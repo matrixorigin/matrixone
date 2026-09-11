@@ -3270,10 +3270,12 @@ type Function struct {
 	// Planner provenance only. Explicit CAST syntax can share the legacy CAST
 	// overload while optimizers still distinguish it from an implicit cast.
 	// Older CNs safely ignore this unknown field and execute the legacy overload.
-	SyntaxExplicitCast   bool     `protobuf:"varint,5,opt,name=syntax_explicit_cast,json=syntaxExplicitCast,proto3" json:"syntax_explicit_cast,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	SyntaxExplicitCast bool `protobuf:"varint,5,opt,name=syntax_explicit_cast,json=syntaxExplicitCast,proto3" json:"syntax_explicit_cast,omitempty"`
+	// Typed routine metadata. Ordinary builtin Function values leave this nil.
+	RoutineCall          *RoutineCall `protobuf:"bytes,6,opt,name=routine_call,json=routineCall,proto3" json:"routine_call,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
+	XXX_unrecognized     []byte       `json:"-"`
+	XXX_sizecache        int32        `json:"-"`
 }
 
 func (m *Function) Reset()         { *m = Function{} }
@@ -3342,6 +3344,13 @@ func (m *Function) GetSyntaxExplicitCast() bool {
 		return m.SyntaxExplicitCast
 	}
 	return false
+}
+
+func (m *Function) GetRoutineCall() *RoutineCall {
+	if m != nil {
+		return m.RoutineCall
+	}
+	return nil
 }
 
 // PreparedNumericMetadata is sparse planner provenance for a numeric overload
@@ -11898,12 +11907,17 @@ type Query struct {
 	// Neither the View nor the UDF catalog table changes schema when that row is replaced.
 	ViewMetadataDependsOnUdf bool `protobuf:"varint,17,opt,name=view_metadata_depends_on_udf,json=viewMetadataDependsOnUdf,proto3" json:"view_metadata_depends_on_udf,omitempty"`
 	// Logical access paths, not grants or resolved security roles.
-	ViewReferences       []*ViewReference       `protobuf:"bytes,18,rep,name=view_references,json=viewReferences,proto3" json:"view_references,omitempty"`
-	Correlation          *CorrelationSpec       `protobuf:"bytes,19,opt,name=correlation,proto3" json:"correlation,omitempty"`
-	IntegerPrecision     *IntegerPrecisionGraph `protobuf:"bytes,20,opt,name=integer_precision,json=integerPrecision,proto3" json:"integer_precision,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}               `json:"-"`
-	XXX_unrecognized     []byte                 `json:"-"`
-	XXX_sizecache        int32                  `json:"-"`
+	ViewReferences   []*ViewReference       `protobuf:"bytes,18,rep,name=view_references,json=viewReferences,proto3" json:"view_references,omitempty"`
+	Correlation      *CorrelationSpec       `protobuf:"bytes,19,opt,name=correlation,proto3" json:"correlation,omitempty"`
+	IntegerPrecision *IntegerPrecisionGraph `protobuf:"bytes,20,opt,name=integer_precision,json=integerPrecision,proto3" json:"integer_precision,omitempty"`
+	// Exact routine revisions captured while binding this statement.  The
+	// expression tree carries the call-site implementation, while this bounded
+	// envelope lets prepared and ordinary plan-cache reuse validate the shared
+	// catalog namespace without walking or reinterpreting user source.
+	RoutineDependencies  []*RoutinePlanDependency `protobuf:"bytes,21,rep,name=routine_dependencies,json=routineDependencies,proto3" json:"routine_dependencies,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}                 `json:"-"`
+	XXX_unrecognized     []byte                   `json:"-"`
+	XXX_sizecache        int32                    `json:"-"`
 }
 
 func (m *Query) Reset()         { *m = Query{} }
@@ -12075,6 +12089,13 @@ func (m *Query) GetCorrelation() *CorrelationSpec {
 func (m *Query) GetIntegerPrecision() *IntegerPrecisionGraph {
 	if m != nil {
 		return m.IntegerPrecision
+	}
+	return nil
+}
+
+func (m *Query) GetRoutineDependencies() []*RoutinePlanDependency {
+	if m != nil {
+		return m.RoutineDependencies
 	}
 	return nil
 }
@@ -17629,6 +17650,603 @@ func (m *ViewStep) GetSubscriptionName() string {
 	return ""
 }
 
+// FunctionRef is the exact catalog identity carried by an executable plan.
+// A zero revision is invalid for external routines; the planner validates the
+// complete call before a fragment is dispatched.
+type FunctionRef struct {
+	FunctionId       uint64 `protobuf:"varint,1,opt,name=function_id,json=functionId,proto3" json:"function_id,omitempty"`
+	Revision         uint64 `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
+	NamespaceVersion uint64 `protobuf:"varint,3,opt,name=namespace_version,json=namespaceVersion,proto3" json:"namespace_version,omitempty"`
+	// Function identity is tenant/database scoped. These fields prevent a
+	// plan fragment from being interpreted in a different catalog namespace.
+	AccountId            uint64   `protobuf:"varint,4,opt,name=account_id,json=accountId,proto3" json:"account_id,omitempty"`
+	DatabaseId           uint64   `protobuf:"varint,5,opt,name=database_id,json=databaseId,proto3" json:"database_id,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *FunctionRef) Reset()         { *m = FunctionRef{} }
+func (m *FunctionRef) String() string { return proto.CompactTextString(m) }
+func (*FunctionRef) ProtoMessage()    {}
+func (*FunctionRef) Descriptor() ([]byte, []int) {
+	return fileDescriptor_2d655ab2f7683c23, []int{164}
+}
+func (m *FunctionRef) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *FunctionRef) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_FunctionRef.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *FunctionRef) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_FunctionRef.Merge(m, src)
+}
+func (m *FunctionRef) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *FunctionRef) XXX_DiscardUnknown() {
+	xxx_messageInfo_FunctionRef.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_FunctionRef proto.InternalMessageInfo
+
+func (m *FunctionRef) GetFunctionId() uint64 {
+	if m != nil {
+		return m.FunctionId
+	}
+	return 0
+}
+
+func (m *FunctionRef) GetRevision() uint64 {
+	if m != nil {
+		return m.Revision
+	}
+	return 0
+}
+
+func (m *FunctionRef) GetNamespaceVersion() uint64 {
+	if m != nil {
+		return m.NamespaceVersion
+	}
+	return 0
+}
+
+func (m *FunctionRef) GetAccountId() uint64 {
+	if m != nil {
+		return m.AccountId
+	}
+	return 0
+}
+
+func (m *FunctionRef) GetDatabaseId() uint64 {
+	if m != nil {
+		return m.DatabaseId
+	}
+	return 0
+}
+
+type SqlRoutineImplementation struct {
+	DefinitionFingerprint           []byte   `protobuf:"bytes,1,opt,name=definition_fingerprint,json=definitionFingerprint,proto3" json:"definition_fingerprint,omitempty"`
+	SemanticDefinitionSchemaVersion int32    `protobuf:"varint,2,opt,name=semantic_definition_schema_version,json=semanticDefinitionSchemaVersion,proto3" json:"semantic_definition_schema_version,omitempty"`
+	XXX_NoUnkeyedLiteral            struct{} `json:"-"`
+	XXX_unrecognized                []byte   `json:"-"`
+	XXX_sizecache                   int32    `json:"-"`
+}
+
+func (m *SqlRoutineImplementation) Reset()         { *m = SqlRoutineImplementation{} }
+func (m *SqlRoutineImplementation) String() string { return proto.CompactTextString(m) }
+func (*SqlRoutineImplementation) ProtoMessage()    {}
+func (*SqlRoutineImplementation) Descriptor() ([]byte, []int) {
+	return fileDescriptor_2d655ab2f7683c23, []int{165}
+}
+func (m *SqlRoutineImplementation) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *SqlRoutineImplementation) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_SqlRoutineImplementation.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *SqlRoutineImplementation) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_SqlRoutineImplementation.Merge(m, src)
+}
+func (m *SqlRoutineImplementation) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *SqlRoutineImplementation) XXX_DiscardUnknown() {
+	xxx_messageInfo_SqlRoutineImplementation.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_SqlRoutineImplementation proto.InternalMessageInfo
+
+func (m *SqlRoutineImplementation) GetDefinitionFingerprint() []byte {
+	if m != nil {
+		return m.DefinitionFingerprint
+	}
+	return nil
+}
+
+func (m *SqlRoutineImplementation) GetSemanticDefinitionSchemaVersion() int32 {
+	if m != nil {
+		return m.SemanticDefinitionSchemaVersion
+	}
+	return 0
+}
+
+type PythonRoutineImplementation struct {
+	Handler string `protobuf:"bytes,1,opt,name=handler,proto3" json:"handler,omitempty"`
+	// Source is retained only so an old serialized demo plan can be identified
+	// and rejected. A current executable plan must carry the immutable artifact
+	// digest and resolve the artifact through the runtime artifact store.
+	Source                  string   `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"` // Deprecated: Do not use.
+	AbiContract             string   `protobuf:"bytes,3,opt,name=abi_contract,json=abiContract,proto3" json:"abi_contract,omitempty"`
+	AdapterVersion          string   `protobuf:"bytes,4,opt,name=adapter_version,json=adapterVersion,proto3" json:"adapter_version,omitempty"`
+	ArtifactDigest          string   `protobuf:"bytes,5,opt,name=artifact_digest,json=artifactDigest,proto3" json:"artifact_digest,omitempty"`
+	EnvironmentDigest       string   `protobuf:"bytes,6,opt,name=environment_digest,json=environmentDigest,proto3" json:"environment_digest,omitempty"`
+	SdkVersion              string   `protobuf:"bytes,7,opt,name=sdk_version,json=sdkVersion,proto3" json:"sdk_version,omitempty"`
+	DefinitionSchemaVersion int32    `protobuf:"varint,8,opt,name=definition_schema_version,json=definitionSchemaVersion,proto3" json:"definition_schema_version,omitempty"`
+	Mode                    string   `protobuf:"bytes,9,opt,name=mode,proto3" json:"mode,omitempty"`
+	NullPolicy              string   `protobuf:"bytes,10,opt,name=null_policy,json=nullPolicy,proto3" json:"null_policy,omitempty"`
+	DefinitionFingerprint   string   `protobuf:"bytes,11,opt,name=definition_fingerprint,json=definitionFingerprint,proto3" json:"definition_fingerprint,omitempty"`
+	XXX_NoUnkeyedLiteral    struct{} `json:"-"`
+	XXX_unrecognized        []byte   `json:"-"`
+	XXX_sizecache           int32    `json:"-"`
+}
+
+func (m *PythonRoutineImplementation) Reset()         { *m = PythonRoutineImplementation{} }
+func (m *PythonRoutineImplementation) String() string { return proto.CompactTextString(m) }
+func (*PythonRoutineImplementation) ProtoMessage()    {}
+func (*PythonRoutineImplementation) Descriptor() ([]byte, []int) {
+	return fileDescriptor_2d655ab2f7683c23, []int{166}
+}
+func (m *PythonRoutineImplementation) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *PythonRoutineImplementation) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_PythonRoutineImplementation.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *PythonRoutineImplementation) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_PythonRoutineImplementation.Merge(m, src)
+}
+func (m *PythonRoutineImplementation) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *PythonRoutineImplementation) XXX_DiscardUnknown() {
+	xxx_messageInfo_PythonRoutineImplementation.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_PythonRoutineImplementation proto.InternalMessageInfo
+
+func (m *PythonRoutineImplementation) GetHandler() string {
+	if m != nil {
+		return m.Handler
+	}
+	return ""
+}
+
+// Deprecated: Do not use.
+func (m *PythonRoutineImplementation) GetSource() string {
+	if m != nil {
+		return m.Source
+	}
+	return ""
+}
+
+func (m *PythonRoutineImplementation) GetAbiContract() string {
+	if m != nil {
+		return m.AbiContract
+	}
+	return ""
+}
+
+func (m *PythonRoutineImplementation) GetAdapterVersion() string {
+	if m != nil {
+		return m.AdapterVersion
+	}
+	return ""
+}
+
+func (m *PythonRoutineImplementation) GetArtifactDigest() string {
+	if m != nil {
+		return m.ArtifactDigest
+	}
+	return ""
+}
+
+func (m *PythonRoutineImplementation) GetEnvironmentDigest() string {
+	if m != nil {
+		return m.EnvironmentDigest
+	}
+	return ""
+}
+
+func (m *PythonRoutineImplementation) GetSdkVersion() string {
+	if m != nil {
+		return m.SdkVersion
+	}
+	return ""
+}
+
+func (m *PythonRoutineImplementation) GetDefinitionSchemaVersion() int32 {
+	if m != nil {
+		return m.DefinitionSchemaVersion
+	}
+	return 0
+}
+
+func (m *PythonRoutineImplementation) GetMode() string {
+	if m != nil {
+		return m.Mode
+	}
+	return ""
+}
+
+func (m *PythonRoutineImplementation) GetNullPolicy() string {
+	if m != nil {
+		return m.NullPolicy
+	}
+	return ""
+}
+
+func (m *PythonRoutineImplementation) GetDefinitionFingerprint() string {
+	if m != nil {
+		return m.DefinitionFingerprint
+	}
+	return ""
+}
+
+// RoutineCall is the common typed call envelope for SQL and external
+// language routines. Function.Args remains the normal expression argument
+// list so existing expression traversal and CASE/selection ownership stay
+// intact; this field carries only immutable routine identity and semantics.
+type RoutineCall struct {
+	ContractVersion int32        `protobuf:"varint,1,opt,name=contract_version,json=contractVersion,proto3" json:"contract_version,omitempty"`
+	FunctionRef     *FunctionRef `protobuf:"bytes,2,opt,name=function_ref,json=functionRef,proto3" json:"function_ref,omitempty"`
+	Language        string       `protobuf:"bytes,3,opt,name=language,proto3" json:"language,omitempty"`
+	ArgumentTypes   []*Type      `protobuf:"bytes,4,rep,name=argument_types,json=argumentTypes,proto3" json:"argument_types,omitempty"`
+	ReturnType      Type         `protobuf:"bytes,5,opt,name=return_type,json=returnType,proto3" json:"return_type"`
+	Volatility      string       `protobuf:"bytes,6,opt,name=volatility,proto3" json:"volatility,omitempty"`
+	NullPolicy      string       `protobuf:"bytes,7,opt,name=null_policy,json=nullPolicy,proto3" json:"null_policy,omitempty"`
+	// Types that are valid to be assigned to Implementation:
+	//
+	//	*RoutineCall_Sql
+	//	*RoutineCall_Python
+	Implementation isRoutineCall_Implementation `protobuf_oneof:"implementation"`
+	// Reserved from the current executable contract. Statement identity,
+	// session values, and group fences are created at execution time; keeping
+	// them in a prepared plan would allow stale state to cross executions.
+	Context map[string]string `protobuf:"bytes,10,rep,name=context,proto3" json:"context,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"` // Deprecated: Do not use.
+	// These fields are the common semantic contract. They must survive SQL
+	// lowering and expression/plan cloning; the optimizer may only move a
+	// routine call when the attached contract permits it.
+	CallsiteId           string   `protobuf:"bytes,11,opt,name=callsite_id,json=callsiteId,proto3" json:"callsite_id,omitempty"`
+	MayError             bool     `protobuf:"varint,12,opt,name=may_error,json=mayError,proto3" json:"may_error,omitempty"`
+	SecurityMode         string   `protobuf:"bytes,13,opt,name=security_mode,json=securityMode,proto3" json:"security_mode,omitempty"`
+	Leakproof            bool     `protobuf:"varint,14,opt,name=leakproof,proto3" json:"leakproof,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *RoutineCall) Reset()         { *m = RoutineCall{} }
+func (m *RoutineCall) String() string { return proto.CompactTextString(m) }
+func (*RoutineCall) ProtoMessage()    {}
+func (*RoutineCall) Descriptor() ([]byte, []int) {
+	return fileDescriptor_2d655ab2f7683c23, []int{167}
+}
+func (m *RoutineCall) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *RoutineCall) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_RoutineCall.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *RoutineCall) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_RoutineCall.Merge(m, src)
+}
+func (m *RoutineCall) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *RoutineCall) XXX_DiscardUnknown() {
+	xxx_messageInfo_RoutineCall.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_RoutineCall proto.InternalMessageInfo
+
+type isRoutineCall_Implementation interface {
+	isRoutineCall_Implementation()
+	MarshalTo([]byte) (int, error)
+	ProtoSize() int
+}
+
+type RoutineCall_Sql struct {
+	Sql *SqlRoutineImplementation `protobuf:"bytes,8,opt,name=sql,proto3,oneof" json:"sql,omitempty"`
+}
+type RoutineCall_Python struct {
+	Python *PythonRoutineImplementation `protobuf:"bytes,9,opt,name=python,proto3,oneof" json:"python,omitempty"`
+}
+
+func (*RoutineCall_Sql) isRoutineCall_Implementation()    {}
+func (*RoutineCall_Python) isRoutineCall_Implementation() {}
+
+func (m *RoutineCall) GetImplementation() isRoutineCall_Implementation {
+	if m != nil {
+		return m.Implementation
+	}
+	return nil
+}
+
+func (m *RoutineCall) GetContractVersion() int32 {
+	if m != nil {
+		return m.ContractVersion
+	}
+	return 0
+}
+
+func (m *RoutineCall) GetFunctionRef() *FunctionRef {
+	if m != nil {
+		return m.FunctionRef
+	}
+	return nil
+}
+
+func (m *RoutineCall) GetLanguage() string {
+	if m != nil {
+		return m.Language
+	}
+	return ""
+}
+
+func (m *RoutineCall) GetArgumentTypes() []*Type {
+	if m != nil {
+		return m.ArgumentTypes
+	}
+	return nil
+}
+
+func (m *RoutineCall) GetReturnType() Type {
+	if m != nil {
+		return m.ReturnType
+	}
+	return Type{}
+}
+
+func (m *RoutineCall) GetVolatility() string {
+	if m != nil {
+		return m.Volatility
+	}
+	return ""
+}
+
+func (m *RoutineCall) GetNullPolicy() string {
+	if m != nil {
+		return m.NullPolicy
+	}
+	return ""
+}
+
+func (m *RoutineCall) GetSql() *SqlRoutineImplementation {
+	if x, ok := m.GetImplementation().(*RoutineCall_Sql); ok {
+		return x.Sql
+	}
+	return nil
+}
+
+func (m *RoutineCall) GetPython() *PythonRoutineImplementation {
+	if x, ok := m.GetImplementation().(*RoutineCall_Python); ok {
+		return x.Python
+	}
+	return nil
+}
+
+// Deprecated: Do not use.
+func (m *RoutineCall) GetContext() map[string]string {
+	if m != nil {
+		return m.Context
+	}
+	return nil
+}
+
+func (m *RoutineCall) GetCallsiteId() string {
+	if m != nil {
+		return m.CallsiteId
+	}
+	return ""
+}
+
+func (m *RoutineCall) GetMayError() bool {
+	if m != nil {
+		return m.MayError
+	}
+	return false
+}
+
+func (m *RoutineCall) GetSecurityMode() string {
+	if m != nil {
+		return m.SecurityMode
+	}
+	return ""
+}
+
+func (m *RoutineCall) GetLeakproof() bool {
+	if m != nil {
+		return m.Leakproof
+	}
+	return false
+}
+
+// XXX_OneofWrappers is for the internal use of the proto package.
+func (*RoutineCall) XXX_OneofWrappers() []interface{} {
+	return []interface{}{
+		(*RoutineCall_Sql)(nil),
+		(*RoutineCall_Python)(nil),
+	}
+}
+
+// RoutinePlanDependency is the shared cache/prepared-plan validation envelope
+// for a resolved routine closure.  FunctionRef is the executable identity;
+// the integrity fields prove that the implementation attached to the plan is
+// the same immutable revision that the resolver admitted.
+type RoutinePlanDependency struct {
+	FunctionRef           *FunctionRef `protobuf:"bytes,1,opt,name=function_ref,json=functionRef,proto3" json:"function_ref,omitempty"`
+	Language              string       `protobuf:"bytes,2,opt,name=language,proto3" json:"language,omitempty"`
+	ContractVersion       int32        `protobuf:"varint,3,opt,name=contract_version,json=contractVersion,proto3" json:"contract_version,omitempty"`
+	DefinitionFingerprint string       `protobuf:"bytes,4,opt,name=definition_fingerprint,json=definitionFingerprint,proto3" json:"definition_fingerprint,omitempty"`
+	ArtifactDigest        string       `protobuf:"bytes,5,opt,name=artifact_digest,json=artifactDigest,proto3" json:"artifact_digest,omitempty"`
+	EnvironmentDigest     string       `protobuf:"bytes,6,opt,name=environment_digest,json=environmentDigest,proto3" json:"environment_digest,omitempty"`
+	Volatility            string       `protobuf:"bytes,7,opt,name=volatility,proto3" json:"volatility,omitempty"`
+	NullPolicy            string       `protobuf:"bytes,8,opt,name=null_policy,json=nullPolicy,proto3" json:"null_policy,omitempty"`
+	MayError              bool         `protobuf:"varint,9,opt,name=may_error,json=mayError,proto3" json:"may_error,omitempty"`
+	SecurityMode          string       `protobuf:"bytes,10,opt,name=security_mode,json=securityMode,proto3" json:"security_mode,omitempty"`
+	Leakproof             bool         `protobuf:"varint,11,opt,name=leakproof,proto3" json:"leakproof,omitempty"`
+	XXX_NoUnkeyedLiteral  struct{}     `json:"-"`
+	XXX_unrecognized      []byte       `json:"-"`
+	XXX_sizecache         int32        `json:"-"`
+}
+
+func (m *RoutinePlanDependency) Reset()         { *m = RoutinePlanDependency{} }
+func (m *RoutinePlanDependency) String() string { return proto.CompactTextString(m) }
+func (*RoutinePlanDependency) ProtoMessage()    {}
+func (*RoutinePlanDependency) Descriptor() ([]byte, []int) {
+	return fileDescriptor_2d655ab2f7683c23, []int{168}
+}
+func (m *RoutinePlanDependency) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *RoutinePlanDependency) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_RoutinePlanDependency.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *RoutinePlanDependency) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_RoutinePlanDependency.Merge(m, src)
+}
+func (m *RoutinePlanDependency) XXX_Size() int {
+	return m.ProtoSize()
+}
+func (m *RoutinePlanDependency) XXX_DiscardUnknown() {
+	xxx_messageInfo_RoutinePlanDependency.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_RoutinePlanDependency proto.InternalMessageInfo
+
+func (m *RoutinePlanDependency) GetFunctionRef() *FunctionRef {
+	if m != nil {
+		return m.FunctionRef
+	}
+	return nil
+}
+
+func (m *RoutinePlanDependency) GetLanguage() string {
+	if m != nil {
+		return m.Language
+	}
+	return ""
+}
+
+func (m *RoutinePlanDependency) GetContractVersion() int32 {
+	if m != nil {
+		return m.ContractVersion
+	}
+	return 0
+}
+
+func (m *RoutinePlanDependency) GetDefinitionFingerprint() string {
+	if m != nil {
+		return m.DefinitionFingerprint
+	}
+	return ""
+}
+
+func (m *RoutinePlanDependency) GetArtifactDigest() string {
+	if m != nil {
+		return m.ArtifactDigest
+	}
+	return ""
+}
+
+func (m *RoutinePlanDependency) GetEnvironmentDigest() string {
+	if m != nil {
+		return m.EnvironmentDigest
+	}
+	return ""
+}
+
+func (m *RoutinePlanDependency) GetVolatility() string {
+	if m != nil {
+		return m.Volatility
+	}
+	return ""
+}
+
+func (m *RoutinePlanDependency) GetNullPolicy() string {
+	if m != nil {
+		return m.NullPolicy
+	}
+	return ""
+}
+
+func (m *RoutinePlanDependency) GetMayError() bool {
+	if m != nil {
+		return m.MayError
+	}
+	return false
+}
+
+func (m *RoutinePlanDependency) GetSecurityMode() string {
+	if m != nil {
+		return m.SecurityMode
+	}
+	return ""
+}
+
+func (m *RoutinePlanDependency) GetLeakproof() bool {
+	if m != nil {
+		return m.Leakproof
+	}
+	return false
+}
+
 // A zero version represents a legacy database without a persisted default.
 // Names are derived display values; identity/revision own the effective domain.
 type DatabaseDefaults struct {
@@ -17647,7 +18265,7 @@ func (m *DatabaseDefaults) Reset()         { *m = DatabaseDefaults{} }
 func (m *DatabaseDefaults) String() string { return proto.CompactTextString(m) }
 func (*DatabaseDefaults) ProtoMessage()    {}
 func (*DatabaseDefaults) Descriptor() ([]byte, []int) {
-	return fileDescriptor_2d655ab2f7683c23, []int{164}
+	return fileDescriptor_2d655ab2f7683c23, []int{169}
 }
 func (m *DatabaseDefaults) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -17934,6 +18552,12 @@ func init() {
 	proto.RegisterType((*UnresolvedIndexHint)(nil), "plan.UnresolvedIndexHint")
 	proto.RegisterType((*ViewReference)(nil), "plan.ViewReference")
 	proto.RegisterType((*ViewStep)(nil), "plan.ViewStep")
+	proto.RegisterType((*FunctionRef)(nil), "plan.FunctionRef")
+	proto.RegisterType((*SqlRoutineImplementation)(nil), "plan.SqlRoutineImplementation")
+	proto.RegisterType((*PythonRoutineImplementation)(nil), "plan.PythonRoutineImplementation")
+	proto.RegisterType((*RoutineCall)(nil), "plan.RoutineCall")
+	proto.RegisterMapType((map[string]string)(nil), "plan.RoutineCall.ContextEntry")
+	proto.RegisterType((*RoutinePlanDependency)(nil), "plan.RoutinePlanDependency")
 	proto.RegisterType((*DatabaseDefaults)(nil), "plan.DatabaseDefaults")
 }
 
@@ -20465,6 +21089,18 @@ func (m *Function) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.RoutineCall != nil {
+		{
+			size, err := m.RoutineCall.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPlan(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x32
+	}
 	if m.SyntaxExplicitCast {
 		i--
 		if m.SyntaxExplicitCast {
@@ -21347,20 +21983,20 @@ func (m *CorrelationSpec) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.StepOwners) > 0 {
-		dAtA29 := make([]byte, len(m.StepOwners)*10)
-		var j28 int
+		dAtA30 := make([]byte, len(m.StepOwners)*10)
+		var j29 int
 		for _, num := range m.StepOwners {
 			for num >= 1<<7 {
-				dAtA29[j28] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA30[j29] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j28++
+				j29++
 			}
-			dAtA29[j28] = uint8(num)
-			j28++
+			dAtA30[j29] = uint8(num)
+			j29++
 		}
-		i -= j28
-		copy(dAtA[i:], dAtA29[:j28])
-		i = encodeVarintPlan(dAtA, i, uint64(j28))
+		i -= j29
+		copy(dAtA[i:], dAtA30[:j29])
+		i = encodeVarintPlan(dAtA, i, uint64(j29))
 		i--
 		dAtA[i] = 0x1a
 	}
@@ -22129,20 +22765,20 @@ func (m *PrimaryKeyDef) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x10
 	}
 	if len(m.Cols) > 0 {
-		dAtA41 := make([]byte, len(m.Cols)*10)
-		var j40 int
+		dAtA42 := make([]byte, len(m.Cols)*10)
+		var j41 int
 		for _, num := range m.Cols {
 			for num >= 1<<7 {
-				dAtA41[j40] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA42[j41] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j40++
+				j41++
 			}
-			dAtA41[j40] = uint8(num)
-			j40++
+			dAtA42[j41] = uint8(num)
+			j41++
 		}
-		i -= j40
-		copy(dAtA[i:], dAtA41[:j40])
-		i = encodeVarintPlan(dAtA, i, uint64(j40))
+		i -= j41
+		copy(dAtA[i:], dAtA42[:j41])
+		i = encodeVarintPlan(dAtA, i, uint64(j41))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -22342,20 +22978,20 @@ func (m *ForeignKeyDef) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x28
 	}
 	if len(m.ForeignCols) > 0 {
-		dAtA44 := make([]byte, len(m.ForeignCols)*10)
-		var j43 int
+		dAtA45 := make([]byte, len(m.ForeignCols)*10)
+		var j44 int
 		for _, num := range m.ForeignCols {
 			for num >= 1<<7 {
-				dAtA44[j43] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA45[j44] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j43++
+				j44++
 			}
-			dAtA44[j43] = uint8(num)
-			j43++
+			dAtA45[j44] = uint8(num)
+			j44++
 		}
-		i -= j43
-		copy(dAtA[i:], dAtA44[:j43])
-		i = encodeVarintPlan(dAtA, i, uint64(j43))
+		i -= j44
+		copy(dAtA[i:], dAtA45[:j44])
+		i = encodeVarintPlan(dAtA, i, uint64(j44))
 		i--
 		dAtA[i] = 0x22
 	}
@@ -22365,20 +23001,20 @@ func (m *ForeignKeyDef) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x18
 	}
 	if len(m.Cols) > 0 {
-		dAtA46 := make([]byte, len(m.Cols)*10)
-		var j45 int
+		dAtA47 := make([]byte, len(m.Cols)*10)
+		var j46 int
 		for _, num := range m.Cols {
 			for num >= 1<<7 {
-				dAtA46[j45] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA47[j46] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j45++
+				j46++
 			}
-			dAtA46[j45] = uint8(num)
-			j45++
+			dAtA47[j46] = uint8(num)
+			j46++
 		}
-		i -= j45
-		copy(dAtA[i:], dAtA46[:j45])
-		i = encodeVarintPlan(dAtA, i, uint64(j45))
+		i -= j46
+		copy(dAtA[i:], dAtA47[:j46])
+		i = encodeVarintPlan(dAtA, i, uint64(j46))
 		i--
 		dAtA[i] = 0x12
 	}
@@ -22984,20 +23620,20 @@ func (m *TableDef) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.RefChildTbls) > 0 {
-		dAtA54 := make([]byte, len(m.RefChildTbls)*10)
-		var j53 int
+		dAtA55 := make([]byte, len(m.RefChildTbls)*10)
+		var j54 int
 		for _, num := range m.RefChildTbls {
 			for num >= 1<<7 {
-				dAtA54[j53] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA55[j54] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j53++
+				j54++
 			}
-			dAtA54[j53] = uint8(num)
-			j53++
+			dAtA55[j54] = uint8(num)
+			j54++
 		}
-		i -= j53
-		copy(dAtA[i:], dAtA54[:j53])
-		i = encodeVarintPlan(dAtA, i, uint64(j53))
+		i -= j54
+		copy(dAtA[i:], dAtA55[:j54])
+		i = encodeVarintPlan(dAtA, i, uint64(j54))
 		i--
 		dAtA[i] = 0x72
 	}
@@ -23245,9 +23881,9 @@ func (m *HashMapStats) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	}
 	if len(m.Ranges) > 0 {
 		for iNdEx := len(m.Ranges) - 1; iNdEx >= 0; iNdEx-- {
-			f58 := math.Float64bits(float64(m.Ranges[iNdEx]))
+			f59 := math.Float64bits(float64(m.Ranges[iNdEx]))
 			i -= 8
-			encoding_binary.LittleEndian.PutUint64(dAtA[i:], uint64(f58))
+			encoding_binary.LittleEndian.PutUint64(dAtA[i:], uint64(f59))
 		}
 		i = encodeVarintPlan(dAtA, i, uint64(len(m.Ranges)*8))
 		i--
@@ -24007,21 +24643,21 @@ func (m *DedupJoinCtx) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x48
 	}
 	if len(m.UpdateCheckColIdxList) > 0 {
-		dAtA75 := make([]byte, len(m.UpdateCheckColIdxList)*10)
-		var j74 int
+		dAtA76 := make([]byte, len(m.UpdateCheckColIdxList)*10)
+		var j75 int
 		for _, num1 := range m.UpdateCheckColIdxList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA75[j74] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA76[j75] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j74++
+				j75++
 			}
-			dAtA75[j74] = uint8(num)
-			j74++
+			dAtA76[j75] = uint8(num)
+			j75++
 		}
-		i -= j74
-		copy(dAtA[i:], dAtA75[:j74])
-		i = encodeVarintPlan(dAtA, i, uint64(j74))
+		i -= j75
+		copy(dAtA[i:], dAtA76[:j75])
+		i = encodeVarintPlan(dAtA, i, uint64(j75))
 		i--
 		dAtA[i] = 0x42
 	}
@@ -24088,21 +24724,21 @@ func (m *DedupJoinCtx) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.UpdateColIdxList) > 0 {
-		dAtA79 := make([]byte, len(m.UpdateColIdxList)*10)
-		var j78 int
+		dAtA80 := make([]byte, len(m.UpdateColIdxList)*10)
+		var j79 int
 		for _, num1 := range m.UpdateColIdxList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA79[j78] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA80[j79] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j78++
+				j79++
 			}
-			dAtA79[j78] = uint8(num)
-			j78++
+			dAtA80[j79] = uint8(num)
+			j79++
 		}
-		i -= j78
-		copy(dAtA[i:], dAtA79[:j78])
-		i = encodeVarintPlan(dAtA, i, uint64(j78))
+		i -= j79
+		copy(dAtA[i:], dAtA80[:j79])
+		i = encodeVarintPlan(dAtA, i, uint64(j79))
 		i--
 		dAtA[i] = 0x12
 	}
@@ -24643,40 +25279,40 @@ func (m *AnalyzeInfo) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x80
 	}
 	if len(m.TimeConsumedArrayMinor) > 0 {
-		dAtA88 := make([]byte, len(m.TimeConsumedArrayMinor)*10)
-		var j87 int
+		dAtA89 := make([]byte, len(m.TimeConsumedArrayMinor)*10)
+		var j88 int
 		for _, num1 := range m.TimeConsumedArrayMinor {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA88[j87] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA89[j88] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j87++
+				j88++
 			}
-			dAtA88[j87] = uint8(num)
-			j87++
+			dAtA89[j88] = uint8(num)
+			j88++
 		}
-		i -= j87
-		copy(dAtA[i:], dAtA88[:j87])
-		i = encodeVarintPlan(dAtA, i, uint64(j87))
+		i -= j88
+		copy(dAtA[i:], dAtA89[:j88])
+		i = encodeVarintPlan(dAtA, i, uint64(j88))
 		i--
 		dAtA[i] = 0x7a
 	}
 	if len(m.TimeConsumedArrayMajor) > 0 {
-		dAtA90 := make([]byte, len(m.TimeConsumedArrayMajor)*10)
-		var j89 int
+		dAtA91 := make([]byte, len(m.TimeConsumedArrayMajor)*10)
+		var j90 int
 		for _, num1 := range m.TimeConsumedArrayMajor {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA90[j89] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA91[j90] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j89++
+				j90++
 			}
-			dAtA90[j89] = uint8(num)
-			j89++
+			dAtA91[j90] = uint8(num)
+			j90++
 		}
-		i -= j89
-		copy(dAtA[i:], dAtA90[:j89])
-		i = encodeVarintPlan(dAtA, i, uint64(j89))
+		i -= j90
+		copy(dAtA[i:], dAtA91[:j90])
+		i = encodeVarintPlan(dAtA, i, uint64(j90))
 		i--
 		dAtA[i] = 0x72
 	}
@@ -25476,21 +26112,21 @@ func (m *Node) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0xf8
 	}
 	if len(m.GroupByHashKey) > 0 {
-		dAtA110 := make([]byte, len(m.GroupByHashKey)*10)
-		var j109 int
+		dAtA111 := make([]byte, len(m.GroupByHashKey)*10)
+		var j110 int
 		for _, num1 := range m.GroupByHashKey {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA110[j109] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA111[j110] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j109++
+				j110++
 			}
-			dAtA110[j109] = uint8(num)
-			j109++
+			dAtA111[j110] = uint8(num)
+			j110++
 		}
-		i -= j109
-		copy(dAtA[i:], dAtA110[:j109])
-		i = encodeVarintPlan(dAtA, i, uint64(j109))
+		i -= j110
+		copy(dAtA[i:], dAtA111[:j110])
+		i = encodeVarintPlan(dAtA, i, uint64(j110))
 		i--
 		dAtA[i] = 0x4
 		i--
@@ -25523,21 +26159,21 @@ func (m *Node) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0xd8
 	}
 	if len(m.TimeWindowPartitionColPos) > 0 {
-		dAtA112 := make([]byte, len(m.TimeWindowPartitionColPos)*10)
-		var j111 int
+		dAtA113 := make([]byte, len(m.TimeWindowPartitionColPos)*10)
+		var j112 int
 		for _, num1 := range m.TimeWindowPartitionColPos {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA112[j111] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA113[j112] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j111++
+				j112++
 			}
-			dAtA112[j111] = uint8(num)
-			j111++
+			dAtA113[j112] = uint8(num)
+			j112++
 		}
-		i -= j111
-		copy(dAtA[i:], dAtA112[:j111])
-		i = encodeVarintPlan(dAtA, i, uint64(j111))
+		i -= j112
+		copy(dAtA[i:], dAtA113[:j112])
+		i = encodeVarintPlan(dAtA, i, uint64(j112))
 		i--
 		dAtA[i] = 0x4
 		i--
@@ -26069,21 +26705,21 @@ func (m *Node) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0xe2
 	}
 	if len(m.SourceStep) > 0 {
-		dAtA130 := make([]byte, len(m.SourceStep)*10)
-		var j129 int
+		dAtA131 := make([]byte, len(m.SourceStep)*10)
+		var j130 int
 		for _, num1 := range m.SourceStep {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA130[j129] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA131[j130] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j129++
+				j130++
 			}
-			dAtA130[j129] = uint8(num)
-			j129++
+			dAtA131[j130] = uint8(num)
+			j130++
 		}
-		i -= j129
-		copy(dAtA[i:], dAtA130[:j129])
-		i = encodeVarintPlan(dAtA, i, uint64(j129))
+		i -= j130
+		copy(dAtA[i:], dAtA131[:j130])
+		i = encodeVarintPlan(dAtA, i, uint64(j130))
 		i--
 		dAtA[i] = 0x1
 		i--
@@ -26120,21 +26756,21 @@ func (m *Node) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0xca
 	}
 	if len(m.BindingTags) > 0 {
-		dAtA133 := make([]byte, len(m.BindingTags)*10)
-		var j132 int
+		dAtA134 := make([]byte, len(m.BindingTags)*10)
+		var j133 int
 		for _, num1 := range m.BindingTags {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA133[j132] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA134[j133] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j132++
+				j133++
 			}
-			dAtA133[j132] = uint8(num)
-			j132++
+			dAtA134[j133] = uint8(num)
+			j133++
 		}
-		i -= j132
-		copy(dAtA[i:], dAtA133[:j132])
-		i = encodeVarintPlan(dAtA, i, uint64(j132))
+		i -= j133
+		copy(dAtA[i:], dAtA134[:j133])
+		i = encodeVarintPlan(dAtA, i, uint64(j133))
 		i--
 		dAtA[i] = 0x1
 		i--
@@ -26384,21 +27020,21 @@ func (m *Node) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.Children) > 0 {
-		dAtA143 := make([]byte, len(m.Children)*10)
-		var j142 int
+		dAtA144 := make([]byte, len(m.Children)*10)
+		var j143 int
 		for _, num1 := range m.Children {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA143[j142] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA144[j143] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j142++
+				j143++
 			}
-			dAtA143[j142] = uint8(num)
-			j142++
+			dAtA144[j143] = uint8(num)
+			j143++
 		}
-		i -= j142
-		copy(dAtA[i:], dAtA143[:j142])
-		i = encodeVarintPlan(dAtA, i, uint64(j142))
+		i -= j143
+		copy(dAtA[i:], dAtA144[:j143])
+		i = encodeVarintPlan(dAtA, i, uint64(j143))
 		i--
 		dAtA[i] = 0x22
 	}
@@ -26998,21 +27634,21 @@ func (m *IcebergScan) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x52
 	}
 	if len(m.ProjectedFieldIds) > 0 {
-		dAtA154 := make([]byte, len(m.ProjectedFieldIds)*10)
-		var j153 int
+		dAtA155 := make([]byte, len(m.ProjectedFieldIds)*10)
+		var j154 int
 		for _, num1 := range m.ProjectedFieldIds {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA154[j153] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA155[j154] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j153++
+				j154++
 			}
-			dAtA154[j153] = uint8(num)
-			j153++
+			dAtA155[j154] = uint8(num)
+			j154++
 		}
-		i -= j153
-		copy(dAtA[i:], dAtA154[:j153])
-		i = encodeVarintPlan(dAtA, i, uint64(j153))
+		i -= j154
+		copy(dAtA[i:], dAtA155[:j154])
+		i = encodeVarintPlan(dAtA, i, uint64(j154))
 		i--
 		dAtA[i] = 0x4a
 	}
@@ -27711,21 +28347,21 @@ func (m *PreInsertUkCtx) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.KeyTypeCounts) > 0 {
-		dAtA162 := make([]byte, len(m.KeyTypeCounts)*10)
-		var j161 int
+		dAtA163 := make([]byte, len(m.KeyTypeCounts)*10)
+		var j162 int
 		for _, num1 := range m.KeyTypeCounts {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA162[j161] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA163[j162] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j161++
+				j162++
 			}
-			dAtA162[j161] = uint8(num)
-			j161++
+			dAtA163[j162] = uint8(num)
+			j162++
 		}
-		i -= j161
-		copy(dAtA[i:], dAtA162[:j161])
-		i = encodeVarintPlan(dAtA, i, uint64(j161))
+		i -= j162
+		copy(dAtA[i:], dAtA163[:j162])
+		i = encodeVarintPlan(dAtA, i, uint64(j162))
 		i--
 		dAtA[i] = 0x1
 		i--
@@ -27789,21 +28425,21 @@ func (m *PreInsertUkCtx) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x58
 	}
 	if len(m.TargetColumns) > 0 {
-		dAtA164 := make([]byte, len(m.TargetColumns)*10)
-		var j163 int
+		dAtA165 := make([]byte, len(m.TargetColumns)*10)
+		var j164 int
 		for _, num1 := range m.TargetColumns {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA164[j163] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA165[j164] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j163++
+				j164++
 			}
-			dAtA164[j163] = uint8(num)
-			j163++
+			dAtA165[j164] = uint8(num)
+			j164++
 		}
-		i -= j163
-		copy(dAtA[i:], dAtA164[:j163])
-		i = encodeVarintPlan(dAtA, i, uint64(j163))
+		i -= j164
+		copy(dAtA[i:], dAtA165[:j164])
+		i = encodeVarintPlan(dAtA, i, uint64(j164))
 		i--
 		dAtA[i] = 0x52
 	}
@@ -27823,40 +28459,40 @@ func (m *PreInsertUkCtx) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x40
 	}
 	if len(m.ConflictColumns) > 0 {
-		dAtA166 := make([]byte, len(m.ConflictColumns)*10)
-		var j165 int
+		dAtA167 := make([]byte, len(m.ConflictColumns)*10)
+		var j166 int
 		for _, num1 := range m.ConflictColumns {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA166[j165] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA167[j166] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j165++
+				j166++
 			}
-			dAtA166[j165] = uint8(num)
-			j165++
+			dAtA167[j166] = uint8(num)
+			j166++
 		}
-		i -= j165
-		copy(dAtA[i:], dAtA166[:j165])
-		i = encodeVarintPlan(dAtA, i, uint64(j165))
+		i -= j166
+		copy(dAtA[i:], dAtA167[:j166])
+		i = encodeVarintPlan(dAtA, i, uint64(j166))
 		i--
 		dAtA[i] = 0x3a
 	}
 	if len(m.KeyColumns) > 0 {
-		dAtA168 := make([]byte, len(m.KeyColumns)*10)
-		var j167 int
+		dAtA169 := make([]byte, len(m.KeyColumns)*10)
+		var j168 int
 		for _, num1 := range m.KeyColumns {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA168[j167] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA169[j168] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j167++
+				j168++
 			}
-			dAtA168[j167] = uint8(num)
-			j167++
+			dAtA169[j168] = uint8(num)
+			j168++
 		}
-		i -= j167
-		copy(dAtA[i:], dAtA168[:j167])
-		i = encodeVarintPlan(dAtA, i, uint64(j167))
+		i -= j168
+		copy(dAtA[i:], dAtA169[:j168])
+		i = encodeVarintPlan(dAtA, i, uint64(j168))
 		i--
 		dAtA[i] = 0x32
 	}
@@ -27896,21 +28532,21 @@ func (m *PreInsertUkCtx) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x10
 	}
 	if len(m.Columns) > 0 {
-		dAtA172 := make([]byte, len(m.Columns)*10)
-		var j171 int
+		dAtA173 := make([]byte, len(m.Columns)*10)
+		var j172 int
 		for _, num1 := range m.Columns {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA172[j171] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA173[j172] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j171++
+				j172++
 			}
-			dAtA172[j171] = uint8(num)
-			j171++
+			dAtA173[j172] = uint8(num)
+			j172++
 		}
-		i -= j171
-		copy(dAtA[i:], dAtA172[:j171])
-		i = encodeVarintPlan(dAtA, i, uint64(j171))
+		i -= j172
+		copy(dAtA[i:], dAtA173[:j172])
+		i = encodeVarintPlan(dAtA, i, uint64(j172))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -28258,21 +28894,21 @@ func (m *IdList) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.List) > 0 {
-		dAtA181 := make([]byte, len(m.List)*10)
-		var j180 int
+		dAtA182 := make([]byte, len(m.List)*10)
+		var j181 int
 		for _, num1 := range m.List {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA181[j180] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA182[j181] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j180++
+				j181++
 			}
-			dAtA181[j180] = uint8(num)
-			j180++
+			dAtA182[j181] = uint8(num)
+			j181++
 		}
-		i -= j180
-		copy(dAtA[i:], dAtA181[:j180])
-		i = encodeVarintPlan(dAtA, i, uint64(j180))
+		i -= j181
+		copy(dAtA[i:], dAtA182[:j181])
+		i = encodeVarintPlan(dAtA, i, uint64(j181))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -28626,20 +29262,20 @@ func (m *IntegerPrecisionNode) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x28
 	}
 	if len(m.Inputs) > 0 {
-		dAtA188 := make([]byte, len(m.Inputs)*10)
-		var j187 int
+		dAtA189 := make([]byte, len(m.Inputs)*10)
+		var j188 int
 		for _, num := range m.Inputs {
 			for num >= 1<<7 {
-				dAtA188[j187] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA189[j188] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j187++
+				j188++
 			}
-			dAtA188[j187] = uint8(num)
-			j187++
+			dAtA189[j188] = uint8(num)
+			j188++
 		}
-		i -= j187
-		copy(dAtA[i:], dAtA188[:j187])
-		i = encodeVarintPlan(dAtA, i, uint64(j187))
+		i -= j188
+		copy(dAtA[i:], dAtA189[:j188])
+		i = encodeVarintPlan(dAtA, i, uint64(j188))
 		i--
 		dAtA[i] = 0x22
 	}
@@ -28823,6 +29459,22 @@ func (m *Query) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.RoutineDependencies) > 0 {
+		for iNdEx := len(m.RoutineDependencies) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.RoutineDependencies[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintPlan(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x1
+			i--
+			dAtA[i] = 0xaa
+		}
 	}
 	if m.IntegerPrecision != nil {
 		{
@@ -29031,21 +29683,21 @@ func (m *Query) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.Steps) > 0 {
-		dAtA192 := make([]byte, len(m.Steps)*10)
-		var j191 int
+		dAtA193 := make([]byte, len(m.Steps)*10)
+		var j192 int
 		for _, num1 := range m.Steps {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA192[j191] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA193[j192] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j191++
+				j192++
 			}
-			dAtA192[j191] = uint8(num)
-			j191++
+			dAtA193[j192] = uint8(num)
+			j192++
 		}
-		i -= j191
-		copy(dAtA[i:], dAtA192[:j191])
-		i = encodeVarintPlan(dAtA, i, uint64(j191))
+		i -= j192
+		copy(dAtA[i:], dAtA193[:j192])
+		i = encodeVarintPlan(dAtA, i, uint64(j192))
 		i--
 		dAtA[i] = 0x12
 	}
@@ -32136,20 +32788,20 @@ func (m *DropTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		}
 	}
 	if len(m.FkChildTblsReferToMe) > 0 {
-		dAtA262 := make([]byte, len(m.FkChildTblsReferToMe)*10)
-		var j261 int
+		dAtA263 := make([]byte, len(m.FkChildTblsReferToMe)*10)
+		var j262 int
 		for _, num := range m.FkChildTblsReferToMe {
 			for num >= 1<<7 {
-				dAtA262[j261] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA263[j262] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j261++
+				j262++
 			}
-			dAtA262[j261] = uint8(num)
-			j261++
+			dAtA263[j262] = uint8(num)
+			j262++
 		}
-		i -= j261
-		copy(dAtA[i:], dAtA262[:j261])
-		i = encodeVarintPlan(dAtA, i, uint64(j261))
+		i -= j262
+		copy(dAtA[i:], dAtA263[:j262])
+		i = encodeVarintPlan(dAtA, i, uint64(j262))
 		i--
 		dAtA[i] = 0x62
 	}
@@ -32185,20 +32837,20 @@ func (m *DropTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x48
 	}
 	if len(m.ForeignTbl) > 0 {
-		dAtA265 := make([]byte, len(m.ForeignTbl)*10)
-		var j264 int
+		dAtA266 := make([]byte, len(m.ForeignTbl)*10)
+		var j265 int
 		for _, num := range m.ForeignTbl {
 			for num >= 1<<7 {
-				dAtA265[j264] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA266[j265] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j264++
+				j265++
 			}
-			dAtA265[j264] = uint8(num)
-			j264++
+			dAtA266[j265] = uint8(num)
+			j265++
 		}
-		i -= j264
-		copy(dAtA[i:], dAtA265[:j264])
-		i = encodeVarintPlan(dAtA, i, uint64(j264))
+		i -= j265
+		copy(dAtA[i:], dAtA266[:j265])
+		i = encodeVarintPlan(dAtA, i, uint64(j265))
 		i--
 		dAtA[i] = 0x3a
 	}
@@ -32744,20 +33396,20 @@ func (m *TruncateTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x40
 	}
 	if len(m.ForeignTbl) > 0 {
-		dAtA274 := make([]byte, len(m.ForeignTbl)*10)
-		var j273 int
+		dAtA275 := make([]byte, len(m.ForeignTbl)*10)
+		var j274 int
 		for _, num := range m.ForeignTbl {
 			for num >= 1<<7 {
-				dAtA274[j273] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA275[j274] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j273++
+				j274++
 			}
-			dAtA274[j273] = uint8(num)
-			j273++
+			dAtA275[j274] = uint8(num)
+			j274++
 		}
-		i -= j273
-		copy(dAtA[i:], dAtA274[:j273])
-		i = encodeVarintPlan(dAtA, i, uint64(j273))
+		i -= j274
+		copy(dAtA[i:], dAtA275[:j274])
+		i = encodeVarintPlan(dAtA, i, uint64(j274))
 		i--
 		dAtA[i] = 0x3a
 	}
@@ -32834,20 +33486,20 @@ func (m *ClusterTable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x18
 	}
 	if len(m.AccountIDs) > 0 {
-		dAtA277 := make([]byte, len(m.AccountIDs)*10)
-		var j276 int
+		dAtA278 := make([]byte, len(m.AccountIDs)*10)
+		var j277 int
 		for _, num := range m.AccountIDs {
 			for num >= 1<<7 {
-				dAtA277[j276] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA278[j277] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j276++
+				j277++
 			}
-			dAtA277[j276] = uint8(num)
-			j276++
+			dAtA278[j277] = uint8(num)
+			j277++
 		}
-		i -= j276
-		copy(dAtA[i:], dAtA277[:j276])
-		i = encodeVarintPlan(dAtA, i, uint64(j276))
+		i -= j277
+		copy(dAtA[i:], dAtA278[:j277])
+		i = encodeVarintPlan(dAtA, i, uint64(j277))
 		i--
 		dAtA[i] = 0x12
 	}
@@ -33059,21 +33711,21 @@ func (m *Prepare) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.ParamTypes) > 0 {
-		dAtA281 := make([]byte, len(m.ParamTypes)*10)
-		var j280 int
+		dAtA282 := make([]byte, len(m.ParamTypes)*10)
+		var j281 int
 		for _, num1 := range m.ParamTypes {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA281[j280] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA282[j281] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j280++
+				j281++
 			}
-			dAtA281[j280] = uint8(num)
-			j280++
+			dAtA282[j281] = uint8(num)
+			j281++
 		}
-		i -= j280
-		copy(dAtA[i:], dAtA281[:j280])
-		i = encodeVarintPlan(dAtA, i, uint64(j280))
+		i -= j281
+		copy(dAtA[i:], dAtA282[:j281])
+		i = encodeVarintPlan(dAtA, i, uint64(j281))
 		i--
 		dAtA[i] = 0x22
 	}
@@ -33220,21 +33872,21 @@ func (m *OtherDCL) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
 	if len(m.ParamTypes) > 0 {
-		dAtA284 := make([]byte, len(m.ParamTypes)*10)
-		var j283 int
+		dAtA285 := make([]byte, len(m.ParamTypes)*10)
+		var j284 int
 		for _, num1 := range m.ParamTypes {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA284[j283] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA285[j284] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j283++
+				j284++
 			}
-			dAtA284[j283] = uint8(num)
-			j283++
+			dAtA285[j284] = uint8(num)
+			j284++
 		}
-		i -= j283
-		copy(dAtA[i:], dAtA284[:j283])
-		i = encodeVarintPlan(dAtA, i, uint64(j283))
+		i -= j284
+		copy(dAtA[i:], dAtA285[:j284])
+		i = encodeVarintPlan(dAtA, i, uint64(j284))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -34078,21 +34730,21 @@ func (m *ODKUForeignKeyCheck) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		dAtA[i] = 0x12
 	}
 	if len(m.ColIdxList) > 0 {
-		dAtA292 := make([]byte, len(m.ColIdxList)*10)
-		var j291 int
+		dAtA293 := make([]byte, len(m.ColIdxList)*10)
+		var j292 int
 		for _, num1 := range m.ColIdxList {
 			num := uint64(num1)
 			for num >= 1<<7 {
-				dAtA292[j291] = uint8(uint64(num)&0x7f | 0x80)
+				dAtA293[j292] = uint8(uint64(num)&0x7f | 0x80)
 				num >>= 7
-				j291++
+				j292++
 			}
-			dAtA292[j291] = uint8(num)
-			j291++
+			dAtA293[j292] = uint8(num)
+			j292++
 		}
-		i -= j291
-		copy(dAtA[i:], dAtA292[:j291])
-		i = encodeVarintPlan(dAtA, i, uint64(j291))
+		i -= j292
+		copy(dAtA[i:], dAtA293[:j292])
+		i = encodeVarintPlan(dAtA, i, uint64(j292))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -34289,6 +34941,505 @@ func (m *ViewStep) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.DatabaseName)
 		copy(dAtA[i:], m.DatabaseName)
 		i = encodeVarintPlan(dAtA, i, uint64(len(m.DatabaseName)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *FunctionRef) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *FunctionRef) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *FunctionRef) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.DatabaseId != 0 {
+		i = encodeVarintPlan(dAtA, i, uint64(m.DatabaseId))
+		i--
+		dAtA[i] = 0x28
+	}
+	if m.AccountId != 0 {
+		i = encodeVarintPlan(dAtA, i, uint64(m.AccountId))
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.NamespaceVersion != 0 {
+		i = encodeVarintPlan(dAtA, i, uint64(m.NamespaceVersion))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.Revision != 0 {
+		i = encodeVarintPlan(dAtA, i, uint64(m.Revision))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.FunctionId != 0 {
+		i = encodeVarintPlan(dAtA, i, uint64(m.FunctionId))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *SqlRoutineImplementation) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *SqlRoutineImplementation) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *SqlRoutineImplementation) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.SemanticDefinitionSchemaVersion != 0 {
+		i = encodeVarintPlan(dAtA, i, uint64(m.SemanticDefinitionSchemaVersion))
+		i--
+		dAtA[i] = 0x10
+	}
+	if len(m.DefinitionFingerprint) > 0 {
+		i -= len(m.DefinitionFingerprint)
+		copy(dAtA[i:], m.DefinitionFingerprint)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.DefinitionFingerprint)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *PythonRoutineImplementation) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *PythonRoutineImplementation) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *PythonRoutineImplementation) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.DefinitionFingerprint) > 0 {
+		i -= len(m.DefinitionFingerprint)
+		copy(dAtA[i:], m.DefinitionFingerprint)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.DefinitionFingerprint)))
+		i--
+		dAtA[i] = 0x5a
+	}
+	if len(m.NullPolicy) > 0 {
+		i -= len(m.NullPolicy)
+		copy(dAtA[i:], m.NullPolicy)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.NullPolicy)))
+		i--
+		dAtA[i] = 0x52
+	}
+	if len(m.Mode) > 0 {
+		i -= len(m.Mode)
+		copy(dAtA[i:], m.Mode)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.Mode)))
+		i--
+		dAtA[i] = 0x4a
+	}
+	if m.DefinitionSchemaVersion != 0 {
+		i = encodeVarintPlan(dAtA, i, uint64(m.DefinitionSchemaVersion))
+		i--
+		dAtA[i] = 0x40
+	}
+	if len(m.SdkVersion) > 0 {
+		i -= len(m.SdkVersion)
+		copy(dAtA[i:], m.SdkVersion)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.SdkVersion)))
+		i--
+		dAtA[i] = 0x3a
+	}
+	if len(m.EnvironmentDigest) > 0 {
+		i -= len(m.EnvironmentDigest)
+		copy(dAtA[i:], m.EnvironmentDigest)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.EnvironmentDigest)))
+		i--
+		dAtA[i] = 0x32
+	}
+	if len(m.ArtifactDigest) > 0 {
+		i -= len(m.ArtifactDigest)
+		copy(dAtA[i:], m.ArtifactDigest)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.ArtifactDigest)))
+		i--
+		dAtA[i] = 0x2a
+	}
+	if len(m.AdapterVersion) > 0 {
+		i -= len(m.AdapterVersion)
+		copy(dAtA[i:], m.AdapterVersion)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.AdapterVersion)))
+		i--
+		dAtA[i] = 0x22
+	}
+	if len(m.AbiContract) > 0 {
+		i -= len(m.AbiContract)
+		copy(dAtA[i:], m.AbiContract)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.AbiContract)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if len(m.Source) > 0 {
+		i -= len(m.Source)
+		copy(dAtA[i:], m.Source)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.Source)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.Handler) > 0 {
+		i -= len(m.Handler)
+		copy(dAtA[i:], m.Handler)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.Handler)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *RoutineCall) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *RoutineCall) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *RoutineCall) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Leakproof {
+		i--
+		if m.Leakproof {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x70
+	}
+	if len(m.SecurityMode) > 0 {
+		i -= len(m.SecurityMode)
+		copy(dAtA[i:], m.SecurityMode)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.SecurityMode)))
+		i--
+		dAtA[i] = 0x6a
+	}
+	if m.MayError {
+		i--
+		if m.MayError {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x60
+	}
+	if len(m.CallsiteId) > 0 {
+		i -= len(m.CallsiteId)
+		copy(dAtA[i:], m.CallsiteId)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.CallsiteId)))
+		i--
+		dAtA[i] = 0x5a
+	}
+	if len(m.Context) > 0 {
+		for k := range m.Context {
+			v := m.Context[k]
+			baseI := i
+			i -= len(v)
+			copy(dAtA[i:], v)
+			i = encodeVarintPlan(dAtA, i, uint64(len(v)))
+			i--
+			dAtA[i] = 0x12
+			i -= len(k)
+			copy(dAtA[i:], k)
+			i = encodeVarintPlan(dAtA, i, uint64(len(k)))
+			i--
+			dAtA[i] = 0xa
+			i = encodeVarintPlan(dAtA, i, uint64(baseI-i))
+			i--
+			dAtA[i] = 0x52
+		}
+	}
+	if m.Implementation != nil {
+		{
+			size := m.Implementation.ProtoSize()
+			i -= size
+			if _, err := m.Implementation.MarshalTo(dAtA[i:]); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if len(m.NullPolicy) > 0 {
+		i -= len(m.NullPolicy)
+		copy(dAtA[i:], m.NullPolicy)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.NullPolicy)))
+		i--
+		dAtA[i] = 0x3a
+	}
+	if len(m.Volatility) > 0 {
+		i -= len(m.Volatility)
+		copy(dAtA[i:], m.Volatility)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.Volatility)))
+		i--
+		dAtA[i] = 0x32
+	}
+	{
+		size, err := m.ReturnType.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintPlan(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x2a
+	if len(m.ArgumentTypes) > 0 {
+		for iNdEx := len(m.ArgumentTypes) - 1; iNdEx >= 0; iNdEx-- {
+			{
+				size, err := m.ArgumentTypes[iNdEx].MarshalToSizedBuffer(dAtA[:i])
+				if err != nil {
+					return 0, err
+				}
+				i -= size
+				i = encodeVarintPlan(dAtA, i, uint64(size))
+			}
+			i--
+			dAtA[i] = 0x22
+		}
+	}
+	if len(m.Language) > 0 {
+		i -= len(m.Language)
+		copy(dAtA[i:], m.Language)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.Language)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if m.FunctionRef != nil {
+		{
+			size, err := m.FunctionRef.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPlan(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x12
+	}
+	if m.ContractVersion != 0 {
+		i = encodeVarintPlan(dAtA, i, uint64(m.ContractVersion))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *RoutineCall_Sql) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *RoutineCall_Sql) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.Sql != nil {
+		{
+			size, err := m.Sql.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPlan(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x42
+	}
+	return len(dAtA) - i, nil
+}
+func (m *RoutineCall_Python) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *RoutineCall_Python) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	if m.Python != nil {
+		{
+			size, err := m.Python.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPlan(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x4a
+	}
+	return len(dAtA) - i, nil
+}
+func (m *RoutinePlanDependency) Marshal() (dAtA []byte, err error) {
+	size := m.ProtoSize()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *RoutinePlanDependency) MarshalTo(dAtA []byte) (int, error) {
+	size := m.ProtoSize()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *RoutinePlanDependency) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Leakproof {
+		i--
+		if m.Leakproof {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x58
+	}
+	if len(m.SecurityMode) > 0 {
+		i -= len(m.SecurityMode)
+		copy(dAtA[i:], m.SecurityMode)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.SecurityMode)))
+		i--
+		dAtA[i] = 0x52
+	}
+	if m.MayError {
+		i--
+		if m.MayError {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x48
+	}
+	if len(m.NullPolicy) > 0 {
+		i -= len(m.NullPolicy)
+		copy(dAtA[i:], m.NullPolicy)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.NullPolicy)))
+		i--
+		dAtA[i] = 0x42
+	}
+	if len(m.Volatility) > 0 {
+		i -= len(m.Volatility)
+		copy(dAtA[i:], m.Volatility)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.Volatility)))
+		i--
+		dAtA[i] = 0x3a
+	}
+	if len(m.EnvironmentDigest) > 0 {
+		i -= len(m.EnvironmentDigest)
+		copy(dAtA[i:], m.EnvironmentDigest)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.EnvironmentDigest)))
+		i--
+		dAtA[i] = 0x32
+	}
+	if len(m.ArtifactDigest) > 0 {
+		i -= len(m.ArtifactDigest)
+		copy(dAtA[i:], m.ArtifactDigest)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.ArtifactDigest)))
+		i--
+		dAtA[i] = 0x2a
+	}
+	if len(m.DefinitionFingerprint) > 0 {
+		i -= len(m.DefinitionFingerprint)
+		copy(dAtA[i:], m.DefinitionFingerprint)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.DefinitionFingerprint)))
+		i--
+		dAtA[i] = 0x22
+	}
+	if m.ContractVersion != 0 {
+		i = encodeVarintPlan(dAtA, i, uint64(m.ContractVersion))
+		i--
+		dAtA[i] = 0x18
+	}
+	if len(m.Language) > 0 {
+		i -= len(m.Language)
+		copy(dAtA[i:], m.Language)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.Language)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if m.FunctionRef != nil {
+		{
+			size, err := m.FunctionRef.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintPlan(dAtA, i, uint64(size))
+		}
 		i--
 		dAtA[i] = 0xa
 	}
@@ -35044,6 +36195,10 @@ func (m *Function) ProtoSize() (n int) {
 	}
 	if m.SyntaxExplicitCast {
 		n += 2
+	}
+	if m.RoutineCall != nil {
+		l = m.RoutineCall.ProtoSize()
+		n += 1 + l + sovPlan(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -38630,6 +39785,12 @@ func (m *Query) ProtoSize() (n int) {
 		l = m.IntegerPrecision.ProtoSize()
 		n += 2 + l + sovPlan(uint64(l))
 	}
+	if len(m.RoutineDependencies) > 0 {
+		for _, e := range m.RoutineDependencies {
+			l = e.ProtoSize()
+			n += 2 + l + sovPlan(uint64(l))
+		}
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -41101,6 +42262,248 @@ func (m *ViewStep) ProtoSize() (n int) {
 	l = len(m.SubscriptionName)
 	if l > 0 {
 		n += 1 + l + sovPlan(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *FunctionRef) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.FunctionId != 0 {
+		n += 1 + sovPlan(uint64(m.FunctionId))
+	}
+	if m.Revision != 0 {
+		n += 1 + sovPlan(uint64(m.Revision))
+	}
+	if m.NamespaceVersion != 0 {
+		n += 1 + sovPlan(uint64(m.NamespaceVersion))
+	}
+	if m.AccountId != 0 {
+		n += 1 + sovPlan(uint64(m.AccountId))
+	}
+	if m.DatabaseId != 0 {
+		n += 1 + sovPlan(uint64(m.DatabaseId))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *SqlRoutineImplementation) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.DefinitionFingerprint)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	if m.SemanticDefinitionSchemaVersion != 0 {
+		n += 1 + sovPlan(uint64(m.SemanticDefinitionSchemaVersion))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *PythonRoutineImplementation) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.Handler)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.Source)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.AbiContract)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.AdapterVersion)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.ArtifactDigest)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.EnvironmentDigest)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.SdkVersion)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	if m.DefinitionSchemaVersion != 0 {
+		n += 1 + sovPlan(uint64(m.DefinitionSchemaVersion))
+	}
+	l = len(m.Mode)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.NullPolicy)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.DefinitionFingerprint)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *RoutineCall) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.ContractVersion != 0 {
+		n += 1 + sovPlan(uint64(m.ContractVersion))
+	}
+	if m.FunctionRef != nil {
+		l = m.FunctionRef.ProtoSize()
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.Language)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	if len(m.ArgumentTypes) > 0 {
+		for _, e := range m.ArgumentTypes {
+			l = e.ProtoSize()
+			n += 1 + l + sovPlan(uint64(l))
+		}
+	}
+	l = m.ReturnType.ProtoSize()
+	n += 1 + l + sovPlan(uint64(l))
+	l = len(m.Volatility)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.NullPolicy)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	if m.Implementation != nil {
+		n += m.Implementation.ProtoSize()
+	}
+	if len(m.Context) > 0 {
+		for k, v := range m.Context {
+			_ = k
+			_ = v
+			mapEntrySize := 1 + len(k) + sovPlan(uint64(len(k))) + 1 + len(v) + sovPlan(uint64(len(v)))
+			n += mapEntrySize + 1 + sovPlan(uint64(mapEntrySize))
+		}
+	}
+	l = len(m.CallsiteId)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	if m.MayError {
+		n += 2
+	}
+	l = len(m.SecurityMode)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	if m.Leakproof {
+		n += 2
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *RoutineCall_Sql) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Sql != nil {
+		l = m.Sql.ProtoSize()
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	return n
+}
+func (m *RoutineCall_Python) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Python != nil {
+		l = m.Python.ProtoSize()
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	return n
+}
+func (m *RoutinePlanDependency) ProtoSize() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.FunctionRef != nil {
+		l = m.FunctionRef.ProtoSize()
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.Language)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	if m.ContractVersion != 0 {
+		n += 1 + sovPlan(uint64(m.ContractVersion))
+	}
+	l = len(m.DefinitionFingerprint)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.ArtifactDigest)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.EnvironmentDigest)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.Volatility)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	l = len(m.NullPolicy)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	if m.MayError {
+		n += 2
+	}
+	l = len(m.SecurityMode)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
+	if m.Leakproof {
+		n += 2
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -44358,6 +45761,42 @@ func (m *Function) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.SyntaxExplicitCast = bool(v != 0)
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RoutineCall", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.RoutineCall == nil {
+				m.RoutineCall = &RoutineCall{}
+			}
+			if err := m.RoutineCall.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPlan(dAtA[iNdEx:])
@@ -67036,6 +68475,40 @@ func (m *Query) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 21:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RoutineDependencies", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.RoutineDependencies = append(m.RoutineDependencies, &RoutinePlanDependency{})
+			if err := m.RoutineDependencies[len(m.RoutineDependencies)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPlan(dAtA[iNdEx:])
@@ -80198,6 +81671,1586 @@ func (m *ViewStep) Unmarshal(dAtA []byte) error {
 			}
 			m.SubscriptionName = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipPlan(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *FunctionRef) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowPlan
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: FunctionRef: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: FunctionRef: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field FunctionId", wireType)
+			}
+			m.FunctionId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.FunctionId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Revision", wireType)
+			}
+			m.Revision = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Revision |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NamespaceVersion", wireType)
+			}
+			m.NamespaceVersion = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.NamespaceVersion |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AccountId", wireType)
+			}
+			m.AccountId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.AccountId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DatabaseId", wireType)
+			}
+			m.DatabaseId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.DatabaseId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipPlan(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *SqlRoutineImplementation) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowPlan
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: SqlRoutineImplementation: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: SqlRoutineImplementation: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DefinitionFingerprint", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.DefinitionFingerprint = append(m.DefinitionFingerprint[:0], dAtA[iNdEx:postIndex]...)
+			if m.DefinitionFingerprint == nil {
+				m.DefinitionFingerprint = []byte{}
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SemanticDefinitionSchemaVersion", wireType)
+			}
+			m.SemanticDefinitionSchemaVersion = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.SemanticDefinitionSchemaVersion |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipPlan(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *PythonRoutineImplementation) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowPlan
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: PythonRoutineImplementation: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: PythonRoutineImplementation: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Handler", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Handler = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Source", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Source = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AbiContract", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AbiContract = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field AdapterVersion", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.AdapterVersion = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ArtifactDigest", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ArtifactDigest = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EnvironmentDigest", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.EnvironmentDigest = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SdkVersion", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.SdkVersion = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 8:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DefinitionSchemaVersion", wireType)
+			}
+			m.DefinitionSchemaVersion = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.DefinitionSchemaVersion |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Mode", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Mode = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 10:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NullPolicy", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.NullPolicy = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 11:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DefinitionFingerprint", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.DefinitionFingerprint = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipPlan(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *RoutineCall) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowPlan
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: RoutineCall: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: RoutineCall: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ContractVersion", wireType)
+			}
+			m.ContractVersion = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ContractVersion |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field FunctionRef", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.FunctionRef == nil {
+				m.FunctionRef = &FunctionRef{}
+			}
+			if err := m.FunctionRef.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Language", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Language = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ArgumentTypes", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ArgumentTypes = append(m.ArgumentTypes, &Type{})
+			if err := m.ArgumentTypes[len(m.ArgumentTypes)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ReturnType", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.ReturnType.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Volatility", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Volatility = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NullPolicy", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.NullPolicy = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 8:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Sql", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &SqlRoutineImplementation{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Implementation = &RoutineCall_Sql{v}
+			iNdEx = postIndex
+		case 9:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Python", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			v := &PythonRoutineImplementation{}
+			if err := v.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			m.Implementation = &RoutineCall_Python{v}
+			iNdEx = postIndex
+		case 10:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Context", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.Context == nil {
+				m.Context = make(map[string]string)
+			}
+			var mapkey string
+			var mapvalue string
+			for iNdEx < postIndex {
+				entryPreIndex := iNdEx
+				var wire uint64
+				for shift := uint(0); ; shift += 7 {
+					if shift >= 64 {
+						return ErrIntOverflowPlan
+					}
+					if iNdEx >= l {
+						return io.ErrUnexpectedEOF
+					}
+					b := dAtA[iNdEx]
+					iNdEx++
+					wire |= uint64(b&0x7F) << shift
+					if b < 0x80 {
+						break
+					}
+				}
+				fieldNum := int32(wire >> 3)
+				if fieldNum == 1 {
+					var stringLenmapkey uint64
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowPlan
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						stringLenmapkey |= uint64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					intStringLenmapkey := int(stringLenmapkey)
+					if intStringLenmapkey < 0 {
+						return ErrInvalidLengthPlan
+					}
+					postStringIndexmapkey := iNdEx + intStringLenmapkey
+					if postStringIndexmapkey < 0 {
+						return ErrInvalidLengthPlan
+					}
+					if postStringIndexmapkey > l {
+						return io.ErrUnexpectedEOF
+					}
+					mapkey = string(dAtA[iNdEx:postStringIndexmapkey])
+					iNdEx = postStringIndexmapkey
+				} else if fieldNum == 2 {
+					var stringLenmapvalue uint64
+					for shift := uint(0); ; shift += 7 {
+						if shift >= 64 {
+							return ErrIntOverflowPlan
+						}
+						if iNdEx >= l {
+							return io.ErrUnexpectedEOF
+						}
+						b := dAtA[iNdEx]
+						iNdEx++
+						stringLenmapvalue |= uint64(b&0x7F) << shift
+						if b < 0x80 {
+							break
+						}
+					}
+					intStringLenmapvalue := int(stringLenmapvalue)
+					if intStringLenmapvalue < 0 {
+						return ErrInvalidLengthPlan
+					}
+					postStringIndexmapvalue := iNdEx + intStringLenmapvalue
+					if postStringIndexmapvalue < 0 {
+						return ErrInvalidLengthPlan
+					}
+					if postStringIndexmapvalue > l {
+						return io.ErrUnexpectedEOF
+					}
+					mapvalue = string(dAtA[iNdEx:postStringIndexmapvalue])
+					iNdEx = postStringIndexmapvalue
+				} else {
+					iNdEx = entryPreIndex
+					skippy, err := skipPlan(dAtA[iNdEx:])
+					if err != nil {
+						return err
+					}
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
+						return ErrInvalidLengthPlan
+					}
+					if (iNdEx + skippy) > postIndex {
+						return io.ErrUnexpectedEOF
+					}
+					iNdEx += skippy
+				}
+			}
+			m.Context[mapkey] = mapvalue
+			iNdEx = postIndex
+		case 11:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CallsiteId", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.CallsiteId = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 12:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MayError", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.MayError = bool(v != 0)
+		case 13:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SecurityMode", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.SecurityMode = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 14:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Leakproof", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Leakproof = bool(v != 0)
+		default:
+			iNdEx = preIndex
+			skippy, err := skipPlan(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *RoutinePlanDependency) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowPlan
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: RoutinePlanDependency: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: RoutinePlanDependency: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field FunctionRef", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.FunctionRef == nil {
+				m.FunctionRef = &FunctionRef{}
+			}
+			if err := m.FunctionRef.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Language", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Language = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ContractVersion", wireType)
+			}
+			m.ContractVersion = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ContractVersion |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DefinitionFingerprint", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.DefinitionFingerprint = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ArtifactDigest", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ArtifactDigest = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 6:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EnvironmentDigest", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.EnvironmentDigest = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 7:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Volatility", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Volatility = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 8:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NullPolicy", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.NullPolicy = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 9:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MayError", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.MayError = bool(v != 0)
+		case 10:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SecurityMode", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.SecurityMode = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 11:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Leakproof", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Leakproof = bool(v != 0)
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPlan(dAtA[iNdEx:])

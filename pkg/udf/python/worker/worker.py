@@ -6,8 +6,9 @@
 """Arrow Flight worker for the MatrixOne Python routine contract.
 
 The process is deliberately a small protocol endpoint.  It does not install
-packages, read SQL data, or interpret user supplied paths.  Production
-launchers must place it in the sandbox class selected by the routine policy.
+packages, read SQL data, or interpret user supplied paths.  This development
+adapter is not a security boundary; a future production launcher must wrap it
+in the sandbox and deployment policy selected for the routine.
 """
 
 from __future__ import annotations
@@ -17,13 +18,14 @@ import contextlib
 import datetime as _datetime
 import decimal as _decimal
 import hashlib
-import importlib
 import inspect
 import json
 import logging
 import math
 import os
 import pickle
+import queue
+import secrets
 import selectors
 import signal
 import struct
@@ -35,7 +37,7 @@ import uuid as _uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import TZPATH, ZoneInfo, ZoneInfoNotFoundError
 
 import pyarrow as pa
 import pyarrow.flight as flight
@@ -47,9 +49,24 @@ MAX_CONTROL_BYTES = 1 << 20
 # cannot mistake active work for reclaimable terminal state.
 MAX_LEDGER_ENTRIES = 10000
 MAX_LEDGER_BYTES = 16 << 20
+# Closed group fences are retained separately from terminal records. They are
+# the proof that permits TTL collection without allowing an old tuple to
+# regain an execution grant. The cap makes the safety cost explicit: once the
+# owner fence is full, admission fails closed until a durable scheduler fence
+# is available.
+MAX_CLOSED_GROUP_ENTRIES = MAX_LEDGER_ENTRIES
+MAX_CLOSED_GROUP_BYTES = MAX_LEDGER_BYTES
 TERMINAL_TTL_SECONDS = 300.0
 ACK_TIMEOUT_SECONDS = 60.0
 MAX_EXECUTION_FRAME_BYTES = 1 << 30
+MAX_HANDLER_PROCESSES = 8
+# H is a worker-wide child limit.  The two narrower limits prevent one
+# account, or one principal inside an account, from consuming all H slots.
+# They are advertised as part of the worker capability so a Gateway can fail
+# closed when it talks to a worker with a different fairness contract.
+MAX_ACCOUNT_HANDLER_PROCESSES = MAX_HANDLER_PROCESSES
+MAX_OWNER_HANDLER_PROCESSES = MAX_HANDLER_PROCESSES // 2
+_DEFAULT_HANDLER_SLOTS = threading.BoundedSemaphore(MAX_HANDLER_PROCESSES)
 _CONTROL_KEYS = frozenset(
     {
         "version",
@@ -57,7 +74,10 @@ _CONTROL_KEYS = frozenset(
         "tuple",
         "sequence",
         "last_sequence",
+        "last_result_sequence",
         "ack_sequence",
+        "released_bytes",
+        "released_batches",
         "finish_id",
         "status",
         "reason",
@@ -69,12 +89,15 @@ _CONTROL_FIELD_RULES = {
     "OpenInvocation": (frozenset({"payload"}), frozenset({"payload"})),
     "InputBatch": (frozenset({"sequence"}), frozenset({"sequence"})),
     "EndInput": (frozenset({"last_sequence"}), frozenset({"last_sequence"})),
+    "InputConsumed": (
+        frozenset({"sequence", "released_bytes", "released_batches"}),
+        frozenset({"sequence", "released_bytes", "released_batches"}),
+    ),
     "ResultSchema": (frozenset(), frozenset()),
-    "InputConsumed": (frozenset({"sequence"}), frozenset({"sequence"})),
     "ResultBatch": (frozenset({"sequence"}), frozenset({"sequence"})),
     "Finish": (
-        frozenset({"last_sequence", "finish_id", "status"}),
-        frozenset({"last_sequence", "finish_id", "status"}),
+        frozenset({"last_sequence", "last_result_sequence", "finish_id", "status"}),
+        frozenset({"last_sequence", "last_result_sequence", "finish_id", "status"}),
     ),
     "AcknowledgeResults": (
         frozenset({"ack_sequence"}),
@@ -97,6 +120,42 @@ _TUPLE_KEYS = frozenset(
         "lease_epoch",
     }
 )
+_FUNCTION_REF_KEYS = frozenset(
+    {"account_id", "database_id", "function_id", "revision", "namespace_version"}
+)
+_OPEN_PAYLOAD_KEYS = frozenset(
+    {
+        "function_ref",
+        "handler",
+        "source",
+        "mode",
+        "null_policy",
+        "abi_contract",
+        "adapter_version",
+        "sdk_version",
+        "definition_schema_version",
+        "artifact_digest",
+        "environment_digest",
+        "definition_fingerprint",
+        "context",
+        "callsite_id",
+        "may_error",
+        "security_mode",
+        "leakproof",
+        "statement_context",
+        "security_frame",
+        "args",
+        "return",
+        "max_batch_bytes",
+        "max_batch_rows",
+        "max_invocation_rows",
+        "max_invocation_result_bytes",
+        "handler_timeout_seconds",
+    }
+)
+_OPEN_PAYLOAD_REQUIRED_KEYS = _OPEN_PAYLOAD_KEYS - {
+    "context",
+}
 _DESCRIPTOR_KEYS = frozenset(
     {
         "type_id",
@@ -115,6 +174,8 @@ _DESCRIPTOR_TEXT_KEYS = frozenset({"json_encoding", "temporal_encoding"})
 _HANDLER_RESPONSE_ERROR = 0
 _HANDLER_RESPONSE_OK = 1
 _HANDLER_RESPONSE_FD_ENV = "MATRIXONE_HANDLER_RESPONSE_FD"
+_HANDLER_PARENT_WATCH_FD_ENV = "MATRIXONE_HANDLER_PARENT_WATCH_FD"
+_HANDLER_WATCHDOG_FD_ENV = "MATRIXONE_HANDLER_WATCHDOG_FD"
 _HANDLER_ENV_ALLOWLIST = frozenset({"PATH"})
 _MICROS_PER_SECOND = 1_000_000
 _MAX_TIME_MICROS = (838 * 60 * 60 + 59 * 60 + 59) * _MICROS_PER_SECOND
@@ -139,6 +200,130 @@ NULL_RETURN = "RETURNS_NULL_ON_NULL_INPUT"
 ABI_CONTRACT = "PYTHON_ARROW"
 ADAPTER_VERSION = "2026-09"
 SDK_VERSION = "1.0"
+DEFINITION_SCHEMA_VERSION = 1
+PLAN_CONTRACT_VERSION = 1
+TYPE_DESCRIPTOR_CONTRACT = "ARROW_DESCRIPTOR"
+
+
+def _timezone_database_version() -> str:
+    for root in TZPATH:
+        try:
+            with open(
+                os.path.join(root, "tzdata.zi"), "r", encoding="utf-8"
+            ) as source:
+                line = source.readline().strip()
+        except (OSError, UnicodeError):
+            continue
+        prefix = "# version "
+        if line.startswith(prefix) and line[len(prefix) :].strip():
+            return line[len(prefix) :].strip()
+    return ""
+
+
+TIMEZONE_DATABASE_VERSION = _timezone_database_version()
+
+
+def _contract_digest(domain: str, *parts: str) -> str:
+    digest = hashlib.sha256()
+    for part in (domain, *parts):
+        encoded = part.encode("utf-8")
+        digest.update(struct.pack(">Q", len(encoded)))
+        digest.update(encoded)
+    return digest.hexdigest()
+
+
+def _inline_artifact_digest(handler: str, source: str) -> str:
+    return _contract_digest("matrixone-python-inline-artifact", handler, source)
+
+
+def _environment_digest() -> str:
+    if not TIMEZONE_DATABASE_VERSION:
+        return ""
+    return _contract_digest(
+        "matrixone-python-environment",
+        str(PROTOCOL_VERSION),
+        ABI_CONTRACT,
+        ADAPTER_VERSION,
+        SDK_VERSION,
+        str(DEFINITION_SCHEMA_VERSION),
+        str(PLAN_CONTRACT_VERSION),
+        TYPE_DESCRIPTOR_CONTRACT,
+        TIMEZONE_DATABASE_VERSION,
+    )
+
+
+def _canonical_definition_json(value: Any) -> bytes:
+    """Match Go encoding/json's canonical UTF-8 output for this contract."""
+    encoded = json.dumps(
+        value, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
+    # encoding/json escapes these characters even when the payload is UTF-8.
+    # U+2028/U+2029 are also escaped by Go for safe embedding in JavaScript.
+    return (
+        encoded.replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+        .encode("utf-8")
+    )
+
+
+def _definition_fingerprint(payload: Dict[str, Any]) -> str:
+    """Hash the immutable executable contract in an Open.
+
+    The original source is a catalog/audit payload.  The artifact digest
+    identifies the exact bytes resolved by the trusted Gateway, so source is
+    intentionally absent from this canonical definition body.
+    """
+    body = {
+        "definition_schema_version": payload["definition_schema_version"],
+        "handler": payload["handler"],
+        "mode": payload["mode"],
+        "null_policy": payload["null_policy"],
+        "abi_contract": payload["abi_contract"],
+        "adapter_version": payload["adapter_version"],
+        "artifact_digest": payload["artifact_digest"],
+        "environment_digest": payload["environment_digest"],
+        "sdk_version": payload["sdk_version"],
+        # Go's canonical definition body uses `omitempty` for ArgTypes. An
+        # empty VECTOR signature must therefore omit the field rather than
+        # encode it as an empty array, otherwise zero-argument calls would
+        # have different fingerprints on the two sides of the ABI.
+        "arg_types": [
+            json.loads(_canonical_descriptor(descriptor).decode("utf-8"))
+            for descriptor in payload["args"]
+        ],
+        "return_type": json.loads(
+            _canonical_descriptor(payload["return"]).decode("utf-8")
+        ),
+    }
+    if not body["arg_types"]:
+        del body["arg_types"]
+    return hashlib.sha256(_canonical_definition_json(body)).hexdigest()
+
+_CAPABILITY_REQUEST_KEYS = frozenset({"protocol_version"})
+_CAPABILITY_RESPONSE_KEYS = frozenset(
+    {
+        "protocol_version",
+        "abi_contract",
+        "adapter_version",
+        "sdk_version",
+        "definition_schema_version",
+        "plan_contract_version",
+        "type_descriptor_contract",
+        "timezone_database_version",
+        "modes",
+        "null_policies",
+        "window_batches",
+        "cumulative_ack",
+        "max_execution_frame_bytes",
+        "max_handler_processes",
+        "max_account_handler_processes",
+        "max_owner_handler_processes",
+        "lease_epoch",
+    }
+)
 
 log = logging.getLogger("matrixone.python.udf.worker")
 
@@ -214,6 +399,13 @@ class _TerminalRecord:
     bytes: int
     last_result: int
     finish_id: Optional[str]
+    outcome: str
+
+
+_TERMINAL_SUCCESS = "SUCCESS"
+_TERMINAL_FINISH_UNCONFIRMED = "FINISH_UNCONFIRMED"
+_TERMINAL_CANCELLED = "CANCELLED"
+_TERMINAL_FAILED = "FAILED"
 
 
 _FENCING_CONTEXT_KEYS = frozenset(
@@ -233,6 +425,31 @@ _STATEMENT_CONTEXT_KEYS = frozenset(
         "connection_collation",
     }
 )
+_TYPED_STATEMENT_CONTEXT_KEYS = frozenset(
+    {
+        "contract_version",
+        "statement_timestamp_utc",
+        "timezone_kind",
+        "timezone_name",
+        "timezone_offset_minutes",
+        "timezone_database_version",
+        "sql_mode",
+        "current_database",
+        "current_user",
+        "current_role",
+        "connection_collation",
+    }
+)
+_SECURITY_FRAME_KEYS = frozenset(
+    {
+        "contract_version",
+        "mode",
+        "invoker_user_id",
+        "invoker_role_id",
+        "effective_user_id",
+        "effective_role_id",
+    }
+)
 
 
 def _required_context_value(context: Dict[str, Any], key: str) -> str:
@@ -249,6 +466,108 @@ def _optional_context_value(context: Dict[str, Any], key: str) -> Optional[str]:
     if not isinstance(value, str):
         raise ValueError(f"PROTOCOL: statement context field {key} must be text")
     return value or None
+
+
+def _typed_statement_context(raw: Any) -> Optional[Dict[str, Any]]:
+    """Validate the typed Go execution snapshot and return canonical map data."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) - _TYPED_STATEMENT_CONTEXT_KEYS:
+        raise ValueError("PROTOCOL: unsupported typed statement context field")
+    if raw.get("contract_version") != 1:
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported statement context contract")
+    timestamp = raw.get("statement_timestamp_utc")
+    if isinstance(timestamp, bool) or not isinstance(timestamp, int):
+        raise ValueError("PROTOCOL: invalid typed statement timestamp")
+    timezone_kind = raw.get("timezone_kind")
+    if not isinstance(timezone_kind, str):
+        raise ValueError("PROTOCOL: typed statement timezone is missing")
+    timezone_kind = timezone_kind.upper()
+    timezone_name = raw.get("timezone_name", "")
+    tzdb_version = raw.get("timezone_database_version", "")
+    offset = raw.get("timezone_offset_minutes", 0)
+    if isinstance(offset, bool) or not isinstance(offset, int):
+        raise ValueError("PROTOCOL: invalid typed timezone offset")
+    if timezone_kind == "IANA":
+        if not isinstance(timezone_name, str) or not timezone_name or not isinstance(tzdb_version, str) or not tzdb_version or offset != 0:
+            raise ValueError("PROTOCOL: incomplete typed IANA timezone")
+    elif timezone_kind == "FIXED_OFFSET":
+        if timezone_name != "" or tzdb_version != "" or offset < -839 or offset > 840:
+            raise ValueError("PROTOCOL: invalid typed fixed timezone")
+    else:
+        raise ValueError("PROTOCOL: unsupported typed statement timezone")
+    sql_mode = raw.get("sql_mode")
+    if not isinstance(sql_mode, list) or any(not isinstance(item, str) or not item for item in sql_mode):
+        raise ValueError("PROTOCOL: typed statement sql_mode must be an array of strings")
+    if sql_mode != sorted(set(sql_mode)):
+        raise ValueError("PROTOCOL: typed statement sql_mode is not canonical")
+    current_user = raw.get("current_user")
+    collation = raw.get("connection_collation")
+    if not isinstance(current_user, str) or not current_user or not isinstance(collation, str) or not collation:
+        raise ValueError("PROTOCOL: typed statement principal or collation is missing")
+    optional_text = ("current_database", "current_role")
+    for key in optional_text:
+        if key in raw and not isinstance(raw[key], str):
+            raise ValueError(f"PROTOCOL: typed statement field {key} must be text")
+    value = {
+        "statement_timestamp_utc": str(timestamp),
+        "session_timezone_kind": timezone_kind,
+        "sql_mode": json.dumps(sql_mode, separators=(",", ":"), ensure_ascii=True),
+        "current_user": current_user,
+        "connection_collation": collation,
+    }
+    if timezone_kind == "IANA":
+        value["session_timezone_name"] = timezone_name
+        value["session_timezone_tzdb_version"] = tzdb_version
+    else:
+        value["session_timezone_offset_minutes"] = str(offset)
+    for key in optional_text:
+        if raw.get(key, ""):
+            value[key] = raw[key]
+    return value
+
+
+def _validate_typed_call_contract(payload: Dict[str, Any]) -> None:
+    fields = {"callsite_id", "may_error", "security_mode", "leakproof"}
+    present = fields & set(payload)
+    if not present:
+        return
+    if present != fields:
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: incomplete typed routine semantic contract")
+    callsite_id = payload.get("callsite_id")
+    if not isinstance(callsite_id, str) or not callsite_id or len(callsite_id) > 256 or "\n" in callsite_id or "\r" in callsite_id:
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: invalid typed routine callsite id")
+    if payload.get("may_error") is not True or payload.get("security_mode") != "INVOKER" or payload.get("leakproof") is not False:
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported typed routine semantic contract")
+    frame = payload.get("security_frame")
+    if not isinstance(frame, dict) or set(frame) != _SECURITY_FRAME_KEYS:
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: incomplete Python security frame")
+    if frame.get("contract_version") != 1 or frame.get("mode") != "INVOKER":
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported Python security frame")
+    integer_fields = ("invoker_user_id", "invoker_role_id", "effective_user_id", "effective_role_id")
+    if any(type(frame.get(key)) is not int or frame[key] < 0 for key in integer_fields):
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: invalid Python security frame")
+    if frame["invoker_user_id"] != frame["effective_user_id"] or frame["invoker_role_id"] != frame["effective_role_id"]:
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: Python security frame changed effective principal")
+
+
+def _handler_quota_owner(payload: Dict[str, Any]) -> str:
+    """Return the stable effective principal key used by the H budget.
+
+    A session display username is mutable text and is not an identity boundary:
+    two principals can share it across roles or accounts.  The typed security
+    frame has already been validated before this helper is called, so the
+    numeric effective IDs are the only values used for account/owner quota
+    accounting.
+    """
+    frame = payload.get("security_frame") if isinstance(payload, dict) else None
+    if not isinstance(frame, dict):
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: missing Python security frame")
+    user_id = frame.get("effective_user_id")
+    role_id = frame.get("effective_role_id")
+    if type(user_id) is not int or user_id < 0 or type(role_id) is not int or role_id < 0:
+        raise ValueError("UNSUPPORTED_ROUTINE_VERSION: invalid Python effective principal")
+    return f"user:{user_id}/role:{role_id}"
 
 
 def _statement_context(raw: Any) -> Optional[StatementContext]:
@@ -277,6 +596,8 @@ def _statement_context(raw: Any) -> Optional[StatementContext]:
         tzdb_version = _required_context_value(raw, "session_timezone_tzdb_version")
         if "session_timezone_offset_minutes" in raw:
             raise ValueError("PROTOCOL: IANA timezone cannot carry a fixed offset")
+        if not TIMEZONE_DATABASE_VERSION or tzdb_version != TIMEZONE_DATABASE_VERSION:
+            raise ValueError("PROTOCOL: IANA timezone database version does not match the worker contract")
         try:
             ZoneInfo(timezone_name)
         except (ZoneInfoNotFoundError, ValueError) as exc:
@@ -357,6 +678,26 @@ def _tuple_key(value: Dict[str, Any]) -> tuple:
     )
 
 
+def _function_ref(value: Any, tuple_value: Dict[str, Any]) -> tuple:
+    if not isinstance(value, dict) or set(value) != _FUNCTION_REF_KEYS:
+        raise ValueError("PROTOCOL: incomplete FunctionRef")
+    fields = {}
+    for key in _FUNCTION_REF_KEYS:
+        item = value.get(key)
+        minimum = 0 if key == "account_id" else 1
+        if (
+            isinstance(item, bool)
+            or not isinstance(item, int)
+            or item < minimum
+            or item > (1 << 64) - 1
+        ):
+            raise ValueError(f"PROTOCOL: invalid FunctionRef field {key}")
+        fields[key] = item
+    if fields["account_id"] != tuple_value["account_id"]:
+        raise ValueError("PROTOCOL: FunctionRef account does not match the fencing tuple")
+    return tuple(fields[key] for key in ("account_id", "database_id", "function_id", "revision", "namespace_version"))
+
+
 def _reject_duplicate_json_pairs(pairs):
     result = {}
     for key, value in pairs:
@@ -402,6 +743,63 @@ def _decode_control(data: bytes) -> Dict[str, Any]:
     return value
 
 
+def _decode_capability_request(data: bytes) -> Dict[str, Any]:
+    if not data or len(data) > MAX_CONTROL_BYTES:
+        raise ValueError("PROTOCOL: invalid capability request size")
+    try:
+        value = json.loads(
+            bytes(data).decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_pairs,
+            parse_constant=_reject_nonstandard_json_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError("PROTOCOL: invalid capability request JSON") from exc
+    if not isinstance(value, dict) or set(value) != _CAPABILITY_REQUEST_KEYS:
+        raise ValueError("PROTOCOL: invalid capability request fields")
+    if type(value.get("protocol_version")) is not int or value["protocol_version"] != PROTOCOL_VERSION:
+        raise ValueError("PROTOCOL: unsupported capability protocol version")
+    return value
+
+
+def _encode_capabilities(request: Dict[str, Any], lease_epoch: int = 1) -> bytes:
+    _decode_capability_request(json.dumps(request, separators=(",", ":")).encode("utf-8"))
+    if isinstance(lease_epoch, bool) or not isinstance(lease_epoch, int) or lease_epoch <= 0 or lease_epoch > (1 << 64) - 1:
+        raise ValueError("PROTOCOL: invalid worker lease epoch")
+    value = {
+        "protocol_version": PROTOCOL_VERSION,
+        "abi_contract": ABI_CONTRACT,
+        "adapter_version": ADAPTER_VERSION,
+        "sdk_version": SDK_VERSION,
+        "definition_schema_version": DEFINITION_SCHEMA_VERSION,
+        "plan_contract_version": PLAN_CONTRACT_VERSION,
+        "type_descriptor_contract": TYPE_DESCRIPTOR_CONTRACT,
+        "timezone_database_version": TIMEZONE_DATABASE_VERSION,
+        "modes": [MODE_SCALAR, MODE_VECTOR],
+        "null_policies": [NULL_CALL, NULL_RETURN],
+        # The current implementation intentionally exposes one in-flight
+        # batch per invocation. This is a capability, not an implied promise
+        # that a future worker accepts cumulative ACKs.
+        "window_batches": 1,
+        "cumulative_ack": False,
+        "max_execution_frame_bytes": MAX_EXECUTION_FRAME_BYTES,
+        "max_handler_processes": MAX_HANDLER_PROCESSES,
+        "max_account_handler_processes": MAX_ACCOUNT_HANDLER_PROCESSES,
+        "max_owner_handler_processes": MAX_OWNER_HANDLER_PROCESSES,
+        # This is an instance lease, not a liveness timer.  A new worker
+        # process gets a new value, so a Gateway cannot accidentally reuse an
+        # invocation tuple that was admitted by a previous worker instance.
+        "lease_epoch": lease_epoch,
+    }
+    if set(value) != _CAPABILITY_RESPONSE_KEYS:
+        raise ValueError("PROTOCOL: invalid capability response")
+    encoded = json.dumps(
+        value, separators=(",", ":"), sort_keys=True, allow_nan=False
+    ).encode("utf-8")
+    if len(encoded) > MAX_CONTROL_BYTES:
+        raise ValueError("RESOURCE_EXHAUSTED: capability response is too large")
+    return encoded
+
+
 def _require_tuple(value: Dict[str, Any], expected: Dict[str, Any]) -> None:
     if _tuple_key(value) != _tuple_key(expected):
         raise ValueError("PROTOCOL: fencing tuple changed")
@@ -411,6 +809,19 @@ def _required_string(value: Dict[str, Any], key: str) -> str:
     item = value.get(key)
     if not isinstance(item, str) or not item:
         raise ValueError(f"PROTOCOL: missing invocation field {key}")
+    return item
+
+
+def _required_digest(value: Dict[str, Any], key: str) -> str:
+    item = _required_string(value, key)
+    if len(item) != hashlib.sha256().digest_size * 2:
+        raise ValueError(f"PROTOCOL: invalid invocation field {key}")
+    try:
+        decoded = bytes.fromhex(item)
+    except ValueError as exc:
+        raise ValueError(f"PROTOCOL: invalid invocation field {key}") from exc
+    if item.lower() != item or len(decoded) != hashlib.sha256().digest_size:
+        raise ValueError(f"PROTOCOL: invalid invocation field {key}")
     return item
 
 
@@ -464,8 +875,14 @@ def _validate_control_fields(value: Dict[str, Any], wire: bool) -> None:
         _required_uint64(value, "sequence")
     if "last_sequence" in value:
         _required_uint64(value, "last_sequence", allow_zero=True)
+    if "last_result_sequence" in value:
+        _required_uint64(value, "last_result_sequence", allow_zero=True)
     if "ack_sequence" in value:
         _required_uint64(value, "ack_sequence")
+    if "released_bytes" in value:
+        _required_positive_int(value, "released_bytes", MAX_EXECUTION_FRAME_BYTES)
+    if "released_batches" in value:
+        _required_uint64(value, "released_batches")
     if "finish_id" in value:
         _required_string(value, "finish_id")
     if "status" in value:
@@ -536,20 +953,35 @@ def _validate_descriptor_domain(descriptor: Dict[str, Any]) -> None:
         raise ValueError("TYPE_CONTRACT: descriptor width must be non-negative")
     if scale < 0:
         raise ValueError("TYPE_CONTRACT: descriptor scale must be non-negative")
-    if int(descriptor.get("offset_width") or expected_offset_width) != expected_offset_width:
+    # A 32-bit offset is part of the canonical descriptor for ordinary values
+    # and is serialized by the Go descriptor.  Only fixed-width UUID/vector
+    # descriptors omit the zero-valued field.  Do not turn a missing or
+    # explicitly zero ordinary offset into an implicit default: that would
+    # accept a damaged Catalog row and produce a different ABI on the two
+    # sides.
+    if expected_offset_width == 32 and "offset_width" not in descriptor:
+        raise ValueError("TYPE_CONTRACT: descriptor offset_width is required")
+    if int(descriptor.get("offset_width", expected_offset_width)) != expected_offset_width:
         raise ValueError(
             f"TYPE_CONTRACT: descriptor offset_width must be {expected_offset_width}"
         )
     json_encoding = descriptor.get("json_encoding")
     if json_encoding not in (None, "") and (type_id != JSON or json_encoding != "canonical_text"):
         raise ValueError("TYPE_CONTRACT: unsupported JSON encoding")
+    if type_id == JSON and json_encoding != "canonical_text":
+        raise ValueError("TYPE_CONTRACT: JSON descriptor must use canonical_text encoding")
     temporal_encoding = descriptor.get("temporal_encoding")
     if temporal_encoding not in (None, "") and (
         type_id not in (DATE, DATETIME, TIMESTAMP) or temporal_encoding != "sql_zero_struct"
     ):
         raise ValueError("TYPE_CONTRACT: unsupported temporal encoding")
+    if type_id in (DATE, DATETIME, TIMESTAMP) and temporal_encoding != "sql_zero_struct":
+        raise ValueError("TYPE_CONTRACT: temporal descriptor must use sql_zero_struct encoding")
 
-    if type_id in (BOOL, INT8, INT16, INT32, INT64, UINT8, UINT16, UINT32, UINT64, JSON):
+    if type_id in (
+        BOOL, INT8, INT16, INT32, INT64, UINT8, UINT16, UINT32, UINT64,
+        FLOAT32, FLOAT64, JSON,
+    ):
         if width or scale or charset:
             raise ValueError("TYPE_CONTRACT: descriptor carries unused fields")
     elif type_id in (DECIMAL64, DECIMAL128):
@@ -695,15 +1127,13 @@ def _validate_input_batch_schema(
 
 
 def _load_handler(source: str, handler: str):
+    if ":" in handler:
+        raise ValueError(
+            "UNSUPPORTED_ROUTINE_VERSION: Python external handler import requires an immutable artifact catalog"
+        )
     namespace: Dict[str, Any] = {"__name__": "__matrixone_routine__"}
     exec(compile(source, "<routine>", "exec"), namespace, namespace)
-    if ":" in handler:
-        module_name, function_name = handler.split(":", 1)
-        function = namespace.get(function_name)
-        if function is None and module_name:
-            function = getattr(importlib.import_module(module_name), function_name, None)
-    else:
-        function = namespace.get(handler)
+    function = namespace.get(handler)
     if not callable(function) or inspect.iscoroutinefunction(function):
         raise ValueError("USER_CODE: handler must be a synchronous callable")
     return function
@@ -976,19 +1406,26 @@ def _deserialize_record_batch(data: bytes) -> pa.RecordBatch:
         reader.close()
 
 
-def _execute_handler_batch(request: Dict[str, Any]) -> bytes:
+def _execute_handler_batch(
+    request: Dict[str, Any],
+    *,
+    handler=None,
+    statement_context: Optional[StatementContext] = None,
+) -> bytes:
     batch = _deserialize_record_batch(request["input"])
     args = request["args"]
     result_descriptor = request["return"]
     mode = request["mode"]
     null_policy = request["null_policy"]
     sdk_version = request["sdk_version"]
-    statement_context = _statement_context(request.get("context"))
+    if statement_context is None:
+        statement_context = _statement_context(request.get("context"))
 
     # User code has no stdout/stderr channel in the Flight protocol.  Discard
     # it so a print() cannot corrupt the length-prefixed response frame.
     with contextlib.redirect_stdout(_DiscardText()), contextlib.redirect_stderr(_DiscardText()):
-        handler = _load_handler(request["source"], request["handler"])
+        if handler is None:
+            handler = _load_handler(request["source"], request["handler"])
         if mode == MODE_VECTOR:
             call_context = VectorContext(sdk_version, _CallLogger(), statement_context, batch.num_rows)
             output = handler(call_context, *[batch.column(index) for index in range(batch.num_columns)])
@@ -1032,27 +1469,122 @@ def _write_execution_frame(stream, payload: bytes) -> None:
     stream.flush()
 
 
+def _watch_parent_liveness(read_fd: int) -> None:
+    """Terminate the whole handler group when the worker disappears.
+
+    The worker cannot run its normal cleanup after SIGKILL/OOM.  A pipe whose
+    write end is owned by the worker gives the handler a kernel-owned death
+    notification, including the race where the worker exits before the
+    handler has finished starting.  This is a reliability owner for ordinary
+    handler processes; it is deliberately not described as a security
+    sandbox, because unisolated user code can inspect or interfere with its
+    own process.
+    """
+    try:
+        while True:
+            if os.read(read_fd, 1) == b"":
+                if os.name == "posix":
+                    try:
+                        os.killpg(os.getpgrp(), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                os._exit(137)
+    except (OSError, ValueError):
+        os._exit(137)
+
+
+def _watch_handler_group(read_fd: int, process_group_id: int) -> None:
+    """Reap a handler process group even after its leader has exited.
+
+    This watchdog is a worker-owned reliability process, not a security
+    boundary.  It has no user-code imports and only has the group id plus a
+    read end of a worker-owned pipe.  If the worker disappears, the pipe gets
+    EOF and the watchdog kills the whole handler process group.  Keeping this
+    responsibility outside the handler leader closes the case where the
+    leader exits first while a descendant keeps running.
+    """
+    try:
+        while True:
+            if os.read(read_fd, 1) == b"":
+                if os.name == "posix":
+                    try:
+                        os.killpg(process_group_id, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                return
+    except (OSError, ValueError):
+        return
+    finally:
+        try:
+            os.close(read_fd)
+        except OSError:
+            pass
+
+
 def _execute_handler_subprocess() -> None:
     response_fd_text = os.environ.pop(_HANDLER_RESPONSE_FD_ENV, None)
-    if response_fd_text is None:
+    parent_watch_fd_text = os.environ.pop(_HANDLER_PARENT_WATCH_FD_ENV, None)
+    if response_fd_text is None or parent_watch_fd_text is None:
         raise ValueError("PROTOCOL: handler response channel is missing")
     try:
         response_fd = int(response_fd_text)
+        parent_watch_fd = int(parent_watch_fd_text)
         response_stream = os.fdopen(response_fd, "wb", buffering=0, closefd=True)
+        threading.Thread(
+            target=_watch_parent_liveness,
+            args=(parent_watch_fd,),
+            name="matrixone-udf-parent-watch",
+            daemon=True,
+        ).start()
     except (OSError, TypeError, ValueError) as exc:
         raise ValueError("PROTOCOL: handler response channel is invalid") from exc
     try:
-        size = struct.unpack(">Q", _read_exact(sys.stdin.buffer, 8))[0]
-        if size > MAX_EXECUTION_FRAME_BYTES:
-            raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
-        request = pickle.loads(_read_exact(sys.stdin.buffer, size))
-        response = bytes([_HANDLER_RESPONSE_OK]) + _execute_handler_batch(request)
-    except Exception as exc:
-        response = bytes([_HANDLER_RESPONSE_ERROR]) + _safe_error(exc).encode("utf-8")
-    try:
-        # This descriptor is created by the adapter and is distinct from the
-        # process stdout/stderr descriptors available to handler code.
-        _write_execution_frame(response_stream, response)
+        # A child is reused only within one bounded invocation burst.  The
+        # source is compiled once and every later request must carry the same
+        # frozen contract; input Arrow batches remain independently validated
+        # by the parent and by _execute_handler_batch.
+        frozen = None
+        handler = None
+        statement_context = None
+        while True:
+            header = sys.stdin.buffer.read(8)
+            if not header:
+                break
+            if len(header) != 8:
+                raise EOFError("execution request header ended unexpectedly")
+            size = struct.unpack(">Q", header)[0]
+            if size > MAX_EXECUTION_FRAME_BYTES:
+                raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
+            try:
+                request = pickle.loads(_read_exact(sys.stdin.buffer, size))
+                if not isinstance(request, dict):
+                    raise ValueError("PROTOCOL: execution request is not an object")
+                contract = {
+                    key: request.get(key)
+                    for key in (
+                        "source", "handler", "mode", "null_policy", "abi_contract",
+                        "adapter_version", "sdk_version", "definition_schema_version",
+                        "artifact_digest", "environment_digest", "definition_fingerprint",
+                        "context", "args", "return", "max_batch_bytes", "max_batch_rows",
+                        "max_invocation_rows", "max_invocation_result_bytes",
+                    )
+                }
+                if frozen is None:
+                    frozen = contract
+                    statement_context = _statement_context(request.get("context"))
+                    handler = _load_handler(request["source"], request["handler"])
+                elif contract != frozen:
+                    raise ValueError("PROTOCOL: handler burst contract changed")
+                response = bytes([_HANDLER_RESPONSE_OK]) + _execute_handler_batch(
+                    request, handler=handler, statement_context=statement_context
+                )
+            except Exception as exc:
+                response = bytes([_HANDLER_RESPONSE_ERROR]) + _safe_error(exc).encode("utf-8")
+            # This descriptor is created by the adapter and is distinct from
+            # process stdout/stderr descriptors available to handler code.
+            _write_execution_frame(response_stream, response)
+            if response[0] == _HANDLER_RESPONSE_ERROR:
+                break
     finally:
         response_stream.close()
 
@@ -1066,22 +1598,121 @@ def _context_is_cancelled(context) -> bool:
         return False
 
 
+class _ExchangeInputReader:
+    """Make a blocking Flight input read observable to cancellation.
+
+    ``FlightStreamReader.read_chunk`` is a blocking native call.  Polling the
+    Flight context around that call is insufficient: a cancelled RPC can
+    remain stuck in the native reader and therefore keep the invocation, its
+    handler, and its ledger entry alive.  Keep at most one chunk in flight and
+    interrupt the native reader through its cancellation API when the server
+    context is cancelled.  The reader thread is bounded by the admitted
+    exchange, and is joined before the exchange returns.
+    """
+
+    _POLL_SECONDS = 0.05
+
+    def __init__(self, reader):
+        self._reader = reader
+        self._stop = threading.Event()
+        self._items = queue.Queue(maxsize=1)
+        self._thread = threading.Thread(
+            target=self._read_loop,
+            name="matrixone-udf-flight-reader",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _publish(self, kind, value=None):
+        item = (kind, value)
+        while not self._stop.is_set():
+            try:
+                self._items.put(item, timeout=self._POLL_SECONDS)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _read_loop(self):
+        try:
+            while not self._stop.is_set():
+                try:
+                    chunk = self._reader.read_chunk()
+                except StopIteration:
+                    self._publish("eof")
+                    return
+                self._publish("chunk", chunk)
+        except Exception as exc:
+            self._publish("error", exc)
+
+    def _cancel_native_reader(self):
+        cancel = getattr(self._reader, "cancel", None)
+        if not callable(cancel):
+            cancel = getattr(self._reader, "close", None)
+        if callable(cancel):
+            try:
+                cancel()
+            except Exception:
+                # The RPC is already being torn down.  The join below still
+                # verifies whether the native read actually returned.
+                pass
+
+    def next(self, context):
+        while True:
+            if _context_is_cancelled(context):
+                self.cancel()
+                raise TimeoutError("DEADLINE_EXCEEDED: input stream cancelled")
+            try:
+                kind, value = self._items.get(timeout=self._POLL_SECONDS)
+            except queue.Empty:
+                continue
+            if kind == "chunk":
+                return value
+            if kind == "eof":
+                raise StopIteration
+            raise value
+
+    def cancel(self):
+        self._stop.set()
+        self._cancel_native_reader()
+
+    def close(self):
+        self.cancel()
+        self._thread.join(timeout=1.0)
+        if self._thread.is_alive():
+            raise ValueError(
+                "RESOURCE_EXHAUSTED: Flight input reader did not stop after cancellation"
+            )
 def _kill_execution_process(process: subprocess.Popen) -> None:
     # The leader can already have exited while one of its descendants keeps
-    # the execution alive.  Always address the process group first; checking
-    # poll() before killpg() leaves that descendant outside the cleanup path.
+    # the execution alive.  The session closes the worker-owned liveness pipe
+    # before calling this helper, so the watchdog owns that leader-exited
+    # case.  Do not call killpg with a reaped PID: macOS may have already
+    # reused the process-group id and returns EPERM (or could address an
+    # unrelated group).  An un-reaped leader is still killed as a group.
     if os.name == "posix":
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
     elif process.poll() is None:
         process.kill()
     try:
         process.wait(timeout=1.0)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait()
+        try:
+            process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired as exc:
+            # The caller retains the handler session, H slot, and invocation
+            # ledger in the bounded pending-cleanup owner. Do not let an
+            # unbounded reap wait turn a cancellation path into a worker-wide
+            # hang; the process group has already received SIGKILL and the
+            # failure is surfaced to the owner.
+            raise TimeoutError(
+                "DEADLINE_EXCEEDED: handler process did not exit after SIGKILL"
+            ) from exc
 
 
 def _execution_group_alive(process: subprocess.Popen) -> bool:
@@ -1096,129 +1727,455 @@ def _execution_group_alive(process: subprocess.Popen) -> bool:
     return True
 
 
-def _run_handler_process(context, request: Dict[str, Any], timeout_seconds: float) -> bytes:
-    deadline = time.monotonic() + timeout_seconds
-    request_wire = pickle.dumps(request, protocol=5)
-    if len(request_wire) > MAX_EXECUTION_FRAME_BYTES:
-        raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
-    request_frame = struct.pack(">Q", len(request_wire)) + request_wire
-    response_read_fd, response_write_fd = os.pipe()
-    process = None
-    selector = None
-    popen_kwargs = {
-        "stdin": subprocess.PIPE,
-        # Handler output is diagnostic-only.  It must never share the
-        # adapter response channel, even when user code writes directly to
-        # file descriptor 1.
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "close_fds": True,
-    }
-    if os.name == "posix":
-        popen_kwargs["start_new_session"] = True
-        popen_kwargs["pass_fds"] = (response_write_fd,)
-    # User code runs under a separate execution identity.  In particular, do
-    # not inherit CN, object-store, database, or tenant credentials from the
-    # worker process.  Routine dependencies are supplied by the selected Python
-    # environment and do not need ambient environment variables.
-    child_env = {
-        name: value
-        for name, value in os.environ.items()
-        if name in _HANDLER_ENV_ALLOWLIST
-    }
-    child_env[_HANDLER_RESPONSE_FD_ENV] = str(response_write_fd)
-    # The extra descriptor is a protocol-channel separation mechanism, not a
-    # sandbox boundary.  An unisolated handler with arbitrary OS access can
-    # still inspect inherited descriptors; production isolation must enforce
-    # the stronger policy that handler code cannot write this channel.
-    popen_kwargs["env"] = child_env
-    response = bytearray()
-    expected = None
-    response_eof = False
-    request_offset = 0
-    try:
-        process = subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__), "--execute-handler"],
-            **popen_kwargs,
-        )
-        os.close(response_write_fd)
-        response_write_fd = -1
-        selector = selectors.DefaultSelector()
-        stdin_fd = process.stdin.fileno()
-        os.set_blocking(stdin_fd, False)
-        os.set_blocking(response_read_fd, False)
-        selector.register(stdin_fd, selectors.EVENT_WRITE, "request")
-        selector.register(response_read_fd, selectors.EVENT_READ, "response")
-        while True:
-            if _context_is_cancelled(context):
-                raise TimeoutError("DEADLINE_EXCEEDED: handler execution cancelled")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("DEADLINE_EXCEEDED: handler execution timeout")
-            events = selector.select(min(remaining, 0.1))
-            for event, _ in events:
-                if event.data == "request":
-                    try:
-                        written = os.write(stdin_fd, request_frame[request_offset:])
-                    except BlockingIOError:
-                        continue
-                    except BrokenPipeError as exc:
-                        raise ValueError("USER_CODE: handler process closed its request channel") from exc
-                    request_offset += written
-                    if request_offset == len(request_frame):
-                        selector.unregister(stdin_fd)
-                        process.stdin.close()
-                else:
-                    try:
-                        chunk = os.read(response_read_fd, 65536)
-                    except BlockingIOError:
-                        continue
-                    if not chunk:
-                        response_eof = True
-                        selector.unregister(response_read_fd)
-                        if expected is None or len(response) < expected + 8:
-                            raise ValueError("USER_CODE: handler process exited without a response")
-                    else:
-                        response.extend(chunk)
-                        if expected is None and len(response) >= 8:
-                            expected = struct.unpack(">Q", response[:8])[0]
-                            if expected > MAX_EXECUTION_FRAME_BYTES:
-                                raise ValueError("RESOURCE_EXHAUSTED: execution response is too large")
-                        if expected is not None and len(response) > expected + 8:
-                            raise ValueError("PROTOCOL: handler process returned trailing response data")
+DEFAULT_BURST_BATCHES = 64
+DEFAULT_BURST_BYTES = 64 << 20
+DEFAULT_BURST_SECONDS = 30.0
+# A pending cleanup retains an admitted invocation, so it is bounded by the
+# same ledger entry budget as active invocations. H is only the bound for
+# child processes; empty/ALL-NULL invocations can still own a Flight reader
+# without owning a handler child.
+MAX_PENDING_CLEANUPS = MAX_LEDGER_ENTRIES
+PENDING_HANDLER_CLEANUP_INITIAL_DELAY = 0.05
+PENDING_HANDLER_CLEANUP_MAX_DELAY = 1.0
 
-            # A complete frame is not enough.  The adapter wrapper must have
-            # returned normally, and all of its process-group descendants
-            # must be gone before the adapter accepts the result.
-            if process.poll() is not None:
-                if process.returncode != 0:
-                    raise ValueError("USER_CODE: handler process exited abnormally")
-                if _execution_group_alive(process):
-                    raise ValueError("USER_CODE: handler process left descendant processes")
-                if response_eof and expected is not None and len(response) == expected + 8:
-                    break
-        payload = bytes(response[8 : expected + 8])
-        if not payload:
-            raise ValueError("PROTOCOL: handler process returned an empty response")
-        if payload[0] == _HANDLER_RESPONSE_ERROR:
-            try:
-                message = payload[1:].decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise ValueError("PROTOCOL: handler process returned an invalid error") from exc
-            raise ValueError(message or "USER_CODE: handler process failed")
-        if payload[0] != _HANDLER_RESPONSE_OK:
-            raise ValueError("PROTOCOL: handler process returned an unknown status")
-        return payload[1:]
-    finally:
-        if selector is not None:
-            selector.close()
-        if process is not None:
-            _kill_execution_process(process)
-            if process.stdin is not None:
-                process.stdin.close()
-        if response_write_fd >= 0:
+
+class _HandlerQuotaLease:
+    """Idempotent ownership token for one live handler child."""
+
+    def __init__(self, quota, account_id: int, owner_id: str):
+        self._quota = quota
+        self._account_id = account_id
+        self._owner_id = owner_id
+        self._released = False
+        self._lock = threading.Lock()
+
+    def release(self) -> None:
+        with self._lock:
+            if self._released:
+                return
+            self._released = True
+        self._quota._release(self._account_id, self._owner_id)
+
+
+class _HandlerQuota:
+    """Non-blocking worker, account, and principal handler budgets.
+
+    The owner key is scoped by account.  Two tenants using the same username
+    therefore do not contend for one another's principal budget.  Acquisition
+    is deliberately all-or-nothing and never waits while a caller owns an
+    input buffer or a process slot.
+    """
+
+    def __init__(
+        self,
+        max_account_handlers: int = MAX_ACCOUNT_HANDLER_PROCESSES,
+        max_owner_handlers: int = MAX_OWNER_HANDLER_PROCESSES,
+    ):
+        if (
+            type(max_account_handlers) is not int
+            or max_account_handlers <= 0
+            or max_account_handlers > MAX_HANDLER_PROCESSES
+        ):
+            raise ValueError("PROTOCOL: invalid account handler budget")
+        if (
+            type(max_owner_handlers) is not int
+            or max_owner_handlers <= 0
+            or max_owner_handlers > max_account_handlers
+        ):
+            raise ValueError("PROTOCOL: invalid owner handler budget")
+        self._max_account_handlers = max_account_handlers
+        self._max_owner_handlers = max_owner_handlers
+        self._lock = threading.Lock()
+        self._account_counts: Dict[int, int] = {}
+        self._owner_counts: Dict[tuple[int, str], int] = {}
+
+    def acquire(self, account_id: int, owner_id: str) -> _HandlerQuotaLease:
+        if type(account_id) is not int or account_id < 0:
+            raise ValueError("PROTOCOL: invalid handler budget account")
+        if not isinstance(owner_id, str) or not owner_id:
+            raise ValueError("PROTOCOL: invalid handler budget owner")
+        owner_key = (account_id, owner_id)
+        with self._lock:
+            account_count = self._account_counts.get(account_id, 0)
+            if account_count >= self._max_account_handlers:
+                raise ValueError("RESOURCE_EXHAUSTED: account handler budget is full")
+            owner_count = self._owner_counts.get(owner_key, 0)
+            if owner_count >= self._max_owner_handlers:
+                raise ValueError("RESOURCE_EXHAUSTED: owner handler budget is full")
+            self._account_counts[account_id] = account_count + 1
+            self._owner_counts[owner_key] = owner_count + 1
+        return _HandlerQuotaLease(self, account_id, owner_id)
+
+    def _release(self, account_id: int, owner_id: str) -> None:
+        owner_key = (account_id, owner_id)
+        with self._lock:
+            account_count = self._account_counts.get(account_id, 0)
+            owner_count = self._owner_counts.get(owner_key, 0)
+            if account_count <= 0 or owner_count <= 0:
+                raise RuntimeError("handler quota release without ownership")
+            if account_count == 1:
+                del self._account_counts[account_id]
+            else:
+                self._account_counts[account_id] = account_count - 1
+            if owner_count == 1:
+                del self._owner_counts[owner_key]
+            else:
+                self._owner_counts[owner_key] = owner_count - 1
+
+    def counts(self) -> tuple[Dict[int, int], Dict[tuple[int, str], int]]:
+        """Return copies for deterministic tests and bounded diagnostics."""
+        with self._lock:
+            return dict(self._account_counts), dict(self._owner_counts)
+
+
+class _HandlerProcessSession:
+    """One handler child reused only inside a bounded invocation burst."""
+
+    def __init__(
+        self,
+        execution_slots: Optional[threading.BoundedSemaphore] = None,
+        *,
+        handler_quota: Optional[_HandlerQuota] = None,
+        account_id: int = 0,
+        owner_id: str = "__anonymous__",
+    ):
+        self._slots = execution_slots or _DEFAULT_HANDLER_SLOTS
+        self._slot_acquired = False
+        self._quota_lease = None
+        self._process = None
+        self._watchdog_process = None
+        self._selector = None
+        self._response_read_fd = -1
+        self._parent_watch_write_fd = -1
+        self._response_buffer = bytearray()
+        self._closed = False
+        self._close_lock = threading.Lock()
+        self._burst_started = time.monotonic()
+        self._burst_batches = 0
+        self._burst_bytes = 0
+        try:
+            if handler_quota is not None:
+                self._quota_lease = handler_quota.acquire(account_id, owner_id)
+            if not self._slots.acquire(blocking=False):
+                raise ValueError("RESOURCE_EXHAUSTED: handler execution slots are full")
+            self._slot_acquired = True
+            response_read_fd, response_write_fd = os.pipe()
+            parent_watch_read_fd, parent_watch_write_fd = os.pipe()
+            watchdog_read_fd = os.dup(parent_watch_read_fd)
+            self._response_read_fd = response_read_fd
+            self._parent_watch_write_fd = parent_watch_write_fd
+            popen_kwargs = {
+                "stdin": subprocess.PIPE,
+                # Handler output is diagnostic-only.  It must never share the
+                # adapter response channel, even when user code writes directly
+                # to file descriptor 1.
+                "stdout": subprocess.DEVNULL,
+                "stderr": subprocess.DEVNULL,
+                "close_fds": True,
+            }
+            if os.name == "posix":
+                popen_kwargs["start_new_session"] = True
+                popen_kwargs["pass_fds"] = (response_write_fd, parent_watch_read_fd)
+            # User code runs under a separate execution identity.  In
+            # particular, do not inherit CN, object-store, database, or tenant
+            # credentials from the worker process.  This is process hygiene,
+            # not a sandbox boundary.
+            child_env = {
+                name: value
+                for name, value in os.environ.items()
+                if name in _HANDLER_ENV_ALLOWLIST
+            }
+            child_env[_HANDLER_RESPONSE_FD_ENV] = str(response_write_fd)
+            child_env[_HANDLER_PARENT_WATCH_FD_ENV] = str(parent_watch_read_fd)
+            popen_kwargs["env"] = child_env
+            self._process = subprocess.Popen(
+                [sys.executable, os.path.abspath(__file__), "--execute-handler"],
+                **popen_kwargs,
+            )
             os.close(response_write_fd)
-        os.close(response_read_fd)
+            response_write_fd = -1
+            os.close(parent_watch_read_fd)
+            parent_watch_read_fd = -1
+            if os.name == "posix":
+                watchdog_env = {
+                    name: value
+                    for name, value in os.environ.items()
+                    if name in _HANDLER_ENV_ALLOWLIST
+                }
+                watchdog_env[_HANDLER_WATCHDOG_FD_ENV] = str(watchdog_read_fd)
+                self._watchdog_process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        os.path.abspath(__file__),
+                        "--watch-handler-group",
+                        str(self._process.pid),
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    close_fds=True,
+                    env=watchdog_env,
+                    start_new_session=True,
+                    pass_fds=(watchdog_read_fd,),
+                )
+            os.close(watchdog_read_fd)
+            watchdog_read_fd = -1
+            self._selector = selectors.DefaultSelector()
+            stdin_fd = self._process.stdin.fileno()
+            os.set_blocking(stdin_fd, False)
+            os.set_blocking(response_read_fd, False)
+            self._selector.register(response_read_fd, selectors.EVENT_READ, "response")
+        except Exception:
+            for fd in (
+                locals().get("response_write_fd", -1),
+                locals().get("parent_watch_read_fd", -1),
+                locals().get("watchdog_read_fd", -1),
+            ):
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+            # Preserve the construction failure.  Cleanup is best effort and
+            # must not hide the contract error that caused session creation
+            # to fail.
+            try:
+                self.close()
+            except Exception:
+                pass
+            raise
+
+    @property
+    def should_rollover(self) -> bool:
+        return (
+            self._burst_batches >= DEFAULT_BURST_BATCHES
+            or self._burst_bytes >= DEFAULT_BURST_BYTES
+            or time.monotonic() - self._burst_started >= DEFAULT_BURST_SECONDS
+        )
+
+    def _take_response(self) -> Optional[bytes]:
+        if len(self._response_buffer) < 8:
+            return None
+        expected = struct.unpack(">Q", self._response_buffer[:8])[0]
+        if expected > MAX_EXECUTION_FRAME_BYTES:
+            raise ValueError("RESOURCE_EXHAUSTED: execution response is too large")
+        if len(self._response_buffer) < expected + 8:
+            return None
+        payload = bytes(self._response_buffer[8 : expected + 8])
+        del self._response_buffer[: expected + 8]
+        return payload
+
+    def run(self, context, request: Dict[str, Any], timeout_seconds: float) -> bytes:
+        if self._closed or self._process is None or self._selector is None:
+            raise ValueError("PROTOCOL: handler session is closed")
+        # The handler budget is an absolute deadline for the whole request,
+        # including serialization and the non-blocking write. Starting the
+        # clock after pickle.dumps would let a large request consume an
+        # unbounded part of the caller's budget before the deadline was even
+        # installed.
+        deadline = time.monotonic() + timeout_seconds
+        request_wire = pickle.dumps(request, protocol=5)
+        if time.monotonic() >= deadline:
+            raise TimeoutError("DEADLINE_EXCEEDED: handler execution timeout")
+        if len(request_wire) > MAX_EXECUTION_FRAME_BYTES:
+            raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
+        request_frame = struct.pack(">Q", len(request_wire)) + request_wire
+        request_offset = 0
+        stdin_fd = self._process.stdin.fileno()
+        self._selector.register(stdin_fd, selectors.EVENT_WRITE, "request")
+        try:
+            while True:
+                if _context_is_cancelled(context):
+                    raise TimeoutError("DEADLINE_EXCEEDED: handler execution cancelled")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("DEADLINE_EXCEEDED: handler execution timeout")
+                response = self._take_response()
+                if response is not None:
+                    break
+                events = self._selector.select(min(remaining, 0.1))
+                for event, _ in events:
+                    if event.data == "request":
+                        try:
+                            written = os.write(stdin_fd, request_frame[request_offset:])
+                        except BlockingIOError:
+                            continue
+                        except BrokenPipeError as exc:
+                            raise ValueError("USER_CODE: handler process closed its request channel") from exc
+                        request_offset += written
+                        if request_offset == len(request_frame):
+                            self._selector.unregister(stdin_fd)
+                    else:
+                        try:
+                            chunk = os.read(self._response_read_fd, 65536)
+                        except BlockingIOError:
+                            continue
+                        if not chunk:
+                            raise ValueError("USER_CODE: handler process exited without a response")
+                        self._response_buffer.extend(chunk)
+                if self._process.poll() is not None:
+                    if self._process.returncode != 0:
+                        raise ValueError("USER_CODE: handler process exited abnormally")
+                    if _execution_group_alive(self._process):
+                        raise ValueError("USER_CODE: handler process left descendant processes")
+                    raise ValueError("USER_CODE: handler process exited before the burst completed")
+            if not response:
+                raise ValueError("PROTOCOL: handler process returned an empty response")
+            if response[0] == _HANDLER_RESPONSE_ERROR:
+                try:
+                    message = response[1:].decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise ValueError("PROTOCOL: handler process returned an invalid error") from exc
+                raise ValueError(message or "USER_CODE: handler process failed")
+            if response[0] != _HANDLER_RESPONSE_OK:
+                raise ValueError("PROTOCOL: handler process returned an unknown status")
+            output = response[1:]
+            self._burst_batches += 1
+            self._burst_bytes += len(request_wire) + len(response)
+            return output
+        finally:
+            # A failed write/read must not leave a stale registration that a
+            # later close or diagnostic path mistakes for active work.
+            try:
+                self._selector.unregister(stdin_fd)
+            except (KeyError, ValueError):
+                pass
+
+    def close(self) -> None:
+        # Mark the session closed before taking the lock so no new batch can
+        # enter while another terminal path is retrying cleanup.  Ownership
+        # fields are cleared only after their operation succeeds; otherwise a
+        # transient kill/close error would make a later cleanup call unable to
+        # find the resource it still owns.
+        self._closed = True
+        with self._close_lock:
+            close_error = None
+
+            def attempt(operation, commit) -> None:
+                nonlocal close_error
+                operation_error = None
+                # Process reaping can race a child exiting and descriptor
+                # close can transiently fail during RPC teardown.  A bounded
+                # second attempt makes cleanup retryable without turning
+                # cancellation into an unbounded wait.
+                for _ in range(2):
+                    try:
+                        operation()
+                        commit()
+                        return
+                    except Exception as exc:
+                        operation_error = exc
+                if close_error is None:
+                    close_error = operation_error
+
+            if self._selector is not None:
+                selector = self._selector
+                attempt(selector.close, lambda: setattr(self, "_selector", None))
+            if self._parent_watch_write_fd >= 0:
+                parent_watch_write_fd = self._parent_watch_write_fd
+
+                def close_parent_watch() -> None:
+                    os.close(parent_watch_write_fd)
+
+                attempt(
+                    close_parent_watch,
+                    lambda: setattr(self, "_parent_watch_write_fd", -1),
+                )
+            if self._process is not None:
+                process = self._process
+
+                def close_process() -> None:
+                    _kill_execution_process(process)
+                    if process.stdin is not None:
+                        process.stdin.close()
+
+                attempt(close_process, lambda: setattr(self, "_process", None))
+            if self._watchdog_process is not None:
+                watchdog_process = self._watchdog_process
+
+                def wait_for_watchdog() -> None:
+                    try:
+                        watchdog_process.wait(timeout=0.1)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            watchdog_process.kill()
+                        except ProcessLookupError:
+                            pass
+                        watchdog_process.wait(timeout=1.0)
+
+                attempt(
+                    wait_for_watchdog,
+                    lambda: setattr(self, "_watchdog_process", None),
+                )
+            if self._response_read_fd >= 0:
+                response_read_fd = self._response_read_fd
+
+                def close_response_read() -> None:
+                    os.close(response_read_fd)
+
+                attempt(
+                    close_response_read,
+                    lambda: setattr(self, "_response_read_fd", -1),
+                )
+            # H and the account/owner quota describe a live handler child.  A
+            # failed kill must therefore keep both leases held while this
+            # session is owned by the pending-cleanup reaper.  Releasing them
+            # merely because the close attempt returned an error would let a
+            # later invocation exceed the real process budget.  The fields are
+            # cleared only after every process/IPC owner has been cleared.
+            resources_closed = (
+                self._selector is None
+                and self._process is None
+                and self._watchdog_process is None
+                and self._response_read_fd < 0
+                and self._parent_watch_write_fd < 0
+            )
+            if resources_closed and self._slot_acquired:
+                attempt(self._slots.release, lambda: setattr(self, "_slot_acquired", False))
+            quota_lease = getattr(self, "_quota_lease", None)
+            if resources_closed and quota_lease is not None:
+                attempt(quota_lease.release, lambda: setattr(self, "_quota_lease", None))
+            if close_error is not None:
+                raise close_error
+
+
+# Keep stable class identities for cleanup ownership checks. Contract tests
+# replace the module constructors to inject failures; using the mutable module
+# attributes in isinstance() would then turn a valid cleanup path into a
+# TypeError and could mask the original exchange outcome.
+_EXCHANGE_INPUT_READER_TYPE = _ExchangeInputReader
+_HANDLER_PROCESS_SESSION_TYPE = _HandlerProcessSession
+
+
+@dataclass
+class _PendingInvocationCleanup:
+    input_reader: Optional[_ExchangeInputReader]
+    handler_session: Optional[_HandlerProcessSession]
+    key: tuple
+    state: _InvocationState
+    next_attempt: float
+    failures: int = 0
+
+
+def _run_handler_process(
+    context, request: Dict[str, Any], timeout_seconds: float,
+    execution_slots: Optional[threading.BoundedSemaphore] = None,
+) -> bytes:
+    session = _HandlerProcessSession(execution_slots)
+    try:
+        result = session.run(context, request, timeout_seconds)
+    except BaseException:
+        # Preserve the handler/transport failure as the primary diagnosis.
+        # Cleanup is still mandatory, but a close failure must not replace a
+        # deadline, user-code, or protocol error and hide the actual cause.
+        try:
+            session.close()
+        except Exception:
+            logging.exception("Python UDF handler cleanup failed after an execution error")
+        raise
+    else:
+        session.close()
+        return result
 
 
 
@@ -1232,9 +2189,108 @@ class _InvocationState:
         self.acked_result = 0
         self.finish_id: Optional[str] = None
         self.finish_acked = False
+        self.finish_sent = False
+        self.cancelled = False
+        self.terminal_outcome: Optional[str] = None
+
+    def input_sequence(self) -> int:
+        with self.condition:
+            return self.last_input
+
+    def record_input(self, sequence: int) -> None:
+        with self.condition:
+            if self.terminal_outcome is not None or self.cancelled:
+                raise ValueError("PROTOCOL: invocation is already terminal")
+            if sequence != self.last_input + 1:
+                raise ValueError("PROTOCOL: input sequence is not contiguous")
+            self.last_input = sequence
+            self.condition.notify_all()
+
+    def sequences(self) -> tuple:
+        with self.condition:
+            return self.last_input, self.last_result, self.acked_result
+
+    def record_result(self, sequence: int) -> None:
+        with self.condition:
+            if self.terminal_outcome is not None or self.cancelled:
+                raise ValueError("PROTOCOL: invocation is already terminal")
+            if sequence != self.last_result + 1 or sequence > self.last_input:
+                raise ValueError("PROTOCOL: result sequence is not contiguous")
+            self.last_result = sequence
+            self.condition.notify_all()
+
+    def terminal_snapshot(self) -> tuple:
+        with self.condition:
+            outcome = self.terminal_outcome
+            if outcome is None:
+                if self.finish_acked:
+                    outcome = _TERMINAL_SUCCESS
+                elif self.finish_sent:
+                    outcome = _TERMINAL_FINISH_UNCONFIRMED
+                elif self.cancelled:
+                    outcome = _TERMINAL_CANCELLED
+                else:
+                    outcome = _TERMINAL_FAILED
+            return self.last_result, self.finish_id, outcome
+
+    def mark_finish_sent(self, finish_id: str) -> str:
+        with self.condition:
+            if self.terminal_outcome is not None or self.cancelled:
+                raise ValueError("PROTOCOL: invocation is already terminal")
+            if self.finish_sent or not finish_id:
+                raise ValueError("PROTOCOL: Finish was already sent")
+            self.finish_id = finish_id
+            self.finish_sent = True
+            return finish_id
+
+    def freeze_terminal(self) -> str:
+        """Linearize the outcome before the active entry is removed.
+
+        A Finish identifier only proves that the worker emitted Finish.  It
+        does not prove that the peer accepted AcknowledgeFinish.  The latter
+        is the condition for SUCCESS; otherwise a sent Finish is frozen as
+        FINISH_UNCONFIRMED and cannot be promoted by a late action.
+        """
+        with self.condition:
+            if self.terminal_outcome is None:
+                if self.finish_acked:
+                    self.terminal_outcome = _TERMINAL_SUCCESS
+                elif self.finish_sent:
+                    self.terminal_outcome = _TERMINAL_FINISH_UNCONFIRMED
+                elif self.cancelled:
+                    self.terminal_outcome = _TERMINAL_CANCELLED
+                else:
+                    self.terminal_outcome = _TERMINAL_FAILED
+            return self.terminal_outcome
+
+    def mark_cancelled(self) -> None:
+        """Freeze cancellation intent before the active lease is removed.
+
+        Cancellation is recorded on the invocation state rather than inferred
+        from cleanup timing.  This lets a concurrent ACK observe the same
+        terminal gate: an already accepted Finish ACK still wins, while a
+        result or Finish ACK arriving after cancellation cannot advance the
+        invocation.
+        """
+        with self.condition:
+            if self.terminal_outcome is None:
+                # An accepted Finish ACK is the terminal proof.  Cancellation
+                # may race the transport teardown after that ACK, but it must
+                # not overwrite SUCCESS or make a later cleanup publish a
+                # contradictory CANCELLED tombstone.
+                if self.finish_acked:
+                    return
+                self.cancelled = True
+                self.condition.notify_all()
 
     def ack_result(self, sequence: int) -> None:
         with self.condition:
+            if self.cancelled:
+                raise ValueError("PROTOCOL: invocation terminal outcome is CANCELLED")
+            if self.terminal_outcome is not None and self.terminal_outcome != _TERMINAL_SUCCESS:
+                raise ValueError(
+                    f"PROTOCOL: invocation terminal outcome is {self.terminal_outcome}"
+                )
             if sequence <= 0 or sequence < self.acked_result or sequence > self.last_result:
                 raise ValueError("PROTOCOL: result ACK is outside the received range")
             self.acked_result = sequence
@@ -1252,6 +2308,20 @@ class _InvocationState:
 
     def ack_finish(self, finish_id: str) -> None:
         with self.condition:
+            if self.terminal_outcome is not None:
+                if self.terminal_outcome == _TERMINAL_SUCCESS and finish_id == self.finish_id:
+                    return
+                raise ValueError(
+                    f"PROTOCOL: invocation terminal outcome is {self.terminal_outcome}"
+                )
+            # Cancellation may race the response after the peer has already
+            # accepted this exact Finish ACK.  The accepted acknowledgement
+            # is the terminal proof and remains idempotent; a cancellation
+            # that won the race before the ACK is still rejected below.
+            if self.finish_acked and finish_id == self.finish_id:
+                return
+            if self.cancelled:
+                raise ValueError("PROTOCOL: invocation terminal outcome is CANCELLED")
             if not self.finish_id or finish_id != self.finish_id: raise ValueError("PROTOCOL: invalid finish id")
             self.finish_acked = True
             self.condition.notify_all()
@@ -1268,13 +2338,44 @@ class _InvocationState:
 
 
 class RoutineFlightServer(flight.FlightServerBase):
-    def __init__(self, location: str):
+    def __init__(
+        self,
+        location: str,
+        *,
+        clock=time.monotonic,
+        terminal_ttl_seconds=TERMINAL_TTL_SECONDS,
+        lease_epoch=1,
+    ):
+        if isinstance(lease_epoch, bool) or not isinstance(lease_epoch, int) or lease_epoch <= 0 or lease_epoch > (1 << 64) - 1:
+            raise ValueError("PROTOCOL: invalid worker lease epoch")
         super().__init__(location)
         self._lock = threading.RLock()
         self._active: Dict[tuple, _InvocationState] = {}
         self._terminal: OrderedDict[tuple, _TerminalRecord] = OrderedDict()
         self._terminal_bytes = 0
         self._active_bytes = 0
+        self._active_groups: Dict[str, int] = {}
+        self._closed_groups: Dict[str, int] = {}
+        self._closed_group_bytes = 0
+        self._reserved_groups = set()
+        self._reserved_group_bytes = 0
+        self._clock = clock
+        self._terminal_ttl_seconds = terminal_ttl_seconds
+        self._lease_epoch = lease_epoch
+        # H is independent from the number of admitted Flight invocations K.
+        # A rejected acquire fails before the handler process is created and
+        # therefore cannot accumulate a hidden Python task queue.
+        self._handler_slots = threading.BoundedSemaphore(MAX_HANDLER_PROCESSES)
+        self._handler_quota = _HandlerQuota()
+        # A Flight reader or handler session remains owned by the Flight
+        # server until every resource close has succeeded. This queue is
+        # bounded by the active ledger budget, so a transient cleanup failure
+        # cannot create an unbounded reaper queue or silently release an
+        # invocation while a native reader or child is still live.
+        self._pending_cleanup_condition = threading.Condition()
+        self._pending_cleanups: Dict[tuple, _PendingInvocationCleanup] = {}
+        self._pending_cleanup_thread: Optional[threading.Thread] = None
+        self._pending_cleanup_stopping = False
 
     @staticmethod
     def _entry_bytes(key: tuple) -> int:
@@ -1285,68 +2386,367 @@ class RoutineFlightServer(flight.FlightServerBase):
         return len(encoded) + 128
 
     def _purge_terminal_locked(self, now: float) -> None:
-        expired = [key for key, record in self._terminal.items() if record.expires_at <= now]
+        expired = [
+            key
+            for key, record in self._terminal.items()
+            if record.expires_at <= now
+            and self._closed_groups.get(key[2], 0) >= key[3]
+        ]
         for key in expired:
             record = self._terminal.pop(key)
             self._terminal_bytes -= record.bytes
 
     def _admit(self, key: tuple) -> _InvocationState:
         size = self._entry_bytes(key)
+        group_id, group_epoch = key[2], key[3]
         with self._lock:
-            self._purge_terminal_locked(time.monotonic())
+            if self._closed_groups.get(group_id, 0) >= group_epoch:
+                raise ValueError("PROTOCOL: execution group epoch is already closed")
+            self._purge_terminal_locked(self._clock())
             if key in self._active:
                 raise ValueError("PROTOCOL: invocation fence is active")
             if key in self._terminal:
                 raise ValueError("PROTOCOL: invocation fence is terminal")
+            if group_id in self._active_groups:
+                raise ValueError("PROTOCOL: execution group epoch is already active")
             if len(self._active) + len(self._terminal) >= MAX_LEDGER_ENTRIES:
                 raise ValueError("RESOURCE_EXHAUSTED: terminal ledger entries are full")
             if self._active_bytes + self._terminal_bytes + size > MAX_LEDGER_BYTES:
                 raise ValueError("RESOURCE_EXHAUSTED: terminal ledger bytes are full")
+            if group_id not in self._closed_groups and group_id not in self._reserved_groups:
+                fence_bytes = len(group_id.encode("utf-8")) + 8
+                if (
+                    len(self._closed_groups) + len(self._reserved_groups)
+                    >= MAX_CLOSED_GROUP_ENTRIES
+                    or self._closed_group_bytes + self._reserved_group_bytes + fence_bytes
+                    > MAX_CLOSED_GROUP_BYTES
+                ):
+                    raise ValueError("RESOURCE_EXHAUSTED: closed-group fence is full")
+                # Reserve the future tombstone before creating the handler.
+                # Terminal cleanup converts this reservation into the
+                # closed-generation fence.
+                self._reserved_groups.add(group_id)
+                self._reserved_group_bytes += fence_bytes
             state = _InvocationState({}, size)
             self._active[key] = state
             self._active_bytes += size
+            self._active_groups[group_id] = group_epoch
             return state
 
+    def _require_current_lease(self, key: tuple) -> None:
+        if key[5] != self._lease_epoch:
+            raise ValueError(
+                "STALE_LEASE_EPOCH: invocation belongs to a different worker instance"
+            )
+
     def _remember_terminal_locked(self, key: tuple, state: _InvocationState) -> None:
-        deadline = time.monotonic() + TERMINAL_TTL_SECONDS
+        deadline = self._clock() + self._terminal_ttl_seconds
+        last_result, finish_id, outcome = state.terminal_snapshot()
         self._terminal[key] = _TerminalRecord(
-            deadline, state.terminal_bytes, state.last_result, state.finish_id
+            deadline, state.terminal_bytes, last_result, finish_id, outcome
         )
         self._terminal.move_to_end(key)
         self._terminal_bytes += state.terminal_bytes
+
+    def _close_group_epoch_locked(self, key: tuple) -> None:
+        group_id, group_epoch = key[2], key[3]
+        current = self._closed_groups.get(group_id, 0)
+        if group_epoch <= current:
+            return
+        if group_id not in self._closed_groups:
+            fence_bytes = len(group_id.encode("utf-8")) + 8
+            if group_id in self._reserved_groups:
+                self._reserved_groups.remove(group_id)
+                self._reserved_group_bytes -= fence_bytes
+            elif (
+                len(self._closed_groups) >= MAX_CLOSED_GROUP_ENTRIES
+                or self._closed_group_bytes + fence_bytes > MAX_CLOSED_GROUP_BYTES
+            ):
+                # This is only reachable for state restored from an adapter
+                # predating group-fence reservations. Keep the terminal record
+                # and refuse collection until the fence is reconstructed.
+                return
+            self._closed_group_bytes += fence_bytes
+        self._closed_groups[group_id] = group_epoch
 
     def _finish_invocation(self, key: tuple, state: Optional[_InvocationState]) -> None:
         # A rejected duplicate Open has no ownership of the existing state.
         # Cleanup must therefore be identity based, not key based.
         if key is None or state is None:
             return
+        state.freeze_terminal()
         with self._lock:
             current = self._active.get(key)
             if current is not state:
                 return
             self._active.pop(key, None)
             self._active_bytes -= state.terminal_bytes
+            group_id, group_epoch = key[2], key[3]
+            if self._active_groups.get(group_id) == group_epoch:
+                self._active_groups.pop(group_id, None)
             # A started invocation is terminal even when the worker reports an
             # error.  Retaining the fence prevents a late retry from running
             # user code a second time.
             self._remember_terminal_locked(key, state)
+            # The current Gateway contract uses one member per group. The
+            # worker records that owner closure before allowing TTL collection;
+            # a future multi-member scheduler must send an explicit group
+            # closure before reusing this hook.
+            self._close_group_epoch_locked(key)
+
+    def _ensure_pending_cleanup_thread_locked(self) -> None:
+        thread = self._pending_cleanup_thread
+        if thread is not None and thread.is_alive():
+            return
+        thread = threading.Thread(
+            target=self._pending_cleanup_loop,
+            name="matrixone-python-udf-cleanup",
+            daemon=True,
+        )
+        self._pending_cleanup_thread = thread
+        thread.start()
+
+    def _retain_pending_cleanup(
+        self,
+        input_reader: Optional[_ExchangeInputReader],
+        handler_session: Optional[_HandlerProcessSession],
+        key: Optional[tuple],
+        state: Optional[_InvocationState],
+    ) -> bool:
+        """Retain exchange resources until every cleanup operation succeeds."""
+        if key is None or state is None or (input_reader is None and handler_session is None):
+            return False
+        with self._pending_cleanup_condition:
+            existing = self._pending_cleanups.get(key)
+            if existing is not None:
+                return True
+            if len(self._pending_cleanups) >= MAX_PENDING_CLEANUPS:
+                # An admitted invocation must not lose its cleanup owner. A
+                # full queue is an adapter invariant violation; keeping the
+                # invocation active is safer than pretending ownership was
+                # released.
+                logging.critical(
+                    "Python UDF pending cleanup capacity is full for %r",
+                    key,
+                )
+                return False
+            self._pending_cleanups[key] = _PendingInvocationCleanup(
+                input_reader=input_reader,
+                handler_session=handler_session,
+                key=key,
+                state=state,
+                next_attempt=time.monotonic(),
+            )
+            self._ensure_pending_cleanup_thread_locked()
+            self._pending_cleanup_condition.notify_all()
+            return True
+
+    def _pending_cleanup_loop(self) -> None:
+        while True:
+            with self._pending_cleanup_condition:
+                while True:
+                    if self._pending_cleanup_stopping and not self._pending_cleanups:
+                        return
+                    if not self._pending_cleanups:
+                        self._pending_cleanup_condition.wait()
+                        continue
+                    now = time.monotonic()
+                    ready = [
+                        item for item in self._pending_cleanups.values()
+                        if item.next_attempt <= now
+                    ]
+                    if ready:
+                        break
+                    wait_for = min(
+                        item.next_attempt
+                        for item in self._pending_cleanups.values()
+                    ) - now
+                    self._pending_cleanup_condition.wait(max(0.01, wait_for))
+
+            for item in ready:
+                errors = []
+                if item.input_reader is not None:
+                    try:
+                        item.input_reader.close()
+                    except Exception as exc:
+                        errors.append(exc)
+                    else:
+                        with self._pending_cleanup_condition:
+                            current = self._pending_cleanups.get(item.key)
+                            if current is item:
+                                item.input_reader = None
+                if item.handler_session is not None:
+                    try:
+                        item.handler_session.close()
+                    except Exception as exc:
+                        errors.append(exc)
+                    else:
+                        with self._pending_cleanup_condition:
+                            current = self._pending_cleanups.get(item.key)
+                            if current is item:
+                                item.handler_session = None
+                if errors:
+                    exc = errors[0]
+                    item.failures += 1
+                    delay = min(
+                        PENDING_HANDLER_CLEANUP_MAX_DELAY,
+                        PENDING_HANDLER_CLEANUP_INITIAL_DELAY
+                        * (2 ** min(item.failures, 5)),
+                    )
+                    with self._pending_cleanup_condition:
+                        current = self._pending_cleanups.get(item.key)
+                        if current is item:
+                            item.next_attempt = time.monotonic() + delay
+                            self._pending_cleanup_condition.notify_all()
+                    logging.error(
+                        "Python UDF exchange cleanup retry failed for %r: %s",
+                        item.key,
+                        exc,
+                    )
+                    continue
+
+                # The session is now fully closed.  Only then can the
+                # invocation owner release K, the ledger entry, and the group
+                # fence.  _finish_invocation is idempotent with respect to any
+                # late ACK that arrived while the cleanup was pending.
+                finish_error = None
+                try:
+                    self._finish_invocation(item.key, item.state)
+                except Exception as exc:
+                    finish_error = exc
+                with self._pending_cleanup_condition:
+                    current = self._pending_cleanups.get(item.key)
+                    if current is item and finish_error is None:
+                        del self._pending_cleanups[item.key]
+                    elif current is item:
+                        item.failures += 1
+                        item.next_attempt = time.monotonic() + PENDING_HANDLER_CLEANUP_MAX_DELAY
+                    self._pending_cleanup_condition.notify_all()
+                if finish_error is not None:
+                    logging.error(
+                        "Python UDF invocation cleanup retry failed for %r: %s",
+                        item.key,
+                        finish_error,
+                    )
+
+    def shutdown(self):
+        result = super().shutdown()
+        with self._pending_cleanup_condition:
+            self._pending_cleanup_stopping = True
+            self._pending_cleanup_condition.notify_all()
+            thread = self._pending_cleanup_thread
+        if thread is not None:
+            # Normal shutdown has no pending sessions and joins immediately.
+            # A persistent OS/resource failure remains owned by the daemon
+            # reaper; the handler's parent-liveness pipe still guarantees
+            # child-group cleanup if this worker process exits.
+            thread.join(timeout=2.0)
+            with self._pending_cleanup_condition:
+                pending = len(self._pending_cleanups)
+            if pending:
+                logging.error(
+                    "Python UDF worker shutdown left %d handler cleanups pending",
+                    pending,
+                )
+        return result
+
+    def _cleanup_exchange(
+        self,
+        key: Optional[tuple],
+        state: Optional[_InvocationState],
+        input_reader,
+        handler_session,
+    ) -> Optional[Exception]:
+        """Run every exchange cleanup step and return its first error.
+
+        Closing a native Flight reader or a handler process is allowed to
+        fail while an RPC is already being cancelled.  Those failures must
+        not skip the invocation fence cleanup: otherwise K, handler slots,
+        group reservations, and terminal de-duplication can disagree about
+        whether the invocation still owns resources.  The caller decides
+        whether a cleanup error should replace an existing exchange error.
+        """
+        cleanup_error: Optional[Exception] = None
+
+        def close_with_retry(resource) -> tuple[bool, Optional[Exception]]:
+            last_error = None
+            for _ in range(2):
+                try:
+                    resource.close()
+                    return True, None
+                except Exception as exc:
+                    last_error = exc
+            return False, last_error
+
+        input_cleanup_succeeded = input_reader is None
+        if input_reader is not None:
+            input_cleanup_succeeded, cleanup_error = close_with_retry(input_reader)
+
+        handler_cleanup_succeeded = handler_session is None
+        handler_error = None
+        if handler_session is not None:
+            handler_cleanup_succeeded, handler_error = close_with_retry(handler_session)
+            if cleanup_error is None:
+                cleanup_error = handler_error
+
+        # Real native readers and process sessions retain ownership when close
+        # fails. Test doubles deliberately keep the old direct-cleanup
+        # behaviour so the helper tests do not create a false production
+        # resource owner.
+        pending_reader = (
+            input_reader
+            if isinstance(input_reader, _EXCHANGE_INPUT_READER_TYPE) and not input_cleanup_succeeded
+            else None
+        )
+        pending_session = (
+            handler_session
+            if isinstance(handler_session, _HANDLER_PROCESS_SESSION_TYPE) and not handler_cleanup_succeeded
+            else None
+        )
+        if pending_reader is None and pending_session is None:
+            try:
+                self._finish_invocation(key, state)
+            except Exception as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+        elif not self._retain_pending_cleanup(pending_reader, pending_session, key, state):
+            # Keep the invocation active if no cleanup owner could be
+            # registered. Returning the error makes the failure visible and
+            # prevents a false terminal record from authorizing a retry.
+            if cleanup_error is None:
+                cleanup_error = RuntimeError(
+                    "Python UDF exchange cleanup owner could not be retained"
+                )
+        return cleanup_error
 
     def do_action(self, context, action):
+        if action.type == "GetPythonCapabilities":
+            request = _decode_capability_request(action.body)
+            # pyarrow exposes Result as a one positional-buffer value across
+            # supported releases; using a keyword here breaks the real Flight
+            # path before any routine is opened.
+            yield flight.Result(_encode_capabilities(request, self._lease_epoch))
+            return
         control = _decode_control(action.body)
         key = _tuple_key(control["tuple"])
+        self._require_current_lease(key)
         if action.type not in ("AcknowledgeResults", "AcknowledgeFinish"):
             raise ValueError("PROTOCOL: unknown action")
         if control["kind"] != action.type:
             raise ValueError("PROTOCOL: action kind does not match action type")
         with self._lock:
-            self._purge_terminal_locked(time.monotonic())
+            self._purge_terminal_locked(self._clock())
             state = self._active.get(key)
             terminal = self._terminal.get(key)
         if state is None:
             if terminal is None:
                 raise ValueError("PROTOCOL: unknown invocation")
+            if terminal.outcome != _TERMINAL_SUCCESS:
+                raise ValueError(
+                    f"PROTOCOL: invocation terminal outcome is {terminal.outcome}"
+                )
             if not terminal.finish_id:
-                raise ValueError("PROTOCOL: invocation did not complete successfully")
+                raise ValueError("PROTOCOL: successful invocation has no Finish")
             if action.type == "AcknowledgeResults":
                 sequence = _required_uint64(control, "ack_sequence")
                 if sequence != terminal.last_result:
@@ -1375,6 +2775,8 @@ class RoutineFlightServer(flight.FlightServerBase):
     def do_exchange(self, context, descriptor, reader, writer):
         state = None
         key = None
+        handler_session = None
+        input_reader = None
         writer_started = False
         try:
             command = getattr(descriptor, "command", None)
@@ -1385,21 +2787,56 @@ class RoutineFlightServer(flight.FlightServerBase):
             if not isinstance(open_control.get("payload"), dict):
                 raise ValueError("PROTOCOL: invocation payload must be an object")
             key = _tuple_key(open_control["tuple"])
+            self._require_current_lease(key)
             payload = open_control["payload"]
+            unknown_payload = set(payload) - _OPEN_PAYLOAD_KEYS
+            missing_payload = _OPEN_PAYLOAD_REQUIRED_KEYS - set(payload)
+            if unknown_payload:
+                raise ValueError("PROTOCOL: unsupported invocation payload field")
+            if missing_payload:
+                raise ValueError("PROTOCOL: invocation payload is missing a required field")
+            _validate_typed_call_contract(payload)
+            _function_ref(payload.get("function_ref"), open_control["tuple"])
             args = payload.get("args")
             result_descriptor = payload.get("return")
             if not isinstance(args, list) or any(not isinstance(item, dict) for item in args):
                 raise ValueError("PROTOCOL: invocation args must be an array of descriptors")
             if not isinstance(result_descriptor, dict):
                 raise ValueError("PROTOCOL: invocation return must be a descriptor")
-            statement_context = _statement_context(payload.get("context"))
+            context_values = payload.get("context")
+            statement_context = _statement_context(context_values)
+            typed_context_values = _typed_statement_context(payload.get("statement_context"))
+            if typed_context_values is None:
+                raise ValueError("UNSUPPORTED_ROUTINE_VERSION: missing typed statement context")
+            typed_statement_context = _statement_context(typed_context_values)
+            if statement_context is not None and statement_context != typed_statement_context:
+                raise ValueError("PROTOCOL: typed statement context does not match context")
+            statement_context = typed_statement_context
+            effective_context = dict(context_values or {})
+            # The typed form is the canonical wire representation.  The
+            # trusted CN map predates it and may use equivalent textual
+            # encodings such as "+480" for a fixed offset.  The parsed
+            # StatementContext comparison above rejects semantic drift;
+            # overwrite the handler-facing map with canonical values so
+            # equivalent encodings do not become a false protocol error.
+            effective_context.update(typed_context_values)
             mode = _required_string(payload, "mode")
             null_policy = _required_string(payload, "null_policy")
             abi_contract = _required_string(payload, "abi_contract")
             adapter_version = _required_string(payload, "adapter_version")
             sdk_version = _required_string(payload, "sdk_version")
+            definition_schema_version = payload.get("definition_schema_version")
+            if type(definition_schema_version) is not int or definition_schema_version != DEFINITION_SCHEMA_VERSION:
+                raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported Python definition schema")
+            artifact_digest = _required_digest(payload, "artifact_digest")
+            environment_digest = _required_digest(payload, "environment_digest")
+            definition_fingerprint = _required_digest(payload, "definition_fingerprint")
             max_batch_bytes = _required_positive_int(payload, "max_batch_bytes", 1 << 30)
             max_batch_rows = _required_positive_int(payload, "max_batch_rows", 1 << 30)
+            max_invocation_rows = _required_positive_int(payload, "max_invocation_rows", 1 << 32)
+            max_invocation_result_bytes = _required_positive_int(
+                payload, "max_invocation_result_bytes", 1 << 40
+            )
             handler_timeout_seconds = _required_positive_float(
                 payload, "handler_timeout_seconds", 3600.0
             )
@@ -1408,12 +2845,21 @@ class RoutineFlightServer(flight.FlightServerBase):
             if sdk_version != SDK_VERSION: raise ValueError("PROTOCOL: unsupported Python SDK")
             source = _required_string(payload, "source")
             handler_name = _required_string(payload, "handler")
+            if artifact_digest != _inline_artifact_digest(handler_name, source):
+                raise ValueError("UNSUPPORTED_ROUTINE_VERSION: Python artifact digest does not match the source")
+            if environment_digest != _environment_digest():
+                raise ValueError("UNSUPPORTED_ROUTINE_VERSION: Python environment digest does not match the worker contract")
             # Validate the complete frozen type contract before reserving a
             # ledger entry.  A malformed Open is rejected before it can leave
             # a terminal tombstone behind.
             for index, descriptor in enumerate(args):
                 _field(f"arg_{index}", descriptor)
             result_field = _field("result", result_descriptor)
+            expected_fingerprint = _definition_fingerprint(payload)
+            if definition_fingerprint != expected_fingerprint:
+                raise ValueError(
+                    "UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint does not match the typed definition"
+                )
             state = self._admit(key)
             state.tuple = open_control["tuple"]
             schema = None
@@ -1422,11 +2868,20 @@ class RoutineFlightServer(flight.FlightServerBase):
             writer_started = True
             writer.write_metadata(_encode_control({"kind": "ResultSchema", "tuple": open_control["tuple"]}))
             ended = False
+            invocation_rows = 0
+            invocation_result_bytes = 0
+            input_reader = _ExchangeInputReader(reader)
             while True:
                 try:
-                    chunk = reader.read_chunk()
+                    chunk = input_reader.next(context)
                 except StopIteration:
                     break
+                # The reader can publish a chunk at the same instant that the
+                # RPC is cancelled.  Re-check after the blocking handoff so a
+                # chunk already dequeued after cancellation cannot start user
+                # code or consume another handler slot.
+                if _context_is_cancelled(context):
+                    raise TimeoutError("DEADLINE_EXCEEDED: input stream cancelled")
                 if chunk is None or (chunk.data is None and not chunk.app_metadata):
                     raise ValueError("PROTOCOL: empty input frame")
                 if chunk.data is not None:
@@ -1441,25 +2896,45 @@ class RoutineFlightServer(flight.FlightServerBase):
                     _require_tuple(control["tuple"], open_control["tuple"])
                     if control["kind"] != "InputBatch": raise ValueError("PROTOCOL: data batch is missing InputBatch")
                     sequence = _required_uint64(control, "sequence")
-                    if sequence != state.last_input + 1: raise ValueError("PROTOCOL: input sequence is not contiguous")
+                    if sequence != state.input_sequence() + 1: raise ValueError("PROTOCOL: input sequence is not contiguous")
                     if batch.num_rows <= 0: raise ValueError("PROTOCOL: empty input batch")
                     if batch.num_rows > max_batch_rows: raise ValueError("RESOURCE_EXHAUSTED: input batch has too many rows")
+                    if invocation_rows > max_invocation_rows - batch.num_rows:
+                        raise ValueError("RESOURCE_EXHAUSTED: invocation has too many rows")
                     if batch.nbytes > max_batch_bytes: raise ValueError("RESOURCE_EXHAUSTED: input batch exceeds byte limit")
                     for index, descriptor in enumerate(args):
                         _validate_array_values(batch.column(index), descriptor)
+                    state.record_input(sequence)
                     execution_request = {
                         "source": source,
                         "handler": handler_name,
                         "mode": mode,
                         "null_policy": null_policy,
+                        "abi_contract": abi_contract,
+                        "adapter_version": adapter_version,
                         "sdk_version": sdk_version,
-                        "context": payload.get("context"),
+                        "definition_schema_version": definition_schema_version,
+                        "artifact_digest": artifact_digest,
+                        "environment_digest": environment_digest,
+                        "definition_fingerprint": definition_fingerprint,
+                        "context": effective_context,
                         "args": args,
                         "return": result_descriptor,
                         "max_batch_bytes": max_batch_bytes,
+                        "max_batch_rows": max_batch_rows,
+                        "max_invocation_rows": max_invocation_rows,
+                        "max_invocation_result_bytes": max_invocation_result_bytes,
                         "input": _serialize_record_batch(batch),
                     }
-                    output_wire = _run_handler_process(
+                    if handler_session is None:
+                        owner_id = _handler_quota_owner(payload)
+                        handler_session = _HandlerProcessSession(
+                            self._handler_slots,
+                            handler_quota=self._handler_quota,
+                            account_id=key[0],
+                            owner_id=owner_id,
+                        )
+                    output_wire = handler_session.run(
                         context, execution_request, handler_timeout_seconds
                     )
                     output_batch = _deserialize_record_batch(output_wire)
@@ -1470,21 +2945,40 @@ class RoutineFlightServer(flight.FlightServerBase):
                     _validate_array_values(output_array, result_descriptor)
                     if pa.ipc.get_record_batch_size(output_batch) > max_batch_bytes:
                         raise ValueError("RESOURCE_EXHAUSTED: output batch exceeds byte limit")
-                    state.last_input = sequence
-                    state.last_result = sequence
-                    writer.write_metadata(_encode_control({"kind": "InputConsumed", "tuple": open_control["tuple"], "sequence": sequence}))
+                    invocation_result_bytes += pa.ipc.get_record_batch_size(output_batch)
+                    if invocation_result_bytes > max_invocation_result_bytes:
+                        raise ValueError("RESOURCE_EXHAUSTED: invocation result exceeds byte limit")
+                    invocation_rows += batch.num_rows
+                    state.record_result(sequence)
+                    writer.write_metadata(_encode_control({
+                        "kind": "InputConsumed",
+                        "tuple": open_control["tuple"],
+                        "sequence": sequence,
+                        # This is the decoded Arrow backing released by the
+                        # worker after the handler has returned. It is bounded
+                        # by max_batch_bytes and is distinct from the CN's
+                        # transport framing bytes. A zero-column batch has
+                        # no value buffers, but still consumes one logical
+                        # accounting unit so the positive-credit protocol
+                        # remains valid for zero-argument VECTOR calls.
+                        "released_bytes": max(int(batch.nbytes), 1),
+                        "released_batches": 1,
+                    }))
                     writer.write_with_metadata(output_batch, _encode_control({"kind": "ResultBatch", "tuple": open_control["tuple"], "sequence": sequence}))
                     state.wait_result_ack(sequence, context)
+                    if handler_session.should_rollover:
+                        handler_session.close()
+                        handler_session = None
                 elif chunk.app_metadata:
                     control = _decode_control(chunk.app_metadata)
                     _require_tuple(control["tuple"], open_control["tuple"])
                     if control["kind"] == "EndInput":
                         last_sequence = _required_uint64(control, "last_sequence", allow_zero=True)
                         if ended:
-                            if last_sequence != state.last_input:
+                            if last_sequence != state.input_sequence():
                                 raise ValueError("PROTOCOL: EndInput changed after input was closed")
                             continue
-                        if last_sequence != state.last_input:
+                        if last_sequence != state.input_sequence():
                             raise ValueError("PROTOCOL: invalid EndInput")
                         ended = True
                     elif control["kind"] == "OpenInvocation":
@@ -1492,11 +2986,21 @@ class RoutineFlightServer(flight.FlightServerBase):
                     else:
                         raise ValueError("PROTOCOL: unexpected control without Arrow data")
             if not ended: raise ValueError("PROTOCOL: input stream ended before EndInput")
-            if state.acked_result != state.last_result: raise ValueError("PROTOCOL: result is not acknowledged")
-            state.finish_id = _uuid.uuid4().hex
-            writer.write_metadata(_encode_control({"kind": "Finish", "tuple": open_control["tuple"], "status": "OK", "finish_id": state.finish_id, "last_sequence": state.last_input}))
+            last_input, last_result, acked_result = state.sequences()
+            if acked_result != last_result: raise ValueError("PROTOCOL: result is not acknowledged")
+            finish_id = state.mark_finish_sent(_uuid.uuid4().hex)
+            writer.write_metadata(_encode_control({
+                "kind": "Finish",
+                "tuple": open_control["tuple"],
+                "status": "OK",
+                "finish_id": finish_id,
+                "last_sequence": last_input,
+                "last_result_sequence": last_result,
+            }))
             state.wait_finish_ack(context)
         except Exception as exc:
+            if state is not None and _is_cancellation_error(exc, context):
+                state.mark_cancelled()
             if writer_started and key is not None:
                 try:
                     writer.write_metadata(_encode_control({"kind": "Error", "tuple": open_control["tuple"], "status": "ERROR", "reason": _safe_error(exc)}))
@@ -1504,7 +3008,26 @@ class RoutineFlightServer(flight.FlightServerBase):
                     pass
             raise
         finally:
-            self._finish_invocation(key, state)
+            exchange_error = sys.exc_info()[1]
+            cleanup_error = self._cleanup_exchange(
+                key, state, input_reader, handler_session
+            )
+            if cleanup_error is not None and exchange_error is None:
+                raise cleanup_error
+            if cleanup_error is not None:
+                logging.error(
+                    "Python UDF exchange cleanup failed after an exchange error: %s",
+                    cleanup_error,
+                )
+
+
+def _is_cancellation_error(exc: Exception, context) -> bool:
+    if _context_is_cancelled(context):
+        return True
+    # Handler, result-ACK, and Finish-ACK deadlines use this stable protocol
+    # category.  Once observed, they are a cancellation terminal outcome even
+    # if the transport context has not yet reported cancellation locally.
+    return isinstance(exc, TimeoutError) and str(exc).startswith("DEADLINE_EXCEEDED:")
 
 
 def _safe_error(exc: Exception) -> str:
@@ -1518,16 +3041,32 @@ def _safe_error(exc: Exception) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--execute-handler", action="store_true")
+    parser.add_argument("--watch-handler-group", type=int)
     parser.add_argument("--address")
     args = parser.parse_args()
     if args.execute_handler:
         _execute_handler_subprocess()
         return
+    if args.watch_handler_group is not None:
+        watchdog_fd_text = os.environ.pop(_HANDLER_WATCHDOG_FD_ENV, None)
+        if watchdog_fd_text is None:
+            parser.error("--watch-handler-group requires a watchdog pipe")
+        try:
+            watchdog_fd = int(watchdog_fd_text)
+        except ValueError:
+            parser.error("invalid watchdog pipe")
+        _watch_handler_group(watchdog_fd, args.watch_handler_group)
+        return
     if not args.address:
         parser.error("--address is required for the Flight server")
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
     address = args.address if "://" in args.address else "grpc://" + args.address
-    server = RoutineFlightServer(address)
+    # Every worker process is a distinct execution owner.  A random positive
+    # epoch prevents a restarted worker at the same endpoint from accepting
+    # control messages issued to the previous process.  Direct unit-test
+    # servers keep the deterministic default of one.
+    lease_epoch = secrets.randbits(63) or 1
+    server = RoutineFlightServer(address, lease_epoch=lease_epoch)
     server.serve()
 
 

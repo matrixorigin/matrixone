@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -96,6 +97,7 @@ func TestClosingControlCarriesZeroLastSequence(t *testing.T) {
 		if kind == "Finish" {
 			control.Status = "OK"
 			control.FinishID = "finish"
+			control.LastResultSequence = 0
 		}
 		wire, err := MarshalControl(control)
 		require.NoError(t, err)
@@ -118,6 +120,32 @@ func TestClosingControlCarriesZeroLastSequence(t *testing.T) {
 	require.False(t, ok, "non-closing controls should not grow a closing-only field")
 }
 
+func TestInputConsumedCarriesReleaseCredit(t *testing.T) {
+	control := Control{
+		Kind:            "InputConsumed",
+		Tuple:           testTuple(),
+		Sequence:        2,
+		ReleasedBytes:   128,
+		ReleasedBatches: 1,
+	}
+	wire, err := MarshalControl(control)
+	require.NoError(t, err)
+	decoded, err := UnmarshalControl(wire)
+	require.NoError(t, err)
+	require.Equal(t, int64(128), decoded.ReleasedBytes)
+	require.Equal(t, uint64(1), decoded.ReleasedBatches)
+
+	var object map[string]any
+	require.NoError(t, json.Unmarshal(wire, &object))
+	require.Equal(t, float64(128), object["released_bytes"])
+	require.Equal(t, float64(1), object["released_batches"])
+	delete(object, "released_batches")
+	invalid, err := json.Marshal(object)
+	require.NoError(t, err)
+	_, err = UnmarshalControl(invalid)
+	require.ErrorIs(t, err, ErrProtocol)
+}
+
 func TestSystemAccountIsValidFencingIdentity(t *testing.T) {
 	tuple := testTuple()
 	tuple.AccountID = 0
@@ -132,6 +160,14 @@ func TestFencingTupleRejectsInvalidUTF8(t *testing.T) {
 	require.ErrorContains(t, tuple.Validate(), "invalid UTF-8")
 	_, err := MarshalControl(Control{Kind: "OpenInvocation", Tuple: tuple, Payload: []byte(`{}`)})
 	require.ErrorContains(t, err, "invalid UTF-8")
+}
+
+func TestFencingTupleRejectsUnboundedIdentityComponents(t *testing.T) {
+	tuple := testTuple()
+	tuple.GroupID = string(bytes.Repeat([]byte{'g'}, MaxFenceComponentBytes+1))
+	require.ErrorContains(t, tuple.Validate(), "component is too large")
+	_, err := MarshalControl(Control{Kind: "OpenInvocation", Tuple: tuple, Payload: []byte(`{}`)})
+	require.ErrorContains(t, err, "component is too large")
 }
 
 func TestUnmarshalControlRejectsInvalidWireUTF8(t *testing.T) {
@@ -286,25 +322,28 @@ func TestTerminalLedgerRetainsTombstonesUntilExpiry(t *testing.T) {
 	ledger, err := NewTerminalLedger(2, 200)
 	require.NoError(t, err)
 	now := time.Unix(100, 0)
-	credit, err := ledger.Reserve("g1", 1, 100)
+	credit, err := ledger.Reserve("g1", 1, 1, 100)
 	require.NoError(t, err)
 	require.NoError(t, credit.Add("i1", 100, now.Add(time.Hour)))
 	require.NoError(t, ledger.Complete("i1"))
 	credit.ReleaseUnused()
 
-	second, err := ledger.Reserve("g2", 1, 100)
+	second, err := ledger.Reserve("g2", 1, 1, 100)
 	require.NoError(t, err)
 	require.NoError(t, second.Add("i2", 100, now.Add(time.Hour)))
 	require.NoError(t, ledger.Complete("i2"))
 	second.ReleaseUnused()
-	_, err = ledger.Reserve("g3", 1, 1)
+	_, err = ledger.Reserve("g3", 1, 1, 1)
 	require.ErrorIs(t, err, ErrLedgerFull)
 
 	require.Equal(t, 2, func() int { n, _ := ledger.Counts(); return n }())
-	require.Equal(t, 0, ledger.Expire(now.Add(time.Minute)))
+	require.Equal(t, 0, ledger.Expire(now.Add(time.Minute), func(string, uint64) bool { return true }))
 	require.Equal(t, 2, func() int { n, _ := ledger.Counts(); return n }())
-	require.Equal(t, 2, ledger.Expire(now.Add(2*time.Hour)))
-	third, err := ledger.Reserve("g3", 1, 1)
+	require.Equal(t, 0, ledger.Expire(now.Add(2*time.Hour), nil), "TTL must not advance the ownership epoch")
+	require.Equal(t, 2, ledger.Expire(now.Add(2*time.Hour), func(groupID string, groupEpoch uint64) bool {
+		return groupID == "g1" && groupEpoch == 1 || groupID == "g2" && groupEpoch == 1
+	}))
+	third, err := ledger.Reserve("g3", 1, 1, 1)
 	require.NoError(t, err)
 	require.NoError(t, third.Add("i3", 1, now.Add(3*time.Hour)))
 
@@ -317,15 +356,15 @@ func TestTerminalLedgerDoesNotExpireActiveEntries(t *testing.T) {
 	ledger, err := NewTerminalLedger(1, 100)
 	require.NoError(t, err)
 	now := time.Unix(100, 0)
-	credit, err := ledger.Reserve("g", 1, 100)
+	credit, err := ledger.Reserve("g", 1, 1, 100)
 	require.NoError(t, err)
 	require.NoError(t, credit.Add("active", 100, now.Add(time.Second)))
 	credit.ReleaseUnused()
-	require.Equal(t, 0, ledger.Expire(now.Add(time.Hour)))
+	require.Equal(t, 0, ledger.Expire(now.Add(time.Hour), func(string, uint64) bool { return true }))
 	entries, bytes := ledger.Counts()
 	require.Equal(t, 1, entries)
 	require.Equal(t, int64(100), bytes)
-	_, err = ledger.Reserve("other", 1, 1)
+	_, err = ledger.Reserve("other", 1, 1, 1)
 	require.ErrorIs(t, err, ErrLedgerFull)
 	require.NoError(t, ledger.Abandon("active"))
 	entries, bytes = ledger.Counts()
@@ -348,6 +387,32 @@ func TestExecutionGroupReleaseErrorCanBeRetried(t *testing.T) {
 	require.NoError(t, group.Close(ReasonCancel))
 	require.Equal(t, GroupReleased, group.State())
 	require.Equal(t, int32(2), attempts.Load())
+}
+
+func TestExecutionGroupConcurrentReleaseWaitersObserveTheSameFailure(t *testing.T) {
+	releaseStarted := make(chan struct{})
+	releaseContinue := make(chan struct{})
+	var releaseStartOnce sync.Once
+	group, err := NewExecutionGroup("concurrent", 1, 1, func() error {
+		releaseStartOnce.Do(func() { close(releaseStarted) })
+		<-releaseContinue
+		return errors.New("temporary concurrent release failure")
+	})
+	require.NoError(t, err)
+	member, err := group.BeginOpen("member")
+	require.NoError(t, err)
+	require.NoError(t, member.Commit())
+	require.NoError(t, group.Close(ReasonCancel))
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- group.MemberTerminal("member") }()
+	<-releaseStarted
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- group.Close(ReasonCancel) }()
+	close(releaseContinue)
+	require.ErrorContains(t, <-firstDone, "temporary concurrent release failure")
+	require.ErrorContains(t, <-secondDone, "temporary concurrent release failure")
+	require.Equal(t, GroupDraining, group.State())
 }
 
 func TestExecutionGroupCommitReportsReleaseFailure(t *testing.T) {

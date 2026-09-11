@@ -38,6 +38,12 @@ const (
 	// MaxControlBytes is a trust-boundary ceiling.  A runtime may negotiate a
 	// smaller limit, but a caller must never silently raise it.
 	MaxControlBytes = 1 << 20
+
+	// MaxFenceComponentBytes bounds the identity retained by active and
+	// terminal ledgers. The wire envelope is larger than a single component,
+	// but allowing an unbounded statement/group/invocation string would make
+	// every bounded entry claim an unbounded memory claim.
+	MaxFenceComponentBytes = 256
 )
 
 var (
@@ -72,6 +78,9 @@ func (t FencingTuple) Validate() error {
 	if !utf8.ValidString(t.StatementID) || !utf8.ValidString(t.GroupID) || !utf8.ValidString(t.InvocationID) {
 		return fmt.Errorf("%w: fencing tuple contains invalid UTF-8", ErrProtocol)
 	}
+	if len(t.StatementID) > MaxFenceComponentBytes || len(t.GroupID) > MaxFenceComponentBytes || len(t.InvocationID) > MaxFenceComponentBytes {
+		return fmt.Errorf("%w: fencing tuple component is too large", ErrProtocol)
+	}
 	return nil
 }
 
@@ -79,16 +88,19 @@ func (t FencingTuple) Validate() error {
 // app_metadata.  Payload is a versioned descriptor or error body owned by the
 // message kind; it is bounded before JSON decoding.
 type Control struct {
-	Version      int             `json:"version"`
-	Kind         string          `json:"kind"`
-	Tuple        FencingTuple    `json:"tuple"`
-	Sequence     uint64          `json:"sequence,omitempty"`
-	LastSequence uint64          `json:"last_sequence,omitempty"`
-	AckSequence  uint64          `json:"ack_sequence,omitempty"`
-	FinishID     string          `json:"finish_id,omitempty"`
-	Status       string          `json:"status,omitempty"`
-	Reason       string          `json:"reason,omitempty"`
-	Payload      json.RawMessage `json:"payload,omitempty"`
+	Version            int             `json:"version"`
+	Kind               string          `json:"kind"`
+	Tuple              FencingTuple    `json:"tuple"`
+	Sequence           uint64          `json:"sequence,omitempty"`
+	LastSequence       uint64          `json:"last_sequence,omitempty"`
+	AckSequence        uint64          `json:"ack_sequence,omitempty"`
+	ReleasedBytes      int64           `json:"released_bytes,omitempty"`
+	ReleasedBatches    uint64          `json:"released_batches,omitempty"`
+	LastResultSequence uint64          `json:"last_result_sequence,omitempty"`
+	FinishID           string          `json:"finish_id,omitempty"`
+	Status             string          `json:"status,omitempty"`
+	Reason             string          `json:"reason,omitempty"`
+	Payload            json.RawMessage `json:"payload,omitempty"`
 }
 
 type controlFieldRule struct {
@@ -101,9 +113,9 @@ var controlFieldRules = map[string]controlFieldRule{
 	"InputBatch":         {allowed: map[string]struct{}{"sequence": {}}, required: map[string]struct{}{"sequence": {}}},
 	"EndInput":           {allowed: map[string]struct{}{"last_sequence": {}}, required: map[string]struct{}{"last_sequence": {}}},
 	"ResultSchema":       {allowed: map[string]struct{}{}},
-	"InputConsumed":      {allowed: map[string]struct{}{"sequence": {}}, required: map[string]struct{}{"sequence": {}}},
+	"InputConsumed":      {allowed: map[string]struct{}{"sequence": {}, "released_bytes": {}, "released_batches": {}}, required: map[string]struct{}{"sequence": {}, "released_bytes": {}, "released_batches": {}}},
 	"ResultBatch":        {allowed: map[string]struct{}{"sequence": {}}, required: map[string]struct{}{"sequence": {}}},
-	"Finish":             {allowed: map[string]struct{}{"last_sequence": {}, "finish_id": {}, "status": {}}, required: map[string]struct{}{"last_sequence": {}, "finish_id": {}, "status": {}}},
+	"Finish":             {allowed: map[string]struct{}{"last_sequence": {}, "last_result_sequence": {}, "finish_id": {}, "status": {}}, required: map[string]struct{}{"last_sequence": {}, "last_result_sequence": {}, "finish_id": {}, "status": {}}},
 	"AcknowledgeResults": {allowed: map[string]struct{}{"ack_sequence": {}}, required: map[string]struct{}{"ack_sequence": {}}},
 	"AcknowledgeFinish":  {allowed: map[string]struct{}{"finish_id": {}}, required: map[string]struct{}{"finish_id": {}}},
 	"Ack":                {allowed: map[string]struct{}{"ack_sequence": {}, "finish_id": {}, "status": {}}, required: map[string]struct{}{"status": {}}},
@@ -149,6 +161,21 @@ func validateControlFields(control Control, wire map[string]json.RawMessage) err
 			return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, "ack_sequence", control.Kind)
 		}
 	}
+	if control.ReleasedBytes != 0 {
+		if _, allowed := rule.allowed["released_bytes"]; !allowed {
+			return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, "released_bytes", control.Kind)
+		}
+	}
+	if control.ReleasedBatches != 0 {
+		if _, allowed := rule.allowed["released_batches"]; !allowed {
+			return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, "released_batches", control.Kind)
+		}
+	}
+	if control.LastResultSequence != 0 {
+		if _, allowed := rule.allowed["last_result_sequence"]; !allowed {
+			return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, "last_result_sequence", control.Kind)
+		}
+	}
 	if control.FinishID != "" {
 		if _, allowed := rule.allowed["finish_id"]; !allowed {
 			return fmt.Errorf("%w: field %q is not valid for control kind %q", ErrProtocol, "finish_id", control.Kind)
@@ -174,9 +201,13 @@ func validateControlFields(control Control, wire map[string]json.RawMessage) err
 		if len(control.Payload) == 0 && wire == nil {
 			return fmt.Errorf("%w: control kind %q is missing field %q", ErrProtocol, control.Kind, "payload")
 		}
-	case "InputBatch", "InputConsumed", "ResultBatch":
+	case "InputBatch", "ResultBatch":
 		if control.Sequence == 0 {
 			return fmt.Errorf("%w: control kind %q requires a positive sequence", ErrProtocol, control.Kind)
+		}
+	case "InputConsumed":
+		if control.Sequence == 0 || control.ReleasedBytes <= 0 || control.ReleasedBatches == 0 {
+			return fmt.Errorf("%w: control kind %q requires sequence and positive released bytes/batches", ErrProtocol, control.Kind)
 		}
 	case "AcknowledgeResults":
 		if control.AckSequence == 0 {
@@ -209,16 +240,19 @@ func validateControlFields(control Control, wire map[string]json.RawMessage) err
 // omission used for fields they do not own.
 func (c Control) MarshalJSON() ([]byte, error) {
 	type wireControl struct {
-		Version      int             `json:"version"`
-		Kind         string          `json:"kind"`
-		Tuple        FencingTuple    `json:"tuple"`
-		Sequence     uint64          `json:"sequence,omitempty"`
-		LastSequence *uint64         `json:"last_sequence,omitempty"`
-		AckSequence  uint64          `json:"ack_sequence,omitempty"`
-		FinishID     string          `json:"finish_id,omitempty"`
-		Status       string          `json:"status,omitempty"`
-		Reason       string          `json:"reason,omitempty"`
-		Payload      json.RawMessage `json:"payload,omitempty"`
+		Version            int             `json:"version"`
+		Kind               string          `json:"kind"`
+		Tuple              FencingTuple    `json:"tuple"`
+		Sequence           uint64          `json:"sequence,omitempty"`
+		LastSequence       *uint64         `json:"last_sequence,omitempty"`
+		AckSequence        uint64          `json:"ack_sequence,omitempty"`
+		ReleasedBytes      *int64          `json:"released_bytes,omitempty"`
+		ReleasedBatches    *uint64         `json:"released_batches,omitempty"`
+		LastResultSequence *uint64         `json:"last_result_sequence,omitempty"`
+		FinishID           string          `json:"finish_id,omitempty"`
+		Status             string          `json:"status,omitempty"`
+		Reason             string          `json:"reason,omitempty"`
+		Payload            json.RawMessage `json:"payload,omitempty"`
 	}
 	wire := wireControl{
 		Version: c.Version, Kind: c.Kind, Tuple: c.Tuple,
@@ -229,6 +263,16 @@ func (c Control) MarshalJSON() ([]byte, error) {
 	if c.Kind == "EndInput" || c.Kind == "Finish" || c.LastSequence != 0 {
 		lastSequence := c.LastSequence
 		wire.LastSequence = &lastSequence
+	}
+	if c.Kind == "Finish" {
+		lastResultSequence := c.LastResultSequence
+		wire.LastResultSequence = &lastResultSequence
+	}
+	if c.Kind == "InputConsumed" {
+		releasedBytes := c.ReleasedBytes
+		releasedBatches := c.ReleasedBatches
+		wire.ReleasedBytes = &releasedBytes
+		wire.ReleasedBatches = &releasedBatches
 	}
 	return json.Marshal(wire)
 }
@@ -546,6 +590,7 @@ const (
 	ReasonAllNull          CloseReason = "ALL_NULL"
 	ReasonNoSelectedRows   CloseReason = "NO_SELECTED_ROWS"
 	ReasonPartialOpenError CloseReason = "PARTIAL_OPEN_FAILURE"
+	ReasonFailure          CloseReason = "FAILURE"
 	ReasonCancel           CloseReason = "CANCEL"
 	ReasonIdle             CloseReason = "IDLE"
 )
@@ -565,6 +610,8 @@ type ExecutionGroup struct {
 	terminal    map[string]bool
 	closing     bool
 	releaseBusy bool
+	releaseDone chan struct{}
+	releaseErr  error
 	released    bool
 	release     func() error
 	reason      CloseReason
@@ -633,7 +680,7 @@ func (t *OpenToken) Commit() error {
 	delete(g.pending, t.memberID)
 	g.inFlight--
 	if g.closing || g.released {
-		release := g.canReleaseLocked()
+		release := g.shouldReleaseLocked()
 		g.mu.Unlock()
 		if release {
 			return errors.Join(ErrGroupClosed, g.releaseIfReady())
@@ -657,7 +704,7 @@ func (t *OpenToken) Abort() error {
 	g.mu.Lock()
 	delete(g.pending, t.memberID)
 	g.inFlight--
-	release := g.canReleaseLocked()
+	release := g.shouldReleaseLocked()
 	g.mu.Unlock()
 	if release {
 		return g.releaseIfReady()
@@ -692,7 +739,7 @@ func (g *ExecutionGroup) Close(reason CloseReason) error {
 		g.closing = true
 		g.reason = reason
 	}
-	release := g.canReleaseLocked()
+	release := g.shouldReleaseLocked()
 	g.mu.Unlock()
 	if release {
 		return g.releaseIfReady()
@@ -712,7 +759,7 @@ func (g *ExecutionGroup) MemberTerminal(memberID string) error {
 	}
 	delete(g.members, memberID)
 	g.terminal[memberID] = true
-	release := g.canReleaseLocked()
+	release := g.shouldReleaseLocked()
 	g.mu.Unlock()
 	if release {
 		return g.releaseIfReady()
@@ -721,23 +768,51 @@ func (g *ExecutionGroup) MemberTerminal(memberID string) error {
 }
 
 func (g *ExecutionGroup) canReleaseLocked() bool {
-	return g.closing && len(g.members) == 0 && g.inFlight == 0 && !g.released && !g.releaseBusy
+	return g.shouldReleaseLocked() && !g.releaseBusy
+}
+
+func (g *ExecutionGroup) shouldReleaseLocked() bool {
+	return g.closing && len(g.members) == 0 && g.inFlight == 0 && !g.released
 }
 
 func (g *ExecutionGroup) releaseIfReady() error {
 	g.mu.Lock()
-	if !g.canReleaseLocked() {
+	if !g.shouldReleaseLocked() {
 		g.mu.Unlock()
 		return nil
 	}
+	if g.releaseBusy {
+		done := g.releaseDone
+		g.mu.Unlock()
+		<-done
+		g.mu.Lock()
+		err := g.releaseErr
+		released := g.released
+		g.mu.Unlock()
+		if released {
+			return nil
+		}
+		return err
+	}
 	g.releaseBusy = true
+	g.releaseDone = make(chan struct{})
+	done := g.releaseDone
 	g.mu.Unlock()
-	err := g.release()
+	err := func() (err error) {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err = fmt.Errorf("%w: group release panicked: %v", ErrProtocol, recovered)
+			}
+		}()
+		return g.release()
+	}()
 	g.mu.Lock()
 	g.releaseBusy = false
+	g.releaseErr = err
 	if err == nil {
 		g.released = true
 	}
+	close(done)
 	g.mu.Unlock()
 	return err
 }
@@ -769,11 +844,33 @@ func (g *ExecutionGroup) Counts() (registered, active, inFlight int) {
 	return g.registered, len(g.members), g.inFlight
 }
 
+// ID and Epoch identify the ownership fence used by the group owner. They are
+// immutable for the lifetime of an ExecutionGroup.
+func (g *ExecutionGroup) ID() string {
+	if g == nil {
+		return ""
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.id
+}
+
+func (g *ExecutionGroup) Epoch() uint64 {
+	if g == nil {
+		return 0
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.epoch
+}
+
 type ledgerEntry struct {
-	key       string
-	bytes     int64
-	expiresAt time.Time
-	tombstone bool
+	key        string
+	groupID    string
+	groupEpoch uint64
+	bytes      int64
+	expiresAt  time.Time
+	tombstone  bool
 }
 
 // TerminalLedger is an admission-reserved bounded deduplication ledger.  A
@@ -791,6 +888,7 @@ type TerminalLedger struct {
 type LedgerCredit struct {
 	ledger     *TerminalLedger
 	groupID    string
+	groupEpoch uint64
 	remainingN int
 	remainingB int64
 	closed     bool
@@ -803,8 +901,8 @@ func NewTerminalLedger(maxEntries int, maxBytes int64) (*TerminalLedger, error) 
 	return &TerminalLedger{maxEntries: maxEntries, maxBytes: maxBytes, entries: make(map[string]ledgerEntry)}, nil
 }
 
-func (l *TerminalLedger) Reserve(groupID string, entries int, bytes int64) (*LedgerCredit, error) {
-	if groupID == "" || entries <= 0 || bytes <= 0 {
+func (l *TerminalLedger) Reserve(groupID string, groupEpoch uint64, entries int, bytes int64) (*LedgerCredit, error) {
+	if groupID == "" || groupEpoch == 0 || entries <= 0 || bytes <= 0 {
 		return nil, fmt.Errorf("%w: invalid terminal ledger reservation", ErrProtocol)
 	}
 	l.mu.Lock()
@@ -814,7 +912,7 @@ func (l *TerminalLedger) Reserve(groupID string, entries int, bytes int64) (*Led
 	}
 	l.reservedN += entries
 	l.reservedB += bytes
-	return &LedgerCredit{ledger: l, groupID: groupID, remainingN: entries, remainingB: bytes}, nil
+	return &LedgerCredit{ledger: l, groupID: groupID, groupEpoch: groupEpoch, remainingN: entries, remainingB: bytes}, nil
 }
 
 func (c *LedgerCredit) Add(key string, bytes int64, expiry time.Time) error {
@@ -829,7 +927,7 @@ func (c *LedgerCredit) Add(key string, bytes int64, expiry time.Time) error {
 	if _, exists := c.ledger.entries[key]; exists {
 		return ErrDuplicate
 	}
-	c.ledger.entries[key] = ledgerEntry{key: key, bytes: bytes, expiresAt: expiry}
+	c.ledger.entries[key] = ledgerEntry{key: key, groupID: c.groupID, groupEpoch: c.groupEpoch, bytes: bytes, expiresAt: expiry}
 	c.remainingN--
 	c.remainingB -= bytes
 	return nil
@@ -866,7 +964,14 @@ func (l *TerminalLedger) Complete(key string) error {
 	return nil
 }
 
-func (l *TerminalLedger) Expire(now time.Time) int {
+// EpochFence is supplied by the Scheduler/group owner. It must return true
+// only after the owner has durably or monotonically closed the corresponding
+// group epoch so that an old grant cannot be issued again. A wall clock TTL is
+// deliberately insufficient proof and a nil fence therefore reclaims nothing.
+// The callback must not call back into the ledger.
+type EpochFence func(groupID string, groupEpoch uint64) bool
+
+func (l *TerminalLedger) Expire(now time.Time, fence EpochFence) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	removed := 0
@@ -878,7 +983,7 @@ func (l *TerminalLedger) Expire(now time.Time) int {
 		if !entry.tombstone {
 			continue
 		}
-		if !now.Before(entry.expiresAt) {
+		if !now.Before(entry.expiresAt) && fence != nil && fence(entry.groupID, entry.groupEpoch) {
 			delete(l.entries, key)
 			l.reservedN--
 			l.reservedB -= entry.bytes
