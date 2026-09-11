@@ -261,13 +261,16 @@ test('provenance remains available when helper loading or checkout fails', () =>
     };
     for (const job of ['change-scope', 'ci-required']) {
       const summaryPath = join(root, `${job}.md`);
-      const result = spawnSync('/bin/bash', ['-eu', '-c', provenanceScript(entrypointJobs()[job])], {
+      const result = spawnSync('/bin/bash', [
+        '-eu',
+        '-c',
+        `${provenanceScript(entrypointJobs()[job])}\n# Simulated checkout failure\nexit 42`,
+      ], {
         env: { ...process.env, ...values, GITHUB_STEP_SUMMARY: summaryPath },
         encoding: 'utf8',
       });
-      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.status, 42, result.stderr);
       assert.match(readFileSync(summaryPath, 'utf8'), /Workflow SHA: workflow-sha/);
-      assert.throws(() => { throw new Error('checkout failed before helper load'); }, /checkout failed/);
       assert.match(readFileSync(summaryPath, 'utf8'), /PR head SHA: head-sha/);
     }
   } finally {
