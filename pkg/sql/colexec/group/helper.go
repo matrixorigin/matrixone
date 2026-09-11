@@ -1909,7 +1909,7 @@ func useLegacyDecimalSumState(proc *process.Process) bool {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion64
+	return !ok || !valid || version < defines.MORPCVersion65
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

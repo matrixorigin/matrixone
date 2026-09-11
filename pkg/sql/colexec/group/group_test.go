@@ -3992,6 +3992,6 @@ func TestDecimalSumUsesLegacyStateBeforeProtocolV64(t *testing.T) {
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
 	require.True(t, useLegacyDecimalSumState(proc))
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
 	require.False(t, useLegacyDecimalSumState(proc))
 }

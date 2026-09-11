@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ddl
+package sqlintegration
 
 import (
 	"encoding/json"
@@ -32,13 +32,14 @@ import (
 // This schema metadata check shares the single-CN fixture with the other DDL
 // tests in this package, avoiding a second embedded-cluster lifecycle.
 func TestTableFeatures(t *testing.T) {
-	embed.RunSingleCNBaseClusterTests(
+	runSQLIntegration(
 		t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
 
 			db := testutils.GetDatabaseName(t)
+			defer cleanupSQLIntegration(t, cn, "drop database if exists "+db)
 			testutils.CreateTestDatabase(t, db, cn)
 
 			// Create table with primary key and an additional index
