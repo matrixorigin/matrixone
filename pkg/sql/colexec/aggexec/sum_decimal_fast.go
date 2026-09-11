@@ -26,6 +26,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// The public dispatcher sends SUM/AVG operations whose result requires
+// Decimal256 to newSumAvgDecExec. Keep the explicitly Decimal128 fast
+// executors internally self-consistent as well: their state and their SUM
+// result must both describe the Decimal128 values they physically store.
+// This also keeps direct fast-executor tests useful for the checked
+// Decimal128 overflow paths.
+func decimal128FastSumType(param, sumType types.Type) types.Type {
+	if sumType.Oid == types.T_decimal256 {
+		return types.New(types.T_decimal128, maxDecimal128Precision, param.Scale)
+	}
+	return sumType
+}
+
 // ---- Decimal64 SUM/AVG ----
 
 type sumDecimal64FastExec struct {
@@ -83,10 +96,11 @@ func newSumDecimal64FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinc
 	exec.mp = mp
 	exec.isSum = isSum
 	sumTyp := SumReturnType([]types.Type{param})
+	fastSumTyp := decimal128FastSumType(param, sumTyp)
 	avgTyp := AvgReturnType([]types.Type{param})
 	var rt types.Type
 	if isSum {
-		rt = sumTyp
+		rt = fastSumTyp
 	} else {
 		rt = avgTyp
 	}
@@ -100,13 +114,7 @@ func newSumDecimal64FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinc
 	}
 	// Always allocate sum + count. Count tracks group-has-data for SUM
 	// and row count for AVG division. This avoids per-row null checks on accumulator.
-	stateTyp := sumTyp
-	if !isSum {
-		// The fast AVG accumulator is physically Decimal128 even when SUM for
-		// the same input advertises a wider Decimal256 result.
-		stateTyp = types.New(types.T_decimal128, 38, param.Scale)
-	}
-	exec.aggInfo.stateTypes = []types.Type{stateTyp, types.T_int64.ToType()}
+	exec.aggInfo.stateTypes = []types.Type{fastSumTyp, types.T_int64.ToType()}
 	return &exec
 }
 
@@ -432,10 +440,11 @@ func newSumDecimal128FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistin
 	// Width > 28: overflow is reachable with fewer rows, so use checked Add128.
 	exec.overflowCheck = param.Width > 28
 	sumTyp := SumReturnType([]types.Type{param})
+	fastSumTyp := decimal128FastSumType(param, sumTyp)
 	avgTyp := AvgReturnType([]types.Type{param})
 	var rt types.Type
 	if isSum {
-		rt = sumTyp
+		rt = fastSumTyp
 	} else {
 		rt = avgTyp
 	}
@@ -449,13 +458,7 @@ func newSumDecimal128FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistin
 	}
 	// Always allocate sum + count. Count tracks group-has-data for SUM
 	// and row count for AVG division. This avoids per-row null checks on accumulator.
-	stateTyp := sumTyp
-	if !isSum {
-		// The fast AVG accumulator is physically Decimal128 even when SUM for
-		// the same input advertises a wider Decimal256 result.
-		stateTyp = types.New(types.T_decimal128, 38, param.Scale)
-	}
-	exec.aggInfo.stateTypes = []types.Type{stateTyp, types.T_int64.ToType()}
+	exec.aggInfo.stateTypes = []types.Type{fastSumTyp, types.T_int64.ToType()}
 	return &exec
 }
 
