@@ -14,6 +14,7 @@ in the sandbox and deployment policy selected for the routine.
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import datetime as _datetime
 import decimal as _decimal
@@ -870,7 +871,7 @@ def _decode_definition_validation(data: bytes) -> Dict[str, Any]:
 
 
 def _validate_definition_syntax(value: Dict[str, Any]) -> None:
-    """Compile source without executing its module or resolving its handler."""
+    """Validate source and the static handler binding without executing it."""
     try:
         compile(value["source"], "<matrixone-python-udf>", "exec")
     except SyntaxError as exc:
@@ -880,6 +881,31 @@ def _validate_definition_syntax(value: Dict[str, Any]) -> None:
         raise ValueError(
             f"USER_CODE: Python syntax error at line {line}, column {column}: {message}"
         ) from exc
+    handler = value["handler"]
+    if not handler.isidentifier():
+        raise ValueError(
+            "USER_CODE: Python handler must be a module-level identifier"
+        )
+    tree = ast.parse(value["source"], filename="<matrixone-python-udf>", mode="exec")
+    binding = None
+    for node in tree.body:
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == handler:
+            raise ValueError("USER_CODE: Python handler must be synchronous")
+        if isinstance(node, ast.FunctionDef) and node.name == handler:
+            binding = node
+            break
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Lambda):
+            if any(isinstance(target, ast.Name) and target.id == handler for target in node.targets):
+                binding = node
+                break
+        if isinstance(node, ast.AnnAssign) and isinstance(node.value, ast.Lambda):
+            if isinstance(node.target, ast.Name) and node.target.id == handler:
+                binding = node
+                break
+    if binding is None:
+        raise ValueError(
+            f"USER_CODE: Python handler {handler!r} is not a module-level function"
+        )
 
 
 def _encode_definition_validation_result(

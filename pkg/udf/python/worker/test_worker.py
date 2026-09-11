@@ -154,6 +154,52 @@ class WorkerContractTest(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_definition_validation_rejects_missing_handler_before_catalog_state(self):
+        payload = complete_definition_validation_payload(
+            "def other(ctx, value): return value"
+        )
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        try:
+            results = list(
+                server.do_action(
+                    None,
+                    flight.Action(
+                        "ValidatePythonDefinition",
+                        json.dumps(payload, separators=(",", ":")).encode(),
+                    ),
+                )
+            )
+            response = json.loads(bytes(results[0].body))
+            self.assertEqual("ERROR", response["status"])
+            self.assertIn("not a module-level function", response["reason"])
+            self.assertEqual({}, server._active)
+            self.assertEqual({}, server._terminal)
+        finally:
+            server.shutdown()
+
+    def test_definition_validation_rejects_async_handler_before_catalog_state(self):
+        payload = complete_definition_validation_payload(
+            "async def f(ctx, value): return value"
+        )
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        try:
+            results = list(
+                server.do_action(
+                    None,
+                    flight.Action(
+                        "ValidatePythonDefinition",
+                        json.dumps(payload, separators=(",", ":")).encode(),
+                    ),
+                )
+            )
+            response = json.loads(bytes(results[0].body))
+            self.assertEqual("ERROR", response["status"])
+            self.assertIn("must be synchronous", response["reason"])
+            self.assertEqual({}, server._active)
+            self.assertEqual({}, server._terminal)
+        finally:
+            server.shutdown()
+
     def test_capability_advertises_worker_instance_lease(self):
         encoded = worker._encode_capabilities(
             {"protocol_version": worker.PROTOCOL_VERSION}, lease_epoch=17
