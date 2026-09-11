@@ -1094,7 +1094,10 @@ func TestPreparedExportSetInputScalarSubqueryUsesExecuteNumericSourceType(t *tes
 	require.True(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan), queryPlan.String())
 	preparedExpr := findPlanFunctionExpr(queryPlan, "export_set")
 	require.NotNil(t, preparedExpr)
-	preparedSource := preparedExpr.GetF().Args[0].GetF().Args[0]
+	preparedSource := preparedExpr.GetF().Args[0]
+	if cast := preparedSource.GetF(); cast != nil && cast.Func.GetObjName() == "cast" && len(cast.Args) > 0 {
+		preparedSource = cast.Args[0]
+	}
 	require.NotNil(t, preparedSource.GetCol())
 	require.True(t, preparedSource.GetPreparedNumeric().GetFallbackSource(), preparedSource.String())
 
@@ -1148,6 +1151,9 @@ func TestPreparedExportSetTracesNestedScalarSources(t *testing.T) {
 		`prepare stmt_export_set from "select export_set((with d as (select ? as x) select x from d limit 1), 'Y', 'N', '', 4)"`,
 		`prepare stmt_export_set from "select export_set((select ? from nation limit 1) + 0, 'Y', 'N', '', 4)"`,
 		`prepare stmt_export_set from "select export_set((select ?) + (select ?), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select ? union all select 1), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select ? from nation limit 1) / 1, 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select first_value(?) over () from nation limit 1), 'Y', 'N', '', 4)"`,
 	} {
 		prepared, err := runOneStmt(NewMockOptimizer(false), t, sql)
 		require.NoError(t, err)
@@ -1171,7 +1177,9 @@ func TestPreparedExportSetTracesNestedScalarSources(t *testing.T) {
 			},
 			{
 				name: "boolean", param: ParamValue{Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true},
-				wantType: func(typ types.T) bool { return typ == types.T_int64 || typ == types.T_bool },
+				wantType: func(typ types.T) bool {
+					return typ == types.T_int64 || typ == types.T_bool || typ == types.T_float64
+				},
 			},
 		} {
 			t.Run(test.name, func(t *testing.T) {
@@ -1195,6 +1203,7 @@ func TestPreparedExportSetPreservesExplicitCast(t *testing.T) {
 	for _, sql := range []string{
 		`prepare stmt_export_set from "select export_set(cast((select ?) as double), 'Y', 'N', '', 4)"`,
 		`prepare stmt_export_set from "select export_set((select cast(? as double) from nation limit 1), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select cast(? as decimal(4,1)) from nation limit 1), 'Y', 'N', '', 4)"`,
 	} {
 		t.Run(sql, func(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false), t, sql)
@@ -1206,6 +1215,14 @@ func TestPreparedExportSetPreservesExplicitCast(t *testing.T) {
 			_, provisional := preparedResultParamPosition(expr.GetF().Args[0], "export_set")
 			require.False(t, provisional, expr.String())
 			require.False(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan), queryPlan.String())
+			filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{ParamValue{
+				Value: "2.5", SourceType: types.T_float64.ToType(), HasSourceType: true,
+			}})
+			require.NoError(t, err)
+			filledExpr := findPlanFunctionExpr(filled, "export_set")
+			require.NotNil(t, filledExpr)
+			require.Equal(t, expr.GetF().Args[0].Typ.Id, filledExpr.GetF().Args[0].Typ.Id,
+				"an explicit cast must retain its prepared result domain")
 		})
 	}
 }

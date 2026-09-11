@@ -224,6 +224,40 @@ SET @export_set_right = TRUE;
 EXECUTE export_set_multi_scalar_stmt USING @export_set_left, @export_set_right;
 DEALLOCATE PREPARE export_set_multi_scalar_stmt;
 
+PREPARE export_set_explicit_decimal_stmt FROM
+  "SELECT EXPORT_SET((SELECT CAST(? AS DECIMAL(4,1)) FROM export_set_scalar_input LIMIT 1), 'Y', 'N', '', 4) AS explicit_decimal_bits";
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_explicit_decimal_stmt USING @export_set_bits;
+EXECUTE export_set_explicit_decimal_stmt USING @export_set_bits;
+DEALLOCATE PREPARE export_set_explicit_decimal_stmt;
+
+PREPARE export_set_derived_arithmetic_stmt FROM
+  "SELECT EXPORT_SET((SELECT x + y FROM (SELECT ? AS x, ? AS y) d), 'Y', 'N', '', 4) AS derived_arithmetic_bits";
+SET @export_set_left = CAST(1.5 AS DECIMAL(4,1));
+SET @export_set_right = CAST(1 AS DOUBLE);
+EXECUTE export_set_derived_arithmetic_stmt USING @export_set_left, @export_set_right;
+EXECUTE export_set_derived_arithmetic_stmt USING @export_set_left, @export_set_right;
+DEALLOCATE PREPARE export_set_derived_arithmetic_stmt;
+
+PREPARE export_set_union_stmt FROM
+  "SELECT EXPORT_SET((SELECT ? UNION ALL SELECT 1 LIMIT 1), 'Y', 'N', '', 4) AS union_bits";
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_union_stmt USING @export_set_bits;
+EXECUTE export_set_union_stmt USING @export_set_bits;
+DEALLOCATE PREPARE export_set_union_stmt;
+
+PREPARE export_set_division_stmt FROM
+  "SELECT EXPORT_SET((SELECT ? FROM export_set_scalar_input LIMIT 1) / 1, 'Y', 'N', '', 4) AS division_bits";
+EXECUTE export_set_division_stmt USING @export_set_bits;
+EXECUTE export_set_division_stmt USING @export_set_bits;
+DEALLOCATE PREPARE export_set_division_stmt;
+
+PREPARE export_set_window_stmt FROM
+  "SELECT EXPORT_SET((SELECT FIRST_VALUE(?) OVER () FROM export_set_scalar_input LIMIT 1), 'Y', 'N', '', 4) AS window_bits";
+EXECUTE export_set_window_stmt USING @export_set_bits;
+EXECUTE export_set_window_stmt USING @export_set_bits;
+DEALLOCATE PREPARE export_set_window_stmt;
+
 DROP TABLE export_set_scalar_input;
 
 DROP TABLE export_set_numeric_bits;

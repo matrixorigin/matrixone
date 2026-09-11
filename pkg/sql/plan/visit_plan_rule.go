@@ -1396,8 +1396,20 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 			copy.GetF().Args[i] = refreshed
 			changed = changed || argChanged
 		}
+		if len(copy.GetF().Args) > 0 && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") &&
+			fn.Args[0].GetPreparedNumeric().GetFallbackSource() {
+			return copy.GetF().Args[0], true, nil
+		}
 		if !changed {
 			return expr, false, nil
+		}
+		if isImplicitPreparedParamCast(expr) && len(copy.GetF().Args) > 0 {
+			return copy.GetF().Args[0], true, nil
+		}
+		for i, arg := range copy.GetF().Args {
+			if source, ok := provisionalExactNumericSource(arg); ok {
+				copy.GetF().Args[i] = source
+			}
 		}
 		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.GetObjName(), copy.GetF().Args)
 		if err != nil {

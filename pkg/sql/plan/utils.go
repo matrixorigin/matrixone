@@ -3706,6 +3706,15 @@ func markPreparedExportSetLineage(plan0 *Plan) {
 	}
 }
 
+func isExplicitPreparedLineageCast(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") {
+		return false
+	}
+	_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	return fn.GetSyntaxExplicitCast() || overload == 1
+}
+
 func collectPreparedExportSetSources(
 	query *plan.Query,
 	expr *plan.Expr,
@@ -3732,8 +3741,7 @@ func collectPreparedExportSetSources(
 		}
 	}
 	if fn := expr.GetF(); fn != nil {
-		if fn.Func != nil && fn.Func.GetObjName() == "cast" &&
-			(fn.GetSyntaxExplicitCast() || expr.Typ.Id != int32(types.T_int64)) {
+		if isExplicitPreparedLineageCast(expr) {
 			return 0, 0, false
 		}
 		for _, arg := range fn.Args {
@@ -3748,6 +3756,11 @@ func collectPreparedExportSetSources(
 				query, item, ownerNodeID, positions, seenColumns, seenSubqueries)
 			remember(nodeID, colPos, ok)
 		}
+	}
+	if window := expr.GetW(); window != nil {
+		nodeID, colPos, ok := collectPreparedExportSetSources(
+			query, window.WindowFunc, ownerNodeID, positions, seenColumns, seenSubqueries)
+		remember(nodeID, colPos, ok)
 	}
 	if sub := expr.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
 		if _, seen := seenSubqueries[sub.NodeId]; !seen {
@@ -3801,6 +3814,32 @@ func collectPreparedExportSetSourceColumn(
 	node := query.Nodes[nodeID]
 	if node == nil {
 		return 0, 0, false
+	}
+	if node.NodeType == plan.Node_WINDOW && int(colPos) < len(node.ProjectList) {
+		projected := node.ProjectList[colPos]
+		if projectedCol := projected.GetCol(); projectedCol != nil && projectedCol.RelPos < 0 && len(node.Children) == 1 {
+			child := query.Nodes[node.Children[0]]
+			if child != nil {
+				windowPos := int(projectedCol.ColPos) - len(child.ProjectList)
+				if windowPos >= 0 && windowPos < len(node.WinSpecList) {
+					localPositions := make(map[int32]struct{})
+					_, _, found := collectPreparedExportSetSources(
+						query, node.WinSpecList[windowPos], nodeID, localPositions, seenColumns, seenSubqueries)
+					for position := range localPositions {
+						positions[position] = struct{}{}
+					}
+					if found || len(localPositions) > 0 {
+						metadata := ensurePreparedNumericMetadata(projected)
+						metadata.Fallback = true
+						metadata.ParamPos = minimumPreparedPosition(localPositions)
+						metadata.FallbackSource = true
+						metadata.FallbackSourceNodeId = nodeID
+						metadata.FallbackSourceColPos = colPos
+						return nodeID, colPos, true
+					}
+				}
+			}
+		}
 	}
 	if int(colPos) < len(node.ProjectList) && node.ProjectList[colPos] != nil {
 		localPositions := make(map[int32]struct{})
@@ -6543,6 +6582,16 @@ func replaceParamValsWithSelection(
 		}
 	}
 	refreshPreparedPlanProjectionTypes(plan0)
+	if plan0.GetDcl().GetSetVariables() == nil {
+		// WINDOW and set-operation output mappings are synchronized only after
+		// their producer expressions have been rebound. Refresh consumers once
+		// more from those finalized operator output types.
+		refreshRule := &preparedNumericSourceRefreshRule{reset: paramRule}
+		if err = NewVisitPlan(plan0, []VisitPlanRule{refreshRule}).Visit(ctx); err != nil {
+			return false, err
+		}
+		refreshPreparedPlanProjectionTypes(plan0)
+	}
 
 	// A direct SELECT parameter is part of the result-column contract. Propagate
 	// its execute-time type through transparent projection/sort/distinct nodes

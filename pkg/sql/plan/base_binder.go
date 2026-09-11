@@ -3058,33 +3058,6 @@ func (b *baseBinder) markPreparedNumericFallback(expr *plan.Expr) {
 	}
 }
 
-func firstPlanParamPosition(expr *plan.Expr) (int32, bool) {
-	if expr == nil {
-		return 0, false
-	}
-	if param := expr.GetP(); param != nil {
-		return param.Pos, true
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			if pos, ok := firstPlanParamPosition(arg); ok {
-				return pos, true
-			}
-		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if pos, ok := firstPlanParamPosition(item); ok {
-				return pos, true
-			}
-		}
-	}
-	if sub := expr.GetSub(); sub != nil {
-		return firstPlanParamPosition(sub.Child)
-	}
-	return 0, false
-}
-
 // firstPreparedParamPosition follows every scalar-subquery and projected-column
 // edge reachable from expr. This includes derived tables and nested scalar
 // subqueries whose parameters are no longer children of Expr_Sub after binding.
@@ -3132,6 +3105,9 @@ func (b *baseBinder) collectPreparedParamSources(
 		}
 	}
 	if fn := expr.GetF(); fn != nil {
+		if isExplicitPreparedLineageCast(expr) {
+			return 0, 0, false
+		}
 		for _, arg := range fn.Args {
 			nodeID, colPos, ok := b.collectPreparedParamSources(
 				arg, ownerNodeID, positions, seenColumns, seenSubqueries, mark)
@@ -3144,6 +3120,11 @@ func (b *baseBinder) collectPreparedParamSources(
 				item, ownerNodeID, positions, seenColumns, seenSubqueries, mark)
 			remember(nodeID, colPos, ok)
 		}
+	}
+	if window := expr.GetW(); window != nil {
+		nodeID, colPos, ok := b.collectPreparedParamSources(
+			window.WindowFunc, ownerNodeID, positions, seenColumns, seenSubqueries, mark)
+		remember(nodeID, colPos, ok)
 	}
 	if sub := expr.GetSub(); sub != nil {
 		if sub.Child != nil {
@@ -3210,6 +3191,34 @@ func (b *baseBinder) collectPreparedParamSourceColumn(
 	node := b.builder.qry.Nodes[nodeID]
 	if node == nil {
 		return 0, 0, false
+	}
+	if node.NodeType == plan.Node_WINDOW && int(colPos) < len(node.ProjectList) {
+		projected := node.ProjectList[colPos]
+		if projectedCol := projected.GetCol(); projectedCol != nil && projectedCol.RelPos < 0 && len(node.Children) == 1 {
+			child := b.builder.qry.Nodes[node.Children[0]]
+			if child != nil {
+				windowPos := int(projectedCol.ColPos) - len(child.ProjectList)
+				if windowPos >= 0 && windowPos < len(node.WinSpecList) {
+					localPositions := make(map[int32]struct{})
+					_, _, found := b.collectPreparedParamSources(
+						node.WinSpecList[windowPos], nodeID, localPositions, seenColumns, seenSubqueries, mark)
+					for position := range localPositions {
+						positions[position] = struct{}{}
+					}
+					if found || len(localPositions) > 0 {
+						if mark {
+							metadata := ensurePreparedNumericMetadata(projected)
+							metadata.Fallback = true
+							metadata.ParamPos = minimumPreparedPosition(localPositions)
+							metadata.FallbackSource = true
+							metadata.FallbackSourceNodeId = nodeID
+							metadata.FallbackSourceColPos = colPos
+						}
+						return nodeID, colPos, true
+					}
+				}
+			}
+		}
 	}
 	if int(colPos) < len(node.ProjectList) && node.ProjectList[colPos] != nil {
 		localPositions := make(map[int32]struct{})
@@ -3541,6 +3550,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		for idx, arg := range astArgs {
 			paramType := b.numericParamType
 			subqueryTarget := b.numericSubqueryTarget
+			_, directParam := unwrapParenExpr(arg).(*tree.ParamExpr)
+			if b.builder != nil && b.builder.isPrepareStatement && name == "export_set" && idx == 0 &&
+				b.numericParamType == nil && !directParam {
+				target := makePlan2Type(&types.Type{Oid: types.T_int64})
+				b.numericParamType = &target
+				b.numericSubqueryTarget = &target
+			}
 			if paramType != nil && numericFunctionHasSelectiveContext(name) &&
 				!numericFunctionArgKeepsContext(name, idx, len(astArgs)) {
 				b.numericParamType = nil
@@ -3585,11 +3601,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 	if b.builder != nil && b.builder.isPrepareStatement && name == "export_set" && len(args) > 0 &&
 		!preparedExprContainsParam(args[0]) {
-		_, explicitCast := unwrapParenExpr(astArgs[0]).(*tree.CastExpr)
-		if !explicitCast && !containsExplicitFloatCast(astArgs[0]) {
-			if _, found := b.firstPreparedParamPosition(args[0], make(map[int32]struct{})); found {
-				b.markPreparedNumericFallback(args[0])
-			}
+		if _, found := b.firstPreparedParamPosition(args[0], make(map[int32]struct{})); found {
+			b.markPreparedNumericFallback(args[0])
 		}
 	}
 	preparedNumericPeer := false
