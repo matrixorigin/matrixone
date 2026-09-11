@@ -1590,6 +1590,17 @@ func TestD128MulPow10Carry(t *testing.T) {
 }
 
 func TestD128Mul(t *testing.T) {
+	t.Run("uint64_boundary_times_one_limb_factor_overflows", func(t *testing.T) {
+		// 2^64 is the first value outside the UINT64 result boundary.  A
+		// one-limb 10^19 multiplier must still take Decimal128's overflow path;
+		// this is the runtime guard used by prepared unsigned arithmetic.
+		values := []types.Decimal128{{B0_63: 0, B64_127: 1}}
+		factor := []types.Decimal128{{B0_63: types.Pow10[19]}}
+		result := make([]types.Decimal128, 1)
+		err := d128Mul(values, factor, result, 0, 0, nulls.NewWithSize(1))
+		require.Error(t, err)
+	})
+
 	t.Run("VecVec", func(t *testing.T) {
 		rng := rand.New(rand.NewSource(2))
 		v1 := make([]types.Decimal128, testBatchSize)

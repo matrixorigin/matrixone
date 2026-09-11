@@ -1768,10 +1768,12 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	oldMatrixOneNative := false
 	oldOnlyFullGroupBy := false
 	oldBoolSumAvg := false
+	oldNoUnsignedSubtraction := false
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
 		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
+		oldNoUnsignedSubtraction = ses.sqlModeHasNoUnsignedSubtraction()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1831,7 +1833,13 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, val)
+		ses.updateSqlModeCaches(
+			oldMatrixOneNative,
+			oldOnlyFullGroupBy,
+			oldBoolSumAvg,
+			oldNoUnsignedSubtraction,
+			val,
+		)
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {

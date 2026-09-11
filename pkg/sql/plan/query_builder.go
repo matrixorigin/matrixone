@@ -96,6 +96,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 
 	var mysqlCompatible bool
 	var mysqlFullGroupByCompat bool
+	var noUnsignedSubtraction bool
 	var boolSumAvgCompat bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
@@ -104,6 +105,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			onlyFullGroupBy := mysql.HasSQLMode(modeStr, "ONLY_FULL_GROUP_BY")
 			mysqlCompatible = !onlyFullGroupBy
 			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
+			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, mysql.SQLModeNoUnsignedSubtraction)
 			boolSumAvgCompat = mysql.HasEnableBoolSumAvgSQLMode(modeStr)
 		}
 	}
@@ -158,6 +160,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		nextBindTag:              0,
 		mysqlCompatible:          mysqlCompatible,
 		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
+		noUnsignedSubtraction:    noUnsignedSubtraction,
 		boolSumAvgCompat:         boolSumAvgCompat,
 		aggSpillMem:              aggSpillMem,
 		joinSpillMem:             joinSpillMem,
@@ -11386,6 +11389,17 @@ func (builder *QueryBuilder) bindView(
 		builder.compCtx.SetQueryingSubscription(metadataSubscription.Meta)
 		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
+	// A view's expressions are bound under the SQL mode persisted with the
+	// view, not the invoker's current mode.  Parsing already uses this mode;
+	// mirror it for arithmetic binding and restore the outer builder state so
+	// nested views and the caller keep their own semantics.
+	savedNoUnsignedSubtraction := builder.noUnsignedSubtraction
+	builder.noUnsignedSubtraction = mysql.HasSQLMode(
+		parserSQLMode, mysql.SQLModeNoUnsignedSubtraction,
+	)
+	defer func() {
+		builder.noUnsignedSubtraction = savedNoUnsignedSubtraction
+	}()
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return

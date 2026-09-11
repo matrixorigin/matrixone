@@ -39,3 +39,11 @@ func sqlModeHasEnableBoolSumAvgValue(value interface{}) (bool, bool) {
 	}
 	return mysql.HasEnableBoolSumAvgSQLMode(mode), true
 }
+
+func sqlModeHasNoUnsignedSubtractionValue(value interface{}) (bool, bool) {
+	mode, ok := value.(string)
+	if !ok {
+		return false, false
+	}
+	return mysql.HasSQLMode(mode, mysql.SQLModeNoUnsignedSubtraction), true
+}

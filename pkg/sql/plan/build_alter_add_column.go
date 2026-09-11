@@ -191,13 +191,13 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		//	newCol.Default = defaultValue
 		//	hasDefaultValue = true
 		case *tree.AttributeOnUpdate:
-			onUpdateExpr, err := buildOnUpdate(specNewColumn, colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(specNewColumn, colType, ctx.GetProcess(), noUnsignedSubtractionMode(ctx))
 			if err != nil {
 				return nil, err
 			}
 			newCol.OnUpdate = onUpdateExpr
 		case *tree.AttributeGeneratedAlways:
-			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, scopeCols, ctx.GetProcess())
+			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, scopeCols, ctx.GetProcess(), noUnsignedSubtractionMode(ctx))
 			if err != nil {
 				return nil, err
 			}
@@ -221,7 +221,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			OriginString: "",
 		}
 	} else {
-		defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), scopeCols)
+		defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), scopeCols, noUnsignedSubtractionMode(ctx))
 		if err != nil {
 			return nil, err
 		}

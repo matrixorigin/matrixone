@@ -456,7 +456,7 @@ func TestBuildDefaultExprGeometryDisallowsNonNullDefault(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 
-	_, err = buildDefaultExpr(colDef, typ, proc)
+	_, err = buildDefaultExpr(colDef, typ, proc, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "GEOMETRY column 'g' cannot have default value")
 }
@@ -475,7 +475,7 @@ func TestBuildDefaultExprGeometryAllowsNullDefault(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 
-	def, err := buildDefaultExpr(colDef, typ, proc)
+	def, err := buildDefaultExpr(colDef, typ, proc, false)
 	require.NoError(t, err)
 	require.NotNil(t, def)
 }
@@ -534,7 +534,7 @@ func TestBuildDefaultExprJSONExpressionDefaults(t *testing.T) {
 			typ, err := getTypeFromAst(context.Background(), colDef.Type)
 			require.NoError(t, err)
 
-			def, err := buildDefaultExpr(colDef, typ, proc)
+			def, err := buildDefaultExpr(colDef, typ, proc, false)
 			if tt.wantErr != "" {
 				require.ErrorContains(t, err, tt.wantErr)
 				return
@@ -584,7 +584,7 @@ func TestBuildDefaultExprParenthesizedNullMatchesNullDefault(t *testing.T) {
 			typ, err := getTypeFromAst(context.Background(), colDef.Type)
 			require.NoError(t, err)
 
-			def, err := buildDefaultExpr(colDef, typ, proc)
+			def, err := buildDefaultExpr(colDef, typ, proc, false)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				require.Contains(t, err.Error(), tt.wantErr)
@@ -610,7 +610,7 @@ func TestBuildDefaultExprAllowsParenthesizedUuidForStringDefault(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 
-	def, err := buildDefaultExpr(colDef, typ, proc)
+	def, err := buildDefaultExpr(colDef, typ, proc, false)
 	require.NoError(t, err)
 	require.NotNil(t, def)
 	require.NotNil(t, def.Expr)
@@ -631,7 +631,7 @@ func TestBuildDefaultExprKeepsBareUuidTypeGuard(t *testing.T) {
 	typ, err := getTypeFromAst(context.Background(), colDef.Type)
 	require.NoError(t, err)
 
-	_, err = buildDefaultExpr(colDef, typ, proc)
+	_, err = buildDefaultExpr(colDef, typ, proc, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid default value for column 'a'")
 }
@@ -651,7 +651,7 @@ func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 				&tree.AttributeDefault{Expr: tree.NewNumVal("abcdef", "abcdef", false, tree.P_char)},
 			},
 		)
-		_, err := buildDefaultExpr(defaultCol, typ, proc)
+		_, err := buildDefaultExpr(defaultCol, typ, proc, false)
 		require.Error(t, err, "oversized DEFAULT for %v(3) must be rejected", oid)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 
@@ -662,7 +662,7 @@ func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 				&tree.AttributeOnUpdate{Expr: tree.NewNumVal("abcdef", "abcdef", false, tree.P_char)},
 			},
 		)
-		_, err = buildOnUpdate(onUpdateCol, typ, proc)
+		_, err = buildOnUpdate(onUpdateCol, typ, proc, false)
 		require.Error(t, err, "oversized ON UPDATE for %v(3) must be rejected", oid)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 	}
@@ -681,7 +681,7 @@ func TestBuildDefaultExprRejectsOversizedTinyText(t *testing.T) {
 
 	_, err := buildDefaultExpr(defaultCol, plan.Type{
 		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
-	}, proc)
+	}, proc, false)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 }
@@ -697,7 +697,7 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 			&tree.AttributeDefault{Expr: tree.NewNumVal("abc", "abc", false, tree.P_char)},
 		},
 	)
-	defaultValue, err := buildDefaultExpr(defaultCol, plan.Type{Id: int32(types.T_varchar), Width: 3}, proc)
+	defaultValue, err := buildDefaultExpr(defaultCol, plan.Type{Id: int32(types.T_varchar), Width: 3}, proc, false)
 	require.NoError(t, err)
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
 }
@@ -923,7 +923,7 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	require.NotNil(t, genCol)
 
 	existingCols := []*ColDef{{Name: "t", Typ: plan.Type{Id: int32(types.T_text)}}}
-	gen, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_varchar), Width: 1}, existingCols, proc)
+	gen, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_varchar), Width: 1}, existingCols, proc, false)
 	require.NoError(t, err)
 	require.NotNil(t, gen)
 	require.Equal(t, "cast_strict", gen.Expr.GetF().GetFunc().GetObjName())
@@ -932,7 +932,7 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	require.Equal(t, int32(types.T_varchar), gen.Expr.Typ.Id) // type still resolves to the column type
 
 	// A non-CHAR/VARCHAR generated target keeps the generic cast.
-	genInt, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_int64)}, existingCols, proc)
+	genInt, err := buildGeneratedExpr(genCol, plan.Type{Id: int32(types.T_int64)}, existingCols, proc, false)
 	require.NoError(t, err)
 	require.Equal(t, "cast", genInt.Expr.GetF().GetFunc().GetObjName())
 }
@@ -977,7 +977,7 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 			}
 			require.NotNil(t, genCol)
 
-			gen, err := buildGeneratedExpr(genCol, tc.generatedType, []*ColDef{{Name: tc.baseColumn, Typ: tc.baseType}}, proc)
+			gen, err := buildGeneratedExpr(genCol, tc.generatedType, []*ColDef{{Name: tc.baseColumn, Typ: tc.baseType}}, proc, false)
 			require.NoError(t, err)
 			require.NotNil(t, gen)
 		})
@@ -1000,6 +1000,7 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 		plan.Type{Id: int32(types.T_uint64)},
 		[]*ColDef{{Name: "ip_text", Typ: plan.Type{Id: int32(types.T_varchar), Width: 39}}},
 		proc,
+		false,
 	)
 	require.ErrorContains(t, err, "non-deterministic function 'uuid'")
 }

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1003,6 +1004,260 @@ func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 			require.Equal(t, cachedPlan, after, "failed rebinding must leave the cached plan reusable")
 		})
 	}
+}
+
+// TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound exercises both
+// COM_STMT_EXECUTE's unsigned packet decoding and the prepared arithmetic
+// boundary. The outer subtraction could cancel the overflow if the inner
+// CAST(? AS UNSIGNED) arithmetic node lost its own UINT64 result cast.
+func TestCOMStmtUnsignedArithmeticRetainsTypedIntermediateBound(t *testing.T) {
+	const maxUint64 = ^uint64(0)
+	for _, tc := range []struct {
+		name                 string
+		query                string
+		peer                 uint64
+		peerSet              bool
+		peerSigned           bool
+		control              bool
+		floatPeer            bool
+		nullPeer             bool
+		runtimeBoundOperator string
+	}{
+		{
+			name:  "addition",
+			query: "select (cast(? as unsigned) + cast(1 as signed)) - cast(? as unsigned)",
+		},
+		{
+			name:  "multiplication",
+			query: "select (cast(? as unsigned) * cast(2 as signed)) - cast(? as unsigned)",
+		},
+		{
+			name:                 "bare_addition",
+			query:                "select (cast(? as unsigned) + ?) - cast(? as unsigned)",
+			peer:                 1,
+			runtimeBoundOperator: "+",
+		},
+		{
+			name:                 "bare_addition_signed_peer",
+			query:                "select (cast(? as unsigned) + ?) - cast(? as unsigned)",
+			peer:                 1,
+			peerSigned:           true,
+			runtimeBoundOperator: "+",
+		},
+		{
+			name:                 "bare_multiplication",
+			query:                "select (cast(? as unsigned) * ?) - cast(? as unsigned)",
+			peer:                 2,
+			runtimeBoundOperator: "*",
+		},
+		{
+			name:  "bare_subtraction_negative_peer",
+			query: "select (cast(? as unsigned) - ?) - cast(? as unsigned)",
+			// The second packet value is signed LONGLONG -1. The inner
+			// UINT64_MAX - (-1) must fail before the outer subtraction can
+			// cancel it to 1.
+			peer: maxUint64,
+		},
+		{
+			name:                 "bare_absolute_value_peer",
+			query:                "select (cast(? as unsigned) + abs(?)) - cast(? as unsigned)",
+			peer:                 1,
+			runtimeBoundOperator: "+",
+		},
+		{
+			// The boundary itself is valid.  This distinguishes MAX_UINT64 from
+			// the immediately adjacent overflowing value exercised above, and
+			// catches guards that reject the inclusive upper bound.
+			name:                 "bare_absolute_value_max_boundary",
+			query:                "select (cast(? as unsigned) + abs(?)) is not null",
+			peerSet:              true,
+			control:              true,
+			runtimeBoundOperator: "+",
+		},
+		{
+			name:  "bare_negated_peer",
+			query: "select (cast(? as unsigned) - -?) - cast(? as unsigned)",
+			// The second packet value is signed LONGLONG 1. Unary negation
+			// makes the inner operation UINT64_MAX - (-1), which must fail
+			// before the final subtraction could cancel it to 1.
+			peer: 1,
+		},
+		{
+			name:                 "bare_coalesced_peer",
+			query:                "select (cast(? as unsigned) + coalesce(?, 0)) - cast(? as unsigned)",
+			peer:                 1,
+			runtimeBoundOperator: "+",
+		},
+		{
+			name:    "coalesced_fractional_fallback",
+			query:   "select (cast(? as unsigned) + coalesce(?, 0.5)) is not null",
+			peer:    1,
+			control: true,
+		},
+		{
+			name:                 "bare_conditional_peer",
+			query:                "select (cast(? as unsigned) + case when 1 then ? else 0 end) - cast(? as unsigned)",
+			peer:                 1,
+			runtimeBoundOperator: "+",
+		},
+		{
+			name:                 "bare_integer_division_negative_peer",
+			query:                "select (cast(? as unsigned) div ?) - cast(? as unsigned)",
+			peer:                 maxUint64,
+			runtimeBoundOperator: "div",
+		},
+		{
+			name:                 "bare_modulo_negative_peer",
+			query:                "select (cast(? as unsigned) % ?) is not null",
+			peer:                 maxUint64 - 1,
+			control:              true,
+			runtimeBoundOperator: "%",
+		},
+		{
+			name:                 "bare_modulo_signed_peer",
+			query:                "select (cast(? as unsigned) % ?) is not null",
+			peer:                 2,
+			peerSigned:           true,
+			control:              true,
+			runtimeBoundOperator: "%",
+		},
+		{
+			name:    "bare_unsigned_divisor_does_not_force_signed_modulo",
+			query:   "select (cast(-3 as signed) % ?) is not null",
+			peer:    2,
+			control: true,
+		},
+		{
+			name:                 "bare_integer_division_zero_peer",
+			query:                "select (cast(? as unsigned) div ?) is null",
+			peerSet:              true,
+			control:              true,
+			runtimeBoundOperator: "div",
+		},
+		{
+			name:                 "bare_modulo_zero_peer",
+			query:                "select (cast(? as unsigned) % ?) is null",
+			peerSet:              true,
+			control:              true,
+			runtimeBoundOperator: "%",
+		},
+		{name: "negative_peer", query: "select (cast(? as unsigned) + ?) is not null", peer: maxUint64 - 1, peerSigned: true, control: true},
+		{name: "bare_both", query: "select (? + ?) - cast(? as unsigned)", peer: 1},
+		{name: "abs_parent", query: "select abs(cast(? as unsigned) + ?) - cast(? as unsigned)", peer: 1},
+		{name: "multiplication_identity", query: "select (cast(? as unsigned) * ?) is not null", peer: 1, control: true},
+		{name: "float_peer", query: "select (cast(? as unsigned) + ?) is not null", peer: 0x3ff0000000000000, control: true, floatPeer: true},
+		{name: "null_peer", query: "select (cast(? as unsigned) + ?) is not null", peer: 1, control: true, nullPeer: true},
+	} {
+		for _, sqlMode := range []string{"", mysql.SQLModeNoUnsignedSubtraction} {
+			t.Run(tc.name+"/"+sqlMode, func(t *testing.T) {
+				compilerContext := plan2.NewMockCompilerContext(false)
+				compilerContext.SetSqlModeOverride(sqlMode)
+				ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
+					t, 28134, tc.query, compilerContext)
+				proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, tc.query)
+				cachedPlan, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+				require.NoError(t, err)
+				defer func() {
+					cw.proc.SetPrepareParams(nil)
+					prepareStmt.Close()
+					scratchPrepare.Close()
+				}()
+
+				// COM_STMT_EXECUTE: two non-NULL MYSQL_TYPE_LONGLONG unsigned values.
+				packet := make([]byte, 27)
+				packet[6] = 1 // new-params-bound flag
+				packet[7] = byte(defines.MYSQL_TYPE_LONGLONG)
+				packet[8] = 0x80
+				packet[9] = byte(defines.MYSQL_TYPE_LONGLONG)
+				packet[10] = 0x80
+				binary.LittleEndian.PutUint64(packet[11:], maxUint64)
+				binary.LittleEndian.PutUint64(packet[19:], maxUint64)
+				if tc.peer != 0 || tc.peerSet {
+					paramCount := strings.Count(tc.query, "?")
+					require.True(t, paramCount >= 1 && paramCount <= 3)
+					packet = make([]byte, 7+2*paramCount+8*paramCount)
+					packet[6] = 1
+					valueOffset := 7 + 2*paramCount
+					if paramCount == 1 {
+						packet[7], packet[8] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
+						binary.LittleEndian.PutUint64(packet[valueOffset:], tc.peer)
+					} else {
+						packet[7], packet[8] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
+						packet[9] = byte(defines.MYSQL_TYPE_LONGLONG)
+						if !tc.peerSigned {
+							packet[10] = 0x80
+						}
+						binary.LittleEndian.PutUint64(packet[valueOffset:], maxUint64)
+						binary.LittleEndian.PutUint64(packet[valueOffset+8:], tc.peer)
+					}
+					if paramCount == 3 {
+						packet[11], packet[12] = byte(defines.MYSQL_TYPE_LONGLONG), 0x80
+						binary.LittleEndian.PutUint64(packet[valueOffset+16:], maxUint64)
+					}
+					if tc.floatPeer {
+						packet[9] = byte(defines.MYSQL_TYPE_DOUBLE)
+					}
+					if tc.nullPeer {
+						packet[5] = 2
+						packet = packet[:valueOffset+8]
+					}
+				}
+				require.NoError(t, proto.ParseExecuteData(execCtx.reqCtx, cw.proc, prepareStmt, packet, 0))
+
+				_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+					execCtx, ses, cw, nil, prepareStmt.Name)
+				require.NoError(t, err)
+				if owned {
+					defer executionStmt.Free()
+				}
+				projectNode := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+				require.Len(t, projectNode.ProjectList, 1)
+				if tc.runtimeBoundOperator != "" {
+					require.True(t,
+						hasRuntimeArithmeticResultCast(projectNode.ProjectList[0], tc.runtimeBoundOperator, types.T_uint64),
+						"runtime plan must retain the inner unsigned %s boundary", tc.runtimeBoundOperator,
+					)
+				}
+				executor, err := colexec.NewExpressionExecutor(cw.proc, projectNode.ProjectList[0])
+				require.NoError(t, err)
+				defer executor.Free()
+				input := batch.New(nil)
+				input.SetRowCount(1)
+				result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+				if tc.control {
+					require.NoError(t, err)
+					require.Equal(t, !tc.nullPeer, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+				} else {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "inner unsigned overflow must fail before outer cancellation: %v", err)
+				}
+				after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+				require.NoError(t, err)
+				require.Equal(t, cachedPlan, after, "execution must not mutate the prepared template")
+			})
+		}
+	}
+}
+
+func hasRuntimeArithmeticResultCast(expr *plan.Expr, operator string, resultType types.T) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	if fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) > 0 &&
+		types.T(expr.Typ.Id) == resultType {
+		if inner := fn.Args[0].GetF(); inner != nil && inner.Func != nil && inner.Func.ObjName == operator {
+			return true
+		}
+	}
+	for _, arg := range fn.Args {
+		if hasRuntimeArithmeticResultCast(arg, operator, resultType) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildPlanRegexpStaticStringDomainMatrix(t *testing.T) {

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -203,6 +204,34 @@ func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *t
 	require.JSONEq(t, `"create view v as select n_name from nation"`, string(fields["Stmt"]))
 	require.Contains(t, fields, "dependencies")
 	require.Contains(t, fields, "lower_case_table_names")
+}
+
+func TestRegenerateViewDefinitionUsesStoredNoUnsignedSubtractionMode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		callerMode string
+		storedMode string
+		want       types.T
+	}{
+		{name: "stored signed mode overrides default caller", storedMode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_int64},
+		{name: "stored default overrides signed caller", callerMode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_uint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			ctx.SetSqlModeOverride(tc.callerMode)
+			persisted, err := json.Marshal(ViewData{
+				Stmt:            "create view v_mode as select cast(0 as unsigned) - 1 as c",
+				DefaultDatabase: "tpch",
+				SQLMode:         &tc.storedMode,
+			})
+			require.NoError(t, err)
+
+			regenerated, err := RegenerateViewDefinition(ctx, string(persisted))
+			require.NoError(t, err)
+			require.Len(t, regenerated.TableDef.Cols, 1)
+			require.Equal(t, int32(tc.want), regenerated.TableDef.Cols[0].Typ.Id)
+		})
+	}
 }
 
 func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {

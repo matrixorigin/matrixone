@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -274,6 +275,30 @@ func TestBindSQLUDFUsesStoredParserMode(t *testing.T) {
 	})
 }
 
+func TestBindSQLUDFUsesStoredNoUnsignedSubtractionMode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		callerMode bool
+		storedMode string
+		want       types.T
+	}{
+		{name: "stored mode overrides default caller", storedMode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_int64},
+		{name: "stored default overrides enabled caller", callerMode: true, storedMode: "", want: types.T_uint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			binder := NewDefaultBinder(context.Background(), nil, nil, plan.Type{}, nil)
+			binder.setNoUnsignedSubtractionOverride(tc.callerMode)
+			expr, err := bindFuncExprImplUdf(&binder.baseBinder, "unsigned_sub", &function.Udf{
+				Body:     "cast(0 as unsigned) - 1",
+				Language: string(tree.SQL),
+				SQLMode:  &tc.storedMode,
+			}, nil, nil, 0)
+			require.NoError(t, err)
+			require.Equal(t, int32(tc.want), expr.Typ.Id)
+		})
+	}
+}
+
 type sqlUdfMockCompilerContext struct {
 	*MockCompilerContext
 }
@@ -296,6 +321,20 @@ func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*fu
 		mode := "ANSI"
 		return &function.Udf{
 			Body:     `select 1 from (select 1) as "a\" where $1 = 2`,
+			Language: string(tree.SQL),
+			SQLMode:  &mode,
+		}, nil
+	case "f_stored_unsigned_sub":
+		mode := ""
+		return &function.Udf{
+			Body:     "select cast(0 as unsigned) - 1",
+			Language: string(tree.SQL),
+			SQLMode:  &mode,
+		}, nil
+	case "f_stored_signed_sub":
+		mode := mysql.SQLModeNoUnsignedSubtraction
+		return &function.Udf{
+			Body:     "select cast(0 as unsigned) - 1",
 			Language: string(tree.SQL),
 			SQLMode:  &mode,
 		}, nil
@@ -361,6 +400,30 @@ func TestBindSQLUDFArgumentMarkersFollowLexerSemantics(t *testing.T) {
 			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
 			_, err = BuildPlan(ctx, stmts[0], false)
 			require.NoError(t, err)
+		})
+	}
+}
+
+func TestSelectSQLUDFUsesStoredNoUnsignedSubtractionMode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		callerMode string
+		function   string
+		want       types.T
+	}{
+		{name: "stored mode overrides default caller", function: "f_stored_signed_sub", want: types.T_int64},
+		{name: "stored default overrides enabled caller", callerMode: mysql.SQLModeNoUnsignedSubtraction, function: "f_stored_unsigned_sub", want: types.T_uint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select "+tc.function+"()", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true)}
+			ctx.SetSqlModeOverride(tc.callerMode)
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, types.T(firstProjectionExpr(t, built).Typ.Id))
 		})
 	}
 }

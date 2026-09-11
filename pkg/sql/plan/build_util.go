@@ -626,18 +626,33 @@ func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint3
 	return tableCharset, nil
 }
 
-func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
-	return buildDefaultExprWithColumns(col, typ, proc, nil)
+func optionalBool(values []bool) bool {
+	return len(values) > 0 && values[0]
 }
 
-// buildDefaultExprWithColumns is the scoped form of buildDefaultExpr.  The
-// unscoped form remains for call sites that bind an expression which is not a
-// table-row default (for example internal compatibility expressions).
+func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process, noUnsignedSubtraction ...bool) (*plan.Default, error) {
+	return buildDefaultExprWithColumnsAndMode(col, typ, proc, nil, optionalBool(noUnsignedSubtraction))
+}
+
+// buildDefaultExprWithColumns binds a row default with the columns visible in
+// the row scope.  The optional mode keeps compatibility with callers that do
+// not carry a session SQL mode while allowing DDL paths to preserve it.
 func buildDefaultExprWithColumns(
 	col *tree.ColumnTableDef,
 	typ plan.Type,
 	proc *process.Process,
 	columns []*ColDef,
+	noUnsignedSubtraction ...bool,
+) (*plan.Default, error) {
+	return buildDefaultExprWithColumnsAndMode(col, typ, proc, columns, optionalBool(noUnsignedSubtraction))
+}
+
+func buildDefaultExprWithColumnsAndMode(
+	col *tree.ColumnTableDef,
+	typ plan.Type,
+	proc *process.Process,
+	columns []*ColDef,
+	noUnsignedSubtraction bool,
 ) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
@@ -687,6 +702,7 @@ func buildDefaultExprWithColumns(
 	} else {
 		binder = NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
 	}
+	binder.setNoUnsignedSubtractionOverride(noUnsignedSubtraction)
 	planExpr, err := binder.BindExpr(semanticExpr, 0, false)
 	if err != nil {
 		return nil, err
@@ -743,7 +759,7 @@ func requireExpressionDefaultProtocol(proc *process.Process) error {
 		"column-reference defaults require all CNs to support protocol version 60")
 }
 
-func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.OnUpdate, error) {
+func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process, noUnsignedSubtraction ...bool) (*plan.OnUpdate, error) {
 	var expr tree.Expr = nil
 
 	for _, attr := range col.Attributes {
@@ -758,6 +774,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	}
 
 	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
+	binder.setNoUnsignedSubtractionOverride(optionalBool(noUnsignedSubtraction))
 	planExpr, err := binder.BindExpr(expr, 0, false)
 	if err != nil {
 		return nil, err
@@ -803,7 +820,7 @@ func getColumnNullAbility(col *tree.ColumnTableDef) bool {
 	return true
 }
 
-func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process) (*plan.GeneratedCol, error) {
+func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []*ColDef, proc *process.Process, noUnsignedSubtraction ...bool) (*plan.GeneratedCol, error) {
 	var genAttr *tree.AttributeGeneratedAlways
 	for _, attr := range col.Attributes {
 		if ga, ok := attr.(*tree.AttributeGeneratedAlways); ok {
@@ -845,6 +862,7 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 	}
 
 	binder := NewGeneratedColBinder(proc.Ctx, colNames, colTypes)
+	binder.setNoUnsignedSubtractionOverride(optionalBool(noUnsignedSubtraction))
 	planExpr, err := binder.BindExpr(genAttr.Expr, 0, false)
 	if err != nil {
 		return nil, err

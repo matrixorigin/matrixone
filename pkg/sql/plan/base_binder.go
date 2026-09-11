@@ -3553,6 +3553,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 		preparedNumericPeer = preparedNumericProvenance && name == "/"
 	}
+	unsignedArithmeticResultType := b.unsignedIntegerArithmeticResultType(name, astArgs, args)
 	if b.numericParamType != nil || preparedNumericPeer {
 		var err error
 		args, err = b.resolvePreparedNumericArgs(name, args)
@@ -3616,6 +3617,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
+	if unsignedArithmeticResultType != nil {
+		var err error
+		args, err = b.castUnsignedIntegerArithmeticArgs(args)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if b.builder != nil && b.builder.isPrepareStatement {
 		b.markPreparedStringDomainSubquerySources(name, args)
 	}
@@ -3733,6 +3741,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
+			if unsignedArithmeticResultType != nil {
+				return appendCastBeforeExpr(b.GetContext(), e, *unsignedArithmeticResultType)
+			}
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -3753,6 +3764,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if err == nil {
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+			}
+			if unsignedArithmeticResultType != nil {
+				return appendCastBeforeExpr(b.GetContext(), builtinExpr, *unsignedArithmeticResultType)
 			}
 			return builtinExpr, nil
 		}
@@ -3986,6 +4000,10 @@ func bindFuncExprImplUdf(
 		if udf.SQLMode != nil {
 			parserSQLMode = *udf.SQLMode
 		}
+		restoreSQLMode := b.pushNoUnsignedSubtractionOverride(
+			mysqlparser.HasSQLMode(parserSQLMode, mysqlparser.SQLModeNoUnsignedSubtraction),
+		)
+		defer restoreSQLMode()
 		sql, udfArgs := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode)
 		restoreUdfArgs := b.pushSQLUdfArguments(udfArgs)
 		defer restoreUdfArgs()
@@ -6056,6 +6074,272 @@ func bindFuncExprImplByPlanExpr(
 		},
 		Typ: Typ,
 	}, nil
+}
+
+// unsignedIntegerArithmeticResultType returns MySQL's result domain for an
+// integer arithmetic node involving an unsigned operand. This is intentionally
+// decided before prepared numeric argument reconciliation: that reconciliation
+// may temporarily widen an explicit unsigned cast containing a parameter to
+// DECIMAL128. Applying the cast at every node is important: a final cast on
+// only the outer subtraction lets a DECIMAL128 intermediate overflow and then
+// be cancelled by its parent.
+func (b *baseBinder) unsignedIntegerArithmeticResultType(name string, astArgs []tree.Expr, args []*Expr) *Type {
+	if len(astArgs) != 2 || len(args) != 2 {
+		return nil
+	}
+	switch name {
+	case "-", "+", "*", "%", "div":
+	default:
+		return nil
+	}
+	if name != "-" && b.builder != nil && b.builder.isPrepareStatement &&
+		(preparedArithmeticOperandHasUnresolvedMarker(args[0]) ||
+			preparedArithmeticOperandHasUnresolvedMarker(args[1])) {
+		// A bare marker's signedness is an execute-time property. Freezing the
+		// unsigned peer's physical type into that marker makes a later signed
+		// value (for example, u16 + -2) fail before arithmetic runs. An explicit
+		// CAST is different: it fixes the operand's semantic domain, so its
+		// enclosing node must retain the result-boundary cast. In particular this
+		// keeps an overflowing CAST(? AS UNSIGNED) + CAST(1 AS SIGNED) from being
+		// cancelled by an outer expression.
+		// ResetParamRefRule restores the deferred result boundary once the bare
+		// marker's execution-time domain is known.
+		return nil
+	}
+
+	leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(astArgs[0], args[0])
+	rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(astArgs[1], args[1])
+	if !leftInteger || !rightInteger || (!leftUnsigned && !rightUnsigned) {
+		return nil
+	}
+
+	// MOD keeps the signedness of its dividend.  Unlike the other integer
+	// arithmetic operators handled here, an unsigned divisor alone must not
+	// turn a signed remainder into UINT64 (for example, -3 % CAST(2 AS
+	// UNSIGNED) remains -1).  An unsigned dividend still gets the normal
+	// unsigned result boundary.
+	resultUnsigned := leftUnsigned || rightUnsigned
+	if name == "%" {
+		resultUnsigned = leftUnsigned
+	}
+	if !resultUnsigned {
+		return nil
+	}
+
+	resultType := types.T_uint64.ToType()
+	if name == "-" && b.noUnsignedSubtractionEnabled() {
+		resultType = types.T_int64.ToType()
+	}
+	planType := makePlan2Type(&resultType)
+	return &planType
+}
+
+// preparedArithmeticOperandHasUnresolvedMarker reports whether an arithmetic
+// operand still derives its numeric domain from a bare runtime marker. An
+// explicit CAST is a user-selected type boundary, not an unresolved marker:
+// callers must be able to protect the result of arithmetic on that fixed
+// domain even though the cast's child is a parameter.
+func preparedArithmeticOperandHasUnresolvedMarker(expr *Expr) bool {
+	if expr == nil || isExplicitPreparedCast(expr) {
+		return false
+	}
+	if expr.GetP() != nil || expr.GetV() != nil {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if preparedArithmeticOperandHasUnresolvedMarker(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if preparedArithmeticOperandHasUnresolvedMarker(item) {
+				return true
+			}
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		if preparedArithmeticOperandHasUnresolvedMarker(window.WindowFunc) {
+			return true
+		}
+		for _, item := range window.PartitionBy {
+			if preparedArithmeticOperandHasUnresolvedMarker(item) {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && preparedArithmeticOperandHasUnresolvedMarker(order.Expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// integerArithmeticOperandDomain combines the parsed expression with its
+// bound expression. The bound arithmetic node may already contain implicit
+// DECIMAL casts, whereas the AST distinguishes that implementation detail from
+// a user-written DECIMAL cast, which remains a non-integer boundary. If an
+// entirely constant nested expression has already folded, the AST is also the
+// only surviving record of its logical integer/unsigned domain.
+func (b *baseBinder) integerArithmeticOperandDomain(astExpr tree.Expr, expr *Expr) (integer, unsigned bool) {
+	astExpr = unwrapParenExpr(astExpr)
+	if literal, ok := astExpr.(*tree.NumVal); ok {
+		return literal.ValType == tree.P_int64 || literal.ValType == tree.P_uint64, literal.ValType == tree.P_uint64
+	}
+	if cast, ok := astExpr.(*tree.CastExpr); ok {
+		typ, err := getTypeFromAst(b.GetContext(), cast.Type)
+		if err != nil {
+			return false, false
+		}
+		oid := types.T(typ.Id)
+		return integerSubtractionOperand(oid), unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+	}
+	if unary, ok := astExpr.(*tree.UnaryExpr); ok &&
+		(unary.Op == tree.UNARY_PLUS || unary.Op == tree.UNARY_MINUS) {
+		child := expr
+		if fn := expr.GetF(); fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
+			(fn.Func.GetObjName() == "unary_plus" || fn.Func.GetObjName() == "unary_minus") {
+			child = fn.Args[0]
+		}
+		return b.integerArithmeticOperandDomain(unary.Expr, child)
+	}
+	if _, ok := astExpr.(*tree.ParamExpr); ok {
+		// A parameter's concrete numeric domain is not known until EXECUTE, but
+		// subtraction still needs its prepare-time SQL-mode result boundary. The
+		// execute-time parameter reset preserves the cast while supplying the
+		// actual signed/unsigned value to the arithmetic node.
+		return true, false
+	}
+	// An already-bound implicit result cast is semantic, rather than a
+	// user-written DECIMAL boundary. Prefer it before interpreting the binary
+	// AST: a protected nested unsigned operation reaches its parent as CAST(...
+	// AS UNSIGNED), whose function arguments no longer correspond one-to-one
+	// with the original binary expression.
+	if expr != nil {
+		oid := types.T(expr.Typ.Id)
+		if integerSubtractionOperand(oid) {
+			return true, unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+		}
+	}
+
+	if binary, ok := astExpr.(*tree.BinaryExpr); ok && integerArithmeticBinaryOperator(binary.Op) {
+		if expr == nil || expr.GetF() == nil || len(expr.GetF().Args) != 2 {
+			// Constant folding can replace the bound function with a literal before
+			// its parent subtraction is bound. The AST still carries the logical
+			// integer domain, so preserve it rather than relying on the folded
+			// physical DECIMAL result.
+			leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(binary.Left, nil)
+			rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(binary.Right, nil)
+			resultUnsigned := leftUnsigned || rightUnsigned
+			if binary.Op == tree.MOD {
+				resultUnsigned = leftUnsigned
+			}
+			return leftInteger && rightInteger, resultUnsigned
+		}
+		fn := expr.GetF()
+		leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(binary.Left, fn.Args[0])
+		rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(binary.Right, fn.Args[1])
+		resultUnsigned := leftUnsigned || rightUnsigned
+		if binary.Op == tree.MOD {
+			resultUnsigned = leftUnsigned
+		}
+		return leftInteger && rightInteger, resultUnsigned
+	}
+
+	if expr == nil {
+		return false, false
+	}
+	oid := types.T(expr.Typ.Id)
+	return integerSubtractionOperand(oid), unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+}
+
+func integerArithmeticBinaryOperator(op tree.BinaryOp) bool {
+	switch op {
+	case tree.PLUS, tree.MULTI, tree.MOD, tree.INTEGER_DIV:
+		// '/' deliberately produces a fractional domain. A nested '-' already
+		// has the selected final integer type, and the bitwise operators retain
+		// their UINT64 physical result, so neither needs AST provenance here.
+		return true
+	default:
+		return false
+	}
+}
+
+// castUnsignedIntegerArithmeticArgs performs the arithmetic in DECIMAL128 so
+// signed operands and the complete UINT64 range can be combined without an
+// operand cast failing first. The caller applies the final implicit BIGINT
+// cast to enforce this node's selected signed or unsigned bound.
+func (b *baseBinder) castUnsignedIntegerArithmeticArgs(args []*Expr) ([]*Expr, error) {
+	decimalType := types.New(types.T_decimal128, 38, 0)
+	for i := range args {
+		if makeTypeByPlan2Expr(args[i]).Eq(decimalType) {
+			continue
+		}
+		casted, err := appendCastBeforeExpr(b.GetContext(), args[i], makePlan2Type(&decimalType))
+		if err != nil {
+			return nil, err
+		}
+		args[i] = casted
+	}
+	return args, nil
+}
+
+func integerSubtractionOperand(typ types.T) bool {
+	return typ.IsInteger() || typ == types.T_bit || typ == types.T_year
+}
+
+func unsignedIntegerSubtractionOperand(typ types.T) bool {
+	switch typ {
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
+		return true
+	default:
+		return false
+	}
+}
+
+func (b *baseBinder) noUnsignedSubtractionEnabled() bool {
+	if b.hasNoUnsignedSubtractionOverride {
+		return b.noUnsignedSubtractionOverride
+	}
+	return b.builder != nil && b.builder.noUnsignedSubtraction
+}
+
+func (b *baseBinder) pushNoUnsignedSubtractionOverride(enabled bool) func() {
+	oldEnabled := b.noUnsignedSubtractionOverride
+	oldHasOverride := b.hasNoUnsignedSubtractionOverride
+	var oldBuilderEnabled bool
+	if b.builder != nil {
+		oldBuilderEnabled = b.builder.noUnsignedSubtraction
+		// SELECT-form SQL UDF bodies create nested binders from this builder, so
+		// the stored mode must be visible beyond the current baseBinder too.
+		b.builder.noUnsignedSubtraction = enabled
+	}
+	b.noUnsignedSubtractionOverride = enabled
+	b.hasNoUnsignedSubtractionOverride = true
+	return func() {
+		if b.builder != nil {
+			b.builder.noUnsignedSubtraction = oldBuilderEnabled
+		}
+		b.noUnsignedSubtractionOverride = oldEnabled
+		b.hasNoUnsignedSubtractionOverride = oldHasOverride
+	}
+}
+
+func (b *baseBinder) setNoUnsignedSubtractionOverride(enabled bool) {
+	b.noUnsignedSubtractionOverride = enabled
+	b.hasNoUnsignedSubtractionOverride = true
+}
+
+func noUnsignedSubtractionMode(ctx CompilerContext) bool {
+	mode, err := ctx.ResolveVariable("sql_mode", true, false)
+	if err != nil {
+		return false
+	}
+	modeString, ok := mode.(string)
+	return ok && mysqlparser.HasSQLMode(modeString, mysqlparser.SQLModeNoUnsignedSubtraction)
 }
 
 func isCollatedTextPlanType(expr *plan.Expr) bool {
