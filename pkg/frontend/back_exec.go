@@ -410,7 +410,7 @@ func doComQueryInBack(
 		IsRestore:     backSes.GetRestore(),
 	}
 	proc.SetAffectedRows(backSes.lastAffectedRows)
-	bindBackExecSession(proc, backSes)
+	bindBackExecSession(proc, backSes, execCtx.reqCtx)
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	if process.HasSystemCTELimits(execCtx.reqCtx) {
@@ -613,7 +613,8 @@ func affectedRowsForStatement(execCtx *ExecCtx) int64 {
 // a frontend background executor. The back session forwards temporary-table
 // aliases to its upstream session, while the upstream ID keeps physical table
 // names visible to the temporary-table GC as belonging to the active client.
-func bindBackExecSession(proc *process.Process, backSes *backSession) {
+func bindBackExecSession(proc *process.Process, backSes *backSession, ctx context.Context) {
+	proc.WarningSink = process.WarningSinkFromContext(ctx)
 	if backSes.upstream == nil {
 		return
 	}
@@ -1625,6 +1626,13 @@ func (backSes *backSession) AppendWarningDiagnostic(code uint16, msg string) {
 		return
 	}
 	backSes.upstream.AppendWarningDiagnostic(code, msg)
+}
+
+func (backSes *backSession) AppendWarningCount(total uint64) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.AppendWarningCount(total)
 }
 
 func (backSes *backSession) AppendWarningBatch(total uint64, codes []uint16, messages []string) {

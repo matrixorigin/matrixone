@@ -307,6 +307,26 @@ func TestAppendWarningBatchBoundsRecordsAndPreservesTotal(t *testing.T) {
 	require.Equal(t, uint16(100), info.warningCount())
 }
 
+func TestAppendWarningCountSaturatesAndBoundsMessageBytes(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.AppendWarningCount(^uint64(0))
+	ses.AppendWarningCount(1)
+	ses.AppendWarningDiagnostic(1, strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes*2))
+
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, ^uint64(0), info.totalWarnings)
+	require.Len(t, info.msgs, 1)
+	require.LessOrEqual(t, len(info.msgs[0]), process.WarningDiagnosticMaxMessageBytes)
+}
+
+func TestAppendWarningBatchDoesNotRetainMoreRecordsThanTotal(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.AppendWarningBatch(1, []uint16{1292, 1292}, []string{"first", "second"})
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, uint64(1), info.totalWarnings)
+	require.Len(t, info.msgs, 1)
+}
+
 func TestHandleSetTransaction(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
@@ -9998,4 +10018,28 @@ func TestPreparedCloneSQLUsesRemappedDefaultDatabase(t *testing.T) {
 	require.True(t, parsed.SrcTable.ExplicitSchema)
 	require.True(t, parsed.CreateTable.Table.ExplicitSchema)
 	require.Equal(t, "source_db", ses.GetTxnCompileCtx().GetDatabase())
+}
+
+func TestPreparedGroupConcatFloorCapturedWithoutPhysicalCompile(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	const sql = "prepare gc_floor from select /*+ SET_VAR(query_max_workers=1) */ group_concat('abcdef')"
+	parsed, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer parsed.Free()
+	ctrl := gomock.NewController(t)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	runTestHandle("prepared GROUP_CONCAT floor without physical compile", t, func(ses *Session) error {
+		execCtx.resper = ses.respr
+		require.NoError(t, ses.SetSessionSysVar(ctx, "group_concat_max_len", int64(1024)))
+		prepared, err := handlePrepareStmt(ses, execCtx, parsed.(*tree.PrepareStmt), sql)
+		if err != nil {
+			return err
+		}
+		require.Nil(t, prepared.compile, "explicit placement must exercise uncached prepare")
+		require.Equal(t, uint64(1024), prepared.groupConcatMaxLenFloor)
+		require.NoError(t, ses.SetSessionSysVar(ctx, "group_concat_max_len", int64(5)))
+		require.Equal(t, uint64(1024), prepared.groupConcatMaxLenFloor, "the logical prepared owner retains its original floor")
+		return nil
+	})
 }

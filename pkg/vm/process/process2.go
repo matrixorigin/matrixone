@@ -111,8 +111,9 @@ func NewTopProcess(
 // This is used for the compile-process, which doesn't need to pass the context.
 func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	child := &Process{
-		Base:    proc.Base,
-		Session: proc.Session,
+		Base:        proc.Base,
+		Session:     proc.Session,
+		WarningSink: proc.WarningSink,
 	}
 	child.CopyPlanSnapshotFrom(proc)
 	child.CopyStringShuffleHashAlgorithmFrom(proc)
@@ -130,8 +131,9 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 // channelBufferSize and nilbatchCnt is the extra information for Reg.
 func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channelBufferSize []int32, nilbatchCnt []int32) *Process {
 	child := &Process{
-		Base:    proc.Base,
-		Session: proc.Session,
+		Base:        proc.Base,
+		Session:     proc.Session,
+		WarningSink: proc.WarningSink,
 	}
 	child.CopyPlanSnapshotFrom(proc)
 	child.CopyStringShuffleHashAlgorithmFrom(proc)

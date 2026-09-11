@@ -30,6 +30,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
+	// An older CN may receive an overload selected by a newer CN. It must
+	// reject the unknown index instead of panicking while indexing Overloads.
+	unknown := encodeOverloadID(STR_TO_DATE, 99)
+	_, err := GetFunctionById(context.Background(), unknown)
+	require.Error(t, err)
+	_, exists := GetFunctionByIdWithoutError(unknown)
+	require.False(t, exists)
+	require.False(t, GetFunctionIsWinOrderFunById(unknown))
+}
+
 func Test_fixedTypeCastRule1(t *testing.T) {
 	inputs := []struct {
 		shouldCast bool
@@ -1223,6 +1234,27 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 			}
 			require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
 		})
+	}
+}
+
+func TestOctNullability(t *testing.T) {
+	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_int64, types.T_float64, types.T_time, types.T_bit} {
+		t.Run(typ.String(), func(t *testing.T) {
+			fn, err := GetFunctionByName(t.Context(), "oct", []types.Type{typ.ToType()})
+			require.NoError(t, err)
+			arg := &plan.Expr{Typ: plan.Type{Id: int32(typ), NotNullable: true}}
+			want := typ == types.T_int64 || typ == types.T_float64 || typ == types.T_time || typ == types.T_bit
+			require.Equal(t, want, DeduceNotNullable(fn.GetEncodedOverloadID(), []*plan.Expr{arg}))
+			arg.Typ.NotNullable = false
+			require.False(t, DeduceNotNullable(fn.GetEncodedOverloadID(), []*plan.Expr{arg}))
+		})
+	}
+	for id := int32(0); id < OctStringOverloadStart; id++ {
+		op, err := GetFunctionById(t.Context(), EncodeOverloadID(OCT, id))
+		require.NoError(t, err)
+		arg := &plan.Expr{Typ: plan.Type{Id: int32(op.args[0]), NotNullable: true}}
+		require.True(t, DeduceNotNullable(EncodeOverloadID(OCT, id), []*plan.Expr{arg}))
 	}
 }
 

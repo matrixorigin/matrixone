@@ -20,7 +20,6 @@ import (
 	"math"
 	"slices"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -2069,6 +2068,35 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 	}
 	itr := ctr.cachedItr
 	isPessimistic := proc.GetTxnOperator().Txn().IsPessimistic()
+	warningsEnabled := proc != nil && proc.GetStmtProfile() != nil &&
+		proc.GetStmtProfile().GetStatementIgnore() && ap.OnDuplicateAction == plan.Node_IGNORE
+	var duplicateWarnings process.WarningAccumulator
+	recordDuplicateWarning := func(row int) {
+		if !warningsEnabled {
+			return
+		}
+		if !duplicateWarnings.NeedsDiagnostic() {
+			duplicateWarnings.AddCount()
+			return
+		}
+		if len(ctr.vecs) == 0 || ctr.vecs[0] == nil {
+			duplicateWarnings.AddCount()
+			return
+		}
+		rowStr, err := colexec.FormatDedupEntry(
+			ctr.vecs[0], row, ap.DedupColName, ap.DedupColTypes)
+		if err != nil {
+			// A rendering failure must not turn INSERT/UPDATE IGNORE back into a
+			// statement error.  The duplicate row is still filtered exactly as
+			// before; only its optional diagnostic is unavailable.
+			duplicateWarnings.AddCount()
+			return
+		}
+		duplicateWarnings.Add(
+			moerr.ER_DUP_ENTRY,
+			moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName).Error(),
+		)
+	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -2107,27 +2135,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 				if !isPessimistic {
 					continue
 				}
-				var rowStr string
-				if len(ap.DedupColTypes) == 1 {
-					if ap.DedupColName == catalog.IndexTableIndexColName {
-						if ctr.vecs[0].GetType().Oid == types.T_varchar {
-							t, _, schema, err := types.DecodeTuple(ctr.vecs[0].GetBytesAt(i + k))
-							if err == nil && len(schema) > 1 {
-								rowStr = t.ErrString(make([]int32, len(schema)))
-							}
-						}
-					}
-					if len(rowStr) == 0 {
-						rowStr, err = colexec.FormatDedupKey(ctr.vecs[0], i+k, ap.DedupColTypes)
-						if err != nil {
-							return err
-						}
-					}
-				} else {
-					rowStr, err = colexec.FormatDedupKey(ctr.vecs[0], i+k, ap.DedupColTypes)
-					if err != nil {
-						return err
-					}
+				rowStr, err := colexec.FormatDedupEntry(
+					ctr.vecs[0], i+k, ap.DedupColName, ap.DedupColTypes)
+				if err != nil {
+					return err
 				}
 				return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
 			case plan.Node_IGNORE:
@@ -2141,10 +2152,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 					for _, sel := range sels {
 						ctr.matched.Add(uint64(sel))
 					}
+					recordDuplicateWarning(i + k)
 				} else {
 					// Compact unique maps omit GroupSels; in that representation
 					// group g still maps directly to build row g-1.
 					ctr.matched.Add(vals[k] - 1)
+					recordDuplicateWarning(i + k)
 				}
 
 			case plan.Node_UPDATE:
@@ -2208,6 +2221,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 				ctr.matched.Add(vals[k] - 1)
 			}
 		}
+	}
+	if warningsEnabled {
+		duplicateWarnings.Flush(proc)
 	}
 	result.Batch = ctr.rbat
 	ap.ctr.lastPos = 0

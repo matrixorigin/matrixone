@@ -134,6 +134,9 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.beginSchedulingTraceAttempt()
 
@@ -236,6 +239,11 @@ func (c *Compile) Compile(
 	// from plan to scope.
 	if c.scopes, err = c.compileScope(queryPlan); err != nil {
 		return err
+	}
+	if c.groupConcatMaxLenFloor != 0 {
+		if err = refreshGroupConcatMaxLen(c.scopes, c.proc, c.groupConcatMaxLenFloor); err != nil {
+			return err
+		}
 	}
 	if hasUnresolvedFullTextPlan {
 		// Inert unless the cross-CN visibility test pauses a stale plan before
@@ -377,6 +385,16 @@ func expressionsContainUnresolvedFullText(expressions []*plan.Expr) bool {
 
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
+	warningDestination := c.proc.GetWarningSink()
+	warnings := newWarningAttempt(c.proc)
+	warnings.bindScopes(c.scopes)
+	warningsSucceeded := false
+	defer func() { warnings.finish(warningsSucceeded, warningDestination) }()
+
+	// Cached plans can outlive the negotiated cluster capability.
+	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
 	var txnOperator = c.proc.GetTxnOperator()
 
 	// init context for pipeline.
@@ -418,6 +436,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	defer func() {
 		// if a rerun occurs, it differs from the original c, so we need to release it.
 		if runC != c {
+			// Detach before pooled retry processes can be reused.
+			warnings.restore()
 			runC.Release()
 		}
 	}()
@@ -477,6 +497,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	v2.TxnStatementTotalCounter.Inc()
 	if c.siriusRead != nil {
 		err = c.runSiriusRead(execTopContext)
+		warningsSucceeded = err == nil
 		return queryResult, err
 	}
 	attemptStart := time.Now()
@@ -618,6 +639,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			return nil, err
 		}
 
+		// Seal before cancellation: a late terminal RPC must not leak diagnostics.
+		warnings.discard()
 		c.fatalLog(retryTimes, err)
 		if !c.canRetry(err) {
 			// runOnce may return after a local or coordinator branch fails while a
@@ -709,6 +732,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			attemptScopes, attemptAnal, c.addr, true,
 		)
 		attemptOpen = false
+		warnings.finish(false, nil)
 		if runC != c {
 			releaseRetryCompile(runC)
 		}
@@ -728,6 +752,8 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		stats.ResetRetryAttemptResource()
 		resetStatsInfoPreRun(stats, isInExecutor)
 
+		// Retry compilation can itself emit expression diagnostics.
+		warnings = newWarningAttempt(c.proc)
 		nextRunC, buildErr := c.buildRetryCompile(defChanged || forcePreMode)
 		carriedPreRunWall = time.Since(attemptStart)
 		attemptPreRunWall = carriedPreRunWall
@@ -741,6 +767,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			return nil, err
 		}
 		runC = nextRunC
+		warnings.bindScopes(runC.scopes)
 		runC.executionGeneration = c.executionGeneration
 		attemptScopes = runC.scopes
 		attemptAnal = runC.anal
@@ -799,7 +826,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 		sinkAttemptOpen = false
 	}
-
 	resourceRecorder.finishAttempt(
 		uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 		attemptScopes, attemptAnal, c.addr, false,
@@ -815,7 +841,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	if isExplainPhyPlan {
 		c.refreshExplainPhyPlanBuffer(runC, queryResult, option)
 	}
-
+	warningsSucceeded = err == nil
 	return queryResult, err
 }
 
@@ -1108,6 +1134,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 
 	var e error
 	runC := NewCompile(c.addr, c.db, c.sql, c.tenant, c.uid, c.e, c.proc, c.stmt, c.isInternal, c.cnLabel, c.startAt)
+	runC.groupConcatMaxLenFloor = c.groupConcatMaxLenFloor
 	runC.inheritTemporaryDDLPolicy(c)
 	runC.inheritLoadUniqueIndexPromotion(c)
 	c.bindRetryPlanGeneration(runC, rebuildPlan)

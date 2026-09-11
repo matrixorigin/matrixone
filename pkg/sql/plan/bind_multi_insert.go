@@ -586,7 +586,12 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 		// their column lists (defaults for the columns a clause does not set),
 		// cast to the target types, and UNION ALL the branches so the table is
 		// written by one pipeline with one dedup pass.
-		insertColumns := multiInsertUnionColumns(group.branches)
+		var insertColumns []string
+		insertColumns, err = multiInsertUnionColumnsWithDefaultDependencies(
+			builder.GetContext(), group.branches, tableDef)
+		if err != nil {
+			return err
+		}
 		branchIDs := make([]int32, 0, len(group.branches))
 		for _, branch := range group.branches {
 			branchID, err := builder.bindMultiInsertBranchSource(bindCtx, branch, sourceStep, srcCols, insertColumns, tableDef, selectors, whenCount)
@@ -850,6 +855,67 @@ func multiInsertUnionColumns(branches []*multiInsertBranch) []string {
 	return columns
 }
 
+// multiInsertUnionColumnsWithDefaultDependencies widens a multi-table INSERT
+// branch union by the base columns needed to evaluate expression defaults. A
+// branch may set b while omitting a even though b DEFAULT (a + 1); if a is not
+// present in the shared row image, the dependency cannot be materialized until
+// after the union and would either read the wrong source position or be
+// evaluated twice. Dependencies are appended in stable table-column order and
+// transitively closed, so every branch carries one executable value for each
+// source needed by its defaults.
+func multiInsertUnionColumnsWithDefaultDependencies(
+	ctx context.Context,
+	branches []*multiInsertBranch,
+	tableDef *plan.TableDef,
+) ([]string, error) {
+	columns := multiInsertUnionColumns(branches)
+	if tableDef == nil {
+		return columns, nil
+	}
+	seen := make(map[string]struct{}, len(columns))
+	for _, column := range columns {
+		seen[column] = struct{}{}
+	}
+	for i := 0; i < len(columns); i++ {
+		colIdx, ok := tableDef.Name2ColIndex[columns[i]]
+		if !ok || colIdx < 0 || int(colIdx) >= len(tableDef.Cols) || tableDef.Cols[colIdx] == nil {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"multi-table INSERT cannot resolve target column %q", columns[i])
+		}
+		colDef := tableDef.Cols[colIdx]
+		if colDef.Default == nil {
+			// Older catalog rows and synthetic plans may omit Default metadata
+			// for a nullable ordinary column; its implicit default is NULL.
+			continue
+		}
+		for _, refIdx := range collectRefColPos(colDef.Default.GetExpr()) {
+			if refIdx < 0 || int(refIdx) >= len(tableDef.Cols) || tableDef.Cols[refIdx] == nil {
+				return nil, moerr.NewInvalidInputf(ctx,
+					"default expression for column %q references invalid column position %d",
+					columns[i], refIdx)
+			}
+			refCol := tableDef.Cols[refIdx]
+			if refCol.GeneratedCol != nil {
+				return nil, moerr.NewInvalidInputf(ctx,
+					"default expression for column %q cannot depend on generated column %q",
+					columns[i], refCol.Name)
+			}
+			if refCol.Typ.AutoIncr {
+				return nil, moerr.NewInvalidInputf(ctx,
+					"default expression for column %q cannot depend on auto-increment column %q",
+					columns[i], refCol.Name)
+			}
+			refName := tableDef.Cols[refIdx].Name
+			if _, exists := seen[refName]; exists {
+				continue
+			}
+			seen[refName] = struct{}{}
+			columns = append(columns, refName)
+		}
+	}
+	return columns, nil
+}
+
 // bindMultiInsertBranchSource builds one clause's row image:
 //
 //	SINK_SCAN(source) -> [FILTER] -> PROJECT
@@ -1023,14 +1089,25 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 	}
 
 	projList := values
+	var (
+		columnExprs      map[int32]*plan.Expr
+		colIdxToProjPos  map[int32]int32
+		materializeCols  map[int32]bool
+		materializeOrder []int32
+	)
 	if unionColumns != nil {
 		valueByColumn := make(map[string]*plan.Expr, len(values))
 		for i, column := range branch.insertColumns {
 			valueByColumn[column] = values[i]
 		}
 		projList = make([]*plan.Expr, 0, len(unionColumns))
+		columnExprs = make(map[int32]*plan.Expr, len(unionColumns))
+		colIdxToProjPos = make(map[int32]int32, len(unionColumns))
+		materializeCols = make(map[int32]bool, len(unionColumns))
+		materializeOrder = make([]int32, 0, len(unionColumns))
 		for _, column := range unionColumns {
-			colDef := tableDef.Cols[tableDef.Name2ColIndex[column]]
+			colIdx := tableDef.Name2ColIndex[column]
+			colDef := tableDef.Cols[colIdx]
 			expr, ok := valueByColumn[column]
 			var err error
 			if ok {
@@ -1041,17 +1118,39 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 			if err != nil {
 				return 0, err
 			}
+			columnExprs[colIdx] = expr
+			colIdxToProjPos[colIdx] = int32(len(projList))
+			if exprHasLocalColumnRef(expr) {
+				materializeCols[colIdx] = true
+				materializeOrder = append(materializeOrder, colIdx)
+			}
 			projList = append(projList, expr)
 		}
 	}
 
 	projTag := builder.genNewBindTag()
-	return builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		Children:    []int32{lastNodeID},
-		ProjectList: projList,
-		BindingTags: []int32{projTag},
-	}, bCtx), nil
+	if unionColumns == nil {
+		return builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{lastNodeID},
+			ProjectList: projList,
+			BindingTags: []int32{projTag},
+		}, bCtx), nil
+	}
+	lastNodeID, _, err := builder.appendMaterializedExprProjections(
+		bCtx,
+		lastNodeID,
+		projTag,
+		projList,
+		colIdxToProjPos,
+		columnExprs,
+		materializeCols,
+		materializeOrder,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return lastNodeID, nil
 }
 
 // appendMultiInsertUnionAll chains the branches of one table into a left-deep

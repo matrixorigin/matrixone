@@ -35,6 +35,11 @@ func NewBruteForceIndex[T types.ArrayElement](dataset [][]T,
 	return NewCpuBruteForceIndex[T](dataset, dimension, m, elemsz)
 }
 
+// DispatchesToDevice is always false in a non-gpu build: NewBruteForceIndex above ignores
+// gpuMode and returns a CPU index whatever the session asked for, so a caller that sized for the
+// device arena here would reserve bytes the load never puts there.
+func DispatchesToDevice[T types.ArrayElement](bool) bool { return false }
+
 func NewAdhocBruteForceIndex[T types.RealNumbers](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,

@@ -191,6 +191,16 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 	if ctx == nil {
 		return nil
 	}
+	var keyTypes []*plan.Type
+	if ctx.KeyTypes != nil {
+		keyTypes = make([]*plan.Type, len(ctx.KeyTypes))
+		for i, typ := range ctx.KeyTypes {
+			if typ != nil {
+				copied := *typ
+				keyTypes[i] = &copied
+			}
+		}
+	}
 	newCtx := &plan.PreInsertUkCtx{
 		Columns:                      slices.Clone(ctx.Columns),
 		PkColumn:                     ctx.PkColumn,
@@ -207,6 +217,9 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		AutoIncrementGeneratedColumn: ctx.AutoIncrementGeneratedColumn,
 		AutoIncrementKeyIndex:        ctx.AutoIncrementKeyIndex,
 		AutoIncrementOutputColumn:    ctx.AutoIncrementOutputColumn,
+		KeyNames:                     slices.Clone(ctx.KeyNames),
+		KeyTypes:                     keyTypes,
+		KeyTypeCounts:                slices.Clone(ctx.KeyTypeCounts),
 	}
 
 	return newCtx

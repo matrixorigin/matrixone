@@ -309,7 +309,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
 	}
-	if err := refreshGroupConcatMaxLen(c.scopes, proc); err != nil {
+	if err := refreshGroupConcatMaxLen(c.scopes, proc, c.groupConcatMaxLenFloor); err != nil {
 		return err
 	}
 	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(proc)
@@ -536,6 +536,7 @@ func (c *Compile) clear() {
 	c.remoteFragmentCounts = nil
 	c.remoteExecutionID = uuid.Nil
 	c.isPrepare = false
+	c.groupConcatMaxLenFloor = 0
 	c.hasMergeOp = false
 	c.needBlock = false
 	c.ignorePublish = false
@@ -5585,10 +5586,49 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
-	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node)) || c.scopesRunOnCoordinator(ss) {
+	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node) &&
+		!c.needsCoordinatorIgnoreCheck(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
 	return []*Scope{c.newMergeScope(ss)}
+}
+
+// statementIgnoreEnabled is defensive because a few compile/serialization
+// tests construct a Process shell without its shared BaseProcess.  The normal
+// execution path always has both objects, but a protocol gate must not turn a
+// malformed/incomplete process into a panic while handling an error path.
+func statementIgnoreEnabled(proc *process.Process) bool {
+	return proc != nil && proc.Base != nil && proc.GetStmtProfile().GetStatementIgnore()
+}
+
+// An older CN resolves the same CHECK function ID but throws instead of
+// filtering invalid INSERT IGNORE rows. Keep only this filter local while
+// upgrading; ordinary CHECKs and fully upgraded clusters remain distributed.
+func (c *Compile) needsCoordinatorIgnoreCheck(node *plan.Node) bool {
+	if node == nil || len(node.FilterList) == 0 || !statementIgnoreEnabled(c.proc) ||
+		supportsRemoteIgnoreCheck(c.proc.GetService()) {
+		return false
+	}
+	for _, expr := range node.FilterList {
+		if containsFunctionInExpr(expr, nil, isCheckConstraintFunction) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCheckConstraintFunction(functionID, _ int32) bool {
+	return functionID == function.CHECK_CONSTRAINT_ASSERT
+}
+
+func supportsRemoteIgnoreCheck(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, versionOK := value.(int64)
+	return ok && versionOK && version >= defines.MORPCVersion63
 }
 
 func (c *Compile) scopesRunOnCoordinator(ss []*Scope) bool {
@@ -10094,6 +10134,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 	if accountId >= 0 {
 		opts = opts.WithAccountID(uint32(accountId))
 	}
+	ctx = process.ContextWithWarningSink(ctx, c.proc.WarningSink)
 	return exec.Exec(ctx, sql, opts)
 }
 
@@ -10316,3 +10357,7 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 	}
 	return false
 }
+
+// SetGroupConcatMaxLenFloor binds the immutable prepared-statement value before
+// physical compilation. Zero keeps ordinary statements fully dynamic.
+func (c *Compile) SetGroupConcatMaxLenFloor(floor uint64) { c.groupConcatMaxLenFloor = floor }

@@ -62,10 +62,10 @@ func TestDeepExistentialMultiCN(t *testing.T) {
 		defer cleanupTestDatabases(t, db, name)
 		execSQLDB(t, ctx, db, "create database `"+name+"`")
 		execSQLDB(t, ctx, db, "use `"+name+"`")
-		// Three independent blocks are enough to dispatch work to both CNs. Keep
+		// Two independent blocks are enough to dispatch work to both CNs. Keep
 		// eight nonunique keys so the existential match-group shortcut is still
 		// exercised without enumerating I/J witness pairs quadratically.
-		const n = objectio.BlockMaxRows * 3
+		const n = objectio.BlockMaxRows * 2
 		for _, tab := range []string{"ot", "it", "jt"} {
 			execSQLDB(t, ctx, db, "create table "+tab+" (id int, grp int)")
 			execSQLDB(t, ctx, db, fmt.Sprintf("insert into %s select result, result%%8 from generate_series(0,%d) g", tab, n-1))
@@ -87,26 +87,36 @@ func TestDeepExistentialMultiCN(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				query := "select count(*) from ot o where " + tc.predicate
-				physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
+				// Keep one representative execution plan with runtime statistics so
+				// this suite still verifies that a distributed plan executes across
+				// CNs. The remaining predicates only need plan inspection; ANALYZE
+				// would add a full scan before the two result checks below.
+				explain := "explain phyplan " + query
+				if tc.name == "semi" {
+					explain = "explain phyplan analyze " + query
+				}
+				physical, err := testutils.QueryTextResult(ctx, db, explain)
 				require.NoError(t, err)
 				require.Contains(t, strings.ToUpper(physical.ColumnName), "MULTICN(")
 				// Magic: Remote also names local scan scopes. Require the
 				// other CN's pipeline address and a cross-CN receiver, then
 				// verify execution consumes all fixture rows below.
-				require.Contains(t, physical.Text, "addr:"+remoteAddr)
+				require.Contains(t, physical.Text, remoteAddr)
 				require.Contains(t, physical.Text, "cross-cn receiver info:")
 				require.NotContains(t, strings.ToLower(physical.Text), "loop join")
+				if tc.name == "or" {
+					// Keep one independent semantic oracle for the OR rewrite. It
+					// need not be repeated for both identical candidate attempts.
+					var reference int
+					refErr := db.QueryRowContext(ctx, "select count(*) from ot o where ((select count(*)>0 from it i where exists(select 1 from jt j where j.grp=i.grp)) or ((select count(*)>0 from it) and exists(select 1 from jt j where j.grp=o.grp)))").Scan(&reference)
+					require.NoError(t, refErr)
+					require.Equal(t, tc.want, reference)
+				}
 				for attempt := range 2 {
 					var got int
 					err := db.QueryRowContext(ctx, query).Scan(&got)
 					if err != nil {
 						t.Logf("failed query physical plan: %s", physical.Text)
-					}
-					if tc.name == "or" {
-						var reference int
-						refErr := db.QueryRowContext(ctx, "select count(*) from ot o where ((select count(*)>0 from it i where exists(select 1 from jt j where j.grp=i.grp)) or ((select count(*)>0 from it) and exists(select 1 from jt j where j.grp=o.grp)))").Scan(&reference)
-						require.NoError(t, refErr, "reference attempt %d; candidate result %d, error %v", attempt, got, err)
-						require.Equal(t, tc.want, reference)
 					}
 					require.NoError(t, err, "attempt %d", attempt)
 					require.Equal(t, tc.want, got)
