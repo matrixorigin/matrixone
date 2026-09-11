@@ -6943,8 +6943,10 @@ func (c *Compile) checkPitrGranularity(
 		if err != nil {
 			return err
 		}
-		valid := len(res.Batches) > 0 && res.Batches[0].RowCount() > 0
-		res.Close()
+		valid := res != nil && len(res.Batches) > 0 && res.Batches[0].RowCount() > 0
+		if res != nil {
+			res.Close()
+		}
 		if !valid {
 			return moerr.NewInternalErrorf(ctx, "source table %s has no primary key; CDC does not support tables without a user-visible primary key", pt.Source)
 		}
