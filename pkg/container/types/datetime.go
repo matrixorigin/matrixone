@@ -539,10 +539,27 @@ func (dt Datetime) AddInterval(nums int64, its IntervalType, timeType TimeType) 
 	var addMonth, addYear int64
 	switch its {
 	case MicroSecond:
-		// nums is already in microseconds, no conversion needed
-		// For time units (MicroSecond, Second, Minute, Hour), the addition won't change the date part
-		// so we can directly return the result without ValidDatetime check
+		if (nums > 0 && int64(dt) > math.MaxInt64-nums) || (nums < 0 && int64(dt) < math.MinInt64-nums) {
+			return 0, false
+		}
 		newDate := dt + Datetime(nums)
+		// Datetime zero is 0001-01-01 00:00:00. Values below it can be
+		// misread as an in-range calendar date after integer division truncates
+		// toward zero, so reject the encoded domain before calendar conversion.
+		if newDate < 0 {
+			return 0, false
+		}
+		y, m, d, _ := newDate.ToDate().Calendar(true)
+		switch timeType {
+		case DateType:
+			if !ValidDate(y, m, d) {
+				return 0, false
+			}
+		case DateTimeType, TimeStampType:
+			if !ValidDatetime(y, m, d) {
+				return 0, false
+			}
+		}
 		return newDate, true
 	case Second:
 		nums *= MicroSecsPerSec

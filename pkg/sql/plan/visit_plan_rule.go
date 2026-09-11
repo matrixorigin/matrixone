@@ -436,9 +436,9 @@ type ResetParamRefRule struct {
 	// different execute-time overload.
 	preserveRoots        map[*plan.Expr]struct{}
 	validateFunctionArgs func(string, []*Expr) error
-	// specialized is set only when execute-time rebinding changes a function
-	// overload/result type. Literal replacement alone is not enough to require
-	// rebuilding a cached prepared compile.
+	// specialized is set when execute-time rebinding changes the cached plan's
+	// execution semantics, including value-only rewrites whose overload and
+	// result type remain stable.
 	specialized bool
 	// inferTextParamPositions records only the COM_STMT text parameters that may
 	// carry numeric payloads.  Keep this per parameter: enabling inference for
@@ -1784,6 +1784,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
+		var originalTemporalExpr *Expr
+		if exprImpl.F.Func != nil {
+			switch strings.ToLower(exprImpl.F.Func.GetObjName()) {
+			case "date_add", "date_sub", "str_to_date", "to_date":
+				originalTemporalExpr = DeepCopyExpr(e)
+			}
+		}
 		functionName := ""
 		if exprImpl.F.Func != nil {
 			functionName = exprImpl.F.Func.GetObjName()
@@ -1958,6 +1965,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if useSQLExecuteNumericSource {
 				needResetFunction = true
 				compareArgTypes = true
+				// The execute-time source may change only an argument literal while
+				// the selected overload and result type remain stable (for example,
+				// the precision argument of `ROUND(decimal, ?)`).  The copied plan still
+				// contains a different value and must be installed for this execute;
+				// functionBindingChanged cannot observe that value-only change.
+				rule.specialized = true
 				// SourceType already represents the SQL value's numeric contract.
 				// Do not also reinterpret the same argument through the text-prefix
 				// specialization selected for comparisons and common-value peers.
@@ -2230,6 +2243,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			rewritten, err := bindPreparedFuncExprImplByPlanExpr(
 				rule.ctx,
+				originalTemporalExpr,
 				exprImpl.F.Func.GetObjName(),
 				boundArgs,
 				stringDomainModes,
