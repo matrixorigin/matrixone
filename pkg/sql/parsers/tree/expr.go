@@ -960,10 +960,10 @@ type FuncExpr struct {
 	exprImpl
 	Func     ResolvableFunctionReference
 	FuncName *CStr
-	// IsGeneric is true when the parser recognized this call through the
-	// generic identifier-function rule rather than a native built-in rule.
-	// MySQL uses that distinction for whitespace-sensitive built-ins when
-	// IGNORE_SPACE is disabled.
+	// IsGeneric is true when the parser recognized a whitespace-sensitive
+	// MySQL function through the generic identifier-function rule rather than
+	// its native built-in rule. That distinction matters when IGNORE_SPACE is
+	// disabled.
 	IsGeneric bool
 	Type      FuncType
 	Exprs     Exprs
@@ -1007,7 +1007,15 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		node.Func.Format(ctx)
 	}
 
-	ctx.WriteString("(")
+	if node.IsGeneric {
+		// MySQL's whitespace-sensitive function names are parsed as generic
+		// calls when IGNORE_SPACE is disabled. Preserve that separator so a
+		// format/reparse cycle cannot silently turn the call into a native
+		// built-in.
+		ctx.WriteString(" (")
+	} else {
+		ctx.WriteByte('(')
+	}
 	if node.Type != FUNC_TYPE_DEFAULT && node.Type != FUNC_TYPE_TABLE {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')

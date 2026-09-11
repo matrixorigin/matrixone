@@ -32063,7 +32063,7 @@ yydefault:
 			yyLOCAL = &tree.FuncExpr{
 				Func:      tree.FuncName2ResolvableFunctionReference(name),
 				FuncName:  tree.NewCStr(yyDollar[1].str, 1),
-				IsGeneric: true,
+				IsGeneric: isSQLModeSensitiveFunctionName(yyDollar[1].str),
 				Exprs:     yyDollar[3].exprsUnion(),
 			}
 		}

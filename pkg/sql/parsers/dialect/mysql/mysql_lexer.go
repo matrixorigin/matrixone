@@ -261,7 +261,26 @@ func (l *Lexer) HasSQLMode(flag SQLModeFlag) bool {
 }
 
 func (l *Lexer) isSQLModeReservedFunctionName(name string) bool {
-	return l.HasSQLMode(SQLModeIgnoreSpace) && isSQLModeSensitiveFunctionName(name)
+	if !isSQLModeSensitiveFunctionName(name) {
+		return false
+	}
+	if l.HasSQLMode(SQLModeIgnoreSpace) {
+		return true
+	}
+
+	// Without IGNORE_SPACE, a sensitive function token is still reserved when
+	// it is followed immediately by `(`. The lexer turns the whitespace form
+	// into ID, but leaves the no-whitespace form as the keyword token. During
+	// ident reduction the scanner may still point at `(`; the token-state
+	// fallback covers the case where that lookahead has already been fetched.
+	keywordID, ok := keywords[strings.ToLower(name)]
+	if !ok {
+		return false
+	}
+	if l.scanner.Pos < len(l.scanner.buf) && l.scanner.buf[l.scanner.Pos] == '(' {
+		return true
+	}
+	return l.lastToken == int('(') && l.previousToken == keywordID
 }
 
 func rejectSQLModeReservedFunctionName(yylex yyLexer, name string) bool {
@@ -269,7 +288,11 @@ func rejectSQLModeReservedFunctionName(yylex yyLexer, name string) bool {
 	if !lexer.isSQLModeReservedFunctionName(name) {
 		return false
 	}
-	lexer.Error(fmt.Sprintf("function name '%s' is reserved in IGNORE_SPACE mode", name))
+	message := fmt.Sprintf("function name '%s' is reserved", name)
+	if lexer.HasSQLMode(SQLModeIgnoreSpace) {
+		message += " in IGNORE_SPACE mode"
+	}
+	lexer.Error(message)
 	return true
 }
 

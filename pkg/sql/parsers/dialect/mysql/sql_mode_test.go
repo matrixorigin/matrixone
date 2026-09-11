@@ -71,8 +71,9 @@ func TestHasMatrixOneNativeSQLMode(t *testing.T) {
 
 func TestParserSQLModeCombinations(t *testing.T) {
 	modes := ParserSQLModeCombinations()
-	if len(modes) != 32 {
-		t.Fatalf("ParserSQLModeCombinations() returned %d modes, want 32", len(modes))
+	wantModes := 1 << len(parserSQLModeTokens)
+	if len(modes) != wantModes {
+		t.Fatalf("ParserSQLModeCombinations() returned %d modes, want %d", len(modes), wantModes)
 	}
 	if modes[0] != "" {
 		t.Fatalf("first parser mode = %q, want default mode", modes[0])
@@ -161,12 +162,13 @@ func TestIgnoreSpaceReservedFunctionIdentifiers(t *testing.T) {
 		mode    string
 		wantErr bool
 	}{
-		{name: "table name without whitespace is allowed by default", query: "create table count(i int)", mode: "STRICT_TRANS_TABLES"},
+		{name: "table name without whitespace is reserved by default", query: "create table count(i int)", mode: "STRICT_TRANS_TABLES", wantErr: true},
 		{name: "table name with whitespace is allowed by default", query: "create table count (i int)", mode: "STRICT_TRANS_TABLES"},
 		{name: "table name without whitespace is reserved", query: "create table count(i int)", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE", wantErr: true},
 		{name: "table name with whitespace is reserved", query: "create table count (i int)", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE", wantErr: true},
 		{name: "column name is allowed by default", query: "create table src(count int)", mode: "STRICT_TRANS_TABLES"},
 		{name: "column name is reserved", query: "create table src(count int)", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE", wantErr: true},
+		{name: "qualified sensitive identifier is allowed by default", query: "select src.count", mode: "STRICT_TRANS_TABLES"},
 		{name: "qualified non-sensitive identifier remains valid", query: "select src.id", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
 		{name: "qualified sensitive identifier is reserved", query: "select src.count", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE", wantErr: true},
 		{name: "quoted qualified sensitive identifier remains valid", query: "select src.`count`", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
@@ -201,11 +203,12 @@ func TestIgnoreSpaceFunctionFormatting(t *testing.T) {
 		mode  string
 		want  string
 	}{
-		{name: "generic trim string", query: "select trim (' x ')", mode: "STRICT_TRANS_TABLES", want: "trim(' x ')"},
-		{name: "generic trim numeric", query: "select trim (0)", mode: "STRICT_TRANS_TABLES", want: "trim(0)"},
+		{name: "generic now", query: "select now ()", mode: "STRICT_TRANS_TABLES", want: "now ()"},
+		{name: "generic trim string", query: "select trim (' x ')", mode: "STRICT_TRANS_TABLES", want: "trim (' x ')"},
+		{name: "generic trim numeric", query: "select trim (0)", mode: "STRICT_TRANS_TABLES", want: "trim (0)"},
 		{name: "native trim string", query: "select trim (' x ')", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE", want: "trim(' x ')"},
 		{name: "native trim numeric", query: "select trim (0)", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE", want: "trim(0)"},
-		{name: "generic group concat", query: "select group_concat (1)", mode: "STRICT_TRANS_TABLES", want: "group_concat(1)"},
+		{name: "generic group concat", query: "select group_concat (1)", mode: "STRICT_TRANS_TABLES", want: "group_concat (1)"},
 	}
 
 	for _, test := range tests {
@@ -227,6 +230,39 @@ func TestIgnoreSpaceFunctionFormatting(t *testing.T) {
 			got := tree.StringWithOpts(selectClause.Exprs[0].Expr, dialect.MYSQL, tree.WithSingleQuoteString())
 			if got != test.want {
 				t.Fatalf("formatted %q as %q, want %q", test.query, got, test.want)
+			}
+		})
+	}
+}
+
+func TestIgnoreSpaceGenericFunctionFormatRoundTrip(t *testing.T) {
+	for _, query := range []string{
+		"select now ()",
+		"select trim (' x ')",
+		"select trim (0)",
+		"select group_concat (1)",
+	} {
+		t.Run(query, func(t *testing.T) {
+			stmt, err := ParseOneWithSQLMode(context.Background(), query, 1, "STRICT_TRANS_TABLES")
+			if err != nil {
+				t.Fatalf("ParseOneWithSQLMode(%q) failed: %v", query, err)
+			}
+			defer stmt.Free()
+
+			formatted := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithSingleQuoteString())
+			roundTripped, err := ParseOneWithSQLMode(context.Background(), formatted, 1, "STRICT_TRANS_TABLES")
+			if err != nil {
+				t.Fatalf("ParseOneWithSQLMode(%q) failed: %v", formatted, err)
+			}
+			defer roundTripped.Free()
+
+			originalFn := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.FuncExpr)
+			roundTrippedFn := roundTripped.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.FuncExpr)
+			if !originalFn.IsGeneric || !roundTrippedFn.IsGeneric {
+				t.Fatalf("generic shape was not preserved for %q: original=%v round-tripped=%v", query, originalFn.IsGeneric, roundTrippedFn.IsGeneric)
+			}
+			if got := tree.StringWithOpts(roundTripped, dialect.MYSQL, tree.WithSingleQuoteString()); got != formatted {
+				t.Fatalf("format is not idempotent for %q: got %q, want %q", query, got, formatted)
 			}
 		})
 	}

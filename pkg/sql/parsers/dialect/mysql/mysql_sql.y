@@ -13789,7 +13789,7 @@ function_call_generic:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            IsGeneric: true,
+            IsGeneric: isSQLModeSensitiveFunctionName($1),
             Exprs: $3,
         }
     }
