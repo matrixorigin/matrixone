@@ -1,0 +1,118 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+
+package python
+
+import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+)
+
+func benchmarkInputVector(b *testing.B, typ types.Type, rows int) (*vector.Vector, *mpool.MPool) {
+	b.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	input := vector.NewVec(typ)
+	for row := 0; row < rows; row++ {
+		var err error
+		switch typ.Oid {
+		case types.T_int64:
+			err = vector.AppendFixed(input, int64(row), false, mp)
+		case types.T_varchar:
+			err = vector.AppendBytes(input, []byte("matrixone-python-udf"), false, mp)
+		default:
+			b.Fatalf("unsupported benchmark type %s", typ)
+		}
+		if err != nil {
+			input.Free(mp)
+			mpool.DeleteMPool(mp)
+			b.Fatal(err)
+		}
+	}
+	return input, mp
+}
+
+func BenchmarkEncodeInputBatchFixedWidth(b *testing.B) {
+	benchmarkEncodeInputBatch(b, types.T_int64.ToType())
+}
+
+func BenchmarkEncodeInputBatchFixedWidthRebuildBaseline(b *testing.B) {
+	const rows = 8192
+	input, mp := benchmarkInputVector(b, types.T_int64.ToType(), rows)
+	defer func() {
+		input.Free(mp)
+		mpool.DeleteMPool(mp)
+	}()
+
+	b.ReportAllocs()
+	b.SetBytes(int64(rows))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		batch, err := encodeInputBatchRebuildBaseline(
+			[]*vector.Vector{input}, []types.Type{types.T_int64.ToType()},
+			0, rows, DefaultMaxBatchBytes, rows,
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if batch.Rows != rows || len(batch.Frames) != 2 {
+			b.Fatalf("unexpected encoded batch rows=%d frames=%d", batch.Rows, len(batch.Frames))
+		}
+	}
+}
+
+func BenchmarkEncodeInputBatchVariableWidth(b *testing.B) {
+	benchmarkEncodeInputBatch(b, types.New(types.T_varchar, 64, 0))
+}
+
+func benchmarkEncodeInputBatch(b *testing.B, typ types.Type) {
+	const rows = 8192
+	input, mp := benchmarkInputVector(b, typ, rows)
+	defer func() {
+		input.Free(mp)
+		mpool.DeleteMPool(mp)
+	}()
+
+	b.ReportAllocs()
+	b.SetBytes(int64(rows))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		batch, err := encodeInputBatch(
+			[]*vector.Vector{input}, []types.Type{typ}, 0, rows,
+			DefaultMaxBatchBytes, rows,
+		)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if batch.Rows != rows || len(batch.Frames) != 2 {
+			b.Fatalf("unexpected encoded batch rows=%d frames=%d", batch.Rows, len(batch.Frames))
+		}
+	}
+}
+
+// encodeInputBatchRebuildBaseline is a benchmark-only reference for the
+// pre-optimization path. It intentionally rebuilds the Arrow record for every
+// size probe, while production encodeInputBatch slices one fixed-width record.
+func encodeInputBatchRebuildBaseline(
+	inputs []*vector.Vector,
+	args []types.Type,
+	start, remaining, maxBytes, maxRows int64,
+) (encodedRecordBatch, error) {
+	if remaining > maxRows {
+		remaining = maxRows
+	}
+	tryEncode := func(rows int64) ([]ArrowFrame, error) {
+		record, _, err := BuildInputRecordRange(inputs, args, int(start), int(rows))
+		if err != nil {
+			return nil, err
+		}
+		frames, encodeErr := EncodeRecordBatch(record, maxBytes)
+		record.Release()
+		return frames, encodeErr
+	}
+	return chooseInputBatch(remaining, maxBytes, tryEncode)
+}
