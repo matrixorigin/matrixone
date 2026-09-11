@@ -390,6 +390,10 @@ type PrepareStmt struct {
 	// belongs to the current prepared-plan generation. A zero entry means that
 	// the corresponding BIT_COUNT marker has not observed a numeric value.
 	bitCountNumericParamTypes []types.Type
+	// conversionParamPositions identifies BIN/CONV value markers once per
+	// prepared-plan generation. SQL EXECUTE uses it to restore the variable's
+	// concrete domain without walking the plan for every execution.
+	conversionParamPositions []int32
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -1773,10 +1777,14 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	oldMatrixOneNative := false
 	oldOnlyFullGroupBy := false
 	oldBoolSumAvg := false
+	oldHighNotPrecedence := false
+	oldParserFlags := mysql.SQLModeFlags(0)
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
 		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
+		oldHighNotPrecedence = ses.sqlModeHasHighNotPrecedence()
+		oldParserFlags = ses.sqlModeParserFlags()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1836,7 +1844,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldParserFlags, val)
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {

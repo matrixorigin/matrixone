@@ -1225,6 +1225,15 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		bound, ok, err := rule.typedRuntimeParamExpr(int(param.Pos))
 		return bound, ok, err
 	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" {
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if fn.GetSyntaxExplicitCast() || overload == 1 {
+			// Explicit CAST owns its result domain. The ordinary parameter visitor
+			// may replace markers below it, but numeric overload rebinding must not
+			// remove or reinterpret this boundary.
+			return expr, false, nil
+		}
+	}
 	if isImplicitPreparedParamCast(expr) {
 		if param, ok := implicitPreparedParam(expr); ok {
 			if _, selected := positions[param.Pos]; !selected {
@@ -1293,6 +1302,9 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if boundFn := bound.GetF(); boundFn != nil {
 			boundFn.AggConfig = bytes.Clone(fn.AggConfig)
 			boundFn.AggConfigType = fn.AggConfigType
+			_, originalOverload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+			boundFn.SyntaxExplicitCast = fn.SyntaxExplicitCast ||
+				(fn.Func.GetObjName() == "cast" && originalOverload == 1)
 		}
 		return bound, true, nil
 	}
@@ -1416,6 +1428,9 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 		if boundFn := bound.GetF(); boundFn != nil {
 			boundFn.AggConfig = bytes.Clone(fn.AggConfig)
 			boundFn.AggConfigType = fn.AggConfigType
+			_, originalOverload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+			boundFn.SyntaxExplicitCast = fn.SyntaxExplicitCast ||
+				(fn.Func.GetObjName() == "cast" && originalOverload == 1)
 		}
 		return bound, true, nil
 	}

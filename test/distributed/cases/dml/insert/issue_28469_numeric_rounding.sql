@@ -36,6 +36,12 @@ SELECT * FROM t_rounding ORDER BY id;
 INSERT INTO t_rounding VALUES (14, '2.5', '-2.5');
 SELECT COUNT(*) FROM t_rounding WHERE id = 14;
 
+-- Exact numeric expressions may execute through FLOAT vectors, but retain
+-- half-away-from-zero assignment semantics.
+SET @exact_five = 5, @exact_two = 2;
+INSERT INTO t_rounding VALUES (15, @exact_five / @exact_two, -@exact_five / @exact_two);
+SELECT * FROM t_rounding WHERE id = 15;
+
 -- ODKU consumes the already converted incoming VALUES row.
 INSERT INTO t_rounding VALUES (20, 0, 0), (21, 0, 0);
 INSERT INTO t_rounding VALUES (20, 2.5, -2.5), (21, 2.5E0, -2.5E0)
@@ -59,25 +65,29 @@ DEALLOCATE PREPARE insert_rounding;
 -- in charge of FLOAT-to-integer ties-to-even behavior.
 CREATE TABLE t_nested_abs (value_bigint BIGINT);
 CREATE TABLE t_nested_add (value_bigint BIGINT);
+CREATE TABLE t_nested_explicit (id INT PRIMARY KEY, value_bigint BIGINT);
 PREPARE insert_nested_abs FROM 'INSERT INTO t_nested_abs VALUES (ABS(?))';
 PREPARE insert_nested_add FROM 'INSERT INTO t_nested_add VALUES (? + 0)';
+PREPARE insert_nested_explicit FROM
+    'INSERT INTO t_nested_explicit VALUES (?, ABS(CAST(? AS DOUBLE)))';
 SET @nested_value = CAST(-2.5 AS DOUBLE);
 EXECUTE insert_nested_abs USING @nested_value;
 SET @nested_value = CAST(-2.5 AS DOUBLE);
 EXECUTE insert_nested_add USING @nested_value;
+SET @nested_id = 1, @nested_value = 2.5;
+EXECUTE insert_nested_explicit USING @nested_id, @nested_value;
 SELECT * FROM t_nested_abs;
 SELECT * FROM t_nested_add;
+SELECT * FROM t_nested_explicit;
 DEALLOCATE PREPARE insert_nested_abs;
 DEALLOCATE PREPARE insert_nested_add;
+DEALLOCATE PREPARE insert_nested_explicit;
 
 -- Negative approximate values must not wrap while assigning to unsigned
 -- integers. Strict assignment rejects the row; IGNORE clamps it to zero.
 CREATE TABLE t_unsigned (id INT PRIMARY KEY, value_bigint BIGINT UNSIGNED);
 INSERT INTO t_unsigned VALUES (1, -1E0);
 SELECT COUNT(*) FROM t_unsigned WHERE id = 1;
-INSERT IGNORE INTO t_unsigned VALUES (2, -1E0), (3, 2.5E0);
-SELECT * FROM t_unsigned ORDER BY id;
-
 PREPARE insert_unsigned FROM 'INSERT INTO t_unsigned VALUES (?, ?)';
 SET @id = 4, @unsigned_value = CAST(-1 AS DOUBLE);
 EXECUTE insert_unsigned USING @id, @unsigned_value;

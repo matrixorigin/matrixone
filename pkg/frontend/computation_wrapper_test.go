@@ -798,6 +798,80 @@ func TestCOMStmtPreparedDateIntervalMarkerExecutesAcrossWireTypes(t *testing.T) 
 	}
 }
 
+func TestCOMStmtPreparedConversionPreservesBitWireDomain(t *testing.T) {
+	const query = "select conv(?, 2, 10)"
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 27340, query)
+	proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+		scratchPrepare.Close()
+	}()
+
+	// MYSQL_TYPE_BIT is encoded as an unsigned integer on the wire, but its
+	// logical domain is a bit string.  The unsigned flag must therefore not
+	// make the prepared plan take the UINT64 CONV path.  A LONGLONG rebind is
+	// included to prove that changing the wire type still changes the logical
+	// plan and that a later BIT bind does not inherit the numeric domain.
+	makePacket := func(tp defines.MysqlType, value uint64, unsigned bool) []byte {
+		packet := buildLongLongExecutePacket(value, unsigned)
+		packet[7] = byte(tp)
+		return packet
+	}
+
+	evaluate := func(runtimePlan *plan.Plan) string {
+		t.Helper()
+		queryPlan := runtimePlan.GetQuery()
+		require.NotNil(t, queryPlan)
+		require.NotEmpty(t, queryPlan.Steps)
+		project := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]]
+		require.Len(t, project.ProjectList, 1)
+		executor, err := colexec.NewExpressionExecutor(cw.proc, project.ProjectList[0])
+		require.NoError(t, err)
+		defer executor.Free()
+		result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		require.NoError(t, err)
+		require.Equal(t, types.T_varchar, result.GetType().Oid)
+		require.False(t, result.GetNulls().Contains(0))
+		return result.GetStringAt(0)
+	}
+
+	for _, tc := range []struct {
+		name       string
+		tp         defines.MysqlType
+		value      uint64
+		unsigned   bool
+		wantType   types.T
+		wantResult string
+	}{
+		{name: "signed bit", tp: defines.MYSQL_TYPE_BIT, value: 15, wantType: types.T_bit, wantResult: "15"},
+		{name: "unsigned bit", tp: defines.MYSQL_TYPE_BIT, value: 16, unsigned: true, wantType: types.T_bit, wantResult: "16"},
+		{name: "ordinary signed integer", tp: defines.MYSQL_TYPE_LONGLONG, value: 15, wantType: types.T_int64, wantResult: "1"},
+		{name: "ordinary unsigned integer", tp: defines.MYSQL_TYPE_LONGLONG, value: 15, unsigned: true, wantType: types.T_uint64, wantResult: "1"},
+		{name: "bit after integer rebind", tp: defines.MYSQL_TYPE_BIT, value: 15, unsigned: true, wantType: types.T_bit, wantResult: "15"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, proto.ParseExecuteData(
+				execCtx.reqCtx, cw.proc, prepareStmt,
+				makePacket(tc.tp, tc.value, tc.unsigned), 0))
+			_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			if owned && executionStmt != nil {
+				defer executionStmt.Free()
+			}
+			require.Len(t, cw.paramVals, 1)
+			paramValue, ok := cw.paramVals[0].(plan2.ParamValue)
+			require.True(t, ok)
+			require.True(t, paramValue.HasRuntimeType)
+			require.Equal(t, tc.wantType, paramValue.RuntimeType.Oid,
+				"wire type %v unsigned=%v", tc.tp, tc.unsigned)
+			require.Equal(t, tc.wantResult, evaluate(runtimePlan))
+			prepareStmt.clearBinaryParamState(cw.proc)
+		})
+	}
+}
+
 func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 	const query = "select regexp_instr(?, ?, 2), regexp_replace(?, ?, ?, 1, 0), " +
 		"regexp_instr(regexp_substr(?, ?), ?, 1)"
@@ -2636,6 +2710,68 @@ func TestPreparedBitCountNumericRuntimeTypesArePerPosition(t *testing.T) {
 	values[0] = plan2.ParamValue{Value: "8", SourceType: types.T_varbinary.ToType(), HasSourceType: true}
 	require.True(t, prepareStmt.applyBitCountNumericRuntimeTypes(values))
 	require.Equal(t, wideDecimalType, values[0].(plan2.ParamValue).RuntimeType)
+}
+
+func TestApplyPreparedConversionRuntimeTypes(t *testing.T) {
+	values := []any{
+		plan2.ParamValue{Value: true},
+		plan2.ParamValue{Value: int64(15)},
+		plan2.ParamValue{Value: types.Date(1)},
+		plan2.ParamValue{Value: []byte("15abc")},
+		plan2.ParamValue{Value: "15abc"},
+		plan2.ParamValue{Value: nil},
+		plan2.ParamValue{Value: false, RuntimeType: types.T_int8.ToType(), HasRuntimeType: true},
+		plan2.ParamValue{
+			Value: "15.5", SourceType: types.New(types.T_decimal64, 4, 1), HasSourceType: true,
+		},
+		plan2.ParamValue{Value: "binary", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+		plan2.ParamValue{Value: uint64(15)},
+		plan2.ParamValue{Value: float32(15.5)},
+		plan2.ParamValue{Value: float64(15.5)},
+		plan2.ParamValue{Value: types.Decimal64(15)},
+		plan2.ParamValue{Value: types.Decimal128{}},
+		plan2.ParamValue{Value: types.Decimal256{}},
+		plan2.ParamValue{Value: types.Datetime(0)},
+		plan2.ParamValue{Value: types.Timestamp(0)},
+		plan2.ParamValue{Value: types.Time(0)},
+		plan2.ParamValue{Value: types.MoYear(2024)},
+		plan2.ParamValue{Value: "json", SourceType: types.T_json.ToType(), HasSourceType: true},
+	}
+
+	applyPreparedConversionRuntimeTypes(values, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 99})
+
+	assertRuntimeType := func(position int, want types.T) {
+		param, ok := values[position].(plan2.ParamValue)
+		require.True(t, ok)
+		require.True(t, param.HasRuntimeType)
+		require.Equal(t, want, param.RuntimeType.Oid)
+	}
+	assertRuntimeType(0, types.T_bool)
+	assertRuntimeType(1, types.T_int64)
+	assertRuntimeType(2, types.T_date)
+	assertRuntimeType(3, types.T_varbinary)
+	assertRuntimeType(4, types.T_text)
+
+	nullParam := values[5].(plan2.ParamValue)
+	require.False(t, nullParam.HasRuntimeType)
+	retainedParam := values[6].(plan2.ParamValue)
+	require.Equal(t, types.T_int8, retainedParam.RuntimeType.Oid)
+	assertRuntimeType(7, types.T_decimal64)
+	require.Equal(t, int32(4), values[7].(plan2.ParamValue).RuntimeType.Width)
+	require.Equal(t, int32(1), values[7].(plan2.ParamValue).RuntimeType.Scale)
+	assertRuntimeType(8, types.T_varbinary)
+	assertRuntimeType(9, types.T_uint64)
+	assertRuntimeType(10, types.T_float32)
+	assertRuntimeType(11, types.T_float64)
+	assertRuntimeType(12, types.T_decimal64)
+	assertRuntimeType(13, types.T_decimal128)
+	assertRuntimeType(14, types.T_decimal256)
+	assertRuntimeType(15, types.T_datetime)
+	assertRuntimeType(16, types.T_timestamp)
+	assertRuntimeType(17, types.T_time)
+	assertRuntimeType(18, types.T_year)
+	// An unsupported source annotation falls back to the concrete value kind.
+	assertRuntimeType(19, types.T_text)
 }
 
 func TestPreparedBitCountNumericRuntimeTypesUseReprepareCategories(t *testing.T) {

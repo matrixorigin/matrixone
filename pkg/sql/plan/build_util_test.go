@@ -1075,7 +1075,14 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
 	}
-	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
+	require.Equal(t, "cast", assignmentCastFunctionName(
+		plan.Type{Id: int32(types.T_int64)}, true, proc))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
+	require.Equal(t, "cast_ignore", assignmentCastFunctionName(
+		plan.Type{Id: int32(types.T_int64)}, true, proc))
+	require.Equal(t, "cast", assignmentCastFunctionName(
+		plan.Type{Id: int32(types.T_int64)}, false, proc))
 	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
 		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
 	}, false, proc))

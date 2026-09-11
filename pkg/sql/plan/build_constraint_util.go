@@ -1375,6 +1375,21 @@ func forceCastExpr2WithProcess(
 	// cast. Other temporal assignments retain cast_strict behavior, while the
 	// remaining conversions continue to use the generic cast.
 	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
+	if t1.Oid.IsFloat() && t2.Oid.IsInteger() {
+		if !isApproximateFloatAssignmentSource(expr) {
+			// Some exact numeric operators (notably integer division with `/`) use a
+			// FLOAT execution vector. Recover an exact assignment boundary before
+			// the generic FLOAT cast applies approximate ties-to-even rounding.
+			exactType := types.New(types.T_decimal128, 38, 18)
+			var err error
+			expr, err = makePlan2CastExpr(ctx, expr, makePlan2Type(&exactType))
+			if err != nil {
+				return nil, err
+			}
+			t1 = exactType
+			funcName = "cast"
+		}
+	}
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
@@ -1414,9 +1429,43 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 	return forceAssignmentCastExprWithIgnore(ctx, expr, targetType, false)
 }
 
+func isApproximateFloatAssignmentSource(expr *Expr) bool {
+	if expr == nil || !types.T(expr.Typ.Id).IsFloat() {
+		return false
+	}
+	if _, exact := provisionalExactNumericSource(expr); exact {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return true
+	}
+	if fn.Func.GetObjName() != "/" {
+		return true
+	}
+	for _, arg := range fn.Args {
+		if types.T(arg.Typ.Id).IsFloat() && isApproximateFloatAssignmentSource(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func supportsSqlModeAssignmentCast(proc *process.Process) bool {
+	if proc == nil {
+		return true
+	}
+	version, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	protocolVersion, valid := version.(int64)
+	return ok && valid && protocolVersion >= defines.MORPCVersion5
+}
+
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
 	if isIgnore && types.T(targetType.Id).IsInteger() {
-		return "cast_ignore"
+		if supportsSqlModeAssignmentCast(proc) {
+			return "cast_ignore"
+		}
+		return "cast"
 	}
 	if !useSqlModeAssignmentCast(targetType) {
 		if useAssignmentStrictCast(targetType) {

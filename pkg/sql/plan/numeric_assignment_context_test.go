@@ -23,6 +23,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/stretchr/testify/require"
 )
@@ -1455,6 +1456,46 @@ func TestInsertValuesFractionalLiteralsKeepSourceDomain(t *testing.T) {
 		require.True(t, types.T(assignment.Args[0].Typ.Id).IsFloat(),
 			"approximate row %d must keep FLOAT source for assignment: %s", row, expr.String())
 	}
+}
+
+func TestExactDivisionIntegerAssignmentRestoresDecimalBoundary(t *testing.T) {
+	ctx := t.Context()
+	exactDivision, err := BindFuncExprImplByPlanExpr(ctx, "/", []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(5), makePlan2Int64ConstExprWithType(2),
+	})
+	require.NoError(t, err)
+	target := types.T_int64.ToType()
+	targetExpr := &planpb.Expr{Typ: makePlan2Type(&target), Expr: &planpb.Expr_T{T: &planpb.TargetType{}}}
+	assignment, err := forceCastExpr2WithProcess(ctx, exactDivision, target, targetExpr, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_decimal128), assignment.GetF().Args[0].Typ.Id)
+
+	approximateDivision, err := BindFuncExprImplByPlanExpr(ctx, "/", []*planpb.Expr{
+		makePlan2Float64ConstExprWithType(5), makePlan2Int64ConstExprWithType(2),
+	})
+	require.NoError(t, err)
+	assignment, err = forceCastExpr2WithProcess(ctx, approximateDivision, target, targetExpr, false, nil)
+	require.NoError(t, err)
+	require.True(t, types.T(assignment.GetF().Args[0].Typ.Id).IsFloat())
+}
+
+func TestPreparedExplicitDoubleBoundaryPlan(t *testing.T) {
+	prepared := buildPreparedAggregatePlan(t,
+		"insert into constraint_test.emp (empno) values (abs(cast(? as double)))")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+		t.Context(), prepared.Plan, []any{ParamValue{
+			Value: "2.5", PrepareParamKind: vector.PrepareParamDecimal,
+			SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.False(t, specialized)
+	exprs := insertValueRowsetExprs(t, filled)
+	require.Len(t, exprs, 1)
+	explicitCast := exprs[0].GetF().Args[0].GetF().Args[0].GetF()
+	require.NotNil(t, explicitCast)
+	_, overload := planfunction.DecodeOverloadID(explicitCast.Func.GetObj())
+	require.Equal(t, int32(1), overload)
 }
 
 func TestPreparedNestedIntegerAssignmentRebindsNumericOverload(t *testing.T) {
