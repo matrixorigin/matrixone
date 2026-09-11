@@ -58,10 +58,6 @@ func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDe
 		stmt.PrepareStmt, stmt.PreparePlan, txnHaveDDL, stmt.groupConcatMaxLenFloor)
 }
 
-func getPreparedResultColumnsFromPlan(stmt tree.Statement, preparedPlan *plan2.Plan, txnHaveDDL bool) []*plan2.ColDef {
-	return getPreparedResultColumnsFromPlanWithGroupConcatMaxLen(stmt, preparedPlan, txnHaveDDL, 0)
-}
-
 func getPreparedResultColumnsFromPlanWithGroupConcatMaxLen(
 	stmt tree.Statement, preparedPlan *plan2.Plan, txnHaveDDL bool, groupConcatMaxLenFloor uint64,
 ) []*plan2.ColDef {
