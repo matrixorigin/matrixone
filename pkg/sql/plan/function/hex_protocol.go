@@ -31,8 +31,8 @@ const (
 )
 
 // MigrateLegacyHexOverload upgrades one persisted HEX expression after every CN
-// supports MORPCVersion64. It mutates only the execution-plan copy supplied by
-// the compiler; catalog protobufs remain unchanged.
+// supports MORPCVersion64. Callers supply an execution-owned TableDef copy;
+// catalog protobufs remain unchanged.
 func MigrateLegacyHexOverload(expr *plan.Expr) {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {

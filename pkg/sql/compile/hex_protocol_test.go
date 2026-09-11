@@ -90,6 +90,25 @@ func TestHexProtocolPlanAdmissionAndCachedRun(t *testing.T) {
 	}))
 }
 
+func TestHexProtocolLatestVersionDoesNotWalkPlan(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+
+	nodes := make([]*plan.Node, 100)
+	for i := range nodes {
+		nodes[i] = &plan.Node{ProjectList: make([]*plan.Expr, 10)}
+		for j := range nodes[i].ProjectList {
+			nodes[i].ProjectList[j] = plan2.MakePlan2Int64ConstExprWithType(int64(i*10 + j))
+		}
+	}
+	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: nodes}}}
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		require.NoError(t, validateHexMySQLNumericProtocol(proc, queryPlan))
+	}))
+}
+
 func legacyHexCast(arg *plan.Expr, target types.Type, explicit bool) *plan.Expr {
 	overload := int32(0)
 	if explicit {
@@ -136,28 +155,41 @@ func TestHexMigratesLegacyPersistedExpressionsAtVersion64(t *testing.T) {
 			{Default: &plan.Default{Expr: plan2.DeepCopyExpr(legacyDecimal)}},
 			{GeneratedCol: &plan.GeneratedCol{Expr: plan2.DeepCopyExpr(legacyDecimal)}},
 			{OnUpdate: &plan.OnUpdate{Expr: plan2.DeepCopyExpr(legacyDecimal)}},
+			{
+				Name: "folded_default",
+				Typ:  plan2.MakePlan2Type(&types.Type{Oid: types.T_varchar, Width: 16}),
+				Default: &plan.Default{
+					OriginString: "(hex(cast(15.5 as double)))",
+					Expr:         plan2.MakePlan2StringConstExprWithType("10"),
+				},
+			},
 		},
 	}
-	catalogPlan := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{Definition: &plan.DataDefinition_CreateTable{CreateTable: &plan.CreateTable{TableDef: catalogTable}}}}}
-	executionPlan := plan2.DeepCopyPlan(catalogPlan)
-	executionTable := executionPlan.GetDdl().GetCreateTable().GetTableDef()
+	wire, err := catalogTable.Marshal()
+	require.NoError(t, err)
+	serializedCatalog := new(plan.TableDef)
+	require.NoError(t, serializedCatalog.Unmarshal(wire))
+	executionTable := plan2.DeepCopyTableDef(serializedCatalog, true)
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion63)
-	require.NoError(t, validateHexMySQLNumericProtocol(proc, executionPlan))
+	require.NoError(t, plan2.MigrateLegacyHexTableDef(proc, executionTable))
 	for _, expr := range tableHexExpressions(executionTable) {
 		require.Equal(t, int32(5), hexExprOverload(expr))
 	}
+	require.Equal(t, "10", executionTable.Cols[3].Default.Expr.GetLit().GetSval())
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
-	require.NoError(t, validateHexMySQLNumericProtocol(proc, executionPlan))
+	require.NoError(t, plan2.MigrateLegacyHexTableDef(proc, executionTable))
 	for _, expr := range tableHexExpressions(executionTable) {
 		require.Equal(t, int32(9), hexExprOverload(expr))
 		require.Equal(t, types.T_decimal128, types.T(expr.GetF().GetArgs()[0].Typ.Id))
 	}
-	for _, expr := range tableHexExpressions(catalogTable) {
+	require.Equal(t, "F", executionTable.Cols[3].Default.Expr.GetLit().GetSval())
+	for _, expr := range tableHexExpressions(serializedCatalog) {
 		require.Equal(t, int32(5), hexExprOverload(expr), "catalog expression must stay unchanged")
 	}
-	require.NoError(t, validateHexMySQLNumericProtocol(proc, executionPlan))
+	require.Equal(t, "10", serializedCatalog.Cols[3].Default.Expr.GetLit().GetSval())
+	require.NoError(t, plan2.MigrateLegacyHexTableDef(proc, executionTable))
 	for _, expr := range tableHexExpressions(executionTable) {
 		require.Equal(t, int32(9), hexExprOverload(expr), "migration must be idempotent")
 	}
@@ -189,12 +221,41 @@ func TestHexMigratesLegacyPersistedExpressionsAtVersion64(t *testing.T) {
 			expr: hexCompatibilityExpr(5, legacyExplicitWithoutSyntax), want: function.HexExplicitFloat64Overload},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
-				ProjectList: []*plan.Expr{tc.expr},
-			}}}}}
-			require.NoError(t, validateHexMySQLNumericProtocol(proc, queryPlan))
-			require.Equal(t, tc.want, hexExprOverload(queryPlan.GetQuery().GetNodes()[0].GetProjectList()[0]))
+			table := &plan.TableDef{Checks: []*plan.CheckDef{{Check: tc.expr}}}
+			require.NoError(t, plan2.MigrateLegacyHexTableDef(proc, table))
+			require.Equal(t, tc.want, hexExprOverload(table.Checks[0].Check))
 		})
+	}
+}
+
+func TestHexProtocolVersionChangeKeepsCompiledGenerationConsistent(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	logicalExpr := hexCompatibilityExpr(5, plan2.MakePlan2Float64ConstExprWithType(14.5))
+	logicalPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{
+		FilterList: []*plan.Expr{logicalExpr},
+	}}}}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion63)
+	require.NoError(t, validateHexMySQLNumericProtocol(proc, logicalPlan))
+	compiled := constructRestrict(logicalPlan.GetQuery().GetNodes()[0], plan2.DeepCopyExprList(
+		logicalPlan.GetQuery().GetNodes()[0].GetFilterList()))
+
+	// Run validates the cached logical plan again after the negotiated version
+	// changes. It must not mutate that plan after operators own deep copies.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+	require.NoError(t, validateHexMySQLNumericProtocol(proc, logicalPlan))
+	require.Equal(t, int32(5), hexExprOverload(logicalExpr))
+	require.Equal(t, int32(5), hexExprOverload(compiled.FilterExprs[0]))
+
+	for _, expr := range []*plan.Expr{logicalExpr, compiled.FilterExprs[0]} {
+		executor, err := colexec.NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		out, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		require.NoError(t, err)
+		require.Equal(t, "F", string(out.GetBytesAt(0)))
+		executor.Free()
 	}
 }
 

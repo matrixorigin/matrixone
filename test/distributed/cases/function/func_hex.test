@@ -14,7 +14,7 @@ SELECT hex(0x62);
 SELECT hex(b'1101100');
 
 -- @case
--- @desc: issue #28457 - preserve MySQL numeric domains and prepared runtime dispatch
+-- @desc: preserve MySQL numeric domains and prepared runtime dispatch
 -- @label:bvt
 
 drop database if exists hex_issue_28457;
