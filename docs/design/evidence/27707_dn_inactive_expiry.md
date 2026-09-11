@@ -17,7 +17,13 @@ inventory has no lock endpoint for the owner UUID, the cleaner stops network
 probes, backend resets and repeated missing-owner error logs. Each sweep checks
 the local periodically refreshed inventory again, so reappearance is not
 permanently suppressed. This is an unknown observation, not an authoritative
-negative response: admission fencing and cannot-commit state remain protected.
+negative response. It does not create a new admission fence: existing fences
+and cannot-commit state remain protected. The allocator creates a new fence
+only for an exact bind retirement, an explicit invalidation, or bounded
+connection-failure confirmation. For absent owners it records a separate
+cleanup-only first-observed timestamp; that marker never rejects admission,
+is cleared by positive owner evidence, and expires with the retained
+controller state.
 Generic connection errors for owners still in inventory retain the existing
 three-attempt recovery budget. No wire format or public configuration changes.
 
@@ -44,15 +50,20 @@ with `Valid`, `AddCannotCommit`, `FinishCommit`, and `Resume` as consumers.
 - Missing-owner detection uses raw membership, not public SQL admission, so a
   pending-admission CN is still reachable for recovery. It neither refreshes
   discovery nor resets a connection. An existing bounded-label recovery counter
-  gains `result="owner-absent"`; no per-owner series or growing cache is added.
-- The absent observation follows the same ctl/epoch validation as failed RPCs.
-  Resume racing this observation cannot be overwritten by stale re-fencing.
+  gains `result="owner-absent"`; a bounded per-service cleanup-only marker is
+  retained until positive evidence or expiry, without becoming a metric series.
+- A missing-owner observation never mutates admission state. Retirement fencing
+  is performed atomically with exact bind removal, while an existing marker and
+  its ctl/epoch protections remain subject to Resume and expiry.
+- Timeout retirement carries the controller identity and recovery epoch sampled
+  with the bind generation. Resume or controller replacement therefore wins
+  over a stale validation result.
 
 | Audit | Owner / termination |
 |---|---|
 | Q1 cleanup ownership | Allocator removes the exact ctl only when empty; stale snapshots cannot remove a replacement. |
 | Q2 waits | No network operation under cleanup locks; missing endpoints skip RPC/reset immediately. Other owners retain the existing three-attempt RPC budget and context cancellation. |
-| Q3 retained state | Stable disconnect timestamp makes retention reachable; transaction and persistent-Commit protections keep their independent terminal conditions. Sweep maps are temporary and proportional to service count. |
+| Q3 retained state | Stable disconnect/absence timestamps make retention reachable; transaction and persistent-Commit protections keep their independent terminal conditions. At most one cleanup-only marker is kept per observed service; it may outlive an emptied controller, but positive evidence or retention expiry removes it. |
 
 ## Deterministic evidence
 
@@ -90,9 +101,10 @@ repository analyzer completed. `git diff --check` passed.
 
 The supplemental missing-owner regressions cover 45 deterministic sweeps
 (equivalent to 15 minutes of default cadence): zero sends, zero resets, zero
-ERROR logs, one initial state-transition INFO log, with the cannot-commit
-tombstone still present and admission rejected. Membership reappearance allows
-the very next sweep to send; Resume permits new commits. Subsequent absence
+ERROR logs and no admission-state transition, with the cannot-commit
+tombstone still present without inventing a new admission fence. Membership
+reappearance allows the very next sweep to send; Resume permits new commits.
+Subsequent absence
 still allows local expiry. A separate callback interleaving verifies stale
 absence cannot re-fence a resumed owner. The pending-admission raw-inventory
 RPC regression also checks this preflight path.
@@ -107,6 +119,15 @@ selecting count=100 for each under the 30-second per-test budget. Each exact tes
 then passed its separate race-stress command (5.099/4.753/1.867s including harness
 overhead). A grouped 100-repeat run also passed (10.395s), but is supplemental
 rather than a substitute for the individual selections.
+
+This follow-up additionally covers the owner-discovery startup gap: absent
+membership leaves admission open while retaining a cleanup-only timestamp;
+positive admission/heartbeat clears it, and a later absent sweep expires a
+controller that has no allocator bind. Bind retirement tests cover generation
+zero and post-keepalive binds, and a validation/Resume interleaving proves that
+stale timeout evidence cannot remove or re-fence a resumed bind. These tests
+also verify that an existing inactive fence remains authoritative and that an
+absent observation does not clear its orphan tombstone.
 
 ## Real-service validation
 
