@@ -15,9 +15,11 @@
 package function
 
 import (
+	"encoding/hex"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -35,6 +37,7 @@ type regexpStringParameter struct {
 	parameters   []*vector.Vector
 	converter    regexpReplacementDomainConverter
 	validateText bool
+	err          error
 }
 
 func newRegexpStringParameter(
@@ -59,7 +62,7 @@ func (p *regexpStringParameter) GetStrValue(row uint64) ([]byte, bool) {
 		text = p.converter.forMatchDomain(text, int(row), matchingBinary)
 	} else {
 		if p.validateText {
-			text = regexpValidTextPrefix(text)
+			text, p.err = regexpTextPrefix(text)
 		}
 		if matchingBinary {
 			text = regexpTextToBinaryBytes(text)
@@ -68,23 +71,60 @@ func (p *regexpStringParameter) GetStrValue(row uint64) ([]byte, bool) {
 	return functionUtil.QuickStrToBytes(text), false
 }
 
+func (p *regexpStringParameter) Error() error {
+	return p.err
+}
+
 // MySQL passes the successfully decoded prefix to the regexp library when a
 // text operand contains an invalid UTF-8 sequence. StringSource identifies an
 // owner, not UTF-8 validity: VARCHAR columns and expressions can also contain
 // arbitrary bytes when sql_mode permits them.
-func regexpValidTextPrefix(value string) string {
+func regexpTextPrefix(value string) (string, error) {
 	for i := 0; i < len(value); {
 		if value[i] < utf8.RuneSelf {
 			i++
 			continue
 		}
 		_, width := utf8.DecodeRuneInString(value[i:])
-		if width == 1 {
-			return value[:i]
+		if width > 1 {
+			i += width
+			continue
 		}
-		i += width
+		if value[i] == 0xff || regexpIncompleteUTF8Tail(value[i:]) {
+			return value[:i], nil
+		}
+		return "", moerr.NewCannotConvertStringNoCtx(
+			hex.EncodeToString([]byte(value[i:min(i+4, len(value))])), "utf8mb4", "utf8mb4")
 	}
-	return value
+	return value, nil
+}
+
+func regexpIncompleteUTF8Tail(value string) bool {
+	need := 0
+	switch {
+	case value[0] >= 0xc2 && value[0] <= 0xdf:
+		need = 2
+	case value[0] >= 0xe0 && value[0] <= 0xef:
+		need = 3
+	case value[0] >= 0xf0 && value[0] <= 0xf4:
+		need = 4
+	default:
+		return false
+	}
+	if len(value) >= need {
+		return false
+	}
+	for i := 1; i < len(value); i++ {
+		if value[i]&0xc0 != 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+func regexpValidTextPrefix(value string) string {
+	prefix, _ := regexpTextPrefix(value)
+	return prefix
 }
 
 // Result encoding is a separate decision from matching. A bare user variable

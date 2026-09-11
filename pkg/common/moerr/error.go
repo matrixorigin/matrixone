@@ -78,6 +78,7 @@ const (
 	ErrRegexpIllegalArgument       uint16 = 20206
 	ErrPreparedParamOutOfRange     uint16 = 20207
 	ErrTruncatedWrongValue         uint16 = 20208
+	ErrCannotConvertString         uint16 = 20209
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -448,6 +449,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 	ErrPreparedParamOutOfRange:     {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "%s value is out of range in '%s'"},
 	ErrTruncatedWrongValue:         {ER_TRUNCATED_WRONG_VALUE, []string{"22007"}, "Truncated incorrect %-.64s value: '%-.128s'"},
+	ErrCannotConvertString:         {ER_CANNOT_CONVERT_STRING, []string{MySQLDefaultSqlState}, "Cannot convert string '%s' from %s to %s"},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -1104,6 +1106,10 @@ func NewBadConfigf(ctx context.Context, format string, args ...any) *Error {
 
 func NewBadConfig(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrBadConfig, msg)
+}
+
+func NewCannotConvertStringNoCtx(value, from, to string) *Error {
+	return newError(Context(), ErrCannotConvertString, value, from, to)
 }
 
 func NewInvalidInputf(ctx context.Context, format string, args ...any) *Error {

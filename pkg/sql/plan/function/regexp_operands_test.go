@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -162,7 +163,9 @@ func TestRegexpPredicateInvalidTextPrefix(t *testing.T) {
 	} {
 		reg, err := op.regMap.getRegularMatcherForMatchWithMode(tc.pattern, false)
 		require.NoError(t, err)
-		require.Equal(t, tc.want, regexpMatchTextWithValidPrefix(reg, tc.subject), tc)
+		got, err := regexpMatchTextWithValidPrefix(reg, tc.subject)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got, tc)
 	}
 }
 
@@ -170,7 +173,18 @@ func TestRegexpOutputEncoding(t *testing.T) {
 	for _, tc := range []struct{ input, prefix string }{
 		{"ASCII", "ASCII"}, {"éa", "éa"}, {"\xffa", ""}, {"a\xffb", "a"}, {"é\xc3", "é"},
 	} {
-		require.Equal(t, tc.prefix, regexpValidTextPrefix(tc.input))
+		prefix, err := regexpTextPrefix(tc.input)
+		require.NoError(t, err)
+		require.Equal(t, tc.prefix, prefix)
+	}
+	for _, input := range []string{
+		"\x80", "\xc0", "\xc1", "\xc2 ", "\xe0\x80\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80", "a\xc3b",
+	} {
+		_, err := regexpTextPrefix(input)
+		require.Error(t, err, "%x", input)
+		var moErr *moerr.Error
+		require.ErrorAs(t, err, &moErr)
+		require.Equal(t, uint16(moerr.ER_CANNOT_CONVERT_STRING), moErr.MySQLCode())
 	}
 	for _, tc := range []struct{ text, binary string }{
 		{"ASCII", "ASCII"}, {"é", "\xe9"}, {"€", "\x80"}, {"\u0081", "\x81"}, {"中", "?"},
@@ -189,7 +203,9 @@ func TestRegexpShortPredicateValidationDoesNotAllocate(t *testing.T) {
 	reg, err := op.regMap.getRegularMatcherForMatchWithMode("^a", false)
 	require.NoError(t, err)
 	require.Zero(t, testing.AllocsPerRun(1000, func() {
-		require.True(t, regexpMatchTextWithValidPrefix(reg, "abcdefghijklmnopqrstuvwxyz"))
+		matched, matchErr := regexpMatchTextWithValidPrefix(reg, "abcdefghijklmnopqrstuvwxyz")
+		require.NoError(t, matchErr)
+		require.True(t, matched)
 	}))
 }
 
@@ -204,8 +220,9 @@ func BenchmarkRegexpAnchoredTextValidationRouting(b *testing.B) {
 		b.Run(fmt.Sprintf("bytes_%d", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				if !regexpMatchTextWithValidPrefix(reg, subject) {
-					b.Fatal("expected match")
+				matched, matchErr := regexpMatchTextWithValidPrefix(reg, subject)
+				if matchErr != nil || !matched {
+					b.Fatalf("matched=%v err=%v", matched, matchErr)
 				}
 			}
 		})

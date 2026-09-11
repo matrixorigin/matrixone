@@ -185,6 +185,43 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 				}
 			})
 		}
+		t.Run("instr_rebased_text_suffix", func(t *testing.T) {
+			for _, tc := range []struct {
+				subject, pattern string
+				position         int64
+			}{
+				{"\xffa", "a", 2},  // invalid byte is before pos and is discarded
+				{"a\xff", ".", 0},  // suffix begins with a truncatable byte
+				{"aa\xff", "a", 2}, // invalid byte is after the match
+			} {
+				stmt, err := connection.PrepareContext(ctx, "select regexp_instr(?, ?, 2)")
+				require.NoError(t, err)
+				got := observe(t, stmt, 0, tc.subject, tc.pattern)
+				require.NoError(t, stmt.Close())
+				require.Equal(t, sql.NullString{String: fmt.Sprint(tc.position), Valid: true}, got.value, tc)
+			}
+		})
+		t.Run("malformed_text_errors", func(t *testing.T) {
+			for _, subject := range []string{"a\xc3b", "\x80", "\xc0", "\xc1", "\xc2 ", "\xe0\x80\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80"} {
+				for _, query := range []string{
+					"select ? regexp ?", "select regexp_like(?, ?)", "select regexp_instr(?, ?)",
+					"select regexp_substr(?, ?)", "select regexp_replace(?, ?, 'X')",
+				} {
+					stmt, err := connection.PrepareContext(ctx, query)
+					require.NoError(t, err)
+					wire.mu.Lock()
+					wire.mask = 0
+					wire.mu.Unlock()
+					var value any
+					err = stmt.QueryRowContext(ctx, subject, "a").Scan(&value)
+					require.Error(t, err, "%s %x", query, subject)
+					var sqlError *mysql.MySQLError
+					require.ErrorAs(t, err, &sqlError)
+					require.Equal(t, uint16(3854), sqlError.Number)
+					require.NoError(t, stmt.Close())
+				}
+			}
+		})
 		t.Run("error_and_null_reuse", func(t *testing.T) {
 			stmt, err := connection.PrepareContext(ctx, "select regexp_substr(?, ?)")
 			require.NoError(t, err)
