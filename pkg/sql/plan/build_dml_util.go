@@ -4471,7 +4471,8 @@ func appendPreInsertPlan(
 				}},
 			}
 		}
-		keyExpr, err := builder.makeUniqueIndexKeyExprFromInputExprs(uniqueTableDef, idxDef, values, prefixLengths)
+		keyExpr, err := builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+			tableDef, uniqueTableDef, idxDef, values, prefixLengths)
 		if err != nil {
 			return -1, err
 		}
@@ -4732,7 +4733,8 @@ func appendDeleteIndexTablePlan(
 			}
 		}
 		baseDef := &plan.TableDef{UniqueKeyCodecVersion: uniqueTableDef.UniqueKeyCodecVersion}
-		leftExpr, err = builder.makeUniqueIndexKeyExprFromInputExprs(baseDef, indexdef, values, prefixLengths)
+		leftExpr, err = builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+			baseDef, uniqueTableDef, indexdef, values, prefixLengths)
 		if err != nil {
 			return -1, err
 		}

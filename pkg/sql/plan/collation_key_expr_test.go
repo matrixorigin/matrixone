@@ -335,3 +335,33 @@ func TestV2UniqueKeyExpressionBuildersCoverSingleAndCompositePaths(t *testing.T)
 	require.NoError(t, err)
 	require.NotNil(t, expr)
 }
+
+func TestRelationLocalUniqueKeyExpressionUsesPhysicalRelationMetadata(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true), false, true)
+	base := &planpb.TableDef{
+		Name: "mixed_identity_base",
+		Cols: []*planpb.ColDef{{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}}, {
+			Name: "name", Typ: v2PlannerTextType(uint32(types.CharsetUTF8)),
+		}},
+	}
+	hidden := &planpb.TableDef{
+		Name:                  "mixed_identity_base_name_idx",
+		UniqueKeyCodecVersion: v2PlannerMetadata(),
+	}
+	index := &planpb.IndexDef{Unique: true, Parts: []string{"name"}}
+	value := &planpb.Expr{Typ: v2PlannerTextType(uint32(types.CharsetUTF8))}
+
+	expr, err := builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+		base, hidden, index, []*planpb.Expr{value}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, expr.GetF())
+	require.Equal(t, function.CollationKeyV2FunctionEncodedID, expr.GetF().GetFunc().GetObj())
+
+	// The compatibility wrapper intentionally uses one definition for both
+	// source and consumer; it must retain the legacy behavior for this base.
+	legacyExpr, err := builder.makeUniqueIndexKeyExprFromInputExprs(base, index, []*planpb.Expr{value}, nil)
+	require.NoError(t, err)
+	if legacyExpr.GetF() != nil {
+		require.NotEqual(t, function.CollationKeyV2FunctionEncodedID, legacyExpr.GetF().GetFunc().GetObj())
+	}
+}

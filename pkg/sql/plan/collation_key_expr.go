@@ -257,10 +257,31 @@ func (builder *QueryBuilder) makeUniqueIndexKeyExprFromInputExprs(
 	values []*planpb.Expr,
 	prefixLengths map[string]int,
 ) (*planpb.Expr, error) {
-	if err := validateUniqueKeyInputExprs(tableDef, idxDef, values); err != nil {
+	return builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+		tableDef, tableDef, idxDef, values, prefixLengths)
+}
+
+// makeUniqueIndexKeyExprFromInputExprsForRelation builds an identity from
+// source-table expressions while consulting the metadata of the physical
+// unique relation that will consume the result.  These definitions are often
+// different: for example, an INT primary-key base table can own a legacy
+// primary relation while its VARCHAR secondary UNIQUE relation is v2.  Using
+// the source table's metadata in that shape silently emits the legacy serial
+// key and makes probes, locks, and writes disagree with the hidden relation.
+func (builder *QueryBuilder) makeUniqueIndexKeyExprFromInputExprsForRelation(
+	sourceTableDef *planpb.TableDef,
+	uniqueTableDef *planpb.TableDef,
+	idxDef *planpb.IndexDef,
+	values []*planpb.Expr,
+	prefixLengths map[string]int,
+) (*planpb.Expr, error) {
+	if uniqueTableDef == nil {
+		return nil, moerr.NewInternalErrorNoCtx("nil unique relation definition")
+	}
+	if err := validateUniqueKeyInputExprs(sourceTableDef, idxDef, values); err != nil {
 		return nil, err
 	}
-	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
+	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), uniqueTableDef)
 	if err != nil || !useV2 {
 		if len(values) == 1 {
 			return builder.makeIndexPartExprFromInputExpr(values[0], catalog.ResolveAlias(idxDef.Parts[0]), prefixLengths)

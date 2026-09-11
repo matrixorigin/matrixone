@@ -316,7 +316,8 @@ func (builder *QueryBuilder) bindDelete(ctx CompilerContext, stmt *tree.Delete, 
 						RelPos: selectNodeTag, ColPos: colPos, Name: partName,
 					}}}
 				}
-				leftExpr, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, values, prefixLengths)
+				leftExpr, err = builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+					tableDef, idxTableDef, idxDef, values, prefixLengths)
 				if err != nil {
 					return 0, err
 				}

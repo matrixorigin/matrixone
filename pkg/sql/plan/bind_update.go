@@ -1497,14 +1497,16 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 							RelPos: selectNodeTag, ColPos: newPos, Name: colName,
 						}}}
 					}
-					oldUkExpr, err := builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, oldValues, prefixLengths)
+					oldUkExpr, err := builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+						tableDef, idxTableDef, idxDef, oldValues, prefixLengths)
 					if err != nil {
 						return 0, err
 					}
 					newProjNode.ProjectList = append(newProjNode.ProjectList, oldUkExpr)
 
 					newColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(newProjNode.ProjectList))
-					newUkExpr, err := builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, newValues, prefixLengths)
+					newUkExpr, err := builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+						tableDef, idxTableDef, idxDef, newValues, prefixLengths)
 					if err != nil {
 						return 0, err
 					}
@@ -1930,7 +1932,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						RelPos: selectNodeTag, ColPos: colPos, Name: partName,
 					}}}
 				}
-				leftExpr, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, values, prefixLengths)
+				leftExpr, err = builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+					tableDef, idxTableDef, idxDef, values, prefixLengths)
 				if err != nil {
 					return 0, err
 				}
@@ -2301,7 +2304,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 							RelPos: selectNodeTag, ColPos: colPos, Name: realColName,
 						}}}
 					}
-					newIdxExpr, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, values, prefixLengths)
+					newIdxExpr, err = builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+						tableDef, idxNode.TableDef, idxDef, values, prefixLengths)
 					if err != nil {
 						return 0, err
 					}
@@ -3656,11 +3660,13 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 					RelPos: selectNodeTag, ColPos: newPos, Name: part,
 				}}}
 			}
-			oldKey, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, oldValues, prefixLengths)
+			oldKey, err = builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+				tableDef, idxTableDef, idxDef, oldValues, prefixLengths)
 			if err != nil {
 				return 0, nil, err
 			}
-			newKey, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, newValues, prefixLengths)
+			newKey, err = builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+				tableDef, idxTableDef, idxDef, newValues, prefixLengths)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -3749,11 +3755,13 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 					RelPos: 0, ColPos: currentPos, Name: part,
 				}}}
 			}
-			releaseOldKey, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, oldValues, prefixLengths)
+			releaseOldKey, err = builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+				tableDef, idxTableDef, idxDef, oldValues, prefixLengths)
 			if err != nil {
 				return 0, nil, err
 			}
-			releaseCurrentKey, err = builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, currentValues, prefixLengths)
+			releaseCurrentKey, err = builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+				tableDef, idxTableDef, idxDef, currentValues, prefixLengths)
 			if err != nil {
 				return 0, nil, err
 			}

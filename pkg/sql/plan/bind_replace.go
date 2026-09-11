@@ -247,7 +247,8 @@ func (builder *QueryBuilder) appendReplaceConflictLookup(
 						}},
 					}
 				}
-				idxExpr, err := builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, values, prefixLengths)
+				idxExpr, err := builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+					tableDef, idxTableDefs[i], idxDef, values, prefixLengths)
 				if err != nil {
 					return nil, err
 				}
@@ -1602,9 +1603,21 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 
 	validIndexes, _ := getValidIndexes(tableDef)
 	tableDef.Indexes = validIndexes
-	useV2Table, err := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
-	if err != nil {
-		return 0, nil, nil, err
+	// The base table and each physical UNIQUE relation may carry different
+	// codec generations.  Resolve the hidden relation metadata before building
+	// the final REPLACE image so mixed legacy/v2 schemas use the consumer's
+	// format rather than inheriting the base table's format.
+	idxTableDefs := make([]*plan.TableDef, len(tableDef.Indexes))
+	for i, idxDef := range tableDef.Indexes {
+		if idxDef == nil || !idxDef.Unique {
+			continue
+		}
+		_, idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(
+			objRef, idxDef.IndexTableName, bindCtx.snapshot)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		ensureName2ColIndexForReplace(idxTableDefs[i])
 	}
 
 	skipUniqueIdx := make([]bool, len(tableDef.Indexes))
@@ -1637,7 +1650,14 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		// raw string would make REPLACE probe/insert a different identity
 		// than INSERT and ODKU.  This branch must precede the legacy
 		// serialized-key test so composite v2 keys are framed as well.
-		if useV2Table && idxDef.Unique {
+		useV2Idx := false
+		if idxDef.Unique && i < len(idxTableDefs) && idxTableDefs[i] != nil {
+			useV2Idx, err = tableUsesCollationKeyV2(builder.GetContext(), idxTableDefs[i])
+			if err != nil {
+				return 0, nil, nil, err
+			}
+		}
+		if useV2Idx {
 			values := make([]*plan.Expr, len(idxDef.Parts))
 			for partIdx, part := range idxDef.Parts {
 				partName := catalog.ResolveAlias(part)
@@ -1647,7 +1667,8 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				}
 				values[partIdx] = DeepCopyExpr(projList2[partPos])
 			}
-			idxExpr, err := builder.makeUniqueIndexKeyExprFromInputExprs(tableDef, idxDef, values, prefixLengths)
+			idxExpr, err := builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+				tableDef, idxTableDefs[i], idxDef, values, prefixLengths)
 			if err != nil {
 				return 0, nil, nil, err
 			}
