@@ -887,6 +887,16 @@ func TestUsesStableEpochInitialSnapshot(t *testing.T) {
 	assert.False(t, UsesStableEpochInitialSnapshot(`not-json`))
 }
 
+func TestUsesLosslessNoFullStart(t *testing.T) {
+	require.True(t, UsesLosslessNoFullStart(fmt.Sprintf(
+		`{"%s":"%s"}`,
+		CDCTaskExtraOptions_InitialSnapshotProtocol,
+		CDCInitialSnapshotProtocolNoFullHLC,
+	)))
+	require.False(t, UsesLosslessNoFullStart(`{"InitialSnapshotProtocol":"future"}`))
+	require.False(t, UsesLosslessNoFullStart(`not-json`))
+}
+
 func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
 	require.NoError(t, ValidateStableInitialSnapshotProtocol(
 		context.Background(), false, defines.MORPCVersion47))
