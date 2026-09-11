@@ -145,6 +145,20 @@ func TestBuildInputRecordRejectsEmptyConstantVector(t *testing.T) {
 	require.ErrorContains(t, err, "shorter than batch range")
 }
 
+func TestInputBatchEncoderRejectsMismatchedVectorType(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	input := vector.NewVec(types.T_int32.ToType())
+	defer func() {
+		input.Free(mp)
+		mpool.DeleteMPool(mp)
+	}()
+
+	_, err := newInputBatchEncoder(
+		[]*vector.Vector{input}, []types.Type{types.T_int64.ToType()},
+	)
+	require.ErrorContains(t, err, "does not match the frozen argument type")
+}
+
 func TestInputBatchEncoderReusesSchemaAndPreservesRange(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	input := vector.NewVec(types.T_int64.ToType())

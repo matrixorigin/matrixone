@@ -170,6 +170,24 @@ func validInvocation() *udf.Invocation {
 	}
 }
 
+func TestValidateInvocationInputsChecksZeroRowVectorTypes(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	input := vector.NewVec(types.T_int32.ToType())
+	defer func() {
+		input.Free(mp)
+		mpool.DeleteMPool(mp)
+	}()
+
+	descriptor, err := NewTypeDescriptor(types.T_int64.ToType())
+	require.NoError(t, err)
+	err = validateInvocationInputs(&udf.Invocation{
+		Length: 0,
+		Args:   []types.Type{types.T_int64.ToType()},
+		Inputs: []*vector.Vector{input},
+	}, []TypeDescriptor{descriptor})
+	require.ErrorContains(t, err, "does not match the frozen argument type")
+}
+
 func TestValidateInvocationRequiresFrozenContract(t *testing.T) {
 	base := validInvocation()
 	require.NoError(t, validateInvocation(base))
