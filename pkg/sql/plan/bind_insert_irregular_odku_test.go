@@ -223,8 +223,22 @@ func nullSafeEqualityColumns(t *testing.T, marker *planpb.Expr) []string {
 		}
 		require.Equal(t, "<=>", fn.Func.ObjName)
 		require.Len(t, fn.Args, 2)
-		oldCol := fn.Args[0].GetCol()
-		newCol := fn.Args[1].GetCol()
+		// The marker intentionally compares stored-value identity rather than
+		// SQL collation equality. Each side is cast to VARBINARY before the
+		// NULL-safe comparison; unwrap the cast so this oracle still checks the
+		// old-image/final-image column mapping.
+		storedSource := func(expr *planpb.Expr) *planpb.ColRef {
+			t.Helper()
+			require.NotNil(t, expr)
+			require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
+			cast := expr.GetF()
+			require.NotNil(t, cast)
+			require.Equal(t, "cast", cast.Func.ObjName)
+			require.Len(t, cast.Args, 2)
+			return cast.Args[0].GetCol()
+		}
+		oldCol := storedSource(fn.Args[0])
+		newCol := storedSource(fn.Args[1])
 		require.NotNil(t, oldCol)
 		require.NotNil(t, newCol)
 		require.NotEqual(t, oldCol.ColPos, newCol.ColPos,

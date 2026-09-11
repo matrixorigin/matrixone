@@ -77,6 +77,25 @@ func collationKeyV2StorageType() planpb.Type {
 	}
 }
 
+// makeStoredValueIdentityExpr converts a final/old row image to a binary
+// string without applying SQL collation or CHAR PAD SPACE rules.  FULLTEXT
+// no-op proofs use this representation because SQL equality and tokenizer
+// identity are deliberately different contracts.  The helper is kept inside
+// the planner; it is not a SQL-visible function and does not alter ordinary
+// comparison semantics.
+func makeStoredValueIdentityExpr(ctx context.Context, expr *planpb.Expr) (*planpb.Expr, error) {
+	if expr == nil {
+		return nil, moerr.NewInternalErrorNoCtx("nil expression in stored-value identity cast")
+	}
+	target := planpb.Type{
+		Id:          int32(types.T_varbinary),
+		Width:       types.MaxBlobLen,
+		Charset:     uint32(types.CharsetBinary),
+		NotNullable: expr.Typ.NotNullable,
+	}
+	return makePlan2CastExpr(ctx, expr, target)
+}
+
 func makeCollationKeyV2Expr(value *planpb.Expr, prefix int) (*planpb.Expr, error) {
 	if value == nil {
 		return nil, moerr.NewInternalErrorNoCtx("nil value in collation key v2 expression")

@@ -3990,8 +3990,21 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						ColPos: newColPos,
 					}},
 				}
+				// FULLTEXT maintenance identity is stricter than SQL equality. A
+				// future collation-aware <=> may treat case or padding variants as
+				// equal even though the tokenizer input bytes differ. Cast both
+				// images to VARBINARY before the NULL-safe comparison so the marker
+				// proves stored-value identity, not SQL collation equality.
+				oldStored, bindErr := makeStoredValueIdentityExpr(builder.GetContext(), oldCol)
+				if bindErr != nil {
+					return 0, bindErr
+				}
+				newStored, bindErr := makeStoredValueIdentityExpr(builder.GetContext(), newCol)
+				if bindErr != nil {
+					return 0, bindErr
+				}
 				equal, bindErr := BindFuncExprImplByPlanExpr(
-					builder.GetContext(), "<=>", []*plan.Expr{oldCol, newCol})
+					builder.GetContext(), "<=>", []*plan.Expr{oldStored, newStored})
 				if bindErr != nil {
 					return 0, bindErr
 				}
