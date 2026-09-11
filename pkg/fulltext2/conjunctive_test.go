@@ -58,8 +58,8 @@ func requireConjunctiveParity(t *testing.T, s *Segment, query string, allow Memb
 		require.Equal(t, wantBits, gotBits,
 			"query=%q algo=%d must preserve pk and float32 score bits", query, algo)
 
-		// k<=0 is the API's empty-result boundary; the no-LIMIT SQL path
-		// normalizes its runtime limit to N before reaching this helper.
+		// k<=0 is the materializing API's empty-result boundary. The no-LIMIT
+		// SQL path instead uses StreamQuery/streamBoolean, covered separately.
 		for _, k := range []int{0, 1, 3, 10, int(s.N) + 1} {
 			routed, err := s.SearchBoolean(q, algo, k, allow, nil)
 			require.NoError(t, err)
