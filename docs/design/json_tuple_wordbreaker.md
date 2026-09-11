@@ -591,12 +591,18 @@ coverage gate and carried to the operator:
 
 - **tier 1 — warm cache** (`GetBuildTS`): the loaded entry's `build_ts`, i.e. exactly
   the generation execution will reuse;
-- **tier 2 — memo**: a process-shared, per-key value so a query planning against an
-  index another query is still loading inherits *that* generation's `build_ts` rather
-  than a newer durable one;
-- **tier 3 — SQL** `MAX(build_ts)`: the truly-cold first caller, computed once under a
-  per-key mutex (singleflight); tiers 2/3 are removed once the load publishes (tier 1
-  takes over).
+- **tier 2 — memo**: a concurrent cold caller is building an *older* generation than
+  this caller's own snapshot could load; return that (smaller) shared value, since it
+  is the generation execution will actually reuse;
+- **tier 3 — SQL** `MAX(build_ts)`: this caller's own durable as of its transaction.
+
+The result is always **`min(shared memo, own durable)`** — the clamp is the load-bearing
+rule. `own` is computed on every cold call (the memo is a *cap-from-below*, not a
+compute-skip) precisely so a memo seeded by a concurrent *newer*-snapshot query can
+never hand this caller a generation its own snapshot cannot load: without the clamp,
+an older-snapshot query would inherit a `build_ts` above what it can reach, mark itself
+covered, then search an older generation and drop rows. The memo is removed once the
+load publishes (tier 1 takes over).
 
 The planner records that `build_ts` (`recordJSONProbeMaxTs`, covered and partial
 alike) and `buildFulltext2SearchCfg` carries it in the search config as
@@ -609,12 +615,15 @@ never silently substituted for the one the plan approved. `MaxTs == 0` is ordina
 Snapshot reads are exempt: they key by `SnapshotKey` and load the immutable
 as-of-snapshot generation, so their coverage and execution already agree.
 
-Known limitation (accepted, same class as the cross-CN eventual-consistency won't-fix):
-because the current generation is shared across current reads at slightly different
-snapshots, a cold-load race between concurrent probes — an ISCP commit landing in the
-microsecond gap between two snapshots, before the entry warms — can transiently bound
-a tail above the loaded generation. It requires DML to land inside that window on an
-index that already lags by seconds, and it self-corrects once the shared entry warms.
+Remaining limitation (accepted, same class as the cross-CN eventual-consistency
+won't-fix): the clamp bounds `MaxTs` at what a query's *own* snapshot can load, but the
+tail bound is still fixed at plan time, so a query that *reuses* a shared entry whose
+generation is older than that bound — a generation loaded by an even-older-snapshot
+query in the cold window — can still bound its tail above what it searched. This needs
+concurrent probes at different snapshots with DML landing in the microsecond gap, on an
+index already lagging by seconds, and self-corrects once the entry warms. Fully closing
+it requires binding the tail's lower bound to the generation the operator actually
+searched (runtime tail binding), scoped separately.
 
 ## 11. Range probes
 

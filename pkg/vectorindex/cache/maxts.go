@@ -14,32 +14,29 @@
 
 package cache
 
-import "sync"
-
-// maxTSMemoEntry memoizes one index's max build_ts with its OWN mutex, so computing the value for
-// one index never blocks another. The enclosing map is a sync.Map (no global map-wide lock).
+// maxTSMemoEntry holds one index's shared cold-window build_ts. It is written once (via LoadOrStore
+// at the struct literal) and read-only afterward, so it needs no mutex; the enclosing sync.Map has
+// no global map-wide lock either.
 type maxTSMemoEntry struct {
-	mu       sync.Mutex
-	ts       int64
-	computed bool
+	ts int64
 }
 
 // GetMaxTS returns the build_ts of the current generation an async index probe will search, derived
 // identically by the coverage gate (at plan time) and the search operator (at execution) so the two
-// cannot bind different generations, plus WHERE the value came from so a caller can reason about how
-// authoritative it is:
+// cannot bind different generations, plus WHERE the value came from so a caller can reason about it:
 //
 //   - tier 1, indexFound=true: the loaded cache entry's build_ts -- exactly the generation execution
 //     will reuse, so a stale (incl. cross-CN) entry drives a matching partial tail rather than a drop;
-//   - tier 2, memoFound=true: another caller already computed the value for this key (a concurrent /
-//     in-flight cold load) and this call read it from the shared memo -- no recompute;
-//   - tier 3, both false: this call is the first for the key and ran compute (durable MAX(build_ts) as
-//     of its transaction), under the per-key mutex so exactly ONE caller computes and the rest block
-//     then read tier 2.
+//   - tier 2, memoFound=true: a concurrent cold caller is building an OLDER generation than this
+//     caller's own snapshot could load, so this returns that (smaller) shared value -- the generation
+//     execution will actually reuse;
+//   - tier 3, both false: this caller's own durable MAX(build_ts) as of its transaction.
 //
-// The memo is deliberately SHARED across queries (keyed by index table), so a query planning against
-// an index another query is still loading inherits that generation's build_ts rather than a newer
-// durable one -- which keeps the coverage decision and the tail bound pinned to what execution reuses.
+// The critical rule is the CLAMP: the shared memo is never returned unclamped -- the result is
+// min(memo, own). A memo seeded by a concurrent NEWER-snapshot query must never hand this caller a
+// generation its own snapshot cannot load, or its tail bound would exceed the generation execution
+// binds and drop rows. So compute (own durable) runs on every cold call, even a memo hit: the memo is
+// a cap-from-below (inherit a smaller in-flight generation), not a compute-skip.
 //
 // It is for the CURRENT (bare-key) generation only. A {snapshot=...} read keys by SnapshotKey and
 // loads the immutable as-of-snapshot generation, so its coverage and execution already agree and it
@@ -48,22 +45,22 @@ func (c *VectorIndexCache) GetMaxTS(indexTable string, compute func() (int64, er
 	if v, ok := c.GetBuildTS(indexTable); ok {
 		return v, true, false, nil
 	}
-	e, _ := c.maxTSMemo.LoadOrStore(indexTable, &maxTSMemoEntry{})
-	ent := e.(*maxTSMemoEntry)
-	ent.mu.Lock() // per-key mutex: one compute per key, others block then read the memo
-	defer ent.mu.Unlock()
-	if ent.computed {
-		return ent.ts, false, true, nil
-	}
-	v, cerr := compute()
+	// Own durable: the newest generation THIS caller's snapshot can actually load.
+	own, cerr := compute()
 	if cerr != nil {
-		// Do not memoize a failure, and do not leave the empty placeholder behind: drop it (only if
-		// the map still holds this exact entry) so the next caller starts clean and retries.
-		c.maxTSMemo.CompareAndDelete(indexTable, ent)
 		return 0, false, false, cerr
 	}
-	ent.ts, ent.computed = v, true
-	return v, false, false, nil
+	e, loaded := c.maxTSMemo.LoadOrStore(indexTable, &maxTSMemoEntry{ts: own})
+	if !loaded {
+		return own, false, false, nil // first cold caller: seed the shared value with own
+	}
+	if memoTs := e.(*maxTSMemoEntry).ts; memoTs < own {
+		// A concurrent loader is building an OLDER generation than this snapshot could load; inherit it
+		// so the tail is bounded at the generation execution will reuse.
+		return memoTs, false, true, nil
+	}
+	// The shared value is newer than this snapshot can load; clamp to own.
+	return own, false, false, nil
 }
 
 // RemoveMaxTSMemo drops the memo entry once Load has published the generation under indexTable: the
