@@ -766,10 +766,19 @@ func (builder *QueryBuilder) reserveSharedMaterialization(
 	materializedBytes, estimatedRows float64,
 	outputTypes []planpb.Type,
 ) bool {
+	return builder.reserveSharedMaterializationWithSpillLimit(
+		materializedBytes, estimatedRows, outputTypes, cteReuseEstimatedSpillBytesLimit)
+}
+
+func (builder *QueryBuilder) reserveSharedMaterializationWithSpillLimit(
+	materializedBytes, estimatedRows float64,
+	outputTypes []planpb.Type,
+	plannerSpillLimit float64,
+) bool {
 	spillBytes, spillEstimateKnown := estimatedSharedMaterializationSpillBytes(
 		materializedBytes, estimatedRows, outputTypes,
 	)
-	if !spillEstimateKnown {
+	if !spillEstimateKnown || !finitePositive(plannerSpillLimit) {
 		return false
 	}
 	memoryBytes := math.Min(materializedBytes, float64(materialized.MaxSourceRetainedBytes))
@@ -777,7 +786,7 @@ func (builder *QueryBuilder) reserveSharedMaterialization(
 	// Charge every source against spill as well as retained memory. Even a
 	// byte-small source spills after the bounded in-memory batch-count limit,
 	// and batch count is not a hard planner proof from estimated rows.
-	spillLimit := cteReuseEstimatedSpillBytesLimit
+	spillLimit := plannerSpillLimit
 	if builder.compCtx != nil {
 		if proc := builder.compCtx.GetProcess(); proc != nil && proc.Base != nil {
 			if proc.Base.Lim.Size > 0 {

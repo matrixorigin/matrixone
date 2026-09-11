@@ -1564,6 +1564,20 @@ func TestSharedMaterializationRespectsCumulativeProcessCaps(t *testing.T) {
 	require.True(t, memoryBound.reserveSharedMaterialization(64*mpool.MB, 1, types))
 	require.False(t, memoryBound.reserveSharedMaterialization(64*mpool.MB, 1, types),
 		"in-memory sources must also respect the cumulative query memory cap")
+
+	proc.Base.Lim.Size = mpool.GB
+	proc.Base.Lim.SpillSize = 2 * mpool.GB
+	customPlannerCap := &QueryBuilder{compCtx: mock.CurrentContext()}
+	require.False(t, customPlannerCap.reserveSharedMaterializationWithSpillLimit(
+		256*mpool.MB, 1, types, 128*mpool.MB))
+	require.True(t, customPlannerCap.reserveSharedMaterializationWithSpillLimit(
+		256*mpool.MB, 1, types, 512*mpool.MB))
+
+	proc.Base.Lim.SpillSize = 180 * mpool.MB
+	processBound := &QueryBuilder{compCtx: mock.CurrentContext()}
+	require.False(t, processBound.reserveSharedMaterializationWithSpillLimit(
+		256*mpool.MB, 1, types, mpool.GB),
+		"a larger planner allowance must not override the process spill cap")
 }
 
 func TestSharedMaterializationAccountsForPerRecordSpillFraming(t *testing.T) {
