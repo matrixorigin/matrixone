@@ -149,10 +149,8 @@ func TestGroupConcatMaxLenAssignmentBounds(t *testing.T) {
 			info := ses.diagnosticsSnapshot()
 			if tt.wantWarning {
 				assert.Equal(t, []uint16{moerr.ER_TRUNCATED_WRONG_VALUE}, info.codes)
-				if len(info.msgs) > 0 {
-					assert.Equal(t,
-						groupConcatMaxLenTruncationWarning(tt.warningValue), info.msgs[0])
-				}
+				assert.Equal(t,
+					[]string{groupConcatMaxLenTruncationWarning(tt.warningValue)}, info.msgs)
 			} else {
 				assert.Empty(t, info.codes)
 			}
