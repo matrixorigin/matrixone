@@ -225,19 +225,27 @@ func fixedTypeMatchExcept(overloads []overload, inputs []types.Type, excluded in
 	return newCheckResultWithCast(minIndex, castType)
 }
 
-// binTypeMatch keeps numeric inputs on their existing typed overloads and
-// routes MySQL string domains through the prefix-aware string executor. An
-// unresolved parameter is cast to VARCHAR so each execution can retain the
-// normal NULL and runtime string conversion behavior.
+// binTypeMatch keeps the existing integer, float, and string fast paths while
+// routing types whose numeric representation is decided by their runtime
+// vector (including prepared parameters) through the dynamic BIN executor.
+// This is intentionally local to BIN: adding temporal/decimal/BOOL casts to
+// the global implicit-cast table would change overload resolution for unrelated
+// operators.
 func binTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) != 1 || len(overloads) == 0 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
 	stringOverload := -1
+	dynamicOverload := -1
 	for i, ov := range overloads {
 		if len(ov.args) == 1 && ov.args[0] == types.T_varchar {
 			if stringOverload == -1 {
 				stringOverload = i
+			}
+		}
+		if len(ov.args) == 1 && ov.args[0] == types.T_any {
+			if dynamicOverload == -1 {
+				dynamicOverload = i
 			}
 		}
 	}
@@ -245,10 +253,23 @@ func binTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 		return fixedTypeMatch(overloads, inputs)
 	}
 	if inputs[0].Oid == types.T_any {
+		if dynamicOverload >= 0 {
+			return newCheckResultWithSuccess(dynamicOverload)
+		}
 		return newCheckResultWithCast(stringOverload, []types.Type{types.T_varchar.ToType()})
 	}
 	if inputs[0].Oid.IsMySQLString() {
 		return newCheckResultWithSuccess(stringOverload)
+	}
+	if dynamicOverload >= 0 {
+		switch inputs[0].Oid {
+		case types.T_bool,
+			types.T_bit,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256,
+			types.T_date, types.T_datetime, types.T_time, types.T_timestamp,
+			types.T_year:
+			return newCheckResultWithSuccess(dynamicOverload)
+		}
 	}
 
 	return fixedTypeMatchExcept(overloads, inputs, stringOverload)

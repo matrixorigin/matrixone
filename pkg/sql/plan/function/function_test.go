@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -1202,6 +1203,22 @@ func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	}
 	require.False(t, ProducesNoNull(-1))
 	require.False(t, HasExecutableCTASTypeDefault(-1))
+}
+
+func TestFunctionLookupRejectsInvalidOverload(t *testing.T) {
+	invalid := EncodeOverloadID(BIN, 99)
+
+	_, err := GetFunctionById(context.Background(), invalid)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+	_, exists := GetFunctionByIdWithoutError(invalid)
+	require.False(t, exists)
+
+	zonemappable, err := GetFunctionIsZonemappableById(context.Background(), invalid)
+	require.Error(t, err)
+	require.False(t, zonemappable)
+	require.False(t, GetFunctionIsWinOrderFunById(invalid))
 }
 
 func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
