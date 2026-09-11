@@ -611,9 +611,17 @@ func TestHighNotPrecedence(t *testing.T) {
 		"select (not 1) between 2 and 3",
 		"select 1 not in (1)",
 		"select 1 not like '2'",
+		"select 1 not ilike '2'",
 		"select 1 not regexp '2'",
+		"select 1 not between 2 and 3",
 		"select 1 is not null",
-		"create table t_high_not (a int not null)",
+		"select 1 is not unknown",
+		"select 1 is not true",
+		"select 1 is not false",
+		"create table if not exists t_high_not (a int not null)",
+		"alter table t_high_not alter constraint c not enforced",
+		"merge into target t using source s on t.id = s.id when not matched then insert (id) values (s.id)",
+		"merge into target t using source s on t.id = s.id when not matched then insert values (s.id)",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			stmt, err := ParseOneWithSQLMode(ctx, sql, 1, "HIGH_NOT_PRECEDENCE")
