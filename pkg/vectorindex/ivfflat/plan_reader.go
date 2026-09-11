@@ -698,7 +698,10 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	if tableDef == nil {
 		return res, moerr.NewInvalidStateNoCtxf("ivfflat hidden relation %s.%s has no table definition", req.Schema, req.Table)
 	}
-	statsStart := time.Now()
+	var statsStart time.Time
+	if s.executionStats != nil {
+		statsStart = time.Now()
+	}
 
 	partitionCount := req.PartitionCount
 	if partitionCount <= 0 {
@@ -748,8 +751,9 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	if err != nil {
 		return res, err
 	}
-	readerTopStats := make([]objectio.IndexReaderTopStats, len(readers))
+	var readerTopStats []objectio.IndexReaderTopStats
 	if s.executionStats != nil && tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+		readerTopStats = make([]objectio.IndexReaderTopStats, len(readers))
 		for i, reader := range readers {
 			if provider, ok := reader.(engine.ExplainVectorTopStatsReader); ok {
 				provider.SetExplainVectorTopStats(&readerTopStats[i])

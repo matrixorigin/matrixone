@@ -95,6 +95,9 @@ func ReadDataByFilter(
 		if err != nil {
 			return
 		}
+		if stats != nil {
+			stats.StorageFilterInputRows += uint64(info.MetaLocation().Rows())
+		}
 	} else {
 		deleteMask, release, readErr := readBlockData(
 			ctx,

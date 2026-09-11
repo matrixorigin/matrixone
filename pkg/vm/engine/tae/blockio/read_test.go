@@ -996,6 +996,53 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, []int64{2}, sels)
+
+	persistedInfo := info
+	persistedInfo.ObjectFlags &^= objectio.ObjectFlag_Appendable
+	prefixStats := new(objectio.IndexReaderTopStats)
+	prefixSels, err := ReadDataByFilter(
+		ctx,
+		"test",
+		&persistedInfo,
+		&blockReadTestDataSource{deleted: []uint64{1}},
+		[]uint16{0},
+		[]types.Type{types.T_varchar.ToType()},
+		types.BuildTS(7, 0),
+		nil,
+		objectio.NewReadFilterPrefixSearch(types.T_varchar, [][]byte{[]byte("k")}),
+		false,
+		cacheVectors,
+		queryMP,
+		fs,
+		prefixStats,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 2, 3, 4}, prefixSels)
+	require.Equal(t, uint64(5), prefixStats.StorageFilterInputRows)
+	require.Equal(t, uint64(4), prefixStats.StorageFilterOutputRows)
+
+	noMatchStats := new(objectio.IndexReaderTopStats)
+	noMatchSels, err := ReadDataByFilter(
+		ctx,
+		"test",
+		&persistedInfo,
+		&blockReadTestDataSource{},
+		[]uint16{0},
+		[]types.Type{types.T_varchar.ToType()},
+		types.BuildTS(7, 0),
+		nil,
+		objectio.NewReadFilterPrefixSearch(types.T_varchar, [][]byte{[]byte("missing")}),
+		false,
+		cacheVectors,
+		queryMP,
+		fs,
+		noMatchStats,
+	)
+	require.NoError(t, err)
+	require.Empty(t, noMatchSels)
+	require.Equal(t, uint64(5), noMatchStats.StorageFilterInputRows)
+	require.Zero(t, noMatchStats.StorageFilterOutputRows)
+
 	topStats := new(objectio.IndexReaderTopStats)
 	statsSels, err := ReadDataByFilter(
 		ctx,
