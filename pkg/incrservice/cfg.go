@@ -75,11 +75,11 @@ func checkAutoIDCacheProtocol(ctx context.Context, sid string, size uint64) erro
 	rt := runtime.ServiceRuntime(sid)
 	if rt != nil {
 		value, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-		if version, ok := value.(int64); ok && version >= defines.MORPCVersion63 {
+		if version, ok := value.(int64); ok && version >= defines.MORPCVersion64 {
 			return nil
 		}
 	}
-	return moerr.NewNotSupported(ctx, "AUTO_ID_CACHE requires MORPC protocol version 63")
+	return moerr.NewNotSupported(ctx, "AUTO_ID_CACHE requires MORPC protocol version 64")
 }
 
 // CheckAutoIDCache rejects nonzero policies before DDL or remote operator

@@ -119,8 +119,8 @@
 ## 7. 兼容、失败与资源
 
 - 会话沿用 V56 gate；CACHE 使用已批准方案 A：缺省关闭，非零策略只允许在受控全量升级后显式开启。0 的旧表和缺失字段继续默认行为。
-- CACHE 使用新 V63；V56～V62 保留上游原含义（最新合并 cd8e8d9134）。追加 `PreInsertAutoIDCache` wire-only opcode，不改变已有 opcode 数值；接收端先验证，再还原为普通 PRE_INSERT。
-- `SetupServiceBasedRuntime` 的本机 latest 不是 CN/TN 最低版本证明。V63/新 opcode 只补充局部及 PRE_INSERT 传输拒绝；旧 TN/旧直连 CN 必须由运维先停止，混合版本启用/运行和旧节点重入均不支持。该约束已经由用户批准，不增加平台 admission。
+- CACHE 使用新 V64；V56～V63 保留上游原含义（最新合并 065a675286）。追加 `PreInsertAutoIDCache` wire-only opcode，不改变已有 opcode 数值；接收端先验证，再还原为普通 PRE_INSERT。
+- `SetupServiceBasedRuntime` 的本机 latest 不是 CN/TN 最低版本证明。V64/新 opcode 只补充局部及 PRE_INSERT 传输拒绝；旧 TN/旧直连 CN 必须由运维先停止，混合版本启用/运行和旧节点重入均不支持。该约束已经由用户批准，不增加平台 admission。
 - 保留 ALTER exact-TN epoch-fence，不拿一般最低协议版本取代它。
 - 重启丢弃未用段，从持久高水位重建配置；降级旧二进制不承诺保留新策略，需停写后兼容逻辑导出或恢复升级前备份，不降低高水位。
 - account context/CREATE 权限/GLOBAL SET 权限走现有链路，冷 metadata 查询仍按租户隔离。CACHE 上限在 parser/plan 校验。

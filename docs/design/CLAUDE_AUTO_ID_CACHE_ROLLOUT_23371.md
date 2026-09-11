@@ -20,7 +20,7 @@ SHOW CREATE TABLE db_name.table_name;
 ## 1. 已证实的事实
 
 - `pkg/common/runtime/runtime.go:SetupServiceBasedRuntime` 缺省设置本机 `MORPCLatestVersion`。它不是所有参与节点的最低版本。
-- 最新 main 的 V57 属于 Arrow LOAD，V58 已由 binary-string/runtime-domain 协议使用。合并 `d3e8aced87` 时保留上游 V58，将本 PR 尚未合入的 CACHE 门槛从初版 V58 顺延为 **V59**；再合并 `401b967dc1` 时，上游 V59 已用于 FORMAT，CACHE 顺延 **V60**；合并 `cd8e8d9134` 后上游占用 V60～V62，CACHE 最终顺延 **V63**；既有 opcode/字段编号不变。
+- 最新 main 的 V57 属于 Arrow LOAD，V58 已由 binary-string/runtime-domain 协议使用。合并 `d3e8aced87` 时保留上游 V58，将本 PR 尚未合入的 CACHE 门槛从初版 V58 顺延为 **V59**；再合并 `401b967dc1` 时，上游 V59 已用于 FORMAT，CACHE 顺延 **V60**；合并 `cd8e8d9134` 后上游占用 V60～V62，CACHE 顺延 V63；再合并 `065a675286` 后上游占用 V63，CACHE 顺延 **V64**；既有 opcode/字段编号不变。
 - 旧 CN 不认识 SchemaExtra.auto_id_cache，会使用默认 allocator 策略；旧 TN 的手写 schema clone 可能丢掉该字段。这是能力缺失，不是号段算法的错误。
 - `pkg/hakeeper/view_metadata_admission.go` 不是通用能力注册表：它绑定 view catalog epoch、CN/proxy generation、准备阶段/barrier/恢复状态及 store timeout。
 - `pkg/cnservice/server_view_metadata_admission.go` 绑定 catalog fence、bootstrap、SQL/query/pipeline ingress、generation 撤销和任务停止；直接把 CACHE 塞进它会混淆 view 的所有者。
@@ -40,7 +40,7 @@ r4 的“旧/未知节点不得静默忽略”与“本任务不新增跨服务�
 - 关闭时，0/省略继续完全兼容；非零 CREATE 在发布 metadata 之前拒绝。
 - 已有非零表在禁用节点构造 allocator cache/发号时明确失败，不把策略降为 0；SHOW metadata 仍保留真实选项。开关不是禁止该表所有维护操作的写锁：既有 `ALTER AUTO_INCREMENT` 直接调整 offset/epoch、不申请号段，继续可用并保留 CACHE 属性，不为本功能重写上游 ALTER 契约。
 - 开启后沿用 r4 的持久策略；重启必须保持配置一致。
-- V63 本机检查与追加的 `PreInsertAutoIDCache` wire opcode 保护携带策略的 PRE_INSERT 传输：旧 decoder 走 unknown operator 拒绝；新 receiver 在构造 scope/operator 之前检查开关和版本。该标记不覆盖所有 CN/TN metadata 通道，因此不能替代全角色升级，更不是集群 admission 证明。
+- V64 本机检查与追加的 `PreInsertAutoIDCache` wire opcode 保护携带策略的 PRE_INSERT 传输：旧 decoder 走 unknown operator 拒绝；新 receiver 在构造 scope/operator 之前检查开关和版本。该标记不覆盖所有 CN/TN metadata 通道，因此不能替代全角色升级，更不是集群 admission 证明。
 - 无新 goroutine、后台扫描、HAKeeper 持久状态、per-row 能力 RPC；只在 DDL/冷 cache/远端计划边界作有限检查。
 
 运维步骤：阻止新业务请求并排空事务 → 停止所有旧 CN/TN → 升级并确认全角色版本及节点清单 → 在全部 CN 配置显式开启 → 恢复业务 → 才允许建非零 CACHE 表。节点替换必须使用同一支持版本/配置。配置开关不能替代运维对旧进程已停止的证明。
@@ -84,7 +84,7 @@ r4 的“旧/未知节点不得静默忽略”与“本任务不新增跨服务�
 - 触发：跨服务/持久 metadata/兼容契约；必须先设计评审。
 - 已批准部分：r4 allocator/SQL/metadata 行为；本轮继续验证与修补。
 - 当前决定：**方案 A 已批准并实现；不实现 B，也不重启被否决的 C**。
-- 实现：默认关闭配置；DDL/构建 PRE_INSERT/直接 service.Create/冷 cache 分层拒绝；V63 与 wire-only opcode；既有 schema 属性仍是唯一持久所有者。
+- 实现：默认关闭配置；DDL/构建 PRE_INSERT/直接 service.Create/冷 cache 分层拒绝；V64 与 wire-only opcode；既有 schema 属性仍是唯一持久所有者。
 - 运维配置：
   ```toml
   [cn.auto-increment]

@@ -39,6 +39,18 @@ type groupConcatWarningSink struct {
 	messages []string
 }
 
+type groupConcatWarningCountSink struct {
+	total uint64
+}
+
+func (s *groupConcatWarningCountSink) AppendWarningCount(total uint64) {
+	if ^uint64(0)-s.total < total {
+		s.total = ^uint64(0)
+	} else {
+		s.total += total
+	}
+}
+
 type cancelAfterGroupConcatWarningContext struct {
 	context.Context
 	exec *groupConcatExec
@@ -1297,6 +1309,32 @@ func TestGroupConcatMaxLenReportsWarningsOnce(t *testing.T) {
 	require.Equal(t, uint64(1), sink.total)
 	require.Len(t, sink.messages, 1)
 
+	results[0].Free(mp)
+	values.Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupConcatWarningsCountOnlySinkReceivesAllRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     97,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, "").(*groupConcatExec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 2), 0))
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"a", "b", "c"})
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	sink := new(groupConcatWarningCountSink)
+	ReportGroupConcatWarnings(exec, sink)
+	require.Equal(t, uint64(1), sink.total)
+	ReportGroupConcatWarnings(exec, sink)
+	require.Equal(t, uint64(1), sink.total)
 	results[0].Free(mp)
 	values.Free(mp)
 	exec.Free()
