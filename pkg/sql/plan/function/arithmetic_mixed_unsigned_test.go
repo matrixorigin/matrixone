@@ -138,6 +138,27 @@ func TestMixedUnsignedArithmeticSkipsMaskedRows(t *testing.T) {
 	require.NoError(t, caseUnderTest.fn(
 		caseUnderTest.parameters, caseUnderTest.result, proc, 2, selectList))
 	require.True(t, caseUnderTest.GetResultVectorDirectly().GetNulls().Contains(1))
+
+	// Reusing the result must not preserve a prior selection's NULL bitmap.
+	require.NoError(t, caseUnderTest.result.PreExtendAndReset(2))
+	require.NoError(t, caseUnderTest.fn(caseUnderTest.parameters, caseUnderTest.result, proc, 2,
+		&FunctionSelectList{AllNull: true}))
+	require.True(t, caseUnderTest.GetResultVectorDirectly().GetNulls().Contains(0))
+	require.True(t, caseUnderTest.GetResultVectorDirectly().GetNulls().Contains(1))
+
+	caseUnderTest.parameters[1].GetNulls().Add(1)
+	require.NoError(t, caseUnderTest.result.PreExtendAndReset(2))
+	require.NoError(t, caseUnderTest.fn(caseUnderTest.parameters, caseUnderTest.result, proc, 2, nil))
+	require.False(t, caseUnderTest.GetResultVectorDirectly().GetNulls().Contains(0))
+	require.True(t, caseUnderTest.GetResultVectorDirectly().GetNulls().Contains(1))
+
+	caseUnderTest.parameters[1].GetNulls().Reset()
+	caseUnderTest.parameters[1].SetClass(vector.CONSTANT)
+	require.NoError(t, caseUnderTest.result.PreExtendAndReset(2))
+	require.NoError(t, caseUnderTest.fn(caseUnderTest.parameters, caseUnderTest.result, proc, 2, nil))
+	require.True(t, caseUnderTest.GetResultVectorDirectly().GetNulls().IsEmpty())
+	require.Equal(t, []uint64{maxUnsigned, maxUnsigned},
+		vector.MustFixedColNoTypeCheck[uint64](caseUnderTest.GetResultVectorDirectly()))
 }
 
 func TestUnsignedSubtractionBindsResultDomain(t *testing.T) {
