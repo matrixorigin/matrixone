@@ -26,7 +26,6 @@ select @@warning_count;
 @@warning_count
 1
 insert ignore into warning_source values (1);
-Duplicate entry '1' for key 'id'
 select @@warning_count + 1 as warning_count_plus_one;
 warning_count_plus_one
 2
