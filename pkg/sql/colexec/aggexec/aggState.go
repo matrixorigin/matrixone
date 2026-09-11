@@ -98,9 +98,16 @@ type aggInfo struct {
 	opaqueArg          bool
 	boundedOpaqueState bool
 	// preserveDistinctInputOrder stores the first-seen ordinal in each DISTINCT
-	// saved-argument node. The wire format remains a sequence of keys in that
-	// order, so older partial-state readers see the same payload representation.
-	preserveDistinctInputOrder bool
+	// saved-argument node. When distinctInputOrderSourceRow is set, the source
+	// row is kept alongside that ordinal and is carried by a negotiated opaque
+	// payload wrapper; readers still accept the legacy raw-payload form.
+	preserveDistinctInputOrder  bool
+	distinctInputOrderSourceRow bool
+	// groupConcatSourceRowState identifies the private GROUP_CONCAT payload
+	// extension. Local spill always keeps it, while group partial output enables
+	// it only after all peers support the extended wire format.
+	groupConcatSourceRowState bool
+	groupConcatSourceRowWire  bool
 	// stableEmptyOpaqueState preserves an aggregate's historical partial-result
 	// representation when its resident implementation can now omit empty state.
 	// Private spill records deliberately keep the compact zero-size marker.
@@ -126,6 +133,32 @@ func (a *aggInfo) TypesInfo() ([]types.Type, types.Type) {
 
 func (a *aggInfo) usesOpaqueArgEncoding() bool {
 	return a.opaqueArg || len(a.argTypes) != 1 || !a.argTypes[0].IsFixedLen()
+}
+
+const distinctInputOrderSourceRowSize = 8
+
+func (a *aggInfo) distinctInputOrderValueSize() int {
+	if a != nil && a.distinctInputOrderSourceRow {
+		return kAggArgOrdinalSz + distinctInputOrderSourceRowSize
+	}
+	return kAggArgOrdinalSz
+}
+
+func makeDistinctInputOrderValue(ordinal uint32, sourceRow uint64) []byte {
+	var value [kAggArgOrdinalSz + distinctInputOrderSourceRowSize]byte
+	binary.BigEndian.PutUint32(value[:kAggArgOrdinalSz], ordinal)
+	if sourceRow == 0 {
+		return value[:kAggArgOrdinalSz]
+	}
+	binary.BigEndian.PutUint64(value[kAggArgOrdinalSz:], sourceRow)
+	return value[:]
+}
+
+func distinctInputOrderSourceRow(value []byte) uint64 {
+	if len(value) < kAggArgOrdinalSz+distinctInputOrderSourceRowSize {
+		return 0
+	}
+	return binary.BigEndian.Uint64(value[kAggArgOrdinalSz:])
 }
 
 type aggState struct {
@@ -287,6 +320,7 @@ func (ag *aggState) writeStateArg(
 	i int32,
 	writer io.Writer,
 	info *aggInfo,
+	includeGroupConcatSourceRow bool,
 ) error {
 	if err := types.WriteUint32(writer, ag.argCnt[i]); err != nil {
 		return err
@@ -300,8 +334,13 @@ func (ag *aggState) writeStateArg(
 		binary.BigEndian.PutUint16(lk, uint16(i))
 		binary.BigEndian.PutUint16(uk, uint16(i+1))
 		if info.preserveDistinctInputOrder {
-			err := ag.iterInputOrder(mp, uint16(i), func(k []byte) error {
-				if err := types.WriteSizeBytes(k[kAggArgPrefixSz:], writer); err != nil {
+			err := ag.iterInputOrderWithValue(mp, uint16(i), func(k, value []byte) error {
+				payload, err := groupConcatStatePayloadForWire(
+					info, k[kAggArgPrefixSz:], value, includeGroupConcatSourceRow)
+				if err != nil {
+					return err
+				}
+				if err := types.WriteSizeBytes(payload, writer); err != nil {
 					return err
 				}
 				xcnt++
@@ -355,7 +394,12 @@ func (ag *aggState) writeStateArg(
 							panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch i: %d != %d", checkI, i))
 						}
 					*/
-					if err := types.WriteSizeBytes(k[kAggArgPrefixSz:], writer); err != nil {
+					payload, err := groupConcatStateArgumentForWire(
+						info, k[kAggArgPrefixSz:], nil, includeGroupConcatSourceRow)
+					if err != nil {
+						return err
+					}
+					if err := types.WriteSizeBytes(payload, writer); err != nil {
 						return err
 					}
 					xcnt++
@@ -407,9 +451,8 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 				return err
 			}
 			if info.preserveDistinctInputOrder {
-				var ordinal [kAggArgOrdinalSz]byte
-				binary.BigEndian.PutUint32(ordinal[:], ui)
-				err = ag.insertArgValue(mp, fixedKey, ordinal[:])
+				err = ag.insertArgValue(
+					mp, fixedKey, makeDistinctInputOrderValue(ui, 0))
 			} else {
 				err = ag.insertArgValueWithInserter(mp, fixedKey, nil, &inserter)
 			}
@@ -433,9 +476,21 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 				return err
 			}
 			if info.preserveDistinctInputOrder {
-				var ordinal [kAggArgOrdinalSz]byte
-				binary.BigEndian.PutUint32(ordinal[:], ui)
-				err = ag.insertArgValue(mp, kbuf, ordinal[:])
+				sourceRow := uint64(0)
+				if info.distinctInputOrderSourceRow {
+					payload, decodedSourceRow, decodeErr := decodeGroupConcatSourcePayload(
+						kbuf[kAggArgPrefixSz:])
+					if decodeErr != nil {
+						return decodeErr
+					}
+					sourceRow = decodedSourceRow
+					if len(payload) != wireSize {
+						copy(kbuf[kAggArgPrefixSz:], payload)
+						kbuf = kbuf[:kAggArgPrefixSz+len(payload)]
+					}
+				}
+				err = ag.insertArgValue(
+					mp, kbuf, makeDistinctInputOrderValue(ui, sourceRow))
 			} else {
 				err = ag.insertArgValueWithInserter(mp, kbuf, nil, &inserter)
 			}
@@ -519,7 +574,8 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 		}
 		for i := range flags {
 			if flags[i] != 0 {
-				if err := ag.writeStateArg(mp, int32(i), writer, info); err != nil {
+				if err := ag.writeStateArg(
+					mp, int32(i), writer, info, info.groupConcatSourceRowWire); err != nil {
 					return err
 				}
 			}
@@ -583,7 +639,7 @@ func (ag *aggState) writeSpillStateRows(
 		return 0, moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 	}
 	for _, row := range rows {
-		if err := ag.writeStateArg(mp, row, writer, info); err != nil {
+		if err := ag.writeStateArg(mp, row, writer, info, true); err != nil {
 			return 0, err
 		}
 	}
@@ -719,7 +775,8 @@ func (ag *aggState) writeAllStatesToBuf(
 			return moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 		}
 		for i := range ag.length {
-			if err := ag.writeStateArg(mp, int32(i), writer, info); err != nil {
+			if err := ag.writeStateArg(
+				mp, int32(i), writer, info, info.groupConcatSourceRowWire); err != nil {
 				return err
 			}
 		}
@@ -1144,10 +1201,10 @@ func (ag *aggState) fillDistinctArgInInputOrder(
 	mp *mpool.MPool,
 	y uint16,
 	key []byte,
+	sourceRow uint64,
 ) error {
-	var ordinal [kAggArgOrdinalSz]byte
-	binary.BigEndian.PutUint32(ordinal[:], ag.argCnt[y])
-	err := ag.insertArgValue(mp, key, ordinal[:])
+	err := ag.insertArgValue(
+		mp, key, makeDistinctInputOrderValue(ag.argCnt[y], sourceRow))
 	if err == arenaskl.ErrRecordExists {
 		return nil
 	}
@@ -1202,7 +1259,7 @@ func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY
 		return ag.mergeLegacyDistinctArgsIntoFixed(mp, y, other, otherY)
 	}
 	var inserter arenaskl.Inserter
-	merge := func(k []byte) error {
+	merge := func(k, value []byte) error {
 		kcpy, err := ag.resizeArgScratch(mp, len(k))
 		if err != nil {
 			return err
@@ -1213,7 +1270,8 @@ func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY
 			binary.BigEndian.PutUint32(kcpy[kAggArgPrefixSz:kAggArgPrefixSz+kAggArgOrdinalSz], ag.argCnt[y])
 		}
 		if info.preserveDistinctInputOrder {
-			return ag.fillDistinctArgInInputOrder(mp, y, kcpy)
+			return ag.fillDistinctArgInInputOrder(
+				mp, y, kcpy, distinctInputOrderSourceRow(value))
 		}
 		fnerr := ag.insertArgValueWithInserter(mp, kcpy, nil, &inserter)
 		if fnerr == nil {
@@ -1233,9 +1291,11 @@ func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY
 		}
 	}
 	if info.preserveDistinctInputOrder {
-		return other.iterInputOrder(mp, otherY, merge)
+		return other.iterInputOrderWithValue(mp, otherY, merge)
 	}
-	return other.iter(otherY, merge)
+	return other.iter(otherY, func(k []byte) error {
+		return merge(k, nil)
+	})
 }
 
 // mergeFixedDistinctArgs imports a source fixed index without rebuilding the
@@ -1348,13 +1408,24 @@ func (ag *aggState) iter(idx uint16, fn func(k []byte) error) error {
 }
 
 type orderedDistinctArgument struct {
-	key []byte
+	key   []byte
+	value []byte
 }
 
 func (ag *aggState) iterInputOrder(
 	mp *mpool.MPool,
 	idx uint16,
 	fn func(k []byte) error,
+) error {
+	return ag.iterInputOrderWithValue(mp, idx, func(k, _ []byte) error {
+		return fn(k)
+	})
+}
+
+func (ag *aggState) iterInputOrderWithValue(
+	mp *mpool.MPool,
+	idx uint16,
+	fn func(k, value []byte) error,
 ) error {
 	count := int(ag.argCnt[idx])
 	entries, err := makeAccountedScratch[orderedDistinctArgument](
@@ -1372,7 +1443,7 @@ func (ag *aggState) iterInputOrder(
 	defer it.Close()
 	seen := 0
 	for ok, key, value := it.SeekGE(lk); ok; ok, key, value = it.Next() {
-		if len(value) != kAggArgOrdinalSz {
+		if len(value) < kAggArgOrdinalSz {
 			return mpool.ErrAllocationAccountInvariant
 		}
 		ordinal := int(binary.BigEndian.Uint32(value))
@@ -1380,16 +1451,17 @@ func (ag *aggState) iterInputOrder(
 			return mpool.ErrAllocationAccountInvariant
 		}
 		entries[ordinal].key = key
+		entries[ordinal].value = value
 		seen++
 	}
 	if seen != count {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	for i := range entries {
-		if entries[i].key == nil {
+		if entries[i].key == nil || entries[i].value == nil {
 			return mpool.ErrAllocationAccountInvariant
 		}
-		if err := fn(entries[i].key); err != nil {
+		if err := fn(entries[i].key, entries[i].value); err != nil {
 			return err
 		}
 	}
@@ -1734,7 +1806,8 @@ func (ae *aggExec) SaveIntermediateResultWithStringSource(
 		if i >= len(ae.state) {
 			return moerr.NewInternalErrorNoCtxf("aggregate state chunk out of range: %d >= %d", i, len(ae.state))
 		}
-		if err := ae.state[i].writeStateToBuf(ae.mp, &ae.aggInfo, flags[i], writer); err != nil {
+		if err := ae.state[i].writeStateToBuf(
+			ae.mp, &ae.aggInfo, flags[i], writer); err != nil {
 			return err
 		}
 	}

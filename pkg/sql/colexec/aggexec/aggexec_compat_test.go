@@ -65,6 +65,97 @@ func TestGroupConcatIntermediateRoundTrip(t *testing.T) {
 	restored.Free()
 }
 
+func TestGroupConcatLegacyIntermediateWireRemainsReadable(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+
+	info := multiAggInfo{
+		aggID:     AggIdOfGroupConcat,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	values := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(values, []byte("a"), false, mp))
+	require.NoError(t, vector.AppendBytes(values, []byte("b"), false, mp))
+	defer values.Free(mp)
+
+	writer := newGroupConcatExec(mp, info, "|")
+	require.NoError(t, writer.GroupGrow(1))
+	require.NoError(t, writer.BatchFill(
+		0, []uint64{1, 1}, []*vector.Vector{values}))
+	SetGroupConcatSourceRowWire(writer, false)
+	var encoded bytes.Buffer
+	require.NoError(t, writer.SaveIntermediateResult(1, [][]uint8{{1}}, &encoded))
+	require.NotContains(t, encoded.Bytes(), groupConcatSourcePayloadMagic)
+
+	reader := newGroupConcatExec(mp, info, "|")
+	SetGroupConcatSourceRowWire(reader, false)
+	require.NoError(t, reader.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+	results, err := reader.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "a|b", string(results[0].GetBytesAt(0)))
+	results[0].Free(mp)
+	writer.Free()
+	reader.Free()
+}
+
+func TestAccountedDistinctGroupConcatLegacyIntermediateUsesSingleFallbackOrdinal(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	info := multiAggInfo{
+		aggID:     AggIdOfGroupConcat,
+		distinct:  true,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	newExec := func() *groupConcatExec {
+		exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+		require.NoError(t, exec.SetAllocationAccount(allocation))
+		require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("|", 4), 0))
+		SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
+		require.NoError(t, exec.GroupGrow(1))
+		return exec
+	}
+	source := newExec()
+	target := newExec()
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"aa", "bbb"})
+	groups := []uint64{1, 1}
+	defer func() {
+		values.Free(mp)
+		source.Free()
+		target.Free()
+		require.NoError(t, source.ClearAllocationAccount(allocation))
+		require.NoError(t, target.ClearAllocationAccount(allocation))
+		finishTestAggregateAllocation(t, registry, account)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, source.PreflightBatchFill(0, groups, []*vector.Vector{values}))
+	require.NoError(t, source.BatchFill(0, groups, []*vector.Vector{values}))
+	SetGroupConcatSourceRowWire(source, false)
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResult(1, [][]uint8{{1}}, &encoded))
+	require.NotContains(t, encoded.Bytes(), groupConcatSourcePayloadMagic)
+	require.NoError(t, target.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+	results, err := target.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "aa|b", string(results[0].GetBytesAt(0)))
+	results[0].Free(mp)
+
+	sink := &groupConcatWarningSink{}
+	ReportGroupConcatWarnings(target, sink)
+	require.Equal(t, uint64(1), sink.total)
+	require.Equal(t, []string{"Row 2 was cut by GROUP_CONCAT()"}, sink.messages)
+}
+
 func TestOrderedGroupConcatIntermediateRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() {
@@ -112,6 +203,62 @@ func TestOrderedGroupConcatIntermediateRoundTrip(t *testing.T) {
 	results[0].Free(mp)
 	exec.Free()
 	restored.Free()
+}
+
+func TestAccountedDistinctGroupConcatIntermediateKeepsSourceRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	info := multiAggInfo{
+		aggID:     AggIdOfGroupConcat,
+		distinct:  true,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	newExec := func() *groupConcatExec {
+		exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+		require.NoError(t, exec.SetAllocationAccount(allocation))
+		require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("|", 4), 0))
+		SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
+		require.NoError(t, exec.GroupGrow(2))
+		return exec
+	}
+	source := newExec()
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{
+		"aa", "aa", "b", "", "c", "x", "", "yy", "z",
+	})
+	values.SetNull(3)
+	values.SetNull(6)
+	groups := []uint64{1, 1, 1, 1, 1, 2, 2, 2, 2}
+	require.NoError(t, source.PreflightBatchFill(0, groups, []*vector.Vector{values}))
+	require.NoError(t, source.BatchFill(0, groups, []*vector.Vector{values}))
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResult(2, [][]uint8{{1, 1}}, &encoded))
+
+	target := newExec()
+	require.NoError(t, target.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+	results, err := target.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, "aa|b", string(results[0].GetBytesAt(0)))
+	require.Equal(t, "x|yy", string(results[0].GetBytesAt(1)))
+	sink := &groupConcatWarningSink{}
+	ReportGroupConcatWarnings(target, sink)
+	require.Equal(t, uint64(2), sink.total)
+	require.ElementsMatch(t, []string{
+		"Row 3 was cut by GROUP_CONCAT()",
+		"Row 8 was cut by GROUP_CONCAT()",
+	}, sink.messages)
+
+	results[0].Free(mp)
+	values.Free(mp)
+	source.Free()
+	target.Free()
+	require.NoError(t, source.ClearAllocationAccount(allocation))
+	require.NoError(t, target.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestJsonObjectAggIntermediateRoundTrip(t *testing.T) {

@@ -483,6 +483,11 @@ func (group *Group) ensureRuntimeEmptyGroupingSet() error {
 
 func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
 	var err error
+	inputRowBase := group.ctr.inputRowCount
+	if group.hasGroupConcat() && bat != nil && bat.RowCount() > 0 {
+		inputRowBase = proc.NextGroupConcatInputRowBase(
+			group.Idx, uint64(bat.RowCount()))
+	}
 
 	// without group by, there is only one group.
 	if group.ctr.mtyp == H0 {
@@ -502,6 +507,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			); err != nil {
 				return false, err
 			}
+			group.ctr.inputRowCount += uint64(bat.RowCount())
 			group.OpAnalyzer.SetMemUsed(group.ctr.memUsed())
 			return false, nil
 		}
@@ -530,6 +536,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 					}
 				}
 				for i, agg := range group.ctr.aggList {
+					aggexec.SetGroupConcatInputRowBase(agg, inputRowBase)
 					if err = agg.BatchFill(
 						offset, groups, group.ctr.aggArgEvaluate[i].Vec); err != nil {
 						return false, err
@@ -548,6 +555,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 				}
 			}
 		}
+		group.ctr.inputRowCount += uint64(bat.RowCount())
 		group.OpAnalyzer.SetMemUsed(group.ctr.memUsed())
 		return false, nil
 	} else {
@@ -659,6 +667,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 							}
 						}
 						for j, agg := range group.ctr.aggList {
+							aggexec.SetGroupConcatInputRowBase(agg, inputRowBase)
 							if err = agg.BatchFill(
 								i, aggregateGroups, group.ctr.aggArgEvaluate[j].Vec); err != nil {
 								return false, err
@@ -706,8 +715,18 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 				needSpill = group.ctr.needSpill(group.OpAnalyzer)
 			}
 		}
+		group.ctr.inputRowCount += uint64(bat.RowCount())
 		return needSpill, nil
 	}
+}
+
+func (group *Group) hasGroupConcat() bool {
+	for _, agg := range group.Aggs {
+		if agg.GetAggID() == aggexec.AggIdOfGroupConcat {
+			return true
+		}
+	}
+	return false
 }
 
 func dynamicGroupingAggregateGroups(
@@ -1254,6 +1273,7 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 			[]prepareParamKindRowsSource, len(group.ctr.aggList))
 	}
 	for i, ag := range group.ctr.aggList {
+		aggexec.SetGroupConcatSourceRowWire(ag, groupConcatSourceRowWireEnabled(proc))
 		if vec := ag.PrepareParamKindVectorForChunk(curr); vec != nil &&
 			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
