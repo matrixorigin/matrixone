@@ -5942,6 +5942,48 @@ func TestCreateTableAsSelectPreservesIntervalSyntax(t *testing.T) {
 	}
 }
 
+func TestCreateTableAsSelectPreservesUnixTimePrecision(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, `create table ctas_unix_precision as select
+		from_unixtime(cast(1.123 as decimal(10,3))) d3,
+		from_unixtime(cast(1.123456789 as decimal(12,9))) d9,
+		from_unixtime(cast(1.25 as double)) f`)
+	require.NoError(t, err)
+	cols := logicPlan.GetDdl().GetCreateTable().TableDef.Cols
+	for i, scale := range []int32{3, 6, 6} {
+		require.Equal(t, scale, cols[i].Typ.Scale)
+		require.Equal(t, scale, cols[i].Typ.Width)
+	}
+}
+
+func TestCreateTableAsSelectUsesTemporalASTSyntax(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, `
+		create table ctas_temporal_syntax as
+		select
+			timestampadd(microsecond, 1, cast('2024-01-02 03:04:05.123456' as datetime(6))) as added,
+			extract(microsecond from timestampadd(second, 1, cast('2024-01-02 03:04:05.123456' as datetime(6)))) as extracted,
+			'extract(hour from quoted)' as quoted_data`)
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	require.Equal(t, int32(6), createTable.TableDef.Cols[0].Typ.Scale)
+	require.Equal(t, int32(6), createTable.TableDef.Cols[0].Typ.Width)
+	insertSQL := createTable.GetCreateAsSelectSql()
+	require.Contains(t, insertSQL, "timestampadd(microsecond, 1,")
+	require.Contains(t, insertSQL, "extract(microsecond from timestampadd(second, 1,")
+	require.Contains(t, insertSQL, `"extract(hour from quoted)"`)
+	require.NotContains(t, insertSQL, "extract(microsecond,")
+	require.NotContains(t, insertSQL, `'microsecond'`)
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, insertSQL, 1)
+	require.NoError(t, err)
+	formatted := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithQuoteIdentifier(), tree.WithSingleQuoteString())
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, formatted, 1)
+	require.NoError(t, err)
+}
+
 func TestParseDuration(t *testing.T) {
 
 	cases := []struct {
