@@ -757,7 +757,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		resetStatsInfoPreRun(stats, isInExecutor)
 
 		// Retry compilation can itself emit expression diagnostics.
-		warnings = newWarningAttempt(c.proc)
+		warnings = newWarningAttempt(c.proc, promoteGroupConcatCut)
 		nextRunC, buildErr := c.buildRetryCompile(defChanged || forcePreMode)
 		carriedPreRunWall = time.Since(attemptStart)
 		attemptPreRunWall = carriedPreRunWall

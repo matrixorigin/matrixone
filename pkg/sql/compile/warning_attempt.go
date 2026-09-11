@@ -27,7 +27,7 @@ type warningAttempt struct {
 	previous  map[*process.Process]any
 }
 
-func newWarningAttempt(proc *process.Process, force ...bool) *warningAttempt {
+func newWarningAttempt(proc *process.Process, required bool) *warningAttempt {
 	if proc == nil {
 		return nil
 	}
@@ -35,8 +35,7 @@ func newWarningAttempt(proc *process.Process, force ...bool) *warningAttempt {
 	_, single := destination.(warningDiagnosticSink)
 	_, batch := destination.(warningDiagnosticBatchSink)
 	_, count := destination.(warningDiagnosticCountSink)
-	forced := len(force) > 0 && force[0]
-	if !single && !batch && !count && !forced {
+	if !single && !batch && !count && !required {
 		return nil
 	}
 	a := &warningAttempt{collector: &remoteWarningCollector{}, previous: make(map[*process.Process]any)}
@@ -121,8 +120,13 @@ func (a *warningAttempt) finish(success bool, destination any) {
 	if a == nil {
 		return
 	}
-	total, warnings := a.collector.closeWarnings(success)
+	total, warnings, cut, cutMessage := a.collector.closeWarnings(success)
 	a.restore()
+	if cut {
+		if marker, ok := destination.(groupConcatCutMarker); ok {
+			marker.markGroupConcatCut(cutMessage)
+		}
+	}
 	if total == 0 {
 		return
 	}

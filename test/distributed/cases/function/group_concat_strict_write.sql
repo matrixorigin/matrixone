@@ -41,8 +41,8 @@ select gc from dst where id = 1;
 
 insert ignore into dst_ignore
 select group_concat(v order by id separator '|') from src;
-select gc from dst_ignore;
 show warnings;
+select gc from dst_ignore;
 
 set session sql_mode = '';
 insert into dst_nonstrict

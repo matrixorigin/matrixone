@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -74,7 +75,7 @@ func TestInternalSQLWarningAttemptOutcomes(t *testing.T) {
 					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, internal)
 				}
 			})
-			parent := newWarningAttempt(proc)
+			parent := newWarningAttempt(proc, false)
 			defer func() { parent.finish(false, session) }()
 			c := &Compile{proc: proc}
 			sql := "select group_concat(s order by s separator '') from (select 'abc' s union all select 'def') t"
@@ -94,7 +95,7 @@ func TestInternalSQLWarningAttemptOutcomes(t *testing.T) {
 			require.Zero(t, session.totalWarnings, "internal SQL must not publish directly to Session")
 			if outcome == "retry" {
 				parent.finish(false, session)
-				parent = newWarningAttempt(proc)
+				parent = newWarningAttempt(proc, false)
 				res, err = c.runSqlWithResultAndOptions(sql, NoAccountId, executor.StatementOption{}.WithDisableLog())
 				require.NoError(t, err)
 				res.Close()
@@ -112,13 +113,16 @@ func TestInternalSQLWarningAttemptOutcomes(t *testing.T) {
 }
 
 func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
-	for _, outcome := range []string{"success", "retry", "failure", "panic"} {
+	for _, outcome := range []string{"success", "retry", "failure", "panic", "strict retry without sink"} {
 		t.Run(outcome, func(t *testing.T) {
 			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 			proc := testutil.NewProcess(t)
 			session := &remoteWarningSession{}
 			session.AppendWarningDiagnostic(1, "before execution")
 			proc.Session = session
+			if outcome == "strict retry without sink" {
+				proc.Session = nil
+			}
 			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 				if name == "group_concat_max_len" {
 					return int64(5), nil
@@ -159,7 +163,7 @@ func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
 				}
 				senders = append(senders, &messageSenderOnClient{warningSink: proc.GetWarningSink().(warningDiagnosticSink)})
 				switch outcome {
-				case "retry":
+				case "retry", "strict retry without sink":
 					if evaluations == 1 {
 						return moerr.NewTxnNeedRetryNoCtx()
 					}
@@ -170,13 +174,21 @@ func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
 				}
 				return nil
 			}))
+			// Use the real Run/retry lifecycle with a SELECT producer and
+			// strict-write policy; BVT separately verifies actual write rollback.
+			if outcome == "strict retry without sink" {
+				c.stmt = &tree.Insert{}
+			}
 			if outcome == "panic" {
 				// Pipeline panic recovery may convert the panic to an execution error.
 				func() { defer func() { _ = recover() }(); _, err = c.Run(0); require.Error(t, err) }()
 			} else {
 				_, err = c.Run(0)
-				if outcome == "failure" {
+				if outcome == "failure" || outcome == "strict retry without sink" {
 					require.Error(t, err)
+					if outcome == "strict retry without sink" {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrGroupConcatCut))
+					}
 				} else {
 					require.NoError(t, err)
 				}
@@ -190,7 +202,7 @@ func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
 			require.NoError(t, senders[len(senders)-1].dealRemoteTerminal(latePayload))
 			require.Equal(t, want, session.totalWarnings)
 			require.Nil(t, proc.WarningSink)
-			if outcome == "retry" {
+			if outcome == "retry" || outcome == "strict retry without sink" {
 				require.Equal(t, 2, evaluations)
 				require.Equal(t, 1, c.retryTimes)
 			}
@@ -202,9 +214,9 @@ func TestWarningAttemptNestedAndBounded(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	session := &remoteWarningSession{}
 	proc.Session = session
-	parent := newWarningAttempt(proc)
+	parent := newWarningAttempt(proc, false)
 	childProc := proc.NewNoContextChildProc(0)
-	child := newWarningAttempt(childProc)
+	child := newWarningAttempt(childProc, false)
 	child.collector.AppendWarningBatch(1000, []uint16{1260}, []string{"child"})
 	child.finish(true, parent.collector)
 	require.Zero(t, session.totalWarnings)
@@ -214,7 +226,7 @@ func TestWarningAttemptNestedAndBounded(t *testing.T) {
 	childProc.GetWarningSink().(warningDiagnosticSink).AppendWarningDiagnostic(1260, "late child")
 	require.Zero(t, session.totalWarnings)
 
-	attempt := newWarningAttempt(proc)
+	attempt := newWarningAttempt(proc, false)
 	for i := 0; i < 1000; i++ {
 		attempt.collector.AppendWarningDiagnostic(1260, "bounded")
 	}
@@ -310,7 +322,7 @@ func TestWarningAttemptConcurrentSeal(t *testing.T) {
 	// No Session means no diagnostics work or traversal on background queries.
 	proc := testutil.NewProcess(t)
 	proc.Session = nil
-	require.Zero(t, testing.AllocsPerRun(100, func() { require.Nil(t, newWarningAttempt(proc)) }))
+	require.Zero(t, testing.AllocsPerRun(100, func() { require.Nil(t, newWarningAttempt(proc, false)) }))
 }
 
 func TestStrictWriteGroupConcatPromotionPolicy(t *testing.T) {
@@ -389,4 +401,31 @@ func TestStrictWriteGroupConcatCutReturnsMySQLError1260(t *testing.T) {
 	attempt.finish(false, nil)
 	cut, _ := attempt.groupConcatCutDiagnostic()
 	require.False(t, cut, "failed statement must discard the attempt marker")
+}
+
+func TestGroupConcatMarkerSurvivesNestedDiagnosticLimit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Session = nil
+	parent := newWarningAttempt(proc, true)
+	childProc := proc.NewNoContextChildProc(0)
+	child := newWarningAttempt(childProc, false)
+	for i := 0; i < remoteWarningRetentionLimit; i++ {
+		child.collector.AppendWarningDiagnostic(1, "earlier warning")
+	}
+	child.collector.AppendWarningDiagnostic(moerr.ER_CUT_VALUE_GROUP_CONCAT, "cut beyond retained diagnostics")
+	child.finish(true, parent.collector)
+	cut, message := parent.groupConcatCutDiagnostic()
+	require.True(t, cut)
+	require.Equal(t, "cut beyond retained diagnostics", message)
+	total, retained := parent.collector.SnapshotWarnings()
+	require.Equal(t, uint64(remoteWarningRetentionLimit+1), total)
+	require.Len(t, retained, remoteWarningRetentionLimit)
+	child.finish(true, parent.collector)
+	totalAgain, _ := parent.collector.SnapshotWarnings()
+	require.Equal(t, total, totalAgain)
+	parent.finish(false, nil)
+	cut, _ = parent.groupConcatCutDiagnostic()
+	require.False(t, cut)
+	require.Nil(t, proc.WarningSink)
 }

@@ -120,8 +120,7 @@ func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16
 		}
 		message := ""
 		if i < len(messages) {
-			message = process.BoundWarningMessage(
-				messages[i], process.WarningDiagnosticMaxMessageBytes)
+			message = messages[i]
 		}
 		s.markGroupConcatCutLocked(message)
 		break
@@ -170,7 +169,7 @@ func (s *remoteWarningCollector) markGroupConcatCut(message string) {
 func (s *remoteWarningCollector) markGroupConcatCutLocked(message string) {
 	s.groupConcatCut = true
 	if s.groupConcatCutMessage == "" && message != "" {
-		s.groupConcatCutMessage = message
+		s.groupConcatCutMessage = process.BoundWarningMessage(message, process.WarningDiagnosticMaxMessageBytes)
 	}
 }
 
@@ -195,18 +194,19 @@ func (s *remoteWarningCollector) SnapshotWarnings() (uint64, []remoteWarningDiag
 // closeWarnings atomically seals an attempt against late local/RPC writers.
 // Failed attempts discard without copying; successful attempts transfer the
 // bounded records exactly once. A collector is never reopened for a retry.
-func (s *remoteWarningCollector) closeWarnings(success bool) (uint64, []remoteWarningDiagnostic) {
+func (s *remoteWarningCollector) closeWarnings(success bool) (uint64, []remoteWarningDiagnostic, bool, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return 0, nil
+		return 0, nil, false, ""
 	}
 	s.closed = true
 	total, warnings := s.warningCount, s.warnings
+	cut, message := s.groupConcatCut, s.groupConcatCutMessage
 	s.warningCount, s.warnings, s.warningBytes = 0, nil, 0
 	s.groupConcatCut, s.groupConcatCutMessage = false, ""
 	if !success {
-		return 0, nil
+		return 0, nil, false, ""
 	}
-	return total, warnings
+	return total, warnings, cut, message
 }
