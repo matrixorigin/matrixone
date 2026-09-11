@@ -2078,6 +2078,12 @@ func validateRemoteExpressionPipelineProtocol(
 			"typed numeric FORMAT arguments require MORPC protocol version 59",
 		)
 	}
+	if features.TypedConversionFunctions &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion64) {
+		return moerr.NewNotSupportedNoCtx(
+			"typed BIN/CONV execution requires MORPC protocol version 64",
+		)
+	}
 	return nil
 }
 
