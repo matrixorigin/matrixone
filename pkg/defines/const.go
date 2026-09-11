@@ -96,8 +96,10 @@ const (
 	MORPCVersion58     int64 = 58 // binary-string function semantics and runtime-domain metadata
 	MORPCVersion59     int64 = 59 // typed numeric FORMAT arguments in remote expressions
 	MORPCVersion60     int64 = 60 // row-dependent expression defaults
-	MORPCVersion61     int64 = 61 // widened signed-integer unary-minus result vectors
-	MORPCLatestVersion       = MORPCVersion61
+	MORPCVersion61     int64 = 61 // index metadata provenance columns (nrow, build_ts)
+	MORPCVersion62     int64 = 62 // VARCHAR OCT overload identities
+	MORPCVersion63     int64 = 63 // widened signed-integer unary-minus result vectors
+	MORPCLatestVersion       = MORPCVersion63
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

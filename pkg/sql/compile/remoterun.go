@@ -99,6 +99,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateRemoteBinaryStringPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateOctStringProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -123,6 +126,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateOctStringProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
@@ -229,6 +235,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateOctStringProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
@@ -2064,9 +2073,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.WidenedUnaryMinus &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion61) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion63) {
 		return moerr.NewNotSupportedNoCtx(
-			"widened integer unary minus requires MORPC protocol version 61",
+			"widened integer unary minus requires MORPC protocol version 63",
 		)
 	}
 	return nil
