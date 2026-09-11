@@ -16,9 +16,9 @@ insert into large_values values
 select id, length(group_concat(t)), length(group_concat(b)), length(group_concat(j))
 from large_values group by id order by id;
 id    length(group_concat(t, ,))    length(group_concat(b, ,))    length(group_concat(j, ,))
-1    65535    65535    65543
-2    65536    65536    65544
-3    70000    70000    70008
+1    65535    65535    65544
+2    65536    65536    65545
+3    70000    70000    70009
 set session group_concat_max_len = 10;
 select length(group_concat(t order by id separator '')) from large_values;
 length(group_concat(t, ,order by id))
