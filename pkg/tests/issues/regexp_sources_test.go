@@ -270,6 +270,35 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 				})
 			}
 		})
+		t.Run("replace_optional_null_precedence", func(t *testing.T) {
+			for _, tc := range []struct {
+				query string
+				args  []any
+				err   bool
+			}{
+				{"select regexp_replace(?, ?, ?, ?)", []any{"abc", "a\xc3b", "X", nil}, true},
+				{"select regexp_replace(?, ?, ?, ?, ?)", []any{"abc", "a", "X", int64(0), nil}, false},
+				{"select regexp_replace(?, ?, ?, ?)", []any{"abc", "a", "X\xc3Y", nil}, false},
+				{"select regexp_replace(?, ?, ?, ?, ?)", []any{"abc", "a", "X\xc3Y", int64(1), nil}, false},
+			} {
+				withStatement(t, tc.query, func(stmt *sql.Stmt) {
+					wire.mu.Lock()
+					wire.mask = 0
+					wire.mu.Unlock()
+					var value sql.NullString
+					err := stmt.QueryRowContext(ctx, tc.args...).Scan(&value)
+					if tc.err {
+						require.Error(t, err)
+						var sqlError *mysql.MySQLError
+						require.ErrorAs(t, err, &sqlError)
+						require.Equal(t, uint16(3854), sqlError.Number)
+					} else {
+						require.NoError(t, err)
+						require.False(t, value.Valid)
+					}
+				})
+			}
+		})
 		t.Run("replace_null_precedes_malformed_subject", func(t *testing.T) {
 			for _, query := range []string{
 				"select regexp_replace(?, ?, 'X')",

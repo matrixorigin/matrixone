@@ -178,6 +178,7 @@ func TestRegexpOutputEncoding(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tc.prefix, prefix)
 	}
+	require.Equal(t, string([]byte{0x7f})+"\\x80", regexpEscapedConversionValue(string([]byte{0x7f, 0x80})))
 	_, escapedErr := regexpTextPrefix("a\xc3b")
 	require.EqualError(t, escapedErr, "Cannot convert string 'a\\xC3b' from utf8mb4 to utf16le")
 	_, escapedErr = regexpTextPrefix("a\\\xc3b")

@@ -121,7 +121,7 @@ func regexpEscapedConversionValue(value string) string {
 	const mysqlSourceByteLimit = 6
 	var output strings.Builder
 	for i := 0; i < min(len(value), mysqlSourceByteLimit); i++ {
-		if value[i] >= 0x20 && value[i] <= 0x7e {
+		if value[i] >= 0x20 && value[i] <= 0x7f {
 			output.WriteByte(value[i])
 		} else {
 			fmt.Fprintf(&output, "\\x%02X", value[i])

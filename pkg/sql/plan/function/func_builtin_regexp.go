@@ -1448,7 +1448,7 @@ func (op *opBuiltInRegexp) builtInRegexpLike(parameters []*vector.Vector, result
 }
 
 func (op *opBuiltInRegexp) validateRegexpReplaceRow(
-	pattern string, patternNull bool, position int64, positionNull bool,
+	pattern string, patternNull bool, position int64, optionalArgumentNull bool,
 	replacementErr error, matchingBinary bool,
 ) error {
 	if !patternNull {
@@ -1456,7 +1456,10 @@ func (op *opBuiltInRegexp) validateRegexpReplaceRow(
 			return err
 		}
 	}
-	if !positionNull && position <= 0 {
+	if optionalArgumentNull {
+		return nil
+	}
+	if position <= 0 {
 		return moerr.NewInvalidInputNoCtxf(
 			"regexp_replace: Index out of bounds in regular expression search. Search start position: %d", position)
 	}
@@ -1586,7 +1589,7 @@ func (op *opBuiltInRegexp) builtInRegexpReplace(parameters []*vector.Vector, res
 			matchingIsBinary := regexpMatchUsesBinary(parameters, int(i))
 			replacement := functionUtil.QuickBytesToStr(v3)
 			if err := op.validateRegexpReplaceRow(
-				functionUtil.QuickBytesToStr(v2), null2, v4, null4, p3.Error(), matchingIsBinary,
+				functionUtil.QuickBytesToStr(v2), null2, v4, null4 || null5, p3.Error(), matchingIsBinary,
 			); err != nil {
 				return err
 			}
