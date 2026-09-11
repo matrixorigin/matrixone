@@ -7026,7 +7026,7 @@ func appendStringAssignmentTruncationWarning(
 	if proc == nil {
 		return
 	}
-	appender, ok := proc.GetSession().(warningDiagnosticAppender)
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
 	if !ok {
 		return
 	}
