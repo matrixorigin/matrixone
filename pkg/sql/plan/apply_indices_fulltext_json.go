@@ -669,6 +669,17 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 	if !ok || int(pkPos) >= len(scanNode.TableDef.Cols) || scanNode.TableDef.Cols[pkPos].Hidden {
 		return jsonProbeSkip, types.TS{}
 	}
+	// The tail runs table_changes(build_ts, readTS], which table_changes REFUSES to span across a
+	// schema-version change (its after/until/query-snapshot must share one TableDef.Version). So if
+	// the source table's schema version at build_ts differs from what the read sees, a DDL sits in the
+	// gap -- decline to a full scan (always correct) rather than emit a tail that errors at runtime.
+	// Any resolve failure fails closed to the full scan too. This is the same version equality the
+	// operator would hit at runtime, applied at plan time to DECIDE instead of ERROR.
+	vAtRead := rel.CopyTableDef(ctx).Version
+	_, _, relAtBuild, berr := eng.GetRelationById(ctx, txn.CloneSnapshotOp(buildTS.ToTimestamp()), scanNode.TableDef.TblId)
+	if berr != nil || relAtBuild.CopyTableDef(ctx).Version != vAtRead {
+		return jsonProbeSkip, types.TS{}
+	}
 	return jsonProbePartial, buildTS
 }
 

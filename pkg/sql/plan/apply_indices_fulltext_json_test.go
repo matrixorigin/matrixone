@@ -638,6 +638,73 @@ func (fakeSourceRel) SourceCommitTS(context.Context, types.TS) (types.TS, error)
 	return types.BuildTS(50, 0), nil
 }
 
+// CopyTableDef feeds the behind-branch schema-version span-check. A single fixed version means
+// build_ts and the read resolve to the SAME version (no DDL in the gap) -> the probe stays partial.
+func (fakeSourceRel) CopyTableDef(context.Context) *plan.TableDef {
+	return &plan.TableDef{Version: 1}
+}
+
+// schemaSpanEngine returns a DIFFERENT schema version on its 2nd GetRelationById call than its 1st:
+// decideJSONProbe resolves the read-point relation first, then the build_ts relation, so this
+// simulates a DDL (version bump) inside (build_ts, read] -- the tail would span it.
+type schemaSpanEngine struct {
+	engine.Engine
+	calls *int
+}
+
+func (e schemaSpanEngine) GetRelationById(context.Context, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
+	*e.calls++
+	v := uint32(2) // 1st call: the read point (current version)
+	if *e.calls >= 2 {
+		v = 1 // 2nd call: as of build_ts (older version) -> differs -> span
+	}
+	return "", "", schemaSpanRel{v: v}, nil
+}
+
+type schemaSpanRel struct {
+	engine.Relation
+	v uint32
+}
+
+func (r schemaSpanRel) SourceCommitTS(context.Context, types.TS) (types.TS, error) {
+	return types.BuildTS(50, 0), nil
+}
+func (r schemaSpanRel) CopyTableDef(context.Context) *plan.TableDef {
+	return &plan.TableDef{Version: r.v}
+}
+
+// A BEHIND index whose (build_ts, read] window crosses a schema-version change must decline to a
+// full scan, not emit a table_changes tail that would error at runtime ("single source schema
+// version..."). Any resolve failure fails closed to the full scan too.
+func TestDecideJSONProbeSchemaSpanFullScan(t *testing.T) {
+	origCovers := coversSnapshotFn
+	defer func() { coversSnapshotFn = origCovers }()
+	coversSnapshotFn = func(context.Context, string, coverage.Request) (bool, types.TS, error) {
+		return false, types.BuildTS(100, 0), nil // behind, build_ts known -> reaches the span-check
+	}
+	idx := jpJSONIndex("j", `{"parser":"json"}`)
+	mockCtx := NewMockCompilerContext(false)
+	proc := mockCtx.GetProcess()
+	proc.Base.TxnOperator = fakeCoverageTxn{}
+	calls := 0
+	proc.Base.SessionInfo.StorageEngine = schemaSpanEngine{calls: &calls}
+	scan := &plan.Node{
+		NodeType:    plan.Node_TABLE_SCAN,
+		BindingTags: []int32{7},
+		ObjRef:      &plan.ObjectRef{SchemaName: "db", ObjName: "t"},
+		TableDef: &plan.TableDef{
+			TblId: 424242, TableType: catalog.SystemOrdinaryRel,
+			Cols:          []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}}, {Name: "j", Typ: plan.Type{Id: int32(types.T_json)}}},
+			Name2ColIndex: map[string]int32{"id": 0, "j": 1},
+			Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+			Indexes:       []*plan.IndexDef{idx},
+		},
+	}
+	b := &QueryBuilder{compCtx: mockCtx}
+	kind, _ := b.decideJSONProbe(scan, idx)
+	require.Equal(t, jsonProbeSkip, kind, "behind + schema-version span in the gap -> full scan, not a spanning tail")
+}
+
 // recordingSourceEngine captures the account id bound on the context GetRelationById is called with,
 // so a test can assert a cross-account snapshot's freshness reads resolve under the snapshot's owner.
 type recordingSourceEngine struct {
