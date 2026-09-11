@@ -1130,6 +1130,11 @@ type ExecCtx struct {
 	// singleStatementQuery is true only for a raw COM_QUERY containing one
 	// statement, which is the only input the proxy records for raw replay.
 	singleStatementQuery bool
+	// resetDiagnosticsAfterStatement delays clearing the diagnostics until a
+	// count-only SELECT has evaluated its system-variable expressions. MySQL
+	// exposes those expressions from the preceding statement, then treats the
+	// SELECT itself as nondiagnostic.
+	resetDiagnosticsAfterStatement bool
 	// tenant name
 	tenant          string
 	userName        string
@@ -1175,6 +1180,7 @@ func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
 		execCtx.effectiveTxnDefaultDatabase = input.preparedDefaultDatabase
 	}
 	execCtx.persistentDropTableTargets = nil
+	execCtx.resetDiagnosticsAfterStatement = false
 }
 
 func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
@@ -1205,6 +1211,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.implicitCommitBefore = false
 	execCtx.persistentDropTableTargets = nil
 	execCtx.singleStatementQuery = false
+	execCtx.resetDiagnosticsAfterStatement = false
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""
@@ -1730,6 +1737,13 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	name = strings.ToLower(name)
 	if _, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	}
+	if name == warningCountSystemVariable || name == errorCountSystemVariable {
+		warningCount, errorCount := ses.diagnosticsCounts()
+		if name == warningCountSystemVariable {
+			return warningCount, nil
+		}
+		return errorCount, nil
 	}
 
 	// init SystemVariables GlobalSysVarsMgr need to read table, read table need to use SessionSysVar
