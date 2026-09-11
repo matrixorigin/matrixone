@@ -815,12 +815,14 @@ func TestFinalVersionReadinessRequiresExactReadyCatalogRow(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			var finalVersion string
 			exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-				require.Contains(t, sql, "where version = '4.0.6'")
+				require.Contains(t, sql, "where version = '"+finalVersion+"'")
 				return newBootstrapStateResult(tc.states...), nil
 			})
 			svc := NewService("", &memLocker{},
 				clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec)
+			finalVersion = svc.GetFinalVersion()
 			require.NoError(t, svc.(*service).refreshFinalVersionReadiness(context.Background()))
 			require.Equal(t, tc.ready, svc.IsFinalVersionReady())
 		})

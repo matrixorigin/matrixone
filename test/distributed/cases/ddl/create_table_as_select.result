@@ -661,8 +661,8 @@ create table string07 as select startswith(col1, ' '), endswith(col1, ' ') from 
 show create table string07;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string07  ¦  CREATE TABLE `string07` (
-  `startswith(col1,  )` bool DEFAULT NULL,
-  `endswith(col1,  )` bool DEFAULT NULL
+  `startswith(string01.col1,  )` bool DEFAULT NULL,
+  `endswith(string01.col1,  )` bool DEFAULT NULL
 )
 select * from string07;
 ➤ startswith(col1,  )[-7,1,0]  ¦  endswith(col1,  )[-7,1,0]  𝄀
