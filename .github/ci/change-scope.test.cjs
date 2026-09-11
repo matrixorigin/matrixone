@@ -104,6 +104,44 @@ function entrypointJobs() {
     .map(match => [match[1], match[2]]));
 }
 
+function checkoutSpec(block) {
+  const lines = block.split('\n');
+  const checkoutIndex = lines.findIndex(line => /^      - uses: actions\/checkout@/.test(line));
+  assert.notEqual(checkoutIndex, -1, 'job must contain the trusted checkout');
+  assert.equal(lines[checkoutIndex + 1].trim(), 'with:');
+  const spec = {};
+  for (const line of lines.slice(checkoutIndex + 2)) {
+    if (/^      - /.test(line) || /^  [\w-]+:/.test(line)) break;
+    const match = line.match(/^\s{10}([\w-]+):\s*(.+)$/);
+    if (match) spec[match[1]] = match[2];
+  }
+  return spec;
+}
+
+function selectFixtureCheckout(block, context, refs) {
+  const spec = checkoutSpec(block);
+  const expressions = {
+    'github.repository': context.repository,
+    'github.workflow_sha': context.workflowSha,
+    'github.event.pull_request.base.sha': context.baseSha,
+    'github.event.pull_request.head.sha': context.headSha,
+  };
+  const resolve = value => {
+    const match = value.match(/^\$\{\{\s*(.+?)\s*\}\}$/);
+    return match ? expressions[match[1]] : value;
+  };
+  const repository = resolve(spec.repository);
+  const ref = resolve(spec.ref);
+  assert.equal(repository, context.repository, 'checkout must stay in the target repository');
+  const refName = Object.entries({
+    base: context.baseSha,
+    workflow: context.workflowSha,
+    head: context.headSha,
+  }).find(([, value]) => value === ref)?.[0];
+  assert.ok(refName, `unexpected checkout ref: ${ref}`);
+  return { repository, ref, refName, path: refs[refName] };
+}
+
 test('gates accept intentional omissions but reject failed, cancelled, skipped or missing required work', () => {
   const jobs = {
     docs: ['docs-check'], ut: ['matrixone-ci'],
@@ -182,6 +220,14 @@ test('entrypoint routes each scope through one required check', () => {
     assert.match(blocks[job], /WORKFLOW_SHA: \$\{\{ github.workflow_sha \}\}/);
     assert.match(blocks[job], /PR_BASE_SHA: \$\{\{ github.event.pull_request.base.sha \}\}/);
     assert.match(blocks[job], /PR_HEAD_SHA: \$\{\{ github.event.pull_request.head.sha \}\}/);
+    const provenance = blocks[job].indexOf('name: Record CI provenance');
+    const checkout = blocks[job].indexOf('uses: actions/checkout@');
+    assert.ok(provenance >= 0 && provenance < checkout, `${job} records provenance before checkout`);
+    const provenanceBlock = blocks[job].slice(provenance, checkout);
+    assert.match(provenanceBlock, /GITHUB_STEP_SUMMARY/);
+    assert.match(provenanceBlock, /echo "- Workflow SHA: \$\{WORKFLOW_SHA\}"/);
+    assert.match(provenanceBlock, /echo "- PR base SHA: \$\{PR_BASE_SHA\}"/);
+    assert.match(provenanceBlock, /echo "- PR head SHA: \$\{PR_HEAD_SHA\}"/);
   }
 });
 
@@ -190,7 +236,7 @@ function loadFixtureHelper(path) {
   return require(path);
 }
 
-test('workflow provenance selects its helper when base is missing and head is untrusted', async () => {
+test('workflow provenance selects both helpers from the actual checkout config', async () => {
   const root = mkdtempSync(join(tmpdir(), 'matrixone-ci-provenance-'));
   const refs = Object.fromEntries(['base', 'workflow', 'head'].map(ref => {
     const dir = join(root, ref);
@@ -201,18 +247,32 @@ test('workflow provenance selects its helper when base is missing and head is un
     cpSync(join(__dirname, 'change-scope.cjs'), join(refs.workflow, '.github', 'ci', 'change-scope.cjs'));
     writeFileSync(
       join(refs.head, '.github', 'ci', 'change-scope.cjs'),
-      "module.exports = { resolveScope: async () => 'docs' };\n",
+      "module.exports = { resolveScope: async () => 'docs', verifyResults: () => { throw new Error('untrusted helper selected'); } };\n",
     );
 
+    const context = {
+      repository: 'matrixorigin/matrixone',
+      workflowSha: 'workflow-sha',
+      baseSha: 'base-sha',
+      headSha: 'head-sha',
+    };
+    const blocks = entrypointJobs();
+    const changeScopeCheckout = selectFixtureCheckout(blocks['change-scope'], context, refs);
+    const ciRequiredCheckout = selectFixtureCheckout(blocks['ci-required'], context, refs);
+    assert.equal(changeScopeCheckout.refName, 'workflow');
+    assert.deepEqual(ciRequiredCheckout, changeScopeCheckout);
+
     const basePath = join(refs.base, '.github', 'ci', 'change-scope.cjs');
-    const workflowPath = join(refs.workflow, '.github', 'ci', 'change-scope.cjs');
+    const workflowPath = changeScopeCheckout.path + '/.github/ci/change-scope.cjs';
     const headPath = join(refs.head, '.github', 'ci', 'change-scope.cjs');
     assert.throws(() => require(basePath), /Cannot find module/);
 
     const workflowHelper = loadFixtureHelper(workflowPath);
     const headHelper = loadFixtureHelper(headPath);
     assert.equal(await workflowHelper.resolveScope(client({ files: [modified('pkg/a.go')] })), 'full');
+    assert.match(workflowHelper.verifyResults('full', results()), /all required jobs passed/);
     assert.equal(await headHelper.resolveScope(client({ files: [modified('pkg/a.go')] })), 'docs');
+    assert.throws(() => headHelper.verifyResults('full', results()), /untrusted helper selected/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
