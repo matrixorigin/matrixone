@@ -1100,6 +1100,43 @@ func PreparedPlanBitCountFallbackParamPositions(preparePlan *Plan) []int32 {
 	return preparedPlanFunctionFallbackParamPositions(preparePlan, "bit_count")
 }
 
+// PreparedPlanConversionParamPositions returns the marker positions used as
+// the value operand of BIN/CONV. These functions defer their first-operand
+// domain until EXECUTE, so SQL PREPARE needs the positions once per plan
+// generation rather than rescanning the expression tree on every execution.
+func PreparedPlanConversionParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+			return nil
+		}
+		name := strings.ToLower(fn.Func.GetObjName())
+		if name != "bin" && name != "conv" {
+			return nil
+		}
+		if name == "conv" && len(fn.Args) != 3 {
+			return nil
+		}
+		if position, ok := preparedParamPosition(fn.Args[0]); ok {
+			positions[int32(position)] = struct{}{}
+		}
+		return nil
+	})
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
 func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName string) []int32 {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
 		return nil
@@ -4137,6 +4174,11 @@ func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.E
 }
 
 func preparedExprRequiresRuntimeSpecializationAt(functionName string, argIndex int, expr *plan.Expr) bool {
+	// Only CONV's first operand changes the executor domain. The base operands
+	// are numeric controls and do not justify copying/rebinding the plan.
+	if functionName == "bin" || functionName == "conv" {
+		return argIndex == 0 && preparedExprRequiresRuntimeSpecialization(functionName, expr)
+	}
 	// LAG/LEAD/NTH_VALUE offset markers affect row selection, not the result
 	// value's type. Their value argument remains domain-sensitive, while the
 	// cached compile can safely retain an offset parameter after validation.
@@ -4252,7 +4294,7 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	// the type of its first argument, so a binary parameter can change the
 	// result-column type from the prepare-time placeholder domain.
 	switch name {
-	case "ntile", "sleep",
+	case "bin", "conv", "ntile", "sleep",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
 		"ord", "char_length", "character_length",
 		"left", "right", "substring", "substr", "mid", "reverse",
@@ -5861,6 +5903,14 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 	case types.T_bool:
 		value, err := strconv.ParseBool(text)
 		if err != nil {
+			switch text {
+			case "0":
+				value, err = false, nil
+			case "1":
+				value, err = true, nil
+			}
+		}
+		if err != nil {
 			return castText()
 		}
 		return makeLiteral(&plan.Literal_Bval{Bval: value}), nil
@@ -5930,6 +5980,11 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 			return castText()
 		}
 		return makeLiteral(&plan.Literal_Dval{Dval: value}), nil
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+		// The plan literal protocol has no temporal oneofs. Keep the
+		// execute-time domain explicit with a typed cast so the dynamic
+		// executor receives a fixed-width temporal vector.
+		return castText()
 	case types.T_decimal64:
 		width, scale := runtimeType.Width, runtimeType.Scale
 		if width <= 0 || scale < 0 || scale > width {
@@ -5976,7 +6031,10 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 		// vector instead of treating the value as VARCHAR.
 		return castText()
 	default:
-		return makeLiteral(&plan.Literal_Sval{Sval: rawText}), nil
+		if runtimeType.Oid.IsMySQLString() {
+			return makeLiteral(&plan.Literal_Sval{Sval: rawText}), nil
+		}
+		return castText()
 	}
 }
 
