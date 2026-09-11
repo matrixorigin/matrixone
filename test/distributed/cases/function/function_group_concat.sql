@@ -342,6 +342,29 @@ show warnings;
 set session group_concat_max_len = 1024;
 drop table group_concat_warning_01;
 
+-- max_error_count bounds retained diagnostics without changing the aggregate
+-- result or the total warning count. Three truncating aggregates make the
+-- prefix boundary observable in SHOW WARNINGS.
+drop table if exists group_concat_warning_capacity;
+create table group_concat_warning_capacity (id int primary key, s varchar(16));
+insert into group_concat_warning_capacity values (1, 'aa'), (2, 'bb'), (3, 'cc');
+set session group_concat_max_len = 2;
+set session max_error_count = 1;
+select group_concat(s order by id separator ''),
+       group_concat(s order by id separator '|'),
+       group_concat(s order by id separator ':')
+from group_concat_warning_capacity;
+show warnings;
+set session max_error_count = 10;
+select group_concat(s order by id separator ''),
+       group_concat(s order by id separator '|'),
+       group_concat(s order by id separator ':')
+from group_concat_warning_capacity;
+show warnings;
+set session max_error_count = 1024;
+set session group_concat_max_len = 1024;
+drop table group_concat_warning_capacity;
+
 -- regression for issue #27589: supported wide and binary types must serialize
 -- consistently instead of failing in the group_concat payload writer
 drop table if exists group_concat_extended_types;

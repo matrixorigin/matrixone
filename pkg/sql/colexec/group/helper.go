@@ -1849,6 +1849,11 @@ func (ctr *container) makeAggListWithAllocation(
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
+		limit := process.WarningDiagnosticDefaultRetentionLimit
+		if ctr.warningRetentionSet {
+			limit = ctr.warningRetentionLimit
+		}
+		aggexec.ConfigureGroupConcatWarningRetention(aggList[i], limit)
 	}
 
 	if ctr.mtyp != H0 {

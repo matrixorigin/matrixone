@@ -988,7 +988,14 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
-	receiver.warningSession = &remoteWarningCollector{}
+	warningLimit := process.WarningDiagnosticLegacyRetentionLimit
+	if proc.Base.SessionInfo.MaxErrorCountSet {
+		warningLimit = proc.Base.SessionInfo.MaxErrorCount
+	}
+	receiver.warningSession = &remoteWarningCollector{
+		maxRetained:    warningLimit,
+		maxRetainedSet: true,
+	}
 	proc.Session = receiver.warningSession
 	if pHelper.hasPlanSnapshotTS {
 		proc.SetPlanSnapshotTS(pHelper.planSnapshotTS)

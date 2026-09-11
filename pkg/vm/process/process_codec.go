@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -146,6 +147,12 @@ func (proc *Process) BuildProcessInfo(
 		if loc == nil {
 			loc = time.Local
 		}
+		maxErrorCount := proc.Base.SessionInfo.MaxErrorCount
+		if proc.Base.SessionInfo.MaxErrorCountSet &&
+			(maxErrorCount < 0 || maxErrorCount > int(^uint16(0))) {
+			return procInfo, moerr.NewInvalidInputNoCtxf(
+				"invalid max_error_count %d", maxErrorCount)
+		}
 		timeBytes, err := time.Time{}.In(loc).MarshalBinary()
 		if err != nil {
 			return procInfo, err
@@ -166,6 +173,8 @@ func (proc *Process) BuildProcessInfo(
 			SqlMode:                resolveSqlMode(proc),
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
+			MaxErrorCount:          uint32(maxErrorCount),
+			MaxErrorCountSet:       proc.Base.SessionInfo.MaxErrorCountSet,
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
@@ -452,6 +461,10 @@ func ConvertToProcessLimitation(
 func ConvertToProcessSessionInfo(
 	sei pipeline.SessionInfo,
 ) (SessionInfo, error) {
+	if sei.MaxErrorCountSet && sei.MaxErrorCount > uint32(^uint16(0)) {
+		return SessionInfo{}, moerr.NewInvalidInputNoCtxf(
+			"invalid max_error_count %d", sei.MaxErrorCount)
+	}
 	sessionInfo := SessionInfo{
 		User:                                sei.User,
 		Host:                                sei.Host,
@@ -468,6 +481,8 @@ func ConvertToProcessSessionInfo(
 		SqlMode:                             sei.SqlMode,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
+		MaxErrorCount:                       int(sei.MaxErrorCount),
+		MaxErrorCountSet:                    sei.MaxErrorCountSet,
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)

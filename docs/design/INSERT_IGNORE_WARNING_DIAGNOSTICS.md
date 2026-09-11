@@ -6,7 +6,8 @@ This document defines the warning contract for rows that are already skipped
 by `INSERT IGNORE` or `UPDATE IGNORE`.  It is intentionally limited to
 constraint diagnostics; conversion warnings, transaction diagnostics, and a
 statement-wide replacement for the frontend diagnostic area are separate
-designs.
+designs.  The retained-record capacity is the session's `max_error_count`
+value, whose default is 1024 and whose valid range is 0 through 65535.
 
 ## Contract and invariants
 
@@ -14,8 +15,10 @@ For every input row skipped by a primary-key, unique-key, or CHECK constraint,
 the successful statement reports one warning with the original condition code.
 The existing arbitration order chooses the first rejecting constraint, so a row
 that violates several constraints still produces one warning.  The exact
-warning count is preserved independently of the at-most-64 records retained
-for `SHOW WARNINGS`.
+warning count is preserved independently of the `min(W, max_error_count)`
+records retained for `SHOW WARNINGS`.  A zero capacity retains no records
+while still reporting the count and returning ordinary SQL errors through the
+ERR response.
 
 The data decision is unchanged: only the existing IGNORE rejection path may
 record a warning.  Ordinary `INSERT`, `UPDATE`, `REPLACE`, and ODKU behavior
@@ -103,15 +106,21 @@ before a capability change from being sent with the new meaning.  The v62
 VARCHAR OCT capability remains intact; this change does not reinterpret or
 lower any existing protocol version.
 
+The session diagnostic capacity is carried in the appended protobuf SessionInfo
+fields. A receiver that does not send or understand those fields uses the
+legacy 64-record retention limit and continues execution; after all CNs are
+upgraded, the configured `max_error_count` is preserved through remote
+attempts.
+
 ## Cost and failure containment
 
-Each accumulator and remote collector retains at most 64 records and at most
-256 KiB of message bytes; an individual message is capped at 4 KiB.  Counts
-use saturating `uint64` arithmetic and are independent of either bound.  Each
-producer stops formatting after its local retained capacity, while the attempt
-collector applies the same global bound; a large ignored statement therefore
-does not retain or transmit every duplicate key.  The attempt binding map is
-proportional to live processes/scopes, not rows.
+Each accumulator and remote collector retains at most the statement's
+`max_error_count` records; an individual message is capped at 4 KiB.  Counts
+use saturating `uint64` arithmetic and are independent of the retained-record
+capacity.  Each producer stops formatting after its local capacity, while the
+attempt collector and final session apply the same capacity; a large ignored
+statement therefore does not retain or transmit every duplicate key.  The
+attempt binding map is proportional to live processes/scopes, not rows.
 No goroutine, timer, retry loop, or unbounded queue is introduced.  Key
 formatting has a recoverable diagnostic boundary: an invalid internal tuple
 returns an internal rendering error to the IGNORE caller, which increments the
@@ -124,7 +133,8 @@ Acceptance requires the owning package tests and focused race tests for the
 collector, retry/late-terminal lifecycle, duplicate producers, CHECK barrier,
 protocol gate, malformed key rendering, and metadata bounds.  The public BVT
 must cover PK, unique, composite/index, same-batch, UPDATE IGNORE, and CHECK
-cases, including a constant CHECK predicate and the 64-record boundary.  A
+cases, including a constant CHECK predicate and the 0/1/10/64/128/1024/65535
+capacity boundaries.  A
 mixed-version two-binary run is useful rollout evidence but is not claimed by
 this PR; deterministic serialization and coordinator-fallback tests are the
 compatibility gate.

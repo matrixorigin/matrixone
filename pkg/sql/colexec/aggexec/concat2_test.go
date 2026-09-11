@@ -1315,6 +1315,46 @@ func TestGroupConcatMaxLenReportsWarningsOnce(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestGroupConcatWarningRetentionLimitControlsPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit int
+		want  int
+	}{
+		{name: "zero", limit: 0, want: 0},
+		{name: "one", limit: 1, want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			info := multiAggInfo{
+				aggID:     97,
+				argTypes:  []types.Type{types.T_varchar.ToType()},
+				retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+				emptyNull: true,
+			}
+			exec := newGroupConcatExec(mp, info, "").(*groupConcatExec)
+			ConfigureGroupConcatWarningRetention(exec, tc.limit)
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 2), 0))
+			values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"a", "b", "c", "d"})
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			sink := new(groupConcatWarningSink)
+			ReportGroupConcatWarnings(exec, sink)
+			require.Equal(t, uint64(1), sink.total)
+			require.Len(t, sink.messages, tc.want)
+			if tc.want > 0 {
+				require.Equal(t, "Row 3 was cut by GROUP_CONCAT()", sink.messages[0])
+			}
+			results[0].Free(mp)
+			values.Free(mp)
+			exec.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestGroupConcatWarningsCountOnlySinkReceivesAllRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	info := multiAggInfo{

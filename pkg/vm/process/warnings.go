@@ -19,17 +19,27 @@ import (
 	"unicode/utf8"
 )
 
-const warningDiagnosticRetentionLimit = 64
+const (
+	// WarningDiagnosticDefaultRetentionLimit is the capacity used by newly
+	// created local executions when no session-specific value is available.
+	WarningDiagnosticDefaultRetentionLimit = 1024
+	// WarningDiagnosticLegacyRetentionLimit is the capacity used when an older
+	// remote ProcessInfo does not carry the new session fields.
+	WarningDiagnosticLegacyRetentionLimit = 64
+
+	// Keep the package-local name for tests and callers which historically used
+	// the default execution capacity directly.
+	warningDiagnosticRetentionLimit = WarningDiagnosticDefaultRetentionLimit
+)
 
 // WarningDiagnosticMaxMessageBytes bounds one retained warning message. The
 // warning count remains exact even when the human-readable record is
 // truncated or omitted.
 const WarningDiagnosticMaxMessageBytes = 4 << 10
 
-// WarningDiagnosticMaxBytes bounds the retained diagnostic payload for one
-// execution attempt. Producers may still format a transient value, but no
-// session, attempt collector, or terminal result retains more than this
-// budget.
+// WarningDiagnosticMaxBytes is retained for source compatibility with older
+// callers which used the former byte-budget constant. Diagnostic retention is
+// now bounded by max_error_count and WarningDiagnosticMaxMessageBytes.
 const WarningDiagnosticMaxBytes = 256 << 10
 
 // WarningDiagnosticBatchAppender carries an exact count separately from the
@@ -50,6 +60,48 @@ type WarningDiagnosticAppender interface {
 // the exact count without fabricating records.
 type WarningDiagnosticCountAppender interface {
 	AppendWarningCount(total uint64)
+}
+
+// WarningDiagnosticRetentionLimitProvider exposes the session-scoped
+// diagnostic capacity without making it part of process.Session. It is an
+// optional capability so internal sessions and old remote implementations can
+// continue to use the legacy fallback.
+type WarningDiagnosticRetentionLimitProvider interface {
+	GetWarningRetentionLimit() int
+}
+
+func clampWarningRetentionLimit(limit int) int {
+	if limit < 0 {
+		return 0
+	}
+	if limit > int(^uint16(0)) {
+		return int(^uint16(0))
+	}
+	return limit
+}
+
+// WarningDiagnosticRetentionLimitForProcess resolves the capacity captured by
+// a process generation. A bound attempt sink wins so nested/internal work
+// inherits its parent's generation; otherwise the statement snapshot and then
+// the session capability provide the fallback.
+func WarningDiagnosticRetentionLimitForProcess(proc *Process) int {
+	if proc == nil {
+		return WarningDiagnosticDefaultRetentionLimit
+	}
+	if proc.WarningSink != nil {
+		if provider, ok := proc.WarningSink.(WarningDiagnosticRetentionLimitProvider); ok {
+			return clampWarningRetentionLimit(provider.GetWarningRetentionLimit())
+		}
+	}
+	if proc.Base != nil && proc.Base.SessionInfo.MaxErrorCountSet {
+		return clampWarningRetentionLimit(proc.Base.SessionInfo.MaxErrorCount)
+	}
+	if sink := proc.GetWarningSink(); sink != nil {
+		if provider, ok := sink.(WarningDiagnosticRetentionLimitProvider); ok {
+			return clampWarningRetentionLimit(provider.GetWarningRetentionLimit())
+		}
+	}
+	return WarningDiagnosticDefaultRetentionLimit
 }
 
 // BoundWarningMessage returns an owned, UTF-8-safe warning message no longer
@@ -144,10 +196,50 @@ func AppendWarningBatchToSink(destination any, total uint64, codes []uint16, mes
 // operator/function invocation, so large INSERT IGNORE statements cannot grow
 // execution memory with the number of skipped rows.
 type WarningAccumulator struct {
-	Total    uint64
-	Codes    []uint16
-	Messages []string
-	bytes    int
+	Total             uint64
+	Codes             []uint16
+	Messages          []string
+	bytes             int
+	retentionLimit    int
+	retentionLimitSet bool
+}
+
+// SetWarningRetentionLimit binds the accumulator to one execution's session
+// capacity. It may be called before the first warning is added; reducing the
+// capacity also releases records already retained by a reused accumulator.
+func (a *WarningAccumulator) SetWarningRetentionLimit(limit int) {
+	if a == nil {
+		return
+	}
+	a.retentionLimit = clampWarningRetentionLimit(limit)
+	a.retentionLimitSet = true
+	if len(a.Codes) > a.retentionLimit {
+		clear(a.Codes[a.retentionLimit:])
+		clear(a.Messages[a.retentionLimit:])
+		a.Codes = a.Codes[:a.retentionLimit]
+		a.Messages = a.Messages[:a.retentionLimit]
+		a.bytes = 0
+		for _, message := range a.Messages {
+			a.bytes += len(message)
+		}
+	}
+	if a.retentionLimit == 0 {
+		a.Codes = nil
+		a.Messages = nil
+		a.bytes = 0
+		return
+	}
+	if cap(a.Codes) > a.retentionLimit*2 || cap(a.Messages) > a.retentionLimit*2 {
+		a.Codes = append([]uint16(nil), a.Codes...)
+		a.Messages = append([]string(nil), a.Messages...)
+	}
+}
+
+func (a *WarningAccumulator) warningRetentionLimit() int {
+	if a == nil || !a.retentionLimitSet {
+		return WarningDiagnosticDefaultRetentionLimit
+	}
+	return a.retentionLimit
 }
 
 func (a *WarningAccumulator) Add(code uint16, message string) {
@@ -155,17 +247,10 @@ func (a *WarningAccumulator) Add(code uint16, message string) {
 		return
 	}
 	a.AddCount()
-	if len(a.Codes) >= warningDiagnosticRetentionLimit {
+	if len(a.Codes) >= a.warningRetentionLimit() {
 		return
 	}
-	remaining := WarningDiagnosticMaxBytes - a.bytes
-	if remaining <= 0 {
-		return
-	}
-	if remaining > WarningDiagnosticMaxMessageBytes {
-		remaining = WarningDiagnosticMaxMessageBytes
-	}
-	message = BoundWarningMessage(message, remaining)
+	message = BoundWarningMessage(message, WarningDiagnosticMaxMessageBytes)
 	a.Codes = append(a.Codes, code)
 	a.Messages = append(a.Messages, message)
 	a.bytes += len(message)
@@ -186,8 +271,7 @@ func (a *WarningAccumulator) AddCount() {
 // Callers can use it to avoid formatting large internal keys once the bounded
 // diagnostic buffer is full.
 func (a *WarningAccumulator) NeedsDiagnostic() bool {
-	return a != nil && len(a.Codes) < warningDiagnosticRetentionLimit &&
-		a.bytes < WarningDiagnosticMaxBytes
+	return a != nil && len(a.Codes) < a.warningRetentionLimit()
 }
 
 func (a *WarningAccumulator) Flush(proc *Process) {
@@ -196,6 +280,8 @@ func (a *WarningAccumulator) Flush(proc *Process) {
 	}
 	AppendWarningBatch(proc, a.Total, a.Codes, a.Messages)
 	a.Total = 0
+	clear(a.Codes)
+	clear(a.Messages)
 	a.Codes = a.Codes[:0]
 	a.Messages = a.Messages[:0]
 	a.bytes = 0

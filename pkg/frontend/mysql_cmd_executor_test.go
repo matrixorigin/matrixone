@@ -303,8 +303,85 @@ func TestAppendWarningBatchBoundsRecordsAndPreservesTotal(t *testing.T) {
 
 	info := ses.diagnosticsSnapshot()
 	require.Len(t, info.codes, 3)
-	require.Equal(t, []uint16{2, 3, 4}, info.codes)
+	require.Equal(t, []uint16{1, 2, 3}, info.codes)
 	require.Equal(t, uint16(100), info.warningCount())
+}
+
+func TestMaxErrorCountSessionCapacityAndZero(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: make(map[string]interface{})},
+		},
+		errInfo: &errInfo{maxCnt: MoDefaultErrorCount},
+	}
+	ctx := context.Background()
+	require.Equal(t, MoDefaultErrorCount, ses.GetWarningRetentionLimit())
+	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(3)))
+	require.Equal(t, 3, ses.GetWarningRetentionLimit())
+	ses.appendErrorDiagnostic(1064, "error")
+	ses.appendWarningDiagnostic(1329, "warning")
+	ses.appendWarningDiagnostic(1000, "note")
+	ses.appendWarningDiagnostic(1001, "discarded")
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, []uint16{1064, 1329, 1000}, info.codes)
+	require.Equal(t, uint64(3), info.totalWarnings)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(0)))
+	require.Equal(t, 0, ses.GetWarningRetentionLimit())
+	ses.resetDiagnostics()
+	ses.appendErrorDiagnostic(1064, "not retained")
+	ses.appendWarningDiagnostic(1329, "not retained")
+	info = ses.diagnosticsSnapshot()
+	require.Empty(t, info.codes)
+	require.Equal(t, uint64(1), info.totalWarnings)
+	require.Error(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(-1)))
+	require.Error(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(65536)))
+}
+
+func TestMaxErrorCountSessionCapacityPrefixes(t *testing.T) {
+	ctx := context.Background()
+	for _, limit := range []int{0, 1, 10, 64, 128, 1024, 65535} {
+		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
+			ses := &Session{
+				feSessionImpl: feSessionImpl{
+					sesSysVars: &SystemVariables{mp: make(map[string]interface{})},
+				},
+				errInfo: &errInfo{maxCnt: MoDefaultErrorCount},
+			}
+			require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(limit)))
+			for i := 0; i < 100; i++ {
+				ses.appendWarningDiagnostic(uint16(2000+i), fmt.Sprintf("warning-%d", i))
+			}
+			info := ses.diagnosticsSnapshot()
+			want := limit
+			if want > 100 {
+				want = 100
+			}
+			require.Len(t, info.codes, want)
+			require.Equal(t, uint64(100), info.totalWarnings)
+			for i := 0; i < want; i++ {
+				require.Equal(t, uint16(2000+i), info.codes[i])
+			}
+		})
+	}
+}
+
+func TestShowWarningsPreservesGenerationOrder(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		errInfo:       &errInfo{maxCnt: 10},
+	}
+	ses.appendWarningDiagnostic(1329, "first")
+	ses.appendWarningDiagnostic(1000, "second")
+	execCtx := &ExecCtx{reqCtx: context.Background(), stmt: &tree.ShowWarnings{}}
+	require.NoError(t, doShowErrors(ses, execCtx))
+	require.Equal(t, uint64(2), ses.GetMysqlResultSet().GetRowCount())
+	first, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 2)
+	require.NoError(t, err)
+	second, err := ses.GetMysqlResultSet().GetString(context.Background(), 1, 2)
+	require.NoError(t, err)
+	require.Equal(t, "first", first)
+	require.Equal(t, "second", second)
 }
 
 func TestAppendWarningCountSaturatesAndBoundsMessageBytes(t *testing.T) {

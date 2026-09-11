@@ -1890,7 +1890,7 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 		_, showErrorsOnly = execCtx.stmt.(*tree.ShowErrors)
 	}
 
-	for i := info.length() - 1; i >= 0; i-- {
+	for i := 0; i < info.length(); i++ {
 		row := make([]interface{}, 3)
 		row[0] = "Error"
 		if i < len(info.levels) && info.levels[i] != "" {
@@ -4279,10 +4279,29 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
+	if limit, ok := resolveSessionWarningRetentionLimit(ses); ok {
+		proc.Base.SessionInfo.MaxErrorCount = limit
+		proc.Base.SessionInfo.MaxErrorCountSet = true
+	}
 	proc.Base.SessionInfo.AutoIncrementIncrement = resolvePositiveSessionUint64(
 		ses, "auto_increment_increment", proc.Base.SessionInfo.AutoIncrementIncrement)
 	proc.Base.SessionInfo.AutoIncrementOffset = resolvePositiveSessionUint64(
 		ses, "auto_increment_offset", proc.Base.SessionInfo.AutoIncrementOffset)
+}
+
+func resolveSessionWarningRetentionLimit(ses FeSession) (int, bool) {
+	if ses == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit, true
+	}
+	value, err := ses.GetSessionSysVar("max_error_count")
+	if err != nil {
+		return process.WarningDiagnosticDefaultRetentionLimit, true
+	}
+	limit, ok := sessionWarningRetentionLimit(value)
+	if !ok {
+		return process.WarningDiagnosticDefaultRetentionLimit, true
+	}
+	return limit, true
 }
 
 func resolvePositiveSessionUint64(ses FeSession, name string, previous uint64) uint64 {

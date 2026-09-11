@@ -35,6 +35,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -215,14 +216,31 @@ func TestWarningAttemptNestedAndBounded(t *testing.T) {
 	require.Zero(t, session.totalWarnings)
 
 	attempt := newWarningAttempt(proc)
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < process.WarningDiagnosticDefaultRetentionLimit+10; i++ {
 		attempt.collector.AppendWarningDiagnostic(1260, "bounded")
 	}
 	attempt.finish(true, session)
-	require.Equal(t, uint64(1000), session.totalWarnings)
-	require.Len(t, session.warnings, remoteWarningRetentionLimit)
+	require.Equal(t, uint64(process.WarningDiagnosticDefaultRetentionLimit+10), session.totalWarnings)
+	require.Len(t, session.warnings, process.WarningDiagnosticDefaultRetentionLimit)
 	attempt.finish(true, session)
-	require.Equal(t, uint64(1000), session.totalWarnings, "one-shot publish")
+	require.Equal(t, uint64(process.WarningDiagnosticDefaultRetentionLimit+10), session.totalWarnings, "one-shot publish")
+}
+
+func TestWarningAttemptCapturesStatementRetentionSnapshot(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.MaxErrorCount = 2
+	proc.Base.SessionInfo.MaxErrorCountSet = true
+	session := &remoteWarningSession{}
+	proc.Session = session
+	attempt := newWarningAttempt(proc)
+	require.NotNil(t, attempt)
+	attempt.collector.AppendWarningBatch(3,
+		[]uint16{1, 2, 3}, []string{"first", "second", "third"})
+	attempt.finish(true, session)
+	require.Equal(t, uint64(3), session.totalWarnings)
+	require.Len(t, session.warnings, 2)
+	require.Equal(t, uint16(1), session.warnings[0].code)
+	require.Equal(t, uint16(2), session.warnings[1].code)
 }
 
 func TestPreparedGroupConcatFloorFreshAndRetryCompile(t *testing.T) {

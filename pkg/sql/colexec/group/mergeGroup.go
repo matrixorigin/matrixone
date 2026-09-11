@@ -34,6 +34,8 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	}
 	mergeGroup.ctr.prepareParamKind.Reset(mergeGroup.Aggs)
 	mergeGroup.ctr.aggExprs = mergeGroup.Aggs
+	mergeGroup.ctr.warningRetentionLimit = process.WarningDiagnosticRetentionLimitForProcess(proc)
+	mergeGroup.ctr.warningRetentionSet = true
 	mergeGroup.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
 		hasPrepareParamKindPreservingAgg(mergeGroup.Aggs)
 	mergeGroup.ctr.mp = mpool.MustNewNoLock("merge_group_mpool")

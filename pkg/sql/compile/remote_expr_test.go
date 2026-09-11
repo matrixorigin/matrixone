@@ -170,6 +170,33 @@ func TestRemoteSecToTimeConversionWarningsRemainBounded(t *testing.T) {
 	require.Len(t, initiatingSession.warnings, 3)
 }
 
+func TestRemoteWarningCollectorConfiguredRetentionPrefixAndZero(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit int
+		want  int
+	}{
+		{name: "zero", limit: 0, want: 0},
+		{name: "prefix", limit: 3, want: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			collector := &remoteWarningCollector{
+				maxRetained:    tc.limit,
+				maxRetainedSet: true,
+			}
+			collector.AppendWarningBatch(5,
+				[]uint16{1, 2, 3, 4, 5},
+				[]string{"one", "two", "three", "four", "five"})
+			total, warnings := collector.SnapshotWarnings()
+			require.Equal(t, uint64(5), total)
+			require.Len(t, warnings, tc.want)
+			for i := range warnings {
+				require.Equal(t, uint16(i+1), warnings[i].Code)
+			}
+		})
+	}
+}
+
 func TestRemoteNumericCastWarningCountIsIndependentOfBatching(t *testing.T) {
 	buildCast := func(proc *process.Process) *plan.Expr {
 		proc.Session = &remoteWarningSession{}

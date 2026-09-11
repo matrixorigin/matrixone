@@ -484,6 +484,8 @@ func (ctr *container) newAggregateExecutor(
 	if err != nil {
 		return nil, err
 	}
+	aggexec.ConfigureGroupConcatWarningRetention(
+		exec, process.WarningDiagnosticRetentionLimitForProcess(proc))
 	succeeded := false
 	defer func() {
 		if !succeeded {

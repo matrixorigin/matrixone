@@ -413,6 +413,35 @@ Warning  ¦  1260  ¦  Row 2 was cut by GROUP_CONCAT()  𝄀
 Warning  ¦  1260  ¦  Row 2 was cut by GROUP_CONCAT()
 set session group_concat_max_len = 1024;
 drop table group_concat_warning_01;
+drop table if exists group_concat_warning_capacity;
+create table group_concat_warning_capacity (id int primary key, s varchar(16));
+insert into group_concat_warning_capacity values (1, 'aa'), (2, 'bb'), (3, 'cc');
+set session group_concat_max_len = 2;
+set session max_error_count = 1;
+select group_concat(s order by id separator ''),
+group_concat(s order by id separator '|'),
+group_concat(s order by id separator ':')
+from group_concat_warning_capacity;
+group_concat(s, ,order by id)    group_concat(s, |,order by id)    group_concat(s, :,order by id)
+aa    aa    aa
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1260  ¦  Row 2 was cut by GROUP_CONCAT()
+set session max_error_count = 10;
+select group_concat(s order by id separator ''),
+group_concat(s order by id separator '|'),
+group_concat(s order by id separator ':')
+from group_concat_warning_capacity;
+group_concat(s, ,order by id)    group_concat(s, |,order by id)    group_concat(s, :,order by id)
+aa    aa    aa
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1260  ¦  Row 2 was cut by GROUP_CONCAT()  𝄀
+Warning  ¦  1260  ¦  Row 2 was cut by GROUP_CONCAT()  𝄀
+Warning  ¦  1260  ¦  Row 2 was cut by GROUP_CONCAT()
+set session max_error_count = 1024;
+set session group_concat_max_len = 1024;
+drop table group_concat_warning_capacity;
 drop table if exists group_concat_extended_types;
 create table group_concat_extended_types (
 id int primary key,

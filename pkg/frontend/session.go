@@ -130,8 +130,7 @@ func init() {
 	MaxPrepareNumberInOneSession.Store(100000)
 }
 
-// TODO: this variable should be configure by set variable
-const MoDefaultErrorCount = 64
+const MoDefaultErrorCount = process.WarningDiagnosticDefaultRetentionLimit
 
 type ShowStatementType int
 
@@ -503,10 +502,19 @@ func (ses *Session) initSystemVariablesFromGlobal(ctx context.Context, sv *Syste
 		return err
 	}
 	sessionVars.Set(transactionIsolationSystemVariable, normalizedTransactionIsolation)
+	maxErrorCount := process.WarningDiagnosticDefaultRetentionLimit
+	if value := sessionVars.Get("max_error_count"); value != nil {
+		if parsed, ok := sessionWarningRetentionLimit(value); ok {
+			maxErrorCount = parsed
+		}
+	}
 
 	ses.mu.Lock()
 	ses.gSysVars = sv
 	ses.sesSysVars = sessionVars
+	if ses.errInfo != nil {
+		ses.errInfo.setMaxCnt(maxErrorCount)
+	}
 	txnHandler := ses.txnHandler
 	ses.mu.Unlock()
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
@@ -1431,6 +1439,73 @@ type errInfo struct {
 	warningBytes  int
 }
 
+func sessionWarningRetentionLimit(value interface{}) (int, bool) {
+	var limit int64
+	switch v := value.(type) {
+	case int64:
+		limit = v
+	case int:
+		limit = int64(v)
+	case uint64:
+		if v > uint64(^uint16(0)) {
+			return 0, false
+		}
+		limit = int64(v)
+	case uint32:
+		limit = int64(v)
+	case int32:
+		limit = int64(v)
+	default:
+		return 0, false
+	}
+	if limit < 0 || limit > int64(^uint16(0)) {
+		return 0, false
+	}
+	return int(limit), true
+}
+
+func (e *errInfo) setMaxCnt(limit int) {
+	if e == nil {
+		return
+	}
+	if limit < 0 {
+		limit = 0
+	} else if limit > int(^uint16(0)) {
+		limit = int(^uint16(0))
+	}
+	e.maxCnt = limit
+	if len(e.codes) > limit {
+		clear(e.codes[limit:])
+		clear(e.msgs[limit:])
+		clear(e.levels[limit:])
+		e.codes = e.codes[:limit]
+		e.msgs = e.msgs[:limit]
+		e.levels = e.levels[:limit]
+		e.warningBytes = 0
+		for i, message := range e.msgs {
+			if i < len(e.levels) && strings.EqualFold(e.levels[i], "Error") {
+				continue
+			}
+			e.warningBytes += len(message)
+		}
+	}
+	if limit == 0 {
+		e.codes = nil
+		e.msgs = nil
+		e.levels = nil
+		e.warningBytes = 0
+		return
+	}
+	// Do not retain a large backing array after a substantial capacity
+	// reduction. Small changes keep the existing storage to avoid churn.
+	if cap(e.codes) > limit*2 || cap(e.msgs) > limit*2 || cap(e.levels) > limit*2 {
+		codes := append([]uint16(nil), e.codes...)
+		msgs := append([]string(nil), e.msgs...)
+		levels := append([]string(nil), e.levels...)
+		e.codes, e.msgs, e.levels = codes, msgs, levels
+	}
+}
+
 func (e *errInfo) push(code uint16, msg string) {
 	e.pushWithLevel(code, msg, "Error")
 }
@@ -1443,35 +1518,23 @@ func (e *errInfo) pushWithLevel(code uint16, msg, level string) {
 }
 
 func (e *errInfo) pushStored(code uint16, msg, level string) {
-	dropOldest := e.maxCnt > 0 && len(e.codes) >= e.maxCnt
-	droppedWarningBytes := 0
-	if dropOldest && len(e.levels) > 0 && !strings.EqualFold(e.levels[0], "Error") {
-		droppedWarningBytes = len(e.msgs[0])
+	if e.maxCnt <= 0 || len(e.codes) >= e.maxCnt {
+		return
 	}
 	if !strings.EqualFold(level, "Error") {
-		remaining := process.WarningDiagnosticMaxBytes - (e.warningBytes - droppedWarningBytes)
-		if remaining <= 0 {
-			return
-		}
-		if remaining > process.WarningDiagnosticMaxMessageBytes {
-			remaining = process.WarningDiagnosticMaxMessageBytes
-		}
-		msg = process.BoundWarningMessage(msg, remaining)
-		if dropOldest {
-			e.warningBytes -= droppedWarningBytes
-		}
-		e.warningBytes += len(msg)
-	} else if dropOldest {
-		e.warningBytes -= droppedWarningBytes
-	}
-	if dropOldest {
-		e.codes = e.codes[1:]
-		e.msgs = e.msgs[1:]
-		e.levels = e.levels[1:]
+		msg = process.BoundWarningMessage(msg, process.WarningDiagnosticMaxMessageBytes)
+	} else {
+		// Error responses carry their full text through ERR packets. Keep the
+		// existing SHOW ERRORS payload semantics while sharing the same record
+		// capacity with warnings and notes.
+		msg = strings.Clone(msg)
 	}
 	e.codes = append(e.codes, code)
 	e.msgs = append(e.msgs, msg)
 	e.levels = append(e.levels, level)
+	if !strings.EqualFold(level, "Error") {
+		e.warningBytes += len(msg)
+	}
 }
 
 func (e *errInfo) addWarningCount(delta uint64) {
@@ -1501,6 +1564,9 @@ func (e *errInfo) appendWarningBatch(total uint64, codes []uint16, msgs []string
 }
 
 func (e *errInfo) reset() {
+	clear(e.codes)
+	clear(e.msgs)
+	clear(e.levels)
 	e.codes = e.codes[:0]
 	e.msgs = e.msgs[:0]
 	e.levels = e.levels[:0]
@@ -1569,8 +1635,6 @@ func NewSession(
 			service:        service,
 		},
 		errInfo: &errInfo{
-			codes:  make([]uint16, 0, MoDefaultErrorCount),
-			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
 		cache:     &privilegeCache{},
@@ -2275,6 +2339,23 @@ func (ses *Session) AppendWarningBatch(total uint64, codes []uint16, messages []
 	}
 }
 
+// GetWarningRetentionLimit exposes the session's statement diagnostic
+// capacity through the narrow process warning capability interface.
+func (ses *Session) GetWarningRetentionLimit() int {
+	if ses == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit
+	}
+	if ses.errInfo.maxCnt < 0 || ses.errInfo.maxCnt > int(^uint16(0)) {
+		return process.WarningDiagnosticDefaultRetentionLimit
+	}
+	return ses.errInfo.maxCnt
+}
+
 func (ses *Session) diagnosticsSnapshot() errInfo {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -2282,6 +2363,18 @@ func (ses *Session) diagnosticsSnapshot() errInfo {
 		return errInfo{}
 	}
 	return ses.errInfo.snapshot()
+}
+
+func (ses *Session) warningCount() uint16 {
+	if ses == nil {
+		return 0
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return 0
+	}
+	return ses.errInfo.warningCount()
 }
 
 func (ses *Session) GenNewStmtId() uint32 {
@@ -3272,7 +3365,7 @@ func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d
 	// If the stmt has next stmt, should add SERVER_MORE_RESULTS_EXISTS to the server status.
 	var resp *Response
 	serverStatus := ses.GetTxnHandler().GetServerStatus()
-	warnings := ses.diagnosticsSnapshot().warningCount()
+	warnings := ses.warningCount()
 	if !isLastStmt {
 		resp = NewResponse(category, affectedRows, 0, warnings,
 			serverStatus|SERVER_MORE_RESULTS_EXISTS, cmd, d)

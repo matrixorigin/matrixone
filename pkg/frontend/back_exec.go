@@ -580,6 +580,10 @@ func refreshBackgroundStatementScopedSessionInfo(backSes *backSession, input *Us
 	backSes.effectiveMatrixOneNativeMode = nativeMode
 	backSes.hasEffectiveMatrixOneNativeMode = true
 	refreshStatementScopedSessionInfoWithNativeMode(nativeMode, proc)
+	if limit, ok := resolveSessionWarningRetentionLimit(backSes); ok && proc != nil && proc.Base != nil {
+		proc.Base.SessionInfo.MaxErrorCount = limit
+		proc.Base.SessionInfo.MaxErrorCountSet = true
+	}
 }
 
 func appendNestedCallResults(ctx context.Context, backSes *backSession, results []ExecResult) error {
@@ -1108,6 +1112,26 @@ func (backSes *backSession) currentMatrixOneNativeMode() bool {
 	return false
 }
 
+func (backSes *backSession) GetWarningRetentionLimit() int {
+	if backSes == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit
+	}
+	if backSes.upstream != nil {
+		if provider, ok := backSes.upstream.(process.WarningDiagnosticRetentionLimitProvider); ok {
+			return provider.GetWarningRetentionLimit()
+		}
+		if value, err := backSes.upstream.GetSessionSysVar("max_error_count"); err == nil {
+			if limit, ok := sessionWarningRetentionLimit(value); ok {
+				return limit
+			}
+		}
+	}
+	if backSes.parentBackSession != nil {
+		return backSes.parentBackSession.GetWarningRetentionLimit()
+	}
+	return process.WarningDiagnosticDefaultRetentionLimit
+}
+
 func (backSes *backSession) InitBackExec(txnOp TxnOperator, db string, callBack outputCallBackFunc, opts ...*BackgroundExecOption) BackgroundExec {
 	if txnOp != nil {
 		be := &backExec{}
@@ -1375,6 +1399,14 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 		return int64(1), nil
 	case "sql_mode":
 		return "", nil
+	case "max_error_count":
+		if backSes.upstream != nil {
+			return backSes.upstream.GetSessionSysVar(name)
+		}
+		if backSes.parentBackSession != nil {
+			return backSes.parentBackSession.GetSessionSysVar(name)
+		}
+		return int64(process.WarningDiagnosticDefaultRetentionLimit), nil
 	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}

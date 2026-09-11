@@ -15684,6 +15684,7 @@ var supportedOthersBuiltIns = []FuncNew{
 					res := vector.MustFunctionResult[bool](result)
 					ignore := statementIgnore(proc)
 					var warnings process.WarningAccumulator
+					warnings.SetWarningRetentionLimit(process.WarningDiagnosticRetentionLimitForProcess(proc))
 					for i := uint64(0); i < uint64(length); i++ {
 						flag, isNull := checkFlags.GetValue(i)
 						if isNull || !flag {
