@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 const (
@@ -34,11 +35,19 @@ const (
 	// materialized source still charges every spill byte and file descriptor to
 	// the statement/CN owner before writing.
 	groupingSetEstimatedSpillBytesLimit = float64(8 * mpool.GB)
+	// Prefix reuse removes repeated fact-side work without multiplying detail
+	// rows. Permit a larger, still statement-budgeted spool than the dynamic
+	// expansion alternative; machines with a smaller spill budget fail closed.
+	groupingSetPrefixEstimatedSpillBytesLimit = float64(32 * mpool.GB)
 	// Group cardinality is especially fragile here: the rewrite runs before the
 	// normal optimizer passes, while joins and correlated multi-column keys can
 	// make the estimate miss by orders of magnitude. Inflate the estimate, but
 	// never beyond the relational one-output-row-per-input-row ceiling.
 	groupingSetCardinalitySafetyFactor = float64(32)
+	// Prefix reuse materializes one legacy aggregate branch rather than the
+	// expanded output of every grouping set.  Its cardinality is bounded by the
+	// common producer and is less exposed to summed multi-set estimation error.
+	groupingSetPrefixCardinalitySafetyFactor = float64(4)
 	// Require a twofold modeled advantage because row counts and producer costs
 	// are estimates while the output write and every branch scan are certain.
 	groupingSetCostSafetyFactor = float64(2)
@@ -257,6 +266,15 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 			}
 		}
 	}
+	// Validate every branch path before either sharing alternative mutates the
+	// plan. Prefix reuse keeps the coarser aggregates, while dynamic expansion
+	// replaces all of them, but both replace the pivot branch itself.
+	for i := range branches {
+		if builder.countReachableNode(branches[i].rootID, branches[i].aggID, make(map[int32]bool)) != 1 ||
+			!builder.groupingBranchExpressionsRewritable(branches[i].rootID, branches[i].aggID, branches[i].agg) {
+			return false
+		}
+	}
 
 	// Build the exact value schemas used by the shared aggregate before changing
 	// the plan. Declared variable-width capacities are deliberately included:
@@ -329,6 +347,20 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 	if producerStats == nil || !finitePositive(producerStats.Outcnt) {
 		return false
 	}
+	// A strict grouping-prefix chain can reuse one aggregate for every coarser
+	// level without expanding detail rows. Prefer the finest prefix that passes
+	// the bounded materialization admission; retain every finer level on the raw
+	// producer. Require every legacy branch to drain so eager materialization
+	// cannot introduce new evaluation.
+	if allBranchesDrained && builder.shareGroupingSetPrefix(
+		branches,
+		hashBuildBranches,
+		producerCost,
+		producerStats.Outcnt,
+		inputRowSize,
+	) {
+		return true
+	}
 	totalAggregateRows := float64(0)
 	for i := range branches {
 		ReCalcNodeStats(branches[i].aggID, builder, true, true, true)
@@ -353,13 +385,6 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 		return false
 	}
 
-	// Validate every branch path before mutating the plan.
-	for i := range branches {
-		if builder.countReachableNode(branches[i].rootID, branches[i].aggID, make(map[int32]bool)) != 1 ||
-			!builder.groupingBranchExpressionsRewritable(branches[i].rootID, branches[i].aggID, branches[i].agg) {
-			return false
-		}
-	}
 	if !builder.reserveSharedMaterialization(
 		estimatedMaterializedRows*outputRowSize,
 		estimatedMaterializedRows,
@@ -467,6 +492,243 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 			branches[i].agg, scanTag, groupCount)
 	}
 	return true
+}
+
+// shareGroupingSetPrefix keeps the finer grouping branches on the common raw
+// input, materializes one admissible prefix once, and computes every coarser
+// branch from that reduced relation. It is intentionally narrow: only a strict
+// nested grouping chain and exact SUM states whose rebound result type is
+// unchanged are admitted. Other aggregates keep the existing plan until they
+// have an explicit scalar-state merge contract.
+func (builder *QueryBuilder) shareGroupingSetPrefix(
+	branches []groupingSetBranch,
+	hashBuildBranches map[int32]bool,
+	producerCost float64,
+	producerRows float64,
+	inputRowSize float64,
+) bool {
+	chain, ok := groupingSetPrefixChain(branches)
+	if !ok {
+		return false
+	}
+
+	groupCount := len(branches[chain[0]].agg.GroupBy)
+	mergeAggregates := make([]*planpb.Expr, len(branches[chain[0]].agg.AggList))
+	for i, aggregate := range branches[chain[0]].agg.AggList {
+		fn := aggregate.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "sum" || len(fn.Args) != 1 ||
+			fn.AggConfigType != planpb.AggregateConfigType_AGG_CONFIG_NONE || len(fn.AggConfig) != 0 ||
+			uint64(fn.Func.Obj)&planfunction.Distinct != 0 ||
+			!canonicalBoundFunction(builder.GetContext(), aggregate, "sum") {
+			return false
+		}
+		// Exact decimal states have a stable SUM(SUM(x)) result type. Floating
+		// point would change rounding order; narrow integer SUM widens again.
+		switch types.T(aggregate.Typ.Id) {
+		case types.T_decimal128, types.T_decimal256:
+		default:
+			return false
+		}
+		partial := groupingSetCol(aggregate.Typ, 0, int32(groupCount+i))
+		merged, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "sum", []*planpb.Expr{partial})
+		if err != nil || merged == nil || !samePlanType(merged.Typ, aggregate.Typ) {
+			return false
+		}
+		mergeAggregates[i] = merged
+	}
+
+	pivotIndex := -1
+	var consumers []int
+	var outputTypes []planpb.Type
+	// Prefer the finest admissible prefix because it eliminates the most raw
+	// producer runs. If its correlated-key estimate is too large, walk down the
+	// same proven chain and retain the finer legacy branches instead of rejecting
+	// all prefix reuse.
+	for chainPos := 1; chainPos < len(chain)-1; chainPos++ {
+		candidateIndex := chain[chainPos]
+		candidate := branches[candidateIndex].agg
+		if len(candidate.GroupByHashKey) != 0 {
+			continue
+		}
+		candidateTypes := make([]planpb.Type, 0, groupCount+len(candidate.AggList))
+		for i, group := range candidate.GroupBy {
+			candidateTypes = append(candidateTypes,
+				groupingFlagOutputType(group.Typ, candidate.GroupingFlag, int32(i)))
+		}
+		for _, aggregate := range candidate.AggList {
+			candidateTypes = append(candidateTypes, aggregate.Typ)
+		}
+		outputRowSize, sizeKnown := materializedDeclaredRowSize(candidateTypes)
+		if !sizeKnown {
+			continue
+		}
+		ReCalcNodeStats(branches[candidateIndex].aggID, builder, true, true, true)
+		candidateStats := candidate.Stats
+		if candidateStats == nil || !finitePositive(candidateStats.Outcnt) {
+			continue
+		}
+		estimatedRows, rowsKnown := groupingSetPrefixRowsForAdmission(
+			producerRows, candidateStats.Outcnt)
+		candidateConsumers := chain[chainPos:]
+		if !rowsKnown || !groupingSetPrefixFitsCostAndStorage(
+			producerCost,
+			inputRowSize,
+			estimatedRows,
+			outputRowSize,
+			len(candidateConsumers),
+		) {
+			continue
+		}
+		if !builder.reserveSharedMaterializationWithSpillLimit(
+			estimatedRows*outputRowSize,
+			estimatedRows,
+			candidateTypes,
+			groupingSetPrefixEstimatedSpillBytesLimit,
+		) {
+			continue
+		}
+		pivotIndex = candidateIndex
+		consumers = append([]int(nil), candidateConsumers...)
+		outputTypes = candidateTypes
+		break
+	}
+	if pivotIndex < 0 {
+		return false
+	}
+	pivot := branches[pivotIndex].agg
+
+	outputTag := builder.genNewBindTag()
+	output := make([]*planpb.Expr, 0, len(outputTypes))
+	for i := range pivot.GroupBy {
+		output = append(output, groupingSetCol(
+			outputTypes[i], pivot.BindingTags[0], int32(i)))
+	}
+	for i := range pivot.AggList {
+		output = append(output, groupingSetCol(
+			outputTypes[groupCount+i], pivot.BindingTags[1], int32(i)))
+	}
+	outputID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{branches[pivotIndex].aggID},
+		ProjectList: output,
+		BindingTags: []int32{outputTag},
+	}, branches[pivotIndex].ctx)
+	sinkID := appendSinkNodeWithTag(builder, branches[pivotIndex].ctx, outputID, outputTag)
+	builder.qry.Nodes[sinkID].ExtraOptions = materialized.CTESinkOption
+	sourceStep := builder.appendStep(sinkID)
+
+	for _, branchIndex := range consumers {
+		branch := branches[branchIndex]
+		scanTag := builder.genNewBindTag()
+		scanProject := make([]*planpb.Expr, len(outputTypes))
+		cols := make([]*planpb.ColDef, len(outputTypes))
+		for i, typ := range outputTypes {
+			scanProject[i] = groupingSetCol(typ, scanTag, int32(i))
+			cols[i] = &planpb.ColDef{Typ: typ}
+		}
+		scanID := builder.appendNode(&planpb.Node{
+			NodeType:    planpb.Node_SINK_SCAN,
+			SourceStep:  []int32{sourceStep},
+			ProjectList: scanProject,
+			BindingTags: []int32{scanTag},
+			TableDef:    &planpb.TableDef{Name: "__mo_grouping_prefix", Cols: cols},
+		}, branch.ctx)
+		if hashBuildBranches[branch.rootID] {
+			builder.qry.Nodes[scanID].ExtraOptions = materialized.CTEHashBuildScanOption
+		}
+
+		if branchIndex == pivotIndex {
+			builder.rewriteGroupingBranch(
+				branch.rootID, branch.aggID, scanID, branch.agg, scanTag, groupCount)
+			continue
+		}
+		branch.agg.Children[0] = scanID
+		branch.agg.GroupByHashKey = nil
+		for i := range branch.agg.GroupBy {
+			branch.agg.GroupBy[i] = groupingSetCol(outputTypes[i], scanTag, int32(i))
+		}
+		for i := range branch.agg.AggList {
+			merged := DeepCopyExpr(mergeAggregates[i])
+			merged.GetF().Args[0].GetCol().RelPos = scanTag
+			branch.agg.AggList[i] = merged
+		}
+	}
+	return true
+}
+
+func groupingSetPrefixChain(branches []groupingSetBranch) ([]int, bool) {
+	if len(branches) < 3 {
+		return nil, false
+	}
+	order := make([]int, len(branches))
+	active := make([]int, len(branches))
+	for i, branch := range branches {
+		if branch.agg == nil || len(branch.agg.GroupingFlag) == 0 ||
+			len(branch.agg.GroupingFlag) != len(branch.agg.GroupBy) {
+			return nil, false
+		}
+		order[i] = i
+		for _, enabled := range branch.agg.GroupingFlag {
+			if enabled {
+				active[i]++
+			}
+		}
+	}
+	for i := 1; i < len(order); i++ {
+		for j := i; j > 0 && active[order[j]] > active[order[j-1]]; j-- {
+			order[j], order[j-1] = order[j-1], order[j]
+		}
+	}
+	for i := 1; i < len(order); i++ {
+		finer, coarser := branches[order[i-1]].agg.GroupingFlag, branches[order[i]].agg.GroupingFlag
+		if active[order[i-1]] <= active[order[i]] {
+			return nil, false
+		}
+		for key := range finer {
+			if coarser[key] && !finer[key] {
+				return nil, false
+			}
+		}
+	}
+	return order, true
+}
+
+func groupingSetPrefixRowsForAdmission(producerRows, prefixRows float64) (float64, bool) {
+	if !finitePositive(producerRows) || !finitePositive(prefixRows) {
+		return 0, false
+	}
+	inflated := prefixRows * groupingSetPrefixCardinalitySafetyFactor
+	if !finitePositive(inflated) {
+		return 0, false
+	}
+	return max(prefixRows, min(producerRows, inflated)), true
+}
+
+func groupingSetPrefixFitsCostAndStorage(
+	producerCost float64,
+	inputRowSize float64,
+	materializedRows float64,
+	outputRowSize float64,
+	consumerCount int,
+) bool {
+	if consumerCount < 2 ||
+		!finitePositive(producerCost) || !finitePositive(inputRowSize) ||
+		!finitePositive(materializedRows) || !finitePositive(outputRowSize) ||
+		outputRowSize > float64(materialized.MaxSpillBatchBytes)/2 {
+		return false
+	}
+	materializedBytes := materializedRows * outputRowSize
+	if !finitePositive(materializedBytes) || materializedBytes > groupingSetPrefixEstimatedSpillBytesLimit {
+		return false
+	}
+	// In the rewritten suffix, the old plan runs the raw producer once per
+	// consumer. Prefix reuse runs it once for the pivot, then writes the pivot
+	// once and reads it for the pivot plus every coarser consumer.
+	savedProducerWork := producerCost * inputRowSize * float64(consumerCount-1)
+	materializedTraffic := materializedBytes * float64(consumerCount+1) *
+		groupingSetCostSafetyFactor
+	return finitePositive(savedProducerWork) && finitePositive(materializedTraffic) &&
+		savedProducerWork > materializedTraffic
 }
 
 func (builder *QueryBuilder) subtreeMayExposeGroupingSentinel(nodeID int32, seen map[int32]bool) bool {

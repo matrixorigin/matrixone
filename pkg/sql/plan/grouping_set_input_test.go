@@ -103,6 +103,98 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 	require.Zero(t, rolledBack.expandProjects)
 }
 
+func TestGroupingSetPrefixReuseForExactSum(t *testing.T) {
+	const sql = `select l_returnflag, l_linestatus, l_shipmode,
+		grouping(l_returnflag, l_linestatus, l_shipmode), sum(l_extendedprice)
+		from lineitem
+		group by rollup(l_returnflag, l_linestatus, l_shipmode)`
+
+	ctx := NewMockCompilerContext(true)
+	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+	rt.SetGlobalVariables("optimizer_hints", "")
+
+	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	shape := reachableGroupingSetShape(built.GetQuery())
+	require.Equal(t, 2, shape.tableScans)
+	require.Zero(t, shape.expandProjects)
+	require.Equal(t, 3, shape.sinkScans)
+	require.Equal(t, 2, shape.aggregatesOnSinkScan)
+	require.Equal(t, 1, shape.materializedSinks)
+}
+
+func TestGroupingSetPrefixReuseRejectsAverageState(t *testing.T) {
+	const sql = `select l_returnflag, l_linestatus, l_shipmode,
+		avg(l_extendedprice)
+		from lineitem
+		group by rollup(l_returnflag, l_linestatus, l_shipmode)`
+
+	ctx := NewMockCompilerContext(true)
+	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+	rt.SetGlobalVariables("optimizer_hints", "")
+
+	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	shape := reachableGroupingSetShape(built.GetQuery())
+	require.Zero(t, shape.aggregatesOnSinkScan)
+	// AVG has no scalar merge state. The pre-existing dynamic grouping rewrite
+	// remains available and does not route through prefix reuse.
+	require.Equal(t, 1, shape.expandProjects)
+}
+
+func TestGroupingSetPrefixChainRejectsNonNestedSets(t *testing.T) {
+	branch := func(flags ...bool) groupingSetBranch {
+		groups := make([]*planpb.Expr, len(flags))
+		return groupingSetBranch{agg: &planpb.Node{GroupBy: groups, GroupingFlag: flags}}
+	}
+
+	_, ok := groupingSetPrefixChain([]groupingSetBranch{
+		branch(true, true),
+		branch(true, false),
+		branch(false, true),
+		branch(false, false),
+	})
+	require.False(t, ok)
+}
+
 func TestGroupingSetInputSharingRejectsInheritedGroupingSentinel(t *testing.T) {
 	const sql = `select d.l_returnflag, grouping(d.l_returnflag), count(*)
 		from (
@@ -374,14 +466,15 @@ func TestGroupingSetMaterializedRowsForAdmission(t *testing.T) {
 }
 
 type groupingSetShape struct {
-	tableScans         int
-	aggregates         int
-	expandProjects     int
-	aggregatesOnExpand int
-	sinkScans          int
-	materializedSinks  int
-	flags              []bool
-	hasEmptyRowMarker  bool
+	tableScans           int
+	aggregates           int
+	expandProjects       int
+	aggregatesOnExpand   int
+	aggregatesOnSinkScan int
+	sinkScans            int
+	materializedSinks    int
+	flags                []bool
+	hasEmptyRowMarker    bool
 }
 
 func reachableGroupingSetShape(query *planpb.Query) groupingSetShape {
@@ -402,6 +495,9 @@ func reachableGroupingSetShape(query *planpb.Query) groupingSetShape {
 			if len(node.Children) == 1 {
 				if _, ok := DecodeGroupingSetExpandOption(query.Nodes[node.Children[0]].ExtraOptions); ok {
 					shape.aggregatesOnExpand++
+				}
+				if query.Nodes[node.Children[0]].NodeType == planpb.Node_SINK_SCAN {
+					shape.aggregatesOnSinkScan++
 				}
 			}
 		case planpb.Node_SINK_SCAN:
