@@ -17,6 +17,7 @@ package compile
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -38,6 +39,10 @@ type warningDiagnosticBatchSink = process.WarningDiagnosticBatchAppender
 
 type warningDiagnosticCountSink = process.WarningDiagnosticCountAppender
 
+type groupConcatCutMarker interface {
+	markGroupConcatCut(string)
+}
+
 // appendWarningBatchToSink preserves the bounded diagnostic batch when the
 // sink supports it and falls back to the legacy one-record interface for
 // older sessions. The sink is captured by the remote sender for one execution
@@ -52,12 +57,14 @@ const remoteWarningRetentionLimit = 64
 // surface it needs while collecting row-level warnings. It deliberately does
 // not expose a frontend session or variable state to the remote CN.
 type remoteWarningCollector struct {
-	mu           sync.Mutex
-	warningCount uint64
-	warnings     []remoteWarningDiagnostic
-	warningBytes int
-	maxRetained  int
-	closed       bool
+	mu                    sync.Mutex
+	warningCount          uint64
+	warnings              []remoteWarningDiagnostic
+	warningBytes          int
+	maxRetained           int
+	groupConcatCut        bool
+	groupConcatCutMessage string
+	closed                bool
 }
 
 func (*remoteWarningCollector) GetTempTable(string, string) (string, bool) { return "", false }
@@ -103,6 +110,22 @@ func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16
 	} else {
 		s.warningCount += total
 	}
+	codeLimit := len(codes)
+	if uint64(codeLimit) > total {
+		codeLimit = int(total)
+	}
+	for i := 0; i < codeLimit; i++ {
+		if codes[i] != moerr.ER_CUT_VALUE_GROUP_CONCAT {
+			continue
+		}
+		message := ""
+		if i < len(messages) {
+			message = process.BoundWarningMessage(
+				messages[i], process.WarningDiagnosticMaxMessageBytes)
+		}
+		s.markGroupConcatCutLocked(message)
+		break
+	}
 	limit := s.maxRetained
 	if limit <= 0 {
 		limit = remoteWarningRetentionLimit
@@ -132,6 +155,34 @@ func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16
 	s.mu.Unlock()
 }
 
+func (s *remoteWarningCollector) markGroupConcatCut(message string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.markGroupConcatCutLocked(message)
+}
+
+func (s *remoteWarningCollector) markGroupConcatCutLocked(message string) {
+	s.groupConcatCut = true
+	if s.groupConcatCutMessage == "" && message != "" {
+		s.groupConcatCutMessage = message
+	}
+}
+
+func (s *remoteWarningCollector) groupConcatCutDiagnostic() (bool, string) {
+	if s == nil {
+		return false, ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.groupConcatCut, s.groupConcatCutMessage
+}
+
 func (s *remoteWarningCollector) SnapshotWarnings() (uint64, []remoteWarningDiagnostic) {
 	if s == nil {
 		return 0, nil
@@ -153,6 +204,7 @@ func (s *remoteWarningCollector) closeWarnings(success bool) (uint64, []remoteWa
 	s.closed = true
 	total, warnings := s.warningCount, s.warnings
 	s.warningCount, s.warnings, s.warningBytes = 0, nil, 0
+	s.groupConcatCut, s.groupConcatCutMessage = false, ""
 	if !success {
 		return 0, nil
 	}

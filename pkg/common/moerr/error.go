@@ -78,6 +78,7 @@ const (
 	ErrRegexpIllegalArgument       uint16 = 20206
 	ErrPreparedParamOutOfRange     uint16 = 20207
 	ErrTruncatedWrongValue         uint16 = 20208
+	ErrGroupConcatCut              uint16 = 20209
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -448,6 +449,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 	ErrPreparedParamOutOfRange:     {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "%s value is out of range in '%s'"},
 	ErrTruncatedWrongValue:         {ER_TRUNCATED_WRONG_VALUE, []string{"22007"}, "Truncated incorrect %-.64s value: '%-.128s'"},
+	ErrGroupConcatCut:              {ER_CUT_VALUE_GROUP_CONCAT, []string{"HY000"}, "%s"},
 
 	// Group 3: invalid input
 	ErrBadConfig:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -1082,6 +1084,13 @@ func NewPreparedParamOutOfRange(ctx context.Context, typ string, statement strin
 func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrDataTruncated, typ, msg)
+}
+
+func NewGroupConcatCut(ctx context.Context, message string) *Error {
+	if message == "" {
+		message = "Row 1 was cut by GROUP_CONCAT()"
+	}
+	return newError(ctx, ErrGroupConcatCut, message)
 }
 
 func NewInvalidArg(ctx context.Context, arg string, val any) *Error {

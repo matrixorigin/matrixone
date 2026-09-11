@@ -401,6 +401,11 @@ func TestNewErrTooBigPrecision(t *testing.T) {
 
 func Test_ForCoverage(t *testing.T) {
 	ctx := context.Background()
+	cut := NewGroupConcatCut(ctx, "Row 2 was cut by GROUP_CONCAT()")
+	require.True(t, IsMoErrCode(cut, ErrGroupConcatCut))
+	require.Equal(t, ER_CUT_VALUE_GROUP_CONCAT, cut.MySQLCode())
+	require.Equal(t, "Row 2 was cut by GROUP_CONCAT()", cut.Error())
+
 	err := NewDataTruncatedf(ctx, "test", "test")
 	require.True(t, IsMoErrCode(err, ErrDataTruncated))
 

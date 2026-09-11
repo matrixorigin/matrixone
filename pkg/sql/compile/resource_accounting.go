@@ -57,6 +57,8 @@ type remoteTerminalEnvelope struct {
 	StatementLastInsertID     uint64                           `json:"statement_last_insert_id,omitempty"`
 	WarningCount              uint64                           `json:"warning_count,omitempty"`
 	WarningDiagnostics        []remoteWarningDiagnostic        `json:"warning_diagnostics,omitempty"`
+	GroupConcatCut            bool                             `json:"group_concat_cut,omitempty"`
+	GroupConcatCutMessage     string                           `json:"group_concat_cut_message,omitempty"`
 	Delta                     resource.Delta                   `json:"resource_delta"`
 	Memory                    resource.MemoryTotals            `json:"memory"`
 	Allocation                resource.AllocationAccountTotals `json:"allocation_account"`

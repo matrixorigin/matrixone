@@ -312,3 +312,81 @@ func TestWarningAttemptConcurrentSeal(t *testing.T) {
 	proc.Session = nil
 	require.Zero(t, testing.AllocsPerRun(100, func() { require.Nil(t, newWarningAttempt(proc)) }))
 }
+
+func TestStrictWriteGroupConcatPromotionPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		sql     string
+		mode    string
+		enabled bool
+	}{
+		{name: "select", sql: "select 1", mode: "STRICT_TRANS_TABLES"},
+		{name: "insert select", sql: "insert into dst select 1", mode: "STRICT_TRANS_TABLES", enabled: true},
+		{name: "insert ignore", sql: "insert ignore into dst select 1", mode: "STRICT_TRANS_TABLES"},
+		{name: "update", sql: "update dst set a = 1", mode: "STRICT_ALL_TABLES", enabled: true},
+		{name: "replace", sql: "replace into dst select 1", mode: "STRICT_TRANS_TABLES", enabled: true},
+		{name: "on duplicate", sql: "insert into dst select 1 on duplicate key update a = values(a)", mode: "STRICT_TRANS_TABLES", enabled: true},
+		{name: "ctas", sql: "create table dst as select 1", mode: "STRICT_TRANS_TABLES", enabled: true},
+		{name: "ordinary create", sql: "create table dst(a int)", mode: "STRICT_TRANS_TABLES"},
+		{name: "non-strict write", sql: "insert into dst select 1", mode: ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			statements, err := mysql.Parse(ctx, test.sql, 1)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			defer statements[0].Free()
+
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return test.mode, nil
+				}
+				return nil, nil
+			})
+			compile := &Compile{proc: proc, stmt: statements[0]}
+			enabled, err := compile.strictWriteGroupConcatPromotionEnabled()
+			require.NoError(t, err)
+			require.Equal(t, test.enabled, enabled)
+		})
+	}
+}
+
+func TestGroupConcatCutMarkerSurvivesDiagnosticRetentionAndRemoteEnvelope(t *testing.T) {
+	collector := &remoteWarningCollector{maxRetained: 1}
+	collector.AppendWarningDiagnostic(1, "retained first")
+	collector.AppendWarningDiagnostic(
+		moerr.ER_CUT_VALUE_GROUP_CONCAT, "Row 7 was cut by GROUP_CONCAT()")
+	require.Len(t, collector.warnings, 1)
+	cut, message := collector.groupConcatCutDiagnostic()
+	require.True(t, cut)
+	require.Equal(t, "Row 7 was cut by GROUP_CONCAT()", message)
+
+	remoteCollector := &remoteWarningCollector{}
+	sender := &messageSenderOnClient{warningSink: remoteCollector}
+	payload, err := json.Marshal(remoteTerminalEnvelope{
+		GroupConcatCut:        true,
+		GroupConcatCutMessage: "Row 9 was cut by GROUP_CONCAT()",
+	})
+	require.NoError(t, err)
+	require.NoError(t, sender.dealRemoteTerminal(payload))
+	cut, message = remoteCollector.groupConcatCutDiagnostic()
+	require.True(t, cut)
+	require.Equal(t, "Row 9 was cut by GROUP_CONCAT()", message)
+}
+
+func TestStrictWriteGroupConcatCutReturnsMySQLError1260(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	attempt := newWarningAttempt(proc, true)
+	attempt.collector.AppendWarningDiagnostic(
+		moerr.ER_CUT_VALUE_GROUP_CONCAT, "Row 2 was cut by GROUP_CONCAT()")
+	compile := &Compile{proc: proc}
+	err := compile.strictWriteGroupConcatCutError(attempt, true)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrGroupConcatCut))
+	require.Equal(t, moerr.ER_CUT_VALUE_GROUP_CONCAT, err.(*moerr.Error).MySQLCode())
+
+	attempt.finish(false, nil)
+	cut, _ := attempt.groupConcatCutDiagnostic()
+	require.False(t, cut, "failed statement must discard the attempt marker")
+}

@@ -14,7 +14,11 @@
 
 package compile
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 // warningAttempt binds a generation-specific sink without replacing Session,
 // whose optional interfaces are still needed by expression execution.
@@ -23,7 +27,7 @@ type warningAttempt struct {
 	previous  map[*process.Process]any
 }
 
-func newWarningAttempt(proc *process.Process) *warningAttempt {
+func newWarningAttempt(proc *process.Process, force ...bool) *warningAttempt {
 	if proc == nil {
 		return nil
 	}
@@ -31,12 +35,55 @@ func newWarningAttempt(proc *process.Process) *warningAttempt {
 	_, single := destination.(warningDiagnosticSink)
 	_, batch := destination.(warningDiagnosticBatchSink)
 	_, count := destination.(warningDiagnosticCountSink)
-	if !single && !batch && !count {
+	forced := len(force) > 0 && force[0]
+	if !single && !batch && !count && !forced {
 		return nil
 	}
 	a := &warningAttempt{collector: &remoteWarningCollector{}, previous: make(map[*process.Process]any)}
 	a.bindProcess(proc)
 	return a
+}
+
+func (a *warningAttempt) groupConcatCutDiagnostic() (bool, string) {
+	if a == nil {
+		return false, ""
+	}
+	return a.collector.groupConcatCutDiagnostic()
+}
+
+func (c *Compile) strictWriteGroupConcatPromotionEnabled() (bool, error) {
+	if c == nil {
+		return false, nil
+	}
+	switch stmt := c.stmt.(type) {
+	case *tree.Insert:
+		if len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil {
+			return false, nil
+		}
+	case *tree.Update, *tree.Replace:
+	case *tree.CreateTable:
+		if !stmt.IsAsSelect {
+			return false, nil
+		}
+	default:
+		return false, nil
+	}
+	err, strict := StrictSqlMode(c.proc)
+	return strict, err
+}
+
+func (c *Compile) strictWriteGroupConcatCutError(
+	warnings *warningAttempt,
+	promotionEnabled bool,
+) error {
+	if !promotionEnabled {
+		return nil
+	}
+	cut, message := warnings.groupConcatCutDiagnostic()
+	if !cut {
+		return nil
+	}
+	return moerr.NewGroupConcatCut(c.proc.Ctx, message)
 }
 
 func (a *warningAttempt) bindProcess(proc *process.Process) {

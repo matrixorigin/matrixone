@@ -968,6 +968,11 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 		}
 		appendWarningBatchToSink(sender.warningSink, envelope.WarningCount, codes, messages)
 	}
+	if envelope.GroupConcatCut {
+		if marker, ok := sender.warningSink.(groupConcatCutMarker); ok {
+			marker.markGroupConcatCut(envelope.GroupConcatCutMessage)
+		}
+	}
 	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {
 		if envelope.Allocation.GenerationCount != 0 {
 			if envelope.TerminalResourceVersion <
