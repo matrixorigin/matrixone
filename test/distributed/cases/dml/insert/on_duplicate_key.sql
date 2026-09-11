@@ -233,6 +233,20 @@ insert into t_odku_row_alias values (1, 10, 0);
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
 select * from t_odku_row_alias order by id;
 
+-- A target-correlated subquery must not read a stale target snapshot after an
+-- earlier ordered assignment or across input rows that can hit the same target.
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = t_odku_row_alias.a + 1, b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (1, 5, 0), (1, 6, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias (id, a, b) select 1, 5, 0 on duplicate key update b = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
+
 -- The target row must be available to a correlated subquery below the
 -- candidate pipeline, even when the source alias does not shadow the row alias.
 delete from t_odku_row_alias;

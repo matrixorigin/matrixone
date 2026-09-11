@@ -153,6 +153,22 @@ func TestInsertRowAliasCorrelatedFromBuildPlanKeepsTargetLookupReachable(t *test
 	require.GreaterOrEqual(t, targetScans, 3)
 }
 
+func TestInsertRowAliasCorrelatedRejectsOrderedAssignmentComposition(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update dname = 'changed', loc = (select max(e.ename) from constraint_test.emp as e "+
+			"where e.deptno = constraint_test.dept.deptno)")
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+}
+
+func TestInsertRowAliasCorrelatedRejectsMultiRowInput(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(id, name, location) "+
+			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
+			"where e.deptno = constraint_test.dept.deptno)")
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+}
+
 func TestInsertRowAliasCorrelatedFromBuildPlanWithUniqueConflict(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+

@@ -155,6 +155,7 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 	// Never inherit single-table insert proofs/flags from a previous DML bound
 	// on this builder.
 	builder.insertInputKeysUnique = false
+	builder.insertInputSingleRow = false
 	builder.isInsertIgnore = false
 
 	if stmt.Source == nil {
