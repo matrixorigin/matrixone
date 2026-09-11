@@ -380,6 +380,50 @@ func TestGenerateSeriesUsesPreparedResultSchema(t *testing.T) {
 	require.Equal(t, "2020-02-29 23:59:59.124356", stringResult.Batch.Vecs[0].GetStringAt(0))
 }
 
+func TestGenerateDatetimeSeriesRejectsInvalidNextStep(t *testing.T) {
+	proc := testutil.NewProc(t)
+	minimum := types.DatetimeFromClock(types.MinDatetimeYear, 1, 1, 0, 0, 0, 0)
+
+	for _, test := range []struct {
+		name   string
+		newVec func() *vector.Vector
+		build  func(*genDatetimeState, *batch.Batch, int, *process.Process) error
+	}{
+		{
+			name:   "datetime",
+			newVec: func() *vector.Vector { return vector.NewVec(types.T_datetime.ToTypeWithScale(6)) },
+			build:  buildNextDatetimeBatch,
+		},
+		{
+			name:   "string",
+			newVec: func() *vector.Vector { return vector.NewVec(types.T_varchar.ToType()) },
+			build:  buildNextDatetimeStringBatch,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := &genDatetimeState{
+				start: minimum,
+				end:   minimum,
+				next:  minimum,
+				step:  -1,
+				tp:    types.MicroSecond,
+				scale: 6,
+			}
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = test.newVec()
+			owner := &generateSeriesArg{batch: bat}
+			t.Cleanup(func() { owner.free(nil, proc, false, nil) })
+
+			err := test.build(state, bat, 1, proc)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "invalid step")
+
+			owner.reset(nil, proc)
+			require.Zero(t, owner.batch.RowCount())
+		})
+	}
+}
+
 func TestInitStartAndEndNumNoTypeCheck(t *testing.T) {
 	proc := testutil.NewProc(t)
 	tests := []struct {
