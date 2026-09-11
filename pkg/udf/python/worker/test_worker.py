@@ -1155,6 +1155,8 @@ class WorkerContractTest(unittest.TestCase):
                     [{"type_id": worker.VARCHAR, "offset_width": 32}], "arg"
                 ),
             )
+        with self.assertRaisesRegex(ValueError, "valid Arrow record batch"):
+            worker._deserialize_record_batch_message(bytes(message_wire) + b"junk", schema)
 
     def test_handler_frame_keeps_arrow_bytes_out_of_pickle_metadata(self):
         arrow_wire = b"arrow-payload"
