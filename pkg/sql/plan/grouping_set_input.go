@@ -211,20 +211,22 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 	for i := range branches {
 		drainOccurrences[i] = cteOccurrence{rootID: branches[i].rootID}
 	}
-	hashBuildBranches, hasDrainWitness := builder.cteConsumerDrainRequirements(
-		rootID, drainOccurrences,
-	)
-	if !hasDrainWitness {
+	drainProof := builder.proveCTEConsumerDrainRequirements(rootID, drainOccurrences)
+	if !drainProof.hasWitness {
 		return false
 	}
+	hashBuildBranches := drainProof.hashBuildOccurrences
+	allBranchesDrained := len(drainProof.drainedOccurrences) == len(branches)
 	if !builder.subtreeIsDeterministic(first.Children[0], make(map[int32]bool), true) {
 		return false
 	}
 	for _, expr := range first.GroupBy {
-		if expr == nil || !exprCanRemoveProject(expr) ||
-			!builder.cteExprIsTotal(
-				first.Children[0], expr, branches[0].ctx, make(map[[2]int32]bool),
-			) {
+		if expr == nil || !exprCanRemoveProject(expr) {
+			return false
+		}
+		if !allBranchesDrained && !builder.cteExprIsTotal(
+			first.Children[0], expr, branches[0].ctx, make(map[[2]int32]bool),
+		) {
 			return false
 		}
 	}
@@ -235,9 +237,11 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 		}
 		// A legacy grouping branch may leave some grouping expressions inactive,
 		// and an outer consumer may stop before other branches. Dynamic expansion
-		// evaluates every key and aggregate for every set, so only expressions
-		// proved total may cross that evaluation-domain boundary.
-		if !builder.cteAggregateIsTotal(
+		// evaluates every key and aggregate for every set. If every legacy branch
+		// is already guaranteed to drain, every deterministic expression and
+		// aggregate is evaluated on the same complete input domain and no totality
+		// proof is needed. Otherwise retain the conservative totality guard.
+		if !allBranchesDrained && !builder.cteAggregateIsTotal(
 			first.Children[0], agg, branches[0].ctx, make(map[[2]int32]bool),
 		) {
 			return false
