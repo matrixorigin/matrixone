@@ -2999,7 +2999,7 @@ func (b *baseBinder) bindJsonValueExpr(astExpr *tree.FuncExpr, depth int32) (*Ex
 			}
 			args[i] = bound
 		}
-		return bindFuncExprImplByPlanExpr(b.GetContext(), "json_value", args, false, nil, false)
+		return bindFuncExprImplByPlanExpr(b.GetContext(), "json_value", args, false, nil, nil, false)
 	}
 	target := types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
 	if spec.Returning != nil {
