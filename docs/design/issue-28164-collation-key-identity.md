@@ -3,7 +3,7 @@
 - Status: Design revision 3; implementation increment in PR #28520; v2 remains gated and the full series is not complete
 - Tracking issue: [#28164](https://github.com/matrixorigin/matrixone/issues/28164)
 - Design revision: 3
-- Frozen baseline for implementation increment: `ee0c2bf563bf27ff2c80891bb57a1de5886bf90b` (`upstream/main` at the final exact-head rebase freeze)
+- Frozen baseline for implementation increment: `7013fbbd6e152ba31da2d3dbba7012ac7f8b8462` (`upstream/main` at the final exact-head rebase freeze)
 - Scope: the complete string PK/UNIQUE identity contract; this PR carries the codec, metadata fence, planner key materialization, and guarded index probes. TN persistence, global comparison consumers, migration management, and rollout remain follow-up work.
 
 ## 1. Decision summary
@@ -1277,3 +1277,18 @@ UNIQUE` does not implicitly migrate merely because the activation context is
 enabled. The behavior remains fail-closed and production v2 is still disabled;
 TN/catalog persistence and the full migration owner must consume these
 relation-local records before any user-visible activation.
+
+### 10.21 Implementation series status (transactional sidecar replacement)
+
+The sidecar transaction contract now permits an atomic locator replacement when
+one transaction deletes the expected old locator and republishes the same
+encoded key for a new locator. A staged delete is intentionally treated as the
+transaction's current value; re-reading the old store entry during `Put` would
+reject the replacement even though the delete and put are fenced together at
+commit. The regression test verifies that the committed lookup exposes only the
+new locator. This is an in-memory contract test for the future storage adapter,
+not evidence that TN/catalog sidecar persistence is connected.
+
+The implementation remains a staged foundation: v2 admission is still
+fail-closed and disabled, and complete storage integration, SQL comparison
+consumers, migration commands, upgrade validation, and QA remain required.
