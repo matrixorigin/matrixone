@@ -4,6 +4,110 @@ Joe
 select json_value('{"fname": "Joe", "lname": "Palmer"}', '$.lname');
 json_value({"fname": "Joe", "lname": "Palmer"}, $.lname)
 Palmer
+select json_value('{"a":[12]}', '$.a');
+json_value({"a":[12]}, $.a)
+[12]
+select json_value('{"a":{"k":1}}', '$.a');
+json_value({"a":{"k":1}}, $.a)
+{"k": 1}
+select json_value('{}', '$.missing' default 'empty' on empty);
+json_value({}, $.missing default 'empty' on empty)
+empty
+select json_value('{"a":"bad"}', '$.a' returning unsigned default 7 on error);
+json_value({"a":"bad"}, $.a returning unsigned default 7 on error)
+7
+select json_value('{"a":1,"b":2}', '$.*' returning unsigned default 7 on error);
+json_value({"a":1,"b":2}, $.* returning unsigned default 7 on error)
+7
+select json_value('{"a":[12]}', '$.a' returning json);
+json_value({"a":[12]}, $.a returning json)
+[12]
+select json_value('{"a":"longer"}', '$.a' returning char(4) default 'back' on error);
+json_value({"a":"longer"}, $.a returning char(4) default 'back' on error)
+back
+select json_value(null, '$.a' default 'empty' on empty);
+json_value(null, $.a default 'empty' on empty)
+null
+select json_value('{}', '$.a' returning unsigned default 5 on empty default 7 on error) as n;
+n
+5
+select json_value('{"a":"bad"}', '$.a' returning unsigned default 5 on empty default 7 on error) as n;
+n
+7
+select json_value('{"a":1,"b":2}', '$.*' default 'empty' on empty default 'error' on error) as s;
+s
+error
+select json_value('not-json', '$' returning json default '5' on empty default '7' on error) as j;
+j
+7
+select json_value('{}', '$.a' returning json default '5' on empty default '7' on error) as j;
+j
+5
+select json_value('{"a":" 12 "}', '$.a' returning signed null on error) as n;
+n
+12
+select json_value('{"a":" 12 "}', '$.a' returning unsigned null on error) as n;
+n
+12
+select json_value('{"a":"2026-01-02 03:04:05.1234"}', '$.a' returning datetime(3) null on error) as dt;
+dt
+null
+select json_value('{"a":"0000-00-00"}', '$.a' returning date null on error) as d;
+d
+null
+create table json_value_responses (id int, doc varchar(100));
+insert into json_value_responses values (1, '{}'), (2, '{"a":"bad"}'), (3, '{"a":9}'), (4, '{"a":null}');
+select id, json_value(doc, '$.a' returning unsigned default 5 on empty default 7 on error) as n from json_value_responses order by id;
+id	n
+1	5
+2	7
+3	9
+4	null
+select id from json_value_responses where json_value(doc, '$.a' returning unsigned default 5 on empty default 7 on error) = 7 order by id;
+id
+2
+drop table json_value_responses;
+create view json_value_view as select json_value('{"a":[12]}', '$.a') as extracted;
+select extracted from json_value_view;
+extracted
+[12]
+drop view json_value_view;
+prepare json_value_stmt from 'select json_value(?, ''$.a'' returning unsigned default 7 on error)';
+set @json_value_doc = '{"a":"bad"}';
+execute json_value_stmt using @json_value_doc;
+json_value(?, $.a returning unsigned default 7 on error)
+7
+deallocate prepare json_value_stmt;
+drop table if exists json_value_ctas;
+create table json_value_ctas as select json_value('{"a":[12]}', '$.a') as extracted;
+select extracted from json_value_ctas;
+extracted
+[12]
+drop table json_value_ctas;
+drop table if exists json_value_generated;
+create table json_value_generated (id int primary key, doc json, extracted varchar(512) generated always as (json_value(doc, '$.a')) stored, key extracted_idx (extracted));
+insert into json_value_generated(id, doc) values (1, '{"a":[12]}'), (2, '{"a":{"k":1}}'), (3, '{"a":"scalar"}');
+select id, extracted from json_value_generated order by id;
+id	extracted
+1	[12]
+2	{"k": 1}
+3	scalar
+select id, extracted from json_value_generated force index(extracted_idx) where extracted = '[12]';
+id	extracted
+1	[12]
+select id, extracted from json_value_generated force index(extracted_idx) where extracted = '{"k": 1}';
+id	extracted
+2	{"k": 1}
+update json_value_generated set doc = '{"a":[99]}' where id = 3;
+select id, extracted from json_value_generated order by id;
+id	extracted
+1	[12]
+2	{"k": 1}
+3	[99]
+select id, extracted from json_value_generated force index(extracted_idx) where extracted = '[99]';
+id	extracted
+3	[99]
+drop table json_value_generated;
 select json_value('{"item": "shoes", "price": "49.95"}', '$.price');
 json_value({"item": "shoes", "price": "49.95"}, $.price)
 49.95

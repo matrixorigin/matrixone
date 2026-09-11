@@ -403,6 +403,9 @@ const (
 	ErrVectorNeedRetryWithPreMode uint16 = 22301
 	// Group 16: CCPR
 	ErrCCPRReadOnly uint16 = 22401
+	// JSON_VALUE response errors use the MySQL 8.0 diagnostics 3966/3967.
+	ErrMissingJSONValue   uint16 = 22402
+	ErrMultipleJSONValues uint16 = 22403
 
 	// ErrEnd, the max value of MOErrorCode
 	ErrEnd uint16 = 65535
@@ -709,6 +712,12 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 
 	// Group 16: CCPR
 	ErrCCPRReadOnly: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ccpr shared object is read-only"},
+	ErrMissingJSONValue: {
+		ER_MISSING_JSON_VALUE, []string{"22035"}, "No value was found by '%.192s' on the specified path.",
+	},
+	ErrMultipleJSONValues: {
+		ER_MULTIPLE_JSON_VALUES, []string{"22034"}, "More than one value was found by '%.192s' on the specified path.",
+	},
 
 	// Group End: max value of MOErrorCode
 	ErrEnd: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "internal error: end of errcode code"},
@@ -1171,6 +1180,16 @@ func NewInvalidJSONCharset(ctx context.Context, charset string) *Error {
 
 func NewCharacterSetMismatch(ctx context.Context, left, right, function string) *Error {
 	return newError(ctx, ErrCharacterSetMismatch, left, right, function)
+}
+
+// NewMissingJSONValue reports JSON_VALUE's ER_MISSING_JSON_VALUE response.
+func NewMissingJSONValue(ctx context.Context, path string) *Error {
+	return newError(ctx, ErrMissingJSONValue, path)
+}
+
+// NewMultipleJSONValues reports JSON_VALUE's ER_MULTIPLE_JSON_VALUES response.
+func NewMultipleJSONValues(ctx context.Context, path string) *Error {
+	return newError(ctx, ErrMultipleJSONValues, path)
 }
 
 func NewUnknownStmtHandler(ctx context.Context, name, operation string) *Error {

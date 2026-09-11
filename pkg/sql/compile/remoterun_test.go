@@ -1416,6 +1416,25 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			}},
 		}
 	}
+	jsonValueContract := func() *planpb.Expr {
+		args := make([]*planpb.Expr, 7)
+		for i := range args {
+			args[i] = &planpb.Expr{
+				Typ:  planpb.Type{Id: int32(types.T_varchar)},
+				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}},
+			}
+		}
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					Obj:     planfunction.EncodeOverloadID(planfunction.JSON_VALUE, 2),
+					ObjName: "json_value",
+				},
+				Args: args,
+			}},
+		}
+	}
 	makeScope := func(expressions ...*planpb.Expr) *Scope {
 		return &Scope{
 			Magic:  Remote,
@@ -1567,6 +1586,13 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			incompatibleVersion: defines.MORPCVersion35,
 			compatibleVersion:   defines.MORPCVersion36,
 			errorContains:       "prepared JSON comparison parameters require MORPC protocol version 36",
+		},
+		{
+			name:                "JSON_VALUE seven-argument plan",
+			expressions:         []*planpb.Expr{jsonValueContract()},
+			incompatibleVersion: defines.MORPCVersion59,
+			compatibleVersion:   defines.MORPCVersion64,
+			errorContains:       "seven-argument JSON_VALUE plans require MORPC protocol version 64",
 		},
 		{
 			name:                "numeric prefix and JSON comparison",

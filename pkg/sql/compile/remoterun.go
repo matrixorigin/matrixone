@@ -2078,6 +2078,12 @@ func validateRemoteExpressionPipelineProtocol(
 			"typed numeric FORMAT arguments require MORPC protocol version 59",
 		)
 	}
+	if features.JSONValueContract &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion64) {
+		return moerr.NewNotSupportedNoCtx(
+			"seven-argument JSON_VALUE plans require MORPC protocol version 64",
+		)
+	}
 	return nil
 }
 

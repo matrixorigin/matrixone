@@ -9368,7 +9368,7 @@ func groupingSetOrderCanBindAboveUnion(selectList tree.SelectExprs, astExpr tree
 
 func groupingSetOrderExprEqual(left, right tree.Expr) bool {
 	normalizeIdentifiers := func(expr tree.Expr) tree.Expr {
-		normalized := cloneTreeExpr(expr)
+		normalized := normalizeJSONValueSemantics(expr)
 		walkGroupingSetOrderByExpr(normalized, func(node tree.Expr) bool {
 			name, ok := node.(*tree.UnresolvedName)
 			if !ok {

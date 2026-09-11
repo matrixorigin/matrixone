@@ -19,12 +19,15 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -2896,6 +2899,9 @@ func combinePlanExprsBalanced(ctx context.Context, op string, exprs []*plan.Expr
 }
 
 func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bool) (*Expr, error) {
+	if astExpr.JsonValue != nil {
+		return b.bindJsonValueExpr(astExpr, depth)
+	}
 	funcRef, ok := astExpr.Func.FunctionReference.(*tree.UnresolvedName)
 	if !ok {
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
@@ -2951,6 +2957,408 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+}
+
+func jsonValueUsesContract(spec *tree.JsonValueSpec) bool {
+	return spec != nil && (spec.Returning != nil || spec.OnEmpty.IsExplicit() || spec.OnError.IsExplicit())
+}
+
+func requireJSONValueContractProtocol(ctx context.Context, proc *process.Process) error {
+	if proc == nil {
+		return nil
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return moerr.NewNotSupported(
+			ctx,
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 64",
+		)
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion64 {
+		return moerr.NewNotSupported(
+			ctx,
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 64",
+		)
+	}
+	return nil
+}
+
+func (b *baseBinder) bindJsonValueExpr(astExpr *tree.FuncExpr, depth int32) (*Expr, error) {
+	if len(astExpr.Exprs) != 2 {
+		return nil, moerr.NewInvalidArg(b.GetContext(), "json_value requires document and path", len(astExpr.Exprs))
+	}
+	spec := astExpr.JsonValue
+	if !jsonValueUsesContract(spec) {
+		args := make([]*Expr, len(astExpr.Exprs))
+		for i, arg := range astExpr.Exprs {
+			bound, err := b.impl.BindExpr(arg, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			args[i] = bound
+		}
+		return bindFuncExprImplByPlanExpr(b.GetContext(), "json_value", args, false, nil, nil, false)
+	}
+	target := types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
+	if spec.Returning != nil {
+		if spec.Returning.Type == nil {
+			return nil, moerr.NewInvalidArg(b.GetContext(), "json_value RETURNING type", "")
+		}
+		planTarget, err := getTypeFromAst(b.GetContext(), spec.Returning.Type)
+		if err != nil {
+			return nil, err
+		}
+		target = makeTypeByPlan2Type(planTarget)
+		// FLOAT/DOUBLE omit a display width when no precision is written. The
+		// parser records that omission as -1; keep the plan metadata's neutral
+		// zero width instead of exposing a sentinel through protocol/CTAS.
+		if (target.Oid == types.T_float32 || target.Oid == types.T_float64) && target.Width < 0 {
+			target.Width = 0
+		}
+		if spec.Returning.Charset != "" {
+			if !target.Oid.IsMySQLString() {
+				return nil, moerr.NewInvalidInputf(b.GetContext(),
+					"JSON_VALUE CHARACTER SET is only valid for character RETURNING types")
+			}
+			charset, ok := charsetForName(spec.Returning.Charset)
+			if !ok {
+				return nil, moerr.NewInvalidInputf(b.GetContext(), "unsupported character set '%s'", spec.Returning.Charset)
+			}
+			if target.Oid == types.T_binary || target.Oid == types.T_varbinary || target.Oid == types.T_blob {
+				if charset != uint32(types.CharsetBinary) {
+					return nil, moerr.NewInvalidInputf(b.GetContext(),
+						"JSON_VALUE BINARY RETURNING type cannot use character set '%s'", spec.Returning.Charset)
+				}
+			}
+			target.Charset = uint8(charset)
+			if target.Charset == types.CharsetBinary {
+				switch target.Oid {
+				case types.T_char:
+					target.Oid = types.T_binary
+				case types.T_varchar:
+					target.Oid = types.T_varbinary
+				case types.T_text:
+					target.Oid = types.T_blob
+				}
+			}
+		}
+		if err := validateJSONValueTarget(b.GetContext(), target); err != nil {
+			return nil, err
+		}
+		if err := validateJSONValueTargetSyntax(b.GetContext(), spec.Returning.Type); err != nil {
+			return nil, err
+		}
+	}
+	targetPlan := makePlan2Type(&target)
+	document, err := b.impl.BindExpr(astExpr.Exprs[0], depth, false)
+	if err != nil {
+		return nil, err
+	}
+	path, err := b.impl.BindExpr(astExpr.Exprs[1], depth, false)
+	if err != nil {
+		return nil, err
+	}
+
+	typeExpr := &Expr{Typ: targetPlan, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+	args := []*Expr{document, path, typeExpr}
+	for _, response := range []*tree.JsonValueResponse{&spec.OnEmpty, &spec.OnError} {
+		mode := response.Mode
+		if mode == tree.JsonValueImplicitResponse {
+			mode = tree.JsonValueNullResponse
+		}
+		args = append(args, &Expr{Expr: makePlan2Int64ConstExprWithType(int64(mode)).Expr, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}})
+		if response.Mode == tree.JsonValueDefaultResponse {
+			if response.Default == nil {
+				return nil, moerr.NewInvalidArg(b.GetContext(), "json_value DEFAULT requires a literal", "")
+			}
+			if err := validateJSONValueDefaultLiteral(b.GetContext(), response.Default, target); err != nil {
+				return nil, err
+			}
+			defaultExpr, err := b.impl.BindExpr(response.Default, depth, false)
+			if err != nil {
+				return nil, err
+			}
+			// DEFAULT is validated during binding even when the response branch
+			// is not reached by the current data. The strict cast preserves the
+			// SQL/JSON contract and prevents an invalid or over-width literal from
+			// being silently truncated in a prepared plan.
+			defaultExpr, err = appendExplicitCastBeforeExpr(b.GetContext(), defaultExpr, targetPlan)
+			if err != nil {
+				return nil, err
+			}
+			args = append(args, defaultExpr)
+		} else {
+			args = append(args, &Expr{Expr: &plan.Expr_Lit{Lit: &Const{Isnull: true}}, Typ: targetPlan})
+		}
+	}
+	if b.builder != nil {
+		if err := requireJSONValueContractProtocol(b.GetContext(), b.builder.compCtx.GetProcess()); err != nil {
+			return nil, err
+		}
+	}
+	argsType := make([]types.Type, len(args))
+	for i, arg := range args {
+		argsType[i] = makeTypeByPlan2Expr(arg)
+	}
+	fGet, err := function.GetFunctionByName(b.GetContext(), "json_value", argsType)
+	if err != nil {
+		return nil, err
+	}
+	retTyp := targetPlan
+	retTyp.NotNullable = false
+	return &Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{Func: getFunctionObjRef(fGet.GetEncodedOverloadID(), "json_value"), Args: args}},
+		Typ:  retTyp,
+	}, nil
+}
+
+func validateJSONValueDefaultLiteral(ctx context.Context, expr tree.Expr, target types.Type) error {
+	value, err := jsonValueDefaultLiteralText(expr)
+	if err != nil {
+		return err
+	}
+	switch target.Oid {
+	case types.T_char, types.T_varchar, types.T_text:
+		if target.Width > 0 && utf8.RuneCountInString(value) > int(target.Width) {
+			return moerr.NewDataTruncatedf(ctx, "JSON_VALUE", "default exceeds character width")
+		}
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		if target.Width > 0 && len(value) > int(target.Width) {
+			return moerr.NewDataTruncatedf(ctx, "JSON_VALUE", "default exceeds binary width")
+		}
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		if !jsonValueDefaultNumericExactAtScale(value, 0) {
+			return moerr.NewDataTruncatedf(ctx, "JSON_VALUE", "default integer loses fractional precision")
+		}
+		parsed, ok := jsonValueDefaultInt64(value)
+		if !ok {
+			return moerr.NewInvalidInputf(ctx, "invalid JSON_VALUE default %q", value)
+		}
+		min, max := int64(-1<<63), int64(1<<63-1)
+		switch target.Oid {
+		case types.T_int8:
+			min, max = -1<<7, 1<<7-1
+		case types.T_int16:
+			min, max = -1<<15, 1<<15-1
+		case types.T_int32:
+			min, max = -1<<31, 1<<31-1
+		}
+		if parsed < min || parsed > max {
+			return moerr.NewOutOfRange(ctx, "JSON_VALUE", "default integer is out of range")
+		}
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		if !jsonValueDefaultNumericExactAtScale(value, 0) {
+			return moerr.NewDataTruncatedf(ctx, "JSON_VALUE", "default unsigned integer loses fractional precision")
+		}
+		parsed, ok := jsonValueDefaultUint64(value)
+		if !ok {
+			return moerr.NewInvalidInputf(ctx, "invalid JSON_VALUE default %q", value)
+		}
+		max := uint64(^uint8(0))
+		switch target.Oid {
+		case types.T_uint16:
+			max = uint64(^uint16(0))
+		case types.T_uint32:
+			max = uint64(^uint32(0))
+		case types.T_uint64:
+			max = ^uint64(0)
+		}
+		if parsed > max {
+			return moerr.NewOutOfRange(ctx, "JSON_VALUE", "default unsigned integer is out of range")
+		}
+	case types.T_float32, types.T_float64:
+		bits := 64
+		if target.Oid == types.T_float32 {
+			bits = 32
+		}
+		floatText := jsonValueDefaultNumericText(value)
+		parsed, parseErr := strconv.ParseFloat(strings.TrimSpace(floatText), bits)
+		if parseErr != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+			return moerr.NewInvalidInputf(ctx, "invalid JSON_VALUE default %q", value)
+		}
+	case types.T_decimal64:
+		if !jsonValueDefaultNumericExactAtScale(value, target.Scale) {
+			return moerr.NewDataTruncatedf(ctx, "JSON_VALUE", "default decimal loses fractional precision")
+		}
+		if _, err = types.ParseDecimal64(jsonValueDefaultNumericText(value), target.Width, target.Scale); err != nil {
+			return err
+		}
+	case types.T_decimal128:
+		if !jsonValueDefaultNumericExactAtScale(value, target.Scale) {
+			return moerr.NewDataTruncatedf(ctx, "JSON_VALUE", "default decimal loses fractional precision")
+		}
+		if _, err = types.ParseDecimal128(jsonValueDefaultNumericText(value), target.Width, target.Scale); err != nil {
+			return err
+		}
+	case types.T_decimal256:
+		if !jsonValueDefaultNumericExactAtScale(value, target.Scale) {
+			return moerr.NewDataTruncatedf(ctx, "JSON_VALUE", "default decimal loses fractional precision")
+		}
+		if _, err = types.ParseDecimal256(jsonValueDefaultNumericText(value), target.Width, target.Scale); err != nil {
+			return err
+		}
+	case types.T_date:
+		if jsonValueTemporalHasZeroDate(value) {
+			return moerr.NewInvalidInputf(ctx, "JSON_VALUE zero date value %q", value)
+		}
+		if _, err = types.ParseDateCast(value); err != nil {
+			return err
+		}
+	case types.T_time:
+		if err = validateJSONValueTemporalDefault(ctx, value, target.Scale); err != nil {
+			return err
+		}
+		if _, err = types.ParseTime(value, target.Scale); err != nil {
+			return err
+		}
+	case types.T_datetime:
+		if err = validateJSONValueTemporalDefault(ctx, value, target.Scale); err != nil {
+			return err
+		}
+		if _, err = types.ParseDatetime(value, target.Scale); err != nil {
+			return err
+		}
+	case types.T_year:
+		if _, parseErr := types.ParseMoYear(value); parseErr != nil {
+			if numeric, numericErr := strconv.ParseInt(strings.TrimSpace(value), 10, 64); numericErr != nil {
+				return parseErr
+			} else if _, numericErr = types.ParseMoYearFromInt(numeric); numericErr != nil {
+				return numericErr
+			}
+		}
+	case types.T_json:
+		if _, err = types.ParseSliceToByteJsonWithDepthLimit([]byte(value), bytejson.JSONDocumentMaxNestingDepth); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateJSONValueTemporalDefault(ctx context.Context, value string, scale int32) error {
+	if jsonValueTemporalHasZeroDate(value) {
+		return moerr.NewInvalidInputf(ctx, "JSON_VALUE zero date/time value %q", value)
+	}
+	if digits, ok := jsonValueTemporalFractionalDigits(value); ok && int32(digits) > scale {
+		return moerr.NewDataTruncatedf(ctx, "JSON_VALUE", "default value %q loses fractional precision at scale %d", value, scale)
+	}
+	return nil
+}
+
+func jsonValueTemporalHasZeroDate(s string) bool {
+	year, month, day, err := types.ParseDateCastComponents(strings.TrimSpace(s))
+	return err == nil && year == 0 && month == 0 && day == 0
+}
+
+func jsonValueTemporalFractionalDigits(s string) (int, bool) {
+	s = strings.TrimSpace(s)
+	dot := strings.IndexByte(s, '.')
+	if dot < 0 || dot == len(s)-1 {
+		return 0, dot < 0
+	}
+	for i := dot + 1; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+	}
+	return len(s) - dot - 1, true
+}
+
+func jsonValueDefaultNumericText(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true":
+		return "1"
+	case "false":
+		return "0"
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func jsonValueDefaultInt64(value string) (int64, bool) {
+	return bytejson.NumericTextToInt64(jsonValueDefaultNumericText(value))
+}
+
+func jsonValueDefaultUint64(value string) (uint64, bool) {
+	return bytejson.NumericTextToUint64(jsonValueDefaultNumericText(value))
+}
+
+func jsonValueDefaultNumericExactAtScale(value string, scale int32) bool {
+	if scale < 0 {
+		scale = 0
+	}
+	rational, ok := new(big.Rat).SetString(strings.TrimSpace(jsonValueDefaultNumericText(value)))
+	if !ok {
+		return false
+	}
+	factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
+	rational.Mul(rational, new(big.Rat).SetInt(factor))
+	return rational.Denom().Cmp(big.NewInt(1)) == 0
+}
+
+func jsonValueDefaultLiteralText(expr tree.Expr) (string, error) {
+	switch value := expr.(type) {
+	case *tree.NumVal:
+		if value.ValType == tree.P_null {
+			return "", moerr.NewInvalidInputNoCtx("JSON_VALUE DEFAULT cannot be NULL")
+		}
+		return value.String(), nil
+	case *tree.UnaryExpr:
+		num, ok := value.Expr.(*tree.NumVal)
+		if !ok || num.ValType == tree.P_null {
+			return "", moerr.NewInvalidInputNoCtx("JSON_VALUE DEFAULT must be a signed literal")
+		}
+		return value.Op.ToString() + num.String(), nil
+	default:
+		return "", moerr.NewInvalidInputNoCtx("JSON_VALUE DEFAULT must be a literal")
+	}
+}
+
+func validateJSONValueTarget(ctx context.Context, target types.Type) error {
+	switch target.Oid {
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_json,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_date, types.T_time, types.T_datetime, types.T_year:
+		// Supported JSON_VALUE RETURNING families.
+	default:
+		return moerr.NewInvalidInputf(ctx, "unsupported JSON_VALUE RETURNING type %s", target.String())
+	}
+	if (target.Oid == types.T_binary || target.Oid == types.T_varbinary) && target.Width <= 0 {
+		return moerr.NewInvalidInputf(ctx, "JSON_VALUE binary RETURNING type requires a positive width")
+	}
+	if target.Oid.IsDateRelate() && (target.Oid == types.T_time || target.Oid == types.T_datetime) &&
+		(target.Scale < 0 || target.Scale > 6) {
+		return moerr.NewInvalidInputf(ctx, "invalid JSON_VALUE fractional precision %d", target.Scale)
+	}
+	if target.Oid.IsDecimal() && (target.Width <= 0 || target.Width > 65 || target.Scale < 0 || target.Scale > target.Width) {
+		return moerr.NewInvalidInputf(ctx, "invalid JSON_VALUE decimal precision %d,%d", target.Width, target.Scale)
+	}
+	return nil
+}
+
+func validateJSONValueTargetSyntax(ctx context.Context, target *tree.T) error {
+	if target == nil {
+		return moerr.NewInvalidArg(ctx, "json_value RETURNING type", "")
+	}
+	name := strings.ToLower(target.InternalType.FamilyString)
+	switch name {
+	case "float", "double", "real":
+		if (target.InternalType.DisplayWith != tree.NotDefineDisplayWidth &&
+			target.InternalType.DisplayWith != tree.DefaultDisplayWidth) || target.InternalType.Scale != tree.NotDefineDec {
+			return moerr.NewInvalidInputf(ctx, "JSON_VALUE RETURNING %s does not accept precision or scale", name)
+		}
+	case "year":
+		if target.InternalType.DisplayWith != 0 {
+			return moerr.NewInvalidInputf(ctx, "JSON_VALUE RETURNING YEAR does not accept a width")
+		}
+	}
+	return nil
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered

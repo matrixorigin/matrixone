@@ -254,6 +254,22 @@ func binTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return fixedTypeMatchExcept(overloads, inputs, stringOverload)
 }
 
+// jsonValueCheckFn keeps the public two-argument overloads compatible with
+// existing plans and accepts the planner-only seven-argument form. The
+// target type and response modes are encoded as typed plan arguments, so no
+// implicit cast may be inserted for this internal form.
+func jsonValueCheckFn(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 7 {
+		for i, ov := range overloads {
+			if len(ov.args) == 7 {
+				return newCheckResultWithSuccess(i)
+			}
+		}
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 // fixedTypeMatchWithBoolNumericCast applies MySQL's numeric-context rule for
 // BOOL only to callers that explicitly opt in.  BOOL is intentionally not
 // added to fixedCanImplicitCastRule globally: that table is shared by

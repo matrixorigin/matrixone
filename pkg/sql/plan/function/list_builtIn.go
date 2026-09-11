@@ -1905,16 +1905,19 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `json_value`
 	{
 		functionId: JSON_VALUE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		// JSON_VALUE handles NULL documents, response policies and conversion
+		// failures itself. It therefore must not use the generic STRICT
+		// short-circuit path.
+		class:   plan.Function_NONE,
+		layout:  STANDARD_FUNCTION,
+		checkFn: jsonValueCheckFn,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonValue
@@ -1924,7 +1927,20 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_json, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonValue
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_any, types.T_any, types.T_any, types.T_any, types.T_any, types.T_any, types.T_any},
+				retType: func(parameters []types.Type) types.Type {
+					if len(parameters) > 2 && parameters[2].Oid != types.T_any {
+						return parameters[2]
+					}
+					return types.NewWithCharset(types.T_varchar, 512, 0, types.CharsetUTF8MB4Bin)
 				},
 				newOp: func() executeLogicOfOverload {
 					return JsonValue
