@@ -532,40 +532,49 @@ requirement:
   transaction-local write to the source. This is the value an idle table's
   `build_ts` catches up to and stays at, so the fast path fires once CDC drains —
   a strict `build_ts >= now` never holds because CDC always lags the present.
-- **historical (`{snapshot=...}` / AS OF) read** — `bar = the snapshot ts` itself.
-  A snapshot is a fixed past state, so `build_ts >= snapshot ⇒` every source commit
-  up to it is indexed; `SourceCommitTS` is neither computed nor used. The `build_ts`
-  and the cold metadata read both target the **snapshot-bound generation** — cache
-  key `index_table@snapshot`, and a metadata read on a txn cloned at the snapshot —
-  derived from one choice so warm and cold cannot disagree.
+- **historical (`{snapshot=...}` / AS OF) read** — `bar = SourceCommitTS as of the
+  snapshot`: the same source-commit bar as a current read, but computed on a txn
+  cloned at the snapshot, so it is the greatest source DML commit visible AT the
+  snapshot `S`. `build_ts` is read from the same snapshot-bound generation (cache key
+  `index_table@snapshot`, metadata on the cloned txn), so `build_ts` and the bar are
+  measured at one read point: a snapshot whose index had caught up as of `S` is
+  covered, one that was behind is completed with a tail up to `S` — exactly like a
+  current read. Binding the bar to `S` itself is unsound the same way `build_ts >= now`
+  is: the index build lags `S`, so `build_ts >= S` rarely holds and nearly every
+  snapshot would needlessly decline.
 
 The original json_extract predicate is retained and re-evaluated on every row the
 probe returns.
 
 ### 10.3 Partial coverage: bulk probe + gap tail (json_extract only)
 
-When a **current** read is not covered (`build_ts < SourceCommitTS`) the gate would
-otherwise decline to a full table scan. When the gap `(build_ts, S]` is small and
-spans no DDL, the optimizer instead keeps the index for the bulk and scans only the
-gap — a UNION of two pk sources feeding the base fetch:
+When a read is not covered (`build_ts < bar`) the gate completes the behind index
+instead of declining to a full table scan — for BOTH current and historical reads,
+measured at the read point (`now`, or the snapshot `S`). The optimizer keeps the
+index for the bulk and scans only the gap — a UNION of two pk sources feeding the
+base fetch:
 
-- **bulk** — the `fulltext2_search` probe (rows committed `<= build_ts`);
+- **bulk** — the `fulltext2_search` probe (rows the generation reflects, `<= build_ts`);
 - **tail** — `table_changes(t, build_ts, S]` filtered by the same json_extract
-  predicate (the rows the index has not yet absorbed).
+  predicate (the rows the index has not yet absorbed), projected to `(pk, score)`.
 
-`base rows ← fetch by pk ∈ (bulk pks ∪ tail pks)`. Deletes inside the gap need no
-handling: the base fetch is at `S`, so MVCC drops a pk that was deleted after
-`build_ts`. This is **json_extract only** — `MATCH … AGAINST` keeps search
-semantics and never uses it. **Snapshot reads stay binary** (probe-or-full-scan):
-a snapshot generation is fixed, there is no growing near-`now` tail to stitch in,
-and a historical `table_changes` read buys nothing.
+`base rows ← fetch by pk ∈ AGG(bulk pks ∪ tail pks)`. The UNION is `UNION ALL` plus a
+group-by dedup, both required: bulk and tail overlap when a row is updated inside the
+gap (old value in the index, new value in the tail), and a probe repeats a pk per
+matched term. Deletes inside the gap need no handling: the base fetch is at the read
+point, so MVCC drops a pk deleted after `build_ts`. This is **json_extract only** —
+`MATCH … AGAINST` keeps search semantics and never uses it.
 
-Cost gate: attempt the partial plan only when the gap's estimated row count is
-small; otherwise fall back to the full scan. `table_changes` also refuses to span
-a schema-version change, so a DDL inside the gap forces the full scan too. The
-construction lives in the json-probe rewrite (`addJSONFulltextProbes`), reusing the
-existing probe rewrite for the bulk arm and the `table_changes` builder for the
-tail arm, so the shared `fulltext2_search` TVF and the `MATCH` path are untouched.
+There is **no cost gate**. The base table carries large per-row content (avoiding the
+bulk-load of that content is the whole reason to use the index), so even a large tail
+costs no more than the full scan it replaces; a gate would risk declining a plan that
+is always at least as cheap. `table_changes` refuses to span a schema-version change,
+so a DDL inside the gap forces the full scan — an ALTER rebuilds the index with
+`build_ts >=` the ALTER, so in practice the tail never spans it. The construction
+lives in the json-probe rewrite (`decideJSONProbe` / `recordJSONPartialProbe`),
+reusing the existing probe rewrite for the bulk arm and the `table_changes` builder
+for the tail arm, so the shared `fulltext2_search` TVF and the `MATCH` path are
+untouched.
 
 ## 11. Range probes
 
