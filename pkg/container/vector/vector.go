@@ -8316,6 +8316,9 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if len(sels) == 0 {
 		return nil
 	}
+	preserveDisjointArea := v.typ.IsVarlen() &&
+		v.AreaBackingKind() == OwnedMPoolUnique &&
+		v.VarlenaAreaIsDisjoint()
 	if err := v.preflightPrepareParamKindAppend(
 		v.length+len(sels),
 		summarizePrepareParamKindSelection(w, sels),
@@ -8431,6 +8434,10 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 				}
 			}
 		}
+		// Selection materialization copies every non-inline value into a fresh
+		// destination range. It cannot introduce aliases for a non-const source,
+		// even when source rows repeat or arrive out of order.
+		v.areaDisjoint = preserveDisjointArea
 	} else {
 		tlen := v.GetType().TypeSize()
 		if !w.nsp.EmptyByFlag() {

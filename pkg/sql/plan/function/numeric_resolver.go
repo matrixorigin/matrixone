@@ -289,7 +289,7 @@ func resolveNumericBinaryTypes(
 	case numericOpDiv, numericOpIntegerDiv:
 		cast, castLeft, castRight = fixedTypeCastRule2(left, right)
 	default:
-		cast, castLeft, castRight = fixedTypeCastRule1(left, right)
+		cast, castLeft, castRight = arithmeticTypeCastRule1(left, right)
 	}
 	if cast {
 		left, right = castLeft, castRight
