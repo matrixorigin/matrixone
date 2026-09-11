@@ -367,6 +367,27 @@ func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
 	}
 }
 
+func TestAssignStringWidthWarningUsesExecutionAttemptSink(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sink := &numericWarningSession{}
+	proc.WarningSink = sink
+
+	source := vector.NewVec(types.T_varchar.ToType())
+	defer source.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(source, []byte("abcd"), false, proc.Mp()))
+	target := types.New(types.T_varchar, 3, 0)
+	destination := vector.NewVec(target)
+	defer destination.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(target, proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	require.NoError(t, NewAssignIgnoreCast([]*vector.Vector{source, destination}, result, proc, 1, nil))
+	require.Nil(t, proc.Session)
+	require.Len(t, sink.warnings, 1)
+	require.Equal(t, moerr.WARN_DATA_TRUNCATED, sink.warnings[0].code)
+}
+
 func TestNewAssignCastRemoteEmptyResolverUsesSessionSnapshot(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	// A remote CN has no frontend session. Its resolver may still be attached

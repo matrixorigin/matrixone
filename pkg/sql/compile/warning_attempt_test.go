@@ -27,12 +27,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -223,6 +226,36 @@ func TestWarningAttemptNestedAndBounded(t *testing.T) {
 	require.Len(t, session.warnings, remoteWarningRetentionLimit)
 	attempt.finish(true, session)
 	require.Equal(t, uint64(1000), session.totalWarnings, "one-shot publish")
+}
+
+func TestStringAssignmentWarningAttemptDiscard(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &remoteWarningSession{}
+	proc.Session = session
+	attempt := newWarningAttempt(proc)
+	require.NotNil(t, attempt)
+
+	source := vector.NewVec(types.T_varchar.ToType())
+	defer source.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(source, []byte("abcd"), false, proc.Mp()))
+	target := types.New(types.T_varchar, 3, 0)
+	destination := vector.NewVec(target)
+	defer destination.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(target, proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	require.NoError(t, planfunction.NewAssignIgnoreCast(
+		[]*vector.Vector{source, destination}, result, proc, 1, nil))
+	total, warnings := attempt.collector.SnapshotWarnings()
+	require.Equal(t, uint64(1), total)
+	require.Len(t, warnings, 1)
+	require.Zero(t, session.totalWarnings, "attempt diagnostics must not publish early")
+
+	attempt.discard()
+	attempt.restore()
+	require.Zero(t, session.totalWarnings, "discarded attempt diagnostics must not leak")
+	require.Nil(t, proc.WarningSink)
 }
 
 func TestPreparedGroupConcatFloorFreshAndRetryCompile(t *testing.T) {

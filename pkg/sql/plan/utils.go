@@ -3132,23 +3132,54 @@ func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
 		return nil
 	}
+	query := preparePlan.GetQuery()
 	rule := &decrementParamOrdinalRule{
 		seen:         make(map[*plan.ParamRef]struct{}),
 		seenFallback: make(map[*plan.Expr]struct{}),
 	}
-	visit := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
+	subqueryRoots := newSubqueryRootRule()
+	rules := []VisitPlanRule{rule, subqueryRoots}
+	visit := NewVisitPlan(preparePlan, rules)
 	if err := visit.Visit(ctx); err != nil {
 		return err
 	}
-	for i := range preparePlan.GetQuery().Params {
+	for i := range query.Params {
 		var err error
-		preparePlan.GetQuery().Params[i], err = rule.ApplyExpr(preparePlan.GetQuery().Params[i])
+		query.Params[i], err = subqueryRoots.ApplyExpr(query.Params[i])
+		if err != nil {
+			return err
+		}
+		query.Params[i], err = rule.ApplyExpr(query.Params[i])
 		if err != nil {
 			return err
 		}
 	}
-	return visitMissingNodeExprs(
-		preparePlan.GetQuery(), preparePlan.GetQuery().Steps, []VisitPlanRule{rule})
+	if err := visitMissingNodeExprs(query, query.Steps, rules); err != nil {
+		return err
+	}
+
+	visitedRoots := make(map[int32]struct{})
+	for len(subqueryRoots.pending) > 0 {
+		root := subqueryRoots.pending[0]
+		subqueryRoots.pending = subqueryRoots.pending[1:]
+		if _, ok := visitedRoots[root]; ok {
+			continue
+		}
+		if root < 0 || int(root) >= len(query.Nodes) {
+			return moerr.NewInternalErrorf(ctx, "missing query root %d for prepared subquery", root)
+		}
+		visitedRoots[root] = struct{}{}
+		queryCopy := *query
+		queryCopy.Steps = []int32{root}
+		queryPlan := &Plan{Plan: &plan.Plan_Query{Query: &queryCopy}}
+		if err := NewVisitPlan(queryPlan, rules).Visit(ctx); err != nil {
+			return err
+		}
+		if err := visitMissingNodeExprs(&queryCopy, queryCopy.Steps, rules); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func resetPreparePlan(
@@ -3177,14 +3208,46 @@ func resetPreparePlan(
 	resetQuery := func(query *Query) ([]*plan.ObjectRef, []int32, error) {
 		queryPlan := &Plan{Plan: &plan.Plan_Query{Query: query}}
 		getParamRule := NewGetParamRule()
-		visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule})
+		subqueryRoots := newSubqueryRootRule()
+		visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule, subqueryRoots})
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 			return nil, nil, err
 		}
 		for i := range query.Params {
 			var err error
+			query.Params[i], err = subqueryRoots.ApplyExpr(query.Params[i])
+			if err != nil {
+				return nil, nil, err
+			}
 			query.Params[i], err = getParamRule.ApplyExpr(query.Params[i])
 			if err != nil {
+				return nil, nil, err
+			}
+		}
+
+		// Scalar subquery plans are referenced by Expr_Sub.NodeId rather than
+		// linked through the writer's Children list. Visit each referenced root
+		// so parameters in its projection/filter remain part of the prepared
+		// statement, including nested subqueries in a discarded ODKU RHS.
+		visitedRoots := make(map[int32]struct{})
+		rootOrder := make([]int32, 0)
+		for len(subqueryRoots.pending) > 0 {
+			root := subqueryRoots.pending[0]
+			subqueryRoots.pending = subqueryRoots.pending[1:]
+			if _, ok := visitedRoots[root]; ok {
+				continue
+			}
+			if root < 0 || int(root) >= len(query.Nodes) {
+				return nil, nil, moerr.NewInternalErrorf(
+					ctx.GetContext(), "missing query root %d for prepared subquery", root)
+			}
+			visitedRoots[root] = struct{}{}
+			rootOrder = append(rootOrder, root)
+			queryCopy := *query
+			queryCopy.Steps = []int32{root}
+			queryPlan = &Plan{Plan: &plan.Plan_Query{Query: &queryCopy}}
+			visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule, subqueryRoots})
+			if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -3198,9 +3261,19 @@ func resetPreparePlan(
 		querySchemas = appendPrepareSchemas(querySchemas, query.GetCatalogDependencies()...)
 
 		resetParamRule := NewResetParamOrderRule(args)
+		queryPlan = &Plan{Plan: &plan.Plan_Query{Query: query}}
 		visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 			return nil, nil, err
+		}
+		for _, root := range rootOrder {
+			queryCopy := *query
+			queryCopy.Steps = []int32{root}
+			queryPlan = &Plan{Plan: &plan.Plan_Query{Query: &queryCopy}}
+			visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
+			if err := visitQuery.Visit(ctx.GetContext()); err != nil {
+				return nil, nil, err
+			}
 		}
 		for i := range query.Params {
 			var err error

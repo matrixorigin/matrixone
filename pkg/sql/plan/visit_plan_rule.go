@@ -218,6 +218,11 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
 		}
 		return e, nil
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil {
+			exprImpl.Sub.Child, _ = rule.ApplyExpr(exprImpl.Sub.Child)
+		}
+		return e, nil
 	default:
 		return e, nil
 	}
@@ -311,6 +316,11 @@ func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
 		}
 		return e, nil
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil {
+			exprImpl.Sub.Child, _ = rule.ApplyExpr(exprImpl.Sub.Child)
+		}
+		return e, nil
 	default:
 		return e, nil
 	}
@@ -339,23 +349,13 @@ func (rule *subqueryRootRule) ApplyNode(_ *Node) error {
 }
 
 func (rule *subqueryRootRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
-	switch exprImpl := e.Expr.(type) {
-	case *plan.Expr_F:
-		for i := range exprImpl.F.Args {
-			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
+	err := plan.VisitExprTree(e, func(expr *plan.Expr) error {
+		if sub := expr.GetSub(); sub != nil {
+			rule.pending = append(rule.pending, sub.NodeId)
 		}
-	case *plan.Expr_List:
-		for i := range exprImpl.List.List {
-			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
-		}
-	case *plan.Expr_W:
-		if err := applyRuleToWindowSpec(rule, exprImpl.W); err != nil {
-			return nil, err
-		}
-	case *plan.Expr_Sub:
-		rule.pending = append(rule.pending, exprImpl.Sub.NodeId)
-	}
-	return e, nil
+		return nil
+	})
+	return e, err
 }
 
 // ---------------------------
@@ -419,6 +419,14 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 			return nil, moerr.NewInternalErrorNoCtx("prepared parameter ordinal is not one-based")
 		}
 		exprImpl.P.Pos--
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil && exprImpl.Sub.Child != nil {
+			var err error
+			exprImpl.Sub.Child, err = rule.ApplyExpr(exprImpl.Sub.Child)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	return e, nil
 }

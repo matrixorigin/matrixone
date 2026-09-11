@@ -1112,6 +1112,32 @@ func TestResetPreparePlanResetsWindowParameterOrder(t *testing.T) {
 	require.Equal(t, int32(2), window.Frame.End.Val.GetP().Pos)
 }
 
+func TestResetPreparePlanCollectsSubqueryParameters(t *testing.T) {
+	param := &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	queryPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		Steps: []int32{0},
+		Nodes: []*planpb.Node{
+			{
+				NodeId:   0,
+				NodeType: planpb.Node_PROJECT,
+				ProjectList: []*planpb.Expr{{Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{
+					NodeId: 1,
+				}}}},
+			},
+			{
+				NodeId:      1,
+				NodeType:    planpb.Node_PROJECT,
+				ProjectList: []*planpb.Expr{param},
+			},
+		},
+	}}}
+
+	_, paramTypes, err := ResetPreparePlan(NewMockCompilerContext(false), queryPlan)
+	require.NoError(t, err)
+	require.Len(t, paramTypes, 1)
+	require.Equal(t, int32(0), param.GetP().Pos)
+}
+
 func TestResetParamRefRuleReplacesWindowParameters(t *testing.T) {
 	paramExpr := func(pos int32) *planpb.Expr {
 		return &planpb.Expr{
