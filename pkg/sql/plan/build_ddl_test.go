@@ -1728,6 +1728,7 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 		{name: "avg distinct", query: "select service, avg(distinct bytes) bytes_avg from events group by service", outputs: []string{"service", "bytes_avg"}, eligible: true},
 		{name: "select distinct rows", query: "select distinct service, region from events", outputs: []string{"service", "region"}, eligible: true},
 		{name: "having", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service having count(*) > 1", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
+		{name: "having-only-input", query: "select service, count(*) requests from events group by service having sum(status) > 1", outputs: []string{"service", "requests"}, eligible: true},
 		{name: "inner join", query: "select events.service, count(*) requests from events join services on events.service = services.name group by events.service", outputs: []string{"service", "requests"}},
 		{name: "distinct select", query: "select distinct service, count(*) requests, sum(bytes) bytes_sum from events group by service", outputs: []string{"service", "requests", "bytes_sum"}},
 		{name: "limit", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service limit 1", outputs: []string{"service", "requests", "bytes_sum"}},
@@ -1789,6 +1790,12 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 				require.Equal(t, "hybrid-affected-group", desc.Strategy)
 				require.Equal(t, "count(*) > 1", desc.Having)
 				require.Equal(t, "__state", desc.StateTable)
+			}
+			if tc.name == "having-only-input" {
+				require.Equal(t, "hybrid-affected-group", desc.Strategy)
+				require.Equal(t, "sum(status) > 1", desc.Having)
+				require.Equal(t, "__state", desc.StateTable)
+				require.Contains(t, desc.SourceColumns, "status")
 			}
 			if tc.name == "select distinct rows" {
 				require.Empty(t, desc.StateTable)

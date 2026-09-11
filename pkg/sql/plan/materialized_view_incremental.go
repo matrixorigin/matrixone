@@ -171,6 +171,13 @@ func buildMaterializedViewIncrementalBranchPlan(
 		spec.Filter = materializedViewIncrementalExprSQL(clause.Where.Expr)
 	}
 	if clause.Having != nil {
+		// HAVING is part of the maintained result predicate.  Its row-local
+		// inputs must be subscribed just like WHERE and aggregate inputs;
+		// otherwise a change to a column referenced only by HAVING can be
+		// omitted from the ISCP batch and leave group visibility stale.
+		if !materializedViewIncrementalHavingSupported(clause.Having.Expr) || !collector.collect(clause.Having.Expr) {
+			return "", nil, ""
+		}
 		// HAVING is maintained by rebuilding only the affected groups at the
 		// iteration boundary. Keep the original expression in the spec so the
 		// refresh SQL evaluates it with the normal planner semantics.
@@ -539,6 +546,72 @@ func materializedViewIncrementalScalarSupported(expr tree.Expr) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// materializedViewIncrementalHavingSupported is the HAVING counterpart of
+// materializedViewIncrementalScalarSupported.  HAVING is evaluated per group,
+// so it may contain one of the aggregates maintained by the incremental
+// description, while all non-aggregate portions must remain row-local and
+// deterministic.  Keeping this separate prevents COUNT(*) and SUM(col) from
+// being accidentally rejected as ordinary scalar expressions.
+func materializedViewIncrementalHavingSupported(expr tree.Expr) bool {
+	switch node := expr.(type) {
+	case *tree.FuncExpr:
+		if node.WindowSpec != nil || len(node.OrderBy) != 0 || node.Type == tree.FUNC_TYPE_DISTINCT {
+			return false
+		}
+		name := materializedViewIncrementalFunctionName(node)
+		switch name {
+		case "count":
+			return len(node.Exprs) == 0 || len(node.Exprs) == 1 && isMaterializedViewStar(node.Exprs[0]) ||
+				len(node.Exprs) == 1 && materializedViewIncrementalScalarSupported(node.Exprs[0])
+		case "sum", "avg", "min", "max":
+			return len(node.Exprs) == 1 && materializedViewIncrementalScalarSupported(node.Exprs[0])
+		case "date_trunc", "coalesce", "ifnull", "abs", "floor", "ceil":
+			for _, arg := range node.Exprs {
+				if !materializedViewIncrementalHavingSupported(arg) {
+					return false
+				}
+			}
+			return true
+		default:
+			return false
+		}
+	case *tree.BinaryExpr:
+		return materializedViewIncrementalHavingSupported(node.Left) && materializedViewIncrementalHavingSupported(node.Right)
+	case *tree.UnaryExpr:
+		return materializedViewIncrementalHavingSupported(node.Expr)
+	case *tree.ComparisonExpr:
+		return node.SubOp == 0 && node.Escape == nil && materializedViewIncrementalHavingSupported(node.Left) && materializedViewIncrementalHavingSupported(node.Right)
+	case *tree.AndExpr:
+		return materializedViewIncrementalHavingSupported(node.Left) && materializedViewIncrementalHavingSupported(node.Right)
+	case *tree.OrExpr:
+		return materializedViewIncrementalHavingSupported(node.Left) && materializedViewIncrementalHavingSupported(node.Right)
+	case *tree.XorExpr:
+		return materializedViewIncrementalHavingSupported(node.Left) && materializedViewIncrementalHavingSupported(node.Right)
+	case *tree.NotExpr:
+		return materializedViewIncrementalHavingSupported(node.Expr)
+	case *tree.IsNullExpr:
+		return materializedViewIncrementalHavingSupported(node.Expr)
+	case *tree.IsNotNullExpr:
+		return materializedViewIncrementalHavingSupported(node.Expr)
+	case *tree.RangeCond:
+		return materializedViewIncrementalHavingSupported(node.Left) && materializedViewIncrementalHavingSupported(node.From) && materializedViewIncrementalHavingSupported(node.To)
+	case *tree.CastExpr:
+		return materializedViewIncrementalHavingSupported(node.Expr)
+	case *tree.CaseExpr:
+		if node.Expr != nil && !materializedViewIncrementalHavingSupported(node.Expr) {
+			return false
+		}
+		for _, when := range node.Whens {
+			if when == nil || !materializedViewIncrementalHavingSupported(when.Cond) || !materializedViewIncrementalHavingSupported(when.Val) {
+				return false
+			}
+		}
+		return node.Else == nil || materializedViewIncrementalHavingSupported(node.Else)
+	default:
+		return materializedViewIncrementalScalarSupported(expr)
 	}
 }
 
