@@ -1708,11 +1708,16 @@ def _encode_execution_request(request: Dict[str, Any]):
 
 def _read_execution_request(stream) -> Optional[Dict[str, Any]]:
     """Read and validate one metadata plus out-of-band Arrow frame."""
-    header = stream.read(8)
-    if not header:
+    # A pipe is a byte stream: one read is allowed to return a prefix even
+    # when the sender has already written the complete frame.  Read one byte
+    # first so only an empty read means clean burst EOF, then complete the
+    # fixed-width header through the same exact-read path as the body.
+    first = stream.read(1)
+    if not first:
         return None
-    if len(header) != 8:
+    if len(first) != 1:
         raise EOFError("execution request header ended unexpectedly")
+    header = bytes(first) + _read_exact(stream, 7)
     payload_size = struct.unpack(">Q", header)[0]
     if payload_size > MAX_EXECUTION_FRAME_BYTES or payload_size < 8:
         raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")

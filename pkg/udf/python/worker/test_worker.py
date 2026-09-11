@@ -1170,6 +1170,29 @@ class WorkerContractTest(unittest.TestCase):
         self.assertIsInstance(metadata["input"], pickle.PickleBuffer)
         self.assertEqual(arrow_wire, bytes(metadata["input"].raw()))
 
+    def test_handler_request_reader_accepts_fragmented_headers(self):
+        parts, _ = worker._encode_execution_request(
+            {
+                "arrow_encoding": worker.HANDLER_ARROW_RECORD_BATCH,
+                "input": b"arrow-payload",
+            }
+        )
+
+        class OneByteReader:
+            def __init__(self, data):
+                self.data = data
+
+            def read(self, size=-1):
+                if not self.data:
+                    return b""
+                count = 1 if size < 0 else min(1, size)
+                value, self.data = self.data[:count], self.data[count:]
+                return value
+
+        request = worker._read_execution_request(OneByteReader(b"".join(parts)))
+        self.assertEqual(worker.HANDLER_ARROW_RECORD_BATCH, request["arrow_encoding"])
+        self.assertEqual(b"arrow-payload", bytes(request["input"].raw()))
+
     def test_handler_process_accepts_schema_free_record_batch_messages(self):
         descriptor = {"type_id": worker.INT64, "offset_width": 32}
         schema = worker._schema_from_descriptors([descriptor], "arg")
