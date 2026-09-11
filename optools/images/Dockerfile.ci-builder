@@ -82,6 +82,15 @@ RUN if cover_scope=$(go list -mod=readonly ./... | grep -v 'driver\|engine/aoe\|
       echo "WARNING: coverage UT warm incomplete; PR CI will compile the misses"; \
     fi
 
+# Warm the pinned report tool into the same module/build caches exported below.
+# A stale/missing warm only costs time: run_ut.sh still installs its pinned version.
+RUN if bash -c 'source optools/ut_tools.bash; install_go_ut_analysis'; then \
+      echo "warm-ut-analysis=ok" >> /mo-prebuilt/warm-status; \
+    else \
+      echo "warm-ut-analysis=FAILED" >> /mo-prebuilt/warm-status; \
+      echo "WARNING: UT analysis warm incomplete; PR CI will install it"; \
+    fi
+
 # Fingerprint the native inputs the prebuilt thirdparties were produced
 # from. Consumers restore thirdparties/install only on an exact match, so a
 # PR that changes thirdparties/, cgo, the compiler, or the native build

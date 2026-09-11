@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ddl
+package sqlintegration
 
 import (
 	"context"
@@ -33,7 +33,7 @@ import (
 )
 
 func TestCreateAndDropPitr(t *testing.T) {
-	embed.RunSingleCNBaseClusterTests(t,
+	runSQLIntegration(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
@@ -44,6 +44,7 @@ func TestCreateAndDropPitr(t *testing.T) {
 			exec := testutils.GetSQLExecutor(cn1)
 
 			db := testutils.GetDatabaseName(t)
+			defer cleanupSQLIntegration(t, cn1, "drop database if exists "+db)
 			pitrName := "pitr_ut"
 
 			// create database
@@ -77,7 +78,7 @@ func TestCreateAndDropPitr(t *testing.T) {
 }
 
 func TestPitrCases(t *testing.T) {
-	embed.RunSingleCNBaseClusterTests(t,
+	runSQLIntegration(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
@@ -88,6 +89,7 @@ func TestPitrCases(t *testing.T) {
 			exec := testutils.GetSQLExecutor(cn1)
 
 			db := testutils.GetDatabaseName(t)
+			defer cleanupSQLIntegration(t, cn1, "drop database if exists "+db)
 			table := "table01"
 			pitr1 := "pitr01"
 			pitr2 := "pitr02"
@@ -199,7 +201,7 @@ func TestCDCCases(t *testing.T) {
 	})
 	defer stubOpenDbConn.Reset()
 
-	embed.RunSingleCNBaseClusterTests(t,
+	runSQLIntegration(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()
@@ -219,6 +221,7 @@ func TestCDCCases(t *testing.T) {
 			exec := testutils.GetSQLExecutor(cn1)
 
 			db := testutils.GetDatabaseName(t)
+			defer cleanupSQLIntegration(t, cn1, "drop database if exists "+db)
 			table := "table01"
 			cdcTaskDB := "cdc_task_db"
 			cdcTaskTbl := "cdc_task_tbl"
@@ -422,7 +425,7 @@ func TestCDCCases(t *testing.T) {
 }
 
 func TestAlterRoleCases(t *testing.T) {
-	embed.RunSingleCNBaseClusterTests(t,
+	runSQLIntegration(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*120)
 			defer cancel()

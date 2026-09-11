@@ -31,6 +31,10 @@ func writeMockGo(t *testing.T) string {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "go")
 	script := `#!/bin/bash
+if [[ "$1" == version ]]; then
+    if [[ -n "${MOCK_GO_BUILD_INFO:-}" ]]; then printf "%s\n" "$MOCK_GO_BUILD_INFO"; exit 0; fi
+    exit 1
+fi
 count=0
 if [[ -f "${MOCK_GO_COUNTER}" ]]; then count=$(<"${MOCK_GO_COUNTER}"); fi
 count=$((count + 1))
@@ -118,6 +122,42 @@ func TestInstallGoUTAnalysisPreservesFinalFailure(t *testing.T) {
 		t.Fatalf("expected status 42, got %d: %s", status, output)
 	}
 	assertAttempts(t, counter, arguments, 3)
+}
+
+func TestInstallGoUTAnalysisChecksCachedVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name, info string
+		cached     bool
+	}{
+		{"pinned", "mod github.com/matrixorigin/go-ut-analysis v0.0.0-20250711025253-f31acb12d3b1 h1:example", true},
+		{"stale", "mod github.com/matrixorigin/go-ut-analysis v0.0.0-old h1:example", false},
+		{"unreadable", "", false},
+		{"replaced", "mod github.com/matrixorigin/go-ut-analysis v0.0.0-20250711025253-f31acb12d3b1\n=> local", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := writeMockGo(t)
+			if err := os.WriteFile(filepath.Join(dir, "go-ut-analysis"), []byte("#!/bin/bash\nexit 99\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			counter, arguments := filepath.Join(dir, "counter"), filepath.Join(dir, "args")
+			toolsPath, err := filepath.Abs("ut_tools.bash")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash", "-c", `source "$1"; install_go_ut_analysis 1 0`, "bash", toolsPath)
+			cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "MOCK_GO_BUILD_INFO="+tc.info, "MOCK_GO_COUNTER="+counter, "MOCK_GO_ARGS="+arguments, "MOCK_GO_SUCCEED_AFTER=1", "MOCK_GO_FAILURE_STATUS=42")
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("install: %v: %s", err, output)
+			}
+			if tc.cached {
+				if _, err := os.Stat(counter); !os.IsNotExist(err) {
+					t.Fatalf("cached tool should avoid installation: %v", err)
+				}
+			} else {
+				assertAttempts(t, counter, arguments, 1)
+			}
+		})
+	}
 }
 
 func TestUTProcessGroupsEscalateAfterTerm(t *testing.T) {
