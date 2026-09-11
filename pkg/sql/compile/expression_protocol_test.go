@@ -77,6 +77,9 @@ func TestExpressionProtocolUnknownAndCanceledWorkers(t *testing.T) {
 	supported, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "old-worker", Addr: "stale:6001"}}, defines.MORPCVersion65)
 	require.NoError(t, err)
 	require.False(t, supported, "a new query endpoint cannot validate a stale pipeline address")
+	supported, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "wrong-worker", Addr: "remote:6001"}}, defines.MORPCVersion65)
+	require.NoError(t, err)
+	require.False(t, supported)
 	supported, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{}}, defines.MORPCVersion65)
 	require.NoError(t, err)
 	require.False(t, supported)
@@ -86,4 +89,15 @@ func TestExpressionProtocolUnknownAndCanceledWorkers(t *testing.T) {
 	_, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "old-worker"}}, defines.MORPCVersion65)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Zero(t, client.calls)
+}
+
+func TestExpressionProtocolResolvesLegacyAddressOnlyScopes(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	client.version = defines.MORPCVersion65
+	supported, err := remoteWorkersSupportProtocol(c.proc,
+		engine.Nodes{{Addr: "remote:6001"}}, defines.MORPCVersion65)
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, 1, client.calls)
+	require.Equal(t, client.calls, client.releases)
 }

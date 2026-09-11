@@ -46,10 +46,7 @@ func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, m
 	ctx, cancel := context.WithTimeoutCause(parent, 5*time.Second, moerr.NewInternalError(parent, "remote expression capability probe timed out"))
 	defer cancel()
 	for _, worker := range workers {
-		if worker.Id != "" && worker.Id == proc.GetService() {
-			continue
-		}
-		if worker.Id == "" || proc.GetQueryClient() == nil {
+		if worker.Addr == "" || proc.GetQueryClient() == nil {
 			return false, nil
 		}
 		cluster, err := clusterservice.GetMOClusterWithContext(ctx, proc.GetService())
@@ -57,18 +54,28 @@ func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, m
 			return false, parent.Err()
 		}
 		var addr string
+		var workerID string
+		selector := clusterservice.NewSelector()
+		if worker.Id != "" {
+			selector = clusterservice.NewServiceIDSelector(worker.Id)
+		}
 		err = clusterservice.GetCNServiceWithoutWorkingStateWithContext(ctx, cluster,
-			clusterservice.NewServiceIDSelector(worker.Id), func(cn metadata.CNService) bool {
-				if cn.PipelineServiceAddress == worker.Addr {
+			selector, func(cn metadata.CNService) bool {
+				if cn.PipelineServiceAddress == worker.Addr && (worker.Id == "" || cn.ServiceID == worker.Id) {
 					addr = cn.QueryAddress
+					workerID = cn.ServiceID
+					return false
 				}
-				return false
+				return true
 			})
 		if err != nil {
 			return false, parent.Err()
 		}
 		if addr == "" {
 			return false, nil
+		}
+		if workerID != "" && workerID == proc.GetService() {
+			continue
 		}
 		client := proc.GetQueryClient()
 		req := client.NewRequest(querypb.CmdMethod_GetProtocolVersion)
