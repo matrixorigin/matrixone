@@ -301,6 +301,24 @@ type IndexReaderTopOp struct {
 	UpperBound     float64
 
 	DistHeap Float64Heap
+	// Stats is an optional query-local EXPLAIN collector. Top-K readers borrow
+	// it synchronously and must not retain it beyond the owning engine reader.
+	Stats *IndexReaderTopStats
+}
+
+// IndexReaderTopStats records bounded storage work for one vector Top-K
+// reader. It is intentionally not synchronized: an engine reader is called
+// serially, and parallel readers own independent instances.
+type IndexReaderTopStats struct {
+	BlocksRead              uint64
+	StorageFilterInputRows  uint64
+	StorageFilterOutputRows uint64
+	VectorRowsScored        uint64
+	VectorChunksRead        uint64
+	VectorChunkCacheHits    uint64
+	VectorCompressedBytes   uint64
+	VectorDecodedBytes      uint64
+	TopKOutputRows          uint64
 }
 
 type WriteOptions struct {
