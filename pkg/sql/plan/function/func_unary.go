@@ -559,7 +559,7 @@ func BinString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 	nParam := vector.GenerateFunctionStrParameter(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -603,6 +603,165 @@ func BinFloat[T constraints.Float](ivecs []*vector.Vector, result vector.Functio
 		}
 		return val, err
 	}, selectList)
+}
+
+// BinDynamic is the runtime-owned BIN path. It is used for prepared
+// parameters and for scalar types whose MySQL numeric representation is not
+// an integer vector with a matching fixed overload. Keeping this dispatch at
+// the batch boundary preserves the specialized hot paths for ordinary integer,
+// float, and string columns.
+func BinDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	inputType := ivecs[0].GetType()
+	switch inputType.Oid {
+	case types.T_any:
+		// A T_any vector can only carry an untyped NULL at this boundary. A
+		// prepared marker with a concrete runtime type is handled by the
+		// corresponding case below.
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob:
+		return BinString(ivecs, result, proc, length, selectList)
+	case types.T_int8:
+		return Bin[int8](ivecs, result, proc, length, selectList)
+	case types.T_int16:
+		return Bin[int16](ivecs, result, proc, length, selectList)
+	case types.T_int32:
+		return Bin[int32](ivecs, result, proc, length, selectList)
+	case types.T_int64:
+		return Bin[int64](ivecs, result, proc, length, selectList)
+	case types.T_uint8:
+		return Bin[uint8](ivecs, result, proc, length, selectList)
+	case types.T_uint16:
+		return Bin[uint16](ivecs, result, proc, length, selectList)
+	case types.T_uint32:
+		return Bin[uint32](ivecs, result, proc, length, selectList)
+	case types.T_uint64:
+		return Bin[uint64](ivecs, result, proc, length, selectList)
+	case types.T_float32:
+		return BinFloat[float32](ivecs, result, proc, length, selectList)
+	case types.T_float64:
+		return BinFloat[float64](ivecs, result, proc, length, selectList)
+	case types.T_bool:
+		return binMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[bool](ivecs[0]),
+			func(v bool) int64 {
+				if v {
+					return 1
+				}
+				return 0
+			}, result, length, selectList)
+	case types.T_bit:
+		return Bin[uint64](ivecs, result, proc, length, selectList)
+	case types.T_decimal64:
+		return binDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0]),
+			func(v types.Decimal64) string { return v.Format(inputType.Scale) },
+			result, length, selectList)
+	case types.T_decimal128:
+		return binDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0]),
+			func(v types.Decimal128) string { return v.Format(inputType.Scale) },
+			result, length, selectList)
+	case types.T_decimal256:
+		return binDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0]),
+			func(v types.Decimal256) string { return v.Format(inputType.Scale) },
+			result, length, selectList)
+	case types.T_date:
+		return binMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0]),
+			func(v types.Date) int64 { return int64(v.Year()) }, result, length, selectList)
+	case types.T_datetime:
+		return binMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0]),
+			func(v types.Datetime) int64 { return int64(v.Year()) },
+			result, length, selectList)
+	case types.T_timestamp:
+		zone := time.Local
+		if proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		return binMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0]),
+			func(v types.Timestamp) int64 { return int64(v.ToDatetime(zone).Year()) },
+			result, length, selectList)
+	case types.T_time:
+		return binMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0]),
+			func(v types.Time) int64 { return v.Hour() },
+			result, length, selectList)
+	case types.T_year:
+		return binMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.MoYear](ivecs[0]),
+			func(v types.MoYear) int64 { return v.ToInt64() },
+			result, length, selectList)
+	default:
+		return moerr.NewInvalidArg(proc.Ctx, "function bin", inputType.Oid)
+	}
+}
+
+func binMappedInt64[T types.FixedSizeTExceptStrType](
+	nParam vector.FunctionParameterWrapper[T], mapValue func(T) int64,
+	result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes([]byte(uintToBinary(uint64(mapValue(value)))), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func binDecimalPrefix[T types.Decimal](
+	nParam vector.FunctionParameterWrapper[T], formatValue func(T) string,
+	result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		_, unsignedValue, _, err := parseBaseIntegerPrefix([]byte(formatValue(value)), 10)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes([]byte(uintToBinary(unsignedValue)), false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func bitCountFromUint64(v uint64) uint64 {
