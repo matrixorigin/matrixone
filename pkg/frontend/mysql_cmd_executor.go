@@ -392,7 +392,7 @@ func redactStatementErrorForLogging(err error, text string) error {
 func isIgnoreStatement(statement tree.Statement) bool {
 	switch stmt := statement.(type) {
 	case *tree.Insert:
-		return len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
+		return stmt.IsIgnore()
 	case *tree.Update:
 		return stmt.Ignore
 	case *tree.Load:

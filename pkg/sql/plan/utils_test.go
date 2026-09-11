@@ -397,6 +397,30 @@ func TestNormalizePrepareParamRefsIsIdempotentAcrossVisitedAliases(t *testing.T)
 	})
 }
 
+func TestNormalizePrepareParamRefsVisitsSubqueryRoots(t *testing.T) {
+	param := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
+	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Steps: []int32{0},
+		Nodes: []*plan.Node{
+			{
+				NodeId:   0,
+				NodeType: plan.Node_PROJECT,
+				ProjectList: []*plan.Expr{{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{
+					NodeId: 1,
+				}}}},
+			},
+			{
+				NodeId:      1,
+				NodeType:    plan.Node_PROJECT,
+				ProjectList: []*plan.Expr{param},
+			},
+		},
+	}}}
+
+	require.NoError(t, NormalizePrepareParamRefs(context.Background(), queryPlan))
+	require.Equal(t, int32(0), param.GetP().Pos)
+}
+
 func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 	source := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
 	binaryLiteral := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{

@@ -912,6 +912,13 @@ func (m castMode) isAssignment() bool {
 		m == castModeAssignmentIgnore
 }
 
+// reportsStringTruncationWarning identifies the assignment modes that keep a
+// truncated value. Strict assignment returns ER_DATA_TOO_LONG instead, while
+// ordinary expression and explicit casts do not have DML warning semantics.
+func (m castMode) reportsStringTruncationWarning() bool {
+	return m == castModeAssignment || m == castModeAssignmentIgnore
+}
+
 func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return newCast(parameters, result, proc, length, selectList, castModeNormal, false)
 }
@@ -6748,6 +6755,30 @@ type warningDiagnosticAppender interface {
 	AppendWarningDiagnostic(code uint16, msg string)
 }
 
+// appendStringAssignmentTruncationWarning reports the warning produced when a
+// width-constrained string assignment keeps a truncated value. The expression
+// layer does not carry the target column name, so use the stable target type as
+// the column label while preserving MySQL's warning code and row format. CHAR
+// values whose excess consists only of trailing spaces are explicitly exempt.
+func appendStringAssignmentTruncationWarning(
+	proc *process.Process, toType types.Type, row uint64, trailingSpaceOnly bool,
+) {
+	if trailingSpaceOnly && toType.Oid == types.T_char {
+		return
+	}
+	if proc == nil {
+		return
+	}
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	appender.AppendWarningDiagnostic(
+		moerr.WARN_DATA_TRUNCATED,
+		fmt.Sprintf("Data truncated for column '%s' at row %d", strings.ToLower(toType.Oid.String()), row+1),
+	)
+}
+
 // appendNumericCoercionWarning mirrors MySQL's warning for a non-empty string
 // whose numeric prefix was consumed and whose remaining text was discarded.
 // Empty strings intentionally coerce to zero without a warning.
@@ -8509,7 +8540,11 @@ func strToStr(
 				//     (allowTrailingSpaceTrim, MySQL-compatible);
 				//   - non-strict mode: truncate;
 				//   - otherwise (strict, real over-length): reject with 1406.
-				if (allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(s, destLen)) || !strictStringWidth {
+				trailingSpaceOnly := allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(s, destLen)
+				if trailingSpaceOnly || !strictStringWidth {
+					if mode.reportsStringTruncationWarning() {
+						appendStringAssignmentTruncationWarning(proc, toType, i, trailingSpaceOnly)
+					}
 					v = []byte(truncateStringByRunes(s, destLen))
 				} else if allowTrailingSpaceTrim {
 					extraInfo := fmt.Sprintf(
@@ -8531,6 +8566,9 @@ func strToStr(
 				}
 			} else if isTinyTextType(toType) && len(v) > destLen {
 				if !strictStringWidth {
+					if mode.reportsStringTruncationWarning() {
+						appendStringAssignmentTruncationWarning(proc, toType, i, false)
+					}
 					v = truncateTextByBytes(v, destLen)
 				} else {
 					return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(

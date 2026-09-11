@@ -41,9 +41,21 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// INSERT ... SELECT.  Reset it before binding so a QueryBuilder cannot leak
 	// the proof into a later DML path (for example LOAD or REPLACE).
 	builder.insertInputKeysUnique = false
-	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
-	// CHAR/VARCHAR writes to truncation instead of rejection.
-	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
+	// INSERT IGNORE is independent from the duplicate-key action.  In
+	// particular, a non-empty ODKU list still selects UPDATE while its input and
+	// assignment conversions use the IGNORE policy.
+	builder.isInsertIgnore = stmt.IsIgnore()
+	// Keep the planner-owned assignment stream structurally independent from the
+	// AST so later plan rewrites cannot resize the statement's mutable slice.
+	astUpdateExprs := slices.Clone(stmt.GetOnDuplicateUpdate())
+	// The auto-increment provenance/reorder metadata belongs only to the pure
+	// INSERT IGNORE multi-key dedup path. A combination statement still uses
+	// IGNORE conversions, but its duplicate action is UPDATE and must not carry
+	// row-skip-only state into PRE_INSERT.
+	builder.insertHasOnDuplicateUpdate = len(astUpdateExprs) > 0
+	defer func() {
+		builder.insertHasOnDuplicateUpdate = false
+	}()
 	dmlCtx := NewDMLContext()
 	// Allow FK tables on the modern insert path: bypass the generic FK-table
 	// rejection in ResolveTables via IgnoreForeignKey, then enforce parent
@@ -130,7 +142,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// action is known: plain INSERT shares its new-row image; INSERT IGNORE
 	// shares accepted rows after arbitration; ODKU shares the post-merge final
 	// image plus an old-row image for dropping stale entries.
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, stmt.OnDuplicateUpdate, irregularIndexes, autoIncrementGeneratedColumn)
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, astUpdateExprs, irregularIndexes, autoIncrementGeneratedColumn)
 }
 
 func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
@@ -2076,17 +2088,19 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 	return lastNodeID, newTag, nil
 }
 
-// insertIgnoreAutoIncrementReorderable is deliberately narrow.  The ordered
-// candidate policy is only needed when a real single-column AUTO_INCREMENT
-// primary key is combined with another unique constraint.  Composite/fake
-// keys, generated hidden keys, and tables whose unique checks are bypassed do
-// not have enough provenance here to justify changing their established path.
+// insertIgnoreAutoIncrementReorderable is deliberately narrow. The ordered
+// candidate policy is only needed for a pure INSERT IGNORE with a real
+// single-column AUTO_INCREMENT primary key combined with another unique
+// constraint. ODKU has a different action/affected-row contract and must keep
+// its established pre-insert shape. Composite/fake keys, generated hidden
+// keys, and tables whose unique checks are bypassed do not have enough
+// provenance here to justify changing their established path.
 func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
 	tableDef *plan.TableDef,
 	skipUniqueIdx []bool,
 	compPkeyExpr, clusterByExpr *plan.Expr,
 ) (int32, bool) {
-	if !builder.isInsertIgnore || tableDef == nil || tableDef.Pkey == nil ||
+	if !builder.isInsertIgnore || builder.insertHasOnDuplicateUpdate || tableDef == nil || tableDef.Pkey == nil ||
 		compPkeyExpr != nil || clusterByExpr != nil ||
 		tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return 0, false
@@ -2652,7 +2666,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	autoUpdateCols := make(map[string]bool)
 
 	if len(astUpdateExprs) == 0 {
-		onDupAction = plan.Node_FAIL
+		if builder.isInsertIgnore {
+			onDupAction = plan.Node_IGNORE
+		} else {
+			onDupAction = plan.Node_FAIL
+		}
 	} else if len(astUpdateExprs) == 1 && astUpdateExprs[0] == nil {
 		onDupAction = plan.Node_IGNORE
 	} else if isFakePK && firstUniqueIdxPos < 0 {
@@ -2729,7 +2747,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				continue
 			}
 
-			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, false)
+			updateExpr, err = builder.forceAssignmentCastExpr(updateExpr, colDef.Typ, builder.isInsertIgnore)
 			if err != nil {
 				return 0, err
 			}

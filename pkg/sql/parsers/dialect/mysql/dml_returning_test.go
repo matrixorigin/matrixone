@@ -97,8 +97,10 @@ func TestRejectedDMLReturningSyntaxRoundTrips(t *testing.T) {
 		switch original := stmt.(type) {
 		case *tree.Insert:
 			reparsed := roundTrip.(*tree.Insert)
-			require.Equal(t, len(original.OnDuplicateUpdate), len(reparsed.OnDuplicateUpdate))
-			require.Equal(t, original.OnDuplicateUpdate[0] == nil, reparsed.OnDuplicateUpdate[0] == nil)
+			require.True(t, original.IsIgnore())
+			require.True(t, reparsed.IsIgnore())
+			require.Empty(t, original.GetOnDuplicateUpdate())
+			require.Empty(t, reparsed.GetOnDuplicateUpdate())
 		case *tree.Update:
 			reparsed := roundTrip.(*tree.Update)
 			require.Equal(t, original.Priority, reparsed.Priority)

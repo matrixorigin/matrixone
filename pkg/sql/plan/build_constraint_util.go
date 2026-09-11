@@ -68,13 +68,6 @@ type dmlTableInfo struct {
 	alias          map[string]int         // Mapping of table aliases to tableDefs array index,If there is no alias, replace it with the original name of the table
 }
 
-var constTextType plan.Type
-
-func init() {
-	typ := types.T_text.ToType()
-	constTextType = makePlan2Type(&typ)
-}
-
 func getAliasToName(ctx CompilerContext, expr tree.TableExpr, alias string, aliasMap map[string][2]string) {
 	switch t := expr.(type) {
 	case *tree.TableName:
@@ -752,7 +745,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
 		var valueScanColumns []string
-		valueScanColumns, err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate)
+		valueScanColumns, err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.GetOnDuplicateUpdate())
 		if err != nil {
 			return false, nil, nil, err
 		}
@@ -1007,11 +1000,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// insert into t1 values (1,1,3),(2,2,3) on duplicate key update a=a+1, b=b-2;
 	// rewrite to : select _t.*, t1.a, t1.b，t1.c, t1.row_id from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
-	if len(stmt.OnDuplicateUpdate) > 0 {
-		isIgnore := len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
-		if isIgnore {
-			stmt.OnDuplicateUpdate = nil
-		}
+	onDuplicateUpdate := stmt.GetOnDuplicateUpdate()
+	if len(onDuplicateUpdate) > 0 {
 
 		rightTableDef := CloneTableDefForPlan(tableDef, true)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
@@ -1046,7 +1036,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 			// get update cols
 			updateCols := make(map[string]tree.Expr)
-			for _, updateExpr := range stmt.OnDuplicateUpdate {
+			for _, updateExpr := range onDuplicateUpdate {
 				col := updateExpr.Names[0].ColName()
 				updateCols[col] = updateExpr.Expr
 				if _, ok := uniqueColNames[col]; ok {
@@ -1176,7 +1166,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.rootId = newRootId
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
-			info.onDuplicateIsIgnore = isIgnore
+			info.onDuplicateIsIgnore = stmt.IsIgnore()
 
 			// append ProjectNode
 			info.rootId = builder.appendNode(&plan.Node{
@@ -2157,43 +2147,30 @@ func buildValueScan(
 	}
 
 	onUpdateExprs := make([]*plan.Expr, 0)
-	if builder.isPrepareStatement && !(len(OnDuplicateUpdate) == 1 && OnDuplicateUpdate[0] == nil) {
-		for _, expr := range OnDuplicateUpdate {
-			var updateExpr *plan.Expr
-			col := tableDef.Cols[colToIdx[expr.Names[0].ColName()]]
-			if nv, ok := expr.Expr.(*tree.ParamExpr); ok {
-				updateExpr = &plan.Expr{
-					Typ: constTextType,
-					Expr: &plan.Expr_P{
-						P: &plan.ParamRef{
-							Pos: int32(nv.Offset),
-						},
-					},
-				}
-			} else if nv, ok := expr.Expr.(*tree.FuncExpr); ok {
-				if checkExprHasParamExpr(nv.Exprs) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-					binder.builder = builder
-					binder.ctx = bindCtx
-					updateExpr, err = binder.BindExpr(nv, 0, true)
-					if err != nil {
-						return nil, err
-					}
-				}
-			} else if nv, ok := expr.Expr.(*tree.BinaryExpr); ok {
-				if checkExprHasParamExpr([]tree.Expr{nv.Right}) {
-					binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-					binder.builder = builder
-					binder.ctx = bindCtx
-					updateExpr, err = binder.BindExpr(nv.Right, 0, true)
-					if err != nil {
-						return nil, err
-					}
-				}
+	if builder.isPrepareStatement && len(OnDuplicateUpdate) > 0 {
+		// The no-key fallback does not execute the ODKU action, but its complete
+		// expression still has to be bound so every parameter marker is retained.
+		// Use the ODKU binder here because the fallback value scan has no FROM
+		// binding for target-table column references such as `id + ?`.
+		odkuBinder := NewOndupUpdateBinder(
+			builder.GetContext(), builder, bindCtx, 0, 0, tableDef,
+			tableDef.DbName, tableDef.Name, builder.compCtx.GetLowerCaseTableNames(),
+		)
+		for _, update := range OnDuplicateUpdate {
+			if update == nil || update.Expr == nil || !checkExprHasParamExpr([]tree.Expr{update.Expr}) {
+				continue
 			}
-			if updateExpr != nil {
-				onUpdateExprs = append(onUpdateExprs, updateExpr)
+			col := tableDef.Cols[colToIdx[update.Names[0].ColName()]]
+			// The update action is intentionally discarded by the no-key
+			// fallback, but every marker in its RHS still belongs to the
+			// prepared statement. Bind the complete expression so a binary
+			// expression contributes parameters from both operands, in lexical
+			// order, rather than retaining only the right operand.
+			updateExpr, err := odkuBinder.BindAssignmentExpr(update.Expr, col.Typ)
+			if err != nil {
+				return nil, err
 			}
+			onUpdateExprs = append(onUpdateExprs, updateExpr)
 		}
 	}
 	rowsetData.RowCount = int32(len(slt.Rows))

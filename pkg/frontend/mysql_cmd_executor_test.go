@@ -1681,7 +1681,7 @@ func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 	proc := ses.GetProc()
 	require.NotNil(t, proc)
 
-	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
+	insertIgnore := &tree.Insert{Ignore: true}
 	cw := InitTxnComputationWrapper(ses, insertIgnore, proc)
 	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert ignore into t values (1, 10 / 0)", constant.ExternSql, true)
 	require.NoError(t, err)
@@ -1763,7 +1763,7 @@ func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {
 	require.Equal(t, tree.QueryTypeOth, ses.GetQueryType())
 
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
-	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
+	insertIgnore := &tree.Insert{Ignore: true}
 	refreshProcessStmtProfileForPreparedStmt(proc, insertIgnore)
 
 	stmtType, queryType, ignore := proc.GetStmtProfile().GetStatementRuntimeProfile()

@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -2339,13 +2340,67 @@ func checkTableColumnNameValid(name string) bool {
 
 // Check the expr has paramExpr
 func checkExprHasParamExpr(exprs []tree.Expr) bool {
+	visited := make(map[paramExprVisit]struct{})
 	for _, expr := range exprs {
-		if _, ok := expr.(*tree.ParamExpr); ok {
+		if hasParamExprReflectively(reflect.ValueOf(expr), visited) {
 			return true
-		} else if e, ok := expr.(*tree.FuncExpr); ok {
-			return checkExprHasParamExpr(e.Exprs)
 		}
 	}
+	return false
+}
+
+// The parser's Expr visitor is incomplete for several valid AST nodes,
+// including Subquery, VarExpr, ExprList, and IntervalExpr. The no-key INSERT
+// fallback must still find parameter markers in those discarded expressions,
+// so inspect the AST data directly instead of invoking Accept and potentially
+// panicking. Reflection keeps this traversal complete as expression nodes gain
+// more nested AST fields; it does not call methods or mutate the tree.
+type paramExprVisit struct {
+	typ reflect.Type
+	ptr uintptr
+}
+
+func hasParamExprReflectively(value reflect.Value, visited map[paramExprVisit]struct{}) bool {
+	if !value.IsValid() {
+		return false
+	}
+
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return false
+		}
+		return hasParamExprReflectively(value.Elem(), visited)
+
+	case reflect.Ptr:
+		if value.IsNil() {
+			return false
+		}
+		if value.Type() == reflect.TypeOf((*tree.ParamExpr)(nil)) {
+			return true
+		}
+		visit := paramExprVisit{typ: value.Type(), ptr: value.Pointer()}
+		if _, ok := visited[visit]; ok {
+			return false
+		}
+		visited[visit] = struct{}{}
+		return hasParamExprReflectively(value.Elem(), visited)
+
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if hasParamExprReflectively(value.Field(i), visited) {
+				return true
+			}
+		}
+
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			if hasParamExprReflectively(value.Index(i), visited) {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 
