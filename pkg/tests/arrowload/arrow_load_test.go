@@ -610,6 +610,7 @@ func testArrowClusterRestart(t *testing.T, c embed.Cluster, db *sql.DB) {
 	require.NoError(t, db.Close())
 	require.NoError(t, c.Close())
 	require.NoError(t, c.Start())
+	waitArrowLoadClusterReady(t, c)
 
 	restartedDB := openArrowLoadDB(t, c, 0)
 	mustExec(t, restartedDB, "use arrow_bvt")

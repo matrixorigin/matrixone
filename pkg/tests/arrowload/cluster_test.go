@@ -23,6 +23,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
@@ -39,6 +40,97 @@ type arrowLoadClusterOptions struct {
 	distributedEnabled bool
 	forceMaterialize   bool
 	useDefaults        bool
+}
+
+const (
+	arrowLoadClusterReadyTimeout = 30 * time.Second
+	arrowLoadClusterReadyPoll    = 100 * time.Millisecond
+)
+
+// waitArrowLoadClusterReady closes the gap between process startup and the
+// lockservice membership contract used by Arrow LOAD. StartTestCluster returns
+// after the services are started, while each service's cached CN inventory may
+// still be empty or carry a CN without its lock endpoint. A distributed LOAD
+// can reach that window before the lock-table cleaner and be rejected as an
+// orphan transaction. Refresh every local CN view and require every expected
+// owner to be present in the raw inventory before a test opens its frontend.
+func waitArrowLoadClusterReady(t testing.TB, c embed.Cluster) {
+	t.Helper()
+
+	var expected []string
+	c.ForeachServices(func(svc embed.ServiceOperator) bool {
+		if svc.ServiceType() == metadata.ServiceType_CN {
+			expected = append(expected, svc.ServiceID())
+		}
+		return true
+	})
+	require.NotEmpty(t, expected, "Arrow LOAD cluster must have at least one CN")
+
+	ctx, cancel := context.WithTimeout(context.Background(), arrowLoadClusterReadyTimeout)
+	defer cancel()
+	poll := time.NewTicker(arrowLoadClusterReadyPoll)
+	defer poll.Stop()
+	lastStatus := "not checked"
+	for {
+		ready, status := arrowLoadClusterReadyStatus(ctx, expected)
+		if ready {
+			return
+		}
+		lastStatus = status
+
+		select {
+		case <-ctx.Done():
+			require.Failf(t,
+				"Arrow LOAD cluster did not become lockservice-ready",
+				"expected CNs=%v; last status=%s", expected, lastStatus)
+			return
+		case <-poll.C:
+		}
+	}
+}
+
+func arrowLoadClusterReadyStatus(ctx context.Context, expected []string) (bool, string) {
+	for _, serviceID := range expected {
+		cluster, err := clusterservice.GetMOClusterWithContext(ctx, serviceID)
+		if err != nil {
+			return false, fmt.Sprintf("CN %s cluster lookup failed: %v", serviceID, err)
+		}
+		refresher, ok := cluster.(clusterservice.AuthoritativeRefresher)
+		if !ok {
+			return false, fmt.Sprintf("CN %s cluster has no authoritative refresher", serviceID)
+		}
+		if err := refresher.Refresh(ctx); err != nil {
+			return false, fmt.Sprintf("CN %s inventory refresh failed: %v", serviceID, err)
+		}
+
+		observed := make(map[string]string, len(expected))
+		if err := clusterservice.GetCNServiceRawWithContext(
+			ctx,
+			cluster,
+			clusterservice.NewSelectAll(),
+			func(cn metadata.CNService) bool {
+				observed[cn.ServiceID] = cn.LockServiceAddress
+				return true
+			},
+		); err != nil {
+			return false, fmt.Sprintf("CN %s raw inventory read failed: %v", serviceID, err)
+		}
+
+		for _, expectedID := range expected {
+			address, found := observed[expectedID]
+			if !found {
+				return false, fmt.Sprintf(
+					"CN %s view is missing owner %s (observed=%v)",
+					serviceID, expectedID, observed)
+			}
+			if address == "" {
+				return false, fmt.Sprintf(
+					"CN %s view has empty lock endpoint for owner %s (observed=%v)",
+					serviceID, expectedID, observed)
+			}
+		}
+	}
+	return true, "all expected CN lock endpoints are present in every local inventory"
 }
 
 func startArrowLoadCluster(t testing.TB, cnCount int, enabled, s3Enabled, distributedEnabled bool) embed.Cluster {
@@ -75,10 +167,13 @@ func startArrowLoadClusterWithOptions(t testing.TB, options arrowLoadClusterOpti
 		}))
 	}
 	c, err := embed.StartTestCluster(clusterOptions...)
+	if c != nil {
+		t.Cleanup(func() {
+			require.NoError(t, c.Close())
+		})
+	}
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, c.Close())
-	})
+	waitArrowLoadClusterReady(t, c)
 	return c
 }
 
@@ -108,6 +203,7 @@ func startArrowLoadClusterWithForceModes(t testing.TB) embed.Cluster {
 		t.Cleanup(func() { require.NoError(t, c.Close()) })
 	}
 	require.NoError(t, err)
+	waitArrowLoadClusterReady(t, c)
 	return c
 }
 
