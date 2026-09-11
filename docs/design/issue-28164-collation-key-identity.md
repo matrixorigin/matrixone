@@ -3,7 +3,7 @@
 - Status: Design revision 3; implementation increment in PR #28520; v2 remains gated and the full series is not complete
 - Tracking issue: [#28164](https://github.com/matrixorigin/matrixone/issues/28164)
 - Design revision: 3
-- Frozen baseline for implementation increment: `7c643f469b9162dec19b7f880e4cf6b2c12507d9` (`upstream/main` at the post-rebase exact-head validation freeze)
+- Frozen baseline for implementation increment: `065a67528608c475d0219e0be6b7d454a58f7b1a` (`upstream/main` at the final exact-head rebase freeze)
 - Scope: the complete string PK/UNIQUE identity contract; this PR carries the codec, metadata fence, planner key materialization, and guarded index probes. TN persistence, global comparison consumers, migration management, and rollout remain follow-up work.
 
 ## 1. Decision summary
@@ -1241,3 +1241,18 @@ field is observation/persistence only until an owner-authorized transition
 command is specified. TN commit admission, `mo_ctl`, catalog relation
 publication, and the migration runbook are still not connected. The v2
 writer/read gates remain fail-closed and production v2 remains disabled.
+
+### 10.19 Implementation series status (post-rebase correctness hardening)
+
+The latest exact-head hardening keeps planner nullability aligned with the
+runtime composite materializer: a composite v2 key is nullable whenever any
+source part is nullable, because the materializer returns NULL for the whole
+identity in that case. The codec also keeps zero as the lower bound for decimal
+canonicalization; values such as `10` and `10.0` at declared scale zero retain
+their significant integer zero and validate as the same canonical key.
+
+These changes are covered by planner and codec unit tests (including the codec
+race suite) and do not enable v2 or alter legacy relations. The implementation
+increment remains a staged foundation; TN/catalog sidecar persistence, complete
+SQL comparison consumers, migration management, upgrade validation, and QA are
+still required before production rollout.
