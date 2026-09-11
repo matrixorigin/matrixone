@@ -347,6 +347,8 @@ select * from t_odku_row_alias order by id;
 ➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  10  ¦  0  𝄀
 2  ¦  5  ¦  0
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
 drop table t_odku_scope_multi;
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);

@@ -4573,154 +4573,162 @@ func (builder *QueryBuilder) validateOndupTargetCorrelatedSubqueries(exprs []*pl
 		if !builder.exprHasTargetCorrelatedSubquery(expr, targetTag) {
 			continue
 		}
-		if i > 0 || !builder.insertInputSingleRow {
+		if i > 0 || !builder.insertInputSingleRow ||
+			builder.targetCorrelatedSubqueryHasNestedSubquery(expr) {
 			return moerr.NewUnsupportedDML(builder.GetContext(), odkuTargetCorrelatedSubqueryCause)
 		}
 	}
 	return nil
 }
 
-// exprHasTargetCorrelatedSubquery distinguishes a target correlation inside a
+// analyzeTargetCorrelatedSubquery distinguishes a target correlation inside a
 // subquery from an ordinary target reference in the ODKU expression. The latter
 // is evaluated by DedupJoin against its evolving old-row image; the former is
 // flattened into the candidate side and must not be allowed to observe a stale
-// target snapshot in a multi-row or ordered-assignment shape.
-func (builder *QueryBuilder) exprHasTargetCorrelatedSubquery(expr *plan.Expr, targetTag int32) bool {
+// target snapshot in an unsupported shape. It also records whether a nested
+// subquery exists, because the outer target-match guard cannot gate the inner
+// subquery's input plan.
+func (builder *QueryBuilder) analyzeTargetCorrelatedSubquery(
+	expr *plan.Expr, targetTag int32,
+) (hasTargetCorrelation, hasNestedSubquery bool) {
 	visitedNodes := make(map[int32]struct{})
-	var visitExpr func(*plan.Expr, bool) bool
-	var visitNode func(int32) bool
+	var visitExpr func(*plan.Expr, bool)
+	var visitNode func(int32)
 
-	visitExpr = func(current *plan.Expr, inSubquery bool) bool {
-		if current == nil {
-			return false
+	visitExpr = func(current *plan.Expr, inSubquery bool) {
+		if current == nil || (hasTargetCorrelation && hasNestedSubquery) {
+			return
 		}
 		switch exprImpl := current.Expr.(type) {
 		case *plan.Expr_Corr:
-			return inSubquery && exprImpl.Corr != nil &&
-				exprImpl.Corr.Depth > 0 && exprImpl.Corr.RelPos == targetTag
+			if inSubquery && exprImpl.Corr != nil &&
+				exprImpl.Corr.Depth > 0 && exprImpl.Corr.RelPos == targetTag {
+				hasTargetCorrelation = true
+			}
 		case *plan.Expr_F:
 			if exprImpl.F == nil {
-				return false
+				return
 			}
 			for _, arg := range exprImpl.F.Args {
-				if visitExpr(arg, inSubquery) {
-					return true
-				}
+				visitExpr(arg, inSubquery)
 			}
 		case *plan.Expr_Lit:
-			if exprImpl.Lit != nil && visitExpr(exprImpl.Lit.Src, inSubquery) {
-				return true
+			if exprImpl.Lit != nil {
+				visitExpr(exprImpl.Lit.Src, inSubquery)
 			}
 		case *plan.Expr_List:
 			if exprImpl.List == nil {
-				return false
+				return
 			}
 			for _, item := range exprImpl.List.List {
-				if visitExpr(item, inSubquery) {
-					return true
-				}
+				visitExpr(item, inSubquery)
 			}
 		case *plan.Expr_Sub:
 			if exprImpl.Sub == nil {
-				return false
+				return
 			}
-			if visitExpr(exprImpl.Sub.Child, true) || visitNode(exprImpl.Sub.NodeId) {
-				return true
+			if inSubquery {
+				hasNestedSubquery = true
 			}
+			visitExpr(exprImpl.Sub.Child, true)
+			visitNode(exprImpl.Sub.NodeId)
 		case *plan.Expr_W:
 			if exprImpl.W == nil {
-				return false
+				return
 			}
-			if visitExpr(exprImpl.W.WindowFunc, inSubquery) {
-				return true
-			}
+			visitExpr(exprImpl.W.WindowFunc, inSubquery)
 			for _, item := range exprImpl.W.PartitionBy {
-				if visitExpr(item, inSubquery) {
-					return true
-				}
+				visitExpr(item, inSubquery)
 			}
 			for _, orderBy := range exprImpl.W.OrderBy {
-				if orderBy != nil && visitExpr(orderBy.Expr, inSubquery) {
-					return true
+				if orderBy != nil {
+					visitExpr(orderBy.Expr, inSubquery)
 				}
 			}
 			if exprImpl.W.Frame != nil {
-				if exprImpl.W.Frame.Start != nil && visitExpr(exprImpl.W.Frame.Start.Val, inSubquery) {
-					return true
+				if exprImpl.W.Frame.Start != nil {
+					visitExpr(exprImpl.W.Frame.Start.Val, inSubquery)
 				}
-				if exprImpl.W.Frame.End != nil && visitExpr(exprImpl.W.Frame.End.Val, inSubquery) {
-					return true
+				if exprImpl.W.Frame.End != nil {
+					visitExpr(exprImpl.W.Frame.End.Val, inSubquery)
 				}
 			}
 		}
-		return false
 	}
 
-	visitNode = func(nodeID int32) bool {
+	visitNode = func(nodeID int32) {
+		if hasTargetCorrelation && hasNestedSubquery {
+			return
+		}
 		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
-			return false
+			return
 		}
 		if _, ok := visitedNodes[nodeID]; ok {
-			return false
+			return
 		}
 		visitedNodes[nodeID] = struct{}{}
 		node := builder.qry.Nodes[nodeID]
 		if node == nil {
-			return false
+			return
 		}
 		for _, childID := range node.Children {
-			if visitNode(childID) {
-				return true
-			}
+			visitNode(childID)
 		}
-		visitExprList := func(exprs []*plan.Expr) bool {
+		visitExprList := func(exprs []*plan.Expr) {
 			for _, item := range exprs {
-				if visitExpr(item, true) {
-					return true
-				}
+				visitExpr(item, true)
 			}
-			return false
 		}
 		for _, item := range []*plan.Expr{
 			node.Limit, node.Offset, node.Interval, node.Sliding, node.Timestamp, node.WEnd,
 		} {
-			if visitExpr(item, true) {
-				return true
-			}
+			visitExpr(item, true)
 		}
 		for _, exprs := range [][]*plan.Expr{
 			node.OnList, node.FilterList, node.ProjectList, node.GroupBy,
 			node.AggList, node.WinSpecList, node.TblFuncExprList, node.BlockFilterList,
 			node.FillVal, node.OnUpdateExprs, node.TimeWindowPartitionBy,
 		} {
-			if visitExprList(exprs) {
-				return true
-			}
+			visitExprList(exprs)
 		}
 		for _, orderBy := range node.OrderBy {
-			if orderBy != nil && visitExpr(orderBy.Expr, true) {
-				return true
+			if orderBy != nil {
+				visitExpr(orderBy.Expr, true)
 			}
 		}
 		if param := node.IndexReaderParam; param != nil {
-			if visitExpr(param.Limit, true) {
-				return true
-			}
+			visitExpr(param.Limit, true)
 			for _, orderBy := range param.OrderBy {
-				if orderBy != nil && visitExpr(orderBy.Expr, true) {
-					return true
+				if orderBy != nil {
+					visitExpr(orderBy.Expr, true)
 				}
 			}
 			if param.DistRange != nil {
-				if visitExpr(param.DistRange.LowerBound, true) || visitExpr(param.DistRange.UpperBound, true) {
-					return true
-				}
+				visitExpr(param.DistRange.LowerBound, true)
+				visitExpr(param.DistRange.UpperBound, true)
 			}
 		}
-		return false
 	}
 
-	return visitExpr(expr, false)
+	visitExpr(expr, false)
+	return hasTargetCorrelation, hasNestedSubquery
+}
+
+// exprHasTargetCorrelatedSubquery reports whether a subquery contains a
+// correlation to the target row rather than an ordinary ODKU target reference.
+func (builder *QueryBuilder) exprHasTargetCorrelatedSubquery(expr *plan.Expr, targetTag int32) bool {
+	hasTarget, _ := builder.analyzeTargetCorrelatedSubquery(expr, targetTag)
+	return hasTarget
+}
+
+// targetCorrelatedSubqueryHasNestedSubquery reports whether a target-correlated
+// subquery contains another subquery. The target lookup guard is a predicate on
+// the outer scalar join; it cannot prevent a nested subquery's input plan from
+// executing before that predicate is evaluated. Reject that shape until the
+// UPDATE branch can be gated at the duplicate-key action boundary.
+func (builder *QueryBuilder) targetCorrelatedSubqueryHasNestedSubquery(expr *plan.Expr) bool {
+	_, nested := builder.analyzeTargetCorrelatedSubquery(expr, 0)
+	return nested
 }
 
 // insertScopeRef is a global binding reference that must be made visible by
