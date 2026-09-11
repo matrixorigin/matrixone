@@ -4659,7 +4659,7 @@ func mysqlTimeOutOfRangeForCast(
 		return 0, moerr.NewOutOfRangef(ctx, "time", "value '%s'", value)
 	}
 	if proc != nil {
-		if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+		if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 			appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
 				fmt.Sprintf("Out of range value for column 'time' at row %d", row+1))
 		}
@@ -4696,7 +4696,7 @@ func mysqlInvalidTimeForCast(
 		return 0, moerr.NewTruncatedWrongValue(ctx, "time", value)
 	}
 	if proc != nil {
-		if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+		if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 			appender.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED,
 				fmt.Sprintf("Data truncated for column 'time' at row %d", row+1))
 		}
@@ -6767,7 +6767,7 @@ func appendNumericCoercionWarning(proc *process.Process, value string) {
 	if proc == nil {
 		return
 	}
-	session := proc.GetSession()
+	session := proc.GetWarningSink()
 	appender, ok := session.(warningDiagnosticAppender)
 	if !ok {
 		return
@@ -6789,7 +6789,7 @@ func appendIntegerNumericCoercionWarning(
 	if trimmed == "" || proc == nil {
 		return
 	}
-	session := proc.GetSession()
+	session := proc.GetWarningSink()
 	appender, ok := session.(warningDiagnosticAppender)
 	if !ok {
 		return
@@ -7239,12 +7239,25 @@ func strToFloatWithProc[T constraints.Float](
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
 			}
-			r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
-			if tErr != nil {
-				return tErr
-			}
-			if !isBinary && mode == SQLCompatibilityMySQL {
-				appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+				// Prepared Boolean values travel as canonical text. Restore their
+				// numeric category without changing ordinary SQL string coercion.
+				b, err := strconv.ParseBool(convertByteSliceToString(v))
+				if err != nil {
+					return moerr.NewInvalidArg(ctx, "prepared Boolean", convertByteSliceToString(v))
+				}
+				r2 = 0
+				if b {
+					r2 = 1
+				}
+			} else {
+				r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
+				if tErr != nil {
+					return tErr
+				}
+				if !isBinary && mode == SQLCompatibilityMySQL {
+					appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+				}
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 				result = T(r2)

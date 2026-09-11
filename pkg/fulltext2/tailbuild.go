@@ -16,6 +16,7 @@ package fulltext2
 
 import (
 	"fmt"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"os"
 	"path/filepath"
 )
@@ -32,6 +33,10 @@ type TailSegment struct {
 	Path     string
 	Offset   int64
 	FrameLen int
+	// Checksum is the CRC32 the frame already carries in its footer, read back rather than
+	// recomputed. It goes into the frame's metadata row so the tail is verifiable from the
+	// catalog the same way a base sub-index is.
+	Checksum uint32
 }
 
 // TailBuilder streams CDC insert/upsert rows into capacity-capped positional segments and DELETEs
@@ -218,7 +223,8 @@ func (t *TailBuilder) seal() error {
 	if err != nil {
 		return err
 	}
-	t.frames = append(t.frames, TailSegment{Path: path, Offset: off, FrameLen: len(framed)})
+	sum, _ := cuvscdc.CdcChunkChecksum(framed)
+	t.frames = append(t.frames, TailSegment{Path: path, Offset: off, FrameLen: len(framed), Checksum: sum})
 	return nil
 }
 
@@ -240,7 +246,8 @@ func (t *TailBuilder) sealDeletes() error {
 	if err != nil {
 		return err
 	}
-	t.frames = append(t.frames, TailSegment{Path: path, Offset: off, FrameLen: len(framed)})
+	sum, _ := cuvscdc.CdcChunkChecksum(framed)
+	t.frames = append(t.frames, TailSegment{Path: path, Offset: off, FrameLen: len(framed), Checksum: sum})
 	return nil
 }
 

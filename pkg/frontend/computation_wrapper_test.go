@@ -1466,6 +1466,120 @@ func TestInitExecuteStmtParamDirectTextIgnoresNestedNumericMarker(t *testing.T) 
 		"the direct VAR_STRING result must retain TEXT metadata")
 }
 
+func TestSQLPreparedBooleanDirectResultKeepsTextWithNumericSibling(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		paramCount  int
+		directIndex int
+		numeric     []int
+	}{
+		{name: "direct_before_numeric", sql: "select ?, round(?)", paramCount: 2, directIndex: 0, numeric: []int{1}},
+		{name: "direct_after_numeric", sql: "select round(?), ?", paramCount: 2, directIndex: 1, numeric: []int{0}},
+		{name: "direct_between_numeric", sql: "select round(?), ?, sign(?)", paramCount: 3, directIndex: 1, numeric: []int{0, 2}},
+	}
+	for testIndex, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, uint32(215+testIndex), test.sql)
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+			execCtx.input.isBinaryProtExecute = false
+			cw.binaryPrepare = false
+			execPlan := &plan.Execute{Name: prepareStmt.Name, Args: make([]*plan.Expr, test.paramCount)}
+			for i := range execPlan.Args {
+				execPlan.Args[i] = &plan.Expr{Expr: &plan.Expr_V{V: &plan.VarRef{
+					Name: fmt.Sprintf("bool_param_%d", i),
+				}}}
+			}
+			cachedPlan, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+			require.NoError(t, err)
+			originalQuery := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery()
+			originalRoot := originalQuery.Nodes[originalQuery.Steps[len(originalQuery.Steps)-1]]
+			require.Len(t, prepareStmt.directResultParamPositions, 1)
+			require.Equal(t, int32(test.directIndex), prepareStmt.directResultParamPositions[0])
+			originalDirectType := originalRoot.ProjectList[test.directIndex].Typ
+
+			type execution struct {
+				value    any
+				wantText string
+				wantNum  int64
+			}
+			for index, execution := range []execution{
+				{value: true, wantText: "true", wantNum: 1},
+				{value: false, wantText: "false"},
+				{value: true, wantText: "true", wantNum: 1},
+			} {
+				t.Run(fmt.Sprintf("execution-%d", index), func(t *testing.T) {
+					for i := range execPlan.Args {
+						require.NoError(t, ses.SetUserDefinedVar(
+							fmt.Sprintf("bool_param_%d", i), execution.value, ""))
+					}
+					_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+						execCtx, ses, cw, execPlan, "")
+					require.NoError(t, err)
+					if owned && executionStmt != nil {
+						defer executionStmt.Free()
+					}
+
+					query := runtimePlan.GetQuery()
+					root := query.Nodes[query.Steps[len(query.Steps)-1]]
+					require.Len(t, root.ProjectList, test.paramCount)
+					require.Equal(t, originalDirectType, root.ProjectList[test.directIndex].Typ,
+						"an independent numeric sibling must not change a direct SQL result")
+					for _, numericIndex := range test.numeric {
+						require.True(t, types.T(root.ProjectList[numericIndex].Typ.Id).IsInteger(),
+							"numeric consumer %d must use an integer overload", numericIndex)
+					}
+
+					evaluate := func(expr *plan.Expr) (*vector.Vector, colexec.ExpressionExecutor, *batch.Batch) {
+						t.Helper()
+						executor, err := colexec.NewExpressionExecutor(cw.proc, expr)
+						require.NoError(t, err)
+						input := batch.New(nil)
+						input.SetRowCount(1)
+						result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+						require.NoError(t, err)
+						return result, executor, input
+					}
+					direct, directExecutor, directInput := evaluate(root.ProjectList[test.directIndex])
+					t.Cleanup(func() {
+						direct.Free(cw.proc.Mp())
+						directExecutor.Free()
+						directInput.Clean(cw.proc.Mp())
+					})
+					require.True(t, direct.GetType().Oid.IsMySQLString())
+					require.False(t, direct.GetNulls().Contains(0))
+					require.Equal(t, execution.wantText, direct.GetStringAt(0))
+					for _, numericIndex := range test.numeric {
+						numeric, numericExecutor, numericInput := evaluate(root.ProjectList[numericIndex])
+						t.Cleanup(func() {
+							numeric.Free(cw.proc.Mp())
+							numericExecutor.Free()
+							numericInput.Clean(cw.proc.Mp())
+						})
+						require.True(t, numeric.GetType().Oid.IsInteger())
+						require.False(t, numeric.GetNulls().Contains(0))
+						switch numeric.GetType().Oid {
+						case types.T_uint64:
+							require.Equal(t, uint64(execution.wantNum), vector.GetFixedAtNoTypeCheck[uint64](numeric, 0))
+						case types.T_int64:
+							require.Equal(t, execution.wantNum, vector.GetFixedAtNoTypeCheck[int64](numeric, 0))
+						default:
+							require.Failf(t, "unexpected numeric result type", "%s", numeric.GetType().Oid)
+						}
+					}
+					after, err := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+					require.NoError(t, err)
+					require.Equal(t, cachedPlan, after, "SQL EXECUTE must not mutate the cached plan")
+				})
+			}
+		})
+	}
+}
+
 func TestInitExecuteStmtParamDirectNumericPreservesTextSibling(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 214, "select ? as direct_number, ? as direct_text")
@@ -3522,6 +3636,7 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
 		"runtime_decimal", "2.500", "", false, decimalType, vector.PrepareParamDecimal))
 	require.NoError(t, ses.SetUserDefinedVar("runtime_text", "2.500", ""))
+	require.NoError(t, ses.SetUserDefinedVar("runtime_bool", true, ""))
 	binaryTextType := plan.Type{
 		Id: int32(types.T_varchar), Width: 8, Charset: uint32(types.CharsetBinary),
 	}
@@ -3539,6 +3654,10 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 		{
 			Typ:  binaryTextType,
 			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_binary"}},
+		},
+		{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_bool"}},
 		},
 	}
 	params, paramVals, _, _, _, _, err := buildExecuteUserParams(cw.proc, args, nil)
@@ -3561,6 +3680,13 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, binaryParam.HasSourceType)
 	require.Equal(t, types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), binaryParam.SourceType)
+	boolParam := paramVals[3].(plan2.ParamValue)
+	require.Equal(t, "true", params.GetStringAt(3), "do not rewrite the transport value")
+	require.Equal(t, vector.PrepareParamBoolean, boolParam.PrepareParamKind)
+	require.True(t, boolParam.HasSourceType)
+	require.Equal(t, types.T_bool.ToType(), boolParam.SourceType)
+	require.False(t, boolParam.HasRuntimeType,
+		"SQL EXECUTE keeps a bare direct parameter's text result domain")
 }
 
 // A nil cached compile means the statement was rejected for prepare-time

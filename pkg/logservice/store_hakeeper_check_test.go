@@ -444,10 +444,20 @@ func runHakeeperTaskServiceTestWithCNStoreTimeout(
 	cnStoreTimeout time.Duration,
 	fn func(*testing.T, *store, taskservice.TaskService),
 ) {
+	runHakeeperTaskServiceTestWithWorkers(t, cnStoreTimeout, true, fn)
+}
+
+func runHakeeperTaskServiceTestWithWorkers(
+	t *testing.T,
+	cnStoreTimeout time.Duration,
+	workers bool,
+	fn func(*testing.T, *store, taskservice.TaskService),
+) {
 	defer leaktest.AfterTest(t)()
 	var cfg Config
 	genCfg := func() Config {
 		cfg = getStoreTestConfig()
+		cfg.DisableWorkers = !workers
 		cfg.HAKeeperConfig.CNStoreTimeout.Duration = cnStoreTimeout
 		return cfg
 	}
@@ -1203,10 +1213,10 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
 		if fail {
-			// Move the deadline into the past so this test does not spend the
-			// real multi-minute bootstrap budget.
-			store.bootstrapCheckDeadline = time.Now().Add(-time.Second)
-			store.checkBootstrap(state)
+			// Drive the elapsed-time check through its explicit-time seam rather
+			// than mutating the production-owned deadline.
+			expired := time.Now().Add(store.bootstrapCheckWindow())
+			require.NoError(t, store.checkBootstrapWithSetterAt(expired, state, store.setBootstrapState))
 
 			state, err = store.getCheckerState()
 			require.NoError(t, err)
@@ -1387,7 +1397,9 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 	}
-	runHakeeperTaskServiceTest(t, fn)
+	// This case drives bootstrap and scheduling explicitly; a background
+	// HAKeeper check would race with bootstrap and mutate scheduler state.
+	runHakeeperTaskServiceTestWithWorkers(t, 5*time.Second, false, fn)
 }
 
 func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
