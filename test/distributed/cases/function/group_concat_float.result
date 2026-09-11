@@ -11,22 +11,22 @@ insert into float_values values
 (6, null, null);
 select group_concat(f order by id separator '|') from float_values;
 group_concat(f, |,order by id)
-1.5|1E+20|0.0000001|1E-14|0
+1.5|1E+20|0.0000001|1E-14|-0
 select group_concat(d order by id separator '|') from float_values;
 group_concat(d, |,order by id)
-1.5|1E+20|0.0000001|1E-14|0
+1.5|1E+20|0.0000001|1E-14|-0
 select group_concat(d order by id separator '|') =
 group_concat(cast(d as char) order by id separator '|')
 from float_values;
 group_concat(d, |,order by id) = group_concat(cast(d as char), |,order by id)
-true
+1
 select group_concat(distinct d order by d separator '|') from float_values;
 group_concat(distinct d, |,order by d)
-0|1E-14|0.0000001|1.5|1E+20
+-0|1E-14|0.0000001|1.5|1E+20
 prepare group_concat_float_stmt from
 'select group_concat(d order by id separator \'|\') from float_values';
 execute group_concat_float_stmt;
 group_concat(d, |,order by id)
-1.5|1E+20|0.0000001|1E-14|0
+1.5|1E+20|0.0000001|1E-14|-0
 deallocate prepare group_concat_float_stmt;
 drop database group_concat_float_28660;
