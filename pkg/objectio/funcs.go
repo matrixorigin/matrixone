@@ -143,7 +143,7 @@ func ReadOneBlock(
 		sharedPosition = 0
 	}
 	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy,
-		sharedPosition)
+		sharedPosition, nil)
 }
 
 // ReadOneBlockWithScopedDecode opts one requested column into immutable decoded
@@ -158,7 +158,7 @@ func ReadOneBlockWithScopedDecode(
 		return fileservice.IOVector{}, moerr.NewInvalidInputNoCtxf(
 			"scoped decode column position %d is outside column/type lists", sharedPosition)
 	}
-	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy, sharedPosition)
+	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, columnCacheConstructorFactory, policy, sharedPosition, nil)
 }
 
 func ReadOneBlockWithMeta(
@@ -173,13 +173,13 @@ func ReadOneBlockWithMeta(
 	factory CacheConstructorFactory,
 	policy fileservice.Policy,
 ) (ioVec fileservice.IOVector, err error) {
-	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, factory, policy, -1)
+	return readOneBlockWithMeta(ctx, meta, name, blk, seqnums, typs, m, fs, factory, policy, -1, nil)
 }
 
 func readOneBlockWithMeta(
 	ctx context.Context, meta *ObjectDataMeta, name string, blk uint16,
 	seqnums []uint16, typs []types.Type, m *mpool.MPool, fs fileservice.FileService,
-	factory CacheConstructorFactory, policy fileservice.Policy, sharedPosition int,
+	factory CacheConstructorFactory, policy fileservice.Policy, sharedPosition int, selectedEntry *fileservice.IOEntry,
 ) (ioVec fileservice.IOVector, err error) {
 	ioVec = fileservice.IOVector{
 		FilePath: name,
@@ -236,7 +236,9 @@ func readOneBlockWithMeta(
 		col := blkmeta.ColumnMeta(seqnum)
 		ext := col.Location()
 		entry := newColumnIOEntry(ext, factory)
-		if i == sharedPosition && typs[i].Oid.IsArrayRelate() {
+		if i == sharedPosition && selectedEntry != nil {
+			entry = *selectedEntry
+		} else if i == sharedPosition && typs[i].Oid.IsArrayRelate() {
 			entry.DecodeSharing = fileservice.DecodeSharing{
 				Codec:      "objectio-validated-column-v1",
 				Parameters: [2]uint64{uint64(ext.Alg()), uint64(ext.OriginSize())},

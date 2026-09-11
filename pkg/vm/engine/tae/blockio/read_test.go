@@ -414,7 +414,88 @@ func TestBlockDataReadInnerPersistedVectorTopN(t *testing.T) {
 	emptyTop.UpperBound = 0
 	run("bounds remove every row", &blockReadTestDataSource{}, nil, emptyTop,
 		[]int64{}, []float64{})
+	t.Run("exact membership fused before topk", func(t *testing.T) {
+		output := newOutput()
+		filter := objectio.BlockReadFilter{
+			Valid:           true,
+			ExactMembership: true,
+			UnSortedSearchFunc: func(vectors containers.Vectors) []int64 {
+				require.Equal(t, []int32{100, 101, 102, 103, 104},
+					vector.MustFixedColWithTypeCheck[int32](&vectors[0]))
+				return []int64{0, 2, 4}
+			},
+		}
+		require.NoError(t, BlockDataRead(
+			ctx,
+			&info,
+			&blockReadTestDataSource{deleted: []uint64{2}},
+			columns,
+			columnTypes,
+			1,
+			timestamp.Timestamp{},
+			[]uint16{0},
+			[]types.Type{typesByColumn[0]},
+			filter,
+			newTop(),
+			fileservice.Policy(0),
+			"entries",
+			output,
+			containers.NewVectors(len(columns)+1),
+			queryMP,
+			fs,
+		))
+		assertOutput(t, output, []int64{0, 4}, []float64{100, 9})
+		output.Clean(queryMP)
+	})
+	t.Run("exact membership all tombstoned", func(t *testing.T) {
+		output := newOutput()
+		filter := objectio.BlockReadFilter{
+			Valid:              true,
+			ExactMembership:    true,
+			UnSortedSearchFunc: func(containers.Vectors) []int64 { return []int64{0, 2, 4} },
+		}
+		require.NoError(t, BlockDataRead(
+			ctx,
+			&info,
+			&blockReadTestDataSource{deleted: []uint64{0, 2, 4}},
+			columns,
+			columnTypes,
+			1,
+			timestamp.Timestamp{},
+			[]uint16{0},
+			[]types.Type{typesByColumn[0]},
+			filter,
+			newTop(),
+			fileservice.Policy(0),
+			"entries",
+			output,
+			containers.NewVectors(len(columns)+1),
+			queryMP,
+			fs,
+		))
+		assertOutput(t, output, []int64{}, []float64{})
+		output.Clean(queryMP)
+	})
 	require.Zero(t, queryMP.CurrNB())
+}
+
+func TestCanFuseExactMembershipTopK(t *testing.T) {
+	info := &objectio.BlockInfo{}
+	top := &objectio.IndexReaderTopOp{Typ: types.T_array_float32, ColPos: 1}
+	search := func(containers.Vectors) []int64 { return []int64{0} }
+	filter := objectio.BlockReadFilter{ExactMembership: true}
+	require.True(t, canFuseExactMembershipTopK(info, filter, search, []uint16{0}, top, -1, 2, nil))
+
+	filter.ExactMembership = false
+	require.False(t, canFuseExactMembershipTopK(info, filter, search, []uint16{0}, top, -1, 2, nil))
+	filter.ExactMembership = true
+	top.Desc = true
+	require.False(t, canFuseExactMembershipTopK(info, filter, search, []uint16{0}, top, -1, 2, nil))
+	top.Desc = false
+	require.False(t, canFuseExactMembershipTopK(info, filter, search, []uint16{0}, top, -1, 2,
+		func(*batch.Batch, []int) (engine.ReaderFilterResult, error) {
+			return engine.ReaderFilterResult{}, nil
+		}))
 }
 
 func TestBlockDataReadInnerAppendableVectorTopNUsesLegacyPath(t *testing.T) {

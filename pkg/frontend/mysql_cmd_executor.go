@@ -1364,12 +1364,14 @@ func doSetVar(
 	var err error = nil
 	var ok bool
 	var userVarIsBin bool
+	var userVarRuntimeDomain types.RuntimeStringDomain
 	var userVarType plan.Type
 	var userVarPrepareParamKind vector.PrepareParamKind
 	type evaluatedAssignment struct {
 		assign                  *tree.VarAssignmentExpr
 		value                   interface{}
 		userVarIsBin            bool
+		userVarRuntimeDomain    types.RuntimeStringDomain
 		valueType               plan.Type
 		userVarPrepareParamKind vector.PrepareParamKind
 	}
@@ -1413,18 +1415,22 @@ func doSetVar(
 		prepareParamKind := vector.PrepareParamNone
 		var value interface{}
 		var valueType plan.Type
+		var runtimeDomain types.RuntimeStringDomain
 		var evalErr error
 		if index < len(preparedItems) && preparedItems[index].Value != nil {
 			if preparedPlanExprContainsSubquery(preparedItems[index].Value) {
 				value, valueType, evalErr = getPreparedPlanExprValueWithSubqueries(
-					assign.Value, preparedItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)
+					assign.Value, preparedItems[index].Value, ses, execCtx,
+					&prepareParamKind, &runtimeDomain, &isBin)
 			} else {
 				value, valueType, evalErr = getPreparedPlanExprValueWithMeta(
-					preparedItems[index].Value, ses, execCtx, &prepareParamKind, &isBin)
+					preparedItems[index].Value, ses, execCtx,
+					&prepareParamKind, &runtimeDomain, &isBin)
 			}
 		} else {
 			value, valueType, evalErr = getExprValueWithPrepareMeta(
-				assign.Value, ses, execCtx, preparedExpression, nil, &prepareParamKind, &isBin)
+				assign.Value, ses, execCtx, preparedExpression, nil,
+				&prepareParamKind, &runtimeDomain, &isBin)
 		}
 		if evalErr != nil {
 			return evaluatedAssignment{}, evalErr
@@ -1447,6 +1453,7 @@ func doSetVar(
 			assign:                  assign,
 			value:                   value,
 			userVarIsBin:            isBin,
+			userVarRuntimeDomain:    runtimeDomain,
 			valueType:               valueType,
 			userVarPrepareParamKind: prepareParamKind,
 		}, nil
@@ -1489,7 +1496,8 @@ func doSetVar(
 		} else {
 			err = ses.setUserDefinedVarWithTypeAndKindAndReplayability(
 				name, value, sql, userVarIsBin, userVarType, userVarPrepareParamKind,
-				!preparedExpression && sql != "" && execCtx.singleStatementQuery)
+				!preparedExpression && sql != "" && execCtx.singleStatementQuery,
+				userVarRuntimeDomain)
 			if err != nil {
 				return err
 			}
@@ -1546,6 +1554,7 @@ func doSetVar(
 		name := assign.Name
 		value := item.value
 		userVarIsBin = item.userVarIsBin
+		userVarRuntimeDomain = item.userVarRuntimeDomain
 		userVarType = item.valueType
 		userVarPrepareParamKind = item.userVarPrepareParamKind
 
@@ -2737,6 +2746,15 @@ func createPrepareStmtInSession(
 		return nil, err
 	}
 	prepareTs := currentTxnSnapshotTSForProcess(executionProc)
+	groupConcatValue, err := owner.GetSessionSysVar("group_concat_max_len")
+	if err != nil {
+		return nil, err
+	}
+	groupConcatLimit, validGroupConcat := groupConcatValue.(int64)
+	if !validGroupConcat || groupConcatLimit < 4 {
+		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "invalid group_concat_max_len: %v", groupConcatValue)
+	}
+	groupConcatFloor := uint64(groupConcatLimit)
 
 	schedulingSQLMode := sessionSQLModeForParser(owner)
 	prepareSchedulingIntent := querySchedulingIntentForStatementWithSQLMode(
@@ -2767,6 +2785,7 @@ func createPrepareStmtInSession(
 			true,
 			nil,
 			nil,
+			groupConcatFloor,
 		)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -2784,21 +2803,22 @@ func createPrepareStmtInSession(
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(prepareControl.Plan)
 	prepareStmt := &PrepareStmt{
-		Name:             preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:              originSQL,
-		compile:          comp,
-		PreparePlan:      preparePlan,
-		PrepareStmt:      saveStmt,
-		NativeMode:       owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:  owner.sqlModeHasOnlyFullGroupBy(),
-		BoolSumAvg:       owner.sqlModeHasEnableBoolSumAvg(),
-		sqlModeFlagsSet:  true,
-		remapDb:          maps.Clone(execCtx.remapDb),
-		defaultDatabase:  executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion: owner.GetTempTableVersion(),
-		ddlVersion:       owner.getDDLVersion(),
-		cloneSQL:         cloneSQL,
-		protocolVersion:  protocolVersion,
+		groupConcatMaxLenFloor: groupConcatFloor,
+		Name:                   preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                    originSQL,
+		compile:                comp,
+		PreparePlan:            preparePlan,
+		PrepareStmt:            saveStmt,
+		NativeMode:             owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:        owner.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:             owner.sqlModeHasEnableBoolSumAvg(),
+		sqlModeFlagsSet:        true,
+		remapDb:                maps.Clone(execCtx.remapDb),
+		defaultDatabase:        executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:       owner.GetTempTableVersion(),
+		ddlVersion:             owner.getDDLVersion(),
+		cloneSQL:               cloneSQL,
+		protocolVersion:        protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
@@ -5564,8 +5584,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	// ROW_COUNT() builtin can read it.
 	proc.SetAffectedRows(ses.GetLastAffectedRows())
 	proc.SetResolveVariableFunc(ses.txnCompileCtx.ResolveVariable)
+	proc.SetResolveVariableTypeFunc(ses.txnCompileCtx.ResolveVariableType)
 	proc.SetResolveVariableIsBinFunc(ses.txnCompileCtx.ResolveVariableIsBin)
-	proc.SetResolveVariableBinaryStringFunc(ses.txnCompileCtx.ResolveVariableBinaryString)
+	proc.SetResolveVariableStringDomainFunc(ses.txnCompileCtx.ResolveVariableStringDomain)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	refreshStatementScopedSessionInfo(ses, proc)
 	// Frontend client SQL — session-bound resolver. Procs constructed

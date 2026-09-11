@@ -512,6 +512,35 @@ func BinaryStringPrepareParamMetadataForRemote(
 	return append([]bool(nil), metadata...), nil
 }
 
+// RuntimeStringDomainPrepareParamMetadataForRemote validates explicit per-row
+// runtime string-domain metadata on the process wire boundary.
+func RuntimeStringDomainPrepareParamMetadataForRemote(
+	service string,
+	paramCount int,
+	metadata []uint32,
+) ([]uint32, error) {
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+	if paramCount <= 0 || len(metadata) != paramCount {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"invalid runtime string-domain prepare parameter metadata length %d for %d parameters",
+			len(metadata), paramCount)
+	}
+	for i, encoded := range metadata {
+		if encoded > uint32(types.RuntimeStringBinary) {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"invalid runtime string domain %d at parameter %d", encoded, i)
+		}
+	}
+	if prepareParamProtocolVersion(service) < defines.MORPCVersion58 {
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"runtime string domains in prepared parameters require MORPC protocol version %d",
+			defines.MORPCVersion58)
+	}
+	return append([]uint32(nil), metadata...), nil
+}
+
 // StringSourcePrepareParamMetadataForRemote validates the independent source
 // axis and gates non-default ownership on the protocol version that can carry
 // it. Older peers receive the pre-source payload during rolling upgrades; a

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 )
 
@@ -104,7 +105,7 @@ func recordTopNReadBytes(ctx context.Context, size int64) {
 	})
 }
 
-func (r *chunkTopNReader) read(ctx context.Context, offset, length, originSize uint32, algorithm uint8, column bool) (fileservice.IOVector, error) {
+func (r *chunkTopNReader) entry(offset, length, originSize uint32, algorithm uint8, column bool) fileservice.IOEntry {
 	entry := fileservice.IOEntry{
 		// Widen before addition: relative offsets must not wrap at 4 GiB.
 		Offset: int64(r.ext.Offset()) + int64(offset), Size: int64(length), CachedDataSize: int64(originSize),
@@ -117,7 +118,12 @@ func (r *chunkTopNReader) read(ctx context.Context, offset, length, originSize u
 			Codec: "objectio-validated-column-v1", Parameters: [2]uint64{uint64(algorithm), uint64(originSize)},
 		}
 	}
-	ioVec := fileservice.IOVector{FilePath: r.name, Policy: r.policy, Entries: []fileservice.IOEntry{entry}}
+	return entry
+}
+
+func (r *chunkTopNReader) read(ctx context.Context, offset, length, originSize uint32, algorithm uint8, column bool) (fileservice.IOVector, error) {
+	ioVec := fileservice.IOVector{FilePath: r.name, Policy: r.policy,
+		Entries: []fileservice.IOEntry{r.entry(offset, length, originSize, algorithm, column)}}
 	if err := r.fs.Read(ctx, &ioVec); err != nil {
 		ioVec.ReleaseReadResultOnError()
 		return fileservice.IOVector{}, err
@@ -154,15 +160,16 @@ func (r *chunkTopNReader) consume(ctx context.Context, meta columnChunkMeta, sel
 		return err
 	}
 	defer ioVec.Release()
-	data := ioVec.Entries[0].CachedData
+	return r.consumeData(ctx, ioVec.Entries[0].CachedData, meta, selected, ordinalBase, acc)
+}
+
+func (r *chunkTopNReader) bindChunk(source *vector.Vector, data fscache.Data, meta columnChunkMeta) error {
 	if data.Size() != int64(meta.originSize) {
 		return moerr.NewInvalidInputNoCtx("chunked object column decompressed size mismatch")
 	}
-	var source vector.Vector
-	if err = bindCachedVectorForScope(&source, data); err != nil {
+	if err := bindCachedVectorForScope(source, data); err != nil {
 		return err
 	}
-	defer source.Free(nil)
 	if source.Length() != int(meta.rowCount) {
 		return moerr.NewInvalidInputNoCtx("chunked object column payload row count mismatch")
 	}
@@ -170,6 +177,15 @@ func (r *chunkTopNReader) consume(ctx context.Context, meta columnChunkMeta, sel
 		return moerr.NewInvalidInputNoCtx("chunked object column payload type mismatch")
 	}
 	r.chunkType, r.hasType = *source.GetType(), true
+	return nil
+}
+
+func (r *chunkTopNReader) consumeData(ctx context.Context, data fscache.Data, meta columnChunkMeta, selected []int64, ordinalBase int, acc *vectorTopAccumulator) error {
+	var source vector.Vector
+	defer source.Free(nil)
+	if err := r.bindChunk(&source, data, meta); err != nil {
+		return err
+	}
 	return acc.consume(ctx, &source, int64(meta.rowStart), selected, ordinalBase)
 }
 
@@ -186,18 +202,28 @@ func readChunkedColumnTopN(
 	if totalRows != rows {
 		return nil, nil, false, moerr.NewInvalidInputNoCtx("chunked object column block row count mismatch")
 	}
+	winners, distances, err := searchChunkedTopN(ctx, totalRows, metas, selected, top,
+		func(_ int, meta columnChunkMeta, rows []int64, ordinal int, acc *vectorTopAccumulator) error {
+			return r.consume(ctx, meta, rows, ordinal, acc)
+		})
+	return winners, distances, r.fromCache, err
+}
+
+func searchChunkedTopN(ctx context.Context, totalRows uint32, metas []columnChunkMeta, selected []int64, top *IndexReaderTopOp,
+	consume func(int, columnChunkMeta, []int64, int, *vectorTopAccumulator) error,
+) ([]int64, []float64, error) {
 	count := int(totalRows)
 	if selected != nil {
 		count = len(selected)
 	}
 	acc, err := newVectorTopAccumulator(ctx, top, count)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, err
 	}
 	position := 0
-	for _, meta := range metas {
+	for i, meta := range metas {
 		if err = ctx.Err(); err != nil {
-			return nil, nil, false, err
+			return nil, nil, err
 		}
 		if acc.emptyRange {
 			break
@@ -217,13 +243,12 @@ func readChunkedColumnTopN(
 			}
 			chunkRows, ordinalBase = selected[start:position], start
 		}
-		if err = r.consume(ctx, meta, chunkRows, ordinalBase, &acc); err != nil {
-			return nil, nil, false, err
+		if err = consume(i, meta, chunkRows, ordinalBase, &acc); err != nil {
+			return nil, nil, err
 		}
 	}
 	if err = ctx.Err(); err != nil {
-		return nil, nil, false, err
+		return nil, nil, err
 	}
-	winners, distances, err := acc.finish()
-	return winners, distances, r.fromCache, err
+	return acc.finish()
 }

@@ -31,9 +31,10 @@ import (
 )
 
 const (
-	minIDAllocCapacity   uint64 = 1024
-	defaultIDBatchSize   uint64 = 1024 * 10
-	checkBootstrapCycles        = 100
+	minIDAllocCapacity             uint64 = 1024
+	defaultIDBatchSize             uint64 = 1024 * 10
+	checkBootstrapCycles                  = 100
+	bootstrapHAKeeperCheckInterval        = 100 * time.Millisecond
 )
 
 var (
@@ -252,14 +253,69 @@ func (l *store) getCheckerStateFromLeader() (*pb.CheckerState, uint64) {
 
 var debugPrintHAKeeperState atomic.Bool
 
-func (l *store) hakeeperCheck() {
+// Only reset on cadence changes. Resetting after every synchronous check adds
+// the check's execution time to the configured interval, delaying health checks
+// and repair commands on a busy HAKeeper leader.
+func (l *store) updateHAKeeperCheckTicker(
+	reset func(time.Duration),
+	current time.Duration,
+	state *pb.CheckerState,
+) time.Duration {
+	next := l.nextHAKeeperCheckInterval(state)
+	if next != current {
+		reset(next)
+	}
+	return next
+}
+
+func (l *store) nextHAKeeperCheckInterval(state *pb.CheckerState) time.Duration {
+	interval := l.cfg.HAKeeperCheckInterval.Duration
+	if interval <= 0 {
+		panic("invalid HAKeeperCheckInterval")
+	}
+	if state != nil &&
+		(state.State == pb.HAKeeperBootstrapping ||
+			state.State == pb.HAKeeperBootstrapCommandsReceived) {
+		if interval > bootstrapHAKeeperCheckInterval {
+			return bootstrapHAKeeperCheckInterval
+		}
+	}
+	return interval
+}
+
+func (l *store) bootstrapCheckWindow() time.Duration {
+	interval := l.cfg.HAKeeperCheckInterval.Duration
+	if interval <= 0 {
+		panic("invalid HAKeeperCheckInterval")
+	}
+	if interval > (time.Duration(1<<63-1) / checkBootstrapCycles) {
+		panic("HAKeeperCheckInterval is too large")
+	}
+	return time.Duration(checkBootstrapCycles) * interval
+}
+
+func (l *store) startBootstrapCheckBudget() {
+	l.bootstrapCheckDeadline = time.Now().Add(l.bootstrapCheckWindow())
+}
+
+func (l *store) bootstrapStatusLogAllowed() bool {
+	now := time.Now()
+	if !l.lastBootstrapLogTime.IsZero() &&
+		now.Sub(l.lastBootstrapLogTime) < time.Second {
+		return false
+	}
+	l.lastBootstrapLogTime = now
+	return true
+}
+
+func (l *store) hakeeperCheck() *pb.CheckerState {
 	state, term := l.getCheckerStateFromLeader()
 	if state == nil {
-		return
+		return nil
 	}
 	if state.State == pb.HAKeeperCreated {
 		l.runtime.Logger().Warn("waiting for initial cluster info to be set, check skipped")
-		return
+		return state
 	}
 
 	// Establish the replicated protocol barrier before this checker pass can
@@ -282,9 +338,13 @@ func (l *store) hakeeperCheck() {
 
 	switch state.State {
 	case pb.HAKeeperBootstrapping:
-		l.bootstrap(term, state)
+		if err := l.bootstrap(term, state); err != nil {
+			return nil // Retry failures at the configured cadence, not the fast bootstrap cadence.
+		}
 	case pb.HAKeeperBootstrapCommandsReceived:
-		l.checkBootstrap(state)
+		if err := l.checkBootstrap(state); err != nil {
+			return nil
+		}
 	case pb.HAKeeperBootstrapFailed:
 		l.handleBootstrapFailure()
 	case pb.HAKeeperRunning:
@@ -296,6 +356,7 @@ func (l *store) hakeeperCheck() {
 	default:
 		panic("unknown HAKeeper state")
 	}
+	return state
 }
 
 func (l *store) assertHAKeeperState(s pb.HAKeeperState) {
@@ -370,15 +431,19 @@ func (l *store) registerTaskUser() {
 	}
 }
 
-func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
+func (l *store) bootstrap(term uint64, state *pb.CheckerState) error {
 	if state.LogServiceRecoveryPending && !state.LogServiceRecoveryPrepared {
-		l.runtime.Logger().Info("waiting for LogService recovery ID watermarks before bootstrap")
-		return
+		if l.bootstrapStatusLogAllowed() {
+			l.runtime.Logger().Info("waiting for LogService recovery ID watermarks before bootstrap")
+		}
+		return nil
 	}
 	cmds, err := l.getScheduleCommand(false, term, state)
 	if err != nil {
-		l.runtime.Logger().Error("failed to get bootstrap schedule commands", zap.Error(err))
-		return
+		if l.bootstrapStatusLogAllowed() {
+			l.runtime.Logger().Error("failed to get bootstrap schedule commands", zap.Error(err))
+		}
+		return err
 	}
 	if len(cmds) > 0 {
 		for _, c := range cmds {
@@ -414,50 +479,70 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 			}
 		}
 
-		l.bootstrapCheckCycles = checkBootstrapCycles
+		// Bootstrap checks run more frequently while the cluster is coming up.
+		// Keep the failure window based on elapsed time, rather than on the number
+		// of polls. Each check performs synchronous raft and checker work, so a
+		// poll-count budget would stretch when that work is slow.
+		l.startBootstrapCheckBudget()
 		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
 		l.assertHAKeeperState(pb.HAKeeperBootstrapCommandsReceived)
+		if l.bootstrapCommandsAdded != nil {
+			l.bootstrapCommandsAdded()
+		}
 	}
+	return nil
 }
 
-func (l *store) checkBootstrap(state *pb.CheckerState) {
-	l.checkBootstrapWithSetter(state, l.setBootstrapState)
+func (l *store) checkBootstrap(state *pb.CheckerState) error {
+	return l.checkBootstrapWithSetter(state, l.setBootstrapState)
 }
 
 func (l *store) checkBootstrapWithSetter(
 	state *pb.CheckerState,
 	setState func(bool) error,
-) {
-	if l.bootstrapCheckCycles == 0 {
-		if err := setState(false); err != nil {
-			l.logSetBootstrapStateFailure(false, err)
-			return
-		}
-		l.assertHAKeeperState(pb.HAKeeperBootstrapFailed)
-		return
-	}
+) error {
+	return l.checkBootstrapWithSetterAt(time.Now(), state, setState)
+}
 
+func (l *store) checkBootstrapWithSetterAt(
+	now time.Time,
+	state *pb.CheckerState,
+	setState func(bool) error,
+) error {
+	if l.bootstrapCheckDeadline.IsZero() {
+		// A leader can change after bootstrap commands are replicated. The new
+		// leader has no local start timestamp, so establish a bounded budget when
+		// it first observes the state instead of failing immediately.
+		l.bootstrapCheckDeadline = now.Add(l.bootstrapCheckWindow())
+	}
 	if l.bootstrapMgr == nil {
 		l.bootstrapMgr = bootstrap.NewBootstrapManager(state.ClusterInfo)
 	}
 	if !l.bootstrapMgr.CheckBootstrap(state.LogState) {
-		l.bootstrapCheckCycles--
+		if !now.Before(l.bootstrapCheckDeadline) {
+			if err := setState(false); err != nil {
+				l.logSetBootstrapStateFailure(false, err)
+				return err
+			}
+			l.assertHAKeeperState(pb.HAKeeperBootstrapFailed)
+		}
 	} else {
 		// Recovery status is replicated through LogStore heartbeats. Do not use
 		// the leader process's local flag here: the recovery coordinator and the
 		// HAKeeper leader are not guaranteed to be the same LogService pod.
 		if walRecoveryPending(state) {
-			if l.runtime != nil {
+			if l.runtime != nil && l.bootstrapStatusLogAllowed() {
 				l.runtime.Logger().Info("bootstrap complete but WAL recovery is pending")
 			}
-			return
+			return nil
 		}
 		if err := setState(true); err != nil {
 			l.logSetBootstrapStateFailure(true, err)
-			return
+			return err
 		}
 		l.assertHAKeeperState(pb.HAKeeperRunning)
 	}
+	return nil
 }
 
 func (l *store) logSetBootstrapStateFailure(success bool, err error) {

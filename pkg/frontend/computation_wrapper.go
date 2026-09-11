@@ -560,6 +560,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				false,
 				&cwft.schedulingTrace,
 				preparedRetry,
+				cwft.preparedStmt.groupConcatMaxLenFloor,
 			)
 			if err != nil {
 				cwft.completeRuntimeCacheCandidate(nil, err)
@@ -632,6 +633,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			false,
 			&cwft.schedulingTrace,
 			preparedExprRetry,
+			0,
 		)
 		if err != nil {
 			return nil, err
@@ -1240,6 +1242,13 @@ func binaryProtocolPrepareParamDomains(
 		// Keep NULL on the prepared plan's original domain.  The next execute
 		// packet may carry a concrete type and will specialize it then.
 		return types.Type{}, types.Type{}, "", false, false
+	case defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB,
+		defines.MYSQL_TYPE_LONG_BLOB, defines.MYSQL_TYPE_BLOB:
+		// COM_STMT has no character-set field for parameter values. Clients use
+		// the BLOB family for byte slices and the STRING family for text, so keep
+		// that only available domain distinction through specialization and the
+		// Process binary-string sidecar.
+		return types.T_blob.ToType(), types.Type{}, "", false, true
 	default:
 		return types.T_text.ToType(), types.Type{}, "", false, true
 	}
@@ -1451,6 +1460,7 @@ func initExecuteStmtParamWithResolverInSession(
 					true,
 					nil,
 					nil,
+					prepareStmt.groupConcatMaxLenFloor,
 				)
 				if err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -1573,7 +1583,7 @@ func initExecuteStmtParamWithResolverInSession(
 			}
 			if directPositionIndex < len(directResultPositions) &&
 				directResultPositions[directPositionIndex] == int32(i) &&
-				kind != vector.PrepareParamNone && !prepareStmt.params.IsNull(uint64(i)) {
+				runtimeParamTypes[i].Oid != types.T_text && runtimeParamTypes[i].Oid != types.T_any {
 				runtimeDirectResultCandidate = true
 				runtimeDirectResultPositions = append(runtimeDirectResultPositions, int32(i))
 			}
@@ -1897,12 +1907,9 @@ func restrictPreparedRuntimeTypesToDirectResults(paramVals []any, positions []in
 }
 
 // preparedDirectResultRuntimePositions returns direct-result positions whose
-// execute packet carries a concrete runtime domain. A prepared plan may expose
-// several markers directly (for example, a numeric result beside a text
-// result), but only concrete numeric packet domains need execute-time
-// rebinding. Leaving the other direct markers as ParamRefs preserves their
-// prepare-time charset/collation and avoids invalidating the cached compile
-// for an unrelated sibling.
+// execute packet carries a concrete runtime domain. Typed BLOB NULL packets
+// must be rebound too: their value is absent, but their packet type still
+// determines binary result metadata.
 func preparedDirectResultRuntimePositions(paramVals []any, positions []int32) []int32 {
 	if len(paramVals) == 0 || len(positions) == 0 {
 		return nil
@@ -1913,7 +1920,7 @@ func preparedDirectResultRuntimePositions(paramVals []any, positions []int32) []
 			continue
 		}
 		param, ok := paramVals[position].(plan2.ParamValue)
-		if !ok || param.Value == nil || !param.HasRuntimeType {
+		if !ok || !param.HasRuntimeType {
 			continue
 		}
 		result = append(result, position)
@@ -1939,8 +1946,8 @@ func preparedDirectResultSemanticKey(paramVals []any, positions []int32) string 
 		if param.HasRuntimeType {
 			runtimeType = param.RuntimeType
 		}
-		fmt.Fprintf(&key, "%d:%d:%d:%d:%d;", position, param.PrepareParamKind,
-			runtimeType.Oid, runtimeType.Width, runtimeType.Scale)
+		fmt.Fprintf(&key, "%d:%d:%d:%d:%d:%d;", position, param.PrepareParamKind,
+			runtimeType.Oid, runtimeType.Charset, runtimeType.Width, runtimeType.Scale)
 	}
 	return key.String()
 }
@@ -1974,16 +1981,17 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 		if !param.HasRuntimeType || runtimeType.Oid == types.T_text {
 			runtimeType = plan2.PreparedNumericPrefixTypeFromString(fmt.Sprintf("%v", param.Value))
 		}
-		fmt.Fprintf(&key, "%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
-			runtimeType.Oid, runtimeType.Width, runtimeType.Scale)
-		fmt.Fprintf(&key, "binary:%t;", param.IsBinaryString)
+		fmt.Fprintf(&key, "%d:%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
+			runtimeType.Oid, runtimeType.Charset, runtimeType.Width, runtimeType.Scale)
+		fmt.Fprintf(&key, "binary:%t;domain:%d;", param.IsBinaryString, param.RuntimeStringDomain)
 		if param.HasSourceType {
 			// SQL EXECUTE arithmetic specializes from the user variable's logical
 			// type. Keep that dependency in the cache identity without replacing
 			// the value-derived domain above: comparison specialization still
 			// relies on the latter to separate values such as 200 and 10.
-			fmt.Fprintf(&key, "source:%d:%d:%d;",
-				param.SourceType.Oid, param.SourceType.Width, param.SourceType.Scale)
+			fmt.Fprintf(&key, "source:%d:%d:%d:%d;",
+				param.SourceType.Oid, param.SourceType.Charset,
+				param.SourceType.Width, param.SourceType.Scale)
 		}
 	}
 	return key.String()
@@ -2390,6 +2398,13 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 			PrepareParamKind:    proc.GetPrepareParamKind(i),
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
+		if params.IsNull(uint64(i)) && i*2+1 < len(paramTypes) {
+			mysqlType := defines.MysqlType(paramTypes[i*2])
+			if binaryProtocolPrepareParamIsBinaryString(mysqlType) {
+				paramValue.RuntimeType = types.T_blob.ToType()
+				paramValue.HasRuntimeType = true
+			}
+		}
 		if params.IsNull(uint64(i)) {
 			// NULL has no runtime value type, but it must retain its parameter
 			// position, protocol source, and negotiated capabilities. A bare nil
@@ -2500,10 +2515,13 @@ func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) [
 	}
 	runtimeTypes := make([]types.Type, params.Length())
 	for i := range runtimeTypes {
-		if params.IsNull(uint64(i)) || i*2+1 >= len(paramTypes) {
+		if i*2+1 >= len(paramTypes) {
 			continue
 		}
 		mysqlType := defines.MysqlType(paramTypes[i*2])
+		if params.IsNull(uint64(i)) && !binaryProtocolPrepareParamIsBinaryString(mysqlType) {
+			continue
+		}
 		isUnsigned := paramTypes[i*2+1]&0x80 != 0
 		if runtimeType, ok := binaryProtocolPrepareParamCategoryType(mysqlType, isUnsigned); ok {
 			runtimeTypes[i] = runtimeType
@@ -2659,6 +2677,8 @@ func buildExecuteUserParamsWithMemberOfPositions(
 	paramVals = make([]any, len(args))
 	paramIsBin = make([]bool, len(args))
 	paramBinaryString = make([]bool, len(args))
+	paramDomains := make([]types.RuntimeStringDomain, len(args))
+	effectiveParamDomains := make([]types.RuntimeStringDomain, len(args))
 	paramKinds = make([]vector.PrepareParamKind, len(args))
 	for i, arg := range args {
 		exprImpl := arg.Expr.(*plan.Expr_V)
@@ -2667,6 +2687,18 @@ func buildExecuteUserParamsWithMemberOfPositions(
 		if err != nil {
 			return
 		}
+		sourceType := arg.Typ
+		if resolveType := proc.GetResolveVariableTypeFunc(); resolveType != nil {
+			var resolvedType plan.Type
+			resolvedType, err = resolveType(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
+			if err != nil {
+				return
+			}
+			resolvedSQLType := executeArgumentSourceType(resolvedType)
+			if types.StaticStringDomain(resolvedSQLType) == types.StringDomainBinary || resolvedSQLType.IsDecimal() {
+				sourceType = resolvedType
+			}
+		}
 		resolveIsBin := proc.GetResolveVariableIsBinFunc()
 		if resolveIsBin != nil {
 			paramIsBin[i], err = resolveIsBin(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
@@ -2674,13 +2706,22 @@ func buildExecuteUserParamsWithMemberOfPositions(
 				return
 			}
 		}
-		resolveBinaryString := proc.GetResolveVariableBinaryStringFunc()
-		if resolveBinaryString != nil {
-			paramBinaryString[i], err = resolveBinaryString(
+		resolveStringDomain := proc.GetResolveVariableStringDomainFunc()
+		if resolveStringDomain != nil {
+			paramDomains[i], err = resolveStringDomain(
 				exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
 			if err != nil {
 				return
 			}
+			paramBinaryString[i] = paramDomains[i] == types.RuntimeStringBinary
+		}
+		effectiveParamDomains[i] = paramDomains[i]
+		if effectiveParamDomains[i] == types.RuntimeStringInherit &&
+			types.StaticStringDomain(executeArgumentSourceType(sourceType)) == types.StringDomainBinary {
+			// SQL EXECUTE transports all values through a text-shaped vector. Carry
+			// the assignment-time binary domain on that vector so a remote CN or a
+			// scalar-subquery lineage source does not reinterpret the bytes as text.
+			effectiveParamDomains[i] = types.RuntimeStringBinary
 		}
 		resolveKind := proc.GetResolveVariablePrepareParamKindFunc()
 		if resolveKind != nil {
@@ -2721,10 +2762,20 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			IsBin:               paramIsBin[i],
 			IsBinaryString:      paramBinaryString[i],
 			PrepareParamKind:    paramKinds[i],
+			RuntimeStringDomain: paramDomains[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
-		if paramBinaryString[i] && arg.Typ.Id != 0 {
-			paramValue.SourceType = executeArgumentSourceType(arg.Typ)
+		if paramKinds[i] == vector.PrepareParamBoolean {
+			// SQL EXECUTE keeps its historical text transport for a bare result
+			// parameter.  Carry the logical source type so numeric consumers can
+			// rebind Boolean values as 0/1, but do not advertise a runtime result
+			// type here: that metadata is reserved for COM_STMT packets and would
+			// turn an unrelated direct `?` projection into a BOOL literal whenever
+			// another expression in the same statement is specialized.
+			paramValue.SourceType = types.T_bool.ToType()
+			paramValue.HasSourceType = true
+		} else if paramBinaryString[i] && sourceType.Id != 0 {
+			paramValue.SourceType = executeArgumentSourceType(sourceType)
 			paramValue.HasSourceType = true
 		} else if paramBinaryString[i] {
 			paramValue.SourceType = types.T_varbinary.ToType()
@@ -2734,11 +2785,14 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			// result domain even when the EXECUTE argument itself is untyped.
 			paramValue.SourceType = types.T_varbinary.ToType()
 			paramValue.HasSourceType = true
-		} else if arg.Typ.Id != 0 {
-			paramValue.SourceType = executeArgumentSourceType(arg.Typ)
+		} else if sourceType.Id != 0 {
+			paramValue.SourceType = executeArgumentSourceType(sourceType)
 			paramValue.HasSourceType = true
 		}
 		paramVals[i] = paramValue
+	}
+	if err = params.SetRuntimeStringDomainsWithMP(effectiveParamDomains, proc.Mp()); err != nil {
+		return
 	}
 	return
 }
@@ -2817,6 +2871,7 @@ func createCompile(
 	isPrepare bool,
 	schedulingTrace *schedule.TraceRecorder,
 	preparedRetry *preparedExecutionRetry,
+	groupConcatMaxLenFloor uint64,
 ) (retCompile *compile.Compile, err error) {
 
 	addr := currentCNPipelineAddress(ses)
@@ -2884,6 +2939,7 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
+	retCompile.SetGroupConcatMaxLenFloor(groupConcatMaxLenFloor)
 	if schedulingSQLMode != nil {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
 			ses, schedulingSQL, *schedulingSQLMode))
