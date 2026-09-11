@@ -138,12 +138,16 @@ func validateRoutineCall(call *planpb.RoutineCall) error {
 	if !udf.IsSHA256Digest(python.DefinitionFingerprint) {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: typed Python implementation has invalid definition fingerprint")
 	}
-	if len(call.ArgumentTypes) > 0 {
-		for i, argumentType := range call.ArgumentTypes {
-			if argumentType == nil {
-				return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: typed Python argument %d is nil", i)
-			}
+	for i, argumentType := range call.ArgumentTypes {
+		if argumentType == nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: typed Python argument %d is nil", i)
 		}
+		if _, err := function.NewPythonTypeDescriptor(planTypeToSQL(*argumentType)); err != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: typed Python argument %d is unsupported: %w", i, err)
+		}
+	}
+	if _, err := function.NewPythonTypeDescriptor(planTypeToSQL(call.ReturnType)); err != nil {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: typed Python return descriptor is unsupported: %w", err)
 	}
 	return nil
 }
