@@ -8058,13 +8058,24 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
-	if err := v.PreflightUnionOnePrepareParamKinds(w, sel, mp); err != nil {
-		return err
+	// Uniform ordinary metadata needs neither per-row lookup nor sidecar
+	// admission. Include both vectors: an ordinary source can still append to
+	// a mixed destination, and NULL rows retain their string-source ownership.
+	plainMetadata := v.prepareParamKinds == nil && w.prepareParamKinds == nil &&
+		v.prepareParamKind == PrepareParamNone && w.prepareParamKind == PrepareParamNone &&
+		!v.binaryStringRowsActive && !w.binaryStringRowsActive && !v.binaryString && !w.binaryString &&
+		v.stringSources == nil && w.stringSources == nil &&
+		(v.length == 0 || v.stringSource == w.stringSource)
+	if !plainMetadata {
+		if err := v.PreflightUnionOnePrepareParamKinds(w, sel, mp); err != nil {
+			return err
+		}
+		if err := v.PreflightUnionOneBinaryString(w, sel, mp); err != nil {
+			v.FinalizeStringSourcePreflight()
+			return err
+		}
 	}
 	defer v.FinalizeStringSourcePreflight()
-	if err := v.PreflightUnionOneBinaryString(w, sel, mp); err != nil {
-		return err
-	}
 	if err := extendWithBitmaps(
 		v,
 		1,
@@ -8080,7 +8091,9 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	oldLen := v.length
 	v.setLengthAfterExtend(v.length + 1)
-	if err := v.appendStringSourceAt(oldLen, oldLen, w.GetStringSourceAt(int(sel)), mp); err != nil {
+	if plainMetadata {
+		v.stringSource = w.stringSource
+	} else if err := v.appendStringSourceAt(oldLen, oldLen, w.GetStringSourceAt(int(sel)), mp); err != nil {
 		return err
 	}
 	sourceHasValue := !sourceNull
@@ -8129,6 +8142,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	if sourceHasValue {
 		v.prepareParamKindAppendStart(oldLen)
+		if plainMetadata {
+			v.prepareParamKindSeen = true
+			return nil
+		}
 		if err := v.appendPrepareParamKindAt(oldLen, w.GetPrepareParamKindAt(int(sel)), mp); err != nil {
 			return err
 		}
