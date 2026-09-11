@@ -140,6 +140,11 @@ type store struct {
 	tickerStopper          *stopper.Stopper
 	runtime                runtime.Runtime
 
+	// The ticker (and its task scheduler) lives until store.close, including
+	// across local HAKeeper replica stop/start and voting-role changes.
+	hakeeperTickerOnce sync.Once
+	hakeeperTickerErr  error
+
 	bootstrapCheckDeadline time.Time
 	bootstrapMgr           *bootstrap.Manager
 	lastBootstrapLogTime   time.Time
@@ -524,15 +529,7 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 	}
 	l.addMetadata(hakeeper.DefaultHAKeeperShardID, replicaID, false)
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
-	if !l.cfg.DisableWorkers {
-		if err := l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
-			l.runtime.SubLogger(runtime.SystemInit).Info("HAKeeper ticker started")
-			l.ticker(ctx)
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return l.startHAKeeperTicker()
 }
 
 func (l *store) startHAKeeperNonVotingReplica(replicaID uint64,
@@ -545,15 +542,25 @@ func (l *store) startHAKeeperNonVotingReplica(replicaID uint64,
 	}
 	l.addMetadata(hakeeper.DefaultHAKeeperShardID, replicaID, true)
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
-	if !l.cfg.DisableWorkers {
-		if err := l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
+	return l.startHAKeeperTicker()
+}
+
+func (l *store) startHAKeeperTicker() error {
+	if l.cfg.DisableWorkers {
+		return nil
+	}
+	// StopReplica only removes the local Raft replica. Starting it again must
+	// reuse the existing driver; two checkers would share the allocator and
+	// bootstrap state, and two task tickers could schedule the same tasks.
+	l.hakeeperTickerOnce.Do(func() {
+		l.hakeeperTickerErr = l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
 			l.runtime.SubLogger(runtime.SystemInit).Info("HAKeeper ticker started")
 			l.ticker(ctx)
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+		})
+	})
+	// Stopper admission fails only after shutdown has begun, which is terminal
+	// for this store. All concurrent callers must observe that same failure.
+	return l.hakeeperTickerErr
 }
 
 func (l *store) startReplica(shardID uint64, replicaID uint64,
