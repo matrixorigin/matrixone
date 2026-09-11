@@ -204,9 +204,12 @@ jobs:
   # prerequisites cannot become a green check through dependent-job skipping.
   ci-required:
     name: CI Required
+    # Keep cancellation fail-closed. ci-cancellation.yml independently escalates
+    # cancellation of superseded runs if this always() job holds the group.
     if: ${{ always() && github.base_ref != '3.0-dev' }}
     needs: [check-pr-valid, change-scope, docs-check, bvt-group-plan, matrixone-ci, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci, matrixone-coverage-merge]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Record CI provenance
         env:

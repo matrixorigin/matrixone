@@ -1,0 +1,39 @@
+name: Release superseded CI runs
+
+on:
+  workflow_run:
+    workflows: ['MatrixOne ALL CI']
+    types: [requested]
+  workflow_dispatch:
+    inputs:
+      successor_run_id:
+        description: 'Newer MatrixOne ALL CI run waiting for superseded runs to exit'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+# Deliberately outside entrypoint's branch concurrency group: that group can
+# be held by the very run this controller needs to finish cancelling.
+jobs:
+  release:
+    # Manual recovery must also execute the default branch's trusted helper.
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: .github/ci
+          persist-credentials: false
+      - uses: actions/github-script@v7
+        env:
+          SUCCESSOR_RUN_ID: ${{ github.event.workflow_run.id || inputs.successor_run_id }}
+        with:
+          script: |
+            const { releaseSupersededRuns } = require('./.github/ci/cancel-superseded.cjs');
+            await releaseSupersededRuns({ github, context, core, runId: process.env.SUCCESSOR_RUN_ID });
