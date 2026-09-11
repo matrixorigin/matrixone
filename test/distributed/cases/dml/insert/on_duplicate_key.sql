@@ -254,6 +254,17 @@ insert into t_odku_row_alias values (1, 10, 100);
 insert into t_odku_row_alias values (1, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
 select * from t_odku_row_alias order by id;
 
+-- A scalar UPDATE expression must not run for a non-conflicting insert. The
+-- target lookup is NULL, so this otherwise multi-row scalar result is unused.
+drop table if exists t_odku_scope_multi;
+create table t_odku_scope_multi (x int, y int);
+insert into t_odku_scope_multi values (0, 10), (0, 20);
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = coalesce(t_odku_row_alias.id, 0));
+select * from t_odku_row_alias order by id;
+drop table t_odku_scope_multi;
+
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
 insert into t_odku_row_alias values (1, 6, 0) as n on duplicate key update b = case when n.a > 5 then n.a else NULL end;
