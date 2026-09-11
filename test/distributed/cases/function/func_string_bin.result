@@ -57,6 +57,10 @@ conv_bool    conv_decimal
 SELECT conv(CAST(1e20 AS DOUBLE), 10, 16) AS conv_float_large, conv(CAST(1.2345678901234567e-5 AS DOUBLE), 10, 16) AS conv_float_scientific;
 conv_float_large    conv_float_scientific
 1    1
+SELECT conv(CAST(1e20 AS DOUBLE), 16, 10) AS conv_float_hex_scientific,
+conv(CAST(1234567 AS FLOAT), 10, 10) AS conv_float_precision;
+conv_float_hex_scientific    conv_float_precision
+7712    1234570
 SELECT conv(CAST(1000000 AS DOUBLE), 10, 16) AS conv_float_fixed_boundary,
 bin(CAST(1000000 AS DOUBLE)) AS bin_float_fixed_boundary,
 conv(CAST(1e-5 AS DOUBLE), 10, 16) AS conv_float_small_fixed,

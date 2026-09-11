@@ -3574,7 +3574,16 @@ const (
 )
 
 func appendMySQLNumericFloat(dst []byte, value float64, bitSize int) []byte {
-	text := strconv.AppendFloat(dst[:0], value, 'g', -1, bitSize)
+	// my_gcvt uses FLT_DIG significant digits for FLOAT, while DOUBLE keeps
+	// the shortest round-trippable representation. Keep the rounded text as
+	// the source of any fixed-point rendering below; re-formatting the value
+	// with 'f' would put the discarded FLOAT digits back.
+	precision := -1
+	if bitSize == 32 {
+		precision = 6 // FLT_DIG
+	}
+	var textBuf [64]byte
+	text := strconv.AppendFloat(textBuf[:0], value, 'g', precision, bitSize)
 	exponentPos := -1
 	for i, ch := range text {
 		if ch == 'e' || ch == 'E' {
@@ -3621,11 +3630,52 @@ func appendMySQLNumericFloat(dst []byte, value float64, bitSize int) []byte {
 			maxLength = mysqlFloat32MaxStringLength
 		}
 		if fixedLength > maxLength {
-			return text
+			return appendMySQLScientificFloat(dst[:0], text[:exponentPos], exponent)
 		}
-		return strconv.AppendFloat(dst[:0], value, 'f', -1, bitSize)
+		return appendMySQLFixedFloat(dst[:0], text[:exponentPos], exponent)
 	}
-	return text
+	return appendMySQLScientificFloat(dst[:0], text[:exponentPos], exponent)
+}
+
+func appendMySQLFixedFloat(dst, mantissa []byte, exponent int) []byte {
+	var digits [64]byte
+	digitCount := 0
+	for _, ch := range mantissa {
+		if ch >= '0' && ch <= '9' {
+			digits[digitCount] = ch
+			digitCount++
+		}
+	}
+
+	if len(mantissa) > 0 && mantissa[0] == '-' {
+		dst = append(dst, '-')
+	}
+	decimalPoint := exponent + 1
+	switch {
+	case decimalPoint <= 0:
+		dst = append(dst, '0', '.')
+		for i := 0; i < -decimalPoint; i++ {
+			dst = append(dst, '0')
+		}
+		dst = append(dst, digits[:digitCount]...)
+	case decimalPoint < digitCount:
+		dst = append(dst, digits[:decimalPoint]...)
+		dst = append(dst, '.')
+		dst = append(dst, digits[decimalPoint:digitCount]...)
+	default:
+		dst = append(dst, digits[:digitCount]...)
+		for i := digitCount; i < decimalPoint; i++ {
+			dst = append(dst, '0')
+		}
+	}
+	return dst
+}
+
+func appendMySQLScientificFloat(dst, mantissa []byte, exponent int) []byte {
+	dst = append(dst, mantissa...)
+	dst = append(dst, 'e')
+	// MySQL's e-format omits the plus sign and exponent zero padding.
+	return strconv.AppendInt(dst, int64(exponent), 10)
 }
 
 func parseFloatExponent(text []byte) (int, bool) {
