@@ -15,6 +15,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { spawnSync } = require('node:child_process');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
 const { runInNewContext } = require('node:vm');
@@ -111,7 +112,7 @@ function checkoutSpec(block) {
   assert.equal(lines[checkoutIndex + 1].trim(), 'with:');
   const spec = {};
   for (const line of lines.slice(checkoutIndex + 2)) {
-    if (/^      - /.test(line) || /^  [\w-]+:/.test(line)) break;
+    if (/^      (?:- |#)/.test(line) || /^  [\w-]+:/.test(line)) break;
     const match = line.match(/^\s{10}([\w-]+):\s*(.+)$/);
     if (match) spec[match[1]] = match[2];
   }
@@ -140,6 +141,24 @@ function selectFixtureCheckout(block, context, refs) {
   }).find(([, value]) => value === ref)?.[0];
   assert.ok(refName, `unexpected checkout ref: ${ref}`);
   return { repository, ref, refName, path: refs[refName] };
+}
+
+function provenanceScript(block) {
+  const lines = block.split('\n');
+  const nameIndex = lines.findIndex(line => line.includes('name: Record CI provenance'));
+  const runIndex = lines.findIndex((line, index) => index > nameIndex && line.trim() === 'run: |');
+  assert.ok(nameIndex >= 0 && runIndex > nameIndex, 'job must have a provenance run step');
+  const script = [];
+  for (const line of lines.slice(runIndex + 1)) {
+    if (/^      (?:- |#)/.test(line) || /^  [\w-]+:/.test(line)) break;
+    if (line.trim() === '') {
+      script.push('');
+    } else {
+      assert.match(line, /^          /, 'provenance script indentation must be valid');
+      script.push(line.slice(10));
+    }
+  }
+  return script.join('\n');
 }
 
 test('gates accept intentional omissions but reject failed, cancelled, skipped or missing required work', () => {
@@ -220,6 +239,7 @@ test('entrypoint routes each scope through one required check', () => {
     assert.match(blocks[job], /WORKFLOW_SHA: \$\{\{ github.workflow_sha \}\}/);
     assert.match(blocks[job], /PR_BASE_SHA: \$\{\{ github.event.pull_request.base.sha \}\}/);
     assert.match(blocks[job], /PR_HEAD_SHA: \$\{\{ github.event.pull_request.head.sha \}\}/);
+    assert.doesNotMatch(blocks[job], /ref:\s*main/);
     const provenance = blocks[job].indexOf('name: Record CI provenance');
     const checkout = blocks[job].indexOf('uses: actions/checkout@');
     assert.ok(provenance >= 0 && provenance < checkout, `${job} records provenance before checkout`);
@@ -228,6 +248,30 @@ test('entrypoint routes each scope through one required check', () => {
     assert.match(provenanceBlock, /echo "- Workflow SHA: \$\{WORKFLOW_SHA\}"/);
     assert.match(provenanceBlock, /echo "- PR base SHA: \$\{PR_BASE_SHA\}"/);
     assert.match(provenanceBlock, /echo "- PR head SHA: \$\{PR_HEAD_SHA\}"/);
+  }
+});
+
+test('provenance remains available when helper loading or checkout fails', () => {
+  const root = mkdtempSync(join(tmpdir(), 'matrixone-ci-provenance-summary-'));
+  try {
+    const values = {
+      WORKFLOW_SHA: 'workflow-sha',
+      PR_BASE_SHA: 'base-sha',
+      PR_HEAD_SHA: 'head-sha',
+    };
+    for (const job of ['change-scope', 'ci-required']) {
+      const summaryPath = join(root, `${job}.md`);
+      const result = spawnSync('/bin/bash', ['-eu', '-c', provenanceScript(entrypointJobs()[job])], {
+        env: { ...process.env, ...values, GITHUB_STEP_SUMMARY: summaryPath },
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(readFileSync(summaryPath, 'utf8'), /Workflow SHA: workflow-sha/);
+      assert.throws(() => { throw new Error('checkout failed before helper load'); }, /checkout failed/);
+      assert.match(readFileSync(summaryPath, 'utf8'), /PR head SHA: head-sha/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
