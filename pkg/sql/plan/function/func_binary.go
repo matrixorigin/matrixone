@@ -3584,6 +3584,10 @@ func appendMySQLNumericFloat(dst []byte, value float64, bitSize int) []byte {
 	}
 	var textBuf [64]byte
 	text := strconv.AppendFloat(textBuf[:0], value, 'g', precision, bitSize)
+	maxLength := mysqlFloat64MaxStringLength
+	if bitSize == 32 {
+		maxLength = mysqlFloat32MaxStringLength
+	}
 	exponentPos := -1
 	for i, ch := range text {
 		if ch == 'e' || ch == 'E' {
@@ -3592,9 +3596,13 @@ func appendMySQLNumericFloat(dst []byte, value float64, bitSize int) []byte {
 		}
 	}
 	if exponentPos < 0 {
-		// A finite value already rendered without an exponent is within Go's
-		// fixed-point range, which is a subset of MySQL's range.
-		return text
+		// Go may choose fixed notation even when the complete representation
+		// exceeds my_gcvt's type-specific width. Re-render those rare values in
+		// scientific notation so CONV/BIN see the same integer prefix as MySQL.
+		if len(text) <= maxLength {
+			return append(dst[:0], text...)
+		}
+		return appendMySQLScientificValue(dst[:0], value, bitSize)
 	}
 
 	exponent, ok := parseFloatExponent(text[exponentPos+1:])
@@ -3624,10 +3632,6 @@ func appendMySQLNumericFloat(dst []byte, value float64, bitSize int) []byte {
 		}
 		if text[0] == '-' {
 			fixedLength++
-		}
-		maxLength := mysqlFloat64MaxStringLength
-		if bitSize == 32 {
-			maxLength = mysqlFloat32MaxStringLength
 		}
 		if fixedLength > maxLength {
 			return appendMySQLScientificFloat(dst[:0], text[:exponentPos], exponent)
@@ -3676,6 +3680,31 @@ func appendMySQLScientificFloat(dst, mantissa []byte, exponent int) []byte {
 	dst = append(dst, 'e')
 	// MySQL's e-format omits the plus sign and exponent zero padding.
 	return strconv.AppendInt(dst, int64(exponent), 10)
+}
+
+func appendMySQLScientificValue(dst []byte, value float64, bitSize int) []byte {
+	precision := -1
+	if bitSize == 32 {
+		// 'e' precision counts digits after the decimal point.
+		precision = 5 // FLT_DIG - 1
+	}
+	var textBuf [64]byte
+	text := strconv.AppendFloat(textBuf[:0], value, 'e', precision, bitSize)
+	exponentPos := -1
+	for i, ch := range text {
+		if ch == 'e' || ch == 'E' {
+			exponentPos = i
+			break
+		}
+	}
+	if exponentPos < 0 {
+		return append(dst, text...)
+	}
+	exponent, ok := parseFloatExponent(text[exponentPos+1:])
+	if !ok {
+		return append(dst, text...)
+	}
+	return appendMySQLScientificFloat(dst, text[:exponentPos], exponent)
 }
 
 func parseFloatExponent(text []byte) (int, bool) {

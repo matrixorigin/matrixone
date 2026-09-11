@@ -28,6 +28,8 @@ SELECT conv(TRUE, 10, 16) AS conv_bool, conv(CAST('15.5' AS DECIMAL(4,1)), 10, 1
 SELECT conv(CAST(1e20 AS DOUBLE), 10, 16) AS conv_float_large, conv(CAST(1.2345678901234567e-5 AS DOUBLE), 10, 16) AS conv_float_scientific;
 SELECT conv(CAST(1e20 AS DOUBLE), 16, 10) AS conv_float_hex_scientific,
        conv(CAST(1234567 AS FLOAT), 10, 10) AS conv_float_precision;
+SELECT conv(CAST(-1.2345678901234567e-4 AS DOUBLE), 10, -10) AS conv_float_negative_width,
+       bin(CAST(-1.2345678901234567e-4 AS DOUBLE)) AS bin_float_negative_width;
 SELECT conv(CAST(1000000 AS DOUBLE), 10, 16) AS conv_float_fixed_boundary,
        bin(CAST(1000000 AS DOUBLE)) AS bin_float_fixed_boundary,
        conv(CAST(1e-5 AS DOUBLE), 10, 16) AS conv_float_small_fixed,

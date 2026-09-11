@@ -3528,6 +3528,19 @@ func TestBinFloatUsesMySQLNumericPrefix(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestBinFloatNegativeWidthBoundaryPreservesPrefix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{-1.2345678901234567e-4}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"1111111111111111111111111111111111111111111111111111111111111111"},
+			[]bool{false}), BinFloat[float64])
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
+}
+
 func initBitLengthFuncTestCase() []tcTemp {
 	return []tcTemp{
 		{
