@@ -231,13 +231,13 @@ func TestInsertRowAliasCorrelatedFromBuildPlanSupportsFakePrimaryTarget(t *testi
 	require.True(t, targetLookup)
 }
 
-func TestInsertRowAliasNestedCorrelationBuilds(t *testing.T) {
+func TestInsertRowAliasNestedCorrelationIsRejected(t *testing.T) {
 	_, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
 			"where e.deptno = (select max(e2.deptno) from constraint_test.emp as e2 "+
 			"where e2.deptno = constraint_test.dept.deptno))")
-	require.NoError(t, err)
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
 }
 
 func TestInsertRowAliasGeneratedDefaultNoKeyFallbackBuilds(t *testing.T) {
