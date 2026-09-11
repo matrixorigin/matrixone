@@ -23,13 +23,48 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCheckPitrGranularityRejectsWildcardNoPrimaryKey(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	exec := &recordingInternalSQLExecutor{mocker: func(string) (executor.Result, error) {
+		result := executor.NewMemResult([]types.Type{types.T_uint8.ToType()}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		return result.GetResult(), nil
+	}}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+		}
+	})
+
+	c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{
+		Database: "db", Table: cdc.CDCPitrGranularity_All,
+	}}}}
+	err := c.checkPitrGranularity(ctx, pts)
+	require.Error(t, err)
+	require.Len(t, exec.sqls, 1)
+	require.Contains(t, exec.sqls[0], "mo_tables")
+}
 
 type cdcRecordingSQLExecutor struct {
 	queries []string
