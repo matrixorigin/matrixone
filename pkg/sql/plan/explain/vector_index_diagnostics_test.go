@@ -92,9 +92,48 @@ func TestSplitIvfSearchDiagnosticsPreservesOrdinaryBackgroundPlans(t *testing.T)
 	})
 	malformed := &plan.Query{Headings: []string{"__mo_ivf_search_round_v1", "malformed"}}
 
-	rounds, remaining := splitIvfSearchDiagnostics([]*plan.Query{ordinary, diagnostic, malformed})
+	execution := vectorindex.EncodeIvfExecutionDiagnostic(vectorindex.IvfExecutionDiagnostic{
+		SearchCount: 1, ReaderCount: 2,
+	})
+	rounds, executions, remaining := splitIvfSearchDiagnostics(
+		[]*plan.Query{ordinary, diagnostic, execution, malformed})
 	require.Equal(t, []vectorindex.IvfSearchRoundDiagnostic{{
 		Round: 1, BucketCount: 1, RowLimit: 2,
 	}}, rounds)
+	require.Equal(t, []vectorindex.IvfExecutionDiagnostic{{SearchCount: 1, ReaderCount: 2}}, executions)
 	require.Equal(t, []*plan.Query{ordinary, malformed}, remaining)
+}
+
+func TestExplainAnalyzeAggregatesIvfExecutionDiagnostics(t *testing.T) {
+	query := &plan.Query{
+		Steps: []int32{0},
+		Nodes: []*plan.Node{{NodeId: 0, NodeType: plan.Node_PROJECT}},
+		BackgroundQueries: []*plan.Query{
+			vectorindex.EncodeIvfExecutionDiagnostic(vectorindex.IvfExecutionDiagnostic{
+				SearchCount: 1, ReaderCount: 1, MetadataBlocks: 1, MetadataRows: 1,
+				MetadataTimeNS: 1_000_000, EntryBlocksSelected: 2, EntryBlocksRead: 2, EntryOutputRows: 4, EntryTimeNS: 2_000_000,
+				StorageFilterInputRows: 10, StorageFilterOutputRows: 4,
+				VectorRowsScored: 4, VectorChunksRead: 2, VectorChunkCacheHits: 1,
+				VectorCompressedBytes: 100, VectorDecodedBytes: 200, TopKOutputRows: 2, OutputRows: 2,
+			}),
+			vectorindex.EncodeIvfExecutionDiagnostic(vectorindex.IvfExecutionDiagnostic{
+				ReaderCount: 1, EntryBlocksSelected: 3, EntryBlocksRead: 2, EntryOutputRows: 2, EntryTimeNS: 3_000_000,
+				StorageFilterInputRows: 8, StorageFilterOutputRows: 2,
+				VectorRowsScored: 2, VectorChunksRead: 1, VectorChunkCacheHits: 1,
+				VectorCompressedBytes: 50, VectorDecodedBytes: 100, TopKOutputRows: 1, OutputRows: 1,
+			}),
+		},
+	}
+
+	buffer := NewExplainDataBuffer()
+	require.NoError(t, NewExplainQueryImpl(query).ExplainPlan(
+		context.Background(), buffer, &ExplainOptions{Analyze: true, Format: EXPLAIN_FORMAT_TEXT}))
+	text := buffer.ToString()
+	require.Contains(t, text, "Vector Index Execution: search_count=1 readers=2")
+	require.Contains(t, text, "metadata_blocks=1 metadata_rows=1 metadata_time_ns=1000000")
+	require.Contains(t, text, "entry_blocks_selected=5 entry_blocks_read=4 entry_output_rows=6 entry_time_ns=5000000")
+	require.Contains(t, text, "storage_filter_rows=18:6 vector_rows_scored=6")
+	require.Contains(t, text, "vector_chunks=3 vector_chunk_cache_hits=2")
+	require.Contains(t, text, "vector_compressed_bytes=150 vector_decoded_bytes=300")
+	require.Contains(t, text, "block_topk_rows=3 output_rows=3")
 }
