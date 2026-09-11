@@ -11686,7 +11686,61 @@ func ensurePythonUdfRuntimeReady(ctx context.Context, ses *Session) error {
 	if !ok {
 		return moerr.NewNotSupportedNoCtx("Python UDF runtime does not expose the current contract")
 	}
+	if _, ok := pu.UdfService.(udf.RuntimeDefinitionValidator); !ok {
+		return moerr.NewNotSupportedNoCtx("Python UDF runtime does not expose definition validation")
+	}
 	return readiness.CheckLanguageReady(ctx, udf.LanguagePython)
+}
+
+// validatePythonUdfDefinitionAtCreate runs after the immutable artifact has
+// been published and before the Catalog transaction writes the new identity
+// or revision. The source is transient input to the validator; the Gateway
+// resolves the same account-scoped digest before sending it to the worker.
+func validatePythonUdfDefinitionAtCreate(
+	ctx context.Context,
+	ses *Session,
+	tenant *TenantInfo,
+	body function.PythonRoutineBody,
+) error {
+	pu := getPuIfPresent(ses.GetService())
+	if pu == nil || pu.UdfService == nil {
+		return moerr.NewNotSupportedNoCtx("Python UDF feature is disabled")
+	}
+	validator, ok := pu.UdfService.(udf.RuntimeDefinitionValidator)
+	if !ok {
+		return moerr.NewNotSupportedNoCtx("Python UDF runtime does not expose definition validation")
+	}
+	if tenant == nil {
+		return moerr.NewInvalidInputNoCtx("Python UDF definition validation requires an account")
+	}
+	if err := body.Validate(); err != nil {
+		return moerr.NewInvalidInputNoCtxf("Python UDF definition rejected before publication: %v", err)
+	}
+	definitionFingerprint, err := function.PythonRoutineBodyFingerprint(body)
+	if err != nil {
+		return moerr.NewInvalidInputNoCtxf("Python UDF definition fingerprint cannot be computed: %v", err)
+	}
+	args := make([]types.Type, len(body.ArgTypes))
+	for index, descriptor := range body.ArgTypes {
+		args[index] = descriptor.Type()
+	}
+	return validator.ValidateDefinition(ctx, &udf.RoutineDefinition{
+		Language:                udf.LanguagePython,
+		AccountID:               uint64(tenant.GetTenantID()),
+		Handler:                 body.Handler,
+		Source:                  body.Source,
+		Args:                    args,
+		ReturnType:              body.ReturnType.Type(),
+		Mode:                    body.Mode,
+		NullPolicy:              body.NullPolicy,
+		ABIContract:             body.ABIContract,
+		AdapterVersion:          body.AdapterVersion,
+		SDKVersion:              body.SDKVersion,
+		DefinitionSchemaVersion: body.DefinitionSchemaVersion,
+		ArtifactDigest:          body.ArtifactDigest,
+		EnvironmentDigest:       body.EnvironmentDigest,
+		DefinitionFingerprint:   definitionFingerprint,
+	})
 }
 
 // canonicalPythonInputDescriptor is the shared overload key used by the
@@ -11702,6 +11756,7 @@ func canonicalPythonInputDescriptor(
 }
 
 func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.CreateFunction) (err error) {
+	isPython := strings.EqualFold(cf.Language, string(tree.PYTHON))
 	var retTypeStr string
 	var dbName string
 	var dbExists bool
@@ -11715,7 +11770,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 	var erArray []ExecResult
 	var pythonArgTypes []function.PythonTypeDescriptor
 	var pythonReturnType *function.PythonTypeDescriptor
-	if strings.EqualFold(cf.Language, string(tree.PYTHON)) {
+	if isPython {
 		if err := ensurePythonUdfRuntimeReady(execCtx.reqCtx, ses); err != nil {
 			return err
 		}
@@ -11731,44 +11786,17 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		dbName = string(cf.Name.Name.SchemaName)
 	}
 
-	// Exact function signatures need an exclusion boundary in every deployment
-	// mode. The catalog unique index documents the identity, but optimistic/SI
-	// transactions do not acquire FOR UPDATE locks. This private transaction is
-	// therefore explicitly pessimistic RC, locks the target database row, then
-	// rechecks and writes the signature before releasing that lock.
-	bh := ses.GetBackgroundExec(execCtx.reqCtx, &BackgroundExecOption{forcePessimisticRC: true})
-	defer bh.Close()
-
-	err = bh.Exec(execCtx.reqCtx, "begin;")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		err = finishTxn(execCtx.reqCtx, bh, err)
-	}()
-	if cf.Language == string(tree.PYTHON) {
-		if err = ensurePythonUdfCatalogReady(execCtx.reqCtx, bh); err != nil {
-			return err
-		}
-	}
-
-	// Lock and authenticate the target database before the exact-signature
-	// read. The lock stays held through persistence and commit.
-	dbExists, err = lockDatabaseForUDFCreation(execCtx.reqCtx, bh, dbName)
-	if err != nil {
-		return err
-	}
-	if !dbExists {
-		return moerr.NewBadDB(execCtx.reqCtx, dbName)
-	}
-
-	// format return type
+	// Parse the complete typed definition before opening the Catalog
+	// transaction. Python validation performs a network round trip to the
+	// worker; holding the database lock while waiting would make a slow or
+	// unavailable worker block unrelated DDL. The later transaction still
+	// locks and rechecks the exact identity before publication.
 	fmtctx = tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	retTypeStr, err = plan2.GetFunctionTypeStrFromAst(cf.ReturnType.Type)
 	if err != nil {
 		return err
 	}
-	if cf.Language == string(tree.PYTHON) {
+	if isPython {
 		returnType, typeErr := plan2.GetFunctionTypeFromAst(cf.ReturnType.Type)
 		if typeErr != nil {
 			return typeErr
@@ -11794,7 +11822,7 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		}
 		argList[i].Type = typ
 		typeList[i] = typ
-		if cf.Language == string(tree.PYTHON) {
+		if isPython {
 			argType, typeErr := plan2.GetFunctionTypeFromAst(cf.Args[i].(*tree.FunctionArgDecl).Type)
 			if typeErr != nil {
 				return typeErr
@@ -11816,42 +11844,15 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		return err
 	}
 	logicalArgTypes = argTypes
-	if cf.Language == string(tree.PYTHON) {
+	if isPython {
 		exactArgTypes, err = canonicalPythonInputDescriptor(pythonArgTypes, pythonReturnType)
 		if err != nil {
 			return err
 		}
 	}
 
-	// validate duplicate function declaration
-	bh.ClearExecResultSet()
-	if cf.Language == string(tree.PYTHON) {
-		checkExistence = fmt.Sprintf(checkPythonUdfExistence, string(cf.Name.Name.ObjectName), dbName)
-	} else {
-		checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName)
-	}
-	err = bh.Exec(execCtx.reqCtx, checkExistence)
-	if err != nil {
-		return err
-	}
-
-	erArray, err = getResultSet(execCtx.reqCtx, bh)
-	if err != nil {
-		return err
-	}
-
-	matchedIDs, err := matchUserDefinedFunctionCandidates(execCtx.reqCtx, erArray, string(cf.Language), logicalArgTypes, exactArgTypes)
-	if err != nil {
-		return err
-	}
-	if len(matchedIDs) > 1 {
-		return moerr.NewInvalidInputNoCtxf("function %s has multiple catalog identities for the same signature", string(cf.Name.Name.ObjectName))
-	}
-	if len(matchedIDs) == 1 && !cf.Replace {
-		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
-	}
 	var body string
-	if cf.Language == string(tree.SQL) {
+	if !isPython {
 		body = cf.Body
 	} else {
 		if cf.Import {
@@ -11893,22 +11894,11 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		// Using strconv.Quote here would preserve backslashes before JSON quotes
 		// in storage and break json.Unmarshal when invoking python UDFs.
 		body = string(byt)
-	}
-	definition := userDefinedFunctionDefinition{
-		name:     string(cf.Name.Name.ObjectName),
-		args:     string(argsJson),
-		argTypes: argTypes,
-		retType:  retTypeStr,
-		body:     body,
-		lang:     cf.Language,
-		sqlMode:  sessionSQLModeForParser(ses),
-		dbName:   dbName,
-	}
-	if strings.EqualFold(cf.Language, string(tree.PYTHON)) {
-		// The catalog revision stores the source for restore/inspection, while
-		// the executable plan carries only its immutable digest. Publish the
-		// account-scoped object before the catalog row becomes visible; a failed
-		// transaction can leave only an unreferenced object for later GC.
+
+		// Publish and validate the exact immutable artifact before opening the
+		// Catalog transaction. A failed CREATE/REPLACE therefore cannot expose
+		// a revision whose source the current worker has not accepted, while a
+		// failed replacement leaves its previous active revision untouched.
 		artifactStore, storeErr := pythonudf.NewFileArtifactStore(
 			getPu(ses.GetService()).FileService,
 			pythonudf.DefaultMaxArtifactBytes,
@@ -11924,6 +11914,78 @@ func InitFunction(ses *Session, execCtx *ExecCtx, tenant *TenantInfo, cf *tree.C
 		); err != nil {
 			return err
 		}
+		if err = validatePythonUdfDefinitionAtCreate(execCtx.reqCtx, ses, tenant, nb); err != nil {
+			return err
+		}
+	}
+	definition := userDefinedFunctionDefinition{
+		name:     string(cf.Name.Name.ObjectName),
+		args:     string(argsJson),
+		argTypes: argTypes,
+		retType:  retTypeStr,
+		body:     body,
+		lang:     cf.Language,
+		sqlMode:  sessionSQLModeForParser(ses),
+		dbName:   dbName,
+	}
+
+	// Exact function signatures need an exclusion boundary in every deployment
+	// mode. The catalog unique index documents the identity, but optimistic/SI
+	// transactions do not acquire FOR UPDATE locks. This private transaction is
+	// therefore explicitly pessimistic RC, locks the target database row, then
+	// rechecks and writes the signature before releasing that lock.
+	bh := ses.GetBackgroundExec(execCtx.reqCtx, &BackgroundExecOption{forcePessimisticRC: true})
+	defer bh.Close()
+
+	err = bh.Exec(execCtx.reqCtx, "begin;")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		err = finishTxn(execCtx.reqCtx, bh, err)
+	}()
+	if isPython {
+		if err = ensurePythonUdfCatalogReady(execCtx.reqCtx, bh); err != nil {
+			return err
+		}
+	}
+
+	// Lock and authenticate the target database before the exact-signature
+	// read. The lock stays held through persistence and commit.
+	dbExists, err = lockDatabaseForUDFCreation(execCtx.reqCtx, bh, dbName)
+	if err != nil {
+		return err
+	}
+	if !dbExists {
+		return moerr.NewBadDB(execCtx.reqCtx, dbName)
+	}
+
+	// Validate duplicate function declaration under the same lock used for
+	// persistence. Python source validation above is intentionally outside this
+	// transaction, but identity/revision publication remains linearized here.
+	bh.ClearExecResultSet()
+	if isPython {
+		checkExistence = fmt.Sprintf(checkPythonUdfExistence, string(cf.Name.Name.ObjectName), dbName)
+	} else {
+		checkExistence = fmt.Sprintf(checkUdfExistence, string(cf.Name.Name.ObjectName), dbName)
+	}
+	err = bh.Exec(execCtx.reqCtx, checkExistence)
+	if err != nil {
+		return err
+	}
+	erArray, err = getResultSet(execCtx.reqCtx, bh)
+	if err != nil {
+		return err
+	}
+	matchedIDs, err := matchUserDefinedFunctionCandidates(execCtx.reqCtx, erArray, string(cf.Language), logicalArgTypes, exactArgTypes)
+	if err != nil {
+		return err
+	}
+	if len(matchedIDs) > 1 {
+		return moerr.NewInvalidInputNoCtxf("function %s has multiple catalog identities for the same signature", string(cf.Name.Name.ObjectName))
+	}
+	if len(matchedIDs) == 1 && !cf.Replace {
+		return moerr.NewUDFAlreadyExistsNoCtx(string(cf.Name.Name.ObjectName))
 	}
 	if len(matchedIDs) == 1 { // replace
 		id := matchedIDs[0]

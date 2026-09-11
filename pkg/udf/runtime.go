@@ -279,6 +279,42 @@ type RuntimeReadiness interface {
 	CheckLanguageReady(context.Context, string) error
 }
 
+// RoutineDefinition is the typed, pre-publication contract handed to a
+// language runtime for definition validation. It is deliberately separate
+// from Invocation: a CREATE or REPLACE has no FunctionRef/revision yet and
+// must be validated before the new Catalog revision becomes visible.
+//
+// Source is transient create-time input. An executable plan never carries
+// source; a runtime with an ArtifactResolver must resolve the same immutable
+// artifact digest before sending source to the worker.
+type RoutineDefinition struct {
+	Language                string
+	AccountID               uint64
+	Handler                 string
+	Source                  string
+	Args                    []types.Type
+	ReturnType              types.Type
+	Mode                    string
+	NullPolicy              string
+	ABIContract             string
+	AdapterVersion          string
+	SDKVersion              string
+	DefinitionSchemaVersion int
+	ArtifactDigest          string
+	EnvironmentDigest       string
+	DefinitionFingerprint   string
+}
+
+// RuntimeDefinitionValidator is an optional language runtime capability.
+// Python CREATE/REPLACE requires it: the worker must compile the exact
+// immutable artifact before Catalog publication. Keeping this as a separate
+// capability preserves the language-neutral execution interface and lets
+// ordinary SQL UDFs continue to use Runtime implementations that do not own
+// a source validation protocol.
+type RuntimeDefinitionValidator interface {
+	ValidateDefinition(context.Context, *RoutineDefinition) error
+}
+
 // Registry dispatches to the one runtime selected by a routine's language.
 // A registry is immutable after construction, so plan execution cannot race
 // service registration or observe a partially initialized adapter.
@@ -330,6 +366,21 @@ func (r *runtimeRegistry) CheckLanguageReady(ctx context.Context, language strin
 		return moerr.NewNotSupportedf(ctx, "%s UDF runtime does not expose the current contract", language)
 	}
 	return readiness.CheckLanguageReady(ctx, language)
+}
+
+func (r *runtimeRegistry) ValidateDefinition(ctx context.Context, definition *RoutineDefinition) error {
+	if definition == nil {
+		return moerr.NewInvalidInputNoCtx("nil UDF routine definition")
+	}
+	runtime := r.byLanguage[definition.Language]
+	if runtime == nil {
+		return moerr.NewNotSupportedf(ctx, "%s UDF runtime is not enabled", definition.Language)
+	}
+	validator, ok := runtime.(RuntimeDefinitionValidator)
+	if !ok {
+		return moerr.NewNotSupportedf(ctx, "%s UDF runtime does not expose definition validation", definition.Language)
+	}
+	return validator.ValidateDefinition(ctx, definition)
 }
 
 func (r *runtimeRegistry) Close() error {

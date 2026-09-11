@@ -145,6 +145,101 @@ func TestBuildInputRecordRejectsEmptyConstantVector(t *testing.T) {
 	require.ErrorContains(t, err, "shorter than batch range")
 }
 
+func TestInputBatchEncoderReusesSchemaAndPreservesRange(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	input := vector.NewVec(types.T_int64.ToType())
+	defer func() {
+		input.Free(mp)
+		mpool.DeleteMPool(mp)
+	}()
+	for _, value := range []int64{10, 20, 30} {
+		require.NoError(t, vector.AppendFixed(input, value, false, mp))
+	}
+	encoder, err := newInputBatchEncoder(
+		[]*vector.Vector{input}, []types.Type{types.T_int64.ToType()},
+	)
+	require.NoError(t, err)
+	first, firstSchema, err := encoder.build(0, 2)
+	require.NoError(t, err)
+	defer first.Release()
+	second, secondSchema, err := encoder.build(2, 1)
+	require.NoError(t, err)
+	defer second.Release()
+	require.Same(t, firstSchema, secondSchema)
+	firstValues := first.Column(0).(*array.Int64)
+	secondValues := second.Column(0).(*array.Int64)
+	require.Equal(t, int64(10), firstValues.Value(0))
+	require.Equal(t, int64(20), firstValues.Value(1))
+	require.Equal(t, int64(30), secondValues.Value(0))
+}
+
+func TestInputBatchWireEncoderReusesSchemaAcrossBatches(t *testing.T) {
+	descriptor, err := NewTypeDescriptor(types.T_int64.ToType())
+	require.NoError(t, err)
+	field, err := descriptor.Field("arg_0")
+	require.NoError(t, err)
+	schema := arrow.NewSchema([]arrow.Field{field}, nil)
+	makeRecord := func(value int64) arrow.RecordBatch {
+		builder := array.NewInt64Builder(memory.NewGoAllocator())
+		builder.Append(value)
+		values := builder.NewInt64Array()
+		record := array.NewRecordBatch(schema, []arrow.Array{values}, 1)
+		values.Release()
+		return record
+	}
+
+	encoder := &inputBatchWireEncoder{schema: schema}
+	first := makeRecord(1)
+	second := makeRecord(2)
+	defer first.Release()
+	defer second.Release()
+	defer func() { require.NoError(t, encoder.close()) }()
+
+	firstFrames, err := encoder.encode(first, DefaultMaxBatchBytes)
+	require.NoError(t, err)
+	secondFrames, err := encoder.encode(second, DefaultMaxBatchBytes)
+	require.NoError(t, err)
+	require.Len(t, firstFrames, 2)
+	require.Len(t, secondFrames, 2)
+	require.Equal(t, firstFrames[0].Header, secondFrames[0].Header)
+	require.Equal(t, firstFrames[0].Body, secondFrames[0].Body)
+	require.NotEqual(t, firstFrames[1].Body, secondFrames[1].Body)
+}
+
+func TestInputBatchWireEncoderRecoversAfterOversizeCandidate(t *testing.T) {
+	descriptor, err := NewTypeDescriptor(types.T_int64.ToType())
+	require.NoError(t, err)
+	field, err := descriptor.Field("arg_0")
+	require.NoError(t, err)
+	schema := arrow.NewSchema([]arrow.Field{field}, nil)
+	makeRecord := func(values ...int64) arrow.RecordBatch {
+		builder := array.NewInt64Builder(memory.NewGoAllocator())
+		builder.AppendValues(values, nil)
+		arrayValues := builder.NewInt64Array()
+		record := array.NewRecordBatch(schema, []arrow.Array{arrayValues}, int64(len(values)))
+		arrayValues.Release()
+		return record
+	}
+
+	one := makeRecord(1)
+	defer one.Release()
+	measure := &inputBatchWireEncoder{schema: schema}
+	oneFrames, err := measure.encode(one, DefaultMaxBatchBytes)
+	require.NoError(t, err)
+	maxBytes := int64(len(oneFrames[0].Header) + len(oneFrames[0].Body) + len(oneFrames[1].Header) + len(oneFrames[1].Body))
+	require.NoError(t, measure.close())
+
+	encoder := &inputBatchWireEncoder{schema: schema}
+	defer func() { require.NoError(t, encoder.close()) }()
+	wider := makeRecord(1, 2)
+	defer wider.Release()
+	_, err = encoder.encode(wider, maxBytes)
+	require.ErrorIs(t, err, errArrowBatchTooLarge)
+	frames, err := encoder.encode(one, maxBytes)
+	require.NoError(t, err)
+	require.Len(t, frames, 2)
+}
+
 func TestArrowValueDomainRejectsWidthAndTimeOverflow(t *testing.T) {
 	allocator := memory.NewGoAllocator()
 	stringBuilder := array.NewStringBuilder(allocator)
