@@ -9,6 +9,9 @@ select regexp_instr(t,b), regexp_instr(t,f), regexp_instr(b,'a'), regexp_instr(f
 select hex(regexp_substr(b,'.')), hex(regexp_substr(b,'.',2)), hex(regexp_substr(b,'.',2,1)) from operands;
 ➤ hex(regexp_substr(b, .))[-1,16383,0]  ¦  hex(regexp_substr(b, ., 2))[-1,16383,0]  ¦  hex(regexp_substr(b, ., 2, 1))[-1,16383,0]  𝄀
 C3  ¦  A9  ¦  A9
+select hex(regexp_replace(b,b,'é')) from operands;
+➤ hex(regexp_replace(b, b, é))[-1,16383,0]  𝄀
+E9
 select regexp_instr(t,v) from operands;
 Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
 select regexp_like(_binary'abc','a');
@@ -93,6 +96,16 @@ set @rs=x'ff61';
 select @rs regexp 'a', regexp_like(@rs,'a'), regexp_instr(@rs,'a'), hex(regexp_substr(@rs,'.')), hex(regexp_replace(@rs,'a','X'));
 ➤ @rs reg_match a[-7,1,0]  ¦  regexp_like(@rs, a)[-7,1,0]  ¦  regexp_instr(@rs, a)[-5,64,0]  ¦  hex(regexp_substr(@rs, .))[-1,16383,0]  ¦  hex(regexp_replace(@rs, a, X))[-1,16383,0]  𝄀
 1  ¦  1  ¦  2  ¦  FF  ¦  FF58
+create table invalid_text(v varchar(10));
+set @regexp_saved_sql_mode=@@session.sql_mode;
+set session sql_mode='';
+insert into invalid_text values (x'ff61');
+set session sql_mode=@regexp_saved_sql_mode;
+set @regexp_saved_sql_mode=null;
+select hex(v), regexp_instr(v,'a'), v regexp 'a', v rlike 'a', regexp_like(v,'a') from invalid_text;
+➤ hex(v)[12,80,0]  ¦  regexp_instr(v, a)[-5,64,0]  ¦  v reg_match a[-7,1,0]  ¦  v reg_match a[-7,1,0]  ¦  regexp_like(v, a)[-7,1,0]  𝄀
+FF61  ¦  0  ¦  0  ¦  0  ¦  0
+drop table invalid_text;
 prepare regexp_markers from 'select regexp_instr(?,?),hex(regexp_substr(?,?)),hex(regexp_replace(?,?,\'X\'))';
 set @rs=_binary'éa', @rp=_binary'.';
 execute regexp_markers using @rs,@rp,@rs,@rp,@rs,@rp;

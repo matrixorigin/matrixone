@@ -118,13 +118,17 @@ func regexpUTF8InputWidth(lead byte) int {
 }
 
 func regexpEscapedConversionValue(value string) string {
+	const mysqlSourceByteLimit = 6
 	var output strings.Builder
-	for i := 0; i < len(value) && output.Len() < 64; i++ {
-		if value[i] >= 0x20 && value[i] <= 0x7e && value[i] != '\\' {
+	for i := 0; i < min(len(value), mysqlSourceByteLimit); i++ {
+		if value[i] >= 0x20 && value[i] <= 0x7e {
 			output.WriteByte(value[i])
 		} else {
 			fmt.Fprintf(&output, "\\x%02X", value[i])
 		}
+	}
+	if len(value) > mysqlSourceByteLimit {
+		output.WriteString("...")
 	}
 	return output.String()
 }

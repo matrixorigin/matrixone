@@ -232,6 +232,22 @@ func TestRegexpPreparedProtocolSources(t *testing.T) {
 				}
 			}
 		})
+		t.Run("malformed_pattern_and_replacement_precede_null", func(t *testing.T) {
+			for _, query := range []string{
+				"select regexp_instr(?, ?)",
+				"select regexp_substr(?, ?)",
+				"select regexp_replace('abc', ?, ?)",
+			} {
+				withStatement(t, query, func(stmt *sql.Stmt) {
+					var value any
+					err := stmt.QueryRowContext(ctx, nil, "a\xc3b").Scan(&value)
+					require.Error(t, err)
+					var sqlError *mysql.MySQLError
+					require.ErrorAs(t, err, &sqlError)
+					require.Equal(t, uint16(3854), sqlError.Number)
+				})
+			}
+		})
 		t.Run("pattern_and_position_precede_operand_conversion", func(t *testing.T) {
 			for _, tc := range []struct {
 				query       string

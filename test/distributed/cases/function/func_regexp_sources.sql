@@ -13,6 +13,7 @@ insert into operands values ('éa', _binary'éa', _binary'éa', _binary'éa');
 -- Static column types differ from binary literals and explicit casts.
 select regexp_instr(t,b), regexp_instr(t,f), regexp_instr(b,'a'), regexp_instr(f,'a') from operands;
 select hex(regexp_substr(b,'.')), hex(regexp_substr(b,'.',2)), hex(regexp_substr(b,'.',2,1)) from operands;
+select hex(regexp_replace(b,b,'é')) from operands;
 select regexp_instr(t,v) from operands;
 select regexp_like(_binary'abc','a');
 select regexp_instr('abc',x'61');
@@ -51,6 +52,14 @@ select regexp_substr(@rs,'.',null), regexp_substr(@rs,'.',1,null);
 select regexp_replace(@rs,'.',null), regexp_replace(@rs,'.','X',null), regexp_replace(@rs,'.','X',1,null);
 set @rs=x'ff61';
 select @rs regexp 'a', regexp_like(@rs,'a'), regexp_instr(@rs,'a'), hex(regexp_substr(@rs,'.')), hex(regexp_replace(@rs,'a','X'));
+create table invalid_text(v varchar(10));
+set @regexp_saved_sql_mode=@@session.sql_mode;
+set session sql_mode='';
+insert into invalid_text values (x'ff61');
+set session sql_mode=@regexp_saved_sql_mode;
+set @regexp_saved_sql_mode=null;
+select hex(v), regexp_instr(v,'a'), v regexp 'a', v rlike 'a', regexp_like(v,'a') from invalid_text;
+drop table invalid_text;
 -- SQL markers retain a text result charset, unlike bare binary variables.
 prepare regexp_markers from 'select regexp_instr(?,?),hex(regexp_substr(?,?)),hex(regexp_replace(?,?,\'X\'))';
 set @rs=_binary'éa', @rp=_binary'.';
