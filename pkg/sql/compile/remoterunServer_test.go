@@ -836,6 +836,14 @@ func TestRemoteNotifyCancellationReleasesCreditWaitAndRegistration(t *testing.T)
 			require.Error(t, wireError)
 			if connectionClosed {
 				require.True(t, moerr.IsMoErrCode(wireError, moerr.ErrStreamClosed))
+				select {
+				case <-proc.Ctx.Done():
+				default:
+					t.Fatal("connection cancellation did not cancel the owning query")
+				}
+				cause := context.Cause(proc.Ctx)
+				require.Error(t, cause)
+				require.True(t, moerr.IsMoErrCode(cause, moerr.ErrStreamClosed))
 			} else {
 				require.ErrorIs(t, handlerErr, context.Canceled)
 				require.ErrorIs(t, sendErr, context.Canceled)
