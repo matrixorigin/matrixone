@@ -315,7 +315,7 @@ func lockDataBranchCloneSource(
 	})
 }
 
-var lockCloneDatabaseTarget = func(
+func lockDatabaseCatalogRow(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
@@ -345,7 +345,7 @@ var lockCloneDatabaseTarget = func(
 	defer lockBat.Vecs[0].Free(lockProc.Mp())
 
 	// The background transaction owns this exact mo_database key through the
-	// destination CREATE. Its deferred commit or rollback releases the lock.
+	// catalog mutation. Its deferred commit or rollback releases the lock.
 	return withCloneLockContext(lockProc, targetCtx, func() error {
 		return lockop.LockRows(
 			eng,
@@ -360,6 +360,16 @@ var lockCloneDatabaseTarget = func(
 			accountID,
 		)
 	})
+}
+
+var lockCloneDatabaseTarget = func(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	accountID uint32,
+	databaseName string,
+) error {
+	return lockDatabaseCatalogRow(ctx, ses, bh, accountID, databaseName)
 }
 
 func checkCloneDatabaseTarget(

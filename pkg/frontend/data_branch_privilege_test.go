@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -105,6 +106,196 @@ func TestBranchDeleteDatabaseTableIDsSQLReusesCloneObjectFilter(t *testing.T) {
 	require.NotContains(t, got, "relname != 'mo_increment_columns'")
 	require.NotContains(t, got, "relname != '__mo_account_lock'")
 	require.NotContains(t, got, "relname not like")
+}
+
+func TestValidateDataBranchDeleteDatabaseTargetUsesDatabaseIdentity(t *testing.T) {
+	const (
+		accountID uint32 = 42
+		dbName           = "db1"
+		tableID   uint64 = 101
+	)
+	ctx := defines.AttachAccountId(context.Background(), accountID)
+
+	tests := []struct {
+		name         string
+		protocol     int64
+		databaseType string
+		tables       [][]interface{}
+		activeIDs    [][]interface{}
+		wantIDs      []uint64
+		wantErr      string
+		wantSQLCount int
+	}{
+		{
+			name:         "v64 marked empty database",
+			protocol:     defines.MORPCVersion64,
+			databaseType: catalog.SystemDBTypeDataBranch,
+			wantIDs:      []uint64{},
+			wantSQLCount: 2,
+		},
+		{
+			name:         "v63 marked empty database fails closed",
+			protocol:     defines.MORPCVersion63,
+			databaseType: catalog.SystemDBTypeDataBranch,
+			wantErr:      "not an active branch database",
+			wantSQLCount: 2,
+		},
+		{
+			name:         "v64 unmarked empty database",
+			protocol:     defines.MORPCVersion64,
+			wantErr:      "not an active branch database",
+			wantSQLCount: 2,
+		},
+		{
+			name:         "v63 unmarked empty database",
+			protocol:     defines.MORPCVersion63,
+			wantErr:      "not an active branch database",
+			wantSQLCount: 2,
+		},
+		{
+			name:         "subscription database",
+			protocol:     defines.MORPCVersion64,
+			databaseType: catalog.SystemDBTypeSubscription,
+			wantErr:      "not an active branch database",
+			wantSQLCount: 1,
+		},
+		{
+			name:         "unknown database type",
+			protocol:     defines.MORPCVersion64,
+			databaseType: "unknown",
+			wantErr:      "not an active branch database",
+			wantSQLCount: 1,
+		},
+		{
+			name:         "v64 marked database with ordinary table",
+			protocol:     defines.MORPCVersion64,
+			databaseType: catalog.SystemDBTypeDataBranch,
+			tables:       [][]interface{}{{int64(tableID), "local_t"}},
+			wantErr:      "not an active branch table",
+			wantSQLCount: 3,
+		},
+		{
+			name:         "v63 marked database with ordinary table",
+			protocol:     defines.MORPCVersion63,
+			databaseType: catalog.SystemDBTypeDataBranch,
+			tables:       [][]interface{}{{int64(tableID), "local_t"}},
+			wantErr:      "not an active branch table",
+			wantSQLCount: 3,
+		},
+		{
+			name:         "v64 marked database with branch table",
+			protocol:     defines.MORPCVersion64,
+			databaseType: catalog.SystemDBTypeDataBranch,
+			tables:       [][]interface{}{{int64(tableID), "branch_t"}},
+			activeIDs:    [][]interface{}{{int64(tableID)}},
+			wantIDs:      []uint64{tableID},
+			wantSQLCount: 3,
+		},
+		{
+			name:         "v63 legacy database with branch table",
+			protocol:     defines.MORPCVersion63,
+			tables:       [][]interface{}{{int64(tableID), "branch_t"}},
+			activeIDs:    [][]interface{}{{int64(tableID)}},
+			wantIDs:      []uint64{tableID},
+			wantSQLCount: 3,
+		},
+		{
+			name:         "v64 legacy database with branch table",
+			protocol:     defines.MORPCVersion64,
+			tables:       [][]interface{}{{int64(tableID), "branch_t"}},
+			activeIDs:    [][]interface{}{{int64(tableID)}},
+			wantIDs:      []uint64{tableID},
+			wantSQLCount: 3,
+		},
+		{
+			name:         "v63 marked database retains legacy receipt validation",
+			protocol:     defines.MORPCVersion63,
+			databaseType: catalog.SystemDBTypeDataBranch,
+			tables:       [][]interface{}{{int64(tableID), "branch_t"}},
+			activeIDs:    [][]interface{}{{int64(tableID)}},
+			wantIDs:      []uint64{tableID},
+			wantSQLCount: 3,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ses := newValidateSession(t)
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[branchDatabaseTypeSQL(accountID, dbName)] = branchStringResult(
+				"dat_type", [][]interface{}{{test.databaseType}},
+			)
+			bh.sql2result[branchDeleteDatabaseTableIDsSQL(accountID, dbName)] = branchTableResult(test.tables)
+			activeSQL := fmt.Sprintf(
+				"select table_id from %s.%s where table_deleted = false and level != 'alter' and table_id in (%d)",
+				catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA, tableID,
+			)
+			bh.sql2result[activeSQL] = branchUint64Result("table_id", test.activeIDs)
+
+			ids, err := validateDataBranchDeleteDatabaseTarget(ctx, ses, bh, dbName, test.protocol)
+			if test.wantErr != "" {
+				require.ErrorContains(t, err, test.wantErr)
+				require.Nil(t, ids)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, test.wantIDs, ids)
+			}
+			require.Len(t, bh.executedSQLs, test.wantSQLCount)
+		})
+	}
+}
+
+func TestLoadBranchDatabaseTypeRejectsMissingDatabase(t *testing.T) {
+	const (
+		accountID uint32 = 42
+		dbName           = "missing_db"
+	)
+	ctx := defines.AttachAccountId(context.Background(), accountID)
+	ses := newValidateSession(t)
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[branchDatabaseTypeSQL(accountID, dbName)] = branchStringResult("dat_type", nil)
+
+	_, err := loadBranchDatabaseType(ctx, ses, bh, accountID, dbName)
+	require.ErrorContains(t, err, "Unknown database")
+}
+
+func branchStringResult(columnName string, rows [][]interface{}) *MysqlResultSet {
+	result := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName(columnName)
+	column.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	result.AddColumn(column)
+	for _, row := range rows {
+		result.AddRow(row)
+	}
+	return result
+}
+
+func branchUint64Result(columnName string, rows [][]interface{}) *MysqlResultSet {
+	result := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName(columnName)
+	column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	column.SetSigned(false)
+	result.AddColumn(column)
+	for _, row := range rows {
+		result.AddRow(row)
+	}
+	return result
+}
+
+func branchTableResult(rows [][]interface{}) *MysqlResultSet {
+	result := branchUint64Result("rel_id", nil)
+	nameColumn := &MysqlColumn{}
+	nameColumn.SetName("relname")
+	nameColumn.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	result.AddColumn(nameColumn)
+	for _, row := range rows {
+		result.AddRow(row)
+	}
+	return result
 }
 
 func TestBuildTableInfoListWhereClauseUsesRelationKindForInternalObjects(t *testing.T) {

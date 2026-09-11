@@ -654,13 +654,18 @@ func validateDataBranchDeleteDatabaseTarget(
 	ses *Session,
 	bh BackgroundExec,
 	dbName string,
+	protocolVersion int64,
 ) ([]uint64, error) {
 	accId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err = validateBranchDatabaseExists(ctx, ses, bh, accId, dbName); err != nil {
+	databaseType, err := loadBranchDatabaseType(ctx, ses, bh, accId, dbName)
+	if err != nil {
 		return nil, err
+	}
+	if databaseType != "" && databaseType != catalog.SystemDBTypeDataBranch {
+		return nil, inactiveBranchDatabaseError(ctx, dbName)
 	}
 
 	sql := branchDeleteDatabaseTableIDsSQL(accId, dbName)
@@ -686,8 +691,8 @@ func validateDataBranchDeleteDatabaseTarget(
 		}
 		return true
 	})
-	if len(tableNames) == 0 {
-		return nil, moerr.NewInternalErrorf(ctx, "DATA BRANCH DELETE target %s is not an active branch database", dbName)
+	if len(tableNames) == 0 && !dataBranchDatabaseIdentityActive(databaseType, protocolVersion) {
+		return nil, inactiveBranchDatabaseError(ctx, dbName)
 	}
 	if err = validateActiveBranchChildTableIDs(ctx, ses, bh, tableNames); err != nil {
 		return nil, err
@@ -698,6 +703,23 @@ func validateDataBranchDeleteDatabaseTarget(
 	}
 	slices.Sort(tableIDs)
 	return tableIDs, nil
+}
+
+// lockDataBranchDeleteDatabaseTarget establishes the authorization point for a
+// database delete. CREATE/ALTER/DROP object DDL takes the same mo_database row
+// lock, so holding it through validation and the nested DROP makes the marker
+// and complete ordinary-table set stable until the owning transaction ends.
+func lockDataBranchDeleteDatabaseTarget(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	dbName string,
+) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	return lockDatabaseCatalogRow(ctx, ses, bh, accountID, dbName)
 }
 
 func branchDeleteDatabaseTableIDsSQL(accId uint32, dbName string) string {
@@ -713,35 +735,49 @@ func branchDeleteDatabaseTableIDsSQL(accId uint32, dbName string) string {
 	)
 }
 
-func validateBranchDatabaseExists(
+func loadBranchDatabaseType(
 	ctx context.Context,
 	ses *Session,
 	bh BackgroundExec,
 	accId uint32,
 	dbName string,
-) error {
-	sql := fmt.Sprintf(
-		"select dat_id from %s.%s where account_id = %d and datname = %s",
-		catalog.MO_CATALOG,
-		catalog.MO_DATABASE,
-		accId,
-		quoteSQLStringLiteral(dbName),
-	)
-	sqlRet, err := runSql(ctx, ses, bh, sql, nil, nil)
+) (string, error) {
+	sqlRet, err := runSql(ctx, ses, bh, branchDatabaseTypeSQL(accId, dbName), nil, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer sqlRet.Close()
 
+	var databaseType string
 	found := false
 	sqlRet.ReadRows(func(rows int, cols []*vector.Vector) bool {
-		found = rows > 0
+		if rows > 0 {
+			databaseType = executor.GetStringRows(cols[0])[0]
+			found = true
+		}
 		return false
 	})
 	if !found {
-		return moerr.NewBadDB(ctx, dbName)
+		return "", moerr.NewBadDB(ctx, dbName)
 	}
-	return nil
+	return databaseType, nil
+}
+
+func branchDatabaseTypeSQL(accId uint32, dbName string) string {
+	return fmt.Sprintf(
+		"select coalesce(%s, '') from %s.%s where %s = %d and %s = %s",
+		catalog.SystemDBAttr_Type,
+		catalog.MO_CATALOG,
+		catalog.MO_DATABASE,
+		catalog.SystemDBAttr_AccID,
+		accId,
+		catalog.SystemDBAttr_Name,
+		quoteSQLStringLiteral(dbName),
+	)
+}
+
+func inactiveBranchDatabaseError(ctx context.Context, dbName string) error {
+	return moerr.NewInternalErrorf(ctx, "DATA BRANCH DELETE target %s is not an active branch database", dbName)
 }
 
 func validateActiveBranchChildTableIDs(

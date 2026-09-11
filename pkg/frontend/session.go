@@ -73,7 +73,11 @@ func currentProtocolVersion(proc *process.Process) int64 {
 	if proc == nil {
 		return defines.MORPCLatestVersion
 	}
-	value, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	return currentProtocolVersionForService(proc.GetService())
+}
+
+func currentProtocolVersionForService(service string) int64 {
+	value, ok := moruntime.ServiceRuntime(service).GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {
 		return defines.MORPCVersion4
 	}

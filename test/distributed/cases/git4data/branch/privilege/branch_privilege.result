@@ -16,6 +16,9 @@ set @quoted_acc_id = (select account_id from mo_catalog.mo_account where account
 select count(*) from mo_catalog.mo_database where account_id = @quoted_acc_id and datname = 'br_to_acc';
 ➤ count(*)[-5,64,0]  𝄀
 1
+select dat_type from mo_catalog.mo_database where account_id = @quoted_acc_id and datname = 'br_to_acc';
+➤ dat_type[12,32,0]  𝄀
+data-branch
 select count(*) from mo_catalog.mo_tables where account_id = @quoted_acc_id and reldatabase = 'br_to_acc' and relname = 't';
 ➤ count(*)[-5,64,0]  𝄀
 1
