@@ -117,15 +117,19 @@ func TestUnsignedIntegerSubtractionOperandCombinations(t *testing.T) {
 	}
 }
 
+// TestUnsignedIntegerSubtractionPreservesNestedIntegerDomain checks both the
+// outer subtraction domain and each nested unsigned arithmetic boundary in a
+// single mode/operator matrix.
 func TestUnsignedIntegerSubtractionPreservesNestedIntegerDomain(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		sql  string
+		op   string
 	}{
-		{name: "addition", sql: "select (cast(n_nationkey as unsigned) + 0) - 1 from nation"},
-		{name: "multiplication", sql: "select (cast(n_nationkey as unsigned) * 1) - 1 from nation"},
-		{name: "integer division", sql: "select (cast(n_nationkey as unsigned) div 1) - 1 from nation"},
-		{name: "modulo", sql: "select (cast(n_nationkey as unsigned) % 1) - 1 from nation"},
+		{name: "addition", sql: "select (cast(n_nationkey as unsigned) + 0) - 1 from nation", op: "+"},
+		{name: "multiplication", sql: "select (cast(n_nationkey as unsigned) * 1) - 1 from nation", op: "*"},
+		{name: "integer division", sql: "select (cast(n_nationkey as unsigned) div 1) - 1 from nation", op: "div"},
+		{name: "modulo", sql: "select (cast(n_nationkey as unsigned) % 1) - 1 from nation", op: "%"},
 	} {
 		for _, mode := range []struct {
 			name string
@@ -139,31 +143,6 @@ func TestUnsignedIntegerSubtractionPreservesNestedIntegerDomain(t *testing.T) {
 				t.Run(tc.name+"/"+mode.name+"/"+bindMode.name, func(t *testing.T) {
 					expr := unsignedSubtractionProjection(t, mode.mode, tc.sql, bindMode.prepare)
 					assertUnsignedSubtractionPlan(t, expr, mode.want)
-				})
-			}
-		}
-	}
-}
-
-// TestUnsignedIntegerArithmeticChecksNestedUnsignedResults verifies that every
-// integer-producing unsigned arithmetic node, rather than only the final
-// subtraction, gets its own UINT64 boundary cast. Without that cast an inner
-// DECIMAL128 result can exceed UINT64 and later be cancelled by its parent.
-func TestUnsignedIntegerArithmeticChecksNestedUnsignedResults(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		sql  string
-		op   string
-	}{
-		{name: "addition", sql: "select (cast(n_nationkey as unsigned) + 0) - 1 from nation", op: "+"},
-		{name: "multiplication", sql: "select (cast(n_nationkey as unsigned) * 1) - 1 from nation", op: "*"},
-		{name: "integer division", sql: "select (cast(n_nationkey as unsigned) div 1) - 1 from nation", op: "div"},
-		{name: "modulo", sql: "select (cast(n_nationkey as unsigned) % 1) - 1 from nation", op: "%"},
-	} {
-		for _, mode := range []string{"", mysql.SQLModeNoUnsignedSubtraction} {
-			for _, bindMode := range bindModes {
-				t.Run(tc.name+"/"+mode+"/"+bindMode.name, func(t *testing.T) {
-					expr := unsignedSubtractionProjection(t, mode, tc.sql, bindMode.prepare)
 					require.True(t, hasArithmeticResultCast(expr, tc.op, types.T_uint64))
 				})
 			}
@@ -236,24 +215,6 @@ func TestUnsignedIntegerSubtractionPreservesConstantFoldedNestedIntegerDomain(t 
 				})
 			}
 		}
-	}
-}
-
-func TestUnsignedIntegerSubtractionPreservesIntegerDivisionDomain(t *testing.T) {
-	for _, mode := range []struct {
-		name string
-		mode string
-		want types.T
-	}{
-		{name: "default", want: types.T_uint64},
-		{name: "no unsigned subtraction", mode: mysql.SQLModeNoUnsignedSubtraction, want: types.T_int64},
-	} {
-		t.Run(mode.name, func(t *testing.T) {
-			expr := unsignedSubtractionProjection(
-				t, mode.mode, "select (cast(n_nationkey as unsigned) div 1) - 1 from nation", false,
-			)
-			assertUnsignedSubtractionPlan(t, expr, mode.want)
-		})
 	}
 }
 
