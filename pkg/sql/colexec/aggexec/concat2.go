@@ -25,6 +25,7 @@ import (
 	"math"
 	"os"
 	"slices"
+	"time"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -57,6 +58,7 @@ type groupConcatExec struct {
 	truncationCount  uint64
 	truncationRows   []uint64
 	warningRowCount  uint64
+	timeZone         *time.Location
 }
 
 // GroupConcatWarning identifies one retained truncation diagnostic. The
@@ -101,6 +103,18 @@ func ConsumeGroupConcatWarnings(agg AggFuncExec) (uint64, []GroupConcatWarning) 
 func (exec *groupConcatExec) clearTruncationWarnings() {
 	exec.truncationCount = 0
 	exec.truncationRows = exec.truncationRows[:0]
+}
+
+// ConfigureGroupConcatTimeZone installs the initiating session's location for
+// TIMESTAMP rendering. Process session information already carries this value
+// across CN boundaries, so finalization never depends on a worker's local zone.
+func ConfigureGroupConcatTimeZone(agg AggFuncExec, location *time.Location) {
+	if exec, ok := agg.(*groupConcatExec); ok {
+		if location == nil {
+			location = time.UTC
+		}
+		exec.timeZone = location
+	}
 }
 
 // ReportGroupConcatWarnings publishes the bounded diagnostics and exact total
@@ -1852,7 +1866,7 @@ func (exec *groupConcatExec) flushGroupInInputOrderAccounted(
 				if isNull || writer.truncated {
 					return nil
 				}
-				return writeGroupConcatData(writer, exec.argTypes[i], data)
+				return writeGroupConcatData(writer, exec.argTypes[i], data, exec.timeZone)
 			},
 		)
 		if err != nil {
@@ -1995,7 +2009,7 @@ func (exec *groupConcatExec) flushOrderedGroupAccounted(
 					return nil
 				}
 				return writeGroupConcatData(
-					writer, exec.argTypes[column], data)
+					writer, exec.argTypes[column], data, exec.timeZone)
 			}); err != nil {
 			return err
 		}
@@ -2022,7 +2036,7 @@ func (exec *groupConcatExec) appendConcatPayload(
 			if isNull || writer.truncated {
 				return nil
 			}
-			return writeGroupConcatData(writer, exec.argTypes[i], data)
+			return writeGroupConcatData(writer, exec.argTypes[i], data, exec.timeZone)
 		},
 	)
 	return writer.buffer, writer.truncated, err
@@ -2222,6 +2236,7 @@ func (exec *groupConcatExec) Free() {
 	exec.truncationRows = nil
 	exec.truncationCount = 0
 	exec.warningRowCount = 0
+	exec.timeZone = nil
 	exec.distinctHash.free()
 	exec.aggExec.Free()
 }

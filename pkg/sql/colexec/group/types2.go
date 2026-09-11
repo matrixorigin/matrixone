@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -255,6 +256,7 @@ type container struct {
 	prepareParamKindWireV1 bool
 	legacyTextMinMax       bool
 	legacyVarianceState    bool
+	timeZone               *time.Location
 
 	// spill, agglist to load spilled data.
 	spillMem        int64

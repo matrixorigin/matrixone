@@ -54,6 +54,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	}
 	mergeGroup.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
 	mergeGroup.ctr.legacyVarianceState = useLegacyVarianceStateForRemote(proc)
+	mergeGroup.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
 	mergeGroup.ctr.groupingAware = mergeGroup.GroupingAware

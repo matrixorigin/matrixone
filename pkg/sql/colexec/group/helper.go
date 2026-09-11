@@ -1849,6 +1849,7 @@ func (ctr *container) makeAggListWithAllocation(
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
+		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
 	}
 
 	if ctr.mtyp != H0 {

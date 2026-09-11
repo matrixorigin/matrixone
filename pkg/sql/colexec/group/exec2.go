@@ -109,6 +109,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	}
 	group.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
 	group.ctr.legacyVarianceState = useLegacyVarianceStateForRemote(proc)
+	group.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()
@@ -273,6 +274,9 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 				return err
 			}
 		}
+	}
+	for _, agg := range group.ctr.aggList {
+		aggexec.ConfigureGroupConcatTimeZone(agg, group.ctr.timeZone)
 	}
 	group.configureH0OrderedAggSpill(proc)
 

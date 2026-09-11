@@ -17,6 +17,7 @@ package aggexec
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -127,13 +128,21 @@ func (w *appendSliceWriter) Write(value []byte) (int, error) {
 
 func appendGroupConcatData(dst []byte, typ types.Type, data []byte) ([]byte, error) {
 	writer := appendSliceWriter{data: dst}
-	if err := writeGroupConcatData(&writer, typ, data); err != nil {
+	if err := writeGroupConcatData(&writer, typ, data, time.UTC); err != nil {
 		return nil, err
 	}
 	return writer.data, nil
 }
 
-func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
+func writeGroupConcatData(
+	writer io.Writer,
+	typ types.Type,
+	data []byte,
+	location *time.Location,
+) error {
+	if location == nil {
+		location = time.UTC
+	}
 	switch typ.Oid {
 	case types.T_bit, types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -196,11 +205,11 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 	case types.T_date:
 		return writeValue(util.UnsafeFromBytes[types.Date](data).String())
 	case types.T_datetime:
-		return writeValue(util.UnsafeFromBytes[types.Datetime](data).String())
+		return writeValue(util.UnsafeFromBytes[types.Datetime](data).String2(typ.Scale))
 	case types.T_timestamp:
-		return writeValue(util.UnsafeFromBytes[types.Timestamp](data).String())
+		return writeValue(util.UnsafeFromBytes[types.Timestamp](data).String2(location, typ.Scale))
 	case types.T_time:
-		return writeValue(util.UnsafeFromBytes[types.Time](data).String())
+		return writeValue(util.UnsafeFromBytes[types.Time](data).String2(typ.Scale))
 	case types.T_year:
 		return writeValue(util.UnsafeFromBytes[types.MoYear](data).String())
 	case types.T_uuid:
