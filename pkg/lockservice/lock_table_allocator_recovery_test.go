@@ -81,19 +81,26 @@ func TestAbsentActiveTxnOwnerQuiescesUntilMembershipReturns(t *testing.T) {
 		require.Equal(t, 45, tracking.checks)
 		require.Zero(t, tracking.sends)
 		require.Zero(t, tracking.resets.Load())
-		require.Equal(t, 1, logs.FilterMessage("active txn owner absent; retaining commit fences").Len())
+		require.Zero(t, logs.FilterMessage("active txn owner absent; retaining commit fences").Len())
 		require.Zero(t, logs.FilterLevelExact(zap.ErrorLevel).Len())
-		require.True(t, a.HasInvalidService(sid))
+		require.False(t, a.HasInvalidService(sid), "membership absence is not retirement evidence")
+		_, absent := a.ownerAbsentSince.Load(sid)
+		require.True(t, absent, "absence still needs a bounded cleanup lifecycle")
 		_, exists := ctl.getCommitState("orphan")
 		require.True(t, exists, "absence must not stand in for a negative GetActiveTxn response")
 		_, err := a.Valid(sid, []byte("late"), nil)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
+		require.NoError(t, err, "unknown membership must not fence a new owner")
+		_, absent = a.ownerAbsentSince.Load(sid)
+		require.False(t, absent, "admission itself is positive owner evidence")
+		a.FinishCommit(sid, []byte("late"))
 
 		tracking.inventory.cluster.AddCN(metadata.CNService{
 			ServiceID: "departed", LockServiceAddress: "restored:1234",
 		})
 		a.cleanCommitStateOnce(context.Background(), a.getActiveTxn, time.Hour)
 		require.Equal(t, 1, tracking.sends, "membership restoration must allow the next sweep to probe")
+		_, absent = a.ownerAbsentSince.Load(sid)
+		require.False(t, absent, "a successful owner probe clears cleanup-only absence")
 		_, exists = ctl.getCommitState("orphan")
 		require.True(t, exists)
 		a.resumeService(sid)
@@ -103,7 +110,10 @@ func TestAbsentActiveTxnOwnerQuiescesUntilMembershipReturns(t *testing.T) {
 
 		tracking.inventory.cluster.RemoveCN("departed")
 		a.inactiveService.Store(sid, time.Now().Add(-2*time.Hour))
-		a.cleanCommitStateOnce(context.Background(), a.getActiveTxn, time.Hour)
+		a.cleanCommitStateOnce(context.Background(), a.getActiveTxn, time.Nanosecond)
+		// The first absent observation starts the cleanup-only marker. The next
+		// sweep observes both old markers and performs their expiry transition.
+		a.cleanCommitStateOnce(context.Background(), a.getActiveTxn, time.Nanosecond)
 		_, exists = a.ctl.Load(sid)
 		require.False(t, exists, "skipping network probes must not skip local expiry")
 		require.False(t, a.HasInvalidService(sid))
@@ -319,6 +329,226 @@ func TestCleanCommitStateExpiryDoesNotRequireSuccessfulProbe(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestAbsentActiveTxnOwnerKeepsPendingBindUnknown(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		for _, serviceID := range []string{"pending-owner", "live-owner"} {
+			a.Get(serviceID, 0, 1, 0, pb.Sharding_None)
+			if serviceID == "live-owner" {
+				require.True(t, a.KeepLockTableBind(serviceID))
+			}
+			ctl := a.getCtl(serviceID)
+			require.Equal(t, cannotCommitState, ctl.tryCannotCommit("orphan"))
+
+			a.cleanCommitStateOnce(context.Background(), func(context.Context, string) (bool, [][]byte, error) {
+				return false, nil, errActiveTxnOwnerAbsent
+			}, time.Hour)
+
+			require.False(t, a.HasInvalidService(serviceID),
+				"a bind without a published membership record is still pending")
+			_, err := a.Valid(serviceID, []byte("orphan"), nil)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOrphan),
+				"absence must not erase the orphan tombstone")
+			_, err = a.Valid(serviceID, []byte("new"), nil)
+			require.NoError(t, err)
+			a.FinishCommit(serviceID, []byte("new"))
+		}
+	})
+}
+
+func TestAbsentActiveTxnOwnerPreservesExistingFence(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		const serviceID = "already-fenced"
+		ctl := a.getCtl(serviceID)
+		require.Equal(t, cannotCommitState, ctl.tryCannotCommit("orphan"))
+		a.AddInvalidService(serviceID)
+
+		a.cleanCommitStateOnce(context.Background(), func(context.Context, string) (bool, [][]byte, error) {
+			return false, nil, errActiveTxnOwnerAbsent
+		}, time.Hour)
+
+		require.True(t, a.HasInvalidService(serviceID),
+			"an unknown observation must not clear an existing fence")
+		_, err := a.Valid(serviceID, []byte("new"), nil)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
+	})
+}
+
+func TestAbsentActiveTxnOwnerCleanupOnlyStateExpires(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		const serviceID = "never-published-owner"
+		ctl := a.getCtl(serviceID)
+		require.Equal(t, cannotCommitState, ctl.tryCannotCommit("orphan"))
+		probe := func(context.Context, string) (bool, [][]byte, error) {
+			return false, nil, errActiveTxnOwnerAbsent
+		}
+
+		// The first absent observation starts a cleanup-only retention window. It
+		// must not fence admission, and it is not eligible for same-sweep expiry.
+		a.cleanCommitStateOnce(context.Background(), probe, time.Hour)
+		require.False(t, a.HasInvalidService(serviceID))
+		_, exists := a.ownerAbsentSince.Load(serviceID)
+		require.True(t, exists)
+
+		// Backdate the marker created by the real absent transition instead of
+		// relying on a sub-microsecond sleep to cross the retention boundary.
+		a.inactiveMu.Lock()
+		a.ownerAbsentSince.Store(serviceID, time.Now().Add(-2*time.Hour))
+		a.inactiveMu.Unlock()
+		// The following sweep may reap the controller once the bounded retention
+		// has elapsed, even though no allocator bind was ever published.
+		a.cleanCommitStateOnce(context.Background(), probe, time.Hour)
+		_, exists = a.ctl.Load(serviceID)
+		require.False(t, exists)
+		_, exists = a.ownerAbsentSince.Load(serviceID)
+		require.False(t, exists)
+	})
+}
+
+type resumeDuringValidationClient struct {
+	Client
+	allocator *lockTableAllocator
+	serviceID string
+}
+
+func (c *resumeDuringValidationClient) Send(
+	context.Context,
+	*pb.Request,
+) (*pb.Response, error) {
+	resp := acquireResponse()
+	resp.ValidateService.OK = false
+	return resp, nil
+}
+
+func (c *resumeDuringValidationClient) ResetValidationBackend(
+	context.Context,
+	string,
+) error {
+	c.allocator.resumeService(c.serviceID)
+	return nil
+}
+
+func (c *resumeDuringValidationClient) Close() error { return nil }
+
+func TestTimeoutRetirementCannotRefenceAfterResume(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		const serviceID = "resume-during-retirement"
+		const tableID = uint64(1)
+		a.Get(serviceID, 0, tableID, 0, pb.Sharding_None)
+		binds := a.getServiceBinds(serviceID)
+		ctl := a.getCtl(serviceID)
+		ctl.tryCannotCommit("orphan")
+		binds.Lock()
+		binds.lastKeepaliveTime = time.Now().Add(-3 * time.Hour)
+		binds.Unlock()
+
+		client := &resumeDuringValidationClient{allocator: a, serviceID: serviceID}
+		require.NoError(t, a.client.Close())
+		a.client = client
+		timeoutBinds := a.getTimeoutBinds(time.Now())
+		require.Len(t, timeoutBinds, 1)
+		require.Same(t, ctl, timeoutBinds[0].ctl)
+		require.True(t, a.validateTimeoutBinds(context.Background(), timeoutBinds))
+		require.Same(t, binds, a.getServiceBinds(serviceID),
+			"a stale timeout result must not remove a resumed bind")
+		require.False(t, binds.disabled)
+		require.False(t, a.HasInvalidService(serviceID),
+			"a stale timeout result must not re-fence a resumed owner")
+	})
+}
+
+func TestTimeoutRetirementRejectsNewControllerEvidence(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		prepare := func(serviceID string, tableID uint64, createCtl, saturateEpoch bool) (timedOutServiceBinds, *serviceBinds) {
+			a.Get(serviceID, 0, tableID, 0, pb.Sharding_None)
+			var ctl *commitCtl
+			if createCtl {
+				ctl = a.getCtl(serviceID)
+				if saturateEpoch {
+					ctl.mu.Lock()
+					ctl.recoveryEpoch = ^uint64(0)
+					ctl.mu.Unlock()
+				}
+			}
+			binds := a.getServiceBinds(serviceID)
+			binds.Lock()
+			binds.lastKeepaliveTime = time.Now().Add(-3 * time.Hour)
+			binds.Unlock()
+			timeoutBinds := a.getTimeoutBinds(time.Now())
+			for _, timeoutBind := range timeoutBinds {
+				if timeoutBind.binds == binds {
+					return timeoutBind, binds
+				}
+			}
+			t.Fatalf("timed-out bind %q was not captured", serviceID)
+			return timedOutServiceBinds{}, binds
+		}
+
+		t.Run("controller-created-after-snapshot", func(t *testing.T) {
+			timedOut, binds := prepare("controller-created-after-snapshot", 1, false, false)
+			require.Nil(t, timedOut.ctl)
+			a.getCtl(binds.serviceID)
+			require.False(t, a.disableTableBindsAtGeneration(
+				binds, timedOut.keepaliveGeneration, timedOut.ctl, timedOut.recoveryEpoch))
+			require.Same(t, binds, a.getServiceBinds(binds.serviceID))
+			require.False(t, a.HasInvalidService(binds.serviceID))
+		})
+
+		t.Run("controller-replaced-after-snapshot", func(t *testing.T) {
+			timedOut, binds := prepare("controller-replaced-after-snapshot", 2, true, false)
+			oldCtl := timedOut.ctl
+			require.NotNil(t, oldCtl)
+			a.ctlMu.Lock()
+			a.ctl.Delete(binds.serviceID)
+			a.getCtl(binds.serviceID)
+			a.ctlMu.Unlock()
+			require.False(t, a.disableTableBindsAtGeneration(
+				binds, timedOut.keepaliveGeneration, oldCtl, timedOut.recoveryEpoch))
+			require.Same(t, binds, a.getServiceBinds(binds.serviceID))
+			require.False(t, a.HasInvalidService(binds.serviceID))
+		})
+
+		t.Run("recovery-epoch-saturated", func(t *testing.T) {
+			timedOut, binds := prepare("recovery-epoch-saturated", 3, true, true)
+			ctl := timedOut.ctl
+			require.NotNil(t, ctl)
+			require.Equal(t, ^uint64(0), timedOut.recoveryEpoch)
+			require.False(t, a.disableTableBindsAtGeneration(
+				binds, timedOut.keepaliveGeneration, timedOut.ctl, timedOut.recoveryEpoch))
+			require.Same(t, binds, a.getServiceBinds(binds.serviceID))
+			require.False(t, a.HasInvalidService(binds.serviceID))
+		})
+	})
+}
+
+func TestDisableTableBindsAtGenerationFencesRetiredOwner(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		for _, serviceID := range []string{"retired-pending", "retired-live"} {
+			a.Get(serviceID, 0, 1, 0, pb.Sharding_None)
+			binds := a.getServiceBinds(serviceID)
+			if serviceID == "retired-live" {
+				require.True(t, a.KeepLockTableBind(serviceID))
+			}
+			ctl := a.getCtl(serviceID)
+			require.Equal(t, cannotCommitState, ctl.tryCannotCommit("orphan"))
+			generation, timedOut := binds.timeoutSnapshot(time.Now(), 0)
+			require.True(t, timedOut)
+
+			require.True(t, a.disableTableBindsAtGeneration(
+				binds, generation, ctl, ctl.currentRecoveryEpoch()))
+			require.True(t, a.HasInvalidService(serviceID),
+				"validated bind retirement must fence every bind generation")
+			require.Nil(t, a.getServiceBinds(serviceID))
+			_, err := a.Valid(serviceID, []byte("late"), nil)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrCannotCommitOnInvalidCN))
+
+			a.resumeService(serviceID)
+			_, err = a.Valid(serviceID, []byte("new"), nil)
+			require.NoError(t, err)
+			a.FinishCommit(serviceID, []byte("new"))
+		}
+	})
 }
 
 func TestCleanCommitStateExpiryPreservesFreshRecoveryEpoch(t *testing.T) {
