@@ -6041,8 +6041,7 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 
 	// First argument (bits) must be numeric. MySQL treats BOOLEAN as the
 	// integer values 0 and 1 for this argument.
-	isNumeric := inputs[0].Oid == types.T_bool || inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() ||
-		inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_bit
+	isNumeric := inputs[0].Oid == types.T_bool || inputs[0].IsNumeric() || inputs[0].Oid == types.T_bit
 	if !isNumeric && inputs[0].Oid != types.T_any {
 		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
 		if c == matchFailed {
@@ -6158,10 +6157,22 @@ func writeExportSetResult(dst []byte, bitsValue uint64, on, off, separator []byt
 	}
 }
 
+func exportSetDecimal256ToBits(value types.Decimal256, scale int32) (uint64, error) {
+	rounded, err := decimalInt64Explicit(decimal256RoundedIntegerString(value, scale))
+	return uint64(rounded), err
+}
+
 // exportSetFloatToBits follows MySQL's approximate-number val_int conversion:
-// round to the nearest integer with ties to even, then inspect its signed bit pattern.
-func exportSetFloatToBits(value float64) uint64 {
-	return uint64(int64(math.RoundToEven(value)))
+// round to the nearest integer with ties to even, reject values outside signed
+// BIGINT, then inspect the signed bit pattern.
+func exportSetFloatToBits(value float64) (uint64, error) {
+	rounded := math.RoundToEven(value)
+	if math.IsNaN(rounded) || math.IsInf(rounded, 0) ||
+		rounded < -math.Exp2(63) || rounded >= math.Exp2(63) {
+		return 0, moerr.NewOutOfRangeNoCtxf(
+			"int64", "value '%s'", strconv.FormatFloat(value, 'g', -1, 64))
+	}
+	return uint64(int64(rounded)), nil
 }
 
 // ExportSet: EXPORT_SET(bits, on, off[, separator[, number_of_bits]]) - Returns a string such that for every bit set in the value bits, you get an on string and for every bit not set, you get an off string.
@@ -6175,6 +6186,7 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 
 	// Create appropriate parameter wrapper based on type (once, outside loop)
 	var getBitsValue func(uint64) (uint64, bool)
+	var getBitsValueWithError func(uint64) (uint64, bool, error)
 	switch bitsType {
 	case types.T_int8:
 		param := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
@@ -6262,21 +6274,23 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		}
 	case types.T_float32:
 		param := vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
+		getBitsValueWithError = func(i uint64) (uint64, bool, error) {
 			val, null := param.GetValue(i)
 			if null {
-				return 0, true
+				return 0, true, nil
 			}
-			return exportSetFloatToBits(float64(val)), false
+			bits, err := exportSetFloatToBits(float64(val))
+			return bits, false, err
 		}
 	case types.T_float64:
 		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
+		getBitsValueWithError = func(i uint64) (uint64, bool, error) {
 			val, null := param.GetValue(i)
 			if null {
-				return 0, true
+				return 0, true, nil
 			}
-			return exportSetFloatToBits(val), false
+			bits, err := exportSetFloatToBits(val)
+			return bits, false, err
 		}
 	case types.T_decimal64:
 		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0])
@@ -6297,6 +6311,17 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				return 0, true
 			}
 			return setDecimalToBits(val, scale), false
+		}
+	case types.T_decimal256:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValueWithError = func(i uint64) (uint64, bool, error) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true, nil
+			}
+			bits, err := exportSetDecimal256ToBits(val, scale)
+			return bits, false, err
 		}
 	default:
 		// Fallback to int64
@@ -6338,8 +6363,16 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			continue
 		}
 
-		// Extract bits value using the appropriate getter
-		bitsUint, nullBits = getBitsValue(i)
+		// Extract bits value using the appropriate getter.
+		if getBitsValueWithError != nil {
+			var err error
+			bitsUint, nullBits, err = getBitsValueWithError(i)
+			if err != nil {
+				return err
+			}
+		} else {
+			bitsUint, nullBits = getBitsValue(i)
+		}
 
 		if nullBits {
 			if err := rs.AppendBytes(nil, true); err != nil {

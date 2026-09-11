@@ -1942,7 +1942,22 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// The prepare-time implicit cast is provisional. Materialize the
 				// execute-time numeric domain before descending into that cast;
 				// evaluating it first can discard DECIMAL, FLOAT, or BOOLEAN semantics.
-				rewrittenArg = &plan.Expr{Typ: executeNumericSource.Typ, Expr: executeNumericSource.Expr}
+				if functionName == "export_set" {
+					castFn := arg.GetF()
+					if castFn != nil && len(castFn.Args) > 0 {
+						castSource := castFn.Args[0]
+						if castSource.GetCol() != nil && castSource.GetPreparedNumeric().GetFallbackSource() {
+							// Keep the flattened scalar-subquery column reference. Replacing it
+							// with the parameter literal would bypass FROM/LIMIT and empty-row
+							// semantics; its marked source projection is rebound separately.
+							rewrittenArg = DeepCopyExpr(castSource)
+							rewrittenArg.Typ = executeNumericSource.Typ
+						}
+					}
+				}
+				if rewrittenArg == nil {
+					rewrittenArg = &plan.Expr{Typ: executeNumericSource.Typ, Expr: executeNumericSource.Expr}
+				}
 			} else {
 				var applyErr error
 				disablePrefix := sharedControlParam && paramPos >= 0 &&
@@ -2295,6 +2310,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		param := rule.params[position]
 		if param == nil {
 			return e, nil
+		}
+		if e.GetPreparedNumeric().GetFallback() && position < len(rule.sqlExecuteNumericParams) &&
+			rule.sqlExecuteNumericParams[position] != nil && position < len(rule.sqlExecuteStringBackedParams) &&
+			!rule.sqlExecuteStringBackedParams[position] {
+			source := rule.sqlExecuteNumericParams[position]
+			rule.specialized = true
+			return &plan.Expr{Typ: source.Typ, Expr: source.Expr}, nil
 		}
 		if rule.numericComparisonTextParamPositions[position] &&
 			param.Typ.Id == int32(types.T_text) && param.GetLit() != nil {
@@ -3337,11 +3359,14 @@ func preparedResultParamPosition(expr *plan.Expr, name string) (int, bool) {
 	if !preparedSQLExecuteNumericResultConsumer(name) && name != "export_set" {
 		return 0, false
 	}
-	param := fn.Args[0].GetP()
-	if param == nil || param.Pos < 0 {
-		return 0, false
+	if param := fn.Args[0].GetP(); param != nil && param.Pos >= 0 {
+		return int(param.Pos), true
 	}
-	return int(param.Pos), true
+	metadata := fn.Args[0].GetPreparedNumeric()
+	if fn.Args[0].GetCol() != nil && metadata.GetFallbackSource() && metadata.GetParamPos() >= 0 {
+		return int(metadata.GetParamPos()), true
+	}
+	return 0, false
 }
 
 // isImplicitPreparedParamCast identifies the cast inserted by overload

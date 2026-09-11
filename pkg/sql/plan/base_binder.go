@@ -3533,6 +3533,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
+	if b.builder != nil && b.builder.isPrepareStatement && name == "export_set" && len(args) > 0 &&
+		!preparedExprContainsParam(args[0]) {
+		_, explicitCast := unwrapParenExpr(astArgs[0]).(*tree.CastExpr)
+		if !explicitCast && !containsExplicitFloatCast(astArgs[0]) {
+			if _, found := b.firstPreparedParamPosition(args[0], make(map[int32]struct{})); found {
+				b.markPreparedNumericFallback(args[0])
+			}
+		}
+	}
 	preparedNumericPeer := false
 	preparedNumericProvenance := false
 	if b.builder != nil && b.builder.isPrepareStatement &&

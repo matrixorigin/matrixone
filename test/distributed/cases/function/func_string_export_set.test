@@ -73,6 +73,13 @@ SELECT EXPORT_SET(CAST(2.5 AS DOUBLE), 'Y', 'N', '', 4) AS double_even_integer_h
 SELECT EXPORT_SET(CAST(-2.5 AS DOUBLE), 'Y', 'N', '', 4) AS double_negative_half;
 SELECT EXPORT_SET(TRUE, 'Y', 'N', '', 4) AS boolean_true;
 SELECT EXPORT_SET(FALSE, 'Y', 'N', '', 4) AS boolean_false;
+SELECT EXPORT_SET(CAST(2.5 AS DECIMAL(65,1)), 'Y', 'N', '', 4) AS decimal256_half;
+SELECT EXPORT_SET(CAST(9223372036854775808.5 AS DECIMAL(65,1)), 'Y', 'N', '', 4) AS decimal256_positive_saturation;
+SELECT EXPORT_SET(CAST(-9223372036854775809.5 AS DECIMAL(65,1)), 'Y', 'N', '', 4) AS decimal256_negative_saturation;
+SELECT EXPORT_SET(CAST('NaN' AS DOUBLE), 'Y', 'N', '', 4) AS invalid_nan;
+SELECT EXPORT_SET(CAST('Inf' AS DOUBLE), 'Y', 'N', '', 4) AS invalid_infinity;
+SELECT EXPORT_SET(CAST(1e20 AS DOUBLE), 'Y', 'N', '', 4) AS invalid_positive_range;
+SELECT EXPORT_SET(CAST(-1e20 AS DOUBLE), 'Y', 'N', '', 4) AS invalid_negative_range;
 
 DROP TABLE IF EXISTS export_set_numeric_bits;
 CREATE TABLE export_set_numeric_bits(
@@ -127,6 +134,22 @@ EXECUTE export_set_scalar_numeric_stmt USING @export_set_bits;
 SET @export_set_bits = TRUE;
 EXECUTE export_set_scalar_numeric_stmt USING @export_set_bits;
 DEALLOCATE PREPARE export_set_scalar_numeric_stmt;
+
+DROP TABLE IF EXISTS export_set_scalar_input;
+CREATE TABLE export_set_scalar_input(id INT);
+INSERT INTO export_set_scalar_input VALUES (1);
+PREPARE export_set_scalar_input_stmt FROM
+  "SELECT EXPORT_SET((SELECT ? FROM export_set_scalar_input LIMIT 1), 'Y', 'N', '', 4) AS prepared_scalar_input_bits";
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_scalar_input_stmt USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_scalar_input_stmt USING @export_set_bits;
+SET @export_set_bits = TRUE;
+EXECUTE export_set_scalar_input_stmt USING @export_set_bits;
+TRUNCATE TABLE export_set_scalar_input;
+EXECUTE export_set_scalar_input_stmt USING @export_set_bits;
+DEALLOCATE PREPARE export_set_scalar_input_stmt;
+DROP TABLE export_set_scalar_input;
 
 DROP TABLE export_set_numeric_bits;
 

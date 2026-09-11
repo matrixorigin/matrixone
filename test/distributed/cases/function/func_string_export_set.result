@@ -136,6 +136,23 @@ YNNN
 SELECT EXPORT_SET(FALSE, 'Y', 'N', '', 4) AS boolean_false;
 ➤ boolean_false[12,64,0]  𝄀
 NNNN
+SELECT EXPORT_SET(CAST(2.5 AS DECIMAL(65,1)), 'Y', 'N', '', 4) AS decimal256_half;
+➤ decimal256_half[12,64,0]  𝄀
+YYNN
+SELECT EXPORT_SET(CAST(9223372036854775808.5 AS DECIMAL(65,1)), 'Y', 'N', '', 4) AS decimal256_positive_saturation;
+➤ decimal256_positive_saturation[12,64,0]  𝄀
+YYYY
+SELECT EXPORT_SET(CAST(-9223372036854775809.5 AS DECIMAL(65,1)), 'Y', 'N', '', 4) AS decimal256_negative_saturation;
+➤ decimal256_negative_saturation[12,64,0]  𝄀
+NNNN
+SELECT EXPORT_SET(CAST('NaN' AS DOUBLE), 'Y', 'N', '', 4) AS invalid_nan;
+Data truncation: data out of range: data type int64, value 'NaN'
+SELECT EXPORT_SET(CAST('Inf' AS DOUBLE), 'Y', 'N', '', 4) AS invalid_infinity;
+Data truncation: data out of range: data type int64, value '+Inf'
+SELECT EXPORT_SET(CAST(1e20 AS DOUBLE), 'Y', 'N', '', 4) AS invalid_positive_range;
+Data truncation: data out of range: data type int64, value '1e+20'
+SELECT EXPORT_SET(CAST(-1e20 AS DOUBLE), 'Y', 'N', '', 4) AS invalid_negative_range;
+Data truncation: data out of range: data type int64, value '-1e+20'
 DROP TABLE IF EXISTS export_set_numeric_bits;
 CREATE TABLE export_set_numeric_bits(
 id INT PRIMARY KEY,
@@ -216,4 +233,27 @@ EXECUTE export_set_scalar_numeric_stmt USING @export_set_bits;
 ➤ prepared_scalar_bits[12,64,0]  𝄀
 YNNN
 DEALLOCATE PREPARE export_set_scalar_numeric_stmt;
+DROP TABLE IF EXISTS export_set_scalar_input;
+CREATE TABLE export_set_scalar_input(id INT);
+INSERT INTO export_set_scalar_input VALUES (1);
+PREPARE export_set_scalar_input_stmt FROM
+"SELECT EXPORT_SET((SELECT ? FROM export_set_scalar_input LIMIT 1), 'Y', 'N', '', 4) AS prepared_scalar_input_bits";
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_scalar_input_stmt USING @export_set_bits;
+➤ prepared_scalar_input_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_scalar_input_stmt USING @export_set_bits;
+➤ prepared_scalar_input_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = TRUE;
+EXECUTE export_set_scalar_input_stmt USING @export_set_bits;
+➤ prepared_scalar_input_bits[12,64,0]  𝄀
+YNNN
+TRUNCATE TABLE export_set_scalar_input;
+EXECUTE export_set_scalar_input_stmt USING @export_set_bits;
+➤ prepared_scalar_input_bits[12,64,0]  𝄀
+null
+DEALLOCATE PREPARE export_set_scalar_input_stmt;
+DROP TABLE export_set_scalar_input;
 DROP TABLE export_set_numeric_bits;
