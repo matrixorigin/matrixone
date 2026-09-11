@@ -2020,7 +2020,7 @@ func supportsGenericNumericFunctionContext(name string) bool {
 	// result. A numeric return type alone is insufficient: FIELD, LENGTH and
 	// similar functions return numbers while their arguments belong to another
 	// domain.
-	case "abs", "ceil", "ceiling", "floor", "round", "truncate",
+	case "abs", "ceil", "ceiling", "floor", "round", "truncate", "sign",
 		"sqrt", "power", "pow", "exp", "ln", "log", "log2", "log10":
 		return true
 	default:
