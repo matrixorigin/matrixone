@@ -30,8 +30,8 @@ import (
 )
 
 func TestPayloadFieldIteratorAndErrors(t *testing.T) {
-	payload := appendPayloadField(nil, []byte("alpha"), false)
-	payload = appendPayloadField(payload, nil, true)
+	payload := mustAppendPayloadField(t, nil, []byte("alpha"), false)
+	payload = mustAppendPayloadField(t, payload, nil, true)
 
 	var seen []string
 	err := payloadFieldIterator(payload, 2, func(i int, isNull bool, data []byte) error {
@@ -60,7 +60,7 @@ func TestPayloadFieldIteratorAndErrors(t *testing.T) {
 		{name: "invalid-null-flag", payload: []byte{2}, errMsg: "invalid null flag"},
 		{name: "truncated-size", payload: []byte{1}, errMsg: "truncated size"},
 		{name: "truncated-field-bytes", payload: append([]byte{1}, []byte{4, 0, 0, 0, 'x'}...), errMsg: "truncated field bytes"},
-		{name: "trailing-bytes", payload: append(appendPayloadField(nil, []byte("x"), false), 'z'), errMsg: "trailing bytes"},
+		{name: "trailing-bytes", payload: append(mustAppendPayloadField(t, nil, []byte("x"), false), 'z'), errMsg: "trailing bytes"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,6 +71,11 @@ func TestPayloadFieldIteratorAndErrors(t *testing.T) {
 			require.Contains(t, err.Error(), tc.errMsg)
 		})
 	}
+}
+
+func TestPayloadFieldLengthUsesUint32Domain(t *testing.T) {
+	require.NoError(t, validatePayloadFieldLength(math.MaxUint32))
+	require.Error(t, validatePayloadFieldLength(uint64(math.MaxUint32)+1))
 }
 
 func TestEncodeGroupConcatPayloadAndFieldBytes(t *testing.T) {
@@ -211,7 +216,9 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 		{name: "rowid", typ: types.T_Rowid.ToType(), data: rowidVal[:], want: rowidVal.String()},
 		{name: "blockid", typ: types.T_Blockid.ToType(), data: blockidVal[:], want: fmt.Sprint(blockidVal)},
 		{name: "short-fixed-payload", typ: types.T_int64.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
-		{name: "too-long", typ: types.T_text.ToType(), data: make([]byte, math.MaxUint16+1), wantErr: "too long"},
+		{name: "text-65535", typ: types.T_text.ToType(), data: make([]byte, math.MaxUint16), want: string(make([]byte, math.MaxUint16))},
+		{name: "text-65536", typ: types.T_text.ToType(), data: make([]byte, math.MaxUint16+1), want: string(make([]byte, math.MaxUint16+1))},
+		{name: "text-70000", typ: types.T_text.ToType(), data: make([]byte, 70000), want: string(make([]byte, 70000))},
 		{name: "large-geometry", typ: types.T_geometry.ToType(), data: largeGeometryVal, want: string(largeGeometryVal)},
 		{name: "short-decimal256-payload", typ: types.T_decimal256.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
 		{name: "short-year-payload", typ: types.T_year.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
@@ -245,4 +252,11 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 
 func ptr[T any](v T) *T {
 	return &v
+}
+
+func mustAppendPayloadField(t *testing.T, dst, data []byte, isNull bool) []byte {
+	t.Helper()
+	payload, err := appendPayloadField(dst, data, isNull)
+	require.NoError(t, err)
+	return payload
 }

@@ -316,13 +316,6 @@ func (exec *groupConcatExec) PreAllocateGroups(more int) error {
 	return exec.aggExec.PreAllocateGroups(more)
 }
 
-func isValidGroupConcatUnit(value []byte) error {
-	if len(value) > math.MaxUint16 {
-		return moerr.NewInternalErrorNoCtx("group_concat: the length of the value is too long")
-	}
-	return nil
-}
-
 func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
 	return exec.BatchFill(row, []uint64{uint64(groupIndex + 1)}, vectors)
 }

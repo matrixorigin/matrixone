@@ -24,14 +24,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func appendPayloadField(dst []byte, data []byte, isNull bool) []byte {
+func appendPayloadField(dst []byte, data []byte, isNull bool) ([]byte, error) {
 	if isNull {
-		return append(dst, 0)
+		return append(dst, 0), nil
+	}
+	if err := validatePayloadFieldLength(uint64(len(data))); err != nil {
+		return nil, err
 	}
 	dst = append(dst, 1)
 	sz := uint32(len(data))
 	dst = append(dst, types.EncodeUint32(&sz)...)
-	return append(dst, data...)
+	return append(dst, data...), nil
+}
+
+func validatePayloadFieldLength(length uint64) error {
+	if length > uint64(^uint32(0)) {
+		return moerr.NewInvalidInputNoCtx(
+			"aggregate payload field exceeds uint32 encoding limit")
+	}
+	return nil
 }
 
 func payloadFieldIterator(payload []byte, fieldCount int, fn func(i int, isNull bool, data []byte) error) error {
@@ -80,7 +91,11 @@ func encodeGroupConcatPayload(vectors []*vector.Vector, row int, argTypes []type
 		if vec.IsNull(uint64(r)) {
 			return nil, nil
 		}
-		payload = appendPayloadField(payload, groupConcatFieldBytes(vec, r, argTypes[i]), false)
+		var err error
+		payload, err = appendPayloadField(payload, groupConcatFieldBytes(vec, r, argTypes[i]), false)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return payload, nil
 }
@@ -97,10 +112,18 @@ func encodeGroupConcatPayloadWithNulls(
 			r = 0
 		}
 		if vec.IsNull(uint64(r)) {
-			payload = appendPayloadField(payload, nil, true)
+			var err error
+			payload, err = appendPayloadField(payload, nil, true)
+			if err != nil {
+				return nil, err
+			}
 			continue
 		}
-		payload = appendPayloadField(payload, groupConcatFieldBytes(vec, r, argTypes[i]), false)
+		var err error
+		payload, err = appendPayloadField(payload, groupConcatFieldBytes(vec, r, argTypes[i]), false)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return payload, nil
 }
@@ -208,16 +231,10 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 	case types.T_blob, types.T_text, types.T_datalink, types.T_varbinary, types.T_binary,
 		types.T_char, types.T_varchar, types.T_enum, types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
-		if err := isValidGroupConcatUnit(data); err != nil {
-			return err
-		}
 		return writeBytes(data)
 	case types.T_geometry, types.T_geometry32:
 		return writeBytes(data)
 	case types.T_json:
-		if err := isValidGroupConcatUnit(data); err != nil {
-			return err
-		}
 		return writeValue(types.DecodeJson(data).String())
 	case types.T_interval:
 		return writeValue(*util.UnsafeFromBytes[types.IntervalType](data))

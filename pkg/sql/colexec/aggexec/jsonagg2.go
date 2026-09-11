@@ -133,7 +133,10 @@ func (exec *jsonArrayAggExec) BatchFill(offset int, groups []uint64, vectors []*
 		if err != nil {
 			return err
 		}
-		payload := appendPayloadField(nil, bs, false)
+		payload, err := appendPayloadField(nil, bs, false)
+		if err != nil {
+			return err
+		}
 		x, y := exec.getXY(grp - 1)
 		if err := exec.state[x].fillArg(exec.mp, y, payload, false); err != nil {
 			return err
@@ -341,8 +344,14 @@ func (exec *jsonObjectAggExec) BatchFill(offset int, groups []uint64, vectors []
 		if err != nil {
 			return err
 		}
-		payload := appendPayloadField(nil, []byte(key), false)
-		payload = appendPayloadField(payload, valBytes, false)
+		payload, err := appendPayloadField(nil, []byte(key), false)
+		if err != nil {
+			return err
+		}
+		payload, err = appendPayloadField(payload, valBytes, false)
+		if err != nil {
+			return err
+		}
 		x, y := exec.getXY(grp - 1)
 		if err := exec.state[x].fillArg(exec.mp, y, payload, false); err != nil {
 			return err

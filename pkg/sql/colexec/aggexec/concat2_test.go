@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -465,8 +466,8 @@ func TestGroupConcatSpillCompactsFanIn(t *testing.T) {
 	for i := range want {
 		want[i] = fmt.Sprintf("%02d", i)
 		entry := groupConcatOrderedEntry{
-			concatPayload: appendPayloadField(nil, []byte(want[i]), false),
-			orderPayload:  appendPayloadField(nil, []byte(want[i]), false),
+			concatPayload: mustAppendPayloadField(t, nil, []byte(want[i]), false),
+			orderPayload:  mustAppendPayloadField(t, nil, []byte(want[i]), false),
 		}
 		require.NoError(t, exec.writeOrderedRun(context.Background(), 0, []groupConcatOrderedEntry{entry}))
 	}
@@ -658,7 +659,7 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 			require.NoError(t, exec.GroupGrow(1))
 			require.NoError(t, exec.SetExtraInformation(
 				EncodeGroupConcatConfig("", 20), 0))
-			payload := appendPayloadField(nil, tc.wkb, false)
+			payload := mustAppendPayloadField(t, nil, tc.wkb, false)
 			scratch, truncated, err := exec.(*groupConcatExec).appendConcatPayload(
 				make([]byte, 0, 64), payload)
 			require.NoError(t, err)
@@ -784,6 +785,48 @@ func TestGroupConcatLargeGeometryAcrossFinalizers(t *testing.T) {
 			require.Zero(t, mp.CurrNB())
 		})
 	}
+}
+
+func TestGroupConcatLargeTextAcrossOrderedSpill(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	input := bytes.Repeat([]byte("x"), 70000)
+	exec := newGroupConcatExec(mp, multiAggInfo{
+		aggID:     AggIdOfGroupConcat,
+		argTypes:  []types.Type{types.T_text.ToType(), types.T_int64.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_text.ToType()}),
+		emptyNull: true,
+	}, "").(*groupConcatExec)
+	defer exec.Free()
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ""), 0))
+	exec.maxLen = uint64(len(input))
+	require.NoError(t, exec.GroupGrow(1))
+	ConfigureGroupConcatH0Spill(
+		exec, groupConcatMinRunSize, context.Background(),
+		func() (*os.File, error) {
+			file, err := os.CreateTemp(t.TempDir(), "group-concat-large-text-")
+			if err == nil {
+				err = os.Remove(file.Name())
+			}
+			return file, err
+		}, nil)
+
+	values := vector.NewVec(types.T_text.ToType())
+	defer values.Free(mp)
+	require.NoError(t, vector.AppendBytes(values, input, false, mp))
+	order := vector.NewVec(types.T_int64.ToType())
+	defer order.Free(mp)
+	require.NoError(t, vector.AppendFixed(order, int64(1), false, mp))
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values, order}))
+	require.True(t, exec.hasOrderedSpillRuns())
+
+	result, err := exec.FlushWithContext(context.Background())
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	defer result[0].Free(mp)
+	require.Equal(t, input, result[0].GetBytesAt(0))
 }
 
 func TestGroupConcatMaxLenPreservesOpaqueBinaryCharset(t *testing.T) {
@@ -1621,7 +1664,7 @@ func TestGroupConcatOrderedPayloadValidation(t *testing.T) {
 		require.Error(t, err)
 		require.Zero(t, mp.CurrNB())
 
-		badFixedField := appendPayloadField(nil, []byte{1}, false)
+		badFixedField := mustAppendPayloadField(t, nil, []byte{1}, false)
 		entries[0].orderPayload = badFixedField
 		_, err = exec.restoreOrderVectors(context.Background(), entries)
 		require.Error(t, err)
