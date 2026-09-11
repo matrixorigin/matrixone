@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnexecutor
+package sqlintegration
 
 import (
 	"context"
@@ -27,7 +27,7 @@ import (
 
 func Test_TxnExecutorExec(t *testing.T) {
 	// Reuse the single-CN fixture used by TestPreparedParams; this case only reads the catalog.
-	embed.RunSingleCNBaseClusterTests(t, func(c embed.Cluster) {
+	runSQLIntegration(t, func(c embed.Cluster) {
 		svc, err := c.GetCNService(0)
 		require.NoError(t, err)
 
@@ -38,8 +38,9 @@ func Test_TxnExecutorExec(t *testing.T) {
 		defer cancel()
 
 		err = exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-			_, err = txn.Exec("select count(*) from mo_catalog.mo_tables", executor.StatementOption{}.WithAccountID(1).WithUserID(2).WithRoleID(2))
-			require.NoError(t, err)
+			result, queryErr := txn.Exec("select count(*) from mo_catalog.mo_tables", executor.StatementOption{}.WithAccountID(1).WithUserID(2).WithRoleID(2))
+			require.NoError(t, queryErr)
+			result.Close()
 			return nil
 		}, executor.Options{}.WithWaitCommittedLogApplied())
 		require.NoError(t, err)
@@ -47,7 +48,7 @@ func Test_TxnExecutorExec(t *testing.T) {
 }
 
 func TestPreparedParams(t *testing.T) {
-	embed.RunSingleCNBaseClusterTests(t,
+	runSQLIntegration(t,
 		func(c embed.Cluster) {
 			cn, err := c.GetCNService(0)
 			require.NoError(t, err)
@@ -56,11 +57,12 @@ func TestPreparedParams(t *testing.T) {
 			require.NotNil(t, exec)
 
 			db := testutils.GetDatabaseName(t)
+			defer cleanupSQLIntegration(t, cn, "drop database if exists "+db)
 			testutils.CreateTestDatabase(t, db, cn)
 
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute*5)
 			defer cancel()
-			exec.ExecTxn(
+			err = exec.ExecTxn(
 				ctx,
 				func(txn executor.TxnExecutor) error {
 					txn.Use(db)
@@ -88,6 +90,8 @@ func TestPreparedParams(t *testing.T) {
 				},
 				executor.Options{},
 			)
+
+			require.NoError(t, err)
 
 			_, err = exec.Exec(
 				ctx,
