@@ -131,3 +131,24 @@ func TestNoUnsignedSubtractionModeRequiresExactToken(t *testing.T) {
 	require.False(t, sqlModeContainsToken(
 		"NOT_NO_UNSIGNED_SUBTRACTION", "NO_UNSIGNED_SUBTRACTION"))
 }
+
+func TestNoUnsignedSubtractionUsesLiveModeAndRemoteSnapshot(t *testing.T) {
+	frontend := testutil.NewProcess(t)
+	defer frontend.Free()
+	frontend.Base.IsFrontend = true
+	frontend.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES"
+	frontend.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "NO_UNSIGNED_SUBTRACTION", nil
+	})
+	enabled, err := resolveSQLModeToken(frontend, "NO_UNSIGNED_SUBTRACTION")
+	require.NoError(t, err)
+	require.True(t, enabled)
+
+	remote := testutil.NewProcess(t)
+	defer remote.Free()
+	remote.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES,NO_UNSIGNED_SUBTRACTION"
+	remote.SetResolveVariableFunc(nil)
+	enabled, err = resolveSQLModeToken(remote, "NO_UNSIGNED_SUBTRACTION")
+	require.NoError(t, err)
+	require.True(t, enabled)
+}

@@ -395,9 +395,14 @@ func mixedUnsignedMinusFn(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
+	noUnsignedSubtraction, err := resolveSQLModeToken(
+		proc, "NO_UNSIGNED_SUBTRACTION")
+	if err != nil {
+		return err
+	}
 	return mixedUnsignedDecimalArith(
 		parameters, result, proc, length, selectList, "-", d128Sub,
-		!sqlModeContainsToken(proc.Base.SessionInfo.SqlMode, "NO_UNSIGNED_SUBTRACTION"))
+		!noUnsignedSubtraction)
 }
 
 func multiFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -536,6 +541,27 @@ func sqlModeContainsToken(mode, wanted string) bool {
 		}
 	}
 	return false
+}
+
+func resolveSQLModeToken(proc *process.Process, wanted string) (bool, error) {
+	if proc == nil {
+		return false, nil
+	}
+	if resolve := proc.GetResolveVariableFunc(); resolve != nil {
+		mode, err := resolve("sql_mode", true, false)
+		if err != nil {
+			return false, err
+		}
+		if value, ok := mode.(string); ok {
+			if value != "" || proc.Base == nil || proc.Base.IsFrontend {
+				return sqlModeContainsToken(value, wanted), nil
+			}
+		}
+	}
+	if proc.Base == nil {
+		return false, nil
+	}
+	return sqlModeContainsToken(proc.Base.SessionInfo.SqlMode, wanted), nil
 }
 
 func divFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
