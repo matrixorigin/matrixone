@@ -472,13 +472,16 @@ func (e *inputBatchWireEncoder) close() error {
 	if e == nil || e.closed {
 		return nil
 	}
-	e.closed = true
 	if e.writer == nil {
+		e.closed = true
 		return nil
 	}
 	if err := e.writer.Close(); err != nil {
 		return fmt.Errorf("close Arrow record batch encoder: %w", err)
 	}
+	// Commit the closed state only after the writer has released its resources.
+	// A failed close remains retryable for the owning invocation cleanup path.
+	e.closed = true
 	return nil
 }
 
