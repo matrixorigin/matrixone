@@ -26,6 +26,11 @@ import (
 
 func runAssignmentIgnoreStringCast(t *testing.T, sourceType, targetType types.Type,
 	values []string, nulls []bool, binary bool) (*vector.Vector, *numericWarningSession, error) {
+	return runAssignmentIgnoreStringCastWithSelection(t, sourceType, targetType, values, nulls, binary, nil)
+}
+
+func runAssignmentIgnoreStringCastWithSelection(t *testing.T, sourceType, targetType types.Type,
+	values []string, nulls []bool, binary bool, selectList *FunctionSelectList) (*vector.Vector, *numericWarningSession, error) {
 	t.Helper()
 	session := &numericWarningSession{}
 	proc := testutil.NewProcess(t)
@@ -43,8 +48,14 @@ func runAssignmentIgnoreStringCast(t *testing.T, sourceType, targetType types.Ty
 	if err := tc.result.PreExtendAndReset(tc.fnLength); err != nil {
 		return nil, session, err
 	}
-	result, err := tc.DebugRun()
-	return result, session, err
+	if selectList == nil {
+		result, err := tc.DebugRun()
+		return result, session, err
+	}
+	if err := tc.fn(tc.parameters, tc.result, proc, tc.fnLength, selectList); err != nil {
+		return nil, session, err
+	}
+	return tc.GetResultVectorDirectly(), session, nil
 }
 
 func emptyCastTargetValues(typ types.Type) any {
@@ -266,6 +277,26 @@ func TestAssignmentIgnorePreservesNullsAndWarnsPerRow(t *testing.T) {
 		require.Contains(t, warning.msg, "Incorrect INTEGER value")
 		require.NotContains(t, warning.msg, "row ")
 		require.NotContains(t, warning.msg, "column ")
+	}
+}
+
+func TestAssignmentIgnoreSkipsInactiveNumericRows(t *testing.T) {
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+	for _, target := range []types.Type{
+		types.T_int32.ToType(),
+		types.T_uint32.ToType(),
+		types.New(types.T_decimal64, 10, 2),
+		types.New(types.T_decimal128, 20, 2),
+		types.New(types.T_decimal256, 40, 2),
+	} {
+		t.Run(target.Oid.String(), func(t *testing.T) {
+			result, session, err := runAssignmentIgnoreStringCastWithSelection(
+				t, types.T_varchar.ToType(), target, []string{"abc", "invalid"}, nil, false, selectList)
+			require.NoError(t, err)
+			require.False(t, result.IsNull(0))
+			require.True(t, result.IsNull(1))
+			require.Len(t, session.warnings, 1)
+		})
 	}
 }
 

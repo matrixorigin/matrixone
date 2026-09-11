@@ -6530,6 +6530,12 @@ func strToSignedWithProc[T constraints.Signed](
 
 	var result T
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -7267,6 +7273,12 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 	var val uint64
 	var tErr error
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -7440,6 +7452,12 @@ func strToDecimal64(
 		return nil
 	}
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
@@ -7914,6 +7932,12 @@ func strToDecimal128(
 		return nil
 	}
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
@@ -8034,6 +8058,12 @@ func strToDecimal256(
 		return nil
 	}
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
