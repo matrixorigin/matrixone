@@ -7,11 +7,14 @@ package python
 
 import (
 	"context"
+	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow/flight/gen/flight"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/udf"
@@ -24,6 +27,66 @@ type gatewayResultStream struct {
 	grpc.ClientStream
 	results []*flight.FlightData
 	index   int
+}
+
+type finishAckActionStream struct {
+	grpc.ClientStream
+	result *flight.Result
+	err    error
+	read   bool
+}
+
+func (s *finishAckActionStream) Recv() (*flight.Result, error) {
+	if !s.read {
+		s.read = true
+		if s.err != nil {
+			return nil, s.err
+		}
+		return s.result, nil
+	}
+	return nil, io.EOF
+}
+
+type finishAckFlightClient struct {
+	flight.FlightServiceClient
+	calls   int
+	actions []*flight.Action
+}
+
+type recordingArtifactResolver struct {
+	source  string
+	calls   int
+	account uint64
+	handler string
+	digest  string
+}
+
+func (r *recordingArtifactResolver) Resolve(_ context.Context, accountID uint64, handler, digest string) (string, error) {
+	r.calls++
+	r.account = accountID
+	r.handler = handler
+	r.digest = digest
+	return r.source, nil
+}
+
+func (c *finishAckFlightClient) DoAction(
+	ctx context.Context,
+	action *flight.Action,
+	opts ...grpc.CallOption,
+) (flight.FlightService_DoActionClient, error) {
+	c.calls++
+	c.actions = append(c.actions, action)
+	if c.calls == 1 {
+		return &finishAckActionStream{err: errors.New("injected ACK response loss")}, nil
+	}
+	tuple := validInvocation().Tuple
+	ack, err := protocol.MarshalControl(protocol.Control{
+		Kind: "Ack", Tuple: tuple, Status: statusOK, FinishID: "finish-1",
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &finishAckActionStream{result: &flight.Result{Body: ack}}, nil
 }
 
 func (s *gatewayResultStream) Recv() (*flight.FlightData, error) {
@@ -52,18 +115,54 @@ func gatewayControl(t *testing.T, kind string, tuple protocol.FencingTuple, fiel
 
 func validInvocation() *udf.Invocation {
 	return &udf.Invocation{
-		Language:       udf.LanguagePython,
-		Handler:        "add",
-		Source:         "def add(ctx, value): return value",
-		Args:           []types.Type{types.T_int64.ToType()},
-		ReturnType:     types.T_int64.ToType(),
-		Length:         0,
-		Inputs:         []*vector.Vector{nil},
-		Mode:           ModeScalar,
-		NullPolicy:     NullCallHandler,
-		ABIContract:    udf.PythonABIContract,
-		AdapterVersion: udf.PythonAdapterVersion,
-		SDKVersion:     udf.PythonSDKVersion,
+		FunctionRef: udf.FunctionRef{
+			AccountID: 1, DatabaseID: 2, FunctionID: 3, Revision: 1, NamespaceVersion: 1,
+		},
+		Language:                udf.LanguagePython,
+		Handler:                 "add",
+		Source:                  "def add(ctx, value): return value",
+		Args:                    []types.Type{types.T_int64.ToType()},
+		ReturnType:              types.T_int64.ToType(),
+		Length:                  0,
+		Inputs:                  []*vector.Vector{nil},
+		Mode:                    ModeScalar,
+		NullPolicy:              NullCallHandler,
+		ABIContract:             udf.PythonABIContract,
+		AdapterVersion:          udf.PythonAdapterVersion,
+		SDKVersion:              udf.PythonSDKVersion,
+		DefinitionSchemaVersion: udf.PythonDefinitionSchemaVersion,
+		ArtifactDigest:          udf.PythonInlineArtifactDigest("add", "def add(ctx, value): return value"),
+		EnvironmentDigest:       func() string { digest, _ := udf.PythonEnvironmentDigest(); return digest }(),
+		DefinitionFingerprint: func() string {
+			argument, _ := NewTypeDescriptor(types.T_int64.ToType())
+			fingerprint, _ := DefinitionFingerprint(
+				udf.PythonDefinitionSchemaVersion,
+				"add", ModeScalar, NullCallHandler,
+				udf.PythonABIContract, udf.PythonAdapterVersion,
+				udf.PythonInlineArtifactDigest("add", "def add(ctx, value): return value"),
+				func() string { digest, _ := udf.PythonEnvironmentDigest(); return digest }(),
+				udf.PythonSDKVersion, []TypeDescriptor{argument}, argument,
+			)
+			return fingerprint
+		}(),
+		CallsiteID:   "python/test",
+		MayError:     true,
+		SecurityMode: "INVOKER",
+		StatementContext: &udf.StatementContext{
+			ContractVersion:       udf.StatementContextContractVersion,
+			StatementTimestampUTC: 1704067200123456,
+			TimezoneKind:          "FIXED_OFFSET",
+			TimezoneOffsetMinutes: 480,
+			SQLMode:               []string{"ANSI", "STRICT_TRANS_TABLES"},
+			CurrentDatabase:       "udf",
+			CurrentUser:           "root",
+			CurrentRole:           "writer",
+			ConnectionCollation:   "utf8mb4_bin",
+		},
+		SecurityFrame: &udf.SecurityFrame{
+			ContractVersion: udf.SecurityFrameContractVersion,
+			Mode:            "INVOKER",
+		},
 		Tuple: protocol.FencingTuple{
 			AccountID: 1, StatementID: "statement", GroupID: "group",
 			GroupEpoch: 1, InvocationID: "invocation", LeaseEpoch: 1,
@@ -80,10 +179,18 @@ func TestValidateInvocationRequiresFrozenContract(t *testing.T) {
 		mutate func(*udf.Invocation)
 	}{
 		{name: "mode", mutate: func(invocation *udf.Invocation) { invocation.Mode = "" }},
+		{name: "external handler", mutate: func(invocation *udf.Invocation) { invocation.Handler = "module:add" }},
 		{name: "null policy", mutate: func(invocation *udf.Invocation) { invocation.NullPolicy = "" }},
 		{name: "ABI", mutate: func(invocation *udf.Invocation) { invocation.ABIContract = "" }},
 		{name: "adapter", mutate: func(invocation *udf.Invocation) { invocation.AdapterVersion = "" }},
 		{name: "SDK", mutate: func(invocation *udf.Invocation) { invocation.SDKVersion = "" }},
+		{name: "definition schema", mutate: func(invocation *udf.Invocation) { invocation.DefinitionSchemaVersion = 0 }},
+		{name: "artifact digest", mutate: func(invocation *udf.Invocation) { invocation.ArtifactDigest = "" }},
+		{name: "environment digest", mutate: func(invocation *udf.Invocation) { invocation.EnvironmentDigest = "" }},
+		{name: "definition fingerprint", mutate: func(invocation *udf.Invocation) { invocation.DefinitionFingerprint = "" }},
+		{name: "definition fingerprint contents", mutate: func(invocation *udf.Invocation) {
+			invocation.DefinitionFingerprint = strings.Repeat("b", 64)
+		}},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -92,6 +199,160 @@ func TestValidateInvocationRequiresFrozenContract(t *testing.T) {
 			require.Error(t, validateInvocation(invocation))
 		})
 	}
+}
+
+func TestGatewayValidatesIdentityBeforeResolvingArtifact(t *testing.T) {
+	resolver := &recordingArtifactResolver{source: validInvocation().Source}
+	gateway, err := NewGatewayWithArtifactStore(ClientConfig{
+		Enabled:         true,
+		AllowUnisolated: true,
+		ServerAddress:   "127.0.0.1:50051",
+	}, resolver)
+	require.NoError(t, err)
+
+	invocation := validInvocation()
+	invocation.Source = ""
+	invocation.FunctionRef.FunctionID = 0
+	resultMP := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(resultMP)
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), resultMP)
+	defer result.Free()
+
+	err = gateway.Execute(context.Background(), invocation, result, resultMP)
+	require.ErrorContains(t, err, "incomplete UDF FunctionRef")
+	require.Zero(t, resolver.calls, "a malformed typed plan must not probe an account-scoped artifact")
+}
+
+func TestGatewayResolvesArtifactOnlyAfterHeaderValidation(t *testing.T) {
+	base := validInvocation()
+	resolver := &recordingArtifactResolver{source: base.Source}
+	gateway, err := NewGatewayWithArtifactStore(ClientConfig{
+		Enabled:         true,
+		AllowUnisolated: true,
+		ServerAddress:   "127.0.0.1:50051",
+	}, resolver)
+	require.NoError(t, err)
+
+	invocation := *base
+	invocation.Source = ""
+	resultMP := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(resultMP)
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), resultMP)
+	defer result.Free()
+
+	require.NoError(t, gateway.Execute(context.Background(), &invocation, result, resultMP))
+	require.Equal(t, 1, resolver.calls)
+	require.Equal(t, uint64(1), resolver.account)
+	require.Equal(t, "add", resolver.handler)
+	require.Equal(t, base.ArtifactDigest, resolver.digest)
+}
+
+func TestValidateInvocationRejectsMismatchedInputBacking(t *testing.T) {
+	cases := []struct {
+		name string
+		make func(*mpool.MPool) *vector.Vector
+		want string
+	}{
+		{
+			name: "nil backing",
+			make: func(*mpool.MPool) *vector.Vector { return nil },
+			want: "has no backing vector",
+		},
+		{
+			name: "wrong type",
+			make: func(mp *mpool.MPool) *vector.Vector {
+				input := vector.NewVec(types.T_float64.ToType())
+				require.NoError(t, vector.AppendFixed(input, float64(1), false, mp))
+				return input
+			},
+			want: "does not match",
+		},
+		{
+			name: "short flat vector",
+			make: func(mp *mpool.MPool) *vector.Vector {
+				input := vector.NewVec(types.T_int64.ToType())
+				require.NoError(t, vector.AppendFixed(input, int64(1), false, mp))
+				return input
+			},
+			want: "expected at least 2",
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZeroNoFixed()
+			t.Cleanup(func() { mpool.DeleteMPool(mp) })
+			input := test.make(mp)
+			if input != nil {
+				t.Cleanup(func() { input.Free(mp) })
+			}
+			invocation := validInvocation()
+			invocation.Length = 2
+			invocation.Inputs = []*vector.Vector{input}
+			require.ErrorContains(t, validateInvocation(invocation), test.want)
+		})
+	}
+}
+
+func TestValidateInvocationAcceptsConstInputWithFrozenType(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	input, err := vector.NewConstFixed(types.T_int64.ToType(), int64(7), 2, mp)
+	require.NoError(t, err)
+	t.Cleanup(func() { input.Free(mp) })
+
+	invocation := validInvocation()
+	invocation.Length = 2
+	invocation.Inputs = []*vector.Vector{input}
+	require.NoError(t, validateInvocation(invocation))
+}
+
+func TestValidateInvocationBudgetRejectsBeforeOpen(t *testing.T) {
+	require.NoError(t, validateInvocationBudget(executionBudget{
+		rows: 2, maxRows: 2, returnType: types.T_int64.ToType(), maxResultBytes: 32,
+	}))
+	require.ErrorContains(t, validateInvocationBudget(executionBudget{
+		rows: 3, maxRows: 2, returnType: types.T_int64.ToType(), maxResultBytes: 32,
+	}), "invocation has 3 rows")
+	// Two int64 values plus the validity bitmap need more than sixteen bytes;
+	// this is rejected before OpenInvocation rather than after user code runs.
+	require.ErrorContains(t, validateInvocationBudget(executionBudget{
+		rows: 2, maxRows: 2, returnType: types.T_int64.ToType(), maxResultBytes: 16,
+	}), "result reservation")
+}
+
+func TestGatewayFeatureGateRejectsDisabledRuntime(t *testing.T) {
+	gateway, err := NewGateway(ClientConfig{})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.ErrorContains(t, gateway.CheckLanguageReady(ctx, udf.LanguagePython), "runtime is disabled")
+	require.ErrorContains(t, gateway.Execute(ctx, validInvocation(), nil, nil), "runtime is disabled")
+}
+
+func TestValidateCapabilitiesRequiresWorkerInstanceLease(t *testing.T) {
+	response := capabilityResponse{
+		ProtocolVersion:            protocol.Version,
+		ABIContract:                udf.PythonABIContract,
+		AdapterVersion:             udf.PythonAdapterVersion,
+		SDKVersion:                 udf.PythonSDKVersion,
+		DefinitionSchemaVersion:    udf.PythonDefinitionSchemaVersion,
+		PlanContractVersion:        udf.PythonPlanContractVersion,
+		TypeDescriptorContract:     udf.PythonTypeDescriptorContract,
+		TimezoneDatabaseVersion:    currentTimezoneDatabaseVersion(),
+		Modes:                      []string{ModeScalar, ModeVector},
+		NullPolicies:               []string{NullCallHandler, NullReturnNull},
+		WindowBatches:              1,
+		MaxExecutionFrameBytes:     1 << 30,
+		MaxHandlerProcesses:        DefaultWorkerMaxHandlerProcesses,
+		MaxAccountHandlerProcesses: DefaultWorkerMaxAccountHandlers,
+		MaxOwnerHandlerProcesses:   DefaultWorkerMaxOwnerHandlers,
+	}
+	require.ErrorContains(t, validateCapabilities(response), "contract does not match")
+	response.LeaseEpoch = 17
+	require.NoError(t, validateCapabilities(response))
+	response.MaxOwnerHandlerProcesses++
+	require.ErrorContains(t, validateCapabilities(response), "contract does not match")
 }
 
 func TestValidateActionAckCorrelatesTheRequestedFence(t *testing.T) {
@@ -110,6 +371,22 @@ func TestValidateActionAckCorrelatesTheRequestedFence(t *testing.T) {
 	require.NoError(t, validateActionAck(finish.Kind, finish, finishAck))
 	finishAck.FinishID = "finish-2"
 	require.ErrorContains(t, validateActionAck(finish.Kind, finish, finishAck), "finish ID")
+}
+
+func TestAcknowledgeFinishRetriesTheSameIdempotentRequest(t *testing.T) {
+	request := protocol.Control{
+		Kind:     "AcknowledgeFinish",
+		Tuple:    validInvocation().Tuple,
+		FinishID: "finish-1",
+	}
+	client := &finishAckFlightClient{}
+	gateway := &Gateway{cfg: ClientConfig{RequestTimeout: time.Second}}
+
+	require.NoError(t, gateway.acknowledgeFinish(context.Background(), client, request.Kind, request))
+	require.Equal(t, 2, client.calls)
+	require.Len(t, client.actions, 2)
+	require.Equal(t, client.actions[0].Type, client.actions[1].Type)
+	require.Equal(t, client.actions[0].Body, client.actions[1].Body)
 }
 
 func TestGatewayCloseIsTerminal(t *testing.T) {
@@ -133,6 +410,8 @@ func TestGatewayFinishRejectsLateHalfStreamControls(t *testing.T) {
 				gatewayControl(t, kind, tuple, func(control *protocol.Control) {
 					if kind == "InputConsumed" {
 						control.Sequence = 1
+						control.ReleasedBytes = 1
+						control.ReleasedBatches = 1
 					}
 				}),
 			}}
@@ -154,6 +433,7 @@ func TestGatewayRejectsArrowBodyOnControlFrame(t *testing.T) {
 		value.Status = statusOK
 		value.FinishID = "finish-1"
 		value.LastSequence = 1
+		value.LastResultSequence = 1
 	})
 	control.DataBody = []byte("hidden Arrow payload")
 	gateway := &Gateway{cfg: ClientConfig{RequestTimeout: time.Second}}

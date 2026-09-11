@@ -128,6 +128,7 @@ var (
 		"mo_role_privs":                 systemCatalogRestoreRebuild,
 		"mo_role_rule":                  systemCatalogRestoreCopy,
 		"mo_user_defined_function":      systemCatalogRestoreCopy,
+		"mo_function_revisions":         systemCatalogRestoreCopy,
 		"mo_stored_procedure":           systemCatalogRestoreCopy,
 		"mo_mysql_compatibility_mode":   systemCatalogRestoreSkip,
 		"mo_stages":                     systemCatalogRestoreCopy,
@@ -2226,7 +2227,20 @@ func recreateTable(
 			sourceSnapshot = fmt.Sprintf(" {SNAPSHOT = %s}", escapeSQLString(snapshotName))
 		}
 		return restoreRoutineCatalogWithCurrentSchema(
-			ctx, bh, tblInfo.tblName, sourceSnapshot, curAccountID, toAccountId,
+			ctx, bh, tblInfo.tblName, sourceSnapshot, curAccountID, toAccountId, tblInfo.createSql,
+		)
+	}
+	if isCurrentFunctionRevisionCatalog(tblInfo) {
+		curAccountID, accountErr := defines.GetAccountId(ctx)
+		if accountErr != nil {
+			return accountErr
+		}
+		sourceSnapshot := fmt.Sprintf(" {MO_TS = %d}", snapshotTs)
+		if curAccountID != toAccountId {
+			sourceSnapshot = fmt.Sprintf(" {SNAPSHOT = %s}", escapeSQLString(snapshotName))
+		}
+		return restoreFunctionRevisionCatalogWithCurrentSchema(
+			ctx, bh, sourceSnapshot, curAccountID, toAccountId, tblInfo.createSql,
 		)
 	}
 	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)

@@ -9,16 +9,12 @@
 package function
 
 import (
-	"encoding/json"
 	"fmt"
 	"strconv"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/udf"
 	"github.com/matrixorigin/matrixone/pkg/udf/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -78,170 +74,72 @@ func pythonTypesEqual(left, right types.Type) bool {
 	return left.Eq(right)
 }
 
+// PythonUdfArgTypeMatch applies the ordinary implicit cast graph while also
+// treating the complete frozen descriptor as the exact-match key. The shared
+// UDF resolver historically compared only OIDs, which made two Python
+// overloads such as DECIMAL(18,2) and DECIMAL(18,6) indistinguishable and
+// allowed a non-exact candidate to win with the same cost as an exact one.
+func PythonUdfArgTypeMatch(from, to []types.Type) (bool, int) {
+	if len(from) != len(to) {
+		return false, -1
+	}
+	length := len(from)
+	cost := 0
+	for index := range from {
+		if pythonTypesEqual(from[index], to[index]) {
+			continue
+		}
+		if from[index].Oid == to[index].Oid {
+			// A same-OID descriptor change is a SQL cast to the declared
+			// width/scale. It is valid, but less specific than an exact match.
+			cost++
+			continue
+		}
+		canCast, castCost := fixedImplicitTypeCast(from[index], to[index].Oid)
+		if !canCast {
+			return false, -1
+		}
+		if castCost == 1 {
+			cost += castCost
+		} else {
+			cost += castCost * length
+		}
+	}
+	return true, cost
+}
+
+// PythonUdfArgTypeCast returns the exact descriptor that the Python handler
+// declared for every argument.  The generic UDF cast helper only receives an
+// OID list, so it intentionally preserves a same-OID source type.  That is
+// unsafe for Python's frozen contract: DECIMAL(18,2) and DECIMAL(18,6) have
+// the same OID but different Arrow interpretation.  The SQL cast expression
+// must therefore materialize the target descriptor even when only metadata
+// differs.
+func PythonUdfArgTypeCast(from, to []types.Type) []types.Type {
+	if len(from) != len(to) {
+		return nil
+	}
+	castTypes := make([]types.Type, len(from))
+	for index := range from {
+		if pythonTypesEqual(from[index], to[index]) {
+			castTypes[index] = from[index]
+			continue
+		}
+		castTypes[index] = to[index]
+	}
+	return castTypes
+}
+
 // param parameters is same with param inputs in function checkPythonUdf
 func pythonUdfRetType(parameters []types.Type) types.Type {
 	return parameters[len(parameters)-1]
 }
 
-// param parameters has two parts:
-//  1. parameters[0]: const vector udf
-//  2. parameters[1:]: data vectors
-//
-// The SQL executor normally applies CASE/selection compaction before this
-// function is called.  The NULL policy is still enforced here because it is
-// part of the persisted Python routine contract and must not be inferred from
-// the generic builtin STRICT bit.
-func runPythonUdf(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if len(parameters) == 0 || parameters[0] == nil {
-		return fmt.Errorf("python udf: missing routine descriptor")
-	}
-	if err := validatePythonRoutineDescriptor(parameters[0]); err != nil {
-		return err
-	}
-	if length < 0 {
-		return fmt.Errorf("python udf: negative input length %d", length)
-	}
-
-	routine := &UdfWithContext{}
-	encoded, isNull := vector.GenerateFunctionStrParameter(parameters[0]).GetStrValue(0)
-	if isNull {
-		return fmt.Errorf("python udf: routine descriptor is NULL")
-	}
-	if err := json.Unmarshal(encoded, routine); err != nil {
-		return fmt.Errorf("python udf: decode routine descriptor: %w", err)
-	}
-	if routine.Udf == nil {
-		return fmt.Errorf("python udf: routine descriptor has no function")
-	}
-	if err := routine.LoadPythonTypeContract(); err != nil {
-		return fmt.Errorf("python udf: decode Python type contract: %w", err)
-	}
-
-	body, err := DecodePythonRoutineBody(routine.Body)
-	if err != nil {
-		return fmt.Errorf("python udf: decode Python routine body: %w", err)
-	}
-	argTypes, err := routineArgumentTypes(routine)
-	if err != nil {
-		return err
-	}
-	if len(parameters)-1 != len(argTypes) {
-		return fmt.Errorf("python udf: routine has %d arguments, received %d", len(argTypes), len(parameters)-1)
-	}
-
-	if length == 0 {
-		return result.PreExtendAndReset(0)
-	}
-	if err := validatePythonInputVectors(parameters[1:], argTypes, length); err != nil {
-		return err
-	}
-	// FunctionExpressionExecutor passes an empty, non-nil select list when the
-	// caller selected every row.  In that state AnyNull is false and the
-	// missing bitmap means "all rows", not a truncated selection.  A partial
-	// selection must still carry one entry per invocation row so that a row
-	// cannot accidentally be evaluated after CASE/short-circuit filtering.
-	if selectList != nil && !selectList.ShouldEvalAllRow() && len(selectList.SelectList) < length {
-		return fmt.Errorf("python udf: selection list is shorter than invocation length")
-	}
-
-	selected := make([]int64, 0, length)
-	for row := 0; row < length; row++ {
-		if selectList != nil && len(selectList.SelectList) > row && !selectList.SelectList[row] {
-			continue
-		}
-		if body.NullPolicy == udf.NullReturnNull && hasNullInput(parameters[1:], row) {
-			continue
-		}
-		selected = append(selected, int64(row))
-	}
-	if len(selected) == 0 {
-		if err := result.PreExtendAndReset(length); err != nil {
-			return err
-		}
-		result.GetResultVector().SetAllNulls(length)
-		result.GetResultVector().SetLength(length)
-		return nil
-	}
-
-	inputs := parameters[1:]
-	var compacted []*vector.Vector
-	if len(selected) != length {
-		compacted = make([]*vector.Vector, len(inputs))
-		for i, input := range inputs {
-			if input == nil {
-				return fmt.Errorf("python udf: input vector %d is nil", i)
-			}
-			compacted[i] = vector.NewOffHeapVecWithType(*input.GetType())
-			compacted[i].SetIsBin(input.GetIsBin())
-			if err := compacted[i].Union(input, selected, proc.Mp()); err != nil {
-				freeVectors(compacted, proc.Mp())
-				return fmt.Errorf("python udf: compact input %d: %w", i, err)
-			}
-		}
-		inputs = compacted
-		defer freeVectors(compacted, proc.Mp())
-	}
-
-	callResult := result
-	var temporary vector.FunctionResultWrapper
-	if len(selected) != length {
-		temporary = vector.NewFunctionResultWrapper(routine.GetRetType(), proc.Mp())
-		callResult = temporary
-		defer temporary.Free()
-	}
-
-	accountID, err := defines.GetAccountId(proc.Ctx)
-	if err != nil {
-		return fmt.Errorf("python udf: resolve account: %w", err)
-	}
-	tuple, err := invocationTuple(routine.Context, proc.QueryId(), accountID)
-	if err != nil {
-		return err
-	}
-	invocation := &udf.Invocation{
-		Language:       udf.LanguagePython,
-		Handler:        body.Handler,
-		Source:         body.Source,
-		Args:           argTypes,
-		ReturnType:     routine.GetRetType(),
-		Inputs:         inputs,
-		Length:         len(selected),
-		Mode:           body.Mode,
-		NullPolicy:     body.NullPolicy,
-		ABIContract:    body.ABIContract,
-		AdapterVersion: body.AdapterVersion,
-		SDKVersion:     body.SDKVersion,
-		Context:        cloneContext(routine.Context),
-		Tuple:          tuple,
-	}
-	if err := proc.Base.UdfService.Execute(proc.Ctx, invocation, callResult, proc.Mp()); err != nil {
-		return err
-	}
-
-	if len(selected) == length {
-		return nil
-	}
-	if err := result.PreExtendAndReset(length); err != nil {
-		return err
-	}
-	full := result.GetResultVector()
-	full.ResetWithSameType()
-	nullResult := vector.NewConstNull(routine.GetRetType(), 1, proc.Mp())
-	defer nullResult.Free(proc.Mp())
-	selectedRow := int64(0)
-	for row := 0; row < length; row++ {
-		if selectedRow < int64(len(selected)) && selected[selectedRow] == int64(row) {
-			if err := full.UnionOne(callResult.GetResultVector(), selectedRow, proc.Mp()); err != nil {
-				return err
-			}
-			selectedRow++
-			continue
-		}
-		if err := full.UnionOne(nullResult, 0, proc.Mp()); err != nil {
-			return err
-		}
-	}
-	return nil
+// rejectPythonJSONPlan is kept as the explicit stale-plan boundary for the
+// historical overload id. Long-term execution enters through the typed
+// RoutineCall field and ExternalRoutineEval.
+func rejectPythonJSONPlan(_ []*vector.Vector, _ vector.FunctionResultWrapper, _ *process.Process, _ int, _ *FunctionSelectList) error {
+	return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python JSON plan execution is not supported; reprepare the statement")
 }
 
 func validatePythonRoutineDescriptor(descriptor *vector.Vector) error {
@@ -291,50 +189,6 @@ func hasNullInput(inputs []*vector.Vector, row int) bool {
 	return false
 }
 
-func routineArgumentTypes(routine *UdfWithContext) ([]types.Type, error) {
-	if routine.Language == "python" {
-		args := make([]types.Type, len(routine.PythonArgTypes))
-		for i, descriptor := range routine.PythonArgTypes {
-			args[i] = descriptor.Type()
-		}
-		return args, nil
-	}
-	if len(routine.ArgsType) != 0 || len(routine.Args) == 0 {
-		return append([]types.Type(nil), routine.ArgsType...), nil
-	}
-	args := make([]types.Type, len(routine.Args))
-	for i, arg := range routine.Args {
-		if arg == nil {
-			return nil, fmt.Errorf("python udf: routine argument %d is nil", i)
-		}
-		typ, ok := types.Types[arg.Type]
-		if !ok {
-			return nil, fmt.Errorf("python udf: unknown routine argument type %q", arg.Type)
-		}
-		args[i] = typ.ToType()
-	}
-	return args, nil
-}
-
-func cloneContext(input map[string]string) map[string]string {
-	if len(input) == 0 {
-		return nil
-	}
-	output := make(map[string]string, len(input))
-	for key, value := range input {
-		output[key] = value
-	}
-	return output
-}
-
-func freeVectors(vectors []*vector.Vector, mp *mpool.MPool) {
-	for _, vector := range vectors {
-		if vector != nil {
-			vector.Free(mp)
-		}
-	}
-}
-
 func invocationTuple(context map[string]string, queryID string, accountID uint32) (protocol.FencingTuple, error) {
 	statementID := context["statement_id"]
 	if statementID == "" {
@@ -347,13 +201,19 @@ func invocationTuple(context map[string]string, queryID string, accountID uint32
 		}
 		statementID = id.String()
 	}
-	groupID := context["group_id"]
-	if groupID == "" {
-		groupID = statementID + "/python"
-	}
 	invocationID, err := uuid.NewV7()
 	if err != nil {
 		return protocol.FencingTuple{}, fmt.Errorf("python udf: create invocation fence: %w", err)
+	}
+	groupID := context["group_id"]
+	if groupID == "" {
+		// The current physical adapter owns one group per invocation. A stable
+		// statement-only group would reject the second batch or second routine
+		// in the same statement; the scheduler may supply a shared group and
+		// explicit epoch when it is introduced.
+		groupID = statementID + "/python/" + invocationID.String()
+	} else if context["group_epoch"] == "" {
+		return protocol.FencingTuple{}, fmt.Errorf("python udf: explicit group_id requires group_epoch")
 	}
 	groupEpoch, err := positiveContextUint(context, "group_epoch", 1)
 	if err != nil {
@@ -371,6 +231,13 @@ func invocationTuple(context map[string]string, queryID string, accountID uint32
 		InvocationID: invocationID.String(),
 		LeaseEpoch:   leaseEpoch,
 	}, nil
+}
+
+// NewInvocationTuple is shared by the physical external evaluator and protocol
+// tests. A prepared plan supplies no execution identity; the caller provides
+// the current query id and this helper creates a fresh invocation fence.
+func NewInvocationTuple(context map[string]string, queryID string, accountID uint32) (protocol.FencingTuple, error) {
+	return invocationTuple(context, queryID, accountID)
 }
 
 func positiveContextUint(context map[string]string, key string, fallback uint64) (uint64, error) {
