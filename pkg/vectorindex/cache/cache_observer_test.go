@@ -54,6 +54,7 @@ func (m *observerMock) OnCacheInvalidated(reason string) {
 		<-m.allowInvalidation
 	}
 }
+func (m *observerMock) GetIndexSize() (int64, int64) { return 0, 0 }
 func (m *observerMock) Destroy() {
 	if m.destroyStarted != nil {
 		close(m.destroyStarted)
@@ -140,7 +141,7 @@ func TestVectorIndexCacheHouseKeepingPublishesBeforeDelete(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		c.HouseKeeping()
+		houseKeepingSync(t, c)
 		close(done)
 	}()
 
@@ -226,7 +227,7 @@ func TestVectorIndexCacheHouseKeepingPublishesReasonBeforeRemovingEntry(t *testi
 		}
 	}()
 	go func() {
-		c.HouseKeeping()
+		houseKeepingSync(t, c)
 		close(done)
 	}()
 
@@ -288,7 +289,7 @@ func TestVectorIndexCacheHouseKeepingSkipsReplacedSnapshotEntry(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		c.HouseKeeping()
+		houseKeepingSync(t, c)
 		close(done)
 	}()
 
@@ -352,7 +353,7 @@ func TestVectorIndexCacheHouseKeepingSkipsConcurrentlyRenewedSnapshotEntry(t *te
 
 	done := make(chan struct{})
 	go func() {
-		c.HouseKeeping()
+		houseKeepingSync(t, c)
 		close(done)
 	}()
 

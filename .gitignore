@@ -130,3 +130,8 @@ test/esqltvf/reports/
 
 # kafka external table E2E reports (local artifacts)
 test/kafkaexttab/reports/
+
+# hnsw test byproducts: the usearch index files a test writes into the package
+# directory. The tracked copies live in pkg/vectorindex/hnsw/resources/.
+/pkg/vectorindex/hnsw[0-9].bin
+/pkg/vectorindex/hnsw/apple

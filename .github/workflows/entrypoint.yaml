@@ -120,6 +120,7 @@ jobs:
     uses: matrixorigin/CI/.github/workflows/ci.yaml@main
     with:
       ut_parallel: 6
+      ut_sharded: false
     secrets: inherit
 
   matrixone-ut-coverage:

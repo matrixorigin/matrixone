@@ -91,6 +91,32 @@ from small_composite s
 where s.id = 1;
 
 -- @case
+-- @desc: a component IN is not a full-key lookup; keep every matching suffix
+-- @label:bvt
+select s.id, b.a, b.b, b.v
+from big_composite b join small_lookup s on b.a = s.lookup_id
+order by s.id, b.b;
+
+-- @case
+-- @desc: leading-key membership preserves duplicate probe values
+-- @label:bvt
+select b.a, b.b from big_composite b
+where b.a in (select lookup_id from small_lookup)
+order by b.a, b.b;
+
+-- @case
+-- @desc: partial-key filtering must not remove unmatched preserved rows
+-- @label:bvt
+select s.id, b.b from small_lookup s
+left join big_composite b on b.a = s.lookup_id
+order by s.id, b.b;
+
+-- @case
+-- @desc: empty component-key build returns no matches
+-- @label:bvt
+select count(*) from big_composite b join empty_lookup e on b.a = e.lookup_id;
+
+-- @case
 -- @desc: UPDATE SET correlated scalar preserves affected rows and missing NULL
 -- @label:bvt
 create table update_target(id bigint primary key, lookup_id bigint, v bigint);
