@@ -263,6 +263,11 @@ delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = coalesce(t_odku_row_alias.id, 0));
 select * from t_odku_row_alias order by id;
+
+-- A nested subquery input cannot be guarded by the outer target-match
+-- predicate. Reject it before the unused UPDATE branch can execute.
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action",true)
+insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select (select q.y from t_odku_scope_multi as q) from t_odku_scope_multi as s where s.x = coalesce(t_odku_row_alias.id, 0));
 drop table t_odku_scope_multi;
 
 delete from t_odku_row_alias;
