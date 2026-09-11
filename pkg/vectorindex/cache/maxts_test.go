@@ -55,6 +55,23 @@ func TestGetMaxTSClampToOwn(t *testing.T) {
 	require.Equal(t, int64(300), ts)
 }
 
+// An unknown build_ts (0, e.g. a freshly-created index not yet built) is NEVER memoized: memoizing 0
+// would poison every later caller into min(0, own)=0, permanently declining the probe for this index
+// even after it builds (the decline path never loads, so nothing removes the memo).
+func TestGetMaxTSNeverMemoizesUnknown(t *testing.T) {
+	c := &VectorIndexCache{}
+	ts, _, memoFound, err := c.GetMaxTS("k", func() (int64, error) { return 0, nil })
+	require.NoError(t, err)
+	require.Equal(t, int64(0), ts)
+	require.False(t, memoFound)
+
+	// a later caller with a real build_ts computes its own -- it does not inherit the 0.
+	ts, _, memoFound, err = c.GetMaxTS("k", func() (int64, error) { return 100, nil })
+	require.NoError(t, err)
+	require.Equal(t, int64(100), ts)
+	require.False(t, memoFound) // 0 was never stored, so this is a fresh compute
+}
+
 // A compute error propagates and leaves no entry (compute runs before LoadOrStore), so the next
 // caller recomputes cleanly rather than inheriting a bogus/zero memo.
 func TestGetMaxTSErrorPropagates(t *testing.T) {

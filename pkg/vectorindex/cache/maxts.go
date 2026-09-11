@@ -50,6 +50,13 @@ func (c *VectorIndexCache) GetMaxTS(indexTable string, compute func() (int64, er
 	if cerr != nil {
 		return 0, false, false, cerr
 	}
+	if own == 0 {
+		// 0 = unknown / not-yet-built index. Never memoize it: the probe declines to a full scan
+		// (no load, so nothing removes the memo), and a memoized 0 would then poison every later
+		// caller into min(0, own)=0 -- permanently disabling the probe for this index even after it
+		// builds. Return unknown without touching the shared entry.
+		return 0, false, false, nil
+	}
 	e, loaded := c.maxTSMemo.LoadOrStore(indexTable, &maxTSMemoEntry{ts: own})
 	if !loaded {
 		return own, false, false, nil // first cold caller: seed the shared value with own
