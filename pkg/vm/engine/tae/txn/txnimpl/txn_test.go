@@ -793,9 +793,12 @@ func TestTxnManager1(t *testing.T) {
 
 	lock := sync.Mutex{}
 	seqs := make([]int, 0)
+	prepareStarted := make(chan struct{})
+	continuePrepare := make(chan struct{})
 
 	txn.SetPrepareCommitFn(func(_ txnif.AsyncTxn) error {
-		time.Sleep(time.Millisecond * 100)
+		close(prepareStarted)
+		<-continuePrepare
 		lock.Lock()
 		seqs = append(seqs, 2)
 		lock.Unlock()
@@ -813,10 +816,11 @@ func TestTxnManager1(t *testing.T) {
 			lock.Unlock()
 			return nil
 		})
-		time.Sleep(10 * time.Millisecond)
+		<-prepareStarted
 		lock.Lock()
 		seqs = append(seqs, 1)
 		lock.Unlock()
+		close(continuePrepare)
 		txn.GetTxnState(true)
 		lock.Lock()
 		seqs = append(seqs, 3)
