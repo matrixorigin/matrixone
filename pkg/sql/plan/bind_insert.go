@@ -3285,6 +3285,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if skipUniqueIdx[i] || !idxDef.Unique {
 			continue
 		}
+		// The projection is built before the lock/dedup loops below, but the
+		// physical hidden relation owns the v2 metadata needed to encode this
+		// index. Resolve it here so a table with a legacy integer PK can still
+		// materialize a textual secondary UNIQUE key with its own format.
+		if idxTableDefs[i] == nil {
+			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(
+				objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			if err != nil {
+				return 0, err
+			}
+		}
 
 		// prepare two projections for the unique index: `__mo_index_idx_col` and `__mo_index_pri_col`
 		idxTableName := idxDef.IndexTableName
@@ -3314,7 +3325,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			return 0, err
 		}
 		idxIndexColExpr, err = builder.makeInsertUniqueIndexKeyExpr(
-			selectNode, selectTag, tableDef, idxDef, colName2Idx, prefixLengths)
+			selectNode, selectTag, tableDef, idxTableDefs[i], idxDef, colName2Idx, prefixLengths)
 		if err != nil {
 			return 0, err
 		}

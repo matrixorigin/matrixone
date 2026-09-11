@@ -113,7 +113,7 @@ func TestV2TextPrimaryKeyDefersHiddenColumnAppendToPreInsert(t *testing.T) {
 	require.NotSame(t, tableDef.Pkey.CompPkeyCol, tableDef.Cols[0])
 }
 
-func TestMaybeEnableCollationKeyV2RejectsMixedAndMalformedDefinitions(t *testing.T) {
+func TestMaybeEnableCollationKeyV2RejectsMalformedDefinitionsAndScopesPerRelation(t *testing.T) {
 	noAdmission := NewMockCompilerContext(false)
 	legacyTable := &plan.TableDef{Cols: []*plan.ColDef{{Name: "k", Typ: plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}}}}
 	require.NoError(t, maybeEnableCollationKeyV2ForCreate(noAdmission, legacyTable, nil))
@@ -156,7 +156,32 @@ func TestMaybeEnableCollationKeyV2RejectsMixedAndMalformedDefinitions(t *testing
 		Pkey: &plan.PrimaryKeyDef{Names: []string{"k"}},
 	}
 	unique := &tree.UniqueIndex{KeyParts: []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("n")}}}
-	require.Error(t, maybeEnableCollationKeyV2ForCreate(ctx, textPK, []*tree.UniqueIndex{unique}))
+	// The textual PK owns the base relation's v2 identity; the integer UNIQUE
+	// relation remains legacy instead of rejecting the whole table. The hidden
+	// index builder assigns v2 independently when its own parts are textual.
+	require.NoError(t, maybeEnableCollationKeyV2ForCreate(ctx, textPK, []*tree.UniqueIndex{unique}))
+	require.NotNil(t, textPK.UniqueKeyCodecVersion)
+
+	intPK := &plan.TableDef{
+		Name: "integer_pk_text_unique",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "k", Typ: plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+	}
+	textUnique := &tree.UniqueIndex{KeyParts: []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("k")}}}
+	create := &plan.CreateTable{TableDef: intPK}
+	require.NoError(t, maybeEnableCollationKeyV2ForCreate(ctx, intPK, []*tree.UniqueIndex{textUnique}))
+	require.Nil(t, intPK.UniqueKeyCodecVersion, "the integer PK relation stays legacy")
+	require.NoError(t, buildUniqueIndexTable(create, []*tree.UniqueIndex{textUnique}, map[string]*ColDef{
+		"id": {Name: "id", Typ: intPK.Cols[0].Typ},
+		"k":  {Name: "k", Typ: intPK.Cols[1].Typ},
+	}, "id", ctx))
+	require.Len(t, create.IndexTables, 1)
+	require.NotNil(t, create.IndexTables[0].UniqueKeyCodecVersion,
+		"the textual secondary relation gets its own v2 identity")
+	require.NotNil(t, create.TableDef.Indexes[0])
 
 	missing := &plan.TableDef{
 		Name: "missing_v2",

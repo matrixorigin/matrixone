@@ -1256,3 +1256,24 @@ race suite) and do not enable v2 or alter legacy relations. The implementation
 increment remains a staged foundation; TN/catalog sidecar persistence, complete
 SQL comparison consumers, migration management, upgrade validation, and QA are
 still required before production rollout.
+
+### 10.20 Implementation series status (relation-local DDL scoping)
+
+DDL planning now makes the relation boundary explicit. The metadata on the
+base `TableDef` is assigned only when the physical primary-key identity is a
+supported textual key. Each hidden secondary UNIQUE relation independently
+validates its own parts and receives a cloned codec record when it is created
+as part of a newly admitted table (or when an existing v2 relation propagates
+its already-validated record). A numeric-only key remains on the legacy
+bytewise path; a single constraint that mixes supported text with an
+unregistered part is rejected while an unrelated constraint is not.
+
+This permits the issue-shaped schema `INT PRIMARY KEY, VARCHAR UNIQUE` to keep
+the integer base relation legacy and give the textual hidden relation its own
+v2 identity. The insert projection resolves that hidden relation before
+materializing the key, so a base-table metadata value cannot force unrelated
+indexes to re-encode. A legacy table receiving `CREATE INDEX` or `ALTER ADD
+UNIQUE` does not implicitly migrate merely because the activation context is
+enabled. The behavior remains fail-closed and production v2 is still disabled;
+TN/catalog persistence and the full migration owner must consume these
+relation-local records before any user-visible activation.

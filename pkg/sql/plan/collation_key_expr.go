@@ -193,6 +193,7 @@ func (builder *QueryBuilder) makeInsertUniqueIndexKeyExpr(
 	selectNode *planpb.Node,
 	selectTag int32,
 	tableDef *planpb.TableDef,
+	uniqueTableDef *planpb.TableDef,
 	idxDef *planpb.IndexDef,
 	colName2Idx map[string]int32,
 	prefixLengths map[string]int,
@@ -200,7 +201,15 @@ func (builder *QueryBuilder) makeInsertUniqueIndexKeyExpr(
 	if tableDef == nil || idxDef == nil || selectNode == nil || len(idxDef.Parts) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("invalid unique-key index definition")
 	}
-	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
+	// Secondary UNIQUE indexes own their physical relation metadata. The base
+	// table metadata describes only the primary-key relation, so consulting it
+	// here would incorrectly force every unique index to share the PK's format
+	// (or miss a v2 secondary index on an integer-PK table).
+	metadataDef := uniqueTableDef
+	if metadataDef == nil {
+		metadataDef = tableDef
+	}
+	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), metadataDef)
 	if err != nil || !useV2 {
 		if len(idxDef.Parts) == 1 {
 			return builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, idxDef.Parts[0], prefixLengths)

@@ -4382,10 +4382,15 @@ func checkFulltextEngineConflict(indexInfos []*tree.FullTextIndex, existedIndexe
 
 // maybeEnableCollationKeyV2ForCreate applies the durable activation decision to
 // a newly created table. The default remains legacy: a planner context must
-// carry an enabled generation and a matching local node capability. Because
-// the current TableDef metadata is table-scoped, a table that mixes a text
-// unique key with an unsupported unique-key part is rejected rather than
-// silently storing some constraints as v1 and others as v2.
+// carry an enabled generation and a matching local node capability. The
+// metadata on TableDef belongs to the physical base relation (and therefore
+// its primary-key identity); secondary UNIQUE relations receive their own
+// metadata while buildUniqueIndexTable is constructing the hidden relation.
+// Keeping these decisions relation-local is important for the common shape
+// `INT PRIMARY KEY, VARCHAR UNIQUE`: the integer primary key remains on the
+// legacy physical relation while the textual secondary relation can use the
+// framed identity. A constraint which mixes supported text with an
+// unregistered part is still rejected rather than silently split.
 func maybeEnableCollationKeyV2ForCreate(
 	ctx CompilerContext,
 	tableDef *plan.TableDef,
@@ -4405,47 +4410,48 @@ func maybeEnableCollationKeyV2ForCreate(
 		return moerr.NewInternalErrorf(ctx.GetContext(), "invalid unique-key node capability: %v", err)
 	}
 
-	hasTextKey := false
-	hasUnsupportedKey := false
-	checkPart := func(name string) error {
-		name = catalog.ResolveAlias(name)
-		col, exists := slicesxFindCol(tableDef.Cols, name)
-		if !exists {
-			return moerr.NewInternalErrorf(ctx.GetContext(), "unique key references missing column %s", name)
-		}
-		if col.Typ.Id == int32(types.T_varchar) || col.Typ.Id == int32(types.T_text) {
-			hasTextKey = true
-			if _, err := collationKeyV2ValueCharset(col.Typ); err != nil {
-				hasUnsupportedKey = true
-			}
-		} else {
-			hasUnsupportedKey = true
-		}
-		return nil
+	lookup := func(name string) (*plan.ColDef, bool) {
+		return slicesxFindCol(tableDef.Cols, catalog.ResolveAlias(name))
 	}
 
+	// Validate every constraint independently. Only the base primary-key
+	// relation is represented by TableDef.UniqueKeyCodecVersion here; hidden
+	// UNIQUE relations are marked later from their own part list.
 	if tableDef.Pkey != nil {
-		for _, name := range tableDef.Pkey.Names {
-			if err := checkPart(name); err != nil {
-				return err
-			}
+		_, _, err := uniqueKeyCodecMetadataForParts(
+			ctx, lookup, tableDef.Pkey.Names, nil, false)
+		if err != nil {
+			return err
 		}
 	}
 	for _, indexInfo := range uniqueInfos {
+		if indexInfo == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "unique key definition is nil")
+		}
+		names := make([]string, 0, len(indexInfo.KeyParts))
 		for _, keyPart := range indexInfo.KeyParts {
 			if keyPart == nil || keyPart.ColName == nil {
 				return moerr.NewInternalError(ctx.GetContext(), "unique key contains an empty key part")
 			}
-			if err := checkPart(keyPart.ColName.ColName()); err != nil {
-				return err
-			}
+			names = append(names, keyPart.ColName.ColName())
+		}
+		if _, _, err := uniqueKeyCodecMetadataForParts(ctx, lookup, names, nil, true); err != nil {
+			return err
 		}
 	}
-	if !hasTextKey {
-		return nil
+
+	pkMetadata, hasTextPK, err := uniqueKeyCodecMetadataForParts(
+		ctx, lookup, func() []string {
+			if tableDef.Pkey == nil {
+				return nil
+			}
+			return tableDef.Pkey.Names
+		}(), nil, true)
+	if err != nil {
+		return err
 	}
-	if hasUnsupportedKey {
-		return moerr.NewNotSupported(ctx.GetContext(), "v2 unique-key activation requires all primary and unique key parts to use a registered text domain")
+	if !hasTextPK {
+		return nil
 	}
 	if tableDef.Pkey != nil {
 		if tableDef.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
@@ -4469,18 +4475,90 @@ func maybeEnableCollationKeyV2ForCreate(
 			tableDef.Pkey.CompPkeyCol = hidden
 		}
 	}
+	tableDef.UniqueKeyCodecVersion = pkMetadata
+	return nil
+}
+
+// uniqueKeyCodecMetadataForParts validates one physical key's part domains
+// and, when requested, returns the metadata for a newly-created v2 relation.
+// A key with no textual parts is left on the existing legacy path. A key that
+// mixes supported text with a non-text or unregistered textual part is
+// rejected: silently storing that one constraint as v1 would reintroduce two
+// different identities under the same activation fence.
+//
+// inherited is used by CREATE INDEX/ALTER ADD on a relation which already
+// carries a validated v2 identity. allowActivation is true only for the
+// hidden relations created as part of CREATE TABLE; an un-migrated legacy
+// table must not implicitly acquire v2 merely because the cluster is enabled.
+func uniqueKeyCodecMetadataForParts(
+	ctx CompilerContext,
+	lookup func(string) (*plan.ColDef, bool),
+	names []string,
+	inherited *plan.UniqueKeyCodecVersion,
+	allowActivation bool,
+) (*plan.UniqueKeyCodecVersion, bool, error) {
+	hasText := false
+	hasUnsupported := false
+	for _, rawName := range names {
+		name := catalog.ResolveAlias(rawName)
+		if name == "" {
+			return nil, false, moerr.NewInternalError(ctx.GetContext(), "unique key contains an empty key part")
+		}
+		col, exists := lookup(name)
+		if !exists || col == nil {
+			return nil, false, moerr.NewInternalErrorf(ctx.GetContext(), "unique key references missing column %s", name)
+		}
+		if col.Typ.Id == int32(types.T_varchar) || col.Typ.Id == int32(types.T_text) {
+			hasText = true
+			if _, err := collationKeyV2ValueCharset(col.Typ); err != nil {
+				hasUnsupported = true
+			}
+		} else {
+			hasUnsupported = true
+		}
+	}
+	if !hasText {
+		return nil, false, nil
+	}
+	// A legacy table may contain collations that this v2 increment does not
+	// register. Keep it on the existing path unless v2 is actually requested
+	// for this relation (an inherited v2 identity or an enabled CREATE TABLE
+	// admission). Only then is silently falling back unsafe.
+	admission, admissionOK := collationkey.AdmissionFromContext(ctx.GetContext())
+	activationEnabled := admissionOK && admission.Activation.Phase == collationkey.ActivationEnabled
+	if hasUnsupported && (inherited != nil || (allowActivation && activationEnabled)) {
+		return nil, true, moerr.NewNotSupported(ctx.GetContext(), "v2 unique-key activation requires all parts of a textual key to use a registered text domain")
+	}
+	if hasUnsupported {
+		return nil, false, nil
+	}
+	if inherited != nil {
+		candidate := &plan.TableDef{UniqueKeyCodecVersion: proto.Clone(inherited).(*plan.UniqueKeyCodecVersion)}
+		useV2, err := tableUsesCollationKeyV2(ctx.GetContext(), candidate)
+		if err != nil {
+			return nil, true, err
+		}
+		if useV2 {
+			return proto.Clone(inherited).(*plan.UniqueKeyCodecVersion), true, nil
+		}
+	}
+	if !allowActivation {
+		return nil, true, nil
+	}
+	if !admissionOK || !activationEnabled {
+		return nil, true, nil
+	}
 	metadata := collationkey.NewCollationAwareMetadataAtGeneration(admission.Activation.Generation)
 	if err := admission.Validate(metadata, true); err != nil {
-		return moerr.NewUnsupportedDML(ctx.GetContext(), "collation-aware unique-key writes are not enabled")
+		return nil, true, moerr.NewUnsupportedDML(ctx.GetContext(), "collation-aware unique-key writes are not enabled")
 	}
-	tableDef.UniqueKeyCodecVersion = &plan.UniqueKeyCodecVersion{
+	return &plan.UniqueKeyCodecVersion{
 		Value:                metadata.Version,
 		RegistryVersion:      metadata.RegistryVersion,
 		RegistryDigest:       metadata.RegistryDigest,
 		MaxEncodedKeyBytes:   metadata.MaxEncodedKeyBytes,
 		ActivationGeneration: metadata.ActivationGeneration,
-	}
-	return nil
+	}, true, nil
 }
 
 // propagateUniqueKeyCodecMetadata carries the relation-level codec identity
@@ -4567,20 +4645,41 @@ func slicesxFindCol(cols []*plan.ColDef, name string) (*plan.ColDef, bool) {
 }
 
 func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.UniqueIndex, colMap map[string]*ColDef, pkeyName string, ctx CompilerContext) error {
-	useV2 := false
-	var codecMetadata *plan.UniqueKeyCodecVersion
-	if createTable != nil && createTable.TableDef != nil && createTable.TableDef.UniqueKeyCodecVersion != nil {
-		metadata := createTable.TableDef.UniqueKeyCodecVersion
-		ok, err := tableUsesCollationKeyV2(ctx.GetContext(), createTable.TableDef)
+	if createTable == nil || createTable.TableDef == nil {
+		return moerr.NewInternalError(ctx.GetContext(), "unique index target definition is nil")
+	}
+	// CREATE TABLE carries the source columns in createTable.TableDef. CREATE
+	// INDEX and ALTER ADD UNIQUE pass an empty shell and may only inherit v2
+	// when the source relation explicitly carried that identity through
+	// propagateUniqueKeyCodecMetadata. This keeps an un-migrated legacy table
+	// from silently acquiring a new physical format.
+	inheritedMetadata := createTable.TableDef.UniqueKeyCodecVersion
+	allowActivation := len(createTable.TableDef.Cols) > 0
+	lookup := func(name string) (*plan.ColDef, bool) {
+		name = catalog.ResolveAlias(name)
+		col, ok := colMap[name]
+		if !ok {
+			col, ok = colMap[catalog.CreateAlias(name)]
+		}
+		return col, ok
+	}
+	for _, indexInfo := range indexInfos {
+		if indexInfo == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "unique key definition is nil")
+		}
+		indexNames := make([]string, 0, len(indexInfo.KeyParts))
+		for _, keyPart := range indexInfo.KeyParts {
+			if keyPart == nil || keyPart.ColName == nil {
+				return moerr.NewInternalError(ctx.GetContext(), "unique key contains an empty key part")
+			}
+			indexNames = append(indexNames, keyPart.ColName.ColName())
+		}
+		codecMetadata, hasText, err := uniqueKeyCodecMetadataForParts(
+			ctx, lookup, indexNames, inheritedMetadata, allowActivation)
 		if err != nil {
 			return err
 		}
-		useV2 = ok
-		if useV2 {
-			codecMetadata = proto.Clone(metadata).(*plan.UniqueKeyCodecVersion)
-		}
-	}
-	for _, indexInfo := range indexInfos {
+		useV2 := hasText && codecMetadata != nil
 		indexDef := &plan.IndexDef{}
 		indexDef.Unique = true
 
@@ -4592,18 +4691,19 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		tableDef := &TableDef{
 			Name: indexTableName,
 		}
-		if codecMetadata != nil {
+		if useV2 {
 			tableDef.UniqueKeyCodecVersion = proto.Clone(codecMetadata).(*plan.UniqueKeyCodecVersion)
 		}
 		indexParts := make([]string, 0)
 
 		for _, keyPart := range indexInfo.KeyParts {
 			nameOrigin := keyPart.ColName.ColNameOrigin()
-			name := keyPart.ColName.ColName()
-			if _, ok := colMap[name]; !ok {
+			name := catalog.ResolveAlias(keyPart.ColName.ColName())
+			if _, ok := lookup(name); !ok {
 				return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", nameOrigin)
 			}
-			if err := checkIndexColumnSupportability(ctx.GetContext(), colMap[name], keyPart, "unique"); err != nil {
+			colDef, _ := lookup(name)
+			if err := checkIndexColumnSupportability(ctx.GetContext(), colDef, keyPart, "unique"); err != nil {
 				return err
 			}
 
@@ -4614,11 +4714,15 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		if len(indexInfo.KeyParts) == 1 {
 			keyName = catalog.IndexTableIndexColName
 			keyPart := indexInfo.KeyParts[0]
-			colName := keyPart.ColName.ColName()
+			colName := catalog.ResolveAlias(keyPart.ColName.ColName())
+			sourceCol, ok := lookup(colName)
+			if !ok || sourceCol == nil {
+				return moerr.NewInternalErrorf(ctx.GetContext(), "unique key references missing column %s", colName)
+			}
 			colDef := &ColDef{
 				Name: keyName,
 				Alg:  plan.CompressType_Lz4,
-				Typ:  indexTableKeyTypeForSinglePart(colMap[colName], keyPart),
+				Typ:  indexTableKeyTypeForSinglePart(sourceCol, keyPart),
 				Default: &plan.Default{
 					NullAbility:  false,
 					Expr:         nil,
@@ -4655,15 +4759,19 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			}
 		}
 		if pkeyName != "" {
+			pkeyCol, ok := lookup(pkeyName)
+			if !ok || pkeyCol == nil {
+				return moerr.NewInternalErrorf(ctx.GetContext(), "unique key references missing primary key column %s", pkeyName)
+			}
 			colDef := &ColDef{
 				Name: catalog.IndexTablePrimaryColName,
 				Alg:  plan.CompressType_Lz4,
 				Typ: plan.Type{
 					// don't copy auto increment
-					Id:      colMap[pkeyName].Typ.Id,
-					Width:   colMap[pkeyName].Typ.Width,
-					Scale:   colMap[pkeyName].Typ.Scale,
-					Charset: colMap[pkeyName].Typ.Charset,
+					Id:      pkeyCol.Typ.Id,
+					Width:   pkeyCol.Typ.Width,
+					Scale:   pkeyCol.Typ.Scale,
+					Charset: pkeyCol.Typ.Charset,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,

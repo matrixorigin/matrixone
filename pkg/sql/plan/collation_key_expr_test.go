@@ -280,14 +280,32 @@ func TestV2UniqueKeyExpressionBuildersCoverSingleAndCompositePaths(t *testing.T)
 	single := &planpb.IndexDef{Parts: []string{"a"}, Unique: true}
 	composite := &planpb.IndexDef{Parts: []string{"a", "b"}, Unique: true}
 	for _, index := range []*planpb.IndexDef{single, composite} {
-		expr, err := builder.makeInsertUniqueIndexKeyExpr(node, 3, table, index,
+		expr, err := builder.makeInsertUniqueIndexKeyExpr(node, 3, table, table, index,
 			map[string]int32{"t_v2_expr.a": 0, "t_v2_expr.b": 1}, map[string]int{"a": 2})
 		require.NoError(t, err)
 		require.NotNil(t, expr)
 	}
-	_, err := builder.makeInsertUniqueIndexKeyExpr(node, 3, table, single, map[string]int32{}, nil)
+	// The secondary relation, rather than the base table, selects the physical
+	// identity format. This is the mixed `INT PRIMARY KEY + VARCHAR UNIQUE`
+	// shape: a legacy base metadata value must not hide a v2 secondary relation,
+	// and a v2 base value must not force an unrelated legacy index to re-encode.
+	legacyBase := &planpb.TableDef{Name: "t_v2_expr", Cols: table.Cols}
+	v2Hidden := &planpb.TableDef{UniqueKeyCodecVersion: v2PlannerMetadata()}
+	expr, err := builder.makeInsertUniqueIndexKeyExpr(node, 3, legacyBase, v2Hidden, single,
+		map[string]int32{"t_v2_expr.a": 0}, nil)
+	require.NoError(t, err)
+	require.Equal(t, function.CollationKeyV2FunctionEncodedID, expr.GetF().GetFunc().GetObj())
+	legacyHidden := &planpb.TableDef{}
+	v2Base := &planpb.TableDef{Name: "t_v2_expr", UniqueKeyCodecVersion: v2PlannerMetadata(), Cols: table.Cols}
+	expr, err = builder.makeInsertUniqueIndexKeyExpr(node, 3, v2Base, legacyHidden, single,
+		map[string]int32{"t_v2_expr.a": 0}, nil)
+	require.NoError(t, err)
+	if expr.GetF() != nil {
+		require.NotEqual(t, function.CollationKeyV2FunctionEncodedID, expr.GetF().GetFunc().GetObj())
+	}
+	_, err = builder.makeInsertUniqueIndexKeyExpr(node, 3, table, table, single, map[string]int32{}, nil)
 	require.Error(t, err)
-	_, err = builder.makeInsertUniqueIndexKeyExpr(nil, 3, table, single, nil, nil)
+	_, err = builder.makeInsertUniqueIndexKeyExpr(nil, 3, table, table, single, nil, nil)
 	require.Error(t, err)
 
 	for _, index := range []*planpb.IndexDef{single, composite} {
@@ -313,7 +331,7 @@ func TestV2UniqueKeyExpressionBuildersCoverSingleAndCompositePaths(t *testing.T)
 	_, err = makePrimaryKeyV2IdentityExprs(pk, []*planpb.Expr{value})
 	require.Error(t, err)
 	pk.Pkey.Names = []string{"a"}
-	expr, err := makePrimaryKeyV2IdentityExprs(pk, []*planpb.Expr{value})
+	expr, err = makePrimaryKeyV2IdentityExprs(pk, []*planpb.Expr{value})
 	require.NoError(t, err)
 	require.NotNil(t, expr)
 }
