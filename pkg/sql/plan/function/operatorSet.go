@@ -878,6 +878,19 @@ func operatorUnaryPlus[T constraints.Integer | constraints.Float | types.Decimal
 	return nil
 }
 
+func unaryMinusMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		switch inputs[0].Oid {
+		case types.T_int8, types.T_int16, types.T_int32:
+			// Keep overloads 0/1/2 unchanged for serialized legacy plans. New plans
+			// use the historical BIGINT overload after an explicit widening cast,
+			// so old workers execute the same physical argument/result contract.
+			return newCheckResultWithCast(3, []types.Type{types.T_int64.ToType()})
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[T](result)
@@ -895,68 +908,6 @@ func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*
 			}
 		}
 		if err := rs.Append(-v, null); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func operatorUnaryMinusInt8(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	// Keep old serialized plans (whose result type is INT8) executable during a rolling upgrade.
-	if result.GetResultVector().GetType().Oid == types.T_int8 {
-		return operatorUnaryMinus[int8](parameters, result, nil, length, selectList)
-	}
-	p := vector.GenerateFunctionFixedTypeParameter[int8](parameters[0])
-	r := vector.MustFunctionResult[int64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, n := p.GetValue(i)
-		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
-			if err := r.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := r.Append(-int64(v), n); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-func operatorUnaryMinusInt16(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	if result.GetResultVector().GetType().Oid == types.T_int16 {
-		return operatorUnaryMinus[int16](parameters, result, nil, length, selectList)
-	}
-	p := vector.GenerateFunctionFixedTypeParameter[int16](parameters[0])
-	r := vector.MustFunctionResult[int64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, n := p.GetValue(i)
-		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
-			if err := r.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := r.Append(-int64(v), n); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-func operatorUnaryMinusInt32(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
-	if result.GetResultVector().GetType().Oid == types.T_int32 {
-		return operatorUnaryMinus[int32](parameters, result, nil, length, selectList)
-	}
-	p := vector.GenerateFunctionFixedTypeParameter[int32](parameters[0])
-	r := vector.MustFunctionResult[int64](result)
-	for i := uint64(0); i < uint64(length); i++ {
-		v, n := p.GetValue(i)
-		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
-			if err := r.Append(0, true); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := r.Append(-int64(v), n); err != nil {
 			return err
 		}
 	}

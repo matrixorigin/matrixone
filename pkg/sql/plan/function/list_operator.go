@@ -2328,37 +2328,37 @@ var supportedOperators = []FuncNew{
 		functionId: UNARY_MINUS,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     UNARY_ARITHMETIC_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    unaryMinusMatch,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_int64.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return operatorUnaryMinusInt8
+					return operatorUnaryMinus[int8]
 				},
 			},
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_int64.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return operatorUnaryMinusInt16
+					return operatorUnaryMinus[int16]
 				},
 			},
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_int64.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
-					return operatorUnaryMinusInt32
+					return operatorUnaryMinus[int32]
 				},
 			},
 			{

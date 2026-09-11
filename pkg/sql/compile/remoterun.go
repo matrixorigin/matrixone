@@ -2078,12 +2078,6 @@ func validateRemoteExpressionPipelineProtocol(
 			"typed numeric FORMAT arguments require MORPC protocol version 59",
 		)
 	}
-	if features.WidenedUnaryMinus &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion64) {
-		return moerr.NewNotSupportedNoCtx(
-			"widened integer unary minus requires MORPC protocol version 64",
-		)
-	}
 	return nil
 }
 

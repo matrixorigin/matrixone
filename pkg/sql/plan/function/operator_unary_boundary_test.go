@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -68,14 +69,27 @@ func checkUnaryRows[T, R constraints.Signed | constraints.Float](t *testing.T, n
 }
 
 func TestUnaryRegisteredTypeAndSelection(t *testing.T) {
-	t.Run("int8", func(t *testing.T) {
-		checkUnaryRows(t, "unary_minus", types.T_int8, types.T_int64, []int8{math.MinInt8, 0, math.MaxInt8}, []int64{128, 0, -127})
+	for _, inputType := range []types.T{types.T_int8, types.T_int16, types.T_int32} {
+		t.Run(inputType.String()+"_widening_plan", func(t *testing.T) {
+			resolved, err := GetFunctionByName(t.Context(), "unary_minus", []types.Type{inputType.ToType()})
+			require.NoError(t, err)
+			targets, needCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, needCast)
+			require.Equal(t, []types.Type{types.T_int64.ToType()}, targets)
+			functionID, overloadID := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, int32(UNARY_MINUS), functionID)
+			require.Equal(t, int32(3), overloadID)
+			require.Equal(t, types.T_int64, resolved.GetReturnType().Oid)
+		})
+	}
+	t.Run("widened_int8", func(t *testing.T) {
+		checkUnaryRows(t, "unary_minus", types.T_int64, types.T_int64, []int64{math.MinInt8, 0, math.MaxInt8}, []int64{128, 0, -127})
 	})
-	t.Run("int16", func(t *testing.T) {
-		checkUnaryRows(t, "unary_minus", types.T_int16, types.T_int64, []int16{math.MinInt16, 0, math.MaxInt16}, []int64{32768, 0, -32767})
+	t.Run("widened_int16", func(t *testing.T) {
+		checkUnaryRows(t, "unary_minus", types.T_int64, types.T_int64, []int64{math.MinInt16, 0, math.MaxInt16}, []int64{32768, 0, -32767})
 	})
-	t.Run("int32", func(t *testing.T) {
-		checkUnaryRows(t, "unary_minus", types.T_int32, types.T_int64, []int32{math.MinInt32, 0, math.MaxInt32}, []int64{2147483648, 0, -2147483647})
+	t.Run("widened_int32", func(t *testing.T) {
+		checkUnaryRows(t, "unary_minus", types.T_int64, types.T_int64, []int64{math.MinInt32, 0, math.MaxInt32}, []int64{2147483648, 0, -2147483647})
 	})
 	t.Run("int64", func(t *testing.T) {
 		checkUnaryRows(t, "unary_minus", types.T_int64, types.T_int64, []int64{math.MinInt64 + 1, 0, math.MaxInt64}, []int64{math.MaxInt64, 0, -math.MaxInt64})
@@ -97,6 +111,48 @@ func TestUnaryRegisteredTypeAndSelection(t *testing.T) {
 		ok, info := tc.Run()
 		require.True(t, ok, info)
 	})
+}
+
+func TestUnaryMinusLegacyOverloadsPreserveSerializedContract(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		overloadID int64
+		typ        types.T
+		append     func(*vector.Vector, *mpool.MPool) error
+		want       any
+	}{
+		{"int8", encodeOverloadID(UNARY_MINUS, 0), types.T_int8, func(v *vector.Vector, mp *mpool.MPool) error {
+			return vector.AppendFixed(v, int8(1), false, mp)
+		}, int8(-1)},
+		{"int16", encodeOverloadID(UNARY_MINUS, 1), types.T_int16, func(v *vector.Vector, mp *mpool.MPool) error {
+			return vector.AppendFixed(v, int16(1), false, mp)
+		}, int16(-1)},
+		{"int32", encodeOverloadID(UNARY_MINUS, 2), types.T_int32, func(v *vector.Vector, mp *mpool.MPool) error {
+			return vector.AppendFixed(v, int32(1), false, mp)
+		}, int32(-1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			overload, err := GetFunctionById(proc.Ctx, test.overloadID)
+			require.NoError(t, err)
+			in := vector.NewVec(test.typ.ToType())
+			defer in.Free(proc.Mp())
+			require.NoError(t, test.append(in, proc.Mp()))
+			out := vector.NewFunctionResultWrapper(test.typ.ToType(), proc.Mp())
+			defer out.Free()
+			require.NoError(t, out.PreExtendAndReset(1))
+			exec, _, _, _ := overload.GetExecuteMethod()
+			require.NoError(t, exec([]*vector.Vector{in}, out, proc, 1, nil))
+			switch want := test.want.(type) {
+			case int8:
+				require.Equal(t, want, vector.MustFixedColNoTypeCheck[int8](out.GetResultVector())[0])
+			case int16:
+				require.Equal(t, want, vector.MustFixedColNoTypeCheck[int16](out.GetResultVector())[0])
+			case int32:
+				require.Equal(t, want, vector.MustFixedColNoTypeCheck[int32](out.GetResultVector())[0])
+			}
+		})
+	}
 }
 
 func TestUnaryMinusInt64Overflow(t *testing.T) {
