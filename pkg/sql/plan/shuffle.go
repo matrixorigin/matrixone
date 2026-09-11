@@ -612,10 +612,38 @@ func determineShuffleTypeWithColRefMode(
 	}
 
 	if child, reusable := reusableShuffleChild(col, node, builder, afterRemap); reusable {
-		reuseShuffleStrategy(node.Stats.HashmapStats, child)
-		return
+		// String range ownership is derived from an eight-byte prefix.  A
+		// downstream aggregate must not inherit that lossy distribution, but a
+		// reusable full-key hash distribution remains valid and useful.
+		if !isStringAggregateShuffleKey(node, col) ||
+			child.Stats.HashmapStats.ShuffleType != plan.ShuffleType_Range {
+			reuseShuffleStrategy(node.Stats.HashmapStats, child)
+			return
+		}
 	}
 	determineNonReusableShuffleType(col, node, builder, afterRemap)
+}
+
+func isStringAggregateShuffleKey(node *plan.Node, col *plan.ColRef) bool {
+	if node == nil || node.NodeType != plan.Node_AGG || col == nil {
+		return false
+	}
+	for _, groupBy := range node.GroupBy {
+		if groupBy == nil {
+			continue
+		}
+		groupCol, typ := GetHashColumn(groupBy)
+		if groupCol == nil || groupCol.RelPos != col.RelPos || groupCol.ColPos != col.ColPos {
+			continue
+		}
+		switch types.T(typ) {
+		case types.T_char, types.T_varchar, types.T_text:
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func determineNonReusableShuffleType(
@@ -670,6 +698,14 @@ func determineNonReusableShuffleType(
 		return
 	}
 	s := w.GetStats()
+	if isStringAggregateShuffleKey(node, col) {
+		// ShuffleRange for strings is encoded with only the first eight bytes,
+		// while equality and hash aggregation use the complete value.  Without
+		// a full-key quantile sketch, the range metadata cannot prove balanced
+		// aggregate ownership.  Keep the existing hash/no-shuffle decision and
+		// leave range strategy available to joins and numeric keys.
+		return
+	}
 	if node.NodeType == plan.Node_AGG {
 		if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
 			return
