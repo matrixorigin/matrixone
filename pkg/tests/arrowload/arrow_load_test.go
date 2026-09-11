@@ -35,7 +35,7 @@ import (
 // default-path checks against one dedicated 2-CN cluster without Arrow-specific
 // settings and uses the real MySQL protocol rather than the internal SQL
 // executor. Keeping the default BVT and distributed fan-out checks in this one
-// lifecycle avoids paying for two identical cluster startups while preserving
+// lifecycle avoids a separate cluster startup while preserving
 // separate databases and subtest names. Local File and Stream, local stage, and
 // S3-backed stage therefore prove default availability. Focused gate tests,
 // standard distributed CI, mixed binaries, and real cloud providers remain
@@ -621,7 +621,6 @@ func testArrowClusterRestart(t *testing.T, c embed.Cluster, db *sql.DB) {
 	require.NoError(t, db.Close())
 	require.NoError(t, c.Close())
 	require.NoError(t, c.Start())
-	waitArrowLoadClusterReady(t, c)
 
 	restartedDB := openArrowLoadDB(t, c, 0)
 	mustExec(t, restartedDB, "use arrow_bvt")

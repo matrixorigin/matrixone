@@ -171,7 +171,6 @@ func TestArrowLoadRolloutRollbackDrain(t *testing.T) {
 
 	adjustArrowLoadCluster(c, arrowLoadClusterOptions{cnCount: 1})
 	require.NoError(t, c.Start())
-	waitArrowLoadClusterReady(t, c)
 	rollbackDB := openArrowLoadDB(t, c, 0)
 	rows := queryCount(t, rollbackDB, "select count(*) from arrow_rollout.rollout_drain")
 	if loadErr != nil {
@@ -192,7 +191,6 @@ func TestArrowLoadRolloutRollbackDrain(t *testing.T) {
 		cnCount: 1, enabled: true, s3Enabled: false, distributedEnabled: false,
 	})
 	require.NoError(t, c.Start())
-	waitArrowLoadClusterReady(t, c)
 	rolledForwardDB := openArrowLoadDB(t, c, 0)
 	mustExec(t, rolledForwardDB, "truncate table arrow_rollout.rollout_drain")
 	mustExec(t, rolledForwardDB, fmt.Sprintf(

@@ -87,8 +87,9 @@ stage syntax, multi-object success, corrupt-object rollback followed by reader
 reuse, same-key object replacement, conditional-range object-change rejection,
 client request cancellation, `KILL QUERY`, 2-CN fanout, and committed-data
 persistence across a complete local cluster restart. No cloud credentials or
-external services are needed. The added scenarios passed the full package,
-focused race runs, and a same-process two-run 2-CN BVT repetition:
+external services are needed. The original validation used a 1-CN BVT and a
+separate 2-CN fanout fixture. After consolidating them into one 2-CN BVT, the
+current validation commands are:
 
 ```text
 .agents/skills/mo-dev/scripts/mo-cgo-test -p=1 -count=1 -timeout=1200s \
