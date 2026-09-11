@@ -238,6 +238,39 @@ func BenchmarkRegexpAnchoredTextValidationRouting(b *testing.B) {
 	}
 }
 
+func BenchmarkRegexpSubstrWrapperPosition(b *testing.B) {
+	const rows = 1000
+	proc := testutil.NewProcess(b)
+	pattern := strings.Repeat("a", 1000) + "b"
+	subjects := make([]string, rows)
+	for i := range rows {
+		subjects[i] = "x"
+	}
+	for _, arity := range []int{2, 3} {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), subjects, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{pattern}, nil),
+		}
+		if arity == 3 {
+			inputs = append(inputs, NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, nil))
+		}
+		test := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_varchar.ToType(), false, make([]string, rows), nil),
+			newOpBuiltInRegexp().builtInRegexpSubstr)
+		b.Run(fmt.Sprintf("arity_%d", arity), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := test.result.PreExtendAndReset(rows); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := test.DebugRun(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkRegexpValueTextValidation(b *testing.B) {
 	subject := "a" + strings.Repeat("x", 1<<20-1)
 	for _, tc := range []struct {
