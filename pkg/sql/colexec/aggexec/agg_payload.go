@@ -17,6 +17,7 @@ package aggexec
 import (
 	"fmt"
 	"io"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
@@ -133,6 +134,14 @@ func appendGroupConcatData(dst []byte, typ types.Type, data []byte) ([]byte, err
 	return writer.data, nil
 }
 
+func formatGroupConcatFloat(value float64, bitSize int) []byte {
+	if value >= 1e15 || (value > 0 && value < 1e-13) ||
+		(value < 0 && value > -1e-13) || value <= -1e15 {
+		return []byte(strconv.FormatFloat(value, 'E', -1, bitSize))
+	}
+	return []byte(strconv.FormatFloat(value, 'f', -1, bitSize))
+}
+
 func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 	switch typ.Oid {
 	case types.T_bit, types.T_bool,
@@ -184,9 +193,11 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 	case types.T_uint32:
 		return writeValue(*util.UnsafeFromBytes[uint32](data))
 	case types.T_float32:
-		return writeValue(*util.UnsafeFromBytes[float32](data))
+		return writeBytes(formatGroupConcatFloat(
+			float64(*util.UnsafeFromBytes[float32](data)), 32))
 	case types.T_float64:
-		return writeValue(*util.UnsafeFromBytes[float64](data))
+		return writeBytes(formatGroupConcatFloat(
+			*util.UnsafeFromBytes[float64](data), 64))
 	case types.T_decimal64:
 		return writeValue(types.DecodeDecimal64(data).Format(typ.Scale))
 	case types.T_decimal128:
