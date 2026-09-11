@@ -221,6 +221,59 @@ func TestDecimalSumLegacyStateWireCompatibility(t *testing.T) {
 	}
 }
 
+func TestDecimalSumLegacyDistinctFlushWidenedResult(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	tests := []struct {
+		name      string
+		param     types.Type
+		makeInput func() *vector.Vector
+	}{
+		{
+			name:  "wide decimal64",
+			param: types.New(types.T_decimal64, 18, 0),
+			makeInput: func() *vector.Vector {
+				return buildAvgFixedVector(t, mp, types.New(types.T_decimal64, 18, 0),
+					[]types.Decimal64{1, 2, 2})
+			},
+		},
+		{
+			name:  "decimal128",
+			param: types.New(types.T_decimal128, 38, 0),
+			makeInput: func() *vector.Vector {
+				return buildAvgFixedVector(t, mp, types.New(types.T_decimal128, 38, 0),
+					[]types.Decimal128{
+						types.Decimal128FromInt64(1),
+						types.Decimal128FromInt64(2),
+						types.Decimal128FromInt64(2),
+					})
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := test.makeInput()
+			defer input.Free(mp)
+
+			exec := makeSumAvgExecWithLegacyDecimalSumState(
+				mp, true, AggIdOfSum, true, test.param, true)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(2))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, types.T_decimal256, results[0].GetType().Oid)
+			require.Equal(t, "3", vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0).Format(0))
+			require.True(t, results[0].IsNull(1))
+		})
+	}
+}
+
 func TestAvgExactNumericReturnType(t *testing.T) {
 	for _, test := range []struct {
 		name  string
