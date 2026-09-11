@@ -13789,6 +13789,7 @@ function_call_generic:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
+            IsGeneric: true,
             Exprs: $3,
         }
     }

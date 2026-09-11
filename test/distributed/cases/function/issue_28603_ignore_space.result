@@ -1,0 +1,55 @@
+DROP DATABASE IF EXISTS issue_28603_ignore_space;
+CREATE DATABASE issue_28603_ignore_space;
+USE issue_28603_ignore_space;
+CREATE TABLE src(a INT);
+INSERT INTO src VALUES (10), (20);
+SET @issue_28603_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+SELECT NOW () IS NOT NULL AS now_ok;
+not supported: function or operator 'now'
+SELECT SUBSTRING ('abcdef', 2, 3) AS substring_ok;
+not supported: function or operator 'substring'
+SELECT COUNT (*) FROM src;
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 15 near "*) FROM src;";
+SELECT SUM (a) FROM src;
+not supported: function or operator 'sum'
+SELECT DATE_ADD ('2024-01-01', INTERVAL 1 DAY) AS date_add_ok;
+not supported: function or operator 'date_add'
+SELECT ABS (-2) AS abs_ok, MOD (5, 2) AS mod_ok;
+➤ abs_ok[-5,64,0]  ¦  mod_ok[-5,64,0]  𝄀
+2  ¦  1
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,IGNORE_SPACE';
+SELECT NOW () IS NOT NULL AS now_ok;
+➤ now_ok[-7,1,0]  𝄀
+1
+SELECT SUBSTRING ('abcdef', 2, 3) AS substring_ok;
+➤ substring_ok[12,6,0]  𝄀
+bcd
+SELECT COUNT (*) = 2 AS count_ok FROM src;
+➤ count_ok[-7,1,0]  𝄀
+1
+SELECT SUM (a) = 30 AS sum_ok FROM src;
+➤ sum_ok[-7,1,0]  𝄀
+1
+SELECT DATE_ADD ('2024-01-01', INTERVAL 1 DAY) = '2024-01-02' AS date_add_ok;
+➤ date_add_ok[-7,1,0]  𝄀
+1
+SELECT ABS (-2) AS abs_ok, MOD (5, 2) AS mod_ok;
+➤ abs_ok[-5,64,0]  ¦  mod_ok[-5,64,0]  𝄀
+2  ¦  1
+PREPARE issue_28603_p FROM 'SELECT COUNT (*) = 2 AS count_ok FROM src';
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+EXECUTE issue_28603_p;
+➤ count_ok[-7,1,0]  𝄀
+1
+DEALLOCATE PREPARE issue_28603_p;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,IGNORE_SPACE';
+DROP VIEW IF EXISTS issue_28603_v;
+CREATE VIEW issue_28603_v AS SELECT COUNT (*) = 2 AS count_ok FROM src;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES';
+SELECT * FROM issue_28603_v;
+➤ count_ok[-7,1,0]  𝄀
+1
+DROP VIEW issue_28603_v;
+SET SESSION sql_mode = @issue_28603_saved_sql_mode;
+DROP DATABASE issue_28603_ignore_space;

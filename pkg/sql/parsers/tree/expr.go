@@ -960,8 +960,13 @@ type FuncExpr struct {
 	exprImpl
 	Func     ResolvableFunctionReference
 	FuncName *CStr
-	Type     FuncType
-	Exprs    Exprs
+	// IsGeneric is true when the parser recognized this call through the
+	// generic identifier-function rule rather than a native built-in rule.
+	// MySQL uses that distinction for whitespace-sensitive built-ins when
+	// IGNORE_SPACE is disabled.
+	IsGeneric bool
+	Type      FuncType
+	Exprs     Exprs
 
 	//specify the type of aggregation.
 	AggType AggType

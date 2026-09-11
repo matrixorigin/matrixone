@@ -259,6 +259,32 @@ func TestScannerSQLModePipeConcat(t *testing.T) {
 	}
 }
 
+func TestScannerSQLModeIgnoreSpace(t *testing.T) {
+	tests := []struct {
+		name  string
+		mode  string
+		input string
+		want  int
+	}{
+		{name: "default rejects whitespace-sensitive function spacing", input: "NOW ()", want: ID},
+		{name: "ignore space accepts whitespace-sensitive function spacing", mode: sqlModeIgnoreSpace, input: "NOW ()", want: NOW},
+		{name: "comments count as whitespace", input: "NOW /* comment */ ()", want: ID},
+		{name: "non-sensitive function remains generic", input: "ABS ()", want: ID},
+		{name: "mod remains available with whitespace", input: "MOD ()", want: MOD},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scanner := NewScannerWithSQLMode(dialect.MYSQL, test.input, ParseSQLModeFlags(test.mode))
+			defer PutScanner(scanner)
+			got, _ := scanner.Scan()
+			if got != test.want {
+				t.Fatalf("Scan(%q, %q) = %s, want %s", test.input, test.mode, tokenName(got), tokenName(test.want))
+			}
+		})
+	}
+}
+
 func TestScannerContextualOffset(t *testing.T) {
 	tests := []struct {
 		input string

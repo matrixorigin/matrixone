@@ -482,6 +482,30 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 		require.False(t, ses.isCached("cached-sql"), mode)
 		require.Equal(t, 1, stmt.freed, mode)
 	}
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE,IGNORE_SPACE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
 }
 
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {

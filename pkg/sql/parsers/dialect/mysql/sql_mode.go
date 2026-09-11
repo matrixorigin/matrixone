@@ -26,6 +26,8 @@ const SQLModeMatrixOneNative = "MATRIXONE_NATIVE"
 // rejects it when this token is absent.
 const SQLModeEnableBoolSumAvg = "ENABLE_BOOL_SUMAVG"
 
+const sqlModeIgnoreSpace = "IGNORE_SPACE"
+
 const (
 	sqlModeANSIQuotes         = "ANSI_QUOTES"
 	sqlModePipesAsConcat      = "PIPES_AS_CONCAT"
@@ -40,6 +42,53 @@ var parserSQLModeTokens = []string{
 	sqlModeNoBackslashEscapes,
 	sqlModeRealAsFloat,
 	sqlModeHighNotPrecedence,
+	sqlModeIgnoreSpace,
+}
+
+var sqlModeSensitiveFunctionNames = map[string]struct{}{
+	"adddate":      {},
+	"bit_and":      {},
+	"bit_or":       {},
+	"bit_xor":      {},
+	"cast":         {},
+	"count":        {},
+	"curdate":      {},
+	"curtime":      {},
+	"date_add":     {},
+	"date_sub":     {},
+	"extract":      {},
+	"group_concat": {},
+	"max":          {},
+	"mid":          {},
+	"min":          {},
+	"now":          {},
+	"position":     {},
+	"session_user": {},
+	"std":          {},
+	"stddev":       {},
+	"stddev_pop":   {},
+	"stddev_samp":  {},
+	"subdate":      {},
+	"substr":       {},
+	"substring":    {},
+	"sum":          {},
+	"sysdate":      {},
+	"system_user":  {},
+	"trim":         {},
+	"variance":     {},
+	"var_pop":      {},
+	"var_samp":     {},
+}
+
+func isSQLModeSensitiveFunctionName(name string) bool {
+	_, ok := sqlModeSensitiveFunctionNames[strings.ToLower(name)]
+	return ok
+}
+
+// IsSQLModeSensitiveFunctionName reports whether MySQL's function-name
+// whitespace rule applies to name.
+func IsSQLModeSensitiveFunctionName(name string) bool {
+	return isSQLModeSensitiveFunctionName(name)
 }
 
 const (
@@ -48,6 +97,9 @@ const (
 	SQLModeNoBackslashEscapes
 	SQLModeRealAsFloat
 	SQLModeHighNotPrecedence
+	// SQLModeIgnoreSpace allows whitespace between a whitespace-sensitive
+	// built-in function name and its opening parenthesis.
+	SQLModeIgnoreSpace
 )
 
 type SQLModeFlags uint8
@@ -57,7 +109,7 @@ func ParseSQLModeFlags(mode string) SQLModeFlags {
 	for _, part := range strings.Split(mode, ",") {
 		switch strings.ToUpper(strings.TrimSpace(part)) {
 		case "ANSI":
-			flags |= SQLModeFlags(SQLModeANSIQuotes | SQLModePipesAsConcat | SQLModeRealAsFloat)
+			flags |= SQLModeFlags(SQLModeANSIQuotes | SQLModePipesAsConcat | SQLModeRealAsFloat | SQLModeIgnoreSpace)
 		case sqlModeANSIQuotes:
 			flags |= SQLModeFlags(SQLModeANSIQuotes)
 		case sqlModePipesAsConcat:
@@ -68,6 +120,8 @@ func ParseSQLModeFlags(mode string) SQLModeFlags {
 			flags |= SQLModeFlags(SQLModeRealAsFloat)
 		case sqlModeHighNotPrecedence:
 			flags |= SQLModeFlags(SQLModeHighNotPrecedence)
+		case sqlModeIgnoreSpace:
+			flags |= SQLModeFlags(SQLModeIgnoreSpace)
 		}
 	}
 	return flags
