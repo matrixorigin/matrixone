@@ -1,0 +1,34 @@
+# Fractional temporal values must retain their source scale during numeric
+# coercion for variance and standard-deviation aggregates.
+DROP TABLE IF EXISTS variance_fraction;
+CREATE TABLE variance_fraction (
+    id INT,
+    t TIME(6),
+    d DATETIME(6),
+    ts TIMESTAMP(6)
+);
+INSERT INTO variance_fraction VALUES
+    (1, '00:00:00.100000', '2020-01-01 00:00:00.100000', '2020-01-01 00:00:00.100000'),
+    (1, '00:00:00.300000', '2020-01-01 00:00:00.300000', '2020-01-01 00:00:00.300000'),
+    (1, NULL, NULL, NULL),
+    (2, '-00:00:00.100000', '2020-01-01 00:00:00.100000', '2020-01-01 00:00:00.100000'),
+    (2, '-00:00:00.300000', '2020-01-01 00:00:00.300000', '2020-01-01 00:00:00.300000'),
+    (2, NULL, NULL, NULL);
+
+# Distributed aggregation, NULL neighbors, and negative TIME.
+SELECT id,
+       VAR_POP(t), VAR_SAMP(t), STDDEV_POP(t), STDDEV_SAMP(t),
+       VAR_POP(d), VAR_SAMP(d), STDDEV_POP(d), STDDEV_SAMP(d),
+       VAR_POP(ts), VAR_SAMP(ts), STDDEV_POP(ts), STDDEV_SAMP(ts)
+FROM variance_fraction
+GROUP BY id
+ORDER BY id;
+
+# Prepared execution must retain the temporal scale as well.
+SET @variance_fraction_id = 1;
+PREPARE variance_fraction_stmt FROM
+    'SELECT VAR_POP(t), VAR_SAMP(t), STDDEV_POP(t), STDDEV_SAMP(t) FROM variance_fraction WHERE id = ?';
+EXECUTE variance_fraction_stmt USING @variance_fraction_id;
+DEALLOCATE PREPARE variance_fraction_stmt;
+
+DROP TABLE variance_fraction;
