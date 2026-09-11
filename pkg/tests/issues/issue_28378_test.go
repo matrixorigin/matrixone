@@ -453,31 +453,35 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 							if err != nil {
 								return err
 							}
-							count := 0
-							seen := make(map[int64]bool)
-							for rows.Next() {
-								var id int64
-								if err := rows.Scan(&id); err != nil {
-									_ = rows.Close()
+							err = func() (runErr error) {
+								defer func() {
+									if closeErr := rows.Close(); runErr == nil {
+										runErr = closeErr
+									}
+								}()
+								count := 0
+								seen := make(map[int64]bool)
+								for rows.Next() {
+									var id int64
+									if err := rows.Scan(&id); err != nil {
+										return err
+									}
+									if id < 0 || id >= 65536 || seen[id] {
+										return fmt.Errorf("invalid vector id %d", id)
+									}
+									seen[id] = true
+									count++
+								}
+								if err := rows.Err(); err != nil {
 									return err
 								}
-								if id < 0 || id >= 65536 || seen[id] {
-									_ = rows.Close()
-									return fmt.Errorf("invalid vector id %d", id)
+								if count != 10 {
+									return fmt.Errorf("got %d rows, want 10", count)
 								}
-								seen[id] = true
-								count++
-							}
-							err = rows.Err()
-							closeErr := rows.Close()
+								return nil
+							}()
 							if err != nil {
 								return err
-							}
-							if closeErr != nil {
-								return closeErr
-							}
-							if count != 10 {
-								return fmt.Errorf("got %d rows, want 10", count)
 							}
 						}
 						return nil
@@ -497,7 +501,10 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 			cancel()
 			cancelledRows, err := conns[0].QueryContext(cancelCtx, statement)
 			if cancelledRows != nil {
-				_ = cancelledRows.Close()
+				defer cancelledRows.Close()
+				if rowsErr := cancelledRows.Err(); rowsErr != nil {
+					require.ErrorIs(t, rowsErr, context.Canceled)
+				}
 			}
 			require.ErrorIs(t, err, context.Canceled)
 			// This checks cancellation before SQL admission, not cancellation
