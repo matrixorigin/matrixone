@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"bytes"
 	"testing"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
@@ -25,6 +26,24 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSchemaReplayPreservesCaseVariantColumns(t *testing.T) {
+	legacy := NewEmptySchema("duplicate_column_case_replayed")
+	legacy.ColDefs = []*ColDef{
+		{Name: "Id", Idx: 0, Type: types.T_int32.ToType()},
+		{Name: "id", Idx: 1, Type: types.T_int32.ToType()},
+	}
+	legacy.NameMap = map[string]int{"Id": 0, "id": 1}
+	buf, err := legacy.Marshal()
+	require.NoError(t, err)
+
+	replayed := NewEmptySchema("")
+	_, err = replayed.ReadFromWithVersion(bytes.NewReader(buf), IOET_WALTxnCommand_Table_CurrVer)
+	require.NoError(t, err)
+	require.Len(t, replayed.ColDefs, 2)
+	require.Equal(t, "Id", replayed.ColDefs[0].Name)
+	require.Equal(t, "id", replayed.ColDefs[1].Name)
+}
 
 func TestCoverage_DefsToSchema_FromPublicationProperty(t *testing.T) {
 	defs := []engine.TableDef{
@@ -466,6 +485,9 @@ func TestCoverage_SystemSchemas_Init(t *testing.T) {
 	assert.NotNil(t, SystemTableSchema)
 	assert.NotNil(t, SystemColumnSchema)
 	assert.NotNil(t, SystemIndexTableSchema)
+	primaryColIdx := SystemIndexTableSchema.GetColIdx(pkgcatalog.IndexTablePrimaryColName)
+	require.NotEqual(t, -1, primaryColIdx)
+	assert.Equal(t, pkgcatalog.MoTablesTypes[pkgcatalog.MO_TABLES_CPKEY_IDX], SystemIndexTableSchema.ColDefs[primaryColIdx].Type)
 }
 
 func TestCoverage_Constants(t *testing.T) {
