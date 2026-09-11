@@ -3690,6 +3690,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 	if oldLogicalId != 0 {
 		createOpts = createOpts.WithKeepLogicalId(oldLogicalId)
 	}
+	// Same reason as the ALTER ... COPY replica: the recreate goes through regenerated
+	// DDL, which cannot express relkind.
+	createOpts = createOpts.WithKeepRelKind(tableDef.GetTableType())
 	if truncate.IsDelete {
 		rows, err := rel.Rows(c.proc.Ctx)
 		if err != nil {
@@ -4465,7 +4468,8 @@ func (s *Scope) AlterSequence(c *Compile) error {
 		oldLogicalID = plan2.SnapshotTableID(rel.GetTableDef(c.proc.Ctx))
 		// sequence table exists
 		// get pre sequence table row values
-		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSql(fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
+		ctx := process.ContextWithWarningSink(c.proc.Ctx, c.proc.WarningSink)
+		_values, err := c.proc.GetSessionInfo().SqlHelper.ExecSqlWithCtx(ctx, fmt.Sprintf("select * from `%s`.`%s`", dbName, tblName))
 		if err != nil {
 			return err
 		}

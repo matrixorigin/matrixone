@@ -112,15 +112,15 @@
 
 1. 不扩展 InsertValues；有剩余段继续使用上游 oldestAllocateAtLocked，含 terminal/skipped 来源。CACHE=1 有可用段但 TS 未知时 fail closed。
 2. 持列锁观察无可用段时，无投机分配在途；调用事务 SnapshotTS 可作为后续新保留的保守下界。新共享保留在该快照之后提交，私有保留采用 owning snapshot。缺少有效 snapshot 时拒绝，不使用零或 wall clock。
-3. CurrentValue 有本地游标/terminal 则直接读；无段时由实际 table cache owner 执行 SQL 读取 offset+step，checked overflow，不用创建 cache 时的陈旧 offset，不触发分配。未提交 CREATE 使用该 cache 的 txnOp；commit 后 owner 清空为 nil，使用已提交快照。lazy private wrapper 转交到同一实际 owner，并在整个查询期间保留 acquire/release；不持 cache 锁跨 SQL I/O。
+3. CurrentValue 有本地游标/terminal 则直接读；无段时由实际 table cache owner 执行 SQL 读取 offset+step，checked overflow，不用创建 cache 时的陈旧 offset，不触发分配。未提交 CREATE 使用该 cache 的 txnOp；commit 后 owner 清空为 nil，使用已提交快照。lazy private wrapper 转交到同一实际 owner，并在整个查询期间保留 acquire/release；不持 cache 锁跨 SQL I/O。已建立的 cache owner 将不可变策略传给观察查询，仅重新读取 allocator offset/step，不再重复读取 mo_tables；冷加载仍独立发现并校验策略，不缓存陈旧offset。
 4. mixed batch 的自动行真实需求在 manual 位移之前同步保留，使 `(NULL,100,NULL)` 的前一自动行仍能沿用上游 skipped-range 顺序。全显式不预留，estimate/low-water 不参与。
 5. cold GetColumns 同 SQL 快照读取 allocator rows 与 SchemaExtra；Reset 的旧 catalog 行可能已被 TRUNCATE 删除，因此该次读取明确指定新物理表为 metadata owner。无新增 public service/store API。
 
 ## 7. 兼容、失败与资源
 
 - 会话沿用 V56 gate；CACHE 使用已批准方案 A：缺省关闭，非零策略只允许在受控全量升级后显式开启。0 的旧表和缺失字段继续默认行为。
-- CACHE 使用新 V60；V56/V57/V58/V59 保留上游原含义。追加 `PreInsertAutoIDCache` wire-only opcode，不改变已有 opcode 数值；接收端先验证，再还原为普通 PRE_INSERT。
-- `SetupServiceBasedRuntime` 的本机 latest 不是 CN/TN 最低版本证明。V60/新 opcode 只补充局部及 PRE_INSERT 传输拒绝；旧 TN/旧直连 CN 必须由运维先停止，混合版本启用/运行和旧节点重入均不支持。该约束已经由用户批准，不增加平台 admission。
+- CACHE 使用新 V63；V56～V62 保留上游原含义（最新合并 cd8e8d9134）。追加 `PreInsertAutoIDCache` wire-only opcode，不改变已有 opcode 数值；接收端先验证，再还原为普通 PRE_INSERT。
+- `SetupServiceBasedRuntime` 的本机 latest 不是 CN/TN 最低版本证明。V63/新 opcode 只补充局部及 PRE_INSERT 传输拒绝；旧 TN/旧直连 CN 必须由运维先停止，混合版本启用/运行和旧节点重入均不支持。该约束已经由用户批准，不增加平台 admission。
 - 保留 ALTER exact-TN epoch-fence，不拿一般最低协议版本取代它。
 - 重启丢弃未用段，从持久高水位重建配置；降级旧二进制不承诺保留新策略，需停写后兼容逻辑导出或恢复升级前备份，不降低高水位。
 - account context/CREATE 权限/GLOBAL SET 权限走现有链路，冷 metadata 查询仍按租户隔离。CACHE 上限在 parser/plan 校验。

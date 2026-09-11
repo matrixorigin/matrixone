@@ -182,7 +182,8 @@ func (c *tableCache) currentValue(
 			// An uncommitted CREATE owns private allocator rows. Observe through
 			// that cache's transaction, not a new committed snapshot. getTxn
 			// releases its lock before I/O and returns nil after cache commit.
-			cols, err := store.GetColumns(ctx, tableID, c.getTxn())
+			observationCtx := context.WithValue(ctx, autoColumnKnownPolicyKey{}, col.CacheSize)
+			cols, err := store.GetColumns(observationCtx, tableID, c.getTxn())
 			if err != nil {
 				return 0, err
 			}

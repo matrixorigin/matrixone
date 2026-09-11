@@ -470,6 +470,10 @@ func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 // rows remain until Reset migrates them. The new physical table owns the policy.
 type autoColumnPolicyTableKey struct{}
 
+// autoColumnKnownPolicyKey is used only by an existing cache owner observing
+// its allocator rows. It must not bypass policy discovery on a cold cache load.
+type autoColumnKnownPolicyKey struct{}
+
 func (s *sqlStore) GetColumns(
 	ctx context.Context,
 	tableID uint64,
@@ -478,12 +482,16 @@ func (s *sqlStore) GetColumns(
 	if replacement, ok := ctx.Value(autoColumnPolicyTableKey{}).(uint64); ok {
 		policyTableID = replacement
 	}
-	// Read the table policy and allocator rows in one SQL snapshot. The policy
-	// is not duplicated in mo_increment_columns and must survive cold CN loads.
+	// Cold loads discover policy in the same SQL snapshot. An existing cache
+	// owner already knows its immutable policy and needs only fresh offsets.
+	knownPolicy, hasKnownPolicy := ctx.Value(autoColumnKnownPolicyKey{}).(uint64)
+	policySQL := fmt.Sprintf("(select extra_info from mo_tables where rel_id = %d)", policyTableID)
+	if hasKnownPolicy {
+		policySQL = "''"
+	}
 	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step,
-		(select extra_info from mo_tables where rel_id = %d) as table_extra
-		from %s where table_id = %d order by col_index`,
-		policyTableID, incrTableName, tableID)
+		%s as table_extra from %s where table_id = %d order by col_index`,
+		policySQL, incrTableName, tableID)
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithTxn(txnOp).
@@ -531,6 +539,9 @@ func (s *sqlStore) GetColumns(
 
 	if metadataErr != nil {
 		return nil, metadataErr
+	}
+	if hasKnownPolicy {
+		extra.AutoIdCache = knownPolicy
 	}
 	if err := validateAutoIDCacheSize(ctx, extra.AutoIdCache); err != nil {
 		return nil, err

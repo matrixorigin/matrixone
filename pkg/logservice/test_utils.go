@@ -108,12 +108,20 @@ func probeTestPort(port int) error {
 }
 
 func probeTestPortAddress(addr string) error {
-	tcp, err := net.Listen("tcp4", addr)
+	return probeTestPortAddressWithListeners(addr, net.Listen, net.ListenPacket)
+}
+
+func probeTestPortAddressWithListeners(
+	addr string,
+	listen func(string, string) (net.Listener, error),
+	listenPacket func(string, string) (net.PacketConn, error),
+) error {
+	tcp, err := listen("tcp4", addr)
 	if err != nil {
 		return err
 	}
 	defer tcp.Close()
-	udp, err := net.ListenPacket("udp4", addr)
+	udp, err := listenPacket("udp4", addr)
 	if err != nil {
 		return err
 	}
