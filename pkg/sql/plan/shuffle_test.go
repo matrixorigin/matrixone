@@ -3235,18 +3235,20 @@ func TestCompositeKeyZonemapExtractsFirstElementFromTruncatedTuple(t *testing.T)
 	_, err := types.Unpack(zm.GetMinBuf())
 	require.ErrorContains(t, err, "position 29")
 
-	center, ok := GetCenterValueExtractFromZMUnsigned(zm, types.T_varchar)
-	require.True(t, ok)
 	want := ByteSliceToUint64([]byte(traceID))
-	require.Equal(t, want/2+want/2, center)
+	for _, typ := range []types.T{types.T_varchar, types.T_char, types.T_text} {
+		center, ok := GetCenterValueExtractFromZMUnsigned(zm, typ)
+		require.True(t, ok)
+		require.Equal(t, want/2+want/2, center)
 
-	idx, ok := GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(
-		[]uint64{want - 1, want, want + 1},
-		zm,
-		types.T_varchar,
-	)
-	require.True(t, ok)
-	require.Less(t, idx, uint64(4))
+		idx, ok := GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(
+			[]uint64{want - 1, want, want + 1},
+			zm,
+			typ,
+		)
+		require.True(t, ok)
+		require.Less(t, idx, uint64(4))
+	}
 }
 
 func TestCompositeKeyZonemapExtractsSignedFirstElement(t *testing.T) {
@@ -3270,6 +3272,110 @@ func TestCompositeKeyZonemapExtractsSignedFirstElement(t *testing.T) {
 		zm,
 		types.T_int64,
 	)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), idx)
+}
+
+func TestCompositeKeyZonemapExtractsOtherNumericTypes(t *testing.T) {
+	newZonemap := func(encodeMin, encodeMax func(*types.Packer)) objectio.ZoneMap {
+		minPacker := types.NewPacker()
+		encodeMin(minPacker)
+		minPacker.EncodeStringType(bytes.Repeat([]byte{'a'}, 64))
+		maxPacker := types.NewPacker()
+		encodeMax(maxPacker)
+		maxPacker.EncodeStringType(bytes.Repeat([]byte{'z'}, 64))
+
+		zm := index2.NewZM(types.T_varchar, 0)
+		index2.UpdateZM(zm, minPacker.Bytes())
+		index2.UpdateZM(zm, maxPacker.Bytes())
+		return zm
+	}
+
+	for _, test := range []struct {
+		name      string
+		typ       types.T
+		encodeMin func(*types.Packer)
+		encodeMax func(*types.Packer)
+	}{
+		{
+			name:      "int16",
+			typ:       types.T_int16,
+			encodeMin: func(p *types.Packer) { p.EncodeInt16(-20) },
+			encodeMax: func(p *types.Packer) { p.EncodeInt16(40) },
+		},
+		{
+			name:      "int32",
+			typ:       types.T_int32,
+			encodeMin: func(p *types.Packer) { p.EncodeInt32(-20) },
+			encodeMax: func(p *types.Packer) { p.EncodeInt32(40) },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			zm := newZonemap(test.encodeMin, test.encodeMax)
+			center, ok := GetCenterValueExtractFromZMSigned(zm, test.typ)
+			require.True(t, ok)
+			require.Equal(t, int64(10), center)
+		})
+	}
+
+	for _, test := range []struct {
+		name      string
+		typ       types.T
+		encodeMin func(*types.Packer)
+		encodeMax func(*types.Packer)
+	}{
+		{
+			name:      "uint16",
+			typ:       types.T_uint16,
+			encodeMin: func(p *types.Packer) { p.EncodeUint16(20) },
+			encodeMax: func(p *types.Packer) { p.EncodeUint16(40) },
+		},
+		{
+			name:      "uint32",
+			typ:       types.T_uint32,
+			encodeMin: func(p *types.Packer) { p.EncodeUint32(20) },
+			encodeMax: func(p *types.Packer) { p.EncodeUint32(40) },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			zm := newZonemap(test.encodeMin, test.encodeMax)
+			center, ok := GetCenterValueExtractFromZMUnsigned(zm, test.typ)
+			require.True(t, ok)
+			require.Equal(t, uint64(30), center)
+		})
+	}
+}
+
+func TestShuffleByValueExtractedFromZonemapUsesPresetRanges(t *testing.T) {
+	makeNode := func(typ types.T) *plan.Node {
+		node := &plan.Node{Stats: DefaultStats()}
+		node.Stats.HashmapStats.ShuffleColIdx = int32(typ)
+		return node
+	}
+
+	signedPacker := types.NewPacker()
+	signedPacker.EncodeInt64(10)
+	signedZM := index2.NewZM(types.T_varchar, 0)
+	index2.UpdateZM(signedZM, signedPacker.Bytes())
+	signedRsp := &engine.RangesShuffleParam{
+		Node:              makeNode(types.T_int64),
+		Init:              true,
+		ShuffleRangeInt64: []int64{0, 20},
+	}
+	idx, ok := shuffleByValueExtractedFromZonemap(signedRsp, signedZM, 3)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), idx)
+
+	unsignedPacker := types.NewPacker()
+	unsignedPacker.EncodeUint64(10)
+	unsignedZM := index2.NewZM(types.T_varchar, 0)
+	index2.UpdateZM(unsignedZM, unsignedPacker.Bytes())
+	unsignedRsp := &engine.RangesShuffleParam{
+		Node:               makeNode(types.T_uint64),
+		Init:               true,
+		ShuffleRangeUint64: []uint64{0, 20},
+	}
+	idx, ok = shuffleByValueExtractedFromZonemap(unsignedRsp, unsignedZM, 3)
 	require.True(t, ok)
 	require.Equal(t, uint64(1), idx)
 }
@@ -3316,5 +3422,26 @@ func TestCompositeKeyZonemapDecodeFailureFallsBackToObjectHash(t *testing.T) {
 	_, ok = GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice([]uint64{1, 2, 3}, zm, types.T_varchar)
 	require.False(t, ok)
 	_, ok = GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice([]int64{1, 2, 3}, zm, types.T_int64)
+	require.False(t, ok)
+
+	unsupportedSigned := types.NewPacker()
+	unsupportedSigned.EncodeInt8(1)
+	unsupportedSignedZM := index2.NewZM(types.T_varchar, 0)
+	index2.UpdateZM(unsupportedSignedZM, unsupportedSigned.Bytes())
+	_, ok = GetCenterValueExtractFromZMSigned(unsupportedSignedZM, types.T_int8)
+	require.False(t, ok)
+
+	unsupportedUnsigned := types.NewPacker()
+	unsupportedUnsigned.EncodeBit(1)
+	unsupportedUnsignedZM := index2.NewZM(types.T_varchar, 0)
+	index2.UpdateZM(unsupportedUnsignedZM, unsupportedUnsigned.Bytes())
+	_, ok = GetCenterValueExtractFromZMUnsigned(unsupportedUnsignedZM, types.T_bit)
+	require.False(t, ok)
+
+	_, ok = GetRangeShuffleIndexForExtractedZM(0, 1, zm, uint64(bucketCount), types.T_float64)
+	require.False(t, ok)
+	_, ok = GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice([]uint64{1}, zm, types.T_float64)
+	require.False(t, ok)
+	_, ok = GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice([]int64{1}, zm, types.T_float64)
 	require.False(t, ok)
 }
