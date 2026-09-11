@@ -20,6 +20,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -152,21 +154,23 @@ func TestGenerateSeriesOffsetsPreserveSequence(t *testing.T) {
 
 func TestCompileGenerateSeriesParallelPartitionsOffsetsAcrossCNs(t *testing.T) {
 	offsets := [][2]int64{
-		{1, 100_000},
-		{100_001, 200_000},
-		{200_001, 300_000},
-		{300_001, 400_000},
+		{0, 4},
+		{6, 8},
+		{10, 12},
 	}
 	c := NewMockCompile(t)
 	c.addr = "ingress:6001"
 	c.anal = &AnalyzeModule{}
 	c.cnList = engine.Nodes{
 		{Addr: "cn-1:6001", Mcpu: 2},
-		{Addr: "cn-2:6001", Mcpu: 3},
+		{Addr: "cn-2:6001", Mcpu: 2},
 	}
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
 	node := &plan.Node{TableDef: &plan.TableDef{
-		Cols:    []*plan.ColDef{{Name: "result"}},
+		Cols: []*plan.ColDef{{
+			Name: "result",
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+		}},
 		TblFunc: &plan.TableFunction{Name: "generate_series"},
 	}}
 
@@ -176,7 +180,7 @@ func TestCompileGenerateSeriesParallelPartitionsOffsetsAcrossCNs(t *testing.T) {
 		len(offsets),
 		true,
 		offsets,
-		1,
+		2,
 	)
 	require.NoError(t, err)
 	require.Len(t, scopes, 2)
@@ -188,4 +192,24 @@ func TestCompileGenerateSeriesParallelPartitionsOffsetsAcrossCNs(t *testing.T) {
 
 	require.Equal(t, offsets[:2], first.OffsetTotal)
 	require.Equal(t, offsets[2:], second.OffsetTotal)
+
+	tail, workers := newParallelScope(scopes[1])
+	require.Same(t, scopes[1], tail)
+	require.Empty(t, workers)
+
+	proc := tail.Proc
+	require.NoError(t, second.Prepare(proc))
+	defer second.Free(proc, false, nil)
+
+	var got []int64
+	for {
+		result, err := second.Call(proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		values := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])
+		got = append(got, values...)
+	}
+	require.Equal(t, []int64{10, 12}, got)
 }

@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/prometheus/client_golang/prometheus"
-	"golang.org/x/sys/unix"
 )
 
 /*
@@ -256,13 +255,7 @@ func (sca *SimpleCAllocator) allocateMemory(size uint64, clearMemory bool) ([]by
 				return slice, nil
 			}
 		}
-		slice, err := unix.Mmap(
-			-1,
-			0,
-			int(size),
-			unix.PROT_READ|unix.PROT_WRITE,
-			unix.MAP_PRIVATE|unix.MAP_ANONYMOUS,
-		)
+		slice, err := mmapMemory(int(size))
 		if err != nil {
 			return nil, moerr.NewOOMNoCtx()
 		}
@@ -293,9 +286,7 @@ func (sca *SimpleCAllocator) deallocateMemory(slice []byte, size uint64) {
 		if sca.mmapCache != nil && sca.mmapCache.put(fullAllocation) {
 			return
 		}
-		if err := unix.Munmap(fullAllocation); err != nil {
-			panic(moerr.NewInternalErrorNoCtxf("failed to unmap %d-byte allocation: %v", size, err))
-		}
+		unmapMemory(fullAllocation)
 		return
 	}
 	C.free(ptr)
