@@ -45,9 +45,10 @@ const (
 	getActiveTxnRetryDelay  = 100 * time.Millisecond
 )
 
-// Local cleaner observation, never sent on the wire. An absent owner still
-// needs admission fencing and retained commit state, but has no endpoint to
-// probe/reset until the periodically refreshed membership view contains it.
+// Local cleaner observation, never sent on the wire. An absent owner has no
+// endpoint to probe/reset until the periodically refreshed membership view
+// contains it. Absence is not, by itself, proof that a newly admitted owner
+// has retired; the allocator's bind lifecycle supplies that evidence.
 var errActiveTxnOwnerAbsent = moerr.NewInternalErrorNoCtx("active txn owner absent from cluster inventory")
 
 type lockTableAllocator struct {
@@ -60,12 +61,16 @@ type lockTableAllocator struct {
 	server          Server
 	client          Client
 	inactiveService sync.Map // lock service id -> inactive time
-	inactiveMu      sync.RWMutex
-	ctl             sync.Map // lock service id -> *commitCtl
-	ctlMu           sync.RWMutex
-	allocatorID     string
-	closeOnce       sync.Once
-	closeErr        error
+	// ownerAbsentSince records a cleanup-only absence observation. It never
+	// participates in admission; unlike inactiveService, it cannot reject a
+	// commit. A positive bind/heartbeat or a resumed owner clears the marker.
+	ownerAbsentSince sync.Map // lock service id -> first observed absence time
+	inactiveMu       sync.RWMutex
+	ctl              sync.Map // lock service id -> *commitCtl
+	ctlMu            sync.RWMutex
+	allocatorID      string
+	closeOnce        sync.Once
+	closeErr         error
 	// version is the allocator process epoch. It is set once when the
 	// allocator is constructed; production code must not mutate it at runtime.
 	version uint64
@@ -149,6 +154,7 @@ func (l *lockTableAllocator) Get(
 	if binds == nil {
 		binds = l.registerService(serviceID)
 	}
+	l.markServicePresent(serviceID)
 	return l.registerBind(binds, group, tableID, originTableID, sharding)
 }
 
@@ -157,7 +163,11 @@ func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
 	if b == nil {
 		return false
 	}
-	return b.active()
+	active := b.active()
+	if active {
+		l.markServicePresent(serviceID)
+	}
+	return active
 }
 
 func (l *lockTableAllocator) AddCannotCommit(values []pb.OrphanTxn) [][]byte {
@@ -236,6 +246,57 @@ func (l *lockTableAllocator) markServiceInactive(
 	return true
 }
 
+// markServiceInactiveAtGenerationLocked records a retirement fence while the
+// allocator mutex is held by the caller. The lock order is l.mu -> ctlMu ->
+// inactiveMu, matching Valid's admission path. The controller identity and
+// recovery epoch are validation-time evidence: a timeout result captured before
+// Resume, controller replacement, or recovery-epoch rollover must not fence the
+// resumed incarnation. Keeping the check and fence in the same critical
+// section as bind removal prevents a commit from entering after retirement but
+// before the inactive marker is visible.
+func (l *lockTableAllocator) markServiceInactiveAtGenerationLocked(
+	serviceID string,
+	expectedCtl *commitCtl,
+	expectedRecoveryEpoch uint64,
+) bool {
+	l.ctlMu.Lock()
+	defer l.ctlMu.Unlock()
+	current, exists := l.ctl.Load(serviceID)
+	if expectedCtl == nil {
+		// No controller existed when the timeout was sampled. A controller
+		// created while the validation RPC was in flight is newer positive
+		// lifecycle evidence; leave the bind for the next timeout sweep.
+		if exists {
+			return false
+		}
+	} else if !exists || current != expectedCtl ||
+		expectedRecoveryEpoch == math.MaxUint64 ||
+		expectedCtl.currentRecoveryEpoch() != expectedRecoveryEpoch {
+		return false
+	}
+	l.inactiveMu.Lock()
+	defer l.inactiveMu.Unlock()
+	l.inactiveService.LoadOrStore(serviceID, time.Now())
+	return true
+}
+
+func (l *lockTableAllocator) markServiceAbsent(serviceID string) {
+	l.inactiveMu.Lock()
+	defer l.inactiveMu.Unlock()
+	l.ownerAbsentSince.LoadOrStore(serviceID, time.Now())
+}
+
+func (l *lockTableAllocator) markServicePresent(serviceID string) {
+	// Valid is on the commit-admission hot path. Avoid taking the mutex for the
+	// common case where no cleanup-only absence marker exists.
+	if _, ok := l.ownerAbsentSince.Load(serviceID); !ok {
+		return
+	}
+	l.inactiveMu.Lock()
+	defer l.inactiveMu.Unlock()
+	l.ownerAbsentSince.Delete(serviceID)
+}
+
 func (l *lockTableAllocator) resumeService(serviceID string) {
 	l.ctlMu.RLock()
 	defer l.ctlMu.RUnlock()
@@ -244,6 +305,7 @@ func (l *lockTableAllocator) resumeService(serviceID string) {
 	defer l.inactiveMu.Unlock()
 	ctl.advanceRecoveryEpoch()
 	l.inactiveService.Delete(serviceID)
+	l.ownerAbsentSince.Delete(serviceID)
 }
 
 func (l *lockTableAllocator) Valid(
@@ -274,6 +336,10 @@ func (l *lockTableAllocator) Valid(
 	if len(invalid) > 0 {
 		return invalid, nil
 	}
+	// A successful admission is positive lifecycle evidence even when this CN
+	// has not sent its first keepalive yet. Clear only the cleanup-only absence
+	// marker; an explicit/validated inactive fence remains authoritative below.
+	l.markServicePresent(serviceID)
 
 	// Admission and commit registration must be atomic with respect to fencing.
 	// Otherwise cleanup can mark the service inactive after this check but
@@ -429,12 +495,15 @@ func (l *lockTableAllocator) disableTableBindsLocked(b *serviceBinds) {
 }
 
 // disableTableBindsAtGeneration commits validation evidence only if it still
-// describes the serviceBinds object and keepalive generation sampled by
-// getTimeoutBinds. A successful keepalive after that snapshot is newer positive
+// describes the serviceBinds object, keepalive generation, and controller
+// recovery incarnation sampled by getTimeoutBinds. A successful keepalive,
+// Resume, or controller replacement after that snapshot is newer positive
 // evidence and must win over the stale validation result.
 func (l *lockTableAllocator) disableTableBindsAtGeneration(
 	b *serviceBinds,
 	keepaliveGeneration uint64,
+	expectedCtl *commitCtl,
+	expectedRecoveryEpoch uint64,
 ) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -444,6 +513,17 @@ func (l *lockTableAllocator) disableTableBindsAtGeneration(
 	b.Lock()
 	defer b.Unlock()
 	if b.keepaliveGeneration != keepaliveGeneration {
+		return false
+	}
+	// Validation has now confirmed that this exact allocator bind retired.
+	// Establish the service-level fence before deleting the bind, including for
+	// generation zero: a bind can be handed out before its first keepalive and
+	// its owner may already have admitted a transaction without a table list.
+	if !l.markServiceInactiveAtGenerationLocked(
+		b.serviceID,
+		expectedCtl,
+		expectedRecoveryEpoch,
+	) {
 		return false
 	}
 	b.disableLocked()
@@ -506,11 +586,15 @@ func (l *lockTableAllocator) getServiceBindsWithoutPrefix(serviceID string) *ser
 type timedOutServiceBinds struct {
 	binds               *serviceBinds
 	keepaliveGeneration uint64
+	ctl                 *commitCtl
+	recoveryEpoch       uint64
 }
 
 func (l *lockTableAllocator) getTimeoutBinds(now time.Time) []timedOutServiceBinds {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	l.ctlMu.RLock()
+	defer l.ctlMu.RUnlock()
 
 	var values []timedOutServiceBinds
 	for _, b := range l.mu.services {
@@ -518,9 +602,17 @@ func (l *lockTableAllocator) getTimeoutBinds(now time.Time) []timedOutServiceBin
 			now,
 			l.keepBindTimeout*keepBindGraceFactor,
 		); ok {
+			var ctl *commitCtl
+			var recoveryEpoch uint64
+			if value, exists := l.ctl.Load(b.serviceID); exists {
+				ctl = value.(*commitCtl)
+				recoveryEpoch = ctl.currentRecoveryEpoch()
+			}
 			values = append(values, timedOutServiceBinds{
 				binds:               b,
 				keepaliveGeneration: generation,
+				ctl:                 ctl,
+				recoveryEpoch:       recoveryEpoch,
 			})
 		}
 	}
@@ -708,6 +800,8 @@ func (l *lockTableAllocator) validateTimeoutBinds(
 			l.disableTableBindsAtGeneration(
 				b,
 				timeoutBind.keepaliveGeneration,
+				timeoutBind.ctl,
+				timeoutBind.recoveryEpoch,
 			)
 		}
 	}
@@ -801,6 +895,13 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 		snapshots[sid] = snapshot
 		return true
 	})
+	l.ownerAbsentSince.Range(func(key, value any) bool {
+		sid := key.(string)
+		snapshot := snapshots[sid]
+		snapshot.ownerAbsentAt = value.(time.Time)
+		snapshots[sid] = snapshot
+		return true
+	})
 	l.inactiveMu.RUnlock()
 	l.ctlMu.RUnlock()
 
@@ -831,12 +932,14 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 						break
 					}
 					activeTxnMap[sid] = nil
+					l.markServicePresent(sid)
 				} else {
 					m := make(map[string]struct{}, len(actives))
 					for _, txn := range actives {
 						m[util.UnsafeBytesToString(txn)] = struct{}{}
 					}
 					activeTxnMap[sid] = m
+					l.markServicePresent(sid)
 				}
 				break
 			}
@@ -848,11 +951,12 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 				return
 			}
 			if errors.Is(err, errActiveTxnOwnerAbsent) {
-				if l.markServiceInactive(sid, snapshot.ctl, snapshot.recoveryEpoch, true) &&
-					snapshot.inactiveAt.IsZero() {
-					l.logger.Info("active txn owner absent; retaining commit fences",
-						zap.String("serviceID", sid))
-				}
+				// Membership absence is an unknown observation. It may be the
+				// startup gap between allocator admission and HAKeeper's first
+				// inventory publication, so it must not create an inactive fence.
+				l.markServiceAbsent(sid)
+				// A confirmed bind retirement records the fence atomically in
+				// disableTableBindsAtGeneration; existing markers remain intact.
 				// Membership is checked again next sweep. Do not retry/reset an
 				// endpoint that does not exist, or emit the same error each sweep.
 				break
@@ -908,6 +1012,7 @@ type commitCleanupSnapshot struct {
 	generation    uint64
 	recoveryEpoch uint64
 	inactiveAt    time.Time
+	ownerAbsentAt time.Time
 }
 
 // applyCommitCleanup requires ctlMu exclusively. Expiry and state cleanup are
@@ -937,7 +1042,18 @@ func (l *lockTableAllocator) applyCommitCleanup(
 	if isInactive && inactive.(time.Time) != snapshot.inactiveAt {
 		return
 	}
-	expired := isInactive && time.Since(snapshot.inactiveAt) > retention
+	ownerAbsent, isOwnerAbsent := l.ownerAbsentSince.Load(sid)
+	// An absent-observation marker created after the snapshot is a newer
+	// lifecycle observation. Do not let an older RPC result reap its state.
+	if isOwnerAbsent && ownerAbsent.(time.Time) != snapshot.ownerAbsentAt {
+		return
+	}
+	// A disconnect fence and a cleanup-only absence marker each retain state for
+	// their own lifetime. Expiry is safe only after every marker currently
+	// protecting this controller has expired.
+	inactiveExpired := !isInactive || time.Since(snapshot.inactiveAt) > retention
+	ownerAbsentExpired := !isOwnerAbsent || time.Since(snapshot.ownerAbsentAt) > retention
+	expired := (isInactive || isOwnerAbsent) && inactiveExpired && ownerAbsentExpired
 	if c != nil {
 		// In-flight commits and persistent unknown-commit fences retain their
 		// independent lifetime protections in clean, even after disconnect expiry.
@@ -948,6 +1064,7 @@ func (l *lockTableAllocator) applyCommitCleanup(
 	}
 	if expired {
 		l.inactiveService.Delete(sid)
+		l.ownerAbsentSince.Delete(sid)
 		l.logger.Info("remove inactive service", zap.String("serviceID", sid))
 	}
 }
