@@ -67,6 +67,23 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 				require.NoError(t, conn.QueryRowContext(ctx, strings.ReplaceAll(integerQuery, "?", value)).Scan(&expected[0], &expected[1], &expected[2], &expected[3], &expected[4]))
 				require.Equal(t, expected, got, value)
 			}
+			for index, query := range []string{
+				"SELECT ROUND(1.25, ?), TRUNCATE(1.25, ?)",
+				"SELECT ROUND(?, 2), TRUNCATE(?, 2)",
+			} {
+				name := fmt.Sprintf("bool_precision_%d", index)
+				mustExec(t, ctx, conn, "PREPARE "+name+" FROM '"+query+"'")
+				for _, value := range []string{"TRUE", "FALSE", "NULL", "1", "0"} {
+					mustExec(t, ctx, conn, "SET @bool_precision = "+value)
+					var got, expected [2]sql.NullFloat64
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"EXECUTE "+name+" USING @bool_precision, @bool_precision").Scan(&got[0], &got[1]))
+					require.NoError(t, conn.QueryRowContext(ctx,
+						strings.ReplaceAll(query, "?", value)).Scan(&expected[0], &expected[1]))
+					require.Equal(t, expected, got, name+" "+value)
+				}
+				mustExec(t, ctx, conn, "DEALLOCATE PREPARE "+name)
+			}
 			mustExec(t, ctx, conn, `PREPARE bool_json FROM 'SELECT ?, JSON_TYPE(JSON_EXTRACT(JSON_ARRAY(?), "$[0]"))'`)
 			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_json")
 			var direct, jsonKind string
