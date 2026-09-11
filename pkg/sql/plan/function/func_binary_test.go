@@ -3414,20 +3414,46 @@ func TestConvNegativeFromBaseUsesSignedSourceDomain(t *testing.T) {
 	}
 }
 
-func TestConvFloatUsesStringPrefixForScientificValues(t *testing.T) {
+func TestConvFloatUsesMySQLNumericPrefix(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_float64.ToType(),
-				[]float64{1e20, -1e20, math.Ldexp(1, 63)},
-				[]bool{false, false, false}),
-			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10, 10, -10}, []bool{false, false, false}),
-			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16, 16, 16}, []bool{false, false, false}),
+				[]float64{1e20, -1e20, math.Ldexp(1, 63), 999999, 1e6, 1e15, 1.2345678901234567e-5, 1e-5, 1e-16},
+				[]bool{false, false, false, false, false, false, false, false, false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10, 10, -10, 10, 10, 10, 10, 10, 10}, []bool{false, false, false, false, false, false, false, false, false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16, 16, 16, 16, 16, 16, 16, 16, 16}, []bool{false, false, false, false, false, false, false, false, false}),
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
-			[]string{"1", "FFFFFFFFFFFFFFFF", "9"}, []bool{false, false, false}), Conv)
+			[]string{"1", "FFFFFFFFFFFFFFFF", "9", "F423F", "F4240", "1", "1", "0", "1"},
+			[]bool{false, false, false, false, false, false, false, false, false}), Conv)
 	succeed, info := fc.Run()
 	require.True(t, succeed, info)
+}
+
+func TestAppendMySQLNumericFloatBoundary(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		bits  int
+		want  string
+	}{
+		{name: "go exponent boundary remains fixed", value: 1e6, bits: 64, want: "1000000"},
+		{name: "small value remains fixed", value: 1e-5, bits: 64, want: "0.00001"},
+		{name: "long small value keeps scientific width fallback", value: 1.2345678901234567e-5, bits: 64, want: "1.2345678901234568e-05"},
+		{name: "mysql lower fixed boundary", value: 1e-15, bits: 64, want: "0.000000000000001"},
+		{name: "outside lower fixed boundary remains scientific", value: 1e-16, bits: 64, want: "1e-16"},
+		{name: "mysql upper fixed boundary remains scientific", value: 1e15, bits: 64, want: "1e+15"},
+		{name: "float32 exponent boundary remains fixed", value: 1e6, bits: 32, want: "1000000"},
+		{name: "float32 small value remains fixed", value: 1e-5, bits: 32, want: "0.00001"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := string(appendMySQLNumericFloat(nil, tc.value, tc.bits))
+			require.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestConvCoversRemainingTypedDomains(t *testing.T) {
@@ -3448,7 +3474,7 @@ func TestConvCoversRemainingTypedDomains(t *testing.T) {
 		{name: "bit", input: NewFunctionTestInput(types.T_bit.ToType(), []uint64{15}, []bool{false}), wanted: []string{"F"}},
 		{name: "decimal128", input: NewFunctionTestInput(types.New(types.T_decimal128, 20, 1), []types.Decimal128{decimal128}, []bool{false}), wanted: []string{"F"}},
 		{name: "decimal256", input: NewFunctionTestInput(types.New(types.T_decimal256, 65, 1), []types.Decimal256{decimal256}, []bool{false}), wanted: []string{"F"}},
-		{name: "float32", input: NewFunctionTestInput(types.T_float32.ToType(), []float32{15.5}, []bool{false}), wanted: []string{"F"}},
+		{name: "float32", input: NewFunctionTestInput(types.T_float32.ToType(), []float32{15.5, 1e6, 1e-5}, []bool{false, false, false}), wanted: []string{"F", "F4240", "0"}},
 		{name: "timestamp", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp}, []bool{false}), wanted: []string{"7E8"}},
 		{name: "year", input: NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024}, []bool{false}), wanted: []string{"7E8"}},
 	}

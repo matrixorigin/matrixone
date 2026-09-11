@@ -3499,8 +3499,8 @@ func convFloatPrefix[T types.Floats](
 		// 1e20 is parsed as the prefix "1", not as an integer conversion of
 		// the binary float. Keep the representation on the stack and share the
 		// same signed/unsigned parser as character and decimal inputs.
-		var buf [32]byte
-		text := strconv.AppendFloat(buf[:0], float64(value), 'g', -1, bitSize)
+		var buf [64]byte
+		text := appendMySQLNumericFloat(buf[:0], float64(value), bitSize)
 		signedValue, unsignedValue, signed, err := parseBaseIntegerPrefix(text, fromBase)
 		if err != nil {
 			return err
@@ -3514,6 +3514,106 @@ func convFloatPrefix[T types.Floats](
 		}
 	}
 	return nil
+}
+
+// MySQL renders floating-point values with a fixed-point representation for a
+// wider exponent range than strconv's 'g' format. CONV and BIN consume the
+// integer prefix of that representation, so using Go's default boundary would
+// turn values such as 1000000 ("1e+06") into the prefix 1 instead of 1000000.
+//
+// This is the prefix-relevant part of MySQL's my_gcvt policy. A decimal point
+// position of -14 through 15 uses fixed notation when that representation fits
+// MySQL's type-specific output width; values outside that range remain
+// scientific unless the shortest representation has enough significant digits
+// to retain a fractional part beyond the 15-digit boundary.
+const (
+	mysqlFloatMaxDecimalPoint   = 15
+	mysqlFloat32MaxStringLength = 12 // FLT_DIG + 6
+	mysqlFloat64MaxStringLength = 22 // DBL_DIG + 7
+)
+
+func appendMySQLNumericFloat(dst []byte, value float64, bitSize int) []byte {
+	text := strconv.AppendFloat(dst[:0], value, 'g', -1, bitSize)
+	exponentPos := -1
+	for i, ch := range text {
+		if ch == 'e' || ch == 'E' {
+			exponentPos = i
+			break
+		}
+	}
+	if exponentPos < 0 {
+		// A finite value already rendered without an exponent is within Go's
+		// fixed-point range, which is a subset of MySQL's range.
+		return text
+	}
+
+	exponent, ok := parseFloatExponent(text[exponentPos+1:])
+	if !ok {
+		// strconv only emits a valid exponent. Keep this defensive fallback
+		// total and preserve its original representation if that ever changes.
+		return text
+	}
+	decimalPoint := exponent + 1
+	significantDigits := 0
+	for _, ch := range text[:exponentPos] {
+		if ch >= '0' && ch <= '9' {
+			significantDigits++
+		}
+	}
+
+	if decimalPoint >= -mysqlFloatMaxDecimalPoint+1 &&
+		(decimalPoint <= mysqlFloatMaxDecimalPoint || significantDigits > decimalPoint) {
+		fixedLength := significantDigits
+		switch {
+		case decimalPoint <= 0:
+			fixedLength += 2 - decimalPoint // "0." plus leading zeroes
+		case decimalPoint < significantDigits:
+			fixedLength++ // decimal point between significant digits
+		default:
+			fixedLength = decimalPoint // trailing zeroes after the digits
+		}
+		if text[0] == '-' {
+			fixedLength++
+		}
+		maxLength := mysqlFloat64MaxStringLength
+		if bitSize == 32 {
+			maxLength = mysqlFloat32MaxStringLength
+		}
+		if fixedLength > maxLength {
+			return text
+		}
+		return strconv.AppendFloat(dst[:0], value, 'f', -1, bitSize)
+	}
+	return text
+}
+
+func parseFloatExponent(text []byte) (int, bool) {
+	if len(text) == 0 {
+		return 0, false
+	}
+
+	sign := 1
+	pos := 0
+	switch text[0] {
+	case '+':
+		pos++
+	case '-':
+		sign = -1
+		pos++
+	}
+	if pos == len(text) {
+		return 0, false
+	}
+
+	exponent := 0
+	for ; pos < len(text); pos++ {
+		ch := text[pos]
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+		exponent = exponent*10 + int(ch-'0')
+	}
+	return sign * exponent, true
 }
 
 func formatSignedToBase(val int64, toBase int64) string {

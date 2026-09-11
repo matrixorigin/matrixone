@@ -22,6 +22,10 @@ SELECT bin(TRUE) AS bin_true, bin(FALSE) AS bin_false;
 SELECT bin(DATE '2024-05-06') AS bin_date, bin(CAST('2024-05-06 12:34:56' AS DATETIME)) AS bin_datetime, bin(CAST('12:34:56' AS TIME)) AS bin_time;
 SELECT conv(TRUE, 10, 16) AS conv_bool, conv(CAST('15.5' AS DECIMAL(4,1)), 10, 16) AS conv_decimal;
 SELECT conv(CAST(1e20 AS DOUBLE), 10, 16) AS conv_float_large, conv(CAST(1.2345678901234567e-5 AS DOUBLE), 10, 16) AS conv_float_scientific;
+SELECT conv(CAST(1000000 AS DOUBLE), 10, 16) AS conv_float_fixed_boundary,
+       bin(CAST(1000000 AS DOUBLE)) AS bin_float_fixed_boundary,
+       conv(CAST(1e-5 AS DOUBLE), 10, 16) AS conv_float_small_fixed,
+       bin(CAST(1e-5 AS DOUBLE)) AS bin_float_small_fixed;
 PREPARE bin_runtime FROM 'SELECT BIN(?)';
 SET @bin_runtime_value = TRUE;
 EXECUTE bin_runtime USING @bin_runtime_value;

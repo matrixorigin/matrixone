@@ -3448,7 +3448,7 @@ func TestBinDynamicCoversRemainingDomains(t *testing.T) {
 		{name: "uint16", input: NewFunctionTestInput(types.T_uint16.ToType(), []uint16{10}, []bool{false}), wanted: []string{"1010"}},
 		{name: "uint32", input: NewFunctionTestInput(types.T_uint32.ToType(), []uint32{10}, []bool{false}), wanted: []string{"1010"}},
 		{name: "uint64", input: NewFunctionTestInput(types.T_uint64.ToType(), []uint64{10}, []bool{false}), wanted: []string{"1010"}},
-		{name: "float32", input: NewFunctionTestInput(types.T_float32.ToType(), []float32{10.5}, []bool{false}), wanted: []string{"1010"}},
+		{name: "float32", input: NewFunctionTestInput(types.T_float32.ToType(), []float32{10.5, 1e6, 1e-5}, []bool{false, false, false}), wanted: []string{"1010", "11110100001001000000", "0"}},
 		{name: "float64", input: NewFunctionTestInput(types.T_float64.ToType(), []float64{10.5}, []bool{false}), wanted: []string{"1010"}},
 		{name: "bit", input: NewFunctionTestInput(types.T_bit.ToType(), []uint64{10}, []bool{false}), wanted: []string{"1010"}},
 		{name: "decimal128", input: NewFunctionTestInput(types.New(types.T_decimal128, 20, 1), []types.Decimal128{decimal128}, []bool{false}), wanted: []string{"1111"}},
@@ -3513,17 +3513,17 @@ func TestBinFloat(t *testing.T) {
 	}
 }
 
-func TestBinFloatUsesStringPrefix(t *testing.T) {
+func TestBinFloatUsesMySQLNumericPrefix(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_float64.ToType(),
-				[]float64{1e20, -1e20, 1.2345678901234567e-5, math.Ldexp(1, 63)},
-				[]bool{false, false, false, false}),
+				[]float64{1e20, -1e20, 1.2345678901234567e-5, 1e-5, math.Ldexp(1, 63), 999999, 1e6, 1e15, 1e-16},
+				[]bool{false, false, false, false, false, false, false, false, false}),
 		},
 		NewFunctionTestResult(types.T_varchar.ToType(), false,
-			[]string{"1", "1111111111111111111111111111111111111111111111111111111111111111", "1", "1001"},
-			[]bool{false, false, false, false}), BinFloat[float64])
+			[]string{"1", "1111111111111111111111111111111111111111111111111111111111111111", "1", "0", "1001", "11110100001000111111", "11110100001001000000", "1", "1"},
+			[]bool{false, false, false, false, false, false, false, false, false}), BinFloat[float64])
 	succeed, info := fc.Run()
 	require.True(t, succeed, info)
 }

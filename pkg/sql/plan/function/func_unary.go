@@ -549,8 +549,8 @@ func binFloat[T constraints.Float](v T, proc *process.Process) (string, error) {
 	if _, ok := any(v).(float32); ok {
 		bitSize = 32
 	}
-	var buf [32]byte
-	text := strconv.AppendFloat(buf[:0], float64(v), 'g', -1, bitSize)
+	var buf [64]byte
+	text := appendMySQLNumericFloat(buf[:0], float64(v), bitSize)
 	_, unsignedValue, _, err := parseBaseIntegerPrefix(text, 10)
 	if err != nil {
 		return "", err
