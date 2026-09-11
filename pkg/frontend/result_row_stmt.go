@@ -68,11 +68,25 @@ func getPreparedResultColumnsFor(stmt tree.Statement, plan *plan.Plan, txnHaveDD
 	}
 	if query := plan.GetQuery(); query != nil {
 		var title string
-		switch stmt.(type) {
-		case *tree.ExplainStmt, *tree.ExplainAnalyze:
-			title = plan2.GetPlanTitle(query, txnHaveDDL)
+		switch explainStmt := stmt.(type) {
+		case *tree.ExplainStmt:
+			if explainJSONFormat(explainStmt.Options) {
+				title = "EXPLAIN"
+			} else {
+				title = plan2.GetPlanTitle(query, txnHaveDDL)
+			}
+		case *tree.ExplainAnalyze:
+			if explainJSONFormat(explainStmt.Options) {
+				title = "EXPLAIN"
+			} else {
+				title = plan2.GetPlanTitle(query, txnHaveDDL)
+			}
 		case *tree.ExplainPhyPlan:
-			title = plan2.GetPhyPlanTitle(query, txnHaveDDL)
+			if explainJSONFormat(explainStmt.Options) {
+				title = "EXPLAIN"
+			} else {
+				title = plan2.GetPhyPlanTitle(query, txnHaveDDL)
+			}
 		}
 		if title != "" {
 			return []*plan2.ColDef{{
@@ -83,6 +97,17 @@ func getPreparedResultColumnsFor(stmt tree.Statement, plan *plan.Plan, txnHaveDD
 		}
 	}
 	return plan2.GetResultColumnsFromPlan(plan)
+}
+
+func explainJSONFormat(options []tree.OptionElem) bool {
+	for _, option := range options {
+		if !strings.EqualFold(option.Name, tree.FormatOption) {
+			continue
+		}
+		value := strings.Trim(strings.TrimSpace(option.Value), "'\"")
+		return strings.EqualFold(value, "JSON")
+	}
+	return false
 }
 
 func sessionTxnHaveDDL(ses FeSession) bool {

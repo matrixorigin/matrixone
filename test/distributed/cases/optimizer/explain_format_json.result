@@ -1,0 +1,39 @@
+drop database if exists issue_28301;
+create database issue_28301;
+use issue_28301;
+create table t(id int primary key, v int);
+insert into t values (1, 10), (2, 20);
+explain format=json select * from t where id = 1;
+EXPLAIN
+explain (format 'json') select * from t;
+EXPLAIN
+explain format = 'json' select a.id from t a join t b on a.id = b.id;
+EXPLAIN
+explain format=json with c as (select id from t) select * from c;
+EXPLAIN
+explain format=json select id, row_number() over (order by id) as rn from t;
+EXPLAIN
+explain (analyze false, format json) select * from t;
+EXPLAIN
+explain format=json update t set v = 99 where id = 1;
+EXPLAIN
+explain format=json delete from t where id = 1;
+EXPLAIN
+explain format=json insert into t values (3, 30);
+EXPLAIN
+explain format=json replace into t values (3, 30);
+EXPLAIN
+select count(*) as cnt from t;
+cnt
+2
+select v from t where id = 1;
+v
+10
+prepare e28301 from 'explain format=json select * from t';
+execute e28301;
+EXPLAIN
+deallocate prepare e28301;
+explain analyze format=json select * from t;
+explain phyplan format=json select * from t;
+explain (format json, check '["Table Scan"]') select * from t;
+drop database issue_28301;

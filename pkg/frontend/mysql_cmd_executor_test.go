@@ -7002,6 +7002,38 @@ func TestWriteExplainResultSetsValidTextMetadata(t *testing.T) {
 	require.Equal(t, uint32(math.MaxUint32), mysqlColumn.Length())
 }
 
+func TestWriteExplainResultSetsStableJSONMetadata(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ctx := context.Background()
+	query := &plan0.Query{
+		StmtType: plan0.Query_SELECT,
+		Nodes:    []*plan0.Node{{NodeId: 0, NodeType: plan0.Node_VALUE_SCAN}},
+		Steps:    []int32{0},
+	}
+	stmt := tree.NewExplainStmt(&tree.Select{}, "json")
+	stmt.Options = []tree.OptionElem{{Name: tree.FormatOption, Value: "json"}}
+
+	err := writeExplainResult(
+		ctx,
+		ses,
+		stmt,
+		&plan0.Plan{Plan: &plan0.Plan_Query{Query: query}},
+		&explain.ExplainOptions{Format: explain.EXPLAIN_FORMAT_JSON},
+		"",
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), ses.GetMysqlResultSet().GetRowCount())
+	column, err := ses.GetMysqlResultSet().GetColumn(ctx, 0)
+	require.NoError(t, err)
+	mysqlColumn := column.(*MysqlColumn)
+	require.Equal(t, "EXPLAIN", mysqlColumn.Name())
+	require.Equal(t, defines.MYSQL_TYPE_VAR_STRING, mysqlColumn.ColumnType())
+	require.Equal(t, uint16(charsetVarchar), mysqlColumn.Charset())
+	require.Equal(t, uint32(math.MaxUint32), mysqlColumn.Length())
+}
+
 func TestDoExplainStmtIncludesSchedulingPreviewWithoutFailingDiscovery(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -8256,13 +8288,43 @@ func Test_getExplainOption(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, option.Format, explain.EXPLAIN_FORMAT_TEXT)
 
-	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "json"}})
+	option, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "json"}})
+	require.Nil(t, err)
+	require.Equal(t, option.Format, explain.EXPLAIN_FORMAT_JSON)
+
+	_, err = getExplainOption(ctx, []tree.OptionElem{
+		{Name: "format", Value: "json"},
+		{Name: "analyze", Value: "true"},
+	})
+	require.NotNil(t, err)
+	_, err = getExplainOption(ctx, []tree.OptionElem{
+		{Name: "format", Value: "json"},
+		{Name: "phyplan", Value: "true"},
+	})
+	require.NotNil(t, err)
+	_, err = getExplainOption(ctx, []tree.OptionElem{
+		{Name: "format", Value: "json"},
+		{Name: "check", Value: `["Table Scan"]`},
+	})
+	require.NotNil(t, err)
+	_, err = getExplainOption(ctx, []tree.OptionElem{
+		{Name: "format", Value: "json"},
+		{Name: "check", Value: `[]`},
+	})
+	require.NotNil(t, err)
+
+	_, err = getExplainOption(ctx, []tree.OptionElem{
+		{Name: "format", Value: "json"},
+		{Name: "format", Value: "text"},
+	})
 	require.NotNil(t, err)
 
 	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "dot"}})
 	require.NotNil(t, err)
 
 	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "???"}})
+	require.NotNil(t, err)
+	_, err = getExplainOption(ctx, []tree.OptionElem{{Name: "format", Value: "traditional"}})
 	require.NotNil(t, err)
 
 	// other

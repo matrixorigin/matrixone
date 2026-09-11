@@ -17,6 +17,7 @@ package frontend
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -34,4 +35,19 @@ func TestPreparedAnalyzeProtocolContract(t *testing.T) {
 
 	columns := getPreparedResultColumnsFor(prepareStmt.Stmt, &planpb.Plan{}, false)
 	require.Empty(t, columns)
+}
+
+func TestPreparedExplainJSONUsesStableColumnName(t *testing.T) {
+	stmt := tree.MakeExplainStmt(&tree.Select{}, []tree.OptionElem{
+		tree.MakeOptionElem(tree.FormatOption, "json"),
+	})
+	plan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+	}}}
+
+	columns := getPreparedResultColumnsFor(stmt, plan, false)
+	require.Len(t, columns, 1)
+	require.Equal(t, "EXPLAIN", columns[0].Name)
+	require.Equal(t, "EXPLAIN", columns[0].OriginName)
+	require.Equal(t, int32(types.T_varchar), columns[0].Typ.Id)
 }
