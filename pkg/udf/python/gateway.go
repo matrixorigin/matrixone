@@ -1650,10 +1650,22 @@ func validateInvocationInputs(invocation *udf.Invocation, args []TypeDescriptor)
 	if invocation == nil || len(invocation.Inputs) != len(args) {
 		return fmt.Errorf("python udf: invalid input shape")
 	}
-	// An empty physical selection has no input backing to inspect.  The
-	// descriptor and arity have already been validated above; keeping this
-	// case explicit allows zero-row operators to avoid manufacturing vectors.
+	// An empty physical selection has no input backing to inspect.  Nil inputs
+	// are valid in this case, but a vector supplied by a caller still has to
+	// match the frozen descriptor.  Otherwise a zero-row invocation could
+	// bypass the same type boundary enforced for non-empty execution.
 	if invocation.Length == 0 {
+		for index, input := range invocation.Inputs {
+			if input == nil {
+				continue
+			}
+			if input.GetType() == nil || !input.GetType().Eq(invocation.Args[index]) {
+				return fmt.Errorf(
+					"python udf: input column %d type does not match the frozen argument type",
+					index,
+				)
+			}
+		}
 		return nil
 	}
 	for index, input := range invocation.Inputs {
