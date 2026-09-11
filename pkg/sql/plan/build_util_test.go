@@ -702,6 +702,47 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
 }
 
+func TestBuildPlanFencesHexDefaultBeforeConstantFold(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := mock.CurrentContext().GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	const ddl = "create table t(v varchar(16) default (hex(cast(15.5 as double))))"
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+	_, err := buildSingleStmt(mock, t, ddl)
+	require.ErrorContains(t, err, "protocol version 65")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+	built, err := buildSingleStmt(mock, t, ddl)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault()
+	require.Equal(t, "F", def.Expr.GetLit().GetSval())
+	require.Nil(t, def.Expr.GetLit().GetSrc())
+}
+
+func TestMigrateLegacyHexDoesNotReparseFoldedDefault(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+
+	stmt, err := mysql.ParseOneWithSQLMode(t.Context(),
+		"create table t(v varchar(16) default (hex(cast(16777215.9 as real))))", 1, "REAL_AS_FLOAT")
+	require.NoError(t, err)
+	defer stmt.Free()
+	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+	def, err := buildDefaultExpr(col, plan.Type{Id: int32(types.T_varchar), Width: 16}, proc)
+	require.NoError(t, err)
+	require.Equal(t, "1000000", def.Expr.GetLit().GetSval())
+
+	tableDef := &plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "v", Typ: plan.Type{Id: int32(types.T_varchar), Width: 16}, Default: def,
+	}}}
+	require.NoError(t, MigrateLegacyHexTableDef(proc, tableDef))
+	require.Equal(t, "1000000", tableDef.Cols[0].Default.Expr.GetLit().GetSval())
+}
+
 func TestMapDDLAssignmentCastErrorOnlyMapsStringWidthFailures(t *testing.T) {
 	ctx := t.Context()
 	invalidInput := moerr.NewInvalidInput(ctx, "bad default")

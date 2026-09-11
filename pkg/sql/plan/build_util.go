@@ -710,6 +710,11 @@ func buildDefaultExprWithColumns(
 	if err != nil {
 		return nil, err
 	}
+	// Constant folding removes the function identity, so rolling-upgrade
+	// admission must happen while the resolved HEX overload is still present.
+	if err = requireHexMySQLNumericProtocol(proc, defaultExpr); err != nil {
+		return nil, err
+	}
 
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)

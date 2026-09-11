@@ -15,15 +15,10 @@
 package plan
 
 import (
-	"strings"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -50,15 +45,8 @@ func MigrateLegacyHexTableDef(proc *process.Process, tableDef *plan.TableDef) er
 		if col.OnUpdate != nil {
 			migrateLegacyHexExpr(col.OnUpdate.Expr)
 		}
-		if col.Default == nil || col.Default.Expr == nil {
-			continue
-		}
-		if col.Default.Expr.GetLit() == nil {
+		if col.Default != nil && col.Default.Expr != nil && col.Default.Expr.GetLit() == nil {
 			migrateLegacyHexExpr(col.Default.Expr)
-			continue
-		}
-		if err := rebuildFoldedHexDefault(proc, col); err != nil {
-			return err
 		}
 	}
 	return nil
@@ -77,66 +65,33 @@ func supportsHexMySQLNumericProtocol(proc *process.Process) bool {
 	return ok && valid && version >= defines.MORPCVersion65
 }
 
-func rebuildFoldedHexDefault(proc *process.Process, col *plan.ColDef) error {
-	origin := col.Default.OriginString
-	if !strings.Contains(strings.ToLower(origin), "hex") {
+func requireHexMySQLNumericProtocol(proc *process.Process, expr *plan.Expr) error {
+	if supportsHexMySQLNumericProtocol(proc) || !exprContainsNewHexOverload(expr) {
 		return nil
 	}
-	stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "select "+origin, 1)
-	if err != nil {
-		return nil
-	}
-	defer stmt.Free()
-	selectStmt, ok := stmt.(*tree.Select)
-	if !ok {
-		return nil
-	}
-	clause, ok := selectStmt.Select.(*tree.SelectClause)
-	if !ok || len(clause.Exprs) != 1 {
-		return nil
-	}
-
-	binder := NewDefaultBinder(proc.Ctx, nil, nil, col.Typ, nil)
-	bound, err := binder.BindExpr(unwrapParenExpr(clause.Exprs[0].Expr), 0, false)
-	if err != nil {
-		return nil
-	}
-	if !exprContainsHex(bound) {
-		return nil
-	}
-	if err = preservePersistedFormatCompatibility(proc.Ctx, bound); err != nil {
-		return err
-	}
-	assigned, err := makePlan2AssignmentCastExpr(proc.Ctx, bound, col.Typ)
-	if err != nil {
-		return err
-	}
-	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(assigned), proc, false, true)
-	if err != nil {
-		return mapDDLAssignmentCastError(proc.Ctx, col.Typ, col.Name, err)
-	}
-	col.Default.Expr = folded
-	return nil
+	return moerr.NewNotSupportedNoCtxf(
+		"MySQL numeric HEX semantics require all CNs to support MORPC protocol version %d",
+		defines.MORPCVersion65)
 }
 
-func exprContainsHex(expr *plan.Expr) bool {
+func exprContainsNewHexOverload(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
 	if fn := expr.GetF(); fn != nil {
-		functionID, _ := function.DecodeOverloadID(fn.GetFunc().GetObj())
-		if functionID == function.HEX {
+		functionID, overloadID := function.DecodeOverloadID(fn.GetFunc().GetObj())
+		if functionID == function.HEX && overloadID >= function.HexMySQLNumericOverloadStart {
 			return true
 		}
 		for _, arg := range fn.Args {
-			if exprContainsHex(arg) {
+			if exprContainsNewHexOverload(arg) {
 				return true
 			}
 		}
 	}
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
-			if exprContainsHex(item) {
+			if exprContainsNewHexOverload(item) {
 				return true
 			}
 		}

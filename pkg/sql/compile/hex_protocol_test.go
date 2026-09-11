@@ -188,7 +188,8 @@ func TestHexMigratesLegacyPersistedExpressionsAtVersion65(t *testing.T) {
 		require.Equal(t, int32(9), hexExprOverload(expr))
 		require.Equal(t, types.T_decimal128, types.T(expr.GetF().GetArgs()[0].Typ.Id))
 	}
-	require.Equal(t, "F", executionTable.Cols[3].Default.Expr.GetLit().GetSval())
+	require.Equal(t, "10", executionTable.Cols[3].Default.Expr.GetLit().GetSval(),
+		"a folded catalog literal must retain its creation-time semantics")
 	for _, expr := range tableHexExpressions(serializedCatalog) {
 		require.Equal(t, int32(5), hexExprOverload(expr), "catalog expression must stay unchanged")
 	}
