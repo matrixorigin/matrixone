@@ -6921,6 +6921,10 @@ func (c *Compile) checkPitrGranularity(
 	pts *cdc.PatternTuples,
 	minLength ...int64,
 ) error {
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
 	// Validate concrete CDC sources before persisting the task. The sink needs
 	// a user-visible primary key for UPDATE/DELETE identity; the engine-only
 	// fake key used by no-PK tables is deliberately not accepted.
@@ -6928,8 +6932,9 @@ func (c *Compile) checkPitrGranularity(
 		if pt == nil || pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
 			continue
 		}
-		pkSQL := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = %s AND %s = %s AND %s = 'p' AND %s <> %s LIMIT 1",
+		pkSQL := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = %d AND %s = %s AND %s = %s AND %s = 'p' AND %s <> %s LIMIT 1",
 			sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
+			sqlquote.Ident(catalog.SystemColAttr_AccID), accountId,
 			sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.String(pt.Source.Database),
 			sqlquote.Ident(catalog.SystemColAttr_RelName), sqlquote.String(pt.Source.Table),
 			sqlquote.Ident(catalog.SystemColAttr_ConstraintType),
@@ -6951,11 +6956,6 @@ func (c *Compile) checkPitrGranularity(
 	if len(minLength) > 0 {
 		minPitrLen = max(minLength[0]+1, minPitrLen)
 	}
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-
 	sqlCluster := fmt.Sprintf(`SELECT pitr_length,pitr_unit FROM %s.%s WHERE level='cluster' AND account_id = %d`,
 		catalog.MO_CATALOG, catalog.MO_PITR, accountId)
 	if res, err := c.runSqlWithResultAndOptions(sqlCluster, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog()); err == nil {
