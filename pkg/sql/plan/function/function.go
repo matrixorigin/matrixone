@@ -383,8 +383,18 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // non-NULL. STRICT functions normally preserve an all-non-NULL argument
 // guarantee, except for functions that can synthesize NULL from valid values.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
-	fid, _ := DecodeOverloadID(overloadID)
+	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
+	case OCT:
+		// New string executors produce NULL for empty non-NULL input.
+		// Preserve the persisted legacy and numeric overload contracts.
+		if oid >= OctStringOverloadStart && len(args) == 1 {
+			switch types.T(args[0].Typ.Id) {
+			case types.T_char, types.T_varchar, types.T_text,
+				types.T_binary, types.T_varbinary, types.T_blob:
+				return false
+			}
+		}
 	case CASE:
 		if caseHasTemporalPromotion(args) {
 			return false

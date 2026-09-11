@@ -361,7 +361,7 @@ prepare group_concat_max_len_stmt from 'select group_concat(s order by s separat
 set session group_concat_max_len = 5;
 execute group_concat_max_len_stmt;
 group_concat(s, ,order by s)
-aabbc
+aabbcc
 set session group_concat_max_len = 1024;
 execute group_concat_max_len_stmt;
 group_concat(s, ,order by s)
@@ -371,8 +371,48 @@ set session group_concat_max_len = 5;
 select group_concat(s order by s separator '') from group_concat_max_len_01;
 group_concat(s, ,order by s)
 aabbc
+set session group_concat_max_len = 5;
+prepare group_concat_max_len_low_stmt from 'select group_concat(s order by s separator "") from group_concat_max_len_01';
+execute group_concat_max_len_low_stmt;
+group_concat(s, ,order by s)
+aabbc
 set session group_concat_max_len = 1024;
+execute group_concat_max_len_low_stmt;
+group_concat(s, ,order by s)
+aabbcc
+set session group_concat_max_len = 5;
+execute group_concat_max_len_low_stmt;
+group_concat(s, ,order by s)
+aabbc
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1260  ¦  Row 3 was cut by GROUP_CONCAT()
+deallocate prepare group_concat_max_len_low_stmt;
 drop table group_concat_max_len_01;
+drop table if exists group_concat_warning_01;
+create table group_concat_warning_01 (id int primary key, s varchar(16));
+insert into group_concat_warning_01 values (1, 'éé'), (2, '中中'), (3, 'abcd');
+set session group_concat_max_len = 8;
+select group_concat(s order by id separator '|'),
+hex(group_concat(s order by id separator '|'))
+from group_concat_warning_01;
+group_concat(s, |,order by id)    hex(group_concat(s, |,order by id))
+éé|中    C3A9C3A97CE4B8AD
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1260  ¦  Row 2 was cut by GROUP_CONCAT()  𝄀
+Warning  ¦  1260  ¦  Row 2 was cut by GROUP_CONCAT()
+select group_concat(s order by id separator '|'),
+group_concat(s order by id separator '')
+from group_concat_warning_01;
+group_concat(s, |,order by id)    group_concat(s, ,order by id)
+éé|中    éé中
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1260  ¦  Row 2 was cut by GROUP_CONCAT()  𝄀
+Warning  ¦  1260  ¦  Row 2 was cut by GROUP_CONCAT()
+set session group_concat_max_len = 1024;
+drop table group_concat_warning_01;
 drop table if exists group_concat_extended_types;
 create table group_concat_extended_types (
 id int primary key,

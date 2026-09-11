@@ -2622,6 +2622,26 @@ func TestGroupingExtensionQueryOutputKeysAreNullable(t *testing.T) {
 	}
 }
 
+func TestOctNotNullSourceCTAS(t *testing.T) {
+	for _, typ := range []types.T{types.T_varchar, types.T_varbinary, types.T_int64} {
+		t.Run(typ.String(), func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			source := ctx.tables["nation"].Cols[0]
+			source.Typ = plan.Type{Id: int32(typ), Width: 10, NotNullable: true}
+			source.Default = &plan.Default{NullAbility: false}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+				"create table oct_copy as select oct(n_nationkey) as o from nation", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			col := p.GetDdl().GetCreateTable().GetTableDef().GetCols()[0]
+			require.Equal(t, int32(types.T_varchar), col.Typ.Id)
+			require.Equal(t, typ != types.T_int64, col.GetDefault().GetNullAbility())
+		})
+	}
+}
+
 func TestBuildCTASFromViewUsesIndependentExecutableDefault(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	sourceCol := ctx.tables["nation"].Cols[0]
@@ -5274,6 +5294,38 @@ func TestCreateTableAsSelect(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	sqls := []string{"CREATE TABLE t1 (a int, b char(5)); CREATE TABLE t2 (c float) as select b, a from t1"}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestCTASTargetOnlyDefaultsUseTargetInsertPath(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := buildSingleStmt(mock, t, `
+		create table ctas_target_only (
+			a int default 1,
+			b int default (a + 1)
+		) as select 7 as c`)
+	require.NoError(t, err)
+
+	createTable := logicPlan.GetDdl().GetCreateTable()
+	require.NotNil(t, createTable)
+	createAsSelect := createTable.GetCreateAsSelectSql()
+	require.Contains(t, createAsSelect,
+		"insert into `tpch`.`ctas_target_only` (`c`) select `__mo_ctas_source`.`c`")
+	require.NotContains(t, createAsSelect, "a + 1",
+		"target-only defaults must be evaluated by INSERT after the table exists")
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, createAsSelect, 1)
+	require.NoError(t, err)
+
+	logicPlan, err = buildSingleStmt(mock, t, `
+		create table ctas_target_only_volatile (
+			a double default (rand()),
+			b double default (a)
+		) as select 7 as c`)
+	require.NoError(t, err)
+	createAsSelect = logicPlan.GetDdl().GetCreateTable().GetCreateAsSelectSql()
+	require.Contains(t, createAsSelect,
+		"insert into `tpch`.`ctas_target_only_volatile` (`c`) select `__mo_ctas_source`.`c`")
+	require.NotContains(t, createAsSelect, "rand()",
+		"volatile target-only defaults must be evaluated once by INSERT")
 }
 
 func TestCTASDoesNotProjectDestinationGeneratedColumns(t *testing.T) {

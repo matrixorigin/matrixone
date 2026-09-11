@@ -265,6 +265,47 @@ func parseLeadingInteger(s string) (int64, bool) {
 	return v, true
 }
 
+// parseLeadingUint64 extracts the decimal integer prefix used by OCT's
+// string-to-number conversion. MySQL parses OCT's string argument through an
+// unsigned longlong: a representable sign is applied modulo 2^64, positive
+// overflow saturates at ULLONG_MAX, and negative overflow converts to zero.
+//
+// Leading whitespace must already be stripped by the caller. The boolean is
+// false when there is no digit after an optional sign.
+func parseLeadingUint64(s string) (uint64, bool) {
+	if len(s) == 0 {
+		return 0, false
+	}
+	start := 0
+	negative := false
+	if s[0] == '+' || s[0] == '-' {
+		start = 1
+		negative = s[0] == '-'
+	}
+
+	end := start
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == start {
+		return 0, false
+	}
+
+	value, err := strconv.ParseUint(s[start:end], 10, 64)
+	if err != nil {
+		// MySQL's conversion clamps a positive overflow to ULLONG_MAX, but
+		// returns zero when the negative magnitude itself overflows.
+		if negative {
+			return 0, true
+		}
+		return ^uint64(0), true
+	}
+	if negative {
+		return 0 - value, true
+	}
+	return value, true
+}
+
 // encodeCharBytes converts an int64 argument for MySQL CHAR() into big-endian
 // bytes. MySQL treats CHAR(N) values as unsigned 32-bit integers and expands
 // values > 255 into multiple big-endian bytes:
@@ -4255,9 +4296,10 @@ func builtInTan(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
-		return momath.Exp(v)
+func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck[float64, float64](parameters, result, length, func(v float64) (float64, bool) {
+		r := math.Exp(v)
+		return r, math.IsInf(r, 0)
 	}, selectList)
 }
 

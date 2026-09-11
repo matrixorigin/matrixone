@@ -529,9 +529,9 @@ UT_HARD_TIMEOUT ?= 70m
 # consumes CPU, memory, and linker capacity, so it remains opt-in until a
 # same-resource measurement proves a critical-path gain.
 UT_PREBUILD_EMBEDDED ?= 0
-# Plan overlap is an explicit A/B knob; it consumes one heavy process slot and
-# remains off until the runner's resource budget proves a gain.
-UT_OVERLAP_PLAN ?= 0
+# Reuse released engine slots for plan while resource-heavy work finishes.
+# The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
+UT_OVERLAP_PLAN ?= 1
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60

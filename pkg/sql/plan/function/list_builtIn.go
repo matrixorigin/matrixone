@@ -8881,14 +8881,14 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: OCT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    octTypeCheck,
 
-		Overloads: []overload{
+		Overloads: withLegacyOctOverloads([]overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_uint8},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[uint8]
@@ -8898,7 +8898,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_uint16},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[uint16]
@@ -8908,7 +8908,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[uint32]
@@ -8918,7 +8918,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[uint64]
@@ -8928,7 +8928,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[int8]
@@ -8938,7 +8938,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[int16]
@@ -8948,7 +8948,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[int32]
@@ -8958,7 +8958,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[int64]
@@ -8968,7 +8968,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 8,
 				args:       []types.T{types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctFloat[float32]
@@ -8978,7 +8978,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 9,
 				args:       []types.T{types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctFloat[float64]
@@ -8988,7 +8988,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 10,
 				args:       []types.T{types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctDate
@@ -8998,7 +8998,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 11,
 				args:       []types.T{types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctDatetime
@@ -9008,7 +9008,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 12,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctString
@@ -9018,7 +9018,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 13,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctString
@@ -9028,13 +9028,63 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 14,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctString
 				},
 			},
-		},
+			{
+				overloadId: 15,
+				args:       []types.T{types.T_time},
+				retType: func(parameters []types.Type) types.Type {
+					return octalResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctTime
+				},
+			},
+			{
+				overloadId: 16,
+				args:       []types.T{types.T_bit},
+				retType: func(parameters []types.Type) types.Type {
+					return octalResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return Oct[uint64]
+				},
+			},
+			{
+				overloadId: 17,
+				args:       []types.T{types.T_binary},
+				retType: func(parameters []types.Type) types.Type {
+					return octalResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctString
+				},
+			},
+			{
+				overloadId: 18,
+				args:       []types.T{types.T_varbinary},
+				retType: func(parameters []types.Type) types.Type {
+					return octalResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctString
+				},
+			},
+			{
+				overloadId: 19,
+				args:       []types.T{types.T_blob},
+				retType: func(parameters []types.Type) types.Type {
+					return octalResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctString
+				},
+			},
+		}),
 	},
 
 	// function `PI`

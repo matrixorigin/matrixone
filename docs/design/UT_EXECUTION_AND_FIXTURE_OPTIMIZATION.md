@@ -1,11 +1,46 @@
 # UT 执行模型与 fixture 生命周期优化设计
 
-- 状态：Accepted for this PR，revision 4
+- 状态：Accepted for this PR，revision 6
 - 适用范围：`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 资源预算
 - 约束：不增加 runner 数量；收益必须来自单 runner 的工作删除、fixture 复用或资源有界的阶段重叠
 - 设计 owner：UT runner 与测试基础设施；各测试 package 对自己的 fixture reset/cleanup 契约负责
 - 设计门禁：跨 package、跨进程 admission、runner 取消和集群生命周期，命中 execution、ownership、resource 和 public test-contract 多个边界
 - 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 仍为显式 opt-in；两者都不改变默认资源预算。跨进程 cluster 共享和动态调度不在本 PR；本 revision 按兼容矩阵落地了一个同进程单 CN fixture 合并，并为后续专用 fixture 增加显式释放边界。
+
+## Revision 6: reuse released engine capacity on one runner
+
+The CI caller selects `ut_sharded: false`. Returning to one runner is a resource
+constraint, not a speedup relative to the earlier single-runner baseline.
+
+The measured single-runner trace has resource-heavy work from 06:19:04 to
+06:26:04, while both engine processes finish by 06:22:22. Plan then extends the
+critical path by about 2m20s. The runner now starts plan after joining engine,
+while the existing resource-heavy command continues. With the default budget
+of three, `engine(2) + resource(1)` becomes `plan(1) + resource(1)`. Plan compilation
+retains `-p1`; cases, data, race flags, cluster admission, and coverage jobs are
+unchanged. This scheduling change is enabled by default (`UT_OVERLAP_PLAN=1`);
+`0` provides the previous sequential baseline. Budgets of one or two retain
+sequential execution, as do paths without a concurrent engine helper.
+
+The foreground command retains one parent-owned PID and stage/label. Engine's
+status is saved even on failure, and plan still runs. Engine JSON is merged only
+after the foreground writer has exited: renaming the report before that barrier
+would discard later writes to the old inode. Plan retains its private report.
+Cancellation signals every owned group before bounded waits and report merging.
+
+The scheduling contract tests use a blocked heavy writer that only plan can
+release, prove engine is joined first, and require every report exactly once.
+They also exercise failures of each stage, low budgets, sequential mode, and
+TERM during overlap. No public SQL behavior changes, so new BVT cases are not
+needed. Actual CI savings depend on the remaining heavy tail and resource
+contention; the historical 2m20s is potential overlap, not a measured improvement.
+
+The earlier proposed logservice companion was removed. That package finished
+several minutes before light completed in the observed trace; its own elapsed
+time was not evidence of critical-path savings.
+
+The sections below record the earlier fixture/runner design. Revision 6 replaces
+the earlier opt-in, extra-slot plan-overlap policy with released-slot scheduling.
 
 ## 1. 问题与不变量
 

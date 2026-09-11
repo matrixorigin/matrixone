@@ -913,8 +913,20 @@ func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 		return types.Type{}, false
 	}
 	if pos < len(rule.paramValues) {
-		if param, ok := rule.paramValues[pos].(ParamValue); ok && param.HasRuntimeType {
-			return param.RuntimeType, true
+		if param, ok := rule.paramValues[pos].(ParamValue); ok {
+			// SQL EXECUTE values are transported through a text vector, so their
+			// logical source type must drive overload rebinding without becoming
+			// the visible type of a bare result marker.  An explicit RuntimeType
+			// (for protocol values or a latched specialization) remains authoritative;
+			// a SQL source is only a fallback when no such type is present.
+			if param.HasRuntimeType {
+				return param.RuntimeType, true
+			}
+			if !param.IsBinaryProtocol && param.HasSourceType &&
+				(param.SourceType.IsNumeric() || param.SourceType.Oid == types.T_bool ||
+					param.SourceType.Oid == types.T_year) {
+				return param.SourceType, true
+			}
 		}
 	}
 	switch kind {
