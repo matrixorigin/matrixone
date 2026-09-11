@@ -973,7 +973,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 }
 
 func TestMarkedDatabaseRestoreRejectsBeforeDestructiveWorkBelowCapability(t *testing.T) {
-	setProtocolVersionForTest(t, "", defines.MORPCVersion61)
+	setProtocolVersionForTest(t, "", defines.MORPCVersion63)
 	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
 	const (
 		dbName       = "issue26068_restore"
@@ -1039,14 +1039,14 @@ func TestMarkedDatabaseRestoreRejectsBeforeDestructiveWorkBelowCapability(t *tes
 			)
 
 			err := test.run(bh)
-			require.ErrorContains(t, err, "requires MORPC protocol version 62")
+			require.ErrorContains(t, err, "requires MORPC protocol version 64")
 			require.Equal(t, []string{test.query}, bh.executedSQLs)
 		})
 	}
 }
 
 func TestMarkedAccountRestorePreflightsBeforeDestructiveWorkBelowCapability(t *testing.T) {
-	setProtocolVersionForTest(t, "", defines.MORPCVersion61)
+	setProtocolVersionForTest(t, "", defines.MORPCVersion63)
 	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
 	const (
 		dbName       = "issue26068_restore"
@@ -1108,14 +1108,14 @@ func TestMarkedAccountRestorePreflightsBeforeDestructiveWorkBelowCapability(t *t
 			)
 
 			err := test.run(bh)
-			require.ErrorContains(t, err, "requires MORPC protocol version 62")
+			require.ErrorContains(t, err, "requires MORPC protocol version 64")
 			require.Equal(t, []string{test.showSQL, test.createSQL}, bh.executedSQLs)
 		})
 	}
 }
 
 func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
-	setProtocolVersionForTest(t, "", defines.MORPCVersion62)
+	setProtocolVersionForTest(t, "", defines.MORPCVersion64)
 	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
 	const (
 		dbName       = "issue26068_restore"

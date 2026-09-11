@@ -40,13 +40,13 @@ import (
 )
 
 func TestIsUserDatabaseType(t *testing.T) {
-	for _, version := range []int64{defines.MORPCVersion61, defines.MORPCVersion62} {
+	for _, version := range []int64{defines.MORPCVersion63, defines.MORPCVersion64} {
 		require.True(t, isUserDatabaseType("", version))
 		require.False(t, isUserDatabaseType(catalog.SystemDBTypeSubscription, version))
 		require.False(t, isUserDatabaseType("unknown", version))
 	}
-	require.False(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion61))
-	require.True(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion62))
+	require.False(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion63))
+	require.True(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion64))
 }
 
 func Test_doCreatePublication(t *testing.T) {
@@ -476,8 +476,8 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 		wantErr             bool
 	}{
 		{
-			name:          "v61 explicit database rejects",
-			protocol:      defines.MORPCVersion61,
+			name:          "v63 explicit database rejects",
+			protocol:      defines.MORPCVersion63,
 			publication:   "branch_db",
 			publicationID: 7,
 			statement:     "alter publication pub1 account acc1 database replacement_db comment 'updated'",
@@ -485,8 +485,8 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 			wantErr:       true,
 		},
 		{
-			name:            "v61 effective database rejects",
-			protocol:        defines.MORPCVersion61,
+			name:            "v63 effective database rejects",
+			protocol:        defines.MORPCVersion63,
 			publication:     "branch_db",
 			publicationID:   7,
 			statement:       "alter publication pub1 account acc1 comment 'updated'",
@@ -494,24 +494,24 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 			wantErr:         true,
 		},
 		{
-			name:          "v62 explicit database succeeds",
-			protocol:      defines.MORPCVersion62,
+			name:          "v64 explicit database succeeds",
+			protocol:      defines.MORPCVersion64,
 			publication:   "branch_db",
 			publicationID: 7,
 			statement:     "alter publication pub1 account acc1 database replacement_db comment 'updated'",
 			lookupDB:      "replacement_db",
 		},
 		{
-			name:            "v62 effective database succeeds",
-			protocol:        defines.MORPCVersion62,
+			name:            "v64 effective database succeeds",
+			protocol:        defines.MORPCVersion64,
 			publication:     "branch_db",
 			publicationID:   7,
 			statement:       "alter publication pub1 account acc1 comment 'updated'",
 			lookupPersisted: true,
 		},
 		{
-			name:                "v62 effective target account database succeeds",
-			protocol:            defines.MORPCVersion62,
+			name:                "v64 effective target account database succeeds",
+			protocol:            defines.MORPCVersion64,
 			publication:         "branch_db",
 			publicationID:       7,
 			publicationAccounts: "acc1",
@@ -520,8 +520,8 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 			databaseOwner:       1,
 		},
 		{
-			name:                "v62 replacement target account database succeeds",
-			protocol:            defines.MORPCVersion62,
+			name:                "v64 replacement target account database succeeds",
+			protocol:            defines.MORPCVersion64,
 			publication:         "branch_db",
 			publicationID:       7,
 			publicationAccounts: "acc1",
@@ -532,7 +532,7 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 		},
 		{
 			name:        "account level remains database independent",
-			protocol:    defines.MORPCVersion61,
+			protocol:    defines.MORPCVersion63,
 			publication: pubsub.TableAll,
 			statement:   "alter publication pub1 account acc1 comment 'updated'",
 		},

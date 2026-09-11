@@ -396,10 +396,10 @@ Execution safety:
 - If the database contains user data tables, every contained user data table
   must have an active `mo_branch_metadata` child row.
 - Fail before DDL if any contained user data table is not a branch child.
-- Before database-identity protocol v62 is active, if validation finds no active
+- Before database-identity protocol v64 is active, if validation finds no active
   branch child tables, fail before DDL. Current table-level metadata cannot
   distinguish an empty branch-created database from an ordinary empty database.
-- At protocol v62 or later, `mo_database.dat_type = 'data-branch'` is the
+- At protocol v64 or later, `mo_database.dat_type = 'data-branch'` is the
   database-level identity. A marked database may contain no ordinary tables,
   but every ordinary table that is present must still have an active
   `mo_branch_metadata` child row.
@@ -780,9 +780,9 @@ Required unit tests:
   - database owner fallback -> same;
   - database with non-branch user table -> fail before drop.
   - failed validation leaves the database and all contained objects untouched.
-  - pre-v62 or unmarked empty database with normal `DROP DATABASE` privilege ->
+  - pre-v64 or unmarked empty database with normal `DROP DATABASE` privilege ->
     fail before drop.
-  - v62 marked database containing only views/sequences and no active branch
+  - v64 marked database containing only views/sequences and no active branch
     child tables -> pass.
   - database containing only branch tables plus restored views -> pass.
 
@@ -857,7 +857,7 @@ Implement these decisions in this change:
      existing table.
 2. Empty database created by `DATA BRANCH CREATE DATABASE`
    - Before the section 12 protocol is approved and active, reject `DATA BRANCH
-     DELETE DATABASE` if validation finds no active branch child tables. At v62
+     DELETE DATABASE` if validation finds no active branch child tables. At v64
      or later, accept an empty database only when its catalog row carries the
      approved database-level branch identity.
 3. View handling in `CREATE DATABASE`
@@ -868,7 +868,7 @@ Implement these decisions in this change:
    - Do not require `mo_branch_metadata` rows for restored views during
      `DATA BRANCH DELETE DATABASE`; current metadata is table-level only.
 4. Database-level branch identity
-   - The privilege fix remains table-metadata based below v62. The proposed
+   - The privilege fix remains table-metadata based below v64. The proposed
      issue #26068 extension is specified separately in section 12 and must not
      emit or consume its persistent semantics until the cluster-wide capability
      gate is active.
@@ -886,13 +886,13 @@ Implement these decisions in this change:
 ## 12. Database-level Branch Identity Amendment
 
 - Status: proposed and implemented; independent revision review pending
-- Independent decision: pending for exact revision r14
+- Independent decision: pending for exact revision r15
 - Tracking issue: [matrixorigin/matrixone#26068](https://github.com/matrixorigin/matrixone/issues/26068)
 - Implementation PR: [matrixorigin/matrixone#28272](https://github.com/matrixorigin/matrixone/pull/28272)
-- Design revision: `data-branch-database-identity-2026-09-10-r14`
-- Required rollout capability: `MORPCVersion62`
+- Design revision: `data-branch-database-identity-2026-09-11-r15`
+- Required rollout capability: `MORPCVersion64`
 
-Revision r14 moves the capability to v62 because v48 through v61 are
+Revision r15 moves the capability to v64 because v48 through v63 are
 now owned by the generation-aware CDC watermark catalog contract, vector-level
 grouping-set projection expansion, the two ordered ODKU protocol contracts,
 MySQL binary JSON subtype tags, ordered-stream distributed Top-N merge, and
@@ -902,14 +902,15 @@ increment/offset and provenance, and the Arrow LOAD external-scan pipeline
 payload, followed by binary-string function semantics and runtime-domain
 metadata, typed numeric `FORMAT` arguments in remote expressions, and
 row-dependent expression defaults, followed by index metadata provenance
-columns (`nrow`, `build_ts`). The semantic contract is unchanged from the
-independently approved r13 revision; r14 changes only the capability number,
-the preceding-version matrix, and the v61 ownership record.
+columns (`nrow`, `build_ts`), VARCHAR OCT overload identities, and INSERT IGNORE
+CHECK warning diagnostics. The semantic contract is unchanged from the
+independently approved r13 revision; r15 changes only the capability number,
+the preceding-version matrix, and the v62/v63 ownership record.
 
 ### 12.1 Problem and invariant
 
 `DATA BRANCH CREATE DATABASE` commits the destination database even when no
-ordinary table receipt is produced, but the pre-v62 delete validator recognizes
+ordinary table receipt is produced, but the pre-v64 delete validator recognizes
 database branches only through active table receipts. The result is a database
 that the matching delete statement cannot recognize after an empty,
 view-only, or sequence-only clone, or after every cloned ordinary table is
@@ -917,7 +918,7 @@ dropped.
 
 The new invariant is:
 
-> Every database successfully created by a v62-capable `DATA BRANCH CREATE
+> Every database successfully created by a v64-capable `DATA BRANCH CREATE
 > DATABASE` has durable database-level identity until that database is dropped,
 > independent of the number and lifetime of its ordinary tables.
 
@@ -946,25 +947,25 @@ the database and performs lineage cleanup. Missing, subscription, unknown-type,
 unmarked-empty, and mixed branch/non-branch targets fail before DDL.
 
 `data-branch` remains a user database category for publication purposes only
-when v62 semantics are active. Subscription and unknown non-empty types remain
+when v64 semantics are active. Subscription and unknown non-empty types remain
 non-user databases.
 
 ### 12.3 Capability, upgrade, and mixed-version behavior
 
-`MORPCVersion62` is the deployment capability for every producer and consumer
+`MORPCVersion64` is the deployment capability for every producer and consumer
 of the marker. `MOProtocolVersion` is maintained at the oldest live service
 version, so all three frontend decisions use the same gate:
 
 | Common protocol | CREATE DATABASE branch | DELETE DATABASE branch | CREATE/ALTER PUBLICATION |
 | --- | --- | --- | --- |
-| `< v62` | new CN rejects before DDL; it does not emit a marker | use legacy table-receipt identity; empty/all-dropped targets fail closed | treat `data-branch` as non-user, matching old CNs |
-| `>= v62` | persist `dat_type = 'data-branch'` atomically | accept a marked zero-table target; still validate every present ordinary table | treat `data-branch` as a user database |
+| `< v64` | new CN rejects before DDL; it does not emit a marker | use legacy table-receipt identity; empty/all-dropped targets fail closed | treat `data-branch` as non-user, matching old CNs |
+| `>= v64` | persist `dat_type = 'data-branch'` atomically | accept a marked zero-table target; still validate every present ordinary table | treat `data-branch` as a user database |
 
-Rejecting create below v62 is deliberate. Merely omitting the marker would let a
+Rejecting create below v64 is deliberate. Merely omitting the marker would let a
 new CN create another database that later becomes undeletable, while writing it
-would expose unknown persistent semantics to an old CN. Existing pre-v62
+would expose unknown persistent semantics to an old CN. Existing pre-v64
 table-backed branches remain usable and deletable through their receipts during
-rollout. Existing pre-v62 empty/all-dropped branches remain indistinguishable
+rollout. Existing pre-v64 empty/all-dropped branches remain indistinguishable
 from ordinary databases and cannot be migrated automatically.
 
 No session-local flag or per-call probe may override the common protocol. The
@@ -973,7 +974,7 @@ rejected create has no catalog, table, receipt, or snapshot side effects.
 
 ### 12.4 Downgrade and rollback
 
-Deployment must lower the common protocol below v62 before removing v62-capable
+Deployment must lower the common protocol below v64 before removing v64-capable
 CNs. New CNs then immediately stop creating branch databases and use legacy
 delete/publication behavior, matching old CNs. Existing marker rows remain
 valid opaque catalog data:
@@ -981,27 +982,27 @@ valid opaque catalog data:
 - ordinary SQL access and normal `DROP DATABASE` remain unchanged;
 - table-backed branches with active receipts remain deletable through `DATA
   BRANCH DELETE DATABASE`;
-- empty or all-dropped marked branches fail closed until v62 is restored;
-- publication create/alter rejects a marked database until v62 is restored.
+- empty or all-dropped marked branches fail closed until v64 is restored;
+- publication create/alter rejects a marked database until v64 is restored.
 
 Rollback does not erase or rewrite markers because doing so would permanently
-destroy trustworthy identity. Re-enabling v62 restores the new behavior without
+destroy trustworthy identity. Re-enabling v64 restores the new behavior without
 migration. A permanent downgrade must first remove marked branch databases
-while v62 is active; silently converting them into ordinary databases is not an
+while v64 is active; silently converting them into ordinary databases is not an
 allowed fallback.
 
 ### 12.5 Backup, snapshot, PITR, and restore
 
 Physical backup/checkpoint/replay already persists `mo_database.dat_type`; the
 new categorical value requires no new serialization. Restore into a deployment
-whose common protocol is below v62 is unsupported for snapshots containing a
+whose common protocol is below v64 is unsupported for snapshots containing a
 marked database and must fail before an existing target database is dropped.
 
 Logical snapshot, account/cluster restore, and PITR recreate database catalog
 rows rather than replaying them directly. The restore reader must therefore
 read `dat_type` with `dat_createsql` and attach `data-branch` to the internal
-database create at v62. It must not infer identity from table receipts, names,
-views, sequences, or SQL text. Restoring an unmarked pre-v62 database leaves it
+database create at v64. It must not infer identity from table receipts, names,
+views, sequences, or SQL text. Restoring an unmarked pre-v64 database leaves it
 unmarked. Subscription restoration retains its existing create-SQL path.
 
 After database recreation, existing object and system-catalog restoration owns
@@ -1028,17 +1029,17 @@ restore transaction and does not publish a partially restored identity.
 
 Focused tests must cover both sides of the capability boundary:
 
-- v61 create rejects before any DDL; v62 create attaches the marker;
+- v63 create rejects before any DDL; v64 create attaches the marker;
 - old-created unmarked empty/all-dropped databases reject at both versions;
 - old-created unmarked table-backed databases with valid receipts delete at
   both versions;
-- new-created marked empty/all-dropped databases reject at v61 and delete at
-  v62;
+- new-created marked empty/all-dropped databases reject at v63 and delete at
+  v64;
 - new-created marked table-backed databases retain legacy receipt validation at
-  v61 and require the same receipts at v62;
-- publication treats the marker as non-user at v61 and user at v62;
-- snapshot/PITR restore rejects marked input before destructive work at v61 and
-  preserves the marker at v62;
+  v63 and require the same receipts at v64;
+- publication treats the marker as non-user at v63 and user at v64;
+- snapshot/PITR restore rejects marked input before destructive work at v63 and
+  preserves the marker at v64;
 - missing/subscription/unknown identity and locally added ordinary tables remain
   negative controls;
 - BVT at the active protocol proves empty, view-only, sequence-only,
