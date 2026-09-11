@@ -1787,6 +1787,10 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if isMixedInt64Uint64(inputs[0], inputs[1]) {
+					decimal := types.New(types.T_decimal128, 38, 0)
+					return newCheckResultWithCast(2, []types.Type{decimal, decimal})
+				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if plusOperatorSupportsVectorScalar(t1, t2) {
@@ -1853,6 +1857,15 @@ var supportedOperators = []FuncNew{
 					return plusFnVectorScalar
 				},
 			},
+			{
+				overloadId: 2,
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_decimal128, 38, 0)
+				},
+				newOp: func() executeLogicOfOverload {
+					return mixedUnsignedPlusFn
+				},
+			},
 		},
 	},
 
@@ -1864,6 +1877,10 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if isMixedInt64Uint64(inputs[0], inputs[1]) {
+					decimal := types.New(types.T_decimal128, 38, 0)
+					return newCheckResultWithCast(2, []types.Type{decimal, decimal})
+				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					if minusOperatorSupportsVectorScalar(t1, t2) {
@@ -1928,6 +1945,15 @@ var supportedOperators = []FuncNew{
 					return minusFnVectorScalar
 				},
 			},
+			{
+				overloadId: 2,
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_decimal128, 38, 0)
+				},
+				newOp: func() executeLogicOfOverload {
+					return mixedUnsignedMinusFn
+				},
+			},
 		},
 	},
 
@@ -1939,6 +1965,10 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if isMixedInt64Uint64(inputs[0], inputs[1]) {
+					decimal := types.New(types.T_decimal128, 38, 0)
+					return newCheckResultWithCast(2, []types.Type{decimal, decimal})
+				}
 				has, t1, t2 := fixedTypeCastRule1(inputs[0], inputs[1])
 				if has {
 					// Multiply-specific: when coercion promotes intN×D64 to
@@ -2027,6 +2057,15 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return multiFnVectorScalar
+				},
+			},
+			{
+				overloadId: 2,
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_decimal128, 38, 0)
+				},
+				newOp: func() executeLogicOfOverload {
+					return mixedUnsignedMultiFn
 				},
 			},
 		},
