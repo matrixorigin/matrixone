@@ -179,7 +179,7 @@ SELECT DATE_ADD(to_date('9999-12-30 23:59:00','%Y-%m-%d %H:%i:%s'), INTERVAL 1 M
 DATE_ADD(to_date(9999-12-30 23:59:00, %Y-%m-%d %H:%i:%s), INTERVAL 1 minute)
 9999-12-31 00:00:00
 SELECT extract(week from DATE_ADD('2020-12-30 23:59:00', INTERVAL 1 year));
-extract(week, DATE_ADD(2020-12-30 23:59:00, INTERVAL 1 year))
+extract(week from DATE_ADD(2020-12-30 23:59:00, INTERVAL 1 year))
 52
 CREATE TABLE t1 (datetime datetime, timestamp timestamp, date date);
 INSERT INTO t1 values ("2001-01-02 03:04:05", "2002-01-02 03:04:05", "2003-01-02");
