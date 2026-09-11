@@ -5933,6 +5933,7 @@ func TestPartitionTopNPipelineRoundTrip(t *testing.T) {
 	original.Limit = limit
 	original.PartitionByCount = 1
 	original.PreReduce = true
+	original.WithTies = true
 	defer original.Release()
 
 	_, instruction, err := convertToPipelineInstruction(original, nil, ctx, 0)
@@ -5947,9 +5948,31 @@ func TestPartitionTopNPipelineRoundTrip(t *testing.T) {
 	defer restored.Release()
 	require.Equal(t, int32(1), restored.PartitionByCount)
 	require.True(t, restored.PreReduce)
+	require.True(t, restored.WithTies)
 	require.Len(t, restored.OrderBySpecs, 2)
 	require.Equal(t, uint64(7), restored.Limit.GetLit().GetU64Val())
 	require.Equal(t, planpb.OrderBySpec_DESC, restored.OrderBySpecs[1].Flag)
+}
+
+func TestPartitionTopNWithTiesRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion67)
+		}
+	})
+
+	p := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{PartitionTopNWithTies: true}},
+	}}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion66)
+	require.ErrorContains(t, validateRemotePartitionTopNWithTiesPipelineProtocol(proc, p), "protocol version 67")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion67)
+	require.NoError(t, validateRemotePartitionTopNWithTiesPipelineProtocol(proc, p))
 }
 
 // newDispatchSrcScopeForTest builds a cross-CN shuffle dispatch source scope:

@@ -46,6 +46,9 @@ type Partition struct {
 	// PreReduce is set when the consumer can recover partition boundaries from
 	// keys. It emits dense candidate batches instead of one batch per group.
 	PreReduce bool
+	// WithTies retains every peer of the Nth row in each partition. This makes
+	// the bounded path exact for RANK predicates, whose boundary is peer-aware.
+	WithTies bool
 	// Algorithm is ignored by the bounded Partition Top-N path.
 	Algorithm plan.Node_PartitionAlgorithm
 	SpillMem  int64

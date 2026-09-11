@@ -143,6 +143,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemotePartitionTopNWithTiesPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -250,6 +253,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemotePartitionTopNWithTiesPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
@@ -832,6 +838,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Limit = t.Limit
 		in.PartitionByCount = t.PartitionByCount
 		in.PartitionTopNPreReduce = t.PreReduce
+		in.PartitionTopNWithTies = t.WithTies
 		in.PartitionAlgorithm = t.Algorithm
 		in.SpillMem = t.SpillMem
 	case *product.Product:
@@ -1466,6 +1473,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Limit = opr.Limit
 		arg.PartitionByCount = opr.PartitionByCount
 		arg.PreReduce = opr.PartitionTopNPreReduce
+		arg.WithTies = opr.PartitionTopNWithTies
 		arg.Algorithm = opr.PartitionAlgorithm
 		arg.SpillMem = opr.SpillMem
 		op = arg
@@ -2156,6 +2164,39 @@ func validateRemoteDistributedOrderedTopPipelineProtocol(
 		}
 	}
 	return nil
+}
+
+func validateRemotePartitionTopNWithTiesPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if instruction != nil && instruction.PartitionTopNWithTies &&
+			(proc == nil || !procSupportsRemotePartitionTopNWithTies(proc)) {
+			return moerr.NewNotSupportedNoCtx(
+				"RANK Partition Top-N requires MORPC protocol version 67",
+			)
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemotePartitionTopNWithTiesPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func procSupportsRemotePartitionTopNWithTies(proc *process.Process) bool {
+	version, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion67
 }
 
 func validateRemoteRightDedupInputKeysUniquePipelineProtocol(

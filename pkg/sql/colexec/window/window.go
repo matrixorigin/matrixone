@@ -1027,10 +1027,15 @@ func (ctr *container) processOrderFuncRange(
 					peerEnd = int(ctr.os[peerIndex+1])
 				}
 			}
+			partitionStart := 0
+			if ctr.ps != nil {
+				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
 			if funcName == "rank" {
-				values[j-outputStart] = uint64(peerStart + 1)
+				values[j-outputStart] = uint64(peerStart - partitionStart + 1)
 			} else {
-				values[j-outputStart] = uint64(peerIndex + 1)
+				partitionPeerIndex, _, _ := peerInterval(ctr.os, partitionStart, n)
+				values[j-outputStart] = uint64(peerIndex - partitionPeerIndex + 1)
 			}
 		}
 		vec := vector.NewVec(types.T_uint64.ToType())
@@ -2139,8 +2144,22 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		return false, nil
 	}
 
-	ovec := ctr.orderVecs[0].Vec[0]
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	if ap.PartitionTopN {
+		// Grouping-set sentinels are SQL NULLs to a downstream PARTITION BY.
+		// Normalize only the private order-key copies: otherwise the sorter can
+		// compare their physical zero payload with an ordinary value (for example
+		// an empty string) and the boundary detector can merge two partitions.
+		for i := 0; i < len(w.PartitionBy); i++ {
+			vec := ctr.orderVecs[i].Vec[0]
+			if vec.HasGrouping() {
+				vec.GetNulls().Or(vec.GetGrouping())
+				vec.SetGrouping(nil)
+			}
+		}
+	}
+
+	ovec := ctr.orderVecs[0].Vec[0]
 	partitionKeyCount := 0
 	if ap.PartitionTopN {
 		// PartitionTopN coalesces input partitions, so its order-vector prefix
