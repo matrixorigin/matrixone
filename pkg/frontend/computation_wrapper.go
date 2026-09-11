@@ -1383,6 +1383,8 @@ func initExecuteStmtParamWithResolverInSession(
 			newPreparePlan.Plan)
 		prepareStmt.bitCountOverloadParamPositions = plan2.PreparedPlanBitCountFallbackParamPositions(
 			newPreparePlan.Plan)
+		prepareStmt.conversionParamPositions = plan2.PreparedPlanConversionParamPositions(
+			newPreparePlan.Plan)
 		// Parameter type evolution belongs to one prepared-plan generation. The
 		// rebuilt plan has resolved against fresh metadata and must not inherit a
 		// numeric BIT_COUNT category selected by the preceding generation.
@@ -1660,6 +1662,7 @@ func initExecuteStmtParamWithResolverInSession(
 			cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds, paramBinaryString)
 		}
 		cwft.paramVals = paramVals
+		applyPreparedConversionRuntimeTypes(cwft.paramVals, prepareStmt.conversionParamPositions)
 		bitCountNumericOverloadCandidate := prepareStmt.applyBitCountNumericRuntimeTypes(cwft.paramVals)
 		runtimeNumericOverloadCandidate = runtimeNumericOverloadCandidate ||
 			bitCountNumericOverloadCandidate
@@ -2449,6 +2452,81 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 		values[i] = paramValue
 	}
 	return values, nil
+}
+
+func applyPreparedConversionRuntimeTypes(paramVals []any, positions []int32) {
+	for _, position := range positions {
+		if position < 0 || int(position) >= len(paramVals) {
+			continue
+		}
+		param, ok := paramVals[position].(plan2.ParamValue)
+		if !ok || param.Value == nil || param.HasRuntimeType {
+			continue
+		}
+		runtimeType, ok := preparedConversionSourceRuntimeType(param)
+		if !ok {
+			runtimeType, ok = preparedConversionRuntimeType(param.Value)
+		}
+		if !ok {
+			continue
+		}
+		param.RuntimeType = runtimeType
+		param.HasRuntimeType = true
+		paramVals[position] = param
+	}
+}
+
+func preparedConversionSourceRuntimeType(param plan2.ParamValue) (types.Type, bool) {
+	if !param.HasSourceType {
+		return types.Type{}, false
+	}
+	typ := param.SourceType
+	if typ.IsNumeric() || typ.Oid == types.T_bool || typ.Oid == types.T_bit ||
+		typ.Oid == types.T_date || typ.Oid == types.T_datetime || typ.Oid == types.T_timestamp ||
+		typ.Oid == types.T_time || typ.Oid == types.T_year {
+		return typ, true
+	}
+	if types.StaticStringDomain(typ) == types.StringDomainBinary {
+		return typ, true
+	}
+	return types.Type{}, false
+}
+
+func preparedConversionRuntimeType(value any) (types.Type, bool) {
+	switch value.(type) {
+	case bool:
+		return types.T_bool.ToType(), true
+	case int, int8, int16, int32, int64:
+		return types.T_int64.ToType(), true
+	case uint, uint8, uint16, uint32, uint64:
+		return types.T_uint64.ToType(), true
+	case float32:
+		return types.T_float32.ToType(), true
+	case float64:
+		return types.T_float64.ToType(), true
+	case types.Decimal64:
+		return types.T_decimal64.ToType(), true
+	case types.Decimal128:
+		return types.T_decimal128.ToType(), true
+	case types.Decimal256:
+		return types.T_decimal256.ToType(), true
+	case types.Date:
+		return types.T_date.ToType(), true
+	case types.Datetime:
+		return types.T_datetime.ToType(), true
+	case types.Timestamp:
+		return types.T_timestamp.ToType(), true
+	case types.Time:
+		return types.T_time.ToType(), true
+	case types.MoYear:
+		return types.T_year.ToType(), true
+	case []byte:
+		return types.T_varbinary.ToType(), true
+	case string:
+		return types.T_text.ToType(), true
+	default:
+		return types.Type{}, false
+	}
 }
 
 func (prepareStmt *PrepareStmt) applyBitCountNumericRuntimeTypes(values []any) bool {

@@ -2262,6 +2262,16 @@ var supportedStringBuiltIns = []FuncNew{
 				(inputs[2].Oid != types.T_int64 && inputs[2].Oid != types.T_any) {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
+			// Keep an untyped NULL or prepared marker dynamic. The executor
+			// must see the actual runtime vector instead of losing its domain
+			// through the VARCHAR overload.
+			if inputs[0].Oid == types.T_any {
+				for i, ov := range overloads {
+					if len(ov.args) == 3 && ov.args[0] == types.T_any {
+						return newCheckResultWithSuccess(i)
+					}
+				}
+			}
 			return newCheckResultWithSuccess(0)
 		},
 
@@ -2389,6 +2399,19 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 12,
 				args:       []types.T{types.T_float64, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return convReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return Conv
+				},
+			},
+			{
+				// Conv dispatches the first vector at execution time for an
+				// untyped NULL or prepared marker. Ordinary typed inputs keep
+				// the existing overloads above.
+				overloadId: 13,
+				args:       []types.T{types.T_any, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
 					return convReturnType(parameters)
 				},
@@ -8043,6 +8066,19 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return BinString
+				},
+			},
+			{
+				// BIN keeps a runtime-owned path for prepared parameters and
+				// scalar types whose MySQL numeric representation is not a
+				// fixed-width integer vector (BOOL, DECIMAL, and temporal types).
+				overloadId: 11,
+				args:       []types.T{types.T_any},
+				retType: func(parameters []types.Type) types.Type {
+					return binReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return BinDynamic
 				},
 			},
 		},

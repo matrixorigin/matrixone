@@ -3290,7 +3290,8 @@ func TestConvStringUsesNumericPrefix(t *testing.T) {
 }
 
 func TestConvTypeCheckAcceptsNullBase(t *testing.T) {
-	_, err := GetFunctionByName(context.Background(), "conv", []types.Type{
+	ctx := context.Background()
+	_, err := GetFunctionByName(ctx, "conv", []types.Type{
 		types.T_varchar.ToType(),
 		types.T_any.ToType(),
 		types.T_int64.ToType(),
@@ -3303,6 +3304,74 @@ func TestConvTypeCheckAcceptsNullBase(t *testing.T) {
 		types.T_any.ToType(),
 	})
 	require.NoError(t, err)
+
+	parameter, err := GetFunctionByName(ctx, "conv", []types.Type{
+		types.T_any.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(13), parameter.overloadId)
+	require.False(t, parameter.needCast)
+}
+
+func TestConvTypedNumericDispatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	date, err := types.ParseDateCast("2024-05-06")
+	require.NoError(t, err)
+	datetime, err := types.ParseDatetime("2024-05-06 12:34:56", 6)
+	require.NoError(t, err)
+	clock, err := types.ParseTime("12:34:56", 6)
+	require.NoError(t, err)
+	decimal, err := types.ParseDecimal64("15.5", 4, 1)
+	require.NoError(t, err)
+	decimalType := types.New(types.T_decimal64, 4, 1)
+
+	testCase := func(input FunctionTestInput, wanted []string, nulls []bool) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				input,
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, wanted, nulls), Conv)
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+	}
+
+	t.Run("bool", func(t *testing.T) {
+		testCase(NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, false}, []bool{false, false, true}),
+			[]string{"1", "0", ""}, []bool{false, false, true})
+	})
+	t.Run("decimal truncates", func(t *testing.T) {
+		testCase(NewFunctionTestInput(decimalType, []types.Decimal64{decimal}, []bool{false}),
+			[]string{"F"}, []bool{false})
+	})
+	t.Run("date uses packed date", func(t *testing.T) {
+		testCase(NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false}),
+			[]string{"7E8"}, []bool{false})
+	})
+	t.Run("datetime uses date portion", func(t *testing.T) {
+		testCase(NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, []bool{false}),
+			[]string{"7E8"}, []bool{false})
+	})
+	t.Run("time uses hour", func(t *testing.T) {
+		testCase(NewFunctionTestInput(types.T_time.ToType(), []types.Time{clock}, []bool{false}),
+			[]string{"C"}, []bool{false})
+	})
+	t.Run("masked rows do not access the typed vector", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(decimalType, []types.Decimal64{decimal, decimal}, []bool{false, false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10, 10}, []bool{false, false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16, 16}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", ""}, []bool{true, true}),
+			Conv).WithSelectList(&FunctionSelectList{AllNull: true})
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+	})
 }
 
 func TestParseBaseIntegerPrefixEdgeCases(t *testing.T) {

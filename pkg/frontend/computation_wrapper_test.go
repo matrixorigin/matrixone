@@ -2522,6 +2522,45 @@ func TestPreparedBitCountNumericRuntimeTypesArePerPosition(t *testing.T) {
 	require.Equal(t, wideDecimalType, values[0].(plan2.ParamValue).RuntimeType)
 }
 
+func TestApplyPreparedConversionRuntimeTypes(t *testing.T) {
+	values := []any{
+		plan2.ParamValue{Value: true},
+		plan2.ParamValue{Value: int64(15)},
+		plan2.ParamValue{Value: types.Date(1)},
+		plan2.ParamValue{Value: []byte("15abc")},
+		plan2.ParamValue{Value: "15abc"},
+		plan2.ParamValue{Value: nil},
+		plan2.ParamValue{Value: false, RuntimeType: types.T_int8.ToType(), HasRuntimeType: true},
+		plan2.ParamValue{
+			Value: "15.5", SourceType: types.New(types.T_decimal64, 4, 1), HasSourceType: true,
+		},
+		plan2.ParamValue{Value: "binary", SourceType: types.T_varbinary.ToType(), HasSourceType: true},
+	}
+
+	applyPreparedConversionRuntimeTypes(values, []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 99})
+
+	assertRuntimeType := func(position int, want types.T) {
+		param, ok := values[position].(plan2.ParamValue)
+		require.True(t, ok)
+		require.True(t, param.HasRuntimeType)
+		require.Equal(t, want, param.RuntimeType.Oid)
+	}
+	assertRuntimeType(0, types.T_bool)
+	assertRuntimeType(1, types.T_int64)
+	assertRuntimeType(2, types.T_date)
+	assertRuntimeType(3, types.T_varbinary)
+	assertRuntimeType(4, types.T_text)
+
+	nullParam := values[5].(plan2.ParamValue)
+	require.False(t, nullParam.HasRuntimeType)
+	retainedParam := values[6].(plan2.ParamValue)
+	require.Equal(t, types.T_int8, retainedParam.RuntimeType.Oid)
+	assertRuntimeType(7, types.T_decimal64)
+	require.Equal(t, int32(4), values[7].(plan2.ParamValue).RuntimeType.Width)
+	require.Equal(t, int32(1), values[7].(plan2.ParamValue).RuntimeType.Scale)
+	assertRuntimeType(8, types.T_varbinary)
+}
+
 func TestPreparedBitCountNumericRuntimeTypesUseReprepareCategories(t *testing.T) {
 	prepareStmt := &PrepareStmt{bitCountOverloadParamPositions: []int32{0}}
 

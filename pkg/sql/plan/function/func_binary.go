@@ -3219,8 +3219,30 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	// - For string types: parse according to from_base
 	inputType := ivecs[0].GetType()
 	switch inputType.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob:
 		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+	case types.T_bool:
+		return convMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[bool](ivecs[0]),
+			func(v bool) int64 {
+				if v {
+					return 1
+				}
+				return 0
+			}, toBase, rs, length, selectList)
+	case types.T_bit:
+		return convUint64Direct(ivecs[0], toBase, rs, length, selectList)
+	case types.T_any:
+		// T_any is only the function-local representation of an untyped NULL
+		// or a marker before execute-time specialization. It must propagate
+		// NULL and never reach a fixed-width/string accessor.
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		// Numeric types are always treated as base 10
 		switch inputType.Oid {
@@ -3251,9 +3273,54 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			return convFloat32Direct(ivecs[0], toBase, rs, length, selectList)
 		}
 		return convFloat64Direct(ivecs[0], toBase, rs, length, selectList)
+	case types.T_decimal64:
+		return convDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0]),
+			func(v types.Decimal64) string { return v.Format(inputType.Scale) },
+			toBase, rs, length, selectList)
+	case types.T_decimal128:
+		return convDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0]),
+			func(v types.Decimal128) string { return v.Format(inputType.Scale) },
+			toBase, rs, length, selectList)
+	case types.T_decimal256:
+		return convDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0]),
+			func(v types.Decimal256) string { return v.Format(inputType.Scale) },
+			toBase, rs, length, selectList)
+	case types.T_date:
+		return convMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0]),
+			func(v types.Date) int64 { return int64(v.Year()) }, toBase, rs, length, selectList)
+	case types.T_datetime:
+		return convMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0]),
+			func(v types.Datetime) int64 { return int64(v.Year()) },
+			toBase, rs, length, selectList)
+	case types.T_timestamp:
+		zone := time.Local
+		if proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		return convMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0]),
+			func(v types.Timestamp) int64 { return int64(v.ToDatetime(zone).Year()) },
+			toBase, rs, length, selectList)
+	case types.T_time:
+		return convMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0]),
+			func(v types.Time) int64 { return v.Hour() },
+			toBase, rs, length, selectList)
+	case types.T_year:
+		return convMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.MoYear](ivecs[0]),
+			func(v types.MoYear) int64 { return v.ToInt64() },
+			toBase, rs, length, selectList)
 	default:
-		// For other types, try to convert to string first
-		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+		// Never pass a fixed-width vector to GenerateFunctionStrParameter:
+		// doing so is the panic reported by #28461. Unsupported input types
+		// must fail at the function boundary instead.
+		return moerr.NewInvalidArg(proc.Ctx, "function conv", inputType.Oid)
 	}
 }
 
@@ -3276,7 +3343,7 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 	nParam := vector.GenerateFunctionStrParameter(nVec)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3311,6 +3378,66 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 			continue
 		}
 		if err := rs.AppendBytes([]byte(formatUnsignedToBase(unsignedVal, toBase)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convMappedInt64[T types.FixedSizeTExceptStrType](
+	nParam vector.FunctionParameterWrapper[T], mapValue func(T) int64,
+	toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes([]byte(formatSignedToBase(mapValue(value), toBase)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convDecimalPrefix[T types.Decimal](
+	nParam vector.FunctionParameterWrapper[T], formatValue func(T) string,
+	toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// DECIMAL is numeric input to CONV. MySQL consumes the integer
+		// prefix (15.9 -> 15), while the existing decimal-to-integer cast
+		// helpers round; do not reuse those helpers here.
+		_, unsignedValue, _, err := parseBaseIntegerPrefix([]byte(formatValue(value)), 10)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes([]byte(formatUnsignedToBase(unsignedValue, toBase)), false); err != nil {
 			return err
 		}
 	}
