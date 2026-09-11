@@ -34,6 +34,11 @@ const (
 	// materialized source still charges every spill byte and file descriptor to
 	// the statement/CN owner before writing.
 	groupingSetEstimatedSpillBytesLimit = float64(8 * mpool.GB)
+	// Group cardinality is especially fragile here: the rewrite runs before the
+	// normal optimizer passes, while joins and correlated multi-column keys can
+	// make the estimate miss by orders of magnitude. Inflate the estimate, but
+	// never beyond the relational one-output-row-per-input-row ceiling.
+	groupingSetCardinalitySafetyFactor = float64(32)
 	// Require a twofold modeled advantage because row counts and producer costs
 	// are estimates while the output write and every branch scan are certain.
 	groupingSetCostSafetyFactor = float64(2)
@@ -295,8 +300,13 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 
 	// The old plan repeats the producer once per branch. The new plan runs it
 	// once, then writes the complete aggregate output once and makes every
-	// branch scan that complete output. Compare byte-work, branch count and the
-	// bounded-spill ceiling; unknown or marginal estimates fail closed.
+	// branch scan that complete output. Bound the optimistic group-NDV estimate
+	// with a safety margin and the relational ceiling (each aggregate can emit at
+	// most one row per input row). Multi-column NDVs are often correlated or
+	// unavailable at this early rewrite point; using their raw result can turn a
+	// supposedly small shared result into a multi-GB spill stage. Compare
+	// byte-work, branch count and the bounded-spill ceiling; unknown or marginal
+	// estimates fail closed.
 	producerID := first.Children[0]
 	// A grouping sentinel belongs to the grouping extension that created it.
 	// Legacy outer aggregates intentionally hash an inherited sentinel like SQL
@@ -309,21 +319,34 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 	if builder.subtreeMayExposeGroupingSentinel(producerID, make(map[int32]bool)) {
 		return false
 	}
-	ReCalcNodeStats(producerID, builder, true, false, true)
+	// Unlike the normal optimization pipeline, this rewrite runs before the
+	// final leaf-statistics pass. Recalculate table leaves explicitly; costing a
+	// materialization from the binder's tiny defaults defeats both the spill
+	// ceiling and the profitability test on large fact tables.
+	ReCalcNodeStats(producerID, builder, true, true, true)
 	producerCost := builder.cteProducerCost(producerID, make(map[int32]bool))
+	producerStats := builder.qry.Nodes[producerID].Stats
+	if producerStats == nil || !finitePositive(producerStats.Outcnt) {
+		return false
+	}
 	totalAggregateRows := float64(0)
 	for i := range branches {
-		ReCalcNodeStats(branches[i].aggID, builder, true, false, true)
+		ReCalcNodeStats(branches[i].aggID, builder, true, true, true)
 		stats := branches[i].agg.Stats
 		if stats == nil || !finitePositive(stats.Outcnt) {
 			return false
 		}
 		totalAggregateRows += stats.Outcnt
 	}
+	estimatedMaterializedRows, ok := groupingSetMaterializedRowsForAdmission(
+		producerStats.Outcnt, totalAggregateRows, len(branches))
+	if !ok {
+		return false
+	}
 	if !groupingSetSharingFitsCostAndStorage(
 		producerCost,
 		inputRowSize,
-		totalAggregateRows,
+		estimatedMaterializedRows,
 		outputRowSize,
 		len(branches),
 	) {
@@ -338,8 +361,8 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 		}
 	}
 	if !builder.reserveSharedMaterialization(
-		totalAggregateRows*outputRowSize,
-		totalAggregateRows,
+		estimatedMaterializedRows*outputRowSize,
+		estimatedMaterializedRows,
 		outputTypes,
 	) {
 		return false
@@ -552,6 +575,22 @@ func groupingSetSharingFitsCostAndStorage(
 		groupingSetCostSafetyFactor
 	return finitePositive(savedProducerWork) && finitePositive(materializedTraffic) &&
 		savedProducerWork > materializedTraffic
+}
+
+func groupingSetMaterializedRowsForAdmission(
+	producerRows float64,
+	aggregateRows float64,
+	branchCount int,
+) (float64, bool) {
+	if branchCount < 2 || !finitePositive(producerRows) || !finitePositive(aggregateRows) {
+		return 0, false
+	}
+	structuralCeiling := producerRows * float64(branchCount)
+	inflatedEstimate := aggregateRows * groupingSetCardinalitySafetyFactor
+	if !finitePositive(structuralCeiling) || !finitePositive(inflatedEstimate) {
+		return 0, false
+	}
+	return max(aggregateRows, min(structuralCeiling, inflatedEstimate)), true
 }
 
 func groupingSetCol(typ planpb.Type, tag, pos int32) *planpb.Expr {
