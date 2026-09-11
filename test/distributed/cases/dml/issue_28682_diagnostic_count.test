@@ -18,6 +18,7 @@ insert ignore into warning_source values (1);
 show count(*) warnings;
 show warnings limit 1;
 select @@warning_count;
+insert ignore into warning_source values (1);
 select @@warning_count + 1 as warning_count_plus_one;
 show count(*) warnings;
 
