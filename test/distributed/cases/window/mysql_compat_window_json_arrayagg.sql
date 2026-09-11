@@ -37,16 +37,22 @@ select id, customer_id,
        json_arrayagg(status) over (partition by customer_id order by id rows between 1 preceding and current row) v
 from orders order by id;
 
--- json_objectagg as a cumulative window aggregate (key must be a string type in MO).
+-- json_objectagg accepts numeric keys and applies the same VARCHAR cast as a scalar aggregate.
 select id, customer_id,
-       json_objectagg(cast(id as char), status) over (partition by customer_id order by id) v
+       json_objectagg(id, status) over (partition by customer_id order by id) v
+from orders order by id;
+
+-- Duplicate numeric keys keep the last value in each ordered frame.
+select id, customer_id,
+       json_objectagg(customer_id, status) over (partition by customer_id order by id
+                                                 rows between unbounded preceding and current row) v
 from orders order by id;
 
 -- plain aggregates still work; use single-row groups so the output is order-independent.
 select customer_id, json_arrayagg(status) v
 from orders where id in (1, 4, 7) group by customer_id order by customer_id;
 
-select customer_id, json_objectagg(cast(id as char), status) v
+select customer_id, json_objectagg(id, status) v
 from orders where id in (1, 4, 7) group by customer_id order by customer_id;
 
 -- json_arrayagg / json_objectagg remain usable as identifiers (non-reserved)
