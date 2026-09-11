@@ -66,36 +66,64 @@ func TestWANDRouteAndBlockMaxObservation(t *testing.T) {
 	withoutBlocks, err := BuildSegmentFromTokenized("qa-wand-no-block", int32(types.T_int64), docs)
 	require.NoError(t, err)
 	qaDisableBlockMax(withoutBlocks)
+	blob, err := withBlocks.Serialize()
+	require.NoError(t, err)
+	noBlockBlob, err := withoutBlocks.Serialize()
+	require.NoError(t, err)
+	loadedWithBlocks, err := Deserialize("qa-wand-loaded", bytes.NewReader(blob))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if loadedWithBlocks.dict != nil {
+			_ = loadedWithBlocks.dict.Close()
+		}
+		loadedWithBlocks.Free()
+	})
+	loadedWithoutBlocks, err := Deserialize("qa-wand-loaded-no-block", bytes.NewReader(noBlockBlob))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if loadedWithoutBlocks.dict != nil {
+			_ = loadedWithoutBlocks.dict.Close()
+		}
+		loadedWithoutBlocks.Free()
+	})
 
 	q, err := ParseBoolean([]byte("w00 w01"), tokenizer.NewSimpleTokenizer())
 	require.NoError(t, err)
 	_, eligible := disjunctiveTerms(q)
 	require.True(t, eligible, "the probe query must be WAND-eligible")
 
-	for _, algo := range []ScoreAlgo{BM25, TfIdf} {
-		wandAllow := &qaCountingMembership{}
-		got, err := withBlocks.SearchBoolean(q, algo, 5, wandAllow, nil)
-		require.NoError(t, err)
+	for _, tc := range []struct {
+		name                 string
+		withBlocks, noBlocks *Segment
+	}{
+		{name: "build", withBlocks: withBlocks, noBlocks: withoutBlocks},
+		{name: "loaded", withBlocks: loadedWithBlocks, noBlocks: loadedWithoutBlocks},
+	} {
+		for _, algo := range []ScoreAlgo{BM25, TfIdf} {
+			wandAllow := &qaCountingMembership{}
+			got, err := tc.withBlocks.SearchBoolean(q, algo, 5, wandAllow, nil)
+			require.NoError(t, err)
 
-		fullAllow := &qaCountingMembership{}
-		want, err := withBlocks.searchBooleanFull(q, algo, 5, fullAllow, nil)
-		require.NoError(t, err)
-		requireSameRanking(t, "block-max-vs-full", got, want)
+			fullAllow := &qaCountingMembership{}
+			want, err := tc.withBlocks.searchBooleanFull(q, algo, 5, fullAllow, nil)
+			require.NoError(t, err)
+			requireSameRanking(t, tc.name+" block-max-vs-full", got, want)
 
-		termOnlyAllow := &qaCountingMembership{}
-		termOnly, err := withoutBlocks.SearchBoolean(q, algo, 5, termOnlyAllow, nil)
-		require.NoError(t, err)
-		requireSameRanking(t, "block-max-vs-term-only", got, termOnly)
+			termOnlyAllow := &qaCountingMembership{}
+			termOnly, err := tc.noBlocks.SearchBoolean(q, algo, 5, termOnlyAllow, nil)
+			require.NoError(t, err)
+			requireSameRanking(t, tc.name+" block-max-vs-term-only", got, termOnly)
 
-		wandCalls := wandAllow.calls.Load()
-		fullCalls := fullAllow.calls.Load()
-		termOnlyCalls := termOnlyAllow.calls.Load()
-		t.Logf("algo=%v candidate probes: block-max=%d term-only=%d full=%d", algo, wandCalls, termOnlyCalls, fullCalls)
-		require.Positive(t, fullCalls, "the full evaluator must probe matching candidates")
-		require.Less(t, wandCalls, fullCalls,
-			"SearchBoolean must use the WAND candidate path, not only return equal results")
-		require.Less(t, wandCalls, termOnlyCalls,
-			"original block bounds must prune beyond term-level WAND")
+			wandCalls := wandAllow.calls.Load()
+			fullCalls := fullAllow.calls.Load()
+			termOnlyCalls := termOnlyAllow.calls.Load()
+			t.Logf("path=%s algo=%v candidate probes: block-max=%d term-only=%d full=%d", tc.name, algo, wandCalls, termOnlyCalls, fullCalls)
+			require.Positive(t, fullCalls, "the full evaluator must probe matching candidates")
+			require.Less(t, wandCalls, fullCalls,
+				"SearchBoolean must use the WAND candidate path, not only return equal results")
+			require.Less(t, wandCalls, termOnlyCalls,
+				"original block bounds must prune beyond term-level WAND")
+		}
 	}
 }
 
@@ -336,12 +364,22 @@ func TestWANDIndependentScorePkOracleWithTailLiveness(t *testing.T) {
 	base, err := Deserialize("qa-base", bytes.NewReader(blob))
 	require.NoError(t, err)
 	base.Recency = 0
+	baseOwned := true
+	t.Cleanup(func() {
+		if baseOwned {
+			if base.dict != nil {
+				_ = base.dict.Close()
+			}
+			base.Free()
+		}
+	})
 
 	cdc := NewCdc(int32(types.T_int64))
 	cdc.Upsert(int64(2), "beta beta gamma", nil) // replace old alpha-heavy version
 	cdc.Delete(int64(3))                         // remove the old beta/delta row
 	cdc.Insert(int64(7), "alpha delta delta delta", nil)
 	idx := buildTailIndexLWW(t, base, cdc, 1000)
+	baseOwned = false // ownership transfers to idx after successful assembly
 	t.Cleanup(func() {
 		idx.Free()
 		for _, seg := range idx.segments {
