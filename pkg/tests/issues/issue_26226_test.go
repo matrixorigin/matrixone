@@ -96,7 +96,7 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 							"where t.reldatabase = ? and t.relkind = 'v' and r.status = 'CURRENT' "+
 							"and exists (select 1 from mo_catalog.mo_view_dependencies g "+
 							"where g.account_id=0 and g.target_relation_id=0 and g.dependency_ordinal=0 "+
-							"and g.source_relation_kind='ACTIVATED')",
+							"and g.source_relation_kind in ('ACTIVATED','LEGACY_SCAN'))",
 						db).Scan(&current)
 					return err == nil && current == 11
 				}, time.Minute, 100*time.Millisecond)
