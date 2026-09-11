@@ -90,6 +90,13 @@ type Fulltext2Search struct {
 	// index or read error), which callers must treat as "not current".
 	buildTS int64
 
+	// pinnedMaxTs, when > 0, is the generation build_ts a mandatory json probe pinned via
+	// GetMaxTS: Load records it as this entry's buildTS so the entry the planner's coverage gate
+	// measured is exactly the one cached and searched here, and the probe's table_changes tail
+	// (bounded at the same value) leaves no gap. 0 = ordinary MATCH, which loads and reports the
+	// whole current index.
+	pinnedMaxTs int64
+
 	// preloadNdoc is the base doc count read by Preload, so GetIndexSize can report what the
 	// following Load will cost before any base is mapped, and so Load can run the heap-budget
 	// check without repeating the aggregate. Superseded by the loaded segments once Load
@@ -113,6 +120,11 @@ var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
 func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 	return &Fulltext2Search{cfg: cfg}
 }
+
+// SetMaxTs pins the generation build_ts a mandatory json probe must present as this entry's
+// coverage point (see pinnedMaxTs). The caller derives it from cache.GetMaxTS so the plan and
+// this load agree. 0 (the default) is the ordinary MATCH path.
+func (s *Fulltext2Search) SetMaxTs(ts int64) { s.pinnedMaxTs = ts }
 
 // Load reads the index from the chunk store: the tag=0 base sub-indexes plus the
 // tag=1 CdcTail delta frames (+ delete set), assembled into a queryable Index with
@@ -168,8 +180,15 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 
 	// Capture the base-table coverage of exactly what was just loaded, in the same
 	// txn/snapshot as the data, so the freshness gate compares the generation this
-	// object will actually search.
-	s.buildTS = MaxBuildTS(sqlproc, s.cfg, false /* base + cdc_tail */)
+	// object will actually search. A mandatory json probe instead records the pinned
+	// value it was planned against (GetMaxTS), so the loaded entry reports the exact
+	// generation the plan measured and the tail was bounded at -- the load reads the
+	// same current durable segments, this only fixes the reported point.
+	if s.pinnedMaxTs > 0 {
+		s.buildTS = s.pinnedMaxTs
+	} else {
+		s.buildTS = MaxBuildTS(sqlproc, s.cfg, false /* base + cdc_tail */)
+	}
 
 	// Capture the generation + durable handles for IsStale. Same txn as the load, so the
 	// captured generation matches the loaded snapshot exactly. On any capture failure genValid

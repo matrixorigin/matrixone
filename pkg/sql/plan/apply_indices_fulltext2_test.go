@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	fulltext2engine "github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -104,4 +105,21 @@ func TestBuildFulltext2SearchCfg(t *testing.T) {
 	cfg, err = b.buildFulltext2SearchCfg(node, pf, int64(tree.FULLTEXT_BM25))
 	require.NoError(t, err)
 	require.Contains(t, cfg, "__store")
+
+	// JSONProbeMode carries the pinned generation build_ts (recordJSONProbeMaxTs stash, keyed by the
+	// scan node id) into the config as max_ts, so execution pins the generation coverage measured.
+	b.jsonProbeMaxTs = map[int32]int64{node.NodeId: 424242}
+	cfg, err = b.buildFulltext2SearchCfg(node, idxdef, fulltext2engine.JSONProbeMode)
+	require.NoError(t, err)
+	var mm map[string]any
+	require.NoError(t, json.Unmarshal([]byte(cfg), &mm))
+	require.Equal(t, float64(424242), mm["max_ts"])
+
+	// MATCH mode → no max_ts even with a stash present (whole current index).
+	cfg, err = b.buildFulltext2SearchCfg(node, idxdef, int64(tree.FULLTEXT_NL))
+	require.NoError(t, err)
+	var matchCfg map[string]any
+	require.NoError(t, json.Unmarshal([]byte(cfg), &matchCfg))
+	_, hasMaxTs := matchCfg["max_ts"]
+	require.False(t, hasMaxTs)
 }

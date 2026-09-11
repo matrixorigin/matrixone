@@ -461,6 +461,19 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		IncludePredsJSON: includePreds,
 	}
 
+	// A mandatory json probe on a CURRENT read pins the generation to search: the planner computed
+	// MaxTs ONCE (coverage's GetMaxTS) and carried it in the index config, so execution binds exactly
+	// the generation the plan measured and the table_changes tail was bounded at -- the TVF does NOT
+	// re-derive it (a fresh read here could diverge from the plan's value under a concurrent
+	// load/eviction and re-open the gap). 0 = ordinary MATCH (whole current index). Only the current
+	// (bare-key) read pins; a historical ({snapshot=...}) probe uses the immutable snapshot entry.
+	pinnedMaxTs := u.tblcfg.MaxTs
+	if pinnedMaxTs > 0 && cacheKey == u.tblcfg.IndexTable {
+		newsearch.SetMaxTs(pinnedMaxTs)
+	} else {
+		pinnedMaxTs = 0
+	}
+
 	if u.limit == 0 {
 		// No pushed LIMIT: STREAM every matching doc in bounded batches (no top-K heap,
 		// no materialization of the whole result set). A producer goroutine runs the
@@ -488,6 +501,11 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 		}
 		go func() {
 			_, _, serr := veccache.Cache.Search(sp, cacheKey, newsearch, q, rt)
+			// The load (if this was the cold winner) has published the entry, whose build_ts is now
+			// authoritative; drop the bridge memo so it cannot go stale. See GetMaxTS.
+			if pinnedMaxTs > 0 {
+				veccache.Cache.RemoveMaxTSMemo(u.tblcfg.IndexTable)
+			}
 			u.errCh <- serr // buffered(1): send before close so call() reads it after drain
 			close(u.streamCh)
 		}()
@@ -507,7 +525,13 @@ func (u *fulltext2SearchState) start(tf *TableFunction, proc *process.Process, n
 	if u.out == nil {
 		u.out = &vectorindex.SearchOutput{}
 	}
-	return veccache.Cache.SearchInto(sp, cacheKey, newsearch, q, rt, u.out)
+	serr := veccache.Cache.SearchInto(sp, cacheKey, newsearch, q, rt, u.out)
+	// The load (if this was the cold winner) has published the entry, whose build_ts is now
+	// authoritative; drop the bridge memo so it cannot go stale. See GetMaxTS.
+	if pinnedMaxTs > 0 {
+		veccache.Cache.RemoveMaxTSMemo(u.tblcfg.IndexTable)
+	}
+	return serr
 }
 
 // fulltext2ScoreAlgo resolves the relevance formula from fulltext2's OWN session

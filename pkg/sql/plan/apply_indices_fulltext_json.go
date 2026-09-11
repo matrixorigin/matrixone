@@ -353,6 +353,14 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 		if kind == jsonProbePartial {
 			builder.recordJSONPartialProbe(scanNode, f, buildTS)
 		}
+		// Record the generation this probe was planned against (covered AND partial) so
+		// buildFulltext2SearchCfg carries it into the fulltext2_search config and execution pins the
+		// SAME generation -- for covered too, since covered has no tail to recover a stale reuse.
+		// Only for a current read (buildTS != 0 tracks the current generation); a snapshot probe binds
+		// the immutable snapshot entry and is not pinned here.
+		if scanNode.ScanSnapshot == nil && !buildTS.IsEmpty() {
+			builder.recordJSONProbeMaxTs(scanNode, buildTS)
+		}
 		scanNode.FilterList = append(scanNode.FilterList, match)
 		return
 	}
@@ -370,6 +378,16 @@ func (builder *QueryBuilder) recordJSONPartialProbe(scanNode *plan.Node, jsonPre
 		builder.jsonPartialProbes = make(map[int32]jsonPartialProbe)
 	}
 	builder.jsonPartialProbes[scanNode.NodeId] = jsonPartialProbe{buildTS: buildTS, jsonPred: DeepCopyExpr(jsonPred)}
+}
+
+// recordJSONProbeMaxTs records the generation build_ts a json probe was planned against, so
+// buildFulltext2SearchCfg pins execution to it via TableConfig.MaxTs. Recorded for covered and
+// partial alike (current read only).
+func (builder *QueryBuilder) recordJSONProbeMaxTs(scanNode *plan.Node, buildTS types.TS) {
+	if builder.jsonProbeMaxTs == nil {
+		builder.jsonProbeMaxTs = make(map[int32]int64)
+	}
+	builder.jsonProbeMaxTs[scanNode.NodeId] = buildTS.Physical()
 }
 
 // PreparedPlanDependsOnIndexCoverage reports whether a prepared plan carries an injected
@@ -519,7 +537,9 @@ func (builder *QueryBuilder) decideJSONProbe(scanNode *plan.Node, idx *plan.Inde
 		return jsonProbeSkip, types.TS{}
 	}
 	if covered {
-		return jsonProbeCovered, types.TS{}
+		// Return build_ts so the caller can pin execution to this exact generation. Covered has no
+		// tail, so binding matters most: a probe reusing an older generation would drop rows silently.
+		return jsonProbeCovered, buildTS
 	}
 	// Not covered: complete the behind index with a table_changes tail from build_ts up to the read
 	// point (now for a current read, S for a snapshot). Both paths are identical.

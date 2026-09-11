@@ -651,6 +651,7 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 // implementation of VectorIndexCache
 type VectorIndexCache struct {
 	IndexMap       sync.Map
+	maxTSMemo      sync.Map // indexTable -> *maxTSMemoEntry; see GetMaxTS
 	TickerInterval time.Duration
 	ticker         *time.Ticker
 	done           chan bool

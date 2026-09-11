@@ -500,6 +500,12 @@ type QueryBuilder struct {
 	// addJSONFulltextProbes, consumed at the join splice.
 	jsonPartialProbes map[int32]jsonPartialProbe
 
+	// jsonProbeMaxTs records, per base-scan node id, the generation build_ts a json_extract probe
+	// was planned against (covered AND partial). buildFulltext2SearchCfg carries it into the
+	// fulltext2_search config (TableConfig.MaxTs) so execution pins the SAME generation coverage
+	// measured -- current read only; a {snapshot=...} probe is not recorded here. 0/absent ⇒ MATCH.
+	jsonProbeMaxTs map[int32]int64
+
 	aggSpillMem int64
 
 	// spill memory for join

@@ -166,14 +166,26 @@ func (Hooks) CoversSnapshot(ctx context.Context, req coverage.Request) (bool, ty
 // Warm: the loaded generation's build_ts from the cache; cold: MAX(build_ts) from metadata.
 // 0 = unknown.
 func searchedBuildTS(ctx context.Context, req coverage.Request) int64 {
-	key, metaTxn := req.IndexStorageTable, req.Txn
+	// Historical ({snapshot=...}) read: the snapshot-bound generation is immutable and both the plan
+	// and execution key by SnapshotKey and read as of the snapshot, so warm and cold already agree.
+	// This path is unchanged and does NOT go through the current-read memo.
 	if req.ScanSnapshotTS != nil {
-		key = veccache.SnapshotKey(req.IndexStorageTable, *req.ScanSnapshotTS)
-		metaTxn = req.Txn.CloneSnapshotOp(*req.ScanSnapshotTS)
+		key := veccache.SnapshotKey(req.IndexStorageTable, *req.ScanSnapshotTS)
+		metaTxn := req.Txn.CloneSnapshotOp(*req.ScanSnapshotTS)
+		if buildTS, ok := veccache.Cache.GetBuildTS(key); ok {
+			return buildTS
+		}
+		return maxDurableBuildTS(ctx, req, metaTxn)
 	}
-	buildTS, ok := veccache.Cache.GetBuildTS(key)
-	if !ok {
-		buildTS = maxDurableBuildTS(ctx, req, metaTxn)
+	// Current read: derive the generation via the shared memo (GetMaxTS) so this planning call and the
+	// fulltext2_search operator that later executes bind the SAME generation -- the loaded entry's
+	// build_ts when warm, else one compute-once durable MAX shared with a concurrent in-flight load.
+	// That closes the window where the plan measured a newer durable generation than execution reused.
+	buildTS, _, _, err := veccache.Cache.GetMaxTS(req.IndexStorageTable, func() (int64, error) {
+		return maxDurableBuildTS(ctx, req, req.Txn), nil
+	})
+	if err != nil {
+		return 0
 	}
 	return buildTS
 }

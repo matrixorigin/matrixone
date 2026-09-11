@@ -30,8 +30,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/stretchr/testify/require"
 )
+
+// testIndexStorageTable is the index storage table gateReq uses; also the key of the shared
+// current-read maxTs memo, which must be cleared between tests so one test's value can't leak.
+const testIndexStorageTable = "ftj_index"
 
 func ts(physical int64) types.TS { return types.BuildTS(physical, 0) }
 
@@ -48,6 +53,10 @@ type logRow struct {
 // cache reads from the metadata table.
 func mockGate(t *testing.T, jobs []logRow, durableBuildTS int64) *string {
 	t.Helper()
+	// A current read routes through the process-global maxTs memo; clear it so a value computed by an
+	// earlier test (or an earlier CoversSnapshot call in this test) can't be returned in place of this
+	// gate's durableBuildTS.
+	veccache.Cache.RemoveMaxTSMemo(testIndexStorageTable)
 	mp := mpool.MustNewZero()
 	var iscpSQL string
 	prev := execWithResult
@@ -234,6 +243,7 @@ func TestCoversSnapshotRejectsIncompleteRequests(t *testing.T) {
 
 // A lookup error is reported, and the caller still sees "not covered".
 func TestCoversSnapshotLookupError(t *testing.T) {
+	veccache.Cache.RemoveMaxTSMemo(testIndexStorageTable) // this test does not use mockGate
 	mp := mpool.MustNewZero()
 	prev := execWithResult
 	t.Cleanup(func() { execWithResult = prev })

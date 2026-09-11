@@ -80,6 +80,11 @@ type TableConfig struct {
 	// cfg so Fulltext2Search.Search can map a covering query's RequestedIncludeColumns (by
 	// name) to each result's positional Include values. nil ⇒ no INCLUDE columns.
 	IncludeColumns []string `json:"include_columns,omitempty"`
+	// MaxTs pins the generation a mandatory json probe must load and search: build_ts <= MaxTs.
+	// The planner computes it ONCE (coverage's GetMaxTS) and carries it here, so plan and execution
+	// bind the same generation and the table_changes tail (bounded at the same value) leaves no gap;
+	// the TVF must not re-derive it. 0 = ordinary MATCH, which loads the whole current index.
+	MaxTs int64 `json:"max_ts,omitempty"`
 }
 
 // runSql / runStreamingSql indirect the sqlexec executor entry points so unit tests can

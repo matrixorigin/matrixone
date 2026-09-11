@@ -125,6 +125,15 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 	if incCols := indexDefIncludedColumnsBestEffort(idxdef); len(incCols) > 0 {
 		cfgMap["include_columns"] = incCols
 	}
+	// Pin the generation for a mandatory json probe: carry the build_ts coverage measured
+	// (recordJSONProbeMaxTs) so execution loads and searches exactly that generation, and its
+	// table_changes tail (bounded at the same value) leaves no gap. Current-read probe only; a MATCH
+	// or a snapshot probe records nothing here, so max_ts stays 0 (whole current index).
+	if mode == fulltext2engine.JSONProbeMode {
+		if maxTs, ok := builder.jsonProbeMaxTs[scanNode.NodeId]; ok && maxTs > 0 {
+			cfgMap["max_ts"] = maxTs
+		}
+	}
 	cfgBytes, err := json.Marshal(cfgMap)
 	if err != nil {
 		return "", err

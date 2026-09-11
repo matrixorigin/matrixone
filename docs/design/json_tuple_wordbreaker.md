@@ -576,6 +576,46 @@ reusing the existing probe rewrite for the bulk arm and the `table_changes` buil
 for the tail arm, so the shared `fulltext2_search` TVF and the `MATCH` path are
 untouched.
 
+### 10.4 Generation binding: plan and execution must search the same generation
+
+The covered/partial verdict and the tail's lower bound are decided at PLAN time, but
+the generation the operator actually searches is chosen at EXECUTION. If the two
+differ, a covered probe (no tail) or a partial tail bounded above the searched
+generation drops rows. The classic hole: an index is mid-load of an old generation
+`W0`; a row commits and CDC publishes `W1`; a second query plans, reads durable `W1`,
+declares *covered*, then executes against the still-loading `W0` — and the row is gone.
+
+So the plan-time `build_ts` and the execution generation are tied to one value,
+`GetMaxTS(indexTable)` (`pkg/vectorindex/cache`), consulted identically by the
+coverage gate and carried to the operator:
+
+- **tier 1 — warm cache** (`GetBuildTS`): the loaded entry's `build_ts`, i.e. exactly
+  the generation execution will reuse;
+- **tier 2 — memo**: a process-shared, per-key value so a query planning against an
+  index another query is still loading inherits *that* generation's `build_ts` rather
+  than a newer durable one;
+- **tier 3 — SQL** `MAX(build_ts)`: the truly-cold first caller, computed once under a
+  per-key mutex (singleflight); tiers 2/3 are removed once the load publishes (tier 1
+  takes over).
+
+The planner records that `build_ts` (`recordJSONProbeMaxTs`, covered and partial
+alike) and `buildFulltext2SearchCfg` carries it in the search config as
+`TableConfig.MaxTs`. The operator reads `MaxTs` — it does **not** re-derive it (a
+fresh read at execution could diverge from the plan under a concurrent load/eviction)
+— and tags the loaded entry's `build_ts` with it, so a stale/in-flight generation is
+never silently substituted for the one the plan approved. `MaxTs == 0` is ordinary
+`MATCH`, which loads the whole current index.
+
+Snapshot reads are exempt: they key by `SnapshotKey` and load the immutable
+as-of-snapshot generation, so their coverage and execution already agree.
+
+Known limitation (accepted, same class as the cross-CN eventual-consistency won't-fix):
+because the current generation is shared across current reads at slightly different
+snapshots, a cold-load race between concurrent probes — an ISCP commit landing in the
+microsecond gap between two snapshots, before the entry warms — can transiently bound
+a tail above the loaded generation. It requires DML to land inside that window on an
+index that already lags by seconds, and it self-corrects once the shared entry warms.
+
 ## 11. Range probes
 
 An inequality (`>`, `>=`, `<`, `<=`) becomes a single inclusive term RANGE
