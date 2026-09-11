@@ -634,15 +634,15 @@ func TestCollectPrepareViewSchemasKeepsLogicalSubscriptions(t *testing.T) {
 	}
 	ctx.resolve = func(databaseName, tableName string, _ *Snapshot) (*ObjectRef, *TableDef, error) {
 		return &ObjectRef{
-			SchemaName:       "publisher_db",
-			ObjName:          tableName,
-			Obj:              20,
-			SubscriptionName: databaseName,
-			PubInfo:          &planpb.PubInfo{TenantId: 11},
-		}, &TableDef{
-			DbName: "publisher_db", Name: tableName,
-			DbId: 10, TblId: 20, Version: 30,
-		}, nil
+				SchemaName:       "publisher_db",
+				ObjName:          tableName,
+				Obj:              20,
+				SubscriptionName: databaseName,
+				PubInfo:          &planpb.PubInfo{TenantId: 11},
+			}, &TableDef{
+				DbName: "publisher_db", Name: tableName,
+				DbId: 10, TblId: 20, Version: 30,
+			}, nil
 	}
 
 	schemas, err := collectPrepareViewSchemas(ctx)
