@@ -228,6 +228,33 @@ func TestPercentileArithmeticScratchDoesNotAllocatePerGroup(t *testing.T) {
 		"percentile finalization arithmetic must not allocate per group")
 }
 
+func TestPercentileArithmeticScratchExactRanks(t *testing.T) {
+	tests := []struct {
+		name  string
+		count uint64
+		p     *big.Rat
+		lo    uint64
+		hi    uint64
+		frac  *big.Rat
+	}{
+		{name: "minimum", count: 800, p: big.NewRat(0, 1), lo: 0, hi: 0, frac: big.NewRat(0, 1)},
+		{name: "exact interior", count: 3, p: big.NewRat(1, 2), lo: 1, hi: 1, frac: big.NewRat(0, 1)},
+		{name: "interpolated interior", count: 4, p: big.NewRat(1, 2), lo: 1, hi: 2, frac: big.NewRat(1, 2)},
+		{name: "maximum", count: 800, p: big.NewRat(1, 1), lo: 799, hi: 799, frac: big.NewRat(0, 1)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var scratch percentileArithmeticScratch
+			lo, hi, fraction := scratch.ranks(test.count, test.p)
+			require.Equal(t, test.lo, lo)
+			require.Equal(t, test.hi, hi)
+			require.Zero(t, new(big.Rat).SetFrac(
+				fraction.numerator, fraction.denominator).Cmp(test.frac))
+		})
+	}
+}
+
 func TestRationalToFloat64MatchesBigRat(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -680,6 +707,41 @@ func TestApproxPercentileExec_DifferentPercentiles(t *testing.T) {
 			e.Free()
 		})
 	}
+}
+
+func TestApproxPercentileExec_ExactMinimumAfterCompactionAndMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	left, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	right, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	defer left.Free()
+	defer right.Free()
+	for _, exec := range []AggFuncExec{left, right} {
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation([]byte("0"), 0))
+	}
+
+	leftValues := make([]int64, 400)
+	rightValues := make([]int64, 400)
+	for i := range 400 {
+		leftValues[i] = int64(800 - i)
+		rightValues[i] = int64(400 - i)
+	}
+	leftVec := buildFixedVec(t, mp, types.T_int64.ToType(), leftValues)
+	rightVec := buildFixedVec(t, mp, types.T_int64.ToType(), rightValues)
+	defer leftVec.Free(mp)
+	defer rightVec.Free(mp)
+	require.NoError(t, left.BulkFill(0, []*vector.Vector{leftVec}))
+	require.NoError(t, right.BulkFill(0, []*vector.Vector{rightVec}))
+	require.NoError(t, left.Merge(right, 0, 0))
+
+	ret, err := left.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 1.0, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
 }
 
 func TestApproxPercentileExec_Float64ExtremeInterpolation(t *testing.T) {
