@@ -599,6 +599,11 @@ type QueryBuilder struct {
 	// row after an earlier action and must be rejected until execution can refresh
 	// the correlated row image.
 	insertInputSingleRow bool
+	// odkuTargetCorrelationGuard is set only while flattening an ODKU assignment
+	// that contains a target-correlated subquery. It prevents the flattened
+	// scalar/SINGLE join from evaluating the UPDATE arm for a non-conflicting
+	// insert, whose snapshot target lookup is NULL.
+	odkuTargetCorrelationGuard *plan.Expr
 	// sinkColRef records, per materialized step, the post-pruning column remap
 	// produced by createQuery's final remapAllColRefs pass: {step, originalColPos}
 	// -> newColPos. The irregular-index maintenance sub-plans are appended after
