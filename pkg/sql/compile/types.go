@@ -398,8 +398,10 @@ type Compile struct {
 	needLockMeta bool
 	needBlock    bool
 	isPrepare    bool
-	disableRetry bool
-	isInternal   bool
+	// Immutable PREPARE-time floor, inherited by every physical generation.
+	groupConcatMaxLenFloor uint64
+	disableRetry           bool
+	isInternal             bool
 	// temporaryDDLInExecutorTxn keeps temporary CREATE/DROP in the transaction
 	// owned by the SQL executor. It is intentionally separate from isInternal,
 	// which also controls routing and other execution policy.

@@ -2664,6 +2664,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				if err != nil {
 					return 0, err
 				}
+				// A DEFAULT expression in the UPDATE arm is evaluated against the
+				// conflicting row. getDefaultExpr deliberately returns local column
+				// references, so bind them to the old-row scan before the expression
+				// reaches the dedup join. Leaving RelPos=0 here makes the optimizer
+				// treat a valid dependency (for example b DEFAULT (a + 1)) as a
+				// missing input column.
+				replaceColRefTag(updateExpr, 0, scanTag)
 			} else {
 				updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
 				if err != nil {
@@ -4536,10 +4543,12 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		if isAllDefault && astCols != nil {
 			return 0, nil, nil, -1, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		lastNodeID, err = builder.buildValueScan(isAllDefault, colRefAsDefault, isReplace, bindCtx, tableDef, selectImpl, insertColumns)
+		var valueScanColumns []string
+		lastNodeID, valueScanColumns, err = builder.buildValueScan(isAllDefault, colRefAsDefault, isReplace, bindCtx, tableDef, selectImpl, insertColumns)
 		if err != nil {
 			return 0, nil, nil, -1, err
 		}
+		insertColumns = valueScanColumns
 
 	case *tree.SelectClause, *tree.UnionClause:
 		astSelect = astRows
@@ -4899,6 +4908,9 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	genColIdxToProj1Pos := make(map[int]int)
 	genColIdxToProj2Pos := make(map[int]int)
 	generatedColIdxs := make([]int, 0)
+	columnExprs := make(map[int32]*plan.Expr)
+	materializeCols := make(map[int32]bool)
+	materializeOrder := make([]int32, 0)
 
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
@@ -4913,6 +4925,11 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				},
 			})
 			projList1 = append(projList1, oldExpr)
+			columnExprs[int32(i)] = oldExpr
+			if exprHasLocalColumnRef(oldExpr) {
+				materializeCols[int32(i)] = true
+				materializeOrder = append(materializeOrder, int32(i))
+			}
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if col.Name == catalog.Row_ID {
 			continue
@@ -4989,6 +5006,11 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				},
 			})
 			projList1 = append(projList1, defExpr)
+			columnExprs[int32(i)] = defExpr
+			if exprHasLocalColumnRef(defExpr) {
+				materializeCols[int32(i)] = true
+				materializeOrder = append(materializeOrder, int32(i))
+			}
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		}
 	}
@@ -4999,20 +5021,68 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			DeepCopyExpr(col.GeneratedCol.Expr),
 			builder.isInsertIgnore,
 		)
-		inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
 		proj1Pos := genColIdxToProj1Pos[i]
-		projList1[proj1Pos] = genExpr
-		pos := int32(proj1Pos)
-		colIdxToProjPos[int32(i)] = pos
+		columnExprs[int32(i)] = genExpr
+		colIdxToProjPos[int32(i)] = int32(proj1Pos)
 		projList2[genColIdxToProj2Pos[i]] = &plan.Expr{
 			Typ: genExpr.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: projTag1,
-					ColPos: pos,
+					ColPos: int32(proj1Pos),
 				},
 			},
 		}
+	}
+
+	for _, i := range generatedColIdxs {
+		genExpr := columnExprs[int32(i)]
+		proj1Pos := genColIdxToProj1Pos[i]
+		needsStage := false
+		for _, refIdx := range collectRefColPos(genExpr) {
+			if materializeCols[refIdx] ||
+				(refIdx >= 0 && int(refIdx) < len(tableDef.Cols) && tableDef.Cols[refIdx].GeneratedCol != nil) {
+				needsStage = true
+				break
+			}
+		}
+		if !needsStage && exprHasLocalColumnRef(genExpr) {
+			volatileDependency, err := hasVolatileLocalDependency(
+				builder.GetContext(), int32(i), columnExprs, materializeCols,
+			)
+			if err != nil {
+				return 0, nil, nil, -1, err
+			}
+			needsStage = volatileDependency
+		}
+		if needsStage {
+			materializeCols[int32(i)] = true
+			materializeOrder = append(materializeOrder, int32(i))
+		} else {
+			// Generated expressions over stable input/default values retain the
+			// established inline path. Generated-to-generated and generated-to-
+			// materialized/volatile-default edges use the staged path above.
+			inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
+			projList1[proj1Pos] = genExpr
+		}
+	}
+
+	tmpCtx := NewBindContext(builder, bindCtx)
+	lastNodeID, materializedTag, err := builder.appendMaterializedExprProjections(
+		tmpCtx,
+		lastNodeID,
+		projTag1,
+		projList1,
+		colIdxToProjPos,
+		columnExprs,
+		materializeCols,
+		materializeOrder,
+	)
+	if err != nil {
+		return 0, nil, nil, -1, err
+	}
+	for _, expr := range projList2 {
+		replaceColRefTag(expr, projTag1, materializedTag)
 	}
 
 	// Skip irregular (vector / fulltext) indexes here; they are maintained
@@ -5047,14 +5117,6 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			}},
 		})
 	}
-
-	tmpCtx := NewBindContext(builder, bindCtx)
-	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		ProjectList: projList1,
-		Children:    []int32{lastNodeID},
-		BindingTags: []int32{projTag1},
-	}, tmpCtx)
 
 	if hasAutoCol || compPkeyExpr != nil || clusterByExpr != nil {
 		lastNodeID = builder.appendNode(&plan.Node{
@@ -5167,12 +5229,13 @@ func (builder *QueryBuilder) buildValueScan(
 	tableDef *TableDef,
 	stmt *tree.ValuesClause,
 	colNames []string,
-) (int32, error) {
+) (int32, []string, error) {
 	var err error
+	effectiveColNames := append([]string(nil), colNames...)
 
 	if allowSubquery {
 		if err = validateReplaceValuesSubqueryBranchLimit(builder.GetContext(), stmt.Rows); err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 	}
 
@@ -5182,6 +5245,7 @@ func (builder *QueryBuilder) buildValueScan(
 	rowsetData := &plan.RowsetData{
 		Cols: make([]*plan.ColData, colCount),
 	}
+	hasLocalDefaultRefs := false
 	for i := 0; i < colCount; i++ {
 		rowsetData.Cols[i] = new(plan.ColData)
 	}
@@ -5196,6 +5260,7 @@ func (builder *QueryBuilder) buildValueScan(
 		valueBindCtx = NewBindContext(builder, bindCtx)
 	}
 	appendValueExpr := func(colIdx int, expr *plan.Expr) {
+		hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(expr)
 		rowsetData.Cols[colIdx].Data = append(rowsetData.Cols[colIdx].Data, &plan.RowsetExpr{Expr: expr})
 	}
 
@@ -5212,11 +5277,11 @@ func (builder *QueryBuilder) buildValueScan(
 		if isAllDefault {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
-				return 0, err
+				return 0, nil, err
 			}
 			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 			if err != nil {
-				return 0, err
+				return 0, nil, err
 			}
 			for range stmt.Rows {
 				appendValueExpr(i, defExpr)
@@ -5249,7 +5314,7 @@ func (builder *QueryBuilder) buildValueScan(
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {
-						return 0, err
+						return 0, nil, err
 					}
 					if handled {
 						appendValueExpr(i, expr)
@@ -5259,7 +5324,7 @@ func (builder *QueryBuilder) buildValueScan(
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
-						return 0, err
+						return 0, nil, err
 					}
 					if expr != nil {
 						appendValueExpr(i, expr)
@@ -5270,7 +5335,7 @@ func (builder *QueryBuilder) buildValueScan(
 				if _, ok := r[i].(*tree.DefaultVal); ok {
 					defExpr, err = getDefaultExpr(builder.GetContext(), col)
 					if err != nil {
-						return 0, err
+						return 0, nil, err
 					}
 				} else {
 					valueBinder := binder
@@ -5288,7 +5353,7 @@ func (builder *QueryBuilder) buildValueScan(
 								scan, err = numericBinder.numericAstTypesInternal(r[i], 0, numericBinder.numericAstColumnResolver())
 							}
 							if err != nil {
-								return 0, err
+								return 0, nil, err
 							}
 							if scan.hasParam {
 								switch numericBinder := funcBinder.(type) {
@@ -5298,7 +5363,7 @@ func (builder *QueryBuilder) buildValueScan(
 									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
 								}
 								if err != nil {
-									return 0, err
+									return 0, nil, err
 								}
 								boundWithNumericContext = defExpr != nil
 							}
@@ -5316,29 +5381,29 @@ func (builder *QueryBuilder) buildValueScan(
 					if !boundWithNumericContext {
 						defExpr, err = valueBinder.BindExpr(r[i], 0, true)
 						if err != nil {
-							return 0, err
+							return 0, nil, err
 						}
 					}
 					if isEnumPlanType(&col.Typ) {
 						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
-							return 0, err
+							return 0, nil, err
 						}
 					} else if isSetPlanType(&col.Typ) {
 						defExpr, err = funcCastForSetType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
-							return 0, err
+							return 0, nil, err
 						}
 					} else if isGeometryPlanType(&col.Typ) {
 						defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
-							return 0, err
+							return 0, nil, err
 						}
 					}
 				}
 				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 				if err != nil {
-					return 0, err
+					return 0, nil, err
 				}
 				appendValueExpr(i, defExpr)
 			}
@@ -5369,6 +5434,10 @@ func (builder *QueryBuilder) buildValueScan(
 			}
 		}
 		if hasAnySubquery {
+			if hasLocalDefaultRefs {
+				return 0, nil, moerr.NewNotSupported(builder.GetContext(),
+					"REPLACE VALUES cannot combine subqueries with row-local default dependencies")
+			}
 			// Build the column-major view only for the relational lowering. The
 			// ordinary RowsetData path keeps a single set of expression slices.
 			valueExprs := make([][]*plan.Expr, len(rowsetData.Cols))
@@ -5378,11 +5447,72 @@ func (builder *QueryBuilder) buildValueScan(
 					valueExprs[colIdx][rowIdx] = row.Expr
 				}
 			}
-			return builder.buildValueScanWithSubqueries(bindCtx, colNames, valueExprs)
+			nodeID, err := builder.buildValueScanWithSubqueries(bindCtx, colNames, valueExprs)
+			return nodeID, effectiveColNames, err
 		}
 	}
 
 	rowsetData.RowCount = int32(len(stmt.Rows))
+	if hasLocalDefaultRefs {
+		var err error
+		effectiveColNames, err = valueScanColumnsWithDefaultDependencies(
+			builder.GetContext(), tableDef, effectiveColNames, rowsetData,
+		)
+		if err != nil {
+			return 0, nil, err
+		}
+		for i := colCount; i < len(effectiveColNames); i++ {
+			colName := effectiveColNames[i]
+			colIdx, ok := tableDef.Name2ColIndex[colName]
+			if !ok {
+				for j, candidate := range tableDef.Cols {
+					if candidate != nil && strings.EqualFold(candidate.Name, colName) {
+						colIdx = int32(j)
+						ok = true
+						break
+					}
+				}
+			}
+			if !ok || colIdx < 0 || int(colIdx) >= len(tableDef.Cols) || tableDef.Cols[colIdx] == nil {
+				return 0, nil, moerr.NewInvalidInputf(builder.GetContext(),
+					"insert column '%s' does not exist", colName)
+			}
+			col := tableDef.Cols[colIdx]
+			colTyp := makeTypeByPlan2Type(col.Typ)
+			targetTyp := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			if err != nil {
+				return 0, nil, err
+			}
+			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+			if err != nil {
+				return 0, nil, err
+			}
+			data := make([]*plan.RowsetExpr, len(stmt.Rows))
+			for row := range data {
+				data[row] = &plan.RowsetExpr{Expr: defExpr}
+			}
+			rowsetData.Cols = append(rowsetData.Cols, &plan.ColData{Data: data})
+			valueScanTableDef.Cols = append(valueScanTableDef.Cols, &plan.ColDef{
+				ColId: 0,
+				Name:  fmt.Sprintf("column_%d", len(valueScanTableDef.Cols)),
+				Typ:   col.Typ,
+			})
+			projectList = append(projectList, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: lastTag,
+					ColPos: int32(len(projectList)),
+				}},
+			})
+		}
+		if err := expandDefaultExprsInValueScan(
+			builder.GetContext(), tableDef, effectiveColNames, rowsetData,
+		); err != nil {
+			return 0, nil, err
+		}
+	}
+
 	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_VALUE_SCAN,
@@ -5393,7 +5523,7 @@ func (builder *QueryBuilder) buildValueScan(
 	}
 	nodeID := builder.appendNode(scanNode, bindCtx)
 	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
 	lastTag = builder.genNewBindTag()
@@ -5404,7 +5534,7 @@ func (builder *QueryBuilder) buildValueScan(
 		BindingTags: []int32{lastTag},
 	}, bindCtx)
 
-	return nodeID, nil
+	return nodeID, effectiveColNames, nil
 }
 
 // buildValueScanWithSubqueries lowers value rows that contain subqueries into

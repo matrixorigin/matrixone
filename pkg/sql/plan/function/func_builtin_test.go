@@ -148,6 +148,9 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 		types.New(types.T_binary, 8, 0),
 		types.New(types.T_varbinary, 128, 0),
 		types.New(types.T_blob, 0, 0),
+		types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetUTF8MB4Bin),
+		types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetBinary),
+		types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetLegacy),
 		types.T_int32.ToType(),
 	}
 	encoded := make([]string, len(typesToEncode))
@@ -165,17 +168,17 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 		{
 			name:   "maximum character length",
 			fn:     builtInInternalCharLength,
-			values: []int64{8, 128, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
+			values: []int64{8, 128, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 16, 16, 16, 0},
 		},
 		{
 			name:   "maximum octet length",
 			fn:     builtInInternalCharSize,
-			values: []int64{32, 512, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 0},
+			values: []int64{32, 512, types.MaxStringSize, types.MaxTinyTextLen, 8, 128, 0, 64, 16, 48, 0},
 		},
 		{
 			name:   "character set domain",
 			fn:     builtInInternalCharacterSet,
-			values: []int64{0, 0, 0, 0, 2, 2, 2, 0},
+			values: []int64{3, 3, 3, 3, 2, 2, 2, 1, 2, 0, 0},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -188,7 +191,7 @@ func TestBuiltInInternalCharMetadataUsesEncodedWidth(t *testing.T) {
 					types.T_int64.ToType(),
 					false,
 					test.values,
-					[]bool{false, false, false, false, false, false, false, true},
+					[]bool{false, false, false, false, false, false, false, false, false, false, true},
 				),
 				test.fn,
 			)
@@ -1270,10 +1273,10 @@ func TestPadRejectsAccountedAllocationBeforeBuildingResult(t *testing.T) {
 			require.NoError(t, err)
 			proc := testutil.NewProcessWithMPool(t, "", mp)
 			tc := NewFunctionTestCase(proc, []FunctionTestInput{
-				NewFunctionTestConstInput(types.T_blob.ToType(), []string{"x"}, nil),
-				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{500000}, nil),
-				NewFunctionTestConstInput(types.T_blob.ToType(), []string{"😀"}, nil),
-			}, NewFunctionTestResult(types.T_blob.ToType(), true, nil, nil), fEvalFn(fn))
+				NewFunctionTestConstInput(types.T_text.ToType(), []string{"x"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{300000}, nil),
+				NewFunctionTestConstInput(types.T_text.ToType(), []string{"😀"}, nil),
+			}, NewFunctionTestResult(types.T_text.ToType(), true, nil, nil), fEvalFn(fn))
 			ok, info := tc.Run()
 			require.True(t, ok, info)
 		})
@@ -2630,6 +2633,46 @@ func TestBuiltInExpAndCotInvalidResultReturnsNull(t *testing.T) {
 	}
 }
 
+func TestBuiltInCotUsesStableReciprocalAndNullsOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []float64{1e-20, -1e-20, 1e-308, -1e-308, 1e100, -1e100, math.SmallestNonzeroFloat64, -math.SmallestNonzeroFloat64, 0, 1}
+	nulls := []bool{false, false, false, false, false, false, false, false, false, true}
+	tcc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(), inputs, nulls)},
+		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil),
+		builtInCot,
+	)
+	require.NoError(t, tcc.result.PreExtendAndReset(tcc.fnLength))
+	require.NoError(t, builtInCot(tcc.parameters, tcc.result, proc, tcc.fnLength, nil))
+
+	result := vector.GenerateFunctionFixedTypeParameter[float64](tcc.result.GetResultVector())
+	for i, input := range inputs {
+		value, isNull := result.GetValue(uint64(i))
+		if i >= 6 {
+			require.True(t, isNull, "Cot(%g) should return NULL", input)
+			continue
+		}
+		require.False(t, isNull, "Cot(%g) unexpectedly returned NULL", input)
+		require.Equal(t, 1/math.Tan(input), value)
+	}
+
+	constant := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{NewFunctionTestConstInput(types.T_float64.ToType(), []float64{1e-20, 1e-20}, nil)},
+		NewFunctionTestResult(types.T_float64.ToType(), false, nil, nil),
+		builtInCot,
+	)
+	require.NoError(t, constant.result.PreExtendAndReset(constant.fnLength))
+	require.NoError(t, builtInCot(constant.parameters, constant.result, proc, constant.fnLength, nil))
+	constantResult := vector.GenerateFunctionFixedTypeParameter[float64](constant.result.GetResultVector())
+	for i := 0; i < constant.fnLength; i++ {
+		value, isNull := constantResult.GetValue(uint64(i))
+		require.False(t, isNull)
+		require.Equal(t, 1/math.Tan(1e-20), value)
+	}
+}
+
 func TestBuiltInExpAndCotRespectSelectList(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	testCases := []struct {
@@ -2647,7 +2690,7 @@ func TestBuiltInExpAndCotRespectSelectList(t *testing.T) {
 		{
 			name:  "cot skips masked zero",
 			input: []float64{0, 1},
-			value: math.Tan(math.Pi/2 - 1),
+			value: 1 / math.Tan(1),
 			fn:    builtInCot,
 		},
 	}
@@ -2704,6 +2747,64 @@ func TestBuiltInExpAndCotRespectSelectList(t *testing.T) {
 			succeed, info := tcc.Run()
 			require.True(t, succeed, info)
 		})
+	}
+}
+
+func TestBuiltInExpOverflowAllocationsDoNotScaleWithRows(t *testing.T) {
+	measure := func(rowCount int) float64 {
+		proc := testutil.NewProcess(t)
+		values := make([]float64, rowCount)
+		for i := range values {
+			values[i] = 710
+		}
+
+		input := newVectorByType(proc.Mp(), types.T_float64.ToType(), values, nil)
+		defer input.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp())
+		defer result.Free()
+		if err := result.PreExtendAndReset(rowCount); err != nil {
+			t.Fatal(err)
+		}
+
+		return testing.AllocsPerRun(100, func() {
+			if err := result.PreExtendAndReset(rowCount); err != nil {
+				panic(err)
+			}
+			if err := builtInExp([]*vector.Vector{input}, result, proc, rowCount, nil); err != nil {
+				panic(err)
+			}
+		})
+	}
+
+	oneRowAllocs := measure(1)
+	batchAllocs := measure(8192)
+	require.LessOrEqual(t, batchAllocs, oneRowAllocs+16,
+		"EXP overflow handling must not allocate per row: one row=%v, 8192 rows=%v",
+		oneRowAllocs, batchAllocs)
+}
+
+func BenchmarkBuiltInExpOverflowBatch(b *testing.B) {
+	const rowCount = 8192
+	proc := testutil.NewProcess(b)
+	values := make([]float64, rowCount)
+	for i := range values {
+		values[i] = 710
+	}
+
+	input := newVectorByType(proc.Mp(), types.T_float64.ToType(), values, nil)
+	defer input.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp())
+	defer result.Free()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := result.PreExtendAndReset(rowCount); err != nil {
+			b.Fatal(err)
+		}
+		if err := builtInExp([]*vector.Vector{input}, result, proc, rowCount, nil); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

@@ -10001,3 +10001,27 @@ func TestPreparedCloneSQLUsesRemappedDefaultDatabase(t *testing.T) {
 	require.True(t, parsed.CreateTable.Table.ExplicitSchema)
 	require.Equal(t, "source_db", ses.GetTxnCompileCtx().GetDatabase())
 }
+
+func TestPreparedGroupConcatFloorCapturedWithoutPhysicalCompile(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	const sql = "prepare gc_floor from select /*+ SET_VAR(query_max_workers=1) */ group_concat('abcdef')"
+	parsed, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer parsed.Free()
+	ctrl := gomock.NewController(t)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	runTestHandle("prepared GROUP_CONCAT floor without physical compile", t, func(ses *Session) error {
+		execCtx.resper = ses.respr
+		require.NoError(t, ses.SetSessionSysVar(ctx, "group_concat_max_len", int64(1024)))
+		prepared, err := handlePrepareStmt(ses, execCtx, parsed.(*tree.PrepareStmt), sql)
+		if err != nil {
+			return err
+		}
+		require.Nil(t, prepared.compile, "explicit placement must exercise uncached prepare")
+		require.Equal(t, uint64(1024), prepared.groupConcatMaxLenFloor)
+		require.NoError(t, ses.SetSessionSysVar(ctx, "group_concat_max_len", int64(5)))
+		require.Equal(t, uint64(1024), prepared.groupConcatMaxLenFloor, "the logical prepared owner retains its original floor")
+		return nil
+	})
+}

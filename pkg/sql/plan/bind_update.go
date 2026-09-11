@@ -232,6 +232,27 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 			if err != nil {
 				return 0, nil, 0, err
 			}
+			currentValues := make(map[int32]*plan.Expr, len(tableDef.Cols))
+			for i := range tableDef.Cols {
+				if i < len(currentProjectList) {
+					// Resolve DEFAULT references against the row image produced by
+					// the preceding assignment projection.  Keeping the raw
+					// expression here would replay a volatile default (for example,
+					// RAND()) instead of reading the value already materialized in
+					// the current row.
+					currentValues[int32(i)] = &plan.Expr{
+						Typ: currentProjectList[i].Typ,
+						Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: currentTag,
+							ColPos: int32(i),
+						}},
+					}
+				}
+			}
+			rhs, err = expandDefaultExprWithColumnExprs(builder.GetContext(), rhs, currentValues)
+			if err != nil {
+				return 0, nil, 0, err
+			}
 		}
 		if isEnumPlanType(&column.Typ) {
 			rhs, err = funcCastForEnumType(builder.GetContext(), rhs, column.Typ)
@@ -624,6 +645,17 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				updateExpr := selectNode.ProjectList[colPos]
 				if isDefaultValExpr(updateExpr) { // set col = default
 					updateExpr, err = getDefaultExpr(builder.GetContext(), col)
+					if err != nil {
+						return 0, err
+					}
+					oldValues := make(map[int32]*plan.Expr, len(tableDef.Cols))
+					for colIdx, refCol := range tableDef.Cols {
+						if oldPos, exists := oldColName2Idx[alias+"."+refCol.Name]; exists &&
+							oldPos >= 0 && int(oldPos) < len(selectNode.ProjectList) {
+							oldValues[int32(colIdx)] = selectNode.ProjectList[oldPos]
+						}
+					}
+					updateExpr, err = expandDefaultExprWithColumnExprs(builder.GetContext(), updateExpr, oldValues)
 					if err != nil {
 						return 0, err
 					}

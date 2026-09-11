@@ -2020,7 +2020,7 @@ func supportsGenericNumericFunctionContext(name string) bool {
 	// result. A numeric return type alone is insufficient: FIELD, LENGTH and
 	// similar functions return numbers while their arguments belong to another
 	// domain.
-	case "abs", "ceil", "ceiling", "floor", "round", "truncate",
+	case "abs", "ceil", "ceiling", "floor", "round", "truncate", "sign",
 		"sqrt", "power", "pow", "exp", "ln", "log", "log2", "log10":
 		return true
 	default:
@@ -3599,6 +3599,22 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 		}
 	}
+	// FIND_IN_SET has two different SQL contracts for its second operand:
+	// ordinary strings are comma-separated lists, while a SET operand is a
+	// bitmap whose member position is defined by the SET declaration.  The
+	// display wrapper installed by BindColRef intentionally hides that bitmap
+	// from ordinary string functions, so retain the SET contract before the
+	// generic numeric-special-type rewrite gets a chance to discard the
+	// provenance.
+	findInSetInternalArgs := false
+	if isFindInSetName(name) && len(args) == 2 && b.ctx != nil {
+		var err error
+		args, findInSetInternalArgs, err = rewriteFindInSetSetProvenance(
+			b.GetContext(), b.builder, b.ctx, args)
+		if err != nil {
+			return nil, err
+		}
+	}
 	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
 	if b.builder != nil && b.builder.isPrepareStatement {
 		b.markPreparedStringDomainSubquerySources(name, args)
@@ -3679,7 +3695,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	}
 
 	if b.builder != nil {
-		e, err := bindBoundFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+		var e *plan.Expr
+		var err error
+		if findInSetInternalArgs {
+			e, err = bindBoundFuncExprAndConstFoldWithInternalFunctionArgs(
+				b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+		} else {
+			e, err = bindBoundFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+		}
 		if err == nil {
 			if fn := e.GetF(); fn != nil {
 				for i, source := range preparedPeerSources {
@@ -3725,7 +3748,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	} else {
 		// return bindFuncExprImplByPlanExpr(b.GetContext(), name, args)
 		// first look for builtin func
-		builtinExpr, err := bindFuncExprImplByPlanExpr(b.GetContext(), name, args, false, nil, false)
+		builtinExpr, err := bindFuncExprImplByPlanExpr(
+			b.GetContext(), name, args, false, nil, findInSetInternalArgs)
 		if err == nil {
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
@@ -4211,12 +4235,102 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 	return BindFuncExprImplByPlanExpr(b.GetContext(), "python_user_defined_function", args)
 }
 
+func isFindInSetName(name string) bool {
+	return strings.EqualFold(name, "find_in_set") || strings.EqualFold(name, "findinset")
+}
+
+func rewriteFindInSetStoredOperand(args []*Expr) ([]*Expr, bool) {
+	if len(args) != 2 || args[1] == nil {
+		return args, false
+	}
+
+	var (
+		bitmap     *Expr
+		storageTyp *plan.Type
+	)
+	if isSetDisplayValueExpr(args[1]) {
+		fn := args[1].GetF()
+		if len(fn.Args) != 2 || fn.Args[1] == nil || !isSetPlanType(&fn.Args[1].Typ) {
+			return args, false
+		}
+		storageTyp = DeepCopyType(&fn.Args[1].Typ)
+		var ok bool
+		bitmap, ok = storedSetBitmapExpr(args[1])
+		if !ok {
+			return args, false
+		}
+	} else if isSetPlanType(&args[1].Typ) {
+		storageTyp = DeepCopyType(&args[1].Typ)
+		bitmap = DeepCopyExpr(args[1])
+		bitmap.Typ.Enumvalues = ""
+	} else {
+		return args, false
+	}
+
+	rewritten := make([]*Expr, 0, 3)
+	rewritten = append(rewritten, args[0], bitmap)
+	rewritten = append(rewritten, makePlan2StringConstExprWithType(storageTyp.Enumvalues))
+	return rewritten, true
+}
+
+// rewriteFindInSetSetProvenance converts a visible SET value that crossed a
+// query boundary back to its stored bitmap before FIND_IN_SET is bound.  A
+// direct SET column is handled structurally by bindFuncExprImplByPlanExpr;
+// this path is for derived tables/views, whose output is a VARCHAR ColRef but
+// whose BindContext still records the source SET definition.
+func rewriteFindInSetSetProvenance(
+	ctx context.Context, builder *QueryBuilder, bindCtx *BindContext, args []*Expr,
+) ([]*Expr, bool, error) {
+	if bindCtx == nil || len(args) != 2 || args[1] == nil || isSetDisplayValueExpr(args[1]) {
+		return args, false, nil
+	}
+
+	storageType := bindCtx.mysqlSpecialOrderTypeForExpr(args[1])
+	if !isSetPlanType(storageType) {
+		return args, false, nil
+	}
+	if builder != nil && setTypeHasEmptyMember(storageType) {
+		if bitmap, ok := builder.materializeProjectedSetBitmap(args[1], nil); ok {
+			rewritten := make([]*Expr, 0, 3)
+			rewritten = append(rewritten, args[0], bitmap)
+			rewritten = append(rewritten, makePlan2StringConstExprWithType(storageType.Enumvalues))
+			return rewritten, true, nil
+		}
+	}
+
+	_, valueToIndex, _, err := mysqlSpecialTypeFuncNames(storageType)
+	if err != nil {
+		return nil, false, err
+	}
+	bitmap, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, []*Expr{
+		makePlan2StringConstExprWithType(storageType.Enumvalues),
+		DeepCopyExpr(args[1]),
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	// This is an ordinary physical bitmap inside the hidden overload.  Do not
+	// let a later SET-aware assignment/cast treat it as a display value again.
+	bitmap.Typ.Enumvalues = ""
+
+	rewritten := make([]*Expr, 0, 3)
+	rewritten = append(rewritten, args[0], bitmap)
+	rewritten = append(rewritten, makePlan2StringConstExprWithType(storageType.Enumvalues))
+	return rewritten, true, nil
+}
+
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, true)
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, true, false)
 }
 
 func bindBoundFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false)
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, false)
+}
+
+func bindBoundFuncExprAndConstFoldWithInternalFunctionArgs(
+	ctx context.Context, proc *process.Process, name string, args []*Expr,
+) (*plan.Expr, error) {
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, true)
 }
 
 func bindFuncExprAndConstFoldInternal(
@@ -4225,11 +4339,13 @@ func bindFuncExprAndConstFoldInternal(
 	name string,
 	args []*Expr,
 	descendFunctions bool,
+	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
 		return nil, err
 	}
-	retExpr, err := bindFuncExprImplByPlanExpr(ctx, name, args, descendFunctions, nil, false)
+	retExpr, err := bindFuncExprImplByPlanExpr(
+		ctx, name, args, descendFunctions, nil, allowInternalFunctionArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -4816,7 +4932,7 @@ func bindFuncExprImplByPlanExpr(
 	args []*Expr,
 	descendFunctions bool,
 	stringDomainModes []function.StringDomainCheckMode,
-	allowInternalDateFunctionArgs bool,
+	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
@@ -4867,6 +4983,22 @@ func bindFuncExprImplByPlanExpr(
 		args[0], err = appendCastBeforeExpr(ctx, args[0], makePlan2Type(&target))
 		if err != nil {
 			return nil, err
+		}
+	}
+	if isFindInSetName(name) {
+		switch len(args) {
+		case 2:
+			var rewritten bool
+			args, rewritten = rewriteFindInSetStoredOperand(args)
+			if rewritten {
+				allowInternalFunctionArgs = true
+			}
+		case 3:
+			if !allowInternalFunctionArgs {
+				return nil, moerr.NewInvalidArg(ctx, "function "+name, len(args))
+			}
+		default:
+			return nil, moerr.NewInvalidArg(ctx, "function "+name, len(args))
 		}
 	}
 	if name == "member of" {
@@ -4922,7 +5054,7 @@ func bindFuncExprImplByPlanExpr(
 		// form after replacing a parameter marker. Do not run the SQL-syntax
 		// two-argument rewrite a second time; ordinary callers still cannot bind
 		// the internal overload directly.
-		if allowInternalDateFunctionArgs && len(args) == 3 {
+		if allowInternalFunctionArgs && len(args) == 3 {
 			break
 		}
 		if len(args) != 2 {
@@ -5045,7 +5177,8 @@ func bindFuncExprImplByPlanExpr(
 		} else if args[0].Typ.Id == int32(types.T_interval) && args[1].Typ.Id == int32(types.T_int64) && intervalUnitIsDayOrLarger(args[0]) {
 			name = "date_add"
 			args, err = resetDateFunctionArgs(ctx, args[1], args[0])
-		} else if isCollatedTextPlanType(args[0]) && isCollatedTextPlanType(args[1]) {
+		} else if isCollatedTextPlanType(args[0]) && isCollatedTextPlanType(args[1]) &&
+			!isOctFunctionPlanExpr(args[0]) && !isOctFunctionPlanExpr(args[1]) {
 			name = "concat"
 		}
 		if err != nil {
@@ -5126,9 +5259,18 @@ func bindFuncExprImplByPlanExpr(
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
-		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
+		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) ||
+			(name == "oct" && args[0].Typ.Id == int32(types.T_decimal256)) {
+			target := types.T_float64
+			if name == "oct" {
+				// OCT reads the integer prefix of the decimal's exact text.
+				// Going through FLOAT64 loses digits above 2^53.
+				target = types.T_varchar
+			}
+			targetType := target.ToType()
 			args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
-				Id:          int32(types.T_float64),
+				Id:          int32(target),
+				Width:       targetType.Width,
 				NotNullable: args[0].Typ.NotNullable,
 			})
 			if err != nil {
@@ -5345,6 +5487,20 @@ func bindFuncExprImplByPlanExpr(
 	case "pow":
 		name = "power"
 	}
+
+	// OCT returns VARCHAR for compatibility with MySQL, but its result is still
+	// a numeric string when consumed by arithmetic.  The generic string-plus
+	// compatibility rule above intentionally rewrites VARCHAR + VARCHAR to
+	// CONCAT, so direct OCT operands must enter the numeric operator lattice
+	// explicitly.  Keep this narrow: ordinary text expressions must retain the
+	// existing MatrixOne string-plus behavior.
+	if isOctNumericContextFunction(name) {
+		args, err = castOctFunctionArgsForNumericContext(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if name == "convert" {
 		if err := bindConvertUsingCharset(ctx, args); err != nil {
 			return nil, err
@@ -5871,6 +6027,38 @@ func isCollatedTextPlanType(expr *plan.Expr) bool {
 	default:
 		return false
 	}
+}
+
+func isOctFunctionPlanExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "oct")
+}
+
+func isOctNumericContextFunction(name string) bool {
+	switch name {
+	case "+", "-", "*", "/", "%", "div", "mod", "unary_minus":
+		return true
+	default:
+		return false
+	}
+}
+
+func castOctFunctionArgsForNumericContext(ctx context.Context, args []*plan.Expr) ([]*plan.Expr, error) {
+	floatType := types.T_float64.ToType()
+	for idx, arg := range args {
+		if !isOctFunctionPlanExpr(arg) {
+			continue
+		}
+		cast, err := appendCastBeforeExpr(ctx, arg, makePlan2Type(&floatType))
+		if err != nil {
+			return nil, err
+		}
+		args[idx] = cast
+	}
+	return args, nil
 }
 
 func refineRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {

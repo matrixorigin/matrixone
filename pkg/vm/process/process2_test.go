@@ -39,6 +39,7 @@ func (*childProcessSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return
 func TestChildProcessesInheritSession(t *testing.T) {
 	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	parent.Session = &childProcessSession{}
+	parent.WarningSink = &struct{ generation int }{1}
 
 	child := parent.NewNoContextChildProc(0)
 	channelChild := parent.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
@@ -47,6 +48,9 @@ func TestChildProcessesInheritSession(t *testing.T) {
 	require.Same(t, parent.Session, child.Session)
 	require.Same(t, parent.Session, channelChild.Session)
 	require.Same(t, parent.Session, contextChild.Session)
+	require.Same(t, parent.WarningSink, child.GetWarningSink())
+	require.Same(t, parent.WarningSink, channelChild.GetWarningSink())
+	require.Same(t, parent.WarningSink, contextChild.GetWarningSink())
 }
 
 func TestBuildPipelineContext(t *testing.T) {
@@ -324,15 +328,17 @@ func TestSetPrepareParamsWithReusableMetaReusesPackedStorage(t *testing.T) {
 
 	metadata := proc.SetPrepareParamsWithReusableTypedMeta(
 		params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger},
-		[]types.T{types.T_int64}, nil)
+		[]types.T{types.T_int64}, nil, []bool{true})
 	require.Equal(t, vector.PrepareParamInteger, proc.GetPrepareParamKind(0))
 	require.Equal(t, types.T_int64, proc.GetPrepareParamType(0))
+	require.True(t, proc.GetPrepareParamIsBinaryString(0))
 	first := &metadata[0]
 	metadata = proc.SetPrepareParamsWithReusableMeta(
 		params, nil, []vector.PrepareParamKind{vector.PrepareParamDecimal}, metadata)
 	require.Same(t, first, &metadata[0])
 	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
 	require.Equal(t, types.T_any, proc.GetPrepareParamType(0))
+	require.False(t, proc.GetPrepareParamIsBinaryString(0))
 }
 
 func TestDetachAndRestorePrepareParams(t *testing.T) {

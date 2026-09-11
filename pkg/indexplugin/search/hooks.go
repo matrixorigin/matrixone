@@ -66,3 +66,10 @@ type Request struct {
 type Hooks interface {
 	NewReader(proc *process.Process, spec *plan.VectorIndexScan, req Request) (engine.Reader, error)
 }
+
+// ParallelHooks optionally partitions one coordinator-local search into disjoint
+// readers. The returned slice must match parallelism, including empty shards.
+// Consumers without local parallelism, including APPLY, can keep Hooks.NewReader.
+type ParallelHooks interface {
+	NewReaders(proc *process.Process, spec *plan.VectorIndexScan, req Request, parallelism int) ([]engine.Reader, error)
+}

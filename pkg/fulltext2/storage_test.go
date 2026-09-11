@@ -23,9 +23,12 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,10 +54,20 @@ func TestDeleteSqls(t *testing.T) {
 	require.Len(t, all, 2)
 	require.Contains(t, all[0], "__store")
 	require.Contains(t, all[1], "__meta")
+	// A REBUILD clears the bases and KEEPS the tail's bytes, so the tail's frame rows have to
+	// survive with them: stripping the rows off chunks that are still there loses their
+	// build_ts and leaves tailPeakBytes summing whichever frames a later flush appends.
+	require.Contains(t, all[1], notTailFrame(), "the bases' delete must spare the tail frame rows")
+	require.Contains(t, all[1], TailFrameMetaPrefix)
+	require.NotContains(t, all[1], "WHERE TRUE")
 
+	// The tail's chunks AND its per-frame metadata rows: leaving the rows behind would report
+	// a tail that no longer exists.
 	tail := DeleteTailSqls(cfg)
-	require.Len(t, tail, 1)
+	require.Len(t, tail, 2)
 	require.Contains(t, tail[0], "__store")
+	require.Contains(t, tail[1], "__meta")
+	require.Contains(t, tail[1], TailFrameMetaPrefix)
 }
 
 func TestFileChunkInsertSqls(t *testing.T) {
@@ -106,22 +119,39 @@ func TestTailFramesInsertSqls(t *testing.T) {
 	for i := 0; i < n; i++ {
 		frames[i] = TailSegment{Path: "/tmp/spool", Offset: int64(i * 8), FrameLen: 8}
 	}
-	startChunk := int64(7)
-	sqls, next := TailFramesInsertSqls(cfg, startChunk, frames)
+	// Its own table name, and marked widened: provenanceShape is process-wide, so a test that
+	// shares a name with another can be switched off by it.
+	cfg.MetadataTable = "__meta_tailframes_batching"
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
 
-	// n rows batched at maxInsertTuples/statement ⇒ 3 statements, NOT n (one-per-frame).
-	require.Len(t, sqls, 3)
-	total := 0
+	startChunk := int64(7)
+	sp, _ := mockSqlProc(t)
+	sqls, next := TailFramesInsertSqlsAt(sp, cfg, startChunk, frames, 0)
+
+	// Chunk rows AND the per-frame metadata rows, each batched at maxInsertTuples per
+	// statement: 3 of each, never one statement per frame.
+	var chunkSqls, metaSqls []string
 	for _, s := range sqls {
+		if strings.Contains(s, cfg.MetadataTable) {
+			metaSqls = append(metaSqls, s)
+		} else {
+			chunkSqls = append(chunkSqls, s)
+		}
+	}
+	require.Len(t, chunkSqls, 3)
+	require.Len(t, metaSqls, 3, "frame rows are batched too, or a burst costs a round trip each")
+	total := 0
+	for _, s := range chunkSqls {
 		total += strings.Count(s, "load_file(")
 		require.Contains(t, s, vectorindex.CdcTailId)
 	}
 	require.Equal(t, n, total, "every frame contributes exactly one chunk row")
 	// chunk_ids are contiguous from startChunk; next = startChunk + total chunks.
 	require.Equal(t, startChunk+int64(n), next)
-	require.Contains(t, sqls[0], fmt.Sprintf(", %d, load_file", startChunk))            // first chunk id
-	require.Contains(t, sqls[2], fmt.Sprintf(", %d, load_file", startChunk+int64(n)-1)) // last chunk id
-	require.Contains(t, sqls[2], fmt.Sprintf("offset=%d", (n-1)*8))                     // last frame's offset in the last stmt
+	require.Contains(t, chunkSqls[0], fmt.Sprintf(", %d, load_file", startChunk))            // first chunk id
+	require.Contains(t, chunkSqls[2], fmt.Sprintf(", %d, load_file", startChunk+int64(n)-1)) // last chunk id
+	require.Contains(t, chunkSqls[2], fmt.Sprintf("offset=%d", (n-1)*8))                     // last frame
 
 	// empty input ⇒ no statements, next == start.
 	sqls0, next0 := TailFramesInsertSqls(cfg, startChunk, nil)
@@ -157,7 +187,7 @@ func TestToInsertSqls(t *testing.T) {
 	seg.Recency = 3
 
 	// nil sqlproc ⇒ createLocalSpillFile falls back to an os temp file.
-	sqls, cleanup, err := seg.ToInsertSqls(nil, cfg, 12345, int(vectorindex.Tag_ModelChunk))
+	sqls, cleanup, err := seg.ToInsertSqls(nil, cfg, 12345, int(vectorindex.Tag_ModelChunk), 0)
 	require.NoError(t, err)
 	require.NotNil(t, cleanup)
 	defer cleanup()
@@ -242,4 +272,147 @@ func TestAggregateSQLCastsToSigned(t *testing.T) {
 		require.Contains(t, line, "AS SIGNED",
 			"a SUM read back as int64 must be cast in SQL: %s", strings.TrimSpace(line))
 	}
+}
+
+// The metadata table now holds two kinds of row: one per BASE segment, and one per tail FRAME.
+// Every reader that means "the bases" must say so -- one that does not would try to load a tail
+// frame as a base segment, or fold the tail's bytes into the base totals. Base ids are
+// "<index table>:<ts>:<n>", so the prefix cannot collide.
+func TestTailFrameRowsAreNeverReadAsBases(t *testing.T) {
+	cfg := testStorageCfg()
+
+	require.Equal(t, "cdc_tail:7", TailFrameMetaId(7))
+	require.True(t, strings.HasPrefix(TailFrameMetaId(7), TailFrameMetaPrefix))
+	require.False(t, strings.HasPrefix(SubIndexId("mytable", 3), TailFrameMetaPrefix),
+		"a base id must not look like a tail frame")
+
+	// Every query that enumerates or sums the bases carries the exclusion.
+	for _, sql := range []string{
+		NextTailChunkIdSql(cfg),
+	} {
+		_ = sql // NextTailChunkId deliberately spans both kinds; see its comment.
+	}
+
+	tsSQL, _ := StaleGenSqls(cfg)
+	require.Contains(t, tsSQL, notTailFrame(),
+		"a tail flush must not read as a new base generation")
+}
+
+// A frame's row can be referred back to the bytes it describes: chunk ids are contiguous in
+// frame order, so a frame owns [start, start+ceil(filesize/MaxChunkSize)).
+func TestTailFrameRowsReferToTheirChunks(t *testing.T) {
+	cfg := testStorageCfg()
+	frames := []TailSegment{
+		{Path: "/tmp/s", Offset: 0, FrameLen: vectorindex.MaxChunkSize + 1}, // 2 chunks
+		{Path: "/tmp/s", Offset: 100, FrameLen: 10},                         // 1 chunk
+	}
+	const start = int64(5)
+	cfg.MetadataTable = "__meta_tailframes_refer"
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
+	sp, _ := mockSqlProc(t)
+	sqls, next := TailFramesInsertSqlsAt(sp, cfg, start, frames, 4242)
+
+	var meta string
+	for _, s := range sqls {
+		if strings.Contains(s, cfg.MetadataTable) {
+			meta += s
+		}
+	}
+	// First frame starts at 5 and spans two chunks, so the second starts at 7.
+	require.Contains(t, meta, "'cdc_tail:5'")
+	require.Contains(t, meta, "'cdc_tail:7'")
+	require.Contains(t, meta, "4242", "each frame records the version it applied")
+	require.Equal(t, start+3, next, "and the chunk ids they name are the ones written")
+}
+
+// On a metadata table that predates build_ts, the frame rows must OMIT it rather than fail.
+// Naming a column the table does not have fails every CDC flush: the ISCP transaction never
+// commits its watermark and the iteration retries the same statement forever, so the index stops
+// advancing silently. Its sibling writer, Segment.ToInsertSqls, has always probed for this.
+func TestTailFrameRowsAreWithheldFromALegacyTable(t *testing.T) {
+	cfg := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta_never_widened"}
+	sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable)
+
+	frames := []TailSegment{{Path: "/tmp/s", Offset: 0, FrameLen: 10}}
+	sqls, next := TailFramesInsertSqlsAt(nil, cfg, 1, frames, 4242)
+
+	var meta string
+	for _, s := range sqls {
+		if strings.Contains(s, cfg.MetadataTable) {
+			meta += s
+		}
+	}
+	// Naming build_ts on a table without it fails the flush; writing the row without build_ts
+	// leaves an un-upgraded CN reading 'cdc_tail:1' as a base segment. Neither row is written.
+	require.Empty(t, meta, "no metadata row at all until the table carries the columns")
+	require.NotEmpty(t, sqls, "the chunks themselves are still written")
+	require.Equal(t, int64(2), next, "and the chunk id still advances past the frame")
+}
+
+// The tail frame rows are withheld while ANY un-upgraded CN could still be serving this index,
+// separately from whether the table happens to carry the columns. An old CN reads the metadata
+// table with SELECT * and would take 'cdc_tail:1' for a base sub-index and try to load it as one.
+//
+// A widened table used to stand as proof that no such reader was left, because only the gated
+// v4_0_7 migration could widen it. That stopped being true once CREATE INDEX could produce a wide
+// table too, so the deployment is asked directly.
+func TestTailFrameRowsAreWithheldFromAMixedVersionDeployment(t *testing.T) {
+	cfg := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta_mixed_version"}
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable) // the table IS wide
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
+
+	sp, _ := mockSqlProc(t)
+	rt := moruntime.ServiceRuntime(sp.Proc.GetService())
+	require.NotNil(t, rt)
+	prev, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, prev) })
+
+	frames := []TailSegment{{Path: "/tmp/s", Offset: 0, FrameLen: 10}}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion61-1)
+	sqls, next := TailFramesInsertSqlsAt(sp, cfg, 1, frames, 4242)
+	var meta string
+	for _, s := range sqls {
+		if strings.Contains(s, cfg.MetadataTable) {
+			meta += s
+		}
+	}
+	require.Empty(t, meta, "an old CN could still read this row as a base sub-index")
+	require.NotEmpty(t, sqls, "the frame's bytes are still written")
+	require.Equal(t, int64(2), next)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion61)
+	sqls, _ = TailFramesInsertSqlsAt(sp, cfg, 1, frames, 4242)
+	meta = ""
+	for _, s := range sqls {
+		if strings.Contains(s, cfg.MetadataTable) {
+			meta += s
+		}
+	}
+	require.Contains(t, meta, "'cdc_tail:1'", "once nobody can misread it, the row is written")
+	require.Contains(t, meta, "4242")
+}
+
+// The frame's metadata row carries the CRC the frame was SEALED with, read back from its footer
+// rather than recomputed, so the tail is verifiable from the catalog the way a base sub-index is.
+// An empty checksum column would have made the row unable to detect a corrupted tail at all.
+func TestTailFrameRowCarriesTheFramesChecksum(t *testing.T) {
+	cfg := TableConfig{DbName: "db", IndexTable: "__store", MetadataTable: "__meta_tail_checksum"}
+	sqlexec.MarkProvenanceColumns(cfg.DbName, cfg.MetadataTable)
+	t.Cleanup(func() { sqlexec.ForgetProvenanceShape(cfg.DbName, cfg.MetadataTable) })
+
+	sp, _ := mockSqlProc(t)
+	frames := []TailSegment{{Path: "/tmp/s", Offset: 0, FrameLen: 10, Checksum: 0xfeedface}}
+	sqls, _ := TailFramesInsertSqlsAt(sp, cfg, 3, frames, 99)
+
+	var meta string
+	for _, s := range sqls {
+		if strings.Contains(s, cfg.MetadataTable) {
+			meta += s
+		}
+	}
+	require.Contains(t, meta, "feedface",
+		"the row records the frame's own CRC, read back from the footer it was sealed with")
+	require.Contains(t, meta, "'cdc_tail:3'")
 }

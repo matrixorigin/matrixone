@@ -1,0 +1,80 @@
+#FIND_IN_SET on SET uses SET declaration order, not the rendered label order.
+DROP TABLE IF EXISTS find_in_set_set_28221;
+CREATE TABLE find_in_set_set_28221 (
+    id INT PRIMARY KEY,
+    v SET('z','a','m')
+);
+INSERT INTO find_in_set_set_28221 VALUES
+    (1, 'z'), (2, 'a'), (3, 'm'), (4, 'z,a'),
+    (5, 'a,m'), (6, 'z,a,m'), (7, ''), (8, NULL);
+
+SELECT id, v, FIND_IN_SET('a', v) AS a_pos,
+       FIND_IN_SET('m', v) AS m_pos
+FROM find_in_set_set_28221 ORDER BY id;
+
+SELECT id, FIND_IN_SET('a', v) AS derived_pos
+FROM (SELECT id, v FROM find_in_set_set_28221) AS d ORDER BY id;
+
+DROP VIEW IF EXISTS find_in_set_set_view_28221;
+CREATE VIEW find_in_set_set_view_28221 AS
+SELECT id, v FROM find_in_set_set_28221;
+SELECT id, FIND_IN_SET('a', v) AS view_pos
+FROM find_in_set_set_view_28221 ORDER BY id;
+
+# An explicit cast intentionally opts into ordinary comma-list semantics.
+SELECT id, FIND_IN_SET('a', CAST(v AS CHAR)) AS cast_pos
+FROM find_in_set_set_28221 WHERE id IN (2, 4, 5, 6) ORDER BY id;
+
+PREPARE find_in_set_set_stmt_28221 FROM
+    'SELECT id, FIND_IN_SET(?, v) AS prepared_pos
+     FROM find_in_set_set_28221 ORDER BY id';
+SET @find_in_set_set_needle_28221 = 'a';
+EXECUTE find_in_set_set_stmt_28221 USING @find_in_set_set_needle_28221;
+-- SET labels follow the SET case-insensitive comparison contract even when
+-- the prepared needle changes case between executions.
+SET @find_in_set_set_needle_28221 = 'A';
+EXECUTE find_in_set_set_stmt_28221 USING @find_in_set_set_needle_28221;
+DEALLOCATE PREPARE find_in_set_set_stmt_28221;
+
+DROP VIEW find_in_set_set_view_28221;
+DROP TABLE find_in_set_set_28221;
+
+# An empty SET member is distinct from an empty SET bitmap.  Keep both rows so
+# FIND_IN_SET can prove it is using the stored bitmap rather than display text.
+DROP TABLE IF EXISTS find_in_set_set_empty_28221;
+CREATE TABLE find_in_set_set_empty_28221 (
+    id INT PRIMARY KEY,
+    v SET('','a')
+);
+INSERT INTO find_in_set_set_empty_28221 VALUES
+    (1, 0), (2, 1), (3, 'a'), (4, '');
+
+SELECT id, v, FIND_IN_SET('', v) AS empty_pos,
+       FIND_IN_SET('A', v) AS a_pos
+FROM find_in_set_set_empty_28221 ORDER BY id;
+
+SELECT id, FIND_IN_SET('', v) AS derived_empty_pos
+FROM (SELECT id, v FROM find_in_set_set_empty_28221) AS d ORDER BY id;
+
+# A bare NULL branch is neutral for SET provenance.  The empty member (bitmap
+# 1) must remain distinguishable from the empty bitmap (0), while NULL stays
+# NULL, in either UNION ALL order.
+SELECT id, src, v, FIND_IN_SET('', v) AS union_empty_pos
+FROM (
+    SELECT id, 1 AS src, v
+    FROM find_in_set_set_empty_28221
+    WHERE id IN (1, 2)
+    UNION ALL
+    SELECT 0 AS id, 2 AS src, NULL AS v
+) AS u ORDER BY src, id;
+
+SELECT id, src, v, FIND_IN_SET('', v) AS union_empty_pos
+FROM (
+    SELECT 0 AS id, 1 AS src, NULL AS v
+    UNION ALL
+    SELECT id, 2 AS src, v
+    FROM find_in_set_set_empty_28221
+    WHERE id IN (1, 2)
+) AS u ORDER BY src, id;
+
+DROP TABLE find_in_set_set_empty_28221;
