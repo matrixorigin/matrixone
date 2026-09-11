@@ -25,6 +25,9 @@ Warning    1062    Duplicate entry '1' for key 'id'
 select @@warning_count;
 @@warning_count
 1
+select @@warning_count + 1 as warning_count_plus_one;
+warning_count_plus_one
+2
 show count(*) warnings;
 @@session.warning_count
 0

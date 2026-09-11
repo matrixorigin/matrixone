@@ -1130,11 +1130,13 @@ type ExecCtx struct {
 	// singleStatementQuery is true only for a raw COM_QUERY containing one
 	// statement, which is the only input the proxy records for raw replay.
 	singleStatementQuery bool
-	// resetDiagnosticsAfterStatement delays clearing the diagnostics until a
-	// count-only SELECT has evaluated its system-variable expressions. MySQL
-	// exposes those expressions from the preceding statement, then treats the
-	// SELECT itself as nondiagnostic.
-	resetDiagnosticsAfterStatement bool
+	// diagnosticCountsSnapshot holds the two values exposed to diagnostic
+	// system-variable expressions while this statement is being evaluated.
+	// The live diagnostic records are still reset normally at the statement
+	// boundary; only these scalar inputs survive that reset.
+	diagnosticCountsSnapshotSet    bool
+	diagnosticWarningCountSnapshot uint64
+	diagnosticErrorCountSnapshot   uint64
 	// tenant name
 	tenant          string
 	userName        string
@@ -1180,7 +1182,40 @@ func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
 		execCtx.effectiveTxnDefaultDatabase = input.preparedDefaultDatabase
 	}
 	execCtx.persistentDropTableTargets = nil
-	execCtx.resetDiagnosticsAfterStatement = false
+	execCtx.clearDiagnosticCountsSnapshot()
+}
+
+func (execCtx *ExecCtx) captureDiagnosticCountsSnapshot(ses *Session) {
+	if execCtx == nil || ses == nil {
+		return
+	}
+	warningCount, errorCount := ses.diagnosticsCounts()
+	execCtx.diagnosticWarningCountSnapshot = warningCount
+	execCtx.diagnosticErrorCountSnapshot = errorCount
+	execCtx.diagnosticCountsSnapshotSet = true
+}
+
+func (execCtx *ExecCtx) clearDiagnosticCountsSnapshot() {
+	if execCtx == nil {
+		return
+	}
+	execCtx.diagnosticCountsSnapshotSet = false
+	execCtx.diagnosticWarningCountSnapshot = 0
+	execCtx.diagnosticErrorCountSnapshot = 0
+}
+
+func (execCtx *ExecCtx) diagnosticCountSnapshot(name string) (uint64, bool) {
+	if execCtx == nil || !execCtx.diagnosticCountsSnapshotSet {
+		return 0, false
+	}
+	switch strings.ToLower(name) {
+	case warningCountSystemVariable:
+		return execCtx.diagnosticWarningCountSnapshot, true
+	case errorCountSystemVariable:
+		return execCtx.diagnosticErrorCountSnapshot, true
+	default:
+		return 0, false
+	}
 }
 
 func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
@@ -1211,7 +1246,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.implicitCommitBefore = false
 	execCtx.persistentDropTableTargets = nil
 	execCtx.singleStatementQuery = false
-	execCtx.resetDiagnosticsAfterStatement = false
+	execCtx.clearDiagnosticCountsSnapshot()
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""

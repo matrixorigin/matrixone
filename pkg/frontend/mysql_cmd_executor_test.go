@@ -378,46 +378,57 @@ func TestShowDiagnosticsLimitFiltersBeforePagination(t *testing.T) {
 	require.Empty(t, ses.GetMysqlResultSet().Data)
 }
 
-func TestDiagnosticCountSelectClassification(t *testing.T) {
-	tests := []struct {
-		name string
-		sql  string
-		want bool
-	}{
-		{name: "warning", sql: "select @@warning_count", want: true},
-		{name: "both with alias", sql: "select (@@warning_count) as w, @@error_count", want: true},
-		{name: "ordinary expression", sql: "select @@warning_count + 1", want: false},
-		{name: "explicit table", sql: "select @@warning_count from dual", want: false},
-		{name: "limit", sql: "select @@warning_count limit 1", want: false},
-		{name: "user variable", sql: "select @warning_count", want: false},
-		{name: "global variable", sql: "select @@global.warning_count", want: false},
+func TestDiagnosticCountVariableExpressionsParse(t *testing.T) {
+	for _, sql := range []string{
+		"select @@warning_count",
+		"select (@@warning_count) as w, @@error_count",
+		"select @@warning_count + 1",
+		"select @@warning_count from dual",
+		"select @@warning_count limit 1",
+	} {
+		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		stmt.Free()
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			stmt, err := mysql.ParseOne(context.Background(), test.sql, 1)
-			require.NoError(t, err)
-			require.Equal(t, test.want, isDiagnosticCountSelect(stmt))
-		})
+	for _, sql := range []string{
+		"select @warning_count",
+		"select @@global.warning_count",
+	} {
+		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok, sql)
+		selectStmt.Free()
 	}
 }
 
-func TestDiagnosticCountSelectDefersResetUntilAfterRead(t *testing.T) {
+func TestDiagnosticCountVariableUsesStatementSnapshot(t *testing.T) {
 	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
-	ses.appendWarningDiagnostic(1292, "warning")
-	stmt, err := mysql.ParseOne(context.Background(), "select @@warning_count", 1)
+	ses.appendWarningDiagnostic(1292, "previous warning")
+	ses.appendErrorDiagnostic(1064, "previous error")
+
+	execCtx := &ExecCtx{reqCtx: context.Background(), ses: ses}
+	tcc := &TxnCompilerContext{}
+	tcc.SetExecCtx(execCtx)
+	execCtx.captureDiagnosticCountsSnapshot(ses)
+	resetDiagnosticsForStatement(ses, execCtx, &UserInput{}, &tree.Select{})
+	ses.appendWarningDiagnostic(1365, "new warning")
+
+	warningCount, err := tcc.ResolveVariable(warningCountSystemVariable, true, false)
 	require.NoError(t, err)
+	require.Equal(t, uint64(2), warningCount)
+	errorCount, err := tcc.ResolveVariable(errorCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), errorCount)
 
-	execCtx := &ExecCtx{resetDiagnosticsAfterStatement: true}
-	input := &UserInput{}
-	resetDiagnosticsForStatement(ses, execCtx, input, stmt)
-	warningCount, errorCount := ses.diagnosticsCounts()
+	execCtx.clearDiagnosticCountsSnapshot()
+	warningCount, err = tcc.ResolveVariable(warningCountSystemVariable, true, false)
+	require.NoError(t, err)
 	require.Equal(t, uint64(1), warningCount)
+	errorCount, err = tcc.ResolveVariable(errorCountSystemVariable, true, false)
+	require.NoError(t, err)
 	require.Zero(t, errorCount)
-
-	resetDiagnosticsAfterStatementIfNeeded(ses, execCtx)
-	require.Zero(t, ses.diagnosticsSnapshot().length())
-	require.False(t, execCtx.resetDiagnosticsAfterStatement)
 }
 
 func TestSetNewResponseIncludesWarningDiagnostics(t *testing.T) {

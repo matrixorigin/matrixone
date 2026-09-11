@@ -2017,73 +2017,9 @@ func isDiagnosticsStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.ShowErrors, *tree.ShowWarnings:
 		return true
-	case *tree.Select:
-		return isDiagnosticCountSelect(stmt)
 	default:
 		return false
 	}
-}
-
-func isDiagnosticCountSelect(stmt tree.Statement) bool {
-	selectStmt, ok := stmt.(*tree.Select)
-	if !ok || selectStmt.IsPerform || selectStmt.Select == nil ||
-		selectStmt.RewriteOption != nil || selectStmt.TimeWindow != nil ||
-		len(selectStmt.OrderBy) != 0 || selectStmt.Limit != nil ||
-		selectStmt.RankOption != nil || selectStmt.With != nil ||
-		selectStmt.Ep != nil || len(selectStmt.IntoVars) != 0 ||
-		selectStmt.DeprecatedInto || selectStmt.SelectLockInfo != nil {
-		return false
-	}
-
-	clause, ok := selectStmt.Select.(*tree.SelectClause)
-	if !ok || clause.Distinct || len(clause.IntoVars) != 0 ||
-		clause.IntoExport != nil || clause.From == nil || len(clause.From.Tables) != 1 ||
-		clause.Where != nil || clause.GroupBy != nil || clause.Having != nil ||
-		len(clause.Windows) != 0 || clause.Option != 0 ||
-		len(clause.OrderByOriginalExprs) != 0 || len(clause.OrderBySourceProbes) != 0 {
-		return false
-	}
-
-	from, ok := clause.From.Tables[0].(*tree.AliasedTableExpr)
-	if !ok || from == nil || from.As.Alias != "" || len(from.IndexHints) != 0 {
-		return false
-	}
-	table, ok := from.Expr.(*tree.TableName)
-	if !ok || table == nil || table.Name() != "" || table.Schema() != "" ||
-		table.Catalog() != "" || table.AtTsExpr != nil || table.IcebergRef != nil {
-		return false
-	}
-	if len(clause.Exprs) == 0 {
-		return false
-	}
-
-	for _, selectExpr := range clause.Exprs {
-		expr := selectExpr.Expr
-		for {
-			paren, ok := expr.(*tree.ParenExpr)
-			if !ok {
-				break
-			}
-			expr = paren.Expr
-		}
-		variable, ok := expr.(*tree.VarExpr)
-		if !ok || !variable.System || variable.Global {
-			return false
-		}
-		name := strings.ToLower(variable.Name)
-		if name != warningCountSystemVariable && name != errorCountSystemVariable {
-			return false
-		}
-	}
-	return true
-}
-
-func resetDiagnosticsAfterStatementIfNeeded(ses *Session, execCtx *ExecCtx) {
-	if execCtx == nil || !execCtx.resetDiagnosticsAfterStatement {
-		return
-	}
-	ses.resetDiagnostics()
-	execCtx.resetDiagnosticsAfterStatement = false
 }
 
 func isTopLevelClientStatement(ses *Session, execCtx *ExecCtx, input *UserInput) bool {
@@ -5043,7 +4979,6 @@ func executeStmtWithResponse(ses *Session,
 ) (err error) {
 	ses.EnterFPrint(FPStmtWithResponse)
 	defer ses.ExitFPrint(FPStmtWithResponse)
-	defer resetDiagnosticsAfterStatementIfNeeded(ses, execCtx)
 	var span trace.Span
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "executeStmtWithResponse",
 		trace.WithKind(trace.SpanKindStatement))
@@ -5666,8 +5601,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	defer ses.ExitFPrint(FPDoComQuery)
 	defer ses.ClearDDLOwnerRoleID()
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
-	execCtx.resetDiagnosticsAfterStatement = false
-	defer resetDiagnosticsAfterStatementIfNeeded(ses, execCtx)
+	defer execCtx.clearDiagnosticCountsSnapshot()
 	beginInstant := time.Now()
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
 	execCtx.reqCtx = defines.AttachDDLOwnerRoleIDProvider(execCtx.reqCtx, ses)
@@ -6003,8 +5937,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// statement so the remote PRE_INSERT path observes the session values
 		// established by earlier statements in the request.
 		refreshStatementScopedSessionInfo(ses, proc)
-		execCtx.resetDiagnosticsAfterStatement = isTopLevelClientStatement(ses, execCtx, currentInput) &&
-			isDiagnosticCountSelect(diagnosticStmt)
+		if isTopLevelClientStatement(ses, execCtx, currentInput) {
+			execCtx.captureDiagnosticCountsSnapshot(ses)
+		}
 		resetDiagnosticsForStatement(ses, execCtx, currentInput, diagnosticStmt)
 		removePrepareStmtForReplacement(ses, stmt)
 		var err2 error
