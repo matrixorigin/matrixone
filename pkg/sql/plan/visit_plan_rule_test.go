@@ -1503,6 +1503,17 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeOnlyInNumericConsumers(
 	comparisonResult := comparisonFilled.GetQuery().Nodes[0].ProjectList[0]
 	require.Equal(t, int32(types.T_int32), comparisonResult.GetF().Args[1].Typ.Id,
 		"a SQL source type must not replace the comparison domain")
+
+	sign, err := BindFuncExprImplByPlanExpr(ctx, "sign", []*planpb.Expr{makeParam()})
+	require.NoError(t, err)
+	signFilled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		ctx, makeQuery(t, sign), []any{ParamValue{
+			Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true,
+		}})
+	require.NoError(t, err)
+	signResult := signFilled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, types.T_int64, types.T(signResult.Typ.Id), signResult.String())
+	require.Equal(t, types.T_int64, types.T(signResult.GetF().Args[0].Typ.Id), signResult.String())
 }
 
 func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsumers(t *testing.T) {
