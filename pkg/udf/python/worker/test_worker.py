@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import pickle
 import signal
 import struct
 import subprocess
@@ -81,7 +82,78 @@ def complete_open_payload(payload):
     return payload
 
 
+def complete_definition_validation_payload(source="def f(ctx, value): return value", handler="f"):
+    descriptor = {"type_id": worker.INT64, "offset_width": 32}
+    payload = {
+        "account_id": 1,
+        "handler": handler,
+        "source": source,
+        "mode": worker.MODE_SCALAR,
+        "null_policy": worker.NULL_CALL,
+        "abi_contract": worker.ABI_CONTRACT,
+        "adapter_version": worker.ADAPTER_VERSION,
+        "sdk_version": worker.SDK_VERSION,
+        "definition_schema_version": worker.DEFINITION_SCHEMA_VERSION,
+        "artifact_digest": worker._inline_artifact_digest(handler, source),
+        "environment_digest": worker._environment_digest(),
+        "definition_fingerprint": "",
+        "args": [descriptor],
+        "return": descriptor,
+    }
+    payload["definition_fingerprint"] = worker._definition_fingerprint(payload)
+    return payload
+
+
 class WorkerContractTest(unittest.TestCase):
+    def test_definition_validation_compiles_without_executing_module_code(self):
+        with tempfile.TemporaryDirectory(prefix="mo-udf-definition-") as directory:
+            marker = pathlib.Path(directory) / "executed"
+            source = (
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed')\n"
+                "def f(ctx, value): return value\n"
+            )
+            payload = complete_definition_validation_payload(source)
+            server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+            try:
+                results = list(
+                    server.do_action(
+                        None,
+                        flight.Action(
+                            "ValidatePythonDefinition",
+                            json.dumps(payload, separators=(",", ":")).encode(),
+                        ),
+                    )
+                )
+                self.assertEqual(1, len(results))
+                self.assertEqual("OK", json.loads(bytes(results[0].body))["status"])
+                self.assertFalse(marker.exists(), "definition validation executed module code")
+                self.assertEqual({}, server._active)
+                self.assertEqual({}, server._terminal)
+            finally:
+                server.shutdown()
+
+    def test_definition_validation_rejects_syntax_before_catalog_state(self):
+        payload = complete_definition_validation_payload("def f(ctx, value) return value")
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        try:
+            results = list(
+                server.do_action(
+                    None,
+                    flight.Action(
+                        "ValidatePythonDefinition",
+                        json.dumps(payload, separators=(",", ":")).encode(),
+                    ),
+                )
+            )
+            response = json.loads(bytes(results[0].body))
+            self.assertEqual("ERROR", response["status"])
+            self.assertRegex(response["reason"], r"USER_CODE: Python syntax error at line 1, column")
+            self.assertEqual({}, server._active)
+            self.assertEqual({}, server._terminal)
+        finally:
+            server.shutdown()
+
     def test_capability_advertises_worker_instance_lease(self):
         encoded = worker._encode_capabilities(
             {"protocol_version": worker.PROTOCOL_VERSION}, lease_epoch=17
@@ -929,7 +1001,7 @@ class WorkerContractTest(unittest.TestCase):
         output = pa.RecordBatch.from_arrays(
             [pa.array([1], type=pa.int64())], schema=result_schema
         )
-        output_wire = worker._serialize_record_batch(output)
+        output_wire = worker._serialize_record_batch_message(output)
         output_bytes = pa.ipc.get_record_batch_size(output)
 
         for limit_name, limit, error_text, expected_calls in (
@@ -1063,6 +1135,64 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(TimeoutError, "handler execution timeout"):
             worker._run_handler_process(None, request, 0.1)
         self.assertLess(time.monotonic() - started, 2)
+
+    def test_record_batch_message_reuses_the_frozen_schema(self):
+        descriptor = {"type_id": worker.INT64, "offset_width": 32}
+        schema = worker._schema_from_descriptors([descriptor], "arg")
+        batch = pa.RecordBatch.from_arrays(
+            [pa.array([1, 2], type=pa.int64())], schema=schema
+        )
+        stream_wire = worker._serialize_record_batch(batch)
+        message_wire = worker._serialize_record_batch_message(batch)
+        self.assertLess(len(message_wire), len(stream_wire))
+
+        decoded = worker._deserialize_record_batch_message(message_wire, schema)
+        self.assertEqual([1, 2], decoded.column(0).to_pylist())
+        with self.assertRaisesRegex(ValueError, "valid Arrow record batch"):
+            worker._deserialize_record_batch_message(
+                message_wire,
+                worker._schema_from_descriptors(
+                    [{"type_id": worker.VARCHAR, "offset_width": 32}], "arg"
+                ),
+            )
+
+    def test_handler_frame_keeps_arrow_bytes_out_of_pickle_metadata(self):
+        arrow_wire = b"arrow-payload"
+        parts, payload_size = worker._encode_execution_request(
+            {
+                "arrow_encoding": worker.HANDLER_ARROW_RECORD_BATCH,
+                "input": arrow_wire,
+            }
+        )
+        self.assertEqual(4, len(parts))
+        self.assertEqual(payload_size, len(parts[1]) + len(parts[2]) + len(parts[3]))
+        metadata = pickle.loads(parts[2], buffers=[pickle.PickleBuffer(parts[3])])
+        self.assertIsInstance(metadata["input"], pickle.PickleBuffer)
+        self.assertEqual(arrow_wire, bytes(metadata["input"].raw()))
+
+    def test_handler_process_accepts_schema_free_record_batch_messages(self):
+        descriptor = {"type_id": worker.INT64, "offset_width": 32}
+        schema = worker._schema_from_descriptors([descriptor], "arg")
+        result_schema = pa.schema([worker._field("result", descriptor)])
+        batch = pa.RecordBatch.from_arrays(
+            [pa.array([1, 2], type=pa.int64())], schema=schema
+        )
+        request = {
+            "source": "def f(ctx, x): return x + 1",
+            "handler": "f",
+            "mode": worker.MODE_SCALAR,
+            "null_policy": worker.NULL_CALL,
+            "sdk_version": worker.SDK_VERSION,
+            "context": None,
+            "args": [descriptor],
+            "return": descriptor,
+            "max_batch_bytes": 1 << 20,
+            "arrow_encoding": worker.HANDLER_ARROW_RECORD_BATCH,
+            "input": worker._serialize_record_batch_message(batch),
+        }
+        output_wire = worker._run_handler_process(None, request, 3)
+        output = worker._deserialize_record_batch_message(output_wire, result_schema)
+        self.assertEqual([2, 3], output.column(0).to_pylist())
 
     @unittest.skipUnless(os.name == "posix", "process-group cleanup race")
     def test_handler_error_after_leader_exit_releases_quota(self):
@@ -2530,7 +2660,7 @@ except Exception:
     @unittest.skipUnless(os.name == "posix", "handler deadline test")
     def test_handler_deadline_includes_request_serialization(self):
         # The session owns one monotonic timestamp for the whole request. A
-        # deterministic clock jump after pickle.dumps proves that serialization
+        # deterministic clock jump after request encoding proves that serialization
         # cannot consume time outside the handler budget.
         clock = iter((0.0, 0.0, 1.0))
         session = None
@@ -2538,7 +2668,7 @@ except Exception:
             with mock.patch.object(worker.time, "monotonic", side_effect=clock):
                 session = worker._HandlerProcessSession()
                 with self.assertRaisesRegex(TimeoutError, "handler execution timeout"):
-                    session.run(None, {}, 0.05)
+                    session.run(None, {"input": b"x"}, 0.05)
         finally:
             if session is not None:
                 session.close()

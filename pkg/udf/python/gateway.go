@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/apache/arrow-go/v18/arrow/flight/gen/flight"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -52,6 +53,8 @@ const (
 )
 
 var errGatewayClosed = errors.New("python udf gateway is closed")
+
+var _ udf.RuntimeDefinitionValidator = (*Gateway)(nil)
 
 type Gateway struct {
 	cfg               ClientConfig
@@ -169,6 +172,194 @@ func (g *Gateway) CheckLanguageReady(ctx context.Context, language string) error
 		return err
 	}
 	return g.ensureCapabilities(ctx, client)
+}
+
+// ValidateDefinition asks the current worker to compile the exact artifact
+// that a CREATE or REPLACE is about to publish. This action has no
+// FunctionRef, invocation lease, handler slot, or ledger entry: a definition
+// has not acquired a Catalog identity and must not consume execution state.
+// The worker performs compile(source, ..., "exec") only; it does not execute
+// top-level code, import dependencies, or call the handler.
+func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.RoutineDefinition) error {
+	g.mu.Lock()
+	closed := g.closed
+	g.mu.Unlock()
+	if closed {
+		return errGatewayClosed
+	}
+	if !g.cfg.Enabled {
+		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python UDF runtime is disabled")
+	}
+	if !g.cfg.AllowUnisolated {
+		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python UDF runtime requires explicit unisolated opt-in")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if definition == nil {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: nil Python routine definition")
+	}
+	if definition.Language != "" && definition.Language != udf.LanguagePython {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported UDF language %q", definition.Language)
+	}
+	if strings.TrimSpace(definition.Handler) == "" {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python handler is required")
+	}
+	if strings.Contains(definition.Handler, ":") {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python external handler import requires the immutable artifact catalog")
+	}
+	if definition.DefinitionSchemaVersion != udf.PythonDefinitionSchemaVersion ||
+		definition.ABIContract != udf.PythonABIContract ||
+		definition.AdapterVersion != udf.PythonAdapterVersion ||
+		definition.SDKVersion != udf.PythonSDKVersion {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition contract is not supported")
+	}
+	if definition.Mode != ModeScalar && definition.Mode != ModeVector {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported Python mode %q", definition.Mode)
+	}
+	if definition.NullPolicy != NullCallHandler && definition.NullPolicy != NullReturnNull {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported Python NULL policy %q", definition.NullPolicy)
+	}
+	if !udf.IsSHA256Digest(definition.ArtifactDigest) || !udf.IsSHA256Digest(definition.EnvironmentDigest) {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition digest is invalid")
+	}
+	currentEnvironment, err := udf.PythonEnvironmentDigest()
+	if err != nil || currentEnvironment != definition.EnvironmentDigest {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python environment digest does not match the current contract")
+	}
+	if !udf.IsSHA256Digest(definition.DefinitionFingerprint) {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint is invalid")
+	}
+	args := make([]TypeDescriptor, len(definition.Args))
+	for index, typ := range definition.Args {
+		args[index], err = NewTypeDescriptor(typ)
+		if err != nil {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python argument descriptor %d: %w", index, err)
+		}
+	}
+	returnDescriptor, err := NewTypeDescriptor(definition.ReturnType)
+	if err != nil {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python return descriptor: %w", err)
+	}
+	expectedFingerprint, err := DefinitionFingerprint(
+		definition.DefinitionSchemaVersion,
+		definition.Handler, definition.Mode, definition.NullPolicy,
+		definition.ABIContract, definition.AdapterVersion,
+		definition.ArtifactDigest, definition.EnvironmentDigest, definition.SDKVersion,
+		args, returnDescriptor,
+	)
+	if err != nil {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint cannot be computed: %w", err)
+	}
+	if definition.DefinitionFingerprint != expectedFingerprint {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint does not match the typed definition")
+	}
+
+	source := definition.Source
+	if g.artifactResolver != nil {
+		resolved, resolveErr := g.artifactResolver.Resolve(
+			ctx, definition.AccountID, definition.Handler, definition.ArtifactDigest,
+		)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		if source != "" && source != resolved {
+			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source does not match the immutable artifact")
+		}
+		source = resolved
+	} else if !g.allowInlineSource {
+		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python artifact resolver is not configured")
+	}
+	if source == "" || !utf8.ValidString(source) {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source is empty or not valid UTF-8")
+	}
+	if int64(len([]byte(source))) > DefaultMaxArtifactBytes {
+		return fmt.Errorf("RESOURCE_EXHAUSTED: Python artifact exceeds %d bytes", DefaultMaxArtifactBytes)
+	}
+	if udf.PythonInlineArtifactDigest(definition.Handler, source) != definition.ArtifactDigest {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact digest does not match the immutable source")
+	}
+
+	client, err := g.flightClient()
+	if err != nil {
+		return err
+	}
+	if err := g.ensureCapabilities(ctx, client); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(definitionValidationPayload{
+		AccountID:               definition.AccountID,
+		Handler:                 definition.Handler,
+		Source:                  source,
+		Mode:                    definition.Mode,
+		NullPolicy:              definition.NullPolicy,
+		ABIContract:             definition.ABIContract,
+		AdapterVersion:          definition.AdapterVersion,
+		SDKVersion:              definition.SDKVersion,
+		DefinitionSchemaVersion: definition.DefinitionSchemaVersion,
+		ArtifactDigest:          definition.ArtifactDigest,
+		EnvironmentDigest:       definition.EnvironmentDigest,
+		DefinitionFingerprint:   definition.DefinitionFingerprint,
+		Args:                    args,
+		Return:                  returnDescriptor,
+	})
+	if err != nil {
+		return fmt.Errorf("python udf: encode definition validation: %w", err)
+	}
+	actionCtx, cancel := context.WithTimeout(ctx, g.cfg.RequestTimeout)
+	defer cancel()
+	stream, err := client.DoAction(actionCtx, &flight.Action{Type: "ValidatePythonDefinition", Body: payload})
+	if err != nil {
+		g.invalidateCapabilities()
+		return fmt.Errorf("python udf: definition validation action: %w", err)
+	}
+	result, err := stream.Recv()
+	if err != nil {
+		g.invalidateCapabilities()
+		return fmt.Errorf("python udf: definition validation response: %w", err)
+	}
+	if result == nil {
+		g.invalidateCapabilities()
+		return fmt.Errorf("python udf: empty definition validation response")
+	}
+	var response definitionValidationResponse
+	decoder := json.NewDecoder(bytes.NewReader(result.Body))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&response); err != nil {
+		g.invalidateCapabilities()
+		return fmt.Errorf("python udf: decode definition validation response: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		g.invalidateCapabilities()
+		return fmt.Errorf("python udf: definition validation response has trailing JSON")
+	}
+	if response.Status == "ERROR" {
+		if _, err := stream.Recv(); err != io.EOF {
+			g.invalidateCapabilities()
+			if err == nil {
+				return fmt.Errorf("python udf: definition validation returned multiple results")
+			}
+			return fmt.Errorf("python udf: definition validation stream: %w", err)
+		}
+		if response.Reason == "" {
+			return fmt.Errorf("USER_CODE: Python definition validation failed")
+		}
+		return errors.New(response.Reason)
+	}
+	if response.Status != statusOK || response.ArtifactDigest != definition.ArtifactDigest ||
+		response.DefinitionFingerprint != definition.DefinitionFingerprint {
+		g.invalidateCapabilities()
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition validation returned an invalid result")
+	}
+	if _, err := stream.Recv(); err != io.EOF {
+		g.invalidateCapabilities()
+		if err == nil {
+			return fmt.Errorf("python udf: definition validation returned multiple results")
+		}
+		return fmt.Errorf("python udf: definition validation stream: %w", err)
+	}
+	return nil
 }
 
 func (g *Gateway) connect() error {
@@ -320,6 +511,23 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if execution.Length == 0 {
 		return result.PreExtendAndReset(0)
 	}
+	inputEncoder, err := newInputBatchEncoder(execution.Inputs, execution.Args)
+	if err != nil {
+		return err
+	}
+	inputEncoderClosed := false
+	closeInputEncoder := func() error {
+		if inputEncoderClosed {
+			return nil
+		}
+		inputEncoderClosed = true
+		return inputEncoder.close()
+	}
+	defer func() {
+		if closeErr := closeInputEncoder(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
 	client, err := g.flightClient()
 	if err != nil {
 		return err
@@ -410,7 +618,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	var lastSequence uint64
 	var inputEnded bool
 	for start < int64(execution.Length) {
-		batch, err := encodeInputBatch(execution.Inputs, execution.Args, start, int64(execution.Length)-start, g.cfg.MaxBatchBytes, g.cfg.MaxBatchRows)
+		batch, err := encodeInputBatchWithEncoder(inputEncoder, start, int64(execution.Length)-start, g.cfg.MaxBatchBytes, g.cfg.MaxBatchRows)
 		if err != nil {
 			return err
 		}
@@ -471,7 +679,10 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if !inputEnded || lastSequence != batchIndex {
 		return fmt.Errorf("python udf: input stream did not reach EndInput")
 	}
-	return g.receiveFinish(streamCtx, client, stream, execution.Tuple, execution.Length, rows, &sequence)
+	if err := g.receiveFinish(streamCtx, client, stream, execution.Tuple, execution.Length, rows, &sequence); err != nil {
+		return err
+	}
+	return closeInputEncoder()
 }
 
 // invocationAdmission is the real Gateway owner for the CN-side execution
@@ -770,6 +981,33 @@ type capabilityRequest struct {
 	ProtocolVersion int `json:"protocol_version"`
 }
 
+// definitionValidationPayload is a create-time action payload. It is not a
+// plan or an invocation envelope: it carries the source only after the
+// Gateway has resolved the exact account-scoped artifact digest.
+type definitionValidationPayload struct {
+	AccountID               uint64           `json:"account_id"`
+	Handler                 string           `json:"handler"`
+	Source                  string           `json:"source"`
+	Mode                    string           `json:"mode"`
+	NullPolicy              string           `json:"null_policy"`
+	ABIContract             string           `json:"abi_contract"`
+	AdapterVersion          string           `json:"adapter_version"`
+	SDKVersion              string           `json:"sdk_version"`
+	DefinitionSchemaVersion int              `json:"definition_schema_version"`
+	ArtifactDigest          string           `json:"artifact_digest"`
+	EnvironmentDigest       string           `json:"environment_digest"`
+	DefinitionFingerprint   string           `json:"definition_fingerprint"`
+	Args                    []TypeDescriptor `json:"args"`
+	Return                  TypeDescriptor   `json:"return"`
+}
+
+type definitionValidationResponse struct {
+	Status                string `json:"status"`
+	Reason                string `json:"reason,omitempty"`
+	ArtifactDigest        string `json:"artifact_digest,omitempty"`
+	DefinitionFingerprint string `json:"definition_fingerprint,omitempty"`
+}
+
 type capabilityResponse struct {
 	ProtocolVersion            int      `json:"protocol_version"`
 	ABIContract                string   `json:"abi_contract"`
@@ -919,6 +1157,14 @@ func sameStrings(actual, expected []string) bool {
 }
 
 func encodeInputBatch(inputs []*vector.Vector, args []types.Type, start, remaining, maxBytes, maxRows int64) (encodedRecordBatch, error) {
+	encoder, err := newInputBatchEncoder(inputs, args)
+	if err != nil {
+		return encodedRecordBatch{}, err
+	}
+	return encodeInputBatchWithEncoder(encoder, start, remaining, maxBytes, maxRows)
+}
+
+func encodeInputBatchWithEncoder(encoder *inputBatchEncoder, start, remaining, maxBytes, maxRows int64) (encodedRecordBatch, error) {
 	if start < 0 || remaining <= 0 {
 		return encodedRecordBatch{}, fmt.Errorf("invalid Python UDF input batch range")
 	}
@@ -933,8 +1179,11 @@ func encodeInputBatch(inputs []*vector.Vector, args []types.Type, start, remaini
 	// work without assuming anything about variable-length SQL values. The
 	// slice keeps the same backing buffers, and every candidate is still encoded
 	// and checked against maxBytes before publication.
-	if fixedWidthInputTypes(args) {
-		record, _, err := BuildInputRecordRange(inputs, args, int(start), int(remaining))
+	if encoder == nil {
+		return encodedRecordBatch{}, fmt.Errorf("invalid Python UDF input encoder")
+	}
+	if encoder.fixedWidth {
+		record, _, err := encoder.build(int(start), int(remaining))
 		if err != nil {
 			return encodedRecordBatch{}, err
 		}
@@ -942,32 +1191,43 @@ func encodeInputBatch(inputs []*vector.Vector, args []types.Type, start, remaini
 		tryEncode := func(rows int64) ([]ArrowFrame, error) {
 			candidate := record.NewSlice(0, rows)
 			defer candidate.Release()
-			return EncodeRecordBatch(candidate, maxBytes)
+			return encoder.encode(candidate, maxBytes)
 		}
-		return chooseInputBatch(remaining, maxBytes, tryEncode)
+		// The full fixed-width record is already materialized under the
+		// invocation's bounded input range. Try publishing it once before the
+		// size search; the normal SQL batch fits in the limit and avoids a
+		// logarithmic series of identical IPC encodes.
+		return chooseInputBatchWithFullCandidate(remaining, maxBytes, tryEncode, true)
 	}
 	tryEncode := func(rows int64) ([]ArrowFrame, error) {
-		record, _, err := BuildInputRecordRange(inputs, args, int(start), int(rows))
+		record, _, err := encoder.build(int(start), int(rows))
 		if err != nil {
 			return nil, err
 		}
-		frames, encodeErr := EncodeRecordBatch(record, maxBytes)
+		frames, encodeErr := encoder.encode(record, maxBytes)
 		record.Release()
 		return frames, encodeErr
 	}
-	return chooseInputBatch(remaining, maxBytes, tryEncode)
-}
-
-func fixedWidthInputTypes(args []types.Type) bool {
-	for _, typ := range args {
-		if typ.IsVarlen() {
-			return false
-		}
-	}
-	return true
+	return chooseInputBatchWithFullCandidate(
+		remaining, maxBytes, tryEncode,
+		encoder.canBuildFullBatch(start, remaining, maxBytes),
+	)
 }
 
 func chooseInputBatch(remaining, maxBytes int64, tryEncode func(int64) ([]ArrowFrame, error)) (encodedRecordBatch, error) {
+	return chooseInputBatchWithFullCandidate(remaining, maxBytes, tryEncode, false)
+}
+
+func chooseInputBatchWithFullCandidate(remaining, maxBytes int64, tryEncode func(int64) ([]ArrowFrame, error), tryFull bool) (encodedRecordBatch, error) {
+	if tryFull {
+		frames, err := tryEncode(remaining)
+		if err == nil {
+			return encodedRecordBatch{Frames: frames, Rows: remaining}, nil
+		}
+		if !errors.Is(err, errArrowBatchTooLarge) {
+			return encodedRecordBatch{}, err
+		}
+	}
 	best, probe := int64(0), int64(1)
 	var bestFrames []ArrowFrame
 	failedAt := int64(0)

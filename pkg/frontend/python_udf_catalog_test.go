@@ -14,8 +14,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -26,6 +28,66 @@ import (
 	pythonudf "github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/stretchr/testify/require"
 )
+
+type definitionValidationRuntime struct {
+	definition *udf.RoutineDefinition
+	err        error
+}
+
+func (r *definitionValidationRuntime) Language() string { return udf.LanguagePython }
+
+func (r *definitionValidationRuntime) Execute(
+	context.Context,
+	*udf.Invocation,
+	vector.FunctionResultWrapper,
+	*mpool.MPool,
+) error {
+	return nil
+}
+
+func (r *definitionValidationRuntime) CheckLanguageReady(context.Context, string) error {
+	return nil
+}
+
+func (r *definitionValidationRuntime) ValidateDefinition(
+	_ context.Context,
+	definition *udf.RoutineDefinition,
+) error {
+	r.definition = definition
+	return r.err
+}
+
+func TestValidatePythonUdfDefinitionAtCreateUsesTypedWorkerGate(t *testing.T) {
+	const service = "python-definition-validation-test"
+	InitServerLevelVars(service)
+	previous := getPuIfPresent(service)
+	t.Cleanup(func() { setPu(service, previous) })
+
+	runtime := &definitionValidationRuntime{err: fmt.Errorf("USER_CODE: Python syntax error at line 1, column 22")}
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.UdfService = runtime
+	setPu(service, pu)
+
+	source := "def f(ctx, value): return value"
+	body, err := function.DecodePythonRoutineBody(pythonCatalogTestBody(t, types.T_int64))
+	require.NoError(t, err)
+	body.Source = source
+	body.ArtifactDigest = udf.PythonInlineArtifactDigest(body.Handler, source)
+	body.EnvironmentDigest, err = udf.PythonEnvironmentDigest()
+	require.NoError(t, err)
+
+	ses := &Session{feSessionImpl: feSessionImpl{service: service}}
+	tenant := &TenantInfo{TenantID: 27}
+	err = validatePythonUdfDefinitionAtCreate(context.Background(), ses, tenant, body)
+	require.ErrorContains(t, err, "Python syntax error")
+	require.NotNil(t, runtime.definition)
+	require.Equal(t, uint64(27), runtime.definition.AccountID)
+	require.Equal(t, body.Handler, runtime.definition.Handler)
+	require.Equal(t, body.Source, runtime.definition.Source)
+	require.Equal(t, body.ArtifactDigest, runtime.definition.ArtifactDigest)
+	require.Equal(t, body.EnvironmentDigest, runtime.definition.EnvironmentDigest)
+	require.Equal(t, types.T_int64.ToType(), runtime.definition.ReturnType)
+}
 
 func TestPersistPythonReplaceRejectsLegacyHeadBeforeWriting(t *testing.T) {
 	ctx := context.Background()
