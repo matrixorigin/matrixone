@@ -98,8 +98,10 @@ const (
 	MORPCVersion60     int64 = 60 // row-dependent expression defaults
 	MORPCVersion61     int64 = 61 // index metadata provenance columns (nrow, build_ts)
 	MORPCVersion62     int64 = 62 // VARCHAR OCT overload identities
-	MORPCVersion63     int64 = 63 // extended discrete percentile input types
-	MORPCLatestVersion       = MORPCVersion63
+	MORPCVersion63     int64 = 63 // INSERT IGNORE CHECK warning diagnostics
+	MORPCVersion64     int64 = 64 // widened DECIMAL SUM partial state (#28624)
+	MORPCVersion65     int64 = 65 // extended discrete percentile input types
+	MORPCLatestVersion       = MORPCVersion65
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

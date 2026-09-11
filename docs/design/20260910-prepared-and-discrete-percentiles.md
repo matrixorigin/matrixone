@@ -233,45 +233,50 @@ raw value bytes
 There is no untagged string variant. Inherited domain and expression source are
 encoded explicitly as their enum values, so user data beginning with the magic
 prefix occurs only after this envelope and cannot be mistaken for framing. The
-v63 decoder rejects a missing envelope, unknown metadata version, or invalid
+v65 decoder rejects a missing envelope, unknown metadata version, or invalid
 enum and restores the metadata before sorting. Merge and intermediate/spill
 serialization copy this inner payload byte-for-byte. Result publication uses
 `Vector.UnionOne`, so the chosen row's raw value, domain, and source reach the
 result together.
 
-This representation is not a promise that pre-v63 workers can execute extended
+This representation is not a promise that pre-v65 workers can execute extended
 types: those workers know the aggregate ID from v17 but do not know the new
 executor or metadata payload. There is no lossy wire downgrade. Correctness is
-provided by fail-closed remote admission at v63, not by asking an old worker to
+provided by fail-closed remote admission at v65, not by asking an old worker to
 ignore the header. Numeric exact-percentile state and
 `APPROX_PERCENTILE` sketch state retain their previous representation and
 remain admitted at their existing v17 boundary.
 
 ## Distributed rollout, downgrade, and rollback
 
-`MORPCVersion62` is already assigned to VARCHAR `OCT` overload identities.
-This feature therefore uses `MORPCVersion63`. When serializing a remote `Group`
-or `MergeGroup`, the coordinator identifies a `PERCENTILE_DISC` input outside
-the historical numeric family. If the configured protocol version is below 63,
+`MORPCVersion62` is assigned to VARCHAR `OCT` overload identities and
+`MORPCVersion63` is assigned to INSERT IGNORE CHECK warning diagnostics.
+`MORPCVersion64` is allocated to the widened DECIMAL SUM partial state in
+#28624. This feature therefore uses `MORPCVersion65` and must merge after
+#28624, so a v65 binary implements the complete monotonic protocol prefix.
+When serializing a remote `Group` or `MergeGroup`, the coordinator identifies
+a `PERCENTILE_DISC` input outside the historical numeric family. If the
+configured protocol version is below 65,
 serialization fails before dispatch with a not-supported error. Numeric
 ordered-set percentiles continue to require only version 17.
 
 The operational rollout is:
 
-1. deploy binaries containing the v63 executor and decoder to every
-   participating CN while the configured protocol remains at most 62;
+1. merge and deploy #28624, then deploy binaries containing the v65 executor
+   and decoder to every participating CN while the configured protocol remains
+   at most 64;
 2. run mixed-version qualification; extended local work may be tested, but
    distributed extended-percentile work must continue to fail closed;
 3. after every participating worker is capable, raise the configured protocol
-   to 63 and enable distributed use; and
+   to 65 and enable distributed use; and
 4. monitor protocol rejection, allocation/spill errors, and result regressions.
 
-To roll back, first lower the configured protocol to 62 so no new extended
+To roll back, first lower the configured protocol to 64 so no new extended
 remote pipeline is dispatched, drain in-flight queries and prepared sessions,
 then roll back binaries. Aggregate state and private spill files are ephemeral
 and query-owned; no catalog rows, user tables, durable object format, backups,
 or restore procedures are changed. A process crash follows existing temporary
-spill cleanup. Downgrading a live query or injecting a v63 partial state into an
+spill cleanup. Downgrading a live query or injecting a v65 partial state into an
 older worker is unsupported and must fail at admission rather than fall back to
 numeric or text coercion.
 
@@ -296,7 +301,7 @@ rollout precondition.
   ordering boundary and one generic retained representation.
 - Silently running extended types only on the coordinator would avoid a wire
   version, but changes placement and memory behavior and can be defeated by
-  later optimizer changes. An explicit fail-closed v63 contract is selected.
+  later optimizer changes. An explicit fail-closed v65 contract is selected.
 - Dropping string runtime metadata keeps the old raw saved-argument payload but
   can change downstream binary/text semantics. The versioned inner metadata
   envelope is selected; static binary types remain represented by their type.
@@ -316,10 +321,10 @@ does not substitute for traceable approval of this design revision.
 | `VARCHAR`, `DATE`, and `DECIMAL256` execution and unchanged result type | executor tests above and the ordered-set public BVT |
 | retained-state ownership/accounting and merge | `TestOrderedPercentileDiscreteSortableTypes`, `TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip` |
 | row-exact string domain/source and unambiguous magic-prefix values through selection and wire merge | `TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip`, `TestOrderedPercentileDiscreteVarcharSelectedRuntimeDomain`, `TestOrderedPercentileDiscreteRawMagicPrefixRoundTrip` |
-| v62 rejection, v63 admission, and unchanged v17 numeric boundary | `pkg/sql/compile/remote_expr_test.go` |
+| v64 rejection, v65 admission, and unchanged v17 numeric boundary | `pkg/sql/compile/remote_expr_test.go` |
 | build and changed-package regression | `make build`; targeted `go test` commands recorded on PR #28540 |
 
-Before enabling protocol 63 in a release, deployment qualification must also
+Before enabling protocol 65 in a release, deployment qualification must also
 exercise a real mixed-version cluster, upgrade then downgrade admission, query
 cancellation during a large extended percentile, allocation failure/spill and
 reload, and process termination cleanup. Those are release/operational tests;

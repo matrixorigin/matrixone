@@ -198,10 +198,6 @@ func appendCheckConstraintPlanWithColLookupAndEligibility(
 		if err != nil {
 			return 0, err
 		}
-		if ignoreMode {
-			filterList = append(filterList, passExpr)
-			continue
-		}
 		errMsg := makePlan2StringConstExprWithType(
 			fmt.Sprintf("Check constraint '%s' is violated", check.Name),
 		)
