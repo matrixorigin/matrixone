@@ -836,6 +836,30 @@ func TestCTEMultiReferenceRejectsFallibleOutputBeforeConsumerJoin(t *testing.T) 
 		"consumer joins must not expand evaluation of a fallible shared output")
 }
 
+func TestCTEMultiReferenceRejectsProjectedFallibleDomainAboveHashBuild(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with c as (
+			select l_shipmode as region, l_suppkey as k,
+			       cast(max(l_comment) as bigint) as risky
+			from lineitem group by l_shipmode, l_suppkey
+		)
+		select sum(p.risky) from (
+			select c.region as projected_region, c.risky
+			from c join supplier s1 on c.k = s1.s_suppkey
+		) p where p.projected_region = 'AIR'
+		union all
+		select sum(p.risky) from (
+			select c.region as projected_region, c.risky
+			from c join supplier s2 on c.k = s2.s_suppkey
+		) p where p.projected_region = 'SHIP'`)
+	require.NoError(t, err)
+
+	require.Equal(t, 0,
+		countReachableNodeType(logicPlan.GetQuery(), planpb.Node_SINK_SCAN),
+		"a projection tag must not disguise a build-local predicate as probe-only")
+}
+
 func TestCTEMultiReferenceRejectsFallibleOutputBeforeConsumerTopN(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	logicPlan, err := runOneStmt(mock, t, `
@@ -1314,6 +1338,92 @@ func TestCTEDrainProofMarksExactInnerHashBuild(t *testing.T) {
 		2, []cteOccurrence{{rootID: 0}})
 	require.True(t, ok)
 	require.True(t, requirements[0])
+}
+
+func TestCTEDrainProofRecognizesPendingCommaJoinEquality(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	intType := planpb.Type{Id: int32(types.T_int64), NotNullable: true}
+
+	for _, test := range []struct {
+		name      string
+		operator  string
+		wantDrain bool
+	}{
+		{name: "equality becomes hash join", operator: "=", wantDrain: true},
+		{name: "non equality remains streaming join", operator: ">", wantDrain: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			condition, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), test.operator, []*planpb.Expr{
+				GetColExpr(intType, 10, 0),
+				GetColExpr(intType, 20, 0),
+			})
+			require.NoError(t, err)
+
+			builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+			builder.qry.Nodes = []*planpb.Node{
+				{NodeId: 0, NodeType: planpb.Node_VALUE_SCAN, BindingTags: []int32{20}},
+				{NodeId: 1, NodeType: planpb.Node_VALUE_SCAN, BindingTags: []int32{10}},
+				{
+					NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+					Children: []int32{1, 0},
+				},
+				{NodeId: 3, NodeType: planpb.Node_FILTER, Children: []int32{2}, FilterList: []*planpb.Expr{condition}},
+			}
+
+			requirements, drained := builder.cteConsumerDrainRequirements(
+				3, []cteOccurrence{{rootID: 0}})
+			require.Equal(t, test.wantDrain, drained)
+			require.Equal(t, test.wantDrain, requirements[0])
+		})
+	}
+}
+
+func TestCTEDrainProofCarriesPreservedLeftInput(t *testing.T) {
+	builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
+		{NodeId: 0, NodeType: planpb.Node_VALUE_SCAN},
+		{NodeId: 1, NodeType: planpb.Node_VALUE_SCAN},
+		{
+			NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_LEFT,
+			Children: []int32{0, 1},
+		},
+	}}}
+
+	requirements, drained := builder.cteConsumerDrainRequirements(
+		2, []cteOccurrence{{rootID: 0}})
+	require.True(t, drained)
+	require.False(t, requirements[0],
+		"the preserved LEFT input drains without forcing a hash-build orientation")
+}
+
+func TestCTEMultiReferenceReusesCommaJoinHashBuildConsumers(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	logicPlan, err := runOneStmt(mock, t, `
+		with expensive_keys as (
+			select l_suppkey, sum(l_extendedprice) as total
+			from lineitem group by l_suppkey
+		)
+		select a.l_suppkey
+		from expensive_keys a, supplier s1
+		where a.l_suppkey = s1.s_suppkey
+		union all
+		select b.l_suppkey
+		from expensive_keys b, supplier s2
+		where b.l_suppkey = s2.s_suppkey`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	require.Equal(t, 2, countReachableNodeType(query, planpb.Node_SINK_SCAN))
+	require.Equal(t, 1, countReachableNodeType(query, planpb.Node_SINK))
+	lineitemScans := 0
+	for nodeID := range cteReachablePlanNodes(query) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil &&
+			node.TableDef.Name == "lineitem" {
+			lineitemScans++
+		}
+	}
+	require.Equal(t, 1, lineitemScans)
 }
 
 func TestCTEMultiReferenceReuseRespectsNestedShadowing(t *testing.T) {
