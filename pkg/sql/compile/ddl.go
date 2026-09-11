@@ -6921,6 +6921,29 @@ func (c *Compile) checkPitrGranularity(
 	pts *cdc.PatternTuples,
 	minLength ...int64,
 ) error {
+	// Validate concrete CDC sources before persisting the task. The sink needs
+	// a user-visible primary key for UPDATE/DELETE identity; the engine-only
+	// fake key used by no-PK tables is deliberately not accepted.
+	for _, pt := range pts.Pts {
+		if pt == nil || pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
+			continue
+		}
+		pkSQL := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = %s AND %s = %s AND %s = 'p' AND %s <> %s LIMIT 1",
+			sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
+			sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.String(pt.Source.Database),
+			sqlquote.Ident(catalog.SystemColAttr_RelName), sqlquote.String(pt.Source.Table),
+			sqlquote.Ident(catalog.SystemColAttr_ConstraintType),
+			sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.String(catalog.FakePrimaryKeyColName))
+		res, err := c.runSqlWithResultAndOptions(pkSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+		if err != nil {
+			return err
+		}
+		valid := len(res.Batches) > 0 && res.Batches[0].RowCount() > 0
+		res.Close()
+		if !valid {
+			return moerr.NewInternalErrorf(ctx, "source table %s has no primary key; CDC does not support tables without a user-visible primary key", pt.Source)
+		}
+	}
 	var minPitrLen int64 = 2
 	if len(minLength) > 1 {
 		return moerr.NewInternalErrorf(ctx, "only one length parameter allowed")
