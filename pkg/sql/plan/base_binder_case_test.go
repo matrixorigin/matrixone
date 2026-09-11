@@ -1030,9 +1030,63 @@ func TestPreparedExportSetUsesExecuteNumericSourceType(t *testing.T) {
 	}
 }
 
+func TestPreparedExportSetScalarSubqueryUsesExecuteNumericSourceType(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare stmt_export_set_scalar from "select export_set((select ?), 'Y', 'N', '', 4)"`)
+	require.NoError(t, err)
+	queryPlan := prepared.GetDcl().GetPrepare().Plan
+	require.NotNil(t, queryPlan)
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan), queryPlan.String())
+
+	decimalType := types.New(types.T_decimal64, 2, 1)
+	for _, test := range []struct {
+		name     string
+		param    ParamValue
+		wantType types.T
+		want     string
+	}{
+		{
+			name: "decimal", param: ParamValue{
+				Value: "2.5", SourceType: decimalType, HasSourceType: true,
+			}, wantType: types.T_decimal64, want: "YYNN",
+		},
+		{
+			name: "double", param: ParamValue{
+				Value: "2.5", SourceType: types.T_float64.ToType(), HasSourceType: true,
+			}, wantType: types.T_float64, want: "NYNN",
+		},
+		{
+			name: "boolean", param: ParamValue{
+				Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true,
+			}, wantType: types.T_int64, want: "YNNN",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filled, err := FillValuesOfParamsInPlan(
+				context.Background(), queryPlan, []any{test.param})
+			require.NoError(t, err)
+			expr := findPlanFunctionExpr(filled, "export_set")
+			require.NotNil(t, expr)
+			require.Equal(t, int32(test.wantType), expr.GetF().Args[0].Typ.Id, expr.String())
+
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, test.want, result.GetStringAt(0))
+		})
+	}
+	original := findPlanFunctionExpr(queryPlan, "export_set")
+	require.Equal(t, int32(types.T_int64), original.GetF().Args[0].Typ.Id,
+		"execute-time specialization must not mutate the cached plan")
+}
+
 func TestPreparedExportSetPreservesExplicitCast(t *testing.T) {
 	prepared, err := runOneStmt(NewMockOptimizer(false), t,
-		`prepare stmt_export_set from "select export_set(cast(? as double), 'Y', 'N', '', 4)"`)
+		`prepare stmt_export_set from "select export_set(cast((select ?) as double), 'Y', 'N', '', 4)"`)
 	require.NoError(t, err)
 	queryPlan := prepared.GetDcl().GetPrepare().Plan
 	require.NotNil(t, queryPlan)

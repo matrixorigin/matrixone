@@ -118,5 +118,15 @@ SET @export_set_bits = CAST(1.5 AS DECIMAL(4,1));
 EXECUTE export_set_numeric_stmt USING @export_set_bits;
 DEALLOCATE PREPARE export_set_numeric_stmt;
 
+PREPARE export_set_scalar_numeric_stmt FROM
+  "SELECT EXPORT_SET((SELECT ?), 'Y', 'N', '', 4) AS prepared_scalar_bits";
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_scalar_numeric_stmt USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_scalar_numeric_stmt USING @export_set_bits;
+SET @export_set_bits = TRUE;
+EXECUTE export_set_scalar_numeric_stmt USING @export_set_bits;
+DEALLOCATE PREPARE export_set_scalar_numeric_stmt;
+
 DROP TABLE export_set_numeric_bits;
 

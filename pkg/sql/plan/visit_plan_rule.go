@@ -3321,8 +3321,17 @@ func functionBindingChanged(
 // written by the user.
 func preparedResultParamPosition(expr *plan.Expr, name string) (int, bool) {
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 ||
-		!expr.GetPreparedNumeric().GetProvisionalResultCast() {
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return 0, false
+	}
+	provisional := expr.GetPreparedNumeric().GetProvisionalResultCast()
+	if name == "export_set" && !fn.GetSyntaxExplicitCast() && expr.Typ.Id == int32(types.T_int64) {
+		// Scalar-subquery flattening can rebuild EXPORT_SET's checker-inserted
+		// TEXT-to-BIGINT cast without its occurrence metadata. Syntax provenance
+		// still distinguishes that cast from an authoritative user CAST.
+		provisional = true
+	}
+	if !provisional {
 		return 0, false
 	}
 	if !preparedSQLExecuteNumericResultConsumer(name) && name != "export_set" {
