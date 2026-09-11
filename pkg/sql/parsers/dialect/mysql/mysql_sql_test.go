@@ -606,6 +606,23 @@ func TestHighNotPrecedence(t *testing.T) {
 		require.IsType(t, &tree.NotExpr{}, highIn.Left)
 	})
 
+	t.Run("high NOT is accepted in simple-expression unary positions", func(t *testing.T) {
+		minusExpr, ok := parseExpr(t, "select - not 0", "HIGH_NOT_PRECEDENCE").(*tree.UnaryExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.UNARY_MINUS, minusExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, minusExpr.Expr)
+
+		bangExpr, ok := parseExpr(t, "select ! not 0", "HIGH_NOT_PRECEDENCE").(*tree.UnaryExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.UNARY_MARK, bangExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, bangExpr.Expr)
+
+		likeExpr, ok := parseExpr(t, "select '1' like not 0", "HIGH_NOT_PRECEDENCE").(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.LIKE, likeExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, likeExpr.Right)
+	})
+
 	for _, sql := range []string{
 		"select not (1 between 2 and 3)",
 		"select (not 1) between 2 and 3",

@@ -12550,11 +12550,7 @@ subquery:
     }
 
 bit_expr:
-    HIGH_NOT bit_expr %prec HIGH_NOT
-    {
-        $$ = tree.NewNotExpr($2)
-    }
-|   bit_expr '&' bit_expr %prec '&'
+    bit_expr '&' bit_expr %prec '&'
     {
         $$ = tree.NewBinaryExpr(tree.BIT_AND, $1, $3)
     }
@@ -12676,6 +12672,10 @@ simple_expr:
 |   '!' simple_expr %prec UNARY
     {
         $$ = tree.NewUnaryExpr(tree.UNARY_MARK, $2)
+    }
+|   HIGH_NOT simple_expr %prec UNARY
+    {
+        $$ = tree.NewNotExpr($2)
     }
 |   '{'  ident expression '}'
     {   

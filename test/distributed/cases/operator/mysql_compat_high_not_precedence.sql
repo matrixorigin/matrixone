@@ -32,6 +32,10 @@ SELECT
   NOT (0 IN (0, 1)) AS parenthesized_not_in,
   (NOT 0) IN (0, 1) AS explicit_not_in;
 
+SELECT
+  ! NOT 0 AS high_not_after_bang,
+  '1' LIKE NOT 0 AS high_not_like_rhs;
+
 -- Prepared statements and views retain the parser mode from creation.
 SET SESSION sql_mode = '';
 PREPARE p_default FROM 'SELECT NOT 1 BETWEEN 2 AND 3 AS prepared_default';

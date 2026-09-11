@@ -28,6 +28,11 @@ NOT (0 IN (0, 1)) AS parenthesized_not_in,
 (NOT 0) IN (0, 1) AS explicit_not_in;
 high_not_between    parenthesized_not_between    explicit_not_between    high_not_in    parenthesized_not_in    explicit_not_in
 0    1    0    1    0    1
+SELECT
+! NOT 0 AS high_not_after_bang,
+'1' LIKE NOT 0 AS high_not_like_rhs;
+high_not_after_bang    high_not_like_rhs
+0    1
 SET SESSION sql_mode = '';
 PREPARE p_default FROM 'SELECT NOT 1 BETWEEN 2 AND 3 AS prepared_default';
 SET SESSION sql_mode = 'HIGH_NOT_PRECEDENCE';
