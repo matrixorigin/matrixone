@@ -5806,9 +5806,9 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
-// makeSetDecimalToBits implements the signed DECIMAL val_int conversion used
-// by MAKE_SET: round half away from zero, then saturate to the int64 range.
-func makeSetDecimalToBits(value types.Decimal128, scale int32) uint64 {
+// setDecimalToBits implements the signed DECIMAL val_int conversion used by
+// MAKE_SET and EXPORT_SET: round half away from zero, then saturate to the int64 range.
+func setDecimalToBits(value types.Decimal128, scale int32) uint64 {
 	negative := value.Sign()
 	if negative {
 		value = value.Minus()
@@ -5950,7 +5950,7 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			if null {
 				return 0, true
 			}
-			return makeSetDecimalToBits(types.Decimal128FromInt64(int64(val)), scale), false
+			return setDecimalToBits(types.Decimal128FromInt64(int64(val)), scale), false
 		}
 	case types.T_decimal128:
 		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
@@ -5960,7 +5960,7 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			if null {
 				return 0, true
 			}
-			return makeSetDecimalToBits(val, scale), false
+			return setDecimalToBits(val, scale), false
 		}
 	default:
 		// Fallback to int64
@@ -6028,9 +6028,10 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	shouldCast := false
 	castTypes := make([]types.Type, len(inputs))
 
-	// First argument (bits) must be numeric
-	// Check if it's a numeric type (integer, float, or decimal)
-	isNumeric := inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() || inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_bit
+	// First argument (bits) must be numeric. MySQL treats BOOLEAN as the
+	// integer values 0 and 1 for this argument.
+	isNumeric := inputs[0].Oid == types.T_bool || inputs[0].Oid.IsInteger() || inputs[0].Oid.IsFloat() ||
+		inputs[0].Oid == types.T_decimal64 || inputs[0].Oid == types.T_decimal128 || inputs[0].Oid == types.T_bit
 	if !isNumeric && inputs[0].Oid != types.T_any {
 		c, _ := tryToMatch([]types.Type{inputs[0]}, []types.T{types.T_int64})
 		if c == matchFailed {
@@ -6146,6 +6147,12 @@ func writeExportSetResult(dst []byte, bitsValue uint64, on, off, separator []byt
 	}
 }
 
+// exportSetFloatToBits follows MySQL's approximate-number val_int conversion:
+// round to the nearest integer with ties to even, then inspect its signed bit pattern.
+func exportSetFloatToBits(value float64) uint64 {
+	return uint64(int64(math.RoundToEven(value)))
+}
+
 // ExportSet: EXPORT_SET(bits, on, off[, separator[, number_of_bits]]) - Returns a string such that for every bit set in the value bits, you get an on string and for every bit not set, you get an off string.
 func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6230,6 +6237,18 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			}
 			return val, false
 		}
+	case types.T_bool:
+		param := vector.GenerateFunctionFixedTypeParameter[bool](ivecs[0])
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			if val {
+				return 1, false
+			}
+			return 0, false
+		}
 	case types.T_float32:
 		param := vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0])
 		getBitsValue = func(i uint64) (uint64, bool) {
@@ -6237,7 +6256,7 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			if null {
 				return 0, true
 			}
-			return uint64(int64(val)), false
+			return exportSetFloatToBits(float64(val)), false
 		}
 	case types.T_float64:
 		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
@@ -6246,7 +6265,27 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			if null {
 				return 0, true
 			}
-			return uint64(int64(val)), false
+			return exportSetFloatToBits(val), false
+		}
+	case types.T_decimal64:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return setDecimalToBits(types.Decimal128FromInt64(int64(val)), scale), false
+		}
+	case types.T_decimal128:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return setDecimalToBits(val, scale), false
 		}
 	default:
 		// Fallback to int64

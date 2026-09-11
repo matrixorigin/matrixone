@@ -60,3 +60,63 @@ DROP TABLE t1;
 SELECT EXPORT_SET(0, 'Y', 'N', ',', 0) AS export_set_zero_bits;
 SELECT EXPORT_SET(0, 'Y', 'N', ',', 1) AS export_set_one_bit_zero;
 
+# Numeric bits use the logical value and type-specific integer conversion
+SELECT EXPORT_SET(CAST(1.4 AS DECIMAL(4,1)), 'Y', 'N', '', 4) AS decimal_scale_1;
+SELECT EXPORT_SET(CAST(1.40 AS DECIMAL(4,2)), 'Y', 'N', '', 4) AS decimal_scale_2;
+SELECT EXPORT_SET(CAST(1.400 AS DECIMAL(5,3)), 'Y', 'N', '', 4) AS decimal_scale_3;
+SELECT EXPORT_SET(CAST(1.5 AS DECIMAL(4,1)), 'Y', 'N', '', 4) AS decimal_half;
+SELECT EXPORT_SET(CAST(2.5 AS DECIMAL(4,1)), 'Y', 'N', '', 4) AS decimal_odd_half;
+SELECT EXPORT_SET(CAST(-2.5 AS DECIMAL(4,1)), 'Y', 'N', '', 4) AS decimal_negative_half;
+SELECT EXPORT_SET(CAST(0.5 AS DOUBLE), 'Y', 'N', '', 4) AS double_even_half;
+SELECT EXPORT_SET(CAST(1.5 AS DOUBLE), 'Y', 'N', '', 4) AS double_odd_half;
+SELECT EXPORT_SET(CAST(2.5 AS DOUBLE), 'Y', 'N', '', 4) AS double_even_integer_half;
+SELECT EXPORT_SET(CAST(-2.5 AS DOUBLE), 'Y', 'N', '', 4) AS double_negative_half;
+SELECT EXPORT_SET(TRUE, 'Y', 'N', '', 4) AS boolean_true;
+SELECT EXPORT_SET(FALSE, 'Y', 'N', '', 4) AS boolean_false;
+
+DROP TABLE IF EXISTS export_set_numeric_bits;
+CREATE TABLE export_set_numeric_bits(
+  id INT PRIMARY KEY,
+  d1 DECIMAL(4,1),
+  d2 DECIMAL(5,2),
+  f DOUBLE,
+  b BOOLEAN
+);
+INSERT INTO export_set_numeric_bits VALUES
+  (1, 1.4, 1.40, 1.4, TRUE),
+  (2, 1.5, 1.50, 1.5, FALSE),
+  (3, 1.9, 1.90, 1.9, NULL),
+  (4, -1.5, -1.50, -1.5, NULL),
+  (5, 2.5, 2.50, 2.5, TRUE);
+SELECT id,
+  EXPORT_SET(d1, 'Y', 'N', '', 4) AS d1_bits,
+  EXPORT_SET(d2, 'Y', 'N', '', 4) AS d2_bits,
+  EXPORT_SET(f, 'Y', 'N', '', 4) AS f_bits,
+  EXPORT_SET(b, 'Y', 'N', '', 4) AS b_bits
+FROM export_set_numeric_bits ORDER BY id;
+
+DROP TABLE IF EXISTS export_set_numeric_ctas;
+CREATE TABLE export_set_numeric_ctas AS
+SELECT id, EXPORT_SET(d2, 'Y', 'N', '', 4) AS bits
+FROM export_set_numeric_bits;
+SELECT * FROM export_set_numeric_ctas ORDER BY id;
+DROP TABLE export_set_numeric_ctas;
+
+PREPARE export_set_numeric_stmt FROM
+  "SELECT EXPORT_SET(?, 'Y', 'N', '', 4) AS prepared_bits";
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_numeric_stmt USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_numeric_stmt USING @export_set_bits;
+SET @export_set_bits = TRUE;
+EXECUTE export_set_numeric_stmt USING @export_set_bits;
+SET @export_set_bits = FALSE;
+EXECUTE export_set_numeric_stmt USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_numeric_stmt USING @export_set_bits;
+SET @export_set_bits = CAST(1.5 AS DECIMAL(4,1));
+EXECUTE export_set_numeric_stmt USING @export_set_bits;
+DEALLOCATE PREPARE export_set_numeric_stmt;
+
+DROP TABLE export_set_numeric_bits;
+

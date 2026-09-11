@@ -3537,7 +3537,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	preparedNumericProvenance := false
 	if b.builder != nil && b.builder.isPrepareStatement &&
 		(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
-			preparedSQLExecuteNumericResultConsumer(name) || name == "iff") {
+			preparedSQLExecuteNumericResultConsumer(name) || name == "iff" || name == "export_set") {
 		var err error
 		preparedNumericProvenance, err = b.hasPreparedNumericParamExprs(astArgs, depth)
 		if err != nil {
@@ -3897,7 +3897,7 @@ func markPreparedResultCastsProvisional(
 				}
 			}
 		}
-		if i >= len(astArgs) || !preparedSQLExecuteNumericResultValueArg(name, i, len(args)) {
+		if i >= len(astArgs) || !preparedSQLExecuteNumericSourceValueArg(name, i, len(args)) {
 			continue
 		}
 		if _, explicit := astArgs[i].(*tree.CastExpr); explicit {

@@ -4077,6 +4077,15 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			}
 			return
 		}
+		for argIndex, arg := range exprImpl.F.Args {
+			if preparedFunctionArgUsesSQLExecuteNumericSource(
+				expr, name, argIndex, len(exprImpl.F.Args)) {
+				if _, ok := preparedResultParamPosition(arg, name); ok {
+					rule.needs = true
+					return
+				}
+			}
+		}
 		if preparedRuntimeSpecializationFunction(name) || preparedFunctionResultDependsOnRuntimeParam(expr) {
 			for argIndex, arg := range exprImpl.F.Args {
 				if preparedExprRequiresRuntimeSpecializationAt(name, argIndex, arg) {

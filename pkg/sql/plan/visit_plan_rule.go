@@ -1875,13 +1875,20 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				e, functionName, i, len(exprImpl.F.Args)) {
 				paramPos, hasParamPos = preparedResultParamPosition(arg, functionName)
 			}
-			useSQLExecuteNumericSource := hasParamPos &&
-				preparedFunctionArgUsesSQLExecuteNumericSource(
-					e, functionName, i, len(exprImpl.F.Args)) &&
-				paramPos < len(rule.sqlExecuteNumericParams) &&
-				rule.sqlExecuteNumericParams[paramPos] != nil &&
-				preparedSQLExecuteNumericSourceOwnsResultDomain(
-					functionName, paramPos, rule.sqlExecuteStringBackedParams)
+			var executeNumericSource *plan.Expr
+			if hasParamPos && preparedFunctionArgUsesSQLExecuteNumericSource(
+				e, functionName, i, len(exprImpl.F.Args)) {
+				switch {
+				case paramPos < len(rule.sqlExecuteNumericParams) &&
+					rule.sqlExecuteNumericParams[paramPos] != nil &&
+					preparedSQLExecuteNumericSourceOwnsResultDomain(
+						functionName, paramPos, rule.sqlExecuteStringBackedParams):
+					executeNumericSource = rule.sqlExecuteNumericParams[paramPos]
+				case functionName == "export_set" && paramPos < len(rule.params) &&
+					preparedExportSetRuntimeNumericSource(rule.params[paramPos]):
+					executeNumericSource = rule.params[paramPos]
+				}
+			}
 			sharedControlParam := false
 			if paramPos >= 0 && preparedSQLExecuteNumericResultValueArg(functionName, i, len(exprImpl.F.Args)) {
 				for j, sibling := range originalArgs {
@@ -1920,15 +1927,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 			}
 			var rewrittenArg *plan.Expr
-			if useSQLExecuteNumericSource {
-				sqlExecuteNumericSourceDependent = true
+			if executeNumericSource != nil {
+				if functionName != "export_set" {
+					sqlExecuteNumericSourceDependent = true
+				}
 				sqlExecuteNumericSourceArgs[i] = true
 				// The prepare-time implicit cast is provisional. Materialize the
-				// SQL user variable's current source domain before descending into
-				// that cast; evaluating it first can reject a valid DECIMAL value
-				// using the overload selected for the initial TEXT marker.
-				source := rule.sqlExecuteNumericParams[paramPos]
-				rewrittenArg = &plan.Expr{Typ: source.Typ, Expr: source.Expr}
+				// execute-time numeric domain before descending into that cast;
+				// evaluating it first can discard DECIMAL, FLOAT, or BOOLEAN semantics.
+				rewrittenArg = &plan.Expr{Typ: executeNumericSource.Typ, Expr: executeNumericSource.Expr}
 			} else {
 				var applyErr error
 				disablePrefix := sharedControlParam && paramPos >= 0 &&
@@ -1955,7 +1962,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			exprImpl.F.Args[i] = rewrittenArg
 			boundArgs[i] = rewrittenArg
-			if useSQLExecuteNumericSource {
+			if executeNumericSource != nil {
 				needResetFunction = true
 				compareArgTypes = true
 				// The execute-time source may change only an argument literal while
@@ -3143,6 +3150,13 @@ func preparedSQLExecuteNumericResultConsumer(name string) bool {
 	return preparedNumericResultPolymorphicFunction(name)
 }
 
+func preparedSQLExecuteNumericSourceValueArg(name string, argIndex, argCount int) bool {
+	if name == "export_set" {
+		return argIndex == 0 && argCount >= 3 && argCount <= 5
+	}
+	return preparedSQLExecuteNumericResultValueArg(name, argIndex, argCount)
+}
+
 func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int) bool {
 	if !preparedSQLExecuteNumericResultConsumer(name) {
 		return false
@@ -3182,6 +3196,14 @@ func preparedRuntimeResultOccurrenceType(value any, fallback plan.Type) plan.Typ
 	}
 }
 
+func preparedExportSetRuntimeNumericSource(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	typ := types.T(expr.Typ.Id)
+	return typ == types.T_bool || typ == types.T_bit || (types.Type{Oid: typ}).IsNumeric()
+}
+
 func preparedSQLExecuteNumericSourceOwnsResultDomain(
 	name string,
 	paramPos int,
@@ -3199,6 +3221,13 @@ func preparedFunctionArgUsesSQLExecuteNumericSource(
 	argIndex int,
 	argCount int,
 ) bool {
+	// EXPORT_SET returns text, but its first argument retains the numeric
+	// category's own integer conversion contract. Do not let PREPARE's TEXT
+	// transport permanently narrow DECIMAL, FLOAT, or BOOLEAN values to BIGINT.
+	if name == "export_set" {
+		return argIndex == 0 && argCount >= 3 && argCount <= 5
+	}
+
 	// A prepared TEXT marker can make result-selecting functions bind to a
 	// non-numeric envelope even though the execute-time SQL source is numeric.
 	// Decide from the argument's value role before consulting that provisional
@@ -3278,17 +3307,17 @@ func functionBindingChanged(
 	return false
 }
 
-// preparedResultParamPosition recognizes provisional result-domain casts that
-// overload resolution inserts around a prepared TEXT marker. The enclosing
-// consumer and provisional target jointly distinguish these from authoritative
-// numeric casts written by the user.
+// preparedResultParamPosition recognizes provisional casts that overload
+// resolution inserts around a prepared TEXT marker. The enclosing consumer and
+// provisional target jointly distinguish these from authoritative numeric casts
+// written by the user.
 func preparedResultParamPosition(expr *plan.Expr, name string) (int, bool) {
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 ||
 		!expr.GetPreparedNumeric().GetProvisionalResultCast() {
 		return 0, false
 	}
-	if !preparedSQLExecuteNumericResultConsumer(name) {
+	if !preparedSQLExecuteNumericResultConsumer(name) && name != "export_set" {
 		return 0, false
 	}
 	param := fn.Args[0].GetP()

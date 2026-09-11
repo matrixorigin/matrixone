@@ -1,102 +1,204 @@
 SELECT EXPORT_SET(5, 'Y', 'N', ',', 4) AS result1;
-result1
+➤ result1[12,127,0]  𝄀
 Y,N,Y,N
 SELECT EXPORT_SET(5, 'Y', 'N', ',', 4) AS export_set_basic;
-export_set_basic
+➤ export_set_basic[12,127,0]  𝄀
 Y,N,Y,N
 SELECT EXPORT_SET(5, 'Y', 'N') AS export_set_default_sep;
-export_set_default_sep
+➤ export_set_default_sep[12,127,0]  𝄀
 Y,N,Y,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N
 SELECT EXPORT_SET(5, 'Y', 'N', ',') AS export_set_default_bits;
-export_set_default_bits
+➤ export_set_default_bits[12,127,0]  𝄀
 Y,N,Y,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N
 SELECT EXPORT_SET(0, 'Y', 'N', ',', 4) AS export_set_zero;
-export_set_zero
+➤ export_set_zero[12,127,0]  𝄀
 N,N,N,N
 SELECT EXPORT_SET(15, 'Y', 'N', ',', 4) AS export_set_all_ones;
-export_set_all_ones
+➤ export_set_all_ones[12,127,0]  𝄀
 Y,Y,Y,Y
 SELECT EXPORT_SET(1, 'Y', 'N', ',', 4) AS export_set_one;
-export_set_one
+➤ export_set_one[12,127,0]  𝄀
 Y,N,N,N
 SELECT EXPORT_SET(8, 'Y', 'N', ',', 4) AS export_set_eight;
-export_set_eight
+➤ export_set_eight[12,127,0]  𝄀
 N,N,N,Y
 SELECT EXPORT_SET(5, 'Y', 'N', '|', 4) AS export_set_pipe;
-export_set_pipe
+➤ export_set_pipe[12,127,0]  𝄀
 Y|N|Y|N
 SELECT EXPORT_SET(5, 'Y', 'N', '-', 4) AS export_set_dash;
-export_set_dash
+➤ export_set_dash[12,127,0]  𝄀
 Y-N-Y-N
 SELECT EXPORT_SET(5, 'Y', 'N', '', 4) AS export_set_empty_sep;
-export_set_empty_sep
+➤ export_set_empty_sep[12,64,0]  𝄀
 YNYN
 SELECT EXPORT_SET(5, 'Y', 'N', ' ', 4) AS export_set_space;
-export_set_space
+➤ export_set_space[12,127,0]  𝄀
 Y N Y N
 SELECT EXPORT_SET(5, 'ON', 'OFF', ',', 4) AS export_set_on_off;
-export_set_on_off
+➤ export_set_on_off[12,255,0]  𝄀
 ON,OFF,ON,OFF
 SELECT EXPORT_SET(5, '1', '0', ',', 4) AS export_set_1_0;
-export_set_1_0
+➤ export_set_1_0[12,127,0]  𝄀
 1,0,1,0
 SELECT EXPORT_SET(5, 'true', 'false', ',', 4) AS export_set_true_false;
-export_set_true_false
+➤ export_set_true_false[12,383,0]  𝄀
 true,false,true,false
 SELECT EXPORT_SET(5, 'Y', 'N', ',', 1) AS export_set_1_bit;
-export_set_1_bit
+➤ export_set_1_bit[12,127,0]  𝄀
 Y
 SELECT EXPORT_SET(5, 'Y', 'N', ',', 2) AS export_set_2_bits;
-export_set_2_bits
+➤ export_set_2_bits[12,127,0]  𝄀
 Y,N
 SELECT EXPORT_SET(5, 'Y', 'N', ',', 8) AS export_set_8_bits;
-export_set_8_bits
+➤ export_set_8_bits[12,127,0]  𝄀
 Y,N,Y,N,N,N,N,N
 SELECT EXPORT_SET(5, 'Y', 'N', ',', 64) AS export_set_64_bits;
-export_set_64_bits
+➤ export_set_64_bits[12,127,0]  𝄀
 Y,N,Y,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N
 SELECT EXPORT_SET(255, 'Y', 'N', ',', 8) AS export_set_255;
-export_set_255
+➤ export_set_255[12,127,0]  𝄀
 Y,Y,Y,Y,Y,Y,Y,Y
 SELECT EXPORT_SET(256, 'Y', 'N', ',', 9) AS export_set_256;
-export_set_256
+➤ export_set_256[12,127,0]  𝄀
 N,N,N,N,N,N,N,N,Y
 SELECT EXPORT_SET(-1, 'Y', 'N', ',', 8) AS export_set_neg_one;
-export_set_neg_one
+➤ export_set_neg_one[12,127,0]  𝄀
 Y,Y,Y,Y,Y,Y,Y,Y
 SELECT EXPORT_SET(NULL, 'Y', 'N', ',', 4) AS export_set_null_bits;
-export_set_null_bits
+➤ export_set_null_bits[12,127,0]  𝄀
 null
 SELECT EXPORT_SET(5, NULL, 'N', ',', 4) AS export_set_null_on;
-export_set_null_on
+➤ export_set_null_on[-1,16383,0]  𝄀
 null
 SELECT EXPORT_SET(5, 'Y', NULL, ',', 4) AS export_set_null_off;
-export_set_null_off
+➤ export_set_null_off[-1,16383,0]  𝄀
 null
 SELECT EXPORT_SET(5, 'Y', 'N', NULL, 4) AS export_set_null_sep;
-export_set_null_sep
+➤ export_set_null_sep[-1,16383,0]  𝄀
 Y,N,Y,N
 SELECT EXPORT_SET(5, 'Y', 'N', ',', NULL) AS export_set_null_bits_count;
-export_set_null_bits_count
+➤ export_set_null_bits_count[12,127,0]  𝄀
 Y,N,Y,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N
 CREATE TABLE t1(bits INT, on_str VARCHAR(10), off_str VARCHAR(10));
 INSERT INTO t1 VALUES (5, 'Y', 'N'), (10, 'ON', 'OFF'), (15, '1', '0');
 SELECT bits, EXPORT_SET(bits, on_str, off_str, ',', 4) AS result FROM t1;
-bits    result
-5    Y,N,Y,N
-10    OFF,ON,OFF,ON
-15    1,1,1,1
+➤ bits[4,32,0]  ¦  result[12,703,0]  𝄀
+5  ¦  Y,N,Y,N  𝄀
+10  ¦  OFF,ON,OFF,ON  𝄀
+15  ¦  1,1,1,1
 DROP TABLE t1;
 CREATE TABLE t1(bits INT);
 INSERT INTO t1 VALUES (5), (10), (15);
 SELECT * FROM t1 WHERE EXPORT_SET(bits, 'Y', 'N', ',', 4) LIKE 'Y%';
-bits
-5
+➤ bits[4,32,0]  𝄀
+5  𝄀
 15
 DROP TABLE t1;
 SELECT EXPORT_SET(0, 'Y', 'N', ',', 0) AS export_set_zero_bits;
-export_set_zero_bits
+➤ export_set_zero_bits[12,127,0]  𝄀
 N
 SELECT EXPORT_SET(0, 'Y', 'N', ',', 1) AS export_set_one_bit_zero;
-export_set_one_bit_zero
+➤ export_set_one_bit_zero[12,127,0]  𝄀
 N
+SELECT EXPORT_SET(CAST(1.4 AS DECIMAL(4,1)), 'Y', 'N', '', 4) AS decimal_scale_1;
+➤ decimal_scale_1[12,64,0]  𝄀
+YNNN
+SELECT EXPORT_SET(CAST(1.40 AS DECIMAL(4,2)), 'Y', 'N', '', 4) AS decimal_scale_2;
+➤ decimal_scale_2[12,64,0]  𝄀
+YNNN
+SELECT EXPORT_SET(CAST(1.400 AS DECIMAL(5,3)), 'Y', 'N', '', 4) AS decimal_scale_3;
+➤ decimal_scale_3[12,64,0]  𝄀
+YNNN
+SELECT EXPORT_SET(CAST(1.5 AS DECIMAL(4,1)), 'Y', 'N', '', 4) AS decimal_half;
+➤ decimal_half[12,64,0]  𝄀
+NYNN
+SELECT EXPORT_SET(CAST(2.5 AS DECIMAL(4,1)), 'Y', 'N', '', 4) AS decimal_odd_half;
+➤ decimal_odd_half[12,64,0]  𝄀
+YYNN
+SELECT EXPORT_SET(CAST(-2.5 AS DECIMAL(4,1)), 'Y', 'N', '', 4) AS decimal_negative_half;
+➤ decimal_negative_half[12,64,0]  𝄀
+YNYY
+SELECT EXPORT_SET(CAST(0.5 AS DOUBLE), 'Y', 'N', '', 4) AS double_even_half;
+➤ double_even_half[12,64,0]  𝄀
+NNNN
+SELECT EXPORT_SET(CAST(1.5 AS DOUBLE), 'Y', 'N', '', 4) AS double_odd_half;
+➤ double_odd_half[12,64,0]  𝄀
+NYNN
+SELECT EXPORT_SET(CAST(2.5 AS DOUBLE), 'Y', 'N', '', 4) AS double_even_integer_half;
+➤ double_even_integer_half[12,64,0]  𝄀
+NYNN
+SELECT EXPORT_SET(CAST(-2.5 AS DOUBLE), 'Y', 'N', '', 4) AS double_negative_half;
+➤ double_negative_half[12,64,0]  𝄀
+NYYY
+SELECT EXPORT_SET(TRUE, 'Y', 'N', '', 4) AS boolean_true;
+➤ boolean_true[12,64,0]  𝄀
+YNNN
+SELECT EXPORT_SET(FALSE, 'Y', 'N', '', 4) AS boolean_false;
+➤ boolean_false[12,64,0]  𝄀
+NNNN
+DROP TABLE IF EXISTS export_set_numeric_bits;
+CREATE TABLE export_set_numeric_bits(
+id INT PRIMARY KEY,
+d1 DECIMAL(4,1),
+d2 DECIMAL(5,2),
+f DOUBLE,
+b BOOLEAN
+);
+INSERT INTO export_set_numeric_bits VALUES
+(1, 1.4, 1.40, 1.4, TRUE),
+(2, 1.5, 1.50, 1.5, FALSE),
+(3, 1.9, 1.90, 1.9, NULL),
+(4, -1.5, -1.50, -1.5, NULL),
+(5, 2.5, 2.50, 2.5, TRUE);
+SELECT id,
+EXPORT_SET(d1, 'Y', 'N', '', 4) AS d1_bits,
+EXPORT_SET(d2, 'Y', 'N', '', 4) AS d2_bits,
+EXPORT_SET(f, 'Y', 'N', '', 4) AS f_bits,
+EXPORT_SET(b, 'Y', 'N', '', 4) AS b_bits
+FROM export_set_numeric_bits ORDER BY id;
+➤ id[4,32,0]  ¦  d1_bits[12,64,0]  ¦  d2_bits[12,64,0]  ¦  f_bits[12,64,0]  ¦  b_bits[12,64,0]  𝄀
+1  ¦  YNNN  ¦  YNNN  ¦  YNNN  ¦  YNNN  𝄀
+2  ¦  NYNN  ¦  NYNN  ¦  NYNN  ¦  NNNN  𝄀
+3  ¦  NYNN  ¦  NYNN  ¦  NYNN  ¦  null  𝄀
+4  ¦  NYYY  ¦  NYYY  ¦  NYYY  ¦  null  𝄀
+5  ¦  YYNN  ¦  YYNN  ¦  NYNN  ¦  YNNN
+DROP TABLE IF EXISTS export_set_numeric_ctas;
+CREATE TABLE export_set_numeric_ctas AS
+SELECT id, EXPORT_SET(d2, 'Y', 'N', '', 4) AS bits
+FROM export_set_numeric_bits;
+SELECT * FROM export_set_numeric_ctas ORDER BY id;
+➤ id[4,32,0]  ¦  bits[12,64,0]  𝄀
+1  ¦  YNNN  𝄀
+2  ¦  NYNN  𝄀
+3  ¦  NYNN  𝄀
+4  ¦  NYYY  𝄀
+5  ¦  YYNN
+DROP TABLE export_set_numeric_ctas;
+PREPARE export_set_numeric_stmt FROM
+"SELECT EXPORT_SET(?, 'Y', 'N', '', 4) AS prepared_bits";
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_numeric_stmt USING @export_set_bits;
+➤ prepared_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_numeric_stmt USING @export_set_bits;
+➤ prepared_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = TRUE;
+EXECUTE export_set_numeric_stmt USING @export_set_bits;
+➤ prepared_bits[12,64,0]  𝄀
+YNNN
+SET @export_set_bits = FALSE;
+EXECUTE export_set_numeric_stmt USING @export_set_bits;
+➤ prepared_bits[12,64,0]  𝄀
+NNNN
+SET @export_set_bits = NULL;
+EXECUTE export_set_numeric_stmt USING @export_set_bits;
+➤ prepared_bits[12,64,0]  𝄀
+null
+SET @export_set_bits = CAST(1.5 AS DECIMAL(4,1));
+EXECUTE export_set_numeric_stmt USING @export_set_bits;
+➤ prepared_bits[12,64,0]  𝄀
+NYNN
+DEALLOCATE PREPARE export_set_numeric_stmt;
+DROP TABLE export_set_numeric_bits;
