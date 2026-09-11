@@ -3374,6 +3374,125 @@ func TestConvTypedNumericDispatch(t *testing.T) {
 	})
 }
 
+func TestConvNegativeFromBaseUsesSignedSourceDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal, err := types.ParseDecimal128("9223372036854775808", 20, 0)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		input FunctionTestInput
+		want  string
+	}{
+		{
+			name: "uint64 saturates at signed max",
+			input: NewFunctionTestInput(
+				types.T_uint64.ToType(), []uint64{math.MaxUint64}, []bool{false}),
+			want: "7FFFFFFFFFFFFFFF",
+		},
+		{
+			name: "decimal saturates at signed max",
+			input: NewFunctionTestInput(
+				types.New(types.T_decimal128, 20, 0), []types.Decimal128{decimal}, []bool{false}),
+			want: "7FFFFFFFFFFFFFFF",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					tc.input,
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-10}, []bool{false}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{false}),
+				Conv)
+			succeed, info := fc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestConvFloatUsesStringPrefixForScientificValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{1e20, -1e20, math.Ldexp(1, 63)},
+				[]bool{false, false, false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10, 10, -10}, []bool{false, false, false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16, 16, 16}, []bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"1", "FFFFFFFFFFFFFFFF", "9"}, []bool{false, false, false}), Conv)
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestConvCoversRemainingTypedDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	decimal128, err := types.ParseDecimal128("15.5", 20, 1)
+	require.NoError(t, err)
+	decimal256, err := types.ParseDecimal256("15.5", 65, 1)
+	require.NoError(t, err)
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-05-06 12:34:56", 6)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name   string
+		input  FunctionTestInput
+		wanted []string
+	}{
+		{name: "bit", input: NewFunctionTestInput(types.T_bit.ToType(), []uint64{15}, []bool{false}), wanted: []string{"F"}},
+		{name: "decimal128", input: NewFunctionTestInput(types.New(types.T_decimal128, 20, 1), []types.Decimal128{decimal128}, []bool{false}), wanted: []string{"F"}},
+		{name: "decimal256", input: NewFunctionTestInput(types.New(types.T_decimal256, 65, 1), []types.Decimal256{decimal256}, []bool{false}), wanted: []string{"F"}},
+		{name: "float32", input: NewFunctionTestInput(types.T_float32.ToType(), []float32{15.5}, []bool{false}), wanted: []string{"F"}},
+		{name: "timestamp", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp}, []bool{false}), wanted: []string{"7E8"}},
+		{name: "year", input: NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024}, []bool{false}), wanted: []string{"7E8"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					tc.input,
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, tc.wanted, []bool{false}), Conv)
+			succeed, info := fc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	t.Run("unsupported fixed width type is rejected", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_uuid.ToType(), []types.Uuid{{}}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{true}), Conv)
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("untyped marker vector returns NULL", func(t *testing.T) {
+		input := vector.NewVec(types.T_any.ToType())
+		fromBase, err := vector.NewConstFixed(types.T_int64.ToType(), int64(10), 1, proc.Mp())
+		require.NoError(t, err)
+		toBase, err := vector.NewConstFixed(types.T_int64.ToType(), int64(16), 1, proc.Mp())
+		require.NoError(t, err)
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, Conv([]*vector.Vector{input, fromBase, toBase}, result, proc, 1, nil))
+		_, isNull := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		require.True(t, isNull)
+	})
+}
+
 func TestParseBaseIntegerPrefixEdgeCases(t *testing.T) {
 	t.Run("empty string returns zero values without error", func(t *testing.T) {
 		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix(nil, 10)

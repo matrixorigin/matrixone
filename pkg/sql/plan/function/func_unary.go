@@ -545,10 +545,17 @@ func binInteger[T constraints.Unsigned | constraints.Signed](v T, proc *process.
 }
 
 func binFloat[T constraints.Float](v T, proc *process.Process) (string, error) {
-	if err := overflowForNumericToNumeric[T, int64](proc.Ctx, []T{v}, nil); err != nil {
+	bitSize := 64
+	if _, ok := any(v).(float32); ok {
+		bitSize = 32
+	}
+	var buf [32]byte
+	text := strconv.AppendFloat(buf[:0], float64(v), 'g', -1, bitSize)
+	_, unsignedValue, _, err := parseBaseIntegerPrefix(text, 10)
+	if err != nil {
 		return "", err
 	}
-	return uintToBinary(uint64(int64(v))), nil
+	return uintToBinary(unsignedValue), nil
 }
 
 // BinString applies BIN's MySQL string contract: convert the leading base-10

@@ -1493,6 +1493,7 @@ func initExecuteStmtParamWithResolverInSession(
 		preparedExplain = true
 	}
 	runtimeNumericPrefixCandidate := false
+	runtimeConversionCandidate := false
 	// The planner records deferred overloads explicitly on the prepared plan.
 	// Carry this bounded metadata into execution instead of walking every
 	// expression tree for each EXECUTE. ABS always rebinds; BIT_COUNT starts in
@@ -1682,6 +1683,15 @@ func initExecuteStmtParamWithResolverInSession(
 				executionPlan, runtimeTypes)
 		}
 	}
+	// SQL EXECUTE transports user variables through a text-shaped parameter
+	// vector, so BIN/CONV still need one typed logical plan per runtime domain.
+	// Once that domain is known, reuse the same bounded runtime-plan cache used
+	// by binary EXECUTE; otherwise every repeated EXECUTE would copy and compile
+	// the plan again even when the variable type is unchanged.
+	runtimeConversionCandidate = len(prepareStmt.conversionParamPositions) > 0 &&
+		needsRuntimeSpecialization && !runtimeTextComparisonSpecialization &&
+		!prepareStmt.hasPaginationParams && !prepareStmt.hasLagLeadParams && !preparedExplain &&
+		preparedRuntimeCacheSupports(cwft.paramVals)
 	// Static binary specialization, numeric-prefix conversion, and deferred
 	// overload binding all materialize every ParamRef in the copied plan. Keep
 	// provenance for every parameter before caching so a same-category hit reads
@@ -1690,7 +1700,7 @@ func initExecuteStmtParamWithResolverInSession(
 	stableRuntimeSpecializationCandidate := binaryExecute &&
 		prepareStmt.runtimeSpecializationNeeded && !runtimeTextComparisonSpecialization &&
 		!prepareStmt.hasPaginationParams && !prepareStmt.hasLagLeadParams && !preparedExplain
-	if runtimeNumericOverloadCandidate || runtimeNumericPrefixCandidate ||
+	if runtimeNumericOverloadCandidate || runtimeNumericPrefixCandidate || runtimeConversionCandidate ||
 		stableRuntimeSpecializationCandidate {
 		retainPreparedRuntimeParamRefs(cwft.paramVals)
 	}
@@ -1717,7 +1727,7 @@ func initExecuteStmtParamWithResolverInSession(
 	var cachedRuntimeCompile *compile.Compile
 	runtimeCacheKey := ""
 	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
-		stableRuntimeSpecializationCandidate
+		runtimeConversionCandidate || stableRuntimeSpecializationCandidate
 	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate
 	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
 		(runtimeDirectResultCandidate ||
