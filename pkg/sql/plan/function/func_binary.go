@@ -6117,7 +6117,132 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
+type exportSetInteger interface {
+	int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64
+}
+
+func makeExportSetIntegerGetter[T exportSetInteger](vec *vector.Vector) func(uint64) (uint64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[T](vec)
+	return func(i uint64) (uint64, bool) {
+		value, isNull := param.GetValue(i)
+		if isNull {
+			return 0, true
+		}
+		return uint64(value), false
+	}
+}
+
+func makeExportSetBitsGetter(vec *vector.Vector) (func(uint64) (uint64, bool), error) {
+	if vec.IsConstNull() {
+		return func(uint64) (uint64, bool) { return 0, true }, nil
+	}
+
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return makeExportSetIntegerGetter[int8](vec), nil
+	case types.T_int16:
+		return makeExportSetIntegerGetter[int16](vec), nil
+	case types.T_int32:
+		return makeExportSetIntegerGetter[int32](vec), nil
+	case types.T_int64:
+		return makeExportSetIntegerGetter[int64](vec), nil
+	case types.T_uint8:
+		return makeExportSetIntegerGetter[uint8](vec), nil
+	case types.T_uint16:
+		return makeExportSetIntegerGetter[uint16](vec), nil
+	case types.T_uint32:
+		return makeExportSetIntegerGetter[uint32](vec), nil
+	case types.T_uint64:
+		return makeExportSetIntegerGetter[uint64](vec), nil
+	case types.T_bit:
+		return makeExportSetIntegerGetter[uint64](vec), nil
+	case types.T_float32:
+		param := vector.GenerateFunctionFixedTypeParameter[float32](vec)
+		return func(i uint64) (uint64, bool) {
+			value, isNull := param.GetValue(i)
+			if isNull {
+				return 0, true
+			}
+			return uint64(int64(value)), false
+		}, nil
+	case types.T_float64:
+		param := vector.GenerateFunctionFixedTypeParameter[float64](vec)
+		return func(i uint64) (uint64, bool) {
+			value, isNull := param.GetValue(i)
+			if isNull {
+				return 0, true
+			}
+			return uint64(int64(value)), false
+		}, nil
+	case types.T_decimal64:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](vec)
+		scale := vec.GetType().Scale
+		return func(i uint64) (uint64, bool) {
+			value, isNull := param.GetValue(i)
+			if isNull {
+				return 0, true
+			}
+			return makeSetDecimalToBits(types.Decimal128FromInt64(int64(value)), scale), false
+		}, nil
+	case types.T_decimal128:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](vec)
+		scale := vec.GetType().Scale
+		return func(i uint64) (uint64, bool) {
+			value, isNull := param.GetValue(i)
+			if isNull {
+				return 0, true
+			}
+			return makeSetDecimalToBits(value, scale), false
+		}, nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported EXPORT_SET bits type %s", vec.GetType().Oid)
+	}
+}
+
+func makeExportSetNumberOfBitsGetter(vec *vector.Vector) (func(uint64) (uint64, bool), error) {
+	if vec.IsConstNull() {
+		return func(uint64) (uint64, bool) { return 0, true }, nil
+	}
+
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return makeExportSetIntegerGetter[int8](vec), nil
+	case types.T_int16:
+		return makeExportSetIntegerGetter[int16](vec), nil
+	case types.T_int32:
+		return makeExportSetIntegerGetter[int32](vec), nil
+	case types.T_int64:
+		return makeExportSetIntegerGetter[int64](vec), nil
+	case types.T_uint8:
+		return makeExportSetIntegerGetter[uint8](vec), nil
+	case types.T_uint16:
+		return makeExportSetIntegerGetter[uint16](vec), nil
+	case types.T_uint32:
+		return makeExportSetIntegerGetter[uint32](vec), nil
+	case types.T_uint64:
+		return makeExportSetIntegerGetter[uint64](vec), nil
+	case types.T_bit:
+		return makeExportSetIntegerGetter[uint64](vec), nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported EXPORT_SET number_of_bits type %s", vec.GetType().Oid)
+	}
+}
+
+func normalizeExportSetNumberOfBits(value uint64) int64 {
+	if value > 64 {
+		return 64
+	}
+	return int64(value)
+}
+
 func exportSetResultByteLength(bitsValue uint64, on, off, separator []byte, numberOfBits int64, maxResultLen int64) (int, bool) {
+	if numberOfBits < 0 || numberOfBits > 64 {
+		return 0, false
+	}
+	if numberOfBits == 0 {
+		return 0, true
+	}
+
 	size := int64(0)
 	add := func(count int64, width int) bool {
 		if count == 0 || width == 0 {
@@ -6161,114 +6286,9 @@ func writeExportSetResult(dst []byte, bitsValue uint64, on, off, separator []byt
 func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// First argument: bits (numeric) - handle different numeric types
-	bitsType := ivecs[0].GetType().Oid
-	var bitsUint uint64
-	var nullBits bool
-
-	// Create appropriate parameter wrapper based on type (once, outside loop)
-	var getBitsValue func(uint64) (uint64, bool)
-	switch bitsType {
-	case types.T_int8:
-		param := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_int16:
-		param := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_int32:
-		param := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_int64:
-		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_uint8:
-		param := vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_uint16:
-		param := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_uint32:
-		param := vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_uint64:
-		param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return val, false
-		}
-	case types.T_float32:
-		param := vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(int64(val)), false
-		}
-	case types.T_float64:
-		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(int64(val)), false
-		}
-	default:
-		// Fallback to int64
-		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
+	getBitsValue, err := makeExportSetBitsGetter(ivecs[0])
+	if err != nil {
+		return err
 	}
 
 	// Second argument: on (string)
@@ -6284,11 +6304,14 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		separatorParam = vector.GenerateFunctionStrParameter(ivecs[3])
 	}
 
-	// Optional fifth argument: number_of_bits (int64, default 64)
-	var numberOfBitsParam vector.FunctionParameterWrapper[int64]
+	// Optional fifth argument: number_of_bits (integer, default 64)
+	var getNumberOfBits func(uint64) (uint64, bool)
 	numberOfBitsProvided := len(ivecs) > 4
 	if numberOfBitsProvided {
-		numberOfBitsParam = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[4])
+		getNumberOfBits, err = makeExportSetNumberOfBitsGetter(ivecs[4])
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -6299,8 +6322,8 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			continue
 		}
 
-		// Extract bits value using the appropriate getter
-		bitsUint, nullBits = getBitsValue(i)
+		// Extract bits value using the appropriate getter.
+		bitsUint, nullBits := getBitsValue(i)
 
 		if nullBits {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -6318,32 +6341,36 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			continue
 		}
 
-		// Get separator (default ',')
-		separator := ","
-		if separatorProvided && !ivecs[3].IsConstNull() {
-			sep, nullSep := separatorParam.GetStrValue(i)
-			if !nullSep {
-				separator = functionUtil.QuickBytesToStr(sep)
-			}
-		}
-
-		// Get number_of_bits (default 64, max 64)
-		numberOfBits := int64(64)
-		if numberOfBitsProvided && !ivecs[4].IsConstNull() {
-			nBits, nullNBits := numberOfBitsParam.GetValue(i)
-			if !nullNBits {
-				if nBits < 1 {
-					numberOfBits = 1
-				} else if nBits > 64 {
-					numberOfBits = 64
-				} else {
-					numberOfBits = nBits
+		// Get separator (default ','). A supplied NULL is distinct from an
+		// omitted argument and makes the result NULL.
+		separator := functionUtil.QuickStrToBytes(",")
+		if separatorProvided {
+			var nullSep bool
+			separator, nullSep = separatorParam.GetStrValue(i)
+			if nullSep {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
 				}
+				continue
 			}
 		}
 
-		separatorBytes := functionUtil.QuickStrToBytes(separator)
-		size, ok := exportSetResultByteLength(bitsUint, on, off, separatorBytes, numberOfBits,
+		// MySQL treats number_of_bits as an unsigned value and clips it to 64.
+		// Converting signed values to uint64 before clipping preserves the
+		// established -1 => 64 behavior without narrowing uint64 inputs.
+		numberOfBits := int64(64)
+		if numberOfBitsProvided {
+			nBits, nullNBits := getNumberOfBits(i)
+			if nullNBits {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			numberOfBits = normalizeExportSetNumberOfBits(nBits)
+		}
+
+		size, ok := exportSetResultByteLength(bitsUint, on, off, separator, numberOfBits,
 			maxStringFunctionResultLength(result))
 		if !ok {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -6352,7 +6379,7 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			continue
 		}
 		if err := rs.AppendBytesWithWriter(size, func(dst []byte) error {
-			writeExportSetResult(dst, bitsUint, on, off, separatorBytes, numberOfBits)
+			writeExportSetResult(dst, bitsUint, on, off, separator, numberOfBits)
 			return nil
 		}); err != nil {
 			return err
