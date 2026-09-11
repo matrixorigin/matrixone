@@ -4506,7 +4506,11 @@ func uniqueKeyCodecMetadataForParts(
 		}
 		col, exists := lookup(name)
 		if !exists || col == nil {
-			return nil, false, moerr.NewInternalErrorf(ctx.GetContext(), "unique key references missing column %s", name)
+			// Keep the existing CREATE TABLE/CREATE INDEX user-facing
+			// diagnostic for a misspelled key part.  The v2 metadata check is
+			// an additional admission guard; it must not change the SQL error
+			// contract for invalid column names.
+			return nil, false, moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", name)
 		}
 		if col.Typ.Id == int32(types.T_varchar) || col.Typ.Id == int32(types.T_text) {
 			hasText = true
@@ -4623,7 +4627,7 @@ func validateV2UniqueIndexParts(
 			ok = true
 		}
 		if !ok {
-			return moerr.NewInternalErrorf(ctx.GetContext(), "unique key references missing column %s", name)
+			return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", name)
 		}
 		if col.Typ.Id != int32(types.T_varchar) && col.Typ.Id != int32(types.T_text) {
 			return moerr.NewNotSupported(ctx.GetContext(), "v2 unique-key activation requires registered text index parts")
@@ -4717,7 +4721,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 			colName := catalog.ResolveAlias(keyPart.ColName.ColName())
 			sourceCol, ok := lookup(colName)
 			if !ok || sourceCol == nil {
-				return moerr.NewInternalErrorf(ctx.GetContext(), "unique key references missing column %s", colName)
+				return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", colName)
 			}
 			colDef := &ColDef{
 				Name: keyName,
@@ -4761,7 +4765,7 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 		if pkeyName != "" {
 			pkeyCol, ok := lookup(pkeyName)
 			if !ok || pkeyCol == nil {
-				return moerr.NewInternalErrorf(ctx.GetContext(), "unique key references missing primary key column %s", pkeyName)
+				return moerr.NewInvalidInputf(ctx.GetContext(), "column '%s' is not exist", pkeyName)
 			}
 			colDef := &ColDef{
 				Name: catalog.IndexTablePrimaryColName,
