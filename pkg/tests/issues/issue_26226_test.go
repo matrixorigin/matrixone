@@ -93,7 +93,10 @@ func TestIssue26226ViewDistinctUsesVisibleSetValue(t *testing.T) {
 					err := dbConn.QueryRowContext(ctx,
 						"select count(*) from mo_catalog.mo_tables t "+
 							"join mo_catalog.mo_view_refresh r on r.account_id=t.account_id and r.target_relation_id=t.rel_id "+
-							"where t.reldatabase = ? and t.relkind = 'v' and r.status = 'CURRENT'",
+							"where t.reldatabase = ? and t.relkind = 'v' and r.status = 'CURRENT' "+
+							"and exists (select 1 from mo_catalog.mo_view_dependencies g "+
+							"where g.account_id=0 and g.target_relation_id=0 and g.dependency_ordinal=0 "+
+							"and g.source_relation_kind='ACTIVATED')",
 						db).Scan(&current)
 					return err == nil && current == 11
 				}, time.Minute, 100*time.Millisecond)
