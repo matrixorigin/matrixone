@@ -248,7 +248,7 @@ CI 中硬编码 `if: false` 的 Upgrade jobs 只能记录为 SKIPPED，不能替
 6. **接受** rollback 后 fail closed + 再 revalidate；不承诺旧 binary 可独立开放新 lifecycle。
 7. **实现偏差**：原 prototype 使用 SQL 文本识别 `information_schema.columns`，review 发现可绕过；本版本将 section 6.3 固化为 AST contract。
 
-历史设计门禁由 `fengttt` 的 review `5126100008` 关闭，审批只覆盖上述获批 checkpoint。待审锁协议语义 checkpoint 为 `a97f8074d7514428d042de482650c7b4f3f855e1`（其 base 为 `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）；当前 conformance head 为 `05e9a81187520d635d3bcfe132c647aa165a93e3`（base `5dc33c1cce`，后续仅调整 lifecycle 集成测试同步与合法序列 oracle，不改变待审锁协议）；本次后台锁协调改变不能自动继承历史审批。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
+历史设计门禁由 `fengttt` 的 review `5126100008` 关闭，审批只覆盖上述获批 checkpoint。待审锁协议语义 checkpoint 为 `a97f8074d7514428d042de482650c7b4f3f855e1`（其 base 为 `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）；当前 conformance head 为 `d2c558db3029609b672aeb05ae7aa540ab0a7c7b`（base `b169827111`，后续仅调整 lifecycle/upgrade/生成结果 fixture，不改变待审锁协议）；本次后台锁协调改变不能自动继承历史审批。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
 
 ### 12.1 后台恢复与显式 owner 事务的锁协调修复
 
@@ -267,3 +267,5 @@ CI 中硬编码 `if: false` 的 Upgrade jobs 只能记录为 SKIPPED，不能替
 后续 CI run `34308560098` 暴露 clone 并发测试只接受 SNAPSHOT waiter 的过窄断言。`28a63bd5b4` 改为用目标数据库精确键识别首个 clone 的事务，只接受该事务在 SNAPSHOT 或目标库 catalog 锁上阻塞的 waiter，保留提交前不得返回及提交后唯一数据库/数据断言。该用例普通、race、frontend/compile/lockservice coverage 插桩各三次通过；完整 issues 包通过。本轮未修改生产逻辑；被取消的 UT/BVT 不记作通过。
 
 CI run `34448112054` 进一步覆盖两种合法锁序列：owner 已持有 SNAPSHOT 时 commit 可先完成；snapshot 已持有 SNAPSHOT 并等待 View 时，owner 的 commit validation 必须以 retry/lock-conflict 原子失败。`05e9a81187` 在两种结果下分别断言完整提交或零行，且 snapshot 必须在事务终止后成功；View readiness 则通过当前 `mo_tables.rel_id` 连接 refresh marker，并要求全局 revalidation cursor 已到 `ACTIVATED`，避免 orphan `CURRENT` 行或 target 已完成但 authority 尚未发布时过早放行。两项回归 race 各三次、coverage 模式及完整 issues 包通过。PESSIMISTIC `clone_can_rollback.sql` 在合并最新 main 后同实例连续两次 54/54 通过。
+
+CI run `34560821930` 在 main 引入 v4.0.7 后暴露 readiness UT 仍硬编码 v4.0.6；`d2c558db30` 改为从被测 Service 读取当前 final version，同时保留 SQL 必须精确查询该版本的断言。该 run 的 PESSIMISTIC BVT 还证明 CTAS expression heading 的实际输出已保留 source qualification，machine-generated result 与 mo-tester 的 actual output 对齐。bootstrap 定向三次及完整包、issue26226 race/coverage 定向与完整 issues 普通包通过。
