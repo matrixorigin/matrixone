@@ -43,6 +43,10 @@ Required invariants:
 6. A prepared or cached logical plan reads `max_error_count` at each execution
    boundary. Physical aggregate generations receive that statement snapshot;
    the capacity is not fixed in the logical plan.
+   The session variable value may change while a SET statement runs, but its
+   active diagnostic capacity is updated only at the next top-level
+   non-diagnostic boundary, so that statement's warnings remain visible to a
+   following `SHOW WARNINGS`.
 
 ## Alternatives and decision
 
