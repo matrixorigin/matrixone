@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -35,6 +36,10 @@ type stubCompileContext struct {
 	qryDatabase      string
 	vars             map[string]any
 	isFrontend       bool
+	runErr           error
+	dropErr          error
+	createErr        error
+	runSQLs          []string
 
 	// lastCdcTask records the args of the most recent
 	// CreateIndexCdcTask call. Used by HandleCreateIndex_Async{True,
@@ -68,7 +73,10 @@ func (s *stubCompileContext) OriginalTableDef() *plan.TableDef { return s.origin
 func (s *stubCompileContext) IndexInfo() *plan.CreateTable     { return nil }
 func (s *stubCompileContext) MainTableID() uint64              { return 0 }
 func (s *stubCompileContext) MainExtra() *api.SchemaExtra      { return nil }
-func (s *stubCompileContext) RunSql(_ string) error            { return nil }
+func (s *stubCompileContext) RunSql(sql string) error {
+	s.runSQLs = append(s.runSQLs, sql)
+	return s.runErr
+}
 func (s *stubCompileContext) BuildIndexTable(_ *plan.TableDef) error {
 	return nil
 }
@@ -88,10 +96,10 @@ func (s *stubCompileContext) CreateIndexCdcTask(_, _ string, _ uint64, _ string,
 	s.lastCdcTask.called = true
 	s.lastCdcTask.startFromNow = startFromNow
 	s.lastCdcTask.sql = sql
-	return nil
+	return s.createErr
 }
 func (s *stubCompileContext) DropIndexCdcTask(_ *plan.TableDef, _, _, _ string) error {
-	return nil
+	return s.dropErr
 }
 func (s *stubCompileContext) RunSqlWithResult(_ string) (executor.Result, error) {
 	return executor.Result{}, nil
@@ -106,6 +114,17 @@ func (s *stubCompileContext) RegisterIdxcronUpdate(tableID uint64, dbName, table
 	s.lastIdxcronUpdate.metadataLen = len(metadata)
 	return nil
 }
+
+type alterCopyPhaseContext struct {
+	*stubCompileContext
+	prepare bool
+	build   bool
+	publish bool
+}
+
+func (s *alterCopyPhaseContext) IsAlterCopyPrepare() bool     { return s.prepare }
+func (s *alterCopyPhaseContext) IsAlterCopyIndexBuild() bool  { return s.build }
+func (s *alterCopyPhaseContext) IsAlterCopyPublication() bool { return s.publish }
 
 func ivfpqIndexDefs() map[string]*plan.IndexDef {
 	return map[string]*plan.IndexDef{
@@ -432,4 +451,54 @@ func TestIvfpqHandleReindex_DelegatesToCreate(t *testing.T) {
 	// now reads catalog.IndexParamAsync).
 	err := Hooks{}.HandleReindex(newHandleCtx(true), ivfpqIndexDefs(), false, false)
 	require.NoError(t, err)
+}
+
+func TestIvfpqAlterCopyPhases(t *testing.T) {
+	base := func() *stubCompileContext {
+		return &stubCompileContext{
+			qryDatabase: "db1",
+			originalTableDef: &plan.TableDef{
+				Name: "t", Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+			},
+			vars: map[string]any{"ivfpq_threads_build": int64(2)},
+		}
+	}
+
+	ctx := &alterCopyPhaseContext{stubCompileContext: base(), prepare: true}
+	require.NoError(t, (Hooks{}).HandleCreateIndex(ctx, ivfpqIndexDefs()))
+	require.Empty(t, ctx.runSQLs)
+	require.False(t, ctx.lastCdcTask.called)
+
+	defs := ivfpqIndexDefs()
+	defs[catalog.Ivfpq_TblType_Metadata].IndexAlgoParams = `{"async":"true"}`
+	ctx = &alterCopyPhaseContext{stubCompileContext: base(), prepare: true, build: true}
+	require.NoError(t, (Hooks{}).HandleCreateIndex(ctx, defs))
+	require.Empty(t, ctx.runSQLs)
+
+	ctx = &alterCopyPhaseContext{stubCompileContext: base(), prepare: true, build: true}
+	require.NoError(t, (Hooks{}).HandleCreateIndex(ctx, ivfpqIndexDefs()))
+	require.NotEmpty(t, ctx.runSQLs)
+	require.False(t, ctx.lastCdcTask.called)
+}
+
+func TestIvfpqPublicationAndBuildErrors(t *testing.T) {
+	defs := ivfpqIndexDefs()
+	defs[catalog.Ivfpq_TblType_Metadata].IndexAlgoParams = `{"async":"true"}`
+	ctx := &alterCopyPhaseContext{stubCompileContext: &stubCompileContext{
+		qryDatabase: "db1", originalTableDef: &plan.TableDef{Name: "t", Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}},
+		vars: map[string]any{"ivfpq_threads_build": int64(2)}, dropErr: errors.New("drop task failed"),
+	}, publish: true}
+	require.ErrorIs(t, (Hooks{}).HandleCreateIndex(ctx, defs), ctx.dropErr)
+
+	ctx = &alterCopyPhaseContext{stubCompileContext: &stubCompileContext{
+		qryDatabase: "db1", originalTableDef: &plan.TableDef{Name: "t", Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}},
+		vars: map[string]any{"ivfpq_threads_build": int64(2)}, createErr: errors.New("create task failed"),
+	}, publish: true}
+	require.ErrorIs(t, (Hooks{}).HandleCreateIndex(ctx, ivfpqIndexDefs()), ctx.createErr)
+
+	ctx = &alterCopyPhaseContext{stubCompileContext: &stubCompileContext{
+		qryDatabase: "db1", originalTableDef: &plan.TableDef{Name: "t", Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}},
+		vars: map[string]any{"ivfpq_threads_build": int64(2)}, runErr: errors.New("delete failed"),
+	}}
+	require.ErrorIs(t, (Hooks{}).HandleCreateIndex(ctx, ivfpqIndexDefs()), ctx.runErr)
 }
