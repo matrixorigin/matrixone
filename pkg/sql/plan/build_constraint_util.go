@@ -1365,6 +1365,10 @@ func forceCastExpr2WithProcess(
 	if isTypedArrayPlanType(&targetType.Typ) {
 		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
 	}
+	expr, err = widenApproximateIntegerAssignment(ctx, expr, targetType.Typ)
+	if err != nil {
+		return nil, err
+	}
 	t1 := makeTypeByPlan2Expr(expr)
 	if t1.Eq(t2) && !needsSameTypeAssignmentCast(targetType.Typ) {
 		return expr, nil
@@ -1404,6 +1408,23 @@ func (builder *QueryBuilder) forceCastExpr2(
 		isIgnore,
 		builder.compCtx.GetProcess(),
 	)
+}
+
+// widenApproximateIntegerAssignment makes the source domain explicit before
+// an assignment cast narrows it to the destination integer. MySQL rounds an
+// approximate value to the nearest even integer, while the generic numeric
+// cast uses half-away-from-zero. The explicit BIGINT/UNSIGNED overload already
+// owns the ties-to-even and 64-bit boundary checks; a following assignment cast
+// retains the actual destination's narrower range checks.
+func widenApproximateIntegerAssignment(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if expr == nil || !types.T(targetType.Id).IsInteger() || !types.T(expr.Typ.Id).IsFloat() {
+		return expr, nil
+	}
+	wideType := types.T_int64.ToType()
+	if types.T(targetType.Id).IsUnsignedInt() {
+		wideType = types.T_uint64.ToType()
+	}
+	return appendExplicitCastBeforeExpr(ctx, expr, makePlan2Type(&wideType))
 }
 
 func forceCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
@@ -1750,6 +1771,12 @@ func forceCastExprWithNameAndAssignment(
 	if isTypedArrayPlanType(&targetType) {
 		return funcCastForTypedArrayType(ctx, expr, targetType)
 	}
+	if isAssignment {
+		expr, err = widenApproximateIntegerAssignment(ctx, expr, targetType)
+		if err != nil {
+			return nil, err
+		}
+	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
 	if t1.Eq(t2) && !(isAssignment && needsSameTypeAssignmentCast(targetType)) {
 		return expr, nil
@@ -2015,7 +2042,11 @@ func buildValueScan(
 		} else {
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
+			naturalBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
+			naturalBinder.builder = builder
 			for _, r := range slt.Rows {
+				preserveNumericSource := types.T(col.Typ.Id).IsInteger() &&
+					valuesExprIsFractionalNumericLiteral(r[i])
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {
@@ -2027,7 +2058,8 @@ func buildValueScan(
 						continue
 					}
 				}
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
+				if nv, ok := r[i].(*tree.NumVal); ok && !preserveNumericSource &&
+					!isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return nil, err
@@ -2047,7 +2079,11 @@ func buildValueScan(
 						return nil, err
 					}
 				} else {
-					defExpr, err = binder.BindExpr(r[i], 0, true)
+					valueBinder := binder
+					if preserveNumericSource {
+						valueBinder = naturalBinder
+					}
+					defExpr, err = valueBinder.BindExpr(r[i], 0, true)
 					if err != nil {
 						return nil, err
 					}

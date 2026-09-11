@@ -1536,6 +1536,9 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 	if e == nil {
 		return nil, nil
 	}
+	if rewritten, ok, err := rule.rebindPreparedNumericIntegerAssignment(e); ok || err != nil {
+		return rewritten, err
+	}
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_P:
 		return e, nil
@@ -1573,6 +1576,81 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 	default:
 		return e, nil
 	}
+}
+
+// rebindPreparedNumericIntegerAssignment restores the logical source type of
+// an EXECUTE USING value below a preserved DML assignment cast. SQL prepared
+// values travel in a text vector, but DECIMAL and FLOAT sources must retain
+// their different integer-rounding contracts. String-backed user variables
+// deliberately remain on the existing text-assignment path.
+func (rule *ResetParamRefRule) rebindPreparedNumericIntegerAssignment(
+	expr *plan.Expr,
+) (*plan.Expr, bool, error) {
+	if expr == nil || !types.T(expr.Typ.Id).IsInteger() {
+		return expr, false, nil
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+		return expr, false, nil
+	}
+	funcName := fn.Func.GetObjName()
+	switch funcName {
+	case "cast", "cast_assign", "cast_ignore", "cast_strict":
+	default:
+		return expr, false, nil
+	}
+	paramPos, ok := preparedParamPosition(fn.Args[0])
+	if !ok || paramPos < 0 || paramPos >= len(rule.paramValues) ||
+		paramPos >= len(rule.sqlExecuteNumericParams) || paramPos >= len(rule.sqlExecuteStringBackedParams) {
+		return expr, false, nil
+	}
+	param, isParamValue := rule.paramValues[paramPos].(ParamValue)
+	numericKind := isParamValue &&
+		(param.PrepareParamKind == vector.PrepareParamDecimal ||
+			param.PrepareParamKind == vector.PrepareParamFloat)
+	if rule.sqlExecuteStringBackedParams[paramPos] && !numericKind {
+		return expr, false, nil
+	}
+	source := rule.sqlExecuteNumericParams[paramPos]
+	if isParamValue && param.Value != nil && numericKind &&
+		(source == nil || types.T(source.Typ.Id).IsMySQLString()) {
+		// SQL EXECUTE intentionally does not publish a FLOAT source type to
+		// general expression rebinding. The stored parameter category is enough
+		// to restore it narrowly at this integer-assignment boundary.
+		sourceType := PreparedNumericPrefixTypeFromString(fmt.Sprintf("%v", param.Value))
+		if param.PrepareParamKind == vector.PrepareParamFloat {
+			sourceType = types.T_float64.ToType()
+		}
+		var err error
+		source, err = preparedRuntimeParamExpr(rule.ctx, param.Value, param.IsBin, sourceType)
+		if err != nil {
+			return nil, true, err
+		}
+	}
+	if source == nil && isParamValue && paramPos < len(rule.params) {
+		// COM_STMT already materializes packet values in their runtime type.
+		// Use that typed parameter only for this assignment boundary; publishing
+		// it as a SQL-execute numeric source would change unrelated expression
+		// specialization throughout the plan.
+		if param.IsBinaryProtocol && param.HasRuntimeType &&
+			(param.RuntimeType.IsDecimal() || param.RuntimeType.Oid.IsFloat()) {
+			source = rule.params[paramPos]
+		}
+	}
+	if source == nil {
+		return expr, false, nil
+	}
+	sourceOID := types.T(source.Typ.Id)
+	if !sourceOID.IsDecimal() && !sourceOID.IsFloat() {
+		return expr, false, nil
+	}
+	rewritten, err := forceAssignmentCastExprWithName(
+		rule.ctx, DeepCopyExpr(source), expr.Typ, funcName)
+	if err != nil {
+		return nil, true, err
+	}
+	rule.specialized = true
+	return rewritten, true, nil
 }
 
 func (rule *ResetParamRefRule) markNumericPrefixDependent(exprs ...*plan.Expr) {

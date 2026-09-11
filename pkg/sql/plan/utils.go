@@ -3735,6 +3735,44 @@ func isPreparedDMLStmt(stmtType plan.Query_StatementType) bool {
 	}
 }
 
+// PreparedDMLIntegerAssignmentParamPositions returns direct prepared markers
+// whose DML write roots assign into an integer target. The frontend caches this
+// bounded metadata per prepared-plan generation so ordinary prepared writes do
+// not need a plan walk on every execution.
+func PreparedDMLIntegerAssignmentParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	for expr := range preparedDMLWriteExpressions(preparePlan.GetQuery()) {
+		if expr == nil || !types.T(expr.Typ.Id).IsInteger() {
+			continue
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+			continue
+		}
+		switch fn.Func.GetObjName() {
+		case "cast", "cast_assign", "cast_ignore", "cast_strict":
+		default:
+			continue
+		}
+		position, ok := preparedParamPosition(fn.Args[0])
+		if ok {
+			positions[int32(position)] = struct{}{}
+		}
+	}
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
 func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 	writeExprs := make(map[*plan.Expr]struct{})
 	if query == nil || !isPreparedDMLStmt(query.StmtType) {

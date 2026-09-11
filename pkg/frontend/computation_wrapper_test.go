@@ -329,6 +329,8 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
 			preparePlan.GetDcl().GetPrepare().Plan),
 		fixedIntegerParamPositions: fixedIntegerParamPositions,
+		dmlIntegerAssignmentParamPositions: plan2.PreparedDMLIntegerAssignmentParamPositions(
+			preparePlan.GetDcl().GetPrepare().Plan),
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
 			preparePlan.GetDcl().GetPrepare().Plan),
 		hasPaginationParams: hasPaginationParams,
@@ -3635,6 +3637,9 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	decimalType := plan.Type{Id: int32(types.T_decimal128), Width: 12, Scale: 3}
 	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
 		"runtime_decimal", "2.500", "", false, decimalType, vector.PrepareParamDecimal))
+	require.NoError(t, ses.setUserDefinedVarWithTypeAndKind(
+		"runtime_float", "2.5", "", false,
+		plan.Type{Id: int32(types.T_float64)}, vector.PrepareParamFloat))
 	require.NoError(t, ses.SetUserDefinedVar("runtime_text", "2.500", ""))
 	require.NoError(t, ses.SetUserDefinedVar("runtime_bool", true, ""))
 	binaryTextType := plan.Type{
@@ -3647,6 +3652,9 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 		{
 			Typ:  decimalType,
 			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_decimal"}},
+		},
+		{
+			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_float"}},
 		},
 		{
 			Expr: &plan.Expr_V{V: &plan.VarRef{Name: "runtime_text"}},
@@ -3671,22 +3679,123 @@ func TestBuildExecuteUserParamsRetainsExecuteArgumentSourceType(t *testing.T) {
 	require.Equal(t, types.New(types.T_decimal128, 12, 3), decimalParam.SourceType)
 	require.Equal(t, vector.PrepareParamDecimal, decimalParam.PrepareParamKind)
 
-	textParam, ok := paramVals[1].(plan2.ParamValue)
+	floatParam, ok := paramVals[1].(plan2.ParamValue)
+	require.True(t, ok)
+	require.False(t, floatParam.HasSourceType,
+		"FLOAT metadata stays narrow until a domain-sensitive assignment consumes it")
+	require.Equal(t, vector.PrepareParamFloat, floatParam.PrepareParamKind)
+
+	textParam, ok := paramVals[2].(plan2.ParamValue)
 	require.True(t, ok)
 	require.False(t, textParam.HasSourceType,
 		"an unresolved execute argument must keep the existing text fallback")
 
-	binaryParam, ok := paramVals[2].(plan2.ParamValue)
+	binaryParam, ok := paramVals[3].(plan2.ParamValue)
 	require.True(t, ok)
 	require.True(t, binaryParam.HasSourceType)
 	require.Equal(t, types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), binaryParam.SourceType)
-	boolParam := paramVals[3].(plan2.ParamValue)
-	require.Equal(t, "true", params.GetStringAt(3), "do not rewrite the transport value")
+	boolParam := paramVals[4].(plan2.ParamValue)
+	require.Equal(t, "true", params.GetStringAt(4), "do not rewrite the transport value")
 	require.Equal(t, vector.PrepareParamBoolean, boolParam.PrepareParamKind)
 	require.True(t, boolParam.HasSourceType)
 	require.Equal(t, types.T_bool.ToType(), boolParam.SourceType)
 	require.False(t, boolParam.HasRuntimeType,
 		"SQL EXECUTE keeps a bare direct parameter's text result domain")
+}
+
+func TestSQLExecuteNumericSourceSpecializesDMLIntegerAssignment(t *testing.T) {
+	optimizer := plan2.NewMockOptimizer(false)
+	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(),
+		"prepare stmt1 from 'insert into constraint_test.emp (empno) values (?)'", 1)
+	require.NoError(t, err)
+	preparePlan, err := plan2.BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+	require.NoError(t, err)
+	original := preparePlan.GetDcl().GetPrepare().Plan
+	positions := plan2.PreparedDMLIntegerAssignmentParamPositions(original)
+	require.Equal(t, []int32{0}, positions)
+
+	assignmentSource := func(runtimePlan *plan.Plan) *plan.Expr {
+		t.Helper()
+		for _, node := range runtimePlan.GetQuery().Nodes {
+			if node.NodeType != plan.Node_VALUE_SCAN || node.RowsetData == nil ||
+				len(node.RowsetData.Cols) == 0 || len(node.RowsetData.Cols[0].Data) == 0 {
+				continue
+			}
+			assignment := node.RowsetData.Cols[0].Data[0].Expr.GetF()
+			require.NotNil(t, assignment)
+			require.NotEmpty(t, assignment.Args)
+			return assignment.Args[0]
+		}
+		require.FailNow(t, "prepared INSERT value scan not found")
+		return nil
+	}
+
+	tests := []struct {
+		name       string
+		param      plan2.ParamValue
+		wantSource types.T
+		wantNested types.T
+	}{
+		{
+			name: "decimal",
+			param: plan2.ParamValue{
+				Value: "2.5", SourceType: types.New(types.T_decimal128, 10, 1), HasSourceType: true,
+			},
+			wantSource: types.T_decimal128,
+		},
+		{
+			name: "SQL parameter float category",
+			param: plan2.ParamValue{
+				Value: "2.5", PrepareParamKind: vector.PrepareParamFloat,
+			},
+			wantSource: types.T_uint64,
+			wantNested: types.T_float64,
+		},
+		{
+			name: "binary protocol float",
+			param: plan2.ParamValue{
+				Value: "2.5", RuntimeType: types.T_float64.ToType(), HasRuntimeType: true,
+				IsBinaryProtocol: true,
+			},
+			wantSource: types.T_uint64,
+			wantNested: types.T_float64,
+		},
+		{
+			name: "text",
+			param: plan2.ParamValue{
+				Value: "2.5", SourceType: types.T_varchar.ToType(), HasSourceType: true,
+			},
+		},
+	}
+	require.True(t, preparedDMLIntegerAssignmentRuntimeTypesNeedSpecialization(
+		[]types.Type{types.T_float64.ToType()}, positions))
+	require.False(t, preparedDMLIntegerAssignmentRuntimeTypesNeedSpecialization(
+		[]types.Type{types.T_varchar.ToType()}, positions))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			values := []any{test.param}
+			force := preparedDMLIntegerAssignmentNeedsRuntimeSpecialization(values, positions)
+			runtimePlan, specialized, applied, err := specializePreparedExecutionPlan(
+				t.Context(), original, values, false, false, false, force, nil, true, false)
+			require.NoError(t, err)
+			if test.wantSource == 0 {
+				require.False(t, force)
+				require.False(t, specialized)
+				require.False(t, applied)
+				require.Same(t, original, runtimePlan)
+				return
+			}
+			require.True(t, force)
+			require.True(t, specialized)
+			require.True(t, applied)
+			source := assignmentSource(runtimePlan)
+			require.Equal(t, int32(test.wantSource), source.Typ.Id)
+			if test.wantNested != 0 {
+				require.NotNil(t, source.GetF())
+				require.Equal(t, int32(test.wantNested), source.GetF().Args[0].Typ.Id)
+			}
+		})
+	}
 }
 
 // A nil cached compile means the statement was rejected for prepare-time

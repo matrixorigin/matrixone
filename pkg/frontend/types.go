@@ -360,11 +360,15 @@ type PrepareStmt struct {
 	// with each prepared-plan generation so binary EXECUTE never walks the plan
 	// merely to classify a runtime parameter.
 	fixedIntegerParamPositions []int32
-	hasPaginationParams        bool
-	hasLagLeadParams           bool
-	paramKinds                 []vector.PrepareParamKind
-	paramBinaryStrings         []bool
-	paramMetadata              []bool
+	// dmlIntegerAssignmentParamPositions identifies direct markers assigned to
+	// integer write columns. Only DECIMAL/FLOAT executions of these positions
+	// need a copied plan; ordinary prepared writes keep the cached compile.
+	dmlIntegerAssignmentParamPositions []int32
+	hasPaginationParams                bool
+	hasLagLeadParams                   bool
+	paramKinds                         []vector.PrepareParamKind
+	paramBinaryStrings                 []bool
+	paramMetadata                      []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
 	// generation. Only these parameters need an exact SQL type in Process
 	// metadata; paramConcreteTypes is a reusable execution buffer.
@@ -870,6 +874,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
+	prepareStmt.dmlIntegerAssignmentParamPositions = nil
 	prepareStmt.remapDb = nil
 }
 
