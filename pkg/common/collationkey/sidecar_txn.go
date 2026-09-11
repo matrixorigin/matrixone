@@ -268,7 +268,12 @@ func (tx *SidecarTxn) Put(key []byte, locator RowLocator) error {
 	if staged, ok := tx.writes[name]; ok && staged != nil && !sameLocator(staged.Locator, locator) {
 		return ErrSidecarConflict
 	}
-	if staged, ok := tx.writes[name]; !ok || staged == nil {
+	// A staged delete deliberately clears the old mapping before a caller
+	// republishes the key for a new locator in the same transaction.  The
+	// delete and put are fenced together by touch/keyVersion at Commit, so
+	// re-checking the current store entry here would reject the atomic replace
+	// that this transaction is meant to provide.
+	if _, ok := tx.writes[name]; !ok {
 		tx.store.mu.RLock()
 		current, exists := tx.store.entries[name]
 		tx.store.mu.RUnlock()

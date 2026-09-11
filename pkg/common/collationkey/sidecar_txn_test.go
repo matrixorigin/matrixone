@@ -141,6 +141,55 @@ func TestSidecarTxnConflictsOnSameKeyAndAllowsFreshRetry(t *testing.T) {
 	}
 }
 
+func TestSidecarTxnAtomicallyReplacesLocator(t *testing.T) {
+	metadata := NewCollationAwareMetadataAtGeneration(6)
+	store, err := NewSidecarStore(15, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := sidecarTestKey(t)
+	oldLocator := RowLocator{RelationID: 15, PartitionID: 1, PrimaryKey: []byte("old")}
+	newLocator := RowLocator{RelationID: 15, PartitionID: 2, PrimaryKey: []byte("new")}
+
+	seed, err := store.Begin(sidecarTestAdmission(6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Put(key, oldLocator); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	tx, err := store.Begin(sidecarTestAdmission(6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Delete(key, &oldLocator); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Put(key, newLocator); err != nil {
+		t.Fatalf("delete-then-put replacement failed: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	check, err := store.Begin(sidecarTestAdmission(6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := check.Lookup(key)
+	if err != nil || !ok {
+		t.Fatalf("replacement lookup = %+v, %v, %v", got, ok, err)
+	}
+	if !sameLocator(got.Locator, newLocator) {
+		t.Fatalf("replacement locator = %+v, want %+v", got.Locator, newLocator)
+	}
+	check.Rollback()
+}
+
 func TestSidecarTxnRejectsStaleGenerationAndWrongRelation(t *testing.T) {
 	metadata := NewCollationAwareMetadataAtGeneration(5)
 	store, err := NewSidecarStore(12, metadata)
