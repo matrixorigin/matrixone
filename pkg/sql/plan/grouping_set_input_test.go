@@ -184,6 +184,43 @@ func TestGroupingSetInputSharingRequiresLegacyDrainWitness(t *testing.T) {
 	require.Zero(t, shape.sinkScans)
 }
 
+func TestGroupingSetInputSharingAllowsFallibleKeyWhenAllBranchesDrain(t *testing.T) {
+	const sql = `select cast(l_comment as bigint),
+		grouping(cast(l_comment as bigint)), count(*)
+		from lineitem
+		group by rollup(cast(l_comment as bigint))`
+
+	ctx := NewMockCompilerContext(true)
+	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+	rt.SetGlobalVariables("optimizer_hints", "")
+
+	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	shape := reachableGroupingSetShape(built.GetQuery())
+	require.Equal(t, 1, shape.tableScans)
+	require.Equal(t, 1, shape.expandProjects)
+	require.Equal(t, 2, shape.sinkScans)
+}
+
 func TestGroupingSetSentinelDetectionFollowsMaterializedSource(t *testing.T) {
 	builder := &QueryBuilder{qry: &planpb.Query{
 		Nodes: []*planpb.Node{
