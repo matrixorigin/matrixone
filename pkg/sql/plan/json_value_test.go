@@ -109,12 +109,12 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 	require.Len(t, legacy.GetF().Args, 2)
 
 	_, err = bind(defines.MORPCVersion57, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 60")
+	require.ErrorContains(t, err, "MORPC protocol version 64")
 
 	_, err = bind(defines.MORPCVersion59, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 60")
+	require.ErrorContains(t, err, "MORPC protocol version 64")
 
-	contract, err := bind(defines.MORPCVersion60, `select json_value('1', '$' returning unsigned)`)
+	contract, err := bind(defines.MORPCVersion64, `select json_value('1', '$' returning unsigned)`)
 	require.NoError(t, err)
 	require.Len(t, contract.GetF().Args, 7)
 }

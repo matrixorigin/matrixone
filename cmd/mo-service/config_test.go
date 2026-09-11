@@ -394,18 +394,21 @@ func TestArrowLoadConfigDefaults(t *testing.T) {
 		s3Enabled          bool
 		distributedEnabled bool
 	}{
-		{name: "omitted"},
+		{name: "omitted", enabled: true, s3Enabled: true, distributedEnabled: true},
 		{
-			name: "S3 opt in", input: "[cn.frontend.arrow-load]\nenabled = true\ns3-enabled = true\n",
-			enabled: true, s3Enabled: true,
+			name: "explicit disable", input: `[cn.frontend.arrow-load]
+enabled = false
+s3-enabled = false
+distributed-enabled = false
+`,
 		},
 		{
-			name: "all opt in", input: `[cn.frontend.arrow-load]
-	enabled = true
+			name: "distributed rollback", input: `[cn.frontend.arrow-load]
+enabled = true
 s3-enabled = true
-distributed-enabled = true
+distributed-enabled = false
 `,
-			enabled: true, s3Enabled: true, distributedEnabled: true,
+			enabled: true, s3Enabled: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

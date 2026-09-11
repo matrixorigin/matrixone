@@ -106,6 +106,41 @@ func serializedTupleReturnType(_ []types.Type) types.Type {
 	return typ
 }
 
+// Decimal epochs must reach the exact decimal overload. The generic numeric
+// cast costs tie decimal-to-float with decimal widening and pick the first
+// overload, losing both decimal digits and declared fractional precision.
+func fromUnixTimeTypeCheck(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) > 0 && inputs[0].Oid.IsDecimal() {
+		for i, candidate := range overloads {
+			if len(candidate.args) == len(inputs) && candidate.args[0] == types.T_decimal256 {
+				matched := fixedTypeMatch(overloads[i:i+1], inputs)
+				matched.idx = i
+				return matched
+			}
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
+func fromUnixTimeReturnType(parameters []types.Type) types.Type {
+	scale := int32(0)
+	if len(parameters) > 0 {
+		switch parameters[0].Oid {
+		case types.T_float32, types.T_float64:
+			scale = 6
+		case types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			scale = parameters[0].Scale
+			if scale > 6 {
+				scale = 6
+			}
+			if scale < 0 {
+				scale = 0
+			}
+		}
+	}
+	return types.New(types.T_datetime, scale, scale)
+}
+
 func concatReturnType(parameters []types.Type) types.Type {
 	return mergedDerivedStringReturnType(parameters, 0)
 }
@@ -8862,14 +8897,14 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: OCT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    octTypeCheck,
 
-		Overloads: []overload{
+		Overloads: withLegacyOctOverloads([]overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_uint8},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[uint8]
@@ -8879,7 +8914,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_uint16},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[uint16]
@@ -8889,7 +8924,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[uint32]
@@ -8899,7 +8934,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[uint64]
@@ -8909,7 +8944,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[int8]
@@ -8919,7 +8954,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[int16]
@@ -8929,7 +8964,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[int32]
@@ -8939,7 +8974,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Oct[int64]
@@ -8949,7 +8984,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 8,
 				args:       []types.T{types.T_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctFloat[float32]
@@ -8959,7 +8994,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 9,
 				args:       []types.T{types.T_float64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctFloat[float64]
@@ -8969,7 +9004,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 10,
 				args:       []types.T{types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctDate
@@ -8979,7 +9014,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 11,
 				args:       []types.T{types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctDatetime
@@ -8989,7 +9024,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 12,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctString
@@ -8999,7 +9034,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 13,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctString
@@ -9009,13 +9044,63 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 14,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_decimal128.ToType()
+					return octalResultType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return OctString
 				},
 			},
-		},
+			{
+				overloadId: 15,
+				args:       []types.T{types.T_time},
+				retType: func(parameters []types.Type) types.Type {
+					return octalResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctTime
+				},
+			},
+			{
+				overloadId: 16,
+				args:       []types.T{types.T_bit},
+				retType: func(parameters []types.Type) types.Type {
+					return octalResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return Oct[uint64]
+				},
+			},
+			{
+				overloadId: 17,
+				args:       []types.T{types.T_binary},
+				retType: func(parameters []types.Type) types.Type {
+					return octalResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctString
+				},
+			},
+			{
+				overloadId: 18,
+				args:       []types.T{types.T_varbinary},
+				retType: func(parameters []types.Type) types.Type {
+					return octalResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctString
+				},
+			},
+			{
+				overloadId: 19,
+				args:       []types.T{types.T_blob},
+				retType: func(parameters []types.Type) types.Type {
+					return octalResultType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return OctString
+				},
+			},
+		}),
 	},
 
 	// function `PI`
@@ -9761,7 +9846,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_datetime, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeAdd
@@ -9954,7 +10039,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_char, types.T_int64, types.T_date},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return parameters[2]
 				},
 				newOp: func() executeLogicOfOverload {
 					return TimestampAddDate
@@ -10015,7 +10100,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_datetime, types.T_int64, types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
+					return parameters[0]
 				},
 				newOp: func() executeLogicOfOverload {
 					return DatetimeSub
@@ -10163,15 +10248,13 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: FROM_UNIXTIME,
 		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    fromUnixTimeTypeCheck,
 
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
-				},
+				retType:    fromUnixTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return FromUnixTimeInt64
 				},
@@ -10179,9 +10262,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_uint64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
-				},
+				retType:    fromUnixTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return FromUnixTimeUint64
 				},
@@ -10189,9 +10270,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
-				},
+				retType:    fromUnixTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return FromUnixTimeFloat64
 				},
@@ -10199,9 +10278,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_decimal256},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_datetime.ToType()
-				},
+				retType:    fromUnixTimeReturnType,
 				newOp: func() executeLogicOfOverload {
 					return FromUnixTimeDecimal256
 				},
@@ -15619,6 +15696,10 @@ var supportedOthersBuiltIns = []FuncNew{
 		Overloads: []overload{{
 			overloadId: 0,
 			args:       []types.T{types.T_bool, types.T_varchar},
+			// This function has a per-row diagnostic side effect in INSERT
+			// IGNORE. Folding a constant result would evaluate it once and lose
+			// one warning for every additional input row.
+			volatile: true,
 			retType: func(parameters []types.Type) types.Type {
 				return types.T_bool.ToType()
 			},
@@ -15639,14 +15720,30 @@ var supportedOthersBuiltIns = []FuncNew{
 							"the CHECK constraint error message should not be null",
 						)
 					}
-					errMsg := functionUtil.QuickBytesToStr(value)
+					// The warning can outlive this invocation when it is forwarded to
+					// a session/remote diagnostic sink. Own the bytes instead of
+					// retaining a string view into the input vector.
+					errMsg := string(value)
 					res := vector.MustFunctionResult[bool](result)
+					ignore := statementIgnore(proc)
+					var warnings process.WarningAccumulator
 					for i := uint64(0); i < uint64(length); i++ {
 						flag, isNull := checkFlags.GetValue(i)
 						if isNull || !flag {
-							return moerr.NewConstraintViolation(proc.Ctx, errMsg)
+							if !ignore {
+								return moerr.NewConstraintViolation(proc.Ctx, errMsg)
+							}
+							// Keep the value false so the surrounding FILTER
+							// removes this row, while retaining one bounded
+							// warning record per ignored row.
+							warnings.Add(moerr.ER_CHECK_CONSTRAINT_VIOLATED, errMsg)
+							res.AppendMustValue(false)
+							continue
 						}
 						res.AppendMustValue(true)
+					}
+					if ignore {
+						warnings.Flush(proc)
 					}
 					return nil
 				}

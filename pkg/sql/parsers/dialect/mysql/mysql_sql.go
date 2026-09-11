@@ -32476,7 +32476,7 @@ yydefault:
 		{
 			name := tree.NewUnresolvedColName(yyDollar[1].str)
 			str := strings.ToLower(yyDollar[3].str)
-			arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+			arg1 := tree.NewTimeUnitExpr(str)
 			yyLOCAL = &tree.FuncExpr{
 				Func:     tree.FuncName2ResolvableFunctionReference(name),
 				FuncName: tree.NewCStr(yyDollar[1].str, 1),

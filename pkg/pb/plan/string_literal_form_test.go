@@ -355,7 +355,7 @@ func TestRequiresMORPCVersion36MixedJSONBooleanEquality(t *testing.T) {
 	}
 }
 
-func TestRequiresMORPCVersion60JSONValueContract(t *testing.T) {
+func TestRequiresMORPCVersion64JSONValueContract(t *testing.T) {
 	jsonValueContract := &Expr{Expr: &Expr_F{F: &Function{
 		Func: &ObjectRef{Obj: int64(462)<<32 | 2, ObjName: "json_value"},
 		Args: make([]*Expr, 7),
@@ -365,11 +365,11 @@ func TestRequiresMORPCVersion60JSONValueContract(t *testing.T) {
 		Args: make([]*Expr, 2),
 	}}}
 
-	required, err := RequiresMORPCVersion60JSONValueContract(jsonValueContract)
+	required, err := RequiresMORPCVersion64JSONValueContract(jsonValueContract)
 	require.NoError(t, err)
 	require.True(t, required)
 
-	required, err = RequiresMORPCVersion60JSONValueContract(legacy)
+	required, err = RequiresMORPCVersion64JSONValueContract(legacy)
 	require.NoError(t, err)
 	require.False(t, required)
 }

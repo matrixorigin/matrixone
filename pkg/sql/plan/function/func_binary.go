@@ -1668,6 +1668,13 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 		}
 		return dt, nil
 	} else {
+		// AddInterval validates microsecond results in the encoded datetime
+		// domain.  Do not reconstruct a rejected negative value below: integer
+		// division in ToDate can otherwise make -1..-999999 microseconds look
+		// like the minimum date and publish ZeroDatetime instead of NULL.
+		if iTyp == types.MicroSecond {
+			return 0, datetimeOverflowMaxError
+		}
 		// MySQL behavior:
 		// - If overflow beyond maximum (diff > 0), return NULL
 		// - If overflow beyond minimum (diff < 0):
@@ -1764,7 +1771,11 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp 
 		}
 		return dt.ToTimestamp(loc), nil
 	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+		// The vector callers translate this sentinel into a row-local NULL.
+		// AddInterval returning false means the computed calendar value is
+		// outside the supported temporal domain, not that the whole query is
+		// malformed.
+		return 0, datetimeOverflowMaxError
 	}
 }
 
@@ -2420,7 +2431,7 @@ func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		scale = 6
 	}
 	rs := vector.MustFunctionResult[types.Datetime](result)
-	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+	rs.TempSetType(types.New(types.T_datetime, scale, scale))
 
 	// Use custom implementation to handle maximum overflow (return NULL)
 	result.UseOptFunctionParamFrame(2)
@@ -2543,7 +2554,7 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.MicroSecond:
 		scale = 6
 	}
-	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+	rs.TempSetType(types.New(types.T_timestamp, scale, scale))
 
 	result.UseOptFunctionParamFrame(2)
 	p1 := vector.OptGetParamFromWrapper[types.Timestamp](rs, 0, ivecs[0])
@@ -2592,7 +2603,7 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	case types.MicroSecond:
 		scale = 6
 	}
-	rs.TempSetType(types.New(types.T_time, 0, scale))
+	rs.TempSetType(types.New(types.T_time, scale, scale))
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Time, int64, types.Time](ivecs, result, proc, length, func(v1 types.Time, v2 int64) (types.Time, error) {
 		return doTimeAdd(v1, v2, iTyp)
@@ -2640,7 +2651,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			if resultType == types.T_date {
 				// Result wrapper is DATE, but we need to return DATETIME
 				// Convert to DATETIME type
-				vec.SetTypeAndFixData(types.New(types.T_datetime, 0, scale), proc.GetMPool())
+				vec.SetTypeAndFixData(types.New(types.T_datetime, scale, scale), proc.GetMPool())
 				rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 				rsNull := vec.GetNulls()
 
@@ -2668,7 +2679,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			} else {
 				// Result wrapper is DATETIME (backward compatibility)
 				rsDatetime := vector.MustFunctionResult[types.Datetime](result)
-				rsDatetime.TempSetType(types.New(types.T_datetime, 0, scale))
+				rsDatetime.TempSetType(types.New(types.T_datetime, scale, scale))
 				rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 				rsNull := vec.GetNulls()
 
@@ -2782,7 +2793,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		scale := maxScale
 		if resultType == types.T_date {
 			// Result wrapper is DATE, but we need to return DATETIME
-			vec.SetTypeAndFixData(types.New(types.T_datetime, 0, scale), proc.GetMPool())
+			vec.SetTypeAndFixData(types.New(types.T_datetime, scale, scale), proc.GetMPool())
 			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 			rsNull := vec.GetNulls()
 
@@ -2815,7 +2826,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		} else {
 			// Result wrapper is DATETIME
 			rsDatetime := vector.MustFunctionResult[types.Datetime](result)
-			rsDatetime.TempSetType(types.New(types.T_datetime, 0, scale))
+			rsDatetime.TempSetType(types.New(types.T_datetime, scale, scale))
 			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 			rsNull := vec.GetNulls()
 
@@ -2932,7 +2943,7 @@ func TimestampAddDatetime(ivecs []*vector.Vector, result vector.FunctionResultWr
 		}
 	}
 	rs := vector.MustFunctionResult[types.Datetime](result)
-	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+	rs.TempSetType(types.New(types.T_datetime, scale, scale))
 
 	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[2])
 	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -2983,7 +2994,7 @@ func TimestampAddTimestamp(ivecs []*vector.Vector, result vector.FunctionResultW
 		scale = 6
 	}
 	rs := vector.MustFunctionResult[types.Timestamp](result)
-	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+	rs.TempSetType(types.New(types.T_timestamp, scale, scale))
 
 	timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[2])
 	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -5164,7 +5175,7 @@ func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		scale = 6
 	}
 	rs := vector.MustFunctionResult[types.Datetime](result)
-	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+	rs.TempSetType(types.New(types.T_datetime, scale, scale))
 
 	// Use custom implementation to handle maximum overflow (return NULL)
 	result.UseOptFunctionParamFrame(2)
@@ -5287,7 +5298,7 @@ func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		scale = 6
 	}
 	rs := vector.MustFunctionResult[types.Timestamp](result)
-	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+	rs.TempSetType(types.New(types.T_timestamp, scale, scale))
 
 	// Use custom implementation to handle maximum overflow (return NULL)
 	result.UseOptFunctionParamFrame(2)
@@ -5336,7 +5347,7 @@ func TimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	if iTyp == types.MicroSecond {
 		scale = 6
 	}
-	rs.TempSetType(types.New(types.T_time, 0, scale))
+	rs.TempSetType(types.New(types.T_time, scale, scale))
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Time, int64, types.Time](ivecs, result, proc, length, func(v1 types.Time, v2 int64) (types.Time, error) {
 		return doTimeSub(v1, v2, iTyp)
@@ -5806,6 +5817,42 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
+// makeSetDecimalToBits implements the signed DECIMAL val_int conversion used
+// by MAKE_SET: round half away from zero, then saturate to the int64 range.
+func makeSetDecimalToBits(value types.Decimal128, scale int32) uint64 {
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
+	}
+	if scale > 0 {
+		var power types.Decimal128
+		if scale <= 19 {
+			power = types.Decimal128{B0_63: types.Pow10[scale]}
+		} else {
+			power, _ = (types.Decimal128{B0_63: types.Pow10[19]}).Mul128(types.Decimal128{B0_63: types.Pow10[scale-19]})
+		}
+		quotient, _ := value.Div128Trunc(power)
+		product, _ := quotient.Mul128(power)
+		remainder, _ := value.Sub128(product)
+		halfPower, _ := power.Div128Trunc(types.Decimal128{B0_63: 2})
+		if remainder.Compare(halfPower) >= 0 {
+			quotient, _ = quotient.Add128(types.Decimal128{B0_63: 1})
+		}
+		value = quotient
+	}
+	limit := uint64(math.MaxInt64)
+	if negative {
+		limit++
+	}
+	if value.B64_127 != 0 || value.B0_63 > limit {
+		return limit
+	}
+	if negative {
+		return -value.B0_63
+	}
+	return value.B0_63
+}
+
 // MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
 func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -5905,6 +5952,26 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 				return 0, true
 			}
 			return uint64(int64(val)), false
+		}
+	case types.T_decimal64:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return makeSetDecimalToBits(types.Decimal128FromInt64(int64(val)), scale), false
+		}
+	case types.T_decimal128:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return makeSetDecimalToBits(val, scale), false
 		}
 	default:
 		// Fallback to int64
@@ -6600,7 +6667,7 @@ func FromUnixTimeInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > maxUnixTimestampInt) {
+		if null || v < 0 || v > maxUnixTimestampInt {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
@@ -6634,11 +6701,24 @@ func FromUnixTimeUint64(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func splitDecimalToIntAndFrac(f float64) (int64, int64) {
-	intPart := int64(f)
-	nano := (f - float64(intPart)) * math.Pow10(9)
-	fracPart := int64(nano)
-	return intPart, fracPart
+func floatUnixTimeParts(v float64) (sec int64, nsec int64, ok bool) {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return 0, 0, false
+	}
+	whole, fraction := math.Modf(v)
+	if whole > float64(maxUnixTimestampInt) {
+		return 0, 0, false
+	}
+	sec = int64(whole)
+	microseconds := int64(math.Round(fraction * 1_000_000))
+	if microseconds == 1_000_000 {
+		sec++
+		microseconds = 0
+	}
+	if sec > maxUnixTimestampInt {
+		return 0, 0, false
+	}
+	return sec, microseconds * 1_000, true
 }
 
 func decimal256ToInt64ForUnix(v types.Decimal256) (int64, error) {
@@ -6660,6 +6740,29 @@ func decimal256ToInt64ForUnix(v types.Decimal256) (int64, error) {
 		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
 	}
 	return int64(v.B0_63), nil
+}
+
+func decimal256Pow10ForUnix(n int32) (types.Decimal256, error) {
+	if n < 0 {
+		return types.Decimal256{}, moerr.NewInvalidInputNoCtxf("negative decimal power: %d", n)
+	}
+	result := types.Decimal256{B0_63: 1}
+	for n >= 19 {
+		var err error
+		result, err = result.Mul256(types.Decimal256{B0_63: types.Pow10[19]})
+		if err != nil {
+			return types.Decimal256{}, err
+		}
+		n -= 19
+	}
+	if n > 0 {
+		var err error
+		result, err = result.Mul256(types.Decimal256{B0_63: types.Pow10[n]})
+		if err != nil {
+			return types.Decimal256{}, err
+		}
+	}
+	return result, nil
 }
 
 func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec int64, ok bool, err error) {
@@ -6695,39 +6798,69 @@ func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec i
 		return sec, 0, true, nil
 	}
 
-	if scale > 9 {
-		frac, err = frac.ScaleTruncate(-(scale - 9))
-	} else if scale < 9 {
-		frac, err = frac.Scale(9 - scale)
+	if scale > 6 {
+		// Divide once at microsecond precision. Decimal256.Scale rounds each
+		// 19-digit chunk, which can double-round when scale-6 exceeds 19.
+		divisor, powerErr := decimal256Pow10ForUnix(scale - 6)
+		if powerErr != nil {
+			return 0, 0, false, powerErr
+		}
+		quotient, divErr := frac.Div256Trunc(divisor)
+		if divErr != nil {
+			return 0, 0, false, divErr
+		}
+		remainder, modErr := frac.Mod256(divisor)
+		if modErr != nil {
+			return 0, 0, false, modErr
+		}
+		doubled, mulErr := remainder.Mul256(types.Decimal256{B0_63: 2})
+		if mulErr != nil {
+			return 0, 0, false, mulErr
+		}
+		if doubled.Compare(divisor) >= 0 {
+			quotient, err = quotient.Add256(types.Decimal256{B0_63: 1})
+			if err != nil {
+				return 0, 0, false, err
+			}
+		}
+		frac = quotient
+	} else if scale < 6 {
+		frac, err = frac.Scale(6 - scale)
 	}
 	if err != nil {
 		return 0, 0, false, err
 	}
-	nsec, err = decimal256ToInt64ForUnix(frac)
+	microseconds, err := decimal256ToInt64ForUnix(frac)
 	if err != nil {
 		return 0, 0, false, err
 	}
-	if sec == maxUnixTimestampInt && nsec > 0 {
+	if microseconds == 1_000_000 {
+		sec++
+		microseconds = 0
+	}
+	if sec > maxUnixTimestampInt {
 		return 0, 0, false, nil
 	}
-	return sec, nsec, true, nil
+	return sec, microseconds * 1_000, true, nil
 }
 
 func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	vs := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-	rs.TempSetType(types.New(types.T_datetime, 0, 6))
 	var d types.Datetime
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > maxUnixTimestampInt) {
+		if null {
+			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+		} else if sec, nsec, ok := floatUnixTimeParts(v); !ok {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
 		} else {
-			x, y := splitDecimalToIntAndFrac(v)
-			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y), false); err != nil {
+			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, sec, nsec), false); err != nil {
 				return err
 			}
 		}
@@ -6739,16 +6872,20 @@ func FromUnixTimeDecimal256(ivecs []*vector.Vector, result vector.FunctionResult
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	vs := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0])
 	scale := ivecs[0].GetType().Scale
-	rs.TempSetType(types.New(types.T_datetime, 0, 6))
 	var d types.Datetime
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
+		if null {
+			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+			continue
+		}
 		sec, nsec, ok, convErr := decimal256UnixTimeParts(v, scale)
 		if convErr != nil {
 			return convErr
 		}
-
-		if null || !ok {
+		if !ok {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
@@ -6775,7 +6912,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > maxUnixTimestampInt) || null1 {
+		if null || v < 0 || v > maxUnixTimestampInt || null1 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -6839,14 +6976,14 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > maxUnixTimestampInt) || null1 {
+		sec, nsec, ok := floatUnixTimeParts(v)
+		if null || !ok || null1 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
 			buf.Reset()
-			x, y := splitDecimalToIntAndFrac(v)
-			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y)
+			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, sec, nsec)
 			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
@@ -6872,12 +7009,18 @@ func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.Function
 	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
+		if null || null1 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		sec, nsec, ok, convErr := decimal256UnixTimeParts(v, scale)
 		if convErr != nil {
 			return convErr
 		}
 
-		if null || !ok || null1 {
+		if !ok {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}

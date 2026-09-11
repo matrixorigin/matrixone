@@ -171,10 +171,10 @@ func RequiresMORPCVersion36MixedJSONBooleanEquality(owner any) (bool, error) {
 	return features.MixedJSONBooleanEquality, err
 }
 
-// RequiresMORPCVersion60JSONValueContract reports whether an owner contains
+// RequiresMORPCVersion64JSONValueContract reports whether an owner contains
 // the planner-only seven-argument JSON_VALUE overload. The overload carries
 // target and response semantics that older receivers cannot dispatch.
-func RequiresMORPCVersion60JSONValueContract(owner any) (bool, error) {
+func RequiresMORPCVersion64JSONValueContract(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONValueContract, err
 }
@@ -203,7 +203,7 @@ const (
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
-// MORPC v59 and JSONValueContract requires MORPC v60. A struct makes
+// MORPC v59 and JSONValueContract requires MORPC v64. A struct makes
 // compatibility call sites name every capability
 // instead of relying on positional booleans.
 type RemoteExpressionFeatures struct {

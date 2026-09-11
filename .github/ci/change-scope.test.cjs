@@ -14,7 +14,10 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
+const { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const { tmpdir } = require('node:os');
+const { join } = require('node:path');
 const { runInNewContext } = require('node:vm');
 const { classify, resolveScope, verifyResults } = require('./change-scope.cjs');
 
@@ -96,6 +99,68 @@ function results() {
   return needs;
 }
 
+function entrypointJobs() {
+  const workflow = readFileSync(`${__dirname}/../workflows/entrypoint.yaml`, 'utf8');
+  return Object.fromEntries([...workflow.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:\n|$(?![\s\S]))/gm)]
+    .map(match => [match[1], match[2]]));
+}
+
+function checkoutSpec(block) {
+  const lines = block.split('\n');
+  const checkoutIndex = lines.findIndex(line => /^      - uses: actions\/checkout@/.test(line));
+  assert.notEqual(checkoutIndex, -1, 'job must contain the trusted checkout');
+  assert.equal(lines[checkoutIndex + 1].trim(), 'with:');
+  const spec = {};
+  for (const line of lines.slice(checkoutIndex + 2)) {
+    if (/^      (?:- |#)/.test(line) || /^  [\w-]+:/.test(line)) break;
+    const match = line.match(/^\s{10}([\w-]+):\s*(.+)$/);
+    if (match) spec[match[1]] = match[2];
+  }
+  return spec;
+}
+
+function selectFixtureCheckout(block, context, refs) {
+  const spec = checkoutSpec(block);
+  const expressions = {
+    'github.repository': context.repository,
+    'github.workflow_sha': context.workflowSha,
+    'github.event.pull_request.base.sha': context.baseSha,
+    'github.event.pull_request.head.sha': context.headSha,
+  };
+  const resolve = value => {
+    const match = value.match(/^\$\{\{\s*(.+?)\s*\}\}$/);
+    return match ? expressions[match[1]] : value;
+  };
+  const repository = resolve(spec.repository);
+  const ref = resolve(spec.ref);
+  assert.equal(repository, context.repository, 'checkout must stay in the target repository');
+  const refName = Object.entries({
+    base: context.baseSha,
+    workflow: context.workflowSha,
+    head: context.headSha,
+  }).find(([, value]) => value === ref)?.[0];
+  assert.ok(refName, `unexpected checkout ref: ${ref}`);
+  return { repository, ref, refName, path: refs[refName] };
+}
+
+function provenanceScript(block) {
+  const lines = block.split('\n');
+  const nameIndex = lines.findIndex(line => line.includes('name: Record CI provenance'));
+  const runIndex = lines.findIndex((line, index) => index > nameIndex && line.trim() === 'run: |');
+  assert.ok(nameIndex >= 0 && runIndex > nameIndex, 'job must have a provenance run step');
+  const script = [];
+  for (const line of lines.slice(runIndex + 1)) {
+    if (/^      (?:- |#)/.test(line) || /^  [\w-]+:/.test(line)) break;
+    if (line.trim() === '') {
+      script.push('');
+    } else {
+      assert.match(line, /^          /, 'provenance script indentation must be valid');
+      script.push(line.slice(10));
+    }
+  }
+  return script.join('\n');
+}
+
 test('gates accept intentional omissions but reject failed, cancelled, skipped or missing required work', () => {
   const jobs = {
     docs: ['docs-check'], ut: ['matrixone-ci'],
@@ -132,9 +197,7 @@ test('a successful eligibility job cannot hide skipped UT coverage', () => {
 });
 
 test('entrypoint routes each scope through one required check', () => {
-  const workflow = readFileSync(`${__dirname}/../workflows/entrypoint.yaml`, 'utf8');
-  const blocks = Object.fromEntries([...workflow.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:\n|$(?![\s\S]))/gm)]
-    .map(match => [match[1], match[2]]));
+  const blocks = entrypointJobs();
   const routed = ['docs-check', 'bvt-group-plan', 'matrixone-shared-build', 'matrixone-ci',
     'matrixone-ut-coverage', 'matrixone-upgrade-ci', 'matrixone-compose-ci',
     'matrixone-standalone-ci', 'matrixone-coverage-merge'];
@@ -169,7 +232,101 @@ test('entrypoint routes each scope through one required check', () => {
     assert.ok(gates.match(/^    needs: (.*)$/m)[1].includes(job));
   }
   for (const job of ['change-scope', 'ci-required']) {
-    assert.match(blocks[job], /ref: \$\{\{ github.event.pull_request.base.sha \}\}/);
+    assert.match(blocks[job], /repository: \$\{\{ github.repository \}\}/);
+    assert.match(blocks[job], /ref: \$\{\{ github.workflow_sha \}\}/);
+    assert.doesNotMatch(blocks[job], /ref: \$\{\{ github.event.pull_request.base.sha \}\}/);
     assert.match(blocks[job], /persist-credentials: false/);
+    assert.match(blocks[job], /WORKFLOW_SHA: \$\{\{ github.workflow_sha \}\}/);
+    assert.match(blocks[job], /PR_BASE_SHA: \$\{\{ github.event.pull_request.base.sha \}\}/);
+    assert.match(blocks[job], /PR_HEAD_SHA: \$\{\{ github.event.pull_request.head.sha \}\}/);
+    assert.doesNotMatch(blocks[job], /ref:\s*main/);
+    const provenance = blocks[job].indexOf('name: Record CI provenance');
+    const checkout = blocks[job].indexOf('uses: actions/checkout@');
+    assert.ok(provenance >= 0 && provenance < checkout, `${job} records provenance before checkout`);
+    const provenanceBlock = blocks[job].slice(provenance, checkout);
+    assert.match(provenanceBlock, /GITHUB_STEP_SUMMARY/);
+    assert.match(provenanceBlock, /echo "- Workflow SHA: \$\{WORKFLOW_SHA\}"/);
+    assert.match(provenanceBlock, /echo "- PR base SHA: \$\{PR_BASE_SHA\}"/);
+    assert.match(provenanceBlock, /echo "- PR head SHA: \$\{PR_HEAD_SHA\}"/);
   }
+});
+
+test('provenance remains available when helper loading or checkout fails', () => {
+  const root = mkdtempSync(join(tmpdir(), 'matrixone-ci-provenance-summary-'));
+  try {
+    const values = {
+      WORKFLOW_SHA: 'workflow-sha',
+      PR_BASE_SHA: 'base-sha',
+      PR_HEAD_SHA: 'head-sha',
+    };
+    for (const job of ['change-scope', 'ci-required']) {
+      const summaryPath = join(root, `${job}.md`);
+      const result = spawnSync('/bin/bash', [
+        '-eu',
+        '-c',
+        `${provenanceScript(entrypointJobs()[job])}\n# Simulated checkout failure\nexit 42`,
+      ], {
+        env: { ...process.env, ...values, GITHUB_STEP_SUMMARY: summaryPath },
+        encoding: 'utf8',
+      });
+      assert.equal(result.status, 42, result.stderr);
+      assert.match(readFileSync(summaryPath, 'utf8'), /Workflow SHA: workflow-sha/);
+      assert.match(readFileSync(summaryPath, 'utf8'), /PR head SHA: head-sha/);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function loadFixtureHelper(path) {
+  delete require.cache[require.resolve(path)];
+  return require(path);
+}
+
+test('workflow provenance selects both helpers from the actual checkout config', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'matrixone-ci-provenance-'));
+  const refs = Object.fromEntries(['base', 'workflow', 'head'].map(ref => {
+    const dir = join(root, ref);
+    mkdirSync(join(dir, '.github', 'ci'), { recursive: true });
+    return [ref, dir];
+  }));
+  try {
+    cpSync(join(__dirname, 'change-scope.cjs'), join(refs.workflow, '.github', 'ci', 'change-scope.cjs'));
+    writeFileSync(
+      join(refs.head, '.github', 'ci', 'change-scope.cjs'),
+      "module.exports = { resolveScope: async () => 'docs', verifyResults: () => { throw new Error('untrusted helper selected'); } };\n",
+    );
+
+    const context = {
+      repository: 'matrixorigin/matrixone',
+      workflowSha: 'workflow-sha',
+      baseSha: 'base-sha',
+      headSha: 'head-sha',
+    };
+    const blocks = entrypointJobs();
+    const changeScopeCheckout = selectFixtureCheckout(blocks['change-scope'], context, refs);
+    const ciRequiredCheckout = selectFixtureCheckout(blocks['ci-required'], context, refs);
+    assert.equal(changeScopeCheckout.refName, 'workflow');
+    assert.deepEqual(ciRequiredCheckout, changeScopeCheckout);
+
+    const basePath = join(refs.base, '.github', 'ci', 'change-scope.cjs');
+    const workflowPath = changeScopeCheckout.path + '/.github/ci/change-scope.cjs';
+    const headPath = join(refs.head, '.github', 'ci', 'change-scope.cjs');
+    assert.throws(() => require(basePath), /Cannot find module/);
+
+    const workflowHelper = loadFixtureHelper(workflowPath);
+    const headHelper = loadFixtureHelper(headPath);
+    assert.equal(await workflowHelper.resolveScope(client({ files: [modified('pkg/a.go')] })), 'full');
+    assert.match(workflowHelper.verifyResults('full', results()), /all required jobs passed/);
+    assert.equal(await headHelper.resolveScope(client({ files: [modified('pkg/a.go')] })), 'docs');
+    assert.throws(() => headHelper.verifyResults('full', results()), /untrusted helper selected/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('entrypoint runs the complete race-UT suite on one runner', () => {
+  const caller = entrypointJobs()['matrixone-ci'];
+  assert.match(caller, /^    uses: matrixorigin\/CI\/\.github\/workflows\/ci\.yaml@main$/m);
+  assert.match(caller, /^    with:\n      ut_parallel: 6\n      ut_sharded: false$/m);
 });
