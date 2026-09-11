@@ -44,8 +44,8 @@ SELECT conv(0b1111, 2, 10) AS conv_bit_value;
 conv_bit_value
 15
 SELECT BIN(X'') AS bin_empty_hex, CONV(X'', 2, 10) AS conv_empty_hex,
-       BIN(X'FFFFFFFFFFFFFFFFFF') AS bin_wide_hex,
-       CONV(X'FFFFFFFFFFFFFFFFFF', 16, 10) AS conv_wide_hex;
+BIN(X'FFFFFFFFFFFFFFFFFF') AS bin_wide_hex,
+CONV(X'FFFFFFFFFFFFFFFFFF', 16, 10) AS conv_wide_hex;
 bin_empty_hex    conv_empty_hex    bin_wide_hex    conv_wide_hex
 NULL    NULL    0    0
 SELECT bin(DATE '2024-05-06') AS bin_date, bin(CAST('2024-05-06 12:34:56' AS DATETIME)) AS bin_datetime, bin(CAST('12:34:56' AS TIME)) AS bin_time;
@@ -58,9 +58,9 @@ SELECT conv(CAST(1e20 AS DOUBLE), 10, 16) AS conv_float_large, conv(CAST(1.23456
 conv_float_large    conv_float_scientific
 1    1
 SELECT conv(CAST(1000000 AS DOUBLE), 10, 16) AS conv_float_fixed_boundary,
-       bin(CAST(1000000 AS DOUBLE)) AS bin_float_fixed_boundary,
-       conv(CAST(1e-5 AS DOUBLE), 10, 16) AS conv_float_small_fixed,
-       bin(CAST(1e-5 AS DOUBLE)) AS bin_float_small_fixed;
+bin(CAST(1000000 AS DOUBLE)) AS bin_float_fixed_boundary,
+conv(CAST(1e-5 AS DOUBLE), 10, 16) AS conv_float_small_fixed,
+bin(CAST(1e-5 AS DOUBLE)) AS bin_float_small_fixed;
 conv_float_fixed_boundary    bin_float_fixed_boundary    conv_float_small_fixed    bin_float_small_fixed
 F4240    11110100001001000000    0    0
 PREPARE bin_runtime FROM 'SELECT BIN(?)';
@@ -98,8 +98,8 @@ BIN(d)    BIN(b)    BIN(dt)    BIN(dtt)    BIN(tm)    CONV(d, 10, 16)    CONV(b,
 1111    1    11111101000    11111101000    1100    F    1    7E8    7E8    C
 NULL    NULL    NULL    NULL    NULL    NULL    NULL    NULL    NULL    NULL
 SELECT CONV(DATE '2024-05-06', 16, 10) AS conv_date_hex_to_dec,
-       CONV(CAST('2024-05-06 12:34:56' AS DATETIME), 16, 10) AS conv_datetime_hex_to_dec,
-       CONV(CAST('12:34:56' AS TIME), 16, 10) AS conv_time_hex_to_dec;
+CONV(CAST('2024-05-06 12:34:56' AS DATETIME), 16, 10) AS conv_datetime_hex_to_dec,
+CONV(CAST('12:34:56' AS TIME), 16, 10) AS conv_time_hex_to_dec;
 conv_date_hex_to_dec    conv_datetime_hex_to_dec    conv_time_hex_to_dec
 8228    8228    18
 DROP TABLE typed_bin_conv;
