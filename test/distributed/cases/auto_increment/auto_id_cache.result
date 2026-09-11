@@ -192,6 +192,13 @@ ai_drop  ¦  CREATE TABLE `ai_drop` (
 select v from ai_drop;
 ➤ v[4,32,0]  𝄀
 7
+create table ai_bad_partition(id bigint auto_increment primary key) partition by range(id) (partition p0 values less than maxvalue auto_id_cache=0);
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. AUTO_ID_CACHE is a table option, not a partition or subpartition option at line 1 column 146 near "0);";
+create table ai_bad_partition(id bigint auto_increment primary key) partition by range(id) subpartition by hash(id) (partition p0 values less than maxvalue (subpartition s0 auto_id_cache=1));
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. AUTO_ID_CACHE is a table option, not a partition or subpartition option at line 1 column 188 near "1));";
+select count(*) from mo_catalog.mo_tables where reldatabase=database() and relname='ai_bad_partition';
+➤ count(*)[-5,64,0]  𝄀
+0
 create table ai_bad(id bigint auto_increment) auto_id_cache=1000001;
 invalid input: AUTO_ID_CACHE must be between 0 and 1000000
 create table ai_bad(id bigint auto_increment) auto_id_cache=-1;

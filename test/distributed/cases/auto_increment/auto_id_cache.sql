@@ -93,6 +93,11 @@ alter table ai_drop drop column id;
 show create table ai_drop;
 select v from ai_drop;
 
+-- 表级策略不能在分区/子分区中被静默忽略，包括默认值。
+create table ai_bad_partition(id bigint auto_increment primary key) partition by range(id) (partition p0 values less than maxvalue auto_id_cache=0);
+create table ai_bad_partition(id bigint auto_increment primary key) partition by range(id) subpartition by hash(id) (partition p0 values less than maxvalue (subpartition s0 auto_id_cache=1));
+select count(*) from mo_catalog.mo_tables where reldatabase=database() and relname='ai_bad_partition';
+
 -- 非法选项必须拒绝，不能静默截断或忽略。
 create table ai_bad(id bigint auto_increment) auto_id_cache=1000001;
 create table ai_bad(id bigint auto_increment) auto_id_cache=-1;

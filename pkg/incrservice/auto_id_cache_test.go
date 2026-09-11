@@ -273,7 +273,8 @@ func TestAutoIDCacheSQLMetadata(t *testing.T) {
 			})
 			store := &sqlStore{exec: exec}
 			// Reset reads old allocator rows but the replacement's live metadata.
-			ctx := context.WithValue(t.Context(), autoColumnPolicyTableKey{}, uint64(42))
+			// A hint for the old physical table must not override replacement metadata.
+			ctx := context.WithValue(WithAutoIDCachePolicy(t.Context(), 7, MaxAutoIDCache+1), autoColumnPolicyTableKey{}, uint64(42))
 			cols, err := store.GetColumns(ctx, 7, nil)
 			if size > MaxAutoIDCache {
 				require.ErrorContains(t, err, "AUTO_ID_CACHE")

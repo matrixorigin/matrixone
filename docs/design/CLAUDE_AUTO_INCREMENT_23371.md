@@ -54,6 +54,7 @@
 - 1：关闭建表、只读 CurrentValue 和 batch 结束时的投机预取，按当前请求真实自动行需求分配；不是全局单 owner 发号，也不承诺全局单调/无间隙。
 - 2～1000000：覆盖基础原始数值跨度 C；大批次可以按需扩大。不是内存容量，也不是保证生成行数。session stride 只决定区间内选值。
 - 负数、非整数、超上限、重复选项拒绝，不静默截断。
+- AUTO_ID_CACHE 仅属于表；在 PARTITION/SUBPARTITION 选项列表中（含0）于解析边界拒绝，不能接受后静默忽略。
 - 非零选项要求普通/临时表有用户可见自增列；无此列时 CACHE=0 可归一为默认。ALTER COPY 在所有条款处理完后，若最终目标已无可见自增列（MODIFY 移除属性或 DROP 移除列），将继承策略归一为 0；仍有可见自增列则保留原策略。直接 CREATE 的非法组合仍拒绝，SHOW 不隐瞒持久属性。
 - 正数 SHOW CREATE 稳定呈现；0 省略。与 AUTO_INCREMENT=N 同时生效，N 是原始下界，实际候选继续由现有会话序列算法选择。
 - 沿用当前 main 的 O>S 归一为 1、零/NULL/sql_mode、显式正数推进、负数不推进的行为，不重新定义它们。
@@ -66,7 +67,7 @@
 1. 全局号段由持久 allocator 高水位事务独占，跨 CN 不重叠。修改 C 不改变取号线性化点，不回收业务回滚的保留区间。
 2. 会话 S/O 只读选择候选，不改 `AutoColumn.Step` 或共享 cache 的序列定义；legacy 非 1 step 继续使用上游算法。
 3. CACHE 的唯一持久所有者为表 metadata，CREATE/冷 CN/重启/LIKE/COPY/CLONE/dump/restore 的读取一致。
-4. 默认 0 的 SQL 行为、预取与发号热路径请求次数保持 main 行为；冷加载在同一 SQL 快照额外读取已有表属性，不增加 executor 往返，但不宣称该 catalog 读取成本为零。新策略不引入 session cache、worker、广播、retry 层。
+4. 默认 0 的 SQL 行为、预取与发号热路径请求次数保持 main 行为；PRE_INSERT 的已解析 TableDef 与 internal_auto_increment 已打开的 relation 提供 typed policy，绑定物理 tableID 后传给冷加载；匹配时只读 allocator 行。缺少可靠 metadata、tableID 刷新不匹配或 Reset 替换ID不匹配时，仍在同一 SQL 快照查询持久表属性，不因开关关闭而跳过policy发现。新策略不引入 session cache、worker、广播、retry 层。
 5. CHECK、PK/UK 锁、base/index 共用最终行、上游结果发布边界保持；CACHE 不能制造未探测/未锁定的新候选。
 6. TS 随实际保留区间保存，查重下界不晚于本批任何候选来源；末端值、skipped、跨段与错误清理同样成立。
 7. 加法、乘法、int 转换、末端值均受既有边界检查；新预算计算不能在已有 checked helper 之前溢出。
@@ -83,6 +84,12 @@
 - 所有 parser/proto/mock 由仓库工具生成，字段编号和协议版本以实施时最新基线分配。
 
 ## 6. 分配策略接入
+
+### 冷目录成本与观察一致性
+
+2026-09-11 review修复：使用同一真实embedded集群的SQL executor，对64/1024张默认策略空表，逐表调用GetColumns（绕过allocator缓存，三轮），对比无hint的原catalog子查询与已有typed policy的路径。1024表总读取中位数2.977s → 0.516s，约82.7%下降；64表36.675ms → 9.613ms。表创建/清理不计入计时；没有执行号段分配。该测量只证明cold policy读取路径的成本差异，不是端到端吞吐、严格复杂度或生产catalog容量承诺。未知tableID-only caller的fallback仍有目录读取成本。
+
+空 demand-only cache 每次观察仍读持久offset：另一CN发号/显式值推进后，现有公开契约和跨CN回归要求下次观察推进。仅依据“曾分配过”或本地最后offset做缓存不能正确失效；本轮不新增跨CN失效协议，也不将过期数值当作当前值返回。优化目录策略读取与保留实时水位读取是两个独立决定。
 
 ### 6.1 默认与非默认 session 两条路径
 
@@ -112,7 +119,7 @@
 
 1. 不扩展 InsertValues；有剩余段继续使用上游 oldestAllocateAtLocked，含 terminal/skipped 来源。CACHE=1 有可用段但 TS 未知时 fail closed。
 2. 持列锁观察无可用段时，无投机分配在途；调用事务 SnapshotTS 可作为后续新保留的保守下界。新共享保留在该快照之后提交，私有保留采用 owning snapshot。缺少有效 snapshot 时拒绝，不使用零或 wall clock。
-3. CurrentValue 有本地游标/terminal 则直接读；无段时由实际 table cache owner 执行 SQL 读取 offset+step，checked overflow，不用创建 cache 时的陈旧 offset，不触发分配。未提交 CREATE 使用该 cache 的 txnOp；commit 后 owner 清空为 nil，使用已提交快照。lazy private wrapper 转交到同一实际 owner，并在整个查询期间保留 acquire/release；不持 cache 锁跨 SQL I/O。已建立的 cache owner 将不可变策略传给观察查询，仅重新读取 allocator offset/step，不再重复读取 mo_tables；冷加载仍独立发现并校验策略，不缓存陈旧offset。
+3. CurrentValue 有本地游标/terminal 则直接读；无段时由实际 table cache owner 执行 SQL 读取 offset+step，checked overflow，不用创建 cache 时的陈旧 offset，不触发分配。未提交 CREATE 使用该 cache 的 txnOp；commit 后 owner 清空为 nil，使用已提交快照。lazy private wrapper 转交到同一实际 owner，并在整个查询期间保留 acquire/release；不持 cache 锁跨 SQL I/O。已建立的 cache owner 将不可变策略传给观察查询，仅重新读取 allocator offset/step，不再重复读取 mo_tables。PRE_INSERT/元数据函数的冷加载复用绑定物理ID的typed policy；未知调用者仍独立发现策略，所有路径继续校验开关/版本，不缓存陈旧offset。
 4. mixed batch 的自动行真实需求在 manual 位移之前同步保留，使 `(NULL,100,NULL)` 的前一自动行仍能沿用上游 skipped-range 顺序。全显式不预留，estimate/low-water 不参与。
 5. cold GetColumns 同 SQL 快照读取 allocator rows 与 SchemaExtra；Reset 的旧 catalog 行可能已被 TRUNCATE 删除，因此该次读取明确指定新物理表为 metadata owner。无新增 public service/store API。
 

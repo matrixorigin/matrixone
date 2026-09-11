@@ -78,6 +78,15 @@ func TestAutoIDCachePublicLifecycle(t *testing.T) {
 		for _, conn := range conns {
 			exec(conn, "use `"+dbName+"`")
 		}
+		for _, partition := range []string{
+			"partition by range(id) (partition p0 values less than maxvalue auto_id_cache=1)",
+			"partition by range(id) subpartition by hash(id) (partition p0 values less than maxvalue (subpartition s0 auto_id_cache=1))",
+		} {
+			_, err := conns[0].ExecContext(ctx, "create table ai_bad_partition(id bigint auto_increment primary key) "+partition)
+			require.ErrorContains(t, err, "AUTO_ID_CACHE")
+			require.Equal(t, int64(0), number(conns[0], "select count(*) from mo_catalog.mo_tables where reldatabase=database() and relname='ai_bad_partition'"))
+		}
+
 		// Both SHOW and information_schema must observe the CREATE transaction,
 		// without reserving IDs. Include the default policy and both outcomes.
 		for _, policy := range []int{0, 1} {

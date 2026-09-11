@@ -470,9 +470,20 @@ func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 // rows remain until Reset migrates them. The new physical table owns the policy.
 type autoColumnPolicyTableKey struct{}
 
-// autoColumnKnownPolicyKey is used only by an existing cache owner observing
-// its allocator rows. It must not bypass policy discovery on a cold cache load.
 type autoColumnKnownPolicyKey struct{}
+
+type autoColumnKnownPolicy struct {
+	tableID uint64
+	size    uint64
+}
+
+// WithAutoIDCachePolicy carries policy from a resolved table definition or an
+// existing cache owner. Binding the hint to a physical table ID prevents reuse
+// after a table-ID refresh or for a different table in the same context.
+// Callers without authoritative metadata must leave the context unchanged.
+func WithAutoIDCachePolicy(ctx context.Context, tableID, size uint64) context.Context {
+	return context.WithValue(ctx, autoColumnKnownPolicyKey{}, autoColumnKnownPolicy{tableID: tableID, size: size})
+}
 
 func (s *sqlStore) GetColumns(
 	ctx context.Context,
@@ -482,9 +493,10 @@ func (s *sqlStore) GetColumns(
 	if replacement, ok := ctx.Value(autoColumnPolicyTableKey{}).(uint64); ok {
 		policyTableID = replacement
 	}
-	// Cold loads discover policy in the same SQL snapshot. An existing cache
-	// owner already knows its immutable policy and needs only fresh offsets.
-	knownPolicy, hasKnownPolicy := ctx.Value(autoColumnKnownPolicyKey{}).(uint64)
+	// A resolved definition or existing cache owner supplies immutable policy.
+	// Other cold loads discover it in the same SQL snapshot as fresh offsets.
+	knownPolicy, hasKnownPolicy := ctx.Value(autoColumnKnownPolicyKey{}).(autoColumnKnownPolicy)
+	hasKnownPolicy = hasKnownPolicy && knownPolicy.tableID == policyTableID
 	policySQL := fmt.Sprintf("(select extra_info from mo_tables where rel_id = %d)", policyTableID)
 	if hasKnownPolicy {
 		policySQL = "''"
@@ -541,7 +553,7 @@ func (s *sqlStore) GetColumns(
 		return nil, metadataErr
 	}
 	if hasKnownPolicy {
-		extra.AutoIdCache = knownPolicy
+		extra.AutoIdCache = knownPolicy.size
 	}
 	if err := validateAutoIDCacheSize(ctx, extra.AutoIdCache); err != nil {
 		return nil, err

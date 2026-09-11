@@ -923,6 +923,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <partitions> partition_list_opt partition_list
 %type <values> values_opt
 %type <tableOptions> partition_option_list
+%type <tableOption> partition_table_option
 %type <subPartition> sub_partition
 %type <subPartitions> sub_partition_list sub_partition_list_opt
 %type <subquery> subquery
@@ -11038,13 +11039,24 @@ sub_partition:
     }
 
 partition_option_list:
-    table_option
+    partition_table_option
     {
         $$ = []tree.TableOption{$1}
     }
-|   partition_option_list table_option
+|   partition_option_list partition_table_option
     {
         $$ = append($1, $2)
+    }
+
+partition_table_option:
+    table_option
+    {
+        if option, ok := $1.(*tree.TableOptionAutoIDCache); ok {
+            option.Free()
+            yylex.Error("AUTO_ID_CACHE is a table option, not a partition or subpartition option")
+            goto ret1
+        }
+        $$ = $1
     }
 
 values_opt:
@@ -14018,7 +14030,7 @@ function_call_nonkeyword:
 	{
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+        arg1 := tree.NewTimeUnitExpr(str)
 		$$ =  &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),

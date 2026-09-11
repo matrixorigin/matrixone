@@ -58,8 +58,12 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 		}
 		autoIncrCol := getTableAutoIncrCol(engineDefs)
 		if autoIncrCol != "" {
+			ctx := proc.Ctx
+			if extra := relation.GetExtraInfo(); extra != nil {
+				ctx = incrservice.WithAutoIDCachePolicy(ctx, tableId, extra.AutoIdCache)
+			}
 			autoIncrement, err := getCurrentValue(
-				proc.Ctx,
+				ctx,
 				proc.GetService(),
 				tableId,
 				autoIncrCol,

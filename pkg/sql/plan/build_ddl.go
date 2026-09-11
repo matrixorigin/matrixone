@@ -2845,6 +2845,11 @@ func buildCreateTable(
 	if err := validatePersistedTableIdentifiers(ctx.GetContext(), createTable.TableDef); err != nil {
 		return nil, err
 	}
+	if !stmt.IsAsSelect {
+		if err := validateUniquePersistedTableColumns(ctx.GetContext(), createTable.TableDef); err != nil {
+			return nil, err
+		}
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -2965,6 +2970,32 @@ func validatePersistedTableIdentifiers(ctx context.Context, tableDef *plan.Table
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func validateUniquePersistedTableColumns(ctx context.Context, tableDef *plan.TableDef) error {
+	if tableDef == nil {
+		return nil
+	}
+
+	// Column lookup is case-insensitive even when lower_case_table_names is 0.
+	columnNames := make([]string, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col == nil || col.Hidden {
+			continue
+		}
+		name := col.GetOriginCaseName()
+		compareName := col.Name
+		if compareName == "" {
+			compareName = name
+		}
+		for _, existingName := range columnNames {
+			if strings.EqualFold(existingName, compareName) {
+				return moerr.NewErrDupFieldName(ctx, name)
+			}
+		}
+		columnNames = append(columnNames, compareName)
 	}
 	return nil
 }
