@@ -3510,6 +3510,7 @@ func TestAppendMySQLNumericFloatBoundary(t *testing.T) {
 		{name: "outside lower fixed boundary remains scientific", value: 1e-16, bits: 64, want: "1e-16"},
 		{name: "mysql upper fixed boundary remains scientific", value: 1e15, bits: 64, want: "1e15"},
 		{name: "negative fixed width overflow uses scientific", value: -1.2345678901234567e-4, bits: 64, want: "-1.2345678901234567e-4"},
+		{name: "scientific width rounds exponent carry", value: -9.999999999999999e-100, bits: 64, want: "-1e-99"},
 		{name: "float32 exponent boundary remains fixed", value: 1e6, bits: 32, want: "1000000"},
 		{name: "float32 small value remains fixed", value: 1e-5, bits: 32, want: "0.00001"},
 		{name: "float32 keeps MySQL significant digit limit", value: 1234567, bits: 32, want: "1234570"},
@@ -3541,6 +3542,19 @@ func TestConvFloatNegativeWidthBoundaryPreservesPrefix(t *testing.T) {
 	fc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_float64.ToType(), []float64{-1.2345678901234567e-4}, []bool{false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-10}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-1"}, []bool{false}), Conv)
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestConvFloatScientificWidthRoundsExponentCarry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{-9.999999999999999e-100}, []bool{false}),
 			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
 			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-10}, []bool{false}),
 		},

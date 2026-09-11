@@ -3602,7 +3602,7 @@ func appendMySQLNumericFloat(dst []byte, value float64, bitSize int) []byte {
 		if len(text) <= maxLength {
 			return append(dst[:0], text...)
 		}
-		return appendMySQLScientificValue(dst[:0], value, bitSize)
+		return appendMySQLScientificValue(dst[:0], value, bitSize, maxLength)
 	}
 
 	exponent, ok := parseFloatExponent(text[exponentPos+1:])
@@ -3634,11 +3634,11 @@ func appendMySQLNumericFloat(dst []byte, value float64, bitSize int) []byte {
 			fixedLength++
 		}
 		if fixedLength > maxLength {
-			return appendMySQLScientificFloat(dst[:0], text[:exponentPos], exponent)
+			return appendMySQLScientificValue(dst[:0], value, bitSize, maxLength)
 		}
 		return appendMySQLFixedFloat(dst[:0], text[:exponentPos], exponent)
 	}
-	return appendMySQLScientificFloat(dst[:0], text[:exponentPos], exponent)
+	return appendMySQLScientificValue(dst[:0], value, bitSize, maxLength)
 }
 
 func appendMySQLFixedFloat(dst, mantissa []byte, exponent int) []byte {
@@ -3676,13 +3676,29 @@ func appendMySQLFixedFloat(dst, mantissa []byte, exponent int) []byte {
 }
 
 func appendMySQLScientificFloat(dst, mantissa []byte, exponent int) []byte {
-	dst = append(dst, mantissa...)
+	end := len(mantissa)
+	dot := -1
+	for i, ch := range mantissa {
+		if ch == '.' {
+			dot = i
+			break
+		}
+	}
+	if dot >= 0 {
+		for end > dot+1 && mantissa[end-1] == '0' {
+			end--
+		}
+		if end == dot+1 {
+			end--
+		}
+	}
+	dst = append(dst, mantissa[:end]...)
 	dst = append(dst, 'e')
 	// MySQL's e-format omits the plus sign and exponent zero padding.
 	return strconv.AppendInt(dst, int64(exponent), 10)
 }
 
-func appendMySQLScientificValue(dst []byte, value float64, bitSize int) []byte {
+func appendMySQLScientificValue(dst []byte, value float64, bitSize, maxLength int) []byte {
 	precision := -1
 	if bitSize == 32 {
 		// 'e' precision counts digits after the decimal point.
@@ -3690,13 +3706,7 @@ func appendMySQLScientificValue(dst []byte, value float64, bitSize int) []byte {
 	}
 	var textBuf [64]byte
 	text := strconv.AppendFloat(textBuf[:0], value, 'e', precision, bitSize)
-	exponentPos := -1
-	for i, ch := range text {
-		if ch == 'e' || ch == 'E' {
-			exponentPos = i
-			break
-		}
-	}
+	exponentPos := scientificFloatExponentPos(text)
 	if exponentPos < 0 {
 		return append(dst, text...)
 	}
@@ -3704,7 +3714,60 @@ func appendMySQLScientificValue(dst []byte, value float64, bitSize int) []byte {
 	if !ok {
 		return append(dst, text...)
 	}
-	return appendMySQLScientificFloat(dst, text[:exponentPos], exponent)
+	var normalized [64]byte
+	text = appendMySQLScientificFloat(normalized[:0], text[:exponentPos], exponent)
+	if len(text) <= maxLength {
+		return append(dst, text...)
+	}
+
+	maxDigits := scientificFloatMantissaDigits(maxLength, value < 0, exponent)
+	for digits := maxDigits; digits > 0; digits-- {
+		text = strconv.AppendFloat(textBuf[:0], value, 'e', digits-1, bitSize)
+		exponentPos = scientificFloatExponentPos(text)
+		if exponentPos < 0 {
+			continue
+		}
+		exponent, ok = parseFloatExponent(text[exponentPos+1:])
+		if !ok {
+			continue
+		}
+		text = appendMySQLScientificFloat(normalized[:0], text[:exponentPos], exponent)
+		if len(text) <= maxLength {
+			return append(dst, text...)
+		}
+	}
+
+	return append(dst, text...)
+}
+
+func scientificFloatExponentPos(text []byte) int {
+	for i, ch := range text {
+		if ch == 'e' || ch == 'E' {
+			return i
+		}
+	}
+	return -1
+}
+
+func scientificFloatMantissaDigits(maxLength int, negative bool, exponent int) int {
+	exponentText := strconv.Itoa(exponent)
+	if exponentText[0] == '-' {
+		exponentText = exponentText[1:]
+	}
+	overhead := 1 + len(exponentText) // 'e' plus exponent digits
+	if exponent < 0 {
+		overhead++
+	}
+	if negative {
+		overhead++
+	}
+	available := maxLength - overhead
+	if available <= 1 {
+		return 1
+	}
+	// A mantissa with more than one significant digit needs one decimal
+	// point. The one-digit form remains available for the smallest width.
+	return available - 1
 }
 
 func parseFloatExponent(text []byte) (int, bool) {

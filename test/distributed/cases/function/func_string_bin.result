@@ -65,6 +65,10 @@ SELECT conv(CAST(-1.2345678901234567e-4 AS DOUBLE), 10, -10) AS conv_float_negat
 bin(CAST(-1.2345678901234567e-4 AS DOUBLE)) AS bin_float_negative_width;
 conv_float_negative_width    bin_float_negative_width
 -1    1111111111111111111111111111111111111111111111111111111111111111
+SELECT conv(CAST(-9.999999999999999e-100 AS DOUBLE), 10, -10) AS conv_float_round_carry,
+bin(CAST(-9.999999999999999e-100 AS DOUBLE)) AS bin_float_round_carry;
+conv_float_round_carry    bin_float_round_carry
+-1    1111111111111111111111111111111111111111111111111111111111111111
 SELECT conv(CAST(1000000 AS DOUBLE), 10, 16) AS conv_float_fixed_boundary,
 bin(CAST(1000000 AS DOUBLE)) AS bin_float_fixed_boundary,
 conv(CAST(1e-5 AS DOUBLE), 10, 16) AS conv_float_small_fixed,
