@@ -1,0 +1,64 @@
+select statement_digest('SELECT 1') as digest;
+digest
+d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae
+select statement_digest('select 2') as digest;
+digest
+d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae
+select statement_digest(NULL) as digest;
+digest
+null
+select statement_digest('SELECT * FROM mytable WHERE cola = 10 AND colb = 20') as digest;
+digest
+3bb95eeade896657c4526e74ff2a2862039d0a0fe8a9e7155b5fe492cbd78387
+select statement_digest('SELECT * FROM t WHERE id IN (1,2,3)') as digest;
+digest
+cba65b0398663b18b471aba08f14a530e0aef745b1b031c40a61d22ad271dc26
+select statement_digest('SELECT -42') as absorbed_sign_digest;
+absorbed_sign_digest
+d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae
+select statement_digest('SELECT * FROM t WHERE b=-42') as preserved_sign_digest;
+preserved_sign_digest
+4474030ab69df2ff0b2834202712d7114446f7e1429d610030b17018e09db1f0
+select statement_digest('SELECT CASE WHEN a THEN -1 ELSE +2 END') as branch_sign_digest;
+branch_sign_digest
+b13883eec7cbb158f27ca4e1fda9be138c02d89a1407b7cfe3bfb53027c27958
+select statement_digest('SELECT _utf8mb4''hello''') as charset_digest;
+charset_digest
+04144c90cfef7b8973c07fe5b12181df7996a6db61471dfe8b365d188cea8e19
+select statement_digest('SELECT 1;') as semicolon_digest;
+semicolon_digest
+4b46f54bd8065b8dc5777a0cc14bcefc2be16c230edaa024ddd28ebf988a865c
+select statement_digest('/* comment only */') as comment_only_digest;
+comment_only_digest
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+select statement_digest('SELECT /*+ SET_VAR(sort_buffer_size=16M) */ 1') as hint_scaled_number_digest;
+hint_scaled_number_digest
+c76de720d78ecfc18e2cf4e87e894bc134f7596270461ad343b3e9d069af2d31
+select statement_digest('SELECT a FROM t GROUP BY a WITH ROLLUP') as with_rollup_digest;
+with_rollup_digest
+8b73b88a9ea6da4ce94aaed3dc371d92791c705aa173693ee25e141acc4f02df
+select statement_digest('CREATE TABLE t(a INT NULL, b INT NOT NULL, c INT DEFAULT NULL, d INT NULL DEFAULT NULL)') as ddl_null_digest;
+ddl_null_digest
+e9b16bb26e6f0a1adede7aaf756bf40913eae757496c8bc35e0207573b3452c9
+drop database if exists statement_digest_23024;
+create database statement_digest_23024;
+use statement_digest_23024;
+create table statement_digest_inputs_23024(sql_text text);
+insert into statement_digest_inputs_23024 values
+('SELECT 1'),
+('select 2'),
+('SELECT ''中文'''),
+(NULL);
+select sql_text, statement_digest(sql_text) as digest from statement_digest_inputs_23024 order by sql_text;
+sql_text	digest
+null	null
+SELECT '中文'	d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae
+SELECT 1	d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae
+select 2	d1b44b0c19af710b5a679907e284acd2ddc285201794bc69a2389d77baedddae
+select statement_digest('   ') as digest;
+SQL parser error: syntax error, or too many sql to parse
+select statement_digest('SELECT FROM') as digest;
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " FROM";
+select statement_digest('SELECT 1; SELECT 2') as digest;
+SQL parser error: syntax error, or too many sql to parse
+drop database statement_digest_23024;

@@ -25,11 +25,13 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
@@ -170,7 +172,9 @@ func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
 
 		for _, testCase := range cases {
 			t.Run(testCase.name, func(t *testing.T) {
-				runIssue27487IndexCase(t, ctx, writerDB, ddlDB, database, lockServices, testCase)
+				runIssue27487IndexCase(t, ctx, writerDB, ddlDB, database, lockServices,
+					writerCN.RawService().(cnservice.Service).GetTxnClient(),
+					ddlCN.RawService().(cnservice.Service).GetTxnClient(), testCase)
 			})
 		}
 	})
@@ -183,6 +187,7 @@ func runIssue27487IndexCase(
 	ddlDB *sql.DB,
 	database string,
 	lockServices []lockservice.LockService,
+	writerClient, ddlClient client.TxnClient,
 	testCase issue27487IndexCase,
 ) {
 	t.Helper()
@@ -211,12 +216,11 @@ func runIssue27487IndexCase(
 	// The table was created on another CN. Establish catalog and seed-row
 	// visibility before starting the lock-order phase, so a stale CN cannot turn
 	// the intended metadata wait into an unrelated no-such-table failure.
-	require.Eventually(t, func() bool {
-		var seedRows int
-		err := ddlConn.QueryRowContext(ctx,
-			"select count(*) from `"+database+"`.`"+testCase.table+"`").Scan(&seedRows)
-		return err == nil && seedRows == 1
-	}, 30*time.Second, 10*time.Millisecond, "DDL CN did not observe the seeded table")
+	syncIssue27487Commit(t, ctx, writerClient, ddlClient)
+	var seedRows int
+	require.NoError(t, ddlConn.QueryRowContext(ctx,
+		"select count(*) from `"+database+"`.`"+testCase.table+"`").Scan(&seedRows))
+	require.Equal(t, 1, seedRows)
 	if testCase.probeWhileDDL != "" {
 		var rows int
 		err := verifier.QueryRowContext(ctx, testCase.probeWhileDDL).Scan(&rows)
@@ -365,8 +369,24 @@ func runIssue27487IndexCase(
 
 	// Verify from the other CN. The DDL CN has the updated constraint in its
 	// transaction-local catalog, while another CN must observe it through the
-	// committed catalog logtail before planning MATCH ... AGAINST.
+	// committed catalog logtail before planning. The default sacrificing-freshness
+	// mode may otherwise choose a snapshot preceding CREATE INDEX's commit even
+	// after its SQL response has arrived. Synchronize committed timestamps rather
+	// than retrying the verification query and hiding an actual index failure.
+	// Keep this after the pre-DDL probe completes: that probe must exercise the
+	// stale-plan validation path without help from this visibility barrier.
+	syncIssue27487Commit(t, ctx, ddlClient, writerClient)
 	testCase.verify(t, ctx, verifier)
+}
+
+func syncIssue27487Commit(t *testing.T, ctx context.Context, source, destination client.TxnClient) {
+	t.Helper()
+	// Use the actual CN clients, not cluster discovery (which may not yet list
+	// both services). New waits for the destination logtail to reach minTS and
+	// honors the test deadline; subsequent SQL snapshots cannot precede it.
+	barrier, err := destination.New(ctx, source.GetLatestCommitTS())
+	require.NoError(t, err)
+	require.NoError(t, barrier.Rollback(ctx))
 }
 
 func issue27487DSN(port int64) string {
