@@ -98,7 +98,8 @@ const (
 	MORPCVersion60     int64 = 60 // row-dependent expression defaults
 	MORPCVersion61     int64 = 61 // index metadata provenance columns (nrow, build_ts)
 	MORPCVersion62     int64 = 62 // VARCHAR OCT overload identities
-	MORPCLatestVersion       = MORPCVersion62
+	MORPCVersion63     int64 = 63 // INSERT IGNORE CHECK warning diagnostics
+	MORPCLatestVersion       = MORPCVersion63
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

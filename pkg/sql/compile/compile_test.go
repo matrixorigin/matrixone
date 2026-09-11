@@ -657,8 +657,10 @@ func compiledScopesContainOperator(scopes []*Scope, opType vm.OpType) bool {
 }
 
 type retryRecordingResultSink struct {
-	events []string
-	rows   map[uint64]int
+	events          []string
+	rows            map[uint64]int
+	proc            *process.Process
+	warningsOnWrite bool
 }
 
 type generationCheckingResultSink struct {
@@ -693,8 +695,9 @@ func (s *generationCheckingResultSink) AbortAttempt(generation uint64, _ error) 
 	return nil
 }
 
-func (s *retryRecordingResultSink) BeginAttempt(_ context.Context, generation uint64, _ *process.Process) error {
+func (s *retryRecordingResultSink) BeginAttempt(_ context.Context, generation uint64, proc *process.Process) error {
 	s.events = append(s.events, fmt.Sprintf("begin:%d", generation))
+	s.proc = proc
 	if s.rows == nil {
 		s.rows = make(map[uint64]int)
 	}
@@ -707,6 +710,11 @@ func (s *retryRecordingResultSink) Write(generation uint64, bat *batch.Batch, _ 
 	}
 	s.events = append(s.events, fmt.Sprintf("write:%d", generation))
 	s.rows[generation] += bat.RowCount()
+	if s.warningsOnWrite {
+		// Model a warning-producing operator completing before a downstream
+		// consumer asks Compile.Run to retry the execution generation.
+		process.AppendWarningBatch(s.proc, 1, []uint16{1062}, []string{"duplicate"})
+	}
 	if generation < 2 {
 		return moerr.NewTxnNeedRetryNoCtx()
 	}
@@ -762,7 +770,8 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 	require.NoError(t, c.Compile(ctx, pn, func(*batch.Batch, *perfcounter.CounterSet) error {
 		return errors.New("streaming callback must not be used when ResultSink is installed")
 	}))
-	sink := &retryRecordingResultSink{}
+	proc.Session = &remoteWarningCollector{}
+	sink := &retryRecordingResultSink{warningsOnWrite: true}
 	c.SetResultSink(sink)
 	_, err = c.Run(0)
 	require.NoError(t, err)
@@ -773,6 +782,9 @@ func TestCompileResultSinkDiscardsRetriedGenerations(t *testing.T) {
 	}, sink.events)
 	require.Equal(t, map[uint64]int{2: 1}, sink.rows)
 	require.Equal(t, uint64(2), c.executionGeneration)
+	warningCount, warningDiagnostics := proc.Session.(*remoteWarningCollector).SnapshotWarnings()
+	require.Equal(t, uint64(1), warningCount, "failed retry generations must not publish warnings")
+	require.Equal(t, []remoteWarningDiagnostic{{Code: 1062, Message: "duplicate"}}, warningDiagnostics)
 
 	// Compile.Reset is the prepared-statement reuse boundary. The next execution
 	// must rebuild its output callback for generation zero even when the previous
