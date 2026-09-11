@@ -575,6 +575,43 @@ func TestSummarizeUTSetupReportsCumulativePhases(t *testing.T) {
 	}
 }
 
+func TestSummarizeUTSlowCasesReportsCompletedPrefix(t *testing.T) {
+	scriptPath, err := filepath.Abs("summarize_ut_slow_cases.py")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(t.TempDir(), "ut.json")
+	report := strings.Join([]string{
+		`{"Time":"2026-09-10T01:00:00Z","Action":"start","Package":"example/slow"}`,
+		`{"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/slow","Test":"TestSlow"}`,
+		`{"Time":"2026-09-10T01:00:04Z","Action":"pass","Package":"example/slow","Test":"TestSlow","Elapsed":3.5}`,
+		`{"Time":"2026-09-10T01:00:05Z","Action":"run","Package":"example/slow","Test":"TestActive"}`,
+		`{"Time":"2026-09-10T01:00:06Z","Action":"pass","Package":"example/slow","Elapsed":6.0}`,
+		`not json`,
+	}, "\n")
+	reportBytes := append([]byte(report), '\n', 0xff, '\n')
+	if err := os.WriteFile(reportPath, reportBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.Command("python3", scriptPath, reportPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("summarize slow UT cases: %v\n%s", err, output)
+	}
+	text := string(output)
+	if !strings.Contains(text, "[slow_ut_cases] elapsed=3.50s result=pass package=example/slow test=TestSlow") {
+		t.Fatalf("completed case missing: %s", text)
+	}
+	if strings.Contains(text, "TestActive") {
+		t.Fatalf("incomplete case was reported as completed: %s", text)
+	}
+	if !strings.Contains(text, "[slow_ut_cases] elapsed=6.00s result=pass package=example/slow ended=2026-09-10T01:00:06+00:00") {
+		t.Fatalf("completed package missing: %s", text)
+	}
+	if !strings.Contains(text, "ignored malformed JSON lines=2") {
+		t.Fatalf("truncated report warning missing: %s", text)
+	}
+}
+
 func writeScopeFixture(t *testing.T, root, name, contents string) {
 	t.Helper()
 
