@@ -71,7 +71,7 @@ func waitArrowLoadClusterReady(t testing.TB, c embed.Cluster) {
 	poll := time.NewTicker(arrowLoadClusterReadyPoll)
 	defer poll.Stop()
 	started := time.Now()
-	lastStatus := "not checked"
+	var lastStatus string
 	for {
 		ready, status := arrowLoadClusterReadyStatus(ctx, expected)
 		if ready {
