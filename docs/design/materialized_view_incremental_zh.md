@@ -1,7 +1,14 @@
 # 物化视图：当前实现契约（D2）
 
-本文对应本 PR 实现的聚合与 UNION ALL 维护方案。目录定义格式为 1，创建要求协议
-57；本文不把尚未实现的算子图格式列为当前契约。
+本文对应本 PR 实现的聚合与 UNION ALL 维护方案。目录定义格式为 1，创建要求专用协议
+64；本文不把尚未实现的算子图格式列为当前契约。
+
+## 设计追踪与批准记录
+
+- 所属 issue：[matrixorigin/matrixone#24553](https://github.com/matrixorigin/matrixone/issues/24553)
+- 实现 PR：[matrixorigin/matrixone#27615](https://github.com/matrixorigin/matrixone/pull/27615)
+- 已批准 revision：等待对最终 revision 的独立 maintainer 批准。
+- 批准决定：待定；实现提交或自动化审查不等同于设计批准。
 
 所有刷新模式在绑定前拒绝子查询、CTE、会话变量/参数和非确定性或时间相关函数，
 因为当前直接来源调度与快照契约尚未表示这些额外输入。
@@ -86,7 +93,7 @@ DROP 先按目标 ID 注销所有活跃任务 generation，再删除拥有的关
 
 ## 升级与回退
 
-所有创建（包括 ON DEMAND）要求协议 57。除准入检查外，旧执行器也会在既有边界拒绝
+所有创建（包括 ON DEMAND）要求协议 64。除准入检查外，旧执行器也会在既有边界拒绝
 新对象：任务落盘使用已有 IndexSync 枚举、空 index selector 和新增 MVReference；
 旧 writer registry 在消费者构造及 SQL 执行之前拒绝空 selector。新解码器验证引用后
 恢复内存中的 MV 类型。

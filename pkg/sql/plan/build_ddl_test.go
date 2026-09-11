@@ -1486,6 +1486,12 @@ func TestIsMaterializedViewStateTableDefUsesCatalogOwner(t *testing.T) {
 			Format: 1, AccountID: 0, TargetID: 100, Generation: 1, StateID: 101,
 		})}},
 	}))
+	require.True(t, IsMaterializedViewStateTableDef(&plan.TableDef{
+		Name:      "__mo_mv_state_0123456789abcdef",
+		TableType: catalog.SystemIndexRel,
+		TblId:     101,
+		Props:     []*plan.PropertyDef{{Key: mvdefinition.OwnerProperty, Value: `{"format":99,"state_id":101}`}},
+	}))
 	require.False(t, IsMaterializedViewStateTableDef(&plan.TableDef{
 		Name: "state", Createsql: "create table state (a int) comment = 'matrixone materialized view state'",
 	}))
@@ -1502,7 +1508,12 @@ func TestDropMaterializedViewStateAllowsInternalDatabaseCleanup(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	name := "__mo_mv_state_0123456789abcdef"
 	mock.ctxt.objects[name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: 424241}
-	mock.ctxt.tables[name] = &plan.TableDef{Name: name}
+	mock.ctxt.tables[name] = &plan.TableDef{
+		Name:      name,
+		TableType: catalog.SystemIndexRel,
+		TblId:     424241,
+		Props:     []*plan.PropertyDef{{Key: mvdefinition.OwnerProperty, Value: `{"format":99,"state_id":424241}`}},
+	}
 	_, err := runOneStmt(mock, t, "drop table tpch."+name)
 	require.ErrorContains(t, err, "must be dropped with its materialized view")
 

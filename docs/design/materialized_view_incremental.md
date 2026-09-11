@@ -4,6 +4,13 @@ Status: implementation contract for this PR. The persisted definition is format
 1 and requires the dedicated protocol 64 capability. This document describes the implemented aggregate
 and UNION ALL variants; it does not specify a future operator-graph format.
 
+## Design traceability and approval
+
+- Owning issue: [matrixorigin/matrixone#24553](https://github.com/matrixorigin/matrixone/issues/24553)
+- Implementation PR: [matrixorigin/matrixone#27615](https://github.com/matrixorigin/matrixone/pull/27615)
+- Approved revision: pending explicit independent maintainer approval on the final revision.
+- Approval decision: pending; this document does not treat implementation or automated review as design approval.
+
 ## SQL and refresh policy
 
 `CREATE MATERIALIZED VIEW ... REFRESH FAST|FORCE|COMPLETE ON CHANGE AS SELECT ...`
