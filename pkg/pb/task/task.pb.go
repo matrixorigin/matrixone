@@ -12,6 +12,7 @@ import (
 
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
+	descriptor "github.com/gogo/protobuf/protoc-gen-gogo/descriptor"
 	github_com_gogo_protobuf_types "github.com/gogo/protobuf/types"
 	_ "github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	_ "google.golang.org/protobuf/types/known/timestamppb"
@@ -1479,7 +1480,35 @@ func init() {
 	proto.RegisterType((*DaemonTask)(nil), "task.DaemonTask")
 }
 
-func init() { proto.RegisterFile("task.proto", fileDescriptor_ce5d8dd45b4a91ff) }
+func init() {
+	// Keep the embedded descriptor in sync with the enum maps above. This is
+	// required by reflection/dynamic protobuf consumers when the task schema is
+	// extended without regenerating all generated bindings in older toolchains.
+	var fd descriptor.FileDescriptorProto
+	if err := proto.Unmarshal(fileDescriptor_ce5d8dd45b4a91ff, &fd); err == nil {
+		found := false
+		for _, enum := range fd.EnumType {
+			if enum.GetName() == "TaskCode" {
+				for _, value := range enum.Value {
+					if value.GetName() == "InitCdcLosslessStart" {
+						found = true
+					}
+				}
+				if !found {
+					n := "InitCdcLosslessStart"
+					num := int32(15)
+					enum.Value = append(enum.Value, &descriptor.EnumValueDescriptorProto{Name: &n, Number: &num})
+				}
+			}
+		}
+		if !found {
+			if encoded, err := proto.Marshal(&fd); err == nil {
+				fileDescriptor_ce5d8dd45b4a91ff = encoded
+			}
+		}
+	}
+	proto.RegisterFile("task.proto", fileDescriptor_ce5d8dd45b4a91ff)
+}
 
 var fileDescriptor_ce5d8dd45b4a91ff = []byte{
 	// 1633 bytes of a gzipped FileDescriptorProto
