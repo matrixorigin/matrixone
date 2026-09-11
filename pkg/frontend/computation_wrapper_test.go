@@ -796,6 +796,80 @@ func TestCOMStmtPreparedDateIntervalMarkerExecutesAcrossWireTypes(t *testing.T) 
 	}
 }
 
+func TestCOMStmtPreparedConversionPreservesBitWireDomain(t *testing.T) {
+	const query = "select conv(?, 2, 10)"
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 27340, query)
+	proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, query)
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+		scratchPrepare.Close()
+	}()
+
+	// MYSQL_TYPE_BIT is encoded as an unsigned integer on the wire, but its
+	// logical domain is a bit string.  The unsigned flag must therefore not
+	// make the prepared plan take the UINT64 CONV path.  A LONGLONG rebind is
+	// included to prove that changing the wire type still changes the logical
+	// plan and that a later BIT bind does not inherit the numeric domain.
+	makePacket := func(tp defines.MysqlType, value uint64, unsigned bool) []byte {
+		packet := buildLongLongExecutePacket(value, unsigned)
+		packet[7] = byte(tp)
+		return packet
+	}
+
+	evaluate := func(runtimePlan *plan.Plan) string {
+		t.Helper()
+		queryPlan := runtimePlan.GetQuery()
+		require.NotNil(t, queryPlan)
+		require.NotEmpty(t, queryPlan.Steps)
+		project := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]]
+		require.Len(t, project.ProjectList, 1)
+		executor, err := colexec.NewExpressionExecutor(cw.proc, project.ProjectList[0])
+		require.NoError(t, err)
+		defer executor.Free()
+		result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		require.NoError(t, err)
+		require.Equal(t, types.T_varchar, result.GetType().Oid)
+		require.False(t, result.GetNulls().Contains(0))
+		return result.GetStringAt(0)
+	}
+
+	for _, tc := range []struct {
+		name       string
+		tp         defines.MysqlType
+		value      uint64
+		unsigned   bool
+		wantType   types.T
+		wantResult string
+	}{
+		{name: "signed bit", tp: defines.MYSQL_TYPE_BIT, value: 15, wantType: types.T_bit, wantResult: "15"},
+		{name: "unsigned bit", tp: defines.MYSQL_TYPE_BIT, value: 16, unsigned: true, wantType: types.T_bit, wantResult: "16"},
+		{name: "ordinary signed integer", tp: defines.MYSQL_TYPE_LONGLONG, value: 15, wantType: types.T_int64, wantResult: "1"},
+		{name: "ordinary unsigned integer", tp: defines.MYSQL_TYPE_LONGLONG, value: 15, unsigned: true, wantType: types.T_uint64, wantResult: "1"},
+		{name: "bit after integer rebind", tp: defines.MYSQL_TYPE_BIT, value: 15, unsigned: true, wantType: types.T_bit, wantResult: "15"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, proto.ParseExecuteData(
+				execCtx.reqCtx, cw.proc, prepareStmt,
+				makePacket(tc.tp, tc.value, tc.unsigned), 0))
+			_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			if owned && executionStmt != nil {
+				defer executionStmt.Free()
+			}
+			require.Len(t, cw.paramVals, 1)
+			paramValue, ok := cw.paramVals[0].(plan2.ParamValue)
+			require.True(t, ok)
+			require.True(t, paramValue.HasRuntimeType)
+			require.Equal(t, tc.wantType, paramValue.RuntimeType.Oid,
+				"wire type %v unsigned=%v", tc.tp, tc.unsigned)
+			require.Equal(t, tc.wantResult, evaluate(runtimePlan))
+			prepareStmt.clearBinaryParamState(cw.proc)
+		})
+	}
+}
+
 func TestCOMStmtRegexpRebindExecutesWithWireStringDomain(t *testing.T) {
 	const query = "select regexp_instr(?, ?, 2), regexp_replace(?, ?, ?, 1, 0), " +
 		"regexp_instr(regexp_substr(?, ?), ?, 1)"

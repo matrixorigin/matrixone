@@ -1220,7 +1220,12 @@ func binaryProtocolPrepareParamDomains(
 	case defines.MYSQL_TYPE_LONGLONG:
 		return signed(types.T_int64, types.T_uint64), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_BIT:
-		return signed(types.T_bit, types.T_uint64), types.Type{}, "", false, true
+		// MYSQL_TYPE_BIT carries an opaque bit-domain value.  The protocol's
+		// unsigned flag describes its wire integer encoding, not a semantic
+		// conversion to UINT64.  Keep BIT stable for prepared-plan rebinding so
+		// CONV/BIN and other BIT-aware consumers receive the same domain for
+		// both flag variants.
+		return types.T_bit.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_YEAR:
 		return types.T_year.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_FLOAT:
