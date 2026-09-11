@@ -1,6 +1,6 @@
 -- SQL-to-Window coverage for the cost-based hash partition design (#27943).
 -- The table is deliberately larger than one vector batch and ANALYZE supplies
--- low-NDV cardinality evidence for the automatic HASH admission decision.
+-- low-NDV cardinality evidence for the explicit COST admission-model control.
 drop database if exists window_hash_partition;
 create database window_hash_partition;
 use window_hash_partition;
@@ -57,7 +57,7 @@ select sum(first_v) from (
     select first_value(v) over (partition by k order by v) as first_v from t
 ) q;
 
--- ROWS and RANGE frames preserve the Window contract on the HASH path.
+-- ROWS and RANGE frames preserve the Window contract under the restored SORT control.
 select sum(frame_sum) from (
     select sum(v) over (
         partition by k order by v rows between 1 preceding and current row
