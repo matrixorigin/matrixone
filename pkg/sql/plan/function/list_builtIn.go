@@ -16577,7 +16577,7 @@ var supportedOthersBuiltIns = []FuncNew{
 				// execute it once and broadcast the result to all rows.
 				volatile: true,
 				newOp: func() executeLogicOfOverload {
-					return runPythonUdf
+					return rejectPythonJSONPlan
 				},
 			},
 		},

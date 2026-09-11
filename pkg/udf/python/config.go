@@ -36,12 +36,32 @@ type ClientConfig struct {
 	// Enabled is deliberately false by default.  The Python worker is an
 	// unisolated development adapter until the production sandbox contract is
 	// deployed, so a generic CN launch must never attach it implicitly.
-	Enabled         bool          `toml:"enabled"`
-	AllowUnisolated bool          `toml:"allow-unisolated"`
-	ServerAddress   string        `toml:"server-address"`
-	MaxBatchBytes   int64         `toml:"max-batch-bytes"`
-	MaxBatchRows    int64         `toml:"max-batch-rows"`
-	RequestTimeout  time.Duration `toml:"request-timeout"`
+	Enabled         bool   `toml:"enabled"`
+	AllowUnisolated bool   `toml:"allow-unisolated"`
+	ServerAddress   string `toml:"server-address"`
+	MaxBatchBytes   int64  `toml:"max-batch-bytes"`
+	MaxBatchRows    int64  `toml:"max-batch-rows"`
+	// MaxInvocationRows bounds the rows retained by one physical invocation.
+	// It is checked before OpenInvocation so a large request cannot reserve a
+	// worker or run user code before the CN has accepted its result shape.
+	MaxInvocationRows int64 `toml:"max-invocation-rows"`
+	// MaxInvocationResultBytes bounds the retained MO result vector for one
+	// invocation.  Arrow frames remain subject to MaxBatchBytes; this separate
+	// limit prevents many individually valid batches from accumulating an
+	// unbounded result in the Gateway.
+	MaxInvocationResultBytes int64 `toml:"max-invocation-result-bytes"`
+	// MaxActiveInvocations is K: a CN refuses a new physical invocation when
+	// all slots are in use. It deliberately does not queue, because queued
+	// execution would retain the caller's input vectors and their allocation
+	// accounts while waiting for a worker slot.
+	MaxActiveInvocations int           `toml:"max-active-invocations"`
+	RequestTimeout       time.Duration `toml:"request-timeout"`
+	// Terminal limits cover both active and retained completion tombstones.
+	// They are reserved before an invocation is sent, so a long stream of
+	// short calls cannot grow the deduplication ledger without bound.
+	MaxTerminalEntries int           `toml:"max-terminal-entries"`
+	MaxTerminalBytes   int64         `toml:"max-terminal-bytes"`
+	TerminalRecordTTL  time.Duration `toml:"terminal-record-ttl"`
 }
 
 func (c *ClientConfig) Validate() error {
@@ -60,8 +80,26 @@ func (c *ClientConfig) Validate() error {
 	if c.MaxBatchRows < 0 || c.MaxBatchRows > 1<<30 {
 		return moerr.NewInternalError(context.Background(), "invalid python udf max batch rows")
 	}
+	if c.MaxInvocationRows < 0 || c.MaxInvocationRows > 1<<32 {
+		return moerr.NewInternalError(context.Background(), "invalid python udf max invocation rows")
+	}
+	if c.MaxInvocationResultBytes < 0 || c.MaxInvocationResultBytes > 1<<40 {
+		return moerr.NewInternalError(context.Background(), "invalid python udf max invocation result bytes")
+	}
+	if c.MaxActiveInvocations < 0 || c.MaxActiveInvocations > 1<<20 {
+		return moerr.NewInternalError(context.Background(), "invalid python udf max active invocations")
+	}
 	if c.RequestTimeout < 0 {
 		return moerr.NewInternalError(context.Background(), "invalid python udf request timeout")
+	}
+	if c.MaxTerminalEntries < 0 || c.MaxTerminalEntries > 1<<30 {
+		return moerr.NewInternalError(context.Background(), "invalid python udf max terminal entries")
+	}
+	if c.MaxTerminalBytes < 0 || c.MaxTerminalBytes > 1<<40 {
+		return moerr.NewInternalError(context.Background(), "invalid python udf max terminal bytes")
+	}
+	if c.TerminalRecordTTL < 0 {
+		return moerr.NewInternalError(context.Background(), "invalid python udf terminal record ttl")
 	}
 	return nil
 }

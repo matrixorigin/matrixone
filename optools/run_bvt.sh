@@ -19,17 +19,20 @@ set -o nounset
 MO_WORKSPACE=$1
 LAUNCH=$2
 PROXY=${3:-}
+LAUNCH_CONFIG=$LAUNCH
+MO_PID=""
 
 function launch_mo() {
     cd $MO_WORKSPACE
     # Ordinary launch BVT remains the single CI entry point, but its Python
     # cases opt into the worker-enabled manifest explicitly.  The generic
     # etc/launch manifest stays safe for users who start mo-service directly.
-    local launch_config=$LAUNCH
+    LAUNCH_CONFIG=$LAUNCH
     if [[ "$LAUNCH" == "launch" ]]; then
-        launch_config=launch-with-python-udf-worker
+        LAUNCH_CONFIG=launch-with-python-udf-worker
     fi
-    ./mo-service -debug-http=:12345 -launch ./etc/$launch_config/launch.toml $PROXY &>mo-service.log &
+    ./mo-service -debug-http=:12345 -launch ./etc/$LAUNCH_CONFIG/launch.toml $PROXY &>mo-service.log &
+    MO_PID=$!
 }
 
 # this will wait mo all system init completed
@@ -42,6 +45,32 @@ function wait_system_init() {
         fi
         sleep 1
     done 
+    return 1
+}
+
+# MySQL readiness only proves that the CN frontend accepted connections.  The
+# worker is a separately started service, so Python UDF DDL/execution can still
+# race its Flight listener.  Keep this in the existing BVT launcher instead of
+# adding a second CI job or making every SQL case retry its first call.
+function wait_python_udf_worker() {
+    if [[ "$LAUNCH_CONFIG" != "launch-with-python-udf-worker" ]]; then
+        return 0
+    fi
+    for num in {1..120}
+    do
+        if [[ -n "$MO_PID" ]] && ! kill -0 "$MO_PID" 2>/dev/null; then
+            echo "MatrixOne exited before Python UDF worker became ready" >&2
+            tail -n 160 mo-service.log >&2 || true
+            return 1
+        fi
+        if bash -c 'exec 3<>/dev/tcp/127.0.0.1/50051' 2>/dev/null; then
+            echo "Python UDF worker is ready, cost $num seconds"
+            return 0
+        fi
+        sleep 1
+    done
+    echo "Python UDF worker did not become ready on 127.0.0.1:50051" >&2
+    tail -n 160 mo-service.log >&2 || true
     return 1
 }
 
@@ -85,4 +114,8 @@ else
     launch_jstfu || exit $?
 fi
 wait_system_init
+if [[ "$?" -ne 0 ]]; then
+    exit 1
+fi
+wait_python_udf_worker
 exit $?

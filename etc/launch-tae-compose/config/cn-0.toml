@@ -71,3 +71,5 @@ enable-maintenance = true
 enabled = true
 allow-unisolated = true
 server-address = "python-udf-worker-cn0:50051"
+max-invocation-rows = 1048576
+max-invocation-result-bytes = 268435456

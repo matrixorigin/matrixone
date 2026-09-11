@@ -4344,6 +4344,13 @@ func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 		return nil
 	}
 	cached := ses.getCachedPlan(input.getHash())
+	if cached != nil && !cachedRoutinePlanDependenciesCurrent(ses, cached) {
+		// A cached plan carries exact routine revisions.  Do not let an entry
+		// survive a replace/drop or an integrity mismatch merely because the
+		// ordinary table/schema generation is unchanged.
+		ses.removeCachedPlan(input.getHash())
+		return nil
+	}
 	// SELECT ... INTO @var changes the type of a session variable as part of
 	// execution.  A cached SELECT-INTO plan can therefore never be reused: it
 	// may have been bound against the variable's pre-assignment type, and the
@@ -5671,8 +5678,12 @@ func checkCachedStatementPlan(ses FeSession, execCtx *ExecCtx) error {
 				return err
 			}
 		}
-		if flag {
-			if err := rebuildStaleCachedStatements(ses, execCtx); err != nil {
+		routineChanged, err := validateRoutinePlanDependencies(execCtx.reqCtx, ses, execCtx.cw.Plan())
+		if err != nil {
+			return err
+		}
+		if flag || routineChanged {
+			if err = rebuildStaleCachedStatements(ses, execCtx); err != nil {
 				return err
 			}
 		}

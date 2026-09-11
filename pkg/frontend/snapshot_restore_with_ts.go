@@ -579,6 +579,17 @@ func recreateTableFromTS(
 			fmt.Sprintf(" {MO_TS = %d}", snapshotTs),
 			restoreAccount,
 			toAccountId,
+			tblInfo.createSql,
+		)
+	}
+	if isCurrentFunctionRevisionCatalog(tblInfo) {
+		return restoreFunctionRevisionCatalogWithCurrentSchema(
+			ctx,
+			bh,
+			fmt.Sprintf(" {MO_TS = %d}", snapshotTs),
+			restoreAccount,
+			toAccountId,
+			tblInfo.createSql,
 		)
 	}
 	ctx, err = restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)

@@ -487,6 +487,20 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 			StmtType: planpb.Query_SELECT,
 			Headings: []string{"background"},
 		}, nil},
+		RoutineDependencies: []*planpb.RoutinePlanDependency{{
+			FunctionRef: &planpb.FunctionRef{
+				FunctionId:       41,
+				Revision:         7,
+				NamespaceVersion: 12,
+				AccountId:        9,
+				DatabaseId:       8,
+			},
+			Language:              "python",
+			ContractVersion:       1,
+			DefinitionFingerprint: "fingerprint",
+			ArtifactDigest:        "artifact",
+			EnvironmentDigest:     "environment",
+		}},
 	}
 
 	encoded, err := (&planpb.Query{ViewReferences: source.ViewReferences}).Marshal()
@@ -520,6 +534,9 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	require.Len(t, cloned.BackgroundQueries, 2)
 	require.Nil(t, cloned.BackgroundQueries[1])
 	require.NotSame(t, source.BackgroundQueries[0], cloned.BackgroundQueries[0])
+	require.Equal(t, source.RoutineDependencies, cloned.RoutineDependencies)
+	require.NotSame(t, source.RoutineDependencies[0], cloned.RoutineDependencies[0])
+	require.NotSame(t, source.RoutineDependencies[0].FunctionRef, cloned.RoutineDependencies[0].FunctionRef)
 
 	cloned.Params[0].GetP().Pos = 99
 	cloned.CatalogDependencies[0].ObjName = "changed"
@@ -528,9 +545,11 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	cloned.Steps[0] = 99
 	cloned.Headings[0] = "changed"
 	cloned.BackgroundQueries[0].Headings[0] = "changed"
+	cloned.RoutineDependencies[0].FunctionRef.Revision = 99
 	require.Equal(t, int32(3), source.Steps[0])
 	require.Equal(t, "id", source.Headings[0])
 	require.Equal(t, "background", source.BackgroundQueries[0].Headings[0])
+	require.Equal(t, uint64(7), source.RoutineDependencies[0].FunctionRef.Revision)
 }
 
 func TestDeepCopyDataDefinitionCreateTablePreservesExecutionFields(t *testing.T) {
