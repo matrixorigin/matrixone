@@ -228,10 +228,6 @@ func (r *DataRetrieverImpl) GetTableID() uint64 {
 	return r.tableID
 }
 
-func (r *DataRetrieverImpl) GetToTS() types.TS {
-	return r.status.To
-}
-
 func (r *DataRetrieverImpl) GetFromTS() types.TS {
 	return r.status.From
 }

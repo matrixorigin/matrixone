@@ -315,11 +315,6 @@ func TestMaterializedViewConsumerRefreshFailureBoundaries(t *testing.T) {
 		MockRetriever: MockRetriever{dtype: ISCPDataType_Snapshot}, err: drainErr,
 	})
 	require.ErrorIs(t, err, drainErr)
-
-	consumer.info.RefreshSQL = "select * from events"
-	consumer.info.SrcTables = []TableInfo{{DBName: "db", TableName: "events"}}
-	err = consumer.Consume(t.Context(), &MockRetriever{dtype: ISCPDataType_Snapshot})
-	require.ErrorContains(t, err, "does not expose iteration boundary")
 }
 
 func TestMaterializedViewIncrementalSourceFailureBoundaries(t *testing.T) {
