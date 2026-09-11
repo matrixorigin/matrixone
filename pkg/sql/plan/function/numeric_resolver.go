@@ -37,11 +37,6 @@ type numericTypeResolution struct {
 	result types.Type
 }
 
-func isMixedInt64Uint64(left, right types.Type) bool {
-	return left.Oid == types.T_int64 && right.Oid == types.T_uint64 ||
-		left.Oid == types.T_uint64 && right.Oid == types.T_int64
-}
-
 // InferNumericParameterType selects the computation type for unresolved
 // numeric parameters. known may contain operands from any depth in one
 // arithmetic subtree. Approximate operands dominate exact operands, followed
@@ -288,11 +283,11 @@ func resolveNumericBinaryTypes(
 		return numericTypeResolution{}, false
 	}
 	if (op == numericOpAdd || op == numericOpSub || op == numericOpMul) &&
-		isMixedInt64Uint64(left, right) {
+		isMixedUnsignedInteger(left, right) {
 		return numericTypeResolution{
 			left:   left,
 			right:  right,
-			result: types.New(types.T_decimal128, 38, 0),
+			result: types.New(types.T_uint64, 64, -1),
 		}, true
 	}
 

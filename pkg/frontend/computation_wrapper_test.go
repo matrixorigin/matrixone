@@ -4501,6 +4501,36 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenBoolSumAvgChanges(t *testin
 	require.NotSame(t, rebuiltPlan, prepareStmt.PreparePlan)
 }
 
+func TestInitExecuteStmtParamRebuildsPreparedPlanWhenNoUnsignedSubtractionChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 112)
+	defer prepareStmt.Close()
+
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+	prepareStmt.OnlyFullGroupBy = true
+	prepareStmt.NoUnsignedSubtraction = false
+	prepareStmt.sqlModeFlagsSet = true
+	originalPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY,NO_UNSIGNED_SUBTRACTION"))
+
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.True(t, prepareStmt.NoUnsignedSubtraction)
+	require.True(t, prepareStmt.OnlyFullGroupBy)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+
+	// Dropping the token rebuilds again; an unchanged mode reuses the plan.
+	rebuiltPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.False(t, prepareStmt.NoUnsignedSubtraction)
+	require.NotSame(t, rebuiltPlan, prepareStmt.PreparePlan)
+}
+
 func TestInitExecuteStmtParamRebuildsPlanInvalidatedDuringRun(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 110)
 	defer prepareStmt.Close()

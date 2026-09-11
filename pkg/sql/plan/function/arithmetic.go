@@ -16,7 +16,6 @@ package function
 
 import (
 	"math"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -293,17 +292,6 @@ func plusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 	panic("unreached code")
 }
 
-func mixedUnsignedPlusFn(
-	parameters []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-) error {
-	return mixedUnsignedDecimalArith(
-		parameters, result, proc, length, selectList, "+", d128Add, true)
-}
-
 func minusFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	vectorIdx, scalarIdx := 0, 1
 	vectorAndScalarParams := []*vector.Vector{parameters[vectorIdx], parameters[scalarIdx]}
@@ -388,23 +376,6 @@ func minusFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	panic("unreached code")
 }
 
-func mixedUnsignedMinusFn(
-	parameters []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-) error {
-	noUnsignedSubtraction, err := resolveSQLModeToken(
-		proc, "NO_UNSIGNED_SUBTRACTION")
-	if err != nil {
-		return err
-	}
-	return mixedUnsignedDecimalArith(
-		parameters, result, proc, length, selectList, "-", d128Sub,
-		!noUnsignedSubtraction)
-}
-
 func multiFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	vectorIdx, scalarIdx := 0, 1
 	if parameters[1].GetType().Oid.IsArrayRelate() {
@@ -483,85 +454,6 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		}, selectList)
 	}
 	panic("unreached code")
-}
-
-func mixedUnsignedMultiFn(
-	parameters []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-) error {
-	return mixedUnsignedDecimalArith(
-		parameters, result, proc, length, selectList, "*", d128Mul, true)
-}
-
-func mixedUnsignedDecimalArith(
-	parameters []*vector.Vector,
-	result vector.FunctionResultWrapper,
-	proc *process.Process,
-	length int,
-	selectList *FunctionSelectList,
-	operator string,
-	arithFn func(
-		v1, v2, rs []types.Decimal128,
-		scale1, scale2 int32,
-		rsnull *nulls.Nulls,
-	) error,
-	checkUnsignedDomain bool,
-) error {
-	if err := decimalBatchArith[types.Decimal128, types.Decimal128](
-		parameters, result, proc, length, arithFn, selectList); err != nil {
-		return err
-	}
-	if !checkUnsignedDomain {
-		return nil
-	}
-
-	resultVector := result.GetResultVector()
-	values := vector.MustFixedColNoTypeCheck[types.Decimal128](resultVector)
-	maxUnsigned := types.Decimal128{B0_63: math.MaxUint64}
-	for i := 0; i < length; i++ {
-		if resultVector.GetNulls().Contains(uint64(i)) {
-			continue
-		}
-		if values[i].Sign() || values[i].Compare(maxUnsigned) > 0 {
-			return moerr.NewOutOfRangef(
-				proc.Ctx, "BIGINT UNSIGNED",
-				"(mixed signed/unsigned %s result %s)", operator, values[i].Format(0))
-		}
-	}
-	return nil
-}
-
-func sqlModeContainsToken(mode, wanted string) bool {
-	for token := range strings.SplitSeq(mode, ",") {
-		if strings.EqualFold(strings.TrimSpace(token), wanted) {
-			return true
-		}
-	}
-	return false
-}
-
-func resolveSQLModeToken(proc *process.Process, wanted string) (bool, error) {
-	if proc == nil {
-		return false, nil
-	}
-	if resolve := proc.GetResolveVariableFunc(); resolve != nil {
-		mode, err := resolve("sql_mode", true, false)
-		if err != nil {
-			return false, err
-		}
-		if value, ok := mode.(string); ok {
-			if value != "" || proc.Base == nil || proc.Base.IsFrontend {
-				return sqlModeContainsToken(value, wanted), nil
-			}
-		}
-	}
-	if proc.Base == nil {
-		return false, nil
-	}
-	return sqlModeContainsToken(proc.Base.SessionInfo.SqlMode, wanted), nil
 }
 
 func divFnVectorScalar(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

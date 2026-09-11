@@ -97,6 +97,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	var mysqlCompatible bool
 	var mysqlFullGroupByCompat bool
 	var boolSumAvgCompat bool
+	var noUnsignedSubtraction bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
@@ -105,6 +106,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			mysqlCompatible = !onlyFullGroupBy
 			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
 			boolSumAvgCompat = mysql.HasEnableBoolSumAvgSQLMode(modeStr)
+			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, "NO_UNSIGNED_SUBTRACTION")
 		}
 	}
 
@@ -159,6 +161,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		mysqlCompatible:          mysqlCompatible,
 		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
 		boolSumAvgCompat:         boolSumAvgCompat,
+		noUnsignedSubtraction:    noUnsignedSubtraction,
 		aggSpillMem:              aggSpillMem,
 		joinSpillMem:             joinSpillMem,
 		sortSpillMem:             sortSpillMem,
@@ -13014,7 +13017,7 @@ func (builder *QueryBuilder) GetContext() context.Context {
 	if builder == nil {
 		return context.TODO()
 	}
-	return builder.compCtx.GetContext()
+	return function.WithNoUnsignedSubtraction(builder.compCtx.GetContext(), builder.noUnsignedSubtraction)
 }
 
 func (builder *QueryBuilder) checkPlanningCanceled() error {

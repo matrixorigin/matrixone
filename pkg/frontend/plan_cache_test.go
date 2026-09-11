@@ -474,6 +474,7 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 		"PIPES_AS_CONCAT",
 		"NO_BACKSLASH_ESCAPES",
 		"REAL_AS_FLOAT",
+		"NO_UNSIGNED_SUBTRACTION",
 	} {
 		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
 		stmt = &trackedStatement{}

@@ -36,13 +36,14 @@ func TestMixedInt64Uint64ResolversUseUnsignedDomainOverloads(t *testing.T) {
 				context.Background(), operator, operands[:])
 			require.NoError(t, err)
 			require.Equal(t, int32(2), resolved.overloadId)
-			require.Equal(t, types.New(types.T_decimal128, 38, 0), resolved.GetReturnType())
+			require.Equal(t, types.New(types.T_uint64, 64, -1), resolved.GetReturnType())
 			targets, needCast := resolved.ShouldDoImplicitTypeCast()
 			require.True(t, needCast)
-			require.Equal(t, []types.Type{
-				types.New(types.T_decimal128, 38, 0),
-				types.New(types.T_decimal128, 38, 0),
-			}, targets)
+			require.Len(t, targets, 2)
+			for i, target := range targets {
+				require.Equal(t, operands[i].Oid, target.Oid)
+				require.Equal(t, int32(64), target.Width)
+			}
 		}
 	}
 
@@ -55,7 +56,6 @@ func TestMixedInt64Uint64ResolversUseUnsignedDomainOverloads(t *testing.T) {
 }
 
 func TestMixedUnsignedArithmeticDomainChecks(t *testing.T) {
-	decimalType := types.New(types.T_decimal128, 38, 0)
 	maxUnsigned := types.Decimal128{B0_63: math.MaxUint64}
 	negativeOne := types.Decimal128{B0_63: math.MaxUint64, B64_127: math.MaxUint64}
 
@@ -71,22 +71,32 @@ func TestMixedUnsignedArithmeticDomainChecks(t *testing.T) {
 		{name: "plus maximum", fn: mixedUnsignedPlusFn, left: maxUnsigned, right: types.Decimal128{}, want: maxUnsigned},
 		{name: "plus overflow", fn: mixedUnsignedPlusFn, left: maxUnsigned, right: types.Decimal128{B0_63: 1}, wantCode: moerr.ER_DATA_OUT_OF_RANGE},
 		{name: "minus negative", fn: mixedUnsignedMinusFn, left: types.Decimal128{}, right: types.Decimal128{B0_63: 1}, wantCode: moerr.ER_DATA_OUT_OF_RANGE},
-		{name: "minus negative allowed", fn: mixedUnsignedMinusFn, left: types.Decimal128{}, right: types.Decimal128{B0_63: 1}, mode: "NO_UNSIGNED_SUBTRACTION", want: negativeOne},
+		{name: "minus negative allowed", fn: signedUnsignedMinusFn, left: types.Decimal128{}, right: types.Decimal128{B0_63: 1}, mode: "NO_UNSIGNED_SUBTRACTION", want: negativeOne},
+		{name: "signed positive overflow", fn: signedUnsignedMinusFn, left: maxUnsigned, mode: "NO_UNSIGNED_SUBTRACTION", wantCode: moerr.ER_DATA_OUT_OF_RANGE},
+		{name: "signed negative overflow", fn: signedUnsignedMinusFn, left: negativeOne, right: maxUnsigned, mode: "NO_UNSIGNED_SUBTRACTION", wantCode: moerr.ER_DATA_OUT_OF_RANGE},
+		{name: "plus negative operand", fn: mixedUnsignedPlusFn, left: maxUnsigned, right: negativeOne, want: types.Decimal128{B0_63: math.MaxUint64 - 1}},
 		{name: "multiply maximum", fn: mixedUnsignedMultiFn, left: maxUnsigned, right: types.Decimal128{B0_63: 1}, want: maxUnsigned},
 		{name: "multiply overflow", fn: mixedUnsignedMultiFn, left: maxUnsigned, right: types.Decimal128{B0_63: 2}, wantCode: moerr.ER_DATA_OUT_OF_RANGE},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			defer proc.Free()
-			proc.Base.SessionInfo.SqlMode = test.mode
+			resultType := types.T_uint64.ToType()
+			if test.mode != "" {
+				resultType = types.T_int64.ToType()
+			}
 			caseUnderTest := NewFunctionTestCase(proc,
 				[]FunctionTestInput{
-					NewFunctionTestInput(decimalType, []types.Decimal128{test.left}, nil),
-					NewFunctionTestInput(decimalType, []types.Decimal128{test.right}, nil),
+					integerDomainTestInput(test.left),
+					integerDomainTestInput(test.right),
 				},
-				NewFunctionTestResult(decimalType, false, []types.Decimal128{test.want}, nil),
+				NewFunctionTestResult(resultType, false, nil, nil),
 				test.fn,
 			)
+			defer caseUnderTest.result.Free()
+			for _, parameter := range caseUnderTest.parameters {
+				defer parameter.Free(proc.Mp())
+			}
 			require.NoError(t, caseUnderTest.result.PreExtendAndReset(1))
 			err := caseUnderTest.fn(
 				caseUnderTest.parameters, caseUnderTest.result, proc, 1, nil)
@@ -98,9 +108,11 @@ func TestMixedUnsignedArithmeticDomainChecks(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Equal(t, test.want,
-				vector.GetFixedAtNoTypeCheck[types.Decimal128](
-					caseUnderTest.GetResultVectorDirectly(), 0))
+			if resultType.Oid == types.T_int64 {
+				require.Equal(t, int64(test.want.B0_63), vector.GetFixedAtNoTypeCheck[int64](caseUnderTest.GetResultVectorDirectly(), 0))
+			} else {
+				require.Equal(t, test.want.B0_63, vector.GetFixedAtNoTypeCheck[uint64](caseUnderTest.GetResultVectorDirectly(), 0))
+			}
 		})
 	}
 }
@@ -108,16 +120,19 @@ func TestMixedUnsignedArithmeticDomainChecks(t *testing.T) {
 func TestMixedUnsignedArithmeticSkipsMaskedRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	decimalType := types.New(types.T_decimal128, 38, 0)
-	maxUnsigned := types.Decimal128{B0_63: math.MaxUint64}
+	maxUnsigned := uint64(math.MaxUint64)
 	caseUnderTest := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(decimalType, []types.Decimal128{maxUnsigned, maxUnsigned}, nil),
-			NewFunctionTestInput(decimalType, []types.Decimal128{{}, {B0_63: 1}}, nil),
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{maxUnsigned, maxUnsigned}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1}, nil),
 		},
-		NewFunctionTestResult(decimalType, false, nil, nil),
+		NewFunctionTestResult(types.T_uint64.ToType(), false, nil, nil),
 		mixedUnsignedPlusFn,
 	)
+	defer caseUnderTest.result.Free()
+	for _, parameter := range caseUnderTest.parameters {
+		defer parameter.Free(proc.Mp())
+	}
 	require.NoError(t, caseUnderTest.result.PreExtendAndReset(2))
 	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
 	require.NoError(t, caseUnderTest.fn(
@@ -125,30 +140,30 @@ func TestMixedUnsignedArithmeticSkipsMaskedRows(t *testing.T) {
 	require.True(t, caseUnderTest.GetResultVectorDirectly().GetNulls().Contains(1))
 }
 
-func TestNoUnsignedSubtractionModeRequiresExactToken(t *testing.T) {
-	require.True(t, sqlModeContainsToken(
-		"STRICT_TRANS_TABLES, NO_UNSIGNED_SUBTRACTION", "NO_UNSIGNED_SUBTRACTION"))
-	require.False(t, sqlModeContainsToken(
-		"NOT_NO_UNSIGNED_SUBTRACTION", "NO_UNSIGNED_SUBTRACTION"))
+func TestUnsignedSubtractionBindsResultDomain(t *testing.T) {
+	for _, pair := range [][2]types.Type{
+		{types.T_uint64.ToType(), types.T_int64.ToType()},
+		{types.T_int64.ToType(), types.T_uint64.ToType()},
+		{types.T_uint64.ToType(), types.T_uint64.ToType()},
+		{types.T_uint8.ToType(), types.T_int8.ToType()},
+	} {
+		ctx := WithNoUnsignedSubtraction(context.Background(), true)
+		resolved, err := GetFunctionByName(ctx, "-", pair[:])
+		require.NoError(t, err)
+		require.Equal(t, int32(3), resolved.overloadId)
+		require.Equal(t, types.T_int64, resolved.GetReturnType().Oid)
+	}
+	inner, err := GetFunctionByName(context.Background(), "+", []types.Type{types.T_uint64.ToType(), types.T_int64.ToType()})
+	require.NoError(t, err)
+	outer, err := GetFunctionByName(context.Background(), "-", []types.Type{inner.GetReturnType(), types.T_int64.ToType()})
+	require.NoError(t, err)
+	require.Equal(t, types.T_uint64, outer.GetReturnType().Oid)
+	require.Equal(t, int32(2), outer.overloadId)
 }
 
-func TestNoUnsignedSubtractionUsesLiveModeAndRemoteSnapshot(t *testing.T) {
-	frontend := testutil.NewProcess(t)
-	defer frontend.Free()
-	frontend.Base.IsFrontend = true
-	frontend.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES"
-	frontend.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
-		return "NO_UNSIGNED_SUBTRACTION", nil
-	})
-	enabled, err := resolveSQLModeToken(frontend, "NO_UNSIGNED_SUBTRACTION")
-	require.NoError(t, err)
-	require.True(t, enabled)
-
-	remote := testutil.NewProcess(t)
-	defer remote.Free()
-	remote.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES,NO_UNSIGNED_SUBTRACTION"
-	remote.SetResolveVariableFunc(nil)
-	enabled, err = resolveSQLModeToken(remote, "NO_UNSIGNED_SUBTRACTION")
-	require.NoError(t, err)
-	require.True(t, enabled)
+func integerDomainTestInput(value types.Decimal128) FunctionTestInput {
+	if value.Sign() {
+		return NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(value.B0_63)}, nil)
+	}
+	return NewFunctionTestInput(types.T_uint64.ToType(), []uint64{value.B0_63}, nil)
 }

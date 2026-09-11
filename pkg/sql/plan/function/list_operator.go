@@ -1787,9 +1787,8 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if isMixedInt64Uint64(inputs[0], inputs[1]) {
-					decimal := types.New(types.T_decimal128, 38, 0)
-					return newCheckResultWithCast(2, []types.Type{decimal, decimal})
+				if isMixedUnsignedInteger(inputs[0], inputs[1]) {
+					return newCheckResultWithCast(2, integerDomainOperands(inputs))
 				}
 				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 
@@ -1861,7 +1860,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 2,
 				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_decimal128, 38, 0)
+					return types.New(types.T_uint64, 64, -1)
 				},
 				newOp: func() executeLogicOfOverload {
 					return mixedUnsignedPlusFn
@@ -1878,9 +1877,8 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if isMixedInt64Uint64(inputs[0], inputs[1]) {
-					decimal := types.New(types.T_decimal128, 38, 0)
-					return newCheckResultWithCast(2, []types.Type{decimal, decimal})
+				if isMixedUnsignedInteger(inputs[0], inputs[1]) {
+					return newCheckResultWithCast(2, integerDomainOperands(inputs))
 				}
 				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 
@@ -1950,11 +1948,18 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 2,
 				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_decimal128, 38, 0)
+					return types.New(types.T_uint64, 64, -1)
 				},
 				newOp: func() executeLogicOfOverload {
 					return mixedUnsignedMinusFn
 				},
+			},
+			{
+				overloadId: 3,
+				retType: func(parameters []types.Type) types.Type {
+					return types.New(types.T_int64, 64, -1)
+				},
+				newOp: func() executeLogicOfOverload { return signedUnsignedMinusFn },
 			},
 		},
 	},
@@ -1967,9 +1972,8 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if isMixedInt64Uint64(inputs[0], inputs[1]) {
-					decimal := types.New(types.T_decimal128, 38, 0)
-					return newCheckResultWithCast(2, []types.Type{decimal, decimal})
+				if isMixedUnsignedInteger(inputs[0], inputs[1]) {
+					return newCheckResultWithCast(2, integerDomainOperands(inputs))
 				}
 				has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 
@@ -2065,7 +2069,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 2,
 				retType: func(parameters []types.Type) types.Type {
-					return types.New(types.T_decimal128, 38, 0)
+					return types.New(types.T_uint64, 64, -1)
 				},
 				newOp: func() executeLogicOfOverload {
 					return mixedUnsignedMultiFn
