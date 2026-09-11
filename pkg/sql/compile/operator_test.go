@@ -293,6 +293,42 @@ func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), config)
 }
 
+func TestGroupConcatMaxLenAsUint64(t *testing.T) {
+	tests := []struct {
+		name  string
+		value interface{}
+		want  uint64
+		ok    bool
+	}{
+		{name: "int", value: int(5), want: 5, ok: true},
+		{name: "negative int", value: int(-1)},
+		{name: "uint", value: uint(5), want: 5, ok: true},
+		{name: "int8", value: int8(5), want: 5, ok: true},
+		{name: "negative int8", value: int8(-1)},
+		{name: "uint8", value: uint8(5), want: 5, ok: true},
+		{name: "int16", value: int16(5), want: 5, ok: true},
+		{name: "negative int16", value: int16(-1)},
+		{name: "uint16", value: uint16(5), want: 5, ok: true},
+		{name: "int32", value: int32(5), want: 5, ok: true},
+		{name: "negative int32", value: int32(-1)},
+		{name: "uint32", value: uint32(5), want: 5, ok: true},
+		{name: "int64", value: int64(5), want: 5, ok: true},
+		{name: "negative int64", value: int64(-1)},
+		{name: "uint64", value: uint64(5), want: 5, ok: true},
+		{name: "float", value: float64(5)},
+		{name: "string", value: "5"},
+		{name: "nil", value: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := groupConcatMaxLenAsUint64(tt.value)
+			require.Equal(t, tt.want, got)
+			require.Equal(t, tt.ok, ok)
+		})
+	}
+}
+
 func TestConstructAggregateConfigPreservesOrderedGroupConcatArgs(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {

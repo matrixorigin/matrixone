@@ -11057,6 +11057,21 @@ func TestSetGlobalSysVar(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 0)
 
+		groupConcatGetSQL := getSqlForGetSysVarWithAccount(sysAccountID, groupConcatMaxLenVariable)
+		bh.sql2result[groupConcatGetSQL] = newMrsForSystemVariableNameOfAccount([][]interface{}{})
+		groupConcatInsertSQL := getSqlForInsertSysVarWithAccount(
+			sysAccountID, sysAccountName, groupConcatMaxLenVariable, "4")
+		bh.sql2result[groupConcatInsertSQL] = nil
+		err = ses0.SetGlobalSysVar(context.TODO(), groupConcatMaxLenVariable, int64(0))
+		convey.So(err, convey.ShouldBeNil)
+		value, err = ses0.GetGlobalSysVar(groupConcatMaxLenVariable)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, uint64(4))
+		info := ses0.diagnosticsSnapshot()
+		convey.So(info.codes, convey.ShouldResemble, []uint16{moerr.ER_TRUNCATED_WRONG_VALUE})
+		convey.So(info.msgs, convey.ShouldResemble,
+			[]string{groupConcatMaxLenTruncationWarning(int64(0))})
+
 		err = ses0.SetGlobalSysVar(context.TODO(), "not exists sys var", "xxxx")
 		convey.So(err, convey.ShouldNotBeNil)
 	})

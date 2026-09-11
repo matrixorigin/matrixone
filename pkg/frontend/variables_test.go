@@ -158,6 +158,56 @@ func TestGroupConcatMaxLenAssignmentBounds(t *testing.T) {
 	}
 }
 
+func TestNormalizeGroupConcatMaxLenValue(t *testing.T) {
+	tests := []struct {
+		name         string
+		value        interface{}
+		want         interface{}
+		wasTruncated bool
+	}{
+		{name: "int below minimum", value: int(3), want: uint64(4), wasTruncated: true},
+		{name: "int at minimum", value: int(4), want: int(4)},
+		{name: "uint below minimum", value: uint(3), want: uint64(4), wasTruncated: true},
+		{name: "uint at minimum", value: uint(4), want: uint(4)},
+		{name: "int8 below minimum", value: int8(3), want: uint64(4), wasTruncated: true},
+		{name: "int8 at minimum", value: int8(4), want: int8(4)},
+		{name: "uint8 below minimum", value: uint8(3), want: uint64(4), wasTruncated: true},
+		{name: "uint8 at minimum", value: uint8(4), want: uint8(4)},
+		{name: "int16 below minimum", value: int16(3), want: uint64(4), wasTruncated: true},
+		{name: "int16 at minimum", value: int16(4), want: int16(4)},
+		{name: "uint16 below minimum", value: uint16(3), want: uint64(4), wasTruncated: true},
+		{name: "uint16 at minimum", value: uint16(4), want: uint16(4)},
+		{name: "int32 below minimum", value: int32(3), want: uint64(4), wasTruncated: true},
+		{name: "int32 at minimum", value: int32(4), want: int32(4)},
+		{name: "uint32 below minimum", value: uint32(3), want: uint64(4), wasTruncated: true},
+		{name: "uint32 at minimum", value: uint32(4), want: uint32(4)},
+		{name: "int64 below minimum", value: int64(3), want: uint64(4), wasTruncated: true},
+		{name: "int64 at minimum", value: int64(4), want: int64(4)},
+		{name: "uint64 below minimum", value: uint64(3), want: uint64(4), wasTruncated: true},
+		{name: "uint64 at minimum", value: uint64(4), want: uint64(4)},
+		{name: "float32 below minimum", value: float32(3), want: uint64(4), wasTruncated: true},
+		{name: "float32 at minimum", value: float32(4), want: float32(4)},
+		{name: "float32 fractional", value: float32(3.5), want: float32(3.5)},
+		{name: "float64 below minimum", value: float64(3), want: uint64(4), wasTruncated: true},
+		{name: "float64 at minimum", value: float64(4), want: float64(4)},
+		{name: "float64 fractional", value: float64(3.5), want: float64(3.5)},
+		{name: "unsigned string below minimum", value: "3", want: uint64(4), wasTruncated: true},
+		{name: "unsigned string", value: "5", want: uint64(5)},
+		{name: "signed string below minimum", value: "-1", want: uint64(4), wasTruncated: true},
+		{name: "invalid string", value: "invalid", want: "invalid"},
+		{name: "overflow string", value: "18446744073709551616", want: "18446744073709551616"},
+		{name: "unsupported type", value: true, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, wasTruncated := normalizeGroupConcatMaxLenValue(tt.value)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wasTruncated, wasTruncated)
+		})
+	}
+}
+
 func TestGroupConcatMaxLenFailedAssignmentKeepsPreviousValue(t *testing.T) {
 	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
 	assert.NoError(t, ses.SetSessionSysVar(context.Background(), groupConcatMaxLenVariable, int64(1024)))
