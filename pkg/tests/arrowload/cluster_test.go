@@ -70,10 +70,13 @@ func waitArrowLoadClusterReady(t testing.TB, c embed.Cluster) {
 	defer cancel()
 	poll := time.NewTicker(arrowLoadClusterReadyPoll)
 	defer poll.Stop()
+	started := time.Now()
 	lastStatus := "not checked"
 	for {
 		ready, status := arrowLoadClusterReadyStatus(ctx, expected)
 		if ready {
+			t.Logf("MO_UT_SETUP fixture=arrowload phase=lockservice-ready duration=%s cn_count=%d status=ready",
+				time.Since(started), len(expected))
 			return
 		}
 		lastStatus = status
@@ -82,7 +85,8 @@ func waitArrowLoadClusterReady(t testing.TB, c embed.Cluster) {
 		case <-ctx.Done():
 			require.Failf(t,
 				"Arrow LOAD cluster did not become lockservice-ready",
-				"expected CNs=%v; last status=%s", expected, lastStatus)
+				"elapsed=%s; expected CNs=%v; last status=%s",
+				time.Since(started), expected, lastStatus)
 			return
 		case <-poll.C:
 		}

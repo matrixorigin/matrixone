@@ -22,19 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestArrowLoadMultiCN covers distributed record-batch fan-out through the
-// public path. Shutdown/cancellation coverage uses deterministic request and
-// cluster-lifecycle fault injection in the dedicated rollout and MinIO tests.
-func TestArrowLoadMultiCN(t *testing.T) {
-	c := startArrowLoadClusterWithDefaults(t, 2)
-	db := openArrowLoadDB(t, c, 0)
-	mustExec(t, db, "create database if not exists arrow_multicn")
-	mustExec(t, db, "use arrow_multicn")
-	path, ddl := fixtureLarge(t)
-
-	t.Run("DistributedRecordBatchFanout", func(t *testing.T) { testArrowMultiCNFanout(t, db, path, ddl) })
-}
-
 // testArrowMultiCNFanout loads the "large" multi-record-batch fixture with
 // `PARALLEL 'true'` against the 2-CN cluster and checks full row-count and content
 // correctness. Shard-routing internals are already unit-tested in

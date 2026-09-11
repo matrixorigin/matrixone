@@ -88,7 +88,7 @@ reuse, same-key object replacement, conditional-range object-change rejection,
 client request cancellation, `KILL QUERY`, 2-CN fanout, and committed-data
 persistence across a complete local cluster restart. No cloud credentials or
 external services are needed. The added scenarios passed the full package,
-focused race runs, and a same-process two-run 1-CN BVT repetition:
+focused race runs, and a same-process two-run 2-CN BVT repetition:
 
 ```text
 .agents/skills/mo-dev/scripts/mo-cgo-test -p=1 -count=1 -timeout=1200s \
@@ -97,7 +97,7 @@ focused race runs, and a same-process two-run 1-CN BVT repetition:
   -run '^TestArrowLoadBVT/(CorruptInputRollback|LocalMinIO)$' \
   ./pkg/tests/arrowload
 .agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -timeout=1200s \
-  -run '^TestArrowLoadMultiCN/(CancelMidLoad|ClientContextCancel)$' \
+  -run '^TestArrowLoadBVT/DistributedRecordBatchFanout$' \
   ./pkg/tests/arrowload
 .agents/skills/mo-dev/scripts/mo-cgo-test -p=1 -count=2 -timeout=1200s \
   -run '^TestArrowLoadBVT$' ./pkg/tests/arrowload

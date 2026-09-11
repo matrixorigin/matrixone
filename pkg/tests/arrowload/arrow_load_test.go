@@ -31,20 +31,31 @@ import (
 )
 
 // TestArrowLoadBVT is the embedded public-path BVT suite for `LOAD DATA ...
-// format='arrow'` (issue #23684, design doc sections 14 and 18). It runs every
-// subtest against one dedicated 1-CN cluster without Arrow-specific settings and
-// uses the real MySQL protocol rather than the internal executor. Local File and
-// Stream, local stage, and S3-backed stage therefore prove default availability.
-// It proves type-matrix correctness, option/DDL rejection, multi-object
-// atomicity, explicit transactions, and cross-session visibility. Focused gate
-// tests, standard distributed CI, mixed binaries, and real cloud providers
-// remain separate release evidence.
+// format='arrow'` (issue #23684, design doc sections 14 and 18). It runs the
+// default-path checks against one dedicated 2-CN cluster without Arrow-specific
+// settings and uses the real MySQL protocol rather than the internal SQL
+// executor. Keeping the default BVT and distributed fan-out checks in this one
+// lifecycle avoids paying for two identical cluster startups while preserving
+// separate databases and subtest names. Local File and Stream, local stage, and
+// S3-backed stage therefore prove default availability. Focused gate tests,
+// standard distributed CI, mixed binaries, and real cloud providers remain
+// separate release evidence.
 func TestArrowLoadBVT(t *testing.T) {
-	c := startArrowLoadClusterWithDefaults(t, 1)
+	c := startArrowLoadClusterWithDefaults(t, 2)
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_bvt")
 	mustExec(t, db, "use arrow_bvt")
 
+	// The multi-CN fan-out test uses the same default-path cluster. It runs before
+	// ClusterRestartPersistence, which deliberately invalidates every connection
+	// and must remain the final subtest in this lifecycle.
+	t.Run("DistributedRecordBatchFanout", func(t *testing.T) {
+		multiDB := openArrowLoadDB(t, c, 0)
+		mustExec(t, multiDB, "create database if not exists arrow_multicn")
+		mustExec(t, multiDB, "use arrow_multicn")
+		path, ddl := fixtureLarge(t)
+		testArrowMultiCNFanout(t, multiDB, path, ddl)
+	})
 	t.Run("TypeMatrixNumeric", func(t *testing.T) { testArrowTypeMatrixNumeric(t, db) })
 	t.Run("TypeMatrixTimestampDict", func(t *testing.T) { testArrowTypeMatrixTimestampDict(t, db) })
 	t.Run("TypeMatrixLongBinary", func(t *testing.T) { testArrowTypeMatrixLongBinary(t, db) })
