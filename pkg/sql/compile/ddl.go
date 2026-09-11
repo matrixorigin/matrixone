@@ -6844,6 +6844,11 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		value := planCDC.Option[i+1]
 		tmpOpts[key] = value
 	}
+	// Make the raw exclude expression available to level validation, which runs
+	// before the option switch reaches the Exclude case.
+	if exclude := tmpOpts[cdc.CDCRequestOptions_Exclude]; exclude != "" {
+		opts.Exclude = exclude
+	}
 
 	// extract source uri and check connection
 	// target field: SrcUri
@@ -7088,7 +7093,7 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 
 	// ensure PITR checks run with the target tenant account id
 	ctx = defines.AttachAccountId(ctx, opts.UserInfo.AccountId)
-	if err = c.checkPitrGranularity(ctx, patterTupples); err != nil {
+	if err = c.checkPitrGranularity(ctx, patterTupples, opts.Exclude); err != nil {
 		return
 	}
 
@@ -7148,6 +7153,7 @@ func transformIntoHours(freq string) int64 {
 func (c *Compile) checkPitrGranularity(
 	ctx context.Context,
 	pts *cdc.PatternTuples,
+	exclude string,
 	minLength ...int64,
 ) error {
 	accountId, err := defines.GetAccountId(ctx)
@@ -7166,8 +7172,16 @@ func (c *Compile) checkPitrGranularity(
 			if pt.Source.Database != cdc.CDCPitrGranularity_All {
 				dbFilter = fmt.Sprintf(" AND t.%s = %s", sqlquote.Ident(catalog.SystemRelAttr_DBName), sqlquote.String(pt.Source.Database))
 			}
-			pkSQL := fmt.Sprintf("SELECT 1 FROM %s.%s t WHERE t.%s = %d AND t.%s = 'r'%s AND NOT EXISTS (SELECT 1 FROM %s.%s p WHERE p.%s = t.%s AND p.%s = t.%s AND p.%s = %s AND p.%s <> %s) LIMIT 1",
-				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_TABLES), sqlquote.Ident(catalog.SystemRelAttr_AccID), accountId, sqlquote.Ident(catalog.SystemRelAttr_Kind), dbFilter,
+			tableFilter := ""
+			if pt.Source.Table != cdc.CDCPitrGranularity_All {
+				tableFilter = fmt.Sprintf(" AND t.%s = %s", sqlquote.Ident(catalog.SystemRelAttr_Name), sqlquote.String(pt.Source.Table))
+			}
+			excludeFilter := ""
+			if exclude != "" {
+				excludeFilter = fmt.Sprintf(" AND concat(t.%s, '.', t.%s) NOT REGEXP %s", sqlquote.Ident(catalog.SystemRelAttr_DBName), sqlquote.Ident(catalog.SystemRelAttr_Name), sqlquote.String(exclude))
+			}
+			pkSQL := fmt.Sprintf("SELECT 1 FROM %s.%s t WHERE t.%s = %d AND t.%s = 'r'%s%s%s AND NOT EXISTS (SELECT 1 FROM %s.%s p WHERE p.%s = t.%s AND p.%s = t.%s AND p.%s = %s AND p.%s <> %s) LIMIT 1",
+				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_TABLES), sqlquote.Ident(catalog.SystemRelAttr_AccID), accountId, sqlquote.Ident(catalog.SystemRelAttr_Kind), dbFilter, tableFilter, excludeFilter,
 				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
 				sqlquote.Ident(catalog.SystemColAttr_AccID), sqlquote.Ident(catalog.SystemRelAttr_AccID),
 				sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.Ident(catalog.SystemRelAttr_DBName),
@@ -7352,7 +7366,7 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 		return
 	}
 
-	if err = c.checkPitrGranularity(ctx, patterTupples, normalized); err != nil {
+	if err = c.checkPitrGranularity(ctx, patterTupples, opts.Exclude, normalized); err != nil {
 		return err
 	}
 	return nil
