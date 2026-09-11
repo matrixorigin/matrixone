@@ -82,9 +82,11 @@ func TestIssue28401SubstringIndexDecimalCount(t *testing.T) {
 			require.NoError(t, rows.Err())
 		}()
 
-		_, err = conn.ExecContext(ctx, "create table counts (n decimal(4,1), wide decimal(65,1))")
+		_, err = conn.ExecContext(ctx,
+			"create table counts (n decimal(4,1), wide decimal(65,1), high_bit bit(64))")
 		require.NoError(t, err)
-		_, err = conn.ExecContext(ctx, "insert into counts values (1.5, 1.5), (-1.5, -1.5)")
+		_, err = conn.ExecContext(ctx, "insert into counts values "+
+			"(1.5, 1.5, 9223372036854775808), (-1.5, -1.5, 9223372036854775808)")
 		require.NoError(t, err)
 		func() {
 			rows, err := conn.QueryContext(ctx,
@@ -101,6 +103,10 @@ func TestIssue28401SubstringIndexDecimalCount(t *testing.T) {
 			require.NoError(t, rows.Err())
 			require.Equal(t, []string{"a,b", "a,b", "c,d", "c,d"}, got)
 		}()
+		var bitCount string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select substring_index('a,b,c,d', ',', high_bit) from counts limit 1").Scan(&bitCount))
+		require.Equal(t, "a,b,c,d", bitCount)
 
 		require.NoError(t, execIssue28401(ctx, conn,
 			`prepare stmt from "select substring_index('a,b,c,d', ',', ?)"`))

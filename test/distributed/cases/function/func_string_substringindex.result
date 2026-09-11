@@ -79,6 +79,13 @@ substring_index(a,b,c,d, ,, n)	substring_index(a,b,c,d, ,, wide)
 a,b	a,b
 c,d	c,d
 DROP TABLE substring_index_decimal_count;
+DROP TABLE IF EXISTS substring_index_bit_count;
+CREATE TABLE substring_index_bit_count (n BIT(64));
+INSERT INTO substring_index_bit_count VALUES (9223372036854775808);
+SELECT SUBSTRING_INDEX('a,b,c,d', ',', n) FROM substring_index_bit_count;
+substring_index(a,b,c,d, ,, n)
+a,b,c,d
+DROP TABLE substring_index_bit_count;
 PREPARE substring_index_decimal_stmt FROM "SELECT SUBSTRING_INDEX('a,b,c,d', ',', ?)";
 SET @substring_index_decimal_count = CAST(1.5 AS DECIMAL(4,1));
 EXECUTE substring_index_decimal_stmt USING @substring_index_decimal_count;

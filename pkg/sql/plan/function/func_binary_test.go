@@ -4821,6 +4821,7 @@ func TestSubStrIndexIntegerArgumentResolution(t *testing.T) {
 		{"int64", types.T_int64.ToType(), 2, false, types.T_int64},
 		{"uint64", types.T_uint64.ToType(), 1, false, types.T_uint64},
 		{"uint32", types.T_uint32.ToType(), 1, true, types.T_uint64},
+		{"bit64", types.New(types.T_bit, 64, 0), 1, true, types.T_uint64},
 		{"float32", types.T_float32.ToType(), 0, true, types.T_float64},
 		{"float64", types.T_float64.ToType(), 0, false, types.T_float64},
 		{"decimal64", types.New(types.T_decimal64, 18, 1), 2, true, types.T_int64},

@@ -1347,6 +1347,9 @@ func TestFillValuesOfParamsInPlanPreservesSubstringIndexIntegerContract(t *testi
 	require.Equal(t, int32(types.T_int64), count.Typ.Id, result.String())
 	require.Equal(t, "cast", count.GetF().Func.GetObjName(), result.String())
 	require.Equal(t, int32(types.T_decimal64), count.GetF().Args[0].Typ.Id, result.String())
+	requiresV64, err := planpb.RequiresMORPCVersion64ExactDecimalInt64Cast(filled)
+	require.NoError(t, err)
+	require.True(t, requiresV64, "the prepared plan must retain the remote exact-cast capability")
 }
 
 func TestFillValuesOfParamsInPlanPreservesMaterializedBinaryStringDomain(t *testing.T) {

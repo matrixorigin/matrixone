@@ -180,12 +180,25 @@ func RequiresMORPCVersion59NumericFormatArguments(owner any) (bool, error) {
 	return features.FormatNumericArguments, err
 }
 
+// RequiresMORPCVersion64ExactDecimalInt64Cast reports whether an owner contains
+// a normal DECIMAL-to-BIGINT cast whose single-rounding semantics require v64.
+func RequiresMORPCVersion64ExactDecimalInt64Cast(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.ExactDecimalInt64Cast, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
+	normalCastFunctionID             int32 = 21
 	nullSafeEqualFunctionID          int32 = 406
 	internalJSONComparisonFunctionID int32 = 577
+	normalCastOverloadID             int32 = 0
 	planBooleanTypeID                int32 = 10
+	planInt64TypeID                  int32 = 23
+	planDecimal64TypeID              int32 = 32
+	planDecimal128TypeID             int32 = 33
+	planDecimal256TypeID             int32 = 34
 	planJSONTypeID                   int32 = 62
 )
 
@@ -193,20 +206,23 @@ const (
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
-// MORPC v59. A struct makes compatibility call sites name every capability
-// instead of relying on positional booleans.
+// MORPC v59. ExactDecimalInt64Cast requires MORPC v64. A struct makes
+// compatibility call sites name every capability instead of relying on
+// positional booleans.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool
 	MixedJSONBooleanEquality bool
 	FormatNumericArguments   bool
+	ExactDecimalInt64Cast    bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
-		features.FormatNumericArguments
+		features.FormatNumericArguments ||
+		features.ExactDecimalInt64Cast
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -217,6 +233,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			fn := current.GetF()
+			if !features.ExactDecimalInt64Cast && isExactDecimalInt64Cast(current) {
+				features.ExactDecimalInt64Cast = true
+			}
 			if !features.NumericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
 				strings.EqualFold(fn.Func.GetObjName(), "cast") {
 				features.NumericPrefix = true
@@ -239,6 +258,30 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 		})
 	})
 	return
+}
+
+// Normal CAST overload 0 changed from multi-step decimal scaling to one exact
+// HALF_UP rounding step in v64. Explicit CAST overload 1 already had the exact
+// behavior, so it remains safe on older workers.
+func isExactDecimalInt64Cast(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	function := expr.GetF()
+	if function == nil || function.Func == nil || len(function.Args) < 2 ||
+		function.Args[0] == nil || function.Args[1] == nil || function.Args[1].Typ.Id != planInt64TypeID {
+		return false
+	}
+	if int32(function.Func.Obj>>32) != normalCastFunctionID ||
+		int32(function.Func.Obj) != normalCastOverloadID {
+		return false
+	}
+	switch function.Args[0].Typ.Id {
+	case planDecimal64TypeID, planDecimal128TypeID, planDecimal256TypeID:
+		return true
+	default:
+		return false
+	}
 }
 
 // FORMAT reuses its historical VARCHAR overload IDs for the new typed numeric
