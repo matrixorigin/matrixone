@@ -28,6 +28,33 @@ NOT (0 IN (0, 1)) AS parenthesized_not_in,
 (NOT 0) IN (0, 1) AS explicit_not_in;
 high_not_between    parenthesized_not_between    explicit_not_between    high_not_in    parenthesized_not_in    explicit_not_in
 0    1    0    1    0    1
+SET SESSION sql_mode = '';
+PREPARE p_default FROM 'SELECT NOT 1 BETWEEN 2 AND 3 AS prepared_default';
+SET SESSION sql_mode = 'HIGH_NOT_PRECEDENCE';
+EXECUTE p_default;
+prepared_default
+1
+DEALLOCATE PREPARE p_default;
+PREPARE p_high FROM 'SELECT NOT 1 BETWEEN 2 AND 3 AS prepared_high';
+SET SESSION sql_mode = '';
+EXECUTE p_high;
+prepared_high
+0
+DEALLOCATE PREPARE p_high;
+SET SESSION sql_mode = '';
+CREATE VIEW v_default_high_not AS SELECT NOT 1 BETWEEN 2 AND 3 AS view_default;
+SET SESSION sql_mode = 'HIGH_NOT_PRECEDENCE';
+SELECT * FROM v_default_high_not;
+view_default
+1
+CREATE VIEW v_high_high_not AS SELECT NOT 1 BETWEEN 2 AND 3 AS view_high;
+SET SESSION sql_mode = '';
+SELECT * FROM v_high_high_not;
+view_high
+0
+DROP VIEW v_default_high_not;
+DROP VIEW v_high_high_not;
+SET SESSION sql_mode = 'HIGH_NOT_PRECEDENCE';
 DROP TABLE IF EXISTS t_high_not_precedence;
 CREATE TABLE t_high_not_precedence (
 id INT PRIMARY KEY,

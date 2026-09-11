@@ -32,6 +32,29 @@ SELECT
   NOT (0 IN (0, 1)) AS parenthesized_not_in,
   (NOT 0) IN (0, 1) AS explicit_not_in;
 
+-- Prepared statements and views retain the parser mode from creation.
+SET SESSION sql_mode = '';
+PREPARE p_default FROM 'SELECT NOT 1 BETWEEN 2 AND 3 AS prepared_default';
+SET SESSION sql_mode = 'HIGH_NOT_PRECEDENCE';
+EXECUTE p_default;
+DEALLOCATE PREPARE p_default;
+
+PREPARE p_high FROM 'SELECT NOT 1 BETWEEN 2 AND 3 AS prepared_high';
+SET SESSION sql_mode = '';
+EXECUTE p_high;
+DEALLOCATE PREPARE p_high;
+
+SET SESSION sql_mode = '';
+CREATE VIEW v_default_high_not AS SELECT NOT 1 BETWEEN 2 AND 3 AS view_default;
+SET SESSION sql_mode = 'HIGH_NOT_PRECEDENCE';
+SELECT * FROM v_default_high_not;
+CREATE VIEW v_high_high_not AS SELECT NOT 1 BETWEEN 2 AND 3 AS view_high;
+SET SESSION sql_mode = '';
+SELECT * FROM v_high_high_not;
+DROP VIEW v_default_high_not;
+DROP VIEW v_high_high_not;
+SET SESSION sql_mode = 'HIGH_NOT_PRECEDENCE';
+
 DROP TABLE IF EXISTS t_high_not_precedence;
 CREATE TABLE t_high_not_precedence (
   id INT PRIMARY KEY,
