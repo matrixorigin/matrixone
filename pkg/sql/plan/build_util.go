@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -2339,39 +2340,68 @@ func checkTableColumnNameValid(name string) bool {
 
 // Check the expr has paramExpr
 func checkExprHasParamExpr(exprs []tree.Expr) bool {
-	checker := paramExprChecker{}
+	visited := make(map[paramExprVisit]struct{})
 	for _, expr := range exprs {
-		if expr == nil {
-			continue
-		}
-		_, _ = expr.Accept(&checker)
-		if checker.found {
+		if hasParamExprReflectively(reflect.ValueOf(expr), visited) {
 			return true
 		}
 	}
 	return false
 }
 
-// paramExprChecker walks every expression node through the parser's visitor
-// contract. The no-key INSERT fallback does not execute an ODKU expression,
-// but its parameter markers still belong to the prepared statement. Using the
-// visitor keeps markers in all expression forms (including comparison, CASE,
-// casts, and nested function arguments), rather than maintaining a partial
-// type switch here.
-type paramExprChecker struct {
-	found bool
+// The parser's Expr visitor is incomplete for several valid AST nodes,
+// including Subquery, VarExpr, ExprList, and IntervalExpr. The no-key INSERT
+// fallback must still find parameter markers in those discarded expressions,
+// so inspect the AST data directly instead of invoking Accept and potentially
+// panicking. Reflection keeps this traversal complete as expression nodes gain
+// more nested AST fields; it does not call methods or mutate the tree.
+type paramExprVisit struct {
+	typ reflect.Type
+	ptr uintptr
 }
 
-func (v *paramExprChecker) Enter(expr tree.Expr) (tree.Expr, bool) {
-	if _, ok := expr.(*tree.ParamExpr); ok {
-		v.found = true
-		return expr, true
+func hasParamExprReflectively(value reflect.Value, visited map[paramExprVisit]struct{}) bool {
+	if !value.IsValid() {
+		return false
 	}
-	return expr, false
-}
 
-func (v *paramExprChecker) Exit(expr tree.Expr) (tree.Expr, bool) {
-	return expr, !v.found
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return false
+		}
+		return hasParamExprReflectively(value.Elem(), visited)
+
+	case reflect.Ptr:
+		if value.IsNil() {
+			return false
+		}
+		if value.Type() == reflect.TypeOf((*tree.ParamExpr)(nil)) {
+			return true
+		}
+		visit := paramExprVisit{typ: value.Type(), ptr: value.Pointer()}
+		if _, ok := visited[visit]; ok {
+			return false
+		}
+		visited[visit] = struct{}{}
+		return hasParamExprReflectively(value.Elem(), visited)
+
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if hasParamExprReflectively(value.Field(i), visited) {
+				return true
+			}
+		}
+
+	case reflect.Slice, reflect.Array:
+		for i := 0; i < value.Len(); i++ {
+			if hasParamExprReflectively(value.Index(i), visited) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // makeSelectList forms SELECT Clause "Select t.a,t.b,... "

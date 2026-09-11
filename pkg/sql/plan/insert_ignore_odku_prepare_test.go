@@ -23,22 +23,33 @@ import (
 
 func TestPreparedNoKeyODKUParameters(t *testing.T) {
 	for _, modifier := range []string{"", "ignore "} {
-		for _, rhs := range []string{"?", "? + 1", "1 + ?", "pid + ?", "? + ?", "coalesce(?, 1)"} {
-			t.Run(modifier+rhs, func(t *testing.T) {
+		cases := []struct {
+			name     string
+			rhs      string
+			expected int
+		}{
+			{name: "parameter", rhs: "?", expected: 3},
+			{name: "right arithmetic parameter", rhs: "? + 1", expected: 3},
+			{name: "left arithmetic parameter", rhs: "1 + ?", expected: 3},
+			{name: "target reference and parameter", rhs: "pid + ?", expected: 3},
+			{name: "two parameters", rhs: "? + ?", expected: 4},
+			{name: "nested function parameter", rhs: "coalesce(?, 1)", expected: 3},
+			{name: "user variable", rhs: "@x", expected: 2},
+			{name: "literal scalar subquery", rhs: "(select 1)", expected: 2},
+			{name: "scalar subquery parameter", rhs: "(select ?)", expected: 3},
+		}
+		for _, tc := range cases {
+			t.Run(modifier+tc.name, func(t *testing.T) {
 				mock := NewMockOptimizer(true)
 				sql := fmt.Sprintf(
 					"prepare s from insert %sinto insert_fk_no_key_c values (?, ?) on duplicate key update pid = %s",
 					modifier,
-					rhs,
+					tc.rhs,
 				)
 				p, err := runOneStmt(mock, t, sql)
 				require.NoError(t, err)
 
-				expected := 3
-				if rhs == "? + ?" {
-					expected = 4
-				}
-				require.Equal(t, expected, len(p.GetDcl().GetPrepare().GetParamTypes()))
+				require.Equal(t, tc.expected, len(p.GetDcl().GetPrepare().GetParamTypes()))
 			})
 		}
 	}
