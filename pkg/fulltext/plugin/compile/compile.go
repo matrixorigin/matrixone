@@ -49,6 +49,9 @@ type Hooks struct{}
 // the empty string (see plan/schema.go), so the map has exactly one
 // entry under the "" key.
 func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
+	prepare := compileplugin.IsAlterCopyPrepare(ctx)
+	indexBuild := compileplugin.IsAlterCopyIndexBuild(ctx)
+	publish := compileplugin.IsAlterCopyPublication(ctx)
 	if len(indexDefs) != 1 {
 		return moerr.NewInternalErrorNoCtx("invalid fulltext index table definition")
 	}
@@ -69,6 +72,12 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 		if err := ctx.BuildIndexTable(tables[0]); err != nil {
 			return err
 		}
+		if prepare && !indexBuild {
+			return nil
+		}
+	}
+	if prepare && !indexBuild {
+		return nil
 	}
 
 	originalTableDef := ctx.OriginalTableDef()
@@ -84,6 +93,24 @@ func (Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map[s
 	async, err := indexplugin.IsAsync(indexDef.IndexAlgo, indexDef.IndexAlgoParams)
 	if err != nil {
 		return err
+	}
+	if publish {
+		if !async {
+			// Synchronous fulltext indexes have no CDC maintenance task; their
+			// physical rows were built before publication.
+			return nil
+		}
+		sinkerType := ctx.SinkerTypeFromAlgo(catalog.MOIndexFullTextAlgo.ToString())
+		if err = ctx.DropIndexCdcTask(originalTableDef, qryDatabase, originalTableDef.Name, indexDef.IndexName); err != nil {
+			return err
+		}
+		return ctx.CreateIndexCdcTask(qryDatabase, originalTableDef.Name,
+			originalTableDef.TblId, indexDef.IndexName, sinkerType, false, "", originalTableDef)
+	}
+	if prepare && async {
+		// Async fulltext is populated from the source CDC stream after the
+		// replacement relation is published.
+		return nil
 	}
 
 	// 3a. async: register a CDC task; data syncs via ISCP.
