@@ -41,6 +41,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// INSERT ... SELECT.  Reset it before binding so a QueryBuilder cannot leak
 	// the proof into a later DML path (for example LOAD or REPLACE).
 	builder.insertInputKeysUnique = false
+	builder.insertInputSingleRow = false
 	// INSERT IGNORE (OnDuplicateUpdate == [nil]) downgrades over-length
 	// CHAR/VARCHAR writes to truncation instead of rejection.
 	builder.isInsertIgnore = len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
@@ -2847,6 +2848,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			updateColExprList = append(updateColExprList, genExpr)
 		}
 	}
+	if err = builder.validateOndupTargetCorrelatedSubqueries(updateColExprList, targetCorrelationTag); err != nil {
+		return 0, err
+	}
 
 	for _, part := range tableDef.Pkey.Names {
 		if columnPossiblyChanged(tableDef, possiblyChangedCols, part) {
@@ -4547,6 +4551,161 @@ func updateExprListHasSubquery(exprs []*plan.Expr) bool {
 	return false
 }
 
+func (builder *QueryBuilder) validateOndupTargetCorrelatedSubqueries(exprs []*plan.Expr, targetTag int32) error {
+	for i, expr := range exprs {
+		if !builder.exprHasTargetCorrelatedSubquery(expr, targetTag) {
+			continue
+		}
+		if i > 0 || !builder.insertInputSingleRow {
+			return moerr.NewUnsupportedDML(builder.GetContext(), odkuTargetCorrelatedSubqueryCause)
+		}
+	}
+	return nil
+}
+
+// exprHasTargetCorrelatedSubquery distinguishes a target correlation inside a
+// subquery from an ordinary target reference in the ODKU expression. The latter
+// is evaluated by DedupJoin against its evolving old-row image; the former is
+// flattened into the candidate side and must not be allowed to observe a stale
+// target snapshot in a multi-row or ordered-assignment shape.
+func (builder *QueryBuilder) exprHasTargetCorrelatedSubquery(expr *plan.Expr, targetTag int32) bool {
+	visitedNodes := make(map[int32]struct{})
+	var visitExpr func(*plan.Expr, bool) bool
+	var visitNode func(int32) bool
+
+	visitExpr = func(current *plan.Expr, inSubquery bool) bool {
+		if current == nil {
+			return false
+		}
+		switch exprImpl := current.Expr.(type) {
+		case *plan.Expr_Corr:
+			return inSubquery && exprImpl.Corr != nil &&
+				exprImpl.Corr.Depth > 0 && exprImpl.Corr.RelPos == targetTag
+		case *plan.Expr_F:
+			if exprImpl.F == nil {
+				return false
+			}
+			for _, arg := range exprImpl.F.Args {
+				if visitExpr(arg, inSubquery) {
+					return true
+				}
+			}
+		case *plan.Expr_Lit:
+			if exprImpl.Lit != nil && visitExpr(exprImpl.Lit.Src, inSubquery) {
+				return true
+			}
+		case *plan.Expr_List:
+			if exprImpl.List == nil {
+				return false
+			}
+			for _, item := range exprImpl.List.List {
+				if visitExpr(item, inSubquery) {
+					return true
+				}
+			}
+		case *plan.Expr_Sub:
+			if exprImpl.Sub == nil {
+				return false
+			}
+			if visitExpr(exprImpl.Sub.Child, true) || visitNode(exprImpl.Sub.NodeId) {
+				return true
+			}
+		case *plan.Expr_W:
+			if exprImpl.W == nil {
+				return false
+			}
+			if visitExpr(exprImpl.W.WindowFunc, inSubquery) {
+				return true
+			}
+			for _, item := range exprImpl.W.PartitionBy {
+				if visitExpr(item, inSubquery) {
+					return true
+				}
+			}
+			for _, orderBy := range exprImpl.W.OrderBy {
+				if orderBy != nil && visitExpr(orderBy.Expr, inSubquery) {
+					return true
+				}
+			}
+			if exprImpl.W.Frame != nil {
+				if exprImpl.W.Frame.Start != nil && visitExpr(exprImpl.W.Frame.Start.Val, inSubquery) {
+					return true
+				}
+				if exprImpl.W.Frame.End != nil && visitExpr(exprImpl.W.Frame.End.Val, inSubquery) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	visitNode = func(nodeID int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			return false
+		}
+		if _, ok := visitedNodes[nodeID]; ok {
+			return false
+		}
+		visitedNodes[nodeID] = struct{}{}
+		node := builder.qry.Nodes[nodeID]
+		if node == nil {
+			return false
+		}
+		for _, childID := range node.Children {
+			if visitNode(childID) {
+				return true
+			}
+		}
+		visitExprList := func(exprs []*plan.Expr) bool {
+			for _, item := range exprs {
+				if visitExpr(item, true) {
+					return true
+				}
+			}
+			return false
+		}
+		for _, item := range []*plan.Expr{
+			node.Limit, node.Offset, node.Interval, node.Sliding, node.Timestamp, node.WEnd,
+		} {
+			if visitExpr(item, true) {
+				return true
+			}
+		}
+		for _, exprs := range [][]*plan.Expr{
+			node.OnList, node.FilterList, node.ProjectList, node.GroupBy,
+			node.AggList, node.WinSpecList, node.TblFuncExprList, node.BlockFilterList,
+			node.FillVal, node.OnUpdateExprs, node.TimeWindowPartitionBy,
+		} {
+			if visitExprList(exprs) {
+				return true
+			}
+		}
+		for _, orderBy := range node.OrderBy {
+			if orderBy != nil && visitExpr(orderBy.Expr, true) {
+				return true
+			}
+		}
+		if param := node.IndexReaderParam; param != nil {
+			if visitExpr(param.Limit, true) {
+				return true
+			}
+			for _, orderBy := range param.OrderBy {
+				if orderBy != nil && visitExpr(orderBy.Expr, true) {
+					return true
+				}
+			}
+			if param.DistRange != nil {
+				if visitExpr(param.DistRange.LowerBound, true) || visitExpr(param.DistRange.UpperBound, true) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	return visitExpr(expr, false)
+}
+
 // insertScopeRef is a global binding reference that must be made visible by
 // the projection which normalizes a flattened ODKU subquery input. Keeping the
 // encounter order makes the generated plan deterministic and avoids relying
@@ -4951,6 +5110,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		err        error
 	)
 	builder.insertInputKeysUnique = false
+	builder.insertInputSingleRow = false
 
 	// var uniqueCheckOnAutoIncr string
 	var insertColumns []string
@@ -4980,6 +5140,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	switch selectImpl := effectiveRows.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
 	case *tree.ValuesClause:
+		builder.insertInputSingleRow = len(selectImpl.Rows) == 1
 		isAllDefault := false
 		if selectImpl.Rows[0] == nil {
 			isAllDefault = true

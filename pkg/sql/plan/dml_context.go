@@ -287,6 +287,11 @@ const externalTableUnsupportedDMLMsg = "unsupported DML: " + externalTableUnsupp
 const noPkOnDupUpdateCause = "on duplicate key update without primary or unique key"
 const noPkOnDupUpdateMsg = "unsupported DML: " + noPkOnDupUpdateCause
 
+// odkuTargetCorrelatedSubqueryCause identifies the ODKU shape for which the
+// modern plan would otherwise evaluate a target-correlated subquery from a
+// stale snapshot instead of the row image established by ordered assignments.
+const odkuTargetCorrelatedSubqueryCause = "target-correlated subqueries in on duplicate key update cannot be combined with preceding assignments or multi-row input"
+
 const icebergRowLevelDMLUnsupportedCause = "Iceberg row-level DML"
 
 const icebergRowLevelDMLUnsupportedMsg = "unsupported DML: " + icebergRowLevelDMLUnsupportedCause
