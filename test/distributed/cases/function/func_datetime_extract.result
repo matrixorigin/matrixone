@@ -1,25 +1,25 @@
 select extract(YEAR FROM "1999-01-02 10:11:12");
-➤ extract(year, 1999-01-02 10:11:12)[12,-1,0]  𝄀
+➤ extract(year from 1999-01-02 10:11:12)[12,-1,0]  𝄀
 1999
 select extract(YEAR_MONTH FROM "1999-01-02");
-➤ extract(year_month, 1999-01-02)[12,-1,0]  𝄀
+➤ extract(year_month from 1999-01-02)[12,-1,0]  𝄀
 199901
 select extract(DAY FROM "1999-01-02");
-➤ extract(day, 1999-01-02)[12,-1,0]  𝄀
+➤ extract(day from 1999-01-02)[12,-1,0]  𝄀
 02
 select extract(DAY_HOUR FROM "1999-01-02 10:11:12");
-➤ extract(day_hour, 1999-01-02 10:11:12)[12,-1,0]  𝄀
+➤ extract(day_hour from 1999-01-02 10:11:12)[12,-1,0]  𝄀
 02 10
 select extract(HOUR FROM "1999-01-02 10:11:12");
-➤ extract(hour, 1999-01-02 10:11:12)[12,-1,0]  𝄀
+➤ extract(hour from 1999-01-02 10:11:12)[12,-1,0]  𝄀
 10
 select extract(SECOND FROM "1999-01-02 10:11:12");
-➤ extract(second, 1999-01-02 10:11:12)[12,-1,0]  𝄀
+➤ extract(second from 1999-01-02 10:11:12)[12,-1,0]  𝄀
 12
 select extract(MONTH FROM "2001-02-00");
 internal error: invalid input
 select extract(HOUR FROM "2023-11-08 15:00");
-➤ extract(hour, 2023-11-08 15:00)[12,-1,0]  𝄀
+➤ extract(hour from 2023-11-08 15:00)[12,-1,0]  𝄀
 15
 SELECT EXTRACT(QUARTER FROM '2004-01-15') AS quarter;
 ➤ quarter[12,-1,0]  𝄀
@@ -58,7 +58,7 @@ SELECT EXTRACT(QUARTER FROM '2004-12-15') AS quarter;
 ➤ quarter[12,-1,0]  𝄀
 4
 select extract(month from NULL);
-➤ extract(month, null)[12,-1,0]  𝄀
+➤ extract(month from null)[12,-1,0]  𝄀
 null
 create table t1(a INT,  b date);
 create table t2(a INT,  b date);
@@ -82,43 +82,43 @@ drop table t1;
 CREATE TABLE t1 (i1 INT,d1 DATETIME);
 INSERT INTO t1 SELECT MAX(1), "2023-04-23 08:23:21" FROM t1;
 SELECT i1, EXTRACT(YEAR FROM "2023-04-23 08:23:21"), EXTRACT(YEAR FROM d1) FROM t1;
-➤ i1[4,32,0]  ¦  EXTRACT(year, 2023-04-23 08:23:21)[12,-1,0]  ¦  EXTRACT(year, d1)[12,-1,0]  𝄀
+➤ i1[4,32,0]  ¦  EXTRACT(year from 2023-04-23 08:23:21)[12,-1,0]  ¦  EXTRACT(year from d1)[12,-1,0]  𝄀
 null  ¦  2023  ¦  2023
 DROP TABLE t1;
 select extract(DAY_MINUTE FROM "02 10:11:12");
-➤ extract(day_minute, 02 10:11:12)[12,-1,0]  𝄀
+➤ extract(day_minute from 02 10:11:12)[12,-1,0]  𝄀
 5811
 select extract(DAY_SECOND FROM "225 10:11:12");
-➤ extract(day_second, 225 10:11:12)[12,-1,0]  𝄀
+➤ extract(day_second from 225 10:11:12)[12,-1,0]  𝄀
 54101112
 select extract(HOUR_MINUTE FROM "10:11:12");
-➤ extract(hour_minute, 10:11:12)[12,-1,0]  𝄀
+➤ extract(hour_minute from 10:11:12)[12,-1,0]  𝄀
 1011
 select extract(HOUR_SECOND FROM "10:11:12");
-➤ extract(hour_second, 10:11:12)[12,-1,0]  𝄀
+➤ extract(hour_second from 10:11:12)[12,-1,0]  𝄀
 101112
 select extract(MINUTE FROM "10:11:12");
-➤ extract(minute, 10:11:12)[12,-1,0]  𝄀
+➤ extract(minute from 10:11:12)[12,-1,0]  𝄀
 11
 select extract(MINUTE_SECOND FROM "10:11:12");
-➤ extract(minute_second, 10:11:12)[12,-1,0]  𝄀
+➤ extract(minute_second from 10:11:12)[12,-1,0]  𝄀
 1112
 SELECT EXTRACT(HOUR FROM '100000:02:03');
-➤ EXTRACT(hour, 100000:02:03)[12,-1,0]  𝄀
+➤ EXTRACT(hour from 100000:02:03)[12,-1,0]  𝄀
 100000
 select reverse(concat_ws(",",extract(year from 20090702)));
-➤ reverse(concat_ws(,, extract(year, 20090702)))[12,-1,0]  𝄀
+➤ reverse(concat_ws(,, extract(year from 20090702)))[12,-1,0]  𝄀
 9002
 create table t1 (d date, dt datetime, t timestamp, c char(10));
 insert ignore into t1 values ("0000-00-00", "0000-00-00", "0000-00-00", "0000-00-00");
 select extract(MONTH FROM "0000-00-00"),extract(MONTH FROM d),extract(MONTH FROM dt),extract(MONTH FROM t),extract(MONTH FROM c) from t1;
-➤ extract(month, 0000-00-00)[12,-1,0]  ¦  extract(month, d)[4,32,0]  ¦  extract(month, dt)[12,-1,0]  ¦  extract(month, t)[12,-1,0]  ¦  extract(month, c)[12,-1,0]  𝄀
+➤ extract(month from 0000-00-00)[12,-1,0]  ¦  extract(month from d)[4,32,0]  ¦  extract(month from dt)[12,-1,0]  ¦  extract(month from t)[12,-1,0]  ¦  extract(month from c)[12,-1,0]  𝄀
 00  ¦  0  ¦  00  ¦  00  ¦  00
 drop table t1;
 CREATE TABLE t1 (i1 INT,d1 DATETIME);
 INSERT INTO t1 values(1, "2023-04-23 08:23:21");
 SELECT i1, EXTRACT(HOUR FROM d1) FROM t1;
-➤ i1[4,32,0]  ¦  EXTRACT(hour, d1)[12,-1,0]  𝄀
+➤ i1[4,32,0]  ¦  EXTRACT(hour from d1)[12,-1,0]  𝄀
 1  ¦  08
 DROP TABLE t1;
 CREATE TABLE t1

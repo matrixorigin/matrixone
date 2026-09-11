@@ -4197,7 +4197,7 @@ func initFromUnixTimeTestCase(t *testing.T) []tcTemp {
 					[]float64{1451606400.999999},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+			expect: NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
 				[]types.Datetime{d3},
 				[]bool{false}),
 		},
@@ -4209,7 +4209,7 @@ func initFromUnixTimeTestCase(t *testing.T) []tcTemp {
 					[]types.Decimal256{mustDecimal256ForUnixTime(t, "1451606400.999999", 6)},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+			expect: NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
 				[]types.Datetime{d3},
 				[]bool{false}),
 		},
@@ -4221,7 +4221,7 @@ func initFromUnixTimeTestCase(t *testing.T) []tcTemp {
 					[]types.Decimal256{mustDecimal256ForUnixTime(t, "32536771198.999999", 6)},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+			expect: NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
 				[]types.Datetime{mustDatetimeForUnixTime(t, "3001-01-18 23:59:58.999999")},
 				[]bool{false}),
 		},
@@ -4294,6 +4294,200 @@ func TestFromUnixTime(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestFromUnixTimeDomainPrecisionAndFormatting(t *testing.T) {
+	proc := newTmpProcess(t)
+	epoch := mustDatetimeForUnixTime(t, "1970-01-01 00:00:00.000000")
+	epochNext := mustDatetimeForUnixTime(t, "1970-01-01 00:00:01.000000")
+	maximum := mustDatetimeForUnixTime(t, "3001-01-18 23:59:59.999999")
+	maximumSecond := mustDatetimeForUnixTime(t, "3001-01-18 23:59:59.000000")
+	formatType := types.T_varchar.ToType()
+	format := NewFunctionTestConstInput(formatType, []string{"%Y-%m-%d %H:%i:%s.%f"}, []bool{false})
+
+	tests := []struct {
+		name      string
+		inputs    []FunctionTestInput
+		result    FunctionTestResult
+		formatted FunctionTestResult
+		plainFn   fEvalFn
+		formatFn  fEvalFn
+	}{
+		{
+			name: "signed integer",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{-1, 0, maxUnixTimestampInt + 1, 0}, []bool{false, false, false, true})},
+			result: NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{0, epoch, 0, 0}, []bool{true, false, true, true}),
+			formatted: NewFunctionTestResult(formatType, false,
+				[]string{"", "1970-01-01 00:00:00.000000", "", ""}, []bool{true, false, true, true}),
+			plainFn: FromUnixTimeInt64, formatFn: FromUnixTimeInt64Format,
+		},
+		{
+			name: "unsigned integer",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{0, maxUnixTimestampInt + 1, 0}, []bool{false, false, true})},
+			result: NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{epoch, 0, 0}, []bool{false, true, true}),
+			formatted: NewFunctionTestResult(formatType, false,
+				[]string{"1970-01-01 00:00:00.000000", "", ""}, []bool{false, true, true}),
+			plainFn: FromUnixTimeUint64, formatFn: FromUnixTimeUint64Format,
+		},
+		{
+			name: "float",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{-1, math.NaN(), math.Inf(1), 0.9999995, 0}, []bool{false, false, false, false, true})},
+			result: NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
+				[]types.Datetime{0, 0, 0, epochNext, 0}, []bool{true, true, true, false, true}),
+			formatted: NewFunctionTestResult(formatType, false,
+				[]string{"", "", "", "1970-01-01 00:00:01.000000", ""}, []bool{true, true, true, false, true}),
+			plainFn: FromUnixTimeFloat64, formatFn: FromUnixTimeFloat64Format,
+		},
+		{
+			name: "decimal rounding and maximum",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.New(types.T_decimal256, 65, 7),
+				[]types.Decimal256{
+					mustDecimal256ForUnixTime(t, "32536771199.9999994", 7),
+					mustDecimal256ForUnixTime(t, "32536771199.9999995", 7),
+					mustDecimal256ForUnixTime(t, "32536771198.9999995", 7),
+					mustDecimal256ForUnixTime(t, "-0.0000001", 7),
+					{},
+				}, []bool{false, false, false, false, true})},
+			result: NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
+				[]types.Datetime{maximum, 0, maximumSecond, 0, 0}, []bool{false, true, false, true, true}),
+			formatted: NewFunctionTestResult(formatType, false,
+				[]string{"3001-01-18 23:59:59.999999", "", "3001-01-18 23:59:59.000000", "", ""}, []bool{false, true, false, true, true}),
+			plainFn: FromUnixTimeDecimal256, formatFn: FromUnixTimeDecimal256Format,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plain := NewFunctionTestCase(proc, test.inputs, test.result, test.plainFn)
+			ok, info := plain.Run()
+			require.True(t, ok, info)
+			require.Equal(t, test.result.typ, *plain.GetResultVectorDirectly().GetType())
+
+			formattedInputs := append(append([]FunctionTestInput{}, test.inputs...), format)
+			formatted := NewFunctionTestCase(proc, formattedInputs, test.formatted, test.formatFn)
+			ok, info = formatted.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	for _, test := range tests {
+		t.Run(test.name+" null format", func(t *testing.T) {
+			nullFormat := NewFunctionTestConstInput(formatType, []string{""}, []bool{true})
+			formatted := NewFunctionTestCase(proc,
+				[]FunctionTestInput{test.inputs[0], nullFormat},
+				NewFunctionTestResult(formatType, false, make([]string, len(test.inputs[0].nullList)), make([]bool, len(test.inputs[0].nullList))),
+				test.formatFn)
+			for i := range formatted.expected.nullList {
+				formatted.expected.nullList[i] = true
+			}
+			ok, info := formatted.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestFromUnixTimeDecimalHighScaleRoundsOnce(t *testing.T) {
+	proc := newTmpProcess(t)
+	formatType := types.T_varchar.ToType()
+	format := NewFunctionTestConstInput(formatType, []string{"%Y-%m-%d %H:%i:%s.%f"}, []bool{false})
+	inputType := types.New(types.T_decimal256, 38, 26)
+	input := NewFunctionTestInput(inputType, []types.Decimal256{
+		mustDecimal256ForUnixTime(t, "0.12345649999999999999999999", 26),
+		mustDecimal256ForUnixTime(t, "0.12345650000000000000000000", 26),
+		mustDecimal256ForUnixTime(t, "32536771199.99999949999999999999999999", 26),
+		mustDecimal256ForUnixTime(t, "32536771199.99999950000000000000000000", 26),
+	}, []bool{false, false, false, false})
+	expected := NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
+		[]types.Datetime{
+			mustDatetimeForUnixTime(t, "1970-01-01 00:00:00.123456"),
+			mustDatetimeForUnixTime(t, "1970-01-01 00:00:00.123457"),
+			mustDatetimeForUnixTime(t, "3001-01-18 23:59:59.999999"),
+			0,
+		}, []bool{false, false, false, true})
+	plain := NewFunctionTestCase(proc, []FunctionTestInput{input}, expected, FromUnixTimeDecimal256)
+	ok, info := plain.Run()
+	require.True(t, ok, info)
+
+	formattedExpected := NewFunctionTestResult(formatType, false,
+		[]string{"1970-01-01 00:00:00.123456", "1970-01-01 00:00:00.123457", "3001-01-18 23:59:59.999999", ""},
+		[]bool{false, false, false, true})
+	formatted := NewFunctionTestCase(proc, []FunctionTestInput{input, format}, formattedExpected, FromUnixTimeDecimal256Format)
+	ok, info = formatted.Run()
+	require.True(t, ok, info)
+}
+
+func TestTemporalSubResultScaleMetadata(t *testing.T) {
+	proc := newTmpProcess(t)
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+	previous, err := types.ParseTimestamp(time.UTC, "2024-01-01 03:04:05.123456", 6)
+	require.NoError(t, err)
+	timestampCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{ts}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.Day)}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_timestamp.ToTypeWithScale(6), false, []types.Timestamp{previous}, []bool{false}),
+		TimestampSub)
+	ok, info := timestampCase.Run()
+	require.True(t, ok, info)
+
+	tm, err := types.ParseTime("10:00:00.123456", 6)
+	require.NoError(t, err)
+	expected, err := types.ParseTime("09:59:59.123456", 6)
+	require.NoError(t, err)
+	timeCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToTypeWithScale(6), []types.Time{tm}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.Second)}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false, []types.Time{expected}, []bool{false}),
+		TimeSub)
+	ok, info = timeCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestFromUnixTimeReturnType(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input types.Type
+		scale int32
+	}{
+		{name: "int", input: types.T_int64.ToType(), scale: 0},
+		{name: "uint", input: types.T_uint64.ToType(), scale: 0},
+		{name: "float", input: types.T_float64.ToType(), scale: 6},
+		{name: "decimal64 scale 3", input: types.New(types.T_decimal64, 10, 3), scale: 3},
+		{name: "decimal128 scale 3", input: types.New(types.T_decimal128, 20, 3), scale: 3},
+		{name: "decimal scale 0", input: types.New(types.T_decimal256, 65, 0), scale: 0},
+		{name: "decimal scale 3", input: types.New(types.T_decimal256, 65, 3), scale: 3},
+		{name: "decimal scale 6", input: types.New(types.T_decimal256, 65, 6), scale: 6},
+		{name: "decimal scale 9", input: types.New(types.T_decimal256, 65, 9), scale: 6},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), "from_unixtime", []types.Type{test.input})
+			require.NoError(t, err)
+			got := resolved.GetReturnType()
+			require.Equal(t, types.T_datetime, got.Oid)
+			require.Equal(t, test.scale, got.Scale)
+			require.Equal(t, test.scale, got.Width)
+			if test.input.Oid.IsDecimal() {
+				_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+				require.Equal(t, int32(3), overload)
+				formatted, err := GetFunctionByName(context.Background(), "from_unixtime", []types.Type{test.input, types.T_varchar.ToType()})
+				require.NoError(t, err)
+				_, overload = DecodeOverloadID(formatted.GetEncodedOverloadID())
+				require.Equal(t, int32(7), overload)
+			}
+		})
+	}
+
 }
 
 func initStrCmpTestCase() []tcTemp {
@@ -12559,6 +12753,137 @@ func TestDoDatetimeAddComprehensive(t *testing.T) {
 			} else {
 				require.Equal(t, tc.expectedValue, result, "Result should match expected value")
 			}
+		})
+	}
+}
+
+func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
+	minDatetime, err := types.ParseDatetime("0001-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	maxTimestamp, err := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59.999999", 6)
+	require.NoError(t, err)
+	ordinaryTimestamp, err := types.ParseTimestamp(time.UTC, "2024-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	ordinaryTimestampNext, err := types.ParseTimestamp(time.UTC, "2024-01-01 00:00:00.000001", 6)
+	require.NoError(t, err)
+
+	t.Run("helpers preserve rejected domain", func(t *testing.T) {
+		for _, delta := range []int64{-1, -2} {
+			_, err = doDatetimeAdd(minDatetime, delta, types.MicroSecond)
+			require.True(t, isDatetimeOverflowMaxError(err))
+
+			_, err = doDateStringAdd("0001-01-01 00:00:00.000000", delta, types.MicroSecond)
+			require.True(t, isDatetimeOverflowMaxError(err))
+		}
+
+		got, err := doDatetimeAdd(minDatetime, 0, types.MicroSecond)
+		require.NoError(t, err)
+		require.Equal(t, minDatetime, got)
+		got, err = doDateStringAdd("0001-01-01 00:00:00.000000", 0, types.MicroSecond)
+		require.NoError(t, err)
+		require.Equal(t, minDatetime, got)
+
+		_, err = doTimestampAdd(time.UTC, maxTimestamp, 1, types.MicroSecond)
+		require.True(t, isDatetimeOverflowMaxError(err))
+	})
+
+	timestampInputs := func(t *testing.T, dateAddSyntax bool) (*process.Process, []*vector.Vector, vector.FunctionResultWrapper) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.GetSessionInfo().TimeZone = time.UTC
+		timestampVec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		require.NoError(t, vector.AppendFixedList(timestampVec,
+			[]types.Timestamp{maxTimestamp, ordinaryTimestamp, ordinaryTimestamp}, []bool{false, false, true}, proc.Mp()))
+		intervalVec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(intervalVec, []int64{1, 1, 1}, nil, proc.Mp()))
+
+		var parameters []*vector.Vector
+		if dateAddSyntax {
+			unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 3, proc.Mp())
+			require.NoError(t, makeErr)
+			parameters = []*vector.Vector{timestampVec, intervalVec, unitVec}
+		} else {
+			unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 3, proc.Mp())
+			require.NoError(t, makeErr)
+			parameters = []*vector.Vector{unitVec, intervalVec, timestampVec}
+		}
+		result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(3))
+		t.Cleanup(func() {
+			for _, parameter := range parameters {
+				parameter.Free(proc.Mp())
+			}
+			result.Free()
+		})
+		return proc, parameters, result
+	}
+
+	for _, test := range []struct {
+		name          string
+		dateAddSyntax bool
+		fn            func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+	}{
+		{name: "DATE_ADD timestamp column", dateAddSyntax: true, fn: TimestampAdd},
+		{name: "TIMESTAMPADD timestamp column", fn: TimestampAddTimestamp},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc, parameters, result := timestampInputs(t, test.dateAddSyntax)
+			require.NoError(t, test.fn(parameters, result, proc, 3, nil))
+			resultVec := result.GetResultVector()
+			require.True(t, resultVec.GetNulls().Contains(0), "upper overflow must be row-local NULL")
+			require.False(t, resultVec.GetNulls().Contains(1), "ordinary neighbor must remain valid")
+			require.True(t, resultVec.GetNulls().Contains(2), "input NULL must remain NULL")
+			got, isNull := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](resultVec).GetValue(1)
+			require.False(t, isNull)
+			require.Equal(t, ordinaryTimestampNext, got)
+		})
+	}
+
+	for _, test := range []struct {
+		name          string
+		dateAddSyntax bool
+		fn            func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+	}{
+		{name: "DATE_ADD string column", dateAddSyntax: true, fn: DateStringAdd},
+		{name: "TIMESTAMPADD string column", fn: TimestampAddString},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			stringVec := vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendStringList(stringVec, []string{
+				"0001-01-01 00:00:00.000000",
+				"0001-01-01 00:00:00.000000",
+				"0001-01-01 00:00:00.000000",
+				"2024-01-01 00:00:00.000000",
+			}, []bool{false, false, false, true}, proc.Mp()))
+			intervalVec := vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixedList(intervalVec, []int64{-1, -2, 0, 1}, nil, proc.Mp()))
+
+			var parameters []*vector.Vector
+			if test.dateAddSyntax {
+				unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 4, proc.Mp())
+				require.NoError(t, makeErr)
+				parameters = []*vector.Vector{stringVec, intervalVec, unitVec}
+			} else {
+				unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 4, proc.Mp())
+				require.NoError(t, makeErr)
+				parameters = []*vector.Vector{unitVec, intervalVec, stringVec}
+			}
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			require.NoError(t, result.PreExtendAndReset(4))
+			t.Cleanup(func() {
+				for _, parameter := range parameters {
+					parameter.Free(proc.Mp())
+				}
+				result.Free()
+			})
+
+			require.NoError(t, test.fn(parameters, result, proc, 4, nil))
+			resultNulls := result.GetResultVector().GetNulls()
+			require.True(t, resultNulls.Contains(0), "one microsecond below minimum must be NULL")
+			require.True(t, resultNulls.Contains(1), "two microseconds below minimum must be NULL")
+			require.False(t, resultNulls.Contains(2), "exact minimum must remain valid")
+			require.True(t, resultNulls.Contains(3), "input NULL must remain NULL")
 		})
 	}
 }

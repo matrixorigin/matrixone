@@ -1862,6 +1862,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
+		var originalTemporalExpr *Expr
+		if exprImpl.F.Func != nil {
+			switch strings.ToLower(exprImpl.F.Func.GetObjName()) {
+			case "date_add", "date_sub", "str_to_date", "to_date":
+				originalTemporalExpr = DeepCopyExpr(e)
+			}
+		}
 		functionName := ""
 		if exprImpl.F.Func != nil {
 			functionName = exprImpl.F.Func.GetObjName()
@@ -2314,6 +2321,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			rewritten, err := bindPreparedFuncExprImplByPlanExpr(
 				rule.ctx,
+				originalTemporalExpr,
 				exprImpl.F.Func.GetObjName(),
 				boundArgs,
 				stringDomainModes,
