@@ -2828,6 +2828,8 @@ func createPrepareStmtInSession(
 			prepareControl.Plan),
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
 			prepareControl.Plan),
+		conversionParamPositions: plan2.PreparedPlanConversionParamPositions(
+			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
 		directResultParamPositionsSet: true,
