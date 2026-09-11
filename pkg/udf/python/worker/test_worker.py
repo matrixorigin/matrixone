@@ -1193,6 +1193,12 @@ class WorkerContractTest(unittest.TestCase):
         self.assertEqual(worker.HANDLER_ARROW_RECORD_BATCH, request["arrow_encoding"])
         self.assertEqual(b"arrow-payload", bytes(request["input"].raw()))
 
+    def test_handler_request_encoder_rejects_non_contiguous_arrow_buffer(self):
+        with self.assertRaisesRegex(ValueError, "cannot encode execution request"):
+            worker._encode_execution_request(
+                {"input": memoryview(b"arrow-payload")[::2]}
+            )
+
     def test_handler_process_accepts_schema_free_record_batch_messages(self):
         descriptor = {"type_id": worker.INT64, "offset_width": 32}
         schema = worker._schema_from_descriptors([descriptor], "arg")
