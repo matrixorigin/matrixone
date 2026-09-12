@@ -1034,6 +1034,14 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
+	zeroAware := false
+	if len(ivecs) == 3 && length > 0 {
+		// The planner exposes this internal mode only as a literal TRUE. Read it
+		// once so the legacy two-argument row loop keeps its original parameter
+		// access cost.
+		zeroAwareParam := vector.GenerateFunctionFixedTypeParameter[bool](ivecs[2])
+		zeroAware, _ = zeroAwareParam.GetValue(0)
+	}
 	var valueIndex *enumValueIndex
 	if length >= enumValueIndexMinRows && ivecs[0].IsConst() && !ivecs[0].IsConstNull() {
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(0)
@@ -1057,7 +1065,13 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 				index types.Enum
 				err   error
 			)
-			if valueIndex != nil {
+			if zeroAware && enumStr == "" {
+				// A valid empty ENUM member maps to its declaration ordinal;
+				// when there is no such member, the empty display is ordinal 0.
+				// The planner enables this mode only when the definition is safe
+				// to recover after grouping.
+				index, err = types.ParseEnumName(typeEnumVal, enumStr)
+			} else if valueIndex != nil {
 				index, err = valueIndex.parse(enumStr)
 			} else {
 				index, err = types.ParseEnum(typeEnumVal, enumStr)

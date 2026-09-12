@@ -104,6 +104,79 @@ func TestCastValueToIndexConstDefinition(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestCastValueToIndexZeroAwareGroupedDisplay(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Run("empty display recovers ordinal zero and preserves null", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a,b"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "", "b", ""}, []bool{false, false, false, true}),
+				NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil),
+			},
+			NewFunctionTestResult(types.T_enum.ToType(), false,
+				[]types.Enum{1, 0, 2, 0}, []bool{false, false, false, true}),
+			CastValueToIndex,
+		)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("declared empty label keeps its ordinal", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{",a"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "a"}, nil),
+				NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil),
+			},
+			NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{1, 2}, nil),
+			CastValueToIndex,
+		)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("invalid nonempty display still errors", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a,b"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"missing"}, nil),
+				NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil),
+			},
+			NewFunctionTestResult(types.T_enum.ToType(), true, []types.Enum{}, nil),
+			CastValueToIndex,
+		)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("empty batch does not read row zero", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{}, nil),
+				NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil),
+			},
+			NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{}, nil),
+			CastValueToIndex,
+		)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("legacy two-argument conversion remains strict", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a,b"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil),
+			},
+			NewFunctionTestResult(types.T_enum.ToType(), false, []types.Enum{0}, nil),
+			CastValueToIndex,
+		)
+		succeed, _ := tcc.Run()
+		require.False(t, succeed)
+	})
+}
+
 func TestInsertIgnoreAdjustsMySQLSpecialTypeValues(t *testing.T) {
 	ignoreProc := testutil.NewProcess(t)
 	ignoreProc.SetStmtProfile(&process.StmtProfile{})

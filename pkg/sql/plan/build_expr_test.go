@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -741,6 +742,106 @@ func TestEnumAndSetNumericContractsUseStoredValues(t *testing.T) {
 			require.Equal(t, tc.wantDisplay, containsEnumOrSetDisplayValue(pl.GetQuery().Nodes[1].ProjectList[0]))
 		})
 	}
+}
+
+func TestGroupedMySQLSpecialNumericContextsRecoverStoredValues(t *testing.T) {
+	tests := []struct {
+		name         string
+		sql          string
+		functionName string
+		definition   string
+		argCount     int
+	}{
+		{name: "grouped enum", sql: "select e + 0 from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
+		{name: "derived grouped enum", sql: "select d.e + 0 from (select e from enum_order_t group by e) d", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
+		{name: "cte grouped enum", sql: "with c as (select e from enum_order_t group by e) select e + 0 from c", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
+		{name: "having grouped enum", sql: "select e from enum_order_t group by e having e + 0 > 1", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
+		{name: "window over grouped enum", sql: "select e + 0, sum(e + 0) over () from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
+		{name: "grouped set", sql: "select s + 0 from enum_order_t group by s", functionName: moSetCastValueToIndexFun, definition: "red,green,blue", argCount: 2},
+		{name: "grouped enum numeric IN", sql: "select e in (1, 2) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
+		{name: "grouped enum numeric NOT IN", sql: "select e not in (1, 2) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
+		{name: "grouped enum numeric IN subquery", sql: "select e in (select 1) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
+		{name: "grouped enum numeric NOT IN subquery", sql: "select e not in (select 1) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
+		{name: "numeric NOT IN grouped enum subquery", sql: "select 1 not in (select e from enum_order_t group by e)", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
+		{name: "grouped enum numeric ANY subquery", sql: "select 1 = any (select e from enum_order_t group by e)", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
+		{name: "grouped set numeric IN", sql: "select s in (1, 3) from enum_order_t group by s", functionName: moSetCastValueToIndexFun, definition: "red,green,blue", argCount: 2},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMySQLSpecialOrderMock()
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+
+			conversion := findPlanFunctionExpr(logicPlan, tc.functionName)
+			require.NotNil(t, conversion, "expected guarded conversion in bound plan")
+			require.Len(t, conversion.GetF().Args, tc.argCount)
+			require.Equal(t, tc.definition, conversion.GetF().Args[0].GetLit().GetSval())
+			if tc.argCount == 3 {
+				require.True(t, conversion.GetF().Args[2].GetLit().GetBval())
+				require.Equal(t, int32(types.T_enum), conversion.Typ.Id)
+			} else {
+				require.Equal(t, int32(types.T_uint64), conversion.Typ.Id)
+				require.Empty(t, conversion.Typ.Enumvalues)
+			}
+		})
+	}
+
+	t.Run("tuple IN subquery recovers each side by position", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select (e, 1) in (select 1, e from enum_order_t group by e) from enum_order_t group by e")
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, countPlanFunctionCalls(logicPlan, moEnumCastValueToIndexFun), 2,
+			"position 0 must recover the grouped left ENUM and position 1 the grouped subquery ENUM")
+	})
+
+	t.Run("row-level conversion remains raw", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select e + 0 from enum_order_t")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("numeric group key remains numeric", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select e + 0 from enum_order_t group by e + 0")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("explicit lexical cast clears provenance", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select cast(e as char) + 0 from enum_order_t group by e")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("mixed IN list keeps display comparison", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select e in ('low', 1) from enum_order_t group by e")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("empty enum label does not enable lossy recovery", func(t *testing.T) {
+		mock := newMySQLSpecialOrderMock()
+		mock.ctxt.tables["enum_duplicate_t"].Cols[0].Typ = plan.Type{
+			Id: int32(types.T_enum), Enumvalues: ",a",
+		}
+		logicPlan, err := runOneStmt(mock, t,
+			"select e + 0 from enum_duplicate_t group by e")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("zero-aware converter is not a public overload", func(t *testing.T) {
+		_, err := BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+			makePlan2StringConstExprWithType("a,b"),
+			makePlan2StringConstExprWithType(""),
+			makePlan2BoolConstExprWithType(true),
+		})
+		require.Error(t, err)
+	})
 }
 
 func TestIsBitwiseBinaryOp(t *testing.T) {

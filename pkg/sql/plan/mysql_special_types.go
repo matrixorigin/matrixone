@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // validateGeometrySRID rejects SRIDs that cannot be stored in the type Width
@@ -530,6 +531,151 @@ func mysqlSpecialOrderTypeReversible(typ *plan.Type) bool {
 	default:
 		return false
 	}
+}
+
+// mysqlSpecialNumericTypeReversible is stricter than the ORDER BY provenance
+// guard because numeric conversion must also preserve ENUM's stored error
+// member. An ENUM with an empty label displays both ordinal 0 and that label as
+// the empty string; grouping can merge them, so the numeric value cannot be
+// recovered from the group output alone.
+func mysqlSpecialNumericTypeReversible(typ *plan.Type) bool {
+	if !mysqlSpecialOrderTypeReversible(typ) {
+		return false
+	}
+	if isEnumPlanType(typ) {
+		for _, value := range strings.Split(typ.Enumvalues, ",") {
+			if value == "" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// useStoredMySQLSpecialTypesForNumericContractWithProvenance extends the
+// structural row-level rewrite with a narrow recovery for display values that
+// crossed a GROUP BY or transparent query boundary. It only rewrites operands
+// whose resolved function contract is numeric and whose source provenance is
+// still the exact ENUM/SET display value.
+func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
+	ctx context.Context,
+	name string,
+	args []*plan.Expr,
+) ([]*plan.Expr, error) {
+	result := useStoredMySQLSpecialTypesForNumericContract(ctx, name, args)
+	if b == nil || b.ctx == nil {
+		return result, nil
+	}
+
+	hasProvenanceCandidate := false
+	for _, arg := range args {
+		if _, direct := storedMySQLSpecialTypeExpr(arg); direct {
+			continue
+		}
+		if b.ctx.mysqlSpecialOrderTypeForExpr(arg) != nil {
+			hasProvenanceCandidate = true
+			break
+		}
+	}
+	if !hasProvenanceCandidate {
+		return result, nil
+	}
+	if mysqlSpecialNumericInList(name, args) {
+		if _, direct := storedMySQLSpecialTypeExpr(args[0]); !direct {
+			storageType := b.ctx.mysqlSpecialOrderTypeForExpr(args[0])
+			if storageType != nil && mysqlSpecialNumericTypeReversible(storageType) {
+				recovered, err := makeMySQLSpecialNumericValue(ctx, args[0], storageType)
+				if err != nil {
+					return nil, err
+				}
+				result = append([]*plan.Expr(nil), result...)
+				result[0] = recovered
+				return result, nil
+			}
+		}
+	}
+
+	displayTypes := make([]types.Type, len(args))
+	for i, arg := range args {
+		displayTypes[i] = makeTypeByPlan2Expr(arg)
+	}
+	resolved, err := function.GetFunctionByName(ctx, name, displayTypes)
+	if err != nil {
+		return result, nil
+	}
+	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+	if !shouldCast || len(targets) != len(args) {
+		return result, nil
+	}
+
+	changed := false
+	for i, arg := range args {
+		if !targets[i].IsNumeric() {
+			continue
+		}
+		if _, direct := storedMySQLSpecialTypeExpr(arg); direct {
+			continue
+		}
+		storageType := b.ctx.mysqlSpecialOrderTypeForExpr(arg)
+		if storageType == nil || !mysqlSpecialNumericTypeReversible(storageType) {
+			continue
+		}
+
+		recovered, err := makeMySQLSpecialNumericValue(ctx, arg, storageType)
+		if err != nil {
+			return nil, err
+		}
+		if !changed {
+			result = append([]*plan.Expr(nil), result...)
+			changed = true
+		}
+		result[i] = recovered
+	}
+	return result, nil
+}
+
+func makeMySQLSpecialNumericValue(
+	ctx context.Context,
+	displayExpr *plan.Expr,
+	storageType *plan.Type,
+) (*plan.Expr, error) {
+	if isEnumPlanType(storageType) {
+		_, valueToIndex, _, err := mysqlSpecialTypeFuncNames(storageType)
+		if err != nil {
+			return nil, err
+		}
+		// The third argument is an internal-only mode. It maps the empty
+		// display of ENUM ordinal 0 back to 0 while preserving the existing
+		// two-argument string-to-ENUM behavior.
+		numericExpr, err := bindBoundFuncExprAndConstFoldWithInternalFunctionArgs(
+			ctx,
+			nil,
+			valueToIndex,
+			[]*plan.Expr{
+				makePlan2StringConstExprWithType(storageType.Enumvalues),
+				DeepCopyExpr(displayExpr),
+				makePlan2BoolConstExprWithType(true),
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+		numericExpr.Typ.NotNullable = displayExpr.Typ.NotNullable
+		numericExpr.Typ.Enumvalues = storageType.Enumvalues
+		return numericExpr, nil
+	}
+
+	if isSetPlanType(storageType) {
+		numericExpr, err := makeMySQLSpecialOrderKey(ctx, displayExpr, storageType)
+		if err != nil {
+			return nil, err
+		}
+		// The SET value-to-index function returns an ordinary uint64 bitmap.
+		// Do not let later SET-aware casts reinterpret it as a display value.
+		numericExpr.Typ.Enumvalues = ""
+		return numericExpr, nil
+	}
+	return nil, moerr.NewInternalError(ctx, "invalid ENUM/SET numeric provenance")
 }
 
 // setTypeHasEmptyMember identifies a SET definition that has at least one
