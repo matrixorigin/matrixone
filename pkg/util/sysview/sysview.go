@@ -76,7 +76,7 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion58 {
+	if protocol >= defines.MORPCVersion67 {
 		return InitInformationSchemaSysTables
 	}
 
@@ -95,6 +95,8 @@ func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
 			} else {
 				sql = InformationSchemaColumnsV41DDL
 			}
+		case InformationSchemaViewsDDL:
+			sql = InformationSchemaViewsLegacyDDL
 		}
 		if !includeCheckConstraints {
 			switch sql {

@@ -45,7 +45,7 @@ func TestColumnsUpgradeProtocolGenerations(t *testing.T) {
 		upgradeInformationSchemaColumnsBinaryStrings(),
 		refreshInformationSchemaCharacterSetsUTF8Maxlen(),
 	} {
-		for _, peer := range []int64{defines.MORPCVersion46, defines.MORPCVersion57, defines.MORPCVersion58} {
+		for _, peer := range []int64{defines.MORPCVersion46, defines.MORPCVersion57, defines.MORPCVersion58, defines.MORPCVersion59} {
 			t.Run(fmt.Sprintf("%s-gate-%d-peer-%d", entry.TableName, entry.RequiredProtocolVersion, peer), func(t *testing.T) {
 				mp := mpool.MustNewZero()
 				defer mpool.DeleteMPool(mp)
@@ -65,7 +65,8 @@ func TestColumnsUpgradeProtocolGenerations(t *testing.T) {
 				entry.CheckFunc = func(executor.TxnExecutor, uint32) (bool, error) { return false, nil }
 				err := entry.Upgrade(txn, 0)
 				if peer < entry.RequiredProtocolVersion {
-					require.ErrorContains(t, err, "requires all CNs to support protocol version 58")
+					require.ErrorContains(t, err, fmt.Sprintf(
+						"requires all CNs to support protocol version %d", entry.RequiredProtocolVersion))
 					require.Empty(t, executed, "an old peer must block before DROP/DELETE or DDL")
 				} else {
 					require.NoError(t, err)
@@ -216,7 +217,10 @@ func TestUpgradeEntries(t *testing.T) {
 		"drop view if exists information_schema.statistics")
 	for _, entry := range tenantUpgEntries {
 		ddl := entry.UpgSql + entry.PostSql
-		if strings.Contains(ddl, "mo_subscription_tables()") ||
+		if entry.TableName == "VIEWS" {
+			require.Equal(t, int64(defines.MORPCVersion67), entry.RequiredProtocolVersion,
+				"view upgrade %s must wait for mo_view_definition", entry.TableName)
+		} else if strings.Contains(ddl, "mo_subscription_tables()") ||
 			strings.Contains(ddl, "mo_subscription_columns()") {
 			require.GreaterOrEqual(t, entry.RequiredProtocolVersion, int64(defines.MORPCVersion46),
 				"view upgrade %s must wait for subscription metadata functions", entry.TableName)
@@ -257,6 +261,8 @@ func TestUpgradeEntries(t *testing.T) {
 		expectedProtocol := int64(defines.MORPCVersion41)
 		if view.name == "TABLES" || view.name == "COLUMNS" {
 			expectedProtocol = defines.MORPCVersion46
+		} else if view.name == "VIEWS" {
+			expectedProtocol = defines.MORPCVersion67
 		}
 		require.Equal(t, expectedProtocol, entry.RequiredProtocolVersion)
 		require.Contains(t, strings.ToLower(entry.PreSql),
@@ -469,6 +475,24 @@ func TestDaemonClaimPrecisionCheckUsesStoredType(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInformationSchemaViewsUpgradeUsesLegacyDefinitionCompatibility(t *testing.T) {
+	// A pre-upgrade viewdef has Stmt but no parser-derived definition. The
+	// MODIFY_VIEW entry must keep the public metadata contract available through
+	// the parser-aware compatibility function instead of returning NULL while the
+	// separate lifecycle recovery remains inactive.
+	var viewsEntry *versions.UpgradeEntry
+	for i := range tenantUpgEntries {
+		if tenantUpgEntries[i].TableName == "VIEWS" {
+			viewsEntry = &tenantUpgEntries[i]
+			break
+		}
+	}
+	require.NotNil(t, viewsEntry)
+	require.Equal(t, versions.MODIFY_VIEW, viewsEntry.UpgType)
+	require.Contains(t, viewsEntry.UpgSql, "mo_view_definition(tbl.viewdef)")
+	require.NotContains(t, viewsEntry.UpgSql, "json_extract_string(tbl.viewdef, '$.definition')")
 }
 
 func TestInformationSchemaMetadataVisibilityUpgradeChecks(t *testing.T) {

@@ -548,6 +548,12 @@ func pipelineContainsFunction(p *pipeline.Pipeline, predicate remoteFunctionPred
 	return containsFunctionInValue(reflect.ValueOf(p), nil, predicate)
 }
 
+func pipelineContainsFunctionID(p *pipeline.Pipeline, functionID int32) bool {
+	return pipelineContainsFunction(p, func(id, _ int32) bool {
+		return id == functionID
+	})
+}
+
 func containsFunctionInExpr(
 	expr *plan.Expr,
 	seen map[uintptr]struct{},

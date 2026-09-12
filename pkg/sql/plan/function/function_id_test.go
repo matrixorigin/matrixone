@@ -740,6 +740,8 @@ var predefinedFunids = map[int]int{
 	ONNX_RUN:                       556,
 	APPROX_PERCENTILE:              557,
 	MO_IS_LEGACY_TEMPORARY_TABLE:   558,
+	MO_VIEW_DEFINITION:             579,
+	MO_VIEW_CHECK_OPTION:           580,
 	MAX_BY:                         559,
 	MAX_BY_NON_NULL:                560,
 	CHECK_CONSTRAINT_ASSERT:        561,
@@ -762,7 +764,7 @@ var predefinedFunids = map[int]int{
 	INTERNAL_JSON_MEMBER_OF:        578,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 579,
+	FUNCTION_END_NUMBER: 581,
 }
 
 func Test_funids(t *testing.T) {
