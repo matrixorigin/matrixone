@@ -965,7 +965,7 @@ func TestCheckAlterCopyGeneratedForeignKeyUsesLiveChildMetadata(t *testing.T) {
 		1: {Name: "source"},
 		2: {Name: "generated_key"},
 	}
-	qry := &plan.AlterTable{
+	qry := &plan2.AlterTable{
 		TableDef: oldTable, CopyTableDef: copyTable, ChangeTblColIdMap: changeColDefMap,
 	}
 	c := NewCompile("db", "db", "alter table db.parent", "", "", eng, proc, nil, false, nil, time.Now())
