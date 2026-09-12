@@ -1804,17 +1804,17 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// function and selects a numeric overload.
 			return e, nil
 		}
-		isAbs := strings.EqualFold(functionName, "abs") && len(exprImpl.F.Args) == 1
-		var originalAbsArg *plan.Expr
-		var hasPreparedAbsValue bool
-		if isAbs {
+		isDeferredNumeric := isPreparedNumericFallbackFunction(functionName) && len(exprImpl.F.Args) == 1
+		var originalDeferredNumericArg *plan.Expr
+		var hasPreparedDeferredNumericValue bool
+		if isDeferredNumeric {
 			// Keep an immutable copy of the marker-bearing argument. Recursive
 			// replacement can rebuild CASE/IF/scalar-subquery nodes and discard
 			// the explicit fallback metadata; the copy is the provenance source
-			// for the final ABS overload decision.
-			originalAbsArg = DeepCopyExpr(exprImpl.F.Args[0])
-			hasPreparedAbsValue = isPreparedNumericFallbackExpr(originalAbsArg) &&
-				len(preparedNumericValueParamPositions(originalAbsArg)) > 0
+			// for the final ABS/SIGN overload decision.
+			originalDeferredNumericArg = DeepCopyExpr(exprImpl.F.Args[0])
+			hasPreparedDeferredNumericValue = isPreparedNumericFallbackExpr(originalDeferredNumericArg) &&
+				len(preparedNumericValueParamPositions(originalDeferredNumericArg)) > 0
 		}
 		if isPreparedPrefixFilter(exprImpl.F.Func.GetObjName()) {
 			rule.markSerializedDecimalParamTypes(e)
@@ -2208,12 +2208,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			compareArgTypes = true
 		}
 
-		if isAbs && hasPreparedAbsValue {
-			// A flattened scalar subquery leaves the ABS argument as a column
+		if isDeferredNumeric && hasPreparedDeferredNumericValue {
+			// A flattened scalar subquery leaves the ABS/SIGN argument as a column
 			// reference.  Its inner projection has already been rebound above;
-			// refresh the reference type and rebind ABS, but keep the reference so
+			// refresh the reference type and rebind ABS/SIGN, but keep the reference so
 			// empty/multi-row scalar-subquery semantics remain intact.
-			if originalAbsArg.GetPreparedNumeric().GetFallbackSource() {
+			if originalDeferredNumericArg.GetPreparedNumeric().GetFallbackSource() {
 				refreshed, changed, refreshErr := rule.refreshPreparedNumericSource(boundArgs[0])
 				if refreshErr != nil {
 					return nil, refreshErr
@@ -2232,8 +2232,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					return rewritten, nil
 				}
 			}
-			source, sourceOK := preparedNumericFallbackSource(originalAbsArg)
-			positions := preparedNumericValueParamPositions(originalAbsArg)
+			source, sourceOK := preparedNumericFallbackSource(originalDeferredNumericArg)
+			positions := preparedNumericValueParamPositions(originalDeferredNumericArg)
 			if sourceOK && len(positions) > 0 {
 				rebound, changed, reboundErr := rule.rebindPreparedNumericExpr(source, positions)
 				if reboundErr != nil {

@@ -425,15 +425,25 @@ func SubVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vect
 	return nil
 }
 
-func StringSingle(val []byte) uint8 {
+func StringSingle(val []byte) int32 {
 	if len(val) == 0 {
 		return 0
 	}
-	return val[0]
+	return int32(val[0])
 }
 
 func AsciiString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return opUnaryBytesToFixed[uint8](ivecs, result, proc, length, func(v []byte) uint8 {
+	// The overload IDs are part of the serialized plan contract. During a
+	// rolling upgrade an old plan can still carry the historical UINT8 result
+	// type, even though new plans advertise INT32. Keep the old wrapper
+	// executable on a new binary; the remote protocol fence prevents the
+	// reverse direction (a new INT32 plan sent to an old worker).
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return opUnaryBytesToFixed[uint8](ivecs, result, proc, length, func(v []byte) uint8 {
+			return uint8(StringSingle(v))
+		}, selectList)
+	}
+	return opUnaryBytesToFixed[int32](ivecs, result, proc, length, func(v []byte) int32 {
 		return StringSingle(v)
 	}, selectList)
 }
@@ -483,9 +493,9 @@ var (
 	uints = []uint64{1e16, 1e8, 1e4, 1e2, 1e1}
 )
 
-func IntSingle[T types.Ints](val T, start int) uint8 {
+func IntSingle[T types.Ints](val T, start int) int32 {
 	if val < 0 {
-		return '-'
+		return int32('-')
 	}
 	i64Val := int64(val)
 	for _, v := range ints[start:] {
@@ -493,31 +503,41 @@ func IntSingle[T types.Ints](val T, start int) uint8 {
 			i64Val /= v
 		}
 	}
-	return uint8(i64Val) + '0'
+	return int32(i64Val) + '0'
 }
 
 func AsciiInt[T types.Ints](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	start := intStartMap[ivecs[0].GetType().Oid]
 
-	return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+			return uint8(IntSingle[T](v, start))
+		}, selectList)
+	}
+	return opUnaryFixedToFixed[T, int32](ivecs, result, proc, length, func(v T) int32 {
 		return IntSingle[T](v, start)
 	}, selectList)
 }
 
-func UintSingle[T types.UInts](val T, start int) uint8 {
+func UintSingle[T types.UInts](val T, start int) int32 {
 	u64Val := uint64(val)
 	for _, v := range uints[start:] {
 		if u64Val >= v {
 			u64Val /= v
 		}
 	}
-	return uint8(u64Val) + '0'
+	return int32(u64Val) + '0'
 }
 
 func AsciiUint[T types.UInts](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	start := intStartMap[ivecs[0].GetType().Oid]
 
-	return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+			return uint8(UintSingle[T](v, start))
+		}, selectList)
+	}
+	return opUnaryFixedToFixed[T, int32](ivecs, result, proc, length, func(v T) int32 {
 		return UintSingle[T](v, start)
 	}, selectList)
 }
@@ -4539,82 +4559,32 @@ func parseCoordinatePairWithError(point string, errMsg string) (float64, float64
 	return x, y, nil
 }
 
-// SoundexString implements the SOUNDEX algorithm
-// Returns a phonetic code representing how a string sounds
+// soundexCodeMap maps ASCII A-Z to original Soundex digits; '0' means discard.
+const soundexCodeMap = "01230120022455012623010202"
+
+// SoundexString implements MySQL's original Soundex behavior for ASCII input.
 func SoundexString(str string) string {
-	if len(str) == 0 {
-		return "0000"
-	}
-
-	// Convert to uppercase and process only alphabetic characters
-	upper := strings.ToUpper(str)
-
-	// Find the first alphabetic character
-	firstChar := byte(0)
-	firstIdx := -1
-	for i := 0; i < len(upper); i++ {
-		if upper[i] >= 'A' && upper[i] <= 'Z' {
-			firstChar = upper[i]
-			firstIdx = i
-			break
-		}
-	}
-
-	// If no alphabetic character found, return "0000"
-	if firstChar == 0 {
-		return "0000"
-	}
-
-	// Build the soundex code
 	var code strings.Builder
-	code.WriteByte(firstChar)
-
-	// Soundex mapping: B, F, P, V → 1; C, G, J, K, Q, S, X, Z → 2; D, T → 3; L → 4; M, N → 5; R → 6
-	// Index: A=0, B=1, C=2, ..., Z=25
-	soundexMap := [26]byte{
-		0,   // A
-		'1', // B
-		'2', // C
-		'3', // D
-		0,   // E
-		'1', // F
-		'2', // G
-		0,   // H
-		0,   // I
-		'2', // J
-		'2', // K
-		'4', // L
-		'5', // M
-		'5', // N
-		0,   // O
-		'1', // P
-		'2', // Q
-		'6', // R
-		'2', // S
-		'3', // T
-		0,   // U
-		'1', // V
-		0,   // W
-		'2', // X
-		0,   // Y
-		'2', // Z
-	}
-
-	lastCode := byte(0)
-	for i := firstIdx + 1; i < len(upper) && code.Len() < 4; i++ {
-		c := upper[i]
+	firstLetter := true
+	lastCode := byte('0')
+	for i := 0; i < len(str); i++ {
+		c := str[i]
+		if c >= 'a' && c <= 'z' {
+			c -= 'a' - 'A'
+		}
 		if c < 'A' || c > 'Z' {
 			continue
 		}
-
-		codeChar := soundexMap[c-'A']
-		// Skip vowels, H, W (codeChar == 0)
-		if codeChar == 0 {
+		codeChar := soundexCodeMap[c-'A']
+		if firstLetter {
+			code.WriteByte(c)
+			lastCode = codeChar
+			firstLetter = false
 			continue
 		}
 
-		// Skip consecutive duplicate codes
-		if codeChar == lastCode {
+		// Original Soundex discards code-zero letters before suppressing duplicates.
+		if codeChar == '0' || codeChar == lastCode {
 			continue
 		}
 
@@ -4622,13 +4592,13 @@ func SoundexString(str string) string {
 		lastCode = codeChar
 	}
 
-	// Pad with zeros to make it 4 characters
-	result := code.String()
-	for len(result) < 4 {
-		result += "0"
+	if firstLetter {
+		return ""
 	}
-
-	return result
+	for code.Len() < 4 {
+		code.WriteByte('0')
+	}
+	return code.String()
 }
 
 func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -7642,11 +7612,36 @@ func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, resul
 		}, selectList)
 }
 
+func encodeBase64WithLineBreaks(data []byte) []byte {
+	encodedLen := base64.StdEncoding.EncodedLen(len(data))
+	wrappedLen := encodedLen
+	breakCount := 0
+	if encodedLen > 0 {
+		breakCount = (encodedLen - 1) / 76
+		wrappedLen += breakCount
+	}
+
+	out := make([]byte, wrappedLen)
+	base64.StdEncoding.Encode(out[:encodedLen], data)
+
+	// Move later lines first so each overlapping copy preserves the unprocessed prefix.
+	for breakIndex := breakCount; breakIndex > 0; breakIndex-- {
+		srcStart := breakIndex * 76
+		srcEnd := srcStart + 76
+		if srcEnd > encodedLen {
+			srcEnd = encodedLen
+		}
+		dstStart := srcStart + breakIndex
+		copy(out[dstStart:srcEnd+breakIndex], out[srcStart:srcEnd])
+		out[dstStart-1] = '\n'
+	}
+
+	return out
+}
+
 func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
-		buf := make([]byte, base64.StdEncoding.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
-		base64.StdEncoding.Encode(buf, data)
-		return buf, nil
+		return encodeBase64WithLineBreaks(data), nil
 	}, selectList)
 }
 
@@ -7783,6 +7778,29 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 
 const mysqlCompressedLengthMask = uint32(0x3fffffff)
 
+var (
+	errUncompressOutputTooLarge = moerr.NewInvalidInputNoCtx("advertised uncompressed length exceeds result limit")
+	uncompressSizeLimitWarning  = fmt.Sprintf("Uncompressed data size too large; the maximum size is %d (probably, length of uncompressed data was corrupted)", types.MaxBlobLen)
+)
+
+const (
+	uncompressBufferWarning = "ZLIB: Not enough room in the output buffer (probably, length of uncompressed data was corrupted)"
+	uncompressDataWarning   = "ZLIB: Input data corrupted"
+)
+
+func mysqlUncompressWarning(err error) (uint16, string) {
+	// This classifier is called only after both decoders reject the input. The
+	// size-limit sentinel and short-write error are the two non-data-error cases.
+	switch {
+	case errors.Is(err, errUncompressOutputTooLarge):
+		return moerr.ER_TOO_BIG_FOR_UNCOMPRESS, uncompressSizeLimitWarning
+	case errors.Is(err, io.ErrShortWrite):
+		return moerr.ER_ZLIB_Z_BUF_ERROR, uncompressBufferWarning
+	default:
+		return moerr.ER_ZLIB_Z_DATA_ERROR, uncompressDataWarning
+	}
+}
+
 func writeZlibCompressed(dst io.Writer, data []byte) error {
 	writer := zlib.NewWriter(dst)
 	written, err := writer.Write(data)
@@ -7872,7 +7890,7 @@ func compressedOriginalLength(data []byte, maxResultSize int) (uint32, error) {
 	}
 	originalLen := binary.LittleEndian.Uint32(data[:4]) & mysqlCompressedLengthMask
 	if uint64(originalLen) > uint64(maxResultSize) {
-		return 0, moerr.NewInternalErrorNoCtxf("uncompressed length %d exceeds result limit %d", originalLen, maxResultSize)
+		return 0, errUncompressOutputTooLarge
 	}
 	return originalLen, nil
 }
@@ -7972,6 +7990,7 @@ func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	var warnings process.WarningAccumulator
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -7992,20 +8011,26 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 
 		decompressed, err := mysqlUncompress(data, types.MaxBlobLen)
 		if err != nil {
+			primaryErr := err
 			// COMPRESS used raw DEFLATE before MatrixOne matched MySQL's zlib
 			// format. Keep those previously persisted values readable.
 			decompressed, err = legacyMatrixOneUncompress(data, types.MaxBlobLen)
-		}
-		if err != nil {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
+			if err != nil {
+				code, message := mysqlUncompressWarning(primaryErr)
+				warnings.Add(code, message)
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
 			}
-			continue
 		}
 
 		if err = rs.AppendBytes(decompressed, false); err != nil {
 			return err
 		}
+	}
+	if warnings.Total > 0 {
+		warnings.Flush(proc)
 	}
 
 	return nil
@@ -9867,22 +9892,59 @@ func userLevelLockSessionID(proc *process.Process) string {
 // user-level lock names (GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK).
 const maxUserLevelLockNameLength = 64
 
-// validateUserLevelLockName validates a MySQL user-level lock name.
-// It normalizes casing so lock-name identity is case-insensitive.
-func validateUserLevelLockName(name string) (string, error) {
-	if len(name) == 0 {
-		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not be empty")
-	}
-	if strings.IndexByte(name, 0) >= 0 {
-		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not contain NUL bytes")
+func validateUserLevelLockNameInput(name string) error {
+	if len(name) == 0 || !utf8.ValidString(name) || strings.IndexByte(name, 0) >= 0 {
+		return moerr.NewUserLockWrongNameNoCtx(name)
 	}
 	if utf8.RuneCountInString(name) > maxUserLevelLockNameLength {
-		return "", moerr.NewInternalErrorNoCtxf(
+		return moerr.NewInternalErrorNoCtxf(
 			"user-level lock name exceeds maximum length of %d characters",
 			maxUserLevelLockNameLength,
 		)
 	}
+	return nil
+}
+
+func validateUserLevelLockNameBytes(name []byte) error {
+	if len(name) == 0 || !utf8.Valid(name) || bytes.IndexByte(name, 0) >= 0 {
+		return moerr.NewUserLockWrongNameNoCtx(functionUtil.QuickBytesToStr(name))
+	}
+	if utf8.RuneCount(name) > maxUserLevelLockNameLength {
+		return moerr.NewInternalErrorNoCtxf(
+			"user-level lock name exceeds maximum length of %d characters",
+			maxUserLevelLockNameLength,
+		)
+	}
+	return nil
+}
+
+// validateUserLevelLockName validates a MySQL user-level lock name.
+// It normalizes casing so lock-name identity is case-insensitive.
+func validateUserLevelLockName(name string) (string, error) {
+	if err := validateUserLevelLockNameInput(name); err != nil {
+		return "", err
+	}
 	return strings.ToLower(name), nil
+}
+
+const maxUserLevelLockTimeoutSeconds uint32 = 1<<31 - 1
+
+func validateUserLevelLockFloat64Timeout(timeout float64) error {
+	if math.IsNaN(timeout) {
+		return moerr.NewInvalidArgNoCtx("GET_LOCK timeout", timeout)
+	}
+	return nil
+}
+
+func userLevelLockTimeoutSeconds(timeout float64) (uint32, error) {
+	if err := validateUserLevelLockFloat64Timeout(timeout); err != nil {
+		return 0, err
+	}
+	seconds := math.RoundToEven(timeout)
+	if math.IsInf(timeout, 0) || seconds < 0 || seconds > float64(maxUserLevelLockTimeoutSeconds) {
+		return maxUserLevelLockTimeoutSeconds, nil
+	}
+	return uint32(seconds), nil
 }
 
 func userLevelLockTxnID(owner string, connID uint64, name string) []byte {
@@ -10915,19 +10977,16 @@ func userLevelLockOptions(policy lockpb.WaitPolicy) lockpb.LockOptions {
 	}
 }
 
-func userLevelLockContext(proc *process.Process, timeout float64) (context.Context, context.CancelFunc, lockpb.WaitPolicy) {
+func userLevelLockContext(proc *process.Process, timeoutSeconds uint32) (context.Context, context.CancelFunc, lockpb.WaitPolicy) {
 	ctx := context.Background()
 	if proc != nil && proc.Ctx != nil {
 		ctx = proc.Ctx
 	}
-	if timeout == 0 {
+	if timeoutSeconds == 0 {
 		return ctx, func() {}, lockpb.WaitPolicy_FastFail
 	}
-	if timeout > 0 {
-		ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout*float64(time.Second)))
-		return ctx, cancel, lockpb.WaitPolicy_Wait
-	}
-	return ctx, func() {}, lockpb.WaitPolicy_Wait
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	return ctx, cancel, lockpb.WaitPolicy_Wait
 }
 
 func userLevelLockConflictOrTimeout(err error) bool {
@@ -11141,6 +11200,18 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 	if err != nil {
 		return 0, err
 	}
+	timeoutSeconds, err := userLevelLockTimeoutSeconds(timeout)
+	if err != nil {
+		return 0, err
+	}
+	return getUserLevelLockValidated(name, timeoutSeconds, proc)
+}
+
+// getUserLevelLockValidated expects an already normalized lock name and a
+// bounded timeout in whole seconds. Vector wrappers prevalidate their entire
+// evaluated batch before calling it, so an invalid later row cannot leave an
+// earlier acquisition or recursive reference behind.
+func getUserLevelLockValidated(name string, timeoutSeconds uint32, proc *process.Process) (int64, error) {
 	ls, err := userLevelLockService(proc)
 	if err != nil {
 		return 0, err
@@ -11158,7 +11229,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 		return 1, nil
 	}
 
-	ctx, cancel, policy := userLevelLockContext(proc, timeout)
+	ctx, cancel, policy := userLevelLockContext(proc, timeoutSeconds)
 	defer cancel()
 
 	txnID := userLevelLockAttemptTxnID(owner, connID, name)
@@ -11212,6 +11283,10 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 	if err != nil {
 		return 0, false, err
 	}
+	return releaseUserLevelLockValidated(name, proc)
+}
+
+func releaseUserLevelLockValidated(name string, proc *process.Process) (int64, bool, error) {
 	ls, err := userLevelLockService(proc)
 	if err != nil {
 		return 0, false, err
@@ -11273,6 +11348,10 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	return isUserLevelLockFreeValidated(name, proc)
+}
+
+func isUserLevelLockFreeValidated(name string, proc *process.Process) (int64, error) {
 	ls, err := userLevelLockService(proc)
 	if err != nil {
 		return 0, err
@@ -11317,6 +11396,10 @@ func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, erro
 	if err != nil {
 		return 0, false, err
 	}
+	return isUserLevelLockUsedValidated(name, proc)
+}
+
+func isUserLevelLockUsedValidated(name string, proc *process.Process) (uint64, bool, error) {
 	ls, err := userLevelLockService(proc)
 	if err != nil {
 		return 0, false, err
@@ -11436,21 +11519,258 @@ func releaseUserLevelLocksOnSessionCloseWithTimeout(proc *process.Process, timeo
 	}
 }
 
-func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	names := vector.GenerateFunctionStrParameter(ivecs[0])
-	timeouts := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
-	rs := vector.MustFunctionResult[int64](result)
+func validateUserLevelLockNameRows(
+	names vector.FunctionParameterWrapper[types.Varlena],
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	for i := 0; i < length; i++ {
+		row := uint64(i)
+		if functionRowSkipped(selectList, row) {
+			continue
+		}
+		name, isNull := names.GetStrValue(row)
+		if isNull {
+			return moerr.NewUserLockWrongNameNoCtx("NULL")
+		}
+		if err := validateUserLevelLockNameBytes(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
+type userLevelLockTimeoutConverter[T any] func(T) (uint32, error)
+
+func newDecimal64LockTimeoutConverter(scale int32) (userLevelLockTimeoutConverter[types.Decimal64], error) {
+	if scale < 0 || scale > 18 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid GET_LOCK DECIMAL64 scale %d", scale)
+	}
+	divisor := types.Pow10[scale]
+	return func(value types.Decimal64) (uint32, error) {
+		negative := value.Sign()
+		if negative {
+			value = value.Minus()
+		}
+		magnitude := uint64(value)
+		seconds, remainder := magnitude/divisor, magnitude%divisor
+		if scale > 0 && remainder >= divisor/2 {
+			seconds++
+		}
+		if (negative && seconds != 0) || seconds > uint64(maxUserLevelLockTimeoutSeconds) {
+			return maxUserLevelLockTimeoutSeconds, nil
+		}
+		return uint32(seconds), nil
+	}, nil
+}
+
+func decimal128LockTimeoutDivisor(scale int32) (types.Decimal128, types.Decimal128, error) {
+	if scale < 0 || scale > 38 {
+		return types.Decimal128{}, types.Decimal128{}, moerr.NewInternalErrorNoCtxf(
+			"invalid GET_LOCK DECIMAL128 scale %d", scale)
+	}
+	divisor := types.Decimal128{B0_63: 1}
+	for remaining := scale; remaining > 0; {
+		step := remaining
+		if step > 19 {
+			step = 19
+		}
+		var err error
+		divisor, err = divisor.Mul128(types.Decimal128{B0_63: types.Pow10[step]})
+		if err != nil {
+			return types.Decimal128{}, types.Decimal128{}, err
+		}
+		remaining -= step
+	}
+	if scale == 0 {
+		return divisor, types.Decimal128{}, nil
+	}
+	half, err := divisor.Div128Trunc(types.Decimal128{B0_63: 2})
+	return divisor, half, err
+}
+
+func newDecimal128LockTimeoutConverter(scale int32) (userLevelLockTimeoutConverter[types.Decimal128], error) {
+	divisor, half, err := decimal128LockTimeoutDivisor(scale)
+	if err != nil {
+		return nil, err
+	}
+	return func(value types.Decimal128) (uint32, error) {
+		negative := value.Sign()
+		if negative {
+			value = value.Minus()
+		}
+		seconds, err := value.Div128Trunc(divisor)
+		if err != nil {
+			return 0, err
+		}
+		if seconds.B64_127 != 0 || seconds.B0_63 > uint64(maxUserLevelLockTimeoutSeconds) {
+			return maxUserLevelLockTimeoutSeconds, nil
+		}
+		if scale > 0 {
+			product, err := divisor.Mul128(seconds)
+			if err != nil {
+				return 0, err
+			}
+			remainder, err := value.Sub128(product)
+			if err != nil {
+				return 0, err
+			}
+			if remainder.Compare(half) >= 0 {
+				seconds.B0_63++
+			}
+		}
+		if (negative && (seconds.B0_63 != 0 || seconds.B64_127 != 0)) ||
+			seconds.B64_127 != 0 || seconds.B0_63 > uint64(maxUserLevelLockTimeoutSeconds) {
+			return maxUserLevelLockTimeoutSeconds, nil
+		}
+		return uint32(seconds.B0_63), nil
+	}, nil
+}
+
+func decimal256LockTimeoutDivisor(scale int32) (types.Decimal256, types.Decimal256, error) {
+	if scale < 0 || scale > 76 {
+		return types.Decimal256{}, types.Decimal256{}, moerr.NewInternalErrorNoCtxf(
+			"invalid GET_LOCK DECIMAL256 scale %d", scale)
+	}
+	divisor := types.Decimal256{B0_63: 1}
+	for remaining := scale; remaining > 0; {
+		step := remaining
+		if step > 19 {
+			step = 19
+		}
+		var err error
+		divisor, err = divisor.Mul256(types.Decimal256{B0_63: types.Pow10[step]})
+		if err != nil {
+			return types.Decimal256{}, types.Decimal256{}, err
+		}
+		remaining -= step
+	}
+	if scale == 0 {
+		return divisor, types.Decimal256{}, nil
+	}
+	half, err := divisor.Div256Trunc(types.Decimal256{B0_63: 2})
+	return divisor, half, err
+}
+
+func newDecimal256LockTimeoutConverter(scale int32) (userLevelLockTimeoutConverter[types.Decimal256], error) {
+	divisor, half, err := decimal256LockTimeoutDivisor(scale)
+	if err != nil {
+		return nil, err
+	}
+	return func(value types.Decimal256) (uint32, error) {
+		negative := value.Sign()
+		if negative {
+			value = value.Minus()
+		}
+		seconds, err := value.Div256Trunc(divisor)
+		if err != nil {
+			return 0, err
+		}
+		if seconds.B192_255 != 0 || seconds.B128_191 != 0 || seconds.B64_127 != 0 ||
+			seconds.B0_63 > uint64(maxUserLevelLockTimeoutSeconds) {
+			return maxUserLevelLockTimeoutSeconds, nil
+		}
+		if scale > 0 {
+			product, err := divisor.Mul256(seconds)
+			if err != nil {
+				return 0, err
+			}
+			remainder, err := value.Sub256(product)
+			if err != nil {
+				return 0, err
+			}
+			if remainder.Compare(half) >= 0 {
+				seconds.B0_63++
+			}
+		}
+		if (negative && (seconds.B0_63 != 0 || seconds.B64_127 != 0 ||
+			seconds.B128_191 != 0 || seconds.B192_255 != 0)) ||
+			seconds.B192_255 != 0 || seconds.B128_191 != 0 || seconds.B64_127 != 0 ||
+			seconds.B0_63 > uint64(maxUserLevelLockTimeoutSeconds) {
+			return maxUserLevelLockTimeoutSeconds, nil
+		}
+		return uint32(seconds.B0_63), nil
+	}, nil
+}
+
+func getLockRows[T types.FixedSizeT](
+	names vector.FunctionParameterWrapper[types.Varlena],
+	timeouts vector.FunctionParameterWrapper[T],
+	timeoutVector *vector.Vector,
+	convert userLevelLockTimeoutConverter[T],
+	validate func(T) error,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	var constantTimeout uint32
+	constantTimeoutNull := true
+	constantTimeoutReady := false
+
+	// Validate the complete evaluated batch before touching the lock service.
+	// Constant timeout vectors are normalized once and reused below. Varying
+	// FLOAT64 values are checked for NaN here; valid DECIMAL vectors have a
+	// total fixed-width conversion after the scale/divisor is checked once, so
+	// avoid repeating 128/256-bit division in this side-effect barrier. No
+	// O(batch-size) scratch is allocated.
+	for i := 0; i < length; i++ {
+		row := uint64(i)
+		if functionRowSkipped(selectList, row) {
+			continue
+		}
+		name, nameNull := names.GetStrValue(row)
+		if nameNull {
+			return moerr.NewUserLockWrongNameNoCtx("NULL")
+		}
+		if err := validateUserLevelLockNameBytes(name); err != nil {
+			return err
+		}
+		if timeoutVector.IsConst() {
+			if !constantTimeoutReady {
+				timeout, timeoutNull := timeouts.GetValue(row)
+				constantTimeoutNull = timeoutNull
+				if !timeoutNull {
+					var err error
+					constantTimeout, err = convert(timeout)
+					if err != nil {
+						return err
+					}
+				}
+				constantTimeoutReady = true
+			}
+		} else {
+			timeout, timeoutNull := timeouts.GetValue(row)
+			if !timeoutNull && validate != nil {
+				if err := validate(timeout); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		name, nameNull := names.GetStrValue(i)
-		timeout, timeoutNull := timeouts.GetValue(i)
-		if nameNull || timeoutNull {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
 		}
-		value, err := getUserLevelLock(string(name), timeout, proc)
+		name, _ := names.GetStrValue(i)
+		timeoutSeconds := uint32(0)
+		if timeoutVector.IsConst() {
+			if !constantTimeoutNull {
+				timeoutSeconds = constantTimeout
+			}
+		} else if timeout, timeoutNull := timeouts.GetValue(i); !timeoutNull {
+			var err error
+			timeoutSeconds, err = convert(timeout)
+			if err != nil {
+				return err
+			}
+		}
+		value, err := getUserLevelLockValidated(strings.ToLower(string(name)), timeoutSeconds, proc)
 		if err != nil {
 			return err
 		}
@@ -11461,19 +11781,73 @@ func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return nil
 }
 
+func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	timeoutType := ivecs[1].GetType()
+	switch timeoutType.Oid {
+	case types.T_float64:
+		return getLockRows(
+			names,
+			vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1]),
+			ivecs[1],
+			userLevelLockTimeoutSeconds,
+			validateUserLevelLockFloat64Timeout,
+			result, proc, length, selectList,
+		)
+	case types.T_decimal64:
+		convert, err := newDecimal64LockTimeoutConverter(timeoutType.Scale)
+		if err != nil {
+			return err
+		}
+		return getLockRows(
+			names,
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[1]),
+			ivecs[1], convert, nil,
+			result, proc, length, selectList,
+		)
+	case types.T_decimal128:
+		convert, err := newDecimal128LockTimeoutConverter(timeoutType.Scale)
+		if err != nil {
+			return err
+		}
+		return getLockRows(
+			names,
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[1]),
+			ivecs[1], convert, nil,
+			result, proc, length, selectList,
+		)
+	case types.T_decimal256:
+		convert, err := newDecimal256LockTimeoutConverter(timeoutType.Scale)
+		if err != nil {
+			return err
+		}
+		return getLockRows(
+			names,
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[1]),
+			ivecs[1], convert, nil,
+			result, proc, length, selectList,
+		)
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported GET_LOCK timeout type %s", timeoutType.Oid)
+	}
+}
+
 func ReleaseLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	if err := validateUserLevelLockNameRows(names, length, selectList); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[int64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		name, null := names.GetStrValue(i)
-		if null {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
 		}
-		value, isNull, err := releaseUserLevelLock(string(name), proc)
+		name, _ := names.GetStrValue(i)
+		value, isNull, err := releaseUserLevelLockValidated(strings.ToLower(string(name)), proc)
 		if err != nil {
 			return err
 		}
@@ -11486,17 +11860,20 @@ func ReleaseLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 func IsFreeLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	if err := validateUserLevelLockNameRows(names, length, selectList); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[int64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		name, null := names.GetStrValue(i)
-		if null {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
 		}
-		value, err := isUserLevelLockFree(string(name), proc)
+		name, _ := names.GetStrValue(i)
+		value, err := isUserLevelLockFreeValidated(strings.ToLower(string(name)), proc)
 		if err != nil {
 			return err
 		}
@@ -11509,17 +11886,20 @@ func IsFreeLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func IsUsedLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	if err := validateUserLevelLockNameRows(names, length, selectList); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[uint64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		name, null := names.GetStrValue(i)
-		if null {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
 		}
-		value, isNull, err := isUserLevelLockUsed(string(name), proc)
+		name, _ := names.GetStrValue(i)
+		value, isNull, err := isUserLevelLockUsedValidated(strings.ToLower(string(name)), proc)
 		if err != nil {
 			return err
 		}

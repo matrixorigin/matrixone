@@ -100,7 +100,9 @@ const (
 	MORPCVersion62     int64 = 62 // VARCHAR OCT overload identities
 	MORPCVersion63     int64 = 63 // INSERT IGNORE CHECK warning diagnostics
 	MORPCVersion64     int64 = 64 // typed BIN/CONV execution contracts
-	MORPCLatestVersion       = MORPCVersion64
+	MORPCVersion65     int64 = 65 // signed INT result contract for ASCII
+	MORPCVersion66     int64 = 66 // GROUP_CONCAT source-row diagnostics in aggregate partial state
+	MORPCLatestVersion       = MORPCVersion66
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

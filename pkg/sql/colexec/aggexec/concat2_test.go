@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -786,6 +787,48 @@ func TestGroupConcatLargeGeometryAcrossFinalizers(t *testing.T) {
 	}
 }
 
+func TestGroupConcatLargeTextAcrossOrderedSpill(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	input := bytes.Repeat([]byte("x"), 70000)
+	exec := newGroupConcatExec(mp, multiAggInfo{
+		aggID:     AggIdOfGroupConcat,
+		argTypes:  []types.Type{types.T_text.ToType(), types.T_int64.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_text.ToType()}),
+		emptyNull: true,
+	}, "").(*groupConcatExec)
+	defer exec.Free()
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ""), 0))
+	exec.maxLen = uint64(len(input))
+	require.NoError(t, exec.GroupGrow(1))
+	ConfigureGroupConcatH0Spill(
+		exec, groupConcatMinRunSize, context.Background(),
+		func() (*os.File, error) {
+			file, err := os.CreateTemp(t.TempDir(), "group-concat-large-text-")
+			if err == nil {
+				err = os.Remove(file.Name())
+			}
+			return file, err
+		}, nil)
+
+	values := vector.NewVec(types.T_text.ToType())
+	defer values.Free(mp)
+	require.NoError(t, vector.AppendBytes(values, input, false, mp))
+	order := vector.NewVec(types.T_int64.ToType())
+	defer order.Free(mp)
+	require.NoError(t, vector.AppendFixed(order, int64(1), false, mp))
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values, order}))
+	require.True(t, exec.hasOrderedSpillRuns())
+
+	result, err := exec.FlushWithContext(context.Background())
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	defer result[0].Free(mp)
+	require.Equal(t, input, result[0].GetBytesAt(0))
+}
+
 func TestGroupConcatVectorValuesAcrossFinalizers(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() {
@@ -1338,6 +1381,71 @@ func TestGroupConcatOrderedMaxLen(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestGroupConcatH0WarningCounterSkipsNullWithOrdering(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		spill bool
+	}{
+		{name: "resident"},
+		{name: "spill", spill: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			info := multiAggInfo{
+				aggID:     101,
+				argTypes:  []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+				retType:   types.T_text.ToType(),
+				emptyNull: true,
+			}
+			exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+			require.NoError(t, exec.SetExtraInformation(
+				testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, "|"),
+				0,
+			))
+			exec.maxLen = 4
+			require.NoError(t, exec.GroupGrow(1))
+
+			values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"aa", "", "bbb"})
+			values.SetNull(1)
+			orderKeys := vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixedList(
+				orderKeys, []int64{1, 2, 3}, nil, mp))
+			if tc.spill {
+				ConfigureGroupConcatH0Spill(exec, groupConcatMinRunSize, context.Background(), func() (*os.File, error) {
+					file, err := os.CreateTemp(t.TempDir(), "group-concat-h0-warning-")
+					if err == nil {
+						err = os.Remove(file.Name())
+					}
+					return file, err
+				}, nil)
+			}
+
+			require.NoError(t, exec.BatchFill(
+				0,
+				[]uint64{1, 1, 1},
+				[]*vector.Vector{values, orderKeys},
+			))
+			if tc.spill {
+				require.NoError(t, exec.spillOrderedState(context.Background()))
+			}
+
+			results, err := exec.FlushWithContext(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, "aa|b", string(results[0].GetBytesAt(0)))
+			sink := &groupConcatWarningSink{}
+			ReportGroupConcatWarnings(exec, sink)
+			require.Equal(t, uint64(1), sink.total)
+			require.Equal(t, []string{"Row 2 was cut by GROUP_CONCAT()"}, sink.messages)
+
+			results[0].Free(mp)
+			values.Free(mp)
+			orderKeys.Free(mp)
+			exec.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestGroupConcatMaxLen(t *testing.T) {
 	mp := mpool.MustNewZero()
 	info := multiAggInfo{
@@ -1361,6 +1469,34 @@ func TestGroupConcatMaxLen(t *testing.T) {
 	results[0].Free(mp)
 	exec.Free()
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestGroupConcatBatchFillOffsetKeepsWarningSourceRow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	info := multiAggInfo{
+		aggID:     98,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, "").(*groupConcatExec)
+	require.NoError(t, exec.GroupGrow(1))
+	SetGroupConcatMultiGroupContext(exec, true)
+	require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 3), 0))
+	values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"a", "a", "bcdef"})
+	require.NoError(t, exec.BatchFill(0, []uint64{1, 1}, []*vector.Vector{values}))
+	require.NoError(t, exec.BatchFill(2, []uint64{1}, []*vector.Vector{values}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "aab", string(results[0].GetBytesAt(0)))
+	sink := &groupConcatWarningSink{}
+	ReportGroupConcatWarnings(exec, sink)
+	require.Equal(t, uint64(1), sink.total)
+	require.Equal(t, []string{"Row 3 was cut by GROUP_CONCAT()"}, sink.messages)
+	results[0].Free(mp)
+	values.Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestGroupConcatMaxLenReportsWarningsOnce(t *testing.T) {
@@ -1425,6 +1561,59 @@ func TestGroupConcatWarningsCountOnlySinkReceivesAllRows(t *testing.T) {
 	results[0].Free(mp)
 	values.Free(mp)
 	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupConcatWarningAccumulatorRetainsGlobalSmallestRows(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makeExec := func(base uint64) (*groupConcatExec, *vector.Vector, *vector.Vector) {
+		info := multiAggInfo{
+			aggID:     99,
+			argTypes:  []types.Type{types.T_varchar.ToType()},
+			retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+			emptyNull: true,
+		}
+		exec := newGroupConcatExec(mp, info, "").(*groupConcatExec)
+		require.NoError(t, exec.GroupGrow(40))
+		require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 3), 0))
+		values := make([]string, 80)
+		groups := make([]uint64, 80)
+		for i := range values {
+			values[i] = "aa"
+			if i%2 == 1 {
+				values[i] = "bb"
+			}
+			groups[i] = uint64(i/2 + 1)
+		}
+		valueVec := buildVarlenVec(t, mp, types.T_varchar.ToType(), values)
+		if base != 0 {
+			SetGroupConcatInputRowBase(exec, base)
+		}
+		require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{valueVec}))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		return exec, valueVec, result[0]
+	}
+
+	first, firstValues, firstResult := makeExec(0)
+	second, secondValues, secondResult := makeExec(100)
+	var accumulator GroupConcatWarningAccumulator
+	accumulator.Add(first)
+	accumulator.Add(second)
+	sink := &groupConcatWarningSink{}
+	accumulator.Report(sink)
+	require.Equal(t, uint64(80), sink.total)
+	require.Len(t, sink.codes, groupConcatWarningRetentionLimit)
+	require.Len(t, sink.messages, groupConcatWarningRetentionLimit)
+	require.Equal(t, "Row 148 was cut by GROUP_CONCAT()", sink.messages[0])
+	require.Equal(t, "Row 2 was cut by GROUP_CONCAT()",
+		sink.messages[len(sink.messages)-1])
+	firstResult.Free(mp)
+	firstValues.Free(mp)
+	first.Free()
+	secondResult.Free(mp)
+	secondValues.Free(mp)
+	second.Free()
 	require.Zero(t, mp.CurrNB())
 }
 
