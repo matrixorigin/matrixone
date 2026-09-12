@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -784,6 +785,48 @@ func TestGroupConcatLargeGeometryAcrossFinalizers(t *testing.T) {
 			require.Zero(t, mp.CurrNB())
 		})
 	}
+}
+
+func TestGroupConcatLargeTextAcrossOrderedSpill(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	input := bytes.Repeat([]byte("x"), 70000)
+	exec := newGroupConcatExec(mp, multiAggInfo{
+		aggID:     AggIdOfGroupConcat,
+		argTypes:  []types.Type{types.T_text.ToType(), types.T_int64.ToType()},
+		retType:   GroupConcatReturnType([]types.Type{types.T_text.ToType()}),
+		emptyNull: true,
+	}, "").(*groupConcatExec)
+	defer exec.Free()
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ""), 0))
+	exec.maxLen = uint64(len(input))
+	require.NoError(t, exec.GroupGrow(1))
+	ConfigureGroupConcatH0Spill(
+		exec, groupConcatMinRunSize, context.Background(),
+		func() (*os.File, error) {
+			file, err := os.CreateTemp(t.TempDir(), "group-concat-large-text-")
+			if err == nil {
+				err = os.Remove(file.Name())
+			}
+			return file, err
+		}, nil)
+
+	values := vector.NewVec(types.T_text.ToType())
+	defer values.Free(mp)
+	require.NoError(t, vector.AppendBytes(values, input, false, mp))
+	order := vector.NewVec(types.T_int64.ToType())
+	defer order.Free(mp)
+	require.NoError(t, vector.AppendFixed(order, int64(1), false, mp))
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values, order}))
+	require.True(t, exec.hasOrderedSpillRuns())
+
+	result, err := exec.FlushWithContext(context.Background())
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	defer result[0].Free(mp)
+	require.Equal(t, input, result[0].GetBytesAt(0))
 }
 
 func TestGroupConcatVectorValuesAcrossFinalizers(t *testing.T) {
