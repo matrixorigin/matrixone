@@ -789,6 +789,12 @@ func (s *service) handleRequest(
 		}
 		return moerr.NewServiceUnavailableNoCtx("CN pipeline service is closing")
 	}
+	if s.cfg != nil {
+		handlerCtx = morpc.ContextWithMaxMessageSize(
+			handlerCtx,
+			uint64(s.cfg.RPC.MaxMessageSize),
+		)
+	}
 	owned := true
 	cancelOwned := value.Cancel != nil
 	defer func() {

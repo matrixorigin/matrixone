@@ -15,6 +15,7 @@
 package process
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -87,6 +88,27 @@ func TestWarningAccumulatorRetainsBoundedDiagnosticsAndExactCount(t *testing.T) 
 	require.Len(t, accumulator.Codes, warningDiagnosticRetentionLimit)
 }
 
+func TestWarningAccumulatorUsesConfiguredRetentionPrefix(t *testing.T) {
+	for _, limit := range []int{0, 1, 10, 64, 128, 1024, 65535} {
+		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
+			var accumulator WarningAccumulator
+			accumulator.SetWarningRetentionLimit(limit)
+			for i := 0; i < 20; i++ {
+				accumulator.Add(uint16(1000+i), fmt.Sprintf("warning-%d", i))
+			}
+			want := limit
+			if want > 20 {
+				want = 20
+			}
+			require.Len(t, accumulator.Codes, want)
+			for i := 0; i < want; i++ {
+				require.Equal(t, uint16(1000+i), accumulator.Codes[i])
+			}
+			require.Equal(t, uint64(20), accumulator.Total)
+		})
+	}
+}
+
 func TestAppendWarningBatchUsesCurrentAttemptSink(t *testing.T) {
 	session := new(warningTestSession)
 	proc := &Process{Base: &BaseProcess{}, Session: session}
@@ -106,6 +128,31 @@ func TestAppendWarningBatchUsesCurrentAttemptSink(t *testing.T) {
 	require.Equal(t, uint64(1), session.total)
 	require.Equal(t, []uint16{1292}, session.codes)
 }
+
+func TestWarningDiagnosticRetentionLimitForProcessPrefersSnapshot(t *testing.T) {
+	proc := &Process{
+		Base: &BaseProcess{SessionInfo: SessionInfo{
+			MaxErrorCount:    0,
+			MaxErrorCountSet: true,
+		}},
+		Session: &retentionWarningSession{limit: 128},
+	}
+	proc.WarningSink = &retentionWarningSession{limit: 256}
+	require.Equal(t, 256, WarningDiagnosticRetentionLimitForProcess(proc))
+
+	proc.WarningSink = nil
+	proc.Base.SessionInfo.MaxErrorCountSet = false
+	require.Equal(t, 128, WarningDiagnosticRetentionLimitForProcess(proc))
+}
+
+type retentionWarningSession struct{ limit int }
+
+func (s *retentionWarningSession) GetWarningRetentionLimit() int            { return s.limit }
+func (*retentionWarningSession) GetTempTable(string, string) (string, bool) { return "", false }
+func (*retentionWarningSession) AddTempTable(string, string, string)        {}
+func (*retentionWarningSession) RemoveTempTable(string, string)             {}
+func (*retentionWarningSession) RemoveTempTableByRealName(string)           {}
+func (*retentionWarningSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
 
 func TestAppendWarningBatchLegacySinkPreservesUnretainedCount(t *testing.T) {
 	sink := new(legacyWarningSink)
@@ -158,14 +205,14 @@ func TestBoundWarningMessageIsOwnedAndUTF8Safe(t *testing.T) {
 	require.Contains(t, bounded, "truncated")
 }
 
-func TestWarningAccumulatorBoundsRetainedBytesWithoutLosingCount(t *testing.T) {
+func TestWarningAccumulatorBoundsRetainedMessageWithoutLosingCount(t *testing.T) {
 	var accumulator WarningAccumulator
 	for i := 0; i < warningDiagnosticRetentionLimit+10; i++ {
 		accumulator.Add(1062, strings.Repeat("x", WarningDiagnosticMaxMessageBytes*2))
 	}
 	require.Equal(t, uint64(warningDiagnosticRetentionLimit+10), accumulator.Total)
 	require.Len(t, accumulator.Codes, warningDiagnosticRetentionLimit)
-	require.LessOrEqual(t, accumulator.bytes, WarningDiagnosticMaxBytes)
+	require.Greater(t, accumulator.bytes, WarningDiagnosticMaxBytes)
 	for _, message := range accumulator.Messages {
 		require.LessOrEqual(t, len(message), WarningDiagnosticMaxMessageBytes)
 	}

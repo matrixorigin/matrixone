@@ -1855,7 +1855,6 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 			ses.rewriteEnabled.Store(on)
 		}
 	}
-
 	// A prepared statement bakes in the rewrite/remap state captured at PREPARE
 	// time (the injected hint and the remapdb applied to its AST). Changing that
 	// state must invalidate the cached prepared statements, otherwise a later

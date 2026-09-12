@@ -77,6 +77,17 @@ func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {
 	require.Equal(t, int8(0), value)
 }
 
+func TestBackSessionDelegatesWarningRetentionLimit(t *testing.T) {
+	ctx := context.Background()
+	ses := newFeatureLimitTestSession(t)
+	ses.errInfo = &errInfo{maxCnt: MoDefaultErrorCount}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(7)))
+	ses.beginWarningDiagnostics()
+	backSes := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
+
+	require.Equal(t, 7, backSes.GetWarningRetentionLimit())
+}
+
 func TestBindBackExecSessionWithoutUpstream(t *testing.T) {
 	backSessionID := uuid.New()
 	backSes := &backSession{

@@ -1890,7 +1890,7 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 		_, showErrorsOnly = execCtx.stmt.(*tree.ShowErrors)
 	}
 
-	for i := info.length() - 1; i >= 0; i-- {
+	for i := 0; i < info.length(); i++ {
 		row := make([]interface{}, 3)
 		row[0] = "Error"
 		if i < len(info.levels) && info.levels[i] != "" {
@@ -1930,7 +1930,7 @@ func isTopLevelClientStatement(ses *Session, execCtx *ExecCtx, input *UserInput)
 
 func resetDiagnosticsForStatement(ses *Session, execCtx *ExecCtx, input *UserInput, stmt tree.Statement) {
 	if isTopLevelClientStatement(ses, execCtx, input) && !isDiagnosticsStatement(stmt) {
-		ses.resetDiagnostics()
+		ses.beginWarningDiagnostics()
 	}
 }
 
@@ -4281,10 +4281,29 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
+	if limit, ok := resolveSessionWarningRetentionLimit(ses); ok {
+		proc.Base.SessionInfo.MaxErrorCount = limit
+		proc.Base.SessionInfo.MaxErrorCountSet = true
+	}
 	proc.Base.SessionInfo.AutoIncrementIncrement = resolvePositiveSessionUint64(
 		ses, "auto_increment_increment", proc.Base.SessionInfo.AutoIncrementIncrement)
 	proc.Base.SessionInfo.AutoIncrementOffset = resolvePositiveSessionUint64(
 		ses, "auto_increment_offset", proc.Base.SessionInfo.AutoIncrementOffset)
+}
+
+func resolveSessionWarningRetentionLimit(ses FeSession) (int, bool) {
+	if ses == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit, true
+	}
+	value, err := ses.GetSessionSysVar("max_error_count")
+	if err != nil {
+		return process.WarningDiagnosticDefaultRetentionLimit, true
+	}
+	limit, ok := sessionWarningRetentionLimit(value)
+	if !ok {
+		return process.WarningDiagnosticDefaultRetentionLimit, true
+	}
+	return limit, true
 }
 
 func resolvePositiveSessionUint64(ses FeSession, name string, previous uint64) uint64 {
@@ -5662,7 +5681,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	ParseDuration := time.Since(beginInstant)
 	recordParseError := func(errorInput *UserInput, parseErr error) error {
 		if isTopLevelClientStatement(ses, execCtx, errorInput) {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 		}
 		statsInfo.ParseStage.ParseDuration = time.Since(beginInstant)
 		diagnosticErr := redactStatementErrorForLogging(parseErr, errorInput.getSql())
@@ -6218,7 +6237,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		// SQL mode current for each staged statement.
 		rewritePolicy, rewriteErr := captureRewritePolicy(execCtx.reqCtx, ses)
 		if rewriteErr != nil {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_QUERY, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 			return resp, nil
@@ -6271,7 +6290,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			var rewriteErr error
 			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
 			if rewriteErr != nil {
-				ses.resetDiagnostics()
+				ses.beginWarningDiagnostics()
 				markRowCountFailed(ses, ses.GetProc())
 				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
@@ -6279,7 +6298,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			preparedRemapDb = extractInlineRemapDb(sql)
 		}
 		if err = validateNativePrepareJSONHints(execCtx.reqCtx, sql, parserLowerCaseTableNames(ses)); err != nil {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 			markRowCountFailed(ses, ses.GetProc())
 			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), err)
 			return resp, nil
@@ -6308,7 +6327,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var prepareStmt *PrepareStmt
 		sql, prepareStmt, err = parseStmtExecute(execCtx.reqCtx, ses, req.GetData().([]byte))
 		if err != nil {
-			ses.resetDiagnostics()
+			ses.beginWarningDiagnostics()
 			if prepareStmt != nil {
 				prepareStmt.closeCursor()
 				prepareStmt.clearBinaryParamState(ses.GetProc())
@@ -6325,6 +6344,7 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		prepareStmt.closeCursor()
 		if cursorRequested {
 			if _, ok := prepareStmt.PrepareStmt.(*tree.Select); !ok {
+				ses.beginWarningDiagnostics()
 				prepareStmt.clearBinaryParamState(ses.GetProc())
 				markRowCountFailed(ses, ses.GetProc())
 				return NewGeneralErrorResponse(COM_STMT_EXECUTE, ses.GetTxnHandler().GetServerStatus(),

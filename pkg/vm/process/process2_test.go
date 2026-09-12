@@ -53,6 +53,13 @@ func TestChildProcessesInheritSession(t *testing.T) {
 	require.Same(t, parent.WarningSink, contextChild.GetWarningSink())
 }
 
+func TestNewTopProcessDefaultsWarningRetention(t *testing.T) {
+	proc := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer proc.Free()
+	require.Equal(t, WarningDiagnosticDefaultRetentionLimit, proc.Base.SessionInfo.MaxErrorCount)
+	require.True(t, proc.Base.SessionInfo.MaxErrorCountSet)
+}
+
 func TestBuildPipelineContext(t *testing.T) {
 	// Create a parent context
 	parentCtx := context.Background()

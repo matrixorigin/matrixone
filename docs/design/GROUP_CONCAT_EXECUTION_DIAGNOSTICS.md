@@ -36,11 +36,17 @@ Required invariants:
    attempt by reading a mutable process or session destination.
 4. Session identity and its optional interfaces remain intact. Diagnostic
    routing is an independent process field; children inherit its destination.
-5. Warning count is independent of retained records. Retaining only 64 records
-   does not reduce the batch warning count.
-6. For one prepared-statement lifetime, effective limit is
-   max(prepare-time floor, execution-time session limit). Physical compile
-   generations cannot mutate the floor.
+5. Warning count is independent of retained records. The session's
+   `max_error_count` (default 1024, range 0 through 65535) limits retained
+   records without reducing the batch warning count; zero disables detail
+   retention.
+6. A prepared or cached logical plan reads `max_error_count` at each execution
+   boundary. Physical aggregate generations receive that statement snapshot;
+   the capacity is not fixed in the logical plan.
+   The session variable value may change while a SET statement runs, but its
+   active diagnostic capacity is updated only at the next top-level
+   non-diagnostic boundary, so that statement's warnings remain visible to a
+   following `SHOW WARNINGS`.
 
 ## Alternatives and decision
 
@@ -116,11 +122,17 @@ counting after truncation. The counter restarts for a new finalization. It is
 not a source-table row ID or a globally ordered distributed row number.
 
 Distributed terminal envelopes sum fragment warning counts and retain bounded
-diagnostics. Arrival order can affect which records survive the cap. No global
-ordering or reproducible row numbering across different physical plans is
-promised. Ordinary partial-state transport must not itself emit a second copy
-of a warning for the same finalization; the finalizing operator owns reporting.
-Window finalizations can represent separate frame evaluations.
+diagnostics. Records keep each fragment's production order, and the
+coordinator merges batches in the order it receives them; no global ordering or
+reproducible row numbering across different physical plans is promised. Before
+the terminal JSON is attached to MORPC, a conservative byte budget is applied
+to the diagnostic array. The exact count is always sent, while only the
+longest prefix that fits the frame is sent; a remote terminal may therefore
+carry fewer records than its configured `max_error_count` when messages are
+large.
+Ordinary partial-state transport must not itself emit a second copy of a warning
+for the same finalization; the finalizing operator owns reporting. Window
+finalizations can represent separate frame evaluations.
 
 ## Prepared statements and compatibility
 
@@ -137,35 +149,44 @@ the receiving session. Preservation across migration needs a separate serialized
 prepared-state contract and is not claimed here. Restart has no new durable
 state to recover; rollback of this code needs no catalog/data conversion.
 
-Warnings use the existing optional terminal JSON fields; no new protobuf or
-protocol number is required. Older receivers ignore unknown fields; older
-producers may omit warnings. During mixed-version operation, successful SQL
-execution remains compatible but complete warning coverage is not guaranteed.
+Warnings use the existing optional terminal JSON fields. The initiating
+statement's `max_error_count` is carried in the appended protobuf SessionInfo
+fields. Older receivers ignore those fields and use the legacy 64-record
+capacity; during mixed-version operation, successful SQL execution remains
+compatible but complete warning coverage is not guaranteed. Once all CNs are
+upgraded, the configured capacity is preserved through collection, subject to
+the terminal frame byte budget.
 The single-record optional sink fallback reports retained records only; exact
 totals above retention require the batch interface used by the frontend and
 attempt collectors. The frontend's wire warning count saturates at uint16 max.
 
 ## Cost, retention and failure containment
 
-Each aggregate retains at most 64 uint64 row numbers plus two counters. Each
-collector retains at most 64 diagnostic records and a uint64 count. The process
-binding map and temporary visited-scope map are O(processes/scopes in the plan),
-not O(rows or warnings). Retries release previous binding maps and record slices;
-only already outstanding callbacks can retain a sealed old collector until their
-existing RPC lifecycle ends. No new goroutine, queue, timer, retry, or log is added.
+Each aggregate retains at most `max_error_count` uint64 row numbers plus two
+counters. Each collector retains at most that many diagnostic records and a
+uint64 count. The process binding map and temporary visited-scope map are
+O(processes/scopes in the plan), not O(rows or warnings). Retries release
+previous binding maps and record slices; only already outstanding callbacks can
+retain a sealed old collector until their existing RPC lifecycle ends. No new
+goroutine, queue, timer, retry, or log is added.
 
 Retained record count is bounded independently of total count. Retained *bytes*
-are O(64 times maximum produced message length), not a universal fixed byte cap:
+are O(`max_error_count` times maximum produced message length), while terminal
+serialization applies a separate conservative frame byte budget:
 GROUP_CONCAT messages contain only a row number, while existing scalar conversion
 messages can contain input text. This design does not newly cap scalar message
 length, and does not claim to bound the existing aggregate payload/spill memory.
+The remote receiver uses the smaller of the configured MORPC body limit and the
+existing 64 MiB result-fragment limit as the terminal budget (and subtracts
+protobuf message overhead). Receivers created outside an RPC server use the
+default 100 MiB MORPC body limit as the compatibility fallback.
 Plan size and simultaneously live fragments also multiply the per-owner bound.
 
 The per-contributing-row addition is counter arithmetic. Message formatting and
 batch publication occur at warning/finalization boundaries. Collectors use a
-short mutex section and copy/transfer at most 64 records. No-warning foreground
-Run still pays for a collector and binding traversal; no-sink background Run
-skips it. Independent duplicate GROUP_CONCAT calls now pay for independent
+short mutex section and copy/transfer at most `max_error_count` records.
+No-warning foreground Run still pays for a collector and binding traversal;
+no-sink background Run skips it. Independent duplicate GROUP_CONCAT calls now pay for independent
 aggregate evaluation; this is the accepted cost of preserving their diagnostic
 effects. Avoid claiming measured speedups without comparative evidence.
 

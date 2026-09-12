@@ -1874,6 +1874,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 	warningsEnabled := proc != nil && proc.GetStmtProfile() != nil &&
 		proc.GetStmtProfile().GetStatementIgnore() && ap.OnDuplicateAction == plan.Node_IGNORE
 	var duplicateWarnings process.WarningAccumulator
+	duplicateWarnings.SetWarningRetentionLimit(process.WarningDiagnosticRetentionLimitForProcess(proc))
 	recordDuplicateWarning := func(row int) {
 		if !warningsEnabled {
 			return

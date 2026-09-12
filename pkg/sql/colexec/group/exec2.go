@@ -90,6 +90,8 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	}
 	group.ctr.prepareParamKind.Reset(group.Aggs)
 	group.ctr.aggExprs = group.Aggs
+	group.ctr.warningRetentionLimit = process.WarningDiagnosticRetentionLimitForProcess(proc)
+	group.ctr.warningRetentionSet = true
 	group.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
 		hasPrepareParamKindPreservingAgg(group.Aggs)
 	group.ctr.mp = mpool.MustNewNoLock("group_mpool")

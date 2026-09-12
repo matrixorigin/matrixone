@@ -564,6 +564,8 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 		if err != nil {
 			return nil, err
 		}
+		aggexec.ConfigureGroupConcatWarningRetention(
+			aggs[i], process.WarningDiagnosticRetentionLimitForProcess(proc))
 		if config := expression.GetExtraInformation(); config != nil {
 			if err = aggs[i].SetExtraInformation(config, 0); err != nil {
 				return nil, err

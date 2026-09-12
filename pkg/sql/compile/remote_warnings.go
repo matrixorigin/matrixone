@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"encoding/json"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,18 +47,84 @@ func appendWarningBatchToSink(destination any, total uint64, codes []uint16, mes
 	process.AppendWarningBatchToSink(destination, total, codes, messages)
 }
 
-const remoteWarningRetentionLimit = 64
+const remoteWarningRetentionLimit = process.WarningDiagnosticLegacyRetentionLimit
+
+// terminalWarningDiagnosticsField is appended only when at least one
+// diagnostic fits in the terminal envelope byte budget. Keeping the warning
+// records out of the initial marshal avoids constructing a full-size JSON
+// frame before the MORPC limit has been applied.
+const terminalWarningDiagnosticsField = `"warning_diagnostics":[`
+
+// marshalRemoteTerminalEnvelope preserves the exact warning count while
+// retaining the longest prefix of diagnostics that fits in maxBytes. The
+// terminal envelope has no independent fragmentation channel, so the byte
+// budget is applied before the JSON is attached to a MORPC message.
+func marshalRemoteTerminalEnvelope(envelope remoteTerminalEnvelope, maxBytes int) ([]byte, error) {
+	warnings := envelope.WarningDiagnostics
+	envelope.WarningDiagnostics = nil
+	base, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, err
+	}
+	if len(warnings) == 0 || maxBytes <= len(base) || len(base) == 0 {
+		return base, nil
+	}
+
+	// json.Marshal emits a compact object, so the final byte is the closing
+	// brace. Add the diagnostics field immediately before it. Appending the
+	// field keeps all existing envelope fields and their compatibility intact.
+	result := append([]byte(nil), base[:len(base)-1]...)
+	hasBaseFields := len(result) > 1 // the object is not just "{}"
+	started := false
+	used := len(result)
+	for _, warning := range warnings {
+		encoded, err := json.Marshal(warning)
+		if err != nil {
+			return nil, err
+		}
+		extra := len(encoded)
+		if started {
+			extra++ // comma between array elements
+		} else {
+			extra += len(terminalWarningDiagnosticsField) + 2 // field, []
+			if hasBaseFields {
+				extra++ // comma before the appended field
+			}
+		}
+		if used+extra > maxBytes {
+			break
+		}
+		if !started {
+			if hasBaseFields {
+				result = append(result, ',')
+			}
+			result = append(result, terminalWarningDiagnosticsField...)
+			started = true
+		} else {
+			result = append(result, ',')
+		}
+		result = append(result, encoded...)
+		used += extra
+	}
+	if started {
+		result = append(result, "]}"...)
+	} else {
+		result = append(result, '}')
+	}
+	return result, nil
+}
 
 // remoteWarningCollector gives a remote pipeline the small process.Session
 // surface it needs while collecting row-level warnings. It deliberately does
 // not expose a frontend session or variable state to the remote CN.
 type remoteWarningCollector struct {
-	mu           sync.Mutex
-	warningCount uint64
-	warnings     []remoteWarningDiagnostic
-	warningBytes int
-	maxRetained  int
-	closed       bool
+	mu             sync.Mutex
+	warningCount   uint64
+	warnings       []remoteWarningDiagnostic
+	warningBytes   int
+	maxRetained    int
+	maxRetainedSet bool
+	closed         bool
 }
 
 func (*remoteWarningCollector) GetTempTable(string, string) (string, bool) { return "", false }
@@ -65,6 +132,34 @@ func (*remoteWarningCollector) AddTempTable(string, string, string)        {}
 func (*remoteWarningCollector) RemoveTempTable(string, string)             {}
 func (*remoteWarningCollector) RemoveTempTableByRealName(string)           {}
 func (*remoteWarningCollector) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return false, false }
+
+func (s *remoteWarningCollector) GetWarningRetentionLimit() int {
+	if s == nil {
+		return remoteWarningRetentionLimit
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.warningRetentionLimitLocked()
+}
+
+func (s *remoteWarningCollector) warningRetentionLimitLocked() int {
+	if s.maxRetainedSet {
+		if s.maxRetained < 0 {
+			return 0
+		}
+		if s.maxRetained > int(^uint16(0)) {
+			return int(^uint16(0))
+		}
+		return s.maxRetained
+	}
+	if s.maxRetained > 0 {
+		if s.maxRetained > int(^uint16(0)) {
+			return int(^uint16(0))
+		}
+		return s.maxRetained
+	}
+	return remoteWarningRetentionLimit
+}
 
 func (s *remoteWarningCollector) AppendWarningDiagnostic(code uint16, msg string) {
 	if s == nil {
@@ -103,10 +198,7 @@ func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16
 	} else {
 		s.warningCount += total
 	}
-	limit := s.maxRetained
-	if limit <= 0 {
-		limit = remoteWarningRetentionLimit
-	}
+	limit := s.warningRetentionLimitLocked()
 	batchLimit := len(codes)
 	if len(messages) < batchLimit {
 		batchLimit = len(messages)
@@ -115,14 +207,7 @@ func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16
 		batchLimit = int(total)
 	}
 	for i := 0; i < batchLimit && len(s.warnings) < limit; i++ {
-		remaining := process.WarningDiagnosticMaxBytes - s.warningBytes
-		if remaining <= 0 {
-			break
-		}
-		if remaining > process.WarningDiagnosticMaxMessageBytes {
-			remaining = process.WarningDiagnosticMaxMessageBytes
-		}
-		message := process.BoundWarningMessage(messages[i], remaining)
+		message := process.BoundWarningMessage(messages[i], process.WarningDiagnosticMaxMessageBytes)
 		s.warnings = append(s.warnings, remoteWarningDiagnostic{
 			Code:    codes[i],
 			Message: message,
