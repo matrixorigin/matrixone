@@ -2544,7 +2544,7 @@ func validateRemoteViewDefinitionPipelineProtocol(
 	}
 	if proc == nil || !supportsRemoteViewDefinitionFunction(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"view metadata remote execution requires MORPC protocol version 66",
+			"view metadata remote execution requires MORPC protocol version 67",
 		)
 	}
 	return nil
