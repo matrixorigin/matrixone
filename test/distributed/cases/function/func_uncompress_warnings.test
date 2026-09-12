@@ -1,0 +1,39 @@
+-- @suite
+
+-- @case
+-- @desc: UNCOMPRESS returns NULL and emits bounded MySQL-compatible warnings for rejected inputs.
+-- @label:bvt
+
+-- Invalid UNCOMPRESS input remains NULL and reports the MySQL diagnostic.
+-- Keep each SHOW WARNINGS adjacent to the expression whose diagnostics it checks.
+SELECT UNCOMPRESS(x'00000000') IS NULL AS corrupt_input_is_null;
+SHOW WARNINGS;
+
+SELECT UNCOMPRESS(x'03000000789c00') IS NULL AS truncated_input_is_null;
+SHOW WARNINGS;
+
+SELECT UNCOMPRESS(x'ffffffff00') IS NULL AS oversized_input_is_null;
+SHOW WARNINGS;
+
+-- The zlib stream expands beyond its advertised output capacity: MySQL maps
+-- Z_BUF_ERROR to warning 1258 and still returns NULL.
+SELECT UNCOMPRESS(x'02000000789c4b4c4a0600024d0127') IS NULL AS output_capacity_is_null;
+SHOW WARNINGS;
+
+-- Verify row-wise evaluation and controls through a BLOB column. NULL, empty,
+-- and valid zlib values do not warn; each rejected row contributes one warning.
+DROP DATABASE IF EXISTS uncompress_warnings_28458;
+CREATE DATABASE uncompress_warnings_28458;
+CREATE TABLE uncompress_warnings_28458.cases(id INT PRIMARY KEY, compressed BLOB);
+INSERT INTO uncompress_warnings_28458.cases VALUES
+(1, x'00000000'),
+(2, COMPRESS('ok')),
+(3, NULL),
+(4, COMPRESS('')),
+(5, x'00000000');
+SELECT id, UNCOMPRESS(compressed) IS NULL AS is_null
+FROM uncompress_warnings_28458.cases ORDER BY id;
+SHOW WARNINGS;
+DROP DATABASE uncompress_warnings_28458;
+SELECT COUNT(*) AS leftover_tables FROM information_schema.tables
+WHERE table_schema = 'uncompress_warnings_28458';
