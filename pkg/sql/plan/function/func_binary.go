@@ -7864,6 +7864,23 @@ func ExtractFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWra
 		return nil
 	}
 	unit := functionUtil.QuickBytesToStr(v1)
+	if unit == "minute" {
+		// The unit is constant for the vector. Keep this hot path out of the
+		// generic per-row unit lookup, switch, and integer formatter.
+		for i := uint64(0); i < uint64(length); i++ {
+			v2, null2 := p2.GetValue(i)
+			if null2 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(formatExtractMinute(int(v2.Minute()))), false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i := uint64(0); i < uint64(length); i++ {
 		v2, null2 := p2.GetValue(i)
 		if null2 {
@@ -8120,6 +8137,16 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
+const extractMinuteDigits = "000102030405060708091011121314151617181920212223242526272829303132333435363738394041424344454647484950515253545556575859"
+
+func formatExtractMinute(minute int) string {
+	if minute >= 0 && minute < 60 {
+		start := minute * 2
+		return extractMinuteDigits[start : start+2]
+	}
+	return fmt.Sprintf("%02d", minute)
+}
+
 func extractFromDatetime(unit string, d types.Datetime) (string, error) {
 	if _, ok := validDatetimeUnit[unit]; !ok {
 		return "", moerr.NewInternalErrorNoCtx("invalid unit")
@@ -8280,6 +8307,23 @@ func ExtractFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWr
 	}
 	unit := functionUtil.QuickBytesToStr(v1)
 	zone := proc.GetSessionInfo().TimeZone
+	if unit == "minute" {
+		// Preserve the per-row timezone conversion before extracting the minute.
+		for i := uint64(0); i < uint64(length); i++ {
+			v2, null2 := p2.GetValue(i)
+			if null2 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			dt := v2.ToDatetime(zone)
+			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(formatExtractMinute(int(dt.Minute()))), false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i := uint64(0); i < uint64(length); i++ {
 		v2, null2 := p2.GetValue(i)
 		if null2 {

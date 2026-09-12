@@ -7750,7 +7750,7 @@ func hasVarianceAggregate(node *plan.Node) bool {
 }
 
 // hasWidenedDecimalSum reports SUM expressions whose public result is
-// Decimal256. Before MORPC v66, a new CN can still exchange the legacy
+// Decimal256. Before MORPC v67, a new CN can still exchange the legacy
 // Decimal128 partial state with an old CN, but a final shuffle Group evaluates
 // the state on its remote owner and sends the public result directly. That
 // final batch would be Decimal256 on the new binary and Decimal128 on the old
@@ -7813,7 +7813,7 @@ func supportsRemoteOrderedSetExtendedTypes(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion67
+	return ok && protocolVersion >= defines.MORPCVersion68
 }
 
 func (c *Compile) supportsRemoteVarianceAggregates() bool {
@@ -7833,7 +7833,7 @@ func (c *Compile) supportsRemoteWidenedDecimalSum() bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion66
+	return ok && protocolVersion >= defines.MORPCVersion67
 }
 
 func (c *Compile) supportsRemotePartitionTopN() bool {

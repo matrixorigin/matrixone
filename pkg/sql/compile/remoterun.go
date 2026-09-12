@@ -1900,7 +1900,7 @@ func validateRemoteAggregateProtocol(
 				orderedSetPercentileDiscUsesExtendedType(agg) &&
 				!supportsRemoteOrderedSetExtendedTypes(proc.GetService()) {
 				return moerr.NewNotSupportedNoCtx(
-					"extended discrete percentile input types require MORPC protocol version 67",
+					"extended discrete percentile input types require MORPC protocol version 68",
 				)
 			}
 		}
