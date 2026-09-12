@@ -129,6 +129,18 @@ Storage-compute separation. Deploy anywhere. Elastic scaling. Kubernetes-native.
   <img alt="MatrixOne" height="450" src="https://github.com/matrixorigin/artwork/blob/main/docs/overview/architecture/architeture241113_en.png?raw=true">
 </p>
 
+### 🤖 **Use OrcaRouter as your LLM gateway**
+
+[OrcaRouter](https://www.orcarouter.ai) is an OpenAI-compatible model gateway that routes chat requests to the best available model through a single endpoint. It also runs gateway-level, zero-trust security for AI agents on the same endpoint — screening every prompt/response and governing every tool call on a default-deny basis, with no application code changes.
+
+MatrixOne's built-in `llm_chat` function supports `orcarouter` as a named server. Set the `ORCAROUTER_API_KEY` environment variable and route chat queries through the gateway:
+
+```sql
+-- Route chat through the OrcaRouter smart-routing model
+SELECT llm_chat('orcarouter', '', 'orcarouter/auto', '{"temperature": 0.1}',
+  '[{"role": "user", "content": "What is MatrixOne?"}]');
+```
+
 ## ⚡️ Get Started in 60 Seconds
 
 ### 1️⃣ Launch MatrixOne
