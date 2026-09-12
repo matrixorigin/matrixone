@@ -511,3 +511,26 @@ func TestRequiresMORPCVersion64TypedConversion(t *testing.T) {
 	require.True(t, features.TypedConversionFunctions)
 	require.True(t, features.Any())
 }
+
+func TestRequiredRemoteExpressionFeaturesASCIIResultContract(t *testing.T) {
+	ascii := func(resultType, functionID int32) *Expr {
+		return &Expr{
+			Typ: Type{Id: resultType},
+			Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(functionID) << 32, ObjName: "ascii"},
+				Args: []*Expr{{Typ: Type{Id: 61}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}},
+			}},
+		}
+	}
+
+	features, err := RequiredRemoteExpressionFeatures(ascii(asciiInt32ResultTypeID, asciiFunctionID))
+	require.NoError(t, err)
+	require.True(t, features.ASCIIInt32Result)
+	require.True(t, features.Any())
+
+	features, err = RequiredRemoteExpressionFeatures(ascii(25, asciiFunctionID))
+	require.NoError(t, err)
+	require.False(t, features.ASCIIInt32Result,
+		"legacy UINT8 ASCII plans remain executable on a newer worker")
+
+}
