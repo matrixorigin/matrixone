@@ -4574,6 +4574,47 @@ func TestD128DivPow10_Coverage(t *testing.T) {
 	})
 }
 
+func TestDecimalScaleDownMultiStepRounding(t *testing.T) {
+	pow10a, twoStep, pow10b := scalePow10Factors(30)
+	require.True(t, twoStep)
+
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{"0.499999999999999999999999999999", "0"},
+		{"-0.499999999999999999999999999999", "0"},
+		{"0.500000000000000000000000000001", "1"},
+		{"-0.500000000000000000000000000001", "-1"},
+	} {
+		t.Run("D128/"+tc.input, func(t *testing.T) {
+			x, err := types.ParseDecimal128(tc.input, 38, 30)
+			require.NoError(t, err)
+
+			general := x
+			d128ScaleDown(&general, 30)
+			require.Equal(t, tc.want, general.Format(0))
+
+			optimized := x
+			d128ScaleDownPow10(&optimized, pow10a, twoStep, pow10b)
+			require.Equal(t, tc.want, optimized.Format(0))
+		})
+
+		t.Run("D256/"+tc.input, func(t *testing.T) {
+			x, err := types.ParseDecimal256(tc.input, 65, 30)
+			require.NoError(t, err)
+
+			general := x
+			d256ScaleDown(&general, 30)
+			require.Equal(t, tc.want, general.Format(0))
+
+			optimized := x
+			d256ScaleDownPow10(&optimized, pow10a, twoStep, pow10b)
+			require.Equal(t, tc.want, optimized.Format(0))
+		})
+	}
+}
+
 func TestD128ScaleDown_Coverage(t *testing.T) {
 	t.Run("Positive", func(t *testing.T) {
 		x := types.Decimal128{B0_63: 123456789}

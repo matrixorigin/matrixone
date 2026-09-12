@@ -402,6 +402,10 @@ func (x *Decimal128) ScaleInplace(n int32) error {
 	if n == 0 {
 		return nil
 	}
+	if n < -38 {
+		*x = Decimal128{}
+		return nil
+	}
 	signx := x.Sign()
 	if signx {
 		x.MinusInplace()
@@ -414,7 +418,7 @@ func (x *Decimal128) ScaleInplace(n int32) error {
 			err = x.Mul64InPlace(Decimal64(Pow10[19]))
 		} else {
 			m -= 19
-			err = x.Div128InPlace(&Decimal128{Pow10[19], 0})
+			*x, err = x.Div128Trunc(Decimal128{Pow10[19], 0})
 		}
 		if err != nil {
 			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
@@ -446,6 +450,9 @@ func (x Decimal128) Scale(n int32) (Decimal128, error) {
 	if n == 0 {
 		return x, nil
 	}
+	if n < -38 {
+		return Decimal128{}, nil
+	}
 	signx := x.Sign()
 	x1 := x
 	if signx {
@@ -459,7 +466,7 @@ func (x Decimal128) Scale(n int32) (Decimal128, error) {
 			x1, err = x1.Mul128(Decimal128{Pow10[19], 0})
 		} else {
 			m -= 19
-			x1, err = x1.Div128(Decimal128{Pow10[19], 0})
+			x1, err = x1.Div128Trunc(Decimal128{Pow10[19], 0})
 		}
 		if err != nil {
 			err = moerr.NewInvalidInputNoCtxf("Decimal128 scale overflow: %s", x.Format(n))
@@ -490,6 +497,9 @@ func (x Decimal128) Scale(n int32) (Decimal128, error) {
 func (x Decimal128) ScaleTruncate(n int32) (Decimal128, error) {
 	if n == 0 {
 		return x, nil
+	}
+	if n < -38 {
+		return Decimal128{}, nil
 	}
 	signx := x.Sign()
 	x1 := x
@@ -532,6 +542,18 @@ func (x Decimal128) ScaleTruncate(n int32) (Decimal128, error) {
 	return x1, err
 }
 
+// div256ByUint64 divides an unsigned D256 by a non-zero uint64 divisor.
+// The quotient and remainder are computed without shifting the dividend, so
+// the full 256-bit magnitude (including 2^255) is preserved.
+func div256ByUint64(x Decimal256, d uint64) (Decimal256, uint64) {
+	var rem uint64
+	x.B192_255, rem = bits.Div64(0, x.B192_255, d)
+	x.B128_191, rem = bits.Div64(rem, x.B128_191, d)
+	x.B64_127, rem = bits.Div64(rem, x.B64_127, d)
+	x.B0_63, rem = bits.Div64(rem, x.B0_63, d)
+	return x, rem
+}
+
 func (x Decimal256) Scale(n int32) (Decimal256, error) {
 	if n == 0 || (x.B0_63 == 0 && x.B64_127 == 0 && x.B128_191 == 0 && x.B192_255 == 0) {
 		return x, nil
@@ -552,7 +574,7 @@ func (x Decimal256) Scale(n int32) (Decimal256, error) {
 			x1, err = x1.Mul256(Decimal256{Pow10[19], 0, 0, 0})
 		} else {
 			remaining += 19
-			x1, err = x1.Div256(Decimal256{Pow10[19], 0, 0, 0})
+			x1, _ = div256ByUint64(x1, Pow10[19])
 		}
 		if err != nil {
 			err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: target scale=%d", n)
@@ -568,7 +590,12 @@ func (x Decimal256) Scale(n int32) (Decimal256, error) {
 	if remaining > 0 {
 		x1, err = x1.Mul256(Decimal256{Pow10[remaining], 0, 0, 0})
 	} else {
-		x1, err = x1.Div256(Decimal256{Pow10[-remaining], 0, 0, 0})
+		divisor := Pow10[-remaining]
+		var remainder uint64
+		x1, remainder = div256ByUint64(x1, divisor)
+		if remainder >= (divisor+1)/2 {
+			x1, err = x1.Add256(Decimal256{1, 0, 0, 0})
+		}
 	}
 	if err != nil {
 		err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: target scale=%d", n)
@@ -584,6 +611,9 @@ func (x Decimal256) ScaleTruncate(n int32) (Decimal256, error) {
 	if n == 0 {
 		return x, nil
 	}
+	if n < -77 {
+		return Decimal256{}, nil
+	}
 	signx := x.Sign()
 	x1 := x
 	if signx {
@@ -597,7 +627,7 @@ func (x Decimal256) ScaleTruncate(n int32) (Decimal256, error) {
 			x1, err = x1.Mul256(Decimal256{Pow10[19], 0, 0, 0})
 		} else {
 			m -= 19
-			x1, err = x1.div256Trunc(Decimal256{Pow10[19], 0, 0, 0})
+			x1, _ = div256ByUint64(x1, Pow10[19])
 		}
 		if err != nil {
 			err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", x.Format(n))
@@ -613,7 +643,7 @@ func (x Decimal256) ScaleTruncate(n int32) (Decimal256, error) {
 	if n-m > 0 {
 		x1, err = x1.Mul256(Decimal256{Pow10[n-m], 0, 0, 0})
 	} else {
-		x1, err = x1.div256Trunc(Decimal256{Pow10[m-n], 0, 0, 0})
+		x1, _ = div256ByUint64(x1, Pow10[m-n])
 	}
 	if err != nil {
 		err = moerr.NewInvalidInputNoCtxf("Decimal256 scale overflow: %s", x.Format(n))

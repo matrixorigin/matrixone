@@ -131,6 +131,8 @@ const (
 	// required argument depends on a runtime system variable.
 	ErrWrongParamCountToNativeFct uint16 = 20333
 	ErrAESInvalidIV               uint16 = 20334
+	// ErrUserLockWrongName preserves MySQL's ER_USER_LOCK_WRONG_NAME contract.
+	ErrUserLockWrongName uint16 = 20335
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -488,6 +490,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidBitwiseAggregateOperandsSize: {ER_INVALID_BITWISE_AGGREGATE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Aggregate bitwise functions cannot accept arguments longer than 511 bytes; consider using the SUBSTRING() function"},
 	ErrWrongParamCountToNativeFct:          {ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, []string{"42000"}, "Incorrect parameter count in the call to native function '%-.192s'"},
 	ErrAESInvalidIV:                        {ER_AES_INVALID_IV, []string{"HY000"}, "The initialization vector supplied to %s is too short. Must be at least %d bytes long"},
+	ErrUserLockWrongName:                   {ER_USER_LOCK_WRONG_NAME, []string{"42000"}, "Incorrect user-level lock name '%-.192s'."},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1148,6 +1151,10 @@ func NewWrongParamCountToNativeFct(ctx context.Context, function string) *Error 
 
 func NewAESInvalidIV(ctx context.Context, function string, minLength int) *Error {
 	return newError(ctx, ErrAESInvalidIV, function, minLength)
+}
+
+func NewUserLockWrongName(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrUserLockWrongName, name)
 }
 
 func NewWrongUsage(ctx context.Context, first, second string) *Error {

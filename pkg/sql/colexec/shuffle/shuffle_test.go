@@ -44,6 +44,32 @@ const (
 	Rows = 8192 // default rows
 )
 
+func TestShufflePreparePreservesEarlierAbortCause(t *testing.T) {
+	for _, drainAll := range []bool{false, true} {
+		for _, cause := range []error{context.Canceled, context.DeadlineExceeded, errors.New("upstream execution failure")} {
+			t.Run(fmt.Sprintf("drain-all=%t/%v", drainAll, cause), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				defer proc.Free()
+				pool := NewShufflePool(2, 2, drainAll)
+				first, late := NewArgument(), NewArgument()
+				defer first.Release()
+				defer late.Release()
+				first.DrainAllBuckets, late.DrainAllBuckets = drainAll, drainAll
+				first.BucketNum, late.BucketNum = 2, 2
+				first.SetShufflePool(pool)
+				late.SetShufflePool(pool)
+				// A sibling can be retired before another scope reaches Prepare.
+				// Keep cancellation distinguishable from a substantive query error.
+				first.Reset(proc, true, cause)
+				defer late.Reset(proc, true, cause)
+				err := late.Prepare(proc)
+				require.ErrorIs(t, err, cause)
+				require.False(t, late.ctr.held)
+			})
+		}
+	}
+}
+
 // add unit tests for cases
 type shuffleTestCase struct {
 	arg   *Shuffle

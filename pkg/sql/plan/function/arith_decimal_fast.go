@@ -524,13 +524,14 @@ func d128ScaleIntoRs(vec, rs []types.Decimal128, n int, scaleDiff int32, rsnull 
 // ---- Decimal128 multiply ----
 
 // d128DivPow10 divides unsigned D128 x by 10^n in-place with round-half-up.
+// Multi-chunk divisions truncate intermediate quotients and round only once.
 // n must be in [1, 38].
 func d128DivPow10(x *types.Decimal128, n int32) {
 	if n <= 19 {
 		d128DivPow10Once(x, types.Pow10[n])
 		return
 	}
-	d128DivPow10Once(x, types.Pow10[19])
+	d128DivPow10TruncOnce(x, types.Pow10[19])
 	d128DivPow10Once(x, types.Pow10[n-19])
 }
 
@@ -541,13 +542,15 @@ func d128ScaleDown(x *types.Decimal128, n int32) {
 	d128Negate(x, sign)
 }
 
-// d128ScaleDownPow10 divides signed D128 by pre-computed pow10 factor(s).
-// d128Abs/d128DivPow10Once/d128Negate all inline (costs 48, 66, 38).
+// d128ScaleDownPow10 divides signed D128 by pre-computed pow10 factor(s),
+// truncating the intermediate quotient and rounding only the final division.
 func d128ScaleDownPow10(x *types.Decimal128, pow10a uint64, twoStep bool, pow10b uint64) {
 	sign := d128Abs(x)
-	d128DivPow10Once(x, pow10a)
 	if twoStep {
+		d128DivPow10TruncOnce(x, pow10a)
 		d128DivPow10Once(x, pow10b)
+	} else {
+		d128DivPow10Once(x, pow10a)
 	}
 	d128Negate(x, sign)
 }
@@ -1926,10 +1929,11 @@ func d256ScaleUpPow10(x *types.Decimal256, pow10a uint64, twoStep bool, pow10b u
 }
 
 // d256DivPow10 divides unsigned D256 x by 10^n in-place with round-half-up.
+// Multi-chunk divisions truncate intermediate quotients and round only once.
 // n must be >= 1. Uses loop for n > 19 (same approach as d256MulPow10).
 func d256DivPow10(x *types.Decimal256, n int32) {
 	for n > 19 {
-		d256DivPow10Once(x, types.Pow10[19])
+		d256DivPow10TruncOnce(x, types.Pow10[19])
 		n -= 19
 	}
 	d256DivPow10Once(x, types.Pow10[n])
@@ -1960,13 +1964,15 @@ func d256ScaleDown(x *types.Decimal256, n int32) {
 	d256Negate(x, sign)
 }
 
-// d256ScaleDownPow10 divides signed D256 by pre-computed pow10 factor(s).
-// Eliminates d256ScaleDown→d256DivPow10 wrapper chain; d256Abs/d256Negate inline.
+// d256ScaleDownPow10 divides signed D256 by pre-computed pow10 factor(s),
+// truncating the intermediate quotient and rounding only the final division.
 func d256ScaleDownPow10(x *types.Decimal256, pow10a uint64, twoStep bool, pow10b uint64) {
 	sign := d256Abs(x)
-	d256DivPow10Once(x, pow10a)
 	if twoStep {
+		d256DivPow10TruncOnce(x, pow10a)
 		d256DivPow10Once(x, pow10b)
+	} else {
+		d256DivPow10Once(x, pow10a)
 	}
 	d256Negate(x, sign)
 }
@@ -5066,4 +5072,20 @@ func d128DivPow10Once(x *types.Decimal128, d uint64) {
 	lo, c := bits.Add64(x.B0_63, round, 0)
 	x.B0_63 = lo
 	x.B64_127 += c
+}
+
+// d128DivPow10TruncOnce divides unsigned D128 x by d in-place without rounding.
+func d128DivPow10TruncOnce(x *types.Decimal128, d uint64) {
+	var rem uint64
+	x.B64_127, rem = bits.Div64(0, x.B64_127, d)
+	x.B0_63, _ = bits.Div64(rem, x.B0_63, d)
+}
+
+// d256DivPow10TruncOnce divides unsigned D256 x by d in-place without rounding.
+func d256DivPow10TruncOnce(x *types.Decimal256, d uint64) {
+	var rem uint64
+	x.B192_255, rem = bits.Div64(0, x.B192_255, d)
+	x.B128_191, rem = bits.Div64(rem, x.B128_191, d)
+	x.B64_127, rem = bits.Div64(rem, x.B64_127, d)
+	x.B0_63, _ = bits.Div64(rem, x.B0_63, d)
 }
