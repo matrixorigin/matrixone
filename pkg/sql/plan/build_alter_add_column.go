@@ -544,6 +544,9 @@ func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo 
 func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, targetCol *ColDef) error {
 	colName := targetCol.Name
 	for _, fkInfo := range tbInfo.Fkeys {
+		if fkInfo == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "nil foreign key definition while dropping column")
+		}
 		for _, colId := range fkInfo.Cols {
 			referCol := FindColumnByColId(tbInfo.Cols, colId)
 			if referCol == nil {
@@ -556,7 +559,7 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		_, refTableDef, err := ctx.ResolveById(referredTblId, nil)
+		_, refTableDef, selfReference, err := resolveAlterForeignKeyTable(ctx, tbInfo, referredTblId)
 		if err != nil {
 			return err
 		}
@@ -564,11 +567,21 @@ func checkDropColumnWithForeignKey(ctx CompilerContext, tbInfo *TableDef, target
 			return moerr.NewInternalErrorf(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}
 		for _, referredFK := range refTableDef.Fkeys {
-			if referredFK.ForeignTbl == tbInfo.TblId {
-				for i := 0; i < len(referredFK.Cols); i++ {
-					if referredFK.ForeignCols[i] == targetCol.ColId {
-						return moerr.NewErrFkColumnCannotDropChild(ctx.GetContext(), colName, referredFK.Name, refTableDef.Name)
-					}
+			if referredFK == nil {
+				return moerr.NewInternalError(ctx.GetContext(), "nil foreign key definition while dropping column")
+			}
+			if len(referredFK.Cols) != len(referredFK.ForeignCols) {
+				return moerr.NewInternalErrorf(ctx.GetContext(),
+					"foreign key %s has mismatched child and parent columns", referredFK.Name)
+			}
+			if referredFK.ForeignTbl != tbInfo.TblId && !(selfReference && referredFK.ForeignTbl == 0) {
+				continue
+			}
+			for _, foreignColID := range referredFK.ForeignCols {
+				if foreignColID == targetCol.ColId {
+					return moerr.NewErrFkColumnCannotDropChild(
+						ctx.GetContext(), colName, referredFK.Name, refTableDef.Name,
+					)
 				}
 			}
 		}

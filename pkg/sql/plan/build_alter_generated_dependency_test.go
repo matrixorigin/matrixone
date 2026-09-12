@@ -163,6 +163,62 @@ func TestAlterCopyAffectedStoredGeneratedColumnsUsesFinalSourceTypes(t *testing.
 		"a converted source must include the full transitive stored-generated closure, but exclude unrelated and virtual generated columns")
 }
 
+func TestAlterForeignKeyValidationResolvesSelfReferencesLocally(t *testing.T) {
+	for _, selfMarker := range []uint64{0, 100} {
+		t.Run(fmt.Sprintf("self marker %d", selfMarker), func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			int32Type := planpb.Type{Id: int32(types.T_int32)}
+			int64Type := planpb.Type{Id: int32(types.T_int64)}
+			selfTable := func() *planpb.TableDef {
+				return &planpb.TableDef{
+					TblId: 100, DbName: "db", Name: "self_ref",
+					Cols: []*planpb.ColDef{
+						{ColId: 1, Name: "id", Typ: int32Type},
+						{ColId: 2, Name: "generated_key", Typ: int32Type},
+						{ColId: 3, Name: "child_key_a", Typ: int32Type},
+						{ColId: 4, Name: "child_key_b", Typ: int32Type},
+					},
+					Fkeys: []*planpb.ForeignKeyDef{
+						{Name: "fk_unrelated", Cols: []uint64{3}, ForeignTbl: selfMarker, ForeignCols: []uint64{1}},
+						{Name: "fk_second_self_reference", Cols: []uint64{4}, ForeignTbl: selfMarker, ForeignCols: []uint64{2}},
+					},
+					RefChildTbls: []uint64{selfMarker},
+				}
+			}
+
+			t.Run("modify scans every incoming self FK", func(t *testing.T) {
+				table := selfTable()
+				err := checkColumnForeignkeyConstraint(
+					ctx, table, table.Cols[1], &planpb.ColDef{
+						ColId: table.Cols[1].ColId, Name: table.Cols[1].Name, Typ: int64Type,
+					},
+				)
+				require.ErrorContains(t, err, "fk_second_self_reference")
+				require.ErrorContains(t, err, "db.self_ref")
+			})
+
+			t.Run("modify resolves outgoing self FK", func(t *testing.T) {
+				table := selfTable()
+				table.Fkeys = []*planpb.ForeignKeyDef{{
+					Name: "fk_outgoing_self", Cols: []uint64{3}, ForeignTbl: selfMarker, ForeignCols: []uint64{1},
+				}}
+				err := checkColumnForeignkeyConstraint(
+					ctx, table, table.Cols[2], &planpb.ColDef{
+						ColId: table.Cols[2].ColId, Name: table.Cols[2].Name, Typ: int64Type,
+					},
+				)
+				require.ErrorContains(t, err, "fk_outgoing_self")
+			})
+
+			t.Run("drop scans every incoming self FK", func(t *testing.T) {
+				table := selfTable()
+				err := checkDropColumnWithForeignKey(ctx, table, table.Cols[1])
+				require.ErrorContains(t, err, "fk_second_self_reference")
+			})
+		})
+	}
+}
+
 func addAlterTestIndex(t *testing.T, mock *MockOptimizer, base *planpb.TableDef, indexName, columnName string, unique bool) {
 	t.Helper()
 	if base.Name2ColIndex == nil {
