@@ -21,10 +21,12 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -336,6 +338,159 @@ func TestCompressFunctionsNullsSelectListAndLengthMask(t *testing.T) {
 	invalidInput.Free(proc.Mp())
 	input.Free(proc.Mp())
 	proc.Free()
+}
+
+type uncompressWarningRecord struct {
+	code    uint16
+	message string
+}
+
+type uncompressWarningSink struct {
+	total   uint64
+	calls   int
+	records []uncompressWarningRecord
+}
+
+func (s *uncompressWarningSink) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
+	s.calls++
+	s.total += total
+	for i, code := range codes {
+		s.records = append(s.records, uncompressWarningRecord{code: code, message: messages[i]})
+	}
+}
+
+func TestUncompressEmitsMySQLWarningsForRejectedInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	warnings := &uncompressWarningSink{}
+	proc.WarningSink = warnings
+
+	valid, err := mysqlCompress([]byte("ok"), types.MaxBlobLen)
+	require.NoError(t, err)
+	legacy := []byte{3, 0, 0, 0, 0, 3, 0, 0xfc, 0xff, 'a', 'b', 'c', 3, 0}
+	tooSmall := []byte{2, 0, 0, 0, 0x78, 0x9c, 0x4b, 0x4c, 0x4a, 0x06, 0x00, 0x02, 0x4d, 0x01, 0x27}
+	oversized := []byte{0xff, 0xff, 0xff, 0xff, 0}
+	input := testutil.NewVectorWithNulls(
+		9,
+		types.T_blob.ToType(),
+		proc.Mp(),
+		false,
+		[]bool{false, false, false, false, false, false, false, true, false},
+		[]string{
+			string([]byte{0, 0, 0, 0}),
+			string([]byte{3, 0, 0, 0, 0x78, 0x9c, 0}),
+			string(oversized),
+			string(tooSmall),
+			string(valid),
+			string(legacy),
+			"",
+			"ignored NULL",
+			string([]byte{0, 0, 0, 0}),
+		},
+	)
+	defer input.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_blob.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(9))
+	selection := &FunctionSelectList{
+		AnyNull:    true,
+		SelectList: []bool{true, true, true, true, true, true, true, true, false},
+	}
+	require.NoError(t, Uncompress([]*vector.Vector{input}, result, proc, 9, selection))
+
+	out := result.GetResultVector()
+	for i := 0; i < 4; i++ {
+		require.True(t, out.IsNull(uint64(i)), "invalid input row %d remains NULL", i)
+	}
+	require.Equal(t, []byte("ok"), out.GetBytesAt(4))
+	require.Equal(t, []byte("abc"), out.GetBytesAt(5), "legacy raw-DEFLATE values remain readable")
+	require.False(t, out.IsNull(6))
+	require.Empty(t, out.GetBytesAt(6), "empty input remains empty without warning")
+	require.True(t, out.IsNull(7), "SQL NULL remains NULL without warning")
+	require.True(t, out.IsNull(8), "selection-masked invalid input remains NULL without warning")
+
+	require.Equal(t, 1, warnings.calls)
+	require.Equal(t, uint64(4), warnings.total)
+	require.Equal(t, []uncompressWarningRecord{
+		{code: moerr.ER_ZLIB_Z_DATA_ERROR, message: "ZLIB: Input data corrupted"},
+		{code: moerr.ER_ZLIB_Z_DATA_ERROR, message: "ZLIB: Input data corrupted"},
+		{code: moerr.ER_TOO_BIG_FOR_UNCOMPRESS, message: "Uncompressed data size too large; the maximum size is 67108864 (probably, length of uncompressed data was corrupted)"},
+		{code: moerr.ER_ZLIB_Z_BUF_ERROR, message: "ZLIB: Not enough room in the output buffer (probably, length of uncompressed data was corrupted)"},
+	}, warnings.records)
+}
+
+func TestMySQLUncompressWarningClassification(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		code    uint16
+		message string
+	}{
+		{
+			name:    "oversized output sentinel",
+			err:     errUncompressOutputTooLarge,
+			code:    moerr.ER_TOO_BIG_FOR_UNCOMPRESS,
+			message: uncompressSizeLimitWarning,
+		},
+		{
+			name:    "wrapped oversized output sentinel",
+			err:     fmt.Errorf("decode input: %w", errUncompressOutputTooLarge),
+			code:    moerr.ER_TOO_BIG_FOR_UNCOMPRESS,
+			message: uncompressSizeLimitWarning,
+		},
+		{
+			name:    "unrelated invalid input error",
+			err:     moerr.NewInvalidInputNoCtx("unrelated invalid input"),
+			code:    moerr.ER_ZLIB_Z_DATA_ERROR,
+			message: uncompressDataWarning,
+		},
+		{
+			name:    "short write",
+			err:     io.ErrShortWrite,
+			code:    moerr.ER_ZLIB_Z_BUF_ERROR,
+			message: uncompressBufferWarning,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, message := mysqlUncompressWarning(tt.err)
+			require.Equal(t, tt.code, code)
+			require.Equal(t, tt.message, message)
+		})
+	}
+}
+
+func TestUncompressBoundsWarningsForRepeatedConstantRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	warnings := &uncompressWarningSink{}
+	proc.WarningSink = warnings
+
+	const rowCount = 65
+	input, err := vector.NewConstBytes(types.T_blob.ToType(), []byte{0, 0, 0, 0}, rowCount, proc.Mp())
+	require.NoError(t, err)
+	defer input.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_blob.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(rowCount))
+	require.NoError(t, Uncompress([]*vector.Vector{input}, result, proc, rowCount, nil))
+
+	require.Equal(t, uint64(rowCount), warnings.total, "each active row contributes a warning")
+	require.Len(t, warnings.records, 64, "SHOW WARNINGS diagnostics remain bounded")
+	require.Equal(t, 1, warnings.calls)
+	for i, warning := range warnings.records {
+		require.Equal(t, moerr.ER_ZLIB_Z_DATA_ERROR, warning.code, "record %d", i)
+		require.Equal(t, "ZLIB: Input data corrupted", warning.message, "record %d", i)
+	}
+	resultVector := result.GetResultVector()
+	require.True(t, resultVector.IsNull(0))
+	require.True(t, resultVector.IsNull(rowCount-1))
+}
+
+func TestUncompressOverloadsAreNotConstantFolded(t *testing.T) {
+	for i, overload := range allSupportedFunctions[UNCOMPRESS].Overloads {
+		require.True(t, overload.CannotFold(), "UNCOMPRESS overload %d must execute at runtime", i)
+	}
 }
 
 func TestCompressFunctionBinaryReturnTypes(t *testing.T) {
