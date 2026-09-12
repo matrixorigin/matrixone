@@ -1965,6 +1965,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					// for an invalid numeric string without raising a cast error.
 					source = DeepCopyExpr(rule.params[paramPos])
 				}
+				if functionName == "hex" && rule.sqlExecuteStringBackedParams[paramPos] {
+					// The shared numeric-source builder wraps a numeric-prefix SQL
+					// string in an explicit FLOAT64 cast. HEX instead owns a string
+					// operand as bytes, so restore the typed source below that wrapper.
+					if cast := source.GetF(); cast != nil && cast.GetFunc().GetObjName() == "cast" &&
+						len(cast.GetArgs()) > 0 {
+						source = cast.GetArgs()[0]
+					}
+				}
 				rewrittenArg = DeepCopyExpr(source)
 			} else {
 				var applyErr error
@@ -3310,6 +3319,13 @@ func preparedFunctionArgUsesSQLExecuteNumericSource(
 	argIndex int,
 	argCount int,
 ) bool {
+	// HEX owns the runtime domain of its sole argument: numeric source values
+	// use numeric conversion, while non-numeric strings retain byte encoding.
+	// The SQL EXECUTE source is materialized below without crossing an explicit
+	// user CAST boundary.
+	if name == "hex" {
+		return argIndex == 0 && argCount == 1
+	}
 	// A prepared TEXT marker can make result-selecting functions bind to a
 	// non-numeric envelope even though the execute-time SQL source is numeric.
 	// Decide from the argument's value role before consulting that provisional

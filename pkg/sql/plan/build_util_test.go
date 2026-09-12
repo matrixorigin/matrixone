@@ -17,6 +17,8 @@ package plan
 import (
 	"context"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -700,6 +702,106 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 	defaultValue, err := buildDefaultExpr(defaultCol, plan.Type{Id: int32(types.T_varchar), Width: 3}, proc)
 	require.NoError(t, err)
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
+}
+
+func TestBuildPlanFencesHexDefaultBeforeConstantFold(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	proc := mock.CurrentContext().GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	const ddl = "create table t(v varchar(16) default (hex(cast(15.5 as double))))"
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+	_, err := buildSingleStmt(mock, t, ddl)
+	require.ErrorContains(t, err, "protocol version 65")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+	built, err := buildSingleStmt(mock, t, ddl)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault()
+	require.Equal(t, "F", def.Expr.GetLit().GetSval())
+	require.NotNil(t, def.Expr.GetLit().GetSrc())
+}
+
+func TestMigrateLegacyHexDoesNotReparseFoldedDefault(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+
+	stmt, err := mysql.ParseOneWithSQLMode(t.Context(),
+		"create table t(v varchar(16) default (hex(cast(16777215.9 as real))))", 1, "REAL_AS_FLOAT")
+	require.NoError(t, err)
+	defer stmt.Free()
+	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+	def, err := buildDefaultExpr(col, plan.Type{Id: int32(types.T_varchar), Width: 16}, proc)
+	require.NoError(t, err)
+	require.Equal(t, "1000000", def.Expr.GetLit().GetSval())
+
+	tableDef := &plan.TableDef{Cols: []*plan.ColDef{{
+		Name: "v", Typ: plan.Type{Id: int32(types.T_varchar), Width: 16}, Default: def,
+	}}}
+	wire, err := tableDef.Marshal()
+	require.NoError(t, err)
+	loaded := new(plan.TableDef)
+	require.NoError(t, loaded.Unmarshal(wire))
+	require.NotNil(t, loaded.Cols[0].Default.Expr.GetLit().Src)
+	for range 2 {
+		require.NoError(t, MigrateLegacyHexTableDef(proc, loaded))
+		require.Equal(t, "1000000", loaded.Cols[0].Default.Expr.GetLit().GetSval())
+	}
+	// Removing provenance models an old mode-sensitive catalog: the lexical
+	// whitelist must still refuse REAL rather than guess DOUBLE.
+	loaded.Cols[0].Default.Expr.GetLit().Src = nil
+	require.NoError(t, MigrateLegacyHexTableDef(proc, loaded))
+	require.Equal(t, "1000000", loaded.Cols[0].Default.Expr.GetLit().GetSval())
+}
+
+func TestMigrateLegacyHexFoldedDefaultWhitelist(t *testing.T) {
+	// Legacy negative FLOAT-to-uint conversion is platform-dependent. Produce
+	// its historical value at runtime; the corrected decimal oracle is exact.
+	negativeReal, err := strconv.ParseFloat("-9007199254740993", 64)
+	require.NoError(t, err)
+	negativeLegacy := fmt.Sprintf("%X", uint64(math.Round(negativeReal)))
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, tc := range []struct{ name, sql, old, want string }{
+		{"double", "(hex(cast(15.5 as double)))", "10", "F"},
+		{"decimal", "(hex(cast(9007199254740993 as decimal(38,0))))", "20000000000000", "20000000000001"},
+		{"negative_decimal", "(hex(cast(-9007199254740993 as decimal(38,0))))", negativeLegacy, "FFDFFFFFFFFFFFFF"},
+		{"bool_true", "(hex(true))", "31", "1"},
+		{"bool_false", "(hex(false))", "30", "0"},
+		{"already_new", "(hex(cast(15.5 as double)))", "F", "F"},
+		{"unrelated_value", "(hex(true))", "wrong", "wrong"},
+		{"real_ambiguous", "(hex(cast(16777215.9 as real)))", "1000000", "1000000"},
+		{"quoted_operand", "(hex(cast('15.5' as double)))", "10", "10"},
+		{"nested_expression", "(hex(cast(15 + 0.5 as double)))", "10", "10"},
+		{"explicit_string", "(hex(cast(true as varchar)))", "31", "31"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog := &plan.TableDef{Cols: []*plan.ColDef{{Name: "v",
+				Typ:     plan.Type{Id: int32(types.T_varchar), Width: 32},
+				Default: &plan.Default{OriginString: tc.sql, Expr: MakePlan2StringConstExprWithType(tc.old)},
+			}}}
+			wire, err := catalog.Marshal()
+			require.NoError(t, err)
+			loaded := new(plan.TableDef)
+			require.NoError(t, loaded.Unmarshal(wire))
+			execution := CloneTableDefForPlan(loaded, true)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+			require.NoError(t, MigrateLegacyHexTableDef(proc, execution))
+			require.Equal(t, tc.old, execution.Cols[0].Default.Expr.GetLit().GetSval())
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+			for range 2 {
+				require.NoError(t, MigrateLegacyHexTableDef(proc, execution))
+				require.Equal(t, tc.want, execution.Cols[0].Default.Expr.GetLit().GetSval())
+			}
+			after, err := loaded.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, wire, after, "catalog owner must not be mutated")
+		})
+	}
 }
 
 func TestMapDDLAssignmentCastErrorOnlyMapsStringWidthFailures(t *testing.T) {

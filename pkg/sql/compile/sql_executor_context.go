@@ -482,6 +482,9 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	}); err != nil {
 		return nil, nil, err
 	}
+	if err := plan.MigrateLegacyHexTableDef(c.proc, tableDef); err != nil {
+		return nil, nil, err
+	}
 	ownedTemporary := false
 	if owner, ok := c.proc.GetSession().(process.TemporaryTableDDL); ok {
 		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)

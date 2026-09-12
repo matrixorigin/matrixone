@@ -102,6 +102,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateOctStringProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateHexMySQLNumericProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteIgnoreCheckPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
@@ -132,6 +135,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateOctStringProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateHexMySQLNumericProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteIgnoreCheckPipelineProtocol(proc, p); err != nil {
@@ -244,6 +250,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateOctStringProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateHexMySQLNumericProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {

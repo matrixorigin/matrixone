@@ -25,10 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -495,6 +499,26 @@ func TestExecCtxCloseClearsRootSQLOverride(t *testing.T) {
 	execCtx := &ExecCtx{rootSQLOverride: &rootSQL}
 	execCtx.Close()
 	require.Nil(t, execCtx.rootSQLOverride)
+}
+
+func TestRecoverTableDefForPlanMigratesLegacyHex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+
+	hexExpr := &pbplan.Expr{Typ: plan2.MakePlan2Type(&types.Type{Oid: types.T_varchar}), Expr: &pbplan.Expr_F{
+		F: &pbplan.Function{
+			Func: &pbplan.ObjectRef{Obj: function.EncodeOverloadID(function.HEX, 5), ObjName: "hex"},
+			Args: []*pbplan.Expr{plan2.MakePlan2Float64ConstExprWithType(14.5)},
+		},
+	}}
+	tableDef := &pbplan.TableDef{DbName: "db", Checks: []*pbplan.CheckDef{{Check: hexExpr}}}
+	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: context.Background(), proc: proc}}
+
+	require.NoError(t, tcc.recoverLegacyTinyText(context.Background(), "db", tableDef, nil, nil))
+	_, overloadID := function.DecodeOverloadID(hexExpr.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(function.HexFloat64Overload), overloadID)
 }
 
 func TestDatabaseExistsSuppressesOnlyExpectedEOBLog(t *testing.T) {

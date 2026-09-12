@@ -8670,7 +8670,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: HEX,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    hexTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -8720,7 +8720,7 @@ var supportedMathBuiltIns = []FuncNew{
 					return numericHexReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
-					return HexFloat32
+					return HexLegacyFloat32
 				},
 			},
 			{
@@ -8730,7 +8730,7 @@ var supportedMathBuiltIns = []FuncNew{
 					return numericHexReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
-					return HexFloat64
+					return HexLegacyFloat64
 				},
 			},
 			{
@@ -8751,6 +8751,76 @@ var supportedMathBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return HexArray
+				},
+			},
+			{
+				overloadId: HexMySQLNumericOverloadStart,
+				args:       []types.T{types.T_decimal64},
+				retType: func(parameters []types.Type) types.Type {
+					return numericHexReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexDecimal64
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_decimal128},
+				retType: func(parameters []types.Type) types.Type {
+					return numericHexReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexDecimal128
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_decimal256},
+				retType: func(parameters []types.Type) types.Type {
+					return numericHexReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexDecimal256
+				},
+			},
+			{
+				overloadId: HexFloat32Overload,
+				args:       []types.T{types.T_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return numericHexReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexFloat32
+				},
+			},
+			{
+				overloadId: HexFloat64Overload,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return numericHexReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexFloat64
+				},
+			},
+			{
+				overloadId: HexExplicitFloat32Overload,
+				args:       []types.T{types.T_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return numericHexReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexExplicitFloat32
+				},
+			},
+			{
+				overloadId: HexExplicitFloat64Overload,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return numericHexReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return HexExplicitFloat64
 				},
 			},
 		},
