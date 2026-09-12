@@ -1185,7 +1185,7 @@ func TestSoundexLongTextOutput(t *testing.T) {
 	fcTC := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), []string{input}, []bool{false})},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{want}, []bool{false}),
+		NewFunctionTestResult(types.New(types.T_text, types.MaxLongTextLen, 0), false, []string{want}, []bool{false}),
 		Soundex,
 	)
 	s, info := fcTC.Run()
