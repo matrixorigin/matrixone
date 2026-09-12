@@ -54,6 +54,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -2028,6 +2029,48 @@ func TestCompileShuffleGroupGatesVarianceByProtocolVersion(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
 	require.True(t, c.supportsRemoteVarianceAggregates())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
+func TestCompileShuffleGroupGatesWidenedDecimalSumByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for _, input := range []types.Type{
+		types.New(types.T_decimal64, 18, 2),
+		types.New(types.T_decimal128, 38, 2),
+		types.New(types.T_decimal256, 65, 2),
+	} {
+		aggNode.AggList = []*plan.Expr{{
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: aggexec.AggIdOfSum},
+				Args: []*plan.Expr{{Typ: plan.Type{
+					Id:    int32(input.Oid),
+					Width: input.Width,
+					Scale: input.Scale,
+				}}},
+			}},
+		}}
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion66)
+		require.True(t, hasWidenedDecimalSum(aggNode))
+		require.False(t, c.supportsRemoteWidenedDecimalSum())
+		require.False(t, c.canCompileShuffleGroup(aggNode),
+			"mixed-version clusters must finalize widened decimal SUM on the coordinator")
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion67)
+		require.True(t, c.supportsRemoteWidenedDecimalSum())
+		require.True(t, c.canCompileShuffleGroup(aggNode))
+	}
+
+	// DECIMAL(16,2) SUM stays Decimal128 and therefore keeps the established
+	// final shuffle result type on both sides of a v66/v67 rolling upgrade.
+	aggNode.AggList[0].GetF().Args[0].Typ.Width = 16
+	aggNode.AggList[0].GetF().Args[0].Typ.Id = int32(types.T_decimal64)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion66)
+	require.False(t, hasWidenedDecimalSum(aggNode))
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
 

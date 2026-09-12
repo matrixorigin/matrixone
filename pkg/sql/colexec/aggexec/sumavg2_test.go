@@ -43,6 +43,237 @@ func buildAvgFixedVector[T any](t *testing.T, mp *mpool.MPool, typ types.Type, v
 	return vec
 }
 
+func TestSumDecimalReturnType(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input types.Type
+		want  types.Type
+	}{
+		{name: "decimal64 stays decimal128", input: types.New(types.T_decimal64, 10, 4), want: types.New(types.T_decimal128, 32, 4)},
+		{name: "wide decimal64 promotes", input: types.New(types.T_decimal64, 18, 4), want: types.New(types.T_decimal256, 40, 4)},
+		{name: "decimal128 promotes", input: types.New(types.T_decimal128, 38, 0), want: types.New(types.T_decimal256, 60, 0)},
+		{name: "decimal256 caps", input: types.New(types.T_decimal256, 50, 10), want: types.New(types.T_decimal256, 65, 10)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, SumReturnType([]types.Type{test.input}))
+		})
+	}
+}
+
+func TestSumDecimal128UsesDecimal256Accumulator(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	typ := types.New(types.T_decimal128, 38, 0)
+	maxValue, err := types.ParseDecimal128("99999999999999999999999999999999999999", typ.Width, typ.Scale)
+	require.NoError(t, err)
+	negativeMax := maxValue.Minus()
+
+	for _, test := range []struct {
+		name   string
+		values []types.Decimal128
+		want   string
+	}{
+		{
+			name:   "two maximum values",
+			values: []types.Decimal128{maxValue, maxValue},
+			want:   "199999999999999999999999999999999999998",
+		},
+		{
+			name:   "intermediate overflow cancels",
+			values: []types.Decimal128{maxValue, maxValue, negativeMax, negativeMax},
+			want:   "0",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := buildAvgFixedVector(t, mp, typ, test.values)
+			defer input.Free(mp)
+
+			exec := makeSumAvgExec(mp, true, AggIdOfSum, false, typ)
+			defer exec.Free()
+			require.IsType(t, &sumAvgDecExec[types.Decimal128, types.Decimal256]{}, exec)
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, types.New(types.T_decimal256, 60, 0), *results[0].GetType())
+			got := vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0)
+			require.Equal(t, test.want, got.Format(0))
+		})
+	}
+}
+
+func TestDecimalSumLegacyStateWireCompatibility(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	assertLegacyLayout := func(t *testing.T, exec AggFuncExec) {
+		t.Helper()
+		var stateTypes []types.Type
+		switch typed := exec.(type) {
+		case *sumDecimal64FastExec:
+			stateTypes = typed.aggInfo.stateTypes
+		case *sumDecimal128FastExec:
+			stateTypes = typed.aggInfo.stateTypes
+		default:
+			require.FailNow(t, "unexpected legacy SUM executor", "%T", exec)
+		}
+		require.Len(t, stateTypes, 2)
+		require.Equal(t, types.T_decimal128, stateTypes[0].Oid)
+		require.Equal(t, types.T_int64, stateTypes[1].Oid)
+	}
+
+	tests := []struct {
+		name       string
+		param      types.Type
+		appendOne  func(*vector.Vector) error
+		makeLegacy func() AggFuncExec
+		makeBase   func() AggFuncExec
+	}{
+		{
+			name:  "wide decimal64",
+			param: types.New(types.T_decimal64, 18, 0),
+			appendOne: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, types.Decimal64(1), false, mp)
+			},
+			makeLegacy: func() AggFuncExec {
+				return makeSumAvgExecWithLegacyDecimalSumState(
+					mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 18, 0), true, false)
+			},
+			makeBase: func() AggFuncExec {
+				return newSumDecimal64FastExec(
+					mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 18, 0))
+			},
+		},
+		{
+			name:  "decimal128",
+			param: types.New(types.T_decimal128, 38, 0),
+			appendOne: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, types.Decimal128FromInt64(1), false, mp)
+			},
+			makeLegacy: func() AggFuncExec {
+				return makeSumAvgExecWithLegacyDecimalSumState(
+					mp, true, AggIdOfSum, false, types.New(types.T_decimal128, 38, 0), true, false)
+			},
+			makeBase: func() AggFuncExec {
+				return newSumDecimal128FastExec(
+					mp, true, AggIdOfSum, false, types.New(types.T_decimal128, 38, 0))
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := vector.NewVec(test.param)
+			defer input.Free(mp)
+			require.NoError(t, test.appendOne(input))
+
+			modern := makeSumAvgExec(mp, true, AggIdOfSum, false, test.param)
+			defer modern.Free()
+			switch test.param.Oid {
+			case types.T_decimal64:
+				require.IsType(t, &sumAvgDecExec[types.Decimal64, types.Decimal256]{}, modern)
+			case types.T_decimal128:
+				require.IsType(t, &sumAvgDecExec[types.Decimal128, types.Decimal256]{}, modern)
+			}
+
+			directions := []struct {
+				name         string
+				makeSource   func() AggFuncExec
+				makeTarget   func() AggFuncExec
+				wantResultID types.T
+			}{
+				{name: "base partial to new merge", makeSource: test.makeBase, makeTarget: test.makeLegacy, wantResultID: types.T_decimal256},
+				{name: "new partial to base merge", makeSource: test.makeLegacy, makeTarget: test.makeBase, wantResultID: types.T_decimal128},
+			}
+			for _, direction := range directions {
+				t.Run(direction.name, func(t *testing.T) {
+					source := direction.makeSource()
+					defer source.Free()
+					target := direction.makeTarget()
+					defer target.Free()
+					assertLegacyLayout(t, source)
+					assertLegacyLayout(t, target)
+
+					require.NoError(t, source.GroupGrow(1))
+					require.NoError(t, source.BulkFill(0, []*vector.Vector{input}))
+					var wire bytes.Buffer
+					require.NoError(t, source.SaveIntermediateResult(1, [][]uint8{{1}}, &wire))
+					require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(wire.Bytes()), mp))
+
+					results, err := target.Flush()
+					require.NoError(t, err)
+					require.Len(t, results, 1)
+					defer results[0].Free(mp)
+					require.Equal(t, direction.wantResultID, results[0].GetType().Oid)
+					switch direction.wantResultID {
+					case types.T_decimal128:
+						require.Equal(t, "1", vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0).Format(0))
+					case types.T_decimal256:
+						require.Equal(t, "1", vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0).Format(0))
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestDecimalSumLegacyDistinctFlushWidenedResult(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	tests := []struct {
+		name      string
+		param     types.Type
+		makeInput func() *vector.Vector
+	}{
+		{
+			name:  "wide decimal64",
+			param: types.New(types.T_decimal64, 18, 0),
+			makeInput: func() *vector.Vector {
+				return buildAvgFixedVector(t, mp, types.New(types.T_decimal64, 18, 0),
+					[]types.Decimal64{1, 2, 2})
+			},
+		},
+		{
+			name:  "decimal128",
+			param: types.New(types.T_decimal128, 38, 0),
+			makeInput: func() *vector.Vector {
+				return buildAvgFixedVector(t, mp, types.New(types.T_decimal128, 38, 0),
+					[]types.Decimal128{
+						types.Decimal128FromInt64(1),
+						types.Decimal128FromInt64(2),
+						types.Decimal128FromInt64(2),
+					})
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := test.makeInput()
+			defer input.Free(mp)
+
+			exec := makeSumAvgExecWithLegacyDecimalSumState(
+				mp, true, AggIdOfSum, true, test.param, true, false)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(2))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, types.T_decimal256, results[0].GetType().Oid)
+			require.Equal(t, "3", vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0).Format(0))
+			require.True(t, results[0].IsNull(1))
+		})
+	}
+}
+
 func TestAvgExactNumericReturnType(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -823,8 +1054,8 @@ func TestWindowSlidingSumAvgCapability(t *testing.T) {
 		{name: "int32 sum", aggID: AggIdOfSum, typ: types.T_int32.ToType(), want: true},
 		{name: "int64 sum", aggID: AggIdOfSum, typ: types.T_int64.ToType(), want: true},
 		{name: "decimal64 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal64, 18, 2), want: true},
-		{name: "narrow decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 20, 2)},
-		{name: "wide decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 38, 2)},
+		{name: "narrow decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 20, 2), want: true},
+		{name: "wide decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 38, 2), want: true},
 		{name: "float sum", aggID: AggIdOfSum, typ: types.T_float64.ToType()},
 		{name: "int32 avg", aggID: AggIdOfAvg, typ: types.T_int32.ToType(), want: true},
 		{name: "int64 avg", aggID: AggIdOfAvg, typ: types.T_int64.ToType(), want: true},
