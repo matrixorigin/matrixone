@@ -107,11 +107,21 @@ func TestIssue28680IgnoreConversionExecutionBoundaries(t *testing.T) {
 		requireWarningCodes(t, ctx, conn, map[uint16]int{1264: 1, 1366: 2})
 
 		// Assignment rounding must use the complete decimal prefix, including
-		// fractional and exponent components, for reused COM_STMT executions.
+		// fractional and exponent components. Complete values must not inherit
+		// truncation warnings from a neighboring prepared execution.
 		_, err = insertStmt.ExecContext(ctx, 4, "12.9tail", "1.25", "2024-01-03")
 		require.NoError(t, err)
 		requireWarningCodes(t, ctx, conn, map[uint16]int{1265: 1})
-		_, err = insertStmt.ExecContext(ctx, 5, "1e2tail", "1.25", "2024-01-04")
+		_, err = insertStmt.ExecContext(ctx, 5, "12.9", "1.25", "2024-01-04")
+		require.NoError(t, err)
+		requireNoWarnings(t, ctx, conn)
+		_, err = insertStmt.ExecContext(ctx, 6, "12.9tail", "1.25", "2024-01-05")
+		require.NoError(t, err)
+		requireWarningCodes(t, ctx, conn, map[uint16]int{1265: 1})
+		_, err = insertStmt.ExecContext(ctx, 7, "1e2", "1.25", "2024-01-06")
+		require.NoError(t, err)
+		requireNoWarnings(t, ctx, conn)
+		_, err = insertStmt.ExecContext(ctx, 8, "1e2tail", "1.25", "2024-01-07")
 		require.NoError(t, err)
 		requireWarningCodes(t, ctx, conn, map[uint16]int{1265: 1})
 
@@ -133,7 +143,10 @@ func TestIssue28680IgnoreConversionExecutionBoundaries(t *testing.T) {
 			"2/12/1.25/2024-01-02",
 			"3/0/0.00/0000-00-00",
 			"4/13/1.25/2024-01-03",
-			"5/100/1.25/2024-01-04",
+			"5/13/1.25/2024-01-04",
+			"6/13/1.25/2024-01-05",
+			"7/100/1.25/2024-01-06",
+			"8/100/1.25/2024-01-07",
 		}, got)
 
 		// UPDATE must convert once for every matching row. Reusing this prepared

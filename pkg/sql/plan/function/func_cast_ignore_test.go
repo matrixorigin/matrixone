@@ -124,6 +124,18 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 			stripWarningMessages(session.warnings))
 	})
 
+	t.Run("complete unsigned decimal and exponent do not warn", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreStringCast(
+			t, types.T_varchar.ToType(), types.T_uint32.ToType(),
+			[]string{"12.9", "1e2", "12.9tail", "1e2tail"}, nil, false)
+		require.NoError(t, err)
+		require.Equal(t, []uint32{13, 100, 13, 100}, vector.MustFixedColWithTypeCheck[uint32](result))
+		require.Equal(t, []numericWarning{
+			{code: moerr.WARN_DATA_TRUNCATED},
+			{code: moerr.WARN_DATA_TRUNCATED},
+		}, stripWarningMessages(session.warnings))
+	})
+
 	t.Run("fraction and exponent numeric prefixes round", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_int64.ToType(),
@@ -131,8 +143,6 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int64{13, 13, 100, 100, -13, 1, 1}, vector.MustFixedColWithTypeCheck[int64](result))
 		require.Equal(t, []numericWarning{
-			{code: moerr.WARN_DATA_TRUNCATED},
-			{code: moerr.WARN_DATA_TRUNCATED},
 			{code: moerr.WARN_DATA_TRUNCATED},
 			{code: moerr.WARN_DATA_TRUNCATED},
 			{code: moerr.WARN_DATA_TRUNCATED},
@@ -484,22 +494,26 @@ func TestAssignmentPrefixClassification(t *testing.T) {
 		value            string
 		integerPrefix    string
 		hasIntegerPrefix bool
+		truncated        bool
 		decimalPrefix    string
 		hasDecimalPrefix bool
 	}{
-		{value: "12tail", integerPrefix: "12", hasIntegerPrefix: true, decimalPrefix: "12", hasDecimalPrefix: true},
-		{value: "12.34tail", integerPrefix: "12", hasIntegerPrefix: true, decimalPrefix: "12.34", hasDecimalPrefix: true},
-		{value: "12.9tail", integerPrefix: "13", hasIntegerPrefix: true, decimalPrefix: "12.9", hasDecimalPrefix: true},
-		{value: "1e2tail", integerPrefix: "100", hasIntegerPrefix: true, decimalPrefix: "1e2", hasDecimalPrefix: true},
-		{value: "-12.5tail", integerPrefix: "-13", hasIntegerPrefix: true, decimalPrefix: "-12.5", hasDecimalPrefix: true},
-		{value: ".5tail", integerPrefix: "1", hasIntegerPrefix: true, decimalPrefix: ".5", hasDecimalPrefix: true},
-		{value: "1e+tail", integerPrefix: "1", hasIntegerPrefix: true, decimalPrefix: "1", hasDecimalPrefix: true},
+		{value: "12tail", integerPrefix: "12", hasIntegerPrefix: true, truncated: true, decimalPrefix: "12", hasDecimalPrefix: true},
+		{value: "12.34tail", integerPrefix: "12", hasIntegerPrefix: true, truncated: true, decimalPrefix: "12.34", hasDecimalPrefix: true},
+		{value: "12.9tail", integerPrefix: "13", hasIntegerPrefix: true, truncated: true, decimalPrefix: "12.9", hasDecimalPrefix: true},
+		{value: "1e2tail", integerPrefix: "100", hasIntegerPrefix: true, truncated: true, decimalPrefix: "1e2", hasDecimalPrefix: true},
+		{value: "-12.5tail", integerPrefix: "-13", hasIntegerPrefix: true, truncated: true, decimalPrefix: "-12.5", hasDecimalPrefix: true},
+		{value: ".5tail", integerPrefix: "1", hasIntegerPrefix: true, truncated: true, decimalPrefix: ".5", hasDecimalPrefix: true},
+		{value: "1e+tail", integerPrefix: "1", hasIntegerPrefix: true, truncated: true, decimalPrefix: "1", hasDecimalPrefix: true},
+		{value: " 12.9 \t", integerPrefix: "13", hasIntegerPrefix: true, decimalPrefix: "12.9", hasDecimalPrefix: true},
+		{value: " 12.9 tail", integerPrefix: "13", hasIntegerPrefix: true, truncated: true, decimalPrefix: "12.9", hasDecimalPrefix: true},
 		{value: "abc", hasIntegerPrefix: false, hasDecimalPrefix: false},
 	} {
 		t.Run(tc.value, func(t *testing.T) {
-			integerPrefix, hasIntegerPrefix, err := assignmentIntegerPrefix(tc.value)
+			integerPrefix, hasIntegerPrefix, truncated, err := assignmentIntegerPrefix(tc.value)
 			require.NoError(t, err)
 			require.Equal(t, tc.hasIntegerPrefix, hasIntegerPrefix)
+			require.Equal(t, tc.truncated, truncated)
 			require.Equal(t, tc.integerPrefix, integerPrefix)
 			prefix, has := assignmentDecimalPrefix(tc.value)
 			require.Equal(t, tc.hasDecimalPrefix, has)

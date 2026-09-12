@@ -6577,12 +6577,14 @@ func strToSignedWithProc[T constraints.Signed](
 				}
 				if err != nil {
 					if mode == castModeAssignmentIgnore && !isBinary && !isAssignmentSpecialNumericSyntax(s) {
-						if prefix, hasPrefix, prefixErr := assignmentIntegerPrefix(s); hasPrefix {
+						if prefix, hasPrefix, truncated, prefixErr := assignmentIntegerPrefix(s); hasPrefix {
 							if prefixErr == nil {
 								var prefixed int64
 								prefixed, prefixErr = parseSignedCastString(prefix, bitSize)
 								if prefixErr == nil {
-									appendTruncatedAssignmentConversionWarning(proc, "INTEGER", s)
+									if truncated {
+										appendTruncatedAssignmentConversionWarning(proc, "INTEGER", s)
+									}
 									result = T(prefixed)
 									if err = to.Append(result, false); err != nil {
 										return err
@@ -6828,24 +6830,27 @@ func appendTemporalAssignmentConversionWarning(proc *process.Process, targetType
 }
 
 // assignmentIntegerPrefix returns the exact decimal prefix rounded to an
-// integer using assignment semantics. It is intentionally separate from
-// leadingDecimalIntegerPrefix, which serves explicit casts and truncates at
-// the decimal point. hasPrefix distinguishes lexical values such as "abc"
-// from numeric values that round to zero.
-func assignmentIntegerPrefix(s string) (integer string, hasPrefix bool, err error) {
+// integer using assignment semantics and whether a non-whitespace suffix is
+// discarded. It is intentionally separate from leadingDecimalIntegerPrefix,
+// which serves explicit casts and truncates at the decimal point. hasPrefix
+// distinguishes lexical values such as "abc" from numeric values that round
+// to zero.
+func assignmentIntegerPrefix(s string) (integer string, hasPrefix, truncated bool, err error) {
 	prefix, negative, ok := scanDecimalFloatPrefix(s)
 	if !ok {
-		return "", false, nil
+		return "", false, false, nil
 	}
+	prefixEnd := skipASCIISpace(s, 0) + len(prefix)
+	truncated = skipASCIISpace(s, prefixEnd) < len(s)
 	value, overflow := roundedDecimalPrefixMagnitude(prefix)
 	if overflow {
-		return "", true, strconv.ErrRange
+		return "", true, truncated, strconv.ErrRange
 	}
 	integer = strconv.FormatUint(value, 10)
 	if negative {
 		integer = "-" + integer
 	}
-	return integer, true, nil
+	return integer, true, truncated, nil
 }
 
 // roundedDecimalPrefixMagnitude converts a scanned decimal mantissa/exponent
@@ -7459,12 +7464,14 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 			}
 			if tErr != nil {
 				if mode == castModeAssignmentIgnore && !isBinary && !isAssignmentSpecialNumericSyntax(*res) {
-					if prefix, hasPrefix, prefixErr := assignmentIntegerPrefix(*res); hasPrefix {
+					if prefix, hasPrefix, truncated, prefixErr := assignmentIntegerPrefix(*res); hasPrefix {
 						if prefixErr == nil {
 							var prefixed uint64
 							prefixed, prefixErr = parseUnsignedCastString(prefix, bitSize)
 							if prefixErr == nil {
-								appendTruncatedAssignmentConversionWarning(proc, "INTEGER", *res)
+								if truncated {
+									appendTruncatedAssignmentConversionWarning(proc, "INTEGER", *res)
+								}
 								if err := to.Append(T(prefixed), false); err != nil {
 									return err
 								}
