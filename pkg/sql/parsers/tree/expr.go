@@ -960,8 +960,13 @@ type FuncExpr struct {
 	exprImpl
 	Func     ResolvableFunctionReference
 	FuncName *CStr
-	Type     FuncType
-	Exprs    Exprs
+	// IsGeneric is true when the parser recognized a whitespace-sensitive
+	// MySQL function through the generic identifier-function rule rather than
+	// its native built-in rule. That distinction matters when IGNORE_SPACE is
+	// disabled.
+	IsGeneric bool
+	Type      FuncType
+	Exprs     Exprs
 
 	//specify the type of aggregation.
 	AggType AggType
@@ -1002,15 +1007,23 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		node.Func.Format(ctx)
 	}
 
-	ctx.WriteString("(")
+	if node.IsGeneric {
+		// MySQL's whitespace-sensitive function names are parsed as generic
+		// calls when IGNORE_SPACE is disabled. Preserve that separator so a
+		// format/reparse cycle cannot silently turn the call into a native
+		// built-in.
+		ctx.WriteString(" (")
+	} else {
+		ctx.WriteByte('(')
+	}
 	if node.Type != FUNC_TYPE_DEFAULT && node.Type != FUNC_TYPE_TABLE {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}
-	isConvertUsing := strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
-	isExtract := strings.EqualFold(funcName, "extract") && len(node.Exprs) == 2
-	isGroupConcat := strings.EqualFold(funcName, "group_concat") ||
-		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat")
+	isConvertUsing := !node.IsGeneric && strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
+	isExtract := !node.IsGeneric && strings.EqualFold(funcName, "extract") && len(node.Exprs) == 2
+	isGroupConcat := !node.IsGeneric && (strings.EqualFold(funcName, "group_concat") ||
+		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat"))
 	if isConvertUsing {
 		node.Exprs[0].Format(ctx)
 		ctx.WriteString(" using ")
@@ -1033,7 +1046,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteString(" separator ")
 		node.Exprs[len(node.Exprs)-1].Format(ctx)
-	} else if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
+	} else if !node.IsGeneric && node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
 		trimExprsFormat(ctx, node.Exprs)
 	} else {
 		formatFuncExprs(ctx, node)

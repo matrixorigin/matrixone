@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"strings"
 	"testing"
@@ -154,6 +155,13 @@ func Test_getSqlForAccountInfo(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestGetSpecialTableInfoSQLUsesMySQLCastSpacing(t *testing.T) {
+	sql := fmt.Sprintf(getSpecialTablesInfoFormat, sysAccountID, sysAccountID)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	stmt.Free()
 }
 
 func TestBuildShowAccountsSQL(t *testing.T) {

@@ -2904,6 +2904,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	if strings.EqualFold(funcName, "grouping") {
 		return b.bindGroupingFuncExpr(astExpr)
 	}
+	if astExpr.IsGeneric && mysqlparser.IsSQLModeSensitiveFunctionName(funcName) {
+		return b.bindGenericFunctionExpr(funcName, astExpr.Exprs, depth)
+	}
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
@@ -2955,6 +2958,33 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+}
+
+// bindGenericFunctionExpr keeps a whitespace-separated sensitive function
+// name on the stored-function/UDF path. With IGNORE_SPACE disabled, MySQL does
+// not recognize that spelling as a native built-in call.
+func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	args := make([]*Expr, len(astArgs))
+	for i, arg := range astArgs {
+		expr, err := b.impl.BindExpr(arg, depth, false)
+		if err != nil {
+			return nil, err
+		}
+		args[i] = expr
+	}
+
+	if b.builder == nil {
+		return nil, moerr.NewInvalidInputf(
+			b.GetContext(),
+			"function '%s' is not allowed in this expression",
+			name,
+		)
+	}
+	udf, err := b.builder.compCtx.ResolveUdf(name, args)
+	if err != nil {
+		return nil, err
+	}
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered

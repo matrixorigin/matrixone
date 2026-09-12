@@ -84,6 +84,42 @@ func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {
 	}
 }
 
+func TestIgnoreSpaceGenericFunctionsDoNotUseBuiltins(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		mode    string
+		wantErr bool
+	}{
+		{name: "spaced now uses stored function path", query: "select now ()", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced substring uses stored function path", query: "select substring ('abcdef', 2, 3)", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced date add uses stored function path", query: "select date_add ('2024-01-01', interval 1 day)", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced trim string uses stored function path", query: "select trim (' x ') as trimmed", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced trim numeric uses stored function path", query: "select trim (0) as trimmed", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced group concat uses stored function path", query: "select group_concat (1) as grouped", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "native now remains builtin", query: "select now()", mode: "STRICT_TRANS_TABLES"},
+		{name: "ignore space makes spaced now builtin", query: "select now ()", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "ignore space makes spaced trim string builtin", query: "select trim (' x ') as trimmed", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "ignore space makes spaced trim numeric builtin", query: "select trim (0) as trimmed", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOneWithSQLMode(context.Background(), dialect.MYSQL, test.query, 1, test.mode)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
+			if test.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "function '")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestBindFuncExprImplByPlanExpr_PowAlias tests that "pow" is correctly
 // remapped to "power" (line ~1781 in base_binder.go:
 // case "pow": name = "power").
