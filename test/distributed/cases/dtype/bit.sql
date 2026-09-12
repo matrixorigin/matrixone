@@ -123,8 +123,6 @@ INSERT INTO issue_28685_bit64 VALUES
     (5, NULL);
 SELECT b * b * b * b * b * b * b * b + 0 AS bit8_derived
 FROM (SELECT CAST(255 AS BIT(8)) AS b) AS bit8_source;
--- Decimal256 arithmetic keeps the exact square instead of overflowing the
--- Decimal128 domain selected by the older resolver.
 SELECT (b + 0) * (b + 0) AS widened_value
 FROM issue_28685_bit64 WHERE id = 4;
 SELECT 1 AS after_overflow;

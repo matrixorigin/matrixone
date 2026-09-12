@@ -264,8 +264,6 @@ SELECT b * b * b * b * b * b * b * b + 0 AS bit8_derived
 FROM (SELECT CAST(255 AS BIT(8)) AS b) AS bit8_source;
 ➤ bit8_derived[3,38,0]  𝄀
 17878103347812890625
--- Decimal256 arithmetic keeps the exact square instead of overflowing the
--- Decimal128 domain selected by the older resolver.
 SELECT (b + 0) * (b + 0) AS widened_value
 FROM issue_28685_bit64 WHERE id = 4;
 ➤ widened_value[3,65,0]  𝄀
