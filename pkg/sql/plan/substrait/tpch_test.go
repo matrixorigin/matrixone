@@ -31,6 +31,13 @@ import (
 
 func TestExportCanonicalTPCHPlans(t *testing.T) {
 	mock := planbuilder.NewMockOptimizer(false)
+	// Exact DECIMAL widening makes these plans contain Decimal256 expressions.
+	// Substrait decimal is capped at precision 38, so declining Sirius offload is
+	// required to preserve MatrixOne's wider arithmetic semantics.
+	decimal256Plans := map[int]struct{}{
+		1: {}, 3: {}, 5: {}, 7: {}, 8: {}, 9: {}, 10: {},
+		11: {}, 14: {}, 15: {}, 17: {}, 19: {}, 20: {},
+	}
 	for queryNumber := 1; queryNumber <= 22; queryNumber++ {
 		t.Run(fmt.Sprintf("q%d", queryNumber), func(t *testing.T) {
 			path := filepath.Join("..", "tpch", fmt.Sprintf("q%d.sql", queryNumber))
@@ -54,6 +61,11 @@ func TestExportCanonicalTPCHPlans(t *testing.T) {
 			}
 
 			candidate, err := Export(query)
+			if _, expectedIneligible := decimal256Plans[queryNumber]; expectedIneligible {
+				require.Error(t, err)
+				require.True(t, IsNotEligible(err), err)
+				return
+			}
 			require.NoError(t, err)
 			readValues := make(map[int32][]byte, len(candidate.Reads()))
 			for _, read := range candidate.Reads() {

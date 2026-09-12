@@ -5669,6 +5669,7 @@ func bindFuncExprImplByPlanExpr(
 				types.T_varchar, 0, 0, types.CharsetUTF8)}
 		}
 	}
+	lookupTypes = refineDecimalArithmeticLiteralLookupTypes(name, args, lookupTypes)
 	var fGet function.FuncGetResult
 	if stringDomainModes == nil {
 		stringDomainModes = preparedRegexpStringDomainCheckModes(name, args)
@@ -5720,6 +5721,16 @@ func bindFuncExprImplByPlanExpr(
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
+	// Literal-domain refinement participates in overload lookup, so the
+	// physical arguments must honor a refined OID even when the selected
+	// overload itself requires no additional cast.  In particular, leaving an
+	// integer literal uncast after resolving DECIMAL + DECIMAL makes the decimal
+	// kernel consume an integer vector with decimal scale semantics.
+	if len(argsCastType) == 0 &&
+		(name == "+" || name == "-" || name == "*") &&
+		!sameFunctionArgumentTypes(argsType, lookupTypes) {
+		argsCastType = lookupTypes
+	}
 	// CONVERT's executor consumes a VARCHAR cast, but its declared result bound
 	// belongs to the pre-cast source type. Derive metadata before inserting the
 	// execution cast so fixed numeric/temporal/UUID widths are not replaced by
@@ -5767,8 +5778,15 @@ func bindFuncExprImplByPlanExpr(
 
 					// For decimal types, check scale compatibility
 					if colOid.IsDecimal() && otherOid.IsDecimal() {
-						// Only use column type if it has enough precision (scale)
-						// to represent the other value without truncation
+						// Reusing the column type is safe only when it can hold both
+						// the integral and fractional parts of the other operand. A
+						// scale-only check can narrow a Decimal256 expression back to
+						// Decimal128 and overflow before the comparison is evaluated.
+						colIntegralWidth := colType.Width - colType.Scale
+						otherIntegralWidth := otherType.Width - otherType.Scale
+						if colIntegralWidth < otherIntegralWidth {
+							return false
+						}
 						if colType.Scale >= otherType.Scale {
 							return true
 						}
@@ -6175,6 +6193,18 @@ func bindFuncExprImplByPlanExpr(
 		},
 		Typ: Typ,
 	}, nil
+}
+
+func sameFunctionArgumentTypes(left, right []types.Type) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !left[i].Eq(right[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 func isCollatedTextPlanType(expr *plan.Expr) bool {
@@ -7436,6 +7466,114 @@ func decimalStringLiteralValue(expr *Expr) (string, bool) {
 		return "", false
 	}
 	return decimalStringLiteralValue(fn.Args[0])
+}
+
+// refineDecimalArithmeticLiteralLookupTypes removes the conservative full
+// Decimal128 width from direct numeric literals before arithmetic overload
+// selection. The stored literal value supplies a tighter bound; retaining a
+// synthetic DECIMAL(38,s) bound would make a weak literal such as 0.5 force an
+// otherwise narrow prepared expression into Decimal256.
+func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs []types.Type) []types.Type {
+	if len(args) != 2 || len(inputs) != 2 || (name != "+" && name != "-" && name != "*") {
+		return inputs
+	}
+	hasDecimalInput := inputs[0].Oid.IsDecimal() || inputs[1].Oid.IsDecimal()
+	result := inputs
+	changed := false
+	for i, expr := range args {
+		var lit *plan.Literal
+		var literalExpr *Expr
+		for current := expr; current != nil; {
+			// A syntax-explicit cast declares the value's arithmetic domain. Do
+			// not replace DECIMAL(38,18) with metadata inferred from its source
+			// spelling, which can otherwise create an invalid width < scale cast.
+			if isExplicitPreparedCast(current) {
+				break
+			}
+			if lit = current.GetLit(); lit != nil {
+				literalExpr = current
+				break
+			}
+			cast := current.GetF()
+			if cast == nil || cast.Func.ObjName != "cast" || len(cast.Args) == 0 {
+				break
+			}
+			current = cast.Args[0]
+		}
+		if lit == nil || lit.Isnull {
+			continue
+		}
+		// Integer literal precision matters for multiplication because the
+		// declared integer type's full domain can otherwise make a small factor
+		// spuriously widen the product.  Addition and subtraction already derive
+		// their safe result precision from the integer domain; retaining their
+		// established Decimal128 coercion also avoids changing outer-join decimal
+		// expression execution paths.
+		if name == "*" && hasDecimalInput && inputs[i].IsIntOrUint() {
+			width, exact := decimalIntegerWidth(literalExpr, inputs[i])
+			if !exact || width <= 0 {
+				continue
+			}
+			if !changed {
+				result = append([]types.Type(nil), inputs...)
+				changed = true
+			}
+			oid := types.T_decimal64
+			if width > types.T_decimal64.ToType().Width {
+				oid = types.T_decimal128
+			}
+			result[i] = types.New(oid, width, 0)
+			continue
+		}
+		if !inputs[i].Oid.IsDecimal() {
+			continue
+		}
+		var formatted string
+		switch value := lit.Value.(type) {
+		case *plan.Literal_Decimal64Val:
+			formatted = types.Decimal64(value.Decimal64Val.A).Format(inputs[i].Scale)
+		case *plan.Literal_Decimal128Val:
+			formatted = types.Decimal128{
+				B0_63:   uint64(value.Decimal128Val.A),
+				B64_127: uint64(value.Decimal128Val.B),
+			}.Format(inputs[i].Scale)
+		case *plan.Literal_Sval:
+			_, _, canonical, exact := PreparedDecimalRuntimeDomains(value.Sval)
+			if !exact {
+				continue
+			}
+			parseWidth := max(inputs[i].Width, inputs[i].Scale, int32(1))
+			parsed, err := types.ParseDecimal256(canonical, parseWidth, inputs[i].Scale)
+			if err != nil {
+				continue
+			}
+			formatted = parsed.Format(inputs[i].Scale)
+		default:
+			continue
+		}
+		width := int32(0)
+		for _, ch := range formatted {
+			if ch >= '0' && ch <= '9' {
+				width++
+			}
+		}
+		unsigned := strings.TrimPrefix(formatted, "-")
+		if strings.HasPrefix(unsigned, "0.") && width > 1 {
+			// DECIMAL precision excludes the display-only zero to the left of
+			// the decimal point. The scale itself remains a lower bound.
+			width--
+		}
+		width = max(width, inputs[i].Scale, int32(1))
+		if width <= 0 || width >= inputs[i].Width {
+			continue
+		}
+		if !changed {
+			result = append([]types.Type(nil), inputs...)
+			changed = true
+		}
+		result[i].Width = width
+	}
+	return result
 }
 
 // A direct prepared parameter in a binary comparison derives its type from
