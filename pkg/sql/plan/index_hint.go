@@ -41,6 +41,23 @@ type indexHintScopeSet struct {
 	ignore         map[string]struct{}
 }
 
+// ValidateUnresolvedIndexHints returns the original missing-key error for a
+// query whose hinted index is still unresolved. Execution calls it after the
+// metadata lock has had a chance to request a definition-change retry. Consumers
+// that only inspect a query or persist its schema must call it before publishing
+// their result, since they never reach that execution boundary.
+func ValidateUnresolvedIndexHints(ctx context.Context, query *plan.Query) error {
+	hints := query.GetUnresolvedIndexHints()
+	if len(hints) == 0 {
+		return nil
+	}
+	hint := hints[0]
+	if hint == nil || hint.GetIndexName() == "" || hint.GetTable() == nil || hint.GetTable().GetObjName() == "" {
+		return moerr.NewInternalErrorNoCtx("invalid unresolved index hint plan")
+	}
+	return moerr.NewErrKeyDoesNotExist(ctx, hint.GetIndexName(), hint.GetTable().GetObjName())
+}
+
 func (builder *QueryBuilder) recordIndexHints(nodeID int32, tableDef *plan.TableDef, hints []*tree.IndexHint) error {
 	if len(hints) == 0 || tableDef == nil {
 		return nil

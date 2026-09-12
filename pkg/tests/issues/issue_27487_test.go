@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -33,6 +33,66 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
+
+// These consumers never execute the SELECT through the compiler's metadata
+// lock. Missing hints must fail before EXPLAIN output or view catalog writes.
+func testIssue28639MissingHintConsumers(t *testing.T, ctx context.Context, conn *sql.Conn, database string) {
+	t.Helper()
+	table := "`" + database + "`.`hint_validation`"
+	view := "`" + database + "`.`hint_view`"
+	require.NoError(t, execIssue27487(ctx, conn, "create table "+table+" (id int primary key)"))
+	require.NoError(t, execIssue27487(ctx, conn, "insert into "+table+" values (1)"))
+	missingKey := func(t *testing.T, err error) {
+		t.Helper()
+		var mysqlErr *mysql.MySQLError
+		require.ErrorAs(t, err, &mysqlErr)
+		require.Equal(t, uint16(1176), mysqlErr.Number)
+		require.Contains(t, mysqlErr.Message, "idx_missing")
+	}
+	for i, hint := range []string{"use index", "force index", "ignore index", "force index for order by"} {
+		t.Run(hint, func(t *testing.T) {
+			query := "select id from " + table + " " + hint + " (idx_missing)"
+			for _, consumer := range []struct{ name, prefix string }{
+				{"select", ""}, {"explain text", "explain "},
+				{"explain verbose", "explain verbose "}, {"explain text option", "explain (format text) "},
+			} {
+				t.Run(consumer.name, func(t *testing.T) {
+					_, err := testutils.QueryText(ctx, conn, consumer.prefix+query)
+					missingKey(t, err)
+				})
+			}
+			t.Run("create view", func(t *testing.T) {
+				viewName := fmt.Sprintf("missing_hint_view_%d", i)
+				missingKey(t, execIssue27487(ctx, conn, "create view `"+database+"`.`"+viewName+"` as "+query))
+				var count int
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select count(*) from information_schema.views where table_schema = ? and table_name = ?", database, viewName).Scan(&count))
+				require.Zero(t, count, "failed CREATE VIEW must not publish a definition")
+			})
+		})
+	}
+	t.Run("CTAS", func(t *testing.T) {
+		missingKey(t, execIssue27487(ctx, conn, "create table `"+database+"`.`hint_ctas` as select id from "+table+" force index (idx_missing)"))
+		var count int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from information_schema.tables where table_schema = ? and table_name = 'hint_ctas'", database).Scan(&count))
+		require.Zero(t, count, "failed CTAS must not publish a table")
+	})
+	// A valid hint remains usable, and rejected replacement/ALTER must preserve
+	// the previous view's definition and results.
+	validQuery := "select id + 10 as id from " + table + " force index (primary)"
+	_, err := testutils.QueryText(ctx, conn, "explain "+validQuery)
+	require.NoError(t, err)
+	require.NoError(t, execIssue27487(ctx, conn, "create view "+view+" as "+validQuery))
+	for _, prefix := range []string{"create or replace view ", "alter view "} {
+		t.Run(prefix, func(t *testing.T) {
+			missingKey(t, execIssue27487(ctx, conn, prefix+view+" as select id from "+table+" force index (idx_missing)"))
+			var id int
+			require.NoError(t, conn.QueryRowContext(ctx, "select id from "+view).Scan(&id))
+			require.Equal(t, 11, id)
+		})
+	}
+}
 
 type issue27487IndexCase struct {
 	name                string
@@ -86,6 +146,12 @@ func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
 			execSQLMaybe(t, cleanupCtx, writerDB, "drop database if exists `"+database+"`")
 		}()
 		execSQLRequire(t, ctx, writerDB, "create database `"+database+"`")
+		t.Run("missing hints without DDL race", func(t *testing.T) {
+			conn, err := writerDB.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			testIssue28639MissingHintConsumers(t, ctx, conn, database)
+		})
 
 		lockServices := issue27487LockServices(c)
 		require.NotEmpty(t, lockServices)

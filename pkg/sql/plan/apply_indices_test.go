@@ -79,6 +79,20 @@ func TestIndexOnlyScanGuard_RandomRangesScenario(t *testing.T) {
 	assert.True(t, oomRejectNew, "new guard should also reject non-selective scan (selectivity >= 0.3)")
 }
 
+func TestIndexHintNonExecutingConsumers(t *testing.T) {
+	for _, prefix := range []string{"explain ", "create view v as ", "create table ctas as "} {
+		t.Run(prefix, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			_, err := runOneStmt(mock, t, prefix+"select val from single_idx_t force index(idx_missing)")
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+			_, err = runOneStmt(mock, t, prefix+"select val from single_idx_t force index(idx_val)")
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestIndexHintMissingIndexDefersPermanentTableValidation(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	queryPlan, err := runOneStmt(mock, t, "select val from single_idx_t force index(idx_missing) where val = 1")

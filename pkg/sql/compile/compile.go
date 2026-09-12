@@ -934,16 +934,7 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 // hinted index visible. It runs before sources start, so an invalid hint cannot
 // execute the base-table plan produced while the hint was unresolved.
 func (c *Compile) unresolvedIndexHintError() error {
-	query := c.pn.GetQuery()
-	hints := query.GetUnresolvedIndexHints()
-	if len(hints) == 0 {
-		return nil
-	}
-	hint := hints[0]
-	if hint == nil || hint.GetIndexName() == "" || hint.GetTable() == nil || hint.GetTable().GetObjName() == "" {
-		return moerr.NewInternalErrorNoCtx("invalid unresolved index hint plan")
-	}
-	return moerr.NewErrKeyDoesNotExist(c.proc.Ctx, hint.GetIndexName(), hint.GetTable().GetObjName())
+	return plan2.ValidateUnresolvedIndexHints(c.proc.Ctx, c.pn.GetQuery())
 }
 
 func (c *Compile) appendUnresolvedIndexHintMetaTables(query *plan.Query) {

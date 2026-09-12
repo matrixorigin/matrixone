@@ -2334,6 +2334,9 @@ func writeExplainResult(
 	if exPlan.GetQuery() == nil {
 		return moerr.NewNotSupported(reqCtx, "the sql query plan does not support explain.")
 	}
+	if err := plan2.ValidateUnresolvedIndexHints(reqCtx, exPlan.GetQuery()); err != nil {
+		return err
+	}
 	txnHaveDDL := sessionTxnHaveDDL(ses)
 	// generator query explain
 	explainQuery := explain.NewExplainQueryImpl(exPlan.GetQuery())
