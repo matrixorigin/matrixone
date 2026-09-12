@@ -294,7 +294,8 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
-	// Captured once even when AP or specialization discards the physical compile.
+	// Monotonic high-water mark for GROUP_CONCAT across this prepared lifetime,
+	// including executions whose AP or specialization path discards the compile.
 	groupConcatMaxLenFloor uint64
 	Name                   string
 	Sql                    string
