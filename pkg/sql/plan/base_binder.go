@@ -2935,6 +2935,15 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	// without changing the ordinary string-prefix semantics of direct CHAR
 	// calls.
 	if b.builder != nil && b.builder.isPrepareStatement {
+		// GET_LOCK distinguishes DECIMAL timeout conversion from DOUBLE. A bare
+		// marker has no source type at PREPARE time, so use the established
+		// deferred numeric fallback and restore the runtime parameter's exact
+		// overload at EXECUTE. Explicit CASTs stay on the normal binder path.
+		if strings.EqualFold(funcName, "get_lock") && len(astExpr.Exprs) == 2 {
+			if _, directParam := unwrapParenExpr(astExpr.Exprs[1]).(*tree.ParamExpr); directParam {
+				return b.bindPreparedGetLockFuncExpr(astExpr.Exprs, depth)
+			}
+		}
 		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
 			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sign") ||
 				strings.EqualFold(funcName, "sleep") || strings.EqualFold(funcName, "char")) {
@@ -3375,6 +3384,26 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	}
 	return bindBoundFuncExprAndConstFold(
 		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+	)
+}
+
+func (b *baseBinder) bindPreparedGetLockFuncExpr(astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	if b.builder == nil || !b.builder.isPrepareStatement || len(astArgs) != 2 {
+		return b.bindFuncExprImplByAstExpr("get_lock", astArgs, depth)
+	}
+	name, err := b.impl.BindExpr(astArgs[0], depth, false)
+	if err != nil {
+		return nil, err
+	}
+	doubleType := types.T_float64.ToType()
+	target := makePlan2Type(&doubleType)
+	timeout, err := b.bindNumericExprWithContext(astArgs[1], depth, &target)
+	if err != nil {
+		return nil, err
+	}
+	b.markPreparedNumericFallback(timeout)
+	return bindBoundFuncExprAndConstFold(
+		b.GetContext(), b.builder.compCtx.GetProcess(), "get_lock", []*plan.Expr{name, timeout},
 	)
 }
 
