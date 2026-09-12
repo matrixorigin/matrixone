@@ -1423,6 +1423,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("wait_timeout", 1, 2147483, false),
 		Default:           int64(86400),
 	},
+	warningCountSystemVariable: {
+		Name:              warningCountSystemVariable,
+		Scope:             ScopeSession,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableUintType(warningCountSystemVariable, 0, math.MaxUint64),
+		Default:           uint64(0),
+	},
+	errorCountSystemVariable: {
+		Name:              errorCountSystemVariable,
+		Scope:             ScopeSession,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableUintType(errorCountSystemVariable, 0, math.MaxUint64),
+		Default:           uint64(0),
+	},
 	"sql_safe_updates": {
 		Name:              "sql_safe_updates",
 		Scope:             ScopeBoth,
