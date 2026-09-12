@@ -383,11 +383,19 @@ aabbcc
 set session group_concat_max_len = 5;
 execute group_concat_max_len_low_stmt;
 group_concat(s, ,order by s)
+aabbcc
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+deallocate prepare group_concat_max_len_low_stmt;
+set session group_concat_max_len = 5;
+prepare group_concat_max_len_reset_stmt from 'select group_concat(s order by s separator "") from group_concat_max_len_01';
+execute group_concat_max_len_reset_stmt;
+group_concat(s, ,order by s)
 aabbc
 show warnings;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1260  ¦  Row 3 was cut by GROUP_CONCAT()
-deallocate prepare group_concat_max_len_low_stmt;
+deallocate prepare group_concat_max_len_reset_stmt;
 drop table group_concat_max_len_01;
 drop table if exists group_concat_warning_01;
 create table group_concat_warning_01 (id int primary key, s varchar(16));
