@@ -491,8 +491,11 @@ func (b *HavingBinder) bindOrderedSetAggregate(
 		args = append(args, bound)
 	}
 	if spec.useStoredNumericContract {
-		args = useStoredMySQLSpecialTypesForNumericContract(
+		args, err = b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 			b.GetContext(), funcName, args)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var expr *plan.Expr
