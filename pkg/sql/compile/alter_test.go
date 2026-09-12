@@ -1889,6 +1889,8 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			originRel := mock_frontend.NewMockRelation(ctrl)
 			originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
 			originRel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
+			originRel.EXPECT().CopyTableDef(gomock.Any()).
+				Return(plan.DeepCopyTableDef(tableDef, true)).Times(1)
 
 			copyRel := mock_frontend.NewMockRelation(ctrl)
 			if tc.nilCtxBeforeInsert {
@@ -2158,6 +2160,8 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	originRel := mock_frontend.NewMockRelation(ctrl)
 	originRel.EXPECT().GetTableID(gomock.Any()).Return(uint64(1)).AnyTimes()
 	originRel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil).AnyTimes()
+	originRel.EXPECT().CopyTableDef(gomock.Any()).
+		Return(plan.DeepCopyTableDef(tableDef, true)).Times(1)
 
 	copyRel := mock_frontend.NewMockRelation(ctrl)
 	copyRel.EXPECT().CopyTableDef(gomock.Any()).Return(copyTableDef).AnyTimes()
