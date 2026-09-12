@@ -1085,6 +1085,52 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_text)}, false, proc))
 }
 
+func TestIgnoreConversionAssignmentCastTargets(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	targets := []struct {
+		name string
+		typ  types.Type
+		text string
+	}{
+		{name: "signed integer", typ: types.T_int32.ToType(), text: "abc"},
+		{name: "unsigned integer", typ: types.T_uint32.ToType(), text: "-1"},
+		{name: "decimal", typ: types.New(types.T_decimal64, 10, 2), text: "abc"},
+		{name: "date", typ: types.T_date.ToType(), text: "2024-02-30"},
+		{name: "datetime", typ: types.T_datetime.ToTypeWithScale(6), text: "2024-02-30 25:00:00"},
+		{name: "timestamp", typ: types.T_timestamp.ToTypeWithScale(6), text: "2024-02-30 25:00:00"},
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
+	for _, target := range targets {
+		t.Run(target.name, func(t *testing.T) {
+			targetPlanType := makePlan2Type(&target.typ)
+			require.Equal(t, "cast_ignore", assignmentCastFunctionName(targetPlanType, true, proc))
+
+			expr, err := MakeInsertValueConstExpr(
+				proc,
+				tree.NewNumVal(target.text, target.text, false, tree.P_char),
+				&target.typ,
+				true,
+			)
+			require.NoError(t, err)
+			require.Equal(t, "cast_ignore", expr.GetF().GetFunc().GetObjName())
+			require.Equal(t, int32(types.T_varchar), expr.GetF().GetArgs()[0].Typ.Id)
+		})
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
+	for _, target := range targets {
+		want := "cast"
+		if target.typ.Oid == types.T_date || target.typ.Oid == types.T_datetime || target.typ.Oid == types.T_timestamp {
+			want = "cast_strict"
+		}
+		require.Equal(t, want, assignmentCastFunctionName(makePlan2Type(&target.typ), true, proc), target.name)
+	}
+}
+
 func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {
 	source := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_text)},
