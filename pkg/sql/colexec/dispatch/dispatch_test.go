@@ -1361,6 +1361,63 @@ func TestShuffleContinuesAfterCertifiedStopForOtherMatchedReceivers(t *testing.T
 	require.Same(t, second, d.ctr.remoteReceivers[0])
 }
 
+// Exercise slice compaction at each position, including adjacent removals.
+// A second batch also checks that retired registrations are not notified twice.
+func TestShuffleRetiresMatchedReceiverPositions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		stopped []bool
+	}{
+		{"first", []bool{true, false, false}},
+		{"middle", []bool{false, true, false}},
+		{"last", []bool{false, false, true}},
+		{"consecutive", []bool{false, true, true, false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			bat := newDispatchSpoolTestBatch(t, proc.Mp(), 1)
+			t.Cleanup(func() { bat.Clean(proc.Mp()) })
+			ctrl := gomock.NewController(t)
+			d := &Dispatch{ctr: &container{
+				// As in the existing matched-receiver test, use one routing
+				// partition; no local spool participates in this remote test.
+				localRegsCnt:  1,
+				remoteRegsCnt: len(tc.stopped),
+				aliveRegCnt:   1 + len(tc.stopped),
+				remoteToIdx:   make(map[uuid.UUID]int),
+			}}
+			var live, retired []*process.WrapCs
+			for _, stop := range tc.stopped {
+				r := &process.WrapCs{Uid: uuid.Must(uuid.NewV7())}
+				if stop {
+					r.ReceiverDone = true
+					r.ReceiverStopped = func() bool { return true }
+					r.Err = make(chan error, 2)
+					retired = append(retired, r)
+				} else {
+					session := mock_morpc.NewMockClientSession(ctrl)
+					session.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+					r.Cs = session
+					live = append(live, r)
+				}
+				d.ctr.remoteReceivers = append(d.ctr.remoteReceivers, r)
+				d.ctr.remoteToIdx[r.Uid] = 0
+			}
+			for range 2 {
+				done, err := sendBatToMultiMatchedRegOutcome(d, proc, bat, 0)
+				require.NoError(t, err)
+				require.False(t, done)
+				require.Equal(t, live, d.ctr.remoteReceivers)
+				require.Equal(t, len(live), d.ctr.remoteRegsCnt)
+				require.Equal(t, 1+len(live), d.ctr.aliveRegCnt)
+				for _, r := range retired {
+					require.Len(t, r.Err, 1)
+				}
+			}
+		})
+	}
+}
+
 func TestSendBatchRetiresTerminalBackedStopWithoutLegacyChannel(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	wcs := &process.WrapCs{
