@@ -801,6 +801,9 @@ func integerDivUnsignedDecimal256(parameters []*vector.Vector, result vector.Fun
 	if p2.WithAnyNullValue() {
 		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
 	}
+	if !hasEvaluableRows(rsNull, length) {
+		return nil
+	}
 
 	var v1 []types.Decimal256
 	if parameters[0].IsConst() {

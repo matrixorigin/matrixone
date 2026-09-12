@@ -1029,6 +1029,55 @@ func TestIntegerDivUnsignedDividendWithDecimalDivisorControls(t *testing.T) {
 	}
 }
 
+func TestIntegerDivUnsignedDividendWithDecimalConstZeroStrictMode(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 1)
+	defer atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, -1)
+
+	typ := types.New(types.T_decimal256, 76, 2)
+	zero, err := types.ParseDecimal256("0.00", typ.Width, typ.Scale)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name      string
+		dividend  []uint64
+		nulls     []bool
+		wantError bool
+	}{
+		{
+			name:     "all null rows do not evaluate zero divisor",
+			dividend: []uint64{0, 0},
+			nulls:    []bool{true, true},
+		},
+		{
+			name:      "non-null row still errors",
+			dividend:  []uint64{0, 10},
+			nulls:     []bool{true, false},
+			wantError: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), test.dividend, test.nulls),
+				NewFunctionTestConstInput(typ, []types.Decimal256{zero}, []bool{false}),
+			}, NewFunctionTestResult(types.T_int64.ToType(), test.wantError, nil, nil), integerDivFn)
+
+			if test.wantError {
+				succeed, info := tc.Run()
+				require.True(t, succeed, info)
+				return
+			}
+
+			require.NoError(t, tc.result.PreExtendAndReset(len(test.dividend)))
+			require.NoError(t, tc.fn(tc.parameters, tc.result, proc, len(test.dividend), nil))
+			require.Equal(t, len(test.dividend), tc.GetResultVectorDirectly().GetNulls().Count())
+		})
+	}
+}
+
 // TestDecimal128NegativeDivision tests negative Decimal128 DIV operations
 func TestDecimal128NegativeDivision(t *testing.T) {
 	proc := testutil.NewProcess(t)
