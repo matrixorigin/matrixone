@@ -15,6 +15,7 @@
 package table_function
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -235,8 +236,18 @@ func waitRuntimeFilterDataForTableFunction(tf *TableFunction, proc *process.Proc
 		proc.GetMessageBoard(),
 	)
 	msgs, ctxDone, err := msgReceiver.ReceiveMessage(true, proc.Ctx)
-	if err != nil || ctxDone {
+	if err != nil {
 		return nil, err
+	}
+	if ctxDone {
+		if spec.MustApply {
+			if cause := context.Cause(proc.Ctx); cause != nil {
+				return nil, cause
+			}
+			return nil, moerr.NewInternalErrorf(
+				proc.Ctx, "required runtime filter %d wait was canceled", spec.Tag)
+		}
+		return nil, nil
 	}
 
 	for i := range msgs {
@@ -244,13 +255,29 @@ func waitRuntimeFilterDataForTableFunction(tf *TableFunction, proc *process.Proc
 		if !ok {
 			continue
 		}
-		if m.Typ != message.RuntimeFilter_UNIQUEJOINKEYS {
-			continue
+		switch m.Typ {
+		case message.RuntimeFilter_PASS:
+			if spec.MustApply {
+				return nil, moerr.NewInternalErrorf(
+					proc.Ctx, "required runtime filter %d is unavailable: producer returned PASS", spec.Tag)
+			}
+		case message.RuntimeFilter_DROP:
+			// The build side is empty. The enclosing join will produce no rows,
+			// so IVF does not need an exact payload to preserve semantics.
+			return nil, nil
+		case message.RuntimeFilter_UNIQUEJOINKEYS:
+			if spec.MustApply && len(m.Data) == 0 {
+				return nil, moerr.NewInternalErrorf(
+					proc.Ctx, "required runtime filter %d has an empty key payload", spec.Tag)
+			}
+			return m.Data, nil
 		}
-
-		return m.Data, nil
 	}
 
+	if spec.MustApply {
+		return nil, moerr.NewInternalErrorf(
+			proc.Ctx, "required runtime filter %d did not provide an exact payload", spec.Tag)
+	}
 	return nil, nil
 }
 

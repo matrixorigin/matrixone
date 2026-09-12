@@ -1346,7 +1346,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	// pre-filter path and use the legacy single-round IVF search.
 	includeModeFallbackToPre := vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "include" && len(remainingFilters) > 0
 	usePreFilter := ivfCtx.pushdownEnabled || includeModeFallbackToPre
-	if usePreFilter && len(remainingFilters) > 0 &&
+	if (vecCtx.hasMembership || (usePreFilter && len(remainingFilters) > 0)) &&
 		types.T(ivfCtx.pkType.Id).IsInteger() &&
 		!localProtocolEnablesSortedMembershipFilter(
 			builder.compCtx.GetProcess().GetService()) {
@@ -1355,7 +1355,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		// original relational plan until the deployment-wide protocol gate rises.
 		return nodeID, nil
 	}
-	canIndexOnly := canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
+	canIndexOnly := !vecCtx.hasMembership &&
+		canDoIndexOnlyScan(requiredCols, scanNode.TableDef, includeAwareColumns) && len(remainingFilters) == 0
 	tableFuncIncludeColumns := make([]string, 0, len(includeAwareColumns))
 	if canIndexOnly {
 		for _, col := range includeAwareColumns {
@@ -1526,7 +1527,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	//   pre-filter:    JOIN(scanNode, JOIN(ivf_search, secondScan))
 	var joinRootID int32
 
-	pushdownEnabled := usePreFilter && len(remainingFilters) > 0
+	pushdownEnabled := vecCtx.hasMembership || (usePreFilter && len(remainingFilters) > 0)
 	scanNode.FilterList = remainingFilters
 
 	if canIndexOnly {
@@ -1539,18 +1540,24 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		builder.rebindScanNode(secondScanNode)
 		newTag := secondScanNode.BindingTags[0]
 
-		// Update colRefCnt and idxColMap to reflect the new binding tag
-		// This is essential for index optimization to work correctly on the rebound node
+		// The copied scan is an internal producer. Keep its regular-index remaps local so
+		// they cannot affect the original row-fetch side, while preserving any mappings
+		// already published for the original scan tag.
+		secondIdxColMap := make(map[[2]int32]*plan.Expr)
 		if oldTag != newTag {
-			for key, value := range colRefCnt {
-				if key[0] == oldTag {
-					colRefCnt[[2]int32{newTag, key[1]}] = value
-				}
-			}
 			for key, value := range idxColMap {
 				if key[0] == oldTag {
-					idxColMap[[2]int32{newTag, key[1]}] = DeepCopyExpr(value)
+					secondIdxColMap[[2]int32{newTag, key[1]}] = DeepCopyExpr(value)
 				}
+			}
+		}
+
+		var originalMembershipNode *plan.Node
+		if vecCtx.hasMembership {
+			originalMembershipNode = builder.qry.Nodes[vecCtx.membershipNodeID]
+			if originalMembershipNode.NodeType != plan.Node_JOIN || originalMembershipNode.JoinType != plan.Node_SEMI ||
+				len(originalMembershipNode.Children) != 2 || originalMembershipNode.Children[0] != scanNode.NodeId {
+				return nodeID, nil
 			}
 		}
 
@@ -1575,16 +1582,43 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 			for _, expr := range secondScanNode.FilterList {
 				extractColRefs(expr, newTag, secondColRefCnt)
 			}
-			optimizedSecondScanID := builder.applyIndicesForFilters(secondScanNodeID, secondScanNode, secondColRefCnt, idxColMap)
+			// A covering-index decision must account for every left-side column that
+			// the copied membership JOIN will consume after this scan is optimized.
+			if originalMembershipNode != nil {
+				for _, expr := range originalMembershipNode.OnList {
+					rebound := DeepCopyExpr(expr)
+					replaceColRefTag(rebound, oldTag, newTag)
+					extractColRefs(rebound, newTag, secondColRefCnt)
+				}
+			}
+			optimizedSecondScanID := builder.applyIndicesForFilters(
+				secondScanNodeID, secondScanNode, secondColRefCnt, secondIdxColMap)
 			secondScanNodeID = optimizedSecondScanID
 		}
 
-		// Otherwise BloomFilter will only see the truncated primary key set, causing data loss.
+		// Otherwise the runtime filter will only see the truncated primary key set, causing data loss.
+		// Clear candidate limits only from the copied indexed-table side. A membership subquery may
+		// have its own semantic LIMIT/OFFSET, which must remain intact.
 		clearLimitOffsetInSubtree(builder.qry, secondScanNodeID)
 
-		// Add a PROJECT node above secondScanNode to output only the primary key column
+		membershipProducerID := secondScanNodeID
+		if originalMembershipNode != nil {
+			membershipNode := DeepCopyNode(originalMembershipNode)
+			membershipNode.Children[0] = secondScanNodeID
+			membershipNode.Limit = nil
+			membershipNode.Offset = nil
+			for _, expr := range membershipNode.OnList {
+				replaceColRefTag(expr, oldTag, newTag)
+			}
+			// An index-only rewrite replaces the copied scan tag with hidden-index
+			// output expressions. Rebind every membership expression to that output.
+			replaceColumnsForNode(membershipNode, secondIdxColMap)
+			membershipProducerID = builder.appendNode(membershipNode, ctx)
+		}
+
+		// Add a PROJECT above the filtered relation to output only the primary key column.
 		secondProjectTag := builder.genNewBindTag()
-		secondPkExpr := builder.buildPkExprFromNode(secondScanNodeID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
+		secondPkExpr := builder.buildPkExprFromNode(membershipProducerID, ivfCtx.pkType, scanNode.TableDef.Pkey.PkeyColName)
 		if secondPkExpr == nil {
 			// If an optimized second-scan subtree can't provide a stable PK expression,
 			// skip IVF rewrite to avoid wiring stale bindings into join/runtime-filter paths.
@@ -1592,7 +1626,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 		secondProjectNodeID := builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
-			Children:    []int32{secondScanNodeID},
+			Children:    []int32{membershipProducerID},
 			ProjectList: []*plan.Expr{secondPkExpr},
 			BindingTags: []int32{secondProjectTag},
 		}, ctx)
@@ -1642,6 +1676,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 		buildSpec := MakeRuntimeFilter(rfTag, false, 0, buildExpr, false)
 		buildSpec.UseMembershipFilter = true
+		buildSpec.MustApply = vecCtx.hasMembership
 		innerJoinNode := builder.qry.Nodes[innerJoinNodeID]
 		innerJoinNode.RuntimeFilterBuildList = []*plan.RuntimeFilterSpec{buildSpec}
 
@@ -1657,6 +1692,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		}
 		probeSpec := MakeRuntimeFilter(rfTag, false, 0, probeExpr, false)
 		probeSpec.UseMembershipFilter = true
+		probeSpec.MustApply = vecCtx.hasMembership
 		tableFuncNode.RuntimeFilterProbeList = []*plan.RuntimeFilterSpec{probeSpec}
 		// Runtime-filter messages only travel within one CN message board. Keep
 		// this outer join tree on the current CN; the background entries query can

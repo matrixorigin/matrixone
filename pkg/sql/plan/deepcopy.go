@@ -924,6 +924,7 @@ func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSp
 		BuildExpr:           DeepCopyExpr(rf.BuildExpr),
 		NotOnPk:             rf.NotOnPk,
 		UseMembershipFilter: rf.UseMembershipFilter,
+		MustApply:           rf.MustApply,
 		KeyEncoding:         rf.KeyEncoding,
 		ProbeType:           DeepCopyType(rf.ProbeType),
 		KeyComponentProbeTypes: slices.Clone(
