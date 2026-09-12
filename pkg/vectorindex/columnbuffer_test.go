@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -56,6 +57,20 @@ func varlenaBuf(t types.T, vals []string) *ColumnBuffer {
 	return &ColumnBuffer{Type: t, Data: d, N: len(vals)}
 }
 
+// T_json entries use ByteJson storage bytes, not the source JSON text.
+func jsonVarlenaBuf(t *testing.T, values []string) *ColumnBuffer {
+	t.Helper()
+	encoded := make([]string, len(values))
+	for i, text := range values {
+		value, err := bytejson.ParseFromString(text)
+		require.NoError(t, err)
+		raw, err := value.Marshal()
+		require.NoError(t, err)
+		encoded[i] = string(raw)
+	}
+	return varlenaBuf(types.T_json, encoded)
+}
+
 // Every supported type decodes into a vector of the same type with the right
 // element count.
 func TestAppendColumnBuffer_AllTypes(t *testing.T) {
@@ -87,7 +102,7 @@ func TestAppendColumnBuffer_AllTypes(t *testing.T) {
 		{"binary", varlenaBuf(types.T_binary, []string{"a", "bb", "ccc"})},
 		{"varbinary", varlenaBuf(types.T_varbinary, []string{"a", "bb", "ccc"})},
 		{"blob", varlenaBuf(types.T_blob, []string{"a", "bb", "ccc"})},
-		{"json", varlenaBuf(types.T_json, []string{"a", "bb", "ccc"})},
+		{"json", jsonVarlenaBuf(t, []string{`{"a":1}`, `[1,2]`, `"hello"`})},
 		{"uuid", varlenaBuf(types.T_uuid, []string{
 			"00000000-0000-0000-0000-000000000001",
 			"00000000-0000-0000-0000-000000000002",
