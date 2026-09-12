@@ -868,3 +868,17 @@ ready for maintainer review, not approved: the named owners must still record
 acceptance or new findings against this revision before production code is
 written. The baseline reproduction is evidence of the current defect only;
 `production_fix` and `qa_acceptance` remain not implemented/not run.
+
+### 10.2 Implementation series status (PR2)
+
+PR2 (`compare FULLTEXT ODKU values by stored bytes`) implements only the
+planner-side maintenance-identity boundary for classic synchronous irregular
+indexes. The ODKU value-change marker compares the final stored VARCHAR/TEXT
+bytes by casting both operands to VARBINARY/BLOB before NULL-safe equality.
+This prevents a SQL collation equality result from being mistaken for identical
+FULLTEXT tokenizer input. Non-string values keep their typed comparison; CHAR,
+JSON, DATALINK, FULLTEXT2, asynchronous indexes, and plugins without a valid
+hook remain on the conservative maintenance path. No unique-key identity,
+catalog, protobuf, storage format, or migration behavior is enabled by this
+PR; runtime SQL and QA evidence remain required before it can be considered a
+product fix.
