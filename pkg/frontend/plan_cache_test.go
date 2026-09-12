@@ -546,6 +546,21 @@ func TestSessionSQLModePresenceMatcherUsesExactToken(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestPlanCachePreservesViewMetadataDependency(t *testing.T) {
+	pc := newPlanCache(1)
+	pc.cacheWithPlanSnapshotsAndMetadata(
+		"select * from app.metadata_cols",
+		[]tree.Statement{&tree.Select{}},
+		[]*plan.Plan{{}},
+		[]timestamp.Timestamp{{}},
+		[]bool{true},
+	)
+	cached := pc.get("select * from app.metadata_cols")
+	require.NotNil(t, cached)
+	require.Equal(t, []bool{true}, cached.viewMetadataColumnsDependent)
+	pc.clean()
+}
+
 func TestSessionSQLModeHighNotPrecedenceHelpers(t *testing.T) {
 	has, ok := sqlModeHasHighNotPrecedenceValue("STRICT_TRANS_TABLES,HIGH_NOT_PRECEDENCE")
 	require.True(t, ok)

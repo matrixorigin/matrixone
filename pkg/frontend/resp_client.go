@@ -18,6 +18,7 @@ import (
 	"errors"
 	"math"
 	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -226,7 +227,35 @@ func (resper *MysqlResp) ResetStatistics() {
 	resper.mysqlRrWr.ResetStatistics()
 }
 
+type authorityWriteDeadlineSetter interface {
+	SetWriteDeadline(time.Time) error
+}
+
+type authorityConnectionCloser interface {
+	CloseExpiredAuthorityConnection() error
+}
+
+func installViewMetadataWriteDeadline(execCtx *ExecCtx, writer MysqlRrWr) error {
+	if execCtx == nil || execCtx.viewMetadataLease == nil {
+		return nil
+	}
+	deadline, required, err := execCtx.viewMetadataLease.AuthorityDeadline()
+	if err != nil || !required {
+		return err
+	}
+	setter, ok := writer.(authorityWriteDeadlineSetter)
+	if !ok {
+		return moerr.NewInternalError(execCtx.reqCtx,
+			"metadata response writer does not support authority deadlines")
+	}
+	return setter.SetWriteDeadline(deadline)
+}
+
 func (resper *MysqlResp) RespPreMeta(execCtx *ExecCtx, meta any) (err error) {
+	if err = installViewMetadataWriteDeadline(execCtx, resper.mysqlRrWr); err != nil {
+		return err
+	}
+	execCtx.viewMetadataResponseStarted = true
 	columns := meta.([]any)
 	return resper.respColumnDefsWithoutFlush(execCtx.ses.(*Session), execCtx, columns)
 }
@@ -261,12 +290,16 @@ func (resper *MysqlResp) saveResultBatch(execCtx *ExecCtx, crs *perfcounter.Coun
 }
 
 func (resper *MysqlResp) writeClientBatch(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) (err error) {
+	if err = installViewMetadataWriteDeadline(execCtx, resper.mysqlRrWr); err != nil {
+		return err
+	}
 	if isPerformStatement(execCtx.stmt) {
 		return nil
 	}
 	if bat == nil {
 		return nil
 	}
+	execCtx.viewMetadataResponseStarted = true
 
 	ses := execCtx.ses.(*Session)
 	ec := ses.GetExportConfig()

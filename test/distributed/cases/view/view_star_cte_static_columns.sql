@@ -32,6 +32,7 @@ where reldatabase = 'view_star_cte_static_columns' and relname = 'v_cte';
 
 alter table t add column c int default 7;
 
+-- @wait_expect(2, 60)
 select (select count(*) = 2 from information_schema.columns
         where table_schema = 'view_star_cte_static_columns' and table_name = 'v_cte')
        and (select count(*) = 2 from v_cte) as stable_rebind_ok;

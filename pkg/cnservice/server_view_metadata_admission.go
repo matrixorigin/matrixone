@@ -60,6 +60,13 @@ func (s *service) initViewMetadataAdmission(ctx context.Context) error {
 }
 
 func (s *service) closeViewMetadataAdmission() {
+	s.viewMetadataAuthorityMu.Lock()
+	s.viewMetadataAuthorityVersion++
+	if s.viewMetadataAuthorityTimer != nil {
+		s.viewMetadataAuthorityTimer.Stop()
+		s.viewMetadataAuthorityTimer = nil
+	}
+	s.viewMetadataAuthorityMu.Unlock()
 	if s.viewMetadataEpochFence == nil {
 		return
 	}
@@ -68,6 +75,76 @@ func (s *service) closeViewMetadataAdmission() {
 		compile.ViewMetadataEpochFenceRuntimeKey,
 		s.viewMetadataEpochFence,
 	)
+}
+
+func viewMetadataAuthorityLeaseDuration(ticks, tickPerSecond uint64) time.Duration {
+	if ticks == 0 || tickPerSecond == 0 {
+		return 0
+	}
+	// HAKeeper expires a store only after its age exceeds the configured timeout.
+	// Expire locally one replicated tick earlier, leaving transport/scheduling
+	// margin while never extending authority beyond the durable owner lease.
+	if ticks == 1 {
+		return time.Nanosecond
+	}
+	return time.Duration(ticks-1) * time.Second / time.Duration(tickPerSecond)
+}
+
+func (s *service) renewViewMetadataAuthorityLease(
+	snapshot *logservicepb.ViewMetadataAdmission,
+	heartbeatElapsed time.Duration,
+) {
+	if snapshot == nil || snapshot.Generation != s.viewMetadataAdmissionGeneration {
+		return
+	}
+	leaseDuration := viewMetadataAuthorityLeaseDuration(
+		snapshot.AuthorityLeaseTicks, snapshot.TickPerSecond)
+	if leaseDuration == 0 {
+		// Before cluster admission is enabled HAKeeper legitimately returns a
+		// generation-scoped snapshot without an authority lease. Do not turn
+		// that capability-disabled state into an expired lease: doing so seals
+		// every metadata-sensitive statement on a fresh or legacy cluster.
+		//
+		// Once authority has been armed, or the authoritative snapshot says the
+		// feature is active, losing its lease parameters must still fail closed.
+		if s.viewMetadataEpochFence != nil {
+			_, authorityRequired, _ := s.viewMetadataEpochFence.AuthorityDeadline()
+			if authorityRequired || snapshot.Enabled || snapshot.RefreshEnabled {
+				s.viewMetadataEpochFence.ExpireAuthority(time.Time{})
+			}
+		}
+		return
+	}
+	duration := leaseDuration - heartbeatElapsed
+	if duration <= 0 {
+		if s.viewMetadataEpochFence != nil {
+			s.viewMetadataEpochFence.ExpireAuthority(time.Time{})
+		}
+		return
+	}
+	authorityDeadline := time.Now().Add(duration)
+	if s.viewMetadataEpochFence != nil {
+		s.viewMetadataEpochFence.RenewAuthority(authorityDeadline)
+	}
+	s.viewMetadataAuthorityMu.Lock()
+	s.viewMetadataAuthorityVersion++
+	version := s.viewMetadataAuthorityVersion
+	if s.viewMetadataAuthorityTimer != nil {
+		s.viewMetadataAuthorityTimer.Stop()
+	}
+	s.viewMetadataAuthorityTimer = time.AfterFunc(duration, func() {
+		s.expireViewMetadataAuthority(version, authorityDeadline)
+	})
+	s.viewMetadataAuthorityMu.Unlock()
+}
+
+func (s *service) expireViewMetadataAuthority(version uint64, deadline time.Time) {
+	s.viewMetadataAuthorityMu.Lock()
+	current := s.viewMetadataAuthorityVersion == version
+	s.viewMetadataAuthorityMu.Unlock()
+	if current && s.viewMetadataEpochFence != nil {
+		s.viewMetadataEpochFence.ExpireAuthority(deadline)
+	}
 }
 
 func (s *service) notifyViewMetadataAdmissionUpdated() {
@@ -132,9 +209,31 @@ func (s *service) applyViewMetadataAdmission(
 	if startupWaiting {
 		return nil
 	}
-	if err := s.fenceViewMetadataCatalog(ctx, &copy); err != nil &&
-		!viewMetadataCatalogFenceRetryable(err, false) {
-		return err
+	if err := s.fenceViewMetadataCatalog(ctx, &copy); err != nil {
+		if !viewMetadataCatalogFenceRetryable(err, false) {
+			return err
+		}
+		return nil
+	}
+	return s.applyViewMetadataFenceState(&copy)
+}
+
+func (s *service) applyViewMetadataFenceState(snapshot *logservicepb.ViewMetadataAdmission) error {
+	if snapshot == nil || s.viewMetadataEpochFence == nil {
+		return nil
+	}
+	if snapshot.Epoch > 0 && snapshot.CatalogFencedEpoch >= snapshot.Epoch {
+		s.viewMetadataCatalogFencedEpoch.Store(snapshot.Epoch)
+	}
+	if snapshot.Epoch > 0 && s.viewMetadataCatalogFencedEpoch.Load() >= snapshot.Epoch {
+		s.viewMetadataEpochFence.MarkCatalogFenced(snapshot.Epoch)
+	}
+	if snapshot.RefreshReady && !s.viewMetadataEpochFence.MarkRefreshReady(snapshot.Epoch) {
+		return moerr.NewInvalidStateNoCtx("cannot prepare View metadata recovery for an unfenced epoch")
+	}
+	if snapshot.RefreshEnabled && !snapshot.RevalidationRequired &&
+		!s.viewMetadataEpochFence.EnableRefresh(snapshot.Epoch) {
+		return moerr.NewInvalidStateNoCtx("cannot enable View metadata refresh for an unfenced epoch")
 	}
 	return nil
 }
@@ -204,6 +303,24 @@ func (s *service) fenceViewMetadataCatalog(
 	}
 	s.viewMetadataCatalogFencedEpoch.Store(snapshot.Epoch)
 	return nil
+}
+
+func viewMetadataAdmissionWaitTimeout(
+	discoveryTimeout time.Duration,
+	snapshot *logservicepb.ViewMetadataAdmission,
+) time.Duration {
+	if discoveryTimeout <= 0 {
+		discoveryTimeout = 30 * time.Second
+	}
+	if snapshot == nil || snapshot.OwnerExpiryRemainingTicks == 0 || snapshot.TickPerSecond == 0 {
+		return discoveryTimeout
+	}
+	ownerWait := time.Duration(
+		(snapshot.OwnerExpiryRemainingTicks+snapshot.TickPerSecond-1)/snapshot.TickPerSecond) * time.Second
+	// One discovery window after authoritative owner expiry covers the next
+	// replicated reconciliation and heartbeat response without coupling the CN
+	// deadline to an unrelated local multiplier.
+	return ownerWait + discoveryTimeout
 }
 
 func viewMetadataCatalogFenceRetryable(err error, upgradeOwnerActive bool) bool {
@@ -344,10 +461,9 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool) error
 		}
 		return nil
 	}
-	timeout := s.cfg.HAKeeper.DiscoveryTimeout.Duration
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
+	timeout := viewMetadataAdmissionWaitTimeout(
+		s.cfg.HAKeeper.DiscoveryTimeout.Duration,
+		s.viewMetadataAdmission.Load())
 	discoveryCtx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -444,6 +560,9 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool) error
 			catalogRetryAttempt++
 			catalogRetry = catalogRetryTimer.C
 		} else {
+			if err := s.applyViewMetadataFenceState(snapshot); err != nil {
+				return err
+			}
 			catalogPendingEpoch = 0
 			catalogRetryAttempt = 0
 			catalogRetryReady = true

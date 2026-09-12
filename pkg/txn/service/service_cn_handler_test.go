@@ -167,4 +167,16 @@ func TestCommitRequestExpired(t *testing.T) {
 		0,
 	))
 	require.False(t, commitRequestExpired(&txn.TxnRequest{}, now, 0))
+
+	// An authority commit deadline is encoded after the CN subtracts the same
+	// uncertainty that TN adds here. Therefore TN's grace ends exactly at the
+	// authority boundary, never after HAKeeper may replace the old owner.
+	authorityDeadline := now.Add(30 * time.Second)
+	maxClockOffset := 500 * time.Millisecond
+	compensated := authorityDeadline.Add(-maxClockOffset)
+	request := &txn.TxnRequest{CommitRequest: &txn.TxnCommitRequest{
+		DeadlineUnixNano: compensated.UnixNano(),
+	}}
+	require.False(t, commitRequestExpired(request, authorityDeadline.Add(-time.Nanosecond), maxClockOffset))
+	require.True(t, commitRequestExpired(request, authorityDeadline, maxClockOffset))
 }

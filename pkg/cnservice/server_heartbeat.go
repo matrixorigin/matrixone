@@ -209,6 +209,8 @@ func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 		ViewMetadataAdmissionSupported:  s.viewMetadataAdmissionGeneration != 0,
 		ViewMetadataAdmissionGeneration: s.viewMetadataAdmissionGeneration,
 		ViewMetadataCatalogFencedEpoch:  s.viewMetadataCatalogFencedEpoch.Load(),
+		ViewMetadataRefreshSupported:    s.viewMetadataRefreshReady(),
+		ViewMetadataRevalidatedEpoch:    s.viewMetadataRevalidatedEpoch.Load(),
 		ViewMetadataIngressReady:        s.viewMetadataIngressReady.Load(),
 	}
 	if s.viewMetadataEpochFence != nil {
@@ -286,7 +288,8 @@ func (s *service) heartbeat(ctx context.Context) {
 		s.notifyCommandPoll()
 		return
 	}
-	admissionErr := s.applyViewMetadataAdmission(ctx, cb.ViewMetadataAdmission)
+	s.renewViewMetadataAuthorityLease(cb.ViewMetadataAdmission, time.Since(start))
+	admissionErr := s.applyViewMetadataAdmission(ctx2, cb.ViewMetadataAdmission)
 	s.commandPollNeeded.Store(false)
 	s.notifyCommandPoll()
 
@@ -301,6 +304,18 @@ func (s *service) heartbeat(ctx context.Context) {
 	if admissionErr != nil && ctx.Err() == nil {
 		s.logger.Error("failed to apply view metadata admission heartbeat response", zap.Error(admissionErr))
 	}
+}
+
+func (s *service) viewMetadataRefreshReady() bool {
+	if s.viewMetadataReady.Load() {
+		return true
+	}
+	readiness := s.viewMetadataBootstrap.Load()
+	if readiness == nil || !readiness.service.IsFinalVersionReady() {
+		return false
+	}
+	s.viewMetadataReady.Store(true)
+	return true
 }
 
 func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {

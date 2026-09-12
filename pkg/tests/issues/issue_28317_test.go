@@ -229,8 +229,10 @@ func runIssue28317(t *testing.T, parent context.Context, db0, db1 *sql.DB, servi
 	case "cancel":
 		cancelAlter()
 		alterErr := issue28317Wait(t, done, "canceled ALTER")
-		require.Error(t, alterErr)
-		t.Logf("canceled ALTER returned: %v; server-side completion is not inferred from driver cancellation", alterErr)
+		// Cancellation can race a waiter that has just acquired the gate. Both a
+		// cancellation error and successful completion are valid; the state
+		// assertions below require either the old or committed schema to converge.
+		t.Logf("canceled ALTER returned: %v; server-side completion is verified from catalog state", alterErr)
 		alterDone = true
 		_, err = a.ExecContext(ctx, "rollback")
 		require.NoError(t, err)

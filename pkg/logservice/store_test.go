@@ -879,6 +879,14 @@ func TestStopReplicaCanResetHAKeeperReplicaID(t *testing.T) {
 	runStoreTest(t, fn)
 }
 
+func TestLogHeartbeatAdvertisesViewMetadataRefreshSupport(t *testing.T) {
+	runStoreTest(t, func(t *testing.T, store *store) {
+		heartbeat := store.getHeartbeatMessage()
+		require.True(t, heartbeat.ViewMetadataAdmissionSupported)
+		require.True(t, heartbeat.ViewMetadataRefreshSupported)
+	})
+}
+
 func TestHAKeeperTickerSurvivesReplicaRestart(t *testing.T) {
 	for _, nonVoting := range []bool{false, true} {
 		t.Run(fmt.Sprintf("non-voting=%t", nonVoting), func(t *testing.T) {

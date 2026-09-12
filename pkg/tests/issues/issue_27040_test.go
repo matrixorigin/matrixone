@@ -15,6 +15,7 @@
 package issues
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -22,6 +23,8 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -60,8 +63,9 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create table `"+sourceDatabase+"`.payload (id int primary key)")
 		execSQLRequire(t, ctx, db, "insert into `"+sourceDatabase+"`.payload values (1)")
 
-		// Clone serializes through the lineage lifecycle gate before taking the
-		// target catalog key, so the second transaction must wait here first.
+		// Explicit clone transactions always retain the destination catalog key,
+		// but do not necessarily retain the global lineage gate. Depending on
+		// lifecycle activation, the second clone can wait at either boundary.
 		var lineageGateTableID uint64
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select rel_id from mo_catalog.mo_tables where account_id = 0 and reldatabase = 'mo_catalog' and relname = 'mo_feature_registry'",
@@ -101,6 +105,16 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 			}
 		}()
 		require.NoError(t, execConn(first, cloneSQL))
+		packer := types.NewPacker()
+		defer packer.Close()
+		packer.EncodeUint32(0)
+		packer.EncodeStringType([]byte(targetDatabase))
+		// lockop encodes the serialized composite PK as a varlena lock key.
+		catalogKey := bytes.Clone(packer.GetBuf())
+		packer.Reset()
+		packer.EncodeStringType(catalogKey)
+		firstTxnID := clusterDatabaseLockHolder(c, packer.GetBuf())
+		require.NotEmpty(t, firstTxnID, "first clone must own its destination catalog key")
 
 		go func() {
 			secondDone <- execConn(second, cloneSQL)
@@ -109,9 +123,9 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 		secondPending = true
 
 		require.Eventually(t, func() bool {
-			return clusterHasLockWaiter(c, lineageGateTableID)
+			return clusterHasCloneLockWaiter(c, firstTxnID, lineageGateTableID)
 		}, 30*time.Second, 10*time.Millisecond,
-			"second clone did not wait for the first clone's lineage lifecycle lock")
+			"second clone did not wait for the first clone's lifecycle or destination catalog lock")
 
 		select {
 		case cloneErr := <-secondDone:
@@ -143,10 +157,37 @@ func TestIssue27040ConcurrentIfNotExistsDatabaseClone(t *testing.T) {
 	})
 }
 
-// The target catalog table can be bound to any CN's lock service. Observe the
-// owner across the cluster rather than assuming that the SQL frontend CN owns
-// the table binding.
-func clusterHasLockWaiter(c embed.Cluster, tableID uint64) bool {
+// Identify the first clone by its exact destination key, not by an unrelated
+// catalog transaction or a background recovery waiter.
+func clusterDatabaseLockHolder(c embed.Cluster, key []byte) []byte {
+	var txnID []byte
+	c.ForeachServices(func(svc embed.ServiceOperator) bool {
+		if svc.ServiceType() != metadata.ServiceType_CN {
+			return true
+		}
+		lockservice.GetLockServiceByServiceID(svc.ServiceID()).IterLocks(func(tableID uint64, keys [][]byte, l lockservice.Lock) bool {
+			if tableID != catalog.MO_DATABASE_ID || l.GetLockMode() != pblock.LockMode_Exclusive {
+				return true
+			}
+			for _, lockedKey := range keys {
+				if bytes.Equal(lockedKey, key) {
+					l.IterHolders(func(holder pblock.WaitTxn) bool {
+						txnID = bytes.Clone(holder.TxnID)
+						return false
+					})
+					break
+				}
+			}
+			return len(txnID) == 0
+		})
+		return len(txnID) == 0
+	})
+	return txnID
+}
+
+// Bindings can belong to either CN. Only count waiters behind the first clone,
+// on one of its two serialization boundaries, rather than any global waiter.
+func clusterHasCloneLockWaiter(c embed.Cluster, holderTxnID []byte, lineageTableID uint64) bool {
 	waiting := false
 	c.ForeachServices(func(svc embed.ServiceOperator) bool {
 		if svc.ServiceType() != metadata.ServiceType_CN {
@@ -154,7 +195,15 @@ func clusterHasLockWaiter(c embed.Cluster, tableID uint64) bool {
 		}
 		lockService := lockservice.GetLockServiceByServiceID(svc.ServiceID())
 		lockService.IterLocks(func(lockedTableID uint64, _ [][]byte, lock lockservice.Lock) bool {
-			if lockedTableID != tableID {
+			if lockedTableID != lineageTableID && lockedTableID != catalog.MO_DATABASE_ID {
+				return true
+			}
+			heldByFirst := false
+			lock.IterHolders(func(holder pblock.WaitTxn) bool {
+				heldByFirst = bytes.Equal(holder.TxnID, holderTxnID)
+				return !heldByFirst
+			})
+			if !heldByFirst {
 				return true
 			}
 			lock.IterWaiters(func(_ pblock.WaitTxn) bool {
