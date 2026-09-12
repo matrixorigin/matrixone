@@ -1276,6 +1276,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if name == "cast" && isImplicitPreparedParamCast(expr) {
 			return copy.GetF().Args[0], true, nil
 		}
+		restorePreparedIntegerArithmeticOperands(name, copy.GetF().Args)
 		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
 		if err != nil {
 			return nil, false, err
@@ -1334,6 +1335,31 @@ func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
 		}
 	}
 	return nil, false
+}
+
+// Integer widening casts inserted for the PREPARE-time overload are not source
+// domains. Re-resolve arithmetic from those sources when a parameter changes;
+// otherwise a BIT peer widened to UINT64 acquires checked unsigned semantics
+// that the equivalent directly bound BIT expression does not have.
+func restorePreparedIntegerArithmeticOperands(name string, args []*Expr) {
+	if name != "+" && name != "-" && name != "*" {
+		return
+	}
+	for i, arg := range args {
+		for arg != nil && types.T(arg.Typ.Id).IsInteger() {
+			fn := arg.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || fn.SyntaxExplicitCast || len(fn.Args) == 0 || fn.Args[0] == nil {
+				break
+			}
+			_, overload := planfunction.DecodeOverloadID(fn.Func.Obj)
+			source := types.T(fn.Args[0].Typ.Id)
+			if overload != 0 || (!source.IsInteger() && source != types.T_bit) {
+				break
+			}
+			arg = fn.Args[0]
+			args[i] = arg
+		}
+	}
 }
 
 func (rule *ResetParamRefRule) rebindPreparedIntegerExpr(expr *plan.Expr) (*Expr, bool, error) {
@@ -2266,6 +2292,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
+			restorePreparedIntegerArithmeticOperands(functionName, boundArgs)
 			stringDomainModes, resolveErr := rule.resolvePreparedRegexpStringDomainCheckModes(
 				functionName, boundArgs, originalArgs)
 			if resolveErr != nil {

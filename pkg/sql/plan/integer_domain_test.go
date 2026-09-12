@@ -76,3 +76,27 @@ func TestPreparedUnsignedSubtractionRebindingKeepsBoundMode(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_int64), bound.Typ.Id)
 }
+
+func TestPreparedIntegerPeerRetainsOriginalDomain(t *testing.T) {
+	ctx := context.Background()
+	for _, explicit := range []bool{false, true} {
+		peer := &Expr{Typ: planpb.Type{Id: int32(types.T_bit), Width: 64},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+		if explicit {
+			var err error
+			peer, err = appendCastBeforeExpr(ctx, peer, planpb.Type{Id: int32(types.T_uint64), Width: 64})
+			require.NoError(t, err)
+			peer.GetF().SyntaxExplicitCast = true
+		}
+		marker := &Expr{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+		prepared, err := BindFuncExprImplByPlanExpr(ctx, "+", []*Expr{DeepCopyExpr(peer), marker})
+		require.NoError(t, err)
+		direct, err := BindFuncExprImplByPlanExpr(ctx, "+", []*Expr{DeepCopyExpr(peer), makePlan2Int64ConstExprWithType(-1)})
+		require.NoError(t, err)
+		rule := NewResetParamRefRule(ctx, []*Expr{makePlan2Int64ConstExprWithType(-1)})
+		rebound, err := rule.ApplyExpr(prepared)
+		require.NoError(t, err)
+		require.Equal(t, direct.Typ.Id, rebound.Typ.Id, "explicit cast: %v", explicit)
+		require.Equal(t, direct.GetF().Func.Obj, rebound.GetF().Func.Obj)
+	}
+}

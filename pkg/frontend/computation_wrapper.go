@@ -3212,7 +3212,9 @@ func buildPlanForCompileRetry(
 	forcePrepare bool,
 	preparedRetry *preparedExecutionRetry,
 ) (*plan2.Plan, error) {
-	ctx = function.WithNoUnsignedSubtraction(ctx, mysql.HasSQLMode(sessionSQLMode(ses), "NO_UNSIGNED_SUBTRACTION"))
+	if ses != nil {
+		ctx = function.WithNoUnsignedSubtraction(ctx, mysql.HasSQLMode(sessionSQLMode(ses), "NO_UNSIGNED_SUBTRACTION"))
+	}
 	// No permission verification is required when retry execute buildPlan.
 	retryPlan, err := buildPlanWithPrepareMode(
 		ctx, ses, compilerContext, stmt, forcePrepare)
