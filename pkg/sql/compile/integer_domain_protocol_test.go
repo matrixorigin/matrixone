@@ -53,7 +53,7 @@ func TestIntegerArithmeticNegotiatesWorkerVersionAndFencesSender(t *testing.T) {
 		scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: value_scan.NewArgument(), Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: qry}}}
 		_, err = encodeRemoteScope(scope, c.proc)
 		require.ErrorContains(t, err, "remote destination")
-		client.version = defines.MORPCVersion65
+		client.version = defines.MORPCVersion66
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainIntegerDomainWorkers(qry))
@@ -64,8 +64,8 @@ func TestIntegerArithmeticNegotiatesWorkerVersionAndFencesSender(t *testing.T) {
 		require.NoError(t, wire.Unmarshal(data))
 		rt := moruntime.ServiceRuntime(c.proc.GetService())
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 65")
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 66")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion66)
 		client.version = defines.MORPCVersion64
 		_, err = encodeRemoteScope(scope, c.proc)
 		require.Error(t, err)

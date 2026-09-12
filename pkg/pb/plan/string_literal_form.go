@@ -189,6 +189,8 @@ const (
 	planJSONTypeID                   int32 = 62
 	binFunctionID                    int32 = 270
 	convFunctionID                   int32 = 367
+	asciiFunctionID                  int32 = 52
+	asciiInt32ResultTypeID           int32 = 22
 )
 
 // RemoteExpressionFeatures is the complete set of versioned expression
@@ -197,8 +199,10 @@ const (
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
 // MORPC v59. TypedConversionFunctions requires MORPC v64 because BIN/CONV
 // overload identities and their fixed-width execution contracts changed in
-// the same release. A struct makes compatibility call sites name every
-// capability instead of relying on positional booleans.
+// the same release. ASCIIInt32Result requires MORPC v65 because ASCII keeps
+// its overload IDs but changes its physical result vector from UINT8 to INT32.
+// A struct makes compatibility call sites name every capability instead of
+// relying on positional booleans.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool
@@ -206,6 +210,7 @@ type RemoteExpressionFeatures struct {
 	FormatNumericArguments   bool
 	TypedConversionFunctions bool
 	IntegerArithmeticDomains bool
+	ASCIIInt32Result         bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -213,7 +218,9 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
-		features.TypedConversionFunctions || features.IntegerArithmeticDomains
+		features.TypedConversionFunctions ||
+		features.ASCIIInt32Result ||
+		features.IntegerArithmeticDomains
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -252,10 +259,29 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.TypedConversionFunctions && isTypedConversionFunction(fn) {
 				features.TypedConversionFunctions = true
 			}
+			if !features.ASCIIInt32Result && isASCIIInt32Result(current) {
+				features.ASCIIInt32Result = true
+			}
 			return nil
 		})
 	})
 	return
+}
+
+// isASCIIInt32Result identifies the new physical result contract of ASCII.
+// Older serialized plans use the same overload IDs with UINT8 results, so the
+// result type must participate in the feature check; gating every ASCII call
+// would unnecessarily block compatible legacy plans during a rolling upgrade.
+func isASCIIInt32Result(expr *Expr) bool {
+	if expr == nil || expr.Typ.Id != asciiInt32ResultTypeID {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	return int32(fn.Func.Obj>>32) == asciiFunctionID ||
+		strings.EqualFold(fn.Func.GetObjName(), "ascii")
 }
 
 // RequiresMORPCVersion64TypedConversion reports whether an owner contains a
@@ -264,6 +290,13 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 func RequiresMORPCVersion64TypedConversion(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.TypedConversionFunctions, err
+}
+
+// RequiresMORPCVersion65ASCIIResult reports whether an owner contains the
+// signed INT physical result contract introduced for ASCII.
+func RequiresMORPCVersion65ASCIIResult(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.ASCIIInt32Result, err
 }
 
 // isTypedConversionFunction identifies only the BIN/CONV forms changed by the

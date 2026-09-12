@@ -32,7 +32,7 @@ func (c *Compile) constrainIntegerDomainWorkers(qry *plan.Query) error {
 	if err != nil || !features.IntegerArithmeticDomains {
 		return err
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion65)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion66)
 	if err != nil {
 		return err
 	}
@@ -47,12 +47,12 @@ func validateIntegerDomainDestination(proc *process.Process, p *pipeline.Pipelin
 	if p == nil || p.Node == nil {
 		return moerr.NewNotSupportedNoCtx("checked integer arithmetic requires a versioned remote destination")
 	}
-	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion65)
+	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion66)
 	if err != nil {
 		return err
 	}
 	if !supported {
-		return moerr.NewNotSupportedNoCtx("remote destination does not support checked integer arithmetic (MORPC version 65)")
+		return moerr.NewNotSupportedNoCtx("remote destination does not support checked integer arithmetic (MORPC version 66)")
 	}
 	return nil
 }

@@ -372,12 +372,12 @@ func preparedGroupConcatMaxLenFloor(
 	if err != nil {
 		return 0, err
 	}
-	limit, ok := value.(int64)
-	if !ok || limit < 4 {
+	limit, ok := groupConcatMaxLenAsUint64(value)
+	if !ok || limit < groupConcatMaxLenMinimum {
 		return 0, moerr.NewInternalErrorf(ctx, "invalid group_concat_max_len: %v", value)
 	}
-	if current := uint64(limit); current > prepareStmt.groupConcatMaxLenFloor {
-		return current, nil
+	if limit > prepareStmt.groupConcatMaxLenFloor {
+		return limit, nil
 	}
 	return prepareStmt.groupConcatMaxLenFloor, nil
 }
@@ -1579,9 +1579,9 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeConversionCandidate := false
 	// The planner records deferred overloads explicitly on the prepared plan.
 	// Carry this bounded metadata into execution instead of walking every
-	// expression tree for each EXECUTE. ABS always rebinds; BIT_COUNT starts in
-	// the binary-string default and keeps the last canonical numeric parameter
-	// category it observes.
+	// expression tree for each EXECUTE. ABS and SIGN always rebind; BIT_COUNT
+	// starts in the binary-string default and keeps the last canonical numeric
+	// parameter category it observes.
 	deferredNumericOverloadCandidate := len(prepareStmt.numericOverloadParamPositions) > 0
 	deferredBitCountOverloadCandidate := len(prepareStmt.bitCountOverloadParamPositions) > 0
 	runtimeNumericOverloadCandidate := deferredNumericOverloadCandidate &&

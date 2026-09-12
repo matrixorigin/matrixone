@@ -661,8 +661,8 @@ func initAsciiStringTestCase() []tcTemp {
 					[]string{"-23", "9999999", "-11"},
 					[]bool{false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{45, 57, 45},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{45, 57, 45},
 				[]bool{false, false, false}),
 		},
 	}
@@ -690,8 +690,8 @@ func initAsciiIntTestCase() []tcTemp {
 					[]int64{11},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{49},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{49},
 				[]bool{false}),
 		},
 	}
@@ -719,8 +719,8 @@ func initAsciiUintTestCase() []tcTemp {
 					[]uint64{11},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{49},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{49},
 				[]bool{false}),
 		},
 	}
@@ -737,6 +737,76 @@ func TestAsciiUint(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestAsciiRegisteredOverloadsReturnInt32(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name       string
+		input      types.Type
+		overloadID int32
+	}{
+		{name: "varchar", input: types.T_varchar.ToType(), overloadID: 0},
+		{name: "char", input: types.T_char.ToType(), overloadID: 1},
+		{name: "text", input: types.T_text.ToType(), overloadID: 2},
+		{name: "int8", input: types.T_int8.ToType(), overloadID: 3},
+		{name: "int16", input: types.T_int16.ToType(), overloadID: 4},
+		{name: "int32", input: types.T_int32.ToType(), overloadID: 5},
+		{name: "int64", input: types.T_int64.ToType(), overloadID: 6},
+		{name: "uint8", input: types.T_uint8.ToType(), overloadID: 7},
+		{name: "uint16", input: types.T_uint16.ToType(), overloadID: 8},
+		{name: "uint32", input: types.T_uint32.ToType(), overloadID: 9},
+		{name: "uint64", input: types.T_uint64.ToType(), overloadID: 10},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "ascii", []types.Type{test.input})
+			require.NoError(t, err)
+			require.Equal(t, types.T_int32, resolved.GetReturnType().Oid)
+
+			functionID, overloadID := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, int32(ASCII), functionID)
+			require.Equal(t, test.overloadID, overloadID)
+		})
+	}
+}
+
+func TestAsciiKeepsLegacyUint8ResultWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Run("string", func(t *testing.T) {
+		input := testutil.MakeVarlenaVector(
+			[][]byte{[]byte("A")}, nil, types.T_varchar.ToType(), proc.Mp())
+		defer input.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, AsciiString(
+			[]*vector.Vector{input}, result, proc, 1, nil))
+		require.Equal(t, []uint8{65}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
+	})
+	t.Run("signed integer", func(t *testing.T) {
+		input := testutil.MakeInt64Vector([]int64{11}, nil, proc.Mp())
+		defer input.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, AsciiInt[int64](
+			[]*vector.Vector{input}, result, proc, 1, nil))
+		require.Equal(t, []uint8{'1'}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
+	})
+	t.Run("unsigned integer", func(t *testing.T) {
+		input := testutil.MakeUint64Vector([]uint64{11}, nil, proc.Mp())
+		defer input.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, AsciiUint[uint64](
+			[]*vector.Vector{input}, result, proc, 1, nil))
+		require.Equal(t, []uint8{'1'}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
+	})
 }
 
 // ORD
@@ -980,6 +1050,8 @@ func TestQuoteHonorsSelectList(t *testing.T) {
 
 // SOUNDEX
 func initSoundexTestCase() []tcTemp {
+	lateGrowthInput := strings.Repeat("BEB", 4096) + strings.Repeat("BC", 64)
+	lateGrowthWant := "B2" + strings.Repeat("12", 63)
 	return []tcTemp{
 		{
 			info: "test soundex basic",
@@ -1007,12 +1079,12 @@ func initSoundexTestCase() []tcTemp {
 			info: "test soundex with non-alphabetic",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello123", "Test!@#", "123ABC"},
-					[]bool{false, false, false}),
+					[]string{"Hello123", "Test!@#", "123ABC", "123!", "123!ABC"},
+					[]bool{false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"H400", "T230", "A120"},
-				[]bool{false, false, false}),
+				[]string{"H400", "T230", "A120", "", "A120"},
+				[]bool{false, false, false, false, false}),
 		},
 		{
 			info: "test soundex empty string",
@@ -1022,7 +1094,7 @@ func initSoundexTestCase() []tcTemp {
 					[]bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"0000"},
+				[]string{""},
 				[]bool{false}),
 		},
 		{
@@ -1036,21 +1108,28 @@ func initSoundexTestCase() []tcTemp {
 				[]string{""},
 				[]bool{true}),
 		},
-		/*
-			// TODO: fix this test case, according to MySQL behavior,
-			// I have no idea what the correct result should be.
-			{
-				info: "test soundex with consecutive duplicates",
-				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(),
-						[]string{"LLL", "RRR", "MMM"},
-						[]bool{false, false, false}),
-				},
-				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-					[]string{"L000", "R000", "M000"},
-					[]bool{false, false, false}),
+		{
+			info: "test soundex with mixed NULL and non-NULL rows",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Pfister", "ignored", "Ashcraft"},
+					[]bool{false, true, false}),
 			},
-		*/
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"P236", "", "A2613"},
+				[]bool{false, true, false}),
+		},
+		{
+			info: "test soundex first-letter and discarded-letter duplicate suppression",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"LLL", "RRR", "MMM", "BEB", "BHB", "BWB", "B-B"},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"L000", "R000", "M000", "B000", "B000", "B000", "B000"},
+				[]bool{false, false, false, false, false, false, false}),
+		},
 		{
 			info: "test soundex with H and W",
 			inputs: []FunctionTestInput{
@@ -1073,6 +1152,17 @@ func initSoundexTestCase() []tcTemp {
 				[]string{"A000", "A100", "A120"},
 				[]bool{false, false, false}),
 		},
+		{
+			info: "test MySQL original Soundex and variable-length results",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Ashcraft", "Pfister", "Tymczak", "Quadratically", "pfister", "BDFJLMPR", "BDFJLMPRB", lateGrowthInput},
+					[]bool{false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"A2613", "P236", "T520", "Q36324", "P236", "B3124516", "B31245161", lateGrowthWant},
+				[]bool{false, false, false, false, false, false, false, false}),
+		},
 	}
 }
 
@@ -1085,6 +1175,21 @@ func TestSoundex(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestSoundexLongTextOutput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := strings.Repeat("BC", 32769)
+	want := "B" + strings.Repeat("21", 32768) + "2"
+
+	fcTC := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), []string{input}, []bool{false})},
+		NewFunctionTestResult(types.New(types.T_text, types.MaxLongTextLen, 0), false, []string{want}, []bool{false}),
+		Soundex,
+	)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("long TEXT Soundex result was truncated: %s", info))
 }
 
 func initStAsTextTestCase() []tcTemp {

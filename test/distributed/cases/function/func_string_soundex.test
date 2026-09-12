@@ -31,3 +31,41 @@ DROP TABLE t1;
 SELECT SOUNDEX('Smith') AS smith, SOUNDEX('Smythe') AS smythe;
 SELECT SOUNDEX('Robert') AS robert, SOUNDEX('Rupert') AS rupert;
 
+# MySQL original Soundex: first-code suppression and variable-length results.
+SELECT HEX(SOUNDEX('Ashcraft')) AS ashcraft, HEX(SOUNDEX('Pfister')) AS pfister, HEX(SOUNDEX('Tymczak')) AS tymczak, HEX(SOUNDEX('Quadratically')) AS quadratically, HEX(SOUNDEX('BDFJLMPR')) AS long_code, HEX(SOUNDEX('BDFJLMPRB')) AS capacity_plus_one;
+SELECT LENGTH(SOUNDEX(CONCAT(REPEAT('BEB', 4096), REPEAT('BC', 64)))) AS late_growth_len, SOUNDEX(CONCAT(REPEAT('BEB', 4096), REPEAT('BC', 64))) = CONCAT('B2', REPEAT('12', 63)) AS late_growth_exact;
+SELECT HEX(SOUNDEX('BEB')) AS vowel, HEX(SOUNDEX('BHB')) AS h, HEX(SOUNDEX('BWB')) AS w, HEX(SOUNDEX('B-B')) AS punctuation;
+SELECT HEX(SOUNDEX('')) = '' AS empty_string, HEX(SOUNDEX('123!')) = '' AS digits_only, HEX(SOUNDEX('123!ABC')) = HEX('A120') AS leading_non_alpha;
+SELECT SOUNDEX('pfister') = SOUNDEX('Pfister') AS case_insensitive;
+
+# Column, NULL, CHAR, and prepared execution paths.
+DROP TABLE IF EXISTS t_soundex_regression;
+CREATE TABLE t_soundex_regression(id INT PRIMARY KEY, v VARCHAR(50));
+INSERT INTO t_soundex_regression VALUES (1, 'Ashcraft'), (2, 'Pfister'), (3, 'Tymczak'), (4, 'Quadratically'), (5, '123!'), (6, NULL), (7, 'BEB'), (8, 'pfister');
+SELECT id, HEX(SOUNDEX(v)) AS code_hex, LENGTH(SOUNDEX(v)) AS code_len FROM t_soundex_regression ORDER BY id;
+DROP TABLE t_soundex_regression;
+DROP TABLE IF EXISTS t_soundex_char;
+CREATE TABLE t_soundex_char(v CHAR(8));
+INSERT INTO t_soundex_char VALUES ('Pfister');
+SELECT HEX(SOUNDEX(v)) AS code_hex FROM t_soundex_char;
+DROP TABLE t_soundex_char;
+PREPARE soundex_stmt FROM 'SELECT HEX(SOUNDEX(CAST(? AS VARCHAR(32)))) AS code_hex';
+SET @soundex_input='Pfister';
+EXECUTE soundex_stmt USING @soundex_input;
+DEALLOCATE PREPARE soundex_stmt;
+SET @soundex_input=NULL;
+
+# A TEXT input can produce a result wider than VARCHAR's declared 65535-byte width.
+DROP TABLE IF EXISTS t_soundex_long;
+CREATE TABLE t_soundex_long(v TEXT);
+INSERT INTO t_soundex_long VALUES (REPEAT('BC', 32769));
+SELECT LENGTH(SOUNDEX(v)) AS code_len, HEX(LEFT(SOUNDEX(v), 16)) = HEX('B212121212121212') AS prefix_ok, HEX(RIGHT(SOUNDEX(v), 16)) = HEX('1212121212121212') AS suffix_ok FROM t_soundex_long;
+DROP TABLE IF EXISTS t_soundex_ctas_65535;
+CREATE TABLE t_soundex_ctas_65535 AS SELECT SOUNDEX(CAST(CONCAT(REPEAT('BC', 32767), 'B') AS VARCHAR(65535))) AS code FROM t_soundex_long LIMIT 1;
+SELECT LENGTH(code) AS code_len FROM t_soundex_ctas_65535;
+DROP TABLE t_soundex_ctas_65535;
+DROP TABLE IF EXISTS t_soundex_ctas_65536;
+CREATE TABLE t_soundex_ctas_65536 AS SELECT SOUNDEX(CAST(REPEAT('BC', 32768) AS MEDIUMTEXT)) AS code FROM t_soundex_long LIMIT 1;
+SELECT LENGTH(code) AS code_len FROM t_soundex_ctas_65536;
+DROP TABLE t_soundex_ctas_65536;
+DROP TABLE t_soundex_long;
