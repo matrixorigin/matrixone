@@ -90,9 +90,14 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 		}()
 	}
 
-	// Pass WITH clause from INSERT to SELECT if present
+	// Pass WITH clause from INSERT to SELECT if present. The parsed AST can be
+	// retained by PREPARE, so keep the binding-specific rewrite off that shared
+	// wrapper.
+	rowsForBinding := stmt.Rows
 	if stmt.With != nil && stmt.Rows != nil && stmt.Rows.With == nil {
-		stmt.Rows.With = stmt.With
+		rowsCopy := *stmt.Rows
+		rowsCopy.With = stmt.With
+		rowsForBinding = &rowsCopy
 	}
 
 	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForInsertStmt
@@ -120,7 +125,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false)
+	lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err := builder.initInsertReplaceStmt(bindCtx, rowsForBinding, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false)
 	if err != nil {
 		return 0, err
 	}
@@ -4442,40 +4447,86 @@ func (builder *QueryBuilder) rejectDuplicateInsertColumns(astCols tree.Identifie
 	return nil
 }
 
+// implicitInsertValueColumns returns the ordinary insert mapping and, when
+// needed, the full non-hidden input column sequence. VALUES without a column
+// list has a syntactic position for every visible column, including generated
+// columns, while the existing write path still omits generated columns.
+func implicitInsertValueColumns(tableDef *plan.TableDef) (tree.IdentifierList, []string, bool) {
+	insertColumns := make([]string, 0, len(tableDef.Cols))
+	hasGenerated := false
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			continue
+		}
+		if col.GeneratedCol != nil {
+			hasGenerated = true
+		} else {
+			insertColumns = append(insertColumns, col.Name)
+		}
+	}
+	if !hasGenerated {
+		return nil, insertColumns, false
+	}
+
+	columns := make(tree.IdentifierList, 0, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col.Hidden {
+			continue
+		}
+		columns = append(columns, tree.Identifier(col.Name))
+	}
+	return columns, insertColumns, true
+}
+
+func validateImplicitInsertValuesArity(ctx context.Context, rows []tree.Exprs, columnCount int) error {
+	for rowIdx, row := range rows {
+		if len(row) != columnCount {
+			return moerr.NewWrongValueCountOnRow(ctx, rowIdx+1)
+		}
+	}
+	return nil
+}
+
 // stripGeneratedDefaultCols removes generated columns from the INSERT column list
 // when their corresponding VALUES are all DEFAULT. This supports MySQL-compatible
-// syntax: INSERT INTO t(gen_col) VALUES(DEFAULT).
-// Non-DEFAULT values for generated columns still produce an error.
-func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierList, astRows *tree.Select, tableDef *plan.TableDef) (tree.IdentifierList, error) {
+// syntax: INSERT INTO t(gen_col) VALUES(DEFAULT). Non-DEFAULT values for generated
+// columns still produce an error. When rewriting rows, it returns a new Select
+// wrapper so a prepared statement's retained AST is not mutated.
+func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierList, astRows *tree.Select, tableDef *plan.TableDef) (tree.IdentifierList, *tree.Select, error) {
 	// Validate the original list before generated columns can be removed. This
 	// preserves the SQL-level duplicate-column contract independently of the
 	// generated-column DEFAULT rewrite below.
 	if err := builder.rejectDuplicateInsertColumns(astCols); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// Find positions of generated columns in the explicit column list
-	genPositions := make(map[int]bool)
+	// Find generated-column positions in the provided or synthesized column list.
+	genPositions := make([]bool, len(astCols))
+	generatedColumnCount := 0
 	for i, col := range astCols {
 		colName := strings.ToLower(string(col))
 		if idx, ok := tableDef.Name2ColIndex[colName]; ok {
 			if tableDef.Cols[idx].GeneratedCol != nil {
 				genPositions[i] = true
+				generatedColumnCount++
 			}
 		}
 	}
 
-	if len(genPositions) == 0 {
-		return astCols, nil
+	if generatedColumnCount == 0 {
+		return astCols, astRows, nil
 	}
 
 	// For ValuesClause, validate that all values at generated column positions are DEFAULT
 	vc, isValues := astRows.Select.(*tree.ValuesClause)
 	if !isValues {
 		// For INSERT...SELECT with generated columns in column list, block it
-		for pos := range genPositions {
+		for pos, isGenerated := range genPositions {
+			if !isGenerated {
+				continue
+			}
 			colName := string(astCols[pos])
-			return nil, moerr.NewInvalidInputf(builder.GetContext(),
+			return nil, nil, moerr.NewInvalidInputf(builder.GetContext(),
 				"the value specified for generated column '%s' in table '%s' is not allowed",
 				colName, tableDef.Name)
 		}
@@ -4485,13 +4536,16 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 		if row == nil {
 			continue // all-defaults row
 		}
-		for pos := range genPositions {
+		for pos, isGenerated := range genPositions {
+			if !isGenerated {
+				continue
+			}
 			if pos >= len(row) {
-				return nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), rowIdx+1)
+				return nil, nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), rowIdx+1)
 			}
 			if _, ok := row[pos].(*tree.DefaultVal); !ok {
 				colName := string(astCols[pos])
-				return nil, moerr.NewInvalidInputf(builder.GetContext(),
+				return nil, nil, moerr.NewInvalidInputf(builder.GetContext(),
 					"the value specified for generated column '%s' in table '%s' is not allowed",
 					colName, tableDef.Name)
 			}
@@ -4501,7 +4555,7 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	// Strip generated columns from column list and values.
 	// Build a new ValuesClause to avoid mutating the original AST
 	// (important for PREPARE + multiple EXECUTE).
-	newCols := make(tree.IdentifierList, 0, len(astCols)-len(genPositions))
+	newCols := make(tree.IdentifierList, 0, len(astCols)-generatedColumnCount)
 	for i, col := range astCols {
 		if !genPositions[i] {
 			newCols = append(newCols, col)
@@ -4512,9 +4566,12 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 		if row == nil {
 			continue
 		}
-		newRow := make(tree.Exprs, 0, len(row)-len(genPositions))
+		newRow := make(tree.Exprs, 0, len(row)-generatedColumnCount)
 		for i, val := range row {
-			if !genPositions[i] {
+			// Keep excess values intact so the ordinary tuple-arity check below
+			// reports ER_WRONG_VALUE_COUNT_ON_ROW instead of panicking. This is
+			// reachable for an explicit column list followed by an over-wide tuple.
+			if i >= len(genPositions) || !genPositions[i] {
 				newRow = append(newRow, val)
 			}
 		}
@@ -4522,9 +4579,10 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	}
 	newVC := *vc
 	newVC.Rows = newRows
-	astRows.Select = &newVC
+	newRowsAST := *astRows
+	newRowsAST.Select = &newVC
 
-	return newCols, nil
+	return newCols, &newRowsAST, nil
 }
 
 func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool, colRefAsDefault bool) (int32, map[string]int32, []bool, int32, error) {
@@ -4536,24 +4594,44 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 
 	// var uniqueCheckOnAutoIncr string
 	var insertColumns []string
+	rowsForInsert := astRows
 
 	// Strip generated columns with DEFAULT values from INSERT column list.
 	// MySQL allows INSERT INTO t(gen_col) VALUES(DEFAULT) — silently ignore those columns.
 	cleanedCols := astCols
+	implicitValueColumnsHandled := false
 	if astCols != nil {
-		cleanedCols, err = builder.stripGeneratedDefaultCols(astCols, astRows, tableDef)
+		cleanedCols, rowsForInsert, err = builder.stripGeneratedDefaultCols(astCols, rowsForInsert, tableDef)
 		if err != nil {
 			return 0, nil, nil, -1, err
+		}
+	} else if values, ok := astRows.Select.(*tree.ValuesClause); ok {
+		implicitColumns, implicitInsertColumns, hasGenerated := implicitInsertValueColumns(tableDef)
+		insertColumns = implicitInsertColumns
+		implicitValueColumnsHandled = true
+		if hasGenerated && len(values.Rows) > 0 && values.Rows[0] != nil {
+			// Validate the full visible tuple width before inspecting generated
+			// values. This prevents omitting generated positions from making a
+			// short implicit VALUES tuple appear valid.
+			if err = validateImplicitInsertValuesArity(builder.GetContext(), values.Rows, len(implicitColumns)); err != nil {
+				return 0, nil, nil, -1, err
+			}
+			cleanedCols, rowsForInsert, err = builder.stripGeneratedDefaultCols(implicitColumns, rowsForInsert, tableDef)
+			if err != nil {
+				return 0, nil, nil, -1, err
+			}
 		}
 	}
 
 	//var ifInsertFromUniqueColMap map[string]bool
-	if insertColumns, err = builder.getInsertColsFromStmt(cleanedCols, tableDef); err != nil {
-		return 0, nil, nil, -1, err
+	if !implicitValueColumnsHandled {
+		if insertColumns, err = builder.getInsertColsFromStmt(cleanedCols, tableDef); err != nil {
+			return 0, nil, nil, -1, err
+		}
 	}
 
 	var astSelect *tree.Select
-	switch selectImpl := astRows.Select.(type) {
+	switch selectImpl := rowsForInsert.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
 	case *tree.ValuesClause:
 		isAllDefault := false
