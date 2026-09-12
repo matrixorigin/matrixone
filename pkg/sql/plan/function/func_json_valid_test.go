@@ -3726,7 +3726,7 @@ func TestJsonArrayIgnoreAllRows(t *testing.T) {
 	vec := runJsonFunctionWithSelectList(t, proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_json.ToType(),
-				[]string{``, ``},
+				makeJSONEncodedFromText(t, []string{`null`, `null`}, nil),
 				[]bool{false, false}),
 		},
 		types.T_json.ToType(), newOpBuiltInJsonArray().jsonArray, selectList)
@@ -3741,7 +3741,7 @@ func TestJsonObjectIgnoreAllRows(t *testing.T) {
 	vec := runJsonFunctionWithSelectList(t, proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_json.ToType(),
-				[]string{``, ``},
+				makeJSONEncodedFromText(t, []string{`null`, `null`}, nil),
 				[]bool{false, false}),
 			NewFunctionTestInput(types.T_int64.ToType(),
 				[]int64{1, 2},

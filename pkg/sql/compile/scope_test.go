@@ -76,7 +76,7 @@ import (
 
 func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	sessionMaxLen := int64(5)
+	sessionMaxLen := uint64(5)
 	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
 		require.Equal(t, "group_concat_max_len", name)
 		require.True(t, system)

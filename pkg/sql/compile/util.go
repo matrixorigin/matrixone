@@ -75,6 +75,42 @@ func resolveVariableOrDefault(proc *process.Process, name string, isSystemVar, i
 		"resolveVariableOrDefault: no resolver available for %q (proc resolver and executor.DefaultResolveVariable both nil)", name)
 }
 
+func groupConcatMaxLenAsUint64(value any) (uint64, bool) {
+	switch v := value.(type) {
+	case int:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	case uint:
+		return uint64(v), true
+	case int8:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	case uint8:
+		return uint64(v), true
+	case int16:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	case uint16:
+		return uint64(v), true
+	case int32:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	case uint32:
+		return uint64(v), true
+	case int64:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	case uint64:
+		return v, true
+	}
+	return 0, false
+}
+
 const (
 	INDEX_TYPE_PRIMARY  = "PRIMARY"
 	INDEX_TYPE_UNIQUE   = "UNIQUE"
