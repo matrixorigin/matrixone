@@ -134,6 +134,9 @@ func TestGroupConcatMaxLenAssignmentBounds(t *testing.T) {
 		{name: "negative one", value: int64(-1), want: 4, wantWarning: true, warningValue: "-1"},
 		{name: "default", value: uint64(1024), want: 1024},
 		{name: "numeric string", value: "5", want: 5},
+		{name: "signed numeric string at minimum", value: "+4", want: 4},
+		{name: "signed numeric string at int64 maximum", value: "+9223372036854775807", want: uint64(math.MaxInt64)},
+		{name: "signed numeric string at uint64 maximum", value: "+18446744073709551615", want: uint64(math.MaxUint64)},
 	}
 
 	for _, tt := range tests {
@@ -193,9 +196,13 @@ func TestNormalizeGroupConcatMaxLenValue(t *testing.T) {
 		{name: "float64 fractional", value: float64(3.5), want: float64(3.5)},
 		{name: "unsigned string below minimum", value: "3", want: uint64(4), wasTruncated: true},
 		{name: "unsigned string", value: "5", want: uint64(5)},
+		{name: "signed string at minimum", value: "+4", want: uint64(4)},
+		{name: "signed string above minimum", value: "+5", want: uint64(5)},
+		{name: "signed string at uint64 maximum", value: "+18446744073709551615", want: uint64(math.MaxUint64)},
 		{name: "signed string below minimum", value: "-1", want: uint64(4), wasTruncated: true},
 		{name: "invalid string", value: "invalid", want: "invalid"},
 		{name: "overflow string", value: "18446744073709551616", want: "18446744073709551616"},
+		{name: "signed overflow string", value: "+18446744073709551616", want: "+18446744073709551616"},
 		{name: "unsupported type", value: true, want: true},
 	}
 
@@ -209,16 +216,23 @@ func TestNormalizeGroupConcatMaxLenValue(t *testing.T) {
 }
 
 func TestGroupConcatMaxLenFailedAssignmentKeepsPreviousValue(t *testing.T) {
-	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
-	assert.NoError(t, ses.SetSessionSysVar(context.Background(), groupConcatMaxLenVariable, int64(1024)))
+	for _, value := range []string{
+		"invalid",
+		"18446744073709551616",
+		"+18446744073709551616",
+	} {
+		t.Run(value, func(t *testing.T) {
+			ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+			assert.NoError(t, ses.SetSessionSysVar(context.Background(), groupConcatMaxLenVariable, int64(1024)))
 
-	err := ses.SetSessionSysVar(
-		context.Background(), groupConcatMaxLenVariable, "18446744073709551616")
-	assert.Error(t, err)
-	got, getErr := ses.GetSessionSysVar(groupConcatMaxLenVariable)
-	assert.NoError(t, getErr)
-	assert.Equal(t, uint64(1024), got)
-	assert.Empty(t, ses.diagnosticsSnapshot().codes)
+			err := ses.SetSessionSysVar(context.Background(), groupConcatMaxLenVariable, value)
+			assert.Error(t, err)
+			got, getErr := ses.GetSessionSysVar(groupConcatMaxLenVariable)
+			assert.NoError(t, getErr)
+			assert.Equal(t, uint64(1024), got)
+			assert.Empty(t, ses.diagnosticsSnapshot().codes)
+		})
+	}
 }
 
 func TestCTEMaxMemoryBytesDefinition(t *testing.T) {

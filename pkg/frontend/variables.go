@@ -149,7 +149,11 @@ func normalizeGroupConcatMaxLenValue(value interface{}) (interface{}, bool) {
 			return uint64(groupConcatMaxLenMinimum), true
 		}
 	case string:
-		if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+		unsignedValue := v
+		if strings.HasPrefix(unsignedValue, "+") {
+			unsignedValue = unsignedValue[1:]
+		}
+		if parsed, err := strconv.ParseUint(unsignedValue, 10, 64); err == nil {
 			if parsed < groupConcatMaxLenMinimum {
 				return uint64(groupConcatMaxLenMinimum), true
 			}

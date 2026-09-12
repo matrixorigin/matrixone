@@ -38,6 +38,29 @@ set session group_concat_max_len = default;
 show warnings;
 select @@session.group_concat_max_len;
 
--- A rejected assignment must not replace the last valid session value.
+-- Explicitly signed positive strings follow the same unsigned range checks.
+set session group_concat_max_len = '+4';
+show warnings;
+select @@session.group_concat_max_len;
+
+set session group_concat_max_len = '+9223372036854775807';
+show warnings;
+select @@session.group_concat_max_len;
+
+set session group_concat_max_len = '+18446744073709551615';
+show warnings;
+select @@session.group_concat_max_len;
+
+set session group_concat_max_len = default;
+show warnings;
+select @@session.group_concat_max_len;
+
+-- A rejected assignment must not replace the last valid session value or add a warning.
+set session group_concat_max_len = 'invalid';
+select @@session.group_concat_max_len;
+
 set session group_concat_max_len = '18446744073709551616';
+select @@session.group_concat_max_len;
+
+set session group_concat_max_len = '+18446744073709551616';
 select @@session.group_concat_max_len;

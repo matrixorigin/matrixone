@@ -11072,6 +11072,45 @@ func TestSetGlobalSysVar(t *testing.T) {
 		convey.So(info.msgs, convey.ShouldResemble,
 			[]string{groupConcatMaxLenTruncationWarning(int64(0))})
 
+		globalControls := []struct {
+			value   string
+			persist string
+			want    uint64
+		}{
+			{value: "+4", persist: "4", want: 4},
+			{value: "+9223372036854775807", persist: "9223372036854775807", want: uint64(9223372036854775807)},
+			{value: "+18446744073709551615", persist: "18446744073709551615", want: ^uint64(0)},
+		}
+		for _, tc := range globalControls {
+			ses0.resetDiagnostics()
+			bh.sql2result[getSqlForInsertSysVarWithAccount(
+				sysAccountID, sysAccountName, groupConcatMaxLenVariable, tc.persist)] = nil
+			err = ses0.SetGlobalSysVar(context.TODO(), groupConcatMaxLenVariable, tc.value)
+			convey.So(err, convey.ShouldBeNil)
+			value, err = ses0.GetGlobalSysVar(groupConcatMaxLenVariable)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(value, convey.ShouldEqual, tc.want)
+			info = ses0.diagnosticsSnapshot()
+			convey.So(info.codes, convey.ShouldBeEmpty)
+			convey.So(info.msgs, convey.ShouldBeEmpty)
+		}
+
+		for _, invalid := range []string{
+			"invalid",
+			"18446744073709551616",
+			"+18446744073709551616",
+		} {
+			ses0.resetDiagnostics()
+			err = ses0.SetGlobalSysVar(context.TODO(), groupConcatMaxLenVariable, invalid)
+			convey.So(err, convey.ShouldNotBeNil)
+			value, err = ses0.GetGlobalSysVar(groupConcatMaxLenVariable)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(value, convey.ShouldEqual, ^uint64(0))
+			info = ses0.diagnosticsSnapshot()
+			convey.So(info.codes, convey.ShouldBeEmpty)
+			convey.So(info.msgs, convey.ShouldBeEmpty)
+		}
+
 		err = ses0.SetGlobalSysVar(context.TODO(), "not exists sys var", "xxxx")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
