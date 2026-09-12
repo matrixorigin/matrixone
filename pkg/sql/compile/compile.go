@@ -10445,6 +10445,7 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 	return false
 }
 
-// SetGroupConcatMaxLenFloor binds the immutable prepared-statement value before
-// physical compilation. Zero keeps ordinary statements fully dynamic.
+// SetGroupConcatMaxLenFloor binds the prepared statement's execution floor
+// before physical compilation or Compile.Reset. Zero keeps ordinary statements
+// fully dynamic.
 func (c *Compile) SetGroupConcatMaxLenFloor(floor uint64) { c.groupConcatMaxLenFloor = floor }

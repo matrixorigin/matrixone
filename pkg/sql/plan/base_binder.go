@@ -2919,12 +2919,16 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 			"ordered-set percentile window functions")
 	}
 	// Resolve ambiguous scalar numeric overloads while the statement is being
-	// prepared. The parameter itself remains a ParamRef under the DOUBLE cast;
-	// ABS records this fallback so execution can rebind integer protocol values
-	// exactly, while SLEEP keeps the stable DOUBLE domain for the cached plan.
+	// prepared. The parameter itself remains a ParamRef under the selected
+	// numeric cast. ABS records this fallback so execution can rebind integer
+	// protocol values exactly, SLEEP keeps the stable DOUBLE domain for the
+	// cached plan, and CHAR keeps a numeric context for prepared parameters
+	// without changing the ordinary string-prefix semantics of direct CHAR
+	// calls.
 	if b.builder != nil && b.builder.isPrepareStatement {
 		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
-			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sleep")) {
+			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sleep") ||
+				strings.EqualFold(funcName, "char")) {
 			hasPreparedParam, err := b.hasPreparedNumericParamExprs(astExpr.Exprs, depth)
 			if err != nil {
 				return nil, err
@@ -3019,6 +3023,17 @@ func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
 	// ordinary DOUBLE expressions.
 	if argCount == 1 && (strings.EqualFold(name, "abs") || strings.EqualFold(name, "sleep")) {
 		typ := types.T_float64.ToType()
+		target := makePlan2Type(&typ)
+		return &target, true
+	}
+	// CHAR has integer and string overload behavior rather than a single
+	// ordinary numeric overload. A prepared marker has no value domain at
+	// PREPARE time, so bind marker-bearing arguments in an integer context and
+	// let execution-time specialization restore the SQL value's actual numeric
+	// source (DECIMAL, approximate string-prefix, BOOL, or an integer). Direct
+	// string arguments do not enter this path and retain CHAR's prefix parsing.
+	if argCount > 0 && strings.EqualFold(name, "char") {
+		typ := types.T_int64.ToType()
 		target := makePlan2Type(&typ)
 		return &target, true
 	}
@@ -3268,10 +3283,11 @@ func containsExplicitFloatCastInSelect(stmt tree.SelectStatement) bool {
 
 // bindPreparedNumericFuncExpr gives prepared numeric function arguments the
 // same static context as prepared arithmetic. SUM/AVG use the inferred numeric
-// domain, while NTILE requires an integer domain. ParamRef remains TEXT for
+// domain, NTILE requires an integer domain, and CHAR uses an integer domain
+// only for arguments that contain a prepared marker. ParamRef remains TEXT for
 // transport and an explicit cast materializes the computation type.
 // Non-parameter expressions stay on their original binding path, so ordinary
-// string inputs continue to be rejected by function overload resolution.
+// string inputs continue to use their function-specific string semantics.
 func (b *baseBinder) bindPreparedNumericFuncExpr(
 	name string,
 	astArgs []tree.Expr,
@@ -3280,6 +3296,26 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	target, ok := preparedNumericFunctionTarget(name, len(astArgs))
 	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
+	}
+	if strings.EqualFold(name, "char") {
+		args := make([]*plan.Expr, len(astArgs))
+		for i, astArg := range astArgs {
+			hasPreparedParam, err := b.hasPreparedNumericParamExprs([]tree.Expr{astArg}, depth)
+			if err != nil {
+				return nil, err
+			}
+			if hasPreparedParam {
+				args[i], err = b.bindNumericExprWithContext(astArg, depth, target)
+			} else {
+				args[i], err = b.impl.BindExpr(astArg, depth, false)
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		return bindBoundFuncExprAndConstFold(
+			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+		)
 	}
 
 	// Binding can normalize the parsed CAST node in place. Snapshot the user's
@@ -6052,6 +6088,15 @@ func bindFuncExprImplByPlanExpr(
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
+				} else if name == "char" &&
+					(argsType[idx].Oid == types.T_float32 || argsType[idx].Oid == types.T_float64) &&
+					castType.Oid == types.T_int64 {
+					// MySQL's CHAR(float) uses the DOUBLE round-to-even contract.
+					// The ordinary implicit float-to-integer cast is intentionally
+					// round-half-away-from-zero for other SQL expressions, so keep this
+					// correction local to CHAR instead of changing global arithmetic or
+					// cast semantics.
+					args[idx], err = appendExplicitCastBeforeExpr(ctx, args[idx], typ)
 				} else if mysqlNumericPrefixBitwiseArg(name, idx, len(args), argsType[idx], castType) ||
 					mysqlNumericPrefixFunctionArg(name, idx, len(args), argsType[idx], castType) {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
