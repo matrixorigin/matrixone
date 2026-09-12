@@ -2093,8 +2093,8 @@ func validateRemoteExpressionPipelineProtocol(
 			"typed BIN/CONV execution requires MORPC protocol version 64",
 		)
 	}
-	if features.RowDependentConvBases && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion66) {
-		return moerr.NewNotSupportedNoCtx("row-dependent CONV bases require MORPC protocol version 66")
+	if features.RowDependentConvBases && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion67) {
+		return moerr.NewNotSupportedNoCtx("row-dependent CONV bases require MORPC protocol version 67")
 	}
 	if features.ASCIIInt32Result &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion65) {

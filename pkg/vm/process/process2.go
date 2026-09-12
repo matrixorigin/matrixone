@@ -228,6 +228,7 @@ func (proc *Process) ResetQueryContext() {
 		proc.Base.sqlContext.queryCancel()
 		proc.Base.sqlContext.queryCancel = nil
 	}
+	proc.ResetGroupConcatInputRowCounters()
 	proc.doPrepareForRunningWithoutPipeline()
 }
 

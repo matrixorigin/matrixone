@@ -32,7 +32,7 @@ func (c *Compile) constrainConvBasesWorkers(qry *plan.Query) error {
 	if err != nil || !features.RowDependentConvBases {
 		return err
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion66)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion67)
 	if err != nil {
 		return err
 	}
@@ -47,12 +47,12 @@ func validateConvBasesDestination(proc *process.Process, p *pipeline.Pipeline) e
 	if p == nil || p.Node == nil {
 		return moerr.NewNotSupportedNoCtx("row-dependent CONV bases requires a versioned remote destination")
 	}
-	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion66)
+	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion67)
 	if err != nil {
 		return err
 	}
 	if !supported {
-		return moerr.NewNotSupportedNoCtx("remote destination does not support row-dependent CONV bases (MORPC version 66)")
+		return moerr.NewNotSupportedNoCtx("remote destination does not support row-dependent CONV bases (MORPC version 67)")
 	}
 	return nil
 }

@@ -4073,10 +4073,13 @@ var supportedStringBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn:    stringDomainFixedTypeMatch,
 
+		// Invalid inputs produce execution-attempt diagnostics, so constants must
+		// not be evaluated while planning.
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_blob},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
@@ -4087,6 +4090,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
@@ -4097,6 +4101,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_char},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
@@ -4107,6 +4112,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_text},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
