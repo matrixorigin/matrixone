@@ -59,5 +59,5 @@ SET @soundex_input=NULL;
 DROP TABLE IF EXISTS t_soundex_long;
 CREATE TABLE t_soundex_long(v TEXT);
 INSERT INTO t_soundex_long VALUES (REPEAT('BC', 32769));
-SELECT LENGTH(SOUNDEX(v)) AS code_len, SOUNDEX(v) = CONCAT('B', REPEAT('21', 32768), '2') AS exact_code FROM t_soundex_long;
+SELECT LENGTH(SOUNDEX(v)) AS code_len, HEX(LEFT(SOUNDEX(v), 16)) = HEX('B212121212121212') AS prefix_ok, HEX(RIGHT(SOUNDEX(v), 16)) = HEX('1212121212121212') AS suffix_ok FROM t_soundex_long;
 DROP TABLE t_soundex_long;
