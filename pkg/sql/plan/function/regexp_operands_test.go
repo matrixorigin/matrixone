@@ -1,0 +1,309 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package function
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+)
+
+// Expectations come from MySQL 8.4.8, not from the execution-domain helpers.
+// Static acceptance has its own matrix in TestRegexpStringDomainCheckModeMatrix:
+// these vectors exercise only the runtime contract after successful binding.
+func TestRegexpIndependentOperandRoles(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	text := types.T_varchar.ToType()
+	integer := types.T_int64.ToType()
+	for _, source := range []types.StringSource{
+		types.StringSourceExpression, types.StringSourceLiteral,
+		types.StringSourceUserVariable, types.StringSourceSQLPrepare, types.StringSourceCOMStmt,
+	} {
+		for mask := 0; mask < 4; mask++ {
+			subjectBinary, patternBinary := mask&1 != 0, mask&2 != 0
+			resultBinary := mask != 0 && source != types.StringSourceSQLPrepare && source != types.StringSourceCOMStmt
+			for _, name := range []string{"reg_match", "not_reg_match", "regexp_like", "regexp_instr", "regexp_substr", "regexp_replace"} {
+				minArity, maxArity := 2, 2
+				switch name {
+				case "regexp_like":
+					maxArity = 3
+				case "regexp_instr":
+					maxArity = 5
+				case "regexp_substr":
+					maxArity = 4
+				case "regexp_replace":
+					minArity, maxArity = 3, 5
+				}
+				for arity := minArity; arity <= maxArity; arity++ {
+					t.Run(fmt.Sprintf("source_%d/mask_%d/%s_%d", source, mask, name, arity), func(t *testing.T) {
+						op := newOpBuiltInRegexp()
+						pattern := "é"
+						var fn fEvalFn
+						var expected FunctionTestResult
+						equal := subjectBinary == patternBinary
+						switch name {
+						case "reg_match":
+							fn = op.builtInRegMatch
+							expected = NewFunctionTestResult(types.T_bool.ToType(), false, []bool{equal, false}, []bool{false, true})
+						case "not_reg_match":
+							fn = op.builtInNotRegMatch
+							expected = NewFunctionTestResult(types.T_bool.ToType(), false, []bool{!equal, false}, []bool{false, true})
+						case "regexp_like":
+							fn = op.builtInRegexpLike
+							expected = NewFunctionTestResult(types.T_bool.ToType(), false, []bool{equal, false}, []bool{false, true})
+						case "regexp_instr":
+							fn, pattern = op.builtInRegexpInstr, "a"
+							position := int64(2)
+							if subjectBinary {
+								position = 3
+							}
+							expected = NewFunctionTestResult(integer, false, []int64{position, 0}, []bool{false, true})
+						case "regexp_substr":
+							fn, pattern = op.builtInRegexpSubstr, "."
+							value := "é"
+							if resultBinary {
+								value = "\xe9"
+							}
+							if subjectBinary {
+								value = "Ã"
+								if resultBinary {
+									value = "\xc3"
+								}
+							}
+							if arity >= 3 {
+								value = "a"
+								if subjectBinary {
+									value = "©"
+									if resultBinary {
+										value = "\xa9"
+									}
+								}
+							}
+							expected = NewFunctionTestResult(text, false, []string{value, ""}, []bool{false, true})
+						case "regexp_replace":
+							fn, pattern = op.builtInRegexpReplace, "."
+							value := "XX"
+							if subjectBinary {
+								value = "XXX"
+							}
+							expected = NewFunctionTestResult(text, false, []string{value, ""}, []bool{false, true})
+						}
+						inputs := []FunctionTestInput{
+							NewFunctionTestInput(text, []string{"éa", ""}, []bool{false, true}),
+							NewFunctionTestInput(text, []string{pattern, pattern}, nil),
+						}
+						if name == "regexp_replace" {
+							inputs = append(inputs, NewFunctionTestInput(text, []string{"X", "X"}, nil))
+						}
+						for len(inputs) < arity {
+							if name == "regexp_like" {
+								inputs = append(inputs, NewFunctionTestInput(text, []string{"c", "c"}, nil))
+							} else if name == "regexp_instr" && len(inputs) == 4 {
+								inputs = append(inputs, NewFunctionTestInput(types.T_int8.ToType(), []int8{0, 0}, nil))
+							} else {
+								value := int64(1)
+								if len(inputs) == 2 {
+									value = 2
+								}
+								if name == "regexp_replace" && len(inputs) == 4 {
+									value = 0
+								}
+								inputs = append(inputs, NewFunctionTestInput(integer, []int64{value, value}, nil))
+							}
+						}
+						test := NewFunctionTestCase(proc, inputs, expected, fn)
+						for position, binary := range []bool{subjectBinary, patternBinary} {
+							require.NoError(t, test.parameters[position].SetStringSource(source))
+							if binary {
+								require.NoError(t, test.parameters[position].SetRuntimeStringDomainWithMP(types.RuntimeStringBinary, proc.Mp()))
+							}
+						}
+						ok, info := test.Run()
+						require.True(t, ok, info)
+						if name == "regexp_substr" || name == "regexp_replace" {
+							require.Equal(t, resultBinary, test.GetResultVectorDirectly().GetIsBinaryStringAt(0))
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestRegexpPredicateInvalidTextPrefix(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	for _, tc := range []struct {
+		pattern, subject string
+		want             bool
+	}{
+		{"a", "\xffa", false},
+		{"^a", "a\xff", true},
+		{"a$", "a\xff", true},
+		{".", "\xffa", false},
+		{"a", "a\xff", true},
+		{"z", "a\xff", false},
+	} {
+		reg, err := op.regMap.getRegularMatcherForMatchWithMode(tc.pattern, false)
+		require.NoError(t, err)
+		got, err := regexpMatchTextWithValidPrefix(reg, tc.subject)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got, tc)
+	}
+}
+
+func TestRegexpOutputEncoding(t *testing.T) {
+	for _, tc := range []struct{ input, prefix string }{
+		{"ASCII", "ASCII"}, {"éa", "éa"}, {"\xffa", ""}, {"a\xffb", "a"}, {"é\xc3", "é"},
+		{"a\xe0b", "a"}, {"a\xf0bb", "a"}, {"a\xf5b", "a"},
+	} {
+		prefix, err := regexpTextPrefix(tc.input)
+		require.NoError(t, err)
+		require.Equal(t, tc.prefix, prefix)
+	}
+	require.Equal(t, string([]byte{0x7f})+"\\x80", regexpEscapedConversionValue(string([]byte{0x7f, 0x80})))
+	_, escapedErr := regexpTextPrefix("a\xc3b")
+	require.EqualError(t, escapedErr, "Cannot convert string 'a\\xC3b' from utf8mb4 to utf16le")
+	_, escapedErr = regexpTextPrefix("a\\\xc3b")
+	require.EqualError(t, escapedErr, "Cannot convert string 'a\\\\xC3b' from utf8mb4 to utf16le")
+	_, escapedErr = regexpTextPrefix("abcdefg\xc3x")
+	require.EqualError(t, escapedErr, "Cannot convert string 'abcdef...' from utf8mb4 to utf16le")
+	for _, input := range []string{
+		"\x80", "\xc0", "\xc1", "\xc2 ", "\xe0\x80\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80", "a\xc3b",
+		"a\xffbbb", "a\xf5bbb",
+	} {
+		_, err := regexpTextPrefix(input)
+		require.Error(t, err, "%x", input)
+		var moErr *moerr.Error
+		require.ErrorAs(t, err, &moErr)
+		require.Equal(t, uint16(moerr.ER_CANNOT_CONVERT_STRING), moErr.MySQLCode())
+	}
+	for _, tc := range []struct{ text, binary string }{
+		{"ASCII", "ASCII"}, {"é", "\xe9"}, {"€", "\x80"}, {"\u0081", "\x81"}, {"中", "?"},
+	} {
+		require.Equal(t, tc.binary, regexpTextToBinaryBytes(tc.text))
+	}
+	allBytes := make([]byte, 256)
+	for i := range allBytes {
+		allBytes[i] = byte(i)
+	}
+	require.Equal(t, string(allBytes), regexpTextToBinaryBytes(regexpBinaryBytesToText(string(allBytes))))
+}
+
+func TestRegexpShortPredicateValidationDoesNotAllocate(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	reg, err := op.regMap.getRegularMatcherForMatchWithMode("^a", false)
+	require.NoError(t, err)
+	require.Zero(t, testing.AllocsPerRun(1000, func() {
+		matched, matchErr := regexpMatchTextWithValidPrefix(reg, "abcdefghijklmnopqrstuvwxyz")
+		require.NoError(t, matchErr)
+		require.True(t, matched)
+	}))
+}
+
+func BenchmarkRegexpAnchoredTextValidationRouting(b *testing.B) {
+	op := newOpBuiltInRegexp()
+	reg, err := op.regMap.getRegularMatcherForMatchWithMode("^a", false)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, size := range []int{32, 1 << 20} {
+		subject := "a" + strings.Repeat("x", size-1)
+		b.Run(fmt.Sprintf("bytes_%d", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				matched, matchErr := regexpMatchTextWithValidPrefix(reg, subject)
+				if matchErr != nil || !matched {
+					b.Fatalf("matched=%v err=%v", matched, matchErr)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkRegexpSubstrWrapperPosition(b *testing.B) {
+	const rows = 1000
+	proc := testutil.NewProcess(b)
+	pattern := strings.Repeat("a", 1000) + "b"
+	subjects := make([]string, rows)
+	for i := range rows {
+		subjects[i] = "x"
+	}
+	for _, arity := range []int{2, 3} {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), subjects, nil),
+			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{pattern}, nil),
+		}
+		if arity == 3 {
+			inputs = append(inputs, NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, nil))
+		}
+		test := NewFunctionTestCase(proc, inputs,
+			NewFunctionTestResult(types.T_varchar.ToType(), false, make([]string, rows), nil),
+			newOpBuiltInRegexp().builtInRegexpSubstr)
+		b.Run(fmt.Sprintf("arity_%d", arity), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := test.result.PreExtendAndReset(rows); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := test.DebugRun(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkRegexpValueTextValidation(b *testing.B) {
+	subject := "a" + strings.Repeat("x", 1<<20-1)
+	for _, tc := range []struct {
+		name    string
+		pattern string
+		run     func(*regexpSet, string, string) error
+	}{
+		{"instr_early", "^a", func(rs *regexpSet, pattern, subject string) error {
+			_, err := rs.regularInstr(pattern, subject, 1, 1, 0)
+			return err
+		}},
+		{"instr_miss", "z", func(rs *regexpSet, pattern, subject string) error {
+			_, err := rs.regularInstr(pattern, subject, 1, 1, 0)
+			return err
+		}},
+		{"substr_early", "^a", func(rs *regexpSet, pattern, subject string) error {
+			_, _, err := rs.regularSubstr(pattern, subject, 1, 1)
+			return err
+		}},
+		{"substr_miss", "z", func(rs *regexpSet, pattern, subject string) error {
+			_, _, err := rs.regularSubstr(pattern, subject, 1, 1)
+			return err
+		}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			op := newOpBuiltInRegexp()
+			rs := &op.regMap
+			b.ReportAllocs()
+			for b.Loop() {
+				if err := tc.run(rs, tc.pattern, subject); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
