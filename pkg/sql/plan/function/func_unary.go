@@ -4559,82 +4559,32 @@ func parseCoordinatePairWithError(point string, errMsg string) (float64, float64
 	return x, y, nil
 }
 
-// SoundexString implements the SOUNDEX algorithm
-// Returns a phonetic code representing how a string sounds
+// soundexCodeMap maps ASCII A-Z to original Soundex digits; '0' means discard.
+const soundexCodeMap = "01230120022455012623010202"
+
+// SoundexString implements MySQL's original Soundex behavior for ASCII input.
 func SoundexString(str string) string {
-	if len(str) == 0 {
-		return "0000"
-	}
-
-	// Convert to uppercase and process only alphabetic characters
-	upper := strings.ToUpper(str)
-
-	// Find the first alphabetic character
-	firstChar := byte(0)
-	firstIdx := -1
-	for i := 0; i < len(upper); i++ {
-		if upper[i] >= 'A' && upper[i] <= 'Z' {
-			firstChar = upper[i]
-			firstIdx = i
-			break
-		}
-	}
-
-	// If no alphabetic character found, return "0000"
-	if firstChar == 0 {
-		return "0000"
-	}
-
-	// Build the soundex code
 	var code strings.Builder
-	code.WriteByte(firstChar)
-
-	// Soundex mapping: B, F, P, V → 1; C, G, J, K, Q, S, X, Z → 2; D, T → 3; L → 4; M, N → 5; R → 6
-	// Index: A=0, B=1, C=2, ..., Z=25
-	soundexMap := [26]byte{
-		0,   // A
-		'1', // B
-		'2', // C
-		'3', // D
-		0,   // E
-		'1', // F
-		'2', // G
-		0,   // H
-		0,   // I
-		'2', // J
-		'2', // K
-		'4', // L
-		'5', // M
-		'5', // N
-		0,   // O
-		'1', // P
-		'2', // Q
-		'6', // R
-		'2', // S
-		'3', // T
-		0,   // U
-		'1', // V
-		0,   // W
-		'2', // X
-		0,   // Y
-		'2', // Z
-	}
-
-	lastCode := byte(0)
-	for i := firstIdx + 1; i < len(upper) && code.Len() < 4; i++ {
-		c := upper[i]
+	firstLetter := true
+	lastCode := byte('0')
+	for i := 0; i < len(str); i++ {
+		c := str[i]
+		if c >= 'a' && c <= 'z' {
+			c -= 'a' - 'A'
+		}
 		if c < 'A' || c > 'Z' {
 			continue
 		}
-
-		codeChar := soundexMap[c-'A']
-		// Skip vowels, H, W (codeChar == 0)
-		if codeChar == 0 {
+		codeChar := soundexCodeMap[c-'A']
+		if firstLetter {
+			code.WriteByte(c)
+			lastCode = codeChar
+			firstLetter = false
 			continue
 		}
 
-		// Skip consecutive duplicate codes
-		if codeChar == lastCode {
+		// Original Soundex discards code-zero letters before suppressing duplicates.
+		if codeChar == '0' || codeChar == lastCode {
 			continue
 		}
 
@@ -4642,13 +4592,13 @@ func SoundexString(str string) string {
 		lastCode = codeChar
 	}
 
-	// Pad with zeros to make it 4 characters
-	result := code.String()
-	for len(result) < 4 {
-		result += "0"
+	if firstLetter {
+		return ""
 	}
-
-	return result
+	for code.Len() < 4 {
+		code.WriteByte('0')
+	}
+	return code.String()
 }
 
 func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -7662,11 +7612,36 @@ func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, resul
 		}, selectList)
 }
 
+func encodeBase64WithLineBreaks(data []byte) []byte {
+	encodedLen := base64.StdEncoding.EncodedLen(len(data))
+	wrappedLen := encodedLen
+	breakCount := 0
+	if encodedLen > 0 {
+		breakCount = (encodedLen - 1) / 76
+		wrappedLen += breakCount
+	}
+
+	out := make([]byte, wrappedLen)
+	base64.StdEncoding.Encode(out[:encodedLen], data)
+
+	// Move later lines first so each overlapping copy preserves the unprocessed prefix.
+	for breakIndex := breakCount; breakIndex > 0; breakIndex-- {
+		srcStart := breakIndex * 76
+		srcEnd := srcStart + 76
+		if srcEnd > encodedLen {
+			srcEnd = encodedLen
+		}
+		dstStart := srcStart + breakIndex
+		copy(out[dstStart:srcEnd+breakIndex], out[srcStart:srcEnd])
+		out[dstStart-1] = '\n'
+	}
+
+	return out
+}
+
 func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
-		buf := make([]byte, base64.StdEncoding.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
-		base64.StdEncoding.Encode(buf, data)
-		return buf, nil
+		return encodeBase64WithLineBreaks(data), nil
 	}, selectList)
 }
 
@@ -7803,6 +7778,29 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 
 const mysqlCompressedLengthMask = uint32(0x3fffffff)
 
+var (
+	errUncompressOutputTooLarge = moerr.NewInvalidInputNoCtx("advertised uncompressed length exceeds result limit")
+	uncompressSizeLimitWarning  = fmt.Sprintf("Uncompressed data size too large; the maximum size is %d (probably, length of uncompressed data was corrupted)", types.MaxBlobLen)
+)
+
+const (
+	uncompressBufferWarning = "ZLIB: Not enough room in the output buffer (probably, length of uncompressed data was corrupted)"
+	uncompressDataWarning   = "ZLIB: Input data corrupted"
+)
+
+func mysqlUncompressWarning(err error) (uint16, string) {
+	// This classifier is called only after both decoders reject the input. The
+	// size-limit sentinel and short-write error are the two non-data-error cases.
+	switch {
+	case errors.Is(err, errUncompressOutputTooLarge):
+		return moerr.ER_TOO_BIG_FOR_UNCOMPRESS, uncompressSizeLimitWarning
+	case errors.Is(err, io.ErrShortWrite):
+		return moerr.ER_ZLIB_Z_BUF_ERROR, uncompressBufferWarning
+	default:
+		return moerr.ER_ZLIB_Z_DATA_ERROR, uncompressDataWarning
+	}
+}
+
 func writeZlibCompressed(dst io.Writer, data []byte) error {
 	writer := zlib.NewWriter(dst)
 	written, err := writer.Write(data)
@@ -7892,7 +7890,7 @@ func compressedOriginalLength(data []byte, maxResultSize int) (uint32, error) {
 	}
 	originalLen := binary.LittleEndian.Uint32(data[:4]) & mysqlCompressedLengthMask
 	if uint64(originalLen) > uint64(maxResultSize) {
-		return 0, moerr.NewInternalErrorNoCtxf("uncompressed length %d exceeds result limit %d", originalLen, maxResultSize)
+		return 0, errUncompressOutputTooLarge
 	}
 	return originalLen, nil
 }
@@ -7992,6 +7990,7 @@ func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	var warnings process.WarningAccumulator
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -8012,20 +8011,26 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 
 		decompressed, err := mysqlUncompress(data, types.MaxBlobLen)
 		if err != nil {
+			primaryErr := err
 			// COMPRESS used raw DEFLATE before MatrixOne matched MySQL's zlib
 			// format. Keep those previously persisted values readable.
 			decompressed, err = legacyMatrixOneUncompress(data, types.MaxBlobLen)
-		}
-		if err != nil {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
+			if err != nil {
+				code, message := mysqlUncompressWarning(primaryErr)
+				warnings.Add(code, message)
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
 			}
-			continue
 		}
 
 		if err = rs.AppendBytes(decompressed, false); err != nil {
 			return err
 		}
+	}
+	if warnings.Total > 0 {
+		warnings.Flush(proc)
 	}
 
 	return nil
