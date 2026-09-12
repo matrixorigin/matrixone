@@ -20,6 +20,28 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestCloneBytes(t *testing.T) {
+	tests := []struct {
+		name string
+		src  []byte
+		want []byte
+	}{
+		{name: "nil", src: nil, want: []byte{}},
+		{name: "empty", src: []byte{}, want: []byte{}},
+		{name: "single zero byte", src: []byte{0}, want: []byte{0}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CloneBytes(tt.src)
+			assert.Equal(t, tt.want, got)
+			if len(tt.src) > 0 {
+				assert.NotSame(t, &tt.src[0], &got[0])
+			}
+		})
+	}
+}
+
 func TestCopyBytes(t *testing.T) {
 	tests := []struct {
 		name     string
