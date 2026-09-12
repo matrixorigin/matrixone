@@ -7754,7 +7754,7 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 const mysqlCompressedLengthMask = uint32(0x3fffffff)
 
 var (
-	errUncompressOutputTooLarge = errors.New("advertised uncompressed length exceeds result limit")
+	errUncompressOutputTooLarge = moerr.NewInvalidInputNoCtx("advertised uncompressed length exceeds result limit")
 	uncompressSizeLimitWarning  = fmt.Sprintf("Uncompressed data size too large; the maximum size is %d (probably, length of uncompressed data was corrupted)", types.MaxBlobLen)
 )
 

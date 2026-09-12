@@ -4,28 +4,24 @@ SELECT UNCOMPRESS(x'00000000') IS NULL AS corrupt_input_is_null;
 SHOW WARNINGS;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1259  ¦  ZLIB: Input data corrupted
-
 SELECT UNCOMPRESS(x'03000000789c00') IS NULL AS truncated_input_is_null;
 ➤ truncated_input_is_null[-7,1,0]  𝄀
 1
 SHOW WARNINGS;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1259  ¦  ZLIB: Input data corrupted
-
 SELECT UNCOMPRESS(x'ffffffff00') IS NULL AS oversized_input_is_null;
 ➤ oversized_input_is_null[-7,1,0]  𝄀
 1
 SHOW WARNINGS;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1256  ¦  Uncompressed data size too large; the maximum size is 67108864 (probably, length of uncompressed data was corrupted)
-
 SELECT UNCOMPRESS(x'02000000789c4b4c4a0600024d0127') IS NULL AS output_capacity_is_null;
 ➤ output_capacity_is_null[-7,1,0]  𝄀
 1
 SHOW WARNINGS;
 ➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 Warning  ¦  1258  ¦  ZLIB: Not enough room in the output buffer (probably, length of uncompressed data was corrupted)
-
 DROP DATABASE IF EXISTS uncompress_warnings_28458;
 CREATE DATABASE uncompress_warnings_28458;
 CREATE TABLE uncompress_warnings_28458.cases(id INT PRIMARY KEY, compressed BLOB);

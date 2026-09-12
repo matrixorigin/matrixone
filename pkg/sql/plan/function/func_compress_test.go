@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"testing"
@@ -416,6 +417,47 @@ func TestUncompressEmitsMySQLWarningsForRejectedInput(t *testing.T) {
 		{code: moerr.ER_TOO_BIG_FOR_UNCOMPRESS, message: "Uncompressed data size too large; the maximum size is 67108864 (probably, length of uncompressed data was corrupted)"},
 		{code: moerr.ER_ZLIB_Z_BUF_ERROR, message: "ZLIB: Not enough room in the output buffer (probably, length of uncompressed data was corrupted)"},
 	}, warnings.records)
+}
+
+func TestMySQLUncompressWarningClassification(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		code    uint16
+		message string
+	}{
+		{
+			name:    "oversized output sentinel",
+			err:     errUncompressOutputTooLarge,
+			code:    moerr.ER_TOO_BIG_FOR_UNCOMPRESS,
+			message: uncompressSizeLimitWarning,
+		},
+		{
+			name:    "wrapped oversized output sentinel",
+			err:     fmt.Errorf("decode input: %w", errUncompressOutputTooLarge),
+			code:    moerr.ER_TOO_BIG_FOR_UNCOMPRESS,
+			message: uncompressSizeLimitWarning,
+		},
+		{
+			name:    "unrelated invalid input error",
+			err:     moerr.NewInvalidInputNoCtx("unrelated invalid input"),
+			code:    moerr.ER_ZLIB_Z_DATA_ERROR,
+			message: uncompressDataWarning,
+		},
+		{
+			name:    "short write",
+			err:     io.ErrShortWrite,
+			code:    moerr.ER_ZLIB_Z_BUF_ERROR,
+			message: uncompressBufferWarning,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			code, message := mysqlUncompressWarning(tt.err)
+			require.Equal(t, tt.code, code)
+			require.Equal(t, tt.message, message)
+		})
+	}
 }
 
 func TestUncompressBoundsWarningsForRepeatedConstantRows(t *testing.T) {
