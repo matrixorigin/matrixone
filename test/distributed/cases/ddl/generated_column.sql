@@ -18,8 +18,8 @@ insert into t1(a, b) values (1, 2);
 insert into t1(a, b) values (10, 20), (100, 200);
 select * from t1 order by a;
 
--- Implicit column list (generated column auto-excluded)
-insert into t1 values (5, 6);
+-- Explicit ordinary columns continue to omit the generated column.
+insert into t1(a, b) values (5, 6);
 select * from t1 order by a;
 
 -- NULL propagation
@@ -88,8 +88,8 @@ insert into t7(a, b) values (1, 2);
 insert into t7(a, b) values (10, 20), (100, 200);
 select * from t7 order by a;
 
--- Implicit column list with VIRTUAL
-insert into t7 values (5, 6);
+-- Explicit ordinary columns continue to omit the VIRTUAL generated column.
+insert into t7(a, b) values (5, 6);
 select * from t7 order by a;
 
 -- Cannot insert into VIRTUAL column
@@ -415,6 +415,36 @@ select id, generated_key from t44_odku_generated_index force index (idx_generate
 select id, generated_key from t44_odku_generated_index force index for order by (idx_generated_key) order by generated_key, id;
 
 -- ============================================================
--- 46. Cleanup
+-- 46. Implicit VALUES requires DEFAULT at generated positions (#28241)
+-- ============================================================
+create table t45_implicit_values (id int primary key, a int, g int generated always as (a + 1) stored, payload int);
+-- Full visible tuple is required; generated position must be DEFAULT.
+insert into t45_implicit_values values (1, 10, default, 100), (2, 20, default, 200);
+select id, a, g, payload from t45_implicit_values order by id;
+-- A short tuple cannot silently omit the generated column.
+insert into t45_implicit_values values (3, 30, 300);
+-- A supplied non-DEFAULT value for the generated position is rejected.
+insert into t45_implicit_values values (3, 30, 31, 300);
+-- A later bad tuple must not leave the earlier tuple from this statement behind.
+insert into t45_implicit_values values (8, 80, default, 800), (9, 90, 91, 900);
+select count(*) as partial_rows from t45_implicit_values where id in (3, 8, 9);
+-- The explicit ordinary-column and implicit INSERT ... SELECT mappings remain unchanged.
+insert into t45_implicit_values (id, a, payload) values (5, 50, 500);
+insert into t45_implicit_values select 6, 60, 600;
+-- REPLACE also consumes the full visible tuple and recomputes the generated value.
+replace into t45_implicit_values values (1, 99, default, 999);
+select id, a, g, payload from t45_implicit_values order by id;
+-- Rebinding a retained PREPARE AST after a schema change must preserve the generated DEFAULT slot.
+prepare t45_replace from 'replace into t45_implicit_values values (7, 70, default, 700)';
+execute t45_replace;
+alter table t45_implicit_values modify column payload bigint;
+execute t45_replace;
+deallocate prepare t45_replace;
+select count(*) as prepared_rows from t45_implicit_values where id = 7;
+select id, a, g, payload from t45_implicit_values where id = 7;
+drop table t45_implicit_values;
+
+-- ============================================================
+-- 47. Cleanup
 -- ============================================================
 drop database test_generated_col;
