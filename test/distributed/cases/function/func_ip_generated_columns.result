@@ -28,11 +28,11 @@ select id, ip_text, ipv4_number, ipv4_text, hex(ip6_binary), ip6_text,
 is_ipv4, is_ipv6, is_ipv4_compat, is_ipv4_mapped
 from ip_deterministic_generated order by id;
 ➤ id[4,32,0]  ¦  ip_text[12,39,0]  ¦  ipv4_number[-5,64,0]  ¦  ipv4_text[12,39,0]  ¦  hex(ip6_binary)[12,32,0]  ¦  ip6_text[12,39,0]  ¦  is_ipv4[4,32,0]  ¦  is_ipv6[4,32,0]  ¦  is_ipv4_compat[4,32,0]  ¦  is_ipv4_mapped[4,32,0]  𝄀
-1  ¦  192.168.1.1  ¦  3232235777  ¦  192.168.1.1  ¦  C0A80101  ¦  192.168.1.1  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
+1  ¦  192.168.1.1  ¦  3232235777  ¦  192.168.1.1  ¦  C0A80101  ¦  ::ffff:192.168.1.1  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
 2  ¦  2001:db8::1  ¦  null  ¦  null  ¦  20010DB8000000000000000000000001  ¦  2001:db8::1  ¦  0  ¦  1  ¦  0  ¦  0  𝄀
 3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
-4  ¦  invalid  ¦  null  ¦  null  ¦  null  ¦  ::1  ¦  0  ¦  0  ¦  1  ¦  0  𝄀
-5  ¦  ::ffff:192.0.2.1  ¦  3221225985  ¦  192.0.2.1  ¦  C0000201  ¦  192.0.2.1  ¦  1  ¦  0  ¦  0  ¦  1  𝄀
+4  ¦  invalid  ¦  null  ¦  null  ¦  null  ¦  ::1  ¦  0  ¦  0  ¦  0  ¦  0  𝄀
+5  ¦  ::ffff:192.0.2.1  ¦  null  ¦  null  ¦  00000000000000000000FFFFC0000201  ¦  ::ffff:192.0.2.1  ¦  0  ¦  1  ¦  0  ¦  1  𝄀
 6  ¦  ::192.0.2.1  ¦  null  ¦  null  ¦  000000000000000000000000C0000201  ¦  ::192.0.2.1  ¦  0  ¦  1  ¦  1  ¦  0
 select name, column_name
 from mo_catalog.mo_indexes as i
