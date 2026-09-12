@@ -644,25 +644,51 @@ func makeMySQLSpecialNumericValue(
 		if err != nil {
 			return nil, err
 		}
-		// The third argument is an internal-only mode. It maps the empty
-		// display of ENUM ordinal 0 back to 0 while preserving the existing
-		// two-argument string-to-ENUM behavior.
-		numericExpr, err := bindBoundFuncExprAndConstFoldWithInternalFunctionArgs(
-			ctx,
-			nil,
-			valueToIndex,
-			[]*plan.Expr{
-				makePlan2StringConstExprWithType(storageType.Enumvalues),
-				DeepCopyExpr(displayExpr),
-				makePlan2BoolConstExprWithType(true),
-			},
-		)
+		// A reversible ENUM definition has no empty label, so an empty grouped
+		// display uniquely represents the error member at ordinal zero. The
+		// legacy parser cannot convert that display, so feed it a valid label
+		// first and restore ordinal zero after parsing. This keeps the serialized
+		// conversion on the two-argument overload understood by old workers.
+		emptyDisplay, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{
+			DeepCopyExpr(displayExpr), makePlan2StringConstExprWithType(""),
+		})
+		if err != nil {
+			return nil, err
+		}
+		firstLabel := strings.Split(storageType.Enumvalues, ",")[0]
+		safeDisplay, err := BindFuncExprImplByPlanExpr(ctx, "if", []*plan.Expr{
+			DeepCopyExpr(emptyDisplay),
+			makePlan2StringConstExprWithType(firstLabel),
+			DeepCopyExpr(displayExpr),
+		})
+		if err != nil {
+			return nil, err
+		}
+		numericExpr, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, []*plan.Expr{
+			makePlan2StringConstExprWithType(storageType.Enumvalues),
+			safeDisplay,
+		})
 		if err != nil {
 			return nil, err
 		}
 		numericExpr.Typ.NotNullable = displayExpr.Typ.NotNullable
 		numericExpr.Typ.Enumvalues = storageType.Enumvalues
-		return numericExpr, nil
+
+		numericZero := &plan.Expr{
+			Typ: *DeepCopyType(storageType),
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_EnumVal{EnumVal: 0},
+			}},
+		}
+		recovered, err := BindFuncExprImplByPlanExpr(ctx, "if", []*plan.Expr{
+			DeepCopyExpr(emptyDisplay), numericZero, numericExpr,
+		})
+		if err != nil {
+			return nil, err
+		}
+		recovered.Typ.NotNullable = displayExpr.Typ.NotNullable
+		recovered.Typ.Enumvalues = storageType.Enumvalues
+		return recovered, nil
 	}
 
 	if isSetPlanType(storageType) {

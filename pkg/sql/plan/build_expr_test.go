@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -750,21 +751,20 @@ func TestGroupedMySQLSpecialNumericContextsRecoverStoredValues(t *testing.T) {
 		sql          string
 		functionName string
 		definition   string
-		argCount     int
 	}{
-		{name: "grouped enum", sql: "select e + 0 from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
-		{name: "derived grouped enum", sql: "select d.e + 0 from (select e from enum_order_t group by e) d", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
-		{name: "cte grouped enum", sql: "with c as (select e from enum_order_t group by e) select e + 0 from c", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
-		{name: "having grouped enum", sql: "select e from enum_order_t group by e having e + 0 > 1", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
-		{name: "window over grouped enum", sql: "select e + 0, sum(e + 0) over () from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
-		{name: "grouped set", sql: "select s + 0 from enum_order_t group by s", functionName: moSetCastValueToIndexFun, definition: "red,green,blue", argCount: 2},
-		{name: "grouped enum numeric IN", sql: "select e in (1, 2) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
-		{name: "grouped enum numeric NOT IN", sql: "select e not in (1, 2) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
-		{name: "grouped enum numeric IN subquery", sql: "select e in (select 1) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
-		{name: "grouped enum numeric NOT IN subquery", sql: "select e not in (select 1) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
-		{name: "numeric NOT IN grouped enum subquery", sql: "select 1 not in (select e from enum_order_t group by e)", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
-		{name: "grouped enum numeric ANY subquery", sql: "select 1 = any (select e from enum_order_t group by e)", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high", argCount: 3},
-		{name: "grouped set numeric IN", sql: "select s in (1, 3) from enum_order_t group by s", functionName: moSetCastValueToIndexFun, definition: "red,green,blue", argCount: 2},
+		{name: "grouped enum", sql: "select e + 0 from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "derived grouped enum", sql: "select d.e + 0 from (select e from enum_order_t group by e) d", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "cte grouped enum", sql: "with c as (select e from enum_order_t group by e) select e + 0 from c", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "having grouped enum", sql: "select e from enum_order_t group by e having e + 0 > 1", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "window over grouped enum", sql: "select e + 0, sum(e + 0) over () from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped set", sql: "select s + 0 from enum_order_t group by s", functionName: moSetCastValueToIndexFun, definition: "red,green,blue"},
+		{name: "grouped enum numeric IN", sql: "select e in (1, 2) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped enum numeric NOT IN", sql: "select e not in (1, 2) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped enum numeric IN subquery", sql: "select e in (select 1) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped enum numeric NOT IN subquery", sql: "select e not in (select 1) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "numeric NOT IN grouped enum subquery", sql: "select 1 not in (select e from enum_order_t group by e)", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped enum numeric ANY subquery", sql: "select 1 = any (select e from enum_order_t group by e)", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped set numeric IN", sql: "select s in (1, 3) from enum_order_t group by s", functionName: moSetCastValueToIndexFun, definition: "red,green,blue"},
 	}
 
 	for _, tc := range tests {
@@ -775,11 +775,15 @@ func TestGroupedMySQLSpecialNumericContextsRecoverStoredValues(t *testing.T) {
 
 			conversion := findPlanFunctionExpr(logicPlan, tc.functionName)
 			require.NotNil(t, conversion, "expected guarded conversion in bound plan")
-			require.Len(t, conversion.GetF().Args, tc.argCount)
+			require.Len(t, conversion.GetF().Args, 2)
 			require.Equal(t, tc.definition, conversion.GetF().Args[0].GetLit().GetSval())
-			if tc.argCount == 3 {
-				require.True(t, conversion.GetF().Args[2].GetLit().GetBval())
+			_, overloadID := planfunction.DecodeOverloadID(conversion.GetF().Func.Obj)
+			require.Zero(t, overloadID, "grouped expressions must stay on the legacy worker overload")
+			if tc.functionName == moEnumCastValueToIndexFun {
 				require.Equal(t, int32(types.T_enum), conversion.Typ.Id)
+				safeDisplay := conversion.GetF().Args[1].GetF()
+				require.NotNil(t, safeDisplay)
+				require.Equal(t, "if", safeDisplay.Func.GetObjName())
 			} else {
 				require.Equal(t, int32(types.T_uint64), conversion.Typ.Id)
 				require.Empty(t, conversion.Typ.Enumvalues)
@@ -834,8 +838,16 @@ func TestGroupedMySQLSpecialNumericContextsRecoverStoredValues(t *testing.T) {
 		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
 	})
 
-	t.Run("zero-aware converter is not a public overload", func(t *testing.T) {
-		_, err := BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+	t.Run("ENUM conversion remains on the legacy overload", func(t *testing.T) {
+		legacy, err := BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+			makePlan2StringConstExprWithType("a,b"),
+			makePlan2StringConstExprWithType("a"),
+		})
+		require.NoError(t, err)
+		_, overloadID := planfunction.DecodeOverloadID(legacy.GetF().Func.Obj)
+		require.Zero(t, overloadID)
+
+		_, err = BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
 			makePlan2StringConstExprWithType("a,b"),
 			makePlan2StringConstExprWithType(""),
 			makePlan2BoolConstExprWithType(true),
