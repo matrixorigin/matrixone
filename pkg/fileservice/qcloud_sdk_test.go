@@ -35,9 +35,10 @@ import (
 )
 
 func TestQCloudSDK(t *testing.T) {
+	testArguments := externalObjectStorageArgumentsForTest("test", t)
 
 	t.Run("object storage", func(t *testing.T) {
-		for _, args := range objectStorageArgumentsForTest("test", t) {
+		for _, args := range testArguments {
 			if !strings.Contains(args.Endpoint, "myqcloud") {
 				continue
 			}
@@ -62,7 +63,7 @@ func TestQCloudSDK(t *testing.T) {
 	})
 
 	t.Run("file service", func(t *testing.T) {
-		for _, args := range objectStorageArgumentsForTest("test", t) {
+		for _, args := range testArguments {
 			if !strings.Contains(args.Endpoint, "myqcloud") {
 				continue
 			}
