@@ -135,3 +135,6 @@ func TestSnapshotKeyRoundTrip(t *testing.T) {
 	require.NotEqual(t, key, SnapshotKey(boundIdxTable, timestamp.Timestamp{PhysicalTime: 17, LogicalTime: 4}),
 		"the logical clock must be part of the identity")
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (m *countingSearch) BuildTS() int64 { return 0 }

@@ -183,6 +183,10 @@ type VectorIndexSearchIf interface {
 	// The cache calls it once, right after Load, and caches the result on the entry, so it
 	// need not be cheap and is never called on the search path.
 	GetIndexSize() (hostBytes, deviceBytes int64)
+	// BuildTS reports the greatest source-table commit this loaded generation reflects,
+	// for the async-index freshness gate. fulltext2 returns MAX(metadata.build_ts); the
+	// vector algos, whose freshness is handled elsewhere, return 0. 0 = unknown.
+	BuildTS() int64
 	Destroy()
 }
 
@@ -270,6 +274,10 @@ type VectorIndexSearch struct {
 	// estimate never counts toward anyone's budget.
 	hostBytes   atomic.Int64
 	deviceBytes atomic.Int64
+	// buildTS is Algo.BuildTS() published by captureSize under this entry's lock, so the
+	// freshness gate (GetBuildTS) reads it from the atomic and never touches the algo, which
+	// a concurrent eviction may be tearing down. 0 until Load runs.
+	buildTS atomic.Int64
 	// devicePerCard is deviceBytes broken down by GPU, published by captureSize when the
 	// algorithm knows its placement. nil means "aggregate only".
 	devicePerCard    atomic.Value // map[int]int64
@@ -471,6 +479,7 @@ func (s *VectorIndexSearch) captureSize() {
 	host, device := s.Algo.GetIndexSize()
 	s.hostBytes.Store(host)
 	s.deviceBytes.Store(device)
+	s.buildTS.Store(s.Algo.BuildTS())
 	if placed, ok := s.Algo.(devicePlacement); ok {
 		if perCard := placed.DeviceResidency(); len(perCard) > 0 {
 			s.devicePerCard.Store(perCard)
@@ -603,6 +612,12 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	if !s.extendForSearch() {
 		return nil, nil, errIndexDestroyed
 	}
+	// Publish the generation being searched to the caller UNDER this lock, atomic with the search,
+	// so a follow-up bounded to it (the fulltext2 json-probe tail) cannot bind a newer generation a
+	// concurrent evict+reload publishes after this returns. See RuntimeConfig.SearchedBuildTS.
+	if rt.SearchedBuildTS != nil {
+		*rt.SearchedBuildTS = s.buildTS.Load()
+	}
 	return s.Algo.Search(sqlproc, query, rt)
 }
 
@@ -635,6 +650,10 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 	}
 	if !s.extendForSearch() {
 		return errIndexDestroyed
+	}
+	// See Search: publish the searched generation under this lock for a bounded follow-up.
+	if rt.SearchedBuildTS != nil {
+		*rt.SearchedBuildTS = s.buildTS.Load()
 	}
 	return s.Algo.SearchInto(sqlproc, query, rt, out)
 }
@@ -1118,6 +1137,27 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 }
 
 // remove key from cache
+// GetBuildTS returns the source-table coverage (MAX(metadata.build_ts), base + cdc_tail)
+// of the LOADED index generation currently cached under key -- i.e. what a probe issued
+// now would actually search. found is false when no loaded generation is cached (a search
+// would load a fresh one), which the async-index freshness gate treats as "no cached copy
+// to under-serve, proceed". Using the cached generation's own build_ts, rather than the
+// durable metadata, is what keeps a stale warm entry from over-reporting coverage.
+func (c *VectorIndexCache) GetBuildTS(key string) (ts int64, found bool) {
+	v, ok := c.IndexMap.Load(key)
+	if !ok {
+		return 0, false
+	}
+	s, ok := v.(*VectorIndexSearch)
+	if !ok || s.Status.Load() != STATUS_LOADED {
+		return 0, false
+	}
+	// Read the entry's published atomic, never s.Algo: a concurrent eviction may be tearing
+	// the algorithm down. captureSize published buildTS under the entry lock before the
+	// STATUS_LOADED store this read observed.
+	return s.buildTS.Load(), true
+}
+
 // Remove drops a cached index by key so the next Search reloads it. Callers use
 // it after a mutation (CDC append, CREATE/REBUILD/MERGE) makes the cached copy
 // stale. It is LOCAL to this process — a prompt local optimization only; cross-CN

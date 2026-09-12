@@ -27,8 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -591,6 +594,113 @@ func TestFulltext2SearchCallStreamingCovered(t *testing.T) {
 	require.True(t, res.Batch.Vecs[2].IsNull(1)) // NULL include value surfaces as SQL NULL
 
 	st.free(tf, proc, false, nil)
+}
+
+// probeTailState builds a self-completing json-probe state with a [doc_id int64, score float32]
+// output batch, behind the read (searched=100 < snap=1000) so the tail is expected to run.
+func probeTailState() *fulltext2SearchState {
+	st := &fulltext2SearchState{probeTail: true}
+	st.batch = batch.NewWithSize(2)
+	st.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	st.batch.Vecs[1] = vector.NewVec(types.T_float32.ToType())
+	st.pkVecIdx, st.scoreVecIdx = 0, 1
+	st.tblcfg = fulltext2.TableConfig{
+		DbName: "db", SrcTable: "t", PKey: "id",
+		ProbeTailWhere: "json_extract_string(`j`, '$.foo') = 'needle'",
+	}
+	st.tailSearchedBuildTS = 100
+	st.tailSnap = timestamp.Timestamp{PhysicalTime: 1000}
+	return st
+}
+
+// TestFulltext2SearchProbeTailStreams drives the self-completing tail: startProbeTail builds the
+// aliased table_changes SQL (with the pushed json predicate) and streams it via ft2RunStreamingSql;
+// emitProbeTail pages one streamed result into u.batch as (doc_id=pk, score=0), then ends on close.
+func TestFulltext2SearchProbeTailStreams(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	orig := ft2RunStreamingSql
+	defer func() { ft2RunStreamingSql = orig }()
+	var capturedSQL string
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, streamCh chan executor.Result, _ chan error) (executor.Result, error) {
+		capturedSQL = sql
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], 42, false, mp))
+		require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], 43, false, mp))
+		bat.SetRowCount(2)
+		streamCh <- executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+		return executor.Result{}, nil
+	}
+
+	st := probeTailState()
+	st.tailSp = sqlexec.NewSqlProcess(proc)
+	tf := &TableFunction{}
+
+	res, err := st.emitProbeTail(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, res.Status)
+	require.Equal(t, 2, res.Batch.RowCount())
+	require.Equal(t, int64(42), vector.GetFixedAtWithTypeCheck[int64](res.Batch.Vecs[0], 0))
+	require.Equal(t, int64(43), vector.GetFixedAtWithTypeCheck[int64](res.Batch.Vecs[0], 1))
+	require.Equal(t, float32(0), vector.GetFixedAtWithTypeCheck[float32](res.Batch.Vecs[1], 0)) // tail score is 0
+
+	// The streamed SQL: aliased table_changes so change_type binds, insert-only, json predicate pushed.
+	require.Contains(t, capturedSQL, "table_changes('db', 't'")
+	require.Contains(t, capturedSQL, "AS mo_tc")
+	require.Contains(t, capturedSQL, "mo_tc.change_type = 'insert'")
+	require.Contains(t, capturedSQL, "AND (json_extract_string(`j`, '$.foo') = 'needle')")
+
+	st.batch.CleanOnlyData()
+	res, err = st.emitProbeTail(proc) // stream closed → end
+	require.NoError(t, err)
+	require.Equal(t, vm.CancelResult, res)
+
+	st.free(tf, proc, false, nil)
+}
+
+// TestFulltext2SearchProbeTailEmptyGap: a caught-up generation (searched >= snapshot) starts no
+// stream and emits nothing -- the runtime skip that makes a covered probe cost no tail query.
+func TestFulltext2SearchProbeTailEmptyGap(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	orig := ft2RunStreamingSql
+	defer func() { ft2RunStreamingSql = orig }()
+	called := false
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, _ string, _ chan executor.Result, _ chan error) (executor.Result, error) {
+		called = true
+		return executor.Result{}, nil
+	}
+
+	st := probeTailState()
+	st.tailSearchedBuildTS = 2000 // >= snap (1000): empty (searched, snapshot] window
+	st.tailSp = sqlexec.NewSqlProcess(proc)
+
+	res, err := st.emitProbeTail(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.CancelResult, res)
+	require.False(t, called, "a caught-up generation must not run the tail query")
+}
+
+// TestFulltext2SearchProbeTailCloseDrains: closeProbeTail cancels the producer and drains its
+// channel to the close, leaving no goroutine/result leak, and is idempotent.
+func TestFulltext2SearchProbeTailCloseDrains(t *testing.T) {
+	mp := mpool.MustNewZero()
+	st := &fulltext2SearchState{}
+	_, cancel := context.WithCancel(context.Background())
+	st.tailCancel = cancel
+	st.tailStreamCh = make(chan executor.Result, 4)
+	st.tailStreamCh <- executor.Result{Mp: mp}
+	close(st.tailStreamCh)
+
+	st.closeProbeTail()
+	require.Nil(t, st.tailCancel)
+	require.Nil(t, st.tailStreamCh)
+	require.False(t, st.tailStarted)
+
+	st.closeProbeTail() // idempotent
 }
 
 // TestFulltext2SearchStopStreamDrains verifies stopStream cancels the producer context

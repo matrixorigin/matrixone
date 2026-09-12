@@ -80,6 +80,17 @@ type TableConfig struct {
 	// cfg so Fulltext2Search.Search can map a covering query's RequestedIncludeColumns (by
 	// name) to each result's positional Include values. nil ⇒ no INCLUDE columns.
 	IncludeColumns []string `json:"include_columns,omitempty"`
+	// ProbeTail marks a MANDATORY json_extract probe that the fulltext2_search operator must
+	// self-complete: after searching the bulk index it binds the generation it actually searched
+	// (BuildTS) and emits a table_changes(searched, snapshot] tail so no row committed after the
+	// index's generation is dropped. Set by the planner for an async json probe (current or
+	// snapshot). false = ordinary MATCH / a synchronous covered probe, which needs no tail.
+	ProbeTail bool `json:"probe_tail,omitempty"`
+	// ProbeTailWhere is the json predicate, rebuilt against the source columns
+	// (json_extract_string(`col`, '$.path') <op> <lit>), that the ProbeTail tail appends to its
+	// table_changes query so only matching gap rows are returned -- evaluated directly on the changed
+	// rows, no index. Empty ⇒ the tail is unfiltered (the base scan re-checks, so still correct).
+	ProbeTailWhere string `json:"probe_tail_where,omitempty"`
 }
 
 // runSql / runStreamingSql indirect the sqlexec executor entry points so unit tests can
@@ -1110,6 +1121,34 @@ func LoadGeneration(sqlproc *sqlexec.SqlProcess, cfg TableConfig) (ts int64, tai
 	tail = resultScalarInt64(res)
 	res.Close()
 	return ts, tail, nil
+}
+
+// MaxBuildTS returns the greatest base-table version this index reflects:
+// MAX(metadata.build_ts) across base segments and, unless baseOnly, the cdc_tail
+// frames. build_ts records the source commit each segment/frame was built from (a
+// merge preserves the max of its inputs), so this is the coverage point the async
+// freshness gate compares against the query's source commit.
+//
+// Returns 0 (= unknown) when the column is absent (an index predating the build_ts
+// migration) or on any read error. 0 is a safe under-report: it only makes a caller
+// treat the index as less current, never more.
+func MaxBuildTS(sqlproc *sqlexec.SqlProcess, cfg TableConfig, baseOnly bool) int64 {
+	if !sqlexec.HasProvenanceColumns(sqlproc, cfg.DbName, cfg.MetadataTable,
+		catalog.FullText2Index_TblCol_Metadata_Build_Ts) {
+		return 0
+	}
+	sql := fmt.Sprintf("SELECT COALESCE(MAX(%s), 0) FROM %s",
+		catalog.FullText2Index_TblCol_Metadata_Build_Ts,
+		sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable))
+	if baseOnly {
+		sql += " WHERE " + notTailFrame()
+	}
+	res, err := runSql(sqlproc, sql)
+	if err != nil {
+		return 0
+	}
+	defer res.Close()
+	return resultScalarInt64(res)
 }
 
 // QueryGeneration reads the current (timestamp, tailChunk) generation in the BACKGROUND

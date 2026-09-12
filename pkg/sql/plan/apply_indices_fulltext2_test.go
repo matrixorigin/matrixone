@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	fulltext2engine "github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -104,4 +105,26 @@ func TestBuildFulltext2SearchCfg(t *testing.T) {
 	cfg, err = b.buildFulltext2SearchCfg(node, pf, int64(tree.FULLTEXT_BM25))
 	require.NoError(t, err)
 	require.Contains(t, cfg, "__store")
+
+	// JSONProbeMode with a recorded self-completing probe (jsonProbeTail keyed by the scan node id)
+	// flips probe_tail on and carries the source table + pk the operator needs to run its
+	// table_changes tail.
+	b.jsonProbeTail = map[int32]jsonProbeTailInfo{node.NodeId: {
+		whereSQL:   "json_extract_string(`j`, '$.foo') = 'needle'",
+		displaySQL: "SELECT `id` FROM table_changes(...)",
+	}}
+	cfg, err = b.buildFulltext2SearchCfg(node, idxdef, fulltext2engine.JSONProbeMode)
+	require.NoError(t, err)
+	var mm map[string]any
+	require.NoError(t, json.Unmarshal([]byte(cfg), &mm))
+	require.Equal(t, true, mm["probe_tail"])
+	require.Equal(t, "json_extract_string(`j`, '$.foo') = 'needle'", mm["probe_tail_where"])
+
+	// MATCH mode → no probe_tail even with a stash present (whole current index, no tail).
+	cfg, err = b.buildFulltext2SearchCfg(node, idxdef, int64(tree.FULLTEXT_NL))
+	require.NoError(t, err)
+	var matchCfg map[string]any
+	require.NoError(t, json.Unmarshal([]byte(cfg), &matchCfg))
+	_, hasProbeTail := matchCfg["probe_tail"]
+	require.False(t, hasProbeTail)
 }

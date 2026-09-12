@@ -651,6 +651,21 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		// where a repeated pk multiplies base-table rows. Group by the doc id to
 		// collapse them — the aggregate already spills and is already tested.
 		if mode == fulltext2.JSONProbeMode {
+			// An async index only reflects commits up to the generation the operator searches. The
+			// operator SELF-COMPLETES: it unions a table_changes tail over (searched, snapshot]
+			// internally (there is no UNION arm here), binding the lower bound to the generation it
+			// actually searched at runtime; the group-by dedup below collapses pks the bulk and tail
+			// share, and the base scan re-checks the json predicate on current values. Publish the
+			// reconstructed tail SQL on the scan node's Stats.Sql so EXPLAIN (Verbose) shows it -- the
+			// internally-run tail is visible, not a black box.
+			// displaySQL is empty when the index was caught up as of planning (the tail is expected
+			// not to run); only surface the tail SQL in EXPLAIN when it is expected to execute.
+			if info, ok := builder.jsonProbeTail[scanNode.NodeId]; ok && info.displaySQL != "" {
+				if curr_ftnode.Stats == nil {
+					curr_ftnode.Stats = &plan.Stats{}
+				}
+				curr_ftnode.Stats.Sql = info.displaySQL
+			}
 			curr_ftnode_id, curr_ftnode_pkcol = builder.dedupFulltextDocIDs(ctx, curr_ftnode_id, curr_ftnode_pkcol)
 		}
 

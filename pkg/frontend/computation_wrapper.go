@@ -3043,7 +3043,8 @@ func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 	}
 	query := p.GetQuery()
 	return query != nil && (query.GetHasForeignKeyAction() ||
-		plan2.PreparedPlanDependsOnSubscriptionMetadata(p))
+		plan2.PreparedPlanDependsOnSubscriptionMetadata(p) ||
+		plan2.PreparedPlanDependsOnIndexCoverage(p))
 }
 
 func createCompile(

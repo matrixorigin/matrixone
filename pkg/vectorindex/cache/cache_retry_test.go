@@ -237,3 +237,8 @@ func TestVectorIndexCacheReturnsPermanentInvalidStateLoadError(t *testing.T) {
 		})
 	}
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (m *permanentInvalidStateLoadSearch) BuildTS() int64 { return 0 }
+func (m *blockedInvalidStateLoadSearch) BuildTS() int64   { return 0 }
+func (m *retryingLoadSearch) BuildTS() int64              { return 0 }

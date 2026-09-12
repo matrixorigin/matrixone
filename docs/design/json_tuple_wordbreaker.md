@@ -451,6 +451,19 @@ terms for the same document.
 `EXPLAIN` assertions may confirm the index is used, but must never be the only
 oracle for correctness.
 
+The freshness gate (§10) has its own BVTs under
+`pessimistic_transaction/fulltext2/`: `fulltext2_json_probe_plan` (probe fires on a
+current read once CDC has caught up), `fulltext2_json_probe_fallback` (a
+transaction-local write fails the gate closed → table scan, still exact), and
+`fulltext2_json_probe_snapshot` (a `{snapshot=...}` read returns the historical rows
+only, whichever plan is chosen). A snapshot read pins **results, not the plan** —
+whether its probe fires is timing-dependent, but the result is exact either way, so
+it also guards against the gate probing a snapshot generation missing the snapshot
+rows. The partial plan (§10.3) adds cases where the index is behind: the union of
+the bulk probe and the `table_changes` tail must equal the full scan, including a
+**delete inside the gap** (removed via MVCC, not left as a phantom) and
+**gap-larger-than-table / DDL-in-gap** falling back to the full scan.
+
 ## 10. Index freshness (the coverage gate)
 
 The probe is ANDed into an ordinary predicate, so it is a **mandatory** filter,
@@ -459,11 +472,38 @@ allowed to be slightly stale. fulltext2 is maintained asynchronously by ISCP: a
 row written inside the maintenance lag satisfies the predicate but has no
 posting yet, so an unconditional probe would silently drop it.
 
-The optimizer therefore asks, per query, whether the index's durable state has
-reached the read snapshot, and injects the probe only if the answer is a
-definite yes:
+The gate decides, per query, one of three outcomes:
 
-- `pkg/indexplugin/coverage` — `Request` (CN, txn, base table id, index, snapshot)
+- **covered** (`build_ts >= bar`, the index is caught up): probe with **NO tail** — the
+  index already reflects every row the read sees. This includes the common
+  `CREATE INDEX`-on-existing-data case, whose synchronous initial build is caught up
+  immediately.
+- **behind** (`build_ts < bar`): probe that **self-completes** (§10.3) — the
+  `fulltext2_search` operator unions a `table_changes` tail up to the read point, bound
+  to the generation it actually searched (§10.4).
+- **skip**: fail closed to a full scan when the probe would be unsound or unusable —
+  unbuilt index (`build_ts == 0`); a transaction-local write to the source (the index and
+  tail see only committed rows, so an uncommitted write would be dropped — the
+  `SourceCommitTS` guard surfaces this); or `table_changes` cannot serve the table
+  (partitioned/temporary, no explicit non-hidden pk, reserved-name column collision).
+
+Running a tail on a **caught-up** index is not just wasteful, it is UNSOUND: `build_ts`
+then sits at the pre-`CREATE INDEX` schema version while the read snapshot is post-create,
+so `table_changes(build_ts, S]` would span a schema-version change and error
+("single source schema version…"). Only a **behind** index tails, and both its endpoints
+live in the same (post-create) schema version — an `ALTER` rebuilds the index to
+`build_ts >=` the `ALTER`, so a behind tail never spans one either.
+
+Runtime binding (§10.4) still matters for the **behind** case: the operator binds the tail
+to the generation it actually searched, not a plan-time value, so a stale cache reuse
+cannot leave a gap. `CoversSnapshot` supplies the covered verdict (liveness `&&`
+`build_ts >= bar`, read from `mo_catalog.mo_iscp_log`) plus `build_ts` and the
+transaction-local-write guard.
+
+Pieces:
+
+- `pkg/indexplugin/coverage` — `Request` (CN, txn, base table id, index, snapshot,
+  source-commit ts, the index's hidden tables, and the effective scan-snapshot ts)
   and a one-method `Hooks`. It is an **optional** capability in the shape of
   `SearchPlugin`: an algorithm that cannot answer honestly simply does not
   implement it, so no plugin carries a no-op.
@@ -471,10 +511,7 @@ definite yes:
   unregistered algo, missing capability, or a hook error all report "not
   covered". A wrong `true` loses rows; a wrong `false` only forgoes an
   optimization.
-- `pkg/fulltext2/plugin/coverage` — the fulltext2 answer, read from
-  `mo_catalog.mo_iscp_log`. It is sound because the ISCP consumer advances the
-  watermark in the **same transaction** as the segment INSERTs, so a persisted
-  watermark is never ahead of visible index data.
+- `pkg/fulltext2/plugin/coverage` — the fulltext2 answer.
 - `QueryBuilder.indexCoversSnapshot` — synchronous algorithms are current by
   construction and skip the check entirely; only always-async ones pay for it.
 
@@ -482,55 +519,119 @@ The base table is identified by **table id**, not by name: `mo_iscp_log` lives
 in the system tenant, where resolving a normal tenant's table name would find
 the wrong table or nothing at all.
 
-### 10.1 Persisting the index watermark
+### 10.1 `build_ts`: the searched generation's coverage
 
-The watermark is only useful to a reader if it is persisted often enough to
-reflect reality. ISCP's general cadence is not:
+The freshness signal is `build_ts` = `MAX(metadata.build_ts)` over the index's
+base segments **and** cdc_tail frames — the greatest source-table commit the index
+reflects. `build_ts` is the base-table version each flush covered (`GetToTS`),
+written per segment/frame; a **MERGE preserves `max(build_ts)`** of the inputs it
+folds (base + cdc_tail) so coverage survives compaction. An index predating the
+`build_ts` column reads `0` (declines) — a safe under-report.
 
-- While a table is being **written**, each iteration persists the watermark in
-  its own transaction, so the log is fresh.
-- While a table is **idle**, the executor advances the watermark only in memory
-  (the clean-table path in `TableEntry.UpdateWatermark`) and flushes it on a
-  `FlushWatermarkInterval` ticker whose default was **one hour**, and only once
-  the in-memory watermark had moved a full interval past the persisted one
-  (`JobEntry.tryFlushWatermark`).
+Crucially it is read from the generation the probe will **actually search**, never
+a global watermark that could be ahead of it:
 
-That cadence is right for the job class it was written for — a consumer whose
-watermark only bounds how much work a restart repeats. An index job's watermark
-is also **read**, so it now has its own threshold: `JobEntry` records whether it
-is a `ConsumerType_IndexSync` job, and `flushThreshold` gives that class
-`IndexFlushWatermarkInterval` (default 5s) instead of the general one. The flush
-ticker runs at the shortest threshold any class uses, since a slower tick would
-silently cap the faster class. Measured on a live cluster, an idle indexed
-table's persisted watermark now advances every ~10s (the executor's poll
-cadence) instead of hourly.
+- **warm** — `VectorIndexCache.GetBuildTS(cacheKey)`: the loaded generation's
+  `build_ts`, published to an entry atomic by `captureSize` under the entry lock
+  (never read off the algo, which a concurrent eviction may be tearing down);
+- **cold** — `MAX(metadata.build_ts)` read from the index metadata table, i.e. what
+  a fresh load would see.
 
-### 10.2 Remaining gap: the comparison, not the cadence
+Reading the *searched* generation's own `build_ts` is what prevents a stale warm
+cache from over-reporting coverage. `VectorIndexSearchIf.BuildTS()` exposes it per
+algo; fulltext2/hnsw/cagra/ivfpq return the real value, ivfflat/brute-force return 0.
 
-A fresh watermark is necessary but not sufficient, and the reason is structural
-rather than a tuning problem. The gate asks `watermark >= snapshot`, and an
-asynchronous consumer's watermark **trails** the present by construction: at any
-flush interval, a query reading at `now` sees a watermark from one poll cycle
-ago and declines. Shortening the interval moves the lag from an hour to seconds
-but never to zero, so the probe still stays off for a live query. (It does fire
-for a read whose snapshot is older than the watermark — an explicit past
-`AS OF TIMESTAMP`, or a long-running transaction.)
+### 10.2 The bar
 
-What actually licenses the probe is weaker than what is currently asked:
+`CoversSnapshot` computes `covered ⟺ live && build_ts >= bar`. The probe decision (§10 intro)
+uses it directly: covered → no tail, behind → self-completing tail. Computing the bar is also
+how the **transaction-local-write guard** fires (it fails closed on an uncommitted write to
+the source). The bar is the read snapshot's coverage requirement:
 
-    covered  ⟺  no base-table change exists in (watermark, snapshot]
+- **current read** — `bar = SourceCommitTS`: the greatest source DML commit the
+  query CN observes at the read snapshot, computed from the base relation's
+  partition state (`engine.SourceCommitTSProvider`), failing closed on a
+  transaction-local write to the source. This is the value an idle table's
+  `build_ts` catches up to and stays at, so the fast path fires once CDC drains —
+  a strict `build_ts >= now` never holds because CDC always lags the present.
+- **historical (`{snapshot=...}` / AS OF) read** — `bar = SourceCommitTS as of the
+  snapshot`: the same source-commit bar as a current read, but computed on a txn
+  cloned at the snapshot, so it is the greatest source DML commit visible AT the
+  snapshot `S`. `build_ts` is read from the same snapshot-bound generation (cache key
+  `index_table@snapshot`, metadata on the cloned txn), so `build_ts` and the bar are
+  measured at one read point: a snapshot whose index had caught up as of `S` is
+  covered, one that was behind is completed with a tail up to `S` — exactly like a
+  current read. Binding the bar to `S` itself is unsound the same way `build_ts >= now`
+  is: the index build lags `S`, so `build_ts >= S` rarely holds and nearly every
+  snapshot would needlessly decline.
 
-and the clean-table watermark already means "verified no changes up to W", so
-the window left to check is only the last poll cycle. Answering it needs a
-per-table "did this change after W?" query. `disttae.GetChangedTableList` is
-exactly that primitive — it is what ISCP itself polls with — but calling it from
-the planner costs a round trip per planned query. The cheaper shape is to answer
-from the CN's own partition state, which is authoritative for what is visible at
-the read snapshot and needs no RPC; it has no ready-made "max change timestamp"
-accessor today.
+The original json_extract predicate is retained and re-evaluated on every row the
+probe returns.
 
-Until that half is built, the protocol is in place, the watermark it reads is
-fresh, and the gate is safe — it declines rather than dropping rows.
+### 10.3 Self-completing probe: bulk + gap tail (json_extract only)
+
+An async index reflects the source only up to the generation the operator searches, so
+the `fulltext2_search` operator **self-completes**: after the bulk search it runs the
+gap query itself and emits the recovered pks alongside the bulk. There is no separate
+UNION arm in the plan — one node produces both:
+
+- **bulk** — the rows the searched generation reflects (`<= build_ts`), matched through
+  the index;
+- **tail** — `table_changes(db, t, build_ts, S] WHERE change_type='insert' AND
+  <json_extract predicate>`, projected to the pk, emitted as `(doc_id=pk, score=0)`. `S`
+  is the read point (`now`, or the snapshot for a historical read). The tail rows are not
+  in the index (that is the whole point of the gap), so the json predicate is evaluated
+  **directly on the changed rows, no index** — the same predicate the base scan uses,
+  rebuilt against the source columns table_changes exposes. Pushing it only shrinks the
+  candidate set; the base scan re-checks regardless, so if the predicate cannot be
+  rendered the tail is left unfiltered (a wider superset, still correct).
+
+`base rows ← fetch by pk ∈ AGG(bulk pks ∪ tail pks)`. The group-by dedup (`AGG`) is
+still required: bulk and tail overlap when a row is updated inside the gap (old value in
+the index, new insert row in the tail), and a probe repeats a pk per matched term.
+Deletes inside the gap need no handling: the tail is insert-only and the base fetch is
+at the read point, so MVCC drops a pk deleted after `build_ts`. This is **json_extract
+only** — `MATCH … AGAINST` keeps search semantics and never self-completes.
+
+There is **no cost gate**. The base table carries large per-row content (avoiding the
+bulk-load of that content is the whole reason to use the index), so even a large tail
+costs no more than the full scan it replaces. `table_changes` refuses to span a
+schema-version change, so a DDL inside the gap forces the full scan — an ALTER rebuilds
+the index with `build_ts >=` the ALTER, so in practice the tail never spans it. The tail
+SQL runs through the internal SQL executor **inside the TVF** (`pkg/sql/colexec/table_function`),
+never inside `pkg/fulltext2`. The decision lives in `decideJSONProbe`
+(`recordJSONProbeTail`); `buildFulltext2SearchCfg` flips `TableConfig.ProbeTail` and
+carries the source table + pk the operator needs.
+
+### 10.4 Generation binding: the tail is bound to the generation actually searched
+
+The generation the operator searches is chosen at EXECUTION (a warm cache may reuse a
+slightly older generation than the planner measured). If the tail's lower bound were
+fixed at plan time, a query that reused an older generation could bound its tail *above*
+what it searched and drop the rows in between. The classic hole: an index is mid-load of
+an old generation `W0`; a row commits and CDC publishes `W1`; a second query plans against
+durable `W1` but executes against the still-loading `W0` — with a plan-time bound the row
+in `(W0, W1]` is lost.
+
+So the tail's lower bound is **not** a plan-time value. The operator reads
+`newsearch.BuildTS()` — the `build_ts` of the generation this search *actually* reached —
+*after* the bulk search, and runs `table_changes(BuildTS(), S]`. Whatever generation the
+cache handed it (fresh, reused, or cross-CN stale), the tail begins exactly where that
+generation ends, so no row is dropped and no plan-time/execution disagreement is possible.
+A generation already caught up to `S` yields an empty window, which the operator skips.
+Snapshot reads work identically: `BuildTS()` is the as-of-snapshot generation's bound and
+`S` is the snapshot TS, so the tail is `(that generation, S]`.
+
+Because the tail is now internal to the operator rather than a visible plan node, the
+planner publishes the reconstructed tail SQL on the scan node's `Stats.Sql`
+(`jsonProbeTail`), which `EXPLAIN (VERBOSE)` renders as `Sql: SELECT … FROM
+table_changes(…) WHERE change_type = 'insert'` — the same mechanism classic fulltext uses
+to show its index-scan SQL. So the internally-run tail is visible in the plan, not a black
+box; the displayed lower bound is the plan-time `build_ts` (the runtime bound differs only
+within the sub-second window a stale reuse opens).
+
+This closes the microsecond reuse race the plan-time-bound design left open, with no UNION
+arm and no cross-layer generation carrier.
 
 ## 11. Range probes
 

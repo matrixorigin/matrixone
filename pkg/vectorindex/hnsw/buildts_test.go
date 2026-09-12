@@ -67,7 +67,7 @@ func loadMetaFrom(t *testing.T, bat *batch.Batch, mp *mpool.MPool) []*HnswModel[
 	runSql = func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 		return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}, nil
 	}
-	idxs, err := LoadMetadata[float32](nil, "db", "meta")
+	idxs, _, err := LoadMetadata[float32](nil, "db", "meta")
 	require.NoError(t, err)
 	return idxs
 }

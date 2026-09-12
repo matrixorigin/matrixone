@@ -1,0 +1,37 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_json_prep;
+create database ft2_json_prep;
+use ft2_json_prep;
+create table t (id bigint primary key, j json);
+create fulltext2 index ftj on t(j) with parser json;
+insert into t values
+(1, '{"foo":"needle"}'),
+(2, '{"foo":"hay"}'),
+(3, '{"foo":"needle"}');
+set @ftj = (select index_table_name from mo_catalog.mo_indexes where name = 'ftj' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 't') limit 1);
+set @wait_ftj_sql = concat('select coalesce(max(chunk_id), -1) >= 0 as ready from `', database(), '`.`', @ftj, '` where index_id = ''cdc_tail'' and tag = 1');
+prepare wait_ftj from @wait_ftj_sql;
+execute wait_ftj;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_ftj;
+prepare p from 'select id from t where json_extract_string(j,''$.foo'') = ''needle'' order by id';
+execute p;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3
+insert into t values (4, '{"foo":"needle"}');
+execute p;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3  𝄀
+4
+insert into t values (5, '{"foo":"needle"}'), (6, '{"foo":"hay"}');
+execute p;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3  𝄀
+4  𝄀
+5
+deallocate prepare p;
+drop database ft2_json_prep;
