@@ -869,6 +869,116 @@ func TestReconcileAlterCopyForeignKeyReferencesOncePerRelation(t *testing.T) {
 	require.ErrorContains(t, reconcileAlterCopyParentForeignKeyReferences(c, []*plan2.ForeignKeyDef{nil}, 1, 2), "nil foreign key definition")
 }
 
+func TestCheckAlterCopyGeneratedForeignKeyColumns(t *testing.T) {
+	ctx := context.Background()
+	affected := map[uint64]string{42: "generated_key"}
+
+	t.Run("incoming scans every FK on a child table", func(t *testing.T) {
+		foreignKeys := []*plan2.ForeignKeyDef{
+			{Name: "fk_unrelated", Cols: []uint64{1}, ForeignCols: []uint64{7}},
+			{Name: "fk_generated", Cols: []uint64{2}, ForeignCols: []uint64{42}},
+		}
+		err := checkAlterCopyGeneratedForeignKeyColumns(ctx, foreignKeys, affected, true, "db.child")
+		require.ErrorContains(t, err, "fk_generated")
+		require.ErrorContains(t, err, "db.child")
+	})
+
+	t.Run("outgoing child key", func(t *testing.T) {
+		err := checkAlterCopyGeneratedForeignKeyColumns(ctx, []*plan2.ForeignKeyDef{{
+			Name: "fk_child_generated", Cols: []uint64{42}, ForeignCols: []uint64{1},
+		}}, affected, false, "")
+		require.ErrorContains(t, err, "fk_child_generated")
+		require.NotContains(t, err.Error(), "of table")
+	})
+
+	t.Run("self referenced parent key", func(t *testing.T) {
+		err := checkAlterCopyGeneratedForeignKeyColumns(ctx, []*plan2.ForeignKeyDef{{
+			Name: "fk_self_parent", Cols: []uint64{2}, ForeignCols: []uint64{42},
+		}}, affected, true, "db.self_ref")
+		require.ErrorContains(t, err, "fk_self_parent")
+		require.ErrorContains(t, err, "db.self_ref")
+	})
+
+	t.Run("unrelated key remains allowed", func(t *testing.T) {
+		err := checkAlterCopyGeneratedForeignKeyColumns(ctx, []*plan2.ForeignKeyDef{{
+			Name: "fk_other", Cols: []uint64{2}, ForeignCols: []uint64{43},
+		}}, affected, true, "db.child")
+		require.NoError(t, err)
+	})
+
+	t.Run("malformed FK metadata fails closed", func(t *testing.T) {
+		err := checkAlterCopyGeneratedForeignKeyColumns(ctx, []*plan2.ForeignKeyDef{{
+			Name: "fk_malformed", Cols: []uint64{1},
+		}}, affected, true, "db.child")
+		require.ErrorContains(t, err, "mismatched child and parent columns")
+	})
+}
+
+func TestCheckAlterCopyGeneratedForeignKeyUsesLiveChildMetadata(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.Background()
+
+	childRel := mock_frontend.NewMockRelation(ctrl)
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), uint64(200)).
+		Return("db", "child", childRel, nil).Times(1)
+
+	childConstraint := &engine.ConstraintDef{Cts: []engine.Constraint{
+		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{
+			{Name: "fk_unrelated", Cols: []uint64{10}, ForeignTbl: 100, ForeignCols: []uint64{1}},
+			{Name: "fk_live_generated", Cols: []uint64{11}, ForeignTbl: 100, ForeignCols: []uint64{2}},
+		}},
+	}}
+	getConstraintDef := gostub.Stub(&GetConstraintDef, func(_ context.Context, rel engine.Relation) (*engine.ConstraintDef, error) {
+		require.Equal(t, childRel, rel)
+		return childConstraint, nil
+	})
+	defer getConstraintDef.Reset()
+
+	typDecimal := plan2.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 1}
+	typInt := plan2.Type{Id: int32(types.T_int32)}
+	oldTable := &plan2.TableDef{
+		TblId:         100,
+		Name:          "parent",
+		Name2ColIndex: map[string]int32{"source": 0, "generated_key": 1},
+		Cols: []*plan2.ColDef{
+			{ColId: 1, Name: "source", Typ: typDecimal},
+			{
+				ColId: 2, Name: "generated_key", Typ: typInt,
+				GeneratedCol: &plan2.GeneratedCol{IsStored: true, Expr: &plan2.Expr{
+					Typ: typInt,
+					Expr: &plan2.Expr_Col{Col: &plan2.ColRef{
+						ColPos: 0, Name: "source",
+					}},
+				}},
+			},
+		},
+	}
+	copyTable := &plan2.TableDef{
+		Cols: []*plan2.ColDef{
+			{ColId: 1, Name: "source", Typ: typInt},
+			oldTable.Cols[1],
+		},
+	}
+	changeColDefMap := map[uint64]*plan2.ColDef{
+		1: {Name: "source"},
+		2: {Name: "generated_key"},
+	}
+	qry := &plan.AlterTable{
+		TableDef: oldTable, CopyTableDef: copyTable, ChangeTblColIdMap: changeColDefMap,
+	}
+	c := NewCompile("db", "db", "alter table db.parent", "", "", eng, proc, nil, false, nil, time.Now())
+
+	// The planner-facing TableDef deliberately has no FK metadata. Only the
+	// lock-held child relation snapshot contains this newly committed FK.
+	err := checkAlterCopyGeneratedColumnForeignKeys(
+		c, qry, oldTable, nil, []uint64{200}, oldTable.TblId, "db", oldTable.Name,
+	)
+	require.ErrorContains(t, err, "fk_live_generated")
+	require.ErrorContains(t, err, "db.child")
+}
+
 func TestAlterCopyAutoIncrementCleanupDiscardsTrackedReset(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProcess(t)

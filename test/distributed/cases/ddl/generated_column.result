@@ -485,6 +485,48 @@ where table_schema = database()
 and (table_name like 't38_rollback_copy_%' or table_name like 't38_unique_rollback_copy_%');
 ➤ leaked_copy_tables[-5,64,0]  𝄀
 0
+set foreign_key_checks = 1;
+create table t45_fk_parent (id int primary key, a decimal(10,1), payload int, g int generated always as (a * 10) stored, unique key uk_g(g));
+create table t45_fk_child (id int primary key, parent_id int, parent_g int, constraint fk_t45_parent_id foreign key (parent_id) references t45_fk_parent(id), constraint fk_t45_parent_g foreign key (parent_g) references t45_fk_parent(g));
+insert into t45_fk_parent (id, a, payload) values (1, 1.1, 7);
+insert into t45_fk_child values (1, 1, 11);
+alter table t45_fk_parent modify column a int;
+-- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t45_parent_g'", true)
+Cannot change column 'g': used in a foreign key constraint 'fk_t45_parent_g' of table 'test_generated_col.t45_fk_child'
+select count(*) as valid_links from t45_fk_parent p join t45_fk_child c on p.id = c.parent_id and p.g = c.parent_g where p.a = 1.1 and p.g = 11 and c.parent_g = 11;
+➤ valid_links[-5,64,0]  𝄀
+1
+alter table t45_fk_parent modify column payload bigint;
+select count(*) as valid_links from t45_fk_parent p join t45_fk_child c on p.id = c.parent_id and p.g = c.parent_g where p.a = 1.1 and p.g = 11 and c.parent_g = 11;
+➤ valid_links[-5,64,0]  𝄀
+1
+create table t46_fk_parent (k int primary key);
+create table t46_fk_child (id int primary key, a decimal(10,1), g int generated always as (a * 10) stored, constraint fk_t46_generated_child foreign key (g) references t46_fk_parent(k));
+insert into t46_fk_parent values (11);
+insert into t46_fk_child (id, a) values (1, 1.1);
+alter table t46_fk_child modify column a int;
+-- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t46_generated_child'", true)
+Cannot change column 'g': used in a foreign key constraint 'fk_t46_generated_child'
+select count(*) as valid_links from t46_fk_child c join t46_fk_parent p on c.g = p.k where c.id = 1 and c.a = 1.1 and c.g = 11;
+➤ valid_links[-5,64,0]  𝄀
+1
+create table t47_fk_self_parent (id int primary key, a decimal(10,1), g int generated always as (a * 10) stored, parent_g int, unique key uk_g(g), constraint fk_t47_self_parent foreign key (parent_g) references t47_fk_self_parent(g));
+insert into t47_fk_self_parent (id, a, parent_g) values (11, 1.1, 11);
+alter table t47_fk_self_parent modify column a int;
+-- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t47_self_parent'", true)
+Cannot change column 'g': used in a foreign key constraint 'fk_t47_self_parent' of table 'test_generated_col.t47_fk_self_parent'
+select count(*) as valid_links from t47_fk_self_parent c join t47_fk_self_parent p on c.parent_g = p.g where c.id = 11 and c.a = 1.1 and c.g = 11;
+➤ valid_links[-5,64,0]  𝄀
+1
+create table t48_fk_self_child (id int primary key, a decimal(10,1), g int generated always as (a * 10) stored, constraint fk_t48_self_child foreign key (g) references t48_fk_self_child(id));
+insert into t48_fk_self_child (id, a) values (11, 1.1);
+alter table t48_fk_self_child modify column a int;
+-- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t48_self_child'", true)
+Cannot change column 'g': used in a foreign key constraint 'fk_t48_self_child'
+select count(*) as valid_links from t48_fk_self_child c join t48_fk_self_child p on c.g = p.id where c.id = 11 and c.a = 1.1 and c.g = 11;
+➤ valid_links[-5,64,0]  𝄀
+1
+set foreign_key_checks = 1;
 create table t39_vpk (a int, b int generated always as (a+1) virtual, primary key(b));
 not supported: defining a virtual generated column 'b' as primary key
 create table t40_qualname (a int, b int generated always as (t40_qualname.a + 1) stored);
