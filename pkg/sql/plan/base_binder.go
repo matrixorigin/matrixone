@@ -5400,26 +5400,42 @@ func bindFuncExprImplByPlanExpr(
 				return nil, err
 			}
 		}
-	case "oct", "bit_and", "bit_or", "bit_xor":
+	case "oct":
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) ||
-			(name == "oct" && args[0].Typ.Id == int32(types.T_decimal256)) {
-			target := types.T_float64
-			if name == "oct" {
-				// OCT reads the integer prefix of the decimal's exact text.
-				// Going through FLOAT64 loses digits above 2^53.
-				target = types.T_varchar
-			}
-			targetType := target.ToType()
+			args[0].Typ.Id == int32(types.T_decimal256) {
+			// OCT reads the integer prefix of the decimal's exact text.
+			// Going through FLOAT64 loses digits above 2^53.
+			targetType := types.T_varchar.ToType()
 			args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
-				Id:          int32(target),
+				Id:          int32(types.T_varchar),
 				Width:       targetType.Width,
 				NotNullable: args[0].Typ.NotNullable,
 			})
 			if err != nil {
 				return nil, err
+			}
+		}
+	case "bit_and", "bit_or", "bit_xor":
+		if len(args) != 1 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
+		if bitmap, ok := storedSetBitmapExpr(args[0]); ok {
+			// SET's display wrapper is a VARCHAR presentation of a stored uint64
+			// bitmap. Bitwise aggregates are numeric consumers: use that bitmap
+			// directly so it retains the native uint64 aggregate path instead of
+			// routing an unsupported uint64 input through the numeric CAST4 helper.
+			args[0] = bitmap
+		} else {
+			argType := makeTypeByPlan2Expr(args[0])
+			if isBitwiseAggregateConversionInput(argType) {
+				targetType := types.T_int64.ToType()
+				args[0], err = appendBitwiseAggregateCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	case "like", "ilike":
@@ -7908,6 +7924,30 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 
 // --- util functions ----
+
+// isBitwiseAggregateConversionInput selects only MySQL numeric-evaluation
+// inputs for BIT_AND/OR/XOR. Keep native numeric, BIT, and binary-string
+// aggregate paths untouched; binary strings must not be routed through an
+// integer conversion.
+func isBitwiseAggregateConversionInput(t types.Type) bool {
+	if t.Charset == types.CharsetBinary {
+		return false
+	}
+	switch t.Oid {
+	case types.T_any,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_float32, types.T_float64,
+		types.T_char, types.T_varchar, types.T_text,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_year:
+		return true
+	default:
+		return false
+	}
+}
+
+func appendBitwiseAggregateCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 4)
+}
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 0, isBin...)
