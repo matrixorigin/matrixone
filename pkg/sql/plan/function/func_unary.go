@@ -7612,11 +7612,36 @@ func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, resul
 		}, selectList)
 }
 
+func encodeBase64WithLineBreaks(data []byte) []byte {
+	encodedLen := base64.StdEncoding.EncodedLen(len(data))
+	wrappedLen := encodedLen
+	breakCount := 0
+	if encodedLen > 0 {
+		breakCount = (encodedLen - 1) / 76
+		wrappedLen += breakCount
+	}
+
+	out := make([]byte, wrappedLen)
+	base64.StdEncoding.Encode(out[:encodedLen], data)
+
+	// Move later lines first so each overlapping copy preserves the unprocessed prefix.
+	for breakIndex := breakCount; breakIndex > 0; breakIndex-- {
+		srcStart := breakIndex * 76
+		srcEnd := srcStart + 76
+		if srcEnd > encodedLen {
+			srcEnd = encodedLen
+		}
+		dstStart := srcStart + breakIndex
+		copy(out[dstStart:srcEnd+breakIndex], out[srcStart:srcEnd])
+		out[dstStart-1] = '\n'
+	}
+
+	return out
+}
+
 func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
-		buf := make([]byte, base64.StdEncoding.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
-		base64.StdEncoding.Encode(buf, data)
-		return buf, nil
+		return encodeBase64WithLineBreaks(data), nil
 	}, selectList)
 }
 

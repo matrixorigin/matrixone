@@ -6365,6 +6365,9 @@ func TestUnhex(t *testing.T) {
 
 // ToBase64
 func initToBase64TestCase() []tcTemp {
+	line76 := strings.Repeat("YWFh", 19)
+	line76B := strings.Repeat("YmJi", 19)
+	line56 := strings.Repeat("YWFh", 18) + "YWE="
 	regularCases := []struct {
 		info  string
 		data  []string
@@ -6374,6 +6377,33 @@ func initToBase64TestCase() []tcTemp {
 			info:  "test encode - string to base64",
 			data:  []string{"", "abc", "a\nb", `a\nb`, "a\"b"},
 			wants: []string{"", "YWJj", "YQpi", "YVxuYg==", "YSJi"},
+		},
+		{
+			info: "test base64 line breaks at 76 encoded characters",
+			data: []string{
+				strings.Repeat("a", 56),
+				strings.Repeat("a", 57),
+				strings.Repeat("a", 58),
+				strings.Repeat("a", 59),
+				strings.Repeat("a", 60),
+				strings.Repeat("a", 113),
+				strings.Repeat("a", 114),
+				strings.Repeat("a", 115),
+				strings.Repeat("a", 57) + strings.Repeat("b", 57),
+				strings.Repeat("a", 1000),
+			},
+			wants: []string{
+				line56,
+				line76,
+				line76 + "\nYQ==",
+				line76 + "\nYWE=",
+				line76 + "\nYWFh",
+				line76 + "\n" + line56,
+				line76 + "\n" + line76,
+				line76 + "\n" + line76 + "\nYQ==",
+				line76 + "\n" + line76B,
+				strings.Repeat(line76+"\n", 17) + strings.Repeat("YWFh", 10) + "YQ==",
+			},
 		},
 	}
 
@@ -6402,6 +6432,25 @@ func TestToBase64(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestToBase64BinaryWrapBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(
+		types.T_varbinary.ToType(),
+		[]string{string(bytes.Repeat([]byte{0}, 58))},
+		[]bool{false},
+	)
+	want := NewFunctionTestResult(
+		types.T_text.ToType(),
+		false,
+		[]string{strings.Repeat("A", 76) + "\nAA=="},
+		[]bool{false},
+	)
+
+	fcTC := NewFunctionTestCase(proc, []FunctionTestInput{input}, want, ToBase64)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("binary boundary case failed: %s", info))
 }
 
 // FromBase64
