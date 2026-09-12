@@ -279,6 +279,36 @@ func textStringResultType(bound stringResultBound, charset uint8) types.Type {
 	return result
 }
 
+// soundexReturnType keeps the result column large enough for Soundex's
+// variable-length output. Soundex emits ASCII, so its maximum output length
+// is bounded by the input character count (or the byte capacity of TEXT).
+// Unbounded inputs use LONGTEXT because a plain TEXT result could be too
+// narrow when the input itself comes from a widening expression.
+func soundexReturnType(parameters []types.Type) types.Type {
+	if len(parameters) != 1 {
+		return types.NewWithCharset(types.T_text, types.MaxLongTextLen, 0, types.CharsetUTF8)
+	}
+
+	source := parameters[0]
+	if (source.Oid != types.T_char && source.Oid != types.T_varchar && source.Oid != types.T_text) || source.Width <= 0 {
+		return types.NewWithCharset(types.T_text, types.MaxLongTextLen, 0, types.CharsetUTF8)
+	}
+
+	bound := uint64(source.Width)
+	if bound < 4 {
+		bound = 4
+	}
+	if bound <= uint64(types.MaxVarcharLen) {
+		return types.NewWithCharset(types.T_varchar, int32(bound), 0, types.CharsetUTF8)
+	}
+
+	textWidth := int32(types.MaxLongTextLen)
+	if bound <= uint64(types.MaxMediumTextLen) {
+		textWidth = int32(types.MaxMediumTextLen)
+	}
+	return types.NewWithCharset(types.T_text, textWidth, 0, types.CharsetUTF8)
+}
+
 // octalResultType matches MySQL's OCT metadata. OCT returns a character
 // representation rather than a numeric value; 65 is the stable declared
 // VARCHAR width used by MySQL for this function, including the
