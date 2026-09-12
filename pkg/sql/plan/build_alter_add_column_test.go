@@ -75,6 +75,11 @@ func TestCheckGeometryKeyPartTypes(t *testing.T) {
 	require.Contains(t, err.Error(), "GEOMETRY column 'g' cannot be in unique index")
 }
 
+func TestCheckEnumPrimaryKeyPartType(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_enum), Enumvalues: "ACW,BT,XS3"}
+	require.NoError(t, checkPrimaryKeyPartType(context.Background(), typ, "source"))
+}
+
 func TestCheckAddColumnWithUniqueKeyVisibility(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -16,6 +16,7 @@ package iceberg
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,39 @@ type fakeExec struct {
 	sqls []string
 	row  RowScanner
 	rows RowsScanner
+}
+
+func (f *fakeExec) ExecTxn(ctx context.Context, fn func(SQLExecutor) error) error {
+	return fn(f)
+}
+
+type nonTransactionalFakeExec struct {
+	sqls []string
+}
+
+func (f *nonTransactionalFakeExec) Exec(ctx context.Context, sql string) (uint64, error) {
+	f.sqls = append(f.sqls, sql)
+	return 1, nil
+}
+
+func (f *nonTransactionalFakeExec) QueryRow(ctx context.Context, sql string) RowScanner {
+	f.sqls = append(f.sqls, sql)
+	return fakeRow{}
+}
+
+func (f *nonTransactionalFakeExec) Query(ctx context.Context, sql string) (RowsScanner, error) {
+	f.sqls = append(f.sqls, sql)
+	return fakeRows{}, nil
+}
+
+type transactionalFakeExec struct {
+	fakeExec
+	txnCalls int
+}
+
+func (f *transactionalFakeExec) ExecTxn(ctx context.Context, fn func(SQLExecutor) error) error {
+	f.txnCalls++
+	return fn(f)
 }
 
 type zeroAffectedExec struct {
@@ -61,6 +95,17 @@ func (f *fakeExec) QueryRow(ctx context.Context, sql string) RowScanner {
 	f.sqls = append(f.sqls, sql)
 	if f.row != nil {
 		return f.row
+	}
+	if strings.HasPrefix(sql, "select catalog_id from ") && strings.HasSuffix(sql, " for update") {
+		parts := strings.Fields(sql)
+		for i := 0; i+2 < len(parts); i++ {
+			if parts[i] == "catalog_id" && parts[i+1] == "=" {
+				catalogID, err := strconv.ParseUint(parts[i+2], 10, 64)
+				if err == nil {
+					return staticRow{values: []any{catalogID}}
+				}
+			}
+		}
 	}
 	return fakeRow{}
 }
@@ -278,6 +323,7 @@ func TestInsertCatalogSQLUsesStorageAllocatorWhenIDIsUnset(t *testing.T) {
 	require.Contains(t, sql, "insert into mo_catalog.mo_iceberg_catalogs(account_id,name")
 	require.Contains(t, CatalogsDDL, "catalog_id bigint unsigned not null auto_increment")
 	require.Contains(t, CatalogsDDL, "primary key(account_id, catalog_id)")
+	require.Contains(t, CatalogsDDL, "key catalog_id_allocator(catalog_id)")
 }
 
 func TestQuoteSQLStringEscapesBackslashAndQuote(t *testing.T) {
@@ -381,22 +427,25 @@ func TestRefCacheRefreshDAO(t *testing.T) {
 	if err != nil {
 		t.Fatalf("refresh ref cache: %v", err)
 	}
-	if len(exec.sqls) != 3 {
-		t.Fatalf("expected delete plus two inserts, got %#v", exec.sqls)
+	if len(exec.sqls) != 4 {
+		t.Fatalf("expected lifecycle lock, delete, and two inserts, got %#v", exec.sqls)
 	}
-	if !strings.Contains(exec.sqls[0], "delete from mo_catalog.mo_iceberg_refs") ||
-		!strings.Contains(exec.sqls[0], `namespace = 'gold\\'''`) ||
-		!strings.Contains(exec.sqls[0], "table_name = 'orders'") {
-		t.Fatalf("unexpected ref cache delete SQL: %s", exec.sqls[0])
+	if !strings.HasSuffix(exec.sqls[0], "for update") {
+		t.Fatalf("missing lifecycle lock SQL: %s", exec.sqls[0])
+	}
+	if !strings.Contains(exec.sqls[1], "delete from mo_catalog.mo_iceberg_refs") ||
+		!strings.Contains(exec.sqls[1], `namespace = 'gold\\'''`) ||
+		!strings.Contains(exec.sqls[1], "table_name = 'orders'") {
+		t.Fatalf("unexpected ref cache delete SQL: %s", exec.sqls[1])
 	}
 	for _, want := range []string{"insert into mo_catalog.mo_iceberg_refs", "'main'", "'branch'", "'101'", "'catalog'", "'2026-06-18 09:34:56.789000'", ",1)"} {
-		if !strings.Contains(exec.sqls[1], want) {
-			t.Fatalf("ref cache insert SQL missing %q: %s", want, exec.sqls[1])
+		if !strings.Contains(exec.sqls[2], want) {
+			t.Fatalf("ref cache insert SQL missing %q: %s", want, exec.sqls[2])
 		}
 	}
 	for _, want := range []string{"'release'", "'tag'", "'100'", "'nessie'", "utc_timestamp", ",7)"} {
-		if !strings.Contains(exec.sqls[2], want) {
-			t.Fatalf("ref cache second insert SQL missing %q: %s", want, exec.sqls[2])
+		if !strings.Contains(exec.sqls[3], want) {
+			t.Fatalf("ref cache second insert SQL missing %q: %s", want, exec.sqls[3])
 		}
 	}
 
@@ -520,7 +569,7 @@ func TestPublishJobAuditSQL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert publish job: %v", err)
 	}
-	if len(exec.sqls) != 1 || !strings.Contains(exec.sqls[0], "mo_iceberg_publish_jobs") || !strings.Contains(exec.sqls[0], "'job-1'") || !strings.Contains(exec.sqls[0], "'pending'") {
+	if len(exec.sqls) != 2 || !strings.HasSuffix(exec.sqls[0], "for update") || !strings.Contains(exec.sqls[1], "mo_iceberg_publish_jobs") || !strings.Contains(exec.sqls[1], "'job-1'") || !strings.Contains(exec.sqls[1], "'pending'") {
 		t.Fatalf("unexpected publish job insert SQL: %#v", exec.sqls)
 	}
 
@@ -551,21 +600,55 @@ func TestMaintenanceJobAuditSQL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert maintenance job: %v", err)
 	}
-	if len(exec.sqls) != 1 || !strings.Contains(exec.sqls[0], "mo_iceberg_maintenance_jobs") || !strings.Contains(exec.sqls[0], "values ('maint-1',0,7") || !strings.Contains(exec.sqls[0], "'main'") {
+	if len(exec.sqls) != 2 || !strings.HasSuffix(exec.sqls[0], "for update") || !strings.Contains(exec.sqls[1], "mo_iceberg_maintenance_jobs") || !strings.Contains(exec.sqls[1], "values ('maint-1',0,7") || !strings.Contains(exec.sqls[1], "'main'") {
 		t.Fatalf("unexpected maintenance job insert SQL: %#v", exec.sqls)
 	}
 
 	if err := dao.UpdateMaintenanceJobStatus(context.Background(), 0, "maint-1", "committed", "", "101", 5, 3, 4); err != nil {
 		t.Fatalf("update maintenance job for system account: %v", err)
 	}
-	if len(exec.sqls) != 2 {
+	if len(exec.sqls) != 3 {
 		t.Fatalf("expected insert and update SQL, got %#v", exec.sqls)
 	}
-	sql := exec.sqls[1]
+	sql := exec.sqls[2]
 	for _, want := range []string{"status = 'committed'", "error_category = null", "snapshot_after = '101'", "rewritten_file_count = 5", "removed_file_count = 3", "version = version + 1", "account_id = 0", "version = 4"} {
 		if !strings.Contains(sql, want) {
 			t.Fatalf("maintenance job status SQL missing %q: %s", want, sql)
 		}
+	}
+}
+
+func TestMaintenanceJobPublicationLocksCatalogInSameTransaction(t *testing.T) {
+	exec := &transactionalFakeExec{fakeExec: fakeExec{row: staticRow{values: []any{uint64(7)}}}}
+	err := NewDAO(exec).InsertMaintenanceJob(context.Background(), model.MaintenanceJob{
+		AccountID: 0, JobID: "maint-lock", CatalogID: 7, Namespace: "gold", TableName: "orders",
+		Operation: "rewrite_manifests", Status: "pending", Version: 1,
+	})
+	if err != nil {
+		t.Fatalf("publish maintenance job: %v", err)
+	}
+	if exec.txnCalls != 1 || len(exec.sqls) != 2 {
+		t.Fatalf("expected one transaction with lock then publication, got calls=%d sql=%#v", exec.txnCalls, exec.sqls)
+	}
+	if !strings.HasSuffix(exec.sqls[0], "for update") || !strings.Contains(exec.sqls[0], "catalog_id = 7") {
+		t.Fatalf("missing catalog lifecycle lock: %s", exec.sqls[0])
+	}
+	if !strings.Contains(exec.sqls[1], "mo_iceberg_maintenance_jobs") {
+		t.Fatalf("missing maintenance publication: %s", exec.sqls[1])
+	}
+}
+
+func TestCatalogDependencyPublicationRequiresTransactionExecutor(t *testing.T) {
+	exec := &nonTransactionalFakeExec{}
+	err := NewDAO(exec).InsertMaintenanceJob(context.Background(), model.MaintenanceJob{
+		AccountID: 0, JobID: "maint-no-txn", CatalogID: 7, Namespace: "gold", TableName: "orders",
+		Operation: "rewrite_manifests", Status: "pending", Version: 1,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires a transactional SQL executor") {
+		t.Fatalf("expected transactional executor error, got %v", err)
+	}
+	if len(exec.sqls) != 0 {
+		t.Fatalf("non-transactional executor must not publish a dependency: %#v", exec.sqls)
 	}
 }
 
@@ -591,10 +674,10 @@ func TestOrphanFileCleanupSQL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert orphan file: %v", err)
 	}
-	if len(exec.sqls) != 1 || !strings.Contains(exec.sqls[0], "mo_iceberg_orphan_files") || !strings.Contains(exec.sqls[0], "values (0,'job-1',7") || !strings.Contains(exec.sqls[0], "'gold'") || !strings.Contains(exec.sqls[0], "'file-hash'") || !strings.Contains(exec.sqls[0], "on duplicate key update written_at = values(written_at), expire_at = values(expire_at), cleanup_status = values(cleanup_status), updated_at = utc_timestamp, version = version + 1") || strings.Contains(exec.sqls[0], "KSA") {
+	if len(exec.sqls) != 2 || !strings.HasSuffix(exec.sqls[0], "for update") || !strings.Contains(exec.sqls[1], "mo_iceberg_orphan_files") || !strings.Contains(exec.sqls[1], "values (0,'job-1',7") || !strings.Contains(exec.sqls[1], "'gold'") || !strings.Contains(exec.sqls[1], "'file-hash'") || !strings.Contains(exec.sqls[1], "on duplicate key update written_at = values(written_at), expire_at = values(expire_at), cleanup_status = values(cleanup_status), updated_at = utc_timestamp, version = version + 1") || strings.Contains(exec.sqls[1], "KSA") {
 		t.Fatalf("unexpected orphan file insert SQL: %#v", exec.sqls)
 	}
-	if _, err := mysql.ParseOne(context.Background(), exec.sqls[0], 1); err != nil {
+	if _, err := mysql.ParseOne(context.Background(), exec.sqls[1], 1); err != nil {
 		t.Fatalf("parse idempotent orphan file insert SQL: %v", err)
 	}
 
@@ -608,10 +691,10 @@ func TestOrphanFileCleanupSQL(t *testing.T) {
 	if err := dao.UpdateOrphanFileCleanupStatus(context.Background(), 0, "job-1", "file-hash", "deleted", 5); err != nil {
 		t.Fatalf("update orphan cleanup status for system account: %v", err)
 	}
-	if len(exec.sqls) != 2 {
+	if len(exec.sqls) != 3 {
 		t.Fatalf("expected insert and update SQL, got %#v", exec.sqls)
 	}
-	updateSQL := exec.sqls[1]
+	updateSQL := exec.sqls[2]
 	for _, want := range []string{"cleanup_status = 'deleted'", "account_id = 0", "file_path_hash = 'file-hash'", "version = version + 1", "version = 5"} {
 		if !strings.Contains(updateSQL, want) {
 			t.Fatalf("orphan cleanup update SQL missing %q: %s", want, updateSQL)
@@ -760,7 +843,7 @@ func TestDAOWriteMethodsValidateAndExecute(t *testing.T) {
 			if err := tt.run(NewDAO(exec)); err != nil {
 				t.Fatalf("method failed: %v", err)
 			}
-			if len(exec.sqls) != 1 || !strings.Contains(exec.sqls[0], tt.want) {
+			if len(exec.sqls) == 0 || !strings.Contains(exec.sqls[len(exec.sqls)-1], tt.want) {
 				t.Fatalf("unexpected SQL for %s: %#v", tt.name, exec.sqls)
 			}
 		})
@@ -824,6 +907,11 @@ func TestDAOAdditionalSQLBuilders(t *testing.T) {
 			name: "catalog by name",
 			sql:  GetCatalogByNameSQL(1, "cat"),
 			want: []string{"from mo_catalog.mo_iceberg_catalogs", "name = 'cat'"},
+		},
+		{
+			name: "catalog by name for update",
+			sql:  GetCatalogByNameForUpdateSQL(1, "cat"),
+			want: []string{"from mo_catalog.mo_iceberg_catalogs", "name = 'cat'", "for update"},
 		},
 		{
 			name: "catalog by id",
@@ -940,17 +1028,40 @@ func TestWriteWorkflowDAOAdapters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("record orphan file: %v", err)
 	}
-	if len(exec.sqls) != 2 {
-		t.Fatalf("expected two adapter SQL statements, got %#v", exec.sqls)
+	if len(exec.sqls) != 4 {
+		t.Fatalf("expected lifecycle lock and two adapter SQL statements, got %#v", exec.sqls)
 	}
 	for _, want := range []string{"mo_iceberg_publish_jobs", "'job-1'", "'committed'", "'commit-1'", "'200'"} {
-		if !strings.Contains(exec.sqls[0], want) {
-			t.Fatalf("publish adapter SQL missing %q: %s", want, exec.sqls[0])
+		if !strings.Contains(exec.sqls[1], want) {
+			t.Fatalf("publish adapter SQL missing %q: %s", want, exec.sqls[1])
 		}
 	}
 	for _, want := range []string{"mo_iceberg_orphan_files", "'file-hash'", "'pending'"} {
-		if !strings.Contains(exec.sqls[1], want) {
-			t.Fatalf("orphan adapter SQL missing %q: %s", want, exec.sqls[1])
+		if !strings.Contains(exec.sqls[3], want) {
+			t.Fatalf("orphan adapter SQL missing %q: %s", want, exec.sqls[3])
+		}
+	}
+}
+
+func TestInsertPublishJobAllowsSystemAccount(t *testing.T) {
+	exec := &fakeExec{}
+	job := model.PublishJob{
+		AccountID:       0,
+		JobID:           "system-append-1",
+		TargetCatalogID: 7,
+		TargetNamespace: "gold",
+		TargetTable:     "orders",
+		Status:          "committed",
+	}
+	if err := NewDAO(exec).InsertPublishJob(context.Background(), job); err != nil {
+		t.Fatalf("insert system-account publish job: %v", err)
+	}
+	if len(exec.sqls) != 2 {
+		t.Fatalf("expected lifecycle lock and publish insert, got %#v", exec.sqls)
+	}
+	for _, want := range []string{"account_id = 0", "catalog_id = 7", "'system-append-1'"} {
+		if !strings.Contains(strings.Join(exec.sqls, "\n"), want) {
+			t.Fatalf("system-account publish SQL missing %q: %#v", want, exec.sqls)
 		}
 	}
 }

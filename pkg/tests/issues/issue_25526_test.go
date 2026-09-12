@@ -28,13 +28,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 )
 
-// Issue 25526: a prepared UPDATE ... JOIN executed through the binary protocol
-// (COM_STMT_PREPARE / COM_STMT_EXECUTE) hung on the second execution: the
-// cached compile retained stale operator state (hashbuild ctr, dispatch
-// channels), leaving scan receivers blocked in waitForRuntimeFilters.
-// interpolateParams=false forces the driver onto protocol-level prepared
-// statements, and both executions run on the same prepared handle.
-func TestIssue25526PreparedUpdateJoinSecondExecute(t *testing.T) {
+// Issues 25526 and 27935 exercise prepared UPDATE ... JOIN through the binary
+// protocol (COM_STMT_PREPARE / COM_STMT_EXECUTE). The first regression hung on
+// the second execution because cached operator state was stale. The second
+// wrapped a positional TIME join result in assignment casts and failed during
+// COM_STMT_PREPARE. interpolateParams=false keeps both cases on one real
+// server-side prepared handle per statement.
+func TestIssue25526And27935PreparedUpdateJoinBinaryProtocol(t *testing.T) {
 	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*180)
@@ -107,6 +107,42 @@ func TestIssue25526PreparedUpdateJoinSecondExecute(t *testing.T) {
 			}
 			require.NoError(t, rows.Err())
 			require.Equal(t, []string{"closed:13.83", "closed:35.19"}, got)
+
+			mustExec(t, ctx, conn, "create table temporal_dst(id int primary key, tm time(6))")
+			mustExec(t, ctx, conn, "create table temporal_src(k int primary key)")
+			mustExec(t, ctx, conn, "insert into temporal_dst values(1, '00:00:01')")
+			mustExec(t, ctx, conn, "insert into temporal_src values(10)")
+			mustExec(t, ctx, conn, "set session sql_mode='STRICT_TRANS_TABLES'")
+
+			temporalStmt, err := conn.PrepareContext(ctx,
+				"update temporal_dst d join temporal_src s on s.k=? set d.tm=? where d.id=?")
+			require.NoError(t, err)
+			defer temporalStmt.Close()
+
+			executeTemporalUpdate := func(value string) {
+				t.Helper()
+				res, execErr := temporalStmt.ExecContext(ctx, int64(10), value, int64(1))
+				require.NoError(t, execErr)
+				affected, affectedErr := res.RowsAffected()
+				require.NoError(t, affectedErr)
+				require.Equal(t, int64(1), affected)
+			}
+			readTemporalValue := func() string {
+				t.Helper()
+				var value string
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select cast(tm as char) from temporal_dst where id=1").Scan(&value))
+				return value
+			}
+
+			executeTemporalUpdate("02:03:04.000005")
+			_, err = temporalStmt.ExecContext(ctx, int64(10), "838:59:59.000001", int64(1))
+			require.ErrorContains(t, err, "data out of range")
+			require.Equal(t, "02:03:04.000005", readTemporalValue(), "failed assignment must leave the row unchanged")
+
+			executeTemporalUpdate("03:04:05.000006")
+			require.Equal(t, "03:04:05.000006", readTemporalValue(),
+				"the prepared handle must remain reusable after an assignment error")
 		},
 	)
 }

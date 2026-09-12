@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -132,6 +133,11 @@ func init() {
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
 
+const (
+	warningCountSystemVariable = "warning_count"
+	errorCountSystemVariable   = "error_count"
+)
+
 type ShowStatementType int
 
 const (
@@ -227,6 +233,7 @@ type Session struct {
 	// The outer key is the engine transaction ID. Entries are allocated lazily,
 	// only when a transaction actually changes a temporary-table alias.
 	tempTableTxnJournals map[string]*tempTableTxnJournal
+	retiredTempTables    map[string]sessionTempTable
 	// ddlVersion changes after every successful session DDL. It covers
 	// transaction-local catalog writes that are not visible in CatalogCache.
 	ddlVersion      atomic.Uint64
@@ -472,7 +479,25 @@ func (ses *Session) InitSystemVariables(ctx context.Context, bh BackgroundExec) 
 	if sv, err = GSysVarsMgr.Get(ses.GetTenantInfo().TenantID, ses, ctx, bh); err != nil {
 		return
 	}
+	return ses.initSystemVariablesFromGlobal(ctx, sv)
+}
+
+func (ses *Session) initSystemVariablesFromGlobal(ctx context.Context, sv *SystemVariables) (err error) {
+	if sv == nil {
+		return moerr.NewInternalError(ctx, "global system variables are not initialized")
+	}
 	sessionVars := sv.Clone()
+	// A fresh session generation must initialize runtime state as well as the
+	// values visible through @@session. time_zone is the only registered
+	// variable whose setter owns additional Session state.
+	if value := sessionVars.Get("time_zone"); value != nil {
+		if _, ok := value.(string); !ok {
+			return moerr.NewInternalErrorf(ctx, "invalid time_zone value %T", value)
+		}
+		if err = updateTimeZone(ctx, ses, sessionVars, "time_zone", value); err != nil {
+			return err
+		}
+	}
 	transactionIsolationValue := sessionVars.Get(transactionIsolationSystemVariable)
 	if transactionIsolationValue == nil {
 		transactionIsolationValue = gSysVarsDefs[transactionIsolationSystemVariable].Default
@@ -594,9 +619,17 @@ func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
 	typ plan.Type,
 	kind vector.PrepareParamKind,
 	replayable bool,
+	runtimeDomains ...types.RuntimeStringDomain,
 ) error {
 	if typ.Id == 0 {
 		typ = inferUserDefinedVarType(value)
+	}
+	runtimeDomain := types.RuntimeStringInherit
+	if len(runtimeDomains) > 0 {
+		runtimeDomain = runtimeDomains[0]
+		if !runtimeDomain.Valid() {
+			return moerr.NewInvalidInputNoCtxf("invalid user-variable runtime string domain %d", runtimeDomain)
+		}
 	}
 	ses.mu.Lock()
 	key := strings.ToLower(name)
@@ -604,12 +637,13 @@ func (ses *Session) setUserDefinedVarWithTypeAndKindAndReplayability(
 		replayable = false
 	}
 	ses.userDefinedVars[key] = &UserDefinedVar{
-		Value:            value,
-		Sql:              sql,
-		IsBin:            isBin,
-		Type:             typ,
-		PrepareParamKind: kind,
-		Replayable:       replayable,
+		Value:               value,
+		Sql:                 sql,
+		IsBin:               isBin,
+		Type:                typ,
+		PrepareParamKind:    kind,
+		RuntimeStringDomain: runtimeDomain,
+		Replayable:          replayable,
 	}
 	ses.mu.Unlock()
 	// User-variable references are typed at bind time. A later assignment can
@@ -1006,11 +1040,20 @@ func (ses *Session) optimizerStatsKey(tableID uint64) optimizerStatsTableKey {
 }
 
 type optimizerStatsCacheTag struct {
-	key     optimizerStatsTableKey
-	version uint64
+	key               optimizerStatsTableKey
+	version           uint64
+	tableDefVersion   uint32
+	tableVersionBound bool
 }
 
 func (ses *Session) getStatsCacheWithVersion(key optimizerStatsTableKey) (*plan2.StatsCache, uint64) {
+	return ses.getStatsCacheForTableDefVersion(key, nil)
+}
+
+func (ses *Session) getStatsCacheForTableDefVersion(
+	key optimizerStatsTableKey,
+	tableDefVersion *uint32,
+) (*plan2.StatsCache, uint64) {
 	ses.statsCacheMu.Lock()
 	defer ses.statsCacheMu.Unlock()
 	ses.initStatsCacheLocked()
@@ -1024,7 +1067,10 @@ func (ses *Session) getStatsCacheWithVersion(key optimizerStatsTableKey) (*plan2
 		// generation. Once any publication has happened, an untagged entry is
 		// conservatively stale.
 		ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
-	} else if tag.key != key || tag.version != version {
+	} else if tag.key != key || tag.version != version ||
+		(tag.tableVersionBound &&
+			(tableDefVersion == nil || tag.tableDefVersion != *tableDefVersion)) ||
+		(tableDefVersion != nil && !tag.tableVersionBound) {
 		ses.statsCache.Delete(key.tableID)
 		delete(ses.statsCacheVersions, key.tableID)
 	}
@@ -1036,6 +1082,15 @@ func (ses *Session) cacheStatsIfCurrent(
 	version uint64,
 	stats *pbstats.StatsInfo,
 ) bool {
+	return ses.cacheStatsForTableDefVersionIfCurrent(key, version, nil, stats)
+}
+
+func (ses *Session) cacheStatsForTableDefVersionIfCurrent(
+	key optimizerStatsTableKey,
+	version uint64,
+	tableDefVersion *uint32,
+	stats *pbstats.StatsInfo,
+) bool {
 	ses.statsCacheMu.Lock()
 	defer ses.statsCacheMu.Unlock()
 	if currentOptimizerStatsVersion(ses.GetService(), key) != version {
@@ -1045,13 +1100,19 @@ func (ses *Session) cacheStatsIfCurrent(
 	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
 		clear(ses.statsCacheVersions)
 	}
-	ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	tag := optimizerStatsCacheTag{key: key, version: version}
+	if tableDefVersion != nil {
+		tag.tableDefVersion = *tableDefVersion
+		tag.tableVersionBound = true
+	}
+	ses.statsCacheVersions[key.tableID] = tag
 	return true
 }
 
-func (ses *Session) cachePublishedStats(
+func (ses *Session) cachePublishedStatsForTableDefVersion(
 	key optimizerStatsTableKey,
 	version uint64,
+	tableDefVersion *uint32,
 	stats *pbstats.StatsInfo,
 ) {
 	ses.statsCacheMu.Lock()
@@ -1060,7 +1121,12 @@ func (ses *Session) cachePublishedStats(
 	if ses.statsCache.SetAndReportReset(key.tableID, stats) {
 		clear(ses.statsCacheVersions)
 	}
-	ses.statsCacheVersions[key.tableID] = optimizerStatsCacheTag{key: key, version: version}
+	tag := optimizerStatsCacheTag{key: key, version: version}
+	if tableDefVersion != nil {
+		tag.tableDefVersion = *tableDefVersion
+		tag.tableVersionBound = true
+	}
+	ses.statsCacheVersions[key.tableID] = tag
 }
 
 func (ses *Session) initStatsCacheLocked() {
@@ -1318,7 +1384,50 @@ func (ses *Session) sqlModeHasOnlyFullGroupBy() bool {
 	return ok && has
 }
 
-func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val interface{}) {
+func (ses *Session) sqlModeHasEnableBoolSumAvg() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasEnableBoolSumAvgValue(value)
+	return ok && has
+}
+
+func (ses *Session) sqlModeHasHighNotPrecedence() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasHighNotPrecedenceValue(value)
+	return ok && has
+}
+
+func (ses *Session) sqlModeParserFlags() mysql.SQLModeFlags {
+	if ses == nil {
+		return 0
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return 0
+	}
+	flags, ok := sqlModeParserFlagsValue(value)
+	if !ok {
+		return 0
+	}
+	return flags
+}
+
+// updateSqlModeCaches evicts cached plans when a sql_mode token that shapes
+// the plan or parser output changes membership. Every token the planner or
+// parser reads at bind time must be compared here: the cache is keyed by SQL
+// text alone.
+func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence bool, oldParserFlags mysql.SQLModeFlags, val interface{}) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
 	if !ok {
@@ -1328,7 +1437,21 @@ func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy bool, val 
 	if !ok {
 		return
 	}
-	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy {
+	newBoolSumAvg, ok := sqlModeHasEnableBoolSumAvgValue(val)
+	if !ok {
+		return
+	}
+	newHighNotPrecedence, ok := sqlModeHasHighNotPrecedenceValue(val)
+	if !ok {
+		return
+	}
+	newParserFlags, ok := sqlModeParserFlagsValue(val)
+	if !ok {
+		return
+	}
+	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy ||
+		oldBoolSumAvg != newBoolSumAvg || oldHighNotPrecedence != newHighNotPrecedence ||
+		oldParserFlags != newParserFlags {
 		ses.cleanCache()
 	}
 }
@@ -1347,6 +1470,8 @@ type errInfo struct {
 	levels        []string
 	maxCnt        int
 	totalWarnings uint64
+	totalErrors   uint64
+	warningBytes  int
 }
 
 func (e *errInfo) push(code uint16, msg string) {
@@ -1354,14 +1479,37 @@ func (e *errInfo) push(code uint16, msg string) {
 }
 
 func (e *errInfo) pushWithLevel(code uint16, msg, level string) {
-	if !strings.EqualFold(level, "Error") {
-		e.totalWarnings++
+	if strings.EqualFold(level, "Error") {
+		e.addErrorCount(1)
+	} else {
+		e.addWarningCount(1)
 	}
 	e.pushStored(code, msg, level)
 }
 
 func (e *errInfo) pushStored(code uint16, msg, level string) {
-	if e.maxCnt > 0 && len(e.codes) >= e.maxCnt {
+	dropOldest := e.maxCnt > 0 && len(e.codes) >= e.maxCnt
+	droppedWarningBytes := 0
+	if dropOldest && len(e.levels) > 0 && !strings.EqualFold(e.levels[0], "Error") {
+		droppedWarningBytes = len(e.msgs[0])
+	}
+	if !strings.EqualFold(level, "Error") {
+		remaining := process.WarningDiagnosticMaxBytes - (e.warningBytes - droppedWarningBytes)
+		if remaining <= 0 {
+			return
+		}
+		if remaining > process.WarningDiagnosticMaxMessageBytes {
+			remaining = process.WarningDiagnosticMaxMessageBytes
+		}
+		msg = process.BoundWarningMessage(msg, remaining)
+		if dropOldest {
+			e.warningBytes -= droppedWarningBytes
+		}
+		e.warningBytes += len(msg)
+	} else if dropOldest {
+		e.warningBytes -= droppedWarningBytes
+	}
+	if dropOldest {
 		e.codes = e.codes[1:]
 		e.msgs = e.msgs[1:]
 		e.levels = e.levels[1:]
@@ -1371,9 +1519,35 @@ func (e *errInfo) pushStored(code uint16, msg, level string) {
 	e.levels = append(e.levels, level)
 }
 
+func (e *errInfo) addWarningCount(delta uint64) {
+	e.totalWarnings = saturatingAddUint64(e.totalWarnings, delta)
+}
+
+func (e *errInfo) addErrorCount(delta uint64) {
+	e.totalErrors = saturatingAddUint64(e.totalErrors, delta)
+}
+
+func saturatingAddUint64(value, delta uint64) uint64 {
+	if ^uint64(0)-value < delta {
+		return ^uint64(0)
+	}
+	return value + delta
+}
+
+func (e *errInfo) appendWarningCount(total uint64) {
+	e.addWarningCount(total)
+}
+
 func (e *errInfo) appendWarningBatch(total uint64, codes []uint16, msgs []string) {
-	e.totalWarnings += total
-	for i := 0; i < len(codes) && i < len(msgs); i++ {
+	e.addWarningCount(total)
+	limit := len(codes)
+	if len(msgs) < limit {
+		limit = len(msgs)
+	}
+	if uint64(limit) > total {
+		limit = int(total)
+	}
+	for i := 0; i < limit; i++ {
 		e.pushStored(codes[i], msgs[i], "Warning")
 	}
 }
@@ -1383,6 +1557,8 @@ func (e *errInfo) reset() {
 	e.msgs = e.msgs[:0]
 	e.levels = e.levels[:0]
 	e.totalWarnings = 0
+	e.totalErrors = 0
+	e.warningBytes = 0
 }
 
 func (e *errInfo) snapshot() errInfo {
@@ -1392,11 +1568,38 @@ func (e *errInfo) snapshot() errInfo {
 		levels:        append([]string(nil), e.levels...),
 		maxCnt:        e.maxCnt,
 		totalWarnings: e.totalWarnings,
+		totalErrors:   e.totalErrors,
+		warningBytes:  e.warningBytes,
 	}
 }
 
 func (e errInfo) length() int {
 	return len(e.codes)
+}
+
+// diagnosticCounts returns the SQL-visible totals. Retained records are only
+// a bounded view for SHOW WARNINGS/ERRORS and must not be used as the count
+// source. The record fallback keeps hand-built test snapshots and any
+// pre-counter state well-defined.
+func (e errInfo) diagnosticCounts() (warningCount, errorCount uint64) {
+	warningCount = e.totalWarnings
+	errorCount = e.totalErrors
+	if warningCount != 0 || errorCount != 0 {
+		return saturatingAddUint64(warningCount, errorCount), errorCount
+	}
+
+	for i := range e.codes {
+		level := "Error"
+		if i < len(e.levels) && e.levels[i] != "" {
+			level = e.levels[i]
+		}
+		if strings.EqualFold(level, "Error") {
+			errorCount = saturatingAddUint64(errorCount, 1)
+		} else {
+			warningCount = saturatingAddUint64(warningCount, 1)
+		}
+	}
+	return saturatingAddUint64(warningCount, errorCount), errorCount
 }
 
 func (e errInfo) warningCount() uint16 {
@@ -1527,73 +1730,130 @@ func (ses *Session) ReserveConnAndClose() {
 	ses.Close()
 }
 
-func (ses *Session) Close() {
-	// Clean up temporary tables
-	type tempTableEntry struct {
-		dbName   string
-		realName string
-	}
-	var tenant *TenantInfo
+type sessionTempTable struct {
+	retired  bool
+	aliasKey string
+	dbName   string
+	realName string
+	identity tempTableIdentity
+}
+
+func (ses *Session) takeTempTables() ([]sessionTempTable, *TenantInfo) {
 	ses.mu.Lock()
-	tempTables := make([]tempTableEntry, 0, len(ses.tempTables))
+	tempTables := make([]sessionTempTable, 0, len(ses.tempTables))
 	for key, realName := range ses.tempTables {
 		identity := ses.tempTableIdentityLocked(key)
-		tempTables = append(tempTables, tempTableEntry{
-			dbName: identity.dbName, realName: realName,
+		tempTables = append(tempTables, sessionTempTable{
+			aliasKey: key,
+			dbName:   identity.dbName,
+			realName: realName,
+			identity: identity,
 		})
 	}
+	for _, tbl := range ses.retiredTempTables {
+		tempTables = append(tempTables, tbl)
+	}
+	ses.retiredTempTables = nil
 	ses.tempTables = nil
 	ses.tempTablesRev = nil
 	ses.tempTableIdentities = nil
 	ses.tempTableTxnJournals = nil
-	tenant = ses.tenant
+	tenant := ses.tenant
 	ses.mu.Unlock()
-	var tenantInfo *TenantInfo
 	if tenant != nil {
-		tenantInfo = tenant.Copy()
+		tenant = tenant.Copy()
 	}
+	return tempTables, tenant
+}
 
+func dropSessionTempTables(
+	ctx context.Context,
+	service string,
+	timeZone *time.Location,
+	tenant *TenantInfo,
+	tempTables []sessionTempTable,
+) error {
+	if len(tempTables) == 0 {
+		return nil
+	}
+	serviceRuntime := moruntime.ServiceRuntime(service)
+	if serviceRuntime == nil {
+		return moerr.NewInternalError(ctx, "failed to clean temporary tables: service runtime is not ready")
+	}
+	v, ok := serviceRuntime.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	if !ok {
+		return moerr.NewInternalError(ctx, "failed to clean temporary tables: internal SQL executor is not ready")
+	}
+	exec, ok := v.(executor.SQLExecutor)
+	if !ok {
+		return moerr.NewInternalError(ctx, "failed to clean temporary tables: invalid internal SQL executor")
+	}
+	opts := executor.Options{}.WithTimeZone(timeZone)
+	if tenant != nil {
+		opts = opts.WithAccountID(tenant.GetTenantID()).WithStatementOption(
+			executor.StatementOption{}.
+				WithAccountID(tenant.GetTenantID()).
+				WithUserID(tenant.GetUserID()).
+				WithRoleID(tenant.GetDefaultRoleID()),
+		)
+	}
+	var cleanupErr error
+	for _, tbl := range tempTables {
+		dropSQL := "DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent(tbl.dbName, tbl.realName)
+		res, err := exec.Exec(ctx, dropSQL, opts)
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, err)
+			continue
+		}
+		res.Close()
+	}
+	return cleanupErr
+}
+
+// resetTempTables synchronously removes every physical temporary table before
+// a replacement session generation is published. Session.Close may clean up
+// asynchronously because a disconnected client has no generation to reuse.
+func (ses *Session) resetTempTables(ctx context.Context) error {
+	tempTables, tenant := ses.takeTempTables()
+	if err := dropSessionTempTables(ctx, ses.GetService(), ses.GetTimeZone(), tenant, tempTables); err != nil {
+		// Preserve a retryable owner on failure. DROP IF EXISTS makes entries that
+		// were already removed safe to execute again on the next reset attempt.
+		ses.mu.Lock()
+		ses.tempTables = make(map[string]string, len(tempTables))
+		ses.tempTablesRev = make(map[string]string, len(tempTables))
+		ses.tempTableIdentities = make(map[string]tempTableIdentity, len(tempTables))
+		for _, tbl := range tempTables {
+			if tbl.retired {
+				if ses.retiredTempTables == nil {
+					ses.retiredTempTables = make(map[string]sessionTempTable)
+				}
+				ses.retiredTempTables[tbl.realName] = tbl
+				continue
+			}
+			ses.tempTables[tbl.aliasKey] = tbl.realName
+			ses.tempTablesRev[tbl.realName] = tbl.aliasKey
+			ses.tempTableIdentities[tbl.aliasKey] = tbl.identity
+		}
+		ses.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (ses *Session) Close() {
+	// The disconnect path has no next borrower, so temporary-table cleanup can
+	// be asynchronous. Reset uses resetTempTables before it reaches Close.
+	tempTables, tenantInfo := ses.takeTempTables()
 	if len(tempTables) > 0 {
 		service := ses.GetService()
 		timeZone := ses.GetTimeZone()
 		go func() {
-			// use a new context to clean up temp tables
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()
 
 			_, _ = ExecuteFuncWithRecover(func() error {
-				serviceRuntime := moruntime.ServiceRuntime(service)
-				if serviceRuntime == nil {
-					logutil.Errorf("failed to clean temporary tables: service runtime is not ready")
-					return nil
-				}
-				v, ok := serviceRuntime.GetGlobalVariables(moruntime.InternalSQLExecutor)
-				if !ok {
-					logutil.Errorf("failed to clean temporary tables: internal SQL executor is not ready")
-					return nil
-				}
-				exec, ok := v.(executor.SQLExecutor)
-				if !ok {
-					logutil.Errorf("failed to clean temporary tables: invalid internal SQL executor")
-					return nil
-				}
-				opts := executor.Options{}.WithTimeZone(timeZone)
-				if tenantInfo != nil {
-					opts = opts.WithAccountID(tenantInfo.GetTenantID()).WithStatementOption(
-						executor.StatementOption{}.
-							WithAccountID(tenantInfo.GetTenantID()).
-							WithUserID(tenantInfo.GetUserID()).
-							WithRoleID(tenantInfo.GetDefaultRoleID()),
-					)
-				}
-				for _, tbl := range tempTables {
-					dropSQL := "DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent(tbl.dbName, tbl.realName)
-					res, err := exec.Exec(ctx, dropSQL, opts)
-					if err != nil {
-						logutil.Errorf("failed to drop temp table %s: %v", tbl.realName, err)
-						continue
-					}
-					res.Close()
+				if err := dropSessionTempTables(ctx, service, timeZone, tenantInfo, tempTables); err != nil {
+					logutil.Errorf("failed to clean temporary tables: %v", err)
 				}
 				return nil
 			})
@@ -2070,6 +2330,20 @@ func (ses *Session) AppendWarningDiagnostic(code uint16, msg string) {
 	ses.appendWarningDiagnostic(code, msg)
 }
 
+// AppendWarningCount adds warnings whose diagnostic records were omitted by
+// the bounded transport. Callers pass only the count not represented by
+// subsequent AppendWarningDiagnostic calls.
+func (ses *Session) AppendWarningCount(total uint64) {
+	if total == 0 {
+		return
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.appendWarningCount(total)
+	}
+}
+
 // AppendWarningBatch merges the total warning count from a remote fragment
 // while retaining only the bounded records needed by SHOW WARNINGS.
 func (ses *Session) AppendWarningBatch(total uint64, codes []uint16, messages []string) {
@@ -2087,6 +2361,15 @@ func (ses *Session) diagnosticsSnapshot() errInfo {
 		return errInfo{}
 	}
 	return ses.errInfo.snapshot()
+}
+
+func (ses *Session) diagnosticsCounts() (warningCount, errorCount uint64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return 0, 0
+	}
+	return ses.errInfo.diagnosticCounts()
 }
 
 func (ses *Session) GenNewStmtId() uint32 {
@@ -2421,6 +2704,41 @@ func (ses *Session) prepareAuthenticationSnapshot(ctx context.Context) error {
 	return nil
 }
 
+type authenticationRejectedError struct {
+	cause error
+}
+
+func (e *authenticationRejectedError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *authenticationRejectedError) Unwrap() error {
+	return e.cause
+}
+
+func markAuthenticationRejected(err error) error {
+	if err == nil {
+		return nil
+	}
+	var rejected *authenticationRejectedError
+	if errors.As(err, &rejected) {
+		return err
+	}
+	return &authenticationRejectedError{cause: err}
+}
+
+func isAuthenticationRejected(err error) bool {
+	var rejected *authenticationRejectedError
+	return errors.As(err, &rejected)
+}
+
+// isAuthenticationRequestRejected identifies a deterministic login-request
+// validation failure. Unlike credential rejection, the same client request
+// cannot succeed by trying another cached backend generation.
+func isAuthenticationRequestRejected(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrBadDB)
+}
+
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
 func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
 	var (
@@ -2459,16 +2777,22 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	ses.UpdateDebugString()
 
 	ses.Debugf(ctx, "check special user")
-	// check the special user for initialization
-	if isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser()); isSpecial && specialAccount.IsMoAdminRole() {
+	isSpecial, pwdBytes, specialAccount := isSpecialUser(tenant.GetUser())
+	isBootstrapSpecial := isSpecial && specialAccount.IsMoAdminRole()
+	// Internal special users bootstrap the service before catalog access is
+	// available. External special users are normal client connections and must
+	// observe the same fresh catalog boundary as every other public session.
+	if !isBootstrapSpecial || !ses.isInternal {
+		if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
+			return nil, err
+		}
+	}
+	if isBootstrapSpecial {
 		ses.SetTenantInfo(specialAccount)
 		if len(ses.requestLabel) == 0 {
 			ses.requestLabel = db_holder.GetLabelSelector()
 		}
 		return GetPassWord(HashPassWordWithByte(pwdBytes))
-	}
-	if err = ses.prepareAuthenticationSnapshot(ctx); err != nil {
-		return nil, err
 	}
 
 	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{
@@ -2499,7 +2823,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if !execResultArrayHasData(rsset) {
-		return nil, moerr.NewInternalErrorf(sysTenantCtx, "there is no tenant %s", tenant.GetTenant())
+		return nil, markAuthenticationRejected(
+			moerr.NewInternalErrorf(sysTenantCtx, "there is no tenant %s", tenant.GetTenant()))
 	}
 
 	//account id
@@ -2527,7 +2852,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusSuspend.String() {
-		return nil, moerr.NewInternalErrorf(sysTenantCtx, "Account %s is suspended", tenant.GetTenant())
+		return nil, markAuthenticationRejected(
+			moerr.NewInternalErrorf(sysTenantCtx, "Account %s is suspended", tenant.GetTenant()))
 	}
 
 	if strings.ToLower(accountStatus) == tree.AccountStatusRestricted.String() {
@@ -2558,7 +2884,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		return nil, err
 	}
 	if !execResultArrayHasData(userRsset) {
-		return nil, moerr.NewInternalErrorf(tenantCtx, "there is no user %s", tenant.GetUser())
+		return nil, markAuthenticationRejected(
+			moerr.NewInternalErrorf(tenantCtx, "there is no user %s", tenant.GetUser()))
 	}
 
 	userID, err = userRsset[0].GetInt64(tenantCtx, 0, 0)
@@ -2608,7 +2935,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalErrorf(tenantCtx, "there is no role %s", tenant.GetDefaultRole())
+			return nil, markAuthenticationRejected(
+				moerr.NewInternalErrorf(tenantCtx, "there is no role %s", tenant.GetDefaultRole()))
 		}
 
 		ses.Debugf(tenantCtx, "check granted role of user %s.", tenant)
@@ -2622,8 +2950,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			return nil, err
 		}
 		if !execResultArrayHasData(rsset) {
-			return nil, moerr.NewInternalErrorf(tenantCtx, "the role %s has not been granted to the user %s",
-				tenant.GetDefaultRole(), tenant.GetUser())
+			return nil, markAuthenticationRejected(moerr.NewInternalErrorf(tenantCtx,
+				"the role %s has not been granted to the user %s", tenant.GetDefaultRole(), tenant.GetUser()))
 		}
 
 		defaultRoleID, err = rsset[0].GetInt64(tenantCtx, 0, 0)
@@ -2700,7 +3028,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 	}
 
 	if userStatus == userStatusLockForever {
-		return nil, moerr.NewInternalError(tenantCtx, "user is locked, please ask the administrator to unlock")
+		return nil, markAuthenticationRejected(
+			moerr.NewInternalError(tenantCtx, "user is locked, please ask the administrator to unlock"))
 	} else if userStatus == userStatusLock {
 		/*
 			if user lock status is locked
@@ -2711,7 +3040,8 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 		}
 
 		if !lockTimeExpired {
-			return nil, moerr.NewInternalError(tenantCtx, "user is locked, please try again later")
+			return nil, markAuthenticationRejected(
+				moerr.NewInternalError(tenantCtx, "user is locked, please try again later"))
 		}
 	}
 
@@ -2782,7 +3112,7 @@ func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbNa
 			}
 		}
 
-		return nil, moerr.NewInternalError(tenantCtx, "check password failed")
+		return nil, markAuthenticationRejected(moerr.NewInternalError(tenantCtx, "check password failed"))
 	}
 
 	// If the login information contains the database name, verify if the database exists
@@ -2864,8 +3194,8 @@ func resolveImplicitDefaultRole(
 		}
 
 		if roleID == publicRoleID {
-			return 0, "", moerr.NewInternalErrorf(ctx,
-				"get a valid default role of the user %d failed", userID)
+			return 0, "", markAuthenticationRejected(moerr.NewInternalErrorf(ctx,
+				"get a valid default role of the user %d failed", userID))
 		}
 		roleID = publicRoleID
 	}
@@ -3142,6 +3472,27 @@ func (ses *Session) getCleanupContext() context.Context {
 	return context.Background()
 }
 
+// inheritPhysicalConnection copies only metadata owned by the authenticated
+// transport. Identity and session-scoped SQL state are intentionally excluded.
+func (ses *Session) inheritPhysicalConnection(prev *Session) {
+	ses.uuid = prev.uuid
+	ses.fromRealUser = prev.fromRealUser
+	ses.rm = prev.rm
+	ses.rt = prev.rt
+	ses.requestLabel = make(map[string]string, len(prev.requestLabel))
+	for key, value := range prev.requestLabel {
+		ses.requestLabel[key] = value
+	}
+	ses.connType = prev.connType
+	ses.timestampMap = make(map[TS]time.Time, len(prev.timestampMap))
+	for key, value := range prev.timestampMap {
+		ses.timestampMap[key] = value
+	}
+	ses.fromProxy = prev.fromProxy
+	ses.clientAddr = prev.clientAddr
+	ses.proxyAddr = prev.proxyAddr
+}
+
 // reset resets the ses instance and copy some fields of prev, then
 // close the prev.
 func (ses *Session) reset(ctx context.Context, prev *Session) error {
@@ -3155,30 +3506,54 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	for k, v := range prev.label {
 		ses.label[k] = v
 	}
-	// Callers treat time.Location values as immutable and share them by pointer.
-	// New sessions default to time.Local, so copying into the pointed value
-	// would mutate the process-wide location while loggers and other sessions
-	// read it.
-	ses.timeZone = prev.timeZone
-	ses.uuid = prev.uuid
-	ses.fromRealUser = prev.fromRealUser
-	ses.rm = prev.rm
-	ses.rt = prev.rt
-	ses.requestLabel = make(map[string]string, len(prev.requestLabel))
-	for k, v := range prev.requestLabel {
-		ses.requestLabel[k] = v
-	}
-	ses.connType = prev.connType
-	ses.timestampMap = make(map[TS]time.Time, len(prev.timestampMap))
-	for k, v := range prev.timestampMap {
-		ses.timestampMap[k] = v
-	}
-	ses.fromProxy = prev.fromProxy
-	ses.clientAddr = prev.clientAddr
-	ses.proxyAddr = prev.proxyAddr
+	ses.inheritPhysicalConnection(prev)
 
+	// Initialize the unpublished generation from the account's current global
+	// defaults. This deliberately does not copy the old session variables or
+	// their derived runtime state (for example time_zone).
+	initCtx := ctx
+	if initCtx == nil {
+		initCtx = context.Background()
+	}
+	if tenant := ses.GetTenantInfo(); tenant != nil {
+		initCtx = defines.AttachAccount(
+			initCtx,
+			tenant.GetTenantID(),
+			tenant.GetUserID(),
+			tenant.GetDefaultRoleID(),
+		)
+	}
+	prev.mu.Lock()
+	globalVars := prev.gSysVars
+	prev.mu.Unlock()
+	var err error
+	if globalVars != nil {
+		err = ses.initSystemVariablesFromGlobal(initCtx, globalVars)
+	} else {
+		// This fallback is for internal or partially initialized sessions. Normal
+		// authenticated sessions already retain the account-global snapshot.
+		bh := ses.GetBackgroundExec(initCtx)
+		err = ses.InitSystemVariables(initCtx, bh)
+		bh.Close()
+	}
+	if err != nil {
+		return err
+	}
+
+	return prev.closeForReset(ctx)
+}
+
+// errSessionResetConnectionMustClose marks an error after the old session
+// generation has changed state. The MySQL connection must not be reused: an
+// ERR response alone cannot restore physical temporary-table state.
+var errSessionResetConnectionMustClose = moerr.NewInternalErrorNoCtx("session reset must close connection")
+
+// closeForReset retires a session generation while preserving the physical
+// protocol connection. All reusable server-side state must be gone before
+// the replacement generation can be published.
+func (ses *Session) closeForReset(ctx context.Context) error {
 	// rollback the transactions in the old session.
-	rollbackCtx := prev.getCleanupContext()
+	rollbackCtx := ses.getCleanupContext()
 	if ctx != nil {
 		cancelCtx, cancel := context.WithCancelCause(rollbackCtx)
 		stopCancel := context.AfterFunc(ctx, func() {
@@ -3195,22 +3570,47 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	}
 	tempExecCtx := ExecCtx{
 		reqCtx: rollbackCtx,
-		ses:    prev,
+		ses:    ses,
 		txnOpt: FeTxnOption{byRollback: true},
 	}
-	err := prev.GetTxnHandler().rollbackWithContext(rollbackCtx, &tempExecCtx)
+	err := ses.GetTxnHandler().rollbackWithContext(rollbackCtx, &tempExecCtx)
+	tempExecCtx.Close()
 	if err != nil {
-		prev.Error(tempExecCtx.reqCtx, "failed to rollback txn",
+		ses.Error(rollbackCtx, "failed to rollback txn",
 			zap.Error(err))
-		return err
+		// rollbackUnsafe invalidates the transaction handle even when the
+		// storage rollback fails or its context expires. The old generation is
+		// therefore no longer an untouched, reusable session: fail closed just
+		// as we do after a partially completed temporary-table cleanup.
+		return errors.Join(err, errSessionResetConnectionMustClose)
 	}
 	if ctx != nil {
 		if cause := context.Cause(ctx); cause != nil {
-			return cause
+			return errors.Join(cause, errSessionResetConnectionMustClose)
 		}
 	}
+	// Internal SQL execution requires a bounded context. The transaction cleanup
+	// context intentionally outlives request contexts and therefore has no
+	// deadline of its own, so carry the reset deadline across when one exists and
+	// otherwise use the same safety bound as asynchronous disconnect cleanup.
+	tempCleanupCtx := rollbackCtx
+	var tempCleanupCancel context.CancelFunc
+	if ctx != nil {
+		if deadline, ok := ctx.Deadline(); ok {
+			tempCleanupCtx, tempCleanupCancel = context.WithDeadline(rollbackCtx, deadline)
+		}
+	}
+	if tempCleanupCancel == nil {
+		tempCleanupCtx, tempCleanupCancel = context.WithTimeout(rollbackCtx, time.Minute)
+	}
+	defer tempCleanupCancel()
+	if err = ses.resetTempTables(tempCleanupCtx); err != nil {
+		ses.Error(tempCleanupCtx, "failed to drop temporary tables during session reset",
+			zap.Error(err))
+		return errors.Join(err, errSessionResetConnectionMustClose)
+	}
 	// close the previous session.
-	prev.ReserveConnAndClose()
+	ses.ReserveConnAndClose()
 	return nil
 }
 

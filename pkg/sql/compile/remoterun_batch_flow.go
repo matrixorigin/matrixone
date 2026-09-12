@@ -41,6 +41,9 @@ type pipelineBatchFlow struct {
 	pending  map[uint64]uint64
 	changed  chan struct{}
 	abortErr error
+	// stoppedByReceiver distinguishes an internal StopSending from query or
+	// connection cancellation at the terminal-response drain boundary.
+	stoppedByReceiver bool
 }
 
 func newPipelineBatchFlow(requestedCount uint32, requestedBytes uint64) *pipelineBatchFlow {
@@ -110,6 +113,18 @@ func (f *pipelineBatchFlow) reserve(
 // credit waiters and the terminal-response drain barrier. The first abort cause
 // owns the terminal state; later StopSending messages and late ACKs are benign.
 func (f *pipelineBatchFlow) abort(cause error) {
+	f.terminate(cause, false)
+}
+
+// stop releases batch-credit waiters after the downstream receiver has
+// intentionally stopped consuming.  The marker lets the terminal-response
+// path treat this internal cancellation as success without hiding cancellation
+// of the owning query context.
+func (f *pipelineBatchFlow) stop(cause error) {
+	f.terminate(cause, true)
+}
+
+func (f *pipelineBatchFlow) terminate(cause error, stoppedByReceiver bool) {
 	if f == nil {
 		return
 	}
@@ -119,11 +134,21 @@ func (f *pipelineBatchFlow) abort(cause error) {
 	f.mu.Lock()
 	if f.abortErr == nil {
 		f.abortErr = cause
+		f.stoppedByReceiver = stoppedByReceiver
 		clear(f.pending)
 		f.bytes = 0
 		f.notifyLocked()
 	}
 	f.mu.Unlock()
+}
+
+func (f *pipelineBatchFlow) wasStoppedByReceiver() bool {
+	if f == nil {
+		return false
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stoppedByReceiver
 }
 
 func (f *pipelineBatchFlow) rollback(seq uint64) {
@@ -213,7 +238,7 @@ func abortPipelineBatchFlow(cs morpc.ClientSession, id uint64, cause error) {
 	if !ok {
 		return
 	}
-	value.(*pipelineStreamLifecycle).batchFlow.abort(cause)
+	value.(*pipelineStreamLifecycle).batchFlow.stop(cause)
 }
 
 func handlePipelineBatchAck(message *pipeline.Message, cs morpc.ClientSession) error {

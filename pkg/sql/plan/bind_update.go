@@ -26,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planutil "github.com/matrixorigin/matrixone/pkg/sql/util"
@@ -226,6 +228,27 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 		column := tableDef.Cols[columnIndex]
 		if isDefaultValExpr(rhs) {
 			rhs, err = getDefaultExpr(builder.GetContext(), column)
+			if err != nil {
+				return 0, nil, 0, err
+			}
+			currentValues := make(map[int32]*plan.Expr, len(tableDef.Cols))
+			for i := range tableDef.Cols {
+				if i < len(currentProjectList) {
+					// Resolve DEFAULT references against the row image produced by
+					// the preceding assignment projection.  Keeping the raw
+					// expression here would replay a volatile default (for example,
+					// RAND()) instead of reading the value already materialized in
+					// the current row.
+					currentValues[int32(i)] = &plan.Expr{
+						Typ: currentProjectList[i].Typ,
+						Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: currentTag,
+							ColPos: int32(i),
+						}},
+					}
+				}
+			}
+			rhs, err = expandDefaultExprWithColumnExprs(builder.GetContext(), rhs, currentValues)
 			if err != nil {
 				return 0, nil, 0, err
 			}
@@ -616,6 +639,17 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				updateExpr := selectNode.ProjectList[colPos]
 				if isDefaultValExpr(updateExpr) { // set col = default
 					updateExpr, err = getDefaultExpr(builder.GetContext(), col)
+					if err != nil {
+						return 0, err
+					}
+					oldValues := make(map[int32]*plan.Expr, len(tableDef.Cols))
+					for colIdx, refCol := range tableDef.Cols {
+						if oldPos, exists := oldColName2Idx[alias+"."+refCol.Name]; exists &&
+							oldPos >= 0 && int(oldPos) < len(selectNode.ProjectList) {
+							oldValues[int32(colIdx)] = selectNode.ProjectList[oldPos]
+						}
+					}
+					updateExpr, err = expandDefaultExprWithColumnExprs(builder.GetContext(), updateExpr, oldValues)
 					if err != nil {
 						return 0, err
 					}
@@ -2291,6 +2325,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		}
 		return lockTargets[i].PrimaryColIdxInBat < lockTargets[j].PrimaryColIdxInBat
 	})
+	if !builder.hasExistingLockTargets() &&
+		isUnrestrictedSingleTargetUpdate(stmt, dmlCtx, updatedTargetCount) &&
+		lockTargetsCoverCompleteKeyspaces(lockTargets) {
+		if builder.fullTableUpdateLockTargets == nil {
+			builder.fullTableUpdateLockTargets = make(map[*plan.LockTarget]struct{}, len(lockTargets))
+		}
+		builder.fullTableUpdateSourceTableID = dmlCtx.tableDefs[0].TblId
+		builder.hasFullTableUpdateSourceTableID = true
+		for _, target := range lockTargets {
+			if target.Mode == lockpb.LockMode_Exclusive {
+				builder.fullTableUpdateLockTargets[target] = struct{}{}
+			}
+		}
+	}
 
 	// Synchronous irregular indexes share the exact final row image with the
 	// base-table MULTI_UPDATE. Their stale entries are deleted by the immutable
@@ -2366,7 +2414,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			localProjList[deletePkPos].Typ,
 			rowNumberPos,
 			activePos,
+			-1,
 			indexes,
+			nil,
+			-1,
+			nil,
 			tableDef,
 			dmlCtx.objRefs[i],
 		)
@@ -2376,13 +2428,16 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		builder.irregularUpdateMaints = append(
 			builder.irregularUpdateMaints,
 			irregularUpdateMaintenance{
-				sourceStep:  builder.irregularMaintSourceStep,
-				deleteStep:  builder.irregularMaintDeleteStep,
-				deletePkPos: builder.irregularMaintDeletePkPos,
-				deletePkTyp: builder.irregularMaintDeletePkTyp,
-				indexes:     builder.irregularMaintIndexes,
-				tableDef:    builder.irregularMaintTableDef,
-				objRef:      builder.irregularMaintObjRef,
+				sourceStep:              builder.irregularMaintSourceStep,
+				deleteStep:              builder.irregularMaintDeleteStep,
+				deletePkPos:             builder.irregularMaintDeletePkPos,
+				deletePkTyp:             builder.irregularMaintDeletePkTyp,
+				indexes:                 builder.irregularMaintIndexes,
+				insertOnlySourceStep:    builder.irregularMaintInsertOnlySourceStep,
+				insertOnlyIndexes:       builder.irregularMaintInsertOnlyIndexes,
+				valueChangedSourceSteps: builder.irregularMaintValueChangedSourceSteps,
+				tableDef:                builder.irregularMaintTableDef,
+				objRef:                  builder.irregularMaintObjRef,
 			},
 		)
 	}
@@ -2402,7 +2457,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			LockTargets: lockTargets,
 		}, bindCtx)
 	}
-	applySharedLockTableFallback(builder)
+	applyLockTableFallback(builder)
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
 	lastNodeID = builder.appendNode(dmlNode, bindCtx)
@@ -4459,6 +4514,23 @@ func irregularIndexAffectedByUpdate(
 	idxDef *plan.IndexDef,
 	updateCols map[string]tree.Expr,
 ) (bool, error) {
+	updatedCols := make(map[string]struct{}, len(updateCols))
+	for colName := range updateCols {
+		updatedCols[colName] = struct{}{}
+	}
+	return irregularIndexAffectedByUpdatedColumnNames(tableDef, idxDef, updatedCols)
+}
+
+// irregularIndexAffectedByUpdatedColumnNames is the shared dependency check for
+// UPDATE and ON DUPLICATE KEY UPDATE. The latter has already bound its values to
+// plan expressions, so it cannot reuse the tree.Expr map accepted by the former.
+// Keeping the plugin hook here makes both paths honor algorithm-owned metadata
+// dependencies such as IVFFLAT INCLUDE columns.
+func irregularIndexAffectedByUpdatedColumnNames(
+	tableDef *plan.TableDef,
+	idxDef *plan.IndexDef,
+	updateCols map[string]struct{},
+) (bool, error) {
 	columnUpdated := func(colName string) bool {
 		colName = catalog.ResolveAlias(colName)
 		if _, ok := updateCols[colName]; ok {
@@ -4597,6 +4669,52 @@ func updateHasMultipleSourceTables(stmt *tree.Update) bool {
 		return true
 	}
 	return len(stmt.Tables) == 1 && tableExprContainsJoin(stmt.Tables[0])
+}
+
+// isUnrestrictedSingleTargetUpdate proves the semantic precondition for the
+// large-UPDATE table-lock fast path. The proof deliberately stays narrower
+// than cardinality estimation: a predicate that happens to estimate to every
+// current row is still bounded and must preserve #26706's range-lock behavior.
+func isUnrestrictedSingleTargetUpdate(stmt *tree.Update, dmlCtx *DMLContext, updatedTargetCount int) bool {
+	if stmt == nil || dmlCtx == nil || updatedTargetCount != 1 || len(dmlCtx.tableDefs) != 1 ||
+		updateHasMultipleSourceTables(stmt) || len(stmt.OrderBy) != 0 || stmt.Limit != nil {
+		return false
+	}
+	if stmt.Where == nil {
+		return true
+	}
+	literal, ok := stmt.Where.Expr.(*tree.NumVal)
+	return ok && literal.ValType == tree.P_bool && literal.Bool()
+}
+
+// hasExistingLockTargets rejects plans that must lock another namespace before
+// the UPDATE's final base/index lock gate. Pulling only the final targets into
+// the compile-time table-lock phase would reverse that established order for
+// foreign-key checks/actions or an explicitly locking scalar subquery.
+func (builder *QueryBuilder) hasExistingLockTargets() bool {
+	for _, node := range builder.qry.Nodes {
+		if node.NodeType == plan.Node_LOCK_OP && len(node.LockTargets) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// lockTargetsCoverCompleteKeyspaces keeps table-lock admission atomic across
+// every namespace written by the UPDATE. A partial admission can invert lock
+// order against a bounded UPDATE.
+func lockTargetsCoverCompleteKeyspaces(lockTargets []*plan.LockTarget) bool {
+	foundExclusive := false
+	for _, target := range lockTargets {
+		if target == nil || target.Mode != lockpb.LockMode_Exclusive {
+			continue
+		}
+		foundExclusive = true
+		if !colexec.SupportsTotalLockTableRange(makeTypeByPlan2Type(target.PrimaryColTyp)) {
+			return false
+		}
+	}
+	return foundExclusive
 }
 
 func primaryKeyUpdated(tableDef *plan.TableDef, updateCols map[string]tree.Expr) bool {

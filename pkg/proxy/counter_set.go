@@ -54,20 +54,38 @@ func (e *counterLogExporter) Export() []zap.Field {
 		e.counter.connMigrationRequested.Load()))
 	fields = append(fields, zap.Int64("connection migration cannot start",
 		e.counter.connMigrationCannotStart.Load()))
+	fields = append(fields, zap.Int64("cache quit fence success",
+		e.counter.connCacheQuitFenceSuccess.Load()))
+	fields = append(fields, zap.Int64("cache quit fence failure",
+		e.counter.connCacheQuitFenceFailure.Load()))
+	fields = append(fields, zap.Int64("cache quit published",
+		e.counter.connCacheQuitPublished.Load()))
+	fields = append(fields, zap.Int64("cache compatibility hit",
+		e.counter.connCacheCompatibilityHit.Load()))
+	fields = append(fields, zap.Int64("cache compatibility miss",
+		e.counter.connCacheCompatibilityMiss.Load()))
+	fields = append(fields, zap.Int64("cache identity changed discard",
+		e.counter.connCacheIdentityChangedDiscard.Load()))
 	return fields
 }
 
 // counterSet contains all items that need to be tracked in proxy.
 type counterSet struct {
-	connAccepted             stats.Counter
-	connTotal                stats.Counter
-	clientDisconnect         stats.Counter
-	serverDisconnect         stats.Counter
-	connRefused              stats.Counter
-	authFailed               stats.Counter
-	connMigrationSuccess     stats.Counter
-	connMigrationRequested   stats.Counter
-	connMigrationCannotStart stats.Counter
+	connAccepted                    stats.Counter
+	connTotal                       stats.Counter
+	clientDisconnect                stats.Counter
+	serverDisconnect                stats.Counter
+	connRefused                     stats.Counter
+	authFailed                      stats.Counter
+	connMigrationSuccess            stats.Counter
+	connMigrationRequested          stats.Counter
+	connMigrationCannotStart        stats.Counter
+	connCacheQuitFenceSuccess       stats.Counter
+	connCacheQuitFenceFailure       stats.Counter
+	connCacheQuitPublished          stats.Counter
+	connCacheCompatibilityHit       stats.Counter
+	connCacheCompatibilityMiss      stats.Counter
+	connCacheIdentityChangedDiscard stats.Counter
 }
 
 // newCounterSet creates a new counterSet.

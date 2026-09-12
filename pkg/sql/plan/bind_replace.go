@@ -67,12 +67,385 @@ func (builder *QueryBuilder) bindReplace(stmt *tree.Replace, bindCtx *BindContex
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, stmt.IsSetFormat)
+	lastNodeID, colName2Idx, skipUniqueIdx, _, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], true, stmt.IsSetFormat)
 	if err != nil {
 		return 0, err
 	}
 
 	return builder.appendDedupAndMultiUpdateNodesForBindReplace(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, irregularIndexes)
+}
+
+func (builder *QueryBuilder) appendReplaceConflictLookup(
+	bindCtx *BindContext,
+	lastNodeID int32,
+	selectTag int32,
+	fullProjTag int32,
+	selectNode *plan.Node,
+	objRef *plan.ObjectRef,
+	tableDef *plan.TableDef,
+	idxObjRefs []*plan.ObjectRef,
+	idxTableDefs []*plan.TableDef,
+	colName2Idx map[string]int32,
+	skipUniqueIdx []bool,
+	oldColName2Idx map[string][2]int32,
+	needsOldIndexMaintenance bool,
+) (int32, []*plan.Expr, error) {
+	branchCount := 0
+	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		branchCount++
+	}
+	for i, idxDef := range tableDef.Indexes {
+		if idxDef.Unique && !skipUniqueIdx[i] {
+			branchCount++
+		}
+	}
+
+	replacementColumnCount := len(selectNode.ProjectList)
+	var sourceOrdinalType plan.Type
+	sourceOrdinalPos := int32(-1)
+	sourceStep := int32(-1)
+	if branchCount > 1 {
+		// Every lookup branch is a LEFT JOIN so an insert-only source row survives,
+		// but the same source/old-row pair may be found by several constraints.
+		// Carry a per-input ordinal through UNION DISTINCT: it removes only those
+		// duplicate candidates, without collapsing equal source rows that the
+		// downstream keep-last logic must still see.
+		rowNumberFunc, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "row_number", nil)
+		if err != nil {
+			return 0, nil, err
+		}
+		sourceOrdinalType = rowNumberFunc.Typ
+		ordinalTag := builder.genNewBindTag()
+		windowID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_WINDOW,
+			Children: []int32{lastNodeID},
+			WinSpecList: []*plan.Expr{{
+				Typ: rowNumberFunc.Typ,
+				Expr: &plan.Expr_W{W: &plan.WindowSpec{
+					WindowFunc: rowNumberFunc,
+					Name:       "row_number",
+					Frame: &plan.FrameClause{
+						Type:  plan.FrameClause_ROWS,
+						Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+						End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, UnBounded: true},
+					},
+				}},
+			}},
+			WindowIdx:   0,
+			BindingTags: []int32{ordinalTag},
+		}, bindCtx)
+
+		sourceTag := builder.genNewBindTag()
+		sourceProjection := make([]*plan.Expr, 0, replacementColumnCount+1)
+		for i, expr := range selectNode.ProjectList {
+			sourceProjection = append(sourceProjection, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectTag,
+					ColPos: int32(i),
+				}},
+			})
+		}
+		sourceOrdinalPos = int32(len(sourceProjection))
+		sourceProjection = append(sourceProjection, &plan.Expr{
+			Typ: rowNumberFunc.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: ordinalTag,
+				ColPos: 0,
+			}},
+		})
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{windowID},
+			ProjectList: sourceProjection,
+			BindingTags: []int32{sourceTag},
+		}, bindCtx)
+		selectTag = sourceTag
+
+		sourceSinkID := appendSinkNode(builder, bindCtx, lastNodeID)
+		sourceStep = builder.appendStep(sourceSinkID)
+	}
+	newSource := func() (int32, int32) {
+		if sourceStep < 0 {
+			return lastNodeID, selectTag
+		}
+		tag := builder.genNewBindTag()
+		nodeID := appendSinkScanNode(builder, bindCtx, sourceStep)
+		builder.qry.Nodes[nodeID].BindingTags = []int32{tag}
+		return nodeID, tag
+	}
+	newMainScan := func() (int32, int32) {
+		tag := builder.genNewBindTag()
+		builder.addNameByColRef(tag, tableDef)
+		nodeID := builder.appendNode(&plan.Node{
+			NodeType:     plan.Node_TABLE_SCAN,
+			TableDef:     CloneTableDefForPlan(tableDef, true),
+			ObjRef:       objRef,
+			BindingTags:  []int32{tag},
+			ScanSnapshot: bindCtx.snapshot,
+		}, bindCtx)
+		return nodeID, tag
+	}
+
+	ordinalOutputPos := int32(-1)
+	buildProjection := func(sourceTag, oldScanTag int32) ([]*plan.Expr, error) {
+		projection := make([]*plan.Expr, 0, replacementColumnCount+len(tableDef.Cols)+len(tableDef.Indexes)+1)
+		for i, expr := range selectNode.ProjectList[:replacementColumnCount] {
+			projection = append(projection, &plan.Expr{
+				Typ: expr.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: sourceTag,
+					ColPos: int32(i),
+				}},
+			})
+		}
+		for i, col := range tableDef.Cols {
+			oldColName2Idx[tableDef.Name+"."+col.Name] = [2]int32{fullProjTag, int32(len(projection))}
+			projection = append(projection, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: oldScanTag,
+					ColPos: int32(i),
+				}},
+			})
+		}
+
+		for i, idxDef := range tableDef.Indexes {
+			if skipUniqueIdx[i] && !needsOldIndexMaintenance {
+				continue
+			}
+			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+			if err != nil {
+				return nil, err
+			}
+			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTablePrimaryColName] =
+				oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+
+			if !indexTableStoresSerializedKey(idxDef) {
+				partName := indexPrimaryPartName(idxDef)
+				if prefixLengths[partName] == 0 {
+					oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] =
+						oldColName2Idx[tableDef.Name+"."+partName]
+					continue
+				}
+				colIdx := tableDef.Name2ColIndex[partName]
+				partExpr := &plan.Expr{
+					Typ: tableDef.Cols[colIdx].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: oldScanTag,
+						ColPos: colIdx,
+					}},
+				}
+				idxExpr, err := builder.makeIndexPartExprFromInputExpr(partExpr, partName, prefixLengths)
+				if err != nil {
+					return nil, err
+				}
+				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] =
+					[2]int32{fullProjTag, int32(len(projection))}
+				projection = append(projection, idxExpr)
+				continue
+			}
+
+			args := make([]*plan.Expr, len(idxDef.Parts))
+			for j, part := range idxDef.Parts {
+				partName := catalog.ResolveAlias(part)
+				colIdx := tableDef.Name2ColIndex[partName]
+				args[j] = &plan.Expr{
+					Typ: tableDef.Cols[colIdx].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: oldScanTag,
+						ColPos: colIdx,
+					}},
+				}
+				if prefixLengths[partName] > 0 {
+					args[j], err = builder.makeIndexPartExprFromInputExpr(args[j], partName, prefixLengths)
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+			idxExpr := args[0]
+			if len(args) > 1 {
+				funcName := "serial"
+				if !idxDef.Unique {
+					funcName = "serial_full"
+				}
+				idxExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, args)
+			}
+			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] =
+				[2]int32{fullProjTag, int32(len(projection))}
+			projection = append(projection, idxExpr)
+		}
+		if sourceOrdinalPos >= 0 {
+			ordinalOutputPos = int32(len(projection))
+			projection = append(projection, &plan.Expr{
+				Typ: sourceOrdinalType,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: sourceTag,
+					ColPos: sourceOrdinalPos,
+				}},
+			})
+		}
+
+		return projection, nil
+	}
+
+	branchIDs := make([]int32, 0, branchCount)
+	branchTags := make([]int32, 0, branchCount)
+	appendBranch := func(sourceTag, oldScanNodeID, oldScanTag int32) error {
+		branchTag := builder.genNewBindTag()
+		projection, err := buildProjection(sourceTag, oldScanTag)
+		if err != nil {
+			return err
+		}
+		branchIDs = append(branchIDs, builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{oldScanNodeID},
+			ProjectList: projection,
+			BindingTags: []int32{branchTag},
+		}, bindCtx))
+		branchTags = append(branchTags, branchTag)
+		return nil
+	}
+
+	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
+		sourceNodeID, sourceTag := newSource()
+		oldScanNodeID, oldScanTag := newMainScan()
+		pkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+		newPkPos := colName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+		condition, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+			{Typ: tableDef.Cols[pkPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag, ColPos: newPkPos}}},
+			{Typ: tableDef.Cols[pkPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: oldScanTag, ColPos: pkPos}}},
+		})
+		joinID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{sourceNodeID, oldScanNodeID},
+			JoinType: plan.Node_LEFT,
+			OnList:   []*plan.Expr{condition},
+		}, bindCtx)
+		if err := appendBranch(sourceTag, joinID, oldScanTag); err != nil {
+			return 0, nil, err
+		}
+	}
+
+	for i, idxDef := range tableDef.Indexes {
+		if !idxDef.Unique || skipUniqueIdx[i] {
+			continue
+		}
+		sourceNodeID, sourceTag := newSource()
+		idxTag := builder.genNewBindTag()
+		builder.addNameByColRef(idxTag, idxTableDefs[i])
+		idxScanID := builder.appendNode(&plan.Node{
+			NodeType:     plan.Node_TABLE_SCAN,
+			TableDef:     idxTableDefs[i],
+			ObjRef:       idxObjRefs[i],
+			BindingTags:  []int32{idxTag},
+			ScanSnapshot: bindCtx.snapshot,
+		}, bindCtx)
+		newIndexPos, ok := colName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName]
+		if !ok {
+			return 0, nil, moerr.NewInternalErrorf(builder.GetContext(),
+				"bind replace err, can not find new unique index key for %s", idxDef.IndexTableName)
+		}
+		idxKeyPos := idxTableDefs[i].Name2ColIndex[catalog.IndexTableIndexColName]
+		idxKeyTyp := idxTableDefs[i].Cols[idxKeyPos].Typ
+		indexCondition, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+			{Typ: idxKeyTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag, ColPos: newIndexPos}}},
+			{Typ: idxKeyTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: idxTag, ColPos: idxKeyPos}}},
+		})
+		indexJoinID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{sourceNodeID, idxScanID},
+			JoinType: plan.Node_LEFT,
+			OnList:   []*plan.Expr{indexCondition},
+		}, bindCtx)
+
+		oldScanNodeID, oldScanTag := newMainScan()
+		idxPrimaryPos := idxTableDefs[i].Name2ColIndex[catalog.IndexTablePrimaryColName]
+		oldPkPos := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
+		oldPkTyp := tableDef.Cols[oldPkPos].Typ
+		mainCondition, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
+			{Typ: oldPkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: idxTag, ColPos: idxPrimaryPos}}},
+			{Typ: oldPkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: oldScanTag, ColPos: oldPkPos}}},
+		})
+		mainJoinID := builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{indexJoinID, oldScanNodeID},
+			JoinType: plan.Node_LEFT,
+			OnList:   []*plan.Expr{mainCondition},
+		}, bindCtx)
+		if err := appendBranch(sourceTag, mainJoinID, oldScanTag); err != nil {
+			return 0, nil, err
+		}
+	}
+
+	if len(branchIDs) == 0 {
+		return 0, nil, moerr.NewInternalError(builder.GetContext(), "bind replace err, no conflict lookup branch")
+	}
+	if len(branchIDs) == 1 {
+		builder.qry.Nodes[branchIDs[0]].BindingTags[0] = fullProjTag
+		return branchIDs[0], builder.qry.Nodes[branchIDs[0]].ProjectList, nil
+	}
+
+	unionID := branchIDs[0]
+	unionInputTag := branchTags[0]
+	for branchIdx := 1; branchIdx < len(branchIDs); branchIdx++ {
+		leftNode := builder.qry.Nodes[unionID]
+		rightNode := builder.qry.Nodes[branchIDs[branchIdx]]
+		unionProjection := make([]*plan.Expr, len(leftNode.ProjectList))
+		for i, expr := range leftNode.ProjectList {
+			unionProjection[i] = &plan.Expr{
+				Typ: setOperationOutputType(plan.Node_UNION, expr.Typ, rightNode.ProjectList[i].Typ),
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: unionInputTag,
+					ColPos: int32(i),
+				}},
+			}
+		}
+		unionTag := builder.genNewBindTag()
+		unionID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_UNION,
+			Children:    []int32{unionID, branchIDs[branchIdx]},
+			ProjectList: unionProjection,
+			BindingTags: []int32{unionTag},
+		}, bindCtx)
+		unionInputTag = unionTag
+	}
+
+	// UNION DISTINCT is unordered. Restore source order before the DEDUP joins so
+	// duplicate VALUES rows retain REPLACE's existing keep-last semantics.
+	orderedUnionID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{unionID},
+		OrderBy: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{
+				Typ: sourceOrdinalType,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: unionInputTag,
+					ColPos: ordinalOutputPos,
+				}},
+			},
+			Flag: plan.OrderBySpec_ASC | plan.OrderBySpec_INTERNAL,
+		}},
+		SpillMem: builder.sortSpillMem,
+	}, bindCtx)
+	finalProjection := make([]*plan.Expr, ordinalOutputPos)
+	for i := range finalProjection {
+		finalProjection[i] = &plan.Expr{
+			Typ: builder.qry.Nodes[unionID].ProjectList[i].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: unionInputTag,
+				ColPos: int32(i),
+			}},
+		}
+	}
+	finalID := builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		Children:    []int32{orderedUnionID},
+		ProjectList: finalProjection,
+		BindingTags: []int32{fullProjTag},
+	}, bindCtx)
+	return finalID, finalProjection, nil
 }
 
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
@@ -160,6 +533,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 	}
 	needsOldIndexMaintenance := !isFakePK || hasUniqueIdx
+	for i, idxDef := range tableDef.Indexes {
+		if skipUniqueIdx[i] && !needsOldIndexMaintenance {
+			continue
+		}
+		idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(
+			objRef, idxDef.IndexTableName, bindCtx.snapshot)
+		if err != nil {
+			return 0, err
+		}
+		ensureName2ColIndexForReplace(idxTableDefs[i])
+	}
 
 	// get old columns from existing main table
 	//
@@ -185,9 +569,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 	}
 	// Merged-scan is disabled when the table has unique secondary indexes because
-	// a unique-key conflict (without a PK conflict) requires the LEFT JOIN to
-	// retrieve old-row columns for deletion. The merged-scan path only captures
-	// old columns on PK conflict, leaving them NULL when only a UK conflicts.
+	// one incoming row can conflict with different old rows through different keys.
+	// Those tables use one equality-only lookup branch per constraint below.
 	useMergedMainScan := !isFakePK && !hasMultiPartIdx && !hasUniqueIdx
 	if isFakePK && !hasUniqueIdx {
 		// No PK/UK: use NULL expressions for old columns so MULTI_UPDATE only inserts
@@ -223,16 +606,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			})
 		}
 
-		var err error
 		for i, idxDef := range tableDef.Indexes {
 			if skipUniqueIdx[i] && !needsOldIndexMaintenance {
 				continue
 			}
-			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
-			if err != nil {
-				return 0, err
-			}
-			ensureName2ColIndexForReplace(idxTableDefs[i])
 
 			// Spatial indexes look up the old index-table row via the primary
 			// column (indexLookupColumnName returns IndexTablePrimaryColName).
@@ -256,274 +633,25 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			BindingTags: []int32{fullProjTag},
 		}, bindCtx)
 	} else {
-		oldScanTag := builder.genNewBindTag()
-
-		builder.addNameByColRef(oldScanTag, tableDef)
-
-		oldScanNodeID := builder.appendNode(&plan.Node{
-			NodeType:     plan.Node_TABLE_SCAN,
-			TableDef:     CloneTableDefForPlan(tableDef, true),
-			ObjRef:       objRef,
-			BindingTags:  []int32{oldScanTag},
-			ScanSnapshot: bindCtx.snapshot,
-		}, bindCtx)
-
-		for i, col := range tableDef.Cols {
-			oldColName2Idx[tableDef.Name+"."+col.Name] = [2]int32{fullProjTag, int32(len(fullProjList))}
-			fullProjList = append(fullProjList, &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: oldScanTag,
-						ColPos: int32(i),
-					},
-				},
-			})
+		lastNodeID, fullProjList, err = builder.appendReplaceConflictLookup(
+			bindCtx,
+			lastNodeID,
+			selectTag,
+			fullProjTag,
+			selectNode,
+			objRef,
+			tableDef,
+			idxObjRefs,
+			idxTableDefs,
+			colName2Idx,
+			skipUniqueIdx,
+			oldColName2Idx,
+			needsOldIndexMaintenance,
+		)
+		if err != nil {
+			return 0, err
 		}
-
-		for i, idxDef := range tableDef.Indexes {
-			if skipUniqueIdx[i] && !needsOldIndexMaintenance {
-				continue
-			}
-			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
-			if err != nil {
-				return 0, err
-			}
-			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(objRef, idxDef.IndexTableName, bindCtx.snapshot)
-			if err != nil {
-				return 0, err
-			}
-			ensureName2ColIndexForReplace(idxTableDefs[i])
-			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTablePrimaryColName] = oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
-
-			if !indexTableStoresSerializedKey(idxDef) {
-				partName := indexPrimaryPartName(idxDef)
-				if prefixLengths[partName] > 0 {
-					colIdx := tableDef.Name2ColIndex[partName]
-					partExpr := &plan.Expr{
-						Typ: tableDef.Cols[colIdx].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{RelPos: oldScanTag, ColPos: colIdx},
-						},
-					}
-					idxExpr, err := builder.makeIndexPartExprFromInputExpr(partExpr, partName, prefixLengths)
-					if err != nil {
-						return 0, err
-					}
-					oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = [2]int32{
-						fullProjTag, int32(len(fullProjList)),
-					}
-					fullProjList = append(fullProjList, idxExpr)
-				} else {
-					oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = oldColName2Idx[tableDef.Name+"."+partName]
-				}
-			} else {
-				args := make([]*plan.Expr, len(idxDef.Parts))
-				for j, part := range idxDef.Parts {
-					partName := catalog.ResolveAlias(part)
-					colIdx := tableDef.Name2ColIndex[partName]
-					args[j] = &plan.Expr{
-						Typ: tableDef.Cols[colIdx].Typ,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: oldScanTag,
-								ColPos: colIdx,
-							},
-						},
-					}
-					if prefixLengths[partName] > 0 {
-						args[j], err = builder.makeIndexPartExprFromInputExpr(args[j], partName, prefixLengths)
-						if err != nil {
-							return 0, err
-						}
-					}
-				}
-
-				idxExpr := args[0]
-				if len(idxDef.Parts) > 1 {
-					funcName := "serial"
-					if !idxDef.Unique {
-						funcName = "serial_full"
-					}
-					idxExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, args)
-				}
-
-				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = [2]int32{fullProjTag, int32(len(fullProjList))}
-				fullProjList = append(fullProjList, idxExpr)
-			}
-		}
-
-		// Build the LEFT JOIN ON list: for real-PK tables the PK equality OR'd
-		// with one (AND-of-parts) condition per unique key; for fake-PK tables
-		// (no real PK) the OR of one condition per unique key. An old row
-		// conflicting on the PK or ANY unique key is fetched in a single join.
-		// A single new row may match several old rows (fan-out); the conflicting
-		// old rows are all deleted and the new row inserted once, handled by the
-		// keep-last / delete-marker logic in hashbuild downstream.
-		var joinConds []*plan.Expr
-		if isFakePK {
-			// Fake-PK tables previously joined on only the first unique key,
-			// missing conflicts on the others; OR one condition per unique key.
-			for i, idxDef := range tableDef.Indexes {
-				if !idxDef.Unique || skipUniqueIdx[i] {
-					continue
-				}
-				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
-				if err != nil {
-					return 0, err
-				}
-				var ukPartConds []*plan.Expr
-				for _, part := range idxDef.Parts {
-					colName := catalog.ResolveAlias(part)
-					colIdx := tableDef.Name2ColIndex[colName]
-					colTyp := tableDef.Cols[colIdx].Typ
-					lExpr := &plan.Expr{
-						Typ: colTyp,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: selectTag,
-								ColPos: colName2Idx[tableDef.Name+"."+colName],
-							},
-						},
-					}
-					rExpr := &plan.Expr{
-						Typ: colTyp,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: oldScanTag,
-								ColPos: colIdx,
-							},
-						},
-					}
-					if prefixLengths[colName] > 0 {
-						lExpr, err = builder.makeIndexPartExprFromInputExpr(lExpr, colName, prefixLengths)
-						if err != nil {
-							return 0, err
-						}
-						rExpr, err = builder.makeIndexPartExprFromInputExpr(rExpr, colName, prefixLengths)
-						if err != nil {
-							return 0, err
-						}
-					}
-					partCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{lExpr, rExpr})
-					ukPartConds = append(ukPartConds, partCond)
-				}
-				if len(ukPartConds) == 0 {
-					continue
-				}
-				ukCond := ukPartConds[0]
-				for _, c := range ukPartConds[1:] {
-					ukCond, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{ukCond, c})
-				}
-				joinConds = append(joinConds, ukCond)
-			}
-		} else {
-			pkPos := tableDef.Name2ColIndex[pkName]
-			pkTyp := tableDef.Cols[pkPos].Typ
-			leftExpr := &plan.Expr{
-				Typ: pkTyp,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: selectTag,
-						ColPos: colName2Idx[tableDef.Name+"."+pkName],
-					},
-				},
-			}
-			rightExpr := &plan.Expr{
-				Typ: pkTyp,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: oldScanTag,
-						ColPos: pkPos,
-					},
-				},
-			}
-			pkCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{leftExpr, rightExpr})
-			joinConds = append(joinConds, pkCond)
-
-			for i, idxDef := range tableDef.Indexes {
-				if !idxDef.Unique || skipUniqueIdx[i] {
-					continue
-				}
-				prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
-				if err != nil {
-					return 0, err
-				}
-				var ukPartConds []*plan.Expr
-				for _, part := range idxDef.Parts {
-					colName := catalog.ResolveAlias(part)
-					colIdx := tableDef.Name2ColIndex[colName]
-					colTyp := tableDef.Cols[colIdx].Typ
-					lExpr := &plan.Expr{
-						Typ: colTyp,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: selectTag,
-								ColPos: colName2Idx[tableDef.Name+"."+colName],
-							},
-						},
-					}
-					rExpr := &plan.Expr{
-						Typ: colTyp,
-						Expr: &plan.Expr_Col{
-							Col: &plan.ColRef{
-								RelPos: oldScanTag,
-								ColPos: colIdx,
-							},
-						},
-					}
-					if prefixLengths[colName] > 0 {
-						lExpr, err = builder.makeIndexPartExprFromInputExpr(lExpr, colName, prefixLengths)
-						if err != nil {
-							return 0, err
-						}
-						rExpr, err = builder.makeIndexPartExprFromInputExpr(rExpr, colName, prefixLengths)
-						if err != nil {
-							return 0, err
-						}
-					}
-					partCond, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{lExpr, rExpr})
-					ukPartConds = append(ukPartConds, partCond)
-				}
-				var ukCond *plan.Expr
-				if len(ukPartConds) == 1 {
-					ukCond = ukPartConds[0]
-				} else {
-					ukCond = ukPartConds[0]
-					for _, c := range ukPartConds[1:] {
-						ukCond, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{ukCond, c})
-					}
-				}
-				joinConds = append(joinConds, ukCond)
-			}
-		}
-
-		var joinOnList []*plan.Expr
-		if len(joinConds) == 1 {
-			joinOnList = joinConds
-		} else if len(joinConds) > 1 {
-			combined := joinConds[0]
-			for _, c := range joinConds[1:] {
-				combined, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{combined, c})
-			}
-			joinOnList = []*plan.Expr{combined}
-		}
-
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{lastNodeID, oldScanNodeID},
-			JoinType: plan.Node_LEFT,
-			OnList:   joinOnList,
-		}, bindCtx)
-
-		lastNodeID = builder.appendNode(&plan.Node{
-			NodeType:    plan.Node_PROJECT,
-			ProjectList: fullProjList,
-			Children:    []int32{lastNodeID},
-			BindingTags: []int32{fullProjTag},
-		}, bindCtx)
 	}
-
 	oldMainRowIDPos := oldColName2Idx[tableDef.Name+"."+catalog.Row_ID]
 	oldMainPKPos := oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
 	buildParentFKActions := len(tableDef.RefChildTbls) > 0
@@ -1106,8 +1234,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	if len(irregularIndexes) > 0 && replaceOldPkPos >= 0 {
 		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 			bindCtx, lastNodeID, finalProjTag, replaceOldPkPos, replaceOldPkTyp,
-			-1, -1,
-			irregularIndexes, tableDef, objRef)
+			-1, -1, -1,
+			irregularIndexes, nil, -1, nil, tableDef, objRef)
 		if err != nil {
 			return 0, err
 		}
@@ -1123,7 +1251,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			BindingTags: []int32{finalProjTag},
 			LockTargets: lockTargets,
 		}, bindCtx)
-		applySharedLockTableFallback(builder)
+		applyLockTableFallback(builder)
 	}
 
 	if len(replaceOldParentPos) > 0 {
@@ -1150,7 +1278,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			builder.preserveLockProjection = make(map[int32]struct{})
 		}
 		builder.preserveLockProjection[lockedSourceID] = struct{}{}
-		applySharedLockTableFallback(builder)
+		applyLockTableFallback(builder)
 
 		sharedSinkID := appendSinkNode(builder, bindCtx, lockedSourceID)
 		builder.preserveSinkProjection[sharedSinkID] = struct{}{}
@@ -1254,6 +1382,9 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 	genColIdxToProj1Pos := make(map[int]int, colCount)
 	genColIdxToProj2Pos := make(map[int]int, colCount)
 	generatedColIdxs := make([]int, 0)
+	columnExprs := make(map[int32]*plan.Expr, colCount)
+	materializeCols := make(map[int32]bool, colCount)
+	materializeOrder := make([]int32, 0, colCount)
 
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
@@ -1271,6 +1402,11 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				},
 			})
 			projList1 = append(projList1, oldExpr)
+			columnExprs[int32(i)] = oldExpr
+			if exprHasLocalColumnRef(oldExpr) {
+				materializeCols[int32(i)] = true
+				materializeOrder = append(materializeOrder, int32(i))
+			}
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
@@ -1328,6 +1464,11 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 				},
 			})
 			projList1 = append(projList1, defExpr)
+			columnExprs[int32(i)] = defExpr
+			if exprHasLocalColumnRef(defExpr) {
+				materializeCols[int32(i)] = true
+				materializeOrder = append(materializeOrder, int32(i))
+			}
 		}
 
 		colName2Idx[tableDef.Name+"."+col.Name] = int32(i)
@@ -1339,20 +1480,65 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 			DeepCopyExpr(col.GeneratedCol.Expr),
 			false,
 		)
-		inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
 		proj1Pos := genColIdxToProj1Pos[i]
-		projList1[proj1Pos] = genExpr
-		pos := int32(proj1Pos)
-		colIdxToProjPos[int32(i)] = pos
+		columnExprs[int32(i)] = genExpr
+		colIdxToProjPos[int32(i)] = int32(proj1Pos)
 		projList2[genColIdxToProj2Pos[i]] = &plan.Expr{
 			Typ: genExpr.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: projTag1,
-					ColPos: pos,
+					ColPos: int32(proj1Pos),
 				},
 			},
 		}
+	}
+
+	for _, i := range generatedColIdxs {
+		genExpr := columnExprs[int32(i)]
+		proj1Pos := genColIdxToProj1Pos[i]
+		needsStage := false
+		for _, refIdx := range collectRefColPos(genExpr) {
+			if materializeCols[refIdx] ||
+				(refIdx >= 0 && int(refIdx) < len(tableDef.Cols) && tableDef.Cols[refIdx].GeneratedCol != nil) {
+				needsStage = true
+				break
+			}
+		}
+		if !needsStage && exprHasLocalColumnRef(genExpr) {
+			volatileDependency, err := hasVolatileLocalDependency(
+				builder.GetContext(), int32(i), columnExprs, materializeCols,
+			)
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			needsStage = volatileDependency
+		}
+		if needsStage {
+			materializeCols[int32(i)] = true
+			materializeOrder = append(materializeOrder, int32(i))
+		} else {
+			inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
+			projList1[proj1Pos] = genExpr
+		}
+	}
+
+	tmpCtx := NewBindContext(builder, bindCtx)
+	lastNodeID, materializedTag, err := builder.appendMaterializedExprProjections(
+		tmpCtx,
+		lastNodeID,
+		projTag1,
+		projList1,
+		colIdxToProjPos,
+		columnExprs,
+		materializeCols,
+		materializeOrder,
+	)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	for _, expr := range projList2 {
+		replaceColRefTag(expr, projTag1, materializedTag)
 	}
 
 	validIndexes, _ := getValidIndexes(tableDef)
@@ -1427,14 +1613,6 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 			projList2 = append(projList2, idxExpr)
 		}
 	}
-
-	tmpCtx := NewBindContext(builder, bindCtx)
-	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		ProjectList: projList1,
-		Children:    []int32{lastNodeID},
-		BindingTags: []int32{projTag1},
-	}, tmpCtx)
 
 	if hasAutoCol || compPkeyExpr != nil || clusterByExpr != nil {
 		lastNodeID = builder.appendNode(&plan.Node{

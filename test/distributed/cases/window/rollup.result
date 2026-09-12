@@ -1442,4 +1442,16 @@ drop view grouping_extension_partial_sets_v;
 drop table grouping_extension_rollup_ctas;
 drop table grouping_extension_partial_sets_ctas;
 drop table grouping_extension_metadata_src;
+drop table if exists grouping_set_empty_input;
+create table grouping_set_empty_input (a int, b int, v int);
+insert into grouping_set_empty_input
+select result, result % 10, result from generate_series(1, 1000, 1) g;
+delete from grouping_set_empty_input;
+select a, b, count(*) as c, sum(v) as s, grouping(a, b) as g
+from grouping_set_empty_input
+group by grouping sets ((a, b), (a), ())
+order by g, a, b;
+a	b	c	s	g
+null	null	0	null	3
+drop table grouping_set_empty_input;
 drop database rollup_test;

@@ -40,6 +40,15 @@ type FindSpec struct {
 	Limit      int64
 }
 
+// AggregateSpec is deliberately driver-neutral at the operator boundary. The
+// pipeline has already passed the connector allowlist and is represented as an
+// ordered slice of BSON documents. Disk spill is always disabled for the user
+// query MVP.
+type AggregateSpec struct {
+	Pipeline  any
+	BatchSize int32
+}
+
 type Cursor interface {
 	Next(context.Context) bool
 	CurrentRaw() []byte
@@ -49,6 +58,7 @@ type Cursor interface {
 
 type Collection interface {
 	Find(context.Context, FindSpec) (Cursor, error)
+	Aggregate(context.Context, AggregateSpec) (Cursor, error)
 }
 
 type Client interface {
@@ -281,6 +291,21 @@ func (c officialCollection) Find(ctx context.Context, spec FindSpec) (Cursor, er
 	// The client operation timeout and this statement context bound both the
 	// initial find and every getMore without creating a second timeout source.
 	cursor, err := c.collection.Find(ctx, filter, findOptions)
+	if err != nil {
+		return nil, err
+	}
+	return &officialCursor{cursor: cursor}, nil
+}
+
+func (c officialCollection) Aggregate(ctx context.Context, spec AggregateSpec) (Cursor, error) {
+	aggregateOptions := options.Aggregate().SetAllowDiskUse(false)
+	if spec.BatchSize > 0 {
+		aggregateOptions.SetBatchSize(spec.BatchSize)
+	}
+	// The driver v2 client operation timeout and the statement context bound
+	// both the initial aggregate and every getMore. Do not expose arbitrary
+	// command options or a second user-controlled timeout source here.
+	cursor, err := c.collection.Aggregate(ctx, spec.Pipeline, aggregateOptions)
 	if err != nil {
 		return nil, err
 	}

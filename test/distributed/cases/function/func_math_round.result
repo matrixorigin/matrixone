@@ -55,15 +55,16 @@ SELECT a, ROUND(a) FROM t1;
 1.0000000000000002E16  ¦  1.0000000000000002E16
 DROP TABLE t1;
 CREATE TABLE t1(f1 DECIMAL(22,1));
-[unknown result because it is related to issue#2302]
 INSERT INTO t1 VALUES (0),(1);
-[unknown result because it is related to issue#2302]
 SELECT ROUND(f1, f1) FROM t1;
-[unknown result because it is related to issue#2302]
+round(f1, f1)
+0.0
+1.0
 SELECT ROUND(f1, f1) FROM t1 GROUP BY 1;
-[unknown result because it is related to issue#2302]
+round(f1, f1)
+0.0
+1.0
 DROP TABLE t1;
-[unknown result because it is related to issue#2302]
 SELECT ROUND(sin(0.45), cos(0.8));
 ➤ ROUND(sin(0.45), cos(0.8))[8,54,0]  𝄀
 0.4

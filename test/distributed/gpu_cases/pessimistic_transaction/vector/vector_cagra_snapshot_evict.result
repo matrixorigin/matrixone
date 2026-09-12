@@ -1,0 +1,67 @@
+drop account if exists acc_cagra_snap_evict;
+create account acc_cagra_snap_evict admin_name 'admin' identified by '123456';
+SET experimental_cagra_index = 1;
+drop database if exists cagra_snap_evict;
+create database cagra_snap_evict;
+use cagra_snap_evict;
+create table t(id bigint primary key, v vecf32(8));
+insert into t values
+(1, '[10,10,10,10,10,10,10,10]'),   (2, '[20,20,20,20,20,20,20,20]'),
+(3, '[40,40,40,40,40,40,40,40]'),   (4, '[80,80,80,80,80,80,80,80]'),
+(5, '[160,160,160,160,160,160,160,160]'), (6, '[320,320,320,320,320,320,320,320]'),
+(7, '[640,640,640,640,640,640,640,640]'), (8, '[1280,1280,1280,1280,1280,1280,1280,1280]');
+create index ix using cagra on t(v) op_type 'vector_l2_ops'
+intermediate_graph_degree=8 graph_degree=4 itopk_size=16;
+delete from t where id = 5;
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+select count(*) from t where id = 5;
+➤ count(*)[-5,64,0]  𝄀
+0
+create snapshot cagra_snap_evict_s1 for account;
+insert into t values (9, '[150,150,150,150,150,150,150,150]');
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+create snapshot cagra_snap_evict_s2 for account;
+insert into t values (10, '[161,161,161,161,161,161,161,161]');
+select sleep(30);
+➤ sleep(30)[-6,8,0]  𝄀
+0
+set global max_gpu_index_cache_size = 4096;
+select @@global.max_gpu_index_cache_size;
+➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
+4096
+select id from t {snapshot='cagra_snap_evict_s1'} order by l2_distance(v,'[161,161,161,161,161,161,161,161]') limit 1;
+➤ id[-5,64,0]  𝄀
+4
+select id from t {snapshot='cagra_snap_evict_s2'} order by l2_distance(v,'[161,161,161,161,161,161,161,161]') limit 1;
+➤ id[-5,64,0]  𝄀
+9
+select id from t order by l2_distance(v,'[161,161,161,161,161,161,161,161]') limit 1;
+➤ id[-5,64,0]  𝄀
+10
+select id from t {snapshot='cagra_snap_evict_s1'} order by l2_distance(v,'[161,161,161,161,161,161,161,161]') limit 1;
+➤ id[-5,64,0]  𝄀
+4
+select id from t {snapshot='cagra_snap_evict_s2'} order by l2_distance(v,'[161,161,161,161,161,161,161,161]') limit 1;
+➤ id[-5,64,0]  𝄀
+9
+select id from t order by l2_distance(v,'[161,161,161,161,161,161,161,161]') limit 1;
+➤ id[-5,64,0]  𝄀
+10
+select id from t {snapshot='cagra_snap_evict_s1'} order by l2_distance(v,'[161,161,161,161,161,161,161,161]') limit 1;
+➤ id[-5,64,0]  𝄀
+4
+select count(*) from t where id = 5;
+➤ count(*)[-5,64,0]  𝄀
+0
+set global max_gpu_index_cache_size = 0;
+select @@global.max_gpu_index_cache_size;
+➤ @@global.max_gpu_index_cache_size[-1,16383,0]  𝄀
+0
+drop snapshot cagra_snap_evict_s1;
+drop snapshot cagra_snap_evict_s2;
+drop database cagra_snap_evict;
+drop account if exists acc_cagra_snap_evict;

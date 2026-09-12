@@ -434,8 +434,10 @@ Output modes:
   `validateOutputDirPath`; it does not require table write privileges.
 - `OUTPUT AS table_name` materializes an ordinary persistent physical table.
   It is not a data-branch node and has no `mo_branch_metadata` row. The table
-  starts with `__mo_diff_source` and `__mo_diff_flag`, followed by the visible
-  source columns in the requested `COLUMNS` order. If a projected source column
+  starts with `__mo_diff_source` and `__mo_diff_flag`. With `COLUMNS`, explicit
+  primary-key columns come first in primary-key order, followed by the
+  requested non-PK visible source columns in `COLUMNS` order; without it, all
+  visible source columns retain table order. If a projected source column
   already uses either metadata name, the generated metadata name receives a
   numeric suffix.
 - `OUTPUT AS` additionally requires `CREATE TABLE`, `DatabaseAll`, or
@@ -842,9 +844,10 @@ Implement these decisions in this change:
 
 1. `DATA BRANCH DIFF OUTPUT AS table_name`
    - Materialize a persistent ordinary table with the diff source/flag columns
-     followed by the requested visible source columns. Require `CREATE TABLE`
-     on the destination database; do not allow a destination snapshot or
-     overwrite an existing table.
+     followed by explicit primary-key columns in primary-key order and then the
+     requested visible non-PK source columns. Require `CREATE TABLE` on the
+     destination database; do not allow a destination snapshot or overwrite an
+     existing table.
 2. Empty database created by `DATA BRANCH CREATE DATABASE`
    - Reject `DATA BRANCH DELETE DATABASE` if validation finds no active branch
      child tables. Current metadata is table-level only and cannot distinguish

@@ -9049,6 +9049,14 @@ func TestIscpMeta(t *testing.T) {
 	}
 
 	// Helper function to append ISCP records
+	jobSpec, err := types.ParseStringToByteJson(`{"type":"backup","interval":"1h"}`)
+	require.NoError(t, err)
+	jobStatus, err := types.ParseStringToByteJson(`{"status":"running"}`)
+	require.NoError(t, err)
+	jobSpecBytes, err := types.EncodeJson(jobSpec)
+	require.NoError(t, err)
+	jobStatusBytes, err := types.EncodeJson(jobStatus)
+	require.NoError(t, err)
 	appendIscpRecord := func(accountID uint32, tableID uint64, jobName string, jobID uint64, watermark string, isDropped bool) {
 		opt := containers.Options{}
 		opt.Capacity = 0
@@ -9063,15 +9071,15 @@ func TestIscpMeta(t *testing.T) {
 		data := containers.BuildBatch(attrs, vecTypes, opt)
 		defer data.Close()
 
-		data.Vecs[0].Append(accountID, false)                                   // account_id
-		data.Vecs[1].Append(tableID, false)                                     // table_id
-		data.Vecs[2].Append([]byte(jobName), false)                             // job_name
-		data.Vecs[3].Append(jobID, false)                                       // job_id
-		data.Vecs[4].Append([]byte(`{"type":"backup","interval":"1h"}`), false) // job_spec
-		data.Vecs[5].Append(uint8(1), false)                                    // job_state (active)
-		data.Vecs[6].Append([]byte(watermark), false)                           // watermark
-		data.Vecs[7].Append([]byte(`{"status":"running"}`), false)              // job_status
-		data.Vecs[8].Append([]byte(tae.TxnMgr.Now().ToString()), false)         // create_at
+		data.Vecs[0].Append(accountID, false)                           // account_id
+		data.Vecs[1].Append(tableID, false)                             // table_id
+		data.Vecs[2].Append([]byte(jobName), false)                     // job_name
+		data.Vecs[3].Append(jobID, false)                               // job_id
+		data.Vecs[4].Append(jobSpecBytes, false)                        // job_spec
+		data.Vecs[5].Append(uint8(1), false)                            // job_state (active)
+		data.Vecs[6].Append([]byte(watermark), false)                   // watermark
+		data.Vecs[7].Append(jobStatusBytes, false)                      // job_status
+		data.Vecs[8].Append([]byte(tae.TxnMgr.Now().ToString()), false) // create_at
 
 		if isDropped {
 			data.Vecs[9].Append([]byte(tae.TxnMgr.Now().ToString()), false) // drop_at (not null for dropped jobs)
@@ -9450,6 +9458,10 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
+	// Flushing is asynchronous and shares workers with the checkpoint runner;
+	// use the same bounded timeout as checkpoint operations instead of a
+	// load-sensitive four-second deadline.
+	flushTimeoutMS := int(testutil.TestCheckpointTimeout / time.Millisecond)
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCheckpointGlobalMinCount(1)(opts)
@@ -9506,7 +9518,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	tae.AllFlushExpected(tae.TxnMgr.Now(), 4000)
+	tae.AllFlushExpected(tae.TxnMgr.Now(), flushTimeoutMS)
 
 	forceTS := tae.TxnMgr.Now()
 	err = tae.DB.ForceCheckpoint(ctx, forceTS)
@@ -9547,10 +9559,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 
 	currTs := tae.TxnMgr.Now()
 	assert.NoError(t, err)
-	// testutils.WaitExpect(5000, func() bool {
-	// 	return tae.AllCheckpointsFinished()
-	// })
-	tae.AllFlushExpected(currTs, 4000)
+	tae.AllFlushExpected(currTs, flushTimeoutMS)
 	forceTS = tae.TxnMgr.Now()
 	err = tae.DB.ForceGlobalCheckpoint(ctx, forceTS, time.Duration(1))
 	require.NoError(t, err)

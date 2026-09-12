@@ -176,10 +176,13 @@ a nonzero outer OFFSET exhausts a nonempty inner LIMIT: replacing that path with
 A scan with no existing window can still take dynamic LIMIT/OFFSET expressions
 directly.
 
-For `ORDER BY COUNT(*)`, aggregate elimination is still valid, but the current
-revision retains Sort and scans all rows. Removing an all-tie order is a separate
-future rule: it must prove every order expression constant and preserve LIMIT,
-OFFSET and any rank/tie semantics.
+The original #27850 revision deliberately retained Sort for
+`ORDER BY COUNT(*)` and scanned all rows. The proof-gated #27858 follow-up now
+removes that all-tie order when every key is safely constant, at least one key
+comes from the freshly rewritten singleton group, and LIMIT/OFFSET plus
+rank/tie semantics can be preserved. See
+`singleton_group_constant_order_elimination.md` for that rule; the boundary in
+this document remains the historical #27850 boundary.
 
 ## 6. Semantic barriers and failure closure
 

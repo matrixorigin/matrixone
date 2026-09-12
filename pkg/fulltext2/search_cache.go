@@ -16,9 +16,7 @@ package fulltext2
 
 import (
 	"context"
-	"errors"
 	"math"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
@@ -80,20 +78,27 @@ type Fulltext2Search struct {
 	// MAX(metadata.timestamp) (REBUILD/MERGE), loadedTail = MAX(tag=1 CdcTail chunk_id) (CDC
 	// append). cnUUID/accountID are the durable handles to re-query in the background.
 	// genValid is false when capture failed / no resolver (unit tests) → IsStale is a no-op.
-	cnUUID         string
-	accountID      uint32
-	loadedTs       int64
-	loadedTail     int64
-	genValid       bool
-	loadWaiters    atomic.Int64
-	pendingTrace   *loadTrace
-	pendingLoadErr error
-	pendingCancel  bool
-}
+	cnUUID     string
+	accountID  uint32
+	loadedTs   int64
+	loadedTail int64
+	genValid   bool
 
-var errLoadGenerationSuperseded = veccache.NewRetryableLoadError(
-	moerr.NewInvalidStateNoCtx("fulltext2 load superseded by a newer generation"),
-)
+	// preloadNdoc is the base doc count read by Preload, so GetIndexSize can report what the
+	// following Load will cost before any base is mapped, and so Load can run the heap-budget
+	// check without repeating the aggregate. Superseded by the loaded segments once Load
+	// succeeds. preloaded distinguishes "Preload ran and counted zero docs" from "Preload
+	// never ran" -- a caller may reach Load directly.
+	preloadNdoc int64
+	// reservedAhead is what the governor says other in-flight loads have promised. Set
+	// between Preload and Load via SetReservedAhead; see checkTailLoadBudget.
+	reservedAhead int64
+	// preloadTailBytes is the peak the CDC tail costs to load. See tailPeakBytes.
+	preloadTailBytes int64
+	// preloadBytes is the on-disk size of the bases Load will map. See baseDocCountAndBytes.
+	preloadBytes int64
+	preloaded    bool
+}
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
 
@@ -107,79 +112,46 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 // tag=1 CdcTail delta frames (+ delete set), assembled into a queryable Index with
 // global stats and per-pk liveness. An index created on an empty table has no tag=0
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
-func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
-	ensureReusableLoadLifecycle()
-	index := loadReasonKey(s.cfg.DbName, s.cfg.IndexTable)
-	generation := beginLoadGeneration(index)
-	defer endLoadGeneration(generation)
-	reason := LoadMissProcessStart
-	var reasonGeneration uint64
-	if loadObservationEnabled() {
-		if observed, observedGeneration := peekLoadReason(index); observed != "" {
-			reason = observed
-			reasonGeneration = observedGeneration
-		}
+// Preload counts the docs across every tag=0 base -- the quantity the heap cost is derived
+// from -- without loading or mapping any of them, so the cache can reclaim room for this index
+// before Load claims it.
+func (s *Fulltext2Search) Preload(sqlproc *sqlexec.SqlProcess) error {
+	ndoc, bytes, err := baseDocCountAndBytes(sqlproc, s.cfg)
+	if err != nil {
+		return err
 	}
-	trace := newLoadTrace(s.cfg.IndexTable, reason)
-	canceled := false
-	defer func() {
-		if err != nil {
-			canceled = isLoadCancellationError(err)
-			loadedBasePool.rollback(generation.owner)
-		}
-		// VectorIndexCache finishes the event after it samples the shared
-		// entry's waiter count, so waiters that arrived during this load are
-		// included in the diagnostic record.
-		s.pendingTrace = trace
-		s.pendingLoadErr = err
-		s.pendingCancel = canceled
-	}()
+	// The CDC tail is loaded too, and it is pure Go heap. An index with only a tail counts
+	// ZERO base docs, so without this the arrival publishes (0,0), makeRoom takes its
+	// "nothing to account for" exit BEFORE registering a reservation, and the load is
+	// invisible to admission entirely. Counting the chunks is cheap enough to do here; see
+	// tailPeakBytes.
+	tail, _, err := tailPeakBytes(sqlproc, s.cfg)
+	if err != nil {
+		return err
+	}
+	s.preloadNdoc, s.preloadBytes, s.preloadTailBytes, s.preloaded = ndoc, bytes, tail, true
+	return nil
+}
+
+func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	// Fail fast on the QUERY path if the bases' per-doc metadata won't fit the heap
 	// budget, rather than OOM-killing the CN (which takes down every query on the node).
 	// This guard is on Load, NOT LoadAllBases, so CompactSegments (MERGE) — the remedy —
 	// stays exempt and can still load the bases to reclaim dead docs.
-	var budgetStart time.Time
-	if trace != nil {
-		budgetStart = time.Now()
-	}
-	if err := checkBaseLoadBudget(sqlproc, s.cfg); err != nil {
-		if trace != nil {
-			trace.addInternalSQL(time.Since(budgetStart))
+	// Reuse Preload's count when it ran: checkBaseLoadBudget would otherwise repeat the
+	// SUM(nrow) aggregate that Preload already paid for, on every cache miss.
+	if s.preloaded {
+		if err := checkBaseLoadBudgetFor(sqlproc, s.cfg, s.preloadNdoc); err != nil {
+			return err
 		}
+	} else if err := checkBaseLoadBudget(sqlproc, s.cfg); err != nil {
 		return err
 	}
-	if trace != nil {
-		trace.addInternalSQL(time.Since(budgetStart))
-	}
-	var baseGeneration, observedTail int64
-	var generationReady bool
-	var generationStart time.Time
-	if trace != nil {
-		generationStart = time.Now()
-	}
-	baseGeneration, observedTail, err = LoadGeneration(sqlproc, s.cfg)
-	if trace != nil {
-		trace.addInternalSQL(time.Since(generationStart))
-	}
-	if err == nil {
-		generationReady = true
-	}
-	bases, err := loadAllBases(sqlproc, s.cfg, trace, generation)
+	bases, err := LoadAllBases(sqlproc, s.cfg)
 	if err != nil {
 		return err
 	}
-	if !loadGenerationCurrent(generation) {
-		freeSegs(bases)
-		return errLoadGenerationSuperseded
-	}
-	var tails []*Segment
-	var deletes map[any]int64
-	var appliedTail int64
-	if generationReady {
-		tails, deletes, appliedTail, err = loadTailWithReuseForGeneration(sqlproc, s.cfg, baseGeneration, observedTail, trace, generation)
-	} else {
-		tails, deletes, appliedTail, err = loadTailSegmentsAfter(sqlproc, s.cfg, -1, trace)
-	}
+	tails, deletes, err := LoadTailSegmentsWithin(sqlproc, s.cfg, s.reservedAhead)
 	if err != nil {
 		freeSegs(bases) // munmap the base segments on a tail-load error (don't leak the mappings)
 		return err
@@ -187,10 +159,6 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
 	s.loaded = true
-	if loadGenerationCurrent(generation) {
-		consumeLoadReasonIfCurrent(index, reasonGeneration, generation)
-	}
-	trace.setGeneration(baseGeneration, appliedTail)
 
 	// Capture the generation + durable handles for IsStale. Same txn as the load, so the
 	// captured generation matches the loaded snapshot exactly. On any capture failure genValid
@@ -198,70 +166,40 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 	// retry capture) rather than pinning it in cache forever — see IsStale.
 	s.cnUUID = sqlproc.GetService()
 	if acc, e := sqlproc.GetAccountID(); e == nil {
-		var genStart time.Time
-		if trace != nil {
-			genStart = time.Now()
-		}
-		ts, _, e2 := LoadGeneration(sqlproc, s.cfg)
-		if trace != nil {
-			trace.addInternalSQL(time.Since(genStart))
-		}
-		if e2 == nil {
-			s.accountID = acc
-			// Keep the generation actually applied to the assembled Index. If a
-			// writer committed while loading, IsStale will force a later refresh
-			// instead of falsely declaring the older snapshot current.
-			s.loadedTs, s.loadedTail, s.genValid = baseGeneration, appliedTail, true
-			if !generationReady {
-				s.loadedTs, s.loadedTail = ts, appliedTail
-			}
-			trace.setGeneration(s.loadedTs, s.loadedTail)
+		if ts, tail, e2 := LoadGeneration(sqlproc, s.cfg); e2 == nil {
+			s.accountID, s.loadedTs, s.loadedTail, s.genValid = acc, ts, tail, true
 		}
 	}
 	return nil
 }
 
-func isLoadCancellationError(err error) bool {
-	return errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded) ||
-		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted) ||
-		moerr.IsMoErrCode(err, moerr.ErrQueryTimeout)
-}
-
-// OnCacheInvalidated is called by the generic cache only on invalidation paths;
-// it does not run on a warm query. The bounded registry lets the next load
-// classify its miss without changing VectorIndexSearchIf.
-func (s *Fulltext2Search) OnCacheInvalidated(reason string) {
-	if reason == "" {
-		// A reason-less Remove is used by DROP/restore and by generic cache
-		// callers. No next-load diagnostic event is needed, but reusable state
-		// for this index must not survive the cache ownership boundary.
-		clearReusableLoadGeneration(s.cfg)
-		return
+// GetIndexSize reports the Go-heap cost of the loaded index, charged with the SAME per-doc
+// model checkBaseLoadBudget uses to admit the load in the first place (estBytesPerDocHeap), so
+// the governor bounds exactly the quantity that gate measured. Base posting blocks are excluded
+// for the same reason they are excluded there: they are views into a shared read-only mmap --
+// reclaimable OS page cache, not heap, and they cannot OOM the CN. Nothing here is device
+// resident, so the device figure is 0.
+// GetIndexSize charges the doc heap PLUS the file this entry maps.
+//
+// The mapping is not shared between cache entries: LoadFromStorage spills to a fresh LOCAL file
+// per load and mmaps it whole, so a second named-snapshot key of the same index maps its own
+// copy. Reporting only the heap made a multi-megabyte mapping look like a few hundred bytes, and
+// N generations could pin N files while the governor saw almost nothing. Same shape as hnsw:
+// rows x per-row heap, plus the mapped file.
+func (s *Fulltext2Search) GetIndexSize() (hostBytes, deviceBytes int64) {
+	if !s.loaded || s.idx == nil {
+		// Between Preload and Load: report what Load is about to cost, mapping included.
+		return s.preloadNdoc*estBytesPerDocHeap + max(s.preloadBytes, 0) + max(s.preloadTailBytes, 0), 0
 	}
-	invalidateLoadGeneration(s.cfg, LoadMissReason(reason))
-}
-
-// SetLoadWaiters is an internal cache hook used only to complete load
-// observability. It is not part of the public VectorIndexSearchIf contract.
-func (s *Fulltext2Search) SetLoadWaiters(n int64) {
-	s.loadWaiters.Store(n)
-}
-
-// FinishLoadObservation is called by VectorIndexCache after Load returns and
-// SetLoadWaiters has sampled the shared entry. It is intentionally outside
-// VectorIndexSearchIf so other algorithms keep their existing contract.
-func (s *Fulltext2Search) FinishLoadObservation() {
-	trace := s.pendingTrace
-	if trace == nil {
-		return
+	var ndoc, mapped int64
+	for _, seg := range s.idx.segments {
+		if seg == nil {
+			continue
+		}
+		ndoc += seg.N
+		mapped += int64(len(seg.mmapData))
 	}
-	s.pendingTrace = nil
-	err := s.pendingLoadErr
-	canceled := s.pendingCancel
-	s.pendingLoadErr = nil
-	s.pendingCancel = false
-	trace.finish(err, canceled, s.loadWaiters.Load())
+	return ndoc*estBytesPerDocHeap + mapped, 0
 }
 
 // IsStale reports whether the underlying index has changed since this entry was loaded, by
@@ -519,12 +457,18 @@ func (s *Fulltext2Search) SearchFloat32(proc *sqlexec.SqlProcess, query any, rt 
 	return moerr.NewInternalError(proc.GetContext(), "fulltext2 search: SearchFloat32 not supported")
 }
 
-// Destroy releases this generation's base/tail views. Immutable base mappings
-// remain alive in the bounded pool while another generation can reuse them;
-// the cache holds the write lock, so no search is in flight on this generation.
+// Destroy munmaps the loaded index's base segments (their posting blocks + positions
+// are views into those mappings), then drops it. The cache holds the write lock
+// around this, so no search is in flight.
 func (s *Fulltext2Search) Destroy() {
-	s.FinishLoadObservation()
-	s.idx.Free()
+	if s.idx != nil {
+		s.idx.Free()
+	}
 	s.idx = nil
 	s.loaded = false
 }
+
+// SetReservedAhead receives what the governor has already promised to loads ahead of this one,
+// between Preload and Load. The tail budget subtracts it, so two concurrent loads cannot spend
+// the same free memory twice. Implements the cache's reservationAware interface.
+func (s *Fulltext2Search) SetReservedAhead(n int64) { s.reservedAhead = n }

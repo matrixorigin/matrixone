@@ -1,0 +1,32 @@
+set @group_spill_max_depth_old_dop = @@max_dop;
+set @group_spill_max_depth_old_mem = @@agg_spill_mem;
+set @@max_dop = 1;
+set @@agg_spill_mem = 1;
+select result % 4 as g, count(*) as n
+from generate_series(1, 64) s
+group by g order by g;
+➤ g[-5,64,0]  ¦  n[-5,64,0]  𝄀
+0  ¦  16  𝄀
+1  ¦  16  𝄀
+2  ¦  16  𝄀
+3  ¦  16
+set @@agg_spill_mem = 65536;
+select result % 4 as g, count(*) as n
+from generate_series(1, 64) s
+group by g order by g;
+➤ g[-5,64,0]  ¦  n[-5,64,0]  𝄀
+0  ¦  16  𝄀
+1  ¦  16  𝄀
+2  ¦  16  𝄀
+3  ¦  16
+set @@agg_spill_mem = 1073741824;
+select result % 4 as g, count(*) as n
+from generate_series(1, 64) s
+group by g order by g;
+➤ g[-5,64,0]  ¦  n[-5,64,0]  𝄀
+0  ¦  16  𝄀
+1  ¦  16  𝄀
+2  ¦  16  𝄀
+3  ¦  16
+set @@agg_spill_mem = @group_spill_max_depth_old_mem;
+set @@max_dop = @group_spill_max_depth_old_dop;

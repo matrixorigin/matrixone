@@ -1,0 +1,319 @@
+set global enable_privilege_cache = off;
+drop database if exists metadata_visibility_db;
+drop database if exists metadata_visibility_show_db;
+drop user if exists metadata_visibility_user;
+drop role if exists metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
+create database metadata_visibility_db;
+create database metadata_visibility_show_db;
+create table metadata_visibility_db.allowed_table (
+id int primary key,
+secret varchar(20) unique,
+payload int,
+constraint ck_allowed_payload check (payload >= 0)
+) partition by hash(id) partitions 2;
+create table metadata_visibility_db.hidden_parent (
+id int primary key
+);
+create table metadata_visibility_db.hidden_table (
+id int primary key,
+secret varchar(20) unique,
+payload int,
+constraint ck_hidden_payload check (payload >= 0),
+constraint fk_hidden_parent foreign key (id) references metadata_visibility_db.hidden_parent(id)
+);
+create view metadata_visibility_db.hidden_view as
+select id, secret, payload from metadata_visibility_db.hidden_table;
+create role metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
+create user metadata_visibility_user identified by '123456' default role metadata_visibility_primary;
+grant connect on account * to metadata_visibility_primary;
+select count(*) = 0 as tables_hidden
+from information_schema.tables
+where table_schema = 'metadata_visibility_db';
+➤ tables_hidden[-7,1,0]  𝄀
+1
+select count(*) = 0 as columns_hidden
+from information_schema.columns
+where table_schema = 'metadata_visibility_db';
+➤ columns_hidden[-7,1,0]  𝄀
+1
+select count(*) = 0 as statistics_hidden
+from information_schema.statistics
+where table_schema = 'metadata_visibility_db';
+➤ statistics_hidden[-7,1,0]  𝄀
+1
+select count(*) = 0 as constraints_hidden
+from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db';
+➤ constraints_hidden[-7,1,0]  𝄀
+1
+select count(*) = 0 as schema_hidden
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
+➤ schema_hidden[-7,1,0]  𝄀
+1
+select count(*) = 0 as empty_schema_hidden_without_show_databases
+from information_schema.schemata
+where schema_name = 'metadata_visibility_show_db';
+➤ empty_schema_hidden_without_show_databases[-7,1,0]  𝄀
+1
+select
+(select count(*) = 0 from information_schema.check_constraints
+where constraint_schema = 'metadata_visibility_db') as check_constraints_hidden,
+(select count(*) = 0 from information_schema.key_column_usage
+where table_schema = 'metadata_visibility_db') as key_column_usage_hidden,
+(select count(*) = 0 from information_schema.referential_constraints
+where constraint_schema = 'metadata_visibility_db') as referential_constraints_hidden,
+(select count(*) = 0 from information_schema.views
+where table_schema = 'metadata_visibility_db') as views_hidden,
+(select count(*) = 0 from information_schema.partitions
+where table_schema = 'metadata_visibility_db') as partitions_hidden;
+➤ check_constraints_hidden[-7,1,0]  ¦  key_column_usage_hidden[-7,1,0]  ¦  referential_constraints_hidden[-7,1,0]  ¦  views_hidden[-7,1,0]  ¦  partitions_hidden[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1
+select
+(select count(*) > 0 from information_schema.tables
+where table_schema = 'information_schema')
+and
+(select count(*) > 0 from information_schema.columns
+where table_schema = 'information_schema')
+and
+(select count(*) = 1 from information_schema.schemata
+where schema_name = 'information_schema') as system_metadata_visible;
+➤ system_metadata_visible[-7,1,0]  𝄀
+1
+grant select on table metadata_visibility_db.allowed_table to metadata_visibility_reader;
+grant metadata_visibility_reader to metadata_visibility_middle;
+grant metadata_visibility_middle to metadata_visibility_primary;
+grant select on table metadata_visibility_db.hidden_parent to metadata_visibility_primary;
+select
+(select count(*) = 1 from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as inherited_table_visible,
+(select count(*) = 1 from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'hidden_parent') as direct_table_visible,
+(select count(*) = 0 from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table') as hidden_stays_hidden;
+➤ inherited_table_visible[-7,1,0]  ¦  direct_table_visible[-7,1,0]  ¦  hidden_stays_hidden[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+select
+(select count(*) = 3 from information_schema.columns
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as allowed_columns_visible,
+(select count(*) = 0 from information_schema.columns
+where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table') as hidden_columns_hidden;
+➤ allowed_columns_visible[-7,1,0]  ¦  hidden_columns_hidden[-7,1,0]  𝄀
+1  ¦  1
+select
+(select count(*) > 0 from information_schema.statistics
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as allowed_statistics_visible,
+(select count(*) = 0 from information_schema.statistics
+where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table') as hidden_statistics_hidden;
+➤ allowed_statistics_visible[-7,1,0]  ¦  hidden_statistics_hidden[-7,1,0]  𝄀
+1  ¦  1
+select
+(select count(*) > 0 from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as allowed_constraints_visible,
+(select count(*) = 1 from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table'
+and constraint_name = 'ck_allowed_payload') as allowed_check_visible,
+(select count(*) = 0 from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table') as hidden_constraints_hidden;
+➤ allowed_constraints_visible[-7,1,0]  ¦  allowed_check_visible[-7,1,0]  ¦  hidden_constraints_hidden[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+select
+(select count(*) = 1 from information_schema.check_constraints
+where constraint_schema = 'metadata_visibility_db' and constraint_name = 'ck_allowed_payload')
+as allowed_check_metadata_visible,
+(select count(*) > 0 from information_schema.partitions
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table')
+as allowed_partition_metadata_visible,
+(select count(*) = 0 from information_schema.key_column_usage
+where table_schema = 'metadata_visibility_db' and table_name = 'hidden_table')
+as hidden_fk_columns_hidden,
+(select count(*) = 0 from information_schema.referential_constraints
+where constraint_schema = 'metadata_visibility_db' and table_name = 'hidden_table')
+as hidden_fk_constraint_hidden,
+(select count(*) = 0 from information_schema.views
+where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view')
+as hidden_view_hidden;
+➤ allowed_check_metadata_visible[-7,1,0]  ¦  allowed_partition_metadata_visible[-7,1,0]  ¦  hidden_fk_columns_hidden[-7,1,0]  ¦  hidden_fk_constraint_hidden[-7,1,0]  ¦  hidden_view_hidden[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1
+select count(*) = 1 as inherited_schema_visible
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
+➤ inherited_schema_visible[-7,1,0]  𝄀
+1
+alter role metadata_visibility_primary rename to metadata_visibility_primary_renamed;
+select count(*) = 1 as table_visible_after_active_role_rename
+from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
+➤ table_visible_after_active_role_rename[-7,1,0]  𝄀
+1
+select count(*) = 3 as columns_visible_after_active_role_rename
+from information_schema.columns
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
+➤ columns_visible_after_active_role_rename[-7,1,0]  𝄀
+1
+select count(*) > 0 as statistics_visible_after_active_role_rename
+from information_schema.statistics
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
+➤ statistics_visible_after_active_role_rename[-7,1,0]  𝄀
+1
+select count(*) > 0 as constraints_visible_after_active_role_rename
+from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table';
+➤ constraints_visible_after_active_role_rename[-7,1,0]  𝄀
+1
+alter role metadata_visibility_primary_renamed rename to metadata_visibility_primary;
+prepare metadata_visibility_prepared from "select
+(select count(*) from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as table_count,
+(select count(*) from information_schema.columns
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as column_count,
+(select count(*) from information_schema.statistics
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as statistic_count,
+(select count(*) from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as constraint_count";
+execute metadata_visibility_prepared;
+➤ table_count[-5,64,0]  ¦  column_count[-5,64,0]  ¦  statistic_count[-5,64,0]  ¦  constraint_count[-5,64,0]  𝄀
+1  ¦  3  ¦  2  ¦  3
+select
+(select count(*) from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as table_count,
+(select count(*) from information_schema.columns
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as column_count,
+(select count(*) from information_schema.statistics
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as statistic_count,
+(select count(*) from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as constraint_count;
+➤ table_count[-5,64,0]  ¦  column_count[-5,64,0]  ¦  statistic_count[-5,64,0]  ¦  constraint_count[-5,64,0]  𝄀
+1  ¦  3  ¦  2  ¦  3
+set role public;
+execute metadata_visibility_prepared;
+➤ table_count[-5,64,0]  ¦  column_count[-5,64,0]  ¦  statistic_count[-5,64,0]  ¦  constraint_count[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+select
+(select count(*) from information_schema.tables
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as table_count,
+(select count(*) from information_schema.columns
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as column_count,
+(select count(*) from information_schema.statistics
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as statistic_count,
+(select count(*) from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as constraint_count;
+➤ table_count[-5,64,0]  ¦  column_count[-5,64,0]  ¦  statistic_count[-5,64,0]  ¦  constraint_count[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+select count(*) = 0 as schema_hidden_after_set_role
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
+➤ schema_hidden_after_set_role[-7,1,0]  𝄀
+1
+deallocate prepare metadata_visibility_prepared;
+set role metadata_visibility_primary;
+grant create database on account * to metadata_visibility_primary;
+create database metadata_visibility_owned_db;
+select count(*) = 1 as owned_schema_visible
+from information_schema.schemata
+where schema_name = 'metadata_visibility_owned_db';
+➤ owned_schema_visible[-7,1,0]  𝄀
+1
+drop database metadata_visibility_owned_db;
+grant show databases on account * to metadata_visibility_primary;
+select count(*) = 1 as empty_schema_visible_with_show_databases
+from information_schema.schemata
+where schema_name = 'metadata_visibility_show_db';
+➤ empty_schema_visible_with_show_databases[-7,1,0]  𝄀
+1
+revoke show databases on account * from metadata_visibility_primary;
+select count(*) = 0 as empty_schema_hidden_after_show_databases_revoke
+from information_schema.schemata
+where schema_name = 'metadata_visibility_show_db';
+➤ empty_schema_hidden_after_show_databases_revoke[-7,1,0]  𝄀
+1
+grant show tables on database metadata_visibility_db to metadata_visibility_primary;
+select count(*) = 1 as database_schema_visible
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
+➤ database_schema_visible[-7,1,0]  𝄀
+1
+select count(*) = 2 as database_tables_visible
+from information_schema.tables
+where table_schema = 'metadata_visibility_db'
+and table_name in ('allowed_table', 'hidden_table');
+➤ database_tables_visible[-7,1,0]  𝄀
+1
+select count(*) = 6 as database_columns_visible
+from information_schema.columns
+where table_schema = 'metadata_visibility_db'
+and table_name in ('allowed_table', 'hidden_table');
+➤ database_columns_visible[-7,1,0]  𝄀
+1
+select count(*) > 0 as database_statistics_visible
+from information_schema.statistics
+where table_schema = 'metadata_visibility_db';
+➤ database_statistics_visible[-7,1,0]  𝄀
+1
+select count(*) > 0 as database_constraints_visible
+from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db';
+➤ database_constraints_visible[-7,1,0]  𝄀
+1
+select
+(select count(*) > 0 from information_schema.check_constraints
+where constraint_schema = 'metadata_visibility_db') as database_checks_visible,
+(select count(*) = 1 from information_schema.key_column_usage
+where table_schema = 'metadata_visibility_db'
+and table_name = 'hidden_table' and constraint_name = 'fk_hidden_parent') as database_fk_columns_visible,
+(select count(*) = 1 from information_schema.referential_constraints
+where constraint_schema = 'metadata_visibility_db'
+and table_name = 'hidden_table' and constraint_name = 'fk_hidden_parent') as database_fk_constraints_visible,
+(select count(*) = 1 from information_schema.views
+where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view') as database_view_visible,
+(select count(*) > 0 from information_schema.partitions
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as database_partitions_visible;
+➤ database_checks_visible[-7,1,0]  ¦  database_fk_columns_visible[-7,1,0]  ¦  database_fk_constraints_visible[-7,1,0]  ¦  database_view_visible[-7,1,0]  ¦  database_partitions_visible[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1
+select count(*) = 1 as admin_schema_visible
+from information_schema.schemata
+where schema_name = 'metadata_visibility_db';
+➤ admin_schema_visible[-7,1,0]  𝄀
+1
+select count(*) = 2 as admin_tables_visible
+from information_schema.tables
+where table_schema = 'metadata_visibility_db'
+and table_name in ('allowed_table', 'hidden_table');
+➤ admin_tables_visible[-7,1,0]  𝄀
+1
+select count(*) = 6 as admin_columns_visible
+from information_schema.columns
+where table_schema = 'metadata_visibility_db'
+and table_name in ('allowed_table', 'hidden_table');
+➤ admin_columns_visible[-7,1,0]  𝄀
+1
+select count(*) > 0 as admin_statistics_visible
+from information_schema.statistics
+where table_schema = 'metadata_visibility_db';
+➤ admin_statistics_visible[-7,1,0]  𝄀
+1
+select count(*) > 0 as admin_constraints_visible
+from information_schema.table_constraints
+where table_schema = 'metadata_visibility_db';
+➤ admin_constraints_visible[-7,1,0]  𝄀
+1
+select
+(select count(*) > 0 from information_schema.check_constraints
+where constraint_schema = 'metadata_visibility_db') as admin_checks_visible,
+(select count(*) = 1 from information_schema.key_column_usage
+where table_schema = 'metadata_visibility_db'
+and table_name = 'hidden_table' and constraint_name = 'fk_hidden_parent') as admin_fk_columns_visible,
+(select count(*) = 1 from information_schema.referential_constraints
+where constraint_schema = 'metadata_visibility_db'
+and table_name = 'hidden_table' and constraint_name = 'fk_hidden_parent') as admin_fk_constraints_visible,
+(select count(*) = 1 from information_schema.views
+where table_schema = 'metadata_visibility_db' and table_name = 'hidden_view') as admin_view_visible,
+(select count(*) > 0 from information_schema.partitions
+where table_schema = 'metadata_visibility_db' and table_name = 'allowed_table') as admin_partitions_visible;
+➤ admin_checks_visible[-7,1,0]  ¦  admin_fk_columns_visible[-7,1,0]  ¦  admin_fk_constraints_visible[-7,1,0]  ¦  admin_view_visible[-7,1,0]  ¦  admin_partitions_visible[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1
+drop database metadata_visibility_db;
+drop database metadata_visibility_show_db;
+drop user metadata_visibility_user;
+drop role metadata_visibility_primary, metadata_visibility_middle, metadata_visibility_reader;
+set global enable_privilege_cache = on;

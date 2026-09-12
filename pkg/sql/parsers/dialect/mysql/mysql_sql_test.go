@@ -60,6 +60,50 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		want      string
+		count     bool
+		errors    bool
+		hasLimit  bool
+		wantError bool
+	}{
+		{name: "warning count", input: "show count(*) warnings", want: "show count(*) warnings", count: true},
+		{name: "error count", input: "show count(*) errors", want: "show count(*) errors", count: true, errors: true},
+		{name: "warning limit", input: "show warnings limit 2", want: "show warnings limit 2", hasLimit: true},
+		{name: "error comma limit", input: "show errors limit 1, 2", want: "show errors limit 2 offset 1", hasLimit: true, errors: true},
+		{name: "warning offset limit", input: "show warnings limit 2 offset 1", want: "show warnings limit 2 offset 1", hasLimit: true},
+		{name: "count limit rejected", input: "show count(*) warnings limit 1", wantError: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.input, 1)
+			if test.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
+
+			switch stmt := stmt.(type) {
+			case *tree.ShowWarnings:
+				require.False(t, test.errors)
+				require.Equal(t, test.count, stmt.Count)
+				require.Equal(t, test.hasLimit, stmt.Limit != nil)
+			case *tree.ShowErrors:
+				require.True(t, test.errors)
+				require.Equal(t, test.count, stmt.Count)
+				require.Equal(t, test.hasLimit, stmt.Limit != nil)
+			default:
+				t.Fatalf("unexpected statement type %T", stmt)
+			}
+		})
+	}
+}
+
 func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create table t (id int, v varchar(20), key MixedCaseIdx(v), unique key `UniQue_Mix`(id))", 1)
@@ -79,6 +123,31 @@ func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
 	}
 
 	require.Equal(t, []string{"MixedCaseIdx", "UniQue_Mix"}, names)
+}
+
+func TestConfigIsNonReservedIdentifier(t *testing.T) {
+	_, err := ParseOne(context.Background(), "CREATE TABLE config ("+
+		"`key` VARCHAR(255) PRIMARY KEY,"+
+		"value TEXT NOT NULL DEFAULT (''),"+
+		"ctime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"+
+		"mtime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"+
+		")", 1)
+	require.NoError(t, err)
+
+	_, err = ParseOne(context.Background(), "create table t (config int)", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "show config", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "alter account config set MYSQL_COMPATIBILITY_MODE a = 1", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "alter account config tenant1 set MYSQL_COMPATIBILITY_MODE = '1'", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "create account config admin_name = admin identified by 'Passw0rd'", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "alter account config suspend", 1)
+	require.NoError(t, err)
+	_, err = ParseOne(context.Background(), "select account config from t", 1)
+	require.NoError(t, err)
 }
 
 func TestCreateTablePreservesIndexIdentifierCaseWithTypeOption(t *testing.T) {
@@ -543,6 +612,86 @@ func TestSQLModeParserModes(t *testing.T) {
 	})
 }
 
+func TestHighNotPrecedence(t *testing.T) {
+	ctx := context.Background()
+
+	parseExpr := func(t *testing.T, sql, sqlMode string) tree.Expr {
+		t.Helper()
+		stmt, err := ParseOneWithSQLMode(ctx, sql, 1, sqlMode)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		return firstSelectExpr(t, stmt)
+	}
+
+	t.Run("between changes precedence only when enabled", func(t *testing.T) {
+		defaultExpr := parseExpr(t, "select not 1 between 2 and 3", "")
+		defaultNot, ok := defaultExpr.(*tree.NotExpr)
+		require.True(t, ok)
+		require.IsType(t, &tree.RangeCond{}, defaultNot.Expr)
+
+		highExpr := parseExpr(t, "select not 1 between 2 and 3", "HIGH_NOT_PRECEDENCE")
+		highBetween, ok := highExpr.(*tree.RangeCond)
+		require.True(t, ok)
+		require.IsType(t, &tree.NotExpr{}, highBetween.Left)
+	})
+
+	t.Run("in changes precedence only when enabled", func(t *testing.T) {
+		defaultExpr := parseExpr(t, "select not 0 in (0, 1)", "")
+		defaultNot, ok := defaultExpr.(*tree.NotExpr)
+		require.True(t, ok)
+		defaultIn, ok := defaultNot.Expr.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.IN, defaultIn.Op)
+
+		highExpr := parseExpr(t, "select not 0 in (0, 1)", "HIGH_NOT_PRECEDENCE")
+		highIn, ok := highExpr.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.IN, highIn.Op)
+		require.IsType(t, &tree.NotExpr{}, highIn.Left)
+	})
+
+	t.Run("high NOT is accepted in simple-expression unary positions", func(t *testing.T) {
+		minusExpr, ok := parseExpr(t, "select - not 0", "HIGH_NOT_PRECEDENCE").(*tree.UnaryExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.UNARY_MINUS, minusExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, minusExpr.Expr)
+
+		bangExpr, ok := parseExpr(t, "select ! not 0", "HIGH_NOT_PRECEDENCE").(*tree.UnaryExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.UNARY_MARK, bangExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, bangExpr.Expr)
+
+		likeExpr, ok := parseExpr(t, "select '1' like not 0", "HIGH_NOT_PRECEDENCE").(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.LIKE, likeExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, likeExpr.Right)
+	})
+
+	for _, sql := range []string{
+		"select not (1 between 2 and 3)",
+		"select (not 1) between 2 and 3",
+		"select 1 not in (1)",
+		"select 1 not like '2'",
+		"select 1 not ilike '2'",
+		"select 1 not regexp '2'",
+		"select 1 not between 2 and 3",
+		"select 1 is not null",
+		"select 1 is not unknown",
+		"select 1 is not true",
+		"select 1 is not false",
+		"create table if not exists t_high_not (a int not null)",
+		"alter table t_high_not alter constraint c not enforced",
+		"merge into target t using source s on t.id = s.id when not matched then insert (id) values (s.id)",
+		"merge into target t using source s on t.id = s.id when not matched then insert values (s.id)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOneWithSQLMode(ctx, sql, 1, "HIGH_NOT_PRECEDENCE")
+			require.NoError(t, err)
+			stmt.Free()
+		})
+	}
+}
+
 // A fulltext MATCH ... AGAINST pattern is stored unescaped and re-escaped on Format.
 // Under NO_BACKSLASH_ESCAPES a backslash is a literal char, so the formatter must NOT
 // re-escape it (WithNoBackslashEscape), otherwise every parse->format cycle doubles the
@@ -637,6 +786,22 @@ func TestConvertToJSONBuildsCastExpr(t *testing.T) {
 	defer usingStmt.Free()
 	_, isCast := firstSelectExpr(t, usingStmt).(*tree.CastExpr)
 	require.False(t, isCast)
+}
+
+func TestConvertUsingDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select convert(payload using binary) from t",
+		"select convert('1' using utf8mb4)",
+	} {
+		ast, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err)
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
+		ast.Format(fmtCtx)
+		formatted := fmtCtx.String()
+		require.Contains(t, formatted, " using ")
+		_, err = ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+	}
 }
 
 func TestParseFirstWithSQLMode(t *testing.T) {
@@ -785,6 +950,99 @@ func TestBitXorWindowSpec(t *testing.T) {
 	identifier, ok := firstSelectExpr(t, identifierStmt).(*tree.UnresolvedName)
 	require.True(t, ok)
 	require.Equal(t, "bit_xor", identifier.ColName())
+}
+
+func TestValueWindowDefaultModifiers(t *testing.T) {
+	testCases := []struct {
+		name      string
+		sql       string
+		canonical string
+	}{
+		{
+			name:      "LAG RESPECT NULLS",
+			sql:       "select lag(v) respect nulls over (order by id) from t",
+			canonical: "select lag(v) over (order by id) from t",
+		},
+		{
+			name:      "LAG with offset RESPECT NULLS",
+			sql:       "select lag(v, 2) respect nulls over (order by id) from t",
+			canonical: "select lag(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "LAG with offset and default RESPECT NULLS",
+			sql:       "select lag(v, 2, 0) respect nulls over (order by id) from t",
+			canonical: "select lag(v, 2, 0) over (order by id) from t",
+		},
+		{
+			name:      "LEAD RESPECT NULLS",
+			sql:       "select lead(v) respect nulls over (order by id) from t",
+			canonical: "select lead(v) over (order by id) from t",
+		},
+		{
+			name:      "LEAD with offset RESPECT NULLS",
+			sql:       "select lead(v, 2) respect nulls over (order by id) from t",
+			canonical: "select lead(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "LEAD with offset and default RESPECT NULLS",
+			sql:       "select lead(v, 2, 0) respect nulls over (order by id) from t",
+			canonical: "select lead(v, 2, 0) over (order by id) from t",
+		},
+		{
+			name:      "FIRST_VALUE RESPECT NULLS",
+			sql:       "select first_value(v) respect nulls over (order by id) from t",
+			canonical: "select first_value(v) over (order by id) from t",
+		},
+		{
+			name:      "LAST_VALUE RESPECT NULLS",
+			sql:       "select last_value(v) respect nulls over (order by id) from t",
+			canonical: "select last_value(v) over (order by id) from t",
+		},
+		{
+			name:      "NTH_VALUE RESPECT NULLS",
+			sql:       "select nth_value(v, 2) respect nulls over (order by id) from t",
+			canonical: "select nth_value(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "NTH_VALUE FROM FIRST",
+			sql:       "select nth_value(v, 2) from first over (order by id) from t",
+			canonical: "select nth_value(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "NTH_VALUE FROM FIRST RESPECT NULLS",
+			sql:       "select nth_value(v, 2) from first respect nulls over (order by id) from t",
+			canonical: "select nth_value(v, 2) over (order by id) from t",
+		},
+		{
+			name:      "RESPECT remains a non-reserved identifier",
+			sql:       "select respect from t",
+			canonical: "select respect from t",
+		},
+		{
+			name:      "RESPECT remains a generic function name",
+			sql:       "select respect()",
+			canonical: "select respect()",
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), testCase.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			require.Equal(t, testCase.canonical, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+
+	for _, sql := range []string{
+		"select lag(v) ignore nulls over (order by id) from t",
+		"select nth_value(v, 2) from last over (order by id) from t",
+	} {
+		t.Run("reject "+sql, func(t *testing.T) {
+			_, err := ParseOne(context.Background(), sql, 1)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestNamedWindowClause(t *testing.T) {
@@ -1181,6 +1439,62 @@ func TestDataBranchCreateTablePreservesQuotedApostropheIdentifier(t *testing.T) 
 	require.True(t, ok)
 	require.Equal(t, tree.Identifier("quote'dst"), branchStmt.CreateTable.Table.ObjectName)
 	require.Equal(t, tree.Identifier("quote'src"), branchStmt.SrcTable.ObjectName)
+}
+
+func TestPrepareDataBranchStatements(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want any
+	}{
+		{
+			name: "create table",
+			sql:  "prepare stmt from data branch create table branch from base",
+			want: &tree.DataBranchCreateTable{},
+		},
+		{
+			name: "create database",
+			sql:  "prepare stmt from data branch create database branch_db from base_db",
+			want: &tree.DataBranchCreateDatabase{},
+		},
+		{
+			name: "diff",
+			sql:  "prepare stmt from data branch diff branch against base output count",
+			want: &tree.DataBranchDiff{},
+		},
+		{
+			name: "merge",
+			sql:  "prepare stmt from data branch merge branch into base when conflict accept",
+			want: &tree.DataBranchMerge{},
+		},
+		{
+			name: "pick values parameter",
+			sql:  "prepare stmt from data branch pick branch into base keys(?) when conflict accept",
+			want: &tree.DataBranchPick{},
+		},
+		{
+			name: "delete table",
+			sql:  "prepare stmt from data branch delete table branch",
+			want: &tree.DataBranchDeleteTable{},
+		},
+		{
+			name: "delete database",
+			sql:  "prepare stmt from data branch delete database branch_db",
+			want: &tree.DataBranchDeleteDatabase{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.TODO(), tt.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			prepare, ok := stmt.(*tree.PrepareStmt)
+			require.True(t, ok)
+			require.IsType(t, tt.want, prepare.Stmt)
+		})
+	}
 }
 
 func TestDataBranchStatementFormatRoundTrip(t *testing.T) {
@@ -2282,7 +2596,7 @@ var (
 			input: "select a as promo_revenue from (select * from r) as c_orders(c_custkey, c_count)",
 		}, {
 			input:  "select extract(year from l_shipdate) as l_year from t",
-			output: "select extract(year, l_shipdate) as l_year from t",
+			output: "select extract(year from l_shipdate) as l_year from t",
 		}, {
 			input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112' day",
 			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - INTERVAL 112 day",
@@ -2458,34 +2772,34 @@ var (
 			output: "select userID as user, MAX(score) as max from t1 group by userID order by user",
 		}, {
 			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+			output: "load data infile 'test/loadfile5' ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
+			output: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
-			output: "load data local infile data replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
+			output: "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 lines",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
+			output: "load data local infile 'data' replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
+			output: "load data local infile 'data' replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 lines",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
+			output: "load data local infile 'data' replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data local infile 'data' replace into table db.a lines terminated by '\t' starting by '#' ignore 2 rows",
-			output: "load data local infile data replace into table db.a lines starting by # terminated by \t ignore 2 lines",
+			output: "load data local infile 'data' replace into table db.a lines starting by # terminated by \t ignore 2 lines",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
+			output: "load data infile 'data.txt' into table db.a fields terminated by \t escaped by \t",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' enclosed by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a fields terminated by \t enclosed by \t escaped by \t",
+			output: "load data infile 'data.txt' into table db.a fields terminated by \t enclosed by \t escaped by \t",
 		}, {
 			input:  "load data infile 'data.txt' into table db.a",
-			output: "load data infile data.txt into table db.a",
+			output: "load data infile 'data.txt' into table db.a",
 		}, {
 			input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
 		}, {
@@ -2507,16 +2821,16 @@ var (
 			output: "create external table t (a int) url s3option {'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='******', 'secret_access_key'='******', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
 		}, {
 			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+			output: "load data infile 'test/loadfile5' ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
+			output: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by ''",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true strict true ",
+			output: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel 'true' strict 'true' ",
 		}, {
 			input:  "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '' parallel 'true' strict 'true';",
-			output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel true strict true ",
+			output: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat fields terminated by '' optionally enclosed by '' lines terminated by '' parallel 'true' strict 'true' ",
 		}, {
 			input: "load data infile {'filepath'='data.txt', 'compression'='auto'} into table db.a",
 		}, {
@@ -3755,11 +4069,11 @@ var (
 		},
 		{
 			input:  "load data infile 'test/loadfile5' ignore INTO TABLE T.A FIELDS TERMINATED BY  ',' (@,@,c,d,e,f)",
-			output: "load data infile test/loadfile5 ignore into table t.a fields terminated by , (, , c, d, e, f)",
+			output: "load data infile 'test/loadfile5' ignore into table t.a fields terminated by , (, , c, d, e, f)",
 		},
 		{
 			input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
-			output: "load data infile data.txt into table db.a fields terminated by \t escaped by \t",
+			output: "load data infile 'data.txt' into table db.a fields terminated by \t escaped by \t",
 		},
 		{
 			input:  `create function helloworld () returns int language sql as 'select id from test_table limit 1'`,
@@ -5046,6 +5360,10 @@ var (
 			input:  "analyze table t1",
 			output: "analyze table t1",
 		},
+		{
+			input:  "analyze table t1 (a, b), t2 fullscan",
+			output: "analyze table t1(a, b), t2 fullscan",
+		},
 		// Issue #23122: CHECK TABLE
 		{
 			input:  "check table t1",
@@ -5572,13 +5890,60 @@ func TestCreateSQLTaskPreservesTimestampUnits(t *testing.T) {
 	createStmt, ok := stmt.(*tree.CreateSQLTask)
 	require.True(t, ok)
 	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, current_timestamp(), current_timestamp())")
-	require.Contains(t, createStmt.SQLBody, "extract(hour, current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "extract(hour from current_timestamp())")
 	require.Contains(t, createStmt.SQLBody, "INTERVAL 1 hour")
 
 	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
 	require.Contains(t, formatted, "timestampdiff(hour, current_timestamp(), current_timestamp())")
-	require.Contains(t, formatted, "extract(hour, current_timestamp())")
+	require.Contains(t, formatted, "extract(hour from current_timestamp())")
 	require.Contains(t, formatted, "INTERVAL 1 hour")
+}
+
+func TestTemporalUnitSyntaxParseFormatParse(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		sql      string
+		contains []string
+		rejects  []string
+		opts     []tree.FmtCtxOption
+	}{
+		{
+			name:     "nested timestampadd",
+			sql:      "select timestampadd(microsecond, 1, timestampadd(hour, 2, ts)) from t",
+			contains: []string{"timestampadd(microsecond, 1, timestampadd(hour, 2, ts))"},
+			rejects:  []string{"'microsecond'", "'hour'"},
+			opts:     []tree.FmtCtxOption{tree.WithSingleQuoteString()},
+		},
+		{
+			name:     "extract from timestampadd",
+			sql:      "select extract(microsecond from timestampadd(second, 3, ts)) from t",
+			contains: []string{"extract(microsecond from timestampadd(second, 3, ts))"},
+			rejects:  []string{"extract(microsecond,", "'second'"},
+			opts:     []tree.FmtCtxOption{tree.WithSingleQuoteString()},
+		},
+		{
+			name:     "quoted data and identifier",
+			sql:      "select extract(hour from `from`), 'extract(day from x)' as `timestampadd` from t",
+			contains: []string{"extract(hour from `from`)", "'extract(day from x)'", "`timestampadd`"},
+			rejects:  []string{"extract(hour,"},
+			opts:     []tree.FmtCtxOption{tree.WithSingleQuoteString(), tree.WithQuoteIdentifier()},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			formatted := tree.StringWithOpts(stmt, dialect.MYSQL, test.opts...)
+			for _, fragment := range test.contains {
+				require.Contains(t, formatted, fragment)
+			}
+			for _, fragment := range test.rejects {
+				require.NotContains(t, formatted, fragment)
+			}
+			reparsed, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			require.Equal(t, formatted, tree.StringWithOpts(reparsed, dialect.MYSQL, test.opts...))
+		})
+	}
 }
 
 func TestCreateSQLTaskPreservesComplexTimestampUnits(t *testing.T) {

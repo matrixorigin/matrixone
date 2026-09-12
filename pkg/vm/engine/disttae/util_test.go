@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -192,26 +194,26 @@ func TestTombstonePKExistsInRange(t *testing.T) {
 	// Case 1: search for PK=200, should find it
 	keys1 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys1, 200, false, proc.GetMPool()))
-	changed, _, err := tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys1, int32Type, fs, proc.GetMPool())
+	changed, _, err := tombstonePKExistsInRange(ctx, 0, pState, from, types.MaxTs(), keys1, int32Type, fs, proc.GetMPool())
 	require.NoError(t, err)
 	require.True(t, changed)
 
 	// Case 2: search for PK=999, should not find it
 	keys2 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys2, 999, false, proc.GetMPool()))
-	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys2, int32Type, fs, proc.GetMPool())
+	changed, _, err = tombstonePKExistsInRange(ctx, 0, pState, from, types.MaxTs(), keys2, int32Type, fs, proc.GetMPool())
 	require.NoError(t, err)
 	require.False(t, changed)
 
 	// Case 3: search for PK=500, should find it in second tombstone
 	keys3 := vector.NewVec(int32Type)
 	require.NoError(t, vector.AppendFixed[int32](keys3, 500, false, proc.GetMPool()))
-	changed, _, err = tombstonePKExistsInRange(ctx, pState, from, types.MaxTs(), keys3, int32Type, fs, proc.GetMPool())
+	changed, _, err = tombstonePKExistsInRange(ctx, 0, pState, from, types.MaxTs(), keys3, int32Type, fs, proc.GetMPool())
 	require.NoError(t, err)
 	require.True(t, changed)
 
 	// Case 4: no tombstone objects changed after from=25
-	changed, _, err = tombstonePKExistsInRange(ctx, pState, types.BuildTS(25, 0), types.MaxTs(), keys1, int32Type, fs, proc.GetMPool())
+	changed, _, err = tombstonePKExistsInRange(ctx, 0, pState, types.BuildTS(25, 0), types.MaxTs(), keys1, int32Type, fs, proc.GetMPool())
 	require.NoError(t, err)
 	require.False(t, changed)
 }
@@ -269,6 +271,7 @@ func TestTombstonePKExistsInRangeVarcharScopedSearch(t *testing.T) {
 
 	changed, reason, err := tombstonePKExistsInRange(
 		ctx,
+		0,
 		tnState,
 		types.BuildTS(15, 0),
 		types.BuildTS(25, 0),
@@ -284,6 +287,7 @@ func TestTombstonePKExistsInRangeVarcharScopedSearch(t *testing.T) {
 
 	changed, reason, err = tombstonePKExistsInRange(
 		ctx,
+		0,
 		tnState,
 		types.BuildTS(20, 0),
 		types.BuildTS(30, 0),
@@ -301,6 +305,7 @@ func TestTombstonePKExistsInRangeVarcharScopedSearch(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(missing, []byte("missing"), false, mp))
 	changed, reason, err = tombstonePKExistsInRange(
 		ctx,
+		0,
 		tnState,
 		types.BuildTS(15, 0),
 		types.BuildTS(25, 0),
@@ -338,6 +343,7 @@ func TestTombstonePKExistsInRangeVarcharScopedSearch(t *testing.T) {
 	}, true))
 	changed, reason, err = tombstonePKExistsInRange(
 		ctx,
+		0,
 		cnState,
 		types.BuildTS(15, 0),
 		types.BuildTS(25, 0),
@@ -651,6 +657,16 @@ func TestDeletedBlocks_GetDeletedRowIDs(t *testing.T) {
 
 		x := slices.Index(have, int64(offset))
 		require.NotEqual(t, -1, x)
+	}
+
+	selected := rowIds[0].CloneBlockID()
+	scoped := make([]types.Rowid, 0, len(delBlks.offsets[selected]))
+	delBlks.getDeletedRowIDsForBlocks([]types.Blockid{selected}, func(row types.Rowid) {
+		scoped = append(scoped, row)
+	})
+	require.Len(t, scoped, len(delBlks.offsets[selected]))
+	for i := range scoped {
+		require.True(t, scoped[i].BorrowBlockID().EQ(&selected))
 	}
 }
 
@@ -1060,6 +1076,37 @@ func TestCollectAndCalculateStatsRejectsStoppedExecutorOnZeroObjectFastPath(t *t
 	_, err := CollectAndCalculateStats(context.Background(), req, ex)
 	require.ErrorIs(t, err, context.Canceled,
 		"the zero-object fast path must not bypass executor lifecycle failure")
+}
+
+func TestCollectAndCalculateStatsAcceptsTableWideObservationWithoutObjects(t *testing.T) {
+	tableDef := &plan2.TableDef{
+		Name:    "events",
+		Version: 7,
+		Cols: []*plan2.ColDef{
+			{Name: "url"},
+			{Name: catalog.Row_ID},
+		},
+	}
+	stats := plan2.NewStatsInfo()
+	req := &updateStatsRequest{
+		statsInfo:       stats,
+		tableDef:        tableDef,
+		approxObjectNum: 0,
+	}
+
+	ratio, err := CollectAndCalculateStats(context.Background(), req, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1.0, ratio)
+	rowCount := float64(42)
+	require.NoError(t, applyStatsRefreshOptions(stats, tableDef, engine.StatsRefreshOptions{
+		TableDefVersion: &tableDef.Version,
+		TableRowCount:   &rowCount,
+		ColumnNDVs:      map[string]float64{"url": 40},
+	}))
+	require.Zero(t, stats.AccurateObjectNumber)
+	require.Equal(t, rowCount, stats.TableCnt)
+	require.Equal(t, float64(40), stats.NdvMap["url"])
+	require.True(t, plan2.StatsInfoUsable(stats))
 }
 
 func TestCollectAndCalculateStatsDoesNotApplyFailedObjectScan(t *testing.T) {

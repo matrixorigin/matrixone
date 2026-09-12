@@ -218,11 +218,11 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		overflow bool
 	}
 	type keepResult struct {
-		bind                       pb.LockTable
-		err                        error
-		refresh                    bool
-		invalidateOnRefreshFailure bool
-		remove                     bool
+		bind                   pb.LockTable
+		err                    error
+		refresh                bool
+		invalidateAfterRefresh bool
+		remove                 bool
 	}
 	type keepCompletion struct {
 		result keepResult
@@ -370,11 +370,11 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 				if err = resp.UnwrapError(); err != nil {
 					result.err = err
 					result.refresh = canRefreshRemoteBindOnKeepError(err)
-					result.invalidateOnRefreshFailure = result.refresh
+					result.invalidateAfterRefresh = result.refresh
 				} else if resp.NewBind != nil {
 					// A late response must not republish a superseded bind.
 					result.refresh = true
-					result.invalidateOnRefreshFailure = true
+					result.invalidateAfterRefresh = true
 				}
 				releaseResponse(resp)
 			} else {
@@ -410,10 +410,13 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 			recordRefresh(result)
 		}
 		if result.remove {
-			bind := result.bind
-			k.groupTables.removeWithFilter(func(_ uint64, v lockTable) bool {
-				return !v.getBind().Changed(bind)
-			}, closeReasonKeeperFailed)
+			// A non-retryable transport failure means the recorded owner can no
+			// longer preserve this transaction's lock contract. Detaching only the
+			// route leaves the transaction live and its remote-bind lease indexed,
+			// so the keeper retries the departed owner forever. Fence every exact
+			// consumer and remove the exact route if it is still cached. Transaction
+			// cleanup remains the owner of releasing the corresponding remoteBindRef.
+			k.invalidateRemoteBind(result.bind)
 		}
 	}
 
@@ -450,7 +453,7 @@ func (k *lockTableKeeper) doKeepRemoteLock(
 		k.maybeHandleRemoteBindChanged(
 			roundCtx,
 			result.bind,
-			result.invalidateOnRefreshFailure,
+			result.invalidateAfterRefresh,
 		)
 	}
 	return futures[:0], allBinds
@@ -464,7 +467,7 @@ func canRefreshRemoteBindOnKeepError(err error) bool {
 func (k *lockTableKeeper) maybeHandleRemoteBindChanged(
 	ctx context.Context,
 	bind pb.LockTable,
-	invalidateOnRefreshFailure bool,
+	invalidateAfterRefresh bool,
 ) {
 	requestAllocator := k.service.allocatorStateSnapshot()
 	newBind, allocator, err := getLockTableBindWithContext(
@@ -478,8 +481,8 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(
 	)
 	if err != nil {
 		logGetRemoteBindFailed(k.service.logger, bind.Table, err)
-		if invalidateOnRefreshFailure {
-			k.invalidateRemoteBind(bind, requestAllocator)
+		if invalidateAfterRefresh {
+			k.invalidateRemoteBind(bind)
 		}
 		return
 	}
@@ -495,24 +498,33 @@ func (k *lockTableKeeper) maybeHandleRemoteBindChanged(
 			}
 		}
 	}
+	// ErrLockTableBindChanged, ErrLockTableNotFound, and NewBind are
+	// authoritative evidence that the owner no longer accepts this exact
+	// generation. Even if allocator refresh still returns the stale bind (or a
+	// concurrent publisher already installed the replacement), fence the old
+	// consumers and stop heartbeating it. Allocator convergence remains
+	// responsible for publishing the replacement route.
+	if invalidateAfterRefresh {
+		k.invalidateRemoteBind(bind)
+	}
 }
 
 func (k *lockTableKeeper) invalidateRemoteBind(
 	bind pb.LockTable,
-	allocator allocatorState,
 ) {
 	k.service.bindChangeMu.Lock()
 	defer k.service.bindChangeMu.Unlock()
 
-	k.service.removeLockTablesWithFence(
-		k.groupTables,
-		func(candidate pb.LockTable) bool {
-			return candidate.Group == bind.Group &&
-				candidate.Table == bind.Table &&
-				!candidate.Changed(bind)
-		},
-		allocator,
-	)
+	key := makeRemoteBindKey(bind)
+	removed := k.groupTables.detachWithFilter(func(_ uint64, table lockTable) bool {
+		return makeRemoteBindKey(table.getBind()) == key
+	})
+	// A transaction-owned remoteBindRef intentionally outlives route-cache
+	// membership. Stop heartbeating the unusable generation before fencing exact
+	// consumers, even when another path already removed or replaced the route.
+	// Transaction cleanup retains and eventually releases the tombstoned ref.
+	k.service.fenceByExactBind(bind)
+	closeLockTables(removed, closeReasonBindChanged)
 }
 
 func (k *lockTableKeeper) doKeepLockTableBind(ctx context.Context) {

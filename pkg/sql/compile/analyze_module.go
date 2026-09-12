@@ -97,6 +97,10 @@ func (anal *AnalyzeModule) Reset(isPrepare bool, isTpQuery bool) {
 		anal.remotePendingAllocationGroups = nil
 		anal.remoteCompletedAllocationGroups = nil
 		if anal.qry != nil {
+			// BackgroundQueries are populated from operator statistics after an
+			// execution. They are runtime diagnostics rather than immutable plan
+			// content, so a reused prepared plan must start each generation empty.
+			anal.qry.BackgroundQueries = nil
 			for _, node := range anal.qry.Nodes {
 				if node.AnalyzeInfo == nil {
 					node.AnalyzeInfo = new(plan.AnalyzeInfo)

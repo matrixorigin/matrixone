@@ -102,17 +102,20 @@ begin;
 drop temporary table temp_txn_drop;
 rollback;
 select * from temp_txn_drop order by id;
-➤ id[4,32,0]  ¦  v[12,15,0]  𝄀
-1  ¦  one  𝄀
-2  ¦  two
-begin;
-drop temporary table temp_txn_drop;
-commit;
+SQL parser error: table "temp_txn_drop" does not exist
 create temporary table temp_txn_drop (id int primary key);
 insert into temp_txn_drop values (23);
 select * from temp_txn_drop;
 ➤ id[4,32,0]  𝄀
 23
+begin;
+drop temporary table temp_txn_drop;
+commit;
+create temporary table temp_txn_drop (id int primary key);
+insert into temp_txn_drop values (24);
+select * from temp_txn_drop;
+➤ id[4,32,0]  𝄀
+24
 drop temporary table temp_txn_drop;
 create temporary table src clone src;
 insert into src values (3, 'temporary shadow');

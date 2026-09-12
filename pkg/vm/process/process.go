@@ -193,10 +193,15 @@ func (proc *Process) SetPrepareParamsWithReusableMeta(
 	isBin []bool,
 	kinds []vector.PrepareParamKind,
 	metadata []bool,
+	binaryString ...[]bool,
 ) []bool {
 	metadata = prepareParamMetadataWithTypesReuse(
 		prepareParams, isBin, kinds, nil, metadata)
-	proc.setPrepareParams(prepareParams, metadata, nil, false)
+	var binary []bool
+	if len(binaryString) > 0 {
+		binary = binaryString[0]
+	}
+	proc.setPrepareParams(prepareParams, metadata, binary, false)
 	return metadata
 }
 
@@ -210,10 +215,15 @@ func (proc *Process) SetPrepareParamsWithReusableTypedMeta(
 	kinds []vector.PrepareParamKind,
 	paramTypes []types.T,
 	metadata []bool,
+	binaryString ...[]bool,
 ) []bool {
 	metadata = prepareParamMetadataWithTypesReuse(
 		prepareParams, isBin, kinds, paramTypes, metadata)
-	proc.setPrepareParams(prepareParams, metadata, nil, false)
+	var binary []bool
+	if len(binaryString) > 0 {
+		binary = binaryString[0]
+	}
+	proc.setPrepareParams(prepareParams, metadata, binary, false)
 	return metadata
 }
 
@@ -500,6 +510,35 @@ func BinaryStringPrepareParamMetadataForRemote(
 			defines.MORPCVersion18)
 	}
 	return append([]bool(nil), metadata...), nil
+}
+
+// RuntimeStringDomainPrepareParamMetadataForRemote validates explicit per-row
+// runtime string-domain metadata on the process wire boundary.
+func RuntimeStringDomainPrepareParamMetadataForRemote(
+	service string,
+	paramCount int,
+	metadata []uint32,
+) ([]uint32, error) {
+	if len(metadata) == 0 {
+		return nil, nil
+	}
+	if paramCount <= 0 || len(metadata) != paramCount {
+		return nil, moerr.NewInvalidInputNoCtxf(
+			"invalid runtime string-domain prepare parameter metadata length %d for %d parameters",
+			len(metadata), paramCount)
+	}
+	for i, encoded := range metadata {
+		if encoded > uint32(types.RuntimeStringBinary) {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"invalid runtime string domain %d at parameter %d", encoded, i)
+		}
+	}
+	if prepareParamProtocolVersion(service) < defines.MORPCVersion58 {
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"runtime string domains in prepared parameters require MORPC protocol version %d",
+			defines.MORPCVersion58)
+	}
+	return append([]uint32(nil), metadata...), nil
 }
 
 // StringSourcePrepareParamMetadataForRemote validates the independent source

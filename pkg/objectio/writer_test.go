@@ -237,21 +237,39 @@ func TestObjectWriterPropagatesMarshalError(t *testing.T) {
 		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,
 	)
 	require.NoError(t, err)
-	objectID := NewObjectid()
-	writer, err := NewObjectWriter(
-		BuildObjectNameWithObjectID(&objectID), fs, 0, []uint16{0}, nil,
-	)
-	require.NoError(t, err)
 
-	invalid := vector.NewVec(types.T_text.ToType())
-	invalid.SetLength(1) // Deliberately omit the required varlena descriptor.
-	bat := batch.NewWithSize(1)
-	bat.SetVector(0, invalid)
-	bat.SetRowCount(1)
-	defer bat.Clean(mp)
+	tests := []struct {
+		name  string
+		write func(*objectWriterV1, *batch.Batch) (BlockObject, error)
+	}{
+		{name: "Write", write: func(writer *objectWriterV1, bat *batch.Batch) (BlockObject, error) {
+			return writer.Write(bat)
+		}},
+		{name: "WriteWithoutSeqnum", write: func(writer *objectWriterV1, bat *batch.Batch) (BlockObject, error) {
+			return writer.WriteWithoutSeqnum(bat)
+		}},
+	}
 
-	_, err = writer.Write(bat)
-	require.ErrorContains(t, err, "vector data is shorter than its marshal length")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			objectID := NewObjectid()
+			writer, err := NewObjectWriter(
+				BuildObjectNameWithObjectID(&objectID), fs, 0, []uint16{0}, nil,
+			)
+			require.NoError(t, err)
+
+			invalid := vector.NewVec(types.T_text.ToType())
+			invalid.SetLength(1) // Deliberately omit the required varlena descriptor.
+			bat := batch.NewWithSize(1)
+			bat.SetVector(0, invalid)
+			bat.SetRowCount(1)
+			defer bat.Clean(mp)
+
+			block, err := test.write(writer, bat)
+			require.ErrorContains(t, err, "vector data is shorter than its marshal length")
+			require.Nil(t, block)
+		})
+	}
 }
 
 func getObjectMeta(ctx context.Context, t *testing.B) ObjectDataMeta {

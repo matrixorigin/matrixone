@@ -36,11 +36,19 @@ func newFuture(releaseFunc func(f *Future)) *Future {
 type Future struct {
 	id   uint64
 	send RPCMessage
-	c    chan Message
-	errC chan error
+	// streamOwner is local-only send lifecycle state. It is deliberately kept
+	// out of RPCMessage so ordinary wire envelopes are not enlarged or coupled
+	// to a client-side stream object.
+	streamOwner *stream
+	c           chan Message
+	errC        chan error
 	// used to check error for sending message
 	writtenC chan error
 	waiting  atomic.Bool
+	// writtenAt is the backend-relative tick of a successfully flushed ordinary
+	// unary request. Zero plus waiting=false means write admission/in progress;
+	// zero plus waiting=true means terminal send failure.
+	writtenAt atomic.Int64
 	// requestMetricObserved makes terminal request accounting exactly once even
 	// when timeout, transport failure, response delivery, and Close race.
 	requestMetricObserved atomic.Bool
@@ -67,9 +75,11 @@ func (f *Future) init(send RPCMessage) {
 		panic("context deadline not set")
 	}
 	f.waiting.Store(false)
+	f.writtenAt.Store(0)
 	f.requestMetricObserved.Store(false)
 	f.requestMetrics = nil
 	f.send = send
+	f.streamOwner = nil
 	f.send.createAt = time.Now()
 	f.id = send.Message.GetID()
 	f.oneWay = send.oneWay
@@ -241,6 +251,17 @@ func (f *Future) getSendMessageID() uint64 {
 	return f.id
 }
 
+// isUserUnary reports whether this Future carries an ordinary user unary
+// request: the only traffic class whose response owns a per-request read
+// window. The writeLoop flush stamp and pendingRequestReadWindow must use this
+// same predicate; a Future counted by the scan but never stamped would read as
+// pending forever, and one stamped but not scanned would lose its window.
+// (The probe-mode trackLiveness predicate in doWrite intentionally differs:
+// it also tracks one-way user traffic.)
+func (f *Future) isUserUnary() bool {
+	return !f.send.internal && !f.send.stream && !f.oneWay
+}
+
 func (f *Future) done(response Message, cb func()) bool {
 	f.mu.Lock()
 	if f.mu.notified || f.mu.closed || f.timeout() ||
@@ -314,6 +335,8 @@ func (f *Future) reset() {
 	default:
 	}
 	f.send = RPCMessage{}
+	f.streamOwner = nil
+	f.writtenAt.Store(0)
 	f.sendRelease = nil
 	f.responseRelease = nil
 	f.requestMetrics = nil

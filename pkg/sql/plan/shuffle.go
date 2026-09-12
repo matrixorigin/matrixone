@@ -143,7 +143,7 @@ func shuffleByZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucke
 	return shuffleIDX
 }
 
-func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucketNum int) uint64 {
+func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objectio.ZoneMap, bucketNum int) (uint64, bool) {
 	t := types.T(rsp.Node.Stats.HashmapStats.ShuffleColIdx) // actually this is specially used for sort key column type
 	if !rsp.Init {
 		rsp.Init = true
@@ -155,15 +155,18 @@ func shuffleByValueExtractedFromZonemap(rsp *engine.RangesShuffleParam, zm objec
 		}
 	}
 
-	var shuffleIDX uint64
 	if len(rsp.ShuffleRangeUint64) > 0 {
-		shuffleIDX = GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(rsp.ShuffleRangeUint64, zm, t)
+		return GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(rsp.ShuffleRangeUint64, zm, t)
 	} else if len(rsp.ShuffleRangeInt64) > 0 {
-		shuffleIDX = GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice(rsp.ShuffleRangeInt64, zm, t)
-	} else {
-		shuffleIDX = GetRangeShuffleIndexForExtractedZM(rsp.Node.Stats.HashmapStats.ShuffleColMin, rsp.Node.Stats.HashmapStats.ShuffleColMax, zm, uint64(bucketNum), t)
+		return GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice(rsp.ShuffleRangeInt64, zm, t)
 	}
-	return shuffleIDX
+	return GetRangeShuffleIndexForExtractedZM(
+		rsp.Node.Stats.HashmapStats.ShuffleColMin,
+		rsp.Node.Stats.HashmapStats.ShuffleColMax,
+		zm,
+		uint64(bucketNum),
+		t,
+	)
 }
 
 func CalcRangeShuffleIDXForObj(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats, bucketNum int) uint64 {
@@ -174,9 +177,15 @@ func CalcRangeShuffleIDXForObj(rsp *engine.RangesShuffleParam, objstats *objecti
 	}
 	if len(rsp.Node.TableDef.Pkey.Names) == 1 {
 		return shuffleByZonemap(rsp, zm, bucketNum)
-	} else {
-		return shuffleByValueExtractedFromZonemap(rsp, zm, bucketNum)
 	}
+	if shuffleIDX, ok := shuffleByValueExtractedFromZonemap(rsp, zm, bucketNum); ok {
+		return shuffleIDX
+	}
+	// A varlen zonemap stores at most a 30-byte prefix. If the first
+	// component cannot be decoded from that prefix, keep exactly-one-owner
+	// semantics by falling back to the same object hash used by hash shuffle.
+	objID := objstats.ObjectLocation().ObjectId()
+	return SimpleCharHashToRange(objID[:], uint64(bucketNum))
 }
 
 func ShouldSkipObjByShuffle(rsp *engine.RangesShuffleParam, objstats *objectio.ObjectStats) bool {
@@ -213,22 +222,39 @@ func GetCenterValueForZMSigned(zm objectio.ZoneMap) int64 {
 	}
 }
 
-func GetCenterValueExtractFromZMSigned(zm objectio.ZoneMap, t types.T) int64 {
-	idx := 0 //for now, it's always 0
-	minelms, _ := types.Unpack(zm.GetMinBuf())
-	maxelms, _ := types.Unpack(zm.GetMaxBuf())
-	minval := minelms[idx]
-	maxval := maxelms[idx]
+func GetCenterValueExtractFromZMSigned(zm objectio.ZoneMap, t types.T) (int64, bool) {
+	minval, mint, err := types.UnpackNthElement(zm.GetMinBuf(), 0)
+	if err != nil || mint != t {
+		return 0, false
+	}
+	maxval, maxt, err := types.UnpackNthElement(zm.GetMaxBuf(), 0)
+	if err != nil || maxt != t {
+		return 0, false
+	}
 	switch t {
 	case types.T_int64:
-		return minval.(int64)/2 + maxval.(int64)/2
+		min, minOK := minval.(int64)
+		max, maxOK := maxval.(int64)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return min/2 + max/2, true
 	case types.T_int32:
-		return int64(minval.(int32)/2 + maxval.(int32)/2)
+		min, minOK := minval.(int32)
+		max, maxOK := maxval.(int32)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return int64(min/2 + max/2), true
 	case types.T_int16:
-		return int64(minval.(int16)/2 + maxval.(int16)/2)
-	default:
-		panic("wrong type!")
+		min, minOK := minval.(int16)
+		max, maxOK := maxval.(int16)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return int64(min/2 + max/2), true
 	}
+	return 0, false
 }
 
 func GetCenterValueForZMUnsigned(zm objectio.ZoneMap) uint64 {
@@ -246,24 +272,56 @@ func GetCenterValueForZMUnsigned(zm objectio.ZoneMap) uint64 {
 	}
 }
 
-func GetCenterValueExtractFromZMUnsigned(zm objectio.ZoneMap, t types.T) uint64 {
-	idx := 0 //for now, it's always 0
-	minelms, _ := types.Unpack(zm.GetMinBuf())
-	maxelms, _ := types.Unpack(zm.GetMaxBuf())
-	minval := minelms[idx]
-	maxval := maxelms[idx]
+func GetCenterValueExtractFromZMUnsigned(zm objectio.ZoneMap, t types.T) (uint64, bool) {
+	minval, mint, err := types.UnpackNthElement(zm.GetMinBuf(), 0)
+	if err != nil || !sameExtractedZoneMapType(t, mint) {
+		return 0, false
+	}
+	maxval, maxt, err := types.UnpackNthElement(zm.GetMaxBuf(), 0)
+	if err != nil || !sameExtractedZoneMapType(t, maxt) {
+		return 0, false
+	}
 	switch t {
 	case types.T_uint64:
-		return minval.(uint64)/2 + maxval.(uint64)/2
+		min, minOK := minval.(uint64)
+		max, maxOK := maxval.(uint64)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return min/2 + max/2, true
 	case types.T_uint32:
-		return uint64(minval.(uint32)/2 + maxval.(uint32)/2)
+		min, minOK := minval.(uint32)
+		max, maxOK := maxval.(uint32)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return uint64(min/2 + max/2), true
 	case types.T_uint16:
-		return uint64(minval.(uint16)/2 + maxval.(uint16)/2)
+		min, minOK := minval.(uint16)
+		max, maxOK := maxval.(uint16)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return uint64(min/2 + max/2), true
 	case types.T_varchar, types.T_char, types.T_text:
-		return ByteSliceToUint64(minval.([]byte))/2 + ByteSliceToUint64(maxval.([]byte))/2
-	default:
-		panic("wrong type!")
+		min, minOK := minval.([]byte)
+		max, maxOK := maxval.([]byte)
+		if !minOK || !maxOK {
+			return 0, false
+		}
+		return ByteSliceToUint64(min)/2 + ByteSliceToUint64(max)/2, true
 	}
+	return 0, false
+}
+
+func sameExtractedZoneMapType(expected, actual types.T) bool {
+	if expected == actual {
+		return true
+	}
+	// Tuple string components are encoded and decoded as varchar regardless
+	// of whether the logical column is char, varchar, or text.
+	return actual == types.T_varchar &&
+		(expected == types.T_char || expected == types.T_text)
 }
 
 func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, upplerLimit uint64) uint64 {
@@ -277,14 +335,22 @@ func GetRangeShuffleIndexForZM(minVal, maxVal int64, zm objectio.ZoneMap, uppler
 	panic("unsupported shuffle type!")
 }
 
-func GetRangeShuffleIndexForExtractedZM(minVal, maxVal int64, zm objectio.ZoneMap, upplerLimit uint64, t types.T) uint64 {
+func GetRangeShuffleIndexForExtractedZM(minVal, maxVal int64, zm objectio.ZoneMap, upplerLimit uint64, t types.T) (uint64, bool) {
 	switch t {
 	case types.T_int64, types.T_int32, types.T_int16:
-		return GetRangeShuffleIndexSignedMinMax(minVal, maxVal, GetCenterValueExtractFromZMSigned(zm, t), upplerLimit)
+		center, ok := GetCenterValueExtractFromZMSigned(zm, t)
+		if !ok {
+			return 0, false
+		}
+		return GetRangeShuffleIndexSignedMinMax(minVal, maxVal, center, upplerLimit), true
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
-		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), GetCenterValueExtractFromZMUnsigned(zm, t), upplerLimit)
+		center, ok := GetCenterValueExtractFromZMUnsigned(zm, t)
+		if !ok {
+			return 0, false
+		}
+		return GetRangeShuffleIndexUnsignedMinMax(uint64(minVal), uint64(maxVal), center, upplerLimit), true
 	}
-	panic("unsupported shuffle type!")
+	return 0, false
 }
 
 func GetRangeShuffleIndexForZMSignedSlice(val []int64, zm objectio.ZoneMap) uint64 {
@@ -295,12 +361,16 @@ func GetRangeShuffleIndexForZMSignedSlice(val []int64, zm objectio.ZoneMap) uint
 	panic("wrong type!")
 }
 
-func GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice(val []int64, zm objectio.ZoneMap, t types.T) uint64 {
+func GetRangeShuffleIndexForValuesExtractedFromZMSignedSlice(val []int64, zm objectio.ZoneMap, t types.T) (uint64, bool) {
 	switch t {
 	case types.T_int64, types.T_int32, types.T_int16:
-		return GetRangeShuffleIndexSignedSlice(val, GetCenterValueExtractFromZMSigned(zm, t))
+		center, ok := GetCenterValueExtractFromZMSigned(zm, t)
+		if !ok {
+			return 0, false
+		}
+		return GetRangeShuffleIndexSignedSlice(val, center), true
 	}
-	panic("wrong type!")
+	return 0, false
 }
 
 func GetRangeShuffleIndexForZMUnsignedSlice(val []uint64, zm objectio.ZoneMap) uint64 {
@@ -311,12 +381,16 @@ func GetRangeShuffleIndexForZMUnsignedSlice(val []uint64, zm objectio.ZoneMap) u
 	panic("wrong type!")
 }
 
-func GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(val []uint64, zm objectio.ZoneMap, t types.T) uint64 {
+func GetRangeShuffleIndexForValuesExtractedFromZMUnsignedSlice(val []uint64, zm objectio.ZoneMap, t types.T) (uint64, bool) {
 	switch t {
 	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_varchar, types.T_char, types.T_text:
-		return GetRangeShuffleIndexUnsignedSlice(val, GetCenterValueExtractFromZMUnsigned(zm, t))
+		center, ok := GetCenterValueExtractFromZMUnsigned(zm, t)
+		if !ok {
+			return 0, false
+		}
+		return GetRangeShuffleIndexUnsignedSlice(val, center), true
 	}
-	panic("wrong type!")
+	return 0, false
 }
 
 func GetRangeShuffleIndexSignedMinMax(minVal, maxVal, currentVal int64, upplerLimit uint64) uint64 {
@@ -418,6 +492,9 @@ func reusableShuffleChild(
 		return nil, false
 	}
 	child := builder.qry.Nodes[childID]
+	if reusableJoinShuffleChild(col, node, child, builder, afterRemap) {
+		return child, true
+	}
 	if child == nil || child.NodeType != plan.Node_AGG || child.Stats == nil ||
 		child.Stats.HashmapStats == nil || !child.Stats.HashmapStats.Shuffle ||
 		child.Stats.HashmapStats.ShuffleColIdx < 0 ||
@@ -449,6 +526,89 @@ func reusableShuffleChild(
 		return nil, false
 	}
 	return child, true
+}
+
+// reusableJoinShuffleChild proves both distribution lineage through a join and
+// that the resulting ownership scope satisfies the consumer. A shuffled join
+// remains partitioned by its logical-left equality key. Hybrid shuffle owns
+// that key only within each CN: another join can reuse it because its build side
+// is sent to every CN's matching bucket, but an aggregate needs one owner for
+// the key across the whole cluster.
+//
+// Keep this deliberately narrower than general equivalence propagation:
+// right/full preserving joins, expressions, and keys projected from the build
+// side fail closed because unmatched rows do not preserve those properties.
+func reusableJoinShuffleChild(
+	col *plan.ColRef,
+	consumer *plan.Node,
+	child *plan.Node,
+	builder *QueryBuilder,
+	afterRemap bool,
+) bool {
+	if col == nil || consumer == nil || child == nil || builder == nil || builder.qry == nil ||
+		child.NodeType != plan.Node_JOIN || child.IsRightJoin ||
+		child.Stats == nil || child.Stats.HashmapStats == nil ||
+		!child.Stats.HashmapStats.Shuffle {
+		return false
+	}
+	// Join-chain lineage reuse belongs to the outer/ANTI rollout cohort.
+	// Aggregate reuse predates that cohort and keeps its established rollback
+	// behavior, subject to the stricter ownership check below.
+	if consumer.NodeType == plan.Node_JOIN && builder.outerAntiPlanningDisabled() {
+		return false
+	}
+	if consumer.NodeType == plan.Node_AGG &&
+		child.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
+		return false
+	}
+	switch child.JoinType {
+	case plan.Node_INNER, plan.Node_LEFT, plan.Node_SEMI, plan.Node_ANTI:
+	default:
+		return false
+	}
+
+	shuffleIdx := child.Stats.HashmapStats.ShuffleColIdx
+	if shuffleIdx < 0 || int(shuffleIdx) >= len(child.OnList) {
+		return false
+	}
+	fn := child.OnList[shuffleIdx].GetF()
+	if fn == nil || len(fn.Args) != 2 {
+		return false
+	}
+
+	if afterRemap {
+		if col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+			return false
+		}
+		outputCol := child.ProjectList[col.ColPos].GetCol()
+		if outputCol == nil {
+			return false
+		}
+		for _, arg := range fn.Args {
+			keyCol := arg.GetCol()
+			if keyCol != nil && keyCol.RelPos == 0 &&
+				outputCol.RelPos == keyCol.RelPos && outputCol.ColPos == keyCol.ColPos {
+				return true
+			}
+		}
+		return false
+	}
+
+	if len(child.Children) != 2 {
+		return false
+	}
+	leftTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(child.Children[0]) {
+		leftTags[tag] = true
+	}
+	for _, arg := range fn.Args {
+		keyCol := arg.GetCol()
+		if keyCol != nil && leftTags[keyCol.RelPos] &&
+			col.RelPos == keyCol.RelPos && col.ColPos == keyCol.ColPos {
+			return true
+		}
+	}
+	return false
 }
 
 func resetShuffleStrategy(hashmapStats *plan.HashMapStats) {
@@ -526,10 +686,38 @@ func determineShuffleTypeWithColRefMode(
 	}
 
 	if child, reusable := reusableShuffleChild(col, node, builder, afterRemap); reusable {
-		reuseShuffleStrategy(node.Stats.HashmapStats, child)
-		return
+		// String range ownership is derived from an eight-byte prefix.  A
+		// downstream aggregate must not inherit that lossy distribution, but a
+		// reusable full-key hash distribution remains valid and useful.
+		if !isStringAggregateShuffleKey(node, col) ||
+			child.Stats.HashmapStats.ShuffleType != plan.ShuffleType_Range {
+			reuseShuffleStrategy(node.Stats.HashmapStats, child)
+			return
+		}
 	}
 	determineNonReusableShuffleType(col, node, builder, afterRemap)
+}
+
+func isStringAggregateShuffleKey(node *plan.Node, col *plan.ColRef) bool {
+	if node == nil || node.NodeType != plan.Node_AGG || col == nil {
+		return false
+	}
+	for _, groupBy := range node.GroupBy {
+		if groupBy == nil {
+			continue
+		}
+		groupCol, typ := GetHashColumn(groupBy)
+		if groupCol == nil || groupCol.RelPos != col.RelPos || groupCol.ColPos != col.ColPos {
+			continue
+		}
+		switch types.T(typ) {
+		case types.T_char, types.T_varchar, types.T_text:
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 func determineNonReusableShuffleType(
@@ -584,14 +772,27 @@ func determineNonReusableShuffleType(
 		return
 	}
 	s := w.GetStats()
+	if isStringAggregateShuffleKey(node, col) {
+		// ShuffleRange for strings is encoded with only the first eight bytes,
+		// while equality and hash aggregation use the complete value.  Without
+		// a full-key quantile sketch, the range metadata cannot prove balanced
+		// aggregate ownership.  Keep the existing hash/no-shuffle decision and
+		// leave range strategy available to joins and numeric keys.
+		return
+	}
 	if node.NodeType == plan.Node_AGG {
 		if shouldUseHashShuffle(s.ShuffleRangeMap[colName]) {
 			return
 		}
 	}
+	minVal, hasMin := s.MinValMap[colName]
+	maxVal, hasMax := s.MaxValMap[colName]
+	if !hasMin || !hasMax {
+		return
+	}
 	node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
-	node.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[colName])
-	node.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[colName])
+	node.Stats.HashmapStats.ShuffleColMin = int64(minVal)
+	node.Stats.HashmapStats.ShuffleColMax = int64(maxVal)
 	node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[colName], colName)
 	node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[colName])
 }
@@ -687,11 +888,9 @@ func planShuffleJoinCandidate(
 	return candidateHashmapStats, shuffleJoinCandidateSurvivesRecheck(&candidateNode, condition.Ndv)
 }
 
-// selectShuffleJoinCondition keeps the first condition that the current plan
-// can actually shuffle on after the existing range/hash recheck. It only scans
-// later conditions when an earlier condition is unsupported or rejected by
-// those rules. This removes predicate-order-dependent eligibility without
-// changing established valid plans.
+// selectShuffleJoinCondition prefers a condition that can reuse the probe's
+// existing partitioning. Among conditions that require a new shuffle, it keeps
+// the first eligible condition so predicate order remains the stable tie-break.
 func selectShuffleJoinCondition(
 	node *plan.Node,
 	builder *QueryBuilder,
@@ -700,8 +899,11 @@ func selectShuffleJoinCondition(
 	afterRemap bool,
 	previousHashmapStats *plan.HashMapStats,
 ) (int, plan.HashMapStats) {
+	preferReuse := !builder.outerAntiPlanningDisabled()
 	firstSupportedIdx := -1
 	var firstSupportedStats plan.HashMapStats
+	firstEligibleIdx := -1
+	var firstEligibleStats plan.HashMapStats
 
 	for i, condition := range onList {
 		fn := condition.GetF()
@@ -734,10 +936,19 @@ func selectShuffleJoinCondition(
 			firstSupportedStats = candidateStats
 		}
 		if eligible {
-			return i, candidateStats
+			if !preferReuse || candidateStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
+				return i, candidateStats
+			}
+			if firstEligibleIdx == -1 {
+				firstEligibleIdx = i
+				firstEligibleStats = candidateStats
+			}
 		}
 	}
 
+	if firstEligibleIdx != -1 {
+		return firstEligibleIdx, firstEligibleStats
+	}
 	return firstSupportedIdx, firstSupportedStats
 }
 
@@ -1281,26 +1492,6 @@ func determineShuffleForGroupBy(node *plan.Node, builder *QueryBuilder) {
 		}
 	}
 
-	//shuffle join-> shuffle group ,if they use the same hask key, the group can reuse the shuffle method
-	if child.NodeType == plan.Node_JOIN {
-		if node.Stats.HashmapStats.Shuffle && child.Stats.HashmapStats.Shuffle {
-			// shuffle group can reuse shuffle join
-			if node.Stats.HashmapStats.ShuffleType == child.Stats.HashmapStats.ShuffleType && node.Stats.HashmapStats.ShuffleTypeForMultiCN == child.Stats.HashmapStats.ShuffleTypeForMultiCN {
-				groupHashCol, _ := GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
-				switch exprImpl := child.OnList[child.Stats.HashmapStats.ShuffleColIdx].Expr.(type) {
-				case *plan.Expr_F:
-					for _, arg := range exprImpl.F.Args {
-						joinHashCol, _ := GetHashColumn(arg)
-						if joinHashCol != nil && groupHashCol != nil && groupHashCol.RelPos == joinHashCol.RelPos && groupHashCol.ColPos == joinHashCol.ColPos {
-							node.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Reuse
-							return
-						}
-					}
-				}
-			}
-		}
-	}
-
 }
 
 func countDistinctStateNDV(node *plan.Node, builder *QueryBuilder) float64 {
@@ -1434,6 +1625,11 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 	if s.NdvMap[firstSortColName] < ShuffleThreshHoldOfNDV {
 		return
 	}
+	minVal, hasMin := s.MinValMap[firstSortColName]
+	maxVal, hasMax := s.MaxValMap[firstSortColName]
+	if !hasMin || !hasMax {
+		return
+	}
 	firstSortColID, ok := node.TableDef.Name2ColIndex[firstSortColName]
 	if !ok {
 		return
@@ -1443,8 +1639,8 @@ func determineShuffleForScan(node *plan.Node, builder *QueryBuilder) {
 		types.T_uint32, types.T_uint16, types.T_char, types.T_varchar, types.T_text:
 		node.Stats.HashmapStats.ShuffleType = plan.ShuffleType_Range
 		node.Stats.HashmapStats.ShuffleColIdx = node.TableDef.Cols[firstSortColID].Typ.Id // actually this is specially used for sort key column type
-		node.Stats.HashmapStats.ShuffleColMin = int64(s.MinValMap[firstSortColName])
-		node.Stats.HashmapStats.ShuffleColMax = int64(s.MaxValMap[firstSortColName])
+		node.Stats.HashmapStats.ShuffleColMin = int64(minVal)
+		node.Stats.HashmapStats.ShuffleColMax = int64(maxVal)
 		node.Stats.HashmapStats.Ranges = shouldUseShuffleRanges(s.ShuffleRangeMap[firstSortColName], firstSortColName)
 		node.Stats.HashmapStats.Nullcnt = int64(s.NullCntMap[firstSortColName])
 	}
@@ -1497,7 +1693,11 @@ func determineShuffleMethod2(nodeID, parentID int32, builder *QueryBuilder) {
 
 	if node.NodeType == plan.Node_JOIN && node.Stats.HashmapStats.ShuffleTypeForMultiCN == plan.ShuffleTypeForMultiCN_Hybrid {
 		if parent.NodeType == plan.Node_AGG && parent.Stats.HashmapStats.ShuffleMethod == plan.ShuffleMethod_Reuse {
-			return
+			// Hybrid keeps the probe key local to each CN. It can feed another
+			// hybrid join, but a grouped aggregate needs one cluster-global owner
+			// for every key. Normalize stale or future invalid reuse decisions.
+			parent.Stats.HashmapStats.ShuffleMethod = plan.ShuffleMethod_Normal
+			parent.Stats.HashmapStats.ShuffleTypeForMultiCN = plan.ShuffleTypeForMultiCN_Simple
 		}
 		if node.Stats.HashmapStats.HashmapSize <= threshHoldForHybirdShuffle {
 			node.Stats.HashmapStats.Shuffle = false

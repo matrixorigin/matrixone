@@ -18,8 +18,8 @@ select mo_ctl('dn', 'flush', 'd1.t1');
 }
 
 analyze table t1(c2,c3,c4,c5);
-approx_count_distinct(c2)    approx_count_distinct(c3)    approx_count_distinct(c4)    approx_count_distinct(c5)
-100000    10000    5    10
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+d1.t1  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  4  ¦  100000  ¦  1  ¦  100000  ¦  14  ¦  11200000  ¦  OK  ¦  q=1/1
 explain select c3,c4,c5 from t1 where c3=1;
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀
@@ -376,8 +376,8 @@ select mo_ctl('dn', 'flush', 'd1.t2');
 }
 
 analyze table t2(c2,c3,c4,c5);
-approx_count_distinct(c2)    approx_count_distinct(c3)    approx_count_distinct(c4)    approx_count_distinct(c5)
-50000    100    40000    20
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+d1.t2  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  4  ¦  100000  ¦  1  ¦  100000  ¦  14  ¦  11200000  ¦  OK  ¦  q=1/1
 explain select * from t2 where c2 in (1,2,3,4,5,6,7,8,9);
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀

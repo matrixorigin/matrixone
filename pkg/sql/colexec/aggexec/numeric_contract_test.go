@@ -70,7 +70,7 @@ func TestAvgNumericContractMergeOrder(t *testing.T) {
 	}
 	defer decimalInput.Free(mp)
 
-	runDecimal := func(rightAssociated bool) types.Decimal128 {
+	runDecimal := func(rightAssociated bool) (types.Decimal128, int32) {
 		states := make([]AggFuncExec, 3)
 		for i := range states {
 			states[i] = makeAvgExec(t, mp, decimalType)
@@ -87,16 +87,19 @@ func TestAvgNumericContractMergeOrder(t *testing.T) {
 		result, err := states[0].Flush()
 		require.NoError(t, err)
 		value := vector.GetFixedAtNoTypeCheck[types.Decimal128](result[0], 0)
+		scale := result[0].GetType().Scale
 		result[0].Free(mp)
 		for _, state := range states {
 			state.Free()
 		}
-		return value
+		return value, scale
 	}
 
-	leftDecimal := runDecimal(false)
-	rightDecimal := runDecimal(true)
+	leftDecimal, leftScale := runDecimal(false)
+	rightDecimal, rightScale := runDecimal(true)
 	require.Equal(t, leftDecimal, rightDecimal)
-	require.Equal(t, "0.33333333", leftDecimal.Format(8))
+	require.Equal(t, leftScale, rightScale)
+	require.Equal(t, int32(6), leftScale)
+	require.Equal(t, "0.333333", leftDecimal.Format(leftScale))
 	require.Zero(t, mp.CurrNB())
 }

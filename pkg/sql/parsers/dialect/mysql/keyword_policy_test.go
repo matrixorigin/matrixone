@@ -36,7 +36,7 @@ var legacyKeywordPolicyExceptions = map[string]string{
 	"cdc":               "legacy parser behavior before incremental keyword policy",
 	"centroidx":         "legacy parser behavior before incremental keyword policy",
 	"ccpr":              "legacy parser behavior before incremental keyword policy",
-	"config":            "legacy parser behavior before incremental keyword policy",
+	"config":            "contextual keyword: lexer preserves SHOW/ALTER ACCOUNT CONFIG and returns ID otherwise",
 	"coverage":          "legacy parser behavior before incremental keyword policy",
 	"current_role":      "legacy parser behavior before incremental keyword policy",
 	"datalink":          "legacy parser behavior before incremental keyword policy",

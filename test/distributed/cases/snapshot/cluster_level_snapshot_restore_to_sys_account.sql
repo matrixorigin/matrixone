@@ -310,11 +310,25 @@ drop snapshot snap01;
 
 -- restore null
 drop snapshot if exists sp05;
+drop role if exists issue_28206_snapshot_role;
+drop role if exists issue_28206_post_snapshot_role;
+create role issue_28206_snapshot_role;
+grant create database on account * to issue_28206_snapshot_role;
 create snapshot sp05 for cluster;
 create database db01;
+create role issue_28206_post_snapshot_role;
+grant create database on account * to issue_28206_post_snapshot_role;
 restore account sys{snapshot="sp05"};
 show databases;
+select count(*) from mo_catalog.mo_role where role_name = 'issue_28206_snapshot_role';
+select count(*) from mo_catalog.mo_role where role_name = 'issue_28206_post_snapshot_role';
+select count(*) from mo_catalog.mo_role_privs
+where role_name = 'issue_28206_snapshot_role' and privilege_name = 'create database';
+select count(*) from mo_catalog.mo_role_privs
+where role_name = 'issue_28206_post_snapshot_role' and privilege_name = 'create database';
 drop snapshot sp05;
+drop role issue_28206_snapshot_role;
+drop role if exists issue_28206_post_snapshot_role;
 
 
 

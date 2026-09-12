@@ -22,6 +22,7 @@ import (
 
 func TestDriverMonitorLabelsAreBoundedAndRedacted(t *testing.T) {
 	require.Equal(t, "find", boundedCommandLabel("find"))
+	require.Equal(t, "aggregate", boundedCommandLabel("aggregate"))
 	require.Equal(t, "get_more", boundedCommandLabel("getMore"))
 	require.Equal(t, "other", boundedCommandLabel("secret-database-command"))
 	require.Equal(t, "other", boundedPoolEventLabel("mongodb.internal:27017"))

@@ -59,6 +59,15 @@ prepare s1 from @q;
 -- @metacmp(false)
 execute s1;
 
+-- ODKU updates only INCLUDE payload columns on the conflicting row. The
+-- materialized final image must rebuild the whole logical IVF group so the
+-- hidden entry cannot retain the stale covering values.
+insert into vector_ivfflat_include_phase3 values
+    (2, "[9,9,9]", "odku", 200, "odku")
+    on duplicate key update title = values(title), category = values(category), note = values(note);
+-- @metacmp(false)
+execute s1;
+
 update vector_ivfflat_include_phase3
 set note = 'n2-only'
 where id = 2;

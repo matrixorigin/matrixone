@@ -33,8 +33,10 @@ type mockSinker struct {
 	commitCalled   bool
 	rollbackCalled bool
 	dummyCalled    bool
+	releaseCalled  bool
 	clearCalled    bool
 	err            error
+	releaseErr     error
 	rollbackErr    error // Error to return when SendRollback is called
 }
 
@@ -61,6 +63,11 @@ func (m *mockSinker) SendDummy() {
 	m.dummyCalled = true
 }
 
+func (m *mockSinker) releaseTargetOwnership() error {
+	m.releaseCalled = true
+	return m.releaseErr
+}
+
 func (m *mockSinker) Error() error {
 	return m.err
 }
@@ -77,8 +84,10 @@ func (m *mockSinker) reset() {
 	m.commitCalled = false
 	m.rollbackCalled = false
 	m.dummyCalled = false
+	m.releaseCalled = false
 	m.clearCalled = false
 	m.err = nil
+	m.releaseErr = nil
 	m.rollbackErr = nil
 }
 
@@ -198,9 +207,11 @@ func (s *recordingSinker) ClearError() {
 
 // mockWatermarkUpdater for testing
 type mockWatermarkUpdater struct {
-	watermarks      map[string]types.TS
-	updateCalled    bool
-	getFromCacheErr error
+	watermarks             map[string]types.TS
+	updateCalled           bool
+	updateOwnerFence       *OwnerFence
+	updateSourceGeneration uint64
+	getFromCacheErr        error
 }
 
 func newMockWatermarkUpdater() *mockWatermarkUpdater {
@@ -209,7 +220,9 @@ func newMockWatermarkUpdater() *mockWatermarkUpdater {
 	}
 }
 
-func (m *mockWatermarkUpdater) RemoveCachedWM(ctx context.Context, key *WatermarkKey) error {
+func (m *mockWatermarkUpdater) RemoveCachedWM(
+	ctx context.Context, key *WatermarkKey, mode WatermarkCleanupMode,
+) error {
 	delete(m.watermarks, m.keyString(key))
 	return nil
 }
@@ -240,6 +253,8 @@ func (m *mockWatermarkUpdater) GetOrAddCommitted(ctx context.Context, key *Water
 
 func (m *mockWatermarkUpdater) UpdateWatermarkOnly(ctx context.Context, key *WatermarkKey, watermark *types.TS) error {
 	m.updateCalled = true
+	m.updateOwnerFence, _ = ctx.Value(watermarkOwnerFenceContextKey{}).(*OwnerFence)
+	m.updateSourceGeneration, _ = ctx.Value(watermarkSourceTableIDContextKey{}).(uint64)
 	m.watermarks[m.keyString(key)] = *watermark
 	return nil
 }
@@ -358,6 +373,7 @@ func TestTransactionManager_CommitTransaction(t *testing.T) {
 	assert.True(t, sinker.commitCalled)
 	assert.True(t, sinker.dummyCalled)
 	assert.True(t, updater.updateCalled)
+	assert.True(t, sinker.releaseCalled)
 	// Note: tracker is set to nil after successful commit, so we can't check its state
 	// The commit success is verified by checking external effects (sinker, watermark)
 
@@ -365,6 +381,65 @@ func TestTransactionManager_CommitTransaction(t *testing.T) {
 	wm, err := updater.GetFromCache(ctx, tm.watermarkKey)
 	assert.NoError(t, err)
 	assert.Equal(t, toTs, wm)
+}
+
+func TestTransactionManager_CommitTransactionWithoutWatermark(t *testing.T) {
+	ctx := context.Background()
+	sinker := &mockSinker{}
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+
+	fromTs := types.TS{}
+	toTs := types.BuildTS(2, 0)
+	require.NoError(t, tm.BeginTransaction(ctx, fromTs, toTs))
+	require.NoError(t, tm.CommitTransactionWithoutWatermark(ctx))
+
+	assert.True(t, sinker.commitCalled)
+	assert.True(t, sinker.dummyCalled)
+	assert.False(t, updater.updateCalled)
+	assert.True(t, sinker.releaseCalled)
+	assert.Nil(t, tm.GetTracker())
+	_, err := updater.GetFromCache(ctx, tm.watermarkKey)
+	require.Error(t, err)
+}
+
+func TestTransactionManager_CommitPropagatesTargetReleaseFailure(t *testing.T) {
+	ctx := context.Background()
+	releaseErr := moerr.NewInternalError(ctx, "release target ownership")
+	sinker := &mockSinker{releaseErr: releaseErr}
+	tm := NewTransactionManager(
+		sinker, newMockWatermarkUpdater(), 1, "task1", "db1", "table1")
+
+	require.NoError(t, tm.BeginTransaction(ctx, types.TS{}, types.BuildTS(2, 0)))
+	err := tm.CommitTransactionWithoutWatermark(ctx)
+	require.ErrorIs(t, err, releaseErr)
+	require.True(t, sinker.commitCalled)
+	require.True(t, sinker.releaseCalled)
+	require.NotNil(t, tm.GetTracker())
+	require.True(t, tm.GetTracker().NeedsRollback())
+}
+
+func TestTransactionManagerCarriesOwnerFenceToWatermark(t *testing.T) {
+	ctx := context.Background()
+	sinker := &mockSinker{}
+	updater := newMockWatermarkUpdater()
+	tm := NewTransactionManager(sinker, updater, 1, "task1", "db1", "table1")
+	checks := 0
+	fence := NewOwnerFenceForGeneration(time.UnixMicro(1), func(context.Context) error {
+		checks++
+		return nil
+	})
+	tm.SetOwnerFence(fence)
+	tm.SetWatermarkGeneration(12)
+	require.NoError(t, tm.BeginTransaction(ctx, types.TS{}, types.BuildTS(2, 0)))
+	require.NoError(t, tm.CommitTransaction(ctx))
+	require.True(t, sinker.commitCalled)
+	require.True(t, updater.updateCalled)
+	require.Same(t, fence, updater.updateOwnerFence)
+	require.Equal(t, uint64(12), updater.updateSourceGeneration)
+	require.True(t, sinker.releaseCalled)
+	require.Zero(t, checks,
+		"target-lock acquisition owns synchronous validation; commit must not add hot-path checks")
 }
 
 func TestTransactionManager_CommitTransaction_WithoutBegin(t *testing.T) {
@@ -401,6 +476,7 @@ func TestTransactionManager_CommitTransaction_WithError(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.True(t, sinker.commitCalled)
+	assert.True(t, sinker.releaseCalled)
 	assert.False(t, tm.tracker.hasCommitted)
 	assert.True(t, tm.tracker.NeedsRollback())
 }

@@ -294,21 +294,26 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
-	Name            string
-	Sql             string
-	PreparePlan     *plan.Plan
-	PrepareStmt     tree.Statement
-	NativeMode      bool
-	OnlyFullGroupBy bool
-	// onlyFullGroupBySet distinguishes a captured disabled mode from legacy or
-	// minimal in-memory fixtures that predate this plan dependency.
-	onlyFullGroupBySet bool
-	ParamTypes         []byte
-	ColDefData         [][]byte
-	IsCloudNonuser     bool
-	proc               *process.Process
-	remapDb            map[string]string
-	defaultDatabase    string
+	// Monotonic high-water mark for GROUP_CONCAT across this prepared lifetime,
+	// including executions whose AP or specialization path discards the compile.
+	groupConcatMaxLenFloor uint64
+	Name                   string
+	Sql                    string
+	PreparePlan            *plan.Plan
+	PrepareStmt            tree.Statement
+	NativeMode             bool
+	OnlyFullGroupBy        bool
+	BoolSumAvg             bool
+	// sqlModeFlagsSet distinguishes captured disabled modes (OnlyFullGroupBy,
+	// BoolSumAvg) from legacy or minimal in-memory fixtures that predate these
+	// plan dependencies.
+	sqlModeFlagsSet bool
+	ParamTypes      []byte
+	ColDefData      [][]byte
+	IsCloudNonuser  bool
+	proc            *process.Process
+	remapDb         map[string]string
+	defaultDatabase string
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
@@ -344,23 +349,48 @@ type PrepareStmt struct {
 	// ordinary COM_STMT executions never scan or copy the cached plan. Direct
 	// result positions identify parameters whose binary runtime type is also the
 	// visible result-column type.
+	// numericPrefixConsumer belongs to numericPrefixConsumerPlan. Prepared plans
+	// are immutable within one generation; replacing the plan invalidates this
+	// cached capability and refreshes it once before execution.
+	numericPrefixConsumerPlan     *plan.Plan
 	numericPrefixConsumer         bool
 	directResultParamPositions    []int32
 	directResultParamPositionsSet bool
-	hasPaginationParams           bool
-	hasLagLeadParams              bool
-	paramKinds                    []vector.PrepareParamKind
-	paramMetadata                 []bool
+	// fixedIntegerParamPositions identifies parameters with a fixed unsigned-
+	// integer contract (LIMIT/OFFSET and LAG/LEAD offsets). It is installed
+	// with each prepared-plan generation so binary EXECUTE never walks the plan
+	// merely to classify a runtime parameter.
+	fixedIntegerParamPositions []int32
+	hasPaginationParams        bool
+	hasLagLeadParams           bool
+	paramKinds                 []vector.PrepareParamKind
+	paramBinaryStrings         []bool
+	paramMetadata              []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
 	// generation. Only these parameters need an exact SQL type in Process
 	// metadata; paramConcreteTypes is a reusable execution buffer.
 	jsonComparisonParamPositions []int32
+	jsonMemberOfParamPositions   []int32
 	paramConcreteTypes           []types.T
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose
 	// runtime integer/decimal domain may require overload rebinding without
 	// rescanning the full plan for every EXECUTE.
 	numericOverloadParamPositions []int32
+	// bitCountOverloadParamPositions owns BIT_COUNT's asymmetric prepared
+	// contract. Each marker starts with the binary-string default; after an
+	// actual numeric value reparses the statement, later text/BLOB values keep
+	// that marker's canonical numeric parameter category, matching MySQL's
+	// one-way parameter-type evolution without retaining source-width limits.
+	bitCountOverloadParamPositions []int32
+	// bitCountNumericParamTypes is bounded by the statement parameter count and
+	// belongs to the current prepared-plan generation. A zero entry means that
+	// the corresponding BIT_COUNT marker has not observed a numeric value.
+	bitCountNumericParamTypes []types.Type
+	// conversionParamPositions identifies BIN/CONV value markers once per
+	// prepared-plan generation. SQL EXECUTE uses it to restore the variable's
+	// concrete domain without walking the plan for every execution.
+	conversionParamPositions []int32
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -785,15 +815,26 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	key string,
 	runtimePlan *plan.Plan,
 	runtimeCompile *compile.Compile,
-) {
+) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
-	runtimeCompile.SetIsPrepare(true)
+	// AP scopes contain execution-specific placement and scan state. Cache only
+	// the specialized logical plan and leave the AP compile statement-owned.
+	if runtimeCompile != nil && !runtimeCompile.IsTpQuery() {
+		runtimeCompile = nil
+	}
+	if runtimeCompile != nil {
+		runtimeCompile.SetIsPrepare(true)
+	}
 	prepareStmt.runtimeSpecializationKey = key
 	prepareStmt.runtimePlan = runtimePlan
 	prepareStmt.runtimeCompile = runtimeCompile
-	if oldRuntimeCompile != runtimeCompile {
-		prepareStmt.releaseRuntimeCompile(oldRuntimeCompile)
+	if oldRuntimeCompile == runtimeCompile {
+		return nil
 	}
+	// The caller must release the displaced compile only after the statement
+	// using runtimeCompile has finished. Both compiles share the session Process,
+	// and releasing the old one synchronously would clear the new one's state.
+	return oldRuntimeCompile
 }
 
 func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
@@ -1072,6 +1113,13 @@ type ExecCtx struct {
 	// prepared statement. Direct statements leave it empty and resolve against
 	// the current session database.
 	effectiveTxnDefaultDatabase string
+	// effectiveTxnStatement is resolved once per statement generation so
+	// transaction-boundary policy and later execution use the same prepared AST.
+	// The statement is borrowed from the computation wrapper or prepare cache.
+	effectiveTxnStatement tree.Statement
+	// implicitCommitBefore is the generation-level policy for a top-level
+	// implicit-commit statement. It is copied into txnOpt after admission.
+	implicitCommitBefore bool
 	// persistentDropTableTargets captures the per-target classification before
 	// DROP TABLE executes. Temporary aliases are removed during execution, so
 	// post-execution persistent side effects must consume this snapshot instead
@@ -1082,6 +1130,13 @@ type ExecCtx struct {
 	// singleStatementQuery is true only for a raw COM_QUERY containing one
 	// statement, which is the only input the proxy records for raw replay.
 	singleStatementQuery bool
+	// diagnosticCountsSnapshot holds the two values exposed to diagnostic
+	// system-variable expressions while this statement is being evaluated.
+	// The live diagnostic records are still reset normally at the statement
+	// boundary; only these scalar inputs survive that reset.
+	diagnosticCountsSnapshotSet    bool
+	diagnosticWarningCountSnapshot uint64
+	diagnosticErrorCountSnapshot   uint64
 	// tenant name
 	tenant          string
 	userName        string
@@ -1121,10 +1176,46 @@ type ExecCtx struct {
 
 func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
 	execCtx.effectiveTxnDefaultDatabase = ""
+	execCtx.effectiveTxnStatement = nil
+	execCtx.implicitCommitBefore = false
 	if input != nil {
 		execCtx.effectiveTxnDefaultDatabase = input.preparedDefaultDatabase
 	}
 	execCtx.persistentDropTableTargets = nil
+	execCtx.clearDiagnosticCountsSnapshot()
+}
+
+func (execCtx *ExecCtx) captureDiagnosticCountsSnapshot(ses *Session) {
+	if execCtx == nil || ses == nil {
+		return
+	}
+	warningCount, errorCount := ses.diagnosticsCounts()
+	execCtx.diagnosticWarningCountSnapshot = warningCount
+	execCtx.diagnosticErrorCountSnapshot = errorCount
+	execCtx.diagnosticCountsSnapshotSet = true
+}
+
+func (execCtx *ExecCtx) clearDiagnosticCountsSnapshot() {
+	if execCtx == nil {
+		return
+	}
+	execCtx.diagnosticCountsSnapshotSet = false
+	execCtx.diagnosticWarningCountSnapshot = 0
+	execCtx.diagnosticErrorCountSnapshot = 0
+}
+
+func (execCtx *ExecCtx) diagnosticCountSnapshot(name string) (uint64, bool) {
+	if execCtx == nil || !execCtx.diagnosticCountsSnapshotSet {
+		return 0, false
+	}
+	switch strings.ToLower(name) {
+	case warningCountSystemVariable:
+		return execCtx.diagnosticWarningCountSnapshot, true
+	case errorCountSystemVariable:
+		return execCtx.diagnosticErrorCountSnapshot, true
+	default:
+		return 0, false
+	}
 }
 
 func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
@@ -1151,8 +1242,11 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.rootSQLOverride = nil
 	execCtx.stmt = nil
 	execCtx.effectiveTxnDefaultDatabase = ""
+	execCtx.effectiveTxnStatement = nil
+	execCtx.implicitCommitBefore = false
 	execCtx.persistentDropTableTargets = nil
 	execCtx.singleStatementQuery = false
+	execCtx.clearDiagnosticCountsSnapshot()
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""
@@ -1679,6 +1773,13 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	if _, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
 	}
+	if name == warningCountSystemVariable || name == errorCountSystemVariable {
+		warningCount, errorCount := ses.diagnosticsCounts()
+		if name == warningCountSystemVariable {
+			return warningCount, nil
+		}
+		return errorCount, nil
+	}
 
 	// init SystemVariables GlobalSysVarsMgr need to read table, read table need to use SessionSysVar
 	// when ses.sesSysVars is nil
@@ -1720,9 +1821,15 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	name = strings.ToLower(name)
 	oldMatrixOneNative := false
 	oldOnlyFullGroupBy := false
+	oldBoolSumAvg := false
+	oldHighNotPrecedence := false
+	oldParserFlags := mysql.SQLModeFlags(0)
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
+		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
+		oldHighNotPrecedence = ses.sqlModeHasHighNotPrecedence()
+		oldParserFlags = ses.sqlModeParserFlags()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1782,7 +1889,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldParserFlags, val)
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {

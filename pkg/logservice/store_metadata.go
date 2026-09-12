@@ -23,6 +23,7 @@ import (
 	"runtime"
 
 	"github.com/cockroachdb/errors/oserror"
+	"github.com/google/uuid"
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"go.uber.org/zap"
@@ -236,6 +237,9 @@ func hasMetadataRec(dir string,
 }
 
 func (l *store) loadMetadata() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	fs := l.cfg.FS
 	dir := l.cfg.DataDir
 	fp := fs.PathJoin(dir, logMetadataFilename)
@@ -243,17 +247,20 @@ func (l *store) loadMetadata() error {
 	if err != nil {
 		return err
 	}
-	if !found {
-		return nil
+	if found {
+		expectedUUID := l.mu.metadata.UUID
+		if err := readMetadataFile(dir, logMetadataFilename, &l.mu.metadata, fs); err != nil {
+			return err
+		}
+		if expectedUUID != l.mu.metadata.UUID {
+			l.runtime.Logger().Panic("unexpected UUID",
+				zap.String("on disk UUID", l.mu.metadata.UUID),
+				zap.String("expect", expectedUUID))
+		}
 	}
-	expectedUUID := l.mu.metadata.UUID
-	if err := readMetadataFile(dir, logMetadataFilename, &l.mu.metadata, fs); err != nil {
-		return err
-	}
-	if expectedUUID != l.mu.metadata.UUID {
-		l.runtime.Logger().Panic("unexpected UUID",
-			zap.String("on disk UUID", l.mu.metadata.UUID),
-			zap.String("expect", expectedUUID))
+	if l.mu.metadata.Incarnation == "" {
+		l.mu.metadata.Incarnation = uuid.NewString()
+		l.mustSaveMetadata()
 	}
 	return nil
 }
@@ -318,4 +325,10 @@ func (l *store) getShards() []metadata.LogShard {
 	shards := make([]metadata.LogShard, 0, len(l.mu.metadata.Shards))
 	shards = append(shards, l.mu.metadata.Shards...)
 	return shards
+}
+
+func (l *store) getStoreIncarnation() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.mu.metadata.Incarnation
 }

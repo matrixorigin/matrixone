@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -611,8 +612,8 @@ func newResultFunc[T types.FixedSizeT](
 }
 
 func (fr *FunctionResult[T]) UseOptFunctionParamFrame(paramCount int) {
-	if fr.convenientParam == nil {
-		fr.convenientParam = make([]reusableParameterWrapper, paramCount)
+	if len(fr.convenientParam) < paramCount {
+		fr.convenientParam = append(fr.convenientParam, make([]reusableParameterWrapper, paramCount-len(fr.convenientParam))...)
 	}
 }
 
@@ -686,6 +687,13 @@ func (fr *FunctionResult[T]) Append(val T, isnull bool) error {
 	}
 	fr.length++
 	return nil
+}
+
+func (fr *FunctionResult[T]) AppendBytesWithWriter(size int, writer func([]byte) error) error {
+	if fr.vec.IsConst() {
+		return moerr.NewInternalErrorNoCtx("direct varlena writer does not support const result")
+	}
+	return AppendBytesWithWriter(fr.vec, size, fr.mp, writer)
 }
 
 func (fr *FunctionResult[T]) AppendBytes(val []byte, isnull bool) error {

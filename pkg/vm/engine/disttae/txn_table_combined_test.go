@@ -2196,7 +2196,7 @@ func (m *mockTombstoner) UnmarshalBinary(buf []byte) error {
 	return nil
 }
 
-func (m *mockTombstoner) PrefetchTombstones(srvId string, fs fileservice.FileService, bid []objectio.Blockid) {
+func (m *mockTombstoner) PrefetchTombstones(ctx context.Context, srvId string, fs fileservice.FileService, bid []objectio.Blockid) {
 }
 
 func (m *mockTombstoner) ApplyInMemTombstones(bid *types.Blockid, rowsOffset []int64, deleted *objectio.Bitmap) (left []int64) {

@@ -873,6 +873,33 @@ func TestGroupingAwareStringHashMapSeparatesRawSentinelBytes(t *testing.T) {
 	require.Equal(t, uint64(2), hashMap.GroupCount())
 }
 
+func TestGroupingAwareStringHashMapFlatFixedFastPath(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, hasNull := range []bool{false, true} {
+		hashMap, err := NewStrHashMap(hasNull, mp)
+		require.NoError(t, err)
+		require.NoError(t, hashMap.SetGroupingAware())
+
+		vec := vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixedList(
+			vec, []int32{7, 11, 13}, nil, mp))
+		itr := hashMap.NewIterator().(*strHashmapIterator)
+		require.NoError(t, itr.prepareHashKeys(
+			[]*vector.Vector{vec}, 1, 2))
+		itr.encodeHashKeys([]*vector.Vector{vec}, 1, 2)
+
+		for i, value := range []int32{11, 13} {
+			expected := append([]byte{0}, types.EncodeInt32(&value)...)
+			require.Equal(t, expected, itr.keys[i][:len(expected)])
+			require.Len(t, itr.keys[i], 16)
+		}
+
+		vec.Free(mp)
+		hashMap.Free()
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestStringHashMapRejectsShortConstRowMetadata(t *testing.T) {
 	mp := mpool.MustNewZero()
 	hashMap, err := NewStrHashMap(false, mp)

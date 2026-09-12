@@ -149,6 +149,11 @@ type tunnel struct {
 	// the conn-cache path above and the non-cache path where COM_QUIT is
 	// forwarded to CN.
 	expectedClientQuit atomic.Bool
+	// cacheIdentityChanged permanently disables cache publication for this
+	// tunnel generation after a command changes the authenticated principal.
+	// COM_CHANGE_USER and SET ROLE alter CN-side identity that ResetSession does
+	// not reconstruct from the original handshake.
+	cacheIdentityChanged atomic.Bool
 	// requestBoundary is the authoritative request/response ownership state.
 	// It deliberately becomes permanently unsafe for this tunnel generation if
 	// a client pipelines commands: the MySQL command protocol is sequential and
@@ -358,6 +363,16 @@ func (t *tunnel) markCacheReuseReady() {
 	})
 }
 
+func (t *tunnel) markCacheIdentityChanged() {
+	if t != nil {
+		t.cacheIdentityChanged.Store(true)
+	}
+}
+
+func (t *tunnel) hasCacheIdentityChanged() bool {
+	return t != nil && t.cacheIdentityChanged.Load()
+}
+
 type responsePhase uint8
 
 const (
@@ -437,6 +452,11 @@ func (t *tunnel) trackClientRequest(msg []byte) clientRequestCommit {
 	switch cmd {
 	case frontend.COM_QUIT:
 		return commit
+	case frontend.COM_CHANGE_USER:
+		// COM_CHANGE_USER carries a new authenticated principal and database.
+		// The backend generation cannot be safely reconstructed by ResetSession,
+		// so never publish it to the cache after this command is observed.
+		t.cacheIdentityChanged.Store(true)
 	case frontend.COM_STMT_SEND_LONG_DATA:
 		if mysqlPacketPayloadLength(msg) < 7 || len(msg) < mysqlHeadLen+7 {
 			s.ambiguous = true
@@ -537,6 +557,36 @@ func (t *tunnel) hasUnsafeClientState() bool {
 		t.requestBoundary.pendingLongDataOverflow ||
 		len(t.requestBoundary.pendingLongData) > 0 ||
 		len(t.requestBoundary.closedStatements) > 0
+}
+
+// hasFenceableClosedStatementState reports whether the only remaining unsafe
+// client state is a completed COM_STMT_CLOSE. A successful COM_PING on the same
+// backend socket fences every packet sent before it, including an overflowed
+// close tombstone set. Other protocol states remain non-cacheable.
+func (t *tunnel) hasFenceableClosedStatementState() bool {
+	if t == nil {
+		return false
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	s := &t.requestBoundary
+	if s.inFlight || s.requestContinuation || s.localInfileUpload || s.ambiguous ||
+		s.pendingLongDataOverflow || len(s.pendingLongData) > 0 {
+		return false
+	}
+	return s.closedStatementsOverflow || len(s.closedStatements) > 0
+}
+
+// completeClosedStatementFence clears only state proven delivered by the
+// same-backend PING. It deliberately leaves every other protocol state intact.
+func (t *tunnel) completeClosedStatementFence() {
+	if t == nil {
+		return
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	clear(t.requestBoundary.closedStatements)
+	t.requestBoundary.closedStatementsOverflow = false
 }
 
 func (t *tunnel) hasUntransferableClientState() bool {

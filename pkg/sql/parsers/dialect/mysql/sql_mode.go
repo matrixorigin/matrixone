@@ -20,11 +20,18 @@ type SQLModeFlag uint8
 
 const SQLModeMatrixOneNative = "MATRIXONE_NATIVE"
 
+// SQLModeEnableBoolSumAvg selects MySQL's reading of SUM/AVG over a predicate.
+// MySQL has no BOOL type, so a predicate is an integer 0/1 there and
+// aggregating one is ordinary numeric aggregation; MO types it as BOOL and
+// rejects it when this token is absent.
+const SQLModeEnableBoolSumAvg = "ENABLE_BOOL_SUMAVG"
+
 const (
 	sqlModeANSIQuotes         = "ANSI_QUOTES"
 	sqlModePipesAsConcat      = "PIPES_AS_CONCAT"
 	sqlModeNoBackslashEscapes = "NO_BACKSLASH_ESCAPES"
 	sqlModeRealAsFloat        = "REAL_AS_FLOAT"
+	sqlModeHighNotPrecedence  = "HIGH_NOT_PRECEDENCE"
 )
 
 var parserSQLModeTokens = []string{
@@ -32,6 +39,7 @@ var parserSQLModeTokens = []string{
 	sqlModePipesAsConcat,
 	sqlModeNoBackslashEscapes,
 	sqlModeRealAsFloat,
+	sqlModeHighNotPrecedence,
 }
 
 const (
@@ -39,6 +47,7 @@ const (
 	SQLModePipesAsConcat
 	SQLModeNoBackslashEscapes
 	SQLModeRealAsFloat
+	SQLModeHighNotPrecedence
 )
 
 type SQLModeFlags uint8
@@ -57,6 +66,8 @@ func ParseSQLModeFlags(mode string) SQLModeFlags {
 			flags |= SQLModeFlags(SQLModeNoBackslashEscapes)
 		case sqlModeRealAsFloat:
 			flags |= SQLModeFlags(SQLModeRealAsFloat)
+		case sqlModeHighNotPrecedence:
+			flags |= SQLModeFlags(SQLModeHighNotPrecedence)
 		}
 	}
 	return flags
@@ -98,6 +109,10 @@ func HasSQLMode(mode string, token string) bool {
 
 func HasMatrixOneNativeSQLMode(mode string) bool {
 	return HasSQLMode(mode, SQLModeMatrixOneNative)
+}
+
+func HasEnableBoolSumAvgSQLMode(mode string) bool {
+	return HasSQLMode(mode, SQLModeEnableBoolSumAvg)
 }
 
 func (flags SQLModeFlags) Has(flag SQLModeFlag) bool {

@@ -58,6 +58,13 @@ type DataRetriever interface {
 	GetDataType() int8
 	GetAccountID() uint32
 	GetTableID() uint64
+	// GetToTS is the upper bound of the change range this iteration carries -- the same
+	// value UpdateWatermark persists. It is the data version an index generation built from
+	// this data reflects, so a consumer can record it as the generation's build_ts.
+	//
+	// Deliberately NOT the consumer's own transaction SnapshotTS, which is >= this and would
+	// claim coverage of changes committed after the range was collected but not applied.
+	GetToTS() types.TS
 }
 
 // In an iteration, the table's data is propagated downstream.
@@ -90,6 +97,7 @@ type IterationContext struct {
 	jobNames  []string
 	jobIDs    []uint64
 	lsn       []uint64
+	stages    []int8
 	fromTS    types.TS
 	toTS      types.TS
 }
@@ -108,16 +116,23 @@ const (
 	JobStage_Running
 )
 
+// atomicInitLifecycleVersion marks job generations handled with the invariant
+// that InitSQL effects and the Init -> Running status transition share one
+// transaction. An absent/zero value means that invariant cannot be proven after
+// a restart; this includes legacy rows and fresh jobs not yet handled durably.
+const atomicInitLifecycleVersion uint64 = 1
+
 type JobStatus struct {
-	LSN       uint64
-	Stage     int8
-	TaskID    uint64
-	From      types.TS
-	To        types.TS
-	StartAt   types.TS
-	EndAt     types.TS
-	ErrorCode int
-	ErrorMsg  string
+	LSN              uint64
+	Stage            int8
+	LifecycleVersion uint64 `json:",omitempty"`
+	TaskID           uint64
+	From             types.TS
+	To               types.TS
+	StartAt          types.TS
+	EndAt            types.TS
+	ErrorCode        int
+	ErrorMsg         string
 }
 
 type InitWatermark struct {
@@ -203,6 +218,7 @@ type JobEntry struct {
 	watermark          types.TS
 	persistedWatermark types.TS
 	state              int8
+	stage              int8
 	dropAt             types.Timestamp
 	currentLSN         uint64
 	// isIndexJob marks a ConsumerType_IndexSync job, whose watermark is flushed

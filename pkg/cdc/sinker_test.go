@@ -160,7 +160,7 @@ func TestNewSinker(t *testing.T) {
 			if tt.args.sinkUri.SinkTyp == CDCSinkType_MySQL {
 				// Mock CreateMysqlSinker2 to avoid real DB connection
 				stub = gostub.Stub(&CreateMysqlSinker2, func(
-					_ UriInfo, _ uint64, _ string, _ *DbTableInfo, _ *CDCWatermarkUpdater,
+					_ context.Context, _ UriInfo, _ uint64, _ string, _ *DbTableInfo, _ *CDCWatermarkUpdater,
 					tableDef *plan.TableDef, _ int, _ time.Duration, _ *ActiveRoutine, _ uint64, _ string,
 				) (Sinker, error) {
 					// Return nil for success cases (we don't check the actual sinker)
@@ -174,6 +174,7 @@ func TestNewSinker(t *testing.T) {
 			}
 
 			got, err := NewSinker(
+				context.Background(),
 				tt.args.sinkUri,
 				tt.args.accountId,
 				tt.args.taskId,
@@ -192,6 +193,38 @@ func TestNewSinker(t *testing.T) {
 			assert.Equalf(t, tt.want, got, "NewSinker(%v, %v, %v, %v, %v, %v)", tt.args.sinkUri, tt.args.dbTblInfo, tt.args.watermarkUpdater, tt.args.tableDef, tt.args.retryTimes, tt.args.retryDuration)
 		})
 	}
+}
+
+func TestNewSinkerPropagatesLifecycleContextToLegacyFactory(t *testing.T) {
+	var captured context.Context
+	stub := gostub.Stub(&CreateMysqlSinker2, func(
+		ctx context.Context, _ UriInfo, _ uint64, _ string, _ *DbTableInfo,
+		_ *CDCWatermarkUpdater, _ *plan.TableDef, _ int, _ time.Duration,
+		_ *ActiveRoutine, _ uint64, _ string,
+	) (Sinker, error) {
+		captured = ctx
+		return nil, nil
+	})
+	defer stub.Reset()
+
+	type contextKey struct{}
+	ctx := context.WithValue(context.Background(), contextKey{}, "lifecycle")
+	_, err := NewSinker(
+		ctx,
+		UriInfo{SinkTyp: CDCSinkType_MySQL},
+		1,
+		"task",
+		&DbTableInfo{},
+		nil,
+		nil,
+		0,
+		0,
+		NewCdcActiveRoutine(),
+		CDCDefaultTaskExtra_MaxSQLLen,
+		CDCDefaultSendSqlTimeout,
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, "lifecycle", captured.Value(contextKey{}))
 }
 
 func TestNewConsoleSinker(t *testing.T) {

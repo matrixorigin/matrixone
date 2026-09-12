@@ -225,6 +225,12 @@ pb: generate-pb
 VERSION_INFO :=-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'
 THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 CGO_DIR=$(ROOT_DIR)/cgo
+# mo-service links libmo dynamically (-L$(CGO_DIR) -lmo picks the shared
+# library over libmo.a), so libmo is a runtime dependency resolved through
+# the binary's rpath -- $ORIGIN/lib on Linux, @executable_path/lib on macOS.
+# cgo/ is not on that rpath, so libmo must be published into lib/ beside the
+# thirdparty libraries or the built binary cannot start.
+LIBMO_NAME := $(if $(filter darwin,$(UNAME_S)),libmo.dylib,libmo.so)
 JIEBA_DICT_SRC_DIR=$(ROOT_DIR)/pkg/monlp/tokenizer/dict
 RACE_OPT :=
 DEBUG_OPT :=
@@ -303,6 +309,8 @@ endef
 .PHONY: cgo cgo-native-prepare-internal cgo-native-thirdparties-internal
 cgo: cgo-native-thirdparties-internal
 	@(cd cgo; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)) ${CGO_DEBUG_OPT})
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(CGO_DIR)/$(LIBMO_NAME)" "$(ROOT_DIR)/lib/$(LIBMO_NAME)"
 ifeq ($(MO_CL_CUDA),1)
 	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
 		"$(ROOT_DIR)/cgo/cuda/mocl_kernel64.fatbin" \
@@ -460,6 +468,13 @@ jstfu-test:
 	@test -s xtool/jstfu/target/jstfu.jar
 	@echo "tested and built xtool/jstfu/target/jstfu.jar"
 
+# The S0 Connector/J pool regression deliberately builds its Java fixture and
+# fails when MatrixOne is unavailable; it must never report green by skipping
+# either prerequisite.
+.PHONY: test-connectorj-pool-reset-e2e-local
+test-connectorj-pool-reset-e2e-local:
+	@bash ./optools/connectorj_pool_reset_ci.bash
+
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
 .PHONY: debug
@@ -496,8 +511,9 @@ else
 	# The race suite is internally partitioned into light/HNSW, exclusive issues,
 	# embedded-cluster, heavy/engine, and plan stages. Keep the outer budget above
 	# the per-package timeout so an expanded main branch cannot be killed while a
-	# selected stage is still making progress.
-	@cd optools && timeout 90m ./run_ut.sh UT $(SKIP_TEST)
+	# selected stage is still making progress. GNU timeout sends TERM first so
+	# run_ut.sh can preserve its checkpoint and active-case diagnostics.
+	@cd optools && timeout --signal=TERM --kill-after=120s $(UT_HARD_TIMEOUT) ./run_ut.sh UT $(SKIP_TEST)
 endif
 
 ###############################################################################
@@ -505,7 +521,30 @@ endif
 ###############################################################################
 UT_PARALLEL ?= 1
 UT_SHARD ?= all
-export UT_SHARD
+# The outer lifecycle budget is separate from each Go test's UT_TIMEOUT. Keep
+# enough time after TERM for checkpoint flushing and artifact upload.
+UT_HARD_TIMEOUT ?= 70m
+# Emit one bounded progress heartbeat per interval while UT is running.
+UT_HEARTBEAT_INTERVAL ?= 60
+# Build embedded test packages ahead of their execution while the issues
+# fixture is active. This is an explicit A/B knob: compile-only work still
+# consumes CPU, memory, and linker capacity, so it remains opt-in until a
+# same-resource measurement proves a critical-path gain.
+UT_PREBUILD_EMBEDDED ?= 0
+# Reuse released engine slots for plan while resource-heavy work finishes.
+# The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
+UT_OVERLAP_PLAN ?= 1
+# On the single CI runner, an A/B can overlap the dependency-disjoint light
+# wave with the exclusive issues package. HNSW remains an exclusive foreground
+# phase first; the overlap helper defaults to two package slots to leave memory
+# headroom. Keep the safe sequential baseline until a target-runner A/B proves
+# the concurrent path's wall-time and resource budget.
+UT_OVERLAP_LIGHT ?= 0
+UT_OVERLAP_LIGHT_PARALLEL ?= 2
+# Parent cancellation waits long enough for helper-owned child process groups
+# to receive TERM and bounded KILL cleanup in sequence.
+UT_HELPER_TERM_GRACE_TICKS ?= 60
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays
@@ -1405,14 +1444,29 @@ install-static-check-tools:
 	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
-.PHONY: static-check
+.PHONY: static-check static-check-analysis static-check-golangci
 GOLANGCI_LINT_CONCURRENCY ?=
 GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
+STATIC_CHECK_MOLINT = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
+STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
 static-check: config err-check
-	$(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
+	$(STATIC_CHECK_MOLINT)
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
-	$(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
+	$(STATIC_CHECK_GOLANGCI)
+
+# Keep the complete local/release entry point above. PR CI owns license scope
+# selection, but still analyzes the full package graph through content-addressed
+# Go and golangci-lint caches.
+static-check-analysis: config err-check
+	$(STATIC_CHECK_MOLINT)
+	$(STATIC_CHECK_GOLANGCI)
+
+# Trusted cache producers only need to populate golangci-lint's analysis
+# cache. This is not a reduced validation gate; PR and local SCA continue to
+# use static-check-analysis or static-check above.
+static-check-golangci:
+	$(STATIC_CHECK_GOLANGCI)
 
 fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)

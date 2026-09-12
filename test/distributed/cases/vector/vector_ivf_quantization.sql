@@ -26,6 +26,23 @@ select a from q32 order by l2_distance(v,'[1,1,1,1]') limit 3;
 alter table q32 drop index q32bf16;
 create index q32i8 using ivfflat on q32(v) lists=2 op_type 'vector_l2_ops' quantization 'int8';
 select a from q32 order by l2_distance(v,'[1,1,1,1]') limit 3;
+
+-- Bounded affine-quantized searches stay on the exact local range-before-Top-K
+-- path. With trained [0,1], mul=255: rows 2 and 4 have raw squared distances
+-- 57 and 11 from the zero query. Both inclusive boundaries must retain them.
+create table qrange(a int primary key, v vecf32(3));
+insert into qrange values
+    (1,'[0,0,0]'),
+    (2,'[0.02745098,0.007843137,0.007843137]'),
+    (3,'[1,1,0]'),
+    (4,'[0.011764706,0.003921569,0.003921569]');
+create index qrangei8 using ivfflat on qrange(v) lists=1 op_type 'vector_l2_ops' quantization 'int8';
+select a from qrange
+where l2_distance(v,'[0,0,0]') <= 0.02960719386380686
+order by l2_distance(v,'[0,0,0]') limit 10;
+select a from qrange
+where l2_distance(v,'[0,0,0]') >= 0.013006371726883922
+order by l2_distance(v,'[0,0,0]') limit 10;
 create table q64(a int primary key, v vecf64(4));
 insert into q64 values (1,'[1,1,1,1]'),(2,'[3,3,3,3]'),(3,'[5,5,5,5]'),(4,'[50,50,50,50]'),(5,'[52,52,52,52]'),(6,'[54,54,54,54]');
 create index q64f32 using ivfflat on q64(v) lists=2 op_type 'vector_l2_ops' quantization 'float32';

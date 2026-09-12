@@ -7,6 +7,8 @@ SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 1, 0) 'Result';
 SELECT REGEXP_REPLACE(NULL, 'Cow', 'Tiger');
 SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', NULL, 'Tiger');
 SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cow', NULL);
+SELECT REGEXP_REPLACE(NULL, '', NULL, NULL, NULL);
+SELECT REGEXP_REPLACE('abc', '', 'X', 0, 0);
 
 create table t1(a int, b varchar(100));
 insert into t1 values(1 , 'Cat Dog Cat Dog Cat Cat Dog Cat Dog Cat');
@@ -50,3 +52,36 @@ INSERT INTO t VALUES ('W * P', 'W + Z - O'), ('have has having', 'do does doing'
 INSERT INTO t VALUES ('XV*XZ', 'PP-ZZ-DXA'), ('aa bbb cc ddd', 'k ii lll oooo');
 SELECT REGEXP_REPLACE(str1, '*', 'i'), REGEXP_REPLACE(str2,'hav','hiv') FROM t;
 drop table t;
+
+# A match discarded before pos must not suppress a valid match beginning at
+# pos. Anchors keep their original-subject context.
+SELECT REGEXP_REPLACE('aaa', 'aa', 'X', 2, 1) AS overlap_one,
+       REGEXP_REPLACE('aaa', 'aa', 'X', 2, 0) AS overlap_all,
+       REGEXP_REPLACE('abc', '^', 'X', 2, 0) AS anchored,
+       HEX(REGEXP_REPLACE('a\nb', '(?m)a|$', 'X', 2, 1)) AS zero_width_at_pos;
+
+# ICU retains a zero-width match immediately after a nonempty match. Empty
+# subjects remain unchanged by REGEXP_REPLACE.
+SELECT REGEXP_INSTR('abc', 'a*', 1, 2, 0) AS after_nonempty,
+       REGEXP_INSTR('abc', 'b*', 2, 2, 0) AS after_nonempty_at_pos,
+       HEX(REGEXP_REPLACE('abc', 'a*', 'X', 1, 0)) AS replace_zero_width,
+       HEX(REGEXP_REPLACE('', '^$', 'X')) AS empty_subject;
+
+# Binary subjects interpret pos as a byte offset.
+SELECT HEX(REGEXP_REPLACE(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS binary_replace,
+       HEX(REGEXP_REPLACE(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), _binary'X', 2, 1)) AS varbinary_replace;
+
+# A direct binary replacement marker participates in compatibility without
+# selecting byte matching. Its bytes are converted from MySQL's binary
+# regexp facade (Windows-1252) into the text result domain on every execution.
+PREPARE regexp_replacement_charset FROM
+    'SELECT HEX(REGEXP_REPLACE(''a'', ''a'', ?)) AS replacement_hex';
+SET @regexp_replacement = _binary 0xff;
+EXECUTE regexp_replacement_charset USING @regexp_replacement;
+SET @regexp_replacement = _binary 0x80;
+EXECUTE regexp_replacement_charset USING @regexp_replacement;
+SET @regexp_replacement = '中';
+EXECUTE regexp_replacement_charset USING @regexp_replacement;
+SET @regexp_replacement = _binary 0xe4b8ad;
+EXECUTE regexp_replacement_charset USING @regexp_replacement;
+DEALLOCATE PREPARE regexp_replacement_charset;

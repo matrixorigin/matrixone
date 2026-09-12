@@ -100,10 +100,11 @@ func (info *runningPipelineInfo) cancelPipeline() {
 }
 
 type uuidProcMapItem struct {
-	proc    *process.Process
-	ch      process.RemotePipelineInformationChannel
-	ownerCh process.RemotePipelineInformationChannel
-	state   remoteReceiverRegistryState
+	proc     *process.Process
+	ch       process.RemotePipelineInformationChannel
+	ownerCh  process.RemotePipelineInformationChannel
+	state    remoteReceiverRegistryState
+	terminal *RemoteReceiverTerminal
 }
 
 type remoteReceiverRegistryState uint8
@@ -113,6 +114,7 @@ const (
 	remoteReceiverAttached
 	remoteReceiverClosed
 	remoteReceiverTombstone
+	remoteReceiverFinished
 )
 
 // RemoteReceiverAttachState is the result of an atomic receiver attach lookup.
@@ -125,6 +127,7 @@ const (
 	RemoteReceiverAttachedNow
 	RemoteReceiverAlreadyAttached
 	RemoteReceiverAlreadyClosed
+	RemoteReceiverFinished
 )
 
 type UuidProcMap struct {

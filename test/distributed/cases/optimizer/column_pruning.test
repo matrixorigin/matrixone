@@ -54,7 +54,7 @@ select 1 from (
 -- A discarded expensive aggregate must not become the scalar row carrier.
 select 1 from (select group_concat(payload), count(*) from carrier_l) s;
 select 1 from (select group_concat(payload), count(*) from carrier_l where id < 0) s;
-select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s;
+select 1 from (select count(date_add(date '2026-01-01', interval id day)), count(*) from carrier_l) s;
 
 -- SAMPLE prunes unused values and compacts a retained nonzero output slot.
 create table sample_nn(a int not null, b int not null, payload varchar(100) not null);

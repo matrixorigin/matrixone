@@ -77,7 +77,7 @@ select 1 from (select group_concat(payload), count(*) from carrier_l) s;
 select 1 from (select group_concat(payload), count(*) from carrier_l where id < 0) s;
 1
 1
-select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s;
+select 1 from (select count(date_add(date '2026-01-01', interval id day)), count(*) from carrier_l) s;
 1
 1
 create table sample_nn(a int not null, b int not null, payload varchar(100) not null);

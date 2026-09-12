@@ -1,0 +1,348 @@
+set experimental_fulltext2_index = 1;
+set experimental_hnsw_index = 1;
+drop database if exists ft2_hnsw_table_clone;
+create database ft2_hnsw_table_clone;
+use ft2_hnsw_table_clone;
+create table src(id bigint primary key, body text, v vecf32(3));
+create fulltext2 index ft on src(body);
+create index hnsw_idx using hnsw on src(v) op_type 'vector_l2_ops' max_index_capacity 1000;
+insert into src values
+(1, 'alpha copied', '[0,0,0]'),
+(2, 'beta copied', '[10,10,10]');
+set @t_src_ft = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'ft' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src')
+limit 1
+);
+set @t_src_hmeta = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'hnsw_idx' and algo = 'hnsw' and algo_table_type = 'hnsw_meta'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src')
+limit 1
+);
+set @t_src_ready_sql = concat(
+'select coalesce((select max(chunk_id) >= 0 from `', database(), '`.`', @t_src_ft,
+'` where index_id = ''cdc_tail'' and tag = 1), false) and ',
+'(select count(*) = 1 and min(filesize) > 0 from `', database(), '`.`', @t_src_hmeta, '`) as ready'
+);
+prepare wait_t_src_ready from @t_src_ready_sql;
+execute wait_t_src_ready;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_t_src_ready;
+set experimental_fulltext2_index = 0;
+set experimental_hnsw_index = 0;
+create table dst clone src;
+set @t_dst_ft = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'ft' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dst')
+limit 1
+);
+set @t_dst_hmeta = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'hnsw_idx' and algo = 'hnsw' and algo_table_type = 'hnsw_meta'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dst')
+limit 1
+);
+set @t_dst_ready_sql = concat(
+'select (select count(*) = 1 and min(filesize) > 0 from `', database(), '`.`', @t_dst_hmeta, '`) as ready'
+);
+prepare wait_t_dst_ready from @t_dst_ready_sql;
+execute wait_t_dst_ready;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_t_dst_ready;
+set @t_before_sql = concat(
+'select (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @t_src_ft,
+'` where index_id = ''cdc_tail'' and tag = 1), ',
+'(select coalesce(max(chunk_id), -1) from `', database(), '`.`', @t_dst_ft,
+'` where index_id = ''cdc_tail'' and tag = 1), ',
+'(select checksum from `', database(), '`.`', @t_src_hmeta, '` limit 1), ',
+'(select checksum from `', database(), '`.`', @t_dst_hmeta,
+'` limit 1) into @t_src_tail_before, @t_dst_tail_before, @t_src_h_before, @t_dst_h_before'
+);
+prepare capture_t_before from @t_before_sql;
+execute capture_t_before;
+deallocate prepare capture_t_before;
+insert into src values (4, 'alpha source incremental', '[0.1,0.1,0.1]');
+insert into dst values (3, 'alpha destination incremental', '[0.1,0.1,0.1]');
+set @t_tail_advanced_sql = concat(
+'select (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @t_src_ft,
+'` where index_id = ''cdc_tail'' and tag = 1) > @t_src_tail_before and ',
+'(select coalesce(max(chunk_id), -1) from `', database(), '`.`', @t_dst_ft,
+'` where index_id = ''cdc_tail'' and tag = 1) > @t_dst_tail_before and ',
+'(select checksum from `', database(), '`.`', @t_src_hmeta, '` limit 1) <> @t_src_h_before and ',
+'(select checksum from `', database(), '`.`', @t_dst_hmeta, '` limit 1) <> @t_dst_h_before as ready'
+);
+prepare wait_t_tail_advanced from @t_tail_advanced_sql;
+execute wait_t_tail_advanced;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_t_tail_advanced;
+select id from src where match(body) against('alpha' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+4
+select id from dst where match(body) against('alpha' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3
+select id from dst where match(body) against('beta' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+2
+select id from src order by l2_distance(v, '[0.1,0.1,0.1]') limit 2;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+1
+select id from dst order by l2_distance(v, '[0.1,0.1,0.1]') limit 2;
+➤ id[-5,64,0]  𝄀
+3  𝄀
+1
+create table dst clone src;
+table dst already exists
+select count(*) from dst;
+➤ count(*)[-5,64,0]  𝄀
+3
+drop database ft2_hnsw_table_clone;
+set experimental_fulltext2_index = 1;
+set experimental_hnsw_index = 1;
+drop database if exists ft2_hnsw_db_clone_src;
+drop database if exists ft2_hnsw_db_clone_dst;
+create database ft2_hnsw_db_clone_src;
+use ft2_hnsw_db_clone_src;
+create table src(id bigint primary key, body text, v vecf32(3));
+create fulltext2 index ft on src(body);
+create index hnsw_idx using hnsw on src(v) op_type 'vector_l2_ops' max_index_capacity 1000;
+insert into src values
+(1, 'alpha copied', '[0,0,0]'),
+(2, 'beta copied', '[10,10,10]');
+set @d_src_db = database();
+set @d_src_ft = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'ft' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src')
+limit 1
+);
+set @d_src_hmeta = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'hnsw_idx' and algo = 'hnsw' and algo_table_type = 'hnsw_meta'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src')
+limit 1
+);
+set @d_src_ready_sql = concat(
+'select coalesce((select max(chunk_id) >= 0 from `', @d_src_db, '`.`', @d_src_ft,
+'` where index_id = ''cdc_tail'' and tag = 1), false) and ',
+'(select count(*) = 1 and min(filesize) > 0 from `', @d_src_db, '`.`', @d_src_hmeta, '`) as ready'
+);
+prepare wait_d_src_ready from @d_src_ready_sql;
+execute wait_d_src_ready;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_d_src_ready;
+set experimental_fulltext2_index = 0;
+set experimental_hnsw_index = 0;
+create database ft2_hnsw_db_clone_dst clone ft2_hnsw_db_clone_src;
+use ft2_hnsw_db_clone_dst;
+set @d_dst_db = database();
+set @d_dst_ft = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'ft' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src')
+limit 1
+);
+set @d_dst_hmeta = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'hnsw_idx' and algo = 'hnsw' and algo_table_type = 'hnsw_meta'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src')
+limit 1
+);
+set @d_dst_ready_sql = concat(
+'select (select count(*) = 1 and min(filesize) > 0 from `', @d_dst_db, '`.`', @d_dst_hmeta, '`) as ready'
+);
+prepare wait_d_dst_ready from @d_dst_ready_sql;
+execute wait_d_dst_ready;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_d_dst_ready;
+set @d_before_sql = concat(
+'select (select coalesce(max(chunk_id), -1) from `', @d_src_db, '`.`', @d_src_ft,
+'` where index_id = ''cdc_tail'' and tag = 1), ',
+'(select coalesce(max(chunk_id), -1) from `', @d_dst_db, '`.`', @d_dst_ft,
+'` where index_id = ''cdc_tail'' and tag = 1), ',
+'(select checksum from `', @d_src_db, '`.`', @d_src_hmeta, '` limit 1), ',
+'(select checksum from `', @d_dst_db, '`.`', @d_dst_hmeta,
+'` limit 1) into @d_src_tail_before, @d_dst_tail_before, @d_src_h_before, @d_dst_h_before'
+);
+prepare capture_d_before from @d_before_sql;
+execute capture_d_before;
+deallocate prepare capture_d_before;
+insert into ft2_hnsw_db_clone_src.src values (4, 'alpha source incremental', '[0.1,0.1,0.1]');
+insert into ft2_hnsw_db_clone_dst.src values (3, 'alpha destination incremental', '[0.1,0.1,0.1]');
+set @d_tail_advanced_sql = concat(
+'select (select coalesce(max(chunk_id), -1) from `', @d_src_db, '`.`', @d_src_ft,
+'` where index_id = ''cdc_tail'' and tag = 1) > @d_src_tail_before and ',
+'(select coalesce(max(chunk_id), -1) from `', @d_dst_db, '`.`', @d_dst_ft,
+'` where index_id = ''cdc_tail'' and tag = 1) > @d_dst_tail_before and ',
+'(select checksum from `', @d_src_db, '`.`', @d_src_hmeta, '` limit 1) <> @d_src_h_before and ',
+'(select checksum from `', @d_dst_db, '`.`', @d_dst_hmeta, '` limit 1) <> @d_dst_h_before as ready'
+);
+prepare wait_d_tail_advanced from @d_tail_advanced_sql;
+execute wait_d_tail_advanced;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_d_tail_advanced;
+select id from ft2_hnsw_db_clone_src.src where match(body) against('alpha' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+4
+select id from ft2_hnsw_db_clone_dst.src where match(body) against('alpha' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3
+select id from ft2_hnsw_db_clone_dst.src where match(body) against('beta' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+2
+select id from ft2_hnsw_db_clone_src.src order by l2_distance(v, '[0.1,0.1,0.1]') limit 2;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+1
+select id from ft2_hnsw_db_clone_dst.src order by l2_distance(v, '[0.1,0.1,0.1]') limit 2;
+➤ id[-5,64,0]  𝄀
+3  𝄀
+1
+create database ft2_hnsw_db_clone_dst clone ft2_hnsw_db_clone_src;
+database ft2_hnsw_db_clone_dst already exists
+select count(*) from ft2_hnsw_db_clone_dst.src;
+➤ count(*)[-5,64,0]  𝄀
+3
+drop database ft2_hnsw_db_clone_dst;
+drop database ft2_hnsw_db_clone_src;
+set experimental_fulltext2_index = 1;
+set experimental_hnsw_index = 1;
+drop database if exists ft2_hnsw_snapshot_clone;
+drop snapshot if exists ft2_hnsw_clone_sp;
+create database ft2_hnsw_snapshot_clone;
+use ft2_hnsw_snapshot_clone;
+create table src(id bigint primary key, body text, v vecf32(3));
+create fulltext2 index ft on src(body);
+create index hnsw_idx using hnsw on src(v) op_type 'vector_l2_ops' max_index_capacity 1000;
+insert into src values
+(1, 'alpha copied', '[0,0,0]'),
+(2, 'beta copied', '[10,10,10]');
+set @s_src_ft = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'ft' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src')
+limit 1
+);
+set @s_src_hmeta = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'hnsw_idx' and algo = 'hnsw' and algo_table_type = 'hnsw_meta'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src')
+limit 1
+);
+set @s_src_ready_sql = concat(
+'select coalesce((select max(chunk_id) >= 0 from `', database(), '`.`', @s_src_ft,
+'` where index_id = ''cdc_tail'' and tag = 1), false) and ',
+'(select count(*) = 1 and min(filesize) > 0 from `', database(), '`.`', @s_src_hmeta, '`) as ready'
+);
+prepare wait_s_src_ready from @s_src_ready_sql;
+execute wait_s_src_ready;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_s_src_ready;
+set @s_src_before_sql = concat(
+'select (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @s_src_ft,
+'` where index_id = ''cdc_tail'' and tag = 1), ',
+'(select checksum from `', database(), '`.`', @s_src_hmeta,
+'` limit 1) into @s_src_tail_before, @s_src_h_before'
+);
+prepare capture_s_src_before from @s_src_before_sql;
+execute capture_s_src_before;
+deallocate prepare capture_s_src_before;
+create snapshot ft2_hnsw_clone_sp for table ft2_hnsw_snapshot_clone src;
+insert into src values (4, 'alpha source after snapshot', '[0.1,0.1,0.1]');
+set @s_src_advanced_sql = concat(
+'select (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @s_src_ft,
+'` where index_id = ''cdc_tail'' and tag = 1) > @s_src_tail_before and ',
+'(select checksum from `', database(), '`.`', @s_src_hmeta, '` limit 1) <> @s_src_h_before as ready'
+);
+prepare wait_s_src_advanced from @s_src_advanced_sql;
+execute wait_s_src_advanced;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_s_src_advanced;
+set experimental_fulltext2_index = 0;
+set experimental_hnsw_index = 0;
+create table dst clone src {snapshot = 'ft2_hnsw_clone_sp'};
+set @s_dst_ft = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'ft' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dst')
+limit 1
+);
+set @s_dst_hmeta = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'hnsw_idx' and algo = 'hnsw' and algo_table_type = 'hnsw_meta'
+and table_id = (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'dst')
+limit 1
+);
+set @s_dst_ready_sql = concat(
+'select (select count(*) = 1 and min(filesize) > 0 from `', database(), '`.`', @s_dst_hmeta, '`) as ready'
+);
+prepare wait_s_dst_ready from @s_dst_ready_sql;
+execute wait_s_dst_ready;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_s_dst_ready;
+set @s_dst_before_sql = concat(
+'select (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @s_dst_ft,
+'` where index_id = ''cdc_tail'' and tag = 1), ',
+'(select checksum from `', database(), '`.`', @s_dst_hmeta,
+'` limit 1) into @s_dst_tail_before, @s_dst_h_before'
+);
+prepare capture_s_dst_before from @s_dst_before_sql;
+execute capture_s_dst_before;
+deallocate prepare capture_s_dst_before;
+insert into dst values (3, 'alpha destination incremental', '[0.1,0.1,0.1]');
+set @s_dst_advanced_sql = concat(
+'select (select coalesce(max(chunk_id), -1) from `', database(), '`.`', @s_dst_ft,
+'` where index_id = ''cdc_tail'' and tag = 1) > @s_dst_tail_before and ',
+'(select checksum from `', database(), '`.`', @s_dst_hmeta, '` limit 1) <> @s_dst_h_before as ready'
+);
+prepare wait_s_dst_advanced from @s_dst_advanced_sql;
+execute wait_s_dst_advanced;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_s_dst_advanced;
+select id from src where match(body) against('alpha' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+4
+select id from dst where match(body) against('alpha' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3
+select id from dst where match(body) against('beta' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+2
+select count(*) from dst where id = 4;
+➤ count(*)[-5,64,0]  𝄀
+0
+select id from src order by l2_distance(v, '[0.1,0.1,0.1]') limit 2;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+1
+select id from dst order by l2_distance(v, '[0.1,0.1,0.1]') limit 2;
+➤ id[-5,64,0]  𝄀
+3  𝄀
+1
+create table dst clone src {snapshot = 'ft2_hnsw_clone_sp'};
+table dst already exists
+select count(*) from dst;
+➤ count(*)[-5,64,0]  𝄀
+3
+drop snapshot ft2_hnsw_clone_sp;
+drop database ft2_hnsw_snapshot_clone;

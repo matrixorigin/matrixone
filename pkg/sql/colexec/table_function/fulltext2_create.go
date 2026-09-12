@@ -202,7 +202,7 @@ func (u *fulltext2CreateState) sealSegment(proc *process.Process) (err error) {
 	}
 	seg.Id = fulltext2.SubIndexId(u.uid, u.segIdx)
 	u.segIdx++
-	sqls, cleanup, err := seg.ToInsertSqls(sqlproc, u.tblcfg, u.ts, 0 /* tag=0 base */)
+	sqls, cleanup, err := seg.ToInsertSqls(sqlproc, u.tblcfg, u.ts, 0 /* tag=0 base */, sqlproc.BuildSnapshotTS())
 	if err != nil {
 		return err
 	}
@@ -387,7 +387,6 @@ func (u *fulltext2CreateState) end(tf *TableFunction, proc *process.Process) err
 	// A fresh tag=0 was written (CREATE build, or a REBUILD reusing this TVF) — evict
 	// any cached search index so the next query reloads the new base(s) instead of the
 	// stale one held until the TTL. Local to this CN's cache.
-	fulltext2.NewFulltext2Search(u.tblcfg).OnCacheInvalidated(string(fulltext2.LoadMissRebuild))
 	veccache.Cache.Remove(u.tblcfg.IndexTable)
 	return nil
 }

@@ -136,6 +136,110 @@ func configureRuntimeFilterCompositePK(builder *QueryBuilder) (*planpb.Node, *pl
 	return probe, build
 }
 
+func TestCompositeLeadingColumnRuntimeFilter(t *testing.T) {
+	// Use a small configured budget to test the boundary without large data or
+	// inventing statistics for an actual table. Restore the shared mock runtime.
+	rt := moruntime.ServiceRuntime(newRuntimeFilterSingleTestBuilder(false).compCtx.GetProcess().GetService())
+	originalLimit, hadLimit := rt.GetGlobalVariables("runtime_filter_limit_in")
+	rt.SetGlobalVariables("runtime_filter_limit_in", int64(3))
+	t.Cleanup(func() {
+		if hadLimit {
+			rt.SetGlobalVariables("runtime_filter_limit_in", originalLimit)
+		} else {
+			rt.CompareAndDeleteGlobalVariables("runtime_filter_limit_in", int64(3))
+		}
+	})
+	tests := []struct {
+		name   string
+		mutate func(*QueryBuilder)
+		want   bool
+	}{
+		{name: "leading component at ordinary-column budget", want: true},
+		{name: "below ordinary-column budget", want: true, mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 2
+		}},
+		{name: "above ordinary-column budget", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 4
+		}},
+		{name: "right semi retains distributed placement", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].JoinType = planpb.Node_SEMI
+			b.qry.Nodes[2].IsRightJoin = true
+		}},
+		{name: "fallible scan predicate is not truncated", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[0].FilterList = []*planpb.Expr{
+				makeMixedSideRuntimeFilterResidual(b.qry.Nodes[0].TableDef.Cols[0].Typ, 1, 1),
+			}
+		}},
+		{name: "nonleading component retains cost gate", mutate: func(b *QueryBuilder) {
+			col := b.qry.Nodes[2].OnList[0].GetF().Args[0].GetCol()
+			col.ColPos, col.Name = 1, "b"
+		}},
+		{name: "unselective build retains cost gate", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].Stats.HashmapStats.HashmapSize = 100
+		}},
+		{name: "incompatible equality representation", mutate: func(b *QueryBuilder) {
+			b.qry.Nodes[2].OnList[0].GetF().Args[1].Typ.Id = int32(types.T_uint64)
+		}},
+		{name: "disabled by optimizer hint", mutate: func(b *QueryBuilder) {
+			b.optimizerHints = &OptimizerHints{runtimeFilter: 1}
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := newRuntimeFilterSingleTestBuilder(false)
+			probe, _ := configureRuntimeFilterCompositePK(builder)
+			join := builder.qry.Nodes[2]
+			join.JoinType = planpb.Node_INNER
+			join.OnList = join.OnList[:1]
+			join.OnList[0].GetF().Args[0].GetCol().Name = "a"
+			if test.mutate != nil {
+				test.mutate(builder)
+			}
+			builder.generateRuntimeFilters(2)
+			if !test.want {
+				require.Empty(t, join.RuntimeFilterBuildList)
+				require.Empty(t, probe.RuntimeFilterProbeList)
+				return
+			}
+			require.Len(t, join.RuntimeFilterBuildList, 1)
+			require.Len(t, probe.RuntimeFilterProbeList, 1)
+			buildSpec, probeSpec := join.RuntimeFilterBuildList[0], probe.RuntimeFilterProbeList[0]
+			require.Equal(t, buildSpec.Tag, probeSpec.Tag)
+			require.True(t, probeSpec.NotOnPk, "a component must not use full primary-key lookup")
+			require.True(t, buildSpec.NotOnPk)
+			require.False(t, probeSpec.MatchPrefix)
+			require.Equal(t, int32(0), probeSpec.Expr.GetCol().ColPos)
+			require.Equal(t, int32(types.T_int64), probeSpec.Expr.Typ.Id)
+			require.Equal(t, planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_RAW_V1, buildSpec.KeyEncoding)
+			require.Equal(t, int32(3), buildSpec.UpperLimit)
+		})
+	}
+}
+
+func TestCompositeRuntimeFilterResolvesHiddenKeyBeforeAdmission(t *testing.T) {
+	builder := newRuntimeFilterSingleTestBuilder(false)
+	probe, build := configureRuntimeFilterCompositePK(builder)
+	builder.compCtx = &statsCacheCompilerContext{
+		MockCompilerContext: builder.compCtx.(*MockCompilerContext),
+		statsCache:          NewStatsCache(),
+	}
+	builder.tag2Table = map[int32]*TableDef{1: probe.TableDef, 2: build.TableDef}
+	join := builder.qry.Nodes[2]
+	join.JoinType = planpb.Node_INNER
+	keyType := probe.TableDef.Cols[2].Typ
+	build.TableDef.Cols[0].Typ = keyType
+	join.OnList = []*planpb.Expr{makeRuntimeFilterTestEq(keyType, 1, 2, 2, 0)}
+	// Resolving NDV also supplies the initially absent column name. This is
+	// the full serialized key, not a component subject to the new admission.
+	probe.FilterList = []*planpb.Expr{makeMixedSideRuntimeFilterResidual(probe.TableDef.Cols[0].Typ, 1, 1)}
+	builder.generateRuntimeFilters(2)
+	require.Equal(t, catalog.CPrimaryKeyColName, join.OnList[0].GetF().Args[0].GetCol().Name)
+	require.Len(t, join.RuntimeFilterBuildList, 1)
+	require.Len(t, probe.RuntimeFilterProbeList, 1)
+	require.False(t, probe.RuntimeFilterProbeList[0].NotOnPk)
+	require.Equal(t, GetInFilterCardLimitOnPK(builder.compCtx.GetProcess().GetService(), probe.Stats.TableCnt), join.RuntimeFilterBuildList[0].UpperLimit)
+}
+
 func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 	t.Run("right single filters only the discardable probe and is colocated", func(t *testing.T) {
 		builder := newRuntimeFilterSingleTestBuilder(true)
@@ -191,6 +295,198 @@ func TestRightSingleRuntimeFilterSemanticAndDeliveryContract(t *testing.T) {
 		require.Len(t, builder.qry.Nodes[2].OnList, 2)
 		require.Same(t, mixed, builder.qry.Nodes[2].OnList[1])
 	})
+}
+
+func TestScalarPredicateRuntimeFilterPreservesSinglePosition(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		select n.n_name
+		from tpch.nation n join tpch.region r
+			on n.n_regionkey = r.r_regionkey
+		where n.n_nationkey = (
+			select n2.n_nationkey
+			from tpch.nation n2
+			where n2.n_name = 'FRANCE'
+		)`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+	var single *planpb.Node
+	for _, node := range query.Nodes {
+		if node.NodeType == planpb.Node_JOIN &&
+			node.JoinType == planpb.Node_SINGLE &&
+			len(node.OnList) == 0 && len(node.RuntimeFilterBuildList) == 1 {
+			single = node
+			break
+		}
+	}
+	require.NotNil(t, single)
+	require.Equal(t, int32(1), single.RuntimeFilterBuildList[0].UpperLimit)
+	require.True(t, single.RuntimeFilterBuildList[0].ScalarPredicate)
+
+	outerScans := make(map[string]*planpb.Node)
+	var visit func(int32)
+	visit = func(nodeID int32) {
+		node := query.Nodes[nodeID]
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil {
+			outerScans[node.TableDef.Name] = node
+		}
+		for _, childID := range node.Children {
+			visit(childID)
+		}
+	}
+	visit(single.Children[0])
+	require.Contains(t, outerScans, "nation")
+	require.Contains(t, outerScans, "region",
+		"SINGLE must stay above the row-eliminating outer join")
+	require.Len(t, outerScans["nation"].RuntimeFilterProbeList, 1)
+	require.Equal(t, single.RuntimeFilterBuildList[0].Tag,
+		outerScans["nation"].RuntimeFilterProbeList[0].Tag)
+}
+
+func TestScalarPredicateRuntimeFilterProtocolGate(t *testing.T) {
+	optimizer := NewMockOptimizer(true)
+	ctx := optimizer.CurrentContext()
+	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+
+	build := func(version int64) *planpb.Query {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		logicPlan, err := runOneStmt(optimizer, t, `
+			select n.n_name from tpch.nation n
+			where n.n_regionkey = (
+				select r.r_regionkey from tpch.region r where r.r_name = 'EUROPE'
+			)`)
+		require.NoError(t, err)
+		return logicPlan.GetQuery()
+	}
+	hasScalarFilter := func(query *planpb.Query) bool {
+		for _, node := range query.Nodes {
+			for _, spec := range node.RuntimeFilterBuildList {
+				if spec.ScalarPredicate {
+					return true
+				}
+			}
+		}
+		return false
+	}
+
+	require.False(t, hasScalarFilter(build(defines.MORPCVersion42)),
+		"an older participant would decode the optional field as false")
+	require.True(t, hasScalarFilter(build(defines.MORPCVersion43)))
+	rt.SetGlobalVariables("optimizer_hints", "subqueryPredicatePlanning=1")
+	require.False(t, hasScalarFilter(build(defines.MORPCVersion43)),
+		"the cohort rollback must retain the historical plan")
+}
+
+func TestCorrelatedScalarPredicateDoesNotCreateRuntimeFilter(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		select n.n_name from tpch.nation n
+		where n.n_regionkey = (
+			select r.r_regionkey from tpch.region r
+			where r.r_name = n.n_name
+		)`)
+	require.NoError(t, err)
+
+	foundCorrelatedSingle := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_SINGLE ||
+			len(node.OnList) == 0 {
+			continue
+		}
+		foundCorrelatedSingle = true
+		for _, spec := range node.RuntimeFilterBuildList {
+			require.False(t, spec.ScalarPredicate,
+				"a correlated SINGLE must not publish an uncorrelated scalar filter")
+		}
+	}
+	require.True(t, foundCorrelatedSingle)
+}
+
+func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
+	typ := planpb.Type{Id: int32(types.T_int64)}
+	tests := []struct {
+		name       string
+		nodeType   planpb.Node_NodeType
+		joinType   planpb.Node_JoinType
+		childPos   int32
+		rightJoin  bool
+		shuffle    bool
+		unsafeOn   bool
+		unsafeScan bool
+		wantProbe  bool
+	}{
+		{name: "inner left", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, wantProbe: true},
+		{name: "shuffled inner lineage", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, shuffle: true},
+		{name: "inner build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1},
+		{name: "semi preserved side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, wantProbe: true},
+		{name: "semi build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, childPos: 1},
+		{name: "right semi physical build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, rightJoin: true},
+		{name: "anti preserved side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_ANTI, wantProbe: true},
+		{name: "right anti physical build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_ANTI, rightJoin: true},
+		{name: "outer join", nodeType: planpb.Node_JOIN, joinType: planpb.Node_LEFT},
+		{name: "nested single", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SINGLE},
+		{name: "unproven join condition", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, unsafeOn: true},
+		{name: "unproven scan predicate", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, unsafeScan: true},
+		{name: "projection", nodeType: planpb.Node_PROJECT},
+		{name: "window", nodeType: planpb.Node_WINDOW},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			children := []int32{0}
+			if tc.nodeType == planpb.Node_JOIN {
+				children = []int32{0, 1}
+			}
+			builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
+				{NodeType: planpb.Node_TABLE_SCAN, ProjectList: []*planpb.Expr{GetColExpr(typ, 10, 0)}},
+				{NodeType: planpb.Node_TABLE_SCAN, ProjectList: []*planpb.Expr{GetColExpr(typ, 11, 0)}},
+				{
+					NodeType:    tc.nodeType,
+					JoinType:    tc.joinType,
+					IsRightJoin: tc.rightJoin,
+					Children:    children,
+					ProjectList: []*planpb.Expr{GetColExpr(typ, tc.childPos, 0)},
+					Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{
+						Shuffle: tc.shuffle,
+					}},
+				},
+			}}}
+			unsafePredicate := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}}
+			if tc.unsafeOn {
+				builder.qry.Nodes[2].OnList = []*planpb.Expr{unsafePredicate}
+			}
+			if tc.unsafeScan {
+				builder.qry.Nodes[0].FilterList = []*planpb.Expr{unsafePredicate}
+			}
+
+			_, _, ok := builder.scalarRuntimeFilterScanColumn(
+				2, 0, make(map[[2]int32]bool))
+			require.Equal(t, tc.wantProbe, ok)
+		})
+	}
+}
+
+func TestSubqueryPredicatePlanningOptimizerHint(t *testing.T) {
+	builder := &QueryBuilder{}
+	require.False(t, builder.subqueryPredicatePlanningDisabled())
+	handleOptimizerHints("subqueryPredicatePlanning=1", builder)
+	require.True(t, builder.subqueryPredicatePlanningDisabled())
+	handleOptimizerHints("subqueryPredicatePlanning=0", builder)
+	require.False(t, builder.subqueryPredicatePlanningDisabled())
 }
 
 func TestFloatRuntimeFilterUsesOnlySoundEncoding(t *testing.T) {
@@ -1295,7 +1591,7 @@ func TestRightSingleRuntimeFilterConservativeEligibility(t *testing.T) {
 			join.RuntimeFilterBuildList[0].KeyComponentProbeTypes)
 	})
 
-	t.Run("leading composite prefix is omitted until HashBuild can materialize it", func(t *testing.T) {
+	t.Run("leading composite component does not introduce local-only placement", func(t *testing.T) {
 		builder := newRuntimeFilterSingleTestBuilder(true)
 		probe, _ := configureRuntimeFilterCompositePK(builder)
 		builder.qry.Nodes[2].OnList = builder.qry.Nodes[2].OnList[:1]

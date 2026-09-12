@@ -42,6 +42,7 @@ const CatalogsDDL = `create table mo_catalog.mo_iceberg_catalogs (
 	disabled_at timestamp default null,
 	version bigint unsigned not null default 1,
 	primary key(account_id, catalog_id),
+	key catalog_id_allocator(catalog_id),
 	unique key(account_id, name)
 )`
 

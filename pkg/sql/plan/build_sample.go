@@ -62,7 +62,9 @@ func (s *SampleFuncCtx) BindSampleColumn(ctx *BindContext, binder *ProjectionBin
 	for _, se := range sampleList {
 		astStr := semanticAstKey(se.Expr)
 
-		if _, ok := ctx.groupByAst[astStr]; ok {
+		_, grouped := ctx.groupByAst[astStr]
+		_, elidedGroup := ctx.sampleGroupByAst[astStr]
+		if grouped || elidedGroup {
 			return nil, moerr.NewInternalErrorNoCtx("cannot sample the group by column.")
 		}
 

@@ -1,8 +1,8 @@
 # TN-Ordered Logtail Read Barrier and Authentication Catalog Freshness
 
 - Status: Review required
-- Related issue: #27834
-- Last updated: 2026-08-29
+- Related issues: #27743, #27834
+- Last updated: 2026-09-03
 
 ## 1. Summary
 
@@ -53,7 +53,9 @@ The primitive is an optional engine capability. It is suitable for callers
 that need a real-time read boundary without changing the default transaction
 freshness policy. Authentication uses it for all catalog state involved in a
 normal login, including account, user, password, role, grant, system-variable,
-and login-database checks.
+and login-database checks. Externally connected special users also cross this
+boundary because their subsequent SQL needs the same catalog freshness. Only
+internal special sessions retain the catalog-free bootstrap path.
 
 This change does not:
 
@@ -62,7 +64,7 @@ This change does not:
 - fan out to every CN or depend on a CN membership snapshot;
 - change transaction isolation or split authentication across snapshots;
 - persist barrier state;
-- change the bootstrap-only special-user path.
+- change the internal bootstrap-only special-user path.
 
 ## 4. Ordering Proof
 

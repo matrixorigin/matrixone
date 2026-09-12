@@ -27,15 +27,43 @@ import (
 
 // runtimeFilterTopology is built after physical scopes have been constructed
 // and before any local or remote pipeline starts. Runtime-filter messages are
-// current-CN only. Phase-1 right-SINGLE placement therefore requires one
-// producer for the whole tag and every blocking scan consumer on that same
-// execution CN.
+// current-CN only. Local SINGLE filters therefore require one producer for the
+// whole tag and every blocking scan consumer on that same execution CN.
 type runtimeFilterTopology struct {
 	producers map[int32][]*Scope
 	consumers map[int32][]*Scope
 }
 
-func rightSingleLocalRuntimeFilterTags(qry *plan.Query, compiledNodeIDs []int32) []int32 {
+func nodeHasLocalRuntimeFilter(node *plan.Node) bool {
+	if node == nil || node.NodeType != plan.Node_JOIN ||
+		node.JoinType != plan.Node_SINGLE {
+		return false
+	}
+
+	for _, spec := range node.RuntimeFilterBuildList {
+		if isLocalRuntimeFilterSpec(node, spec) {
+			return true
+		}
+	}
+	return false
+}
+
+func isLocalRuntimeFilterSpec(node *plan.Node, spec *plan.RuntimeFilterSpec) bool {
+	if node == nil || spec == nil || spec.Tag <= 0 {
+		return false
+	}
+	if spec.ScalarPredicate {
+		return true
+	}
+	// Phase-1 right-SINGLE uses exact IN. Shuffle PASS specs have no
+	// expression and do not participate in this local delivery contract.
+	shuffled := node.Stats != nil && node.Stats.HashmapStats != nil &&
+		node.Stats.HashmapStats.Shuffle
+	return node.IsRightJoin && !shuffled &&
+		(spec.Expr != nil || spec.BuildExpr != nil)
+}
+
+func localRuntimeFilterTags(qry *plan.Query, compiledNodeIDs []int32) []int32 {
 	if qry == nil || len(compiledNodeIDs) == 0 {
 		return nil
 	}
@@ -46,18 +74,11 @@ func rightSingleLocalRuntimeFilterTags(qry *plan.Query, compiledNodeIDs []int32)
 			continue
 		}
 		node := qry.Nodes[nodeID]
-		if node == nil || node.NodeType != plan.Node_JOIN ||
-			node.JoinType != plan.Node_SINGLE || !node.IsRightJoin {
-			continue
-		}
-		if node.Stats != nil && node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle {
+		if !nodeHasLocalRuntimeFilter(node) {
 			continue
 		}
 		for _, spec := range node.RuntimeFilterBuildList {
-			// Phase-1 right-SINGLE uses exact IN.  Shuffle PASS specs have no
-			// expression and do not participate in this local delivery contract.
-			if spec != nil && spec.Tag > 0 &&
-				(spec.Expr != nil || spec.BuildExpr != nil) {
+			if isLocalRuntimeFilterSpec(node, spec) {
 				tags = append(tags, spec.Tag)
 			}
 		}
@@ -74,6 +95,28 @@ func rightSingleLocalRuntimeFilterTags(qry *plan.Query, compiledNodeIDs []int32)
 		}
 	}
 	return unique
+}
+
+func scalarRuntimeFilterTags(qry *plan.Query, compiledNodeIDs []int32) map[int32]struct{} {
+	tags := make(map[int32]struct{})
+	if qry == nil {
+		return tags
+	}
+	for _, nodeID := range compiledNodeIDs {
+		if nodeID < 0 || int(nodeID) >= len(qry.Nodes) {
+			continue
+		}
+		node := qry.Nodes[nodeID]
+		if node == nil {
+			continue
+		}
+		for _, spec := range node.RuntimeFilterBuildList {
+			if spec != nil && spec.Tag > 0 && spec.ScalarPredicate {
+				tags[spec.Tag] = struct{}{}
+			}
+		}
+	}
+	return tags
 }
 
 func collectRuntimeFilterTopology(roots []*Scope, tags []int32) runtimeFilterTopology {
@@ -156,42 +199,92 @@ func collectRuntimeFilterTopology(roots []*Scope, tags []int32) runtimeFilterTop
 	return topology
 }
 
-func validateRightSingleRuntimeFilterTopology(qry *plan.Query, compiledNodeIDs []int32, roots []*Scope) error {
-	tags := rightSingleLocalRuntimeFilterTags(qry, compiledNodeIDs)
+func validateLocalRuntimeFilterTopology(qry *plan.Query, compiledNodeIDs []int32, roots []*Scope) error {
+	tags := localRuntimeFilterTags(qry, compiledNodeIDs)
 	if len(tags) == 0 {
 		return nil
 	}
 
 	topology := collectRuntimeFilterTopology(roots, tags)
+	scalarTags := scalarRuntimeFilterTags(qry, compiledNodeIDs)
 	for _, tag := range tags {
-		producers := topology.producers[tag]
-		consumers := topology.consumers[tag]
-		if len(consumers) == 0 {
-			return moerr.NewInternalErrorNoCtxf(
-				"invalid local runtime-filter topology: tag %d has no scan consumer", tag)
-		}
-		if len(producers) == 0 {
-			return moerr.NewInternalErrorNoCtxf(
-				"invalid local runtime-filter topology: tag %d has no producer", tag)
-		}
-		if len(producers) != 1 {
-			return moerr.NewInternalErrorNoCtxf(
-				"invalid local runtime-filter topology: tag %d has %d producers; expected exactly one colocated producer: %s",
-				tag, len(producers), runtimeFilterScopeAddresses(producers))
-		}
-
-		producer := producers[0]
-		for _, consumer := range consumers {
-			if !sameRuntimeFilterExecutionNode(consumer.NodeInfo, producer.NodeInfo) {
-				return moerr.NewInternalErrorNoCtxf(
-					"invalid local runtime-filter topology: tag %d consumer %s cannot reach colocated producer %s",
-					tag,
-					runtimeFilterScopeAddress(consumer),
-					runtimeFilterScopeAddress(producer))
+		if err := localRuntimeFilterTopologyError(tag, topology); err != nil {
+			if _, scalar := scalarTags[tag]; scalar {
+				disableScalarRuntimeFilter(tag, topology)
+				continue
 			}
+			return err
 		}
 	}
 	return nil
+}
+
+func localRuntimeFilterTopologyError(tag int32, topology runtimeFilterTopology) error {
+	producers := topology.producers[tag]
+	consumers := topology.consumers[tag]
+	if len(consumers) == 0 {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid local runtime-filter topology: tag %d has no scan consumer", tag)
+	}
+	if len(producers) == 0 {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid local runtime-filter topology: tag %d has no producer", tag)
+	}
+	if len(producers) != 1 {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid local runtime-filter topology: tag %d has %d producers; expected exactly one colocated producer: %s",
+			tag, len(producers), runtimeFilterScopeAddresses(producers))
+	}
+
+	producer := producers[0]
+	for _, consumer := range consumers {
+		if !sameRuntimeFilterExecutionNode(consumer.NodeInfo, producer.NodeInfo) {
+			return moerr.NewInternalErrorNoCtxf(
+				"invalid local runtime-filter topology: tag %d consumer %s cannot reach colocated producer %s",
+				tag,
+				runtimeFilterScopeAddress(consumer),
+				runtimeFilterScopeAddress(producer))
+		}
+	}
+	return nil
+}
+
+func disableScalarRuntimeFilter(tag int32, topology runtimeFilterTopology) {
+	// Scalar predicate filters are optional. If physical scheduling cannot prove
+	// current-CN delivery, remove both endpoints before any pipeline starts and
+	// execute the unchanged FILTER + SINGLE plan without this optimization.
+	for _, consumer := range topology.consumers[tag] {
+		if consumer == nil || consumer.DataSource == nil {
+			continue
+		}
+		specs := consumer.DataSource.RuntimeFilterSpecs
+		kept := make([]*plan.RuntimeFilterSpec, 0, len(specs))
+		for _, spec := range specs {
+			if spec == nil || spec.Tag != tag {
+				kept = append(kept, spec)
+			}
+		}
+		consumer.DataSource.RuntimeFilterSpecs = kept
+	}
+
+	seen := make(map[*Scope]struct{})
+	for _, producer := range topology.producers[tag] {
+		if producer == nil {
+			continue
+		}
+		if _, ok := seen[producer]; ok {
+			continue
+		}
+		seen[producer] = struct{}{}
+		_ = vm.HandleAllOp(producer.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			build, ok := op.(*hashbuild.HashBuild)
+			if ok && build.RuntimeFilterSpec != nil &&
+				build.RuntimeFilterSpec.Tag == tag {
+				build.RuntimeFilterSpec = nil
+			}
+			return nil
+		})
+	}
 }
 
 func sameRuntimeFilterExecutionNode(left, right engine.Node) bool {

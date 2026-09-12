@@ -346,3 +346,65 @@ func TestOptimizeSingleSumDistinctKeepsExistingLogicalRewriteOnly(t *testing.T) 
 	require.Empty(t, builder.distinctKeyLocalPreAggs)
 	require.Empty(t, builder.distinctKeyShuffleCols)
 }
+
+func TestOptimizeSingleAvgDistinctBuildsLogicalRewrite(t *testing.T) {
+	key := distinctAggTestCol(types.T_int64, 1, 1, 1_000_000)
+	avgDistinct := distinctAggTestExpr(function.AVG, true,
+		planpb.Type{Id: int32(types.T_float64)}, key)
+	builder, outer := newDistinctAggTestBuilder(
+		1_000_000, 10, 1_000_000, []*planpb.Expr{avgDistinct})
+
+	require.NoError(t, builder.optimizeDistinctAgg(1))
+
+	require.Len(t, builder.qry.Nodes, 3)
+	inner := builder.qry.Nodes[2]
+	require.Equal(t, []int32{2}, outer.Children)
+	require.Len(t, inner.GroupBy, 2)
+	require.Empty(t, inner.AggList)
+	require.Zero(t, uint64(outer.AggList[0].GetF().Func.Obj)&function.Distinct)
+	functionID, _ := function.DecodeOverloadID(outer.AggList[0].GetF().Func.Obj)
+	require.Equal(t, int32(function.AVG), functionID)
+	require.False(t, RequiresSingleStageDistinctAgg(outer))
+	require.Empty(t, builder.distinctKeyLocalPreAggs)
+	require.Empty(t, builder.distinctKeyShuffleCols)
+}
+
+func TestOptimizeAvgDistinctKeepsConservativeFallbacks(t *testing.T) {
+	newAvg := func() *planpb.Expr {
+		return distinctAggTestExpr(
+			function.AVG,
+			true,
+			planpb.Type{Id: int32(types.T_float64)},
+			distinctAggTestCol(types.T_int64, 1, 1, 100),
+		)
+	}
+
+	t.Run("mixed aggregates", func(t *testing.T) {
+		builder, aggregate := newDistinctAggTestBuilder(
+			1_000, 10, 100,
+			[]*planpb.Expr{
+				newAvg(),
+				distinctAggTestExpr(
+					function.SUM,
+					false,
+					planpb.Type{Id: int32(types.T_int64)},
+					distinctAggTestCol(types.T_int64, 1, 2, 100),
+				),
+			},
+		)
+
+		require.NoError(t, builder.optimizeDistinctAgg(1))
+		require.Len(t, builder.qry.Nodes, 2)
+		require.True(t, RequiresSingleStageDistinctAgg(aggregate))
+	})
+
+	t.Run("grouping set", func(t *testing.T) {
+		builder, aggregate := newDistinctAggTestBuilder(
+			1_000, 10, 100, []*planpb.Expr{newAvg()})
+		aggregate.GroupingFlag = []bool{false}
+
+		require.NoError(t, builder.optimizeDistinctAgg(1))
+		require.Len(t, builder.qry.Nodes, 2)
+		require.True(t, RequiresSingleStageDistinctAgg(aggregate))
+	})
+}

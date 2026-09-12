@@ -2236,6 +2236,7 @@ func (tc *txnOperator) GetOverview() TxnOverview {
 
 	return TxnOverview{
 		CreateAt:  tc.reset.createAt,
+		AccountID: tc.opts.options.GetAccountID(),
 		Meta:      tc.mu.txn,
 		UserTxn:   tc.opts.options.UserTxn(),
 		WaitLocks: tc.getWaitLocksLocked(),

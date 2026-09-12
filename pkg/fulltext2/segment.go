@@ -395,11 +395,6 @@ type Segment struct {
 	// in-memory (tail) segment, whose bytes are GC-managed Go slices.
 	mmapData []byte
 	mmapPath string
-	// ownedBytes is the unique serialized archive retained by a loaded segment.
-	// The tail pool counts this once because pkRaw, FST, ranking, blocks, and
-	// positions are views into the same archive.
-	ownedBytes int64
-	lease      *segmentLease // non-nil for a view into the immutable base pool
 }
 
 // numDocs is the segment's document count, valid for both a build-side segment (== len(pks))
@@ -688,20 +683,6 @@ func cbAppendNull(k *vectorindex.ColumnBuffer, fixedW int, fixed bool) {
 // reading. The loaded posting blocks (blockData) are views into mmapData, so
 // munmap reclaims them — there is no off-heap buffer to deallocate.
 func (s *Segment) Free() {
-	if s.lease != nil {
-		lease := s.lease
-		s.lease = nil
-		// The view does not own the mmap. Clear its aliases as well so a
-		// defensive second Free cannot munmap the shared mapping directly.
-		s.mmapData, s.mmapPath = nil, ""
-		s.ranking, s.blocks, s.positions = nil, nil, nil
-		lease.release()
-		return
-	}
-	s.freeOwned()
-}
-
-func (s *Segment) freeOwned() {
 	if s.mmapData != nil {
 		_ = munmap(s.mmapData)
 		s.mmapData = nil
@@ -711,7 +692,6 @@ func (s *Segment) freeOwned() {
 		s.mmapPath = ""
 	}
 	s.ranking, s.blocks, s.positions = nil, nil, nil
-	s.ownedBytes = 0
 }
 
 // freeSegs frees every segment's off-heap buffers (nil-safe on build-side segs).

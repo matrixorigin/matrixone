@@ -374,9 +374,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:                        plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		hasExecutableCTASTypeDefault: true,
 		layout:                       STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
-		},
+		checkFn:                      bitOpsAggTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -393,9 +391,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:                        plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		hasExecutableCTASTypeDefault: true,
 		layout:                       STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
-		},
+		checkFn:                      bitOpsAggTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -412,9 +408,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:                        plan.Function_AGG | plan.Function_PRODUCE_NO_NULL,
 		hasExecutableCTASTypeDefault: true,
 		layout:                       STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
-		},
+		checkFn:                      bitOpsAggTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -431,7 +425,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return mysqlNumericAggTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -449,7 +443,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return mysqlNumericAggTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -467,7 +461,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return mysqlNumericAggTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -485,7 +479,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return mysqlNumericAggTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -759,6 +753,36 @@ func typeInList(typ types.T, supported []types.T) bool {
 	return false
 }
 
+// mysqlNumericAggTypeCheck implements MySQL's numeric coercion for variance
+// and standard-deviation aggregates. Unlike SUM, these aggregates accept
+// string and temporal expressions and evaluate their numeric representation.
+func mysqlNumericAggTypeCheck(inputs []types.Type) checkResult {
+	if len(inputs) != 1 {
+		return newCheckResultWithFailure(failedAggParametersWrong)
+	}
+
+	t := inputs[0]
+	switch {
+	case t.Oid == types.T_any:
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
+	case typeInList(t.Oid, SumSupportedTypes):
+		return newCheckResultWithSuccess(0)
+	case t.Oid.IsMySQLString():
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
+	case t.Oid == types.T_date || t.Oid == types.T_time ||
+		t.Oid == types.T_datetime || t.Oid == types.T_timestamp:
+		scale := int32(0)
+		if t.Oid != types.T_date {
+			scale = t.Scale
+		}
+		return newCheckResultWithCast(0, []types.Type{
+			types.New(types.T_decimal128, 38, scale),
+		})
+	default:
+		return newCheckResultWithFailure(failedAggParametersWrong)
+	}
+}
+
 var SumSupportedTypes = []types.T{
 	types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -811,6 +835,13 @@ var BitOpsSupportedTypes = []types.T{
 	types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 	types.T_binary, types.T_varbinary,
 	types.T_bit,
+}
+
+func bitOpsAggTypeCheck(_ []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 && aggexec.IsBitwiseAggregateOperandTooWide(inputs[0]) {
+		return newCheckResultWithFailure(failedBitwiseAggregateOperandsSize)
+	}
+	return fixedUnaryAggTypeCheck(inputs, BitOpsSupportedTypes)
 }
 
 var BitOpsReturnType = func(typs []types.Type) types.Type {

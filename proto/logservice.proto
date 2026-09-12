@@ -113,6 +113,12 @@ message LogShardInfo {
   // NonVotingReplicas is the non-voting replicas belongs to this shard.
   map<uint64, string> NonVotingReplicas = 6;
 
+  // ReplicaStoreIncarnations records the persistent storage incarnation from
+  // which each running replica last reported. It fences a replacement store
+  // with the same UUID from reusing a replica ID whose durable Raft state was
+  // lost with the previous storage incarnation.
+  map<uint64, string> ReplicaStoreIncarnations = 7;
+
   // TODO: per shard stats like CPU/memory/network usage can be added here
 };
 
@@ -201,6 +207,10 @@ message LogStoreHeartbeat {
   // ViewMetadataAdmissionSupported proves that every HAKeeper RSM hosted by
   // this LogStore can decode the durable admission update and snapshot fields.
   bool ViewMetadataAdmissionSupported = 10;
+  // StoreIncarnation identifies the persistent storage generation used by
+  // this Log store. It remains stable across process restarts and changes when
+  // the store starts from a new data directory.
+  string StoreIncarnation = 11;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -797,6 +807,7 @@ message LogStoreInfo {
   Locality Locality = 8 [(gogoproto.nullable) = false];
   bool CommandDeliverySupported = 9;
   bool ViewMetadataAdmissionSupported = 10;
+  string StoreIncarnation = 11;
 }
 
 message LogState {

@@ -842,10 +842,11 @@ const (
 	LAST_KAFKA_MESSAGE_ID = 576
 
 	INTERNAL_JSON_COMPARISON_PARAM = 577
+	INTERNAL_JSON_MEMBER_OF        = 578
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 578
+	FUNCTION_END_NUMBER = 579
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1147,6 +1148,7 @@ var functionIdRegister = map[string]int32{
 	"json_merge_patch":               JSON_MERGE_PATCH,
 	"json_merge_preserve":            JSON_MERGE_PRESERVE,
 	"json_overlaps":                  JSON_OVERLAPS,
+	"member of":                      INTERNAL_JSON_MEMBER_OF,
 	"onnx_run":                       ONNX_RUN,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,

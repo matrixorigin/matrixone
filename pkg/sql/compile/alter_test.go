@@ -242,11 +242,12 @@ func TestAlterDataBranchLineageMetadata(t *testing.T) {
 }
 
 func TestValidateAlterDataBranchLineageTxn(t *testing.T) {
-	require.NoError(t, validateAlterDataBranchLineageTxn(false, true, true))
-	require.NoError(t, validateAlterDataBranchLineageTxn(false, true, false))
+	require.NoError(t, validateAlterDataBranchLineageTxn("ALTER", false, true, true))
+	require.NoError(t, validateAlterDataBranchLineageTxn("ALTER", false, true, false))
 
 	for _, tc := range []struct {
 		name        string
+		statement   string
 		byBegin     bool
 		autocommit  bool
 		pessimistic bool
@@ -254,6 +255,7 @@ func TestValidateAlterDataBranchLineageTxn(t *testing.T) {
 	}{
 		{
 			name:        "explicit begin",
+			statement:   "ALTER",
 			byBegin:     true,
 			autocommit:  true,
 			pessimistic: true,
@@ -261,17 +263,93 @@ func TestValidateAlterDataBranchLineageTxn(t *testing.T) {
 		},
 		{
 			name:        "autocommit disabled",
+			statement:   "ALTER",
 			autocommit:  false,
 			pessimistic: true,
 			want:        "not supported inside an explicit transaction",
 		},
+		{
+			name:        "truncate explicit begin identifies statement",
+			statement:   "TRUNCATE",
+			byBegin:     true,
+			autocommit:  true,
+			pessimistic: true,
+			want:        "TRUNCATE on a data-branch lineage is not supported inside an explicit transaction",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateAlterDataBranchLineageTxn(tc.byBegin, tc.autocommit, tc.pessimistic)
+			err := validateAlterDataBranchLineageTxn(tc.statement, tc.byBegin, tc.autocommit, tc.pessimistic)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), tc.want)
 		})
 	}
+}
+
+func TestPrepareAlterDataBranchLineageRejectsLiveBranchTxnWithStatement(t *testing.T) {
+	const (
+		oldTableID    = uint64(42)
+		parentTableID = uint64(41)
+		database      = "test"
+		table         = "dept"
+	)
+	ctrl := gomock.NewController(t)
+	spyExec := &alterCopyInsertSpyExecutor{results: make(map[string]executor.Result)}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{ByBegin: true, Autocommit: true})
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{})
+	c.proc.Base.TxnOperator = txnOp
+
+	participationSQL := alterDataBranchParticipationSQL(oldTableID)
+	metadataSQL := "select table_id, p_table_id, clone_ts, creator, level, table_deleted from mo_catalog.mo_branch_metadata"
+	spyExec.results[participationSQL] = newAlterCopyFixedResult(
+		t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
+	)
+	spyExec.results[metadataSQL] = newAlterLineageMetadataResult(
+		t, c.proc.Mp(), []uint64{oldTableID}, []uint64{parentTableID}, []int64{100},
+		[]uint64{uint64(catalog.System_Account)}, []string{"table"}, []bool{false},
+	)
+
+	lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table, "TRUNCATE")
+	require.ErrorContains(t, err, "TRUNCATE on a data-branch lineage is not supported inside an explicit transaction")
+	require.False(t, lineagePlan.enabled)
+	require.Equal(t, []string{participationSQL, metadataSQL}, spyExec.executedSQLs)
+}
+
+func TestPrepareAlterDataBranchLineageRejectsImplicitCommitOrigin(t *testing.T) {
+	const (
+		oldTableID    = uint64(42)
+		parentTableID = uint64(41)
+		database      = "test"
+		table         = "dept"
+	)
+	ctrl := gomock.NewController(t)
+	spyExec := &alterCopyInsertSpyExecutor{results: make(map[string]executor.Result)}
+	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{Autocommit: true})
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{})
+	c.proc.Base.TxnOperator = txnOp
+	c.proc.ReplaceTopCtx(context.WithValue(
+		c.proc.GetTopContext(),
+		defines.ImplicitCommitFromExplicitTxn{},
+		true,
+	))
+
+	participationSQL := alterDataBranchParticipationSQL(oldTableID)
+	metadataSQL := "select table_id, p_table_id, clone_ts, creator, level, table_deleted from mo_catalog.mo_branch_metadata"
+	spyExec.results[participationSQL] = newAlterCopyFixedResult(
+		t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
+	)
+	spyExec.results[metadataSQL] = newAlterLineageMetadataResult(
+		t, c.proc.Mp(), []uint64{oldTableID}, []uint64{parentTableID}, []int64{100},
+		[]uint64{uint64(catalog.System_Account)}, []string{"table"}, []bool{false},
+	)
+
+	lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table, "TRUNCATE")
+	require.ErrorContains(t, err, "TRUNCATE on a data-branch lineage is not supported inside an explicit transaction")
+	require.False(t, lineagePlan.enabled)
+	require.Equal(t, []string{participationSQL, metadataSQL}, spyExec.executedSQLs)
 }
 
 func TestPrepareAlterDataBranchLineageAllowsHistoricalSourceTxn(t *testing.T) {
@@ -308,7 +386,7 @@ func TestPrepareAlterDataBranchLineageAllowsHistoricalSourceTxn(t *testing.T) {
 				t, c.proc.Mp(), types.T_int32.ToType(), []int32{1},
 			)
 
-			lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table)
+			lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table, "ALTER")
 			require.NoError(t, err)
 			require.True(t, lineagePlan.enabled)
 			require.True(t, lineagePlan.preserveHistoricalSource)
@@ -366,7 +444,7 @@ func TestPrepareAlterDataBranchLineageAllowsHistoricalOnlyGenerationInExplicitTx
 		t, c.proc.Mp(), nil, nil, nil, nil, nil, nil, nil,
 	)
 
-	lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table)
+	lineagePlan, err := c.prepareAlterDataBranchLineage(oldTableID, database, table, "ALTER")
 	require.NoError(t, err)
 	require.True(t, lineagePlan.enabled)
 	require.False(t, lineagePlan.preserveHistoricalSource)
@@ -1003,73 +1081,75 @@ func TestReconcileAlterCopyAutoIncrementUsesStableIdentityAndSafeBounds(t *testi
 }
 
 func TestReconcileAlterCopyAutoIncrementPreservesFreshColumnInitialization(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	resultMP := mpool.MustNewZero()
-	maxSQL := "select cast(coalesce(max(case when `new_id` > 0 then `new_id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
-	spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
-		maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
-	}}
-	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
-	c.proc.SetResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
-		switch name {
-		case "auto_increment_offset":
-			require.True(t, isSystemVar)
-			require.False(t, isGlobalVar)
-			return int64(10), nil
-		case "lower_case_table_names":
-			return int64(1), nil
-		default:
-			return nil, fmt.Errorf("unexpected variable %q", name)
-		}
-	})
-	srcDef := &plan.TableDef{
-		TblId: 1,
-		Cols: []*plan.ColDef{{
-			ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)},
-		}},
-	}
-	copyDef := &plan.TableDef{
-		TblId: 2,
-		Name:  "dept_copy",
-		Cols: []*plan.ColDef{
-			{ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
-			{ColId: 11, Name: catalog.Row_ID, Hidden: true, Typ: plan.Type{Id: int32(types.T_Rowid)}},
-			{ColId: 12, Name: catalog.FakePrimaryKeyColName, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
-			{ColId: 20, Name: "new_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
-		},
-	}
-	createdDef := &plan.TableDef{
-		TblId: 2,
-		Name:  "dept_copy",
-		Cols: []*plan.ColDef{
-			{ColId: 30, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
-			{ColId: 31, Name: "new_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
-			{ColId: 32, Name: catalog.FakePrimaryKeyColName, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
-		},
-	}
-	copyRel := mock_frontend.NewMockRelation(ctrl)
-	copyRel.EXPECT().GetTableDef(gomock.Any()).Return(createdDef)
-	copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId)
-	copyRel.EXPECT().GetDBID(gomock.Any()).Return(uint64(1))
-	copyRel.EXPECT().AlterTable(gomock.Any(), nil, gomock.Any()).DoAndReturn(
-		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
-			require.Equal(t, []*api.AlterTableReq{
-				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 9, 0),
-			}, reqs)
-			return nil
-		},
-	)
-	autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
-	autoSvc.EXPECT().SetOffset(
-		c.proc.Ctx, copyDef.TblId, 1, "new_id", uint64(9), c.proc.GetTxnOperator(),
-	)
-	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
+	for _, sessionOffset := range []int64{1, 10} {
+		t.Run(fmt.Sprintf("session offset %d", sessionOffset), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			resultMP := mpool.MustNewZero()
+			maxSQL := "select cast(coalesce(max(case when `new_id` > 0 then `new_id` else 0 end), 0) as unsigned) from `test`.`dept_copy`"
+			spyExec := &alterCopyInsertSpyExecutor{results: map[string]executor.Result{
+				maxSQL: newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
+			}}
+			c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+			autoOffsetRequested := false
+			c.proc.SetResolveVariableFunc(func(name string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+				switch name {
+				case "auto_increment_offset":
+					autoOffsetRequested = true
+					require.True(t, isSystemVar)
+					require.False(t, isGlobalVar)
+					return sessionOffset, nil
+				case "lower_case_table_names":
+					return int64(1), nil
+				default:
+					return nil, fmt.Errorf("unexpected variable %q", name)
+				}
+			})
+			srcDef := &plan.TableDef{
+				TblId: 1,
+				Cols: []*plan.ColDef{{
+					ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)},
+				}},
+			}
+			copyDef := &plan.TableDef{
+				TblId: 2,
+				Name:  "dept_copy",
+				Cols: []*plan.ColDef{
+					{ColId: 10, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+					{ColId: 11, Name: catalog.Row_ID, Hidden: true, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+					{ColId: 12, Name: catalog.FakePrimaryKeyColName, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+					{ColId: 20, Name: "new_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+				},
+			}
+			createdDef := &plan.TableDef{
+				TblId: 2,
+				Name:  "dept_copy",
+				Cols: []*plan.ColDef{
+					{ColId: 30, Name: "payload", Typ: plan.Type{Id: int32(types.T_int64)}},
+					{ColId: 31, Name: "new_id", Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+					{ColId: 32, Name: catalog.FakePrimaryKeyColName, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+				},
+			}
+			copyRel := mock_frontend.NewMockRelation(ctrl)
+			copyRel.EXPECT().GetTableDef(gomock.Any()).Return(createdDef)
+			copyRel.EXPECT().GetTableID(gomock.Any()).Return(copyDef.TblId)
+			// A fresh empty allocator needs no SetOffset, epoch publication, or
+			// cleanup ownership. Unexpected mock calls make those boundaries
+			// explicit and keep this test independent of session variables.
+			autoSvc := mock_frontend.NewMockAutoIncrementService(ctrl)
+			incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
 
-	require.NoError(t, c.reconcileAlterCopyAutoIncrement(
-		"test", srcDef, copyDef, copyRel, false, newAlterAutoIncrementResetCleanup(c),
-	))
-	require.Equal(t, []string{maxSQL}, spyExec.executedSQLs)
-	require.Zero(t, resultMP.CurrNB())
+			cleanup := newAlterAutoIncrementResetCleanup(c)
+			require.NoError(t, c.reconcileAlterCopyAutoIncrement(
+				"test", srcDef, copyDef, copyRel, false, cleanup,
+			))
+			require.False(t, autoOffsetRequested)
+			require.Equal(t, []string{maxSQL}, spyExec.executedSQLs)
+			require.Zero(t, resultMP.CurrNB())
+			statementErr := errors.New("later ALTER COPY step failed")
+			cleanup.finish(&statementErr)
+			require.ErrorContains(t, statementErr, "later ALTER COPY step failed")
+		})
+	}
 }
 
 func TestReconcileAlterCopyAutoIncrementAdvancesFreshColumnFromCopiedRows(t *testing.T) {
@@ -1119,7 +1199,7 @@ func TestReconcileAlterCopyAutoIncrementAdvancesFreshColumnFromCopiedRows(t *tes
 	require.Zero(t, resultMP.CurrNB())
 }
 
-func TestReconcileAlterCopyAutoIncrementReappliesConfiguredFreshColumnAlongsideRetainedColumn(t *testing.T) {
+func TestReconcileAlterCopyAutoIncrementPreservesFreshColumnAlongsideRetainedColumn(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	resultMP := mpool.MustNewZero()
 	sourceOffsetSQL := "select col_index, offset from mo_catalog.mo_increment_columns where table_id = 1"
@@ -1131,11 +1211,13 @@ func TestReconcileAlterCopyAutoIncrementReappliesConfiguredFreshColumnAlongsideR
 		freshMaxSQL:     newAlterCopyFixedResult(t, resultMP, types.T_uint64.ToType(), []uint64{0}),
 	}}
 	c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+	autoOffsetRequested := false
 	c.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 		switch name {
 		case "lower_case_table_names":
 			return int64(1), nil
 		case "auto_increment_offset":
+			autoOffsetRequested = true
 			return int64(10), nil
 		default:
 			return nil, fmt.Errorf("unexpected variable %q", name)
@@ -1164,7 +1246,6 @@ func TestReconcileAlterCopyAutoIncrementReappliesConfiguredFreshColumnAlongsideR
 		func(_ context.Context, _ *engine.ConstraintDef, reqs []*api.AlterTableReq) error {
 			require.Equal(t, []*api.AlterTableReq{
 				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 50, 0),
-				api.NewUpdateAutoIncrementReq(1, copyDef.TblId, 9, 0),
 			}, reqs)
 			return nil
 		},
@@ -1173,9 +1254,6 @@ func TestReconcileAlterCopyAutoIncrementReappliesConfiguredFreshColumnAlongsideR
 	gomock.InOrder(
 		autoSvc.EXPECT().SetOffset(
 			c.proc.Ctx, copyDef.TblId, 0, "old_id", uint64(50), c.proc.GetTxnOperator(),
-		),
-		autoSvc.EXPECT().SetOffset(
-			c.proc.Ctx, copyDef.TblId, 1, "new_id", uint64(9), c.proc.GetTxnOperator(),
 		),
 	)
 	incrservice.SetAutoIncrementServiceByID(c.proc.GetService(), autoSvc)
@@ -1188,6 +1266,7 @@ func TestReconcileAlterCopyAutoIncrementReappliesConfiguredFreshColumnAlongsideR
 		[]string{sourceOffsetSQL, retainedMaxSQL, freshMaxSQL},
 		spyExec.executedSQLs,
 	)
+	require.False(t, autoOffsetRequested)
 	require.Zero(t, resultMP.CurrNB())
 }
 

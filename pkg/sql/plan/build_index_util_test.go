@@ -224,8 +224,8 @@ func TestCheckIndexColumnSupportability(t *testing.T) {
 		require.Error(t, checkIndexColumnSupportability(ctx, colOf(types.T_array_float16), keyPart, "unique"))
 	})
 
-	t.Run("enum rejected only in primary key", func(t *testing.T) {
-		require.Error(t, checkIndexColumnSupportability(ctx, colOf(types.T_enum, "a", "b"), keyPart, "primary"))
+	t.Run("enum allowed in indexes", func(t *testing.T) {
+		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_enum, "a", "b"), keyPart, "primary"))
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_enum, "a", "b"), keyPart, "secondary"))
 		require.NoError(t, checkIndexColumnSupportability(ctx, colOf(types.T_enum, "a", "b"), keyPart, "unique"))
 	})

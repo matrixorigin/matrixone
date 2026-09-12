@@ -129,13 +129,19 @@ func RegenerateViewDefinition(
 
 	var selectStmt *tree.Select
 	var columnNames tree.IdentifierList
+	var viewDatabase, viewName string
 	switch statement := statements[0].(type) {
 	case *tree.CreateView:
 		selectStmt, columnNames = statement.AsSource, statement.ColNames
+		viewDatabase, viewName = string(statement.Name.SchemaName), string(statement.Name.ObjectName)
 	case *tree.AlterView:
 		selectStmt, columnNames = statement.AsSource, statement.ColNames
+		viewDatabase, viewName = string(statement.Name.SchemaName), string(statement.Name.ObjectName)
 	default:
 		return nil, moerr.NewParseError(ctx.GetContext(), "persisted View statement is not CREATE/ALTER VIEW")
+	}
+	if viewDatabase == "" {
+		viewDatabase = viewData.DefaultDatabase
 	}
 
 	regenerationCtx := &viewRegenerationContext{
@@ -144,7 +150,8 @@ func RegenerateViewDefinition(
 		rootSQL:             viewData.Stmt,
 		lowerCaseTableNames: lowerCaseTableNames,
 	}
-	tableDef, err := genViewTableDef(regenerationCtx, selectStmt, columnNames)
+	tableDef, err := genViewTableDef(
+		regenerationCtx, selectStmt, columnNames, viewDatabase, viewName)
 	if err != nil {
 		return nil, err
 	}

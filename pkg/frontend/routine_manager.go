@@ -442,17 +442,21 @@ func (rm *RoutineManager) Handler(rs *Conn, msg []byte) error {
 		logutil.Errorf("%s error:%v", connectionInfo, err)
 		return err
 	}
+	if len(msg) == 0 {
+		return moerr.NewInvalidInput(ctx, "empty MySQL command packet")
+	}
+	req := ToRequest(msg)
+	if req.GetCmd() == COM_RESET_CONNECTION || req.GetCmd() == COM_CHANGE_USER {
+		return routine.handleSessionCommand(ctx, req)
+	}
 	if !routine.mc.tryBeginRequest() {
 		return moerr.NewInternalError(ctx, "cannot process request as routine is closed or busy")
 	}
 	defer routine.mc.endRequest()
 	routine.setInProcessRequest(true)
 	defer routine.setInProcessRequest(false)
-	payload := msg
-
 	ses := routine.getSession()
 
-	req := ToRequest(payload)
 	//handle request
 	err = routine.handleRequest(req)
 	if err != nil {
@@ -560,6 +564,24 @@ func (rm *RoutineManager) ResetSessionWithContext(
 		return moerr.NewInternalErrorf(rm.ctx, "cannot get routine to clear session %d", req.ConnID)
 	}
 	return routine.resetSessionWithContext(ctx, rm.baseService.ID(), resp)
+}
+
+// RefreshSessionAuthWithContext revalidates a cached backend's credentials and
+// resolved authorization state against the current catalog.
+func (rm *RoutineManager) RefreshSessionAuthWithContext(
+	ctx context.Context,
+	req *query.RefreshSessionAuthRequest,
+	resp *query.RefreshSessionAuthResponse,
+) error {
+	if req == nil || resp == nil {
+		return moerr.NewInvalidInput(rm.ctx, "invalid refresh session authentication request")
+	}
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
+		return moerr.NewInternalErrorf(rm.ctx,
+			"cannot get routine to refresh session authentication %d", req.ConnID)
+	}
+	return routine.refreshSessionAuthWithContext(ctx, req, resp)
 }
 
 func (rm *RoutineManager) cancelCtx() {

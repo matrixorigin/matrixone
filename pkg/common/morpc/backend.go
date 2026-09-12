@@ -182,6 +182,7 @@ type remoteBackend struct {
 	writeC          chan *Future
 	waitWriteC      chan struct{}
 	stopWriteC      chan struct{}
+	stopWriteOnce   sync.Once
 	resetConnC      chan error
 	stopper         *stopper.Stopper
 	readStopper     *stopper.Stopper
@@ -241,6 +242,8 @@ type remoteBackend struct {
 		// concurrent request responds. overflow is sticky for the connection
 		// generation, bounding fault-path memory when timed-out requests keep
 		// arriving faster than the read timeout can recycle the transport.
+		// This tracker serves probe-enabled backends only; probe-less backends
+		// answer the same question via pendingRequestReadWindow (see its doc).
 		pending      map[uint64]struct{}
 		pendingSince int64
 		overflow     bool
@@ -253,6 +256,12 @@ type remoteBackend struct {
 		// draining seals new pool admission after data transport inactivity.
 		// Existing Futures remain owned by this backend and may still complete.
 		draining atomic.Bool
+		// lastStreamFlushAt is the livenessTick of the most recent successfully
+		// flushed user stream message. Probe-less backends grant stream traffic
+		// one complete read window from this stamp so a stream write admitted
+		// late in an idle read window is not charged the idle time; it is never
+		// reset because an old stamp only ever grants less time.
+		lastStreamFlushAt atomic.Int64
 	}
 
 	pool struct {
@@ -617,7 +626,7 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 
 			var writeDeadline time.Time
 			written := messages[:0]
-			for _, f := range messages {
+			for idx, f := range messages {
 				rb.metrics.writeLatencyDurationHistogram.Observe(start.Sub(f.send.createAt).Seconds())
 
 				id := f.getSendMessageID()
@@ -626,7 +635,23 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 					continue
 				}
 
-				if deadline := rb.doWrite(id, f); !deadline.IsZero() {
+				deadline, err := rb.doWrite(id, f)
+				if err != nil {
+					// Encoding may have written a partial frame (including directly
+					// to the socket). Never flush or reuse this connection after it.
+					rb.changeToStopping()
+					rb.stopWriteLoop()
+					rb.cancelActiveStreams()
+					for _, pending := range written {
+						pending.messageSent(err)
+					}
+					for _, pending := range messages[idx+1:] {
+						pending.messageSent(err)
+					}
+					rb.makeAllWaitingFutureFailed(err)
+					return
+				}
+				if !deadline.IsZero() {
 					writeDeadline = earliestDeadline(writeDeadline, deadline)
 					written = append(written, f)
 				}
@@ -643,8 +668,28 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 							append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
 						f.messageSent(err)
 					}
+					rb.changeToStopping()
+					rb.stopWriteLoop()
+					rb.cancelActiveStreams()
+					rb.makeAllWaitingFutureFailed(err)
+					return
 				} else {
+					// Record only transport-complete writes. A request that merely
+					// reached the userspace buffer must not extend the read window
+					// when Flush ultimately fails. Every request in the batch became
+					// transport-complete at this flush, so one tick serves them all.
+					var flushedAt int64
+					if rb.options.readTimeout > 0 && rb.options.livenessProbe == nil {
+						flushedAt = rb.livenessTick()
+					}
 					for _, f := range written {
+						if flushedAt != 0 {
+							if f.isUserUnary() {
+								f.writtenAt.Store(flushedAt)
+							} else if f.send.stream && !f.send.internal {
+								rb.atomic.lastStreamFlushAt.Store(flushedAt)
+							}
+						}
 						f.messageSent(nil)
 					}
 				}
@@ -658,23 +703,28 @@ func (rb *remoteBackend) writeLoop(ctx context.Context) {
 	}
 }
 
-func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Time {
+func (rb *remoteBackend) doWrite(id uint64, f *Future) (time.Time, error) {
 	if !rb.options.filter(f.send.Message, rb.remote) {
 		f.messageSent(messageSkipped)
-		return time.Time{}
+		return time.Time{}, nil
 	}
 	// already timeout in future, and future will get a ctx timeout
 	if f.send.Timeout() {
 		f.messageSent(f.send.Ctx.Err())
-		return time.Time{}
+		return time.Time{}, nil
 	}
 
 	v, err := f.send.GetTimeoutFromContext()
 	if err != nil {
 		f.messageSent(err)
-		return time.Time{}
+		return time.Time{}, nil
 	}
 	deadline := time.Now().Add(v)
+	if f.streamOwner != nil &&
+		!f.streamOwner.assignSendSequence(&f.send) {
+		f.messageSent(backendClosed)
+		return time.Time{}, nil
+	}
 
 	// For PayloadMessage, the internal Codec will write the Payload directly to the underlying socket
 	// instead of copying it to the buffer, so the write deadline of the underlying conn needs to be reset
@@ -703,9 +753,9 @@ func (rb *remoteBackend) doWrite(id uint64, f *Future) time.Time {
 			"write request failed",
 			append(rb.logFields(), zap.Uint64("request-id", id), zap.Error(err))...)
 		f.messageSent(err)
-		return time.Time{}
+		return time.Time{}, err
 	}
-	return deadline
+	return deadline, nil
 }
 
 func (rb *remoteBackend) readLoop(ctx context.Context) {
@@ -743,7 +793,7 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 			msg, err := rb.conn.Read(goetty.ReadOptions{Timeout: rb.options.readTimeout})
 			n++
 			if err != nil || rb.options.disconnectAfterRead == n {
-				if err != nil && rb.keepDataConnectionAfterProbe(ctx, err) {
+				if err != nil && rb.keepDataConnectionAfterReadTimeout(ctx, err) {
 					continue
 				}
 				if err == nil {
@@ -971,7 +1021,9 @@ func (rb *remoteBackend) removeActiveStream(s *stream) {
 }
 
 func (rb *remoteBackend) stopWriteLoop() {
-	close(rb.stopWriteC)
+	// Wake every admission waiter before termination waits for stream locks.
+	// The writer's failure path and Close may both own this notification.
+	rb.stopWriteOnce.Do(func() { close(rb.stopWriteC) })
 }
 
 func (rb *remoteBackend) requestDone(
@@ -1332,11 +1384,16 @@ func (rb *remoteBackend) getPingTimeout() time.Duration {
 	return time.Duration(math.MaxInt64)
 }
 
-func (rb *remoteBackend) keepDataConnectionAfterProbe(
+// keepDataConnectionAfterReadTimeout decides whether a socket read timeout may
+// recycle the data connection. A socket read can begin while the connection is
+// idle and inherit a deadline that is already mostly consumed when the next
+// request arrives. Idle time is not request latency, so admitted traffic is
+// judged against request-owned read windows instead of the socket's deadline.
+func (rb *remoteBackend) keepDataConnectionAfterReadTimeout(
 	ctx context.Context,
 	readErr error,
 ) bool {
-	if rb.options.livenessProbe == nil || !isTimeoutError(readErr) {
+	if !isTimeoutError(readErr) {
 		return false
 	}
 	select {
@@ -1344,17 +1401,45 @@ func (rb *remoteBackend) keepDataConnectionAfterProbe(
 		return false
 	default:
 	}
+	if rb.options.livenessProbe == nil {
+		return rb.keepOrdinaryDataConnection()
+	}
+	return rb.keepProbedDataConnection(ctx)
+}
 
-	// A read deadline on an otherwise idle data connection is not evidence of
-	// a stalled data path. In particular, do not make healthy data depend on a
-	// control transport that may be temporarily unavailable when there is no
-	// outstanding or unacknowledged user traffic to diagnose.
-	oldestWritten := rb.dataPendingSince()
-	if oldestWritten == 0 {
+// keepOrdinaryDataConnection is the probe-less policy. Every admitted user
+// unary request owns exactly one complete read window: it starts at admission,
+// restarts once at the successful flush, and a terminal send failure owns
+// none. The oldest window rules the decision: once the oldest admitted request
+// has waited one full window without any read progress, the transport is
+// stalled and a newer admission cannot rescue it — this also bounds a write
+// blocked against a dead peer to one window instead of letting the queued
+// state renew the connection until the request deadline. Stream traffic keeps
+// the coarser bound of one window from the most recent flushed stream message,
+// but only while no unary request owns a window. Once the oldest unary window
+// expires, newer stream traffic cannot rescue that already-stalled connection
+// generation. An idle backend (no open window at all) keeps the pre-existing
+// idle-timeout close behavior.
+func (rb *remoteBackend) keepOrdinaryDataConnection() bool {
+	now := rb.livenessTick()
+	unaryWindow := rb.pendingRequestReadWindow()
+	if unaryWindow != 0 {
+		return rb.withinReadWindow(now, unaryWindow)
+	}
+	return rb.withinReadWindow(now, rb.atomic.lastStreamFlushAt.Load())
+}
+
+// keepProbedDataConnection is the probe-enabled policy: response inactivity
+// beyond one read window stops admission (draining) and consults the
+// independent liveness probe, but never closes the data connection here — a
+// probe failure is inconclusive because the peer may still return a valid slow
+// response on the data connection.
+func (rb *remoteBackend) keepProbedDataConnection(ctx context.Context) bool {
+	pendingSince := rb.dataPendingSince()
+	if pendingSince == 0 {
 		return true
 	}
-	if elapsed := rb.livenessTick() - oldestWritten; elapsed >= 0 &&
-		elapsed < rb.options.readTimeout.Nanoseconds() {
+	if rb.withinReadWindow(rb.livenessTick(), pendingSince) {
 		return true
 	}
 
@@ -1414,6 +1499,13 @@ func (rb *remoteBackend) livenessTick() int64 {
 	return time.Since(rb.livenessEpoch).Nanoseconds() + 1
 }
 
+// withinReadWindow reports whether the read window that started at since is
+// still open at now. Zero means no window. A start observed slightly after now
+// (a flush racing this scan) is inside its window, never expired.
+func (rb *remoteBackend) withinReadWindow(now, since int64) bool {
+	return since != 0 && now-since < rb.options.readTimeout.Nanoseconds()
+}
+
 func (rb *remoteBackend) recordDataWrite(id uint64, at int64) {
 	rb.livenessMu.Lock()
 	if rb.livenessMu.pending == nil {
@@ -1461,6 +1553,48 @@ func (rb *remoteBackend) dataPendingSince() int64 {
 	rb.livenessMu.Lock()
 	defer rb.livenessMu.Unlock()
 	return rb.livenessMu.pendingSince
+}
+
+// pendingRequestReadWindow returns the oldest read-window start among pending
+// user unary requests, or zero when none holds a window.
+//
+// This future scan is the probe-less twin of the livenessMu.pending machinery:
+// probe-enabled backends publish per-write progress into livenessMu
+// (recordDataWrite/recordDataProgress/resetDataProgress) because the probe
+// wants refresh-on-any-read semantics, while probe-less backends derive the
+// same "how long has user traffic been unanswered" answer from the
+// lifecycle-bounded future set. A timeout-policy change in one tracker usually
+// needs a matching look at the other.
+func (rb *remoteBackend) pendingRequestReadWindow() int64 {
+	rb.mu.RLock()
+	defer rb.mu.RUnlock()
+	oldest := int64(0)
+	for _, f := range rb.mu.futures {
+		if !f.isUserUnary() {
+			continue
+		}
+		// Read the publication flag before the timestamp. The success path stores
+		// writtenAt and then publishes waiting=true; this order prevents observing
+		// the old zero timestamp together with the new success flag.
+		waiting := f.waiting.Load()
+		start := f.writtenAt.Load()
+		if start == 0 {
+			if waiting {
+				// messageSent publishes waiting=true for both success and failure.
+				// Success publishes writtenAt first; therefore zero plus waiting is
+				// exactly the terminal-send-failure state, which owns no window.
+				continue
+			}
+			// Admitted/queued/write-in-progress: the window starts at admission.
+			// f.send is published by addFuture's lock and cleared only under the
+			// same lock in releaseFuture, so this read is synchronized.
+			start = f.send.createAt.Sub(rb.livenessEpoch).Nanoseconds() + 1
+		}
+		if oldest == 0 || start < oldest {
+			oldest = start
+		}
+	}
+	return oldest
 }
 
 func (rb *remoteBackend) resetDataProgress() {
@@ -1612,6 +1746,8 @@ type stream struct {
 	id                   uint64
 	sequence             uint32
 	lastReceivedSequence uint32
+	sendSequenceMu       sync.Mutex
+	sendSequenceClosed   bool
 	mu                   struct {
 		sync.RWMutex
 		closed   bool
@@ -1644,7 +1780,10 @@ func newStream(
 func (s *stream) init(id uint64, unlockAfterClose bool) {
 	s.id = id
 	s.unlockAfterClose = unlockAfterClose
+	s.sendSequenceMu.Lock()
 	s.sequence = 0
+	s.sendSequenceClosed = false
+	s.sendSequenceMu.Unlock()
 	s.lastReceivedSequence = 0
 	s.mu.closed = false
 	s.mu.terminal = false
@@ -1706,13 +1845,12 @@ func (s *stream) doSendLocked(
 	ctx context.Context,
 	f *Future,
 	request Message) error {
-	s.sequence++
 	f.init(RPCMessage{
-		Ctx:            ctx,
-		Message:        request,
-		stream:         true,
-		streamSequence: s.sequence,
+		Ctx:     ctx,
+		Message: request,
+		stream:  true,
 	})
+	f.streamOwner = s
 	f.ref()
 	err := s.sendFunc(f)
 	if err != nil {
@@ -1735,6 +1873,9 @@ func (s *stream) Receive() (chan Message, error) {
 
 func (s *stream) Close(closeConn bool) error {
 	s.cancel()
+	s.sendSequenceMu.Lock()
+	s.sendSequenceClosed = true
+	s.sendSequenceMu.Unlock()
 	if closeConn {
 		s.rb.logger.Info("stream call closed on client", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
 		s.rb.Close()
@@ -1759,6 +1900,21 @@ func (s *stream) Close(closeConn bool) error {
 		panic("BUG: stream close notification channel is full")
 	}
 	return nil
+}
+
+// assignSendSequence runs in the single backend write loop after a request has
+// passed filter and context checks. Assigning at Stream.Send time would consume
+// a sequence for a queued request that expires before transport write, making
+// the next control message look out of order to the server.
+func (s *stream) assignSendSequence(message *RPCMessage) bool {
+	s.sendSequenceMu.Lock()
+	defer s.sendSequenceMu.Unlock()
+	if s.sendSequenceClosed {
+		return false
+	}
+	s.sequence++
+	message.streamSequence = s.sequence
+	return true
 }
 
 func (s *stream) ID() uint64 {
@@ -1808,6 +1964,9 @@ func (s *stream) done(
 // unregister ownership with Stream.Close, as required by the Stream contract.
 func (s *stream) terminate() {
 	s.cancel()
+	s.sendSequenceMu.Lock()
+	s.sendSequenceClosed = true
+	s.sendSequenceMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mu.closed || s.mu.terminal {

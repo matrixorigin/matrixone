@@ -35,6 +35,115 @@ const (
 	Rows = 10
 )
 
+func TestWithTableVersionHoldsCatalogChangeLockThroughCallback(t *testing.T) {
+	cc := NewCatalog()
+	cc.setTableItem(&TableItem{
+		AccountId: 1, DatabaseId: 2, Id: 3, Name: "events", Version: 7,
+	}, true)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	type versionResult struct {
+		actual         uint32
+		found, matched bool
+	}
+	done := make(chan versionResult, 1)
+	go func() {
+		actual, found, matched := cc.WithTableVersion(1, 2, 3, 7, func() {
+			close(entered)
+			<-release
+		})
+		done <- versionResult{actual: actual, found: found, matched: matched}
+	}()
+
+	<-entered
+	require.False(t, cc.tableChange.TryLock(),
+		"catalog writers must not cross the version-check/publication boundary")
+	close(release)
+	result := <-done
+	require.Equal(t, uint32(7), result.actual)
+	require.True(t, result.found)
+	require.True(t, result.matched)
+	require.True(t, cc.tableChange.TryLock())
+	cc.tableChange.Unlock()
+
+	called := false
+	actual, found, matched := cc.WithTableVersion(1, 2, 3, 6, func() { called = true })
+	require.Equal(t, uint32(7), actual)
+	require.True(t, found)
+	require.False(t, matched)
+	require.False(t, called)
+
+	_, found, matched = cc.WithTableVersion(1, 2, 4, 7, func() { called = true })
+	require.False(t, found)
+	require.False(t, matched)
+	require.False(t, called)
+}
+
+func TestCurrentTableLookupHonorsLatestTableIdentity(t *testing.T) {
+	const (
+		accountID  = uint32(1)
+		databaseID = uint64(2)
+		oldTableID = uint64(3)
+		newTableID = uint64(4)
+	)
+	newItem := func(id uint64, version uint32, physicalTime int64, deleted bool) *TableItem {
+		return &TableItem{
+			AccountId: accountID, DatabaseId: databaseID, Id: id,
+			Name: "events", Version: version, deleted: deleted,
+			Ts: timestamp.Timestamp{PhysicalTime: physicalTime},
+		}
+	}
+
+	t.Run("drop hides historical live row", func(t *testing.T) {
+		cc := NewCatalog()
+		cc.setTableItem(newItem(oldTableID, 7, 100, false), true)
+		cc.setTableItem(newItem(oldTableID, 0, 200, true), false)
+
+		require.Nil(t, cc.GetTableById(accountID, databaseID, oldTableID))
+		require.Nil(t, cc.GetTableByName(accountID, databaseID, "events"))
+		called := false
+		_, found, matched := cc.WithTableVersion(
+			accountID, databaseID, oldTableID, 7, func() { called = true })
+		require.False(t, found)
+		require.False(t, matched)
+		require.False(t, called)
+	})
+
+	t.Run("truncate exposes only replacement identity", func(t *testing.T) {
+		cc := NewCatalog()
+		cc.setTableItem(newItem(oldTableID, 7, 100, false), true)
+		cc.setTableItem(newItem(oldTableID, 0, 200, true), false)
+		cc.setTableItem(newItem(newTableID, 0, 200, false), true)
+
+		require.Nil(t, cc.GetTableById(accountID, databaseID, oldTableID))
+		byName := cc.GetTableByName(accountID, databaseID, "events")
+		byID := cc.GetTableById(accountID, databaseID, newTableID)
+		require.NotNil(t, byName)
+		require.NotNil(t, byID)
+		require.Same(t, byName, byID)
+		_, found, matched := cc.WithTableVersion(
+			accountID, databaseID, newTableID, 0, nil)
+		require.True(t, found)
+		require.True(t, matched)
+	})
+
+	t.Run("alter exposes newest version of same identity", func(t *testing.T) {
+		cc := NewCatalog()
+		cc.setTableItem(newItem(oldTableID, 7, 100, false), true)
+		cc.setTableItem(newItem(oldTableID, 0, 200, true), false)
+		cc.setTableItem(newItem(oldTableID, 8, 200, false), true)
+
+		current := cc.GetTableById(accountID, databaseID, oldTableID)
+		require.NotNil(t, current)
+		require.Equal(t, uint32(8), current.Version)
+		_, found, matched := cc.WithTableVersion(
+			accountID, databaseID, oldTableID, 7, nil)
+		require.True(t, found)
+		require.False(t, matched)
+	})
+}
+
 func TestGetTableDefRestoresChecksFromSchemaExtra(t *testing.T) {
 	check := &plan.CheckDef{Name: "t_chk_1", Check: &plan.Expr{}}
 	tableDef, _ := getTableDef(&TableItem{
@@ -67,6 +176,110 @@ func TestCatalogCacheConcurrentGC(t *testing.T) {
 		}(int64(i + 1))
 	}
 	wg.Wait()
+}
+
+func TestCatalogGCVersionRetirementPreservesVisibility(t *testing.T) {
+	t.Run("real GC keeps tombstones authoritative during retirement", func(t *testing.T) {
+		cc := NewCatalog()
+		cc.UpdateDuration(types.TS{}, types.MaxTs())
+		cc.databases.data.Set(&DatabaseItem{
+			AccountId: 1, Name: "dropped_db", Id: 41,
+			Ts: timestamp.Timestamp{PhysicalTime: 10},
+		})
+		cc.databases.data.Set(&DatabaseItem{
+			AccountId: 1, Name: "dropped_db", Id: 41, deleted: true,
+			Ts: timestamp.Timestamp{PhysicalTime: 20},
+		})
+		cc.tables.data.Set(&TableItem{
+			AccountId: 1, DatabaseId: 2, Name: "dropped_table", Id: 41,
+			Ts: timestamp.Timestamp{PhysicalTime: 10},
+		})
+		cc.tables.data.Set(&TableItem{
+			AccountId: 1, DatabaseId: 2, Name: "dropped_table", Id: 41, deleted: true,
+			Ts: timestamp.Timestamp{PhysicalTime: 20},
+		})
+
+		deleteCounts := make(map[catalogGCDeleteKind]int)
+		cc.gcDeleteObserverForTesting = func(kind catalogGCDeleteKind) {
+			deleteCounts[kind]++
+			require.False(t, cc.CanServe(types.BuildTS(15, 0)),
+				"snapshots whose history is being retired must fall back to storage")
+			switch kind {
+			case catalogGCDeleteDatabase:
+				query := &DatabaseItem{
+					AccountId: 1, Name: "dropped_db",
+					Ts: timestamp.Timestamp{PhysicalTime: 40},
+				}
+				require.False(t, cc.GetDatabase(query),
+					"catalog GC must never expose a superseded live database version")
+			case catalogGCDeleteTable:
+				query := &TableItem{
+					AccountId: 1, DatabaseId: 2, Name: "dropped_table",
+					Ts: timestamp.Timestamp{PhysicalTime: 40},
+				}
+				require.False(t, cc.GetTable(query),
+					"catalog GC must never expose a superseded live table version")
+			}
+		}
+
+		cc.GC(timestamp.Timestamp{PhysicalTime: 30})
+		require.Equal(t, 2, deleteCounts[catalogGCDeleteDatabase])
+		require.Equal(t, 2, deleteCounts[catalogGCDeleteTable])
+	})
+
+	t.Run("GC retains newest live recreation", func(t *testing.T) {
+		cc := NewCatalog()
+		cc.UpdateDuration(types.TS{}, types.MaxTs())
+		cc.databases.data.Set(&DatabaseItem{
+			AccountId: 1, Name: "recreated_db", Id: 41,
+			Ts: timestamp.Timestamp{PhysicalTime: 10},
+		})
+		cc.databases.data.Set(&DatabaseItem{
+			AccountId: 1, Name: "recreated_db", Id: 41, deleted: true,
+			Ts: timestamp.Timestamp{PhysicalTime: 20},
+		})
+		cc.databases.data.Set(&DatabaseItem{
+			AccountId: 1, Name: "recreated_db", Id: 42,
+			Ts: timestamp.Timestamp{PhysicalTime: 20},
+		})
+
+		cc.GC(timestamp.Timestamp{PhysicalTime: 30})
+		query := &DatabaseItem{
+			AccountId: 1, Name: "recreated_db",
+			Ts: timestamp.Timestamp{PhysicalTime: 40},
+		}
+		require.True(t, cc.GetDatabase(query))
+		require.Equal(t, uint64(42), query.Id)
+	})
+
+	t.Run("GC isolates identical names by account", func(t *testing.T) {
+		cc := NewCatalog()
+		cc.UpdateDuration(types.TS{}, types.MaxTs())
+		for _, accountID := range []uint32{1, 2} {
+			cc.databases.data.Set(&DatabaseItem{
+				AccountId: accountID, Name: "shared_name", Id: uint64(40 + accountID),
+				Ts: timestamp.Timestamp{PhysicalTime: 10},
+			})
+			cc.tables.data.Set(&TableItem{
+				AccountId: accountID, DatabaseId: 7, Name: "shared_name", Id: uint64(40 + accountID),
+				Ts: timestamp.Timestamp{PhysicalTime: 10},
+			})
+		}
+
+		cc.GC(timestamp.Timestamp{PhysicalTime: 30})
+		for _, accountID := range []uint32{1, 2} {
+			dbQuery := &DatabaseItem{
+				AccountId: accountID, Name: "shared_name",
+				Ts: timestamp.Timestamp{PhysicalTime: 40},
+			}
+			require.True(t, cc.GetDatabase(dbQuery), "database for account %d was retired", accountID)
+			tableQuery := &TableItem{
+				AccountId: accountID, DatabaseId: 7, Name: "shared_name",
+				Ts: timestamp.Timestamp{PhysicalTime: 40},
+			}
+			require.True(t, cc.GetTable(tableQuery), "table for account %d was retired", accountID)
+		}
+	})
 }
 
 func TestCrossDBGet(t *testing.T) {

@@ -197,10 +197,9 @@ func pickMergeDiffs(
 		ctx, ses, bh, tblStuff, dataBranchApplyModeOnlinePKOnly,
 		&deleteCnt, deleteFromVals, &insertCnt, insertIntoVals, nil,
 	)
-	var acceptedExactFloatKeys map[string]struct{}
-	if appender.batchInfo.deleteNeedsExactFloatKeyMatch() &&
-		stmt.ConflictOpt != nil && stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT {
-		acceptedExactFloatKeys = make(map[string]struct{})
+	var acceptedDirectUpdateKeys map[string]struct{}
+	if tblStuff.def.pkKind != fakeKind && stmt.ConflictOpt != nil && stmt.ConflictOpt.Opt == tree.CONFLICT_ACCEPT {
+		acceptedDirectUpdateKeys = make(map[string]struct{})
 	}
 	if err = initApplyTables(ctx, ses, bh, appender.batchInfo, appender.writeFile); err != nil {
 		return err
@@ -223,7 +222,7 @@ func pickMergeDiffs(
 
 		if err = appendPickedBatchRows(
 			ctx, ses, tblStuff, wrapped, tmpValsBuffer, appender,
-			stmt.ConflictOpt, skipSet, acceptedExactFloatKeys,
+			stmt.ConflictOpt, skipSet, acceptedDirectUpdateKeys,
 		); err != nil {
 			firstErr = err
 			cancel()
@@ -233,7 +232,7 @@ func pickMergeDiffs(
 
 		tblStuff.retPool.releaseRetBatch(wrapped.batch, false)
 	}
-	if firstErr == nil && len(acceptedExactFloatKeys) != 0 {
+	if firstErr == nil && len(acceptedDirectUpdateKeys) != 0 {
 		firstErr = moerr.NewInternalErrorNoCtx("Data Branch PICK accepted conflict is missing its source row")
 	}
 
@@ -275,7 +274,7 @@ func appendPickedBatchRows(
 	appender sqlValuesAppender,
 	userConflictOpt *tree.ConflictOpt,
 	skipSet map[string]struct{},
-	acceptedExactFloatKeys map[string]struct{},
+	acceptedDirectUpdateKeys map[string]struct{},
 ) (err error) {
 	// PICK only cares about two kinds of batches from hashDiff:
 	//   1. target INSERT (side=target, kind=INSERT) — source rows to add/replace
@@ -288,7 +287,7 @@ func appendPickedBatchRows(
 	if wrapped.side == diffSideBase && wrapped.kind != diffDelete {
 		return nil
 	}
-	exactFloatKeyUpdate, err := dataBranchExactFloatKeyUpdateBatch(wrapped, appender.batchInfo)
+	directUpdate, err := dataBranchDirectUpdateBatch(tblStuff, wrapped, appender.batchInfo)
 	if err != nil {
 		return err
 	}
@@ -299,6 +298,7 @@ func appendPickedBatchRows(
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		rowDirectUpdate := directUpdate
 
 		// Extract PK for conflict handling (FAIL error message, SKIP set).
 		pkKey, err2 := extractPKAsString(ses, tblStuff, wrapped.batch, rowIdx)
@@ -323,14 +323,14 @@ func appendPickedBatchRows(
 					skipSet[pkKey] = struct{}{}
 					continue // do not apply the DELETE
 				case tree.CONFLICT_ACCEPT:
-					if acceptedExactFloatKeys != nil {
-						// The matching source row is applied by an exact-key upsert.
-						// Deferring the resolution avoids a staged delete that could
-						// run after the upsert and remove the accepted row.
-						acceptedExactFloatKeys[pkKey] = struct{}{}
+					if acceptedDirectUpdateKeys != nil && wrapped.hasReplacement {
+						// The matching source row is applied by a direct key update.
+						// Deferring the resolution avoids deleting a referenced row.
+						acceptedDirectUpdateKeys[pkKey] = struct{}{}
 						continue
 					}
-					// Fall through for non-float keys: DELETE + INSERT is safe.
+					// A source DELETE has no replacement row, so preserve the
+					// destination deletion.
 				}
 			}
 		}
@@ -341,25 +341,32 @@ func appendPickedBatchRows(
 				continue
 			}
 		}
-		if acceptedExactFloatKeys != nil && wrapped.side == diffSideTarget && wrapped.kind == diffInsert {
-			if _, accepted := acceptedExactFloatKeys[pkKey]; accepted {
-				exactFloatKeyUpdate = true
-				delete(acceptedExactFloatKeys, pkKey)
+		if acceptedDirectUpdateKeys != nil && wrapped.side == diffSideTarget && wrapped.kind == diffInsert {
+			if _, accepted := acceptedDirectUpdateKeys[pkKey]; accepted {
+				rowDirectUpdate = true
+				delete(acceptedDirectUpdateKeys, pkKey)
 			}
 		}
-		if exactFloatKeyUpdate && wrapped.kind == diffDelete {
+		if rowDirectUpdate && wrapped.kind == diffDelete {
 			continue
+		}
+		stageUpdate := dataBranchStagesUpdate(
+			appender, rowDirectUpdate, wrapped.requiresNativeUpdate, wrapped.restoreMissing,
+		)
+		extraColIdxes := appender.extraColIdxesForRow(wrapped.kind)
+		if stageUpdate {
+			extraColIdxes = append(extraColIdxes, appender.deleteKeyColIdxes...)
 		}
 
 		if err = extractDataBranchApplyRow(
-			ctx, ses, tblStuff, wrapped.batch, rowIdx, appender.extraColIdxesForRow(wrapped.kind), row,
+			ctx, ses, tblStuff, wrapped.batch, rowIdx, extraColIdxes, row,
 			"data branch pick batch shape mismatch",
 		); err != nil {
 			return
 		}
-		if err = appendOrExecuteDataBranchApplyRow(
+		if err = appendOrStageDataBranchApplyRow(
 			ctx, ses, tblStuff, wrapped.kind, row, tmpValsBuffer, appender,
-			exactFloatKeyUpdate, wrapped.restoreMissing,
+			rowDirectUpdate, stageUpdate, wrapped.restoreMissing,
 		); err != nil {
 			return
 		}
@@ -531,7 +538,8 @@ func materializeValuesUnified(
 	// Build a typed Vec from AST expressions.
 	vec := vector.NewVec(pkType)
 	for _, expr := range stmt.Keys.KeyExprs {
-		if appendErr := appendExprToVec(vec, expr, pkType, ses.GetTimeZone(), mp); appendErr != nil {
+		if appendErr := appendExprToVecWithPrepareParams(
+			vec, expr, pkType, ses.GetTimeZone(), mp, ses.proc.GetPrepareParams()); appendErr != nil {
 			vec.Free(mp)
 			return nil, appendErr
 		}
@@ -598,7 +606,8 @@ func materializeCompositeValuesUnified(
 		}
 		for i, elem := range tup.Exprs {
 			colType := tblStuff.def.colTypes[pkColIdxes[i]]
-			if appendErr := appendExprToVec(compVecs[i], elem, colType, ses.GetTimeZone(), mp); appendErr != nil {
+			if appendErr := appendExprToVecWithPrepareParams(
+				compVecs[i], elem, colType, ses.GetTimeZone(), mp, ses.proc.GetPrepareParams()); appendErr != nil {
 				return nil, appendErr
 			}
 		}
@@ -1283,6 +1292,19 @@ func normalizePickTimeZone(loc *time.Location) *time.Location {
 
 // appendExprToVec appends a literal AST expression value to a typed vector.
 func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *time.Location, mp *mpool.MPool) error {
+	return appendExprToVecWithPrepareParams(vec, expr, pkType, tz, mp, nil)
+}
+
+// appendExprToVecWithPrepareParams appends a literal or prepared parameter
+// value to a typed vector.
+func appendExprToVecWithPrepareParams(
+	vec *vector.Vector,
+	expr tree.Expr,
+	pkType types.Type,
+	tz *time.Location,
+	mp *mpool.MPool,
+	prepareParams *vector.Vector,
+) error {
 	expr = unwrapPickKeyParens(expr)
 	switch e := expr.(type) {
 	case *tree.NumVal:
@@ -1310,6 +1332,18 @@ func appendExprToVec(vec *vector.Vector, expr tree.Expr, pkType types.Type, tz *
 		return appendNumericStringToVec(vec, s, pkType, tz, mp)
 	case *tree.StrVal:
 		return appendStrValToVec(vec, unescapeMySQLString(e.String()), pkType, tz, mp)
+	case *tree.ParamExpr:
+		if prepareParams == nil {
+			return moerr.NewInvalidInputNoCtx("DATA BRANCH PICK parameter has no execution value")
+		}
+		paramIndex := e.Offset - 1
+		if paramIndex < 0 || paramIndex >= prepareParams.Length() {
+			return moerr.NewInvalidInputNoCtxf("DATA BRANCH PICK parameter %d is out of range", e.Offset)
+		}
+		if prepareParams.IsNull(uint64(paramIndex)) {
+			return moerr.NewInvalidInputNoCtxf("DATA BRANCH PICK parameter %d must not be NULL", e.Offset)
+		}
+		return appendStrValToVec(vec, prepareParams.GetStringAt(paramIndex), pkType, tz, mp)
 	default:
 		// For complex expressions, skip ZoneMap pruning in CollectChanges.
 		return moerr.NewInvalidInputNoCtxf("unsupported expression type for PK filter: %T", expr)

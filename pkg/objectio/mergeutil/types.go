@@ -120,18 +120,30 @@ func MergeSortBatches(
 	default:
 		panic(fmt.Sprintf("invalid type: %s", batches[0].Vecs[sortKeyIdx].GetType()))
 	}
+	// NaN does not define a total order, so keep floating-point inputs on the
+	// existing comparison path. For all totally ordered key types, disjoint
+	// ranges can be copied in bulk without changing the merged order.
+	sortType := batches[0].Vecs[sortKeyIdx].GetType().Oid
+	if sortType != types.T_float32 && sortType != types.T_float64 {
+		if order := merge.disjointBatchOrder(); order != nil {
+			return concatDisjointBatches(batches, order, merge, buffer, sinker, mp, putBack)
+		}
+	}
+	merge.prepareGeneralMerge()
 	var (
 		batchIndex int
 		rowIndex   int
 		lens       int
 	)
-	size := len(batches)
 	buffer.CleanOnlyData()
 	if err := buffer.PreExtend(mp, objectio.BlockMaxRows); err != nil {
 		return buffer, err
 	}
-	for size > 0 {
-		batchIndex, rowIndex, size = merge.getNextPos()
+	for {
+		batchIndex, rowIndex, _ = merge.getNextPos()
+		if batchIndex < 0 {
+			break
+		}
 		for i := range buffer.Vecs {
 			err := buffer.Vecs[i].UnionOne(batches[batchIndex].Vecs[i], int64(rowIndex), mp)
 			if err != nil {
@@ -157,6 +169,58 @@ func MergeSortBatches(
 	}
 	if lens > 0 {
 		buffer.SetRowCount(lens)
+		var err error
+		if buffer, err = sinker(buffer); err != nil {
+			return buffer, err
+		}
+	}
+	return buffer, nil
+}
+
+func concatDisjointBatches(
+	batches []*batch.Batch,
+	order []int,
+	merge mergeInterface,
+	buffer *batch.Batch,
+	sinker SinkerT,
+	mp *mpool.MPool,
+	putBack func(int),
+) (*batch.Batch, error) {
+	buffer.CleanOnlyData()
+	if err := buffer.PreExtend(mp, objectio.BlockMaxRows); err != nil {
+		return buffer, err
+	}
+	bufferRows := 0
+	for _, batchIndex := range order {
+		source := batches[batchIndex]
+		sourceRows := merge.batchLength(batchIndex)
+		for offset := 0; offset < sourceRows; {
+			count := min(sourceRows-offset, objectio.BlockMaxRows-bufferRows)
+			if err := buffer.UnionWindow(source, offset, count, mp); err != nil {
+				return buffer, err
+			}
+			offset += count
+			bufferRows += count
+			// Preserve the general merge's callback contract for malformed batches:
+			// it only returns a source whose RowCount agrees with its vectors.
+			if offset == sourceRows && source.RowCount() == sourceRows && putBack != nil {
+				putBack(batchIndex)
+			}
+			if bufferRows == objectio.BlockMaxRows {
+				buffer.SetRowCount(bufferRows)
+				var err error
+				if buffer, err = sinker(buffer); err != nil {
+					return buffer, err
+				}
+				if err = buffer.PreExtend(mp, objectio.BlockMaxRows); err != nil {
+					return buffer, err
+				}
+				bufferRows = 0
+			}
+		}
+	}
+	if bufferRows > 0 {
+		buffer.SetRowCount(bufferRows)
 		var err error
 		if buffer, err = sinker(buffer); err != nil {
 			return buffer, err

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/internal/bytejsonvalidate"
 )
 
 // ValidVectors verifies that each vector covers the requested logical rows.
@@ -204,11 +205,17 @@ func CanonicalFloat64Bytes(value float64) [8]byte {
 // CanonicalJSONSize returns the exact resident key size for one binary JSON
 // value. Arrays and objects are walked recursively because scalar JSON
 // equality also identifies numeric forms below the root.
+const canonicalJSONMalformedMarker byte = 0
+
 func CanonicalJSONSize(value []byte) int {
 	if len(value) == 0 {
 		return 0
 	}
-	return canonicalByteJSONSize(types.DecodeJson(value))
+	decoded := types.DecodeJson(value)
+	if !canonicalByteJSONValid(decoded) {
+		return 1 + len(value)
+	}
+	return canonicalByteJSONSize(decoded)
 }
 
 func canonicalByteJSONSize(value bytejson.ByteJson) int {
@@ -246,7 +253,37 @@ func AppendCanonicalJSON(dst, value []byte) []byte {
 	if len(value) == 0 {
 		return dst
 	}
-	return appendCanonicalByteJSON(dst, types.DecodeJson(value))
+	decoded := types.DecodeJson(value)
+	if !canonicalByteJSONValid(decoded) {
+		dst = append(dst, canonicalJSONMalformedMarker)
+		return append(dst, value...)
+	}
+	return appendCanonicalByteJSON(dst, decoded)
+}
+
+func canonicalByteJSONValid(value bytejson.ByteJson) bool {
+	switch value.Type {
+	case bytejson.TpCodeLiteral:
+		return len(value.Data) == 1 &&
+			(value.Data[0] == bytejson.LiteralNull ||
+				value.Data[0] == bytejson.LiteralTrue ||
+				value.Data[0] == bytejson.LiteralFalse)
+	case bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeDecimal:
+		_, ok := bytejson.CanonicalNumberSize(value)
+		return ok
+	case bytejson.TpCodeString, bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime:
+		_, ok := bytejsonvalidate.UvarintPayload(value.Data)
+		return ok
+	case bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
+		_, ok := bytejson.CanonicalBinarySize(value)
+		return ok
+	case bytejson.TpCodeArray, bytejson.TpCodeObject:
+		return bytejsonvalidate.Container(value.Type, value.Data, func(tp byte, data []byte) bool {
+			return canonicalByteJSONValid(bytejson.ByteJson{Type: bytejson.TpCode(tp), Data: data})
+		})
+	default:
+		return false
+	}
 }
 
 func appendCanonicalByteJSON(dst []byte, value bytejson.ByteJson) []byte {
@@ -513,41 +550,46 @@ func computeGroupingXXHash(vec *vector.Vector, hashValues []uint64) {
 			hashValues[i] = HashCombine(hashValues[i], 0)
 			continue
 		}
-		row := i
-		if vec.IsConst() {
-			row = 0
-		}
-		switch vec.GetType().Oid {
-		case types.T_float32:
-			values := vector.MustFixedColNoTypeCheck[float32](vec)
-			value := NewFloat32Codec(vec.GetType().Scale).CanonicalBytes(values[row])
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(value[:]))
-			continue
-		case types.T_float64:
-			values := vector.MustFixedColNoTypeCheck[float64](vec)
-			value := CanonicalFloat64Bytes(values[row])
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(value[:]))
-			continue
-		case types.T_json:
-			scratch = AppendCanonicalJSON(scratch[:0], vec.GetRawBytesAt(row))
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
-			continue
-		case types.T_array_float32:
-			scratch = AppendCanonicalVecF32(scratch[:0], vec.GetRawBytesAt(row))
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
-			continue
-		case types.T_array_float64:
-			scratch = AppendCanonicalVecF64(scratch[:0], vec.GetRawBytesAt(row))
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
-			continue
-		case types.T_array_bf16, types.T_array_float16:
-			scratch = AppendCanonicalVecF16(scratch[:0], vec.GetRawBytesAt(row))
-			hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(scratch))
-			continue
-		}
-		hashValues[i] = HashCombine(
-			hashValues[i], xxhash.Sum64(vec.GetRawBytesAt(row)),
-		)
+		canonical, reusable := CanonicalBytesAt(vec, i, scratch[:0])
+		scratch = reusable
+		hashValues[i] = HashCombine(hashValues[i], xxhash.Sum64(canonical))
+	}
+}
+
+// CanonicalBytesAt returns the byte representation used by SQL grouping
+// equality. The caller owns null handling. canonical can alias vector storage;
+// reusable preserves scratch capacity for the next call even in that case.
+// Keeping this contract in keycodec prevents statistics, hash joins, and GROUP
+// BY from silently defining different equality domains.
+func CanonicalBytesAt(vec *vector.Vector, row int, scratch []byte) (canonical, reusable []byte) {
+	if vec.IsConst() {
+		row = 0
+	}
+	switch vec.GetType().Oid {
+	case types.T_float32:
+		values := vector.MustFixedColNoTypeCheck[float32](vec)
+		value := NewFloat32Codec(vec.GetType().Scale).CanonicalBytes(values[row])
+		scratch = append(scratch, value[:]...)
+		return scratch, scratch
+	case types.T_float64:
+		values := vector.MustFixedColNoTypeCheck[float64](vec)
+		value := CanonicalFloat64Bytes(values[row])
+		scratch = append(scratch, value[:]...)
+		return scratch, scratch
+	case types.T_json:
+		scratch = AppendCanonicalJSON(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	case types.T_array_float32:
+		scratch = AppendCanonicalVecF32(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	case types.T_array_float64:
+		scratch = AppendCanonicalVecF64(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	case types.T_array_bf16, types.T_array_float16:
+		scratch = AppendCanonicalVecF16(scratch, vec.GetRawBytesAt(row))
+		return scratch, scratch
+	default:
+		return vec.GetRawBytesAt(row), scratch
 	}
 }
 

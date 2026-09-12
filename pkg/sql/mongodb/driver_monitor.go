@@ -107,6 +107,8 @@ func boundedCommandLabel(name string) string {
 	switch strings.ToLower(name) {
 	case "find":
 		return "find"
+	case "aggregate":
+		return "aggregate"
 	case "getmore":
 		return "get_more"
 	case "killcursors":

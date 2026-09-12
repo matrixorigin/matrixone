@@ -128,8 +128,7 @@ func (intersect *Intersect) buildHashTable(proc *process.Process, analyzer proce
 				}
 
 				if v > rowcnt {
-					ctr.cnts = append(ctr.cnts, vector.GetSels())
-					ctr.cnts[v-1] = append(ctr.cnts[v-1], 1)
+					ctr.unmatched = append(ctr.unmatched, true)
 					rowcnt++
 				}
 			}
@@ -198,12 +197,12 @@ func (intersect *Intersect) probeHashTable(proc *process.Process, analyzer proce
 				}
 
 				// has been added into output batch
-				if ctr.cnts[v-1][0] == 0 {
+				if !ctr.unmatched[v-1] {
 					continue
 				}
 
 				needInsert[j] = 1
-				ctr.cnts[v-1][0] = 0
+				ctr.unmatched[v-1] = false
 				insertcnt++
 			}
 			ctr.buf.AddRowCount(insertcnt)

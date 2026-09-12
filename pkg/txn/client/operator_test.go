@@ -591,7 +591,7 @@ func TestCommitReadOnly(t *testing.T) {
 }
 
 func TestCommitWithLockTables(t *testing.T) {
-	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(_ context.Context, tc *txnOperator, ts *testTxnSender) {
 		r := runtime.DefaultRuntime()
 		runtime.SetupServiceBasedRuntime("", r)
 		runtime.SetupServiceBasedRuntime("s1", r)
@@ -604,12 +604,14 @@ func TestCommitWithLockTables(t *testing.T) {
 		defer func() {
 			assert.NoError(t, s.Close())
 		}()
+		opCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
 		tc.mu.txn.Mode = txn.TxnMode_Pessimistic
 		tc.lockService = s
 		tc.AddLockTable(lock.LockTable{Table: 1})
 		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
-		err := tc.Commit(ctx)
+		err := tc.Commit(opCtx)
 		assert.NoError(t, err)
 
 		requests := ts.getLastRequests()
@@ -623,23 +625,25 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 	tableID1 := uint64(10)
 	tableID2 := uint64(20)
 	tableID3 := uint64(30)
-	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(_ context.Context, tc *txnOperator, ts *testTxnSender) {
 		lockservice.RunLockServicesForTest(
 			zap.DebugLevel,
 			[]string{"s1"},
 			time.Second,
 			func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
 				s := ls[0]
+				opCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
 
-				_, err := s.Lock(ctx, tableID1, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
-				assert.NoError(t, err)
-				_, err = s.Lock(ctx, tableID2, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
-				assert.NoError(t, err)
-				_, err = s.Lock(ctx, tableID3, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
-				assert.NoError(t, err)
+				_, err := s.Lock(opCtx, tableID1, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
+				require.NoError(t, err)
+				_, err = s.Lock(opCtx, tableID2, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
+				require.NoError(t, err)
+				_, err = s.Lock(opCtx, tableID3, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
+				require.NoError(t, err)
 
 				ts.setManual(func(sr *rpc.SendResult, err error) (*rpc.SendResult, error) {
-					sr.Responses[0].TxnError = txn.WrapError(moerr.NewLockTableBindChanged(ctx), 0)
+					sr.Responses[0].TxnError = txn.WrapError(moerr.NewLockTableBindChanged(opCtx), 0)
 					sr.Responses[0].CommitResponse = &txn.TxnCommitResponse{
 						InvalidLockTables: []uint64{tableID1, tableID2},
 					}
@@ -657,7 +661,7 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 				tc.AddLockTable(lock.LockTable{Table: tableID3, ServiceID: s.GetServiceID(), Version: lta.GetVersion()})
 
 				tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})
-				err = tc.Commit(ctx)
+				err = tc.Commit(opCtx)
 				assert.Error(t, err)
 				assert.Equal(t, txn.TxnStatus_Aborted, tc.mu.txn.Status)
 
@@ -682,15 +686,17 @@ func TestCommitWithLockTablesChanged(t *testing.T) {
 
 func TestCheckLockTableBindsChanged(t *testing.T) {
 	tableID := uint64(10)
-	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(_ context.Context, tc *txnOperator, ts *testTxnSender) {
 		lockservice.RunLockServicesForTest(
 			zap.DebugLevel,
 			[]string{"s1"},
 			time.Second,
 			func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
 				s := ls[0]
+				opCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
 
-				_, err := s.Lock(ctx, tableID, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
+				_, err := s.Lock(opCtx, tableID, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
 				require.NoError(t, err)
 
 				tc.mu.txn.Mode = txn.TxnMode_Pessimistic
@@ -702,10 +708,10 @@ func TestCheckLockTableBindsChanged(t *testing.T) {
 					Valid:     true,
 				}))
 
-				err = tc.CheckLockTableBinds(ctx)
+				err = tc.CheckLockTableBinds(opCtx)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 
-				err = tc.CheckLockTableBinds(ctx)
+				err = tc.CheckLockTableBinds(opCtx)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 			},
 			nil)
@@ -714,15 +720,17 @@ func TestCheckLockTableBindsChanged(t *testing.T) {
 
 func TestCheckLockTableBindsChangedWithStaleLocalCache(t *testing.T) {
 	tableID := uint64(10)
-	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
+	runOperatorTests(t, func(_ context.Context, tc *txnOperator, ts *testTxnSender) {
 		lockservice.RunLockServicesForTest(
 			zap.DebugLevel,
 			[]string{"s1"},
 			time.Second,
 			func(lta lockservice.LockTableAllocator, ls []lockservice.LockService) {
 				s := ls[0]
+				opCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
 
-				_, err := s.Lock(ctx, tableID, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
+				_, err := s.Lock(opCtx, tableID, [][]byte{[]byte("k1")}, tc.reset.txnID, lock.LockOptions{})
 				require.NoError(t, err)
 				hold, err := s.GetLockTableBind(0, tableID)
 				require.NoError(t, err)
@@ -741,7 +749,7 @@ func TestCheckLockTableBindsChangedWithStaleLocalCache(t *testing.T) {
 				tc.lockService = s
 				require.NoError(t, tc.AddLockTable(hold))
 
-				err = tc.CheckLockTableBinds(ctx)
+				err = tc.CheckLockTableBinds(opCtx)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 			},
 			nil)
@@ -845,6 +853,13 @@ func TestContextWithoutDeadlineReturnsError(t *testing.T) {
 		defer sender.Unlock()
 		require.Empty(t, sender.lastRequests)
 	})
+}
+
+func TestTxnOverviewIncludesAccountID(t *testing.T) {
+	const accountID uint32 = 42
+	runOperatorTests(t, func(_ context.Context, tc *txnOperator, _ *testTxnSender) {
+		require.Equal(t, accountID, tc.GetOverview().AccountID)
+	}, WithTxnCreateBy(accountID, "user", "session", 1))
 }
 
 func TestMissingSenderWillPanic(t *testing.T) {

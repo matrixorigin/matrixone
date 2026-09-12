@@ -40,12 +40,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -78,6 +81,36 @@ func TestDupOperator(t *testing.T) {
 	duplicatedFilter := dupOperator(assertFilter, 0, 1).(*filter.Filter)
 	defer duplicatedFilter.Release()
 	require.True(t, duplicatedFilter.IsAssert)
+}
+
+func TestConstructMergeGroupCarriesEmptyGroupingSetMetadata(t *testing.T) {
+	groupNode := &plan.Node{GroupBy: []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_varchar), Width: 20}},
+		{Typ: plan.Type{Id: int32(types.T_int32)}},
+		{Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+	}}
+	expandNode := &plan.Node{
+		GroupingFlag: []bool{true, true, true, false, false, false},
+		ExtraOptions: "grouping_set_expand:3",
+	}
+
+	merge := constructMergeGroup(groupNode, expandNode, nil, true)
+	defer merge.Release()
+	require.Equal(t, []int64{2}, merge.EmptyGroupingSetIDs)
+	require.Equal(t, []types.Type{
+		types.NewWithCharset(types.T_varchar, 20, 0, 0),
+		types.T_int32.ToType(),
+		types.T_int64.ToType(),
+	}, merge.GroupByTypes)
+
+	legacyGroupNode := &plan.Node{
+		GroupBy:      groupNode.GroupBy[:2],
+		GroupingFlag: []bool{false, false},
+	}
+	legacyMerge := constructMergeGroup(legacyGroupNode, &plan.Node{}, nil, true)
+	defer legacyMerge.Release()
+	require.True(t, legacyMerge.EmptyGroupingSet)
+	require.Len(t, legacyMerge.GroupByTypes, 2)
 }
 
 func TestConstructRestrictForCheckConstraintNodes(t *testing.T) {
@@ -135,6 +168,25 @@ func TestJoinHashBuildTopologyPinsSpillToSingleConsumer(t *testing.T) {
 			shuffle.Release()
 		})
 	}
+}
+
+func TestLoopJoinBuildCarriesScalarRuntimeFilter(t *testing.T) {
+	join := loopjoin.NewArgument()
+	defer join.Release()
+	join.JoinMapTag = 1
+	spec := &plan.RuntimeFilterSpec{
+		Tag: 42, UpperLimit: 1, ScalarPredicate: true,
+	}
+
+	op := constructJoinBuildOperator(
+		&Compile{}, join, 1, []*plan.RuntimeFilterSpec{spec})
+	build, ok := op.(*hashbuild.HashBuild)
+	require.True(t, ok)
+	defer build.Release()
+
+	require.False(t, build.NeedHashMap)
+	require.True(t, build.RuntimeFilterSpec.ScalarPredicate)
+	require.Same(t, spec, build.RuntimeFilterSpec)
 }
 
 func TestConstructFuzzyFilterUsesFinalizedBuildSide(t *testing.T) {
@@ -333,6 +385,57 @@ func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 	require.Equal(t, aggexec.EncodeOrderedPercentileConfig([]byte("0"), false), config)
 }
 
+func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   string
+		desc bool
+	}{
+		{name: "continuous ascending", fn: plan2.NamePercentileCont},
+		{name: "discrete descending", fn: plan2.NamePercentileDisc, desc: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := plan2.NewMockCompilerContext(false)
+			direction := ""
+			if tc.desc {
+				direction = " desc"
+			}
+			stmt, err := parsers.ParseOne(
+				context.Background(),
+				dialect.MYSQL,
+				"select "+tc.fn+"(0.5) within group (order by n_nationkey"+direction+") from nation",
+				1,
+			)
+			require.NoError(t, err)
+			defer stmt.Free()
+			queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+
+			var percentileFn *plan.Function
+			for _, node := range queryPlan.GetQuery().GetNodes() {
+				for _, aggregate := range node.GetAggList() {
+					if fn := aggregate.GetF(); fn != nil && fn.GetFunc().GetObjName() == tc.fn {
+						percentileFn = fn
+					}
+				}
+			}
+			require.NotNil(t, percentileFn)
+			require.Len(t, percentileFn.GetArgs(), 2)
+			require.NotNil(t, percentileFn.GetArgs()[1].GetF(), "raw planner output should retain the static cast")
+			originalConfigExpr := plan2.DeepCopyExpr(percentileFn.GetArgs()[1])
+
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			args, config := constructAggregateConfig(percentileFn, proc)
+			require.Len(t, args, 1)
+			require.Equal(t,
+				aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), tc.desc),
+				config)
+			require.Equal(t, originalConfigExpr, percentileFn.GetArgs()[1])
+		})
+	}
+}
+
 func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -443,6 +546,22 @@ func TestDupOperatorPartitionMultiUpdate(t *testing.T) {
 	}
 }
 
+func TestPartitionConstructionAndDuplicationPreserveHashConfiguration(t *testing.T) {
+	node := &plan.Node{
+		PartitionAlgorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		SpillMem:           4096,
+		OrderBy:            []*plan.OrderBySpec{{Flag: plan.OrderBySpec_DESC}},
+	}
+	op := constructPartition(node)
+	require.Equal(t, node.PartitionAlgorithm, op.Algorithm)
+	require.Equal(t, node.SpillMem, op.SpillMem)
+
+	duplicated := dupOperator(op, 0, 1).(*partition.Partition)
+	defer duplicated.Release()
+	require.Equal(t, op.Algorithm, duplicated.Algorithm)
+	require.Equal(t, op.SpillMem, duplicated.SpillMem)
+}
+
 func TestHasPartitionedUpdateTargetChecksEveryMainContext(t *testing.T) {
 	contexts := []*plan.UpdateCtx{
 		{TableDef: &plan.TableDef{TblId: 1}},
@@ -485,6 +604,8 @@ func TestDupOperatorMultiUpdateCountDeleteAffectRows(t *testing.T) {
 func TestDupOperatorPreInsertState(t *testing.T) {
 	op := preinsert.NewArgument()
 	op.RejectZeroTemporal = true
+	op.TrackAutoIncrementGenerated = true
+	op.AutoIncrementGeneratedColumn = 4
 	op.HasTargetSelector = true
 	op.TargetRowNumberCol = 7
 	op.TargetActiveCol = 8
@@ -493,6 +614,8 @@ func TestDupOperatorPreInsertState(t *testing.T) {
 	require.NotNil(t, result)
 	cloned := result.(*preinsert.PreInsert)
 	require.True(t, cloned.RejectZeroTemporal)
+	require.True(t, cloned.TrackAutoIncrementGenerated)
+	require.Equal(t, int32(4), cloned.AutoIncrementGeneratedColumn)
 	require.True(t, cloned.HasTargetSelector)
 	require.Equal(t, int32(7), cloned.TargetRowNumberCol)
 	require.Equal(t, int32(8), cloned.TargetActiveCol)
@@ -827,15 +950,18 @@ func TestProjectedMongoColumnsUsesExternalScanLayout(t *testing.T) {
 		{Name: "pump"},
 		{Name: "__mo_hidden", Hidden: true},
 	}}
-	projected, err := projectedMongoColumns(t.Context(), columns, tableDef)
+	projected, err := projectedMongoColumns(t.Context(), columns, tableDef, false)
 	require.NoError(t, err)
 	require.Equal(t, []sqlmongodb.ColumnMapping{columns[2], columns[1]}, projected)
 
-	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "missing"}}})
+	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "missing"}}}, false)
 	require.Error(t, err)
-	_, err = projectedMongoColumns(t.Context(), columns, nil)
+	_, err = projectedMongoColumns(t.Context(), columns, nil, false)
 	require.Error(t, err)
-	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}})
+	queryOnly, err := projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}}, true)
+	require.NoError(t, err)
+	require.Empty(t, queryOnly)
+	_, err = projectedMongoColumns(t.Context(), columns, &plan.TableDef{Cols: []*plan.ColDef{{Name: "hidden", Hidden: true}}}, false)
 	require.Error(t, err)
 }
 

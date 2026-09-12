@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -76,8 +75,9 @@ type container struct {
 	// operator state
 	state int
 
-	// cnt record for intersect
-	cnts [][]int64
+	// unmatched records whether a build-side key has already been emitted.
+	// INTERSECT has set semantics, so one boolean per key is sufficient.
+	unmatched []bool
 
 	// Hash table for checking duplicate data
 	hashTable *hashmap.StrHashMap
@@ -93,7 +93,7 @@ func (intersect *Intersect) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.state = build
 	ctr.cleanHashMap()
 	ctr.keyEvaluator.Reset()
-	ctr.putCnts(proc)
+	ctr.unmatched = nil
 	if ctr.buf != nil {
 		ctr.buf.CleanOnlyData()
 	}
@@ -103,7 +103,7 @@ func (intersect *Intersect) Free(proc *process.Process, pipelineFailed bool, err
 	ctr := &intersect.ctr
 	ctr.cleanHashMap()
 	ctr.keyEvaluator.Free()
-	ctr.putCnts(proc)
+	ctr.unmatched = nil
 	if ctr.buf != nil {
 		ctr.buf.Clean(proc.Mp())
 		ctr.buf = nil
@@ -119,11 +119,4 @@ func (ctr *container) cleanHashMap() {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil
 	}
-}
-
-func (ctr *container) putCnts(proc *process.Process) {
-	for i := range ctr.cnts {
-		vector.PutSels(ctr.cnts[i])
-	}
-	ctr.cnts = nil
 }

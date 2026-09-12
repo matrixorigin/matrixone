@@ -47,4 +47,10 @@ func TestVectorIndexScanInfoIsTypedAndVisible(t *testing.T) {
 	require.Contains(t, info[0], "Candidate Limit: 12")
 	require.Contains(t, info[0], "NProbe: 4")
 	require.Contains(t, info[0], "Index Filter: true")
+	require.NotContains(t, info[0], "Estimated Scan Rows")
+	node.VectorIndexScan.ScanWork = &plan.VectorIndexScanWork{Rows: 100, Blocks: 2, VectorBytesPerRow: 128, Objects: 2}
+	node.Stats.Dop = 2
+	basic, err := (&NodeDescribeImpl{Node: node}).GetNodeBasicInfo(context.Background(), &ExplainOptions{})
+	require.NoError(t, err)
+	require.Contains(t, basic, "Estimated Scan Rows: 100, Blocks: 2, Vector Bytes/Row: 128, Objects: 2, Planned DOP: 2")
 }

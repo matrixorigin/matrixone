@@ -376,6 +376,47 @@ func TestViewMetadataAdmissionReplacementKeepsOldGenerationUntilTimeout(t *testi
 	require.True(t, rsm.state.ProxyState.Stores["proxy-1"].ViewMetadataAdmissionReady)
 }
 
+func TestViewMetadataAdmissionCleanRestartSkipsOldGenerationTimeout(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.Tick = 10
+	rsm.state.ViewMetadataAdmissionEnabled = true
+	rsm.state.ViewMetadataAdmissionEpoch = 3
+	rsm.state.ViewMetadataRevalidationRequired = true
+	rsm.state.ViewMetadataCatalogFencedEpoch = 3
+
+	old := pb.CNStoreHeartbeat{
+		UUID:                            "cn-1",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 10,
+		ViewMetadataObservedEpoch:       3,
+		ViewMetadataCatalogFencedEpoch:  3,
+		ViewMetadataIngressReady:        true,
+	}
+	batch := updateViewMetadataCN(t, rsm, old)
+	require.True(t, batch.ViewMetadataAdmission.Ready)
+
+	// A graceful shutdown publishes its ingress withdrawal before exiting.
+	// This distinguishes it from a crashed or partitioned old generation,
+	// which must continue to fence its replacement until store timeout.
+	old.ViewMetadataIngressReady = false
+	batch = updateViewMetadataCN(t, rsm, old)
+	require.False(t, batch.ViewMetadataAdmission.Ready)
+	require.False(t, rsm.state.CNState.Stores[old.UUID].ViewMetadataAdmissionReady)
+
+	rsm.state.Tick = 11
+	batch = updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            old.UUID,
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 11,
+		ViewMetadataObservedEpoch:       3,
+		ViewMetadataCatalogFencedEpoch:  3,
+		ViewMetadataRefreshSupported:    true,
+	})
+	require.True(t, batch.ViewMetadataAdmission.Admitted,
+		"a clean restart must not wait for the old generation's store timeout")
+	require.Empty(t, rsm.state.ViewMetadataAdmissionCNTargets)
+}
+
 func TestViewMetadataAdmissionPreparingWaitsForReplacedGenerationTimeout(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.Tick = 5

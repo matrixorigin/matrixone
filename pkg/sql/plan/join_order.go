@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 
@@ -30,10 +31,11 @@ type joinEdge struct {
 }
 
 type joinVertex struct {
-	node     *plan.Node
-	children map[int32]bool
-	parent   int32
-	joined   bool
+	node                *plan.Node
+	children            map[int32]bool
+	parent              int32
+	selectivityOnParent float64
+	joined              bool
 }
 
 func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
@@ -57,6 +59,10 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 	joinNode := builder.qry.Nodes[node.Children[0]]
 
 	semiAntiStat := builder.qry.Nodes[node.Children[1]].Stats
+	semiAntiSelectivity := semiAntiStat.Selectivity
+	if activeSelectivity, ok := builder.getJoinActiveDomainSelectivity(node.NodeId); ok {
+		semiAntiSelectivity = activeSelectivity
+	}
 
 	for {
 		if joinNode.NodeType != plan.Node_JOIN {
@@ -85,14 +91,22 @@ func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
 		}
 
 		if joinSide == JoinSideLeft {
-			if semiAntiStat.Selectivity*ratio > builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity {
+			siblingSelectivity := builder.qry.Nodes[joinNode.Children[1]].Stats.Selectivity
+			if activeSelectivity, ok := builder.getJoinActiveDomainSelectivity(joinNode.NodeId); ok {
+				siblingSelectivity = activeSelectivity
+			}
+			if semiAntiSelectivity*ratio > siblingSelectivity {
 				break
 			}
 			targetNode = joinNode
 			targetSide = 0
 			joinNode = builder.qry.Nodes[joinNode.Children[0]]
 		} else if joinNode.JoinType == plan.Node_INNER && joinSide == JoinSideRight {
-			if semiAntiStat.Selectivity*ratio > builder.qry.Nodes[joinNode.Children[0]].Stats.Selectivity {
+			siblingSelectivity := builder.qry.Nodes[joinNode.Children[0]].Stats.Selectivity
+			if activeSelectivity, ok := builder.getJoinActiveDomainSelectivityOnSide(joinNode.NodeId, 0); ok {
+				siblingSelectivity = activeSelectivity
+			}
+			if semiAntiSelectivity*ratio > siblingSelectivity {
 				break
 			}
 			targetNode = joinNode
@@ -412,9 +426,10 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 
 	for i, node := range leaves {
 		vertices[i] = &joinVertex{
-			node:     node,
-			children: make(map[int32]bool),
-			parent:   -1,
+			node:                node,
+			children:            make(map[int32]bool),
+			parent:              -1,
+			selectivityOnParent: -1,
 		}
 
 		for _, tag := range builder.enumerateTags(node.NodeId) {
@@ -458,9 +473,17 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 				if leftParent == -1 || shouldChangeParent(leftId, leftParent, rightId, vertices) {
 					if vertices[rightId].parent != leftId {
 						setParent(leftId, rightId, vertices)
+						builder.setSelectivityOnParent(
+							leftId, rightId, edge.leftCols, edge.rightCols,
+							builder.tag2Table[leftCol.RelPos],
+							builder.tag2Table[rightCol.RelPos], vertices)
 					} else if vertices[leftId].node.Stats.Outcnt < vertices[rightId].node.Stats.Outcnt {
 						unsetParent(rightId, leftId, vertices)
 						setParent(leftId, rightId, vertices)
+						builder.setSelectivityOnParent(
+							leftId, rightId, edge.leftCols, edge.rightCols,
+							builder.tag2Table[leftCol.RelPos],
+							builder.tag2Table[rightCol.RelPos], vertices)
 					}
 				}
 			}
@@ -469,9 +492,17 @@ func (builder *QueryBuilder) getJoinGraph(leaves []*plan.Node, conds []*plan.Exp
 				if rightParent == -1 || shouldChangeParent(rightId, rightParent, leftId, vertices) {
 					if vertices[leftId].parent != rightId {
 						setParent(rightId, leftId, vertices)
+						builder.setSelectivityOnParent(
+							rightId, leftId, edge.rightCols, edge.leftCols,
+							builder.tag2Table[rightCol.RelPos],
+							builder.tag2Table[leftCol.RelPos], vertices)
 					} else if vertices[rightId].node.Stats.Outcnt < vertices[leftId].node.Stats.Outcnt {
 						unsetParent(leftId, rightId, vertices)
 						setParent(rightId, leftId, vertices)
+						builder.setSelectivityOnParent(
+							rightId, leftId, edge.rightCols, edge.leftCols,
+							builder.tag2Table[rightCol.RelPos],
+							builder.tag2Table[leftCol.RelPos], vertices)
 					}
 				}
 			}
@@ -489,6 +520,7 @@ func setParent(child, parent int32, vertices []*joinVertex) {
 	}
 	unsetParent(child, vertices[child].parent, vertices)
 	vertices[child].parent = parent
+	vertices[child].selectivityOnParent = -1
 	vertices[parent].children[child] = true
 }
 
@@ -498,6 +530,7 @@ func unsetParent(child, parent int32, vertices []*joinVertex) {
 	}
 	if vertices[child].parent == parent {
 		vertices[child].parent = -1
+		vertices[child].selectivityOnParent = -1
 		delete(vertices[parent].children, child)
 	}
 }
@@ -592,9 +625,7 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 		builder.buildSubJoinTree(vertices, child)
 		dimensions = append(dimensions, vertices[child])
 	}
-	slices.SortFunc(dimensions, func(a, b *joinVertex) int {
-		return compareStats(a.node.Stats, b.node.Stats)
-	})
+	slices.SortFunc(dimensions, compareJoinVertexStats)
 
 	for _, child := range dimensions {
 
@@ -608,6 +639,198 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 
 		vertex.node = builder.qry.Nodes[nodeID]
 	}
+}
+
+func (builder *QueryBuilder) setSelectivityOnParent(
+	child, parent int32,
+	childCols, parentCols []int32,
+	childTable, parentTable *plan.TableDef,
+	vertices []*joinVertex,
+) {
+	if !validVertex(child, vertices) || vertices[child].parent != parent ||
+		!validVertex(parent, vertices) || vertices[child].node == nil ||
+		vertices[child].node.Stats == nil || vertices[parent].node == nil ||
+		vertices[parent].node.Stats == nil ||
+		!builder.hasSingleTableBinding(vertices[child].node.NodeId) {
+		return
+	}
+	parentNDV, ok := builder.getColsNDV(parentCols, parentTable)
+	if !ok || parentNDV <= 0 {
+		return
+	}
+	childNDV, ok := builder.getColsNDV(childCols, childTable)
+	if !ok || childNDV <= 0 {
+		return
+	}
+	// A high-NDV dimension join key is unique or close to unique. Its filtered
+	// row count therefore approximates the number of parent key values retained.
+	// Divide by the parent key's active NDV, not by the dimension table's full
+	// row count: a date dimension can span centuries while a fact table covers
+	// only a few years.
+	activeDomain := min(parentNDV, childNDV, vertices[parent].node.Stats.Outcnt)
+	if activeDomain <= 0 {
+		return
+	}
+	vertices[child].selectivityOnParent = clampSelectivity(
+		vertices[child].node.Stats.Outcnt/activeDomain, 1)
+}
+
+func (builder *QueryBuilder) hasSingleTableBinding(nodeID int32) bool {
+	if builder == nil || builder.qry == nil || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	tags := make(map[int32]struct{})
+	for _, tag := range builder.enumerateTags(nodeID) {
+		if builder.tag2Table[tag] != nil {
+			tags[tag] = struct{}{}
+		}
+	}
+	return len(tags) == 1
+}
+
+func (builder *QueryBuilder) getColsNDV(cols []int32, tableDef *plan.TableDef) (float64, bool) {
+	if tableDef == nil || len(cols) == 0 {
+		return 0, false
+	}
+	w := builder.getStatsInfoByTableID(tableDef.TblId)
+	if w == nil || w.GetStats() == nil {
+		return 0, false
+	}
+	stats := w.GetStats()
+	if stats.TableCnt <= 0 || math.IsNaN(stats.TableCnt) || math.IsInf(stats.TableCnt, 0) {
+		return 0, false
+	}
+	ndv := 1.0
+	for _, colPos := range cols {
+		if colPos < 0 || int(colPos) >= len(tableDef.Cols) || tableDef.Cols[colPos] == nil {
+			return 0, false
+		}
+		columnNDV, exists := stats.NdvMap[tableDef.Cols[colPos].Name]
+		if !exists || columnNDV <= 0 || math.IsNaN(columnNDV) || math.IsInf(columnNDV, 0) {
+			return 0, false
+		}
+		if ndv > stats.TableCnt/columnNDV {
+			ndv = stats.TableCnt
+			break
+		}
+		ndv *= columnNDV
+	}
+	return min(ndv, stats.TableCnt), true
+}
+
+// getJoinActiveDomainSelectivity estimates how much the right side of a join
+// filters the left side when the right join key is unique or nearly unique.
+// The denominator is the key domain that is actually present on both sides,
+// rather than the right table's full historical row count.
+func (builder *QueryBuilder) getJoinActiveDomainSelectivity(nodeID int32) (float64, bool) {
+	return builder.getJoinActiveDomainSelectivityOnSide(nodeID, 1)
+}
+
+func (builder *QueryBuilder) getJoinActiveDomainSelectivityOnSide(
+	nodeID int32,
+	dimensionSide int,
+) (float64, bool) {
+	if builder == nil || builder.qry == nil ||
+		nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return 0, false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.NodeType != plan.Node_JOIN || len(node.Children) != 2 ||
+		(dimensionSide != 0 && dimensionSide != 1) {
+		return 0, false
+	}
+	switch node.JoinType {
+	case plan.Node_INNER, plan.Node_SEMI, plan.Node_ANTI:
+	default:
+		return 0, false
+	}
+	if node.Children[0] < 0 || int(node.Children[0]) >= len(builder.qry.Nodes) ||
+		node.Children[1] < 0 || int(node.Children[1]) >= len(builder.qry.Nodes) ||
+		!builder.hasSingleTableBinding(node.Children[dimensionSide]) {
+		return 0, false
+	}
+	parent := builder.qry.Nodes[node.Children[1-dimensionSide]]
+	dimension := builder.qry.Nodes[node.Children[dimensionSide]]
+	if parent == nil || dimension == nil || parent.Stats == nil || dimension.Stats == nil {
+		return 0, false
+	}
+
+	parentTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(parent.NodeId) {
+		parentTags[tag] = true
+	}
+	dimensionTags := make(map[int32]bool)
+	for _, tag := range builder.enumerateTags(dimension.NodeId) {
+		dimensionTags[tag] = true
+	}
+
+	var parentTable, dimensionTable *plan.TableDef
+	parentCols := make([]int32, 0, len(node.OnList))
+	dimensionCols := make([]int32, 0, len(node.OnList))
+	seen := make(map[[4]int32]struct{})
+	for _, condition := range node.OnList {
+		ok, first, second := checkStrictJoinPred(condition)
+		if !ok {
+			continue
+		}
+		var parentCol, dimensionCol *plan.ColRef
+		switch {
+		case parentTags[first.RelPos] && dimensionTags[second.RelPos]:
+			parentCol, dimensionCol = first, second
+		case parentTags[second.RelPos] && dimensionTags[first.RelPos]:
+			parentCol, dimensionCol = second, first
+		default:
+			continue
+		}
+		conditionParentTable := builder.tag2Table[parentCol.RelPos]
+		conditionDimensionTable := builder.tag2Table[dimensionCol.RelPos]
+		if conditionParentTable == nil || conditionDimensionTable == nil {
+			return 0, false
+		}
+		if (parentTable != nil && parentTable.TblId != conditionParentTable.TblId) ||
+			(dimensionTable != nil && dimensionTable.TblId != conditionDimensionTable.TblId) {
+			return 0, false
+		}
+		parentTable, dimensionTable = conditionParentTable, conditionDimensionTable
+		key := [4]int32{parentCol.RelPos, parentCol.ColPos, dimensionCol.RelPos, dimensionCol.ColPos}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		parentCols = append(parentCols, parentCol.ColPos)
+		dimensionCols = append(dimensionCols, dimensionCol.ColPos)
+	}
+	if len(parentCols) == 0 || !isHighNdvCols(dimensionCols, dimensionTable, builder) {
+		return 0, false
+	}
+	parentNDV, parentOK := builder.getColsNDV(parentCols, parentTable)
+	dimensionNDV, dimensionOK := builder.getColsNDV(dimensionCols, dimensionTable)
+	if !parentOK || !dimensionOK {
+		return 0, false
+	}
+	activeDomain := min(parentNDV, dimensionNDV, parent.Stats.Outcnt)
+	if activeDomain <= 0 || math.IsNaN(activeDomain) || math.IsInf(activeDomain, 0) {
+		return 0, false
+	}
+	matchSelectivity := clampSelectivity(dimension.Stats.Outcnt/activeDomain, 1)
+	if node.JoinType == plan.Node_ANTI {
+		return 1 - matchSelectivity, true
+	}
+	return matchSelectivity, true
+}
+
+func compareJoinVertexStats(left, right *joinVertex) int {
+	leftSelectivity := left.node.Stats.Selectivity
+	if left.selectivityOnParent >= 0 {
+		leftSelectivity = left.selectivityOnParent
+	}
+	rightSelectivity := right.node.Stats.Selectivity
+	if right.selectivityOnParent >= 0 {
+		rightSelectivity = right.selectivityOnParent
+	}
+	return compareStatsValues(
+		leftSelectivity, left.node.Stats.Outcnt,
+		rightSelectivity, right.node.Stats.Outcnt)
 }
 
 func (builder *QueryBuilder) enumerateTags(nodeID int32) []int32 {

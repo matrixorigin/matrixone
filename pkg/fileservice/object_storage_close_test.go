@@ -27,6 +27,14 @@ type testCloser struct {
 	err   error
 }
 
+type testErrorReadCloser struct {
+	readErr  error
+	closeErr error
+}
+
+func (r *testErrorReadCloser) Read([]byte) (int, error) { return 0, r.readErr }
+func (r *testErrorReadCloser) Close() error             { return r.closeErr }
+
 func (c *testCloser) Close() error {
 	c.calls++
 	return c.err
@@ -67,4 +75,21 @@ func TestCloseOnError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMappedErrorReadCloserMapsDeferredProviderErrors(t *testing.T) {
+	providerErr := errors.New("provider object disappeared")
+	mapper := func(err error) error {
+		if errors.Is(err, providerErr) {
+			return errors.Join(ErrObjectChanged, err)
+		}
+		return err
+	}
+
+	reader := mapReadCloserErrors(&testErrorReadCloser{
+		readErr: providerErr, closeErr: providerErr,
+	}, mapper)
+	_, err := reader.Read(make([]byte, 1))
+	require.ErrorIs(t, err, ErrObjectChanged)
+	require.ErrorIs(t, reader.Close(), ErrObjectChanged)
 }

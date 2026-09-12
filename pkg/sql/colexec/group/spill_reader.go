@@ -299,6 +299,84 @@ func (w *groupSpillWriter) Write(value []byte) (int, error) {
 	return written, nil
 }
 
+// WriteSelectedFixedRows appends one sparse fixed-width selection to the
+// existing coalescing buffer in bounded chunks. The bytes are identical to
+// writing every selected value separately; only the call and bounds-check
+// overhead on the spill hot path changes.
+func (w *groupSpillWriter) WriteSelectedFixedRows(
+	data []byte,
+	width int,
+	rows []int32,
+) (int, error) {
+	if w == nil || w.target == nil {
+		return 0, io.ErrClosedPipe
+	}
+	if width < 0 || width > spillWrBufSize ||
+		(width != 0 && len(data)%width != 0) {
+		return 0, mpool.ErrAllocationAccountInvalid
+	}
+	if width == 0 || len(rows) == 0 {
+		return 0, nil
+	}
+	if w.failed != nil {
+		return 0, w.failed
+	}
+	if err := w.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := w.ensureBuffer(); err != nil {
+		return 0, err
+	}
+	if w.disabled {
+		written := 0
+		for _, selected := range rows {
+			row := int(selected)
+			if row < 0 || row >= len(data)/width {
+				return written, mpool.ErrAllocationAccountInvalid
+			}
+			n, err := w.writePhysical(data[row*width : (row+1)*width])
+			written += n
+			if err != nil {
+				return written, err
+			}
+		}
+		return written, nil
+	}
+
+	written := 0
+	rowCount := len(data) / width
+	for len(rows) != 0 {
+		if err := w.ctx.Err(); err != nil {
+			return written, err
+		}
+		spaceRows := (spillWrBufSize - w.buffer.Len()) / width
+		if spaceRows == 0 {
+			if err := w.Flush(); err != nil {
+				return written, err
+			}
+			spaceRows = spillWrBufSize / width
+		}
+		chunkRows := min(spaceRows, len(rows))
+		oldLength := w.buffer.Len()
+		chunkBytes := chunkRows * width
+		if err := w.buffer.Resize(oldLength + chunkBytes); err != nil {
+			return written, err
+		}
+		output := w.buffer.Bytes()[oldLength:]
+		for outputRow, selected := range rows[:chunkRows] {
+			row := int(selected)
+			if row < 0 || row >= rowCount {
+				_ = w.buffer.Resize(oldLength)
+				return written, mpool.ErrAllocationAccountInvalid
+			}
+			copy(output[outputRow*width:], data[row*width:(row+1)*width])
+		}
+		written += chunkBytes
+		rows = rows[chunkRows:]
+	}
+	return written, nil
+}
+
 func (w *groupSpillWriter) Flush() error {
 	if w == nil || w.target == nil {
 		return nil

@@ -45,6 +45,11 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 	if node.DedupJoinCtx != nil {
 		increaseRefCntForColRefList(node.DedupJoinCtx.OldColList, 2, colRefCnt)
 		increaseRefCntForExprList(node.DedupJoinCtx.UpdateColExprList, 2, colRefCnt)
+		for _, col := range dedupJoinMetadataCols(node.DedupJoinCtx) {
+			if col != nil {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}] += 2
+			}
+		}
 		for _, cap := range node.DedupJoinCtx.OldColCaptureList {
 			colRefCnt[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}] += 2
 			colRefCnt[[2]int32{cap.ProbeSource.RelPos, cap.ProbeSource.ColPos}] += 2
@@ -57,6 +62,11 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 		increaseRefCntForColRefList(updateCtx.PartitionCols, 2, colRefCnt)
 		if updateCtx.ChangedRowsCol != nil {
 			colRefCnt[[2]int32{updateCtx.ChangedRowsCol.RelPos, updateCtx.ChangedRowsCol.ColPos}] += 2
+		}
+		for _, col := range []*plan.ColRef{updateCtx.AffectedRowsWeightCol, updateCtx.PhysicalChangedRowsCol} {
+			if col != nil {
+				colRefCnt[[2]int32{col.RelPos, col.ColPos}] += 2
+			}
 		}
 		increaseRefCntForColRefList(updateCtx.AffectedRowsCols, 2, colRefCnt)
 	}
@@ -199,7 +209,15 @@ func increaseRefCntForColRefList(cols []plan.ColRef, inc int, colRefCnt map[[2]i
 
 // FIXME: We should remove PROJECT node for more cases, but keep them now to avoid intricate issues.
 func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, node *plan.Node) bool {
+	if _, protected := builder.existentialGateProjects[node.NodeId]; protected {
+		// Inlining its TRUE slot would turn an ANTI hash key back into a
+		// residual and enumerate every duplicate-key match.
+		return false
+	}
 	if node.NodeType != plan.Node_PROJECT || node.Limit != nil || node.Offset != nil {
+		return false
+	}
+	if _, groupingSetExpand := DecodeGroupingSetExpandOption(node.ExtraOptions); groupingSetExpand {
 		return false
 	}
 
@@ -322,6 +340,13 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	if node.DedupJoinCtx != nil {
 		replaceColumnsForColRefList(node.DedupJoinCtx.OldColList, projMap)
 		replaceColumnsForExprList(node.DedupJoinCtx.UpdateColExprList, projMap)
+		for _, col := range dedupJoinMetadataCols(node.DedupJoinCtx) {
+			if col != nil {
+				cols := []plan.ColRef{*col}
+				replaceColumnsForColRefList(cols, projMap)
+				*col = cols[0]
+			}
+		}
 		for i := range node.DedupJoinCtx.OldColCaptureList {
 			cap := &node.DedupJoinCtx.OldColCaptureList[i]
 			if projExpr, ok := projMap[[2]int32{cap.BuildPlaceholder.RelPos, cap.BuildPlaceholder.ColPos}]; ok {
@@ -350,6 +375,13 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 			cols := []plan.ColRef{*updateCtx.ChangedRowsCol}
 			replaceColumnsForColRefList(cols, projMap)
 			*updateCtx.ChangedRowsCol = cols[0]
+		}
+		for _, col := range []*plan.ColRef{updateCtx.AffectedRowsWeightCol, updateCtx.PhysicalChangedRowsCol} {
+			if col != nil {
+				cols := []plan.ColRef{*col}
+				replaceColumnsForColRefList(cols, projMap)
+				*col = cols[0]
+			}
 		}
 		replaceColumnsForColRefList(updateCtx.AffectedRowsCols, projMap)
 	}
@@ -662,6 +694,11 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 	if node.DedupJoinCtx != nil {
 		increaseTagCntForColRefList(node.DedupJoinCtx.OldColList, 2, tagCnt)
 		increaseTagCntForExprList(node.DedupJoinCtx.UpdateColExprList, 2, tagCnt)
+		for _, col := range dedupJoinMetadataCols(node.DedupJoinCtx) {
+			if col != nil {
+				tagCnt[col.RelPos] += 2
+			}
+		}
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -670,6 +707,11 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 		increaseTagCntForColRefList(updateCtx.PartitionCols, 2, tagCnt)
 		if updateCtx.ChangedRowsCol != nil {
 			tagCnt[updateCtx.ChangedRowsCol.RelPos] += 2
+		}
+		for _, col := range []*plan.ColRef{updateCtx.AffectedRowsWeightCol, updateCtx.PhysicalChangedRowsCol} {
+			if col != nil {
+				tagCnt[col.RelPos] += 2
+			}
 		}
 		increaseTagCntForColRefList(updateCtx.AffectedRowsCols, 2, tagCnt)
 	}
@@ -711,6 +753,11 @@ END:
 	if node.DedupJoinCtx != nil {
 		increaseTagCntForColRefList(node.DedupJoinCtx.OldColList, -2, tagCnt)
 		increaseTagCntForExprList(node.DedupJoinCtx.UpdateColExprList, -2, tagCnt)
+		for _, col := range dedupJoinMetadataCols(node.DedupJoinCtx) {
+			if col != nil {
+				tagCnt[col.RelPos] -= 2
+			}
+		}
 	}
 
 	for _, updateCtx := range node.UpdateCtxList {
@@ -720,10 +767,23 @@ END:
 		if updateCtx.ChangedRowsCol != nil {
 			tagCnt[updateCtx.ChangedRowsCol.RelPos] -= 2
 		}
+		for _, col := range []*plan.ColRef{updateCtx.AffectedRowsWeightCol, updateCtx.PhysicalChangedRowsCol} {
+			if col != nil {
+				tagCnt[col.RelPos] -= 2
+			}
+		}
 		increaseTagCntForColRefList(updateCtx.AffectedRowsCols, -2, tagCnt)
 	}
 
 	return nodeID
+}
+
+func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
+	cols := []*plan.ColRef{ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol}
+	for i := range ctx.ForeignKeyChecks {
+		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
+	}
+	return cols
 }
 
 func increaseTagCntForExprList(exprs []*plan.Expr, inc int, tagCnt map[int32]int) {
@@ -1071,19 +1131,24 @@ func (builder *QueryBuilder) rewriteDistinctToAGG(nodeID int32) {
 }
 
 // reuse removeSimpleProjections to delete this plan node
-func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) {
+func (builder *QueryBuilder) rewriteEffectlessAggToProject(nodeID int32) int32 {
 	remap := make(map[[2]int32]*plan.Expr)
-	builder.rewriteEffectlessAggToProjectImpl(nodeID, false, remap)
-	if len(remap) == 0 {
-		return
+	rewritten := make(map[int32]struct{})
+	builder.rewriteEffectlessAggToProjectImpl(nodeID, false, remap, rewritten)
+	if len(rewritten) == 0 {
+		return nodeID
 	}
-	builder.applyEffectlessAggRemap(nodeID, remap)
+	if len(remap) > 0 {
+		builder.applyEffectlessAggRemap(nodeID, remap)
+	}
+	return builder.removeConstantSortAfterSingletonGroup(nodeID, rewritten)
 }
 
 func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	nodeID int32,
 	limitDemand bool,
 	remap map[[2]int32]*plan.Expr,
+	rewritten map[int32]struct{},
 ) {
 	node := builder.qry.Nodes[nodeID]
 	childLimitDemand := false
@@ -1109,7 +1174,7 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	}
 	if len(node.Children) > 0 {
 		for _, child := range node.Children {
-			builder.rewriteEffectlessAggToProjectImpl(child, childLimitDemand, remap)
+			builder.rewriteEffectlessAggToProjectImpl(child, childLimitDemand, remap, rewritten)
 		}
 	}
 	if node.NodeType != plan.Node_AGG {
@@ -1265,6 +1330,119 @@ func (builder *QueryBuilder) rewriteEffectlessAggToProjectImpl(
 	node.GroupingFlag = nil
 	node.GroupByHashKey = nil
 	node.SpillMem = 0
+	rewritten[nodeID] = struct{}{}
+}
+
+// removeConstantSortAfterSingletonGroup removes only Sorts whose complete key
+// tuple is proven constant by a Project produced in the same singleton-group
+// rewrite pass. Keeping the provenance set local to this pass prevents the rule
+// from becoming an unrelated global constant-ORDER-BY canonicalization.
+func (builder *QueryBuilder) removeConstantSortAfterSingletonGroup(
+	nodeID int32,
+	rewritten map[int32]struct{},
+) int32 {
+	node := builder.qry.Nodes[nodeID]
+	for i, childID := range node.Children {
+		node.Children[i] = builder.removeConstantSortAfterSingletonGroup(childID, rewritten)
+	}
+
+	if node.NodeType != plan.Node_SORT || len(node.Children) != 1 ||
+		node.Limit == nil || node.RankOption != nil || len(node.OrderBy) == 0 ||
+		builder.sqlCalcFoundRows {
+		return nodeID
+	}
+
+	childID := node.Children[0]
+	child := builder.qry.Nodes[childID]
+	if child.RankOption != nil {
+		return nodeID
+	}
+	usesSingletonGroup := false
+	for _, order := range node.OrderBy {
+		if order == nil || order.Expr == nil {
+			return nodeID
+		}
+		constant, usesSingleton := builder.isConstantSingletonGroupOrderExpr(
+			order.Expr, childID, rewritten,
+		)
+		if !constant {
+			return nodeID
+		}
+		usesSingletonGroup = usesSingletonGroup || usesSingleton
+	}
+	if !usesSingletonGroup {
+		return nodeID
+	}
+
+	limit, offset, ok := composePagination(
+		child.Limit, child.Offset, node.Limit, node.Offset,
+	)
+	if !ok {
+		return nodeID
+	}
+	child.Limit, child.Offset = limit, offset
+	return childID
+}
+
+func (builder *QueryBuilder) isConstantSingletonGroupOrderExpr(
+	expr *plan.Expr,
+	nodeID int32,
+	rewritten map[int32]struct{},
+) (constant, usesSingletonGroup bool) {
+	resolved := DeepCopyExpr(expr)
+	for {
+		node := builder.qry.Nodes[nodeID]
+		if node.NodeType == plan.Node_FILTER {
+			if len(node.Children) != 1 {
+				return false, false
+			}
+			// Filter changes row membership but forwards the input bindings. The
+			// pagination window remains above it when Sort is bypassed, so tracing
+			// a key through this node neither reorders nor suppresses its predicate.
+			nodeID = node.Children[0]
+			continue
+		}
+		if node.NodeType != plan.Node_PROJECT || len(node.BindingTags) != 1 ||
+			len(node.Children) != 1 {
+			break
+		}
+		if !containsTag(resolved, node.BindingTags[0]) {
+			// A key may contain an independent safe constant alongside a key
+			// derived from COUNT(*). The Sort as a whole still has to establish
+			// singleton-group provenance before it can be removed.
+			break
+		}
+
+		projectMap := make(map[[2]int32]*plan.Expr, len(node.ProjectList))
+		for i, project := range node.ProjectList {
+			if project == nil {
+				return false, false
+			}
+			projectMap[[2]int32{node.BindingTags[0], int32(i)}] = project
+		}
+		resolved = replaceColumnsForExpr(resolved, projectMap)
+
+		if _, ok := rewritten[nodeID]; ok {
+			usesSingletonGroup = true
+			break
+		}
+		nodeID = node.Children[0]
+	}
+
+	if !rule.IsConstant(resolved, false) {
+		return false, usesSingletonGroup
+	}
+	if resolved.GetLit() != nil {
+		return true, usesSingletonGroup
+	}
+	folded, err := ConstantFold(
+		batch.EmptyForConstFoldBatch,
+		DeepCopyExpr(resolved),
+		builder.compCtx.GetProcess(),
+		false,
+		true,
+	)
+	return err == nil && folded != nil && folded.GetLit() != nil, usesSingletonGroup
 }
 
 func (builder *QueryBuilder) singleRowAggregateExpr(
@@ -1716,6 +1894,15 @@ func singleRowCastIsTotal(source, target plan.Type) bool {
 	if isSameColumnType(source, target) {
 		return !sourceID.IsDecimal() || validDecimalPlanType(source)
 	}
+	// CHAR comparison binding casts text operands to the fixed CHAR domain.
+	// With the same charset and a target at least as wide as the declared
+	// source, that cast cannot reject or truncate any source value.
+	if targetID == types.T_char &&
+		(sourceID == types.T_char || sourceID == types.T_varchar) &&
+		source.Charset == target.Charset && source.Width > 0 &&
+		target.Width >= source.Width {
+		return true
+	}
 	if sourceID.IsDecimal() {
 		if !validDecimalPlanType(source) {
 			return false
@@ -2077,6 +2264,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints = &OptimizerHints{}
 	}
 	switch key {
+	case "vectorLocalDOP":
+		builder.optimizerHints.vectorLocalDOP = value
 	case "pushDownLimitToScan":
 		builder.optimizerHints.pushDownLimitToScan = value
 	case "pushDownTopThroughLeftJoin":
@@ -2117,11 +2306,25 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.disableRightJoin = value
 	case "disableRightSingleRF":
 		builder.optimizerHints.disableRightSingleRF = value
+	case "sharedComputation":
+		builder.optimizerHints.sharedComputation = value
+	case "subqueryPredicatePlanning":
+		builder.optimizerHints.subqueryPredicatePlanning = value
 	case "printShuffle":
 		builder.optimizerHints.printShuffle = value
 	case "skipDedup":
 		builder.optimizerHints.skipDedup = value
+	case "outerAntiPlanning":
+		builder.optimizerHints.outerAntiPlanning = value
 	}
+}
+
+func (builder *QueryBuilder) sharedComputationDisabled() bool {
+	return builder.optimizerHints != nil && builder.optimizerHints.sharedComputation == 1
+}
+
+func (builder *QueryBuilder) subqueryPredicatePlanningDisabled() bool {
+	return builder.optimizerHints != nil && builder.optimizerHints.subqueryPredicatePlanning == 1
 }
 
 func (builder *QueryBuilder) parseOptimizeHints() {

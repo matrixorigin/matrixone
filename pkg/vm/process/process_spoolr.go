@@ -196,6 +196,35 @@ func ResolvePipelineSpoolAbortError(regs ...*WaitRegister) error {
 	return ErrPipelineEndSignalDeliveryFailed
 }
 
+// IsPipelineCancellationError reports whether every error leaf is cancellation
+// fallout rather than a substantive execution failure. A joined error is
+// cancellation-only only when all of its children are cancellation-shaped.
+func IsPipelineCancellationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !IsPipelineCancellationError(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return IsPipelineCancellationError(child)
+		}
+	}
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+}
+
 // BuildCleanupSignal returns the appropriate terminal signal for pipeline cleanup.
 // EventError is used when pipelineFailed=true or err!=nil; EventEnd otherwise.
 func BuildCleanupSignal(pipelineFailed bool, err error) PipelineSignal {
@@ -338,9 +367,10 @@ func (signal PipelineSignal) Action() (data *batch.Batch, info error) {
 }
 
 type PipelineSignalReceiver struct {
-	usrCtx context.Context
-	srcReg []*WaitRegister
-	doneCh []<-chan struct{}
+	usrCtx   context.Context
+	queryCtx context.Context
+	srcReg   []*WaitRegister
+	doneCh   []<-chan struct{}
 
 	alive int
 
@@ -363,6 +393,22 @@ type PipelineSignalReceiverState struct {
 }
 
 func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister) *PipelineSignalReceiver {
+	return initPipelineSignalReceiver(runningCtx, nil, regs)
+}
+
+// InitPipelineSignalReceiverFromProcess initializes a receiver with both levels
+// of execution context. The query context owns client cancellation and
+// deadlines, while proc.Ctx may also be canceled internally to stop a pipeline.
+func InitPipelineSignalReceiverFromProcess(proc *Process, regs []*WaitRegister) *PipelineSignalReceiver {
+	queryCtx, _ := GetQueryCtxFromProc(proc)
+	return initPipelineSignalReceiver(proc.Ctx, queryCtx, regs)
+}
+
+func initPipelineSignalReceiver(
+	runningCtx context.Context,
+	queryCtx context.Context,
+	regs []*WaitRegister,
+) *PipelineSignalReceiver {
 	nbs := make([]int, len(regs))
 	srcRegs := slices.Clone(regs)
 	doneCh := make([]<-chan struct{}, len(regs))
@@ -391,6 +437,7 @@ func InitPipelineSignalReceiver(runningCtx context.Context, regs []*WaitRegister
 
 	return &PipelineSignalReceiver{
 		usrCtx:        runningCtx,
+		queryCtx:      queryCtx,
 		srcReg:        srcRegs,
 		doneCh:        doneCh,
 		alive:         len(regs),
@@ -441,15 +488,11 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 			start := time.Now()
 			chosen, msg = receiver.listenToAll()
 			analyzer.WaitStop(start)
-			if chosen == 0 {
-				return nil, nil
-			}
-
 		} else {
 			chosen, msg = receiver.listenToAll()
-			if chosen == 0 {
-				return nil, nil
-			}
+		}
+		if chosen == 0 {
+			return nil, receiver.contextDoneError()
 		}
 
 		// Handle typed terminal events: End, Error, Abort.
@@ -463,7 +506,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 				continue
 			}
 			// EventError or EventAbort: propagate the error.
-			return nil, msg.terminalErr
+			return nil, receiver.resolveTerminalError(msg.terminalErr)
 		}
 
 		content, info = msg.Action()
@@ -472,7 +515,7 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 			// GetDirectly as a per-sender end signal.
 			receiver.removeIdxReceiver(chosen)
 			if info != nil {
-				return nil, info
+				return nil, receiver.resolveTerminalError(info)
 			}
 			continue
 		}
@@ -483,6 +526,57 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 		}
 		return content, info
 	}
+}
+
+// contextDoneError resolves a canceled receiver against both sources of
+// terminal truth: its process CancelCause and the durable state of its input
+// edges. The latter closes the race where a sibling cancellation wakes the
+// receiver while a producer has already recorded a more specific failure but
+// could not enqueue every Error signal behind buffered data.
+//
+// A plain context.Canceled remains the intentional StopSending/early-stop path.
+// Query deadlines retain their classifiable sentinel even when
+// WithTimeoutCause carries a different diagnostic cause.
+func (receiver *PipelineSignalReceiver) contextDoneError() error {
+	if receiver == nil || receiver.usrCtx == nil {
+		return nil
+	}
+	if queryErr := receiver.queryContextError(); queryErr != nil {
+		return queryErr
+	}
+	if errors.Is(receiver.usrCtx.Err(), context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
+	cause := context.Cause(receiver.usrCtx)
+	if cause != nil && !IsPipelineCancellationError(cause) {
+		return cause
+	}
+	var cancellationErr error
+	for _, reg := range receiver.srcReg {
+		if err := reg.Err(); err != nil {
+			if !IsPipelineCancellationError(err) {
+				return err
+			}
+			if cancellationErr == nil {
+				cancellationErr = err
+			}
+		}
+	}
+	return cancellationErr
+}
+
+func (receiver *PipelineSignalReceiver) resolveTerminalError(err error) error {
+	if queryErr := receiver.queryContextError(); queryErr != nil {
+		return queryErr
+	}
+	return err
+}
+
+func (receiver *PipelineSignalReceiver) queryContextError() error {
+	if receiver == nil || receiver.queryCtx == nil {
+		return nil
+	}
+	return receiver.queryCtx.Err()
 }
 
 // idx is start from 0, this is the index of receiver at the receiver.regs.

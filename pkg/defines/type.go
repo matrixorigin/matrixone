@@ -252,6 +252,11 @@ type DatTypKey struct{}
 type TableIDKey struct{}
 type LogicalIdKey struct{}
 
+// RelKindKey carries a mo_tables.relkind that a CREATE TABLE must adopt verbatim
+// instead of deriving one from the table name. Set by ALTER TABLE ... COPY so the
+// replica keeps the original table's kind.
+type RelKindKey struct{}
+
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 
@@ -290,6 +295,13 @@ type IvfReaderParam struct{}
 
 // RemoteRunContext marks a pipeline executing through remote-run RPC.
 type RemoteRunContext struct{}
+
+// ImplicitCommitFromExplicitTxn marks a statement whose MySQL implicit commit
+// boundary replaced a transaction that was explicitly active before the
+// statement started.  The marker is scoped to one frontend statement and is
+// consumed by data-branch lineage admission after the fresh transaction has
+// been created.
+type ImplicitCommitFromExplicitTxn struct{}
 
 // PkCheckByTN whether TN does primary key uniqueness check against transaction's workspace or not.
 type PkCheckByTN struct{}

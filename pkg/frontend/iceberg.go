@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 )
 
 func handleCreateIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.CreateIcebergCatalog) error {
@@ -176,7 +177,11 @@ func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Drop
 		err = finishTxn(ctx, bh, err)
 	}()
 	catalogName := string(stmt.Name)
-	catalogID, err := queryIcebergCatalogID(ctx, bh, accountID, catalogName)
+	// These points are inert unless explicitly enabled. They make the
+	// CREATE-versus-DROP lifecycle regression observable without changing the
+	// production wait graph or consulting process environment state.
+	fault.TriggerFaultWithContext(ctx, icebergDropCatalogBeforeLifecycleLockFault)
+	catalogID, _, _, err := queryIcebergCatalogStateForUpdate(ctx, bh, accountID, catalogName)
 	if err != nil {
 		return err
 	}
@@ -186,6 +191,7 @@ func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Drop
 		}
 		return moerr.NewInvalidInputf(ctx, "iceberg catalog %s does not exist", catalogName)
 	}
+	fault.TriggerFaultWithContext(ctx, icebergDropCatalogAfterLifecycleLockFault)
 	dependencies, err := icebergCatalogBlockingDependencies(ctx, bh, accountID, catalogID)
 	if err != nil {
 		return err
@@ -200,6 +206,11 @@ func handleDropIcebergCatalog(ctx context.Context, ses *Session, stmt *tree.Drop
 		catalogID,
 	))
 }
+
+const (
+	icebergDropCatalogBeforeLifecycleLockFault = "iceberg-drop-catalog-before-lifecycle-lock"
+	icebergDropCatalogAfterLifecycleLockFault  = "iceberg-drop-catalog-after-lifecycle-lock"
+)
 
 func handleShowIcebergCatalogs(ctx context.Context, ses *Session, stmt *tree.ShowIcebergCatalogs) error {
 	if stmt != nil && (stmt.Like != nil || stmt.Where != nil) {
@@ -416,7 +427,7 @@ func queryIcebergCatalogID(ctx context.Context, bh BackgroundExec, accountID uin
 }
 
 func queryIcebergCatalogStateForUpdate(ctx context.Context, bh BackgroundExec, accountID uint32, catalogName string) (uint64, string, string, error) {
-	sql := sqliceberg.GetCatalogByNameSQL(accountID, catalogName) + " for update"
+	sql := sqliceberg.GetCatalogByNameForUpdateSQL(accountID, catalogName)
 	results, err := ExeSqlInBgSes(ctx, bh, sql)
 	if err != nil {
 		return 0, "", "", err

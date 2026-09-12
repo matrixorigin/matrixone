@@ -204,14 +204,16 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 
 	needCast := false
 	if l >= 2 {
-		// X should be bool or Int.
+		// Each searched CASE condition is a boolean context. Accept every type
+		// that the type system can implicitly convert to BOOL, including the
+		// untyped NULL literal, whose cast remains NULL and therefore does not
+		// select its branch.
 		for i := 0; i < l-1; i += 2 {
 			if inputs[i].Oid != types.T_bool {
-				if inputs[i].IsIntOrUint() {
-					needCast = true
-				} else {
+				if canCast, _ := fixedImplicitTypeCast(inputs[i], types.T_bool); !canCast {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
+				needCast = true
 			}
 		}
 
@@ -876,11 +878,35 @@ func operatorUnaryPlus[T constraints.Integer | constraints.Float | types.Decimal
 	return nil
 }
 
+func unaryMinusMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 {
+		switch inputs[0].Oid {
+		case types.T_int8, types.T_int16, types.T_int32:
+			// Keep overloads 0/1/2 unchanged for serialized legacy plans. New plans
+			// use the historical BIGINT overload after an explicit widening cast,
+			// so old workers execute the same physical argument/result contract.
+			return newCheckResultWithCast(3, []types.Type{types.T_int64.ToType()})
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 func operatorUnaryMinus[T constraints.Signed | constraints.Float](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionFixedTypeParameter[T](parameters[0])
 	rs := vector.MustFunctionResult[T](result)
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := p1.GetValue(i)
+		if selectList != nil && (selectList.IgnoreAllRow() || (!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if !null {
+			if signed, ok := any(v).(int64); ok && signed == math.MinInt64 {
+				return moerr.NewOutOfRangeNoCtxf("BIGINT", "unary minus value '%d'", signed)
+			}
+		}
 		if err := rs.Append(-v, null); err != nil {
 			return err
 		}

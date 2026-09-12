@@ -33,7 +33,8 @@ type AnalyzeTableEntry struct {
 // Use statement
 type AnalyzeStmt struct {
 	statementImpl
-	Entries []*AnalyzeTableEntry
+	Entries  []*AnalyzeTableEntry
+	FullScan bool
 }
 
 func (node *AnalyzeStmt) Format(ctx *FmtCtx) {
@@ -50,6 +51,9 @@ func (node *AnalyzeStmt) Format(ctx *FmtCtx) {
 			entry.Cols.Format(ctx)
 			ctx.WriteString(")")
 		}
+	}
+	if node.FullScan {
+		ctx.WriteString(" fullscan")
 	}
 }
 

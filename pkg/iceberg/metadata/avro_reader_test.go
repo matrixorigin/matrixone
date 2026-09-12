@@ -235,6 +235,21 @@ func TestReadManifest(t *testing.T) {
 	}
 }
 
+func TestReadManifestAcceptsEmptyStringBounds(t *testing.T) {
+	record := manifestEntryTestRecord(1, 0, 3, 2048)
+	dataFile := record["data_file"].(map[string]any)
+	dataFile["lower_bounds"] = []map[string]any{{"key": int32(2), "value": []byte{}}}
+	dataFile["upper_bounds"] = []map[string]any{{"key": int32(2), "value": []byte("z")}}
+
+	entries, err := ReadManifest(encodeOCF(t, manifestEntryTestSchema, []map[string]any{record}))
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	lower, ok := entries[0].DataFile.LowerBounds[2]
+	require.True(t, ok)
+	require.Empty(t, lower)
+	require.Equal(t, []byte("z"), entries[0].DataFile.UpperBounds[2])
+}
+
 func TestReadManifestRejectsInvalidEntryEnumsAndMetrics(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -614,6 +629,10 @@ func TestAvroMetricCollectionValidation(t *testing.T) {
 	byteValues, err := intBytesMap([]any{map[string]any{"key": int32(1), "value": "bound"}})
 	require.NoError(t, err)
 	require.Equal(t, map[int][]byte{1: []byte("bound")}, byteValues)
+	byteValues, err = intBytesMap([]any{map[string]any{"key": int32(1), "value": []byte{}}})
+	require.NoError(t, err)
+	require.Contains(t, byteValues, 1)
+	require.Empty(t, byteValues[1])
 	for _, raw := range []any{
 		"invalid", []any{"invalid"}, []any{map[string]any{"key": 0, "value": []byte{1}}},
 		[]any{map[string]any{"key": 1, "value": 1}},

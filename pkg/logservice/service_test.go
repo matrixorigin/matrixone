@@ -149,10 +149,16 @@ func TestNewServiceClosesStoreOnMetadataFailure(t *testing.T) {
 
 func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	defer leaktest.AfterTest(t)()
-	cfg := getServiceTestConfig()
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	fs := vfs.NewStrictMem()
+	genCfg := newTestServiceConfigGenerator(fs)
+	var cfg Config
+	generate := func() Config {
+		cfg = genCfg()
+		return cfg
+	}
+	defer vfs.ReportLeakedFD(fs, t)
 
-	service, err := NewService(cfg, newFS(), nil)
+	service, err := NewServiceWithRetry(generate, newFS(), nil)
 	require.NoError(t, err)
 	members := map[uint64]dragonboat.Target{1: service.ID()}
 	require.NoError(t, service.store.startReplica(1, 1, members, false))
@@ -168,13 +174,13 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	}
 	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
 
-	service, err = NewService(cfg, newFS(), nil)
+	service, err = NewServiceWithRetry(generate, newFS(), nil)
 	require.Nil(t, service)
 	require.ErrorIs(t, err, dragonboat.ErrShardAlreadyExist)
 
 	md.Shards = md.Shards[:1]
 	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
-	service, err = NewService(cfg, newFS(), nil)
+	service, err = NewServiceWithRetry(generate, newFS(), nil)
 	require.NoError(t, err)
 	require.NoError(t, service.Close())
 }
@@ -1159,40 +1165,16 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				maxNotReady = 0
 			}
 			seedCount := min(nodeCount, 10)
+			gossipPorts := make([]int, nodeCount)
+			for i := range gossipPorts {
+				gossipPorts[i] = getTestGossipPort()
+			}
 			seedAddresses := make([]string, seedCount)
 			for i := range seedCount {
-				seedAddresses[i] = fmt.Sprintf("127.0.0.1:%d", 26002+10*i)
+				seedAddresses[i] = getTestGossipAddress(gossipPorts[i])
 			}
 			configs := make([]Config, 0, nodeCount)
 			services := make([]*Service, 0, nodeCount)
-			for i := 0; i < nodeCount; i++ {
-				cfg := DefaultConfig()
-				cfg.FS = vfs.NewStrictMem()
-				cfg.UUID = uuid.New().String()
-				cfg.DeploymentID = 1
-				cfg.RTTMillisecond = 200
-				cfg.DataDir = fmt.Sprintf("data-%d", i)
-				cfg.LogServicePort = 26000 + 10*i
-				cfg.RaftPort = 26000 + 10*i + 1
-				cfg.GossipPort = 26000 + 10*i + 2
-				cfg.GossipSeedAddresses = append([]string(nil), seedAddresses...)
-				cfg.DisableWorkers = true
-				cfg.LogDBBufferSize = 1024 * 16
-				cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
-				configs = append(configs, cfg)
-
-				runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
-
-				service, err := NewService(cfg,
-					newFS(),
-					nil,
-					WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
-						return true
-					}),
-				)
-				require.NoError(t, err)
-				services = append(services, service)
-			}
 			defer func() {
 				testLogger.Info("going to close all services")
 				var wg sync.WaitGroup
@@ -1216,6 +1198,34 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				wg.Wait()
 				require.NoError(t, closeErr)
 			}()
+			for i := 0; i < nodeCount; i++ {
+				cfg := DefaultConfig()
+				cfg.FS = vfs.NewStrictMem()
+				cfg.UUID = uuid.New().String()
+				cfg.DeploymentID = 1
+				cfg.RTTMillisecond = 200
+				cfg.DataDir = fmt.Sprintf("data-%d", i)
+				cfg.LogServicePort = getTestServicePort()
+				cfg.RaftPort = getAvailablePort()
+				cfg.GossipPort = gossipPorts[i]
+				cfg.GossipSeedAddresses = append([]string(nil), seedAddresses...)
+				cfg.DisableWorkers = true
+				cfg.LogDBBufferSize = 1024 * 16
+				cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
+				configs = append(configs, cfg)
+
+				runtime.SetupServiceBasedRuntime(cfg.UUID, rt)
+
+				service, err := NewService(cfg,
+					newFS(),
+					nil,
+					WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+						return true
+					}),
+				)
+				require.NoError(t, err)
+				services = append(services, service)
+			}
 			// start all replicas
 			// shardID: [1, 16]
 			id := uint64(100)

@@ -47,9 +47,9 @@ func (merge *Merge) Prepare(proc *process.Process) error {
 	}
 
 	if merge.Partial {
-		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
+		merge.ctr.receiver = process.InitPipelineSignalReceiverFromProcess(proc, proc.Reg.MergeReceivers[merge.StartIDX:merge.EndIDX])
 	} else {
-		merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, proc.Reg.MergeReceivers)
+		merge.ctr.receiver = process.InitPipelineSignalReceiverFromProcess(proc, proc.Reg.MergeReceivers)
 	}
 	return nil
 }

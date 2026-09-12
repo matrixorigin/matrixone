@@ -21,6 +21,19 @@ insert into auto_increment_zero values (0,1),(0,2);
 select * from auto_increment_zero order by id;
 drop table auto_increment_zero;
 
+-- A negative explicit ID must not discard low candidates before a later
+-- positive explicit ID, in either ordinary INSERT or ordered INSERT IGNORE.
+drop table if exists auto_increment_signed_manual;
+create table auto_increment_signed_manual(id bigint auto_increment primary key, u int unique);
+insert into auto_increment_signed_manual values(-1,10),(NULL,20),(100,30),(NULL,40);
+select id,u from auto_increment_signed_manual order by u;
+select last_insert_id();
+truncate table auto_increment_signed_manual;
+insert ignore into auto_increment_signed_manual values(-1,10),(NULL,20),(100,30),(NULL,40);
+select id,u from auto_increment_signed_manual order by u;
+select last_insert_id();
+drop table auto_increment_signed_manual;
+
 
 -- auto_increment > 0
 Drop table if exists auto_increment02;
@@ -437,8 +450,9 @@ Drop table if exists auto_increment16;
 Create temporary table auto_increment16(col1 int auto_increment)auto_increment < 0;
 Drop table auto_increment16;
 
--- system variable: auto_increment_increment
+-- Session variables control DML allocation, not CREATE metadata.
 drop table if exists auto_increment17;
+set auto_increment_increment = 1;
 set auto_increment_offset = 10;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
@@ -448,6 +462,7 @@ create table auto_increment17(col1 int auto_increment) auto_increment = 0;
 insert into auto_increment17 values();
 select * from auto_increment17;
 drop table auto_increment17;
+set auto_increment_increment = 1;
 set auto_increment_offset = 100;
 create table auto_increment17(col1 int auto_increment);
 insert into auto_increment17 values();
@@ -496,15 +511,82 @@ insert into auto_increment_alter_copy(v) values (4);
 select id from auto_increment_alter_copy order by id;
 drop table auto_increment_alter_copy;
 
--- COPY must preserve the session-initialized allocator for a newly added
--- AUTO_INCREMENT column when the source table is empty.
+-- COPY must keep a newly added empty AUTO_INCREMENT column independent of the
+-- session that performed the ALTER; the writer's session controls the first ID.
 drop table if exists auto_increment_alter_add_empty;
+set auto_increment_increment = 1;
 set auto_increment_offset = 10;
 create table auto_increment_alter_add_empty(v int);
 alter table auto_increment_alter_add_empty add column id bigint auto_increment, algorithm = copy;
+set auto_increment_offset = 1;
 insert into auto_increment_alter_add_empty(v) values (1);
 select * from auto_increment_alter_add_empty;
 drop table auto_increment_alter_add_empty;
+
+-- A fresh CREATE and a fresh ALTER COPY must not persist the creator's session
+-- offset for a later writer. Explicit AUTO_INCREMENT remains table state.
+drop table if exists auto_increment_session_ddl_alter;
+drop table if exists auto_increment_session_ddl_create;
+drop table if exists auto_increment_session_ddl_explicit;
+set auto_increment_increment = 3;
+set auto_increment_offset = 2;
+create table auto_increment_session_ddl_alter(v int);
+alter table auto_increment_session_ddl_alter add column id bigint auto_increment, algorithm = copy;
+create table auto_increment_session_ddl_create(id bigint auto_increment, v int);
+create table auto_increment_session_ddl_explicit(id bigint auto_increment, v int) auto_increment = 100;
+-- Same-CN exact oracle for independence from the creator's session offset.
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+insert into auto_increment_session_ddl_alter(v) values (0);
+insert into auto_increment_session_ddl_create(v) values (0);
+insert into auto_increment_session_ddl_explicit(v) values (0);
+select id from auto_increment_session_ddl_alter;
+select id from auto_increment_session_ddl_create;
+select id from auto_increment_session_ddl_explicit;
+-- @session:id=1{
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+insert into auto_increment.auto_increment_session_ddl_alter(v) values (1), (2), (3);
+insert into auto_increment.auto_increment_session_ddl_create(v) values (1), (2), (3);
+insert into auto_increment.auto_increment_session_ddl_explicit(v) values (1), (2), (3);
+-- A different CN may reserve the next block. Verify writer step and table
+-- start, not a gapless first ID. Creator-session metadata is checked separately.
+select count(*), min(id) > 1, max(id)-min(id) from auto_increment.auto_increment_session_ddl_alter where v > 0;
+select count(*), min(id) > 1, max(id)-min(id) from auto_increment.auto_increment_session_ddl_create where v > 0;
+select count(*), min(id) > 100, max(id)-min(id) from auto_increment.auto_increment_session_ddl_explicit where v > 0;
+-- @session}
+drop table auto_increment_session_ddl_alter;
+drop table auto_increment_session_ddl_create;
+drop table auto_increment_session_ddl_explicit;
+
+-- Existing allocators use the writer's increment/offset series. Session-local
+-- variables must also be applied after the allocator has already been used.
+drop table if exists auto_increment_session_series;
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+create table auto_increment_session_series(id bigint auto_increment primary key, v int);
+set auto_increment_increment = 3;
+set auto_increment_offset = 2;
+insert into auto_increment_session_series(v) values (1), (2), (3);
+select id, v from auto_increment_session_series order by id;
+select last_insert_id();
+set auto_increment_increment = 1;
+set auto_increment_offset = 1;
+insert into auto_increment_session_series(v) values (4);
+-- A writer-side option change must still advance the existing allocator. The
+-- exact value may follow an already reserved range, so assert the invariant.
+select count(*) from auto_increment_session_series where v = 4 and id > 8;
+-- A different writer may select a new series without changing table metadata;
+-- check only the series invariants because reservation boundaries can create gaps.
+-- @session:id=2{
+set auto_increment_increment = 4;
+set auto_increment_offset = 3;
+insert into auto_increment.auto_increment_session_series(v) values (5), (6), (7);
+select count(*), min(id) % 4, max(id) - min(id), min(id) > 8
+from auto_increment.auto_increment_session_series where v >= 5;
+-- @session}
+drop table auto_increment_session_series;
+set auto_increment_increment = 1;
 set auto_increment_offset = 1;
 
 -- INPLACE rename must not orphan the allocator row used by a later reset.
@@ -556,6 +638,47 @@ select result from generate_series(1, 20000) g;
 select last_insert_id();
 select min(id), max(id), count(*) from auto_increment_multi_batch;
 drop table auto_increment_multi_batch;
+
+-- Provenance must survive multiple computed lock keys and a CHECK filter.
+-- A row rejected by either UK must not reserve its other key for later rows.
+drop table if exists auto_increment_ignore_aux;
+create table auto_increment_ignore_aux(id bigint auto_increment primary key, a varchar(10), b int check(b>0), c varchar(10), unique key uk_ab(a,b), unique key uk_c(c(2)));
+insert ignore into auto_increment_ignore_aux(a,b,c) values ('aa',1,'xy1'),('aa',1,'zz1'),('bb',2,'xy2'),('bb',2,'zz2');
+select id,a,b,c from auto_increment_ignore_aux order by id;
+select last_insert_id();
+select id from auto_increment_ignore_aux force index(uk_ab) where a='bb' and b=2;
+select id from auto_increment_ignore_aux force index(uk_c) where c='zz2';
+drop table auto_increment_ignore_aux;
+
+-- Synchronous indexes must share accepted rows and finalized IDs, not the
+-- provisional input. A rejected token must never find a different accepted row.
+drop table if exists auto_increment_ignore_irregular;
+create table auto_increment_ignore_irregular(id bigint auto_increment primary key, uk int, g int check(g>=0), body varchar(100), unique key uq(uk,g), index mi using master(body), fulltext fi(body));
+insert ignore into auto_increment_ignore_irregular(uk,g,body) values (1,0,'alpha'),(1,0,'beta'),(2,0,'gamma');
+select id,uk,body from auto_increment_ignore_irregular order by id;
+select last_insert_id();
+select id from auto_increment_ignore_irregular where match(body) against('gamma' in boolean mode);
+select id from auto_increment_ignore_irregular where match(body) against('beta' in boolean mode);
+select id from auto_increment_ignore_irregular force index(mi) where body='gamma';
+select id from auto_increment_ignore_irregular force index(mi) where body='beta';
+insert ignore into auto_increment_ignore_irregular(uk,g,body) values (1,0,'rejected'),(4,-1,'rejected');
+insert ignore into auto_increment_ignore_irregular(uk,g,body) select uk,g,body from auto_increment_ignore_irregular where false;
+select count(*) from auto_increment_ignore_irregular;
+select id from auto_increment_ignore_irregular where match(body) against('rejected' in boolean mode);
+begin;
+insert ignore into auto_increment_ignore_irregular(uk,g,body) values (4,0,'rollback');
+rollback;
+select id from auto_increment_ignore_irregular where match(body) against('rollback' in boolean mode);
+select id from auto_increment_ignore_irregular force index(mi) where body='rollback';
+drop table auto_increment_ignore_irregular;
+
+-- The same final-image boundary applies without generated-ID reordering.
+drop table if exists auto_increment_ignore_manual_index;
+create table auto_increment_ignore_manual_index(id bigint primary key, body varchar(100), fulltext fi(body));
+insert ignore into auto_increment_ignore_manual_index values (1,'alpha'),(1,'beta'),(2,'gamma');
+select id from auto_increment_ignore_manual_index where match(body) against('gamma' in boolean mode);
+select id from auto_increment_ignore_manual_index where match(body) against('beta' in boolean mode);
+drop table auto_increment_ignore_manual_index;
 
 -- An all-manual INSERT reports zero in its OK packet but must not change the
 -- session value observed by LAST_INSERT_ID().

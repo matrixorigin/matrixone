@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -83,4 +84,35 @@ func TestPushdownLimitToCheckConstraintsFunctionScan(t *testing.T) {
 	builder.pushdownLimitToTableScan(1)
 	require.Nil(t, functionScan.Limit)
 	require.Same(t, limit, project.Limit)
+}
+
+func TestGuardConstraintByEligibility(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	ctx := mock.CurrentContext().GetContext()
+	constraintOK := makePlan2BoolConstExprWithType(false)
+
+	unguarded, err := guardConstraintByEligibility(ctx, constraintOK, nil)
+	require.NoError(t, err)
+	require.Same(t, constraintOK, unguarded)
+
+	eligible := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_bool), NotNullable: true},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 3,
+			ColPos: 7,
+		}},
+	}
+	guarded, err := guardConstraintByEligibility(ctx, constraintOK, eligible)
+	require.NoError(t, err)
+	orFn := guarded.GetF()
+	require.NotNil(t, orFn)
+	require.Equal(t, "or", orFn.Func.ObjName)
+	require.Len(t, orFn.Args, 2)
+	notFn := orFn.Args[0].GetF()
+	require.NotNil(t, notFn)
+	require.Equal(t, "not", notFn.Func.ObjName)
+	require.Len(t, notFn.Args, 1)
+	require.Equal(t, eligible, notFn.Args[0])
+	require.NotSame(t, eligible, notFn.Args[0], "the caller-owned eligibility expression must not be mutated")
+	require.Same(t, constraintOK, orFn.Args[1])
 }

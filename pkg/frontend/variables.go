@@ -738,18 +738,15 @@ func (svst SystemVariableSetType) bits2string(bits uint64) (string, error) {
 			if !ok {
 				return "", errorValueIsInvalid
 			}
-			bld.WriteString(v)
-			if i != 0 {
+			if bld.Len() > 0 {
 				bld.WriteByte(',')
 			}
+			bld.WriteString(v)
 		}
 	}
 
 	bldString := bld.String()
-	if len(bldString) == 0 {
-		return bldString, nil
-	}
-	return bldString[:len(bldString)-1], nil
+	return bldString, nil
 }
 
 func (svst SystemVariableSetType) string2bits(s string) (uint64, error) {
@@ -1330,8 +1327,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: true,
-		Type:              InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "MATRIXONE_NATIVE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL"),
-		Default:           "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES",
+		// A new value is appended, never inserted: SET bit indexes are
+		// positional, so inserting mid-list would change the bit of every value
+		// after it. A token the planner reads at bind time must also be wired
+		// into updateSqlModeCaches and PrepareStmt, as ONLY_FULL_GROUP_BY is.
+		Type:    InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ALLOW_INVALID_DATES", "ANSI_QUOTES", "ERROR_FOR_DIVISION_BY_ZERO", "HIGH_NOT_PRECEDENCE", "IGNORE_SPACE", "MATRIXONE_NATIVE", "NO_AUTO_VALUE_ON_ZERO", "NO_BACKSLASH_ESCAPES", "NO_DIR_IN_CREATE", "NO_ENGINE_SUBSTITUTION", "NO_UNSIGNED_SUBTRACTION", "NO_ZERO_DATE", "NO_ZERO_IN_DATE", "ONLY_FULL_GROUP_BY", "PAD_CHAR_TO_FULL_LENGTH", "PIPES_AS_CONCAT", "REAL_AS_FLOAT", "STRICT_ALL_TABLES", "STRICT_TRANS_TABLES", "TIME_TRUNCATE_FRACTIONAL", "ENABLE_BOOL_SUMAVG"),
+		Default: "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG",
 	},
 	"completion_type": {
 		Name:              "completion_type",
@@ -1421,6 +1422,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("wait_timeout", 1, 2147483, false),
 		Default:           int64(86400),
+	},
+	warningCountSystemVariable: {
+		Name:              warningCountSystemVariable,
+		Scope:             ScopeSession,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableUintType(warningCountSystemVariable, 0, math.MaxUint64),
+		Default:           uint64(0),
+	},
+	errorCountSystemVariable: {
+		Name:              errorCountSystemVariable,
+		Scope:             ScopeSession,
+		Dynamic:           false,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableUintType(errorCountSystemVariable, 0, math.MaxUint64),
+		Default:           uint64(0),
 	},
 	"sql_safe_updates": {
 		Name:              "sql_safe_updates",
@@ -3744,6 +3761,22 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("experimental_ivf_index"),
 		Default:           int8(0),
 	},
+	"experimental_parquet_load_parallel": {
+		Name:              "experimental_parquet_load_parallel",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("experimental_parquet_load_parallel"),
+		Default:           int8(0),
+	},
+	"experimental_parquet_load_parallel_min_size": {
+		Name:              "experimental_parquet_load_parallel_min_size",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("experimental_parquet_load_parallel_min_size", 1, 128*1024*1024, false),
+		Default:           int64(128 * 1024 * 1024),
+	},
 	"ivf_threads_build": {
 		Name:              "ivf_threads_build",
 		Scope:             ScopeBoth,
@@ -3823,6 +3856,43 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableBoolType("fulltext_bloom_filter_pushdown"),
 		Default:           int8(0),
+	},
+	// HOST memory byte budget for the vector/fulltext index cache, read per account. The
+	// value on the SYS account (id 0) caps every tenant's resident indexes on the CN
+	// together; the value on a tenant caps that tenant alone. 0 -- the default -- means "not
+	// set by an operator", and the governor then DERIVES the budget from this machine: a
+	// share of total RAM, read from /proc/meminfo and any cgroup limit. So the cache is
+	// always accounted and always evictable, without an operator having to pick a number.
+	//
+	// Device memory has its own budget, max_gpu_index_cache_size: a CN has far more RAM than
+	// VRAM, so one number cannot express both.
+	"max_index_cache_size": {
+		Name:              "max_index_cache_size",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("max_index_cache_size", 0, math.MaxInt64, false),
+		// 0, meaning unset. The advertised default used to be a fixed 64 TiB ceiling, which
+		// said nothing true about any particular machine and, being non-zero, took priority
+		// over the derived budget -- so on a bootstrapped cluster the machine-derived sizing
+		// never applied. Defaulting to 0 makes the variable say what the governor does: no
+		// operator limit, budget derived from this host.
+		Default: int64(0),
+	},
+	// DEVICE (VRAM) byte budget for the index cache, the GPU counterpart of
+	// max_index_cache_size and read per account the same way: SYS caps the CN, a tenant's
+	// value caps that tenant. Only the cuVS algorithms (cagra, ivfpq) charge against it.
+	// 0 -- the default -- means "not set by an operator", and the governor derives the budget
+	// from the GPUs actually present. A CN with no GPU derives 0 and charges nothing here.
+	"max_gpu_index_cache_size": {
+		Name:              "max_gpu_index_cache_size",
+		Scope:             ScopeGlobal,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("max_gpu_index_cache_size", 0, math.MaxInt64, false),
+		// 0, meaning unset: the budget comes from a CUDA query of the devices on this CN, not
+		// from a constant that guesses at somebody's GPU count. See max_index_cache_size.
+		Default: int64(0),
 	},
 	"probe_limit": {
 		Name:              "probe_limit",
@@ -4338,8 +4408,9 @@ type UserDefinedVar struct {
 	// compatibility, but MySQL fixes their effective type at statement start.
 	// Keeping the assignment type here prevents a numeric sibling operand from
 	// silently narrowing a decimal or floating-point variable.
-	Type             planpb.Type
-	PrepareParamKind vector.PrepareParamKind
+	Type                planpb.Type
+	PrepareParamKind    vector.PrepareParamKind
+	RuntimeStringDomain types.RuntimeStringDomain
 	// Replayable is true only when the proxy can replay the assignment as a
 	// captured raw COM_QUERY SET statement during legacy migration.
 	Replayable bool

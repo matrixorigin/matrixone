@@ -17,6 +17,7 @@ package sysview
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -75,22 +76,49 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion16 {
+	if protocol >= defines.MORPCVersion58 {
 		return InitInformationSchemaSysTables
 	}
 
-	sqls := make([]string, 0, len(InitInformationSchemaSysTables)-1)
+	includeCheckConstraints := protocol >= defines.MORPCVersion16
+	includeCurrentRoles := protocol >= defines.MORPCVersion41
+	sqls := make([]string, 0, len(InitInformationSchemaSysTables))
 	for _, sql := range InitInformationSchemaSysTables {
 		switch sql {
-		case InformationSchemaCheckConstraintsDDL:
-			continue
-		case InformationSchemaTableConstraintsDDL:
-			sqls = append(sqls, InformationSchemaTableConstraintsLegacyDDL)
-		default:
-			sqls = append(sqls, sql)
+		case InformationSchemaTablesDDL:
+			if protocol < defines.MORPCVersion46 {
+				sql = InformationSchemaTablesV41DDL
+			}
+		case InformationSchemaColumnsDDL:
+			if protocol >= defines.MORPCVersion46 {
+				sql = InformationSchemaColumnsV46DDL
+			} else {
+				sql = InformationSchemaColumnsV41DDL
+			}
 		}
+		if !includeCheckConstraints {
+			switch sql {
+			case InformationSchemaCheckConstraintsDDL:
+				continue
+			case InformationSchemaTableConstraintsDDL:
+				sql = InformationSchemaTableConstraintsLegacyDDL
+			}
+		}
+		if !includeCurrentRoles {
+			sql = informationSchemaMetadataVisibilityCompatibilityDDL(sql)
+		}
+		sqls = append(sqls, sql)
 	}
 	return sqls
+}
+
+func informationSchemaMetadataVisibilityCompatibilityDDL(sql string) string {
+	return strings.Replace(
+		sql,
+		informationSchemaMetadataVisibilityCTE(),
+		informationSchemaMetadataVisibilityCompatibilityCTE(),
+		1,
+	)
 }
 
 func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {

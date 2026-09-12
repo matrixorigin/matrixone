@@ -15,11 +15,13 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -33,6 +35,29 @@ func TestEventSchedulerDefaultDisabled(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(got, convey.ShouldEqual, "DISABLED")
 	})
+}
+
+func TestSystemVariableSetTypeBits2String(t *testing.T) {
+	svst := InitSystemVariableSetType("sql_mode", "ANSI", "TRADITIONAL", "ONLY_FULL_GROUP_BY")
+
+	tests := []struct {
+		name string
+		bits uint64
+		want string
+	}{
+		{name: "first member", bits: 1, want: "ANSI"},
+		{name: "first and second members", bits: 3, want: "ANSI,TRADITIONAL"},
+		{name: "non-first member", bits: 2, want: "TRADITIONAL"},
+		{name: "non-adjacent members", bits: 5, want: "ANSI,ONLY_FULL_GROUP_BY"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := svst.bits2string(tt.bits)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestLockWaitTimeoutDefaultIsBounded(t *testing.T) {
@@ -59,6 +84,34 @@ func TestGroupConcatMaxLenDefault(t *testing.T) {
 	})
 }
 
+func TestDiagnosticCountSystemVariables(t *testing.T) {
+	for _, name := range []string{warningCountSystemVariable, errorCountSystemVariable} {
+		sv, ok := gSysVarsDefs[name]
+		assert.True(t, ok)
+		assert.Equal(t, ScopeSession, sv.Scope)
+		assert.False(t, sv.Dynamic)
+		assert.False(t, sv.SetVarHintApplies)
+		assert.Equal(t, uint64(0), sv.Default)
+		assert.Equal(t, types.T_uint64, sv.Type.Type())
+	}
+
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.appendWarningDiagnostic(1292, "warning")
+	ses.appendErrorDiagnostic(1064, "error")
+
+	warningCount, err := ses.GetSessionSysVar("WARNING_COUNT")
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(2), warningCount)
+	errorCount, err := ses.GetSessionSysVar("error_count")
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(1), errorCount)
+
+	_, err = ses.GetGlobalSysVar(warningCountSystemVariable)
+	assert.Error(t, err)
+	err = ses.SetSessionSysVar(context.Background(), warningCountSystemVariable, uint64(0))
+	assert.Error(t, err)
+}
+
 func TestCTEMaxMemoryBytesDefinition(t *testing.T) {
 	sv, ok := gSysVarsDefs["cte_max_memory_bytes"]
 	assert.True(t, ok)
@@ -76,6 +129,26 @@ func TestCTEMaxMemoryBytesDefinition(t *testing.T) {
 	_, err = sv.Type.Convert(int64(-1))
 	assert.Error(t, err)
 	_, err = sv.Type.Convert(int64(1099511627777))
+	assert.Error(t, err)
+}
+
+func TestExperimentalParquetLoadParallelVariables(t *testing.T) {
+	gate, ok := gSysVarsDefs["experimental_parquet_load_parallel"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, gate.Scope)
+	assert.True(t, gate.Dynamic)
+	assert.Equal(t, int8(0), gate.Default)
+
+	minSize, ok := gSysVarsDefs["experimental_parquet_load_parallel_min_size"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, minSize.Scope)
+	assert.True(t, minSize.Dynamic)
+	assert.Equal(t, int64(128*1024*1024), minSize.Default)
+
+	converted, err := minSize.Type.Convert(int64(1))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), converted)
+	_, err = minSize.Type.Convert(int64(128*1024*1024 + 1))
 	assert.Error(t, err)
 }
 
@@ -372,4 +445,25 @@ func TestRollbackTxnOnErrorVarDefinition(t *testing.T) {
 		_, err = sv.Type.Convert("sometimes")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
+}
+
+// The index cache governor holds ONE cap per tenant, not one per index, and that is only sound
+// while the caps are global-scope. If either variable ever became session-settable, two sessions
+// of the same tenant could load indexes under different caps, the tenant's budget would no longer
+// be a single number over the sum of its entries, and the governor would have to capture the cap
+// per load instead -- see tenantCacheLimits and acctLimits in pkg/vectorindex/cache.
+//
+// So this is not a restatement of the definition: it is the tripwire on the assumption a
+// different package makes about it.
+func TestIndexCacheSizeVariablesStayGlobalScope(t *testing.T) {
+	for _, name := range []string{"max_index_cache_size", "max_gpu_index_cache_size"} {
+		def, ok := gSysVarsDefs[name]
+		assert.True(t, ok, "%s must exist: the governor reads it", name)
+		assert.Equal(t, ScopeGlobal, def.Scope,
+			"%s is global-scope by contract; making it session-settable requires the index cache "+
+				"governor to capture the cap per load", name)
+		assert.True(t, def.Dynamic,
+			"%s must stay dynamic: a cache budget an operator can only change by restarting "+
+				"every CN is not usable during the memory pressure that prompts the change", name)
+	}
 }
