@@ -37,6 +37,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -426,6 +427,35 @@ type Compile struct {
 	ignorePublish            bool
 	ignoreCheckExperimental  bool
 	disableLock              bool
+	// copyAlterPrepare is propagated only to the internal CREATE belonging to
+	// an ALTER COPY preparation. It must be reset with the Compile lifecycle so
+	// it cannot leak into a later statement.
+	copyAlterPrepare          bool
+	copyAlterCreateScope      executor.CopyAlterPreparation
+	copyAlterInternalExecutor bool
+	copyAlterExecutorOwner    bool
+	copyAlterAdmissionSet     bool
+	copyAlterAdmitted         bool
+	// copyAlterIndexBuild marks the explicit physical index-build call that
+	// follows the copied-row preparation. It is only meaningful together with
+	// copyAlterPrepare and is never propagated through user SQL.
+	copyAlterIndexBuild bool
+	// copyAlterPublication marks the post-rename plugin call that publishes
+	// final maintenance tasks. It must not rerun physical index work.
+	copyAlterPublication bool
+	alterCopyIndexRows   map[string]int64
+	// alterCopySplitPreparation tells lineage probing to remain read-only while
+	// the replacement relation is being prepared. It is scoped to one ALTER
+	// COPY compile and is reset with the Compile lifecycle.
+	alterCopySplitPreparation bool
+	// Once gate acquisition begins, only the owning entry point may retry by
+	// rolling back the whole transaction. Statement rollback retains locks.
+	alterCopyCoordinating bool
+	// alterCopyPublicationSnapshotAdvanced records an RC snapshot refresh that
+	// happened while reacquiring the publication gates. Once AdvanceSnapshot
+	// transfers tombstones, the outer ALTER cleanup must not rewind the old
+	// snapshot on a later publication error.
+	alterCopyPublicationSnapshotAdvanced bool
 
 	icebergScanPlanner icebergapi.ScanPlanner
 	icebergScanPlans   map[int32]*icebergapi.IcebergScanPlan

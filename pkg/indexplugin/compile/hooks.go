@@ -133,6 +133,55 @@ type CompileContext interface {
 		action string, metadata []byte) error
 }
 
+// The ALTER COPY split path has two internal-only phases that must not become
+// part of the public plugin interface.  The SQL layer exposes them through
+// optional methods on its concrete context, so existing plugin test doubles
+// keep their current shape.  A context that does not implement these methods
+// is an ordinary CREATE/REINDEX context.
+type alterCopyPhaseContext interface {
+	IsAlterCopyPrepare() bool
+}
+
+type alterCopyIndexBuildContext interface {
+	IsAlterCopyIndexBuild() bool
+}
+
+type alterCopyPublicationContext interface {
+	IsAlterCopyPublication() bool
+}
+
+// AlterCopyIndexRows retains the source cardinality used to generate an async
+// index initialization task. Publication must not scan the source again.
+type AlterCopyIndexRows interface {
+	SetAlterCopyIndexRows(indexName string, rows int64)
+	GetAlterCopyIndexRows(indexName string) (int64, bool)
+}
+
+// IsAlterCopyPrepare reports that a plugin call belongs to the private
+// preparation transaction of ALTER TABLE ... COPY.  During the child CREATE,
+// IndexInfo is non-nil and the plugin must only create hidden relations; during
+// the later index-build call it may populate those relations when
+// IsAlterCopyIndexBuild is also true.
+func IsAlterCopyPrepare(ctx CompileContext) bool {
+	v, ok := ctx.(alterCopyPhaseContext)
+	return ok && v.IsAlterCopyPrepare()
+}
+
+// IsAlterCopyIndexBuild reports that a preparation call is the explicit
+// synchronous physical-build step after the copied rows are present.
+func IsAlterCopyIndexBuild(ctx CompileContext) bool {
+	v, ok := ctx.(alterCopyIndexBuildContext)
+	return ok && v.IsAlterCopyIndexBuild()
+}
+
+// IsAlterCopyPublication reports that a plugin is being called after the
+// copied relation has been atomically renamed.  Such a call may register the
+// final CDC/idxcron work, but must not repeat an expensive physical build.
+func IsAlterCopyPublication(ctx CompileContext) bool {
+	v, ok := ctx.(alterCopyPublicationContext)
+	return ok && v.IsAlterCopyPublication()
+}
+
 // Context is the algorithm-agnostic subset of context.Context the plugin needs.
 // Defined locally to avoid importing context.Context into the interface
 // surface; CompileContext implementations return the real context.Context via

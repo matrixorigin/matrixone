@@ -140,6 +140,9 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 // CDC pipeline via InitSQL (false — the always-async default path).
 func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
 	logutil.Infof("[plugin] ivfpq handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
+	prepare := compileplugin.IsAlterCopyPrepare(ctx)
+	indexBuild := compileplugin.IsAlterCopyIndexBuild(ctx)
+	publish := compileplugin.IsAlterCopyPublication(ctx)
 	// 0. experimental flag gate (mirrors HNSW's check at ddl_index_algo.go:627).
 	// Frontend-only: re-entry from background (idxcron ALTER REINDEX,
 	// ProcessInitSQL) must not re-check the flag, since (a) it may have
@@ -176,6 +179,12 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 				return err
 			}
 		}
+		if prepare && !indexBuild {
+			return nil
+		}
+	}
+	if prepare && !indexBuild {
+		return nil
 	}
 
 	// Skip index data population for CCPR tables when this is a CCPR task
@@ -185,19 +194,18 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 	if ctx.IsCCPRTaskTransaction() && ctx.IsTableFromPublication(originalTableDef) {
 		return nil
 	}
-
 	// 3. clear the cache
 	cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
 
-	// 4. delete old data first
-	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
+	async, err := catalog.IndexParamAsync(metaDef.IndexAlgoParams)
 	if err != nil {
 		return err
 	}
-	for _, sql := range sqls {
-		if err = ctx.RunSql(sql); err != nil {
-			return err
-		}
+	if prepare && async {
+		// Explicitly asynchronous IVF-PQ is initialized by the CDC task after
+		// publication. The synchronous form continues below so its physical
+		// build remains outside the publication gate.
+		return nil
 	}
 
 	// 5. Generate the ivfpq_create build SQL. forceSync controls when
@@ -209,6 +217,42 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 	}
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexIvfpqAlgo.ToString())
 	indexName := metaDef.IndexName
+	if publish {
+		if err = ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(), originalTableDef.Name, indexName); err != nil {
+			return err
+		}
+		initSQL := strings.Join(buildSqls, ";")
+		if !async {
+			initSQL = ""
+		}
+		if err = ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+			indexName, sinkerType, !async, initSQL, originalTableDef); err != nil {
+			return err
+		}
+		return registerIdxcronUpdate(ctx, metaDef, ctx.QryDatabase(), originalTableDef)
+	}
+
+	// 4. delete old data first
+	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
+	if err != nil {
+		return err
+	}
+	for _, sql := range sqls {
+		if err = ctx.RunSql(sql); err != nil {
+			return err
+		}
+	}
+	if prepare && indexBuild {
+		// COPY ALTER explicitly requested the synchronous physical build.
+		// Keep task registration until publication, once the relation has its
+		// final identity and the CDC watermark is valid.
+		for _, sql := range buildSqls {
+			if err = ctx.RunSql(sql); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 
 	if forceSync {
 		// Background reindex: build ivfpq_create synchronously inside

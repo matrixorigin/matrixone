@@ -68,6 +68,22 @@ func TestStatementHasSQLCalcFoundRows(t *testing.T) {
 	require.False(t, selectStatementHasSQLCalcFoundRows(&tree.SelectClause{}))
 }
 
+func TestInheritCopyAlterAdmissionAcrossRetryGeneration(t *testing.T) {
+	root := &Compile{copyAlterAdmissionSet: false}
+	firstRetry := &Compile{copyAlterAdmissionSet: true, copyAlterAdmitted: true}
+	root.inheritCopyAlterAdmission(firstRetry)
+	require.True(t, root.copyAlterAdmissionSet)
+	require.True(t, root.copyAlterAdmitted)
+
+	secondRetry := &Compile{copyAlterAdmissionSet: true, copyAlterAdmitted: false}
+	root.inheritCopyAlterAdmission(secondRetry)
+	require.False(t, root.copyAlterAdmitted, "a later retry must preserve the fixed fallback decision")
+
+	unset := &Compile{}
+	root.inheritCopyAlterAdmission(unset)
+	require.False(t, root.copyAlterAdmitted, "an unset generation must not clear the decision")
+}
+
 func TestStatementHasSQLCalcFoundRowsPagination(t *testing.T) {
 	count := func(value int64) *tree.Limit {
 		return &tree.Limit{Count: tree.NewNumVal(value, "1", false, tree.P_int64)}

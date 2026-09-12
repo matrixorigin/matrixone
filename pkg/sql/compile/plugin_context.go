@@ -124,6 +124,30 @@ func (p *pluginCompileCtx) IsFrontend() bool {
 	return p.c.proc.Base.IsFrontend
 }
 
+func (p *pluginCompileCtx) IsAlterCopyPrepare() bool {
+	return p.c != nil && p.c.copyAlterPrepare
+}
+
+func (p *pluginCompileCtx) IsAlterCopyIndexBuild() bool {
+	return p.c != nil && p.c.copyAlterIndexBuild
+}
+
+func (p *pluginCompileCtx) IsAlterCopyPublication() bool {
+	return p.c != nil && p.c.copyAlterPublication
+}
+
+func (p *pluginCompileCtx) SetAlterCopyIndexRows(indexName string, rows int64) {
+	if p.c.alterCopyIndexRows == nil {
+		p.c.alterCopyIndexRows = make(map[string]int64)
+	}
+	p.c.alterCopyIndexRows[indexName] = rows
+}
+
+func (p *pluginCompileCtx) GetAlterCopyIndexRows(indexName string) (int64, bool) {
+	rows, ok := p.c.alterCopyIndexRows[indexName]
+	return rows, ok
+}
+
 // IsTableClone reports whether this compile runs inside a table-clone scope
 // (`create table … clone`) — which is how snapshot/restore replays a table,
 // and which `IsFrontend` cannot distinguish (it is true for the restore

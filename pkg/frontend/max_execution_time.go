@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	sqlcompile "github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -36,7 +37,45 @@ func executeStmtWithMaxExecutionTime(ses *Session, execCtx *ExecCtx) (err error)
 		err = finish(err)
 	}()
 
-	return executeStmtWithTxn(ses, nil, execCtx)
+	const maxAlterCopyPublicationAttempts = 2
+	originalSQL := execCtx.sqlOfStmt
+	if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+		originalSQL = cw.schedulingSQLOr(originalSQL)
+	}
+	for attempt := 0; attempt < maxAlterCopyPublicationAttempts; attempt++ {
+		err = executeStmtWithTxn(ses, nil, execCtx)
+		if attempt == 0 && canRetryAlterCopyPublication(execCtx, err) {
+			if cw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+				if resetErr := cw.resetForTxnRetry(execCtx, originalSQL); resetErr != nil {
+					return resetErr
+				}
+			}
+			execCtx.runner = nil
+			execCtx.runResult = nil
+			continue
+		}
+		return sqlcompile.UnwrapAlterCopyPublicationRetry(err)
+	}
+	return sqlcompile.UnwrapAlterCopyPublicationRetry(err)
+}
+
+// canRetryAlterCopyPublication is deliberately narrower than the generic
+// transaction retry rules. Only a statement-owned, automatic-commit frontend
+// transaction may be recreated; explicit transactions retain their existing
+// protocol and are never replayed here.
+func canRetryAlterCopyPublication(execCtx *ExecCtx, err error) bool {
+	if execCtx == nil || execCtx.proc == nil || execCtx.proc.GetTxnOperator() == nil || err == nil ||
+		!sqlcompile.IsAlterCopyPublicationRetry(err, execCtx.proc.GetTxnOperator().Txn().ID) {
+		return false
+	}
+	if !execCtx.txnOpt.autoCommit || execCtx.txnOpt.byBegin || execCtx.txnOpt.byCommit ||
+		execCtx.txnOpt.byRollback {
+		return false
+	}
+	if !execCtx.txnOpt.activeTxnAtStartKnown || execCtx.txnOpt.activeTxnAtStart {
+		return false
+	}
+	return execCtx.reqCtx == nil || execCtx.reqCtx.Err() == nil
 }
 
 // startMaxExecutionTimer installs a deadline on both ExecCtx and the session's

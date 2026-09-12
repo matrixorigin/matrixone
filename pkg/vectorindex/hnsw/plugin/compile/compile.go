@@ -71,6 +71,9 @@ func (h Hooks) HandleCreateIndex(ctx compileplugin.CompileContext, indexDefs map
 // RestoreTable) to rebuild an always-async HNSW index synchronously.
 func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef, forceSync bool) error {
 	logutil.Infof("[plugin] hnsw handleCreate: isFrontend=%v forceSync=%v defs=%d", ctx.IsFrontend(), forceSync, len(indexDefs))
+	prepare := compileplugin.IsAlterCopyPrepare(ctx)
+	indexBuild := compileplugin.IsAlterCopyIndexBuild(ctx)
+	publish := compileplugin.IsAlterCopyPublication(ctx)
 	// Frontend-only: re-entry from background (idxcron ALTER REINDEX,
 	// ProcessInitSQL) must not re-check the flag, since (a) it may
 	// have been toggled off since the original CREATE INDEX, and (b)
@@ -105,6 +108,14 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 				return err
 			}
 		}
+		// ALTER COPY creates the hidden relations before the source rows are
+		// copied. Leave population and task publication to the later phases.
+		if prepare && !indexBuild {
+			return nil
+		}
+	}
+	if prepare && !indexBuild {
+		return nil
 	}
 
 	// Skip index data population for CCPR tables when this is a CCPR task
@@ -121,9 +132,15 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 	if err != nil {
 		return err
 	}
-
 	sinkerType := ctx.SinkerTypeFromAlgo(catalog.MoIndexHnswAlgo.ToString())
 	indexName := metaDef.IndexName
+	if publish {
+		if err := ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(), originalTableDef.Name, indexName); err != nil {
+			return err
+		}
+		return ctx.CreateIndexCdcTask(ctx.QryDatabase(), originalTableDef.Name, originalTableDef.TblId,
+			indexName, sinkerType, !async, "", originalTableDef)
+	}
 
 	if !async || forceSync {
 		// Build the index immediately, then register a CDC task that
@@ -148,6 +165,9 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 				return err
 			}
 		}
+		if prepare {
+			return nil
+		}
 		if err := ctx.DropIndexCdcTask(originalTableDef, ctx.QryDatabase(), originalTableDef.Name, indexName); err != nil {
 			return err
 		}
@@ -165,6 +185,11 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		if err = ctx.RunSql(sql); err != nil {
 			return err
 		}
+	}
+	if prepare {
+		// Intrinsically asynchronous indexes are intentionally left empty. The
+		// publication call installs their CDC task after the final rename.
+		return nil
 	}
 
 	// async: drop any existing CDC task, register a new one consuming the

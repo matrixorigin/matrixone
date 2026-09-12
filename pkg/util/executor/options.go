@@ -178,6 +178,19 @@ func (opts StatementOption) AlterCopyDedupOpt() *plan.AlterCopyOpt {
 	return opts.alterCopyOpt
 }
 
+// WithCopyAlterPrepare marks the child CREATE used by an ALTER COPY
+// preparation phase. The flag is private to the owning transaction and is
+// intentionally orthogonal to IgnorePublish: ordinary CREATE/DROP callers
+// must keep their existing publication behavior.
+func (opts StatementOption) WithCopyAlterPrepare(scope CopyAlterPreparation) StatementOption {
+	opts.copyAlterPrepare = scope
+	return opts
+}
+
+func (opts StatementOption) CopyAlterPrepare() CopyAlterPreparation {
+	return opts.copyAlterPrepare
+}
+
 func (opts StatementOption) AccountID() uint32 {
 	return opts.accountId
 }
