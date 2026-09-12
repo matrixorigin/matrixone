@@ -5348,6 +5348,57 @@ func initSubStrIndexTestCase() []tcTemp {
 	}
 }
 
+func TestSubStrIndexIntegerArgumentResolution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name      string
+		countType types.Type
+		wantIndex int32
+		wantCast  bool
+		wantType  types.T
+	}{
+		{"int64", types.T_int64.ToType(), 2, false, types.T_int64},
+		{"uint64", types.T_uint64.ToType(), 1, false, types.T_uint64},
+		{"uint32", types.T_uint32.ToType(), 1, true, types.T_uint64},
+		{"bit64", types.New(types.T_bit, 64, 0), 1, true, types.T_uint64},
+		{"float32", types.T_float32.ToType(), 0, true, types.T_float64},
+		{"float64", types.T_float64.ToType(), 0, false, types.T_float64},
+		{"decimal64", types.New(types.T_decimal64, 18, 1), 2, true, types.T_int64},
+		{"decimal128", types.New(types.T_decimal128, 38, 1), 2, true, types.T_int64},
+		{"decimal256", types.New(types.T_decimal256, 65, 1), 2, true, types.T_int64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "substring_index", []types.Type{
+				types.T_varchar.ToType(), types.T_varchar.ToType(), tc.countType,
+			})
+			require.NoError(t, err)
+			_, overloadIndex := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, tc.wantIndex, overloadIndex)
+			castTypes, needsCast := resolved.ShouldDoImplicitTypeCast()
+			require.Equal(t, tc.wantCast, needsCast)
+			if needsCast {
+				require.Equal(t, tc.wantType, castTypes[2].Oid)
+			}
+		})
+	}
+}
+
+func TestSubStrIndexLegacyFloatOverload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	overload, err := GetFunctionById(proc.Ctx, EncodeOverloadID(SUBSTRING_INDEX, 0))
+	require.NoError(t, err)
+	exec, _, _, _ := overload.GetExecuteMethod()
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b,c,d"}, nil),
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{","}, nil),
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{1.5}, nil),
+	}
+	tc := NewFunctionTestCase(proc, inputs,
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"a"}, nil), fEvalFn(exec))
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
 func TestSubStrIndex(t *testing.T) {
 	testCases := initSubStrIndexTestCase()
 

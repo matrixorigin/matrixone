@@ -6064,6 +6064,12 @@ func bindFuncExprImplByPlanExpr(
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
+				} else if name == "substring_index" && idx == 2 && argsType[idx].Oid.IsDecimal() &&
+					castType.Oid == types.T_int64 {
+					// SUBSTRING_INDEX count conversion follows SQL's exact explicit
+					// DECIMAL rounding contract. Reuse the established CAST overload
+					// so serialized plans remain executable by older workers.
+					args[idx], err = appendExplicitCastBeforeExpr(ctx, args[idx], typ)
 				} else if name == "char" &&
 					(argsType[idx].Oid == types.T_float32 || argsType[idx].Oid == types.T_float64) &&
 					castType.Oid == types.T_int64 {

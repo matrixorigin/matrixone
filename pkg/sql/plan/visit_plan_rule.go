@@ -715,6 +715,23 @@ func preparedNumericPrefixPositionContext(
 	args []*plan.Expr,
 	positions map[int]types.StringConversionKind,
 ) bool {
+	if name == "substring_index" {
+		for i, arg := range args {
+			pos, ok := preparedNumericPrefixFunctionParamPosition(arg)
+			kind, eligible := positions[pos]
+			if !ok || !eligible || kind == types.StringConversionString {
+				continue
+			}
+			cast := arg.GetF()
+			if mysqlNumericPrefixFunctionArg(
+				name, i, len(args), makeTypeByPlan2Expr(cast.Args[0]), makeTypeByPlan2Expr(arg)) {
+				// A typed SQL variable must enter a fixed numeric argument through
+				// its source domain, not through the prepare-time TEXT prefix cast.
+				return true
+			}
+		}
+	}
+
 	switch name {
 	case "coalesce", "greatest", "least", "=", "<=>", "!=", "<>", "<", "<=", ">", ">=", "between", "in_range", "in", "not_in":
 	default:
@@ -1880,7 +1897,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			paramPos, hasParamPos := preparedParamPosition(arg)
 			if !hasParamPos && preparedFunctionArgUsesSQLExecuteNumericSource(
 				e, functionName, i, len(exprImpl.F.Args)) {
-				paramPos, hasParamPos = preparedResultParamPosition(arg, functionName)
+				paramPos, hasParamPos = preparedNumericPrefixFunctionParamPosition(arg)
+				if !hasParamPos {
+					paramPos, hasParamPos = preparedResultParamPosition(arg, functionName)
+				}
 			}
 			var preparedCharSource *plan.Expr
 			var hasPreparedCharSource bool
@@ -3317,7 +3337,28 @@ func preparedFunctionArgUsesSQLExecuteNumericSource(
 	if preparedSQLExecuteNumericResultConsumer(name) {
 		return preparedSQLExecuteNumericResultValueArg(name, argIndex, argCount)
 	}
-	if parent == nil || !makeTypeByPlan2Expr(parent).IsNumeric() {
+	if parent == nil {
+		return false
+	}
+	// SUBSTRING_INDEX has a fixed numeric count contract despite returning text.
+	// Materialize a typed SQL variable in its source domain before rebinding so
+	// DECIMAL counts use the established explicit CAST conversion.
+	if name == "substring_index" && argIndex == 2 && argIndex < len(parent.GetF().GetArgs()) {
+		arg := parent.GetF().GetArgs()[argIndex]
+		if isImplicitPreparedParamCast(arg) && makeTypeByPlan2Expr(arg).IsNumeric() {
+			return true
+		}
+		// Textual arguments with MySQL numeric-prefix semantics use the existing
+		// comparison-cast overload for rolling-upgrade compatibility. That cast is
+		// likewise provisional when SQL EXECUTE supplies a typed numeric variable.
+		if cast := arg.GetF(); cast != nil && cast.Func != nil && cast.Func.GetObjName() == "cast" &&
+			!cast.GetSyntaxExplicitCast() && len(cast.Args) > 0 &&
+			mysqlNumericPrefixFunctionArg(
+				name, argIndex, argCount, makeTypeByPlan2Expr(cast.Args[0]), makeTypeByPlan2Expr(arg)) {
+			return true
+		}
+	}
+	if !makeTypeByPlan2Expr(parent).IsNumeric() {
 		return false
 	}
 	if !isNumericContextFunction(name) && !supportsGenericNumericFunctionContext(name) {
@@ -3387,6 +3428,23 @@ func functionBindingChanged(
 		}
 	}
 	return false
+}
+
+func preparedNumericPrefixFunctionParamPosition(expr *plan.Expr) (int, bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 ||
+		fn.GetSyntaxExplicitCast() {
+		return 0, false
+	}
+	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	if overload != 2 {
+		return 0, false
+	}
+	param := fn.Args[0].GetP()
+	if param == nil || param.Pos < 0 {
+		return 0, false
+	}
+	return int(param.Pos), true
 }
 
 // preparedResultParamPosition recognizes provisional result-domain casts that

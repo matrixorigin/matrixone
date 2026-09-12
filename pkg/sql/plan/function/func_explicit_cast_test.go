@@ -456,6 +456,57 @@ func TestExplicitCastDecimalRoundingAtSignedBoundaries(t *testing.T) {
 	}
 }
 
+func TestExplicitCastDecimalToInt64HonorsSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal128Overflow, err := types.ParseDecimal128("18446744073709551615.5", 21, 1)
+	require.NoError(t, err)
+	decimal256Overflow, err := types.ParseDecimal256("18446744073709551615.5", 41, 1)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+	}{
+		{
+			name: "decimal64",
+			input: NewFunctionTestInput(types.New(types.T_decimal64, 18, 1),
+				[]types.Decimal64{15, math.MaxInt64}, nil),
+		},
+		{
+			name: "decimal128",
+			input: NewFunctionTestInput(types.New(types.T_decimal128, 21, 1),
+				[]types.Decimal128{types.Decimal128FromInt64(15), decimal128Overflow}, nil),
+		},
+		{
+			name: "decimal256",
+			input: NewFunctionTestInput(types.New(types.T_decimal256, 41, 1),
+				[]types.Decimal256{types.Decimal256FromInt64(15), decimal256Overflow}, nil),
+		},
+	} {
+		t.Run(tc.name+" partial", func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+				tc.input,
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+			}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2, 0}, []bool{false, true}),
+				NewExplicitCast).WithSelectList(&FunctionSelectList{
+				AnyNull: true, SelectList: []bool{true, false},
+			})
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		})
+
+		t.Run(tc.name+" all null", func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+				tc.input,
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+			}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{true, true}),
+				NewExplicitCast).WithSelectList(&FunctionSelectList{AnyNull: true, AllNull: true})
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestExplicitCastDecimalPositiveOverflowToSigned(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decimal128, err := types.ParseDecimal128("18446744073709551615", 20, 0)

@@ -965,6 +965,26 @@ func Test_CastToDecimal256(t *testing.T) {
 	}
 }
 
+func TestImplicitDecimalToInt64PreservesOverflowErrors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal128, err := types.ParseDecimal128("9223372036854775808", 19, 0)
+	require.NoError(t, err)
+	decimal256, err := types.ParseDecimal256("9223372036854775808", 39, 0)
+	require.NoError(t, err)
+
+	for _, input := range []FunctionTestInput{
+		NewFunctionTestInput(types.New(types.T_decimal128, 19, 0), []types.Decimal128{decimal128}, nil),
+		NewFunctionTestInput(types.New(types.T_decimal256, 39, 0), []types.Decimal256{decimal256}, nil),
+	} {
+		testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+			input,
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		}, NewFunctionTestResult(types.T_int64.ToType(), true, []int64{0}, nil), NewCast)
+		ok, info := testCase.Run()
+		require.True(t, ok, info)
+	}
+}
+
 func Test_CastFromDecimal256(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decimal256Type := types.New(types.T_decimal256, 65, 2)

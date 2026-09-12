@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -1308,6 +1309,47 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	require.Equal(t, int32(types.T_decimal128), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Id)
 	require.Equal(t, int32(29), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Width)
 	require.Equal(t, int32(9), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Scale)
+}
+
+func TestFillValuesOfParamsInPlanPreservesSubstringIndexIntegerContract(t *testing.T) {
+	ctx := context.Background()
+	param := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	substringIndex, err := BindFuncExprImplByPlanExpr(ctx, "substring_index", []*planpb.Expr{
+		makePlan2StringConstExprWithType("a,b,c,d"),
+		makePlan2StringConstExprWithType(","),
+		param,
+	})
+	require.NoError(t, err)
+	query := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*planpb.Node{{
+			NodeType:    planpb.Node_VALUE_SCAN,
+			ProjectList: []*planpb.Expr{substringIndex},
+		}},
+	}}}
+
+	params := []any{ParamValue{
+		Value:               "1.5",
+		PrepareParamKind:    vector.PrepareParamDecimal,
+		SourceType:          types.New(types.T_decimal64, 2, 1),
+		HasSourceType:       true,
+		EnableNumericPrefix: true,
+	}}
+	require.True(t, PreparedPlanNeedsNumericPrefixSpecialization(query, params))
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(ctx, query, params)
+	require.NoError(t, err)
+	require.True(t, specialized)
+	result := filled.GetQuery().Nodes[0].ProjectList[0]
+	count := result.GetF().Args[2]
+	require.Equal(t, int32(types.T_int64), count.Typ.Id, result.String())
+	require.Equal(t, "cast", count.GetF().Func.GetObjName(), result.String())
+	require.Equal(t, int32(types.T_decimal64), count.GetF().Args[0].Typ.Id, result.String())
+	_, castOverload := planfunction.DecodeOverloadID(count.GetF().Func.GetObj())
+	require.Equal(t, int32(1), castOverload, "DECIMAL count should reuse the established explicit CAST contract")
 }
 
 func TestFillValuesOfParamsInPlanPreservesMaterializedBinaryStringDomain(t *testing.T) {
