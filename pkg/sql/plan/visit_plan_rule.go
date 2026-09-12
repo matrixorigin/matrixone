@@ -3157,6 +3157,13 @@ func isExplicitPreparedCast(expr *plan.Expr) bool {
 	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" {
 		return false
 	}
+	// BIT_AND/BIT_OR/BIT_XOR insert CAST4 while binding a bare parameter.
+	// This is an implementation cast for the aggregate's input contract, not
+	// a SQL-authored cast that fixes the parameter domain. Keep the source type
+	// visible to prepared-plan runtime specialization.
+	if isBitwiseAggregatePrivateCast(expr) {
+		return false
+	}
 	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 	return overload != 0 || fn.GetSyntaxExplicitCast()
 }
@@ -3369,6 +3376,7 @@ func (rule *ResetParamRefRule) preparedBitwiseAggregateSource(pos int) (*plan.Ex
 			}},
 		}
 		setPreparedRuntimeStringDomain(source, param.RuntimeStringDomain)
+		rule.retainRuntimeParamRef(pos, source)
 		return source, true, nil
 	}
 
@@ -3388,6 +3396,7 @@ func (rule *ResetParamRefRule) preparedBitwiseAggregateSource(pos int) (*plan.Ex
 		domain = types.RuntimeStringBinary
 	}
 	setPreparedRuntimeStringDomain(source, domain)
+	rule.retainRuntimeParamRef(pos, source)
 	return source, true, nil
 }
 

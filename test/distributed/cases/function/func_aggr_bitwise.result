@@ -320,6 +320,10 @@ SET @bitwise_aggregate_value_28226 = CAST('2.5' AS DECIMAL(2,1));
 EXECUTE bitwise_aggregate_marker_28226 USING @bitwise_aggregate_value_28226;
 bit_and(?)
 3
+SET @bitwise_aggregate_value_28226 = CAST('4.0' AS DECIMAL(2,1));
+EXECUTE bitwise_aggregate_marker_28226 USING @bitwise_aggregate_value_28226;
+bit_and(?)
+4
 SET @bitwise_aggregate_value_28226 = CAST(2.5 AS DOUBLE);
 EXECUTE bitwise_aggregate_marker_28226 USING @bitwise_aggregate_value_28226;
 bit_and(?)

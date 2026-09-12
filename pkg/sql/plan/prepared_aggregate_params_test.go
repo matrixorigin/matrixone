@@ -427,6 +427,52 @@ func TestPreparedMaxByRuntimeTypeReachesResultProjection(t *testing.T) {
 	}
 }
 
+func TestPreparedBitwiseAggregateScansForRuntimeSpecialization(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select bit_and(?) from nation")
+	aggregate := findPlanFunctionExpr(prepare.Plan, "bit_and")
+	require.NotNil(t, aggregate)
+	require.Len(t, aggregate.GetF().Args, 1)
+	privateCast := aggregate.GetF().Args[0]
+	require.True(t, isBitwiseAggregatePrivateCast(privateCast))
+	require.False(t, isExplicitPreparedCast(privateCast))
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
+}
+
+func TestPreparedBitwiseAggregateRebindsChangedValueWithinSameDomain(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select bit_and(?) from nation")
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
+	decimalType := types.New(types.T_decimal64, 2, 1)
+
+	for _, test := range []struct {
+		value string
+		want  int64
+	}{{value: "2.5", want: 25}, {value: "4.0", want: 40}} {
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+			context.Background(),
+			prepare.Plan,
+			[]any{ParamValue{
+				Value: test.value, SourceType: decimalType, HasSourceType: true,
+				RetainParamRef: true,
+			}},
+		)
+		require.NoError(t, err)
+		require.True(t, specialized)
+
+		aggregate := findPlanFunctionExpr(filled, "bit_and")
+		require.NotNil(t, aggregate)
+		require.Len(t, aggregate.GetF().Args, 1)
+		aggregateCast := aggregate.GetF().Args[0]
+		require.True(t, isBitwiseAggregatePrivateCast(aggregateCast))
+		source := aggregateCast.GetF().Args[0]
+		require.Equal(t, int32(types.T_decimal64), source.Typ.Id)
+		require.Equal(t, test.want, source.GetLit().GetDecimal64Val().A)
+		sourceRef := source.GetLit().GetSrc()
+		require.NotNil(t, sourceRef)
+		require.NotNil(t, sourceRef.GetP())
+		require.Equal(t, int32(0), sourceRef.GetP().GetPos())
+	}
+}
+
 func TestPreparedRuntimeSpecializationCoversResultDomainAggregates(t *testing.T) {
 	for _, name := range []string{
 		"min", "max", "any_value", "max_by", "max_by_non_null",

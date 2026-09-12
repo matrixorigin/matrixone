@@ -1264,29 +1264,42 @@ func TestPreparedBitwiseAggregateRebindsExecutionSourceDomain(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			param := test.param
+			param.RetainParamRef = true
 			rule := NewResetParamRefRule(ctx, []*planpb.Expr{
 				makePlan2StringConstExprWithType("prepare-placeholder"),
 			})
-			rule.SetParamValues([]any{test.param})
+			rule.SetParamValues([]any{param})
 			rewritten, err := rule.ApplyExpr(DeepCopyExpr(prepared))
 			require.NoError(t, err)
 			arg := rewritten.GetF().Args[0]
+			source := arg
 			if test.wantPrivate {
 				require.True(t, isBitwiseAggregatePrivateCast(arg))
 				require.Equal(t, int32(types.T_int64), arg.Typ.Id)
-				require.Equal(t, int32(test.wantSourceOID), arg.GetF().Args[0].Typ.Id)
-				if test.param.Value == nil {
-					nullLiteral := arg.GetF().Args[0].GetLit()
+				source = arg.GetF().Args[0]
+				require.Equal(t, int32(test.wantSourceOID), source.Typ.Id)
+				if param.Value == nil {
+					nullLiteral := source.GetLit()
 					require.NotNil(t, nullLiteral)
 					require.True(t, nullLiteral.Isnull)
 				}
 				if test.wantSourceOID == types.T_varchar {
-					require.Equal(t, "2.5", arg.GetF().Args[0].GetLit().GetSval())
+					require.Equal(t, "2.5", source.GetLit().GetSval())
 				}
 			} else {
 				require.False(t, isBitwiseAggregatePrivateCast(arg))
 				require.Equal(t, int32(test.wantSourceOID), arg.Typ.Id)
 			}
+			runtimeLiteral := source.GetLit()
+			if runtimeLiteral == nil && source.GetF() != nil && source.GetF().Func != nil &&
+				len(source.GetF().Args) > 0 {
+				runtimeLiteral = source.GetF().Args[0].GetLit()
+			}
+			require.NotNil(t, runtimeLiteral)
+			require.NotNil(t, runtimeLiteral.GetSrc())
+			require.NotNil(t, runtimeLiteral.GetSrc().GetP())
+			require.Equal(t, int32(0), runtimeLiteral.GetSrc().GetP().GetPos())
 			// Each execution is a specialized copy; the cached prepare template
 			// must keep its marker and private conversion intact.
 			require.True(t, isBitwiseAggregatePrivateCast(prepared.GetF().Args[0]))
