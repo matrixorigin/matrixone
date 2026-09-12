@@ -1465,13 +1465,6 @@ func isCTEPositiveMarkFilter(expr *planpb.Expr, markTag int32) bool {
 // three-valued logic is preserved: if a row can pass consumer i, it necessarily
 // passes P1 OR ... OR Pn at the producer. rowDomainExact additionally proves
 // that no truncation-safe local predicate was omitted from that union.
-func (builder *QueryBuilder) cteSharedConsumerPredicate(
-	rootID int32,
-	occurrences []cteOccurrence,
-) (*planpb.Expr, bool, bool) {
-	return builder.cteSharedConsumerPredicateWithDrainRequirements(rootID, occurrences, nil)
-}
-
 func (builder *QueryBuilder) cteSharedConsumerPredicateWithDrainRequirements(
 	rootID int32,
 	occurrences []cteOccurrence,
@@ -1618,13 +1611,6 @@ func ctePredicateSingleOutputColumn(expr *planpb.Expr, tag int32) (int32, bool) 
 // involving another CTE occurrence; those are join semantics, not producer
 // bounds. CTE occurrences are trees before reuse, but the parent walk keeps a
 // visited set to fail closed if a future binder introduces a DAG here.
-func (builder *QueryBuilder) cteOccurrenceLocalPredicates(
-	occurrence cteOccurrence,
-	parents map[int32][]int32,
-) ([]*planpb.Expr, bool, bool) {
-	return builder.cteOccurrenceLocalPredicatesWithDrainRequirement(occurrence, parents, false)
-}
-
 func (builder *QueryBuilder) cteOccurrenceLocalPredicatesWithDrainRequirement(
 	occurrence cteOccurrence,
 	parents map[int32][]int32,
