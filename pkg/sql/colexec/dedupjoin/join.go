@@ -154,6 +154,31 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 			return moerr.NewInternalError(proc.Ctx, "dedup join update column out of range")
 		}
 	}
+	if dedupJoin.ODKUResultTracking {
+		if dedupJoin.OnDuplicateAction != plan.Node_UPDATE {
+			return moerr.NewInternalError(proc.Ctx, "ODKU result tracking is only valid for UPDATE dedup joins")
+		}
+		if dedupJoin.ODKUTargetAutoIncrementCol < 0 ||
+			dedupJoin.ODKUTargetAutoIncrementCol >= int32(len(dedupJoin.LeftTypes)) ||
+			dedupJoin.ODKUGeneratedCol < 0 ||
+			dedupJoin.ODKUGeneratedCol >= int32(len(dedupJoin.RightTypes)) ||
+			dedupJoin.ODKUOrdinalCol < 0 ||
+			dedupJoin.ODKUOrdinalCol >= int32(len(dedupJoin.RightTypes)) ||
+			dedupJoin.ODKUGeneratedAutoIncrementCol < 0 ||
+			dedupJoin.ODKUGeneratedAutoIncrementCol >= int32(len(dedupJoin.RightTypes)) {
+			return moerr.NewInternalError(proc.Ctx, "ODKU result tracking source column out of range")
+		}
+		switch dedupJoin.LeftTypes[dedupJoin.ODKUTargetAutoIncrementCol].Oid {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+			types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		default:
+			return moerr.NewInternalError(proc.Ctx, "ODKU target auto-increment column is not an integer")
+		}
+		if dedupJoin.RightTypes[dedupJoin.ODKUGeneratedCol].Oid != types.T_bool ||
+			dedupJoin.RightTypes[dedupJoin.ODKUOrdinalCol].Oid != types.T_uint64 {
+			return moerr.NewInternalError(proc.Ctx, "ODKU provenance columns have invalid types")
+		}
+	}
 	// The ordered assignment list may target one column repeatedly. Derive the
 	// materialization set once per execution instead of de-duplicating it for
 	// every logical action in a potentially large duplicate group.
@@ -330,6 +355,7 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			if err := ctr.probe(bat, dedupJoin, proc, analyzer, &result); err != nil {
 				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
+			ctr.flushODKUResult(proc)
 			return result, nil
 		case Finalize:
 			if dedupJoin.ctr.buf == nil {
@@ -398,10 +424,12 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Batch = dedupJoin.ctr.buf[dedupJoin.ctr.lastPos]
 			dedupJoin.ctr.lastPos++
 			result.Status = vm.ExecHasMore
+			ctr.flushODKUResult(proc)
 			return result, nil
 		default:
 			result.Batch = nil
 			result.Status = vm.ExecStop
+			ctr.flushODKUResult(proc)
 			return result, nil
 		}
 	}
@@ -605,10 +633,13 @@ func (ctr *container) finalizeODKUActionRows(
 
 	zeroSels := ctr.mp.GetSels(0)
 	for ctr.finalizeZeroIdx < len(zeroSels) {
+		sel := zeroSels[ctr.finalizeZeroIdx]
 		if err := ctr.appendBuildSelectionRow(
-			ap, ctr.rbat, zeroSels[ctr.finalizeZeroIdx], proc); err != nil {
+			ap, ctr.rbat, sel, proc); err != nil {
 			return err
 		}
+		idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+		ctr.recordODKUInsertAction(ap, ctr.batches[idx1], int(idx2), proc)
 		ctr.finalizeZeroIdx++
 		if ctr.actionResultBatchFull() {
 			ctr.buf = []*batch.Batch{ctr.rbat}
@@ -624,10 +655,12 @@ func (ctr *container) finalizeODKUActionRows(
 			continue
 		}
 		if ctr.mp.HashOnUnique() {
-			if err := ctr.appendBuildSelectionRow(
-				ap, ctr.rbat, int32(ctr.finalizeGroup), proc); err != nil {
+			sel := int32(ctr.finalizeGroup)
+			if err := ctr.appendBuildSelectionRow(ap, ctr.rbat, sel, proc); err != nil {
 				return err
 			}
+			idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+			ctr.recordODKUInsertAction(ap, ctr.batches[idx1], int(idx2), proc)
 			ctr.finalizeGroup++
 			if ctr.actionResultBatchFull() {
 				ctr.buf = []*batch.Batch{ctr.rbat}
@@ -644,6 +677,8 @@ func (ctr *container) finalizeODKUActionRows(
 			if err := ctr.appendBuildSelectionRow(ap, ctr.rbat, sels[0], proc); err != nil {
 				return err
 			}
+			idx1, idx2 := sels[0]/colexec.DefaultBatchSize, sels[0]%colexec.DefaultBatchSize
+			ctr.recordODKUInsertAction(ap, ctr.batches[idx1], int(idx2), proc)
 			ctr.finalizeGroup++
 			if ctr.actionResultBatchFull() {
 				ctr.buf = []*batch.Batch{ctr.rbat}
@@ -667,8 +702,16 @@ func (ctr *container) finalizeODKUActionRows(
 			}
 			ctr.finalizeCurrentVecs = snapshotVectors(
 				ctr.finalizeCurrentVecs, ctr.joinBat1, ap.UpdateColIdxList)
+			ctr.finalizeBeforeVecs = snapshotVectors(
+				ctr.finalizeBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
+			// The first row in a duplicate group is the successful INSERT
+			// action. Later rows replay UPDATE actions against that row; keep
+			// this event even when action-row emission splits the group across
+			// batches.
+			ctr.recordODKUInsertAction(ap, ctr.batches[idx1], int(idx2), proc)
 			ctr.finalizeActionIdx = 1
 			ctr.finalizeLogicalAffect = 1
+			ctr.finalizeAnyChanged = false
 			ctr.finalizeActionActive = true
 			if err := ctr.appendFinalizeActionRow(
 				ap, ctr.rbat, 0, false, false,
@@ -698,16 +741,24 @@ func (ctr *container) finalizeODKUActionRows(
 				if err != nil {
 					return err
 				}
+				ctr.recordODKUAction(
+					ap, ctr.batches[idx1], int(idx2), ctr.joinBat1, 0, changed, proc)
 				ctr.finalizeCurrentVecs = snapshotVectors(
 					ctr.finalizeCurrentVecs, ctr.joinBat1, ap.UpdateColIdxList)
+				ctr.finalizeAnyChanged = ctr.finalizeAnyChanged || changed
 				ctr.finalizeLogicalAffect += odkuAffectedRows(changed, ap.CountFoundRows)
 				isFinal := ctr.finalizeActionIdx == len(sels)-1
+				// This group starts with a successful INSERT.  Its final image must
+				// be written even when later UPDATE actions are no-ops or restore the
+				// inserted values; the first INSERT is the physical write owner.
+				physicalChanged := isFinal && odkuPhysicalChanged(
+					true, ctr.finalizeAnyChanged, ctr.finalizeBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
 				affectedRows := uint64(0)
 				if isFinal {
 					affectedRows = ctr.finalizeLogicalAffect
 				}
 				if err := ctr.appendFinalizeActionRow(
-					ap, ctr.rbat, affectedRows, isFinal, isFinal,
+					ap, ctr.rbat, affectedRows, physicalChanged, isFinal,
 					ctr.finalizeInsertConstraintEligibility(ap.ForeignKeyChecks, isFinal), proc); err != nil {
 					return err
 				}
@@ -888,6 +939,11 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				// Flat-index offset of this build batch in capturedVecs space.
 				// hashOnUnique guarantees a 1:1 bucket↔flat-row mapping.
 				capOffset := int64(i) * int64(colexec.DefaultBatchSize)
+				if ap.OnDuplicateAction == plan.Node_UPDATE {
+					for row := 0; row < batSize; row++ {
+						ctr.recordODKUInsertAction(ap, bat, row, proc)
+					}
+				}
 				for j, rp := range ap.Result {
 					if rp.Rel == 1 {
 						if len(ctr.captureResultIdx) > 0 && ctr.captureResultIdx[j] >= 0 {
@@ -999,6 +1055,12 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				}
 			}
 			ap.ctr.buf[i].SetRowCount(len(newSels))
+			if ap.OnDuplicateAction == plan.Node_UPDATE {
+				for _, sel := range newSels {
+					idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+					ctr.recordODKUInsertAction(ap, ctr.batches[idx1], int(idx2), proc)
+				}
+			}
 		}
 	} else {
 		sels := ctr.mp.GetSels(0)
@@ -1047,6 +1109,12 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				}
 			}
 			ap.ctr.buf[batIdx].SetRowCount(batSize)
+			if ap.OnDuplicateAction == plan.Node_UPDATE {
+				for _, sel := range sels[fillCnt : fillCnt+batSize] {
+					idx1, idx2 := sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
+					ctr.recordODKUInsertAction(ap, ctr.batches[idx1], int(idx2), proc)
+				}
+			}
 			fillCnt += batSize
 			batIdx++
 			rowIdx = batSize % colexec.DefaultBatchSize
@@ -1082,6 +1150,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				if err := colexec.SetJoinBatchValues(ctr.joinBat1, ctr.batches[idx1], int64(idx2), 1, ctr.cfs1); err != nil {
 					return err
 				}
+				ctr.recordODKUInsertAction(ap, ctr.batches[idx1], int(idx2), proc)
 				if ctr.joinBat2 == nil {
 					ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
 				}
@@ -1121,6 +1190,8 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 						if err != nil {
 							return err
 						}
+						ctr.recordODKUAction(
+							ap, ctr.batches[idx1], int(idx2), ctr.joinBat1, 0, changed, proc)
 						logicalAffectedRows += odkuAffectedRows(changed, ap.CountFoundRows)
 						isFinal := actionIdx == len(sels[1:])-1
 						affectedRows := uint64(0)
@@ -1157,8 +1228,12 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 						}
 					}
 				}
+				ctr.recordODKUInsertAction(ap, ctr.batches[idx1], int(idx2), proc)
 			} else {
 				var logicalAffectedRows uint64 = 1 // the first row is an INSERT
+				// The first action is a successful INSERT, so the group is always a
+				// physical write even when every later UPDATE is a no-op.
+				anyActionChanged := true
 				err := colexec.SetJoinBatchValues(ctr.joinBat1, ctr.batches[idx1], int64(idx2), 1, ctr.cfs1)
 				if err != nil {
 					return err
@@ -1167,6 +1242,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 					ctr.joinBat2, ctr.cfs2 = colexec.NewJoinBatch(ctr.batches[0], proc.Mp())
 				}
 				err = ctr.withRestoredJoinBat1Vectors(ap.UpdateColIdxList, func() error {
+					ctr.recordODKUInsertAction(ap, ctr.batches[idx1], int(idx2), proc)
 					for _, sel := range sels[1:] {
 						idx1, idx2 = sel/colexec.DefaultBatchSize, sel%colexec.DefaultBatchSize
 						if err := colexec.SetJoinBatchValues(ctr.joinBat2, ctr.batches[idx1], int64(idx2), 1, ctr.cfs2); err != nil {
@@ -1178,12 +1254,15 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 							return err
 						}
 						logicalAffectedRows += odkuAffectedRows(changed, ap.CountFoundRows)
+						anyActionChanged = anyActionChanged || changed
+						ctr.recordODKUAction(
+							ap, ctr.batches[idx1], int(idx2), ctr.joinBat1, 0, changed, proc)
 					}
 					for j, rp := range ap.Result {
 						if handled, err := appendODKUMetadata(
 							ap.ctr.buf[batIdx].Vecs[j], ap.HasODKUAffectedRows, int32(j),
 							ap.AffectedRowsResultPos, ap.PhysicalChangedResultPos,
-							logicalAffectedRows, true, proc.Mp()); handled || err != nil {
+							logicalAffectedRows, anyActionChanged, proc.Mp()); handled || err != nil {
 							if err != nil {
 								return err
 							}
@@ -1346,11 +1425,15 @@ func snapshotChanged(before []*vector.Vector, after *batch.Batch, cols []int32) 
 }
 
 func odkuPhysicalChanged(
+	inserted bool,
 	anyActionChanged bool,
 	before []*vector.Vector,
 	after *batch.Batch,
 	cols []int32,
 ) bool {
+	if inserted {
+		return true
+	}
 	return anyActionChanged && snapshotChanged(before, after, cols)
 }
 
@@ -1627,6 +1710,119 @@ func appendODKUActionMetadata(
 	return false, nil
 }
 
+func odkuUint64At(vec *vector.Vector, row int) (uint64, bool) {
+	if vec == nil || row < 0 || row >= vec.Length() || vec.IsNull(uint64(row)) {
+		return 0, false
+	}
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		v := vector.GetFixedAtNoTypeCheck[int8](vec, row)
+		return uint64(v), v >= 0
+	case types.T_int16:
+		v := vector.GetFixedAtNoTypeCheck[int16](vec, row)
+		return uint64(v), v >= 0
+	case types.T_int32:
+		v := vector.GetFixedAtNoTypeCheck[int32](vec, row)
+		return uint64(v), v >= 0
+	case types.T_int64:
+		v := vector.GetFixedAtNoTypeCheck[int64](vec, row)
+		return uint64(v), v >= 0
+	case types.T_uint8:
+		return uint64(vector.GetFixedAtNoTypeCheck[uint8](vec, row)), true
+	case types.T_uint16:
+		return uint64(vector.GetFixedAtNoTypeCheck[uint16](vec, row)), true
+	case types.T_uint32:
+		return uint64(vector.GetFixedAtNoTypeCheck[uint32](vec, row)), true
+	case types.T_uint64:
+		return vector.GetFixedAtNoTypeCheck[uint64](vec, row), true
+	default:
+		return 0, false
+	}
+}
+
+func (ctr *container) recordODKUGenerated(
+	ap *DedupJoin, input *batch.Batch, row int, proc *process.Process,
+) {
+	if !ap.ODKUResultTracking || input == nil ||
+		ap.ODKUGeneratedCol < 0 || ap.ODKUOrdinalCol < 0 ||
+		ap.ODKUGeneratedAutoIncrementCol < 0 ||
+		ap.ODKUGeneratedCol >= int32(len(input.Vecs)) ||
+		ap.ODKUOrdinalCol >= int32(len(input.Vecs)) ||
+		ap.ODKUGeneratedAutoIncrementCol >= int32(len(input.Vecs)) {
+		return
+	}
+	marker := input.Vecs[ap.ODKUGeneratedCol]
+	if marker == nil || marker.IsNull(uint64(row)) ||
+		!vector.GetFixedAtNoTypeCheck[bool](marker, row) {
+		return
+	}
+	ordinal, ok := odkuUint64At(input.Vecs[ap.ODKUOrdinalCol], row)
+	if !ok {
+		return
+	}
+	id, ok := odkuUint64At(input.Vecs[ap.ODKUGeneratedAutoIncrementCol], row)
+	if !ok {
+		return
+	}
+	ctr.odkuSummary.RecordGenerated(ordinal, id)
+}
+
+func (ctr *container) recordODKUInsertAction(
+	ap *DedupJoin, input *batch.Batch, row int, proc *process.Process,
+) {
+	ctr.recordODKUGenerated(ap, input, row, proc)
+	ctr.recordODKUExplicitAction(ap, input, row, true, proc)
+}
+
+func (ctr *container) recordODKUAction(
+	ap *DedupJoin, input *batch.Batch, inputRow int, target *batch.Batch, targetRow int,
+	successful bool, proc *process.Process,
+) {
+	if !ap.ODKUResultTracking || input == nil || target == nil ||
+		ap.ODKUOrdinalCol < 0 || ap.ODKUTargetAutoIncrementCol < 0 ||
+		ap.ODKUOrdinalCol >= int32(len(input.Vecs)) ||
+		ap.ODKUTargetAutoIncrementCol >= int32(len(target.Vecs)) {
+		return
+	}
+	ordinal, ok := odkuUint64At(input.Vecs[ap.ODKUOrdinalCol], inputRow)
+	if !ok {
+		return
+	}
+	id, ok := odkuUint64At(target.Vecs[ap.ODKUTargetAutoIncrementCol], targetRow)
+	if !ok {
+		return
+	}
+	ctr.odkuSummary.RecordAction(ordinal, id, successful)
+}
+
+func (ctr *container) recordODKUExplicitAction(
+	ap *DedupJoin, input *batch.Batch, inputRow int, successful bool, proc *process.Process,
+) {
+	if !ap.ODKUResultTracking || input == nil ||
+		ap.ODKUOrdinalCol < 0 || ap.ODKUGeneratedAutoIncrementCol < 0 ||
+		ap.ODKUOrdinalCol >= int32(len(input.Vecs)) ||
+		ap.ODKUGeneratedAutoIncrementCol >= int32(len(input.Vecs)) {
+		return
+	}
+	ordinal, ok := odkuUint64At(input.Vecs[ap.ODKUOrdinalCol], inputRow)
+	if !ok {
+		return
+	}
+	id, ok := odkuUint64At(input.Vecs[ap.ODKUGeneratedAutoIncrementCol], inputRow)
+	if !ok {
+		return
+	}
+	ctr.odkuSummary.RecordAction(ordinal, id, successful)
+}
+
+func (ctr *container) flushODKUResult(proc *process.Process) {
+	if !ctr.odkuSummary.HasGenerated && !ctr.odkuSummary.HasAction && !ctr.odkuSummary.HasSuccessfulAction {
+		return
+	}
+	proc.MergeODKUResultSummary(ctr.odkuSummary)
+	ctr.odkuSummary = process.ODKUResultSummary{}
+}
+
 func (ctr *container) appendProbeActionRow(
 	ap *DedupJoin,
 	dst *batch.Batch,
@@ -1805,9 +2001,10 @@ func (ctr *container) probeODKUActionRows(
 						ctr.probeCurrentVecs, ctr.joinBat1, ap.UpdateColIdxList)
 					ctr.probeLogicalAffected += odkuAffectedRows(changed, ap.CountFoundRows)
 					ctr.probeAnyChanged = ctr.probeAnyChanged || changed
+					ctr.recordODKUAction(ap, ctr.batches[idx1], int(idx2), ctr.joinBat1, 0, changed, proc)
 					isFinal := ctr.probeActionIdx == actionCount-1
 					physicalChanged := isFinal && odkuPhysicalChanged(
-						ctr.probeAnyChanged, ctr.groupBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
+						false, ctr.probeAnyChanged, ctr.groupBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
 					affectedRows := uint64(0)
 					if isFinal {
 						affectedRows = ctr.probeLogicalAffected
@@ -1996,10 +2193,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 						}
 						logicalAffectedRows += odkuAffectedRows(changed, ap.CountFoundRows)
 						anyActionChanged = anyActionChanged || changed
+						ctr.recordODKUAction(ap, ctr.batches[idx1], int(idx2), ctr.joinBat1, 0, changed, proc)
 						isFinal := actionIdx == len(actionSels)-1
 						if ap.EmitActionRows || isFinal {
 							physicalChanged := isFinal && odkuPhysicalChanged(
-								anyActionChanged, ctr.groupBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
+								false, anyActionChanged, ctr.groupBeforeVecs, ctr.joinBat1, ap.UpdateColIdxList)
 							affectedRows := uint64(0)
 							if isFinal {
 								affectedRows = logicalAffectedRows

@@ -171,6 +171,98 @@ func TestPreInsertExpandsConstVectorToBatchRowCount(t *testing.T) {
 	arg.Free(proc, false, nil)
 }
 
+func TestODKUAutoIncrementProvenanceSelectsUserColumnWithHiddenPrimaryKey(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	table := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), AutoIncr: true}},
+			{Name: catalog.FakePrimaryKeyColName, Hidden: true,
+				Typ: plan.Type{Id: int32(types.T_uint64), AutoIncr: true}},
+		},
+	}
+	pre := &PreInsert{
+		HasAutoCol:                   true,
+		TableDef:                     table,
+		TrackAutoIncrementGenerated:  true,
+		AutoIncrementGeneratedColumn: 0,
+		TrackODKUResult:              true,
+		ODKUOrdinalColumn:            1,
+		ODKUAutoIncrementColumn:      0,
+	}
+	require.NoError(t, pre.Prepare(proc))
+
+	userID := vector.NewVec(types.T_int64.ToType())
+	hiddenID := vector.NewVec(types.T_uint64.ToType())
+	defer userID.Free(proc.Mp())
+	defer hiddenID.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(userID, int64(0), false, proc.Mp()))
+	userID.GetNulls().Add(0)
+	require.NoError(t, vector.AppendFixed(hiddenID, uint64(101), false, proc.Mp()))
+	input := batch.NewWithSize(2)
+	input.Vecs[0], input.Vecs[1] = userID, hiddenID
+	input.SetRowCount(1)
+	require.NoError(t, pre.captureAutoIncrementGeneratedRows(input))
+	require.Equal(t, []bool{true}, pre.ctr.autoIncrementGenerated)
+
+	pre.ODKUAutoIncrementColumn = 1
+	require.ErrorContains(t, pre.Prepare(proc), "not a user auto-increment column")
+}
+
+func TestODKUProvenanceCarriesInputOrdinalsAcrossBufferReuse(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	proc.Base.ODKUInputOrdinal = new(uint64)
+
+	pre := &PreInsert{
+		ctr:        container{canFreeVecIdx: make(map[int]bool)},
+		HasAutoCol: true,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), AutoIncr: true}},
+			{Name: "payload", Typ: i64typ},
+		}},
+		Attrs:                        []string{"id", "payload"},
+		TrackAutoIncrementGenerated:  true,
+		AutoIncrementGeneratedColumn: 2,
+		TrackODKUResult:              true,
+		ODKUOrdinalColumn:            3,
+		ODKUAutoIncrementColumn:      0,
+	}
+	require.NoError(t, pre.Prepare(proc))
+
+	first := batch.NewWithSize(2)
+	first.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	first.Vecs[1] = testutil.MakeInt64Vector([]int64{10, 20}, nil, proc.Mp())
+	require.NoError(t, vector.AppendFixed(first.Vecs[0], int64(0), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(first.Vecs[0], int64(8), false, proc.Mp()))
+	first.Vecs[0].GetNulls().Add(0)
+	first.SetRowCount(2)
+
+	require.NoError(t, pre.constructColBuf(proc, first, true))
+	require.NoError(t, pre.captureAutoIncrementGeneratedRows(first))
+	require.NoError(t, pre.captureODKUInputOrdinals(proc, first))
+	require.NoError(t, pre.constructAutoIncrementGeneratedCol(proc, first, true))
+	marker := pre.ctr.buf.Vecs[2]
+	ordinal := pre.ctr.buf.Vecs[3]
+	require.True(t, vector.GetFixedAtNoTypeCheck[bool](marker, 0))
+	require.False(t, vector.GetFixedAtNoTypeCheck[bool](marker, 1))
+	require.Equal(t, uint64(0), vector.GetFixedAtNoTypeCheck[uint64](ordinal, 0))
+	require.Equal(t, uint64(1), vector.GetFixedAtNoTypeCheck[uint64](ordinal, 1))
+
+	pre.ctr.buf.SetRowCount(0)
+	pre.ctr.autoIncrementGenerated = []bool{false}
+	pre.ctr.odkuOrdinals = []uint64{2}
+	second := batch.NewWithSize(0)
+	second.SetRowCount(1)
+	require.NoError(t, pre.constructAutoIncrementGeneratedCol(proc, second, false))
+	require.False(t, vector.GetFixedAtNoTypeCheck[bool](marker, 0))
+	require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](ordinal, 0))
+
+	pre.Free(proc, false, nil)
+	first.Clean(proc.Mp())
+}
+
 func TestPreInsertNullCheck(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

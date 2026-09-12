@@ -156,6 +156,7 @@ func (builder *QueryBuilder) bindMultiInsert(stmt *tree.MultiInsert, bindCtx *Bi
 	// on this builder.
 	builder.insertInputKeysUnique = false
 	builder.isInsertIgnore = false
+	builder.isODKU = false
 
 	if stmt.Source == nil {
 		return moerr.NewInternalError(builder.GetContext(), "multi-table insert has no source query")

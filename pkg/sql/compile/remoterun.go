@@ -282,6 +282,7 @@ func encodeProcessInfo(
 	sql string,
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
+	odkuOrdinalBase ...uint64,
 ) ([]byte, error) {
 	v, err := proc.BuildProcessInfo(sql)
 	if err != nil {
@@ -290,6 +291,9 @@ func encodeProcessInfo(
 	v.RemoteFragmentCounts = maps.Clone(remoteFragmentCounts)
 	if remoteExecutionID != uuid.Nil {
 		v.RemoteExecutionId = append([]byte(nil), remoteExecutionID[:]...)
+	}
+	if len(odkuOrdinalBase) > 0 {
+		v.OdkuOrdinalBase = odkuOrdinalBase[0]
 	}
 	return v.Marshal()
 }
@@ -679,6 +683,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
 			return ctxId, nil, err
 		}
+		if t.TrackODKUResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+			return ctxId, nil, moerr.NewNotSupportedNoCtx(
+				"remote ODKU result tracking requires MORPC protocol version 58")
+		}
 		in.PreInsert = &pipeline.PreInsert{
 			SchemaName:                   t.SchemaName,
 			TableDef:                     t.TableDef,
@@ -692,6 +700,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ColOffset:                    t.ColOffset,
 			TrackAutoIncrementGenerated:  t.TrackAutoIncrementGenerated,
 			AutoIncrementGeneratedColumn: t.AutoIncrementGeneratedColumn,
+			TrackOdkuResult:              t.TrackODKUResult,
+			OdkuOrdinalColumn:            t.ODKUOrdinalColumn,
+			OdkuAutoIncrementColumn:      t.ODKUAutoIncrementColumn,
 			RejectZeroTemporal:           t.RejectZeroTemporal,
 			HasTargetSelector:            t.HasTargetSelector,
 			TargetRowNumberCol:           t.TargetRowNumberCol,
@@ -1021,6 +1032,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		if err := validateRemoteODKUActionRowsProtocol(proc, t.EmitActionRows || len(t.ForeignKeyChecks) > 0); err != nil {
 			return ctxId, nil, err
 		}
+		if t.ODKUResultTracking && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+			return ctxId, nil, moerr.NewNotSupportedNoCtx(
+				"remote ODKU result tracking requires MORPC protocol version 58")
+		}
 		relList, colList := getRelColList(t.Result)
 		in.DedupJoin = &pipeline.DedupJoin{
 			RelList:                         relList,
@@ -1051,6 +1066,11 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			CountFoundRows:                  t.CountFoundRows,
 			EmitActionRows:                  t.EmitActionRows,
 			ActionFinalResultPos:            t.ActionFinalResultPos,
+			OdkuResultTracking:              t.ODKUResultTracking,
+			OdkuTargetAutoIncrementCol:      t.ODKUTargetAutoIncrementCol,
+			OdkuGeneratedCol:                t.ODKUGeneratedCol,
+			OdkuOrdinalCol:                  t.ODKUOrdinalCol,
+			OdkuGeneratedAutoIncrementCol:   t.ODKUGeneratedAutoIncrementCol,
 		}
 		in.DedupJoin.ForeignKeyChecks = make([]pipeline.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
 		for i, check := range t.ForeignKeyChecks {
@@ -1282,6 +1302,9 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ColOffset = t.ColOffset
 		arg.TrackAutoIncrementGenerated = t.GetTrackAutoIncrementGenerated()
 		arg.AutoIncrementGeneratedColumn = t.GetAutoIncrementGeneratedColumn()
+		arg.TrackODKUResult = t.GetTrackOdkuResult()
+		arg.ODKUOrdinalColumn = t.GetOdkuOrdinalColumn()
+		arg.ODKUAutoIncrementColumn = t.GetOdkuAutoIncrementColumn()
 		arg.RejectZeroTemporal = t.GetRejectZeroTemporal()
 		arg.HasTargetSelector = t.GetHasTargetSelector()
 		arg.TargetRowNumberCol = t.GetTargetRowNumberCol()
@@ -1701,6 +1724,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.CountFoundRows = t.CountFoundRows
 		arg.EmitActionRows = t.EmitActionRows
 		arg.ActionFinalResultPos = t.ActionFinalResultPos
+		arg.ODKUResultTracking = t.GetOdkuResultTracking()
+		arg.ODKUTargetAutoIncrementCol = t.GetOdkuTargetAutoIncrementCol()
+		arg.ODKUGeneratedCol = t.GetOdkuGeneratedCol()
+		arg.ODKUOrdinalCol = t.GetOdkuOrdinalCol()
+		arg.ODKUGeneratedAutoIncrementCol = t.GetOdkuGeneratedAutoIncrementCol()
 		arg.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
 		for i, check := range t.ForeignKeyChecks {
 			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
@@ -2189,6 +2217,15 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 				proc, preInsert.HasAutoCol, preInsert.TrackAutoIncrementGenerated); err != nil {
 				return err
 			}
+			if preInsert.TrackOdkuResult && (proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"remote ODKU result tracking requires MORPC protocol version 58")
+			}
+		}
+		if dedup := instruction.GetDedupJoin(); dedup != nil && dedup.OdkuResultTracking &&
+			(proc == nil || !supportsRemoteODKUResultTracking(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"remote ODKU result tracking requires MORPC protocol version 58")
 		}
 		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
 			if err := validateRemoteAutoIncrementSessionOptionsProtocol(

@@ -3460,6 +3460,20 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 					ColPos: node.PreInsertCtx.AutoIncrementGeneratedColumn,
 				}},
 			})
+			if node.PreInsertCtx.TrackOdkuResult {
+				ordinalRef := [2]int32{
+					node.BindingTags[0],
+					node.PreInsertCtx.OdkuOrdinalColumn,
+				}
+				remapping.addColRef(ordinalRef)
+				node.ProjectList = append(node.ProjectList, &plan.Expr{
+					Typ: plan.Type{Id: int32(types.T_uint64)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: -1,
+						ColPos: node.PreInsertCtx.OdkuOrdinalColumn,
+					}},
+				})
+			}
 		}
 
 	case plan.Node_PRE_INSERT_UK:

@@ -779,7 +779,15 @@ END:
 }
 
 func dedupJoinMetadataCols(ctx *plan.DedupJoinCtx) []*plan.ColRef {
-	cols := []*plan.ColRef{ctx.AffectedRowsCol, ctx.PhysicalChangedRowsCol, ctx.ActionFinalCol}
+	cols := []*plan.ColRef{
+		ctx.AffectedRowsCol,
+		ctx.PhysicalChangedRowsCol,
+		ctx.ActionFinalCol,
+		ctx.OdkuTargetAutoIncrementCol,
+		ctx.OdkuGeneratedCol,
+		ctx.OdkuOrdinalCol,
+		ctx.OdkuGeneratedAutoIncrementCol,
+	}
 	for i := range ctx.ForeignKeyChecks {
 		cols = append(cols, ctx.ForeignKeyChecks[i].EligibilityCol)
 	}

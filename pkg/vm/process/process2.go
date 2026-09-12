@@ -88,6 +88,8 @@ func NewTopProcess(
 		// 2. fields from make.
 		LastInsertID:          new(uint64),
 		StatementLastInsertID: new(uint64),
+		ODKUResult:            &ODKUResultState{},
+		ODKUInputOrdinal:      new(uint64),
 		AffectedRows:          new(int64),
 
 		// 3. other fields.

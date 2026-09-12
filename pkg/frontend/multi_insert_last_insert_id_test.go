@@ -55,6 +55,8 @@ func newLastInsertIDHarness(t *testing.T, targets int) (
 	proc := &process.Process{Base: &process.BaseProcess{
 		LastInsertID:          new(uint64),
 		StatementLastInsertID: new(uint64),
+		ODKUResult:            &process.ODKUResultState{},
+		ODKUInputOrdinal:      new(uint64),
 	}}
 	proc.InitSeq()
 	writer := &countingMysqlWriter{
@@ -69,6 +71,54 @@ func newLastInsertIDHarness(t *testing.T, targets int) (
 		cw:        &TxnComputationWrapper{plan: autoIncrPreInsertPlan(targets)},
 	}
 	return ses, proc, writer, NewMysqlResp(writer), execCtx
+}
+
+func newODKUInsertStatusHarness(t *testing.T) (
+	*Session, *process.Process, *countingMysqlWriter, *MysqlResp, *ExecCtx,
+) {
+	ses, proc, writer, resper, execCtx := newLastInsertIDHarness(t, 0)
+	execCtx.stmt = &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{&tree.UpdateExpr{}}}
+	return ses, proc, writer, resper, execCtx
+}
+
+func TestODKUStatusKeepsSessionValueForUpdateFallback(t *testing.T) {
+	ses, proc, writer, resper, execCtx := newODKUInsertStatusHarness(t)
+	ses.SetLastInsertID(500)
+	proc.SetLastInsertID(500)
+	proc.RecordODKUAction(0, 1, true)
+
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Equal(t, uint64(1), writer.responses[0].lastInsertId)
+	require.Equal(t, uint64(500), ses.GetLastInsertID())
+	require.Equal(t, uint64(500), proc.GetLastInsertID())
+}
+
+func TestODKUStatusNoopReturnsZeroAndKeepsSessionValue(t *testing.T) {
+	ses, proc, writer, resper, execCtx := newODKUInsertStatusHarness(t)
+	ses.SetLastInsertID(500)
+	proc.SetLastInsertID(500)
+	proc.RecordODKUAction(0, 1, false)
+
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Zero(t, writer.responses[0].lastInsertId)
+	require.Equal(t, uint64(500), ses.GetLastInsertID())
+}
+
+func TestODKUStatusPublishesFirstGeneratedValue(t *testing.T) {
+	ses, proc, writer, resper, execCtx := newODKUInsertStatusHarness(t)
+	ses.SetLastInsertID(500)
+	proc.SetLastInsertID(500)
+	proc.RecordODKUGenerated(2, 3)
+
+	require.NoError(t, resper.respStatus(ses, execCtx))
+	require.Len(t, writer.responses, 1)
+	require.Equal(t, uint64(3), writer.responses[0].lastInsertId)
+	require.Equal(t, uint64(3), ses.GetLastInsertID())
+	// The process is normally discarded or refreshed after status emission;
+	// the session object is the durable value used by the next statement.
+	require.Equal(t, uint64(500), proc.GetLastInsertID())
 }
 
 // TestMultiInsertAmbiguousInsertIDLeavesNoProcessState is the regression for

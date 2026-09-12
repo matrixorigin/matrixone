@@ -36,6 +36,7 @@ type container struct {
 	// allocator fills the AUTO_INCREMENT column. It is emitted as a transient
 	// bool vector only for the ordered INSERT IGNORE path.
 	autoIncrementGenerated []bool
+	odkuOrdinals           []uint64
 	// tblId is a local copy of TableDef.TblId, refreshed by
 	// refreshAutoIncrementTableID.  Storing it here avoids mutating the
 	// shared *plan.TableDef that other operators may read concurrently.
@@ -59,10 +60,15 @@ type PreInsert struct {
 	RejectZeroTemporal           bool
 	TrackAutoIncrementGenerated  bool
 	AutoIncrementGeneratedColumn int32
-	HasTargetSelector            bool
-	TargetRowNumberCol           int32
-	TargetActiveCol              int32
-	TargetRowIDCol               int32
+	TrackODKUResult              bool
+	ODKUOrdinalColumn            int32
+	// ODKUAutoIncrementColumn is the table-column index of the user-visible
+	// AUTO_INCREMENT source. It excludes MatrixOne's hidden fake primary key.
+	ODKUAutoIncrementColumn int32
+	HasTargetSelector       bool
+	TargetRowNumberCol      int32
+	TargetActiveCol         int32
+	TargetRowIDCol          int32
 
 	vm.OperatorBase
 }
@@ -104,6 +110,7 @@ func (preInsert *PreInsert) Release() {
 
 func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	preInsert.ctr.autoIncrementGenerated = nil
+	preInsert.ctr.odkuOrdinals = nil
 	if preInsert.ctr.compPkExecutor != nil {
 		preInsert.ctr.compPkExecutor.ResetForNextQuery()
 	}
@@ -114,6 +121,7 @@ func (preInsert *PreInsert) Reset(proc *process.Process, pipelineFailed bool, er
 
 func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err error) {
 	preInsert.ctr.autoIncrementGenerated = nil
+	preInsert.ctr.odkuOrdinals = nil
 	if preInsert.ctr.compPkExecutor != nil {
 		preInsert.ctr.compPkExecutor.Free()
 		preInsert.ctr.compPkExecutor = nil

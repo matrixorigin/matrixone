@@ -34,6 +34,152 @@ func TestODKUAffectedRowsRules(t *testing.T) {
 	require.EqualValues(t, 1, odkuAffectedRows(false, true))
 }
 
+func TestODKUResultTrackingRecordsGeneratedAndPerActionValidity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.ResetODKUResult()
+
+	marker := vector.NewVec(types.T_bool.ToType())
+	ordinal := vector.NewVec(types.T_uint64.ToType())
+	generatedID := vector.NewVec(types.T_int64.ToType())
+	targetID := vector.NewVec(types.T_int64.ToType())
+	for _, vec := range []*vector.Vector{marker, ordinal, generatedID, targetID} {
+		defer vec.Free(proc.Mp())
+	}
+	require.NoError(t, vector.AppendFixed(marker, true, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(ordinal, uint64(4), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(generatedID, int64(9), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(targetID, int64(7), false, proc.Mp()))
+	input := &batch.Batch{Vecs: []*vector.Vector{marker, ordinal, generatedID}}
+	target := &batch.Batch{Vecs: []*vector.Vector{targetID}}
+	input.SetRowCount(1)
+	target.SetRowCount(1)
+	ap := &DedupJoin{
+		ODKUResultTracking:            true,
+		ODKUGeneratedCol:              0,
+		ODKUOrdinalCol:                1,
+		ODKUGeneratedAutoIncrementCol: 2,
+		ODKUTargetAutoIncrementCol:    0,
+	}
+	ctr := &container{}
+	ctr.recordODKUGenerated(ap, input, 0, proc)
+	ctr.recordODKUAction(ap, input, 0, target, 0, true, proc)
+	ctr.recordODKUAction(ap, input, 0, target, 0, false, proc)
+	ctr.flushODKUResult(proc)
+
+	summary := proc.GetODKUResultSummary()
+	require.True(t, summary.HasGenerated)
+	require.Equal(t, uint64(4), summary.FirstGeneratedOrdinal)
+	require.Equal(t, uint64(9), summary.FirstGeneratedID)
+	require.Equal(t, uint64(4), summary.LastActionOrdinal)
+	require.Equal(t, uint64(7), summary.LastActionID)
+	require.True(t, summary.HasSuccessfulAction)
+	require.Equal(t, uint64(7), summary.LastSuccessfulID)
+}
+
+func TestODKUUint64AtAcceptsIntegerStorageDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	tests := []struct {
+		name   string
+		typ    types.Type
+		append func(*vector.Vector) error
+		want   uint64
+		ok     bool
+	}{
+		{
+			name: "int8", typ: types.T_int8.ToType(),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, int8(8), false, proc.Mp())
+			}, want: 8, ok: true,
+		},
+		{
+			name: "int16", typ: types.T_int16.ToType(),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, int16(16), false, proc.Mp())
+			}, want: 16, ok: true,
+		},
+		{
+			name: "int32", typ: types.T_int32.ToType(),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, int32(32), false, proc.Mp())
+			}, want: 32, ok: true,
+		},
+		{
+			name: "int64", typ: types.T_int64.ToType(),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, int64(64), false, proc.Mp())
+			}, want: 64, ok: true,
+		},
+		{
+			name: "uint8", typ: types.T_uint8.ToType(),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, uint8(8), false, proc.Mp())
+			}, want: 8, ok: true,
+		},
+		{
+			name: "uint16", typ: types.T_uint16.ToType(),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, uint16(16), false, proc.Mp())
+			}, want: 16, ok: true,
+		},
+		{
+			name: "uint32", typ: types.T_uint32.ToType(),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, uint32(32), false, proc.Mp())
+			}, want: 32, ok: true,
+		},
+		{
+			name: "uint64", typ: types.T_uint64.ToType(),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, uint64(64), false, proc.Mp())
+			}, want: 64, ok: true,
+		},
+		{
+			name: "negative signed value", typ: types.T_int64.ToType(),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendFixed(vec, int64(-1), false, proc.Mp())
+			}, want: 0, ok: false,
+		},
+		{
+			name: "unsupported type", typ: types.T_varchar.ToType(),
+			append: func(vec *vector.Vector) error {
+				return vector.AppendBytes(vec, []byte("8"), false, proc.Mp())
+			}, want: 0, ok: false,
+		},
+		{
+			name: "null", typ: types.T_int64.ToType(),
+			append: func(vec *vector.Vector) error {
+				if err := vector.AppendFixed(vec, int64(8), false, proc.Mp()); err != nil {
+					return err
+				}
+				vec.GetNulls().Add(0)
+				return nil
+			}, want: 0, ok: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := vector.NewVec(test.typ)
+			t.Cleanup(func() { vec.Free(proc.Mp()) })
+			require.NoError(t, test.append(vec))
+			got, ok := odkuUint64At(vec, 0)
+			require.Equal(t, test.ok, ok)
+			if test.ok {
+				require.Equal(t, test.want, got)
+			}
+			_, ok = odkuUint64At(vec, 1)
+			require.False(t, ok, "out-of-range rows must not produce an ODKU id")
+		})
+	}
+
+	var nilVec *vector.Vector
+	_, ok := odkuUint64At(nilVec, 0)
+	require.False(t, ok)
+}
+
 func TestODKUMetadataContractRejectsMalformedPlans(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -437,11 +583,15 @@ func TestODKUPhysicalChangeSeparatesImplicitColumnsFromNoOp(t *testing.T) {
 	final.SetRowCount(1)
 
 	require.True(t, odkuPhysicalChanged(
-		true, []*vector.Vector{oldValue, oldTimestamp}, final, []int32{0, 1}),
+		false, true, []*vector.Vector{oldValue, oldTimestamp}, final, []int32{0, 1}),
 		"an implicit-column change must survive when an earlier logical action changed the row")
 	require.False(t, odkuPhysicalChanged(
-		false, []*vector.Vector{oldValue, oldTimestamp}, final, []int32{0, 1}),
+		false, false, []*vector.Vector{oldValue, oldTimestamp}, final, []int32{0, 1}),
 		"a pure no-op must not fire an implicit ON UPDATE expression")
+	require.True(t, odkuPhysicalChanged(
+		true, false, []*vector.Vector{oldValue, oldTimestamp},
+		&batch.Batch{Vecs: []*vector.Vector{oldValue, oldTimestamp}}, []int32{0, 1}),
+		"a new-key group must retain its INSERT write even when later actions restore the image")
 }
 
 func TestODKUStableVectorPoolSurvivesJoinBatchWidthChange(t *testing.T) {

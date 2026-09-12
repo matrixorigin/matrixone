@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type executionResourceRecorder struct {
@@ -55,6 +56,7 @@ type remoteTerminalEnvelope struct {
 	models.PhyPlan
 	TerminalResourceVersion   uint32                           `json:"terminal_resource_version,omitempty"`
 	StatementLastInsertID     uint64                           `json:"statement_last_insert_id,omitempty"`
+	ODKUResult                *remoteODKUResultSummary         `json:"odku_result,omitempty"`
 	WarningCount              uint64                           `json:"warning_count,omitempty"`
 	WarningDiagnostics        []remoteWarningDiagnostic        `json:"warning_diagnostics,omitempty"`
 	Delta                     resource.Delta                   `json:"resource_delta"`
@@ -64,6 +66,35 @@ type remoteTerminalEnvelope struct {
 	MissingMemoryDomainCount  uint64                           `json:"missing_memory_domain_count,omitempty"`
 	PendingAllocationGroups   []remoteAllocationGroupPending   `json:"pending_allocation_groups,omitempty"`
 	CompletedAllocationGroups []string                         `json:"completed_allocation_groups,omitempty"`
+}
+
+type remoteODKUResultSummary struct {
+	HasGenerated          bool   `json:"has_generated"`
+	FirstGeneratedOrdinal uint64 `json:"first_generated_ordinal"`
+	FirstGeneratedID      uint64 `json:"first_generated_id"`
+	HasAction             bool   `json:"has_action"`
+	LastActionOrdinal     uint64 `json:"last_action_ordinal"`
+	LastActionID          uint64 `json:"last_action_id"`
+	HasSuccessfulAction   bool   `json:"has_successful_action"`
+	LastSuccessfulOrdinal uint64 `json:"last_successful_ordinal"`
+	LastSuccessfulID      uint64 `json:"last_successful_id"`
+}
+
+func remoteODKUResultFromProcess(summary process.ODKUResultSummary) *remoteODKUResultSummary {
+	if !summary.HasGenerated && !summary.HasAction && !summary.HasSuccessfulAction {
+		return nil
+	}
+	return &remoteODKUResultSummary{
+		HasGenerated:          summary.HasGenerated,
+		FirstGeneratedOrdinal: summary.FirstGeneratedOrdinal,
+		FirstGeneratedID:      summary.FirstGeneratedID,
+		HasAction:             summary.HasAction,
+		LastActionOrdinal:     summary.LastActionOrdinal,
+		LastActionID:          summary.LastActionID,
+		HasSuccessfulAction:   summary.HasSuccessfulAction,
+		LastSuccessfulOrdinal: summary.LastSuccessfulOrdinal,
+		LastSuccessfulID:      summary.LastSuccessfulID,
+	}
 }
 
 type remoteAllocationGroupPending struct {
