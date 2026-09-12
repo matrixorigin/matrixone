@@ -63,6 +63,32 @@ func TestTestPortAllocation(t *testing.T) {
 	}
 }
 
+type probeCloseListener struct {
+	net.Listener
+	closed bool
+}
+
+func (l *probeCloseListener) Close() error {
+	l.closed = true
+	return nil
+}
+
+func TestProbeTestPortClosesTCPOnUDPFailure(t *testing.T) {
+	listener := &probeCloseListener{}
+	err := probeTestPortAddressWithListeners("127.0.0.1:1234",
+		func(network, address string) (net.Listener, error) {
+			require.Equal(t, "tcp4", network)
+			return listener, nil
+		},
+		func(network, address string) (net.PacketConn, error) {
+			require.Equal(t, "udp4", network)
+			require.False(t, listener.closed)
+			return nil, syscall.EADDRINUSE
+		})
+	require.ErrorIs(t, err, syscall.EADDRINUSE)
+	require.True(t, listener.closed)
+}
+
 func TestProbeTestPortRejectsOccupiedSockets(t *testing.T) {
 	t.Run("tcp", func(t *testing.T) {
 		listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -76,9 +102,7 @@ func TestProbeTestPortRejectsOccupiedSockets(t *testing.T) {
 		defer listener.Close()
 		port := listener.LocalAddr().(*net.UDPAddr).Port
 		require.ErrorIs(t, probeTestPort(port), syscall.EADDRINUSE)
-		// The failed UDP probe must release its temporary TCP listener.
-		tcp, err := net.Listen("tcp4", listener.LocalAddr().String())
-		require.NoError(t, err)
-		require.NoError(t, tcp.Close())
+		// A UDP-owned port does not imply that its TCP counterpart is free.
+		// Cleanup is checked separately without racing another process's bind.
 	})
 }

@@ -157,6 +157,15 @@ func TestGetTableDefRestoresChecksFromSchemaExtra(t *testing.T) {
 	require.Equal(t, uint32(types.CharsetBinary), tableDef.DefaultCharset)
 }
 
+func TestGetTableDefRestoresAutoIDCache(t *testing.T) {
+	for _, size := range []uint64{0, 1, 2, 1000000} {
+		tableDef, _ := getTableDef(&TableItem{
+			Name: "t", ExtraInfo: &api.SchemaExtra{AutoIdCache: size},
+		}, nil)
+		require.Equal(t, size, tableDef.AutoIdCache)
+	}
+}
+
 func TestGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {
 	tableDef, _ := getTableDef(&TableItem{Kind: catalog.SystemTemporaryTable}, nil)
 	require.NotNil(t, tableDef)

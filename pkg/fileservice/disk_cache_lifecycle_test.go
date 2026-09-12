@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -216,31 +217,37 @@ func TestDiskCacheReadSharesWaitBudgetAcrossEntries(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cache := newLifecycleTestDiskCache(t)
-			entries := make([]IOEntry, 64)
-			for i := range entries {
-				entries[i] = IOEntry{Offset: int64(i), Size: 1}
-			}
-
-			var releases []func()
-			for _, path := range tc.holdPaths(cache, entries) {
-				releases = append(releases, cache.startUpdate(path))
-			}
-			releaseAll := sync.OnceFunc(func() {
-				for _, release := range releases {
-					release()
+			// Measure the shared timer budget, not scheduler or filesystem delay
+			// on a loaded race runner. Keep all path wait channels in this bubble.
+			synctest.Test(t, func(t *testing.T) {
+				cache := newLifecycleTestDiskCache(t)
+				entries := make([]IOEntry, 64)
+				for i := range entries {
+					entries[i] = IOEntry{Offset: int64(i), Size: 1}
 				}
-			})
-			t.Cleanup(releaseAll)
 
-			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			defer cancel()
-			require.NoError(t, cache.Read(ctx, &IOVector{
-				FilePath: "foo",
-				Entries:  entries,
-			}))
-			require.NoError(t, ctx.Err(), "one Read exhausted a per-entry wait budget")
-			releaseAll()
+				var releases []func()
+				for _, path := range tc.holdPaths(cache, entries) {
+					releases = append(releases, cache.startUpdate(path))
+				}
+				releaseAll := sync.OnceFunc(func() {
+					for _, release := range releases {
+						release()
+					}
+				})
+				t.Cleanup(releaseAll)
+
+				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+				defer cancel()
+				started := time.Now()
+				require.NoError(t, cache.Read(ctx, &IOVector{
+					FilePath: "foo",
+					Entries:  entries,
+				}))
+				require.NoError(t, ctx.Err(), "one Read exhausted a per-entry wait budget")
+				require.Equal(t, shortIOWaitDuration, time.Since(started), "all contended paths share one timer budget")
+				releaseAll()
+			})
 		})
 	}
 }

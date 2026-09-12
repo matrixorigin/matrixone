@@ -1499,6 +1499,9 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateTable()
+	if err := incrservice.CheckAutoIDCache(c.proc.Ctx, c.proc.GetService(), qry.GetTableDef().GetAutoIdCache()); err != nil {
+		return err
+	}
 	dbName := c.db
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()

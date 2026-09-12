@@ -16,13 +16,15 @@ package incrservice
 
 import (
 	"context"
-	"go.uber.org/zap"
+	"math"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/log"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"go.uber.org/zap"
 )
 
 type tableCache struct {
@@ -109,14 +111,18 @@ func (c *tableCache) getTxn() client.TxnOperator {
 	return c.mu.txnOp
 }
 
-func (c *tableCache) getLastAllocateTS(_ context.Context, colName string) (timestamp.Timestamp, error) {
+func (c *tableCache) getLastAllocateTS(ctx context.Context, colName string) (timestamp.Timestamp, error) {
 	cc := c.getColumnCache(colName)
 	if cc == nil {
 		panic("column cache should not be nil, " + colName)
 	}
 	cc.RLock()
 	ts := cc.oldestAllocateAtLocked()
+	unknown := cc.cfg.demandOnly && ts.IsEmpty() && (!cc.ranges.empty() || cc.terminal)
 	cc.RUnlock()
+	if unknown {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "AUTO_INCREMENT range has no allocation timestamp")
+	}
 	// Log a warning if the allocation timestamp is empty, which may cause PrimaryKeysMayBeUpserted
 	// to scan a very large time range and impact performance.
 	if ts.IsEmpty() && c.logger.Enabled(zap.DebugLevel) {
@@ -161,14 +167,35 @@ func (c *tableCache) insertAutoValues(
 func (c *tableCache) currentValue(
 	ctx context.Context,
 	tableID uint64,
-	targetCol string) (uint64, error) {
+	targetCol string,
+	store IncrValueStore) (uint64, error) {
 	for _, col := range c.cols {
 		if col.ColName == targetCol {
 			cc := c.getColumnCache(col.ColName)
 			if cc == nil {
 				panic("column cache should not be nil, " + col.ColName)
 			}
-			return cc.current(ctx)
+			value, err := cc.current(ctx)
+			if err != nil || value != 0 || !cc.cfg.demandOnly {
+				return value, err
+			}
+			// An uncommitted CREATE owns private allocator rows. Observe through
+			// that cache's transaction, not a new committed snapshot. getTxn
+			// releases its lock before I/O and returns nil after cache commit.
+			observationCtx := WithAutoIDCachePolicy(ctx, tableID, col.CacheSize)
+			cols, err := store.GetColumns(observationCtx, tableID, c.getTxn())
+			if err != nil {
+				return 0, err
+			}
+			for _, column := range cols {
+				if column.ColName == targetCol {
+					if column.Step == 0 || column.Offset > math.MaxUint64-column.Step {
+						return 0, moerr.NewOutOfRange(ctx, "AUTO_INCREMENT", "no next value is representable")
+					}
+					return column.Offset + column.Step, nil
+				}
+			}
+			return 0, moerr.NewInternalErrorf(ctx, "AUTO_INCREMENT column %q is missing for table %d", targetCol, tableID)
 		}
 	}
 	return 0, nil

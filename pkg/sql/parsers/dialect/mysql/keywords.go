@@ -38,6 +38,7 @@ func init() {
 		"asensitive":                 UNUSED,
 		"async":                      ASYNC,
 		"auto_increment":             AUTO_INCREMENT,
+		"auto_id_cache":              AUTO_ID_CACHE,
 		"autoextend_size":            AUTOEXTEND_SIZE,
 		"auto_random":                AUTO_RANDOM,
 		"auto_update":                AUTO_UPDATE,

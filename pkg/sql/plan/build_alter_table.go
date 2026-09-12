@@ -404,6 +404,12 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			return nil, err
 		}
 	}
+	// Normalize the final COPY definition, after all ALTER clauses. Keeping a
+	// table cache policy without a visible auto column would make its internal
+	// CREATE invalid; normal SHOW must still faithfully report stored metadata.
+	if !tableHasAutoIncrementColumn(copyTableDef) {
+		copyTableDef.AutoIdCache = 0
+	}
 	if err := validateDefaultColumnDependencies(ctx, copyTableDef.Cols); err != nil {
 		return nil, err
 	}

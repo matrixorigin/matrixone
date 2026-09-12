@@ -925,6 +925,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <partitions> partition_list_opt partition_list
 %type <values> values_opt
 %type <tableOptions> partition_option_list
+%type <tableOption> partition_table_option
 %type <subPartition> sub_partition
 %type <subPartitions> sub_partition_list sub_partition_list_opt
 %type <subquery> subquery
@@ -1039,6 +1040,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // Explicit MySQL default for value-window null treatment.
 %token <str> RESPECT
 %left <str> MEMBER
+%token <str> AUTO_ID_CACHE
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -11070,13 +11072,24 @@ sub_partition:
     }
 
 partition_option_list:
-    table_option
+    partition_table_option
     {
         $$ = []tree.TableOption{$1}
     }
-|   partition_option_list table_option
+|   partition_option_list partition_table_option
     {
         $$ = append($1, $2)
+    }
+
+partition_table_option:
+    table_option
+    {
+        if option, ok := $1.(*tree.TableOptionAutoIDCache); ok {
+            option.Free()
+            yylex.Error("AUTO_ID_CACHE is a table option, not a partition or subpartition option")
+            goto ret1
+        }
+        $$ = $1
     }
 
 values_opt:
@@ -11469,6 +11482,10 @@ table_option:
 |   AUTO_INCREMENT equal_opt INTEGRAL
     {
         $$ = tree.NewTableOptionAutoIncrement(integralToUint64($3))
+    }
+|   AUTO_ID_CACHE equal_opt INTEGRAL
+    {
+        $$ = tree.NewTableOptionAutoIDCache(integralToUint64($3))
     }
 |   AVG_ROW_LENGTH equal_opt INTEGRAL
     {
@@ -16268,6 +16285,7 @@ non_reserved_keyword:
 |	MODIFY
 |	ASCII
 |	AUTO_INCREMENT
+|	AUTO_ID_CACHE
 |	AUTOEXTEND_SIZE
 |	BSI
 |	BINDINGS

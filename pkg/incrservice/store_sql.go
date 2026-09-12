@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
@@ -464,13 +465,45 @@ func (s *sqlStore) Delete(ctx context.Context, tableID uint64) error {
 		opts)
 }
 
+// autoColumnPolicyTableKey redirects only the table-metadata half of a reset
+// read. TRUNCATE has already replaced the old mo_tables row, but its allocator
+// rows remain until Reset migrates them. The new physical table owns the policy.
+type autoColumnPolicyTableKey struct{}
+
+type autoColumnKnownPolicyKey struct{}
+
+type autoColumnKnownPolicy struct {
+	tableID uint64
+	size    uint64
+}
+
+// WithAutoIDCachePolicy carries policy from a resolved table definition or an
+// existing cache owner. Binding the hint to a physical table ID prevents reuse
+// after a table-ID refresh or for a different table in the same context.
+// Callers without authoritative metadata must leave the context unchanged.
+func WithAutoIDCachePolicy(ctx context.Context, tableID, size uint64) context.Context {
+	return context.WithValue(ctx, autoColumnKnownPolicyKey{}, autoColumnKnownPolicy{tableID: tableID, size: size})
+}
+
 func (s *sqlStore) GetColumns(
 	ctx context.Context,
 	tableID uint64,
 	txnOp client.TxnOperator) ([]AutoColumn, error) {
-	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step from %s where table_id = %d order by col_index`,
-		incrTableName,
-		tableID)
+	policyTableID := tableID
+	if replacement, ok := ctx.Value(autoColumnPolicyTableKey{}).(uint64); ok {
+		policyTableID = replacement
+	}
+	// A resolved definition or existing cache owner supplies immutable policy.
+	// Other cold loads discover it in the same SQL snapshot as fresh offsets.
+	knownPolicy, hasKnownPolicy := ctx.Value(autoColumnKnownPolicyKey{}).(autoColumnKnownPolicy)
+	hasKnownPolicy = hasKnownPolicy && knownPolicy.tableID == policyTableID
+	policySQL := fmt.Sprintf("(select extra_info from mo_tables where rel_id = %d)", policyTableID)
+	if hasKnownPolicy {
+		policySQL = "''"
+	}
+	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step,
+		%s as table_extra from %s where table_id = %d order by col_index`,
+		policySQL, incrTableName, tableID)
 	opts := executor.Options{}.
 		WithDatabase(database).
 		WithTxn(txnOp).
@@ -492,7 +525,23 @@ func (s *sqlStore) GetColumns(
 	var indexes []int32
 	var offsets []uint64
 	var steps []uint64
+	var extra api.SchemaExtra
+	var metadataRead bool
+	var metadataErr error
 	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		if rows == 0 {
+			return true
+		}
+		if !metadataRead {
+			if cols[4].IsNull(0) {
+				metadataErr = moerr.NewNoSuchTableNoCtx("", fmt.Sprintf("%d", tableID))
+				return false
+			}
+			if metadataErr = extra.Unmarshal(cols[4].GetBytesAt(0)); metadataErr != nil {
+				return false
+			}
+			metadataRead = true
+		}
 		colNames = append(colNames, executor.GetStringRows(cols[0])...)
 		indexes = append(indexes, executor.GetFixedRows[int32](cols[1])...)
 		offsets = append(offsets, executor.GetFixedRows[uint64](cols[2])...)
@@ -500,14 +549,24 @@ func (s *sqlStore) GetColumns(
 		return true
 	})
 
+	if metadataErr != nil {
+		return nil, metadataErr
+	}
+	if hasKnownPolicy {
+		extra.AutoIdCache = knownPolicy.size
+	}
+	if err := validateAutoIDCacheSize(ctx, extra.AutoIdCache); err != nil {
+		return nil, err
+	}
 	cols := make([]AutoColumn, len(colNames))
 	for idx, colName := range colNames {
 		cols[idx] = AutoColumn{
-			TableID:  tableID,
-			ColName:  colName,
-			ColIndex: int(indexes[idx]),
-			Offset:   offsets[idx],
-			Step:     steps[idx],
+			TableID:   tableID,
+			ColName:   colName,
+			ColIndex:  int(indexes[idx]),
+			Offset:    offsets[idx],
+			Step:      steps[idx],
+			CacheSize: extra.AutoIdCache,
 		}
 	}
 	return cols, nil
