@@ -177,7 +177,10 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 	case types.T_bit, types.T_uint64:
 		return writeValue(*util.UnsafeFromBytes[uint64](data))
 	case types.T_bool:
-		return writeValue(*util.UnsafeFromBytes[bool](data))
+		if *util.UnsafeFromBytes[bool](data) {
+			return writeBytes([]byte("1"))
+		}
+		return writeBytes([]byte("0"))
 	case types.T_int8:
 		return writeValue(*util.UnsafeFromBytes[int8](data))
 	case types.T_int16:
@@ -216,9 +219,11 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 		return writeValue(util.UnsafeFromBytes[types.MoYear](data).String())
 	case types.T_uuid:
 		return writeValue(types.DecodeUuid(data).String())
+	case types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		return writeGroupConcatArrayData(writer, typ, data)
 	case types.T_blob, types.T_text, types.T_datalink, types.T_varbinary, types.T_binary,
-		types.T_char, types.T_varchar, types.T_enum, types.T_array_float32, types.T_array_float64,
-		types.T_array_bf16, types.T_array_float16, types.T_array_int8, types.T_array_uint8:
+		types.T_char, types.T_varchar, types.T_enum:
 		if err := isValidGroupConcatUnit(data); err != nil {
 			return err
 		}
@@ -241,5 +246,33 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 	default:
 		return moerr.NewInternalErrorNoCtxf(
 			"unsupported type for group_concat payload: %s", typ.String())
+	}
+}
+
+func writeGroupConcatArrayData(writer io.Writer, typ types.Type, data []byte) error {
+	if err := isValidGroupConcatUnit(data); err != nil {
+		return err
+	}
+	if !typ.Oid.IsArrayRelate() || len(data)%typ.GetArrayElementSize() != 0 {
+		return moerr.NewInternalErrorNoCtxf(
+			"invalid group_concat array payload size for %s", typ.String())
+	}
+
+	switch typ.Oid {
+	case types.T_array_float32:
+		return types.WriteArrayTo(writer, types.BytesToArray[float32](data))
+	case types.T_array_float64:
+		return types.WriteArrayTo(writer, types.BytesToArray[float64](data))
+	case types.T_array_bf16:
+		return types.WriteArrayTo(writer, types.BytesToArray[types.BF16](data))
+	case types.T_array_float16:
+		return types.WriteArrayTo(writer, types.BytesToArray[types.Float16](data))
+	case types.T_array_int8:
+		return types.WriteArrayTo(writer, types.BytesToArray[int8](data))
+	case types.T_array_uint8:
+		return types.WriteArrayTo(writer, types.BytesToArray[uint8](data))
+	default:
+		return moerr.NewInternalErrorNoCtxf(
+			"unsupported array type for group_concat payload: %s", typ.String())
 	}
 }
