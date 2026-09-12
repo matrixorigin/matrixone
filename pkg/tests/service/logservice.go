@@ -15,6 +15,7 @@
 package service
 
 import (
+	"context"
 	"path/filepath"
 	"sync"
 
@@ -226,36 +227,27 @@ func (c *testCluster) startHAKeeperReplica() error {
 }
 
 // setInitialClusterInfo initializes cluster information.
-func (c *testCluster) setInitialClusterInfo() error {
-	errChan := make(chan error, 1)
-
-	initialize := func() {
-		var err error
-		defer func() {
-			errChan <- err
-		}()
-
+func (c *testCluster) setInitialClusterInfo(ctx context.Context) error {
+	c.log.once.Do(func() {
 		selected := c.selectHAkeeperServices()
 		assert.NotZero(c.t, len(selected))
 
 		c.logger.Info("initialize cluster information")
 
-		err = selected[0].SetInitialClusterInfo(
+		leader := c.WaitHAKeeperLeader(ctx)
+		c.log.initialClusterInfoErr = leader.SetInitialClusterInfo(
 			c.opt.initial.logShardNum,
 			c.opt.initial.tnShardNum,
 			c.opt.initial.logReplicaNum,
 		)
-		if err != nil {
-			c.logger.Error("fail to initialize cluster", zap.Error(err))
+		if c.log.initialClusterInfoErr != nil {
+			c.logger.Error("fail to initialize cluster", zap.Error(c.log.initialClusterInfoErr))
 			return
 		}
 
 		c.logger.Info("cluster information initialized")
-	}
-
-	// initialize cluster only once
-	c.log.once.Do(initialize)
-	return <-errChan
+	})
+	return c.log.initialClusterInfoErr
 }
 
 // listHAKeeperService lists all log services that start hakeeper.

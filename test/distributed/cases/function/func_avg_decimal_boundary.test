@@ -1,4 +1,5 @@
-# High-precision decimal AVG must reject an unrepresentable result instead of publishing wrapped bits.
+# High-precision decimal AVG promotes Decimal128 inputs when the exact result
+# needs four additional precision and scale digits.
 drop database if exists avg_decimal_boundary;
 create database avg_decimal_boundary;
 use avg_decimal_boundary;

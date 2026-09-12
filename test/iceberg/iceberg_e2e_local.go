@@ -862,6 +862,12 @@ func waitForLifecycleFaultWaiters(ctx context.Context, db *sql.DB, waitersPoint 
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
+		// A slow query or instrumented test run can make the ticker and
+		// context deadline ready at the same time. Do not start another
+		// database poll after the context has expired.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		rows, err := queryLines(ctx, db, fmt.Sprintf("select trigger_fault_point(%s)", sqlString(waitersPoint)))
 		if err != nil {
 			return err

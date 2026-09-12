@@ -176,6 +176,9 @@ func (sm *ExecutorStateMachine) initTransitions() {
 	sm.addTransition(StateCancelling, TransitionCancelComplete, StateCancelled)
 
 	// From Failed
+	// A control request can arrive while startup is failing. Failed does not
+	// revoke PAUSE: it must still drain residual readers and reach Paused.
+	sm.addTransition(StateFailed, TransitionPause, StatePausing)
 	sm.addTransition(StateFailed, TransitionResume, StateStarting)
 	sm.addTransition(StateFailed, TransitionRestart, StateRestarting)
 	sm.addTransition(StateFailed, TransitionCancel, StateCancelling)

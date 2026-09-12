@@ -39,8 +39,11 @@ import (
 )
 
 const (
-	countstar_sql     = "SELECT COUNT(*) from %s where word = '%s'"
-	countstar_avg_sql = "SELECT COUNT(*), AVG(pos) from (SELECT doc_id, MAX(pos) AS pos from %s where word = '%s' GROUP BY doc_id) doc_len"
+	countstar_sql = "SELECT COUNT(*) from %s where word = '%s'"
+	// BM25 consumes AvgDocLen as float64. Keep the internal query on the
+	// floating-point AVG path because exact AVG over integer pos now returns a
+	// DECIMAL vector.
+	countstar_avg_sql = "SELECT COUNT(*), AVG(CAST(pos AS DOUBLE)) from (SELECT doc_id, MAX(pos) AS pos from %s where word = '%s' GROUP BY doc_id) doc_len"
 )
 
 var ft_runSql = sqlexec.RunSql
@@ -67,6 +70,8 @@ type fulltextState struct {
 	ranking          bool
 	publisherAccount *uint32
 	publisherDB      string
+	// Named-snapshot read TS, from tf.ScanSnapshot (#27941).
+	scanSnapshot *plan.Snapshot
 
 	// Partition-ordered traversal of agghtab for the zero-LIMIT scoring path.
 	// Built ONCE per scoring phase (aggregation is complete before the first
@@ -121,6 +126,7 @@ func (u *fulltextState) resetRowState(proc *process.Process) {
 	u.scoreOrdered = false
 	u.publisherAccount = nil
 	u.publisherDB = ""
+	u.scanSnapshot = nil
 }
 
 func (u *fulltextState) sqlProcess(proc *process.Process) *sqlexec.SqlProcess {
@@ -128,6 +134,11 @@ func (u *fulltextState) sqlProcess(proc *process.Process) *sqlexec.SqlProcess {
 	if u.publisherAccount != nil {
 		sqlProc.WithExecutionIdentity(*u.publisherAccount, u.publisherDB)
 	}
+	// Named-snapshot read TS + owning tenant; nil leaves the read at the current txn (#27941).
+	// Order-independent: the two identities land in separate fields and SqlProcess resolves the
+	// precedence at use (see resolveAccountID), so a subscribed table read at a snapshot
+	// resolves under the PUBLISHER either way.
+	sqlProc.ApplyScanSnapshot(u.scanSnapshot)
 	return sqlProc
 }
 
@@ -375,6 +386,7 @@ func (u *fulltextState) start(tf *TableFunction, proc *process.Process, nthRow i
 		u.inited = true
 	}
 	u.resetRowState(proc)
+	u.scanSnapshot = tf.ScanSnapshot
 
 	v := tf.ctr.argVecs[0]
 	if v.GetType().Oid != types.T_varchar {

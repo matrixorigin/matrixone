@@ -430,16 +430,23 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	expectMongoDBE2EScalar(mock, "2")
 	mock.ExpectExec("deallocate prepare mongo_pruned_text").WillReturnResult(sqlmock.NewResult(0, 0))
 	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, `{"filter":{"site_id":"site-west"}}`)
 	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
 	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
 	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "64b000000000000000000005")
+	expectMongoDBE2EScalar(mock, "5")
+	expectMongoDBE2EScalar(mock, "10")
+	expectMongoDBE2EScalar(mock, "5")
 	mock.ExpectQuery("explain select").WillReturnRows(sqlmock.NewRows([]string{"QUERY PLAN"}).
 		AddRow("MongoDB Scan: operation=aggregate query_digest=0123456789ab").
 		AddRow("Filter Cond: event_count >= 1"))
 	for range 4 {
 		mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB pipeline stage is not allowed"))
 	}
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB $sort requires 1 to 32 fields"))
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB $unwind requires a valid field path"))
 	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB __mo_query must contain only a filter or pipeline field"))
 	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB __mo_query must be strict Extended JSON"))
 	expectMongoDBE2EScalar(mock, "5")
@@ -516,8 +523,10 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"truncate-read-only-source-preserved",
 		"scan-projection-pushdown-null-conversion",
 		"prepared-scan-binary-and-text-reuse-recovery-metadata",
+		"explicit-filter-residual",
 		"explicit-filter-and-query-column",
 		"explicit-reducing-aggregation-pipeline",
+		"explicit-sort-and-unwind-pipeline",
 		"explicit-query-explain-redaction",
 		"explicit-query-fail-closed",
 		"insert-select-primary-key-targets",

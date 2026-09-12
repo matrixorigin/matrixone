@@ -95,6 +95,9 @@ func updateRenameColumnInTableDef(
 	if err := checkColumnWithGeneratedDependency(ctx.GetContext(), tableDef, oldColName); err != nil {
 		return nil, err
 	}
+	if err := checkColumnWithDefaultDependency(ctx.GetContext(), tableDef, oldColName); err != nil {
+		return nil, err
+	}
 
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	if err := checkColumnNameValid(ctx.GetContext(), newColName); err != nil {
@@ -474,7 +477,9 @@ func AlterColumn(
 				defer func() {
 					tmpColumnDef.Free()
 				}()
-				defaultValue, err := buildDefaultExpr(tmpColumnDef, colDef.Typ, ctx.GetProcess())
+				defaultValue, err := buildDefaultExprWithColumns(
+					tmpColumnDef, colDef.Typ, ctx.GetProcess(), tableDef.Cols,
+				)
 				if err != nil {
 					return false, err
 				}

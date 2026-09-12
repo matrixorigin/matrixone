@@ -411,7 +411,11 @@ func (c *compilerContext) ResolveById(tableId uint64, snapshot *plan.Snapshot) (
 }
 
 func (c *compilerContext) ResolveIndexTableByRef(ref *plan.ObjectRef, tblName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
-	return c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
+	obj, def, err := c.Resolve(plan.DbNameOfObjRef(ref), tblName, snapshot)
+	if obj != nil && ref.NotLockMeta {
+		obj.NotLockMeta = true
+	}
+	return obj, def, err
 }
 
 func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *plan.Snapshot) (*plan.ObjectRef, *plan.TableDef, error) {
@@ -478,15 +482,20 @@ func (c *compilerContext) Resolve(dbName string, tableName string, snapshot *pla
 	}); err != nil {
 		return nil, nil, err
 	}
-	if isTmpTable || tableDef.IsTemporary {
+	ownedTemporary := false
+	if owner, ok := c.proc.GetSession().(process.TemporaryTableDDL); ok {
+		ownedTemporary = owner.OwnsTemporaryTable(dbName, tableName)
+	}
+	if isTmpTable || ownedTemporary || tableDef.IsTemporary {
 		tableDef.IsTemporary = true
 		tableDef.Name = tableName
 	}
 	tableID := int64(table.GetTableID(ctx))
 	obj := &plan.ObjectRef{
-		SchemaName: dbName,
-		ObjName:    tableName,
-		Obj:        tableID,
+		SchemaName:  dbName,
+		ObjName:     tableName,
+		Obj:         tableID,
+		NotLockMeta: ownedTemporary,
 	}
 	return obj, tableDef, nil
 }

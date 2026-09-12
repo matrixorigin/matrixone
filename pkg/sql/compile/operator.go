@@ -204,6 +204,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.NeedEval = t.NeedEval
 		op.SpillMem = t.SpillMem
 		op.GroupingFlag = t.GroupingFlag
+		op.DynamicGrouping = t.DynamicGrouping
 		op.GroupBy = t.GroupBy
 		op.GroupByHashKey = t.GroupByHashKey
 		op.Aggs = t.Aggs
@@ -314,6 +315,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*projection.Projection)
 		op := projection.NewArgument()
 		op.ProjectList = t.ProjectList
+		op.GroupingSetCount = t.GroupingSetCount
+		op.GroupingFlags = t.GroupingFlags
 		op.SetInfo(&info)
 		return op
 	case vm.Filter:
@@ -328,6 +331,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*top.Top)
 		op := top.NewArgument()
 		op.Limit = t.Limit
+		op.OrderedOutput = t.OrderedOutput
 		if t.TopValueTag > 0 {
 			op.TopValueTag = t.TopValueTag + int32(index)<<16
 		}
@@ -359,6 +363,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op := mergetop.NewArgument()
 		op.Limit = t.Limit
 		op.Fs = t.Fs
+		op.OrderedStreams = t.OrderedStreams
 		op.SetInfo(&info)
 		return op
 	case vm.MergeOrder:
@@ -567,6 +572,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ClusterByExpr = t.ClusterByExpr
 		op.ColOffset = t.ColOffset
 		op.RejectZeroTemporal = t.RejectZeroTemporal
+		op.TrackAutoIncrementGenerated = t.TrackAutoIncrementGenerated
+		op.AutoIncrementGeneratedColumn = t.AutoIncrementGeneratedColumn
 		op.HasTargetSelector = t.HasTargetSelector
 		op.TargetRowNumberCol = t.TargetRowNumberCol
 		op.TargetActiveCol = t.TargetActiveCol
@@ -681,6 +688,20 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
+		op.HasODKUAffectedRows = t.HasODKUAffectedRows
+		op.AffectedRowsResultPos = t.AffectedRowsResultPos
+		op.PhysicalChangedResultPos = t.PhysicalChangedResultPos
+		op.UpdateCheckColIdxList = t.UpdateCheckColIdxList
+		op.CountFoundRows = t.CountFoundRows
+		op.EmitActionRows = t.EmitActionRows
+		op.ActionFinalResultPos = t.ActionFinalResultPos
+		op.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
+		for i, check := range t.ForeignKeyChecks {
+			op.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
+				ColIdxList:           slices.Clone(check.ColIdxList),
+				EligibilityResultPos: check.EligibilityResultPos,
+			}
+		}
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -883,6 +904,8 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
+	op.TrackAutoIncrementGenerated = preCtx.TrackAutoIncrementGenerated
+	op.AutoIncrementGeneratedColumn = preCtx.AutoIncrementGeneratedColumn
 	op.HasTargetSelector = preCtx.HasTargetSelector
 	op.TargetRowNumberCol = preCtx.TargetRowNumberCol
 	op.TargetActiveCol = preCtx.TargetActiveCol
@@ -994,6 +1017,14 @@ func constructMultiUpdate(
 		if updateCtx.ChangedRowsCol != nil {
 			changedRowsCol := int(updateCtx.ChangedRowsCol.ColPos)
 			arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
+		}
+		if updateCtx.AffectedRowsWeightCol != nil {
+			col := int(updateCtx.AffectedRowsWeightCol.ColPos)
+			arg.MultiUpdateCtx[i].AffectedRowsWeightCol = &col
+		}
+		if updateCtx.PhysicalChangedRowsCol != nil {
+			col := int(updateCtx.PhysicalChangedRowsCol.ColPos)
+			arg.MultiUpdateCtx[i].PhysicalChangedRowsCol = &col
 		}
 	}
 	arg.Action = action
@@ -1352,29 +1383,37 @@ func buildExternalInsertArg(
 func constructProjection(node *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
 	arg.ProjectList = node.ProjectList
+	if count, ok := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); ok {
+		arg.GroupingSetCount = count
+		arg.GroupingFlags = node.GroupingFlag
+	}
 	return arg
 }
 
-func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool) *external.External {
+func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool, arrowScope pipeline.ArrowExecutionScope, arrowRuntime ...*arrowCompileRuntime) *external.External {
 	attrs := buildExternalAttrs(node)
-
-	return external.NewArgument().WithEs(
+	if param != nil && param.Format == tree.ARROW {
+		attrs = buildArrowExternalAttrs(node)
+	}
+	op := external.NewArgument().WithEs(
 		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
-				Attrs:           attrs,
-				Cols:            node.TableDef.Cols,
-				ColumnListLen:   externalColumnListLen(node),
-				Extern:          param,
-				FileOffsetTotal: fileOffset,
-				CreateSql:       node.TableDef.Createsql,
-				Ctx:             ctx,
-				FileList:        fileList,
-				FileSize:        FileSize,
-				ClusterTable:    node.GetClusterTable(),
-				StrictSqlMode:   strictSqlMode,
-				DatastreamScan:  node.ExternScan.GetDatastreamScan(),
-				ForeignScan:     node.ExternScan.GetForeignScan(),
-				KafkaScan:       node.ExternScan.GetKafkaScan(),
+				ArrowExecutionScope:   arrowScope,
+				ArrowForceMaterialize: param.ArrowForceMaterialize,
+				Attrs:                 attrs,
+				Cols:                  node.TableDef.Cols,
+				ColumnListLen:         externalColumnListLen(node),
+				Extern:                param,
+				FileOffsetTotal:       fileOffset,
+				CreateSql:             node.TableDef.Createsql,
+				Ctx:                   ctx,
+				FileList:              fileList,
+				FileSize:              FileSize,
+				ClusterTable:          node.GetClusterTable(),
+				StrictSqlMode:         strictSqlMode,
+				DatastreamScan:        node.ExternScan.GetDatastreamScan(),
+				ForeignScan:           node.ExternScan.GetForeignScan(),
+				KafkaScan:             node.ExternScan.GetKafkaScan(),
 				LoadEmptyNumericAsZero: param.ExternType == int32(plan.ExternType_LOAD) &&
 					(param.Parallel || param.ParallelLoadRequested),
 			},
@@ -1386,6 +1425,39 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 			},
 		},
 	)
+	if len(arrowRuntime) > 0 && arrowRuntime[0] != nil {
+		op.Es.ArrowObjectIdentities = arrowRuntime[0].identitiesFor(fileList)
+		op.Es.ArrowRecordBatchShards = arrowRuntime[0].shardsFor(fileList)
+		op.Es.ArrowSchemaFingerprint = append([]byte(nil), arrowRuntime[0].schemaFingerprint...)
+		op.Es.ArrowConversionPlanVersion = arrowRuntime[0].conversionPlanVersion
+	}
+	return op
+}
+
+// buildArrowExternalAttrs uses the LOAD binder's positive source-column map.
+// Generated/default/hidden target columns remain owned by the ordinary
+// projection/insert pipeline and must never be invented by the Arrow decoder.
+func buildArrowExternalAttrs(node *plan.Node) []plan.ExternAttr {
+	if node == nil || node.TableDef == nil || node.ExternScan == nil {
+		return nil
+	}
+	mapping := node.ExternScan.TbColToDataCol
+	attrs := make([]plan.ExternAttr, 0, len(mapping))
+	for i, col := range node.TableDef.Cols {
+		if col == nil || col.Hidden || col.GeneratedCol != nil {
+			continue
+		}
+		fieldIndex, ok := mapping[col.Name]
+		if !ok || fieldIndex < 0 {
+			continue
+		}
+		attrs = append(attrs, plan.ExternAttr{
+			ColName:       col.Name,
+			ColIndex:      int32(i),
+			ColFieldIndex: fieldIndex,
+		})
+	}
+	return attrs
 }
 
 func buildExternalAttrs(node *plan.Node) []plan.ExternAttr {
@@ -1430,6 +1502,7 @@ func constructTableFunction(node *plan.Node, qry *plan.Query) *table_function.Ta
 	arg.IsSingle = node.TableDef.TblFunc.IsSingle
 	arg.FulltextSourceRef = node.TableDef.TblFunc.FulltextSourceRef
 	arg.FulltextIndexRef = node.TableDef.TblFunc.FulltextIndexRef
+	arg.ScanSnapshot = node.ScanSnapshot
 	arg.Limit = node.Limit
 	// probe side runtime filter specs
 	arg.RuntimeFilterSpecs = node.RuntimeFilterProbeList
@@ -1535,6 +1608,24 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
+		if node.DedupJoinCtx.AffectedRowsCol != nil && node.DedupJoinCtx.PhysicalChangedRowsCol != nil {
+			arg.HasODKUAffectedRows = true
+			arg.AffectedRowsResultPos = findJoinResultPos(result, node.DedupJoinCtx.AffectedRowsCol)
+			arg.PhysicalChangedResultPos = findJoinResultPos(result, node.DedupJoinCtx.PhysicalChangedRowsCol)
+			arg.UpdateCheckColIdxList = node.DedupJoinCtx.UpdateCheckColIdxList
+			arg.CountFoundRows = node.DedupJoinCtx.CountFoundRows
+		}
+		arg.EmitActionRows = node.DedupJoinCtx.EmitActionRows
+		if arg.EmitActionRows {
+			arg.ActionFinalResultPos = findJoinResultPos(result, node.DedupJoinCtx.ActionFinalCol)
+		}
+		arg.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(node.DedupJoinCtx.ForeignKeyChecks))
+		for i, check := range node.DedupJoinCtx.ForeignKeyChecks {
+			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
+				ColIdxList:           slices.Clone(check.ColIdxList),
+				EligibilityResultPos: findJoinResultPos(result, check.EligibilityCol),
+			}
+		}
 		// OldColList identifies the row being updated.  Both FAIL and IGNORE
 		// must exclude that row from duplicate detection: an UPDATE that keeps
 		// a primary/unique key unchanged is not a duplicate of itself.
@@ -1565,6 +1656,18 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		panic("wrong joinmap tag!")
 	}
 	return arg
+}
+
+func findJoinResultPos(result []colexec.ResultPos, col *plan.ColRef) int32 {
+	if col == nil {
+		return -1
+	}
+	for i, pos := range result {
+		if pos.Rel == col.RelPos && pos.Pos == col.ColPos {
+			return int32(i)
+		}
+	}
+	return -1
 }
 
 func dedupDeleteKeepColIdxList(node *plan.Node) []int32 {
@@ -1812,6 +1915,7 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.NeedEval = needEval
 	arg.SpillMem = node.SpillMem
 	arg.GroupingFlag = node.GroupingFlag
+	_, arg.DynamicGrouping = plan2.DecodeGroupingSetExpandOption(childNode.ExtraOptions)
 	arg.GroupBy = node.GroupBy
 	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
@@ -1883,6 +1987,7 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 		if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
 			panic(err)
 		}
+		configExpr = normalizeAggregateConfigExpr(proc, configExpr)
 		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
 		if err != nil {
 			panic(err)
@@ -1896,6 +2001,30 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 		return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending)
 	}
 	return args, nil
+}
+
+// normalizeAggregateConfigExpr materializes a semantically constant function
+// expression as a literal before a scalar aggregate configuration consumes it.
+// Some internal plans (notably CTAS's INSERT ... SELECT) bypass the optional
+// optimizer constant-fold pass.  Their expression executor can therefore
+// return a one-row flat vector for a constant cast, although the plan still
+// satisfies rule.IsConstant.  Fold a private copy here so the configuration
+// boundary does not depend on which planner path produced the expression.
+func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) *plan.Expr {
+	if expr == nil || expr.GetF() == nil {
+		return expr
+	}
+	folded, err := plan2.ConstantFold(
+		batch.EmptyForConstFoldBatch,
+		plan2.DeepCopyExpr(expr),
+		proc,
+		false,
+		true,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return folded
 }
 
 func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) string {
@@ -2107,13 +2236,52 @@ func constructDispatch(idx int, target []*Scope, source *Scope, node *plan.Node,
 	return arg
 }
 
-func constructMergeGroup(node *plan.Node, aggs []aggexec.AggFuncExecExpression) *group.MergeGroup {
+func constructMergeGroup(
+	node *plan.Node,
+	childNode *plan.Node,
+	aggs []aggexec.AggFuncExecExpression,
+	groupingAware bool,
+) *group.MergeGroup {
 	arg := group.NewArgumentMergeGroup()
 	// here the node is a Group node, merge group is "generated" by the
 	// group node and then merge them
 	arg.SpillMem = node.SpillMem
 	arg.Aggs = aggs
 	arg.GroupByHashKey = node.GroupByHashKey
+	arg.GroupingAware = groupingAware
+	if groupingSetCount, ok := plan2.DecodeGroupingSetExpandOption(childNode.ExtraOptions); ok {
+		groupCount := len(childNode.GroupingFlag) / groupingSetCount
+		if groupCount > 0 && len(childNode.GroupingFlag) == groupingSetCount*groupCount &&
+			len(node.GroupBy) == groupCount+1 {
+			for set := 0; set < groupingSetCount; set++ {
+				active := false
+				for key := 0; key < groupCount; key++ {
+					if childNode.GroupingFlag[set*groupCount+key] {
+						active = true
+						break
+					}
+				}
+				if !active {
+					arg.EmptyGroupingSetIDs = append(arg.EmptyGroupingSetIDs, int64(set))
+				}
+			}
+		}
+	} else if len(node.GroupingFlag) == len(node.GroupBy) && len(node.GroupBy) > 0 {
+		arg.EmptyGroupingSet = true
+		for _, active := range node.GroupingFlag {
+			if active {
+				arg.EmptyGroupingSet = false
+				break
+			}
+		}
+	}
+	if arg.EmptyGroupingSet || len(arg.EmptyGroupingSetIDs) > 0 {
+		arg.GroupByTypes = make([]types.Type, len(node.GroupBy))
+		for i, expr := range node.GroupBy {
+			arg.GroupByTypes[i] = types.NewWithCharset(
+				types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
+		}
+	}
 	return arg
 }
 

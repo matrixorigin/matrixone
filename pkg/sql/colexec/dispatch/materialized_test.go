@@ -15,11 +15,13 @@
 package dispatch
 
 import (
+	"math"
 	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,11 +36,16 @@ func TestMaterializedDispatchAttributesSourceSpill(t *testing.T) {
 	proc.Base.Lim.SpillSize = 1 << 20
 	budget, err := proc.GetExecutionResourceBudget()
 	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(1, math.MaxUint64)
+	require.NoError(t, err)
+	account, err := registry.Open(math.MaxInt64)
+	require.NoError(t, err)
 
 	spillDir := t.TempDir()
 	source := materialized.NewSource(1)
 	t.Cleanup(source.Close)
 	require.NoError(t, source.Begin(proc.Mp(), materialized.SpillConfig{
+		AllocationAccount: account,
 		FileFactory: func(name string) (*os.File, error) {
 			file, err := os.CreateTemp(spillDir, name)
 			if err == nil {

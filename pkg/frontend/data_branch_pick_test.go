@@ -573,6 +573,60 @@ func TestAppendExprToVec_StrVal(t *testing.T) {
 	require.Equal(t, []byte("test_value"), vec.GetBytesAt(0))
 }
 
+func TestAppendExprToVecWithPrepareParams(t *testing.T) {
+	newVector := func(t *testing.T, values []string, null bool) (*mpool.MPool, *vector.Vector) {
+		t.Helper()
+		mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
+		require.NoError(t, err)
+		params := vector.NewVec(types.T_text.ToType())
+		for _, value := range values {
+			require.NoError(t, vector.AppendBytes(params, []byte(value), null, mp))
+		}
+		return mp, params
+	}
+
+	t.Run("converts prepared value", func(t *testing.T) {
+		mp, params := newVector(t, []string{"42"}, false)
+		defer mp.Free(nil)
+		defer params.Free(mp)
+
+		vec := vector.NewVec(types.T_int32.ToType())
+		defer vec.Free(mp)
+		expr := tree.NewParentExpr(tree.NewParamExpr(1))
+		require.NoError(t, appendExprToVecWithPrepareParams(
+			vec, expr, *vec.GetType(), time.UTC, mp, params))
+		require.Equal(t, []int32{42}, vector.MustFixedColNoTypeCheck[int32](vec))
+	})
+
+	for _, tc := range []struct {
+		name   string
+		values []string
+		null   bool
+		offset int
+		want   string
+	}{
+		{name: "missing execution values", offset: 1, want: "has no execution value"},
+		{name: "parameter out of range", values: []string{"1"}, offset: 2, want: "out of range"},
+		{name: "null parameter", values: []string{""}, null: true, offset: 1, want: "must not be NULL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp, params := newVector(t, tc.values, tc.null)
+			defer mp.Free(nil)
+			defer params.Free(mp)
+
+			vec := vector.NewVec(types.T_int32.ToType())
+			defer vec.Free(mp)
+			if tc.name == "missing execution values" {
+				params = nil
+			}
+			err := appendExprToVecWithPrepareParams(
+				vec, tree.NewParamExpr(tc.offset), *vec.GetType(), time.UTC, mp, params)
+			require.ErrorContains(t, err, tc.want)
+			require.Zero(t, vec.Length())
+		})
+	}
+}
+
 func TestAppendExprToVec_BoolLiteral(t *testing.T) {
 	mp, err := mpool.NewMPool("test", 0, mpool.NoFixed)
 	require.NoError(t, err)

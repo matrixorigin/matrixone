@@ -633,6 +633,50 @@ func TestGroupReleasesRecoveryFloorBeforeFinalFlush(t *testing.T) {
 	finalizeGroupTestAllocation(t, g, allocation)
 }
 
+func TestAccountedEmptyGroupingSetRowsReleaseAtOperatorFree(t *testing.T) {
+	t.Run("group", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		defer proc.Free()
+		child := colexec.NewMockOperator()
+		g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+			[]aggexec.AggFuncExecExpression{countStarAgg()})
+		g.GroupingFlag = []bool{false}
+		g.AppendChild(child)
+		allocation := installGroupTestAllocation(t, g, proc, 8<<20)
+		require.NoError(t, g.Prepare(proc))
+		require.Len(t, collectBatches(t, g, proc), 1)
+		require.Positive(t, allocation.account.Snapshot().Used)
+
+		g.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		require.Zero(t, allocation.account.Snapshot().Used)
+		finalizeGroupTestAllocation(t, g, allocation)
+	})
+
+	t.Run("merge group", func(t *testing.T) {
+		proc := testutil.NewProcess(t)
+		defer proc.Free()
+		child := colexec.NewMockOperator()
+		merge := newMergeGroupOp(
+			[]aggexec.AggFuncExecExpression{countStarAgg()})
+		merge.GroupingAware = true
+		merge.EmptyGroupingSetIDs = []int64{1, 2}
+		merge.GroupByTypes = []types.Type{
+			types.T_int32.ToType(), types.T_int64.ToType(),
+		}
+		merge.AppendChild(child)
+		allocation := installGroupTestAllocation(t, merge, proc, 8<<20)
+		require.NoError(t, merge.Prepare(proc))
+		require.Len(t, collectBatches(t, merge, proc), 1)
+		require.Positive(t, allocation.account.Snapshot().Used)
+
+		merge.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		require.Zero(t, allocation.account.Snapshot().Used)
+		finalizeGroupTestAllocation(t, merge, allocation)
+	})
+}
+
 func TestResetForSpillReleasesGroupingSentinel(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

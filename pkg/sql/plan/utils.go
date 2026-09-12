@@ -792,27 +792,6 @@ func deduceNewFilterList(filters, onList []*plan.Expr) []*plan.Expr {
 	return newFilters
 }
 
-func canMergeToBetweenAnd(expr1, expr2 *plan.Expr) bool {
-	col1, _, _, _, _ := extractColRefAndLiteralsInFilter(expr1)
-	col2, _, _, _, _ := extractColRefAndLiteralsInFilter(expr2)
-	if col1 == nil || col2 == nil {
-		return false
-	}
-	if col1.ColPos != col2.ColPos || col1.RelPos != col2.RelPos {
-		return false
-	}
-
-	fnName1 := expr1.GetF().Func.ObjName
-	fnName2 := expr2.GetF().Func.ObjName
-	if fnName1 == ">" || fnName1 == ">=" {
-		return fnName2 == "<" || fnName2 == "<="
-	}
-	if fnName1 == "<" || fnName1 == "<=" {
-		return fnName2 == ">" || fnName2 == ">="
-	}
-	return false
-}
-
 func extractColRefAndLiteralsInFilter(expr *plan.Expr) (col *ColRef, litType types.T, literals []*Const, colFnName string, hasDynamicParam bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) == 0 {
@@ -1114,6 +1093,79 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
+// PreparedPlanBitCountFallbackParamPositions returns unresolved BIT_COUNT
+// marker positions whose prepare-time binary-string default must be rebound
+// only when execution supplies a numeric domain.
+func PreparedPlanBitCountFallbackParamPositions(preparePlan *Plan) []int32 {
+	return preparedPlanFunctionFallbackParamPositions(preparePlan, "bit_count")
+}
+
+// PreparedPlanConversionParamPositions returns the marker positions used as
+// the value operand of BIN/CONV. These functions defer their first-operand
+// domain until EXECUTE, so SQL PREPARE needs the positions once per plan
+// generation rather than rescanning the expression tree on every execution.
+func PreparedPlanConversionParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+			return nil
+		}
+		name := strings.ToLower(fn.Func.GetObjName())
+		if name != "bin" && name != "conv" {
+			return nil
+		}
+		if name == "conv" && len(fn.Args) != 3 {
+			return nil
+		}
+		if position, ok := preparedParamPosition(fn.Args[0]); ok {
+			positions[int32(position)] = struct{}{}
+		}
+		return nil
+	})
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName string) []int32 {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), functionName) || len(fn.Args) != 1 {
+			return nil
+		}
+		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
+			return nil
+		}
+		for pos := range preparedNumericValueParamPositions(fn.Args[0]) {
+			positions[pos] = struct{}{}
+		}
+		return nil
+	})
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for pos := range positions {
+		result = append(result, pos)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
+
 func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
 	return expr != nil && expr.GetPreparedNumeric().GetFallback()
 }
@@ -1143,6 +1195,7 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 		ProvisionalResultPeerTypeId: metadata.ProvisionalResultPeerTypeId,
 		ProvisionalResultPeerWidth:  metadata.ProvisionalResultPeerWidth,
 		ProvisionalResultPeerScale:  metadata.ProvisionalResultPeerScale,
+		StringDomainSource:          DeepCopyExpr(metadata.StringDomainSource),
 	}
 }
 
@@ -2297,10 +2350,16 @@ func InitInfileParam(param *tree.ExternParam) error {
 			param.CompressType = param.Option[i+1]
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET && format != tree.ARROW {
 				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
+		case "arrow_container":
+			container, err := normalizeArrowContainer(param.Ctx, param.Option[i+1])
+			if err != nil {
+				return err
+			}
+			param.ArrowContainer = container
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
@@ -2326,6 +2385,9 @@ func InitInfileParam(param *tree.ExternParam) error {
 	}
 	if len(param.Format) == 0 {
 		param.Format = tree.CSV
+	}
+	if err := validateArrowContainerOption(param); err != nil {
+		return err
 	}
 	return nil
 }
@@ -2363,10 +2425,16 @@ func InitS3Param(param *tree.ExternParam) error {
 			param.S3Param.ExternalId = param.Option[i+1]
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET && format != tree.ARROW {
 				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
+		case "arrow_container":
+			container, err := normalizeArrowContainer(param.Ctx, param.Option[i+1])
+			if err != nil {
+				return err
+			}
+			param.ArrowContainer = container
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
@@ -2389,6 +2457,29 @@ func InitS3Param(param *tree.ExternParam) error {
 	}
 	if len(param.Format) == 0 {
 		param.Format = tree.CSV
+	}
+	if err := validateArrowContainerOption(param); err != nil {
+		return err
+	}
+	return nil
+}
+
+func normalizeArrowContainer(ctx context.Context, value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case tree.ARROW_CONTAINER_AUTO, tree.ARROW_CONTAINER_FILE, tree.ARROW_CONTAINER_STREAM:
+		return value, nil
+	default:
+		return "", moerr.NewBadConfigf(ctx, "the arrow_container '%s' is not supported", value)
+	}
+}
+
+func validateArrowContainerOption(param *tree.ExternParam) error {
+	if param.ArrowContainer != "" && param.Format != tree.ARROW {
+		return moerr.NewBadConfig(param.Ctx, "arrow_container requires format='arrow'")
+	}
+	if param.Format == tree.ARROW && param.ArrowContainer == "" {
+		param.ArrowContainer = tree.ARROW_CONTAINER_AUTO
 	}
 	return nil
 }
@@ -2512,10 +2603,16 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 			continue
 		case "format":
 			format := strings.ToLower(param.Option[i+1])
-			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET {
+			if format != tree.CSV && format != tree.JSONLINE && format != tree.PARQUET && format != tree.ARROW {
 				return moerr.NewBadConfigf(param.Ctx, "the format '%s' is not supported", format)
 			}
 			param.Format = format
+		case "arrow_container":
+			container, err := normalizeArrowContainer(param.Ctx, param.Option[i+1])
+			if err != nil {
+				return err
+			}
+			param.ArrowContainer = container
 		case "jsondata":
 			jsondata := strings.ToLower(param.Option[i+1])
 			if jsondata != tree.OBJECT && jsondata != tree.ARRAY {
@@ -2539,6 +2636,9 @@ func InitStageS3Param(param *tree.ExternParam, s stage.StageDef) error {
 	}
 	if len(param.Format) == 0 {
 		param.Format = tree.CSV
+	}
+	if err := validateArrowContainerOption(param); err != nil {
+		return err
 	}
 
 	return nil
@@ -2645,7 +2745,13 @@ func ReadDir(param *tree.ExternParam) (fileList []string, fileSize []int64, err 
 			if err != nil {
 				return nil, nil, err
 			}
-			for entry, err := range fs.List(param.Ctx, readPath) {
+			entries := fs.List(param.Ctx, readPath)
+			// Dot-prefixed components explicitly select hidden local entries.
+			// Keep ordinary glob discovery (and other List consumers) unchanged.
+			if local, ok := fs.(*fileservice.LocalETLFS); ok && strings.HasPrefix(pathDir[i], ".") {
+				entries = local.ListWithHidden(param.Ctx, readPath)
+			}
+			for entry, err := range entries {
 				if err != nil {
 					return nil, nil, err
 				}
@@ -3945,15 +4051,8 @@ func preparedComparisonTypeIsNumeric(typ types.T) bool {
 }
 
 func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsText(position int) bool {
-	if position < 0 || position >= len(rule.runtimeParamTypes) {
-		return false
-	}
-	switch rule.runtimeParamTypes[position].Oid {
-	case types.T_char, types.T_varchar, types.T_text:
-		return true
-	default:
-		return false
-	}
+	return position >= 0 && position < len(rule.runtimeParamTypes) &&
+		rule.runtimeParamTypes[position].Oid.IsMySQLString()
 }
 
 func (rule *preparedRuntimeSpecializationScanRule) MatchNode(_ *Node) bool {
@@ -4000,6 +4099,12 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			return
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		if name == "bit_count" && len(exprImpl.F.Args) == 1 &&
+			isPreparedNumericFallbackExpr(exprImpl.F.Args[0]) {
+			// BIT_COUNT has its own value-aware trigger; text/BLOB executions keep
+			// the binary default until a numeric execution advances its category.
+			return
+		}
 		if name == "cast" && isExplicitPreparedCast(expr) {
 			// The user-selected cast owns the parameter domain. Its direct marker
 			// does not require runtime specialization, but a nested expression can
@@ -4069,6 +4174,11 @@ func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.E
 }
 
 func preparedExprRequiresRuntimeSpecializationAt(functionName string, argIndex int, expr *plan.Expr) bool {
+	// Only CONV's first operand changes the executor domain. The base operands
+	// are numeric controls and do not justify copying/rebinding the plan.
+	if functionName == "bin" || functionName == "conv" {
+		return argIndex == 0 && preparedExprRequiresRuntimeSpecialization(functionName, expr)
+	}
 	// LAG/LEAD/NTH_VALUE offset markers affect row selection, not the result
 	// value's type. Their value argument remains domain-sensitive, while the
 	// cached compile can safely retain an offset parameter after validation.
@@ -4184,8 +4294,14 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	// the type of its first argument, so a binary parameter can change the
 	// result-column type from the prepare-time placeholder domain.
 	switch name {
-	case "ntile", "sleep",
+	case "bin", "char", "conv", "ntile", "sleep",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
+		"ord", "char_length", "character_length",
+		"left", "right", "substring", "substr", "mid", "reverse",
+		"lower", "lcase", "upper", "ucase", "trim", "ltrim", "rtrim",
+		"locate", "instr", "position", "insert", "replace", "lpad", "rpad",
+		"substring_index", "split_part", "repeat", "concat", "concat_ws",
+		"charset", "collation",
 		"=", "<=>", "!=", "<>", "<", "<=", ">", ">=",
 		"like", "ilike", "regexp", "not_regexp", "between", "not_between",
 		"in", "not_in", "partition_in":
@@ -4576,10 +4692,11 @@ func PreparedPaginationParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
-// PreparedJSONComparisonParamPositions returns the direct parameter markers
-// whose runtime SQL type controls a JSON equality comparison. The hidden
-// adapter remains in a cacheable generic plan; execution metadata supplies the
-// concrete type for only these positions.
+// PreparedJSONComparisonParamPositions returns direct parameter markers whose
+// runtime SQL type controls a JSON comparison. The hidden adapter remains in a
+// cacheable generic plan; execution metadata supplies the concrete type for
+// only these positions. MEMBER OF retains direct markers on both operands:
+// its own executor converts their scalar domains after SQL NULL checks.
 func PreparedJSONComparisonParamPositions(preparePlan *Plan) []int32 {
 	if preparePlan == nil {
 		return nil
@@ -4590,7 +4707,29 @@ func PreparedJSONComparisonParamPositions(preparePlan *Plan) []int32 {
 	// expression collector below owns tree recursion because owner walking stops
 	// at each expression root.
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
-		collectPreparedJSONComparisonParamPositions(expr, positions, seen)
+		collectPreparedJSONComparisonParamPositions(expr, positions, seen, nil)
+		return nil
+	})
+
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+// PreparedJSONMemberOfParamPositions returns direct parameter markers used by
+// MEMBER OF operands. Unlike generic JSON comparisons, these positions need
+// the exact protocol SQL domain at binary EXECUTE time.
+func PreparedJSONMemberOfParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	seen := make(map[*plan.Expr]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		collectPreparedJSONComparisonParamPositions(expr, nil, seen, positions)
 		return nil
 	})
 
@@ -4606,6 +4745,7 @@ func collectPreparedJSONComparisonParamPositions(
 	expr *plan.Expr,
 	positions map[int32]struct{},
 	seen map[*plan.Expr]struct{},
+	memberOfPositions map[int32]struct{},
 ) {
 	if expr == nil {
 		return
@@ -4617,34 +4757,80 @@ func collectPreparedJSONComparisonParamPositions(
 
 	switch impl := expr.Expr.(type) {
 	case *plan.Expr_F:
-		if impl.F.GetFunc().GetObjName() == function.JsonComparisonParamFunctionName &&
-			len(impl.F.Args) == 1 {
-			if param := impl.F.Args[0].GetP(); param != nil {
-				positions[param.Pos] = struct{}{}
+		functionName := impl.F.GetFunc().GetObjName()
+		// Constructor value arguments also consume concrete prepared metadata.
+		// Do not mark OBJECT keys, modifier documents or paths: their legacy
+		// string conversion is a separate contract from JSON scalar values.
+		if positions != nil {
+			for i, arg := range impl.F.Args {
+				valueArg := functionName == "json_array" ||
+					(functionName == "json_object" && i%2 == 1) ||
+					((functionName == "json_set" || functionName == "json_insert" || functionName == "json_replace" || functionName == "json_array_append") && i >= 2 && i%2 == 0)
+				if valueArg {
+					if param := arg.GetP(); param != nil {
+						positions[param.Pos] = struct{}{}
+					}
+				}
 			}
 		}
+		if functionName == function.JsonComparisonParamFunctionName && len(impl.F.Args) == 1 {
+			if positions != nil {
+				if param := impl.F.Args[0].GetP(); param != nil {
+					positions[param.Pos] = struct{}{}
+				}
+			}
+		}
+		if functionName == function.JsonMemberOfFunctionName && len(impl.F.Args) == 2 {
+			if positions != nil {
+				if param := impl.F.Args[0].GetP(); param != nil {
+					positions[param.Pos] = struct{}{}
+				}
+				if param := impl.F.Args[1].GetP(); param != nil {
+					positions[param.Pos] = struct{}{}
+				}
+			}
+			addPreparedJSONMemberOfParamPosition(impl.F.Args[0], memberOfPositions)
+			addPreparedJSONMemberOfParamPosition(impl.F.Args[1], memberOfPositions)
+		}
 		for _, arg := range impl.F.Args {
-			collectPreparedJSONComparisonParamPositions(arg, positions, seen)
+			collectPreparedJSONComparisonParamPositions(arg, positions, seen, memberOfPositions)
 		}
 	case *plan.Expr_W:
 		window := impl.W
-		collectPreparedJSONComparisonParamPositions(window.GetWindowFunc(), positions, seen)
+		collectPreparedJSONComparisonParamPositions(window.GetWindowFunc(), positions, seen, memberOfPositions)
 		for _, item := range window.GetPartitionBy() {
-			collectPreparedJSONComparisonParamPositions(item, positions, seen)
+			collectPreparedJSONComparisonParamPositions(item, positions, seen, memberOfPositions)
 		}
 		for _, order := range window.GetOrderBy() {
-			collectPreparedJSONComparisonParamPositions(order.GetExpr(), positions, seen)
+			collectPreparedJSONComparisonParamPositions(order.GetExpr(), positions, seen, memberOfPositions)
 		}
 		if frame := window.GetFrame(); frame != nil {
-			collectPreparedJSONComparisonParamPositions(frame.GetStart().GetVal(), positions, seen)
-			collectPreparedJSONComparisonParamPositions(frame.GetEnd().GetVal(), positions, seen)
+			collectPreparedJSONComparisonParamPositions(frame.GetStart().GetVal(), positions, seen, memberOfPositions)
+			collectPreparedJSONComparisonParamPositions(frame.GetEnd().GetVal(), positions, seen, memberOfPositions)
 		}
 	case *plan.Expr_List:
 		for _, item := range impl.List.List {
-			collectPreparedJSONComparisonParamPositions(item, positions, seen)
+			collectPreparedJSONComparisonParamPositions(item, positions, seen, memberOfPositions)
 		}
 	case *plan.Expr_Sub:
-		collectPreparedJSONComparisonParamPositions(impl.Sub.GetChild(), positions, seen)
+		collectPreparedJSONComparisonParamPositions(impl.Sub.GetChild(), positions, seen, memberOfPositions)
+	}
+}
+
+func addPreparedJSONMemberOfParamPosition(expr *plan.Expr, positions map[int32]struct{}) {
+	if expr == nil || positions == nil {
+		return
+	}
+	if param := expr.GetP(); param != nil {
+		positions[param.Pos] = struct{}{}
+		return
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.GetFunc().GetObjName() != function.JsonComparisonParamFunctionName || len(fn.Args) != 1 {
+		return
+	}
+	if param := fn.Args[0].GetP(); param != nil {
+		positions[param.Pos] = struct{}{}
 	}
 }
 
@@ -4749,6 +4935,9 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 type ParamValue struct {
 	Value any
 	IsBin bool
+	// IsBinaryString is the legacy binary-domain metadata retained for
+	// compatibility with callers that have not adopted RuntimeStringDomain.
+	IsBinaryString bool
 	// IsBinaryProtocol records that the value came from COM_STMT_EXECUTE.
 	// It is intentionally separate from IsBin: a VAR_STRING parameter is a
 	// binary-protocol value without being a binary string literal.
@@ -4759,8 +4948,9 @@ type ParamValue struct {
 	// through a text vector, and their source type is used only after an
 	// arithmetic consumer establishes a numeric domain. Comparisons keep their
 	// existing common-type and numeric-prefix contracts.
-	SourceType    types.Type
-	HasSourceType bool
+	SourceType          types.Type
+	HasSourceType       bool
+	RuntimeStringDomain types.RuntimeStringDomain
 	// RuntimeType is the type advertised by the binary-protocol parameter
 	// binding.  Prepared plans deliberately keep parameter markers as TEXT
 	// while they are cached, so the execute-time copy can use this optional
@@ -4788,6 +4978,108 @@ type ParamValue struct {
 	// capability on each value so execute-time plan specialization does not need
 	// to guess a service identity from context.Context.
 	EnableNumericPrefix bool
+}
+
+// PreparedParamValueHasNumericRuntime reports whether the prepared value owns
+// an explicit numeric runtime domain without inferring one from text.
+func PreparedParamValueHasNumericRuntime(value any) bool {
+	_, ok := PreparedParamValueNumericReprepareType(value)
+	return ok
+}
+
+// PreparedRuntimeTypeFromString infers the narrowest numeric type needed by a
+// textual value when it is used as an argument to a numeric overload.  A
+// direct SELECT ? remains TEXT unless the protocol supplied an explicit
+// numeric type; this helper is only used while rebinding a function argument.
+func PreparedParamValueNumericReprepareType(value any) (types.Type, bool) {
+	if param, ok := value.(ParamValue); ok {
+		if param.Value == nil {
+			return types.Type{}, false
+		}
+		if param.HasRuntimeType && preparedRuntimeTypeIsNumeric(param.RuntimeType) {
+			return preparedNumericReprepareType(param.RuntimeType)
+		}
+		if param.HasSourceType && preparedRuntimeTypeIsNumeric(param.SourceType) {
+			return preparedNumericReprepareType(param.SourceType)
+		}
+		switch param.PrepareParamKind {
+		case vector.PrepareParamInteger:
+			if typ, ok := PreparedRuntimeTypeFromString(strings.TrimSpace(fmt.Sprint(param.Value))); ok && typ.Oid.IsInteger() {
+				return preparedNumericReprepareType(typ)
+			}
+			// Preserve the protocol domain even for an internally malformed value;
+			// materialization remains responsible for returning the existing error.
+			return types.T_int64.ToType(), true
+		case vector.PrepareParamFloat:
+			return types.T_float64.ToType(), true
+		case vector.PrepareParamDecimal:
+			return mysqlPreparedDecimalReprepareType(), true
+		case vector.PrepareParamBoolean:
+			return types.T_int64.ToType(), true
+		}
+		return PreparedParamValueNumericReprepareType(param.Value)
+	}
+	var source types.Type
+	switch value.(type) {
+	case bool:
+		source = types.T_bool.ToType()
+	case int, int64:
+		source = types.T_int64.ToType()
+	case int8:
+		source = types.T_int8.ToType()
+	case int16:
+		source = types.T_int16.ToType()
+	case int32:
+		source = types.T_int32.ToType()
+	case uint, uint64:
+		source = types.T_uint64.ToType()
+	case uint8:
+		source = types.T_uint8.ToType()
+	case uint16:
+		source = types.T_uint16.ToType()
+	case uint32:
+		source = types.T_uint32.ToType()
+	case float32:
+		source = types.T_float32.ToType()
+	case float64:
+		source = types.T_float64.ToType()
+	case types.MoYear:
+		source = types.T_year.ToType()
+	case types.Decimal64:
+		source = types.T_decimal64.ToType()
+	case types.Decimal128:
+		source = types.T_decimal128.ToType()
+	case types.Decimal256:
+		source = types.T_decimal256.ToType()
+	default:
+		return types.Type{}, false
+	}
+	return preparedNumericReprepareType(source)
+}
+
+func preparedNumericReprepareType(source types.Type) (types.Type, bool) {
+	switch {
+	case source.Oid.IsUnsignedInt(), source.Oid == types.T_bit:
+		return types.T_uint64.ToType(), true
+	case source.Oid.IsSignedInt(), source.Oid == types.T_bool, source.Oid == types.T_year:
+		return types.T_int64.ToType(), true
+	case source.Oid == types.T_float32, source.Oid == types.T_float64:
+		return types.T_float64.ToType(), true
+	case source.IsDecimal():
+		return mysqlPreparedDecimalReprepareType(), true
+	default:
+		return types.Type{}, false
+	}
+}
+
+func mysqlPreparedDecimalReprepareType() types.Type {
+	// MySQL's DECIMAL_MAX_PRECISION and DECIMAL_MAX_SCALE. DECIMAL256 is
+	// MatrixOne's physical carrier for that logical parameter envelope.
+	return types.New(types.T_decimal256, 65, 30)
+}
+
+func preparedRuntimeTypeIsNumeric(typ types.Type) bool {
+	return typ.IsNumeric() || typ.Oid == types.T_bool || typ.Oid == types.T_bit || typ.Oid == types.T_year
 }
 
 // PreparedRuntimeTypeFromString infers the narrowest numeric type needed by a
@@ -4896,6 +5188,37 @@ func PreparedNumericPrefixTypeFromString(value string) types.Type {
 	default:
 		return types.New(types.T_decimal256, w, s)
 	}
+}
+
+// PreparedNumericStringIsComplete reports whether the whole value (apart from
+// surrounding ASCII whitespace) is one numeric lexeme accepted by the MySQL
+// numeric-prefix scanner.  CHAR's prepared-marker context uses this boundary
+// to distinguish an exact numeric value from a string with a numeric prefix
+// and a suffix, whose existing prefix-truncation semantics must be preserved.
+func PreparedNumericStringIsComplete(value string) bool {
+	trimmed := strings.Trim(value, " \t\n\v\f\r")
+	if trimmed == "" {
+		return false
+	}
+	prefix, ok := function.GetNumericStringPrefix(value)
+	return ok && prefix == trimmed
+}
+
+// PreparedCharSourceTypeFromString returns the effective source domain used by
+// a bare prepared CHAR marker.  A complete numeric lexeme uses the exact
+// integer/DECIMAL type inferred from its value; every other string follows
+// CHAR's VARCHAR prefix parser.  Keeping the fallback type explicit lets the
+// frontend runtime cache distinguish values whose numeric-prefix envelope is
+// equal but whose CHAR signedness differs.
+func PreparedCharSourceTypeFromString(value string) (types.Type, bool) {
+	if !PreparedNumericStringIsComplete(value) {
+		return types.T_varchar.ToType(), false
+	}
+	typ, ok := PreparedRuntimeTypeFromString(strings.Trim(value, " \t\n\v\f\r"))
+	if !ok {
+		return types.T_varchar.ToType(), false
+	}
+	return typ, true
 }
 
 func preparedBoundedDecimalExponent(value string, compensation int64) (int64, bool) {
@@ -5611,6 +5934,14 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 	case types.T_bool:
 		value, err := strconv.ParseBool(text)
 		if err != nil {
+			switch text {
+			case "0":
+				value, err = false, nil
+			case "1":
+				value, err = true, nil
+			}
+		}
+		if err != nil {
 			return castText()
 		}
 		return makeLiteral(&plan.Literal_Bval{Bval: value}), nil
@@ -5680,6 +6011,11 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 			return castText()
 		}
 		return makeLiteral(&plan.Literal_Dval{Dval: value}), nil
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+		// The plan literal protocol has no temporal oneofs. Keep the
+		// execute-time domain explicit with a typed cast so the dynamic
+		// executor receives a fixed-width temporal vector.
+		return castText()
 	case types.T_decimal64:
 		width, scale := runtimeType.Width, runtimeType.Scale
 		if width <= 0 || scale < 0 || scale > width {
@@ -5726,7 +6062,10 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 		// vector instead of treating the value as VARCHAR.
 		return castText()
 	default:
-		return makeLiteral(&plan.Literal_Sval{Sval: rawText}), nil
+		if runtimeType.Oid.IsMySQLString() {
+			return makeLiteral(&plan.Literal_Sval{Sval: rawText}), nil
+		}
+		return castText()
 	}
 }
 
@@ -5759,6 +6098,19 @@ func isNonNegativePreparedInteger(value any) bool {
 	return valid && !negative
 }
 
+func setPreparedRuntimeStringDomain(expr *Expr, domain types.RuntimeStringDomain) {
+	literal := expr.GetLit()
+	if literal == nil {
+		return
+	}
+	switch domain {
+	case types.RuntimeStringText:
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+	case types.RuntimeStringBinary:
+		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+	}
+}
+
 func replaceParamVals(
 	ctx context.Context,
 	plan0 *Plan,
@@ -5788,8 +6140,11 @@ func replaceParamValsWithSelection(
 		isBin := false
 		runtimeType := types.T_text.ToType()
 		hasRuntimeType := false
+		stringDomainType := types.Type{}
+		hasStringDomainType := false
 		numericPrefixSource := false
 		retainParamRef := false
+		runtimeStringDomain := types.RuntimeStringInherit
 		if param, ok := val.(ParamValue); ok {
 			val = param.Value
 			if param.MaterializedValue != "" {
@@ -5800,6 +6155,21 @@ func replaceParamValsWithSelection(
 			hasRuntimeType = param.HasRuntimeType
 			numericPrefixSource = param.EnableNumericPrefix
 			retainParamRef = param.RetainParamRef
+			runtimeStringDomain = param.RuntimeStringDomain
+			// Materialize only a non-NULL binary string domain. NULL retains the
+			// prepared marker type, while text sources keep the TEXT transport type.
+			switch {
+			case param.HasSourceType &&
+				types.StaticStringDomain(param.SourceType) == types.StringDomainBinary:
+				// A typed NULL still owns its assignment-time VARBINARY/BLOB type;
+				// RuntimeStringDomain may independently override row semantics.
+				stringDomainType = param.SourceType
+				hasStringDomainType = true
+			case param.Value != nil &&
+				(param.IsBinaryString || param.RuntimeStringDomain == types.RuntimeStringBinary):
+				stringDomainType = types.T_varbinary.ToType()
+				hasStringDomainType = true
+			}
 			if param.HasSourceType && param.Value != nil {
 				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)
 				sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(
@@ -5818,6 +6188,8 @@ func replaceParamValsWithSelection(
 		paramType := plan.Type{Id: int32(types.T_text)}
 		if hasRuntimeType {
 			paramType = makePlan2Type(&runtimeType)
+		} else if hasStringDomainType {
+			paramType = makePlan2Type(&stringDomainType)
 		}
 		_, directRuntimeResult := slices.BinarySearch(directResultPositions, int32(i))
 		directRuntimeResult = directRuntimeResult && hasRuntimeType
@@ -5843,6 +6215,7 @@ func replaceParamValsWithSelection(
 						Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 					})
 				}
+				setPreparedRuntimeStringDomain(params[i], runtimeStringDomain)
 				continue
 			}
 			pc := &plan.Literal{IsBin: isBin}
@@ -5854,6 +6227,7 @@ func replaceParamValsWithSelection(
 				},
 			}
 		}
+		setPreparedRuntimeStringDomain(params[i], runtimeStringDomain)
 		if (numericPrefixSource || retainParamRef || directRuntimeResult) && params[i].GetLit() != nil {
 			params[i].GetLit().Src = &plan.Expr{
 				Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},

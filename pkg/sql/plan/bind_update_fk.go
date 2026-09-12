@@ -200,6 +200,7 @@ func (builder *QueryBuilder) appendUpdateForeignKeyChecks(
 				}
 				return oldColName2Idx[qualifiedName]
 			},
+			true,
 		)
 		if err != nil {
 			return 0, 0, nil, err
@@ -339,6 +340,7 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetChildForeignKeyChecks(
 			}
 			return oldColName2Idx[qualifiedName]
 		},
+		true,
 	)
 	if err != nil {
 		return 0, 0, nil, err

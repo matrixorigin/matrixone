@@ -84,6 +84,9 @@ option (gogoproto.protosizer_all) = true;
    SQLTask = 12;
    // Periodically reclaims expired DATA BRANCH ALTER lineage.
    DataBranchLineageGC = 13;
+   // CDC initial snapshot with persisted stable-epoch retry semantics. Keeping
+   // a distinct code prevents older CNs from claiming protocol-marked tasks.
+   InitCdcStableEpoch = 14;
  }
  
  // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.

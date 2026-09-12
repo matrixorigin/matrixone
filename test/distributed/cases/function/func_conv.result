@@ -175,7 +175,8 @@ select concat('0x', conv('255', 10, 16)) as hex_with_prefix;
 ➤ hex_with_prefix[12,-1,0]  𝄀
 0xFF
 select conv('g', 16, 10) as result8;
-invalid input: invalid conv input "g" for base 16
+➤ result8[12,-1,0]  𝄀
+0
 select conv('10', 1, 10) as result9;
 ➤ result9[12,-1,0]  𝄀
 null
@@ -189,11 +190,14 @@ select conv('10', 10, null) as null_to_base;
 ➤ null_to_base[12,-1,0]  𝄀
 null
 select conv('g', 16, 10) as invalid_hex_char;
-invalid input: invalid conv input "g" for base 16
+➤ invalid_hex_char[12,-1,0]  𝄀
+0
 select conv('2', 2, 10) as invalid_binary_char;
-invalid input: invalid conv input "2" for base 2
+➤ invalid_binary_char[12,-1,0]  𝄀
+0
 select conv('8', 8, 10) as invalid_octal_char;
-invalid input: invalid conv input "8" for base 8
+➤ invalid_octal_char[12,-1,0]  𝄀
+0
 select conv('10', 1, 10) as invalid_from_base;
 ➤ invalid_from_base[12,-1,0]  𝄀
 null
@@ -236,8 +240,12 @@ select conv('-18446744073709551615', 10, 16) as negative_uint64_max_minus_one;
 select conv('-18446744073709551616', 10, 16) as negative_uint64_overflow;
 ➤ negative_uint64_overflow[12,-1,0]  𝄀
 0
+select conv('-18446744073709551617tail', 10, 16) as negative_uint64_overflow_with_suffix;
+➤ negative_uint64_overflow_with_suffix[12,-1,0]  𝄀
+0
 select conv('10xyz', 10, 16) as invalid_suffix;
-invalid input: invalid conv input "10xyz" for base 10
+➤ invalid_suffix[12,-1,0]  𝄀
+A
 select conv('18446744073709551616', 10, 16) as overflow_decimal_to_hex;
 ➤ overflow_decimal_to_hex[12,-1,0]  𝄀
 FFFFFFFFFFFFFFFF
@@ -257,5 +265,6 @@ select conv('+FFFFFFFFFFFFFFFF', 16, 10) as plus_prefixed_hex_uint64_max;
 ➤ plus_prefixed_hex_uint64_max[12,-1,0]  𝄀
 18446744073709551615
 select conv('+', 10, 16) as sign_only_invalid;
-invalid input: invalid conv input "+" for base 10
+➤ sign_only_invalid[12,-1,0]  𝄀
+0
 drop database conv_func;

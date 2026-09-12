@@ -1039,7 +1039,9 @@ public:
     // external id 0.
     // Host bytes per row of id_to_index_: 24 for the unordered_map node, 8 for
     // the allocator header, 8 for the bucket slot. Mirrors
-    // memory.HostIDMapBytesPerRow, which is what the Go capacity model charges.
+    // pkg/vectorindex/memory.HostIDMapBytesPerRow, which is the authority: the
+    // claim below covers only the allocation, so the Go cache budget is what
+    // charges the map for as long as it stays resident.
     static constexpr size_t kIdMapBytesPerRow = 40;
 
     // Claims the host memory a load is about to materialise out of `dir`.

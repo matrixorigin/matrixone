@@ -237,6 +237,7 @@ const (
 	NOT_ILIKE
 	REG_MATCH     // REG_MATCH
 	NOT_REG_MATCH // NOT REG_MATCH
+	MEMBER_OF     // MEMBER [OF]
 	IS_DISTINCT_FROM
 	IS_NOT_DISTINCT_FROM
 	NULL_SAFE_EQUAL // <=>
@@ -290,6 +291,8 @@ func (op ComparisonOp) ToString() string {
 		return "ilike"
 	case NOT_ILIKE:
 		return "not ilike"
+	case MEMBER_OF:
+		return "member of"
 	default:
 		return "Unknown ComparisonExprOperator"
 	}
@@ -312,6 +315,12 @@ func (node *ComparisonExpr) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	ctx.WriteString(node.Op.ToString())
+	if node.Op == MEMBER_OF {
+		ctx.WriteString(" (")
+		ctx.PrintExpr(node, node.Right, false)
+		ctx.WriteByte(')')
+		return
+	}
 	ctx.WriteByte(' ')
 
 	if node.SubOp != ComparisonOp(0) {
@@ -971,6 +980,9 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	if node.FuncName != nil {
 		funcName = node.FuncName.Origin()
 	}
+	if ctx.detectDateTimeFormat && isDateTimeFormatFunction(funcName) {
+		ctx.sawDateTimeFormat = true
+	}
 
 	if strings.ToLower(funcName) == "interval" && len(node.Exprs) == 2 {
 		ctx.WriteString("INTERVAL ")
@@ -996,6 +1008,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	isConvertUsing := strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
+	isExtract := strings.EqualFold(funcName, "extract") && len(node.Exprs) == 2
 	isGroupConcat := strings.EqualFold(funcName, "group_concat") ||
 		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat")
 	if isConvertUsing {
@@ -1006,6 +1019,10 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		} else {
 			node.Exprs[1].Format(ctx)
 		}
+	} else if isExtract {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(" from ")
+		node.Exprs[1].Format(ctx)
 	} else if isGroupConcat && len(node.Exprs) > 0 {
 		// The parser stores GROUP_CONCAT's separator as the final expression so
 		// binders can consume it uniformly. It is not a concatenated argument.
@@ -1039,6 +1056,10 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	}
 }
 
+func isDateTimeFormatFunction(name string) bool {
+	return strings.EqualFold(name, "date_format") || strings.EqualFold(name, "time_format")
+}
+
 func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 	if ctx.ModeIndependentStringLiterals() &&
 		node.FuncName != nil &&
@@ -1055,7 +1076,7 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 	}
 
 	switch strings.ToLower(node.FuncName.Origin()) {
-	case "timestampdiff", "extract":
+	case "timestampdiff":
 		formatExprWithSingleQuoteDisabled(ctx, node.Exprs[0])
 		if len(node.Exprs) > 1 {
 			ctx.WriteString(", ")

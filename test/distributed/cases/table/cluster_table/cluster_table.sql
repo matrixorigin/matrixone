@@ -464,3 +464,31 @@ desc mo_catalog.document;
 ALTER TABLE mo_catalog.document add meta longtext;
 desc mo_catalog.document;
 DROP TABLE mo_catalog.document;
+
+-- regression: TRUNCATE and unconditional DELETE must preserve the implicit account_id default
+DROP TABLE IF EXISTS ct_truncate_implicit_account;
+CREATE CLUSTER TABLE ct_truncate_implicit_account (
+  id INT NOT NULL,
+  payload VARCHAR(20),
+  PRIMARY KEY (id, account_id)
+);
+INSERT INTO ct_truncate_implicit_account (id, payload) VALUES (1, 'before');
+TRUNCATE TABLE ct_truncate_implicit_account;
+INSERT INTO ct_truncate_implicit_account (id, payload) VALUES (2, 'after truncate');
+SELECT id, payload FROM ct_truncate_implicit_account ORDER BY id;
+DELETE FROM ct_truncate_implicit_account;
+INSERT INTO ct_truncate_implicit_account (id, payload) VALUES (3, 'after delete');
+SELECT id, payload FROM ct_truncate_implicit_account ORDER BY id;
+DROP TABLE ct_truncate_implicit_account;
+
+DROP TABLE IF EXISTS ct_truncate_implicit_account_auto;
+CREATE CLUSTER TABLE ct_truncate_implicit_account_auto (
+  id INT NOT NULL AUTO_INCREMENT,
+  payload VARCHAR(20),
+  PRIMARY KEY (id, account_id)
+);
+INSERT INTO ct_truncate_implicit_account_auto (payload) VALUES ('before');
+TRUNCATE TABLE ct_truncate_implicit_account_auto;
+INSERT INTO ct_truncate_implicit_account_auto (payload) VALUES ('after truncate');
+SELECT id, payload FROM ct_truncate_implicit_account_auto ORDER BY id;
+DROP TABLE ct_truncate_implicit_account_auto;

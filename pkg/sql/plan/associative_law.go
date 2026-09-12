@@ -369,7 +369,7 @@ func (builder *QueryBuilder) applyAssociativeLawRule2(nodeID int32) int32 {
 	return leftChild.NodeId
 }
 
-// for （A*B)*C, if A.outcnt>C.outcnt and C.sel<B.sel, change this to (A*C)*B
+// for （A*B)*C, if A.outcnt>C.outcnt and C filters A more than B, change this to (A*C)*B
 func (builder *QueryBuilder) applyAssociativeLawRule3(nodeID int32) int32 {
 	node := builder.qry.Nodes[nodeID]
 	if len(node.Children) > 0 {
@@ -387,14 +387,26 @@ func (builder *QueryBuilder) applyAssociativeLawRule3(nodeID int32) int32 {
 	NodeA := builder.qry.Nodes[leftChild.Children[0]]
 	NodeB := builder.qry.Nodes[leftChild.Children[1]]
 	NodeC := builder.qry.Nodes[node.Children[1]]
-	if NodeA.Stats.Outcnt < NodeC.Stats.Outcnt || NodeC.Stats.Selectivity >= NodeB.Stats.Selectivity {
+	if NodeA.Stats.Outcnt < NodeC.Stats.Outcnt {
 		return nodeID
 	}
 
+	currentActiveSel, currentActiveOK := builder.getJoinActiveDomainSelectivity(leftChild.NodeId)
 	node.Children[0] = NodeA.NodeId
-	ratio, ok := getHashColsNDVRatio(node.NodeId, builder)
-	newSel := NodeC.Stats.Selectivity / ratio
-	if !ok || newSel >= NodeB.Stats.Selectivity {
+	candidateActiveSel, candidateActiveOK := builder.getJoinActiveDomainSelectivity(node.NodeId)
+	currentSel := NodeB.Stats.Selectivity
+	newSel := 0.0
+	ok := false
+	if currentActiveOK && candidateActiveOK {
+		currentSel = currentActiveSel
+		newSel = candidateActiveSel
+		ok = true
+	} else {
+		var ratio float64
+		ratio, ok = getHashColsNDVRatio(node.NodeId, builder)
+		newSel = NodeC.Stats.Selectivity / ratio
+	}
+	if !ok || newSel >= currentSel {
 		//new selectivity bigger than b.sel, can't do this change
 		node.Children[0] = leftChild.NodeId
 		return node.NodeId

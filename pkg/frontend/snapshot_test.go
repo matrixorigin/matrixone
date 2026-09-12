@@ -490,20 +490,20 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 		bh.init()
 		require.NoError(t, invalidateAccountViewMetadata(context.Background(), ses, bh, 42))
 		require.Equal(t, compile.ViewMetadataRequireRevalidationSQL(), bh.executedSQLs)
-		require.Equal(t, []uint32{0, 0, 0}, bh.executionAccountIDs)
-		require.Equal(t, []bool{true, true, true}, bh.systemCTELimits)
-		require.Contains(t, bh.executedSQLs[1], "REVALIDATE_REQUIRED")
+		require.Equal(t, []uint32{0, 0, 0, 0}, bh.executionAccountIDs)
+		require.Equal(t, []bool{true, true, true, true}, bh.systemCTELimits)
+		require.Contains(t, bh.executedSQLs[2], "REVALIDATE_REQUIRED")
 	})
 
 	t.Run("success", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		require.NoError(t, invalidateAccountViewMetadataEnabled(context.Background(), bh, 42))
-		require.Len(t, bh.executedSQLs, 2)
-		require.Equal(t, []uint32{catalog.System_Account, catalog.System_Account}, bh.executionAccountIDs)
-		require.Equal(t, []bool{false, true}, bh.systemCTELimits)
-		require.Contains(t, bh.executedSQLs[0], catalog.ViewMetadataLifecycleGateSQL)
-		require.Contains(t, bh.executedSQLs[1], "d.source_account_id=42")
+		require.Len(t, bh.executedSQLs, 3)
+		require.Equal(t, []uint32{0, 0, 0}, bh.executionAccountIDs)
+		require.Equal(t, []bool{false, false, true}, bh.systemCTELimits)
+		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, bh.executedSQLs[:2])
+		require.Contains(t, bh.executedSQLs[2], "d.source_account_id=42")
 	})
 
 	t.Run("gate failure", func(t *testing.T) {
@@ -512,16 +512,16 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 		testErr := moerr.NewInternalErrorNoCtx("gate failed")
 		bh.sql2err[catalog.ViewMetadataLifecycleGateSQL] = testErr
 		require.ErrorIs(t, invalidateAccountViewMetadataEnabled(context.Background(), bh, 42), testErr)
-		require.Len(t, bh.executedSQLs, 1)
+		require.Len(t, bh.executedSQLs, 2)
 	})
 
 	t.Run("closure failure", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		testErr := moerr.NewInternalErrorNoCtx("closure failed")
-		// The generation is time-derived, so fail the second statement after the gate.
+		// The generation is time-derived, so fail the mutation after both gates.
 		bh.sql2err[catalog.ViewMetadataLifecycleGateSQL] = nil
-		bhFailure := &failSecondBackgroundExec{backgroundExecTest: bh, err: testErr}
+		bhFailure := &failViewMutationBackgroundExec{backgroundExecTest: bh, err: testErr}
 		require.ErrorIs(t, invalidateAccountViewMetadataEnabled(context.Background(), bhFailure, 42), testErr)
 	})
 }
@@ -532,25 +532,27 @@ func TestPrepareViewMetadataMutationCatalogCompatibilityAndFailures(t *testing.T
 	t.Cleanup(ses.Close)
 	statements := compile.ViewMetadataRequireRevalidationSQL()
 
-	t.Run("typed missing table remains compatible", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
-		bh.sql2err[statements[0]] = moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
-		enabled, err := prepareViewMetadataMutation(context.Background(), bh, ses.GetService())
-		require.NoError(t, err)
-		require.False(t, enabled)
-		require.Equal(t, statements[:1], bh.executedSQLs)
-	})
+	for i, table := range []string{catalog.MO_FEATURE_REGISTRY, catalog.MO_VIEW_REFRESH, catalog.MO_VIEW_DEPENDENCIES} {
+		t.Run("typed missing "+table+" remains compatible", func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2err[statements[i]] = moerr.NewNoSuchTableNoCtx("mo_catalog", table)
+			enabled, err := prepareViewMetadataMutation(context.Background(), bh, ses.GetService())
+			require.NoError(t, err)
+			require.False(t, enabled)
+			require.Equal(t, statements[:i+1], bh.executedSQLs)
+		})
+	}
 
 	t.Run("ordinary failure aborts mutation", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		testErr := moerr.NewInternalErrorNoCtx("marker failed")
-		bh.sql2err[statements[1]] = testErr
+		bh.sql2err[statements[2]] = testErr
 		enabled, err := prepareViewMetadataMutation(context.Background(), bh, ses.GetService())
 		require.False(t, enabled)
 		require.ErrorIs(t, err, testErr)
-		require.Equal(t, statements[:2], bh.executedSQLs)
+		require.Equal(t, statements[:3], bh.executedSQLs)
 	})
 }
 
@@ -575,25 +577,43 @@ func TestReconcileAccountViewMetadataUsesSystemContext(t *testing.T) {
 	bh := &backgroundExecTest{}
 	bh.init()
 	require.NoError(t, reconcileAccountViewMetadataEnabled(context.Background(), bh, 42))
-	require.Len(t, bh.executedSQLs, 4)
-	require.Equal(t, catalog.ViewMetadataLifecycleGateSQL, bh.executedSQLs[0])
-	require.Contains(t, bh.executedSQLs[1], "delete from mo_catalog.mo_view_dependencies")
-	require.Contains(t, bh.executedSQLs[2], "delete from mo_catalog.mo_view_refresh")
-	require.Contains(t, bh.executedSQLs[3], "where t.account_id=42")
-	require.Equal(t, []uint32{0, 0, 0, 0}, bh.executionAccountIDs)
-	require.Equal(t, []bool{true, true, true, true}, bh.systemCTELimits)
+	require.Len(t, bh.executedSQLs, 5)
+	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, bh.executedSQLs[:2])
+	require.Contains(t, bh.executedSQLs[2], "delete from mo_catalog.mo_view_dependencies")
+	require.Contains(t, bh.executedSQLs[3], "delete from mo_catalog.mo_view_refresh")
+	require.Contains(t, bh.executedSQLs[4], "where t.account_id=42")
+	require.Equal(t, []uint32{0, 0, 0, 0, 0}, bh.executionAccountIDs)
+	require.Equal(t, []bool{true, true, true, true, true}, bh.systemCTELimits)
 }
 
-type failSecondBackgroundExec struct {
+func TestLockViewMetadataLifecycleUsesSystemContextWithoutMutatingCaller(t *testing.T) {
+	callerCtx := defines.AttachAccountId(context.Background(), 42)
+	callerAccountID, err := defines.GetAccountId(callerCtx)
+	require.NoError(t, err)
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	require.NoError(t, lockViewMetadataLifecycle(callerCtx, bh))
+	require.Equal(t,
+		[]string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL},
+		bh.executedSQLs)
+	require.Equal(t, []uint32{uint32(sysAccountID), uint32(sysAccountID)}, bh.executionAccountIDs)
+
+	afterAccountID, err := defines.GetAccountId(callerCtx)
+	require.NoError(t, err)
+	require.Equal(t, callerAccountID, afterAccountID)
+}
+
+type failViewMutationBackgroundExec struct {
 	*backgroundExecTest
 	err error
 }
 
-func (e *failSecondBackgroundExec) Exec(ctx context.Context, sql string) error {
+func (e *failViewMutationBackgroundExec) Exec(ctx context.Context, sql string) error {
 	if err := e.backgroundExecTest.Exec(ctx, sql); err != nil {
 		return err
 	}
-	if len(e.executedSQLs) == 2 {
+	if len(e.executedSQLs) == 3 {
 		return e.err
 	}
 	return nil

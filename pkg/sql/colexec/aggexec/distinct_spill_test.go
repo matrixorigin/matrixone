@@ -224,7 +224,11 @@ func TestCountDistinctSpillStateRejectsInvalidTransitions(t *testing.T) {
 	require.Error(t, exec.AddDistinctCountContribution(0, math.MaxUint64, nil))
 	require.NoError(t, exec.AddDistinctCountContribution(0, math.MaxInt64, nil))
 	require.ErrorContains(t, exec.AddDistinctCountContribution(0, 1, nil), "overflow")
-	require.NoError(t, exec.InsertDistinctArgument(0, []byte("key")))
+	// Fixed-width exact-distinct states accept the canonical payload emitted by
+	// their drain.  An arbitrary byte string would violate the type contract;
+	// malformed/retyped payloads are rejected before publication.
+	value := int64(7)
+	require.NoError(t, exec.InsertDistinctArgument(0, types.EncodeInt64(&value)))
 	require.ErrorContains(t, exec.RehomeDistinctArgumentState(nil), "non-empty")
 
 	drain, err := exec.BeginArgumentDrain(nil)

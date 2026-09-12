@@ -2606,6 +2606,105 @@ func TestCloneWindowWithMpNil(t *testing.T) {
 	}
 }
 
+func TestOwnedVarlenaMarshalKeepsBulkLayout(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_varchar.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	values := [][]byte{
+		[]byte("ordinary inline"),
+		[]byte("ordinary long value that exceeds inline storage"),
+		[]byte("second ordinary long value that exceeds inline storage"),
+	}
+	require.NoError(t, AppendBytesList(vec, values, nil, mp))
+
+	plan, err := vec.PrepareMarshalBinary()
+	require.NoError(t, err)
+	require.False(t, plan.canonicalVarlen,
+		"an ordinary owned append-built vector should retain bulk serialization")
+	require.Equal(t, uint32(vec.Length()*vec.GetType().TypeSize()+len(vec.GetArea())),
+		plan.dataLength+plan.areaLength)
+
+	encoded, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	decoded := NewVecFromReuse()
+	defer decoded.Free(nil)
+	require.NoError(t, decoded.UnmarshalBinary(encoded))
+	require.Equal(t, values[0], decoded.GetBytesAt(0))
+	require.Equal(t, values[1], decoded.GetBytesAt(1))
+	require.Equal(t, values[2], decoded.GetBytesAt(2))
+
+	nullable := NewVec(types.T_varchar.ToType())
+	defer nullable.Free(mp)
+	require.NoError(t, AppendBytes(nullable, values[0], false, mp))
+	require.NoError(t, AppendBytes(nullable, values[1], true, mp))
+	nullablePlan, err := nullable.PrepareMarshalBinary()
+	require.NoError(t, err)
+	require.False(t, nullablePlan.canonicalVarlen,
+		"an ordinary owned vector with a safe NULL descriptor should retain bulk serialization")
+	require.Nil(t, nullablePlan.normalizedVarlenData)
+	nullableEncoded, err := nullable.MarshalBinary()
+	require.NoError(t, err)
+	nullableDecoded := NewVecFromReuse()
+	defer nullableDecoded.Free(nil)
+	require.NoError(t, nullableDecoded.UnmarshalBinary(nullableEncoded))
+	require.True(t, nullableDecoded.IsNull(1))
+
+	stale := NewVec(types.T_varchar.ToType())
+	defer stale.Free(mp)
+	require.NoError(t, AppendBytes(stale, values[1], false, mp))
+	stale.SetNull(0)
+	stalePlan, err := stale.PrepareMarshalBinary()
+	require.NoError(t, err)
+	require.False(t, stalePlan.canonicalVarlen,
+		"an owned stale NULL descriptor should use bulk serialization with normalization")
+	require.NotNil(t, stalePlan.normalizedVarlenData)
+
+	staleEncoded, err := stale.MarshalBinary()
+	require.NoError(t, err)
+	staleDecoded := NewVecFromReuse()
+	defer staleDecoded.Free(nil)
+	require.NoError(t, staleDecoded.UnmarshalBinary(staleEncoded))
+	require.True(t, staleDecoded.IsNull(0))
+
+	window, err := vec.Window(2, 3)
+	require.NoError(t, err)
+	defer window.Free(nil)
+	windowPlan, err := window.PrepareMarshalBinary()
+	require.NoError(t, err)
+	require.True(t, windowPlan.canonicalVarlen,
+		"a window retaining a larger source area must use canonical serialization")
+	windowEncoded, err := window.MarshalBinary()
+	require.NoError(t, err)
+	windowDecoded := NewVecFromReuse()
+	defer windowDecoded.Free(nil)
+	require.NoError(t, windowDecoded.UnmarshalBinary(windowEncoded))
+	require.Equal(t, values[2], windowDecoded.GetBytesAt(0))
+}
+
+func TestNullableFixedWidthMarshalDoesNotCastAsVarlena(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := NewVec(types.T_int64.ToType())
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, AppendFixedList(vec, []int64{11, 22, 33}, []bool{false, true, false}, mp))
+
+	encoded, err := vec.MarshalBinary()
+	require.NoError(t, err)
+	size, err := vec.MarshalBinarySize()
+	require.NoError(t, err)
+	require.Equal(t, len(encoded), size)
+	decoded := NewVecFromReuse()
+	defer decoded.Free(nil)
+	require.NoError(t, decoded.UnmarshalBinary(encoded))
+	require.Equal(t, []int64{11, 0, 33}, MustFixedColNoTypeCheck[int64](decoded))
+	require.True(t, decoded.IsNull(1))
+}
+
 func TestMarshalAndUnMarshal(t *testing.T) {
 	mp := mpool.MustNewZero()
 	v := NewVec(types.T_int8.ToType())
@@ -5504,14 +5603,17 @@ func TestPrepareParamKindForType(t *testing.T) {
 		kind PrepareParamKind
 		ok   bool
 	}{
-		{types.T_bool, PrepareParamNone, false},
+		{types.T_bool, PrepareParamBoolean, true},
 		{types.T_int64, PrepareParamInteger, true},
 		{types.T_uint32, PrepareParamInteger, true},
 		{types.T_float32, PrepareParamFloat, true},
-		{types.T_float64, PrepareParamNone, false},
-		{types.T_decimal128, PrepareParamNone, false},
-		{types.T_text, PrepareParamNone, false},
-		{types.T_timestamp, PrepareParamNone, false},
+		{types.T_float64, PrepareParamFloat, true},
+		{types.T_decimal128, PrepareParamDecimal, true},
+		{types.T_geometry32, PrepareParamNone, true},
+		{types.T_uuid, PrepareParamNone, true},
+		{types.T_array_float32, PrepareParamNone, true},
+		{types.T_text, PrepareParamNone, true},
+		{types.T_timestamp, PrepareParamNone, true},
 	} {
 		kind, ok := PrepareParamKindForType(test.typ)
 		require.Equal(t, test.kind, kind)
@@ -6152,6 +6254,108 @@ func TestSelectedBatchPreflightProtocol(t *testing.T) {
 		destination, 0, 2, []uint8{1, 0}, mp),
 		mpool.ErrAllocationAccountInvariant,
 		"a rejected aliased preflight must not leave a publishable proof")
+}
+
+func TestUnionOneMetadataTransitions(t *testing.T) {
+	for _, metadata := range []string{"ordinary", "source", "kind", "domain", "text_prefix"} {
+		t.Run(metadata, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := NewVec(types.T_varchar.ToType())
+			destination := NewVec(types.T_varchar.ToType())
+			var changed, constant *Vector
+			t.Cleanup(func() {
+				source.Free(mp)
+				changed.Free(mp)
+				constant.Free(mp)
+				destination.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			})
+			require.NoError(t, AppendBytesList(source, [][]byte{
+				[]byte("value"), nil, []byte(strings.Repeat("long", 16)),
+			}, []bool{false, true, false}, mp))
+			require.NoError(t, source.SetStringSource(types.StringSourceLiteral))
+			nulls.Add(source.GetGrouping(), 1)
+			changed, err := source.Dup(mp)
+			require.NoError(t, err)
+			switch metadata {
+			case "source":
+				require.NoError(t, changed.SetStringSourceAtWithMP(1, types.StringSourceUserVariable, mp))
+			case "kind":
+				require.NoError(t, changed.SetPrepareParamKindsWithMP(
+					[]PrepareParamKind{PrepareParamInteger, PrepareParamNone, PrepareParamFloat}, mp))
+			case "domain":
+				require.NoError(t, changed.SetRuntimeStringDomainsWithMP([]types.RuntimeStringDomain{
+					types.RuntimeStringBinary, types.RuntimeStringInherit, types.RuntimeStringInherit,
+				}, mp))
+			case "text_prefix":
+				require.NoError(t, changed.SetRuntimeStringDomainWithMP(types.RuntimeStringText, mp))
+			}
+			constant, err = NewConstBytes(types.T_varchar.ToType(), []byte("constant"), 4, mp)
+			require.NoError(t, err)
+			require.NoError(t, constant.SetStringSource(types.StringSourceLiteral))
+			rows := []struct {
+				vec *Vector
+				row int
+			}{{source, 1}, {constant, 3}, {source, 2}, {changed, 1},
+				{changed, 0}, {changed, 2}, {source, 0}, {source, 1}}
+			if metadata == "text_prefix" {
+				rows = rows[:3]
+				rows[0].vec, rows[0].row = changed, 0
+			}
+			for range 2 { // Reuse must not retain a previous mixed representation.
+				destination.ResetWithSameType()
+				for end, input := range rows {
+					require.NoError(t, destination.UnionOne(input.vec, int64(input.row), mp))
+					for row, expected := range rows[:end+1] {
+						isNull := expected.vec.IsNull(uint64(expected.row))
+						require.Equal(t, isNull, destination.IsNull(uint64(row)))
+						if !isNull {
+							require.Equal(t, expected.vec.GetBytesAt(expected.row), destination.GetBytesAt(row))
+						}
+						require.Equal(t, expected.vec.GetGrouping().Contains(uint64(expected.row)),
+							destination.GetGrouping().Contains(uint64(row)))
+						require.Equal(t, expected.vec.GetStringSourceAt(expected.row), destination.GetStringSourceAt(row))
+						require.Equal(t, expected.vec.GetPrepareParamKindAt(expected.row), destination.GetPrepareParamKindAt(row))
+						require.Equal(t, expected.vec.GetRuntimeStringDomainAt(expected.row), destination.GetRuntimeStringDomainAt(row))
+					}
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkUnionOneUniformMetadata(b *testing.B) {
+	for _, oid := range []types.T{types.T_int64, types.T_varchar} {
+		for _, kind := range []PrepareParamKind{PrepareParamNone, PrepareParamInteger} {
+			b.Run(fmt.Sprintf("%s/kind=%d", oid, kind), func(b *testing.B) {
+				const rows = 1024
+				mp := mpool.MustNewZero()
+				source := NewVec(oid.ToType())
+				destination := NewVec(oid.ToType())
+				defer source.Free(mp)
+				defer destination.Free(mp)
+				if oid == types.T_int64 {
+					require.NoError(b, AppendFixedList(source, make([]int64, rows), nil, mp))
+				} else {
+					for range rows {
+						require.NoError(b, AppendBytes(source, []byte("ordinary column value"), false, mp))
+					}
+				}
+				require.NoError(b, source.SetStringSource(types.StringSourceLiteral))
+				source.SetPrepareParamKind(kind)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					destination.ResetWithSameType()
+					for row := range rows {
+						if err := destination.UnionOne(source, int64(row), mp); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+		}
+	}
 }
 
 func BenchmarkUnionOnePrepareParamKindLateDivergence(b *testing.B) {

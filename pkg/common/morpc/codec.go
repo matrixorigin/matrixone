@@ -303,6 +303,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 	// 2.4 Custom header size
 	n, err := c.encodeCustomHeaders(&msg, out)
 	if err != nil {
+		discardWritten()
 		return err
 	}
 	totalSize += n

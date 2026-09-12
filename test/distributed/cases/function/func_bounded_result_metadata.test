@@ -1,0 +1,59 @@
+-- @suite
+
+-- @case
+-- @desc: bounded conversion and binary function result domains survive CTAS
+-- @label:bvt
+
+--- @metacmp(true)
+
+drop database if exists bounded_result_metadata;
+create database bounded_result_metadata;
+use bounded_result_metadata;
+
+create table source(s varchar(12) not null, b varbinary(12) not null);
+insert into source values ('hello', _binary '0123456789ab');
+
+create table bounded_network_ctas as
+select inet_ntoa(16909060) as v4_text,
+       inet6_aton('2001:db8::1') as network_bytes,
+       inet6_ntoa(unhex('20010DB8000000000000000000000001')) as v6_text
+from source;
+select column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'bounded_result_metadata' and table_name = 'bounded_network_ctas'
+order by ordinal_position;
+select v4_text, hex(network_bytes), v6_text from bounded_network_ctas;
+
+create table bounded_string_ctas as
+select bin(1) as bin_v,
+       conv('10', 10, 2) as conv_v,
+       hex(1) as hex_num,
+       hex(s) as hex_text,
+       unhex('41') as unhex_v,
+       md5(s) as md5_v,
+       sha1(s) as sha1_v,
+       sha2(s, 512) as sha2_v,
+       uncompressed_length(compress(s)) as uncompressed_v
+from source;
+select column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'bounded_result_metadata' and table_name = 'bounded_string_ctas'
+order by ordinal_position;
+select bin_v, conv_v, hex_num, hex_text, hex(unhex_v), md5_v, sha1_v, sha2_v, uncompressed_v
+from bounded_string_ctas;
+
+create table bounded_binary_ctas as
+select compress(s) as compressed_v,
+       compress(b) as compressed_binary_v,
+       uncompress(compress(s)) as uncompressed_v,
+       aes_encrypt(b, 'key') as aes_v,
+       aes_encrypt(s, 'key') as aes_text_v
+from source;
+select column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'bounded_result_metadata' and table_name = 'bounded_binary_ctas'
+order by ordinal_position;
+select length(compressed_v), length(compressed_binary_v), uncompressed_v,
+       length(aes_v), length(aes_text_v) from bounded_binary_ctas;
+
+drop database bounded_result_metadata;

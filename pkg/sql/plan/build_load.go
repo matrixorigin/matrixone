@@ -217,8 +217,14 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 	return csvReader.Pos(), nil
 }
 
-func validateLoadParquetOptions(param *tree.ExternParam, ctx CompilerContext) error {
-	if param == nil || !isLoadParquetFormat(param) {
+func validateLoadColumnarOptions(param *tree.ExternParam, ctx CompilerContext) error {
+	if param == nil {
+		return nil
+	}
+	if isLoadArrowFormat(param) {
+		return validateLoadArrowOptions(param, ctx)
+	}
+	if !isLoadParquetFormat(param) {
 		return nil
 	}
 	if param.Local {
@@ -253,6 +259,76 @@ func validateLoadParquetOptions(param *tree.ExternParam, ctx CompilerContext) er
 		return moerr.NewNYI(ctx.GetContext(), "parquet load with SET clause")
 	}
 	return nil
+}
+
+// validateLoadParquetOptions is kept as the focused Parquet test seam. LOAD's
+// production path uses validateLoadColumnarOptions so new columnar formats do
+// not accidentally inherit the CSV option surface.
+func validateLoadParquetOptions(param *tree.ExternParam, ctx CompilerContext) error {
+	if param == nil || !isLoadParquetFormat(param) {
+		return nil
+	}
+	return validateLoadColumnarOptions(param, ctx)
+}
+
+func validateLoadArrowOptions(param *tree.ExternParam, ctx CompilerContext) error {
+	if param.Local {
+		return moerr.NewNotSupported(ctx.GetContext(), "Arrow format is supported only by non-LOCAL LOAD DATA")
+	}
+	if param.ScanType == tree.INLINE {
+		return moerr.NewNotSupported(ctx.GetContext(), "Arrow format is supported only by file-backed LOAD DATA")
+	}
+	if loadOptionExists(param, "compression") || hasExplicitLoadCompression(param.CompressType) {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='arrow' does not support external compression")
+	}
+	if loadOptionExists(param, "jsondata") || param.JsonData != "" {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='arrow' does not support jsondata option")
+	}
+	if loadOptionExists(param, "hive_partitioning") || loadOptionExists(param, "hive_partition_columns") ||
+		param.HivePartitioning || len(param.HivePartitionCols) > 0 {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='arrow' does not support hive partitioning options")
+	}
+	container := param.ArrowContainer
+	if container == "" {
+		container = tree.ARROW_CONTAINER_AUTO
+	}
+	switch strings.ToLower(container) {
+	case tree.ARROW_CONTAINER_AUTO, tree.ARROW_CONTAINER_FILE, tree.ARROW_CONTAINER_STREAM:
+		param.ArrowContainer = strings.ToLower(container)
+	default:
+		return moerr.NewBadConfigf(ctx.GetContext(), "the arrow_container '%s' is not supported", container)
+	}
+	if param.Tail == nil {
+		return nil
+	}
+	if param.Tail.Fields != nil {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='arrow' does not support FIELDS option")
+	}
+	if param.Tail.Lines != nil {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='arrow' does not support LINES option")
+	}
+	if param.Tail.IgnoredLines > 0 {
+		return moerr.NewBadConfig(ctx.GetContext(), "LOAD DATA with format='arrow' does not support IGNORE LINES")
+	}
+	if hasLoadUserVariable(param.Tail.ColumnList) {
+		return moerr.NewNotSupported(ctx.GetContext(), "Arrow LOAD DATA does not support @variables in column list")
+	}
+	if len(param.Tail.Assignments) > 0 {
+		return moerr.NewNotSupported(ctx.GetContext(), "Arrow LOAD DATA does not support SET clause")
+	}
+	return nil
+}
+
+func isLoadArrowFormat(param *tree.ExternParam) bool {
+	if param.Format == tree.ARROW {
+		return true
+	}
+	for i := 0; i+1 < len(param.Option); i += 2 {
+		if strings.EqualFold(param.Option[i], "format") && strings.EqualFold(param.Option[i+1], tree.ARROW) {
+			return true
+		}
+	}
+	return false
 }
 
 func isLoadParquetFormat(param *tree.ExternParam) bool {
@@ -368,7 +444,7 @@ func estimateLoadRowsizeFromFirstLine(param *tree.ExternParam, inputSize int64, 
 	if param == nil ||
 		param.ScanType == tree.INLINE ||
 		param.Local ||
-		param.Format == tree.PARQUET ||
+		param.Format == tree.PARQUET || param.Format == tree.ARROW ||
 		getCompressType(param, param.Filepath) != tree.NOCOMPRESS ||
 		(lineTerminator != "\n" && lineTerminator != "\r\n") ||
 		strings.HasPrefix(param.Filepath, "SHARED:/query_result/") {
@@ -456,10 +532,14 @@ func clampLoadRowsize(rowSize float64, inputSize int64) float64 {
 	return rowSize
 }
 
-func loadParquetMayListFiles(param *tree.ExternParam) bool {
+func loadColumnarMayListFiles(param *tree.ExternParam) bool {
 	return param != nil &&
-		param.Format == tree.PARQUET &&
+		(param.Format == tree.PARQUET || param.Format == tree.ARROW) &&
 		strings.ContainsAny(strings.TrimSpace(param.Filepath), "*?[")
+}
+
+func loadParquetMayListFiles(param *tree.ExternParam) bool {
+	return param != nil && param.Format == tree.PARQUET && loadColumnarMayListFiles(param)
 }
 
 func totalLoadFileSize(fileSize []int64) int64 {
@@ -499,7 +579,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if err := InitNullMap(stmt.Param, ctx); err != nil {
 		return nil, err
 	}
-	if err := validateLoadParquetOptions(stmt.Param, ctx); err != nil {
+	if err := validateLoadColumnarOptions(stmt.Param, ctx); err != nil {
 		return nil, err
 	}
 	defaultParquetLoadParallel(stmt.Param, ctx)
@@ -538,6 +618,8 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		}
 		stmt.Param.FileStartOff = offset
 	}
+	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
+		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
 	applyLoadParallelAdmission(stmt.Param, offset)
 
 	stmt.Param.Tail.ColumnList = nil
@@ -610,10 +692,13 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 		builder.qry.LoadWriteS3 = false
 	}
 
-	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET {
-		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode)
+	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET && stmt.Param.Format != tree.ARROW {
+		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode, colToIndex)
 	}
-	lastNodeId = builder.appendNode(projectNode, bindCtx)
+	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex)
+	if err != nil {
+		return nil, err
+	}
 	builder.qry.LoadTag = true
 
 	// External write target: no lock (no engine relation to lock).
@@ -750,6 +835,9 @@ func applyLoadParallelAdmission(param *tree.ExternParam, offset int64) {
 }
 
 func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error) {
+	if _, err := RequireArrowLoadEnabled(ctx.GetProcess(), param); err != nil {
+		return "", err
+	}
 	if param.ScanType == tree.INLINE {
 		return "", nil
 	}
@@ -763,6 +851,11 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 			return "", err
 		}
 	}
+	// Stage resolution may reveal an S3-backed source. Recheck the sub-gate
+	// before ReadDir or StatFile can perform object-store I/O.
+	if _, err := RequireArrowLoadEnabled(ctx.GetProcess(), param); err != nil {
+		return "", err
+	}
 	if param.Local {
 		return param.Filepath, nil
 	}
@@ -771,7 +864,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 	}
 
 	param.Ctx = ctx.GetContext()
-	if loadParquetMayListFiles(param) {
+	if loadColumnarMayListFiles(param) {
 		fileList, fileSize, err := ReadDir(param)
 		param.Ctx = nil
 		if err != nil {
@@ -829,6 +922,56 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 	}
 
 	return ifExistAutoPkCol, nil
+}
+
+// LOAD builds physical (child-batch) references directly, unlike INSERT's
+// logical binding tags. Normalize file columns first, then reuse the same
+// dependency stages as INSERT and lower their tags to child-batch coordinates.
+func (builder *QueryBuilder) appendLoadDefaultProjections(
+	bindCtx *BindContext, node *plan.Node, tableDef *TableDef, supplied map[string]int32,
+) (int32, error) {
+	needed := false
+	for i, col := range tableDef.Cols {
+		if _, ok := supplied[col.Name]; !ok && exprHasLocalColumnRef(node.ProjectList[i]) {
+			needed = true
+			break
+		}
+	}
+	if !needed {
+		return builder.appendNode(node, bindCtx), nil
+	}
+	positions := make(map[int32]int32, len(tableDef.Cols))
+	expressions := make(map[int32]*plan.Expr, len(tableDef.Cols))
+	materialize := make(map[int32]bool)
+	order := make([]int32, 0)
+	inputTag := builder.genNewBindTag()
+	for i, col := range tableDef.Cols {
+		pos := int32(i)
+		positions[pos] = pos
+		expr := DeepCopyExpr(node.ProjectList[i])
+		if _, ok := supplied[col.Name]; ok {
+			replaceColRefTag(expr, 0, inputTag)
+		} else if exprHasLocalColumnRef(expr) {
+			materialize[pos] = true
+			order = append(order, pos)
+		}
+		expressions[pos] = expr
+	}
+	first := len(builder.qry.Nodes)
+	id, _, err := builder.appendMaterializedExprProjections(bindCtx, node.Children[0],
+		builder.genNewBindTag(), node.ProjectList, positions, expressions, materialize, order)
+	if err != nil {
+		return 0, err
+	}
+	previousTag := inputTag
+	for _, stage := range builder.qry.Nodes[first:] {
+		for _, expr := range stage.ProjectList {
+			replaceColRefTag(expr, previousTag, 0)
+		}
+		previousTag = stage.BindingTags[0]
+		stage.BindingTags = nil
+	}
+	return id, nil
 }
 
 func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
@@ -914,10 +1057,16 @@ func getCompressType(param *tree.ExternParam, filepath string) string {
 // lenient handling. Using lenient cast here avoids baking a strictness
 // decision into the plan at PREPARE time, which would become stale when
 // a prepared LOAD statement is EXECUTEd under a different sql_mode.
-func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node) []*plan.Expr {
+func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node, supplied map[string]int32) []*plan.Expr {
 	ret := make([]*plan.Expr, 0)
 	stringTyp := makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
 	for i := 0; i < len(tableDef.Cols); i++ {
+		// Only file fields arrive as strings. Defaults already have their bound
+		// result type, including constants and references to other target columns.
+		if _, ok := supplied[tableDef.Cols[i].Name]; !ok {
+			ret = append(ret, node.ProjectList[i])
+			continue
+		}
 		typ := node.ProjectList[i].Typ
 		expr := node.ProjectList[i].Expr
 		// Parallel CSV LOAD normally scans varchar values and casts them in the

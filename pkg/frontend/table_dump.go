@@ -84,6 +84,7 @@ type tableDumpRelation struct {
 	IndexAlgoTableType string              `json:"index_algo_table_type,omitempty"`
 	SourceTable        string              `json:"source_table"`
 	SchemaHash         string              `json:"schema_hash"`
+	LogicalSchemaHash  string              `json:"logical_schema_hash,omitempty"`
 	AutoIncrement      []tableDumpAutoIncr `json:"auto_increment,omitempty"`
 	Objects            []tableDumpObject   `json:"objects"`
 }
@@ -176,6 +177,13 @@ func tableDumpRelationKey(role, indexName, indexAlgoTableType string) string {
 	return role + "\x00" + indexName + "\x00" + indexAlgoTableType
 }
 
+func tableDumpRelationSchemaMatches(target, dump tableDumpRelation) bool {
+	if dump.LogicalSchemaHash != "" {
+		return target.LogicalSchemaHash == dump.LogicalSchemaHash
+	}
+	return target.SchemaHash == dump.SchemaHash
+}
+
 func tableDumpLegacyTinyTextResolver(
 	ses *Session,
 	defaultDB string,
@@ -236,6 +244,7 @@ func getTableDumpRelations(
 	refs := []tableDumpRelationRef{{
 		tableDumpRelation: tableDumpRelation{
 			Role: "main", SourceTable: master.GetTableName(), SchemaHash: masterHash,
+			LogicalSchemaHash: masterHash,
 		},
 		relation: master,
 	}}
@@ -251,7 +260,12 @@ func getTableDumpRelations(
 		if err != nil {
 			return nil, err
 		}
-		indexHash, err := tableSchemaHashWithResolver(ctx, indexRel.GetTableDef(ctx), resolve)
+		indexDef := indexRel.GetTableDef(ctx)
+		indexHash, err := tableSchemaHashWithResolver(ctx, indexDef, resolve)
+		if err != nil {
+			return nil, err
+		}
+		indexLogicalHash, err := tableLogicalSchemaHashWithResolver(ctx, indexDef, resolve)
 		if err != nil {
 			return nil, err
 		}
@@ -263,6 +277,7 @@ func getTableDumpRelations(
 				IndexAlgoTableType: index.IndexAlgoTableType,
 				SourceTable:        index.IndexTableName,
 				SchemaHash:         indexHash,
+				LogicalSchemaHash:  indexLogicalHash,
 			},
 			relation: indexRel,
 		})
@@ -279,6 +294,23 @@ func tableSchemaHashWithResolver(
 	def *plan.TableDef,
 	resolve sqlplan.LegacyTinyTextTableResolver,
 ) (string, error) {
+	return tableSchemaHashWithOptions(ctx, def, resolve, false)
+}
+
+func tableLogicalSchemaHashWithResolver(
+	ctx context.Context,
+	def *plan.TableDef,
+	resolve sqlplan.LegacyTinyTextTableResolver,
+) (string, error) {
+	return tableSchemaHashWithOptions(ctx, def, resolve, true)
+}
+
+func tableSchemaHashWithOptions(
+	ctx context.Context,
+	def *plan.TableDef,
+	resolve sqlplan.LegacyTinyTextTableResolver,
+	logicalIndexSchema bool,
+) (string, error) {
 	if def == nil {
 		return "", moerr.NewInternalErrorNoCtx("table definition is unavailable")
 	}
@@ -291,11 +323,18 @@ func tableSchemaHashWithResolver(
 	if err := sqlplan.RecoverLegacyTinyText(ctx, def, resolve); err != nil {
 		return "", moerr.NewInternalErrorNoCtxf("cannot normalize table schema: %v", err)
 	}
-	// LOAD recreates legacy bytewise text through the public utf8mb4_bin
-	// compatibility spelling. Normalize that identity before hashing so a dump
-	// from an old catalog compares equal to the schema produced by replaying the
-	// manifest DDL, without changing the engine-owned catalog definition.
-	if tableDumpHasLegacyTextMetadata(def) {
+	// LOAD can recreate internal index relations with equivalent columns but
+	// different catalog-only defaults and CREATE SQL provenance. Normalize those
+	// identities for the new index hash without changing the engine-owned catalog
+	// definition. Keep the legacy hash above for old manifest compatibility.
+	if logicalIndexSchema {
+		normalizeTableDumpIndexSchema(def)
+		// Programmatically created index relations can have no Createsql, while
+		// the same relations recreated from SHOW CREATE retain one. Use the
+		// structural fallback for both forms so that the presence of catalog DDL
+		// does not select two different hashing representations.
+		def.Createsql = ""
+	} else if tableDumpHasLegacyTextMetadata(def) {
 		normalizeTableDumpLegacyTextMetadata(def)
 	}
 	// For ordinary tables, reconstruct the DDL from the expanded TableDef. This
@@ -352,6 +391,29 @@ func tableSchemaHashWithResolver(
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// Internal index relations cannot be altered directly, so their table-level
+// default charset does not affect stored objects. It is also not stable: an
+// index created with an implicit legacy default and the same index recreated
+// from SHOW CREATE can have identical column charsets but a different default.
+// Normalize that non-storage metadata while retaining each column's effective
+// charset, including binary containers used for packed index keys.
+func normalizeTableDumpIndexSchema(def *plan.TableDef) {
+	def.DefaultCharset = uint32(types.CharsetLegacy)
+	for i, col := range def.Cols {
+		if col == nil {
+			continue
+		}
+		switch types.T(col.Typ.Id) {
+		case types.T_char, types.T_varchar, types.T_text:
+			if col.Typ.Charset == uint32(types.CharsetLegacy) {
+				cloned := *col
+				cloned.Typ.Charset = uint32(types.CharsetUTF8MB4Bin)
+				def.Cols[i] = &cloned
+			}
+		}
+	}
 }
 
 func canReconstructTableSchema(def *plan.TableDef) bool {
@@ -899,6 +961,8 @@ func decodeTableDumpRelation(
 			err = decoder.Decode(&relation.SourceTable)
 		case "schema_hash":
 			err = decoder.Decode(&relation.SchemaHash)
+		case "logical_schema_hash":
+			err = decoder.Decode(&relation.LogicalSchemaHash)
 		case "auto_increment":
 			relation.AutoIncrement, err = decodeTableDumpAutoIncrement(decoder, autoIncrCount)
 		case "objects":
@@ -1598,7 +1662,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		}
 		seenRelations[key] = struct{}{}
 		targetRef, ok := targetByKey[key]
-		if !ok || targetRef.SchemaHash != relationDump.SchemaHash {
+		if !ok || !tableDumpRelationSchemaMatches(targetRef.tableDumpRelation, relationDump) {
 			return moerr.NewInvalidInputNoCtx("target table index topology does not match table dump")
 		}
 		existingRows, err := targetRef.relation.Rows(ctx)

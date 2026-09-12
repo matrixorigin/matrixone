@@ -1707,9 +1707,9 @@ select * from abnormal05;
 1997-01-13 00:00:00  ¦  342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f  𝄀
 2012-01-13 23:23:59  ¦  63298ufh3jcweuiv4h32jhf432ouy4hu3enjwfnwje4n3bj24f34573
 alter table abnormal05 modify col1 float;
-alter table for temporary table is not yet implemented
+not supported: currently unsupport change from original type DATETIME to FLOAT
 alter table abnormal05 modify col2 int;
-alter table for temporary table is not yet implemented
+invalid argument cast to int, bad value 342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f
 select * from abnormal05;
 ➤ col1[93,64,0]  ¦  col2[12,0,0]  𝄀
 1997-01-13 00:00:00  ¦  342ewfyuehcdeiuopwu4jo3lekwdfhiu48woi3jrdnefrbwui34f  𝄀

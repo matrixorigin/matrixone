@@ -98,6 +98,7 @@ func shardCacheKey(key fscache.CacheKey) uint64 {
 }
 
 var _ fscache.DataCache = new(DataCache)
+var _ fscache.DataCacheWithPinAdmission = new(DataCache)
 
 func (d *DataCache) Available() int64 {
 	ret := d.fifo.capacity() - d.fifo.Used()
@@ -170,6 +171,28 @@ func (d *DataCache) Get(ctx context.Context, key query.CacheKey) (fscache.Data, 
 		return nil, false
 	}
 	return value.data, true
+}
+
+func (d *DataCache) GetWithPinAdmission(
+	ctx context.Context,
+	key query.CacheKey,
+	admit fscache.DataCachePinAdmission,
+) (data fscache.Data, release func(), ok bool, err error) {
+	if admit == nil {
+		data, ok = d.Get(ctx, key)
+		return data, nil, ok, nil
+	}
+	value, release, ok, err := d.fifo.GetWithAdmission(
+		ctx,
+		key,
+		func(value dataCacheValue, size int64) (func(), error) {
+			return admit(size)
+		},
+	)
+	if !ok || err != nil {
+		return nil, release, ok, err
+	}
+	return value.data, release, true, nil
 }
 
 func (d *DataCache) Contains(key query.CacheKey) bool {

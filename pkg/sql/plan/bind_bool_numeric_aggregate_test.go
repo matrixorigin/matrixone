@@ -130,11 +130,11 @@ func TestBoolNumericAggregateBindsAsTinyint(t *testing.T) {
 		sql        string
 		wantReturn types.T
 	}{
-		// sum(tinyint) -> bigint and avg(tinyint) -> double are MO's own
-		// conventions for the type the BOOL argument is read as.
+		// SUM(tinyint) -> bigint; AVG(tinyint) -> Decimal128 follows the exact
+		// numeric AVG contract for the type the BOOL argument is read as.
 		{"select sum(n_nationkey <> 0) from nation", types.T_int64},
+		{"select avg(n_nationkey <> 0) from nation", types.T_decimal128},
 		{"select sum(json_unquote(json_extract(cast('{\"code\":\"v1\"}' as json), '$.code')) = 'v1')", types.T_int64},
-		{"select avg(n_nationkey <> 0) from nation", types.T_float64},
 		{"select sum(distinct n_nationkey <> 0) from nation", types.T_int64},
 		{"select sum(n_nationkey <> 0) from nation group by n_name", types.T_int64},
 		{"select n_name from nation group by n_name having sum(n_nationkey <> 0) > 0", types.T_int64},

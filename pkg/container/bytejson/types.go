@@ -172,7 +172,7 @@ func (bj ByteJson) TYPE() string {
 	case TpCodeDatetime:
 		return "DATETIME"
 	case TpCodeBlob:
-		if _, ok := bj.persistedBitPayload(); ok {
+		if bj.isPersistedBit() {
 			return "BIT"
 		}
 		return "BLOB"

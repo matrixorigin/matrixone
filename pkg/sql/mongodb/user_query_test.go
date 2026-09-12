@@ -16,6 +16,7 @@ package mongodb
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -62,6 +63,36 @@ func TestParseUserQueryPipelineAndPlanRoundTrip(t *testing.T) {
 	require.Equal(t, source, restored.Source)
 }
 
+func TestParseUserQueryAcceptsSortAndUnwind(t *testing.T) {
+	maxDepthPath := strings.Join(makeFieldPath(MaxUserFieldPathSegments), ".")
+	for _, source := range []string{
+		`{"pipeline":[{"$sort":{"site_id":1}}]}`,
+		`{"pipeline":[{"$sort":{"` + maxDepthPath + `":1}}]}`,
+		`{"pipeline":[{"$unwind":"$site_id"}]}`,
+		`{"pipeline":[{"$unwind":{"path":"$site_id","includeArrayIndex":"index","preserveNullAndEmptyArrays":true}}]}`,
+		`{"pipeline":[{"$unwind":"$` + maxDepthPath + `"}]}`,
+	} {
+		query, err := ParseUserQuery(t.Context(), source)
+		require.NoError(t, err, source)
+		require.Equal(t, UserQueryPipeline, query.Kind, source)
+		require.Equal(t, source, query.Source, source)
+		require.Len(t, query.Pipeline, 1, source)
+
+		encoded := new(plan.MongoScan)
+		require.NoError(t, ApplyUserQueryToPlan(t.Context(), query, encoded), source)
+		restored, err := UserQueryFromPlan(t.Context(), encoded)
+		require.NoError(t, err, source)
+		require.Equal(t, query.Pipeline, restored.Pipeline, source)
+	}
+
+	sortFields := make([]string, MaxUserSortKeys)
+	for i := range sortFields {
+		sortFields[i] = fmt.Sprintf(`"field_%d":1`, i)
+	}
+	_, err := ParseUserQuery(t.Context(), `{"pipeline":[{"$sort":{`+strings.Join(sortFields, ",")+`}}]}`)
+	require.NoError(t, err)
+}
+
 func TestRedactSQLForDiagnostics(t *testing.T) {
 	for _, sql := range []string{
 		`select * from t where __mo_query = '{"filter":{"password":"super-secret-value"}}'`,
@@ -102,7 +133,23 @@ func TestParseUserQueryRejectsMalformedAndAmbiguousInput(t *testing.T) {
 		{name: "limit negative", source: `{"pipeline":[{"$limit":-1}]}`, want: "non-negative integer"},
 		{name: "count field path", source: `{"pipeline":[{"$count":"a.b"}]}`, want: "valid output field"},
 		{name: "unset empty", source: `{"pipeline":[{"$unset":[]}]}`, want: "field name"},
-		{name: "unwind number", source: `{"pipeline":[{"$unwind":1}]}`, want: "stage is not allowed"},
+		{name: "sort is array", source: `{"pipeline":[{"$sort":[]}]}`, want: "$sort requires 1 to 32 fields"},
+		{name: "sort is empty", source: `{"pipeline":[{"$sort":{}}]}`, want: "$sort requires 1 to 32 fields"},
+		{name: "sort direction is zero", source: `{"pipeline":[{"$sort":{"site_id":0}}]}`, want: "1 or -1 directions"},
+		{name: "sort dollar field", source: `{"pipeline":[{"$sort":{"$natural":1}}]}`, want: "$sort requires 1 to 32 fields"},
+		{name: "sort empty path segment", source: `{"pipeline":[{"$sort":{"site_id..value":1}}]}`, want: "$sort requires 1 to 32 fields"},
+		{name: "sort path too deep", source: `{"pipeline":[{"$sort":{"` + strings.Join(makeFieldPath(MaxUserFieldPathSegments+1), ".") + `":1}}]}`, want: "$sort requires 1 to 32 fields"},
+		{name: "unwind number", source: `{"pipeline":[{"$unwind":1}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind string is not path", source: `{"pipeline":[{"$unwind":"site_id"}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind variable is not path", source: `{"pipeline":[{"$unwind":"$$ROOT"}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind trailing dot", source: `{"pipeline":[{"$unwind":"$site_id."}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind empty path segment", source: `{"pipeline":[{"$unwind":"$site_id..value"}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind dollar path segment", source: `{"pipeline":[{"$unwind":"$site_id.$value"}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind path too deep", source: `{"pipeline":[{"$unwind":"$` + strings.Join(makeFieldPath(MaxUserFieldPathSegments+1), ".") + `"}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind object missing path", source: `{"pipeline":[{"$unwind":{"preserveNullAndEmptyArrays":true}}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind object unknown option", source: `{"pipeline":[{"$unwind":{"path":"$site_id","futureOption":true}}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind object invalid index", source: `{"pipeline":[{"$unwind":{"path":"$site_id","includeArrayIndex":"$index"}}]}`, want: "$unwind requires a valid field path"},
+		{name: "unwind object invalid dotted index", source: `{"pipeline":[{"$unwind":{"path":"$site_id","includeArrayIndex":"index..value"}}]}`, want: "$unwind requires a valid field path"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -111,7 +158,14 @@ func TestParseUserQueryRejectsMalformedAndAmbiguousInput(t *testing.T) {
 		})
 	}
 
-	_, err := ParseUserQuery(t.Context(), `{"filter":{"value":"`+strings.Repeat("x", MaxUserQueryBytes)+`"}}`)
+	sortFields := make([]string, MaxUserSortKeys+1)
+	for i := range sortFields {
+		sortFields[i] = fmt.Sprintf(`"field_%d":1`, i)
+	}
+	_, err := ParseUserQuery(t.Context(), `{"pipeline":[{"$sort":{`+strings.Join(sortFields, ",")+`}}]}`)
+	require.ErrorContains(t, err, "$sort requires 1 to 32 fields")
+
+	_, err = ParseUserQuery(t.Context(), `{"filter":{"value":"`+strings.Repeat("x", MaxUserQueryBytes)+`"}}`)
 	require.ErrorContains(t, err, "size limit")
 	_, err = ParseUserQuery(t.Context(), strings.Repeat(" ", MaxUserQueryBytes+1)+`{"filter":{}}`)
 	require.ErrorContains(t, err, "size limit")
@@ -126,6 +180,14 @@ func TestParseUserQueryRejectsMalformedAndAmbiguousInput(t *testing.T) {
 	require.ErrorContains(t, err, "stage limit")
 }
 
+func makeFieldPath(segments int) []string {
+	path := make([]string, segments)
+	for i := range path {
+		path[i] = "a"
+	}
+	return path
+}
+
 func TestParseUserQueryRejectsUnsafeStagesAndOperators(t *testing.T) {
 	for _, stage := range []string{
 		`{"$out":"archive"}`,
@@ -137,8 +199,6 @@ func TestParseUserQueryRejectsUnsafeStagesAndOperators(t *testing.T) {
 		`{"$indexStats":{}}`,
 		`{"$currentOp":{}}`,
 		`{"$planCacheStats":{}}`,
-		`{"$sort":{"value":1}}`,
-		`{"$unwind":"$values"}`,
 		`{"$futureStage":{}}`,
 	} {
 		_, err := ParseUserQuery(t.Context(), `{"pipeline":[`+stage+`]}`)
@@ -217,15 +277,28 @@ func TestUserQueryPlanRevalidationFailsClosed(t *testing.T) {
 	_, err = UserQueryFromPlan(ctx, &duplicatePlan)
 	require.ErrorContains(t, err, "duplicate document keys")
 
-	unsafeStage, err := bson.Marshal(bson.D{{Key: "$out", Value: "archive"}})
-	require.NoError(t, err)
 	pipeline, err := ParseUserQuery(ctx, `{"pipeline":[{"$match":{}}]}`)
 	require.NoError(t, err)
-	unsafePlan := new(plan.MongoScan)
-	require.NoError(t, ApplyUserQueryToPlan(ctx, pipeline, unsafePlan))
-	unsafePlan.UserPipelineStageBson[0] = unsafeStage
-	_, err = UserQueryFromPlan(ctx, unsafePlan)
-	require.ErrorContains(t, err, "is not allowed")
+	validPipelinePlan := new(plan.MongoScan)
+	require.NoError(t, ApplyUserQueryToPlan(ctx, pipeline, validPipelinePlan))
+	for _, test := range []struct {
+		name  string
+		stage bson.D
+		want  string
+	}{
+		{name: "unsafe stage", stage: bson.D{{Key: "$out", Value: "archive"}}, want: "is not allowed"},
+		{name: "invalid sort", stage: bson.D{{Key: "$sort", Value: bson.D{{Key: "site_id", Value: int32(0)}}}}, want: "1 or -1 directions"},
+		{name: "invalid unwind", stage: bson.D{{Key: "$unwind", Value: "site_id"}}, want: "valid field path"},
+	} {
+		t.Run(test.name+" in execution plan", func(t *testing.T) {
+			encodedStage, err := bson.Marshal(test.stage)
+			require.NoError(t, err)
+			candidate := *validPipelinePlan
+			candidate.UserPipelineStageBson = [][]byte{encodedStage}
+			_, err = UserQueryFromPlan(ctx, &candidate)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
 }
 
 func TestCombineFilters(t *testing.T) {

@@ -235,7 +235,8 @@ drop table t1;
 CREATE TABLE t1(a INT);
 INSERT INTO t1 VALUES (0),(0);
 SELECT 1 FROM t1 GROUP BY SUBSTRING('',1,'');
-invalid argument cast to int, bad value 
+➤ 1[-5,64,0]  𝄀
+1
 drop table t1;
 create table t1 (email varchar(50));
 insert into t1 values ('sasha@mysql.com'),('monty@mysql.com'),('foo@hotmail.com'),('foo@aol.com'),('bar@aol.com');
@@ -554,7 +555,8 @@ drop table t1;
 CREATE TABLE t1(a INT);
 INSERT INTO t1 VALUES (0),(0);
 SELECT 1 FROM t1 GROUP BY MID('',1,'');
-invalid argument cast to int, bad value 
+➤ 1[-5,64,0]  𝄀
+1
 drop table t1;
 create table t1 (email varchar(50));
 insert into t1 values ('sasha@mysql.com'),('monty@mysql.com'),('foo@hotmail.com'),('foo@aol.com'),('bar@aol.com');

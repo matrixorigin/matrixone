@@ -21,6 +21,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 func makeJson(t *testing.T, s string) ByteJson {
@@ -46,6 +48,13 @@ func makeBinaryJson(tp TpCode, payload []byte) ByteJson {
 	return ByteJson{Type: tp, Data: data[:n+len(payload)]}
 }
 
+func makeMySQLOpaque(t *testing.T, fieldType uint8, payload []byte) ByteJson {
+	t.Helper()
+	value, err := NewMySQLOpaque(defines.MORPCLatestVersion, fieldType, payload)
+	require.NoError(t, err)
+	return value
+}
+
 func TestCompareByteJsonOpaqueBinaryUsesRawBytes(t *testing.T) {
 	zero := makeBinaryJson(TpCodeOpaque, []byte{0x00})
 	d0 := makeBinaryJson(TpCodeOpaque, []byte{0xd0})
@@ -63,6 +72,69 @@ func TestCompareByteJsonOpaqueBinaryUsesRawBytes(t *testing.T) {
 	require.Equal(t, `"AA=="`, zero.String())
 	require.Equal(t, "AA==", mustUnquote(t, zero))
 	require.Equal(t, "AQ==", mustUnquote(t, bit))
+	require.Zero(t, CompareByteJson(makeMySQLOpaque(t, 16, []byte{0x01}), bit))
+}
+
+func TestCompareByteJsonMySQLOpaqueUsesFieldTypeAndRawBytes(t *testing.T) {
+	varbinary := makeMySQLOpaque(t, 15, []byte{0x00})
+	varbinaryNext := makeMySQLOpaque(t, 15, []byte{0x01})
+	blob := makeMySQLOpaque(t, 252, []byte{0x00})
+	legacyBlob := makeBinaryJson(TpCodeBlob, []byte("AA=="))
+	legacyOpaque := makeBinaryJson(TpCodeOpaque, []byte{0x00})
+
+	require.Less(t, CompareByteJson(varbinary, varbinaryNext), 0)
+	require.Less(t, CompareByteJson(varbinary, blob), 0)
+	require.Zero(t, CompareByteJson(blob, legacyBlob))
+	require.Zero(t, CompareByteJson(blob, legacyOpaque))
+	varbinaryKey, ok := AppendCanonicalBinary(nil, varbinary)
+	require.True(t, ok)
+	blobKey, ok := AppendCanonicalBinary(nil, blob)
+	require.True(t, ok)
+	require.NotEqual(t, varbinaryKey, blobKey)
+	blobSize, ok := CanonicalBinarySize(blob)
+	require.True(t, ok)
+	require.Equal(t, blobSize, len(blobKey))
+}
+
+func TestCompareByteJsonMalformedMySQLOpaqueTagFallsBackToBlob(t *testing.T) {
+	malformed := makeBinaryJson(TpCodeBlob, []byte("base64:type16:not-base64"))
+
+	require.Equal(t, "BLOB", malformed.TYPE())
+	require.NotZero(t, CompareByteJson(malformed, makeBinaryJson(TpCodeBit, []byte{0x00})))
+	key, ok := AppendCanonicalBinary(nil, malformed)
+	require.True(t, ok)
+	require.Equal(t, []byte{canonicalBinaryMarker, byte(binaryJSONBlob)}, key[:2])
+}
+
+func TestCompareByteJsonMalformedBinaryPreservesCanonicalEquivalence(t *testing.T) {
+	for _, stored := range []string{
+		"base64:type16:not-base64",
+		"base64:type252:not-base64",
+	} {
+		t.Run(stored, func(t *testing.T) {
+			malformed := makeBinaryJson(TpCodeBlob, []byte(stored))
+			valid, err := NewMySQLOpaque(defines.MORPCVersion52, 252, []byte(stored))
+			require.NoError(t, err)
+
+			require.Zero(t, CompareByteJson(malformed, valid))
+			require.Zero(t, CompareByteJson(valid, malformed))
+			malformedKey, ok := AppendCanonicalBinary(nil, malformed)
+			require.True(t, ok)
+			validKey, ok := AppendCanonicalBinary(nil, valid)
+			require.True(t, ok)
+			require.Equal(t, malformedKey, validKey)
+		})
+	}
+
+	legacyMalformed := makeBinaryJson(TpCodeBlob, []byte("not-base64"))
+	raw := makeBinaryJson(TpCodeOpaque, []byte("not-base64"))
+	require.Zero(t, CompareByteJson(legacyMalformed, raw))
+	require.Zero(t, CompareByteJson(raw, legacyMalformed))
+	legacyKey, ok := AppendCanonicalBinary(nil, legacyMalformed)
+	require.True(t, ok)
+	rawKey, ok := AppendCanonicalBinary(nil, raw)
+	require.True(t, ok)
+	require.Equal(t, legacyKey, rawKey)
 }
 
 func TestCompareByteJsonLegacyBlobLargePayloadAllocations(t *testing.T) {
@@ -76,6 +148,19 @@ func TestCompareByteJsonLegacyBlobLargePayloadAllocations(t *testing.T) {
 		}
 	})
 	require.Zero(t, allocs, "legacy blob compare should not allocate decoded payload buffers")
+}
+
+func TestCompareByteJsonMySQLOpaqueLargePayloadAllocations(t *testing.T) {
+	payload := bytes.Repeat([]byte{0xab}, 1<<20)
+	left := makeBinaryJson(TpCodeBlob, []byte(mysqlOpaqueText(252, payload)))
+	right := makeBinaryJson(TpCodeBlob, []byte(mysqlOpaqueText(252, payload)))
+
+	allocs := testing.AllocsPerRun(10, func() {
+		if cmp := CompareByteJson(left, right); cmp != 0 {
+			t.Fatalf("unexpected compare result: %d", cmp)
+		}
+	})
+	require.Zero(t, allocs, "tagged blob compare should not allocate decoded payload buffers")
 }
 
 func TestCompareByteJsonLegacyBlobPreservesBase64Newlines(t *testing.T) {
@@ -106,6 +191,20 @@ func BenchmarkCompareByteJsonLegacyBlobLargePayload(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if cmp := CompareByteJson(legacyLeft, legacyRight); cmp != 0 {
+			b.Fatalf("unexpected compare result: %d", cmp)
+		}
+	}
+}
+
+func BenchmarkCompareByteJsonMySQLOpaqueLargePayload(b *testing.B) {
+	payload := bytes.Repeat([]byte{0xcd}, 1<<20)
+	left := makeBinaryJson(TpCodeBlob, []byte(mysqlOpaqueText(252, payload)))
+	right := makeBinaryJson(TpCodeBlob, []byte(mysqlOpaqueText(252, payload)))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if cmp := CompareByteJson(left, right); cmp != 0 {
 			b.Fatalf("unexpected compare result: %d", cmp)
 		}
 	}
@@ -174,9 +273,9 @@ func TestCompareByteJson_DecimalCrossType(t *testing.T) {
 }
 
 // TestCompareByteJson_Int64Uint64CrossType verifies that INT64-vs-UINT64
-// comparisons are handled correctly even though both report TYPE()="INTEGER"
-// (same jsonTpOrder).  Without the cross-type check, the same-type branch
-// would use the wrong accessor.
+// comparisons are handled correctly even though both share one numeric type
+// order. Without the cross-type check, the same-type branch would use the
+// wrong accessor.
 func TestCompareByteJson_Int64Uint64CrossType(t *testing.T) {
 	// INT64 == small UINT64
 	require.Equal(t, 0, CompareByteJson(makeJson(t, "42"), makeJson(t, "42")))

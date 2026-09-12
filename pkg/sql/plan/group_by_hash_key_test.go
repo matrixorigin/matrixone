@@ -519,7 +519,7 @@ func TestAggPullupRequiresTypeMetadataToMatchReferencedColumns(t *testing.T) {
 }
 
 func TestBuildPlanAnnotatesDistinctRewriteAggregate(t *testing.T) {
-	for _, aggregate := range []string{"count", "sum"} {
+	for _, aggregate := range []string{"count", "sum", "avg"} {
 		t.Run(aggregate, func(t *testing.T) {
 			logicPlan, err := runOneStmt(
 				NewMockOptimizer(false),

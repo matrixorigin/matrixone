@@ -507,6 +507,29 @@ func comparePreparedJSONScalarsAsType(
 			return 0, leftNull, rightNull, nil
 		}
 		return compareFloat64Total(left, right), false, false, nil
+	case types.T_float64:
+		left, leftNull, leftErr := preparedJSONFloatScalarWithLimit(proc.Ctx, jsonValue, paramType, math.MaxFloat64, false)
+		if leftErr != nil {
+			return 0, false, false, leftErr
+		}
+		right, rightNull, rightErr := preparedJSONFloatScalarWithLimit(proc.Ctx, paramValue, paramType, math.MaxFloat64, false)
+		if rightErr != nil {
+			return 0, false, false, rightErr
+		}
+		if leftNull || rightNull {
+			return 0, leftNull, rightNull, nil
+		}
+		return compareFloat64Total(left, right), false, false, nil
+	case types.T_bit, types.T_year:
+		return comparePreparedJSONUnsignedScalars(
+			proc.Ctx, jsonValue, paramValue, math.MaxUint64, paramType)
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_json, types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_enum, types.T_geometry:
+		if isJSONLiteralNull(paramValue) {
+			return 0, false, true, nil
+		}
+		return compareJSONOverlapExact(jsonValue, paramValue), false, false, nil
 
 	}
 
@@ -562,6 +585,16 @@ func preparedJSONFloatScalar(
 	value bytejson.ByteJson,
 	paramType types.T,
 ) (float64, bool, error) {
+	return preparedJSONFloatScalarWithLimit(ctx, value, paramType, math.MaxFloat32, true)
+}
+
+func preparedJSONFloatScalarWithLimit(
+	ctx context.Context,
+	value bytejson.ByteJson,
+	paramType types.T,
+	maxValue float64,
+	convertToFloat32 bool,
+) (float64, bool, error) {
 	result, isNull, ok := jsonToScalar(value)
 	if !ok {
 		return 0, false, jsonCastErr(ctx, paramType)
@@ -569,10 +602,13 @@ func preparedJSONFloatScalar(
 	if isNull {
 		return 0, true, nil
 	}
-	if result < -math.MaxFloat32 || result > math.MaxFloat32 {
+	if result < -maxValue || result > maxValue {
 		return 0, false, jsonCastErr(ctx, paramType)
 	}
-	return float64(float32(result)), false, nil
+	if convertToFloat32 {
+		result = float64(float32(result))
+	}
+	return result, false, nil
 }
 
 type preparedJSONIntegerValue struct {

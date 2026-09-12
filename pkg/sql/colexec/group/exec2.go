@@ -72,6 +72,16 @@ func hasInactiveGroupingColumn(flags []bool) bool {
 	return false
 }
 
+// UsesGroupingAwareHash reports whether partial group keys use the extended
+// hash grammar that distinguishes a rolled-up grouping sentinel from SQL NULL.
+// MergeGroup must know this from the plan: an individual partial can contain
+// only the fully active grouping set and therefore carry no sentinel bits even
+// though later partials in the same stream do.
+func (group *Group) UsesGroupingAwareHash() bool {
+	return group != nil &&
+		(group.DynamicGrouping || hasInactiveGroupingColumn(group.GroupingFlag))
+}
+
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.diagnosticsLogged = false
 	group.ctr.state = vm.Build
@@ -113,7 +123,8 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	// same as a reused prepared operator.
 	group.ctr.setSpillMem(group.SpillMem)
 	group.ctr.setGroupByHashKey(group.GroupByHashKey)
-	if len(group.GroupByHashKey) > 0 && hasInactiveGroupingColumn(group.GroupingFlag) {
+	if len(group.GroupByHashKey) > 0 &&
+		(group.DynamicGrouping || hasInactiveGroupingColumn(group.GroupingFlag)) {
 		return moerr.NewInternalErrorNoCtx("group-by hash key cannot be used with grouping sets")
 	}
 	if err = group.ctr.validateGroupByHashKey(len(group.GroupBy)); err != nil {
@@ -172,6 +183,10 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 		}
 
 		group.ctr.groupingAware = false
+		if group.DynamicGrouping {
+			group.ctr.mtyp = HStr
+			group.ctr.groupingAware = true
+		}
 		for _, flag := range group.GroupingFlag {
 			if !flag {
 				group.ctr.mtyp = HStr
@@ -375,6 +390,9 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if err, isCancel = vm.CancelCheck(proc); isCancel {
 				return vm.CancelResult, err
 			}
+			if err = group.ensureRuntimeEmptyGroupingSet(); err != nil {
+				return vm.CancelResult, err
+			}
 		}
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
@@ -418,6 +436,49 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 
 	err = moerr.NewInternalError(proc.Ctx, "bug: unknown group state")
 	return vm.CancelResult, err
+}
+
+// ensureRuntimeEmptyGroupingSet preserves the one-row identity of a legacy
+// all-rolled grouping-set branch. It applies to both final and partial Group:
+// partial empty states merge idempotently, while a single-stage Group emits
+// the SQL result directly.
+func (group *Group) ensureRuntimeEmptyGroupingSet() error {
+	if group.DynamicGrouping || len(group.GroupBy) == 0 ||
+		len(group.GroupingFlag) != len(group.GroupBy) ||
+		len(group.ctr.groupByBatches) > 0 || group.ctr.isSpilling() {
+		return nil
+	}
+	for _, active := range group.GroupingFlag {
+		if active {
+			return nil
+		}
+	}
+
+	groupTypes := group.ctr.groupByEvaluate.Typ
+	if len(groupTypes) != len(group.GroupBy) {
+		return moerr.NewInternalErrorNoCtx(
+			"invalid empty grouping-set group metadata")
+	}
+	output, err := group.ctr.newRuntimeEmptyGroupingSetBatch(groupTypes, nil)
+	if err != nil {
+		return err
+	}
+	if len(group.ctr.aggList) != len(group.Aggs) {
+		group.ctr.aggList, err = group.ctr.makeAggList(group.Aggs)
+		if err != nil {
+			output.Clean(group.ctr.mp)
+			return err
+		}
+	}
+	for _, agg := range group.ctr.aggList {
+		if err = agg.GroupGrow(1); err != nil {
+			output.Clean(group.ctr.mp)
+			return err
+		}
+	}
+	group.ctr.groupByTypes = append(group.ctr.groupByTypes[:0], groupTypes...)
+	group.ctr.groupByBatches = append(group.ctr.groupByBatches, output)
+	return nil
 }
 
 func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
@@ -501,6 +562,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
 			var preview groupInsertPreview
+			var aggregateGroupScratch [hashmap.UnitLimit]uint64
 			for {
 				err = nil
 				if !evaluated {
@@ -552,11 +614,18 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 							preview.inserted, preview.newGroups)
 					}
 					if err == nil {
-						for j, agg := range group.ctr.aggList {
-							if err = agg.PreflightBatchFill(
-								i, preview.values,
-								group.ctr.aggArgEvaluate[j].Vec); err != nil {
-								break
+						aggregateGroups := preview.values[:n]
+						if group.DynamicGrouping {
+							aggregateGroups, err = dynamicGroupingAggregateGroups(
+								bat, i, aggregateGroups, aggregateGroupScratch[:n])
+						}
+						if err == nil {
+							for j, agg := range group.ctr.aggList {
+								if err = agg.PreflightBatchFill(
+									i, aggregateGroups,
+									group.ctr.aggArgEvaluate[j].Vec); err != nil {
+									break
+								}
 							}
 						}
 					}
@@ -581,9 +650,17 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 								}
 							}
 						}
+						aggregateGroups := vals[:n]
+						if group.DynamicGrouping {
+							aggregateGroups, err = dynamicGroupingAggregateGroups(
+								bat, i, aggregateGroups, aggregateGroupScratch[:n])
+							if err != nil {
+								return false, err
+							}
+						}
 						for j, agg := range group.ctr.aggList {
 							if err = agg.BatchFill(
-								i, vals[:n], group.ctr.aggArgEvaluate[j].Vec); err != nil {
+								i, aggregateGroups, group.ctr.aggArgEvaluate[j].Vec); err != nil {
 								return false, err
 							}
 						}
@@ -631,6 +708,43 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		}
 		return needSpill, nil
 	}
+}
+
+func dynamicGroupingAggregateGroups(
+	bat *batch.Batch,
+	offset int,
+	groups []uint64,
+	scratch []uint64,
+) ([]uint64, error) {
+	markerPos := len(bat.Vecs) - 2
+	if markerPos < 0 || len(scratch) < len(groups) {
+		return nil, moerr.NewInvalidInputNoCtx("dynamic grouping input is missing its aggregate marker")
+	}
+	marker := bat.Vecs[markerPos]
+	if marker == nil || marker.GetType().Oid != types.T_bool || offset < 0 || offset+len(groups) > marker.Length() {
+		return nil, moerr.NewInvalidInputNoCtx("invalid dynamic grouping aggregate marker")
+	}
+
+	hasSynthetic := false
+	for i := range groups {
+		row := offset + i
+		if marker.IsNull(uint64(row)) {
+			return nil, moerr.NewInvalidInputNoCtx("dynamic grouping aggregate marker cannot be NULL")
+		}
+		if vector.GetFixedAtNoTypeCheck[bool](marker, row) {
+			hasSynthetic = true
+		}
+	}
+	if !hasSynthetic {
+		return groups, nil
+	}
+	copy(scratch, groups)
+	for i := range groups {
+		if vector.GetFixedAtNoTypeCheck[bool](marker, offset+i) {
+			scratch[i] = aggexec.GroupNotMatched
+		}
+	}
+	return scratch[:len(groups)], nil
 }
 
 func (group *Group) evaluateBuildInput(

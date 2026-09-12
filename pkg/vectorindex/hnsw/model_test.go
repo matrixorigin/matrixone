@@ -546,7 +546,7 @@ func TestNewHnswModelForBuild(t *testing.T) {
 	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	cfg.Usearch.Metric = usearch.L2sq
 
-	idx, err := NewHnswModelForBuild[float32]("build-test", cfg, 1, 64)
+	idx, err := NewHnswModelForBuild[float32]("build-test", cfg, 1, 64, "")
 	require.NoError(t, err)
 	require.NotNil(t, idx.Index)
 	defer idx.Destroy()
@@ -616,7 +616,7 @@ func TestSearch_WrongDimension(t *testing.T) {
 	cfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
 	cfg.Usearch.Metric = usearch.L2sq
 
-	idx, err := NewHnswModelForBuild[float32]("dim-test", cfg, 1, 16)
+	idx, err := NewHnswModelForBuild[float32]("dim-test", cfg, 1, 16, "")
 	require.NoError(t, err)
 	defer idx.Destroy()
 

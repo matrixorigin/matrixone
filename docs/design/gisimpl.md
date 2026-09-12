@@ -202,7 +202,7 @@ All of Phase A is implemented and tested in `pkg/geo/` (33 tests passing, `go ve
 
 ### Task A4 — float32 WKB variant (for GEOMETRY32)
 - **Goal:** a float32-coordinate WKB reader/writer; **no SRID/format wrapper** — the cell is bare WKB (§1.3).
-- **Do:** `pkg/geo/wkb_f32.go`: `ReadWKBFloat32([]byte) (Geometry, error)`, `WriteWKBFloat32(g) []byte` (identical structure to A3, coords stored as float32). Add the float32→float64 up-convert helper used by `ST_AsWKB` on `GEOMETRY32` values. The caller (SQL layer) picks float32 vs float64 from the column OID; the engine just offers both encoders.
+- **Do:** `pkg/geo/wkb_f32.go`: `ReadWKBFloat32([]byte) (Geometry, error)`, `WriteWKBFloat32(g) ([]byte, error)` (identical structure to A3, coords stored as float32). Add the float32→float64 up-convert helper used by `ST_AsWKB` on `GEOMETRY32` values. The caller (SQL layer) picks float32 vs float64 from the column OID; the engine just offers both encoders.
 - **Test:** `WKB32→geom→WKB32` round-trip (assert float32 precision loss is the *only* difference vs float64); up-convert produces byte-standard float64 WKB.
 - **Acceptance:** float32 WKB round-trips; up-convert yields standard WKB. (No SRID anywhere in the bytes.)
 

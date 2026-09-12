@@ -17,6 +17,7 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -787,6 +788,27 @@ func TestDispatchResetDoesNotBlockWhenRemoteErrChannelIsFull(t *testing.T) {
 	}
 }
 
+func TestDispatchResetUsesOnlyTerminalForTerminalBackedReceiver(t *testing.T) {
+	terminal := colexec.NewRemoteReceiverTerminal(nil)
+	wantErr := moerr.NewDuplicateEntryNoCtx("1", "primary")
+	d := &Dispatch{ctr: &container{
+		isRemote:       true,
+		remoteTerminal: terminal,
+		remoteReceivers: []*process.WrapCs{{
+			TerminalBacked: true,
+		}},
+	}}
+
+	d.Reset(nil, true, wantErr)
+
+	select {
+	case <-terminal.Done():
+	default:
+		t.Fatal("terminal-backed receiver did not receive its generation terminal")
+	}
+	require.ErrorIs(t, terminal.Err(), wantErr)
+}
+
 func TestDispatchResetFailedNilErrorNotifiesRemoteWithCause(t *testing.T) {
 	_ = colexec.NewServer("")
 
@@ -1278,26 +1300,80 @@ func testDispatchAllocationClearFinalizesSpool(t *testing.T, abort bool) {
 	require.NoError(t, err)
 }
 
-// TestReceiverDone_OldBehavior tests the old behavior (kept for backward compatibility verification)
-func TestReceiverDone_OldBehavior(t *testing.T) {
+func TestShuffleRetiresCertifiedStopWithoutDataLoss(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	d := &Dispatch{
-		ctr: &container{},
+	uid := uuid.Must(uuid.NewV7())
+	stopped := &process.WrapCs{
+		Uid:             uid,
+		ReceiverDone:    true,
+		ReceiverStopped: func() bool { return true },
+		Err:             make(chan error, 1),
 	}
-	d.ctr.localRegsCnt = 1
-	d.ctr.remoteReceivers = make([]*process.WrapCs, 1)
-	d.ctr.remoteReceivers[0] = &process.WrapCs{ReceiverDone: true, Err: make(chan error, 2)}
-	d.ctr.remoteToIdx = make(map[uuid.UUID]int)
-	d.ctr.remoteToIdx[d.ctr.remoteReceivers[0].Uid] = 0
+	d := &Dispatch{ctr: &container{
+		remoteRegsCnt:   1,
+		aliveRegCnt:     1,
+		remoteReceivers: []*process.WrapCs{stopped},
+		remoteToIdx:     map[uuid.UUID]int{uid: 0},
+	}}
+
 	bat := batch.New(nil)
 	bat.SetRowCount(1)
 
-	// Note: After fix, these should return errors in strict mode
-	err := sendBatToIndex(d, proc, bat, 0)
-	require.Error(t, err, "shuffle should fail when receiver is done")
+	done, err := sendBatToIndexOutcome(d, proc, bat, 0)
+	require.NoError(t, err)
+	require.True(t, done, "the last explicitly stopped remote target ends a remote-only shuffle")
+	require.Empty(t, d.ctr.remoteReceivers)
+	require.Len(t, stopped.Err, 1, "legacy registrations still receive their retirement completion")
+}
 
-	err = sendBatToMultiMatchedReg(d, proc, bat, 0)
-	require.Error(t, err, "shuffle should fail when receiver is done")
+func TestShuffleContinuesAfterCertifiedStopForOtherMatchedReceivers(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := newDispatchSpoolTestBatch(t, proc.Mp(), 1)
+	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+
+	firstUID := uuid.Must(uuid.NewV7())
+	secondUID := uuid.Must(uuid.NewV7())
+	stopped := &process.WrapCs{
+		Uid:             firstUID,
+		ReceiverDone:    true,
+		ReceiverStopped: func() bool { return true },
+		Err:             make(chan error, 1),
+	}
+	ctrl := gomock.NewController(t)
+	secondSession := mock_morpc.NewMockClientSession(ctrl)
+	secondSession.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	second := &process.WrapCs{Uid: secondUID, Cs: secondSession}
+	d := &Dispatch{ctr: &container{
+		localRegsCnt:    1,
+		remoteRegsCnt:   2,
+		aliveRegCnt:     3,
+		remoteReceivers: []*process.WrapCs{stopped, second},
+		remoteToIdx: map[uuid.UUID]int{
+			firstUID:  0,
+			secondUID: 0,
+		},
+	}}
+
+	done, err := sendBatToMultiMatchedRegOutcome(d, proc, bat, 0)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Len(t, d.ctr.remoteReceivers, 1)
+	require.Same(t, second, d.ctr.remoteReceivers[0])
+}
+
+func TestSendBatchRetiresTerminalBackedStopWithoutLegacyChannel(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	wcs := &process.WrapCs{
+		ReceiverDone:    true,
+		ReceiverStopped: func() bool { return true },
+		TerminalBacked:  true,
+	}
+
+	outcome, err := sendBatchToClientSessionOutcome(
+		proc.Ctx, []byte("batch"), wcs, FailureModeStrict, "receiver")
+	require.NoError(t, err)
+	require.True(t, outcome.receiverDone)
+	require.True(t, outcome.explicitlyStopped)
 }
 
 func newDispatchSpoolTestBatch(t *testing.T, mp *mpool.MPool, rows int) *batch.Batch {
@@ -1459,8 +1535,9 @@ func TestSendBatchToClientSessionRollsBackBatchCreditOnWriteFailure(t *testing.T
 
 	rolledBack := uint64(0)
 	wcs := &process.WrapCs{
-		MsgId: 42,
-		Cs:    session,
+		MsgId:           42,
+		Cs:              session,
+		ReceiverStopped: func() bool { return true },
 		ReserveBatch: func(_ context.Context, _ uint64) (uint64, error) {
 			return 7, nil
 		},
@@ -1779,37 +1856,220 @@ func TestShuffleScenario_TargetReceiverFailed(t *testing.T) {
 	require.Contains(t, err.Error(), "data loss may occur", "error should mention data loss")
 }
 
-// TestDataLossPrevention_ComparisonTable documents the fix behavior
-func TestDataLossPrevention_ComparisonTable(t *testing.T) {
-	t.Run("SendToAll_Before_Fix", func(t *testing.T) {
-		// Before fix: ReceiverDone=true was silently ignored
-		// Result: Query "succeeds" but returns incomplete data (CN2's data lost)
-		// This was the CRITICAL BUG
-		t.Log("Before fix: SendToAll silently skipped failed receivers")
-		t.Log("Result: Users got incomplete data without knowing it")
-	})
+func TestReceiverDoneFailureModes(t *testing.T) {
+	proc := testutil.NewProcess(t)
 
-	t.Run("SendToAll_After_Fix", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
+	t.Run("strict reports unqualified receiver loss", func(t *testing.T) {
 		wcs := &process.WrapCs{ReceiverDone: true, Err: make(chan error, 1)}
-
-		// After fix: ReceiverDone=true returns error in strict mode
-		_, err := sendBatchToClientSession(proc.Ctx, []byte("test"), wcs, FailureModeStrict, "CN2")
-
-		require.Error(t, err, "After fix: SendToAll MUST report error")
-		require.Contains(t, err.Error(), "data loss may occur")
-		t.Log("After fix: Query fails with clear error message")
-		t.Log("Result: Users know data is incomplete and can retry")
+		done, err := sendBatchToClientSession(proc.Ctx, []byte("test"), wcs, FailureModeStrict, "CN2")
+		require.True(t, done)
+		require.ErrorContains(t, err, "data loss may occur")
 	})
 
-	t.Run("SendToAny_Still_Works", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
+	t.Run("tolerant retires unqualified receiver for failover", func(t *testing.T) {
 		wcs := &process.WrapCs{ReceiverDone: true, Err: make(chan error, 1)}
-
-		// SendToAny uses tolerant mode - should still work
-		_, err := sendBatchToClientSession(proc.Ctx, []byte("test"), wcs, FailureModeTolerant, "CN2")
-
-		require.NoError(t, err, "SendToAny can tolerate failures")
-		t.Log("SendToAny: Can failover to other receivers")
+		done, err := sendBatchToClientSession(proc.Ctx, []byte("test"), wcs, FailureModeTolerant, "CN2")
+		require.True(t, done)
+		require.NoError(t, err)
 	})
+}
+
+func TestSendBatchRetiresOnlyCertifiedReceiverStop(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		done, stopped, canceled bool
+		reserveErr              error
+		wantRetired             bool
+	}{
+		{"stop before send", true, true, false, nil, true},
+		{"stop wakes reserve", false, true, false, context.Canceled, true},
+		{"stop interrupts reserve", false, true, false, moerr.NewQueryInterrupted(context.Background()), true},
+		{"uncertified done", true, false, false, nil, false},
+		{"uncertified cancellation", false, false, false, context.Canceled, false},
+		{"query cancellation wins", false, true, true, context.Canceled, false},
+		{"query cancellation with done", true, true, true, nil, false},
+		{"real reserve error wins", false, true, false, moerr.NewInternalErrorNoCtx("reserve failure"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.canceled {
+				cancel()
+			}
+			wcs := &process.WrapCs{
+				ReceiverDone:    tc.done,
+				ReceiverStopped: func() bool { return tc.stopped },
+				Err:             make(chan error, 1),
+				ReserveBatch:    func(context.Context, uint64) (uint64, error) { return 0, tc.reserveErr },
+			}
+			done, err := sendBatchToClientSession(ctx, []byte("batch"), wcs, FailureModeStrict, "receiver")
+			if tc.wantRetired {
+				require.NoError(t, err)
+				require.True(t, done)
+				select {
+				case err := <-wcs.Err:
+					require.NoError(t, err)
+				default:
+					t.Fatal("removed receiver's registration handler was not completed")
+				}
+			} else {
+				require.Error(t, err)
+				if !tc.done {
+					require.ErrorIs(t, err, tc.reserveErr)
+				}
+				require.Empty(t, wcs.Err)
+			}
+		})
+	}
+}
+
+func TestBroadcastContinuesAfterRemoteReceiverStop(t *testing.T) {
+	for _, remoteAlive := range []bool{false, true} {
+		t.Run(fmt.Sprint("remaining_remote_", remoteAlive), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			bat := newDispatchSpoolTestBatch(t, proc.Mp(), 3)
+			defer bat.Clean(proc.Mp())
+			reg := process.NewPipelineEdge(1, 0)
+			sp := pSpool.InitMyPipelineSpool(proc.Mp(), 1)
+			defer func() { sp.Abort(context.Canceled); sp.Close() }()
+			d := &Dispatch{LocalRegs: []*process.WaitRegister{reg}, ctr: &container{
+				prepared: true, sp: sp, localRegsCnt: 1, remoteRegsCnt: 1, aliveRegCnt: 2,
+				remoteReceivers: []*process.WrapCs{{
+					ReceiverStopped: func() bool { return true }, Err: make(chan error, 1),
+					ReserveBatch: func(context.Context, uint64) (uint64, error) { return 0, context.Canceled },
+				}},
+			}}
+			stopped := d.ctr.remoteReceivers[0]
+			if remoteAlive {
+				ctrl := gomock.NewController(t)
+				cs := mock_morpc.NewMockClientSession(ctrl)
+				cs.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+				d.ctr.remoteReceivers = append(d.ctr.remoteReceivers, &process.WrapCs{Cs: cs})
+				d.ctr.remoteRegsCnt++
+				d.ctr.aliveRegCnt++
+			}
+			deadlineCtx, cancelDeadline := context.WithTimeout(proc.Ctx, 5*time.Second)
+			defer cancelDeadline()
+			ctx, cancel := context.WithCancelCause(deadlineCtx)
+			process.ReplacePipelineCtx(proc, ctx, cancel)
+			receiver := process.InitPipelineSignalReceiver(ctx, []*process.WaitRegister{reg})
+			sent := make(chan error, 1)
+			senderDone := make(chan struct{})
+			go func() {
+				defer close(senderDone)
+				for range 2 {
+					end, err := sendToAllFunc(bat, d, proc)
+					if err == nil && end {
+						err = fmt.Errorf("broadcast ended before local delivery")
+					}
+					if err != nil {
+						cancel(err)
+						sent <- err
+						return
+					}
+				}
+				_, err := sendToAllLocalFunc(nil, d, proc)
+				if err != nil {
+					cancel(err)
+				}
+				sent <- err
+			}()
+			defer func() { cancel(nil); <-senderDone }()
+			for range 2 {
+				got, err := receiver.GetNextBatch(nil)
+				require.NoError(t, err)
+				require.NotNil(t, got)
+				require.Equal(t, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0]), vector.MustFixedColWithTypeCheck[int64](got.Vecs[0]))
+			}
+			got, err := receiver.GetNextBatch(nil)
+			require.NoError(t, err)
+			require.Nil(t, got)
+			require.NoError(t, <-sent)
+			require.Len(t, stopped.Err, 1)
+		})
+	}
+}
+
+func TestBroadcastEndsAfterAllRemoteReceiversStop(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bat := newDispatchSpoolTestBatch(t, proc.Mp(), 1)
+	defer bat.Clean(proc.Mp())
+	stopped := &process.WrapCs{ReceiverDone: true, ReceiverStopped: func() bool { return true }, Err: make(chan error, 1)}
+	d := &Dispatch{ctr: &container{prepared: true, remoteRegsCnt: 1, aliveRegCnt: 1, remoteReceivers: []*process.WrapCs{stopped}}}
+	end, err := sendToAllRemoteFunc(bat, d, proc)
+	require.NoError(t, err)
+	require.True(t, end)
+	require.Empty(t, d.ctr.remoteReceivers)
+	require.Len(t, stopped.Err, 1)
+}
+
+func TestRemoteReceiverRollbackPublishesFailure(t *testing.T) {
+	server := colexec.NewServer("")
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	uid := uuid.MustParse("00000000-0000-0000-0000-000000028313")
+	_, _, _, waiter, _ := server.AttachProcByUuidOrWait(uid)
+	t.Cleanup(waiter.Close)
+	d := &Dispatch{FuncId: SendToAllFunc, RemoteRegs: []colexec.ReceiveInfo{{Uuid: uid}}}
+	registration, err := d.RegisterRemoteReceiversWithHandle(proc)
+	require.NoError(t, err)
+	t.Cleanup(registration.Cleanup)
+	cause := moerr.NewInternalErrorNoCtx("registration rollback")
+	registration.Cancel(cause)
+	// The cleanup handle must not consult a reused Process for its cause.
+	proc.Ctx = nil
+	proc.Cancel = nil
+	registration.Cleanup()
+	_, _, state, _, terminal := server.AttachProcByUuidOrWait(uid)
+	require.Equal(t, colexec.RemoteReceiverFinished, state)
+	select {
+	case <-terminal.Done():
+	default:
+		t.Fatal("rollback did not publish its terminal result")
+	}
+	require.ErrorIs(t, terminal.Err(), cause)
+}
+
+func TestShuffleLocalReceiverTermination(t *testing.T) {
+	for _, route := range []struct {
+		name string
+		send func(*Dispatch, *process.Process, *batch.Batch, uint32) (bool, error)
+	}{
+		{"index", sendBatToIndexOutcome},
+		{"multi matched", sendBatToMultiMatchedRegOutcome},
+	} {
+		for _, abortSpool := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/spool_aborted=%t", route.name, abortSpool), func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				bat := newDispatchSpoolTestBatch(t, proc.Mp(), 1)
+				defer bat.Clean(proc.Mp())
+				sp := pSpool.InitMyPipelineSpool(proc.Mp(), 1)
+				defer func() { sp.Abort(context.Canceled); sp.Close() }()
+				reg := process.NewPipelineEdge(1, 0)
+				if abortSpool {
+					// Both the abort signal and a free slot may be ready;
+					// either spool exit must propagate queryDone.
+					sp.Abort(nil)
+				} else {
+					// Reject the handoff after the spool accepted the batch.
+					reg.Abort(context.Canceled)
+				}
+				d := &Dispatch{
+					LocalRegs:          []*process.WaitRegister{reg},
+					ShuffleRegIdxLocal: []int{0},
+					ctr:                &container{sp: sp, localRegsCnt: 1},
+				}
+				done, err := route.send(d, proc, bat, 0)
+				if abortSpool {
+					require.True(t, done)
+					if err != nil {
+						require.ErrorIs(t, err, pSpool.ErrPipelineSpoolAborted)
+					}
+				} else {
+					require.False(t, done)
+					require.ErrorIs(t, err, context.Canceled)
+				}
+			})
+		}
+	}
 }

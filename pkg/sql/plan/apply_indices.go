@@ -707,7 +707,7 @@ func (builder *QueryBuilder) applyLogicalVectorIndexForSortContext(
 	opts := planplugin.ApplyForSortOpts{ColRefCnt: colRefCnt, IdxColMap: idxColMap}
 	for _, multi := range indexes {
 		p, ok := indexplugin.Get(multi.IndexAlgo)
-		if !ok || !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) {
+		if !ok || !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) || !vectorIndexSupportsContext(vecCtx, multi.IndexAlgo) {
 			continue
 		}
 		logical, ok := p.Plan().(planplugin.LogicalSearchHooks)
@@ -948,6 +948,9 @@ func (builder *QueryBuilder) applyVectorIndexForSortContext(
 	colRefCnt map[[2]int32]int,
 	idxColMap map[[2]int32]*plan.Expr,
 ) (int32, bool, error) {
+	if vecCtx == nil {
+		return nodeID, false, nil
+	}
 	if vecCtx.projNode == nil && idxColMap == nil {
 		// A sort-anchored rewrite publishes its column remap through idxColMap — that is
 		// the only way ancestors learn the CTE's distance column became the index score.
@@ -995,7 +998,8 @@ func (builder *QueryBuilder) applyVectorIndexForSortContext(
 		// plugin-registered algo) through the vector ANN rewrite
 		// path. indexplugin.Get alone is not sufficient — fulltext
 		// is plugin-registered too.
-		if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) {
+		if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) ||
+			!vectorIndexSupportsContext(vecCtx, multiTableIndex.IndexAlgo) {
 			continue
 		}
 		p, ok := indexplugin.Get(multiTableIndex.IndexAlgo)
@@ -1683,6 +1687,42 @@ func canUseRegularIndexHiddenSortKey(scanNode *plan.Node, orderByCol *plan.ColRe
 	return isRegularIndexFullPrefixEquality(scanNode.FilterList[0], numKeyParts)
 }
 
+// canPushCompositePrimaryKeyOrderedLimit recognizes the narrow base-table
+// shape where an ordered reader may cap each physical source before the Sort:
+// the SQL order is the table's hidden serialized composite primary key, and
+// every scan predicate is a folded literal bound on that same key. Literal PK
+// ranges are evaluated by the reader before ordered truncation. A merely
+// column-independent runtime expression may remain an upper-layer residual;
+// admitting it (or any column residual) could therefore under-fetch valid rows.
+func canPushCompositePrimaryKeyOrderedLimit(scanNode *plan.Node, orderByCol *plan.ColRef) bool {
+	if scanNode == nil || scanNode.TableDef == nil || scanNode.TableDef.Pkey == nil || orderByCol == nil ||
+		scanNode.IndexScanInfo.IsIndexScan || len(scanNode.BindingTags) == 0 ||
+		scanNode.TableDef.Pkey.PkeyColName != catalog.CPrimaryKeyColName {
+		return false
+	}
+	pkPos, ok := scanNode.TableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
+	if !ok || orderByCol.RelPos != scanNode.BindingTags[0] || orderByCol.ColPos != pkPos ||
+		pkPos < 0 || int(pkPos) >= len(scanNode.TableDef.Cols) {
+		return false
+	}
+	pkType := scanNode.TableDef.Cols[pkPos].Typ
+	for _, filter := range scanNode.FilterList {
+		fn := filter.GetF()
+		filterCol, _ := classifyRangeBound(fn)
+		bound := rangeFilterConstValue(fn)
+		literalBound := false
+		if bound != nil {
+			_, _, literalBound = unwrapConstLiteral(bound)
+		}
+		if filterCol == nil || bound == nil || !literalBound ||
+			filterCol.RelPos != orderByCol.RelPos || filterCol.ColPos != pkPos ||
+			!regularIndexCursorTypeMatches(bound.Typ, pkType) {
+			return false
+		}
+	}
+	return true
+}
+
 func canPushRegularIndexOrderedLimit(scanNode *plan.Node) bool {
 	if scanNode == nil || len(scanNode.IndexScanInfo.Parts) < 2 || len(scanNode.FilterList) != 1 {
 		return false
@@ -1945,6 +1985,10 @@ func (builder *QueryBuilder) detectVectorGuardFromSort(sortNode *plan.Node) []in
 	return builder.detectVectorGuardForContext(builder.buildVectorSortContextFromSort(sortNode))
 }
 
+func vectorIndexSupportsContext(vecCtx *vectorSortContext, algo string) bool {
+	return vecCtx == nil || !vecCtx.hasMembership || algo == catalog.MoIndexIvfFlatAlgo.ToString()
+}
+
 func (builder *QueryBuilder) detectVectorGuardForContext(vecCtx *vectorSortContext) []int32 {
 	if vecCtx == nil || vecCtx.scanNode == nil {
 		return nil
@@ -1970,7 +2014,7 @@ func (builder *QueryBuilder) detectVectorGuardForContext(vecCtx *vectorSortConte
 	// explicit predicate keeps that boundary even if the upstream
 	// collectVectorIndexes filter is ever loosened.
 	for _, multi := range multiTableIndexes {
-		if !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) {
+		if !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) || !vectorIndexSupportsContext(vecCtx, multi.IndexAlgo) {
 			continue
 		}
 		p, ok := indexplugin.Get(multi.IndexAlgo)

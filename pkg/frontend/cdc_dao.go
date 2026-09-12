@@ -390,6 +390,17 @@ func (t *CDCDao) DeleteManyWatermark(
 			return
 		}
 		deletedCnt += cnt
+
+		sql = cdc.CDCSQLBuilder.DeleteSnapshotEpochSQL(key.AccountId, key.TaskId)
+		logutil.Debug(
+			"cdc.dao.delete_snapshot_epoch_sql",
+			zap.Uint64("account-id", key.AccountId),
+			zap.String("task-id", key.TaskId),
+			zap.String("sql", sql),
+		)
+		if _, err = ExecuteAndGetRowsAffected(ctx, executor, sql); err != nil {
+			return
+		}
 	}
 
 	return

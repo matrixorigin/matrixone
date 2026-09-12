@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -511,4 +512,72 @@ func TestTxnManager_GetOrCreateTxnWithMeta(t *testing.T) {
 	meta2, err := txnMgr.GetOrCreateTxnWithMeta(nil, txn1, ts)
 	require.NoError(t, err)
 	require.Equal(t, string(txn1), meta2.GetID())
+}
+
+func TestSessionTemporarySchemaVisibility(t *testing.T) {
+	catalog := MockCatalog(nil)
+	defer catalog.Close()
+	mgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog), types.NewMockHLCClock(1))
+	mgr.Start(context.Background())
+	defer mgr.Stop()
+	createDB, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := createDB.CreateDatabase("temporary_schema_visibility", "", "")
+	require.NoError(t, err)
+	dbID := db.(*mockDBHandle).entry.ID
+	require.NoError(t, createDB.Commit(context.Background()))
+	old, err := mgr.StartTxn(nil)
+	require.NoError(t, err)
+	oldTS := old.GetStartTS()
+	defer old.Rollback(context.Background())
+	for _, tc := range []struct {
+		name, kind string
+		visible    bool
+	}{
+		{"__mo_tmp_123e4567e89b12d3a456426614174000_db_t", pkgcatalog.SystemTemporaryTable, true},
+		{"unprefixed_temporary", pkgcatalog.SystemTemporaryTable, false},
+		{"persistent", pkgcatalog.SystemOrdinaryRel, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			create, err := mgr.StartTxn(nil)
+			require.NoError(t, err)
+			db, err := create.GetDatabase("temporary_schema_visibility")
+			require.NoError(t, err)
+			schema := MockSchema(2, 0)
+			schema.Name, schema.Relkind = tc.name, tc.kind
+			relation, err := db.CreateRelation(schema)
+			require.NoError(t, err)
+			entryDB, err := catalog.GetDatabaseByID(dbID)
+			require.NoError(t, err)
+			entry, err := entryDB.GetTableEntryByID(relation.(*mockTableHandle).entry.ID)
+			require.NoError(t, err)
+			require.Nil(t, entry.GetVisibleSchema(old, false), "uncommitted schema must stay invisible")
+			require.NoError(t, create.Commit(context.Background()))
+			_, err = entryDB.TxnGetTableEntryByID(relation.(*mockTableHandle).entry.ID, old)
+			if tc.visible {
+				require.NoError(t, err)
+				require.NotNil(t, entry.GetVisibleSchema(old, false))
+				require.NotNil(t, entry.GetVisibleSchema(old, true))
+				old.BindAccessInfo(1, 0, 0)
+				require.Nil(t, entry.GetVisibleSchema(old, false), "another tenant cannot adopt this schema")
+				_, tenantErr := entryDB.TxnGetTableEntryByID(entry.ID, old)
+				require.Error(t, tenantErr)
+				old.BindAccessInfo(0, 0, 0)
+			} else {
+				require.Error(t, err)
+				require.Nil(t, entry.GetVisibleSchema(old, false))
+			}
+			require.Equal(t, oldTS, old.GetStartTS())
+			drop, err := mgr.StartTxn(nil)
+			require.NoError(t, err)
+			dropDB, err := drop.GetDatabase("temporary_schema_visibility")
+			require.NoError(t, err)
+			_, err = dropDB.DropRelationByName(tc.name)
+			require.NoError(t, err)
+			require.NoError(t, drop.Commit(context.Background()))
+			_, err = entryDB.TxnGetTableEntryByID(relation.(*mockTableHandle).entry.ID, old)
+			require.Error(t, err)
+			require.Nil(t, entry.GetVisibleSchema(old, false))
+		})
+	}
 }

@@ -344,15 +344,13 @@ insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
 on duplicate key update val = val + 1;
 ➤ AP QUERY PLAN ON ONE CN(16 core)[12,-1,0]  𝄀
 Multi Update  𝄀
-  ->  Filter  𝄀
-        Filter Cond: ((t_dedup_spill.__mo_rowid IS NULL) or (not (t_dedup_spill.val <=> #[0,3])))  𝄀
-        ->  Join  𝄀
-              Join Type: DEDUP (UPDATE)  𝄀
-              Join Cond: (t_dedup_spill.id = #[1,0]) shuffle: hash(t_dedup_spill.id)  𝄀
-              ->  Table Scan on d1.t_dedup_spill  𝄀
-              ->  Lock  𝄀
-                    ->  Project  𝄀
-                          ->  Table Function on generate_series
+  ->  Join  𝄀
+        Join Type: DEDUP (UPDATE)  𝄀
+        Join Cond: (t_dedup_spill.id = #[1,0]) shuffle: hash(t_dedup_spill.id)  𝄀
+        ->  Table Scan on d1.t_dedup_spill  𝄀
+        ->  Lock  𝄀
+              ->  Project  𝄀
+                    ->  Table Function on generate_series
 insert into t_dedup_spill select *, 0 from generate_series(200000, 600000) g
 on duplicate key update val = val + 1;
 select count(*) from t_dedup_spill;

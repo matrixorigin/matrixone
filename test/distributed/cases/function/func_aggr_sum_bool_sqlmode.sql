@@ -41,7 +41,8 @@ select sum(cast(i<>0 as tinyint)) from t;
 select avg(i<>0) from t;
 select avg(cast(i<>0 as tinyint)) from t;
 
--- sum(bool) -> bigint and avg(bool) -> double, matching MO's own sum(tinyint)
+-- sum(bool) -> bigint and avg(bool) -> decimal, matching the exact numeric
+-- AVG contract for the coerced TINYINT argument.
 drop table if exists ctas_types;
 create table ctas_types as select sum(i<>0) as s, avg(i<>0) as a from t;
 select column_name, data_type from information_schema.columns where table_schema = 'bool_sumavg_sqlmode' and table_name = 'ctas_types' order by column_name;

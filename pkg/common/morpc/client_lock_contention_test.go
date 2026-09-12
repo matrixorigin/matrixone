@@ -30,39 +30,77 @@ import (
 // TestGetBackendWithSlowConnection tests that getBackend doesn't block
 // when backend creation is slow (simulating network delay or crashed node)
 func TestGetBackendWithSlowConnection(t *testing.T) {
-	// Create a factory that simulates slow connection
-	slowFactory := &testBackendFactoryWithDelay{
-		delay: 100 * time.Millisecond,
+	const remote = "slow-backend"
+	factory := &blockingCreateFactory{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+		backend: &testBackend{id: 1, activeTime: time.Now()},
 	}
 
 	rc, err := NewClient(
 		"test-client",
-		slowFactory,
+		factory,
 		WithClientMaxBackendPerHost(2),
 		WithClientEnableAutoCreateBackend(),
 	)
 	require.NoError(t, err)
-	defer rc.Close()
+
+	var releaseOnce sync.Once
+	releaseFactory := func() {
+		releaseOnce.Do(func() { close(factory.release) })
+	}
+	t.Cleanup(func() {
+		releaseFactory()
+		require.NoError(t, rc.Close())
+	})
 
 	c := rc.(*client)
 
-	// First call should trigger async creation and return error quickly
-	start := time.Now()
-	b, err := c.getBackend("slow-backend", false)
-	elapsed := time.Since(start)
+	// Trigger asynchronous creation, then hold the factory call in progress.
+	b, err := c.getBackend(remote, false)
+	require.ErrorIs(t, err, ErrBackendCreating)
+	require.Nil(t, b)
+	select {
+	case <-factory.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend factory did not start")
+	}
 
-	// Should return error immediately without blocking
-	assert.Error(t, err)
-	assert.Nil(t, b)
-	assert.Less(t, elapsed, 50*time.Millisecond, "getBackend should not block")
+	c.mu.Lock()
+	creation := c.mu.creating[remote]
+	c.mu.Unlock()
+	require.NotNil(t, creation)
 
-	// Wait for async creation to complete
-	time.Sleep(150 * time.Millisecond)
+	// A lookup must complete while factory I/O remains blocked. The timeout is
+	// only a hang guard; the closed release channel is the phase barrier.
+	type lookupResult struct {
+		backend Backend
+		err     error
+	}
+	resultC := make(chan lookupResult, 1)
+	go func() {
+		backend, lookupErr := c.getBackend(remote, false)
+		resultC <- lookupResult{backend: backend, err: lookupErr}
+	}()
+	select {
+	case result := <-resultC:
+		require.ErrorIs(t, result.err, ErrBackendCreating)
+		require.Nil(t, result.backend)
+	case <-time.After(5 * time.Second):
+		t.Fatal("getBackend blocked behind backend factory creation")
+	}
 
-	// Second call should succeed with the created backend
-	b, err = c.getBackend("slow-backend", false)
-	assert.NoError(t, err)
-	assert.NotNil(t, b)
+	releaseFactory()
+	select {
+	case <-creation.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("backend creation did not finish")
+	}
+
+	// done closes only after the backend is published to the pool.
+	b, err = c.getBackend(remote, false)
+	require.NoError(t, err)
+	require.NotNil(t, b)
 }
 
 // TestGetBackendConcurrentWithSlowConnection tests that multiple concurrent

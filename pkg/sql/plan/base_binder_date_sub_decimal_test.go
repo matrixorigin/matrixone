@@ -447,3 +447,18 @@ func TestResetDateFunctionArgsDoesNotFoldCharColumn(t *testing.T) {
 	require.Equal(t, int64(types.Year_Month), extractInt64Value(normalizeExpr.Args[1]))
 	require.Equal(t, int64(types.Month), extractInt64Value(args[2]))
 }
+
+func TestResetDateFunctionArgsDoesNotFoldTextExpression(t *testing.T) {
+	ctx := context.Background()
+	dateExpr := makeDatetimeConst("2026-01-01 00:00:00")
+	textExpr := makeVarcharColumnExpr(0, 0)
+	textExpr.Typ.Id = int32(types.T_text)
+
+	args, err := resetDateFunctionArgs(ctx, dateExpr, makeIntervalExpr(textExpr, "DAY_SECOND"))
+	require.NoError(t, err)
+	require.Len(t, args, 3)
+	require.Equal(t, "to_interval", args[1].GetF().GetFunc().GetObjName())
+	require.Equal(t, textExpr, args[1].GetF().GetArgs()[0])
+	require.Equal(t, int64(types.Day_Second), extractInt64Value(args[1].GetF().GetArgs()[1]))
+	require.Equal(t, int64(types.Second), extractInt64Value(args[2]))
+}

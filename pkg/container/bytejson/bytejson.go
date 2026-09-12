@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	json2 "github.com/segmentio/encoding/json"
 )
 
@@ -40,6 +41,9 @@ func (bj ByteJson) String() string {
 
 func (bj ByteJson) Unquote() (string, error) {
 	if bj.Type == TpCodeBlob {
+		if _, _, ok := mysqlOpaqueValue(bj.GetString()); ok {
+			return string(bj.GetString()), nil
+		}
 		if payload, ok := bj.persistedBitPayload(); ok {
 			return base64.StdEncoding.EncodeToString(payload), nil
 		}
@@ -214,12 +218,15 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 		buf = append(buf, '"')
 	case TpCodeBlob:
 		buf = append(buf, '"')
-		if payload, ok := bj.persistedBitPayload(); ok {
+		data := bj.GetString()
+		if _, _, ok := mysqlOpaqueValue(data); ok {
+			buf = append(buf, data...)
+		} else if payload, ok := bj.persistedBitPayload(); ok {
 			start := len(buf)
 			buf = append(buf, make([]byte, base64.StdEncoding.EncodedLen(len(payload)))...)
 			base64.StdEncoding.Encode(buf[start:], payload)
 		} else {
-			buf = append(buf, bj.GetString()...)
+			buf = append(buf, data...)
 		}
 		buf = append(buf, '"')
 	case TpCodeOpaque, TpCodeBit:
@@ -367,13 +374,98 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 	return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+dataBytes]}
 }
 
-const persistedBitPrefix = "~mo:json-bit:v1:"
+const (
+	persistedBitPrefix         = "~mo:json-bit:v1:"
+	mysqlOpaquePrefix          = "base64:type"
+	MySQLOpaqueProtocolVersion = defines.MORPCVersion52
+)
+
+// NewMySQLOpaque creates the JSON representation MySQL uses for binary SQL
+// values after the cluster-wide protocol admission has completed. The caller
+// must pass the minimum protocol version supported by every executing CN;
+// older readers compare tagged and legacy payloads differently.
+func NewMySQLOpaque(protocolVersion int64, fieldType uint8, payload []byte) (ByteJson, error) {
+	if protocolVersion < MySQLOpaqueProtocolVersion {
+		return ByteJson{}, moerr.NewNotSupportedNoCtxf(
+			"MySQL binary JSON type tags require MORPC protocol version %d",
+			MySQLOpaqueProtocolVersion)
+	}
+	return ByteJson{
+		Type: TpCodeBlob,
+		Data: appendBinaryString(nil, mysqlOpaqueText(fieldType, payload)),
+	}, nil
+}
+
+func mysqlOpaqueText(fieldType uint8, payload []byte) string {
+	encodedLen := base64.StdEncoding.EncodedLen(len(payload))
+	buf := make([]byte, 0, len(mysqlOpaquePrefix)+3+1+encodedLen)
+	buf = append(buf, mysqlOpaquePrefix...)
+	buf = strconv.AppendUint(buf, uint64(fieldType), 10)
+	buf = append(buf, ':')
+	start := len(buf)
+	buf = append(buf, make([]byte, encodedLen)...)
+	base64.StdEncoding.Encode(buf[start:], payload)
+	return string(buf)
+}
+
+// mysqlOpaqueValue parses only the bounded tag header. Consumers validate or
+// decode the returned payload once for their own terminal operation.
+func mysqlOpaqueValue(payload []byte) (uint8, []byte, bool) {
+	if !bytes.HasPrefix(payload, []byte(mysqlOpaquePrefix)) {
+		return 0, nil, false
+	}
+	rest := payload[len(mysqlOpaquePrefix):]
+	fieldType := uint16(0)
+	for i, digit := range rest {
+		if digit == ':' {
+			if i == 0 {
+				return 0, nil, false
+			}
+			return uint8(fieldType), rest[i+1:], true
+		}
+		if i == 3 {
+			return 0, nil, false
+		}
+		if digit < '0' || digit > '9' {
+			return 0, nil, false
+		}
+		n := uint16(digit - '0')
+		if fieldType > (255-n)/10 {
+			return 0, nil, false
+		}
+		fieldType = fieldType*10 + n
+	}
+	return 0, nil, false
+}
+
+func (bj ByteJson) isPersistedBit() bool {
+	if bj.Type != TpCodeBlob {
+		return false
+	}
+	payload := bj.GetString()
+	if fieldType, encoded, ok := mysqlOpaqueValue(payload); ok {
+		if fieldType != 16 {
+			return false
+		}
+		_, valid := base64DecodedLen(encoded)
+		return valid
+	}
+	if !bytes.HasPrefix(payload, []byte(persistedBitPrefix)) {
+		return false
+	}
+	_, valid := base64DecodedLen(payload[len(persistedBitPrefix):])
+	return valid
+}
 
 func (bj ByteJson) persistedBitPayload() ([]byte, bool) {
 	if bj.Type != TpCodeBlob {
 		return nil, false
 	}
 	payload := bj.GetString()
+	if fieldType, encoded, ok := mysqlOpaqueValue(payload); ok && fieldType == 16 {
+		raw, err := base64.StdEncoding.DecodeString(string(encoded))
+		return raw, err == nil
+	}
 	if !bytes.HasPrefix(payload, []byte(persistedBitPrefix)) {
 		return nil, false
 	}
@@ -406,8 +498,9 @@ func (bj ByteJson) requiresLegacyBinaryEncoding() bool {
 
 // appendLegacyCompatibleJSON writes only type codes understood by readers
 // predating TpCodeOpaque and TpCodeBit. Opaque values use the legacy BLOB
-// representation; BIT values use a tagged BLOB payload whose subtype new
-// readers recover through TYPE, display, and comparison operations.
+// representation; BIT values keep the legacy sentinel so existing CAST AS JSON
+// display remains unchanged. Constructors that require MySQL's type16 tag use
+// NewMySQLOpaque directly and therefore do not enter this conversion.
 func appendLegacyCompatibleJSON(buf []byte, bj ByteJson) (TpCode, []byte, error) {
 	switch bj.Type {
 	case TpCodeOpaque:
@@ -490,8 +583,8 @@ func appendLegacyCompatibleValueEntry(buf []byte, docOff, valEntryOff int, bj By
 type binaryJSONSubtype uint8
 
 const (
-	binaryJSONBit binaryJSONSubtype = iota
-	binaryJSONBlob
+	binaryJSONBit  binaryJSONSubtype = 16
+	binaryJSONBlob binaryJSONSubtype = 252
 )
 
 const (
@@ -500,24 +593,33 @@ const (
 )
 
 type binaryJSONValueView struct {
-	subtype       binaryJSONSubtype
-	rawPayload    []byte
-	legacyEncoded []byte
-	fallbackRaw   []byte
+	subtype         binaryJSONSubtype
+	rawPayload      []byte
+	legacyEncoded   []byte
+	fallbackRaw     []byte
+	needsValidation bool
 }
 
 func binaryJSONValue(bj ByteJson) (binaryJSONValueView, bool) {
 	switch bj.Type {
 	case TpCodeBlob:
 		payload := bj.GetString()
+		if fieldType, encoded, ok := mysqlOpaqueValue(payload); ok {
+			return binaryJSONValueView{
+				subtype:         binaryJSONSubtype(fieldType),
+				legacyEncoded:   encoded,
+				fallbackRaw:     payload,
+				needsValidation: true,
+			}, true
+		}
 		if bytes.HasPrefix(payload, []byte(persistedBitPrefix)) {
 			encoded := payload[len(persistedBitPrefix):]
-			if _, ok := base64DecodedLen(encoded); ok {
-				return binaryJSONValueView{
-					subtype:       binaryJSONBit,
-					legacyEncoded: encoded,
-				}, true
-			}
+			return binaryJSONValueView{
+				subtype:         binaryJSONBit,
+				legacyEncoded:   encoded,
+				fallbackRaw:     payload,
+				needsValidation: true,
+			}, true
 		}
 		return binaryJSONValueView{
 			subtype:       binaryJSONBlob,
@@ -539,6 +641,53 @@ func binaryJSONValue(bj ByteJson) (binaryJSONValueView, bool) {
 	}
 }
 
+func resolveBinaryJSONValue(value binaryJSONValueView) binaryJSONValueView {
+	if !value.needsValidation {
+		return value
+	}
+	if _, ok := base64DecodedLen(value.legacyEncoded); ok {
+		value.needsValidation = false
+		return value
+	}
+	return binaryJSONValueView{
+		subtype:    binaryJSONBlob,
+		rawPayload: value.fallbackRaw,
+	}
+}
+
+func binaryJSONFallbackBytes(value binaryJSONValueView) []byte {
+	if value.fallbackRaw != nil {
+		return value.fallbackRaw
+	}
+	if value.legacyEncoded != nil {
+		return value.legacyEncoded
+	}
+	return value.rawPayload
+}
+
+func compareBinaryJSONValues(left, right binaryJSONValueView) (int, bool) {
+	if left.subtype != right.subtype {
+		return int(left.subtype) - int(right.subtype), true
+	}
+	switch {
+	case left.legacyEncoded != nil && right.legacyEncoded != nil:
+		if cmp, ok := compareDecodedBase64Payloads(left.legacyEncoded, right.legacyEncoded); ok {
+			return cmp, true
+		}
+	case left.legacyEncoded != nil:
+		if cmp, ok := compareDecodedBase64WithRaw(left.legacyEncoded, right.rawPayload); ok {
+			return cmp, true
+		}
+	case right.legacyEncoded != nil:
+		if cmp, ok := compareDecodedBase64WithRaw(right.legacyEncoded, left.rawPayload); ok {
+			return -cmp, true
+		}
+	default:
+		return bytes.Compare(left.rawPayload, right.rawPayload), true
+	}
+	return bytes.Compare(binaryJSONFallbackBytes(left), binaryJSONFallbackBytes(right)), false
+}
+
 // CompareBinaryJSON compares opaque JSON values by their MySQL subtype and
 // original bytes. TpCodeBlob is the legacy BLOB encoding and aliases Opaque.
 func CompareBinaryJSON(left, right ByteJson) (int, bool) {
@@ -547,28 +696,17 @@ func CompareBinaryJSON(left, right ByteJson) (int, bool) {
 	if !leftOK || !rightOK {
 		return 0, false
 	}
-	if leftValue.subtype != rightValue.subtype {
-		return int(leftValue.subtype) - int(rightValue.subtype), true
+	if leftValue.needsValidation || rightValue.needsValidation {
+		if leftValue.subtype == rightValue.subtype {
+			if cmp, ok := compareBinaryJSONValues(leftValue, rightValue); ok {
+				return cmp, true
+			}
+		}
+		leftValue = resolveBinaryJSONValue(leftValue)
+		rightValue = resolveBinaryJSONValue(rightValue)
 	}
-	switch {
-	case leftValue.legacyEncoded != nil && rightValue.legacyEncoded != nil:
-		if cmp, ok := compareDecodedBase64Payloads(leftValue.legacyEncoded, rightValue.legacyEncoded); ok {
-			return cmp, true
-		}
-		return bytes.Compare(leftValue.fallbackRaw, rightValue.fallbackRaw), true
-	case leftValue.legacyEncoded != nil:
-		if cmp, ok := compareDecodedBase64WithRaw(leftValue.legacyEncoded, rightValue.rawPayload); ok {
-			return cmp, true
-		}
-		return bytes.Compare(leftValue.fallbackRaw, rightValue.rawPayload), true
-	case rightValue.legacyEncoded != nil:
-		if cmp, ok := compareDecodedBase64WithRaw(rightValue.legacyEncoded, leftValue.rawPayload); ok {
-			return -cmp, true
-		}
-		return bytes.Compare(leftValue.rawPayload, rightValue.fallbackRaw), true
-	default:
-		return bytes.Compare(leftValue.rawPayload, rightValue.rawPayload), true
-	}
+	cmp, _ := compareBinaryJSONValues(leftValue, rightValue)
+	return cmp, true
 }
 
 // BinaryJSONPayloadLen returns the decoded byte length of an opaque JSON
@@ -616,11 +754,11 @@ func AppendCanonicalBinary(dst []byte, bj ByteJson) ([]byte, bool) {
 	if !ok {
 		return dst, false
 	}
+	start := len(dst)
 	dst = append(dst, canonicalBinaryMarker, byte(value.subtype))
 	if value.legacyEncoded == nil {
 		return append(dst, value.rawPayload...), true
 	}
-	start := len(dst)
 	var decodedBuffer [binaryJSONCompareDecodedChunkSize]byte
 	for offset := 0; offset < len(value.legacyEncoded); {
 		n, nextOffset, decoded := decodeBase64Chunk(
@@ -630,6 +768,7 @@ func AppendCanonicalBinary(dst []byte, bj ByteJson) ([]byte, bool) {
 		)
 		if !decoded {
 			dst = dst[:start]
+			dst = append(dst, canonicalBinaryMarker, byte(binaryJSONBlob))
 			return append(dst, value.fallbackRaw...), true
 		}
 		dst = append(dst, decodedBuffer[:n]...)

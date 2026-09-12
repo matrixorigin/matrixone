@@ -356,6 +356,7 @@ func init() {
 		"month":                      MONTH,
 		"mode":                       MODE,
 		"memory":                     MEMORY,
+		"member":                     MEMBER,
 		"modifies":                   UNUSED,
 		"multilinestring":            MULTILINESTRING,
 		"multipoint":                 MULTIPOINT,

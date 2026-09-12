@@ -15,12 +15,51 @@
 package incrservice
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestNextValueInRangeAgainstEnumeration(t *testing.T) {
+	check := func(from, to, step, increment, offset uint64) {
+		t.Helper()
+		var want uint64
+		var found bool
+		for v := from; v < to; {
+			if v >= offset && (v-offset)%increment == 0 {
+				want, found = v, true
+				break
+			}
+			if v > math.MaxUint64-step {
+				break
+			}
+			v += step
+		}
+		value, _, ok := nextValueInRange(from, to, step, increment, offset)
+		if ok != found || ok && value != want {
+			t.Fatalf("range=[%d,%d) step=%d series=%d/%d: got (%d,%t), want (%d,%t)",
+				from, to, step, increment, offset, value, ok, want, found)
+		}
+	}
+	for from := uint64(1); from <= 12; from++ {
+		for step := uint64(1); step <= 4; step++ {
+			for increment := uint64(1); increment <= 9; increment++ {
+				for offset := uint64(1); offset <= increment; offset++ {
+					check(from, 24, step, increment, offset)
+					check(from, from, step, increment, offset)
+				}
+			}
+		}
+	}
+	for _, increment := range []uint64{3, 64, 65535} {
+		for _, offset := range []uint64{1, 2, increment} {
+			check(math.MaxUint64-8, math.MaxUint64, 1, increment, offset)
+		}
+	}
+}
 
 func TestRangeCount(t *testing.T) {
 	r := &ranges{step: 1, values: []uint64{1, 2, 2, 3, 3, 4}}
@@ -62,6 +101,87 @@ func TestRangeNext(t *testing.T) {
 	r = &ranges{step: 1, values: []uint64{1000, 1001}}
 	assert.Equal(t, uint64(1000), r.next())
 	assert.Equal(t, 0, len(r.values))
+}
+
+func TestRangeNextForStatementSeries(t *testing.T) {
+	tests := []struct {
+		name      string
+		step      uint64
+		values    []uint64
+		increment uint64
+		offset    uint64
+		want      []uint64
+	}{
+		{
+			name:      "unit range selects offset residue",
+			step:      1,
+			values:    []uint64{1, 10},
+			increment: 3,
+			offset:    2,
+			want:      []uint64{2, 5, 8},
+		},
+		{
+			name:      "unit range selects first residue",
+			step:      1,
+			values:    []uint64{1, 10},
+			increment: 3,
+			offset:    1,
+			want:      []uint64{1, 4, 7},
+		},
+		{
+			name:      "non unit range uses congruence",
+			step:      2,
+			values:    []uint64{1, 15},
+			increment: 4,
+			offset:    3,
+			want:      []uint64{3, 7, 11},
+		},
+		{
+			name:      "incompatible residues are discarded",
+			step:      2,
+			values:    []uint64{1, 15},
+			increment: 4,
+			offset:    2,
+			want:      []uint64{},
+		},
+		{
+			name:      "later range remains usable",
+			step:      2,
+			values:    []uint64{1, 4, 11, 18},
+			increment: 3,
+			offset:    2,
+			want:      []uint64{11, 17},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &ranges{step: tt.step, values: append([]uint64(nil), tt.values...)}
+			options := NormalizeAutoIncrementOptions(tt.increment, tt.offset)
+			got := make([]uint64, 0, len(tt.want))
+			for {
+				value := r.nextFor(options)
+				if value == 0 {
+					break
+				}
+				got = append(got, value)
+			}
+			require.Equal(t, tt.want, got)
+			require.True(t, r.empty())
+			require.Equal(t, tt.step, r.step)
+		})
+	}
+}
+
+func TestRangeNextForZeroAndInvalidOptionsNormalizeSafely(t *testing.T) {
+	r := &ranges{step: 1, values: []uint64{1, 4}}
+	// A zero increment and an offset outside the series are normalized to the
+	// ordinary MySQL default instead of turning the range into an infinite or
+	// invalid arithmetic path.
+	options := NormalizeAutoIncrementOptions(0, 99)
+	require.Equal(t, AutoIncrementOptions{Increment: 1, Offset: 1}, options)
+	require.Equal(t, uint64(1), r.nextFor(options))
+	require.Equal(t, uint64(2), r.nextFor(options))
 }
 
 func TestRangeLeft(t *testing.T) {

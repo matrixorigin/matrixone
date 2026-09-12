@@ -1805,10 +1805,14 @@ func TestIntermediateDistinctSpillTerminalLeafContinuesWithinHardAccount(t *test
 			groups.SetRowCount(1)
 			groupValues := vector.MustFixedColNoTypeCheck[int32](groups.Vecs[0])
 			const records = 20_000
-			var payload [8]byte
+			var payload [4]byte
 			for row := 0; row < records; row++ {
 				groupValues[0] = int32(row % 32)
-				binary.BigEndian.PutUint64(payload[:], uint64(row))
+				// countDistinctAgg(1) uses an int32 argument.  The spill
+				// payload must use that argument's canonical fixed-width
+				// representation; an arbitrary 8-byte test payload would be a
+				// malformed record for the fixed-index recovery path.
+				binary.LittleEndian.PutUint32(payload[:], uint32(row))
 				_, err := controller.writeRecord(
 					partition.writer,
 					test.routeHash(row),

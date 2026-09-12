@@ -246,6 +246,19 @@ func TestCanonicalJSONBinaryContract(t *testing.T) {
 		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, bit)),
 		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, raw)),
 	)
+
+	malformed := stringByteJSON(bytejson.TpCodeBlob, "base64:type16:not-base64")
+	valid, err := bytejson.NewMySQLOpaque(bytejson.MySQLOpaqueProtocolVersion, 252, []byte(malformed.GetString()))
+	require.NoError(t, err)
+	malformedNested, err := bytejson.CreateByteJSON([]any{malformed})
+	require.NoError(t, err)
+	validNested, err := bytejson.CreateByteJSON([]any{valid})
+	require.NoError(t, err)
+	require.Zero(t, bytejson.CompareByteJson(malformedNested, validNested))
+	require.Equal(t,
+		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, malformedNested)),
+		AppendCanonicalJSON(nil, mustEncodeByteJSON(t, validNested)),
+	)
 }
 
 func TestCanonicalJSONMatchesScalarEquality(t *testing.T) {

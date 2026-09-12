@@ -1,4 +1,5 @@
 -- test hex/unhex and to_base64/from_base64 function
+drop table if exists test_base, t1, t2, base64_values;
 SELECT hex('\xa7');
 SELECT unhex('616263');
 
@@ -32,6 +33,23 @@ select from_base64('MjAwMy0wOS0wNg==');
 create table test_base(c1 varchar(25));
 insert into test_base values(to_base64('blue')),(to_base64('232525')),(to_base64('lijfe23253'));
 select from_base64(c1) from test_base;
+
+-- Exact decoded bytes, whitespace, and row-local NULL/error handling.
+SELECT HEX(FROM_BASE64('YQ==')) AS one_byte, HEX(FROM_BASE64('YWI=')) AS two_bytes;
+SELECT HEX(FROM_BASE64(CONCAT(' Y', CHAR(9), 'Q', CHAR(13), '=', CHAR(10), '= '))) AS whitespace;
+create table base64_values(id int primary key, v varchar(64));
+insert into base64_values values (1,'YQ=='),(2,NULL),(3,'invalid!'),(4,'YWI='),(5,''),(6,'AAEC/w==');
+select id, HEX(FROM_BASE64(v)) AS decoded from base64_values order by id;
+PREPARE base64_stmt FROM 'SELECT HEX(FROM_BASE64(?)) AS decoded';
+SET @base64_input='YQ==';
+EXECUTE base64_stmt USING @base64_input;
+SET @base64_input='invalid!';
+EXECUTE base64_stmt USING @base64_input;
+SET @base64_input='YWI=';
+EXECUTE base64_stmt USING @base64_input;
+DEALLOCATE PREPARE base64_stmt;
+SET @base64_input=NULL;
+drop table base64_values;
 
 -- test serial() and serial_full()
 CREATE TABLE t1 (name varchar(255), age int);
@@ -129,3 +147,4 @@ select serial_extract(min(serial(id, `vecf64_3`, `vecf64_5`)), 1 as vecf64(3)) f
 select serial_extract(max(serial_full(cast(id as decimal), `vecf64_3`)), 0 as decimal) from vtab64;
 select serial_extract(min(serial_full(cast(id as decimal), `vecf64_3`)), 1 as vecf64(3)) from vtab64;
 drop table vtab64;
+drop table test_base, t1, t2;

@@ -1658,6 +1658,12 @@ func (ctr *container) getNextFinalResult(
 					ctr.groupByBatches[j].Vecs, vecs[j])
 			}
 		}
+		// Publish diagnostics only after every final vector has materialized;
+		// a later vector/allocation error must not expose warnings for a failed
+		// statement.
+		for _, ag := range ctr.aggList {
+			aggexec.ReportGroupConcatWarnings(ag, proc.GetWarningSink())
+		}
 
 		ctr.freeAggList()
 	}
@@ -1696,6 +1702,51 @@ func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer proc
 		return vm.CancelResult, err
 	}
 	return res, nil
+}
+
+// newRuntimeEmptyGroupingSetBatch builds the key rows required by SQL when an
+// all-rolled grouping set receives no input. A nil setIDs slice describes one
+// legacy/static grouping set whose every key is rolled up. A non-nil slice
+// describes dynamic grouping sets, whose final key column carries the set id.
+func (ctr *container) newRuntimeEmptyGroupingSetBatch(
+	groupTypes []types.Type,
+	setIDs []int64,
+) (*batch.Batch, error) {
+	rows := 1
+	rollupColumns := len(groupTypes)
+	if setIDs != nil {
+		rows = len(setIDs)
+		rollupColumns--
+	}
+	output := batch.NewOffHeapWithSize(len(groupTypes))
+	if err := output.SetAllocationAccount(ctr.groupByAllocation); err != nil {
+		output.Clean(ctr.mp)
+		return nil, err
+	}
+	for i := 0; i < rollupColumns; i++ {
+		vec, err := vector.NewRollupConstWithAllocation(
+			groupTypes[i], rows, ctr.mp, ctr.groupByAllocation)
+		if err != nil {
+			output.Clean(ctr.mp)
+			return nil, err
+		}
+		output.Vecs[i] = vec
+	}
+	if setIDs != nil {
+		setIDVector, err := vector.NewOffHeapVecWithTypeAndAllocation(
+			groupTypes[len(groupTypes)-1], ctr.groupByAllocation)
+		if err != nil {
+			output.Clean(ctr.mp)
+			return nil, err
+		}
+		output.Vecs[len(output.Vecs)-1] = setIDVector
+		if err = vector.AppendFixedList(setIDVector, setIDs, nil, ctr.mp); err != nil {
+			output.Clean(ctr.mp)
+			return nil, err
+		}
+	}
+	output.SetRowCount(rows)
+	return output, nil
 }
 
 func (ctr *container) memUsed() int64 {

@@ -19,10 +19,16 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -72,6 +78,72 @@ func TestCompilePreparedMongoScanDoesNotMutateCachedPlan(t *testing.T) {
 	require.Zero(t, node.ExternScan.MongodbScan.ConnectionId)
 	require.Len(t, node.ExternScan.MongodbScan.Columns, 2)
 	require.Equal(t, []string{sqlmongodb.GetMappingByTableIDSQL(7, 9)}, exec.sqls)
+}
+
+func TestCompilePlanScopeMongoScanUsesConfiguredResidualFilter(t *testing.T) {
+	exec := &mongoDBMappingTestExecutor{results: make(map[string]executor.Result)}
+	c, _, _ := newMongoDBMappingTestCompile(t, gomock.NewController(t), exec)
+	c.addr = "cn-local:6001"
+	c.anal = &AnalyzeModule{qry: &plan.Query{}, isFirst: true}
+	c.SetSchedulingTraceRecorder(new(schedule.TraceRecorder))
+	c.beginSchedulingTraceAttempt()
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	previousProtocol, hadPreviousProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	t.Cleanup(func() {
+		if hadPreviousProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previousProtocol)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	columns := []sqlmongodb.ColumnMapping{{
+		Name: "measurement", Path: "measurement", TypeID: int32(types.T_int64), Conversion: sqlmongodb.ConversionStrict,
+	}}
+	exec.results[sqlmongodb.GetMappingByTableIDSQL(7, 9)] = mongoDBMappingLookupResult(t, c.proc, columns)
+
+	node := &plan.Node{
+		NodeType: plan.Node_EXTERNAL_SCAN,
+		TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+			{Name: "measurement", ColId: 1, Typ: plan.Type{Id: int32(types.T_int64)}},
+			{ColId: catalog.ExternalQueryColId, Name: catalog.ExternalQuery, Hidden: true,
+				Typ: plan.Type{Id: int32(types.T_varchar)}},
+		}},
+		ExternScan: &plan.ExternScan{
+			Type: int32(plan.ExternType_MONGODB_TB),
+			MongodbScan: &plan.MongoScan{
+				TableId: 9, Database: "telemetry", Collection: "events",
+				Columns: sqlmongodb.ColumnsToPlan(columns), MaxParallelism: 1,
+			},
+		},
+	}
+	queryColumn := mongoQueryTestColumn(1, catalog.ExternalQuery, types.T_varchar)
+	residual := mongoQueryTestFunction(">", function.GREAT_THAN,
+		mongoQueryTestColumn(0, "measurement", types.T_int64), &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: 0},
+			}},
+		})
+	node.FilterList = []*plan.Expr{
+		mongoQueryTestFunction("=", function.EQUAL, queryColumn,
+			mongoQueryTestString(`{"filter":{"site_id":"site-west"}}`)),
+		residual,
+	}
+
+	scopes, err := c.compilePlanScope(0, 0, []*plan.Node{node})
+	require.NoError(t, err)
+	require.Len(t, scopes, 1)
+	defer ReleaseScopes(scopes)
+
+	root, ok := scopes[0].RootOp.(*filter.Filter)
+	require.True(t, ok)
+	require.Len(t, root.FilterExprs, 1)
+	require.Equal(t, residual, root.FilterExprs[0])
+	scan, ok := root.GetOperatorBase().GetChildren(0).(*mongoscan.MongoScan)
+	require.True(t, ok)
+	require.Len(t, scan.Scan.Columns, 1)
+	require.Equal(t, "measurement", scan.Scan.Columns[0].Name)
 }
 
 func mongoDBMappingLookupResult(

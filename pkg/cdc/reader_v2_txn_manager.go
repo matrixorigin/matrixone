@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,9 +39,11 @@ import (
 //     the private rollbackLocked instead of the public RollbackTransaction to avoid
 //     re-entrant locking and potential deadlocks.
 type TransactionManager struct {
-	sinker           Sinker
-	watermarkUpdater WatermarkUpdater
-	watermarkKey     *WatermarkKey
+	sinker              Sinker
+	watermarkUpdater    WatermarkUpdater
+	watermarkKey        *WatermarkKey
+	ownerFence          *OwnerFence
+	watermarkGeneration uint64
 
 	// Protects tracker and transactional state transitions
 	mu sync.Mutex
@@ -53,6 +56,43 @@ type TransactionManager struct {
 	taskId    string
 	dbName    string
 	tableName string
+}
+
+type targetOwnershipReleaser interface {
+	releaseTargetOwnership() error
+}
+
+// joinErrorsPreservingSingle preserves a lone error's concrete identity. Some
+// callers classify moerr values by concrete type; errors.Join(err, nil) would
+// unnecessarily replace that value with a joinError. If both operations fail,
+// retain both causes for diagnosis.
+func joinErrorsPreservingSingle(first, second error) error {
+	if first == nil {
+		return second
+	}
+	if second == nil {
+		return first
+	}
+	return errors.Join(first, second)
+}
+
+func (tm *TransactionManager) releaseTargetOwnership() error {
+	if releaser, ok := tm.sinker.(targetOwnershipReleaser); ok {
+		return releaser.releaseTargetOwnership()
+	}
+	return nil
+}
+
+// SetOwnerFence installs the durable daemon-claim check used by stable-epoch
+// tasks. Legacy/direct users leave it nil.
+func (tm *TransactionManager) SetOwnerFence(fence *OwnerFence) {
+	tm.ownerFence = fence
+}
+
+// SetWatermarkGeneration binds stable progress to the source table incarnation
+// that produced it. Legacy callers leave generation zero.
+func (tm *TransactionManager) SetWatermarkGeneration(sourceTableID uint64) {
+	tm.watermarkGeneration = sourceTableID
 }
 
 // NewTransactionManager creates a new transaction manager
@@ -130,7 +170,7 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, fromTs, toTs
 			zap.String("table", tm.tableName),
 			zap.Error(err),
 		)
-		return err
+		return joinErrorsPreservingSingle(err, tm.releaseTargetOwnership())
 	}
 
 	// Mark as begun
@@ -157,6 +197,19 @@ func (tm *TransactionManager) BeginTransaction(ctx context.Context, fromTs, toTs
 func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
+	return tm.commitLocked(ctx, true)
+}
+
+// CommitTransactionWithoutWatermark commits an intermediate, retry-safe
+// initial-snapshot group. The caller must guarantee that a retry reads the same
+// immutable source epoch. Only the final group may publish the watermark.
+func (tm *TransactionManager) CommitTransactionWithoutWatermark(ctx context.Context) error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	return tm.commitLocked(ctx, false)
+}
+
+func (tm *TransactionManager) commitLocked(ctx context.Context, updateWatermark bool) error {
 	if tm.tracker == nil {
 		logutil.Warn(
 			"cdc.txn_manager.commit_without_tracker",
@@ -206,32 +259,48 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 			zap.String("to-ts", toTs.ToString()),
 			zap.Error(err),
 		)
-		return err
+		// Commit failures can be ambiguous, but the executor has already
+		// detached the sql.Tx. Do not retain the task/table advisory lock while
+		// this pipeline waits for cleanup or retry; a replacement owner must be
+		// able to reacquire it and replay from the durable watermark.
+		return joinErrorsPreservingSingle(err, tm.releaseTargetOwnership())
 	}
 
-	// Step 2: Update watermark (persistent proof of success)
-	// This MUST happen BEFORE marking tracker as committed
-	if err := tm.watermarkUpdater.UpdateWatermarkOnly(
-		ctx,
-		tm.watermarkKey,
-		&toTs,
-	); err != nil {
-		logutil.Error(
-			"cdc.txn_manager.update_watermark_failed",
-			zap.String("task-id", tm.taskId),
-			zap.Uint64("account-id", tm.accountId),
-			zap.String("db", tm.dbName),
-			zap.String("table", tm.tableName),
-			zap.String("to-ts", toTs.ToString()),
-			zap.Error(err),
-		)
-		// Note: UpdateWatermarkOnly always returns nil (eventual consistency)
-		// But we log it anyway for monitoring
+	if updateWatermark {
+		// Step 2: Update watermark (persistent proof of success). This MUST
+		// happen before marking the tracker as committed. Intermediate snapshot
+		// groups deliberately skip this step.
+		if err := tm.watermarkUpdater.UpdateWatermarkOnly(
+			WithWatermarkOwnerFence(ctx, tm.ownerFence, tm.watermarkGeneration),
+			tm.watermarkKey,
+			&toTs,
+		); err != nil {
+			logutil.Error(
+				"cdc.txn_manager.update_watermark_failed",
+				zap.String("task-id", tm.taskId),
+				zap.Uint64("account-id", tm.accountId),
+				zap.String("db", tm.dbName),
+				zap.String("table", tm.tableName),
+				zap.String("to-ts", toTs.ToString()),
+				zap.Error(err),
+			)
+			return joinErrorsPreservingSingle(err, tm.releaseTargetOwnership())
+		}
+	}
+
+	// The target lock protects externally visible effects, not pipeline idle
+	// time. Release it after every committed transaction, including an
+	// intermediate initial-snapshot group. A replacement can then make
+	// progress if this owner stalls while collecting the next group.
+	if err := tm.releaseTargetOwnership(); err != nil {
+		return err
 	}
 
 	// Step 3: Mark tracker as committed (memory state sync)
 	tm.tracker.MarkCommit()
-	tm.tracker.MarkWatermarkUpdated()
+	if updateWatermark {
+		tm.tracker.MarkWatermarkUpdated()
+	}
 
 	logutil.Debug(
 		"cdc.txn_manager.commit_success",
@@ -240,6 +309,7 @@ func (tm *TransactionManager) CommitTransaction(ctx context.Context) error {
 		zap.String("db", tm.dbName),
 		zap.String("table", tm.tableName),
 		zap.String("to-ts", toTs.ToString()),
+		zap.Bool("watermark-updated", updateWatermark),
 	)
 
 	// Step 4: Clean up tracker to allow next transaction to begin

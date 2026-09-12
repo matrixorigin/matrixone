@@ -17,6 +17,7 @@ package isolated
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -24,7 +25,6 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -32,24 +32,15 @@ import (
 
 func runIssue26114ClusterTest(t *testing.T, fn func(embed.Cluster)) {
 	t.Helper()
-	cluster, err := embed.StartTestCluster(
-		embed.WithCNCount(1),
-		embed.WithPreStart(func(service embed.ServiceOperator) {
-			if service.ServiceType() != metadata.ServiceType_CN {
-				return
-			}
-			service.Adjust(func(config *embed.ServiceConfig) {
-				config.CN.LockService.MaxFixedSliceSize = 10001
-				config.CN.LockService.MaxLockRowCount = 10000
-				config.CN.Frontend.SkipCheckUser = false
-			})
-		}),
-	)
-	if cluster != nil {
-		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
-	}
-	require.NoError(t, err)
-	fn(cluster)
+	// The two subtests reset catalog state independently. Discard the shared
+	// process fixture at the test boundary as an additional ownership guard so
+	// a cleanup failure can never leak state into a later test invocation.
+	t.Cleanup(func() {
+		if closeErr := embed.CloseSingleCNBaseClusterTests(); closeErr != nil {
+			t.Errorf("close shared single-CN fixture: %v", closeErr)
+		}
+	})
+	embed.RunSingleCNBaseClusterTests(t, fn)
 }
 
 func execIssue26114SQLRequire(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
@@ -58,8 +49,19 @@ func execIssue26114SQLRequire(t *testing.T, ctx context.Context, db *sql.DB, sta
 	require.NoErrorf(t, err, "exec failed: %s", statement)
 }
 
-func execIssue26114SQLMaybe(ctx context.Context, db *sql.DB, statement string) {
-	_, _ = db.ExecContext(ctx, statement)
+func execIssue26114SQLMaybe(ctx context.Context, db *sql.DB, statement string) error {
+	_, err := db.ExecContext(ctx, statement)
+	return err
+}
+
+func cleanupIssue26114Catalog(ctx context.Context, db *sql.DB, statements ...string) error {
+	var cleanupErr error
+	for _, statement := range statements {
+		if err := execIssue26114SQLMaybe(ctx, db, statement); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("%s: %w", statement, err))
+		}
+	}
+	return cleanupErr
 }
 
 func createIssue26114Account(
@@ -172,14 +174,18 @@ func runIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
-		execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop snapshot if exists "+tableSnapshot)
-		execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop snapshot if exists "+dbSnapshot)
-		execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop database if exists `"+sourceDB+"`")
-		execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop database if exists `"+dbSource+"`")
-		execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop account if exists "+accountName)
+		if cleanupErr := cleanupIssue26114Catalog(cleanupCtx, sysDB,
+			"drop snapshot if exists "+tableSnapshot,
+			"drop snapshot if exists "+dbSnapshot,
+			"drop database if exists `"+sourceDB+"`",
+			"drop database if exists `"+dbSource+"`",
+			"drop account if exists "+accountName,
+		); cleanupErr != nil {
+			t.Errorf("issue 26114 quota catalog cleanup failed: %v", cleanupErr)
+		}
 	}()
 
-	execIssue26114SQLMaybe(ctx, sysDB, "drop account if exists "+accountName)
+	require.NoError(t, execIssue26114SQLMaybe(ctx, sysDB, "drop account if exists "+accountName))
 	accountID := createIssue26114Account(t, ctx, sysDB, accountName, "111")
 	execIssue26114SQLRequire(t, ctx, sysDB, "select mo_feature_registry_upsert('branch', 'Branch feature', '{\"allowed_scope\":[]}', true)")
 	execIssue26114SQLRequire(t, ctx, sysDB, fmt.Sprintf(
@@ -285,12 +291,16 @@ func runIssue26114LegacyCrossAccountMetadataCountsTowardTargetQuota(
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
-		execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop snapshot if exists "+snapshot)
-		execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop database if exists `"+sourceDB+"`")
-		execIssue26114SQLMaybe(cleanupCtx, sysDB, "drop account if exists "+accountName)
+		if cleanupErr := cleanupIssue26114Catalog(cleanupCtx, sysDB,
+			"drop snapshot if exists "+snapshot,
+			"drop database if exists `"+sourceDB+"`",
+			"drop account if exists "+accountName,
+		); cleanupErr != nil {
+			t.Errorf("issue 26114 legacy catalog cleanup failed: %v", cleanupErr)
+		}
 	}()
 
-	execIssue26114SQLMaybe(ctx, sysDB, "drop account if exists "+accountName)
+	require.NoError(t, execIssue26114SQLMaybe(ctx, sysDB, "drop account if exists "+accountName))
 	accountID := createIssue26114Account(t, ctx, sysDB, accountName, "111")
 	execIssue26114SQLRequire(t, ctx, sysDB, "select mo_feature_registry_upsert('branch', 'Branch feature', '{\"allowed_scope\":[]}', true)")
 	execIssue26114SQLRequire(t, ctx, sysDB, fmt.Sprintf(

@@ -1,0 +1,72 @@
+drop database if exists bounded_result_metadata;
+create database bounded_result_metadata;
+use bounded_result_metadata;
+create table source(s varchar(12) not null, b varbinary(12) not null);
+insert into source values ('hello', _binary '0123456789ab');
+create table bounded_network_ctas as
+select inet_ntoa(16909060) as v4_text,
+inet6_aton('2001:db8::1') as network_bytes,
+inet6_ntoa(unhex('20010DB8000000000000000000000001')) as v6_text
+from source;
+select column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'bounded_result_metadata' and table_name = 'bounded_network_ctas'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
+v4_text  ¦  VARCHAR(31)  ¦  NO  𝄀
+network_bytes  ¦  VARBINARY(16)  ¦  YES  𝄀
+v6_text  ¦  VARCHAR(39)  ¦  YES
+select v4_text, hex(network_bytes), v6_text from bounded_network_ctas;
+➤ v4_text[12,31,0]  ¦  hex(network_bytes)[12,32,0]  ¦  v6_text[12,39,0]  𝄀
+1.2.3.4  ¦  20010DB8000000000000000000000001  ¦  2001:db8::1
+create table bounded_string_ctas as
+select bin(1) as bin_v,
+conv('10', 10, 2) as conv_v,
+hex(1) as hex_num,
+hex(s) as hex_text,
+unhex('41') as unhex_v,
+md5(s) as md5_v,
+sha1(s) as sha1_v,
+sha2(s, 512) as sha2_v,
+uncompressed_length(compress(s)) as uncompressed_v
+from source;
+select column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'bounded_result_metadata' and table_name = 'bounded_string_ctas'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
+bin_v  ¦  VARCHAR(65)  ¦  NO  𝄀
+conv_v  ¦  VARCHAR(65)  ¦  YES  𝄀
+hex_num  ¦  VARCHAR(16)  ¦  NO  𝄀
+hex_text  ¦  VARCHAR(96)  ¦  NO  𝄀
+unhex_v  ¦  VARBINARY(4)  ¦  YES  𝄀
+md5_v  ¦  VARCHAR(32)  ¦  NO  𝄀
+sha1_v  ¦  VARCHAR(40)  ¦  NO  𝄀
+sha2_v  ¦  VARCHAR(128)  ¦  YES  𝄀
+uncompressed_v  ¦  INT(0)  ¦  YES
+select bin_v, conv_v, hex_num, hex_text, hex(unhex_v), md5_v, sha1_v, sha2_v, uncompressed_v
+from bounded_string_ctas;
+➤ bin_v[12,65,0]  ¦  conv_v[12,65,0]  ¦  hex_num[12,16,0]  ¦  hex_text[12,96,0]  ¦  hex(unhex_v)[12,8,0]  ¦  md5_v[12,32,0]  ¦  sha1_v[12,40,0]  ¦  sha2_v[12,128,0]  ¦  uncompressed_v[4,32,0]  𝄀
+1  ¦  1010  ¦  1  ¦  68656C6C6F  ¦  41  ¦  5d41402abc4b2a76b9719d911017c592  ¦  aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d  ¦  9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca72323c3d99ba5c11d7c7acc6e14b8c5da0c4663475c2e5c3adef46f73bcdec043  ¦  5
+create table bounded_binary_ctas as
+select compress(s) as compressed_v,
+compress(b) as compressed_binary_v,
+uncompress(compress(s)) as uncompressed_v,
+aes_encrypt(b, 'key') as aes_v,
+aes_encrypt(s, 'key') as aes_text_v
+from source;
+select column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = 'bounded_result_metadata' and table_name = 'bounded_binary_ctas'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
+compressed_v  ¦  VARBINARY(68)  ¦  YES  𝄀
+compressed_binary_v  ¦  VARBINARY(32)  ¦  YES  𝄀
+uncompressed_v  ¦  BLOB(0)  ¦  YES  𝄀
+aes_v  ¦  VARBINARY(16)  ¦  YES  𝄀
+aes_text_v  ¦  VARBINARY(64)  ¦  YES
+select length(compressed_v), length(compressed_binary_v), uncompressed_v,
+length(aes_v), length(aes_text_v) from bounded_binary_ctas;
+➤ length(compressed_v)[-5,64,0]  ¦  length(compressed_binary_v)[-5,64,0]  ¦  uncompressed_v[-4,65535,0]  ¦  length(aes_v)[-5,64,0]  ¦  length(aes_text_v)[-5,64,0]  𝄀
+21  ¦  28  ¦  hello  ¦  16  ¦  16
+drop database bounded_result_metadata;

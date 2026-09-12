@@ -29,6 +29,13 @@ func TestLineageOwnerLifecycleLockSQLUsesStableCatalogWrite(t *testing.T) {
 	)
 }
 
+func TestLineageOwnerLifecyclePessimisticLockSQLUsesRowLock(t *testing.T) {
+	require.Equal(t,
+		"select feature_code from mo_catalog.mo_feature_registry where feature_code = 'SNAPSHOT' for update",
+		LineageOwnerLifecyclePessimisticLockSQL(),
+	)
+}
+
 func TestLineageOwnerLifecycleLockSerializesEmptyProbe(t *testing.T) {
 	var (
 		stableRow sync.Mutex

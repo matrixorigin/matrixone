@@ -32,7 +32,7 @@ import (
 
 func TestCDC_Sinker1(t *testing.T) {
 	var mock sqlmock.Sqlmock
-	mockFn := func(_, _, _ string, _ int, _ string) (db *sql.DB, err error) {
+	mockFn := func(_ context.Context, _, _, _ string, _ int, _ string) (db *sql.DB, err error) {
 		db, mock, err = sqlmock.New()
 		return
 	}
@@ -40,6 +40,7 @@ func TestCDC_Sinker1(t *testing.T) {
 	defer stub.Reset()
 
 	executor, err := cdc.NewExecutor(
+		context.Background(),
 		"root",
 		"123456",
 		"127.0.0.1",

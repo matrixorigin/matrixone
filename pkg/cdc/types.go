@@ -19,16 +19,20 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -48,15 +52,177 @@ type ErrorContext struct {
 	IsPauseOrCancel bool // Whether this is a pause/cancel control signal (optional, auto-detected if not set)
 }
 
+// WatermarkCleanupMode separates stream progress ownership from diagnostic
+// ownership. A failed stream must retire its progress while retaining retry
+// metadata and its task-generation fence for a replacement pipeline in the
+// same daemon generation. Task deletion, successful completion, and
+// control-only shutdown still remove all state.
+type WatermarkCleanupMode uint8
+
+const (
+	WatermarkCleanupAll WatermarkCleanupMode = iota
+	WatermarkCleanupKeepDiagnostic
+)
+
 // WatermarkUpdater manages CDC watermarks
 type WatermarkUpdater interface {
-	RemoveCachedWM(ctx context.Context, key *WatermarkKey) (err error)
+	RemoveCachedWM(ctx context.Context, key *WatermarkKey, mode WatermarkCleanupMode) (err error)
 	UpdateWatermarkErrMsg(ctx context.Context, key *WatermarkKey, errMsg string, errorCtx *ErrorContext) (err error)
 	GetFromCache(ctx context.Context, key *WatermarkKey) (watermark types.TS, err error)
 	GetOrAddCommitted(ctx context.Context, key *WatermarkKey, watermark *types.TS) (ret types.TS, err error)
 	UpdateWatermarkOnly(ctx context.Context, key *WatermarkKey, watermark *types.TS) (err error)
 	IsCircuitBreakerOpen(key *WatermarkKey) bool
 	GetCommitFailureCount(key *WatermarkKey) uint32
+}
+
+// OwnerFence represents one immutable daemon-task claim generation. The
+// pointer identity is intentionally stable: all table pipelines created by the
+// same executor generation share it, which lets the asynchronous watermark
+// writer validate that claim once per task generation instead of once per
+// table.
+type OwnerFence struct {
+	check      func(context.Context) error
+	generation time.Time
+	sequence   uint64
+}
+
+var ownerFenceSequence atomic.Uint64
+
+// OwnerFenceLostError is a lifecycle result, not a table-data failure. It
+// means this execution generation is obsolete and must stop without publishing
+// its error into shared CDC table metadata.
+type OwnerFenceLostError struct{ err error }
+
+func (e *OwnerFenceLostError) Error() string { return e.err.Error() }
+func (e *OwnerFenceLostError) Unwrap() error { return e.err }
+
+// RetryableOwnerFenceError means ownership could not be verified because the
+// fencing backend failed. It does not prove supersession and may be retried.
+type RetryableOwnerFenceError struct{ err error }
+
+func (e *RetryableOwnerFenceError) Error() string { return e.err.Error() }
+func (e *RetryableOwnerFenceError) Unwrap() error { return e.err }
+
+func IsOwnerFenceLostError(err error) bool {
+	var target *OwnerFenceLostError
+	return errors.As(err, &target)
+}
+
+func IsRetryableOwnerFenceError(err error) bool {
+	var target *RetryableOwnerFenceError
+	return errors.As(err, &target)
+}
+
+// RetryableTargetLockError means target ownership could not be established
+// because the target lock service or its transport failed. It is distinct from
+// owner loss: the daemon claim may still be current, and a later attempt may
+// safely retry before any target effect has started.
+type RetryableTargetLockError struct{ err error }
+
+func (e *RetryableTargetLockError) Error() string { return e.err.Error() }
+func (e *RetryableTargetLockError) Unwrap() error { return e.err }
+
+func IsRetryableTargetLockError(err error) bool {
+	var target *RetryableTargetLockError
+	return errors.As(err, &target)
+}
+
+func newRetryableTargetLockError(err error) error {
+	if err == nil || IsRetryableTargetLockError(err) {
+		return err
+	}
+	return &RetryableTargetLockError{err: err}
+}
+
+// RetryableConnectionError identifies a failed external SQL connection attempt
+// after configuration was parsed successfully. Rebuilding a CDC pipeline may
+// succeed once the target or network recovers, and no target effect has begun.
+type RetryableConnectionError struct{ err error }
+
+func (e *RetryableConnectionError) Error() string { return e.err.Error() }
+func (e *RetryableConnectionError) Unwrap() error { return e.err }
+
+func IsRetryableConnectionError(err error) bool {
+	var target *RetryableConnectionError
+	return errors.As(err, &target)
+}
+
+func newRetryableConnectionError(err error) error {
+	if err == nil || IsRetryableConnectionError(err) {
+		return err
+	}
+	return &RetryableConnectionError{err: err}
+}
+
+func NewOwnerFence(check func(context.Context) error) *OwnerFence {
+	return NewOwnerFenceForGeneration(time.Time{}, check)
+}
+
+func NewOwnerFenceForGeneration(
+	generation time.Time,
+	check func(context.Context) error,
+) *OwnerFence {
+	if check == nil {
+		return nil
+	}
+	return &OwnerFence{
+		check:      check,
+		generation: generation,
+		sequence:   ownerFenceSequence.Add(1),
+	}
+}
+
+func (f *OwnerFence) Check(ctx context.Context) error {
+	if f == nil || f.check == nil {
+		return nil
+	}
+	err := f.check(ctx)
+	if err == nil || IsOwnerFenceLostError(err) || IsRetryableOwnerFenceError(err) {
+		return err
+	}
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
+	var moError *moerr.Error
+	if errors.As(err, &moError) && moerr.IsMoErrCode(moError, moerr.ErrInvalidTask) {
+		return &OwnerFenceLostError{err: err}
+	}
+	return &RetryableOwnerFenceError{err: err}
+}
+
+// GenerationToken is the durable, strictly monotonic daemon-claim rank. Stable
+// snapshot admission persists it before touching the target, so an async
+// checkpoint from an older owner can be rejected in the same transaction that
+// reads the admission row.
+func (f *OwnerFence) GenerationToken() uint64 {
+	if f == nil || f.generation.IsZero() || f.generation.UnixMicro() <= 0 {
+		return 0
+	}
+	return uint64(f.generation.UnixMicro())
+}
+
+func (f *OwnerFence) supersedes(other *OwnerFence) bool {
+	if f == nil || f == other {
+		return false
+	}
+	if other == nil {
+		return true
+	}
+	if f.generation.IsZero() || other.generation.IsZero() {
+		if f.generation.IsZero() != other.generation.IsZero() {
+			return !f.generation.IsZero()
+		}
+		// Unranked legacy callers still receive a strict local publication order.
+		return f.sequence > other.sequence
+	}
+	if f.generation.Equal(other.generation) {
+		// LastRun is the durable rank, but two distinct claims can share its
+		// timestamp granularity. Creation order is a sufficient tie-breaker for
+		// caches inside this process; cross-process safety comes from the owner
+		// check and generation-aware SQL.
+		return f.sequence > other.sequence
+	}
+	return f.generation.After(other.generation)
 }
 
 const (
@@ -108,6 +274,11 @@ const (
 	CDCTaskExtraOptions_SendSqlTimeout       = CDCRequestOptions_SendSqlTimeout
 	CDCTaskExtraOptions_InitSnapshotSplitTxn = CDCRequestOptions_InitSnapshotSplitTxn
 	CDCTaskExtraOptions_Frequency            = CDCRequestOptions_Frequency
+
+	// CDCTaskExtraOptions_InitialSnapshotProtocol is an internal, persisted
+	// compatibility marker. It must not be exposed as a CREATE CDC user option.
+	CDCTaskExtraOptions_InitialSnapshotProtocol = "_InitialSnapshotProtocol"
+	CDCInitialSnapshotProtocolStableEpoch       = "stable-epoch-v1"
 )
 
 var CDCRequestOptions = []string{
@@ -133,6 +304,47 @@ var CDCTaskExtraOptions = []string{
 var (
 	EnableConsoleSink = false
 )
+
+// FinalizeInitialSnapshotOptions encodes split mode so mixed-version clusters
+// remain correct. Old executors see false and use one atomic transaction; new
+// executors recognize the internal marker and use stable-epoch bounded groups.
+func FinalizeInitialSnapshotOptions(extraOpts map[string]any) {
+	if split, _ := extraOpts[CDCTaskExtraOptions_InitSnapshotSplitTxn].(bool); split {
+		extraOpts[CDCTaskExtraOptions_InitSnapshotSplitTxn] = false
+		extraOpts[CDCTaskExtraOptions_InitialSnapshotProtocol] =
+			CDCInitialSnapshotProtocolStableEpoch
+	}
+}
+
+// ValidateStableInitialSnapshotProtocol is the common creation barrier for all
+// frontend and compiler entry points. The stable executor depends on catalog
+// fields installed only after the cluster-wide protocol reaches v48.
+func ValidateStableInitialSnapshotProtocol(
+	ctx context.Context,
+	stable bool,
+	protocolVersion int64,
+) error {
+	if !stable || protocolVersion >= defines.MORPCVersion48 {
+		return nil
+	}
+	return moerr.NewNotSupportedf(
+		ctx,
+		"bounded CDC initial snapshots require all CNs to support protocol version %d",
+		defines.MORPCVersion48,
+	)
+}
+
+// UsesStableEpochInitialSnapshot reports whether persisted task options require
+// the bounded stable-epoch executor. Invalid or legacy options fail closed to
+// the atomic executor.
+func UsesStableEpochInitialSnapshot(extraOptsJSON string) bool {
+	extraOpts := make(map[string]any)
+	if err := json.Unmarshal([]byte(extraOptsJSON), &extraOpts); err != nil {
+		return false
+	}
+	protocol, _ := extraOpts[CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
+	return protocol == CDCInitialSnapshotProtocolStableEpoch
+}
 
 type TaskId = uuid.UUID
 
@@ -307,6 +519,18 @@ type DbTableInfo struct {
 	SinkTblName string
 
 	IdChanged bool
+
+	// ownerFence is execution-local and deliberately excluded from Clone and
+	// all persisted table metadata. It protects target initialization DDL.
+	ownerFence *OwnerFence
+}
+
+func (info *DbTableInfo) SetOwnerFence(fence *OwnerFence) {
+	info.ownerFence = fence
+}
+
+func (info *DbTableInfo) OwnerFence() *OwnerFence {
+	return info.ownerFence
 }
 
 func (info DbTableInfo) String() string {

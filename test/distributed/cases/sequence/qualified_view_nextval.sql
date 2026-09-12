@@ -1,0 +1,8 @@
+drop database if exists issue27581q;
+create database issue27581q;
+use issue27581q;
+create sequence seq1 start with 10;
+create view seq_view as select nextval('seq1') as n;
+use mysql;
+select * from issue27581q.seq_view;
+drop database issue27581q;

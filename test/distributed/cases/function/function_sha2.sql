@@ -7,6 +7,10 @@ select sha2("hello world", 66666);
 select sha2("+++++-------,./;[p][]", 512);
 select sha2(null, 512);
 select sha2(null, null);
+select sha2('hello', '256tail');
+select sha2('hello', 'abc');
+select sha2('hello', '');
+select sha2(_binary x'ff00', _binary x'3235367461696c');
 
 create table shatwo01 (a text);
 insert into shatwo01 values("网络安全"),("database"),(null);

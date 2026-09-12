@@ -308,8 +308,25 @@ func TestConnectToLogServiceAddressesClosesSuccessfulLosers(t *testing.T) {
 
 	called := make(chan string, 2)
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+	ctx, cancel := context.WithCancel(context.Background())
 	closeCount := 0
 	var closeMu sync.Mutex
+	finished := make(chan struct{})
+	defer func() {
+		releaseAll()
+		cancel()
+		select {
+		case <-finished:
+		case <-time.After(2 * time.Second):
+			t.Error("timed out waiting for connection attempts to finish")
+			<-finished
+		}
+	}()
+
 	connectToLogServiceAddressFn = func(
 		ctx context.Context,
 		sid string,
@@ -320,7 +337,11 @@ func TestConnectToLogServiceAddressesClosesSuccessfulLosers(t *testing.T) {
 		select {
 		case <-release:
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			select {
+			case <-release:
+			default:
+				return nil, ctx.Err()
+			}
 		}
 		return &client{
 			client: &closeTrackingRPCClient{
@@ -333,8 +354,9 @@ func TestConnectToLogServiceAddressesClosesSuccessfulLosers(t *testing.T) {
 	done := make(chan *client, 1)
 	errs := make(chan error, 1)
 	go func() {
+		defer close(finished)
 		c, err := connectToLogServiceAddresses(
-			context.Background(),
+			ctx,
 			"",
 			[]string{"first", "second"},
 			ClientConfig{},
@@ -346,9 +368,12 @@ func TestConnectToLogServiceAddressesClosesSuccessfulLosers(t *testing.T) {
 		done <- c
 	}()
 
-	require.Equal(t, "first", readCalledAddress(t, called))
-	require.Equal(t, "second", readCalledAddress(t, called))
-	close(release)
+	calledAddresses := []string{
+		readCalledAddress(t, called),
+		readCalledAddress(t, called),
+	}
+	assert.ElementsMatch(t, []string{"first", "second"}, calledAddresses)
+	releaseAll()
 
 	var c *client
 	select {
