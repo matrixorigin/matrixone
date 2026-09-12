@@ -2583,7 +2583,7 @@ func (rs *regexpSet) regexpFindAtOrAfterWithMatchType(
 	if size < 1 {
 		contextStart = startByte - 1
 	}
-	wrappedPattern := "^(?s:.)(?s:.*?)(" + regexpPatternWithPureMatchType(pat, pureMatchType) + ")"
+	wrappedPattern := regexpPositionSearchPattern(pat, pureMatchType)
 	wrapped, _, err := rs.getRegularMatcherInfoWithBinaryCaseFold(
 		wrappedPattern,
 		subjectIsBinary,
@@ -2858,6 +2858,58 @@ func regexpPatternWithPureMatchType(pat, pureMatchType string) string {
 		return pat
 	}
 	return "(?" + pureMatchType + ")" + pat
+}
+
+// regexpPositionSearchPattern wraps a user pattern so matching can start at a
+// later subject position without changing the original anchor context. A
+// trailing \Q is valid RE2 syntax and quotes through end-of-pattern; close that
+// quote before adding wrapper syntax so the generated parenthesis stays syntax.
+func regexpPositionSearchPattern(pat, pureMatchType string) string {
+	const prefix = "^(?s:.)(?s:.*?)("
+	var wrapped strings.Builder
+	wrapped.Grow(len(prefix) + len(pat) + len(pureMatchType) + 5)
+	wrapped.WriteString(prefix)
+	if pureMatchType != "" {
+		wrapped.WriteString("(?")
+		wrapped.WriteString(pureMatchType)
+		wrapped.WriteByte(')')
+	}
+	quoted := false
+	for i := 0; i < len(pat); {
+		if pat[i] != '\\' || i+1 == len(pat) {
+			wrapped.WriteByte(pat[i])
+			i++
+			continue
+		}
+		if quoted {
+			if pat[i+1] == 'E' {
+				wrapped.WriteString(pat[i : i+2])
+				quoted = false
+				i += 2
+			} else {
+				// Inside \Q, only the first literal \E ends quoting. Do not
+				// treat a preceding backslash as escaping that terminator.
+				wrapped.WriteByte(pat[i])
+				i++
+			}
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(pat[i+1:])
+		if size < 1 {
+			size = 1
+		}
+		end := i + 1 + size
+		wrapped.WriteString(pat[i:end])
+		if pat[i+1] == 'Q' {
+			quoted = true
+		}
+		i = end
+	}
+	if quoted {
+		wrapped.WriteString("\\E")
+	}
+	wrapped.WriteByte(')')
+	return wrapped.String()
 }
 
 func (rs *regexpSet) getRegularMatcherInfoWithMatchType(

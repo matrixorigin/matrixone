@@ -166,11 +166,11 @@ func parseRegexpReplacementGroup(replacement string, start int, reg *regexp.Rege
 	}
 
 	maxGroup := reg.NumSubexp()
-	group := int(replacement[start] - '0')
+	group = int(replacement[start] - '0')
 	if group > maxGroup {
 		return 0, start, moerr.NewInvalidInputNoCtx("regexp_replace: invalid replacement template")
 	}
-	next := start + 1
+	next = start + 1
 	for next < len(replacement) && replacement[next] >= '0' && replacement[next] <= '9' {
 		digit := int(replacement[next] - '0')
 		if digit > maxGroup || group > (maxGroup-digit)/10 {
@@ -338,7 +338,7 @@ func (rs *regexpSet) regexpFindSubmatchesAtOrAfterWithMatchType(
 	if size < 1 {
 		contextStart = startByte - 1
 	}
-	wrappedPattern := "^(?s:.)(?s:.*?)(" + regexpPatternWithPureMatchType(pat, pureMatchType) + ")"
+	wrappedPattern := regexpPositionSearchPattern(pat, pureMatchType)
 	wrapped, _, err := rs.getRegularMatcherInfoWithBinaryCaseFold(
 		wrappedPattern,
 		subjectIsBinary,

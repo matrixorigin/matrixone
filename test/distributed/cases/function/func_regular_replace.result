@@ -108,6 +108,17 @@ HEX(REGEXP_REPLACE('abc', 'a*', 'X', 1, 0)) AS replace_zero_width,
 HEX(REGEXP_REPLACE('', '^$', 'X')) AS empty_subject;
 after_nonempty    after_nonempty_at_pos    replace_zero_width    empty_subject
 2    3    585862586358
+SELECT REGEXP_REPLACE('a.a.', '(a)\\Q.', '$1', 1, 0) AS quoted_all,
+REGEXP_REPLACE('xa.a.', '(a)\\Q.', '$1', 2, 1) AS quoted_one,
+REGEXP_REPLACE('xa.a.', '(a)\\Q.', '$1', 2, 0) AS quoted_after_pos,
+REGEXP_INSTR('xa.a.', '(a)\\Q.', 2, 2) AS quoted_instr,
+REGEXP_SUBSTR('xa.a.', '(a)\\Q.', 2, 2) AS quoted_substr;
+quoted_all    quoted_one    quoted_after_pos    quoted_instr    quoted_substr
+aa    xaa.    xaa    4    a.
+SELECT HEX(REGEXP_REPLACE(CAST(_binary'a\\a\\' AS VARBINARY(4)),
+                          CAST(_binary'(a)\\Q\\\\E' AS VARBINARY(8)), _binary'X', 1, 0)) AS binary_quoted_backslash;
+binary_quoted_backslash
+5858
 SELECT HEX(REGEXP_REPLACE(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS binary_replace,
 HEX(REGEXP_REPLACE(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), _binary'X', 2, 1)) AS varbinary_replace;
 binary_replace    varbinary_replace

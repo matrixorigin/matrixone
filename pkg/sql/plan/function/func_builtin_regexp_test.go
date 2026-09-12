@@ -132,6 +132,14 @@ func Test_BuiltIn_RegexpReplaceStartsAtRequestedPosition(t *testing.T) {
 		{name: "zero_width_after_nonempty_match", pattern: "b*", subject: "ab", replacement: "X", position: 2, occurrence: 0, want: "aXX"},
 		{name: "zero_width_all_from_start", pattern: "a*", subject: "abc", replacement: "X", position: 1, occurrence: 0, want: "XXbXcX"},
 		{name: "zero_width_all_after_position", pattern: "a*", subject: "abc", replacement: "X", position: 2, occurrence: 0, want: "aXbXcX"},
+		{name: "open_quote_replace_all", pattern: "(a)\\Q.", subject: "a.a.", replacement: "$1", position: 1, occurrence: 0, want: "aa"},
+		{name: "open_quote_selected_after_position", pattern: "(a)\\Q.", subject: "xa.a.", replacement: "$1", position: 2, occurrence: 1, want: "xaa."},
+		{name: "open_quote_replace_all_after_position", pattern: "(a)\\Q.", subject: "xa.a.", replacement: "$1", position: 2, occurrence: 0, want: "xaa"},
+		{name: "explicit_quote_close", pattern: "(a)\\Q.\\E", subject: "a.a.", replacement: "$1", position: 1, occurrence: 0, want: "aa"},
+		{name: "escaped_backslash_before_open_quote", pattern: "(a)\\\\\\Q.", subject: "a\\.a\\.", replacement: "$1", position: 1, occurrence: 0, want: "aa"},
+		{name: "quoted_backslash_before_terminator", pattern: "(a)\\Q\\\\E", subject: "a\\a\\", replacement: "$1", position: 1, occurrence: 0, want: "aa"},
+		{name: "quoted_backslash_terminator_after_position", pattern: "(a)\\Q\\\\E", subject: "xa\\a\\", replacement: "X", position: 2, occurrence: 0, want: "xXX"},
+		{name: "escaped_backslash_two_byte_control", pattern: "(a)\\\\\\Q.", subject: "a\\\\.a\\\\.", replacement: "X", position: 2, occurrence: 0, want: "a\\\\.a\\\\."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := op.regMap.regularReplace(tc.pattern, tc.subject, tc.replacement, tc.position, tc.occurrence)
@@ -139,6 +147,27 @@ func Test_BuiltIn_RegexpReplaceStartsAtRequestedPosition(t *testing.T) {
 			require.Equal(t, tc.want, got)
 		})
 	}
+
+	quotedPattern := "(a)\\Q."
+	position, err := op.regMap.regularInstr(quotedPattern, "xa.a.", 2, 2, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(4), position)
+	matched, part, err := op.regMap.regularSubstr(quotedPattern, "xa.a.", 2, 2)
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, "a.", part)
+	quotedBackslashPattern := "(a)\\Q\\\\E"
+	position, err = op.regMap.regularInstr(quotedBackslashPattern, "xa\\a\\", 2, 2, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(4), position)
+	matched, part, err = op.regMap.regularSubstr(quotedBackslashPattern, "xa\\a\\", 2, 2)
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, "a\\", part)
+	binaryResult, err := op.regMap.regularReplaceWithMode(
+		quotedBackslashPattern, "a\\a\\", "X", 1, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, "XX", binaryResult)
 
 	got, err := op.regMap.regularReplace("^$", "", "X", 1, 0)
 	require.NoError(t, err)
