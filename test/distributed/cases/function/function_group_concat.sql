@@ -320,6 +320,11 @@ set session group_concat_max_len = 5;
 execute group_concat_max_len_low_stmt;
 show warnings;
 deallocate prepare group_concat_max_len_low_stmt;
+set session group_concat_max_len = 5;
+prepare group_concat_max_len_reset_stmt from 'select group_concat(s order by s separator "") from group_concat_max_len_01';
+execute group_concat_max_len_reset_stmt;
+show warnings;
+deallocate prepare group_concat_max_len_reset_stmt;
 drop table group_concat_max_len_01;
 
 -- A truncating GROUP_CONCAT must expose one MySQL-compatible warning per
