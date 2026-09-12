@@ -242,7 +242,7 @@ services:
     entrypoint: ["java","-jar","/jstfu-out/jstfu.jar","/config/jstfu-compose.json"]
 
   minio:
-    image: minio/minio:RELEASE.2023-11-01T18-37-25Z
+    image: quay.io/minio/minio:RELEASE.2023-11-01T18-37-25Z
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -268,7 +268,7 @@ services:
   # mc client: https://github.com/minio/mc/blob/master/docs/minio-client-complete-guide.md
   # mc anonymous set: https://min.io/docs/minio/linux/reference/minio-mc/mc-anonymous-set.html
   createbuckets:
-    image: minio/mc:RELEASE.2023-10-30T18-43-32Z
+    image: quay.io/minio/mc:RELEASE.2023-10-30T18-43-32Z
     depends_on:
       minio:
         condition: service_healthy
