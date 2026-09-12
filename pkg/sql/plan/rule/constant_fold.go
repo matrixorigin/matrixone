@@ -218,6 +218,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		// digits before execute-time common-type specialization can run.
 		return expr
 	}
+	exactNumeric := types.T(expr.Typ.Id).IsFloat() && IsExactNumeric(expr, nil)
 	isVec := false
 	for i := range fn.Args {
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
@@ -338,6 +339,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	// We should preserve the retType (DATETIME) to ensure consistency
 	expr.Typ.Scale = vec.GetType().Scale
 	expr.Typ.Width = vec.GetType().Width
+	if exactNumeric {
+		MarkExactNumeric(expr)
+	}
 	expr.Expr = ec
 
 	return expr

@@ -42,6 +42,28 @@ SET @exact_five = 5, @exact_two = 2;
 INSERT INTO t_rounding VALUES (15, @exact_five / @exact_two, -@exact_five / @exact_two);
 SELECT * FROM t_rounding WHERE id = 15;
 
+-- Folding, projection and numeric wrappers retain the exact source domain.
+CREATE TABLE src (x BIGINT);
+INSERT INTO src VALUES (5);
+CREATE TABLE dst (id INT PRIMARY KEY, v BIGINT);
+INSERT INTO dst VALUES (1, 5 / 2);
+INSERT INTO dst SELECT 2, x / 2 FROM src;
+INSERT INTO dst SELECT 3, ABS(x / 2) FROM src;
+INSERT INTO dst SELECT 4, -(x / 2) FROM src;
+INSERT INTO dst SELECT 5, x / 2 + 0 FROM src;
+INSERT INTO dst VALUES (6, 0);
+UPDATE dst SET v = ABS(5 / 2) WHERE id = 6;
+INSERT INTO dst SELECT 7, x / 2E0 FROM src;
+INSERT INTO dst VALUES (8, ABS(5E0 / 2) + 0);
+INSERT INTO dst SELECT 9, CAST(x / 2 AS DOUBLE) FROM src;
+INSERT INTO dst SELECT 10, ABS(q) FROM (SELECT x / 2 AS q FROM src) s;
+SELECT * FROM dst ORDER BY id;
+CREATE TABLE quotient_source (result BIGINT);
+INSERT INTO quotient_source VALUES (150), (250);
+CREATE TABLE quotient_target (a BIGINT, b BIGINT, PRIMARY KEY(a,b));
+INSERT INTO quotient_target SELECT result/100, result%100 FROM quotient_source;
+SELECT * FROM quotient_target ORDER BY a,b;
+
 -- ODKU consumes the already converted incoming VALUES row.
 INSERT INTO t_rounding VALUES (20, 0, 0), (21, 0, 0);
 INSERT INTO t_rounding VALUES (20, 2.5, -2.5), (21, 2.5E0, -2.5E0)
@@ -84,7 +106,8 @@ DEALLOCATE PREPARE insert_nested_add;
 DEALLOCATE PREPARE insert_nested_explicit;
 
 -- Negative approximate values must not wrap while assigning to unsigned
--- integers. Strict assignment rejects the row; IGNORE clamps it to zero.
+-- integers. Strict assignment rejects the row. Protocol-gated prepared IGNORE
+-- and repeated COM_STMT execution are covered by the embedded integration test.
 CREATE TABLE t_unsigned (id INT PRIMARY KEY, value_bigint BIGINT UNSIGNED);
 INSERT INTO t_unsigned VALUES (1, -1E0);
 SELECT COUNT(*) FROM t_unsigned WHERE id = 1;

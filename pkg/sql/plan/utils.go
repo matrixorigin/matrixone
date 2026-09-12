@@ -1196,6 +1196,7 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 		ProvisionalResultPeerWidth:  metadata.ProvisionalResultPeerWidth,
 		ProvisionalResultPeerScale:  metadata.ProvisionalResultPeerScale,
 		StringDomainSource:          DeepCopyExpr(metadata.StringDomainSource),
+		ExactNumeric:                metadata.ExactNumeric,
 	}
 }
 
@@ -1848,6 +1849,7 @@ func constantFoldWithPreparedExactSource(
 		// otherwise the later prepared-only fold cannot recover lost digits.
 		return expr, nil
 	}
+	exactNumeric := types.T(expr.Typ.Id).IsFloat() && rule.IsExactNumeric(expr, nil)
 	isVec := false
 	for i := range fn.Args {
 		foldExpr, errFold := constantFoldWithPreparedExactSource(
@@ -1913,6 +1915,9 @@ func constantFoldWithPreparedExactSource(
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,
+	}
+	if exactNumeric {
+		rule.MarkExactNumeric(expr)
 	}
 	expr.Expr = ec
 	return expr, nil

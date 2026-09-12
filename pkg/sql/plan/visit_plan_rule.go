@@ -1686,8 +1686,10 @@ func (rule *ResetParamRefRule) rebindPreparedNumericIntegerAssignment(
 	if !sourceOID.IsDecimal() && !sourceOID.IsFloat() {
 		return expr, false, nil
 	}
+	source = DeepCopyExpr(source)
+	rule.retainRuntimeParamRef(paramPos, source)
 	rewritten, err := forceAssignmentCastExprWithName(
-		rule.ctx, DeepCopyExpr(source), expr.Typ, funcName)
+		rule.ctx, source, expr.Typ, funcName)
 	if err != nil {
 		return nil, true, err
 	}
