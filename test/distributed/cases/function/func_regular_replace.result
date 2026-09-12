@@ -131,3 +131,39 @@ EXECUTE regexp_replacement_charset USING @regexp_replacement;
 replacement_hex
 C3A4C2B8C2AD
 DEALLOCATE PREPARE regexp_replacement_charset;
+
+SELECT REGEXP_REPLACE('Abc abc', 'abc', 'X', 1, 0, 'i') AS insensitive,
+REGEXP_REPLACE('Abc abc', 'abc', 'X', 1, 0, 'c') AS sensitive;
+insensitive    sensitive
+X X    Abc X
+SELECT HEX(REGEXP_REPLACE('a\nb', '^b', 'X', 3, 1, 'm')) AS multiline,
+HEX(REGEXP_REPLACE('a\nb', '^b', 'X', 3, 1, 'c')) AS singleline;
+multiline    singleline
+610A58    610A62
+SELECT HEX(REGEXP_REPLACE(CAST(X'78C9' AS BINARY(2)), CAST(X'E9' AS BINARY(1)), CAST(X'58' AS BINARY(1)), 1, 0, 'i')) AS binary_i,
+HEX(REGEXP_REPLACE(CAST(X'78C9' AS VARBINARY(2)), CAST(X'E9' AS VARBINARY(1)), CAST(X'58' AS VARBINARY(1)), 1, 0, 'i')) AS varbinary_i;
+binary_i    varbinary_i
+7858    7858
+SELECT HEX(REGEXP_REPLACE(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), CAST(X'58' AS BINARY(1)), 2, 1, 'i')) AS binary_byte_pos,
+HEX(REGEXP_REPLACE(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), CAST(X'58' AS VARBINARY(1)), 2, 1, 'i')) AS varbinary_byte_pos;
+binary_byte_pos    varbinary_byte_pos
+E4B8AD58    E4B8AD58
+PREPARE regexp_value_match_type_rebind FROM
+'SELECT REGEXP_INSTR(?, ?, 1, 1, 0, ?) AS pos,
+REGEXP_SUBSTR(?, ?, 1, 1, ?) AS part,
+REGEXP_REPLACE(?, ?, ''X'', 1, 0, ?) AS replaced';
+SET @regexp_mode_subject = 'Abc abc';
+SET @regexp_mode_pattern = 'abc';
+SET @regexp_mode = 'i';
+EXECUTE regexp_value_match_type_rebind USING @regexp_mode_subject, @regexp_mode_pattern, @regexp_mode,
+@regexp_mode_subject, @regexp_mode_pattern, @regexp_mode,
+@regexp_mode_subject, @regexp_mode_pattern, @regexp_mode;
+pos    part    replaced
+1    Abc    X X
+SET @regexp_mode = 'c';
+EXECUTE regexp_value_match_type_rebind USING @regexp_mode_subject, @regexp_mode_pattern, @regexp_mode,
+@regexp_mode_subject, @regexp_mode_pattern, @regexp_mode,
+@regexp_mode_subject, @regexp_mode_pattern, @regexp_mode;
+pos    part    replaced
+5    abc    Abc X
+DEALLOCATE PREPARE regexp_value_match_type_rebind;
