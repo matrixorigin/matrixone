@@ -44,6 +44,10 @@ select group_concat(v order by id separator '|') from src;
 show warnings;
 select gc from dst_ignore;
 
+update ignore dst set gc = (select group_concat(v order by id separator '|') from src) where id = 1;
+show warnings;
+select gc from dst where id = 1;
+
 set session sql_mode = '';
 insert into dst_nonstrict
 select group_concat(v order by id separator '|') from src;

@@ -59,7 +59,11 @@ func (c *Compile) strictWriteGroupConcatPromotionEnabled() (bool, error) {
 		if len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil {
 			return false, nil
 		}
-	case *tree.Update, *tree.Replace:
+	case *tree.Update:
+		if stmt.Ignore {
+			return false, nil
+		}
+	case *tree.Replace:
 	case *tree.CreateTable:
 		if !stmt.IsAsSelect {
 			return false, nil
