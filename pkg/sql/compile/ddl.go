@@ -6641,6 +6641,11 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		value := planCDC.Option[i+1]
 		tmpOpts[key] = value
 	}
+	// Make the raw exclude expression available to level validation, which runs
+	// before the option switch reaches the Exclude case.
+	if exclude := tmpOpts[cdc.CDCRequestOptions_Exclude]; exclude != "" {
+		opts.Exclude = exclude
+	}
 
 	// extract source uri and check connection
 	// target field: SrcUri
@@ -6862,7 +6867,7 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 
 	// ensure PITR checks run with the target tenant account id
 	ctx = defines.AttachAccountId(ctx, opts.UserInfo.AccountId)
-	if err = c.checkPitrGranularity(ctx, patterTupples); err != nil {
+	if err = c.checkPitrGranularity(ctx, patterTupples, opts.Exclude); err != nil {
 		return
 	}
 
@@ -6922,8 +6927,70 @@ func transformIntoHours(freq string) int64 {
 func (c *Compile) checkPitrGranularity(
 	ctx context.Context,
 	pts *cdc.PatternTuples,
+	exclude string,
 	minLength ...int64,
 ) error {
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	// Validate concrete CDC sources before persisting the task. The sink needs
+	// a user-visible primary key for UPDATE/DELETE identity; the engine-only
+	// fake key used by no-PK tables is deliberately not accepted.
+	for _, pt := range pts.Pts {
+		if pt == nil {
+			continue
+		}
+		if pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
+			dbFilter := ""
+			if pt.Source.Database != cdc.CDCPitrGranularity_All {
+				dbFilter = fmt.Sprintf(" AND t.%s = %s", sqlquote.Ident(catalog.SystemRelAttr_DBName), sqlquote.String(pt.Source.Database))
+			}
+			tableFilter := ""
+			if pt.Source.Table != cdc.CDCPitrGranularity_All {
+				tableFilter = fmt.Sprintf(" AND t.%s = %s", sqlquote.Ident(catalog.SystemRelAttr_Name), sqlquote.String(pt.Source.Table))
+			}
+			excludeFilter := ""
+			if exclude != "" {
+				excludeFilter = fmt.Sprintf(" AND concat(t.%s, '.', t.%s) NOT REGEXP %s", sqlquote.Ident(catalog.SystemRelAttr_DBName), sqlquote.Ident(catalog.SystemRelAttr_Name), sqlquote.String(exclude))
+			}
+			pkSQL := fmt.Sprintf("SELECT 1 FROM %s.%s t WHERE t.%s = %d AND t.%s = 'r'%s%s%s AND NOT EXISTS (SELECT 1 FROM %s.%s p WHERE p.%s = t.%s AND p.%s = t.%s AND p.%s = t.%s AND p.%s = t.%s AND p.%s = %s AND p.%s <> %s) LIMIT 1",
+				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_TABLES), sqlquote.Ident(catalog.SystemRelAttr_AccID), accountId, sqlquote.Ident(catalog.SystemRelAttr_Kind), dbFilter, tableFilter, excludeFilter,
+				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
+				sqlquote.Ident(catalog.SystemColAttr_AccID), sqlquote.Ident(catalog.SystemRelAttr_AccID),
+				sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.Ident(catalog.SystemRelAttr_DBName),
+				sqlquote.Ident(catalog.SystemColAttr_RelName), sqlquote.Ident(catalog.SystemRelAttr_Name),
+				sqlquote.Ident(catalog.SystemColAttr_RelID), sqlquote.Ident(catalog.SystemRelAttr_ID),
+				sqlquote.Ident(catalog.SystemColAttr_ConstraintType), sqlquote.String("p"),
+				sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.String(catalog.FakePrimaryKeyColName))
+			res, err := c.runSqlWithResultAndOptions(pkSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+			if err != nil {
+				return err
+			}
+			invalid := len(res.Batches) > 0 && res.Batches[0].RowCount() > 0
+			res.Close()
+			if invalid {
+				return moerr.NewInternalErrorf(ctx, "CDC source scope %s contains a table without a primary key; CDC does not support tables without a user-visible primary key", pt.Source)
+			}
+			continue
+		}
+		pkSQL := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = %d AND %s = %s AND %s = %s AND %s = 'p' AND %s <> %s LIMIT 1",
+			sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
+			sqlquote.Ident(catalog.SystemColAttr_AccID), accountId,
+			sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.String(pt.Source.Database),
+			sqlquote.Ident(catalog.SystemColAttr_RelName), sqlquote.String(pt.Source.Table),
+			sqlquote.Ident(catalog.SystemColAttr_ConstraintType),
+			sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.String(catalog.FakePrimaryKeyColName))
+		res, err := c.runSqlWithResultAndOptions(pkSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+		if err != nil {
+			return err
+		}
+		valid := len(res.Batches) > 0 && res.Batches[0].RowCount() > 0
+		res.Close()
+		if !valid {
+			return moerr.NewInternalErrorf(ctx, "source table %s has no primary key; CDC does not support tables without a user-visible primary key", pt.Source)
+		}
+	}
 	var minPitrLen int64 = 2
 	if len(minLength) > 1 {
 		return moerr.NewInternalErrorf(ctx, "only one length parameter allowed")
@@ -6931,11 +6998,6 @@ func (c *Compile) checkPitrGranularity(
 	if len(minLength) > 0 {
 		minPitrLen = max(minLength[0]+1, minPitrLen)
 	}
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-
 	sqlCluster := fmt.Sprintf(`SELECT pitr_length,pitr_unit FROM %s.%s WHERE level='cluster' AND account_id = %d`,
 		catalog.MO_CATALOG, catalog.MO_PITR, accountId)
 	if res, err := c.runSqlWithResultAndOptions(sqlCluster, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog()); err == nil {
@@ -7079,7 +7141,7 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 		return
 	}
 
-	if err = c.checkPitrGranularity(ctx, patterTupples, normalized); err != nil {
+	if err = c.checkPitrGranularity(ctx, patterTupples, opts.Exclude, normalized); err != nil {
 		return err
 	}
 	return nil

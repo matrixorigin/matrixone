@@ -17,12 +17,14 @@ package frontend
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"math"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -198,6 +200,44 @@ var CDCCheckPitrGranularity = func(
 	pts *cdc.PatternTuples,
 	minLength ...int64,
 ) error {
+	// Validate concrete source tables before persisting the CDC task. A CDC
+	// stream needs a user-visible primary key to identify UPDATE/DELETE rows;
+	// MatrixOne's internal fake key is not a supported sink identity.
+	if bh != nil {
+		for _, pt := range pts.Pts {
+			if pt == nil || pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
+				continue
+			}
+			// Read att_constraint_type directly; parsing SHOW CREATE text would
+			// incorrectly treat comments or identifiers containing "PRIMARY KEY"
+			// as an actual constraint. Keep hidden composite-PK markers; only the
+			// engine-only fake key denotes a table without a user primary key.
+			pkSQL := fmt.Sprintf("SELECT count(*) FROM %s.%s WHERE %s = %s AND %s = %s AND %s = 'p' AND %s <> %s",
+				quoteIdentifierForSQL(catalog.MO_CATALOG), quoteIdentifierForSQL(catalog.MO_COLUMNS),
+				quoteIdentifierForSQL(catalog.SystemColAttr_DBName), quoteSQLStringLiteral(pt.Source.Database),
+				quoteIdentifierForSQL(catalog.SystemColAttr_RelName), quoteSQLStringLiteral(pt.Source.Table),
+				quoteIdentifierForSQL(catalog.SystemColAttr_ConstraintType),
+				quoteIdentifierForSQL(catalog.SystemColAttr_Name), quoteSQLStringLiteral(catalog.FakePrimaryKeyColName))
+			if err := bh.Exec(ctx, pkSQL); err != nil {
+				return err
+			}
+			results, err := getResultSet(ctx, bh)
+			bh.ClearExecResultSet()
+			if err != nil {
+				return err
+			}
+			if len(results) == 0 || results[0].GetRowCount() == 0 {
+				return moerr.NewInternalErrorf(ctx, "source table %s has no primary key; CDC does not support tables without a user-visible primary key", pt.Source)
+			}
+			pkCount, err := results[0].GetUint64(ctx, 0, 0)
+			if err != nil {
+				return err
+			}
+			if pkCount == 0 {
+				return moerr.NewInternalErrorf(ctx, "source table %s has no primary key; CDC does not support tables without a user-visible primary key", pt.Source)
+			}
+		}
+	}
 	var minPitrLen int64 = 2
 	if len(minLength) > 1 {
 		return moerr.NewInternalErrorf(ctx, "only one length parameter allowed")

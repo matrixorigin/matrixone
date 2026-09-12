@@ -161,6 +161,14 @@ func TestNewCDCStatementBuilder_ValidationAndStrategy(t *testing.T) {
 		Cols: []*plan.ColDef{{Name: catalog.Row_ID, Typ: plan.Type{Id: int32(types.T_Rowid)}}},
 		Pkey: &plan.PrimaryKeyDef{Names: []string{catalog.Row_ID}}, Name2ColIndex: map[string]int32{catalog.Row_ID: 0},
 	}
+	noUserPK := &plan.TableDef{
+		Cols: []*plan.ColDef{
+			{Name: "value", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: catalog.FakePrimaryKeyColName, Hidden: true, Typ: plan.Type{Id: int32(types.T_uint64)}},
+		},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{catalog.FakePrimaryKeyColName}},
+		Name2ColIndex: map[string]int32{"value": 0, catalog.FakePrimaryKeyColName: 1},
+	}
 	for _, tc := range []struct {
 		name string
 		def  *plan.TableDef
@@ -169,6 +177,7 @@ func TestNewCDCStatementBuilder_ValidationAndStrategy(t *testing.T) {
 		{name: "nil column", def: &plan.TableDef{Cols: []*plan.ColDef{nil}}},
 		{name: "empty column name", def: &plan.TableDef{Cols: []*plan.ColDef{{Name: ""}}}},
 		{name: "no visible columns", def: internalOnly},
+		{name: "no user primary key", def: noUserPK},
 		{name: "nil primary key", def: &plan.TableDef{Cols: base.Cols, Name2ColIndex: base.Name2ColIndex}},
 		{name: "empty primary key", def: &plan.TableDef{Cols: base.Cols, Pkey: &plan.PrimaryKeyDef{}, Name2ColIndex: base.Name2ColIndex}},
 		{name: "missing mapping", def: &plan.TableDef{Cols: base.Cols, Pkey: base.Pkey}},
