@@ -390,47 +390,65 @@ func fixtureInt64Overflow(t *testing.T, dir, filename, container string, values 
 	})
 }
 
-// --- large fixture: many record batches, for multi-CN parallel fan-out and the ---
-// --- KILL-QUERY cancellation test --------------------------------------------------
+// --- large fixture: end-to-end throughput benchmark -------------------------------
 
 const (
 	largeFixtureBatches   = 100
 	largeFixtureBatchRows = 1000
 	largeFixtureRows      = largeFixtureBatches * largeFixtureBatchRows
+	// Keep the fanout BVT above LOAD's 1 MiB LoadWriteS3 threshold while reducing
+	// row work. The separate benchmark retains the full 100,000-row workload.
+	fanoutFixtureBatchRows = 256
+	fanoutFixtureRows      = largeFixtureBatches * fanoutFixtureBatchRows
 	// The ownership-policy test only needs several batches to exercise Arrow
-	// conversion. Keep the 100-batch fixture for tests that actually prove
-	// distributed fan-out or mid-load cancellation.
+	// conversion; it does not need the fanout workload.
 	forceMaterializeFixtureBatches = 4
 	forceMaterializeFixtureRows    = forceMaterializeFixtureBatches * largeFixtureBatchRows
 )
 
-// fixtureLarge writes an IPC File (so record-batch parallel shard fan-out applies)
-// with largeFixtureRows rows of `id BIGINT NOT NULL, payload VARCHAR(64) NOT NULL`
-// spread across largeFixtureBatches record batches, giving both the multi-CN
-// parallel-shard test and the cancel-mid-LOAD test enough real decode/insert work to
-// observe or interrupt without relying on a sleep.
+// fixtureLarge writes an IPC File with largeFixtureRows rows of
+// `id BIGINT NOT NULL, payload VARCHAR(128) NOT NULL` spread across
+// largeFixtureBatches record batches. The throughput benchmark retains this
+// volume; the functional fanout BVT uses fewer rows but keeps every batch.
 func fixtureLarge(t testing.TB) (path string, schemaDDL string) {
 	t.Helper()
 	return fixtureLargeWithBatches(t, largeFixtureBatches)
 }
 
-// fixtureLargeWithBatches keeps the schema and row construction identical for
-// the large fan-out fixture and the smaller single-CN ownership-policy fixture.
-// A separate batch count prevents a policy check from accidentally carrying the
-// fan-out workload while retaining multiple record-batch conversion.
+// fixtureLargeWithBatches keeps schema and row construction shared by the large
+// throughput benchmark and the forced-materialization BVT. A separate batch
+// count prevents the ownership-policy check from carrying the benchmark workload.
 func fixtureLargeWithBatches(t testing.TB, batches int) (path string, schemaDDL string) {
+	t.Helper()
+	return fixtureArrowBatches(t, "large.arrow", batches, largeFixtureBatchRows)
+}
+
+// fixtureFanout retains all record batches while reducing row work. Its file
+// remains above the LOAD 1 MiB threshold so the public BVT still exercises the
+// LoadWriteS3 insertion path; the benchmark retains the original 100k rows.
+func fixtureFanout(t testing.TB) (path string, schemaDDL string) {
+	t.Helper()
+	return fixtureArrowBatches(t, "fanout.arrow", largeFixtureBatches, fanoutFixtureBatchRows)
+}
+
+func fixtureArrowBatches(
+	t testing.TB,
+	filename string,
+	batches int,
+	rowsPerBatch int,
+) (path string, schemaDDL string) {
 	t.Helper()
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int64, Nullable: false},
 		{Name: "payload", Type: arrow.BinaryTypes.String, Nullable: false},
 	}, nil)
-	path = writeArrowFile(t, t.TempDir(), "large.arrow", containerFile, schema, func(alloc memory.Allocator, write func(arrow.RecordBatch) error) {
+	path = writeArrowFile(t, t.TempDir(), filename, containerFile, schema, func(alloc memory.Allocator, write func(arrow.RecordBatch) error) {
 		for b := 0; b < batches; b++ {
 			builder := array.NewRecordBuilder(alloc, schema)
-			ids := make([]int64, largeFixtureBatchRows)
-			payloads := make([]string, largeFixtureBatchRows)
-			for r := 0; r < largeFixtureBatchRows; r++ {
-				id := int64(b*largeFixtureBatchRows + r)
+			ids := make([]int64, rowsPerBatch)
+			payloads := make([]string, rowsPerBatch)
+			for r := 0; r < rowsPerBatch; r++ {
+				id := int64(b*rowsPerBatch + r)
 				ids[r] = id
 				payloads[r] = fmt.Sprintf("payload-row-%08d-%s", id, strings.Repeat("x", 32))
 			}
