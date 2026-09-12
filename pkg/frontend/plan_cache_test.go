@@ -484,6 +484,55 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	}
 }
 
+func TestSessionWindowPartitionAlgorithmChangeClearsPlanCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	stmt := &trackedStatement{}
+	ses.cachePlan("cached-window", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.True(t, ses.isCached("cached-window"))
+
+	// Re-setting the SORT default does not change the physical-plan contract.
+	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "SORT"))
+	require.True(t, ses.isCached("cached-window"))
+	require.Zero(t, stmt.freed)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "COST"))
+	require.False(t, ses.isCached("cached-window"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-window", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "WINDOW_PARTITION_ALGORITHM", "HASH"))
+	require.False(t, ses.isCached("cached-window"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestSessionWindowPartitionAlgorithmChangeInvalidatesPreparedPlanGeneration(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	prepared := &PrepareStmt{Name: "window-prepared"}
+	require.NoError(t, ses.SetPrepareStmt(ctx, prepared.Name, prepared))
+
+	// A mode change must preserve the prepared handle while forcing EXECUTE to
+	// rebuild the logical/physical plan under the new session value.
+	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "COST"))
+	require.True(t, prepared.needsRebuild)
+
+	prepared.needsRebuild = false
+	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "SORT"))
+	require.True(t, prepared.needsRebuild)
+
+	prepared.needsRebuild = false
+	require.NoError(t, ses.SetSessionSysVar(ctx, "window_partition_algorithm", "SORT"))
+	require.False(t, prepared.needsRebuild)
+
+	require.True(t, ses.RemovePrepareStmt(prepared.Name))
+}
+
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))

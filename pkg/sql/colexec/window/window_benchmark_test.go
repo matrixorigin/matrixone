@@ -15,6 +15,8 @@
 package window
 
 import (
+	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -24,9 +26,268 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	orderop "github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	execpartition "github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
+
+// BenchmarkWindowHashPartitionAcceptance measures the real Window consumer,
+// not only the blocking Partition prerequisite. The matrix is intentionally
+// kept in the benchmark source so every reported result has an exact, rerunnable
+// shape: 1K/64K/1M rows, 1/1%/100% NDV, one/three fixed or variable keys, and
+// ordered/unordered windows. Each input is split into two upstream batches to
+// exercise blocking/finalization across batches. The single MockOperator does
+// not model a compiled multi-scope Merge and this benchmark is not evidence for
+// the default-enable gate.
+func BenchmarkWindowHashPartitionAcceptance(b *testing.B) {
+	for _, rows := range []int{1 << 10, 1 << 16, 1 << 20} {
+		for _, ndv := range []int{1, max(1, rows/100), rows} {
+			for _, keyCount := range []int{1, 3} {
+				for _, varlen := range []bool{false, true} {
+					for _, ordered := range []bool{false, true} {
+						for _, algorithm := range []string{"sort", "hash"} {
+							name := fmt.Sprintf("rows=%d/ndv=%d/keys=%d/%s/%s/%s",
+								rows, ndv, keyCount,
+								map[bool]string{false: "fixed", true: "varlen"}[varlen],
+								map[bool]string{false: "unordered", true: "ordered"}[ordered],
+								algorithm)
+							b.Run(name, func(b *testing.B) {
+								b.ReportAllocs()
+								var peak uint64
+								for i := 0; i < b.N; i++ {
+									b.StopTimer()
+									pipeline := newWindowHashAcceptancePipeline(
+										b, rows, ndv, keyCount, varlen, ordered,
+										algorithm == "hash", 1<<30,
+									)
+									b.StartTimer()
+									token := pipeline.mp.StartResourcePeakEpoch()
+									if token == nil {
+										b.Fatal("failed to start resource peak epoch")
+									}
+									rowsSeen := 0
+									for {
+										result, err := vm.Exec(pipeline.window, pipeline.proc)
+										if err != nil {
+											b.Fatal(err)
+										}
+										if result.Batch == nil {
+											break
+										}
+										rowsSeen += result.Batch.RowCount()
+									}
+									measuredPeak, ok := pipeline.mp.EndResourcePeakEpoch(token)
+									if !ok {
+										b.Fatal("failed to end resource peak epoch")
+									}
+									b.StopTimer()
+									if rowsSeen != rows {
+										b.Fatalf("Window emitted %d rows, want %d", rowsSeen, rows)
+									}
+									peak = max(peak, measuredPeak)
+									pipeline.free()
+								}
+								b.ReportMetric(float64(peak), "peak-mpool-B")
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+type windowHashAcceptancePipeline struct {
+	proc      *process.Process
+	mp        *mpool.MPool
+	window    *Window
+	partition *execpartition.Partition
+	order     *orderop.Order
+	child     *colexec.MockOperator
+	valuePos  int
+}
+
+func (p *windowHashAcceptancePipeline) free() {
+	p.window.Free(p.proc, false, nil)
+	p.partition.Free(p.proc, false, nil)
+	if p.order != nil {
+		p.order.Free(p.proc, false, nil)
+	}
+	p.child.Free(p.proc, false, nil)
+	p.proc.Free()
+}
+
+func newWindowHashAcceptancePipeline(
+	t testing.TB,
+	rows, ndv, keyCount int,
+	varlen, ordered, useHash bool,
+	spillMem int64,
+) *windowHashAcceptancePipeline {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	inputs, partitionSpecs, partitionExprs, valuePos := makeWindowHashAcceptanceInput(
+		t, proc, rows, ndv, keyCount, varlen,
+	)
+	child := colexec.NewMockOperator().WithBatchs(inputs)
+	partition := &execpartition.Partition{
+		OrderBySpecs: partitionSpecs,
+		SpillMem:     spillMem,
+	}
+	var order *orderop.Order
+	if useHash {
+		partition.Algorithm = plan.Node_PARTITION_ALGORITHM_HASH
+		partition.AppendChild(child)
+	} else {
+		order = orderop.NewArgument()
+		order.OrderBySpec = partitionSpecs
+		order.AppendChild(child)
+		if err := order.Prepare(proc); err != nil {
+			t.Fatal(err)
+		}
+		partition.AppendChild(order)
+	}
+	if err := partition.Prepare(proc); err != nil {
+		t.Fatal(err)
+	}
+
+	spec := makeWindowSpec()
+	w := spec.GetW()
+	// Use a linear frame so the acceptance matrix measures the partition
+	// consumer rather than the quadratic work of an unbounded aggregate frame.
+	w.Frame = makeCurrentRowFrame()
+	w.PartitionBy = partitionExprs
+	if ordered {
+		w.OrderBy = []*plan.OrderBySpec{{
+			Expr: newColExprWithType(int32(valuePos), types.T_int32.ToType()),
+		}}
+	}
+	window := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExprAt(int32(valuePos))},
+	}
+	window.AppendChild(partition)
+	if err := window.Prepare(proc); err != nil {
+		t.Fatal(err)
+	}
+	return &windowHashAcceptancePipeline{
+		proc:      proc,
+		mp:        mp,
+		window:    window,
+		partition: partition,
+		order:     order,
+		child:     child,
+		valuePos:  valuePos,
+	}
+}
+
+func TestWindowHashPartitionAcceptanceConsumer(t *testing.T) {
+	for _, ordered := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unordered", true: "ordered"}[ordered], func(t *testing.T) {
+			var checksums [2]int64
+			for algorithm, useHash := range []bool{false, true} {
+				func() {
+					pipeline := newWindowHashAcceptancePipeline(
+						t, 4096, 64, 1, false, ordered, useHash, 1<<30,
+					)
+					defer pipeline.free()
+					rowsSeen := 0
+					for {
+						result, err := vm.Exec(pipeline.window, pipeline.proc)
+						require.NoError(t, err)
+						if result.Batch == nil {
+							break
+						}
+						rowsSeen += result.Batch.RowCount()
+						values := vector.MustFixedColWithTypeCheck[int64](
+							result.Batch.Vecs[pipeline.valuePos+1],
+						)
+						for _, value := range values {
+							checksums[algorithm] += value
+						}
+					}
+					require.Equal(t, 4096, rowsSeen)
+				}()
+			}
+			require.Equal(t, checksums[0], checksums[1])
+			require.NotZero(t, checksums[0])
+		})
+	}
+}
+
+func makeWindowHashAcceptanceInput(
+	t testing.TB,
+	proc *process.Process,
+	rows, ndv, keyCount int,
+	varlen bool,
+) ([]*batch.Batch, []*plan.OrderBySpec, []*plan.Expr, int) {
+	t.Helper()
+	if ndv < 1 {
+		ndv = 1
+	}
+	split := rows / 2
+	if split == 0 {
+		split = rows
+	}
+	parts := []int{split, rows - split}
+	if parts[1] == 0 {
+		parts = parts[:1]
+	}
+	partitionSpecs := make([]*plan.OrderBySpec, keyCount)
+	partitionExprs := make([]*plan.Expr, keyCount)
+	for key := 0; key < keyCount; key++ {
+		if varlen {
+			partitionExprs[key] = newColExprWithType(int32(key), types.T_varchar.ToType())
+		} else {
+			partitionExprs[key] = newColExprWithType(int32(key), types.T_int32.ToType())
+		}
+		partitionSpecs[key] = &plan.OrderBySpec{Expr: partitionExprs[key]}
+	}
+	valuePos := keyCount
+	inputs := make([]*batch.Batch, 0, len(parts))
+	start := 0
+	for _, partRows := range parts {
+		bat := batch.NewWithSize(keyCount + 1)
+		for key := 0; key < keyCount; key++ {
+			if varlen {
+				vec := vector.NewVec(types.T_varchar.ToType())
+				values := make([][]byte, partRows)
+				for row := range values {
+					values[row] = strconv.AppendInt(nil, int64((start+row)*7919+key*104729)%int64(ndv), 10)
+				}
+				if err := vector.AppendBytesList(vec, values, nil, proc.Mp()); err != nil {
+					t.Fatal(err)
+				}
+				bat.Vecs[key] = vec
+			} else {
+				vec := vector.NewVec(types.T_int32.ToType())
+				values := make([]int32, partRows)
+				for row := range values {
+					values[row] = int32((start+row)*7919+key*104729) % int32(ndv)
+				}
+				if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
+					t.Fatal(err)
+				}
+				bat.Vecs[key] = vec
+			}
+		}
+		values := make([]int32, partRows)
+		for row := range values {
+			values[row] = int32(start + row + 1)
+		}
+		bat.Vecs[valuePos] = vector.NewVec(types.T_int32.ToType())
+		if err := vector.AppendFixedList(bat.Vecs[valuePos], values, nil, proc.Mp()); err != nil {
+			t.Fatal(err)
+		}
+		bat.SetRowCount(partRows)
+		inputs = append(inputs, bat)
+		start += partRows
+	}
+	return inputs, partitionSpecs, partitionExprs, valuePos
+}
 
 // BenchmarkWindowFirstBatch models the #23107 LIMIT consumer: it asks Window
 // for only the first output batch of a large cumulative frame and then resets
