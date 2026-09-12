@@ -27,6 +27,10 @@ SELECT COUNT (*) = 2 AS count_ok FROM src;
 SELECT SUM (a) = 30 AS sum_ok FROM src;
 SELECT DATE_ADD ('2024-01-01', INTERVAL 1 DAY) = '2024-01-02' AS date_add_ok;
 SELECT ABS (-2) AS abs_ok, MOD (5, 2) AS mod_ok;
+CREATE TABLE issue_28603_ignore_space.count(a INT);
+INSERT INTO issue_28603_ignore_space.count VALUES (30);
+SELECT issue_28603_ignore_space.count.a AS qualified_count FROM issue_28603_ignore_space.count;
+DROP TABLE issue_28603_ignore_space.count;
 
 PREPARE issue_28603_p FROM 'SELECT COUNT (*) = 2 AS count_ok FROM src';
 SET SESSION sql_mode = 'STRICT_TRANS_TABLES';

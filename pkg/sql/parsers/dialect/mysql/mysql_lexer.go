@@ -264,6 +264,13 @@ func (l *Lexer) isSQLModeReservedFunctionName(name string) bool {
 	if !isSQLModeSensitiveFunctionName(name) {
 		return false
 	}
+	// MySQL permits a reserved function name as a component after the
+	// qualification dot, for example `src.count`. The identifier reduction is
+	// shared by unqualified names and qualified-name components, so preserve
+	// that distinction before applying the function-name rule.
+	if l.previousToken == int('.') {
+		return false
+	}
 	if l.HasSQLMode(SQLModeIgnoreSpace) {
 		return true
 	}
