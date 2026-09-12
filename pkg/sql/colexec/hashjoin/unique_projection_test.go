@@ -98,7 +98,7 @@ func TestHashJoinUniqueProjectionResumesAndReuses(t *testing.T) {
 		[][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}})
 	tc.arg.JoinType, tc.arg.NonEqCond = plan.Node_INNER, nil
 	tc.arg.ResultCols = []colexec.ResultPos{{Rel: 0, Pos: 0}, {Rel: 1, Pos: 0}}
-	var inputs []*batch.Batch
+	inputs := make([]*batch.Batch, 0, 6)
 	t.Cleanup(func() {
 		tc.arg.Reset(tc.proc, false, nil)
 		tc.barg.Reset(tc.proc, false, nil)
