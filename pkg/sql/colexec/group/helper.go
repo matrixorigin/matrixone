@@ -845,6 +845,9 @@ func (ctr *container) writeSpillRecord(
 	clear(prepareParamKindSources)
 	hasPrepareParamKinds := false
 	for i, ag := range ctr.aggList {
+		// Generic spill is local state, so retain GROUP_CONCAT source rows even
+		// when this operator is currently connected to a legacy partial peer.
+		aggexec.SetGroupConcatSourceRowWire(ag, true)
 		if fullFlags != nil {
 			// The stable intermediate format predates the bounded spill codec and
 			// accepts one flag slice per aggregate chunk. Legacy callers do not
@@ -1658,11 +1661,12 @@ func (ctr *container) getNextFinalResult(
 					ctr.groupByBatches[j].Vecs, vecs[j])
 			}
 		}
-		// Publish diagnostics only after every final vector has materialized;
-		// a later vector/allocation error must not expose warnings for a failed
-		// statement.
+		// Collect diagnostics only after every final vector has materialized; a
+		// later vector/allocation error must not expose warnings for a failed
+		// statement. Publication is deferred until every resident/spilled bucket
+		// has completed so warning order and bounded retention are global.
 		for _, ag := range ctr.aggList {
-			aggexec.ReportGroupConcatWarnings(ag, proc.GetWarningSink())
+			ctr.groupConcatWarnings.Add(ag)
 		}
 
 		ctr.freeAggList()
@@ -1701,6 +1705,7 @@ func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer proc
 	if err := ctr.releaseFinalRecoveryCapacity(); err != nil {
 		return vm.CancelResult, err
 	}
+	ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	return res, nil
 }
 
@@ -1850,6 +1855,12 @@ func (ctr *container) makeAggListWithAllocation(
 			return nil, err
 		}
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
+		// mtyp is the logical Group mode and survives resident-spill resets.
+		// Preserve it in each rebuilt GROUP_CONCAT executor even when the
+		// current spill bucket contains only one group.
+		aggexec.SetGroupConcatMultiGroupContext(aggList[i], ctr.mtyp != H0)
+		aggexec.SetGroupConcatSourceRowsTrusted(
+			aggList[i], !ctr.groupConcatSourceRowsUntrusted)
 	}
 
 	if ctr.mtyp != H0 {

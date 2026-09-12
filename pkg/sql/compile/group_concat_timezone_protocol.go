@@ -83,7 +83,7 @@ func (c *Compile) constrainGroupConcatTimeZoneWorkers(qry *plan.Query) error {
 	}
 	if named && !local {
 		var supported bool
-		supported, err = remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion66)
+		supported, err = remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion67)
 		if err != nil {
 			return err
 		}
@@ -105,7 +105,7 @@ func validateGroupConcatTimeZoneDestination(proc *process.Process, p *pipeline.P
 		return nil
 	}
 	if !local && p != nil && p.Node != nil {
-		supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion66)
+		supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion67)
 		if err != nil {
 			return err
 		}
@@ -113,5 +113,5 @@ func validateGroupConcatTimeZoneDestination(proc *process.Process, p *pipeline.P
 			return nil
 		}
 	}
-	return moerr.NewNotSupportedNoCtx("remote GROUP_CONCAT requires a portable time zone and MORPC version 66")
+	return moerr.NewNotSupportedNoCtx("remote GROUP_CONCAT requires a portable time zone and MORPC version 67")
 }

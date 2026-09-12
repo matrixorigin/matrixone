@@ -45,20 +45,20 @@ func TestNamedGroupConcatNegotiatesPlacementAndFencesOldWorkers(t *testing.T) {
 	}
 	scope := &Scope{Magic: Remote, Proc: c.proc,
 		NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: operator}
-	client.version = defines.MORPCVersion66
+	client.version = defines.MORPCVersion67
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	wire := new(pipeline.Pipeline)
 	require.NoError(t, wire.Unmarshal(data))
 	require.True(t, wire.InstructionList[0].Agg.NeedEval)
 	require.Nil(t, wire.InstructionList[0].Agg.Aggs[0].Expr[0].GetF())
-	for _, v := range []int64{defines.MORPCVersion65, defines.MORPCVersion66} {
+	for _, v := range []int64{defines.MORPCVersion66, defines.MORPCVersion67} {
 		client.version = v
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainGroupConcatTimeZoneWorkers(qry))
 		err := validateGroupConcatTimeZoneDestination(c.proc, wire)
-		if v < defines.MORPCVersion66 {
+		if v < defines.MORPCVersion67 {
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 			require.Equal(t, c.addr, c.cnList[0].Addr)
 			require.Error(t, err)
@@ -77,7 +77,7 @@ func TestNamedGroupConcatNegotiatesPlacementAndFencesOldWorkers(t *testing.T) {
 		require.Error(t, validateGroupConcatTimeZoneDestination(c.proc, wire))
 	}
 	c.proc.Base.SessionInfo.TimeZone = time.FixedZone("FixedZone", 8*3600)
-	client.version = defines.MORPCVersion65
+	client.version = defines.MORPCVersion66
 	require.NoError(t, validateGroupConcatTimeZoneDestination(c.proc, wire))
 	c.proc.Base.SessionInfo.TimeZone = time.UTC
 	require.NoError(t, validateGroupConcatTimeZoneDestination(c.proc, wire))
