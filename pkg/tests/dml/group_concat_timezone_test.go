@@ -110,7 +110,7 @@ func TestGroupConcatNamedTimeZoneRemoteOwner(t *testing.T) {
 		}
 		peerRuntime := moruntime.ServiceRuntime(peer.ServiceID())
 		oldVersion, _ := peerRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
-		peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+		peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
 		defer peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
 		physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 		require.NoError(t, err)

@@ -17,46 +17,12 @@ package isolated
 import (
 	"context"
 	"database/sql"
-	"strings"
-	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 )
 
-// StartTestCluster returns after the CN service is listening, while the
-// asynchronous system bootstrap can still be creating the task tables. Account
-// DDL initializes a complete tenant catalog and competes with that bootstrap for
-// HAKeeper/logtail work. Wait for the bootstrap marker tables before issuing it.
+// Keep the isolated package's existing helper name while sharing the readiness
+// contract with SQL integration tests.
 func waitSystemBootstrap(ctx context.Context, db *sql.DB) error {
-	want := map[string]struct{}{
-		"sys_async_task":  {},
-		"sys_cron_task":   {},
-		"sys_daemon_task": {},
-		"sql_task":        {},
-		"sql_task_run":    {},
-	}
-
-	for {
-		rows, err := db.QueryContext(ctx, "show tables from mo_task")
-		if err == nil {
-			err = func() error {
-				defer rows.Close()
-				for rows.Next() {
-					var name string
-					if err := rows.Scan(&name); err != nil {
-						return err
-					}
-					delete(want, strings.ToLower(name))
-				}
-				return rows.Err()
-			}()
-			if err == nil && len(want) == 0 {
-				return nil
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
+	return testutils.WaitSystemBootstrap(ctx, db)
 }

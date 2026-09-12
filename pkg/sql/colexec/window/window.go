@@ -2181,6 +2181,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(ctr.sels))
+	var jsonOrderScratch sort.JSONOrderScratch
 
 	i, j := 1, len(ctr.orderVecs)
 	for ; i < j; i++ {
@@ -2195,9 +2196,14 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			ps = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
 		}
 		vec := ctr.orderVecs[i].Vec[0]
+		var scratch *sort.JSONOrderScratch
+		nullCnt := vec.GetNulls().Count()
+		if i >= partitionKeyCount && !vec.IsConst() && vec.GetType().Oid == types.T_json && nullCnt < vec.Length() {
+			jsonOrderScratch.Prepare(ctr.sels, vec)
+			scratch = &jsonOrderScratch
+		}
 		// skip sort for const vector
 		if !vec.IsConst() {
-			nullCnt := vec.GetNulls().Count()
 			if nullCnt < vec.Length() {
 				for group, groupCount := 0, len(ps); group < groupCount; group++ {
 					if err := checkCanceled(proc, group); err != nil {
@@ -2211,7 +2217,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 					if i < partitionKeyCount {
 						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
 					} else {
-						sort.SortForSQLOrder(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
+						sort.SortForSQLOrderWithScratch(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec, scratch)
 					}
 				}
 			}
