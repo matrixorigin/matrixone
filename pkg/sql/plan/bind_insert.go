@@ -1441,11 +1441,45 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 			RelPos: probeTag, ColPos: pkColIdx,
 		}}}
 		var err error
-		inputPK, err = bindPrimaryKeyIdentityExpr(builder, inputPK, pkTyp)
+		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
 		if err != nil {
 			return 0, 0, 0, err
 		}
-		existingPK, err = bindPrimaryKeyIdentityExpr(builder, existingPK, pkTyp)
+		if useV2 {
+			values := make([]*plan.Expr, len(tableDef.Pkey.Names))
+			for i, name := range tableDef.Pkey.Names {
+				name = catalog.ResolveAlias(name)
+				pos, ok := colName2Idx[tableDef.Name+"."+name]
+				if !ok || pos < 0 || int(pos) >= len(incomingProjectList) {
+					return 0, 0, 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 primary-key part %s", name)
+				}
+				values[i] = &plan.Expr{Typ: incomingProjectList[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectTag, ColPos: pos, Name: name,
+				}}}
+			}
+			inputPK, err = makePrimaryKeyV2IdentityExprs(tableDef, values)
+		} else {
+			inputPK, err = bindPrimaryKeyIdentityExpr(builder, inputPK, pkTyp)
+		}
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		if useV2 {
+			values := make([]*plan.Expr, len(tableDef.Pkey.Names))
+			for i, name := range tableDef.Pkey.Names {
+				name = catalog.ResolveAlias(name)
+				pos, ok := tableDef.Name2ColIndex[name]
+				if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) {
+					return 0, 0, 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 existing primary-key part %s", name)
+				}
+				values[i] = &plan.Expr{Typ: tableDef.Cols[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: probeTag, ColPos: pos, Name: name,
+				}}}
+			}
+			existingPK, err = makePrimaryKeyV2IdentityExprs(tableDef, values)
+		} else {
+			existingPK, err = bindPrimaryKeyIdentityExpr(builder, existingPK, pkTyp)
+		}
 		if err != nil {
 			return 0, 0, 0, err
 		}
@@ -1495,14 +1529,37 @@ func (builder *QueryBuilder) buildOnDupTargetPkResolution(
 		priColPos := idxTableDef.Name2ColIndex[catalog.IndexTablePrimaryColName]
 		priColTyp := idxTableDef.Cols[priColPos].Typ
 
-		// The incoming unique-key value, matching what the hidden index table
-		// stores: for a single-part index the prefix-aware value (a substring for a
-		// prefix index like UNIQUE KEY u(col(4)), otherwise the raw column); for a
-		// composite index the serial composite already materialized in colName2Idx.
-		// Using the raw column for a prefix index would miss conflicts whose stored
-		// prefix keys collide (e.g. existing 'abcdxxxx' vs incoming 'abcdyyyy').
+		// The incoming unique-key value must be byte-identical to the value
+		// materialized for the hidden relation. For v2 relations the planner
+		// builds the complete framed key directly from the final input image;
+		// legacy relations retain the existing prefix/serial path.
 		var incomingValExpr *plan.Expr
-		if len(idxDef.Parts) == 1 {
+		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDef)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		if useV2 {
+			values := make([]*plan.Expr, len(idxDef.Parts))
+			for k, part := range idxDef.Parts {
+				partName := catalog.ResolveAlias(part)
+				pos, ok := colName2Idx[tableDef.Name+"."+partName]
+				if !ok || pos < 0 || int(pos) >= len(incomingProjectList) {
+					return 0, 0, 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 ODKU unique-key part %s", partName)
+				}
+				values[k] = &plan.Expr{Typ: incomingProjectList[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectTag, ColPos: pos, Name: partName,
+				}}}
+			}
+			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
+			if err != nil {
+				return 0, 0, 0, err
+			}
+			incomingValExpr, err = builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+				tableDef, idxTableDef, idxDef, values, prefixLengths)
+			if err != nil {
+				return 0, 0, 0, err
+			}
+		} else if len(idxDef.Parts) == 1 {
 			prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 			if err != nil {
 				return 0, 0, 0, err
@@ -1786,7 +1843,20 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			if partsEqual(pkeyNames, referencedNames) {
 				lockTableDef = parentTableDef
 				lockObjRef = parentObjRef
-				if len(childExprs) == 1 {
+				useV2, v2Err := tableUsesCollationKeyV2(builder.GetContext(), parentTableDef)
+				if v2Err != nil {
+					return 0, nil, v2Err
+				}
+				if useV2 {
+					// Parent PK locks must use exactly the same framed identity as
+					// PK probes and writes.  Serializing the original strings here
+					// would allow two collation-equivalent FK values to lock
+					// different identities.
+					lockExpr, err = makePrimaryKeyV2IdentityExprs(parentTableDef, childExprs)
+					if err != nil {
+						return 0, nil, err
+					}
+				} else if len(childExprs) == 1 {
 					lockExpr = childExprs[0]
 				} else {
 					lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", childExprs)
@@ -1823,20 +1893,35 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 					if err != nil {
 						return 0, nil, err
 					}
-					keyParts := make([]*plan.Expr, len(childExprs))
-					for i, expr := range childExprs {
-						keyParts[i], err = builder.makeIndexPartExprFromInputExpr(expr, referencedNames[i], prefixLengths)
-						if err != nil {
-							return 0, nil, err
+					useV2, v2Err := tableUsesCollationKeyV2(builder.GetContext(), lockTableDef)
+					if v2Err != nil {
+						return 0, nil, v2Err
+					}
+					if useV2 {
+						// The resolved hidden unique relation carries the codec
+						// metadata.  Build the same framed key used by the index
+						// probe, including prefix semantics.
+						lockExpr, err = builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+							parentTableDef, lockTableDef, matchedIndex, childExprs, prefixLengths)
+					} else {
+						keyParts := make([]*plan.Expr, len(childExprs))
+						for i, expr := range childExprs {
+							keyParts[i], err = builder.makeIndexPartExprFromInputExpr(expr, referencedNames[i], prefixLengths)
+							if err != nil {
+								return 0, nil, err
+							}
+						}
+						if indexTableStoresSerializedKey(matchedIndex) {
+							lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", keyParts)
+							if err != nil {
+								return 0, nil, err
+							}
+						} else {
+							lockExpr = keyParts[0]
 						}
 					}
-					if indexTableStoresSerializedKey(matchedIndex) {
-						lockExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", keyParts)
-						if err != nil {
-							return 0, nil, err
-						}
-					} else {
-						lockExpr = keyParts[0]
+					if err != nil {
+						return 0, nil, err
 					}
 				}
 			}
@@ -2594,8 +2679,26 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	autoIncrementGeneratedColumn int32,
 ) (int32, error) {
 	tableDef := dmlCtx.tableDefs[0]
+	objRef := dmlCtx.objRefs[0]
 	pkName := tableDef.Pkey.PkeyColName
 	isFakePK := pkName == catalog.FakePrimaryKeyColName
+	var err error
+	// Resolve unique relation definitions before any lock-key projection is
+	// materialized.  A secondary UNIQUE relation can own a different codec
+	// generation from the base table (for example INT PK + VARCHAR UNIQUE), so
+	// the lock projection must consult that physical relation's metadata.
+	idxObjRefs := make([]*plan.ObjectRef, len(tableDef.Indexes))
+	idxTableDefs := make([]*plan.TableDef, len(tableDef.Indexes))
+	for i, idxDef := range tableDef.Indexes {
+		if idxDef == nil || !idxDef.Unique {
+			continue
+		}
+		idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(
+			objRef, idxDef.IndexTableName, bindCtx.snapshot)
+		if err != nil {
+			return 0, err
+		}
+	}
 
 	// For fake-PK tables (no explicit primary key), the first usable unique
 	// index plays the role of the primary key for conflict detection and for
@@ -2634,10 +2737,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		return 0, moerr.NewUnsupportedDML(builder.GetContext(), "insert into vector/text index table")
 	}
 
-	var (
-		err         error
-		onDupAction plan.Node_OnDuplicateAction
-	)
+	var onDupAction plan.Node_OnDuplicateAction
 
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectTag := selectNode.BindingTags[0]
@@ -2820,7 +2920,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// physical vectors consumed by LockOp.
 	lockKeysMaterializedBeforeChecks := false
 	if onDupAction == plan.Node_IGNORE && len(tableDef.Checks) > 0 {
-		needsLockKeyProjection, err := hasMaterializedInsertUniqueLockKey(tableDef, skipUniqueIdx)
+		needsLockKeyProjection, err := builder.hasMaterializedInsertUniqueLockKeyForRelations(
+			tableDef, idxTableDefs, skipUniqueIdx)
 		if err != nil {
 			return 0, err
 		}
@@ -2829,7 +2930,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				bindCtx,
 				lastNodeID,
 			)
-			if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
+			if err = builder.materializeInsertUniqueLockKeys(tableDef, idxTableDefs, skipUniqueIdx, colName2Idx, selectNode); err != nil {
 				return 0, err
 			}
 			lockKeysMaterializedBeforeChecks = true
@@ -2900,7 +3001,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// Materialize lock keys for composite and prefix unique indexes in advance.
 	// This guarantees the lock target can find __mo_index_idx_col in colName2Idx.
 	if !lockKeysMaterializedBeforeChecks {
-		if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
+		if err = builder.materializeInsertUniqueLockKeys(tableDef, idxTableDefs, skipUniqueIdx, colName2Idx, selectNode); err != nil {
 			return 0, err
 		}
 	}
@@ -3026,10 +3127,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
-	objRef := dmlCtx.objRefs[0]
-	idxObjRefs := make([]*plan.ObjectRef, len(tableDef.Indexes))
-	idxTableDefs := make([]*plan.TableDef, len(tableDef.Indexes))
-
 	//lock main table
 	lockTargets := make([]*plan.LockTarget, 0, len(tableDef.Indexes)+1)
 	pkInTableCols := false
@@ -3090,7 +3187,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if err != nil {
 			return 0, err
 		}
-		if len(idxDef.Parts) == 1 && len(prefixLengths) == 0 {
+		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDef)
+		if err != nil {
+			return 0, err
+		}
+		if len(idxDef.Parts) == 1 && len(prefixLengths) == 0 && !useV2 {
 			var ok bool
 			partName := catalog.ResolveAlias(idxDef.Parts[0])
 			pkIdxInBat, ok = colName2Idx[tableDef.Name+"."+partName]
@@ -3202,6 +3303,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if skipUniqueIdx[i] || !idxDef.Unique {
 			continue
 		}
+		// The projection is built before the lock/dedup loops below, but the
+		// physical hidden relation owns the v2 metadata needed to encode this
+		// index. Resolve it here so a table with a legacy integer PK can still
+		// materialize a textual secondary UNIQUE key with its own format.
+		if idxTableDefs[i] == nil {
+			idxObjRefs[i], idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(
+				objRef, idxDef.IndexTableName, bindCtx.snapshot)
+			if err != nil {
+				return 0, err
+			}
+		}
 
 		// prepare two projections for the unique index: `__mo_index_idx_col` and `__mo_index_pri_col`
 		idxTableName := idxDef.IndexTableName
@@ -3221,28 +3333,19 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 		appendedUniqueProjs[idxPriColName] = idxPrimaryColExpr
 
-		// __mo_index_idx_col projection for index columns
-		argsLen := len(idxDef.Parts)
+		// __mo_index_idx_col projection for index columns. Legacy relations keep
+		// their typed/raw or serial key. A v2 relation uses the planner-only
+		// framed codec expression so the same bytes feed probes, statement-local
+		// arbitration, locks, and the physical unique relation.
 		var idxIndexColExpr *plan.Expr
 		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 		if err != nil {
 			return 0, err
 		}
-		if argsLen == 1 {
-			idxIndexColExpr, err = builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, idxDef.Parts[0], prefixLengths)
-			if err != nil {
-				return 0, err
-			}
-		} else {
-			args := make([]*plan.Expr, argsLen)
-			for k := range argsLen {
-				args[k], err = builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, idxDef.Parts[k], prefixLengths)
-				if err != nil {
-					return 0, err
-				}
-			}
-
-			idxIndexColExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+		idxIndexColExpr, err = builder.makeInsertUniqueIndexKeyExpr(
+			selectNode, selectTag, tableDef, idxTableDefs[i], idxDef, colName2Idx, prefixLengths)
+		if err != nil {
+			return 0, err
 		}
 		appendedUniqueProjs[idxIdxColName] = idxIndexColExpr
 	}
@@ -3380,11 +3483,43 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					Typ:  pkTyp,
 					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: rightPkPos}},
 				}
-				leftPK, err = bindPrimaryKeyIdentityExpr(builder, leftPK, pkTyp)
+				useV2, keyErr := tableUsesCollationKeyV2(builder.GetContext(), tableDef)
+				if keyErr != nil {
+					return 0, keyErr
+				}
+				if useV2 {
+					leftValues := make([]*plan.Expr, len(tableDef.Pkey.Names))
+					rightValues := make([]*plan.Expr, len(tableDef.Pkey.Names))
+					for i, name := range tableDef.Pkey.Names {
+						name = catalog.ResolveAlias(name)
+						partPos, ok := tableDef.Name2ColIndex[name]
+						incomingPos, incomingOK := colName2Idx[tableDef.Name+"."+name]
+						if !ok || !incomingOK || partPos < 0 || incomingPos < 0 || int(partPos) >= len(tableDef.Cols) || int(incomingPos) >= len(selectNode.ProjectList) {
+							return 0, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 primary-key dedup part %s", name)
+						}
+						leftValues[i] = &plan.Expr{Typ: tableDef.Cols[partPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: scanTag, ColPos: int32(partPos), Name: name,
+						}}}
+						rightValues[i] = &plan.Expr{Typ: selectNode.ProjectList[incomingPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: selectTag, ColPos: incomingPos, Name: name,
+						}}}
+					}
+					leftPK, err = makePrimaryKeyV2IdentityExprs(tableDef, leftValues)
+					if err != nil {
+						return 0, err
+					}
+					// The target primary key remains the original storage identity;
+					// only the dedup comparison uses the framed key.
+					rightPK, err = makePrimaryKeyV2IdentityExprs(tableDef, rightValues)
+				} else {
+					leftPK, err = bindPrimaryKeyIdentityExpr(builder, leftPK, pkTyp)
+				}
 				if err != nil {
 					return 0, err
 				}
-				rightPK, err = bindPrimaryKeyIdentityExpr(builder, rightPK, pkTyp)
+				if !useV2 {
+					rightPK, err = bindPrimaryKeyIdentityExpr(builder, rightPK, pkTyp)
+				}
 				if err != nil {
 					return 0, err
 				}
@@ -3855,8 +3990,21 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						ColPos: newColPos,
 					}},
 				}
+				// FULLTEXT maintenance identity is stricter than SQL equality. A
+				// future collation-aware <=> may treat case or padding variants as
+				// equal even though the tokenizer input bytes differ. Cast both
+				// images to VARBINARY before the NULL-safe comparison so the marker
+				// proves stored-value identity, not SQL collation equality.
+				oldStored, bindErr := makeStoredValueIdentityExpr(builder.GetContext(), oldCol)
+				if bindErr != nil {
+					return 0, bindErr
+				}
+				newStored, bindErr := makeStoredValueIdentityExpr(builder.GetContext(), newCol)
+				if bindErr != nil {
+					return 0, bindErr
+				}
 				equal, bindErr := BindFuncExprImplByPlanExpr(
-					builder.GetContext(), "<=>", []*plan.Expr{oldCol, newCol})
+					builder.GetContext(), "<=>", []*plan.Expr{oldStored, newStored})
 				if bindErr != nil {
 					return 0, bindErr
 				}
@@ -4309,6 +4457,7 @@ func (builder *QueryBuilder) appendInsertLockKeyProjection(
 // physical vectors rather than expressions in a pass-through FILTER.
 func (builder *QueryBuilder) materializeInsertUniqueLockKeys(
 	tableDef *TableDef,
+	idxTableDefs []*plan.TableDef,
 	skipUniqueIdx []bool,
 	colName2Idx map[string]int32,
 	selectNode *plan.Node,
@@ -4318,6 +4467,21 @@ func (builder *QueryBuilder) materializeInsertUniqueLockKeys(
 		if err != nil {
 			return err
 		}
+		uniqueTableDef := tableDef
+		if i < len(idxTableDefs) && idxTableDefs[i] != nil {
+			uniqueTableDef = idxTableDefs[i]
+		}
+		useV2 := false
+		if idxDef.Unique && !skipUniqueIdx[i] {
+			useV2, err = tableUsesCollationKeyV2(builder.GetContext(), uniqueTableDef)
+			if err != nil {
+				return err
+			}
+		}
+		// A v2 relation stores a complete framed key even for a single-part
+		// index, so it must have a physical lock-key projection.  The legacy
+		// helper only asks for a projection for composite/prefix keys.
+		materialize = materialize || useV2
 		if !materialize {
 			continue
 		}
@@ -4327,7 +4491,22 @@ func (builder *QueryBuilder) materializeInsertUniqueLockKeys(
 		}
 
 		var lockExpr *plan.Expr
-		if len(idxDef.Parts) == 1 {
+		if useV2 {
+			values := make([]*plan.Expr, len(idxDef.Parts))
+			for k, part := range idxDef.Parts {
+				partName := catalog.ResolveAlias(part)
+				partPos, ok := colName2Idx[tableDef.Name+"."+partName]
+				if !ok || partPos < 0 || int(partPos) >= len(selectNode.ProjectList) {
+					return moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 unique-key lock part %s", partName)
+				}
+				values[k] = selectNode.ProjectList[partPos]
+			}
+			lockExpr, err = builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+				tableDef, uniqueTableDef, idxDef, values, prefixLengths)
+			if err != nil {
+				return err
+			}
+		} else if len(idxDef.Parts) == 1 {
 			partName := catalog.ResolveAlias(idxDef.Parts[0])
 			partPos, ok := colName2Idx[tableDef.Name+"."+partName]
 			if !ok {
@@ -4366,6 +4545,39 @@ func hasMaterializedInsertUniqueLockKey(tableDef *TableDef, skipUniqueIdx []bool
 			return false, err
 		}
 		if materialize {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// hasMaterializedInsertUniqueLockKeyForRelations extends the legacy shape
+// check with relation-local codec metadata.  A v2 single-part UNIQUE relation
+// needs its framed key materialized before an INSERT IGNORE CHECK filter just
+// like a legacy composite/prefix key; otherwise the filter would turn the
+// executable PROJECT into a pass-through node before LockOp can read the key.
+func (builder *QueryBuilder) hasMaterializedInsertUniqueLockKeyForRelations(
+	tableDef *TableDef,
+	idxTableDefs []*plan.TableDef,
+	skipUniqueIdx []bool,
+) (bool, error) {
+	for i, idxDef := range tableDef.Indexes {
+		_, materialize, err := insertUniqueLockKeyPrefixLengths(idxDef, skipUniqueIdx[i])
+		if err != nil {
+			return false, err
+		}
+		uniqueTableDef := tableDef
+		if i < len(idxTableDefs) && idxTableDefs[i] != nil {
+			uniqueTableDef = idxTableDefs[i]
+		}
+		useV2 := false
+		if idxDef.Unique && !skipUniqueIdx[i] {
+			useV2, err = tableUsesCollationKeyV2(builder.GetContext(), uniqueTableDef)
+			if err != nil {
+				return false, err
+			}
+		}
+		if materialize || useV2 {
 			return true, nil
 		}
 	}
@@ -4938,6 +5150,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	var (
 		compPkeyExpr  *plan.Expr
 		clusterByExpr *plan.Expr
+		err           error
 	)
 
 	columnIsNull := make(map[string]bool)
@@ -4979,7 +5192,10 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			//}
 			//
 			//compPkeyExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
-			compPkeyExpr = makeCompPkeyExpr(tableDef, tableDef.Name2ColIndex)
+			compPkeyExpr, err = makeCompPkeyExprForTable(builder.GetContext(), tableDef, tableDef.Name2ColIndex)
+			if err != nil {
+				return 0, nil, nil, -1, err
+			}
 			projList2 = append(projList2, &plan.Expr{
 				Typ: compPkeyExpr.Typ,
 				Expr: &plan.Expr_Col{

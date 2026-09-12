@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -64,6 +65,183 @@ type viewReplacementCompilerContext struct {
 	historicalSnapshot  *Snapshot
 	timestampValid      bool
 	lowerCaseTableNames int64
+}
+
+func TestV2TextPrimaryKeyDefersHiddenColumnAppendToPreInsert(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.SetContext(collationkey.WithAdmission(context.Background(), collationkey.Admission{
+		Activation: collationkey.Activation{
+			RequestedVersion: collationkey.CollationAwareVersion,
+			RegistryVersion:  uint32(collationkey.RegistryVersion),
+			RegistryDigest:   collationkey.RegistryDigest(),
+			Generation:       7,
+			Phase:            collationkey.ActivationEnabled,
+			CnTargets:        map[string]uint64{"cn-1": 11},
+			TnTargets:        map[string]uint64{"tn-1": 13},
+		},
+		Kind: collationkey.NodeCN,
+		Node: collationkey.NodeAcknowledgement{
+			NodeID:      "cn-1",
+			Incarnation: 11,
+			Capability: collationkey.Capability{
+				ReadableVersions:   1 << collationkey.CollationAwareVersion,
+				WritableVersions:   1 << collationkey.CollationAwareVersion,
+				RegistryVersion:    uint32(collationkey.RegistryVersion),
+				RegistryDigest:     collationkey.RegistryDigest(),
+				MaxEncodedKeyBytes: collationkey.MaxKeyBytes,
+			},
+		},
+	}))
+
+	userPK := &plan.ColDef{Name: "k", Typ: plan.Type{
+		Id:      int32(types.T_varchar),
+		Charset: uint32(types.CharsetUTF8),
+	}}
+	tableDef := &plan.TableDef{
+		Name: "v2_pk",
+		Cols: []*plan.ColDef{userPK},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"k"}, PkeyColName: "k"},
+	}
+
+	require.NoError(t, maybeEnableCollationKeyV2ForCreate(ctx, tableDef, nil))
+	require.NotNil(t, tableDef.UniqueKeyCodecVersion)
+	require.Equal(t, catalog.CPrimaryKeyColName, tableDef.Pkey.PkeyColName)
+	require.NotNil(t, tableDef.Pkey.CompPkeyCol)
+	// appendPreInsertPlan owns the physical Cols append for composite keys.
+	// The DDL helper must not pre-append the same object.
+	require.Len(t, tableDef.Cols, 1)
+	require.NotSame(t, tableDef.Pkey.CompPkeyCol, tableDef.Cols[0])
+}
+
+func TestMaybeEnableCollationKeyV2RejectsMalformedDefinitionsAndScopesPerRelation(t *testing.T) {
+	noAdmission := NewMockCompilerContext(false)
+	legacyTable := &plan.TableDef{Cols: []*plan.ColDef{{Name: "k", Typ: plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}}}}
+	require.NoError(t, maybeEnableCollationKeyV2ForCreate(noAdmission, legacyTable, nil))
+	require.Nil(t, legacyTable.UniqueKeyCodecVersion)
+
+	metadata := collationkey.NewCollationAwareMetadata()
+	preexisting := &plan.TableDef{UniqueKeyCodecVersion: &plan.UniqueKeyCodecVersion{Value: metadata.Version}}
+	require.NoError(t, maybeEnableCollationKeyV2ForCreate(noAdmission, preexisting, nil))
+
+	ctx := NewMockCompilerContext(false)
+	ctx.SetContext(collationkey.WithAdmission(context.Background(), collationkey.Admission{
+		Activation: collationkey.Activation{
+			RequestedVersion: collationkey.CollationAwareVersion,
+			RegistryVersion:  uint32(collationkey.RegistryVersion),
+			RegistryDigest:   collationkey.RegistryDigest(),
+			Generation:       2,
+			Phase:            collationkey.ActivationEnabled,
+			CnTargets:        map[string]uint64{"cn": 1},
+			TnTargets:        map[string]uint64{"tn": 1},
+		},
+		Kind: collationkey.NodeCN,
+		Node: collationkey.NodeAcknowledgement{
+			NodeID: "cn", Incarnation: 1,
+			Capability: collationkey.Capability{
+				ReadableVersions:   1 << collationkey.CollationAwareVersion,
+				WritableVersions:   1 << collationkey.CollationAwareVersion,
+				RegistryVersion:    uint32(collationkey.RegistryVersion),
+				RegistryDigest:     collationkey.RegistryDigest(),
+				MaxEncodedKeyBytes: collationkey.MaxKeyBytes,
+			},
+		},
+	}))
+
+	textPK := &plan.TableDef{
+		Name: "mixed_v2",
+		Cols: []*plan.ColDef{
+			{Name: "k", Typ: plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}},
+			{Name: "n", Typ: plan.Type{Id: int32(types.T_int64)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"k"}},
+	}
+	unique := &tree.UniqueIndex{KeyParts: []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("n")}}}
+	// The textual PK owns the base relation's v2 identity; the integer UNIQUE
+	// relation remains legacy instead of rejecting the whole table. The hidden
+	// index builder assigns v2 independently when its own parts are textual.
+	require.NoError(t, maybeEnableCollationKeyV2ForCreate(ctx, textPK, []*tree.UniqueIndex{unique}))
+	require.NotNil(t, textPK.UniqueKeyCodecVersion)
+
+	intPK := &plan.TableDef{
+		Name: "integer_pk_text_unique",
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "k", Typ: plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}},
+		},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+	}
+	textUnique := &tree.UniqueIndex{KeyParts: []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("k")}}}
+	create := &plan.CreateTable{TableDef: intPK}
+	require.NoError(t, maybeEnableCollationKeyV2ForCreate(ctx, intPK, []*tree.UniqueIndex{textUnique}))
+	require.Nil(t, intPK.UniqueKeyCodecVersion, "the integer PK relation stays legacy")
+	require.NoError(t, buildUniqueIndexTable(create, []*tree.UniqueIndex{textUnique}, map[string]*ColDef{
+		"id": {Name: "id", Typ: intPK.Cols[0].Typ},
+		"k":  {Name: "k", Typ: intPK.Cols[1].Typ},
+	}, "id", ctx))
+	require.Len(t, create.IndexTables, 1)
+	require.NotNil(t, create.IndexTables[0].UniqueKeyCodecVersion,
+		"the textual secondary relation gets its own v2 identity")
+	require.NotNil(t, create.TableDef.Indexes[0])
+
+	missing := &plan.TableDef{
+		Name: "missing_v2",
+		Cols: []*plan.ColDef{{Name: "k", Typ: plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)}}},
+	}
+	require.Error(t, maybeEnableCollationKeyV2ForCreate(ctx, missing, []*tree.UniqueIndex{{KeyParts: []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("absent")}}}}))
+	require.Error(t, maybeEnableCollationKeyV2ForCreate(ctx, missing, []*tree.UniqueIndex{{KeyParts: []*tree.KeyPart{nil}}}))
+
+	legacyCharset := &plan.TableDef{
+		Name: "legacy_charset_v2",
+		Cols: []*plan.ColDef{{Name: "k", Typ: plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetLegacy)}}},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"k"}},
+	}
+	require.Error(t, maybeEnableCollationKeyV2ForCreate(ctx, legacyCharset, nil))
+}
+
+func TestUniqueIndexDDLPropagatesV2Metadata(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	metadata := collationkey.NewCollationAwareMetadata()
+	source := &plan.TableDef{
+		Name: "v2_source",
+		Cols: []*plan.ColDef{{
+			Name: "k",
+			Typ:  plan.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)},
+		}},
+		UniqueKeyCodecVersion: &plan.UniqueKeyCodecVersion{
+			Value:                metadata.Version,
+			RegistryVersion:      metadata.RegistryVersion,
+			RegistryDigest:       metadata.RegistryDigest,
+			MaxEncodedKeyBytes:   metadata.MaxEncodedKeyBytes,
+			ActivationGeneration: metadata.ActivationGeneration,
+		},
+	}
+	target := &plan.CreateTable{TableDef: &plan.TableDef{}}
+	require.NoError(t, validateV2UniqueIndexParts(ctx, source, []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("k")}}))
+	require.NoError(t, propagateUniqueKeyCodecMetadata(ctx, source, target))
+	require.Equal(t, source.UniqueKeyCodecVersion, target.TableDef.UniqueKeyCodecVersion)
+	require.NotSame(t, source.UniqueKeyCodecVersion, target.TableDef.UniqueKeyCodecVersion)
+	originalDigest := append([]byte(nil), source.UniqueKeyCodecVersion.RegistryDigest...)
+	target.TableDef.UniqueKeyCodecVersion.RegistryDigest[0]++
+	require.NotEqual(t, originalDigest, target.TableDef.UniqueKeyCodecVersion.RegistryDigest)
+	target.TableDef.UniqueKeyCodecVersion.RegistryDigest[0]--
+
+	source.Cols = append(source.Cols, &plan.ColDef{Name: "n", Typ: plan.Type{Id: int32(types.T_int64)}})
+	err := validateV2UniqueIndexParts(ctx, source, []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("n")}})
+	require.Error(t, err)
+	require.Error(t, validateV2UniqueIndexParts(ctx, source, nil))
+}
+
+func TestUniqueIndexDDLRejectsMalformedV2Metadata(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	source := &plan.TableDef{
+		Name: "v2_malformed_source",
+		UniqueKeyCodecVersion: &plan.UniqueKeyCodecVersion{
+			Value: uint32(collationkey.CollationAwareVersion),
+		},
+	}
+	target := &plan.CreateTable{TableDef: &plan.TableDef{}}
+	require.Error(t, propagateUniqueKeyCodecMetadata(ctx, source, target))
+	require.Nil(t, target.TableDef.UniqueKeyCodecVersion)
 }
 
 func (c *viewReplacementCompilerContext) SetBuildingAlterView(building bool, database, view string) {

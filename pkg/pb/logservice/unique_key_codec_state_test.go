@@ -1,0 +1,190 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package logservice
+
+import (
+	"errors"
+	"reflect"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
+)
+
+func TestStoreStateCopiesUniqueKeyCodecCapabilities(t *testing.T) {
+	capability := &UniqueKeyCodecCapability{
+		ReadableVersions:   1 << 2,
+		WritableVersions:   1 << 2,
+		RegistryVersion:    1,
+		RegistryDigest:     []byte{1, 2, 3},
+		MaxEncodedKeyBytes: 64 << 20,
+		Incarnation:        17,
+	}
+	cn := NewCNState()
+	heartbeat := CNStoreHeartbeat{UUID: "cn-1", UniqueKeyCodecCapability: capability}
+	cn.Update(heartbeat, 1)
+	capability.RegistryDigest[0] = 9
+	if got := cn.Stores["cn-1"].UniqueKeyCodecCapability.RegistryDigest[0]; got != 1 {
+		t.Fatalf("CN state retained heartbeat digest alias: %d", got)
+	}
+	if got := cn.Stores["cn-1"].UniqueKeyCodecCapability.Incarnation; got != 17 {
+		t.Fatalf("CN state lost capability incarnation: %d", got)
+	}
+	cn.Update(CNStoreHeartbeat{UUID: "cn-1"}, 2)
+	if cn.Stores["cn-1"].UniqueKeyCodecCapability != nil {
+		t.Fatal("missing CN capability did not clear stale state")
+	}
+
+	capability = &UniqueKeyCodecCapability{RegistryDigest: []byte{4, 5}}
+	tn := NewTNState()
+	tn.Update(TNStoreHeartbeat{UUID: "tn-1", UniqueKeyCodecCapability: capability}, 1)
+	capability.RegistryDigest[0] = 8
+	if got := tn.Stores["tn-1"].UniqueKeyCodecCapability.RegistryDigest[0]; got != 4 {
+		t.Fatalf("TN state retained heartbeat digest alias: %d", got)
+	}
+}
+
+func TestUniqueKeyCodecWireAdaptersFailClosed(t *testing.T) {
+	var missing *UniqueKeyCodecCapability
+	if missing.ToCollationKeyCapability().Supports(collationkey.NewCollationAwareMetadata(), true) {
+		t.Fatal("missing capability advertised v2 support")
+	}
+	activation, err := (*UniqueKeyCodecActivation)(nil).ToCollationKeyActivation()
+	if err != nil || activation.Phase != collationkey.ActivationDisabled {
+		t.Fatalf("missing activation = %+v, %v", activation, err)
+	}
+	valid := &UniqueKeyCodecActivation{
+		RequestedVersion: 2,
+		RegistryVersion:  1,
+		RegistryDigest:   collationkey.RegistryDigest(),
+		Generation:       4,
+		Phase:            ENABLED,
+		CnTargets:        map[string]uint64{"cn": 0},
+		TnTargets:        map[string]uint64{"tn": 2},
+	}
+	if _, err := valid.ToCollationKeyActivation(); !errors.Is(err, collationkey.ErrMalformedKey) {
+		t.Fatalf("incomplete enabled activation error = %v, want malformed", err)
+	}
+	valid.Phase = PREPARING
+	valid.CnTargets["cn"] = 1
+	converted, err := valid.ToCollationKeyActivation()
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid.CnTargets["cn"] = 9
+	if converted.CnTargets["cn"] != 1 {
+		t.Fatal("activation adapter aliases target map")
+	}
+}
+
+func TestUniqueKeyCodecCapabilityBuildsGenerationAcknowledgement(t *testing.T) {
+	capability := &UniqueKeyCodecCapability{
+		ReadableVersions:   1 << 2,
+		WritableVersions:   1 << 2,
+		RegistryVersion:    1,
+		RegistryDigest:     collationkey.RegistryDigest(),
+		MaxEncodedKeyBytes: collationkey.MaxKeyBytes,
+		Incarnation:        27,
+	}
+	ack := capability.ToCollationKeyAcknowledgement("cn-1")
+	if ack.NodeID != "cn-1" || ack.Incarnation != 27 ||
+		!ack.Capability.Supports(collationkey.NewCollationAwareMetadata(), true) {
+		t.Fatalf("acknowledgement = %+v", ack)
+	}
+	missing := (*UniqueKeyCodecCapability)(nil).ToCollationKeyAcknowledgement("cn-2")
+	if missing.NodeID != "cn-2" || missing.Incarnation != 0 ||
+		missing.Capability.Supports(collationkey.NewCollationAwareMetadata(), true) {
+		t.Fatalf("missing acknowledgement = %+v", missing)
+	}
+}
+
+func TestUniqueKeyMigrationGateWireAdapterRoundTripsRSMState(t *testing.T) {
+	gate, err := collationkey.NewMigrationGate(91, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := collationkey.MigrationOwner{OwnerID: "owner-a", Incarnation: 7, ClaimToken: []byte{1, 2, 3}}
+	if err := gate.BeginDraining(owner, 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.EnterExclusive(owner, 200); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.SetBuildIdentity(owner, 12, 300, 400); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.Publish(owner, 500, 600, map[string]uint64{"cn-a": 11, "tn-a": 13}, 700); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.AcknowledgeReplay(owner, 600, "cn-a", 11); err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.RetireReplayTarget(owner, 600, "tn-a", 13); err != nil {
+		t.Fatal(err)
+	}
+
+	wire, err := NewUniqueKeyMigrationGate(gate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := wire.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded UniqueKeyMigrationGate
+	if err := decoded.Unmarshal(encoded); err != nil {
+		t.Fatal(err)
+	}
+	converted, err := decoded.ToCollationKeyMigrationGate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(converted, gate) {
+		t.Fatalf("migration gate conversion differs: got=%+v want=%+v", converted, gate)
+	}
+
+	state := HAKeeperRSMState{
+		UniqueKeyMigrationGates: map[uint64]UniqueKeyMigrationGate{
+			decoded.RelationId: decoded,
+		},
+	}
+	stateWire, err := state.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored HAKeeperRSMState
+	if err := restored.Unmarshal(stateWire); err != nil {
+		t.Fatal(err)
+	}
+	gotGate, ok := restored.UniqueKeyMigrationGates[decoded.RelationId]
+	if !ok || !reflect.DeepEqual(gotGate, decoded) {
+		t.Fatalf("RSM migration gate was not restored: %+v", restored.UniqueKeyMigrationGates)
+	}
+
+	wire.ClaimToken[0] ^= 1
+	wire.ReplayTargets["cn-a"] = 99
+	if decoded.ClaimToken[0] != 1 || decoded.ReplayTargets["cn-a"] != 11 {
+		t.Fatal("wire adapter retained mutable source aliases")
+	}
+}
+
+func TestUniqueKeyMigrationGateWireAdapterRejectsMalformedState(t *testing.T) {
+	bad := &UniqueKeyMigrationGate{RelationId: 91, Phase: MIGRATION_EXCLUSIVE}
+	if _, err := bad.ToCollationKeyMigrationGate(); !errors.Is(err, collationkey.ErrMigrationGate) {
+		t.Fatalf("malformed migration gate error = %v", err)
+	}
+	if _, err := NewUniqueKeyMigrationGate(collationkey.MigrationGate{}); !errors.Is(err, collationkey.ErrMigrationGate) {
+		t.Fatalf("empty migration gate error = %v", err)
+	}
+}

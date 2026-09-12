@@ -1,0 +1,239 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package collationkey
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
+	"errors"
+	"testing"
+)
+
+func TestSidecarSnapshotWireRoundTripAndOwnership(t *testing.T) {
+	metadata := NewCollationAwareMetadataAtGeneration(8)
+	store, err := NewSidecarStore(77, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := store.Begin(sidecarTestAdmission(8))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, value := range []string{"alpha", "beta"} {
+		key, keyErr := EncodePart(nil, Part{
+			Domain: Domain{Type: Text, Charset: CharsetUTF8, Unit: PrefixCharacters},
+			Value:  []byte(value),
+		})
+		if keyErr != nil {
+			t.Fatal(keyErr)
+		}
+		if err := tx.Put(key, RowLocator{RelationID: 77, PartitionID: 3, PrimaryKey: []byte{byte(i + 1)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := store.Snapshot()
+	wire, err := EncodeSidecarSnapshot(nil, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeSidecarSnapshot(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.RelationID != snapshot.RelationID || decoded.Revision != snapshot.Revision ||
+		!bytes.Equal(decoded.Metadata.RegistryDigest, snapshot.Metadata.RegistryDigest) ||
+		len(decoded.Entries) != len(snapshot.Entries) {
+		t.Fatalf("decoded snapshot differs: got=%+v want=%+v", decoded, snapshot)
+	}
+	restored, err := RestoreSidecarStore(decoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := restored.Snapshot(); got.Revision != snapshot.Revision || len(got.Entries) != len(snapshot.Entries) {
+		t.Fatalf("restored snapshot differs: %+v", got)
+	}
+	decoded.Entries[0].Key[0] = 'X'
+	decoded.Entries[0].Locator.PrimaryKey[0] = 'X'
+	if bytes.Equal(decoded.Entries[0].Key, snapshot.Entries[0].Key) ||
+		bytes.Equal(decoded.Entries[0].Locator.PrimaryKey, snapshot.Entries[0].Locator.PrimaryKey) {
+		t.Fatal("decoded snapshot aliases the input snapshot")
+	}
+}
+
+func TestSidecarSnapshotRejectsCorruptionAndAmbiguousOrdering(t *testing.T) {
+	metadata := NewCollationAwareMetadataAtGeneration(9)
+	keyA, err := EncodePart(nil, Part{
+		Domain: Domain{Type: Text, Charset: CharsetUTF8, Unit: PrefixCharacters},
+		Value:  []byte("a"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyB, err := EncodePart(nil, Part{
+		Domain: Domain{Type: Text, Charset: CharsetUTF8, Unit: PrefixCharacters},
+		Value:  []byte("b"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := SidecarSnapshot{
+		Metadata:   metadata,
+		RelationID: 99,
+		Revision:   1,
+		Entries: []SidecarEntry{
+			{Key: keyA, Locator: RowLocator{RelationID: 99, PrimaryKey: []byte("a")}},
+			{Key: keyB, Locator: RowLocator{RelationID: 99, PrimaryKey: []byte("b")}},
+		},
+	}
+	wire, err := EncodeSidecarSnapshot(nil, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt := append([]byte(nil), wire...)
+	corrupt[len(corrupt)-1] ^= 1
+	if _, err := DecodeSidecarSnapshot(corrupt); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("checksum corruption error = %v", err)
+	}
+	if _, err := DecodeSidecarSnapshot(wire[:len(wire)-1]); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("truncated snapshot error = %v", err)
+	}
+	unsorted := snapshot
+	unsorted.Entries = []SidecarEntry{snapshot.Entries[1], snapshot.Entries[0]}
+	if _, err := EncodeSidecarSnapshot(nil, unsorted); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("unsorted snapshot error = %v", err)
+	}
+
+	// Recompute the checksum after changing the entry count so the decoder
+	// reaches the structural count check rather than stopping at the checksum.
+	badCount := append([]byte(nil), wire...)
+	entryCountOffset := 5 + 4 + 4 + 4 + len(snapshot.Metadata.RegistryDigest) + 4 + 8 + 8 + 8
+	binary.BigEndian.PutUint32(badCount[entryCountOffset:entryCountOffset+4], uint32(MaxSidecarSnapshotEntries)+1)
+	digest := sha256.Sum256(badCount[:len(badCount)-sidecarSnapshotDigest])
+	copy(badCount[len(badCount)-sidecarSnapshotDigest:], digest[:])
+	if _, err := DecodeSidecarSnapshot(badCount); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("oversized entry count error = %v", err)
+	}
+}
+
+func TestSidecarSnapshotRejectsInvalidDestinationAndMetadata(t *testing.T) {
+	snapshot := SidecarSnapshot{
+		Metadata:   RelationMetadata{},
+		RelationID: 1,
+	}
+	if _, err := EncodeSidecarSnapshot(nil, snapshot); !errors.Is(err, ErrUnsupportedDomain) {
+		t.Fatalf("legacy metadata error = %v", err)
+	}
+	valid := SidecarSnapshot{
+		Metadata:   NewCollationAwareMetadataAtGeneration(10),
+		RelationID: 1,
+	}
+	dst := make([]byte, MaxSidecarSnapshotBytes+1)
+	if _, err := EncodeSidecarSnapshot(dst, valid); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("oversized destination error = %v", err)
+	}
+}
+
+func TestSidecarSnapshotRejectsMalformedHeadersAndBounds(t *testing.T) {
+	metadata := NewCollationAwareMetadataAtGeneration(11)
+	key, err := EncodePart(nil, Part{
+		Domain: Domain{Type: Text, Charset: CharsetUTF8, Unit: PrefixCharacters},
+		Value:  []byte("snapshot-boundary"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err := EncodeSidecarSnapshot(nil, SidecarSnapshot{
+		Metadata:   metadata,
+		RelationID: 123,
+		Revision:   1,
+		Entries: []SidecarEntry{{
+			Key:     key,
+			Locator: RowLocator{RelationID: 123, PartitionID: 4, PrimaryKey: []byte("pk")},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withDigest := func(body []byte) []byte {
+		out := append([]byte(nil), body...)
+		digest := sha256.Sum256(out[:len(out)-sidecarSnapshotDigest])
+		copy(out[len(out)-sidecarSnapshotDigest:], digest[:])
+		return out
+	}
+	badHeader := append([]byte(nil), valid...)
+	badHeader[0] = 'X'
+	if _, err := DecodeSidecarSnapshot(withDigest(badHeader)); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("header error = %v", err)
+	}
+	badVersion := append([]byte(nil), valid...)
+	badVersion[4]++
+	if _, err := DecodeSidecarSnapshot(withDigest(badVersion)); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("version error = %v", err)
+	}
+
+	// Keep the envelope above the minimum length while truncating each fixed
+	// field in turn. Recomputing the digest makes the decoder exercise the
+	// structural read guards rather than the checksum guard.
+	for _, trim := range []int{1, 8, 16, 24, 32, 40, 48} {
+		if trim >= len(valid)-sidecarSnapshotDigest {
+			continue
+		}
+		truncated := withDigest(valid[:len(valid)-trim])
+		if _, err := DecodeSidecarSnapshot(truncated); !errors.Is(err, ErrMalformedKey) {
+			t.Fatalf("truncated by %d error = %v", trim, err)
+		}
+	}
+
+	// Exercise the low-level offset guards directly as well. These helpers are
+	// deliberately tiny, but a malformed checkpoint must never panic on a nil
+	// or out-of-range offset.
+	if _, ok := readU32(nil, nil); ok {
+		t.Fatal("readU32 accepted a nil offset")
+	}
+	if _, ok := readU64(nil, nil); ok {
+		t.Fatal("readU64 accepted a nil offset")
+	}
+	off := -1
+	if _, ok := readU32([]byte{0, 0, 0, 0}, &off); ok {
+		t.Fatal("readU32 accepted a negative offset")
+	}
+	off = 2
+	if _, ok := readU64(make([]byte, 9), &off); ok {
+		t.Fatal("readU64 accepted a short tail")
+	}
+
+	// Validate shape failures that cannot be reached through a well-formed
+	// encoded snapshot.
+	if err := validateSidecarSnapshotShape(SidecarSnapshot{Metadata: metadata}); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("zero relation error = %v", err)
+	}
+	if err := validateSidecarSnapshotShape(SidecarSnapshot{
+		Metadata: metadata, RelationID: 123, Revision: 0,
+		Entries: []SidecarEntry{{Key: key, Locator: RowLocator{RelationID: 123, PrimaryKey: []byte("pk")}}},
+	}); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("zero revision error = %v", err)
+	}
+	if err := validateSidecarSnapshotShape(SidecarSnapshot{
+		Metadata: metadata, RelationID: 123, Revision: 1,
+		Entries: []SidecarEntry{{Key: key, Locator: RowLocator{RelationID: 124, PrimaryKey: []byte("pk")}}},
+	}); !errors.Is(err, ErrSidecarRelation) {
+		t.Fatalf("relation mismatch error = %v", err)
+	}
+}

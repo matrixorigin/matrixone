@@ -34,6 +34,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -169,15 +170,19 @@ func TestTxnTableGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {
 }
 
 func TestTxnTableGetTableDefRestoresDefaultCharset(t *testing.T) {
+	version := &plan.UniqueKeyCodecVersion{Value: 2, RegistryVersion: 1, RegistryDigest: []byte{1}}
 	table := &txnTable{
 		db: &txnDatabase{},
 		extraInfo: &api.SchemaExtra{
-			DefaultCharset: uint32(types.CharsetUTF8MB4Bin),
+			DefaultCharset:        uint32(types.CharsetUTF8MB4Bin),
+			UniqueKeyCodecVersion: version,
 		},
 	}
 	tableDef := table.GetTableDef(context.Background())
 	require.NotNil(t, tableDef)
 	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), tableDef.DefaultCharset)
+	require.Equal(t, version, tableDef.UniqueKeyCodecVersion)
+	require.NotSame(t, version, tableDef.UniqueKeyCodecVersion)
 }
 
 func makeBatchForTest(

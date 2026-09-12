@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -57,6 +58,22 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	tsm1.state.CommandDeliveryEnabled = true
 	tsm1.state.CommandDeliveryBatchIDsAssigned = true
 	tsm1.state.CommandDeliveryCommandIDsAssigned = true
+	tsm1.state.UniqueKeyCodecActivation = &pb.UniqueKeyCodecActivation{
+		RequestedVersion: 2,
+		RegistryVersion:  1,
+		RegistryDigest:   []byte{6, 7, 8},
+		Generation:       13,
+		Phase:            pb.PREPARING,
+		CnTargets:        map[string]uint64{"cn-1": 21},
+		TnTargets:        map[string]uint64{"tn-1": 22},
+	}
+	migrationGate, err := collationkey.NewMigrationGate(91, 12)
+	require.NoError(t, err)
+	migrationGateWire, err := pb.NewUniqueKeyMigrationGate(migrationGate)
+	require.NoError(t, err)
+	tsm1.state.UniqueKeyMigrationGates = map[uint64]pb.UniqueKeyMigrationGate{
+		migrationGate.RelationID: *migrationGateWire,
+	}
 	tsm1.state.ScheduleCommands["tn-1"] = pb.CommandBatch{
 		BatchID:    9,
 		Commands:   []pb.ScheduleCommand{{UUID: "tn-1", ServiceType: pb.TNService}},
@@ -72,8 +89,69 @@ func TestHAKeeperStateMachineSnapshot(t *testing.T) {
 	assert.Equal(t, uint64(7), tsm2.state.IDWatermarkRestoreGeneration)
 	assert.True(t, tsm2.state.CommandDeliveryEnabled)
 	assert.True(t, tsm2.state.CommandDeliveryCommandIDsAssigned)
+	assert.Equal(t, tsm1.state.UniqueKeyCodecActivation, tsm2.state.UniqueKeyCodecActivation)
+	gotGateWire := tsm2.state.UniqueKeyMigrationGates[migrationGate.RelationID]
+	gotGate, err := gotGateWire.ToCollationKeyMigrationGate()
+	require.NoError(t, err)
+	wantGateWire := tsm1.state.UniqueKeyMigrationGates[migrationGate.RelationID]
+	wantGate, err := wantGateWire.ToCollationKeyMigrationGate()
+	require.NoError(t, err)
+	assert.Equal(t, wantGate, gotGate)
 	assert.Equal(t, tsm1.state.ScheduleCommands, tsm2.state.ScheduleCommands)
 	assert.True(t, tsm1.replicaID != tsm2.replicaID)
+}
+
+func TestHAKeeperStateMachineSnapshotPreservesMigrationGatesPerRelation(t *testing.T) {
+	tsm1 := NewStateMachine(0, 1).(*stateMachine)
+	tsm2 := NewStateMachine(0, 2).(*stateMachine)
+
+	first, err := collationkey.NewMigrationGate(91, 12)
+	require.NoError(t, err)
+	second, err := collationkey.NewMigrationGate(92, 13)
+	require.NoError(t, err)
+	firstWire, err := pb.NewUniqueKeyMigrationGate(first)
+	require.NoError(t, err)
+	secondWire, err := pb.NewUniqueKeyMigrationGate(second)
+	require.NoError(t, err)
+	tsm1.state.UniqueKeyMigrationGates = map[uint64]pb.UniqueKeyMigrationGate{
+		first.RelationID:  *firstWire,
+		second.RelationID: *secondWire,
+	}
+
+	buf := bytes.NewBuffer(nil)
+	require.NoError(t, tsm1.SaveSnapshot(buf, nil, nil))
+	require.NoError(t, tsm2.RecoverFromSnapshot(bytes.NewReader(buf.Bytes()), nil, nil))
+	require.Len(t, tsm2.state.UniqueKeyMigrationGates, 2)
+	for _, want := range []collationkey.MigrationGate{first, second} {
+		wire, ok := tsm2.state.UniqueKeyMigrationGates[want.RelationID]
+		require.True(t, ok)
+		got, err := wire.ToCollationKeyMigrationGate()
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+}
+
+func TestHAKeeperSnapshotWithoutCodecActivationClearsReusedState(t *testing.T) {
+	legacy := NewStateMachine(0, 1).(*stateMachine)
+	buf := bytes.NewBuffer(nil)
+	require.NoError(t, legacy.SaveSnapshot(buf, nil, nil))
+
+	reused := NewStateMachine(0, 2).(*stateMachine)
+	reused.state.UniqueKeyCodecActivation = &pb.UniqueKeyCodecActivation{
+		RequestedVersion: 2,
+		RegistryVersion:  1,
+		RegistryDigest:   []byte{1, 2, 3},
+		Generation:       11,
+		Phase:            pb.PREPARING,
+		CnTargets:        map[string]uint64{"cn-1": 4},
+		TnTargets:        map[string]uint64{"tn-1": 5},
+	}
+	reused.state.UniqueKeyMigrationGates = map[uint64]pb.UniqueKeyMigrationGate{
+		91: {RelationId: 91},
+	}
+	require.NoError(t, reused.RecoverFromSnapshot(bytes.NewReader(buf.Bytes()), nil, nil))
+	require.Nil(t, reused.state.UniqueKeyCodecActivation)
+	require.Nil(t, reused.state.UniqueKeyMigrationGates)
 }
 
 func TestHAKeeperCanBeClosed(t *testing.T) {
@@ -588,6 +666,100 @@ func TestClusterDetailsQuery(t *testing.T) {
 func TestInitialState(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	assert.Equal(t, pb.HAKeeperCreated, rsm.state.State)
+}
+
+func TestStateQueryPreservesUniqueKeyCodecActivation(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.UniqueKeyCodecActivation = &pb.UniqueKeyCodecActivation{
+		RequestedVersion: 2,
+		RegistryVersion:  1,
+		RegistryDigest:   []byte{1, 2, 3},
+		Generation:       9,
+		Phase:            pb.ENABLED,
+		CnTargets:        map[string]uint64{"cn-1": 4},
+		TnTargets:        map[string]uint64{"tn-1": 5},
+	}
+
+	value, err := rsm.Lookup(&StateQuery{})
+	require.NoError(t, err)
+	state := value.(*pb.CheckerState)
+	require.Equal(t, rsm.state.UniqueKeyCodecActivation, state.UniqueKeyCodecActivation)
+
+	// StateQuery must return a deep copy so callers cannot mutate replicated
+	// activation state through the read-only view.
+	state.UniqueKeyCodecActivation.RegistryDigest[0] = 8
+	state.UniqueKeyCodecActivation.CnTargets["cn-1"] = 99
+	require.Equal(t, byte(1), rsm.state.UniqueKeyCodecActivation.RegistryDigest[0])
+	require.Equal(t, uint64(4), rsm.state.UniqueKeyCodecActivation.CnTargets["cn-1"])
+}
+
+func TestStateQueryPreservesUniqueKeyMigrationGate(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	gate, err := collationkey.NewMigrationGate(91, 12)
+	require.NoError(t, err)
+	wire, err := pb.NewUniqueKeyMigrationGate(gate)
+	require.NoError(t, err)
+	rsm.state.UniqueKeyMigrationGates = map[uint64]pb.UniqueKeyMigrationGate{
+		gate.RelationID: *wire,
+	}
+
+	value, err := rsm.Lookup(&StateQuery{})
+	require.NoError(t, err)
+	state := value.(*pb.CheckerState)
+	require.Equal(t, rsm.state.UniqueKeyMigrationGates, state.UniqueKeyMigrationGates)
+	observed := state.UniqueKeyMigrationGates[gate.RelationID]
+	observed.ClaimToken = []byte{9}
+	observed.RelationId = 99
+	state.UniqueKeyMigrationGates[gate.RelationID] = observed
+	require.Empty(t, rsm.state.UniqueKeyMigrationGates[gate.RelationID].ClaimToken)
+	require.Equal(t, uint64(91), rsm.state.UniqueKeyMigrationGates[gate.RelationID].RelationId)
+}
+
+func TestUniqueKeyCodecActivationUpdateRequiresTargetCapabilities(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	activation := pb.UniqueKeyCodecActivation{
+		RequestedVersion: 2,
+		RegistryVersion:  1,
+		RegistryDigest:   collationkey.RegistryDigest(),
+		Generation:       7,
+		Phase:            pb.PREPARING,
+		CnTargets:        map[string]uint64{"cn-1": 4},
+		TnTargets:        map[string]uint64{"tn-1": 5},
+	}
+	result, err := rsm.Update(sm.Entry{Index: 10, Cmd: GetSetUniqueKeyCodecActivationCmd(activation)})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), result.Value)
+	require.Equal(t, pb.PREPARING, rsm.state.UniqueKeyCodecActivation.Phase)
+
+	enable := activation
+	enable.Phase = pb.ENABLED
+	result, err = rsm.Update(sm.Entry{Index: 11, Cmd: GetSetUniqueKeyCodecActivationCmd(enable)})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.Equal(t, pb.PREPARING, rsm.state.UniqueKeyCodecActivation.Phase)
+
+	capability := func(incarnation uint64) *pb.UniqueKeyCodecCapability {
+		return &pb.UniqueKeyCodecCapability{
+			ReadableVersions:   uint32(1) << collationkey.CollationAwareVersion,
+			WritableVersions:   uint32(1) << collationkey.CollationAwareVersion,
+			RegistryVersion:    uint32(collationkey.RegistryVersion),
+			RegistryDigest:     collationkey.RegistryDigest(),
+			MaxEncodedKeyBytes: collationkey.MaxKeyBytes,
+			Incarnation:        incarnation,
+		}
+	}
+	rsm.state.CNState.Stores["cn-1"] = pb.CNStoreInfo{UniqueKeyCodecCapability: capability(4)}
+	rsm.state.TNState.Stores["tn-1"] = pb.TNStoreInfo{UniqueKeyCodecCapability: capability(5)}
+	result, err = rsm.Update(sm.Entry{Index: 12, Cmd: GetSetUniqueKeyCodecActivationCmd(enable)})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), result.Value)
+	require.Equal(t, pb.ENABLED, rsm.state.UniqueKeyCodecActivation.Phase)
+
+	// An enabled generation cannot be erased or replaced by a stale disable.
+	result, err = rsm.Update(sm.Entry{Index: 13, Cmd: GetSetUniqueKeyCodecActivationCmd(pb.UniqueKeyCodecActivation{})})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.Equal(t, pb.ENABLED, rsm.state.UniqueKeyCodecActivation.Phase)
 }
 
 func TestSetState(t *testing.T) {

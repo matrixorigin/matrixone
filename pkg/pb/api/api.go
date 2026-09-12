@@ -86,7 +86,13 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		AutoIncrOffset:    info.AutoIncrOffset,
 		AutoIncrEpoch:     info.AutoIncrEpoch,
 		DefaultCharset:    info.DefaultCharset,
-		Checks:            checks,
+		UniqueKeyCodecVersion: func() *plan.UniqueKeyCodecVersion {
+			if info.UniqueKeyCodecVersion == nil {
+				return nil
+			}
+			return proto.Clone(info.UniqueKeyCodecVersion).(*plan.UniqueKeyCodecVersion)
+		}(),
+		Checks: checks,
 	}
 }
 

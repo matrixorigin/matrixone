@@ -91,6 +91,17 @@ func (builder *QueryBuilder) appendReplaceConflictLookup(
 	needsOldIndexMaintenance bool,
 ) (int32, []*plan.Expr, error) {
 	branchCount := 0
+	v2UniqueIndexes := make(map[string]bool, len(tableDef.Indexes))
+	for i, idxDef := range tableDef.Indexes {
+		if !idxDef.Unique || i >= len(idxTableDefs) || idxTableDefs[i] == nil {
+			continue
+		}
+		useV2, err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDefs[i])
+		if err != nil {
+			return 0, nil, err
+		}
+		v2UniqueIndexes[idxDef.IndexTableName] = useV2
+	}
 	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		branchCount++
 	}
@@ -220,6 +231,31 @@ func (builder *QueryBuilder) appendReplaceConflictLookup(
 			}
 			oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTablePrimaryColName] =
 				oldColName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
+
+			if v2UniqueIndexes[idxDef.IndexTableName] {
+				values := make([]*plan.Expr, len(idxDef.Parts))
+				for partIdx, part := range idxDef.Parts {
+					partName := catalog.ResolveAlias(part)
+					colIdx, ok := tableDef.Name2ColIndex[partName]
+					if !ok || colIdx < 0 || int(colIdx) >= len(tableDef.Cols) {
+						return nil, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 replace index part %s", partName)
+					}
+					values[partIdx] = &plan.Expr{
+						Typ: tableDef.Cols[colIdx].Typ,
+						Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: oldScanTag, ColPos: int32(colIdx), Name: partName,
+						}},
+					}
+				}
+				idxExpr, err := builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+					tableDef, idxTableDefs[i], idxDef, values, prefixLengths)
+				if err != nil {
+					return nil, err
+				}
+				oldColName2Idx[idxDef.IndexTableName+"."+catalog.IndexTableIndexColName] = [2]int32{fullProjTag, int32(len(projection))}
+				projection = append(projection, idxExpr)
+				continue
+			}
 
 			if !indexTableStoresSerializedKey(idxDef) {
 				partName := indexPrimaryPartName(idxDef)
@@ -544,6 +580,23 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		}
 		ensureName2ColIndexForReplace(idxTableDefs[i])
 	}
+	// v2 metadata is copied onto unique index relations only.  Keep this
+	// relation-local map so a v2 base table does not make legacy non-unique
+	// indexes look like framed-key relations, and fail closed if a unique
+	// relation advertises malformed metadata.
+	v2UniqueIndexes := make(map[string]bool, len(tableDef.Indexes))
+	hasV2UniqueIdx := false
+	for i, idxDef := range tableDef.Indexes {
+		if !idxDef.Unique || i >= len(idxTableDefs) || idxTableDefs[i] == nil {
+			continue
+		}
+		useV2, v2Err := tableUsesCollationKeyV2(builder.GetContext(), idxTableDefs[i])
+		if v2Err != nil {
+			return 0, v2Err
+		}
+		v2UniqueIndexes[idxDef.IndexTableName] = useV2
+		hasV2UniqueIdx = hasV2UniqueIdx || useV2
+	}
 
 	// get old columns from existing main table
 	//
@@ -571,7 +624,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// Merged-scan is disabled when the table has unique secondary indexes because
 	// one incoming row can conflict with different old rows through different keys.
 	// Those tables use one equality-only lookup branch per constraint below.
-	useMergedMainScan := !isFakePK && !hasMultiPartIdx && !hasUniqueIdx
+	// A merged scan captures raw base columns.  v2 unique indexes require
+	// rebuilding the framed identity from those columns, so use the explicit
+	// per-constraint lookup branches instead of aliasing raw captures.
+	useMergedMainScan := !isFakePK && !hasMultiPartIdx && !hasUniqueIdx && !hasV2UniqueIdx
 	if isFakePK && !hasUniqueIdx {
 		// No PK/UK: use NULL expressions for old columns so MULTI_UPDATE only inserts
 		for _, col := range tableDef.Cols {
@@ -1374,6 +1430,7 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 	var (
 		compPkeyExpr  *plan.Expr
 		clusterByExpr *plan.Expr
+		err           error
 	)
 
 	columnIsNull := make(map[string]bool, colCount)
@@ -1410,7 +1467,10 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		} else if col.Name == catalog.Row_ID {
 			continue
 		} else if col.Name == catalog.CPrimaryKeyColName {
-			compPkeyExpr = makeCompPkeyExpr(tableDef, tableDef.Name2ColIndex)
+			compPkeyExpr, err = makeCompPkeyExprForTable(builder.GetContext(), tableDef, tableDef.Name2ColIndex)
+			if err != nil {
+				return 0, nil, nil, err
+			}
 			projList2 = append(projList2, &plan.Expr{
 				Typ: compPkeyExpr.Typ,
 				Expr: &plan.Expr_Col{
@@ -1543,6 +1603,22 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 
 	validIndexes, _ := getValidIndexes(tableDef)
 	tableDef.Indexes = validIndexes
+	// The base table and each physical UNIQUE relation may carry different
+	// codec generations.  Resolve the hidden relation metadata before building
+	// the final REPLACE image so mixed legacy/v2 schemas use the consumer's
+	// format rather than inheriting the base table's format.
+	idxTableDefs := make([]*plan.TableDef, len(tableDef.Indexes))
+	for i, idxDef := range tableDef.Indexes {
+		if idxDef == nil || !idxDef.Unique {
+			continue
+		}
+		_, idxTableDefs[i], err = builder.compCtx.ResolveIndexTableByRef(
+			objRef, idxDef.IndexTableName, bindCtx.snapshot)
+		if err != nil {
+			return 0, nil, nil, err
+		}
+		ensureName2ColIndexForReplace(idxTableDefs[i])
+	}
 
 	skipUniqueIdx := make([]bool, len(tableDef.Indexes))
 	pkName := tableDef.Pkey.PkeyColName
@@ -1568,6 +1644,37 @@ func (builder *QueryBuilder) appendNodesForReplaceStmt(
 		prefixLengths, err := catalog.IndexPrefixLengthsFromParamsWithError(idxDef.IndexAlgoParams)
 		if err != nil {
 			return 0, nil, nil, err
+		}
+		// v2 metadata is attached to unique index relations.  Build the
+		// framed key even for a single-part unique index; treating it as a
+		// raw string would make REPLACE probe/insert a different identity
+		// than INSERT and ODKU.  This branch must precede the legacy
+		// serialized-key test so composite v2 keys are framed as well.
+		useV2Idx := false
+		if idxDef.Unique && i < len(idxTableDefs) && idxTableDefs[i] != nil {
+			useV2Idx, err = tableUsesCollationKeyV2(builder.GetContext(), idxTableDefs[i])
+			if err != nil {
+				return 0, nil, nil, err
+			}
+		}
+		if useV2Idx {
+			values := make([]*plan.Expr, len(idxDef.Parts))
+			for partIdx, part := range idxDef.Parts {
+				partName := catalog.ResolveAlias(part)
+				partPos, ok := colName2Idx[tableDef.Name+"."+partName]
+				if !ok || partPos < 0 || int(partPos) >= len(projList2) {
+					return 0, nil, nil, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 replace index part %s", partName)
+				}
+				values[partIdx] = DeepCopyExpr(projList2[partPos])
+			}
+			idxExpr, err := builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+				tableDef, idxTableDefs[i], idxDef, values, prefixLengths)
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			colName2Idx[idxTableName+"."+catalog.IndexTableIndexColName] = int32(len(projList2))
+			projList2 = append(projList2, idxExpr)
+			continue
 		}
 		if !indexTableStoresSerializedKey(idxDef) {
 			partName := indexPrimaryPartName(idxDef)

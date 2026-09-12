@@ -21,6 +21,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
 
@@ -95,17 +96,18 @@ func (m LogRecord) Clone() LogRecord {
 // NewRSMState creates a new HAKeeperRSMState instance.
 func NewRSMState() HAKeeperRSMState {
 	return HAKeeperRSMState{
-		NextIDByKey:            make(map[string]uint64),
-		ScheduleCommands:       make(map[string]CommandBatch),
-		CommandDeliveryReady:   make(map[string]bool),
-		CommandDeliveryCNReady: make(map[string]bool),
-		CommandDeliveryTNReady: make(map[string]bool),
-		LogShards:              make(map[string]uint64),
-		CNState:                NewCNState(),
-		TNState:                NewTNState(),
-		LogState:               NewLogState(),
-		ProxyState:             NewProxyState(),
-		ClusterInfo:            newClusterInfo(),
+		NextIDByKey:             make(map[string]uint64),
+		ScheduleCommands:        make(map[string]CommandBatch),
+		CommandDeliveryReady:    make(map[string]bool),
+		CommandDeliveryCNReady:  make(map[string]bool),
+		CommandDeliveryTNReady:  make(map[string]bool),
+		UniqueKeyMigrationGates: make(map[uint64]UniqueKeyMigrationGate),
+		LogShards:               make(map[string]uint64),
+		CNState:                 NewCNState(),
+		TNState:                 NewTNState(),
+		LogState:                NewLogState(),
+		ProxyState:              NewProxyState(),
+		ClusterInfo:             newClusterInfo(),
 	}
 }
 
@@ -163,6 +165,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.ViewMetadataRefreshSupported = hb.ViewMetadataRefreshSupported
 	storeInfo.ViewMetadataRevalidatedEpoch = hb.ViewMetadataRevalidatedEpoch
 	storeInfo.ViewMetadataIngressReady = hb.ViewMetadataIngressReady
+	storeInfo.UniqueKeyCodecCapability = cloneUniqueKeyCodecCapability(hb.UniqueKeyCodecCapability)
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -239,7 +242,152 @@ func (s *TNState) Update(hb TNStoreHeartbeat, tick uint64) {
 	storeInfo.ReplayedLsn = hb.ReplayedLsn
 	storeInfo.AutoIncrEpochFenceSupported = hb.AutoIncrEpochFenceSupported
 	storeInfo.CommandDeliveryAckSupported = hb.CommandDeliveryAckSupported
+	storeInfo.UniqueKeyCodecCapability = cloneUniqueKeyCodecCapability(hb.UniqueKeyCodecCapability)
 	s.Stores[hb.UUID] = storeInfo
+}
+
+// cloneUniqueKeyCodecCapability keeps the replicated capability state
+// ownership-safe. Heartbeat messages are decoded from reusable RPC buffers;
+// retaining their nested digest slice would otherwise let the next heartbeat
+// mutate HAKeeper's state in place.
+func cloneUniqueKeyCodecCapability(capability *UniqueKeyCodecCapability) *UniqueKeyCodecCapability {
+	if capability == nil {
+		return nil
+	}
+	clone := *capability
+	clone.RegistryDigest = append([]byte(nil), capability.RegistryDigest...)
+	return &clone
+}
+
+// ToCollationKeyCapability converts the wire capability into the common
+// validation type. A missing message is intentionally represented by an
+// unsupported zero capability; callers must not treat protobuf field absence
+// as v2 support.
+func (c *UniqueKeyCodecCapability) ToCollationKeyCapability() collationkey.Capability {
+	if c == nil {
+		return collationkey.Capability{}
+	}
+	return collationkey.Capability{
+		ReadableVersions:   c.ReadableVersions,
+		WritableVersions:   c.WritableVersions,
+		RegistryVersion:    c.RegistryVersion,
+		RegistryDigest:     append([]byte(nil), c.RegistryDigest...),
+		MaxEncodedKeyBytes: c.MaxEncodedKeyBytes,
+	}
+}
+
+// ToCollationKeyAcknowledgement converts one heartbeat capability into the
+// generation-scoped acknowledgement consumed by the activation fence. The
+// node id is supplied by the enclosing store record; an absent capability or
+// zero incarnation remains explicitly unsupported.
+func (c *UniqueKeyCodecCapability) ToCollationKeyAcknowledgement(nodeID string) collationkey.NodeAcknowledgement {
+	if c == nil {
+		return collationkey.NodeAcknowledgement{NodeID: nodeID}
+	}
+	return collationkey.NodeAcknowledgement{
+		NodeID:      nodeID,
+		Incarnation: c.Incarnation,
+		Capability:  c.ToCollationKeyCapability(),
+	}
+}
+
+// ToCollationKeyActivation converts the replicated activation record while
+// preserving its fail-closed phase and target validation. The nil message is
+// the explicitly disabled state; a non-nil malformed record is returned as an
+// error instead of being silently downgraded.
+func (a *UniqueKeyCodecActivation) ToCollationKeyActivation() (collationkey.Activation, error) {
+	if a == nil {
+		return collationkey.Activation{Phase: collationkey.ActivationDisabled}, nil
+	}
+	phase := collationkey.ActivationPhase(a.Phase)
+	activation := collationkey.Activation{
+		RequestedVersion: a.RequestedVersion,
+		RegistryVersion:  a.RegistryVersion,
+		RegistryDigest:   append([]byte(nil), a.RegistryDigest...),
+		Generation:       a.Generation,
+		Phase:            phase,
+		CnTargets:        cloneUniqueKeyCodecTargets(a.CnTargets),
+		TnTargets:        cloneUniqueKeyCodecTargets(a.TnTargets),
+	}
+	if err := activation.Validate(); err != nil {
+		return collationkey.Activation{}, err
+	}
+	return activation, nil
+}
+
+func cloneUniqueKeyCodecTargets(src map[string]uint64) map[string]uint64 {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]uint64, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func cloneUniqueKeyMigrationMap(src map[string]uint64) map[string]uint64 {
+	if src == nil {
+		return make(map[string]uint64)
+	}
+	return cloneUniqueKeyCodecTargets(src)
+}
+
+// ToCollationKeyMigrationGate converts the replicated gate into the common
+// state-machine contract. A nil field is the clean OPEN state; malformed or
+// partially populated records are rejected instead of being interpreted as a
+// fresh migration.
+func (g *UniqueKeyMigrationGate) ToCollationKeyMigrationGate() (collationkey.MigrationGate, error) {
+	if g == nil {
+		return collationkey.MigrationGate{}, nil
+	}
+	gate := collationkey.MigrationGate{
+		RelationID:          g.RelationId,
+		MigrationEpoch:      g.MigrationEpoch,
+		Owner:               collationkey.MigrationOwner{OwnerID: g.OwnerId, Incarnation: g.OwnerIncarnation, ClaimToken: append([]byte(nil), g.ClaimToken...)},
+		Phase:               collationkey.MigrationPhase(g.Phase),
+		PhaseDeadlineNanos:  g.PhaseDeadlineNanos,
+		SourceSchemaEpoch:   g.SourceSchemaEpoch,
+		SourceSnapshotID:    g.SourceSnapshotId,
+		TempRelationID:      g.TempRelationId,
+		PublicationTxnID:    g.PublicationTxnId,
+		ReplayGeneration:    g.ReplayGeneration,
+		WritePermits:        cloneUniqueKeyMigrationMap(g.WritePermits),
+		ReplayTargets:       cloneUniqueKeyMigrationMap(g.ReplayTargets),
+		ReplayAcknowledged:  cloneUniqueKeyMigrationMap(g.ReplayAcknowledged),
+		RetiredReplayTarget: cloneUniqueKeyMigrationMap(g.RetiredReplayTarget),
+	}
+	if err := gate.Validate(); err != nil {
+		return collationkey.MigrationGate{}, err
+	}
+	return gate, nil
+}
+
+// NewUniqueKeyMigrationGate creates an ownership-safe protobuf record from a
+// validated common gate. The generated protobuf message is the RSM/catalog
+// persistence form; no caller-owned map or token is retained by reference.
+func NewUniqueKeyMigrationGate(gate collationkey.MigrationGate) (*UniqueKeyMigrationGate, error) {
+	if err := gate.Validate(); err != nil {
+		return nil, err
+	}
+	return &UniqueKeyMigrationGate{
+		RelationId:          gate.RelationID,
+		MigrationEpoch:      gate.MigrationEpoch,
+		OwnerId:             gate.Owner.OwnerID,
+		OwnerIncarnation:    gate.Owner.Incarnation,
+		ClaimToken:          append([]byte(nil), gate.Owner.ClaimToken...),
+		Phase:               UniqueKeyMigrationGate_Phase(gate.Phase),
+		PhaseDeadlineNanos:  gate.PhaseDeadlineNanos,
+		SourceSchemaEpoch:   gate.SourceSchemaEpoch,
+		SourceSnapshotId:    gate.SourceSnapshotID,
+		TempRelationId:      gate.TempRelationID,
+		PublicationTxnId:    gate.PublicationTxnID,
+		ReplayGeneration:    gate.ReplayGeneration,
+		WritePermits:        cloneUniqueKeyMigrationMap(gate.WritePermits),
+		ReplayTargets:       cloneUniqueKeyMigrationMap(gate.ReplayTargets),
+		ReplayAcknowledged:  cloneUniqueKeyMigrationMap(gate.ReplayAcknowledged),
+		RetiredReplayTarget: cloneUniqueKeyMigrationMap(gate.RetiredReplayTarget),
+	}, nil
 }
 
 // NewLogState creates a new LogState.

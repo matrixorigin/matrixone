@@ -146,15 +146,19 @@ func TestCurrentTableLookupHonorsLatestTableIdentity(t *testing.T) {
 
 func TestGetTableDefRestoresChecksFromSchemaExtra(t *testing.T) {
 	check := &plan.CheckDef{Name: "t_chk_1", Check: &plan.Expr{}}
+	version := &plan.UniqueKeyCodecVersion{Value: 2, RegistryVersion: 1, RegistryDigest: []byte{1}}
 	tableDef, _ := getTableDef(&TableItem{
 		Name: "t",
 		ExtraInfo: &api.SchemaExtra{
-			Checks:         []*plan.CheckDef{check},
-			DefaultCharset: uint32(types.CharsetBinary),
+			Checks:                []*plan.CheckDef{check},
+			DefaultCharset:        uint32(types.CharsetBinary),
+			UniqueKeyCodecVersion: version,
 		},
 	}, nil)
 	require.Equal(t, []*plan.CheckDef{check}, tableDef.Checks)
 	require.Equal(t, uint32(types.CharsetBinary), tableDef.DefaultCharset)
+	require.Equal(t, version, tableDef.UniqueKeyCodecVersion)
+	require.NotSame(t, version, tableDef.UniqueKeyCodecVersion)
 }
 
 func TestGetTableDefKeepsTemporarySessionStateContextual(t *testing.T) {

@@ -26,6 +26,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
@@ -1734,6 +1735,10 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.AutoIncrEpoch = tbl.extraInfo.AutoIncrEpoch
 			tbl.tableDef.Checks = tbl.extraInfo.Checks
 			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
+			tbl.tableDef.UniqueKeyCodecVersion = nil
+			if tbl.extraInfo.UniqueKeyCodecVersion != nil {
+				tbl.tableDef.UniqueKeyCodecVersion = proto.Clone(tbl.extraInfo.UniqueKeyCodecVersion).(*plan.UniqueKeyCodecVersion)
+			}
 		}
 	}
 	return tbl.tableDef

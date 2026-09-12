@@ -74,3 +74,26 @@ func TestPlanDefsToExeDefsPersistsChecksInSchemaExtra(t *testing.T) {
 	require.Equal(t, extra.DefaultCharset, clone.DefaultCharset)
 	require.NotSame(t, extra.Checks[0], clone.Checks[0])
 }
+
+func TestPlanDefsToExeDefsCopiesUniqueKeyCodecMetadata(t *testing.T) {
+	version := &plan.UniqueKeyCodecVersion{
+		Value:              2,
+		RegistryVersion:    1,
+		RegistryDigest:     []byte{1, 2, 3, 4},
+		MaxEncodedKeyBytes: 64 << 20,
+	}
+	_, extra, err := PlanDefsToExeDefs(&plan.TableDef{
+		Name:                  "t",
+		UniqueKeyCodecVersion: version,
+	})
+	require.NoError(t, err)
+	require.Equal(t, version, extra.UniqueKeyCodecVersion)
+
+	roundTrip := api.MustUnmarshalTblExtra(api.MustMarshalTblExtra(extra))
+	require.Equal(t, version, roundTrip.UniqueKeyCodecVersion)
+	clone := api.CloneExtra(extra)
+	require.Equal(t, version, clone.UniqueKeyCodecVersion)
+	require.NotSame(t, version, clone.UniqueKeyCodecVersion)
+	clone.UniqueKeyCodecVersion.RegistryDigest[0] = 9
+	require.Equal(t, byte(1), version.RegistryDigest[0])
+}

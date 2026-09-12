@@ -1,10 +1,10 @@
 # #28164 Collation-Aware Unique-Key Identity
 
-- Status: Design revision 3; ready for maintainer review; implementation not started
+- Status: Design revision 3; implementation increment in PR #28520; v2 remains gated and the full series is not complete
 - Tracking issue: [#28164](https://github.com/matrixorigin/matrixone/issues/28164)
 - Design revision: 3
-- Frozen baseline: `c51bb4ed868219af720cb5c019fb103bc1e7bcc7`
-- Scope: the complete string PK/UNIQUE identity contract; first delivery is design and baseline evidence only
+- Frozen baseline for implementation increment: `23b20ea909e8ed7e68e331d2bff1a10fce3635f9` (`upstream/main` at the latest exact-head rebase freeze)
+- Scope: the complete string PK/UNIQUE identity contract; this PR carries the codec, metadata fence, planner key materialization, and guarded index probes. TN persistence, global comparison consumers, migration management, and rollout remain follow-up work.
 
 ## 1. Decision summary
 
@@ -55,8 +55,9 @@ INSERT INTO ci VALUES (3, 'Alpha ', 30)
 
 The reported result was three rows instead of one row `(1, 'Alpha', 30)`.
 That is historical runtime evidence only until a current build is run. The
-current-main baseline used for the executable evidence is frozen at
-`c51bb4ed868219af720cb5c019fb103bc1e7bcc7`. The correction run
+the executable correction run used the then-current historical freeze
+`c51bb4ed868219af720cb5c019fb103bc1e7bcc7`; it is retained as baseline
+evidence and is distinct from the implementation freeze above. The correction run
 `artifacts/issue-28164-design/20260909T000000Z/` executes the complete sequence
 once in each of three independent databases (`r1`, `r2`, and `r3`). Every
 sample still leaves three rows, and a forced unique-index read returns the same
@@ -391,9 +392,11 @@ available:
 ### 5.1 Version location
 
 The encoding version belongs to the physical relation that owns the key, not to
-the SQL expression alone. The next implementation PR adds the following
-length-delimited protobuf message and fields (the design PR does not modify
-the `.proto` files):
+the SQL expression alone. This implementation increment adds the following
+length-delimited protobuf message and fields; generated bindings and the
+currently reachable plan/schema copy boundaries are included in the same
+change. The fields remain inert until the complete storage and activation
+series is connected:
 
 ```protobuf
 message UniqueKeyCodecVersion {
@@ -427,9 +430,12 @@ the version:
   overloaded with a collation encoding version;
 - non-unique and FULLTEXT relations do not opt into this key contract.
 
-The next implementation PR copies the message through
-`PlanDefsToExeDefs`, `DefsToSchema`, `SchemaToDefs`, table-schema
-serialization, catalog replay, plan deep-copy, snapshot, clone, and restore.
+The current increment copies the message through the plan deep-copy and the
+existing schema/catalog-cache boundaries. `PlanDefsToExeDefs`,
+`DefsToSchema`, `SchemaToDefs`, table-schema serialization, catalog replay,
+snapshot, clone, and restore still require end-to-end verification before v2
+can be enabled; any boundary that cannot preserve the fields must remain
+fail-closed.
 The `value` values are:
 
 ```text
@@ -448,9 +454,11 @@ continues to mean the FULLTEXT algorithm version and is not reused.
 
 ### 5.2 Capability publication and activation fence
 
-The version message describes a relation; it is not a node capability. The next
-implementation adds a typed capability and a replicated activation record (the
-design PR does not edit `proto/*.proto`):
+The version message describes a relation; it is not a node capability. This
+increment also reserves typed capability and activation records in
+`proto/logservice.proto` and carries them through the HAKeeper snapshot/state
+adapters. Heartbeat publication, administrator authorization, and the complete
+rolling-upgrade fence remain follow-up work; no current service advertises v2.
 
 ```protobuf
 message UniqueKeyCodecCapability {
@@ -827,13 +835,13 @@ checks remain proportional to input rows and constraints, not a full-table scan.
 
 | Field | Decision |
 | --- | --- |
-| Change scope | Design plus current-main baseline evidence; later implementation PR series |
+| Change scope | Design plus current-main baseline evidence and the staged implementation series |
 | Design trigger | Crosses planner, executor, lock, storage, catalog, upgrade, and hot-path boundaries; persistent compatibility and concurrency triggers apply |
 | Selected direction | Shared versioned codec with explicit stop-write migration |
 | Public SQL/API change in this delivery | None |
-| Production implementation | Not started by this design PR |
+| Production implementation | This increment adds guarded planner/index-probe integration; v2 remains disabled and the complete storage/migration/query series is not implemented |
 | QA decision | Required for implementation: user-visible uniqueness, persistence, concurrency, and compatibility behavior |
-| Baseline reproduction | **PASS / REPRODUCED** on frozen `c51bb4ed…`; three independent databases in `20260909T000000Z` each leave three rows, and forced-index reads agree with table scans |
+| Baseline reproduction | **PASS / REPRODUCED** on historical freeze `c51bb4ed…`; three independent databases in `20260909T000000Z` each leave three rows, and forced-index reads agree with table scans |
 | Design review | **READY_FOR_MAINTAINER_REVIEW** for revision 3; maintainer approval is still pending |
 
 Open review findings must be recorded against this exact revision. Any change to
@@ -865,6 +873,422 @@ evidence, not maintainer approval.
 Revision 3 closes the currently recorded local design findings and is complete
 enough to start a separately reviewed implementation series. It is marked
 ready for maintainer review, not approved: the named owners must still record
-acceptance or new findings against this revision before production code is
-written. The baseline reproduction is evidence of the current defect only;
-`production_fix` and `qa_acceptance` remain not implemented/not run.
+acceptance or new findings against this revision. The baseline reproduction is
+evidence of the current defect only; the staged implementation must keep v2
+gated until every producer and consumer is connected, and `qa_acceptance`
+remains not run.
+
+### 10.2 Implementation series status (PR1)
+
+The first implementation delivery is intentionally limited to the dependency-
+light codec foundation in `pkg/common/collationkey`. It does not change any
+planner, executor, catalog, protobuf, storage, or SQL entry point. The package
+therefore cannot make an existing relation collation-aware by itself; the
+remaining metadata, capability, sidecar, query, DML, migration, and activation
+deliveries remain required before the issue can be closed.
+
+PR1 freezes the following implementation details without changing the approved
+revision-3 contract:
+
+- registry name `collationkey/domains-v1`, registry version `1`, codec envelope
+  version `2`, and a maximum framed key size of `67108864` bytes;
+- family IDs `0x0001` (UTF-8 general-ci-v1/PAD SPACE), `0x0002` (UTF-8 `_bin`/
+  PAD SPACE), `0x0003` (exact binary), `0x0101` (signed integer), `0x0102`
+  (unsigned integer), and `0x0103` (decimal);
+- canonical parameter bytes use big-endian prefix/width fields and the schema
+  bytes defined in Section 4.3; the immutable registry digest is
+  `c69a5959e49d4fb193d8c8252e76eb5ea92e53be9594354d4e8befd4575db41a`, and
+  includes the executable general-ci weight table plus its fallback policy;
+- all text input is validated as complete UTF-8 before prefixing, general-ci
+  emits one four-byte big-endian weight per code point, and NULL/empty values
+  retain distinct framed states;
+- malformed descriptors, unknown families, invalid widths/scales, non-canonical
+  decimal payloads, invalid UTF-8, and over-sized envelopes fail before a key is
+  published; `HashEncoded` is only a bucket hint and never a uniqueness oracle.
+
+The digest and golden vectors are package tests, not a claim that a relation has
+adopted v2. Subsequent implementation PRs must copy the exact bytes and digest
+through the approved metadata and capability boundaries before any production
+writer is allowed to emit this format.
+
+### 10.3 Implementation series status (PR3)
+
+PR3 is a metadata transport and validation foundation only. It adds typed
+`UniqueKeyCodecVersion` fields to the plan and schema-extra messages, reserves
+typed capability/activation records in the logservice messages, and explicitly
+copies the relation version through the current plan, engine, catalog-cache,
+schema-extra, and deep-copy boundaries. The dependency-light codec package
+validates the supported version, registry version/digest, and maximum encoded
+key size, and separates readable from writable capability bits.
+
+PR3 does not publish an activation state, admit a v2 relation, change a unique
+index, or make any existing writer emit v2 bytes. Capability publication,
+HAKeeper persistence, generation acknowledgements, plan/TN admission, and
+activation recovery remain unimplemented until the distributed state-machine
+and storage owners provide those consumers. A missing or absent field therefore
+continues to mean legacy behavior; this PR must not be interpreted as a
+production compatibility gate by itself.
+
+### 10.4 Implementation series status (PR4)
+
+PR4 adds the dependency-light row-locator envelope used by the planned
+storage-owned UNIQUE sidecar. `pkg/common/collationkey` now defines
+`RowLocator`, `EncodeLocator`, and `DecodeLocator`. The format is the fixed
+big-endian sequence `MOKL | version(1) | relation_id(u64) |
+partition_id(u64) | primary_key_length(u32) | original_primary_key_bytes`.
+Relation identity is mandatory, the primary-key bytes are copied on decode, and
+truncation, version, length, zero-relation, and the shared 64 MiB allocation
+guard fail closed. Empty primary-key bytes remain valid; the locator never
+stores a compaction-sensitive `__mo_rowid` and is not a replacement for the
+user-visible primary-key value.
+
+This PR is a storage contract and test foundation only. No catalog relation is
+created, no existing hidden index changes type, and no planner, lock owner, TN
+commit path, or migration command consumes the locator yet. Until those paths
+are wired atomically with the base row and capability/activation checks, v2
+remains disabled and all production writes retain their existing behavior.
+
+### 10.5 Implementation series status (PR5)
+
+PR5 adds a dependency-light comparison adapter in the planner function package.
+`CollationKeyEqual` and `CollationKeyNullSafeEqual` evaluate an explicitly
+aligned UTF-8 general-ci or UTF-8 `_bin` text pair through the same immutable
+normalization used by the v2 codec. NULL-safe comparison keeps SQL `<=>`
+semantics, while unsupported or legacy domains fail closed instead of silently
+changing their bytewise behavior.
+
+The adapter is deliberately not registered as a user-visible function and is
+not called by the existing SQL equality operator, hash join, index probe, or
+ODKU planner. This preserves the legacy contract until a relation's codec
+version and comparison domain have been proven at every producer and consumer
+boundary. PR5 therefore supplies executable comparison tests only; it does not
+create a v2 relation, replace resident/spill key codecs, alter unique-index
+bytes, or enable any writer. Sidecar, lock, query-routing, migration, and
+activation work remain required before a production fix can be claimed.
+
+### 10.6 Implementation series status (PR6)
+
+PR6 adds the common planner admission check for relation-local codec metadata.
+Legacy and explicitly bytewise relations continue through their existing DML
+paths. A relation carrying a valid v2 metadata record is rejected at the
+shared table-resolution boundary while the sidecar, capability, lock, commit,
+query, and migration consumers are incomplete; malformed metadata fails as an
+internal error. This prevents an early writer from emitting bytes that an
+older reader could not interpret.
+
+The check is a fail-closed safety fence, not a v2 enablement mechanism. It does
+not change existing relation behavior, create a management command, or claim
+that any DML entry point is v2-capable. The final implementation must replace
+this temporary rejection only after all required producers and consumers share
+the same activation generation and recovery protocol.
+
+The same revision also rejects v2 relations at the ordinary table-scan binding
+boundary. A planner that has not yet proved the versioned point-probe, scan,
+join, and fallback consumers cannot open a v2 relation for SELECT or an index
+lookup while allowing legacy bytewise readers to continue. Missing metadata and
+the explicitly bytewise format remain unchanged; malformed v2 metadata fails
+closed as an internal error. This read-side fence is intentionally a temporary
+admission rule and is not a capability publication or storage-reader
+implementation.
+
+### 10.7 Implementation series status (v2 key materialization primitive)
+
+The next runtime increment adds `INTERNAL_COLLATION_KEY_V2`, an unregistered
+planner-owned vector primitive. Given a `VARCHAR`/`TEXT` value, a character
+prefix length, and an explicit supported charset descriptor, it emits the
+exact `collationkey.EncodePart` envelope used by the shared codec. It validates
+the value type and charset before evaluating rows, preserves NULL as a NULL
+result, rejects NULL or out-of-range descriptors, and propagates malformed
+UTF-8 or unsupported-domain errors without publishing a partial key. The
+result is a binary varlena value; the original user value is not overwritten.
+
+The primitive is intentionally absent from `functionIdRegister`, so SQL text
+cannot call or constant-fold it by name. A future v2 sidecar writer may build a
+plan expression with the exported encoded overload ID only after relation
+metadata, capability, activation generation, and migration gates have passed.
+No catalog relation, unique-index probe, lock, transaction commit, query
+consumer, or management command calls this primitive yet; the read/write
+admission fences therefore continue to reject v2 relations. This increment is
+an executable runtime foundation, not a user-visible fix or an enablement
+claim.
+
+### 10.8 Implementation series status (activation contract)
+
+The activation increment adds a dependency-light `collationkey.Activation`
+contract for the durable PREPARING/ENABLED/ABORTED state. It validates the
+requested codec and registry digest, requires non-zero generation and explicit
+CN/TN target incarnations, copies target maps on creation, and exposes a
+single `Enable` operation that requires every target to acknowledge both read
+and write support. Acknowledgements are matched by node identity and exact
+incarnation, so a restarted or stale writer cannot satisfy a previous
+generation. `Advance` cannot bypass that check and enabled/aborted generations
+cannot be downgraded to disabled.
+
+This is the state-machine contract and its executable unit tests only. It is
+not yet wired to HAKeeper persistence, heartbeat publication, plan/TN commit
+admission, recovery owner, or a management command. Until those consumers are
+connected, the planner's v2 read/write rejection remains in force and no
+relation can be enabled by this package alone.
+
+### 10.9 Implementation series status (sidecar entry envelope)
+
+The sidecar increment adds a dependency-light `MOKS` entry envelope for the
+planned storage-owned mapping from a complete `MOKY` equality key to a stable
+`MOKL` row locator. Both variable-length components are length-delimited and
+validated before publication; decoding copies pooled input bytes and rejects
+unknown versions, malformed keys, malformed locators, and trailing data.
+The locator remains the original physical primary-key image plus relation and
+partition identity, never a transient `__mo_rowid`.
+
+This package is only a wire/validation contract. No catalog relation, hidden
+index schema, point probe, lock, transaction writer, replay consumer, or
+migration command uses it yet. The v2 read/write admission fences therefore
+remain active, and this increment does not change legacy or user-visible SQL
+behaviour.
+
+### 10.10 Implementation series status (migration gate contract)
+
+The migration increment adds a dependency-light `MigrationGate` state contract
+for the explicit stop-write protocol. It records the relation and monotonic
+epoch, fenced owner/incarnation/token, phase deadline, post-drain snapshot and
+temporary relation identities, publication transaction, replay generation,
+outstanding pre-drain permits, and per-target replay acknowledgements or
+retirements. The executable transitions enforce OPEN → DRAINING → EXCLUSIVE →
+PUBLISHED, allow pre-publication ABORTED recovery, require all permits to drain
+before EXCLUSIVE, and make publication irreversible. Expired owners can be
+replaced only with a different fencing identity; stale owners cannot mutate or
+release a gate.
+
+The state machine is not connected to HAKeeper, catalog persistence, SQL
+write admission, TN commit, snapshot creation, or a management command. It
+therefore does not stop real writes or migrate a relation; the planner's v2
+read/write fences remain in force. This increment only freezes and tests the
+failure/recovery contract that those production consumers must implement.
+
+### 10.11 Capability propagation correction
+
+The sidecar/migration increment also closes a metadata ownership gap in the
+existing HAKeeper state adapter: CN and TN heartbeat capability messages are
+now copied into their corresponding `CNStoreInfo`/`TNStoreInfo` records, with
+the nested registry digest cloned rather than retained by alias. A subsequent
+heartbeat that omits the capability clears stale state. This is necessary for
+an eventual activation coordinator to make decisions from replicated state;
+protobuf wire round-tripping alone was insufficient. It does not advertise v2
+support from current nodes or connect activation to HAKeeper decisions.
+
+The same increment adds explicit wire adapters from the replicated heartbeat
+messages to the common capability/activation validators. A missing capability
+is treated as unsupported, and a non-nil malformed activation is rejected;
+target maps and registry bytes are copied. This prevents a protobuf transport
+round-trip from becoming an accidental downgrade and gives the eventual
+coordinator a single validation boundary, while still leaving the actual
+heartbeat publication and activation state machine unconnected.
+
+### 10.12 Durable HAKeeper activation state
+
+The activation record is now also a field of `HAKeeperRSMState` (field 43) in
+the logservice schema. The generated binding therefore carries the same typed
+activation through RSM snapshots and Dragonboat recovery, while the existing
+`StateQuery` response copies it into `CheckerState`. The query path returns a
+deep copy, so callers cannot mutate replicated target maps or registry bytes.
+Round-trip, snapshot/recovery, and state-query aliasing tests cover the new
+boundary.
+
+This is persistence and observation only. No RSM command changes the phase,
+heartbeats do not advertise a new capability, and no planner, TN commit,
+catalog, migration, or management entry point consumes the field yet. The
+v2 admission fences remain enabled; a missing activation still means that
+production v2 is disabled rather than legacy data being reinterpreted.
+
+### 10.13 Replicated activation proposal boundary
+
+The HAKeeper RSM now reserves `SetUniqueKeyCodecActivationUpdate` as an
+internal replicated command whose payload is the typed activation record. A
+PREPARING record may be installed from the disabled state (or from an older
+ABORTED generation); an ENABLED record is accepted only when it matches the
+current PREPARING identity and every targeted CN/TN heartbeat has a matching
+non-zero incarnation plus both read and write capability. Enabled and aborted
+generations cannot be cleared by a stale disable command. The RSM returns
+deterministic pending/applied values and leaves state unchanged on a rejected
+transition.
+
+The capability wire record carries the node incarnation used for this exact
+target match. Current CN/TN services still publish no v2 capability, and no
+management client proposes this command, so the admission fences continue to
+prevent production enablement. This command closes only the durable proposal
+and capability-check boundary; it does not implement sidecar writes, query
+consumers, TN commit validation, migration, or administrator authorization.
+
+### 10.14 Planner/runtime key materialization boundary
+
+The integration increment adds two planner-owned, unregistered primitives. A
+single text part is materialized as `__mo_collation_key_v2(value, prefix,
+charset)` and a composite key as repeated `(value, prefix, charset)` triplets.
+Both expressions return the exact `MOKY` bytes from the shared codec; prefix
+lengths are applied by the codec and are not implemented with a second
+`substring`/`serial` rule. Composite keys emit a NULL result when any part is
+NULL, preserving the existing UNIQUE NULL policy. The original user columns
+remain in the row image.
+
+For a v2 text primary key, DDL planning adds the hidden `__mo_cpkey` physical
+identity column (or changes the existing composite identity column to binary)
+and keeps the original columns in `Pkey.Names`. Insert/update projections fill
+that column with the same single/composite `MOKY` expression. Thus the base
+table's storage-level primary uniqueness is not left on raw user bytes; target
+and foreign-key-facing expressions can still refer to the original source
+columns.
+
+When a v2 relation definition is already present, the planner uses these
+expressions for unique-index projections, ODKU target probes, ordered dedup,
+row-level lock keys, and regular unique-index delete/reinsert joins. Hidden
+unique relations are typed as binary values and carry the same relation
+metadata, so every connected edge compares the framed bytes rather than raw
+text or an ad-hoc serial tuple. Composite primary-key comparisons use the same
+framing over the source parts; the stored target lookup identity is the hidden
+encoded primary-key column while the original source value remains available
+for user-facing and foreign-key expressions.
+
+The relation metadata now carries a non-zero activation generation. New text
+PRIMARY/UNIQUE definitions are marked v2 only when a request context contains
+an enabled, generation-matching activation and local CN/TN acknowledgement;
+otherwise creation remains legacy. A table mixing a v2 candidate with an
+unregistered key domain is rejected instead of silently creating a table-scoped
+hybrid. Missing or invalid admission still fails closed at both read and write
+planner boundaries. The HAKeeper command and storage/query/TN migration
+consumers are not yet connected, so no user-visible v2 relation can be created
+on the normal SQL path in this increment.
+
+### 10.15 Transactional sidecar owner contract
+
+`pkg/common/collationkey.SidecarStore` supplies the storage-owner contract used
+by a future hidden-relation adapter. It indexes the complete encoded `MOKY`
+bytes and stores a copied `MOKL` locator; hashes are never used as the unique
+identity. `Begin` requires the same enabled activation generation and local
+read/write acknowledgement as the planner. Per-key optimistic fencing rejects
+a commit that races another transaction on any touched key, while unrelated
+keys may commit independently. `Put` rejects a different locator for an
+existing identity, `Delete` can require the expected old locator, and all
+staged changes publish atomically or not at all. `Snapshot` and
+`RestoreSidecarStore` validate ordering, relation identity, key envelopes, and
+locator envelopes before exposing a recovered map. This package is a
+dependency-light reference for TN/catalog integration; it is not a process
+global index and is not itself connected to the production hidden-table write
+path yet.
+
+### 10.16 Implementation series status (planner and index-probe increment)
+
+This implementation increment carries the first production-planner integration
+of the v2 identity bytes.
+Primary-key and UNIQUE projections, ODKU/REPLACE/UPDATE/DELETE conflict probes,
+foreign-key parent locks, and unique-index maintenance now materialize the
+relation-local framed identity rather than falling back to the legacy `serial`
+or raw text bytes. Composite and prefix parts are framed in declared order;
+missing or invalid source positions fail closed. Range rewrites, index-only
+projections that cannot reconstruct the original value, raw residual pushdown,
+and runtime-filter rewrites are disabled for opaque v2 unique keys unless an
+exact point-equality proof is available.
+
+The change is deliberately still gated. The normal service capabilities do not
+advertise the v2 codec, no SQL DDL or DML path can enable it, and there is no
+TN/catalog sidecar persistence or commit-time validation yet. Global SQL
+collation/hash/group consumers, bulk-ingestion paths, migration management,
+and production heartbeat/activation wiring remain required before a v2 table
+can be exposed. The existing `pkg/common/collationkey.SidecarStore` and
+`MigrationGate` are reference contracts, not storage implementations. This
+increment therefore supplies planner and fallback safety for the eventual
+format but is not the complete #28164 fix; `production_fix` and
+`qa_acceptance` remain incomplete and the issue stays open.
+
+### 10.17 Implementation series status (sidecar snapshot boundary)
+
+The sidecar contract now has a deterministic checkpoint/clone envelope in
+`pkg/common/collationkey/snapshot.go`. Its `MOKP` body stores the codec version,
+registry version and digest, maximum key size, activation generation, owning
+relation ID, monotonic sidecar revision, and length-delimited `MOKS` entries;
+the body is followed by a SHA-256 checksum. All integer fields are fixed
+big-endian values and the format is independent of Go struct layout.
+
+Encoding requires a v2 metadata record, strictly ordered complete `MOKY` keys,
+matching `MOKL` relation locators, and a bounded entry count/total size.
+Decoding verifies the checksum first, then validates metadata, every nested
+entry, ordering, relation identity, and the 256 MiB allocation ceiling before
+returning any bytes. Restore therefore cannot expose a torn, mixed-generation,
+or legacy sidecar image. The snapshot codec is an in-process persistence
+boundary and is not yet wired to TN/catalog pages, backup/restore commands, or
+the migration management API; v2 remains disabled until those owners consume
+the same format and activation epoch.
+
+### 10.18 Implementation series status (migration gate persistence envelope)
+
+The migration contract now has a deterministic `MOKG` checkpoint envelope in
+`pkg/common/collationkey/migration_snapshot.go`. It persists the relation and
+monotonic migration epoch, fenced owner identity, phase/deadline, post-drain
+snapshot and temporary relation IDs, publication/replay identities, and all
+permit/replay maps. Integer fields use fixed big-endian encoding; map entries
+are sorted by their complete byte identity and all variable-length identities
+are bounded. A SHA-256 trailer covers the complete body.
+
+Decoding verifies the checksum before allocation, enforces the snapshot and
+entry ceilings, rejects unsorted or duplicate identities, and runs the
+`MigrationGate.Validate` state-machine check before returning any state. A
+recovered gate therefore cannot silently lose an outstanding writer, replay
+target, owner fence, or irreversible publication marker. This is a typed
+checkpoint contract for a future HAKeeper/catalog adapter; it is not yet
+used to mutate the gate through a management command. A typed
+per-relation `UniqueKeyMigrationGates` map is now carried through HAKeeper RSM snapshots
+and `StateQuery`, with deep-copy and legacy-snapshot clearing tests; the RSM
+field is observation/persistence only until an owner-authorized transition
+command is specified. TN commit admission, `mo_ctl`, catalog relation
+publication, and the migration runbook are still not connected. The v2
+writer/read gates remain fail-closed and production v2 remains disabled.
+
+### 10.19 Implementation series status (post-rebase correctness hardening)
+
+The latest exact-head hardening keeps planner nullability aligned with the
+runtime composite materializer: a composite v2 key is nullable whenever any
+source part is nullable, because the materializer returns NULL for the whole
+identity in that case. The codec also keeps zero as the lower bound for decimal
+canonicalization; values such as `10` and `10.0` at declared scale zero retain
+their significant integer zero and validate as the same canonical key.
+
+These changes are covered by planner and codec unit tests (including the codec
+race suite) and do not enable v2 or alter legacy relations. The implementation
+increment remains a staged foundation; TN/catalog sidecar persistence, complete
+SQL comparison consumers, migration management, upgrade validation, and QA are
+still required before production rollout.
+
+### 10.20 Implementation series status (relation-local DDL scoping)
+
+DDL planning now makes the relation boundary explicit. The metadata on the
+base `TableDef` is assigned only when the physical primary-key identity is a
+supported textual key. Each hidden secondary UNIQUE relation independently
+validates its own parts and receives a cloned codec record when it is created
+as part of a newly admitted table (or when an existing v2 relation propagates
+its already-validated record). A numeric-only key remains on the legacy
+bytewise path; a single constraint that mixes supported text with an
+unregistered part is rejected while an unrelated constraint is not.
+
+This permits the issue-shaped schema `INT PRIMARY KEY, VARCHAR UNIQUE` to keep
+the integer base relation legacy and give the textual hidden relation its own
+v2 identity. The insert projection resolves that hidden relation before
+materializing the key, so a base-table metadata value cannot force unrelated
+indexes to re-encode. A legacy table receiving `CREATE INDEX` or `ALTER ADD
+UNIQUE` does not implicitly migrate merely because the activation context is
+enabled. The behavior remains fail-closed and production v2 is still disabled;
+TN/catalog persistence and the full migration owner must consume these
+relation-local records before any user-visible activation.
+
+### 10.21 Implementation series status (transactional sidecar replacement)
+
+The sidecar transaction contract now permits an atomic locator replacement when
+one transaction deletes the expected old locator and republishes the same
+encoded key for a new locator. A staged delete is intentionally treated as the
+transaction's current value; re-reading the old store entry during `Put` would
+reject the replacement even though the delete and put are fenced together at
+commit. The regression test verifies that the committed lookup exposes only the
+new locator. This is an in-memory contract test for the future storage adapter,
+not evidence that TN/catalog sidecar persistence is connected.
+
+The implementation remains a staged foundation: v2 admission is still
+fail-closed and disabled, and complete storage integration, SQL comparison
+consumers, migration commands, upgrade validation, and QA remain required.

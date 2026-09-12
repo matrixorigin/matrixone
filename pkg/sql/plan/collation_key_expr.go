@@ -1,0 +1,349 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"context"
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collationkey"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+)
+
+// tableUsesCollationKeyV2 reports whether a physical relation explicitly owns
+// the framed v2 key format. Admission remains responsible for checking the
+// cluster activation fence; this helper only validates the relation-local
+// metadata before constructing an expression.
+func tableUsesCollationKeyV2(ctx context.Context, tableDef *planpb.TableDef) (bool, error) {
+	if tableDef == nil || tableDef.UniqueKeyCodecVersion == nil {
+		return false, nil
+	}
+	version := tableDef.UniqueKeyCodecVersion
+	metadata := collationkey.RelationMetadata{
+		Version:              version.Value,
+		RegistryVersion:      version.RegistryVersion,
+		RegistryDigest:       version.RegistryDigest,
+		MaxEncodedKeyBytes:   version.MaxEncodedKeyBytes,
+		ActivationGeneration: version.ActivationGeneration,
+	}
+	if err := metadata.Validate(); err != nil {
+		return false, moerr.NewInternalErrorf(ctx, "invalid unique-key codec metadata: %v", err)
+	}
+	return metadata.IsV2(), nil
+}
+
+func collationKeyV2ValueCharset(typ planpb.Type) (int64, error) {
+	if typ.Id != int32(types.T_varchar) && typ.Id != int32(types.T_text) {
+		return 0, moerr.NewNotSupportedNoCtxf("unique-key codec v2 does not support type %d", typ.Id)
+	}
+	switch typ.Charset {
+	case uint32(types.CharsetUTF8), uint32(types.CharsetUTF8MB4Bin):
+		return int64(typ.Charset), nil
+	default:
+		return 0, moerr.NewNotSupportedNoCtxf("unique-key codec v2 does not support charset %d", typ.Charset)
+	}
+}
+
+func collationKeyV2OutputType(input planpb.Type) planpb.Type {
+	return planpb.Type{
+		Id:          int32(types.T_blob),
+		Width:       types.MaxBlobLen,
+		Charset:     uint32(types.CharsetBinary),
+		NotNullable: input.NotNullable,
+	}
+}
+
+func collationKeyV2StorageType() planpb.Type {
+	return planpb.Type{
+		Id:      int32(types.T_blob),
+		Width:   types.MaxBlobLen,
+		Charset: uint32(types.CharsetBinary),
+	}
+}
+
+// makeStoredValueIdentityExpr converts a final/old row image to a binary
+// string without applying SQL collation or CHAR PAD SPACE rules.  FULLTEXT
+// no-op proofs use this representation because SQL equality and tokenizer
+// identity are deliberately different contracts.  The helper is kept inside
+// the planner; it is not a SQL-visible function and does not alter ordinary
+// comparison semantics.
+func makeStoredValueIdentityExpr(ctx context.Context, expr *planpb.Expr) (*planpb.Expr, error) {
+	if expr == nil {
+		return nil, moerr.NewInternalErrorNoCtx("nil expression in stored-value identity cast")
+	}
+	target := planpb.Type{
+		Id:          int32(types.T_varbinary),
+		Width:       types.MaxBlobLen,
+		Charset:     uint32(types.CharsetBinary),
+		NotNullable: expr.Typ.NotNullable,
+	}
+	return makePlan2CastExpr(ctx, expr, target)
+}
+
+func makeCollationKeyV2Expr(value *planpb.Expr, prefix int) (*planpb.Expr, error) {
+	if value == nil {
+		return nil, moerr.NewInternalErrorNoCtx("nil value in collation key v2 expression")
+	}
+	charset, err := collationKeyV2ValueCharset(value.Typ)
+	if err != nil {
+		return nil, err
+	}
+	if prefix < 0 || uint64(prefix) > math.MaxUint32 {
+		return nil, moerr.NewInvalidInputNoCtx("unique-key prefix out of range")
+	}
+	return &planpb.Expr{
+		Typ: collationKeyV2OutputType(value.Typ),
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{
+				Obj:     function.CollationKeyV2FunctionEncodedID,
+				ObjName: "__mo_collation_key_v2",
+			},
+			Args: []*planpb.Expr{
+				DeepCopyExpr(value),
+				makePlan2Int64ConstExprWithType(int64(prefix)),
+				makePlan2Int64ConstExprWithType(charset),
+			},
+		}},
+	}, nil
+}
+
+// uniqueKeyPrefixLength returns the declared prefix for a source column.  A
+// missing entry means that the part is unprefixed; an entry is only valid when
+// it is strictly positive.  ResolveAlias is applied at the boundary so that
+// physical index metadata and user-facing column names share one lookup.
+func uniqueKeyPrefixLength(prefixLengths map[string]int, part string) (int, error) {
+	part = catalog.ResolveAlias(part)
+	if part == "" {
+		return 0, moerr.NewInternalErrorNoCtx("empty unique-key index part")
+	}
+	if prefixLengths == nil {
+		return 0, nil
+	}
+	length, ok := prefixLengths[part]
+	if !ok {
+		return 0, nil
+	}
+	if length <= 0 {
+		return 0, moerr.NewInvalidInputNoCtxf("invalid unique-key prefix length %d for %s", length, part)
+	}
+	if uint64(length) > math.MaxUint32 {
+		return 0, moerr.NewInvalidInputNoCtxf("unique-key prefix length %d for %s exceeds uint32", length, part)
+	}
+	return length, nil
+}
+
+func validateUniqueKeyInputExprs(tableDef *planpb.TableDef, idxDef *planpb.IndexDef, values []*planpb.Expr) error {
+	if tableDef == nil || idxDef == nil {
+		return moerr.NewInternalErrorNoCtx("nil table or index definition for unique-key identity")
+	}
+	if len(idxDef.Parts) == 0 || len(values) != len(idxDef.Parts) {
+		return moerr.NewInternalErrorNoCtxf("unique-key identity has %d values for %d parts", len(values), len(idxDef.Parts))
+	}
+	for i, value := range values {
+		if value == nil {
+			return moerr.NewInternalErrorNoCtxf("nil value for unique-key part %d", i)
+		}
+		if catalog.ResolveAlias(idxDef.Parts[i]) == "" {
+			return moerr.NewInternalErrorNoCtxf("empty unique-key part %d", i)
+		}
+	}
+	return nil
+}
+
+func makeCollationCompositeKeyV2Expr(values []*planpb.Expr, prefixes []int) (*planpb.Expr, error) {
+	if len(values) < 2 || len(values) != len(prefixes) {
+		return nil, moerr.NewInternalErrorNoCtx("invalid collation composite key v2 parts")
+	}
+	args := make([]*planpb.Expr, 0, len(values)*3)
+	for i, value := range values {
+		if value == nil {
+			return nil, moerr.NewInternalErrorNoCtx("nil value in collation composite key v2 expression")
+		}
+		charset, err := collationKeyV2ValueCharset(value.Typ)
+		if err != nil {
+			return nil, err
+		}
+		if prefixes[i] < 0 || uint64(prefixes[i]) > math.MaxUint32 {
+			return nil, moerr.NewInvalidInputNoCtx("unique-key prefix out of range")
+		}
+		args = append(args,
+			DeepCopyExpr(value),
+			makePlan2Int64ConstExprWithType(int64(prefixes[i])),
+			makePlan2Int64ConstExprWithType(charset),
+		)
+	}
+	resultType := collationKeyV2OutputType(values[0].Typ)
+	// The composite materializer emits SQL NULL when any source part is NULL.
+	// Carry that contract into the planner type instead of looking only at the
+	// first part; otherwise a nullable later part can be incorrectly treated as
+	// non-nullable by null-elimination and constraint planning.
+	for _, value := range values[1:] {
+		resultType.NotNullable = resultType.NotNullable && value.Typ.NotNullable
+	}
+	return &planpb.Expr{
+		Typ: resultType,
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{
+				Obj:     function.CollationCompositeKeyV2FunctionEncodedID,
+				ObjName: "__mo_collation_composite_key_v2",
+			},
+			Args: args,
+		}},
+	}, nil
+}
+
+func (builder *QueryBuilder) makeInsertUniqueIndexKeyExpr(
+	selectNode *planpb.Node,
+	selectTag int32,
+	tableDef *planpb.TableDef,
+	uniqueTableDef *planpb.TableDef,
+	idxDef *planpb.IndexDef,
+	colName2Idx map[string]int32,
+	prefixLengths map[string]int,
+) (*planpb.Expr, error) {
+	if tableDef == nil || idxDef == nil || selectNode == nil || len(idxDef.Parts) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid unique-key index definition")
+	}
+	// Secondary UNIQUE indexes own their physical relation metadata. The base
+	// table metadata describes only the primary-key relation, so consulting it
+	// here would incorrectly force every unique index to share the PK's format
+	// (or miss a v2 secondary index on an integer-PK table).
+	metadataDef := uniqueTableDef
+	if metadataDef == nil {
+		metadataDef = tableDef
+	}
+	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), metadataDef)
+	if err != nil || !useV2 {
+		if len(idxDef.Parts) == 1 {
+			return builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, idxDef.Parts[0], prefixLengths)
+		}
+		args := make([]*planpb.Expr, len(idxDef.Parts))
+		for i, part := range idxDef.Parts {
+			args[i], err = builder.makeInsertIndexPartExpr(selectNode, selectTag, tableDef, colName2Idx, part, prefixLengths)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
+	}
+
+	values := make([]*planpb.Expr, len(idxDef.Parts))
+	prefixes := make([]int, len(idxDef.Parts))
+	for i, part := range idxDef.Parts {
+		partName := catalog.ResolveAlias(part)
+		pos, ok := colName2Idx[tableDef.Name+"."+partName]
+		if !ok || pos < 0 || int(pos) >= len(selectNode.ProjectList) {
+			return nil, moerr.NewInternalErrorf(builder.GetContext(), "cannot locate v2 unique-key part %s", partName)
+		}
+		values[i] = &planpb.Expr{
+			Typ: selectNode.ProjectList[pos].Typ,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+				RelPos: selectTag,
+				ColPos: pos,
+				Name:   partName,
+			}},
+		}
+		prefixes[i], err = uniqueKeyPrefixLength(prefixLengths, partName)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(values) == 1 {
+		return makeCollationKeyV2Expr(values[0], prefixes[0])
+	}
+	return makeCollationCompositeKeyV2Expr(values, prefixes)
+}
+
+func (builder *QueryBuilder) makeUniqueIndexKeyExprFromInputExprs(
+	tableDef *planpb.TableDef,
+	idxDef *planpb.IndexDef,
+	values []*planpb.Expr,
+	prefixLengths map[string]int,
+) (*planpb.Expr, error) {
+	return builder.makeUniqueIndexKeyExprFromInputExprsForRelation(
+		tableDef, tableDef, idxDef, values, prefixLengths)
+}
+
+// makeUniqueIndexKeyExprFromInputExprsForRelation builds an identity from
+// source-table expressions while consulting the metadata of the physical
+// unique relation that will consume the result.  These definitions are often
+// different: for example, an INT primary-key base table can own a legacy
+// primary relation while its VARCHAR secondary UNIQUE relation is v2.  Using
+// the source table's metadata in that shape silently emits the legacy serial
+// key and makes probes, locks, and writes disagree with the hidden relation.
+func (builder *QueryBuilder) makeUniqueIndexKeyExprFromInputExprsForRelation(
+	sourceTableDef *planpb.TableDef,
+	uniqueTableDef *planpb.TableDef,
+	idxDef *planpb.IndexDef,
+	values []*planpb.Expr,
+	prefixLengths map[string]int,
+) (*planpb.Expr, error) {
+	if uniqueTableDef == nil {
+		return nil, moerr.NewInternalErrorNoCtx("nil unique relation definition")
+	}
+	if err := validateUniqueKeyInputExprs(sourceTableDef, idxDef, values); err != nil {
+		return nil, err
+	}
+	useV2, err := tableUsesCollationKeyV2(builder.GetContext(), uniqueTableDef)
+	if err != nil || !useV2 {
+		if len(values) == 1 {
+			return builder.makeIndexPartExprFromInputExpr(values[0], catalog.ResolveAlias(idxDef.Parts[0]), prefixLengths)
+		}
+		parts := make([]*planpb.Expr, len(values))
+		for i, value := range values {
+			parts[i], err = builder.makeIndexPartExprFromInputExpr(value, catalog.ResolveAlias(idxDef.Parts[i]), prefixLengths)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", parts)
+	}
+	prefixes := make([]int, len(values))
+	for i := range values {
+		prefixes[i], err = uniqueKeyPrefixLength(prefixLengths, idxDef.Parts[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(values) == 1 {
+		return makeCollationKeyV2Expr(values[0], prefixes[0])
+	}
+	return makeCollationCompositeKeyV2Expr(values, prefixes)
+}
+
+func makePrimaryKeyV2IdentityExpr(tableDef *planpb.TableDef, value *planpb.Expr) (*planpb.Expr, error) {
+	if tableDef == nil || tableDef.Pkey == nil || value == nil {
+		return nil, moerr.NewInternalErrorNoCtx("invalid v2 primary-key identity")
+	}
+	if len(tableDef.Pkey.Names) > 1 {
+		return nil, moerr.NewNotSupportedNoCtx("composite v2 primary-key identity requires part expressions")
+	}
+	return makeCollationKeyV2Expr(value, 0)
+}
+
+func makePrimaryKeyV2IdentityExprs(tableDef *planpb.TableDef, values []*planpb.Expr) (*planpb.Expr, error) {
+	if tableDef == nil || tableDef.Pkey == nil || len(values) != len(tableDef.Pkey.Names) || len(values) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid v2 primary-key identity parts")
+	}
+	if len(values) == 1 {
+		return makePrimaryKeyV2IdentityExpr(tableDef, values[0])
+	}
+	prefixes := make([]int, len(values))
+	return makeCollationCompositeKeyV2Expr(values, prefixes)
+}
