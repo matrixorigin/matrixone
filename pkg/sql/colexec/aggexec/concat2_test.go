@@ -786,6 +786,93 @@ func TestGroupConcatLargeGeometryAcrossFinalizers(t *testing.T) {
 	}
 }
 
+func TestGroupConcatVectorValuesAcrossFinalizers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	valueType := types.T_array_float32.ToType()
+	first := types.ArrayToBytes([]float32{1, 2, 3})
+	second := types.ArrayToBytes([]float32{-1, 0, 4})
+	cases := []struct {
+		name     string
+		distinct bool
+		ordered  bool
+		values   [][]byte
+		keys     []int64
+		want     string
+	}{
+		{
+			name:   "input order",
+			values: [][]byte{first, second},
+			want:   "[1, 2, 3]|[-1, 0, 4]",
+		},
+		{
+			name:    "ordered",
+			ordered: true,
+			values:  [][]byte{second, first, second},
+			keys:    []int64{3, 1, 2},
+			want:    "[1, 2, 3]|[-1, 0, 4]|[-1, 0, 4]",
+		},
+		{
+			name:     "ordered distinct",
+			distinct: true,
+			ordered:  true,
+			values:   [][]byte{second, first, first},
+			keys:     []int64{3, 1, 2},
+			want:     "[1, 2, 3]|[-1, 0, 4]",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			argTypes := []types.Type{valueType}
+			if tc.ordered {
+				argTypes = append(argTypes, types.T_int64.ToType())
+			}
+			info := multiAggInfo{
+				aggID:     AggIdOfGroupConcat,
+				distinct:  tc.distinct,
+				argTypes:  argTypes,
+				retType:   GroupConcatReturnType([]types.Type{valueType}),
+				emptyNull: true,
+			}
+			exec := newGroupConcatExec(mp, info, "|").(*groupConcatExec)
+			defer exec.Free()
+			if tc.ordered {
+				require.NoError(t, exec.SetExtraInformation(
+					testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, "|"), 0))
+			}
+			require.NoError(t, exec.GroupGrow(1))
+
+			values := vector.NewVec(valueType)
+			defer values.Free(mp)
+			for _, value := range tc.values {
+				require.NoError(t, vector.AppendBytes(values, value, false, mp))
+			}
+			vectors := []*vector.Vector{values}
+			if tc.ordered {
+				orderKeys := vector.NewVec(types.T_int64.ToType())
+				defer orderKeys.Free(mp)
+				require.NoError(t, vector.AppendFixedList(orderKeys, tc.keys, nil, mp))
+				vectors = append(vectors, orderKeys)
+			}
+
+			groups := make([]uint64, len(tc.values))
+			for i := range groups {
+				groups[i] = 1
+			}
+			require.NoError(t, exec.BatchFill(0, groups, vectors))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, tc.want, string(results[0].GetBytesAt(0)))
+		})
+	}
+}
+
 func TestGroupConcatMaxLenPreservesOpaqueBinaryCharset(t *testing.T) {
 	mp := mpool.MustNewZero()
 	inputType := types.NewWithCharset(
