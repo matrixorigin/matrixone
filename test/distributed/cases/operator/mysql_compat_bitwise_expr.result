@@ -16,8 +16,6 @@ select '+7' & 3 as signed_str_and,
 '+7' >> 1 as signed_str_right_shift;
 signed_str_and    signed_str_or    signed_str_xor    signed_str_left_shift    signed_str_right_shift
 3    15    4    28    3
--- Binary introducers/casts select fixed-width bytewise semantics; bare hex
--- literals and ordinary text remain numeric controls.
 select hex(~_binary X'00FF') as binary_not,
 octet_length(~_binary X'00FF') as binary_not_bytes,
 hex(_binary X'0102' << 1) as binary_left_1,
@@ -80,7 +78,6 @@ id    varbinary_not    varbinary_not_bytes    varbinary_left_1    varbinary_left
 1    FEFD    2    0204    2    0102    0081    2    0102    0200    0001
 2    FF    1    00    1    00    00    1    00    00    00
 3    null    null    null    null    null    null    null    null    null    null
--- Scalar operators are not subject to the aggregate bitwise 511-byte limit.
 select id,
 octet_length(b) as blob_bytes,
 octet_length(~b) as blob_not_bytes,
