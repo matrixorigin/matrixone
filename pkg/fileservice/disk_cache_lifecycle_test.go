@@ -1364,11 +1364,15 @@ func TestDiskCacheCloseDeadlineDoesNotWaitForQueuedCleanup(t *testing.T) {
 
 func TestDiskCacheAsyncUpdateMemoryIsBounded(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
+	// This tests admission and memory release, not filesystem durability.
+	// Keep the flush barrier independent of host fsync latency.
+	cache.fileSync = func(*os.File) error { return nil }
 	cache.async.mu.Lock()
 	cache.async.mu.maxPendingBytes = 1
 	cache.async.mu.Unlock()
 
 	release := cache.startUpdate(cache.pathForIOEntry("foo", IOEntry{Offset: 0, Size: 1}))
+	t.Cleanup(release)
 	require.NoError(t, cache.Update(context.Background(), &IOVector{
 		FilePath: "foo",
 		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
@@ -1378,11 +1382,13 @@ func TestDiskCacheAsyncUpdateMemoryIsBounded(t *testing.T) {
 		Entries:  []IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
 	}, true))
 
-	cache.async.mu.Lock()
-	require.Equal(t, int64(1), cache.async.mu.pendingBytes)
-	require.Len(t, cache.async.mu.pending, 1)
-	require.Equal(t, int64(1), cache.async.mu.dropped)
-	cache.async.mu.Unlock()
+	func() {
+		cache.async.mu.Lock()
+		defer cache.async.mu.Unlock()
+		require.Equal(t, int64(1), cache.async.mu.pendingBytes)
+		require.Len(t, cache.async.mu.pending, 1)
+		require.Equal(t, int64(1), cache.async.mu.dropped)
+	}()
 
 	release()
 	flushCtx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
@@ -1390,8 +1396,8 @@ func TestDiskCacheAsyncUpdateMemoryIsBounded(t *testing.T) {
 	cache.Flush(flushCtx)
 	require.NoError(t, flushCtx.Err())
 	cache.async.mu.Lock()
+	defer cache.async.mu.Unlock()
 	require.Zero(t, cache.async.mu.pendingBytes)
-	cache.async.mu.Unlock()
 }
 
 func TestDiskCacheAsyncUpdateRejectsCanceledCaller(t *testing.T) {
