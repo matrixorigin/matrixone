@@ -25,8 +25,8 @@ import (
 	"math"
 	"os"
 	"slices"
-	"time"
 	"sort"
+	"time"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
