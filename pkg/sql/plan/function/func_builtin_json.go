@@ -2751,6 +2751,9 @@ func jsonKeysWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_keys", "invalid path expression")
 		}
+		if !path.IsSimple() {
+			return moerr.NewInvalidJSONPathWildcard(proc.Ctx)
+		}
 		val := bj.Query([]*bytejson.Path{&path})
 		if val.IsNull() || val.Type != bytejson.TpCodeObject {
 			rs.AppendMustNullForBytesResult()
