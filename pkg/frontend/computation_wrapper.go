@@ -2073,13 +2073,34 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 		if !ok {
 			return ""
 		}
+		rawValue := ""
+		if param.Value != nil {
+			switch value := param.Value.(type) {
+			case []byte:
+				rawValue = string(value)
+			default:
+				rawValue = fmt.Sprint(value)
+			}
+		}
+		if param.MaterializedValue != "" {
+			rawValue = param.MaterializedValue
+		}
 		runtimeType := param.RuntimeType
 		if !param.HasRuntimeType || runtimeType.Oid == types.T_text {
-			runtimeType = plan2.PreparedNumericPrefixTypeFromString(fmt.Sprintf("%v", param.Value))
+			runtimeType = plan2.PreparedNumericPrefixTypeFromString(rawValue)
 		}
 		fmt.Fprintf(&key, "%d:%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
 			runtimeType.Oid, runtimeType.Charset, runtimeType.Width, runtimeType.Scale)
 		fmt.Fprintf(&key, "binary:%t;domain:%d;", param.IsBinaryString, param.RuntimeStringDomain)
+		charSourceRelevant := param.IsBinaryProtocol || param.HasSourceType ||
+			(param.HasRuntimeType && types.T(param.RuntimeType.Oid).IsMySQLString())
+		if charSourceRelevant {
+			charType, charNumeric := plan2.PreparedCharSourceTypeFromString(rawValue)
+			fmt.Fprintf(&key, "char-source:%t:%d:%d:%d:%d;", charNumeric,
+				charType.Oid, charType.Charset, charType.Width, charType.Scale)
+		} else {
+			fmt.Fprint(&key, "char-source:irrelevant;")
+		}
 		if param.HasSourceType {
 			// SQL EXECUTE arithmetic specializes from the user variable's logical
 			// type. Keep that dependency in the cache identity without replacing
