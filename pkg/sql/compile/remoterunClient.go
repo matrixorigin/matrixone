@@ -465,15 +465,16 @@ type messageSenderOnClient struct {
 	// receiveClosed records a terminal signal from the receive channel. It
 	// poisons backend reuse, but does not release the locally owned morpc Stream;
 	// close must still call Stream.Close.
-	receiveClosed      bool
-	reuseEligible      bool
-	terminalNegotiated bool
-	stopResponseTried  bool
-	expectedEnd        pipeline.Method
-	stateMu            sync.Mutex
-	closeOnce          sync.Once
-	requestFinishAck   bool
-	pendingBatchAck    uint64
+	receiveClosed           bool
+	reuseEligible           bool
+	terminalNegotiated      bool
+	stopResponseTried       bool
+	expectedEnd             pipeline.Method
+	reportingRequestStarted bool
+	stateMu                 sync.Mutex
+	closeOnce               sync.Once
+	requestFinishAck        bool
+	pendingBatchAck         uint64
 	// allowCleanupCancellation is set after successful local cleanup. Pipeline
 	// and query contexts may be intentionally cancelled by that cleanup; FIN
 	// then runs on its own bounded context. Cancellation before this transition
@@ -579,6 +580,7 @@ func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Me
 
 func (sender *messageSenderOnClient) sendPipeline(
 	scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int, debugMsg string) error {
+	sender.markReportingRequestStarted()
 	sdLen := len(scopeData)
 	if sdLen <= eachMessageSizeLimitation {
 		message := cnclient.AcquireMessage()
@@ -706,7 +708,7 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			}
 			batchSequence = sequence
 		}
-		if m.IsEndMessage() && len(m.GetAnalyse()) > 0 {
+		if m.IsEndMessage() {
 			if err = sender.dealRemoteTerminal(m.GetAnalyse()); err != nil {
 				return nil, false, err
 			}
@@ -858,9 +860,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 			message := val.(*pipeline.Message)
 
 			if message.IsEndMessage() || len(message.GetErr()) > 0 {
-				if len(message.GetAnalyse()) > 0 {
-					_ = sender.dealRemoteTerminal(message.GetAnalyse())
-				}
+				_ = sender.dealRemoteTerminal(message.GetAnalyse())
 				if terminalErr, ok := message.TryToGetMoErr(); ok {
 					sender.markTerminal(message, false)
 					return terminalErr
@@ -950,8 +950,13 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 		return nil
 	}
 	var envelope remoteTerminalEnvelope
-	if err := json.Unmarshal(data, &envelope); err != nil {
-		return err
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &envelope); err != nil {
+			if marker, ok := sender.warningSink.(groupConcatCutMarker); ok {
+				marker.markGroupConcatReportingIncomplete()
+			}
+			return err
+		}
 	}
 	if sender.proc != nil && envelope.StatementLastInsertID != 0 {
 		sender.proc.SetStatementLastInsertIDIfEarlier(envelope.StatementLastInsertID)
@@ -967,6 +972,16 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 			messages = append(messages, warning.Message)
 		}
 		appendWarningBatchToSink(sender.warningSink, envelope.WarningCount, codes, messages)
+	}
+	if envelope.GroupConcatCut {
+		if marker, ok := sender.warningSink.(groupConcatCutMarker); ok {
+			marker.markGroupConcatCut(envelope.GroupConcatCutMessage)
+		}
+	}
+	if !envelope.GroupConcatCutReported {
+		if marker, ok := sender.warningSink.(groupConcatCutMarker); ok {
+			marker.markGroupConcatReportingIncomplete()
+		}
 	}
 	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {
 		if envelope.Allocation.GenerationCount != 0 {
@@ -1005,6 +1020,7 @@ func (sender *messageSenderOnClient) close() {
 		defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
 
 		_ = sender.waitingTheStopResponse()
+		sender.markMissingGroupConcatTerminal()
 		sender.stateMu.Lock()
 		receiveClosed, reuseEligible := sender.receiveClosed, sender.reuseEligible
 		sender.stateMu.Unlock()
@@ -1028,4 +1044,27 @@ func (sender *messageSenderOnClient) close() {
 		}
 		_ = sender.streamSender.Close(true)
 	})
+}
+
+func (sender *messageSenderOnClient) markMissingGroupConcatTerminal() {
+	sender.stateMu.Lock()
+	started := sender.reportingRequestStarted
+	sender.stateMu.Unlock()
+	if !started {
+		return
+	}
+	sender.terminalMu.Lock()
+	seen := sender.terminalSeen
+	sender.terminalMu.Unlock()
+	if !seen {
+		if marker, ok := sender.warningSink.(groupConcatCutMarker); ok {
+			marker.markGroupConcatReportingIncomplete()
+		}
+	}
+}
+
+func (sender *messageSenderOnClient) markReportingRequestStarted() {
+	sender.stateMu.Lock()
+	sender.reportingRequestStarted = true
+	sender.stateMu.Unlock()
 }

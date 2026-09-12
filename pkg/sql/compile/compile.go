@@ -1426,6 +1426,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = c.constrainStrictWriteWorkers(); err != nil {
+		return nil, err
+	}
 
 	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
