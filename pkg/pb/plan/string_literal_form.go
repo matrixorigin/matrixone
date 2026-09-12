@@ -203,12 +203,14 @@ const (
 // its overload IDs but changes its physical result vector from UINT8 to INT32.
 // A struct makes compatibility call sites name every capability instead of
 // relying on positional booleans.
+// RowDependentConvBases requires MORPC v67 for nonconstant or unsigned bases.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool
 	MixedJSONBooleanEquality bool
 	FormatNumericArguments   bool
 	TypedConversionFunctions bool
+	RowDependentConvBases    bool
 	ASCIIInt32Result         bool
 }
 
@@ -218,7 +220,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
 		features.TypedConversionFunctions ||
-		features.ASCIIInt32Result
+		features.ASCIIInt32Result ||
+		features.RowDependentConvBases
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -249,6 +252,15 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			if !features.TypedConversionFunctions && isTypedConversionFunction(fn) {
 				features.TypedConversionFunctions = true
+			}
+			if fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == convFunctionID && len(fn.Args) == 3 {
+				for _, base := range fn.Args[1:] {
+					// Only literal INT64 bases prove the pre-v65 constant-vector
+					// contract. Unknown or not-yet-folded expressions fail closed.
+					if base == nil || base.Typ.Id != 23 || base.GetLit() == nil {
+						features.RowDependentConvBases = true
+					}
+				}
 			}
 			if !features.ASCIIInt32Result && isASCIIInt32Result(current) {
 				features.ASCIIInt32Result = true

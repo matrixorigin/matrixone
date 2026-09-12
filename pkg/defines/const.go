@@ -102,7 +102,8 @@ const (
 	MORPCVersion64     int64 = 64 // typed BIN/CONV execution contracts
 	MORPCVersion65     int64 = 65 // signed INT result contract for ASCII
 	MORPCVersion66     int64 = 66 // GROUP_CONCAT source-row diagnostics in aggregate partial state
-	MORPCLatestVersion       = MORPCVersion66
+	MORPCVersion67     int64 = 67 // row-dependent and unsigned CONV bases
+	MORPCLatestVersion       = MORPCVersion67
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
