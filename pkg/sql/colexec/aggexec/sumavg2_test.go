@@ -141,7 +141,7 @@ func TestDecimalSumLegacyStateWireCompatibility(t *testing.T) {
 			},
 			makeLegacy: func() AggFuncExec {
 				return makeSumAvgExecWithLegacyDecimalSumState(
-					mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 18, 0), true)
+					mp, true, AggIdOfSum, false, types.New(types.T_decimal64, 18, 0), true, false)
 			},
 			makeBase: func() AggFuncExec {
 				return newSumDecimal64FastExec(
@@ -156,7 +156,7 @@ func TestDecimalSumLegacyStateWireCompatibility(t *testing.T) {
 			},
 			makeLegacy: func() AggFuncExec {
 				return makeSumAvgExecWithLegacyDecimalSumState(
-					mp, true, AggIdOfSum, false, types.New(types.T_decimal128, 38, 0), true)
+					mp, true, AggIdOfSum, false, types.New(types.T_decimal128, 38, 0), true, false)
 			},
 			makeBase: func() AggFuncExec {
 				return newSumDecimal128FastExec(
@@ -258,7 +258,7 @@ func TestDecimalSumLegacyDistinctFlushWidenedResult(t *testing.T) {
 			defer input.Free(mp)
 
 			exec := makeSumAvgExecWithLegacyDecimalSumState(
-				mp, true, AggIdOfSum, true, test.param, true)
+				mp, true, AggIdOfSum, true, test.param, true, false)
 			defer exec.Free()
 			require.NoError(t, exec.GroupGrow(2))
 			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
