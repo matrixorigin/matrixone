@@ -21,6 +21,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
@@ -211,9 +212,9 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 		{name: "decimal128", typ: types.New(types.T_decimal128, 20, 2), data: types.EncodeDecimal128(&d128), want: d128.Format(2)},
 		{name: "decimal256", typ: types.New(types.T_decimal256, 40, 2), data: types.EncodeDecimal256(&d256), want: d256.Format(2)},
 		{name: "date", typ: types.T_date.ToType(), data: types.EncodeDate(&dateVal), want: dateVal.String()},
-		{name: "time", typ: types.T_time.ToType(), data: types.EncodeTime(&timeVal), want: timeVal.String()},
-		{name: "datetime", typ: types.T_datetime.ToType(), data: types.EncodeDatetime(&datetimeVal), want: datetimeVal.String()},
-		{name: "timestamp", typ: types.T_timestamp.ToType(), data: types.EncodeTimestamp(&timestampVal), want: timestampVal.String()},
+		{name: "time", typ: types.T_time.ToType(), data: types.EncodeTime(&timeVal), want: timeVal.String2(0)},
+		{name: "datetime", typ: types.T_datetime.ToType(), data: types.EncodeDatetime(&datetimeVal), want: datetimeVal.String2(0)},
+		{name: "timestamp", typ: types.T_timestamp.ToType(), data: types.EncodeTimestamp(&timestampVal), want: timestampVal.String2(time.UTC, 0)},
 		{name: "year", typ: types.T_year.ToType(), data: types.EncodeInt16(ptr(int16(yearVal))), want: yearVal.String()},
 		{name: "uuid", typ: types.T_uuid.ToType(), data: types.EncodeUuid(&uuidVal), want: uuidVal.String()},
 		{name: "text", typ: types.T_text.ToType(), data: []byte("hello"), want: "hello"},
@@ -269,9 +270,9 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 	writerErr := errors.New("array writer failed")
 	require.ErrorIs(t, writeGroupConcatData(
 		&groupConcatFailWriter{err: writerErr},
-		types.T_array_float32.ToType(), arrayBytes), writerErr)
+		types.T_array_float32.ToType(), arrayBytes, time.UTC), writerErr)
 	require.ErrorIs(t, writeGroupConcatData(
-		groupConcatShortWriter{}, types.T_array_float32.ToType(), arrayBytes), io.ErrShortWrite)
+		groupConcatShortWriter{}, types.T_array_float32.ToType(), arrayBytes, time.UTC), io.ErrShortWrite)
 }
 
 type groupConcatFailWriter struct {
@@ -289,6 +290,46 @@ func (groupConcatShortWriter) Write(value []byte) (int, error) {
 		return 0, nil
 	}
 	return len(value) - 1, nil
+}
+
+func TestGroupConcatTemporalFormattingUsesScaleAndLocation(t *testing.T) {
+	datetime, err := types.ParseDatetime("2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+	timeValue, err := types.ParseTime("-12:34:56.123456", 6)
+	require.NoError(t, err)
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+
+	assertValue := func(typ types.Type, data []byte, location *time.Location, want string) {
+		t.Helper()
+		writer := &appendSliceWriter{}
+		require.NoError(t, writeGroupConcatData(writer, typ, data, location))
+		require.Equal(t, want, string(writer.data))
+	}
+
+	assertValue(types.New(types.T_datetime, 0, 3), types.EncodeDatetime(&datetime), time.UTC,
+		"2024-01-02 03:04:05.123")
+	assertValue(types.New(types.T_time, 0, 6), types.EncodeTime(&timeValue), time.UTC,
+		"-12:34:56.123456")
+	assertValue(types.New(types.T_timestamp, 0, 6), types.EncodeTimestamp(&timestamp),
+		time.FixedZone("UTC+8", 8*60*60), "2024-01-02 11:04:05.123456")
+	assertValue(types.New(types.T_timestamp, 0, 0), types.EncodeTimestamp(&timestamp), nil,
+		"2024-01-02 03:04:05")
+}
+
+func TestConfigureGroupConcatTimeZone(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	agg, err := MakeAgg(mp, AggIdOfGroupConcat, false, types.T_timestamp.ToType())
+	require.NoError(t, err)
+	defer agg.Free()
+
+	location := time.FixedZone("UTC+8", 8*60*60)
+	ConfigureGroupConcatTimeZone(agg, location)
+	require.Same(t, location, agg.(*groupConcatExec).timeZone)
+	ConfigureGroupConcatTimeZone(agg, nil)
+	require.Same(t, time.UTC, agg.(*groupConcatExec).timeZone)
 }
 
 func ptr[T any](v T) *T {

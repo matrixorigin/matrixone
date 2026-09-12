@@ -484,6 +484,7 @@ func (ctr *container) newAggregateExecutor(
 	if err != nil {
 		return nil, err
 	}
+	aggexec.ConfigureGroupConcatTimeZone(exec, proc.Base.SessionInfo.TimeZone)
 	succeeded := false
 	defer func() {
 		if !succeeded {
