@@ -5471,7 +5471,19 @@ func (builder *QueryBuilder) buildValueScan(
 							if err != nil {
 								return 0, nil, err
 							}
-							if scan.hasParam {
+							// A bare marker is the source value of the assignment, not a
+							// numeric expression.  In an IGNORE assignment it must remain
+							// TEXT until the outer cast_ignore runs; otherwise the prepare-time
+							// numeric context creates an ordinary cast(? AS INT/DECIMAL), and
+							// malformed values fail before the IGNORE warning/adjustment mode
+							// is reached.  Keep numeric context for compound expressions such
+							// as ? + 1, whose operands genuinely need numeric binding.
+							directPreparedParam := false
+							if _, ok := unwrapParenExpr(r[i]).(*tree.ParamExpr); ok {
+								directPreparedParam = true
+							}
+							if scan.hasParam && !(builder.isInsertIgnore && directPreparedParam &&
+								useIgnoreConversionAssignmentCast(targetTyp.Typ)) {
 								switch numericBinder := funcBinder.(type) {
 								case *DefaultBinder:
 									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
