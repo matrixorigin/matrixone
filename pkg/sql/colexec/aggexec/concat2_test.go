@@ -466,8 +466,8 @@ func TestGroupConcatSpillCompactsFanIn(t *testing.T) {
 	for i := range want {
 		want[i] = fmt.Sprintf("%02d", i)
 		entry := groupConcatOrderedEntry{
-			concatPayload: mustAppendPayloadField(t, nil, []byte(want[i]), false),
-			orderPayload:  mustAppendPayloadField(t, nil, []byte(want[i]), false),
+			concatPayload: appendPayloadField(nil, []byte(want[i]), false),
+			orderPayload:  appendPayloadField(nil, []byte(want[i]), false),
 		}
 		require.NoError(t, exec.writeOrderedRun(context.Background(), 0, []groupConcatOrderedEntry{entry}))
 	}
@@ -659,7 +659,7 @@ func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 			require.NoError(t, exec.GroupGrow(1))
 			require.NoError(t, exec.SetExtraInformation(
 				EncodeGroupConcatConfig("", 20), 0))
-			payload := mustAppendPayloadField(t, nil, tc.wkb, false)
+			payload := appendPayloadField(nil, tc.wkb, false)
 			scratch, truncated, err := exec.(*groupConcatExec).appendConcatPayload(
 				make([]byte, 0, 64), payload)
 			require.NoError(t, err)
@@ -1751,7 +1751,7 @@ func TestGroupConcatOrderedPayloadValidation(t *testing.T) {
 		require.Error(t, err)
 		require.Zero(t, mp.CurrNB())
 
-		badFixedField := mustAppendPayloadField(t, nil, []byte{1}, false)
+		badFixedField := appendPayloadField(nil, []byte{1}, false)
 		entries[0].orderPayload = badFixedField
 		_, err = exec.restoreOrderVectors(context.Background(), entries)
 		require.Error(t, err)

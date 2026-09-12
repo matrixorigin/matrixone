@@ -25,25 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
-func appendPayloadField(dst []byte, data []byte, isNull bool) ([]byte, error) {
+func appendPayloadField(dst []byte, data []byte, isNull bool) []byte {
 	if isNull {
-		return append(dst, 0), nil
-	}
-	if err := validatePayloadFieldLength(uint64(len(data))); err != nil {
-		return nil, err
+		return append(dst, 0)
 	}
 	dst = append(dst, 1)
 	sz := uint32(len(data))
 	dst = append(dst, types.EncodeUint32(&sz)...)
-	return append(dst, data...), nil
-}
-
-func validatePayloadFieldLength(length uint64) error {
-	if length > uint64(^uint32(0)) {
-		return moerr.NewInvalidInputNoCtx(
-			"aggregate payload field exceeds uint32 encoding limit")
-	}
-	return nil
+	return append(dst, data...)
 }
 
 func payloadFieldIterator(payload []byte, fieldCount int, fn func(i int, isNull bool, data []byte) error) error {
@@ -92,11 +81,7 @@ func encodeGroupConcatPayload(vectors []*vector.Vector, row int, argTypes []type
 		if vec.IsNull(uint64(r)) {
 			return nil, nil
 		}
-		var err error
-		payload, err = appendPayloadField(payload, groupConcatFieldBytes(vec, r, argTypes[i]), false)
-		if err != nil {
-			return nil, err
-		}
+		payload = appendPayloadField(payload, groupConcatFieldBytes(vec, r, argTypes[i]), false)
 	}
 	return payload, nil
 }
@@ -113,18 +98,10 @@ func encodeGroupConcatPayloadWithNulls(
 			r = 0
 		}
 		if vec.IsNull(uint64(r)) {
-			var err error
-			payload, err = appendPayloadField(payload, nil, true)
-			if err != nil {
-				return nil, err
-			}
+			payload = appendPayloadField(payload, nil, true)
 			continue
 		}
-		var err error
-		payload, err = appendPayloadField(payload, groupConcatFieldBytes(vec, r, argTypes[i]), false)
-		if err != nil {
-			return nil, err
-		}
+		payload = appendPayloadField(payload, groupConcatFieldBytes(vec, r, argTypes[i]), false)
 	}
 	return payload, nil
 }
@@ -267,9 +244,6 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 }
 
 func writeGroupConcatArrayData(writer io.Writer, typ types.Type, data []byte) error {
-	if err := isValidGroupConcatUnit(data); err != nil {
-		return err
-	}
 	if !typ.Oid.IsArrayRelate() || len(data)%typ.GetArrayElementSize() != 0 {
 		return moerr.NewInternalErrorNoCtxf(
 			"invalid group_concat array payload size for %s", typ.String())
