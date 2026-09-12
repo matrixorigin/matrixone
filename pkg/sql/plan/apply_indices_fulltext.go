@@ -467,6 +467,11 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	var last_node_id int32
 	var last_ftnode_pkcol *Expr
 
+	srcTblSchema := scanNode.ObjRef.SchemaName
+	if len(scanNode.ObjRef.SubscriptionName) > 0 {
+		srcTblSchema = scanNode.ObjRef.SubscriptionName
+	}
+
 	for i := 0; i < len(ft_filters); i++ {
 		ftidxscan := ft_filters[i]
 		idxdef := indexDefs[i]
@@ -480,8 +485,8 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 				builder.GetContext(), "resolved fulltext index table %q without catalog metadata", idxdef.IndexTableName)
 		}
 
-		idxtblname := sqlquote.QualifiedIdent(idxObjRef.SchemaName, idxObjRef.ObjName)
-		srctblname := sqlquote.QualifiedIdent(scanNode.ObjRef.SchemaName, scanNode.ObjRef.ObjName)
+		idxtblname := sqlquote.QualifiedIdent(srcTblSchema, idxObjRef.ObjName)
+		srctblname := sqlquote.QualifiedIdent(srcTblSchema, scanNode.ObjRef.ObjName)
 		fn := ftidxscan.GetF()
 		params := idxdef.IndexAlgoParams
 		aliasName := fmt.Sprintf("mo_fulltext_alias_%d", i)
