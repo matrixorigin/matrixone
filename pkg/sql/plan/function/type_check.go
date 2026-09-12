@@ -645,6 +645,52 @@ func unaryTildeTypeMatch(overloads []overload, inputs []types.Type) checkResult 
 	return fixedDirectlyTypeMatch(overloads, inputs)
 }
 
+func isBitwiseBinaryStringType(oid types.T) bool {
+	switch oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return false
+	}
+}
+
+func bitShiftTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	// The first four overloads are the existing numeric signatures. Keep their
+	// matching behavior isolated so adding bytewise overloads cannot make a
+	// numeric or textual left operand bind to a binary implementation.
+	numericOverloads := overloads
+	if len(numericOverloads) > 4 {
+		numericOverloads = numericOverloads[:4]
+	}
+	if len(inputs) != 2 || !isBitwiseBinaryStringType(inputs[0].Oid) {
+		return fixedTypeMatch(numericOverloads, inputs)
+	}
+
+	bestIndex := -1
+	bestCost := math.MaxInt
+	for i, candidate := range overloads {
+		if len(candidate.args) != 2 || candidate.args[0] != inputs[0].Oid {
+			continue
+		}
+		status, cost := tryToMatch([]types.Type{inputs[1]}, []types.T{candidate.args[1]})
+		if status == matchDirectly {
+			return newCheckResultWithSuccess(i)
+		}
+		if status != matchFailed && cost < bestCost {
+			bestIndex = i
+			bestCost = cost
+		}
+	}
+	if bestIndex == -1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	return newCheckResultWithCast(bestIndex, []types.Type{
+		inputs[0],
+		overloads[bestIndex].args[1].ToType(),
+	})
+}
+
 // return whether `from` can match `to` implicitly, and match cost.
 func tryToMatch(from []types.Type, to []types.T) (sta matchCheckStatus, cost int) {
 	if len(from) != len(to) {
