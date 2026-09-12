@@ -902,7 +902,7 @@ column_privileges  ¦  0  ¦  0  ¦  accountadmin  𝄀
 engines  ¦  0  ¦  0  ¦  accountadmin  𝄀
 events  ¦  0  ¦  0  ¦  accountadmin  𝄀
 files  ¦  0  ¦  0  ¦  accountadmin  𝄀
-keywords  ¦  748  ¦  23936  ¦  accountadmin  𝄀
+keywords  ¦  749  ¦  23968  ¦  accountadmin  𝄀
 parameters  ¦  0  ¦  0  ¦  accountadmin  𝄀
 profiling  ¦  0  ¦  0  ¦  accountadmin  𝄀
 routines  ¦  0  ¦  0  ¦  accountadmin  𝄀

@@ -19,6 +19,11 @@ drop table t1;
 #嵌套，EXTREME VALUE
 -- @separator:table
 select space(5),concat_ws('*',space(5),'*');
+SELECT LENGTH(SPACE(8001)), LENGTH(SPACE(10000)), LENGTH(SPACE(65535));
+SELECT LENGTH(SPACE(CAST(1.4 AS DECIMAL(4,1)))),
+       LENGTH(SPACE(CAST(1.5 AS DECIMAL(4,1)))),
+       LENGTH(SPACE(CAST(1.9 AS DECIMAL(4,1)))),
+       LENGTH(SPACE(CAST(-1.5 AS DECIMAL(4,1))));
 select space(-1);
 select space(-4294967295);
 select space(4294967295);
@@ -49,7 +54,7 @@ SELECT SPACE(NULL);
 #DATE TYPE
 -- @separator:table
 SELECT SPACE(12)+"123";
-SELECT SPACE(12314.14123)+"123";
+SELECT LENGTH(SPACE(12314.14123));
 -- @separator:table
 SELECT SPACE("1231")+"123";
 SELECT SPACE("2012-03-12")+"123";

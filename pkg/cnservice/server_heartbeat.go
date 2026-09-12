@@ -241,11 +241,20 @@ func (s *service) withdrawViewMetadataAdmission() error {
 	hb := s.newCNStoreHeartbeat()
 	_, err := s._hakeeperClient.SendCNHeartbeat(ctx, hb)
 	if err != nil {
-		return moerr.AttachCause(ctx, err)
+		err = moerr.AttachCause(ctx, err)
+		s.logger.Error("failed to publish final view metadata withdrawal",
+			zap.Bool("clean_handoff", false), zap.Error(err))
+		return err
 	}
 	if ctx.Err() != nil {
-		return moerr.AttachCause(ctx, ctx.Err())
+		err = moerr.AttachCause(ctx, ctx.Err())
+		s.logger.Error("final view metadata withdrawal timed out",
+			zap.Bool("clean_handoff", false), zap.Error(err))
+		return err
 	}
+	s.logger.Info("published final view metadata withdrawal",
+		zap.Bool("clean_handoff", true),
+		zap.Uint64("generation", s.viewMetadataAdmissionGeneration))
 	return nil
 }
 

@@ -347,7 +347,7 @@ func (r *Runtime) Reconcile(
 	queryID []byte,
 	release func(context.Context) error,
 ) error {
-	if r == nil || len(queryID) == 0 || release == nil {
+	if r == nil || len(queryID) != 16 || release == nil {
 		return internalErrorf("sidecar flight: invalid replayed execution")
 	}
 	idempotencyKey := executionIdempotencyKey(accountID, queryID)
@@ -385,10 +385,6 @@ func (r *Runtime) remove(execution *Execution) {
 func (r *Runtime) retainForReconciliation(execution *Execution) bool {
 	r.mu.Lock()
 	if r.stopped {
-		if r.executions == nil {
-			r.executions = make(map[*Execution]struct{})
-		}
-		r.executions[execution] = struct{}{}
 		r.mu.Unlock()
 		return false
 	}

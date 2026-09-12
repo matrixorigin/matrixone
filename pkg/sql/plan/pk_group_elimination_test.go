@@ -105,14 +105,14 @@ func TestPrimaryKeyGroupEliminationRequiresExactSingleRowAggregateLaw(t *testing
 		wantAgg bool
 	}{
 		{
-			name:    "wide decimal avg falls back",
+			name:    "wide decimal avg remains eligible after promotion",
 			sql:     "select empno, avg(cast(sal as decimal(38,10))) from constraint_test.emp group by empno limit 10",
-			wantAgg: true,
+			wantAgg: false,
 		},
 		{
-			name:    "mixed aggregate falls back atomically",
+			name:    "mixed aggregate remains eligible after promotion",
 			sql:     "select empno, count(*), avg(cast(sal as decimal(38,10))) from constraint_test.emp group by empno limit 10",
-			wantAgg: true,
+			wantAgg: false,
 		},
 		{
 			name:    "safe decimal avg remains eligible",
@@ -388,6 +388,7 @@ func TestSingleRowSumOrAvgCastIsExact(t *testing.T) {
 		{"float avg signed zero", "avg", planpb.Type{Id: int32(types.T_float64)}, planpb.Type{Id: int32(types.T_float64)}, false},
 		{"decimal64 widened", "avg", decimal(types.T_decimal64, 18, 0), decimal(types.T_decimal128, 38, 6), true},
 		{"decimal128 loses integer digits", "avg", decimal(types.T_decimal128, 38, 10), decimal(types.T_decimal128, 38, 12), false},
+		{"decimal128 promotes without losing integer digits", "avg", decimal(types.T_decimal128, 38, 10), decimal(types.T_decimal256, 42, 14), true},
 		{"decimal128 exact boundary", "avg", decimal(types.T_decimal128, 37, 11), decimal(types.T_decimal128, 38, 12), true},
 		{"decimal256 loses integer digits", "avg", decimal(types.T_decimal256, 65, 0), decimal(types.T_decimal256, 65, 6), false},
 		{"decimal256 exact boundary", "avg", decimal(types.T_decimal256, 65, 12), decimal(types.T_decimal256, 65, 12), true},
@@ -1298,7 +1299,9 @@ func TestPrimaryKeyGroupEliminationPreservesInactiveGroupingSetsWithoutAggregate
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			optimizer := NewMockOptimizer(false)
+			useLegacyGroupingSetPlan(t, optimizer)
+			logical, err := runOneStmt(optimizer, t, test.sql)
 			require.NoError(t, err)
 			agg := firstReachableNode(logical.GetQuery(), planpb.Node_AGG)
 			require.NotNil(t, agg)

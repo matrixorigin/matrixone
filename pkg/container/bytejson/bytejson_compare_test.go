@@ -18,9 +18,12 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 func makeJson(t *testing.T, s string) ByteJson {
@@ -46,6 +49,223 @@ func makeBinaryJson(tp TpCode, payload []byte) ByteJson {
 	return ByteJson{Type: tp, Data: data[:n+len(payload)]}
 }
 
+func makeMySQLOpaque(t *testing.T, fieldType uint8, payload []byte) ByteJson {
+	t.Helper()
+	value, err := NewMySQLOpaque(defines.MORPCLatestVersion, fieldType, payload)
+	require.NoError(t, err)
+	return value
+}
+
+func TestCompareByteJsonMySQLTypePrecedence(t *testing.T) {
+	values := []struct {
+		name  string
+		value ByteJson
+	}{
+		{name: "json-null", value: makeJson(t, "null")},
+		{name: "number", value: makeJson(t, "0")},
+		{name: "string", value: makeJson(t, `""`)},
+		{name: "object", value: makeJson(t, `{}`)},
+		{name: "array", value: makeJson(t, `[]`)},
+		{name: "false", value: makeJson(t, `false`)},
+		{name: "true", value: makeJson(t, `true`)},
+		{name: "date", value: makeBinaryJson(TpCodeDate, []byte("2024-01-01"))},
+		{name: "time", value: makeBinaryJson(TpCodeTime, []byte("12:34:56"))},
+		{name: "datetime", value: makeBinaryJson(TpCodeDatetime, []byte("2024-01-01 12:34:56"))},
+		{name: "bit", value: makeBinaryJson(TpCodeBit, []byte{0x01})},
+		{name: "blob", value: makeBinaryJson(TpCodeOpaque, []byte{0x01})},
+	}
+
+	for i := range values {
+		for j := range values {
+			got := compareSign(CompareByteJson(values[i].value, values[j].value))
+			want := compareSign(i - j)
+			require.Equalf(t, want, got, "%s compared with %s", values[i].name, values[j].name)
+			require.Equalf(t, -got,
+				compareSign(CompareByteJson(values[j].value, values[i].value)),
+				"reverse comparison for %s and %s", values[i].name, values[j].name)
+		}
+	}
+
+	for i := range values {
+		for j := i + 1; j < len(values); j++ {
+			for k := j + 1; k < len(values); k++ {
+				require.Lessf(t, CompareByteJson(values[i].value, values[k].value), 0,
+					"transitive order for %s, %s, %s", values[i].name, values[j].name, values[k].name)
+			}
+		}
+	}
+
+	require.Less(t, CompareByteJson(makeJson(t, `[false]`), makeJson(t, `[true]`)), 0)
+	require.Zero(t, CompareByteJson(makeJson(t, `1`), makeJson(t, `1.0`)))
+
+	legacyBit := makeBinaryJson(TpCodeBlob, []byte(persistedBitPrefix+"AQ=="))
+	legacyBlob := makeBinaryJson(TpCodeBlob, []byte("AQ=="))
+	require.Greater(t, CompareByteJson(legacyBit, values[9].value), 0)
+	require.Less(t, CompareByteJson(legacyBit, values[11].value), 0)
+	require.Greater(t, CompareByteJson(legacyBlob, values[10].value), 0)
+}
+
+func TestCompareByteJsonTrustedMatchesValidatedComparison(t *testing.T) {
+	values := []ByteJson{
+		makeJson(t, "null"),
+		makeJson(t, "1"),
+		makeJson(t, `"x"`),
+		makeJson(t, `{"a":[false,{"b":2}]}`),
+		makeJson(t, `[true,{"b":3}]`),
+		makeJson(t, "false"),
+		makeJson(t, "true"),
+		makeBinaryJson(TpCodeDate, []byte("2024-01-01")),
+		makeBinaryJson(TpCodeBit, []byte{0x01}),
+		makeBinaryJson(TpCodeOpaque, []byte{0x01}),
+	}
+
+	for i := range values {
+		require.True(t, IsValidByteJson(values[i]))
+		for j := range values {
+			require.Equal(t,
+				compareSign(CompareByteJson(values[i], values[j])),
+				compareSign(CompareByteJsonTrusted(values[i], values[j])),
+				"trusted comparison differs for indexes %d and %d", i, j)
+		}
+	}
+
+	require.False(t, IsValidByteJson(ByteJson{Type: TpCodeArray, Data: []byte{0x01}}))
+}
+
+func TestCompareByteJsonUnknownTypeHasDeterministicFallback(t *testing.T) {
+	left := ByteJson{Type: 0xfd, Data: []byte{0x01}}
+	right := ByteJson{Type: 0xfd, Data: []byte{0x02}}
+	otherType := ByteJson{Type: 0xfe, Data: []byte{0x01}}
+
+	require.Less(t, CompareByteJson(left, right), 0)
+	require.Less(t, CompareByteJson(left, otherType), 0)
+	require.Greater(t, CompareByteJson(otherType, left), 0)
+}
+
+func TestCompareByteJsonMalformedEncodingHasDeterministicFallback(t *testing.T) {
+	values := []ByteJson{
+		{Type: TpCodeLiteral},
+		{Type: TpCodeInt64, Data: []byte{0x01}},
+		{Type: TpCodeString, Data: []byte{0x02, 'x'}},
+		{Type: TpCodeArray, Data: []byte{0x01}},
+		{Type: TpCodeObject, Data: []byte{0x01}},
+		{Type: TpCodeBlob, Data: []byte{0x02, 0x01}},
+	}
+	for _, value := range values {
+		right := ByteJson{Type: value.Type, Data: append(bytes.Clone(value.Data), 0xfe, 0xff)}
+		require.NotPanics(t, func() {
+			require.Less(t, CompareByteJson(value, right), 0)
+			require.Greater(t, CompareByteJson(right, value), 0)
+		})
+	}
+}
+
+func TestCompareByteJsonMalformedValuesUseGlobalFallbackDomain(t *testing.T) {
+	malformedNested := makeJson(t, `[[]]`)
+	endian.PutUint32(malformedNested.Data[headerSize+valTypeSize:], 0)
+	valid := []ByteJson{
+		makeJson(t, `""`),
+		makeJson(t, `{}`),
+		makeBinaryJson(TpCodeBlob, []byte("AQ==")),
+		makeBinaryJson(TpCodeOpaque, []byte{0x01}),
+	}
+	malformed := []ByteJson{
+		{Type: TpCodeArray, Data: []byte{0x01}},
+		malformedNested,
+		makeBinaryJson(TpCodeBlob, []byte("not-base64")),
+		makeBinaryJson(TpCodeBlob, []byte(persistedBitPrefix+"not-base64")),
+		{Type: TpCodeLiteral, Data: []byte{LiteralNull, 0xff}},
+		makeFloatJSONFromBits(math.Float64bits(math.NaN())),
+		{Type: TpCodeString, Data: []byte{0x80, 0}},
+	}
+
+	for _, left := range valid {
+		for _, right := range malformed {
+			require.Less(t, CompareByteJson(left, right), 0)
+			require.Greater(t, CompareByteJson(right, left), 0)
+		}
+	}
+
+	values := append(append([]ByteJson{}, valid...), malformed...)
+	for i := range values {
+		for j := range values {
+			leftRight := compareSign(CompareByteJson(values[i], values[j]))
+			rightLeft := compareSign(CompareByteJson(values[j], values[i]))
+			require.Equal(t, -leftRight, rightLeft, "antisymmetry for (%d, %d)", i, j)
+			for k := range values {
+				if CompareByteJson(values[i], values[j]) < 0 && CompareByteJson(values[j], values[k]) < 0 {
+					require.Less(t, CompareByteJson(values[i], values[k]), 0,
+						"transitivity for (%d, %d, %d)", i, j, k)
+				}
+			}
+		}
+	}
+}
+
+func TestCompareByteJsonMalformedContainerClassificationIsGlobal(t *testing.T) {
+	malformed := makeJson(t, `[0,0]`)
+	malformed.Data[headerSize+valEntrySize] = 0xfd
+	validArray := makeJson(t, `[1,0]`)
+	validBoolean := makeJson(t, `false`)
+
+	require.False(t, IsValidByteJson(malformed))
+	require.Greater(t, CompareByteJson(malformed, validArray), 0)
+	require.Less(t, CompareByteJson(validArray, validBoolean), 0)
+	require.Greater(t, CompareByteJson(malformed, validBoolean), 0)
+}
+
+func TestCompareByteJsonRejectsOversizedLiteral(t *testing.T) {
+	oversized := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull, 0xff}}
+	require.NotZero(t, CompareByteJson(makeJson(t, "null"), oversized))
+	require.Zero(t, CompareByteJson(oversized, oversized))
+}
+
+func TestCompareByteJsonRejectsNonFiniteNumbers(t *testing.T) {
+	values := []ByteJson{
+		makeFloatJSONFromBits(math.Float64bits(math.NaN())),
+		makeFloatJSONFromBits(0x7ff8000000000001),
+		makeFloatJSONFromBits(0xfff8000000000001),
+		makeFloatJSONFromBits(math.Float64bits(math.Inf(1))),
+		makeFloatJSONFromBits(math.Float64bits(math.Inf(-1))),
+	}
+	valid := makeBinaryJson(TpCodeOpaque, []byte{0xff})
+
+	for i := range values {
+		require.Zero(t, CompareByteJson(values[i], values[i]), "reflexivity for value %d", i)
+		require.Less(t, CompareByteJson(valid, values[i]), 0,
+			"non-finite value %d must use the malformed fallback domain", i)
+		for j := range values {
+			leftRight := compareSign(CompareByteJson(values[i], values[j]))
+			rightLeft := compareSign(CompareByteJson(values[j], values[i]))
+			require.Equal(t, -leftRight, rightLeft, "antisymmetry for (%d, %d)", i, j)
+		}
+	}
+}
+
+func TestCompareByteJsonRejectsNonMinimalUvarints(t *testing.T) {
+	for _, tp := range []TpCode{TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime} {
+		minimal := ByteJson{Type: tp, Data: []byte{0}}
+		nonMinimal := ByteJson{Type: tp, Data: []byte{0x80, 0}}
+		require.NotZero(t, CompareByteJson(minimal, nonMinimal), "type %d", tp)
+		require.Zero(t, CompareByteJson(nonMinimal, nonMinimal), "type %d", tp)
+	}
+	minimalDecimal := ByteJson{Type: TpCodeDecimal, Data: []byte{1, '1'}}
+	nonMinimalDecimal := ByteJson{Type: TpCodeDecimal, Data: []byte{0x81, 0, '1'}}
+	require.NotZero(t, CompareByteJson(minimalDecimal, nonMinimalDecimal))
+
+	minimalNested, err := CreateByteJSON([]any{ByteJson{Type: TpCodeString, Data: []byte{0}}})
+	require.NoError(t, err)
+	nonMinimalNested, err := CreateByteJSON([]any{ByteJson{Type: TpCodeString, Data: []byte{0x80, 0}}})
+	require.NoError(t, err)
+	require.NotZero(t, CompareByteJson(minimalNested, nonMinimalNested))
+}
+
+func makeFloatJSONFromBits(bits uint64) ByteJson {
+	data := make([]byte, numberSize)
+	endian.PutUint64(data, bits)
+	return ByteJson{Type: TpCodeFloat64, Data: data}
+}
+
 func TestCompareByteJsonOpaqueBinaryUsesRawBytes(t *testing.T) {
 	zero := makeBinaryJson(TpCodeOpaque, []byte{0x00})
 	d0 := makeBinaryJson(TpCodeOpaque, []byte{0xd0})
@@ -63,6 +283,69 @@ func TestCompareByteJsonOpaqueBinaryUsesRawBytes(t *testing.T) {
 	require.Equal(t, `"AA=="`, zero.String())
 	require.Equal(t, "AA==", mustUnquote(t, zero))
 	require.Equal(t, "AQ==", mustUnquote(t, bit))
+	require.Zero(t, CompareByteJson(makeMySQLOpaque(t, 16, []byte{0x01}), bit))
+}
+
+func TestCompareByteJsonMySQLOpaqueUsesFieldTypeAndRawBytes(t *testing.T) {
+	varbinary := makeMySQLOpaque(t, 15, []byte{0x00})
+	varbinaryNext := makeMySQLOpaque(t, 15, []byte{0x01})
+	blob := makeMySQLOpaque(t, 252, []byte{0x00})
+	legacyBlob := makeBinaryJson(TpCodeBlob, []byte("AA=="))
+	legacyOpaque := makeBinaryJson(TpCodeOpaque, []byte{0x00})
+
+	require.Less(t, CompareByteJson(varbinary, varbinaryNext), 0)
+	require.Less(t, CompareByteJson(varbinary, blob), 0)
+	require.Zero(t, CompareByteJson(blob, legacyBlob))
+	require.Zero(t, CompareByteJson(blob, legacyOpaque))
+	varbinaryKey, ok := AppendCanonicalBinary(nil, varbinary)
+	require.True(t, ok)
+	blobKey, ok := AppendCanonicalBinary(nil, blob)
+	require.True(t, ok)
+	require.NotEqual(t, varbinaryKey, blobKey)
+	blobSize, ok := CanonicalBinarySize(blob)
+	require.True(t, ok)
+	require.Equal(t, blobSize, len(blobKey))
+}
+
+func TestCompareByteJsonMalformedMySQLOpaqueTagFallsBackToBlob(t *testing.T) {
+	malformed := makeBinaryJson(TpCodeBlob, []byte("base64:type16:not-base64"))
+
+	require.Equal(t, "BLOB", malformed.TYPE())
+	require.NotZero(t, CompareByteJson(malformed, makeBinaryJson(TpCodeBit, []byte{0x00})))
+	key, ok := AppendCanonicalBinary(nil, malformed)
+	require.True(t, ok)
+	require.Equal(t, []byte{canonicalBinaryMarker, byte(binaryJSONBlob)}, key[:2])
+}
+
+func TestCompareByteJsonMalformedBinaryPreservesCanonicalEquivalence(t *testing.T) {
+	for _, stored := range []string{
+		"base64:type16:not-base64",
+		"base64:type252:not-base64",
+	} {
+		t.Run(stored, func(t *testing.T) {
+			malformed := makeBinaryJson(TpCodeBlob, []byte(stored))
+			valid, err := NewMySQLOpaque(defines.MORPCVersion52, 252, []byte(stored))
+			require.NoError(t, err)
+
+			require.Zero(t, CompareByteJson(malformed, valid))
+			require.Zero(t, CompareByteJson(valid, malformed))
+			malformedKey, ok := AppendCanonicalBinary(nil, malformed)
+			require.True(t, ok)
+			validKey, ok := AppendCanonicalBinary(nil, valid)
+			require.True(t, ok)
+			require.Equal(t, malformedKey, validKey)
+		})
+	}
+
+	legacyMalformed := makeBinaryJson(TpCodeBlob, []byte("not-base64"))
+	raw := makeBinaryJson(TpCodeOpaque, []byte("not-base64"))
+	require.Zero(t, CompareByteJson(legacyMalformed, raw))
+	require.Zero(t, CompareByteJson(raw, legacyMalformed))
+	legacyKey, ok := AppendCanonicalBinary(nil, legacyMalformed)
+	require.True(t, ok)
+	rawKey, ok := AppendCanonicalBinary(nil, raw)
+	require.True(t, ok)
+	require.Equal(t, legacyKey, rawKey)
 }
 
 func TestCompareByteJsonLegacyBlobLargePayloadAllocations(t *testing.T) {
@@ -76,6 +359,19 @@ func TestCompareByteJsonLegacyBlobLargePayloadAllocations(t *testing.T) {
 		}
 	})
 	require.Zero(t, allocs, "legacy blob compare should not allocate decoded payload buffers")
+}
+
+func TestCompareByteJsonMySQLOpaqueLargePayloadAllocations(t *testing.T) {
+	payload := bytes.Repeat([]byte{0xab}, 1<<20)
+	left := makeBinaryJson(TpCodeBlob, []byte(mysqlOpaqueText(252, payload)))
+	right := makeBinaryJson(TpCodeBlob, []byte(mysqlOpaqueText(252, payload)))
+
+	allocs := testing.AllocsPerRun(10, func() {
+		if cmp := CompareByteJson(left, right); cmp != 0 {
+			t.Fatalf("unexpected compare result: %d", cmp)
+		}
+	})
+	require.Zero(t, allocs, "tagged blob compare should not allocate decoded payload buffers")
 }
 
 func TestCompareByteJsonLegacyBlobPreservesBase64Newlines(t *testing.T) {
@@ -106,6 +402,20 @@ func BenchmarkCompareByteJsonLegacyBlobLargePayload(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if cmp := CompareByteJson(legacyLeft, legacyRight); cmp != 0 {
+			b.Fatalf("unexpected compare result: %d", cmp)
+		}
+	}
+}
+
+func BenchmarkCompareByteJsonMySQLOpaqueLargePayload(b *testing.B) {
+	payload := bytes.Repeat([]byte{0xcd}, 1<<20)
+	left := makeBinaryJson(TpCodeBlob, []byte(mysqlOpaqueText(252, payload)))
+	right := makeBinaryJson(TpCodeBlob, []byte(mysqlOpaqueText(252, payload)))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if cmp := CompareByteJson(left, right); cmp != 0 {
 			b.Fatalf("unexpected compare result: %d", cmp)
 		}
 	}
@@ -175,7 +485,7 @@ func TestCompareByteJson_DecimalCrossType(t *testing.T) {
 
 // TestCompareByteJson_Int64Uint64CrossType verifies that INT64-vs-UINT64
 // comparisons are handled correctly even though both report TYPE()="INTEGER"
-// (same jsonTpOrder).  Without the cross-type check, the same-type branch
+// (same numeric rank).  Without the cross-type check, the same-type branch
 // would use the wrong accessor.
 func TestCompareByteJson_Int64Uint64CrossType(t *testing.T) {
 	// INT64 == small UINT64

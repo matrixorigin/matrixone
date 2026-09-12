@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"testing"
 	"time"
 
@@ -1818,6 +1819,63 @@ func (e *sessionCloseExecutor) ExecTxn(
 	return nil
 }
 
+func TestSessionTemporaryDDLLifetime(t *testing.T) {
+	newSession := func() *Session {
+		return &Session{tempTables: make(map[string]string), tempTablesRev: make(map[string]string)}
+	}
+	t.Run("published schema survives unrelated transaction rollback", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "internal", "internal-physical", "txn", "stmt")
+		ses.PublishTemporaryTable("db", "public", "public-generation")
+		ses.rollbackTempTableTransaction("txn")
+		name, ok := ses.GetTempTable("db", "public")
+		require.True(t, ok)
+		require.Equal(t, "public-generation", name)
+		require.True(t, ses.OwnsTemporaryTable("db", name))
+		require.False(t, ses.OwnsTemporaryTable("other-db", name))
+		require.False(t, ses.OwnsTemporaryTable("db", "__mo_tmp_unowned"))
+		_, ok = ses.GetTempTable("db", "internal")
+		require.False(t, ok)
+	})
+	t.Run("retirement cannot be undone or overwrite replacement", func(t *testing.T) {
+		ses := newSession()
+		ses.addTempTable("db", "t", "old", "", "")
+		ses.removeTempTable("db", "t", "txn", "stmt")
+		ses.addTempTable("db", "t", "intermediate", "txn", "stmt")
+		ses.addTempIndexTable("db", "idx", "index-physical", "txn", "stmt")
+		ses.RetireTemporaryTable("db", "t", "intermediate", []string{"index-physical"})
+		require.False(t, ses.OwnsTemporaryTable("db", "intermediate"))
+		ses.rollbackTempTableStatement("txn", "stmt")
+		_, ok := ses.GetTempTable("db", "t")
+		require.False(t, ok)
+		ses.PublishTemporaryTable("db", "t", "new-generation")
+		ses.rollbackTempTableTransaction("txn")
+		name, ok := ses.GetTempTable("db", "t")
+		require.True(t, ok)
+		require.Equal(t, "new-generation", name)
+		snapshot := ses.snapshotTempTables()
+		require.Len(t, snapshot, 1)
+		require.Equal(t, "new-generation", snapshot[0].PhysicalName)
+		tables, _ := ses.takeTempTables()
+		require.Len(t, tables, 2)
+		require.Empty(t, ses.retiredTempTables)
+	})
+	t.Run("retired generations consume admission capacity", func(t *testing.T) {
+		ses := newSession()
+		for i := 0; i < maxSessionTemporaryTableGenerations; i++ {
+			name := fmt.Sprintf("generation-%d", i)
+			require.NoError(t, ses.CheckTemporaryTableCapacity(context.Background()))
+			ses.PublishTemporaryTable("db", "t", name)
+			ses.RetireTemporaryTable("db", "t", name, nil)
+		}
+		require.Error(t, ses.CheckTemporaryTableCapacity(context.Background()))
+		require.Empty(t, ses.snapshotTempTables())
+		tables, _ := ses.takeTempTables()
+		require.Len(t, tables, maxSessionTemporaryTableGenerations)
+		require.NoError(t, ses.CheckTemporaryTableCapacity(context.Background()))
+	})
+}
+
 func TestSessionCloseDropsTemporaryTablesAsOwningTenant(t *testing.T) {
 	const service = "session-close-temp-table"
 	sv := &config.FrontendParameters{}
@@ -1910,6 +1968,33 @@ func TestSessionResetTempTablesIsSynchronousAndRetryable(t *testing.T) {
 		"DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent("db", "physical"),
 		"DROP TABLE IF EXISTS " + sqlquote.QualifiedIdent("db", "physical"),
 	}, exec.sql)
+	// A failed reset preserves reclamation ownership, not logical visibility.
+	exec.failures = 1
+	ses.PublishTemporaryTable("db", "alias", "retired-generation")
+	ses.RetireTemporaryTable("db", "alias", "retired-generation", nil)
+	require.ErrorIs(t, ses.resetTempTables(context.Background()), assert.AnError)
+	_, ok = ses.GetTempTable("db", "alias")
+	require.False(t, ok)
+	require.Len(t, ses.retiredTempTables, 1)
+	require.Empty(t, ses.snapshotTempTables())
+	require.NoError(t, ses.resetTempTables(context.Background()))
+	require.Empty(t, ses.retiredTempTables)
+
+	// Idle cleanup keeps failed identities retryable and never removes a new
+	// generation. A cancelled user request does not discard cleanup ownership.
+	exec.failures = 1
+	ses.RetireTemporaryTable("db", "alias", "retired-again", nil)
+	ses.PublishTemporaryTable("db", "alias", "replacement")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ses.cleanupRetiredTempTables(ctx)
+	require.Len(t, ses.retiredTempTables, 1)
+	ses.cleanupRetiredTempTables(ctx)
+	require.Empty(t, ses.retiredTempTables)
+	name, exists := ses.GetTempTable("db", "alias")
+	require.True(t, exists)
+	require.Equal(t, "replacement", name)
+	require.NoError(t, ses.resetTempTables(context.Background()))
 }
 
 func TestRemoveAllPrepareStmts(t *testing.T) {

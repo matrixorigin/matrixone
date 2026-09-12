@@ -354,3 +354,160 @@ func TestRequiresMORPCVersion36MixedJSONBooleanEquality(t *testing.T) {
 		require.False(t, required)
 	}
 }
+
+func TestRequiresMORPCVersion59NumericFormatArguments(t *testing.T) {
+	numeric := func(typeID int32, position int32) *Expr {
+		return &Expr{Typ: Type{Id: typeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: position}}}
+	}
+	stringArg := numeric(61, 0)
+	scale := numeric(23, 1)
+	locale := numeric(61, 2)
+	format := func(obj int64, name string, first *Expr, args ...*Expr) *Expr {
+		all := make([]*Expr, 0, len(args)+1)
+		all = append(all, first)
+		all = append(all, args...)
+		return &Expr{Typ: Type{Id: 61}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: obj, ObjName: name},
+			Args: all,
+		}}}
+	}
+
+	tests := []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{
+			name: "encoded two-argument numeric format",
+			expr: format(int64(262)<<32, "format", numeric(23, 0), scale),
+			want: true,
+		},
+		{
+			name: "encoded three-argument numeric format",
+			expr: format(int64(262)<<32|1, "format", numeric(31, 0), scale, locale),
+			want: true,
+		},
+		{
+			name: "name-only numeric format",
+			expr: format(0, "FORMAT", numeric(32, 0), scale),
+			want: true,
+		},
+		{
+			name: "string format remains compatible",
+			expr: format(int64(262)<<32, "format", stringArg, scale),
+		},
+		{
+			name: "other numeric function",
+			expr: format(int64(123)<<32, "other", numeric(23, 0), scale),
+		},
+		{
+			name: "missing scale argument",
+			expr: format(int64(262)<<32, "format", numeric(23, 0)),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := RequiresMORPCVersion59NumericFormatArguments(test.expr)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+	t.Run("missing first argument", func(t *testing.T) {
+		_, err := RequiresMORPCVersion59NumericFormatArguments(
+			format(int64(262)<<32, "format", nil, scale))
+		require.ErrorContains(t, err, "FORMAT is missing its first argument")
+	})
+
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expressions []*Expr }{
+		Expressions: []*Expr{
+			format(int64(262)<<32, "format", numeric(23, 0), scale),
+			format(int64(262)<<32, "format", stringArg, scale),
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, features.FormatNumericArguments)
+	require.True(t, features.Any())
+}
+
+func TestRequiresMORPCVersion64TypedConversion(t *testing.T) {
+	arg := func(typeID int32) *Expr {
+		return &Expr{Typ: Type{Id: typeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+	}
+	conversion := func(functionID, overload int32, name string, first *Expr) *Expr {
+		args := []*Expr{first}
+		if name == "conv" {
+			args = append(args,
+				arg(23), // INT64 from_base
+				arg(23), // INT64 to_base
+			)
+		}
+		return &Expr{
+			Typ: Type{Id: 61},
+			Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(functionID)<<32 | int64(overload), ObjName: name},
+				Args: args,
+			}},
+		}
+	}
+
+	tests := []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{
+			name: "typed CONV integer overload",
+			expr: conversion(convFunctionID, 3, "conv", arg(23)),
+			want: true,
+		},
+		{
+			name: "typed CONV fixed-width overload zero",
+			expr: conversion(convFunctionID, 0, "conv", arg(32)), // DECIMAL64
+			want: true,
+		},
+		{
+			name: "dynamic CONV marker",
+			expr: conversion(convFunctionID, 13, "conv", arg(0)), // T_ANY
+			want: true,
+		},
+		{
+			name: "typed BIN float overload",
+			expr: conversion(binFunctionID, 8, "bin", arg(30)), // FLOAT32
+			want: true,
+		},
+		{
+			name: "dynamic BIN overload",
+			expr: conversion(binFunctionID, 11, "bin", arg(10)), // BOOL
+			want: true,
+		},
+		{
+			name: "string CONV remains compatible",
+			expr: conversion(convFunctionID, 0, "conv", arg(61)), // VARCHAR
+		},
+		{
+			name: "integer BIN remains compatible",
+			expr: conversion(binFunctionID, 7, "bin", arg(23)), // INT64
+		},
+		{
+			name: "string BIN remains compatible",
+			expr: conversion(binFunctionID, 10, "bin", arg(61)), // VARCHAR
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := RequiresMORPCVersion64TypedConversion(test.expr)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expressions []*Expr }{
+		Expressions: []*Expr{
+			conversion(convFunctionID, 0, "conv", arg(32)),
+			conversion(binFunctionID, 10, "bin", arg(61)),
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, features.TypedConversionFunctions)
+	require.True(t, features.Any())
+}

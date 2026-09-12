@@ -47,7 +47,10 @@ import (
 // this is just a number I casually wrote, the purpose of doing this is that any message sent through rpc need a clear deadline.
 const MaxRpcTime = time.Hour * 24
 
-var pipelineStreamFinishClientTimeout = 30 * time.Second
+var (
+	pipelineStopSendingClientTimeout  = 30 * time.Second
+	pipelineStreamFinishClientTimeout = 30 * time.Second
+)
 
 // remoteRun sends a scope to remote node for running.
 // and keep receiving the back results.
@@ -103,9 +106,11 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return nil, err
 	}
 	sender.proc = s.Proc
-	if sink, ok := s.Proc.GetSession().(warningDiagnosticSink); ok {
-		sender.warningSink = sink
-	}
+	// Capture the execution-attempt sink, rather than looking it up from proc
+	// when the terminal message arrives. Retry/reuse can replace proc.WarningSink
+	// before an old RPC callback is delivered; a closed captured sink then drops
+	// that stale callback instead of publishing it into the new attempt.
+	sender.warningSink = s.Proc.GetWarningSink()
 
 	debugMsg := ""
 	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
@@ -229,6 +234,12 @@ func prepareRemoteRunSendingData(
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
+	if output, ok := s.RootOp.(*connector.Connector); ok &&
+		output.Reg != nil && output.Reg.OrderedStream &&
+		!supportsDistributedOrderedTop(proc.GetService()) {
+		return nil, false, nil, false, moerr.NewNotSupportedNoCtx(
+			"distributed ordered Top-N requires MORPC protocol version 53")
+	}
 	encodedScope, withoutOutput := getScopeForRemoteRunEncoding(s)
 	encodedScope = copyBlockFiltersForRemoteRun(encodedScope)
 	encodedScope, folded, err = foldVarExprsInRemoteRunScope(encodedScope, proc)
@@ -433,10 +444,12 @@ type messageSenderOnClient struct {
 	anal *AnalyzeModule
 	proc *process.Process
 
-	// warningSink is the session-owned diagnostic destination on the initiating
-	// process. Remote terminal warnings are applied here only after the remote
-	// pipeline has finished, preserving one warning per actual evaluated row.
-	warningSink warningDiagnosticSink
+	// warningSink is the captured diagnostic destination on the initiating
+	// process for this execution attempt. Remote terminal warnings are applied
+	// here only after the remote pipeline has finished, preserving one warning
+	// per actual evaluated row and preventing a late retry callback from finding
+	// a newer destination.
+	warningSink any
 
 	// message sender and its data receiver.
 	streamSender morpc.Stream
@@ -455,6 +468,7 @@ type messageSenderOnClient struct {
 	receiveClosed      bool
 	reuseEligible      bool
 	terminalNegotiated bool
+	stopResponseTried  bool
 	expectedEnd        pipeline.Method
 	stateMu            sync.Mutex
 	closeOnce          sync.Once
@@ -618,6 +632,7 @@ func (sender *messageSenderOnClient) markStreamActive(method pipeline.Method) {
 	sender.receiveClosed = false
 	sender.reuseEligible = false
 	sender.terminalNegotiated = false
+	sender.stopResponseTried = false
 	sender.allowCleanupCancellation = false
 	sender.expectedEnd = method
 }
@@ -794,24 +809,41 @@ func forwardRemoteBatchWithContext(
 	return true, nil
 }
 
-// no matter how we stop the remote-run, we should get the final remote cost here.
-func (sender *messageSenderOnClient) waitingTheStopResponse() {
+// waitingTheStopResponse asks an unfinished remote stream to stop and waits for
+// its terminal response. The terminal error remains part of execution state:
+// cancellation may have won the caller's receive select immediately before the
+// remote pipeline reported its actual failure.
+func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 	sender.stateMu.Lock()
-	receiveClosed, safeToClose := sender.receiveClosed, sender.safeToClose
-	sender.stateMu.Unlock()
-	if receiveClosed || safeToClose {
-		return
+	if sender.receiveClosed || sender.safeToClose || sender.stopResponseTried {
+		sender.stateMu.Unlock()
+		return nil
 	}
+	// RemoteRun and close share this teardown owner. Claim the handshake before
+	// doing I/O so a terminal-less attempt cannot be repeated by close and add a
+	// second full timeout to the same statement.
+	sender.stopResponseTried = true
+	sender.stateMu.Unlock()
 
 	// cannot use sender.ctx here, because ctx maybe done.
-	maxWaitingTime, cancel := context.WithTimeoutCause(context.TODO(), 30*time.Second, moerr.CauseWaitingTheStopResponse)
+	maxWaitingTime, cancel := context.WithTimeoutCause(
+		context.Background(), pipelineStopSendingClientTimeout, moerr.CauseWaitingTheStopResponse)
 	defer cancel()
 
 	// send a stop sending message to message-receiver.
 	if err := sender.streamSender.Send(
 		maxWaitingTime,
 		generateStopSendingMessage(sender.streamSender.ID())); err != nil {
-		return
+		if maxWaitingTime.Err() != nil {
+			return moerr.NewRPCTimeout(maxWaitingTime)
+		}
+		// The handshake owns an independent live context. A cancellation-shaped
+		// Send result therefore describes a closed transport, not successful
+		// pipeline cancellation, and must not be suppressible by RemoteRun.
+		if isScopeCancellationError(err) {
+			return moerr.NewStreamClosedNoCtx()
+		}
+		return err
 	}
 
 	// wait an EndMessage response.
@@ -820,7 +852,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 		case val, ok := <-sender.receiveCh:
 			if !ok || val == nil {
 				sender.markReceiveClosed()
-				return
+				return moerr.NewStreamClosedNoCtx()
 			}
 
 			message := val.(*pipeline.Message)
@@ -829,17 +861,21 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() {
 				if len(message.GetAnalyse()) > 0 {
 					_ = sender.dealRemoteTerminal(message.GetAnalyse())
 				}
+				if terminalErr, ok := message.TryToGetMoErr(); ok {
+					sender.markTerminal(message, false)
+					return terminalErr
+				}
 				// StopSending is also a clean teardown when the original server
 				// worker answers with its negotiated terminal response. The later FIN
 				// still waits for the same server cleanup barrier. Unnegotiated or
 				// mismatched terminal responses remain poisoned.
-				sender.markTerminal(message, message.IsEndMessage())
+				sender.markTerminal(message, true)
 				// in fact, we should deal the cost analysis information here.
-				return
+				return nil
 			}
 
 		case <-maxWaitingTime.Done():
-			return
+			return moerr.NewRPCTimeout(maxWaitingTime)
 		}
 	}
 }
@@ -923,20 +959,14 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)
 	}
-	if sender.warningSink != nil {
-		if sink, ok := sender.warningSink.(warningDiagnosticBatchSink); ok {
-			codes := make([]uint16, 0, len(envelope.WarningDiagnostics))
-			messages := make([]string, 0, len(envelope.WarningDiagnostics))
-			for _, warning := range envelope.WarningDiagnostics {
-				codes = append(codes, warning.Code)
-				messages = append(messages, warning.Message)
-			}
-			sink.AppendWarningBatch(envelope.WarningCount, codes, messages)
-		} else {
-			for _, warning := range envelope.WarningDiagnostics {
-				sender.warningSink.AppendWarningDiagnostic(warning.Code, warning.Message)
-			}
+	if sender.warningSink != nil && envelope.WarningCount > 0 {
+		codes := make([]uint16, 0, len(envelope.WarningDiagnostics))
+		messages := make([]string, 0, len(envelope.WarningDiagnostics))
+		for _, warning := range envelope.WarningDiagnostics {
+			codes = append(codes, warning.Code)
+			messages = append(messages, warning.Message)
 		}
+		appendWarningBatchToSink(sender.warningSink, envelope.WarningCount, codes, messages)
 	}
 	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {
 		if envelope.Allocation.GenerationCount != 0 {
@@ -974,7 +1004,7 @@ func (sender *messageSenderOnClient) close() {
 		// Ensure Gauge is decremented exactly once when this sender is torn down.
 		defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
 
-		sender.waitingTheStopResponse()
+		_ = sender.waitingTheStopResponse()
 		sender.stateMu.Lock()
 		receiveClosed, reuseEligible := sender.receiveClosed, sender.reuseEligible
 		sender.stateMu.Unlock()

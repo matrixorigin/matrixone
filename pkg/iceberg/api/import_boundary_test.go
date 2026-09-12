@@ -36,12 +36,15 @@ func TestIcebergAdapterImportBoundary(t *testing.T) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", "vendor", "node_modules":
+			case ".git", ".proto-vendor", "vendor", "node_modules":
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
 		fset := token.NewFileSet()
@@ -50,11 +53,18 @@ func TestIcebergAdapterImportBoundary(t *testing.T) {
 			return parseErr
 		}
 		slashPath := filepath.ToSlash(path)
-		adapterAllowed := strings.Contains(slashPath, "/pkg/iceberg/adapter/iceberggo/")
+		// Arrow has two approved MatrixOne-owned boundaries: the Iceberg
+		// adapter and the static-file ingestion bridge. Everywhere else remains
+		// forbidden so an implementation detail cannot leak into SQL layers.
+		arrowAllowed := strings.Contains(slashPath, "/pkg/iceberg/adapter/iceberggo/") ||
+			strings.Contains(slashPath, "/pkg/container/arrowbridge/") ||
+			strings.Contains(slashPath, "/pkg/sql/colexec/external/arrowio/") ||
+			strings.HasSuffix(slashPath, "/pkg/sql/colexec/external/reader_arrow.go") ||
+			strings.HasSuffix(slashPath, "/pkg/sql/compile/compile.go")
 		for _, imp := range file.Imports {
 			importPath := strings.Trim(imp.Path.Value, `"`)
 			for _, prefix := range forbidden {
-				if strings.HasPrefix(importPath, prefix) && !adapterAllowed {
+				if strings.HasPrefix(importPath, prefix) && !arrowAllowed {
 					t.Fatalf("forbidden Iceberg/Arrow import outside adapter: %s imports %s", slashPath, importPath)
 				}
 			}

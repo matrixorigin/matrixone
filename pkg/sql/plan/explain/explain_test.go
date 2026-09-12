@@ -123,6 +123,20 @@ func TestPartitionTopNExplain(t *testing.T) {
 	require.Contains(t, title, "N: 2")
 }
 
+func TestHashPartitionExplain(t *testing.T) {
+	node := &plan2.Node{
+		NodeType:           plan2.Node_PARTITION,
+		PartitionAlgorithm: plan2.Node_PARTITION_ALGORITHM_HASH,
+	}
+	opts := &ExplainOptions{Format: EXPLAIN_FORMAT_TEXT}
+	name, err := NewNodeDescriptionImpl(node).GetNodeBasicInfo(context.Background(), opts)
+	require.NoError(t, err)
+	require.Equal(t, "Hash Partition", name)
+	jsonName, err := NewMarshalNodeImpl(node).GetNodeName(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "Hash Partition", jsonName)
+}
+
 func TestSingleSql(t *testing.T) {
 	// input := "explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20"
 	//input := "explain verbose SELECT N_REGIONKEY + 2 as a FROM NATION WHERE -N_NATIONKEY < -20"

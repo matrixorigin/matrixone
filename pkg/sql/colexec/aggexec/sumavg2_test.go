@@ -36,6 +36,532 @@ func buildDecimal256Vector(t *testing.T, mp *mpool.MPool, typ types.Type, nulls 
 	return vec
 }
 
+func buildAvgFixedVector[T any](t *testing.T, mp *mpool.MPool, typ types.Type, values []T) *vector.Vector {
+	t.Helper()
+	vec := vector.NewVec(typ)
+	require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+	return vec
+}
+
+func TestAvgExactNumericReturnType(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input types.Type
+		want  types.Type
+	}{
+		{name: "tinyint", input: types.T_int8.ToType(), want: types.New(types.T_decimal128, 7, 4)},
+		{name: "tinyint unsigned", input: types.T_uint8.ToType(), want: types.New(types.T_decimal128, 7, 4)},
+		{name: "smallint", input: types.T_int16.ToType(), want: types.New(types.T_decimal128, 9, 4)},
+		{name: "smallint unsigned", input: types.T_uint16.ToType(), want: types.New(types.T_decimal128, 9, 4)},
+		{name: "int", input: types.T_int32.ToType(), want: types.New(types.T_decimal128, 14, 4)},
+		{name: "int unsigned", input: types.T_uint32.ToType(), want: types.New(types.T_decimal128, 14, 4)},
+		{name: "bigint", input: types.T_int64.ToType(), want: types.New(types.T_decimal128, 23, 4)},
+		{name: "bigint unsigned", input: types.T_uint64.ToType(), want: types.New(types.T_decimal128, 24, 4)},
+		{name: "bigint cast domain", input: types.New(types.T_int64, 64, -1), want: types.New(types.T_decimal128, 23, 4)},
+		{name: "literal precision", input: types.New(types.T_int64, 1, 0), want: types.New(types.T_decimal128, 5, 4)},
+		{name: "literal precision at decimal128 limit", input: types.New(types.T_int64, 34, 0), want: types.New(types.T_decimal128, 38, 4)},
+		{name: "literal precision promotes to decimal256", input: types.New(types.T_int64, 35, 0), want: types.New(types.T_decimal256, 39, 4)},
+		{name: "literal precision caps decimal256", input: types.New(types.T_int64, 100, 0), want: types.New(types.T_decimal256, 65, 4)},
+		{name: "year", input: types.T_year.ToType(), want: types.New(types.T_decimal128, 8, 4)},
+		{name: "decimal64", input: types.New(types.T_decimal64, 8, 2), want: types.New(types.T_decimal128, 12, 6)},
+		{name: "decimal128", input: types.New(types.T_decimal128, 20, 6), want: types.New(types.T_decimal128, 24, 10)},
+		{name: "decimal128 promotes to decimal256", input: types.New(types.T_decimal128, 38, 20), want: types.New(types.T_decimal256, 42, 24)},
+		{name: "double", input: types.T_float64.ToType(), want: types.T_float64.ToType()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, AvgReturnType([]types.Type{test.input}))
+		})
+	}
+}
+
+func TestAvgRoundsDirectlyAtDeclaredScale(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		sum        types.Decimal128
+		count      int64
+		argScale   int32
+		resultType types.Type
+		want       string
+	}{
+		{
+			name:       "integer average",
+			sum:        types.Decimal128FromInt64(1),
+			count:      113,
+			resultType: types.New(types.T_decimal128, 5, 4),
+			want:       "0.0088",
+		},
+		{
+			name:       "fractional average",
+			sum:        types.Decimal128FromInt64(1),
+			count:      113,
+			argScale:   2,
+			resultType: types.New(types.T_decimal128, 7, 6),
+			want:       "0.000088",
+		},
+		{
+			name:       "negative integer average",
+			sum:        types.Decimal128FromInt64(-1),
+			count:      113,
+			resultType: types.New(types.T_decimal128, 5, 4),
+			want:       "-0.0088",
+		},
+		{
+			name:       "negative fractional average",
+			sum:        types.Decimal128FromInt64(-1),
+			count:      113,
+			argScale:   2,
+			resultType: types.New(types.T_decimal128, 7, 6),
+			want:       "-0.000088",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			avg, err := decAvg[types.Decimal128](
+				test.sum, test.count, test.argScale, test.resultType)
+			require.NoError(t, err)
+			require.Equal(t, test.want, avg.Format(test.resultType.Scale))
+		})
+	}
+}
+
+func TestAvgNativeIntegerHelperBoundaries(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		sum         any
+		count       int64
+		resultScale int32
+		wantErr     string
+	}{
+		{name: "positive int64", sum: int64(1), count: 113, resultScale: 4},
+		{name: "negative int64", sum: int64(-1), count: 113, resultScale: 4},
+		{name: "wide int64", sum: int64(1 << 60), count: 1, resultScale: 4},
+		{name: "uint64", sum: uint64(1), count: 113, resultScale: 4},
+		{name: "zero count", sum: int64(1), count: 0, resultScale: 4, wantErr: "Div by Zero"},
+		{name: "invalid scale", sum: int64(1), count: 1, resultScale: -1, wantErr: "invalid native AVG result scale"},
+		{name: "scale outside native table", sum: int64(1), count: 1, resultScale: int32(len(types.Pow10)), wantErr: "invalid native AVG result scale"},
+		{name: "unsupported float", sum: float64(1), count: 1, resultScale: 4, wantErr: "unsupported native AVG sum type"},
+		{name: "uint64 scale overflow", sum: ^uint64(0), count: 1, resultScale: 19, wantErr: "scale overflow"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var (
+				got types.Decimal128
+				err error
+			)
+			switch sum := test.sum.(type) {
+			case int64:
+				got, err = decimal128NativeIntegerAvg(sum, test.count, test.resultScale)
+			case uint64:
+				got, err = decimal128NativeIntegerAvg(sum, test.count, test.resultScale)
+			case float64:
+				got, err = decimal128NativeIntegerAvg(sum, test.count, test.resultScale)
+			default:
+				t.Fatalf("unsupported test value %T", test.sum)
+			}
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				require.NotZero(t, got)
+			} else {
+				require.ErrorContains(t, err, test.wantErr)
+			}
+		})
+	}
+
+	require.Equal(t, types.Decimal128FromInt64(-1), decimal128FromNativeSum(int64(-1)))
+	require.Equal(t, types.Decimal128{B0_63: 1}, decimal128FromNativeSum(uint64(1)))
+	require.Panics(t, func() { decimal128FromNativeSum(float64(1)) })
+	require.Equal(t, types.Decimal256FromInt64(-1), decimal256FromNativeSum(int64(-1)))
+	require.Equal(t, types.Decimal256{B0_63: 1}, decimal256FromNativeSum(uint64(1)))
+	require.Panics(t, func() { decimal256FromNativeSum(float64(1)) })
+}
+
+func TestAvgDecimalConversionHelpers(t *testing.T) {
+	positive := types.Decimal256FromInt64(1)
+	negative := types.Decimal256FromInt64(-1)
+	for _, value := range []types.Decimal256{positive, negative} {
+		converted, ok := decimal128FromDecimal256(value)
+		require.True(t, ok)
+		require.Equal(t, types.Decimal128{B0_63: value.B0_63, B64_127: value.B64_127}, converted)
+	}
+	_, ok := decimal128FromDecimal256(types.Decimal256{B128_191: 1})
+	require.False(t, ok)
+	_, ok = decimal128FromDecimal256(types.Decimal256{B64_127: 1 << 63, B192_255: ^uint64(0)})
+	require.False(t, ok)
+
+	value := types.Decimal256FromInt64(1)
+	_, err := decimal256AvgAtScale(value, 0, 0, 4)
+	require.ErrorContains(t, err, "Div by Zero")
+	_, err = decimal256AvgAtScale(value, 1, 5, 4)
+	require.ErrorContains(t, err, "below input scale")
+	_, err = decimal128AvgAtScaleSigned(types.Decimal128FromInt64(1), 0, 0, 4)
+	require.ErrorContains(t, err, "Div by Zero")
+	_, err = decimal128AvgAtScaleSigned(types.Decimal128FromInt64(1), 1, 5, 4)
+	require.ErrorContains(t, err, "below input scale")
+
+	resultType := types.New(types.T_decimal128, 5, 4)
+	_, err = decAvg[types.Decimal128](types.Decimal128FromInt64(1), 1, 0, types.New(types.T_decimal256, 42, 4))
+	require.ErrorContains(t, err, "invalid decimal avg result type")
+	_, err = decAvg[types.Decimal256](types.Decimal256FromInt64(1), 1, 0, resultType)
+	require.ErrorContains(t, err, "invalid decimal avg result type")
+}
+
+func TestAvgIntegerExpressionPrecisionExecution(t *testing.T) {
+	argType := types.New(types.T_int32, 1, 0)
+	values := make([]int32, 113)
+	values[0] = 1
+
+	for _, test := range []struct {
+		name     string
+		distinct bool
+		window   bool
+		values   []int32
+	}{
+		{name: "ordinary", values: values},
+		{
+			name:     "distinct",
+			distinct: true,
+			values: func() []int32 {
+				result := make([]int32, 113)
+				for i := 0; i < 112; i++ {
+					result[i] = int32(i) - 56 // -56 through 55
+				}
+				result[112] = 57 // the distinct values sum to one
+				return result
+			}(),
+		},
+		{name: "window", window: true, values: values},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			input := buildAvgFixedVector(t, mp, argType, test.values)
+			defer input.Free(mp)
+
+			exec, err := MakeAgg(mp, AggIdOfAvg, test.distinct, argType)
+			require.NoError(t, err)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			if test.window {
+				for row := range test.values {
+					require.NoError(t, exec.Fill(0, row, []*vector.Vector{input}))
+				}
+			} else if test.distinct {
+				groups := make([]uint64, len(test.values))
+				for i := range groups {
+					groups[i] = 1
+				}
+				require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{input}))
+			} else {
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			}
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			defer results[0].Free(mp)
+			require.Equal(t, types.New(types.T_decimal128, 5, 4), *results[0].GetType())
+			value := vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0)
+			require.Equal(t, "0.0088", value.Format(results[0].GetType().Scale))
+		})
+	}
+}
+
+func TestAvgWideIntegerExpressionPrecisionExecutionModes(t *testing.T) {
+	argType := types.New(types.T_int64, 37, 0)
+	resultType := types.New(types.T_decimal256, 41, 4)
+	values := []int64{0}
+
+	for _, test := range []struct {
+		name     string
+		distinct bool
+		window   bool
+	}{
+		{name: "ordinary"},
+		{name: "distinct", distinct: true},
+		{name: "window", window: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			input := buildAvgFixedVector(t, mp, argType, values)
+			defer input.Free(mp)
+
+			exec, err := MakeAgg(mp, AggIdOfAvg, test.distinct, argType)
+			require.NoError(t, err)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			switch {
+			case test.window:
+				require.NoError(t, exec.Fill(0, 0, []*vector.Vector{input}))
+			case test.distinct:
+				require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{input}))
+			default:
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			}
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, resultType, *results[0].GetType())
+			require.Equal(t, types.Decimal256{},
+				vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0))
+		})
+	}
+}
+
+func TestAvgWideIntegerExpressionNativeFinalizer(t *testing.T) {
+	argType := types.New(types.T_int32, 37, 0)
+	resultType := types.New(types.T_decimal256, 41, 4)
+
+	for _, test := range []struct {
+		name     string
+		distinct bool
+		window   bool
+	}{
+		{name: "ordinary"},
+		{name: "distinct", distinct: true},
+		{name: "window", window: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			input := buildAvgFixedVector(t, mp, argType, []int32{0})
+			defer input.Free(mp)
+
+			exec, err := MakeAgg(mp, AggIdOfAvg, test.distinct, argType)
+			require.NoError(t, err)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			switch {
+			case test.window:
+				require.NoError(t, exec.Fill(0, 0, []*vector.Vector{input}))
+			case test.distinct:
+				require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{input}))
+			default:
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			}
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, resultType, *results[0].GetType())
+			require.Equal(t, types.Decimal256{},
+				vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0))
+		})
+	}
+}
+
+func TestAvgDecimalRoundingExecutionModes(t *testing.T) {
+	argType := types.New(types.T_decimal64, 8, 2)
+	values := make([]types.Decimal64, 113)
+	values[0] = 1 // 0.01; the remaining values are zero.
+
+	for _, test := range []struct {
+		name     string
+		distinct bool
+		window   bool
+		values   []types.Decimal64
+	}{
+		{name: "ordinary", values: values},
+		{
+			name:     "distinct",
+			distinct: true,
+			values: func() []types.Decimal64 {
+				result := make([]types.Decimal64, 113)
+				for i := 0; i < 112; i++ {
+					result[i] = types.Decimal64(i - 56) // -0.56 through 0.55
+				}
+				result[112] = 57 // the distinct values sum to 0.01
+				return result
+			}(),
+		},
+		{name: "window", window: true, values: values},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			input := buildAvgFixedVector(t, mp, argType, test.values)
+			defer input.Free(mp)
+
+			exec, err := MakeAgg(mp, AggIdOfAvg, test.distinct, argType)
+			require.NoError(t, err)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			switch {
+			case test.window:
+				for row := range test.values {
+					require.NoError(t, exec.Fill(0, row, []*vector.Vector{input}))
+				}
+			case test.distinct:
+				groups := make([]uint64, len(test.values))
+				for i := range groups {
+					groups[i] = 1
+				}
+				require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{input}))
+			default:
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			}
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			defer results[0].Free(mp)
+			require.Equal(t, types.New(types.T_decimal128, 12, 6), *results[0].GetType())
+			value := vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0)
+			require.Equal(t, "0.000088", value.Format(results[0].GetType().Scale))
+		})
+	}
+}
+
+func TestAvgDecimal256PreservesMaximumInputScale(t *testing.T) {
+	argType := types.New(types.T_decimal128, 38, 38)
+	resultType := AvgReturnType([]types.Type{argType})
+	require.Equal(t, types.New(types.T_decimal256, 42, 38), resultType)
+
+	value, err := types.ParseDecimal128(
+		"0.12345678901234567890123456789012345678",
+		argType.Width,
+		argType.Scale,
+	)
+	require.NoError(t, err)
+	avg, err := decAvg[types.Decimal256](
+		types.Decimal256FromDecimal128(value), 1, argType.Scale, resultType)
+	require.NoError(t, err)
+	// Compare the encoded value rather than Decimal256.Format here. Format rounds
+	// while repeatedly dividing by ten, which is not a lossless way to inspect a
+	// 38-digit value.
+	require.Equal(t, types.Decimal256FromDecimal128(value), avg)
+}
+
+func TestAvgDecimal256HighScaleExecutionModes(t *testing.T) {
+	argType := types.New(types.T_decimal128, 38, 38)
+	resultType := AvgReturnType([]types.Type{argType})
+	value, err := types.ParseDecimal128(
+		"0.12345678901234567890123456789012345678",
+		argType.Width,
+		argType.Scale,
+	)
+	require.NoError(t, err)
+
+	for _, test := range []struct {
+		name     string
+		distinct bool
+		window   bool
+	}{
+		{name: "ordinary"},
+		{name: "distinct", distinct: true},
+		{name: "window", window: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			input := buildAvgFixedVector(t, mp, argType, []types.Decimal128{value})
+			defer input.Free(mp)
+
+			exec := makeSumAvgExec(mp, false, AggIdOfAvg, test.distinct, argType)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			switch {
+			case test.window:
+				require.NoError(t, exec.Fill(0, 0, []*vector.Vector{input}))
+			case test.distinct:
+				require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{input}))
+			default:
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			}
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			defer results[0].Free(mp)
+			require.Equal(t, resultType, *results[0].GetType())
+			require.Equal(t, types.Decimal256FromDecimal128(value),
+				vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0))
+		})
+	}
+}
+
+func TestAvgExactIntegerExecution(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	for _, test := range []struct {
+		name  string
+		typ   types.Type
+		input func(*testing.T, *mpool.MPool, types.Type) *vector.Vector
+	}{
+		{name: "int8", typ: types.T_int8.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []int8{1, 2, 4})
+		}},
+		{name: "int16", typ: types.T_int16.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []int16{1, 2, 4})
+		}},
+		{name: "int32", typ: types.T_int32.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []int32{1, 2, 4})
+		}},
+		{name: "uint8", typ: types.T_uint8.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []uint8{1, 2, 4})
+		}},
+		{name: "uint16", typ: types.T_uint16.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []uint16{1, 2, 4})
+		}},
+		{name: "uint32", typ: types.T_uint32.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []uint32{1, 2, 4})
+		}},
+		{name: "year", typ: types.T_year.ToType(), input: func(t *testing.T, mp *mpool.MPool, typ types.Type) *vector.Vector {
+			return buildAvgFixedVector(t, mp, typ, []types.MoYear{2001, 2002, 2004})
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := test.input(t, mp, test.typ)
+			defer input.Free(mp)
+			exec := makeAvgExec(t, mp, test.typ)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{input}))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			defer results[0].Free(mp)
+			require.Equal(t, AvgReturnType([]types.Type{test.typ}), *results[0].GetType())
+
+			value := vector.GetFixedAtNoTypeCheck[types.Decimal128](results[0], 0)
+			if test.typ.Oid == types.T_year {
+				require.Equal(t, "2002.3333", value.Format(results[0].GetType().Scale))
+			} else {
+				require.Equal(t, "2.3333", value.Format(results[0].GetType().Scale))
+			}
+		})
+	}
+}
+
+func TestDecimal128AvgFinalizationRejectsNarrowResult(t *testing.T) {
+	argType := types.New(types.T_decimal128, 38, 10)
+	resultType := types.New(types.T_decimal128, 38, 12)
+	testCases := []struct {
+		name    string
+		value   string
+		wantErr string
+	}{
+		{
+			name:    "physical overflow",
+			value:   "9999999999999999999999999999.1234567890",
+			wantErr: "Decimal128 Div overflow",
+		},
+		{
+			name:    "declared precision overflow",
+			value:   "100000000000000000000000000.0000000000",
+			wantErr: "Decimal128(38,12)",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			value, err := types.ParseDecimal128(tc.value, argType.Width, argType.Scale)
+			require.NoError(t, err)
+			_, err = decAvg[types.Decimal128](value, 1, argType.Scale, resultType)
+			require.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
 func buildNumericTestDataVecs(t *testing.T, mp *mpool.MPool) ([]types.Type, []*vector.Vector, []*vector.Vector) {
 	nulls := []bool{false, false, false, false, true, false, false, false, false, true}
 	int8s := []int8{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
@@ -133,7 +659,11 @@ func (e *expectedResult) check(val any, scale int32) error {
 		}
 	case types.Decimal256:
 		resultFloat := types.Decimal256ToFloat64(val, scale)
-		if math.Abs(e.expected-resultFloat) > 1e-6 {
+		tolerance := 1e-6
+		if scale > 0 {
+			tolerance = math.Max(tolerance, math.Pow10(-int(scale)))
+		}
+		if math.Abs(e.expected-resultFloat) > tolerance {
 			return moerr.NewInternalErrorNoCtxf("expected %f, got %f", e.expected, resultFloat)
 		}
 	default:
@@ -281,7 +811,7 @@ func TestAvgDistinct(t *testing.T) {
 	testSumAvg(t, makeAvgDistinctExec, newExpectedSumAvg(6, 6, 6, 126000))
 }
 
-func TestWindowSlidingSumCapability(t *testing.T) {
+func TestWindowSlidingSumAvgCapability(t *testing.T) {
 	mp := mpool.MustNewZero()
 	tests := []struct {
 		name     string
@@ -296,8 +826,12 @@ func TestWindowSlidingSumCapability(t *testing.T) {
 		{name: "narrow decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 20, 2)},
 		{name: "wide decimal128 sum", aggID: AggIdOfSum, typ: types.New(types.T_decimal128, 38, 2)},
 		{name: "float sum", aggID: AggIdOfSum, typ: types.T_float64.ToType()},
-		{name: "avg", aggID: AggIdOfAvg, typ: types.T_int32.ToType()},
+		{name: "int32 avg", aggID: AggIdOfAvg, typ: types.T_int32.ToType(), want: true},
+		{name: "int64 avg", aggID: AggIdOfAvg, typ: types.T_int64.ToType(), want: true},
+		{name: "decimal64 avg", aggID: AggIdOfAvg, typ: types.New(types.T_decimal64, 18, 2), want: true},
+		{name: "float avg", aggID: AggIdOfAvg, typ: types.T_float64.ToType()},
 		{name: "distinct sum", aggID: AggIdOfSum, distinct: true, typ: types.T_int32.ToType()},
+		{name: "distinct avg", aggID: AggIdOfAvg, distinct: true, typ: types.T_int32.ToType()},
 	}
 
 	for _, test := range tests {
@@ -309,6 +843,108 @@ func TestWindowSlidingSumCapability(t *testing.T) {
 		})
 	}
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestWindowSlidingAvgRemoveUpdatesCountAndEmptyState(t *testing.T) {
+	t.Run("remaining row", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		typ := types.T_int32.ToType()
+		input := testutil.NewInt32Vector(3, typ, mp, false,
+			[]bool{false, true, false}, []int32{2, 0, 4})
+		defer input.Free(mp)
+
+		exec, err := MakeAgg(mp, AggIdOfAvg, false, typ)
+		require.NoError(t, err)
+		defer exec.Free()
+		require.NoError(t, exec.GroupGrow(1))
+		require.True(t, SupportsWindowSliding(exec))
+
+		for row := 0; row < input.Length(); row++ {
+			require.NoError(t, AddWindowRow(exec, row, []*vector.Vector{input}))
+		}
+		require.NoError(t, RemoveWindowRow(exec, 1, []*vector.Vector{input}))
+		require.NoError(t, RemoveWindowRow(exec, 0, []*vector.Vector{input}))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		defer results[0].Free(mp)
+		require.False(t, results[0].IsNull(0))
+		require.Equal(t, types.T_decimal128, results[0].GetType().Oid)
+		value := vector.MustFixedColNoTypeCheck[types.Decimal128](results[0])[0]
+		require.Equal(t, "4.0000", value.Format(results[0].GetType().Scale))
+	})
+
+	t.Run("empty frame", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		typ := types.T_int32.ToType()
+		input := testutil.NewInt32Vector(1, typ, mp, false, nil, []int32{2})
+		defer input.Free(mp)
+
+		exec, err := MakeAgg(mp, AggIdOfAvg, false, typ)
+		require.NoError(t, err)
+		defer exec.Free()
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, AddWindowRow(exec, 0, []*vector.Vector{input}))
+		require.NoError(t, RemoveWindowRow(exec, 0, []*vector.Vector{input}))
+		require.Error(t, RemoveWindowRow(exec, 0, []*vector.Vector{input}))
+
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		defer results[0].Free(mp)
+		require.True(t, results[0].IsNull(0))
+	})
+}
+
+func TestWindowSlidingAvgDecimalStates(t *testing.T) {
+	tests := []struct {
+		name      string
+		typ       types.Type
+		makeInput func(*mpool.MPool) *vector.Vector
+		want      string
+	}{
+		{
+			name: "int64",
+			typ:  types.T_int64.ToType(),
+			makeInput: func(mp *mpool.MPool) *vector.Vector {
+				return testutil.NewInt64Vector(2, types.T_int64.ToType(), mp, false, nil, []int64{2, 4})
+			},
+			want: "4.0000",
+		},
+		{
+			name: "decimal64",
+			typ:  types.New(types.T_decimal64, 18, 2),
+			makeInput: func(mp *mpool.MPool) *vector.Vector {
+				typ := types.New(types.T_decimal64, 18, 2)
+				return testutil.NewDecimal64Vector(
+					2, typ, mp, false, nil, []types.Decimal64{200, 400})
+			},
+			want: "4.000000",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			input := test.makeInput(mp)
+			defer input.Free(mp)
+
+			exec, err := MakeAgg(mp, AggIdOfAvg, false, test.typ)
+			require.NoError(t, err)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			require.True(t, SupportsWindowSliding(exec))
+			require.NoError(t, AddWindowRow(exec, 0, []*vector.Vector{input}))
+			require.NoError(t, AddWindowRow(exec, 1, []*vector.Vector{input}))
+			require.NoError(t, RemoveWindowRow(exec, 0, []*vector.Vector{input}))
+
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			defer results[0].Free(mp)
+			require.False(t, results[0].IsNull(0))
+			value := vector.MustFixedColNoTypeCheck[types.Decimal128](results[0])[0]
+			require.Equal(t, test.want, value.Format(results[0].GetType().Scale))
+		})
+	}
 }
 
 func TestWindowSlidingSumRemoveRestoresNull(t *testing.T) {
@@ -432,7 +1068,7 @@ func TestAvgDecimal256FinalizationPrecisionOverflow(t *testing.T) {
 				}
 			}()
 			require.Nil(t, results)
-			require.ErrorContains(t, err, "Decimal256(65,12)")
+			require.ErrorContains(t, err, "Decimal256(65,14)")
 		})
 	}
 }

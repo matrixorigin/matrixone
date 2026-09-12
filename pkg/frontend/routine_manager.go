@@ -566,6 +566,24 @@ func (rm *RoutineManager) ResetSessionWithContext(
 	return routine.resetSessionWithContext(ctx, rm.baseService.ID(), resp)
 }
 
+// RefreshSessionAuthWithContext revalidates a cached backend's credentials and
+// resolved authorization state against the current catalog.
+func (rm *RoutineManager) RefreshSessionAuthWithContext(
+	ctx context.Context,
+	req *query.RefreshSessionAuthRequest,
+	resp *query.RefreshSessionAuthResponse,
+) error {
+	if req == nil || resp == nil {
+		return moerr.NewInvalidInput(rm.ctx, "invalid refresh session authentication request")
+	}
+	routine := rm.getRoutineByConnID(req.ConnID)
+	if routine == nil {
+		return moerr.NewInternalErrorf(rm.ctx,
+			"cannot get routine to refresh session authentication %d", req.ConnID)
+	}
+	return routine.refreshSessionAuthWithContext(ctx, req, resp)
+}
+
 func (rm *RoutineManager) cancelCtx() {
 	if rm == nil {
 		return

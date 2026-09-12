@@ -856,6 +856,15 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 						ctr.sels = nil
 					} else if ctr.probeLeftAnti {
 						ctr.sels = nil
+					} else if (hashJoin.IsRightSemi() || hashJoin.IsRightAnti()) &&
+						len(ctr.sels) > 0 && ctr.rightRowsMatched.Contains(uint64(ctr.sels[0])) {
+						// With no residual, the first matching probe marks this
+						// entire immutable group. A new psBatchRow is reached
+						// only after all psSelsForOneRow chunks have completed,
+						// so its first bit now certifies the whole group. Avoid
+						// revisiting every build duplicate on repeated probes.
+						// The bitmap is worker-local and reset with the JoinMap.
+						ctr.sels = nil
 					}
 				}
 			}

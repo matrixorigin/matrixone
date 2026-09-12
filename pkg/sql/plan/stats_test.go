@@ -23,10 +23,65 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	index2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
+
+func TestStatsInfoUsableWithoutPersistedObjects(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		stats *pb.StatsInfo
+		want  bool
+	}{
+		{name: "missing"},
+		{name: "empty", stats: &pb.StatsInfo{}},
+		{name: "negative table count", stats: &pb.StatsInfo{TableCnt: -1}},
+		{name: "nan table count", stats: &pb.StatsInfo{TableCnt: math.NaN()}},
+		{name: "infinite table count", stats: &pb.StatsInfo{TableCnt: math.Inf(1)}},
+		{name: "persisted object with nan table count", stats: &pb.StatsInfo{
+			AccurateObjectNumber: 1, TableCnt: math.NaN(),
+		}},
+		{name: "completed empty table", stats: &pb.StatsInfo{TableName: "events"}, want: true},
+		{name: "persisted objects", stats: &pb.StatsInfo{AccurateObjectNumber: 1}, want: true},
+		{name: "committed rows before flush", stats: &pb.StatsInfo{TableCnt: 1}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, StatsInfoUsable(test.stats))
+		})
+	}
+}
+
+type tableDefStatsTestCompilerContext struct {
+	*MockCompilerContext
+	stats       *pb.StatsInfo
+	gotTableDef *planpb.TableDef
+}
+
+func (c *tableDefStatsTestCompilerContext) StatsWithTableDef(
+	_ *planpb.ObjectRef,
+	tableDef *planpb.TableDef,
+	_ *Snapshot,
+) (*pb.StatsInfo, error) {
+	c.gotTableDef = tableDef
+	return c.stats, nil
+}
+
+func TestStatsForTableDefUsesVersionAwareCompilerContext(t *testing.T) {
+	tableDef := &planpb.TableDef{TblId: 42, Version: 7}
+	want := &pb.StatsInfo{TableCnt: 42}
+	ctx := &tableDefStatsTestCompilerContext{
+		MockCompilerContext: &MockCompilerContext{},
+		stats:               want,
+	}
+
+	got, err := statsForTableDef(ctx, &planpb.ObjectRef{Obj: 42}, tableDef, nil)
+	require.NoError(t, err)
+	require.Same(t, want, got)
+	require.Same(t, tableDef, ctx.gotTableDef)
+}
 
 func TestCalcBlockSelectivityUsingShuffleRangeBareColumn(t *testing.T) {
 	t.Run("bare column uses the generic overlap estimate", func(t *testing.T) {
@@ -452,6 +507,220 @@ func newStatsTestBuilderWithNDV(colName string, ndv float64) *QueryBuilder {
 	return builder
 }
 
+func TestEstimateAndSelectivityNormalizesSameColumnRanges(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableCnt = 300_000
+	stats.DataTypeMap["price"] = uint64(types.T_decimal64)
+	stats.MinValMap["price"] = 0.09
+	stats.MaxValMap["price"] = 99.99
+	stats.DataTypeMap["other"] = uint64(types.T_decimal64)
+	stats.MinValMap["other"] = 0.09
+	stats.MaxValMap["other"] = 99.99
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	builder.tag2Table[0] = &planpb.TableDef{
+		TblId: 1,
+		Cols: []*planpb.ColDef{
+			{Name: "price", Typ: planpb.Type{Id: int32(types.T_decimal64), Scale: 2}},
+			{Name: "other", Typ: planpb.Type{Id: int32(types.T_decimal64), Scale: 2}},
+		},
+	}
+
+	decimalRange := func(column int32, name string, value int64) *planpb.Expr {
+		columnExpr := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_decimal64), Scale: 2},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+				RelPos: 0, ColPos: column, Name: builder.tag2Table[0].Cols[column].Name,
+			}},
+		}
+		literalExpr := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_decimal64), Scale: 2},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+				Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: value}},
+			}},
+		}
+		bound, err := BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{columnExpr, literalExpr})
+		require.NoError(t, err)
+		return bound
+	}
+	and := func(left, right *planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "and"},
+				Args: []*planpb.Expr{left, right},
+			}},
+		}
+	}
+
+	// The four predicates represent one interval, [36, 45]. Their estimate
+	// must not shrink merely because equivalent, weaker bounds are repeated.
+	overlapping := and(
+		decimalRange(0, ">=", 3600),
+		and(decimalRange(0, ">=", 3500), and(
+			decimalRange(0, "<=", 4500), decimalRange(0, "<=", 5000))),
+	)
+	wantInterval := (45.0 - 36.0 + 1) / (99.99 - 0.09)
+	require.InDelta(t, wantInterval, estimateExprSelectivity(overlapping, builder, stats), 1e-12)
+
+	strongerLowerBound := and(decimalRange(0, ">=", 3500), decimalRange(0, ">=", 3600))
+	wantLowerBound := (99.99 - 36.0 + 1) / (99.99 - 0.09)
+	require.InDelta(t, wantLowerBound, estimateExprSelectivity(strongerLowerBound, builder, stats), 1e-12)
+
+	contradictory := and(decimalRange(0, ">=", 5000), decimalRange(0, "<=", 4500))
+	require.InDelta(t, 0.00000001, estimateExprSelectivity(contradictory, builder, stats), 1e-15)
+	exclusivePoint := and(decimalRange(0, ">", 4500), decimalRange(0, "<=", 4500))
+	require.InDelta(t, 0.00000001, estimateExprSelectivity(exclusivePoint, builder, stats), 1e-15)
+	inclusivePoint := and(decimalRange(0, ">=", 4500), decimalRange(0, "<=", 4500))
+	require.Greater(t, estimateExprSelectivity(inclusivePoint, builder, stats), 0.00000001)
+
+	// Predicates on different columns remain independent.
+	independent := and(decimalRange(0, ">=", 3600), decimalRange(1, "<=", 4500))
+	wantIndependent := andSelectivity(
+		(99.99-36.0+1)/(99.99-0.09),
+		(45.0-0.09+1)/(99.99-0.09),
+	)
+	require.InDelta(t, wantIndependent, estimateExprSelectivity(independent, builder, stats), 1e-12)
+
+	// Moving an out-of-domain endpoint to the observed boundary must preserve
+	// the fact that the boundary value satisfies the original predicate.
+	stats.MinValMap["price"] = 10
+	stats.MaxValMap["price"] = 10
+	redundantLowerBounds := and(decimalRange(0, ">", 100), decimalRange(0, ">", 200))
+	require.Equal(t, 1.0, estimateExprSelectivity(redundantLowerBounds, builder, stats))
+	redundantUpperBounds := and(decimalRange(0, "<", 2000), decimalRange(0, "<", 3000))
+	require.Equal(t, 1.0, estimateExprSelectivity(redundantUpperBounds, builder, stats))
+}
+
+func TestEstimateIntervalSelectivityPreservesClippedBoundaryMembership(t *testing.T) {
+	const emptySelectivity = 0.00000001
+	tests := []struct {
+		name                     string
+		lower, upper             float64
+		hasLower, lowerInclusive bool
+		hasUpper, upperInclusive bool
+		want                     float64
+	}{
+		{
+			name:  "exclusive lower below singleton domain",
+			lower: 1, hasLower: true,
+			want: 1,
+		},
+		{
+			name:  "exclusive upper above singleton domain",
+			upper: 20, hasUpper: true,
+			want: 1,
+		},
+		{
+			name:  "exclusive bounds outside singleton domain",
+			lower: 1, hasLower: true,
+			upper: 20, hasUpper: true,
+			want: 1,
+		},
+		{
+			name:  "exclusive lower at singleton boundary",
+			lower: 10, hasLower: true,
+			want: emptySelectivity,
+		},
+		{
+			name:  "exclusive upper at singleton boundary",
+			upper: 10, hasUpper: true,
+			want: emptySelectivity,
+		},
+		{
+			name:  "inclusive singleton",
+			lower: 10, hasLower: true, lowerInclusive: true,
+			upper: 10, hasUpper: true, upperInclusive: true,
+			want: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := estimateIntervalSelectivity(
+				10, 10,
+				test.lower, test.hasLower, test.lowerInclusive,
+				test.upper, test.hasUpper, test.upperInclusive,
+			)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestBoundFilterListNormalizesSameColumnRanges(t *testing.T) {
+	mock := NewMockCompilerContext(false)
+	part := mock.tables["part"]
+	require.NotNil(t, part)
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableName = "part"
+	stats.TableCnt = 200_000
+	stats.DataTypeMap["p_retailprice"] = uint64(types.T_decimal64)
+	stats.MinValMap["p_retailprice"] = 0.09
+	stats.MaxValMap["p_retailprice"] = 99.99
+	statsCache.Set(part.TblId, stats)
+	ctx := &fixedStatsCompilerContext{statsCacheCompilerContext: &statsCacheCompilerContext{
+		MockCompilerContext: mock, statsCache: statsCache,
+	}}
+
+	stmts, err := mysql.Parse(ctx.GetContext(), `
+		select p_partkey from part
+		where p_retailprice >= 36.00 and p_retailprice >= 35.00
+		  and p_retailprice <= 45.00 and p_retailprice <= 50.00`, 1)
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+	defer stmts[0].Free()
+	built, err := BuildPlan(ctx, stmts[0], false)
+	require.NoError(t, err)
+
+	var scan *planpb.Node
+	for _, node := range built.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef.Name == "part" {
+			scan = node
+			break
+		}
+	}
+	require.NotNil(t, scan)
+	require.InDelta(t, (45.0-36.0+1)/(99.99-0.09), scan.Stats.Selectivity, 1e-12)
+}
+
+func TestMissingColumnMapsUseUnknownStatsFallbacks(t *testing.T) {
+	builder := newStatsTestBuilderWithNDV("d", 10)
+	wrapper := builder.compCtx.GetStatsCache().Get(1)
+	stats := wrapper.GetStats()
+	delete(stats.NdvMap, "d")
+	col := &planpb.ColRef{RelPos: 0, ColPos: 0, Name: "d"}
+	expr := &planpb.Expr{Expr: &planpb.Expr_Col{Col: col}}
+
+	require.Equal(t, float64(-1), builder.getColNdv(col))
+	require.Equal(t, 0.1, getNullSelectivity(expr, builder, true))
+	require.Equal(t, 0.9, getNullSelectivity(expr, builder, false))
+}
+
+func TestCompleteStatsSizeMapRejectsPartialGenerations(t *testing.T) {
+	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Name: "a"}, {Name: "b"}, {Name: "__hidden", Hidden: true},
+	}}
+	stats := NewStatsInfo()
+	stats.SizeMap["a"] = 10
+	_, complete := completeStatsSizeMap(stats, tableDef)
+	require.False(t, complete)
+
+	stats.SizeMap["b"] = 20
+	total, complete := completeStatsSizeMap(stats, tableDef)
+	require.True(t, complete)
+	require.Equal(t, uint64(30), total)
+
+	stats.SizeMap["a"] = math.MaxUint64
+	_, complete = completeStatsSizeMap(stats, tableDef)
+	require.False(t, complete)
+}
+
 func TestPrimaryKeyStatsShortcutsRequireSQLEqualityCompatibleKey(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -513,6 +782,18 @@ type statsCacheCompilerContext struct {
 
 func (ctx *statsCacheCompilerContext) GetStatsCache() *StatsCache {
 	return ctx.statsCache
+}
+
+type fixedStatsCompilerContext struct {
+	*statsCacheCompilerContext
+}
+
+func (ctx *fixedStatsCompilerContext) Stats(
+	obj *planpb.ObjectRef,
+	_ *planpb.Snapshot,
+) (*pb.StatsInfo, error) {
+	wrapper := ctx.statsCache.Get(uint64(obj.Obj))
+	return wrapper.GetStats(), nil
 }
 
 func isFinite(v float64) bool {
@@ -1390,6 +1671,108 @@ func TestHasRecursiveScanHandlesGeneralPlanGraphs(t *testing.T) {
 	require.False(t, builder.hasRecursiveScan(builder.qry.Nodes[5]))
 	require.True(t, builder.hasRecursiveScan(builder.qry.Nodes[3]))
 	require.True(t, builder.hasRecursiveScan(builder.qry.Nodes[6]))
+}
+
+func TestDetermineBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(intType, 10, 0),
+		GetColExpr(intType, 20, 0),
+	})
+	require.NoError(t, err)
+
+	makeBuilder := func(scanOption string) *QueryBuilder {
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+		builder.qry.Nodes = []*planpb.Node{
+			{
+				NodeId: 0, NodeType: planpb.Node_TABLE_SCAN,
+				BindingTags: []int32{10}, Stats: &planpb.Stats{Outcnt: 10},
+			},
+			{
+				NodeId: 1, NodeType: planpb.Node_SINK_SCAN,
+				BindingTags: []int32{20}, Stats: &planpb.Stats{Outcnt: 1000},
+				ExtraOptions: scanOption,
+			},
+			{
+				NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_SEMI,
+				Children: []int32{0, 1}, OnList: []*planpb.Expr{joinCond},
+				Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
+			},
+		}
+		return builder
+	}
+
+	t.Run("marked build remains logical right", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption)
+		builder.determineBuildAndProbeSide(2, false)
+		require.False(t, builder.qry.Nodes[2].IsRightJoin)
+	})
+
+	t.Run("unmarked build retains cost choice", func(t *testing.T) {
+		builder := makeBuilder("")
+		builder.determineBuildAndProbeSide(2, false)
+		require.True(t, builder.qry.Nodes[2].IsRightJoin)
+	})
+
+	t.Run("marked LEFT build remains logical right", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption)
+		builder.qry.Nodes[2].JoinType = planpb.Node_LEFT
+		builder.determineBuildAndProbeSide(2, false)
+		require.False(t, builder.qry.Nodes[2].IsRightJoin)
+	})
+}
+
+func TestDetermineInnerBuildSidePreservesCTEHashBuildDrainProof(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	joinCond, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{
+		GetColExpr(intType, 10, 0),
+		GetColExpr(intType, 20, 0),
+	})
+	require.NoError(t, err)
+
+	makeBuilder := func(leftOption, rightOption string) *QueryBuilder {
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+		builder.qry.Nodes = []*planpb.Node{
+			{
+				NodeId: 0, NodeType: planpb.Node_SINK_SCAN,
+				BindingTags: []int32{10}, Stats: &planpb.Stats{Outcnt: 10},
+				ExtraOptions: leftOption,
+			},
+			{
+				NodeId: 1, NodeType: planpb.Node_SINK_SCAN,
+				BindingTags: []int32{20}, Stats: &planpb.Stats{Outcnt: 1000},
+				ExtraOptions: rightOption,
+			},
+			{
+				NodeId: 2, NodeType: planpb.Node_JOIN, JoinType: planpb.Node_INNER,
+				Children: []int32{0, 1}, OnList: []*planpb.Expr{joinCond},
+				Stats: &planpb.Stats{HashmapStats: &planpb.HashMapStats{}},
+			},
+		}
+		return builder
+	}
+
+	t.Run("marked logical left moves to build", func(t *testing.T) {
+		builder := makeBuilder(materialized.CTEHashBuildScanOption, "")
+		builder.determineBuildAndProbeSide(2, false)
+		require.Equal(t, []int32{1, 0}, builder.qry.Nodes[2].Children)
+	})
+
+	t.Run("marked logical right remains build", func(t *testing.T) {
+		builder := makeBuilder("", materialized.CTEHashBuildScanOption)
+		builder.determineBuildAndProbeSide(2, false)
+		require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+	})
+
+	t.Run("marked logical right remains shuffle build", func(t *testing.T) {
+		builder := makeBuilder("", materialized.CTEHashBuildScanOption)
+		builder.qry.Nodes[2].Stats.HashmapStats.Shuffle = true
+		builder.determineBuildAndProbeSide(2, false)
+		require.Equal(t, []int32{0, 1}, builder.qry.Nodes[2].Children)
+		require.True(t, builder.qry.Nodes[2].Stats.HashmapStats.Shuffle)
+	})
 }
 
 func TestDeepCopyIndexReaderParamCopiesOrigFuncName(t *testing.T) {

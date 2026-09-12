@@ -21,12 +21,15 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -713,6 +716,7 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 		viewRef,
 		"db",
 		"v",
+		nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, bindCtx.views, 1)
@@ -740,6 +744,7 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 		&ObjectRef{},
 		"db",
 		"empty",
+		nil,
 	)
 	require.NoError(t, err)
 	require.Zero(t, nodeID)
@@ -1305,6 +1310,70 @@ func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {
 	require.Equal(t, int32(9), filled.GetQuery().Nodes[0].ProjectList[0].Typ.Scale)
 }
 
+func TestFillValuesOfParamsInPlanPreservesMaterializedBinaryStringDomain(t *testing.T) {
+	ctx := context.Background()
+	makeQuery := func(t *testing.T) *planpb.Plan {
+		t.Helper()
+		param := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+		}
+		ord, err := BindFuncExprImplByPlanExpr(ctx, "ord", []*planpb.Expr{param})
+		require.NoError(t, err)
+		return &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+			StmtType: planpb.Query_SELECT,
+			Steps:    []int32{0},
+			Nodes: []*planpb.Node{{
+				NodeType:    planpb.Node_VALUE_SCAN,
+				ProjectList: []*planpb.Expr{ord},
+			}},
+		}}}
+	}
+
+	for _, test := range []struct {
+		name  string
+		value ParamValue
+		want  types.T
+	}{
+		{
+			name: "sql execute varbinary source",
+			value: ParamValue{
+				Value: "\xc3\xa9", SourceType: types.T_varbinary.ToType(), HasSourceType: true,
+			},
+			want: types.T_varbinary,
+		},
+		{
+			name: "com stmt binary string metadata",
+			value: ParamValue{
+				Value: "\xc3\xa9", IsBinaryString: true, IsBinaryProtocol: true,
+			},
+			want: types.T_varbinary,
+		},
+		{
+			name: "sql execute text source control",
+			value: ParamValue{
+				Value: "\xc3\xa9", SourceType: types.T_varchar.ToType(), HasSourceType: true,
+			},
+			want: types.T_text,
+		},
+		{
+			name: "null keeps static source domain",
+			value: ParamValue{
+				SourceType: types.T_varbinary.ToType(), HasSourceType: true,
+			},
+			want: types.T_varbinary,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+				ctx, makeQuery(t), []any{test.value})
+			require.NoError(t, err)
+			ord := filled.GetQuery().Nodes[0].ProjectList[0]
+			require.Equal(t, test.want, types.T(ord.GetF().Args[0].Typ.Id), ord.String())
+		})
+	}
+}
+
 func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeOnlyInNumericConsumers(t *testing.T) {
 	ctx := context.Background()
 	makeParam := func() *planpb.Expr {
@@ -1434,6 +1503,44 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeOnlyInNumericConsumers(
 	comparisonResult := comparisonFilled.GetQuery().Nodes[0].ProjectList[0]
 	require.Equal(t, int32(types.T_int32), comparisonResult.GetF().Args[1].Typ.Id,
 		"a SQL source type must not replace the comparison domain")
+
+	sign, err := BindFuncExprImplByPlanExpr(ctx, "sign", []*planpb.Expr{makeParam()})
+	require.NoError(t, err)
+	signFilled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		ctx, makeQuery(t, sign), []any{ParamValue{
+			Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true,
+		}})
+	require.NoError(t, err)
+	signResult := signFilled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, types.T_int64, types.T(signResult.Typ.Id), signResult.String())
+	require.Equal(t, types.T_int64, types.T(signResult.GetF().Args[0].Typ.Id), signResult.String())
+}
+
+func TestFillValuesOfParamsInstallsValueOnlyNumericSourceRewrite(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"round", "truncate"} {
+		t.Run(name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare stmt_precision from 'select "+name+"(1.25, ?)'")
+			require.NoError(t, err)
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				ctx, prepared.GetDcl().GetPrepare().Plan, []any{ParamValue{
+					Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true,
+				}})
+			require.NoError(t, err)
+			require.True(t, specialized, filled.String())
+			result := findPlanFunctionExpr(filled, name)
+			require.NotNil(t, result, filled.String())
+			require.Len(t, result.GetF().Args, 2, result.String())
+			require.Equal(t, int32(types.T_int64), result.GetF().Args[1].Typ.Id, result.String())
+			precisionCast := result.GetF().Args[1].GetF()
+			require.NotNil(t, precisionCast, result.String())
+			require.Equal(t, "cast", precisionCast.GetFunc().GetObjName(), result.String())
+			precisionLiteral := precisionCast.Args[0].GetLit()
+			require.NotNil(t, precisionLiteral, result.String())
+			require.True(t, precisionLiteral.GetBval(), result.String())
+		})
+	}
 }
 
 func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsumers(t *testing.T) {
@@ -1509,6 +1616,56 @@ func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsume
 		require.NotNil(t, result)
 		require.Equal(t, int32(types.T_varbinary), result.Typ.Id, result.String())
 	})
+}
+
+func TestFillValuesOfParamsPreservesSQLExecuteRuntimeStringDomain(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_runtime_domain from 'select char_length(?)'")
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().Plan
+
+	for _, test := range []struct {
+		name       string
+		sourceType types.Type
+		domain     types.RuntimeStringDomain
+		wantForm   planpb.StringLiteralForm
+		wantLength int64
+	}{
+		{
+			name: "static varbinary runtime text", sourceType: types.T_varbinary.ToType(),
+			domain: types.RuntimeStringText, wantForm: planpb.StringLiteralForm_STRING_LITERAL_TEXT, wantLength: 2,
+		},
+		{
+			name: "static varchar runtime binary", sourceType: types.T_varchar.ToType(),
+			domain: types.RuntimeStringBinary, wantForm: planpb.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+			wantLength: 4,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for execution := 0; execution < 2; execution++ {
+				filled, _, fillErr := FillValuesOfParamsInPlanWithSpecialization(
+					context.Background(), original, []any{ParamValue{
+						Value: "你a", SourceType: test.sourceType, HasSourceType: true,
+						RuntimeStringDomain: test.domain,
+					}})
+				require.NoError(t, fillErr)
+				charLength := findPlanFunctionExpr(filled, "char_length")
+				require.NotNil(t, charLength)
+				require.Len(t, charLength.GetF().Args, 1)
+				literal := charLength.GetF().Args[0].GetLit()
+				require.NotNil(t, literal)
+				require.Equal(t, test.wantForm, literal.LiteralForm)
+
+				proc := testutil.NewProc(t)
+				executor, execErr := colexec.NewExpressionExecutor(proc, charLength)
+				require.NoError(t, execErr)
+				t.Cleanup(executor.Free)
+				result, execErr := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				require.NoError(t, execErr)
+				require.Equal(t, test.wantLength, vector.GetFixedAtNoTypeCheck[int64](result, 0))
+			}
+		})
+	}
 }
 
 func TestFillValuesOfParamsMaterializesInferredTextNumericLiteral(t *testing.T) {

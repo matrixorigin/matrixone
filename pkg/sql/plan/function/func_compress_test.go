@@ -89,6 +89,21 @@ func TestMySQLCompressBufferBoundaries(t *testing.T) {
 	}
 }
 
+func TestMySQLCompressResultBoundCoversIncompressibleInput(t *testing.T) {
+	random := rand.New(rand.NewSource(3))
+	for _, size := range []int{1, 15, 16, 17, 48, 4096, 16384, 65536} {
+		input := make([]byte, size)
+		_, err := random.Read(input)
+		require.NoError(t, err)
+
+		bound := compressResultBound(stringResultBound{bytes: uint64(size)})
+		require.False(t, bound.unknown)
+		compressed, err := mysqlCompress(input, int(bound.bytes))
+		require.NoError(t, err, "input size %d exceeds planner bound %d", size, bound.bytes)
+		require.LessOrEqual(t, uint64(len(compressed)), bound.bytes)
+	}
+}
+
 func TestMySQLCompressPreservesTrailingSpace(t *testing.T) {
 	// The Adler-32 checksum for this input ends in 0x20. MySQL appends a dot
 	// so a CHAR column cannot trim that byte from the zlib stream.
@@ -304,11 +319,11 @@ func TestCompressFunctionsNullsSelectListAndLengthMask(t *testing.T) {
 		[]bool{false, false, false, false, true},
 		[]string{"", "abc", string(maskedHeader[:]), "invalid", "ignored"},
 	)
-	lengthResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	lengthResult := vector.NewFunctionResultWrapper(types.T_int32.ToType(), proc.Mp())
 	require.NoError(t, lengthResult.PreExtendAndReset(5))
 	require.NoError(t, UncompressedLength([]*vector.Vector{lengthInput}, lengthResult, proc, 5, nil))
 	lengthVector := lengthResult.GetResultVector()
-	require.Equal(t, []int64{0, 0, int64(mysqlCompressedLengthMask), 561409641, 0}, vector.MustFixedColNoTypeCheck[int64](lengthVector))
+	require.Equal(t, []int32{0, 0, int32(mysqlCompressedLengthMask), 561409641, 0}, vector.MustFixedColNoTypeCheck[int32](lengthVector))
 	require.False(t, lengthVector.IsNull(0))
 	require.False(t, lengthVector.IsNull(1))
 	require.True(t, lengthVector.IsNull(4))
@@ -324,19 +339,44 @@ func TestCompressFunctionsNullsSelectListAndLengthMask(t *testing.T) {
 }
 
 func TestCompressFunctionBinaryReturnTypes(t *testing.T) {
-	for _, name := range []string{"compress", "uncompress"} {
-		for _, inputType := range []types.Type{
-			types.T_char.ToType(),
-			types.T_varchar.ToType(),
-			types.T_text.ToType(),
-			types.T_blob.ToType(),
-			types.T_binary.ToType(),
-			types.T_varbinary.ToType(),
-		} {
-			resolved, err := GetFunctionByName(context.Background(), name, []types.Type{inputType})
-			require.NoError(t, err, "%s(%s)", name, inputType.String())
-			require.Equal(t, types.T_blob, resolved.GetReturnType().Oid)
-		}
+	for _, inputType := range []types.Type{
+		types.T_char.ToType(),
+		types.T_varchar.ToType(),
+		types.T_text.ToType(),
+		types.T_blob.ToType(),
+		types.T_binary.ToType(),
+		types.T_varbinary.ToType(),
+	} {
+		resolved, err := GetFunctionByName(context.Background(), "uncompress", []types.Type{inputType})
+		require.NoError(t, err, "uncompress(%s)", inputType.String())
+		require.Equal(t, types.T_blob, resolved.GetReturnType().Oid)
+	}
+
+	for _, inputType := range []types.Type{
+		types.T_text.ToType(),
+		types.T_blob.ToType(),
+	} {
+		resolved, err := GetFunctionByName(context.Background(), "compress", []types.Type{inputType})
+		require.NoError(t, err, "compress(%s)", inputType.String())
+		require.Equal(t, types.T_blob, resolved.GetReturnType().Oid)
+	}
+
+	for _, test := range []struct {
+		name      string
+		inputType types.Type
+		wantOID   types.T
+		wantWidth int32
+	}{
+		{name: "varchar", inputType: types.New(types.T_varchar, 12, 0), wantOID: types.T_varbinary, wantWidth: 68},
+		{name: "varbinary", inputType: types.New(types.T_varbinary, 12, 0), wantOID: types.T_varbinary, wantWidth: 32},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), "compress", []types.Type{test.inputType})
+			require.NoError(t, err)
+			require.Equal(t, test.wantOID, resolved.GetReturnType().Oid)
+			require.Equal(t, test.wantWidth, resolved.GetReturnType().Width)
+			require.Equal(t, types.CharsetBinary, resolved.GetReturnType().Charset)
+		})
 	}
 }
 

@@ -30,6 +30,7 @@ import (
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,11 +41,18 @@ type issue27487IndexCase struct {
 	seedSQL        string
 	heldInsertSQL  string
 	createIndexSQL string
+	probeWhileDDL  string
+	probeExpected  int
 	prepareDDL     func(context.Context, *sql.Conn) error
 	verify         func(*testing.T, context.Context, *sql.Conn)
 }
 
 func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
+	faultEnabledHere := fault.Enable()
+	if faultEnabledHere {
+		defer fault.Disable()
+	}
+
 	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
 		defer cancel()
@@ -110,6 +118,8 @@ func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
 				seedSQL:        "insert into `" + database + "`.`fulltext_docs` values (1, 'seedtoken')",
 				heldInsertSQL:  "insert into `" + database + "`.`fulltext_docs` values (2, 'heldtoken')",
 				createIndexSQL: "create fulltext index ft_body on `" + database + "`.`fulltext_docs` (`body`)",
+				probeWhileDDL: "select count(*) from `" + database + "`.`fulltext_docs` " +
+					"where match(body) against('heldtoken')",
 				prepareDDL: func(ctx context.Context, conn *sql.Conn) error {
 					return execIssue27487(ctx, conn, "set experimental_fulltext_index = 1")
 				},
@@ -124,6 +134,36 @@ func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
 							"where body like '%heldtoken%'").Scan(&scannedRows))
 					require.Equal(t, 1, scannedRows)
 					require.Equal(t, scannedRows, indexedRows)
+				},
+			},
+			{
+				name:           "fulltext index order by",
+				table:          "fulltext_order_docs",
+				createTableSQL: "create table `" + database + "`.`fulltext_order_docs` (id bigint primary key, body text)",
+				seedSQL:        "insert into `" + database + "`.`fulltext_order_docs` values (1, 'heldtoken')",
+				heldInsertSQL:  "insert into `" + database + "`.`fulltext_order_docs` values (2, 'heldtoken')",
+				createIndexSQL: "create fulltext index ft_body on `" + database + "`.`fulltext_order_docs` (`body`)",
+				probeWhileDDL: "select id from `" + database + "`.`fulltext_order_docs` " +
+					"order by match(body) against('heldtoken') desc, id desc",
+				probeExpected: 2,
+				prepareDDL: func(ctx context.Context, conn *sql.Conn) error {
+					return execIssue27487(ctx, conn, "set experimental_fulltext_index = 1")
+				},
+				verify: func(t *testing.T, ctx context.Context, conn *sql.Conn) {
+					t.Helper()
+					rows, err := conn.QueryContext(ctx,
+						"select id from `"+database+"`.`fulltext_order_docs` "+
+							"order by match(body) against('heldtoken') desc, id desc")
+					require.NoError(t, err)
+					defer rows.Close()
+					var ids []int
+					for rows.Next() {
+						var id int
+						require.NoError(t, rows.Scan(&id))
+						ids = append(ids, id)
+					}
+					require.NoError(t, rows.Err())
+					require.Equal(t, []int{2, 1}, ids)
 				},
 			},
 		}
@@ -160,8 +200,12 @@ func runIssue27487IndexCase(
 	ddlConn, err := ddlDB.Conn(ctx)
 	require.NoError(t, err)
 	defer ddlConn.Close()
+	verifier, err := writerDB.Conn(ctx)
+	require.NoError(t, err)
+	defer verifier.Close()
 	if testCase.prepareDDL != nil {
 		require.NoError(t, testCase.prepareDDL(ctx, ddlConn))
+		require.NoError(t, testCase.prepareDDL(ctx, verifier))
 	}
 
 	// The table was created on another CN. Establish catalog and seed-row
@@ -173,6 +217,12 @@ func runIssue27487IndexCase(
 			"select count(*) from `"+database+"`.`"+testCase.table+"`").Scan(&seedRows)
 		return err == nil && seedRows == 1
 	}, 30*time.Second, 10*time.Millisecond, "DDL CN did not observe the seeded table")
+	if testCase.probeWhileDDL != "" {
+		var rows int
+		err := verifier.QueryRowContext(ctx, testCase.probeWhileDDL).Scan(&rows)
+		require.ErrorContains(t, err,
+			"MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX")
+	}
 
 	writerOpen := true
 	require.NoError(t, execIssue27487(ctx, writer, "begin"))
@@ -226,24 +276,97 @@ func runIssue27487IndexCase(
 		return hasIssue27487Waiter(lockServices, metadataKeys)
 	}, 30*time.Second, 10*time.Millisecond, "CREATE INDEX did not wait for the INSERT metadata lock")
 
-	select {
-	case ddlErr := <-ddlDone:
-		ddlFinished = true
-		require.Failf(t, "DDL returned before INSERT committed", "error: %v", ddlErr)
-	default:
+	var probeDone chan error
+	var cancelProbe context.CancelFunc
+	if testCase.probeWhileDDL != "" {
+		const (
+			compiledPlanBarrier = "unresolved-fulltext-plan-compiled"
+			barrierWaiters      = "issue-28286-compiled-plan-barrier-waiters"
+		)
+		require.NoError(t, fault.AddFaultPoint(ctx, compiledPlanBarrier, ":::", "wait", 0, "", false))
+		defer func() {
+			_, _ = fault.RemoveFaultPoint(context.Background(), barrierWaiters)
+			_, _ = fault.RemoveFaultPoint(context.Background(), compiledPlanBarrier)
+		}()
+		require.NoError(t, fault.AddFaultPoint(
+			ctx, barrierWaiters, ":::", "getwaiters", 0, compiledPlanBarrier, false))
+
+		var probeCtx context.Context
+		probeCtx, cancelProbe = context.WithCancel(ctx)
+		defer cancelProbe()
+		probeDone = make(chan error, 1)
+		go func() {
+			var value int
+			err := verifier.QueryRowContext(probeCtx, testCase.probeWhileDDL).Scan(&value)
+			if err == nil {
+				want := testCase.probeExpected
+				if want == 0 {
+					want = 1
+				}
+				if value != want {
+					err = fmt.Errorf("pre-DDL probe returned %d, expected %d", value, want)
+				}
+			}
+			probeDone <- err
+		}()
+
+		require.Eventually(t, func() bool {
+			waiters, _, ok := fault.TriggerFault(barrierWaiters)
+			return ok && waiters == 1
+		}, 30*time.Second, 10*time.Millisecond,
+			"FULLTEXT query did not pause after compiling against the old schema")
+		select {
+		case probeErr := <-probeDone:
+			require.Failf(t, "FULLTEXT query returned before its compiled-plan barrier was released",
+				"error: %v", probeErr)
+		default:
+		}
+
+		require.NoError(t, execIssue27487(ctx, writer, "commit"))
+		writerOpen = false
+		select {
+		case ddlErr := <-ddlDone:
+			ddlFinished = true
+			require.NoError(t, ddlErr)
+		case <-time.After(30 * time.Second):
+			t.Fatal("CREATE INDEX did not return after INSERT committed")
+		}
+		_, _ = fault.RemoveFaultPoint(ctx, compiledPlanBarrier)
 	}
 
-	require.NoError(t, execIssue27487(ctx, writer, "commit"))
-	writerOpen = false
-	select {
-	case ddlErr := <-ddlDone:
-		ddlFinished = true
-		require.NoError(t, ddlErr)
-	case <-time.After(30 * time.Second):
-		t.Fatal("CREATE INDEX did not return after INSERT committed")
+	if writerOpen {
+		select {
+		case ddlErr := <-ddlDone:
+			ddlFinished = true
+			require.Failf(t, "DDL returned before INSERT committed", "error: %v", ddlErr)
+		default:
+		}
+		require.NoError(t, execIssue27487(ctx, writer, "commit"))
+		writerOpen = false
+	}
+	if !ddlFinished {
+		select {
+		case ddlErr := <-ddlDone:
+			ddlFinished = true
+			require.NoError(t, ddlErr)
+		case <-time.After(30 * time.Second):
+			t.Fatal("CREATE INDEX did not return after INSERT committed")
+		}
+	}
+	if probeDone != nil {
+		select {
+		case probeErr := <-probeDone:
+			require.NoError(t, probeErr)
+		case <-time.After(30 * time.Second):
+			t.Fatal("FULLTEXT query did not return after CREATE INDEX committed")
+		}
+		cancelProbe()
 	}
 
-	testCase.verify(t, ctx, ddlConn)
+	// Verify from the other CN. The DDL CN has the updated constraint in its
+	// transaction-local catalog, while another CN must observe it through the
+	// committed catalog logtail before planning MATCH ... AGAINST.
+	testCase.verify(t, ctx, verifier)
 }
 
 func issue27487DSN(port int64) string {

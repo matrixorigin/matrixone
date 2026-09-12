@@ -60,6 +60,10 @@ JEMALLOC_CONFIGURE_FLAGS=--disable-shared --enable-static --enable-stats --with-
 ONNX_VERSION=1.26.0
 ONNX_REPO_COMMIT=655365097e21c4df0f82337063f9a12b66700593
 ONNX_BASE_URL=https://github.com/matrixorigin/thirdparty/raw/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
+# GitHub's media endpoint serves the same immutable Git LFS objects directly.
+# It is used only after the primary endpoint times out and is still verified by
+# the platform-specific SHA-256 below.
+ONNX_FALLBACK_BASE_URL=https://media.githubusercontent.com/media/matrixorigin/thirdparty/$(ONNX_REPO_COMMIT)/onnxrt/$(ONNX_VERSION)
 # The MatrixOne CI builder image ships these pinned artifacts. Keep this a
 # versioned directory so a base-image update cannot accidentally satisfy a
 # different ONNX Runtime version. A local build simply falls back to DOWNLOAD.
@@ -231,7 +235,8 @@ onnxruntime: | init
 		actual_sha256="$$(shasum -a 256 "$$installed" | awk '{print $$1}')"; \
 		test "$$actual_sha256" = "$(ONNX_SHA256)" || { echo "ONNX Runtime checksum mismatch: got $$actual_sha256, expected $(ONNX_SHA256)" >&2; rm -f "$$installed"; exit 1; }; \
 	else \
-		$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "$$installed"; \
+		MO_DOWNLOAD_FALLBACK_URL="$(ONNX_FALLBACK_BASE_URL)/$(ONNX_SRC)" \
+			$(DOWNLOAD) "$(ONNX_BASE_URL)/$(ONNX_SRC)" "$(ONNX_SHA256)" "$$installed"; \
 	fi
 else
 onnxruntime:

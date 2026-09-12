@@ -258,13 +258,17 @@ func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error
 		strings.ToUpper(tbl.relKind) == "V" {
 		return nil, nil
 	}
-	return tbl.getEngine().Stats(ctx, pb.StatsInfoKey{
+	key := pb.StatsInfoKey{
 		AccId:      tbl.accountId,
 		DatabaseID: tbl.db.databaseId,
 		TableID:    tbl.tableId,
 		TableName:  tbl.tableName,
 		DbName:     tbl.db.databaseName,
-	}, sync), nil
+	}
+	if versioned, ok := tbl.getEngine().(engine.TableVersionedStats); ok {
+		return versioned.StatsAtTableVersion(ctx, key, sync, tbl.version), nil
+	}
+	return tbl.getEngine().Stats(ctx, key, sync), nil
 }
 
 func (tbl *txnTable) Rows(ctx context.Context) (uint64, error) {
@@ -695,7 +699,26 @@ func (tbl *txnTable) CollectTombstones(
 	txnOffset int,
 	policy engine.TombstoneCollectPolicy,
 ) (engine.Tombstoner, error) {
+	return tbl.collectTombstones(ctx, txnOffset, policy, nil)
+}
+
+func (tbl *txnTable) collectTombstones(
+	ctx context.Context,
+	txnOffset int,
+	policy engine.TombstoneCollectPolicy,
+	blocks []objectio.Blockid,
+) (engine.Tombstoner, error) {
 	tombstone := readutil.NewEmptyTombstoneData()
+	if blocks != nil {
+		blocks = slices.Clone(blocks)
+		slices.SortFunc(blocks, func(a, b objectio.Blockid) int {
+			return a.Compare(&b)
+		})
+		blocks = slices.CompactFunc(blocks, func(a, b objectio.Blockid) bool {
+			return a.EQ(&b)
+		})
+		tombstone = readutil.NewBlockScopedTombstoneData(blocks)
+	}
 
 	//collect uncommitted tombstones
 
@@ -731,9 +754,14 @@ func (tbl *txnTable) CollectTombstones(
 			})
 
 		//collect uncommitted in-memory tombstones belongs to blocks persisted by CN writing S3
-		tbl.getTxn().deletedBlocks.getDeletedRowIDs(func(row types.Rowid) {
+		appendDeletedRow := func(row types.Rowid) {
 			tombstone.AppendInMemory(row)
-		})
+		}
+		if blocks == nil {
+			tbl.getTxn().deletedBlocks.getDeletedRowIDs(appendDeletedRow)
+		} else {
+			tbl.getTxn().deletedBlocks.getDeletedRowIDsForBlocks(blocks, appendDeletedRow)
+		}
 
 		//collect uncommitted persisted tombstones.
 		if err := tbl.getTxn().getUncommittedS3Tombstone(
@@ -753,15 +781,32 @@ func (tbl *txnTable) CollectTombstones(
 		if err != nil {
 			return nil, err
 		}
-		{
+		collectRows := func(block *types.Blockid) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			ts := tbl.db.op.SnapshotTS()
-			iter := state.NewRowsIter(types.TimestampToTS(ts), nil, true)
+			iter := state.NewRowsIter(types.TimestampToTS(ts), block, true)
+			defer iter.Close()
 			for iter.Next() {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				entry := iter.Entry()
-				//bid, o := entry.RowID.Decode()
 				tombstone.AppendInMemory(entry.RowID)
 			}
-			iter.Close()
+			return nil
+		}
+		if blocks == nil {
+			if err = collectRows(nil); err != nil {
+				return nil, err
+			}
+		} else {
+			for i := range blocks {
+				if err = collectRows(&blocks[i]); err != nil {
+					return nil, err
+				}
+			}
 		}
 
 		//tombstone.SortInMemory()
@@ -2764,6 +2809,7 @@ func pkCommitTSMatchedInRange(
 }
 
 func (tbl *txnTable) PKPersistedBetween(
+	ctx context.Context,
 	p *logtailreplay.PartitionState,
 	from types.TS,
 	to types.TS,
@@ -2778,6 +2824,12 @@ func (tbl *txnTable) PKPersistedBetween(
 	candidateBlks := make(map[types.Blockid]*objectio.BlockInfo)
 	v2.TxnPKChangeCheckTotalCounter.Inc()
 	defer func() {
+		// A statement (including internal SQL in an existing transaction) may
+		// have a shorter lifetime than the relation's transaction process.
+		// Cancellation is terminal, not evidence of a PK/metadata conflict.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			changed, err = false, ctxErr
+		}
 		if err == nil && changed {
 			v2.TxnPKChangeCheckChangedCounter.Inc()
 		}
@@ -2805,7 +2857,9 @@ func (tbl *txnTable) PKPersistedBetween(
 			)
 		}
 	}()
-	ctx := tbl.proc.Load().Ctx
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	fs := tbl.getTxn().engine.fs
 	primaryIdx := tbl.primaryIdx
 
@@ -2829,6 +2883,9 @@ func (tbl *txnTable) PKPersistedBetween(
 	isFakePK := tbl.GetTableDef(ctx).Pkey.PkeyColName == catalog.FakePrimaryKeyColName
 	if err := ForeachCommittedObjects(cObjs, delObjs, p,
 		func(obj objectio.ObjectEntry) (err2 error) {
+			if err2 = ctx.Err(); err2 != nil {
+				return
+			}
 			var zmCkecked bool
 			if !isFakePK {
 				// if the object info contains a pk zonemap, fast-check with the zonemap
@@ -2907,7 +2964,7 @@ func (tbl *txnTable) PKPersistedBetween(
 	bytes, _ := keys.MarshalBinary()
 	colExpr := readutil.NewColumnExpr(0, plan2.MakePlan2Type(keys.GetType()), tbl.tableDef.Pkey.PkeyColName)
 	inExpr := plan2.MakeInExpr(
-		tbl.proc.Load().Ctx,
+		ctx,
 		colExpr,
 		int32(keys.Length()),
 		bytes,
@@ -2952,8 +3009,8 @@ func (tbl *txnTable) PKPersistedBetween(
 	if len(candidateBlks) > 0 {
 		// Acquire semaphore to limit concurrent block I/O across all transactions.
 		// This prevents 1000 goroutines from simultaneously reading blocks and
-		// exhausting mpool capacity. Scoped to the block loop only — tombstone
-		// checking below is not rate-limited by this semaphore.
+		// exhausting mpool capacity. Release before the tombstone phase, which
+		// acquires its own permit (never nest acquisitions).
 		if err := acquirePKCheckSemaphore(ctx); err != nil {
 			return false, err
 		}
@@ -2961,6 +3018,10 @@ func (tbl *txnTable) PKPersistedBetween(
 		v2.TxnPKChangeCheckIOCounter.Inc()
 
 		for _, blk := range candidateBlks {
+			if err := ctx.Err(); err != nil {
+				releasePKCheckSemaphore()
+				return false, err
+			}
 			searchFunc := filter.DecideSearchFunc(blk.IsSorted())
 			if searchFunc == nil {
 				searchFunc = buildUnsortedFilter()
@@ -3025,7 +3086,7 @@ func (tbl *txnTable) PKPersistedBetween(
 		pkDef := tbl.tableDef.Cols[tbl.primaryIdx]
 		pkType := plan2.ExprType2Type(&pkDef.Typ)
 		changed, tombstoneReason, err := tombstonePKExistsInRange(
-			ctx, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
+			ctx, tbl.tableId, p, from, to, keys, pkType, fs, tbl.proc.Load().GetMPool(),
 		)
 		if changed {
 			reason = tombstoneReason
@@ -3037,9 +3098,13 @@ func (tbl *txnTable) PKPersistedBetween(
 
 // tombstonePKExistsInRange checks whether any tombstone object created or deleted
 // after 'from' contains a PK that intersects with 'keys'.
-// If the total tombstone rows exceed the threshold, it conservatively returns true.
+// User tables retain a row-count cost guard. System catalog checks must inspect
+// the requested keys: unrelated DDL/compaction can rewrite many historical
+// tombstones, and a false conflict restarts the entire (potentially expensive)
+// DDL statement. Object row counts are not evidence of a catalog-key change.
 func tombstonePKExistsInRange(
 	ctx context.Context,
+	tableID uint64,
 	p *logtailreplay.PartitionState,
 	from types.TS,
 	to types.TS,
@@ -3048,17 +3113,36 @@ func tombstonePKExistsInRange(
 	fs fileservice.FileService,
 	mp *mpool.MPool,
 ) (bool, string, error) {
+	if err := ctx.Err(); err != nil {
+		return false, "", err
+	}
 	tombObjs := p.GetChangedTombstoneObjsBetween(from)
 	if len(tombObjs) == 0 {
 		return false, "", nil
 	}
 	const tombstoneRowsThreshold = 50000
-	var totalRows uint32
-	for i := range tombObjs {
-		totalRows += tombObjs[i].Rows()
-		if totalRows > tombstoneRowsThreshold {
-			return true, "tombstone_rows_bailout", nil
+	if !catalog.IsSystemTable(tableID) {
+		var totalRows uint64
+		for i := range tombObjs {
+			totalRows += uint64(tombObjs[i].Rows())
+			if totalRows > tombstoneRowsThreshold {
+				return true, "tombstone_rows_bailout", nil
+			}
 		}
+	}
+	// Bound concurrent pinned/decoded blocks, not the number of unrelated
+	// catalog rows. Each iteration releases its block before reading the next.
+	if err := acquirePKCheckSemaphore(ctx); err != nil {
+		return false, "", err
+	}
+	defer releasePKCheckSemaphore()
+	// Preserve conservative I/O-failure handling, but do not turn cancellation
+	// into a metadata-change retry. All readers receive the same caller context.
+	readFailure := func() (bool, string, error) {
+		if err := ctx.Err(); err != nil {
+			return false, "", err
+		}
+		return true, "tombstone_read_error", nil
 	}
 	searchKeys := LinearSearchOffsetByValFactory(keys)
 	var cachedSearch *objectio.ReadFilterSearch
@@ -3075,12 +3159,15 @@ func tombstonePKExistsInRange(
 	}
 	for _, obj := range tombObjs {
 		for blkIdx := uint32(0); blkIdx < obj.BlkCnt(); blkIdx++ {
+			if err := ctx.Err(); err != nil {
+				return false, "", err
+			}
 			loc := obj.BlockLocation(uint16(blkIdx), objectio.BlockMaxRows)
 			isCNCreated := obj.GetCNCreated()
 			if cachedSearch != nil {
 				// Tombstone objects are ordered by rowid, not by the copied PK
-				// column. Always use the linear search even when object metadata
-				// carries a sorted flag.
+				// column. Always use the unsorted-source search even when object
+				// metadata carries a sorted flag.
 				if isCNCreated {
 					hits, _, err := ioutil.LoadColumnDataBySearch(
 						ctx,
@@ -3095,7 +3182,7 @@ func tombstonePKExistsInRange(
 						fileservice.Policy(0),
 					)
 					if err != nil {
-						return true, "tombstone_read_error", nil
+						return readFailure()
 					}
 					if len(hits) > 0 {
 						return true, "tombstone_cn_hit", nil
@@ -3118,7 +3205,7 @@ func tombstonePKExistsInRange(
 					fileservice.Policy(0),
 				)
 				if err != nil {
-					return true, "tombstone_read_error", nil
+					return readFailure()
 				}
 				if !usable || changed {
 					if usable {
@@ -3136,7 +3223,7 @@ func tombstonePKExistsInRange(
 			tombVectors := containers.NewVectors(vecCount)
 			_, release, err := ioutil.ReadDeletes(ctx, loc, fs, isCNCreated, tombVectors, &pkType)
 			if err != nil {
-				return true, "tombstone_read_error", nil
+				return readFailure()
 			}
 			pkVec := tombVectors[1]
 			hits := searchKeys(&pkVec)
@@ -3369,6 +3456,7 @@ func (tbl *txnTable) primaryKeysMayBeChanged(
 	//need check pk whether exist on S3 block.
 	v2.TxnPKMayBeChangedPersistedCounter.Inc()
 	return tbl.PKPersistedBetween(
+		ctx,
 		snap,
 		from,
 		to,

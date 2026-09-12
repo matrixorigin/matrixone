@@ -7,6 +7,7 @@ on:
     paths:
       - go.mod
       - go.sum
+      - .golangci.yml
       - Makefile
       - cgo/*.c
       - cgo/*.h
@@ -16,6 +17,9 @@ on:
       - thirdparties/download
       - .github/workflows/sca-go-module-cache.yaml
   schedule:
+    # Keep the pre-existing module/native/tool caches inside the configured
+    # retention window. The expensive analysis below runs only on a cache miss,
+    # so daily keepalive no longer means daily full lint.
     - cron: "0 18 * * *"
   workflow_dispatch:
 
@@ -45,11 +49,56 @@ jobs:
           setup-java: false
           setup-cmake: true
           go-version-file: "${{ github.workspace }}/go.mod"
+      - name: Resolve analysis cache compression
+        id: analysis-cache-compression
+        run: |
+          set -euo pipefail
+          compression_probe=matrixone-sca-cache-compression-probe
+          if command -v zstd >/dev/null 2>&1; then
+            # actions/cache selects zstd when this command is present, then
+            # invokes zstdmt to create and unzstd to restore the archive.
+            # Reject a partial installation before the expensive analysis.
+            if ! zstd --quiet --version >/dev/null 2>&1; then
+              echo "::error::zstd is present but unusable"
+              exit 1
+            fi
+            missing_helpers=()
+            for helper in zstdmt unzstd; do
+              if ! command -v "$helper" >/dev/null 2>&1; then
+                missing_helpers+=("$helper")
+              fi
+            done
+            if (( ${#missing_helpers[@]} > 0 )); then
+              echo "::error::Incomplete zstd installation; missing: ${missing_helpers[*]}"
+              exit 1
+            fi
+            if ! round_trip="$(
+              printf '%s' "$compression_probe" | zstdmt -q -c | unzstd -q -c
+            )" || [[ "$round_trip" != "$compression_probe" ]]; then
+              echo "::error::zstd compression round-trip failed"
+              exit 1
+            fi
+            compression_method=zstd
+          elif command -v gzip >/dev/null 2>&1; then
+            # This is the supported actions/cache fallback when zstd is absent.
+            if ! round_trip="$(
+              printf '%s' "$compression_probe" | gzip -c | gzip -dc
+            )" || [[ "$round_trip" != "$compression_probe" ]]; then
+              echo "::error::gzip compression round-trip failed"
+              exit 1
+            fi
+            compression_method=gzip
+          else
+            echo "::error::Neither zstd nor gzip is available for the analysis cache"
+            exit 1
+          fi
+          echo "method=$compression_method" >> "$GITHUB_OUTPUT"
+          echo "Analysis cache compression: $compression_method"
       - name: Clean generated SCA outputs
         run: |
           set -euo pipefail
           make clean
-          rm -rf .sca-go-module-cache .sca-static-check-tools
+          rm -rf .sca-go-module-cache .sca-static-check-tools .sca-golangci-analysis-cache .sca-onnx-runtime
       - name: Resolve Go module cache metadata
         id: go-module-cache-metadata
         run: |
@@ -79,6 +128,26 @@ jobs:
         with:
           path: .sca-go-module-cache
           key: ${{ steps.go-module-cache.outputs.cache-primary-key }}
+      - name: Verify stable Go module cache path
+        run: |
+          set -euo pipefail
+          # golangci-lint includes absolute compiled-file paths in its package
+          # action IDs. Keep this path identical to the PR consumer instead of
+          # moving it into a fresh mktemp directory on every job.
+          test "$(go env GOMODCACHE)" = "$GITHUB_WORKSPACE/.sca-go-module-cache"
+      - name: Restore golangci-lint analysis cache
+        id: golangci-analysis-cache
+        uses: matrixorigin/CI/actions/restore-sca-analysis-cache@main
+      - name: Reject unusable exact analysis cache
+        if: steps.golangci-analysis-cache.outputs.cache-exact-match == 'true' && steps.golangci-analysis-cache.outputs.cache-usable != 'true'
+        env:
+          MATCHED_KEY: ${{ steps.golangci-analysis-cache.outputs.cache-matched-key }}
+        run: |
+          set -euo pipefail
+          echo "::error::The exact golangci-lint analysis cache is unusable and immutable; delete the matched cache key or wait for the weekly generation to rotate"
+          printf '### SCA cache repair required\n\nExact key `%s` exists but contains no usable analysis files. Warming cannot replace an existing GitHub Actions cache key.\n' \
+            "${MATCHED_KEY:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
       # Keep these metadata outputs and the key schema aligned with
       # matrixorigin/CI:.github/workflows/ci.yaml.
       - name: Resolve native cache metadata
@@ -101,6 +170,27 @@ jobs:
             cgo/libmo.a
             cgo/libmo.so
           key: matrixone-sca-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-cache-metadata.outputs.compiler }}-${{ steps.native-cache-metadata.outputs.cxx-compiler }}-${{ steps.native-cache-metadata.outputs.cmake }}-${{ hashFiles('Makefile', 'cgo/*.c', 'cgo/*.h', 'cgo/Makefile', 'thirdparties/Makefile', 'thirdparties/*.tar.gz', 'thirdparties/download') }}
+      - name: Restore ONNX Runtime fallback
+        id: onnx-cache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          # Keep a small fallback separate from the much larger native archive.
+          # Shanghai runners can often restore this archive even when a large
+          # cache transfer is reset, avoiding a second raw GitHub dependency.
+          path: .sca-onnx-runtime
+          key: matrixone-sca-onnx-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('thirdparties/Makefile', 'thirdparties/download') }}
+      - name: Verify restored ONNX Runtime fallback
+        if: steps.onnx-cache.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          mapfile -t onnx_files < <(find .sca-onnx-runtime -maxdepth 1 -type f -name 'onnxruntime*.so' -print)
+          if [[ "${#onnx_files[@]}" -ne 1 ]] || \
+            [[ ! -f .sca-onnx-runtime/SHA256SUMS ]] || \
+            ! (cd .sca-onnx-runtime && sha256sum --check --strict SHA256SUMS); then
+            echo "::error::The exact ONNX Runtime fallback cache is incomplete or corrupt and cannot be replaced in place"
+            printf '### SCA cache repair required\n\nDelete the exact ONNX Runtime fallback cache key so the trusted producer can publish it again.\n' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
       - name: Build native SCA prerequisites
         if: steps.native-cache.outputs.cache-hit != 'true'
         run: |
@@ -108,7 +198,11 @@ jobs:
           # Top-level cgo is the single complete-generation owner and already
           # builds/stages thirdparties. A standalone pre-build has no complete
           # provenance stamp and would be conservatively deleted and repeated.
-          make cgo
+          if [[ "${{ steps.onnx-cache.outputs.cache-hit }}" == "true" ]]; then
+            make ONNX_PREBUILT_DIR="$GITHUB_WORKSPACE/.sca-onnx-runtime" cgo
+          else
+            make cgo
+          fi
           test -f thirdparties/install/include/xxhash.h
           test -f thirdparties/install/include/usearch.h
           test -f cgo/libmo.so
@@ -122,6 +216,25 @@ jobs:
           find thirdparties/install/lib -maxdepth 1 -type f -name 'onnxruntime*.so' -print -quit | grep -q .
           test -f cgo/libmo.a
           test -f cgo/libmo.so
+      - name: Stage ONNX Runtime fallback
+        if: steps.onnx-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mapfile -t onnx_files < <(find thirdparties/install/lib -maxdepth 1 -type f -name 'onnxruntime*.so' -print)
+          test "${#onnx_files[@]}" -eq 1
+          rm -rf .sca-onnx-runtime
+          mkdir .sca-onnx-runtime
+          cp "${onnx_files[0]}" .sca-onnx-runtime/
+          (
+            cd .sca-onnx-runtime
+            sha256sum onnxruntime*.so > SHA256SUMS
+          )
+      - name: Save ONNX Runtime fallback
+        if: steps.onnx-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .sca-onnx-runtime
+          key: ${{ steps.onnx-cache.outputs.cache-primary-key }}
       - name: Save native SCA prerequisites
         if: steps.native-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
@@ -165,3 +278,82 @@ jobs:
         with:
           path: .sca-static-check-tools
           key: ${{ steps.static-check-tool-cache.outputs.cache-primary-key }}
+      - name: Prepare SCA environment
+        run: |
+          set -euo pipefail
+          rm -rf .sca-onnx-runtime
+          rm -rf "$GITHUB_WORKSPACE/lib"
+          cp -r thirdparties/install/lib "$GITHUB_WORKSPACE/lib"
+          runtime_dir="$(mktemp -d "${RUNNER_TEMP%/}/matrixone-sca-tools.XXXXXX")"
+          mv .sca-static-check-tools/* "$runtime_dir/"
+          rmdir .sca-static-check-tools
+          echo "$runtime_dir" >> "$GITHUB_PATH"
+      - name: Warm golangci-lint analysis cache
+        id: warm-analysis-cache
+        if: steps.golangci-analysis-cache.outputs.cache-hit != 'true'
+        env:
+          CACHE_COMPRESSION_METHOD: ${{ steps.analysis-cache-compression.outputs.method }}
+        run: |
+          set -euo pipefail
+          # The producer is not a validation gate: populate only the cache
+          # consumed by golangci-lint. PR SCA still runs molint, golangci-lint,
+          # and the applicable complete/incremental license checks.
+          make static-check-golangci GOLANGCI_LINT_CONCURRENCY=1
+          cache_files="$(find "$GOLANGCI_LINT_CACHE" -type f -print | wc -l | tr -d ' ')"
+          max_cache_files=200000
+          if (( cache_files == 0 )); then
+            echo "::error::golangci-lint completed without producing analysis cache files"
+            printf '### SCA cache publication failed\n\nThe analyzer produced an empty cache.\n' >> "$GITHUB_STEP_SUMMARY"
+            echo "cache-within-budget=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          elif (( cache_files > max_cache_files )); then
+            echo "::error::golangci-lint cache exceeds the 200,000-file publication budget"
+            printf '### SCA cache publication failed\n\nCache files: %s\n\nBudget: %s files\n' \
+              "$cache_files" "$max_cache_files" >> "$GITHUB_STEP_SUMMARY"
+            echo "cache-within-budget=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          # GitHub accounts cache quota against the uploaded compressed archive,
+          # not filesystem blocks. Match actions/cache's zstd-or-gzip selection
+          # so this estimate remains valid on runner images without zstd.
+          case "$CACHE_COMPRESSION_METHOD" in
+            zstd)
+              # actions/cache uses the multithreaded alias when creating its
+              # archive, so measure with the same compressor.
+              compressor=(zstdmt -q -c)
+              ;;
+            gzip)
+              compressor=(gzip -c)
+              ;;
+            *)
+              echo "::error::Unsupported analysis cache compression method: $CACHE_COMPRESSION_METHOD"
+              exit 1
+              ;;
+          esac
+          cache_archive_bytes="$(
+            tar -C "$GOLANGCI_LINT_CACHE" -cf - . | "${compressor[@]}" | wc -c | tr -d ' '
+          )"
+          cache_archive_kib=$(((cache_archive_bytes + 1023) / 1024))
+          max_cache_kib=$((160 * 1024))
+          echo "golangci-lint cache: ${cache_files} files, estimated ${CACHE_COMPRESSION_METHOD} archive $((cache_archive_kib / 1024)) MiB (limit: $((max_cache_kib / 1024)) MiB)"
+          if (( cache_archive_kib > max_cache_kib )); then
+            echo "::error::golangci-lint cache exceeds the 160 MiB compressed publication budget"
+            printf '### SCA cache publication failed\n\nEstimated %s archive: %s MiB\n\nBudget: %s MiB\n' \
+              "$CACHE_COMPRESSION_METHOD" "$((cache_archive_kib / 1024))" "$((max_cache_kib / 1024))" >> "$GITHUB_STEP_SUMMARY"
+            echo "cache-within-budget=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "cache-within-budget=true" >> "$GITHUB_OUTPUT"
+      - name: Stage golangci-lint analysis cache
+        if: steps.golangci-analysis-cache.outputs.cache-hit != 'true' && steps.warm-analysis-cache.outputs.cache-within-budget == 'true'
+        run: |
+          set -euo pipefail
+          staging_dir="$GITHUB_WORKSPACE/.sca-golangci-analysis-cache"
+          mkdir "$staging_dir"
+          mv "$GOLANGCI_LINT_CACHE" "$staging_dir/golangci-lint"
+      - name: Save golangci-lint analysis cache
+        if: steps.golangci-analysis-cache.outputs.cache-hit != 'true' && steps.warm-analysis-cache.outputs.cache-within-budget == 'true'
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .sca-golangci-analysis-cache
+          key: ${{ steps.golangci-analysis-cache.outputs.cache-primary-key }}

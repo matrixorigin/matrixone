@@ -43,6 +43,24 @@ type releaseTrackingData struct {
 	bytes    []byte
 }
 
+func TestNewJsonVectorFromValuesUsesByteAdmission(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	values := []string{`{"a":1}`, `[1,2]`}
+	vec := NewVector(len(values), types.T_json.ToType(), mp, false, values)
+	require.NotNil(t, vec)
+	defer vec.Free(mp)
+
+	for i, value := range values {
+		parsed, err := types.ParseStringToByteJson(value)
+		require.NoError(t, err)
+		expected, err := parsed.Marshal()
+		require.NoError(t, err)
+		require.Equal(t, expected, vec.GetBytesAt(i))
+	}
+}
+
 func TestValidatedVectorCacheDataRehomePreservesValidation(t *testing.T) {
 	ctx := context.Background()
 	source := &validatedVectorCacheData{
@@ -1017,6 +1035,41 @@ func TestReadFilterPrefixSearchDoesNotAllocatePerBlockRow(t *testing.T) {
 		result.AllocedBytesPerOp(),
 		int64(4<<10),
 		"sparse PREFIX_IN must not allocate a block-sized marks array",
+	)
+}
+
+func TestCombinedReadFilterSearchDoesNotAllocatePerBlockRow(t *testing.T) {
+	const rowCount = 8192
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	source := vector.NewVec(types.T_varchar.ToType())
+	for row := 0; row < rowCount; row++ {
+		require.NoError(t, vector.AppendBytes(
+			source,
+			[]byte(fmt.Sprintf("key-%05d", row)),
+			false,
+			mp,
+		))
+	}
+	defer source.Free(mp)
+	search := CombineReadFilterSearch(
+		NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("key-00123")}),
+		NewReadFilterSearch(types.T_varchar, [][]byte{[]byte("key-07111")}),
+	)
+
+	result := testing.Benchmark(func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			rows := search.search(source, true)
+			if len(rows) != 2 || rows[0] != 123 || rows[1] != 7111 {
+				b.Fatalf("unexpected exact hits: %v", rows)
+			}
+		}
+	})
+	require.Less(
+		t,
+		result.AllocedBytesPerOp(),
+		int64(16<<10),
+		"combined exact search must not allocate an int64 mark per source row",
 	)
 }
 

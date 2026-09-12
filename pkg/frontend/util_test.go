@@ -1098,6 +1098,16 @@ func TestRewriteError(t *testing.T) {
 			want2: "internal error: xxxx",
 		},
 		{
+			name: "canonical catalog rejection",
+			args: args{
+				err:      markAuthenticationRejected(moerr.NewInternalErrorNoCtx("there is no user dump")),
+				username: "tenant:dump",
+			},
+			want:  moerr.ER_ACCESS_DENIED_ERROR,
+			want1: "28000",
+			want2: "Access denied for user tenant:dump. internal error: there is no user dump",
+		},
+		{
 			name: "t8",
 			args: args{
 				err:      moerr.NewBadDBNoCtx("yyy"),

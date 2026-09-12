@@ -13,6 +13,18 @@ explicit_pos_match
 SELECT REGEXP_INSTR('', 'x', 1) AS explicit_pos_no_match;
 explicit_pos_no_match
 0
+SELECT REGEXP_INSTR('', '^$', 5) AS empty_subject_late_anchor,
+REGEXP_INSTR('', '.', 5) AS empty_subject_late_no_match,
+REGEXP_INSTR('', '^$', 5, 2) AS empty_subject_second_occurrence,
+REGEXP_INSTR(CAST(_binary'' AS VARBINARY(1)), CAST(_binary'^$' AS VARBINARY(2)), 5, 1, 1) AS empty_binary_late_anchor;
+empty_subject_late_anchor    empty_subject_late_no_match    empty_subject_second_occurrence    empty_binary_late_anchor
+5    0    0    5
+SELECT REGEXP_INSTR(NULL, '');
+Illegal argument to a regular expression.
+SELECT REGEXP_INSTR('abc', '', 0);
+Illegal argument to a regular expression.
+SELECT REGEXP_INSTR(NULL, '*');
+invalid argument regexp_instr have invalid regexp pattern arg, bad value [*]
 SELECT REGEXP_INSTR('Cat', 'at') Result;
 result
 2
@@ -230,3 +242,157 @@ regexp_substr(col1, a, 1)
 a
 a
 drop database big_data_test;
+SELECT REGEXP_INSTR('甲😀乙😀丙', '😀') AS first_start,
+REGEXP_INSTR('甲😀乙😀丙', '😀', 1, 2, 0) AS second_start,
+REGEXP_INSTR('甲😀乙😀丙', '😀', 1, 2, 1) AS second_end,
+REGEXP_INSTR('甲😀乙😀丙', '😀', 3, 1, 0) AS from_third;
+first_start    second_start    second_end    from_third
+2    4    5    4
+SELECT REGEXP_SUBSTR('甲😀乙😀丙', '😀', 3, 1) AS second_emoji,
+REGEXP_REPLACE('甲😀乙😀丙', '😀', 'X', 3, 1) AS replace_one,
+REGEXP_REPLACE('甲😀乙😀丙', '😀', 'X', 3, 0) AS replace_all_from_pos;
+second_emoji    replace_one    replace_all_from_pos
+😀    甲😀乙X丙    甲😀乙X丙
+SELECT REGEXP_INSTR('abc', '^', 2) AS instr_beginning,
+REGEXP_INSTR('abc', '(?m)^b', 2) AS instr_multiline_beginning,
+REGEXP_INSTR(CAST(_binary'中' AS VARBINARY(3)), CAST(_binary'^.' AS VARBINARY(2)), 2) AS binary_beginning;
+instr_beginning    instr_multiline_beginning    binary_beginning
+2    2    2
+SELECT REGEXP_SUBSTR('abc', '^', 2) IS NULL AS substr_original_anchor,
+REGEXP_REPLACE('abc', '^', 'X', 2) AS replace_original_anchor;
+substr_original_anchor    replace_original_anchor
+1    abc
+DROP DATABASE IF EXISTS regexp_utf8_test;
+CREATE DATABASE regexp_utf8_test;
+USE regexp_utf8_test;
+DROP TABLE IF EXISTS t_regexp_utf8;
+CREATE TABLE t_regexp_utf8(id INT PRIMARY KEY, s VARCHAR(40), vb VARBINARY(6), bl BLOB);
+INSERT INTO t_regexp_utf8 VALUES
+(1, '甲😀乙😀丙', _binary'中中', _binary'中中'),
+(2, 'ASCII', _binary'ASCII', _binary'ASCII');
+SELECT id, REGEXP_INSTR(s, '😀', 3, 1, 0) AS pos FROM t_regexp_utf8 ORDER BY id;
+id    pos
+1    4
+2    0
+SELECT id, REGEXP_REPLACE(s, '😀', 'X', 3, 0) AS replaced FROM t_regexp_utf8 ORDER BY id;
+id    replaced
+1    甲😀乙X丙
+2    ASCII
+SELECT ORD(vb) AS vb_ord, ORD(bl) AS blob_ord,
+REGEXP_INSTR(vb, CAST(_binary'中' AS VARBINARY(3)), 2) AS vb_pos,
+REGEXP_INSTR(bl, CAST(_binary'中' AS BINARY(3)), 2) AS blob_pos,
+HEX(REGEXP_SUBSTR(bl, CAST(_binary'中' AS BINARY(3)), 2)) AS blob_substr,
+HEX(REGEXP_REPLACE(bl, CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS blob_replace
+FROM t_regexp_utf8 WHERE id = 1;
+vb_ord    blob_ord    vb_pos    blob_pos    blob_substr    blob_replace
+228    228    4    4    E4B8AD    E4B8AD58
+SELECT REGEXP_INSTR(bl, '中', 2) AS blob_text_pos,
+REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), '中', 2) AS binary_text_pos
+FROM t_regexp_utf8 WHERE id = 1;
+blob_text_pos    binary_text_pos
+4    4
+PREPARE regexp_domain_rebind FROM
+'SELECT ORD(?), REGEXP_INSTR(?, CAST(_binary''中'' AS VARBINARY(3)), 2), ORD(REGEXP_SUBSTR(?, CAST(_binary''中'' AS VARBINARY(3)), 2))';
+SET @regexp_subject = CAST(_binary'中中' AS VARBINARY(6));
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+ord(?)    regexp_instr(?, cast(_binary'中' as varbinary(3)), 2)    ord(regexp_substr(?, cast(_binary'中' as varbinary(3)), 2))
+228    4    228
+SET @regexp_subject = '中中';
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+SET @regexp_subject = NULL;
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+SET @regexp_subject = CAST(_binary'中中' AS BLOB);
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+ord(?)    regexp_instr(?, cast(_binary'中' as varbinary(3)), 2)    ord(regexp_substr(?, cast(_binary'中' as varbinary(3)), 2))
+228    4    228
+DEALLOCATE PREPARE regexp_domain_rebind;
+PREPARE regexp_marker_static_text FROM
+'SELECT REGEXP_INSTR(?, ''b'') AS marker_static_text';
+SET @regexp_marker_subject = CAST(_binary'abc' AS VARBINARY(3));
+EXECUTE regexp_marker_static_text USING @regexp_marker_subject;
+marker_static_text
+2
+SET @regexp_marker_subject = 'abc';
+EXECUTE regexp_marker_static_text USING @regexp_marker_subject;
+marker_static_text
+2
+DEALLOCATE PREPARE regexp_marker_static_text;
+PREPARE regexp_scalar_domain_rebind FROM
+'SELECT REGEXP_INSTR((SELECT ? FROM t_regexp_utf8 LIMIT 1), (SELECT ? FROM t_regexp_utf8 LIMIT 1), 2) AS scalar_pos';
+SET @regexp_scalar_subject = CAST(_binary'中中' AS VARBINARY(6));
+SET @regexp_scalar_pattern = CAST(_binary'中' AS VARBINARY(3));
+EXECUTE regexp_scalar_domain_rebind USING @regexp_scalar_subject, @regexp_scalar_pattern;
+scalar_pos
+4
+SET @regexp_scalar_subject = '中中';
+SET @regexp_scalar_pattern = '中';
+EXECUTE regexp_scalar_domain_rebind USING @regexp_scalar_subject, @regexp_scalar_pattern;
+scalar_pos
+2
+SET @regexp_scalar_subject = CAST(_binary'中中' AS BLOB);
+EXECUTE regexp_scalar_domain_rebind USING @regexp_scalar_subject, @regexp_scalar_pattern;
+scalar_pos
+4
+SET @regexp_scalar_subject = CAST(_binary'中中' AS VARBINARY(6));
+EXECUTE regexp_scalar_domain_rebind USING @regexp_scalar_subject, @regexp_scalar_pattern;
+scalar_pos
+4
+DEALLOCATE PREPARE regexp_scalar_domain_rebind;
+PREPARE regexp_derived_scalar_domain_rebind FROM
+'SELECT REGEXP_INSTR((SELECT d.subject FROM (SELECT ? AS subject) d), (SELECT d.pattern FROM (SELECT ? AS pattern) d), 2) AS derived_scalar_pos';
+SET @regexp_derived_subject = CAST(_binary'中中' AS VARBINARY(6));
+SET @regexp_derived_pattern = CAST(_binary'中' AS VARBINARY(3));
+EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
+derived_scalar_pos
+4
+SET @regexp_derived_subject = '中中';
+SET @regexp_derived_pattern = '中';
+EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
+derived_scalar_pos
+2
+SET @regexp_derived_subject = CAST(_binary'中中' AS VARBINARY(6));
+EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
+derived_scalar_pos
+4
+SET @regexp_derived_pattern = CAST(_binary'中' AS VARBINARY(3));
+EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
+derived_scalar_pos
+4
+DEALLOCATE PREPARE regexp_derived_scalar_domain_rebind;
+PREPARE regexp_nested_domain_rebind FROM
+'SELECT ORD(REGEXP_SUBSTR(?, ?)), REGEXP_INSTR(REGEXP_SUBSTR(?, ?), CAST(_binary''.'' AS VARBINARY(1)), 1)';
+SET @regexp_nested_subject = CAST(_binary'中中' AS VARBINARY(6));
+SET @regexp_nested_pattern = CAST(_binary'中' AS VARBINARY(3));
+EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
+ord(regexp_substr(?, ?))    regexp_instr(regexp_substr(?, ?), cast(_binary'.' as varbinary(1)), 1)
+228    1
+SET @regexp_nested_subject = '中中';
+SET @regexp_nested_pattern = '中';
+EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+SET @regexp_nested_subject = NULL;
+SET @regexp_nested_pattern = NULL;
+EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+SET @regexp_nested_subject = CAST(_binary'中中' AS BLOB);
+SET @regexp_nested_pattern = CAST(_binary'中' AS BLOB);
+EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
+ord(regexp_substr(?, ?))    regexp_instr(regexp_substr(?, ?), cast(_binary'.' as varbinary(1)), 1)
+228    1
+DEALLOCATE PREPARE regexp_nested_domain_rebind;
+PREPARE regexp_nested_replacement_static_mismatch FROM
+'SELECT REGEXP_INSTR(REGEXP_REPLACE(''a'', ''a'', ?), CAST(_binary''a'' AS VARBINARY(1)), 1)';
+Character set 'utf8mb4_general_ci' cannot be used in conjunction with 'binary' in call to regexp_instr.
+DROP TABLE t_regexp_utf8;
+DROP DATABASE regexp_utf8_test;
+SELECT REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), 2) AS binary_pos,
+REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2) AS varbinary_pos,
+REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2, 1, 1) AS varbinary_end;
+binary_pos    varbinary_pos    varbinary_end
+4    4    7
+SELECT REGEXP_INSTR(CAST(X'FF' AS BINARY(1)), CAST(X'5C784646' AS BINARY(4))) AS hex_escape,
+REGEXP_INSTR(CAST(X'FF' AS BINARY(1)), CAST(X'5B5C7838302D5C7846465D' AS BINARY(11))) AS byte_range;
+hex_escape    byte_range
+1    1

@@ -1,0 +1,43 @@
+drop database if exists mysql_compat_window_default_frame;
+create database mysql_compat_window_default_frame;
+use mysql_compat_window_default_frame;
+create table t (id int primary key, o int, v int);
+insert into t values (1,1,20),(2,1,20),(3,2,30),(4,3,40);
+select id,
+last_value(v) over (order by o) as lv,
+nth_value(v, 3) over (order by o) as nv
+from t order by id;
+➤ id[4,32,0]  ¦  lv[4,32,0]  ¦  nv[4,32,0]  𝄀
+1  ¦  20  ¦  null  𝄀
+2  ¦  20  ¦  null  𝄀
+3  ¦  30  ¦  30  𝄀
+4  ¦  40  ¦  30
+select id,
+last_value(v) over (
+order by o range between unbounded preceding and current row
+) as lv,
+nth_value(v, 3) over (
+order by o range between unbounded preceding and current row
+) as nv
+from t order by id;
+➤ id[4,32,0]  ¦  lv[4,32,0]  ¦  nv[4,32,0]  𝄀
+1  ¦  20  ¦  null  𝄀
+2  ¦  20  ¦  null  𝄀
+3  ¦  30  ¦  30  𝄀
+4  ¦  40  ¦  30
+select id,
+last_value(v) over (
+order by o rows between unbounded preceding and unbounded following
+) as lv,
+nth_value(v, 3) over (
+order by o rows between unbounded preceding and unbounded following
+) as nv
+from t order by id;
+➤ id[4,32,0]  ¦  lv[4,32,0]  ¦  nv[4,32,0]  𝄀
+1  ¦  40  ¦  30  𝄀
+2  ¦  40  ¦  30  𝄀
+3  ¦  40  ¦  30  𝄀
+4  ¦  40  ¦  30
+drop database mysql_compat_window_default_frame;
+show databases like 'mysql_compat_window_default_frame';
+➤ Database[12,5000,0]

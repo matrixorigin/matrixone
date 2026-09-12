@@ -343,6 +343,9 @@ func (c *Config) Validate() error {
 	if c.UUID == "" {
 		panic("missing cn store UUID")
 	}
+	if err := validateCNServiceUUID(c.UUID); err != nil {
+		return err
+	}
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
 	}
@@ -511,6 +514,16 @@ func (c *Config) Validate() error {
 		moruntime.EnablePipelineStreamReuse,
 		!c.Pipeline.DisableStreamReuse,
 	)
+	return nil
+}
+
+func validateCNServiceUUID(serviceID string) error {
+	if serviceID == "" || serviceID == "." || serviceID == ".." || strings.ContainsAny(serviceID, `/\`) {
+		return moerr.NewBadConfigNoCtxf(
+			"CN service UUID %q must be a single path component",
+			serviceID,
+		)
+	}
 	return nil
 }
 

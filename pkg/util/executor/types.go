@@ -102,8 +102,11 @@ type StatementOption struct {
 	paramNulls               []bool
 	alterCopyOpt             *plan.AlterCopyOpt
 	disableDropAutoIncrement bool
+	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
 	keepLogicalId            uint64
+	keepRelKind              string
+	hasKeepRelKind           bool
 	disableLock              bool
 	allowMoColumnsUpdate     bool
 }

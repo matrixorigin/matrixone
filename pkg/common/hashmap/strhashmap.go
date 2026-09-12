@@ -112,6 +112,7 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		itr.zValues[i] = 0
 	}
 	const maxInt = int(^uint(0) >> 1)
+	flatFixedSize := 0
 	add := func(row int, size int) error {
 		if size < 0 || itr.zValues[row] > int64(maxInt-size) {
 			return mpool.ErrAllocationAccountInvalid
@@ -151,11 +152,10 @@ func (itr *strHashmapIterator) prepareHashKeys(
 		if !hasGrouping && !vec.GetNulls().Any() {
 			if vec.GetType().IsFixedLen() {
 				size := prefix + vec.GetType().TypeSize()
-				for i := 0; i < count; i++ {
-					if err := add(i, size); err != nil {
-						return err
-					}
+				if size < 0 || flatFixedSize > maxInt-size {
+					return mpool.ErrAllocationAccountInvalid
 				}
+				flatFixedSize += size
 				continue
 			}
 			if vec.IsConst() {
@@ -228,6 +228,13 @@ func (itr *strHashmapIterator) prepareHashKeys(
 			if err := add(i, prefix+4+valueSize); err != nil {
 				return err
 			}
+		}
+	}
+	// Fixed, flat columns contribute the same width to every row. Accumulate
+	// them once above instead of walking the row set once per key column.
+	for i := 0; i < count; i++ {
+		if err := add(i, flatFixedSize); err != nil {
+			return err
 		}
 	}
 
@@ -597,6 +604,15 @@ func fillGroupingAwareStr(
 	start int,
 ) {
 	keys := itr.keys
+	// Nullable and grouping-aware maps use a domain byte before every ordinary
+	// value. Most batches contain neither NULL nor GROUPING rows, though. Keep
+	// that common case on flat vector data so the hot path does not probe two
+	// bitmaps and redispatch the vector representation for every row.
+	if vec.GetType().IsFixedLen() && !vec.IsConstNull() &&
+		!vec.HasGrouping() && !vec.GetNulls().Any() {
+		fillFlatFixedGroupingAwareStr(keys, vec, n, start)
+		return
+	}
 	if vec.IsGrouping() {
 		for i := 0; i < n; i++ {
 			keys[i] = append(keys[i], byte(2))
@@ -659,6 +675,52 @@ func fillGroupingAwareStr(
 		length := uint32(len(value))
 		keys[i] = append(keys[i], util.UnsafeToBytes(&length)...)
 		keys[i] = append(keys[i], value...)
+	}
+}
+
+func fillFlatFixedGroupingAwareStr(
+	keys [][]byte,
+	vec *vector.Vector,
+	n int,
+	start int,
+) {
+	valueRow := start
+	if vec.IsConst() {
+		valueRow = 0
+	}
+	switch vec.GetType().Oid {
+	case types.T_float32:
+		values := vector.MustFixedColNoTypeCheck[float32](vec)
+		codec := keycodec.NewFloat32Codec(vec.GetType().Scale)
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(0))
+			value := codec.CanonicalBytes(values[valueRow])
+			keys[i] = append(keys[i], value[:]...)
+			if !vec.IsConst() {
+				valueRow++
+			}
+		}
+	case types.T_float64:
+		values := vector.MustFixedColNoTypeCheck[float64](vec)
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(0))
+			value := keycodec.CanonicalFloat64Bytes(values[valueRow])
+			keys[i] = append(keys[i], value[:]...)
+			if !vec.IsConst() {
+				valueRow++
+			}
+		}
+	default:
+		width := vec.GetType().TypeSize()
+		data := vec.GetData()
+		for i := 0; i < n; i++ {
+			keys[i] = append(keys[i], byte(0))
+			offset := valueRow * width
+			keys[i] = append(keys[i], data[offset:offset+width]...)
+			if !vec.IsConst() {
+				valueRow++
+			}
+		}
 	}
 }
 

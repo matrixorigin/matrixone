@@ -277,7 +277,7 @@ SELECT (SELECT COUNT(DISTINCT 12)) FROM t1 GROUP BY t1.a;
 1  𝄀
 1
 SELECT AVG(2), BIT_AND(2), BIT_OR(2), BIT_XOR(2), COUNT(*), COUNT(12),COUNT(DISTINCT 12), MIN(2),MAX(2),STD(2), VARIANCE(2),SUM(2);
-➤ AVG(2)[8,54,0]  ¦  BIT_AND(2)[-5,64,0]  ¦  BIT_OR(2)[-5,64,0]  ¦  BIT_XOR(2)[-5,64,0]  ¦  COUNT(*)[-5,64,0]  ¦  COUNT(12)[-5,64,0]  ¦  COUNT(distinct 12)[-5,64,0]  ¦  MIN(2)[-5,64,0]  ¦  MAX(2)[-5,64,0]  ¦  STD(2)[8,54,0]  ¦  VARIANCE(2)[8,54,0]  ¦  SUM(2)[-5,64,0]  𝄀
+➤ AVG(2)[3,5,4]  ¦  BIT_AND(2)[-5,64,0]  ¦  BIT_OR(2)[-5,64,0]  ¦  BIT_XOR(2)[-5,64,0]  ¦  COUNT(*)[-5,64,0]  ¦  COUNT(12)[-5,64,0]  ¦  COUNT(distinct 12)[-5,64,0]  ¦  MIN(2)[-5,64,0]  ¦  MAX(2)[-5,64,0]  ¦  STD(2)[8,54,0]  ¦  VARIANCE(2)[8,54,0]  ¦  SUM(2)[-5,64,0]  𝄀
 2.0  ¦  2  ¦  2  ¦  2  ¦  1  ¦  1  ¦  1  ¦  2  ¦  2  ¦  0.0  ¦  0.0  ¦  2
 DROP TABLE t1;
 CREATE TABLE t1 (col1 decimal(16,12));

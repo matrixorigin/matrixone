@@ -469,7 +469,7 @@ func TestRunCountStarUsesDedupedDocLenForBM25(t *testing.T) {
 
 	_, err := runCountStar(&fulltextState{}, proc, s)
 	require.NoError(t, err)
-	require.Equal(t, "SELECT COUNT(*), AVG(pos) from (SELECT doc_id, MAX(pos) AS pos from idx_table where word = '__DocLen' GROUP BY doc_id) doc_len", gotSQL)
+	require.Equal(t, "SELECT COUNT(*), AVG(CAST(pos AS DOUBLE)) from (SELECT doc_id, MAX(pos) AS pos from idx_table where word = '__DocLen' GROUP BY doc_id) doc_len", gotSQL)
 	require.Equal(t, int64(100), s.Nrow)
 	require.InDelta(t, 10.6666, s.AvgDocLen, 1e-9)
 }

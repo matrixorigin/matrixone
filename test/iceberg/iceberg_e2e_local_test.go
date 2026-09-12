@@ -842,18 +842,39 @@ func TestLocalE2EWaitForLifecycleFaultWaitersRejectsInvalidResponses(t *testing.
 	}
 }
 
-func TestLocalE2EWaitForLifecycleFaultWaitersHonorsDeadline(t *testing.T) {
+func TestLocalE2EWaitForLifecycleFaultWaitersStopsAfterPollingCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	driver := &lifecycleWaiterTestDriver{
+		cancel:           cancel,
+		firstQueryClosed: make(chan struct{}),
+	}
+	db := sql.OpenDB(driver)
+	defer db.Close()
+
+	if err := waitForLifecycleFaultWaiters(ctx, db, icebergCreateAfterCatalogLockWaitersFault, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("lifecycle fault waiter ignored cancellation after polling: %v", err)
+	}
+	select {
+	case <-driver.firstQueryClosed:
+	default:
+		t.Fatal("lifecycle fault waiter returned before completing the first query")
+	}
+	if got := driver.queryCount(); got != 1 {
+		t.Fatalf("lifecycle fault waiter issued %d queries after cancellation", got)
+	}
+}
+
+func TestLocalE2EWaitForLifecycleFaultWaitersStopsBeforePollingCanceledContext(t *testing.T) {
 	db, mock := newLocalE2ESQLMock(t)
 	defer db.Close()
-	mock.ExpectQuery("select trigger_fault_point").
-		WillReturnRows(sqlmock.NewRows([]string{"waiters"}).AddRow(int64(0)))
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)
-	defer cancel()
-	if err := waitForLifecycleFaultWaiters(ctx, db, icebergCreateAfterCatalogLockWaitersFault, 1); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("lifecycle fault waiter ignored deadline: %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := waitForLifecycleFaultWaiters(ctx, db, icebergCreateAfterCatalogLockWaitersFault, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("lifecycle fault waiter ignored canceled context: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("lifecycle-fault waiter deadline expectation: %v", err)
+		t.Fatalf("canceled lifecycle-fault waiter issued a query: %v", err)
 	}
 }
 
@@ -1101,6 +1122,82 @@ func TestLocalE2ERestoreSessionLockWaitTimeoutFailureDiscardsConnection(t *testi
 type sessionTimeoutTestDriver struct {
 	mu    sync.Mutex
 	conns []*sessionTimeoutTestConn
+}
+
+type lifecycleWaiterTestDriver struct {
+	mu               sync.Mutex
+	queries          int
+	cancel           context.CancelFunc
+	firstQueryClosed chan struct{}
+}
+
+func (d *lifecycleWaiterTestDriver) Connect(context.Context) (driver.Conn, error) {
+	return &lifecycleWaiterTestConn{driver: d}, nil
+}
+
+func (d *lifecycleWaiterTestDriver) Driver() driver.Driver { return d }
+
+func (d *lifecycleWaiterTestDriver) Open(string) (driver.Conn, error) {
+	return d.Connect(context.Background())
+}
+
+func (d *lifecycleWaiterTestDriver) recordQuery() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.queries++
+	return d.queries == 1
+}
+
+func (d *lifecycleWaiterTestDriver) queryCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.queries
+}
+
+type lifecycleWaiterTestConn struct {
+	driver *lifecycleWaiterTestDriver
+}
+
+func (c *lifecycleWaiterTestConn) Prepare(string) (driver.Stmt, error) {
+	return nil, errors.New("prepare is not supported by lifecycle waiter test driver")
+}
+
+func (c *lifecycleWaiterTestConn) Close() error { return nil }
+
+func (c *lifecycleWaiterTestConn) Begin() (driver.Tx, error) {
+	return nil, errors.New("transactions are not supported by lifecycle waiter test driver")
+}
+
+func (c *lifecycleWaiterTestConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	if !c.driver.recordQuery() {
+		return nil, errors.New("unexpected lifecycle waiter query after cancellation")
+	}
+	return &lifecycleWaiterTestRows{driver: c.driver}, nil
+}
+
+type lifecycleWaiterTestRows struct {
+	driver   *lifecycleWaiterTestDriver
+	closed   sync.Once
+	returned bool
+}
+
+func (r *lifecycleWaiterTestRows) Columns() []string { return []string{"waiters"} }
+
+func (r *lifecycleWaiterTestRows) Close() error {
+	r.closed.Do(func() {
+		close(r.driver.firstQueryClosed)
+		r.driver.cancel()
+	})
+	return nil
+}
+
+func (r *lifecycleWaiterTestRows) Next(dest []driver.Value) error {
+	if r.returned {
+		return io.EOF
+	}
+	dest[0] = int64(0)
+	r.returned = true
+	return nil
 }
 
 func (d *sessionTimeoutTestDriver) Connect(context.Context) (driver.Conn, error) {
@@ -1393,6 +1490,64 @@ func TestLocalE2EAppendReadAndTimeTravelCaseReportsInsertFailure(t *testing.T) {
 	if result.Status != "failed" || !strings.Contains(result.Error, "write unavailable") {
 		t.Fatalf("expected insert failure, got %+v", result)
 	}
+}
+
+func TestLocalE2EEmptyStringReadCase(t *testing.T) {
+	db, mock := newLocalE2ESQLMock(t)
+	defer db.Close()
+
+	mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectQuery("COUNT\\(NULLIF\\(region,''\\)\\)").
+		WillReturnRows(sqlmock.NewRows([]string{"count", "count_region", "count_nonempty"}).AddRow(int64(3), int64(2), int64(1)))
+	mock.ExpectQuery("region = ''").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+	mock.ExpectQuery("region = '中文'").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+
+	result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).emptyStringReadCase(context.Background())
+	if result.Status != "passed" {
+		t.Fatalf("empty string case failed: %+v", result)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestLocalE2EEmptyStringReadCaseFailures(t *testing.T) {
+	t.Run("insert fails", func(t *testing.T) {
+		db, mock := newLocalE2ESQLMock(t)
+		defer db.Close()
+		mock.ExpectExec("INSERT INTO").WillReturnError(errors.New("write unavailable"))
+		result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).emptyStringReadCase(context.Background())
+		if result.Status != "failed" || !strings.Contains(result.Error, "write unavailable") {
+			t.Fatalf("expected insert failure, got %+v", result)
+		}
+	})
+
+	t.Run("query fails", func(t *testing.T) {
+		db, mock := newLocalE2ESQLMock(t)
+		defer db.Close()
+		mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 3))
+		mock.ExpectQuery("COUNT\\(NULLIF\\(region,''\\)\\)").WillReturnError(errors.New("catalog offline"))
+		result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).emptyStringReadCase(context.Background())
+		if result.Status != "failed" || !strings.Contains(result.Error, "catalog offline") {
+			t.Fatalf("expected query failure, got %+v", result)
+		}
+	})
+
+	t.Run("result mismatches", func(t *testing.T) {
+		db, mock := newLocalE2ESQLMock(t)
+		defer db.Close()
+		mock.ExpectExec("INSERT INTO").WillReturnResult(sqlmock.NewResult(0, 3))
+		mock.ExpectQuery("COUNT\\(NULLIF\\(region,''\\)\\)").
+			WillReturnRows(sqlmock.NewRows([]string{"count", "count_region", "count_nonempty"}).AddRow(int64(3), int64(2), int64(0)))
+		mock.ExpectQuery("region = ''").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+		mock.ExpectQuery("region = '中文'").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+		result := (&caseRunner{cfg: localE2ETestConfig(), db: db}).emptyStringReadCase(context.Background())
+		if result.Status != "failed" || !strings.Contains(result.Error, "result mismatch") {
+			t.Fatalf("expected mismatch failure, got %+v", result)
+		}
+	})
 }
 
 func TestLocalE2ESnapshotHelpersAgainstREST(t *testing.T) {

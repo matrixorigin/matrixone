@@ -353,9 +353,10 @@ select * from t36_remap;
 create table t37_odku_pk (a int, b int generated always as (a*2) stored, primary key(b));
 insert into t37_odku_pk (a) values (1);
 insert into t37_odku_pk (a) values (1) on duplicate key update a=5;
+unsupported DML: update primary key on duplicate
 select * from t37_odku_pk;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-5  ¦  10
+1  ¦  2
 create table t38_modify (a int, b int, c int generated always as (a + b) stored);
 alter table t38_modify modify column a bigint;
 invalid input: Cannot modify column 'a': generated column 'c' depends on it
@@ -389,4 +390,42 @@ select * from t42_churn where id between 1 and 5 order by id;
 3  ¦  3  ¦  6  ¦  9  𝄀
 4  ¦  7  ¦  8  ¦  15  𝄀
 5  ¦  5  ¦  15  ¦  20
+create table t43_odku_generated_unique (id int primary key, doc json, kind varchar(20) generated always as (doc ->> '$.kind') stored, payload int, unique key uk_kind(kind));
+insert into t43_odku_generated_unique (id, doc, payload) values (1, '{"kind":"alpha"}', 10), (2, '{"kind":"beta"}', 20);
+insert into t43_odku_generated_unique (id, doc, payload) values (3, '{"kind":"alpha"}', 30) on duplicate key update doc = json_set(doc, '$.kind', 'beta');
+unsupported DML: update unique key on duplicate
+select id, kind, payload from t43_odku_generated_unique order by id;
+➤ id[4,32,0]  ¦  kind[12,-1,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  alpha  ¦  10  𝄀
+2  ¦  beta  ¦  20
+select id, kind from t43_odku_generated_unique force index (uk_kind) order by id;
+➤ id[4,32,0]  ¦  kind[12,-1,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta
+insert into t43_odku_generated_unique (id, doc, payload) values (1, '{"kind":"alpha"}', 99) on duplicate key update payload = values(payload);
+select id, kind, payload from t43_odku_generated_unique order by id;
+➤ id[4,32,0]  ¦  kind[12,-1,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  alpha  ¦  99  𝄀
+2  ¦  beta  ¦  20
+insert into t43_odku_generated_unique (id, doc, payload) values (1, '{"kind":"gamma"}', 111), (2, '{"kind":"delta"}', 222) on duplicate key update doc = values(doc);
+unsupported DML: update unique key on duplicate
+select id, kind, payload from t43_odku_generated_unique order by id;
+➤ id[4,32,0]  ¦  kind[12,-1,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  alpha  ¦  99  𝄀
+2  ¦  beta  ¦  20
+update t43_odku_generated_unique set doc = json_set(doc, '$.kind', 'beta') where id = 1;
+Duplicate entry 'beta' for key 'kind'
+create table t44_odku_generated_index (id int primary key, source int, payload int, generated_key int generated always as (source * 2) stored, key idx_generated_key(generated_key));
+insert into t44_odku_generated_index (id, source, payload) values (1, 1, 10), (2, 2, 20);
+insert into t44_odku_generated_index (id, source, payload) values (1, 2, 11) on duplicate key update source = values(source);
+select id, generated_key from t44_odku_generated_index force index (idx_generated_key) where generated_key = 2;
+➤ id[4,32,0]  ¦  generated_key[4,32,0]
+select id, generated_key from t44_odku_generated_index force index (idx_generated_key) where generated_key = 4 order by id;
+➤ id[4,32,0]  ¦  generated_key[4,32,0]  𝄀
+1  ¦  4  𝄀
+2  ¦  4
+select id, generated_key from t44_odku_generated_index force index for order by (idx_generated_key) order by generated_key, id;
+➤ id[4,32,0]  ¦  generated_key[4,32,0]  𝄀
+1  ¦  4  𝄀
+2  ¦  4
 drop database test_generated_col;

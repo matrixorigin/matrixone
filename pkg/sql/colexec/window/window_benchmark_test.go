@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -140,6 +141,78 @@ func BenchmarkWindowBoundedRowsSum(b *testing.B) {
 				arg.Reset(proc, false, nil)
 				arg.Free(proc, false, nil)
 				op.Free(proc, false, nil)
+				proc.Free()
+				if got := proc.Mp().CurrNB(); got != 0 {
+					b.Fatalf("mpool leak: %d bytes", got)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkWindowBoundedRangeAvg covers #13008's finite RANGE AVG evaluator.
+// Repeated order keys make the ordinary implementation increasingly expensive
+// because it refills the complete frame for every peer row. The sliding path
+// instead searches and updates once per peer while still emitting every row.
+func BenchmarkWindowBoundedRangeAvg(b *testing.B) {
+	const rows = 80_000
+	peers := []struct {
+		name string
+		size int
+	}{
+		{name: "peer_1", size: 1},
+		{name: "peer_16", size: 16},
+		{name: "peer_64", size: 64},
+	}
+
+	for _, peer := range peers {
+		b.Run(peer.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				proc := testutil.NewProcessWithMPool(b, "", mpool.MustNewZero())
+				values := make([]int32, rows)
+				boundaries := make([]int64, 0, rows/peer.size)
+				for row := range values {
+					values[row] = int32(row / peer.size)
+					if row%peer.size == 0 {
+						boundaries = append(boundaries, int64(row))
+					}
+				}
+				input := makeInt32Batch(proc.Mp(), values)
+				spec := makeWindowSpec()
+				spec.GetW().Frame = makeBoundedRangeFrame(2, 2)
+				arg := &Window{
+					WinSpecList: []*plan.Expr{spec},
+					Aggs: []aggexec.AggFuncExecExpression{
+						newTypedAvgAggExpr(b, 0, types.T_int32.ToType()),
+					},
+				}
+				ctr := &container{
+					bat:       input,
+					os:        boundaries,
+					orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{input.Vecs[0]}}},
+					aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{input.Vecs[0]}}},
+				}
+				b.StartTimer()
+
+				var last float64
+				for start := 0; start < rows; start += colexec.DefaultBatchSize {
+					end := min(start+colexec.DefaultBatchSize, rows)
+					result, err := ctr.processAggregateFuncRange(0, arg, proc, start, end)
+					if err != nil {
+						b.Fatal(err)
+					}
+					resultValues := vector.MustFixedColWithTypeCheck[float64](result)
+					last = resultValues[len(resultValues)-1]
+					result.Free(proc.Mp())
+				}
+				b.StopTimer()
+
+				if want := float64(rows/peer.size - 2); last != want {
+					b.Fatalf("last sliding avg: got %v, want %v", last, want)
+				}
+				input.Clean(proc.Mp())
 				proc.Free()
 				if got := proc.Mp().CurrNB(); got != 0 {
 					b.Fatalf("mpool leak: %d bytes", got)

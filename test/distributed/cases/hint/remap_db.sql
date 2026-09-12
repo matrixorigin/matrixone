@@ -282,8 +282,8 @@ select * from rdb_dst.t order by id;
 set remap_rewrites = '';
 insert into rdb_dst.t values (2,20),(3,30);
 
--- ANALYZE must expand implicit columns after remapping, and inherited inline
--- rewrites must affect the cardinality query.
+-- ANALYZE must resolve both qualified and implicit targets after remapping.
+-- Row rewrites do not restrict the physical table statistics being published.
 create database if not exists rdb_src;
 drop table if exists rdb_src.t;
 create table rdb_src.t(src_only int);

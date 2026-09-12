@@ -29,11 +29,18 @@ drop table if exists quoted_cols;
 create table quoted_cols(`select` int, `a-b` int, `tick``name` int);
 insert into quoted_cols values (1, 2, 3), (2, 3, 4);
 
--- ANALYZE TABLE single table (existing behavior)
+-- AUTO returns one maintenance-summary row and publishes sampled statistics
 analyze table t_analyze_01(a, b);
+select table_cnt,
+json_extract(ndv_map, '$.a') as a_ndv,
+json_extract(ndv_map, '$.b') as b_ndv
+from table_stats('db_analyze_stmt.t_analyze_01', 'get', 'normal') g;
 
 -- ANALYZE TABLE without column list (issue #23122 core case)
 analyze table t_analyze_01;
+
+-- FULLSCAN uses the same command path and reports its selected mode
+analyze table t_analyze_01(a, b) fullscan;
 
 -- quoted explicit and catalog-expanded column names
 analyze table quoted_cols(`select`, `a-b`, `tick``name`);
@@ -41,8 +48,7 @@ select 'AFTER_EXPLICIT_QUOTED';
 analyze table quoted_cols;
 select 'AFTER_EXPANDED_QUOTED';
 
--- views retain the legacy derived-query result and must not be subscribed as
--- physical optimizer-statistics tables
+-- only owned physical tables may publish optimizer statistics
 create view v_analyze as select a, b from t_analyze_01;
 analyze table v_analyze(a);
 select 'AFTER_VIEW_ANALYZE';
@@ -65,7 +71,7 @@ select 'AFTER_MULTI';
 analyze table t_analyze_01, t_analyze_nonexistent, t_analyze_02;
 select 'AFTER_MID_LIST_ERROR';
 
--- duplicate targets are accepted and each target is analyzed
+-- duplicate targets are rejected before collection
 analyze table t_analyze_01, t_analyze_01;
 select 'AFTER_DUPLICATE_TARGETS';
 
@@ -76,7 +82,7 @@ analyze table t_analyze_nonexistent;
 analyze table t_analyze_01(missing_column);
 select 'AFTER_MISSING_COLUMN_ERROR';
 
--- implicit columns must be resolved from the same historical schema
+-- historical snapshots cannot publish current optimizer statistics
 drop snapshot if exists analyze_schema_snapshot;
 drop table if exists snapshot_cols;
 create table snapshot_cols(old_col int);
@@ -88,7 +94,7 @@ select 'AFTER_SNAPSHOT_ANALYZE';
 drop snapshot analyze_schema_snapshot;
 drop table snapshot_cols;
 
--- SQL PREPARE/EXECUTE keeps ANALYZE's dynamic result shape and default database
+-- SQL PREPARE/EXECUTE keeps ANALYZE's maintenance result and bound database
 prepare analyze_explicit from analyze table t_analyze_01(a, b);
 execute analyze_explicit;
 execute analyze_explicit;
@@ -120,8 +126,8 @@ show profile limit 10;
 show profile for query 2 limit 10;
 show profile for query 2 limit 10 offset 5;
 
--- transaction gate: statements should reach their handlers, not the
--- generic unclassified-transaction error
+-- ANALYZE rejects an already-active user transaction because publication is
+-- outside the transaction workspace
 begin;
 analyze table t_analyze_01(a, b);
 commit;
@@ -135,8 +141,7 @@ analyze table t_analyze_01, t_analyze_02;
 select 'AFTER_TXN_MULTI';
 rollback;
 
--- A transaction-local table is visible to the derived ANALYZE query but not
--- to the process-global optimizer statistics refresher.
+-- A transaction-local table is not eligible for published optimizer statistics.
 begin;
 create table txn_created_analyze(a int);
 insert into txn_created_analyze values (1), (2);
@@ -144,8 +149,7 @@ analyze table txn_created_analyze(a);
 rollback;
 drop table if exists txn_created_analyze;
 
--- The result includes uncommitted workspace rows, while global optimizer
--- statistics remain at the committed visibility boundary.
+-- Uncommitted workspace rows are never mixed into published statistics.
 begin;
 insert into t_analyze_01 values (3, 30);
 analyze table t_analyze_01(a);

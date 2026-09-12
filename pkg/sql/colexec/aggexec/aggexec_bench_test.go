@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"strconv"
 	"strings"
 	"testing"
@@ -186,6 +187,83 @@ func BenchmarkAggExecPaths(b *testing.B) {
 				b.Fatal(err)
 			}
 			b.StopTimer()
+			exec.Free()
+		}
+	})
+
+	b.Run("AvgInt32/BatchFillFlush", func(b *testing.B) {
+		b.ReportAllocs()
+		int32Vals := make([]int32, rows)
+		for i := range int32Vals {
+			int32Vals[i] = int32(i % 1024)
+		}
+		int32Vec := testutil.NewInt32Vector(rows, types.T_int32.ToType(), mp, false, nil, int32Vals)
+		defer int32Vec.Free(mp)
+		vectors := []*vector.Vector{int32Vec}
+		b.StopTimer()
+		for i := 0; i < b.N; i++ {
+			exec, err := MakeAgg(mp, AggIdOfAvg, false, types.T_int32.ToType())
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err = exec.GroupGrow(groupSize); err != nil {
+				exec.Free()
+				b.Fatal(err)
+			}
+			b.StartTimer()
+			if err = exec.BatchFill(0, groups, vectors); err != nil {
+				b.StopTimer()
+				exec.Free()
+				b.Fatal(err)
+			}
+			results, err := exec.Flush()
+			b.StopTimer()
+			if err != nil {
+				exec.Free()
+				b.Fatal(err)
+			}
+			for _, result := range results {
+				result.Free(mp)
+			}
+			exec.Free()
+		}
+	})
+
+	b.Run("AvgInt32FloatReference/BatchFillFlush", func(b *testing.B) {
+		b.ReportAllocs()
+		int32Vals := make([]int32, rows)
+		for i := range int32Vals {
+			int32Vals[i] = int32(i % 1024)
+		}
+		int32Vec := testutil.NewInt32Vector(rows, types.T_int32.ToType(), mp, false, nil, int32Vals)
+		defer int32Vec.Free(mp)
+		vectors := []*vector.Vector{int32Vec}
+		b.StopTimer()
+		for i := 0; i < b.N; i++ {
+			// Before exact AVG finalization, INT32 used this native accumulator
+			// and reinterpreted the sum buffer as float64 at Flush. Keep that
+			// path as a local benchmark reference for the compatibility tradeoff.
+			exec := newSumAvgExec[int64, int32](mp, int64OfCheck, false, AggIdOfAvg, false, types.T_int32.ToType())
+			exec.(*sumAvgExec[int64, int32]).exactAvg = false
+			if err := exec.GroupGrow(groupSize); err != nil {
+				exec.Free()
+				b.Fatal(err)
+			}
+			b.StartTimer()
+			if err := exec.BatchFill(0, groups, vectors); err != nil {
+				b.StopTimer()
+				exec.Free()
+				b.Fatal(err)
+			}
+			results, err := exec.Flush()
+			b.StopTimer()
+			if err != nil {
+				exec.Free()
+				b.Fatal(err)
+			}
+			for _, result := range results {
+				result.Free(mp)
+			}
 			exec.Free()
 		}
 	})
@@ -515,6 +593,97 @@ func BenchmarkCountDistinctSavedArgumentMerge(b *testing.B) {
 		if err = source.(AllocationAccountOwner).ClearAllocationAccount(allocation); err != nil {
 			b.Fatal(err)
 		}
+	}
+	if account.Snapshot().Used != 0 {
+		b.Fatalf("account retains %d bytes", account.Snapshot().Used)
+	}
+	account.Seal()
+	if _, err = registry.Finalize(account); err != nil {
+		b.Fatal(err)
+	}
+}
+
+func BenchmarkCountDistinctSavedArgumentUnmarshal(b *testing.B) {
+	const rows = 250_000
+
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	if err != nil {
+		b.Fatal(err)
+	}
+	account, err := registry.Open(128 << 20)
+	if err != nil {
+		b.Fatal(err)
+	}
+	allocation, err := NewAllocationAccount(
+		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3,
+			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	input := vector.NewVec(types.T_int64.ToType())
+	for row := range rows {
+		if err = vector.AppendFixed(input, int64(row), false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	groups := make([]uint64, hashmap.UnitLimit)
+	for row := range groups {
+		groups[row] = 1
+	}
+	source := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
+	if err = source.(AllocationAccountOwner).SetAllocationAccount(allocation); err != nil {
+		b.Fatal(err)
+	}
+	if err = source.GroupGrow(1); err != nil {
+		b.Fatal(err)
+	}
+	for offset := 0; offset < rows; offset += hashmap.UnitLimit {
+		workGroups := groups[:min(hashmap.UnitLimit, rows-offset)]
+		if err = source.(BatchCapacityPreflight).PreflightBatchFill(
+			offset, workGroups, []*vector.Vector{input}); err != nil {
+			b.Fatal(err)
+		}
+		if err = source.BatchFill(
+			offset, workGroups, []*vector.Vector{input}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	input.Free(mp)
+
+	var encoded bytes.Buffer
+	if err = source.SaveIntermediateResult(
+		1, [][]uint8{{1}}, &encoded); err != nil {
+		b.Fatal(err)
+	}
+	payload := encoded.Bytes()
+
+	b.ReportAllocs()
+	b.SetBytes(rows * 8)
+	b.ResetTimer()
+	for range b.N {
+		target := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
+		if err = target.(AllocationAccountOwner).SetAllocationAccount(allocation); err != nil {
+			b.Fatal(err)
+		}
+		if err = target.UnmarshalFromReader(bytes.NewReader(payload), mp); err != nil {
+			b.Fatal(err)
+		}
+		target.Free()
+		if err = target.(AllocationAccountOwner).ClearAllocationAccount(allocation); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+
+	source.Free()
+	if err = source.(AllocationAccountOwner).ClearAllocationAccount(allocation); err != nil {
+		b.Fatal(err)
 	}
 	if account.Snapshot().Used != 0 {
 		b.Fatalf("account retains %d bytes", account.Snapshot().Used)

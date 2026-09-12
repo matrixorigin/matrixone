@@ -155,4 +155,27 @@ drop table pick_keys;
 drop table t1;
 drop table t2;
 
+-- ----------------------------------------------------------------
+-- case 8: user identifiers sharing the internal diff prefix still stream
+-- ----------------------------------------------------------------
+
+create table user_prefix_base (a int primary key, b int);
+insert into user_prefix_base values (1,10);
+data branch create table user_prefix_src from user_prefix_base;
+data branch create table user_prefix_dst from user_prefix_base;
+insert into user_prefix_src values (2,20),(3,30);
+
+create database __mo_diff_orders;
+create table __mo_diff_orders.__mo_diff_keys (__mo_diff_flag int);
+insert into __mo_diff_orders.__mo_diff_keys values (2),(3);
+
+data branch pick user_prefix_src into user_prefix_dst
+keys(select __mo_diff_flag from __mo_diff_orders.__mo_diff_keys);
+select * from user_prefix_dst order by a;
+
+drop database __mo_diff_orders;
+drop table user_prefix_base;
+drop table user_prefix_src;
+drop table user_prefix_dst;
+
 drop database test;

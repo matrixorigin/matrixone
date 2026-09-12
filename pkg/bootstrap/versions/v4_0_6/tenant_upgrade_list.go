@@ -51,7 +51,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaStatistics(),
 	addMoRoleGrantGranteeIndex(),
 	upgradeInformationSchemaMetadataVisibilityView("TABLES", sysview.InformationSchemaTablesDDL),
-	upgradeInformationSchemaMetadataVisibilityView("COLUMNS", sysview.InformationSchemaColumnsDDL),
+	upgradeInformationSchemaMetadataVisibilityView("COLUMNS", sysview.InformationSchemaColumnsV46UpgradeDDL),
 	upgradeInformationSchemaMetadataVisibilityView("STATISTICS", sysview.InformationSchemaStatisticsDDL),
 	upgradeInformationSchemaMetadataVisibilityTableConstraints(),
 	upgradeInformationSchemaMetadataVisibilityView("KEY_COLUMN_USAGE", sysview.InformationSchemaKeyColumnUsageDDL),
@@ -62,6 +62,8 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaMetadataVisibilityView("SCHEMATA", sysview.InformationSchemaSchemataDDL),
 	upgradeInformationSchemaTablePrivileges(),
 	addIcebergCatalogIDAllocatorIndex(),
+	upgradeInformationSchemaColumnsBinaryStrings(),
+	refreshInformationSchemaCharacterSetsUTF8Maxlen(),
 }
 
 // The catalog ID allocator is storage-owned.  MatrixOne only materializes an
@@ -81,6 +83,10 @@ func addIcebergCatalogIDAllocatorIndex() versions.UpgradeEntry {
 }
 
 func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) versions.UpgradeEntry {
+	requiredProtocol := defines.MORPCVersion41
+	if viewName == "TABLES" || viewName == "COLUMNS" {
+		requiredProtocol = defines.MORPCVersion46
+	}
 	return versions.UpgradeEntry{
 		Schema:                  sysview.InformationDBConst,
 		TableName:               viewName,
@@ -88,7 +94,7 @@ func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) ve
 		UpgSql:                  viewDDL,
 		CheckFunc:               checkViewDefinition(viewName, viewDDL),
 		PreSql:                  fmt.Sprintf("DROP VIEW IF EXISTS %s.%s;", sysview.InformationDBConst, viewName),
-		RequiredProtocolVersion: defines.MORPCVersion41,
+		RequiredProtocolVersion: requiredProtocol,
 	}
 }
 
@@ -148,14 +154,14 @@ func upgradeInformationSchemaColumns() versions.UpgradeEntry {
 		Schema:                  sysview.InformationDBConst,
 		TableName:               "COLUMNS",
 		UpgType:                 versions.MODIFY_VIEW,
-		UpgSql:                  sysview.InformationSchemaColumnsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion41,
+		UpgSql:                  sysview.InformationSchemaColumnsV46UpgradeDDL,
+		RequiredProtocolVersion: defines.MORPCVersion46,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, viewDef, err := versions.CheckViewDefinition(txn, accountID, sysview.InformationDBConst, "COLUMNS")
 			if err != nil {
 				return false, err
 			}
-			return exists && viewDef == sysview.InformationSchemaColumnsDDL, nil
+			return exists && viewDef == sysview.InformationSchemaColumnsV46UpgradeDDL, nil
 		},
 		PreSql: fmt.Sprintf("DROP VIEW IF EXISTS %s.COLUMNS;", sysview.InformationDBConst),
 	}
@@ -371,7 +377,7 @@ func informationSchemaCharacterSetsCheckSQL() string {
 		"SELECT 1 FROM information_schema.CHARACTER_SETS "+
 			"WHERE CHARACTER_SET_NAME = 'binary' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 1 "+
 			"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
-			"WHERE CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 4) "+
+			"WHERE CHARACTER_SET_NAME = 'utf8' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 3) "+
 			"AND EXISTS (SELECT 1 FROM information_schema.CHARACTER_SETS "+
 			"WHERE CHARACTER_SET_NAME = 'utf8mb4' AND DEFAULT_COLLATE_NAME = '%s' AND MAXLEN = 4) "+
 			"LIMIT 1",
@@ -379,6 +385,32 @@ func informationSchemaCharacterSetsCheckSQL() string {
 		sysview.DefaultCollationForCharset("utf8"),
 		sysview.DefaultCollationForCharset("utf8mb4"),
 	)
+}
+
+func upgradeInformationSchemaColumnsBinaryStrings() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:                  sysview.InformationDBConst,
+		TableName:               "COLUMNS",
+		UpgType:                 versions.MODIFY_VIEW,
+		PreSql:                  "DROP VIEW IF EXISTS information_schema.COLUMNS;",
+		UpgSql:                  sysview.InformationSchemaColumnsDDL,
+		CheckFunc:               checkViewDefinition("COLUMNS", sysview.InformationSchemaColumnsDDL),
+		RequiredProtocolVersion: defines.MORPCVersion58,
+	}
+}
+
+func refreshInformationSchemaCharacterSetsUTF8Maxlen() versions.UpgradeEntry {
+	return versions.UpgradeEntry{
+		Schema:    sysview.InformationDBConst,
+		TableName: "CHARACTER_SETS",
+		UpgType:   versions.MODIFY_METADATA,
+		PreSql:    "delete from information_schema.character_sets",
+		UpgSql:    sysview.InformationSchemaCharacterSetsData,
+		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
+			return versions.CheckTableDataExist(txn, accountID, informationSchemaCharacterSetsCheckSQL())
+		},
+		RequiredProtocolVersion: defines.MORPCVersion58,
+	}
 }
 
 func newMongoDBCatalogTable(name, ddl string) versions.UpgradeEntry {

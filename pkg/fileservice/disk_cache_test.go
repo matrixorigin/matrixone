@@ -1100,14 +1100,22 @@ func TestDiskCacheSetFromFile(t *testing.T) {
 	require.True(t, written)
 }
 
-func TestDiskCacheReadEnsuresMemoryCacheCapacity(t *testing.T) {
+func TestDiskCacheReadUsesMemoryCacheReservation(t *testing.T) {
 	ctx := context.Background()
-	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, nil, "")
-	require.Nil(t, err)
+	const request = 10
+	capacity := int64(1 << 20)
+	memoryCache := NewMemCache(func() int64 { return capacity }, nil, nil, "")
+	defer memoryCache.Close(ctx)
+	cache, err := NewDiskCache(ctx, t.TempDir(), fscache.ConstCapacity(1<<20), nil, false, memoryCache, "")
+	require.NoError(t, err)
 	defer cache.Close(ctx)
 
-	dataCache := new(countingDataCache)
-	cache.memoryCache = dataCache
+	capacity = int64(memoryCache.BackingSize(request))
+	seed := NewBytes(make([]byte, request, capacity))
+	_, err = memoryCache.cache.Set(ctx, fscache.CacheKey{Path: "seed", Sz: request}, seed)
+	require.NoError(t, err)
+	seed.Release()
+	require.Equal(t, int64(memoryCache.BackingSize(request)), memoryCache.cache.Used())
 
 	err = cache.Update(ctx, &IOVector{
 		FilePath: "foo",
@@ -1125,17 +1133,21 @@ func TestDiskCacheReadEnsuresMemoryCacheCapacity(t *testing.T) {
 			Offset: 0,
 			Size:   3,
 			ToCacheData: func(ctx context.Context, _ io.Reader, _ []byte, allocator CacheDataAllocator) (fscache.Data, error) {
-				return allocator.AllocateCacheDataWithHint(ctx, 10, malloc.NoClear), nil
+				require.Same(t, memoryCache, allocator)
+				return allocator.AllocateCacheDataWithHint(ctx, request, malloc.NoClear), nil
 			},
 		}},
 	}
-	defer vec.Release()
 	err = cache.Read(ctx, vec)
-	require.Nil(t, err)
-	require.Equal(t, 1, dataCache.ensureCalls)
-	require.Equal(t, DefaultCacheDataAllocator().BackingSize(10), dataCache.ensureBytes)
+	require.NoError(t, err)
 	require.True(t, vec.Entries[0].done)
-	require.NotNil(t, vec.Entries[0].CachedData)
+	data := vec.Entries[0].CachedData.(*Bytes)
+	require.Same(t, memoryCache.allocator.owner, data.CacheDataOwner())
+	require.Zero(t, memoryCache.cache.Used())
+	require.Equal(t, int64(memoryCache.BackingSize(request)), memoryCache.reservedBytes)
+	vec.Release()
+	memoryCache.Flush(ctx)
+	require.Zero(t, memoryCache.reservedBytes)
 }
 
 func TestDiskCacheQuotaExceeded(t *testing.T) {
@@ -1153,35 +1165,3 @@ func TestDiskCacheQuotaExceeded(t *testing.T) {
 	)
 
 }
-
-type countingDataCache struct {
-	ensureCalls int
-	ensureBytes int
-}
-
-func (c *countingDataCache) EnsureNBytes(_ context.Context, want int) {
-	c.ensureCalls++
-	c.ensureBytes += want
-}
-
-func (*countingDataCache) Capacity() int64 { return 0 }
-
-func (*countingDataCache) Used() int64 { return 0 }
-
-func (*countingDataCache) Available() int64 { return 0 }
-
-func (*countingDataCache) Get(context.Context, fscache.CacheKey) (fscache.Data, bool) {
-	return nil, false
-}
-
-func (*countingDataCache) Set(context.Context, fscache.CacheKey, fscache.Data) (bool, error) {
-	return true, nil
-}
-
-func (*countingDataCache) DeletePaths(context.Context, []string) {}
-
-func (*countingDataCache) Flush(context.Context) {}
-
-func (*countingDataCache) Evict(context.Context, chan int64) {}
-
-func (*countingDataCache) EvictToTargetWithWait(context.Context, int64) int64 { return 0 }

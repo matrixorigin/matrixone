@@ -889,7 +889,7 @@ drop account if exists test_load;
 create account test_load ADMIN_NAME 'admin' IDENTIFIED BY '123456';
 show session variables like 'sql_mode';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀
-sql_mode  ¦  ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES
+sql_mode  ¦  ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG
 set session sql_mode = "NO_ENGINE_SUBSTITUTION";
 show session variables like 'sql_mode';
 ➤ Variable_name[12,0,0]  ¦  Value[12,0,0]  𝄀

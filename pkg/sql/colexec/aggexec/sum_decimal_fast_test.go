@@ -703,7 +703,7 @@ func TestSumDecimal128Fast_AVG(t *testing.T) {
 	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
 	defer mp.Free(nil)
 
-	param := types.New(types.T_decimal128, 38, 2)
+	param := types.New(types.T_decimal128, 30, 2)
 
 	vec := vector.NewVec(param)
 	defer vec.Free(mp)
@@ -725,42 +725,37 @@ func TestSumDecimal128Fast_AVG(t *testing.T) {
 
 	require.False(t, vecs[0].IsNull(0))
 	got := vector.GetFixedAtNoTypeCheck[types.Decimal128](vecs[0], 0)
-	require.Equal(t, "2.00000000", got.Format(vecs[0].GetType().Scale))
+	require.Equal(t, "2.000000", got.Format(vecs[0].GetType().Scale))
 
 	exec.Free()
 }
 
-func TestAvgDecimal128FastFinalizationOverflow(t *testing.T) {
+func TestAvgDecimal128PromotedFinalization(t *testing.T) {
 	param := types.New(types.T_decimal128, 38, 10)
 	testCases := []struct {
 		name     string
 		value    string
 		distinct bool
-		wantErr  string
 	}{
 		{
-			name: "positive physical overflow", value: "9999999999999999999999999999.1234567890",
-			wantErr: "Decimal128 Div overflow",
+			name: "positive physical boundary", value: "9999999999999999999999999999.1234567890",
 		},
 		{
-			name: "negative physical overflow", value: "-9999999999999999999999999999.1234567890",
-			wantErr: "Decimal128 Div overflow",
+			name: "negative physical boundary", value: "-9999999999999999999999999999.1234567890",
 		},
 		{
-			name: "positive physical overflow distinct", value: "9999999999999999999999999999.1234567890",
-			distinct: true, wantErr: "Decimal128 Div overflow",
+			name: "positive physical boundary distinct", value: "9999999999999999999999999999.1234567890",
+			distinct: true,
 		},
 		{
-			name: "negative physical overflow distinct", value: "-9999999999999999999999999999.1234567890",
-			distinct: true, wantErr: "Decimal128 Div overflow",
+			name: "negative physical boundary distinct", value: "-9999999999999999999999999999.1234567890",
+			distinct: true,
 		},
 		{
-			name: "positive declared precision overflow", value: "100000000000000000000000000.0000000000",
-			wantErr: "Decimal128(38,12)",
+			name: "positive declared precision boundary", value: "100000000000000000000000000.0000000000",
 		},
 		{
-			name: "negative declared precision overflow", value: "-100000000000000000000000000.0000000000",
-			wantErr: "Decimal128(38,12)",
+			name: "negative declared precision boundary", value: "-100000000000000000000000000.0000000000",
 		},
 	}
 
@@ -774,7 +769,7 @@ func TestAvgDecimal128FastFinalizationOverflow(t *testing.T) {
 			defer vec.Free(mp)
 			require.NoError(t, vector.AppendFixed(vec, value, false, mp))
 
-			exec := newSumDecimal128FastExec(mp, false, AggIdOfAvg, tc.distinct, param)
+			exec := makeSumAvgExec(mp, false, AggIdOfAvg, tc.distinct, param)
 			defer exec.Free()
 			require.NoError(t, exec.GroupGrow(1))
 			require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}))
@@ -785,8 +780,13 @@ func TestAvgDecimal128FastFinalizationOverflow(t *testing.T) {
 					result.Free(mp)
 				}
 			}()
-			require.Nil(t, results)
-			require.ErrorContains(t, err, tc.wantErr)
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.Equal(t, types.New(types.T_decimal256, 42, 14), *results[0].GetType())
+			got := vector.GetFixedAtNoTypeCheck[types.Decimal256](results[0], 0)
+			want, err := types.ParseDecimal256(tc.value, 42, 14)
+			require.NoError(t, err)
+			require.Equal(t, want, got)
 		})
 	}
 }
@@ -991,19 +991,24 @@ func TestSumDecimal128Fast_BulkFillPreservesBatchFillOverflowSemantics(t *testin
 	require.NoError(t, vector.AppendFixed(delta, two.Minus(), false, mp))
 
 	testCases := []struct {
-		name       string
-		isSum      bool
-		aggID      int64
-		flushError string
+		name  string
+		isSum bool
+		aggID int64
 	}{
 		{name: "sum", isSum: true, aggID: AggIdOfSum},
-		{name: "avg", aggID: AggIdOfAvg, flushError: "Decimal128 Div overflow"},
+		{name: "avg", aggID: AggIdOfAvg},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			batch := newSumDecimal128FastExec(mp, tc.isSum, tc.aggID, false, param)
-			bulk := newSumDecimal128FastExec(mp, tc.isSum, tc.aggID, false, param)
+			var batch, bulk AggFuncExec
+			if tc.isSum {
+				batch = newSumDecimal128FastExec(mp, true, tc.aggID, false, param)
+				bulk = newSumDecimal128FastExec(mp, true, tc.aggID, false, param)
+			} else {
+				batch = makeSumAvgExec(mp, false, tc.aggID, false, param)
+				bulk = makeSumAvgExec(mp, false, tc.aggID, false, param)
+			}
 			defer batch.Free()
 			defer bulk.Free()
 
@@ -1014,7 +1019,7 @@ func TestSumDecimal128Fast_BulkFillPreservesBatchFillOverflowSemantics(t *testin
 
 			require.NoError(t, batch.BatchFill(0, []uint64{1, 1, 1}, []*vector.Vector{delta}))
 			require.NoError(t, bulk.BulkFill(0, []*vector.Vector{delta}))
-			requireSingleAggResultEqual(t, mp, batch, bulk, tc.flushError)
+			requireSingleAggResultEqual(t, mp, batch, bulk, "")
 		})
 	}
 }
@@ -1023,7 +1028,7 @@ func TestSumDecimal128Fast_BulkFillAvgCountsOnlyNonNullRows(t *testing.T) {
 	mp, _ := mpool.NewMPool("test", 0, mpool.NoFixed)
 	defer mp.Free(nil)
 
-	param := types.New(types.T_decimal128, 38, 2)
+	param := types.New(types.T_decimal128, 30, 2)
 	vec := vector.NewVec(param)
 	defer vec.Free(mp)
 	require.NoError(t, vector.AppendFixed(vec, types.Decimal128{B0_63: 100}, false, mp))

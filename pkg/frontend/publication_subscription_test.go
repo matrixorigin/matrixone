@@ -175,6 +175,31 @@ func Test_showTablesFromDbQuotesDatabaseName(t *testing.T) {
 	}
 }
 
+func TestGenPubTablesStrDeduplicatesExplicitTables(t *testing.T) {
+	ctx := context.Background()
+	statements, err := mysql.Parse(ctx,
+		"create publication pub database db table t2, t1, t2 account all", 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+	defer freeStatements(statements)
+
+	showTablesSQL := "show tables from `db`"
+	result := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("Tables_in_db")
+	result.AddColumn(column)
+	result.AddRow([]interface{}{"t1"})
+	result.AddRow([]interface{}{"t2"})
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[showTablesSQL] = result
+
+	pubTables, err := genPubTablesStr(ctx, bh, "db", statements[0].(*tree.CreatePublication).Table)
+	require.NoError(t, err)
+	require.Equal(t, "t1,t2", pubTables)
+	require.Equal(t, []string{showTablesSQL}, bh.executedSQLs)
+}
+
 func Test_doAlterPublication(t *testing.T) {
 	mockedAccountsResults := func(ctrl *gomock.Controller) []interface{} {
 		er := mock_frontend.NewMockExecResult(ctrl)

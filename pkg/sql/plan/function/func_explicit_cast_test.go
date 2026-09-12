@@ -154,6 +154,62 @@ func TestNumericStringPrefixWarning(t *testing.T) {
 	}
 }
 
+func TestImplicitStringToIntegerUsesIntegerPrefixDiagnostics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &numericWarningSession{}
+	proc.Session = session
+	inputs := []string{"2tail", "2.9", "2e1", "abc", ""}
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), inputs, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2, 2, 2, 0, 0}, nil),
+		NewComparisonCast)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+
+	require.Len(t, session.warnings, 4)
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+		require.Contains(t, warning.msg, "Truncated incorrect INTEGER value")
+	}
+
+	appendIntegerNumericCoercionWarning(
+		proc, "9223372036854775808", "9223372036854775808", true, true)
+	require.Len(t, session.warnings, 5)
+	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[4].code)
+
+	value, _, _, outOfRange, err := parseSignedNumericPrefixCastString("9223372036854775808", 64)
+	require.NoError(t, err)
+	require.Equal(t, int64(math.MinInt64), value)
+	require.False(t, outOfRange)
+	_, _, _, outOfRange, err = parseSignedNumericPrefixCastString("18446744073709551616", 64)
+	require.NoError(t, err)
+	require.True(t, outOfRange)
+}
+
+func TestImplicitStringToIntegerNegativeRangeDiagnostics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &numericWarningSession{}
+	proc.Session = session
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{
+				"-9223372036854775808", "-9223372036854775809",
+			}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{math.MinInt64, math.MinInt64}, nil),
+		NewComparisonCast)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+	require.Len(t, session.warnings, 1)
+	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
+	require.Contains(t, session.warnings[0].msg, "INTEGER")
+}
+
 func TestExplicitCastFloatToUnsigned(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{

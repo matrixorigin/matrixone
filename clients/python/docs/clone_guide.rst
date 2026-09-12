@@ -8,7 +8,7 @@ Overview
 
 MatrixOne's cloning system provides:
 
-* **Database Cloning**: Create complete copies of databases with all tables and data
+* **Database Cloning**: Create copies of MatrixOne-managed database tables and data
 * **Table Cloning**: Clone individual tables with or without data
 * **Schema-Only Cloning**: Clone database structure without data
 * **Selective Cloning**: Clone specific tables or schemas
@@ -154,7 +154,7 @@ Full Database Cloning
 
 .. code-block:: python
 
-   # Clone entire database with all data
+   # Clone the entire database with MatrixOne-managed data
    clone_result = clone_manager.clone_database(
        source_database="production_db",
        target_database="test_db",
@@ -179,6 +179,29 @@ Full Database Cloning
        target_server="backup-server:6001",
        include_data=True
    )
+
+External Tables and Dependent Objects
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Database cloning intentionally omits external tables because their data and
+files are managed outside MatrixOne. Views, SQL functions, and stored
+procedures that directly or transitively depend on an omitted external table,
+view, or routine are omitted as well. This closure is applied in both
+directions, so a view that calls an omitted SQL function is omitted before view
+restoration. Independent SQL routine families are copied and rewritten for the
+target database. Supported non-SQL UDFs with inline bodies are opaque to the
+SQL dependency walker and are copied without body rewriting; imported
+non-SQL UDF packages are rejected before the target database is created because
+their package objects are not snapshot-versioned. UDF overloads with
+the same database, name, and kind are treated as one family: if dependency
+inspection omits one overload, the whole family is omitted because clone-time
+metadata inspection does not resolve overload types at every call site.
+SQL routines whose bodies cannot be structurally inspected are omitted when the
+source contains an omitted relation. Executable ``USE`` statements are treated
+as uninspectable for this purpose because control-flow branches can make more
+than one default database reachable; this avoids assigning an unqualified
+reference to the wrong database. Explicit single-table cloning of an external
+table remains unsupported.
 
 Schema-Only Cloning
 ~~~~~~~~~~~~~~~~~~~

@@ -232,6 +232,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 		pname = "Partition"
 		if ndesc.Node.Limit != nil && ndesc.Node.PartitionByCount > 0 {
 			pname = "Partition Top N"
+		} else if ndesc.Node.PartitionAlgorithm == plan.Node_PARTITION_ALGORITHM_HASH {
+			pname = "Hash Partition"
 		}
 	case plan.Node_UNION:
 		pname = "Union"
@@ -330,6 +332,10 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(ctx context.Context, options *Ex
 				buf.WriteString(" [")
 				buf.WriteString(spec.DistanceFunction)
 				buf.WriteString("]")
+				if work := spec.ScanWork; work != nil {
+					fmt.Fprintf(buf, " [Estimated Scan Rows: %.0f, Blocks: %d, Vector Bytes/Row: %.0f, Objects: %d, Planned DOP: %d]",
+						work.Rows, work.Blocks, work.VectorBytesPerRow, work.Objects, ndesc.Node.Stats.GetDop())
+				}
 			}
 		case plan.Node_DELETE:
 			buf.WriteString(" on ")

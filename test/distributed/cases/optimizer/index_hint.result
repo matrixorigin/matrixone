@@ -36,8 +36,8 @@ select mo_ctl('dn', 'flush', 'mysql_compat_index_hint.t');
 }
 
 analyze table t(a,b,c,status,dt);
-approx_count_distinct(a)    approx_count_distinct(b)    approx_count_distinct(c)    approx_count_distinct(status)    approx_count_distinct(dt)
-3    8    10    4    10
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+mysql_compat_index_hint.t  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  5  ¦  10  ¦  1  ¦  10  ¦  2  ¦  1840  ¦  OK  ¦  q=1/1
 explain select id,a,b,c
 from t use index(idx_b_a)
 where b = 7 and a in ('g01','g03','g05')
@@ -388,8 +388,8 @@ select mo_ctl('dn', 'flush', 'mysql_compat_index_hint.owner_tasks');
 }
 
 analyze table owner_tasks(status,policy,score,due);
-approx_count_distinct(status)    approx_count_distinct(policy)    approx_count_distinct(score)    approx_count_distinct(due)
-2    2    5    6
+➤ table_name[12,0,0]  ¦  mode[12,0,0]  ¦  coverage[12,0,0]  ¦  columns_analyzed[-5,0,0]  ¦  population_rows[-5,0,0]  ¦  population_exact[-6,0,0]  ¦  sample_rows[-5,0,0]  ¦  sample_blocks[-5,0,0]  ¦  sample_bytes[-5,0,0]  ¦  status[12,0,0]  ¦  message[12,0,0]  𝄀
+mysql_compat_index_hint.owner_tasks  ¦  AUTO  ¦  SNAPSHOT_VISIBLE_V1  ¦  4  ¦  6  ¦  1  ¦  6  ¦  2  ¦  912  ¦  OK  ¦  q=1/1
 select count(*) from owner_tasks where status = 'active';
 ➤ count(*)[-5,64,0]  𝄀
 4

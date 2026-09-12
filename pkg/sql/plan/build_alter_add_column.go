@@ -123,6 +123,10 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		Typ:        colType,
 		Alg:        plan.CompressType_Lz4,
 	}
+	// Bind the new definition against the post-ALTER row schema.  The new
+	// column is appended to this temporary scope; handleAddColumnPosition
+	// remaps ColPos after the requested physical insertion.
+	scopeCols := append(append([]*ColDef(nil), alterPlan.CopyTableDef.Cols...), newCol)
 
 	hasDefaultValue := false
 	auto_incr := false
@@ -193,7 +197,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			}
 			newCol.OnUpdate = onUpdateExpr
 		case *tree.AttributeGeneratedAlways:
-			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, alterPlan.CopyTableDef.Cols, ctx.GetProcess())
+			generatedCol, err := buildGeneratedExpr(specNewColumn, colType, scopeCols, ctx.GetProcess())
 			if err != nil {
 				return nil, err
 			}
@@ -206,6 +210,10 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 	}
 
 	if newCol.GeneratedCol != nil {
+		if exprReferencesColumn(newCol.GeneratedCol.Expr, newColName, scopeCols) {
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(),
+				"generated column '%s' cannot refer to itself", newColNameOrigin)
+		}
 		// Generated columns preserve declared nullability but use no default expr for storage layer compatibility
 		newCol.Default = &plan.Default{
 			NullAbility:  getColumnNullAbility(specNewColumn),
@@ -213,11 +221,15 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			OriginString: "",
 		}
 	} else {
-		defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+		defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), scopeCols)
 		if err != nil {
 			return nil, err
 		}
 		newCol.Default = defaultValue
+		if exprReferencesColumn(defaultValue.Expr, newColName, scopeCols) {
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(),
+				"default expression for column '%s' cannot refer to itself", newColNameOrigin)
+		}
 
 		hasDefaultValue = defaultValue.Expr != nil
 		if auto_incr && hasDefaultValue {
@@ -403,6 +415,9 @@ func DropColumn(
 	}
 
 	if err := checkColumnWithGeneratedDependency(ctx.GetContext(), tableDef, colName); err != nil {
+		return column.Primary, err
+	}
+	if err := checkColumnWithDefaultDependency(ctx.GetContext(), tableDef, colName); err != nil {
 		return column.Primary, err
 	}
 
@@ -611,7 +626,8 @@ func handleDropColumnWithClusterBy(ctx context.Context, copyTableDef *TableDef, 
 	return nil
 }
 
-// shiftColPosInExpr adjusts ColRef.ColPos values in a generated column expression.
+// shiftColPosInExpr adjusts row-local ColRef.ColPos values in a generated or
+// expression-default definition.
 // All positions >= threshold are shifted by delta (+1 for insert, -1 for drop).
 func shiftColPosInExpr(expr *plan.Expr, threshold int32, delta int32) {
 	if expr == nil {
@@ -619,7 +635,7 @@ func shiftColPosInExpr(expr *plan.Expr, threshold int32, delta int32) {
 	}
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if e.Col.RelPos == 0 && e.Col.ColPos >= threshold {
+		if e.Col != nil && e.Col.RelPos == 0 && e.Col.ColPos >= threshold {
 			e.Col.ColPos += delta
 		}
 	case *plan.Expr_F:
@@ -633,23 +649,29 @@ func shiftColPosInExpr(expr *plan.Expr, threshold int32, delta int32) {
 	}
 }
 
-// remapGeneratedColExprsAfterInsert adjusts all generated column expressions
-// after a new column is inserted at insertPos. ColPos >= insertPos shift up by 1.
-// The newly inserted column's own expression (if any) is also adjusted.
+// remapGeneratedColExprsAfterInsert adjusts all row-local expressions after a
+// new column is inserted at insertPos. ColPos >= insertPos shift up by 1. The
+// newly inserted column's own expression (if any) is also adjusted.
 func remapGeneratedColExprsAfterInsert(tableDef *TableDef, insertPos int32) {
 	for _, col := range tableDef.Cols {
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
 			shiftColPosInExpr(col.GeneratedCol.Expr, insertPos, 1)
 		}
+		if col.Default != nil && col.Default.Expr != nil {
+			shiftColPosInExpr(col.Default.Expr, insertPos, 1)
+		}
 	}
 }
 
-// remapGeneratedColExprsAfterDrop adjusts all generated column expressions
-// after a column is removed from dropPos. ColPos > dropPos shift down by 1.
+// remapGeneratedColExprsAfterDrop adjusts all row-local expressions after a
+// column is removed from dropPos. ColPos > dropPos shift down by 1.
 func remapGeneratedColExprsAfterDrop(tableDef *TableDef, dropPos int32) {
 	for _, col := range tableDef.Cols {
 		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
 			shiftColPosInExpr(col.GeneratedCol.Expr, dropPos+1, -1)
+		}
+		if col.Default != nil && col.Default.Expr != nil {
+			shiftColPosInExpr(col.Default.Expr, dropPos+1, -1)
 		}
 	}
 }
@@ -668,6 +690,21 @@ func checkColumnWithGeneratedDependency(ctx context.Context, tableDef *TableDef,
 	return nil
 }
 
+// checkColumnWithDefaultDependency prevents a DROP/RENAME from leaving
+// persisted row-local default expressions pointing at a different or missing
+// column position. Rebinding those expressions is unsafe for a COPY ALTER
+// because existing rows and future inserts must observe the same dependency.
+func checkColumnWithDefaultDependency(ctx context.Context, tableDef *TableDef, colName string) error {
+	for _, col := range tableDef.Cols {
+		if col.Default != nil && col.Default.Expr != nil && exprReferencesColumn(col.Default.Expr, colName, tableDef.Cols) {
+			return moerr.NewInvalidInputf(ctx,
+				"Cannot modify column '%s': default expression of column '%s' depends on it",
+				colName, col.Name)
+		}
+	}
+	return nil
+}
+
 // exprReferencesColumn checks if a plan expression references a column by name.
 func exprReferencesColumn(expr *plan.Expr, colName string, cols []*ColDef) bool {
 	if expr == nil {
@@ -675,7 +712,7 @@ func exprReferencesColumn(expr *plan.Expr, colName string, cols []*ColDef) bool 
 	}
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_Col:
-		if int(e.Col.ColPos) < len(cols) {
+		if e.Col != nil && e.Col.RelPos == 0 && e.Col.ColPos >= 0 && int(e.Col.ColPos) < len(cols) {
 			return strings.EqualFold(cols[e.Col.ColPos].Name, colName)
 		}
 	case *plan.Expr_F:

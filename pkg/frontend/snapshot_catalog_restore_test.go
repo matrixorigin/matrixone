@@ -260,17 +260,21 @@ func TestRemapRolePrivilegeObjectID(t *testing.T) {
 	}
 }
 
-func TestSystemCatalogTransformPoliciesHaveHandlers(t *testing.T) {
+func TestSystemCatalogRebuildPoliciesHaveHandlers(t *testing.T) {
 	require.NoError(t, validateSystemCatalogRestoreHandlers(t.Context()))
 	handlers := make(map[string]struct{}, len(systemCatalogPostRestoreHandlers))
 	for _, entry := range systemCatalogPostRestoreHandlers {
-		require.Equal(t, systemCatalogRestoreCopyThenTransform, systemCatalogRestorePolicies[entry.tableName])
+		require.Equal(t, systemCatalogRestoreRebuild, systemCatalogRestorePolicies[entry.tableName])
+		require.True(t, needSkipTable(sysAccountID, moCatalog, entry.tableName))
+		require.True(t, needSkipSystemTable(sysAccountID, &tableInfo{
+			dbName: moCatalog, tblName: entry.tableName, typ: "BASE TABLE",
+		}))
 		_, duplicate := handlers[entry.tableName]
 		require.False(t, duplicate)
 		handlers[entry.tableName] = struct{}{}
 	}
 	for tableName, policy := range systemCatalogRestorePolicies {
-		if policy == systemCatalogRestoreCopyThenTransform {
+		if policy == systemCatalogRestoreRebuild {
 			_, ok := handlers[tableName]
 			require.Truef(t, ok, "missing restore handler for %s", tableName)
 		}
@@ -287,10 +291,10 @@ func TestValidateSystemCatalogRestoreHandlersRejectsIncompleteRegistry(t *testin
 		slices.Clone(originalHandlers),
 		systemCatalogPostRestoreHandler{tableName: "mo_user"},
 	)
-	require.ErrorContains(t, validateSystemCatalogRestoreHandlers(t.Context()), "has no transform policy")
+	require.ErrorContains(t, validateSystemCatalogRestoreHandlers(t.Context()), "has no rebuild policy")
 	require.ErrorContains(t,
 		restoreSystemCatalogsAfterObjects(t.Context(), "", nil, 0, 0, 0),
-		"has no transform policy",
+		"has no rebuild policy",
 	)
 
 	systemCatalogPostRestoreHandlers = append(slices.Clone(originalHandlers), originalHandlers[0])
@@ -307,7 +311,7 @@ func TestValidateSystemCatalogRestoreHandlersRejectsIncompleteRegistry(t *testin
 
 	systemCatalogPostRestoreHandlers = originalHandlers
 	originalPolicy := systemCatalogRestorePolicies["mo_user"]
-	systemCatalogRestorePolicies["mo_user"] = systemCatalogRestoreCopyThenTransform
+	systemCatalogRestorePolicies["mo_user"] = systemCatalogRestoreRebuild
 	t.Cleanup(func() {
 		systemCatalogRestorePolicies["mo_user"] = originalPolicy
 	})

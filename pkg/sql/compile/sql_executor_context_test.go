@@ -256,6 +256,12 @@ func TestCompilerContextDelegatesSnapshotAndSubscriptionBinding(t *testing.T) {
 	require.Same(t, delegate.resolvedTableDef, resolved)
 	require.Equal(t, "subscription_db", delegate.resolvedDatabase)
 	require.Equal(t, "source", delegate.resolvedTable)
+	for _, skipMeta := range []bool{false, true} {
+		indexRef, _, err := c.ResolveIndexTableByRef(&plan.ObjectRef{SchemaName: "db", NotLockMeta: skipMeta}, "hidden_index", nil)
+		require.NoError(t, err)
+		require.Equal(t, skipMeta, indexRef.NotLockMeta)
+		require.Equal(t, "hidden_index", delegate.resolvedTable)
+	}
 }
 
 func TestCompilerContext_Database(t *testing.T) {

@@ -41,6 +41,42 @@ create database if not exists `TPCH_0.01G`;
 use `TPCH_0.01G`;
 drop database if exists `TPCH_0.01G`;
 drop database if exists db1;
+
+-- @case
+-- @desc:transaction-local drop and recreate must create a physical catalog row
+-- @label:bvt
+drop database if exists create_database_txn_target;
+drop database if exists create_database_txn_audit;
+create database create_database_txn_audit;
+create table create_database_txn_audit.ids (id bigint unsigned);
+create database create_database_txn_target;
+create table create_database_txn_target.original_table (id int);
+insert into create_database_txn_target.original_table values (7);
+insert into create_database_txn_audit.ids
+select dat_id from mo_catalog.mo_database where datname = 'create_database_txn_target';
+begin;
+drop database create_database_txn_target;
+create database create_database_txn_target;
+create table create_database_txn_target.recreated_table (id int);
+insert into create_database_txn_target.recreated_table values (8);
+commit;
+select dat_id <> (select id from create_database_txn_audit.ids) as recreated_with_new_id
+from mo_catalog.mo_database where datname = 'create_database_txn_target';
+select * from create_database_txn_target.recreated_table;
+truncate table create_database_txn_audit.ids;
+insert into create_database_txn_audit.ids
+select dat_id from mo_catalog.mo_database where datname = 'create_database_txn_target';
+begin;
+drop database create_database_txn_target;
+create database create_database_txn_target;
+create table create_database_txn_target.rolled_back_table (id int);
+rollback;
+select dat_id = (select id from create_database_txn_audit.ids) as rollback_kept_original_id
+from mo_catalog.mo_database where datname = 'create_database_txn_target';
+select * from create_database_txn_target.recreated_table;
+drop database create_database_txn_target;
+drop database create_database_txn_audit;
+
 create database if not exists db1;
 show schemas;
 drop database if exists db1;

@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"strings"
@@ -1035,7 +1036,8 @@ func TestStAsWKBAndGeomFromWKB(t *testing.T) {
 func TestGeometry32EncodeDecode(t *testing.T) {
 	// Float32 WKB is shorter than float64 (4 vs 8 bytes per ordinate) and both
 	// decode back to the same WKT.
-	f32 := encodeGeometryPayloadFloat32("POINT(1 2)")
+	f32, err := encodeGeometryPayloadFloat32("POINT(1 2)")
+	require.NoError(t, err)
 	f64 := encodeGeometryPayload("POINT(1 2)", 0, false)
 	require.Len(t, f32, 13)
 	require.Len(t, f64, 21)
@@ -1049,11 +1051,45 @@ func TestGeometry32EncodeDecode(t *testing.T) {
 	require.Equal(t, "POINT(1 2)", got64)
 }
 
+func TestGeometry32OverflowAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	const overflowPoint = "POINT(3.5e38 0)"
+
+	out, err := encodeGeometryPayloadFloat32(overflowPoint)
+	require.Nil(t, out)
+	require.ErrorContains(t, err, "not finite in GEOMETRY32")
+
+	out, err = NormalizeGeometryForStorage(proc, []byte(overflowPoint), "POINT", true)
+	require.Nil(t, out)
+	require.ErrorContains(t, err, "not finite in GEOMETRY32")
+
+	cast := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{overflowPoint}, nil),
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{}, nil),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), true, nil, nil), NewCast)
+	require.NoError(t, cast.result.PreExtendAndReset(1))
+	err = NewCast(cast.parameters, cast.result, proc, 1, nil)
+	require.ErrorContains(t, err, "not finite in GEOMETRY32")
+
+	boundary := fmt.Sprintf("POINT(%g %g)", float64(math.MaxFloat32), -float64(math.MaxFloat32))
+	out, err = NormalizeGeometryForStorage(proc, []byte(boundary), "POINT", true)
+	require.NoError(t, err)
+	require.Len(t, out, 13)
+	for _, off := range []int{5, 9} {
+		bits := binary.LittleEndian.Uint32(out[off : off+4])
+		require.NotEqual(t, uint32(0x7f800000), bits&0x7f800000)
+	}
+}
+
 func Test_CastGeometry32(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	// A geometry32 (float32 WKB) source value.
-	pointF32 := string(encodeGeometryPayloadFloat32("POINT(5 6)"))
+	pointF32Bytes, err := encodeGeometryPayloadFloat32("POINT(5 6)")
+	require.NoError(t, err)
+	pointF32 := string(pointF32Bytes)
 
 	testCases := []tcTemp{
 		{
@@ -1097,7 +1133,9 @@ func Test_CastGeometry32(t *testing.T) {
 func Test_CastGeometryPrecisionBothWays(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
-	pointF32 := string(encodeGeometryPayloadFloat32("POINT(5 6)"))    // float32 WKB
+	pointF32Bytes, err := encodeGeometryPayloadFloat32("POINT(5 6)")
+	require.NoError(t, err)
+	pointF32 := string(pointF32Bytes)                                 // float32 WKB
 	pointF64 := string(encodeGeometryPayload("POINT(5 6)", 0, false)) // float64 WKB
 
 	castLen := func(srcType types.Type, src string, dstType types.Type) int {
@@ -4340,14 +4378,10 @@ func TestCastJsonToBool(t *testing.T) {
 		{name: "malformed_decimal", value: newTypedByteJson(bytejson.TpCodeDecimal, "not-a-decimal")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			inputs := []FunctionTestInput{
-				NewFunctionTestInput(types.T_json.ToType(), []string{encodeJSONCastValue(t, tc.value)}, nil),
-				NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
-			}
-			expect := NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil)
-			fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-			succeed, info := fcTC.Run()
-			require.True(t, succeed, "%s: %s", tc.name, info)
+			// Arbitrary malformed ByteJSON is rejected by vector admission. Keep
+			// the scalar cast's defensive error contract as a direct internal probe.
+			_, _, err := jsonScalarToBool(proc.Ctx, tc.value)
+			require.Error(t, err)
 		})
 	}
 }

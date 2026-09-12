@@ -318,17 +318,17 @@ t9  ¦  INSERT  ¦  104  𝄀
 t9  ¦  INSERT  ¦  109  𝄀
 t0  ¦  INSERT  ¦  200
 data branch diff t9 against t0 columns (b);
-➤ diff t9 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  b[4,0,0]  𝄀
-t9  ¦  UPDATE  ¦  10000  𝄀
-t0  ¦  UPDATE  ¦  99999  𝄀
-t9  ¦  UPDATE  ¦  40000  𝄀
-t9  ¦  UPDATE  ¦  90000  𝄀
-t9  ¦  DELETE  ¦  11  𝄀
-t9  ¦  DELETE  ¦  16  𝄀
-t9  ¦  INSERT  ¦  101  𝄀
-t9  ¦  INSERT  ¦  104  𝄀
-t9  ¦  INSERT  ¦  109  𝄀
-t0  ¦  INSERT  ¦  200
+➤ diff t9 against t0[12,0,0]  ¦  flag[12,0,0]  ¦  a[4,0,0]  ¦  b[4,0,0]  𝄀
+t9  ¦  UPDATE  ¦  1  ¦  10000  𝄀
+t0  ¦  UPDATE  ¦  1  ¦  99999  𝄀
+t9  ¦  UPDATE  ¦  4  ¦  40000  𝄀
+t9  ¦  UPDATE  ¦  9  ¦  90000  𝄀
+t9  ¦  DELETE  ¦  11  ¦  11  𝄀
+t9  ¦  DELETE  ¦  16  ¦  16  𝄀
+t9  ¦  INSERT  ¦  101  ¦  101  𝄀
+t9  ¦  INSERT  ¦  104  ¦  104  𝄀
+t9  ¦  INSERT  ¦  109  ¦  109  𝄀
+t0  ¦  INSERT  ¦  200  ¦  200
 drop table t9;
 drop table t10;
 drop table t11;

@@ -48,49 +48,90 @@ func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 			require.NoError(t, prepareErr, statement)
 			return stmt
 		}
-		assertResultSet := func(rows *sql.Rows, expectedColumns []string, expectedValues []int64) {
+		type expectedAnalyzeRow struct {
+			tableName       string
+			columnsAnalyzed uint64
+			populationRows  uint64
+		}
+		assertResultSet := func(rows *sql.Rows, expectedRows []expectedAnalyzeRow) {
 			columns, columnsErr := rows.Columns()
 			require.NoError(t, columnsErr)
-			require.Equal(t, expectedColumns, columns)
-			require.Len(t, expectedValues, len(columns))
-			dest := make([]any, len(expectedValues))
-			actual := make([]int64, len(expectedValues))
-			for i := range actual {
-				dest[i] = &actual[i]
+			require.Equal(t, []string{
+				"table_name", "mode", "coverage", "columns_analyzed", "population_rows",
+				"population_exact", "sample_rows", "sample_blocks", "sample_bytes", "status", "message",
+			}, columns)
+			for _, expected := range expectedRows {
+				var (
+					tableName       string
+					mode            string
+					coverage        string
+					columnsAnalyzed uint64
+					populationRows  uint64
+					populationExact bool
+					sampleRows      uint64
+					sampleBlocks    uint64
+					sampleBytes     uint64
+					status          string
+					message         string
+				)
+				require.True(t, rows.Next())
+				require.NoError(t, rows.Scan(
+					&tableName, &mode, &coverage, &columnsAnalyzed, &populationRows,
+					&populationExact, &sampleRows, &sampleBlocks, &sampleBytes, &status, &message))
+				require.Equal(t, expected.tableName, tableName)
+				require.Equal(t, "AUTO", mode)
+				require.Equal(t, "SNAPSHOT_VISIBLE_V1", coverage)
+				require.Equal(t, expected.columnsAnalyzed, columnsAnalyzed)
+				require.Equal(t, expected.populationRows, populationRows)
+				require.True(t, populationExact)
+				require.Equal(t, populationRows, sampleRows)
+				require.NotZero(t, sampleBlocks)
+				require.NotZero(t, sampleBytes)
+				require.Equal(t, "OK", status)
+				require.Equal(t, "q=1/1", message)
 			}
-			require.True(t, rows.Next())
-			require.NoError(t, rows.Scan(dest...))
-			require.Equal(t, expectedValues, actual)
 			require.False(t, rows.Next())
 			require.NoError(t, rows.Err())
 		}
-		querySingle := func(stmt *sql.Stmt, expectedColumns []string, expectedValues []int64) {
+		querySingle := func(stmt *sql.Stmt, expectedRows ...expectedAnalyzeRow) {
 			rows, queryErr := stmt.QueryContext(ctx)
 			require.NoError(t, queryErr)
 			defer func() {
 				require.NoError(t, rows.Close())
 			}()
-			assertResultSet(rows, expectedColumns, expectedValues)
+			assertResultSet(rows, expectedRows)
 			require.False(t, rows.NextResultSet())
 			require.NoError(t, rows.Err())
 		}
-		queryText := func(name string, expectedResultSets ...struct {
-			columns []string
-			values  []int64
-		}) {
+		queryText := func(name string, expectedRows ...expectedAnalyzeRow) {
 			rows, queryErr := conn.QueryContext(ctx, "execute "+name)
 			require.NoError(t, queryErr)
 			defer func() {
 				require.NoError(t, rows.Close())
 			}()
-			for i, expected := range expectedResultSets {
-				if i > 0 {
-					require.True(t, rows.NextResultSet())
-				}
-				assertResultSet(rows, expected.columns, expected.values)
-			}
+			assertResultSet(rows, expectedRows)
 			require.False(t, rows.NextResultSet())
 			require.NoError(t, rows.Err())
+		}
+		queryError := func(stmt *sql.Stmt, expected string) {
+			rows, queryErr := stmt.QueryContext(ctx)
+			if rows != nil {
+				defer func() {
+					require.NoError(t, rows.Close())
+				}()
+				require.NoError(t, rows.Err())
+			}
+			require.ErrorContains(t, queryErr, expected)
+		}
+		queryTextError := func(name string, expected string) {
+			rows, queryErr := conn.QueryContext(ctx, "execute "+name)
+			if rows != nil {
+				defer func() {
+					require.NoError(t, rows.Close())
+				}()
+				require.NoError(t, rows.Err())
+			}
+			require.ErrorContains(t, queryErr, expected)
 		}
 		assertCurrentDatabase := func(expected string) {
 			var currentDatabase string
@@ -111,59 +152,43 @@ func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 		explicit := prepare("analyze table t(a, b)")
 		defer explicit.Close()
 		for range 2 {
-			querySingle(explicit,
-				[]string{"approx_count_distinct(a)", "approx_count_distinct(b)"},
-				[]int64{2, 2})
+			querySingle(explicit, expectedAnalyzeRow{
+				tableName: "prepared_analyze_test.t", columnsAnalyzed: 2, populationRows: 3})
 		}
 
 		implicit := prepare("analyze table t")
 		defer implicit.Close()
-		querySingle(implicit,
-			[]string{"approx_count_distinct(a)", "approx_count_distinct(b)"},
-			[]int64{2, 2})
+		querySingle(implicit, expectedAnalyzeRow{
+			tableName: "prepared_analyze_test.t", columnsAnalyzed: 2, populationRows: 3})
 
-		multi := prepare("analyze table t(a), t(b, a)")
+		exec("create table t_aux (a int, b varchar(20))")
+		exec("insert into t_aux values (4, 'u'), (5, 'v')")
+		multi := prepare("analyze table t(a), t_aux(b, a)")
 		defer multi.Close()
-		func() {
-			rows, queryErr := multi.QueryContext(ctx)
-			require.NoError(t, queryErr)
-			defer func() {
-				require.NoError(t, rows.Close())
-			}()
-			assertResultSet(rows, []string{"approx_count_distinct(a)"}, []int64{2})
-			require.True(t, rows.NextResultSet())
-			assertResultSet(rows,
-				[]string{"approx_count_distinct(b)", "approx_count_distinct(a)"},
-				[]int64{2, 2})
-			require.False(t, rows.NextResultSet())
-			require.NoError(t, rows.Err())
-		}()
+		querySingle(multi,
+			expectedAnalyzeRow{tableName: "prepared_analyze_test.t", columnsAnalyzed: 1, populationRows: 3},
+			expectedAnalyzeRow{tableName: "prepared_analyze_test.t_aux", columnsAnalyzed: 2, populationRows: 2})
 
-		exec("prepare analyze_stmt_form from analyze table t(a), t(b, a)")
+		exec("prepare analyze_stmt_form from analyze table t(a), t_aux(b, a)")
 		defer exec("deallocate prepare analyze_stmt_form")
-		exec("prepare analyze_string_form from 'analyze table t(a), t(b, a)'")
+		exec("prepare analyze_string_form from 'analyze table t(a), t_aux(b, a)'")
 		defer exec("deallocate prepare analyze_string_form")
 
 		exec("use prepared_analyze_other")
 		exec("create table t (a int, b varchar(20))")
 		exec("insert into t values (9, 'other'), (9, 'other')")
-		expectedTextResultSets := []struct {
-			columns []string
-			values  []int64
-		}{
-			{columns: []string{"approx_count_distinct(a)"}, values: []int64{2}},
-			{
-				columns: []string{"approx_count_distinct(b)", "approx_count_distinct(a)"},
-				values:  []int64{2, 2},
-			},
+		exec("create table t_aux (a int, b varchar(20))")
+		exec("insert into t_aux values (9, 'other')")
+		expectedTextRows := []expectedAnalyzeRow{
+			{tableName: "prepared_analyze_test.t", columnsAnalyzed: 1, populationRows: 3},
+			{tableName: "prepared_analyze_test.t_aux", columnsAnalyzed: 2, populationRows: 2},
 		}
-		queryText("analyze_stmt_form", expectedTextResultSets...)
+		queryText("analyze_stmt_form", expectedTextRows...)
 		assertCurrentDatabase("prepared_analyze_other")
-		queryText("analyze_string_form", expectedTextResultSets...)
+		queryText("analyze_string_form", expectedTextRows...)
 		assertCurrentDatabase("prepared_analyze_other")
-		querySingle(explicit,
-			[]string{"approx_count_distinct(a)", "approx_count_distinct(b)"},
-			[]int64{2, 2})
+		querySingle(explicit, expectedAnalyzeRow{
+			tableName: "prepared_analyze_test.t", columnsAnalyzed: 2, populationRows: 3})
 		assertCurrentDatabase("prepared_analyze_other")
 		exec("use prepared_analyze_test")
 
@@ -177,15 +202,9 @@ func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 		defer exec("deallocate prepare analyze_snapshot_string")
 		exec("alter table snapshot_text add column current_only int")
 		exec("use prepared_analyze_other")
-		expectedSnapshotResult := []struct {
-			columns []string
-			values  []int64
-		}{
-			{columns: []string{"approx_count_distinct(old_col)"}, values: []int64{2}},
-		}
-		queryText("analyze_snapshot_stmt", expectedSnapshotResult...)
+		queryTextError("analyze_snapshot_stmt", "does not support historical snapshots")
 		assertCurrentDatabase("prepared_analyze_other")
-		queryText("analyze_snapshot_string", expectedSnapshotResult...)
+		queryTextError("analyze_snapshot_string", "does not support historical snapshots")
 		assertCurrentDatabase("prepared_analyze_other")
 		exec("use prepared_analyze_test")
 
@@ -195,19 +214,17 @@ func TestPreparedAnalyzeOverMySQLProtocol(t *testing.T) {
 		defer drift.Close()
 		exec("alter table drift add column y int")
 		exec("update drift set y = x")
-		querySingle(drift,
-			[]string{"approx_count_distinct(x)", "approx_count_distinct(y)"},
-			[]int64{2, 2})
+		querySingle(drift, expectedAnalyzeRow{
+			tableName: "prepared_analyze_test.drift", columnsAnalyzed: 2, populationRows: 2})
 		exec("drop table drift")
 		exec("create table drift (x int)")
 		exec("insert into drift values (7), (7)")
-		querySingle(drift, []string{"approx_count_distinct(x)"}, []int64{1})
+		querySingle(drift, expectedAnalyzeRow{
+			tableName: "prepared_analyze_test.drift", columnsAnalyzed: 1, populationRows: 2})
 
 		exec("begin")
 		exec("insert into t values (3, 'z')")
-		querySingle(explicit,
-			[]string{"approx_count_distinct(a)", "approx_count_distinct(b)"},
-			[]int64{3, 3})
+		queryError(explicit, "cannot run inside an active user transaction")
 		exec("rollback")
 
 		exec("create table later_missing (v int)")

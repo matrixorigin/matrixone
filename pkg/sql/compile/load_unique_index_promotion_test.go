@@ -266,6 +266,25 @@ func TestAnalyzeLoadUniqueIndexPromotionPlan(t *testing.T) {
 	require.True(t, ok,
 		"an execution-path marker must not change lock-safety admission")
 
+	for _, floatType := range []types.T{types.T_float32, types.T_float64} {
+		t.Run(floatType.String()+" base primary key", func(t *testing.T) {
+			candidate := newLoadUniqueIndexPromotionPlan()
+			floatPK := plan.Type{Id: int32(floatType)}
+			candidate.GetQuery().Nodes[1].TableDef.Cols[0].Typ = floatPK
+			candidate.GetQuery().Nodes[1].LockTargets[0].PrimaryColTyp = floatPK
+			_, admitted := analyzeLoadUniqueIndexPromotionPlan(candidate, testLoadUniqueIndexMaxRowLocks)
+			require.True(t, admitted)
+		})
+		t.Run(floatType.String()+" unique hidden primary key", func(t *testing.T) {
+			candidate := newLoadUniqueIndexPromotionPlan()
+			floatPK := plan.Type{Id: int32(floatType)}
+			candidate.GetQuery().Nodes[2].UpdateCtxList[1].TableDef.Cols[0].Typ = floatPK
+			candidate.GetQuery().Nodes[1].LockTargets[1].PrimaryColTyp = floatPK
+			_, admitted := analyzeLoadUniqueIndexPromotionPlan(candidate, testLoadUniqueIndexMaxRowLocks)
+			require.True(t, admitted)
+		})
+	}
+
 	tests := []struct {
 		name   string
 		mutate func(*plan.Plan)
@@ -304,20 +323,10 @@ func TestAnalyzeLoadUniqueIndexPromotionPlan(t *testing.T) {
 			p.GetQuery().Nodes[2].UpdateCtxList[1].TableDef.Cols[0].Typ = unsupported
 			p.GetQuery().Nodes[1].LockTargets[1].PrimaryColTyp = unsupported
 		}},
-		{"non-total float hidden pk", func(p *plan.Plan) {
-			nonTotal := plan.Type{Id: int32(types.T_float64)}
-			p.GetQuery().Nodes[2].UpdateCtxList[1].TableDef.Cols[0].Typ = nonTotal
-			p.GetQuery().Nodes[1].LockTargets[1].PrimaryColTyp = nonTotal
-		}},
 		{"unsupported base pk", func(p *plan.Plan) {
 			unsupported := plan.Type{Id: int32(types.T_blob)}
 			p.GetQuery().Nodes[1].TableDef.Cols[0].Typ = unsupported
 			p.GetQuery().Nodes[1].LockTargets[0].PrimaryColTyp = unsupported
-		}},
-		{"non-total float base pk", func(p *plan.Plan) {
-			nonTotal := plan.Type{Id: int32(types.T_float32)}
-			p.GetQuery().Nodes[1].TableDef.Cols[0].Typ = nonTotal
-			p.GetQuery().Nodes[1].LockTargets[0].PrimaryColTyp = nonTotal
 		}},
 		{"partial target vector", func(p *plan.Plan) { p.GetQuery().Nodes[1].LockTargets = p.GetQuery().Nodes[1].LockTargets[:1] }},
 		{"duplicate lock shape", func(p *plan.Plan) {

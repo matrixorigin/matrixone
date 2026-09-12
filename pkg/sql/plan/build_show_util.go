@@ -602,7 +602,11 @@ func constructCreateTableSQL(
 			fkRefDbName = schemaName
 		}
 		fkRefDbTblName := sqlquote.Ident(fkTableDef.Name)
-		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName {
+		// CREATE TABLE LIKE rewrites the target database into tableDef before
+		// rebuilding the source definition. Keep ordinary same-database references
+		// qualified so the recursive planner does not fall back to the session DB.
+		if cloneStmt != nil || tableDef.DbName != fkTableDef.DbName ||
+			(useDbName && sourceSubscription == nil && fkRefDbName != "") {
 			fkRefDbTblName = sqlquote.QualifiedIdent(fkRefDbName, fkTableDef.Name)
 		}
 		createStr += fmt.Sprintf("  CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s) ON DELETE %s ON UPDATE %s",

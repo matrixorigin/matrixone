@@ -37,6 +37,13 @@ const (
 	// protects planning, plan transport, and recursive validation as well as the
 	// remote server.
 	MaxUserPipelineStages = 16
+	// MaxUserSortKeys matches MongoDB's compound-sort key limit and bounds the
+	// per-stage validation and server sort specification.
+	MaxUserSortKeys = 32
+	// MaxUserFieldPathSegments is the common path-depth envelope accepted by
+	// both $sort and $unwind on the supported MongoDB baseline. $unwind rejects
+	// a 200-component path, so all locally validated stage paths use 199.
+	MaxUserFieldPathSegments = 199
 	// MaxUserQueryDepth bounds recursive JSON/BSON validation independently of
 	// the byte limit so adversarial nesting cannot exhaust the planner stack.
 	MaxUserQueryDepth = 32
@@ -300,11 +307,6 @@ func consumeJSONValue(decoder *json.Decoder, depth int) error {
 	return nil
 }
 
-var allowedUserPipelineStages = map[string]struct{}{
-	"$match": {}, "$project": {}, "$set": {}, "$addFields": {},
-	"$unset": {}, "$group": {}, "$limit": {}, "$skip": {}, "$count": {},
-}
-
 // allowedUserQueryOperators is intentionally an allowlist. It covers the
 // common read-only filter, expression, and accumulator subset needed by the
 // first implementation. Adding an operator requires an explicit security and
@@ -341,14 +343,17 @@ func validateUserPipelineStage(ctx context.Context, stage bson.D) error {
 		return moerr.NewInvalidInput(ctx, "each MongoDB pipeline stage must contain exactly one operator")
 	}
 	operator := stage[0].Key
-	if _, ok := allowedUserPipelineStages[operator]; !ok {
-		return moerr.NewInvalidInput(ctx, "MongoDB pipeline stage is not allowed")
-	}
 	value := stage[0].Value
+	// Keep the stage allowlist and the stage-specific validation in one switch so
+	// a reviewed stage cannot be accidentally rejected by a second, stale list.
 	switch operator {
-	case "$match", "$project", "$set", "$addFields", "$group", "$sort":
+	case "$match", "$project", "$set", "$addFields", "$group":
 		if _, ok := asBSONDocument(value); !ok {
 			return moerr.NewInvalidInputf(ctx, "MongoDB pipeline stage %s requires an object", operator)
+		}
+	case "$sort":
+		if !isValidSortDocument(value) {
+			return moerr.NewInvalidInputf(ctx, "MongoDB $sort requires 1 to %d fields with 1 or -1 directions", MaxUserSortKeys)
 		}
 	case "$limit", "$skip":
 		if !isNonNegativeInteger(value) {
@@ -367,11 +372,11 @@ func validateUserPipelineStage(ctx context.Context, stage bson.D) error {
 			return moerr.NewInvalidInput(ctx, "MongoDB $unset requires a field name or array of field names")
 		}
 	case "$unwind":
-		if _, stringForm := value.(string); !stringForm {
-			if _, documentForm := asBSONDocument(value); !documentForm {
-				return moerr.NewInvalidInput(ctx, "MongoDB $unwind requires a field path or object")
-			}
+		if !isValidUnwind(value) {
+			return moerr.NewInvalidInput(ctx, "MongoDB $unwind requires a valid field path or options object")
 		}
+	default:
+		return moerr.NewInvalidInput(ctx, "MongoDB pipeline stage is not allowed")
 	}
 	return validateMongoValue(ctx, value)
 }
@@ -468,6 +473,88 @@ func isZeroInteger(value any) bool {
 	default:
 		return false
 	}
+}
+
+func isValidSortDocument(value any) bool {
+	document, ok := asBSONDocument(value)
+	if !ok || len(document) == 0 || len(document) > MaxUserSortKeys {
+		return false
+	}
+	for _, element := range document {
+		if !isMongoDottedFieldPath(element.Key) || !isOneOrMinusOneInteger(element.Value) {
+			return false
+		}
+	}
+	return true
+}
+
+func isOneOrMinusOneInteger(value any) bool {
+	switch typed := value.(type) {
+	case int32:
+		return typed == 1 || typed == -1
+	case int64:
+		return typed == 1 || typed == -1
+	default:
+		return false
+	}
+}
+
+func isValidUnwind(value any) bool {
+	if path, ok := value.(string); ok {
+		return isMongoFieldPath(path)
+	}
+	document, ok := asBSONDocument(value)
+	if !ok || len(document) == 0 {
+		return false
+	}
+	seenPath := false
+	seen := make(map[string]struct{}, len(document))
+	for _, element := range document {
+		if _, exists := seen[element.Key]; exists {
+			return false
+		}
+		seen[element.Key] = struct{}{}
+		switch element.Key {
+		case "path":
+			path, ok := element.Value.(string)
+			if !ok || !isMongoFieldPath(path) {
+				return false
+			}
+			seenPath = true
+		case "includeArrayIndex":
+			name, ok := element.Value.(string)
+			if !ok || !isMongoDottedFieldPath(name) {
+				return false
+			}
+		case "preserveNullAndEmptyArrays":
+			if _, ok := element.Value.(bool); !ok {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return seenPath
+}
+
+func isMongoFieldPath(path string) bool {
+	return len(path) > 1 && path[0] == '$' && isMongoDottedFieldPath(path[1:])
+}
+
+func isMongoDottedFieldPath(path string) bool {
+	if path == "" || strings.IndexByte(path, 0) >= 0 {
+		return false
+	}
+	fields := strings.Split(path, ".")
+	if len(fields) > MaxUserFieldPathSegments {
+		return false
+	}
+	for _, field := range fields {
+		if field == "" || field[0] == '$' {
+			return false
+		}
+	}
+	return true
 }
 
 func isStringOrStringArray(value any) bool {

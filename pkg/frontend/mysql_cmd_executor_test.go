@@ -24,6 +24,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -196,6 +197,28 @@ func TestDoComQueryStopsAfterStatementError(t *testing.T) {
 	require.ErrorContains(t, err, "first statement failed")
 }
 
+func TestExecuteStmtDoesNotCreateLoadLocalPipeBeforeCompileSucceeds(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	compileErr := moerr.NewInternalError(ctx, "placement rejected")
+	cw := mock_frontend.NewMockComputationWrapper(ctrl)
+	cw.EXPECT().Compile(gomock.Any(), gomock.Any()).Return(nil, compileErr)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.proc = ses.GetProc()
+	execCtx.input = &UserInput{}
+	execCtx.cw = cw
+	execCtx.stmt = &tree.Load{Local: true}
+
+	err := executeStmt(ses, execCtx)
+	require.ErrorIs(t, err, compileErr)
+	require.Nil(t, execCtx.proc.Base.LoadLocalReader)
+	require.Nil(t, execCtx.loadLocalWriter)
+}
+
 func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
 	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
 	execCtx := &ExecCtx{}
@@ -260,6 +283,154 @@ func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {
 	require.Equal(t, "Warning", level)
 }
 
+func TestShowDiagnosticCountsUseIndependentTotals(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		errInfo:       &errInfo{maxCnt: 1},
+	}
+	ses.appendWarningDiagnostic(1292, "warning")
+	ses.appendErrorDiagnostic(1064, "error")
+	ses.appendErrorDiagnostic(1065, "newest error")
+
+	warningCount, errorCount := ses.diagnosticsCounts()
+	require.Equal(t, uint64(3), warningCount)
+	require.Equal(t, uint64(2), errorCount)
+	require.Len(t, ses.diagnosticsSnapshot().codes, 1)
+
+	for _, test := range []struct {
+		name       string
+		stmt       tree.Statement
+		columnName string
+		want       uint64
+	}{
+		{
+			name:       "warnings",
+			stmt:       &tree.ShowWarnings{Count: true},
+			columnName: "@@session.warning_count",
+			want:       3,
+		},
+		{
+			name:       "errors",
+			stmt:       &tree.ShowErrors{Count: true},
+			columnName: "@@session.error_count",
+			want:       2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses.SetMysqlResultSet(&MysqlResultSet{})
+			execCtx := &ExecCtx{reqCtx: context.Background(), stmt: test.stmt}
+			require.NoError(t, doShowErrors(ses, execCtx))
+			mrs := ses.GetMysqlResultSet()
+			require.Equal(t, uint64(1), mrs.GetColumnCount())
+			require.Equal(t, test.columnName, mrs.Columns[0].Name())
+			column, ok := mrs.Columns[0].(*MysqlColumn)
+			require.True(t, ok)
+			require.Equal(t, defines.MYSQL_TYPE_LONGLONG, column.ColumnType())
+			require.False(t, column.IsSigned())
+			require.Equal(t, uint64(1), mrs.GetRowCount())
+			got, err := mrs.GetUint64(context.Background(), 0, 0)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestShowDiagnosticsLimitFiltersBeforePagination(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		errInfo:       &errInfo{maxCnt: MoDefaultErrorCount},
+	}
+	ses.appendErrorDiagnostic(1001, "old error")
+	ses.appendWarningDiagnostic(1002, "warning")
+	ses.appendErrorDiagnostic(1003, "new error")
+
+	limit := func(offset, count int64) *tree.Limit {
+		return &tree.Limit{
+			Offset: tree.NewNumVal(offset, fmt.Sprintf("%d", offset), false, tree.P_int64),
+			Count:  tree.NewNumVal(count, fmt.Sprintf("%d", count), false, tree.P_int64),
+		}
+	}
+
+	showDiagnostics := func(stmt tree.Statement, wantCode string) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		execCtx := &ExecCtx{reqCtx: context.Background(), stmt: stmt}
+		require.NoError(t, doShowErrors(ses, execCtx))
+		require.Equal(t, uint64(1), ses.GetMysqlResultSet().GetRowCount())
+		code, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 1)
+		require.NoError(t, err)
+		require.Equal(t, wantCode, code)
+	}
+
+	showDiagnostics(&tree.ShowErrors{Limit: limit(1, 1)}, "1001")
+	showDiagnostics(&tree.ShowWarnings{Limit: limit(1, 1)}, "1002")
+
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	invalid := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt: &tree.ShowWarnings{Limit: &tree.Limit{
+			Count: tree.NewUnaryExpr(
+				tree.UNARY_MINUS,
+				tree.NewNumVal[int64](1, "1", false, tree.P_int64),
+			),
+		}},
+	}
+	require.Error(t, doShowErrors(ses, invalid))
+	require.Empty(t, ses.GetMysqlResultSet().Data)
+}
+
+func TestDiagnosticCountVariableExpressionsParse(t *testing.T) {
+	for _, sql := range []string{
+		"select @@warning_count",
+		"select (@@warning_count) as w, @@error_count",
+		"select @@warning_count + 1",
+		"select @@warning_count from dual",
+		"select @@warning_count limit 1",
+	} {
+		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		stmt.Free()
+	}
+
+	for _, sql := range []string{
+		"select @warning_count",
+		"select @@global.warning_count",
+	} {
+		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok, sql)
+		selectStmt.Free()
+	}
+}
+
+func TestDiagnosticCountVariableUsesStatementSnapshot(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.appendWarningDiagnostic(1292, "previous warning")
+	ses.appendErrorDiagnostic(1064, "previous error")
+
+	execCtx := &ExecCtx{reqCtx: context.Background(), ses: ses}
+	tcc := &TxnCompilerContext{}
+	tcc.SetExecCtx(execCtx)
+	execCtx.captureDiagnosticCountsSnapshot(ses)
+	resetDiagnosticsForStatement(ses, execCtx, &UserInput{}, &tree.Select{})
+	ses.appendWarningDiagnostic(1365, "new warning")
+
+	warningCount, err := tcc.ResolveVariable(warningCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), warningCount)
+	errorCount, err := tcc.ResolveVariable(errorCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), errorCount)
+
+	execCtx.clearDiagnosticCountsSnapshot()
+	warningCount, err = tcc.ResolveVariable(warningCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), warningCount)
+	errorCount, err = tcc.ResolveVariable(errorCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Zero(t, errorCount)
+}
+
 func TestSetNewResponseIncludesWarningDiagnostics(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
@@ -282,6 +453,26 @@ func TestAppendWarningBatchBoundsRecordsAndPreservesTotal(t *testing.T) {
 	require.Len(t, info.codes, 3)
 	require.Equal(t, []uint16{2, 3, 4}, info.codes)
 	require.Equal(t, uint16(100), info.warningCount())
+}
+
+func TestAppendWarningCountSaturatesAndBoundsMessageBytes(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.AppendWarningCount(^uint64(0))
+	ses.AppendWarningCount(1)
+	ses.AppendWarningDiagnostic(1, strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes*2))
+
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, ^uint64(0), info.totalWarnings)
+	require.Len(t, info.msgs, 1)
+	require.LessOrEqual(t, len(info.msgs[0]), process.WarningDiagnosticMaxMessageBytes)
+}
+
+func TestAppendWarningBatchDoesNotRetainMoreRecordsThanTotal(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.AppendWarningBatch(1, []uint16{1292, 1292}, []string{"first", "second"})
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, uint64(1), info.totalWarnings)
+	require.Len(t, info.msgs, 1)
 }
 
 func TestHandleSetTransaction(t *testing.T) {
@@ -985,8 +1176,12 @@ func TestExecCtxStatementGenerationPreparedDatabase(t *testing.T) {
 	execCtx.persistentDropTableTargets = tree.TableNames{
 		tree.NewTableName(tree.Identifier("next"), tree.ObjectNamePrefix{}, nil),
 	}
+	execCtx.effectiveTxnStatement = &tree.TruncateTable{}
+	execCtx.implicitCommitBefore = true
 	execCtx.beginStatementGeneration(&UserInput{})
 	require.Empty(t, execCtx.effectiveTxnDefaultDatabase)
+	require.Nil(t, execCtx.effectiveTxnStatement)
+	require.False(t, execCtx.implicitCommitBefore)
 	require.Nil(t, execCtx.persistentDropTableTargets)
 }
 
@@ -3964,6 +4159,14 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
 	refreshStatementScopedSessionInfo(ses, proc)
 	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.Equal(t, uint64(1), proc.Base.SessionInfo.AutoIncrementIncrement)
+	require.Equal(t, uint64(1), proc.Base.SessionInfo.AutoIncrementOffset)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "auto_increment_increment", int64(7)))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "auto_increment_offset", int64(4)))
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, uint64(7), proc.Base.SessionInfo.AutoIncrementIncrement)
+	require.Equal(t, uint64(4), proc.Base.SessionInfo.AutoIncrementOffset)
 
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES,MATRIXONE_NATIVE"))
 	refreshStatementScopedSessionInfo(ses, proc)
@@ -4596,6 +4799,8 @@ func TestPreparedCursorGeometryMaterializationBoundAndRollback(t *testing.T) {
 		points[i] = geo.Coord{X: float64(i) + 0.123456, Y: float64(i%97) + 0.654321}
 	}
 	line := geo.LineString{Points: points}
+	line32, err := geo.WriteWKBFloat32(line)
+	require.NoError(t, err)
 
 	for _, tc := range []struct {
 		name    string
@@ -4603,7 +4808,7 @@ func TestPreparedCursorGeometryMaterializationBoundAndRollback(t *testing.T) {
 		payload []byte
 	}{
 		{name: "geometry", typ: types.T_geometry, payload: geo.WriteWKB(line)},
-		{name: "geometry32", typ: types.T_geometry32, payload: geo.WriteWKBFloat32(line)},
+		{name: "geometry32", typ: types.T_geometry32, payload: line32},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vec := vector.NewVec(tc.typ.ToType())
@@ -4896,6 +5101,8 @@ func Test_statement_type(t *testing.T) {
 		}
 
 		convey.So(IsDDL(&tree.CreateTable{}), convey.ShouldBeTrue)
+		convey.So(isImplicitCommitStatement(&tree.TruncateTable{}), convey.ShouldBeTrue)
+		convey.So(isImplicitCommitStatement(&tree.CreateTable{}), convey.ShouldBeFalse)
 		convey.So(IsDropStatement(&tree.DropTable{}), convey.ShouldBeTrue)
 		convey.So(IsAdministrativeStatement(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(IsParameterModificationStatement(&tree.SetVar{}), convey.ShouldBeTrue)
@@ -4938,6 +5145,15 @@ func Test_statement_type(t *testing.T) {
 				activeTxnAtStart:      true,
 			},
 		}), convey.ShouldBeFalse)
+		convey.So(needToFinishTransactionAtStatementEnd(&ExecCtx{
+			stmt: &tree.TruncateTable{},
+			txnOpt: FeTxnOption{
+				implicitCommitBefore: true,
+			},
+		}), convey.ShouldBeTrue)
+		txnOpt := FeTxnOption{implicitCommitBefore: true}
+		txnOpt.Close()
+		convey.So(txnOpt.implicitCommitBefore, convey.ShouldBeFalse)
 		mixedSet := &tree.SetVar{Assignments: []*tree.VarAssignmentExpr{
 			{
 				System:   true,
@@ -5027,6 +5243,24 @@ func TestCanExecuteDataBranchMergePickInUncommittedTransaction(t *testing.T) {
 				require.Contains(t, err.Error(), dataBranchMergePickTxnErrorInfo())
 			})
 		}
+	}
+}
+
+func TestPrepareDataBranchCanExecuteInUncommittedTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.GetTxnHandler().SetOptionBits(OPTION_NOT_AUTOCOMMIT)
+
+	for _, stmt := range []tree.Statement{
+		tree.NewPrepareStmt("merge", &tree.DataBranchMerge{}),
+		tree.NewPrepareStmt("pick", &tree.DataBranchPick{}),
+		tree.NewPrepareString("merge_sql", "data branch merge src into dst when conflict accept"),
+		tree.NewPrepareString("pick_sql", "data branch pick src into dst keys(?) when conflict accept"),
+	} {
+		allowed, err := statementCanBeExecutedInUncommittedTransaction(context.Background(), ses, stmt)
+		require.NoError(t, err)
+		require.True(t, allowed)
 	}
 }
 
@@ -5121,12 +5355,32 @@ func TestHandleAnalyzeStmtRestoresOuterExecCtxOnError(t *testing.T) {
 	require.Same(t, outerExecCtx, ses.GetTxnCompileCtx().execCtx)
 }
 
-type analyzeStatsRefresherFunc func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error)
+func TestHandleAnalyzeStmtAlwaysUsesStatisticsCollector(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
+	execCtx.txnOpt.activeTxnAtStartKnown = true
+	execCtx.txnOpt.activeTxnAtStart = true
+	stmt := &tree.AnalyzeStmt{Entries: []*tree.AnalyzeTableEntry{{
+		Table: tree.NewTableName("events", tree.ObjectNamePrefix{}, nil),
+	}}}
 
-func (f analyzeStatsRefresherFunc) RefreshTableStats(
-	ctx context.Context, key pbstats.StatsInfoKey,
+	err := handleAnalyzeStmt(ses, execCtx, stmt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ANALYZE TABLE cannot run inside an active user transaction")
+}
+
+type analyzedStatsPublisherFunc func(
+	context.Context,
+	pbstats.StatsInfoKey,
+	uint32,
+	*pbstats.StatsInfo,
+) (*pbstats.StatsInfo, error)
+
+func (f analyzedStatsPublisherFunc) PublishAnalyzedStats(
+	ctx context.Context, key pbstats.StatsInfoKey, tableDefVersion uint32, stats *pbstats.StatsInfo,
 ) (*pbstats.StatsInfo, error) {
-	return f(ctx, key)
+	return f(ctx, key, tableDefVersion, stats)
 }
 
 func TestAnalyzeTableOwnsPersistentStats(t *testing.T) {
@@ -5361,7 +5615,7 @@ func TestOptimizerStatsVersionsCompactWithoutRevalidatingOldEntries(t *testing.T
 	require.NotEqual(t, secondVersion, currentOptimizerStatsVersionLocked(vars, second))
 }
 
-func TestPublishAnalyzeTableStatsDefinesCacheBoundary(t *testing.T) {
+func TestPublishCollectedAnalyzeStatsDefinesCacheBoundary(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
@@ -5404,15 +5658,23 @@ func TestPublishAnalyzeTableStatsDefinesCacheBoundary(t *testing.T) {
 	freshStats := plan.NewStatsInfo()
 	freshStats.AccurateObjectNumber = 8
 	freshStats.NdvMap["url"] = 1_000_000
+	tableDefVersion := uint32(7)
 	var gotKey pbstats.StatsInfoKey
-	refresher := analyzeStatsRefresherFunc(func(_ context.Context, key pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+	var gotTableDefVersion uint32
+	publisher := analyzedStatsPublisherFunc(func(
+		_ context.Context, key pbstats.StatsInfoKey, version uint32, stats *pbstats.StatsInfo,
+	) (*pbstats.StatsInfo, error) {
 		gotKey = key
+		gotTableDefVersion = version
+		require.Same(t, freshStats, stats)
 		return freshStats, nil
 	})
 
-	require.NoError(t, publishAnalyzeTableStats(ses, execCtx.reqCtx, key, refresher))
+	require.NoError(t, publishCollectedAnalyzeStats(
+		ses, execCtx.reqCtx, key, tableDefVersion, freshStats, publisher))
 	require.Equal(t, key, gotKey)
-	cache, _ := ses.getStatsCacheWithVersion(physicalKey)
+	require.Equal(t, tableDefVersion, gotTableDefVersion)
+	cache, _ := ses.getStatsCacheForTableDefVersion(physicalKey, &tableDefVersion)
 	wrapper := cache.Get(tableID)
 	require.Same(t, freshStats, wrapper.GetStats())
 	otherSes.cachePlanWithStatsVersions("compiled before analyze completed",
@@ -5430,19 +5692,20 @@ func TestPublishAnalyzeTableStatsDefinesCacheBoundary(t *testing.T) {
 		"a stats read started before publication must not repopulate the table entry")
 	require.False(t, crossAccountSes.cacheStatsIfCurrent(physicalKey, crossAccountOldVersion, oldStats),
 		"a cross-account stats read must not repopulate the old physical generation")
-	otherCache, currentVersion := otherSes.getStatsCacheWithVersion(otherSes.optimizerStatsKey(tableID))
+	otherCache, currentVersion := otherSes.getStatsCacheForTableDefVersion(
+		otherSes.optimizerStatsKey(tableID), &tableDefVersion)
 	otherWrapper := otherCache.Get(tableID)
 	require.False(t, otherWrapper.Exists())
 	otherTableWrapper := otherCache.Get(otherTableID)
 	require.Same(t, otherStats, otherTableWrapper.GetStats(),
 		"invalidating one table must retain unrelated statistics")
-	require.True(t, otherSes.cacheStatsIfCurrent(
-		otherSes.optimizerStatsKey(tableID), currentVersion, freshStats))
+	require.True(t, otherSes.cacheStatsForTableDefVersionIfCurrent(
+		otherSes.optimizerStatsKey(tableID), currentVersion, &tableDefVersion, freshStats))
 	currentWrapper := otherCache.Get(tableID)
 	require.Same(t, freshStats, currentWrapper.GetStats())
 }
 
-func TestPublishAnalyzeTableStatsDoesNotExposeFailedRefresh(t *testing.T) {
+func TestPublishCollectedAnalyzeStatsDoesNotExposeFailure(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
@@ -5453,35 +5716,31 @@ func TestPublishAnalyzeTableStatsDoesNotExposeFailedRefresh(t *testing.T) {
 	oldStats := plan.NewStatsInfo()
 	cacheOptimizerStatsForTest(t, ses, tableID, oldStats)
 	cacheOptimizerPlanForTest(ses, "select url from events", tableID)
-	wantErr := moerr.NewInternalError(execCtx.reqCtx, "refresh failed")
-	refresher := analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+	wantErr := moerr.NewInternalError(execCtx.reqCtx, "publication failed")
+	publisher := analyzedStatsPublisherFunc(func(
+		context.Context, pbstats.StatsInfoKey, uint32, *pbstats.StatsInfo,
+	) (*pbstats.StatsInfo, error) {
 		return nil, wantErr
 	})
 
-	err := publishAnalyzeTableStats(ses, execCtx.reqCtx, key, refresher)
+	err := publishCollectedAnalyzeStats(ses, execCtx.reqCtx, key, 7, plan.NewStatsInfo(), publisher)
 	require.ErrorIs(t, err, wantErr)
 	cache, _ := ses.getStatsCacheWithVersion(ses.optimizerStatsKey(tableID))
 	wrapper := cache.Get(tableID)
 	require.Same(t, oldStats, wrapper.GetStats())
 	require.NotNil(t, ses.getCachedPlan("select url from events"))
 
-	tableKey := optimizerStatsTableKey{accountID: key.AccId, tableID: key.TableID}
-	admission := getOptimizerStatsVars(ses.GetService()).
-		optimizerStatsPublish[optimizerStatsPublisherStripe(tableKey)]
-	select {
-	case admission <- struct{}{}:
-		<-admission
-	default:
-		t.Fatal("a failed refresh leaked same-table publication admission")
-	}
 	freshStats := plan.NewStatsInfo()
-	require.NoError(t, publishAnalyzeTableStats(ses, execCtx.reqCtx, key,
-		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+	require.NoError(t, publishCollectedAnalyzeStats(
+		ses, execCtx.reqCtx, key, 7, freshStats,
+		analyzedStatsPublisherFunc(func(
+			context.Context, pbstats.StatsInfoKey, uint32, *pbstats.StatsInfo,
+		) (*pbstats.StatsInfo, error) {
 			return freshStats, nil
-		})), "a failed refresh must release same-table publication admission")
+		})), "a failed publication must leave the cache replaceable")
 }
 
-func TestPublishAnalyzeTableStatsRejectsMissingRefreshResult(t *testing.T) {
+func TestPublishCollectedAnalyzeStatsRejectsMissingResult(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
@@ -5494,11 +5753,13 @@ func TestPublishAnalyzeTableStatsRejectsMissingRefreshResult(t *testing.T) {
 	cacheOptimizerPlanForTest(ses, "select url from events", tableID)
 	version := currentOptimizerStatsVersion(ses.GetService(), ses.optimizerStatsKey(tableID))
 	clock := currentOptimizerStatsClock(ses.GetService())
-	refresher := analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
+	publisher := analyzedStatsPublisherFunc(func(
+		context.Context, pbstats.StatsInfoKey, uint32, *pbstats.StatsInfo,
+	) (*pbstats.StatsInfo, error) {
 		return nil, nil
 	})
 
-	err := publishAnalyzeTableStats(ses, execCtx.reqCtx, key, refresher)
+	err := publishCollectedAnalyzeStats(ses, execCtx.reqCtx, key, 7, plan.NewStatsInfo(), publisher)
 	require.Error(t, err)
 	require.Equal(t, version,
 		currentOptimizerStatsVersion(ses.GetService(), ses.optimizerStatsKey(tableID)))
@@ -5509,7 +5770,7 @@ func TestPublishAnalyzeTableStatsRejectsMissingRefreshResult(t *testing.T) {
 	require.NotNil(t, ses.getCachedPlan("select url from events"))
 }
 
-func TestPublishAnalyzeTableStatsSerializesAndCancelsAdmission(t *testing.T) {
+func TestAcquireOptimizerStatsPublisherSerializesAndCancels(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	firstSes, firstExecCtx := newAnalyzeHandlerTestSession(t, ctrl)
@@ -5519,56 +5780,35 @@ func TestPublishAnalyzeTableStatsSerializesAndCancelsAdmission(t *testing.T) {
 	key := pbstats.StatsInfoKey{
 		AccId: catalog.System_Account, TableID: 42, DbName: "db", TableName: "events",
 	}
-	entered := make(chan struct{})
-	unblock := make(chan struct{}, 1)
-	releaseFirst := func() {
-		select {
-		case unblock <- struct{}{}:
-		default:
-		}
-	}
-	t.Cleanup(releaseFirst)
-	firstDone := make(chan error, 1)
-	go func() {
-		firstDone <- publishAnalyzeTableStats(firstSes, firstExecCtx.reqCtx, key,
-			analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
-				close(entered)
-				<-unblock
-				return plan.NewStatsInfo(), nil
-			}))
-	}()
-	<-entered
+	tableKey := optimizerStatsTableKey{accountID: key.AccId, tableID: key.TableID}
+	releaseFirst, err := acquireOptimizerStatsPublisher(
+		firstExecCtx.reqCtx, firstSes.GetService(), tableKey)
+	require.NoError(t, err)
+	var releaseFirstOnce sync.Once
+	releaseFirstSafely := func() { releaseFirstOnce.Do(releaseFirst) }
+	t.Cleanup(releaseFirstSafely)
 
 	// A publication for a different table must not queue behind this table.
 	otherKey := key
 	otherKey.TableID = 43
 	otherKey.TableName = "other_events"
-	var otherCalled atomic.Bool
-	require.NoError(t, publishAnalyzeTableStats(secondSes, secondExecCtx.reqCtx, otherKey,
-		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
-			otherCalled.Store(true)
-			return plan.NewStatsInfo(), nil
-		})))
-	require.True(t, otherCalled.Load())
+	releaseOther, err := acquireOptimizerStatsPublisher(
+		secondExecCtx.reqCtx,
+		secondSes.GetService(),
+		optimizerStatsTableKey{accountID: otherKey.AccId, tableID: otherKey.TableID},
+	)
+	require.NoError(t, err)
+	releaseOther()
 
 	secondCtx, cancel := context.WithCancel(secondExecCtx.reqCtx)
 	cancel()
-	var secondCalled atomic.Bool
-	err := publishAnalyzeTableStats(secondSes, secondCtx, key,
-		analyzeStatsRefresherFunc(func(context.Context, pbstats.StatsInfoKey) (*pbstats.StatsInfo, error) {
-			secondCalled.Store(true)
-			return plan.NewStatsInfo(), nil
-		}))
+	_, err = acquireOptimizerStatsPublisher(secondCtx, secondSes.GetService(), tableKey)
 	require.ErrorIs(t, err, context.Canceled)
-	require.False(t, secondCalled.Load())
-
-	releaseFirst()
-	select {
-	case err = <-firstDone:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("first statistics publication did not finish")
-	}
+	releaseFirstSafely()
+	releaseAfter, err := acquireOptimizerStatsPublisher(
+		secondExecCtx.reqCtx, secondSes.GetService(), tableKey)
+	require.NoError(t, err)
+	releaseAfter()
 }
 
 func TestSetExecCtxClearsPreviousStatementViews(t *testing.T) {
@@ -5747,124 +5987,6 @@ func TestPrepareStringCreateViewUsesRewrittenInnerRootSQL(t *testing.T) {
 		require.Equal(t, outerSQL, ses.GetSql())
 		return nil
 	})
-}
-
-func TestBuildAnalyzeDerivedSQLQuotesIdentifiers(t *testing.T) {
-	entry := &tree.AnalyzeTableEntry{
-		Table: tree.NewTableName(
-			tree.Identifier("tick`table"),
-			tree.ObjectNamePrefix{SchemaName: tree.Identifier("select-db"), ExplicitSchema: true},
-			nil,
-		),
-		Cols: tree.IdentifierList{"select", "a-b", "tick`name"},
-	}
-	require.Equal(t,
-		"select approx_count_distinct(`select`),approx_count_distinct(`a-b`),approx_count_distinct(`tick``name`) from `select-db`.`tick``table`",
-		buildAnalyzeDerivedSQL(entry, entry.Cols),
-	)
-}
-
-func TestInheritAnalyzeRewriteHint(t *testing.T) {
-	jsonHint := ` {"rewrites":{"src.t":"select * from dst.t where keep = 1"},"remapdb":{"src":"dst"}} `
-	tests := []struct {
-		name, outer, derived, want string
-	}{
-		{"merged json", "/*+" + jsonHint + "*/ analyze table src.t(a)", "select approx_count_distinct(`a`) from `dst`.`t`", "/*+" + jsonHint + "*/ select approx_count_distinct(`a`) from `dst`.`t`"},
-		{"mysql json", "/*!+" + jsonHint + "*/ analyze table src.t(a)", "select 1", "/*+" + jsonHint + "*/ select 1"},
-		{"optimizer hint ignored", "/*+ force_index(t) */ analyze table t(a)", "select 1", "select 1"},
-		{"no hint", "analyze table t(a)", "select 1", "select 1"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, inheritAnalyzeRewriteHint(tt.outer, tt.derived))
-		})
-	}
-
-	t.Run("merged rewrite chain is parser consumable", func(t *testing.T) {
-		chainHint := ` {"rewrites":{"src.t":["select * from src.t where role_keep = 1","select * from src.t where session_keep = 1","select * from dst.t where inline_keep = 1"]},"remapdb":{"src":"dst"}} `
-		derived := "select approx_count_distinct(`a`) from `dst`.`t`"
-		inherited := inheritAnalyzeRewriteHint("/*+"+chainHint+"*/ analyze table src.t(a)", derived)
-		require.Equal(t, "/*+"+chainHint+"*/ "+derived, inherited)
-		require.Equal(t, 1, strings.Count(inherited, "/*+"))
-
-		stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, inherited, 1)
-		require.NoError(t, err)
-		require.NoError(t, parsers.AddRewriteHints(context.Background(), stmts, inherited))
-		require.Len(t, stmts, 1)
-		sel, ok := stmts[0].(*tree.Select)
-		require.True(t, ok)
-		require.NotNil(t, sel.RewriteOption)
-		chain := sel.RewriteOption.Rewrites["src.t"]
-		require.Len(t, chain, 3)
-		wantBodies := []string{
-			"select * from src.t where role_keep = 1",
-			"select * from src.t where session_keep = 1",
-			"select * from dst.t where inline_keep = 1",
-		}
-		for i, rewrite := range chain {
-			require.Equal(t, "src", rewrite.DbName)
-			require.Equal(t, "t", rewrite.TableName)
-			require.Equal(t, wantBodies[i], tree.String(rewrite.Stmt, dialect.MYSQL), "rewrite chain index %d", i)
-		}
-		require.Equal(t, "dst", sel.RewriteOption.RemapDb["src"])
-	})
-}
-
-func TestHandleAnalyzeStmtInheritsCurrentStatementRewriteOnly(t *testing.T) {
-	jsonHint := ` {"rewrites":{"db.t":"select * from db.t where inline_keep = 1"}} `
-	tests := []struct {
-		name, commandSQL, statementSQL, wantDerived string
-	}{
-		{
-			name:         "second statement inline is inherited",
-			commandSQL:   "select 1; /*+" + jsonHint + "*/ analyze table db.t(id)",
-			statementSQL: "/*+" + jsonHint + "*/ analyze table db.t(id)",
-			wantDerived:  "/*+" + jsonHint + "*/ select approx_count_distinct(`id`) from `db`.`t`",
-		},
-		{
-			name:         "first statement inline is not inherited by later analyze",
-			commandSQL:   "/*+" + jsonHint + "*/ select 1; analyze table db.t(id)",
-			statementSQL: "analyze table db.t(id)",
-			wantDerived:  "select approx_count_distinct(`id`) from `db`.`t`",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctrl := gomock.NewController(t)
-			defer ctrl.Finish()
-			ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
-			ses.rewriteEnabled.Store(false)
-			execCtx.rewriteEnabled = true
-			execCtx.input = &UserInput{
-				sql:           tt.commandSQL,
-				rewritePolicy: &rewritePolicySnapshot{enabled: true},
-			}
-			execCtx.sqlOfStmt = tt.statementSQL
-			var gotDerived string
-			stub := gostub.Stub(&GetComputationWrapper, func(innerExecCtx *ExecCtx, _ string, _ string, _ engine.Engine, proc *process.Process, innerSes *Session) ([]ComputationWrapper, error) {
-				require.NotNil(t, innerExecCtx.input.rewritePolicy)
-				require.True(t, innerExecCtx.input.rewritePolicy.enabled)
-				require.True(t, innerExecCtx.input.rewritePolicyMaterialized)
-				gotDerived = innerExecCtx.input.getSql()
-				stmts, err := parsers.Parse(innerExecCtx.reqCtx, dialect.MYSQL, gotDerived, 1)
-				require.NoError(t, err)
-				results := map[string]*result{
-					gotDerived: {gen: func(*Session) *MysqlResultSet {
-						return makeAnalyzeCountResult("approx_count_distinct(id)", 2)
-					}},
-				}
-				return []ComputationWrapper{newMockWrapper(ctrl, innerSes, results, nil, gotDerived, stmts[0], proc)}, nil
-			})
-			defer stub.Reset()
-
-			stmt := &tree.AnalyzeStmt{Entries: []*tree.AnalyzeTableEntry{{
-				Table: tree.NewTableName("t", tree.ObjectNamePrefix{SchemaName: "db", ExplicitSchema: true}, nil),
-				Cols:  tree.IdentifierList{"id"},
-			}}}
-			require.NoError(t, handleAnalyzeStmt(ses, execCtx, stmt))
-			require.Equal(t, tt.wantDerived, gotDerived)
-		})
-	}
 }
 
 func TestResolveAnalyzeDatabaseUsesRemappedDefault(t *testing.T) {
@@ -6195,72 +6317,6 @@ func TestProcedureCallerAffectedRows(t *testing.T) {
 	require.Equal(t, int64(7), procedureCallerAffectedRows(&ExecCtx{proc: proc}))
 }
 
-func TestHandleAnalyzeStmtCollectsDerivedResultsInEntryOrder(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
-
-	firstSQL := "select approx_count_distinct(`a`) from `first_table`"
-	secondSQL := "select approx_count_distinct(`x`) from `second_table`"
-	results := map[string]*result{
-		firstSQL:  {gen: func(*Session) *MysqlResultSet { return makeAnalyzeCountResult("approx_count_distinct(a)", 2) }},
-		secondSQL: {gen: func(*Session) *MysqlResultSet { return makeAnalyzeCountResult("approx_count_distinct(x)", 4) }},
-	}
-	var derivedSQL []string
-	stub := gostub.Stub(&GetComputationWrapper, func(innerExecCtx *ExecCtx, _ string, _ string, _ engine.Engine, proc *process.Process, innerSes *Session) ([]ComputationWrapper, error) {
-		sql := innerExecCtx.input.getSql()
-		derivedSQL = append(derivedSQL, sql)
-		stmts, err := parsers.Parse(innerExecCtx.reqCtx, dialect.MYSQL, sql, 1)
-		require.NoError(t, err)
-		return []ComputationWrapper{newMockWrapper(ctrl, innerSes, results, nil, sql, stmts[0], proc)}, nil
-	})
-	defer stub.Reset()
-
-	stmt := &tree.AnalyzeStmt{Entries: []*tree.AnalyzeTableEntry{
-		{Table: tree.NewTableName("first_table", tree.ObjectNamePrefix{}, nil), Cols: tree.IdentifierList{"a"}},
-		{Table: tree.NewTableName("second_table", tree.ObjectNamePrefix{}, nil), Cols: tree.IdentifierList{"x"}},
-	}}
-	require.NoError(t, handleAnalyzeStmt(ses, execCtx, stmt))
-	require.Equal(t, []string{firstSQL, secondSQL}, derivedSQL)
-	require.Len(t, execCtx.results, 2)
-	requireAnalyzeCountValue(t, execCtx.reqCtx, execCtx.results[0], 2)
-	requireAnalyzeCountValue(t, execCtx.reqCtx, execCtx.results[1], 4)
-}
-
-func TestHandleAnalyzeStmtDoesNotPublishPartialResultsOnDerivedError(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	ses, execCtx := newAnalyzeHandlerTestSession(t, ctrl)
-
-	firstSQL := "select approx_count_distinct(`a`) from `first_table`"
-	secondSQL := "select approx_count_distinct(`x`) from `second_table`"
-	results := map[string]*result{
-		firstSQL: {gen: func(*Session) *MysqlResultSet { return makeAnalyzeCountResult("approx_count_distinct(a)", 2) }},
-	}
-	var derivedSQL []string
-	stub := gostub.Stub(&GetComputationWrapper, func(innerExecCtx *ExecCtx, _ string, _ string, _ engine.Engine, proc *process.Process, innerSes *Session) ([]ComputationWrapper, error) {
-		sql := innerExecCtx.input.getSql()
-		derivedSQL = append(derivedSQL, sql)
-		if sql == secondSQL {
-			return nil, moerr.NewInternalError(innerExecCtx.reqCtx, "second derived query failed")
-		}
-		stmts, err := parsers.Parse(innerExecCtx.reqCtx, dialect.MYSQL, sql, 1)
-		require.NoError(t, err)
-		return []ComputationWrapper{newMockWrapper(ctrl, innerSes, results, nil, sql, stmts[0], proc)}, nil
-	})
-	defer stub.Reset()
-
-	stmt := &tree.AnalyzeStmt{Entries: []*tree.AnalyzeTableEntry{
-		{Table: tree.NewTableName("first_table", tree.ObjectNamePrefix{}, nil), Cols: tree.IdentifierList{"a"}},
-		{Table: tree.NewTableName("second_table", tree.ObjectNamePrefix{}, nil), Cols: tree.IdentifierList{"x"}},
-	}}
-	err := handleAnalyzeStmt(ses, execCtx, stmt)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "second derived query failed")
-	require.Equal(t, []string{firstSQL, secondSQL}, derivedSQL)
-	require.Nil(t, execCtx.results)
-}
-
 func newAnalyzeHandlerTestSession(t *testing.T, ctrl *gomock.Controller) (*Session, *ExecCtx) {
 	t.Helper()
 	ses := newTestSession(t, ctrl)
@@ -6292,16 +6348,6 @@ func makeAnalyzeCountResult(name string, value uint64) *MysqlResultSet {
 	mrs.AddColumn(col)
 	mrs.AddRow([]any{value})
 	return mrs
-}
-
-func requireAnalyzeCountValue(t *testing.T, ctx context.Context, result ExecResult, expected uint64) {
-	t.Helper()
-	mrs := result.(*MysqlResultSet)
-	require.Equal(t, uint64(1), mrs.GetColumnCount())
-	require.Equal(t, uint64(1), mrs.GetRowCount())
-	value, err := mrs.GetValue(ctx, 0, 0)
-	require.NoError(t, err)
-	require.EqualValues(t, expected, value)
 }
 
 func Test_convert_type(t *testing.T) {
@@ -7718,7 +7764,7 @@ func TestProcessLoadLocal(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		convey.So(err, convey.ShouldBeNil)
 		proto := &testMysqlWriter{
 			ioses: ioses,
@@ -7741,11 +7787,156 @@ func TestProcessLoadLocal(t *testing.T) {
 			}
 		}(buffer)
 		ec := newTestExecCtx(context.Background(), ctrl)
-		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(buffer[:10], convey.ShouldResemble, []byte("helloworld"))
 		convey.So(buffer[10:], convey.ShouldResemble, make([]byte, 4096-10))
 	})
+}
+
+type trackedLoadLocalMysqlWriter struct {
+	*testMysqlWriter
+	started        chan struct{}
+	cleanupEntered chan struct{}
+	releaseCleanup chan struct{}
+	completed      atomic.Bool
+}
+
+func (w *trackedLoadLocalMysqlWriter) WriteLocalInfileRequest(filename string) error {
+	select {
+	case w.started <- struct{}{}:
+	default:
+	}
+	return w.testMysqlWriter.WriteLocalInfileRequest(filename)
+}
+
+func (w *trackedLoadLocalMysqlWriter) FreeLoadLocal() {
+	if w.cleanupEntered != nil {
+		select {
+		case w.cleanupEntered <- struct{}{}:
+		default:
+		}
+		<-w.releaseCleanup
+	}
+	w.testMysqlWriter.FreeLoadLocal()
+	w.completed.Store(true)
+}
+
+func TestExecuteStatusStmtOwnsLoadLocalPipeForAcceptedExecution(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		runnerErr   error
+		runnerPanic any
+		payload     []byte
+	}{
+		{name: "success", payload: []byte("helloworld")},
+		{name: "runner failure", runnerErr: moerr.NewInternalErrorNoCtx("runner failed")},
+		{name: "runner panic", runnerPanic: "runner panicked"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			reqCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			proc := testutil.NewProc(t)
+			tConn := &testConn{}
+			packets := []*Packet{
+				{Length: 5, Payload: []byte("hello"), SequenceID: 1},
+				{Length: 5, Payload: []byte("world"), SequenceID: 2},
+				{Length: 0, Payload: nil, SequenceID: 3},
+			}
+			writeExceptResult(tConn, packets)
+			sv, err := getSystemVariables("test/system_vars_config.toml")
+			require.NoError(t, err)
+			pu := config.NewParameterUnit(sv, nil, nil, nil)
+			pu.SV.SkipCheckUser = true
+			setPu("", pu)
+			setSessionAlloc("", NewLeakCheckAllocator())
+			ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
+			require.NoError(t, err)
+			mysqlWriter := &trackedLoadLocalMysqlWriter{
+				testMysqlWriter: &testMysqlWriter{ioses: ioses},
+				started:         make(chan struct{}, 1),
+			}
+			if test.runnerPanic != nil {
+				mysqlWriter.cleanupEntered = make(chan struct{}, 1)
+				mysqlWriter.releaseCleanup = make(chan struct{})
+			}
+			ses := &Session{feSessionImpl: feSessionImpl{
+				respr: NewMysqlResp(mysqlWriter),
+			}}
+
+			var payload []byte
+			runner := mock_frontend.NewMockComputationRunner(ctrl)
+			runner.EXPECT().Run(uint64(0)).DoAndReturn(func(uint64) (*util.RunResult, error) {
+				select {
+				case <-mysqlWriter.started:
+				case <-reqCtx.Done():
+					return nil, reqCtx.Err()
+				}
+				reader := proc.GetLoadLocalReader()
+				require.NotNil(t, reader)
+				if test.runnerPanic != nil {
+					panic(test.runnerPanic)
+				}
+				if test.runnerErr != nil {
+					return nil, test.runnerErr
+				}
+				payload, err = io.ReadAll(reader)
+				return &util.RunResult{}, err
+			})
+			execCtx := newTestExecCtx(reqCtx, ctrl)
+			execCtx.proc = proc
+			execCtx.runner = runner
+			execCtx.stmt = &tree.Load{
+				Local: true,
+				Param: &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "test.csv"}},
+			}
+
+			if test.runnerPanic != nil {
+				panicResult := make(chan any, 1)
+				go func() {
+					defer func() {
+						panicResult <- recover()
+					}()
+					_ = executeStatusStmt(ses, execCtx)
+				}()
+				select {
+				case <-mysqlWriter.cleanupEntered:
+				case <-time.After(5 * time.Second):
+					cancel()
+					close(mysqlWriter.releaseCleanup)
+					t.Fatal("upload owner did not reach cleanup")
+				}
+				var panicValue any
+				returnedBeforeCleanup := false
+				select {
+				case panicValue = <-panicResult:
+					returnedBeforeCleanup = true
+				case <-time.After(100 * time.Millisecond):
+				}
+				close(mysqlWriter.releaseCleanup)
+				if !returnedBeforeCleanup {
+					select {
+					case panicValue = <-panicResult:
+					case <-time.After(5 * time.Second):
+						cancel()
+						t.Fatal("statement did not return after upload cleanup")
+					}
+				}
+				require.False(t, returnedBeforeCleanup,
+					"statement returned while upload owner was still cleaning up")
+				require.Equal(t, test.runnerPanic, panicValue)
+			} else {
+				err = executeStatusStmt(ses, execCtx)
+				require.ErrorIs(t, err, test.runnerErr)
+			}
+			require.Equal(t, test.payload, payload)
+			require.True(t, mysqlWriter.completed.Load(), "upload owner must terminate before statement return")
+			require.Nil(t, proc.GetLoadLocalReader())
+			require.Nil(t, execCtx.loadLocalWriter)
+		})
+	}
 }
 
 func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
@@ -7767,7 +7958,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		convey.So(err, convey.ShouldBeNil)
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
@@ -7785,7 +7976,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorBeforeRead(t *testing.T) {
 		proc.Ctx = ctx
 		ec.proc = proc
 
-		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
 		convey.So(err, convey.ShouldEqual, expected)
 		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 1)
 	})
@@ -7813,7 +8004,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorInLoop(t *testing.T) {
 		pu := config.NewParameterUnit(sv, nil, nil, nil)
 		pu.SV.SkipCheckUser = true
 		setPu("", pu)
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		convey.So(err, convey.ShouldBeNil)
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
@@ -7845,7 +8036,7 @@ func TestProcessLoadLocalCheckLockTableBindsErrorInLoop(t *testing.T) {
 		proc.Ctx = ctx
 		ec.proc = proc
 
-		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
 		convey.So(err, convey.ShouldEqual, expected)
 		convey.So(op.checkLockTableChecks, convey.ShouldEqual, 2)
 		convey.So(buffer[:5], convey.ShouldResemble, []byte("hello"))
@@ -7898,7 +8089,7 @@ func TestProcessLoadLocal_NetworkTimeout(t *testing.T) {
 		pu.SV.SkipCheckUser = true
 		setSessionAlloc("", NewLeakCheckAllocator())
 		setPu("", pu)
-		ioses, err := NewIOSession(tConn, pu, "")
+		ioses, err := NewIOSessionWithOptions(tConn, pu, "", WithIOSessionAllocator(NewLeakCheckAllocator()))
 		convey.So(err, convey.ShouldBeNil)
 		proto := &testMysqlWriter{
 			ioses: ioses,
@@ -7922,7 +8113,7 @@ func TestProcessLoadLocal_NetworkTimeout(t *testing.T) {
 		}()
 
 		ec := newTestExecCtx(context.Background(), ctrl)
-		err = processLoadLocal(ses, ec, param, writer, proc.GetLoadLocalReader())
+		err = processLoadLocal(ec.reqCtx, ses, ec, param, writer, proc.GetLoadLocalReader())
 
 		// Should return error containing "network read timeout"
 		convey.So(err, convey.ShouldNotBeNil)
@@ -8502,6 +8693,83 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, setVar.Assignments, 2)
 	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 2)
+
+	for _, tt := range []struct {
+		name       string
+		sql        string
+		want       any
+		paramCount int
+	}{
+		{
+			name: "data branch create table",
+			sql:  "data branch create table branch from base",
+			want: &tree.DataBranchCreateTable{},
+		},
+		{
+			name: "data branch create database",
+			sql:  "data branch create database branch_db from base_db",
+			want: &tree.DataBranchCreateDatabase{},
+		},
+		{
+			name: "data branch diff",
+			sql:  "data branch diff branch against base output count",
+			want: &tree.DataBranchDiff{},
+		},
+		{
+			name: "data branch merge",
+			sql:  "data branch merge branch into base when conflict accept",
+			want: &tree.DataBranchMerge{},
+		},
+		{
+			name:       "data branch pick parameter",
+			sql:        "data branch pick branch into base keys(?) when conflict accept",
+			want:       &tree.DataBranchPick{},
+			paramCount: 1,
+		},
+		{
+			name:       "data branch pick composite parameters",
+			sql:        "data branch pick branch into base keys((?, ?)) when conflict accept",
+			want:       &tree.DataBranchPick{},
+			paramCount: 2,
+		},
+		{
+			name:       "data branch pick composite mixed literal parameter",
+			sql:        "data branch pick branch into base keys((1, ?)) when conflict accept",
+			want:       &tree.DataBranchPick{},
+			paramCount: 1,
+		},
+		{
+			name:       "data branch pick multiple composite parameters",
+			sql:        "data branch pick branch into base keys((?, ?), (?, ?)) when conflict accept",
+			want:       &tree.DataBranchPick{},
+			paramCount: 4,
+		},
+		{
+			name: "data branch delete table",
+			sql:  "data branch delete table branch",
+			want: &tree.DataBranchDeleteTable{},
+		},
+		{
+			name: "data branch delete database",
+			sql:  "data branch delete database branch_db",
+			want: &tree.DataBranchDeleteDatabase{},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := ExecRequest(ses, execCtx, &Request{
+				cmd:  COM_STMT_PREPARE,
+				data: []byte(tt.sql),
+			})
+			require.NoError(t, err)
+			require.Nil(t, resp)
+
+			stmtName := getPrepareStmtName(ses.GetLastStmtId())
+			prepared, err := ses.GetPrepareStmt(ctx, stmtName)
+			require.NoError(t, err)
+			require.IsType(t, tt.want, prepared.PrepareStmt)
+			require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), tt.paramCount)
+		})
+	}
 
 	ses.rewriteEnabled.Store(true)
 	ses.ruleCache = map[string]string{"review27190.t": "delete from review27190.t"}
@@ -9898,4 +10166,28 @@ func TestPreparedCloneSQLUsesRemappedDefaultDatabase(t *testing.T) {
 	require.True(t, parsed.SrcTable.ExplicitSchema)
 	require.True(t, parsed.CreateTable.Table.ExplicitSchema)
 	require.Equal(t, "source_db", ses.GetTxnCompileCtx().GetDatabase())
+}
+
+func TestPreparedGroupConcatFloorCapturedWithoutPhysicalCompile(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	const sql = "prepare gc_floor from select /*+ SET_VAR(query_max_workers=1) */ group_concat('abcdef')"
+	parsed, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer parsed.Free()
+	ctrl := gomock.NewController(t)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	runTestHandle("prepared GROUP_CONCAT floor without physical compile", t, func(ses *Session) error {
+		execCtx.resper = ses.respr
+		require.NoError(t, ses.SetSessionSysVar(ctx, "group_concat_max_len", int64(1024)))
+		prepared, err := handlePrepareStmt(ses, execCtx, parsed.(*tree.PrepareStmt), sql)
+		if err != nil {
+			return err
+		}
+		require.Nil(t, prepared.compile, "explicit placement must exercise uncached prepare")
+		require.Equal(t, uint64(1024), prepared.groupConcatMaxLenFloor)
+		require.NoError(t, ses.SetSessionSysVar(ctx, "group_concat_max_len", int64(5)))
+		require.Equal(t, uint64(1024), prepared.groupConcatMaxLenFloor, "the logical prepared owner retains its original floor")
+		return nil
+	})
 }

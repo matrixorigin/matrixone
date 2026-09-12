@@ -4,27 +4,45 @@ use temp_shadow_truncate;
 create table shadow(id int primary key, k int, index idx_k(k));
 insert into shadow values (100, 7), (101, 8);
 prepare truncate_shadow_before_temp from 'truncate table shadow';
-create temporary table shadow(id int primary key, k int, index idx_k(k));
-insert into shadow values (1, 7), (2, 8);
+create temporary table shadow(id int auto_increment primary key, k int, index idx_k(k));
+insert into shadow(k) values (7), (8);
 truncate table shadow;
-no such table temp_shadow_truncate.shadow
 select count(*) as temp_rows_after_direct from shadow;
 ➤ temp_rows_after_direct[-5,64,0]  𝄀
-2
+0
+insert into shadow(k) values (9);
+select id as auto_id_after_direct from shadow;
+➤ auto_id_after_direct[-5,64,0]  𝄀
+1
 prepare truncate_shadow_after_temp from 'truncate table shadow';
-no such table temp_shadow_truncate.shadow
 select count(*) as temp_rows_after_prepare from shadow;
 ➤ temp_rows_after_prepare[-5,64,0]  𝄀
-2
+1
+insert into shadow(k) values (10), (11);
 execute truncate_shadow_before_temp;
-no such table temp_shadow_truncate.shadow
 select count(*) as temp_rows_after_execute from shadow;
 ➤ temp_rows_after_execute[-5,64,0]  𝄀
-2
+0
+insert into shadow(k) values (12);
+select id as auto_id_after_prepared_before from shadow;
+➤ auto_id_after_prepared_before[-5,64,0]  𝄀
+1
+execute truncate_shadow_after_temp;
+select count(*) as auto_rows_after_prepared from shadow;
+➤ auto_rows_after_prepared[-5,64,0]  𝄀
+0
+insert into shadow(k) values (13);
+select id as auto_id_after_prepared_visible from shadow;
+➤ auto_id_after_prepared_visible[-5,64,0]  𝄀
+1
 use temp_shadow_truncate;
 select count(*) as permanent_rows from shadow;
 ➤ permanent_rows[-5,64,0]  𝄀
 2
+select min(id) as permanent_min_id from shadow;
+➤ permanent_min_id[-5,64,0]  𝄀
+100
 deallocate prepare truncate_shadow_before_temp;
+deallocate prepare truncate_shadow_after_temp;
 drop table shadow;
 drop database temp_shadow_truncate;

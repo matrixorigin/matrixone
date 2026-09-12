@@ -59,12 +59,17 @@ type container struct {
 	retainedAllocation   *vector.AllocationAccountSelection
 	expressionAllocation *vector.AllocationAccountSelection
 	appendScratch        *mpool.AccountedBuffer
+
+	// stream is non-nil when MergeTop is the leaf of an ordered merge scope.
+	// The legacy child mode is retained for decoded plans produced by older CNs.
+	stream *streamContainer
 }
 
 type MergeTop struct {
-	Limit *plan.Expr          // Limit store the number of mergeTop-operator
-	ctr   container           // ctr stores the attributes needn't do Serialization work
-	Fs    []*plan.OrderBySpec // Fs store the order information
+	Limit          *plan.Expr          // Limit store the number of mergeTop-operator
+	ctr            container           // ctr stores the attributes needn't do Serialization work
+	Fs             []*plan.OrderBySpec // Fs store the order information
+	OrderedStreams bool                // consume one sorted stream per merge receiver
 
 	vm.OperatorBase
 }
@@ -104,6 +109,11 @@ func (mergeTop *MergeTop) WithFs(fs []*plan.OrderBySpec) *MergeTop {
 	return mergeTop
 }
 
+func (mergeTop *MergeTop) WithOrderedStreams() *MergeTop {
+	mergeTop.OrderedStreams = true
+	return mergeTop
+}
+
 func (mergeTop *MergeTop) Release() {
 	if mergeTop != nil {
 		reuse.Free(mergeTop, nil)
@@ -111,10 +121,12 @@ func (mergeTop *MergeTop) Release() {
 }
 
 func (mergeTop *MergeTop) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	mergeTop.ctr.resetStream(proc, pipelineFailed, err)
 	mergeTop.ctr.reset(proc)
 }
 
 func (mergeTop *MergeTop) Free(proc *process.Process, pipelineFailed bool, err error) {
+	mergeTop.ctr.freeStream(proc)
 	mergeTop.ctr.free(proc)
 }
 
@@ -150,7 +162,7 @@ func (ctr *container) setAllocationAccount(account *mpool.AllocationAccount) err
 		}
 		return mpool.ErrAllocationAccountMismatch
 	}
-	if ctr.bat != nil || ctr.limitExecutor != nil || ctr.appendScratch != nil ||
+	if ctr.bat != nil || ctr.limitExecutor != nil || ctr.appendScratch != nil || ctr.stream != nil ||
 		len(ctr.executorsForOrderList) != 0 || cap(ctr.sels) != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
@@ -189,7 +201,7 @@ func (ctr *container) clearAllocationAccount(account *mpool.AllocationAccount) e
 	if ctr.allocationAccount != account {
 		return mpool.ErrAllocationAccountMismatch
 	}
-	if ctr.bat != nil || ctr.limitExecutor != nil || ctr.appendScratch != nil ||
+	if ctr.bat != nil || ctr.limitExecutor != nil || ctr.appendScratch != nil || ctr.stream != nil ||
 		len(ctr.executorsForOrderList) != 0 || cap(ctr.sels) != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}

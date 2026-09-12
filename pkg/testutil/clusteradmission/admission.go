@@ -52,9 +52,24 @@ const (
 // Release is idempotent. The runner-wide lock is released after the process's
 // last active lease is released, or automatically when the process exits.
 type Lease struct {
-	mu       sync.Mutex
-	manager  *manager
-	released bool
+	mu         sync.Mutex
+	manager    *manager
+	released   bool
+	requested  time.Time
+	acquired   time.Time
+	releasedAt time.Time
+}
+
+// Timing describes one admission lease. WaitDuration is the time from the
+// Acquire request until admission is granted; HoldDuration is the time from
+// acquisition until Release. The values remain available after Release for
+// test diagnostics.
+type Timing struct {
+	WaitDuration time.Duration
+	HoldDuration time.Duration
+	RequestedAt  time.Time
+	AcquiredAt   time.Time
+	ReleasedAt   time.Time
 }
 
 // Acquire waits until this test process has runner-wide admission. A second
@@ -78,8 +93,40 @@ func (l *Lease) Release() error {
 	if err := l.manager.release(); err != nil {
 		return err
 	}
+	l.releasedAt = time.Now()
 	l.released = true
 	return nil
+}
+
+// Timing returns a race-safe snapshot of this lease's wait and hold times.
+// Before Release, HoldDuration is measured up to the snapshot time.
+func (l *Lease) Timing() Timing {
+	if l == nil {
+		return Timing{}
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.timingLocked(time.Now())
+}
+
+func (l *Lease) timingLocked(now time.Time) Timing {
+	timing := Timing{
+		RequestedAt: l.requested,
+		AcquiredAt:  l.acquired,
+		ReleasedAt:  l.releasedAt,
+	}
+	if !l.requested.IsZero() && !l.acquired.IsZero() {
+		timing.WaitDuration = l.acquired.Sub(l.requested)
+	}
+	if !l.acquired.IsZero() {
+		releasedAt := l.releasedAt
+		if releasedAt.IsZero() {
+			releasedAt = now
+		}
+		timing.HoldDuration = releasedAt.Sub(l.acquired)
+	}
+	return timing
 }
 
 type manager struct {
@@ -99,6 +146,7 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 		return nil, moerr.NewInvalidInputNoCtx("cluster admission requires a context")
 	}
 
+	requested := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.references > 0 {
@@ -108,7 +156,7 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 			)
 		}
 		m.references++
-		return &Lease{manager: m}, nil
+		return &Lease{manager: m, requested: requested, acquired: time.Now()}, nil
 	}
 
 	lock := flock.New(m.path)
@@ -128,7 +176,7 @@ func (m *manager) acquire(ctx context.Context, mode Mode) (*Lease, error) {
 	}
 	m.lock = lock
 	m.references = 1
-	return &Lease{manager: m}, nil
+	return &Lease{manager: m, requested: requested, acquired: time.Now()}, nil
 }
 
 func (m *manager) release() error {
