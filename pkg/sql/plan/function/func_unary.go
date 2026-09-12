@@ -4559,82 +4559,32 @@ func parseCoordinatePairWithError(point string, errMsg string) (float64, float64
 	return x, y, nil
 }
 
-// SoundexString implements the SOUNDEX algorithm
-// Returns a phonetic code representing how a string sounds
+// soundexCodeMap maps ASCII A-Z to original Soundex digits; '0' means discard.
+const soundexCodeMap = "01230120022455012623010202"
+
+// SoundexString implements MySQL's original Soundex behavior for ASCII input.
 func SoundexString(str string) string {
-	if len(str) == 0 {
-		return "0000"
-	}
-
-	// Convert to uppercase and process only alphabetic characters
-	upper := strings.ToUpper(str)
-
-	// Find the first alphabetic character
-	firstChar := byte(0)
-	firstIdx := -1
-	for i := 0; i < len(upper); i++ {
-		if upper[i] >= 'A' && upper[i] <= 'Z' {
-			firstChar = upper[i]
-			firstIdx = i
-			break
-		}
-	}
-
-	// If no alphabetic character found, return "0000"
-	if firstChar == 0 {
-		return "0000"
-	}
-
-	// Build the soundex code
 	var code strings.Builder
-	code.WriteByte(firstChar)
-
-	// Soundex mapping: B, F, P, V → 1; C, G, J, K, Q, S, X, Z → 2; D, T → 3; L → 4; M, N → 5; R → 6
-	// Index: A=0, B=1, C=2, ..., Z=25
-	soundexMap := [26]byte{
-		0,   // A
-		'1', // B
-		'2', // C
-		'3', // D
-		0,   // E
-		'1', // F
-		'2', // G
-		0,   // H
-		0,   // I
-		'2', // J
-		'2', // K
-		'4', // L
-		'5', // M
-		'5', // N
-		0,   // O
-		'1', // P
-		'2', // Q
-		'6', // R
-		'2', // S
-		'3', // T
-		0,   // U
-		'1', // V
-		0,   // W
-		'2', // X
-		0,   // Y
-		'2', // Z
-	}
-
-	lastCode := byte(0)
-	for i := firstIdx + 1; i < len(upper) && code.Len() < 4; i++ {
-		c := upper[i]
+	firstLetter := true
+	lastCode := byte('0')
+	for i := 0; i < len(str); i++ {
+		c := str[i]
+		if c >= 'a' && c <= 'z' {
+			c -= 'a' - 'A'
+		}
 		if c < 'A' || c > 'Z' {
 			continue
 		}
-
-		codeChar := soundexMap[c-'A']
-		// Skip vowels, H, W (codeChar == 0)
-		if codeChar == 0 {
+		codeChar := soundexCodeMap[c-'A']
+		if firstLetter {
+			code.WriteByte(c)
+			lastCode = codeChar
+			firstLetter = false
 			continue
 		}
 
-		// Skip consecutive duplicate codes
-		if codeChar == lastCode {
+		// Original Soundex discards code-zero letters before suppressing duplicates.
+		if codeChar == '0' || codeChar == lastCode {
 			continue
 		}
 
@@ -4642,13 +4592,13 @@ func SoundexString(str string) string {
 		lastCode = codeChar
 	}
 
-	// Pad with zeros to make it 4 characters
-	result := code.String()
-	for len(result) < 4 {
-		result += "0"
+	if firstLetter {
+		return ""
 	}
-
-	return result
+	for code.Len() < 4 {
+		code.WriteByte('0')
+	}
+	return code.String()
 }
 
 func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

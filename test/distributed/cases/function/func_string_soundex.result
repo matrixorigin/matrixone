@@ -18,7 +18,7 @@ with_special_chars
 T230
 SELECT SOUNDEX('') AS empty_string;
 empty_string
-0000
+
 SELECT SOUNDEX('A') AS single_char;
 single_char
 A000
@@ -52,3 +52,53 @@ S530    S530
 SELECT SOUNDEX('Robert') AS robert, SOUNDEX('Rupert') AS rupert;
 robert    rupert
 R163    R163
+SELECT HEX(SOUNDEX('Ashcraft')) AS ashcraft, HEX(SOUNDEX('Pfister')) AS pfister, HEX(SOUNDEX('Tymczak')) AS tymczak, HEX(SOUNDEX('Quadratically')) AS quadratically, HEX(SOUNDEX('BDFJLMPR')) AS long_code, HEX(SOUNDEX('BDFJLMPRB')) AS capacity_plus_one;
+ashcraft    pfister    tymczak    quadratically    long_code    capacity_plus_one
+4132363133    50323336    54353230    513336333234    4233313234353136    423331323435313631
+SELECT LENGTH(SOUNDEX(CONCAT(REPEAT('BEB', 4096), REPEAT('BC', 64)))) AS late_growth_len, SOUNDEX(CONCAT(REPEAT('BEB', 4096), REPEAT('BC', 64))) = CONCAT('B2', REPEAT('12', 63)) AS late_growth_exact;
+late_growth_len    late_growth_exact
+128    1
+SELECT HEX(SOUNDEX('BEB')) AS vowel, HEX(SOUNDEX('BHB')) AS h, HEX(SOUNDEX('BWB')) AS w, HEX(SOUNDEX('B-B')) AS punctuation;
+vowel    h    w    punctuation
+42303030    42303030    42303030    42303030
+SELECT HEX(SOUNDEX('')) = '' AS empty_string, HEX(SOUNDEX('123!')) = '' AS digits_only, HEX(SOUNDEX('123!ABC')) = HEX('A120') AS leading_non_alpha;
+empty_string    digits_only    leading_non_alpha
+1    1    1
+SELECT SOUNDEX('pfister') = SOUNDEX('Pfister') AS case_insensitive;
+case_insensitive
+1
+DROP TABLE IF EXISTS t_soundex_regression;
+CREATE TABLE t_soundex_regression(id INT PRIMARY KEY, v VARCHAR(50));
+INSERT INTO t_soundex_regression VALUES (1, 'Ashcraft'), (2, 'Pfister'), (3, 'Tymczak'), (4, 'Quadratically'), (5, '123!'), (6, NULL), (7, 'BEB'), (8, 'pfister');
+SELECT id, HEX(SOUNDEX(v)) AS code_hex, LENGTH(SOUNDEX(v)) AS code_len FROM t_soundex_regression ORDER BY id;
+id    code_hex    code_len
+1    4132363133    5
+2    50323336    4
+3    54353230    4
+4    513336333234    6
+5        0
+6    null    null
+7    42303030    4
+8    50323336    4
+DROP TABLE t_soundex_regression;
+DROP TABLE IF EXISTS t_soundex_char;
+CREATE TABLE t_soundex_char(v CHAR(8));
+INSERT INTO t_soundex_char VALUES ('Pfister');
+SELECT HEX(SOUNDEX(v)) AS code_hex FROM t_soundex_char;
+code_hex
+50323336
+DROP TABLE t_soundex_char;
+PREPARE soundex_stmt FROM 'SELECT HEX(SOUNDEX(CAST(? AS VARCHAR(32)))) AS code_hex';
+SET @soundex_input='Pfister';
+EXECUTE soundex_stmt USING @soundex_input;
+code_hex
+50323336
+DEALLOCATE PREPARE soundex_stmt;
+SET @soundex_input=NULL;
+DROP TABLE IF EXISTS t_soundex_long;
+CREATE TABLE t_soundex_long(v TEXT);
+INSERT INTO t_soundex_long VALUES (REPEAT('BC', 32769));
+SELECT LENGTH(SOUNDEX(v)) AS code_len, SOUNDEX(v) = CONCAT('B', REPEAT('21', 32768), '2') AS exact_code FROM t_soundex_long;
+code_len    exact_code
+65538    1
+DROP TABLE t_soundex_long;

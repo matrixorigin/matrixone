@@ -1050,6 +1050,8 @@ func TestQuoteHonorsSelectList(t *testing.T) {
 
 // SOUNDEX
 func initSoundexTestCase() []tcTemp {
+	lateGrowthInput := strings.Repeat("BEB", 4096) + strings.Repeat("BC", 64)
+	lateGrowthWant := "B2" + strings.Repeat("12", 63)
 	return []tcTemp{
 		{
 			info: "test soundex basic",
@@ -1077,12 +1079,12 @@ func initSoundexTestCase() []tcTemp {
 			info: "test soundex with non-alphabetic",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello123", "Test!@#", "123ABC"},
-					[]bool{false, false, false}),
+					[]string{"Hello123", "Test!@#", "123ABC", "123!", "123!ABC"},
+					[]bool{false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"H400", "T230", "A120"},
-				[]bool{false, false, false}),
+				[]string{"H400", "T230", "A120", "", "A120"},
+				[]bool{false, false, false, false, false}),
 		},
 		{
 			info: "test soundex empty string",
@@ -1092,7 +1094,7 @@ func initSoundexTestCase() []tcTemp {
 					[]bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"0000"},
+				[]string{""},
 				[]bool{false}),
 		},
 		{
@@ -1106,21 +1108,28 @@ func initSoundexTestCase() []tcTemp {
 				[]string{""},
 				[]bool{true}),
 		},
-		/*
-			// TODO: fix this test case, according to MySQL behavior,
-			// I have no idea what the correct result should be.
-			{
-				info: "test soundex with consecutive duplicates",
-				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(),
-						[]string{"LLL", "RRR", "MMM"},
-						[]bool{false, false, false}),
-				},
-				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-					[]string{"L000", "R000", "M000"},
-					[]bool{false, false, false}),
+		{
+			info: "test soundex with mixed NULL and non-NULL rows",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Pfister", "ignored", "Ashcraft"},
+					[]bool{false, true, false}),
 			},
-		*/
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"P236", "", "A2613"},
+				[]bool{false, true, false}),
+		},
+		{
+			info: "test soundex first-letter and discarded-letter duplicate suppression",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"LLL", "RRR", "MMM", "BEB", "BHB", "BWB", "B-B"},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"L000", "R000", "M000", "B000", "B000", "B000", "B000"},
+				[]bool{false, false, false, false, false, false, false}),
+		},
 		{
 			info: "test soundex with H and W",
 			inputs: []FunctionTestInput{
@@ -1143,6 +1152,17 @@ func initSoundexTestCase() []tcTemp {
 				[]string{"A000", "A100", "A120"},
 				[]bool{false, false, false}),
 		},
+		{
+			info: "test MySQL original Soundex and variable-length results",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Ashcraft", "Pfister", "Tymczak", "Quadratically", "pfister", "BDFJLMPR", "BDFJLMPRB", lateGrowthInput},
+					[]bool{false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"A2613", "P236", "T520", "Q36324", "P236", "B3124516", "B31245161", lateGrowthWant},
+				[]bool{false, false, false, false, false, false, false, false}),
+		},
 	}
 }
 
@@ -1155,6 +1175,21 @@ func TestSoundex(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestSoundexLongTextOutput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := strings.Repeat("BC", 32769)
+	want := "B" + strings.Repeat("21", 32768) + "2"
+
+	fcTC := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), []string{input}, []bool{false})},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{want}, []bool{false}),
+		Soundex,
+	)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("long TEXT Soundex result was truncated: %s", info))
 }
 
 func initStAsTextTestCase() []tcTemp {
