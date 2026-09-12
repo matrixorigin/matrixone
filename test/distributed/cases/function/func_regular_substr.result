@@ -121,3 +121,20 @@ SELECT HEX(REGEXP_SUBSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' A
 HEX(REGEXP_SUBSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2)) AS varbinary_substr;
 binary_substr    varbinary_substr
 E4B8AD    E4B8AD
+
+SELECT REGEXP_SUBSTR('Abc abc', 'abc', 1, 1, 'i') AS insensitive,
+REGEXP_SUBSTR('Abc abc', 'abc', 1, 1, 'c') AS sensitive;
+insensitive    sensitive
+Abc    abc
+SELECT REGEXP_SUBSTR('a\nb', '^b', 3, 1, 'm') AS multiline,
+REGEXP_SUBSTR('a\nb', '^b', 3, 1, 'c') AS singleline;
+multiline    singleline
+b    null
+SELECT HEX(REGEXP_SUBSTR(CAST(X'78C9' AS BINARY(2)), CAST(X'E9' AS BINARY(1)), 1, 1, 'i')) AS binary_i,
+HEX(REGEXP_SUBSTR(CAST(X'78C9' AS VARBINARY(2)), CAST(X'E9' AS VARBINARY(1)), 1, 1, 'i')) AS varbinary_i;
+binary_i    varbinary_i
+C9    C9
+SELECT HEX(REGEXP_SUBSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), 2, 1, 'i')) AS binary_byte_pos,
+HEX(REGEXP_SUBSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2, 1, 'i')) AS varbinary_byte_pos;
+binary_byte_pos    varbinary_byte_pos
+E4B8AD    E4B8AD

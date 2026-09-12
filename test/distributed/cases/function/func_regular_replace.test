@@ -67,6 +67,16 @@ SELECT REGEXP_INSTR('abc', 'a*', 1, 2, 0) AS after_nonempty,
        HEX(REGEXP_REPLACE('abc', 'a*', 'X', 1, 0)) AS replace_zero_width,
        HEX(REGEXP_REPLACE('', '^$', 'X')) AS empty_subject;
 
+# A trailing \Q quotes through pattern end; position wrappers must not
+# accidentally quote the wrapper's generated capture boundary.
+SELECT REGEXP_REPLACE('a.a.', '(a)\\Q.', '$1', 1, 0) AS quoted_all,
+       REGEXP_REPLACE('xa.a.', '(a)\\Q.', '$1', 2, 1) AS quoted_one,
+       REGEXP_REPLACE('xa.a.', '(a)\\Q.', '$1', 2, 0) AS quoted_after_pos,
+       REGEXP_INSTR('xa.a.', '(a)\\Q.', 2, 2) AS quoted_instr,
+       REGEXP_SUBSTR('xa.a.', '(a)\\Q.', 2, 2) AS quoted_substr;
+SELECT HEX(REGEXP_REPLACE(CAST(_binary'a\\a\\' AS VARBINARY(4)),
+                          CAST(_binary'(a)\\Q\\\\E' AS VARBINARY(8)), _binary'X', 1, 0)) AS binary_quoted_backslash;
+
 # Binary subjects interpret pos as a byte offset.
 SELECT HEX(REGEXP_REPLACE(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS binary_replace,
        HEX(REGEXP_REPLACE(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), _binary'X', 2, 1)) AS varbinary_replace;
@@ -85,3 +95,61 @@ EXECUTE regexp_replacement_charset USING @regexp_replacement;
 SET @regexp_replacement = _binary 0xe4b8ad;
 EXECUTE regexp_replacement_charset USING @regexp_replacement;
 DEALLOCATE PREPARE regexp_replacement_charset;
+
+# match_type controls matching and replacement consistently. The multiline
+# case also exercises flags in the position-aware wrapper's second compilation.
+SELECT REGEXP_REPLACE('Abc abc', 'abc', 'X', 1, 0, 'i') AS insensitive,
+       REGEXP_REPLACE('Abc abc', 'abc', 'X', 1, 0, 'c') AS sensitive;
+SELECT HEX(REGEXP_REPLACE('a\nb', '^b', 'X', 3, 1, 'm')) AS multiline,
+       HEX(REGEXP_REPLACE('a\nb', '^b', 'X', 3, 1, 'c')) AS singleline;
+
+# Binary case folding preserves the original byte representation and pos unit.
+SELECT HEX(REGEXP_REPLACE(CAST(X'78C9' AS BINARY(2)), CAST(X'E9' AS BINARY(1)), CAST(X'58' AS BINARY(1)), 1, 0, 'i')) AS binary_i,
+       HEX(REGEXP_REPLACE(CAST(X'78C9' AS VARBINARY(2)), CAST(X'E9' AS VARBINARY(1)), CAST(X'58' AS VARBINARY(1)), 1, 0, 'i')) AS varbinary_i;
+SELECT HEX(REGEXP_REPLACE(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), CAST(X'58' AS BINARY(1)), 2, 1, 'i')) AS binary_byte_pos,
+       HEX(REGEXP_REPLACE(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), CAST(X'58' AS VARBINARY(1)), 2, 1, 'i')) AS varbinary_byte_pos;
+
+# Reusing one prepared plan with changing match_type values must not retain the
+# previous case flags in any of the three value functions.
+PREPARE regexp_value_match_type_rebind FROM
+    'SELECT REGEXP_INSTR(?, ?, 1, 1, 0, ?) AS pos,
+            REGEXP_SUBSTR(?, ?, 1, 1, ?) AS part,
+            REGEXP_REPLACE(?, ?, ''X'', 1, 0, ?) AS replaced';
+SET @regexp_mode_subject = 'Abc abc';
+SET @regexp_mode_pattern = 'abc';
+SET @regexp_mode = 'i';
+EXECUTE regexp_value_match_type_rebind USING @regexp_mode_subject, @regexp_mode_pattern, @regexp_mode,
+       @regexp_mode_subject, @regexp_mode_pattern, @regexp_mode,
+       @regexp_mode_subject, @regexp_mode_pattern, @regexp_mode;
+SET @regexp_mode = 'c';
+EXECUTE regexp_value_match_type_rebind USING @regexp_mode_subject, @regexp_mode_pattern, @regexp_mode,
+       @regexp_mode_subject, @regexp_mode_pattern, @regexp_mode,
+       @regexp_mode_subject, @regexp_mode_pattern, @regexp_mode;
+DEALLOCATE PREPARE regexp_value_match_type_rebind;
+
+# ICU-style capture references are expanded at the selected match; binary
+# captures append the original bytes, including NUL and invalid UTF-8.
+SELECT REGEXP_REPLACE('ab', '(a)(b)', '$2$1') AS swapped,
+       REGEXP_REPLACE('matrix', '(matrix)', '<$1>') AS captured,
+       REGEXP_REPLACE('aab', '(a)', '<$1>', 2, 0) AS from_pos;
+SELECT HEX(REGEXP_REPLACE(CAST(X'00FFC3' AS VARBINARY(3)),
+                          CAST(X'00' AS VARBINARY(1)),
+                          CAST(X'5B24305D' AS VARBINARY(4)), 1, 0)) AS binary_capture;
+SELECT HEX(REGEXP_REPLACE(CAST(X'00FFC3' AS BINARY(3)),
+                          CAST(X'00' AS BINARY(1)),
+                          CAST(X'5B24305D' AS BINARY(4)), 1, 0)) AS binary_capture,
+       HEX(REGEXP_REPLACE(CAST(X'00FFC3' AS VARBINARY(3)),
+                          CAST(X'00' AS VARBINARY(1)),
+                          CAST(X'5B24305D' AS VARBINARY(4)), 1, 0)) AS varbinary_capture;
+
+# Replacement markers supplied through a prepared parameter are interpreted
+# on each execution rather than retained from an earlier value.
+PREPARE regexp_capture_replacement FROM
+    'SELECT REGEXP_REPLACE(?, ?, ?, 1, 0) AS replaced';
+SET @regexp_capture_subject = 'ab';
+SET @regexp_capture_pattern = '(a)(b)';
+SET @regexp_capture_value = '$2$1';
+EXECUTE regexp_capture_replacement USING @regexp_capture_subject, @regexp_capture_pattern, @regexp_capture_value;
+SET @regexp_capture_value = '<$0>';
+EXECUTE regexp_capture_replacement USING @regexp_capture_subject, @regexp_capture_pattern, @regexp_capture_value;
+DEALLOCATE PREPARE regexp_capture_replacement;

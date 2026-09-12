@@ -396,3 +396,22 @@ SELECT REGEXP_INSTR(CAST(X'FF' AS BINARY(1)), CAST(X'5C784646' AS BINARY(4))) AS
 REGEXP_INSTR(CAST(X'FF' AS BINARY(1)), CAST(X'5B5C7838302D5C7846465D' AS BINARY(11))) AS byte_range;
 hex_escape    byte_range
 1    1
+
+SELECT REGEXP_INSTR('Abc abc', 'abc', 1, 1, 0, 'i') AS insensitive,
+REGEXP_INSTR('Abc abc', 'abc', 1, 1, 0, 'c') AS sensitive,
+REGEXP_INSTR('Abc abc', 'abc', 1, 1, 0, 'ic') AS rightmost_c,
+REGEXP_INSTR('Abc abc', 'abc', 1, 1, 0, 'ci') AS rightmost_i;
+insensitive    sensitive    rightmost_c    rightmost_i
+1    5    5    1
+SELECT REGEXP_INSTR('a\nb', '^b', 1, 1, 0, 'mu') AS unix_lf,
+REGEXP_INSTR('a\rb', '^b', 1, 1, 0, 'mu') AS unix_cr;
+unix_lf    unix_cr
+3    0
+SELECT REGEXP_INSTR(CAST(X'78C9' AS BINARY(2)), CAST(X'E9' AS BINARY(1)), 1, 1, 0, 'i') AS binary_i,
+REGEXP_INSTR(CAST(X'78C9' AS VARBINARY(2)), CAST(X'E9' AS VARBINARY(1)), 1, 1, 0, 'i') AS varbinary_i;
+binary_i    varbinary_i
+2    2
+SELECT REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), 2, 1, 0, 'i') AS binary_byte_pos,
+REGEXP_INSTR(CAST(_binary'中中' AS VARBINARY(6)), CAST(_binary'中' AS VARBINARY(3)), 2, 1, 0, 'i') AS varbinary_byte_pos;
+binary_byte_pos    varbinary_byte_pos
+4    4

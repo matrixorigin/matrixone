@@ -132,6 +132,14 @@ func Test_BuiltIn_RegexpReplaceStartsAtRequestedPosition(t *testing.T) {
 		{name: "zero_width_after_nonempty_match", pattern: "b*", subject: "ab", replacement: "X", position: 2, occurrence: 0, want: "aXX"},
 		{name: "zero_width_all_from_start", pattern: "a*", subject: "abc", replacement: "X", position: 1, occurrence: 0, want: "XXbXcX"},
 		{name: "zero_width_all_after_position", pattern: "a*", subject: "abc", replacement: "X", position: 2, occurrence: 0, want: "aXbXcX"},
+		{name: "open_quote_replace_all", pattern: "(a)\\Q.", subject: "a.a.", replacement: "$1", position: 1, occurrence: 0, want: "aa"},
+		{name: "open_quote_selected_after_position", pattern: "(a)\\Q.", subject: "xa.a.", replacement: "$1", position: 2, occurrence: 1, want: "xaa."},
+		{name: "open_quote_replace_all_after_position", pattern: "(a)\\Q.", subject: "xa.a.", replacement: "$1", position: 2, occurrence: 0, want: "xaa"},
+		{name: "explicit_quote_close", pattern: "(a)\\Q.\\E", subject: "a.a.", replacement: "$1", position: 1, occurrence: 0, want: "aa"},
+		{name: "escaped_backslash_before_open_quote", pattern: "(a)\\\\\\Q.", subject: "a\\.a\\.", replacement: "$1", position: 1, occurrence: 0, want: "aa"},
+		{name: "quoted_backslash_before_terminator", pattern: "(a)\\Q\\\\E", subject: "a\\a\\", replacement: "$1", position: 1, occurrence: 0, want: "aa"},
+		{name: "quoted_backslash_terminator_after_position", pattern: "(a)\\Q\\\\E", subject: "xa\\a\\", replacement: "X", position: 2, occurrence: 0, want: "xXX"},
+		{name: "escaped_backslash_two_byte_control", pattern: "(a)\\\\\\Q.", subject: "a\\\\.a\\\\.", replacement: "X", position: 2, occurrence: 0, want: "a\\\\.a\\\\."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := op.regMap.regularReplace(tc.pattern, tc.subject, tc.replacement, tc.position, tc.occurrence)
@@ -140,9 +148,304 @@ func Test_BuiltIn_RegexpReplaceStartsAtRequestedPosition(t *testing.T) {
 		})
 	}
 
+	quotedPattern := "(a)\\Q."
+	position, err := op.regMap.regularInstr(quotedPattern, "xa.a.", 2, 2, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(4), position)
+	matched, part, err := op.regMap.regularSubstr(quotedPattern, "xa.a.", 2, 2)
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, "a.", part)
+	quotedBackslashPattern := "(a)\\Q\\\\E"
+	position, err = op.regMap.regularInstr(quotedBackslashPattern, "xa\\a\\", 2, 2, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(4), position)
+	matched, part, err = op.regMap.regularSubstr(quotedBackslashPattern, "xa\\a\\", 2, 2)
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, "a\\", part)
+	binaryResult, err := op.regMap.regularReplaceWithMode(
+		quotedBackslashPattern, "a\\a\\", "X", 1, 0, true)
+	require.NoError(t, err)
+	require.Equal(t, "XX", binaryResult)
+
 	got, err := op.regMap.regularReplace("^$", "", "X", 1, 0)
 	require.NoError(t, err)
 	require.Empty(t, got, "MySQL leaves an empty REGEXP_REPLACE subject unchanged")
+}
+
+func Test_BuiltIn_RegexpReplaceCaptureTemplate(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	tests := []struct {
+		name        string
+		pattern     string
+		subject     string
+		replacement string
+		position    int64
+		occurrence  int64
+		want        string
+	}{
+		{name: "swap_groups", pattern: "(a)(b)", subject: "ab", replacement: "$2$1", position: 1, occurrence: 0, want: "ba"},
+		{name: "whole_match", pattern: "(ab)", subject: "ab", replacement: "$0", position: 1, occurrence: 1, want: "ab"},
+		{name: "greedy_multi_digit", pattern: "(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)", subject: "abcdefghijkl", replacement: "$12", position: 1, occurrence: 1, want: "l"},
+		{name: "greedy_fallback", pattern: "(a)", subject: "a", replacement: "$12", position: 1, occurrence: 1, want: "a2"},
+		{name: "leading_zero_group", pattern: "(a)", subject: "a", replacement: "$01", position: 1, occurrence: 1, want: "a"},
+		{name: "leading_zero_fallback", pattern: "(a)", subject: "a", replacement: "$09", position: 1, occurrence: 1, want: "a9"},
+		{name: "unmatched_optional_group", pattern: "(a)?b", subject: "b", replacement: "$1x", position: 1, occurrence: 1, want: "x"},
+		{name: "named_group", pattern: "(?P<word>[a-z]+)", subject: "matrix", replacement: "<$" + "{word}>", position: 1, occurrence: 1, want: "<matrix>"},
+		{name: "escaped_dollar", pattern: "(a)", subject: "a", replacement: "\\$1", position: 1, occurrence: 1, want: "$1"},
+		{name: "escaped_backslash", pattern: "(a)", subject: "a", replacement: "\\\\", position: 1, occurrence: 1, want: "\\"},
+		{name: "trailing_escape", pattern: "(a)", subject: "a", replacement: "tail\\", position: 1, occurrence: 1, want: "tail"},
+		{name: "position_all", pattern: "(a)", subject: "aab", replacement: "<$1>", position: 2, occurrence: 0, want: "a<a>b"},
+		{name: "selected_occurrence", pattern: "(a)", subject: "aab", replacement: "<$1>", position: 1, occurrence: 2, want: "a<a>b"},
+		{name: "boundary_overlapping_match", pattern: "(aa)", subject: "aaa", replacement: "<$1>", position: 2, occurrence: 1, want: "a<aa>"},
+		{name: "anchor_keeps_original_context", pattern: "^(a)", subject: "ab", replacement: "<$1>", position: 2, occurrence: 0, want: "ab"},
+		{name: "zero_width_empty_capture", pattern: "(?P<empty>)", subject: "ab", replacement: "[$1]", position: 1, occurrence: 0, want: "[]a[]b[]"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := op.regMap.regularReplaceWithMatchType(
+				tc.pattern, tc.subject, tc.replacement, tc.position, tc.occurrence, false, "")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	for _, replacement := range []string{"$", "$$", "$x", "$" + "{}", "$" + "{missing}", "$2"} {
+		t.Run("invalid_"+replacement, func(t *testing.T) {
+			_, err := op.regMap.regularReplace("(a)", "a", replacement, 1, 0)
+			require.Error(t, err)
+
+			got, err := op.regMap.regularReplace("z", "a", replacement, 1, 0)
+			require.NoError(t, err, "replacement is not evaluated when no match is selected")
+			require.Equal(t, "a", got)
+		})
+	}
+	got, err := op.regMap.regularReplace("(a)", "a", "$9", 1, 2)
+	require.NoError(t, err, "an out-of-range occurrence does not evaluate the replacement")
+	require.Equal(t, "a", got)
+
+	binarySubject := string([]byte{0x00, 0xff, 0xc3, 0x28})
+	got, err = op.regMap.regularReplaceWithMatchType(
+		".", binarySubject, "[$0]", 1, 0, true, "")
+	require.NoError(t, err)
+	want := []byte{'[', 0x00, ']', '[', 0xff, ']', '[', 0xc3, ']', '[', 0x28, ']'}
+	require.Equal(t, string(want), got, "binary captures preserve NUL and invalid UTF-8 bytes")
+
+	pureMatchType, err := getPureMatchType("i")
+	require.NoError(t, err)
+	got, err = op.regMap.regularReplaceWithMatchType(
+		string([]byte{0xe9}), string([]byte{0xc9}), "<$0>", 1, 1, true, pureMatchType)
+	require.NoError(t, err)
+	require.Equal(t, string([]byte{'<', 0xc9, '>'}), got,
+		"binary case-folding must emit the original captured byte")
+
+	largeReplacement := strings.Repeat("$0", 10000)
+	got, err = op.regMap.regularReplace("(a)", "a", largeReplacement, 1, 1)
+	require.NoError(t, err)
+	require.Equal(t, strings.Repeat("a", 10000), got)
+}
+
+func Test_BuiltIn_RegexpReplaceOutputLimit(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	reg, _, err := op.regMap.getRegularMatcherInfoWithMode("(a)", false)
+	require.NoError(t, err)
+	got, err := op.regMap.regularReplaceWithTemplate(
+		reg, "(a)", "a", "$1$1", 0, 0, false, "", 2)
+	require.NoError(t, err)
+	require.Equal(t, "aa", got, "exactly-at-limit output is accepted")
+	_, err = op.regMap.regularReplaceWithTemplate(
+		reg, "(a)", "a", "$1$1", 0, 0, false, "", 1)
+	require.Error(t, err, "one byte below the required output is rejected before construction")
+
+	regA, _, err := op.regMap.getRegularMatcherInfoWithMode("a", false)
+	require.NoError(t, err)
+	got, err = op.regMap.regexpReplaceLiteralWithLimit(
+		regA, "a", "aaaa", "aa", 0, 0, false, "", 8)
+	require.NoError(t, err)
+	require.Equal(t, "aaaaaaaa", got)
+	_, err = op.regMap.regexpReplaceLiteralWithLimit(
+		regA, "a", "aaaa", "aa", 0, 0, false, "", 7)
+	require.Error(t, err)
+
+	regZ, _, err := op.regMap.getRegularMatcherInfoWithMode("z", false)
+	require.NoError(t, err)
+	got, err = op.regMap.regularReplaceWithTemplate(
+		regZ, "z", "a", "$999", 0, 0, false, "", 1)
+	require.NoError(t, err, "a no-match result stays unchanged and does not parse an invalid template")
+	require.Equal(t, "a", got)
+
+	maxInt := int(^uint(0) >> 1)
+	_, ok := regexpReplaceOutputUpperBound(maxInt, maxInt)
+	require.False(t, ok, "the allocation bound must reject arithmetic overflow")
+}
+
+func Test_BuiltIn_RegexpValueFunctionsHonorMatchType(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	pureMatchType := func(input string) string {
+		t.Helper()
+		pure, err := getPureMatchType(input)
+		require.NoError(t, err, input)
+		return pure
+	}
+
+	for _, tc := range []struct {
+		name string
+		mode string
+		want int64
+	}{
+		{name: "case_insensitive", mode: "i", want: 1},
+		{name: "case_sensitive", mode: "c", want: 5},
+		{name: "rightmost_c_wins", mode: "ic", want: 5},
+		{name: "rightmost_i_wins", mode: "ci", want: 1},
+	} {
+		t.Run("instr_"+tc.name, func(t *testing.T) {
+			got, err := op.regMap.regularInstrWithMatchType(
+				"abc", "Abc abc", 1, 1, 0, false, pureMatchType(tc.mode))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	instrGot, err := op.regMap.regularInstrWithMatchType(
+		"^b", "a\nb", 1, 1, 0, false, pureMatchType("m"))
+	require.NoError(t, err)
+	require.EqualValues(t, 3, instrGot)
+	instrGot, err = op.regMap.regularInstrWithMatchType(
+		"^b", "a\nb", 1, 1, 0, false, pureMatchType("c"))
+	require.NoError(t, err)
+	require.Zero(t, instrGot)
+	instrGot, err = op.regMap.regularInstrWithMatchType(
+		"^", "a\nb", 1, 2, 0, false, pureMatchType("m"))
+	require.NoError(t, err)
+	require.EqualValues(t, 3, instrGot, "the second multiline zero-width anchor is still a match")
+
+	for _, tc := range []struct {
+		name string
+		mode string
+		want string
+	}{
+		{name: "case_insensitive", mode: "i", want: "Abc"},
+		{name: "case_sensitive", mode: "c", want: "abc"},
+		{name: "multiline_anchor_after_position", mode: "m", want: "b"},
+	} {
+		t.Run("substr_"+tc.name, func(t *testing.T) {
+			subject, pattern, pos := "Abc abc", "abc", int64(1)
+			if tc.mode == "m" {
+				subject, pattern, pos = "a\nb", "^b", 3
+			}
+			matched, got, err := op.regMap.regularSubstrWithMatchType(
+				pattern, subject, pos, 1, false, pureMatchType(tc.mode))
+			require.NoError(t, err)
+			require.True(t, matched)
+			require.Equal(t, tc.want, got)
+		})
+	}
+	matched, substrGot, err := op.regMap.regularSubstrWithMatchType(
+		"^b", "a\nb", 3, 1, false, pureMatchType("c"))
+	require.NoError(t, err)
+	require.False(t, matched)
+	require.Empty(t, substrGot)
+	matched, substrGot, err = op.regMap.regularSubstrWithMatchType(
+		"^", "a\nb", 3, 1, false, pureMatchType("m"))
+	require.NoError(t, err)
+	require.True(t, matched, "a zero-width match is distinct from no match")
+	require.Empty(t, substrGot)
+
+	for _, tc := range []struct {
+		name string
+		mode string
+		want string
+	}{
+		{name: "case_insensitive", mode: "i", want: "X X"},
+		{name: "case_sensitive", mode: "c", want: "Abc X"},
+	} {
+		t.Run("replace_"+tc.name, func(t *testing.T) {
+			got, err := op.regMap.regularReplaceWithMatchType(
+				"abc", "Abc abc", "X", 1, 0, false, pureMatchType(tc.mode))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+	replaceGot, err := op.regMap.regularReplaceWithMatchType(
+		"^b", "a\nb", "X", 3, 1, false, pureMatchType("m"))
+	require.NoError(t, err)
+	require.Equal(t, "a\nX", replaceGot,
+		"the position-aware iterator must compile its wrapped matcher with match_type flags")
+	replaceGot, err = op.regMap.regularReplaceWithMatchType(
+		"aa", "aaa", "X", 2, 1, false, pureMatchType("c"))
+	require.NoError(t, err)
+	require.Equal(t, "aX", replaceGot, "a discarded overlap must not suppress a match starting at pos")
+	replaceGot, err = op.regMap.regularReplaceWithMatchType(
+		"^", "a\nb", "X", 3, 1, false, pureMatchType("m"))
+	require.NoError(t, err)
+	require.Equal(t, "a\nXb", replaceGot, "a zero-width multiline match at pos remains observable")
+
+	for _, tc := range []struct {
+		name string
+		mode string
+		want int64
+	}{
+		{name: "binary_i_folds_windows_1252_bytes", mode: "i", want: 2},
+		{name: "binary_c_preserves_byte_case", mode: "c", want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			subject := string([]byte{0x78, 0xc9})
+			pattern := string([]byte{0xe9})
+			got, err := op.regMap.regularInstrWithMatchType(
+				pattern, subject, 1, 1, 0, true, pureMatchType(tc.mode))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	binarySubject := string([]byte{0x78, 0xc9})
+	binaryPattern := string([]byte{0xe9})
+	matched, substrGot, err = op.regMap.regularSubstrWithMatchType(
+		binaryPattern, binarySubject, 1, 1, true, pureMatchType("i"))
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, string([]byte{0xc9}), substrGot)
+	replaceGot, err = op.regMap.regularReplaceWithMatchType(
+		binaryPattern, binarySubject, "X", 1, 0, true, pureMatchType("i"))
+	require.NoError(t, err)
+	require.Equal(t, "xX", replaceGot)
+
+	// UTF-8-looking bytes are still byte positions for binary operands, including
+	// a start position inside the first encoded character.
+	binarySubject, binaryPattern = "中中", "中"
+	instrGot, err = op.regMap.regularInstrWithMatchType(
+		binaryPattern, binarySubject, 2, 1, 0, true, pureMatchType("i"))
+	require.NoError(t, err)
+	require.EqualValues(t, 4, instrGot)
+	matched, substrGot, err = op.regMap.regularSubstrWithMatchType(
+		binaryPattern, binarySubject, 2, 1, true, pureMatchType("i"))
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, "中", substrGot)
+	replaceGot, err = op.regMap.regularReplaceWithMatchType(
+		binaryPattern, binarySubject, "X", 2, 1, true, pureMatchType("i"))
+	require.NoError(t, err)
+	require.Equal(t, "中X", replaceGot)
+}
+
+func TestRegexpMatchTypeParser(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: "u", want: ""},
+		{input: "mu", want: "m"},
+		{input: "nu", want: "s"},
+		{input: "ic", want: ""},
+		{input: "ci", want: "i"},
+	} {
+		got, err := getPureMatchType(tc.input)
+		require.NoError(t, err, tc.input)
+		require.Equal(t, tc.want, got, tc.input)
+	}
+	_, err := getPureMatchType("z")
+	require.Error(t, err)
 }
 
 func Test_BuiltIn_RegexpPositiveOccurrenceReturnsOnlyRequestedMatch(t *testing.T) {
@@ -717,6 +1020,20 @@ func TestRegexpBinaryBytesToText(t *testing.T) {
 	require.Equal(t, string(latin1Runes),
 		regexpBinaryBytesToText(string(latin1Bytes)))
 
+	allBytes := make([]byte, 256)
+	for i := range allBytes {
+		allBytes[i] = byte(i)
+	}
+	allBinary := string(allBytes)
+	encoded := regexpBinaryBytesToText(allBinary)
+	require.Equal(t, allBinary, decodeBinaryRegexpText(encoded),
+		"the binary i facade must round-trip every possible byte")
+	for start := 0; start <= len(allBinary); start++ {
+		encoded, encodedStart := encodeBinaryRegexpText(allBinary, start)
+		require.Equal(t, allBinary[:start], decodeBinaryRegexpText(encoded[:encodedStart]),
+			"position %d must map to an encoded rune boundary", start)
+	}
+
 	proc := testutil.NewProcess(t)
 	constantBinary, err := vector.NewConstBytes(types.T_blob.ToType(), []byte{0xff}, 2, proc.Mp())
 	require.NoError(t, err)
@@ -797,6 +1114,44 @@ func Test_BuiltIn_RegexpHonorsSelectList(t *testing.T) {
 			expected: NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, false}, []bool{false, true}),
 			fn:       newOpBuiltInRegexp().builtInRegexpLike,
 		},
+		{
+			name: "regexp_instr_match_type",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"Abc abc", "a"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "["}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1}, nil),
+				NewFunctionTestInput(types.T_int8.ToType(), []int8{0, 0}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"i", "invalid"}, nil),
+			},
+			expected: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 0}, []bool{false, true}),
+			fn:       newOpBuiltInRegexp().builtInRegexpInstr,
+		},
+		{
+			name: "regexp_substr_match_type",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"Abc abc", "a"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "["}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"i", "invalid"}, nil),
+			},
+			expected: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"Abc", ""}, []bool{false, true}),
+			fn:       newOpBuiltInRegexp().builtInRegexpSubstr,
+		},
+		{
+			name: "regexp_replace_match_type",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"Abc abc", "a"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "["}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"X", "X"}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1, 1}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 0}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"i", "invalid"}, nil),
+			},
+			expected: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"X X", ""}, []bool{false, true}),
+			fn:       newOpBuiltInRegexp().builtInRegexpReplace,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ft := NewFunctionTestCase(proc, tc.inputs, tc.expected, tc.fn).WithSelectList(maskedSecond)
@@ -809,6 +1164,9 @@ func Test_BuiltIn_RegexpHonorsSelectList(t *testing.T) {
 func TestRegexpFunctionsPreserveBinaryOverloadDomain(t *testing.T) {
 	for _, oid := range []types.T{types.T_binary, types.T_varbinary, types.T_blob} {
 		subject := types.New(oid, 32, 0)
+		text := types.T_varchar.ToType()
+		int64Type := types.T_int64.ToType()
+		int8Type := types.T_int8.ToType()
 		for _, tc := range []struct {
 			name string
 			args []types.Type
@@ -817,6 +1175,9 @@ func TestRegexpFunctionsPreserveBinaryOverloadDomain(t *testing.T) {
 			{name: "regexp_instr", args: []types.Type{subject, subject}},
 			{name: "regexp_substr", args: []types.Type{subject, subject}},
 			{name: "regexp_replace", args: []types.Type{subject, subject, subject}},
+			{name: "regexp_instr", args: []types.Type{subject, subject, int64Type, int64Type, int8Type, text}},
+			{name: "regexp_substr", args: []types.Type{subject, subject, int64Type, int64Type, text}},
+			{name: "regexp_replace", args: []types.Type{subject, subject, subject, int64Type, int64Type, text}},
 		} {
 			resolved, err := GetFunctionByName(context.Background(), tc.name, tc.args)
 			require.NoError(t, err)
@@ -847,15 +1208,19 @@ func TestRegexpFunctionsRejectStaticMixedStringDomains(t *testing.T) {
 		{name: "not_reg_match_pattern", args: []types.Type{text, binary}},
 		{name: "regexp_like_subject", args: []types.Type{binary, text, text}},
 		{name: "regexp_instr_pattern", args: []types.Type{text, binary, int64Type, int64Type, int8Type}},
+		{name: "regexp_instr_match_type_pattern", args: []types.Type{text, binary, int64Type, int64Type, int8Type, text}},
 		{name: "regexp_substr_subject", args: []types.Type{binary, text, int64Type, int64Type}},
+		{name: "regexp_substr_match_type_pattern", args: []types.Type{text, binary, int64Type, int64Type, text}},
 		{name: "regexp_replace_subject", args: []types.Type{binary, text, text, int64Type, int64Type}},
 		{name: "regexp_replace_pattern", args: []types.Type{text, binary, text}},
 		{name: "regexp_replace_replacement", args: []types.Type{text, text, binary}},
+		{name: "regexp_replace_match_type_replacement", args: []types.Type{text, text, binary, int64Type, int64Type, text}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			functionName := strings.TrimSuffix(tc.name, "_subject")
 			functionName = strings.TrimSuffix(functionName, "_pattern")
 			functionName = strings.TrimSuffix(functionName, "_replacement")
+			functionName = strings.TrimSuffix(functionName, "_match_type")
 			_, err := GetFunctionByName(ctx, functionName, tc.args)
 			require.Error(t, err)
 			var moErr *moerr.Error
@@ -1444,12 +1809,15 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 		{name: "instr_3_null_position", fn: newOpBuiltInRegexp().builtInRegexpInstr, inputs: []FunctionTestInput{validText, invalidPattern, nullInt64}, resultType: int64Type},
 		{name: "instr_4_null_occurrence", fn: newOpBuiltInRegexp().builtInRegexpInstr, inputs: []FunctionTestInput{validText, invalidPattern, NewFunctionTestInput(int64Type, []int64{1}, nil), nullInt64}, resultType: int64Type},
 		{name: "instr_5_null_result_option", fn: newOpBuiltInRegexp().builtInRegexpInstr, inputs: []FunctionTestInput{validText, invalidPattern, NewFunctionTestInput(int64Type, []int64{1}, nil), NewFunctionTestInput(int64Type, []int64{1}, nil), nullInt8}, resultType: int64Type},
+		{name: "instr_6_invalid_match_type_before_null_subject", fn: newOpBuiltInRegexp().builtInRegexpInstr, inputs: []FunctionTestInput{nullText, validPattern, NewFunctionTestInput(int64Type, []int64{1}, nil), NewFunctionTestInput(int64Type, []int64{1}, nil), NewFunctionTestInput(int8Type, []int8{0}, nil), invalidMatchType}, resultType: int64Type},
 		{name: "substr_2_null_subject", fn: newOpBuiltInRegexp().builtInRegexpSubstr, inputs: []FunctionTestInput{nullText, invalidPattern}, resultType: text},
 		{name: "substr_3_null_position", fn: newOpBuiltInRegexp().builtInRegexpSubstr, inputs: []FunctionTestInput{validText, invalidPattern, nullInt64}, resultType: text},
 		{name: "substr_4_null_occurrence", fn: newOpBuiltInRegexp().builtInRegexpSubstr, inputs: []FunctionTestInput{validText, invalidPattern, NewFunctionTestInput(int64Type, []int64{1}, nil), nullInt64}, resultType: text},
+		{name: "substr_5_invalid_match_type_before_null_subject", fn: newOpBuiltInRegexp().builtInRegexpSubstr, inputs: []FunctionTestInput{nullText, validPattern, NewFunctionTestInput(int64Type, []int64{1}, nil), NewFunctionTestInput(int64Type, []int64{1}, nil), invalidMatchType}, resultType: text},
 		{name: "replace_3_null_replacement", fn: newOpBuiltInRegexp().builtInRegexpReplace, inputs: []FunctionTestInput{validText, invalidPattern, nullText}, resultType: text},
 		{name: "replace_4_null_position", fn: newOpBuiltInRegexp().builtInRegexpReplace, inputs: []FunctionTestInput{validText, invalidPattern, validText, nullInt64}, resultType: text},
 		{name: "replace_5_null_occurrence", fn: newOpBuiltInRegexp().builtInRegexpReplace, inputs: []FunctionTestInput{validText, invalidPattern, validText, NewFunctionTestInput(int64Type, []int64{1}, nil), nullInt64}, resultType: text},
+		{name: "replace_6_invalid_match_type_before_null_subject", fn: newOpBuiltInRegexp().builtInRegexpReplace, inputs: []FunctionTestInput{nullText, validPattern, validText, NewFunctionTestInput(int64Type, []int64{1}, nil), NewFunctionTestInput(int64Type, []int64{1}, nil), invalidMatchType}, resultType: text},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tcc := NewFunctionTestCase(
@@ -1461,14 +1829,66 @@ func Test_BuiltIn_RegexpValidatesPresentArgumentsBeforeNullableResult(t *testing
 	}
 
 	nullMatchType := NewFunctionTestInput(text, []string{""}, []bool{true})
-	control := NewFunctionTestCase(
-		proc,
-		[]FunctionTestInput{nullText, invalidPattern, nullMatchType},
-		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{true}),
-		newOpBuiltInRegexp().builtInRegexpLike,
-	)
-	ok, info := control.Run()
-	require.True(t, ok, info, "a NULL match_type remains the earlier NULL result boundary")
+	for _, tc := range []struct {
+		name       string
+		fn         fEvalFn
+		inputs     []FunctionTestInput
+		resultType types.Type
+		values     any
+	}{
+		{
+			name:       "regexp_like",
+			fn:         newOpBuiltInRegexp().builtInRegexpLike,
+			inputs:     []FunctionTestInput{nullText, invalidPattern, nullMatchType},
+			resultType: types.T_bool.ToType(),
+			values:     []bool{false},
+		},
+		{
+			name: "regexp_instr",
+			fn:   newOpBuiltInRegexp().builtInRegexpInstr,
+			inputs: []FunctionTestInput{
+				nullText, invalidPattern,
+				NewFunctionTestInput(int64Type, []int64{1}, nil),
+				NewFunctionTestInput(int64Type, []int64{1}, nil),
+				NewFunctionTestInput(int8Type, []int8{0}, nil),
+				nullMatchType,
+			},
+			resultType: int64Type,
+			values:     []int64{0},
+		},
+		{
+			name: "regexp_substr",
+			fn:   newOpBuiltInRegexp().builtInRegexpSubstr,
+			inputs: []FunctionTestInput{
+				nullText, invalidPattern,
+				NewFunctionTestInput(int64Type, []int64{1}, nil),
+				NewFunctionTestInput(int64Type, []int64{1}, nil),
+				nullMatchType,
+			},
+			resultType: text,
+			values:     []string{""},
+		},
+		{
+			name: "regexp_replace",
+			fn:   newOpBuiltInRegexp().builtInRegexpReplace,
+			inputs: []FunctionTestInput{
+				nullText, invalidPattern, validText,
+				NewFunctionTestInput(int64Type, []int64{1}, nil),
+				NewFunctionTestInput(int64Type, []int64{0}, nil),
+				nullMatchType,
+			},
+			resultType: text,
+			values:     []string{""},
+		},
+	} {
+		control := NewFunctionTestCase(
+			proc, tc.inputs,
+			NewFunctionTestResult(tc.resultType, false, tc.values, []bool{true}),
+			tc.fn,
+		)
+		ok, info := control.Run()
+		require.True(t, ok, "%s: %s", tc.name, info)
+	}
 }
 
 func Test_BuiltIn_RegexpLikeRejectsEmptyPattern(t *testing.T) {
