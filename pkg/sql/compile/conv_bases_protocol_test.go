@@ -41,7 +41,7 @@ func TestConvBasesPlacementAndActualSender(t *testing.T) {
 	defer op.Release()
 	op.ProjectList = []*planpb.Expr{expr}
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	for _, version := range []int64{defines.MORPCVersion64, defines.MORPCVersion66} {
+	for _, version := range []int64{defines.MORPCVersion65, defines.MORPCVersion66} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
@@ -57,12 +57,12 @@ func TestConvBasesPlacementAndActualSender(t *testing.T) {
 			wire := new(pipeline.Pipeline)
 			require.NoError(t, wire.Unmarshal(data))
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
 			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 66")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion66)
 		}
 	}
-	client.version = defines.MORPCVersion64
+	client.version = defines.MORPCVersion65
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.Error(t, err, "a downgrade after placement must be fenced")
 	require.Positive(t, client.calls)

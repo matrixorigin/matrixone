@@ -69,7 +69,7 @@ func expressionProtocolTestCompile(t *testing.T) (*Compile, *expressionVersionCl
 			rt.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
 		}
 	})
-	client := &expressionVersionClient{version: defines.MORPCVersion64}
+	client := &expressionVersionClient{version: defines.MORPCVersion65}
 	c.proc.Base.QueryClient = client
 	return c, client
 }

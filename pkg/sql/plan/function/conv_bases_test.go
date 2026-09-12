@@ -75,17 +75,20 @@ func TestConvDynamicBasesPreserveTypedInputs(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			defer proc.Free()
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input,
-				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{2, 10, 16}, nil),
-				NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 16, 10}, nil)},
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{2, 10, 16, 1, 2, 2}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 16, 10, 10, 10, 37}, []bool{false, false, false, false, true, false})},
 				NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil), Conv)
 			defer fc.result.Free()
 			for _, v := range fc.parameters {
 				defer v.Free(proc.Mp())
 			}
-			require.NoError(t, fc.result.PreExtendAndReset(3))
-			require.NoError(t, Conv(fc.parameters, fc.result, proc, 3, nil))
+			require.NoError(t, fc.result.PreExtendAndReset(6))
+			require.NoError(t, Conv(fc.parameters, fc.result, proc, 6, nil))
 			for i, want := range tc.want {
 				require.Equal(t, want, string(fc.result.GetResultVector().GetBytesAt(i)))
+			}
+			for row := uint64(3); row < 6; row++ {
+				require.True(t, fc.result.GetResultVector().IsNull(row), "invalid/NULL bases must be handled by every typed conversion loop")
 			}
 		})
 	}
