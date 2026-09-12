@@ -520,6 +520,32 @@ func TestResolveNumericBinaryTypesByName(t *testing.T) {
 	}
 }
 
+func TestResolveNumericBinaryTypesBitSignedBigintUsesDecimal(t *testing.T) {
+	bit64 := types.New(types.T_bit, 64, 0)
+	int64Type := types.New(types.T_int64, 64, 0)
+	want := types.New(types.T_decimal128, 38, 0)
+
+	for _, operator := range []string{"+", "-", "*", "%"} {
+		for _, operands := range []struct {
+			name        string
+			left, right types.Type
+		}{
+			{name: "bit-left", left: bit64, right: int64Type},
+			{name: "bit-right", left: int64Type, right: bit64},
+		} {
+			t.Run(operator+"/"+operands.name, func(t *testing.T) {
+				left, right, result, ok := ResolveNumericBinaryTypes(
+					operator, operands.left, operands.right, nil,
+				)
+				require.True(t, ok)
+				require.Equal(t, want, left)
+				require.Equal(t, want, right)
+				require.Equal(t, want, result)
+			})
+		}
+	}
+}
+
 func typePtr(typ types.Type) *types.Type {
 	return &typ
 }

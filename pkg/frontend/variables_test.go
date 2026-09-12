@@ -15,11 +15,13 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -80,6 +82,34 @@ func TestGroupConcatMaxLenDefault(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(got, convey.ShouldEqual, int64(1024))
 	})
+}
+
+func TestDiagnosticCountSystemVariables(t *testing.T) {
+	for _, name := range []string{warningCountSystemVariable, errorCountSystemVariable} {
+		sv, ok := gSysVarsDefs[name]
+		assert.True(t, ok)
+		assert.Equal(t, ScopeSession, sv.Scope)
+		assert.False(t, sv.Dynamic)
+		assert.False(t, sv.SetVarHintApplies)
+		assert.Equal(t, uint64(0), sv.Default)
+		assert.Equal(t, types.T_uint64, sv.Type.Type())
+	}
+
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.appendWarningDiagnostic(1292, "warning")
+	ses.appendErrorDiagnostic(1064, "error")
+
+	warningCount, err := ses.GetSessionSysVar("WARNING_COUNT")
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(2), warningCount)
+	errorCount, err := ses.GetSessionSysVar("error_count")
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(1), errorCount)
+
+	_, err = ses.GetGlobalSysVar(warningCountSystemVariable)
+	assert.Error(t, err)
+	err = ses.SetSessionSysVar(context.Background(), warningCountSystemVariable, uint64(0))
+	assert.Error(t, err)
 }
 
 func TestCTEMaxMemoryBytesDefinition(t *testing.T) {
