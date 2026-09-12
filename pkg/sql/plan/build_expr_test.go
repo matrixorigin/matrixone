@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -854,6 +856,77 @@ func TestGroupedMySQLSpecialNumericContextsRecoverStoredValues(t *testing.T) {
 		})
 		require.Error(t, err)
 	})
+}
+
+func TestGroupedEnumRecoveryExecutesAfterPlanRoundTrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	storageType := &plan.Type{
+		Id: int32(types.T_enum), Enumvalues: "2,red", NotNullable: false,
+	}
+	nullDisplay := makePlan2NullConstExprWithType()
+	nullDisplay.Typ.Id = int32(types.T_varchar)
+
+	tests := []struct {
+		name     string
+		display  *plan.Expr
+		want     types.Enum
+		wantNull bool
+	}{
+		{name: "ordinal zero", display: makePlan2StringConstExprWithType(""), want: 0},
+		{name: "numeric-looking label", display: makePlan2StringConstExprWithType("2"), want: 1},
+		{name: "ordinary label", display: makePlan2StringConstExprWithType("red"), want: 2},
+		{name: "null remains null", display: nullDisplay, wantNull: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := makeMySQLSpecialNumericValue(context.Background(), tc.display, storageType)
+			require.NoError(t, err)
+			// IF selects the common numeric representation for ENUM branches.
+			require.Equal(t, int32(types.T_uint16), expr.Typ.Id)
+			require.Equal(t, storageType.Enumvalues, expr.Typ.Enumvalues)
+			require.Equal(t, !tc.wantNull, expr.Typ.NotNullable)
+
+			payload, err := proto.Marshal(expr)
+			require.NoError(t, err)
+			var restored plan.Expr
+			require.NoError(t, proto.Unmarshal(payload, &restored))
+			require.True(t, proto.Equal(expr, &restored))
+			requireBaseSupportedEnumRecoveryFunctions(t, &restored)
+
+			executor, err := colexec.NewExpressionExecutor(proc, &restored)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, types.T_uint16, result.GetType().Oid)
+			if tc.wantNull {
+				require.True(t, result.GetNulls().Contains(0))
+				return
+			}
+			require.False(t, result.GetNulls().Contains(0))
+			require.Equal(t, uint16(tc.want), vector.MustFixedColWithTypeCheck[uint16](result)[0])
+		})
+	}
+}
+
+func requireBaseSupportedEnumRecoveryFunctions(t *testing.T, expr *plan.Expr) {
+	t.Helper()
+	if functionExpr := expr.GetF(); functionExpr != nil {
+		name := functionExpr.Func.GetObjName()
+		_, err := planfunction.GetFunctionById(context.Background(), functionExpr.Func.Obj)
+		require.NoError(t, err, "serialized function ID %d (%s) must exist in the base registry",
+			functionExpr.Func.Obj, name)
+
+		if name == moEnumCastValueToIndexFun {
+			_, overloadID := planfunction.DecodeOverloadID(functionExpr.Func.Obj)
+			require.Zero(t, overloadID, "recovery must use the legacy two-argument ENUM overload")
+			require.Len(t, functionExpr.Args, 2)
+		}
+		for _, arg := range functionExpr.Args {
+			requireBaseSupportedEnumRecoveryFunctions(t, arg)
+		}
+	}
 }
 
 func TestIsBitwiseBinaryOp(t *testing.T) {
