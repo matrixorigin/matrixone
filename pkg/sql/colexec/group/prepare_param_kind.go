@@ -493,13 +493,27 @@ func groupConcatSourceRowWireEnabled(proc *process.Process) bool {
 	if proc == nil {
 		return false
 	}
+	if !proc.GroupConcatSourceRowProvenanceTrusted() {
+		return false
+	}
+	return groupConcatSourceRowProvenanceWireEnabled(proc)
+}
+
+// groupConcatSourceRowProvenanceWireEnabled gates the v66 state-level marker.
+// It remains enabled for remote producers even though their payload rows are
+// legacy: the marker is how a coordinator learns that an empty/NULL-only
+// partial consumed an independent source-row namespace.
+func groupConcatSourceRowProvenanceWireEnabled(proc *process.Process) bool {
+	if proc == nil {
+		return false
+	}
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	if rt == nil {
 		return false
 	}
 	value, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion65
+	return ok && version >= defines.MORPCVersion66
 }
 
 type aggregateStringSourceProtocolWriter interface {

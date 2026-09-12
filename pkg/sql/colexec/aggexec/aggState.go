@@ -41,6 +41,12 @@ const (
 	aggBinaryStringTrailerMagic = uint64(0x4147474253545231)
 	aggStringDomainTrailerMagic = uint64(0x4147474253545232)
 	aggStringStateTrailerMagic  = uint64(0x4147474253545233)
+	// aggGroupConcatSourceRowTrailerMagic carries provenance independently of
+	// aggregate values. This matters for empty and NULL-only partials: their
+	// source rows still consume input ordinals even though no payload entry is
+	// present to reveal the producer namespace.
+	aggGroupConcatSourceRowTrailerMagic   = uint64(0x4147474353523131)
+	aggGroupConcatSourceRowTrailerVersion = byte(1)
 )
 
 var _ [0]struct{} = [AggBatchSize & aggBatchSizeMask]struct{}{}       // mask == size-1
@@ -106,8 +112,10 @@ type aggInfo struct {
 	// groupConcatSourceRowState identifies the private GROUP_CONCAT payload
 	// extension. Local spill always keeps it, while group partial output enables
 	// it only after all peers support the extended wire format.
-	groupConcatSourceRowState bool
-	groupConcatSourceRowWire  bool
+	groupConcatSourceRowState          bool
+	groupConcatSourceRowWire           bool
+	groupConcatSourceRowTrusted        bool
+	groupConcatSourceRowProvenanceWire bool
 	// stableEmptyOpaqueState preserves an aggregate's historical partial-result
 	// representation when its resident implementation can now omit empty state.
 	// Private spill records deliberately keep the compact zero-size marker.
@@ -1412,16 +1420,6 @@ type orderedDistinctArgument struct {
 	value []byte
 }
 
-func (ag *aggState) iterInputOrder(
-	mp *mpool.MPool,
-	idx uint16,
-	fn func(k []byte) error,
-) error {
-	return ag.iterInputOrderWithValue(mp, idx, func(k, _ []byte) error {
-		return fn(k)
-	})
-}
-
 func (ag *aggState) iterInputOrderWithValue(
 	mp *mpool.MPool,
 	idx uint16,
@@ -1814,6 +1812,9 @@ func (ae *aggExec) SaveIntermediateResultWithStringSource(
 	if err := ae.writeBinaryStringTrailerForSelection(flags, writer, includeStringSource); err != nil {
 		return err
 	}
+	if err := ae.writeGroupConcatSourceRowTrailer(writer); err != nil {
+		return err
+	}
 
 	if err := types.WriteUint64(writer, magic); err != nil {
 		return err
@@ -1913,6 +1914,9 @@ func (ae *aggExec) SaveIntermediateResultOfChunkWithStringSource(
 		return err
 	}
 	if err := ae.writeBinaryStringTrailerForChunk(chunk, writer, includeStringSource); err != nil {
+		return err
+	}
+	if err := ae.writeGroupConcatSourceRowTrailer(writer); err != nil {
 		return err
 	}
 
@@ -2048,6 +2052,27 @@ func (ae *aggExec) writeBinaryStringTrailerForChunk(
 	return nil
 }
 
+// writeGroupConcatSourceRowTrailer records whether source-row metadata in a
+// partial aggregate is statement-global. It is a negotiated v66 trailer and
+// is deliberately emitted even when the state has no non-NULL values.
+func (ae *aggExec) writeGroupConcatSourceRowTrailer(writer io.Writer) error {
+	if ae == nil || writer == nil || !ae.aggInfo.groupConcatSourceRowState ||
+		!ae.aggInfo.groupConcatSourceRowProvenanceWire {
+		return nil
+	}
+	if err := types.WriteUint64(writer, aggGroupConcatSourceRowTrailerMagic); err != nil {
+		return err
+	}
+	if err := writeAggBinaryStringByte(writer, aggGroupConcatSourceRowTrailerVersion); err != nil {
+		return err
+	}
+	value := byte(0)
+	if ae.aggInfo.groupConcatSourceRowTrusted {
+		value = 1
+	}
+	return writeAggBinaryStringByte(writer, value)
+}
+
 func checkAggStateMagic(reader io.Reader) error {
 	magic, err := types.ReadUint64(reader)
 	if err != nil {
@@ -2165,56 +2190,94 @@ func (ae *aggExec) readBinaryStringTrailerAndMagic(reader io.Reader, mp *mpool.M
 	if err != nil {
 		return err
 	}
-	if marker == magicNumber {
-		return nil
+	// A group-concat partial without an explicit v66 trailer is legacy or
+	// otherwise untrusted. Set this before reading any optional trailer so an
+	// executor reused across generations cannot retain a previous decision.
+	if ae.aggInfo.groupConcatSourceRowState {
+		ae.aggInfo.groupConcatSourceRowTrusted = false
 	}
-	if marker != aggBinaryStringTrailerMagic && marker != aggStringDomainTrailerMagic &&
-		marker != aggStringStateTrailerMagic {
+	if marker != magicNumber && marker != aggGroupConcatSourceRowTrailerMagic {
+		if marker != aggBinaryStringTrailerMagic && marker != aggStringDomainTrailerMagic &&
+			marker != aggStringStateTrailerMagic {
+			return moerr.NewInvalidInputNoCtxf(
+				"invalid aggregate state magic number %d", marker)
+		}
+		rowCount, err := types.ReadInt32(reader)
+		if err != nil {
+			return err
+		}
+		if rowCount < 0 || int(rowCount) != ae.GetNumGroups() {
+			return moerr.NewInvalidInputNoCtxf(
+				"aggregate binary provenance row count %d does not match %d", rowCount, ae.GetNumGroups())
+		}
+		for chunk := range ae.state {
+			if len(ae.state[chunk].vecs) == 0 || ae.state[chunk].vecs[0] == nil {
+				continue
+			}
+			vec := ae.state[chunk].vecs[0]
+			for row := 0; row < vec.Length(); row++ {
+				encoded, err := types.ReadByte(reader)
+				if err != nil {
+					return err
+				}
+				domain := encoded
+				source := types.StringSourceExpression
+				if marker == aggStringStateTrailerMagic {
+					domain = encoded & 0x03
+					source = types.StringSource(encoded >> 2)
+				}
+				if marker == aggBinaryStringTrailerMagic && domain > 1 ||
+					(marker == aggStringDomainTrailerMagic || marker == aggStringStateTrailerMagic) &&
+						types.RuntimeStringDomain(domain) > types.RuntimeStringBinary || !source.Valid() {
+					return moerr.NewInvalidInputNoCtx("invalid aggregate binary provenance row")
+				}
+				runtimeDomain := types.RuntimeStringDomain(domain)
+				if marker == aggBinaryStringTrailerMagic && domain == 1 {
+					runtimeDomain = types.RuntimeStringBinary
+				}
+				if err := vec.SetRuntimeStringDomainAtWithMP(row, runtimeDomain, mp); err != nil {
+					return err
+				}
+				if err := vec.SetStringSourceAtWithMP(row, source, mp); err != nil {
+					return err
+				}
+			}
+		}
+		marker, err = types.ReadUint64(reader)
+		if err != nil {
+			return err
+		}
+	}
+	if marker == aggGroupConcatSourceRowTrailerMagic {
+		if !ae.aggInfo.groupConcatSourceRowState {
+			return moerr.NewInvalidInputNoCtx(
+				"group_concat source-row trailer on non-group-concat aggregate")
+		}
+		version, err := types.ReadByte(reader)
+		if err != nil {
+			return err
+		}
+		if version != aggGroupConcatSourceRowTrailerVersion {
+			return moerr.NewInvalidInputNoCtx("invalid group_concat source-row trailer version")
+		}
+		trusted, err := types.ReadByte(reader)
+		if err != nil {
+			return err
+		}
+		if trusted > 1 {
+			return moerr.NewInvalidInputNoCtx("invalid group_concat source-row trust marker")
+		}
+		ae.aggInfo.groupConcatSourceRowTrusted = trusted == 1
+		marker, err = types.ReadUint64(reader)
+		if err != nil {
+			return err
+		}
+	}
+	if marker != magicNumber {
 		return moerr.NewInvalidInputNoCtxf(
 			"invalid aggregate state magic number %d", marker)
 	}
-	rowCount, err := types.ReadInt32(reader)
-	if err != nil {
-		return err
-	}
-	if rowCount < 0 || int(rowCount) != ae.GetNumGroups() {
-		return moerr.NewInvalidInputNoCtxf(
-			"aggregate binary provenance row count %d does not match %d", rowCount, ae.GetNumGroups())
-	}
-	for chunk := range ae.state {
-		if len(ae.state[chunk].vecs) == 0 || ae.state[chunk].vecs[0] == nil {
-			continue
-		}
-		vec := ae.state[chunk].vecs[0]
-		for row := 0; row < vec.Length(); row++ {
-			encoded, err := types.ReadByte(reader)
-			if err != nil {
-				return err
-			}
-			domain := encoded
-			source := types.StringSourceExpression
-			if marker == aggStringStateTrailerMagic {
-				domain = encoded & 0x03
-				source = types.StringSource(encoded >> 2)
-			}
-			if marker == aggBinaryStringTrailerMagic && domain > 1 ||
-				(marker == aggStringDomainTrailerMagic || marker == aggStringStateTrailerMagic) &&
-					types.RuntimeStringDomain(domain) > types.RuntimeStringBinary || !source.Valid() {
-				return moerr.NewInvalidInputNoCtx("invalid aggregate binary provenance row")
-			}
-			runtimeDomain := types.RuntimeStringDomain(domain)
-			if marker == aggBinaryStringTrailerMagic && domain == 1 {
-				runtimeDomain = types.RuntimeStringBinary
-			}
-			if err := vec.SetRuntimeStringDomainAtWithMP(row, runtimeDomain, mp); err != nil {
-				return err
-			}
-			if err := vec.SetStringSourceAtWithMP(row, source, mp); err != nil {
-				return err
-			}
-		}
-	}
-	return checkAggStateMagic(reader)
+	return nil
 }
 
 func (ae *aggExec) Size() int64 {

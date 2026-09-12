@@ -88,6 +88,8 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	if group.ctr.mp != nil {
 		group.ctr.free()
 	}
+	group.ctr.groupConcatSourceRowsUntrusted = proc != nil &&
+		!proc.GroupConcatSourceRowProvenanceTrusted()
 	group.ctr.prepareParamKind.Reset(group.Aggs)
 	group.ctr.aggExprs = group.Aggs
 	group.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
@@ -1274,6 +1276,8 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 	}
 	for i, ag := range group.ctr.aggList {
 		aggexec.SetGroupConcatSourceRowWire(ag, groupConcatSourceRowWireEnabled(proc))
+		aggexec.SetGroupConcatSourceRowProvenanceWire(
+			ag, groupConcatSourceRowProvenanceWireEnabled(proc))
 		if vec := ag.PrepareParamKindVectorForChunk(curr); vec != nil &&
 			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(

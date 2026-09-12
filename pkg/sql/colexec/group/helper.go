@@ -1858,6 +1858,8 @@ func (ctr *container) makeAggListWithAllocation(
 		// Preserve it in each rebuilt GROUP_CONCAT executor even when the
 		// current spill bucket contains only one group.
 		aggexec.SetGroupConcatMultiGroupContext(aggList[i], ctr.mtyp != H0)
+		aggexec.SetGroupConcatSourceRowsTrusted(
+			aggList[i], !ctr.groupConcatSourceRowsUntrusted)
 	}
 
 	if ctr.mtyp != H0 {

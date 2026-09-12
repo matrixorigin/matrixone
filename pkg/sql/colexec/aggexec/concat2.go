@@ -250,6 +250,40 @@ func SetGroupConcatSourceRowWire(agg AggFuncExec, enabled bool) {
 	exec.aggInfo.groupConcatSourceRowWire = enabled
 }
 
+// SetGroupConcatSourceRowProvenanceWire enables the v66 state-level marker.
+// Unlike the payload switch, this marker is also emitted for empty and
+// NULL-only partials so the receiver can make one decision for the complete
+// logical aggregate rather than inferring provenance from values.
+func SetGroupConcatSourceRowProvenanceWire(agg AggFuncExec, enabled bool) {
+	exec, ok := agg.(*groupConcatExec)
+	if !ok || exec == nil {
+		return
+	}
+	exec.aggInfo.groupConcatSourceRowProvenanceWire = enabled
+}
+
+// SetGroupConcatSourceRowsTrusted applies the statement-wide provenance mode
+// to a newly created or rebuilt executor. Once a merge observes an untrusted
+// partial, the mode is monotonic and cannot be restored for that generation.
+func SetGroupConcatSourceRowsTrusted(agg AggFuncExec, trusted bool) {
+	exec, ok := agg.(*groupConcatExec)
+	if !ok || exec == nil {
+		return
+	}
+	exec.aggInfo.groupConcatSourceRowTrusted = trusted
+}
+
+// GroupConcatSourceRowsTrusted reports the aggregate's current provenance
+// mode. Non-GROUP_CONCAT aggregates are treated as trusted so callers can
+// update a list of heterogeneous aggregates without type checks.
+func GroupConcatSourceRowsTrusted(agg AggFuncExec) bool {
+	exec, ok := agg.(*groupConcatExec)
+	if !ok || exec == nil {
+		return true
+	}
+	return exec.aggInfo.groupConcatSourceRowTrusted
+}
+
 // SetGroupConcatMultiGroupContext preserves the logical grouped-query
 // contract across aggregate rebuilds. A spill bucket can contain one group
 // even though the Group operator is processing multiple groups overall.
@@ -431,15 +465,17 @@ func newGroupConcatExec(mg *mpool.MPool, info multiAggInfo, separator string) Ag
 	}
 	exec.mp = mg
 	exec.aggInfo = aggInfo{
-		aggId:                     info.aggID,
-		isDistinct:                false,
-		argTypes:                  info.argTypes,
-		retType:                   info.retType,
-		emptyNull:                 info.emptyNull,
-		saveArg:                   true,
-		opaqueArg:                 true,
-		groupConcatSourceRowState: true,
-		groupConcatSourceRowWire:  true,
+		aggId:                              info.aggID,
+		isDistinct:                         false,
+		argTypes:                           info.argTypes,
+		retType:                            info.retType,
+		emptyNull:                          info.emptyNull,
+		saveArg:                            true,
+		opaqueArg:                          true,
+		groupConcatSourceRowState:          true,
+		groupConcatSourceRowWire:           true,
+		groupConcatSourceRowTrusted:        true,
+		groupConcatSourceRowProvenanceWire: true,
 	}
 	return exec
 }
@@ -875,6 +911,9 @@ func (exec *groupConcatExec) Merge(next AggFuncExec, groupIdx1, groupIdx2 int) e
 
 func (exec *groupConcatExec) BatchMerge(next AggFuncExec, offset int, groups []uint64) error {
 	other := next.(*groupConcatExec)
+	if !other.aggInfo.groupConcatSourceRowTrusted {
+		exec.aggInfo.groupConcatSourceRowTrusted = false
+	}
 	if exec.allocation != nil {
 		return exec.batchMergeArgs(&other.aggExec, offset, groups, false)
 	}
@@ -1085,7 +1124,7 @@ func (exec *groupConcatExec) nextWarningRow() uint64 {
 }
 
 func (exec *groupConcatExec) warningRowForSource(sourceRow uint64) uint64 {
-	if sourceRow != 0 &&
+	if exec.aggInfo.groupConcatSourceRowTrusted && sourceRow != 0 &&
 		(exec.multiGroupWarningContext || exec.GetNumGroups() > 1) {
 		return sourceRow
 	}
@@ -1671,6 +1710,11 @@ func groupConcatStatePayloadForWire(
 	if err != nil {
 		return nil, err
 	}
+	// A mixed merge (trusted local partial plus an independent/legacy remote
+	// partial) must not re-export partially meaningful source rows. Strip the
+	// extension for the whole state and let downstream finalization use the
+	// legacy counter consistently.
+	includeSourceRow = includeSourceRow && info.groupConcatSourceRowTrusted
 	if !includeSourceRow {
 		return decoded, nil
 	}
@@ -2631,6 +2675,8 @@ func (exec *groupConcatExec) Free() {
 	exec.inputRowBase = 0
 	exec.inputRowBaseSet = false
 	exec.multiGroupWarningContext = false
+	exec.aggInfo.groupConcatSourceRowTrusted = true
+	exec.aggInfo.groupConcatSourceRowProvenanceWire = true
 	exec.distinctHash.free()
 	exec.aggExec.Free()
 }

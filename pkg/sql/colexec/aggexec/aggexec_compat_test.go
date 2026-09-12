@@ -87,6 +87,7 @@ func TestGroupConcatLegacyIntermediateWireRemainsReadable(t *testing.T) {
 	require.NoError(t, writer.BatchFill(
 		0, []uint64{1, 1}, []*vector.Vector{values}))
 	SetGroupConcatSourceRowWire(writer, false)
+	SetGroupConcatSourceRowProvenanceWire(writer, false)
 	var encoded bytes.Buffer
 	require.NoError(t, writer.SaveIntermediateResult(1, [][]uint8{{1}}, &encoded))
 	require.NotContains(t, encoded.Bytes(), groupConcatSourcePayloadMagic)
@@ -95,6 +96,7 @@ func TestGroupConcatLegacyIntermediateWireRemainsReadable(t *testing.T) {
 	SetGroupConcatSourceRowWire(reader, false)
 	require.NoError(t, reader.UnmarshalFromReader(
 		bytes.NewReader(encoded.Bytes()), mp))
+	require.False(t, GroupConcatSourceRowsTrusted(reader))
 	results, err := reader.Flush()
 	require.NoError(t, err)
 	require.Len(t, results, 1)
@@ -203,6 +205,90 @@ func TestOrderedGroupConcatIntermediateRoundTrip(t *testing.T) {
 	results[0].Free(mp)
 	exec.Free()
 	restored.Free()
+}
+
+func TestGroupConcatUntrustedEmptyPartialForcesFallbackOrdinal(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	info := multiAggInfo{
+		aggID:     AggIdOfGroupConcat,
+		argTypes:  []types.Type{types.T_varchar.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+
+	// The remote producer consumed input rows but had no non-NULL GROUP_CONCAT
+	// payload. The explicit v66 trailer must preserve that untrusted namespace
+	// instead of relying on a value entry that does not exist.
+	remote := newGroupConcatExec(mp, info, "|")
+	require.NoError(t, remote.GroupGrow(1))
+	SetGroupConcatSourceRowWire(remote, false)
+	SetGroupConcatSourceRowProvenanceWire(remote, true)
+	SetGroupConcatSourceRowsTrusted(remote, false)
+	var encoded bytes.Buffer
+	require.NoError(t, remote.SaveIntermediateResultOfChunk(0, &encoded))
+
+	target := newGroupConcatExec(mp, info, "|")
+	require.NoError(t, target.SetExtraInformation(EncodeGroupConcatConfig("|", 4), 0))
+	require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(encoded.Bytes()), mp))
+	require.False(t, GroupConcatSourceRowsTrusted(target))
+	SetGroupConcatMultiGroupContext(target, true)
+
+	values := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(values, []byte("aa"), false, mp))
+	require.NoError(t, vector.AppendBytes(values, []byte("bbb"), false, mp))
+	defer values.Free(mp)
+	trusted := newGroupConcatExec(mp, info, "|")
+	require.NoError(t, trusted.SetExtraInformation(EncodeGroupConcatConfig("|", 4), 0))
+	require.NoError(t, trusted.GroupGrow(1))
+	// Deliberately use a disjoint producer namespace. If the receiver ever
+	// treats the mixed state as trusted, the truncation would be reported as
+	// row 102 instead of the deterministic fallback ordinal 2.
+	SetGroupConcatInputRowBase(trusted, 100)
+	require.NoError(t, trusted.BatchFill(0, []uint64{1, 1}, []*vector.Vector{values}))
+	require.NoError(t, target.BatchMerge(trusted, 0, []uint64{1}))
+	require.False(t, GroupConcatSourceRowsTrusted(target))
+
+	// The downgrade must also be monotonic when the trusted producer arrives
+	// first. This is the ordering used by a coordinator that receives local
+	// state before a second CN's empty/NULL-only state.
+	reverse := newGroupConcatExec(mp, info, "|")
+	require.NoError(t, reverse.SetExtraInformation(EncodeGroupConcatConfig("|", 4), 0))
+	require.NoError(t, reverse.GroupGrow(1))
+	SetGroupConcatMultiGroupContext(reverse, true)
+	require.NoError(t, reverse.BatchMerge(trusted, 0, []uint64{1}))
+	require.True(t, GroupConcatSourceRowsTrusted(reverse))
+	require.NoError(t, reverse.BatchMerge(remote, 0, []uint64{1}))
+	require.False(t, GroupConcatSourceRowsTrusted(reverse))
+	reverseResult, err := reverse.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "aa|b", string(reverseResult[0].GetBytesAt(0)))
+	reverseResult[0].Free(mp)
+	reverseSink := &groupConcatWarningSink{}
+	ReportGroupConcatWarnings(reverse, reverseSink)
+	require.Equal(t, []string{"Row 2 was cut by GROUP_CONCAT()"}, reverseSink.messages)
+	reverse.Free()
+
+	var reencoded bytes.Buffer
+	require.NoError(t, target.SaveIntermediateResultOfChunk(0, &reencoded))
+	downstream := newGroupConcatExec(mp, info, "|")
+	require.NoError(t, downstream.UnmarshalFromReader(
+		bytes.NewReader(reencoded.Bytes()), mp))
+	require.False(t, GroupConcatSourceRowsTrusted(downstream))
+	downstream.Free()
+
+	result, err := target.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "aa|b", string(result[0].GetBytesAt(0)))
+	result[0].Free(mp)
+	sink := &groupConcatWarningSink{}
+	ReportGroupConcatWarnings(target, sink)
+	require.Equal(t, uint64(1), sink.total)
+	require.Equal(t, []string{"Row 2 was cut by GROUP_CONCAT()"}, sink.messages)
+
+	remote.Free()
+	trusted.Free()
+	target.Free()
 }
 
 func TestAccountedDistinctGroupConcatIntermediateKeepsSourceRows(t *testing.T) {

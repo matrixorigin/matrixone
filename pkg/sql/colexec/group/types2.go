@@ -250,6 +250,11 @@ type container struct {
 	// survive resident spills, because later partials and queued spill records
 	// still belong to that same hash-key domain.
 	mergePartialMetadataSet bool
+	// groupConcatSourceRowsUntrusted is a statement-wide, monotonic fallback
+	// mode. It survives resident spills and aggregate rebuilds; once a remote
+	// or legacy partial is observed, every later finalization uses the legacy
+	// local warning counter.
+	groupConcatSourceRowsUntrusted bool
 
 	// aggs, which holds the intermediate state of agg functions.
 	aggList                []aggexec.GroupAggFuncExec
@@ -669,10 +674,27 @@ func (ctr *container) free() {
 	ctr.groupByHashKey = nil
 	ctr.hashKeyVecs = nil
 	ctr.mergePartialMetadataSet = false
+	ctr.groupConcatSourceRowsUntrusted = false
 	ctr.budget = nil
 
 	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = nil
+}
+
+// refreshGroupConcatSourceRowTrust folds the current aggregate modes into the
+// logical Group/MergeGroup mode. The reduction is monotonic: a legacy or
+// independent remote partial permanently selects the fallback for this
+// execution, including all later spill rebuilds.
+func (ctr *container) refreshGroupConcatSourceRowTrust() {
+	if ctr == nil || ctr.groupConcatSourceRowsUntrusted {
+		return
+	}
+	for _, agg := range ctr.aggList {
+		if !aggexec.GroupConcatSourceRowsTrusted(agg) {
+			ctr.groupConcatSourceRowsUntrusted = true
+			return
+		}
+	}
 }
 
 func (ctr *container) reset() {
