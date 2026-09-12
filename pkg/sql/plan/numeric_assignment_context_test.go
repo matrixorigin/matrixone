@@ -19,9 +19,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/stretchr/testify/require"
 )
@@ -1406,6 +1408,193 @@ func TestValuesExprIsFuncCall(t *testing.T) {
 	for i, want := range wants {
 		require.Equal(t, want, valuesExprIsFuncCall(valuesClause.Rows[i][0]), "row %d", i)
 	}
+}
+
+func TestValuesExprIsFractionalNumericLiteral(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(),
+		"insert into t values (2.5), (-2.5), ((2.5e0)), "+
+			"(9007199254740992.5000000000000001), (1), "+
+			"(18446744073709551616), (-18446744073709551616)", 1)
+	require.NoError(t, err)
+	insertStmt := stmts[0].(*tree.Insert)
+	valuesClause := insertStmt.Rows.Select.(*tree.ValuesClause)
+	wants := []bool{true, true, true, true, false, false, false}
+	require.Len(t, valuesClause.Rows, len(wants))
+	for row, want := range wants {
+		require.Equal(t, want, valuesExprIsFractionalNumericLiteral(valuesClause.Rows[row][0]),
+			"row %d: %s", row, valuesClause.Rows[row][0].String())
+	}
+}
+
+func TestInsertValuesFractionalLiteralsKeepSourceDomain(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := mysql.Parse(
+		optimizer.CurrentContext().GetContext(),
+		"insert into constraint_test.emp (empno) values "+
+			"(2.5), (-2.5), ((3.5)), (2.5e0), (-2.5e0), ((3.5e0))",
+		1,
+	)
+	require.NoError(t, err)
+
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+	require.NoError(t, err)
+	exprs := insertValueRowsetExprs(t, queryPlan)
+	require.Len(t, exprs, 6)
+
+	for row, expr := range exprs {
+		targetOID := types.T(expr.Typ.Id)
+		require.True(t, targetOID.IsInteger(), "row %d: %s", row, expr.String())
+		assignment := expr.GetF()
+		require.NotNil(t, assignment, "row %d must retain an assignment cast: %s", row, expr.String())
+		require.NotEmpty(t, assignment.Args, "row %d: %s", row, expr.String())
+		if row < 3 {
+			require.True(t, types.T(assignment.Args[0].Typ.Id).IsDecimal(),
+				"exact row %d must keep DECIMAL source: %s", row, expr.String())
+			continue
+		}
+		require.True(t, types.T(assignment.Args[0].Typ.Id).IsFloat(),
+			"approximate row %d must keep FLOAT source for assignment: %s", row, expr.String())
+	}
+}
+
+func TestExactDivisionIntegerAssignmentRestoresDecimalBoundary(t *testing.T) {
+	ctx := t.Context()
+	exactDivision, err := BindFuncExprImplByPlanExpr(ctx, "/", []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(5), makePlan2Int64ConstExprWithType(2),
+	})
+	require.NoError(t, err)
+	target := types.T_int64.ToType()
+	targetExpr := &planpb.Expr{Typ: makePlan2Type(&target), Expr: &planpb.Expr_T{T: &planpb.TargetType{}}}
+	assignment, err := forceCastExpr2WithProcess(ctx, exactDivision, target, targetExpr, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_decimal128), assignment.GetF().Args[0].Typ.Id)
+
+	approximateDivision, err := BindFuncExprImplByPlanExpr(ctx, "/", []*planpb.Expr{
+		makePlan2Float64ConstExprWithType(5), makePlan2Int64ConstExprWithType(2),
+	})
+	require.NoError(t, err)
+	assignment, err = forceCastExpr2WithProcess(ctx, approximateDivision, target, targetExpr, false, nil)
+	require.NoError(t, err)
+	require.True(t, types.T(assignment.GetF().Args[0].Typ.Id).IsFloat())
+}
+
+func TestPreparedExplicitDoubleBoundaryPlan(t *testing.T) {
+	prepared := buildPreparedAggregatePlan(t,
+		"insert into constraint_test.emp (empno) values (abs(cast(? as double)))")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+		t.Context(), prepared.Plan, []any{ParamValue{
+			Value: "2.5", PrepareParamKind: vector.PrepareParamDecimal,
+			SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.False(t, specialized)
+	exprs := insertValueRowsetExprs(t, filled)
+	require.Len(t, exprs, 1)
+	explicitCast := exprs[0].GetF().Args[0].GetF().Args[0].GetF()
+	require.NotNil(t, explicitCast)
+	_, overload := planfunction.DecodeOverloadID(explicitCast.Func.GetObj())
+	require.Equal(t, int32(1), overload)
+}
+
+func TestPreparedNestedIntegerAssignmentRebindsNumericOverload(t *testing.T) {
+	for _, sourceSQL := range []string{"abs(?)", "? + 0"} {
+		t.Run(sourceSQL, func(t *testing.T) {
+			prepared := buildPreparedAggregatePlan(t,
+				"insert into constraint_test.emp (empno) values ("+sourceSQL+")")
+			require.Equal(t, []int32{0}, PreparedDMLIntegerAssignmentParamPositions(prepared.Plan))
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+				t.Context(), prepared.Plan, []any{ParamValue{
+					Value: "-2.5", RuntimeType: types.T_float64.ToType(), HasRuntimeType: true,
+					IsBinaryProtocol: true, RetainParamRef: true,
+				}},
+			)
+			require.NoError(t, err)
+			require.True(t, specialized)
+			require.NoError(t, RestorePreparedRuntimeParamRefs(t.Context(), filled))
+			exprs := insertValueRowsetExprs(t, filled)
+			require.Len(t, exprs, 1)
+			assignment := exprs[0].GetF()
+			require.NotNil(t, assignment)
+			require.True(t, types.T(assignment.Args[0].Typ.Id).IsFloat(), assignment.Args[0].String())
+		})
+	}
+}
+
+func TestPreparedInsertIntegerAssignmentUsesNumericSourceType(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		kind       vector.PrepareParamKind
+		sourceType types.Type
+		wantSource types.T
+	}{
+		{
+			name:       "exact decimal",
+			value:      "2.5",
+			kind:       vector.PrepareParamDecimal,
+			sourceType: types.New(types.T_decimal64, 2, 1),
+			wantSource: types.T_decimal64,
+		},
+		{
+			name:       "approximate double",
+			value:      "2.5",
+			kind:       vector.PrepareParamFloat,
+			sourceType: types.T_float64.ToType(),
+			wantSource: types.T_float64,
+		},
+		{
+			name:       "text remains text",
+			value:      "2.5",
+			kind:       vector.PrepareParamNone,
+			sourceType: types.T_varchar.ToType(),
+			wantSource: types.T_text,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			prepared := buildPreparedAggregatePlan(t,
+				"insert into constraint_test.emp (empno) values (?)")
+			require.Equal(t, []int32{0}, PreparedDMLIntegerAssignmentParamPositions(prepared.Plan))
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+				t.Context(), prepared.Plan, []any{ParamValue{
+					Value:            test.value,
+					PrepareParamKind: test.kind,
+					SourceType:       test.sourceType,
+					HasSourceType:    true,
+				}},
+			)
+			require.NoError(t, err)
+			if test.kind != vector.PrepareParamNone {
+				require.True(t, specialized)
+			}
+			exprs := insertValueRowsetExprs(t, filled)
+			require.Len(t, exprs, 1)
+			assignment := exprs[0].GetF()
+			require.NotNil(t, assignment, exprs[0].String())
+			require.NotEmpty(t, assignment.Args, exprs[0].String())
+			source := assignment.Args[0]
+			require.Equal(t, int32(test.wantSource), source.Typ.Id, exprs[0].String())
+		})
+	}
+}
+
+func insertValueRowsetExprs(t *testing.T, queryPlan *planpb.Plan) []*planpb.Expr {
+	t.Helper()
+	for _, node := range queryPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_VALUE_SCAN || node.RowsetData == nil || len(node.RowsetData.Cols) == 0 {
+			continue
+		}
+		exprs := make([]*planpb.Expr, 0, len(node.RowsetData.Cols[0].Data))
+		for _, row := range node.RowsetData.Cols[0].Data {
+			exprs = append(exprs, row.Expr)
+		}
+		return exprs
+	}
+	require.FailNow(t, "value scan rowset not found")
+	return nil
 }
 
 func TestBindProjectionListWithSampleFunc(t *testing.T) {

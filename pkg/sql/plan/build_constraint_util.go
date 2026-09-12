@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1365,6 +1366,13 @@ func forceCastExpr2WithProcess(
 	if isTypedArrayPlanType(&targetType.Typ) {
 		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
 	}
+	// Target-aware parameter binding may already have inserted a generic cast.
+	// That provisional cast is not the DML assignment policy: unwrap it before
+	// the same-type fast path so IGNORE can own the conversion and range check.
+	if isIgnore && t2.Oid.IsInteger() && supportsSqlModeAssignmentCast(proc) &&
+		isImplicitPreparedParamCast(expr) {
+		expr = expr.GetF().Args[0]
+	}
 	t1 := makeTypeByPlan2Expr(expr)
 	if t1.Eq(t2) && !needsSameTypeAssignmentCast(targetType.Typ) {
 		return expr, nil
@@ -1375,6 +1383,11 @@ func forceCastExpr2WithProcess(
 	// cast. Other temporal assignments retain cast_strict behavior, while the
 	// remaining conversions continue to use the generic cast.
 	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
+	expr, err = normalizeExactIntegerAssignment(ctx, expr, targetType.Typ)
+	if err != nil {
+		return nil, err
+	}
+	t1 = makeTypeByPlan2Expr(expr)
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
@@ -1414,7 +1427,34 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 	return forceAssignmentCastExprWithIgnore(ctx, expr, targetType, false)
 }
 
+func normalizeExactIntegerAssignment(ctx context.Context, expr *Expr, target Type) (*Expr, error) {
+	if expr == nil || !types.T(target.Id).IsInteger() || !types.T(expr.Typ.Id).IsFloat() ||
+		!rule.IsExactNumeric(expr, nil) {
+		return expr, nil
+	}
+	// Round once at the integer assignment boundary. Scale zero avoids the
+	// precision loss and range restriction of multiplying by 10^18 first.
+	// DECIMAL128 contains the entire signed and unsigned 64-bit integer range.
+	exactType := types.New(types.T_decimal128, 38, 0)
+	return makePlan2CastExpr(ctx, expr, makePlan2Type(&exactType))
+}
+
+func supportsSqlModeAssignmentCast(proc *process.Process) bool {
+	if proc == nil {
+		return true
+	}
+	version, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	protocolVersion, valid := version.(int64)
+	return ok && valid && protocolVersion >= defines.MORPCVersion5
+}
+
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
+	if isIgnore && types.T(targetType.Id).IsInteger() {
+		if supportsSqlModeAssignmentCast(proc) {
+			return "cast_ignore"
+		}
+		return "cast"
+	}
 	if !useSqlModeAssignmentCast(targetType) {
 		if useAssignmentStrictCast(targetType) {
 			return "cast_strict"
@@ -1475,7 +1515,24 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	if err != nil || rewritten {
 		return expr, err
 	}
+	if types.T(expr.Typ.Id).IsFloat() && builder.isExactNumericAssignmentSource(sourceExpr, nil) {
+		rule.MarkExactNumeric(expr)
+	}
 	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore)
+}
+
+func (builder *QueryBuilder) isExactNumericAssignmentSource(expr *Expr, visited map[[2]int32]struct{}) bool {
+	if visited == nil {
+		visited = make(map[[2]int32]struct{})
+	}
+	return rule.IsExactNumeric(expr, func(col *Expr) bool {
+		return builder.isProjectedDisplayValueExpr(col, func(source *Expr) bool {
+			if source.GetCol() != nil {
+				return false
+			}
+			return builder.isExactNumericAssignmentSource(source, visited)
+		}, true, visited)
+	})
 }
 
 func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
@@ -1725,6 +1782,11 @@ func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, fun
 }
 
 func forceAssignmentCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
+	var err error
+	expr, err = normalizeExactIntegerAssignment(ctx, expr, targetType)
+	if err != nil {
+		return nil, err
+	}
 	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true)
 }
 
@@ -2015,7 +2077,11 @@ func buildValueScan(
 		} else {
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
+			naturalBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
+			naturalBinder.builder = builder
 			for _, r := range slt.Rows {
+				preserveNumericSource := types.T(col.Typ.Id).IsInteger() &&
+					valuesExprIsFractionalNumericLiteral(r[i])
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {
@@ -2027,7 +2093,8 @@ func buildValueScan(
 						continue
 					}
 				}
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
+				if nv, ok := r[i].(*tree.NumVal); ok && !preserveNumericSource &&
+					!isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return nil, err
@@ -2047,7 +2114,11 @@ func buildValueScan(
 						return nil, err
 					}
 				} else {
-					defExpr, err = binder.BindExpr(r[i], 0, true)
+					valueBinder := binder
+					if preserveNumericSource {
+						valueBinder = naturalBinder
+					}
+					defExpr, err = valueBinder.BindExpr(r[i], 0, true)
 					if err != nil {
 						return nil, err
 					}

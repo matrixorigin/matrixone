@@ -274,6 +274,9 @@ message PreparedNumericMetadata {
   // expression needed to recompute a runtime string domain after scalar-
   // subquery flattening without adding another pointer to every Expr.
   Expr string_domain_source = 11;
+  // Independent of prepared fallback: exact SQL numeric provenance for a
+  // FLOAT execution vector, retained through folding and projection.
+  bool exact_numeric = 12;
 }
 
 message Expr {

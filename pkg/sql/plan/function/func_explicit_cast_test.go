@@ -268,6 +268,41 @@ func TestExplicitCastFloatRoundingToEven(t *testing.T) {
 	}
 }
 
+func TestAssignmentCastFloatToInteger(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Run("ties to even", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{2.5, -2.5, 3.5, -3.5}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		}
+		expect := NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2, -2, 4, -4}, nil)
+		testCase := NewFunctionTestCase(proc, inputs, expect, NewAssignCast)
+		succeed, info := testCase.Run()
+		require.True(t, succeed, info)
+	})
+	t.Run("strict unsigned rejects negative", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{-1}, nil),
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil),
+		}
+		expect := NewFunctionTestResult(types.T_uint64.ToType(), true, []uint64{0}, nil)
+		testCase := NewFunctionTestCase(proc, inputs, expect, NewAssignCast)
+		succeed, info := testCase.Run()
+		require.True(t, succeed, info)
+	})
+	t.Run("ignore unsigned clamps and rounds", func(t *testing.T) {
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{-1, 2.5, math.Exp2(64)}, nil),
+			NewFunctionTestInput(types.T_uint64.ToType(), []uint64{}, nil),
+		}
+		expect := NewFunctionTestResult(types.T_uint64.ToType(), false,
+			[]uint64{0, 2, math.MaxUint64}, nil)
+		testCase := NewFunctionTestCase(proc, inputs, expect, NewAssignIgnoreCast)
+		succeed, info := testCase.Run()
+		require.True(t, succeed, info)
+	})
+}
+
 func TestExplicitCastFloatOverflowErrors(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tests := []struct {

@@ -903,6 +903,32 @@ func TestPreparedNumericRuntimeLiteralRebindingHelpers(t *testing.T) {
 	require.Equal(t, types.T_bool, runtimeType.Oid)
 }
 
+func TestPreparedNumericRebindPreservesExplicitCastBoundary(t *testing.T) {
+	ctx := context.Background()
+	doubleType := types.T_float64.ToType()
+	param := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	explicitDouble, err := appendExplicitCastBeforeExpr(ctx, param, makePlan2Type(&doubleType))
+	require.NoError(t, err)
+	absExpr, err := BindFuncExprImplByPlanExpr(ctx, "abs", []*planpb.Expr{explicitDouble})
+	require.NoError(t, err)
+
+	rule := NewResetParamRefRule(ctx, nil)
+	rule.SetParamValues([]any{ParamValue{
+		Value:            "2.5",
+		PrepareParamKind: vector.PrepareParamFloat,
+		RuntimeType:      doubleType,
+		HasRuntimeType:   true,
+	}})
+	rebound, changed, err := rule.rebindPreparedNumericExpr(absExpr, map[int32]struct{}{0: {}})
+	require.NoError(t, err)
+	require.False(t, changed)
+	_, overload := function.DecodeOverloadID(rebound.GetF().Args[0].GetF().Func.GetObj())
+	require.Equal(t, int32(1), overload)
+}
+
 func TestPreparedNumericRuntimeParamValueLiteralKinds(t *testing.T) {
 	params := []*planpb.Expr{
 		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: -8}}}},

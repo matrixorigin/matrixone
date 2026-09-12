@@ -1137,6 +1137,76 @@ func (prepareStmt *PrepareStmt) refreshFixedIntegerParamPositions(preparePlan *p
 		prepareStmt.hasLagLeadParams = preparedFixedIntegerParamPositions(preparePlan)
 }
 
+func preparedDMLIntegerAssignmentNeedsRuntimeSpecialization(
+	paramVals []any,
+	positions []int32,
+) bool {
+	for _, position := range positions {
+		if position < 0 || int(position) >= len(paramVals) {
+			continue
+		}
+		param, ok := paramVals[position].(plan2.ParamValue)
+		if !ok || param.Value == nil {
+			continue
+		}
+		var source types.Type
+		switch {
+		case param.HasSourceType:
+			source = param.SourceType
+		case param.IsBinaryProtocol && param.HasRuntimeType:
+			source = param.RuntimeType
+		}
+		if source.IsDecimal() || source.Oid.IsFloat() ||
+			param.PrepareParamKind == vector.PrepareParamDecimal ||
+			param.PrepareParamKind == vector.PrepareParamFloat {
+			return true
+		}
+	}
+	return false
+}
+
+func preparedDMLNumericParamsNeedSpecialization(preparePlan *plan2.Plan, paramVals []any) bool {
+	query := preparePlan.GetQuery()
+	if query == nil {
+		return false
+	}
+	switch query.StmtType {
+	case plan.Query_INSERT, plan.Query_UPDATE, plan.Query_DELETE, plan.Query_MERGE:
+	default:
+		return false
+	}
+	for _, value := range paramVals {
+		param, ok := value.(plan2.ParamValue)
+		if !ok {
+			continue
+		}
+		if param.PrepareParamKind == vector.PrepareParamDecimal ||
+			param.PrepareParamKind == vector.PrepareParamFloat {
+			return true
+		}
+		if param.HasSourceType && (param.SourceType.IsDecimal() || param.SourceType.Oid.IsFloat()) {
+			return true
+		}
+	}
+	return false
+}
+
+func preparedDMLIntegerAssignmentRuntimeTypesNeedSpecialization(
+	runtimeTypes []types.Type,
+	positions []int32,
+) bool {
+	for _, position := range positions {
+		if position < 0 || int(position) >= len(runtimeTypes) {
+			continue
+		}
+		typ := runtimeTypes[position]
+		if typ.IsDecimal() || typ.Oid.IsFloat() {
+			return true
+		}
+	}
+	return false
+}
+
 func preparedPositionHasStaticExactNumericPeer(preparePlan *plan2.Plan, position int) bool {
 	found := false
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
@@ -1435,6 +1505,8 @@ func initExecuteStmtParamWithResolverInSession(
 			newPreparePlan.Plan)
 		prepareStmt.bitCountOverloadParamPositions = plan2.PreparedPlanBitCountFallbackParamPositions(
 			newPreparePlan.Plan)
+		prepareStmt.dmlIntegerAssignmentParamPositions =
+			plan2.PreparedDMLIntegerAssignmentParamPositions(newPreparePlan.Plan)
 		prepareStmt.conversionParamPositions = plan2.PreparedPlanConversionParamPositions(
 			newPreparePlan.Plan)
 		// Parameter type evolution belongs to one prepared-plan generation. The
@@ -1582,6 +1654,7 @@ func initExecuteStmtParamWithResolverInSession(
 		executionPlan.GetQuery() != nil
 	runtimeDirectResultCandidate := false
 	runtimeTextComparisonSpecialization := false
+	runtimeDMLIntegerAssignmentCandidate := false
 	directResultPositions := prepareStmt.directResultParamPositions
 	runtimeDirectResultPositions := make([]int32, 0, len(directResultPositions))
 	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
@@ -1669,6 +1742,9 @@ func initExecuteStmtParamWithResolverInSession(
 		if binaryStringMetadata != nil {
 			prepareStmt.paramBinaryStrings = binaryStringMetadata
 		}
+		runtimeDMLIntegerAssignmentCandidate =
+			preparedDMLIntegerAssignmentRuntimeTypesNeedSpecialization(
+				runtimeParamTypes, prepareStmt.dmlIntegerAssignmentParamPositions)
 		if hasConcreteType {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableTypedMeta(
 				prepareStmt.params, nil, prepareStmt.paramKinds,
@@ -1681,7 +1757,8 @@ func initExecuteStmtParamWithResolverInSession(
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}
 		needsRuntimeParamVals = needsRuntimeParamVals || needsRuntimeSpecialization ||
-			runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate || runtimeDirectResultCandidate
+			runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate || runtimeDirectResultCandidate ||
+			runtimeDMLIntegerAssignmentCandidate
 		if needsRuntimeParamVals {
 			cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
 			if err != nil {
@@ -1741,6 +1818,21 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		cwft.paramVals = paramVals
 		applyPreparedConversionRuntimeTypes(cwft.paramVals, prepareStmt.conversionParamPositions)
+		if preparedDMLNumericParamsNeedSpecialization(executionPlan, cwft.paramVals) {
+			for i, value := range cwft.paramVals {
+				param, ok := value.(plan2.ParamValue)
+				if !ok || param.Value == nil || param.PrepareParamKind != vector.PrepareParamFloat {
+					continue
+				}
+				param.RuntimeType = types.T_float64.ToType()
+				param.HasRuntimeType = true
+				cwft.paramVals[i] = param
+			}
+		}
+		runtimeDMLIntegerAssignmentCandidate =
+			preparedDMLIntegerAssignmentNeedsRuntimeSpecialization(
+				cwft.paramVals, prepareStmt.dmlIntegerAssignmentParamPositions) ||
+				preparedDMLNumericParamsNeedSpecialization(executionPlan, cwft.paramVals)
 		bitCountNumericOverloadCandidate := prepareStmt.applyBitCountNumericRuntimeTypes(cwft.paramVals)
 		runtimeNumericOverloadCandidate = runtimeNumericOverloadCandidate ||
 			bitCountNumericOverloadCandidate
@@ -1749,6 +1841,7 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	needsRuntimeSpecialization = needsRuntimeSpecialization || runtimeDMLIntegerAssignmentCandidate
 	if !binaryExecute && executionPlan.GetQuery() != nil {
 		// SQL EXECUTE values are already decoded as ParamValue.  The prepared
 		// plan's cached prefix-consumer bit is sufficient to decide whether the
@@ -1778,7 +1871,8 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.runtimeSpecializationNeeded && !runtimeTextComparisonSpecialization &&
 		!prepareStmt.hasPaginationParams && !prepareStmt.hasLagLeadParams && !preparedExplain
 	if runtimeNumericOverloadCandidate || runtimeNumericPrefixCandidate || runtimeConversionCandidate ||
-		stableRuntimeSpecializationCandidate {
+		stableRuntimeSpecializationCandidate ||
+		(binaryExecute && runtimeDMLIntegerAssignmentCandidate) {
 		retainPreparedRuntimeParamRefs(cwft.paramVals)
 	}
 	if err := plan2.ValidatePreparedLagLeadParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
@@ -1804,7 +1898,8 @@ func initExecuteStmtParamWithResolverInSession(
 	var cachedRuntimeCompile *compile.Compile
 	runtimeCacheKey := ""
 	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
-		runtimeConversionCandidate || stableRuntimeSpecializationCandidate
+		runtimeConversionCandidate || stableRuntimeSpecializationCandidate ||
+		(binaryExecute && runtimeDMLIntegerAssignmentCandidate)
 	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate
 	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
 		(runtimeDirectResultCandidate ||

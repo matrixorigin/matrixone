@@ -1075,7 +1075,14 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
 	}
-	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
+	require.Equal(t, "cast", assignmentCastFunctionName(
+		plan.Type{Id: int32(types.T_int64)}, true, proc))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
+	require.Equal(t, "cast_ignore", assignmentCastFunctionName(
+		plan.Type{Id: int32(types.T_int64)}, true, proc))
+	require.Equal(t, "cast", assignmentCastFunctionName(
+		plan.Type{Id: int32(types.T_int64)}, false, proc))
 	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
 		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
 	}, false, proc))
@@ -1083,6 +1090,34 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
 	}, true, proc))
 	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_text)}, false, proc))
+}
+
+func TestPreparedIntegerIgnoreOverridesProvisionalCast(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, exists)
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+	for _, tc := range []struct {
+		version int64
+		ignore  bool
+		want    string
+	}{
+		{defines.MORPCVersion4, true, "cast"},
+		{defines.MORPCVersion5, true, "cast_ignore"},
+		{defines.MORPCVersion5, false, "cast"},
+	} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.version)
+		target := types.T_uint64.ToType()
+		marker := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+		provisional, err := appendCastBeforeExpr(t.Context(), marker, makePlan2Type(&target))
+		require.NoError(t, err)
+		assignment, err := forceCastExpr2WithProcess(t.Context(), provisional, target,
+			&plan.Expr{Typ: makePlan2Type(&target), Expr: &plan.Expr_T{T: &plan.TargetType{}}}, tc.ignore, proc)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, assignment.GetF().Func.GetObjName())
+		require.NotNil(t, assignment.GetF().Args[0].GetP())
+	}
 }
 
 func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {

@@ -1196,6 +1196,7 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 		ProvisionalResultPeerWidth:  metadata.ProvisionalResultPeerWidth,
 		ProvisionalResultPeerScale:  metadata.ProvisionalResultPeerScale,
 		StringDomainSource:          DeepCopyExpr(metadata.StringDomainSource),
+		ExactNumeric:                metadata.ExactNumeric,
 	}
 }
 
@@ -1848,6 +1849,7 @@ func constantFoldWithPreparedExactSource(
 		// otherwise the later prepared-only fold cannot recover lost digits.
 		return expr, nil
 	}
+	exactNumeric := types.T(expr.Typ.Id).IsFloat() && rule.IsExactNumeric(expr, nil)
 	isVec := false
 	for i := range fn.Args {
 		foldExpr, errFold := constantFoldWithPreparedExactSource(
@@ -1913,6 +1915,9 @@ func constantFoldWithPreparedExactSource(
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,
+	}
+	if exactNumeric {
+		rule.MarkExactNumeric(expr)
 	}
 	expr.Expr = ec
 	return expr, nil
@@ -3770,6 +3775,41 @@ func isPreparedDMLStmt(stmtType plan.Query_StatementType) bool {
 	default:
 		return false
 	}
+}
+
+// PreparedDMLIntegerAssignmentParamPositions returns prepared markers beneath
+// DML write roots that assign into an integer target. The frontend caches this
+// bounded metadata per prepared-plan generation so ordinary prepared writes do
+// not need a plan walk on every execution.
+func PreparedDMLIntegerAssignmentParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	for expr := range preparedDMLWriteExpressions(preparePlan.GetQuery()) {
+		if expr == nil || !types.T(expr.Typ.Id).IsInteger() {
+			continue
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+			continue
+		}
+		switch fn.Func.GetObjName() {
+		case "cast", "cast_assign", "cast_ignore", "cast_strict":
+		default:
+			continue
+		}
+		collectNumericValueParamPositions(fn.Args[0], positions)
+	}
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
 }
 
 func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
