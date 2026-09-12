@@ -278,6 +278,7 @@ test('summary identifies the cancellation owner and remains bounded', () => {
 });
 
 test('required-job policy matches the current entrypoint callers', () => {
+  assert.ok(SUPPORTED_CI_REVISIONS.includes('e43e7077e87ebdcefa66b12e3b1778b984cc3ce2'));
   assert.deepEqual(ALWAYS_REQUIRED_JOBS, ['preflight']);
   assert.deepEqual(REQUIRED_JOBS_BY_SCOPE.bvt, ['matrixone-compose-ci', 'matrixone-standalone-ci']);
   assert.ok(requiredJobUnion().includes('preflight'));

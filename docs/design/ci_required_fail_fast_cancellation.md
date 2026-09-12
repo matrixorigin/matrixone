@@ -67,8 +67,12 @@ are ignored. Each authorized external job is also bound to its referenced
 workflow path and an explicitly supported immutable `referenced_workflows.sha`
 reported by the workflow-run API. A new MatrixOrigin/CI revision therefore
 pauses cancellation for that caller until its propagation behavior and names
-are reviewed and added to the policy. It cannot silently inherit authority by
-retaining a prefix.
+are reviewed and added to the policy. Revisions
+`2ab1af3a85ca3c4e4eab7483201aca3e1913dd99` and
+`e43e7077e87ebdcefa66b12e3b1778b984cc3ce2` are currently approved; the latter
+was checked against the latest run's exact child job names and enabled/disabled
+BVT jobs. A new revision cannot silently inherit authority by retaining a
+prefix.
 
 For local jobs, the watchdog compares the `entrypoint.yaml` and
 `change-scope.cjs` Git blob identities at the run's immutable base SHA with the

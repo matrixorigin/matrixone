@@ -35,6 +35,7 @@ const DOOMED_CONCLUSIONS = new Set([
 // fail closed until this policy is updated.
 const SUPPORTED_CI_REVISIONS = Object.freeze([
   '2ab1af3a85ca3c4e4eab7483201aca3e1913dd99',
+  'e43e7077e87ebdcefa66b12e3b1778b984cc3ce2',
 ]);
 
 const CI_WORKFLOWS = Object.freeze({
