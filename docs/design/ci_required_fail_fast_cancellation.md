@@ -28,9 +28,9 @@ The watchdog must satisfy these invariants:
    `bvt` scope are intentionally skipped, and the watchdog does not need to
    recompute the scope to distinguish them.
 5. It skips `3.0-dev`, where the `CI Required` gate is disabled. The triggering
-   workflow writes immutable PR, base ref, base SHA, head SHA and cancellation
-   policy version into a machine-readable run name. Missing, malformed or
-   unsupported metadata grants no cancellation authority.
+   workflow writes immutable PR, base ref, base SHA, workflow SHA, head SHA and
+   cancellation policy version into a machine-readable run name. Missing,
+   malformed or unsupported metadata grants no cancellation authority.
 6. A decision is bound to `run_id + run_attempt`. Every inspected job and the
    final workflow status must still belong to that attempt. A completed run or
    changed attempt is left unchanged; a cancellation conflict is reported as a
@@ -49,7 +49,7 @@ watchdog must reject a decision made from an older attempt.
 The scope-to-caller contract remains owned by
 `.github/ci/change-scope.cjs`. The watchdog derives the union of logical
 required jobs from that module, then authorizes exact Actions display names in
-policy version `v1`:
+policy version `v2`:
 
 | Logical dependency | Actions job match |
 | --- | --- |
@@ -75,9 +75,10 @@ BVT jobs. A new revision cannot silently inherit authority by retaining a
 prefix.
 
 For local jobs, the watchdog compares the `entrypoint.yaml` and
-`change-scope.cjs` Git blob identities at the run's immutable base SHA with the
-current default-branch policy blobs. An old or changed gate is skipped. This
-lets ordinary product commits share the policy while preventing a current name
+`change-scope.cjs` Git blob identities at the run's immutable workflow SHA with
+the current watchdog policy blobs. The PR base SHA is retained for diagnostics;
+it is not a policy source. An old or changed gate is skipped. This lets
+ordinary product commits share the policy while preventing a current name
 mapping from being applied to a run created by a different gate revision.
 
 Terminal conclusions that make a required caller irrecoverable are `failure`,
@@ -91,28 +92,29 @@ conflict handling make that harmless.
 The scheduled workflow runs from the default branch every five minutes and may
 also be dispatched manually in dry-run mode. The job rejects any dispatch whose
 workflow ref is not the repository's default branch. It checks out only
-`.github/ci` from that trusted revision with persisted credentials disabled.
-No pull-request code is loaded or executed. The PR entrypoint uses a strict run
-name of the form:
+`.github/ci` from its immutable `github.workflow_sha` with persisted credentials
+disabled. No pull-request code is loaded or executed. The PR entrypoint uses a
+strict run name of the form:
 
 ```text
-CI_REQUIRED/v1 pr=<number> base=<ref> base_sha=<40-hex> head_sha=<40-hex>
+CI_REQUIRED/v2 pr=<number> base=<ref> base_sha=<40-hex> workflow_sha=<40-hex> head_sha=<40-hex>
 ```
 
 The watchdog requires an exact parse, checks that `head_sha` equals the run API
-field, rejects `3.0-dev`, and uses `base_sha` for the local policy-blob check.
-Because these values are evaluated by the trusted `pull_request_target`
-workflow at trigger time, later PR retargeting cannot change the decision.
+field, rejects `3.0-dev`, and compares local policy blobs at `workflow_sha`.
+`base_sha` is logged only as provenance diagnostics. Because these values are
+evaluated by the trusted `pull_request_target` workflow at trigger time, later
+PR retargeting cannot change the decision.
 
 The token permissions are limited to `contents: read` and `actions: write`.
 The latter permission is needed only for
 `cancelWorkflowRun`. The script cannot push commits, edit PRs, or mutate issues.
 
-Existing runs without `CI_REQUIRED/v1` metadata are intentionally not
+Existing runs without `CI_REQUIRED/v2` metadata are intentionally not
 cancelled. This is a rollout boundary: the watchdog does not reconstruct a
 trigger-time base from the PR's current base, because retargeting can preserve
-the head SHA. The recorded PR number is diagnostic; it is not used to replace
-the immutable base metadata.
+the head SHA. The recorded PR number and base SHA are diagnostic; they are not
+used to replace immutable workflow provenance.
 
 ## Unhappy paths and bounds
 
