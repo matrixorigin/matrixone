@@ -465,15 +465,16 @@ type messageSenderOnClient struct {
 	// receiveClosed records a terminal signal from the receive channel. It
 	// poisons backend reuse, but does not release the locally owned morpc Stream;
 	// close must still call Stream.Close.
-	receiveClosed      bool
-	reuseEligible      bool
-	terminalNegotiated bool
-	stopResponseTried  bool
-	expectedEnd        pipeline.Method
-	stateMu            sync.Mutex
-	closeOnce          sync.Once
-	requestFinishAck   bool
-	pendingBatchAck    uint64
+	receiveClosed           bool
+	reuseEligible           bool
+	terminalNegotiated      bool
+	stopResponseTried       bool
+	expectedEnd             pipeline.Method
+	reportingRequestStarted bool
+	stateMu                 sync.Mutex
+	closeOnce               sync.Once
+	requestFinishAck        bool
+	pendingBatchAck         uint64
 	// allowCleanupCancellation is set after successful local cleanup. Pipeline
 	// and query contexts may be intentionally cancelled by that cleanup; FIN
 	// then runs on its own bounded context. Cancellation before this transition
@@ -579,6 +580,7 @@ func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Me
 
 func (sender *messageSenderOnClient) sendPipeline(
 	scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int, debugMsg string) error {
+	sender.markReportingRequestStarted()
 	sdLen := len(scopeData)
 	if sdLen <= eachMessageSizeLimitation {
 		message := cnclient.AcquireMessage()
@@ -1045,6 +1047,12 @@ func (sender *messageSenderOnClient) close() {
 }
 
 func (sender *messageSenderOnClient) markMissingGroupConcatTerminal() {
+	sender.stateMu.Lock()
+	started := sender.reportingRequestStarted
+	sender.stateMu.Unlock()
+	if !started {
+		return
+	}
 	sender.terminalMu.Lock()
 	seen := sender.terminalSeen
 	sender.terminalMu.Unlock()
@@ -1053,4 +1061,10 @@ func (sender *messageSenderOnClient) markMissingGroupConcatTerminal() {
 			marker.markGroupConcatReportingIncomplete()
 		}
 	}
+}
+
+func (sender *messageSenderOnClient) markReportingRequestStarted() {
+	sender.stateMu.Lock()
+	sender.reportingRequestStarted = true
+	sender.stateMu.Unlock()
 }

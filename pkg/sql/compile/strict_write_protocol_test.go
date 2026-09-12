@@ -118,6 +118,9 @@ func TestMissingOrMalformedTruncationReportFailsClosed(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		attempt := newWarningAttempt(proc, true)
 		sender := &messageSenderOnClient{warningSink: attempt.collector}
+		sender.markMissingGroupConcatTerminal()
+		require.False(t, attempt.collector.incompleteGroupConcatReporting(), "a stream that never attempted work needs no report")
+		sender.markReportingRequestStarted()
 		if malformed {
 			require.Error(t, sender.dealRemoteTerminal([]byte("{")))
 		}

@@ -75,6 +75,12 @@ func TestStrictGroupConcatOldWorkerCannotCommit(t *testing.T) {
 		var count int
 		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from dst").Scan(&count))
 		require.Zero(t, count, "a strict write cannot commit a truncated aggregate")
+		_, err = db.ExecContext(ctx, "create table rejected_ctas as select group_concat(v order by id separator '|') as gc from src")
+		sqlErr = nil
+		require.True(t, errors.As(err, &sqlErr), "%v", err)
+		require.Equal(t, uint16(1260), sqlErr.Number)
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from information_schema.tables where table_schema=? and table_name='rejected_ctas'", name).Scan(&count))
+		require.Zero(t, count, "CTAS internal SQL must inherit the reporting requirement and roll back")
 		execSQLDB(t, ctx, db, "insert ignore into dst select group_concat(v order by id separator '|') from src")
 		var value string
 		require.NoError(t, db.QueryRowContext(ctx, "select gc from dst").Scan(&value))
