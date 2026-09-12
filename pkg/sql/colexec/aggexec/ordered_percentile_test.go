@@ -483,7 +483,7 @@ func TestOrderedPercentileTypeDispatchAndMath(t *testing.T) {
 
 	lo, hi, gotFrac := orderedPercentileRanks(5, big.NewRat(1, 4), orderedPercentileContinuous)
 	require.Equal(t, uint64(1), lo)
-	require.Equal(t, uint64(2), hi)
+	require.Equal(t, lo, hi)
 	require.Zero(t, gotFrac.Sign())
 	lo, hi, gotFrac = orderedPercentileRanks(5, big.NewRat(1, 2), orderedPercentileDiscrete)
 	require.Equal(t, uint64(2), lo)
