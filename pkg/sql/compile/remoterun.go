@@ -1900,7 +1900,7 @@ func validateRemoteAggregateProtocol(
 				orderedSetPercentileDiscUsesExtendedType(agg) &&
 				!supportsRemoteOrderedSetExtendedTypes(proc.GetService()) {
 				return moerr.NewNotSupportedNoCtx(
-					"extended discrete percentile input types require MORPC protocol version 66",
+					"extended discrete percentile input types require MORPC protocol version 67",
 				)
 			}
 		}
@@ -2113,6 +2113,12 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion64) {
 		return moerr.NewNotSupportedNoCtx(
 			"typed BIN/CONV execution requires MORPC protocol version 64",
+		)
+	}
+	if features.ASCIIInt32Result &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion65) {
+		return moerr.NewNotSupportedNoCtx(
+			"signed INT ASCII results require MORPC protocol version 65",
 		)
 	}
 	return nil

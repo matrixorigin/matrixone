@@ -890,6 +890,9 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
 		return nil, err
 	}
+	if err = c.unresolvedIndexHintError(); err != nil {
+		return nil, err
+	}
 	if err = c.lockTable(); err != nil {
 		return nil, err
 	}
@@ -924,6 +927,25 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 		startedSources = append(startedSources, source)
 	}
 	return startedSources, nil
+}
+
+// unresolvedIndexHintError restores the ordinary MySQL error after the
+// metadata lock has established that no concurrent definition change made the
+// hinted index visible. It runs before sources start, so an invalid hint cannot
+// execute the base-table plan produced while the hint was unresolved.
+func (c *Compile) unresolvedIndexHintError() error {
+	return plan2.ValidateUnresolvedIndexHints(c.proc.Ctx, c.pn.GetQuery())
+}
+
+func (c *Compile) appendUnresolvedIndexHintMetaTables(query *plan.Query) {
+	if query == nil {
+		return
+	}
+	for _, hint := range query.GetUnresolvedIndexHints() {
+		if hint != nil && hint.GetTable() != nil {
+			c.appendMetaTables(hint.GetTable())
+		}
+	}
 }
 
 func closeMaterializedSourceGenerations(sources []*materialized.Source) {
@@ -7728,7 +7750,7 @@ func hasVarianceAggregate(node *plan.Node) bool {
 }
 
 // hasWidenedDecimalSum reports SUM expressions whose public result is
-// Decimal256. Before MORPC v65, a new CN can still exchange the legacy
+// Decimal256. Before MORPC v66, a new CN can still exchange the legacy
 // Decimal128 partial state with an old CN, but a final shuffle Group evaluates
 // the state on its remote owner and sends the public result directly. That
 // final batch would be Decimal256 on the new binary and Decimal128 on the old
@@ -7791,7 +7813,7 @@ func supportsRemoteOrderedSetExtendedTypes(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion66
+	return ok && protocolVersion >= defines.MORPCVersion67
 }
 
 func (c *Compile) supportsRemoteVarianceAggregates() bool {
@@ -7811,7 +7833,7 @@ func (c *Compile) supportsRemoteWidenedDecimalSum() bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion65
+	return ok && protocolVersion >= defines.MORPCVersion66
 }
 
 func (c *Compile) supportsRemotePartitionTopN() bool {

@@ -368,6 +368,10 @@ func TestDeepCopyNodePreservesPreparedExecutionState(t *testing.T) {
 
 func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	source := &planpb.Query{
+		UnresolvedIndexHints: []*planpb.UnresolvedIndexHint{
+			{Table: &planpb.ObjectRef{SchemaName: "db", ObjName: "t"}, IndexName: "idx_missing"},
+			nil,
+		},
 		Steps:       []int32{3, 7},
 		Headings:    []string{"id"},
 		LoadTag:     true,
@@ -380,6 +384,13 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	}
 
 	cloned := DeepCopyQuery(source)
+	require.Equal(t, source.UnresolvedIndexHints, cloned.UnresolvedIndexHints)
+	require.NotSame(t, source.UnresolvedIndexHints[0], cloned.UnresolvedIndexHints[0])
+	require.NotSame(t, source.UnresolvedIndexHints[0].Table, cloned.UnresolvedIndexHints[0].Table)
+	cloned.UnresolvedIndexHints[0].IndexName = "changed"
+	cloned.UnresolvedIndexHints[0].Table.ObjName = "changed"
+	require.Equal(t, "idx_missing", source.UnresolvedIndexHints[0].IndexName)
+	require.Equal(t, "t", source.UnresolvedIndexHints[0].Table.ObjName)
 	require.Equal(t, source.Steps, cloned.Steps)
 	require.Equal(t, source.Headings, cloned.Headings)
 	require.True(t, cloned.LoadTag)

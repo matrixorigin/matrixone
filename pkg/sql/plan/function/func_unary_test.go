@@ -661,8 +661,8 @@ func initAsciiStringTestCase() []tcTemp {
 					[]string{"-23", "9999999", "-11"},
 					[]bool{false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{45, 57, 45},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{45, 57, 45},
 				[]bool{false, false, false}),
 		},
 	}
@@ -690,8 +690,8 @@ func initAsciiIntTestCase() []tcTemp {
 					[]int64{11},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{49},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{49},
 				[]bool{false}),
 		},
 	}
@@ -719,8 +719,8 @@ func initAsciiUintTestCase() []tcTemp {
 					[]uint64{11},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{49},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{49},
 				[]bool{false}),
 		},
 	}
@@ -737,6 +737,76 @@ func TestAsciiUint(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestAsciiRegisteredOverloadsReturnInt32(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name       string
+		input      types.Type
+		overloadID int32
+	}{
+		{name: "varchar", input: types.T_varchar.ToType(), overloadID: 0},
+		{name: "char", input: types.T_char.ToType(), overloadID: 1},
+		{name: "text", input: types.T_text.ToType(), overloadID: 2},
+		{name: "int8", input: types.T_int8.ToType(), overloadID: 3},
+		{name: "int16", input: types.T_int16.ToType(), overloadID: 4},
+		{name: "int32", input: types.T_int32.ToType(), overloadID: 5},
+		{name: "int64", input: types.T_int64.ToType(), overloadID: 6},
+		{name: "uint8", input: types.T_uint8.ToType(), overloadID: 7},
+		{name: "uint16", input: types.T_uint16.ToType(), overloadID: 8},
+		{name: "uint32", input: types.T_uint32.ToType(), overloadID: 9},
+		{name: "uint64", input: types.T_uint64.ToType(), overloadID: 10},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "ascii", []types.Type{test.input})
+			require.NoError(t, err)
+			require.Equal(t, types.T_int32, resolved.GetReturnType().Oid)
+
+			functionID, overloadID := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, int32(ASCII), functionID)
+			require.Equal(t, test.overloadID, overloadID)
+		})
+	}
+}
+
+func TestAsciiKeepsLegacyUint8ResultWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Run("string", func(t *testing.T) {
+		input := testutil.MakeVarlenaVector(
+			[][]byte{[]byte("A")}, nil, types.T_varchar.ToType(), proc.Mp())
+		defer input.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, AsciiString(
+			[]*vector.Vector{input}, result, proc, 1, nil))
+		require.Equal(t, []uint8{65}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
+	})
+	t.Run("signed integer", func(t *testing.T) {
+		input := testutil.MakeInt64Vector([]int64{11}, nil, proc.Mp())
+		defer input.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, AsciiInt[int64](
+			[]*vector.Vector{input}, result, proc, 1, nil))
+		require.Equal(t, []uint8{'1'}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
+	})
+	t.Run("unsigned integer", func(t *testing.T) {
+		input := testutil.MakeUint64Vector([]uint64{11}, nil, proc.Mp())
+		defer input.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, AsciiUint[uint64](
+			[]*vector.Vector{input}, result, proc, 1, nil))
+		require.Equal(t, []uint8{'1'}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
+	})
 }
 
 // ORD

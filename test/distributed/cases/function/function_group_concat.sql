@@ -159,15 +159,16 @@ CREATE TABLE group_concat_12 (a int, c int);
 INSERT INTO group_concat_12 values (1, 5);
 INSERT INTO group_concat_12 values (2, 4);
 INSERT INTO group_concat_12 values (3, 3);
-INSERT INTO group_concat_12 values (3, 3);
 
 -- subqueris
 SELECT group_concat(c) FROM group_concat_11;
 SELECT group_concat_12.a,group_concat_12.c FROM group_concat_12,group_concat_11 where group_concat_12.a=group_concat_11.a;
-SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc) as grp FROM group_concat_11;
+SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc, c) as grp FROM group_concat_11;
 SELECT group_concat((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a) order by 1) as grp FROM group_concat_11;
 SELECT group_concat(coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '') order by 1) as grp FROM group_concat_11;
-SELECT group_concat(group_concat_11.c order by coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '')) as grp FROM group_concat_11;
+SELECT group_concat(group_concat_11.c order by coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), ''), group_concat_11.c) as grp FROM group_concat_11;
+INSERT INTO group_concat_12 values (3, 6);
+SELECT group_concat(group_concat_11.c order by (SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a)) as grp FROM group_concat_11;
 
 
 -- @suite
@@ -378,3 +379,85 @@ set session group_concat_max_len = 20;
 select hex(group_concat(g order by id separator '')) from group_concat_extended_types;
 set session group_concat_max_len = 1024;
 drop table group_concat_extended_types;
+
+-- regression for issue #28669: scalar subqueries are valid hidden order keys
+-- for GROUP_CONCAT and are flattened before the aggregate is executed
+drop table if exists group_concat_subquery_src;
+drop table if exists group_concat_subquery_weights;
+create table group_concat_subquery_src (
+    id int primary key,
+    grp int,
+    a varchar(10)
+);
+create table group_concat_subquery_weights (
+    id int primary key,
+    w int
+);
+insert into group_concat_subquery_src values
+    (1, 1, 'a'),
+    (2, 1, 'b'),
+    (3, 1, 'c'),
+    (4, 2, 'd');
+insert into group_concat_subquery_weights values
+    (1, 30),
+    (2, 10),
+    (3, 20),
+    (4, null);
+
+select group_concat(
+           a order by
+           (select w from group_concat_subquery_weights weights
+             where weights.id = src.id)
+           separator '|') as result
+from group_concat_subquery_src src
+where grp = 1;
+
+select group_concat(
+           a order by
+           (select w from group_concat_subquery_weights weights
+             where weights.id = src.id) desc
+           separator '|') as result
+from group_concat_subquery_src src;
+
+select grp,
+       group_concat(
+           a order by
+           (select w from group_concat_subquery_weights weights
+             where weights.id = src.id)
+           separator '|') as result
+from group_concat_subquery_src src
+group by grp
+order by grp;
+
+select group_concat(
+           a order by coalesce(
+               (select w from group_concat_subquery_weights weights
+                 where weights.id = src.id), 0)
+           separator '|') as result
+from group_concat_subquery_src src;
+
+select group_concat(
+           a order by (select max(w) from group_concat_subquery_weights)
+           separator '|') as result
+from group_concat_subquery_src
+where id = 1;
+
+prepare group_concat_subquery_stmt from
+    'select group_concat(a order by
+        (select w + ? from group_concat_subquery_weights weights
+          where weights.id = src.id)
+        separator "|") as result
+     from group_concat_subquery_src src where grp = ?';
+set @group_concat_subquery_offset = 5;
+set @group_concat_subquery_grp = 1;
+execute group_concat_subquery_stmt using
+    @group_concat_subquery_offset, @group_concat_subquery_grp;
+deallocate prepare group_concat_subquery_stmt;
+
+select group_concat(
+           a order by (select w from group_concat_subquery_weights)
+           separator '|')
+from group_concat_subquery_src;
+
+drop table group_concat_subquery_src;
+drop table group_concat_subquery_weights;
