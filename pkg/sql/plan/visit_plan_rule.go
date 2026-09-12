@@ -1396,8 +1396,20 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 			copy.GetF().Args[i] = refreshed
 			changed = changed || argChanged
 		}
+		if len(copy.GetF().Args) > 0 && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") &&
+			fn.Args[0].GetPreparedNumeric().GetFallbackSource() {
+			return copy.GetF().Args[0], true, nil
+		}
 		if !changed {
 			return expr, false, nil
+		}
+		if isImplicitPreparedParamCast(expr) && len(copy.GetF().Args) > 0 {
+			return copy.GetF().Args[0], true, nil
+		}
+		for i, arg := range copy.GetF().Args {
+			if source, ok := provisionalExactNumericSource(arg); ok {
+				copy.GetF().Args[i] = source
+			}
 		}
 		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.GetObjName(), copy.GetF().Args)
 		if err != nil {
@@ -1433,6 +1445,23 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 		return copy, true, nil
 	}
 	return expr, false, nil
+}
+
+type preparedNumericSourceRefreshRule struct {
+	reset *ResetParamRefRule
+}
+
+func (rule *preparedNumericSourceRefreshRule) MatchNode(_ *Node) bool { return false }
+func (rule *preparedNumericSourceRefreshRule) IsApplyExpr() bool      { return true }
+func (rule *preparedNumericSourceRefreshRule) ApplyNode(_ *Node) error {
+	return nil
+}
+func (rule *preparedNumericSourceRefreshRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
+	refreshed, changed, err := rule.reset.refreshPreparedNumericSource(expr)
+	if changed {
+		rule.reset.specialized = true
+	}
+	return refreshed, err
 }
 
 func (rule *ResetParamRefRule) MatchNode(_ *Node) bool {
@@ -1890,26 +1919,30 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					return nil, err
 				}
 			}
-			// A non-numeric SQL string variable has no approximate numeric source
-			// expression. CHAR still owns the SQL EXECUTE argument domain: it must
-			// receive the original string so builtInChar can apply MySQL's
-			// non-numeric-prefix -> 0 rule, instead of evaluating the provisional
-			// prepare-time TEXT-to-INT cast (which would return an error).
-			charStringSourceFallback := hasParamPos &&
-				strings.EqualFold(functionName, "char") &&
+			charStringSourceFallback := hasParamPos && strings.EqualFold(functionName, "char") &&
 				paramPos >= 0 && paramPos < len(rule.sqlExecuteNumericParams) &&
 				rule.sqlExecuteNumericParams[paramPos] == nil &&
 				paramPos < len(rule.sqlExecuteStringBackedParams) &&
 				rule.sqlExecuteStringBackedParams[paramPos] &&
 				paramPos < len(rule.params) && rule.params[paramPos] != nil
-			useSQLExecuteNumericSource := hasParamPos &&
-				preparedFunctionArgUsesSQLExecuteNumericSource(
-					e, functionName, i, len(exprImpl.F.Args)) &&
-				(hasPreparedCharSource || charStringSourceFallback || (paramPos >= 0 &&
-					paramPos < len(rule.sqlExecuteNumericParams) &&
-					rule.sqlExecuteNumericParams[paramPos] != nil)) &&
+			var executeNumericSource *plan.Expr
+			if hasParamPos && preparedFunctionArgUsesSQLExecuteNumericSource(
+				e, functionName, i, len(exprImpl.F.Args)) &&
 				preparedSQLExecuteNumericSourceOwnsResultDomain(
-					functionName, paramPos, rule.sqlExecuteStringBackedParams)
+					functionName, paramPos, rule.sqlExecuteStringBackedParams) {
+				switch {
+				case hasPreparedCharSource:
+					executeNumericSource = preparedCharSource
+				case charStringSourceFallback:
+					executeNumericSource = rule.params[paramPos]
+				case paramPos >= 0 && paramPos < len(rule.sqlExecuteNumericParams) &&
+					rule.sqlExecuteNumericParams[paramPos] != nil:
+					executeNumericSource = rule.sqlExecuteNumericParams[paramPos]
+				case functionName == "export_set" && paramPos >= 0 && paramPos < len(rule.params) &&
+					preparedExportSetRuntimeNumericSource(rule.params[paramPos]):
+					executeNumericSource = rule.params[paramPos]
+				}
+			}
 			sharedControlParam := false
 			if paramPos >= 0 && preparedSQLExecuteNumericResultValueArg(functionName, i, len(exprImpl.F.Args)) {
 				for j, sibling := range originalArgs {
@@ -1948,24 +1981,28 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 			}
 			var rewrittenArg *plan.Expr
-			if useSQLExecuteNumericSource {
-				sqlExecuteNumericSourceDependent = true
+			if executeNumericSource != nil {
+				if functionName != "export_set" {
+					sqlExecuteNumericSourceDependent = true
+				}
 				sqlExecuteNumericSourceArgs[i] = true
 				// The prepare-time implicit cast is provisional. Materialize the
-				// SQL user variable's current source domain before descending into
-				// that cast; evaluating it first can reject a valid DECIMAL value
-				// using the overload selected for the initial TEXT marker.
-				source := preparedCharSource
-				if source == nil && paramPos >= 0 && paramPos < len(rule.sqlExecuteNumericParams) {
-					source = rule.sqlExecuteNumericParams[paramPos]
+				// Materialize the execute-time source domain before descending into
+				// a provisional cast. EXPORT_SET must retain flattened scalar-subquery
+				// structure; replacing its ColRef would bypass FROM/LIMIT semantics.
+				if functionName == "export_set" {
+					castFn := arg.GetF()
+					if castFn != nil && len(castFn.Args) > 0 {
+						castSource := castFn.Args[0]
+						if castSource.GetCol() != nil && castSource.GetPreparedNumeric().GetFallbackSource() {
+							rewrittenArg = DeepCopyExpr(castSource)
+							rewrittenArg.Typ = executeNumericSource.Typ
+						}
+					}
 				}
-				if source == nil {
-					// Only CHAR takes this branch. Keep the original TEXT/BINARY
-					// source so its function-specific prefix parser can produce 0
-					// for an invalid numeric string without raising a cast error.
-					source = DeepCopyExpr(rule.params[paramPos])
+				if rewrittenArg == nil {
+					rewrittenArg = DeepCopyExpr(executeNumericSource)
 				}
-				rewrittenArg = DeepCopyExpr(source)
 			} else {
 				var applyErr error
 				disablePrefix := sharedControlParam && paramPos >= 0 &&
@@ -1992,7 +2029,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			exprImpl.F.Args[i] = rewrittenArg
 			boundArgs[i] = rewrittenArg
-			if useSQLExecuteNumericSource {
+			if executeNumericSource != nil {
 				needResetFunction = true
 				compareArgTypes = true
 				// The execute-time source may change only an argument literal while
@@ -2318,6 +2355,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		param := rule.params[position]
 		if param == nil {
 			return e, nil
+		}
+		if e.GetPreparedNumeric().GetFallback() && position < len(rule.sqlExecuteNumericParams) &&
+			rule.sqlExecuteNumericParams[position] != nil && position < len(rule.sqlExecuteStringBackedParams) &&
+			!rule.sqlExecuteStringBackedParams[position] {
+			source := rule.sqlExecuteNumericParams[position]
+			rule.specialized = true
+			return &plan.Expr{Typ: source.Typ, Expr: source.Expr}, nil
 		}
 		if rule.numericComparisonTextParamPositions[position] &&
 			param.Typ.Id == int32(types.T_text) && param.GetLit() != nil {
@@ -3181,6 +3225,13 @@ func preparedSQLExecuteNumericResultConsumer(name string) bool {
 	return preparedNumericResultPolymorphicFunction(name) || strings.EqualFold(name, "char")
 }
 
+func preparedSQLExecuteNumericSourceValueArg(name string, argIndex, argCount int) bool {
+	if name == "export_set" {
+		return argIndex == 0 && argCount >= 3 && argCount <= 5
+	}
+	return preparedSQLExecuteNumericResultValueArg(name, argIndex, argCount)
+}
+
 func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int) bool {
 	if !preparedSQLExecuteNumericResultConsumer(name) {
 		return false
@@ -3218,6 +3269,14 @@ func preparedRuntimeResultOccurrenceType(value any, fallback plan.Type) plan.Typ
 	default:
 		return fallback
 	}
+}
+
+func preparedExportSetRuntimeNumericSource(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	typ := types.T(expr.Typ.Id)
+	return typ == types.T_bool || typ == types.T_bit || (types.Type{Oid: typ}).IsNumeric()
 }
 
 func preparedSQLExecuteNumericSourceOwnsResultDomain(
@@ -3310,6 +3369,13 @@ func preparedFunctionArgUsesSQLExecuteNumericSource(
 	argIndex int,
 	argCount int,
 ) bool {
+	// EXPORT_SET returns text, but its first argument retains the numeric
+	// category's own integer conversion contract. Do not let PREPARE's TEXT
+	// transport permanently narrow DECIMAL, FLOAT, or BOOLEAN values to BIGINT.
+	if name == "export_set" {
+		return argIndex == 0 && argCount >= 3 && argCount <= 5
+	}
+
 	// A prepared TEXT marker can make result-selecting functions bind to a
 	// non-numeric envelope even though the execute-time SQL source is numeric.
 	// Decide from the argument's value role before consulting that provisional
@@ -3389,24 +3455,36 @@ func functionBindingChanged(
 	return false
 }
 
-// preparedResultParamPosition recognizes provisional result-domain casts that
-// overload resolution inserts around a prepared TEXT marker. The enclosing
-// consumer and provisional target jointly distinguish these from authoritative
-// numeric casts written by the user.
+// preparedResultParamPosition recognizes provisional casts that overload
+// resolution inserts around a prepared TEXT marker. The enclosing consumer and
+// provisional target jointly distinguish these from authoritative numeric casts
+// written by the user.
 func preparedResultParamPosition(expr *plan.Expr, name string) (int, bool) {
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 ||
-		!expr.GetPreparedNumeric().GetProvisionalResultCast() {
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
 		return 0, false
 	}
-	if !preparedSQLExecuteNumericResultConsumer(name) {
+	provisional := expr.GetPreparedNumeric().GetProvisionalResultCast()
+	if name == "export_set" && !fn.GetSyntaxExplicitCast() && expr.Typ.Id == int32(types.T_int64) {
+		// Scalar-subquery flattening can rebuild EXPORT_SET's checker-inserted
+		// TEXT-to-BIGINT cast without its occurrence metadata. Syntax provenance
+		// still distinguishes that cast from an authoritative user CAST.
+		provisional = true
+	}
+	if !provisional {
 		return 0, false
 	}
-	param := fn.Args[0].GetP()
-	if param == nil || param.Pos < 0 {
+	if !preparedSQLExecuteNumericResultConsumer(name) && name != "export_set" {
 		return 0, false
 	}
-	return int(param.Pos), true
+	if param := fn.Args[0].GetP(); param != nil && param.Pos >= 0 {
+		return int(param.Pos), true
+	}
+	metadata := fn.Args[0].GetPreparedNumeric()
+	if fn.Args[0].GetCol() != nil && metadata.GetFallbackSource() && metadata.GetParamPos() >= 0 {
+		return int(metadata.GetParamPos()), true
+	}
+	return 0, false
 }
 
 // isImplicitPreparedParamCast identifies the cast inserted by overload

@@ -3059,157 +3059,216 @@ func (b *baseBinder) markPreparedNumericFallback(expr *plan.Expr) {
 	// would make a malformed/legacy fallback look as though it belonged to the
 	// first parameter.
 	metadata.ParamPos = -1
-	pos, ok := firstPlanParamPosition(expr)
-	if !ok {
-		pos, ok = b.firstPreparedParamPosition(expr, make(map[int32]struct{}))
+	positions := make(map[int32]struct{})
+	b.collectPreparedParamSources(expr, -1, positions,
+		make(map[directResultTraceKey]struct{}), make(map[int32]struct{}), true)
+	pos, ok := int32(0), false
+	for candidate := range positions {
+		if !ok || candidate < pos {
+			pos, ok = candidate, true
+		}
 	}
 	if ok && pos >= 0 {
 		metadata.ParamPos = pos
-		// Scalar subqueries are flattened into a projected column before the
-		// execute-time replacement rule runs.  Keep the same provenance on the
-		// inner projection so rebinding can restore the complete expression
-		// (for example ROUND(?) or ? + 0) instead of replacing the projected
-		// column with the raw parameter and silently dropping the subquery.
-		_, _, _ = b.markPreparedNumericSubquerySources(expr, pos, make(map[int32]struct{}))
 	}
 }
 
-func firstPlanParamPosition(expr *plan.Expr) (int32, bool) {
-	if expr == nil {
+// firstPreparedParamPosition follows every scalar-subquery and projected-column
+// edge reachable from expr. This includes derived tables and nested scalar
+// subqueries whose parameters are no longer children of Expr_Sub after binding.
+func (b *baseBinder) firstPreparedParamPosition(expr *plan.Expr, _ map[int32]struct{}) (int32, bool) {
+	positions := make(map[int32]struct{})
+	b.collectPreparedParamSources(expr, -1, positions,
+		make(map[directResultTraceKey]struct{}), make(map[int32]struct{}), false)
+	if len(positions) == 0 {
 		return 0, false
 	}
-	if param := expr.GetP(); param != nil {
-		return param.Pos, true
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			if pos, ok := firstPlanParamPosition(arg); ok {
-				return pos, true
-			}
+	first := int32(math.MaxInt32)
+	for pos := range positions {
+		if pos < first {
+			first = pos
 		}
 	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if pos, ok := firstPlanParamPosition(item); ok {
-				return pos, true
-			}
-		}
-	}
-	if sub := expr.GetSub(); sub != nil {
-		return firstPlanParamPosition(sub.Child)
-	}
-	return 0, false
+	return first, true
 }
 
-// firstPreparedParamPosition extends firstPlanParamPosition to the query
-// nodes referenced by scalar subqueries.  Expr_Sub.Child contains the left
-// operand for quantified subqueries, but a scalar subquery's actual parameter
-// normally lives in its PROJECT node, so it is not visible from the expression
-// wrapper after binding.
-func (b *baseBinder) firstPreparedParamPosition(expr *plan.Expr, visited map[int32]struct{}) (int32, bool) {
-	if expr == nil {
-		return 0, false
-	}
-	if pos, ok := firstPlanParamPosition(expr); ok {
-		return pos, true
-	}
-	if sub := expr.GetSub(); sub != nil && b.builder != nil && b.builder.qry != nil &&
-		sub.Typ == plan.SubqueryRef_SCALAR && sub.NodeId >= 0 && int(sub.NodeId) < len(b.builder.qry.Nodes) {
-		if _, ok := visited[sub.NodeId]; ok {
-			return 0, false
-		}
-		visited[sub.NodeId] = struct{}{}
-		node := b.builder.qry.Nodes[sub.NodeId]
-		if node != nil {
-			for _, projection := range node.ProjectList {
-				if pos, ok := b.firstPreparedParamPosition(projection, visited); ok {
-					return pos, true
-				}
-			}
-		}
-	}
-	return 0, false
-}
-
-func (b *baseBinder) markPreparedNumericSubquerySources(
+func (b *baseBinder) collectPreparedParamSources(
 	expr *plan.Expr,
-	pos int32,
-	visited map[int32]struct{},
+	ownerNodeID int32,
+	positions map[int32]struct{},
+	seenColumns map[directResultTraceKey]struct{},
+	seenSubqueries map[int32]struct{},
+	mark bool,
 ) (int32, int32, bool) {
 	if expr == nil {
 		return 0, 0, false
 	}
-	switch exprImpl := expr.Expr.(type) {
-	case *plan.Expr_F:
-		for _, arg := range exprImpl.F.Args {
-			if nodeID, colPos, ok := b.markPreparedNumericSubquerySources(arg, pos, visited); ok {
-				metadata := ensurePreparedNumericMetadata(expr)
-				metadata.FallbackSource = true
-				metadata.FallbackSourceNodeId = nodeID
-				metadata.FallbackSourceColPos = colPos
-				return nodeID, colPos, true
-			}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 {
+		positions[param.Pos] = struct{}{}
+		if mark {
+			metadata := ensurePreparedNumericMetadata(expr)
+			metadata.Fallback = true
+			metadata.ParamPos = param.Pos
 		}
-	case *plan.Expr_List:
-		for _, item := range exprImpl.List.List {
-			if nodeID, colPos, ok := b.markPreparedNumericSubquerySources(item, pos, visited); ok {
-				metadata := ensurePreparedNumericMetadata(expr)
-				metadata.FallbackSource = true
-				metadata.FallbackSourceNodeId = nodeID
-				metadata.FallbackSourceColPos = colPos
-				return nodeID, colPos, true
-			}
-		}
-	case *plan.Expr_Sub:
-		if exprImpl.Sub == nil || exprImpl.Sub.Typ != plan.SubqueryRef_SCALAR ||
-			b.builder == nil || b.builder.qry == nil || exprImpl.Sub.NodeId < 0 ||
-			int(exprImpl.Sub.NodeId) >= len(b.builder.qry.Nodes) {
-			if exprImpl.Sub != nil {
-				return b.markPreparedNumericSubquerySources(exprImpl.Sub.Child, pos, visited)
-			}
-			return 0, 0, false
-		}
-		if _, ok := visited[exprImpl.Sub.NodeId]; ok {
-			return 0, 0, false
-		}
-		visited[exprImpl.Sub.NodeId] = struct{}{}
-		node := b.builder.qry.Nodes[exprImpl.Sub.NodeId]
-		if node == nil {
-			return 0, 0, false
-		}
-		for colPos, projection := range node.ProjectList {
-			if projection == nil || !planExprContainsParamPosition(projection, pos) {
-				continue
-			}
-			projectionMetadata := ensurePreparedNumericMetadata(projection)
-			projectionMetadata.Fallback = true
-			projectionMetadata.ParamPos = pos
-			projectionMetadata.FallbackSource = true
-			projectionMetadata.FallbackSourceNodeId = exprImpl.Sub.NodeId
-			projectionMetadata.FallbackSourceColPos = int32(colPos)
-			exprMetadata := ensurePreparedNumericMetadata(expr)
-			exprMetadata.FallbackSource = true
-			exprMetadata.FallbackSourceNodeId = exprImpl.Sub.NodeId
-			exprMetadata.FallbackSourceColPos = int32(colPos)
-			b.markPreparedNumericSubquerySources(projection, pos, visited)
-			return exprImpl.Sub.NodeId, int32(colPos), true
+		return ownerNodeID, -1, true
+	}
+	var sourceNodeID, sourceColPos int32
+	found := false
+	remember := func(nodeID, colPos int32, ok bool) {
+		if ok && !found {
+			sourceNodeID, sourceColPos, found = nodeID, colPos, true
 		}
 	}
-	return 0, 0, false
+	if fn := expr.GetF(); fn != nil {
+		if isExplicitPreparedLineageCast(expr) {
+			return 0, 0, false
+		}
+		for _, arg := range fn.Args {
+			nodeID, colPos, ok := b.collectPreparedParamSources(
+				arg, ownerNodeID, positions, seenColumns, seenSubqueries, mark)
+			remember(nodeID, colPos, ok)
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			nodeID, colPos, ok := b.collectPreparedParamSources(
+				item, ownerNodeID, positions, seenColumns, seenSubqueries, mark)
+			remember(nodeID, colPos, ok)
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		nodeID, colPos, ok := b.collectPreparedParamSources(
+			window.WindowFunc, ownerNodeID, positions, seenColumns, seenSubqueries, mark)
+		remember(nodeID, colPos, ok)
+	}
+	if sub := expr.GetSub(); sub != nil {
+		if sub.Child != nil {
+			nodeID, colPos, ok := b.collectPreparedParamSources(
+				sub.Child, ownerNodeID, positions, seenColumns, seenSubqueries, mark)
+			remember(nodeID, colPos, ok)
+		}
+		if sub.Typ == plan.SubqueryRef_SCALAR {
+			if _, seen := seenSubqueries[sub.NodeId]; !seen {
+				seenSubqueries[sub.NodeId] = struct{}{}
+				nodeID, colPos, ok := b.collectPreparedParamSourceColumn(
+					sub.NodeId, 0, positions, seenColumns, seenSubqueries, mark)
+				remember(nodeID, colPos, ok)
+			}
+		}
+	}
+	if col := expr.GetCol(); col != nil && ownerNodeID >= 0 && b.builder != nil && b.builder.qry != nil &&
+		int(ownerNodeID) < len(b.builder.qry.Nodes) {
+		node := b.builder.qry.Nodes[ownerNodeID]
+		if node != nil {
+			childNodeID := int32(-1)
+			if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+				childNodeID = node.Children[col.RelPos]
+			} else if len(node.Children) == 1 {
+				childNodeID = node.Children[0]
+			}
+			if childNodeID >= 0 {
+				nodeID, colPos, ok := b.collectPreparedParamSourceColumn(
+					childNodeID, col.ColPos, positions, seenColumns, seenSubqueries, mark)
+				remember(nodeID, colPos, ok)
+			}
+		}
+	}
+	if found && mark && sourceColPos >= 0 {
+		metadata := ensurePreparedNumericMetadata(expr)
+		metadata.FallbackSource = true
+		metadata.FallbackSourceNodeId = sourceNodeID
+		metadata.FallbackSourceColPos = sourceColPos
+		metadata.ParamPos = -1
+		for pos := range positions {
+			if metadata.ParamPos < 0 || pos < metadata.ParamPos {
+				metadata.ParamPos = pos
+			}
+		}
+	}
+	return sourceNodeID, sourceColPos, found
 }
 
-func planExprContainsParamPosition(expr *plan.Expr, pos int32) bool {
-	if expr == nil {
-		return false
+func (b *baseBinder) collectPreparedParamSourceColumn(
+	nodeID, colPos int32,
+	positions map[int32]struct{},
+	seenColumns map[directResultTraceKey]struct{},
+	seenSubqueries map[int32]struct{},
+	mark bool,
+) (int32, int32, bool) {
+	if b.builder == nil || b.builder.qry == nil || nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) || colPos < 0 {
+		return 0, 0, false
 	}
-	found := false
-	_ = plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
-		if param := candidate.GetP(); param != nil && param.Pos == pos {
-			found = true
+	key := directResultTraceKey{nodeID: nodeID, colPos: colPos}
+	if _, seen := seenColumns[key]; seen {
+		return 0, 0, false
+	}
+	seenColumns[key] = struct{}{}
+	node := b.builder.qry.Nodes[nodeID]
+	if node == nil {
+		return 0, 0, false
+	}
+	if node.NodeType == plan.Node_WINDOW && int(colPos) < len(node.ProjectList) {
+		projected := node.ProjectList[colPos]
+		if projectedCol := projected.GetCol(); projectedCol != nil && projectedCol.RelPos < 0 && len(node.Children) == 1 {
+			child := b.builder.qry.Nodes[node.Children[0]]
+			if child != nil {
+				windowPos := int(projectedCol.ColPos) - len(child.ProjectList)
+				if windowPos >= 0 && windowPos < len(node.WinSpecList) {
+					localPositions := make(map[int32]struct{})
+					_, _, found := b.collectPreparedParamSources(
+						node.WinSpecList[windowPos], nodeID, localPositions, seenColumns, seenSubqueries, mark)
+					for position := range localPositions {
+						positions[position] = struct{}{}
+					}
+					if found || len(localPositions) > 0 {
+						if mark {
+							metadata := ensurePreparedNumericMetadata(projected)
+							metadata.Fallback = true
+							metadata.ParamPos = minimumPreparedPosition(localPositions)
+							metadata.FallbackSource = true
+							metadata.FallbackSourceNodeId = nodeID
+							metadata.FallbackSourceColPos = colPos
+						}
+						return nodeID, colPos, true
+					}
+				}
+			}
 		}
-		return nil
-	})
-	return found
+	}
+	if int(colPos) < len(node.ProjectList) && node.ProjectList[colPos] != nil {
+		localPositions := make(map[int32]struct{})
+		sourceNodeID, sourceColPos, found := b.collectPreparedParamSources(
+			node.ProjectList[colPos], nodeID, localPositions, seenColumns, seenSubqueries, mark)
+		for pos := range localPositions {
+			positions[pos] = struct{}{}
+		}
+		if found || len(localPositions) > 0 {
+			resolvedNodeID, resolvedColPos := nodeID, colPos
+			if sourceColPos >= 0 {
+				resolvedNodeID, resolvedColPos = sourceNodeID, sourceColPos
+			}
+			if mark {
+				metadata := ensurePreparedNumericMetadata(node.ProjectList[colPos])
+				metadata.Fallback = true
+				metadata.FallbackSource = true
+				metadata.FallbackSourceNodeId = resolvedNodeID
+				metadata.FallbackSourceColPos = resolvedColPos
+				metadata.ParamPos = -1
+				for pos := range localPositions {
+					if metadata.ParamPos < 0 || pos < metadata.ParamPos {
+						metadata.ParamPos = pos
+					}
+				}
+			}
+			return resolvedNodeID, resolvedColPos, true
+		}
+		return sourceNodeID, sourceColPos, false
+	}
+	if len(node.Children) == 1 {
+		return b.collectPreparedParamSourceColumn(
+			node.Children[0], colPos, positions, seenColumns, seenSubqueries, mark)
+	}
+	return 0, 0, false
 }
 
 func containsExplicitFloatCast(expr tree.Expr) bool {
@@ -3527,6 +3586,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		for idx, arg := range astArgs {
 			paramType := b.numericParamType
 			subqueryTarget := b.numericSubqueryTarget
+			_, directParam := unwrapParenExpr(arg).(*tree.ParamExpr)
+			if b.builder != nil && b.builder.isPrepareStatement && name == "export_set" && idx == 0 &&
+				b.numericParamType == nil && !directParam {
+				target := makePlan2Type(&types.Type{Oid: types.T_int64})
+				b.numericParamType = &target
+				b.numericSubqueryTarget = &target
+			}
 			if paramType != nil && numericFunctionHasSelectiveContext(name) &&
 				!numericFunctionArgKeepsContext(name, idx, len(astArgs)) {
 				b.numericParamType = nil
@@ -3569,11 +3635,17 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			args[idx] = expr
 		}
 	}
+	if b.builder != nil && b.builder.isPrepareStatement && name == "export_set" && len(args) > 0 &&
+		!preparedExprContainsParam(args[0]) {
+		if _, found := b.firstPreparedParamPosition(args[0], make(map[int32]struct{})); found {
+			b.markPreparedNumericFallback(args[0])
+		}
+	}
 	preparedNumericPeer := false
 	preparedNumericProvenance := false
 	if b.builder != nil && b.builder.isPrepareStatement &&
 		(isNumericContextFunction(name) || supportsGenericNumericFunctionContext(name) ||
-			preparedSQLExecuteNumericResultConsumer(name) || name == "iff") {
+			preparedSQLExecuteNumericResultConsumer(name) || name == "iff" || name == "export_set") {
 		var err error
 		preparedNumericProvenance, err = b.hasPreparedNumericParamExprs(astArgs, depth)
 		if err != nil {
@@ -3933,7 +4005,7 @@ func markPreparedResultCastsProvisional(
 				}
 			}
 		}
-		if i >= len(astArgs) || !preparedSQLExecuteNumericResultValueArg(name, i, len(args)) {
+		if i >= len(astArgs) || !preparedSQLExecuteNumericSourceValueArg(name, i, len(args)) {
 			continue
 		}
 		if _, explicit := astArgs[i].(*tree.CastExpr); explicit {

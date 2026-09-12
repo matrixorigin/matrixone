@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -25,10 +26,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -943,6 +946,285 @@ func TestPreparedNumericRuntimeParamValueLiteralKinds(t *testing.T) {
 	runtimeType, ok := rule.runtimeParamType(3)
 	require.True(t, ok)
 	require.Equal(t, types.T_int64, runtimeType.Oid)
+}
+
+func TestPreparedExportSetUsesExecuteNumericSourceType(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare stmt_export_set from "select export_set(?, 'Y', 'N', '', 4)"`)
+	require.NoError(t, err)
+	queryPlan := prepared.GetDcl().GetPrepare().Plan
+	require.NotNil(t, queryPlan)
+	preparedExpr := findPlanFunctionExpr(queryPlan, "export_set")
+	require.NotNil(t, preparedExpr)
+	require.True(t, preparedFunctionArgUsesSQLExecuteNumericSource(preparedExpr, "export_set", 0, 5))
+	position, found := preparedResultParamPosition(preparedExpr.GetF().Args[0], "export_set")
+	require.True(t, found, preparedExpr.String())
+	require.Equal(t, 0, position)
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan))
+
+	decimalType := types.New(types.T_decimal64, 2, 1)
+	for _, test := range []struct {
+		name     string
+		param    ParamValue
+		wantType types.T
+		want     string
+	}{
+		{
+			name: "SQL decimal", param: ParamValue{
+				Value: "2.5", SourceType: decimalType, HasSourceType: true,
+			}, wantType: types.T_decimal64, want: "YYNN",
+		},
+		{
+			name: "SQL double", param: ParamValue{
+				Value: "2.5", SourceType: types.T_float64.ToType(), HasSourceType: true,
+			}, wantType: types.T_float64, want: "NYNN",
+		},
+		{
+			name: "SQL boolean", param: ParamValue{
+				Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true,
+			}, wantType: types.T_int64, want: "YNNN",
+		},
+		{
+			name: "binary decimal", param: ParamValue{
+				Value: "2.5", RuntimeType: decimalType, HasRuntimeType: true, IsBinaryProtocol: true,
+			}, wantType: types.T_decimal64, want: "YYNN",
+		},
+		{
+			name: "binary double", param: ParamValue{
+				Value: "2.5", RuntimeType: types.T_float64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true,
+			}, wantType: types.T_float64, want: "NYNN",
+		},
+		{
+			name: "binary boolean", param: ParamValue{
+				Value: "true", RuntimeType: types.T_bool.ToType(), HasRuntimeType: true, IsBinaryProtocol: true,
+			}, wantType: types.T_bool, want: "YNNN",
+		},
+		{
+			name: "binary unsigned", param: ParamValue{
+				Value: "18446744073709551615", RuntimeType: types.T_uint64.ToType(),
+				HasRuntimeType: true, IsBinaryProtocol: true,
+			}, wantType: types.T_uint64, want: "YYYY",
+		},
+		{
+			name: "binary text control", param: ParamValue{
+				Value: "2.5", RuntimeType: types.T_text.ToType(), HasRuntimeType: true, IsBinaryProtocol: true,
+			}, wantType: types.T_int64, want: "NYNN",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filled, err := FillValuesOfParamsInPlan(
+				context.Background(), DeepCopyPlan(queryPlan), []any{test.param})
+			require.NoError(t, err)
+			expr := findPlanFunctionExpr(filled, "export_set")
+			require.NotNil(t, expr)
+			require.Equal(t, int32(test.wantType), expr.GetF().Args[0].Typ.Id, expr.String())
+
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, test.want, result.GetStringAt(0))
+		})
+	}
+}
+
+func TestPreparedExportSetScalarSubqueryUsesExecuteNumericSourceType(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare stmt_export_set_scalar from "select export_set((select ?), 'Y', 'N', '', 4)"`)
+	require.NoError(t, err)
+	queryPlan := prepared.GetDcl().GetPrepare().Plan
+	require.NotNil(t, queryPlan)
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan), queryPlan.String())
+
+	decimalType := types.New(types.T_decimal64, 2, 1)
+	for _, test := range []struct {
+		name     string
+		param    ParamValue
+		wantType types.T
+		want     string
+	}{
+		{
+			name: "decimal", param: ParamValue{
+				Value: "2.5", SourceType: decimalType, HasSourceType: true,
+			}, wantType: types.T_decimal64, want: "YYNN",
+		},
+		{
+			name: "double", param: ParamValue{
+				Value: "2.5", SourceType: types.T_float64.ToType(), HasSourceType: true,
+			}, wantType: types.T_float64, want: "NYNN",
+		},
+		{
+			name: "boolean", param: ParamValue{
+				Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true,
+			}, wantType: types.T_int64, want: "YNNN",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filled, err := FillValuesOfParamsInPlan(
+				context.Background(), queryPlan, []any{test.param})
+			require.NoError(t, err)
+			expr := findPlanFunctionExpr(filled, "export_set")
+			require.NotNil(t, expr)
+			require.Equal(t, int32(test.wantType), expr.GetF().Args[0].Typ.Id, expr.String())
+
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, test.want, result.GetStringAt(0))
+		})
+	}
+	original := findPlanFunctionExpr(queryPlan, "export_set")
+	require.Equal(t, int32(types.T_int64), original.GetF().Args[0].Typ.Id,
+		"execute-time specialization must not mutate the cached plan")
+}
+
+func TestPreparedExportSetInputScalarSubqueryUsesExecuteNumericSourceType(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare stmt_export_set_input_scalar from "select export_set((select ? from nation limit 1), 'Y', 'N', '', 4)"`)
+	require.NoError(t, err)
+	queryPlan := prepared.GetDcl().GetPrepare().Plan
+	require.NotNil(t, queryPlan)
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan), queryPlan.String())
+	preparedExpr := findPlanFunctionExpr(queryPlan, "export_set")
+	require.NotNil(t, preparedExpr)
+	preparedSource := preparedExpr.GetF().Args[0]
+	if cast := preparedSource.GetF(); cast != nil && cast.Func.GetObjName() == "cast" && len(cast.Args) > 0 {
+		preparedSource = cast.Args[0]
+	}
+	require.NotNil(t, preparedSource.GetCol())
+	require.True(t, preparedSource.GetPreparedNumeric().GetFallbackSource(), preparedSource.String())
+
+	decimalType := types.New(types.T_decimal64, 2, 1)
+	for _, test := range []struct {
+		name     string
+		param    ParamValue
+		wantType types.T
+	}{
+		{
+			name: "decimal", param: ParamValue{
+				Value: "2.5", SourceType: decimalType, HasSourceType: true,
+			}, wantType: types.T_decimal64,
+		},
+		{
+			name: "double", param: ParamValue{
+				Value: "2.5", SourceType: types.T_float64.ToType(), HasSourceType: true,
+			}, wantType: types.T_float64,
+		},
+		{
+			name: "boolean", param: ParamValue{
+				Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true,
+			}, wantType: types.T_int64,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{test.param})
+			require.NoError(t, err)
+			expr := findPlanFunctionExpr(filled, "export_set")
+			require.NotNil(t, expr)
+			source := expr.GetF().Args[0]
+			require.Equal(t, int32(test.wantType), source.Typ.Id, expr.String())
+			require.NotNil(t, source.GetCol(), "scalar FROM/LIMIT semantics must remain in the plan")
+			metadata := source.GetPreparedNumeric()
+			require.True(t, metadata.GetFallbackSource())
+			sourceNode := filled.GetQuery().Nodes[metadata.GetFallbackSourceNodeId()]
+			require.Equal(t, int32(test.wantType),
+				sourceNode.ProjectList[metadata.GetFallbackSourceColPos()].Typ.Id)
+		})
+	}
+	original := findPlanFunctionExpr(queryPlan, "export_set")
+	require.Equal(t, int32(types.T_int64), original.GetF().Args[0].Typ.Id,
+		"execute-time specialization must not mutate the cached plan")
+}
+
+func TestPreparedExportSetTracesNestedScalarSources(t *testing.T) {
+	decimalType := types.New(types.T_decimal64, 4, 1)
+	for _, sql := range []string{
+		`prepare stmt_export_set from "select export_set((select x from (select ? as x) d limit 1), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select x from (select ? as x) d join nation on true limit 1), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((with d as (select ? as x) select x from d limit 1), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select ? from nation limit 1) + 0, 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select ?) + (select ?), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select ? union all select 1), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select ? from nation limit 1) / 1, 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select first_value(?) over () from nation limit 1), 'Y', 'N', '', 4)"`,
+	} {
+		prepared, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		require.NoError(t, err)
+		queryPlan := prepared.GetDcl().GetPrepare().Plan
+		require.NotNil(t, queryPlan)
+		require.True(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan), queryPlan.String())
+		cachedPlan := queryPlan.String()
+		paramCount := strings.Count(sql, "?")
+		for _, test := range []struct {
+			name     string
+			param    ParamValue
+			wantType func(types.T) bool
+		}{
+			{
+				name: "decimal", param: ParamValue{Value: "2.5", SourceType: decimalType, HasSourceType: true},
+				wantType: func(typ types.T) bool { return typ.IsDecimal() },
+			},
+			{
+				name: "double", param: ParamValue{Value: "2.5", SourceType: types.T_float64.ToType(), HasSourceType: true},
+				wantType: func(typ types.T) bool { return typ == types.T_float64 },
+			},
+			{
+				name: "boolean", param: ParamValue{Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true},
+				wantType: func(typ types.T) bool {
+					return typ == types.T_int64 || typ == types.T_bool || typ == types.T_float64
+				},
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				params := make([]any, paramCount)
+				for i := range params {
+					params[i] = test.param
+				}
+				filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, params)
+				require.NoError(t, err)
+				expr := findPlanFunctionExpr(filled, "export_set")
+				require.NotNil(t, expr)
+				require.True(t, test.wantType(types.T(expr.GetF().Args[0].Typ.Id)), expr.String())
+			})
+		}
+		require.Equal(t, cachedPlan, queryPlan.String(),
+			"execute-time specialization must not mutate the cached plan")
+	}
+}
+
+func TestPreparedExportSetPreservesExplicitCast(t *testing.T) {
+	for _, sql := range []string{
+		`prepare stmt_export_set from "select export_set(cast((select ?) as double), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select cast(? as double) from nation limit 1), 'Y', 'N', '', 4)"`,
+		`prepare stmt_export_set from "select export_set((select cast(? as decimal(4,1)) from nation limit 1), 'Y', 'N', '', 4)"`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+			queryPlan := prepared.GetDcl().GetPrepare().Plan
+			require.NotNil(t, queryPlan)
+			expr := findPlanFunctionExpr(queryPlan, "export_set")
+			require.NotNil(t, expr)
+			_, provisional := preparedResultParamPosition(expr.GetF().Args[0], "export_set")
+			require.False(t, provisional, expr.String())
+			require.False(t, PreparedPlanNeedsRuntimeSpecialization(queryPlan), queryPlan.String())
+			filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{ParamValue{
+				Value: "2.5", SourceType: types.T_float64.ToType(), HasSourceType: true,
+			}})
+			require.NoError(t, err)
+			filledExpr := findPlanFunctionExpr(filled, "export_set")
+			require.NotNil(t, filledExpr)
+			require.Equal(t, expr.GetF().Args[0].Typ.Id, filledExpr.GetF().Args[0].Typ.Id,
+				"an explicit cast must retain its prepared result domain")
+		})
+	}
 }
 
 func floatTypeExprForTest() *planpb.Expr {
