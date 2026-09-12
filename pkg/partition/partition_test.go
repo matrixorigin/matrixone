@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -169,6 +170,23 @@ func TestPartitionForOrderTreatsNaNPayloadsAsPeers(t *testing.T) {
 
 	orderDiffs := make([]bool, len(sels))
 	require.Equal(t, []int64{0, 2}, PartitionForOrder(sels, orderDiffs, nil, vec))
+}
+
+func TestPartitionForOrderJSONNumericPeers(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_json.ToType())
+	defer vec.Free(mp)
+	for _, text := range []string{"1", "1.0", "2"} {
+		value, err := bytejson.ParseFromString(text)
+		require.NoError(t, err)
+		encoded, err := value.Marshal()
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(vec, encoded, false, mp))
+	}
+
+	sels := []int64{0, 1, 2}
+	diffs := make([]bool, len(sels))
+	require.Equal(t, []int64{0, 2}, PartitionForOrder(sels, diffs, nil, vec))
 }
 
 // TestPartitionAccumulatesDiffs verifies that successive Partition calls on

@@ -649,7 +649,14 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		applySQLSelectLimit(stmt.Select, queryPlan)
 		return queryPlan, nil
 	case *tree.ExplainStmt:
-		return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
+		queryPlan, err := buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
+		if err != nil {
+			return nil, err
+		}
+		if err = ValidateUnresolvedIndexHints(ctx.GetContext(), queryPlan.GetQuery()); err != nil {
+			return nil, err
+		}
+		return queryPlan, nil
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
 	case *tree.ExplainPhyPlan:

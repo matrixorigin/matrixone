@@ -3587,7 +3587,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 		}
-		preparedNumericPeer = preparedNumericProvenance && name == "/"
+		preparedNumericPeer = preparedNumericProvenance && (name == "/" || name == "div")
 	}
 	if b.numericParamType != nil || preparedNumericPeer {
 		var err error
