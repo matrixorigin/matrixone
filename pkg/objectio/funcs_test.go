@@ -43,6 +43,24 @@ type releaseTrackingData struct {
 	bytes    []byte
 }
 
+func TestNewJsonVectorFromValuesUsesByteAdmission(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	values := []string{`{"a":1}`, `[1,2]`}
+	vec := NewVector(len(values), types.T_json.ToType(), mp, false, values)
+	require.NotNil(t, vec)
+	defer vec.Free(mp)
+
+	for i, value := range values {
+		parsed, err := types.ParseStringToByteJson(value)
+		require.NoError(t, err)
+		expected, err := parsed.Marshal()
+		require.NoError(t, err)
+		require.Equal(t, expected, vec.GetBytesAt(i))
+	}
+}
+
 func TestValidatedVectorCacheDataRehomePreservesValidation(t *testing.T) {
 	ctx := context.Background()
 	source := &validatedVectorCacheData{

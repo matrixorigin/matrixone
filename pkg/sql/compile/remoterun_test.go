@@ -1730,6 +1730,73 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 	})
 }
 
+func TestRemoteASCIIResultProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	ascii := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{
+				Obj:     int64(planfunction.ASCII) << 32,
+				ObjName: "ascii",
+			},
+			Args: []*planpb.Expr{{
+				Typ:  planpb.Type{Id: int32(types.T_varchar)},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+			}},
+		}},
+	}
+	scope := &Scope{
+		Magic:  Remote,
+		Proc:   proc,
+		RootOp: value_scan.NewArgument(),
+		Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+			Steps: []int32{0},
+			Nodes: []*planpb.Node{{NodeId: 0, ProjectList: []*planpb.Expr{ascii}}},
+		}}},
+	}
+
+	const expected = "signed INT ASCII results require MORPC protocol version 65"
+	features, featureErr := planpb.RequiredRemoteExpressionFeatures(&pipeline.Pipeline{
+		InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{ascii}}},
+	})
+	require.NoError(t, featureErr)
+	require.True(t, features.ASCIIInt32Result, ascii.String())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+	err := validateRemoteExpressionPipelineProtocol(proc, &pipeline.Pipeline{
+		InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{ascii}}},
+	})
+	require.ErrorContains(t, err, expected)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	_, _, _, _, err = prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, expected)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+	encoded, _, _, _, err := prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+	require.NoError(t, err)
+	decoded, err := decodeScope(encoded, proc, true, nil)
+	require.NoError(t, err)
+	decoded.release()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+	decoded, err = decodeScope(encoded, proc, true, nil)
+	require.ErrorContains(t, err, expected)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	require.Nil(t, decoded)
+}
+
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,
