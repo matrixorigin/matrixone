@@ -1,4 +1,5 @@
 name: MatrixOne ALL CI
+run-name: CI_REQUIRED/v2 pr=${{ github.event.pull_request.number }} base=${{ github.base_ref }} base_sha=${{ github.event.pull_request.base.sha }} workflow_sha=${{ github.workflow_sha }} head_sha=${{ github.event.pull_request.head.sha }}
 
 on:
   pull_request_target:
