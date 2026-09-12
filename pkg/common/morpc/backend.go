@@ -309,7 +309,10 @@ func NewRemoteBackend(
 	rb.conn = goetty.NewIOSession(rb.options.goettyOptions...)
 
 	if err := rb.resetConn(); err != nil {
-		rb.logger.Error("connect to remote failed", rb.logFields()...)
+		rb.logger.Error(
+			"connect to remote failed",
+			append(rb.logFields(), zap.Error(err))...,
+		)
 		return nil, err
 	}
 	rb.activeReadLoop(false)
