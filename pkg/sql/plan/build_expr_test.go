@@ -15,11 +15,13 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -28,9 +30,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -740,6 +744,188 @@ func TestEnumAndSetNumericContractsUseStoredValues(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.wantDisplay, containsEnumOrSetDisplayValue(pl.GetQuery().Nodes[1].ProjectList[0]))
 		})
+	}
+}
+
+func TestGroupedMySQLSpecialNumericContextsRecoverStoredValues(t *testing.T) {
+	tests := []struct {
+		name         string
+		sql          string
+		functionName string
+		definition   string
+	}{
+		{name: "grouped enum", sql: "select e + 0 from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "derived grouped enum", sql: "select d.e + 0 from (select e from enum_order_t group by e) d", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "cte grouped enum", sql: "with c as (select e from enum_order_t group by e) select e + 0 from c", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "having grouped enum", sql: "select e from enum_order_t group by e having e + 0 > 1", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "window over grouped enum", sql: "select e + 0, sum(e + 0) over () from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped set", sql: "select s + 0 from enum_order_t group by s", functionName: moSetCastValueToIndexFun, definition: "red,green,blue"},
+		{name: "grouped enum numeric IN", sql: "select e in (1, 2) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped enum numeric NOT IN", sql: "select e not in (1, 2) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped enum numeric IN subquery", sql: "select e in (select 1) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped enum numeric NOT IN subquery", sql: "select e not in (select 1) from enum_order_t group by e", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "numeric NOT IN grouped enum subquery", sql: "select 1 not in (select e from enum_order_t group by e)", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped enum numeric ANY subquery", sql: "select 1 = any (select e from enum_order_t group by e)", functionName: moEnumCastValueToIndexFun, definition: "low,mid,high"},
+		{name: "grouped set numeric IN", sql: "select s in (1, 3) from enum_order_t group by s", functionName: moSetCastValueToIndexFun, definition: "red,green,blue"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMySQLSpecialOrderMock()
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+
+			conversion := findPlanFunctionExpr(logicPlan, tc.functionName)
+			require.NotNil(t, conversion, "expected guarded conversion in bound plan")
+			require.Len(t, conversion.GetF().Args, 2)
+			require.Equal(t, tc.definition, conversion.GetF().Args[0].GetLit().GetSval())
+			_, overloadID := planfunction.DecodeOverloadID(conversion.GetF().Func.Obj)
+			require.Zero(t, overloadID, "grouped expressions must stay on the legacy worker overload")
+			if tc.functionName == moEnumCastValueToIndexFun {
+				require.Equal(t, int32(types.T_enum), conversion.Typ.Id)
+				safeDisplay := conversion.GetF().Args[1].GetF()
+				require.NotNil(t, safeDisplay)
+				require.Equal(t, "if", safeDisplay.Func.GetObjName())
+			} else {
+				require.Equal(t, int32(types.T_uint64), conversion.Typ.Id)
+				require.Empty(t, conversion.Typ.Enumvalues)
+			}
+		})
+	}
+
+	t.Run("tuple IN subquery recovers each side by position", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select (e, 1) in (select 1, e from enum_order_t group by e) from enum_order_t group by e")
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, countPlanFunctionCalls(logicPlan, moEnumCastValueToIndexFun), 2,
+			"position 0 must recover the grouped left ENUM and position 1 the grouped subquery ENUM")
+	})
+
+	t.Run("row-level conversion remains raw", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select e + 0 from enum_order_t")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("numeric group key remains numeric", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select e + 0 from enum_order_t group by e + 0")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("explicit lexical cast clears provenance", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select cast(e as char) + 0 from enum_order_t group by e")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("mixed IN list keeps display comparison", func(t *testing.T) {
+		logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
+			"select e in ('low', 1) from enum_order_t group by e")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("empty enum label does not enable lossy recovery", func(t *testing.T) {
+		mock := newMySQLSpecialOrderMock()
+		mock.ctxt.tables["enum_duplicate_t"].Cols[0].Typ = plan.Type{
+			Id: int32(types.T_enum), Enumvalues: ",a",
+		}
+		logicPlan, err := runOneStmt(mock, t,
+			"select e + 0 from enum_duplicate_t group by e")
+		require.NoError(t, err)
+		require.Nil(t, findPlanFunctionExpr(logicPlan, moEnumCastValueToIndexFun))
+	})
+
+	t.Run("ENUM conversion remains on the legacy overload", func(t *testing.T) {
+		legacy, err := BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+			makePlan2StringConstExprWithType("a,b"),
+			makePlan2StringConstExprWithType("a"),
+		})
+		require.NoError(t, err)
+		_, overloadID := planfunction.DecodeOverloadID(legacy.GetF().Func.Obj)
+		require.Zero(t, overloadID)
+
+		_, err = BindFuncExprImplByPlanExpr(context.Background(), moEnumCastValueToIndexFun, []*plan.Expr{
+			makePlan2StringConstExprWithType("a,b"),
+			makePlan2StringConstExprWithType(""),
+			makePlan2BoolConstExprWithType(true),
+		})
+		require.Error(t, err)
+	})
+}
+
+func TestGroupedEnumRecoveryExecutesAfterPlanRoundTrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	storageType := &plan.Type{
+		Id: int32(types.T_enum), Enumvalues: "2,red", NotNullable: false,
+	}
+	nullDisplay := makePlan2NullConstExprWithType()
+	nullDisplay.Typ.Id = int32(types.T_varchar)
+
+	tests := []struct {
+		name     string
+		display  *plan.Expr
+		want     types.Enum
+		wantNull bool
+	}{
+		{name: "ordinal zero", display: makePlan2StringConstExprWithType(""), want: 0},
+		{name: "numeric-looking label", display: makePlan2StringConstExprWithType("2"), want: 1},
+		{name: "ordinary label", display: makePlan2StringConstExprWithType("red"), want: 2},
+		{name: "null remains null", display: nullDisplay, wantNull: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := makeMySQLSpecialNumericValue(context.Background(), tc.display, storageType)
+			require.NoError(t, err)
+			// IF selects the common numeric representation for ENUM branches.
+			require.Equal(t, int32(types.T_uint16), expr.Typ.Id)
+			require.Equal(t, storageType.Enumvalues, expr.Typ.Enumvalues)
+			require.Equal(t, !tc.wantNull, expr.Typ.NotNullable)
+
+			payload, err := proto.Marshal(expr)
+			require.NoError(t, err)
+			var restored plan.Expr
+			require.NoError(t, proto.Unmarshal(payload, &restored))
+			require.True(t, proto.Equal(expr, &restored))
+			requireBaseSupportedEnumRecoveryFunctions(t, &restored)
+
+			executor, err := colexec.NewExpressionExecutor(proc, &restored)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, types.T_uint16, result.GetType().Oid)
+			if tc.wantNull {
+				require.True(t, result.GetNulls().Contains(0))
+				return
+			}
+			require.False(t, result.GetNulls().Contains(0))
+			require.Equal(t, uint16(tc.want), vector.MustFixedColWithTypeCheck[uint16](result)[0])
+		})
+	}
+}
+
+func requireBaseSupportedEnumRecoveryFunctions(t *testing.T, expr *plan.Expr) {
+	t.Helper()
+	if functionExpr := expr.GetF(); functionExpr != nil {
+		name := functionExpr.Func.GetObjName()
+		_, err := planfunction.GetFunctionById(context.Background(), functionExpr.Func.Obj)
+		require.NoError(t, err, "serialized function ID %d (%s) must exist in the base registry",
+			functionExpr.Func.Obj, name)
+
+		if name == moEnumCastValueToIndexFun {
+			_, overloadID := planfunction.DecodeOverloadID(functionExpr.Func.Obj)
+			require.Zero(t, overloadID, "recovery must use the legacy two-argument ENUM overload")
+			require.Len(t, functionExpr.Args, 2)
+		}
+		for _, arg := range functionExpr.Args {
+			requireBaseSupportedEnumRecoveryFunctions(t, arg)
+		}
 	}
 }
 

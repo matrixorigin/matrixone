@@ -2524,7 +2524,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				if err = rejectBoundIntervalFunctionArgs(b.GetContext(), "in", []*plan.Expr{leftArg}); err != nil {
 					return nil, err
 				}
-				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
 						return nil, moerr.NewNYIf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -2533,6 +2532,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					if subquery.RowSize > 1 {
 						return nil, moerr.NewInvalidInput(b.GetContext(), "subquery returns more than 1 column")
 					}
+				}
+				leftArg, err = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
+				if err != nil {
+					return nil, err
 				}
 
 				subquery.Typ = plan.SubqueryRef_IN
@@ -2574,7 +2577,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				if err = rejectBoundIntervalFunctionArgs(b.GetContext(), "not_in", []*plan.Expr{leftArg}); err != nil {
 					return nil, err
 				}
-				leftArg = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
 				if list := leftArg.GetList(); list != nil {
 					if len(list.List) != int(subquery.RowSize) {
 						return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -2583,6 +2585,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 					if subquery.RowSize > 1 {
 						return nil, moerr.NewInvalidInput(b.GetContext(), "subquery should return 1 column")
 					}
+				}
+				leftArg, err = b.useStoredMySQLSpecialTypesForNumericSubquery(leftArg, rightArg)
+				if err != nil {
+					return nil, err
 				}
 
 				subquery.Typ = plan.SubqueryRef_NOT_IN
@@ -2628,7 +2634,6 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			if err = rejectBoundIntervalFunctionArgs(b.GetContext(), op, []*plan.Expr{child}); err != nil {
 				return nil, err
 			}
-			child = b.useStoredMySQLSpecialTypesForNumericSubquery(child, expr)
 			if list := child.GetList(); list != nil {
 				if len(list.List) != int(subquery.RowSize) {
 					return nil, moerr.NewInvalidInputf(b.GetContext(), "subquery should return %d columns", len(list.List))
@@ -2637,6 +2642,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				if subquery.RowSize > 1 {
 					return nil, moerr.NewInvalidInput(b.GetContext(), "subquery should return 1 column")
 				}
+			}
+			child, err = b.useStoredMySQLSpecialTypesForNumericSubquery(child, expr)
+			if err != nil {
+				return nil, err
 			}
 
 			subquery.Op = op
@@ -3682,7 +3691,12 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			return nil, err
 		}
 	}
-	args = useStoredMySQLSpecialTypesForNumericContract(b.GetContext(), name, args)
+	rewrittenArgs, rewriteErr := b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(
+		b.GetContext(), name, args)
+	if rewriteErr != nil {
+		return nil, rewriteErr
+	}
+	args = rewrittenArgs
 	if b.builder != nil && b.builder.isPrepareStatement {
 		b.markPreparedStringDomainSubquerySources(name, args)
 	}
@@ -5089,6 +5103,13 @@ func bindFuncExprImplByPlanExpr(
 				return nil, moerr.NewInvalidArg(ctx, "function "+name, len(args))
 			}
 		default:
+			return nil, moerr.NewInvalidArg(ctx, "function "+name, len(args))
+		}
+	}
+	if name == moEnumCastValueToIndexFun && len(args) == 3 {
+		mode := args[2].GetLit()
+		if !allowInternalFunctionArgs || args[2].Typ.Id != int32(types.T_bool) ||
+			mode == nil || !mode.GetBval() {
 			return nil, moerr.NewInvalidArg(ctx, "function "+name, len(args))
 		}
 	}
@@ -8183,13 +8204,8 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 // therefore the operand contract: use the stored value only when every member
 // is numeric.  Mixed lists retain normal string semantics.
 func useStoredMySQLSpecialTypesForNumericInList(name string, args, rawArgs []*Expr) []*Expr {
-	if (name != "in" && name != "not_in" && name != "partition_in") || len(args) != 2 || args[1].GetList() == nil || len(args[1].GetList().List) == 0 {
+	if !mysqlSpecialNumericInList(name, args) {
 		return args
-	}
-	for _, member := range args[1].GetList().List {
-		if !makeTypeByPlan2Expr(member).IsNumeric() {
-			return args
-		}
 	}
 	result := append([]*Expr(nil), args...)
 	for i, arg := range args {
@@ -8200,72 +8216,186 @@ func useStoredMySQLSpecialTypesForNumericInList(name string, args, rawArgs []*Ex
 	return result
 }
 
-// useStoredMySQLSpecialTypesForNumericSubquery applies the numeric operand
-// contract in both directions.  Subquery references expose only one scalar
-// type for single-column results, so tuple comparisons must inspect the
-// subquery projection position-by-position rather than the tuple type itself.
-func (b *baseBinder) useStoredMySQLSpecialTypesForNumericSubquery(left, subqueryExpr *Expr) *Expr {
-	projectList := b.subqueryProjectList(subqueryExpr)
-	if len(projectList) == 0 {
-		return left
+func mysqlSpecialNumericInList(name string, args []*Expr) bool {
+	if (name != "in" && name != "not_in" && name != "partition_in") || len(args) != 2 {
+		return false
 	}
-
-	left = useStoredMySQLSpecialTypeForNumericProjection(left, projectList)
-	for i, project := range projectList {
-		if !numericSubqueryOperandAt(left, i) {
-			continue
-		}
-		if raw, ok := storedMySQLSpecialTypeExpr(project); ok {
-			projectList[i] = raw
+	list := args[1].GetList()
+	if list == nil || len(list.List) == 0 {
+		return false
+	}
+	for _, member := range list.List {
+		if !makeTypeByPlan2Expr(member).IsNumeric() {
+			return false
 		}
 	}
-	return left
+	return true
 }
 
-func (b *baseBinder) subqueryProjectList(expr *Expr) []*Expr {
-	if b.builder == nil || expr == nil || expr.GetSub() == nil {
-		return nil
+// useStoredMySQLSpecialTypesForNumericSubquery applies the numeric operand
+// contract in both directions. Subquery references expose one scalar type for
+// single-column results, so tuple comparisons inspect the original bound
+// operands position-by-position rather than the tuple type itself.
+func (b *baseBinder) useStoredMySQLSpecialTypesForNumericSubquery(
+	left, subqueryExpr *Expr,
+) (*Expr, error) {
+	if left == nil {
+		return nil, nil
+	}
+	node, subCtx := b.subqueryNodeAndContext(subqueryExpr)
+	if node == nil || subqueryExpr.GetSub() == nil {
+		return left, nil
+	}
+	rowSize := int(subqueryExpr.GetSub().RowSize)
+	if rowSize <= 0 || rowSize > len(node.ProjectList) {
+		return left, nil
+	}
+	projectList := node.ProjectList[:rowSize]
+
+	// Decide each side from the original bound pair. Do not let rewriting one
+	// side make the other side newly eligible for numeric recovery.
+	var rewrittenLeft *Expr
+	if list := left.GetList(); list != nil {
+		if len(list.List) != len(projectList) {
+			return left, nil
+		}
+		var rewrittenItems []*Expr
+		for i, item := range list.List {
+			if projectList[i] == nil || !makeTypeByPlan2Expr(projectList[i]).IsNumeric() {
+				continue
+			}
+			recovered, changed, err := storedMySQLSpecialNumericExpr(
+				b.GetContext(), b.ctx, item,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if changed {
+				if rewrittenItems == nil {
+					rewrittenItems = append([]*Expr(nil), list.List...)
+				}
+				rewrittenItems[i] = recovered
+			}
+		}
+		if rewrittenItems != nil {
+			rewrittenLeft = DeepCopyExpr(left)
+			rewrittenLeft.Expr = &plan.Expr_List{List: &plan.ExprList{List: rewrittenItems}}
+		}
+	} else if len(projectList) == 1 && projectList[0] != nil && makeTypeByPlan2Expr(projectList[0]).IsNumeric() {
+		recovered, changed, err := storedMySQLSpecialNumericExpr(
+			b.GetContext(), b.ctx, left,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if changed {
+			rewrittenLeft = recovered
+		}
+	}
+
+	var rewrittenProjects []*Expr
+	for i, project := range projectList {
+		if project == nil || !numericSubqueryOperandAt(left, i) {
+			continue
+		}
+		recovered, changed, err := storedMySQLSpecialNumericProject(
+			b.GetContext(), subCtx, project, int32(i),
+		)
+		if err != nil {
+			return nil, err
+		}
+		if changed {
+			if rewrittenProjects == nil {
+				rewrittenProjects = append([]*Expr(nil), node.ProjectList...)
+			}
+			rewrittenProjects[i] = recovered
+		}
+	}
+
+	// Build every potentially failing conversion before publishing either side.
+	// Flattening reads ctx.results as well as the root node's ProjectList, so
+	// keep those output slots in sync even when the slices do not alias.
+	if rewrittenProjects != nil {
+		node.ProjectList = rewrittenProjects
+		if subCtx != nil {
+			var rewrittenResults []*Expr
+			for i := range rewrittenProjects {
+				if i >= len(subCtx.results) || rewrittenProjects[i] == projectList[i] {
+					continue
+				}
+				if rewrittenResults == nil {
+					rewrittenResults = append([]*Expr(nil), subCtx.results...)
+				}
+				rewrittenResults[i] = rewrittenProjects[i]
+			}
+			if rewrittenResults != nil {
+				subCtx.results = rewrittenResults
+			}
+		}
+	}
+	if rewrittenLeft != nil {
+		return rewrittenLeft, nil
+	}
+	return left, nil
+}
+
+func (b *baseBinder) subqueryNodeAndContext(expr *Expr) (*plan.Node, *BindContext) {
+	if b == nil || b.builder == nil || b.builder.qry == nil || expr == nil || expr.GetSub() == nil {
+		return nil, nil
 	}
 	nodeID := expr.GetSub().NodeId
 	if nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
-		return nil
+		return nil, nil
 	}
-	return b.builder.qry.Nodes[nodeID].ProjectList
+	var bindCtx *BindContext
+	if int(nodeID) < len(b.builder.ctxByNode) {
+		bindCtx = b.builder.ctxByNode[nodeID]
+	}
+	node := b.builder.qry.Nodes[nodeID]
+	if node == nil {
+		return nil, bindCtx
+	}
+	return node, bindCtx
 }
 
-func useStoredMySQLSpecialTypeForNumericProjection(left *Expr, projects []*Expr) *Expr {
-	if left == nil || len(projects) == 0 {
-		return left
+func storedMySQLSpecialNumericExpr(
+	ctx context.Context, bindCtx *BindContext, expr *Expr,
+) (*Expr, bool, error) {
+	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok {
+		return raw, true, nil
 	}
-	if list := left.GetList(); list != nil {
-		if len(list.List) != len(projects) {
-			return left
-		}
-		var result []*Expr
-		for i, item := range list.List {
-			if !makeTypeByPlan2Expr(projects[i]).IsNumeric() {
-				continue
-			}
-			raw, ok := storedMySQLSpecialTypeExpr(item)
-			if !ok {
-				continue
-			}
-			if result == nil {
-				result = append([]*Expr(nil), list.List...)
-			}
-			result[i] = raw
-		}
-		if result == nil {
-			return left
-		}
-		return &Expr{Typ: left.Typ, Expr: &plan.Expr_List{List: &plan.ExprList{List: result}}}
+	if bindCtx == nil {
+		return expr, false, nil
 	}
-	if len(projects) == 1 && makeTypeByPlan2Expr(projects[0]).IsNumeric() {
-		if raw, ok := storedMySQLSpecialTypeExpr(left); ok {
-			return raw
-		}
+	storageType := bindCtx.mysqlSpecialOrderTypeForExpr(expr)
+	if storageType == nil || !mysqlSpecialNumericTypeReversible(storageType) {
+		return expr, false, nil
 	}
-	return left
+	recovered, err := makeMySQLSpecialNumericValue(ctx, expr, storageType)
+	if err != nil {
+		return nil, false, err
+	}
+	return recovered, true, nil
+}
+
+func storedMySQLSpecialNumericProject(
+	ctx context.Context, bindCtx *BindContext, expr *Expr, projectPos int32,
+) (*Expr, bool, error) {
+	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok {
+		return raw, true, nil
+	}
+	if bindCtx == nil {
+		return expr, false, nil
+	}
+	storageType := bindCtx.mysqlSpecialOrderTypeForProject(projectPos)
+	if storageType == nil || !mysqlSpecialNumericTypeReversible(storageType) {
+		return expr, false, nil
+	}
+	recovered, err := makeMySQLSpecialNumericValue(ctx, expr, storageType)
+	if err != nil {
+		return nil, false, err
+	}
+	return recovered, true, nil
 }
 
 func numericSubqueryOperandAt(left *Expr, index int) bool {
@@ -8273,7 +8403,7 @@ func numericSubqueryOperandAt(left *Expr, index int) bool {
 		return false
 	}
 	if list := left.GetList(); list != nil {
-		return index < len(list.List) && makeTypeByPlan2Expr(list.List[index]).IsNumeric()
+		return index < len(list.List) && list.List[index] != nil && makeTypeByPlan2Expr(list.List[index]).IsNumeric()
 	}
 	return index == 0 && makeTypeByPlan2Expr(left).IsNumeric()
 }
