@@ -880,6 +880,74 @@ func TestIntegerDivUnsignedDividendWithSignedDivisor(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestIntegerDivUnsignedDividendWithSignedDivisorControls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	tests := []struct {
+		name   string
+		inputs []FunctionTestInput
+		result FunctionTestResult
+	}{
+		{
+			name: "positive divisor",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{10}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+			},
+			result: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{3}, []bool{false}),
+		},
+		{
+			name: "zero divisor",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{10}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			},
+			result: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		},
+		{
+			name: "constant unsigned dividend",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{10}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+			},
+			result: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{3}, []bool{false}),
+		},
+		{
+			name: "constant signed divisor",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{3}, []bool{false}),
+			},
+			result: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{3}, []bool{false}),
+		},
+		{
+			name: "positive quotient overflow",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{^uint64(0)}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			},
+			result: NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil),
+		},
+		{
+			name: "null operands",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{10, 20}, []bool{true, false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3, 0}, []bool{false, true}),
+			},
+			result: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{true, true}),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, test.inputs, test.result, integerDivFn)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func TestIntegerDivUnsignedDividendWithDecimalDivisor(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -893,6 +961,72 @@ func TestIntegerDivUnsignedDividendWithDecimalDivisor(t *testing.T) {
 	}, NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), integerDivFn)
 	succeed, info := tc.Run()
 	require.True(t, succeed, info)
+}
+
+func TestIntegerDivUnsignedDividendWithDecimalDivisorControls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	typ := types.New(types.T_decimal256, 76, 2)
+	positive, err := types.ParseDecimal256("3.00", typ.Width, typ.Scale)
+	require.NoError(t, err)
+	zero, err := types.ParseDecimal256("0.00", typ.Width, typ.Scale)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name   string
+		inputs []FunctionTestInput
+		result FunctionTestResult
+	}{
+		{
+			name: "constant unsigned dividend",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{10}, []bool{false}),
+				NewFunctionTestInput(typ, []types.Decimal256{positive}, []bool{false}),
+			},
+			result: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{3}, []bool{false}),
+		},
+		{
+			name: "zero divisor",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{10}, []bool{false}),
+				NewFunctionTestConstInput(typ, []types.Decimal256{zero}, []bool{false}),
+			},
+			result: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		},
+		{
+			name: "null operands",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{10, 20}, []bool{true, false}),
+				NewFunctionTestInput(typ, []types.Decimal256{positive, positive}, []bool{false, true}),
+			},
+			result: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{true, true}),
+		},
+		{
+			name: "constant null unsigned dividend",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{0}, []bool{true}),
+				NewFunctionTestInput(typ, []types.Decimal256{positive}, []bool{false}),
+			},
+			result: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		},
+		{
+			name: "constant null decimal divisor",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{10}, []bool{false}),
+				NewFunctionTestConstInput(typ, []types.Decimal256{zero}, []bool{true}),
+			},
+			result: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, test.inputs, test.result, integerDivFn)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
+		})
+	}
 }
 
 // TestDecimal128NegativeDivision tests negative Decimal128 DIV operations
