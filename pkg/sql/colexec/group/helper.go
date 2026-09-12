@@ -845,6 +845,9 @@ func (ctr *container) writeSpillRecord(
 	clear(prepareParamKindSources)
 	hasPrepareParamKinds := false
 	for i, ag := range ctr.aggList {
+		// Generic spill is local state, so retain GROUP_CONCAT source rows even
+		// when this operator is currently connected to a legacy partial peer.
+		aggexec.SetGroupConcatSourceRowWire(ag, true)
 		if fullFlags != nil {
 			// The stable intermediate format predates the bounded spill codec and
 			// accepts one flag slice per aggregate chunk. Legacy callers do not
@@ -1658,11 +1661,12 @@ func (ctr *container) getNextFinalResult(
 					ctr.groupByBatches[j].Vecs, vecs[j])
 			}
 		}
-		// Publish diagnostics only after every final vector has materialized;
-		// a later vector/allocation error must not expose warnings for a failed
-		// statement.
+		// Collect diagnostics only after every final vector has materialized; a
+		// later vector/allocation error must not expose warnings for a failed
+		// statement. Publication is deferred until every resident/spilled bucket
+		// has completed so warning order and bounded retention are global.
 		for _, ag := range ctr.aggList {
-			aggexec.ReportGroupConcatWarnings(ag, proc.GetWarningSink())
+			ctr.groupConcatWarnings.Add(ag)
 		}
 
 		ctr.freeAggList()
@@ -1701,6 +1705,7 @@ func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer proc
 	if err := ctr.releaseFinalRecoveryCapacity(); err != nil {
 		return vm.CancelResult, err
 	}
+	ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	return res, nil
 }
 
@@ -1852,6 +1857,12 @@ func (ctr *container) makeAggListWithAllocation(
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
+		// mtyp is the logical Group mode and survives resident-spill resets.
+		// Preserve it in each rebuilt GROUP_CONCAT executor even when the
+		// current spill bucket contains only one group.
+		aggexec.SetGroupConcatMultiGroupContext(aggList[i], ctr.mtyp != H0)
+		aggexec.SetGroupConcatSourceRowsTrusted(
+			aggList[i], !ctr.groupConcatSourceRowsUntrusted)
 	}
 
 	if ctr.mtyp != H0 {
@@ -1896,7 +1907,7 @@ func useLegacyVarianceStateForRemote(proc *process.Process) bool {
 	return !ok || !valid || version < defines.MORPCVersion35
 }
 
-// Decimal SUM must use the pre-v66 state on every side of a distributed
+// Decimal SUM must use the pre-v67 state on every side of a distributed
 // aggregation while the cluster protocol is still mixed. Unlike the older
 // remote-only gates, this includes the coordinator's local MergeGroup: it may
 // consume a partial produced by an older CN.
@@ -1910,11 +1921,11 @@ func useLegacyDecimalSumState(proc *process.Process) bool {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion66
+	return !ok || !valid || version < defines.MORPCVersion67
 }
 
 // An old coordinator can send a final Group to an upgraded worker without
-// running the upgraded shuffle-plan gate. Below v66 that Group must preserve
+// running the upgraded shuffle-plan gate. Below v67 that Group must preserve
 // the old Decimal128 result contract. Partial Groups still use the legacy wire
 // state, while local final Groups and coordinator MergeGroups publish the
 // widened result selected by the upgraded plan.

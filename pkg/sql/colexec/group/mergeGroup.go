@@ -32,6 +32,8 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	if mergeGroup.ctr.mp != nil {
 		mergeGroup.ctr.free()
 	}
+	mergeGroup.ctr.groupConcatSourceRowsUntrusted = proc != nil &&
+		!proc.GroupConcatSourceRowProvenanceTrusted()
 	mergeGroup.ctr.prepareParamKind.Reset(mergeGroup.Aggs)
 	mergeGroup.ctr.aggExprs = mergeGroup.Aggs
 	mergeGroup.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
@@ -306,6 +308,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 				return false, err
 			}
 		}
+		mergeGroup.ctr.refreshGroupConcatSourceRowTrust()
 	} else {
 		rowCount := bat.RowCount()
 		hashKeyVecs := mergeGroup.ctr.hashKeyVectors(bat.Vecs)
@@ -379,6 +382,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 								return false, err
 							}
 						}
+						mergeGroup.ctr.refreshGroupConcatSourceRowTrust()
 						break
 					}
 				}

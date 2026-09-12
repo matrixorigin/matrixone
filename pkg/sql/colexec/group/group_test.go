@@ -3979,7 +3979,7 @@ func TestRemoteVarianceUsesLegacyStateBeforeProtocolV35(t *testing.T) {
 	require.False(t, useLegacyVarianceStateForRemote(proc))
 }
 
-func TestDecimalSumUsesLegacyStateBeforeProtocolV66(t *testing.T) {
+func TestDecimalSumUsesLegacyStateBeforeProtocolV67(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -3987,12 +3987,12 @@ func TestDecimalSumUsesLegacyStateBeforeProtocolV66(t *testing.T) {
 
 	// The coordinator-side MergeGroup is intentionally gated too; it can read
 	// a partial emitted by an older CN even though its process is not remote.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion66)
 	require.True(t, useLegacyDecimalSumState(proc))
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
 	require.True(t, useLegacyDecimalSumState(proc))
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion66)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion67)
 	require.False(t, useLegacyDecimalSumState(proc))
 }
 
@@ -4025,8 +4025,8 @@ func TestRemoteFinalDecimalSumPreservesOldCoordinatorResult(t *testing.T) {
 				version int64
 				want    types.T
 			}{
-				{name: "old coordinator v65", version: defines.MORPCVersion65, want: types.T_decimal128},
-				{name: "new coordinator v66", version: defines.MORPCVersion66, want: types.T_decimal256},
+				{name: "old coordinator v66", version: defines.MORPCVersion66, want: types.T_decimal128},
+				{name: "new coordinator v67", version: defines.MORPCVersion67, want: types.T_decimal256},
 			} {
 				t.Run(protocol.name, func(t *testing.T) {
 					proc := testutil.NewProcess(t)
@@ -4056,8 +4056,8 @@ func TestRemoteFinalDecimalSumPreservesOldCoordinatorResult(t *testing.T) {
 					})
 
 					require.NoError(t, group.Prepare(proc))
-					require.True(t, group.ctr.legacyDecimalSumState == (protocol.version < defines.MORPCVersion66))
-					require.True(t, group.ctr.legacyDecimalSumResult == (protocol.version < defines.MORPCVersion66))
+					require.True(t, group.ctr.legacyDecimalSumState == (protocol.version < defines.MORPCVersion67))
+					require.True(t, group.ctr.legacyDecimalSumResult == (protocol.version < defines.MORPCVersion67))
 					outputs := collectBatches(t, group, proc)
 					require.Len(t, outputs, 1)
 					require.Len(t, outputs[0].Vecs, 1)
@@ -4070,6 +4070,37 @@ func TestRemoteFinalDecimalSumPreservesOldCoordinatorResult(t *testing.T) {
 					}
 				})
 			}
+		})
+	}
+}
+
+func TestGroupConcatSourceRowProtocolGates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for _, test := range []struct {
+		name           string
+		version        int64
+		payloadEnabled bool
+		markerEnabled  bool
+	}{
+		{name: "legacy v64", version: defines.MORPCVersion64},
+		{name: "ascii v65", version: defines.MORPCVersion65},
+		{name: "group concat v66", version: defines.MORPCVersion66, payloadEnabled: true, markerEnabled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
+			proc.SetGroupConcatSourceRowProvenanceTrusted(true)
+			require.Equal(t, test.payloadEnabled, groupConcatSourceRowWireEnabled(proc))
+			require.Equal(t, test.markerEnabled, groupConcatSourceRowProvenanceWireEnabled(proc))
+
+			proc.SetGroupConcatSourceRowProvenanceTrusted(false)
+			require.False(t, groupConcatSourceRowWireEnabled(proc),
+				"independent producers must not send source ordinals")
+			require.Equal(t, test.markerEnabled, groupConcatSourceRowProvenanceWireEnabled(proc),
+				"remote producers still need the v66 trust marker")
 		})
 	}
 }
