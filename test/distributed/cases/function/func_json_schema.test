@@ -97,9 +97,26 @@ select json_schema_valid('{"exclusiveMinimum":5}', '5');
 select json_schema_valid('{"exclusiveMinimum":5}', '6');
 select json_schema_valid('{"$schema":"http://json-schema.org/draft-07/schema#","const":1}', '2');
 
+-- PR B internal local JSON Pointer references
+select json_schema_valid('{"properties":{"id":{"$ref":"#/definitions/id"}},"definitions":{"id":{"type":"integer"}}}', '{"id":3}');
+select json_schema_valid('{"properties":{"id":{"$ref":"#/definitions/id"}},"definitions":{"id":{"type":"integer"}}}', '{"id":"bad"}');
+select json_schema_valid('{"properties":{"id":{"$ref":"#/$defs/id"}},"$defs":{"id":{"type":"integer"}}}', '{"id":3}');
+select json_schema_validation_report('{"properties":{"id":{"$ref":"#/$defs/id"}},"$defs":{"id":{"type":"integer"}}}', '{"id":"bad"}');
+select json_schema_valid('{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"x-annotation":{"id":"#/definitions/safe","type":"string"}}', '1');
+select json_schema_valid('{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"x-annotation":[{"nested":[{"$id":"#/definitions/safe","type":"string"}]}]}', '"wrong-target"');
+select json_schema_validation_report('{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"x-annotation":{"$id":"#/definitions/safe","type":"string"}}', '1');
+select json_schema_validation_report('{"$ref":"#/definitions/safe","definitions":{"safe":{"type":"integer"}},"x-annotation":[{"nested":[{"id":"#/definitions/safe","type":"string"}]}]}', '"wrong-target"');
+select json_schema_valid('{"$ref":"#/$defs/safe","$defs":{"id":"#/$defs/safe","safe":{"type":"integer"},"type":"string"}}', '1');
+select json_schema_valid('{"$ref":"#/$defs/safe","$defs":{"$id":"#/$defs/safe","safe":{"type":"integer"},"type":"string"}}', '1');
+select json_schema_validation_report('{"$ref":"#/$defs/safe","$defs":{"id":"#/$defs/safe","safe":{"type":"integer"},"type":"string"}}', '"wrong-target"');
+select json_schema_validation_report('{"$ref":"#/$defs/safe","$defs":{"$id":"#/$defs/safe","safe":{"type":"integer"},"type":"string"}}', '"wrong-target"');
+select json_schema_valid('{"$ref":"https://example.invalid/schema"}', '1');
+select json_schema_valid('{"$ref":"#/definitions/node","definitions":{"node":{"$ref":"#/definitions/node"}}}', '1');
+
 -- MySQL checks recognized combinator references before validating the container shape
 select json_schema_valid('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
 select json_schema_validation_report('{"allOf":{"$ref":"https://example.invalid/schema"}}', '1');
+select json_schema_valid('{"properties":{"$ref":"https://example.invalid/schema"}}', '1');
 
 -- MySQL discovers string $ref values throughout the complete JSON tree
 select json_schema_valid('{"if":{"$ref":"https://example.invalid/schema"}}', '1');
@@ -135,3 +152,11 @@ create table json_schema_draft4_rows (id int primary key, s varchar(1024), d jso
 insert into json_schema_draft4_rows values (1, '{"format":"email"}', '"not-an-email"'), (2, '{"type":"integer","minimum":5}', '2');
 select id, json_schema_valid(s, d), json_schema_validation_report(s, d) from json_schema_draft4_rows order by id;
 drop table json_schema_draft4_rows;
+
+-- Non-string references must not suppress local references or target constraints.
+select json_schema_valid('{"$ref":1,"properties":{"value":{"$ref":"#/$defs/value"}},"$defs":{"value":{"$ref":null,"type":"integer"}}}', '{"value":1}') as valid_local;
+select json_schema_valid('{"$ref":1,"properties":{"value":{"$ref":"#/$defs/value"}},"$defs":{"value":{"$ref":null,"type":"integer"}}}', '{"value":"bad"}') as invalid_local;
+select json_schema_validation_report('{"$ref":"#/$defs/value","$defs":{"value":{"$ref":false,"type":"integer"}}}', '1') as report_local;
+
+-- Reachable reference expansion counts evaluation edges, not definition storage edges.
+select json_schema_valid('{"$ref":"#/definitions/d14","definitions":{"d0":{"type":"integer"},"d1":{"allOf":[{"$ref":"#/definitions/d0"},{"$ref":"#/definitions/d0"}]},"d2":{"allOf":[{"$ref":"#/definitions/d1"},{"$ref":"#/definitions/d1"}]},"d3":{"allOf":[{"$ref":"#/definitions/d2"},{"$ref":"#/definitions/d2"}]},"d4":{"allOf":[{"$ref":"#/definitions/d3"},{"$ref":"#/definitions/d3"}]},"d5":{"allOf":[{"$ref":"#/definitions/d4"},{"$ref":"#/definitions/d4"}]},"d6":{"allOf":[{"$ref":"#/definitions/d5"},{"$ref":"#/definitions/d5"}]},"d7":{"allOf":[{"$ref":"#/definitions/d6"},{"$ref":"#/definitions/d6"}]},"d8":{"allOf":[{"$ref":"#/definitions/d7"},{"$ref":"#/definitions/d7"}]},"d9":{"allOf":[{"$ref":"#/definitions/d8"},{"$ref":"#/definitions/d8"}]},"d10":{"allOf":[{"$ref":"#/definitions/d9"},{"$ref":"#/definitions/d9"}]},"d11":{"allOf":[{"$ref":"#/definitions/d10"},{"$ref":"#/definitions/d10"}]},"d12":{"allOf":[{"$ref":"#/definitions/d11"},{"$ref":"#/definitions/d11"}]},"d13":{"allOf":[{"$ref":"#/definitions/d12"},{"$ref":"#/definitions/d12"}]},"d14":{"allOf":[{"$ref":"#/definitions/d13"},{"$ref":"#/definitions/d13"}]}}}', '1') as reachable_budget;

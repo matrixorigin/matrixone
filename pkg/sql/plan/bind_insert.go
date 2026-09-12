@@ -120,17 +120,17 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false)
+	lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false)
 	if err != nil {
 		return 0, err
 	}
 
 	// The irregular-index maintenance source is set up inside
 	// appendDedupAndMultiUpdateNodesForBindInsert, where the resolved conflict
-	// action (plain insert vs ON DUPLICATE KEY UPDATE) is known: plain insert
-	// feeds the pre-dedup new-row image; ODKU feeds the post-merge final image
-	// plus an old-row image for dropping stale entries.
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, stmt.OnDuplicateUpdate, irregularIndexes)
+	// action is known: plain INSERT shares its new-row image; INSERT IGNORE
+	// shares accepted rows after arbitration; ODKU shares the post-merge final
+	// image plus an old-row image for dropping stale entries.
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, stmt.OnDuplicateUpdate, irregularIndexes, autoIncrementGeneratedColumn)
 }
 
 func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
@@ -423,19 +423,6 @@ func splitIrregularIndexesByUpdatedColumns(
 	return affected, insertOnly, nil
 }
 
-// appendIrregularMaintSource materializes the modern new-row image (the projList2
-// PROJECT produced by appendNodesForInsertStmt: tableDef.Cols order minus Row_ID,
-// with auto-increment / composite-pk already assigned by PreInsert) into a SINK
-// step. The image must be shared rather than re-derived, because re-running the
-// source would assign different auto-increment values, so both the modern main
-// plan (base table + regular indexes) and the irregular-index (IVF/fulltext)
-// maintenance sub-plans consume sink-scans of the same step.
-//
-// It records the maintenance context on the builder and returns the node the
-// dedup path must consume in place of newRowImageID: a passthrough PROJECT over
-// a sink-scan (a PROJECT so the dedup can safely extend its projection list with
-// composite unique-index lock keys without mutating the SINK_SCAN). When the
-// table has no irregular indexes it is a no-op and returns newRowImageID.
 // modernInsertFkCheckEnabled reports whether the modern plain-INSERT path should
 // run the row-scoped child→parent foreign-key check: FK checks are enabled and the
 // table has at least one non-self-referencing foreign key. Self-referencing FKs are
@@ -553,9 +540,20 @@ func (builder *QueryBuilder) appendODKUActionNotNullAssertions(
 	}, bindCtx), nil
 }
 
+// appendIrregularMaintSource shares one row image between the base/regular-index
+// write and synchronous irregular-index maintenance. rowImage describes the
+// output columns of the stream rooted at newRowImageID: table columns minus
+// Row_ID, followed by any computed lock keys. For IGNORE, the stream must already
+// have rejected conflicts and finalized generated PKs. Re-evaluating the source
+// for each consumer could otherwise assign different IDs.
+//
+// The returned PROJECT over a SINK_SCAN lets the main write extend its projection
+// without changing the shared schema. With neither irregular indexes nor
+// RETURNING it is a no-op.
 func (builder *QueryBuilder) appendIrregularMaintSource(
 	bindCtx *BindContext,
 	newRowImageID int32,
+	rowImage *plan.Node,
 	irregularIndexes []*plan.IndexDef,
 	tableDef *plan.TableDef,
 	objRef *plan.ObjectRef,
@@ -568,6 +566,19 @@ func (builder *QueryBuilder) appendIrregularMaintSource(
 		return newRowImageID
 	}
 
+	// The stream root can be a DEDUP join whose first child is the existing
+	// table, not the incoming row. Expose that row explicitly when the root
+	// does not itself project it. SINK pruning relies on its child's output
+	// schema; changing only SINK.ProjectList would lose the payload columns.
+	if newRowImageID != rowImage.NodeId {
+		projectTag := builder.genNewBindTag()
+		newRowImageID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_PROJECT,
+			Children:    []int32{newRowImageID},
+			ProjectList: getProjectionByLastNodeWithTag(builder, rowImage.NodeId, projectTag),
+			BindingTags: []int32{projectTag},
+		}, bindCtx)
+	}
 	sinkTag := builder.genNewBindTag()
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, newRowImageID, sinkTag)
 	if forceMaterialize {
@@ -627,6 +638,12 @@ func (builder *QueryBuilder) appendImageSinkScanNode(
 			continue
 		}
 		cols = append(cols, &ColDef{Name: col.Name, Hidden: col.Hidden, Typ: col.Typ})
+	}
+	// IGNORE arbitration can retain computed unique-lock keys after the table
+	// columns. They remain inputs to the main write even though maintenance
+	// reads only the table prefix. Keep their physical schema in lockstep.
+	for i := len(cols); i < len(projList); i++ {
+		cols = append(cols, &ColDef{Name: fmt.Sprintf("__mo_insert_aux_%d", i), Hidden: true, Typ: projList[i].Typ})
 	}
 
 	scanNode := &plan.Node{
@@ -2059,6 +2076,133 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 	return lastNodeID, newTag, nil
 }
 
+// insertIgnoreAutoIncrementReorderable is deliberately narrow.  The ordered
+// candidate policy is only needed when a real single-column AUTO_INCREMENT
+// primary key is combined with another unique constraint.  Composite/fake
+// keys, generated hidden keys, and tables whose unique checks are bypassed do
+// not have enough provenance here to justify changing their established path.
+func (builder *QueryBuilder) insertIgnoreAutoIncrementReorderable(
+	tableDef *plan.TableDef,
+	skipUniqueIdx []bool,
+	compPkeyExpr, clusterByExpr *plan.Expr,
+) (int32, bool) {
+	if !builder.isInsertIgnore || tableDef == nil || tableDef.Pkey == nil ||
+		compPkeyExpr != nil || clusterByExpr != nil ||
+		tableDef.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+		return 0, false
+	}
+	// The arbiter assigns the final generated primary-key value after the
+	// ordinary row filters have run. Do not enable it while a later value change
+	// could invalidate a dependent CHECK/FK or generated-column expression.
+	// Unrelated constraints do not disable the optimized path.
+	if len(tableDef.Pkey.Names) != 1 {
+		return 0, false
+	}
+	pkPos, ok := tableColumnPosition(tableDef, tableDef.Pkey.PkeyColName)
+	if !ok || pkPos < 0 || int(pkPos) >= len(tableDef.Cols) ||
+		tableDef.Cols[pkPos] == nil || !tableDef.Cols[pkPos].Typ.AutoIncr {
+		return 0, false
+	}
+	if hasAutoIncrementDependentConstraint(tableDef, pkPos) {
+		return 0, false
+	}
+	autoCount := 0
+	for _, col := range tableDef.Cols {
+		if col != nil && col.Typ.AutoIncr {
+			autoCount++
+		}
+	}
+	if autoCount != 1 {
+		return 0, false
+	}
+	hasOtherUnique := false
+	for i, idxDef := range tableDef.Indexes {
+		if idxDef.Unique && !skipUniqueIdx[i] {
+			hasOtherUnique = true
+			break
+		}
+	}
+	if !hasOtherUnique || builder.canSkipDedup(tableDef) {
+		return 0, false
+	}
+	visibleWidth := 0
+	for _, col := range tableDef.Cols {
+		if col != nil && (!col.Hidden || col.Name == catalog.FakePrimaryKeyColName) {
+			visibleWidth++
+		}
+	}
+	return int32(visibleWidth), true
+}
+
+func hasAutoIncrementDependentConstraint(tableDef *plan.TableDef, autoColPos int32) bool {
+	if tableDef == nil || autoColPos < 0 || int(autoColPos) >= len(tableDef.Cols) {
+		return true
+	}
+	dependent := make([]bool, len(tableDef.Cols))
+	dependent[autoColPos] = true
+	for {
+		changed := false
+		for colPos, col := range tableDef.Cols {
+			if col == nil || col.GeneratedCol == nil || dependent[colPos] {
+				continue
+			}
+			for _, refPos := range collectRefColPos(col.GeneratedCol.Expr) {
+				if refPos < 0 || int(refPos) >= len(tableDef.Cols) {
+					return true
+				}
+				if dependent[refPos] {
+					dependent[colPos] = true
+					changed = true
+					break
+				}
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+
+	// Secondary unique keys are materialized from the pre-arbitration row. If
+	// one of their parts depends on the generated primary key, changing that
+	// key after this join would leave the uniqueness decision and the emitted
+	// index key out of sync. Unknown index metadata is also unsafe to optimize.
+	for _, idx := range tableDef.Indexes {
+		if idx == nil || !idx.Unique {
+			continue
+		}
+		for _, part := range idx.Parts {
+			partPos, ok := tableColumnPosition(tableDef, catalog.ResolveAlias(part))
+			if !ok || dependent[partPos] {
+				return true
+			}
+		}
+	}
+
+	for _, check := range tableDef.Checks {
+		if check == nil || check.Check == nil {
+			return true
+		}
+		for _, refPos := range collectRefColPos(check.Check) {
+			if refPos < 0 || int(refPos) >= len(tableDef.Cols) || dependent[refPos] {
+				return true
+			}
+		}
+	}
+	for _, fk := range tableDef.Fkeys {
+		if fk == nil {
+			return true
+		}
+		for _, childColID := range fk.Cols {
+			for colPos, col := range tableDef.Cols {
+				if col != nil && col.ColId == childColID && dependent[colPos] {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
 func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	bindCtx *BindContext,
 	tableDef *plan.TableDef,
@@ -2067,14 +2211,52 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	selectTag int32,
 	selectNode *plan.Node,
 	colName2Idx map[string]int32,
+	autoIncrementGeneratedColumn int32,
 	skipUniqueIdx []bool,
 	appendedUniqueProjs map[string]*plan.Expr,
 	idxObjRefs []*plan.ObjectRef,
 	idxTableDefs []*plan.TableDef,
 ) (int32, int32, *plan.Node, error) {
 	baseWidth := len(selectNode.ProjectList)
+	markerSelectPos := autoIncrementGeneratedColumn
+	autoIncrementReorder := markerSelectPos >= 0
+	if autoIncrementReorder {
+		if markerSelectPos >= int32(baseWidth) ||
+			selectNode.ProjectList[markerSelectPos].Typ.Id != int32(types.T_bool) {
+			return 0, 0, nil, moerr.NewInternalError(builder.GetContext(),
+				"invalid INSERT IGNORE auto-increment provenance projection")
+		}
+	}
+	outputWidth := baseWidth
+	if autoIncrementReorder {
+		outputWidth--
+	}
 	keyExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
 	conflictExprs := make([]*plan.Expr, 0, len(tableDef.Indexes)+1)
+	keyNames := make([]string, 0, len(tableDef.Indexes)+1)
+	keyTypes := make([]*plan.Type, 0, len(tableDef.Indexes)+1)
+	keyTypeCounts := make([]int32, 0, len(tableDef.Indexes)+1)
+	appendKeyMetadata := func(parts []string) error {
+		if len(parts) == 0 {
+			return moerr.NewInternalError(builder.GetContext(),
+				"INSERT IGNORE unique-key metadata has no columns")
+		}
+		resolvedParts := make([]string, len(parts))
+		for i, part := range parts {
+			resolved := catalog.ResolveAlias(part)
+			pos, ok := tableDef.Name2ColIndex[resolved]
+			if !ok || pos < 0 || int(pos) >= len(tableDef.Cols) {
+				return moerr.NewInternalErrorf(builder.GetContext(),
+					"cannot resolve INSERT IGNORE unique-key column %q", part)
+			}
+			resolvedParts[i] = resolved
+			typ := tableDef.Cols[pos].Typ
+			keyTypes = append(keyTypes, &typ)
+		}
+		keyNames = append(keyNames, formatDedupColumnName(resolvedParts))
+		keyTypeCounts = append(keyTypeCounts, int32(len(parts)))
+		return nil
+	}
 
 	if tableDef.Pkey.PkeyColName != catalog.FakePrimaryKeyColName {
 		scanTag := builder.genNewBindTag()
@@ -2106,6 +2288,13 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			return 0, 0, nil, err
 		}
 		keyExprs = append(keyExprs, DeepCopyExpr(inputPK))
+		pkParts := tableDef.Pkey.Names
+		if len(pkParts) == 0 {
+			pkParts = []string{pkName}
+		}
+		if err := appendKeyMetadata(pkParts); err != nil {
+			return 0, 0, nil, err
+		}
 		joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{inputPK, existingPK})
 		if err != nil {
 			return 0, 0, nil, err
@@ -2149,6 +2338,9 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		idxKeyName := idxDef.IndexTableName + "." + catalog.IndexTableIndexColName
 		inputKey := DeepCopyExpr(appendedUniqueProjs[idxKeyName])
 		keyExprs = append(keyExprs, DeepCopyExpr(inputKey))
+		if err := appendKeyMetadata(idxDef.Parts); err != nil {
+			return 0, 0, nil, err
+		}
 		joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{inputKey, existingKey})
 		if err != nil {
 			return 0, 0, nil, err
@@ -2167,10 +2359,30 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	}
 	projectTag := builder.genNewBindTag()
 	projectList := make([]*plan.Expr, 0, baseWidth+2*len(keyExprs))
+	// Lock-key materialization can append columns after provenance. Build the
+	// arbiter's output prefix explicitly, retaining every non-marker column in
+	// order; move only provenance behind it. Reuse this PROJECT so there is no
+	// additional execution stage or row copy.
+	var outputRemapping map[[2]int32][2]int32
+	if autoIncrementReorder {
+		outputRemapping = make(map[[2]int32][2]int32, outputWidth)
+	}
 	for i, expr := range selectNode.ProjectList {
+		if autoIncrementReorder && int32(i) == markerSelectPos {
+			continue
+		}
+		if autoIncrementReorder {
+			outputRemapping[[2]int32{selectTag, int32(i)}] = [2]int32{selectTag, int32(len(projectList))}
+		}
 		projectList = append(projectList, &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: selectTag, ColPos: int32(i),
 		}}})
+	}
+	if autoIncrementReorder {
+		projectList = append(projectList, &plan.Expr{
+			Typ:  selectNode.ProjectList[markerSelectPos].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: markerSelectPos}},
+		})
 	}
 	keyColumns := make([]int32, len(keyExprs))
 	conflictColumns := make([]int32, len(conflictExprs))
@@ -2188,8 +2400,9 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	}, bindCtx)
 
 	outputTag := builder.genNewBindTag()
-	outputProject := make([]*plan.Expr, baseWidth)
-	for i, expr := range selectNode.ProjectList {
+	outputProject := make([]*plan.Expr, outputWidth)
+	for i := 0; i < outputWidth; i++ {
+		expr := projectList[i]
 		outputProject[i] = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 			RelPos: projectTag, ColPos: int32(i),
 		}}}
@@ -2203,11 +2416,50 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			InsertIgnoreMultiDedup: true,
 			KeyColumns:             keyColumns,
 			ConflictColumns:        conflictColumns,
-			OutputColumns:          int32(baseWidth),
+			OutputColumns:          int32(outputWidth),
+			KeyNames:               keyNames,
+			KeyTypes:               keyTypes,
+			KeyTypeCounts:          keyTypeCounts,
 		},
+	}
+	if autoIncrementReorder {
+		// These expressions are consumed after arbitration. Their binding tag is
+		// updated by the caller; their positions must follow the same permutation
+		// as the retained row, including computed index-lock columns.
+		for name, pos := range colName2Idx {
+			mapped, ok := outputRemapping[[2]int32{selectTag, pos}]
+			if !ok {
+				return 0, 0, nil, moerr.NewInternalError(builder.GetContext(),
+					"missing INSERT IGNORE retained output column")
+			}
+			colName2Idx[name] = mapped[1]
+		}
+		for _, expr := range appendedUniqueProjs {
+			if err := builder.remapColRefForExpr(expr, outputRemapping, &RemapInfo{tip: "INSERT IGNORE output"}); err != nil {
+				return 0, 0, nil, err
+			}
+		}
+		pkName := catalog.ResolveAlias(tableDef.Pkey.PkeyColName)
+		autoColumn, ok := colName2Idx[tableDef.Name+"."+pkName]
+		if !ok {
+			return 0, 0, nil, moerr.NewInternalError(builder.GetContext(),
+				"missing INSERT IGNORE auto-increment primary-key projection")
+		}
+		arbiterNode.PreInsertUkCtx.AutoIncrementReorder = true
+		arbiterNode.PreInsertUkCtx.AutoIncrementColumn = autoColumn
+		arbiterNode.PreInsertUkCtx.AutoIncrementGeneratedColumn = int32(outputWidth)
+		arbiterNode.PreInsertUkCtx.AutoIncrementKeyIndex = 0
+		arbiterNode.PreInsertUkCtx.AutoIncrementOutputColumn = autoColumn
 	}
 	lastNodeID = builder.appendNode(arbiterNode, bindCtx)
 	return lastNodeID, outputTag, arbiterNode, nil
+}
+
+func formatDedupColumnName(parts []string) string {
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return "(" + strings.Join(parts, ",") + ")"
 }
 
 // collectGeneratedColumnDependents returns the set of columns that may change
@@ -2339,6 +2591,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	skipUniqueIdx []bool,
 	astUpdateExprs tree.UpdateExprs,
 	irregularIndexes []*plan.IndexDef,
+	autoIncrementGeneratedColumn int32,
 ) (int32, error) {
 	tableDef := dmlCtx.tableDefs[0]
 	pkName := tableDef.Pkey.PkeyColName
@@ -2449,6 +2702,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				if err != nil {
 					return 0, err
 				}
+				// A DEFAULT expression in the UPDATE arm is evaluated against the
+				// conflicting row. getDefaultExpr deliberately returns local column
+				// references, so bind them to the old-row scan before the expression
+				// reaches the dedup join. Leaving RelPos=0 here makes the optimizer
+				// treat a valid dependency (for example b DEFAULT (a + 1)) as a
+				// missing input column.
+				replaceColRefTag(updateExpr, 0, scanTag)
 			} else {
 				updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
 				if err != nil {
@@ -2617,8 +2877,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	}
-	if onDupAction != plan.Node_UPDATE && (len(irregularIndexes) > 0 || builder.returningRequested) {
-		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, irregularIndexes, tableDef, dmlCtx.objRefs[0], builder.returningRequested)
+	if onDupAction == plan.Node_FAIL && (len(irregularIndexes) > 0 || builder.returningRequested) {
+		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, selectNode, irregularIndexes, tableDef, dmlCtx.objRefs[0], builder.returningRequested)
 		selectNode = builder.qry.Nodes[lastNodeID]
 		selectTag = selectNode.BindingTags[0]
 	}
@@ -3009,6 +3269,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		oldSelectTag := selectTag
 		lastNodeID, selectTag, selectNode, err = builder.appendInsertIgnoreMultiDedup(
 			bindCtx, tableDef, objRef, lastNodeID, selectTag, selectNode, colName2Idx,
+			autoIncrementGeneratedColumn,
 			skipUniqueIdx, appendedUniqueProjs, idxObjRefs, idxTableDefs)
 		if err != nil {
 			return 0, err
@@ -3482,6 +3743,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				DedupColTypes:     dedupColTypes,
 			}, bindCtx)
 
+		}
+	}
+
+	if onDupAction == plan.Node_IGNORE && len(irregularIndexes) > 0 {
+		// All synchronous indexes must consume accepted rows with final PKs.
+		// Sharing the pre-dedup image indexes rejected rows and, when IGNORE
+		// reuses an allocator candidate, points postings at the wrong base row.
+		oldSelectTag := selectTag
+		lastNodeID = builder.appendIrregularMaintSource(
+			bindCtx, lastNodeID, selectNode, irregularIndexes, tableDef, objRef, false)
+		selectNode = builder.qry.Nodes[lastNodeID]
+		selectTag = selectNode.BindingTags[0]
+		for _, expr := range appendedUniqueProjs {
+			replaceColRefTag(expr, oldSelectTag, selectTag)
 		}
 	}
 
@@ -4252,7 +4527,7 @@ func (builder *QueryBuilder) stripGeneratedDefaultCols(astCols tree.IdentifierLi
 	return newCols, nil
 }
 
-func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool, colRefAsDefault bool) (int32, map[string]int32, []bool, error) {
+func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows *tree.Select, astCols tree.IdentifierList, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool, colRefAsDefault bool) (int32, map[string]int32, []bool, int32, error) {
 	var (
 		lastNodeID int32
 		err        error
@@ -4268,13 +4543,13 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	if astCols != nil {
 		cleanedCols, err = builder.stripGeneratedDefaultCols(astCols, astRows, tableDef)
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, nil, -1, err
 		}
 	}
 
 	//var ifInsertFromUniqueColMap map[string]bool
 	if insertColumns, err = builder.getInsertColsFromStmt(cleanedCols, tableDef); err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, -1, err
 	}
 
 	var astSelect *tree.Select
@@ -4288,14 +4563,14 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		if isAllDefault {
 			for j, row := range selectImpl.Rows {
 				if row != nil {
-					return 0, nil, nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
+					return 0, nil, nil, -1, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}
 		} else {
 			colCount := len(insertColumns)
 			for j, row := range selectImpl.Rows {
 				if len(row) != colCount {
-					return 0, nil, nil, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
+					return 0, nil, nil, -1, moerr.NewWrongValueCountOnRow(builder.GetContext(), j+1)
 				}
 			}
 		}
@@ -4304,12 +4579,14 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		// but it does not work at the case:
 		// insert into a(a) values (); insert into a values (0),();
 		if isAllDefault && astCols != nil {
-			return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+			return 0, nil, nil, -1, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
-		lastNodeID, err = builder.buildValueScan(isAllDefault, colRefAsDefault, bindCtx, tableDef, selectImpl, insertColumns)
+		var valueScanColumns []string
+		lastNodeID, valueScanColumns, err = builder.buildValueScan(isAllDefault, colRefAsDefault, isReplace, bindCtx, tableDef, selectImpl, insertColumns)
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, nil, -1, err
 		}
+		insertColumns = valueScanColumns
 
 	case *tree.SelectClause, *tree.UnionClause:
 		astSelect = astRows
@@ -4318,7 +4595,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, nil, -1, err
 		}
 		if !isReplace && builder.localProtocolEnablesRightDedupInputKeysUnique() {
 			builder.insertInputKeysUnique = builder.proveInsertInputKeysUnique(lastNodeID, insertColumns, tableDef)
@@ -4332,7 +4609,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		subCtx.numericProjectionTypes = insertProjectionTypes(insertColumns, tableDef)
 		lastNodeID, err = builder.bindSelect(astSelect, subCtx, false)
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, nil, -1, err
 		}
 		if !isReplace && builder.localProtocolEnablesRightDedupInputKeysUnique() {
 			builder.insertInputKeysUnique = builder.proveInsertInputKeysUnique(lastNodeID, insertColumns, tableDef)
@@ -4340,11 +4617,11 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		// ifInsertFromUniqueColMap = make(map[string]bool)
 
 	default:
-		return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
+		return 0, nil, nil, -1, moerr.NewInvalidInput(builder.GetContext(), "insert has unknown select statement")
 	}
 
 	if err = builder.addBinding(lastNodeID, tree.AliasClause{Alias: derivedTableName}, bindCtx); err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, -1, err
 	}
 
 	return builder.appendInsertReplaceSourceCasts(bindCtx, lastNodeID, insertColumns, objRef, tableDef, isReplace)
@@ -4374,11 +4651,11 @@ func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.E
 // pre-insert nodes (defaults, auto-increment, composite keys, ...) plus the
 // per-table dedup/write nodes. It is shared by single-table INSERT/REPLACE and
 // by every target of a multi-table INSERT.
-func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext, lastNodeID int32, insertColumns []string, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool) (int32, map[string]int32, []bool, error) {
+func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext, lastNodeID int32, insertColumns []string, objRef *plan.ObjectRef, tableDef *plan.TableDef, isReplace bool) (int32, map[string]int32, []bool, int32, error) {
 	var err error
 	lastNode := builder.qry.Nodes[lastNodeID]
 	if len(insertColumns) != len(lastNode.ProjectList) {
-		return 0, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
+		return 0, nil, nil, -1, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 	}
 
 	selectTag := lastNode.BindingTags[0]
@@ -4397,13 +4674,14 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 		}
 		projExpr, err = builder.castInsertSourceColumn(projExpr, lastNode.ProjectList[i], tableDef.Cols[colIdx])
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, nil, -1, err
 		}
 		insertColToExpr[column] = projExpr
 	}
 
 	if isReplace {
-		return builder.appendNodesForReplaceStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
+		lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForReplaceStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
+		return lastNodeID, colName2Idx, skipUniqueIdx, -1, err
 	} else {
 		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
 	}
@@ -4642,7 +4920,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	tableDef *TableDef,
 	objRef *ObjectRef,
 	insertColToExpr map[string]*Expr,
-) (int32, map[string]int32, []bool, error) {
+) (int32, map[string]int32, []bool, int32, error) {
 	colName2Idx := make(map[string]int32)
 	hasAutoCol := false
 	for _, col := range tableDef.Cols {
@@ -4668,6 +4946,9 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	genColIdxToProj1Pos := make(map[int]int)
 	genColIdxToProj2Pos := make(map[int]int)
 	generatedColIdxs := make([]int, 0)
+	columnExprs := make(map[int32]*plan.Expr)
+	materializeCols := make(map[int32]bool)
+	materializeOrder := make([]int32, 0)
 
 	for i, col := range tableDef.Cols {
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
@@ -4682,6 +4963,11 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				},
 			})
 			projList1 = append(projList1, oldExpr)
+			columnExprs[int32(i)] = oldExpr
+			if exprHasLocalColumnRef(oldExpr) {
+				materializeCols[int32(i)] = true
+				materializeOrder = append(materializeOrder, int32(i))
+			}
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else if col.Name == catalog.Row_ID {
 			continue
@@ -4736,7 +5022,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
-				return 0, nil, nil, err
+				return 0, nil, nil, -1, err
 			}
 
 			if !col.Typ.AutoIncr {
@@ -4758,6 +5044,11 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 				},
 			})
 			projList1 = append(projList1, defExpr)
+			columnExprs[int32(i)] = defExpr
+			if exprHasLocalColumnRef(defExpr) {
+				materializeCols[int32(i)] = true
+				materializeOrder = append(materializeOrder, int32(i))
+			}
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		}
 	}
@@ -4768,20 +5059,68 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			DeepCopyExpr(col.GeneratedCol.Expr),
 			builder.isInsertIgnore,
 		)
-		inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
 		proj1Pos := genColIdxToProj1Pos[i]
-		projList1[proj1Pos] = genExpr
-		pos := int32(proj1Pos)
-		colIdxToProjPos[int32(i)] = pos
+		columnExprs[int32(i)] = genExpr
+		colIdxToProjPos[int32(i)] = int32(proj1Pos)
 		projList2[genColIdxToProj2Pos[i]] = &plan.Expr{
 			Typ: genExpr.Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
 					RelPos: projTag1,
-					ColPos: pos,
+					ColPos: int32(proj1Pos),
 				},
 			},
 		}
+	}
+
+	for _, i := range generatedColIdxs {
+		genExpr := columnExprs[int32(i)]
+		proj1Pos := genColIdxToProj1Pos[i]
+		needsStage := false
+		for _, refIdx := range collectRefColPos(genExpr) {
+			if materializeCols[refIdx] ||
+				(refIdx >= 0 && int(refIdx) < len(tableDef.Cols) && tableDef.Cols[refIdx].GeneratedCol != nil) {
+				needsStage = true
+				break
+			}
+		}
+		if !needsStage && exprHasLocalColumnRef(genExpr) {
+			volatileDependency, err := hasVolatileLocalDependency(
+				builder.GetContext(), int32(i), columnExprs, materializeCols,
+			)
+			if err != nil {
+				return 0, nil, nil, -1, err
+			}
+			needsStage = volatileDependency
+		}
+		if needsStage {
+			materializeCols[int32(i)] = true
+			materializeOrder = append(materializeOrder, int32(i))
+		} else {
+			// Generated expressions over stable input/default values retain the
+			// established inline path. Generated-to-generated and generated-to-
+			// materialized/volatile-default edges use the staged path above.
+			inlineGeneratedColExpr(genExpr, colIdxToProjPos, projList1)
+			projList1[proj1Pos] = genExpr
+		}
+	}
+
+	tmpCtx := NewBindContext(builder, bindCtx)
+	lastNodeID, materializedTag, err := builder.appendMaterializedExprProjections(
+		tmpCtx,
+		lastNodeID,
+		projTag1,
+		projList1,
+		colIdxToProjPos,
+		columnExprs,
+		materializeCols,
+		materializeOrder,
+	)
+	if err != nil {
+		return 0, nil, nil, -1, err
+	}
+	for _, expr := range projList2 {
+		replaceColRefTag(expr, projTag1, materializedTag)
 	}
 
 	// Skip irregular (vector / fulltext) indexes here; they are maintained
@@ -4805,25 +5144,30 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			}
 		}
 	}
-
-	tmpCtx := NewBindContext(builder, bindCtx)
-	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType:    plan.Node_PROJECT,
-		ProjectList: projList1,
-		Children:    []int32{lastNodeID},
-		BindingTags: []int32{projTag1},
-	}, tmpCtx)
+	markerPhysicalPos, trackAutoIncrementGenerated := builder.insertIgnoreAutoIncrementReorderable(
+		tableDef, skipUniqueIdx, compPkeyExpr, clusterByExpr)
+	if trackAutoIncrementGenerated {
+		projList2 = append(projList2, &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_bool)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: preInsertTag,
+				ColPos: markerPhysicalPos,
+			}},
+		})
+	}
 
 	if hasAutoCol || compPkeyExpr != nil || clusterByExpr != nil {
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PRE_INSERT,
 			Children: []int32{lastNodeID},
 			PreInsertCtx: &plan.PreInsertCtx{
-				Ref:           objRef,
-				TableDef:      tableDef,
-				HasAutoCol:    hasAutoCol,
-				CompPkeyExpr:  compPkeyExpr,
-				ClusterByExpr: clusterByExpr,
+				Ref:                          objRef,
+				TableDef:                     tableDef,
+				HasAutoCol:                   hasAutoCol,
+				CompPkeyExpr:                 compPkeyExpr,
+				ClusterByExpr:                clusterByExpr,
+				TrackAutoIncrementGenerated:  trackAutoIncrementGenerated,
+				AutoIncrementGeneratedColumn: markerPhysicalPos,
 			},
 			BindingTags: []int32{preInsertTag},
 		}, tmpCtx)
@@ -4836,7 +5180,10 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		BindingTags: []int32{builder.genNewBindTag()},
 	}, tmpCtx)
 
-	return lastNodeID, colName2Idx, skipUniqueIdx, nil
+	if !trackAutoIncrementGenerated {
+		markerPhysicalPos = -1
+	}
+	return lastNodeID, colName2Idx, skipUniqueIdx, markerPhysicalPos, nil
 }
 
 // valuesExprIsFuncCall reports whether a VALUES item is, or transparently wraps
@@ -4864,15 +5211,71 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 	}
 }
 
+// A row containing a scalar subquery becomes an independently scheduled
+// relational branch. Keep that fan-out finite before binding creates any
+// subquery plan nodes; the branches feed a blocking ordinal sort and do not
+// inherit the normal operator DOP bound. Thirty-two permits moderate batches
+// without letting one statement create hundreds of source scopes.
+const maxReplaceValuesSubqueryBranches = 32
+
+func replaceValueExprContainsSubquery(expr tree.Expr) bool {
+	// Keep ordinary literal/default/parameter VALUES rows on an allocation-free
+	// classification path. The reflective walker is only needed for expression
+	// trees that can contain nested subqueries.
+	switch typedExpr := expr.(type) {
+	case nil, *tree.NumVal, *tree.StrVal, *tree.UnresolvedName, *tree.ParamExpr, *tree.UpdateVal, *tree.MaxValue:
+		return false
+	case *tree.DefaultVal:
+		return replaceValueExprContainsSubquery(typedExpr.Expr)
+	}
+
+	found := false
+	walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+		if _, ok := candidate.(*tree.Subquery); ok {
+			found = true
+			return false
+		}
+		return !found
+	})
+	return found
+}
+
+func validateReplaceValuesSubqueryBranchLimit(ctx context.Context, rows []tree.Exprs) error {
+	subqueryRows := 0
+	for _, row := range rows {
+		for _, expr := range row {
+			if !replaceValueExprContainsSubquery(expr) {
+				continue
+			}
+			subqueryRows++
+			if subqueryRows > maxReplaceValuesSubqueryBranches {
+				return moerr.NewInvalidInputf(ctx,
+					"REPLACE VALUES supports at most %d rows containing subqueries",
+					maxReplaceValuesSubqueryBranches)
+			}
+			break
+		}
+	}
+	return nil
+}
+
 func (builder *QueryBuilder) buildValueScan(
 	isAllDefault bool,
 	colRefAsDefault bool,
+	allowSubquery bool,
 	bindCtx *BindContext,
 	tableDef *TableDef,
 	stmt *tree.ValuesClause,
 	colNames []string,
-) (int32, error) {
+) (int32, []string, error) {
 	var err error
+	effectiveColNames := append([]string(nil), colNames...)
+
+	if allowSubquery {
+		if err = validateReplaceValuesSubqueryBranchLimit(builder.GetContext(), stmt.Rows); err != nil {
+			return 0, nil, err
+		}
+	}
 
 	proc := builder.compCtx.GetProcess()
 	lastTag := builder.genNewBindTag()
@@ -4880,6 +5283,7 @@ func (builder *QueryBuilder) buildValueScan(
 	rowsetData := &plan.RowsetData{
 		Cols: make([]*plan.ColData, colCount),
 	}
+	hasLocalDefaultRefs := false
 	for i := 0; i < colCount; i++ {
 		rowsetData.Cols[i] = new(plan.ColData)
 	}
@@ -4889,6 +5293,14 @@ func (builder *QueryBuilder) buildValueScan(
 		Cols:  make([]*plan.ColDef, colCount),
 	}
 	projectList := make([]*plan.Expr, colCount)
+	var valueBindCtx *BindContext
+	if allowSubquery {
+		valueBindCtx = NewBindContext(builder, bindCtx)
+	}
+	appendValueExpr := func(colIdx int, expr *plan.Expr) {
+		hasLocalDefaultRefs = hasLocalDefaultRefs || exprHasLocalColumnRef(expr)
+		rowsetData.Cols[colIdx].Data = append(rowsetData.Cols[colIdx].Data, &plan.RowsetExpr{Expr: expr})
+	}
 
 	for i, colName := range colNames {
 		col := tableDef.Cols[tableDef.Name2ColIndex[colName]]
@@ -4903,31 +5315,28 @@ func (builder *QueryBuilder) buildValueScan(
 		if isAllDefault {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
-				return 0, err
+				return 0, nil, err
 			}
 			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 			if err != nil {
-				return 0, err
+				return 0, nil, err
 			}
-			rowsetData.Cols[i].Data = make([]*plan.RowsetExpr, len(stmt.Rows))
-			for j := range stmt.Rows {
-				rowsetData.Cols[i].Data[j] = &plan.RowsetExpr{
-					Expr: defExpr,
-				}
+			for range stmt.Rows {
+				appendValueExpr(i, defExpr)
 			}
 		} else {
 			var binder, funcBinder Binder
 			if colRefAsDefault {
 				// REPLACE ... SET col = expr: an RHS reference to a target-table
 				// column is evaluated as DEFAULT(col), including inside functions.
-				replaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, nil, col.Typ, tableDef)
+				replaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, valueBindCtx, col.Typ, tableDef)
 				binder = replaceBinder
 
-				funcReplaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, nil, plan.Type{}, tableDef)
+				funcReplaceBinder := NewReplaceValueBinder(builder.GetContext(), builder, valueBindCtx, plan.Type{}, tableDef)
 				funcBinder = funcReplaceBinder
 			} else {
-				defaultBinder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
-				defaultBinder.builder = builder
+				defaultBinder := NewDefaultBinder(builder.GetContext(), builder, valueBindCtx, col.Typ, nil)
+				defaultBinder.allowSubquery = allowSubquery
 				binder = defaultBinder
 
 				// Non-numeric destinations need a target-free function binder. The
@@ -4935,30 +5344,28 @@ func (builder *QueryBuilder) buildValueScan(
 				// arguments and break overload resolution. Numeric destinations use
 				// the target-aware binder below, which resolves each function argument
 				// from overload metadata before the final assignment cast.
-				defaultFuncBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
-				defaultFuncBinder.builder = builder
+				defaultFuncBinder := NewDefaultBinder(builder.GetContext(), builder, valueBindCtx, plan.Type{}, nil)
+				defaultFuncBinder.allowSubquery = allowSubquery
 				funcBinder = defaultFuncBinder
 			}
 			for _, r := range stmt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {
-						return 0, err
+						return 0, nil, err
 					}
 					if handled {
-						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{Expr: expr})
+						appendValueExpr(i, expr)
 						continue
 					}
 				}
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
-						return 0, err
+						return 0, nil, err
 					}
 					if expr != nil {
-						rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-							Expr: expr,
-						})
+						appendValueExpr(i, expr)
 						continue
 					}
 				}
@@ -4966,7 +5373,7 @@ func (builder *QueryBuilder) buildValueScan(
 				if _, ok := r[i].(*tree.DefaultVal); ok {
 					defExpr, err = getDefaultExpr(builder.GetContext(), col)
 					if err != nil {
-						return 0, err
+						return 0, nil, err
 					}
 				} else {
 					valueBinder := binder
@@ -4984,7 +5391,7 @@ func (builder *QueryBuilder) buildValueScan(
 								scan, err = numericBinder.numericAstTypesInternal(r[i], 0, numericBinder.numericAstColumnResolver())
 							}
 							if err != nil {
-								return 0, err
+								return 0, nil, err
 							}
 							if scan.hasParam {
 								switch numericBinder := funcBinder.(type) {
@@ -4994,7 +5401,7 @@ func (builder *QueryBuilder) buildValueScan(
 									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
 								}
 								if err != nil {
-									return 0, err
+									return 0, nil, err
 								}
 								boundWithNumericContext = defExpr != nil
 							}
@@ -5012,33 +5419,31 @@ func (builder *QueryBuilder) buildValueScan(
 					if !boundWithNumericContext {
 						defExpr, err = valueBinder.BindExpr(r[i], 0, true)
 						if err != nil {
-							return 0, err
+							return 0, nil, err
 						}
 					}
 					if isEnumPlanType(&col.Typ) {
 						defExpr, err = funcCastForEnumType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
-							return 0, err
+							return 0, nil, err
 						}
 					} else if isSetPlanType(&col.Typ) {
 						defExpr, err = funcCastForSetType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
-							return 0, err
+							return 0, nil, err
 						}
 					} else if isGeometryPlanType(&col.Typ) {
 						defExpr, err = funcCastForGeometryType(builder.GetContext(), defExpr, col.Typ)
 						if err != nil {
-							return 0, err
+							return 0, nil, err
 						}
 					}
 				}
 				defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
 				if err != nil {
-					return 0, err
+					return 0, nil, err
 				}
-				rowsetData.Cols[i].Data = append(rowsetData.Cols[i].Data, &plan.RowsetExpr{
-					Expr: defExpr,
-				})
+				appendValueExpr(i, defExpr)
 			}
 		}
 		colName := fmt.Sprintf("column_%d", i) // like MySQL
@@ -5059,7 +5464,93 @@ func (builder *QueryBuilder) buildValueScan(
 		projectList[i] = expr
 	}
 
+	if allowSubquery {
+		hasAnySubquery := false
+		for _, col := range rowsetData.Cols {
+			for _, row := range col.Data {
+				hasAnySubquery = hasAnySubquery || hasSubquery(row.Expr)
+			}
+		}
+		if hasAnySubquery {
+			if hasLocalDefaultRefs {
+				return 0, nil, moerr.NewNotSupported(builder.GetContext(),
+					"REPLACE VALUES cannot combine subqueries with row-local default dependencies")
+			}
+			// Build the column-major view only for the relational lowering. The
+			// ordinary RowsetData path keeps a single set of expression slices.
+			valueExprs := make([][]*plan.Expr, len(rowsetData.Cols))
+			for colIdx, col := range rowsetData.Cols {
+				valueExprs[colIdx] = make([]*plan.Expr, len(col.Data))
+				for rowIdx, row := range col.Data {
+					valueExprs[colIdx][rowIdx] = row.Expr
+				}
+			}
+			nodeID, err := builder.buildValueScanWithSubqueries(bindCtx, colNames, valueExprs)
+			return nodeID, effectiveColNames, err
+		}
+	}
+
 	rowsetData.RowCount = int32(len(stmt.Rows))
+	if hasLocalDefaultRefs {
+		var err error
+		effectiveColNames, err = valueScanColumnsWithDefaultDependencies(
+			builder.GetContext(), tableDef, effectiveColNames, rowsetData,
+		)
+		if err != nil {
+			return 0, nil, err
+		}
+		for i := colCount; i < len(effectiveColNames); i++ {
+			colName := effectiveColNames[i]
+			colIdx, ok := tableDef.Name2ColIndex[colName]
+			if !ok {
+				for j, candidate := range tableDef.Cols {
+					if candidate != nil && strings.EqualFold(candidate.Name, colName) {
+						colIdx = int32(j)
+						ok = true
+						break
+					}
+				}
+			}
+			if !ok || colIdx < 0 || int(colIdx) >= len(tableDef.Cols) || tableDef.Cols[colIdx] == nil {
+				return 0, nil, moerr.NewInvalidInputf(builder.GetContext(),
+					"insert column '%s' does not exist", colName)
+			}
+			col := tableDef.Cols[colIdx]
+			colTyp := makeTypeByPlan2Type(col.Typ)
+			targetTyp := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			if err != nil {
+				return 0, nil, err
+			}
+			defExpr, err = builder.forceCastExpr2(defExpr, colTyp, targetTyp, builder.isInsertIgnore)
+			if err != nil {
+				return 0, nil, err
+			}
+			data := make([]*plan.RowsetExpr, len(stmt.Rows))
+			for row := range data {
+				data[row] = &plan.RowsetExpr{Expr: defExpr}
+			}
+			rowsetData.Cols = append(rowsetData.Cols, &plan.ColData{Data: data})
+			valueScanTableDef.Cols = append(valueScanTableDef.Cols, &plan.ColDef{
+				ColId: 0,
+				Name:  fmt.Sprintf("column_%d", len(valueScanTableDef.Cols)),
+				Typ:   col.Typ,
+			})
+			projectList = append(projectList, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: lastTag,
+					ColPos: int32(len(projectList)),
+				}},
+			})
+		}
+		if err := expandDefaultExprsInValueScan(
+			builder.GetContext(), tableDef, effectiveColNames, rowsetData,
+		); err != nil {
+			return 0, nil, err
+		}
+	}
+
 	nodeId, _ := uuid.NewV7()
 	scanNode := &plan.Node{
 		NodeType:    plan.Node_VALUE_SCAN,
@@ -5070,7 +5561,7 @@ func (builder *QueryBuilder) buildValueScan(
 	}
 	nodeID := builder.appendNode(scanNode, bindCtx)
 	if err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, bindCtx); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
 	lastTag = builder.genNewBindTag()
@@ -5081,5 +5572,232 @@ func (builder *QueryBuilder) buildValueScan(
 		BindingTags: []int32{lastTag},
 	}, bindCtx)
 
-	return nodeID, nil
+	return nodeID, effectiveColNames, nil
+}
+
+// buildValueScanWithSubqueries lowers value rows that contain subqueries into
+// ordinary relational expressions. RowsetData is evaluated without an input
+// relation, so it cannot host the joins produced by scalar-subquery
+// flattening. Each subquery row therefore gets a one-row input and projection;
+// literal rows share one compact RowsetData branch. The resulting rows are
+// combined before the normal INSERT/REPLACE source-cast path consumes them.
+func (builder *QueryBuilder) buildValueScanWithSubqueries(
+	bindCtx *BindContext,
+	colNames []string,
+	valueExprs [][]*plan.Expr,
+) (int32, error) {
+	if len(valueExprs) == 0 || len(valueExprs[0]) == 0 {
+		return 0, moerr.NewInternalError(builder.GetContext(), "value expressions are empty")
+	}
+
+	rowCount := len(valueExprs[0])
+	carryOrdinal := rowCount > 1
+	ordinalPos := len(colNames)
+	projectWidth := ordinalPos
+	if carryOrdinal {
+		projectWidth++
+	}
+	branches := make([]int32, 0, rowCount)
+	literalRows := make([]int, 0, rowCount)
+
+	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
+		rowHasSubquery := false
+		for colIdx := range colNames {
+			if rowIdx >= len(valueExprs[colIdx]) {
+				return 0, moerr.NewInternalError(builder.GetContext(), "value expression rows are inconsistent")
+			}
+			rowHasSubquery = rowHasSubquery || hasSubquery(valueExprs[colIdx][rowIdx])
+		}
+		if !rowHasSubquery {
+			literalRows = append(literalRows, rowIdx)
+			continue
+		}
+
+		rowCtx := NewBindContext(builder, bindCtx)
+		rowCtx.hasSingleRow = true
+		projectTag := builder.genNewBindTag()
+		rowCtx.projectTag = projectTag
+
+		// A VALUE_SCAN without RowsetData is the planner's single-row DUAL
+		// relation. It supplies cardinality without introducing a dummy column
+		// that projection pruning could reduce to an invalid empty rowset.
+		dummyID := builder.appendNode(&plan.Node{NodeType: plan.Node_VALUE_SCAN}, rowCtx)
+		projectList := make([]*plan.Expr, projectWidth)
+		for colIdx := range colNames {
+			var err error
+			dummyID, projectList[colIdx], err = builder.flattenSubqueries(dummyID, valueExprs[colIdx][rowIdx], rowCtx)
+			if err != nil {
+				return 0, err
+			}
+		}
+		if carryOrdinal {
+			projectList[ordinalPos] = MakePlan2Int64ConstExprWithType(int64(rowIdx))
+		}
+		rowCtx.headings = make([]string, projectWidth)
+		rowCtx.projects = projectList
+		rowCtx.results = projectList
+		for colIdx := range colNames {
+			rowCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
+		}
+		if carryOrdinal {
+			rowCtx.headings[ordinalPos] = "_values_ordinal"
+		}
+		branches = append(branches, builder.appendNode(&plan.Node{
+			NodeType:     plan.Node_PROJECT,
+			ProjectList:  projectList,
+			Children:     []int32{dummyID},
+			BindingTags:  []int32{projectTag},
+			NotCacheable: true,
+		}, rowCtx))
+	}
+
+	// Literal-only rows share one RowsetData branch. This keeps a single scalar
+	// subquery from turning every other VALUES row into an independent scheduled
+	// branch while the ordinal still restores the original SQL order.
+	if len(literalRows) > 0 {
+		rowCtx := NewBindContext(builder, bindCtx)
+		lastTag := builder.genNewBindTag()
+		rowsetData := &plan.RowsetData{Cols: make([]*plan.ColData, projectWidth), RowCount: int32(len(literalRows))}
+		valueScanTableDef := &plan.TableDef{TblId: 0, Name: "", Cols: make([]*plan.ColDef, projectWidth)}
+		for colIdx := range colNames {
+			rowsetData.Cols[colIdx] = &plan.ColData{}
+			for _, rowIdx := range literalRows {
+				rowsetData.Cols[colIdx].Data = append(rowsetData.Cols[colIdx].Data, &plan.RowsetExpr{Expr: valueExprs[colIdx][rowIdx]})
+			}
+			valueScanTableDef.Cols[colIdx] = &plan.ColDef{
+				ColId: 0,
+				Name:  fmt.Sprintf("column_%d", colIdx),
+				Typ:   valueExprs[colIdx][literalRows[0]].Typ,
+			}
+		}
+		if carryOrdinal {
+			rowsetData.Cols[ordinalPos] = &plan.ColData{}
+			for _, rowIdx := range literalRows {
+				rowsetData.Cols[ordinalPos].Data = append(rowsetData.Cols[ordinalPos].Data, &plan.RowsetExpr{
+					Expr: MakePlan2Int64ConstExprWithType(int64(rowIdx)),
+				})
+			}
+			valueScanTableDef.Cols[ordinalPos] = &plan.ColDef{
+				ColId: 0,
+				Name:  "_values_ordinal",
+				Typ:   MakePlan2Int64ConstExprWithType(0).Typ,
+			}
+		}
+		nodeID, _ := uuid.NewV7()
+		scanID := builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_VALUE_SCAN,
+			RowsetData:  rowsetData,
+			TableDef:    valueScanTableDef,
+			BindingTags: []int32{lastTag},
+			Uuid:        nodeID[:],
+		}, rowCtx)
+		projectTag := builder.genNewBindTag()
+		projectList := make([]*plan.Expr, projectWidth)
+		for colIdx := range projectList {
+			projectList[colIdx] = &plan.Expr{
+				Typ:  valueScanTableDef.Cols[colIdx].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(colIdx)}},
+			}
+		}
+		rowCtx.projectTag = projectTag
+		rowCtx.headings = make([]string, projectWidth)
+		rowCtx.projects = projectList
+		rowCtx.results = projectList
+		for colIdx := range colNames {
+			rowCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
+		}
+		if carryOrdinal {
+			rowCtx.headings[ordinalPos] = "_values_ordinal"
+		}
+		branches = append(branches, builder.appendNode(&plan.Node{
+			NodeType:     plan.Node_PROJECT,
+			ProjectList:  projectList,
+			Children:     []int32{scanID},
+			BindingTags:  []int32{projectTag},
+			NotCacheable: true,
+		}, rowCtx))
+	}
+
+	if len(branches) == 1 {
+		return branches[0], nil
+	}
+
+	unionCtx := NewBindContext(builder, bindCtx)
+	lastNodeID := branches[0]
+	lastTag := builder.qry.Nodes[lastNodeID].BindingTags[0]
+	for _, rightID := range branches[1:] {
+		rightNode := builder.qry.Nodes[rightID]
+		projectList := make([]*plan.Expr, projectWidth)
+		unionTag := builder.genNewBindTag()
+		for colIdx := range projectList {
+			projectList[colIdx] = &plan.Expr{
+				Typ: setOperationOutputType(plan.Node_UNION_ALL,
+					builder.qry.Nodes[lastNodeID].ProjectList[colIdx].Typ,
+					rightNode.ProjectList[colIdx].Typ),
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(colIdx)}},
+			}
+		}
+		lastNodeID = builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_UNION_ALL,
+			Children:    []int32{lastNodeID, rightID},
+			BindingTags: []int32{unionTag},
+			ProjectList: projectList,
+		}, unionCtx)
+		lastTag = unionTag
+	}
+
+	unionCtx.projectTag = lastTag
+	unionCtx.headings = make([]string, projectWidth)
+	unionCtx.projects = make([]*plan.Expr, projectWidth)
+	unionCtx.results = unionCtx.projects
+	for colIdx := range unionCtx.projects {
+		if colIdx < len(colNames) {
+			unionCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
+		} else {
+			unionCtx.headings[colIdx] = "_values_ordinal"
+		}
+		unionCtx.projects[colIdx] = &plan.Expr{
+			Typ:  builder.qry.Nodes[lastNodeID].ProjectList[colIdx].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(colIdx)}},
+		}
+	}
+
+	// UNION ALL may execute branches concurrently. Sort by the carried ordinal
+	// before REPLACE conflict arbitration so the syntactically last VALUES row
+	// remains the winner for duplicate keys.
+	orderedID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{lastNodeID},
+		OrderBy: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{
+				Typ:  builder.qry.Nodes[lastNodeID].ProjectList[ordinalPos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(ordinalPos)}},
+			},
+			Flag: plan.OrderBySpec_ASC | plan.OrderBySpec_INTERNAL,
+		}},
+		SpillMem: builder.sortSpillMem,
+	}, unionCtx)
+
+	outputTag := builder.genNewBindTag()
+	outputList := make([]*plan.Expr, len(colNames))
+	for colIdx := range outputList {
+		outputList[colIdx] = &plan.Expr{
+			Typ:  builder.qry.Nodes[lastNodeID].ProjectList[colIdx].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: lastTag, ColPos: int32(colIdx)}},
+		}
+	}
+	outputCtx := NewBindContext(builder, bindCtx)
+	outputCtx.projectTag = outputTag
+	outputCtx.headings = make([]string, len(colNames))
+	outputCtx.projects = outputList
+	outputCtx.results = outputList
+	for colIdx := range outputList {
+		outputCtx.headings[colIdx] = fmt.Sprintf("column_%d", colIdx)
+	}
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: outputList,
+		Children:    []int32{orderedID},
+		BindingTags: []int32{outputTag},
+	}, outputCtx), nil
 }

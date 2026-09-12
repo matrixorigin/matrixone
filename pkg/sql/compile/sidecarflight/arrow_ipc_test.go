@@ -116,7 +116,7 @@ func TestArrowIPCRejectsMalformedAndMismatchedData(t *testing.T) {
 		require.Error(t, err)
 	}
 	_, err = schema.decodeRecordBatch(mustHex(t, fixtureHeaderHex), body, 1, mp)
-	require.ErrorContains(t, err, "decoded-memory budget")
+	require.ErrorContains(t, err, "decoded record body exceeds limit")
 
 	required := *schema
 	required.fields = append([]arrowField(nil), schema.fields...)
@@ -125,8 +125,195 @@ func TestArrowIPCRejectsMalformedAndMismatchedData(t *testing.T) {
 	require.ErrorContains(t, err, "required field contains nulls")
 
 	_, err = schema.decodeRecordBatch(mustHex(t, fixtureHeaderHex), body[:len(body)-1], 1<<20, mp)
-	require.ErrorContains(t, err, "body length mismatch")
+	require.ErrorContains(t, err, "exceeds limit")
 	require.Equal(t, int64(0), mp.CurrNB())
+}
+
+func TestArrowIPCRejectsDateOutsideMatrixOneRange(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	header := mustHex(t, fixtureHeaderHex)
+	body := mustHex(t, fixtureBodyHex)
+	expected, headings := fixtureOutputShape()
+	schema, err := ParseSchema(schemaWire, expected, headings)
+	require.NoError(t, err)
+
+	metadata, err := ipcMetadata(header)
+	require.NoError(t, err)
+	message, err := rootTable(metadata)
+	require.NoError(t, err)
+	record, ok, err := message.tableField(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	bufferBytes, bufferCount, err := record.structVector(2, 16)
+	require.NoError(t, err)
+	dateBuffer := 0
+	for _, field := range schema.fields[:10] {
+		dateBuffer += field.bufferCount
+	}
+	dateBuffer++ // skip the date validity bitmap
+	require.Less(t, dateBuffer, bufferCount)
+	bodyOffset := binary.LittleEndian.Uint64(bufferBytes[dateBuffer*16:])
+	bodyLength := binary.LittleEndian.Uint64(bufferBytes[dateBuffer*16+8:])
+	require.GreaterOrEqual(t, bodyLength, uint64(4))
+	require.Less(t, bodyOffset+bodyLength, uint64(len(body)+1))
+	binary.LittleEndian.PutUint32(body[bodyOffset:], uint32(math.MaxInt32))
+
+	mp := mpool.MustNewZero()
+	decoded, err := schema.decodeRecordBatch(header, body, 1<<20, mp)
+	if decoded != nil {
+		decoded.Clean(mp)
+	}
+	require.ErrorContains(t, err, "date")
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestArrowIPCRejectsDecimalValueOutsidePrecision(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	header := mustHex(t, fixtureHeaderHex)
+	body := mustHex(t, fixtureBodyHex)
+	expected, headings := fixtureOutputShape()
+	schema, err := ParseSchema(schemaWire, expected, headings)
+	require.NoError(t, err)
+
+	metadata, err := ipcMetadata(header)
+	require.NoError(t, err)
+	message, err := rootTable(metadata)
+	require.NoError(t, err)
+	record, ok, err := message.tableField(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	bufferBytes, bufferCount, err := record.structVector(2, 16)
+	require.NoError(t, err)
+	decimalBuffer := 0
+	for _, field := range schema.fields[:9] {
+		decimalBuffer += field.bufferCount
+	}
+	decimalBuffer++ // skip the decimal128 validity bitmap
+	require.Less(t, decimalBuffer, bufferCount)
+	bodyOffset := binary.LittleEndian.Uint64(bufferBytes[decimalBuffer*16:])
+	bodyLength := binary.LittleEndian.Uint64(bufferBytes[decimalBuffer*16+8:])
+	require.GreaterOrEqual(t, bodyLength, uint64(16))
+	binary.LittleEndian.PutUint64(body[bodyOffset:], math.MaxUint64)
+	binary.LittleEndian.PutUint64(body[bodyOffset+8:], math.MaxInt64)
+
+	mp := mpool.MustNewZero()
+	decoded, err := schema.decodeRecordBatch(header, body, 1<<20, mp)
+	if decoded != nil {
+		decoded.Clean(mp)
+	}
+	require.ErrorContains(t, err, "precision")
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestArrowSchemaRejectsDecimal64PrecisionOverflow(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	expected, headings := fixtureOutputShape()
+	expected[8].Width = 38
+	metadata, err := ipcMetadata(schemaWire)
+	require.NoError(t, err)
+	message, err := rootTable(metadata)
+	require.NoError(t, err)
+	schemaTable, ok, err := message.tableField(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	fields, err := schemaTable.tableVector(1)
+	require.NoError(t, err)
+	typeTable, ok, err := fields[8].tableField(3)
+	require.NoError(t, err)
+	require.True(t, ok)
+	precisionPosition, ok, err := typeTable.field(0, 4)
+	require.NoError(t, err)
+	require.True(t, ok)
+	binary.LittleEndian.PutUint32(metadata[precisionPosition:], 38)
+
+	_, err = ParseSchema(schemaWire, expected, headings)
+	require.ErrorContains(t, err, "precision")
+}
+
+func TestArrowIPCRejectsStringValueOutsideExpectedWidth(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	header := mustHex(t, fixtureHeaderHex)
+	body := mustHex(t, fixtureBodyHex)
+	expected, headings := fixtureOutputShape()
+	expected[7] = planpb.Type{Id: int32(types.T_varchar), Width: 1}
+	schema, err := ParseSchema(schemaWire, expected, headings)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	decoded, err := schema.decodeRecordBatch(header, body, 1<<20, mp)
+	if decoded != nil {
+		decoded.Clean(mp)
+	}
+	require.ErrorContains(t, err, "width")
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestArrowIPCRejectsValidityBitmapWithZeroDeclaredNulls(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	header := mustHex(t, fixtureHeaderHex)
+	body := mustHex(t, fixtureBodyHex)
+	expected, headings := fixtureOutputShape()
+	schema, err := ParseSchema(schemaWire, expected, headings)
+	require.NoError(t, err)
+
+	metadata, err := ipcMetadata(header)
+	require.NoError(t, err)
+	message, err := rootTable(metadata)
+	require.NoError(t, err)
+	record, ok, err := message.tableField(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	nodeBytes, nodeCount, err := record.structVector(1, 16)
+	require.NoError(t, err)
+	require.Positive(t, nodeCount)
+	// The fixture's first validity bitmap marks its second row NULL. Clearing
+	// the matching field-node count creates inconsistent Arrow metadata.
+	binary.LittleEndian.PutUint64(nodeBytes[8:], 0)
+
+	mp := mpool.MustNewZero()
+	decoded, err := schema.decodeRecordBatch(header, body, 1<<20, mp)
+	if decoded != nil {
+		decoded.Clean(mp)
+	}
+	require.ErrorContains(t, err, "validity bitmap")
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestArrowIPCRejectsInvalidUTF8Value(t *testing.T) {
+	schemaWire := mustHex(t, fixtureSchemaHex)
+	header := mustHex(t, fixtureHeaderHex)
+	body := mustHex(t, fixtureBodyHex)
+	expected, headings := fixtureOutputShape()
+	schema, err := ParseSchema(schemaWire, expected, headings)
+	require.NoError(t, err)
+
+	metadata, err := ipcMetadata(header)
+	require.NoError(t, err)
+	message, err := rootTable(metadata)
+	require.NoError(t, err)
+	record, ok, err := message.tableField(2)
+	require.NoError(t, err)
+	require.True(t, ok)
+	bufferBytes, bufferCount, err := record.structVector(2, 16)
+	require.NoError(t, err)
+	stringBuffer := 0
+	for _, field := range schema.fields[:7] {
+		stringBuffer += field.bufferCount
+	}
+	stringBuffer += 2 // skip string validity and offsets
+	require.Less(t, stringBuffer, bufferCount)
+	bodyOffset := binary.LittleEndian.Uint64(bufferBytes[stringBuffer*16:])
+	bodyLength := binary.LittleEndian.Uint64(bufferBytes[stringBuffer*16+8:])
+	require.GreaterOrEqual(t, bodyLength, uint64(1))
+	body[bodyOffset] = 0xff
+
+	mp := mpool.MustNewZero()
+	decoded, err := schema.decodeRecordBatch(header, body, 1<<20, mp)
+	if decoded != nil {
+		decoded.Clean(mp)
+	}
+	require.ErrorContains(t, err, "UTF8")
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestArrowIPCLowLevelBoundsAndFraming(t *testing.T) {
@@ -296,7 +483,7 @@ func TestArrowSchemaRejectsNegotiationMismatches(t *testing.T) {
 	require.True(t, ok)
 	headerMutation[headerPosition] = 0
 	_, err = ParseSchema(headerMutation, typesOut, headings)
-	require.ErrorContains(t, err, "header type")
+	require.ErrorContains(t, err, "header is missing")
 
 	missingSchema := append([]byte(nil), metadata...)
 	missingMessage, err := rootTable(missingSchema)
@@ -305,7 +492,7 @@ func TestArrowSchemaRejectsNegotiationMismatches(t *testing.T) {
 	require.NoError(t, err)
 	binary.LittleEndian.PutUint16(missingSchema[vtable+8:], 0)
 	_, err = ParseSchema(missingSchema, typesOut, headings)
-	require.ErrorContains(t, err, "missing its schema")
+	require.ErrorContains(t, err, "schema header is missing")
 }
 
 func validFlatTableData() []byte {

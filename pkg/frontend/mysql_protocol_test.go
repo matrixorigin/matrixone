@@ -2729,6 +2729,76 @@ func TestPreparedBinaryStringResultMetadata(t *testing.T) {
 	}
 }
 
+func TestJsonQuoteBinaryProtocolMetadata(t *testing.T) {
+	ctx := context.TODO()
+	for _, test := range []struct {
+		name        string
+		sql         string
+		packetCount int
+		resultIndex int
+		typ         defines.MysqlType
+		length      uint32
+		compilerCtx plan.CompilerContext
+	}{
+		{
+			name:        "literal",
+			sql:         "select json_quote('abc') as result",
+			packetCount: 3,
+			resultIndex: 1,
+			typ:         defines.MYSQL_TYPE_VAR_STRING,
+			length:      80,
+		},
+		{
+			name:        "prepared parameter",
+			sql:         "select json_quote(?) as result",
+			packetCount: 5,
+			resultIndex: 3,
+			typ:         defines.MYSQL_TYPE_MEDIUM_BLOB,
+			length:      393200,
+		},
+		{
+			name:        "null literal",
+			sql:         "select json_quote(null) as result",
+			packetCount: 3,
+			resultIndex: 1,
+			typ:         defines.MYSQL_TYPE_VAR_STRING,
+			length:      8,
+		},
+		{
+			name:        "text column",
+			sql:         "select json_quote(rel_createsql) as result from mo_catalog.mo_tables",
+			packetCount: 3,
+			resultIndex: 1,
+			typ:         defines.MYSQL_TYPE_LONG_BLOB,
+			length:      uint32(types.MaxLongTextLen),
+			compilerCtx: plan.NewMockCompilerContext(false),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &prepareResponseCaptureConn{}
+			compilerCtx := test.compilerCtx
+			if compilerCtx == nil {
+				compilerCtx = plan.NewEmptyCompilerContext()
+			}
+			proto, proc, prepareStmt := newBinaryPrepareProtocolTestCaseWithConnAndContext(
+				t, test.sql, conn, compilerCtx)
+			proto.capability &^= CLIENT_DEPRECATE_EOF
+			defer func() {
+				proc.SetPrepareParams(nil)
+				prepareStmt.clearBinaryParamState(proc)
+			}()
+			require.NoError(t, proto.SendPrepareResponse(ctx, prepareStmt))
+			packets := splitProtocolPackets(t, conn.writes)
+			require.Len(t, packets, test.packetCount)
+			result := parsePrepareColumnDefinition(t, packets[test.resultIndex])
+			require.Equal(t, "result", result.name)
+			require.Equal(t, test.typ, result.typ)
+			require.Equal(t, uint16(utf8mb4BinCollationID), result.charset)
+			require.Equal(t, test.length, result.length)
+		})
+	}
+}
+
 func TestPreparedExpandingTextResultMetadata(t *testing.T) {
 	ctx := context.TODO()
 	for _, test := range []struct {
@@ -2892,6 +2962,12 @@ func newBinaryPrepareProtocolTestCase(t *testing.T, sql string) (*MysqlProtocolI
 }
 
 func newBinaryPrepareProtocolTestCaseWithConn(t *testing.T, sql string, conn net.Conn) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
+	return newBinaryPrepareProtocolTestCaseWithConnAndContext(t, sql, conn, plan.NewEmptyCompilerContext())
+}
+
+func newBinaryPrepareProtocolTestCaseWithConnAndContext(
+	t *testing.T, sql string, conn net.Conn, compCtx plan.CompilerContext,
+) (*MysqlProtocolImpl, *process.Process, *PrepareStmt) {
 	t.Helper()
 	ctx := context.TODO()
 	sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -2913,7 +2989,6 @@ func newBinaryPrepareProtocolTestCaseWithConn(t *testing.T, sql string, conn net
 	st := tree.NewPrepareString(tree.Identifier(getPrepareStmtName(1)), sql)
 	stmts, err := mysql.Parse(ctx, st.Sql, 1)
 	require.NoError(t, err)
-	compCtx := plan.NewEmptyCompilerContext()
 	preparePlan, err := buildPlan(ctx, nil, compCtx, st)
 	require.NoError(t, err)
 

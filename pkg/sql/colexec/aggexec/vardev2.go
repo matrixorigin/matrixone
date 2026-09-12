@@ -72,6 +72,9 @@ func (exec *varStdDevExec[T, A]) Fill(groupIndex int, row int, vectors []*vector
 }
 
 func (exec *varStdDevExec[T, A]) BulkFill(groupIndex int, vectors []*vector.Vector) error {
+	if exec.IsDistinct() {
+		return exec.bulkFillDistinctArgs(groupIndex, vectors)
+	}
 	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
 }
 

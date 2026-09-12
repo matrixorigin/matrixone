@@ -5085,6 +5085,15 @@ func BenchmarkWindowTimestampRangeFoldUnboundedValue(b *testing.B) {
 }
 
 func TestSearchLeftRightTemporalRangeOverflow(t *testing.T) {
+	t.Run("microsecond encoded lower domain", func(t *testing.T) {
+		minimum := types.DatetimeFromClock(types.MinDatetimeYear, 1, 1, 0, 0, 0, 0)
+		_, err := doDatetimeSub(minimum, 2, int64(types.MicroSecond))
+		require.Error(t, err)
+		got, err := doDatetimeSub(minimum+2, 2, int64(types.MicroSecond))
+		require.NoError(t, err)
+		require.Equal(t, minimum, got)
+	})
+
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 

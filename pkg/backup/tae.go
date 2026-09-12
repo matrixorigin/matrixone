@@ -320,9 +320,9 @@ func execBackup(
 	backupTime := names[0]
 	trimString := names[1]
 	names = names[1:]
-	files := make(map[string]*objectio.BackupObject, 0)
+	var files map[string]*objectio.BackupObject
 	gcFileMap := make(map[string]string)
-	softDeletes := make(map[string]bool)
+	var err error
 	var loadDuration, copyDuration, reWriteDuration time.Duration
 	var oNames []*objectio.BackupObject
 	parallelNum := getParallelCount(count)
@@ -337,6 +337,30 @@ func execBackup(
 			common.AnyField("copy file cost", copyDuration),
 			common.AnyField("rewrite checkpoint cost", reWriteDuration))
 	}()
+	// The special checkpoint is rewritten to its start timestamp. Objects
+	// dropped before that timestamp are absent from the restored snapshot and
+	// may already have been collected by GC. Objects dropped at or after it
+	// remain live after the rewrite and must still be copied.
+	var cnLoc, mergeStart, mergeEnd string
+	var end, start types.TS
+	var version uint64
+	if trimString != "" {
+		ckpStr := strings.Split(trimString, ":")
+		if len(ckpStr) != 5 {
+			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
+		}
+		cnLoc = ckpStr[0]
+		mergeEnd = ckpStr[2]
+		// tnLoc = ckpStr[3]
+		mergeStart = ckpStr[4]
+		end = types.StringToTS(mergeEnd)
+		start = types.StringToTS(mergeStart)
+		version, err = strconv.ParseUint(ckpStr[1], 10, 32)
+		if err != nil {
+			return err
+		}
+	}
+
 	startTime := time.Now()
 	baseTS := ts
 	// When rewriting the checkpoint and trimming the aobject,
@@ -362,11 +386,15 @@ func execBackup(
 		}
 		var oneNames []*objectio.BackupObject
 		var data *logtail.CKPReader
-		if i == 0 {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), nil, &baseTS)
-		} else {
-			oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(ctx, sid, srcFs, key, uint32(version), &softDeletes, &baseTS)
-		}
+		oneNames, data, err = logtail.LoadCheckpointEntriesFromKey(
+			ctx,
+			sid,
+			srcFs,
+			key,
+			uint32(version),
+			nil,
+			&baseTS,
+		)
 		if err != nil {
 			return err
 		}
@@ -393,42 +421,7 @@ func execBackup(
 		}
 	}
 	startTime = time.Now()
-	for _, oName := range oNames {
-		objName := oName.Location.Name().String()
-		// Check if file already exists in current backup directory
-		if dstHave[objName] {
-			oName.NeedCopy = false
-		}
-		// Check if file exists in global index (already backed up in previous backups)
-		if globalIndex != nil && globalIndex.Has(objName) {
-			oName.NeedCopy = false
-		}
-		if files[objName] == nil {
-			files[objName] = oName
-		}
-	}
-
-	// trim checkpoint and block
-	var cnLoc, mergeStart, mergeEnd string
-	var end, start types.TS
-	var version uint64
-	if trimString != "" {
-		var err error
-		ckpStr := strings.Split(trimString, ":")
-		if len(ckpStr) != 5 {
-			return moerr.NewInternalError(ctx, fmt.Sprintf("invalid checkpoint string: %v", ckpStr))
-		}
-		cnLoc = ckpStr[0]
-		mergeEnd = ckpStr[2]
-		// tnLoc = ckpStr[3]
-		mergeStart = ckpStr[4]
-		end = types.StringToTS(mergeEnd)
-		start = types.StringToTS(mergeStart)
-		version, err = strconv.ParseUint(ckpStr[1], 10, 32)
-		if err != nil {
-			return err
-		}
-	}
+	files = selectBackupObjects(oNames, start, dstHave, globalIndex)
 
 	// Set protectedTS to the backup time point
 	// This is the timestamp that should be protected from GC
@@ -521,6 +514,37 @@ func execBackup(
 		*filesList = append(*filesList, taeFileList...)
 	}
 	return err
+}
+
+func selectBackupObjects(
+	oNames []*objectio.BackupObject,
+	restoreTS types.TS,
+	dstHave map[string]bool,
+	globalIndex *GlobalFileIndex,
+) map[string]*objectio.BackupObject {
+	files := make(map[string]*objectio.BackupObject, len(oNames))
+	for _, oName := range oNames {
+		objName := oName.Location.Name().String()
+		// A DropTS alone does not prove that an object is absent from the
+		// snapshot being restored. The special checkpoint rewrite makes objects
+		// dropped at or after restoreTS live again, so only an earlier DropTS is
+		// safe to omit.
+		if !restoreTS.IsEmpty() && !oName.DropTS.IsEmpty() && oName.DropTS.LT(&restoreTS) {
+			continue
+		}
+		// Check if file already exists in current backup directory
+		if dstHave[objName] {
+			oName.NeedCopy = false
+		}
+		// Check if file exists in global index (already backed up in previous backups)
+		if globalIndex != nil && globalIndex.Has(objName) {
+			oName.NeedCopy = false
+		}
+		if files[objName] == nil {
+			files[objName] = oName
+		}
+	}
+	return files
 }
 
 // CopyCheckpointDir copy checkpoint dir from srcFs to dstFs

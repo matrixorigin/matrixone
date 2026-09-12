@@ -1,0 +1,29 @@
+drop database if exists ft_snap_case;
+create database ft_snap_case;
+use ft_snap_case;
+create table t(id bigint primary key, body text);
+insert into t values (1,'historic alpha'),(2,'shared token');
+create fulltext index idx on t(body);
+select id from t where match(body) against('+alpha' in boolean mode);
+➤ id[-5,64,0]  𝄀
+1
+create snapshot ft_snap_case_sp for account;
+update t set body='current beta' where id=1;
+insert into t values (3,'current beta');
+select id from t where match(body) against('+beta' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3
+select id from t where match(body) against('+alpha' in boolean mode);
+➤ id[-5,64,0]
+select id from t where match(body) against('+beta' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+3
+select id, body from t {snapshot='ft_snap_case_sp'} where match(body) against('+alpha' in boolean mode);
+➤ id[-5,64,0]  ¦  body[-1,16383,0]  𝄀
+1  ¦  historic alpha
+select id from t {snapshot='ft_snap_case_sp'} where match(body) against('+beta' in boolean mode);
+➤ id[-5,64,0]
+drop snapshot ft_snap_case_sp;
+drop database ft_snap_case;

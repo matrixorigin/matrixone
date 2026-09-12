@@ -663,7 +663,6 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 	}
 
 	if len(probeExprs) == 1 {
-		convertToCPKey := false
 		tableDef := leftChild.TableDef
 		if tableDef == nil || tableDef.Pkey == nil {
 			return
@@ -673,6 +672,7 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			return
 		}
 		sortOrder := GetSortOrder(tableDef, probeCol.ColPos)
+		componentFilter := false
 		// LOCAL_COLOCATED gives up multi-CN scan bandwidth.  In phase 1 only
 		// enable right-SINGLE on the leading PK/cluster key, where exact IN can
 		// prune ranges predictably.  A scattered non-key filter may still scan
@@ -694,8 +694,11 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 					return
 				}
 			} else {
-				if len(tableDef.Pkey.Names) > 1 && probeCol.Name != catalog.CPrimaryKeyColName {
-					convertToCPKey = true
+				componentFilter = len(tableDef.Pkey.Names) > 1 && probeCol.Name != catalog.CPrimaryKeyColName
+				// Newly admit component filtering only without a placement
+				// downgrade or suppressing fallible/volatile scan predicates.
+				if componentFilter && (policy.requiresLocalDelivery || !areTruncationSafePredicates(leftChild.FilterList)) {
+					return
 				}
 			}
 			//todo: need to fix this in the future
@@ -708,10 +711,20 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 			return
 		}
 
+		// A leading composite-key component can use its own zonemap and an
+		// ordinary column IN predicate. It is not the serialized full key:
+		// keep NotOnPk so the scan also applies exact row filtering, without
+		// routing this partial key through primary-key lookup or prefix IN.
 		notOnPk := probeCol.Name != tableDef.Pkey.PkeyColName
 		inLimit := GetInFilterCardLimit(sid)
-		if sortOrder == 0 {
+		if sortOrder == 0 && !componentFilter {
 			inLimit = GetInFilterCardLimitOnPK(sid, leftChild.Stats.TableCnt)
+		}
+		// Components need ordinary-column row filtering, not full-PK lookup.
+		// Keep its configured budget; a wrong low estimate still falls back to
+		// PASS when HashBuild observes more actual keys than this limit.
+		if componentFilter && node.Stats.HashmapStats.HashmapSize > float64(inLimit) {
+			return
 		}
 		// Placement is decided before hashbuild knows the actual number of
 		// unique keys.  If the planner already knows the build cannot fit in an
@@ -720,10 +733,6 @@ func (builder *QueryBuilder) generateRuntimeFilters(nodeID int32) {
 		if !builder.rightSingleLocalDeliveryIsSafe(node, rightChild, inLimit) {
 			return
 		}
-		if convertToCPKey {
-			return
-		}
-
 		buildExpr := &plan.Expr{
 			Typ: buildExprs[0].Typ,
 			Expr: &plan.Expr_Col{

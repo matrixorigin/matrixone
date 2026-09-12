@@ -218,6 +218,15 @@ const (
 	CSV      = "csv"
 	JSONLINE = "jsonline"
 	PARQUET  = "parquet"
+	ARROW    = "arrow"
+)
+
+// Arrow IPC container kinds. AUTO probes the object content; it never relies
+// on a filename suffix.
+const (
+	ARROW_CONTAINER_AUTO   = "auto"
+	ARROW_CONTAINER_FILE   = "file"
+	ARROW_CONTAINER_STREAM = "stream"
 )
 
 // if $format is jsonline
@@ -240,16 +249,24 @@ type ExternParam struct {
 }
 
 type ExParamConst struct {
-	ScanType     int
-	FileSize     int64
-	FileStartOff int64
-	Filepath     string
-	CompressType string
-	Format       string
-	Option       []string
-	Data         string
-	Tail         *TailParameter
-	StageName    Identifier
+	ScanType       int
+	FileSize       int64
+	FileStartOff   int64
+	Filepath       string
+	CompressType   string
+	Format         string
+	ArrowContainer string
+	// ArrowMatchByPosition is planner-derived from an explicit LOAD column
+	// list. It is inert unless the compile-only Arrow execution scope is set.
+	ArrowMatchByPosition bool
+	// ArrowForceMaterialize is a compile-time snapshot of the CN rollout
+	// setting. Keeping it with the external-scan payload makes local and remote
+	// scopes use one conversion policy for the whole statement generation.
+	ArrowForceMaterialize bool
+	Option                []string
+	Data                  string
+	Tail                  *TailParameter
+	StageName             Identifier
 
 	HivePartitioning      bool
 	HivePartitionCols     []string

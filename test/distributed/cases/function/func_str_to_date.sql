@@ -99,3 +99,36 @@ SELECT DATE_ADD(to_date('9999-12-30 23:59:00','%Y-%m-%d %H:%i:%s'), INTERVAL 1 M
 SELECT to_date('09:22', '%H:%i');
 SELECT to_date('09:22:23.33', '%H:%i:%s.%f');
 SELECT to_date('09:22', '%H:%i');
+
+# PR28316: a dynamic prepared format has one stable DATETIME(6) domain.
+PREPARE pr28316_str_to_date FROM 'SELECT STR_TO_DATE(?, ?) AS prepared_temporal';
+SET @pr28316_value = '2024-02-29';
+SET @pr28316_format = '%Y-%m-%d';
+EXECUTE pr28316_str_to_date USING @pr28316_value, @pr28316_format;
+SET @pr28316_value = '12:34:56';
+SET @pr28316_format = '%H:%i:%s';
+EXECUTE pr28316_str_to_date USING @pr28316_value, @pr28316_format;
+SET @pr28316_value = '2024-02-29 12:34:56.123456';
+SET @pr28316_format = '%Y-%m-%d %H:%i:%s.%f';
+EXECUTE pr28316_str_to_date USING @pr28316_value, @pr28316_format;
+SET @pr28316_value = NULL;
+EXECUTE pr28316_str_to_date USING @pr28316_value, @pr28316_format;
+SET @pr28316_value = 'not-a-date';
+EXECUTE pr28316_str_to_date USING @pr28316_value, @pr28316_format;
+SET @pr28316_value = '2024-03-01';
+SET @pr28316_format = '%Y-%m-%d';
+EXECUTE pr28316_str_to_date USING @pr28316_value, @pr28316_format;
+DEALLOCATE PREPARE pr28316_str_to_date;
+
+PREPARE pr28316_to_date FROM 'SELECT TO_DATE(?, ?) AS prepared_temporal_alias';
+SET @pr28316_value = '2024-02-29 12:34:56.654321';
+SET @pr28316_format = '%Y-%m-%d %H:%i:%s.%f';
+EXECUTE pr28316_to_date USING @pr28316_value, @pr28316_format;
+SET @pr28316_value = '2024-03-01';
+SET @pr28316_format = '%Y-%m-%d';
+EXECUTE pr28316_to_date USING @pr28316_value, @pr28316_format;
+DEALLOCATE PREPARE pr28316_to_date;
+
+# Literal controls remain specialized to DATE and TIME.
+SELECT STR_TO_DATE('2024-02-29', '%Y-%m-%d') AS literal_date,
+       TO_DATE('12:34:56.123456', '%H:%i:%s.%f') AS literal_time;

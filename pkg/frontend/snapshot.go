@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -51,6 +52,12 @@ type tableType string
 const view tableType = "VIEW"
 
 const clusterTable tableType = "CLUSTER TABLE"
+
+// restoreBeforeViewMetadataLifecycleFault pauses a whole-catalog restore after
+// it has taken the feature-registry catalog identity and before the remaining
+// lifecycle gates. It is inert unless a test explicitly installs the fault
+// point and observes the metadata lock ordering at this boundary.
+const restoreBeforeViewMetadataLifecycleFault = "restore-before-view-metadata-lifecycle"
 
 const (
 	insertIntoMoSnapshots = `insert into mo_catalog.mo_snapshots(
@@ -772,8 +779,9 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		return stats, err
 	}
 	// Serialize catalog restore with View metadata recovery before either path
-	// locks a target View. The gate row belongs to a preserved catalog table, so
-	// it remains stable while relation identities are rebuilt.
+	// locks a target View. The restore admission above owns the feature-registry
+	// catalog identity before its SNAPSHOT row can be retained while relation
+	// identities are rebuilt.
 	if err = lockViewMetadataLifecycle(ctx, bh); err != nil {
 		return stats, err
 	}
@@ -974,6 +982,25 @@ func lockRestoreLineageOwnerLifecycle(
 	if !restoreReplacesLineageOwnerCatalogs(level) {
 		return nil
 	}
+	// The feature-registry relation owns the SNAPSHOT lifecycle row below and
+	// is itself copied during cluster/system-account restore. Acquire its
+	// stable catalog identity before the SNAPSHOT row so a CN heartbeat cannot
+	// hold shared metadata for the relation while waiting on SNAPSHOT as
+	// restore later upgrades that metadata to replace the relation.
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	if err := bh.Exec(systemCtx, catalog.FeatureRegistryCatalogGateSQL); err != nil {
+		return err
+	}
+	results, err := getResultSet(systemCtx, bh)
+	bh.ClearExecResultSet()
+	if err != nil {
+		return err
+	}
+	if !execResultArrayHasData(results) {
+		return moerr.NewNoSuchTable(systemCtx, catalog.MO_CATALOG, catalog.MO_FEATURE_REGISTRY)
+	}
+	fault.TriggerFaultWithContext(ctx, restoreBeforeViewMetadataLifecycleFault)
 	return lockDataBranchLineageOwnerLifecycle(ctx, bh)
 }
 
@@ -3354,6 +3381,13 @@ func lockViewMetadataLifecycle(ctx context.Context, bh BackgroundExec) error {
 	return catalog.LockViewMetadataLifecycle(func(sql string) error {
 		return bh.Exec(systemCtx, sql)
 	})
+}
+
+func lockSnapshotLifecycle(ctx context.Context, bh BackgroundExec) error {
+	// The SNAPSHOT gate is a global catalog row and must be resolved in sys.
+	// Keep the caller's transaction; only account resolution changes for this SQL.
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	return bh.Exec(systemCtx, catalog.SnapshotLifecycleGateSQL)
 }
 
 func prepareViewMetadataMutation(

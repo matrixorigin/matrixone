@@ -137,6 +137,56 @@ func TestCheckerReplacesReplicaAfterStoreIncarnationChange(t *testing.T) {
 	}
 }
 
+// TestCheckerRejectsFinalReplicaRemovalAfterStoreIncarnationChange exercises
+// the checker path that previously reached Builder.targets[0] with no target.
+// A fresh StoreIncarnation makes the sole existing replica unsafe to retain;
+// HAKeeper must keep running and emit no invalid remove operator.
+func TestCheckerRejectsFinalReplicaRemovalAfterStoreIncarnationChange(t *testing.T) {
+	newChecker := func(shard pb.LogShardInfo, stores map[string]pb.LogStoreInfo, nonVoting uint64) hakeeper.ModuleChecker {
+		cfg := hakeeper.Config{}
+		cfg.Fill()
+		return NewLogServiceChecker(
+			hakeeper.NewCheckerCommonFields(
+				"", cfg, util.NewTestIDAllocator(10),
+				pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{ShardID: 1, NumberOfReplicas: 1}}},
+				pb.TaskTableUser{}, 0,
+			),
+			pb.LogState{Shards: map[uint64]pb.LogShardInfo{1: shard}, Stores: stores},
+			pb.TNState{},
+			operator.ExecutingReplicas{}, operator.ExecutingReplicas{},
+			nonVoting, pb.Locality{}, false,
+		)
+	}
+
+	t.Run("final voting replica has changed storage incarnation", func(t *testing.T) {
+		checker := newChecker(
+			pb.LogShardInfo{
+				ShardID: 1, Replicas: map[uint64]string{1: "a"},
+				ReplicaStoreIncarnations: map[uint64]string{1: "disk-a-old"}, Epoch: 1,
+			},
+			map[string]pb.LogStoreInfo{"a": {StoreIncarnation: "disk-a-new"}}, 0,
+		)
+
+		for i := 0; i < 2; i++ {
+			assert.NotPanics(t, func() { assert.Empty(t, checker.Check()) })
+		}
+	})
+
+	t.Run("final non-voting replica has no retained voting command target", func(t *testing.T) {
+		checker := newChecker(
+			pb.LogShardInfo{
+				ShardID: 1, NonVotingReplicas: map[uint64]string{2: "b"},
+				ReplicaStoreIncarnations: map[uint64]string{2: "disk-b-old"}, Epoch: 1,
+			},
+			map[string]pb.LogStoreInfo{"b": {StoreIncarnation: "disk-b-new"}}, 1,
+		)
+
+		for i := 0; i < 2; i++ {
+			assert.NotPanics(t, func() { assert.Empty(t, checker.Check()) })
+		}
+	})
+}
+
 func TestCheck(t *testing.T) {
 	cases := []struct {
 		desc                string

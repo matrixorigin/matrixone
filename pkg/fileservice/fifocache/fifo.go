@@ -466,20 +466,30 @@ func (c *Cache[K, V]) enqueuePendingItem(item *_CacheItem[K, V], queue uint8) {
 }
 
 func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
-	var item *_CacheItem[K, V]
-	defer func() {
-		// item ok, increase count
-		if item != nil {
-			item.inc()
-		}
-	}()
+	value, _, ok, err := c.GetWithAdmission(ctx, key, nil)
+	if err != nil {
+		panic(err)
+	}
+	return value, ok
+}
+
+// GetWithAdmission performs admission while the matching item is protected by
+// its shard lock, before postGet retains the value. The admission callback and
+// any release it returns must complete in bounded time and must not call back
+// into this cache or panic. A release returned together with an error is invoked
+// here because the value has not yet been published to a caller.
+func (c *Cache[K, V]) GetWithAdmission(
+	ctx context.Context,
+	key K,
+	admit func(value V, size int64) (release func(), err error),
+) (value V, release func(), ok bool, err error) {
 
 	shard := &c.shards[c.keyShardFunc(key)%numShards]
 	shard.Lock()
 	defer shard.Unlock()
 
-	item, ok = shard.values[key]
-	if !ok {
+	item, found := shard.values[key]
+	if !found {
 		// not exist
 		return
 	}
@@ -490,10 +500,33 @@ func (c *Cache[K, V]) Get(ctx context.Context, key K) (value V, ok bool) {
 		return
 	}
 
+	published := false
+	if admit != nil {
+		release, err = admit(item.value, item.size)
+		if err != nil {
+			// Be defensive about a callback that acquired a partial reservation
+			// before returning an error. No cache retain has happened yet, so this
+			// function remains the only possible cleanup owner.
+			if release != nil {
+				release()
+				release = nil
+			}
+			ok = false
+			return
+		}
+		defer func() {
+			if !published && release != nil {
+				release()
+				release = nil
+			}
+		}()
+	}
 	if c.postGet != nil {
 		c.postGet(ctx, item.key, item.value, item.size)
 	}
-	return item.value, true
+	item.inc()
+	published = true
+	return item.value, release, true, nil
 }
 
 func (c *Cache[K, V]) Contains(key K) bool {

@@ -119,6 +119,12 @@ const (
 	// lock is re-acquired, so a test can deterministically mutate the
 	// workspace from another goroutine while the window is open.
 	FJ_CNDumpResolveWindowWait = "fj/cn/dump_resolve_window_wait"
+
+	// FJ_ArrowLoadRolloutWait is a test-only post-admission/pre-publication
+	// barrier. Arrow's reader triggers it after a range has been admitted and
+	// converted, but before the batch is published to the LOAD pipeline, so a
+	// lifecycle test can hold a real statement without relying on observer timing.
+	FJ_ArrowLoadRolloutWait = "fj/arrow/load/rollout_wait"
 )
 
 const (

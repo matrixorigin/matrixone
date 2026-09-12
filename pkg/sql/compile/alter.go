@@ -302,6 +302,20 @@ func (c *Compile) prepareAlterDataBranchLineage(
 		if ownershipDAG.ComponentHasLiveLogicalBranch(oldTableID) {
 			op := c.proc.GetTxnOperator()
 			opts := op.TxnOptions()
+			// TRUNCATE commits the transaction that preceded the statement and
+			// plans against a fresh operator. Preserve the client's explicit-
+			// transaction origin across that boundary so a live data branch cannot
+			// bypass the same safety check as ALTER.
+			if !isExplicitAlterTxn(opts.GetByBegin(), opts.GetAutocommit()) {
+				if topContext := c.proc.GetTopContext(); topContext != nil {
+					fromExplicitTxn, _ := topContext.Value(
+						defines.ImplicitCommitFromExplicitTxn{},
+					).(bool)
+					if fromExplicitTxn {
+						opts.ByBegin = true
+					}
+				}
+			}
 			if err = validateAlterDataBranchLineageTxn(
 				statement, opts.GetByBegin(), opts.GetAutocommit(), op.Txn().IsPessimistic(),
 			); err != nil {
@@ -1049,6 +1063,27 @@ func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.Alt
 	return opt, nil
 }
 
+// alterCopyCreateOptions builds the statement options for the ALTER ... COPY replica create.
+//
+// Both carried values exist because the replica is created from regenerated DDL, which cannot
+// express them: KeepLogicalId preserves the table's logical id, and KeepRelKind preserves its
+// relkind. Without the latter buildCreateTable derives a kind from the replica's temporary
+// name -- and for a hidden index table that kind is the only thing keeping it out of the
+// relkind-keyed restore/CLONE filters, so losing it silently promotes the table to an
+// ordinary one.
+//
+// Split out so the carried values are assertable without an executor.
+func alterCopyCreateOptions(qry *plan.AlterTable) executor.StatementOption {
+	// The temporary relation is not externally visible. Its parent backrefs are
+	// reconciled after the original relation is replaced, so avoid materializing
+	// an intermediate parent->temporary-table relationship here.
+	opts := executor.StatementOption{}.WithIgnoreForeignKey()
+	if oldLogicalId := qry.GetTableDef().GetLogicalId(); oldLogicalId != 0 {
+		opts = opts.WithKeepLogicalId(oldLogicalId)
+	}
+	return opts.WithKeepRelKind(qry.GetTableDef().GetTableType())
+}
+
 func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 	cleanup := newAlterAutoIncrementResetCleanup(c)
 	defer cleanup.finish(&err)
@@ -1270,15 +1305,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 
 	// 3. create temporary replica table which doesn't have foreign key constraints
 	// Get logicalId from tableDef and pass it when creating the temporary table
-	oldLogicalId := qry.GetTableDef().GetLogicalId()
-	// The temporary relation is not externally visible. Its parent backrefs are
-	// reconciled after the original relation is replaced, so avoid materializing
-	// an intermediate parent->temporary-table relationship here.
-	createTmpOpts := executor.StatementOption{}.WithIgnoreForeignKey()
-
-	if oldLogicalId != 0 {
-		createTmpOpts = createTmpOpts.WithKeepLogicalId(oldLogicalId)
-	}
+	createTmpOpts := alterCopyCreateOptions(qry)
 	err = c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",
@@ -1744,10 +1771,6 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 	tableID := newRel.GetTableID(c.proc.Ctx)
 	svc := incrservice.GetAutoIncrementService(c.proc.GetService())
 	epochReqs := make([]*api.AlterTableReq, 0, len(autoCols))
-	var (
-		freshColumnOffset         uint64
-		freshColumnOffsetResolved bool
-	)
 	for _, col := range autoCols {
 		if err := c.proc.Ctx.Err(); err != nil {
 			return err
@@ -1781,37 +1804,11 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 
 		name := strings.ToLower(col.ColName)
 		_, retained := retainedNames[name]
-		// Internal ALTER COPY SQL may execute without the client session variables.
-		// Reapply a non-default session offset to an empty newly added column from
-		// the outer compile instead of assuming the temporary CREATE inherited it.
+		// A fresh empty column keeps its session-independent CREATE initialization.
+		// Only copied data, retained allocator state, or an explicit DDL request
+		// requires reconciliation.
 		if !explicitReset && !retained && copyDef.AutoIncrOffset == 0 && copiedMax == 0 {
-			if !freshColumnOffsetResolved {
-				value, err := resolveVariableOrDefault(
-					c.proc,
-					"auto_increment_offset",
-					true,
-					false,
-				)
-				if err != nil {
-					return err
-				}
-				offset, ok := value.(int64)
-				if !ok {
-					return moerr.NewInternalErrorf(
-						c.proc.Ctx,
-						"invalid auto_increment_offset type %T",
-						value,
-					)
-				}
-				if offset > 1 {
-					freshColumnOffset = uint64(offset - 1)
-				}
-				freshColumnOffsetResolved = true
-			}
-			if freshColumnOffset == 0 {
-				continue
-			}
-			copiedMax = freshColumnOffset
+			continue
 		}
 		effectiveOffset := max(copyDef.AutoIncrOffset, copiedMax)
 		if !explicitReset {

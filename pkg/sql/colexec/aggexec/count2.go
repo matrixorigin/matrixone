@@ -165,7 +165,13 @@ func (exec *countColumnExec) Fill(groupIndex int, row int, vectors []*vector.Vec
 }
 
 func (exec *countColumnExec) BulkFill(groupIndex int, vectors []*vector.Vector) error {
-	return exec.BatchFill(0, slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()), vectors)
+	if !exec.IsDistinct() {
+		return exec.BatchFill(
+			0,
+			slices.Repeat([]uint64{uint64(groupIndex + 1)}, vectors[0].Length()),
+			vectors)
+	}
+	return exec.bulkFillDistinctArgs(groupIndex, vectors)
 }
 
 func (exec *countColumnExec) BatchFill(offset int, groups []uint64, vectors []*vector.Vector) error {

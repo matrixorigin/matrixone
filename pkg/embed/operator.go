@@ -143,9 +143,14 @@ func (op *operator) Close() error {
 	var err error
 	if op.reset.svc != nil {
 		err = op.reset.svc.Close()
-		if err == nil {
-			op.reset.svc = nil
+		if err != nil {
+			// A service may return a drain timeout while accepted requests still
+			// use its storage and WAL dependencies.  Keep every cleanup owner
+			// reachable and let the caller retry or fail-stop; closing the
+			// stopper or file service here would destroy those dependencies.
+			return err
 		}
+		op.reset.svc = nil
 	}
 	if op.reset.stopper != nil {
 		op.reset.stopper.Stop()

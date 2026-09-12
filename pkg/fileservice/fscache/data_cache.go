@@ -23,6 +23,10 @@ import (
 
 type CacheKey = pb.CacheKey
 
+// ErrCacheAdmissionRejected reports that a cache entry exists but a caller's
+// separate retention budget or pin policy declined it. A cache coordinator may
+// treat this sentinel as a miss and retry through an uncached authoritative
+// read; cancellation and backend errors must remain distinct.
 var ErrCacheAdmissionRejected = moerr.NewInternalErrorNoCtx("cache admission rejected")
 
 type DataCache interface {
@@ -36,4 +40,24 @@ type DataCache interface {
 	Flush(ctx context.Context)
 	Evict(ctx context.Context, done chan int64)
 	EvictToTargetWithWait(ctx context.Context, target int64) int64
+}
+
+// DataCachePinAdmission runs before a cache hit retains its backing. It executes
+// under the cache key's shard lock and therefore must be bounded, non-blocking,
+// and must not call back into the cache. Its returned release function owns the
+// admitted capacity for exactly as long as the caller owns the retained Data
+// reference. The cache may also invoke release under the shard lock when an
+// admission attempt reports an error, so release has the same bounded and
+// non-reentrant requirements.
+type DataCachePinAdmission func(capacity int64) (release func(), err error)
+
+// DataCacheWithPinAdmission is the cache capability required by consumers
+// that account retained cache backing against a separate statement budget.
+type DataCacheWithPinAdmission interface {
+	DataCache
+	GetWithPinAdmission(
+		context.Context,
+		CacheKey,
+		DataCachePinAdmission,
+	) (data Data, release func(), ok bool, err error)
 }

@@ -188,6 +188,21 @@ func TestCDCRaceTxn(t *testing.T) {
 }
 
 func TestCDCWaiterProbe(t *testing.T) {
+	t.Run("terminal probe errors return immediately", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		probeErr := errors.New("contender completed before lock wait")
+		calls := 0
+
+		observedTxnIDs, err := waitForCDCWaiter(ctx, func(context.Context) (bool, []string, error) {
+			calls++
+			return false, nil, &cdcWaiterTerminalError{cause: probeErr}
+		})
+		require.ErrorIs(t, err, probeErr)
+		require.Empty(t, observedTxnIDs)
+		require.Equal(t, 1, calls)
+	})
+
 	t.Run("requires the contender transaction", func(t *testing.T) {
 		found, observedTxnIDs := cdcWaiterMatches([]lockpb.WaitTxn{
 			{TxnID: []byte("unrelated")},

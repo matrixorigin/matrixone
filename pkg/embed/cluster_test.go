@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -659,9 +660,7 @@ func TestCreateDB(t *testing.T) {
 // doStartLocked that are not reached by normal cluster startup tests.
 func TestDoStartLockedErrorPaths(t *testing.T) {
 	t.Run("non-CN service error returns immediately", func(t *testing.T) {
-		// A non-CN operator whose state is already 'started' will return
-		// an error from Start(), exercising the direct-return path at
-		// cluster.go line 119-121.
+		// A non-CN operator rejects duplicate startup before allocating resources.
 		op := &operator{
 			serviceType: metadata.ServiceType_LOG,
 			state:       started, // forces Start() to return error
@@ -674,10 +673,8 @@ func TestDoStartLockedErrorPaths(t *testing.T) {
 		assert.Contains(t, err.Error(), "already started")
 	})
 
-	t.Run("CN service error captured via atomic.Value", func(t *testing.T) {
-		// A CN operator whose state is already 'started' will return an
-		// error from Start(), exercising the goroutine error-capture path
-		// at cluster.go lines 128-133 and the error-return at 138-140.
+	t.Run("CN service error preserves cause", func(t *testing.T) {
+		// The concurrent startup path preserves the same rejection.
 		op := &operator{
 			serviceType: metadata.ServiceType_CN,
 			state:       started,
@@ -691,7 +688,7 @@ func TestDoStartLockedErrorPaths(t *testing.T) {
 	})
 
 	t.Run("Start propagates doStartLocked error", func(t *testing.T) {
-		// Exercises the error propagation in Start() at line 107-109.
+		// Start preserves service errors through rollback.
 		op := &operator{
 			serviceType: metadata.ServiceType_LOG,
 			state:       started,
@@ -730,6 +727,79 @@ func TestDoStartLockedErrorPaths(t *testing.T) {
 		err := c.doStartLocked(0)
 		assert.NoError(t, err)
 	})
+}
+
+// These startup regressions use the existing startFn seam: no real services,
+// ports, cluster admission, or wall-clock sleeps are needed.
+func TestDoStartLockedConcurrentErrors(t *testing.T) {
+	first := errors.New("connection refused")
+	second := &os.PathError{Op: "open", Path: "catalog", Err: os.ErrPermission}
+	c := &cluster{
+		id: 42,
+		services: []*operator{
+			{serviceType: metadata.ServiceType_CN, sid: "cn-a"},
+			{serviceType: metadata.ServiceType_CN, sid: "cn-b"},
+		},
+		startFn: func(op *operator) error {
+			if op.sid == "cn-a" {
+				return first
+			}
+			return second
+		},
+	}
+	err := c.doStartLocked(0)
+	require.ErrorIs(t, err, first)
+	require.ErrorIs(t, err, second)
+	var pathErr *os.PathError
+	require.ErrorAs(t, err, &pathErr)
+	require.Same(t, second, pathErr)
+	require.EqualError(t, err,
+		"internal error: embedded cluster 42 start CN service \"cn-a\"\n"+
+			"connection refused\n"+
+			"internal error: embedded cluster 42 start CN service \"cn-b\"\n"+
+			"open catalog: permission denied")
+
+	// Startup results belong to this invocation, including incremental CN starts.
+	c.startFn = func(op *operator) error {
+		assert.Equal(t, "cn-b", op.sid)
+		return nil
+	}
+	require.NoError(t, c.doStartLocked(1))
+}
+
+func TestDoStartLockedJoinsCNBeforeReturningInfrastructureFailure(t *testing.T) {
+	cnEntered := make(chan struct{})
+	infrastructureFailed := make(chan struct{})
+	cnErr := errors.New("CN startup failed")
+	logErr := errors.New("log startup failed")
+	var cnReturned atomic.Bool
+	c := &cluster{
+		services: []*operator{
+			{serviceType: metadata.ServiceType_CN, sid: "cn"},
+			{serviceType: metadata.ServiceType_LOG, sid: "log"},
+			{serviceType: metadata.ServiceType_TN, sid: "not-started"},
+		},
+		startFn: func(op *operator) error {
+			switch op.sid {
+			case "cn":
+				close(cnEntered)
+				<-infrastructureFailed
+				defer cnReturned.Store(true)
+				return cnErr
+			case "log":
+				<-cnEntered
+				close(infrastructureFailed)
+				return logErr
+			default:
+				t.Error("started a service after infrastructure failure")
+				return nil
+			}
+		},
+	}
+	err := c.doStartLocked(0)
+	require.True(t, cnReturned.Load(), "all startup workers must finish before caller can roll back")
+	require.ErrorIs(t, err, cnErr)
+	require.ErrorIs(t, err, logErr)
 }
 
 func TestClusterStartRollbackClosesPartiallyStartedServices(t *testing.T) {
@@ -810,7 +880,7 @@ func TestClusterStartRollbackClosesPartiallyStartedServices(t *testing.T) {
 	require.Equal(t, int32(1), tnFS.closeCount.Load())
 }
 
-func TestClusterCloseContinuesAfterServiceError(t *testing.T) {
+func TestClusterCloseStopsAtServiceError(t *testing.T) {
 	first := &closeTrackingService{}
 	secondErr := errors.New("close second")
 	second := &closeTrackingService{closeErr: secondErr}
@@ -831,7 +901,10 @@ func TestClusterCloseContinuesAfterServiceError(t *testing.T) {
 
 	err = c.Close()
 	require.ErrorIs(t, err, secondErr)
-	require.Equal(t, int32(1), first.closeCount.Load())
+	// Services are ordered [dependency, dependent] and closed in reverse.
+	// If the dependent close fails, the dependency must remain available for
+	// accepted handlers and recovery.
+	require.Equal(t, int32(0), first.closeCount.Load())
 	require.Equal(t, int32(1), second.closeCount.Load())
 	require.Equal(t, stopped, c.state)
 	require.NotNil(t, c.testAdmission)
@@ -840,6 +913,84 @@ func TestClusterCloseContinuesAfterServiceError(t *testing.T) {
 	require.NoError(t, c.Close())
 	require.Equal(t, int32(1), first.closeCount.Load())
 	require.Equal(t, int32(2), second.closeCount.Load())
+	require.Nil(t, c.testAdmission)
+}
+
+func TestOperatorClosePreservesDependenciesAfterServiceDrainFailure(t *testing.T) {
+	closeErr := rpc.ErrTxnDrainTimeout
+	svc := &closeTrackingService{closeErr: closeErr}
+	fs := &closeTrackingFileService{}
+	stop := stopper.NewStopper("operator-close-drain")
+	taskStopped := make(chan struct{})
+	require.NoError(t, stop.RunTask(func(ctx context.Context) {
+		<-ctx.Done()
+		close(taskStopped)
+	}))
+
+	op := &operator{state: started}
+	op.reset.svc = svc
+	op.reset.stopper = stop
+	op.reset.fs = fs
+
+	require.ErrorIs(t, op.Close(), closeErr)
+	require.Equal(t, int32(1), svc.closeCount.Load())
+	require.Equal(t, int32(0), fs.closeCount.Load())
+	require.True(t, op.needsCleanup())
+	select {
+	case <-taskStopped:
+		t.Fatal("operator stopper closed after service drain failure")
+	default:
+	}
+
+	svc.closeErr = nil
+	require.NoError(t, op.Close())
+	require.Equal(t, int32(1), fs.closeCount.Load())
+	require.False(t, op.needsCleanup())
+	select {
+	case <-taskStopped:
+	case <-time.After(time.Second):
+		t.Fatal("operator stopper was not closed after successful retry")
+	}
+}
+
+func TestClusterClosePreservesDependenciesAfterTNDrainFailure(t *testing.T) {
+	logService := &closeTrackingService{}
+	logFS := &closeTrackingFileService{}
+	logOp := &operator{state: started}
+	logOp.reset.svc = logService
+	logOp.reset.fs = logFS
+
+	tnService := &closeTrackingService{closeErr: rpc.ErrTxnDrainTimeout}
+	tnFS := &closeTrackingFileService{}
+	tnOp := &operator{state: started}
+	tnOp.reset.svc = tnService
+	tnOp.reset.fs = tnFS
+
+	c := &cluster{
+		state:    started,
+		services: []*operator{logOp, tnOp},
+	}
+	admission, err := clusteradmission.Acquire(
+		context.Background(),
+		clusteradmission.AllowConcurrent,
+	)
+	require.NoError(t, err)
+	c.testAdmission = admission
+
+	require.ErrorIs(t, c.Close(), rpc.ErrTxnDrainTimeout)
+	require.Equal(t, int32(0), logService.closeCount.Load())
+	require.Equal(t, int32(0), logFS.closeCount.Load())
+	require.Equal(t, int32(1), tnService.closeCount.Load())
+	require.Equal(t, int32(0), tnFS.closeCount.Load())
+	require.True(t, tnOp.needsCleanup())
+	require.NotNil(t, c.testAdmission)
+
+	tnService.closeErr = nil
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), logService.closeCount.Load())
+	require.Equal(t, int32(1), logFS.closeCount.Load())
+	require.Equal(t, int32(2), tnService.closeCount.Load())
+	require.Equal(t, int32(1), tnFS.closeCount.Load())
 	require.Nil(t, c.testAdmission)
 }
 

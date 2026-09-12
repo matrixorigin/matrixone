@@ -154,9 +154,12 @@ func TestPrepareScalarKeepsTemplateImmutableAcrossParameters(t *testing.T) {
 	secondParamDone()
 	require.Equal(t, "y", foldedFilterValue(t, second))
 	require.True(t, containsParam(template.PreFilters[0]))
-	req, hasQuery, err := RequestFromScalar(second, searchIdentityForTest(), nil, false)
+	req, hasQuery, err := RequestFromScalar(second, searchIdentityForTest(), []byte{1, 2}, true, true)
 	require.NoError(t, err)
 	require.True(t, hasQuery)
+	require.Equal(t, []byte{1, 2}, req.MembershipFilter)
+	require.True(t, req.HasMembershipFilter)
+	require.True(t, req.MembershipFilterRequired)
 	require.Equal(t, uint64(2), req.ResultLimit)
 	require.Equal(t, overfetch.FilteredPostModeLimit(2), req.CandidateBudget)
 	require.Equal(t, uint64(1), req.FirstRoundLimit)
@@ -294,47 +297,47 @@ func TestExecutionRejectsInvalidRuntimeState(t *testing.T) {
 
 func TestRequestFromScalarRejectsMalformedBoundExpressions(t *testing.T) {
 	identity := searchIdentityForTest()
-	_, _, err := RequestFromScalar(nil, identity, nil, false)
+	_, _, err := RequestFromScalar(nil, identity, nil, false, false)
 	require.ErrorContains(t, err, "incomplete bound expressions")
 
 	nonLiteralQuery := &plan.VectorIndexScan{QueryVector: &plan.Expr{}}
-	_, _, err = RequestFromScalar(nonLiteralQuery, identity, nil, false)
+	_, _, err = RequestFromScalar(nonLiteralQuery, identity, nil, false, false)
 	require.ErrorContains(t, err, "query vector did not fold")
 
 	nullQuery := &plan.VectorIndexScan{QueryVector: &plan.Expr{
 		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
 	}}
-	_, hasQuery, err := RequestFromScalar(nullQuery, identity, nil, false)
+	_, hasQuery, err := RequestFromScalar(nullQuery, identity, nil, false, false)
 	require.NoError(t, err)
 	require.False(t, hasQuery)
 
 	query := plan2.MakePlan2Vecf32ConstExprWithType("[1,2]", 2)
-	_, _, err = RequestFromScalar(&plan.VectorIndexScan{QueryVector: query}, identity, nil, false)
+	_, _, err = RequestFromScalar(&plan.VectorIndexScan{QueryVector: query}, identity, nil, false, false)
 	require.ErrorContains(t, err, "result limit did not fold")
 	_, _, err = RequestFromScalar(&plan.VectorIndexScan{
 		QueryVector: query,
 		CandidateLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 			Isnull: true,
 		}}},
-	}, identity, nil, false)
+	}, identity, nil, false, false)
 	require.ErrorContains(t, err, "result limit did not fold")
 	_, _, err = RequestFromScalar(&plan.VectorIndexScan{
 		QueryVector:    query,
 		CandidateLimit: plan2.MakePlan2Int64ConstExprWithType(1),
-	}, identity, nil, false)
+	}, identity, nil, false, false)
 	require.ErrorContains(t, err, "result limit is not uint64")
 
 	_, _, err = RequestFromScalar(&plan.VectorIndexScan{
 		QueryVector:     query,
 		CandidateLimit:  plan2.MakePlan2Uint64ConstExprWithType(1),
 		FirstRoundLimit: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
-	}, identity, nil, false)
+	}, identity, nil, false, false)
 	require.ErrorContains(t, err, "first-round limit did not fold")
 	_, _, err = RequestFromScalar(&plan.VectorIndexScan{
 		QueryVector:     query,
 		CandidateLimit:  plan2.MakePlan2Uint64ConstExprWithType(1),
 		FirstRoundLimit: plan2.MakePlan2Int64ConstExprWithType(1),
-	}, identity, nil, false)
+	}, identity, nil, false, false)
 	require.ErrorContains(t, err, "first-round limit is not uint64")
 }
 
@@ -346,7 +349,7 @@ func TestExplainDiagnosticsAreEnabledOnlyForScalarScans(t *testing.T) {
 
 	scalar, err := PrepareScalar(spec, proc)
 	require.NoError(t, err)
-	scalarReq, ok, err := RequestFromScalar(scalar, searchIdentityForTest(), nil, false)
+	scalarReq, ok, err := RequestFromScalar(scalar, searchIdentityForTest(), nil, false, false)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.True(t, scalarReq.CollectExplainDiagnostics)

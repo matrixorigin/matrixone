@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -29,6 +30,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
+	// An older CN may receive an overload selected by a newer CN. It must
+	// reject the unknown index instead of panicking while indexing Overloads.
+	unknown := encodeOverloadID(STR_TO_DATE, 99)
+	_, err := GetFunctionById(context.Background(), unknown)
+	require.Error(t, err)
+	_, exists := GetFunctionByIdWithoutError(unknown)
+	require.False(t, exists)
+	require.False(t, GetFunctionIsWinOrderFunById(unknown))
+}
 
 func Test_fixedTypeCastRule1(t *testing.T) {
 	inputs := []struct {
@@ -125,6 +137,78 @@ func Test_fixedTypeCastRule1(t *testing.T) {
 			require.Equal(t, in.want[0], t1, msg)
 			require.Equal(t, in.want[1], t2, msg)
 		}
+	}
+}
+
+func TestArithmeticTypeCastRule1BitSignedBigintUsesDecimal(t *testing.T) {
+	bit64 := types.New(types.T_bit, 64, 0)
+	signedBigint := types.T_int64.ToType()
+	want := types.New(types.T_decimal128, 38, 0)
+
+	for _, test := range []struct {
+		name  string
+		left  types.Type
+		right types.Type
+	}{
+		{name: "bit plus signed bigint", left: bit64, right: signedBigint},
+		{name: "signed bigint plus bit", left: signedBigint, right: bit64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			hasCast, left, right := arithmeticTypeCastRule1(test.left, test.right)
+			require.True(t, hasCast)
+			require.Equal(t, want, left)
+			require.Equal(t, want, right)
+		})
+	}
+
+	// The generic rule remains the comparison contract; only arithmetic uses
+	// the widened mixed-integer domain.
+	hasCast, left, right := fixedTypeCastRule1(bit64, signedBigint)
+	require.True(t, hasCast)
+	require.Equal(t, signedBigint, left)
+	require.Equal(t, signedBigint, right)
+}
+
+func TestGetArithmeticFunctionBitSignedBigintUsesDecimal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bit64 := types.New(types.T_bit, 64, 0)
+	want := types.New(types.T_decimal128, 38, 0)
+
+	for _, operands := range []struct {
+		name        string
+		left, right types.Type
+	}{
+		{name: "bit-left", left: bit64, right: types.T_int64.ToType()},
+		{name: "bit-right", left: types.T_int64.ToType(), right: bit64},
+	} {
+		for _, name := range []string{"+", "-", "*", "%"} {
+			t.Run(operands.name+"/"+name, func(t *testing.T) {
+				get, err := GetFunctionByName(proc.Ctx, name, []types.Type{operands.left, operands.right})
+				require.NoError(t, err)
+				targets, shouldCast := get.ShouldDoImplicitTypeCast()
+				require.True(t, shouldCast)
+				require.Equal(t, []types.Type{want, want}, targets)
+				require.Equal(t, want, get.GetReturnType())
+			})
+		}
+	}
+}
+
+func TestArithmeticTypeCastRule1BitWidthsUseUnsignedDomain(t *testing.T) {
+	int64Type := types.T_int64.ToType()
+	want := types.New(types.T_decimal128, 38, 0)
+
+	// The result of an arithmetic subtree can exceed the declared BIT width, so
+	// use the full unsigned domain even for narrow BIT inputs.
+	for _, width := range []int32{1, 8, 63, 64} {
+		t.Run(fmt.Sprintf("bit-%d", width), func(t *testing.T) {
+			hasCast, left, right := arithmeticTypeCastRule1(
+				types.New(types.T_bit, width, 0), int64Type,
+			)
+			require.True(t, hasCast)
+			require.Equal(t, want, left)
+			require.Equal(t, want, right)
+		})
 	}
 }
 
@@ -410,7 +494,7 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldErr:  false,
 			requireFid: UUID_TO_BIN, requireOid: 0,
 			shouldCast: false,
-			requireRet: types.T_varbinary.ToType(),
+			requireRet: types.NewWithCharset(types.T_varbinary, 16, 0, types.CharsetBinary),
 		},
 		{
 			name: "bin_to_uuid", args: []types.Type{types.T_varbinary.ToType(), types.T_float64.ToType()},
@@ -1151,6 +1235,12 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_role_id"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	for _, name := range []string{
+		"inet_aton", "inet_ntoa", "inet6_aton", "inet6_ntoa",
+		"is_ipv4", "is_ipv6", "is_ipv4_compat", "is_ipv4_mapped",
+	} {
+		assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName(name), name)
+	}
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
 }
 
@@ -1176,6 +1266,22 @@ func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	require.False(t, HasExecutableCTASTypeDefault(-1))
 }
 
+func TestFunctionLookupRejectsInvalidOverload(t *testing.T) {
+	invalid := EncodeOverloadID(BIN, 99)
+
+	_, err := GetFunctionById(context.Background(), invalid)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+
+	_, exists := GetFunctionByIdWithoutError(invalid)
+	require.False(t, exists)
+
+	zonemappable, err := GetFunctionIsZonemappableById(context.Background(), invalid)
+	require.Error(t, err)
+	require.False(t, zonemappable)
+	require.False(t, GetFunctionIsWinOrderFunById(invalid))
+}
+
 func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 	notNull := &plan.Expr{Typ: plan.Type{NotNullable: true}}
 
@@ -1187,13 +1293,24 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 		{name: "division by zero", fid: DIV, argCount: 2},
 		{name: "integer division by zero", fid: INTEGER_DIV, argCount: 2},
 		{name: "modulo by zero", fid: MOD, argCount: 2},
+		{name: "power domain or overflow", fid: POW, argCount: 2},
+		{name: "exponential overflow", fid: EXP, argCount: 1},
+		{name: "cotangent zero", fid: COT, argCount: 1},
 		{name: "missing JSON path", fid: JSON_EXTRACT, argCount: 2},
 		{name: "JSON string extractor", fid: JSON_EXTRACT_STRING, argCount: 2},
 		{name: "JSON float64 extractor", fid: JSON_EXTRACT_FLOAT64, argCount: 2},
 		{name: "regexp without a match", fid: REGEXP_SUBSTR, argCount: 2},
 		{name: "invalid IPv6 address", fid: INET6_ATON, argCount: 1},
+		{name: "invalid IPv4 address", fid: INET_ATON, argCount: 1},
+		{name: "invalid binary IP length", fid: INET6_NTOA, argCount: 1},
 		{name: "out of range elt index", fid: ELT, argCount: 3},
 		{name: "invalid hex input", fid: UNHEX, argCount: 1},
+		{name: "invalid conversion base", fid: CONV, argCount: 3},
+		{name: "invalid SHA2 variant", fid: SHA2, argCount: 2},
+		{name: "AES encryption failure", fid: AES_ENCRYPT, argCount: 2},
+		{name: "AES decryption failure", fid: AES_DECRYPT, argCount: 2},
+		{name: "compression failure", fid: COMPRESS, argCount: 1},
+		{name: "decompression failure", fid: UNCOMPRESS, argCount: 1},
 		{name: "invalid day of year", fid: MAKEDATE, argCount: 2},
 		{name: "date format can reject a date", fid: DATE_FORMAT, argCount: 2},
 		{name: "time format can reject a time", fid: TIME_FORMAT, argCount: 2},
@@ -1206,6 +1323,27 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 			}
 			require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
 		})
+	}
+}
+
+func TestOctNullability(t *testing.T) {
+	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_int64, types.T_float64, types.T_time, types.T_bit} {
+		t.Run(typ.String(), func(t *testing.T) {
+			fn, err := GetFunctionByName(t.Context(), "oct", []types.Type{typ.ToType()})
+			require.NoError(t, err)
+			arg := &plan.Expr{Typ: plan.Type{Id: int32(typ), NotNullable: true}}
+			want := typ == types.T_int64 || typ == types.T_float64 || typ == types.T_time || typ == types.T_bit
+			require.Equal(t, want, DeduceNotNullable(fn.GetEncodedOverloadID(), []*plan.Expr{arg}))
+			arg.Typ.NotNullable = false
+			require.False(t, DeduceNotNullable(fn.GetEncodedOverloadID(), []*plan.Expr{arg}))
+		})
+	}
+	for id := int32(0); id < OctStringOverloadStart; id++ {
+		op, err := GetFunctionById(t.Context(), EncodeOverloadID(OCT, id))
+		require.NoError(t, err)
+		arg := &plan.Expr{Typ: plan.Type{Id: int32(op.args[0]), NotNullable: true}}
+		require.True(t, DeduceNotNullable(EncodeOverloadID(OCT, id), []*plan.Expr{arg}))
 	}
 }
 

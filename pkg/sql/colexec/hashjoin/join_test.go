@@ -2405,12 +2405,12 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 	}
 }
 
-func newTestCase(t *testing.T, flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
+func newTestCase(t testing.TB, flgs []bool, ts []types.Type, rp []colexec.ResultPos, cs [][]*plan.Expr) joinTestCase {
 	return newTestCaseWithMPool(t, mpool.MustNewZero(), flgs, ts, rp, cs)
 }
 
 func newTestCaseWithMPool(
-	t *testing.T,
+	t testing.TB,
 	m *mpool.MPool,
 	flgs []bool,
 	ts []types.Type,

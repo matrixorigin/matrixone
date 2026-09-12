@@ -360,6 +360,51 @@ func TestMakeInsertValueConstExprGeometry(t *testing.T) {
 	require.Equal(t, int32(types.T_geometry), fn.Args[1].Typ.Id)
 }
 
+func TestMakeInsertValueConstExprBoolUsesNonZeroNumericSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	colType := types.T_bool.ToType()
+	testCases := []struct {
+		name  string
+		value *tree.NumVal
+		want  bool
+	}{
+		{
+			name:  "signed positive non-one",
+			value: tree.NewNumVal(int64(2), "2", false, tree.P_int64),
+			want:  true,
+		},
+		{
+			name:  "signed negative",
+			value: tree.NewNumVal(int64(-1), "-1", true, tree.P_int64),
+			want:  true,
+		},
+		{
+			name:  "unsigned positive non-one",
+			value: tree.NewNumVal(uint64(2), "2", false, tree.P_uint64),
+			want:  true,
+		},
+		{
+			name:  "zero remains false",
+			value: tree.NewNumVal(int64(0), "0", false, tree.P_int64),
+			want:  false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := MakeInsertValueConstExpr(proc, tc.value, &colType, false)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_bool), expr.Typ.Id)
+			require.Equal(t, tc.want, expr.GetLit().GetBval())
+		})
+	}
+
+	nullExpr, err := MakeInsertValueConstExpr(proc,
+		tree.NewNumVal("NULL", "NULL", false, tree.P_null), &colType, false)
+	require.NoError(t, err)
+	require.True(t, nullExpr.GetLit().Isnull)
+}
+
 func TestMakeInsertValueConstExprDefersInternalTimeOverflow(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	colType := types.T_time.ToTypeWithScale(6)
@@ -715,7 +760,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true, true, false, false,
+			true, true, false, false, false,
 		)
 
 		require.NoError(t, err)
@@ -744,7 +789,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, true, true, false,
+			false, true, true, false, false,
 		)
 
 		require.NoError(t, err)
@@ -753,6 +798,32 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 		require.False(t, joinNode.IsRightJoin)
 		require.Equal(t, plan.Node_PROJECT, builder.qry.Nodes[joinNode.Children[0]].NodeType)
 		require.Equal(t, plan.Node_TABLE_SCAN, builder.qry.Nodes[joinNode.Children[1]].NodeType)
+	})
+
+	t.Run("post-createQuery FK action uses local ABI without runtime filter", func(t *testing.T) {
+		builder, bindCtx, lastNodeID := newBuilder(t)
+
+		gotNodeID, err := appendDeleteIndexTablePlan(
+			builder,
+			bindCtx,
+			&plan.ObjectRef{ObjName: "idx_body"},
+			indexTableDef,
+			&plan.IndexDef{Parts: []string{"body"}},
+			typMap,
+			posMap,
+			lastNodeID,
+			true, false, false, false, true,
+		)
+
+		require.NoError(t, err)
+		joinNode := builder.qry.Nodes[gotNodeID]
+		require.Equal(t, plan.Node_JOIN, joinNode.NodeType)
+		require.Empty(t, joinNode.RuntimeFilterBuildList)
+		indexScan := builder.qry.Nodes[joinNode.Children[0]]
+		require.Empty(t, indexScan.RuntimeFilterProbeList)
+		require.Empty(t, indexScan.BindingTags)
+		require.Empty(t, builder.qry.Nodes[joinNode.Children[1]].BindingTags)
+		require.Len(t, joinNode.OnList, 1)
 	})
 
 	t.Run("composite set null delete keeps matched hidden rows only", func(t *testing.T) {
@@ -767,7 +838,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, false, false, true,
+			false, false, false, true, false,
 		)
 
 		require.NoError(t, err)
@@ -794,7 +865,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			false, true, false, false,
+			false, true, false, false, false,
 		)
 
 		require.NoError(t, err)
@@ -824,7 +895,7 @@ func TestAppendDeleteIndexTablePlanUsesPrefixLookupKey(t *testing.T) {
 			typMap,
 			posMap,
 			lastNodeID,
-			true, true, false, false,
+			true, true, false, false, false,
 		)
 
 		require.NoError(t, err)

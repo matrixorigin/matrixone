@@ -585,6 +585,7 @@ func (ctr *container) processAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
+	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetWarningSink())
 	// Aggregate state initializes its physical capacity as NULL. Keep only
 	// logical-row nulls so downstream HasNull checks do not see an unused tail.
 	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
@@ -808,6 +809,7 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
+	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetWarningSink())
 	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
 	if outputEnd == n {
 		ctr.freeRunningAgg()
@@ -925,6 +927,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 	if err != nil {
 		return nil, err
 	}
+	aggexec.ReportGroupConcatWarnings(ctr.batAggs[idx], proc.GetWarningSink())
 	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
 	if outputEnd == n {
 		ctr.freeRunningAgg()
@@ -2177,6 +2180,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(ctr.sels))
+	var jsonOrderScratch sort.JSONOrderScratch
 
 	i, j := 1, len(ctr.orderVecs)
 	for ; i < j; i++ {
@@ -2191,9 +2195,14 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			ps = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
 		}
 		vec := ctr.orderVecs[i].Vec[0]
+		var scratch *sort.JSONOrderScratch
+		nullCnt := vec.GetNulls().Count()
+		if i >= partitionKeyCount && !vec.IsConst() && vec.GetType().Oid == types.T_json && nullCnt < vec.Length() {
+			jsonOrderScratch.Prepare(ctr.sels, vec)
+			scratch = &jsonOrderScratch
+		}
 		// skip sort for const vector
 		if !vec.IsConst() {
-			nullCnt := vec.GetNulls().Count()
 			if nullCnt < vec.Length() {
 				for group, groupCount := 0, len(ps); group < groupCount; group++ {
 					if err := checkCanceled(proc, group); err != nil {
@@ -2207,7 +2216,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 					if i < partitionKeyCount {
 						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
 					} else {
-						sort.SortForSQLOrder(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
+						sort.SortForSQLOrderWithScratch(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec, scratch)
 					}
 				}
 			}
@@ -2663,12 +2672,8 @@ func doDateSub(start types.Date, diff int64, unit int64) (types.Date, error) {
 	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(), diff, types.IntervalType(unit), true) {
 		return 0, moerr.NewOutOfRangeNoCtx("date", "")
 	}
-	if types.IntervalType(unit) == types.MicroSecond {
-		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(), diff, true, types.DateType)
-		if !ok {
-			return 0, moerr.NewOutOfRangeNoCtx("date", "")
-		}
-		return dt.ToDate(), nil
+	if diff == math.MinInt64 {
+		return 0, moerr.NewOutOfRangeNoCtx("date", "")
 	}
 	dt, success := start.ToDatetime().AddInterval(-diff, types.IntervalType(unit), types.DateType)
 	if success {
@@ -2712,12 +2717,8 @@ func doDatetimeSub(start types.Datetime, diff int64, unit int64) (types.Datetime
 	if !temporalRangeCalendarIntervalInDomain(start, diff, types.IntervalType(unit), true) {
 		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 	}
-	if types.IntervalType(unit) == types.MicroSecond {
-		dt, ok := checkedDatetimeMicrosecondInterval(start, diff, true, types.DateTimeType)
-		if !ok {
-			return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
-		}
-		return dt, nil
+	if diff == math.MinInt64 {
+		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 	}
 	dt, success := start.AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
@@ -2738,12 +2739,8 @@ func doTimestampSub(loc *time.Location, start types.Timestamp, diff int64, unit 
 	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(loc), diff, types.IntervalType(unit), true) {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}
-	if types.IntervalType(unit) == types.MicroSecond {
-		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(loc), diff, true, types.DateTimeType)
-		if !ok {
-			return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
-		}
-		return timestampRangeBoundary(dt, loc), nil
+	if diff == math.MinInt64 {
+		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(-diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
@@ -3345,23 +3342,6 @@ func temporalRangeCalendarIntervalInDomain(start types.Datetime, diff int64, uni
 	return boundaryYear >= int64(types.MinDatetimeYear) && boundaryYear <= int64(types.MaxDatetimeYear)
 }
 
-// checkedDatetimeMicrosecondInterval validates both the signed arithmetic and
-// the resulting DATE/DATETIME domain. Datetime.AddInterval intentionally
-// fast-paths MICROSECOND without a calendar validation, so RANGE bounds must
-// validate it before using the result as a binary-search key.
-func checkedDatetimeMicrosecondInterval(start types.Datetime, diff int64, subtract bool, timeType types.TimeType) (types.Datetime, bool) {
-	result, ok := checkedMicrosecondArithmetic(int64(start), diff, subtract)
-	if !ok {
-		return 0, false
-	}
-	dt := types.Datetime(result)
-	year, month, day, _ := dt.ToDate().Calendar(true)
-	if timeType == types.DateType {
-		return dt, types.ValidDate(year, month, day)
-	}
-	return dt, types.ValidDatetime(year, month, day)
-}
-
 func checkedTimeMicrosecondInterval(start types.Time, diff int64, subtract bool) (types.Time, bool) {
 	result, ok := checkedMicrosecondArithmetic(int64(start), diff, subtract)
 	if !ok {
@@ -3380,13 +3360,6 @@ func doDateAdd(start types.Date, diff int64, unit int64) (types.Date, error) {
 	}
 	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(), diff, types.IntervalType(unit), false) {
 		return 0, moerr.NewOutOfRangeNoCtx("date", "")
-	}
-	if types.IntervalType(unit) == types.MicroSecond {
-		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(), diff, false, types.DateType)
-		if !ok {
-			return 0, moerr.NewOutOfRangeNoCtx("date", "")
-		}
-		return dt.ToDate(), nil
 	}
 	dt, success := start.ToDatetime().AddInterval(diff, types.IntervalType(unit), types.DateType)
 	if success {
@@ -3430,13 +3403,6 @@ func doDatetimeAdd(start types.Datetime, diff int64, unit int64) (types.Datetime
 	if !temporalRangeCalendarIntervalInDomain(start, diff, types.IntervalType(unit), false) {
 		return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
 	}
-	if types.IntervalType(unit) == types.MicroSecond {
-		dt, ok := checkedDatetimeMicrosecondInterval(start, diff, false, types.DateTimeType)
-		if !ok {
-			return 0, moerr.NewOutOfRangeNoCtx("datetime", "")
-		}
-		return dt, nil
-	}
 	dt, success := start.AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
 	if success {
 		return dt, nil
@@ -3455,13 +3421,6 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, unit 
 	}
 	if !temporalRangeCalendarIntervalInDomain(start.ToDatetime(loc), diff, types.IntervalType(unit), false) {
 		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
-	}
-	if types.IntervalType(unit) == types.MicroSecond {
-		dt, ok := checkedDatetimeMicrosecondInterval(start.ToDatetime(loc), diff, false, types.DateTimeType)
-		if !ok {
-			return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
-		}
-		return timestampRangeBoundary(dt, loc), nil
 	}
 	dt, success := start.ToDatetime(loc).AddInterval(diff, types.IntervalType(unit), types.DateTimeType)
 	if success {

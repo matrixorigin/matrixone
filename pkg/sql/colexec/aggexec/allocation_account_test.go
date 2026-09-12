@@ -1124,7 +1124,10 @@ func TestDistinctFillPreflightUsesPublishedNodeFootprints(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, exact, exactAgain)
 	require.Equal(t, uint32(rows), count)
-	_, count, err = run(exact-1, false)
+	// If the optional fixed index cannot be admitted, preflight may retry with
+	// the legacy skiplist representation. Leave exactly its initial arena
+	// budget available so this assertion exercises that fallback's own bound.
+	_, count, err = run(exact-(40<<10), false)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, count, "failed admission must not publish distinct keys")
 }

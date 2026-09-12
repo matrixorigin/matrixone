@@ -171,6 +171,15 @@ func RequiresMORPCVersion36MixedJSONBooleanEquality(owner any) (bool, error) {
 	return features.MixedJSONBooleanEquality, err
 }
 
+// RequiresMORPCVersion59NumericFormatArguments reports whether an owner
+// contains FORMAT with a physical numeric first argument. The v59 fence is
+// needed even when the function keeps overload IDs 0/1: those IDs were
+// historically string-only on older receivers.
+func RequiresMORPCVersion59NumericFormatArguments(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.FormatNumericArguments, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -178,23 +187,32 @@ const (
 	internalJSONComparisonFunctionID int32 = 577
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
+	binFunctionID                    int32 = 270
+	convFunctionID                   int32 = 367
 )
 
 // RemoteExpressionFeatures is the complete set of versioned expression
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
-// MixedJSONBooleanEquality require MORPC v36. A struct makes compatibility
-// call sites name every capability instead of relying on positional booleans.
+// MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
+// MORPC v59. TypedConversionFunctions requires MORPC v64 because BIN/CONV
+// overload identities and their fixed-width execution contracts changed in
+// the same release. A struct makes compatibility call sites name every
+// capability instead of relying on positional booleans.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool
 	MixedJSONBooleanEquality bool
+	FormatNumericArguments   bool
+	TypedConversionFunctions bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.JSONComparisonParam ||
-		features.MixedJSONBooleanEquality
+		features.MixedJSONBooleanEquality ||
+		features.FormatNumericArguments ||
+		features.TypedConversionFunctions
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -216,10 +234,98 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
 				features.MixedJSONBooleanEquality = true
 			}
+			formatNumericArguments, err := isNumericFormatFunction(fn)
+			if err != nil {
+				return err
+			}
+			if formatNumericArguments {
+				features.FormatNumericArguments = true
+			}
+			if !features.TypedConversionFunctions && isTypedConversionFunction(fn) {
+				features.TypedConversionFunctions = true
+			}
 			return nil
 		})
 	})
 	return
+}
+
+// RequiresMORPCVersion64TypedConversion reports whether an owner contains a
+// BIN/CONV expression whose serialized overload or physical argument contract
+// is not executable with the pre-v64 function registry.
+func RequiresMORPCVersion64TypedConversion(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.TypedConversionFunctions, err
+}
+
+// isTypedConversionFunction identifies only the BIN/CONV forms changed by the
+// typed-dispatch fix. Plain string BIN/CONV and integer BIN retain their old
+// wire/execution contract and remain usable during a rolling upgrade.
+func isTypedConversionFunction(function *Function) bool {
+	if function == nil || function.Func == nil {
+		return false
+	}
+
+	functionID := int32(function.Func.Obj >> 32)
+	name := strings.ToLower(function.Func.GetObjName())
+	firstType := int32(0)
+	if len(function.Args) > 0 && function.Args[0] != nil {
+		firstType = function.Args[0].Typ.Id
+	}
+	overloadID := int32(function.Func.Obj)
+
+	switch {
+	case functionID == convFunctionID || name == "conv":
+		// CONV overloads 3..12 are the typed integer/float forms. The dynamic
+		// overload is 13. BOOL/DECIMAL/temporal values use the historical
+		// overload 0 but carry a fixed-width vector, so inspect the argument
+		// type as well.
+		return overloadID >= 3 || !isPlanMySQLStringType(firstType)
+	case functionID == binFunctionID || name == "bin":
+		// BIN overloads 8/9 are FLOAT32/FLOAT64 and now use MySQL's numeric
+		// prefix representation. Overload 11 is the new dynamic fixed-width
+		// path; overload 10 remains the string path.
+		return overloadID == 8 || overloadID == 9 || overloadID >= 11 ||
+			firstType == 30 || firstType == 31 // FLOAT32/FLOAT64
+	default:
+		return false
+	}
+}
+
+// FORMAT reuses its historical VARCHAR overload IDs for the new typed numeric
+// execution path. A pre-v59 receiver still interprets those vectors as
+// Varlena and can panic while decoding the first argument, so this physical
+// argument contract must be fenced at the remote pipeline boundary.
+func isNumericFormatFunction(function *Function) (bool, error) {
+	if function == nil || function.Func == nil || len(function.Args) < 2 {
+		return false, nil
+	}
+	const formatFunctionID int32 = 262
+	functionID := int32(function.Func.Obj >> 32)
+	if functionID != formatFunctionID && !strings.EqualFold(function.Func.GetObjName(), "format") {
+		return false, nil
+	}
+	if function.Args[0] == nil {
+		return false, moerr.NewInvalidInputNoCtx("FORMAT is missing its first argument")
+	}
+	return isPlanNumericType(function.Args[0].Typ.Id), nil
+}
+
+// isPlanNumericType mirrors container/types.Type.IsNumeric without importing
+// that package (container/types itself depends on pb/plan). The IDs are part
+// of the plan wire contract and include BIT, integer, floating-point and
+// decimal families.
+func isPlanNumericType(id int32) bool {
+	switch id {
+	case 11, // BIT
+		20, 21, 22, 23, // signed integers
+		25, 26, 27, 28, // unsigned integers
+		30, 31, // floating point
+		32, 33, 34: // decimals
+		return true
+	default:
+		return false
+	}
 }
 
 func isMixedJSONBooleanEquality(function *Function) bool {

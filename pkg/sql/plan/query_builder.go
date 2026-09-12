@@ -643,6 +643,9 @@ func (builder *QueryBuilder) copyNode(ctx *BindContext, nodeId int32) int32 {
 		newNode.Children = append(newNode.Children, builder.copyNode(ctx, child))
 	}
 	newNodeId := builder.appendNode(newNode, ctx)
+	if _, protected := builder.existentialGateProjects[nodeId]; protected {
+		builder.existentialGateProjects[newNodeId] = struct{}{}
+	}
 	return newNodeId
 }
 
@@ -3444,6 +3447,20 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				},
 			})
 		}
+		if node.PreInsertCtx.TrackAutoIncrementGenerated {
+			markerRef := [2]int32{
+				node.BindingTags[0],
+				node.PreInsertCtx.AutoIncrementGeneratedColumn,
+			}
+			remapping.addColRef(markerRef)
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_bool)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: -1,
+					ColPos: node.PreInsertCtx.AutoIncrementGeneratedColumn,
+				}},
+			})
+		}
 
 	case plan.Node_PRE_INSERT_UK:
 		if node.PreInsertUkCtx == nil {
@@ -3474,6 +3491,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		for i, pos := range auxColumns {
 			auxRefs[i] = [2]int32{childTag, pos}
 			colRefCnt[auxRefs[i]]++
+		}
+		var autoIncrementRef, autoIncrementGeneratedRef [2]int32
+		if node.PreInsertUkCtx.AutoIncrementReorder {
+			autoIncrementRef = [2]int32{childTag, node.PreInsertUkCtx.AutoIncrementColumn}
+			autoIncrementGeneratedRef = [2]int32{childTag, node.PreInsertUkCtx.AutoIncrementGeneratedColumn}
+			colRefCnt[autoIncrementRef]++
+			colRefCnt[autoIncrementGeneratedRef]++
 		}
 		var pkRef [2]int32
 		if node.PreInsertUkCtx.OdkuTargetArbitration {
@@ -3527,11 +3551,32 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			}
 			node.PreInsertUkCtx.PkColumn = pos[1]
 		}
+		if node.PreInsertUkCtx.AutoIncrementReorder {
+			colRefCnt[autoIncrementRef]--
+			pos, ok := childRemapping.globalToLocal[autoIncrementRef]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE auto-increment column")
+			}
+			node.PreInsertUkCtx.AutoIncrementColumn = pos[1]
+			colRefCnt[autoIncrementGeneratedRef]--
+			pos, ok = childRemapping.globalToLocal[autoIncrementGeneratedRef]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE auto-increment provenance column")
+			}
+			node.PreInsertUkCtx.AutoIncrementGeneratedColumn = pos[1]
+		}
 
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
 		newProjectList := make([]*plan.Expr, 0, len(neededOutputs))
 		remapInfo.tip = "PreInsertUkCtx"
+		autoOutput := node.PreInsertUkCtx.AutoIncrementOutputColumn
+		if node.PreInsertUkCtx.AutoIncrementReorder {
+			node.PreInsertUkCtx.AutoIncrementOutputColumn = -1
+		}
 		for i, output := range neededOutputs {
+			if node.PreInsertUkCtx.AutoIncrementReorder && output == autoOutput {
+				node.PreInsertUkCtx.AutoIncrementOutputColumn = int32(i)
+			}
 			expr := node.ProjectList[output]
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = i
@@ -3543,6 +3588,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			newProjectList = append(newProjectList, expr)
 		}
 		node.ProjectList = newProjectList
+		if node.PreInsertUkCtx.AutoIncrementReorder && node.PreInsertUkCtx.AutoIncrementOutputColumn < 0 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "INSERT IGNORE auto-increment output was pruned")
+		}
 		node.PreInsertUkCtx.OutputColumns = int32(len(newProjectList))
 		if node.PreInsertUkCtx.OdkuTargetArbitration {
 			if len(neededOutputs) == 0 || neededOutputs[len(neededOutputs)-1] != targetOutputPos {
@@ -3697,6 +3745,11 @@ func (builder *QueryBuilder) removeUnnecessaryProjections(nodeID int32) int32 {
 }
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
+	if builder.hadPendingExistentials {
+		if err := builder.checkPendingExistentials(); err != nil {
+			return nil, err
+		}
+	}
 	var err error
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
@@ -3740,6 +3793,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		var fusedScalarAggs bool
+		rootID, fusedScalarAggs = builder.fuseScalarAggregates(rootID)
+		if fusedScalarAggs {
+			colRefCnt = make(map[[2]int32]int)
+			builder.countColRefs(rootID, colRefCnt)
+		}
 		// Removing a proof-eliminated aggregate can expose a direct Project ->
 		// TableScan edge only after the first limit-pushdown pass. Re-run the
 		// idempotent rule so the newly streaming path can honor source demand.
@@ -3780,6 +3839,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID = builder.aggPullup(rootID, rootID)
 		ReCalcNodeStats(rootID, builder, true, false, true)
 		rootID = builder.pushdownSemiAntiJoins(rootID)
+		rootID = builder.removeImpliedSemiJoins(rootID)
 		if err = builder.optimizeDistinctAgg(rootID); err != nil {
 			return nil, err
 		}
@@ -5691,6 +5751,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	if ctx.sampleFunc.hasSampleFunc {
+		for _, group := range ctx.groups {
+			if hasSubquery(group) {
+				return 0, moerr.NewNYI(builder.GetContext(), "subquery in GROUP BY with SAMPLE")
+			}
+		}
 		// return err if it's not a legal SAMPLE function.
 		if err = validSample(ctx, builder); err != nil {
 			return 0, err
@@ -5746,8 +5811,18 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		affineOrderBys,
 	)
 
-	// Flatten aggregate argument subqueries before building the AGG node.
+	// GROUP BY expressions are evaluated by the AGG over its input, so
+	// materialize scalar subqueries into that input before fixing the group-key
+	// layout. Projection, alias, and ordinal references already point at the
+	// corresponding group position and do not need to be rebound.
 	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
+		for i, group := range ctx.groups {
+			if nodeID, ctx.groups[i], err = builder.flattenSubqueries(nodeID, group, ctx); err != nil {
+				return
+			}
+		}
+
+		// Flatten aggregate argument subqueries before building the AGG node.
 		for i, agg := range ctx.aggregates {
 			if nodeID, ctx.aggregates[i], err = builder.flattenSubqueries(nodeID, agg, ctx); err != nil {
 				return
@@ -8341,7 +8416,9 @@ func (builder *QueryBuilder) bindGroupBy(
 		return
 	}
 
-	groupBinder := NewGroupBinder(builder, ctx, selectList)
+	allowScalarSubquery := clause != nil && astTimeWindow == nil &&
+		!clause.Apart && !clause.Cube && !clause.GroupingSets && !clause.Rollup
+	groupBinder := NewGroupBinder(builder, ctx, selectList, allowScalarSubquery)
 
 	if clause != nil {
 		for _, list := range clause.GroupByExprsList {
@@ -12619,6 +12696,11 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 	err = ctx.mergeContexts(builder.GetContext(), leftCtx, rightCtx)
 	if err != nil {
 		return 0, err
+	}
+	if ctx.bindingTree != nil {
+		_, hasUsingClause := tbl.Cond.(*tree.UsingJoinCond)
+		ctx.bindingTree.rightJoinUsingStar = joinType == plan.Node_RIGHT &&
+			(hasUsingClause || tbl.JoinType == tree.JOIN_TYPE_NATURAL_RIGHT)
 	}
 
 	node := &plan.Node{

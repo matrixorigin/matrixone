@@ -176,6 +176,56 @@ func TestCountDistinctSignedZeroUsesOneValue(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestCountDistinctFixedIndexPreservesFloatNaNIdentity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	values := []float64{
+		math.Float64frombits(0x7ff8000000000001),
+		math.Float64frombits(0x7ff8000000000001),
+		math.Float64frombits(0x7ff8000000000002),
+		math.Copysign(0, -1),
+		0,
+	}
+
+	count := func(t *testing.T, groupCapacity int) int64 {
+		t.Helper()
+		vec := testutil.NewFloat64Vector(
+			len(values), types.T_float64.ToType(), mp, false, nil, values)
+		defer vec.Free(mp)
+		exec := newCountColumnExec(
+			mp, AggIdOfCountColumn, true,
+			[]types.Type{types.T_float64.ToType()},
+		).(*countColumnExec)
+		require.NoError(t, exec.GroupGrow(groupCapacity))
+		if groupCapacity >= distinctFixedIndexMinGroups {
+			require.True(t, exec.state[0].distinctFixedDeferred)
+		}
+		defer exec.Free()
+		groups := make([]uint64, len(values))
+		for i := range groups {
+			groups[i] = 1
+		}
+		require.NoError(t, exec.PreflightBatchFill(
+			0, groups, []*vector.Vector{vec}))
+		require.NoError(t, exec.BatchFill(
+			0, groups, []*vector.Vector{vec}))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		got := vector.GetFixedAtNoTypeCheck[int64](result[0], 0)
+		result[0].Free(mp)
+		return got
+	}
+
+	// The fixed index must preserve the pre-existing byte-exact aggregate key
+	// contract: equal NaN payloads remain one key, distinct payloads remain
+	// distinct, and signed zeroes remain one key.
+	legacy := count(t, 1)
+	fixed := count(t, distinctFixedIndexMinGroups)
+	require.Equal(t, int64(3), legacy)
+	require.Equal(t, legacy, fixed)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestCountDistinctSignedZeroDoesNotAllocatePerRow(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -457,6 +507,177 @@ func TestCountMultiColumnDistinct(t *testing.T) {
 		}
 		require.Equal(t, curNB, mp.CurrNB())
 	})
+}
+
+func TestCountDistinctBatchDeduplicatesWithinUnit(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	const rows = hashmap.UnitLimit
+	values := make([]int64, rows)
+	groups := make([]uint64, rows)
+	for i := range values {
+		values[i] = int64(i % 17)
+		groups[i] = uint64(i%2 + 1)
+	}
+	vec := testutil.NewInt64Vector(rows, types.T_int64.ToType(), mp, false, nil, values)
+	defer vec.Free(mp)
+
+	exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
+	require.NoError(t, exec.GroupGrow(2))
+	defer exec.Free()
+	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{vec}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	vals := vector.MustFixedColNoTypeCheck[int64](results[0])
+	require.Equal(t, []int64{17, 17}, vals)
+	results[0].Free(mp)
+}
+
+func TestCountDistinctFixedIndexChunksLargeBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	const rows = AggBatchSize + 17
+	values := make([]int32, rows)
+	groups := make([]uint64, rows)
+	for i := range values {
+		values[i] = int32(i % (hashmap.UnitLimit*2 + 1))
+		groups[i] = 1
+	}
+	vec := testutil.NewInt32Vector(rows, types.T_int32.ToType(), mp, false, nil, values)
+	defer vec.Free(mp)
+
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_int32.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(distinctFixedIndexMinGroups))
+	require.True(t, exec.state[0].distinctFixedDeferred)
+	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{vec}))
+
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t,
+		int64(hashmap.UnitLimit*2+1),
+		vector.GetFixedAtNoTypeCheck[int64](results[0], 0))
+	for _, result := range results {
+		result.Free(mp)
+	}
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCountDistinctFixedIndexBatchAndMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makeExec := func() *countColumnExec {
+		exec := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
+		concrete := exec.(*countColumnExec)
+		require.NoError(t, concrete.GroupGrow(1024))
+		require.True(t, concrete.state[0].distinctFixedDeferred)
+		return concrete
+	}
+	fill := func(exec *countColumnExec, values []int64) {
+		vec := vector.NewVec(types.T_int64.ToType())
+		defer vec.Free(mp)
+		for _, value := range values {
+			require.NoError(t, vector.AppendFixed(vec, value, false, mp))
+		}
+		groups := make([]uint64, len(values))
+		for i := range groups {
+			groups[i] = 1
+		}
+		require.NoError(t, exec.PreflightBatchFill(0, groups, []*vector.Vector{vec}))
+		require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{vec}))
+	}
+
+	source := makeExec()
+	target := makeExec()
+	fill(source, []int64{1, 2, 2})
+	fill(target, []int64{2, 3})
+	require.NoError(t, target.PreflightBatchMerge(source, 0, []uint64{1}))
+	require.NoError(t, target.BatchMerge(source, 0, []uint64{1}))
+	// A fixed-index chunk has many valid-but-empty group rows.  Draining the
+	// whole chunk must skip those rows without requiring an index allocation for
+	// each one.
+	drain, err := target.BeginArgumentDrain(nil)
+	require.NoError(t, err)
+	var drained int
+	require.NoError(t, drain.ForEach(func(int, []byte) error {
+		drained++
+		return nil
+	}))
+	require.Equal(t, 3, drained)
+	drain.Abort()
+	var encoded bytes.Buffer
+	require.NoError(t, target.SaveIntermediateResultOfChunk(0, &encoded))
+	restored := newCountColumnExec(
+		mp, AggIdOfCountColumn, true,
+		[]types.Type{types.T_int64.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, restored.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+	require.True(t, restored.state[0].distinctFixedDeferred)
+	restoredResult, err := restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](restoredResult[0], 0))
+	for _, vec := range restoredResult {
+		vec.Free(mp)
+	}
+	restored.Free()
+
+	result, err := target.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+	for _, vec := range result {
+		vec.Free(mp)
+	}
+	source.Free()
+	target.Free()
+
+	// The batch-local admission key must include the state chunk as well as the
+	// row within that chunk. Otherwise group 1 and group AggBatchSize+1 would
+	// alias when they receive the same value.
+	crossChunk := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()}).(*countColumnExec)
+	require.NoError(t, crossChunk.GroupGrow(AggBatchSize+1))
+	require.True(t, crossChunk.state[0].distinctFixedDeferred)
+	require.True(t, crossChunk.state[1].distinctFixedDeferred)
+	vec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(vec, int64(42), false, mp))
+	require.NoError(t, vector.AppendFixed(vec, int64(42), false, mp))
+	groups := []uint64{1, AggBatchSize + 1}
+	require.NoError(t, crossChunk.PreflightBatchFill(0, groups, []*vector.Vector{vec}))
+	require.NoError(t, crossChunk.BatchFill(0, groups, []*vector.Vector{vec}))
+	vec.Free(mp)
+	crossResult, err := crossChunk.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](crossResult[0], 0))
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](crossResult[1], 0))
+	for _, vec := range crossResult {
+		vec.Free(mp)
+	}
+	crossChunk.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCountDistinctFixedIndexRejectsMismatchedPayload(t *testing.T) {
+	mp := mpool.MustNewZero()
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(1024))
+	defer exec.Free()
+
+	// Replayed exact-distinct spill payloads must retain the fixed-width
+	// contract.  A malformed/retyped payload cannot be put in the compatibility
+	// skiplist because deferred iteration reads only the fixed index.
+	err := exec.InsertDistinctArgument(0, []byte{1})
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	require.Zero(t, exec.state[0].argCnt[0])
+	keys, _, err := exec.DistinctArgumentStats()
+	require.NoError(t, err)
+	require.Zero(t, keys)
 }
 
 func testAggExec(t *testing.T,

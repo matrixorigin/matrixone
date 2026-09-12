@@ -17,4 +17,15 @@ explain select * from t1 where date_format(c2,'%d')='2024:04:01';
 explain select * from t1 where date_format(c2,'%Y:%m:%d')='2024-04-01';
 -- @separator:table
 explain select * from t1 where date_format(c2,'%Y')='2024';
+CREATE TABLE fractional_boundaries(id INT PRIMARY KEY, dt DATETIME(6));
+INSERT INTO fractional_boundaries VALUES
+(1,'2024-03-31 23:59:59.999999'),
+(2,'2024-04-01 00:00:00'),
+(3,'2024-04-01 23:59:59.999999'),
+(4,'2024-04-02 00:00:00'),
+(5,'2024-12-31 23:59:59.999999'),
+(6,'2025-01-01 00:00:00');
+SELECT id FROM fractional_boundaries WHERE DATE_FORMAT(dt,'%Y-%m-%d')='2024-04-01' ORDER BY id;
+SELECT id FROM fractional_boundaries WHERE DATE_FORMAT(dt,'%Y%m%d')='20240401' ORDER BY id;
+SELECT id FROM fractional_boundaries WHERE DATE_FORMAT(dt,'%Y')='2024' ORDER BY id;
 drop database if exists d1;

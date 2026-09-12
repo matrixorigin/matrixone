@@ -44,6 +44,10 @@ type TableFunction struct {
 	FulltextSourceRef *plan.ObjectRef
 	FulltextIndexRef  *plan.ObjectRef
 
+	// Named-snapshot read timestamp from the FUNCTION_SCAN node (Node.ScanSnapshot). Set by
+	// the planner only, never from TVF arguments (#27941).
+	ScanSnapshot *plan.Snapshot
+
 	// probe side runtime filter specs
 	RuntimeFilterSpecs []*plan.RuntimeFilterSpec
 

@@ -370,6 +370,13 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
+	// Deep existential regions are owned by a SQL block, never by a partially
+	// constructed node. The registry stays nil on the ordinary flattening path.
+	nextExistentialBlock    uint64
+	pendingExistentials     map[uint64]*pendingExistential
+	hadPendingExistentials  bool
+	existentialGateProjects map[int32]struct{}
+
 	qry     *plan.Query
 	compCtx CompilerContext
 	// queryingSubscriptionMetadata is scoped to binding one account-wide
@@ -613,6 +620,7 @@ type irregularUpdateMaintenance struct {
 }
 
 type OptimizerHints struct {
+	vectorLocalDOP             int
 	pushDownLimitToScan        int
 	pushDownTopThroughLeftJoin int
 	pushDownSemiAntiJoins      int
@@ -788,6 +796,9 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
+	existentialBlock     uint64
+	subqueryNestingDepth uint32
+
 	binder Binder
 
 	// outputColumnProvenance records planner-local source or pure-NULL identity
@@ -901,8 +912,17 @@ type BindContext struct {
 	// sampleGroupByAst retains the logical identity of stable GROUP BY
 	// literals removed from the physical key. SAMPLE must still reject those
 	// expressions even though ordinary projection binding should see literals.
-	sampleGroupByAst       map[string]struct{}
-	aggregateByAst         map[string]int32
+	sampleGroupByAst map[string]struct{}
+	aggregateByAst   map[string]int32
+	// aliasExpandedExprs marks synthetic wrappers inserted when an ORDER BY or
+	// HAVING alias is expanded and retains the selected projection position.
+	// Binders can therefore resolve a cloned alias expression to its exact
+	// projection instead of relying on an AST-wide aggregate cache.
+	aliasExpandedExprs map[*tree.ParenExpr]int32
+	// groupConcatByExpr records the physical aggregate slot for each GROUP_CONCAT
+	// AST node. HAVING is bound before SELECT, so an alias may materialize the
+	// aggregate first; the later SELECT occurrence must reuse that exact slot.
+	groupConcatByExpr      map[*tree.FuncExpr]int32
 	sampleByAst            map[string]int32
 	windowByAst            map[string]int32
 	projectByExpr          map[string]int32
@@ -1031,6 +1051,12 @@ type BindingTreeNode struct {
 
 	left  *BindingTreeNode
 	right *BindingTreeNode
+
+	// rightJoinUsingStar records the SQL surface order for an explicit
+	// RIGHT JOIN ... USING or NATURAL RIGHT JOIN. The merged columns are
+	// emitted before this node's children; the preserved right child then
+	// precedes the left child for an unqualified star.
+	rightJoinUsingStar bool
 }
 
 type Binder interface {
@@ -1067,8 +1093,10 @@ type boundColumn struct {
 
 type DefaultBinder struct {
 	baseBinder
-	typ  Type
-	cols []string
+	typ           Type
+	cols          []string
+	colTypes      []Type
+	allowSubquery bool
 }
 
 // ReplaceValueBinder binds the RHS value expressions of a `REPLACE ... SET`
@@ -1112,8 +1140,9 @@ type WhereBinder struct {
 
 type GroupBinder struct {
 	baseBinder
-	selectList        tree.SelectExprs
-	projectionExprPos int32
+	selectList          tree.SelectExprs
+	projectionExprPos   int32
+	allowScalarSubquery bool
 }
 
 type HavingBinder struct {
@@ -1128,6 +1157,11 @@ type ProjectionBinder struct {
 	baseBinder
 	havingBinder      *HavingBinder
 	numericTargetType *Type
+	// allowGroupConcatReuse is scoped to ORDER BY binding. ORDER BY expressions
+	// resolve against the aggregate result and must reuse an existing
+	// GROUP_CONCAT slot when the same call is already selected. A grouped wrapper
+	// remains independent because MySQL evaluates it as a per-group sort key.
+	allowGroupConcatReuse bool
 }
 
 type OrderBinder struct {

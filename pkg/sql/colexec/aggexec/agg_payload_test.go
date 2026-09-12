@@ -17,6 +17,7 @@ package aggexec
 import (
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 	"testing"
@@ -83,6 +84,9 @@ func TestEncodeGroupConcatPayloadAndFieldBytes(t *testing.T) {
 	geometryVec := vector.NewVec(types.T_geometry.ToType())
 	geometryBytes := geo.WriteWKB(geo.Point{X: 1, Y: 2})
 	require.NoError(t, vector.AppendBytes(geometryVec, geometryBytes, false, mp))
+	arrayVec := vector.NewVec(types.T_array_float32.ToType())
+	arrayBytes := types.ArrayToBytes([]float32{1, 2, 3})
+	require.NoError(t, vector.AppendBytes(arrayVec, arrayBytes, false, mp))
 
 	payload, err := encodeGroupConcatPayload([]*vector.Vector{textVec, intVec}, 1, []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()})
 	require.NoError(t, err)
@@ -137,10 +141,12 @@ func TestEncodeGroupConcatPayloadAndFieldBytes(t *testing.T) {
 	require.Equal(t, textVec.GetBytesAt(0), groupConcatFieldBytes(textVec, 0, types.T_varchar.ToType()))
 	require.Equal(t, intVec.GetRawBytesAt(0), groupConcatFieldBytes(intVec, 0, types.T_int64.ToType()))
 	require.Equal(t, geometryBytes, groupConcatFieldBytes(geometryVec, 0, types.T_geometry.ToType()))
+	require.Equal(t, arrayBytes, groupConcatFieldBytes(arrayVec, 0, types.T_array_float32.ToType()))
 
 	textVec.Free(mp)
 	intVec.Free(mp)
 	geometryVec.Free(mp)
+	arrayVec.Free(mp)
 	nullVec.Free(mp)
 }
 
@@ -156,7 +162,8 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 	uuidVal, err := types.ParseUuid("00000000-0000-0000-0000-000000000001")
 	require.NoError(t, err)
 	geometryVal := geo.WriteWKB(geo.Point{X: 1, Y: 2})
-	geometry32Val := geo.WriteWKBFloat32(geo.Point{X: 3, Y: 4})
+	geometry32Val, err := geo.WriteWKBFloat32(geo.Point{X: 3, Y: 4})
+	require.NoError(t, err)
 	largeGeometryVal := geo.WriteWKB(geo.LineString{Points: make([]geo.Coord, 4096)})
 	require.Equal(t, 65545, len(largeGeometryVal))
 	bj, err := bytejson.CreateByteJSONWithCheck(map[string]any{"k": "v"})
@@ -181,7 +188,8 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 		wantErr string
 	}{
 		{name: "bit", typ: types.T_bit.ToType(), data: types.EncodeUint64(ptr(uint64(7))), want: "7"},
-		{name: "bool", typ: types.T_bool.ToType(), data: []byte{1}, want: "true"},
+		{name: "bool false", typ: types.T_bool.ToType(), data: []byte{0}, want: "0"},
+		{name: "bool true", typ: types.T_bool.ToType(), data: []byte{1}, want: "1"},
 		{name: "int8", typ: types.T_int8.ToType(), data: []byte{0xfe}, want: "-2"},
 		{name: "int16", typ: types.T_int16.ToType(), data: types.EncodeInt16(ptr(int16(-3))), want: "-3"},
 		{name: "int32", typ: types.T_int32.ToType(), data: types.EncodeInt32(ptr(int32(-4))), want: "-4"},
@@ -191,7 +199,14 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 		{name: "uint32", typ: types.T_uint32.ToType(), data: types.EncodeUint32(ptr(uint32(8))), want: "8"},
 		{name: "uint64", typ: types.T_uint64.ToType(), data: types.EncodeUint64(ptr(uint64(9))), want: "9"},
 		{name: "float32", typ: types.T_float32.ToType(), data: types.EncodeFloat32(ptr(float32(1.5))), want: "1.5"},
+		{name: "float32 scientific", typ: types.T_float32.ToType(), data: types.EncodeFloat32(ptr(float32(1e20))), want: "1E+20"},
 		{name: "float64", typ: types.T_float64.ToType(), data: types.EncodeFloat64(ptr(2.5)), want: "2.5"},
+		{name: "float64 fixed small", typ: types.T_float64.ToType(), data: types.EncodeFloat64(ptr(1e-7)), want: "0.0000001"},
+		{name: "float64 scientific small", typ: types.T_float64.ToType(), data: types.EncodeFloat64(ptr(1e-14)), want: "1E-14"},
+		{name: "float64 scientific large", typ: types.T_float64.ToType(), data: types.EncodeFloat64(ptr(1e20)), want: "1E+20"},
+		{name: "float64 negative zero", typ: types.T_float64.ToType(), data: types.EncodeFloat64(ptr(math.Copysign(0, -1))), want: "-0"},
+		{name: "float64 nan", typ: types.T_float64.ToType(), data: types.EncodeFloat64(ptr(math.NaN())), want: "NaN"},
+		{name: "float64 positive infinity", typ: types.T_float64.ToType(), data: types.EncodeFloat64(ptr(math.Inf(1))), want: "+Inf"},
 		{name: "decimal64", typ: types.New(types.T_decimal64, 10, 2), data: types.EncodeDecimal64(&d64), want: d64.Format(2)},
 		{name: "decimal128", typ: types.New(types.T_decimal128, 20, 2), data: types.EncodeDecimal128(&d128), want: d128.Format(2)},
 		{name: "decimal256", typ: types.New(types.T_decimal256, 40, 2), data: types.EncodeDecimal256(&d256), want: d256.Format(2)},
@@ -202,6 +217,13 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 		{name: "year", typ: types.T_year.ToType(), data: types.EncodeInt16(ptr(int16(yearVal))), want: yearVal.String()},
 		{name: "uuid", typ: types.T_uuid.ToType(), data: types.EncodeUuid(&uuidVal), want: uuidVal.String()},
 		{name: "text", typ: types.T_text.ToType(), data: []byte("hello"), want: "hello"},
+		{name: "array-float32", typ: types.T_array_float32.ToType(), data: types.ArrayToBytes([]float32{1, -2, 0.5}), want: "[1, -2, 0.5]"},
+		{name: "array-float64", typ: types.T_array_float64.ToType(), data: types.ArrayToBytes([]float64{1.25, -2.5}), want: "[1.25, -2.5]"},
+		{name: "array-bf16", typ: types.T_array_bf16.ToType(), data: types.ArrayToBytes(types.Float32ToBF16Slice([]float32{-1, 0, 4})), want: "[-1, 0, 4]"},
+		{name: "array-float16", typ: types.T_array_float16.ToType(), data: types.ArrayToBytes(types.Float32ToFloat16Slice([]float32{1.5, -2, 4})), want: "[1.5, -2, 4]"},
+		{name: "array-int8", typ: types.T_array_int8.ToType(), data: types.ArrayToBytes([]int8{1, -2, 127, -128}), want: "[1, -2, 127, -128]"},
+		{name: "array-uint8", typ: types.T_array_uint8.ToType(), data: types.ArrayToBytes([]uint8{1, 2, 255}), want: "[1, 2, 255]"},
+		{name: "array-empty", typ: types.T_array_float32.ToType(), data: nil, want: "[]"},
 		{name: "geometry", typ: types.T_geometry.ToType(), data: geometryVal, want: string(geometryVal)},
 		{name: "geometry32", typ: types.T_geometry32.ToType(), data: geometry32Val, want: string(geometry32Val)},
 		{name: "json", typ: types.T_json.ToType(), data: jsonBytes, want: types.DecodeJson(jsonBytes).String()},
@@ -215,6 +237,8 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 		{name: "short-decimal256-payload", typ: types.T_decimal256.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
 		{name: "short-year-payload", typ: types.T_year.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
 		{name: "short-uuid-payload", typ: types.T_uuid.ToType(), data: []byte{1}, wantErr: "fixed payload size"},
+		{name: "misaligned-array-float32", typ: types.T_array_float32.ToType(), data: []byte{1}, wantErr: "invalid group_concat array payload size"},
+		{name: "misaligned-array-bf16", typ: types.T_array_bf16.ToType(), data: []byte{1}, wantErr: "invalid group_concat array payload size"},
 		{
 			name: "unsupported-objectid",
 			typ: types.Type{
@@ -240,6 +264,31 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 	got, err := appendGroupConcatData([]byte("prefix-"), types.T_varchar.ToType(), []byte("tail"))
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(string(got), "prefix-tail"))
+
+	arrayBytes := types.ArrayToBytes([]float32{1, 2})
+	writerErr := errors.New("array writer failed")
+	require.ErrorIs(t, writeGroupConcatData(
+		&groupConcatFailWriter{err: writerErr},
+		types.T_array_float32.ToType(), arrayBytes), writerErr)
+	require.ErrorIs(t, writeGroupConcatData(
+		groupConcatShortWriter{}, types.T_array_float32.ToType(), arrayBytes), io.ErrShortWrite)
+}
+
+type groupConcatFailWriter struct {
+	err error
+}
+
+func (w *groupConcatFailWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+type groupConcatShortWriter struct{}
+
+func (groupConcatShortWriter) Write(value []byte) (int, error) {
+	if len(value) == 0 {
+		return 0, nil
+	}
+	return len(value) - 1, nil
 }
 
 func ptr[T any](v T) *T {

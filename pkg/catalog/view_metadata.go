@@ -35,6 +35,13 @@ const ViewMetadataLifecycleGateSQL = "select rel_id from mo_catalog.mo_tables " 
 const SnapshotLifecycleGateSQL = "select feature_code from mo_catalog.mo_feature_registry " +
 	"where feature_code = 'SNAPSHOT' for update"
 
+// FeatureRegistryCatalogGateSQL takes exclusive ownership of the catalog
+// identity that owns SnapshotLifecycleGateSQL. A cluster or system-account
+// restore can drop and recreate mo_feature_registry, so restore must acquire
+// this metadata row before taking the SNAPSHOT lifecycle row lock.
+const FeatureRegistryCatalogGateSQL = "select rel_id from mo_catalog.mo_tables " +
+	"where account_id=0 and reldatabase='mo_catalog' and relname='mo_feature_registry' for update"
+
 // LockViewMetadataLifecycle preserves SNAPSHOT -> View ordering across an
 // entire transaction, including CREATE followed by DROP in a later statement.
 // Keep the View lock as well: older CNs still use it during rolling upgrades.

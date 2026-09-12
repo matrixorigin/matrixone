@@ -140,8 +140,15 @@ type store struct {
 	tickerStopper          *stopper.Stopper
 	runtime                runtime.Runtime
 
-	bootstrapCheckCycles uint64
-	bootstrapMgr         *bootstrap.Manager
+	// The ticker (and its task scheduler) lives until store.close, including
+	// across local HAKeeper replica stop/start and voting-role changes.
+	hakeeperTickerOnce sync.Once
+	hakeeperTickerErr  error
+
+	bootstrapCheckDeadline time.Time
+	bootstrapMgr           *bootstrap.Manager
+	lastBootstrapLogTime   time.Time
+	bootstrapCommandsAdded func()
 
 	taskScheduler hakeeper.TaskScheduler
 
@@ -522,15 +529,7 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 	}
 	l.addMetadata(hakeeper.DefaultHAKeeperShardID, replicaID, false)
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
-	if !l.cfg.DisableWorkers {
-		if err := l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
-			l.runtime.SubLogger(runtime.SystemInit).Info("HAKeeper ticker started")
-			l.ticker(ctx)
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+	return l.startHAKeeperTicker()
 }
 
 func (l *store) startHAKeeperNonVotingReplica(replicaID uint64,
@@ -543,15 +542,25 @@ func (l *store) startHAKeeperNonVotingReplica(replicaID uint64,
 	}
 	l.addMetadata(hakeeper.DefaultHAKeeperShardID, replicaID, true)
 	atomic.StoreUint64(&l.haKeeperReplicaID, replicaID)
-	if !l.cfg.DisableWorkers {
-		if err := l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
+	return l.startHAKeeperTicker()
+}
+
+func (l *store) startHAKeeperTicker() error {
+	if l.cfg.DisableWorkers {
+		return nil
+	}
+	// StopReplica only removes the local Raft replica. Starting it again must
+	// reuse the existing driver; two checkers would share the allocator and
+	// bootstrap state, and two task tickers could schedule the same tasks.
+	l.hakeeperTickerOnce.Do(func() {
+		l.hakeeperTickerErr = l.tickerStopper.RunNamedTask("hakeeper-ticker", func(ctx context.Context) {
 			l.runtime.SubLogger(runtime.SystemInit).Info("HAKeeper ticker started")
 			l.ticker(ctx)
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
+		})
+	})
+	// Stopper admission fails only after shutdown has begun, which is terminal
+	// for this store. All concurrent callers must observe that same failure.
+	return l.hakeeperTickerErr
 }
 
 func (l *store) startReplica(shardID uint64, replicaID uint64,
@@ -1519,7 +1528,7 @@ func (l *store) startTaskScheduleTicker(
 }
 
 func (l *store) ticker(ctx context.Context) {
-	if l.cfg.HAKeeperTickInterval.Duration == 0 {
+	if l.cfg.HAKeeperTickInterval.Duration <= 0 {
 		panic("invalid HAKeeperTickInterval")
 	}
 	l.runtime.Logger().Info("Hakeeper interval configs",
@@ -1527,14 +1536,23 @@ func (l *store) ticker(ctx context.Context) {
 		zap.Int64("HAKeeperCheckInterval", int64(l.cfg.HAKeeperCheckInterval.Duration)))
 	ticker := time.NewTicker(l.cfg.HAKeeperTickInterval.Duration)
 	defer ticker.Stop()
-	if l.cfg.HAKeeperCheckInterval.Duration == 0 {
+	if l.cfg.HAKeeperCheckInterval.Duration <= 0 {
 		panic("invalid HAKeeperCheckInterval")
 	}
 	defer func() {
 		l.runtime.Logger().Info("HAKeeper ticker stopped")
 	}()
-	haTicker := time.NewTicker(l.cfg.HAKeeperCheckInterval.Duration)
+	// Probe once quickly so a newly elected leader can bootstrap without
+	// waiting for the normal health-check interval. Subsequent follower/error
+	// polls use the configured interval, while explicit bootstrap states use
+	// the fast interval.
+	initialCheckInterval := l.cfg.HAKeeperCheckInterval.Duration
+	if initialCheckInterval > bootstrapHAKeeperCheckInterval {
+		initialCheckInterval = bootstrapHAKeeperCheckInterval
+	}
+	haTicker := time.NewTicker(initialCheckInterval)
 	defer haTicker.Stop()
+	checkInterval := initialCheckInterval
 
 	// moving task schedule from the ticker normal routine to a
 	// separate goroutine can avoid the hakeeper's health check and tick update
@@ -1549,7 +1567,8 @@ func (l *store) ticker(ctx context.Context) {
 		case <-ticker.C:
 			l.hakeeperTick()
 		case <-haTicker.C:
-			l.hakeeperCheck()
+			state := l.hakeeperCheck()
+			checkInterval = l.updateHAKeeperCheckTicker(haTicker.Reset, checkInterval, state)
 		case <-ctx.Done():
 			return
 		}
@@ -1569,6 +1588,43 @@ func (l *store) isLeaderHAKeeper() (bool, uint64, error) {
 	}
 	replicaID := atomic.LoadUint64(&l.haKeeperReplicaID)
 	return ok && replicaID != 0 && leaderID == replicaID, term, nil
+}
+
+func (l *store) waitHAKeeperLeaderReady(ctx context.Context, maxWait time.Duration) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, moerr.AttachCause(ctx, err)
+	}
+	leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+	if err != nil {
+		return false, err
+	}
+	if ok && leaderID != 0 {
+		return true, nil
+	}
+	if maxWait <= 0 {
+		return false, nil
+	}
+
+	ticker := time.NewTicker(time.Millisecond * 20)
+	defer ticker.Stop()
+	timer := time.NewTimer(maxWait)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false, moerr.AttachCause(ctx, ctx.Err())
+		case <-timer.C:
+			return false, nil
+		case <-ticker.C:
+		}
+		leaderID, _, ok, err := l.nh.GetLeaderID(hakeeper.DefaultHAKeeperShardID)
+		if err != nil {
+			return false, err
+		}
+		if ok && leaderID != 0 {
+			return true, nil
+		}
+	}
 }
 
 // TODO: add test for this

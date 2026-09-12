@@ -41,6 +41,7 @@ func initBoundedDistinctWorkState(
 	length int32,
 	capacity int32,
 	allocation *AllocationAccount,
+	distinctKeyWidth int,
 ) error {
 	if state == nil || mp == nil || length < 0 || capacity <= 0 ||
 		length > capacity || capacity > AggBatchSize {
@@ -62,6 +63,9 @@ func initBoundedDistinctWorkState(
 	state.length = length
 	state.capacity = capacity
 	state.allocation = allocation
+	state.distinctKeyWidth = distinctKeyWidth
+	state.distinctFixedDeferred = distinctKeyWidth > 0
+	state.distinctIndex.groupLimit = int(capacity)
 	state.argCnt = counts
 	state.argbuf = buffer
 	state.argSkl = arenaskl.NewSkiplist(arenaskl.NewArena(buffer), bytes.Compare)
@@ -115,14 +119,28 @@ func (exec *countColumnExec) DistinctArgumentStats() (
 			}
 			keys += uint64(count)
 		}
-		resident := uint64(cap(state.argbuf)) + uint64(cap(state.argScratch))
-		countBytes := uint64(cap(state.argCnt)) * uint64(4)
-		if resident > math.MaxUint64-countBytes ||
-			retainedBytes > math.MaxUint64-resident-countBytes {
+		argbufBytes := uint64(cap(state.argbuf))
+		scratchBytes := uint64(cap(state.argScratch))
+		countCapacity := uint64(cap(state.argCnt))
+		if countCapacity > math.MaxUint64/4 {
 			return 0, 0, moerr.NewInternalErrorNoCtx(
 				"exact distinct retained byte count overflow")
 		}
-		retainedBytes += resident + countBytes
+		countBytes := countCapacity * 4
+		indexBytes := state.distinctIndex.retainedBytes()
+		if countBytes > math.MaxUint64-indexBytes ||
+			argbufBytes > math.MaxUint64-indexBytes-countBytes ||
+			scratchBytes > math.MaxUint64-indexBytes-countBytes-argbufBytes {
+			return 0, 0, moerr.NewInternalErrorNoCtx(
+				"exact distinct retained byte count overflow")
+		}
+		resident := argbufBytes + scratchBytes
+		accounted := indexBytes + countBytes + resident
+		if retainedBytes > math.MaxUint64-accounted {
+			return 0, 0, moerr.NewInternalErrorNoCtx(
+				"exact distinct retained byte count overflow")
+		}
+		retainedBytes += accounted
 	}
 	return keys, retainedBytes, nil
 }
@@ -194,6 +212,7 @@ func (d *countDistinctArgumentDrain) Commit() error {
 			state.length,
 			state.capacity,
 			d.replacement,
+			state.distinctKeyWidth,
 		); err != nil {
 			return err
 		}
@@ -255,6 +274,7 @@ func (exec *countColumnExec) RehomeDistinctArgumentState(
 		var replacement aggState
 		if err := initBoundedDistinctWorkState(
 			&replacement, exec.mp, state.length, state.capacity, allocation,
+			state.distinctKeyWidth,
 		); err != nil {
 			return err
 		}

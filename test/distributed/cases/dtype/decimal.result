@@ -798,7 +798,11 @@ SELECT LN(b + 20000) FROM decimal07;
 9.69720111828834  𝄀
 85.40636946379534
 SELECT EXP(b) FROM decimal07;
-Data truncation: data out of range: data type float64, DOUBLE value is out of range in 'exp(3.728193e+06)'
+➤ EXP(b)[8,54,0]  𝄀
+null  𝄀
+1.0  𝄀
+0.0  𝄀
+null
 DROP TABLE decimal07;
 DROP TABLE IF EXISTS decimal08;
 CREATE TABLE decimal08(a DECIMAL(38,0));

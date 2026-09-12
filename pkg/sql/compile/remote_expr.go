@@ -536,24 +536,40 @@ func containsVarExprInExpressionGetters(value any) bool {
 	return false
 }
 
+type remoteFunctionPredicate func(functionID, overloadID int32) bool
+
 func pipelineContainsPadSpaceCast(p *pipeline.Pipeline) bool {
-	return containsPadSpaceCastInValue(reflect.ValueOf(p), nil)
+	return pipelineContainsFunction(p, func(functionID, overloadID int32) bool {
+		return functionID == function.CAST && (overloadID == 2 || overloadID == 3)
+	})
 }
 
-func containsPadSpaceCastInExpr(expr *plan.Expr, seen map[uintptr]struct{}) bool {
+func pipelineContainsFunction(p *pipeline.Pipeline, predicate remoteFunctionPredicate) bool {
+	return containsFunctionInValue(reflect.ValueOf(p), nil, predicate)
+}
+
+func containsFunctionInExpr(
+	expr *plan.Expr,
+	seen map[uintptr]struct{},
+	predicate remoteFunctionPredicate,
+) bool {
 	if expr == nil {
 		return false
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil {
 		functionID, overloadID := function.DecodeOverloadID(fn.Func.Obj)
-		if functionID == function.CAST && (overloadID == 2 || overloadID == 3) {
+		if predicate(functionID, overloadID) {
 			return true
 		}
 	}
-	return containsPadSpaceCastInValue(reflect.ValueOf(expr.Expr), seen)
+	return containsFunctionInValue(reflect.ValueOf(expr.Expr), seen, predicate)
 }
 
-func containsPadSpaceCastInValue(v reflect.Value, seen map[uintptr]struct{}) bool {
+func containsFunctionInValue(
+	v reflect.Value,
+	seen map[uintptr]struct{},
+	predicate remoteFunctionPredicate,
+) bool {
 	if !v.IsValid() {
 		return false
 	}
@@ -561,14 +577,14 @@ func containsPadSpaceCastInValue(v reflect.Value, seen map[uintptr]struct{}) boo
 		if v.IsNil() {
 			return false
 		}
-		return containsPadSpaceCastInValue(v.Elem(), seen)
+		return containsFunctionInValue(v.Elem(), seen, predicate)
 	}
 	if v.Kind() == reflect.Pointer {
 		if v.IsNil() {
 			return false
 		}
 		if v.Type() == planExprPtrType {
-			return containsPadSpaceCastInExpr(v.Interface().(*plan.Expr), seen)
+			return containsFunctionInExpr(v.Interface().(*plan.Expr), seen, predicate)
 		}
 		if seen == nil {
 			seen = make(map[uintptr]struct{})
@@ -578,21 +594,21 @@ func containsPadSpaceCastInValue(v reflect.Value, seen map[uintptr]struct{}) boo
 			return false
 		}
 		seen[ptr] = struct{}{}
-		return containsPadSpaceCastInValue(v.Elem(), seen)
+		return containsFunctionInValue(v.Elem(), seen, predicate)
 	}
 
 	switch v.Kind() {
 	case reflect.Slice, reflect.Array:
 		for i := 0; i < v.Len(); i++ {
-			if containsPadSpaceCastInValue(v.Index(i), seen) {
+			if containsFunctionInValue(v.Index(i), seen, predicate) {
 				return true
 			}
 		}
 	case reflect.Map:
 		iter := v.MapRange()
 		for iter.Next() {
-			if containsPadSpaceCastInValue(iter.Key(), seen) ||
-				containsPadSpaceCastInValue(iter.Value(), seen) {
+			if containsFunctionInValue(iter.Key(), seen, predicate) ||
+				containsFunctionInValue(iter.Value(), seen, predicate) {
 				return true
 			}
 		}
@@ -601,7 +617,7 @@ func containsPadSpaceCastInValue(v reflect.Value, seen map[uintptr]struct{}) boo
 			if !v.Type().Field(i).IsExported() {
 				continue
 			}
-			if containsPadSpaceCastInValue(v.Field(i), seen) {
+			if containsFunctionInValue(v.Field(i), seen, predicate) {
 				return true
 			}
 		}

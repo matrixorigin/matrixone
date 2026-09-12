@@ -165,18 +165,20 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		return nil
 	}
 	newCtx := &plan.PreInsertCtx{
-		Ref:                DeepCopyObjectRef(ctx.Ref),
-		TableDef:           DeepCopyTableDef(ctx.TableDef, true),
-		HasAutoCol:         ctx.HasAutoCol,
-		ColOffset:          ctx.ColOffset,
-		CompPkeyExpr:       DeepCopyExpr(ctx.CompPkeyExpr),
-		ClusterByExpr:      DeepCopyExpr(ctx.ClusterByExpr),
-		IsOldUpdate:        ctx.IsOldUpdate,
-		IsNewUpdate:        ctx.IsNewUpdate,
-		HasTargetSelector:  ctx.HasTargetSelector,
-		TargetRowNumberCol: ctx.TargetRowNumberCol,
-		TargetActiveCol:    ctx.TargetActiveCol,
-		TargetRowIdCol:     ctx.TargetRowIdCol,
+		Ref:                          DeepCopyObjectRef(ctx.Ref),
+		TableDef:                     DeepCopyTableDef(ctx.TableDef, true),
+		HasAutoCol:                   ctx.HasAutoCol,
+		ColOffset:                    ctx.ColOffset,
+		CompPkeyExpr:                 DeepCopyExpr(ctx.CompPkeyExpr),
+		ClusterByExpr:                DeepCopyExpr(ctx.ClusterByExpr),
+		IsOldUpdate:                  ctx.IsOldUpdate,
+		IsNewUpdate:                  ctx.IsNewUpdate,
+		HasTargetSelector:            ctx.HasTargetSelector,
+		TargetRowNumberCol:           ctx.TargetRowNumberCol,
+		TargetActiveCol:              ctx.TargetActiveCol,
+		TargetRowIdCol:               ctx.TargetRowIdCol,
+		TrackAutoIncrementGenerated:  ctx.TrackAutoIncrementGenerated,
+		AutoIncrementGeneratedColumn: ctx.AutoIncrementGeneratedColumn,
 	}
 
 	return newCtx
@@ -186,17 +188,35 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 	if ctx == nil {
 		return nil
 	}
+	var keyTypes []*plan.Type
+	if ctx.KeyTypes != nil {
+		keyTypes = make([]*plan.Type, len(ctx.KeyTypes))
+		for i, typ := range ctx.KeyTypes {
+			if typ != nil {
+				copied := *typ
+				keyTypes[i] = &copied
+			}
+		}
+	}
 	newCtx := &plan.PreInsertUkCtx{
-		Columns:                slices.Clone(ctx.Columns),
-		PkColumn:               ctx.PkColumn,
-		PkType:                 ctx.PkType,
-		UkType:                 ctx.UkType,
-		InsertIgnoreMultiDedup: ctx.InsertIgnoreMultiDedup,
-		KeyColumns:             slices.Clone(ctx.KeyColumns),
-		ConflictColumns:        slices.Clone(ctx.ConflictColumns),
-		OutputColumns:          ctx.OutputColumns,
-		OdkuTargetArbitration:  ctx.OdkuTargetArbitration,
-		TargetColumns:          slices.Clone(ctx.TargetColumns),
+		Columns:                      slices.Clone(ctx.Columns),
+		PkColumn:                     ctx.PkColumn,
+		PkType:                       ctx.PkType,
+		UkType:                       ctx.UkType,
+		InsertIgnoreMultiDedup:       ctx.InsertIgnoreMultiDedup,
+		KeyColumns:                   slices.Clone(ctx.KeyColumns),
+		ConflictColumns:              slices.Clone(ctx.ConflictColumns),
+		OutputColumns:                ctx.OutputColumns,
+		OdkuTargetArbitration:        ctx.OdkuTargetArbitration,
+		TargetColumns:                slices.Clone(ctx.TargetColumns),
+		AutoIncrementReorder:         ctx.AutoIncrementReorder,
+		AutoIncrementColumn:          ctx.AutoIncrementColumn,
+		AutoIncrementGeneratedColumn: ctx.AutoIncrementGeneratedColumn,
+		AutoIncrementKeyIndex:        ctx.AutoIncrementKeyIndex,
+		AutoIncrementOutputColumn:    ctx.AutoIncrementOutputColumn,
+		KeyNames:                     slices.Clone(ctx.KeyNames),
+		KeyTypes:                     keyTypes,
+		KeyTypeCounts:                slices.Clone(ctx.KeyTypeCounts),
 	}
 
 	return newCtx
@@ -468,6 +488,11 @@ func DeepCopyVectorIndexScan(old *plan.VectorIndexScan) *plan.VectorIndexScan {
 	if old == nil {
 		return nil
 	}
+	var work *plan.VectorIndexScanWork
+	if old.ScanWork != nil {
+		work = &plan.VectorIndexScanWork{Rows: old.ScanWork.Rows, Blocks: old.ScanWork.Blocks,
+			VectorBytesPerRow: old.ScanWork.VectorBytesPerRow, Objects: old.ScanWork.Objects}
+	}
 	hidden := make([]*plan.VectorIndexTableRef, len(old.HiddenTables))
 	for i, table := range old.HiddenTables {
 		if table == nil {
@@ -497,6 +522,7 @@ func DeepCopyVectorIndexScan(old *plan.VectorIndexScan) *plan.VectorIndexScan {
 		ThreadsSearch:       old.ThreadsSearch,
 		ScanSnapshot:        DeepCopySnapshot(old.ScanSnapshot),
 		PostFilterOverFetch: old.PostFilterOverFetch,
+		ScanWork:            work,
 	}
 }
 
@@ -1005,6 +1031,9 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 			Table:           df.TruncateTable.Table,
 			ClusterTable:    DeepCopyClusterTable(df.TruncateTable.GetClusterTable()),
 			IndexTableNames: slices.Clone(df.TruncateTable.IndexTableNames),
+			TableId:         df.TruncateTable.TableId,
+			ForeignTbl:      slices.Clone(df.TruncateTable.ForeignTbl),
+			IsDelete:        df.TruncateTable.IsDelete,
 		}
 		newDf.Definition = &plan.DataDefinition_TruncateTable{
 			TruncateTable: truncateTable,
@@ -1088,6 +1117,7 @@ func DeepCopyRuntimeFilterSpec(rf *plan.RuntimeFilterSpec) *plan.RuntimeFilterSp
 		KeyEncoding:         rf.KeyEncoding,
 		ProbeType:           DeepCopyType(rf.ProbeType),
 		ScalarPredicate:     rf.ScalarPredicate,
+		MustApply:           rf.MustApply,
 		KeyComponentProbeTypes: slices.Clone(
 			rf.KeyComponentProbeTypes,
 		),

@@ -262,6 +262,11 @@ func (receiver *messageReceiverOnServer) abortBatchFlowForPendingStop() {
 	}
 }
 
+func (receiver *messageReceiverOnServer) hasLiveReceiverStop() bool {
+	return receiver.connectionCtx.Err() == nil && receiver.messageCtx.Err() == nil &&
+		receiver.streamLifecycle.batchFlow.wasStoppedByReceiver()
+}
+
 func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 
 	switch receiver.messageTyp {
@@ -283,15 +288,21 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		}
 
 		infoToDispatchOperator := &process.WrapCs{
-			ReceiverDone: false,
-			MsgId:        receiver.messageId,
-			Uid:          receiver.messageUuid,
-			Cs:           receiver.clientSession,
-			Err:          make(chan error, 1),
+			ReceiverDone:   false,
+			TerminalBacked: terminal != nil,
+			MsgId:          receiver.messageId,
+			Uid:            receiver.messageUuid,
+			Cs:             receiver.clientSession,
+		}
+		if terminal == nil {
+			// Older registrations have no immutable generation terminal and
+			// retain the legacy error channel protocol.
+			infoToDispatchOperator.Err = make(chan error, 1)
 		}
 		if receiver.streamLifecycle != nil && receiver.streamLifecycle.batchFlow != nil {
 			flow := receiver.streamLifecycle.batchFlow
 			infoToDispatchOperator.BatchCredits, infoToDispatchOperator.ByteCredits = flow.accepted()
+			infoToDispatchOperator.ReceiverStopped = receiver.hasLiveReceiverStop
 			infoToDispatchOperator.ReserveBatch = func(ctx context.Context, size uint64) (uint64, error) {
 				return flow.reserve(ctx, receiver.connectionCtx, size)
 			}
@@ -329,6 +340,24 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			return err
 		}
 
+		if terminal != nil {
+			// The immutable generation terminal is the sole owner of the
+			// registration result. Do not race it against the legacy Err channel,
+			// but still cancel this generation when the notify stream disappears.
+			select {
+			case <-contextDone(receiver.connectionCtx):
+				err = moerr.NewStreamClosed(receiver.getMessageContext())
+				receiver.cancelConsumedDispatchRegistration(dispatchProc, terminal, err)
+				return err
+			case <-contextDone(receiver.messageCtx):
+				err = remoteRegistrationContextError(receiver.messageCtx)
+				receiver.cancelConsumedDispatchRegistration(dispatchProc, terminal, err)
+				return err
+			case <-terminalDone:
+				return receiver.waitRemoteReceiverTerminal(terminal)
+			}
+		}
+
 		select {
 		case <-contextDone(receiver.connectionCtx):
 			err = moerr.NewStreamClosed(receiver.getMessageContext())
@@ -336,10 +365,6 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		case <-contextDone(receiver.messageCtx):
 			err = remoteRegistrationContextError(receiver.messageCtx)
 			receiver.cancelConsumedDispatchRegistration(dispatchProc, terminal, err)
-
-		case <-terminalDone:
-			return receiver.waitRemoteReceiverTerminal(terminal)
-
 		case err = <-infoToDispatchOperator.Err:
 			// Legacy registrations report their terminal result through the wrapper.
 		}
@@ -990,6 +1015,16 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 		mpool.DeleteMPool(mp)
 		return nil, err
 	}
+	runtimeStringDomains, err := process.RuntimeStringDomainPrepareParamMetadataForRemote(
+		proc.GetService(),
+		int(pHelper.prepareParams.Length),
+		pHelper.prepareParams.RuntimeStringDomains,
+	)
+	if err != nil {
+		proc.Free()
+		mpool.DeleteMPool(mp)
+		return nil, err
+	}
 	if pHelper.prepareParams.Length > 0 {
 		prepareParams, err := vector.NewVecWithDataCopy(
 			types.T_text.ToType(),
@@ -1013,6 +1048,18 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 			prepareParamMetadata,
 			binaryStringMetadata,
 		)
+		if len(runtimeStringDomains) > 0 {
+			domains := make([]types.RuntimeStringDomain, len(runtimeStringDomains))
+			for i, domain := range runtimeStringDomains {
+				domains[i] = types.RuntimeStringDomain(domain)
+			}
+			if err = prepareParams.SetRuntimeStringDomainsWithMP(domains, proc.Mp()); err != nil {
+				prepareParams.Free(proc.Mp())
+				proc.Free()
+				mpool.DeleteMPool(mp)
+				return nil, err
+			}
+		}
 	}
 	// Carry ROW_COUNT() state so row_count() pushed down to this remote CN reads
 	// the previous statement's affected rows instead of the default 0.

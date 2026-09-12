@@ -123,6 +123,13 @@ const (
 	// compatibility error. Keep this distinct from ErrInvalidArg so clients can
 	// reliably inspect ER_CHARACTER_SET_MISMATCH (3995).
 	ErrCharacterSetMismatch uint16 = 20330
+	// Keep this distinct from ErrInvalidJSONCharset and ErrCharacterSetMismatch
+	// because all three errors are serialized through the internal error code.
+	ErrInvalidBitwiseAggregateOperandsSize uint16 = 20332
+	// These function errors preserve the native MySQL error contract when the
+	// required argument depends on a runtime system variable.
+	ErrWrongParamCountToNativeFct uint16 = 20333
+	ErrAESInvalidIV               uint16 = 20334
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -473,9 +480,12 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrInvalidGroupFuncUse:  {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
 	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
 	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
-	ErrFtMatchingKeyNotFound:  {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
-	ErrMultiUpdateKeyConflict: {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
-	ErrCharacterSetMismatch:   {ER_CHARACTER_SET_MISMATCH, []string{"HY000"}, "Character set '%s' cannot be used in conjunction with '%s' in call to %s."},
+	ErrFtMatchingKeyNotFound:               {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
+	ErrMultiUpdateKeyConflict:              {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
+	ErrCharacterSetMismatch:                {ER_CHARACTER_SET_MISMATCH, []string{"HY000"}, "Character set '%s' cannot be used in conjunction with '%s' in call to %s."},
+	ErrInvalidBitwiseAggregateOperandsSize: {ER_INVALID_BITWISE_AGGREGATE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Aggregate bitwise functions cannot accept arguments longer than 511 bytes; consider using the SUBSTRING() function"},
+	ErrWrongParamCountToNativeFct:          {ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, []string{"42000"}, "Incorrect parameter count in the call to native function '%-.192s'"},
+	ErrAESInvalidIV:                        {ER_AES_INVALID_IV, []string{"HY000"}, "The initialization vector supplied to %s is too short. Must be at least %d bytes long"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1123,6 +1133,14 @@ func NewWrongArguments(ctx context.Context, function string) *Error {
 	return newError(ctx, ErrWrongArguments, function)
 }
 
+func NewWrongParamCountToNativeFct(ctx context.Context, function string) *Error {
+	return newError(ctx, ErrWrongParamCountToNativeFct, function)
+}
+
+func NewAESInvalidIV(ctx context.Context, function string, minLength int) *Error {
+	return newError(ctx, ErrAESInvalidIV, function, minLength)
+}
+
 func NewWrongUsage(ctx context.Context, first, second string) *Error {
 	return newError(ctx, ErrWrongUsage, first, second)
 }
@@ -1137,6 +1155,10 @@ func NewWindowInvalidUse(ctx context.Context, function string) *Error {
 
 func NewInvalidGroupFuncUse(ctx context.Context) *Error {
 	return newError(ctx, ErrInvalidGroupFuncUse)
+}
+
+func NewInvalidBitwiseAggregateOperandsSize(ctx context.Context) *Error {
+	return newError(ctx, ErrInvalidBitwiseAggregateOperandsSize)
 }
 
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {

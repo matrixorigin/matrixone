@@ -157,6 +157,7 @@ func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
 		NotOnPk:             true,
 		UseMembershipFilter: true,
 		ScalarPredicate:     true,
+		MustApply:           true,
 		KeyEncoding:         planpb.RuntimeFilterKeyEncoding_RUNTIME_FILTER_KEY_FLOAT_ZERO_CLOSED_V1,
 		ProbeType: &planpb.Type{
 			Id:         4,
@@ -178,6 +179,7 @@ func TestDeepCopyRuntimeFilterSpecPreservesPayloadContract(t *testing.T) {
 	require.Equal(t, source.NotOnPk, cloned.NotOnPk)
 	require.Equal(t, source.UseMembershipFilter, cloned.UseMembershipFilter)
 	require.True(t, cloned.ScalarPredicate)
+	require.True(t, cloned.MustApply)
 	require.Equal(t, source.KeyEncoding, cloned.KeyEncoding)
 	require.Equal(t, source.ProbeType, cloned.ProbeType)
 	require.NotSame(t, source.ProbeType, cloned.ProbeType)
@@ -439,6 +441,33 @@ func TestDeepCopyDataDefinitionCreateTablePreservesExecutionFields(t *testing.T)
 	require.Equal(t, "create table `db`.`ctas` as select ?", source.GetCreateTable().RawSQL)
 	require.Equal(t, "parent_id", source.GetCreateTable().FkCols[0].Cols[0])
 	require.Equal(t, "fk_child_parent", source.GetCreateTable().FksReferToMe[0].Def.Name)
+}
+
+func TestDeepCopyDataDefinitionTruncatePreservesExecutionFields(t *testing.T) {
+	source := &planpb.DataDefinition{
+		DdlType: planpb.DataDefinition_TRUNCATE_TABLE,
+		Definition: &planpb.DataDefinition_TruncateTable{
+			TruncateTable: &planpb.TruncateTable{
+				Database:        "db",
+				Table:           "t",
+				IndexTableNames: []string{"idx_t"},
+				TableId:         42,
+				ForeignTbl:      []uint64{7, 8},
+				IsDelete:        true,
+			},
+		},
+	}
+
+	cloned := DeepCopyDataDefinition(source)
+	require.Equal(t, source, cloned)
+	require.NotSame(t, source.GetTruncateTable(), cloned.GetTruncateTable())
+
+	cloned.GetTruncateTable().ForeignTbl[0] = 99
+	cloned.GetTruncateTable().IndexTableNames[0] = "changed"
+	cloned.GetTruncateTable().TableId = 100
+	require.Equal(t, uint64(7), source.GetTruncateTable().ForeignTbl[0])
+	require.Equal(t, "idx_t", source.GetTruncateTable().IndexTableNames[0])
+	require.Equal(t, uint64(42), source.GetTruncateTable().TableId)
 }
 
 func TestFilterBarrierSurvivesCopiesAndSerialization(t *testing.T) {

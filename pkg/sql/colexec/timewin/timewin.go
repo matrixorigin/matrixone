@@ -1317,6 +1317,9 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		// grow these slices for the lifetime of the query.
 		ctr.wStart = nil
 		ctr.wEnd = nil
+		for _, ag := range ctr.aggs {
+			aggexec.ReportGroupConcatWarnings(ag, proc.GetWarningSink())
+		}
 		return nil
 	}
 	bat := batch.NewOffHeapWithSize(1)
@@ -1389,6 +1392,9 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
 	ctr.wStart = nil
 	ctr.wEnd = nil
+	for _, ag := range ctr.aggs {
+		aggexec.ReportGroupConcatWarnings(ag, proc.GetWarningSink())
+	}
 	return nil
 }
 
