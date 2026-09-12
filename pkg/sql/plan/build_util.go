@@ -722,6 +722,11 @@ func buildDefaultExprWithColumns(
 		return nil, mapDDLAssignmentCastError(proc.Ctx, typ, colNameOrigin, err)
 	}
 
+	if lit := newExpr.GetLit(); lit != nil && exprContainsHexOverload(defaultExpr, 0) {
+		// Preserve resolved types rather than reparsing display SQL after upgrade.
+		lit.Src = DeepCopyExpr(defaultExpr)
+	}
+
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithSingleQuoteString())
 	fmtCtx.PrintExpr(originExpr, originExpr, false)
 	return &plan.Default{
