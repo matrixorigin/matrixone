@@ -34,6 +34,7 @@ const {
 } = require('./change-scope.cjs');
 
 const baseSha = 'a'.repeat(40);
+const workflowSha = 'c'.repeat(40);
 const headSha = 'b'.repeat(40);
 const supportedCI = SUPPORTED_CI_REVISIONS[0];
 
@@ -45,7 +46,7 @@ function run(overrides = {}) {
     status: 'in_progress',
     run_attempt: 2,
     head_sha: headSha,
-    display_title: `CI_REQUIRED/v1 pr=42 base=main base_sha=${baseSha} head_sha=${headSha}`,
+    display_title: `CI_REQUIRED/v2 pr=42 base=main base_sha=${baseSha} workflow_sha=${workflowSha} head_sha=${headSha}`,
     html_url: 'https://github.example/runs/100',
     referenced_workflows: [
       { path: CI_WORKFLOWS.core, sha: supportedCI },
@@ -99,16 +100,17 @@ function githubMock({
   return { github, calls };
 }
 
-test('run metadata is strict and records the trigger-time base', () => {
+test('run metadata is strict and records the trigger-time workflow revision', () => {
   assert.deepEqual(parseRunMetadata(run().display_title), {
-    policyVersion: 'v1', pullNumber: 42, baseRef: 'main', baseSha, headSha,
+    policyVersion: 'v2', pullNumber: 42, baseRef: 'main', baseSha, workflowSha, headSha,
   });
   for (const title of [
     '',
-    `CI_REQUIRED/v2 pr=42 base=main base_sha=${baseSha} head_sha=${headSha}`,
-    `CI_REQUIRED/v1 pr=0 base=main base_sha=${baseSha} head_sha=${headSha}`,
-    `CI_REQUIRED/v1 pr=42 base=main base_sha=short head_sha=${headSha}`,
-    `prefix CI_REQUIRED/v1 pr=42 base=main base_sha=${baseSha} head_sha=${headSha}`,
+    `CI_REQUIRED/v1 pr=42 base=main base_sha=${baseSha} workflow_sha=${workflowSha} head_sha=${headSha}`,
+    `CI_REQUIRED/v2 pr=0 base=main base_sha=${baseSha} workflow_sha=${workflowSha} head_sha=${headSha}`,
+    `CI_REQUIRED/v2 pr=42 base=main base_sha=short workflow_sha=${workflowSha} head_sha=${headSha}`,
+    `CI_REQUIRED/v2 pr=42 base=main base_sha=${baseSha} workflow_sha=short head_sha=${headSha}`,
+    `prefix CI_REQUIRED/v2 pr=42 base=main base_sha=${baseSha} workflow_sha=${workflowSha} head_sha=${headSha}`,
   ]) assert.equal(parseRunMetadata(title), null, title);
 });
 
@@ -165,7 +167,7 @@ test('old metadata, head mismatch, and trigger-time 3.0 base are skipped', async
   const runs = [
     run({ id: 1, display_title: 'legacy title' }),
     run({ id: 2, head_sha: 'c'.repeat(40) }),
-    run({ id: 3, display_title: `CI_REQUIRED/v1 pr=42 base=3.0-dev base_sha=${baseSha} head_sha=${headSha}` }),
+    run({ id: 3, display_title: `CI_REQUIRED/v2 pr=42 base=3.0-dev base_sha=${baseSha} workflow_sha=${workflowSha} head_sha=${headSha}` }),
   ];
   const { github, calls } = githubMock({ runs, jobs: new Map() });
   const result = await cancelDoomedRuns({ github, owner: 'matrixorigin', repo: 'matrixone', policyRef: 'policy' });
@@ -175,11 +177,41 @@ test('old metadata, head mismatch, and trigger-time 3.0 base are skipped', async
 });
 
 test('local policy drift rejects every cancellation source', async () => {
-  const blobs = new Map([[`${baseSha}:.github/ci/change-scope.cjs`, 'old-policy']]);
+  const blobs = new Map([[`${workflowSha}:.github/ci/change-scope.cjs`, 'old-policy']]);
   const { github, calls } = githubMock({ blobByRef: blobs });
   const result = await cancelDoomedRuns({ github, owner: 'matrixorigin', repo: 'matrixone', policyRef: 'policy' });
   assert.deepEqual(calls.cancelled, []);
   assert.match(result.errors[0].detail, /local cancellation policy revision differs/);
+});
+
+test('local policy provenance uses workflow SHA, not PR base SHA', async () => {
+  const matchingWorkflow = new Map([
+    [`${baseSha}:.github/workflows/entrypoint.yaml`, 'old-entrypoint'],
+    [`${baseSha}:.github/ci/change-scope.cjs`, 'old-change-scope'],
+    [`${workflowSha}:.github/workflows/entrypoint.yaml`, 'blob:.github/workflows/entrypoint.yaml'],
+    [`${workflowSha}:.github/ci/change-scope.cjs`, 'blob:.github/ci/change-scope.cjs'],
+  ]);
+  const matching = githubMock({ blobByRef: matchingWorkflow });
+  const matchingResult = await cancelDoomedRuns({
+    github: matching.github, owner: 'matrixorigin', repo: 'matrixone', policyRef: 'policy',
+  });
+  assert.deepEqual(matching.calls.cancelled, [100],
+    'a target branch without policy files must not block a run whose workflow revision matches');
+  assert.equal(matchingResult.errors.length, 0);
+
+  const workflowDrift = new Map([
+    [`${baseSha}:.github/workflows/entrypoint.yaml`, 'blob:.github/workflows/entrypoint.yaml'],
+    [`${baseSha}:.github/ci/change-scope.cjs`, 'blob:.github/ci/change-scope.cjs'],
+    [`${workflowSha}:.github/workflows/entrypoint.yaml`, 'drifted-entrypoint'],
+    [`${workflowSha}:.github/ci/change-scope.cjs`, 'drifted-change-scope'],
+  ]);
+  const drifted = githubMock({ blobByRef: workflowDrift });
+  const driftedResult = await cancelDoomedRuns({
+    github: drifted.github, owner: 'matrixorigin', repo: 'matrixone', policyRef: 'policy',
+  });
+  assert.deepEqual(drifted.calls.cancelled, [],
+    'a matching PR base must not authorize a different workflow revision');
+  assert.match(driftedResult.errors[0].detail, /workflow SHA/);
 });
 
 test('unsupported external policy is visible and fails closed', async () => {
@@ -254,10 +286,13 @@ test('workflow has a five-minute trusted, bounded, least-privilege controller', 
   assert.doesNotMatch(watchdog, /pull-requests: write|issues: write|contents: write/);
   assert.match(watchdog, /persist-credentials: false/);
   assert.match(watchdog, /sparse-checkout: \.github\/ci/);
+  assert.match(watchdog, /ref: \$\{\{ github\.workflow_sha \}\}/);
+  assert.match(watchdog, /POLICY_SHA: \$\{\{ github\.workflow_sha \}\}/);
   assert.match(watchdog, /timeout-minutes: 5/);
 
   const entrypoint = readFileSync(`${__dirname}/../workflows/entrypoint.yaml`, 'utf8');
-  assert.match(entrypoint, /^run-name: CI_REQUIRED\/v1 pr=\$\{\{ github\.event\.pull_request\.number \}\} base=/m);
+  assert.match(entrypoint,
+    /^run-name: CI_REQUIRED\/v2 pr=\$\{\{ github\.event\.pull_request\.number \}\} base=.*base_sha=.*workflow_sha=\$\{\{ github\.workflow_sha \}\} head_sha=/m);
 });
 
 test('summary identifies the cancellation owner and remains bounded', () => {

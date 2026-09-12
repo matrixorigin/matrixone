@@ -15,7 +15,7 @@
 
 const { requiredJobUnion } = require('./change-scope.cjs');
 
-const POLICY_VERSION = 'v1';
+const POLICY_VERSION = 'v2';
 const ENTRYPOINT_WORKFLOW = 'entrypoint.yaml';
 const LOCAL_POLICY_PATHS = Object.freeze([
   '.github/workflows/entrypoint.yaml',
@@ -85,7 +85,7 @@ validatePolicyCoverage();
 function parseRunMetadata(displayTitle) {
   if (typeof displayTitle !== 'string') return null;
   const match = displayTitle.match(
-    /^CI_REQUIRED\/v1 pr=([1-9][0-9]*) base=([^\s]+) base_sha=([0-9a-f]{40}) head_sha=([0-9a-f]{40})$/,
+    /^CI_REQUIRED\/v2 pr=([1-9][0-9]*) base=([^\s]+) base_sha=([0-9a-f]{40}) workflow_sha=([0-9a-f]{40}) head_sha=([0-9a-f]{40})$/,
   );
   if (!match) return null;
   return {
@@ -93,7 +93,8 @@ function parseRunMetadata(displayTitle) {
     pullNumber: Number(match[1]),
     baseRef: match[2],
     baseSha: match[3],
-    headSha: match[4],
+    workflowSha: match[4],
+    headSha: match[5],
   };
 }
 
@@ -172,7 +173,7 @@ async function cancelDoomedRuns({ github, owner, repo, policyRef, dryRun = false
   if (!policyRef) throw new Error('policyRef is required');
   const result = newResult(dryRun);
   const currentPolicy = await policyBlobs(github, owner, repo, policyRef);
-  const basePolicies = new Map([[policyRef, currentPolicy]]);
+  const workflowPolicies = new Map([[policyRef, currentPolicy]]);
   const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
     owner,
     repo,
@@ -201,13 +202,17 @@ async function cancelDoomedRuns({ github, owner, repo, policyRef, dryRun = false
     result.eligible++;
 
     try {
-      let basePolicy = basePolicies.get(metadata.baseSha);
-      if (!basePolicy) {
-        basePolicy = await policyBlobs(github, owner, repo, metadata.baseSha);
-        basePolicies.set(metadata.baseSha, basePolicy);
+      let workflowPolicy = workflowPolicies.get(metadata.workflowSha);
+      if (!workflowPolicy) {
+        workflowPolicy = await policyBlobs(github, owner, repo, metadata.workflowSha);
+        workflowPolicies.set(metadata.workflowSha, workflowPolicy);
       }
-      if (!samePolicyBlobs(currentPolicy, basePolicy)) {
-        result.errors.push(runRecord(run, metadata, null, 'local cancellation policy revision differs'));
+      if (!samePolicyBlobs(currentPolicy, workflowPolicy)) {
+        result.errors.push(runRecord(
+          run, metadata, null,
+          `local cancellation policy revision differs at workflow SHA ${metadata.workflowSha} ` +
+          `(PR base SHA ${metadata.baseSha})`,
+        ));
         continue;
       }
 
@@ -282,7 +287,7 @@ function renderSummary(result) {
     '',
     `- Mode: ${result.dryRun ? 'dry run' : 'enforce'}`,
     `- Runs scanned: ${result.scanned}`,
-    `- Eligible policy-v1 runs: ${result.eligible}`,
+    `- Eligible policy-v2 runs: ${result.eligible}`,
     `- Skipped legacy or invalid metadata: ${result.skippedMetadata}`,
     `- Skipped 3.0-dev runs: ${result.skippedBase}`,
     `- Cancelled: ${result.cancelled.length}`,
