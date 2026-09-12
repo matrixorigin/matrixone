@@ -5333,13 +5333,21 @@ global_scope:
 show_warnings_stmt:
     SHOW WARNINGS limit_opt
     {
-        $$ = &tree.ShowWarnings{}
+        $$ = &tree.ShowWarnings{Limit: $3}
+    }
+|   SHOW COUNT '(' '*' ')' WARNINGS
+    {
+        $$ = &tree.ShowWarnings{Count: true}
     }
 
 show_errors_stmt:
     SHOW ERRORS limit_opt
     {
-        $$ = &tree.ShowErrors{}
+        $$ = &tree.ShowErrors{Limit: $3}
+    }
+|   SHOW COUNT '(' '*' ')' ERRORS
+    {
+        $$ = &tree.ShowErrors{Count: true}
     }
 
 show_process_stmt:
