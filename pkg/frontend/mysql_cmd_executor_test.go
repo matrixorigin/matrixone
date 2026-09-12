@@ -283,6 +283,154 @@ func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {
 	require.Equal(t, "Warning", level)
 }
 
+func TestShowDiagnosticCountsUseIndependentTotals(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		errInfo:       &errInfo{maxCnt: 1},
+	}
+	ses.appendWarningDiagnostic(1292, "warning")
+	ses.appendErrorDiagnostic(1064, "error")
+	ses.appendErrorDiagnostic(1065, "newest error")
+
+	warningCount, errorCount := ses.diagnosticsCounts()
+	require.Equal(t, uint64(3), warningCount)
+	require.Equal(t, uint64(2), errorCount)
+	require.Len(t, ses.diagnosticsSnapshot().codes, 1)
+
+	for _, test := range []struct {
+		name       string
+		stmt       tree.Statement
+		columnName string
+		want       uint64
+	}{
+		{
+			name:       "warnings",
+			stmt:       &tree.ShowWarnings{Count: true},
+			columnName: "@@session.warning_count",
+			want:       3,
+		},
+		{
+			name:       "errors",
+			stmt:       &tree.ShowErrors{Count: true},
+			columnName: "@@session.error_count",
+			want:       2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses.SetMysqlResultSet(&MysqlResultSet{})
+			execCtx := &ExecCtx{reqCtx: context.Background(), stmt: test.stmt}
+			require.NoError(t, doShowErrors(ses, execCtx))
+			mrs := ses.GetMysqlResultSet()
+			require.Equal(t, uint64(1), mrs.GetColumnCount())
+			require.Equal(t, test.columnName, mrs.Columns[0].Name())
+			column, ok := mrs.Columns[0].(*MysqlColumn)
+			require.True(t, ok)
+			require.Equal(t, defines.MYSQL_TYPE_LONGLONG, column.ColumnType())
+			require.False(t, column.IsSigned())
+			require.Equal(t, uint64(1), mrs.GetRowCount())
+			got, err := mrs.GetUint64(context.Background(), 0, 0)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestShowDiagnosticsLimitFiltersBeforePagination(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		errInfo:       &errInfo{maxCnt: MoDefaultErrorCount},
+	}
+	ses.appendErrorDiagnostic(1001, "old error")
+	ses.appendWarningDiagnostic(1002, "warning")
+	ses.appendErrorDiagnostic(1003, "new error")
+
+	limit := func(offset, count int64) *tree.Limit {
+		return &tree.Limit{
+			Offset: tree.NewNumVal(offset, fmt.Sprintf("%d", offset), false, tree.P_int64),
+			Count:  tree.NewNumVal(count, fmt.Sprintf("%d", count), false, tree.P_int64),
+		}
+	}
+
+	showDiagnostics := func(stmt tree.Statement, wantCode string) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		execCtx := &ExecCtx{reqCtx: context.Background(), stmt: stmt}
+		require.NoError(t, doShowErrors(ses, execCtx))
+		require.Equal(t, uint64(1), ses.GetMysqlResultSet().GetRowCount())
+		code, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 1)
+		require.NoError(t, err)
+		require.Equal(t, wantCode, code)
+	}
+
+	showDiagnostics(&tree.ShowErrors{Limit: limit(1, 1)}, "1001")
+	showDiagnostics(&tree.ShowWarnings{Limit: limit(1, 1)}, "1002")
+
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	invalid := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt: &tree.ShowWarnings{Limit: &tree.Limit{
+			Count: tree.NewUnaryExpr(
+				tree.UNARY_MINUS,
+				tree.NewNumVal[int64](1, "1", false, tree.P_int64),
+			),
+		}},
+	}
+	require.Error(t, doShowErrors(ses, invalid))
+	require.Empty(t, ses.GetMysqlResultSet().Data)
+}
+
+func TestDiagnosticCountVariableExpressionsParse(t *testing.T) {
+	for _, sql := range []string{
+		"select @@warning_count",
+		"select (@@warning_count) as w, @@error_count",
+		"select @@warning_count + 1",
+		"select @@warning_count from dual",
+		"select @@warning_count limit 1",
+	} {
+		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		stmt.Free()
+	}
+
+	for _, sql := range []string{
+		"select @warning_count",
+		"select @@global.warning_count",
+	} {
+		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok, sql)
+		selectStmt.Free()
+	}
+}
+
+func TestDiagnosticCountVariableUsesStatementSnapshot(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.appendWarningDiagnostic(1292, "previous warning")
+	ses.appendErrorDiagnostic(1064, "previous error")
+
+	execCtx := &ExecCtx{reqCtx: context.Background(), ses: ses}
+	tcc := &TxnCompilerContext{}
+	tcc.SetExecCtx(execCtx)
+	execCtx.captureDiagnosticCountsSnapshot(ses)
+	resetDiagnosticsForStatement(ses, execCtx, &UserInput{}, &tree.Select{})
+	ses.appendWarningDiagnostic(1365, "new warning")
+
+	warningCount, err := tcc.ResolveVariable(warningCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), warningCount)
+	errorCount, err := tcc.ResolveVariable(errorCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), errorCount)
+
+	execCtx.clearDiagnosticCountsSnapshot()
+	warningCount, err = tcc.ResolveVariable(warningCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), warningCount)
+	errorCount, err = tcc.ResolveVariable(errorCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Zero(t, errorCount)
+}
+
 func TestSetNewResponseIncludesWarningDiagnostics(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
