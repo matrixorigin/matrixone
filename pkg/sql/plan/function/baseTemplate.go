@@ -1658,8 +1658,6 @@ func specialTemplateForModFunction[
 // - In SELECT: always return NULL (never raise error)
 // - In INSERT/UPDATE: raise error if strict mode + ERROR_FOR_DIVISION_BY_ZERO are enabled
 // - In INSERT IGNORE: always return NULL (never raise error, even in strict mode)
-// checkDivisionByZeroBehavior checks if division by zero should raise an error.
-// Returns true if should raise error, false if should return NULL.
 func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSelectList) (shouldError bool) {
 	if proc == nil {
 		return false
@@ -1704,19 +1702,9 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 		return false
 	}
 
-	modeStr, ok := mode.(string)
-	if !ok {
-		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
-		return false
-	}
-
-	modeStr = strings.ToUpper(modeStr)
-	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
-	hasErrorForDivByZero := strings.Contains(modeStr, "ERROR_FOR_DIVISION_BY_ZERO")
-
 	// Error only if both strict mode AND ERROR_FOR_DIVISION_BY_ZERO are enabled.
 	// INSERT IGNORE is handled through the statement ignore flag.
-	if hasStrictMode && hasErrorForDivByZero {
+	if process.IsStrictDivisionByZeroMode(mode) {
 		if ignore {
 			atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
 			return false
