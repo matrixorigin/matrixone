@@ -7778,6 +7778,29 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 
 const mysqlCompressedLengthMask = uint32(0x3fffffff)
 
+var (
+	errUncompressOutputTooLarge = moerr.NewInvalidInputNoCtx("advertised uncompressed length exceeds result limit")
+	uncompressSizeLimitWarning  = fmt.Sprintf("Uncompressed data size too large; the maximum size is %d (probably, length of uncompressed data was corrupted)", types.MaxBlobLen)
+)
+
+const (
+	uncompressBufferWarning = "ZLIB: Not enough room in the output buffer (probably, length of uncompressed data was corrupted)"
+	uncompressDataWarning   = "ZLIB: Input data corrupted"
+)
+
+func mysqlUncompressWarning(err error) (uint16, string) {
+	// This classifier is called only after both decoders reject the input. The
+	// size-limit sentinel and short-write error are the two non-data-error cases.
+	switch {
+	case errors.Is(err, errUncompressOutputTooLarge):
+		return moerr.ER_TOO_BIG_FOR_UNCOMPRESS, uncompressSizeLimitWarning
+	case errors.Is(err, io.ErrShortWrite):
+		return moerr.ER_ZLIB_Z_BUF_ERROR, uncompressBufferWarning
+	default:
+		return moerr.ER_ZLIB_Z_DATA_ERROR, uncompressDataWarning
+	}
+}
+
 func writeZlibCompressed(dst io.Writer, data []byte) error {
 	writer := zlib.NewWriter(dst)
 	written, err := writer.Write(data)
@@ -7867,7 +7890,7 @@ func compressedOriginalLength(data []byte, maxResultSize int) (uint32, error) {
 	}
 	originalLen := binary.LittleEndian.Uint32(data[:4]) & mysqlCompressedLengthMask
 	if uint64(originalLen) > uint64(maxResultSize) {
-		return 0, moerr.NewInternalErrorNoCtxf("uncompressed length %d exceeds result limit %d", originalLen, maxResultSize)
+		return 0, errUncompressOutputTooLarge
 	}
 	return originalLen, nil
 }
@@ -7967,6 +7990,7 @@ func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	var warnings process.WarningAccumulator
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -7987,20 +8011,26 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 
 		decompressed, err := mysqlUncompress(data, types.MaxBlobLen)
 		if err != nil {
+			primaryErr := err
 			// COMPRESS used raw DEFLATE before MatrixOne matched MySQL's zlib
 			// format. Keep those previously persisted values readable.
 			decompressed, err = legacyMatrixOneUncompress(data, types.MaxBlobLen)
-		}
-		if err != nil {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
+			if err != nil {
+				code, message := mysqlUncompressWarning(primaryErr)
+				warnings.Add(code, message)
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
 			}
-			continue
 		}
 
 		if err = rs.AppendBytes(decompressed, false); err != nil {
 			return err
 		}
+	}
+	if warnings.Total > 0 {
+		warnings.Flush(proc)
 	}
 
 	return nil
