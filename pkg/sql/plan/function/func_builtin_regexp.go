@@ -2231,6 +2231,34 @@ func (rs *regexpSet) regularReplaceWithMatchType(
 	if len(str) == 0 {
 		return str, nil
 	}
+	if regexpReplacementNeedsExpansion(repl) {
+		return rs.regularReplaceWithTemplate(
+			reg, pat, str, repl, startByte, occurrence, subjectIsBinary, pureMatchType,
+			regexpReplaceMaxResultBytes,
+		)
+	}
+	if len(repl) > 0 {
+		if upperBound, ok := regexpReplaceOutputUpperBound(len(str), len(repl)); !ok ||
+			upperBound > uint64(regexpReplaceMaxResultBytes/2) {
+			return rs.regexpReplaceLiteralWithLimit(
+				reg, pat, str, repl, startByte, occurrence, subjectIsBinary, pureMatchType,
+				regexpReplaceMaxResultBytes,
+			)
+		}
+	}
+	return rs.regularReplaceLiteralWithMatchType(
+		reg, pat, str, repl, startByte, occurrence, subjectIsBinary, pureMatchType, mayMatchEmpty)
+}
+
+func (rs *regexpSet) regularReplaceLiteralWithMatchType(
+	reg *regexp.Regexp,
+	pat, str, repl string,
+	startByte int,
+	occurrence int64,
+	subjectIsBinary bool,
+	pureMatchType string,
+	mayMatchEmpty bool,
+) (r string, err error) {
 	if startByte == 0 && occurrence == 0 && !mayMatchEmpty {
 		if !subjectIsBinary {
 			return reg.ReplaceAllLiteralString(str, repl), nil

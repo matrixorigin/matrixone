@@ -116,3 +116,30 @@ EXECUTE regexp_value_match_type_rebind USING @regexp_mode_subject, @regexp_mode_
        @regexp_mode_subject, @regexp_mode_pattern, @regexp_mode,
        @regexp_mode_subject, @regexp_mode_pattern, @regexp_mode;
 DEALLOCATE PREPARE regexp_value_match_type_rebind;
+
+# ICU-style capture references are expanded at the selected match; binary
+# captures append the original bytes, including NUL and invalid UTF-8.
+SELECT REGEXP_REPLACE('ab', '(a)(b)', '$2$1') AS swapped,
+       REGEXP_REPLACE('matrix', '(matrix)', '<$1>') AS captured,
+       REGEXP_REPLACE('aab', '(a)', '<$1>', 2, 0) AS from_pos;
+SELECT HEX(REGEXP_REPLACE(CAST(X'00FFC3' AS VARBINARY(3)),
+                          CAST(X'00' AS VARBINARY(1)),
+                          CAST(X'5B24305D' AS VARBINARY(4)), 1, 0)) AS binary_capture;
+SELECT HEX(REGEXP_REPLACE(CAST(X'00FFC3' AS BINARY(3)),
+                          CAST(X'00' AS BINARY(1)),
+                          CAST(X'5B24305D' AS BINARY(4)), 1, 0)) AS binary_capture,
+       HEX(REGEXP_REPLACE(CAST(X'00FFC3' AS VARBINARY(3)),
+                          CAST(X'00' AS VARBINARY(1)),
+                          CAST(X'5B24305D' AS VARBINARY(4)), 1, 0)) AS varbinary_capture;
+
+# Replacement markers supplied through a prepared parameter are interpreted
+# on each execution rather than retained from an earlier value.
+PREPARE regexp_capture_replacement FROM
+    'SELECT REGEXP_REPLACE(?, ?, ?, 1, 0) AS replaced';
+SET @regexp_capture_subject = 'ab';
+SET @regexp_capture_pattern = '(a)(b)';
+SET @regexp_capture_value = '$2$1';
+EXECUTE regexp_capture_replacement USING @regexp_capture_subject, @regexp_capture_pattern, @regexp_capture_value;
+SET @regexp_capture_value = '<$0>';
+EXECUTE regexp_capture_replacement USING @regexp_capture_subject, @regexp_capture_pattern, @regexp_capture_value;
+DEALLOCATE PREPARE regexp_capture_replacement;

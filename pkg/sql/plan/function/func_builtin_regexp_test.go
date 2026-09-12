@@ -145,6 +145,112 @@ func Test_BuiltIn_RegexpReplaceStartsAtRequestedPosition(t *testing.T) {
 	require.Empty(t, got, "MySQL leaves an empty REGEXP_REPLACE subject unchanged")
 }
 
+func Test_BuiltIn_RegexpReplaceCaptureTemplate(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	tests := []struct {
+		name        string
+		pattern     string
+		subject     string
+		replacement string
+		position    int64
+		occurrence  int64
+		want        string
+	}{
+		{name: "swap_groups", pattern: "(a)(b)", subject: "ab", replacement: "$2$1", position: 1, occurrence: 0, want: "ba"},
+		{name: "whole_match", pattern: "(ab)", subject: "ab", replacement: "$0", position: 1, occurrence: 1, want: "ab"},
+		{name: "greedy_multi_digit", pattern: "(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)", subject: "abcdefghijkl", replacement: "$12", position: 1, occurrence: 1, want: "l"},
+		{name: "greedy_fallback", pattern: "(a)", subject: "a", replacement: "$12", position: 1, occurrence: 1, want: "a2"},
+		{name: "leading_zero_group", pattern: "(a)", subject: "a", replacement: "$01", position: 1, occurrence: 1, want: "a"},
+		{name: "leading_zero_fallback", pattern: "(a)", subject: "a", replacement: "$09", position: 1, occurrence: 1, want: "a9"},
+		{name: "unmatched_optional_group", pattern: "(a)?b", subject: "b", replacement: "$1x", position: 1, occurrence: 1, want: "x"},
+		{name: "named_group", pattern: "(?P<word>[a-z]+)", subject: "matrix", replacement: "<$" + "{word}>", position: 1, occurrence: 1, want: "<matrix>"},
+		{name: "escaped_dollar", pattern: "(a)", subject: "a", replacement: "\\$1", position: 1, occurrence: 1, want: "$1"},
+		{name: "escaped_backslash", pattern: "(a)", subject: "a", replacement: "\\\\", position: 1, occurrence: 1, want: "\\"},
+		{name: "trailing_escape", pattern: "(a)", subject: "a", replacement: "tail\\", position: 1, occurrence: 1, want: "tail"},
+		{name: "position_all", pattern: "(a)", subject: "aab", replacement: "<$1>", position: 2, occurrence: 0, want: "a<a>b"},
+		{name: "selected_occurrence", pattern: "(a)", subject: "aab", replacement: "<$1>", position: 1, occurrence: 2, want: "a<a>b"},
+		{name: "boundary_overlapping_match", pattern: "(aa)", subject: "aaa", replacement: "<$1>", position: 2, occurrence: 1, want: "a<aa>"},
+		{name: "anchor_keeps_original_context", pattern: "^(a)", subject: "ab", replacement: "<$1>", position: 2, occurrence: 0, want: "ab"},
+		{name: "zero_width_empty_capture", pattern: "(?P<empty>)", subject: "ab", replacement: "[$1]", position: 1, occurrence: 0, want: "[]a[]b[]"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := op.regMap.regularReplaceWithMatchType(
+				tc.pattern, tc.subject, tc.replacement, tc.position, tc.occurrence, false, "")
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	for _, replacement := range []string{"$", "$$", "$x", "$" + "{}", "$" + "{missing}", "$2"} {
+		t.Run("invalid_"+replacement, func(t *testing.T) {
+			_, err := op.regMap.regularReplace("(a)", "a", replacement, 1, 0)
+			require.Error(t, err)
+
+			got, err := op.regMap.regularReplace("z", "a", replacement, 1, 0)
+			require.NoError(t, err, "replacement is not evaluated when no match is selected")
+			require.Equal(t, "a", got)
+		})
+	}
+	got, err := op.regMap.regularReplace("(a)", "a", "$9", 1, 2)
+	require.NoError(t, err, "an out-of-range occurrence does not evaluate the replacement")
+	require.Equal(t, "a", got)
+
+	binarySubject := string([]byte{0x00, 0xff, 0xc3, 0x28})
+	got, err = op.regMap.regularReplaceWithMatchType(
+		".", binarySubject, "[$0]", 1, 0, true, "")
+	require.NoError(t, err)
+	want := []byte{'[', 0x00, ']', '[', 0xff, ']', '[', 0xc3, ']', '[', 0x28, ']'}
+	require.Equal(t, string(want), got, "binary captures preserve NUL and invalid UTF-8 bytes")
+
+	pureMatchType, err := getPureMatchType("i")
+	require.NoError(t, err)
+	got, err = op.regMap.regularReplaceWithMatchType(
+		string([]byte{0xe9}), string([]byte{0xc9}), "<$0>", 1, 1, true, pureMatchType)
+	require.NoError(t, err)
+	require.Equal(t, string([]byte{'<', 0xc9, '>'}), got,
+		"binary case-folding must emit the original captured byte")
+
+	largeReplacement := strings.Repeat("$0", 10000)
+	got, err = op.regMap.regularReplace("(a)", "a", largeReplacement, 1, 1)
+	require.NoError(t, err)
+	require.Equal(t, strings.Repeat("a", 10000), got)
+}
+
+func Test_BuiltIn_RegexpReplaceOutputLimit(t *testing.T) {
+	op := newOpBuiltInRegexp()
+	reg, _, err := op.regMap.getRegularMatcherInfoWithMode("(a)", false)
+	require.NoError(t, err)
+	got, err := op.regMap.regularReplaceWithTemplate(
+		reg, "(a)", "a", "$1$1", 0, 0, false, "", 2)
+	require.NoError(t, err)
+	require.Equal(t, "aa", got, "exactly-at-limit output is accepted")
+	_, err = op.regMap.regularReplaceWithTemplate(
+		reg, "(a)", "a", "$1$1", 0, 0, false, "", 1)
+	require.Error(t, err, "one byte below the required output is rejected before construction")
+
+	regA, _, err := op.regMap.getRegularMatcherInfoWithMode("a", false)
+	require.NoError(t, err)
+	got, err = op.regMap.regexpReplaceLiteralWithLimit(
+		regA, "a", "aaaa", "aa", 0, 0, false, "", 8)
+	require.NoError(t, err)
+	require.Equal(t, "aaaaaaaa", got)
+	_, err = op.regMap.regexpReplaceLiteralWithLimit(
+		regA, "a", "aaaa", "aa", 0, 0, false, "", 7)
+	require.Error(t, err)
+
+	regZ, _, err := op.regMap.getRegularMatcherInfoWithMode("z", false)
+	require.NoError(t, err)
+	got, err = op.regMap.regularReplaceWithTemplate(
+		regZ, "z", "a", "$999", 0, 0, false, "", 1)
+	require.NoError(t, err, "a no-match result stays unchanged and does not parse an invalid template")
+	require.Equal(t, "a", got)
+
+	maxInt := int(^uint(0) >> 1)
+	_, ok := regexpReplaceOutputUpperBound(maxInt, maxInt)
+	require.False(t, ok, "the allocation bound must reject arithmetic overflow")
+}
+
 func Test_BuiltIn_RegexpValueFunctionsHonorMatchType(t *testing.T) {
 	op := newOpBuiltInRegexp()
 	pureMatchType := func(input string) string {
