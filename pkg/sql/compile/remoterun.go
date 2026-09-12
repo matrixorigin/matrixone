@@ -2084,6 +2084,12 @@ func validateRemoteExpressionPipelineProtocol(
 			"typed BIN/CONV execution requires MORPC protocol version 64",
 		)
 	}
+	if features.ASCIIInt32Result &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion65) {
+		return moerr.NewNotSupportedNoCtx(
+			"signed INT ASCII results require MORPC protocol version 65",
+		)
+	}
 	return nil
 }
 

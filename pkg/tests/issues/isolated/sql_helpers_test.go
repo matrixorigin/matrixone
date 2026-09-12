@@ -17,12 +17,18 @@ package isolated
 import (
 	"context"
 	"database/sql"
+	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/stretchr/testify/require"
 )
 
-// Keep the isolated package's existing helper name while sharing the readiness
-// contract with SQL integration tests.
-func waitSystemBootstrap(ctx context.Context, db *sql.DB) error {
-	return testutils.WaitSystemBootstrap(ctx, db)
+func execSQLRequire(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
+	t.Helper()
+	_, err := db.ExecContext(ctx, statement)
+	require.NoErrorf(t, err, "exec failed: %s", statement)
+}
+
+func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
+	t.Helper()
+	_, _ = db.ExecContext(ctx, statement)
 }

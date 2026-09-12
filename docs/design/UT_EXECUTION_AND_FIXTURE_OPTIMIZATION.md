@@ -1,11 +1,42 @@
 # UT 执行模型与 fixture 生命周期优化设计
 
-- 状态：Proposed for this PR，revision 8
+- 状态：Proposed for this PR，revision 9
 - 适用范围：`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 资源预算
 - 约束：不增加 runner 数量；收益必须来自单 runner 的工作删除、fixture 复用或资源有界的阶段重叠
 - 设计 owner：UT runner 与测试基础设施；各测试 package 对自己的 fixture reset/cleanup 契约负责
 - 设计门禁：跨 package、跨进程 admission、runner 取消和集群生命周期，命中 execution、ownership、resource 和 public test-contract 多个边界
 - 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 复用已释放 slot 并默认开启；两者都不扩大默认 heavy 资源预算。跨进程 cluster 共享和动态调度不在本 PR；本 revision 按兼容矩阵落地了一个同进程单 CN fixture 合并，并为后续专用 fixture 增加显式释放边界。
+
+## Revision 9: branch SQL regression fixture consolidation
+
+最近两天的变更横跨 SQL function/aggregate、planner/execution、向量与索引、Arrow
+LOAD/DDL/catalog、事务与服务生命周期，以及 UT/BVT runner 基建。测试优化先按生产
+边界和 oracle 分组；本 revision 只处理其中同一普通 SQL 单 CN 合约的两个 branch 回归：
+`TestIssue26111DataBranchDatabaseWithCyclicForeignKeys` 和
+`TestIssue26114CrossAccountBranchQuotaAndOwnership`。它们从
+`pkg/tests/issues/isolated` 迁入已有的 `pkg/tests/sqlintegration` canonical fixture，
+不改变生产代码、runner 分组、race/coverage/timeout 或 BVT 文件。
+
+两组回归的业务 oracle 原样保留：
+
+- 26111 继续验证循环外键的数据、元数据、非法写入、已有目标拒绝、跨账号可见性、
+  session `foreign_key_checks` 和 branch 可删除性；
+- 26114 继续验证 table/database branch 禁用、无残留、并发 quota 的一成一败、quota
+  提高后的 metadata 数量，以及旧版 `creator=0` 元数据仍计入 quota。
+
+共享 fixture 引入了新的 reset oracle，而不是删掉业务断言。每个 26114 子场景保存并
+恢复 `mo_feature_registry` 的 `BRANCH` 完整行（包括 description、JSON scope、enabled、
+created/updated timestamp 以及原行不存在的情况），并复查恢复结果。创建的 account、
+feature-limit、branch metadata、用户 snapshot 和 branch protect snapshot 在退出时有界
+清理并检查。quota 竞争的两个 goroutine 必须先全部返回，随后才能做 catalog cleanup。
+共享 fixture 只有在场景成功且清理成功时复用；失败或恢复失败由外层 cleanup 在 fixture
+锁释放后销毁，避免 callback 内自锁和脏状态串入下一场景。restore、预算、multi-CN、
+global hook、Arrow/partition/shard/upgrade 等不兼容场景继续留在 `isolated`。
+
+删除的业务 case 数量为零；删除的只是跨 package 的重复生命周期 wrapper 和旧文件定义。
+现有 feature-limit branch BVT 仍负责真实 frontend/public SQL contract，因此本 revision
+不新增重复 BVT。收益必须以同一 CGo、race、tag、topology 和 runner 配置的 before/after
+测量确认；CI admission 累计等待不能直接计为 wall-time 节省。
 
 ## Revision 8: timeout observability for partial UT runs
 

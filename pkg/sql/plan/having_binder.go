@@ -714,10 +714,9 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 			}
 		}
 
-		if _, ok := orderExpr.(*tree.Subquery); ok {
-			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
-		}
-
+		// Keep scalar subqueries as aggregate arguments here. QueryBuilder
+		// flattens every aggregate argument before constructing the AGG node,
+		// including the hidden arguments used as GROUP_CONCAT order keys.
 		var boundExpr *plan.Expr
 		if orderArgIndex >= 0 {
 			// Reuse the already-bound aggregate argument. Rebinding an ordinal
@@ -733,9 +732,6 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 			if err != nil {
 				return err
 			}
-		}
-		if hasSubquery(boundExpr) {
-			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
 		}
 		// A literal key is equal for every input row and has no effect on the
 		// ordering. Do not expose it as an executor key (NULL has type ANY).
