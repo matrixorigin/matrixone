@@ -2287,28 +2287,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: CONV,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) != 3 {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			// First parameter can be any type (string or numeric)
-			// Second and third parameters must be int64, but NULL constants arrive as ANY
-			if (inputs[1].Oid != types.T_int64 && inputs[1].Oid != types.T_any) ||
-				(inputs[2].Oid != types.T_int64 && inputs[2].Oid != types.T_any) {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			// Keep an untyped NULL or prepared marker dynamic. The executor
-			// must see the actual runtime vector instead of losing its domain
-			// through the VARCHAR overload.
-			if inputs[0].Oid == types.T_any {
-				for i, ov := range overloads {
-					if len(ov.args) == 3 && ov.args[0] == types.T_any {
-						return newCheckResultWithSuccess(i)
-					}
-				}
-			}
-			return newCheckResultWithSuccess(0)
-		},
+		checkFn:    convTypeCheck,
 
 		Overloads: []overload{
 			{
