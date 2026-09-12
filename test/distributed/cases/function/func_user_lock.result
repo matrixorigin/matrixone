@@ -4,6 +4,18 @@ free_before
 SELECT GET_LOCK('prisma_migrate_lock', CAST(0 AS DOUBLE)) AS acquire_lock;
 acquire_lock
 1
+SELECT GET_LOCK('prisma_migrate_lock_decimal_timeout', 0.5) AS decimal_timeout_lock;
+decimal_timeout_lock
+1
+SELECT RELEASE_LOCK('prisma_migrate_lock_decimal_timeout') AS release_decimal_timeout_lock;
+release_decimal_timeout_lock
+1
+SELECT GET_LOCK('prisma_migrate_lock_double_timeout', CAST(0.5 AS DOUBLE)) AS double_timeout_lock;
+double_timeout_lock
+1
+SELECT RELEASE_LOCK('prisma_migrate_lock_double_timeout') AS release_double_timeout_lock;
+release_double_timeout_lock
+1
 SELECT IS_FREE_LOCK('PRISMA_MIGRATE_LOCK') AS uppercase_same_lock_in_use;
 uppercase_same_lock_in_use
 0
@@ -19,10 +31,17 @@ free_after_release
 SELECT RELEASE_LOCK('prisma_migrate_lock_never_created') AS release_never_created;
 release_never_created
 null
-SELECT
-GET_LOCK(NULL, CAST(0 AS DOUBLE)) AS get_null_name,
-GET_LOCK('prisma_migrate_lock_null_timeout', NULL) AS get_null_timeout,
-RELEASE_LOCK(NULL) AS release_null_name,
-IS_FREE_LOCK(NULL) AS is_free_null_name;
-get_null_name    get_null_timeout    release_null_name    is_free_null_name
-null    null    null    null
+SELECT GET_LOCK(NULL, NULL) AS get_null_name;
+Incorrect user-level lock name 'NULL'.
+SELECT RELEASE_LOCK(NULL) AS release_null_name;
+Incorrect user-level lock name 'NULL'.
+SELECT IS_FREE_LOCK(NULL) AS is_free_null_name;
+Incorrect user-level lock name 'NULL'.
+SELECT IS_USED_LOCK(NULL) AS is_used_null_name;
+Incorrect user-level lock name 'NULL'.
+SELECT GET_LOCK('prisma_migrate_lock_null_timeout', NULL) AS get_null_timeout;
+get_null_timeout
+1
+SELECT RELEASE_LOCK('prisma_migrate_lock_null_timeout') AS release_null_timeout_lock;
+release_null_timeout_lock
+1

@@ -1431,14 +1431,19 @@ func TestUserLevelLockBuiltinRegistration(t *testing.T) {
 	cases := []struct {
 		name string
 		id   int
-		args []types.T
+		args [][]types.T
 		ret  types.Type
 	}{
-		{name: "get_lock", id: GET_LOCK, args: []types.T{types.T_varchar, types.T_float64}, ret: types.T_int64.ToType()},
-		{name: "release_lock", id: RELEASE_LOCK, args: []types.T{types.T_varchar}, ret: types.T_int64.ToType()},
-		{name: "is_free_lock", id: IS_FREE_LOCK, args: []types.T{types.T_varchar}, ret: types.T_int64.ToType()},
-		{name: "is_used_lock", id: IS_USED_LOCK, args: []types.T{types.T_varchar}, ret: types.T_uint64.ToType()},
-		{name: "release_all_locks", id: RELEASE_ALL_LOCKS, args: []types.T{}, ret: types.T_int64.ToType()},
+		{name: "get_lock", id: GET_LOCK, args: [][]types.T{
+			{types.T_varchar, types.T_float64},
+			{types.T_varchar, types.T_decimal64},
+			{types.T_varchar, types.T_decimal128},
+			{types.T_varchar, types.T_decimal256},
+		}, ret: types.T_int64.ToType()},
+		{name: "release_lock", id: RELEASE_LOCK, args: [][]types.T{{types.T_varchar}}, ret: types.T_int64.ToType()},
+		{name: "is_free_lock", id: IS_FREE_LOCK, args: [][]types.T{{types.T_varchar}}, ret: types.T_int64.ToType()},
+		{name: "is_used_lock", id: IS_USED_LOCK, args: [][]types.T{{types.T_varchar}}, ret: types.T_uint64.ToType()},
+		{name: "release_all_locks", id: RELEASE_ALL_LOCKS, args: [][]types.T{{}}, ret: types.T_int64.ToType()},
 	}
 
 	for _, tc := range cases {
@@ -1453,14 +1458,15 @@ func TestUserLevelLockBuiltinRegistration(t *testing.T) {
 			require.NotNil(t, fn)
 			require.Equal(t, plan.Function_STRICT, fn.class)
 			require.Equal(t, STANDARD_FUNCTION, fn.layout)
-			require.Len(t, fn.Overloads, 1)
+			require.Len(t, fn.Overloads, len(tc.args))
 
-			overload := fn.Overloads[0]
-			require.Equal(t, tc.args, overload.args)
-			require.True(t, overload.volatile)
-			require.True(t, overload.realTimeRelated)
-			require.Equal(t, tc.ret, overload.retType(nil))
-			require.NotNil(t, overload.newOp())
+			for i, overload := range fn.Overloads {
+				require.Equal(t, tc.args[i], overload.args)
+				require.True(t, overload.volatile)
+				require.True(t, overload.realTimeRelated)
+				require.Equal(t, tc.ret, overload.retType(nil))
+				require.NotNil(t, overload.newOp())
+			}
 		})
 	}
 }

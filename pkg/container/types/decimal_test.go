@@ -17,6 +17,7 @@ package types
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"math/rand"
 	"testing"
 
@@ -114,6 +115,100 @@ func TestDecimal256ScaleNegativeSeventySevenPreservesRounding(t *testing.T) {
 	negative, err := maximum.Minus().Scale(-77)
 	require.NoError(t, err)
 	require.Equal(t, Decimal256FromInt64(-1), negative)
+}
+
+func TestDecimal128ScaleMultiStepRoundsOnlyFinalChunk(t *testing.T) {
+	for _, tc := range []struct {
+		input         string
+		want          string
+		wantTruncated string
+	}{
+		{"1.499999999999999999999999999999", "1", "1"},
+		{"-1.499999999999999999999999999999", "-1", "-1"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			x, err := ParseDecimal128(tc.input, 38, 30)
+			require.NoError(t, err)
+
+			got, err := x.Scale(-30)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got.Format(0))
+
+			got, err = x.ScaleTruncate(-30)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantTruncated, got.Format(0))
+
+			inplace := x
+			require.NoError(t, inplace.ScaleInplace(-30))
+			require.Equal(t, tc.want, inplace.Format(0))
+		})
+	}
+}
+
+func TestDecimal128ScaleMinimumAndExtremeNegativeScale(t *testing.T) {
+	got, err := Decimal128Min.Scale(-38)
+	require.NoError(t, err)
+	require.Equal(t, "-2", got.Format(0))
+
+	got, err = Decimal128Min.ScaleTruncate(-38)
+	require.NoError(t, err)
+	require.Equal(t, "-1", got.Format(0))
+
+	got, err = Decimal128Min.Scale(math.MinInt32)
+	require.NoError(t, err)
+	require.Equal(t, "0", got.Format(0))
+	got, err = Decimal128Min.ScaleTruncate(math.MinInt32)
+	require.NoError(t, err)
+	require.Equal(t, "0", got.Format(0))
+
+	inplace := Decimal128Min
+	require.NoError(t, inplace.ScaleInplace(math.MinInt32))
+	require.Equal(t, Decimal128{}, inplace)
+}
+
+func TestDecimal256ScaleMultiStepRoundingAndMinimum(t *testing.T) {
+	for _, tc := range []struct {
+		input         string
+		want          string
+		wantTruncated string
+	}{
+		{"1.499999999999999999999999999999", "1", "1"},
+		{"-1.499999999999999999999999999999", "-1", "-1"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			x, err := ParseDecimal256(tc.input, 65, 30)
+			require.NoError(t, err)
+
+			got, err := x.Scale(-30)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got.Format(0))
+
+			got, err = x.ScaleTruncate(-30)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantTruncated, got.Format(0))
+		})
+	}
+
+	minimum := Decimal256{B192_255: uint64(1) << 63}
+	got, err := minimum.Scale(-77)
+	require.NoError(t, err)
+	require.Equal(t, "-1", got.Format(0))
+	got, err = minimum.ScaleTruncate(-77)
+	require.NoError(t, err)
+	require.Equal(t, "0", got.Format(0))
+
+	// The signed minimum is 2^255 in magnitude. Verify a nonzero multi-chunk
+	// truncation against an independent arbitrary-precision quotient.
+	divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(38), nil)
+	want := new(big.Int).Quo(new(big.Int).Lsh(big.NewInt(1), 255), divisor)
+	want.Neg(want)
+	got, err = minimum.ScaleTruncate(-38)
+	require.NoError(t, err)
+	require.Equal(t, want.String(), got.Format(0))
+
+	got, err = minimum.ScaleTruncate(math.MinInt32)
+	require.NoError(t, err)
+	require.Equal(t, "0", got.Format(0))
 }
 
 func TestParse256ExponentOverflowReturnsErrorWithoutPanic(t *testing.T) {

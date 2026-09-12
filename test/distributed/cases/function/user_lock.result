@@ -102,5 +102,58 @@ select is_free_lock('user_lock_bvt_case');
 select release_lock('User_Lock_Bvt_Case');
 ➤ release_lock(User_Lock_Bvt_Case)[-5,64,0]  𝄀
 null
+select get_lock(NULL, NULL);
+Incorrect user-level lock name 'NULL'.
+select release_lock(NULL);
+Incorrect user-level lock name 'NULL'.
+select is_free_lock(NULL);
+Incorrect user-level lock name 'NULL'.
+select is_used_lock(NULL);
+Incorrect user-level lock name 'NULL'.
+select get_lock('user_lock_bvt_null_timeout_free', NULL);
+➤ get_lock(user_lock_bvt_null_timeout_free, null)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_null_timeout_free', NULL);
+➤ get_lock(user_lock_bvt_null_timeout_free, null)[-5,64,0]  𝄀
+1
+select release_lock('user_lock_bvt_null_timeout_free');
+➤ release_lock(user_lock_bvt_null_timeout_free)[-5,64,0]  𝄀
+1
+select release_lock('user_lock_bvt_null_timeout_free');
+➤ release_lock(user_lock_bvt_null_timeout_free)[-5,64,0]  𝄀
+1
+select is_free_lock('user_lock_bvt_null_timeout_free');
+➤ is_free_lock(user_lock_bvt_null_timeout_free)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_null_timeout_busy', 0);
+➤ get_lock(user_lock_bvt_null_timeout_busy, 0)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_null_timeout_busy', NULL);
+➤ get_lock(user_lock_bvt_null_timeout_busy, null)[-5,64,0]  𝄀
+0
+select release_lock('user_lock_bvt_null_timeout_busy');
+➤ release_lock(user_lock_bvt_null_timeout_busy)[-5,64,0]  𝄀
+1
+select is_free_lock('user_lock_bvt_null_timeout_busy');
+➤ is_free_lock(user_lock_bvt_null_timeout_busy)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_decimal_timeout_busy', 0);
+➤ get_lock(user_lock_bvt_decimal_timeout_busy, 0)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_decimal_timeout_busy', 0.5);
+➤ get_lock(user_lock_bvt_decimal_timeout_busy, 0.5)[-5,64,0]  𝄀
+0
+select release_lock('user_lock_bvt_decimal_timeout_busy');
+➤ release_lock(user_lock_bvt_decimal_timeout_busy)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_double_timeout_busy', 0);
+➤ get_lock(user_lock_bvt_double_timeout_busy, 0)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_double_timeout_busy', CAST(0.5 AS DOUBLE));
+➤ get_lock(user_lock_bvt_double_timeout_busy, cast(0.5 as double))[-5,64,0]  𝄀
+0
+select release_lock('user_lock_bvt_double_timeout_busy');
+➤ release_lock(user_lock_bvt_double_timeout_busy)[-5,64,0]  𝄀
+1
 drop table user_lock_bvt_holder;
 drop database user_lock_bvt_db;
