@@ -122,6 +122,15 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		target := b.numericTargetType
 		b.numericTargetType = nil
 		defer func() { b.numericTargetType = target }()
+		_, isDirectPreparedParam := unwrapParenExpr(astExpr).(*tree.ParamExpr)
+		if b.builder != nil && b.builder.isPrepareStatement && isDirectPreparedParam &&
+			(b.builder.isInsertIgnore || (b.ctx != nil && b.ctx.assignmentIgnore)) &&
+			useIgnoreConversionAssignmentCast(*target) {
+			// A bare marker is the assignment source, not a numeric expression.
+			// Leave it as TEXT so the final DML assignment boundary can use
+			// cast_ignore and emit the per-row warning/adjustment at execution.
+			return b.baseBindExpr(astExpr, depth, isRoot)
+		}
 		_, isBareColumn := unwrapParenExpr(astExpr).(*tree.UnresolvedName)
 		if isBareColumn && isEnumOrSetPlanType(target) {
 			previousTarget := b.mysqlSpecialTargetType

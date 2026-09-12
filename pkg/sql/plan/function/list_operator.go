@@ -2580,6 +2580,36 @@ var supportedOperators = []FuncNew{
 					return operatorUnaryTilde[uint64]
 				},
 			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_binary},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitwiseBinaryNotFn
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_varbinary},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitwiseBinaryNotFn
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_blob},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitwiseBinaryNotFn
+				},
+			},
 		},
 	},
 
@@ -3450,7 +3480,7 @@ var supportedOperators = []FuncNew{
 		functionId: OP_BIT_SHIFT_LEFT,
 		class:      plan.Function_STRICT,
 		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    bitShiftTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3481,6 +3511,66 @@ var supportedOperators = []FuncNew{
 				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
 				newOp:      func() executeLogicOfOverload { return operatorOpBitShiftLeftInt64Uint64Fn },
 			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_binary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitShiftLeftBinaryInt64Fn
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_binary, types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitShiftLeftBinaryUint64Fn
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitShiftLeftBinaryInt64Fn
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_varbinary, types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitShiftLeftBinaryUint64Fn
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_blob, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitShiftLeftBinaryInt64Fn
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_blob, types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitShiftLeftBinaryUint64Fn
+				},
+			},
 		},
 	},
 
@@ -3489,7 +3579,7 @@ var supportedOperators = []FuncNew{
 		functionId: OP_BIT_SHIFT_RIGHT,
 		class:      plan.Function_STRICT,
 		layout:     COMPARISON_OPERATOR,
-		checkFn:    fixedTypeMatch,
+		checkFn:    bitShiftTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3519,6 +3609,66 @@ var supportedOperators = []FuncNew{
 				args:       []types.T{types.T_int64, types.T_uint64},
 				retType:    func(parameters []types.Type) types.Type { return types.T_uint64.ToType() },
 				newOp:      func() executeLogicOfOverload { return operatorOpBitShiftRightInt64Uint64Fn },
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_binary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitShiftRightBinaryInt64Fn
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_binary, types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitShiftRightBinaryUint64Fn
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitShiftRightBinaryInt64Fn
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_varbinary, types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitShiftRightBinaryUint64Fn
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_blob, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitShiftRightBinaryInt64Fn
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_blob, types.T_uint64},
+				retType: func(parameters []types.Type) types.Type {
+					return bitwiseBinaryScalarResultType(parameters[0])
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorOpBitShiftRightBinaryUint64Fn
+				},
 			},
 		},
 	},
