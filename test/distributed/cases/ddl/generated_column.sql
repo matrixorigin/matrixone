@@ -350,10 +350,108 @@ insert into t37_odku_pk (a) values (1) on duplicate key update a=5;
 select * from t37_odku_pk;
 
 -- ============================================================
--- 39. MODIFY COLUMN dependency check
+-- 39. MODIFY COLUMN with generated-column dependencies
 -- ============================================================
-create table t38_modify (a int, b int, c int generated always as (a + b) stored);
+create table t38_modify (
+    id int primary key,
+    a int,
+    b int,
+    g bigint generated always as (a + 5) stored,
+    key idx_g(g),
+    key idx_b(b)
+);
+insert into t38_modify (id, a, b) values (1, 10, 20);
 alter table t38_modify modify column a bigint;
+insert into t38_modify (id, a, b) values (2, 4000000000, 30);
+select id, a, g from t38_modify order by id;
+select count(*) as matched from t38_modify force index (idx_g) where g = 15;
+select count(*) as matched from t38_modify force index (idx_g) where g = 4000000005;
+select count(*) as matched from t38_modify force index (idx_b) where b = 20;
+
+-- UNSIGNED, NOT NULL, and column reordering keep generated expressions valid.
+create table t38_unsigned (a int, b int, g bigint generated always as (a + b) stored);
+insert into t38_unsigned (a, b) values (10, 20);
+alter table t38_unsigned modify column a int unsigned;
+alter table t38_unsigned modify column a int unsigned not null;
+insert into t38_unsigned (a, b) values (4000000000, 2);
+select count(*) as matched from t38_unsigned where (a = 10 and g = 30) or (a = 4000000000 and g = 4000000002);
+
+create table t38_reorder (a int, b int, g int generated always as (a * 100 + b) stored);
+insert into t38_reorder (a, b) values (1, 2);
+alter table t38_reorder modify column a int after b;
+insert into t38_reorder (a, b) values (3, 4);
+select * from t38_reorder order by a;
+
+-- Decimal128 -> Decimal256 widening must retain exact generated values.
+create table t38_decimal (
+    id int primary key,
+    d decimal(38, 0),
+    g decimal(41, 0) generated always as (d + 1) stored
+);
+insert into t38_decimal (id, d) values (1, 1);
+alter table t38_decimal modify column d decimal(40, 0);
+insert into t38_decimal (id, d) values (2, cast('9999999999999999999999999999999999999999' as decimal(40, 0)));
+select count(*) as good_rows from t38_decimal where (id = 1 and d = 1 and g = 2) or
+    (id = 2 and d = cast('9999999999999999999999999999999999999999' as decimal(40, 0)) and
+     g = cast('10000000000000000000000000000000000000000' as decimal(41, 0)));
+
+-- A value-changing conversion must rebuild dependent generated indexes while
+-- an unrelated secondary index remains valid.
+create table t38_index_refresh (
+    id int primary key,
+    a decimal(10, 1),
+    payload int,
+    g int generated always as (a * 10) stored,
+    g2 int generated always as (g * 10) stored,
+    key idx_g2(g2),
+    key idx_payload(payload)
+);
+insert into t38_index_refresh (id, a, payload) values (1, 1.1, 7), (2, 1.4, 8);
+alter table t38_index_refresh modify column a int;
+select count(*) as matched from t38_index_refresh force index (idx_g2) where g2 = 100;
+select count(*) as matched from t38_index_refresh force index (idx_g2) where g2 in (110, 140);
+select count(*) as matched from t38_index_refresh ignore index (idx_g2) where g2 = 100;
+select count(*) as matched from t38_index_refresh force index (idx_payload) where payload in (7, 8);
+
+-- A generated primary-key change also requires rebuilding unrelated secondary
+-- indexes because their entries carry the primary-key value.
+create table t38_generated_pk (
+    a decimal(10, 1),
+    payload int,
+    g bigint generated always as (a * 10) stored,
+    primary key (g),
+    unique key idx_payload(payload)
+);
+insert into t38_generated_pk (a, payload) values (1.1, 7), (2.1, 8);
+alter table t38_generated_pk modify column a int;
+select g from t38_generated_pk order by g;
+select a, g, payload from t38_generated_pk force index (idx_payload) where payload in (7, 8) order by payload;
+select a, g, payload from t38_generated_pk ignore index (idx_payload) where payload in (7, 8) order by payload;
+
+-- Failed COPY must leave the old nullable schema/data usable.
+create table t38_rollback (id int primary key, a int, g int generated always as (a + 1) stored);
+insert into t38_rollback (id, a) values (1, null);
+-- @regex("Column 'a' cannot be null",true)
+alter table t38_rollback modify column a int not null;
+insert into t38_rollback (id, a) values (2, null);
+select count(*) as null_rows from t38_rollback where a is null and g is null;
+
+create table t38_unique_rollback (
+    id int primary key,
+    a decimal(10, 1),
+    g int generated always as (a * 10) stored,
+    unique key uk_g(g)
+);
+insert into t38_unique_rollback (id, a) values (1, 1.1), (2, 1.4);
+-- The conversion collides on the generated unique key after both values map to 1.
+-- @regex("Duplicate entry",true)
+alter table t38_unique_rollback modify column a int;
+select count(*) as old_keys from t38_unique_rollback force index (uk_g) where g in (11, 14);
+insert into t38_unique_rollback (id, a) values (3, 2.0);
+select count(*) as total_rows from t38_unique_rollback;
+select count(*) as leaked_copy_tables from information_schema.tables
+where table_schema = database()
+  and (table_name like 't38_rollback_copy_%' or table_name like 't38_unique_rollback_copy_%');
 
 -- ============================================================
 -- 40. VIRTUAL generated column cannot be PRIMARY KEY

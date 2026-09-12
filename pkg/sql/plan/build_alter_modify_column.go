@@ -94,10 +94,9 @@ func ModifyColumn(
 		)
 	}
 
-	// If the column is referenced by a generated column, block the modification
-	if err := checkColumnWithGeneratedDependency(cctx.GetContext(), tableDef, nColName); err != nil {
-		return false, err
-	}
+	// COPY ALTER rebinds dependent generated expressions against the final
+	// schema and recomputes them while copying rows. The caller separately
+	// expands index impact through the original dependency graph.
 	pkAffected, err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
 	if err != nil {
 		return false, err
