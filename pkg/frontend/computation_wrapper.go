@@ -308,6 +308,10 @@ func columnsToMysqlColumns(ctx context.Context, cols []*plan2.ColDef) ([]interfa
 
 func (cwft *TxnComputationWrapper) getColumnsWithResultColumns(ctx context.Context) ([]interface{}, []*plan2.ColDef, error) {
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
+	if cwft.preparedStmt != nil {
+		overlayPreparedGroupConcatResultMetadata(
+			cwft.plan.GetQuery(), cols, cwft.preparedStmt.groupConcatMaxLenFloor)
+	}
 	columns, err := columnsToMysqlColumns(ctx, cols)
 	return columns, cols, err
 }
@@ -367,6 +371,23 @@ func preparedStatementOwner(ctx context.Context, ses FeSession) (*Session, error
 		return backSes.upstream, nil
 	}
 	return nil, moerr.NewInternalError(ctx, "prepared statement session has no client owner")
+}
+
+func preparedGroupConcatMaxLenFloor(
+	ctx context.Context, owner *Session, prepareStmt *PrepareStmt,
+) (uint64, error) {
+	value, err := owner.GetSessionSysVar("group_concat_max_len")
+	if err != nil {
+		return 0, err
+	}
+	limit, ok := value.(int64)
+	if !ok || limit < 4 {
+		return 0, moerr.NewInternalErrorf(ctx, "invalid group_concat_max_len: %v", value)
+	}
+	if current := uint64(limit); current > prepareStmt.groupConcatMaxLenFloor {
+		return current, nil
+	}
+	return prepareStmt.groupConcatMaxLenFloor, nil
 }
 
 // Compile build logical plan and then build physical plan `Compile` object
@@ -586,6 +607,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		} else {
 			// retComp
 			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
+			retComp.SetGroupConcatMaxLenFloor(cwft.preparedStmt.groupConcatMaxLenFloor)
 			retComp.SetBuildPlanFunc(preparedExecutionBuildPlanFunc(
 				cwft.ses,
 				cwft.stmt,
@@ -1298,6 +1320,16 @@ func initExecuteStmtParamWithResolverInSession(
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 	executionPlan := preparePlan.Plan
+	groupConcatMaxLenFloor := prepareStmt.groupConcatMaxLenFloor
+	hasPreparedGroupConcat := preparedPlanContainsGroupConcat(executionPlan)
+	if hasPreparedGroupConcat {
+		groupConcatMaxLenFloor, err = preparedGroupConcatMaxLenFloor(
+			reqCtx, owner, prepareStmt)
+		if err != nil {
+			return nil, nil, nil, "", false, err
+		}
+	}
+	previousGroupConcatMaxLenFloor := prepareStmt.groupConcatMaxLenFloor
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 	currentBoolSumAvg := owner.sqlModeHasEnableBoolSumAvg()
@@ -1356,6 +1388,20 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || rebuildEveryExecute ||
 		!reusablePlanGenerationSupported(cwft.proc)
 	cwft.planGenerationReused = !needRebuild
+	var pendingGroupConcatColDefData [][]byte
+	pendingGroupConcatColDefDataSet := false
+	rebuildCommitted := false
+	rebuildPublished := false
+	defer func() {
+		if rebuildCommitted && !rebuildPublished {
+			// A rebuilt plan may be visible before execute-time parameter binding
+			// finishes. Keep the generation dirty until its metadata and all
+			// execution state are published together, so a rejected execute cannot
+			// pair the new plan with the previous wire metadata.
+			prepareStmt.needsRebuild = true
+			prepareStmt.compileNeedsRebuild = true
+		}
+	}()
 
 	// Rebuild the plan when catalog schema, session temporary-table name
 	// resolution, FK-check state, protocol, or compatibility mode changed. The
@@ -1373,8 +1419,8 @@ func initExecuteStmtParamWithResolverInSession(
 		case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 			txnHaveDDL = sessionTxnHaveDDL(executionSes)
 		}
-		columns := getPreparedResultColumnsFromPlan(
-			prepareStmt.PrepareStmt, newPlan, txnHaveDDL)
+		columns := getPreparedResultColumnsFromPlanWithGroupConcatMaxLen(
+			prepareStmt.PrepareStmt, newPlan, txnHaveDDL, groupConcatMaxLenFloor)
 		resper := execCtx.resper
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
@@ -1389,6 +1435,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.PreparePlan = newPlan
 		prepareStmt.viewMetadataColumnsDependent = cwft.viewMetadataColumnsDependent ||
 			viewMetadataStatementMustRetainLease(prepareStmt.PrepareStmt)
+		rebuildCommitted = true
 		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(executionPlan)
 		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.jsonComparisonParamPositions =
@@ -1408,9 +1455,14 @@ func initExecuteStmtParamWithResolverInSession(
 		// numeric BIT_COUNT category selected by the preceding generation.
 		prepareStmt.bitCountNumericParamTypes = nil
 		prepareStmt.refreshFixedIntegerParamPositions(newPreparePlan.Plan)
-		prepareStmt.ColDefData = newColDefData
-		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
-			execCtx.prepareColDef = newColDefData
+		if hasPreparedGroupConcat {
+			pendingGroupConcatColDefData = newColDefData
+			pendingGroupConcatColDefDataSet = true
+		} else {
+			prepareStmt.ColDefData = newColDefData
+			if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+				execCtx.prepareColDef = newColDefData
+			}
 		}
 		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
@@ -1424,6 +1476,26 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 		prepareStmt.protocolVersion = protocolVersion
 		prepareStmt.needsRebuild = false
+	}
+	if !needRebuild && hasPreparedGroupConcat && groupConcatMaxLenFloor > previousGroupConcatMaxLenFloor {
+		// Keep the cached COM_STMT_PREPARE metadata in sync with the monotonic
+		// execution floor. The current execution gets the same bytes immediately;
+		// later executions start from the widened owner metadata.
+		if prepareStmt.ColDefData != nil && executionPlan.GetQuery() != nil {
+			columns := getPreparedResultColumnsForWithGroupConcatMaxLen(
+				prepareStmt.PrepareStmt, executionPlan, sessionTxnHaveDDL(executionSes),
+				groupConcatMaxLenFloor)
+			resper := execCtx.resper
+			if executionSes.IsBackgroundSession() {
+				resper = owner.GetResponser()
+			}
+			newColDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+			if metadataErr != nil {
+				return nil, nil, nil, "", false, metadataErr
+			}
+			pendingGroupConcatColDefData = newColDefData
+			pendingGroupConcatColDefDataSet = true
+		}
 	}
 
 	// Recreate the cached compile only when a plan dependency changed or an
@@ -1472,7 +1544,7 @@ func initExecuteStmtParamWithResolverInSession(
 					true,
 					nil,
 					nil,
-					prepareStmt.groupConcatMaxLenFloor,
+					groupConcatMaxLenFloor,
 				)
 				if err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -1787,8 +1859,9 @@ func initExecuteStmtParamWithResolverInSession(
 	if runtimePlanApplied {
 		executionPlan = runtimePlan
 		if binaryExecute {
-			columns := getPreparedResultColumnsFor(
-				prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes))
+			columns := getPreparedResultColumnsForWithGroupConcatMaxLen(
+				prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes),
+				groupConcatMaxLenFloor)
 			resper := execCtx.resper
 			if executionSes.IsBackgroundSession() {
 				resper = owner.GetResponser()
@@ -1836,6 +1909,19 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
+	if hasPreparedGroupConcat {
+		if pendingGroupConcatColDefDataSet {
+			prepareStmt.ColDefData = pendingGroupConcatColDefData
+			if execCtx.input != nil && execCtx.input.isBinaryProtExecute && !runtimePlanApplied {
+				execCtx.prepareColDef = pendingGroupConcatColDefData
+			}
+		}
+		// Publish only after parameter binding, validation, specialization, and
+		// all execution metadata construction have succeeded. The caller then
+		// uses this value for a fresh Compile or cached Compile.Reset.
+		prepareStmt.groupConcatMaxLenFloor = groupConcatMaxLenFloor
+	}
+	rebuildPublished = true
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
 }
 
@@ -2000,13 +2086,34 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 		if !ok {
 			return ""
 		}
+		rawValue := ""
+		if param.Value != nil {
+			switch value := param.Value.(type) {
+			case []byte:
+				rawValue = string(value)
+			default:
+				rawValue = fmt.Sprint(value)
+			}
+		}
+		if param.MaterializedValue != "" {
+			rawValue = param.MaterializedValue
+		}
 		runtimeType := param.RuntimeType
 		if !param.HasRuntimeType || runtimeType.Oid == types.T_text {
-			runtimeType = plan2.PreparedNumericPrefixTypeFromString(fmt.Sprintf("%v", param.Value))
+			runtimeType = plan2.PreparedNumericPrefixTypeFromString(rawValue)
 		}
 		fmt.Fprintf(&key, "%d:%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
 			runtimeType.Oid, runtimeType.Charset, runtimeType.Width, runtimeType.Scale)
 		fmt.Fprintf(&key, "binary:%t;domain:%d;", param.IsBinaryString, param.RuntimeStringDomain)
+		charSourceRelevant := param.IsBinaryProtocol || param.HasSourceType ||
+			(param.HasRuntimeType && types.T(param.RuntimeType.Oid).IsMySQLString())
+		if charSourceRelevant {
+			charType, charNumeric := plan2.PreparedCharSourceTypeFromString(rawValue)
+			fmt.Fprintf(&key, "char-source:%t:%d:%d:%d:%d;", charNumeric,
+				charType.Oid, charType.Charset, charType.Width, charType.Scale)
+		} else {
+			fmt.Fprint(&key, "char-source:irrelevant;")
+		}
 		if param.HasSourceType {
 			// SQL EXECUTE arithmetic specializes from the user variable's logical
 			// type. Keep that dependency in the cache identity without replacing

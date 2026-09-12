@@ -5090,8 +5090,14 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 		}
 
 		op.CanOpt = canOpt
-		op.GenerateSeriesCtrNumState(offset[0][0], offset[len(offset)-1][1], step, offset[0][0])
-		op.OffsetTotal = append(op.OffsetTotal, offset[startOffset:startOffset+currMcpu]...)
+		scopeOffsets := offset[startOffset : startOffset+currMcpu]
+		op.GenerateSeriesCtrNumState(
+			scopeOffsets[0][0],
+			scopeOffsets[len(scopeOffsets)-1][1],
+			step,
+			scopeOffsets[0][0],
+		)
+		op.OffsetTotal = append(op.OffsetTotal, scopeOffsets...)
 		startOffset += currMcpu
 
 		ds.NodeInfo = getEngineNode(c)
@@ -10389,6 +10395,7 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 	return false
 }
 
-// SetGroupConcatMaxLenFloor binds the immutable prepared-statement value before
-// physical compilation. Zero keeps ordinary statements fully dynamic.
+// SetGroupConcatMaxLenFloor binds the prepared statement's execution floor
+// before physical compilation or Compile.Reset. Zero keeps ordinary statements
+// fully dynamic.
 func (c *Compile) SetGroupConcatMaxLenFloor(floor uint64) { c.groupConcatMaxLenFloor = floor }

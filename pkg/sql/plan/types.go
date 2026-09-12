@@ -1141,8 +1141,9 @@ type WhereBinder struct {
 
 type GroupBinder struct {
 	baseBinder
-	selectList        tree.SelectExprs
-	projectionExprPos int32
+	selectList          tree.SelectExprs
+	projectionExprPos   int32
+	allowScalarSubquery bool
 }
 
 type HavingBinder struct {
