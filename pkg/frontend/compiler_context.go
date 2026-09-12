@@ -1002,6 +1002,9 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 				return
 			}
 		} else {
+			if value, ok := tcc.execCtx.diagnosticCountSnapshot(varName); ok {
+				return value, nil
+			}
 			if varValue, err = tcc.GetSession().GetSessionSysVar(varName); err != nil {
 				return
 			}
