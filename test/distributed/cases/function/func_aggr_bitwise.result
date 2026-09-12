@@ -265,18 +265,18 @@ select bit_and(a) from t1;
 internal error: Binary operands of bitwise operators must be of equal length
 DROP TABLE IF EXISTS t_bitwise_28226;
 CREATE TABLE t_bitwise_28226 (
-    id INT PRIMARY KEY,
-    grp INT,
-    d DECIMAL(4,1),
-    v VARCHAR(8),
-    day DATE,
-    dt DATETIME(6),
-    b VARBINARY(1)
+id INT PRIMARY KEY,
+grp INT,
+d DECIMAL(4,1),
+v VARCHAR(8),
+day DATE,
+dt DATETIME(6),
+b VARBINARY(1)
 );
 INSERT INTO t_bitwise_28226 VALUES
-    (1, 1, 7.4, '7', '2024-01-02', '2024-12-31 23:59:59.499999', X'03'),
-    (2, 1, 3.5, '3', '2024-01-03', '2024-12-31 23:59:59.500000', X'01'),
-    (3, 2, -2.5, '3tail', '2024-01-04', '2025-01-01 00:00:00.000001', X'FF');
+(1, 1, 7.4, '7', '2024-01-02', '2024-12-31 23:59:59.499999', X'03'),
+(2, 1, 3.5, '3', '2024-01-03', '2024-12-31 23:59:59.500000', X'01'),
+(3, 2, -2.5, '3tail', '2024-01-04', '2025-01-01 00:00:00.000001', X'FF');
 SELECT BIT_AND(d), BIT_OR(d), BIT_XOR(d) FROM t_bitwise_28226 WHERE grp = 1;
 BIT_AND(d)    BIT_OR(d)    BIT_XOR(d)
 4    7    3
@@ -365,7 +365,7 @@ DEALLOCATE PREPARE bitwise_aggregate_nested_28226;
 CREATE TABLE t_bitwise_nested_distinct_28226 (id INT);
 INSERT INTO t_bitwise_nested_distinct_28226 VALUES (1), (2);
 PREPARE bitwise_aggregate_nested_distinct_28226 FROM
-    'SELECT BIT_XOR(DISTINCT COALESCE(?, 0)) FROM t_bitwise_nested_distinct_28226';
+'SELECT BIT_XOR(DISTINCT COALESCE(?, 0)) FROM t_bitwise_nested_distinct_28226';
 SET @bitwise_aggregate_nested_distinct_value_28226 = CAST(2.5 AS DOUBLE);
 -- @regex("distinct bit operations are not supported", true)
 EXECUTE bitwise_aggregate_nested_distinct_28226 USING @bitwise_aggregate_nested_distinct_value_28226;
