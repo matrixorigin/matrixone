@@ -358,12 +358,12 @@ select * from t37_odku_pk;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  2
 create table t38_modify (
-    id int primary key,
-    a int,
-    b int,
-    g bigint generated always as (a + 5) stored,
-    key idx_g(g),
-    key idx_b(b)
+id int primary key,
+a int,
+b int,
+g bigint generated always as (a + 5) stored,
+key idx_g(g),
+key idx_b(b)
 );
 insert into t38_modify (id, a, b) values (1, 10, 20);
 alter table t38_modify modify column a bigint;
@@ -398,26 +398,26 @@ select * from t38_reorder order by a;
 2  ¦  1  ¦  102  𝄀
 4  ¦  3  ¦  304
 create table t38_decimal (
-    id int primary key,
-    d decimal(38, 0),
-    g decimal(41, 0) generated always as (d + 1) stored
+id int primary key,
+d decimal(38, 0),
+g decimal(41, 0) generated always as (d + 1) stored
 );
 insert into t38_decimal (id, d) values (1, 1);
 alter table t38_decimal modify column d decimal(40, 0);
 insert into t38_decimal (id, d) values (2, cast('9999999999999999999999999999999999999999' as decimal(40, 0)));
 select count(*) as good_rows from t38_decimal where (id = 1 and d = 1 and g = 2) or
-    (id = 2 and d = cast('9999999999999999999999999999999999999999' as decimal(40, 0)) and
-     g = cast('10000000000000000000000000000000000000000' as decimal(41, 0)));
+(id = 2 and d = cast('9999999999999999999999999999999999999999' as decimal(40, 0)) and
+g = cast('10000000000000000000000000000000000000000' as decimal(41, 0)));
 ➤ good_rows[-5,64,0]  𝄀
 2
 create table t38_index_refresh (
-    id int primary key,
-    a decimal(10, 1),
-    payload int,
-    g int generated always as (a * 10) stored,
-    g2 int generated always as (g * 10) stored,
-    key idx_g2(g2),
-    key idx_payload(payload)
+id int primary key,
+a decimal(10, 1),
+payload int,
+g int generated always as (a * 10) stored,
+g2 int generated always as (g * 10) stored,
+key idx_g2(g2),
+key idx_payload(payload)
 );
 insert into t38_index_refresh (id, a, payload) values (1, 1.1, 7), (2, 1.4, 8);
 alter table t38_index_refresh modify column a int;
@@ -434,11 +434,11 @@ select count(*) as matched from t38_index_refresh force index (idx_payload) wher
 ➤ matched[-5,64,0]  𝄀
 2
 create table t38_generated_pk (
-    a decimal(10, 1),
-    payload int,
-    g bigint generated always as (a * 10) stored,
-    primary key (g),
-    unique key idx_payload(payload)
+a decimal(10, 1),
+payload int,
+g bigint generated always as (a * 10) stored,
+primary key (g),
+unique key idx_payload(payload)
 );
 insert into t38_generated_pk (a, payload) values (1.1, 7), (2.1, 8);
 alter table t38_generated_pk modify column a int;
@@ -464,10 +464,10 @@ select count(*) as null_rows from t38_rollback where a is null and g is null;
 ➤ null_rows[-5,64,0]  𝄀
 2
 create table t38_unique_rollback (
-    id int primary key,
-    a decimal(10, 1),
-    g int generated always as (a * 10) stored,
-    unique key uk_g(g)
+id int primary key,
+a decimal(10, 1),
+g int generated always as (a * 10) stored,
+unique key uk_g(g)
 );
 insert into t38_unique_rollback (id, a) values (1, 1.1), (2, 1.4);
 alter table t38_unique_rollback modify column a int;
@@ -482,7 +482,7 @@ select count(*) as total_rows from t38_unique_rollback;
 3
 select count(*) as leaked_copy_tables from information_schema.tables
 where table_schema = database()
-  and (table_name like 't38_rollback_copy_%' or table_name like 't38_unique_rollback_copy_%');
+and (table_name like 't38_rollback_copy_%' or table_name like 't38_unique_rollback_copy_%');
 ➤ leaked_copy_tables[-5,64,0]  𝄀
 0
 create table t39_vpk (a int, b int generated always as (a+1) virtual, primary key(b));
