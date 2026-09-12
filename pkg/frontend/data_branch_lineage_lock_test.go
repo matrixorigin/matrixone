@@ -70,6 +70,7 @@ func (e *lineageLifecycleCommitSQLExecutor) ExecTxn(
 
 func TestLockRestoreLineageOwnerLifecycleCoversWholeCatalogRestore(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), 42)
+	featureRegistrySQL := catalog.FeatureRegistryCatalogGateSQL
 	gateSQL := databranchutils.LineageOwnerLifecycleLockSQL()
 
 	for _, level := range []tree.RestoreLevel{
@@ -79,8 +80,9 @@ func TestLockRestoreLineageOwnerLifecycleCoversWholeCatalogRestore(t *testing.T)
 		t.Run(level.String(), func(t *testing.T) {
 			bh := &lineagePublicationLockExec{}
 			bh.init()
+			bh.sql2result[featureRegistrySQL] = newMrsForSqlForShowDatabases([][]interface{}{{1}})
 			require.NoError(t, lockRestoreLineageOwnerLifecycle(ctx, bh, level))
-			require.Equal(t, []string{gateSQL}, bh.executedSQLs)
+			require.Equal(t, []string{featureRegistrySQL, gateSQL}, bh.executedSQLs)
 			require.Equal(t, uint32(catalog.System_Account), bh.accountID)
 		})
 	}
@@ -101,12 +103,34 @@ func TestLockRestoreLineageOwnerLifecycleCoversWholeCatalogRestore(t *testing.T)
 		bh := &lineagePublicationLockExec{}
 		bh.init()
 		wantErr := errors.New("lifecycle gate failed")
+		bh.sql2result[featureRegistrySQL] = newMrsForSqlForShowDatabases([][]interface{}{{1}})
 		bh.sql2err[gateSQL] = wantErr
 		require.ErrorIs(t,
 			lockRestoreLineageOwnerLifecycle(ctx, bh, tree.RESTORELEVELACCOUNT),
 			wantErr,
 		)
-		require.Equal(t, []string{gateSQL}, bh.executedSQLs)
+		require.Equal(t, []string{featureRegistrySQL, gateSQL}, bh.executedSQLs)
+	})
+
+	t.Run("feature registry gate error aborts before lineage barrier", func(t *testing.T) {
+		bh := &lineagePublicationLockExec{}
+		bh.init()
+		wantErr := errors.New("feature registry gate failed")
+		bh.sql2err[featureRegistrySQL] = wantErr
+		require.ErrorIs(t,
+			lockRestoreLineageOwnerLifecycle(ctx, bh, tree.RESTORELEVELCLUSTER),
+			wantErr,
+		)
+		require.Equal(t, []string{featureRegistrySQL}, bh.executedSQLs)
+	})
+
+	t.Run("missing feature registry fails closed", func(t *testing.T) {
+		bh := &lineagePublicationLockExec{}
+		bh.init()
+		require.Error(t,
+			lockRestoreLineageOwnerLifecycle(ctx, bh, tree.RESTORELEVELACCOUNT),
+		)
+		require.Equal(t, []string{featureRegistrySQL}, bh.executedSQLs)
 	})
 }
 
