@@ -460,6 +460,7 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					receiver.warningCount, receiver.warningDiagnostics = receiver.warningSession.SnapshotWarnings()
 					receiver.groupConcatCut, receiver.groupConcatCutMessage =
 						receiver.warningSession.groupConcatCutDiagnostic()
+					receiver.groupConcatReportingIncomplete = receiver.warningSession.incompleteGroupConcatReporting()
 				}
 				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
 				runCompile.clear()
@@ -864,6 +865,7 @@ type messageReceiverOnServer struct {
 	warningDiagnostics                []remoteWarningDiagnostic
 	groupConcatCut                    bool
 	groupConcatCutMessage             string
+	groupConcatReportingIncomplete    bool
 	statementLastInsertID             uint64
 }
 
@@ -1290,6 +1292,7 @@ func (receiver *messageReceiverOnServer) setTerminalAnalysis(message *pipeline.M
 		WarningCount:              receiver.warningCount,
 		GroupConcatCut:            receiver.groupConcatCut,
 		GroupConcatCutMessage:     receiver.groupConcatCutMessage,
+		GroupConcatCutReported:    !receiver.groupConcatReportingIncomplete,
 		Delta:                     receiver.resourceDelta,
 		Memory:                    receiver.resourceMemory,
 		Allocation:                receiver.resourceAllocation,

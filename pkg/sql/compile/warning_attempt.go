@@ -32,13 +32,14 @@ func newWarningAttempt(proc *process.Process, required bool) *warningAttempt {
 		return nil
 	}
 	destination := proc.GetWarningSink()
+	required = required || requiresGroupConcatCutReporting(destination)
 	_, single := destination.(warningDiagnosticSink)
 	_, batch := destination.(warningDiagnosticBatchSink)
 	_, count := destination.(warningDiagnosticCountSink)
 	if !single && !batch && !count && !required {
 		return nil
 	}
-	a := &warningAttempt{collector: &remoteWarningCollector{}, previous: make(map[*process.Process]any)}
+	a := &warningAttempt{collector: &remoteWarningCollector{requiresCutReporting: required}, previous: make(map[*process.Process]any)}
 	a.bindProcess(proc)
 	return a
 }
@@ -84,6 +85,9 @@ func (c *Compile) strictWriteGroupConcatCutError(
 	}
 	cut, message := warnings.groupConcatCutDiagnostic()
 	if !cut {
+		if warnings != nil && warnings.collector.incompleteGroupConcatReporting() {
+			return moerr.NewNotSupportedNoCtx("strict writes require complete remote GROUP_CONCAT truncation reporting")
+		}
 		return nil
 	}
 	return moerr.NewGroupConcatCut(c.proc.Ctx, message)
@@ -124,8 +128,13 @@ func (a *warningAttempt) finish(success bool, destination any) {
 	if a == nil {
 		return
 	}
-	total, warnings, cut, cutMessage := a.collector.closeWarnings(success)
+	total, warnings, cut, cutMessage, incomplete := a.collector.closeWarnings(success)
 	a.restore()
+	if incomplete {
+		if marker, ok := destination.(groupConcatCutMarker); ok {
+			marker.markGroupConcatReportingIncomplete()
+		}
+	}
 	if cut {
 		if marker, ok := destination.(groupConcatCutMarker); ok {
 			marker.markGroupConcatCut(cutMessage)

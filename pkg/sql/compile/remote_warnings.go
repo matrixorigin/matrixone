@@ -41,6 +41,7 @@ type warningDiagnosticCountSink = process.WarningDiagnosticCountAppender
 
 type groupConcatCutMarker interface {
 	markGroupConcatCut(string)
+	markGroupConcatReportingIncomplete()
 }
 
 // appendWarningBatchToSink preserves the bounded diagnostic batch when the
@@ -57,14 +58,17 @@ const remoteWarningRetentionLimit = 64
 // surface it needs while collecting row-level warnings. It deliberately does
 // not expose a frontend session or variable state to the remote CN.
 type remoteWarningCollector struct {
-	mu                    sync.Mutex
-	warningCount          uint64
-	warnings              []remoteWarningDiagnostic
-	warningBytes          int
-	maxRetained           int
-	groupConcatCut        bool
-	groupConcatCutMessage string
-	closed                bool
+	mu                             sync.Mutex
+	warningCount                   uint64
+	warnings                       []remoteWarningDiagnostic
+	warningBytes                   int
+	maxRetained                    int
+	groupConcatCut                 bool
+	groupConcatCutMessage          string
+	groupConcatReportingIncomplete bool
+	// Immutable intent inherited by internal SQL compiles in this attempt.
+	requiresCutReporting bool
+	closed               bool
 }
 
 func (*remoteWarningCollector) GetTempTable(string, string) (string, bool) { return "", false }
@@ -182,6 +186,31 @@ func (s *remoteWarningCollector) groupConcatCutDiagnostic() (bool, string) {
 	return s.groupConcatCut, s.groupConcatCutMessage
 }
 
+func (s *remoteWarningCollector) markGroupConcatReportingIncomplete() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.closed {
+		s.groupConcatReportingIncomplete = true
+	}
+}
+
+func (s *remoteWarningCollector) incompleteGroupConcatReporting() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.groupConcatReportingIncomplete
+}
+
+func requiresGroupConcatCutReporting(sink any) bool {
+	collector, ok := sink.(*remoteWarningCollector)
+	return ok && collector != nil && collector.requiresCutReporting
+}
+
 func (s *remoteWarningCollector) SnapshotWarnings() (uint64, []remoteWarningDiagnostic) {
 	if s == nil {
 		return 0, nil
@@ -194,19 +223,21 @@ func (s *remoteWarningCollector) SnapshotWarnings() (uint64, []remoteWarningDiag
 // closeWarnings atomically seals an attempt against late local/RPC writers.
 // Failed attempts discard without copying; successful attempts transfer the
 // bounded records exactly once. A collector is never reopened for a retry.
-func (s *remoteWarningCollector) closeWarnings(success bool) (uint64, []remoteWarningDiagnostic, bool, string) {
+func (s *remoteWarningCollector) closeWarnings(success bool) (uint64, []remoteWarningDiagnostic, bool, string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return 0, nil, false, ""
+		return 0, nil, false, "", false
 	}
 	s.closed = true
 	total, warnings := s.warningCount, s.warnings
 	cut, message := s.groupConcatCut, s.groupConcatCutMessage
+	incomplete := s.groupConcatReportingIncomplete
 	s.warningCount, s.warnings, s.warningBytes = 0, nil, 0
 	s.groupConcatCut, s.groupConcatCutMessage = false, ""
+	s.groupConcatReportingIncomplete = false
 	if !success {
-		return 0, nil, false, ""
+		return 0, nil, false, "", false
 	}
-	return total, warnings, cut, message
+	return total, warnings, cut, message, incomplete
 }

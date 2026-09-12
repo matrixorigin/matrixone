@@ -113,7 +113,7 @@ func TestInternalSQLWarningAttemptOutcomes(t *testing.T) {
 }
 
 func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
-	for _, outcome := range []string{"success", "retry", "failure", "panic", "strict retry without sink"} {
+	for _, outcome := range []string{"success", "retry", "failure", "panic", "strict retry without sink", "incomplete remote reporting"} {
 		t.Run(outcome, func(t *testing.T) {
 			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 			proc := testutil.NewProcess(t)
@@ -125,6 +125,9 @@ func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
 			}
 			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 				if name == "group_concat_max_len" {
+					if outcome == "incomplete remote reporting" {
+						return int64(100), nil
+					}
 					return int64(5), nil
 				}
 				if name == plan2.SQLSelectLimitVariable {
@@ -156,13 +159,25 @@ func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
 					return nil
 				}
 				evaluations++
-				require.Equal(t, "abcde", string(bat.Vecs[0].GetBytesAt(0)))
+				wantValue := "abcde"
+				if outcome == "incomplete remote reporting" {
+					wantValue = "abcdef"
+				}
+				require.Equal(t, wantValue, string(bat.Vecs[0].GetBytesAt(0)))
 				require.Equal(t, uint64(1), session.totalWarnings, "attempt diagnostics must not be published yet")
 				if len(senders) > 0 {
 					require.NoError(t, senders[0].dealRemoteTerminal(latePayload), "old generation callback during the new attempt")
 				}
 				senders = append(senders, &messageSenderOnClient{warningSink: proc.GetWarningSink().(warningDiagnosticSink)})
 				switch outcome {
+				case "incomplete remote reporting":
+					old := remoteTerminalEnvelope{WarningCount: 65}
+					for i := 0; i < remoteWarningRetentionLimit; i++ {
+						old.WarningDiagnostics = append(old.WarningDiagnostics, remoteWarningDiagnostic{Code: 1, Message: "earlier warning"})
+					}
+					payload, err := json.Marshal(old)
+					require.NoError(t, err)
+					require.NoError(t, senders[len(senders)-1].dealRemoteTerminal(payload))
 				case "retry", "strict retry without sink":
 					if evaluations == 1 {
 						return moerr.NewTxnNeedRetryNoCtx()
@@ -176,7 +191,7 @@ func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
 			}))
 			// Use the real Run/retry lifecycle with a SELECT producer and
 			// strict-write policy; BVT separately verifies actual write rollback.
-			if outcome == "strict retry without sink" {
+			if outcome == "strict retry without sink" || outcome == "incomplete remote reporting" {
 				c.stmt = &tree.Insert{}
 			}
 			if outcome == "panic" {
@@ -184,8 +199,11 @@ func TestGroupConcatWarningAttemptOutcomes(t *testing.T) {
 				func() { defer func() { _ = recover() }(); _, err = c.Run(0); require.Error(t, err) }()
 			} else {
 				_, err = c.Run(0)
-				if outcome == "failure" || outcome == "strict retry without sink" {
+				if outcome == "failure" || outcome == "strict retry without sink" || outcome == "incomplete remote reporting" {
 					require.Error(t, err)
+					if outcome == "incomplete remote reporting" {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+					}
 					if outcome == "strict retry without sink" {
 						require.True(t, moerr.IsMoErrCode(err, moerr.ErrGroupConcatCut))
 					}
