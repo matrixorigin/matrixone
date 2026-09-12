@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -1201,6 +1202,153 @@ func TestResetParamRefRuleRebindsTypedAncestors(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, types.T_float64, types.T(rewritten.Typ.Id))
 	require.Equal(t, types.T_float64, types.T(rewritten.GetF().Args[0].Typ.Id))
+}
+
+func TestPreparedBitwiseAggregateRebindsExecutionSourceDomain(t *testing.T) {
+	ctx := context.Background()
+	marker := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	prepared, err := BindFuncExprImplByPlanExpr(ctx, "bit_and", []*planpb.Expr{marker})
+	require.NoError(t, err)
+	require.True(t, isBitwiseAggregatePrivateCast(prepared.GetF().Args[0]))
+
+	decimalType := types.New(types.T_decimal64, 18, 1)
+	for _, test := range []struct {
+		name          string
+		param         ParamValue
+		wantSourceOID types.T
+		wantPrivate   bool
+	}{
+		{
+			name: "SQL EXECUTE DECIMAL",
+			param: ParamValue{
+				Value: "2.5", SourceType: decimalType, HasSourceType: true,
+			},
+			wantSourceOID: types.T_decimal64,
+			wantPrivate:   true,
+		},
+		{
+			name: "SQL EXECUTE DOUBLE",
+			param: ParamValue{
+				Value: "2.5", SourceType: types.T_float64.ToType(), HasSourceType: true,
+			},
+			wantSourceOID: types.T_float64,
+			wantPrivate:   true,
+		},
+		{
+			name: "SQL EXECUTE VARCHAR keeps integer-prefix semantics",
+			param: ParamValue{
+				Value: "2.5", SourceType: types.New(types.T_varchar, 8, 0), HasSourceType: true,
+			},
+			wantSourceOID: types.T_varchar,
+			wantPrivate:   true,
+		},
+		{
+			name: "COM_STMT VARBINARY switches to byte domain",
+			param: ParamValue{
+				Value: []byte{0x02, 0x03}, RuntimeType: types.New(types.T_varbinary, 2, 0),
+				HasRuntimeType: true, IsBinaryProtocol: true,
+			},
+			wantSourceOID: types.T_varbinary,
+			wantPrivate:   false,
+		},
+		{
+			name: "typed NULL retains DECIMAL domain",
+			param: ParamValue{
+				Value: nil, SourceType: decimalType, HasSourceType: true,
+			},
+			wantSourceOID: types.T_decimal64,
+			wantPrivate:   true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			param := test.param
+			param.RetainParamRef = true
+			rule := NewResetParamRefRule(ctx, []*planpb.Expr{
+				makePlan2StringConstExprWithType("prepare-placeholder"),
+			})
+			rule.SetParamValues([]any{param})
+			rewritten, err := rule.ApplyExpr(DeepCopyExpr(prepared))
+			require.NoError(t, err)
+			arg := rewritten.GetF().Args[0]
+			source := arg
+			if test.wantPrivate {
+				require.True(t, isBitwiseAggregatePrivateCast(arg))
+				require.Equal(t, int32(types.T_int64), arg.Typ.Id)
+				source = arg.GetF().Args[0]
+				require.Equal(t, int32(test.wantSourceOID), source.Typ.Id)
+				if param.Value == nil {
+					nullLiteral := source.GetLit()
+					require.NotNil(t, nullLiteral)
+					require.True(t, nullLiteral.Isnull)
+				}
+				if test.wantSourceOID == types.T_varchar {
+					require.Equal(t, "2.5", source.GetLit().GetSval())
+				}
+			} else {
+				require.False(t, isBitwiseAggregatePrivateCast(arg))
+				require.Equal(t, int32(test.wantSourceOID), arg.Typ.Id)
+			}
+			runtimeLiteral := source.GetLit()
+			if runtimeLiteral == nil && source.GetF() != nil && source.GetF().Func != nil &&
+				len(source.GetF().Args) > 0 {
+				runtimeLiteral = source.GetF().Args[0].GetLit()
+			}
+			require.NotNil(t, runtimeLiteral)
+			require.NotNil(t, runtimeLiteral.GetSrc())
+			require.NotNil(t, runtimeLiteral.GetSrc().GetP())
+			require.Equal(t, int32(0), runtimeLiteral.GetSrc().GetP().GetPos())
+			// Each execution is a specialized copy; the cached prepare template
+			// must keep its marker and private conversion intact.
+			require.True(t, isBitwiseAggregatePrivateCast(prepared.GetF().Args[0]))
+			require.Equal(t, int32(0), prepared.GetF().Args[0].GetF().Args[0].GetP().Pos)
+		})
+	}
+}
+
+func TestPreparedBitwiseAggregateRebindsNestedExecutionSourceDomain(t *testing.T) {
+	ctx := context.Background()
+	marker := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	commonValue, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*planpb.Expr{
+		marker,
+		makePlan2Int64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	prepared, err := BindFuncExprImplByPlanExpr(ctx, "bit_xor", []*planpb.Expr{commonValue})
+	require.NoError(t, err)
+	prepared.GetF().Func.Obj = int64(uint64(prepared.GetF().Func.Obj) | uint64(planfunction.Distinct))
+	require.True(t, isBitwiseAggregatePrivateCast(prepared.GetF().Args[0]))
+	preparedTemplate := DeepCopyExpr(prepared)
+
+	rule := NewResetParamRefRule(ctx, []*planpb.Expr{
+		makePlan2StringConstExprWithType("prepare-placeholder"),
+	})
+	rule.SetParamValues([]any{ParamValue{
+		Value: "2.5", SourceType: types.T_float64.ToType(), HasSourceType: true,
+	}})
+	rule.sqlExecuteNumericParams = []*planpb.Expr{makePlan2Float64ConstExprWithType(2.5)}
+	rule.sqlExecuteStringBackedParams = []bool{false}
+	rewritten, err := rule.ApplyExpr(DeepCopyExpr(prepared))
+	require.NoError(t, err)
+
+	// The nested COALESCE must first acquire its execute-time DOUBLE domain;
+	// then BIT_XOR must reinsert the private conversion instead of rebinding
+	// that conversion as ordinary CAST0 (which rounds 2.5 to 3).
+	aggregateArg := rewritten.GetF().Args[0]
+	require.True(t, isBitwiseAggregatePrivateCast(aggregateArg), aggregateArg.String())
+	require.NotZero(t, uint64(rewritten.GetF().Func.Obj)&uint64(planfunction.Distinct))
+	reboundCommonValue := aggregateArg.GetF().Args[0]
+	require.NotNil(t, reboundCommonValue.GetF())
+	require.Equal(t, "coalesce", reboundCommonValue.GetF().Func.GetObjName())
+	require.Equal(t, types.T_float64, types.T(reboundCommonValue.Typ.Id))
+
+	// Rebinding operates on a copy; it must not specialize the cached template.
+	require.Equal(t, preparedTemplate, prepared)
 }
 
 func TestFillValuesOfParamsInPlanUsesBinaryRuntimeType(t *testing.T) {

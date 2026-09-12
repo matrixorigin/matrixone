@@ -2940,6 +2940,18 @@ var supportedOperators = []FuncNew{
 					return NewSetOperationCast
 				},
 			},
+			{
+				// Internal binder-only conversion for MySQL numeric evaluation in
+				// BIT_AND/OR/XOR. User-written CAST expressions never select this
+				// overload; it keeps aggregate coercion separate from global CAST.
+				overloadId: 4,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewBitwiseAggregateCast
+				},
+			},
 		},
 	},
 

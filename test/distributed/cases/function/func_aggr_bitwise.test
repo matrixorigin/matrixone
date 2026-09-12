@@ -107,11 +107,11 @@ drop table t1;
 #EXTREME VALUE, DISTINCT
 
 select BIT_AND(99999999999999999.99999), BIT_OR(99999999999999999.99999), BIT_XOR(99999999999999999.99999);
-select BIT_AND(999999999999999933193939.99999),BIT_OR(999999999999999933193939.99999),BIT_XOR(999999999999999933193939.99999);
-select BIT_AND(9999999999999999999999999999999999.9999999999999),BIT_OR(9999999999999999999999999999999999.9999999999999),BIT_XOR(9999999999999999999999999999999999.9999999999999);
+select BIT_AND(9007199254740993.5),BIT_OR(9007199254740993.5),BIT_XOR(9007199254740993.5);
+select BIT_AND(9223372036854775806.5),BIT_OR(9223372036854775806.5),BIT_XOR(9223372036854775806.5);
 select BIT_AND(-99999999999999999.99999),BIT_OR(-99999999999999999.99999),BIT_XOR(-99999999999999999.99999);
-select BIT_AND(-999999999999999933193939.99999),BIT_OR(-999999999999999933193939.99999),BIT_XOR(-999999999999999933193939.99999);
-select BIT_AND(-9999999999999999999999999999999999.9999999999999),BIT_OR(-9999999999999999999999999999999999.9999999999999),BIT_XOR(-9999999999999999999999999999999999.9999999999999);
+select BIT_AND(-9007199254740993.5),BIT_OR(-9007199254740993.5),BIT_XOR(-9007199254740993.5);
+select BIT_AND(-9223372036854775807.5),BIT_OR(-9223372036854775807.5),BIT_XOR(-9223372036854775807.5);
 
 create table t1(a bigint);
 select BIT_AND(a),BIT_OR(a), BIT_XOR(a) from t1;
@@ -158,3 +158,76 @@ select bit_and(a), bit_or(a), bit_xor(a) from t1;
 insert into t1 values(33);
 -- @pattern
 select bit_and(a) from t1;
+
+# ISSUE 28226: numeric aggregate coercion, temporal packing and cached PREPARE reuse.
+DROP TABLE IF EXISTS t_bitwise_28226;
+CREATE TABLE t_bitwise_28226 (
+    id INT PRIMARY KEY,
+    grp INT,
+    d DECIMAL(4,1),
+    v VARCHAR(8),
+    day DATE,
+    dt DATETIME(6),
+    b VARBINARY(1)
+);
+INSERT INTO t_bitwise_28226 VALUES
+    (1, 1, 7.4, '7', '2024-01-02', '2024-12-31 23:59:59.499999', X'03'),
+    (2, 1, 3.5, '3', '2024-01-03', '2024-12-31 23:59:59.500000', X'01'),
+    (3, 2, -2.5, '3tail', '2024-01-04', '2025-01-01 00:00:00.000001', X'FF');
+SELECT BIT_AND(d), BIT_OR(d), BIT_XOR(d) FROM t_bitwise_28226 WHERE grp = 1;
+SELECT grp, BIT_AND(d), BIT_OR(d), BIT_XOR(d) FROM t_bitwise_28226 GROUP BY grp ORDER BY grp;
+SELECT id, BIT_AND(d) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)
+FROM t_bitwise_28226 ORDER BY id;
+SELECT id, BIT_AND(d) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)
+FROM t_bitwise_28226 ORDER BY id;
+SELECT BIT_AND(v), BIT_OR(v), BIT_XOR(v) FROM t_bitwise_28226 WHERE grp = 1;
+SELECT BIT_AND(day), BIT_OR(day), BIT_XOR(day) FROM t_bitwise_28226 WHERE grp = 1;
+SELECT BIT_AND(dt), BIT_OR(dt), BIT_XOR(dt) FROM t_bitwise_28226 WHERE grp = 1;
+SELECT HEX(BIT_AND(b)), HEX(BIT_OR(b)), HEX(BIT_XOR(b)) FROM t_bitwise_28226 WHERE grp = 1;
+
+CREATE TABLE t_bitwise_set_28226 (s SET('a','b','c'));
+INSERT INTO t_bitwise_set_28226 VALUES ('a,b'), ('b,c');
+SELECT BIT_AND(s), BIT_OR(s), BIT_XOR(s) FROM t_bitwise_set_28226;
+DROP TABLE t_bitwise_set_28226;
+DROP TABLE t_bitwise_28226;
+
+PREPARE bitwise_aggregate_marker_28226 FROM 'SELECT BIT_AND(?)';
+SET @bitwise_aggregate_value_28226 = CAST('2.5' AS DECIMAL(2,1));
+EXECUTE bitwise_aggregate_marker_28226 USING @bitwise_aggregate_value_28226;
+SET @bitwise_aggregate_value_28226 = CAST('4.0' AS DECIMAL(2,1));
+EXECUTE bitwise_aggregate_marker_28226 USING @bitwise_aggregate_value_28226;
+SET @bitwise_aggregate_value_28226 = CAST(2.5 AS DOUBLE);
+EXECUTE bitwise_aggregate_marker_28226 USING @bitwise_aggregate_value_28226;
+SET @bitwise_aggregate_value_28226 = '2.5';
+EXECUTE bitwise_aggregate_marker_28226 USING @bitwise_aggregate_value_28226;
+SHOW WARNINGS;
+SET @bitwise_aggregate_value_28226 = NULL;
+EXECUTE bitwise_aggregate_marker_28226 USING @bitwise_aggregate_value_28226;
+SET @bitwise_aggregate_value_28226 = CAST('2.5' AS DECIMAL(2,1));
+EXECUTE bitwise_aggregate_marker_28226 USING @bitwise_aggregate_value_28226;
+SHOW WARNINGS;
+DEALLOCATE PREPARE bitwise_aggregate_marker_28226;
+
+PREPARE bitwise_aggregate_domain_28226 FROM 'SELECT HEX(BIT_AND(?))';
+SET @bitwise_aggregate_domain_value_28226 = CAST(_binary 0x02 AS VARBINARY(1));
+EXECUTE bitwise_aggregate_domain_28226 USING @bitwise_aggregate_domain_value_28226;
+SET @bitwise_aggregate_domain_value_28226 = CAST(3 AS SIGNED);
+EXECUTE bitwise_aggregate_domain_28226 USING @bitwise_aggregate_domain_value_28226;
+SET @bitwise_aggregate_domain_value_28226 = CAST(_binary 0x02 AS VARBINARY(1));
+EXECUTE bitwise_aggregate_domain_28226 USING @bitwise_aggregate_domain_value_28226;
+DEALLOCATE PREPARE bitwise_aggregate_domain_28226;
+
+PREPARE bitwise_aggregate_nested_28226 FROM 'SELECT BIT_AND(COALESCE(?, 0))';
+SET @bitwise_aggregate_nested_value_28226 = CAST(2.5 AS DOUBLE);
+EXECUTE bitwise_aggregate_nested_28226 USING @bitwise_aggregate_nested_value_28226;
+DEALLOCATE PREPARE bitwise_aggregate_nested_28226;
+
+CREATE TABLE t_bitwise_nested_distinct_28226 (id INT);
+INSERT INTO t_bitwise_nested_distinct_28226 VALUES (1), (2);
+PREPARE bitwise_aggregate_nested_distinct_28226 FROM
+    'SELECT BIT_XOR(DISTINCT COALESCE(?, 0)) FROM t_bitwise_nested_distinct_28226';
+SET @bitwise_aggregate_nested_distinct_value_28226 = CAST(2.5 AS DOUBLE);
+-- @regex("distinct bit operations are not supported", true)
+EXECUTE bitwise_aggregate_nested_distinct_28226 USING @bitwise_aggregate_nested_distinct_value_28226;
+DEALLOCATE PREPARE bitwise_aggregate_nested_distinct_28226;
+DROP TABLE t_bitwise_nested_distinct_28226;
