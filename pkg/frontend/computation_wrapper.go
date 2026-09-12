@@ -370,12 +370,12 @@ func preparedGroupConcatMaxLenFloor(
 	if err != nil {
 		return 0, err
 	}
-	limit, ok := value.(int64)
-	if !ok || limit < 4 {
+	limit, ok := groupConcatMaxLenAsUint64(value)
+	if !ok || limit < groupConcatMaxLenMinimum {
 		return 0, moerr.NewInternalErrorf(ctx, "invalid group_concat_max_len: %v", value)
 	}
-	if current := uint64(limit); current > prepareStmt.groupConcatMaxLenFloor {
-		return current, nil
+	if limit > prepareStmt.groupConcatMaxLenFloor {
+		return limit, nil
 	}
 	return prepareStmt.groupConcatMaxLenFloor, nil
 }

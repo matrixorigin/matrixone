@@ -863,6 +863,16 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 	for idx, dependency := range qry.CatalogDependencies {
 		newQry.CatalogDependencies[idx] = DeepCopyObjectRef(dependency)
 	}
+	if qry.UnresolvedIndexHints != nil {
+		newQry.UnresolvedIndexHints = make([]*plan.UnresolvedIndexHint, len(qry.UnresolvedIndexHints))
+		for idx, hint := range qry.UnresolvedIndexHints {
+			if hint != nil {
+				newQry.UnresolvedIndexHints[idx] = &plan.UnresolvedIndexHint{
+					Table: DeepCopyObjectRef(hint.Table), IndexName: hint.IndexName,
+				}
+			}
+		}
+	}
 	return newQry
 }
 
