@@ -41,6 +41,11 @@ import (
 // internal jobs should supply a task-owned deadline instead of relying on it.
 const defaultLockWaitTimeoutSeconds int64 = defines.DefaultLockWaitTimeoutSeconds
 
+const (
+	groupConcatMaxLenVariable = "group_concat_max_len"
+	groupConcatMaxLenMinimum  = 4
+)
+
 var (
 	errorConvertToBoolFailed                   = moerr.NewInternalError(context.Background(), "convert to the system variable bool type failed")
 	errorConvertToIntFailed                    = moerr.NewInternalError(context.Background(), "convert to the system variable int type failed")
@@ -85,6 +90,96 @@ func getErrorConvertFromStringToSetFailed(str string) error {
 
 func getErrorConvertFromStringToNullFailed(str string) error {
 	return moerr.NewInternalErrorf(context.Background(), errorConvertFromStringToNullFailedFormat, str)
+}
+
+// normalizeGroupConcatMaxLenValue implements the assignment-specific part of
+// MySQL's group_concat_max_len contract. The registered type is unsigned so
+// values above math.MaxInt64 remain representable; values below the MySQL
+// minimum are clamped here so the setter can publish the corresponding
+// ER_TRUNCATED_WRONG_VALUE warning only after the assignment succeeds.
+func normalizeGroupConcatMaxLenValue(value interface{}) (interface{}, bool) {
+	switch v := value.(type) {
+	case int:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case int8:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint8:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case int16:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint16:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case int32:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint32:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case int64:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case uint64:
+		if v < groupConcatMaxLenMinimum {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case float32:
+		f := float64(v)
+		if !math.IsNaN(f) && !math.IsInf(f, 0) && f == math.Trunc(f) && f < float64(groupConcatMaxLenMinimum) {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case float64:
+		if !math.IsNaN(v) && !math.IsInf(v, 0) && v == math.Trunc(v) && v < float64(groupConcatMaxLenMinimum) {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	case string:
+		unsignedValue := strings.TrimPrefix(v, "+")
+		if parsed, err := strconv.ParseUint(unsignedValue, 10, 64); err == nil {
+			if parsed < groupConcatMaxLenMinimum {
+				return uint64(groupConcatMaxLenMinimum), true
+			}
+			// SystemVariableUintType.Convert intentionally accepts numeric
+			// values, not strings. Preserve the existing SET '5' behavior by
+			// converting a valid string before it reaches that type.
+			return parsed, false
+		}
+		if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed < int64(groupConcatMaxLenMinimum) {
+			return uint64(groupConcatMaxLenMinimum), true
+		}
+	}
+	return value, false
+}
+
+func groupConcatMaxLenAsUint64(value interface{}) (uint64, bool) {
+	switch v := value.(type) {
+	case uint64:
+		return v, true
+	case int64:
+		if v >= 0 {
+			return uint64(v), true
+		}
+	}
+	return 0, false
+}
+
+func groupConcatMaxLenTruncationWarning(value interface{}) string {
+	return fmt.Sprintf("Truncated incorrect %s value: '%v'", groupConcatMaxLenVariable, value)
 }
 
 func errorConfigDoesNotExist() string { return "the config variable does not exist" }
@@ -2104,8 +2199,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: true,
-		Type:              InitSystemVariableIntType("group_concat_max_len", 4, math.MaxInt64, false),
-		Default:           int64(1024),
+		Type:              InitSystemVariableUintType(groupConcatMaxLenVariable, groupConcatMaxLenMinimum, math.MaxUint64),
+		Default:           uint64(1024),
 	},
 	"have_ssl": {
 		Name:              "have_ssl",
