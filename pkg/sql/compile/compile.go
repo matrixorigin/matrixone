@@ -6785,8 +6785,14 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	buildOpScopes := make([]*Scope, 0, len(stageNodes))
 	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
 
-	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) { // probe side is shuffle scopes
+	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) {
 		for _, tmp := range probeScopeGroups {
+			// Each parallel probe worker releases one reference to the shared map.
+			// A colocated scope can contain more than one worker.
+			var probeWorkers int32
+			for _, scope := range tmp {
+				probeWorkers += int32(scope.NodeInfo.Mcpu)
+			}
 			bs := newScope(Remote)
 			bs.NodeInfo = scopeNodeWithMcpu(tmp[0].NodeInfo, 1)
 			bs.Proc = c.proc.NewNoContextChildProc(0)
@@ -6798,7 +6804,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			bs.setRootOperator(mergeOp)
 			bs.setRootOperator(constructJoinBuildOperator(
-				c, tmp[0].RootOp, int32(len(tmp)), node.RuntimeFilterBuildList))
+				c, tmp[0].RootOp, probeWorkers, node.RuntimeFilterBuildList))
 			tmp[0].PreScopes = append(tmp[0].PreScopes, bs)
 			buildOpScopes = append(buildOpScopes, bs)
 		}

@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -2410,6 +2411,72 @@ func TestCompileBuildSideForBroadcastJoinGroupsDuplicateCN(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, dispatchOp.LocalRegs, 1)
 	require.Empty(t, dispatchOp.RemoteRegs)
+}
+
+func TestBroadcastJoinMapReferencesCountProbeWorkers(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		probes engine.Nodes
+		want   map[string]int32
+	}{
+		{
+			name:   "single packed scope",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}},
+			want:   map[string]int32{"cn1:6001": 4},
+		},
+		{
+			name:   "one packed scope per CN",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 3}},
+			want:   map[string]int32{"cn1:6001": 2, "cn2:6001": 3},
+		},
+		{
+			name:   "colocated single worker scopes",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn1:6001", Mcpu: 1}},
+			want:   map[string]int32{"cn1:6001": 2},
+		},
+		{
+			name:   "colocated packed scopes",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn1:6001", Mcpu: 3}},
+			want:   map[string]int32{"cn1:6001": 5},
+		},
+		{
+			name:   "mixed groups on multiple CNs",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 4}},
+			want:   map[string]int32{"cn1:6001": 3, "cn2:6001": 4},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}, {Addr: "cn2:6001", Mcpu: 4}}
+			c.addr = "cn1:6001"
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			node := &plan.Node{Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{}}}
+			buildScope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.TableScan})
+			buildScope.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+			probes := make([]*Scope, len(tc.probes))
+			for i, probe := range tc.probes {
+				probes[i] = generateScopeWithRootOperator(c.proc, []vm.OpType{vm.HashJoin})
+				probes[i].NodeInfo = probe
+			}
+
+			c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{buildScope})
+			builds := make(map[string]*hashbuild.HashBuild)
+			for _, probe := range probes {
+				for _, pre := range probe.PreScopes {
+					if build, ok := pre.RootOp.(*hashbuild.HashBuild); ok {
+						require.NotContains(t, builds, pre.NodeInfo.Addr)
+						builds[pre.NodeInfo.Addr] = build
+					}
+				}
+			}
+			require.Len(t, builds, len(tc.want))
+			for addr, want := range tc.want {
+				require.Contains(t, builds, addr)
+				require.Equal(t, want, builds[addr].JoinMapRefCnt, addr)
+			}
+		})
+	}
 }
 
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
