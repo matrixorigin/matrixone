@@ -345,6 +345,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Limit = t.Limit
 		op.PartitionByCount = t.PartitionByCount
 		op.PreReduce = t.PreReduce
+		op.WithTies = t.WithTies
 		op.Algorithm = t.Algorithm
 		op.SpillMem = t.SpillMem
 		op.SetInfo(&info)
@@ -2304,6 +2305,7 @@ func constructPartition(node *plan.Node) *partition.Partition {
 	arg.OrderBySpecs = node.OrderBy
 	arg.Limit = node.Limit
 	arg.PartitionByCount = node.PartitionByCount
+	arg.WithTies = node.PartitionTopNWithTies
 	arg.Algorithm = node.PartitionAlgorithm
 	arg.SpillMem = node.SpillMem
 	return arg

@@ -165,17 +165,15 @@ func (builder *QueryBuilder) scalarRuntimeFilterScanColumn(
 		return nodeID, DeepCopyExpr(projectExpr), true
 	}
 	// Match the old logical rewrite's legality boundary, but leave the SINGLE
-	// itself in place.  Crossing an aggregate, window, projection, outer join,
+	// itself in place. Crossing an aggregate, window, projection, outer join,
 	// or another SINGLE can change which rows, errors, or volatile expressions
-	// are observed.  Runtime filters must follow physical probe input 0. If we
-	// filtered build input 1, an empty build could short-circuit the unchecked
-	// probe subtree and suppress an error or volatile evaluation there. A
-	// current-CN scalar message also cannot follow a probe column across a
-	// shuffle boundary.
+	// are observed. A shuffle changes where rows are joined, not the value or
+	// row domain of a scan-column predicate. Physical compilation separately
+	// requires one complete scalar producer beside every scan consumer; when it
+	// cannot prove that topology it removes both optional endpoints.
 	if node.NodeType != plan.Node_JOIN || node.Limit != nil || node.Offset != nil ||
 		len(node.Children) != 2 ||
 		node.Stats == nil || node.Stats.HashmapStats == nil ||
-		node.Stats.HashmapStats.Shuffle ||
 		!areTruncationSafePredicates(node.OnList) ||
 		!areTruncationSafePredicates(node.FilterList) {
 		return 0, nil, false
@@ -185,7 +183,15 @@ func (builder *QueryBuilder) scalarRuntimeFilterScanColumn(
 	}
 	switch node.JoinType {
 	case plan.Node_INNER:
-		if col.RelPos != 0 {
+		if col.RelPos == 1 && !builder.scalarRuntimeFilterSiblingIsSafeToSkip(
+			node.Children[0],
+		) {
+			// An empty or non-matching scalar filter can empty the hash-build
+			// input before the probe subtree runs. Admit that placement only
+			// when skipping the sibling cannot hide an error or volatile call.
+			return 0, nil, false
+		}
+		if col.RelPos != 0 && col.RelPos != 1 {
 			return 0, nil, false
 		}
 	case plan.Node_SEMI, plan.Node_ANTI:
@@ -199,4 +205,35 @@ func (builder *QueryBuilder) scalarRuntimeFilterScanColumn(
 	}
 	return builder.scalarRuntimeFilterScanColumn(
 		node.Children[col.RelPos], col.ColPos, visited)
+}
+
+func (builder *QueryBuilder) scalarRuntimeFilterSiblingIsSafeToSkip(nodeID int32) bool {
+	deterministic := builder.subtreeIsDeterministic(nodeID, make(map[int32]bool), true)
+	if !deterministic {
+		return false
+	}
+	if builder.cteProducerEvaluationIsTotal(
+		nodeID, nodeID, nil, make(map[int32]bool),
+	) {
+		return true
+	}
+
+	// Column-remapping can erase a scan's binding owner after all logical
+	// rewrites, making the CTE-oriented totality proof inconclusive. A plain
+	// table scan still has a direct proof: raw column projection plus total scan
+	// predicates cannot fail or invoke user code. Keep this fallback deliberately
+	// scan-only; joins and computed projections require the complete proof above.
+	node := builder.qry.Nodes[nodeID]
+	if node == nil || node.NodeType != plan.Node_TABLE_SCAN ||
+		node.Limit != nil || node.Offset != nil ||
+		!areTruncationSafePredicates(node.FilterList) ||
+		!areTruncationSafePredicates(node.BlockFilterList) {
+		return false
+	}
+	for _, expr := range node.ProjectList {
+		if expr == nil || expr.GetCol() == nil {
+			return false
+		}
+	}
+	return true
 }

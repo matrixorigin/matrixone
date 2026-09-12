@@ -538,8 +538,16 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr, exposeCrossTableK
 				}
 			}
 			if matched != nil {
-				commonConds = append(commonConds, cond)
-				matched.side = JoinSideBoth
+				// Factoring evaluates a common predicate before the residual OR.
+				// Keep predicates that are not proven total in both residual
+				// branches, but do not let one such predicate hide an independent,
+				// safe common join key.
+				if !exposeCrossTable || isTruncationSafePredicateExpr(cond) {
+					commonConds = append(commonConds, cond)
+					matched.side = JoinSideBoth
+				} else {
+					leftOnlyConds = append(leftOnlyConds, cond)
+				}
 			} else {
 				leftOnlyConds = append(leftOnlyConds, cond)
 			}
@@ -554,14 +562,6 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr, exposeCrossTableK
 		if len(commonConds) == 0 {
 			return expr
 		}
-		// Factoring evaluates a common predicate before the residual OR. That is
-		// only observationally equivalent when the common predicate is total and
-		// side-effect-free; otherwise it can expose an error or volatile call on
-		// rows for which the original expression short-circuited.
-		if exposeCrossTable && !areTruncationSafePredicates(commonConds) {
-			return expr
-		}
-
 		expr, _ = combinePlanConjunction(ctx, commonConds)
 
 		if len(leftOnlyConds) == 0 || len(rightOnlyConds) == 0 {

@@ -272,6 +272,63 @@ func TestValidateLocalRuntimeFilterTopology(t *testing.T) {
 		require.Len(t, consumer.DataSource.RuntimeFilterSpecs, 1)
 		require.NotNil(t, build.RuntimeFilterSpec)
 	})
+
+	t.Run("scalar predicate keeps one complete producer per CN", func(t *testing.T) {
+		scalar := makeRightSingleTopologyPlan(tag)
+		scalar.Nodes[1].IsRightJoin = false
+		scalar.Nodes[1].RuntimeFilterBuildList[0].ScalarPredicate = true
+		consumer1 := makeRuntimeFilterConsumerScope(tag, cn1)
+		consumer2 := makeRuntimeFilterConsumerScope(tag, cn2)
+		producer1, build1 := makeRuntimeFilterProducerScope(tag, cn1)
+		producer2, build2 := makeRuntimeFilterProducerScope(tag, cn2)
+		defer build1.Release()
+		defer build2.Release()
+		consumer1.PreScopes = []*Scope{producer1, producer2}
+		consumer2.PreScopes = []*Scope{producer1, producer2}
+
+		require.NoError(t, validateLocalRuntimeFilterTopology(
+			scalar, compiled, []*Scope{consumer1, consumer2}))
+		require.Len(t, consumer1.DataSource.RuntimeFilterSpecs, 1)
+		require.Len(t, consumer2.DataSource.RuntimeFilterSpecs, 1)
+		require.NotNil(t, build1.RuntimeFilterSpec)
+		require.NotNil(t, build2.RuntimeFilterSpec)
+	})
+
+	t.Run("scalar predicate rejects duplicate producer on one CN", func(t *testing.T) {
+		scalar := makeRightSingleTopologyPlan(tag)
+		scalar.Nodes[1].IsRightJoin = false
+		scalar.Nodes[1].RuntimeFilterBuildList[0].ScalarPredicate = true
+		consumer := makeRuntimeFilterConsumerScope(tag, cn1)
+		producer1, build1 := makeRuntimeFilterProducerScope(tag, cn1)
+		producer2, build2 := makeRuntimeFilterProducerScope(tag, cn1)
+		defer build1.Release()
+		defer build2.Release()
+		consumer.PreScopes = []*Scope{producer1, producer2}
+
+		require.NoError(t, validateLocalRuntimeFilterTopology(
+			scalar, compiled, []*Scope{consumer}))
+		require.Empty(t, consumer.DataSource.RuntimeFilterSpecs)
+		require.Nil(t, build1.RuntimeFilterSpec)
+		require.Nil(t, build2.RuntimeFilterSpec)
+	})
+
+	t.Run("scalar predicate rejects producer-only CN", func(t *testing.T) {
+		scalar := makeRightSingleTopologyPlan(tag)
+		scalar.Nodes[1].IsRightJoin = false
+		scalar.Nodes[1].RuntimeFilterBuildList[0].ScalarPredicate = true
+		consumer := makeRuntimeFilterConsumerScope(tag, cn1)
+		producer1, build1 := makeRuntimeFilterProducerScope(tag, cn1)
+		producer2, build2 := makeRuntimeFilterProducerScope(tag, cn2)
+		defer build1.Release()
+		defer build2.Release()
+		consumer.PreScopes = []*Scope{producer1, producer2}
+
+		require.NoError(t, validateLocalRuntimeFilterTopology(
+			scalar, compiled, []*Scope{consumer}))
+		require.Empty(t, consumer.DataSource.RuntimeFilterSpecs)
+		require.Nil(t, build1.RuntimeFilterSpec)
+		require.Nil(t, build2.RuntimeFilterSpec)
+	})
 }
 
 func TestCollectRuntimeFilterTopologyVisitsSharedScopeOnce(t *testing.T) {

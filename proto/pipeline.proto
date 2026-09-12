@@ -671,6 +671,9 @@ message Instruction {
   // MERGE_TOP only: consume one independently ordered stream from every
   // receiver. This is serialized for per-CN ordered gathers sent by RemoteRun.
   bool merge_top_ordered_streams = 63;
+  // PARTITION Top-N only: retain all peers of the Nth row. Planning is gated
+  // by MORPCVersion67 so an older receiver cannot silently drop RANK ties.
+  bool partition_top_n_with_ties = 64;
 }
 
 message AnalysisList {

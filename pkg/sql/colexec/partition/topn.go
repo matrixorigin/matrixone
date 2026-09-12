@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -52,13 +53,19 @@ type topNContainer struct {
 	outputGroup  int
 	outputSlots  []int64
 	outputOffset int
+
+	withTies  bool
+	tieNext   []int64
+	freeSlot  int64
+	outputTie int64
 }
 
 const minTopNVarlenCompactBytes = 64 << 10
 
 type partitionHeap struct {
-	ctr   *topNContainer
-	slots []int64
+	ctr     *topNContainer
+	slots   []int64
+	tieHead int64
 }
 
 func (h partitionHeap) Len() int { return len(h.slots) }
@@ -79,6 +86,9 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 	if partition.PartitionByCount <= 0 || int(partition.PartitionByCount) >= len(partition.OrderBySpecs) {
 		return moerr.NewInternalErrorNoCtx("invalid bounded partition key layout")
 	}
+	if partition.WithTies && !partition.PreReduce {
+		return moerr.NewInternalErrorNoCtx("RANK Partition Top-N requires pre-reduced output")
+	}
 	if partition.top == nil {
 		partition.top = &topNContainer{}
 	}
@@ -86,6 +96,9 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 	ctr.state = vm.Build
 	ctr.outputGroup = 0
 	ctr.outputOffset = 0
+	ctr.outputTie = -2
+	ctr.freeSlot = -1
+	ctr.withTies = partition.WithTies
 
 	if ctr.limitExecutor == nil {
 		ctr.limitExecutor, err = colexec.NewExpressionExecutor(proc, partition.Limit)
@@ -177,7 +190,7 @@ func (partition *Partition) callTopN(proc *process.Process) (vm.CallResult, erro
 					return vm.CancelResult, err
 				}
 				ctr.state = vm.Eval
-				if partition.PreReduce {
+				if partition.PreReduce && !ctr.withTies {
 					ctr.preparePreReduceOutput()
 				}
 				break
@@ -193,6 +206,9 @@ func (partition *Partition) callTopN(proc *process.Process) (vm.CallResult, erro
 
 	result := vm.NewCallResult()
 	if ctr.state == vm.Eval {
+		if ctr.withTies {
+			return ctr.emitWithTies(proc)
+		}
 		if partition.PreReduce {
 			if ctr.outputOffset >= len(ctr.outputSlots) {
 				ctr.state = vm.End
@@ -255,37 +271,119 @@ func (ctr *topNContainer) consume(proc *process.Process, input *batch.Batch) err
 	for i, cmp := range ctr.compares {
 		cmp.Set(1, ctr.orderEval.Vec[i])
 	}
+	partitionKeys, ownedPartitionKeys, err := normalizeHashPartitionKeys(
+		ctr.partitionEval.Vec, input.RowCount(), proc.Mp())
+	if err != nil {
+		return err
+	}
+	defer freeNormalizedHashPartitionKeys(ownedPartitionKeys, proc.Mp())
 
 	for start := 0; start < input.RowCount(); start += hashmap.UnitLimit {
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return err
 		}
 		count := min(hashmap.UnitLimit, input.RowCount()-start)
-		groupIDs, _, err := ctr.hash.TxnItr.Insert(start, count, ctr.partitionEval.Vec)
+		groupIDs, _, err := ctr.hash.TxnItr.Insert(start, count, partitionKeys)
 		if err != nil {
 			return err
 		}
 		for offset, groupID := range groupIDs[:count] {
 			for len(ctr.groups) < int(groupID) {
-				ctr.groups = append(ctr.groups, &partitionHeap{ctr: ctr})
+				ctr.groups = append(ctr.groups, &partitionHeap{ctr: ctr, tieHead: -1})
 			}
 			row := int64(start + offset)
 			groupHeap := ctr.groups[groupID-1]
 			if uint64(groupHeap.Len()) < ctr.limit {
-				slot, err := ctr.appendRow(proc, input, row)
+				slot, err := ctr.retainRow(proc, input, row)
 				if err != nil {
 					return err
 				}
 				heap.Push(groupHeap, slot)
-			} else if ctr.compareInput(row, groupHeap.slots[0]) < 0 {
-				if err := ctr.replaceRow(proc, input, row, groupHeap.slots[0]); err != nil {
-					return err
+			} else {
+				comparison := ctr.compareInput(row, groupHeap.slots[0])
+				if comparison < 0 {
+					if !ctr.withTies {
+						if err := ctr.replaceRow(proc, input, row, groupHeap.slots[0]); err != nil {
+							return err
+						}
+						heap.Fix(groupHeap, 0)
+						continue
+					}
+
+					// Keep the former boundary row alive until the new boundary is
+					// known: another core row may still peer with it.
+					incoming, err := ctr.retainRow(proc, input, row)
+					if err != nil {
+						return err
+					}
+					formerBoundary := groupHeap.slots[0]
+					groupHeap.slots[0] = incoming
+					heap.Fix(groupHeap, 0)
+					if ctr.compareRetained(formerBoundary, groupHeap.slots[0]) == 0 {
+						ctr.linkTie(groupHeap, formerBoundary)
+					} else {
+						ctr.recycleTies(groupHeap)
+						ctr.recycleSlot(formerBoundary)
+					}
+				} else if comparison == 0 && ctr.withTies {
+					slot, err := ctr.retainRow(proc, input, row)
+					if err != nil {
+						return err
+					}
+					ctr.linkTie(groupHeap, slot)
 				}
-				heap.Fix(groupHeap, 0)
 			}
 		}
 	}
 	return nil
+}
+
+func (ctr *topNContainer) retainRow(
+	proc *process.Process,
+	input *batch.Batch,
+	row int64,
+) (int64, error) {
+	if ctr.withTies && ctr.freeSlot >= 0 {
+		slot := ctr.freeSlot
+		ctr.freeSlot = ctr.tieNext[slot]
+		ctr.tieNext[slot] = -1
+		if err := ctr.replaceRow(proc, input, row, slot); err != nil {
+			return 0, err
+		}
+		return slot, nil
+	}
+	slot, err := ctr.appendRow(proc, input, row)
+	if err != nil || !ctr.withTies {
+		return slot, err
+	}
+	oldLength := len(ctr.tieNext)
+	nextTie, err := growHashPartitionSlice(ctr.tieNext, ctr.retained.RowCount(), proc.Mp())
+	if err != nil {
+		return 0, err
+	}
+	ctr.tieNext = nextTie
+	for i := oldLength; i < len(ctr.tieNext); i++ {
+		ctr.tieNext[i] = -1
+	}
+	return slot, nil
+}
+
+func (ctr *topNContainer) linkTie(groupHeap *partitionHeap, slot int64) {
+	ctr.tieNext[slot] = groupHeap.tieHead
+	groupHeap.tieHead = slot
+}
+
+func (ctr *topNContainer) recycleTies(groupHeap *partitionHeap) {
+	for groupHeap.tieHead >= 0 {
+		slot := groupHeap.tieHead
+		groupHeap.tieHead = ctr.tieNext[slot]
+		ctr.recycleSlot(slot)
+	}
+}
+
+func (ctr *topNContainer) recycleSlot(slot int64) {
+	ctr.tieNext[slot] = ctr.freeSlot
+	ctr.freeSlot = slot
 }
 
 func (ctr *topNContainer) appendRow(proc *process.Process, input *batch.Batch, row int64) (int64, error) {
@@ -396,6 +494,41 @@ func (ctr *topNContainer) emitGroup(proc *process.Process, result *vm.CallResult
 	return ctr.emitRows(proc, result, slots)
 }
 
+func (ctr *topNContainer) emitWithTies(proc *process.Process) (vm.CallResult, error) {
+	result := vm.NewCallResult()
+	ctr.outputSlots = ctr.outputSlots[:0]
+	for len(ctr.outputSlots) < colexec.DefaultBatchSize && ctr.outputGroup < len(ctr.groups) {
+		groupHeap := ctr.groups[ctr.outputGroup]
+		if ctr.outputTie == -2 {
+			ctr.sortSlots(groupHeap.slots)
+			ctr.outputTie = groupHeap.tieHead
+		}
+		for ctr.outputOffset < len(groupHeap.slots) && len(ctr.outputSlots) < colexec.DefaultBatchSize {
+			ctr.outputSlots = append(ctr.outputSlots, groupHeap.slots[ctr.outputOffset])
+			ctr.outputOffset++
+		}
+		for ctr.outputOffset == len(groupHeap.slots) && ctr.outputTie >= 0 &&
+			len(ctr.outputSlots) < colexec.DefaultBatchSize {
+			ctr.outputSlots = append(ctr.outputSlots, ctr.outputTie)
+			ctr.outputTie = ctr.tieNext[ctr.outputTie]
+		}
+		if ctr.outputOffset == len(groupHeap.slots) && ctr.outputTie < 0 {
+			ctr.outputGroup++
+			ctr.outputOffset = 0
+			ctr.outputTie = -2
+		}
+	}
+	if len(ctr.outputSlots) == 0 {
+		ctr.state = vm.End
+		result.Status = vm.ExecStop
+		return result, nil
+	}
+	if err := ctr.emitRows(proc, &result, ctr.outputSlots); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
 func (ctr *topNContainer) preparePreReduceOutput() {
 	ctr.outputSlots = ctr.outputSlots[:0]
 	for _, groupHeap := range ctr.groups {
@@ -444,8 +577,11 @@ func (ctr *topNContainer) reset(proc *process.Process) {
 	ctr.state = vm.Build
 	ctr.outputGroup = 0
 	ctr.outputOffset = 0
+	ctr.outputTie = -2
 	ctr.outputSlots = nil
 	ctr.limit = 0
+	ctr.withTies = false
+	ctr.freeSlot = -1
 	ctr.keyNullable = false
 	ctr.isStrHash = false
 	ctr.hash.Free0()
@@ -453,6 +589,10 @@ func (ctr *topNContainer) reset(proc *process.Process) {
 	ctr.compares = nil
 	ctr.retainedDead = nil
 	ctr.keyDead = nil
+	if cap(ctr.tieNext) != 0 {
+		mpool.FreeSlice(proc.Mp(), ctr.tieNext)
+	}
+	ctr.tieNext = nil
 	ctr.partitionEval.ResetForNextQuery()
 	ctr.orderEval.ResetForNextQuery()
 	if ctr.limitExecutor != nil {
