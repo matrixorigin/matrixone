@@ -57,6 +57,7 @@ func varlenaBuf(t types.T, vals []string) *ColumnBuffer {
 	return &ColumnBuffer{Type: t, Data: d, N: len(vals)}
 }
 
+// T_json entries use ByteJson storage bytes, not the source JSON text.
 func jsonVarlenaBuf(t *testing.T, values []string) *ColumnBuffer {
 	t.Helper()
 	encoded := make([]string, len(values))
