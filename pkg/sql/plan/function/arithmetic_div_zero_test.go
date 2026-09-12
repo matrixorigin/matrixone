@@ -503,6 +503,74 @@ func TestDivisionByZeroStrictMode(t *testing.T) {
 	// will return early if cache is set, which we've verified above
 }
 
+// TestDivisionByZeroSQLModes checks the shared mode semantics at the statement
+// boundary, including cache reuse and reset when the same process is reused.
+func TestDivisionByZeroSQLModes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	var mode any
+	var resolveErr error
+	calls := 0
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+		require.Equal(t, "sql_mode", name)
+		require.True(t, system)
+		require.False(t, global)
+		calls++
+		return mode, resolveErr
+	})
+	for _, tc := range []struct {
+		name string
+		mode any
+		want bool
+	}{
+		{"traditional", "TRADITIONAL", true},
+		{"traditional with division flag", "TRADITIONAL,ERROR_FOR_DIVISION_BY_ZERO", true},
+		{"traditional with strict flag", "STRICT_TRANS_TABLES,TRADITIONAL", true},
+		{"case whitespace duplicates", " traditional ,TRADITIONAL, ", true},
+		{"explicit trans", "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO", true},
+		{"explicit all", "error_for_division_by_zero, strict_all_tables", true},
+		{"strict only", "STRICT_TRANS_TABLES,STRICT_ALL_TABLES", false},
+		{"division only", "ERROR_FOR_DIVISION_BY_ZERO", false},
+		{"empty", "", false},
+		{"unrelated", "ANSI,NO_ZERO_DATE", false},
+		{"traditional exact token", "TRADITIONAL_EXTRA", false},
+		{"strict exact token", "NOT_STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO", false},
+		{"division exact token", "STRICT_ALL_TABLES,ERROR_FOR_DIVISION_BY_ZERO_EXTRA", false},
+		{"nil", nil, false},
+		{"non string", 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mode = tc.mode
+			for _, stmt := range []struct {
+				name, query string
+				ignore      bool
+				check       bool
+			}{
+				{"Insert", tree.QueryTypeDML, false, true},
+				{"Select", tree.QueryTypeDQL, false, false},
+				{"Update", tree.QueryTypeDML, false, true},
+				{"Insert", tree.QueryTypeDML, true, false},
+				{"Execute", tree.QueryTypeDML, false, true},
+			} {
+				profile := &process.StmtProfile{}
+				proc.SetStmtProfile(profile)
+				profile.SetDivByZeroRuntimeProfile(stmt.name, stmt.query, stmt.ignore)
+				want := tc.want && stmt.check
+				require.Equal(t, want, checkDivisionByZeroBehavior(proc, nil), stmt.name)
+				resolved := calls
+				require.Equal(t, want, checkDivisionByZeroBehavior(proc, nil), stmt.name)
+				require.Equal(t, resolved, calls, "cached check must not resolve again")
+			}
+		})
+	}
+	mode = "TRADITIONAL"
+	resolveErr = fmt.Errorf("mode lookup failed")
+	profile := &process.StmtProfile{}
+	proc.SetStmtProfile(profile)
+	profile.SetDivByZeroRuntimeProfile("Insert", tree.QueryTypeDML, false)
+	require.False(t, checkDivisionByZeroBehavior(proc, nil))
+}
+
 func TestDivisionByZeroInsertIgnoreStrictMode(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
