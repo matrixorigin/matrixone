@@ -95,6 +95,13 @@ func newInternalStatementContext(parent context.Context) context.Context {
 		statistic.NewStatsInfo())
 }
 
+func markInternalJSONMergeWarningContext(ctx context.Context) context.Context {
+	return plan.WithJSONMergeWarningOrigin(
+		ctx,
+		plan.JSONMergeWarningInternalReprepare,
+	)
+}
+
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
 func NewSQLExecutor(
 	addr string,
@@ -345,7 +352,8 @@ func (exec *txnExecutor) Exec(
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
 	parentCtx := exec.ctx
-	exec.ctx = newInternalStatementContext(parentCtx)
+	exec.ctx = markInternalJSONMergeWarningContext(
+		newInternalStatementContext(parentCtx))
 	defer func() {
 		// The fresh StatsInfo is statement-owned. Do not retain it in a
 		// long-lived transaction executor or build an unbounded context chain.

@@ -2954,7 +2954,11 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return b.impl.BindWinFunc(funcName, astExpr, depth, isRoot)
 	}
 
-	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	if err == nil && strings.EqualFold(funcName, "json_merge") {
+		appendJSONMergeWarning(b.GetContext(), astExpr)
+	}
+	return expr, err
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered
