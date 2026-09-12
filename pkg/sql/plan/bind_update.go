@@ -349,6 +349,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err := validateUpdateWindowFunctions(builder.compCtx, stmt); err != nil {
 		return 0, err
 	}
+	bindCtx.assignmentIgnore = stmt.Ignore
 
 	dmlCtx := NewDMLContext()
 	err = dmlCtx.ResolveUpdateTables(builder.compCtx, stmt)
