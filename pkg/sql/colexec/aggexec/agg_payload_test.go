@@ -270,9 +270,9 @@ func TestAppendGroupConcatDataCoversTypes(t *testing.T) {
 	writerErr := errors.New("array writer failed")
 	require.ErrorIs(t, writeGroupConcatData(
 		&groupConcatFailWriter{err: writerErr},
-		types.T_array_float32.ToType(), arrayBytes), writerErr)
+		types.T_array_float32.ToType(), arrayBytes, time.UTC), writerErr)
 	require.ErrorIs(t, writeGroupConcatData(
-		groupConcatShortWriter{}, types.T_array_float32.ToType(), arrayBytes), io.ErrShortWrite)
+		groupConcatShortWriter{}, types.T_array_float32.ToType(), arrayBytes, time.UTC), io.ErrShortWrite)
 }
 
 type groupConcatFailWriter struct {
