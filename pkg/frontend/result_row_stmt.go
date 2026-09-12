@@ -54,19 +54,29 @@ func GetExplainColumn(ctx context.Context, explainColName string) ([]*plan2.ColD
 }
 
 func getPreparedResultColumns(stmt *PrepareStmt, txnHaveDDL bool) []*plan2.ColDef {
-	return getPreparedResultColumnsFromPlan(stmt.PrepareStmt, stmt.PreparePlan, txnHaveDDL)
+	return getPreparedResultColumnsFromPlanWithGroupConcatMaxLen(
+		stmt.PrepareStmt, stmt.PreparePlan, txnHaveDDL, stmt.groupConcatMaxLenFloor)
 }
 
-func getPreparedResultColumnsFromPlan(stmt tree.Statement, preparedPlan *plan2.Plan, txnHaveDDL bool) []*plan2.ColDef {
+func getPreparedResultColumnsFromPlanWithGroupConcatMaxLen(
+	stmt tree.Statement, preparedPlan *plan2.Plan, txnHaveDDL bool, groupConcatMaxLenFloor uint64,
+) []*plan2.ColDef {
 	plan := preparedPlan.GetDcl().GetPrepare().GetPlan()
-	return getPreparedResultColumnsFor(stmt, plan, txnHaveDDL)
+	return getPreparedResultColumnsForWithGroupConcatMaxLen(
+		stmt, plan, txnHaveDDL, groupConcatMaxLenFloor)
 }
 
 func getPreparedResultColumnsFor(stmt tree.Statement, plan *plan.Plan, txnHaveDDL bool) []*plan2.ColDef {
+	return getPreparedResultColumnsForWithGroupConcatMaxLen(stmt, plan, txnHaveDDL, 0)
+}
+
+func getPreparedResultColumnsForWithGroupConcatMaxLen(
+	stmt tree.Statement, preparedPlan *plan.Plan, txnHaveDDL bool, groupConcatMaxLenFloor uint64,
+) []*plan2.ColDef {
 	if isPerformStatement(stmt) {
 		return nil
 	}
-	if query := plan.GetQuery(); query != nil {
+	if query := preparedPlan.GetQuery(); query != nil {
 		var title string
 		switch stmt.(type) {
 		case *tree.ExplainStmt, *tree.ExplainAnalyze:
@@ -82,7 +92,192 @@ func getPreparedResultColumnsFor(stmt tree.Statement, plan *plan.Plan, txnHaveDD
 			}}
 		}
 	}
-	return plan2.GetResultColumnsFromPlan(plan)
+	columns := plan2.GetResultColumnsFromPlan(preparedPlan)
+	overlayPreparedGroupConcatResultMetadata(
+		preparedPlan.GetQuery(), columns, groupConcatMaxLenFloor)
+	return columns
+}
+
+const preparedGroupConcatVarcharMaxLen = 512
+
+type preparedGroupConcatResultColumnRef struct {
+	nodeID int32
+	colPos int32
+}
+
+func preparedPlanContainsGroupConcat(preparedPlan *plan.Plan) bool {
+	if preparedPlan == nil || preparedPlan.GetQuery() == nil {
+		return false
+	}
+	for _, node := range preparedPlan.GetQuery().Nodes {
+		if node == nil {
+			continue
+		}
+		for _, expr := range node.AggList {
+			if preparedExprContainsGroupConcat(expr) {
+				return true
+			}
+		}
+		for _, expr := range node.WinSpecList {
+			if preparedExprContainsGroupConcat(expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func preparedExprContainsGroupConcat(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.GetFunc() != nil && fn.GetFunc().GetObjName() == plan2.NameGroupConcat {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if preparedExprContainsGroupConcat(arg) {
+				return true
+			}
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		if preparedExprContainsGroupConcat(window.WindowFunc) {
+			return true
+		}
+		for _, arg := range window.PartitionBy {
+			if preparedExprContainsGroupConcat(arg) {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && preparedExprContainsGroupConcat(order.Expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// overlayPreparedGroupConcatResultMetadata applies the MySQL result-type rule
+// that depends on group_concat_max_len to prepared result metadata only. The
+// execution plan keeps the aggregate's engine type (T_text/T_blob); changing it
+// here would change vector allocation and aggregate execution semantics.
+func overlayPreparedGroupConcatResultMetadata(
+	query *plan.Query, columns []*plan2.ColDef, groupConcatMaxLen uint64,
+) {
+	if query == nil || groupConcatMaxLen == 0 || len(query.Steps) == 0 {
+		return
+	}
+	step := len(query.Steps) - 1
+	if query.HasReturning {
+		if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
+			return
+		}
+		step = int(query.ReturningStep)
+	}
+	rootID := query.Steps[step]
+	if rootID < 0 || int(rootID) >= len(query.Nodes) {
+		return
+	}
+	root := query.Nodes[rootID]
+	if root == nil || len(root.ProjectList) != len(columns) {
+		return
+	}
+
+	for idx, expr := range root.ProjectList {
+		if !isDirectPreparedGroupConcatResult(query, rootID, expr, make(map[preparedGroupConcatResultColumnRef]struct{})) {
+			continue
+		}
+		col := columns[idx]
+		if col == nil {
+			continue
+		}
+		isBinary := col.Typ.Id == int32(types.T_blob) ||
+			col.Typ.Charset == uint32(types.CharsetBinary)
+		if groupConcatMaxLen <= preparedGroupConcatVarcharMaxLen {
+			if isBinary {
+				col.Typ.Id = int32(types.T_varbinary)
+				col.Typ.Charset = uint32(types.CharsetBinary)
+			} else {
+				col.Typ.Id = int32(types.T_varchar)
+			}
+			col.Typ.Width = int32(groupConcatMaxLen)
+		} else if isBinary {
+			// MySQL exposes a binary GROUP_CONCAT as BLOB above the VARCHAR
+			// threshold. Keep the binary OID so colDef2MysqlColumn emits both
+			// the binary charset and BINARY_FLAG.
+			col.Typ.Id = int32(types.T_blob)
+			col.Typ.Charset = uint32(types.CharsetBinary)
+		} else {
+			col.Typ.Id = int32(types.T_text)
+			col.Typ.Width = types.MaxLongTextLen
+		}
+	}
+}
+
+func isDirectPreparedGroupConcatResult(
+	query *plan.Query, nodeID int32, expr *plan.Expr, seen map[preparedGroupConcatResultColumnRef]struct{},
+) bool {
+	if expr == nil {
+		return false
+	}
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL:
+		// Set-operation output types are common to both branches. Following
+		// only the left projection could narrow a result whose right branch
+		// still produces a wider value.
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.GetFunc() != nil {
+		return fn.GetFunc().GetObjName() == plan2.NameGroupConcat
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	switch {
+	case col.RelPos == -2:
+		if node.NodeType != plan.Node_AGG {
+			return false
+		}
+		aggPos := col.ColPos - int32(len(node.GroupBy))
+		if aggPos < 0 || int(aggPos) >= len(node.AggList) {
+			return false
+		}
+		return isDirectPreparedGroupConcatResult(
+			query, nodeID, node.AggList[aggPos], seen)
+	case col.RelPos >= 0:
+		if int(col.RelPos) >= len(node.Children) {
+			return false
+		}
+		childID := node.Children[col.RelPos]
+		if childID < 0 || int(childID) >= len(query.Nodes) {
+			return false
+		}
+		child := query.Nodes[childID]
+		if child == nil || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
+			return false
+		}
+		ref := preparedGroupConcatResultColumnRef{nodeID: childID, colPos: col.ColPos}
+		if _, ok := seen[ref]; ok {
+			return false
+		}
+		seen[ref] = struct{}{}
+		return isDirectPreparedGroupConcatResult(
+			query, childID, child.ProjectList[col.ColPos], seen)
+	default:
+		return false
+	}
 }
 
 func sessionTxnHaveDDL(ses FeSession) bool {

@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -245,7 +246,66 @@ func PartitionForOrder(sels []int64, diffs []bool, partitions []int64, vec *vect
 		return floatOrderPartition(sels, diffs, partitions, vec, types.Float32OrderAscCompare)
 	case types.T_float64:
 		return floatOrderPartition(sels, diffs, partitions, vec, types.Float64OrderAscCompare)
+	case types.T_json:
+		return jsonOrderPartition(sels, diffs, partitions, vec)
 	default:
 		return Partition(sels, diffs, partitions, vec)
 	}
+}
+
+func jsonOrderPartition(
+	sels []int64, diffs []bool, partitions []int64, vec *vector.Vector,
+) []int64 {
+	partitions = partitions[:0]
+	if len(sels) == 0 {
+		return partitions
+	}
+	diffs[0] = true
+	diffs = diffs[:len(sels)]
+
+	if !vec.IsConst() {
+		data, area := vector.MustVarlenaRawData(vec)
+		nsp := vec.GetNulls()
+		var previous bytejson.ByteJson
+		var previousValid bool
+		var previousNull bool
+		var havePrevious bool
+		for i, sel := range sels {
+			isNull := nulls.Contains(nsp, uint64(sel))
+			var current bytejson.ByteJson
+			var currentValid bool
+			if !isNull {
+				current = types.DecodeJson(data[sel].GetByteSlice(area))
+				currentValid = bytejson.IsValidByteJson(current)
+			}
+
+			if havePrevious {
+				if previousNull != isNull {
+					diffs[i] = true
+				} else if !isNull {
+					var cmp int
+					if currentValid && previousValid {
+						cmp = bytejson.CompareByteJsonTrusted(current, previous)
+					} else {
+						cmp = bytejson.CompareByteJson(current, previous)
+					}
+					diffs[i] = diffs[i] || cmp != 0
+				}
+			}
+
+			if !isNull {
+				previous = current
+				previousValid = currentValid
+			}
+			previousNull = isNull
+			havePrevious = true
+		}
+	}
+
+	for i, j := int64(0), int64(len(diffs)); i < j; i++ {
+		if diffs[i] {
+			partitions = append(partitions, i)
+		}
+	}
+	return partitions
 }
