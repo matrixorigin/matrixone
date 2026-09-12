@@ -25,6 +25,16 @@ Warning  ¦  1366  ¦  Incorrect INTEGER value: 'abc'
 select id, i, u, d, dt, dtt, ts from conversion_target order by id;
 ➤ id[4,32,0]  ¦  i[-6,8,0]  ¦  u[4,32,0]  ¦  d[3,10,2]  ¦  dt[91,10,0]  ¦  dtt[93,19,0]  ¦  ts[93,19,0]  𝄀
 1  ¦  0  ¦  0  ¦  0.00  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+insert ignore into conversion_target
+values (4, '12.9tail', '1e2tail', '3.25', '2024-03-01',
+'2024-03-01 01:02:03', '2024-03-01 01:02:03');
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1265  ¦  Data truncated for INTEGER value: '1e2tail'  𝄀
+Warning  ¦  1265  ¦  Data truncated for INTEGER value: '12.9tail'
+select id, i, u, d, dt from conversion_target where id = 4;
+➤ id[4,32,0]  ¦  i[-6,8,0]  ¦  u[4,32,0]  ¦  d[3,10,2]  ¦  dt[91,10,0]  𝄀
+4  ¦  13  ¦  100  ¦  3.25  ¦  2024-03-01
 insert into conversion_target
 values (2, 7, 8, 1.25, '2024-01-01',
 '2024-01-01 01:02:03', '2024-01-01 01:02:03');
@@ -43,7 +53,16 @@ Warning  ¦  1366  ¦  Incorrect INTEGER value: 'abc'
 select id, i, u, d, dt, dtt, ts from conversion_target order by id;
 ➤ id[4,32,0]  ¦  i[-6,8,0]  ¦  u[4,32,0]  ¦  d[3,10,2]  ¦  dt[91,10,0]  ¦  dtt[93,19,0]  ¦  ts[93,19,0]  𝄀
 1  ¦  0  ¦  0  ¦  0.00  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00  𝄀
-2  ¦  0  ¦  0  ¦  0.00  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00
+2  ¦  0  ¦  0  ¦  0.00  ¦  0000-00-00  ¦  0000-00-00 00:00:00  ¦  0000-00-00 00:00:00  𝄀
+4  ¦  13  ¦  100  ¦  3.25  ¦  2024-03-01  ¦  2024-03-01 01:02:03  ¦  2024-03-01 01:02:03
+update ignore conversion_target set i = '1e2tail', u = '12.9tail' where id = 4;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1265  ¦  Data truncated for INTEGER value: '12.9tail'  𝄀
+Warning  ¦  1265  ¦  Data truncated for INTEGER value: '1e2tail'
+select id, i, u from conversion_target where id = 4;
+➤ id[4,32,0]  ¦  i[-6,8,0]  ¦  u[4,32,0]  𝄀
+4  ¦  100  ¦  13
 prepare conversion_stmt from
 'insert ignore into conversion_target(id, i, d, dt) values (?, ?, ?, ?)';
 set @conversion_id = 3, @conversion_i = 'abc', @conversion_d = 'abc',

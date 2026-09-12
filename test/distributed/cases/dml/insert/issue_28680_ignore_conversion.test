@@ -24,6 +24,12 @@ insert ignore into conversion_target
 show warnings;
 select id, i, u, d, dt, dtt, ts from conversion_target order by id;
 
+insert ignore into conversion_target
+    values (4, '12.9tail', '1e2tail', '3.25', '2024-03-01',
+            '2024-03-01 01:02:03', '2024-03-01 01:02:03');
+show warnings;
+select id, i, u, d, dt from conversion_target where id = 4;
+
 insert into conversion_target
     values (2, 7, 8, 1.25, '2024-01-01',
             '2024-01-01 01:02:03', '2024-01-01 01:02:03');
@@ -33,6 +39,10 @@ update ignore conversion_target
  where id = 2;
 show warnings;
 select id, i, u, d, dt, dtt, ts from conversion_target order by id;
+
+update ignore conversion_target set i = '1e2tail', u = '12.9tail' where id = 4;
+show warnings;
+select id, i, u from conversion_target where id = 4;
 
 -- SQL PREPARE must use the same assignment boundary as direct DML.
 prepare conversion_stmt from

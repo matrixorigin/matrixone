@@ -15,6 +15,8 @@
 package function
 
 import (
+	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -117,9 +119,26 @@ func TestAssignmentIgnoreAdjustsLexicalNumericAndTemporalValues(t *testing.T) {
 		result, session, err := runAssignmentIgnoreStringCast(
 			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"12.9tail"}, nil, false)
 		require.NoError(t, err)
-		require.Equal(t, []uint32{12}, vector.MustFixedColWithTypeCheck[uint32](result))
+		require.Equal(t, []uint32{13}, vector.MustFixedColWithTypeCheck[uint32](result))
 		require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}},
 			stripWarningMessages(session.warnings))
+	})
+
+	t.Run("fraction and exponent numeric prefixes round", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreStringCast(
+			t, types.T_varchar.ToType(), types.T_int64.ToType(),
+			[]string{"12.9tail", "12.9", "1e2tail", "1e2", "-12.5tail", ".5tail", "1e+tail"}, nil, false)
+		require.NoError(t, err)
+		require.Equal(t, []int64{13, 13, 100, 100, -13, 1, 1}, vector.MustFixedColWithTypeCheck[int64](result))
+		require.Equal(t, []numericWarning{
+			{code: moerr.WARN_DATA_TRUNCATED},
+			{code: moerr.WARN_DATA_TRUNCATED},
+			{code: moerr.WARN_DATA_TRUNCATED},
+			{code: moerr.WARN_DATA_TRUNCATED},
+			{code: moerr.WARN_DATA_TRUNCATED},
+			{code: moerr.WARN_DATA_TRUNCATED},
+			{code: moerr.WARN_DATA_TRUNCATED},
+		}, stripWarningMessages(session.warnings))
 	})
 
 	t.Run("unsigned negative remains a range error", func(t *testing.T) {
@@ -280,6 +299,134 @@ func TestAssignmentIgnorePreservesNullsAndWarnsPerRow(t *testing.T) {
 	}
 }
 
+func TestAssignmentIgnoreIntegerPrefixRoundingBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		target types.Type
+		value  string
+		want   any
+	}{
+		{name: "signed int8 positive", target: types.T_int8.ToType(), value: "127.49tail", want: []int8{127}},
+		{name: "signed int8 negative", target: types.T_int8.ToType(), value: "-128.49tail", want: []int8{-128}},
+		{name: "signed int16", target: types.T_int16.ToType(), value: "32767.4tail", want: []int16{32767}},
+		{name: "signed int32", target: types.T_int32.ToType(), value: "2147483647.4tail", want: []int32{2147483647}},
+		{name: "signed int64 minimum", target: types.T_int64.ToType(), value: "-9223372036854775808.4tail", want: []int64{math.MinInt64}},
+		{name: "signed int64 maximum", target: types.T_int64.ToType(), value: "9223372036854775807.4tail", want: []int64{math.MaxInt64}},
+		{name: "unsigned uint8", target: types.T_uint8.ToType(), value: "255.4tail", want: []uint8{math.MaxUint8}},
+		{name: "unsigned uint16", target: types.T_uint16.ToType(), value: "65535.4tail", want: []uint16{math.MaxUint16}},
+		{name: "unsigned uint32", target: types.T_uint32.ToType(), value: "4294967295.4tail", want: []uint32{math.MaxUint32}},
+		{name: "unsigned uint64 maximum", target: types.T_uint64.ToType(), value: "18446744073709551615.4tail", want: []uint64{math.MaxUint64}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, session, err := runAssignmentIgnoreStringCast(
+				t, types.T_varchar.ToType(), tc.target, []string{tc.value}, nil, false)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, assignmentIntegerVectorValues(result, tc.target.Oid))
+			require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}},
+				stripWarningMessages(session.warnings))
+		})
+	}
+
+	for _, tc := range []struct {
+		name   string
+		target types.Type
+		value  string
+	}{
+		{name: "signed int8 positive carry", target: types.T_int8.ToType(), value: "127.5tail"},
+		{name: "signed int8 negative carry", target: types.T_int8.ToType(), value: "-128.5tail"},
+		{name: "signed int16 carry", target: types.T_int16.ToType(), value: "32767.5tail"},
+		{name: "signed int32 carry", target: types.T_int32.ToType(), value: "2147483647.5tail"},
+		{name: "signed int64 minimum carry", target: types.T_int64.ToType(), value: "-9223372036854775808.5tail"},
+		{name: "signed int64 maximum carry", target: types.T_int64.ToType(), value: "9223372036854775807.5tail"},
+		{name: "unsigned uint8 carry", target: types.T_uint8.ToType(), value: "255.5tail"},
+		{name: "unsigned uint16 carry", target: types.T_uint16.ToType(), value: "65535.5tail"},
+		{name: "unsigned uint32 carry", target: types.T_uint32.ToType(), value: "4294967295.5tail"},
+		{name: "unsigned uint64 carry", target: types.T_uint64.ToType(), value: "18446744073709551615.5tail"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, session, err := runAssignmentIgnoreStringCast(
+				t, types.T_varchar.ToType(), tc.target, []string{tc.value}, nil, false)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+			require.Empty(t, session.warnings)
+		})
+	}
+
+	t.Run("rounds exact values above float64 integer precision", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreStringCast(
+			t, types.T_varchar.ToType(), types.T_int64.ToType(),
+			[]string{"9007199254740992.6tail", "9223372036854775806.6tail"}, nil, false)
+		require.NoError(t, err)
+		require.Equal(t, []int64{9007199254740993, math.MaxInt64},
+			vector.MustFixedColWithTypeCheck[int64](result))
+		require.Equal(t, []numericWarning{
+			{code: moerr.WARN_DATA_TRUNCATED},
+			{code: moerr.WARN_DATA_TRUNCATED},
+		}, stripWarningMessages(session.warnings))
+	})
+
+	t.Run("unsigned negative values are accepted only when rounded to zero", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreStringCast(
+			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"-0.4tail"}, nil, false)
+		require.NoError(t, err)
+		require.Equal(t, []uint32{0}, vector.MustFixedColWithTypeCheck[uint32](result))
+		require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}},
+			stripWarningMessages(session.warnings))
+
+		_, session, err = runAssignmentIgnoreStringCast(
+			t, types.T_varchar.ToType(), types.T_uint32.ToType(), []string{"-0.5tail"}, nil, false)
+		require.Error(t, err)
+		require.Empty(t, session.warnings)
+	})
+}
+
+func TestAssignmentIgnoreIntegerPrefixExponentIsBounded(t *testing.T) {
+	t.Run("long mantissa cancels a negative exponent", func(t *testing.T) {
+		value := strings.Repeat("9", 1000) + "e-999tail"
+		result, session, err := runAssignmentIgnoreStringCast(
+			t, types.T_varchar.ToType(), types.T_int64.ToType(), []string{value}, nil, false)
+		require.NoError(t, err)
+		require.Equal(t, []int64{10}, vector.MustFixedColWithTypeCheck[int64](result))
+		require.Len(t, session.warnings, 1)
+	})
+
+	t.Run("huge negative exponent rounds to zero", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreStringCast(
+			t, types.T_varchar.ToType(), types.T_int64.ToType(),
+			[]string{"1e-999999999999999999999999tail"}, nil, false)
+		require.NoError(t, err)
+		require.Equal(t, []int64{0}, vector.MustFixedColWithTypeCheck[int64](result))
+		require.Len(t, session.warnings, 1)
+	})
+
+	t.Run("zero mantissa with huge positive exponent remains zero", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreStringCast(
+			t, types.T_varchar.ToType(), types.T_uint64.ToType(),
+			[]string{strings.Repeat("0", 1000) + "e999999999999999999999tail"}, nil, false)
+		require.NoError(t, err)
+		require.Equal(t, []uint64{0}, vector.MustFixedColWithTypeCheck[uint64](result))
+		require.Len(t, session.warnings, 1)
+	})
+
+	t.Run("exponent with many leading zeros is parsed exactly", func(t *testing.T) {
+		result, session, err := runAssignmentIgnoreStringCast(
+			t, types.T_varchar.ToType(), types.T_int64.ToType(),
+			[]string{"1e" + strings.Repeat("0", 1000) + "2tail"}, nil, false)
+		require.NoError(t, err)
+		require.Equal(t, []int64{100}, vector.MustFixedColWithTypeCheck[int64](result))
+		require.Len(t, session.warnings, 1)
+	})
+
+	t.Run("huge positive exponent remains a range error", func(t *testing.T) {
+		_, session, err := runAssignmentIgnoreStringCast(
+			t, types.T_varchar.ToType(), types.T_uint64.ToType(),
+			[]string{"1e999999999999999999999999tail"}, nil, false)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+		require.Empty(t, session.warnings)
+	})
+}
+
 func TestAssignmentIgnoreSkipsInactiveNumericRows(t *testing.T) {
 	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
 	for _, target := range []types.Type{
@@ -298,6 +445,19 @@ func TestAssignmentIgnoreSkipsInactiveNumericRows(t *testing.T) {
 			require.Len(t, session.warnings, 1)
 		})
 	}
+
+	t.Run("inactive fractional overflow does not fail or warn", func(t *testing.T) {
+		selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+		result, session, err := runAssignmentIgnoreStringCastWithSelection(
+			t, types.T_varchar.ToType(), types.T_int8.ToType(),
+			[]string{"127.5tail", "12.9tail"}, nil, false, selectList)
+		require.NoError(t, err)
+		require.True(t, result.IsNull(0))
+		require.False(t, result.IsNull(1))
+		require.Equal(t, int8(13), vector.MustFixedColWithTypeCheck[int8](result)[1])
+		require.Equal(t, []numericWarning{{code: moerr.WARN_DATA_TRUNCATED}},
+			stripWarningMessages(session.warnings))
+	})
 }
 
 func TestAssignmentIgnoreDoesNotAdjustBinaryString(t *testing.T) {
@@ -323,17 +483,24 @@ func TestAssignmentPrefixClassification(t *testing.T) {
 	for _, tc := range []struct {
 		value            string
 		integerPrefix    string
+		hasIntegerPrefix bool
 		decimalPrefix    string
 		hasDecimalPrefix bool
 	}{
-		{value: "12tail", integerPrefix: "12", decimalPrefix: "12", hasDecimalPrefix: true},
-		{value: "12.34tail", integerPrefix: "12", decimalPrefix: "12.34", hasDecimalPrefix: true},
-		{value: "1e2tail", integerPrefix: "1", decimalPrefix: "1e2", hasDecimalPrefix: true},
-		{value: ".5tail", integerPrefix: "0", decimalPrefix: ".5", hasDecimalPrefix: true},
-		{value: "abc", hasDecimalPrefix: false},
+		{value: "12tail", integerPrefix: "12", hasIntegerPrefix: true, decimalPrefix: "12", hasDecimalPrefix: true},
+		{value: "12.34tail", integerPrefix: "12", hasIntegerPrefix: true, decimalPrefix: "12.34", hasDecimalPrefix: true},
+		{value: "12.9tail", integerPrefix: "13", hasIntegerPrefix: true, decimalPrefix: "12.9", hasDecimalPrefix: true},
+		{value: "1e2tail", integerPrefix: "100", hasIntegerPrefix: true, decimalPrefix: "1e2", hasDecimalPrefix: true},
+		{value: "-12.5tail", integerPrefix: "-13", hasIntegerPrefix: true, decimalPrefix: "-12.5", hasDecimalPrefix: true},
+		{value: ".5tail", integerPrefix: "1", hasIntegerPrefix: true, decimalPrefix: ".5", hasDecimalPrefix: true},
+		{value: "1e+tail", integerPrefix: "1", hasIntegerPrefix: true, decimalPrefix: "1", hasDecimalPrefix: true},
+		{value: "abc", hasIntegerPrefix: false, hasDecimalPrefix: false},
 	} {
 		t.Run(tc.value, func(t *testing.T) {
-			require.Equal(t, tc.integerPrefix, assignmentIntegerPrefix(tc.value))
+			integerPrefix, hasIntegerPrefix, err := assignmentIntegerPrefix(tc.value)
+			require.NoError(t, err)
+			require.Equal(t, tc.hasIntegerPrefix, hasIntegerPrefix)
+			require.Equal(t, tc.integerPrefix, integerPrefix)
 			prefix, has := assignmentDecimalPrefix(tc.value)
 			require.Equal(t, tc.hasDecimalPrefix, has)
 			if tc.hasDecimalPrefix {
@@ -361,6 +528,29 @@ func vectorValues(result *vector.Vector, oid types.T) any {
 		return vector.MustFixedColWithTypeCheck[types.Decimal256](result)
 	default:
 		panic("unsupported decimal test type")
+	}
+}
+
+func assignmentIntegerVectorValues(result *vector.Vector, oid types.T) any {
+	switch oid {
+	case types.T_int8:
+		return vector.MustFixedColWithTypeCheck[int8](result)
+	case types.T_int16:
+		return vector.MustFixedColWithTypeCheck[int16](result)
+	case types.T_int32:
+		return vector.MustFixedColWithTypeCheck[int32](result)
+	case types.T_int64:
+		return vector.MustFixedColWithTypeCheck[int64](result)
+	case types.T_uint8:
+		return vector.MustFixedColWithTypeCheck[uint8](result)
+	case types.T_uint16:
+		return vector.MustFixedColWithTypeCheck[uint16](result)
+	case types.T_uint32:
+		return vector.MustFixedColWithTypeCheck[uint32](result)
+	case types.T_uint64:
+		return vector.MustFixedColWithTypeCheck[uint64](result)
+	default:
+		panic("unsupported integer test type")
 	}
 }
 

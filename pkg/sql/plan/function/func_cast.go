@@ -6577,15 +6577,20 @@ func strToSignedWithProc[T constraints.Signed](
 				}
 				if err != nil {
 					if mode == castModeAssignmentIgnore && !isBinary && !isAssignmentSpecialNumericSyntax(s) {
-						if prefix := assignmentIntegerPrefix(s); prefix != "" {
-							if prefixed, prefixErr := parseSignedCastString(prefix, bitSize); prefixErr == nil {
-								appendTruncatedAssignmentConversionWarning(proc, "INTEGER", s)
-								result = T(prefixed)
-								if err = to.Append(result, false); err != nil {
-									return err
+						if prefix, hasPrefix, prefixErr := assignmentIntegerPrefix(s); hasPrefix {
+							if prefixErr == nil {
+								var prefixed int64
+								prefixed, prefixErr = parseSignedCastString(prefix, bitSize)
+								if prefixErr == nil {
+									appendTruncatedAssignmentConversionWarning(proc, "INTEGER", s)
+									result = T(prefixed)
+									if err = to.Append(result, false); err != nil {
+										return err
+									}
+									continue
 								}
-								continue
 							}
+							err = prefixErr
 						} else if isIntegerLexicalConversionError(err) {
 							appendInvalidAssignmentConversionWarning(proc, "INTEGER", s)
 							result = 0
@@ -6822,12 +6827,160 @@ func appendTemporalAssignmentConversionWarning(proc *process.Process, targetType
 	)
 }
 
-// assignmentIntegerPrefix returns only a usable decimal prefix. A non-empty
-// prefix is deliberately not enough to downgrade a range error: the caller
-// must parse the prefix in the target width and retain the error if it does
-// not fit. This keeps "12x" distinct from "999999x" and from "abc".
-func assignmentIntegerPrefix(s string) string {
-	return leadingDecimalIntegerPrefix(s)
+// assignmentIntegerPrefix returns the exact decimal prefix rounded to an
+// integer using assignment semantics. It is intentionally separate from
+// leadingDecimalIntegerPrefix, which serves explicit casts and truncates at
+// the decimal point. hasPrefix distinguishes lexical values such as "abc"
+// from numeric values that round to zero.
+func assignmentIntegerPrefix(s string) (integer string, hasPrefix bool, err error) {
+	prefix, negative, ok := scanDecimalFloatPrefix(s)
+	if !ok {
+		return "", false, nil
+	}
+	value, overflow := roundedDecimalPrefixMagnitude(prefix)
+	if overflow {
+		return "", true, strconv.ErrRange
+	}
+	integer = strconv.FormatUint(value, 10)
+	if negative {
+		integer = "-" + integer
+	}
+	return integer, true, nil
+}
+
+// roundedDecimalPrefixMagnitude converts a scanned decimal mantissa/exponent
+// to an integer magnitude without float conversion or exponent-sized
+// allocation. Only the at-most-20 destination digits are accumulated; long
+// mantissas and exponents are inspected in place.
+func roundedDecimalPrefixMagnitude(prefix string) (uint64, bool) {
+	start := 0
+	if len(prefix) > 0 && (prefix[0] == '+' || prefix[0] == '-') {
+		start++
+	}
+	mantissaEnd := len(prefix)
+	for i := start; i < len(prefix); i++ {
+		if prefix[i] == 'e' || prefix[i] == 'E' {
+			mantissaEnd = i
+			break
+		}
+	}
+
+	var digitsBeforeDecimal, digitCount int64
+	firstNonZero := int64(-1)
+	seenDecimal := false
+	for i := start; i < mantissaEnd; i++ {
+		c := prefix[i]
+		if c == '.' {
+			seenDecimal = true
+			continue
+		}
+		if !isASCIIDigit(c) {
+			return 0, true
+		}
+		if !seenDecimal {
+			digitsBeforeDecimal++
+		}
+		if firstNonZero < 0 && c != '0' {
+			firstNonZero = digitCount
+		}
+		digitCount++
+	}
+
+	exponentLimit := int64(len(prefix))
+	if exponentLimit <= math.MaxInt64-64 {
+		exponentLimit += 64
+	} else {
+		exponentLimit = math.MaxInt64
+	}
+	var exponent int64
+	if mantissaEnd < len(prefix) {
+		i := mantissaEnd + 1
+		negativeExponent := false
+		if i < len(prefix) && (prefix[i] == '+' || prefix[i] == '-') {
+			negativeExponent = prefix[i] == '-'
+			i++
+		}
+		for ; i < len(prefix); i++ {
+			digit := int64(prefix[i] - '0')
+			if exponent > (exponentLimit-digit)/10 {
+				exponent = exponentLimit
+			} else {
+				exponent = exponent*10 + digit
+			}
+		}
+		if negativeExponent {
+			exponent = -exponent
+		}
+	}
+	decimalPosition := saturatingDecimalPosition(digitsBeforeDecimal, exponent, exponentLimit)
+
+	integerDigitEnd := decimalPosition
+	if integerDigitEnd < 0 {
+		integerDigitEnd = 0
+	}
+	if integerDigitEnd > digitCount {
+		integerDigitEnd = digitCount
+	}
+	var significantDigits int64
+	if firstNonZero >= 0 && firstNonZero < integerDigitEnd {
+		significantDigits = integerDigitEnd - firstNonZero
+		if decimalPosition > digitCount {
+			zeroDigits := decimalPosition - digitCount
+			if zeroDigits > 20-significantDigits {
+				return 0, true
+			}
+			significantDigits += zeroDigits
+		}
+	}
+	if significantDigits > 20 {
+		return 0, true
+	}
+
+	var magnitude uint64
+	var roundingDigit byte
+	var digitIndex int64
+	for i := start; i < mantissaEnd; i++ {
+		c := prefix[i]
+		if c == '.' {
+			continue
+		}
+		if digitIndex == decimalPosition {
+			roundingDigit = c
+		}
+		if firstNonZero >= 0 && digitIndex >= firstNonZero && digitIndex < integerDigitEnd {
+			digit := uint64(c - '0')
+			if magnitude > (math.MaxUint64-digit)/10 {
+				return 0, true
+			}
+			magnitude = magnitude*10 + digit
+		}
+		digitIndex++
+	}
+	if decimalPosition > digitCount {
+		for zeroDigits := decimalPosition - digitCount; zeroDigits > 0; zeroDigits-- {
+			if magnitude > math.MaxUint64/10 {
+				return 0, true
+			}
+			magnitude *= 10
+		}
+	}
+	if decimalPosition >= 0 && decimalPosition < digitCount && roundingDigit >= '5' {
+		if magnitude == math.MaxUint64 {
+			return 0, true
+		}
+		magnitude++
+	}
+	return magnitude, false
+}
+
+func saturatingDecimalPosition(integerDigits, exponent, limit int64) int64 {
+	if exponent > 0 && integerDigits > limit-exponent {
+		return limit
+	}
+	if exponent < 0 && integerDigits < -limit-exponent {
+		return -limit
+	}
+	return integerDigits + exponent
 }
 
 // assignmentDecimalPrefix uses the same prefix grammar as MySQL decimal
@@ -7306,14 +7459,19 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 			}
 			if tErr != nil {
 				if mode == castModeAssignmentIgnore && !isBinary && !isAssignmentSpecialNumericSyntax(*res) {
-					if prefix := assignmentIntegerPrefix(*res); prefix != "" {
-						if prefixed, prefixErr := parseUnsignedCastString(prefix, bitSize); prefixErr == nil {
-							appendTruncatedAssignmentConversionWarning(proc, "INTEGER", *res)
-							if err := to.Append(T(prefixed), false); err != nil {
-								return err
+					if prefix, hasPrefix, prefixErr := assignmentIntegerPrefix(*res); hasPrefix {
+						if prefixErr == nil {
+							var prefixed uint64
+							prefixed, prefixErr = parseUnsignedCastString(prefix, bitSize)
+							if prefixErr == nil {
+								appendTruncatedAssignmentConversionWarning(proc, "INTEGER", *res)
+								if err := to.Append(T(prefixed), false); err != nil {
+									return err
+								}
+								continue
 							}
-							continue
 						}
+						tErr = prefixErr
 					} else if isIntegerLexicalConversionError(tErr) {
 						appendInvalidAssignmentConversionWarning(proc, "INTEGER", *res)
 						if err := to.Append(T(0), false); err != nil {

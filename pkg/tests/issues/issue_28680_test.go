@@ -106,6 +106,15 @@ func TestIssue28680IgnoreConversionExecutionBoundaries(t *testing.T) {
 		require.NoError(t, err)
 		requireWarningCodes(t, ctx, conn, map[uint16]int{1264: 1, 1366: 2})
 
+		// Assignment rounding must use the complete decimal prefix, including
+		// fractional and exponent components, for reused COM_STMT executions.
+		_, err = insertStmt.ExecContext(ctx, 4, "12.9tail", "1.25", "2024-01-03")
+		require.NoError(t, err)
+		requireWarningCodes(t, ctx, conn, map[uint16]int{1265: 1})
+		_, err = insertStmt.ExecContext(ctx, 5, "1e2tail", "1.25", "2024-01-04")
+		require.NoError(t, err)
+		requireWarningCodes(t, ctx, conn, map[uint16]int{1265: 1})
+
 		rows, err := conn.QueryContext(ctx,
 			"select id, i, cast(d as char), cast(dt as char) from "+dbName+".target order by id")
 		require.NoError(t, err)
@@ -123,6 +132,8 @@ func TestIssue28680IgnoreConversionExecutionBoundaries(t *testing.T) {
 			"1/0/0.00/0000-00-00",
 			"2/12/1.25/2024-01-02",
 			"3/0/0.00/0000-00-00",
+			"4/13/1.25/2024-01-03",
+			"5/100/1.25/2024-01-04",
 		}, got)
 
 		// UPDATE must convert once for every matching row. Reusing this prepared
@@ -162,6 +173,19 @@ func TestIssue28680IgnoreConversionExecutionBoundaries(t *testing.T) {
 		require.Equal(t, "2.50", d)
 		require.Equal(t, "2024-03-04", dt)
 
+		result, err = updateStmt.ExecContext(ctx, "12.9tail", "3.25", "2024-03-05", 1, 1)
+		require.NoError(t, err)
+		affected, err = result.RowsAffected()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), affected)
+		requireWarningCodes(t, ctx, conn, map[uint16]int{1265: 1})
+		require.NoError(t, queryRow(
+			"select i, cast(d as char), cast(dt as char) from "+dbName+".target where id=1",
+		).Scan(&i, &d, &dt))
+		require.Equal(t, 13, i)
+		require.Equal(t, "3.25", d)
+		require.Equal(t, "2024-03-05", dt)
+
 		// INSERT ... SELECT must reach the same runtime assignment boundary for
 		// values coming from actual source columns, not only prepared markers.
 		exec("create table " + dbName + `.source (
@@ -172,9 +196,11 @@ func TestIssue28680IgnoreConversionExecutionBoundaries(t *testing.T) {
 		)`)
 		exec("insert into " + dbName + `.source values
 			(10, 'abc', 'abc', '2024-02-30'),
-			(11, '9', '3.25', '2024-04-05')`)
+			(11, '9', '3.25', '2024-04-05'),
+			(12, '12.9tail', '4.50', '2024-04-06'),
+			(13, '1e2tail', '5.50', '2024-04-07')`)
 		exec("insert ignore into " + dbName + ".target(id, i, d, dt) select id, i, d, dt from " + dbName + ".source")
-		requireWarningCodes(t, ctx, conn, map[uint16]int{1264: 1, 1366: 2})
+		requireWarningCodes(t, ctx, conn, map[uint16]int{1264: 1, 1265: 2, 1366: 2})
 		require.NoError(t, queryRow(
 			"select i, cast(d as char), cast(dt as char) from "+dbName+".target where id=10",
 		).Scan(&i, &d, &dt))
@@ -187,6 +213,18 @@ func TestIssue28680IgnoreConversionExecutionBoundaries(t *testing.T) {
 		require.Equal(t, 9, i)
 		require.Equal(t, "3.25", d)
 		require.Equal(t, "2024-04-05", dt)
+		require.NoError(t, queryRow(
+			"select i, cast(d as char), cast(dt as char) from "+dbName+".target where id=12",
+		).Scan(&i, &d, &dt))
+		require.Equal(t, 13, i)
+		require.Equal(t, "4.50", d)
+		require.Equal(t, "2024-04-06", dt)
+		require.NoError(t, queryRow(
+			"select i, cast(d as char), cast(dt as char) from "+dbName+".target where id=13",
+		).Scan(&i, &d, &dt))
+		require.Equal(t, 100, i)
+		require.Equal(t, "5.50", d)
+		require.Equal(t, "2024-04-07", dt)
 
 		// A successful IGNORE write followed by rollback must not become visible.
 		tx, err := conn.BeginTx(ctx, nil)
