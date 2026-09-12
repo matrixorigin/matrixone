@@ -2264,6 +2264,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints = &OptimizerHints{}
 	}
 	switch key {
+	case "vectorLocalDOP":
+		builder.optimizerHints.vectorLocalDOP = value
 	case "pushDownLimitToScan":
 		builder.optimizerHints.pushDownLimitToScan = value
 	case "pushDownTopThroughLeftJoin":

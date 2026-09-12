@@ -45,9 +45,11 @@ type RelationScanRequest struct {
 	// storage vector Top-K. Readers without that capability fall back to the
 	// caller's local distance calculation and final Top-K compaction.
 	FilterBeforeTopK bool
-	FilterHint       engine.FilterHint
-	PartitionCount   int32
-	PartitionIndex   int32
+	// FilterHint.BF, when nonnil, transfers one owned reference to ScanRelation,
+	// which must release it on every return. BuildReaders borrows that reference.
+	FilterHint     engine.FilterHint
+	PartitionCount int32
+	PartitionIndex int32
 }
 
 type RelationScanExecutor interface {

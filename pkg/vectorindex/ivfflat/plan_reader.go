@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -46,11 +47,13 @@ import (
 // planReader is the IVF-FLAT implementation of an optimizer-visible vector
 // index scan. It owns one execution generation and its direct relation scanner.
 type planReader struct {
-	proc    *process.Process
-	spec    *plan.VectorIndexScan
-	req     searchplugin.Request
-	scanner *relationScanner
-	closed  bool
+	proc        *process.Process
+	spec        *plan.VectorIndexScan
+	req         searchplugin.Request
+	scanner     *relationScanner
+	closed      bool
+	generation  *planSearchGeneration
+	ownsContext bool
 
 	initialized  bool
 	keys         []any
@@ -61,6 +64,7 @@ type planReader struct {
 
 	recordExplainDiagnostics bool
 	explainDiagnostics       []*plan.Query
+	executionStats           *vectorindex.IvfExecutionDiagnostic
 }
 
 var _ engine.Reader = (*planReader)(nil)
@@ -85,6 +89,9 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		req:                      req,
 		recordExplainDiagnostics: req.CollectExplainDiagnostics,
 	}
+	if req.CollectExplainDiagnostics {
+		r.executionStats = new(vectorindex.IvfExecutionDiagnostic)
+	}
 	r.scanner = &relationScanner{
 		proc:           proc,
 		partitionCount: req.Identity.PartitionCount,
@@ -92,6 +99,7 @@ func NewPlanReader(proc *process.Process, spec *plan.VectorIndexScan, req search
 		ownsInMemory:   ownsInMemoryPartition(req.Identity.PartitionCount, req.Identity.PartitionIndex),
 		txnOffset:      req.Identity.TxnOffset,
 		snapshot:       cloneIvfSnapshot(req.Identity.Snapshot),
+		executionStats: r.executionStats,
 	}
 	if req.Identity.PhysicalAccountID != nil {
 		accountID := *req.Identity.PhysicalAccountID
@@ -134,7 +142,17 @@ func (r *planReader) Close() error {
 	r.includeData = nil
 	r.includeNulls = nil
 	r.explainDiagnostics = nil
+	r.executionStats = nil
 	r.scanner = nil
+	r.req.MembershipFilter = nil
+	if r.ownsContext && r.proc != nil && r.proc.Cancel != nil {
+		r.proc.Cancel(nil)
+	}
+	if r.generation != nil {
+		r.generation.release()
+		r.generation = nil
+	}
+	r.proc = nil
 	return nil
 }
 
@@ -206,6 +224,52 @@ func (*planReader) SetIndexParam(*plan.IndexReaderParam) {}
 func (*planReader) SetFilterZM(objectio.ZoneMap)         {}
 
 func (r *planReader) initialize() error {
+	var err error
+	if r.generation != nil {
+		err = r.generation.search(r)
+	} else {
+		err = r.prepareSearch(false)
+	}
+	if err != nil {
+		return err
+	}
+	r.publishExecutionDiagnostic()
+	return nil
+}
+
+func (r *planReader) publishExecutionDiagnostic() {
+	if r == nil || !r.recordExplainDiagnostics || r.executionStats == nil {
+		return
+	}
+	if r.scanner == nil || r.scanner.partitionIndex == 0 {
+		r.executionStats.SearchCount++
+	}
+	r.executionStats.OutputRows += uint64(len(r.keys))
+	r.explainDiagnostics = append(r.explainDiagnostics,
+		vectorindex.EncodeIvfExecutionDiagnostic(*r.executionStats))
+	r.executionStats = nil
+	if r.scanner != nil {
+		r.scanner.executionStats = nil
+	}
+}
+
+func (r *planReader) newSearchProcess() *sqlexec.SqlProcess {
+	p := sqlexec.NewSqlProcess(r.proc)
+	p.RelationScanner = r.scanner
+	p.IvfRuntimeFilterData = r.req.MembershipFilter
+	p.IvfHasMembershipFilter = r.req.HasMembershipFilter
+	p.IvfMembershipFilterRequired = r.req.MembershipFilterRequired
+	if r.generation != nil {
+		p.IvfMembershipFilterObject = r.generation.membership
+	}
+	p.IndexReaderParam = &plan.IndexReaderParam{
+		Limit: ivfUint64Expr(r.req.CandidateBudget), OrderBy: []*plan.OrderBySpec{{Flag: r.spec.Direction}},
+		OrigFuncName: r.spec.DistanceFunction, DistRange: r.req.DistanceRange,
+	}
+	return p
+}
+
+func (r *planReader) prepareSearch(prepareOnly bool) error {
 	if r.req.CandidateBudget == 0 {
 		return nil
 	}
@@ -275,17 +339,7 @@ func (r *planReader) initialize() error {
 		IncludeColumns:     includeColumns,
 		IncludeColumnTypes: includeTypes,
 	}
-	sqlproc := sqlexec.NewSqlProcess(r.proc)
-	sqlproc.RelationScanner = r.scanner
-	sqlproc.IvfRuntimeFilterData = append([]byte(nil), r.req.MembershipFilter...)
-	sqlproc.IvfHasMembershipFilter = r.req.HasMembershipFilter
-	sqlproc.IvfMembershipFilterRequired = r.req.MembershipFilterRequired
-	sqlproc.IndexReaderParam = &plan.IndexReaderParam{
-		Limit:        ivfUint64Expr(r.req.CandidateBudget),
-		OrderBy:      []*plan.OrderBySpec{{Flag: r.spec.Direction}},
-		OrigFuncName: r.spec.DistanceFunction,
-		DistRange:    r.req.DistanceRange,
-	}
+	sqlproc := r.newSearchProcess()
 	version, err := GetVersion(sqlproc, tblcfg)
 	if err != nil {
 		return err
@@ -323,7 +377,7 @@ func (r *planReader) initialize() error {
 		if expectedDimensions <= 0 {
 			idxcfg.Ivfflat.Dimensions = uint(len(query))
 		}
-		return searchPlanReader(r, sqlproc, idxcfg, tblcfg, query)
+		return preparePlanReaderSearch(r, sqlproc, idxcfg, tblcfg, query, prepareOnly)
 	}
 	query, err := r.queryFloat32()
 	if err != nil {
@@ -335,7 +389,17 @@ func (r *planReader) initialize() error {
 	if expectedDimensions <= 0 {
 		idxcfg.Ivfflat.Dimensions = uint(len(query))
 	}
-	return searchPlanReader(r, sqlproc, idxcfg, tblcfg, query)
+	return preparePlanReaderSearch(r, sqlproc, idxcfg, tblcfg, query, prepareOnly)
+}
+
+func preparePlanReaderSearch[T types.RealNumbers](r *planReader, sqlproc *sqlexec.SqlProcess,
+	idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, query []T, prepareOnly bool) error {
+	if prepareOnly {
+		r.generation.search = func(reader *planReader) error {
+			return searchPlanReader(reader, reader.newSearchProcess(), idxcfg, tblcfg, query, false)
+		}
+	}
+	return searchPlanReader(r, sqlproc, idxcfg, tblcfg, query, prepareOnly)
 }
 
 func validateIvfQueryDimensions(expected int32, actual int) error {
@@ -391,6 +455,7 @@ func searchPlanReader[T types.RealNumbers](
 	idxcfg vectorindex.IndexConfig,
 	tblcfg vectorindex.IndexTableConfig,
 	query []T,
+	prepareOnly bool,
 ) error {
 	cache.Cache.Once()
 	algo := NewIvfflatSearch[T](idxcfg, tblcfg)
@@ -401,11 +466,23 @@ func searchPlanReader[T types.RealNumbers](
 	if r.req.Identity.PartitionCount > 1 {
 		key = fmt.Sprintf("%s:%d/%d", key, r.req.Identity.PartitionIndex, r.req.Identity.PartitionCount)
 	}
+	if prepareOnly {
+		cursor := new(vectorindex.IvfSearchCursor)
+		_, _, err := cache.Cache.Search(sqlproc, key, algo, query, vectorindex.RuntimeConfig{
+			Probe: uint(max(uint32(1), r.spec.InitialProbeCount)), SearchCursor: cursor, IvfPrepareRouteOnly: true,
+		})
+		if err == nil {
+			r.generation.route = append([]int64(nil), cursor.RankedCentroidIDs...)
+		}
+		return err
+	}
 
 	multiRound := r.req.HasFirstRound || r.spec.BucketExpandStep > 0
 	var cursor *vectorindex.IvfSearchCursor
 	if multiRound {
 		cursor = &vectorindex.IvfSearchCursor{}
+	} else if r.generation != nil {
+		cursor = &vectorindex.IvfSearchCursor{RankedCentroidIDs: r.generation.route}
 	}
 	limit := uint(r.req.CandidateBudget)
 	if uint64(limit) != r.req.CandidateBudget {
@@ -441,6 +518,7 @@ func searchPlanReader[T types.RealNumbers](
 			SearchRoundLimit:        firstRoundLimit,
 			BucketExpandStep:        uint(r.spec.BucketExpandStep),
 			SearchCursor:            cursor,
+			IvfRoutePrepared:        r.generation != nil && !multiRound,
 		}
 		keys, distances, err := cache.Cache.Search(sqlproc, key, algo, query, rt)
 		if err != nil {
@@ -481,13 +559,23 @@ func (r *planReader) recordSearchRoundDiagnostic(
 	if rowLimit == 0 {
 		rowLimit = resultLimit
 	}
+	rows := uint64(outputRows)
+	if generation := r.generation; generation != nil && generation.parallelism > 1 {
+		// Only single-round readers can share a generation at DOP > 1. Emit
+		// one logical round from its last completed shard, not one per reader.
+		generation.outputRows.Add(rows)
+		if generation.completed.Add(1) != generation.parallelism {
+			return
+		}
+		rows = generation.outputRows.Load()
+	}
 	r.explainDiagnostics = append(r.explainDiagnostics,
 		vectorindex.EncodeIvfSearchRoundDiagnostic(vectorindex.IvfSearchRoundDiagnostic{
 			Round:        uint64(cursor.Round),
 			BucketOffset: uint64(cursor.NextBucketOffset),
 			BucketCount:  uint64(cursor.CurrentBucketCount),
 			RowLimit:     uint64(rowLimit),
-			OutputRows:   uint64(outputRows),
+			OutputRows:   rows,
 			Exhausted:    cursor.Exhausted,
 		}))
 }
@@ -563,24 +651,31 @@ func (r *planReader) sortAndLimit(candidateLimit uint64) {
 // transaction. It is the direct-engine replacement for sqlexec.RunSql.
 type relationScanner struct {
 	proc           *process.Process
+	generation     *planSearchGeneration
 	accountID      *uint32
 	snapshot       *plan.Snapshot
 	partitionCount int32
 	partitionIndex int32
 	ownsInMemory   bool
 	txnOffset      int
+	executionStats *vectorindex.IvfExecutionDiagnostic
 }
 
 var _ sqlexec.RelationScanExecutor = (*relationScanner)(nil)
 
 func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res executor.Result, err error) {
 	res = executor.NewResult(s.proc.Mp())
+	if req.FilterHint.BF != nil {
+		defer req.FilterHint.BF.Free()
+	}
 	ctx := s.proc.Ctx
 	if s.accountID != nil {
 		ctx = defines.AttachAccountId(ctx, *s.accountID)
 	}
 	txn := s.proc.GetTxnOperator()
-	if s.snapshot != nil && s.snapshot.TS != nil &&
+	if s.generation != nil {
+		txn = s.generation.snapshot
+	} else if s.snapshot != nil && s.snapshot.TS != nil &&
 		(s.snapshot.TS.LogicalTime != 0 || s.snapshot.TS.PhysicalTime != 0) &&
 		s.snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		clone := s.proc.GetCloneTxnOperator()
@@ -602,6 +697,10 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	tableDef := rel.GetTableDef(ctx)
 	if tableDef == nil {
 		return res, moerr.NewInvalidStateNoCtxf("ivfflat hidden relation %s.%s has no table definition", req.Schema, req.Table)
+	}
+	var statsStart time.Time
+	if s.executionStats != nil {
+		statsStart = time.Now()
 	}
 
 	partitionCount := req.PartitionCount
@@ -634,6 +733,10 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	if err != nil {
 		return res, err
 	}
+	selectedBlocks := 0
+	if relData != nil {
+		selectedBlocks = relData.DataCnt()
+	}
 	readers, err := rel.BuildReaders(
 		ctx,
 		s.proc,
@@ -647,6 +750,15 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 	)
 	if err != nil {
 		return res, err
+	}
+	var readerTopStats []objectio.IndexReaderTopStats
+	if s.executionStats != nil && tableDef.TableType == catalog.SystemSI_IVFFLAT_TblType_Entries {
+		readerTopStats = make([]objectio.IndexReaderTopStats, len(readers))
+		for i, reader := range readers {
+			if provider, ok := reader.(engine.ExplainVectorTopStatsReader); ok {
+				provider.SetExplainVectorTopStats(&readerTopStats[i])
+			}
+		}
 	}
 	var filterExecutor colexec.ExpressionExecutor
 	if req.Filter != nil {
@@ -772,7 +884,59 @@ func (s *relationScanner) ScanRelation(req sqlexec.RelationScanRequest) (res exe
 			return res, err
 		}
 	}
+	if s.executionStats != nil {
+		s.recordRelationExecutionStats(
+			tableDef.TableType,
+			selectedBlocks,
+			len(readers),
+			resultRowCount(res.Batches),
+			time.Since(statsStart),
+			readerTopStats,
+		)
+	}
 	return res, nil
+}
+
+func (s *relationScanner) recordRelationExecutionStats(
+	tableType string,
+	blocks int,
+	readers int,
+	rows int,
+	elapsed time.Duration,
+	topStats []objectio.IndexReaderTopStats,
+) {
+	if s == nil || s.executionStats == nil {
+		return
+	}
+	blockCount := uint64(max(blocks, 0))
+	rowCount := uint64(max(rows, 0))
+	elapsedNS := uint64(max(elapsed.Nanoseconds(), int64(0)))
+	switch tableType {
+	case catalog.SystemSI_IVFFLAT_TblType_Metadata:
+		s.executionStats.MetadataBlocks += blockCount
+		s.executionStats.MetadataRows += rowCount
+		s.executionStats.MetadataTimeNS += elapsedNS
+	case catalog.SystemSI_IVFFLAT_TblType_Centroids:
+		s.executionStats.CentroidBlocks += blockCount
+		s.executionStats.CentroidRows += rowCount
+		s.executionStats.CentroidTimeNS += elapsedNS
+	case catalog.SystemSI_IVFFLAT_TblType_Entries:
+		s.executionStats.ReaderCount += uint64(max(readers, 0))
+		s.executionStats.EntryBlocksSelected += blockCount
+		s.executionStats.EntryOutputRows += rowCount
+		s.executionStats.EntryTimeNS += elapsedNS
+		for _, stats := range topStats {
+			s.executionStats.EntryBlocksRead += stats.BlocksRead
+			s.executionStats.StorageFilterInputRows += stats.StorageFilterInputRows
+			s.executionStats.StorageFilterOutputRows += stats.StorageFilterOutputRows
+			s.executionStats.VectorRowsScored += stats.VectorRowsScored
+			s.executionStats.VectorChunksRead += stats.VectorChunksRead
+			s.executionStats.VectorChunkCacheHits += stats.VectorChunkCacheHits
+			s.executionStats.VectorCompressedBytes += stats.VectorCompressedBytes
+			s.executionStats.VectorDecodedBytes += stats.VectorDecodedBytes
+			s.executionStats.TopKOutputRows += stats.TopKOutputRows
+		}
+	}
 }
 
 // relationScanPolicy mirrors the distributed table-scan ownership contract:

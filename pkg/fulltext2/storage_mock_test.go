@@ -47,10 +47,13 @@ func swapRunStreamingSql(t *testing.T, fn func(context.Context, *sqlexec.SqlProc
 	t.Cleanup(func() { runStreamingSql = prev })
 }
 
-func int64Batch(mp *mpool.MPool, v int64) *batch.Batch {
-	b := batch.NewWithSize(1)
+// docsAndBytesBatch is what baseDocCountAndBytes reads: SUM(nrow), SUM(filesize).
+func docsAndBytesBatch(mp *mpool.MPool, ndoc, bytes int64) *batch.Batch {
+	b := batch.NewWithSize(2)
 	b.Vecs[0] = vector.NewVec(types.T_int64.ToType())
-	_ = vector.AppendFixed[int64](b.Vecs[0], v, false, mp)
+	b.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+	_ = vector.AppendFixed[int64](b.Vecs[0], ndoc, false, mp)
+	_ = vector.AppendFixed[int64](b.Vecs[1], bytes, false, mp)
 	b.SetRowCount(1)
 	return b
 }
@@ -131,7 +134,7 @@ func TestScanHelpers(t *testing.T) {
 	cfg := testStorageCfg()
 
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 13)}}, nil
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 13, 0)}}, nil
 	})
 
 	n, err := CountTailChunks(sp, cfg)
@@ -160,20 +163,20 @@ func TestLoadBudgetGates(t *testing.T) {
 
 	// small doc/byte counts fit comfortably → nil.
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 100)}}, nil
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 100, 0)}}, nil
 	})
 	require.NoError(t, checkBaseLoadBudget(sp, cfg))
-	require.NoError(t, checkTailLoadBudget(sp, cfg))
+	require.NoError(t, checkTailLoadBudget(sp, cfg, 0))
 
 	// an enormous count exceeds the CN budget → actionable error (no int64 overflow).
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, int64(1)<<40)}}, nil
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, int64(1)<<40, 0)}}, nil
 	})
 	require.Error(t, checkBaseLoadBudget(sp, cfg))
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-		return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, int64(1)<<50)}}, nil
+		return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, int64(1)<<50, 0)}}, nil
 	})
-	require.Error(t, checkTailLoadBudget(sp, cfg))
+	require.Error(t, checkTailLoadBudget(sp, cfg, 0))
 }
 
 func TestLoadAllBasesEmpty(t *testing.T) {
@@ -197,7 +200,7 @@ func TestLoadTailSegmentsEmpty(t *testing.T) {
 	// (chunk_id, data) returns no rows → empty tail.
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		if strings.Contains(sql, "LENGTH(") {
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
 		}
 		return executor.Result{Mp: mp, Batches: nil}, nil
 	})
@@ -239,7 +242,7 @@ func TestLoadTailSegmentsErrorPaths(t *testing.T) {
 		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 			calls++
 			if calls == 1 {
-				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
 			}
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, chunks)}}, nil
 		})
@@ -261,7 +264,7 @@ func TestLoadTailSegmentsErrorPaths(t *testing.T) {
 		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
 			calls++
 			if calls == 1 {
-				return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
 			}
 			return executor.Result{}, moerr.NewInternalErrorNoCtx("tail query failed")
 		})
@@ -386,15 +389,21 @@ func TestCompactSegmentsFoldsTail(t *testing.T) {
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		switch {
 		case strings.Contains(sql, "GREATEST"): // NextTailChunkId
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 100)}}, nil
-		case strings.Contains(sql, "LENGTH("): // checkTailLoadBudget
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 1)}}, nil
-		case strings.Contains(sql, vectorindex.CdcTailId) && strings.Contains(sql, "SELECT"): // tail data
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 100, 0)}}, nil
+		// Scalar sums come first: the tail-size and base-total queries both mention the tail
+		// id (one selects those rows, the other excludes them), so matching on the id alone
+		// would hand them a batch of chunk data.
+		case strings.Contains(sql, "SUM("):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 1, 0)}}, nil
+		case strings.Contains(sql, vectorindex.CdcTailId) && strings.Contains(sql, "SELECT") &&
+			!strings.Contains(sql, notTailFrame()): // tail chunk data
 			return executor.Result{Mp: mp, Batches: []*batch.Batch{tailChunkBatch(mp, chunks)}}, nil
 		case strings.HasPrefix(strings.TrimSpace(sql), "SELECT"): // LoadAllBases enumerate → no bases
 			return executor.Result{Mp: mp, Batches: nil}, nil
 		default: // DELETE / INSERT writes succeed
-			if strings.HasPrefix(sql, "DELETE") && strings.Contains(sql, "TRUE") {
+			// The bases' metadata delete is the one that SPARES the tail frame rows;
+			// DeleteTailSqls' own delete names the same prefix without the negation.
+			if strings.HasPrefix(sql, "DELETE") && strings.Contains(sql, notTailFrame()) {
 				deleteAllRan = true
 			}
 			if strings.HasPrefix(sql, "INSERT") {
@@ -497,7 +506,7 @@ func TestCompactSegmentsNoDelta(t *testing.T) {
 
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		if strings.Contains(sql, "LENGTH(") {
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
 		}
 		return executor.Result{Mp: mp, Batches: nil}, nil // empty enumerate + empty tail
 	})

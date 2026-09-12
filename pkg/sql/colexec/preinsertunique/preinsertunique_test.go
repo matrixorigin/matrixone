@@ -1092,6 +1092,12 @@ func newInsertIgnoreMultiDedupArgument(inputs ...*batch.Batch) *PreInsertUnique 
 			KeyColumns:             []int32{0, 1},
 			ConflictColumns:        []int32{2, 3},
 			OutputColumns:          2,
+			KeyNames:               []string{"id", "v"},
+			KeyTypes: []*plan.Type{
+				{Id: int32(types.T_int32)},
+				{Id: int32(types.T_int32)},
+			},
+			KeyTypeCounts: []int32{1, 1},
 		},
 	}
 	arg.AppendChild(colexec.NewMockOperator().WithBatchs(inputs))

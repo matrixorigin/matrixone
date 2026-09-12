@@ -309,7 +309,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
 	}
-	if err := refreshGroupConcatMaxLen(c.scopes, proc); err != nil {
+	if err := refreshGroupConcatMaxLen(c.scopes, proc, c.groupConcatMaxLenFloor); err != nil {
 		return err
 	}
 	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(proc)
@@ -536,6 +536,7 @@ func (c *Compile) clear() {
 	c.remoteFragmentCounts = nil
 	c.remoteExecutionID = uuid.Nil
 	c.isPrepare = false
+	c.groupConcatMaxLenFloor = 0
 	c.hasMergeOp = false
 	c.needBlock = false
 	c.ignorePublish = false
@@ -5001,19 +5002,63 @@ func (c *Compile) generateSeriesParallel(proc *process.Process, node *plan.Node,
 		return true, 0, nil, nil
 	}
 
-	temp := (end - start + 1) / int64(parallelSize)
-	for i := 0; i < parallelSize; i++ {
-		tempEnd := start + temp - 1
-		if i == parallelSize-1 {
-			tempEnd = end
-		}
+	offset, ok := generateSeriesOffsets(start, end, step, parallelSize)
+	if !ok {
+		return false, 0, nil, nil
+	}
+	return true, step, offset, nil
+}
 
-		arr := [2]int64{start, tempEnd}
-		offset = append(offset, arr)
-		start = tempEnd + 1
+func generateSeriesOffsets(start, end, step int64, parallelSize int) ([][2]int64, bool) {
+	if parallelSize <= 0 || step == 0 ||
+		(step > 0 && start > end) || (step < 0 && start < end) {
+		return nil, false
 	}
 
-	return true, step, offset, nil
+	var distance, stepMagnitude uint64
+	if step > 0 {
+		distance = uint64(end) - uint64(start)
+		stepMagnitude = uint64(step)
+	} else {
+		distance = uint64(start) - uint64(end)
+		stepMagnitude = uint64(-(step + 1)) + 1
+	}
+	lastIndex := distance / stepMagnitude
+	if lastIndex == math.MaxUint64 {
+		// Keep the only cardinality that cannot fit in uint64 on the serial path.
+		return nil, false
+	}
+	count := lastIndex + 1
+	shardCount := uint64(parallelSize)
+	if count < shardCount {
+		return nil, false
+	}
+
+	baseSize := count / shardCount
+	extra := count % shardCount
+	offsets := make([][2]int64, 0, parallelSize)
+	var firstIndex uint64
+	for shard := uint64(0); shard < shardCount; shard++ {
+		size := baseSize
+		if shard < extra {
+			size++
+		}
+		lastIndex := firstIndex + size - 1
+		offsets = append(offsets, [2]int64{
+			generateSeriesValueAt(start, step, stepMagnitude, firstIndex),
+			generateSeriesValueAt(start, step, stepMagnitude, lastIndex),
+		})
+		firstIndex = lastIndex + 1
+	}
+	return offsets, true
+}
+
+func generateSeriesValueAt(start, step int64, stepMagnitude, index uint64) int64 {
+	delta := index * stepMagnitude
+	if step > 0 {
+		return int64(uint64(start) + delta)
+	}
+	return int64(uint64(start) - delta)
 }
 
 func (c *Compile) compileSingleTableFunction(node *plan.Node) ([]*Scope, error) {
@@ -5045,8 +5090,14 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 		}
 
 		op.CanOpt = canOpt
-		op.GenerateSeriesCtrNumState(offset[0][0], offset[len(offset)-1][1], step, offset[0][0])
-		op.OffsetTotal = append(op.OffsetTotal, offset[startOffset:startOffset+currMcpu]...)
+		scopeOffsets := offset[startOffset : startOffset+currMcpu]
+		op.GenerateSeriesCtrNumState(
+			scopeOffsets[0][0],
+			scopeOffsets[len(scopeOffsets)-1][1],
+			step,
+			scopeOffsets[0][0],
+		)
+		op.OffsetTotal = append(op.OffsetTotal, scopeOffsets...)
 		startOffset += currMcpu
 
 		ds.NodeInfo = getEngineNode(c)
@@ -5175,7 +5226,7 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	}
 	if c.execType == plan2.ExecTypeAP_MULTICN && len(c.cnList) > 1 &&
 		(workspace == nil || workspace.Readonly()) &&
-		(node.Stats == nil || !node.Stats.ForceOneCN) {
+		(node.Stats == nil || !node.Stats.ForceOneCN) && !requiredVectorMembership(node) {
 		nodes = make(engine.Nodes, len(c.cnList))
 		for i := range c.cnList {
 			nodes[i] = engine.Node{
@@ -5188,7 +5239,11 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 		}
 	} else {
 		local := getEngineNode(c)
-		local.Mcpu = 1
+		parallelism, err := c.vectorIndexScanParallelism(node, local.Mcpu)
+		if err != nil {
+			return nil, err
+		}
+		local.Mcpu = parallelism
 		local.CNCNT = 1
 		local.CNIDX = 0
 		nodes = engine.Nodes{local}
@@ -5196,11 +5251,10 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	currentFirstFlag := c.anal.isFirst
 	ss := make([]*Scope, 0, len(nodes))
 	for i := range nodes {
-		// One adaptive reader owns one centroid cursor and one bounded top-k.
-		// Parallelism is expressed by independent CN partitions, not duplicate
-		// readers over the same partition.
-		nodes[i].Mcpu = 1
 		nodeCopy := plan2.DeepCopyNode(node)
+		if nodeCopy.Stats != nil {
+			nodeCopy.Stats.Dop = int32(nodes[i].Mcpu)
+		}
 		s := newScope(Remote)
 		s.NodeInfo = nodes[i]
 		s.TxnOffset = c.TxnOffset
@@ -5216,6 +5270,37 @@ func (c *Compile) compileVectorIndexScan(node *plan.Node) ([]*Scope, error) {
 	}
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+func requiredVectorMembership(node *plan.Node) bool {
+	for _, spec := range node.GetRuntimeFilterProbeList() {
+		if spec != nil && spec.UseMembershipFilter && spec.MustApply {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Compile) vectorIndexScanParallelism(node *plan.Node, capacity int) (int, error) {
+	if !requiredVectorMembership(node) || node.GetVectorIndexScan().GetScanWork() == nil || node.Stats == nil || node.Stats.Dop <= 1 {
+		return 1, nil
+	}
+	resolve := c.proc.GetResolveVariableFunc()
+	if resolve == nil {
+		return 1, nil
+	}
+	value, err := resolve("optimizer_hints", true, false)
+	if ctxErr := c.proc.Ctx.Err(); ctxErr != nil {
+		return 0, ctxErr
+	}
+	if err != nil {
+		return 1, nil
+	}
+	hints, ok := value.(string)
+	if !ok || !plan2.VectorLocalDOPEnabled(hints) {
+		return 1, nil
+	}
+	return max(1, min(int(node.Stats.Dop), capacity, c.ncpu)), nil
 }
 
 func (c *Compile) getCompileTableScanDataSourceTxn(s *Scope) (client.TxnOperator, context.Context, error) {
@@ -5551,10 +5636,49 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
-	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node)) || c.scopesRunOnCoordinator(ss) {
+	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node) &&
+		!c.needsCoordinatorIgnoreCheck(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
 	return []*Scope{c.newMergeScope(ss)}
+}
+
+// statementIgnoreEnabled is defensive because a few compile/serialization
+// tests construct a Process shell without its shared BaseProcess.  The normal
+// execution path always has both objects, but a protocol gate must not turn a
+// malformed/incomplete process into a panic while handling an error path.
+func statementIgnoreEnabled(proc *process.Process) bool {
+	return proc != nil && proc.Base != nil && proc.GetStmtProfile().GetStatementIgnore()
+}
+
+// An older CN resolves the same CHECK function ID but throws instead of
+// filtering invalid INSERT IGNORE rows. Keep only this filter local while
+// upgrading; ordinary CHECKs and fully upgraded clusters remain distributed.
+func (c *Compile) needsCoordinatorIgnoreCheck(node *plan.Node) bool {
+	if node == nil || len(node.FilterList) == 0 || !statementIgnoreEnabled(c.proc) ||
+		supportsRemoteIgnoreCheck(c.proc.GetService()) {
+		return false
+	}
+	for _, expr := range node.FilterList {
+		if containsFunctionInExpr(expr, nil, isCheckConstraintFunction) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCheckConstraintFunction(functionID, _ int32) bool {
+	return functionID == function.CHECK_CONSTRAINT_ASSERT
+}
+
+func supportsRemoteIgnoreCheck(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, versionOK := value.(int64)
+	return ok && versionOK && version >= defines.MORPCVersion63
 }
 
 func (c *Compile) scopesRunOnCoordinator(ss []*Scope) bool {
@@ -10047,6 +10171,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 	if accountId >= 0 {
 		opts = opts.WithAccountID(uint32(accountId))
 	}
+	ctx = process.ContextWithWarningSink(ctx, c.proc.WarningSink)
 	return exec.Exec(ctx, sql, opts)
 }
 
@@ -10269,3 +10394,8 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 	}
 	return false
 }
+
+// SetGroupConcatMaxLenFloor binds the prepared statement's execution floor
+// before physical compilation or Compile.Reset. Zero keeps ordinary statements
+// fully dynamic.
+func (c *Compile) SetGroupConcatMaxLenFloor(floor uint64) { c.groupConcatMaxLenFloor = floor }

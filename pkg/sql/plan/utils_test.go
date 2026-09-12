@@ -752,6 +752,46 @@ func TestPreparedNumericPrefixTypeFromString(t *testing.T) {
 	}
 }
 
+func TestPreparedNumericStringIsComplete(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "65.5", want: true},
+		{value: " 65.5e0 ", want: true},
+		{value: "+1", want: true},
+		{value: "65.5xyz", want: false},
+		{value: "abc", want: false},
+		{value: "1e+", want: false},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			require.Equal(t, test.want, PreparedNumericStringIsComplete(test.value))
+		})
+	}
+}
+
+func TestPreparedCharSourceTypeFromString(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		value     string
+		want      types.T
+		wantExact bool
+	}{
+		{name: "signed minimum", value: "-9223372036854775808", want: types.T_int64, wantExact: true},
+		{name: "unsigned above signed maximum", value: "9223372036854775809", want: types.T_uint64, wantExact: true},
+		{name: "decimal", value: "65.5e0", want: types.T_decimal64, wantExact: true},
+		{name: "numeric suffix", value: "65.5xyz", want: types.T_varchar},
+		{name: "non-numeric", value: "abc", want: types.T_varchar},
+		{name: "decimal overflow falls back to string", value: strings.Repeat("9", 77), want: types.T_varchar},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, exact := PreparedCharSourceTypeFromString(test.value)
+			require.Equal(t, test.want, got.Oid)
+			require.Equal(t, test.wantExact, exact)
+		})
+	}
+}
+
 func TestPreparedDecimalRuntimeTypePreservesWireDomain(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -965,6 +1005,31 @@ func TestPreparedPlanDirectResultParamPositions(t *testing.T) {
 
 	require.Nil(t, PreparedPlanDirectResultParamPositions(nil))
 	require.Nil(t, PreparedPlanDirectResultParamPositions(&plan.Plan{
+		Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}},
+	}))
+}
+
+func TestPreparedPlanConversionParamPositions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "bin value", sql: "prepare bin_value from 'select bin(?)'", want: []int32{0}},
+		{name: "conv value", sql: "prepare conv_value from 'select conv(?, 10, 16)'", want: []int32{0}},
+		{name: "multiple values", sql: "prepare multiple_values from 'select bin(?), conv(?, 10, 16)'", want: []int32{0, 1}},
+		{name: "no conversion", sql: "prepare no_conversion from 'select abs(?)'", want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
+			require.Equal(t, test.want, PreparedPlanConversionParamPositions(planUnderTest))
+		})
+	}
+
+	require.Nil(t, PreparedPlanConversionParamPositions(nil))
+	require.Nil(t, PreparedPlanConversionParamPositions(&plan.Plan{
 		Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}},
 	}))
 }

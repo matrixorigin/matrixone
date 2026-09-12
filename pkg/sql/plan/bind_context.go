@@ -31,6 +31,8 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		groupByCanonicalAst: make(map[string]int32),
 		groupByParamAst:     make(map[string]int32),
 		aggregateByAst:      make(map[string]int32),
+		aliasExpandedExprs:  make(map[*tree.ParenExpr]int32),
+		groupConcatByExpr:   make(map[*tree.FuncExpr]int32),
 		sampleByAst:         make(map[string]int32),
 		projectByExpr:       make(map[string]int32),
 		windowByAst:         make(map[string]int32),
@@ -620,8 +622,13 @@ func (bc *BindContext) doUnfoldStar(ctx context.Context, root *BindingTreeNode, 
 		}
 	}
 
-	bc.doUnfoldStar(ctx, root.left, visitedUsingCols, exprs, names, provenances, isSysAccount)
-	bc.doUnfoldStar(ctx, root.right, visitedUsingCols, exprs, names, provenances, isSysAccount)
+	if root.rightJoinUsingStar {
+		bc.doUnfoldStar(ctx, root.right, visitedUsingCols, exprs, names, provenances, isSysAccount)
+		bc.doUnfoldStar(ctx, root.left, visitedUsingCols, exprs, names, provenances, isSysAccount)
+	} else {
+		bc.doUnfoldStar(ctx, root.left, visitedUsingCols, exprs, names, provenances, isSysAccount)
+		bc.doUnfoldStar(ctx, root.right, visitedUsingCols, exprs, names, provenances, isSysAccount)
+	}
 
 	for _, col := range handledUsingCols {
 		delete(visitedUsingCols, col)
@@ -718,6 +725,9 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 			if expandAlias == AliasBeforeColumn {
 				if selectItem, ok := bc.aliasMap[col]; ok {
 					if selectItem.astExpr != nil {
+						if bc.trackAliasExpansion() {
+							return bc.wrapAliasExpansion(selectItem.astExpr, selectItem.idx), nil
+						}
 						return selectItem.astExpr, nil
 					}
 					// aliasMap entry exists but astExpr is nil (e.g., UNION context)
@@ -755,11 +765,17 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 						return nil, ambiguousHavingColumn(bc.binder.GetContext(), col)
 					}
 					if found {
+						if bc.trackAliasExpansion() {
+							return bc.wrapAliasExpansion(projected, bc.projectedExprPosition(projected)), nil
+						}
 						return projected, nil
 					}
 				}
 				if selectItem, ok := bc.aliasMap[col]; ok {
 					if selectItem.astExpr != nil {
+						if bc.trackAliasExpansion() {
+							return bc.wrapAliasExpansion(selectItem.astExpr, selectItem.idx), nil
+						}
 						return selectItem.astExpr, nil
 					}
 					// aliasMap entry exists but astExpr is nil (e.g., UNION context)
@@ -816,6 +832,57 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, expandAlias ExpandA
 	}
 
 	return astExpr, err
+}
+
+func (bc *BindContext) trackAliasExpansion() bool {
+	if bc == nil || bc.binder == nil {
+		return false
+	}
+	switch bc.binder.(type) {
+	case *HavingBinder, *ProjectionBinder:
+		return true
+	default:
+		return false
+	}
+}
+
+func (bc *BindContext) wrapAliasExpansion(expr tree.Expr, projectPos int32) tree.Expr {
+	wrapper := &tree.ParenExpr{Expr: expr}
+	if bc.aliasExpandedExprs == nil {
+		bc.aliasExpandedExprs = make(map[*tree.ParenExpr]int32)
+	}
+	bc.aliasExpandedExprs[wrapper] = projectPos
+	return wrapper
+}
+
+func (bc *BindContext) isAliasExpansion(expr tree.Expr) (*tree.ParenExpr, int32, bool) {
+	wrapper, ok := expr.(*tree.ParenExpr)
+	if !ok || bc == nil {
+		return nil, -1, false
+	}
+	projectPos, ok := bc.aliasExpandedExprs[wrapper]
+	return wrapper, projectPos, ok
+}
+
+func (bc *BindContext) projectedExprPosition(expr tree.Expr) int32 {
+	if bc == nil {
+		return -1
+	}
+	for _, field := range bc.projectByAst {
+		if field.ast == expr {
+			return field.pos
+		}
+	}
+	return -1
+}
+
+func (bc *BindContext) groupConcatAggregatePosition(expr tree.Expr) (int32, bool) {
+	funcExpr, ok := expr.(*tree.FuncExpr)
+	if !ok || bc == nil {
+		return 0, false
+	}
+	pos, ok := bc.groupConcatByExpr[funcExpr]
+	return pos, ok
 }
 
 // havingOutputExpr resolves an unqualified name against the query block's

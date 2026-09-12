@@ -18,7 +18,6 @@ import (
 	"math"
 	"runtime"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -502,6 +501,42 @@ func (hb *HashmapBuilder) buildHashmap(
 	proc *process.Process,
 ) (retErr error) {
 	runtimeFilterRequested := needUniqueVec
+	warningsEnabled := proc != nil && proc.GetStmtProfile() != nil &&
+		proc.GetStmtProfile().GetStatementIgnore() && hb.IsDedup &&
+		hb.OnDuplicateAction == plan.Node_IGNORE
+	var duplicateWarnings process.WarningAccumulator
+	defer func() {
+		// Warnings belong to a successfully completed statement.  If the build
+		// fails, the statement is rolled back and diagnostics from this partial
+		// execution must not leak into the next statement.
+		if retErr == nil && warningsEnabled {
+			duplicateWarnings.Flush(proc)
+		}
+	}()
+	recordDuplicateWarning := func(vec *vector.Vector, row int) {
+		if !warningsEnabled {
+			return
+		}
+		if !duplicateWarnings.NeedsDiagnostic() {
+			duplicateWarnings.AddCount()
+			return
+		}
+		if vec == nil {
+			duplicateWarnings.AddCount()
+			return
+		}
+		rowStr, err := colexec.FormatDedupEntry(vec, row, hb.DedupColName, hb.DedupColTypes)
+		if err != nil {
+			// IGNORE must preserve its historical data-path semantics even if a
+			// user-facing rendering of a corrupt internal key is unavailable.
+			duplicateWarnings.AddCount()
+			return
+		}
+		duplicateWarnings.Add(
+			moerr.ER_DUP_ENTRY,
+			moerr.NewDuplicateEntry(proc.Ctx, rowStr, hb.DedupColName).Error(),
+		)
+	}
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
 	}
@@ -806,28 +841,10 @@ buildUnits:
 							continue
 						}
 
-						var rowStr string
-						if len(hb.DedupColTypes) == 1 {
-							if hb.DedupColName == catalog.IndexTableIndexColName {
-								if hb.curVecs[0].GetType().Oid == types.T_varchar {
-									t, _, schema, err := types.DecodeTuple(hb.curVecs[0].GetBytesAt(vecIdx2 + k))
-									if err == nil && len(schema) > 1 {
-										rowStr = t.ErrString(make([]int32, len(schema)))
-									}
-								}
-							}
-
-							if len(rowStr) == 0 {
-								rowStr, err = colexec.FormatDedupKey(hb.curVecs[0], vecIdx2+k, hb.DedupColTypes)
-								if err != nil {
-									return err
-								}
-							}
-						} else {
-							rowStr, err = colexec.FormatDedupKey(hb.curVecs[0], vecIdx2+k, hb.DedupColTypes)
-							if err != nil {
-								return err
-							}
+						rowStr, err := colexec.FormatDedupEntry(
+							hb.curVecs[0], vecIdx2+k, hb.DedupColName, hb.DedupColTypes)
+						if err != nil {
+							return err
 						}
 						return moerr.NewDuplicateEntry(proc.Ctx, rowStr, hb.DedupColName)
 					case plan.Node_IGNORE:
@@ -835,11 +852,13 @@ buildUnits:
 							previousRow := ignoreSurvivorRows[v]
 							if previousRow > 0 {
 								hb.IgnoreRows.Add(uint64(previousRow - 1))
+								recordDuplicateWarning(hb.curVecs[0], vecIdx2+k)
 							}
 							ignoreSurvivorRows[v] = int64(i+k) + 1
 							ignoreSurvivorOwnsKey[v] = true
 						} else {
 							hb.IgnoreRows.Add(uint64(i + k))
+							recordDuplicateWarning(hb.curVecs[0], vecIdx2+k)
 						}
 					}
 				} else {

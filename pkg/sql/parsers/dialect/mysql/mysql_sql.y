@@ -422,7 +422,9 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %left <str> '*' '/' DIV '%' MOD
 %left <str> '^'
 %left PIPE_CONCAT
-%right <str> '~' UNARY
+// HIGH_NOT shares the unary precedence used by the `!` production. The lexer
+// emits it only when HIGH_NOT_PRECEDENCE is active.
+%right <str> '~' UNARY HIGH_NOT
 %nonassoc LOWER_THAN_COLLATE
 %left <str> COLLATE
 %left TYPECAST
@@ -709,7 +711,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <statement> create_snapshot_stmt drop_snapshot_stmt
 %type <statement> create_pitr_stmt drop_pitr_stmt show_pitr_stmt alter_pitr_stmt restore_pitr_stmt show_recovery_window_stmt
 %type <str> urlparams
-%type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type
+%type <str> comment_opt view_list_opt view_opt security_opt view_tail check_type ctas_conflict_opt ctas_conflict_required
 %type <str> iceberg_namespace_value iceberg_option_key iceberg_option_value iceberg_ref_name
 %type <subscriptionOption> subscription_opt
 %type <accountsSetOption> alter_publication_accounts_opt create_publication_accounts
@@ -5331,13 +5333,21 @@ global_scope:
 show_warnings_stmt:
     SHOW WARNINGS limit_opt
     {
-        $$ = &tree.ShowWarnings{}
+        $$ = &tree.ShowWarnings{Limit: $3}
+    }
+|   SHOW COUNT '(' '*' ')' WARNINGS
+    {
+        $$ = &tree.ShowWarnings{Count: true}
     }
 
 show_errors_stmt:
     SHOW ERRORS limit_opt
     {
-        $$ = &tree.ShowErrors{}
+        $$ = &tree.ShowErrors{Limit: $3}
+    }
+|   SHOW COUNT '(' '*' ')' ERRORS
+    {
+        $$ = &tree.ShowErrors{Count: true}
     }
 
 show_process_stmt:
@@ -6231,7 +6241,26 @@ merge_when_clause:
             InsertValues: $12,
         }
     }
+|   WHEN HIGH_NOT matched_keyword merge_search_condition_opt THEN INSERT '(' merge_insert_column_list ')' VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MergeClause{
+            Matched: false,
+            Condition: $4,
+            Action: tree.MergeActionInsert,
+            InsertColumns: $8,
+            InsertValues: $12,
+        }
+    }
 |   WHEN NOT matched_keyword merge_search_condition_opt THEN INSERT VALUES '(' expression_list ')'
+    {
+        $$ = &tree.MergeClause{
+            Matched: false,
+            Condition: $4,
+            Action: tree.MergeActionInsert,
+            InsertValues: $9,
+        }
+    }
+|   WHEN HIGH_NOT matched_keyword merge_search_condition_opt THEN INSERT VALUES '(' expression_list ')'
     {
         $$ = &tree.MergeClause{
             Matched: false,
@@ -10052,6 +10081,10 @@ not_exists_opt:
     {
         $$ = true
     }
+|   IF HIGH_NOT EXISTS
+    {
+        $$ = true
+    }
 
 internal_opt:
     {
@@ -10386,6 +10419,15 @@ copy_grants_opt:
         $$ = true
     }
 
+ctas_conflict_opt:
+    /* empty */ { $$ = "" }
+    | IGNORE { $$ = "ignore" }
+    | REPLACE { $$ = "replace" }
+
+ctas_conflict_required:
+    IGNORE { $$ = "ignore" }
+    | REPLACE { $$ = "replace" }
+
 create_table_stmt:
     CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' table_option_list_opt partition_by_opt cluster_by_opt
     {
@@ -10502,34 +10544,25 @@ create_table_stmt:
         t.AsSource = $9
         $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name AS ctas_select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name ctas_conflict_required ctas_select_stmt
     {
-        if intoErr := tree.ValidateSelectIntoNotAllowed($7); intoErr != "" {
-            yylex.Error(intoErr)
-            goto ret1
-        }
-        t := tree.NewCreateTable()
-        t.IsAsSelect = true
-        t.Temporary = $2
-        t.IfNotExists = $4
-        t.Table = *$5
-        t.AsSource = $7
-        $$ = t
+        if intoErr := tree.ValidateSelectIntoNotAllowed($7); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.CTASConflict = $6; t.AsSource = $7; $$ = t
     }
-|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' AS ctas_select_stmt
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' ctas_conflict_required ctas_select_stmt
     {
-        if intoErr := tree.ValidateSelectIntoNotAllowed($10); intoErr != "" {
-            yylex.Error(intoErr)
-            goto ret1
-        }
-        t := tree.NewCreateTable()
-        t.IsAsSelect = true
-        t.Temporary = $2
-        t.IfNotExists = $4
-        t.Table = *$5
-        t.Defs = $7
-        t.AsSource = $10
-        $$ = t
+        if intoErr := tree.ValidateSelectIntoNotAllowed($10); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.CTASConflict = $9; t.AsSource = $10; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name ctas_conflict_opt AS ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($8); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.CTASConflict = $6; t.AsSource = $8; $$ = t
+    }
+|   CREATE temporary_opt TABLE not_exists_opt table_name '(' table_elem_list_opt ')' ctas_conflict_opt AS ctas_select_stmt
+    {
+        if intoErr := tree.ValidateSelectIntoNotAllowed($11); intoErr != "" { yylex.Error(intoErr); goto ret1 }
+        t := tree.NewCreateTable(); t.IsAsSelect = true; t.Temporary = $2; t.IfNotExists = $4; t.Table = *$5; t.Defs = $7; t.CTASConflict = $9; t.AsSource = $11; $$ = t
     }
 |   CREATE temporary_opt TABLE not_exists_opt table_name LIKE table_name
     {
@@ -12194,6 +12227,10 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeNull(false)
     }
+|   HIGH_NOT NULL
+    {
+        $$ = tree.NewAttributeNull(false)
+    }
 |   DEFAULT bit_expr
     {
         $$ = tree.NewAttributeDefault($2)
@@ -12326,6 +12363,10 @@ enforce:
         $$ = true
     }
 |   NOT ENFORCED
+    {
+        $$ = false
+    }
+|   HIGH_NOT ENFORCED
     {
         $$ = false
     }
@@ -12639,6 +12680,10 @@ simple_expr:
 |   '!' simple_expr %prec UNARY
     {
         $$ = tree.NewUnaryExpr(tree.UNARY_MARK, $2)
+    }
+|   HIGH_NOT simple_expr %prec UNARY
+    {
+        $$ = tree.NewNotExpr($2)
     }
 |   '{'  ident expression '}'
     {   
@@ -14013,7 +14058,7 @@ function_call_nonkeyword:
 	{
         name := tree.NewUnresolvedColName($1)
         str := strings.ToLower($3)
-        arg1 := tree.NewNumVal(str, str, false, tree.P_char)
+        arg1 := tree.NewTimeUnitExpr(str)
 		$$ =  &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
@@ -14391,11 +14436,19 @@ boolean_primary:
     {
         $$ = tree.NewIsNotNullExpr($1)
     }
+|   boolean_primary IS HIGH_NOT NULL %prec IS
+    {
+        $$ = tree.NewIsNotNullExpr($1)
+    }
 |   boolean_primary IS UNKNOWN %prec IS
     {
         $$ = tree.NewIsUnknownExpr($1)
     }
 |   boolean_primary IS NOT UNKNOWN %prec IS
+    {
+        $$ = tree.NewIsNotUnknownExpr($1)
+    }
+|   boolean_primary IS HIGH_NOT UNKNOWN %prec IS
     {
         $$ = tree.NewIsNotUnknownExpr($1)
     }
@@ -14407,11 +14460,19 @@ boolean_primary:
     {
         $$ = tree.NewIsNotTrueExpr($1)
     }
+|   boolean_primary IS HIGH_NOT TRUE %prec IS
+    {
+        $$ = tree.NewIsNotTrueExpr($1)
+    }
 |   boolean_primary IS FALSE %prec IS
     {
         $$ = tree.NewIsFalseExpr($1)
     }
 |   boolean_primary IS NOT FALSE %prec IS
+    {
+        $$ = tree.NewIsNotFalseExpr($1)
+    }
+|   boolean_primary IS HIGH_NOT FALSE %prec IS
     {
         $$ = tree.NewIsNotFalseExpr($1)
     }
@@ -14435,6 +14496,10 @@ predicate:
     {
         $$ = tree.NewComparisonExpr(tree.NOT_IN, $1, $4)
     }
+|   bit_expr HIGH_NOT IN col_tuple
+    {
+        $$ = tree.NewComparisonExpr(tree.NOT_IN, $1, $4)
+    }
 |   bit_expr MEMBER opt_of '(' simple_expr ')' %prec IN
     {
         $$ = tree.NewComparisonExpr(tree.MEMBER_OF, $1, $5)
@@ -14447,11 +14512,19 @@ predicate:
     {
         $$ = tree.NewComparisonExprWithEscape(tree.NOT_LIKE, $1, $4, $5)
     }
+|   bit_expr HIGH_NOT LIKE simple_expr like_escape_opt
+    {
+        $$ = tree.NewComparisonExprWithEscape(tree.NOT_LIKE, $1, $4, $5)
+    }
 |   bit_expr ILIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.ILIKE, $1, $3, $4)
     }
 |   bit_expr NOT ILIKE simple_expr like_escape_opt
+    {
+        $$ = tree.NewComparisonExprWithEscape(tree.NOT_ILIKE, $1, $4, $5)
+    }
+|   bit_expr HIGH_NOT ILIKE simple_expr like_escape_opt
     {
         $$ = tree.NewComparisonExprWithEscape(tree.NOT_ILIKE, $1, $4, $5)
     }
@@ -14463,11 +14536,19 @@ predicate:
     {
         $$ = tree.NewComparisonExpr(tree.NOT_REG_MATCH, $1, $4)
     }
+|   bit_expr HIGH_NOT REGEXP bit_expr
+    {
+        $$ = tree.NewComparisonExpr(tree.NOT_REG_MATCH, $1, $4)
+    }
 |   bit_expr BETWEEN bit_expr AND predicate
     {
         $$ = tree.NewRangeCond(false, $1, $3, $5)
     }
 |   bit_expr NOT BETWEEN bit_expr AND predicate
+    {
+        $$ = tree.NewRangeCond(true, $1, $4, $6)
+    }
+|   bit_expr HIGH_NOT BETWEEN bit_expr AND predicate
     {
         $$ = tree.NewRangeCond(true, $1, $4, $6)
     }

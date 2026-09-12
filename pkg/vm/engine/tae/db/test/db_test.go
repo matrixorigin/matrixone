@@ -9458,6 +9458,10 @@ func TestGlobalCheckpoint2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()
+	// Flushing is asynchronous and shares workers with the checkpoint runner;
+	// use the same bounded timeout as checkpoint operations instead of a
+	// load-sensitive four-second deadline.
+	flushTimeoutMS := int(testutil.TestCheckpointTimeout / time.Millisecond)
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	options.WithCheckpointGlobalMinCount(1)(opts)
@@ -9514,7 +9518,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
-	tae.AllFlushExpected(tae.TxnMgr.Now(), 4000)
+	tae.AllFlushExpected(tae.TxnMgr.Now(), flushTimeoutMS)
 
 	forceTS := tae.TxnMgr.Now()
 	err = tae.DB.ForceCheckpoint(ctx, forceTS)
@@ -9555,10 +9559,7 @@ func TestGlobalCheckpoint2(t *testing.T) {
 
 	currTs := tae.TxnMgr.Now()
 	assert.NoError(t, err)
-	// testutils.WaitExpect(5000, func() bool {
-	// 	return tae.AllCheckpointsFinished()
-	// })
-	tae.AllFlushExpected(currTs, 4000)
+	tae.AllFlushExpected(currTs, flushTimeoutMS)
 	forceTS = tae.TxnMgr.Now()
 	err = tae.DB.ForceGlobalCheckpoint(ctx, forceTS, time.Duration(1))
 	require.NoError(t, err)

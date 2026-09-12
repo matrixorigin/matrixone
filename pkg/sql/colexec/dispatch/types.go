@@ -278,6 +278,12 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 				dispatch.ctr.remoteTerminal.Finish(terminalErr)
 			}
 			for _, r := range dispatch.ctr.remoteReceivers {
+				if r != nil && r.TerminalBacked {
+					// The generation terminal above is the only terminal owner.
+					// A legacy Err write here would race the immutable result and
+					// can fill the compatibility channel during cleanup.
+					continue
+				}
 				if r == nil || r.Err == nil {
 					process.WarnPipelineCleanupf(
 						proc,

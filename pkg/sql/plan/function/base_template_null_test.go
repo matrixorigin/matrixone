@@ -27,6 +27,103 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestTernaryStrFixedStrToFixedPreservesNullAndSelectionSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	eval := func(
+		parameters []*vector.Vector,
+		result vector.FunctionResultWrapper,
+		proc *process.Process,
+		length int,
+		selectList *FunctionSelectList,
+	) error {
+		return opTernaryStrFixedStrToFixed[uint64, uint64](
+			parameters,
+			result,
+			proc,
+			length,
+			func(value string, bitmap uint64, definition string) uint64 {
+				return bitmap + uint64(len(value)+len(definition))
+			},
+			selectList,
+		)
+	}
+
+	t.Run("all operands constant", func(t *testing.T) {
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a"}, nil),
+				NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{2}, nil),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"xyz"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{6}, []bool{false}),
+			eval,
+		)
+		succeed, info := caseData.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("operand nulls are merged by row", func(t *testing.T) {
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "b", "c"}, []bool{false, true, false}),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{2, 3, 4}, []bool{false, false, true}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"x", "y", "z"}, []bool{true, false, false}),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 0, 0}, []bool{true, true, true}),
+			eval,
+		)
+		succeed, info := caseData.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("masked rows keep cardinality and are not evaluated", func(t *testing.T) {
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "b", "c"}, nil),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{2, 3, 4}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"x", "y", "z"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{4, 0, 6}, []bool{false, true, false}),
+			eval,
+		).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+		succeed, info := caseData.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("all rows masked", func(t *testing.T) {
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "b"}, nil),
+				NewFunctionTestInput(types.T_uint64.ToType(), []uint64{2, 3}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"x", "y"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 0}, []bool{true, true}),
+			eval,
+		).WithSelectList(&FunctionSelectList{AllNull: true})
+		succeed, info := caseData.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("constant null operand", func(t *testing.T) {
+		caseData := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "b"}, nil),
+				NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{0}, []bool{true}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"x", "y"}, nil),
+			},
+			NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0, 0}, []bool{true, true}),
+			eval,
+		)
+		succeed, info := caseData.Run()
+		require.True(t, succeed, info)
+	})
+}
+
 func TestUnaryFixedToStrConstNullPreservesResultCardinality(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	testCase := NewFunctionTestCase(

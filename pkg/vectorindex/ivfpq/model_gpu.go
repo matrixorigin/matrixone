@@ -64,7 +64,20 @@ type IvfpqModel[B, Q cuvs.VectorType] struct {
 	// under gpu_multi_simulation several ranks alias onto the same physical device
 	// and it holds all of theirs.
 	DeviceComponentBytes map[string]int64
-	MaxCapacity          uint64
+	// HostComponentBytes is what this sub-index keeps in HOST memory once loaded --
+	// ids.bin, the INCLUDE blobs, the quantizer, the bitset: cuvs.PackSizes.Host, the
+	// complement of DeviceComponentBytes. Kept beside it so the cache's byte governor
+	// can charge RAM and VRAM to their own budgets instead of summing two arenas that
+	// are not interchangeable.
+	HostComponentBytes int64
+	MaxCapacity        uint64
+	// idMapCharged records that the delete id-map has already been added to
+	// HostComponentBytes. Deletes reach an index by TWO paths -- this model's own
+	// events during LoadIndex, and the shared cdc_tail replayed afterwards by the
+	// search's loadCdcTail -- and the map is built once for the WHOLE index by
+	// whichever arrives first. Charging per path would double-count it; charging in
+	// only one leaves it uncharged whenever the other is the one that fires.
+	idMapCharged bool
 
 	Idxcfg  vectorindex.IndexConfig
 	NThread uint32
@@ -72,6 +85,12 @@ type IvfpqModel[B, Q cuvs.VectorType] struct {
 
 	Timestamp int64
 	Checksum  string
+
+	// Nrow is the source rows this generation indexes and BuildTS is the transaction
+	// SnapshotTS its content was built from. Both 0 when the metadata row predates the
+	// columns -- read as unknown, never as "empty" or "built at the epoch".
+	Nrow    int64
+	BuildTS int64
 
 	Dirty bool
 	View  bool
@@ -310,6 +329,11 @@ func (idx *IvfpqModel[B, Q]) saveToFile() error {
 			idx.DeviceComponentBytes[name] = sz
 		}
 	}
+	idx.HostComponentBytes = packSizes.Host
+
+	// Record the vector count while the handle is still alive; ToInsertSql needs it for the
+	// metadata row and Destroy below releases the index.
+	idx.Len = int64(idx.Index.Len())
 
 	if err = idx.Index.Destroy(); err != nil {
 		logutil.Errorf("IvfpqModel.saveToFile: Destroy FAILED idx=%s (tar RETAINED at %s): %v", idx.Id, tarPath, err)
@@ -489,7 +513,7 @@ func (idx *IvfpqModel[B, Q]) FetchArtifact(sqlproc *sqlexec.SqlProcess, tblcfg v
 	// with no branch here.
 	spillDir := idx.TmpDir
 	if spillDir == "" && sqlproc != nil && sqlproc.Proc != nil {
-		spillDir = vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService)
+		spillDir = vimemory.HostSpillDir(sqlproc.GetTopContext(), sqlproc.Proc.Base.FileService, sqlproc.GetService())
 	}
 	fp, err = os.CreateTemp(spillDir, "ivfpq")
 	if err != nil {
@@ -722,6 +746,10 @@ func (idx *IvfpqModel[B, Q]) LoadIndex(
 			gi.Destroy()
 			return err
 		}
+		// The map ensure_id_index materialised stays resident for the index's life and the
+		// native claim covering its allocation was already released, so the cache budget only
+		// sees it if it is charged here.
+		idx.chargeIdMap(gi.Len())
 	}
 
 	idx.Index = gi
@@ -836,7 +864,12 @@ func (idx *IvfpqModel[B, Q]) Unload() error {
 
 // LoadMetadata loads IvfpqModel descriptors from the metadata table.
 func LoadMetadata[B, Q cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*IvfpqModel[B, Q], error) {
-	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
+	// The BASE sub-indexes only. The metadata table also holds one row per CDC tail frame
+	// (see vectorindex.TailFrameMetaId); a tail row read here would become a sub-index model
+	// with no tar behind it.
+	sql := fmt.Sprintf("SELECT * FROM %s WHERE %s ORDER BY timestamp ASC",
+		sqlquote.QualifiedIdent(dbname, metatbl),
+		vectorindex.NotTailFrameSQL(catalog.Ivfpq_TblCol_Metadata_Index_Id))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
 		return nil, err
@@ -860,10 +893,64 @@ func LoadMetadata[B, Q cuvs.VectorType](sqlproc *sqlexec.SqlProcess, dbname stri
 			ts := vector.GetFixedAtWithTypeCheck[int64](tsVec, i)
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
 			idx := &IvfpqModel[B, Q]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
+			// nrow and build_ts were appended after the original four columns, and the
+			// metadata table is created per index at CREATE INDEX -- REINDEX rewrites its
+			// rows, not the table -- so an index created before they existed still has four.
+			// Read them only when the batch carries them; absent means unknown.
+			if len(bat.Vecs) > 4 {
+				idx.Nrow = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[4], i)
+			}
+			if len(bat.Vecs) > 5 {
+				idx.BuildTS = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[5], i)
+			}
 			indexes = append(indexes, idx)
 		}
 	}
+
+	var rows, newest int64
+	for _, idx := range indexes {
+		rows += idx.Nrow
+		if idx.BuildTS > newest {
+			newest = idx.BuildTS
+		}
+	}
+	logMetadataProvenance(metatbl, len(indexes), rows, newest)
+
 	return indexes, nil
+}
+
+// logMetadataProvenance reports what the metadata rows say a loaded index is: how many source
+// rows its generations cover, and the newest data version they were built from. build_ts is 0
+// for a generation written before the column existed, and for content with no single source
+// version -- both print as "unknown" rather than as an epoch timestamp.
+//
+// This is the read side of the provenance columns: without it nrow/build_ts are written and
+// never surfaced, and an operator asking "how far behind is this resident index?" has to query
+// the hidden metadata table by hand.
+func logMetadataProvenance(metatbl string, count int, rows, buildTS int64) {
+	if buildTS <= 0 {
+		logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=unknown", metatbl, count, rows)
+		return
+	}
+	logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=%d", metatbl, count, rows, buildTS)
+}
+
+// chargeIdMap adds the delete id-map's host footprint to this sub-index, once.
+//
+// The FIRST replayed delete materialises id_to_index_ for EVERY row of the index and it stays
+// resident for the index's life (cgo/cuvs/index_base.hpp, ensure_id_index). The native side
+// reserves that allocation and releases the claim as soon as it succeeds, so nothing downstream
+// tracks it -- uncharged, the governor evicts against a host figure short by 40 bytes per row.
+//
+// Deletes arrive by two paths and either can be the one that builds the map: this model's own
+// events during LoadIndex, and the SHARED cdc_tail replayed afterwards by the search's
+// loadCdcTail. Both call here; the flag makes the charge exactly once.
+func (idx *IvfpqModel[B, Q]) chargeIdMap(rows uint64) {
+	if idx.idMapCharged || rows == 0 {
+		return
+	}
+	idx.idMapCharged = true
+	idx.HostComponentBytes += int64(rows) * vimemory.HostIDMapBytesPerRow
 }
 
 // ToDeleteSql generates DELETE SQL for storage and metadata tables.

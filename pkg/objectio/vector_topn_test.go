@@ -48,11 +48,13 @@ func TestTopNVectorAppliesDistanceRangeBeforeHeap(t *testing.T) {
 		LowerBound:     1,
 		UpperBoundType: plan.BoundType_INCLUSIVE,
 		UpperBound:     9,
+		Stats:          new(IndexReaderTopStats),
 	}
 	rows, distances, err := TopNVector(context.Background(), nil, entries, top)
 	require.NoError(t, err)
 	require.Equal(t, []int64{1, 2}, rows)
 	require.Equal(t, []float64{4, 9}, distances)
+	require.Equal(t, uint64(5), top.Stats.VectorRowsScored)
 }
 
 func TestTopNVectorNaNRangeSelectsNothing(t *testing.T) {
@@ -69,12 +71,14 @@ func TestTopNVectorNaNRangeSelectsNothing(t *testing.T) {
 		Limit:          1,
 		UpperBoundType: plan.BoundType_INCLUSIVE,
 		UpperBound:     math.NaN(),
+		Stats:          new(IndexReaderTopStats),
 	}
 	rows, distances, err := TopNVector(context.Background(), nil, entries, top)
 	require.NoError(t, err)
 	require.Empty(t, rows)
 	require.Empty(t, distances)
 	require.Empty(t, top.DistHeap)
+	require.Zero(t, top.Stats.VectorRowsScored)
 }
 
 func TestTopNVectorDoesNotMutateSelectedRows(t *testing.T) {

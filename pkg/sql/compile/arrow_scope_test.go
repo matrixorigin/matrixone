@@ -66,7 +66,7 @@ func TestArrowExecutionScopeRequiresPositiveCompileEvidence(t *testing.T) {
 	}
 }
 
-func TestArrowLoadRolloutGateFailsClosedAndSerializesWhenDistributedOff(t *testing.T) {
+func TestArrowLoadRolloutGateAllowsDefaultsAndSerializesWhenDistributedOff(t *testing.T) {
 	param := &tree.ExternParam{
 		ExParamConst: tree.ExParamConst{Format: tree.ARROW, ScanType: tree.INFILE},
 		ExParam:      tree.ExParam{Parallel: true},
@@ -82,17 +82,12 @@ func TestArrowLoadRolloutGateFailsClosedAndSerializesWhenDistributedOff(t *testi
 		context.Background(), config.ParameterUnitKey,
 		config.NewParameterUnit(frontend, nil, nil, nil),
 	)
-	_, err = compile.requireArrowLoadEnabled(param)
-	require.ErrorContains(t, err, "disabled by configuration")
-	frontend.ArrowLoad.Enabled = true
 	settings, err := compile.requireArrowLoadEnabled(param)
 	require.NoError(t, err)
 	require.True(t, settings.Enabled)
-	require.False(t, settings.S3Enabled)
-	require.False(t, settings.DistributedEnabled)
-	serial := arrowParamForRollout(param, settings)
-	require.NotSame(t, param, serial)
-	require.False(t, serial.Parallel)
+	require.True(t, settings.S3Enabled)
+	require.True(t, settings.DistributedEnabled)
+	require.Same(t, param, arrowParamForRollout(param, settings))
 
 	frontend.ArrowLoad.Enabled = false
 	_, err = compile.requireArrowLoadEnabled(param)
@@ -102,7 +97,7 @@ func TestArrowLoadRolloutGateFailsClosedAndSerializesWhenDistributedOff(t *testi
 	frontend.ArrowLoad.DistributedEnabled = false
 	settings, err = compile.requireArrowLoadEnabled(param)
 	require.NoError(t, err)
-	serial = arrowParamForRollout(param, settings)
+	serial := arrowParamForRollout(param, settings)
 	require.NotSame(t, param, serial)
 	require.True(t, param.Parallel, "rollout fallback must not mutate the reusable parser parameter")
 	require.False(t, serial.Parallel)

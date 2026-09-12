@@ -3538,6 +3538,7 @@ func TestConstructBlockPKFilterWithBloomFilter(t *testing.T) {
 type testMembershipFilter struct {
 	hits  []uint8
 	calls int
+	exact bool
 }
 
 func (f *testMembershipFilter) Test([]byte) bool { return true }
@@ -3546,7 +3547,7 @@ func (f *testMembershipFilter) TestVector(*vector.Vector, func(bool, bool, int))
 	return f.hits
 }
 func (f *testMembershipFilter) Valid() bool { return true }
-func (f *testMembershipFilter) Exact() bool { return false }
+func (f *testMembershipFilter) Exact() bool { return f.exact }
 func (f *testMembershipFilter) Free()       {}
 
 func TestConstructBlockPKFilterBloomFailOpen(t *testing.T) {
@@ -3587,6 +3588,24 @@ func TestConstructBlockPKFilterBloomFailOpen(t *testing.T) {
 		require.Equal(t, []int64{0, 1, 2}, result)
 		require.Equal(t, 1, bf.calls)
 	})
+}
+
+func TestConstructBlockPKFilterMarksOnlyExactMembership(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		exact bool
+	}{
+		{name: "approximate"},
+		{name: "exact", exact: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filter, err := ConstructBlockPKFilter(false, BasePKFilter{}, &testMembershipFilter{
+				hits: []uint8{1}, exact: test.exact,
+			})
+			require.NoError(t, err)
+			require.Equal(t, test.exact, filter.ExactMembership)
+		})
+	}
 }
 
 func TestConstructBlockPKFilterIntersectsPrimaryKeyAndBloomFilter(t *testing.T) {

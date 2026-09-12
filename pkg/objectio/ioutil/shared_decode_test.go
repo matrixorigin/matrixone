@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -68,6 +69,19 @@ func (f *fusedDecodeFS) Read(ctx context.Context, v *fileservice.IOVector) error
 }
 
 func TestFusedTopNSelectedDecodeIsolation(t *testing.T) {
+	t.Run("legacy", func(t *testing.T) { testFusedTopNSelectedDecodeIsolation(t, 1) })
+	// The public writer's chunk threshold is 8 MiB. Four vectors at this
+	// dimension are the smallest extension of the existing fixture that crosses
+	// it. Reuse all isolation/failure oracles; tiny-format boundary tests live in
+	// objectio, while this case proves the real fused loader and writer rollout.
+	t.Run("chunked", func(t *testing.T) { testFusedTopNSelectedDecodeIsolation(t, 524289) })
+}
+
+func (f *fusedDecodeFS) DecodeFromBytes(ctx context.Context, v *fileservice.IOVector, data []byte) error {
+	return fileservice.DecodeFromBytes(ctx, f.FileService, v, data)
+}
+
+func testFusedTopNSelectedDecodeIsolation(t *testing.T, dimensions int) {
 	ctx := t.Context()
 	capacity := toml.ByteSize(128 << 10)
 	storage, err := fileservice.NewS3FS(ctx,
@@ -84,9 +98,11 @@ func TestFusedTopNSelectedDecodeIsolation(t *testing.T) {
 		bat.Vecs[i] = vector.NewVec(typs[i])
 	}
 	t.Cleanup(func() { bat.Clean(mp) })
+	values := make([]float32, dimensions)
 	for row := range 4 {
 		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(row), false, mp))
-		require.NoError(t, vector.AppendBytes(bat.Vecs[1], types.ArrayToBytes([]float32{float32(row + 1)}), false, mp))
+		values[0] = float32(row + 1)
+		require.NoError(t, vector.AppendArray(bat.Vecs[1], values, false, mp))
 		require.NoError(t, vector.AppendBytes(bat.Vecs[2], types.ArrayToBytes([]float32{float32(row + 10)}), false, mp))
 	}
 	bat.SetRowCount(4)
@@ -94,13 +110,17 @@ func TestFusedTopNSelectedDecodeIsolation(t *testing.T) {
 	name := objectio.BuildObjectNameWithObjectID(&id)
 	writer, err := objectio.NewObjectWriter(name, fs, 0, []uint16{0, 1, 2}, nil)
 	require.NoError(t, err)
+	writer.SetChunkedColumnPolicy(func() bool { return dimensions > 1 })
 	_, err = writer.Write(bat)
 	require.NoError(t, err)
 	blocks, err := writer.WriteEnd(ctx)
 	require.NoError(t, err)
 	location := objectio.BuildLocation(name, blocks[0].GetExtent(), 4, 0)
-	_, err = objectio.FastLoadObjectMeta(ctx, &location, false, fs)
+	meta, err := objectio.FastLoadObjectMeta(ctx, &location, false, fs)
 	require.NoError(t, err)
+	if dimensions > 1 {
+		require.Equal(t, uint8(compress.Lz4Chunked), meta.MustGetMeta(objectio.SchemaData).GetBlockMeta(0).ColumnMeta(1).Location().Alg())
+	}
 	storage.FlushCache(ctx)
 	pinned := storage.AllocateCacheData(ctx, int(capacity))
 	t.Cleanup(pinned.Release)
@@ -112,8 +132,10 @@ func TestFusedTopNSelectedDecodeIsolation(t *testing.T) {
 		defer missing.Free(pool)
 		defer filter.Free(pool)
 		defer projection.Free(pool)
+		queryValues := make([]float32, dimensions)
+		queryValues[0] = query
 		op := &objectio.IndexReaderTopOp{Typ: types.T_array_float32, MetricType: metric.Metric_L2Distance,
-			NumVec: types.ArrayToBytes([]float32{query}), Limit: 1, UpperBoundType: bound, UpperBound: 4}
+			NumVec: types.ArrayToBytes(queryValues), Limit: 1, UpperBoundType: bound, UpperBound: 4}
 		rows, distances, _, err := LoadColumnsDataIntoAndTopN(ctx,
 			[]uint16{3, 0}, []types.Type{typs[0], typs[0]}, fs, location, []*vector.Vector{missing, filter}, materialize,
 			1, typs[1], []uint16{2}, []types.Type{typs[2]}, []*vector.Vector{projection},

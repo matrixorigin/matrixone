@@ -436,9 +436,9 @@ type ResetParamRefRule struct {
 	// different execute-time overload.
 	preserveRoots        map[*plan.Expr]struct{}
 	validateFunctionArgs func(string, []*Expr) error
-	// specialized is set only when execute-time rebinding changes a function
-	// overload/result type. Literal replacement alone is not enough to require
-	// rebuilding a cached prepared compile.
+	// specialized is set when execute-time rebinding changes the cached plan's
+	// execution semantics, including value-only rewrites whose overload and
+	// result type remain stable.
 	specialized bool
 	// inferTextParamPositions records only the COM_STMT text parameters that may
 	// carry numeric payloads.  Keep this per parameter: enabling inference for
@@ -913,8 +913,20 @@ func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 		return types.Type{}, false
 	}
 	if pos < len(rule.paramValues) {
-		if param, ok := rule.paramValues[pos].(ParamValue); ok && param.HasRuntimeType {
-			return param.RuntimeType, true
+		if param, ok := rule.paramValues[pos].(ParamValue); ok {
+			// SQL EXECUTE values are transported through a text vector, so their
+			// logical source type must drive overload rebinding without becoming
+			// the visible type of a bare result marker.  An explicit RuntimeType
+			// (for protocol values or a latched specialization) remains authoritative;
+			// a SQL source is only a fallback when no such type is present.
+			if param.HasRuntimeType {
+				return param.RuntimeType, true
+			}
+			if !param.IsBinaryProtocol && param.HasSourceType &&
+				(param.SourceType.IsNumeric() || param.SourceType.Oid == types.T_bool ||
+					param.SourceType.Oid == types.T_year) {
+				return param.SourceType, true
+			}
 		}
 	}
 	switch kind {
@@ -1772,6 +1784,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_F:
+		var originalTemporalExpr *Expr
+		if exprImpl.F.Func != nil {
+			switch strings.ToLower(exprImpl.F.Func.GetObjName()) {
+			case "date_add", "date_sub", "str_to_date", "to_date":
+				originalTemporalExpr = DeepCopyExpr(e)
+			}
+		}
 		functionName := ""
 		if exprImpl.F.Func != nil {
 			functionName = exprImpl.F.Func.GetObjName()
@@ -1863,11 +1882,32 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				e, functionName, i, len(exprImpl.F.Args)) {
 				paramPos, hasParamPos = preparedResultParamPosition(arg, functionName)
 			}
+			var preparedCharSource *plan.Expr
+			var hasPreparedCharSource bool
+			if hasParamPos && strings.EqualFold(functionName, "char") {
+				preparedCharSource, hasPreparedCharSource, err = rule.preparedCharSourceExpr(paramPos)
+				if err != nil {
+					return nil, err
+				}
+			}
+			// A non-numeric SQL string variable has no approximate numeric source
+			// expression. CHAR still owns the SQL EXECUTE argument domain: it must
+			// receive the original string so builtInChar can apply MySQL's
+			// non-numeric-prefix -> 0 rule, instead of evaluating the provisional
+			// prepare-time TEXT-to-INT cast (which would return an error).
+			charStringSourceFallback := hasParamPos &&
+				strings.EqualFold(functionName, "char") &&
+				paramPos >= 0 && paramPos < len(rule.sqlExecuteNumericParams) &&
+				rule.sqlExecuteNumericParams[paramPos] == nil &&
+				paramPos < len(rule.sqlExecuteStringBackedParams) &&
+				rule.sqlExecuteStringBackedParams[paramPos] &&
+				paramPos < len(rule.params) && rule.params[paramPos] != nil
 			useSQLExecuteNumericSource := hasParamPos &&
 				preparedFunctionArgUsesSQLExecuteNumericSource(
 					e, functionName, i, len(exprImpl.F.Args)) &&
-				paramPos < len(rule.sqlExecuteNumericParams) &&
-				rule.sqlExecuteNumericParams[paramPos] != nil &&
+				(hasPreparedCharSource || charStringSourceFallback || (paramPos >= 0 &&
+					paramPos < len(rule.sqlExecuteNumericParams) &&
+					rule.sqlExecuteNumericParams[paramPos] != nil)) &&
 				preparedSQLExecuteNumericSourceOwnsResultDomain(
 					functionName, paramPos, rule.sqlExecuteStringBackedParams)
 			sharedControlParam := false
@@ -1915,8 +1955,17 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// SQL user variable's current source domain before descending into
 				// that cast; evaluating it first can reject a valid DECIMAL value
 				// using the overload selected for the initial TEXT marker.
-				source := rule.sqlExecuteNumericParams[paramPos]
-				rewrittenArg = &plan.Expr{Typ: source.Typ, Expr: source.Expr}
+				source := preparedCharSource
+				if source == nil && paramPos >= 0 && paramPos < len(rule.sqlExecuteNumericParams) {
+					source = rule.sqlExecuteNumericParams[paramPos]
+				}
+				if source == nil {
+					// Only CHAR takes this branch. Keep the original TEXT/BINARY
+					// source so its function-specific prefix parser can produce 0
+					// for an invalid numeric string without raising a cast error.
+					source = DeepCopyExpr(rule.params[paramPos])
+				}
+				rewrittenArg = DeepCopyExpr(source)
 			} else {
 				var applyErr error
 				disablePrefix := sharedControlParam && paramPos >= 0 &&
@@ -1946,6 +1995,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if useSQLExecuteNumericSource {
 				needResetFunction = true
 				compareArgTypes = true
+				// The execute-time source may change only an argument literal while
+				// the selected overload and result type remain stable (for example,
+				// the precision argument of `ROUND(decimal, ?)`).  The copied plan still
+				// contains a different value and must be installed for this execute;
+				// functionBindingChanged cannot observe that value-only change.
+				rule.specialized = true
 				// SourceType already represents the SQL value's numeric contract.
 				// Do not also reinterpret the same argument through the text-prefix
 				// specialization selected for comparisons and common-value peers.
@@ -2218,6 +2273,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			rewritten, err := bindPreparedFuncExprImplByPlanExpr(
 				rule.ctx,
+				originalTemporalExpr,
 				exprImpl.F.Func.GetObjName(),
 				boundArgs,
 				stringDomainModes,
@@ -3122,7 +3178,7 @@ func windowHasNumericPrefixDependency(
 }
 
 func preparedSQLExecuteNumericResultConsumer(name string) bool {
-	return preparedNumericResultPolymorphicFunction(name)
+	return preparedNumericResultPolymorphicFunction(name) || strings.EqualFold(name, "char")
 }
 
 func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int) bool {
@@ -3169,10 +3225,83 @@ func preparedSQLExecuteNumericSourceOwnsResultDomain(
 	paramPos int,
 	stringBacked []bool,
 ) bool {
+	// CHAR's prepared marker is deliberately numeric even when SQL EXECUTE
+	// supplies a string-backed user variable. This is different from common
+	// value consumers, where a string source remains the comparison/result
+	// domain. preparedSQLExecuteNumericParamExpr performs the required MySQL
+	// numeric-prefix conversion before CHAR is rebound.
+	if strings.EqualFold(name, "char") {
+		return true
+	}
 	if !preparedSQLExecuteNumericResultConsumer(name) {
 		return true
 	}
 	return paramPos >= 0 && paramPos < len(stringBacked) && !stringBacked[paramPos]
+}
+
+// preparedCharSourceExpr keeps CHAR's two string contracts separate at
+// execute time. SQL EXECUTE and COM_STMT string values are text-backed
+// transport values, but a bare prepared marker in CHAR receives numeric
+// context: a complete integer/DECIMAL lexeme is materialized exactly, while a
+// suffix or a non-numeric value stays on CHAR's integer-prefix parser.
+// This is deliberately CHAR-specific; changing the shared string-to-DOUBLE
+// path would regress ordinary arithmetic and comparison semantics.
+func (rule *ResetParamRefRule) preparedCharSourceExpr(pos int) (*plan.Expr, bool, error) {
+	if pos < 0 || pos >= len(rule.paramValues) || pos >= len(rule.params) {
+		return nil, false, nil
+	}
+	param, ok := rule.paramValues[pos].(ParamValue)
+	if !ok || param.Value == nil {
+		return nil, false, nil
+	}
+
+	if param.HasSourceType && isStringBackedType(param.SourceType) {
+		raw := preparedParamValueText(param)
+		runtimeType, typeOK := PreparedCharSourceTypeFromString(raw)
+		if !typeOK {
+			return DeepCopyExpr(rule.params[pos]), true, nil
+		}
+
+		bound, err := preparedRuntimeParamExpr(rule.ctx, raw, param.IsBin, runtimeType)
+		if err != nil {
+			return nil, false, err
+		}
+		rule.retainRuntimeParamRef(pos, bound)
+		return bound, true, nil
+	}
+
+	comStmtText := param.IsBinaryProtocol &&
+		param.PrepareParamKind == vector.PrepareParamNone &&
+		(param.Value != nil || param.HasRuntimeType)
+	if (param.HasRuntimeType && isStringBackedType(param.RuntimeType)) || comStmtText {
+		raw := preparedParamValueText(param)
+		runtimeType, typeOK := PreparedCharSourceTypeFromString(raw)
+		if !typeOK {
+			// Invalid and suffix-bearing strings must keep CHAR's ordinary
+			// numeric-prefix parser; routing them through the provisional INT64
+			// cast would turn a valid prefix conversion into a strict cast error.
+			return DeepCopyExpr(rule.params[pos]), true, nil
+		}
+		bound, err := preparedRuntimeParamExpr(rule.ctx, raw, param.IsBin, runtimeType)
+		if err != nil {
+			return nil, false, err
+		}
+		rule.retainRuntimeParamRef(pos, bound)
+		return bound, true, nil
+	}
+	return nil, false, nil
+}
+
+func preparedParamValueText(param ParamValue) string {
+	if param.MaterializedValue != "" {
+		return param.MaterializedValue
+	}
+	switch value := param.Value.(type) {
+	case []byte:
+		return string(value)
+	default:
+		return fmt.Sprint(value)
+	}
 }
 
 func preparedFunctionArgUsesSQLExecuteNumericSource(

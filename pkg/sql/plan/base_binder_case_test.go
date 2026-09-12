@@ -64,6 +64,148 @@ func TestPreparedNumericFallbackMetadataSurvivesProtoRoundTrip(t *testing.T) {
 		"prepared numeric provenance must not be encoded as an executor memo id")
 }
 
+func TestTemporalBindingUsesPrivatePreparedProvenance(t *testing.T) {
+	ctx := context.Background()
+	value := makePlan2StringConstExprWithType("2024-02-29 12:34:56.123456")
+	formatParam := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+
+	for _, name := range []string{"str_to_date", "to_date"} {
+		t.Run(name+" dynamic", func(t *testing.T) {
+			bound, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{DeepCopyExpr(value), DeepCopyExpr(formatParam)})
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_datetime), bound.Typ.Id)
+			require.Equal(t, int32(6), bound.Typ.Scale)
+			require.Len(t, bound.GetF().Args, 3)
+			_, overload := function.DecodeOverloadID(bound.GetF().Func.Obj)
+			require.Equal(t, int32(0), overload)
+			original := DeepCopyExpr(bound)
+
+			for _, format := range []string{"%Y-%m-%d", "%H:%i:%s", "%Y-%m-%d %H:%i:%s.%f"} {
+				rebound, err := bindPreparedFuncExprImplByPlanExpr(
+					ctx,
+					bound,
+					name,
+					[]*planpb.Expr{DeepCopyExpr(value), makePlan2StringConstExprWithType(format)},
+					nil,
+				)
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_datetime), rebound.Typ.Id)
+				require.Equal(t, int32(6), rebound.Typ.Scale)
+				require.Len(t, rebound.GetF().Args, 3)
+				_, reboundOverload := function.DecodeOverloadID(rebound.GetF().Func.Obj)
+				require.Equal(t, int32(0), reboundOverload)
+			}
+
+			rule := NewResetParamRefRule(ctx, []*planpb.Expr{makePlan2StringConstExprWithType("%Y-%m-%d")})
+			rewritten, err := rule.ApplyExpr(DeepCopyExpr(bound))
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_datetime), rewritten.Typ.Id)
+			require.Equal(t, int32(6), rewritten.Typ.Scale)
+			require.Len(t, rewritten.GetF().Args, 3)
+			_, reboundOverload := function.DecodeOverloadID(rewritten.GetF().Func.Obj)
+			require.Equal(t, int32(0), reboundOverload)
+			require.True(t, proto.Equal(original, bound), "prepared rebinding must not mutate the cached bound expression")
+		})
+
+		for _, literal := range []struct {
+			format       string
+			wantType     types.T
+			wantScale    int32
+			wantOverload int32
+		}{
+			{format: "%Y-%m-%d", wantType: types.T_date, wantOverload: 1},
+			{format: "%H:%i:%s.%f", wantType: types.T_time, wantScale: 6, wantOverload: 2},
+			{format: "%Y-%m-%d %H:%i:%s.%f", wantType: types.T_datetime, wantScale: 6, wantOverload: 0},
+		} {
+			t.Run(name+" literal "+literal.format, func(t *testing.T) {
+				bound, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{DeepCopyExpr(value), makePlan2StringConstExprWithType(literal.format)})
+				require.NoError(t, err)
+				require.Equal(t, int32(literal.wantType), bound.Typ.Id)
+				require.Equal(t, literal.wantScale, bound.Typ.Scale)
+				require.Len(t, bound.GetF().Args, 3)
+				_, overload := function.DecodeOverloadID(bound.GetF().Func.Obj)
+				require.Equal(t, literal.wantOverload, overload)
+			})
+		}
+
+		t.Run(name+" public internal shape rejected", func(t *testing.T) {
+			_, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
+				DeepCopyExpr(value),
+				makePlan2StringConstExprWithType("%Y-%m-%d"),
+				makePlan2DateConstNullExpr(types.T_date),
+			})
+			require.Error(t, err)
+		})
+	}
+
+	date := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_datetime), Scale: 3}}
+	for _, name := range []string{"date_add", "date_sub"} {
+		t.Run(name+" public internal shape rejected", func(t *testing.T) {
+			_, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
+				DeepCopyExpr(date), makePlan2Int64ConstExprWithType(1), makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
+			})
+			require.Error(t, err)
+		})
+	}
+
+	for _, alias := range []string{"adddate", "subdate"} {
+		t.Run(alias+" normalizes once", func(t *testing.T) {
+			bound, err := BindFuncExprImplByPlanExpr(ctx, alias, []*planpb.Expr{DeepCopyExpr(date), makePlan2Int64ConstExprWithType(1)})
+			require.NoError(t, err)
+			require.Len(t, bound.GetF().Args, 3)
+			require.Equal(t, int32(3), bound.Typ.Scale)
+		})
+	}
+
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_temporal from 'select str_to_date(?, ?)'")
+	require.NoError(t, err)
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	preparedExpr := findPlanFunctionExpr(preparedPlan, "str_to_date")
+	require.NotNil(t, preparedExpr)
+	require.Equal(t, int32(types.T_datetime), preparedExpr.Typ.Id)
+	require.Equal(t, int32(6), preparedExpr.Typ.Scale)
+	require.Len(t, preparedExpr.GetF().Args, 3)
+	preparedPlanCopy := DeepCopyPlan(preparedPlan)
+
+	for _, execution := range []struct {
+		name   string
+		params []any
+	}{
+		{
+			name: "SQL execute",
+			params: []any{
+				ParamValue{Value: "2024-02-29", SourceType: types.T_varchar.ToType(), HasSourceType: true},
+				ParamValue{Value: "%Y-%m-%d", SourceType: types.T_varchar.ToType(), HasSourceType: true},
+			},
+		},
+		{
+			name: "binary execute",
+			params: []any{
+				ParamValue{Value: "2024-02-29 12:34:56.123456", IsBinaryProtocol: true},
+				ParamValue{Value: "%Y-%m-%d %H:%i:%s.%f", IsBinaryProtocol: true},
+			},
+		},
+	} {
+		t.Run(execution.name, func(t *testing.T) {
+			filled, err := FillValuesOfParamsInPlan(ctx, preparedPlan, execution.params)
+			require.NoError(t, err)
+			filledExpr := findPlanFunctionExpr(filled, "str_to_date")
+			require.NotNil(t, filledExpr)
+			require.Equal(t, int32(types.T_datetime), filledExpr.Typ.Id)
+			require.Equal(t, int32(6), filledExpr.Typ.Scale)
+			require.Len(t, filledExpr.GetF().Args, 3)
+			_, overload := function.DecodeOverloadID(filledExpr.GetF().Func.Obj)
+			require.Equal(t, int32(0), overload)
+			require.True(t, proto.Equal(preparedPlanCopy, preparedPlan),
+				"parameter filling must not mutate the cached prepared plan")
+		})
+	}
+}
+
 func TestPreparedBitCountDefaultsToBinaryAndSpecializesNumericValues(t *testing.T) {
 	ctx := context.Background()
 	prepared, err := runOneStmt(NewMockOptimizer(false), t,

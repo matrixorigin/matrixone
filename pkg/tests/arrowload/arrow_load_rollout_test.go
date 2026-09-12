@@ -37,6 +37,8 @@ import (
 // be atomic and bounded.
 func TestArrowLoadRolloutRollbackDrain(t *testing.T) {
 	c := startArrowLoadCluster(t, 1, true, false, false)
+	// Both checks use the same policy; run the gate check before shutdown.
+	t.Run("S3GateDisabled", func(t *testing.T) { testArrowLoadGateS3Disabled(t, c) })
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_rollout")
 	mustExec(t, db, "use arrow_rollout")

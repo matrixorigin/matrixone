@@ -106,6 +106,20 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	return false, s1, s2
 }
 
+// arithmeticTypeCastRule1 applies the fixed coercion rules used by the four
+// arithmetic operators. BIT values are stored and executed as uint64,
+// so pairing BIT with a signed bigint must use the same exact DECIMAL128
+// domain as UINT64 with a signed bigint. Keeping this adjustment here, rather
+// than changing fixedTypeCastRule1, leaves comparison coercion unchanged.
+func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	if s1.Oid == types.T_bit && s2.Oid == types.T_int64 {
+		s1.Oid = types.T_uint64
+	} else if s1.Oid == types.T_int64 && s2.Oid == types.T_bit {
+		s2.Oid = types.T_uint64
+	}
+	return fixedTypeCastRule1(s1, s2)
+}
+
 // a fixed type cast rule for
 //  1. Div
 //  2. IntegerDiv
@@ -225,19 +239,27 @@ func fixedTypeMatchExcept(overloads []overload, inputs []types.Type, excluded in
 	return newCheckResultWithCast(minIndex, castType)
 }
 
-// binTypeMatch keeps numeric inputs on their existing typed overloads and
-// routes MySQL string domains through the prefix-aware string executor. An
-// unresolved parameter is cast to VARCHAR so each execution can retain the
-// normal NULL and runtime string conversion behavior.
+// binTypeMatch keeps the existing integer, float, and string fast paths while
+// routing types whose numeric representation is decided by their runtime
+// vector (including prepared parameters) through the dynamic BIN executor.
+// This is intentionally local to BIN: adding temporal/decimal/BOOL casts to
+// the global implicit-cast table would change overload resolution for unrelated
+// operators.
 func binTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) != 1 || len(overloads) == 0 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
 	stringOverload := -1
+	dynamicOverload := -1
 	for i, ov := range overloads {
 		if len(ov.args) == 1 && ov.args[0] == types.T_varchar {
 			if stringOverload == -1 {
 				stringOverload = i
+			}
+		}
+		if len(ov.args) == 1 && ov.args[0] == types.T_any {
+			if dynamicOverload == -1 {
+				dynamicOverload = i
 			}
 		}
 	}
@@ -245,13 +267,96 @@ func binTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 		return fixedTypeMatch(overloads, inputs)
 	}
 	if inputs[0].Oid == types.T_any {
+		if dynamicOverload >= 0 {
+			return newCheckResultWithSuccess(dynamicOverload)
+		}
 		return newCheckResultWithCast(stringOverload, []types.Type{types.T_varchar.ToType()})
 	}
 	if inputs[0].Oid.IsMySQLString() {
 		return newCheckResultWithSuccess(stringOverload)
 	}
+	if dynamicOverload >= 0 {
+		switch inputs[0].Oid {
+		case types.T_bool,
+			types.T_bit,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256,
+			types.T_date, types.T_datetime, types.T_time, types.T_timestamp,
+			types.T_year:
+			return newCheckResultWithSuccess(dynamicOverload)
+		}
+	}
 
 	return fixedTypeMatchExcept(overloads, inputs, stringOverload)
+}
+
+// fixedTypeMatchWithBoolNumericCast applies MySQL's numeric-context rule for
+// BOOL only to callers that explicitly opt in.  BOOL is intentionally not
+// added to fixedCanImplicitCastRule globally: that table is shared by
+// unrelated functions where changing overload resolution would be a silent
+// compatibility regression (for example string/bit and binary functions).
+//
+// The matcher first resolves BOOL as INT64 so overload ordering remains the
+// same as for an integer literal.  It then returns the selected overload's
+// actual target type, forcing a real BOOL cast at execution time.  This keeps
+// direct BOOL expressions and prepared parameters on the same path while
+// preserving the existing string fallback for functions that do not opt in.
+func fixedTypeMatchWithBoolNumericCast(overloads []overload, inputs []types.Type) checkResult {
+	hasBool := false
+	for _, input := range inputs {
+		if input.Oid == types.T_bool {
+			hasBool = true
+			break
+		}
+	}
+	if !hasBool {
+		return fixedTypeMatch(overloads, inputs)
+	}
+
+	normalized := append([]types.Type(nil), inputs...)
+	for i := range normalized {
+		if normalized[i].Oid == types.T_bool {
+			normalized[i] = types.T_int64.ToType()
+		}
+	}
+
+	matched := fixedTypeMatch(overloads, normalized)
+	if matched.status != succeedMatched && matched.status != succeedWithCast {
+		// Preserve the ordinary checker's behavior when this overload set has a
+		// non-numeric BOOL-compatible path.
+		return fixedTypeMatch(overloads, inputs)
+	}
+
+	selected := overloads[matched.idx]
+	for i, input := range inputs {
+		if input.Oid != types.T_bool {
+			continue
+		}
+		target := selected.args[i]
+		if !target.ToType().IsNumeric() || !IfTypeCastSupported(types.T_bool, target) {
+			return fixedTypeMatch(overloads, inputs)
+		}
+	}
+
+	if matched.status == succeedWithCast {
+		finalTypes := append([]types.Type(nil), matched.finalType...)
+		for i, input := range inputs {
+			if input.Oid == types.T_bool {
+				finalTypes[i] = selected.args[i].ToType()
+				SetTargetScaleFromSource(&normalized[i], &finalTypes[i])
+			}
+		}
+		return newCheckResultWithCast(matched.idx, finalTypes)
+	}
+
+	finalTypes := make([]types.Type, len(inputs))
+	for i, input := range inputs {
+		finalTypes[i] = input
+		if input.Oid == types.T_bool {
+			finalTypes[i] = selected.args[i].ToType()
+			SetTargetScaleFromSource(&normalized[i], &finalTypes[i])
+		}
+	}
+	return newCheckResultWithCast(matched.idx, finalTypes)
 }
 
 // stringDomainFixedTypeMatch keeps every MySQL string input in its original
@@ -438,13 +543,6 @@ func regexpCharsetName(typ types.Type) string {
 	default:
 		return "utf8mb4"
 	}
-}
-
-// collatedTextFixedTypeMatch preserves CHAR/VARCHAR/TEXT metadata, but leaves
-// binary families on ordinary overload casts until their rune-based consumers
-// have byte-preserving kernels.
-func collatedTextFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
-	return stringDomainFixedTypeMatchIf(overloads, inputs, isCollatedTextType)
 }
 
 func stringDomainFixedTypeMatchIf(overloads []overload, inputs []types.Type, preserve func(types.T) bool) checkResult {

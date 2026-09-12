@@ -345,3 +345,60 @@ func TestSharedTestClusterCloseIsTerminal(t *testing.T) {
 	require.Equal(t, 1, initCalls)
 	require.NoError(t, state.Close())
 }
+
+func TestSharedTestClusterCloseIfActiveLeavesUnusedFixtureReusable(t *testing.T) {
+	state := SharedTestCluster{}
+	first := &cluster{}
+	second := &cluster{}
+	initCalls := 0
+
+	// A package may have a specialized cluster before its optional shared suite.
+	// Releasing an unused shared fixture must not make that later suite terminal.
+	require.NoError(t, state.CloseIfActive())
+	state.Run(panicTestReporter{}, func() (Cluster, error) {
+		initCalls++
+		return first, nil
+	}, func(cluster Cluster) {
+		require.Same(t, first, cluster)
+	})
+
+	require.NoError(t, state.CloseIfActive())
+	require.False(t, state.closed)
+	require.Nil(t, state.cluster)
+
+	state.Run(panicTestReporter{}, func() (Cluster, error) {
+		initCalls++
+		return second, nil
+	}, func(cluster Cluster) {
+		require.Same(t, second, cluster)
+	})
+	require.Equal(t, 2, initCalls)
+	require.NoError(t, state.CloseIfActive())
+}
+
+func TestSharedTestClusterCloseIfActiveBlocksReuseAfterFailure(t *testing.T) {
+	closeErr := errors.New("cluster cleanup failed")
+	service := &closeTrackingService{closeErr: closeErr}
+	op := &operator{state: started}
+	op.reset.svc = service
+	value := &cluster{state: started, services: []*operator{op}}
+	state := SharedTestCluster{}
+
+	state.Run(panicTestReporter{}, func() (Cluster, error) {
+		return value, nil
+	}, func(Cluster) {})
+	require.ErrorIs(t, state.CloseIfActive(), closeErr)
+	require.True(t, state.closed)
+	require.Same(t, value, state.cluster)
+	require.PanicsWithValue(t, "shared cluster is closed", func() {
+		state.Run(panicTestReporter{}, func() (Cluster, error) {
+			t.Fatal("initializer must not run while cleanup is incomplete")
+			return nil, nil
+		}, func(Cluster) {})
+	})
+
+	service.closeErr = nil
+	require.NoError(t, state.CloseIfActive())
+	require.False(t, state.closed)
+	require.Nil(t, state.cluster)
+}

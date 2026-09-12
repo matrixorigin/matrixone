@@ -317,6 +317,8 @@ type reader struct {
 
 	// cacheVectors is used for vector reuse
 	cacheVectors containers.Vectors
+
+	explainVectorTopStats *objectio.IndexReaderTopStats
 }
 
 type mergeReader struct {
@@ -590,6 +592,7 @@ func NewReader(
 func (r *reader) Close() error {
 	r.source.Close()
 	r.withFilterMixin.reset()
+	r.explainVectorTopStats = nil
 	if r.cacheVectors.Allocated() > 0 {
 		logutil.Fatal("cache vector is not empty")
 	}
@@ -623,6 +626,7 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 			Limit:        limitValue.U64Val,
 			OrderedLimit: true,
 			Desc:         param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0,
+			Stats:        r.explainVectorTopStats,
 		}
 		return
 	}
@@ -659,6 +663,7 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 		Limit:        limitValue.U64Val,
 		OrderedLimit: false,
 		Desc:         param.OrderBy[0].Flag&plan.OrderBySpec_DESC != 0,
+		Stats:        r.explainVectorTopStats,
 	}
 
 	if param.DistRange != nil {
@@ -702,6 +707,15 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 	// Avoid eager O(limit) allocation; blockio grows the heap as rows are accepted.
 	indexTop.DistHeap = nil
 	r.orderByLimit = indexTop
+}
+
+// SetExplainVectorTopStats installs a query-local collector. The reader owns no
+// reference to it beyond Close and performs all updates synchronously.
+func (r *reader) SetExplainVectorTopStats(stats *objectio.IndexReaderTopStats) {
+	r.explainVectorTopStats = stats
+	if r.orderByLimit != nil {
+		r.orderByLimit.Stats = stats
+	}
 }
 
 // squareL2BoundOutward keeps the squared-distance storage gate a superset of
@@ -962,6 +976,9 @@ func (r *reader) read(
 			}
 		}
 		return false, false, nil
+	}
+	if r.explainVectorTopStats != nil {
+		r.explainVectorTopStats.BlocksRead++
 	}
 	//read block
 	filter := r.withFilterMixin.filterState.filter

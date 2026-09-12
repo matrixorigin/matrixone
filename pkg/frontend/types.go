@@ -294,13 +294,16 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
-	Name            string
-	Sql             string
-	PreparePlan     *plan.Plan
-	PrepareStmt     tree.Statement
-	NativeMode      bool
-	OnlyFullGroupBy bool
-	BoolSumAvg      bool
+	// Monotonic high-water mark for GROUP_CONCAT across this prepared lifetime,
+	// including executions whose AP or specialization path discards the compile.
+	groupConcatMaxLenFloor uint64
+	Name                   string
+	Sql                    string
+	PreparePlan            *plan.Plan
+	PrepareStmt            tree.Statement
+	NativeMode             bool
+	OnlyFullGroupBy        bool
+	BoolSumAvg             bool
 	// sqlModeFlagsSet distinguishes captured disabled modes (OnlyFullGroupBy,
 	// BoolSumAvg) from legacy or minimal in-memory fixtures that predate these
 	// plan dependencies.
@@ -361,16 +364,11 @@ type PrepareStmt struct {
 	hasPaginationParams        bool
 	hasLagLeadParams           bool
 	paramKinds                 []vector.PrepareParamKind
+	paramBinaryStrings         []bool
 	paramMetadata              []bool
-	// paramBinaryStrings is statement-owned backing storage for the optional
-	// per-execution BLOB domain sidecar. It remains available across executions
-	// so a BLOB/non-BLOB transition does not allocate or retain stale flags.
-	paramBinaryStrings []bool
 	// jsonComparisonParamPositions is computed once per prepared-plan
-	// generation for generic JSON comparison adapters and EXECUTE USING
-	// metadata. jsonMemberOfParamPositions is the narrower set that may use
-	// exact binary-protocol SQL domains; paramConcreteTypes is a reusable
-	// execution buffer.
+	// generation. Only these parameters need an exact SQL type in Process
+	// metadata; paramConcreteTypes is a reusable execution buffer.
 	jsonComparisonParamPositions []int32
 	jsonMemberOfParamPositions   []int32
 	paramConcreteTypes           []types.T
@@ -389,10 +387,14 @@ type PrepareStmt struct {
 	// belongs to the current prepared-plan generation. A zero entry means that
 	// the corresponding BIT_COUNT marker has not observed a numeric value.
 	bitCountNumericParamTypes []types.Type
+	// conversionParamPositions identifies BIN/CONV value markers once per
+	// prepared-plan generation. SQL EXECUTE uses it to restore the variable's
+	// concrete domain without walking the plan for every execution.
+	conversionParamPositions []int32
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
-	// ParamRefs rather than the preceding execution's literals. Only TP plans
-	// retain a compile; AP plans rebuild statement-owned scan state and topology.
+	// ParamRefs, so equivalent values reuse the compile without embedding the
+	// preceding execution's literal.
 	runtimeSpecializationKey string
 	runtimePlan              *plan.Plan
 	runtimeCompile           *compile.Compile
@@ -815,10 +817,8 @@ func (prepareStmt *PrepareStmt) installRuntimeSpecializationCache(
 	runtimeCompile *compile.Compile,
 ) *compile.Compile {
 	oldRuntimeCompile := prepareStmt.runtimeCompile
-	// Match compileQuery's prepare-time eligibility: AP scopes contain
-	// execution-specific placement and scan state that Reset cannot rebuild.
-	// Keep the specialized logical plan, but leave the AP compile with its
-	// ordinary statement owner for execution and release.
+	// AP scopes contain execution-specific placement and scan state. Cache only
+	// the specialized logical plan and leave the AP compile statement-owned.
 	if runtimeCompile != nil && !runtimeCompile.IsTpQuery() {
 		runtimeCompile = nil
 	}
@@ -875,7 +875,6 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
-	prepareStmt.paramBinaryStrings = nil
 	prepareStmt.remapDb = nil
 }
 
@@ -1131,6 +1130,13 @@ type ExecCtx struct {
 	// singleStatementQuery is true only for a raw COM_QUERY containing one
 	// statement, which is the only input the proxy records for raw replay.
 	singleStatementQuery bool
+	// diagnosticCountsSnapshot holds the two values exposed to diagnostic
+	// system-variable expressions while this statement is being evaluated.
+	// The live diagnostic records are still reset normally at the statement
+	// boundary; only these scalar inputs survive that reset.
+	diagnosticCountsSnapshotSet    bool
+	diagnosticWarningCountSnapshot uint64
+	diagnosticErrorCountSnapshot   uint64
 	// tenant name
 	tenant          string
 	userName        string
@@ -1176,6 +1182,40 @@ func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
 		execCtx.effectiveTxnDefaultDatabase = input.preparedDefaultDatabase
 	}
 	execCtx.persistentDropTableTargets = nil
+	execCtx.clearDiagnosticCountsSnapshot()
+}
+
+func (execCtx *ExecCtx) captureDiagnosticCountsSnapshot(ses *Session) {
+	if execCtx == nil || ses == nil {
+		return
+	}
+	warningCount, errorCount := ses.diagnosticsCounts()
+	execCtx.diagnosticWarningCountSnapshot = warningCount
+	execCtx.diagnosticErrorCountSnapshot = errorCount
+	execCtx.diagnosticCountsSnapshotSet = true
+}
+
+func (execCtx *ExecCtx) clearDiagnosticCountsSnapshot() {
+	if execCtx == nil {
+		return
+	}
+	execCtx.diagnosticCountsSnapshotSet = false
+	execCtx.diagnosticWarningCountSnapshot = 0
+	execCtx.diagnosticErrorCountSnapshot = 0
+}
+
+func (execCtx *ExecCtx) diagnosticCountSnapshot(name string) (uint64, bool) {
+	if execCtx == nil || !execCtx.diagnosticCountsSnapshotSet {
+		return 0, false
+	}
+	switch strings.ToLower(name) {
+	case warningCountSystemVariable:
+		return execCtx.diagnosticWarningCountSnapshot, true
+	case errorCountSystemVariable:
+		return execCtx.diagnosticErrorCountSnapshot, true
+	default:
+		return 0, false
+	}
 }
 
 func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
@@ -1206,6 +1246,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.implicitCommitBefore = false
 	execCtx.persistentDropTableTargets = nil
 	execCtx.singleStatementQuery = false
+	execCtx.clearDiagnosticCountsSnapshot()
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""
@@ -1732,6 +1773,13 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	if _, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
 	}
+	if name == warningCountSystemVariable || name == errorCountSystemVariable {
+		warningCount, errorCount := ses.diagnosticsCounts()
+		if name == warningCountSystemVariable {
+			return warningCount, nil
+		}
+		return errorCount, nil
+	}
 
 	// init SystemVariables GlobalSysVarsMgr need to read table, read table need to use SessionSysVar
 	// when ses.sesSysVars is nil
@@ -1774,10 +1822,14 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	oldMatrixOneNative := false
 	oldOnlyFullGroupBy := false
 	oldBoolSumAvg := false
+	oldHighNotPrecedence := false
+	oldParserFlags := mysql.SQLModeFlags(0)
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
 		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
+		oldHighNotPrecedence = ses.sqlModeHasHighNotPrecedence()
+		oldParserFlags = ses.sqlModeParserFlags()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1837,7 +1889,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldParserFlags, val)
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {

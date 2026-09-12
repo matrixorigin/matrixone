@@ -603,6 +603,10 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		expr.folded = true
 		expr.foldedNull = true
 		if params := proc.GetPrepareParams(); params != nil {
+			if err = expr.null.SetRuntimeStringDomainWithMP(
+				params.GetRuntimeStringDomainAt(expr.pos), proc.Mp()); err != nil {
+				return nil, err
+			}
 			if err = expr.null.SetStringSource(params.GetStringSourceAt(expr.pos)); err != nil {
 				return nil, err
 			}
@@ -620,7 +624,17 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 	if err == nil {
 		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
-		expr.vec.SetIsBinaryString(proc.GetPrepareParamIsBinaryString(expr.pos))
+		runtimeDomain := types.RuntimeStringInherit
+		if params := proc.GetPrepareParams(); params != nil {
+			runtimeDomain = params.GetRuntimeStringDomainAt(expr.pos)
+		}
+		if runtimeDomain == types.RuntimeStringInherit && proc.GetPrepareParamIsBinaryString(expr.pos) {
+			runtimeDomain = types.RuntimeStringBinary
+		}
+		err = expr.vec.SetRuntimeStringDomainWithMP(runtimeDomain, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 		expr.vec.SetPrepareParamKind(proc.GetPrepareParamKind(expr.pos))
 		if params := proc.GetPrepareParams(); params != nil {
 			err = expr.vec.SetStringSource(params.GetStringSourceAt(expr.pos))
@@ -720,9 +734,9 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
-	isBinaryString := false
-	if resolveBinaryString := proc.GetResolveVariableBinaryStringFunc(); resolveBinaryString != nil {
-		isBinaryString, err = resolveBinaryString(expr.name, expr.system, expr.global)
+	runtimeDomain := types.RuntimeStringInherit
+	if resolveStringDomain := proc.GetResolveVariableStringDomainFunc(); resolveStringDomain != nil {
+		runtimeDomain, err = resolveStringDomain(expr.name, expr.system, expr.global)
 		if err != nil {
 			return nil, err
 		}
@@ -743,7 +757,10 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		}
 		if err == nil {
 			expr.null.SetIsBin(isBin)
-			expr.null.SetIsBinaryString(isBinaryString)
+			err = expr.null.SetRuntimeStringDomainWithMP(runtimeDomain, proc.Mp())
+			if err != nil {
+				return nil, err
+			}
 			expr.null.SetPrepareParamKind(prepareParamKind)
 			err = expr.null.SetStringSource(types.StringSourceUserVariable)
 			expr.null.SetLength(rowCount)
@@ -778,7 +795,10 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	}
 	if err == nil {
 		expr.vec.SetIsBin(isBin)
-		expr.vec.SetIsBinaryString(isBinaryString)
+		err = expr.vec.SetRuntimeStringDomainWithMP(runtimeDomain, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 		expr.vec.SetPrepareParamKind(prepareParamKind)
 		err = expr.vec.SetStringSource(types.StringSourceUserVariable)
 		expr.vec.SetLength(rowCount)
@@ -2255,15 +2275,13 @@ func EvaluateFilterByZoneMap(
 // zoneMapInVector decodes an IN / prefix_in payload for zone-map pruning and
 // reports whether it may be used to prune.
 //
-// What each consumer needs differs:
-//   - ZM.PrefixIn always binary-searches the physical varlena slots and never
-//     consults the null bitmap, so it needs the physical order to be ascending.
-//   - ZM.AnyIn binary-searches too, except when the payload carries NULLs, where
-//     it falls back to anyInNullableVec -- a linear scan that ignores order.
+// ZM.PrefixIn scans linearly, so prefix payload ordering does not affect
+// correctness. ZM.AnyIn binary-searches, except when the payload carries NULLs,
+// where it falls back to anyInNullableVec and order does not matter.
 //
-// An out-of-order payload makes the search probe the wrong element and silently
-// drop blocks that hold matching rows, so it must not prune at all: keeping a
-// block is always safe.
+// For AnyIn, an out-of-order payload makes the search probe the wrong element
+// and silently drop blocks that hold matching rows, so it must not prune at all:
+// keeping a block is always safe.
 //
 // Normalizing here is not an option. EvaluateFilterByZoneMap frees its vector
 // cache on every call, and disttae calls it once per object and again for each
@@ -2277,11 +2295,19 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 	if vec.IsConst() {
 		return vec, true
 	}
+	if prefixSearch {
+		// PrefixIn is defined on physical varlena bytes and does not require
+		// producer ordering.
+		if vec.GetType().Oid.IsArrayRelate() || !vec.GetType().IsVarlen() {
+			return nil, false
+		}
+		return vec, true
+	}
 	if !prefixSearch && vec.GetNulls().Any() {
 		// AnyIn scans linearly for these, so order does not matter.
 		return vec, true
 	}
-	if zoneMapInVectorOrderIsKnown(vec, prefixSearch) {
+	if zoneMapInVectorOrderIsKnown(vec) {
 		return vec, true
 	}
 	return nil, false
@@ -2310,18 +2336,14 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 // Failing open only costs pruning. Trusting an unverified order costs rows:
 // needles [30,10] against a block zonemap [5,15] make AnyIn's binary search probe
 // 30, answer false, and drop a block holding the matching needle 10.
-func zoneMapInVectorOrderIsKnown(vec *vector.Vector, prefixSearch bool) bool {
+func zoneMapInVectorOrderIsKnown(vec *vector.Vector) bool {
 	oid := vec.GetType().Oid
 	if oid.IsArrayRelate() {
-		// PrefixIn compares physical bytes and is not defined for array values.
 		// AnyIn supports float32/float64 arrays with ArrayCompare, so only the
 		// comparator-consistent flag produced by InplaceSort or
 		// InplaceSortAndCompact proves
 		// their order. Narrow arrays currently fail open in AnyIn and stay
 		// conservative here regardless of their metadata.
-		if prefixSearch {
-			return false
-		}
 		if vec.Length() < 2 {
 			return true
 		}
@@ -2348,21 +2370,9 @@ func zoneMapInVectorOrderIsKnown(vec *vector.Vector, prefixSearch bool) bool {
 		return false
 	}
 
-	// The flag alone is not enough for a prefix search, so this walks even when it
-	// is set: PrefixIn's search predicate is non-monotonic whenever one needle is a
-	// proper byte-prefix of another, and InplaceSortAndCompact will happily flag
-	// such a payload. Ascending ["a","ab"] against a zone map ["az","c"] makes the
-	// predicate read [true,false]; sort.Search runs off the end and prunes a block
-	// that "a" matches. Checking adjacent pairs suffices: if one needle is a proper
-	// prefix of a later one, every needle between them carries that prefix too.
-	// This is a guard, not the fix -- #27817 tracks PrefixIn itself, and closing it
-	// makes this branch removable.
 	checkOrder := !vec.GetSorted()
-	if !checkOrder && !prefixSearch {
-		// Flagged, and no prefix search to second-guess the flag: nothing to verify.
-		// Without this the walk below runs to completion doing nothing, once per
-		// zone map, for every flagged varlen IN payload -- which is what
-		// ConstructInExpr now publishes on the transfer path.
+	if !checkOrder {
+		// The producer's sorted flag is authoritative for AnyIn.
 		return true
 	}
 	col, area := vector.MustVarlenaRawData(vec)
@@ -2370,9 +2380,6 @@ func zoneMapInVectorOrderIsKnown(vec *vector.Vector, prefixSearch bool) bool {
 	for i := 1; i < len(col); i++ {
 		cur := col[i].GetByteSlice(area)
 		if checkOrder && bytes.Compare(prev, cur) > 0 {
-			return false
-		}
-		if prefixSearch && len(prev) < len(cur) && bytes.HasPrefix(cur, prev) {
 			return false
 		}
 		prev = cur
@@ -2411,6 +2418,14 @@ func GetExprZoneMap(
 
 			// Some expressions need to be handled specifically
 			switch t.F.Func.ObjName {
+			case "round", "truncate":
+				// Precision endpoints do not bound ROUND's interior extrema or
+				// TRUNCATE's sign-dependent precision direction. Only derive a
+				// range when precision is independent of the row value.
+				if len(args) > 1 && !isConst(args[1]) {
+					zms[expr.AuxId].Reset()
+					return zms[expr.AuxId]
+				}
 			case "isnull", "is_null":
 				switch exprImpl := args[0].Expr.(type) {
 				case *plan.Expr_Col:
