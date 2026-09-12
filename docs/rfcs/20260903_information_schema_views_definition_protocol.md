@@ -12,7 +12,7 @@
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through parser-aware metadata functions. The functions
 are new distributed plan functions (IDs 579 and 580), so the catalog contract is fenced by MORPC
-v66.
+v67.
 
 ## Problem and invariant
 
@@ -34,17 +34,17 @@ the stored statement using its persisted SQL mode and identifier-case settings.
 This bounded, side-effect-free fallback avoids a second SQL regexp lexer and
 does not depend on background recovery.
 
-MORPC v66 is allocated as `MORPCLatestVersion + 1` from official main v65,
-which is assigned to the signed INT ASCII result contract. It is specific to
+MORPC v67 is allocated as `MORPCLatestVersion + 1` from official main v66,
+which is assigned to the GROUP_CONCAT source-row diagnostics contract. It is specific to
 these functions and the persisted VIEWS definition. The v4.0.6 VIEWS upgrade
-waits for common v66. New tenant initialization at v65 or below installs the
-predecessor VIEWS DDL, which has no function reference; v66 installs the new
+waits for common v67. New tenant initialization at v66 or below installs the
+predecessor VIEWS DDL, which has no function reference; v67 installs the new
 DDL. Pipeline preparation, remote
 marshal, and remote unmarshal reject a pipeline containing either function ID
-below v66. The receiver check protects stale prepared work as well as normal
-sender dispatch. Before admitting any v65-or-earlier CN during rollback,
+below v67. The receiver check protects stale prepared work as well as normal
+sender dispatch. Before admitting any v66-or-earlier CN during rollback,
 operators must restore `InformationSchemaViewsLegacyDDL` and wait for that
-catalog change to converge; merely draining v66-dependent requests is not
+catalog change to converge; merely draining v67-dependent requests is not
 sufficient because the new persisted view text references the function. The
 new JSON fields are additive and old binaries keep treating them as unknown.
 
@@ -54,7 +54,7 @@ Keeping raw SQL regexp extraction was rejected because it repeatedly diverged
 from the SQL lexer for comments and quoted strings. Eagerly rewriting every
 legacy row was rejected because the existing recovery lifecycle is deliberately
 inactive and a metadata read must not perform unbounded catalog writes. Allowing
-the DDL before v66 was rejected because an old CN cannot bind the metadata functions.
+the DDL before v67 was rejected because an old CN cannot bind the metadata functions.
 
 ## Bounds, security, and operations
 
@@ -69,10 +69,10 @@ NotSupported error rather than returning wrong metadata.
 
 Focused parser/function tests cover current and legacy definitions, quoted and
 commented inputs, malformed rows, frozen wildcard expansion, and CHECK OPTION.
-Protocol tests cover the v65 predecessor rejection and v66 acceptance at
-prepare, sender, and receiver boundaries. System-view tests prove v65 tenant
-initialization uses the predecessor DDL and v66 uses the parser-derived DDL;
-upgrade tests prove the VIEWS entry requires v66. The predecessor-init test is
+Protocol tests cover the v66 predecessor rejection and v67 acceptance at
+prepare, sender, and receiver boundaries. System-view tests prove v66 tenant
+initialization uses the predecessor DDL and v67 uses the parser-derived DDL;
+upgrade tests prove the VIEWS entry requires v67. The predecessor-init test is
 also the rollback guard: it proves that the restoration target has no function
 reference before an older CN is admitted.
 
