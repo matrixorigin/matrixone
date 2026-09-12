@@ -425,15 +425,25 @@ func SubVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vect
 	return nil
 }
 
-func StringSingle(val []byte) uint8 {
+func StringSingle(val []byte) int32 {
 	if len(val) == 0 {
 		return 0
 	}
-	return val[0]
+	return int32(val[0])
 }
 
 func AsciiString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return opUnaryBytesToFixed[uint8](ivecs, result, proc, length, func(v []byte) uint8 {
+	// The overload IDs are part of the serialized plan contract. During a
+	// rolling upgrade an old plan can still carry the historical UINT8 result
+	// type, even though new plans advertise INT32. Keep the old wrapper
+	// executable on a new binary; the remote protocol fence prevents the
+	// reverse direction (a new INT32 plan sent to an old worker).
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return opUnaryBytesToFixed[uint8](ivecs, result, proc, length, func(v []byte) uint8 {
+			return uint8(StringSingle(v))
+		}, selectList)
+	}
+	return opUnaryBytesToFixed[int32](ivecs, result, proc, length, func(v []byte) int32 {
 		return StringSingle(v)
 	}, selectList)
 }
@@ -483,9 +493,9 @@ var (
 	uints = []uint64{1e16, 1e8, 1e4, 1e2, 1e1}
 )
 
-func IntSingle[T types.Ints](val T, start int) uint8 {
+func IntSingle[T types.Ints](val T, start int) int32 {
 	if val < 0 {
-		return '-'
+		return int32('-')
 	}
 	i64Val := int64(val)
 	for _, v := range ints[start:] {
@@ -493,31 +503,41 @@ func IntSingle[T types.Ints](val T, start int) uint8 {
 			i64Val /= v
 		}
 	}
-	return uint8(i64Val) + '0'
+	return int32(i64Val) + '0'
 }
 
 func AsciiInt[T types.Ints](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	start := intStartMap[ivecs[0].GetType().Oid]
 
-	return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+			return uint8(IntSingle[T](v, start))
+		}, selectList)
+	}
+	return opUnaryFixedToFixed[T, int32](ivecs, result, proc, length, func(v T) int32 {
 		return IntSingle[T](v, start)
 	}, selectList)
 }
 
-func UintSingle[T types.UInts](val T, start int) uint8 {
+func UintSingle[T types.UInts](val T, start int) int32 {
 	u64Val := uint64(val)
 	for _, v := range uints[start:] {
 		if u64Val >= v {
 			u64Val /= v
 		}
 	}
-	return uint8(u64Val) + '0'
+	return int32(u64Val) + '0'
 }
 
 func AsciiUint[T types.UInts](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	start := intStartMap[ivecs[0].GetType().Oid]
 
-	return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+			return uint8(UintSingle[T](v, start))
+		}, selectList)
+	}
+	return opUnaryFixedToFixed[T, int32](ivecs, result, proc, length, func(v T) int32 {
 		return UintSingle[T](v, start)
 	}, selectList)
 }
