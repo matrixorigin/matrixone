@@ -3979,6 +3979,101 @@ func TestRemoteVarianceUsesLegacyStateBeforeProtocolV35(t *testing.T) {
 	require.False(t, useLegacyVarianceStateForRemote(proc))
 }
 
+func TestDecimalSumUsesLegacyStateBeforeProtocolV67(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	// The coordinator-side MergeGroup is intentionally gated too; it can read
+	// a partial emitted by an older CN even though its process is not remote.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion66)
+	require.True(t, useLegacyDecimalSumState(proc))
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	require.True(t, useLegacyDecimalSumState(proc))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion67)
+	require.False(t, useLegacyDecimalSumState(proc))
+}
+
+func TestRemoteFinalDecimalSumPreservesOldCoordinatorResult(t *testing.T) {
+	tests := []struct {
+		name      string
+		param     types.Type
+		appendOne func(*vector.Vector, *mpool.MPool) error
+	}{
+		{
+			name:  "wide decimal64",
+			param: types.New(types.T_decimal64, 18, 0),
+			appendOne: func(vec *vector.Vector, mp *mpool.MPool) error {
+				return vector.AppendFixed(vec, types.Decimal64(1), false, mp)
+			},
+		},
+		{
+			name:  "decimal128",
+			param: types.New(types.T_decimal128, 38, 0),
+			appendOne: func(vec *vector.Vector, mp *mpool.MPool) error {
+				return vector.AppendFixed(vec, types.Decimal128FromInt64(1), false, mp)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, protocol := range []struct {
+				name    string
+				version int64
+				want    types.T
+			}{
+				{name: "old coordinator v66", version: defines.MORPCVersion66, want: types.T_decimal128},
+				{name: "new coordinator v67", version: defines.MORPCVersion67, want: types.T_decimal256},
+			} {
+				t.Run(protocol.name, func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+					rt := moruntime.ServiceRuntime(proc.GetService())
+					previous, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, protocol.version)
+
+					input := batch.NewWithSize(1)
+					input.Vecs[0] = vector.NewVec(test.param)
+					require.NoError(t, test.appendOne(input.Vecs[0], proc.Mp()))
+					input.SetRowCount(1)
+					child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+					arg := &plan.Expr{
+						Typ:  plan.Type{Id: int32(test.param.Oid), Width: test.param.Width, Scale: test.param.Scale},
+						Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+					}
+					group := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
+						aggexec.MakeAggFunctionExpression(aggexec.AggIdOfSum, false, []*plan.Expr{arg}, nil),
+					})
+					group.AppendChild(child)
+					t.Cleanup(func() {
+						group.Free(proc, false, nil)
+						child.Free(proc, false, nil)
+						proc.Free()
+						rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+					})
+
+					require.NoError(t, group.Prepare(proc))
+					require.True(t, group.ctr.legacyDecimalSumState == (protocol.version < defines.MORPCVersion67))
+					require.True(t, group.ctr.legacyDecimalSumResult == (protocol.version < defines.MORPCVersion67))
+					outputs := collectBatches(t, group, proc)
+					require.Len(t, outputs, 1)
+					require.Len(t, outputs[0].Vecs, 1)
+					require.Equal(t, protocol.want, outputs[0].Vecs[0].GetType().Oid)
+					switch protocol.want {
+					case types.T_decimal128:
+						require.Equal(t, "1", vector.GetFixedAtNoTypeCheck[types.Decimal128](outputs[0].Vecs[0], 0).Format(0))
+					case types.T_decimal256:
+						require.Equal(t, "1", vector.GetFixedAtNoTypeCheck[types.Decimal256](outputs[0].Vecs[0], 0).Format(0))
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestGroupConcatSourceRowProtocolGates(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

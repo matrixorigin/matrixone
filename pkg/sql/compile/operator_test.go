@@ -421,6 +421,106 @@ func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 	require.Equal(t, aggexec.EncodeOrderedPercentileConfig([]byte("0"), false), config)
 }
 
+func TestConstructAggregateConfigPreparedPercentile(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("0.25"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+	proc.SetPrepareParams(params)
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	for _, tc := range []struct {
+		name string
+		want []byte
+	}{
+		{name: plan2.NameApproxPercentile, want: []byte("0.25")},
+		{name: plan2.NamePercentileCont, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.25"), false)},
+		{name: plan2.NamePercentileDisc, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.25"), false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			percentile := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}
+			bound, err := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), tc.name, []*plan.Expr{value, percentile})
+			require.NoError(t, err)
+			args, config := constructAggregateConfig(bound.GetF(), proc)
+			require.Equal(t, []*plan.Expr{value}, args)
+			require.Equal(t, tc.want, config)
+		})
+	}
+}
+
+func TestPreflightPercentileConfigsReturnsPreparedValueError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	for _, test := range []struct {
+		name       string
+		function   string
+		descending bool
+		wantConfig []byte
+	}{
+		{name: "ordinary approx", function: plan2.NameApproxPercentile, wantConfig: []byte("0.25")},
+		{name: "ordered approx descending", function: plan2.NameApproxPercentile, descending: true, wantConfig: []byte("0.75")},
+		{name: "continuous", function: plan2.NamePercentileCont},
+		{name: "discrete", function: plan2.NamePercentileDisc},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			percentile := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}
+			bound, err := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), test.function,
+				[]*plan.Expr{value, percentile})
+			require.NoError(t, err)
+			if test.descending {
+				bound.GetF().AggConfig = []byte{1}
+			}
+			node := &plan.Node{AggList: []*plan.Expr{bound}}
+
+			check := func(param []byte, isNull bool) error {
+				params := vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, param, isNull, proc.Mp()))
+				proc.SetPrepareParams(params)
+				baseline := proc.Mp().CurrNB()
+				err := preflightPercentileConfigs(node, proc)
+				require.Equal(t, baseline, proc.Mp().CurrNB(),
+					"preflight evaluation must release its temporary vector")
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+				return err
+			}
+
+			err = check([]byte("1.5"), false)
+			require.ErrorContains(t, err,
+				"percentile argument of "+test.function+" must be finite and in [0,1]")
+			err = check(nil, true)
+			require.ErrorContains(t, err,
+				"percentile argument of "+test.function+" cannot be NULL")
+
+			params := vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(params, []byte("0.25"), false, proc.Mp()))
+			proc.SetPrepareParams(params)
+			baseline := proc.Mp().CurrNB()
+			require.NoError(t, preflightPercentileConfigs(node, proc),
+				"the same prepared aggregate must remain reusable after rejected executions")
+			require.Equal(t, baseline, proc.Mp().CurrNB())
+			if test.wantConfig != nil {
+				_, config, configErr := constructApproxPercentileConfig(bound.GetF(), proc)
+				require.NoError(t, configErr)
+				require.Equal(t, test.wantConfig, config)
+				require.Equal(t, baseline, proc.Mp().CurrNB())
+			}
+			proc.SetPrepareParams(nil)
+			params.Free(proc.Mp())
+		})
+	}
+}
+
 func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -825,7 +925,7 @@ func TestConstructTimeWindowApproxPercentileRejectsInvalidConfig(t *testing.T) {
 		{
 			name:       "non constant",
 			percentile: nonConstant,
-			want:       "invalid input: percentile argument of approx_percentile must be a constant",
+			want:       "invalid input: percentile argument of approx_percentile must be a constant or parameter",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1359,7 +1459,7 @@ func TestValidateApproxPercentileExpr(t *testing.T) {
 		}},
 	}
 	require.NoError(t, validateApproxPercentileExpr(literal))
-	require.Error(t, validateApproxPercentileExpr(parameter))
+	require.NoError(t, validateApproxPercentileExpr(parameter))
 }
 
 func TestValidateOrderedPercentileExpr(t *testing.T) {
@@ -1375,7 +1475,7 @@ func TestValidateOrderedPercentileExpr(t *testing.T) {
 
 	require.Error(t, validateOrderedPercentileExpr(nil, plan2.NamePercentileCont))
 	require.Error(t, validateOrderedPercentileExpr(column, plan2.NamePercentileCont))
-	require.Error(t, validateOrderedPercentileExpr(parameter, plan2.NamePercentileDisc))
+	require.NoError(t, validateOrderedPercentileExpr(parameter, plan2.NamePercentileDisc))
 	require.NoError(t, validateOrderedPercentileExpr(literal, plan2.NamePercentileCont))
 }
 

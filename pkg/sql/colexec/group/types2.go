@@ -264,6 +264,8 @@ type container struct {
 	prepareParamKindWireV1 bool
 	legacyTextMinMax       bool
 	legacyVarianceState    bool
+	legacyDecimalSumState  bool
+	legacyDecimalSumResult bool
 
 	// spill, agglist to load spilled data.
 	spillMem        int64

@@ -947,7 +947,7 @@ show create table max_customer;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 max_customer  ¦  CREATE TABLE `max_customer` (
   `customer_id` int DEFAULT NULL,
-  `total_amount` decimal(38,0) DEFAULT NULL
+  `total_amount` decimal(32,0) DEFAULT NULL
 )
 select * from max_customer;
 ➤ customer_id[4,32,0]  ¦  total_amount[3,38,0]  𝄀
@@ -1456,7 +1456,7 @@ show create table max_customer;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 max_customer  ¦  CREATE TEMPORARY TABLE `max_customer` (
   `customer_id` int DEFAULT NULL,
-  `total_amount` decimal(38,0) DEFAULT NULL
+  `total_amount` decimal(32,0) DEFAULT NULL
 )
 select * from max_customer;
 ➤ customer_id[4,32,0]  ¦  total_amount[3,38,0]  𝄀
@@ -2085,7 +2085,7 @@ show create table agg01;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 agg01  ¦  CREATE TABLE `agg01` (
   `avgcol` decimal(14,4) DEFAULT NULL,
-  `sumcol` decimal(38,0) DEFAULT NULL,
+  `sumcol` decimal(32,0) DEFAULT NULL,
   `countcol` bigint NOT NULL DEFAULT 0,
   `maxcol` double DEFAULT NULL,
   `mincol` double DEFAULT NULL

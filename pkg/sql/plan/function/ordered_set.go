@@ -16,6 +16,7 @@ package function
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 )
 
 // orderedSetPercentileCheck validates the two plan arguments used by the
@@ -47,15 +48,22 @@ func orderedSetPercentileCheckWithMode(inputs []types.Type, continuous bool) che
 		finalTypes[1] = types.T_float64.ToType()
 		needCast = true
 	}
-	if !finalTypes[0].IsNumeric() || !finalTypes[1].IsNumeric() {
+	if !finalTypes[1].IsNumeric() {
 		return newCheckResultWithFailure(failedAggParametersWrong)
 	}
-	// The executor currently has exact implementations for the same numeric
-	// family as MEDIAN (decimal256 is intentionally excluded).
-	if finalTypes[0].Oid == types.T_decimal256 || finalTypes[1].Oid == types.T_decimal256 {
+	if finalTypes[1].Oid == types.T_decimal256 {
 		return newCheckResultWithFailure(failedAggParametersWrong)
 	}
-	if continuous && finalTypes[0].IsDecimal() && finalTypes[0].Width >= 38 {
+	if continuous {
+		// Continuous percentiles interpolate between adjacent values and retain
+		// the numeric restrictions of the exact arithmetic implementation.
+		if !finalTypes[0].IsNumeric() || finalTypes[0].Oid == types.T_decimal256 ||
+			(finalTypes[0].IsDecimal() && finalTypes[0].Width >= 38) {
+			return newCheckResultWithFailure(failedAggParametersWrong)
+		}
+	} else if !aggexec.PercentileDiscSupportedType(finalTypes[0].Oid) {
+		// A discrete percentile selects one input value without interpolation,
+		// so every scalar type with a defined SQL ordering can be retained.
 		return newCheckResultWithFailure(failedAggParametersWrong)
 	}
 	if needCast {

@@ -54,6 +54,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -1845,6 +1846,83 @@ func TestCompileClearReleasesLockMetaBeforeProcess(t *testing.T) {
 	require.Nil(t, c.lockMeta)
 }
 
+func TestCompilePreparedApproxPercentilePreflightsBeforeChildScope(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		descending bool
+	}{
+		{name: "ordinary"},
+		{name: "ordered descending", descending: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := newCompileForShuffleGroupTest(t)
+			value := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			}
+			percentile := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}
+			bound, err := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), plan2.NameApproxPercentile,
+				[]*plan.Expr{value, percentile})
+			require.NoError(t, err)
+			if test.descending {
+				bound.GetF().AggConfig = []byte{1}
+			}
+
+			child := &plan.Node{
+				NodeType:    plan.Node_VALUE_SCAN,
+				Stats:       &plan.Stats{Dop: 1},
+				ProjectList: []*plan.Expr{value},
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{{
+					Typ: plan.Type{Id: int32(types.T_int64)},
+				}}},
+				RowsetData: &plan.RowsetData{Cols: []*plan.ColData{{Data: []*plan.RowsetExpr{{
+					Expr: plan2.MakePlan2Int64ConstExprWithType(1),
+				}}}}},
+			}
+			aggregate := &plan.Node{
+				NodeType: plan.Node_AGG,
+				Children: []int32{0},
+				Stats:    &plan.Stats{Dop: 1},
+				AggList:  []*plan.Expr{bound},
+			}
+			nodes := []*plan.Node{child, aggregate}
+
+			compileWithParam := func(param []byte, isNull bool) ([]*Scope, error) {
+				params := vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, param, isNull, c.proc.Mp()))
+				c.proc.SetPrepareParams(params)
+				baseline := c.proc.Mp().CurrNB()
+				scopes, compileErr := c.compilePlanScope(0, 1, nodes)
+				require.Equal(t, baseline, c.proc.Mp().CurrNB())
+				c.proc.SetPrepareParams(nil)
+				params.Free(c.proc.Mp())
+				return scopes, compileErr
+			}
+
+			scopes, err := compileWithParam([]byte("1.5"), false)
+			require.Nil(t, scopes)
+			require.ErrorContains(t, err, "must be finite and in [0,1]")
+			require.Empty(t, c.scopes,
+				"preflight rejection must happen before any child scope becomes owned")
+
+			scopes, err = compileWithParam(nil, true)
+			require.Nil(t, scopes)
+			require.ErrorContains(t, err, "cannot be NULL")
+			require.Empty(t, c.scopes)
+
+			scopes, err = compileWithParam([]byte("0.25"), false)
+			require.NoError(t, err,
+				"the same prepared plan must compile after invalid and NULL executions")
+			require.NotEmpty(t, scopes)
+			ReleaseScopes(scopes)
+		})
+	}
+}
+
 func TestCompileShuffleGroupUsesDistributedPathWhenScopeMcpuDiffersFromDop(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, nodes := newShuffleGroupTestNodes(16)
@@ -2028,6 +2106,48 @@ func TestCompileShuffleGroupGatesVarianceByProtocolVersion(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
 	require.True(t, c.supportsRemoteVarianceAggregates())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
+func TestCompileShuffleGroupGatesWidenedDecimalSumByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for _, input := range []types.Type{
+		types.New(types.T_decimal64, 18, 2),
+		types.New(types.T_decimal128, 38, 2),
+		types.New(types.T_decimal256, 65, 2),
+	} {
+		aggNode.AggList = []*plan.Expr{{
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: aggexec.AggIdOfSum},
+				Args: []*plan.Expr{{Typ: plan.Type{
+					Id:    int32(input.Oid),
+					Width: input.Width,
+					Scale: input.Scale,
+				}}},
+			}},
+		}}
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion66)
+		require.True(t, hasWidenedDecimalSum(aggNode))
+		require.False(t, c.supportsRemoteWidenedDecimalSum())
+		require.False(t, c.canCompileShuffleGroup(aggNode),
+			"mixed-version clusters must finalize widened decimal SUM on the coordinator")
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion67)
+		require.True(t, c.supportsRemoteWidenedDecimalSum())
+		require.True(t, c.canCompileShuffleGroup(aggNode))
+	}
+
+	// DECIMAL(16,2) SUM stays Decimal128 and therefore keeps the established
+	// final shuffle result type on both sides of a v66/v67 rolling upgrade.
+	aggNode.AggList[0].GetF().Args[0].Typ.Width = 16
+	aggNode.AggList[0].GetF().Args[0].Typ.Id = int32(types.T_decimal64)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion66)
+	require.False(t, hasWidenedDecimalSum(aggNode))
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
 
