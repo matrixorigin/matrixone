@@ -1,4 +1,3 @@
--- Regression for sequence function access to a legal identifier containing a backtick.
 drop database if exists issue_28245;
 create database issue_28245;
 use issue_28245;
