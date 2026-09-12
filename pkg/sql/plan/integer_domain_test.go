@@ -100,3 +100,49 @@ func TestPreparedIntegerPeerRetainsOriginalDomain(t *testing.T) {
 		require.Equal(t, direct.GetF().Func.Obj, rebound.GetF().Func.Obj)
 	}
 }
+
+func TestPreparedExplicitCastRetainsItsDomain(t *testing.T) {
+	ctx := context.Background()
+	for _, numericRebind := range []bool{false, true} {
+		for _, reverse := range []bool{false, true} {
+			for _, nested := range []bool{false, true} {
+				param := func(pos int32) *Expr {
+					return &Expr{Typ: planpb.Type{Id: int32(types.T_text)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}}}
+				}
+				cast, err := appendSyntaxExplicitCastBeforeExpr(ctx, param(0), planpb.Type{Id: int32(types.T_uint64), Width: 64, Scale: -1})
+				require.NoError(t, err)
+				if nested {
+					inner, err := appendSyntaxExplicitCastBeforeExpr(ctx, param(0), planpb.Type{Id: int32(types.T_int64), Width: 64, Scale: -1})
+					require.NoError(t, err)
+					cast.GetF().Args[0] = inner
+				}
+				args := []*Expr{cast, param(1)}
+				if reverse {
+					args[0], args[1] = args[1], args[0]
+				}
+				expr, err := BindFuncExprImplByPlanExpr(ctx, "+", args)
+				require.NoError(t, err)
+				rule := NewResetParamRefRule(ctx, []*Expr{makePlan2Int64ConstExprWithType(0), makePlan2Int64ConstExprWithType(-1)})
+				rule.paramValues = []any{int64(0), int64(-1)}
+				var bound *Expr
+				if numericRebind {
+					var changed bool
+					bound, changed, err = rule.rebindPreparedNumericExpr(expr, map[int32]struct{}{0: {}, 1: {}})
+					require.True(t, changed)
+				} else {
+					bound, err = rule.ApplyExpr(expr)
+				}
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_uint64), bound.Typ.Id, "numeric=%v reversed=%v nested=%v", numericRebind, reverse, nested)
+				found := false
+				require.NoError(t, planpb.VisitExprTree(bound, func(e *Expr) error {
+					if e.GetF() != nil && e.GetF().SyntaxExplicitCast && e.Typ.Id == int32(types.T_uint64) {
+						found = true
+					}
+					return nil
+				}))
+				require.True(t, found, "the explicit unsigned CAST must remain a semantic boundary")
+			}
+		}
+	}
+}

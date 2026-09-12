@@ -55,5 +55,12 @@ set @mixed_unsigned_id = 1;
 execute mixed_unsigned_stmt using @mixed_unsigned_id;
 deallocate prepare mixed_unsigned_stmt;
 
+prepare explicit_unsigned_stmt from 'select cast(? as unsigned) + ? as q';
+set @explicit_unsigned_a = 0, @explicit_unsigned_b = -1;
+execute explicit_unsigned_stmt using @explicit_unsigned_a, @explicit_unsigned_b;
+set @explicit_unsigned_a = 2, @explicit_unsigned_b = 1;
+execute explicit_unsigned_stmt using @explicit_unsigned_a, @explicit_unsigned_b;
+deallocate prepare explicit_unsigned_stmt;
+
 set session sql_mode = @mixed_unsigned_saved_sql_mode;
 drop database mixed_unsigned_arithmetic_28581;
