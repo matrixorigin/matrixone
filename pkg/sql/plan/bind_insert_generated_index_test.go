@@ -252,7 +252,7 @@ func configureMockGeneratedIndex(t *testing.T, mock *MockOptimizer, unique bool)
 	indexTableName := catalog.SecondaryIndexTableNamePrefix + "odku-generated-g"
 	base.Indexes = []*planpb.IndexDef{{
 		IndexName:      "idx_generated_g",
-		Parts:          []string{catalog.CreateAlias("g")},
+		Parts:          []string{"g"},
 		Unique:         unique,
 		IndexTableName: indexTableName,
 		TableExist:     true,

@@ -16,11 +16,14 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -103,18 +106,64 @@ func TestAppendAlterGeneratedDependentsRebuildsChainedIndexes(t *testing.T) {
 		"unrelated indexes must remain eligible for COPY cloning")
 }
 
+func TestAppendAlterGeneratedDependentsSkipsTablesWithoutGeneratedColumns(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		// Legacy table metadata can omit Name2ColIndex. With no generated
+		// expressions there is no dependency graph to resolve.
+		Cols: []*planpb.ColDef{{Name: "b"}},
+	}
+	affectedCols, primaryKeyAffected, err := appendAlterGeneratedDependents(
+		context.Background(), tableDef, []string{"b"}, map[string]struct{}{"b": {}},
+	)
+	require.NoError(t, err)
+	require.False(t, primaryKeyAffected)
+	require.Equal(t, []string{"b"}, affectedCols)
+}
+
 func addAlterTestIndex(t *testing.T, mock *MockOptimizer, base *planpb.TableDef, indexName, columnName string, unique bool) {
 	t.Helper()
+	if base.Name2ColIndex == nil {
+		base.Name2ColIndex = make(map[string]int32, len(base.Cols))
+	}
+	for i, col := range base.Cols {
+		base.Name2ColIndex[col.Name] = int32(i)
+	}
 	indexTableName := catalog.SecondaryIndexTableNamePrefix + "alter-generated-" + indexName
 	base.Indexes = append(base.Indexes, &planpb.IndexDef{
 		IndexName:      indexName,
 		IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
-		Parts:          []string{catalog.CreateAlias(columnName)},
+		Parts:          []string{columnName},
 		Unique:         unique,
 		IndexTableName: indexTableName,
 		TableExist:     true,
 	})
 	registerMockGeneratedIndexTable(t, mock, base, indexTableName, base.Cols[mockTableColPos(t, base, columnName)])
+	registerAlterIndexVisibilityRows(t, mock, base)
+}
+
+func registerAlterIndexVisibilityRows(t *testing.T, mock *MockOptimizer, base *planpb.TableDef) {
+	t.Helper()
+	proc := mock.ctxt.GetProcess()
+	require.NotNil(t, mock.ctxt.processHolder)
+	mock.ctxt.processHolder.internalSQLExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		require.Equal(t, fmt.Sprintf(
+			"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = %d",
+			base.TblId,
+		), sql)
+		result := executor.NewMemResult(
+			[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+		)
+		result.NewBatchWithRowCount(len(base.Indexes))
+		names := make([]string, len(base.Indexes))
+		visible := make([]int8, len(base.Indexes))
+		for i, index := range base.Indexes {
+			names[i] = index.IndexName
+			visible[i] = 1
+		}
+		require.NoError(t, executor.AppendStringRows(result, 0, names))
+		require.NoError(t, executor.AppendFixedRows(result, 1, visible))
+		return result.GetResult(), nil
+	})
 }
 
 func newGeneratedIndexAlterMock(t *testing.T) *MockOptimizer {

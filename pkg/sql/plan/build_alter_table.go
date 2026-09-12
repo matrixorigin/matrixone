@@ -648,6 +648,19 @@ func appendAlterGeneratedDependents(
 	if len(seeds) == 0 {
 		return affectedCols, false, nil
 	}
+	// Ordinary tables have no generated dependencies to expand. Keep this path
+	// independent of Name2ColIndex, which is not needed for direct index impact
+	// and may be absent from legacy table metadata.
+	hasGeneratedColumns := false
+	for _, col := range originalTableDef.Cols {
+		if col != nil && col.GeneratedCol != nil {
+			hasGeneratedColumns = true
+			break
+		}
+	}
+	if !hasGeneratedColumns {
+		return affectedCols, false, nil
+	}
 
 	possiblyChangedCols, err := collectGeneratedColumnDependents(ctx, originalTableDef, seeds)
 	if err != nil {
