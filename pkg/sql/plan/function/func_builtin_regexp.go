@@ -2477,16 +2477,6 @@ func (rs *regexpSet) regexpVisitAtOrAfterWithMatchType(
 	return nil
 }
 
-func (rs *regexpSet) regexpReplaceAllAtOrAfter(
-	reg *regexp.Regexp,
-	pat, str, repl string,
-	startByte int,
-	subjectIsBinary bool,
-) (string, error) {
-	return rs.regexpReplaceAllAtOrAfterWithMatchType(
-		reg, pat, str, repl, startByte, subjectIsBinary, "")
-}
-
 func (rs *regexpSet) regexpReplaceAllAtOrAfterWithMatchType(
 	reg *regexp.Regexp,
 	pat, str, repl string,
@@ -2537,15 +2527,11 @@ func (rs *regexpSet) regexpReplaceAllAtOrAfterWithMatchType(
 	return result, nil
 }
 
-// regexpFindAtOrAfter supplies the context that slicing at startByte would
-// lose. The wrapper consumes exactly the preceding text unit, then lazily
-// searches for the original pattern. This keeps ^, multiline ^, and word
-// boundaries relative to the original subject while excluding matches before
-// startByte. The wrapped matcher is cached with the ordinary pattern matchers.
-func (rs *regexpSet) regexpFindAtOrAfter(reg *regexp.Regexp, pat, str string, startByte int, subjectIsBinary bool) (start, end int, found bool, err error) {
-	return rs.regexpFindAtOrAfterWithMatchType(reg, pat, str, startByte, subjectIsBinary, "")
-}
-
+// regexpFindAtOrAfterWithMatchType supplies context lost by slicing at
+// startByte. It consumes exactly the preceding text unit, then lazily searches
+// for the original pattern. This keeps ^, multiline ^, and word boundaries
+// relative to the original subject while excluding matches before startByte.
+// The wrapped matcher is cached with the ordinary pattern matchers.
 func (rs *regexpSet) regexpFindAtOrAfterWithMatchType(
 	reg *regexp.Regexp,
 	pat, str string,
