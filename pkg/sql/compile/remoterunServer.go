@@ -992,6 +992,11 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	proc.Base.Lim = pHelper.lim
 	proc.Base.SessionInfo = pHelper.sessionInfo
 	proc.Base.SessionInfo.StorageEngine = cnInfo.storeEngine
+	// A remote CN owns an independent input stream. Its local source-row
+	// cursor therefore cannot be used as a statement-global GROUP_CONCAT
+	// diagnostic ordinal; the v66 aggregate provenance trailer will carry this
+	// untrusted decision to the coordinator.
+	proc.SetGroupConcatSourceRowProvenanceTrusted(false)
 	receiver.warningSession = &remoteWarningCollector{}
 	proc.Session = receiver.warningSession
 	if pHelper.hasPlanSnapshotTS {
