@@ -312,10 +312,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		pkAffected             bool
 		hasAutoIncrementOption bool
 
-		affectedCols        = make([]string, 0, len(tableDef.Cols))
-		affectedIndexes     = make([]string, 0, len(tableDef.Indexes))
-		unsupportedErrorFmt = "unsupported alter option in copy mode: %s"
-		copyFakePKCol       = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
+		affectedCols             = make([]string, 0, len(tableDef.Cols))
+		affectedIndexes          = make([]string, 0, len(tableDef.Indexes))
+		generatedDependencySeeds = make(map[string]struct{})
+		unsupportedErrorFmt      = "unsupported alter option in copy mode: %s"
+		copyFakePKCol            = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
 	)
 
 	affectedAllIdxCols := func() {
@@ -361,10 +362,28 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			pkAffected, err = AddColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.Column.Name.ColName())
 		case *tree.AlterTableModifyColumnClause:
+			sourceColumn, hasSource, sourceErr := originalAlterSourceColumn(
+				ctx, tableDef, copyTableDef, alterTableCtx, option.NewColumn.Name.ColName(),
+			)
+			if sourceErr != nil {
+				return nil, sourceErr
+			}
 			pkAffected, err = ModifyColumn(cctx, alterTablePlan, option, alterTableCtx)
+			if err == nil && hasSource {
+				generatedDependencySeeds[sourceColumn] = struct{}{}
+			}
 			affectedCols = append(affectedCols, option.NewColumn.Name.ColName())
 		case *tree.AlterTableChangeColumnClause:
+			sourceColumn, hasSource, sourceErr := originalAlterSourceColumn(
+				ctx, tableDef, copyTableDef, alterTableCtx, option.OldColumnName.ColName(),
+			)
+			if sourceErr != nil {
+				return nil, sourceErr
+			}
 			pkAffected, err = ChangeColumn(cctx, alterTablePlan, option, alterTableCtx)
+			if err == nil && hasSource {
+				generatedDependencySeeds[sourceColumn] = struct{}{}
+			}
 			affectedCols = appendAffectedAlterColumnNames(
 				affectedCols,
 				option.OldColumnName.ColName(),
@@ -410,6 +429,26 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if hasAutoIncrementOption && !tableHasAutoIncrementColumn(copyTableDef) {
 		return nil, moerr.NewInvalidInputf(ctx,
 			"Table '%s' does not have an AUTO_INCREMENT column", tableDef.Name)
+	}
+
+	// Generated values are recomputed from the original table rows under the
+	// final schema. Rebuild indexes on every generated dependent, not just the
+	// directly modified column; otherwise COPY could clone stale index entries.
+	// An all-index invalidation already covers these indexes and needs no closure
+	// walk.
+	if !pkAffected && len(affectedIndexes) == 0 && len(generatedDependencySeeds) > 0 {
+		var generatedPrimaryKeyAffected bool
+		affectedCols, generatedPrimaryKeyAffected, err = appendAlterGeneratedDependents(
+			ctx, tableDef, affectedCols, generatedDependencySeeds,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if generatedPrimaryKeyAffected {
+			// Secondary index entries carry the primary-key value. Recompute all
+			// indexes if a changed source can alter a generated primary-key part.
+			pkAffected = true
+		}
 	}
 
 	if pkAffected {
@@ -568,6 +607,180 @@ type AlterTableContext struct {
 	// key oldColId -> new ColDef
 	changColDefMap map[uint64]*ColDef
 	UpdateSqls     []string
+}
+
+// originalAlterSourceColumn resolves the original source column currently
+// feeding a target column in a COPY ALTER. Added columns may have constant or
+// absent source mappings; those must not seed dependency invalidation against
+// an original column with the same name.
+func originalAlterSourceColumn(
+	ctx context.Context,
+	originalTableDef, copyTableDef *TableDef,
+	alterCtx *AlterTableContext,
+	targetColumnName string,
+) (string, bool, error) {
+	targetCol := FindColumn(copyTableDef.Cols, targetColumnName)
+	if targetCol == nil {
+		// Let the ALTER option return its normal unknown-column error.
+		return "", false, nil
+	}
+
+	source, ok := alterCtx.alterColMap[targetCol.Name]
+	if !ok || source.sexprType != exprColumnName {
+		return "", false, nil
+	}
+
+	originalCol := FindColumn(originalTableDef.Cols, source.sexprStr)
+	if originalCol == nil {
+		return "", false, moerr.NewInternalErrorf(ctx,
+			"cannot resolve original source column %q for altered column %q",
+			source.sexprStr, targetCol.Name)
+	}
+	return originalCol.Name, true, nil
+}
+
+// AlterCopyAffectedStoredGeneratedColumns returns the stored generated columns
+// whose values can change when ALTER COPY converts a source column to its final
+// type. The original schema supplies dependency positions; the final copy
+// schema supplies the target types after all ALTER options have been applied.
+func AlterCopyAffectedStoredGeneratedColumns(
+	ctx context.Context,
+	originalTableDef, copyTableDef *TableDef,
+	changeColDefMap map[uint64]*ColDef,
+) (map[uint64]string, error) {
+	if originalTableDef == nil || copyTableDef == nil {
+		return nil, moerr.NewInternalError(ctx, "missing ALTER COPY table definition for generated-column FK validation")
+	}
+	hasStoredGeneratedColumn := false
+	for _, col := range originalTableDef.Cols {
+		if col != nil && col.GeneratedCol != nil && col.GeneratedCol.IsStored {
+			hasStoredGeneratedColumn = true
+			break
+		}
+	}
+	if !hasStoredGeneratedColumn {
+		return nil, nil
+	}
+
+	seeds := make(map[string]struct{})
+	for _, originalCol := range originalTableDef.Cols {
+		if originalCol == nil || originalCol.Hidden {
+			continue
+		}
+		mappedCol, ok := changeColDefMap[originalCol.ColId]
+		if !ok {
+			// A removed source can change every generated value that depends on
+			// it. Drop validation normally rejects that shape earlier; keeping it
+			// in the closure makes the live FK guard fail closed as well.
+			seeds[originalCol.Name] = struct{}{}
+			continue
+		}
+		if mappedCol == nil {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"nil ALTER COPY column mapping for source column %q", originalCol.Name)
+		}
+		copyCol := FindColumn(copyTableDef.Cols, mappedCol.Name)
+		if copyCol == nil {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"cannot resolve ALTER COPY target column %q for source column %q",
+				mappedCol.Name, originalCol.Name)
+		}
+		if alterCopyColumnTypeMayChangeValues(originalCol.Typ, copyCol.Typ) {
+			seeds[originalCol.Name] = struct{}{}
+		}
+	}
+	if len(seeds) == 0 {
+		return nil, nil
+	}
+
+	possiblyChanged, err := collectGeneratedColumnDependents(ctx, originalTableDef, seeds)
+	if err != nil {
+		return nil, err
+	}
+	affected := make(map[uint64]string)
+	for _, col := range originalTableDef.Cols {
+		if col == nil || col.GeneratedCol == nil || !col.GeneratedCol.IsStored {
+			continue
+		}
+		if _, changed := possiblyChanged[col.Name]; changed {
+			affected[col.ColId] = col.Name
+		}
+	}
+	return affected, nil
+}
+
+func alterCopyColumnTypeMayChangeValues(source, target Type) bool {
+	return source.Id != target.Id ||
+		source.Width != target.Width ||
+		source.Scale != target.Scale ||
+		source.Table != target.Table ||
+		source.Enumvalues != target.Enumvalues ||
+		source.Charset != target.Charset ||
+		source.PadSpace != target.PadSpace
+}
+
+func appendAlterGeneratedDependents(
+	ctx context.Context,
+	originalTableDef *TableDef,
+	affectedCols []string,
+	seeds map[string]struct{},
+) ([]string, bool, error) {
+	if len(seeds) == 0 {
+		return affectedCols, false, nil
+	}
+	// Ordinary tables have no generated dependencies to expand. Keep this path
+	// independent of Name2ColIndex, which is not needed for direct index impact
+	// and may be absent from legacy table metadata.
+	hasGeneratedColumns := false
+	for _, col := range originalTableDef.Cols {
+		if col != nil && col.GeneratedCol != nil {
+			hasGeneratedColumns = true
+			break
+		}
+	}
+	if !hasGeneratedColumns {
+		return affectedCols, false, nil
+	}
+
+	possiblyChangedCols, err := collectGeneratedColumnDependents(ctx, originalTableDef, seeds)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, col := range originalTableDef.Cols {
+		if col == nil || col.GeneratedCol == nil {
+			continue
+		}
+		if _, changed := possiblyChangedCols[col.Name]; changed {
+			affectedCols = append(affectedCols, col.Name)
+		}
+	}
+	return affectedCols, generatedColumnDependenciesAffectPrimaryKey(originalTableDef, possiblyChangedCols), nil
+}
+
+func generatedColumnDependenciesAffectPrimaryKey(
+	tableDef *TableDef,
+	possiblyChangedCols map[string]struct{},
+) bool {
+	if tableDef == nil || tableDef.Pkey == nil || catalog.IsFakePkName(tableDef.Pkey.PkeyColName) {
+		return false
+	}
+
+	positions, ok := primaryKeyColumnPositions(tableDef)
+	if !ok {
+		// Incomplete key metadata is not evidence that the key is unaffected.
+		// Conservatively rebuild indexes instead of cloning entries whose
+		// primary-key payload may no longer identify the copied base row.
+		return true
+	}
+	for _, pos := range positions {
+		if pos < 0 || int(pos) >= len(tableDef.Cols) || tableDef.Cols[pos] == nil {
+			return true
+		}
+		if _, changed := possiblyChangedCols[tableDef.Cols[pos].Name]; changed {
+			return true
+		}
+	}
+	return false
 }
 
 func (ctx *AlterTableContext) renameColumnSource(oldName, newName string) {

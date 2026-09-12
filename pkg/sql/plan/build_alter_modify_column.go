@@ -94,10 +94,9 @@ func ModifyColumn(
 		)
 	}
 
-	// If the column is referenced by a generated column, block the modification
-	if err := checkColumnWithGeneratedDependency(cctx.GetContext(), tableDef, nColName); err != nil {
-		return false, err
-	}
+	// COPY ALTER rebinds dependent generated expressions against the final
+	// schema and recomputes them while copying rows. The caller separately
+	// expands index impact through the original dependency graph.
 	pkAffected, err := updateNewColumnInTableDef(cctx, tableDef, oCol, nColSpec, nPos)
 	if err != nil {
 		return false, err
@@ -263,10 +262,18 @@ func checkColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef, orig
 	}
 
 	for _, fkInfo := range tbInfo.Fkeys {
+		if fkInfo == nil {
+			return moerr.NewInternalError(ctx.GetContext(), "nil foreign key definition while modifying column")
+		}
+		if len(fkInfo.Cols) != len(fkInfo.ForeignCols) {
+			return moerr.NewInternalErrorf(ctx.GetContext(),
+				"foreign key %s has mismatched child and parent columns", fkInfo.Name)
+		}
 		for i, colId := range fkInfo.Cols {
 			if colId == originalCol.ColId {
-				// Check if the parent table of the foreign key exists
-				_, referTableDef, err := ctx.ResolveById(fkInfo.ForeignTbl, nil)
+				// A zero foreign-table ID is the durable self-reference marker.
+				// Resolve it from the current table instead of querying the catalog.
+				_, referTableDef, _, err := resolveAlterForeignKeyTable(ctx, tbInfo, fkInfo.ForeignTbl)
 				if err != nil {
 					return err
 				}
@@ -291,46 +298,66 @@ func checkColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef, orig
 	}
 
 	for _, referredTblId := range tbInfo.RefChildTbls {
-		refObjRef, refTableDef, err := ctx.ResolveById(referredTblId, nil)
+		refObjRef, refTableDef, selfReference, err := resolveAlterForeignKeyTable(ctx, tbInfo, referredTblId)
 		if err != nil {
 			return err
 		}
 		if refTableDef == nil {
 			return moerr.NewInternalErrorf(ctx.GetContext(), "The reference foreign key table %d does not exist", referredTblId)
 		}
-		var referredFK *ForeignKeyDef
 		for _, fkInfo := range refTableDef.Fkeys {
-			if fkInfo.ForeignTbl == tbInfo.TblId {
-				referredFK = fkInfo
-				break
+			if fkInfo == nil {
+				return moerr.NewInternalError(ctx.GetContext(), "nil foreign key definition while modifying column")
 			}
-		}
+			if len(fkInfo.Cols) != len(fkInfo.ForeignCols) {
+				return moerr.NewInternalErrorf(ctx.GetContext(),
+					"foreign key %s has mismatched child and parent columns", fkInfo.Name)
+			}
+			if fkInfo.ForeignTbl != tbInfo.TblId && !(selfReference && fkInfo.ForeignTbl == 0) {
+				continue
+			}
 
-		for i := range referredFK.Cols {
-			if referredFK.ForeignCols[i] == originalCol.ColId {
+			for _, referredColumnID := range fkInfo.ForeignCols {
+				if referredColumnID != originalCol.ColId {
+					continue
+				}
 				if originalCol.Name != newCol.Name {
 					return moerr.NewErrAlterOperationNotSupportedReasonFkRename(ctx.GetContext())
-				} else {
-					return moerr.NewErrForeignKeyColumnCannotChangeChild(ctx.GetContext(), originalCol.Name, referredFK.Name, refObjRef.SchemaName+"."+refTableDef.Name)
 				}
-
-				//childCol := FindColumnByColId(refTableDef.Cols, colId)
-				//if childCol == nil {
-				//	continue
-				//}
-				//
-				//if newCol.Typ.GetId() != childCol.Typ.GetId() {
-				//	return moerr.NewErrFKIncompatibleColumns(ctx.GetContext(), childCol.Name, originalCol.Name, referredFK.Name)
-				//}
-				//
-				//if newCol.Typ.GetWidth() < childCol.Typ.GetWidth() ||
-				//	newCol.Typ.GetWidth() < originalCol.Typ.GetWidth() {
-				//	return moerr.NewErrForeignKeyColumnCannotChangeChild(ctx.GetContext(), originalCol.Name, referredFK.Name, refObjRef.SchemaName+"."+refTableDef.Name)
-				//}
+				return moerr.NewErrForeignKeyColumnCannotChangeChild(
+					ctx.GetContext(), originalCol.Name, fkInfo.Name,
+					alterForeignKeyTableName(refObjRef, refTableDef),
+				)
 			}
 		}
 	}
 	return nil
+}
+
+// resolveAlterForeignKeyTable resolves a FK endpoint while treating the zero
+// table ID as the durable self-reference marker. Older catalog entries may
+// store the current physical table ID instead, so that form is self-referential
+// as well.
+func resolveAlterForeignKeyTable(
+	ctx CompilerContext,
+	currentTable *TableDef,
+	tableID uint64,
+) (*ObjectRef, *TableDef, bool, error) {
+	if tableID == 0 || (currentTable.TblId != 0 && tableID == currentTable.TblId) {
+		return nil, currentTable, true, nil
+	}
+	objRef, tableDef, err := ctx.ResolveById(tableID, nil)
+	return objRef, tableDef, false, err
+}
+
+func alterForeignKeyTableName(objRef *ObjectRef, tableDef *TableDef) string {
+	if objRef != nil && objRef.SchemaName != "" {
+		return objRef.SchemaName + "." + tableDef.Name
+	}
+	if tableDef.DbName != "" {
+		return tableDef.DbName + "." + tableDef.Name
+	}
+	return tableDef.Name
 }
 
 // checkPriKeyConstraint check all parts of a PRIMARY KEY must be NOT NULL

@@ -350,23 +350,161 @@ insert into t37_odku_pk (a) values (1) on duplicate key update a=5;
 select * from t37_odku_pk;
 
 -- ============================================================
--- 39. MODIFY COLUMN dependency check
+-- 39. MODIFY COLUMN with generated-column dependencies
 -- ============================================================
-create table t38_modify (a int, b int, c int generated always as (a + b) stored);
+create table t38_modify (
+    id int primary key,
+    a int,
+    b int,
+    g bigint generated always as (a + 5) stored,
+    key idx_g(g),
+    key idx_b(b)
+);
+insert into t38_modify (id, a, b) values (1, 10, 20);
 alter table t38_modify modify column a bigint;
+insert into t38_modify (id, a, b) values (2, 4000000000, 30);
+select id, a, g from t38_modify order by id;
+select count(*) as matched from t38_modify force index (idx_g) where g = 15;
+select count(*) as matched from t38_modify force index (idx_g) where g = 4000000005;
+select count(*) as matched from t38_modify force index (idx_b) where b = 20;
+
+-- UNSIGNED, NOT NULL, and column reordering keep generated expressions valid.
+create table t38_unsigned (a int, b int, g bigint generated always as (a + b) stored);
+insert into t38_unsigned (a, b) values (10, 20);
+alter table t38_unsigned modify column a int unsigned;
+alter table t38_unsigned modify column a int unsigned not null;
+insert into t38_unsigned (a, b) values (4000000000, 2);
+select count(*) as matched from t38_unsigned where (a = 10 and g = 30) or (a = 4000000000 and g = 4000000002);
+
+create table t38_reorder (a int, b int, g int generated always as (a * 100 + b) stored);
+insert into t38_reorder (a, b) values (1, 2);
+alter table t38_reorder modify column a int after b;
+insert into t38_reorder (a, b) values (3, 4);
+select * from t38_reorder order by a;
+
+-- Decimal128 -> Decimal256 widening must retain exact generated values.
+create table t38_decimal (
+    id int primary key,
+    d decimal(38, 0),
+    g decimal(41, 0) generated always as (d + 1) stored
+);
+insert into t38_decimal (id, d) values (1, 1);
+alter table t38_decimal modify column d decimal(40, 0);
+insert into t38_decimal (id, d) values (2, cast('9999999999999999999999999999999999999999' as decimal(40, 0)));
+select count(*) as good_rows from t38_decimal where (id = 1 and d = 1 and g = 2) or
+    (id = 2 and d = cast('9999999999999999999999999999999999999999' as decimal(40, 0)) and
+     g = cast('10000000000000000000000000000000000000000' as decimal(41, 0)));
+
+-- A value-changing conversion must rebuild dependent generated indexes while
+-- an unrelated secondary index remains valid.
+create table t38_index_refresh (
+    id int primary key,
+    a decimal(10, 1),
+    payload int,
+    g int generated always as (a * 10) stored,
+    g2 int generated always as (g * 10) stored,
+    key idx_g2(g2),
+    key idx_payload(payload)
+);
+insert into t38_index_refresh (id, a, payload) values (1, 1.1, 7), (2, 1.4, 8);
+alter table t38_index_refresh modify column a int;
+select count(*) as matched from t38_index_refresh force index (idx_g2) where g2 = 100;
+select count(*) as matched from t38_index_refresh force index (idx_g2) where g2 in (110, 140);
+select count(*) as matched from t38_index_refresh ignore index (idx_g2) where g2 = 100;
+select count(*) as matched from t38_index_refresh force index (idx_payload) where payload in (7, 8);
+
+-- A generated primary-key change also requires rebuilding unrelated secondary
+-- indexes because their entries carry the primary-key value.
+create table t38_generated_pk (
+    a decimal(10, 1),
+    payload int,
+    g bigint generated always as (a * 10) stored,
+    primary key (g),
+    unique key idx_payload(payload)
+);
+insert into t38_generated_pk (a, payload) values (1.1, 7), (2.1, 8);
+alter table t38_generated_pk modify column a int;
+select g from t38_generated_pk order by g;
+select a, g, payload from t38_generated_pk force index (idx_payload) where payload in (7, 8) order by payload;
+select a, g, payload from t38_generated_pk ignore index (idx_payload) where payload in (7, 8) order by payload;
+
+-- Failed COPY must leave the old nullable schema/data usable.
+create table t38_rollback (id int primary key, a int, g int generated always as (a + 1) stored);
+insert into t38_rollback (id, a) values (1, null);
+-- @regex("Column 'a' cannot be null",true)
+alter table t38_rollback modify column a int not null;
+insert into t38_rollback (id, a) values (2, null);
+select count(*) as null_rows from t38_rollback where a is null and g is null;
+
+create table t38_unique_rollback (
+    id int primary key,
+    a decimal(10, 1),
+    g int generated always as (a * 10) stored,
+    unique key uk_g(g)
+);
+insert into t38_unique_rollback (id, a) values (1, 1.1), (2, 1.4);
+-- The conversion collides on the generated unique key after both values map to 1.
+-- @regex("Duplicate entry",true)
+alter table t38_unique_rollback modify column a int;
+select count(*) as old_keys from t38_unique_rollback force index (uk_g) where g in (11, 14);
+insert into t38_unique_rollback (id, a) values (3, 2.0);
+select count(*) as total_rows from t38_unique_rollback;
+select count(*) as leaked_copy_tables from information_schema.tables
+where table_schema = database()
+  and (table_name like 't38_rollback_copy_%' or table_name like 't38_unique_rollback_copy_%');
 
 -- ============================================================
--- 40. VIRTUAL generated column cannot be PRIMARY KEY
+-- 40. ALTER COPY protects foreign keys on stored generated values
+-- ============================================================
+set foreign_key_checks = 1;
+create table t45_fk_parent (id int primary key, a decimal(10,1), payload int, g int generated always as (a * 10) stored, unique key uk_g(g));
+create table t45_fk_child (id int primary key, parent_id int, parent_g int, constraint fk_t45_parent_id foreign key (parent_id) references t45_fk_parent(id), constraint fk_t45_parent_g foreign key (parent_g) references t45_fk_parent(g));
+insert into t45_fk_parent (id, a, payload) values (1, 1.1, 7);
+insert into t45_fk_child values (1, 1, 11);
+-- The second FK on this child references a generated parent key. COPY must reject before replacing either table.
+-- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t45_parent_g'", true)
+alter table t45_fk_parent modify column a int;
+select count(*) as valid_links from t45_fk_parent p join t45_fk_child c on p.id = c.parent_id and p.g = c.parent_g where p.a = 1.1 and p.g = 11 and c.parent_g = 11;
+-- Changing an unrelated source remains supported even while the generated key is referenced.
+alter table t45_fk_parent modify column payload bigint;
+select count(*) as valid_links from t45_fk_parent p join t45_fk_child c on p.id = c.parent_id and p.g = c.parent_g where p.a = 1.1 and p.g = 11 and c.parent_g = 11;
+
+create table t46_fk_parent (k int primary key);
+create table t46_fk_child (id int primary key, a decimal(10,1), g int generated always as (a * 10) stored, constraint fk_t46_generated_child foreign key (g) references t46_fk_parent(k));
+insert into t46_fk_parent values (11);
+insert into t46_fk_child (id, a) values (1, 1.1);
+-- COPY must also reject when the recomputed generated value is the child side of an FK.
+-- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t46_generated_child'", true)
+alter table t46_fk_child modify column a int;
+select count(*) as valid_links from t46_fk_child c join t46_fk_parent p on c.g = p.k where c.id = 1 and c.a = 1.1 and c.g = 11;
+
+create table t47_fk_self_parent (id int primary key, a decimal(10,1), g int generated always as (a * 10) stored, parent_g int, unique key uk_g(g), constraint fk_t47_self_parent foreign key (parent_g) references t47_fk_self_parent(g));
+insert into t47_fk_self_parent (id, a, parent_g) values (11, 1.1, 11);
+-- Self-references are covered on the referenced-key side too.
+-- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t47_self_parent'", true)
+alter table t47_fk_self_parent modify column a int;
+select count(*) as valid_links from t47_fk_self_parent c join t47_fk_self_parent p on c.parent_g = p.g where c.id = 11 and c.a = 1.1 and c.g = 11;
+
+create table t48_fk_self_child (id int primary key, a decimal(10,1), g int generated always as (a * 10) stored, constraint fk_t48_self_child foreign key (g) references t48_fk_self_child(id));
+insert into t48_fk_self_child (id, a) values (11, 1.1);
+-- Self-references are covered on the referencing-key side as well.
+-- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t48_self_child'", true)
+alter table t48_fk_self_child modify column a int;
+select count(*) as valid_links from t48_fk_self_child c join t48_fk_self_child p on c.g = p.id where c.id = 11 and c.a = 1.1 and c.g = 11;
+set foreign_key_checks = 1;
+
+-- ============================================================
+-- 41. VIRTUAL generated column cannot be PRIMARY KEY
 -- ============================================================
 create table t39_vpk (a int, b int generated always as (a+1) virtual, primary key(b));
 
 -- ============================================================
--- 41. Qualified column names rejected in generated expression
+-- 42. Qualified column names rejected in generated expression
 -- ============================================================
 create table t40_qualname (a int, b int generated always as (t40_qualname.a + 1) stored);
 
 -- ============================================================
--- 42. LOAD DATA multi-row correctness
+-- 43. LOAD DATA multi-row correctness
 -- ============================================================
 create table t41_load_bulk (id int, a int, b int, c int generated always as (a + b) stored);
 load data inline format='csv', data='1,10,20\n2,30,40\n3,50,60\n' into table t41_load_bulk fields terminated by ',' (id, a, b);
@@ -374,7 +512,7 @@ select count(*) as bad_rows from t41_load_bulk where c != a + b;
 select * from t41_load_bulk order by id;
 
 -- ============================================================
--- 43. Large-scale DML churn correctness
+-- 44. Large-scale DML churn correctness
 -- ============================================================
 create table t42_churn (id int primary key, a int, b int, c int generated always as (a + b) stored);
 insert into t42_churn (id, a, b) select result, result, result * 2 from generate_series(1, 10000, 1) g;
@@ -386,7 +524,7 @@ select count(*) as bad_rows from t42_churn where c != a + b;
 select * from t42_churn where id between 1 and 5 order by id;
 
 -- ============================================================
--- 44. ODKU generated UNIQUE key safety (#28051)
+-- 45. ODKU generated UNIQUE key safety (#28051)
 -- ============================================================
 create table t43_odku_generated_unique (id int primary key, doc json, kind varchar(20) generated always as (doc ->> '$.kind') stored, payload int, unique key uk_kind(kind));
 insert into t43_odku_generated_unique (id, doc, payload) values (1, '{"kind":"alpha"}', 10), (2, '{"kind":"beta"}', 20);
@@ -404,7 +542,7 @@ select id, kind, payload from t43_odku_generated_unique order by id;
 update t43_odku_generated_unique set doc = json_set(doc, '$.kind', 'beta') where id = 1;
 
 -- ============================================================
--- 45. ODKU generated non-unique index maintenance
+-- 46. ODKU generated non-unique index maintenance
 -- ============================================================
 create table t44_odku_generated_index (id int primary key, source int, payload int, generated_key int generated always as (source * 2) stored, key idx_generated_key(generated_key));
 insert into t44_odku_generated_index (id, source, payload) values (1, 1, 10), (2, 2, 20);
@@ -415,7 +553,7 @@ select id, generated_key from t44_odku_generated_index force index (idx_generate
 select id, generated_key from t44_odku_generated_index force index for order by (idx_generated_key) order by generated_key, id;
 
 -- ============================================================
--- 46. Implicit VALUES requires DEFAULT at generated positions (#28241)
+-- 47. Implicit VALUES requires DEFAULT at generated positions (#28241)
 -- ============================================================
 create table t45_implicit_values (id int primary key, a int, g int generated always as (a + 1) stored, payload int);
 -- Full visible tuple is required; generated position must be DEFAULT.
@@ -445,6 +583,6 @@ select id, a, g, payload from t45_implicit_values where id = 7;
 drop table t45_implicit_values;
 
 -- ============================================================
--- 47. Cleanup
+-- 48. Cleanup
 -- ============================================================
 drop database test_generated_col;
