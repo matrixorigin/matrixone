@@ -133,9 +133,9 @@ func sliceMembers(data []byte) (docmap, fst, ranking, blocks, positions []byte, 
 }
 
 // decodeSegment builds the loaded segment over data (an in-memory blob or an mmap):
-// the ranking DIRECTORY (per-block skip/max meta) expands RESIDENT, while the FST,
-// the docID/tf blocks, and the compressed positions stay as views into data (decoded
-// on demand). Callers keep data alive (mmapData for a base, GC for a tail).
+// the FST, ranking directory, docID/tf blocks and compressed positions remain views
+// into data. Posting directories are decoded on demand, not traversed at load.
+// Callers keep data alive (mmapData for a base, GC for a tail).
 func (s *Segment) decodeSegment(data []byte) error {
 	docmap, fst, ranking, blocks, positions, err := sliceMembers(data)
 	if err != nil {
@@ -535,9 +535,9 @@ func (s *Segment) encodeTermsAndPostings() (fst, ranking, blocks, positions []by
 }
 
 // decodePostings BINDS the loaded segment to its (mmap'd) ranking/blocks/positions
-// sections WITHOUT expanding any term. V6 entries are self-contained and reachable by
-// byte offset (the FST value), so terms decode lazily in LookupLoaded — the resident
-// directory heap is O(the current query), not O(vocabulary).
+// sections without traversing posting directories. Entries are self-contained
+// and reachable by byte offset (the FST value), so terms materialize lazily in
+// LookupLoaded — the resident directory heap is O(the current query), not O(vocabulary).
 func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 	if len(ranking) == 0 {
 		s.ranking, s.blocks, s.positions = nil, nil, nil
@@ -555,9 +555,9 @@ func (s *Segment) decodePostings(ranking, blocks, positions []byte) error {
 
 // decodeTermEntry lazily decodes ONE term's self-contained directory entry at byte
 // offset `off` in s.ranking (the FST value) into a transient termPostings whose
-// blockData/posRaw are views into s.blocks/s.positions. Callers hold the result for the
-// query's lifetime (WAND/phrase cursors, evalClause), so the entry decodes at most a few
-// times per query and never persists — resident directory heap is O(query), not O(vocab).
+// blockData/posRaw are views into s.blocks/s.positions. Query callers hold this
+// transient metadata (WAND/phrase cursors, evalClause); it is not retained by the
+// segment. Resident directory heap is O(query), not O(vocab).
 // Returns (nil,false) on a corrupt/out-of-bounds entry (defense-in-depth on already-CRC'd
 // data).
 func (s *Segment) decodeTermEntry(off int) (*termPostings, bool) {
@@ -613,7 +613,8 @@ func (s *Segment) decodeTermEntry(off int) (*termPostings, bool) {
 	tp.blockMinDocLn = make([]int32, nblk)
 	tp.blockOff = make([]int64, nblk+1)    // byte offsets RELATIVE to this term's blockData
 	tp.blockPosOff = make([]int64, nblk+1) // byte offsets RELATIVE to this term's posRaw
-	var prevLast, cb, cpos int64
+	var prevLast int64
+	var cb, cpos uint64
 	for b := 0; b < nblk; b++ {
 		gap, ok := uv()
 		if !ok {
@@ -624,34 +625,38 @@ func (s *Segment) decodeTermEntry(off int) (*termPostings, bool) {
 		if p >= len(r) {
 			return nil, false
 		}
-		tp.blockMaxTf[b] = r[p]
+		blockMaxTf := r[p]
 		p++
 		mdl, ok := uv()
 		if !ok {
 			return nil, false
 		}
-		tp.blockMinDocLn[b] = int32(mdl)
 		blkLen, ok := uv()
-		if !ok || blkLen > uint64(len(s.blocks)) {
+		if !ok || cb > uint64(len(s.blocks)) || blkLen > uint64(len(s.blocks))-cb {
 			return nil, false
 		}
-		tp.blockOff[b] = cb
-		cb += int64(blkLen)
 		posLen, ok := uv()
-		if !ok || posLen > uint64(len(s.positions)) {
+		if !ok || cpos > uint64(len(s.positions)) || posLen > uint64(len(s.positions))-cpos {
 			return nil, false
 		}
-		tp.blockPosOff[b] = cpos
-		cpos += int64(posLen)
+		tp.blockMaxTf[b] = blockMaxTf
+		tp.blockMinDocLn[b] = int32(mdl)
+		tp.blockOff[b] = int64(cb)
+		tp.blockPosOff[b] = int64(cpos)
+		cb += blkLen
+		cpos += posLen
 	}
-	tp.blockOff[nblk] = cb
-	tp.blockPosOff[nblk] = cpos
-	// blockData/posRaw are views into the mmap sections at this term's stored bases.
-	if int64(baseB)+cb > int64(len(s.blocks)) || int64(baseP)+cpos > int64(len(s.positions)) {
+	// Check unsigned bases before subtraction or conversion. Signed addition can
+	// wrap on malformed varints and incorrectly admit an out-of-bounds slice.
+	if baseB > uint64(len(s.blocks)) || cb > uint64(len(s.blocks))-baseB ||
+		baseP > uint64(len(s.positions)) || cpos > uint64(len(s.positions))-baseP {
 		return nil, false
 	}
-	tp.blockData = s.blocks[baseB : int64(baseB)+cb]
-	tp.posRaw = s.positions[baseP : int64(baseP)+cpos]
+	tp.blockOff[nblk] = int64(cb)
+	tp.blockPosOff[nblk] = int64(cpos)
+	// blockData/posRaw are views into the mmap sections at this term's stored bases.
+	tp.blockData = s.blocks[int(baseB):int(baseB+cb)]
+	tp.posRaw = s.positions[int(baseP):int(baseP+cpos)]
 	return tp, true
 }
 
@@ -714,8 +719,40 @@ func (s *Segment) LookupLoaded(term string) (*termPostings, bool) {
 		return nil, false
 	}
 	off, ok, err := s.dict.get(term) // V6: the FST value is the entry's byte offset in ranking
-	if err != nil || !ok {
+	if err != nil || !ok || off >= uint64(len(s.ranking)) {
 		return nil, false
 	}
 	return s.decodeTermEntry(int(off))
+}
+
+// lookupLoadedDF resolves an exact term on a loaded, fully-live segment and reads
+// only the document-frequency varint at the FST entry offset. The rest of the
+// directory (block max metadata and block/position ranges) is deliberately left
+// untouched: a clean segment can use its raw posting df without decoding it.
+// This does not validate the remaining directory: already-corrupt entries may
+// contribute DF even when search rejects them. Dirty segments use LookupLoaded
+// because their postings must be streamed against the liveness bitmap.
+func (s *Segment) lookupLoadedDF(term string) (int, bool) {
+	if s.dict == nil {
+		return 0, false
+	}
+	off, ok, err := s.dict.get(term)
+	if err != nil || !ok {
+		return 0, false
+	}
+	return s.termDFAt(off)
+}
+
+// termDFAt reads the first field of one loaded posting-directory entry. It is
+// kept separate from the FST lookup so the header parse itself remains a
+// trivially allocation-free operation. The FST's byte-key conversion is unchanged.
+func (s *Segment) termDFAt(off uint64) (int, bool) {
+	if off >= uint64(len(s.ranking)) {
+		return 0, false
+	}
+	df, n := binary.Uvarint(s.ranking[int(off):])
+	if n <= 0 || df == 0 || df > uint64(len(s.blocks)) || df > uint64(^uint(0)>>1) {
+		return 0, false
+	}
+	return int(df), true
 }
