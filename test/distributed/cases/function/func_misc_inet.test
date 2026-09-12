@@ -9,6 +9,15 @@ SELECT INET_ATON('192.168.1.1') AS private_ip;
 SELECT INET_ATON('127.0.0.1') AS loopback;
 SELECT INET_ATON('255.255.255.255') AS max_ip;
 SELECT INET_ATON('0.0.0.0') AS zero_ip;
+SELECT INET_ATON('010.000.005.009') AS leading_zeroes;
+SELECT INET_ATON('0001.2.3.4') AS long_zero_padded_octet;
+SELECT INET_ATON('::ffff:192.0.2.1') AS mapped_ipv6_not_ipv4;
+
+DROP TABLE IF EXISTS inet_aton_leading_zeroes;
+CREATE TABLE inet_aton_leading_zeroes (id INT PRIMARY KEY, ip VARCHAR(50));
+INSERT INTO inet_aton_leading_zeroes VALUES (1, '010.000.005.009'), (2, '0001.2.3.4'), (3, '::ffff:192.0.2.1');
+SELECT id, ip, INET_ATON(ip) AS ip_number FROM inet_aton_leading_zeroes ORDER BY id;
+DROP TABLE inet_aton_leading_zeroes;
 
 # NULL handling
 SELECT INET_ATON(NULL) AS null_input;
@@ -80,7 +89,41 @@ SELECT INET_NTOA(16843009) AS small_result;  -- Should be '1.1.1.1'
 
 # Large values (should handle correctly)
 SELECT INET_NTOA(4294967295) AS max_uint32;
-SELECT INET_NTOA(18446744073709551615) AS max_uint64;  -- Should still be '255.255.255.255' (only lower 32 bits used)
+SELECT INET_NTOA(18446744073709551615) AS max_uint64;  -- Out-of-range values must not wrap to a different address.
+SELECT INET_NTOA(CAST(-1 AS SIGNED)) AS negative_signed;
+SELECT INET_NTOA(CAST(-1 AS INT)) AS negative_int32;
+SELECT INET_NTOA(CAST(4294967296 AS SIGNED)) AS signed_overflow;
+SELECT INET_NTOA(CAST(4294967296 AS UNSIGNED)) AS unsigned_overflow;
+
+# Fractional conversion preserves the source type's rounding contract.
+SELECT INET_NTOA(CAST(0.5 AS DECIMAL(18,1))) AS decimal64_half, INET_NTOA(CAST(1.5 AS DECIMAL(38,1))) AS decimal128_tie, INET_NTOA(CAST(2.5 AS DECIMAL(65,1))) AS decimal256_tie, INET_NTOA(CAST(0.5 AS DOUBLE)) AS double_half, INET_NTOA(CAST(1.5 AS DOUBLE)) AS double_tie_even_up, INET_NTOA(CAST(2.5 AS DOUBLE)) AS double_tie_even_down, INET_NTOA(CAST(4294967294.5 AS DECIMAL(20,1))) AS decimal_max_tie, INET_NTOA(CAST(4294967295.5 AS DECIMAL(20,1))) AS decimal_overflow, INET_NTOA(CAST(4294967294.5 AS DOUBLE)) AS double_max_tie, INET_NTOA(CAST(4294967295.5 AS DOUBLE)) AS double_overflow, INET_NTOA(CAST(-0.4 AS DECIMAL(3,1))) AS decimal_negative_to_zero, INET_NTOA(CAST(-0.5 AS DOUBLE)) AS double_negative_tie_to_zero;
+
+DROP TABLE IF EXISTS inet_ntoa_typed_inputs;
+CREATE TABLE inet_ntoa_typed_inputs (id INT PRIMARY KEY, d64 DECIMAL(18,1), d128 DECIMAL(38,1), d256 DECIMAL(65,1), f FLOAT, d DOUBLE, s BIGINT, u BIGINT UNSIGNED);
+INSERT INTO inet_ntoa_typed_inputs VALUES
+    (1, 2.5, 2.5, 2.5, 2.5, 2.5, 167772161, 4294967295),
+    (2, -0.4, -0.4, -0.4, -0.5, -0.5, -1, 4294967296),
+    (3, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+SELECT id, INET_NTOA(d64) AS ip_d64, INET_NTOA(d128) AS ip_d128, INET_NTOA(d256) AS ip_d256, INET_NTOA(f) AS ip_float, INET_NTOA(d) AS ip_double, INET_NTOA(s) AS ip_signed, INET_NTOA(u) AS ip_unsigned FROM inet_ntoa_typed_inputs ORDER BY id;
+DROP TABLE inet_ntoa_typed_inputs;
+
+PREPARE inet_ntoa_decimal_rebind FROM 'SELECT INET_NTOA(CAST(? AS DECIMAL(18,1))) AS ip';
+SET @inet_ntoa_value = 0.5;
+EXECUTE inet_ntoa_decimal_rebind USING @inet_ntoa_value;
+SET @inet_ntoa_value = 2.5;
+EXECUTE inet_ntoa_decimal_rebind USING @inet_ntoa_value;
+SET @inet_ntoa_value = NULL;
+EXECUTE inet_ntoa_decimal_rebind USING @inet_ntoa_value;
+DEALLOCATE PREPARE inet_ntoa_decimal_rebind;
+PREPARE inet_ntoa_double_rebind FROM 'SELECT INET_NTOA(CAST(? AS DOUBLE)) AS ip';
+SET @inet_ntoa_value = 0.5;
+EXECUTE inet_ntoa_double_rebind USING @inet_ntoa_value;
+SET @inet_ntoa_value = 2.5;
+EXECUTE inet_ntoa_double_rebind USING @inet_ntoa_value;
+SET @inet_ntoa_value = NULL;
+EXECUTE inet_ntoa_double_rebind USING @inet_ntoa_value;
+DEALLOCATE PREPARE inet_ntoa_double_rebind;
+SET @inet_ntoa_value = NULL;
 
 # Const-NULL results must preserve the input cardinality through ORDER BY
 DROP TABLE IF EXISTS const_null_order_probe;
