@@ -120,6 +120,49 @@ func TestAppendAlterGeneratedDependentsSkipsTablesWithoutGeneratedColumns(t *tes
 	require.Equal(t, []string{"b"}, affectedCols)
 }
 
+func TestAlterCopyAffectedStoredGeneratedColumnsUsesFinalSourceTypes(t *testing.T) {
+	original := generatedDependencyTestTable()
+	for i, col := range original.Cols {
+		col.ColId = uint64(i + 1)
+		if col.GeneratedCol != nil {
+			col.GeneratedCol.IsStored = true
+		}
+	}
+
+	virtual := &planpb.ColDef{
+		ColId: 7,
+		Name:  "virtual",
+		Typ:   planpb.Type{Id: int32(types.T_int64)},
+		GeneratedCol: &planpb.GeneratedCol{
+			Expr: generatedColumnRefExpr(planpb.Type{Id: int32(types.T_int64)}, 0, "source"),
+		},
+	}
+	original.Cols = append(original.Cols, virtual)
+	original.Name2ColIndex[virtual.Name] = int32(len(original.Cols) - 1)
+
+	copyTable := &planpb.TableDef{
+		Cols:          make([]*planpb.ColDef, len(original.Cols)),
+		Name2ColIndex: original.Name2ColIndex,
+	}
+	changeColDefMap := make(map[uint64]*planpb.ColDef, len(original.Cols))
+	for i, col := range original.Cols {
+		copyCol := *col
+		copyTable.Cols[i] = &copyCol
+		changeColDefMap[col.ColId] = &planpb.ColDef{Name: col.Name}
+	}
+	copyTable.Cols[0].Typ = planpb.Type{Id: int32(types.T_int32)}
+
+	affected, err := AlterCopyAffectedStoredGeneratedColumns(
+		context.Background(), original, copyTable, changeColDefMap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{
+		original.Cols[1].ColId: "middle",
+		original.Cols[2].ColId: "tail",
+	}, affected,
+		"a converted source must include the full transitive stored-generated closure, but exclude unrelated and virtual generated columns")
+}
+
 func addAlterTestIndex(t *testing.T, mock *MockOptimizer, base *planpb.TableDef, indexName, columnName string, unique bool) {
 	t.Helper()
 	if base.Name2ColIndex == nil {

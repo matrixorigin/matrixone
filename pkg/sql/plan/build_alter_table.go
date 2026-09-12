@@ -639,6 +639,86 @@ func originalAlterSourceColumn(
 	return originalCol.Name, true, nil
 }
 
+// AlterCopyAffectedStoredGeneratedColumns returns the stored generated columns
+// whose values can change when ALTER COPY converts a source column to its final
+// type. The original schema supplies dependency positions; the final copy
+// schema supplies the target types after all ALTER options have been applied.
+func AlterCopyAffectedStoredGeneratedColumns(
+	ctx context.Context,
+	originalTableDef, copyTableDef *TableDef,
+	changeColDefMap map[uint64]*ColDef,
+) (map[uint64]string, error) {
+	if originalTableDef == nil || copyTableDef == nil {
+		return nil, moerr.NewInternalError(ctx, "missing ALTER COPY table definition for generated-column FK validation")
+	}
+	hasStoredGeneratedColumn := false
+	for _, col := range originalTableDef.Cols {
+		if col != nil && col.GeneratedCol != nil && col.GeneratedCol.IsStored {
+			hasStoredGeneratedColumn = true
+			break
+		}
+	}
+	if !hasStoredGeneratedColumn {
+		return nil, nil
+	}
+
+	seeds := make(map[string]struct{})
+	for _, originalCol := range originalTableDef.Cols {
+		if originalCol == nil || originalCol.Hidden {
+			continue
+		}
+		mappedCol, ok := changeColDefMap[originalCol.ColId]
+		if !ok {
+			// A removed source can change every generated value that depends on
+			// it. Drop validation normally rejects that shape earlier; keeping it
+			// in the closure makes the live FK guard fail closed as well.
+			seeds[originalCol.Name] = struct{}{}
+			continue
+		}
+		if mappedCol == nil {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"nil ALTER COPY column mapping for source column %q", originalCol.Name)
+		}
+		copyCol := FindColumn(copyTableDef.Cols, mappedCol.Name)
+		if copyCol == nil {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"cannot resolve ALTER COPY target column %q for source column %q",
+				mappedCol.Name, originalCol.Name)
+		}
+		if alterCopyColumnTypeMayChangeValues(originalCol.Typ, copyCol.Typ) {
+			seeds[originalCol.Name] = struct{}{}
+		}
+	}
+	if len(seeds) == 0 {
+		return nil, nil
+	}
+
+	possiblyChanged, err := collectGeneratedColumnDependents(ctx, originalTableDef, seeds)
+	if err != nil {
+		return nil, err
+	}
+	affected := make(map[uint64]string)
+	for _, col := range originalTableDef.Cols {
+		if col == nil || col.GeneratedCol == nil || !col.GeneratedCol.IsStored {
+			continue
+		}
+		if _, changed := possiblyChanged[col.Name]; changed {
+			affected[col.ColId] = col.Name
+		}
+	}
+	return affected, nil
+}
+
+func alterCopyColumnTypeMayChangeValues(source, target Type) bool {
+	return source.Id != target.Id ||
+		source.Width != target.Width ||
+		source.Scale != target.Scale ||
+		source.Table != target.Table ||
+		source.Enumvalues != target.Enumvalues ||
+		source.Charset != target.Charset ||
+		source.PadSpace != target.PadSpace
+}
+
 func appendAlterGeneratedDependents(
 	ctx context.Context,
 	originalTableDef *TableDef,
