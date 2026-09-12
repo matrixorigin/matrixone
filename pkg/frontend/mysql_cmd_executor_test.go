@@ -1699,17 +1699,17 @@ func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 			Tail: &tree.TailParameter{IgnoredLines: 1},
 		}},
 	}
-	require.False(t, isIgnoreStatement(loadIgnoreLines))
+	require.False(t, tree.IsIgnoreStatement(loadIgnoreLines))
 
 	parsed, err := mysql.Parse(ctx, "load data local infile 'data.csv' ignore into table t fields terminated by ','", 1)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
-	require.True(t, isIgnoreStatement(parsed[0]))
+	require.True(t, tree.IsIgnoreStatement(parsed[0]))
 
 	parsed, err = mysql.Parse(ctx, "load data local infile 'data.csv' into table t fields terminated by ',' ignore 1 lines", 1)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
-	require.False(t, isIgnoreStatement(parsed[0]))
+	require.False(t, tree.IsIgnoreStatement(parsed[0]))
 }
 
 func TestRecordStatementSetsIgnoreForUpdateIgnore(t *testing.T) {
