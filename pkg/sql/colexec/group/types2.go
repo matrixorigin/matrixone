@@ -256,6 +256,7 @@ type container struct {
 	legacyTextMinMax       bool
 	legacyVarianceState    bool
 	legacyDecimalSumState  bool
+	legacyDecimalSumResult bool
 
 	// spill, agglist to load spilled data.
 	spillMem        int64

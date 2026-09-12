@@ -351,7 +351,7 @@ func MakeAgg(
 	aggID int64, isDistinct bool,
 	param ...types.Type,
 ) (AggFuncExec, error) {
-	return makeAgg(mg, aggID, isDistinct, false, false, false, param...)
+	return makeAgg(mg, aggID, isDistinct, false, false, false, false, param...)
 }
 
 // MakeGroupAgg constructs an aggregate that satisfies Group's complete static
@@ -364,7 +364,7 @@ func MakeGroupAgg(
 	param ...types.Type,
 ) (GroupAggFuncExec, error) {
 	return makeGroupAgg(
-		mg, aggID, isDistinct, false, false, false, false, allocation, extraInformation, param...)
+		mg, aggID, isDistinct, false, false, false, false, false, allocation, extraInformation, param...)
 }
 
 // MakeSingleGroupAgg constructs an aggregate for an execution path whose
@@ -379,7 +379,7 @@ func MakeSingleGroupAgg(
 	param ...types.Type,
 ) (GroupAggFuncExec, error) {
 	return makeGroupAgg(
-		mg, aggID, isDistinct, false, false, false, true, allocation, extraInformation, param...)
+		mg, aggID, isDistinct, false, false, false, false, true, allocation, extraInformation, param...)
 }
 
 // MakeAggWithLegacyTextMinMax is used only while decoding a remote pipeline
@@ -390,7 +390,7 @@ func MakeAggWithLegacyTextMinMax(
 	aggID int64, isDistinct bool,
 	param ...types.Type,
 ) (AggFuncExec, error) {
-	return makeAgg(mg, aggID, isDistinct, true, false, false, param...)
+	return makeAgg(mg, aggID, isDistinct, true, false, false, false, param...)
 }
 
 // MakeGroupAggWithLegacyTextMinMax is the Group-specific counterpart of
@@ -403,7 +403,7 @@ func MakeGroupAggWithLegacyTextMinMax(
 	param ...types.Type,
 ) (GroupAggFuncExec, error) {
 	return makeGroupAgg(
-		mg, aggID, isDistinct, true, false, false, false, allocation, extraInformation, param...)
+		mg, aggID, isDistinct, true, false, false, false, false, allocation, extraInformation, param...)
 }
 
 // MakeSingleGroupAggWithLegacyTextMinMax combines the static single-group
@@ -416,7 +416,7 @@ func MakeSingleGroupAggWithLegacyTextMinMax(
 	param ...types.Type,
 ) (GroupAggFuncExec, error) {
 	return makeGroupAgg(
-		mg, aggID, isDistinct, true, false, false, true, allocation, extraInformation, param...)
+		mg, aggID, isDistinct, true, false, false, false, true, allocation, extraInformation, param...)
 }
 
 // MakeGroupAggWithLegacyRemoteState selects aggregate implementations whose
@@ -426,26 +426,30 @@ func MakeSingleGroupAggWithLegacyTextMinMax(
 func MakeGroupAggWithLegacyRemoteState(
 	mg *mpool.MPool,
 	aggID int64, isDistinct bool,
-	legacyTextMinMax bool, legacyVarianceState bool, legacyDecimalSumState bool,
+	legacyTextMinMax bool, legacyVarianceState bool,
+	legacyDecimalSumState bool, legacyDecimalSumResult bool,
 	allocation *AllocationAccount,
 	extraInformation any,
 	param ...types.Type,
 ) (GroupAggFuncExec, error) {
 	return makeGroupAgg(
-		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState, legacyDecimalSumState, false,
+		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
+		legacyDecimalSumState, legacyDecimalSumResult, false,
 		allocation, extraInformation, param...)
 }
 
 func MakeSingleGroupAggWithLegacyRemoteState(
 	mg *mpool.MPool,
 	aggID int64, isDistinct bool,
-	legacyTextMinMax bool, legacyVarianceState bool, legacyDecimalSumState bool,
+	legacyTextMinMax bool, legacyVarianceState bool,
+	legacyDecimalSumState bool, legacyDecimalSumResult bool,
 	allocation *AllocationAccount,
 	extraInformation any,
 	param ...types.Type,
 ) (GroupAggFuncExec, error) {
 	return makeGroupAgg(
-		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState, legacyDecimalSumState, true,
+		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
+		legacyDecimalSumState, legacyDecimalSumResult, true,
 		allocation, extraInformation, param...)
 }
 
@@ -459,12 +463,15 @@ func makeGroupAgg(
 	legacyTextMinMax bool,
 	legacyVarianceState bool,
 	legacyDecimalSumState bool,
+	legacyDecimalSumResult bool,
 	singleGroup bool,
 	allocation *AllocationAccount,
 	extraInformation any,
 	param ...types.Type,
 ) (GroupAggFuncExec, error) {
-	exec, err := makeAgg(mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState, legacyDecimalSumState, param...)
+	exec, err := makeAgg(
+		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
+		legacyDecimalSumState, legacyDecimalSumResult, param...)
 	if err != nil {
 		return nil, err
 	}
@@ -503,9 +510,12 @@ func makeAgg(
 	legacyTextMinMax bool,
 	legacyVarianceState bool,
 	legacyDecimalSumState bool,
+	legacyDecimalSumResult bool,
 	param ...types.Type,
 ) (AggFuncExec, error) {
-	exec, ok, err := makeSpecialAggExec(mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState, legacyDecimalSumState, param...)
+	exec, ok, err := makeSpecialAggExec(
+		mg, aggID, isDistinct, legacyTextMinMax, legacyVarianceState,
+		legacyDecimalSumState, legacyDecimalSumResult, param...)
 	if err != nil {
 		return nil, err
 	}
@@ -518,7 +528,8 @@ func makeAgg(
 
 func makeSpecialAggExec(
 	mp *mpool.MPool,
-	id int64, isDistinct bool, legacyTextMinMax bool, legacyVariance bool, legacyDecimalSum bool, params ...types.Type,
+	id int64, isDistinct bool, legacyTextMinMax bool, legacyVariance bool,
+	legacyDecimalSumState bool, legacyDecimalSumResult bool, params ...types.Type,
 ) (AggFuncExec, bool, error) {
 	if isDistinct &&
 		(id == AggIdOfBitAnd || id == AggIdOfBitOr || id == AggIdOfBitXor) {
@@ -566,7 +577,8 @@ func makeSpecialAggExec(
 	case AggIdOfMaxByNonNull:
 		return makeMaxByExec(mp, id, true, params), true, nil
 	case AggIdOfSum:
-		return makeSumAvgExecWithLegacyDecimalSumState(mp, true, id, isDistinct, params[0], legacyDecimalSum), true, nil
+		return makeSumAvgExecWithLegacyDecimalSumState(
+			mp, true, id, isDistinct, params[0], legacyDecimalSumState, legacyDecimalSumResult), true, nil
 	case AggIdOfAvg:
 		return makeSumAvgExec(mp, false, id, isDistinct, params[0]), true, nil
 	case AggIdOfCountColumn:

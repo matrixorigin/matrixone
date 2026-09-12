@@ -55,6 +55,9 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
 	mergeGroup.ctr.legacyVarianceState = useLegacyVarianceStateForRemote(proc)
 	mergeGroup.ctr.legacyDecimalSumState = useLegacyDecimalSumState(proc)
+	// MergeGroup belongs to the upgraded coordinator and must publish the
+	// widened type selected by its plan, even when it consumes legacy state.
+	mergeGroup.ctr.legacyDecimalSumResult = false
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
 	mergeGroup.ctr.groupingAware = mergeGroup.GroupingAware

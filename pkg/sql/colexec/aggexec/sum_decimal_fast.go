@@ -119,13 +119,18 @@ func newSumDecimal64FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistinc
 	return &exec
 }
 
-// newSumDecimal64LegacyStateExec retains the pre-v65 two-vector partial state
-// while exposing the widened result metadata selected by a new coordinator.
-// It is used only until every CN can read the Decimal256 SUM state.
-func newSumDecimal64LegacyStateExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
+// newSumDecimal64LegacyStateExec retains the pre-v65 two-vector partial state.
+// A new coordinator still requests the widened result, while a final Group
+// decoded from an old coordinator must preserve that coordinator's Decimal128
+// result contract.
+func newSumDecimal64LegacyStateExec(
+	mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type, legacyResult bool,
+) AggFuncExec {
 	exec := newSumDecimal64FastExec(mp, true, aggID, isDistinct, param).(*sumDecimal64FastExec)
-	exec.aggInfo.retType = SumReturnType([]types.Type{param})
-	exec.widenSumResult = true
+	if !legacyResult {
+		exec.aggInfo.retType = SumReturnType([]types.Type{param})
+		exec.widenSumResult = true
+	}
 	return exec
 }
 
@@ -505,10 +510,14 @@ func newSumDecimal128FastExec(mp *mpool.MPool, isSum bool, aggID int64, isDistin
 
 // newSumDecimal128LegacyStateExec is the Decimal128-input counterpart of
 // newSumDecimal64LegacyStateExec.
-func newSumDecimal128LegacyStateExec(mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type) AggFuncExec {
+func newSumDecimal128LegacyStateExec(
+	mp *mpool.MPool, aggID int64, isDistinct bool, param types.Type, legacyResult bool,
+) AggFuncExec {
 	exec := newSumDecimal128FastExec(mp, true, aggID, isDistinct, param).(*sumDecimal128FastExec)
-	exec.aggInfo.retType = SumReturnType([]types.Type{param})
-	exec.widenSumResult = true
+	if !legacyResult {
+		exec.aggInfo.retType = SumReturnType([]types.Type{param})
+		exec.widenSumResult = true
+	}
 	return exec
 }
 

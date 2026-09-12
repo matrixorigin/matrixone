@@ -1826,16 +1826,17 @@ func (ctr *container) makeAggListWithAllocation(
 			)
 		}
 		singleGroup := ctr.mtyp == H0
-		if ctr.legacyTextMinMax || ctr.legacyVarianceState || ctr.legacyDecimalSumState {
+		if ctr.legacyTextMinMax || ctr.legacyVarianceState ||
+			ctr.legacyDecimalSumState || ctr.legacyDecimalSumResult {
 			if singleGroup {
 				aggList[i], err = aggexec.MakeSingleGroupAggWithLegacyRemoteState(
 					ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), ctr.legacyTextMinMax,
-					ctr.legacyVarianceState, ctr.legacyDecimalSumState,
+					ctr.legacyVarianceState, ctr.legacyDecimalSumState, ctr.legacyDecimalSumResult,
 					allocation, agExpr.GetExtraInformation(), typs...)
 			} else {
 				aggList[i], err = aggexec.MakeGroupAggWithLegacyRemoteState(
 					ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), ctr.legacyTextMinMax,
-					ctr.legacyVarianceState, ctr.legacyDecimalSumState,
+					ctr.legacyVarianceState, ctr.legacyDecimalSumState, ctr.legacyDecimalSumResult,
 					allocation, agExpr.GetExtraInformation(), typs...)
 			}
 		} else if singleGroup {
@@ -1910,6 +1911,19 @@ func useLegacyDecimalSumState(proc *process.Process) bool {
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
 	return !ok || !valid || version < defines.MORPCVersion65
+}
+
+// An old coordinator can send a final Group to an upgraded worker without
+// running the upgraded shuffle-plan gate. Below v65 that Group must preserve
+// the old Decimal128 result contract. Partial Groups still use the legacy wire
+// state, while local final Groups and coordinator MergeGroups publish the
+// widened result selected by the upgraded plan.
+func useLegacyDecimalSumResultForRemote(proc *process.Process, needEval bool) bool {
+	if !needEval || !useLegacyDecimalSumState(proc) || proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	return remote
 }
 
 // freeAggListPartial frees the first n aggregators in the list.
