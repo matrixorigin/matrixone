@@ -425,15 +425,25 @@ func SubVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vect
 	return nil
 }
 
-func StringSingle(val []byte) uint8 {
+func StringSingle(val []byte) int32 {
 	if len(val) == 0 {
 		return 0
 	}
-	return val[0]
+	return int32(val[0])
 }
 
 func AsciiString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return opUnaryBytesToFixed[uint8](ivecs, result, proc, length, func(v []byte) uint8 {
+	// The overload IDs are part of the serialized plan contract. During a
+	// rolling upgrade an old plan can still carry the historical UINT8 result
+	// type, even though new plans advertise INT32. Keep the old wrapper
+	// executable on a new binary; the remote protocol fence prevents the
+	// reverse direction (a new INT32 plan sent to an old worker).
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return opUnaryBytesToFixed[uint8](ivecs, result, proc, length, func(v []byte) uint8 {
+			return uint8(StringSingle(v))
+		}, selectList)
+	}
+	return opUnaryBytesToFixed[int32](ivecs, result, proc, length, func(v []byte) int32 {
 		return StringSingle(v)
 	}, selectList)
 }
@@ -483,9 +493,9 @@ var (
 	uints = []uint64{1e16, 1e8, 1e4, 1e2, 1e1}
 )
 
-func IntSingle[T types.Ints](val T, start int) uint8 {
+func IntSingle[T types.Ints](val T, start int) int32 {
 	if val < 0 {
-		return '-'
+		return int32('-')
 	}
 	i64Val := int64(val)
 	for _, v := range ints[start:] {
@@ -493,31 +503,41 @@ func IntSingle[T types.Ints](val T, start int) uint8 {
 			i64Val /= v
 		}
 	}
-	return uint8(i64Val) + '0'
+	return int32(i64Val) + '0'
 }
 
 func AsciiInt[T types.Ints](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	start := intStartMap[ivecs[0].GetType().Oid]
 
-	return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+			return uint8(IntSingle[T](v, start))
+		}, selectList)
+	}
+	return opUnaryFixedToFixed[T, int32](ivecs, result, proc, length, func(v T) int32 {
 		return IntSingle[T](v, start)
 	}, selectList)
 }
 
-func UintSingle[T types.UInts](val T, start int) uint8 {
+func UintSingle[T types.UInts](val T, start int) int32 {
 	u64Val := uint64(val)
 	for _, v := range uints[start:] {
 		if u64Val >= v {
 			u64Val /= v
 		}
 	}
-	return uint8(u64Val) + '0'
+	return int32(u64Val) + '0'
 }
 
 func AsciiUint[T types.UInts](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	start := intStartMap[ivecs[0].GetType().Oid]
 
-	return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+			return uint8(UintSingle[T](v, start))
+		}, selectList)
+	}
+	return opUnaryFixedToFixed[T, int32](ivecs, result, proc, length, func(v T) int32 {
 		return UintSingle[T](v, start)
 	}, selectList)
 }
@@ -4539,82 +4559,32 @@ func parseCoordinatePairWithError(point string, errMsg string) (float64, float64
 	return x, y, nil
 }
 
-// SoundexString implements the SOUNDEX algorithm
-// Returns a phonetic code representing how a string sounds
+// soundexCodeMap maps ASCII A-Z to original Soundex digits; '0' means discard.
+const soundexCodeMap = "01230120022455012623010202"
+
+// SoundexString implements MySQL's original Soundex behavior for ASCII input.
 func SoundexString(str string) string {
-	if len(str) == 0 {
-		return "0000"
-	}
-
-	// Convert to uppercase and process only alphabetic characters
-	upper := strings.ToUpper(str)
-
-	// Find the first alphabetic character
-	firstChar := byte(0)
-	firstIdx := -1
-	for i := 0; i < len(upper); i++ {
-		if upper[i] >= 'A' && upper[i] <= 'Z' {
-			firstChar = upper[i]
-			firstIdx = i
-			break
-		}
-	}
-
-	// If no alphabetic character found, return "0000"
-	if firstChar == 0 {
-		return "0000"
-	}
-
-	// Build the soundex code
 	var code strings.Builder
-	code.WriteByte(firstChar)
-
-	// Soundex mapping: B, F, P, V → 1; C, G, J, K, Q, S, X, Z → 2; D, T → 3; L → 4; M, N → 5; R → 6
-	// Index: A=0, B=1, C=2, ..., Z=25
-	soundexMap := [26]byte{
-		0,   // A
-		'1', // B
-		'2', // C
-		'3', // D
-		0,   // E
-		'1', // F
-		'2', // G
-		0,   // H
-		0,   // I
-		'2', // J
-		'2', // K
-		'4', // L
-		'5', // M
-		'5', // N
-		0,   // O
-		'1', // P
-		'2', // Q
-		'6', // R
-		'2', // S
-		'3', // T
-		0,   // U
-		'1', // V
-		0,   // W
-		'2', // X
-		0,   // Y
-		'2', // Z
-	}
-
-	lastCode := byte(0)
-	for i := firstIdx + 1; i < len(upper) && code.Len() < 4; i++ {
-		c := upper[i]
+	firstLetter := true
+	lastCode := byte('0')
+	for i := 0; i < len(str); i++ {
+		c := str[i]
+		if c >= 'a' && c <= 'z' {
+			c -= 'a' - 'A'
+		}
 		if c < 'A' || c > 'Z' {
 			continue
 		}
-
-		codeChar := soundexMap[c-'A']
-		// Skip vowels, H, W (codeChar == 0)
-		if codeChar == 0 {
+		codeChar := soundexCodeMap[c-'A']
+		if firstLetter {
+			code.WriteByte(c)
+			lastCode = codeChar
+			firstLetter = false
 			continue
 		}
 
-		// Skip consecutive duplicate codes
-		if codeChar == lastCode {
+		// Original Soundex discards code-zero letters before suppressing duplicates.
+		if codeChar == '0' || codeChar == lastCode {
 			continue
 		}
 
@@ -4622,13 +4592,13 @@ func SoundexString(str string) string {
 		lastCode = codeChar
 	}
 
-	// Pad with zeros to make it 4 characters
-	result := code.String()
-	for len(result) < 4 {
-		result += "0"
+	if firstLetter {
+		return ""
 	}
-
-	return result
+	for code.Len() < 4 {
+		code.WriteByte('0')
+	}
+	return code.String()
 }
 
 func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
