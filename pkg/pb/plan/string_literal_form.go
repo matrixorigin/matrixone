@@ -209,6 +209,7 @@ type RemoteExpressionFeatures struct {
 	MixedJSONBooleanEquality bool
 	FormatNumericArguments   bool
 	TypedConversionFunctions bool
+	IntegerArithmeticDomains bool
 	ASCIIInt32Result         bool
 }
 
@@ -218,7 +219,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
 		features.TypedConversionFunctions ||
-		features.ASCIIInt32Result
+		features.ASCIIInt32Result ||
+		features.IntegerArithmeticDomains
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -229,6 +231,13 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			fn := current.GetF()
+			if fn != nil && fn.Func != nil {
+				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				// PLUS/MINUS/MULTI are stable function IDs 10/11/12.
+				if (id >= 10 && id <= 12 && overload == 2) || (id == 11 && overload == 3) {
+					features.IntegerArithmeticDomains = true
+				}
+			}
 			if !features.NumericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
 				strings.EqualFold(fn.Func.GetObjName(), "cast") {
 				features.NumericPrefix = true

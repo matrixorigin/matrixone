@@ -1264,6 +1264,10 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if !changed {
 			return expr, false, nil
 		}
+		if isExplicitPreparedCast(expr) {
+			bound, err := rebindExplicitPreparedCast(rule.ctx, expr, copy.GetF().Args)
+			return bound, true, err
+		}
 		// Recover only peers whose source explicitly proves that FLOAT was a
 		// prepare-time envelope. Source-less scientific literals and explicit
 		// FLOAT casts are semantic FLOAT boundaries and must remain unchanged.
@@ -1276,6 +1280,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if name == "cast" && isImplicitPreparedParamCast(expr) {
 			return copy.GetF().Args[0], true, nil
 		}
+		restorePreparedIntegerArithmeticOperands(name, copy.GetF().Args)
 		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
 		if err != nil {
 			return nil, false, err
@@ -1306,6 +1311,25 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 	return expr, false, nil
 }
 
+// A user CAST fixes the target domain and conversion semantics. Revalidate its
+// current source type, but do not resolve it as a new implicit CAST or elide a
+// now-redundant boundary before the enclosing arithmetic is rebound.
+func rebindExplicitPreparedCast(ctx context.Context, original *Expr, args []*Expr) (*Expr, error) {
+	if len(args) != 2 || args[0] == nil || args[1] == nil {
+		return nil, moerr.NewInternalError(ctx, "invalid prepared CAST arguments")
+	}
+	_, overload := planfunction.DecodeOverloadID(original.GetF().Func.Obj)
+	_, err := planfunction.GetFunctionByNameWithOverload(ctx, "cast", []types.Type{
+		makeTypeByPlan2Expr(args[0]), makeTypeByPlan2Expr(args[1]),
+	}, overload)
+	if err != nil {
+		return nil, err
+	}
+	bound := DeepCopyExpr(original)
+	bound.GetF().Args = args
+	return bound, nil
+}
+
 func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
 	if expr == nil {
 		return nil, false
@@ -1334,6 +1358,31 @@ func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
 		}
 	}
 	return nil, false
+}
+
+// Integer widening casts inserted for the PREPARE-time overload are not source
+// domains. Re-resolve arithmetic from those sources when a parameter changes;
+// otherwise a BIT peer widened to UINT64 acquires checked unsigned semantics
+// that the equivalent directly bound BIT expression does not have.
+func restorePreparedIntegerArithmeticOperands(name string, args []*Expr) {
+	if name != "+" && name != "-" && name != "*" {
+		return
+	}
+	for i, arg := range args {
+		for arg != nil && types.T(arg.Typ.Id).IsInteger() {
+			fn := arg.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || fn.SyntaxExplicitCast || len(fn.Args) == 0 || fn.Args[0] == nil {
+				break
+			}
+			_, overload := planfunction.DecodeOverloadID(fn.Func.Obj)
+			source := types.T(fn.Args[0].Typ.Id)
+			if overload != 0 || (!source.IsInteger() && source != types.T_bit) {
+				break
+			}
+			arg = fn.Args[0]
+			args[i] = arg
+		}
+	}
 }
 
 func (rule *ResetParamRefRule) rebindPreparedIntegerExpr(expr *plan.Expr) (*Expr, bool, error) {
@@ -2266,18 +2315,25 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
+			restorePreparedIntegerArithmeticOperands(functionName, boundArgs)
 			stringDomainModes, resolveErr := rule.resolvePreparedRegexpStringDomainCheckModes(
 				functionName, boundArgs, originalArgs)
 			if resolveErr != nil {
 				return nil, resolveErr
 			}
-			rewritten, err := bindPreparedFuncExprImplByPlanExpr(
-				rule.ctx,
-				originalTemporalExpr,
-				exprImpl.F.Func.GetObjName(),
-				boundArgs,
-				stringDomainModes,
-			)
+			var rewritten *Expr
+			if isExplicitPreparedCast(e) {
+				rewritten, err = rebindExplicitPreparedCast(rule.ctx, e, boundArgs)
+				rule.specialized = true
+			} else {
+				rewritten, err = bindPreparedFuncExprImplByPlanExpr(
+					rule.ctx,
+					originalTemporalExpr,
+					exprImpl.F.Func.GetObjName(),
+					boundArgs,
+					stringDomainModes,
+				)
+			}
 			if err != nil {
 				return nil, err
 			}

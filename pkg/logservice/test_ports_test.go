@@ -76,9 +76,30 @@ func TestProbeTestPortRejectsOccupiedSockets(t *testing.T) {
 		defer listener.Close()
 		port := listener.LocalAddr().(*net.UDPAddr).Port
 		require.ErrorIs(t, probeTestPort(port), syscall.EADDRINUSE)
-		// The failed UDP probe must release its temporary TCP listener.
-		tcp, err := net.Listen("tcp4", listener.LocalAddr().String())
-		require.NoError(t, err)
-		require.NoError(t, tcp.Close())
+	})
+	t.Run("udp failure closes tcp", func(t *testing.T) {
+		// A UDP-selected ephemeral port may already be occupied by unrelated
+		// TCP traffic. Prove cleanup directly, not by racing to rebind it.
+		tcp := &portProbeCloseTracker{}
+		err := probeTestPortAddressWithListeners("test-address",
+			func(network, addr string) (net.Listener, error) {
+				require.Equal(t, "tcp4", network)
+				require.Equal(t, "test-address", addr)
+				return tcp, nil
+			},
+			func(network, addr string) (net.PacketConn, error) {
+				require.Equal(t, "udp4", network)
+				require.Equal(t, "test-address", addr)
+				return nil, syscall.EADDRINUSE
+			})
+		require.ErrorIs(t, err, syscall.EADDRINUSE)
+		require.Equal(t, 1, tcp.closes)
 	})
 }
+
+type portProbeCloseTracker struct {
+	net.Listener
+	closes int
+}
+
+func (l *portProbeCloseTracker) Close() error { l.closes++; return nil }

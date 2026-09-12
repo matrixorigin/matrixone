@@ -217,6 +217,9 @@ func getFunctionByName(
 	}
 
 	check := f.checkFn(f.Overloads, args)
+	if r.fid == MINUS && signedUnsignedSubtraction(ctx, args) {
+		check = newCheckResultWithCast(3, integerDomainOperands(args))
+	}
 	if f.stringDomainCheckFn != nil && len(stringDomainModes) > 0 {
 		check = f.stringDomainCheckFn(f.Overloads, args, stringDomainModes)
 	}

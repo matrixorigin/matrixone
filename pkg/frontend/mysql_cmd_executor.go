@@ -2913,6 +2913,7 @@ func createPrepareStmtInSession(
 		NativeMode:             owner.sqlModeHasMatrixOneNative(),
 		OnlyFullGroupBy:        owner.sqlModeHasOnlyFullGroupBy(),
 		BoolSumAvg:             owner.sqlModeHasEnableBoolSumAvg(),
+		NoUnsignedSubtraction:  owner.sqlModeHasNoUnsignedSubtraction(),
 		sqlModeFlagsSet:        true,
 		remapDb:                maps.Clone(execCtx.remapDb),
 		defaultDatabase:        executionSes.GetTxnCompileCtx().GetDatabase(),

@@ -282,6 +282,14 @@ func resolveNumericBinaryTypes(
 	if !ok {
 		return numericTypeResolution{}, false
 	}
+	if (op == numericOpAdd || op == numericOpSub || op == numericOpMul) &&
+		isMixedUnsignedInteger(left, right) {
+		return numericTypeResolution{
+			left:   left,
+			right:  right,
+			result: types.New(types.T_uint64, 64, -1),
+		}, true
+	}
 
 	var cast bool
 	var castLeft, castRight types.Type

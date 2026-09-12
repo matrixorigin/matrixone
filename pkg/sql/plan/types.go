@@ -479,6 +479,7 @@ type QueryBuilder struct {
 	// builder like the two flags above so every bind path (direct, HAVING,
 	// window, PREPARE) reads the same decision.
 	boolSumAvgCompat      bool
+	noUnsignedSubtraction bool
 	isForUpdate           bool // if it's a query plan for update
 	isRestore             bool
 	isRestoreByTs         bool
