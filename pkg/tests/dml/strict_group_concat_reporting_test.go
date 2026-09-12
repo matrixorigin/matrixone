@@ -62,26 +62,33 @@ func TestStrictGroupConcatOldWorkerCannotCommit(t *testing.T) {
 		execSQLDB(t, ctx, db, "set session sql_mode='STRICT_TRANS_TABLES'")
 		execSQLDB(t, ctx, db, "set session group_concat_max_len=4")
 		rt := moruntime.ServiceRuntime(peer.ServiceID())
-		oldVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion66)
-		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
-		oldForce := plan.GetForceScanOnMultiCN()
-		plan.SetForceScanOnMultiCN(true)
-		defer plan.SetForceScanOnMultiCN(oldForce)
-		_, err = db.ExecContext(ctx, "insert into dst select group_concat(v order by id separator '|') from src")
+		execWithOldWorker := func(statement string) error {
+			// Force only the writes under test, including CTAS's internal SQL.
+			// Rollback verification must not force unrelated metadata queries
+			// (including information_schema's subscription discovery) onto CNs.
+			oldVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion66)
+			defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+			oldForce := plan.GetForceScanOnMultiCN()
+			plan.SetForceScanOnMultiCN(true)
+			defer plan.SetForceScanOnMultiCN(oldForce)
+			_, err := db.ExecContext(ctx, statement)
+			return err
+		}
+		err = execWithOldWorker("insert into dst select group_concat(v order by id separator '|') from src")
 		var sqlErr *mysql.MySQLError
 		require.True(t, errors.As(err, &sqlErr), "%v", err)
 		require.Equal(t, uint16(1260), sqlErr.Number)
 		var count int
 		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from dst").Scan(&count))
 		require.Zero(t, count, "a strict write cannot commit a truncated aggregate")
-		_, err = db.ExecContext(ctx, "create table rejected_ctas as select group_concat(v order by id separator '|') as gc from src")
+		err = execWithOldWorker("create table rejected_ctas as select group_concat(v order by id separator '|') as gc from src")
 		sqlErr = nil
 		require.True(t, errors.As(err, &sqlErr), "%v", err)
 		require.Equal(t, uint16(1260), sqlErr.Number)
 		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from information_schema.tables where table_schema=? and table_name='rejected_ctas'", name).Scan(&count))
 		require.Zero(t, count, "CTAS internal SQL must inherit the reporting requirement and roll back")
-		execSQLDB(t, ctx, db, "insert ignore into dst select group_concat(v order by id separator '|') from src")
+		require.NoError(t, execWithOldWorker("insert ignore into dst select group_concat(v order by id separator '|') from src"))
 		var value string
 		require.NoError(t, db.QueryRowContext(ctx, "select gc from dst").Scan(&value))
 		require.Equal(t, "aa|b", value, "IGNORE must retain warning-only behavior")
