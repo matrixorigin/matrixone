@@ -1050,8 +1050,8 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 }
 
 // PreparedPlanHasDeferredNumericFunction reports whether a prepared plan has
-// an ABS argument whose overload was deferred until execution.  This is kept
-// as a plan-introspection helper for tests and diagnostics; execute-time
+// an ABS or SIGN argument whose overload was deferred until execution. This is
+// kept as a plan-introspection helper for tests and diagnostics; execute-time
 // eligibility is cached on PrepareStmt and must not call this walker for every
 // execution.
 func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
@@ -1059,10 +1059,10 @@ func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
 }
 
 // PreparedPlanNumericFallbackParamPositions returns the parameter positions
-// whose value supplies a deferred numeric ABS argument.  The result is plan
-// metadata, not an execute-time decision: callers can compute it once when a
+// whose value supplies a deferred numeric ABS or SIGN argument. The result is
+// plan metadata, not an execute-time decision: callers can compute it once when a
 // prepared plan is built and use it to decide whether runtime values must be
-// decoded.  In particular, this avoids scanning/deep-copying the entire plan
+// decoded. In particular, this avoids scanning/deep-copying the entire plan
 // on every ordinary execution.
 func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
@@ -1071,7 +1071,7 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	positions := make(map[int32]struct{})
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "abs") || len(fn.Args) != 1 {
+		if fn == nil || fn.Func == nil || !isPreparedNumericFallbackFunction(fn.Func.GetObjName()) || len(fn.Args) != 1 {
 			return nil
 		}
 		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
@@ -1164,6 +1164,15 @@ func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName 
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
+}
+
+func isPreparedNumericFallbackFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "abs", "sign":
+		return true
+	default:
+		return false
+	}
 }
 
 func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {

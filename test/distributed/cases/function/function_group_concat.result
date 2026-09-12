@@ -204,7 +204,6 @@ CREATE TABLE group_concat_12 (a int, c int);
 INSERT INTO group_concat_12 values (1, 5);
 INSERT INTO group_concat_12 values (2, 4);
 INSERT INTO group_concat_12 values (3, 3);
-INSERT INTO group_concat_12 values (3, 3);
 SELECT group_concat(c) FROM group_concat_11;
 group_concat(c, ,)
 2,3,4,5
@@ -214,15 +213,21 @@ a    c
 2    4
 2    4
 3    3
-3    3
-SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc) as grp FROM group_concat_11;
-not supported: subquery in group_concat ORDER BY
+SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc, c) as grp FROM group_concat_11;
+grp
+2,3,4,5
 SELECT group_concat((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a) order by 1) as grp FROM group_concat_11;
-not supported: subquery in group_concat ORDER BY
+grp
+3,4,4,5
 SELECT group_concat(coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '') order by 1) as grp FROM group_concat_11;
-not supported: subquery in group_concat ORDER BY
-SELECT group_concat(group_concat_11.c order by coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '')) as grp FROM group_concat_11;
-not supported: subquery in group_concat ORDER BY
+grp
+3,4,4,5
+SELECT group_concat(group_concat_11.c order by coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), ''), group_concat_11.c) as grp FROM group_concat_11;
+grp
+5,3,4,2
+INSERT INTO group_concat_12 values (3, 6);
+SELECT group_concat(group_concat_11.c order by (SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a)) as grp FROM group_concat_11;
+Subquery returns more than 1 row
 DROP TABLE IF EXISTS group_concat_13;
 DROP TABLE IF EXISTS group_concat_14;
 CREATE TABLE group_concat_13 ( a int );
@@ -466,3 +471,88 @@ hex(group_concat(g, ,order by id))
 0101000000000000000000F03F00000000000000
 set session group_concat_max_len = 1024;
 drop table group_concat_extended_types;
+drop table if exists group_concat_subquery_src;
+drop table if exists group_concat_subquery_weights;
+create table group_concat_subquery_src (
+id int primary key,
+grp int,
+a varchar(10)
+);
+create table group_concat_subquery_weights (
+id int primary key,
+w int
+);
+insert into group_concat_subquery_src values
+(1, 1, 'a'),
+(2, 1, 'b'),
+(3, 1, 'c'),
+(4, 2, 'd');
+insert into group_concat_subquery_weights values
+(1, 30),
+(2, 10),
+(3, 20),
+(4, null);
+select group_concat(
+a order by
+(select w from group_concat_subquery_weights weights
+where weights.id = src.id)
+separator '|') as result
+from group_concat_subquery_src src
+where grp = 1;
+result
+b|c|a
+select group_concat(
+a order by
+(select w from group_concat_subquery_weights weights
+where weights.id = src.id) desc
+separator '|') as result
+from group_concat_subquery_src src;
+result
+a|c|b|d
+select grp,
+group_concat(
+a order by
+(select w from group_concat_subquery_weights weights
+where weights.id = src.id)
+separator '|') as result
+from group_concat_subquery_src src
+group by grp
+order by grp;
+grp    result
+1    b|c|a
+2    d
+select group_concat(
+a order by coalesce(
+(select w from group_concat_subquery_weights weights
+where weights.id = src.id), 0)
+separator '|') as result
+from group_concat_subquery_src src;
+result
+d|b|c|a
+select group_concat(
+a order by (select max(w) from group_concat_subquery_weights)
+separator '|') as result
+from group_concat_subquery_src
+where id = 1;
+result
+a
+prepare group_concat_subquery_stmt from
+'select group_concat(a order by
+(select w + ? from group_concat_subquery_weights weights
+where weights.id = src.id)
+separator "|") as result
+from group_concat_subquery_src src where grp = ?';
+set @group_concat_subquery_offset = 5;
+set @group_concat_subquery_grp = 1;
+execute group_concat_subquery_stmt using
+@group_concat_subquery_offset, @group_concat_subquery_grp;
+result
+b|c|a
+deallocate prepare group_concat_subquery_stmt;
+select group_concat(
+a order by (select w from group_concat_subquery_weights)
+separator '|')
+from group_concat_subquery_src;
+Subquery returns more than 1 row
+drop table group_concat_subquery_src;
+drop table group_concat_subquery_weights;

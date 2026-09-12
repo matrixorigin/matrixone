@@ -128,6 +128,11 @@ func TestCompareNumericFailsClosedForMalformedValues(t *testing.T) {
 		ByteJson{Type: TpCodeInt64, Data: []byte{1}},
 	)
 	require.False(t, ok)
+	notANumber := makeJsonWithoutParse(math.NaN())
+	_, ok = CompareNumeric(notANumber, notANumber)
+	require.False(t, ok)
+	_, ok = ParseNumeric(notANumber)
+	require.False(t, ok)
 
 	parsedLeft, ok := ParseNumeric(makeDecimalJson("9007199254740992.1"))
 	require.True(t, ok)

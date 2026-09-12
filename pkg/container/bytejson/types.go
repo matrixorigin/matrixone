@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/internal/bytejsonvalidate"
 )
 
 type subPathType byte
@@ -185,7 +187,24 @@ func (bj ByteJson) TYPE() string {
 	}
 }
 
-var jsonTpOrder = map[string]int{
+type jsonTypeRank byte
+
+const (
+	jsonRankNull jsonTypeRank = iota
+	jsonRankNumber
+	jsonRankString
+	jsonRankObject
+	jsonRankArray
+	jsonRankBoolean
+	jsonRankDate
+	jsonRankTime
+	jsonRankDatetime
+	jsonRankBit
+	jsonRankBlob
+	jsonRankUnknown
+)
+
+var physicalJSONTypeOrder = map[string]int{
 	"ARRAY":    -1,
 	"OBJECT":   -2,
 	"STRING":   -3,
@@ -217,6 +236,32 @@ const (
 )
 
 func CompareByteJson(left, right ByteJson) int {
+	// Classify each complete document before comparing any descendants. A
+	// malformed container must not become valid or invalid depending on which
+	// child happens to differ from its comparison partner.
+	leftRank, leftKnown := byteJsonTypeRank(left)
+	rightRank, rightKnown := byteJsonTypeRank(right)
+	if !leftKnown || !rightKnown {
+		if leftKnown {
+			return -1
+		}
+		if rightKnown {
+			return 1
+		}
+		return compareByteJsonFallback(left, right)
+	}
+	if leftRank != rightRank {
+		return compareInt64(int64(leftRank), int64(rightRank))
+	}
+
+	return compareByteJsonKnown(left, right, leftRank)
+}
+
+// CompareByteJsonPhysical preserves the pre-SQL-order relation used by
+// persisted JSON cluster keys. It is intentionally separate from
+// CompareByteJson: changing SQL JSON precedence must not reorder old objects
+// relative to newly written objects during physical merge.
+func CompareByteJsonPhysical(left, right ByteJson) int {
 	if cmp, ok := CompareBinaryJSON(left, right); ok {
 		return cmp
 	}
@@ -224,60 +269,49 @@ func CompareByteJson(left, right ByteJson) int {
 		return compareByteJsonNumeric(left, right)
 	}
 
-	order1 := jsonTpOrder[left.TYPE()]
-	order2 := jsonTpOrder[right.TYPE()]
-
-	var cmp int
-	if order1 == order2 {
-		if order1 == jsonTpOrder["LITERAL"] {
-			cmp = 0
+	order1 := physicalJSONTypeOrder[left.TYPE()]
+	order2 := physicalJSONTypeOrder[right.TYPE()]
+	if order1 != order2 {
+		cmp := order1 - order2
+		if cmp > 0 {
+			return 1
 		}
-		switch left.Type {
-		case TpCodeLiteral:
-			cmp = int(left.Data[0]) - int(right.Data[0])
-		case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime:
-			cmp = bytes.Compare(left.GetString(), right.GetString())
-		case TpCodeArray:
-			leftCnt := left.GetElemCnt()
-			rightCnt := right.GetElemCnt()
-			for i := 0; i < leftCnt && i < rightCnt; i++ {
-				elem1 := left.getArrayElem(i)
-				elem2 := right.getArrayElem(i)
-				cmp = CompareByteJson(elem1, elem2)
-				if cmp != 0 {
-					return cmp
-				}
-			}
-			cmp = leftCnt - rightCnt
-		case TpCodeObject:
-			leftCnt := left.GetElemCnt()
-			rightCnt := right.GetElemCnt()
-			cmp = compareInt64(int64(leftCnt), int64(rightCnt))
-			if cmp != 0 {
+		if cmp < 0 {
+			return -1
+		}
+		return 0
+	}
+
+	switch left.Type {
+	case TpCodeLiteral:
+		return int(left.Data[0]) - int(right.Data[0])
+	case TpCodeString, TpCodeDate, TpCodeTime, TpCodeDatetime:
+		return bytes.Compare(left.GetString(), right.GetString())
+	case TpCodeArray:
+		leftCnt := left.GetElemCnt()
+		rightCnt := right.GetElemCnt()
+		for i := 0; i < leftCnt && i < rightCnt; i++ {
+			if cmp := CompareByteJsonPhysical(left.getArrayElem(i), right.getArrayElem(i)); cmp != 0 {
 				return cmp
 			}
-			for i := 0; i < leftCnt; i++ {
-				leftKey := left.getObjectKey(i)
-				rightKey := right.getObjectKey(i)
-				cmp = bytes.Compare(leftKey, rightKey)
-				if cmp != 0 {
-					return cmp
-				}
-				cmp = CompareByteJson(left.getObjectVal(i), right.getObjectVal(i))
-				if cmp != 0 {
-					return cmp
-				}
+		}
+		return leftCnt - rightCnt
+	case TpCodeObject:
+		leftCnt := left.GetElemCnt()
+		rightCnt := right.GetElemCnt()
+		if cmp := compareInt64(int64(leftCnt), int64(rightCnt)); cmp != 0 {
+			return cmp
+		}
+		for i := 0; i < leftCnt; i++ {
+			if cmp := bytes.Compare(left.getObjectKey(i), right.getObjectKey(i)); cmp != 0 {
+				return cmp
+			}
+			if cmp := CompareByteJsonPhysical(left.getObjectVal(i), right.getObjectVal(i)); cmp != 0 {
+				return cmp
 			}
 		}
-	} else {
-		cmp = order1 - order2
-		if cmp > 0 {
-			cmp = 1
-		} else if cmp < 0 {
-			cmp = -1
-		}
 	}
-	return cmp
+	return 0
 }
 
 func isByteJsonNumeric(tp TpCode) bool {
@@ -289,15 +323,187 @@ func isByteJsonNumeric(tp TpCode) bool {
 	}
 }
 
+// IsValidByteJson reports whether value has a complete, supported ByteJSON
+// representation, including every descendant of an array or object.
+func IsValidByteJson(value ByteJson) bool {
+	_, ok := byteJsonTypeRank(value)
+	return ok
+}
+
+// CompareByteJsonTrusted compares two values that have already passed
+// IsValidByteJson. It intentionally skips document validation so callers that
+// sort a batch can validate each row once and keep comparisons allocation-free.
+func CompareByteJsonTrusted(left, right ByteJson) int {
+	leftRank := byteJsonTypeRankTrusted(left)
+	rightRank := byteJsonTypeRankTrusted(right)
+	if leftRank != rightRank {
+		return compareInt64(int64(leftRank), int64(rightRank))
+	}
+	return compareByteJsonKnown(left, right, leftRank)
+}
+
+func compareByteJsonKnown(left, right ByteJson, rank jsonTypeRank) int {
+	var cmp int
+	switch rank {
+	case jsonRankNull:
+		return 0
+	case jsonRankNumber:
+		cmp = compareByteJsonNumeric(left, right)
+	case jsonRankBoolean:
+		return compareInt64(int64(booleanLiteralOrder(left.Data[0])), int64(booleanLiteralOrder(right.Data[0])))
+	case jsonRankString, jsonRankDate, jsonRankTime, jsonRankDatetime:
+		cmp = bytes.Compare(left.GetString(), right.GetString())
+	case jsonRankArray, jsonRankObject:
+		return compareByteJsonContainer(left, right, rank)
+	case jsonRankBit, jsonRankBlob:
+		cmp, _ = CompareBinaryJSON(left, right)
+	default:
+		return compareByteJsonFallback(left, right)
+	}
+	return cmp
+}
+
+func byteJsonTypeRankTrusted(value ByteJson) jsonTypeRank {
+	switch value.Type {
+	case TpCodeLiteral:
+		switch value.Data[0] {
+		case LiteralNull:
+			return jsonRankNull
+		case LiteralTrue, LiteralFalse:
+			return jsonRankBoolean
+		}
+	case TpCodeInt64, TpCodeUint64, TpCodeFloat64, TpCodeDecimal:
+		return jsonRankNumber
+	case TpCodeString:
+		return jsonRankString
+	case TpCodeObject:
+		return jsonRankObject
+	case TpCodeArray:
+		return jsonRankArray
+	case TpCodeDate:
+		return jsonRankDate
+	case TpCodeTime:
+		return jsonRankTime
+	case TpCodeDatetime:
+		return jsonRankDatetime
+	case TpCodeBlob, TpCodeOpaque, TpCodeBit:
+		binaryValue, _ := binaryJSONValue(value)
+		binaryValue = resolveBinaryJSONValue(binaryValue)
+		if binaryValue.subtype == binaryJSONBit {
+			return jsonRankBit
+		}
+		return jsonRankBlob
+	}
+	return jsonRankUnknown
+}
+
+func byteJsonTypeRank(value ByteJson) (jsonTypeRank, bool) {
+	switch value.Type {
+	case TpCodeLiteral:
+		if len(value.Data) != 1 {
+			return jsonRankUnknown, false
+		}
+		switch value.Data[0] {
+		case LiteralNull:
+			return jsonRankNull, true
+		case LiteralTrue, LiteralFalse:
+			return jsonRankBoolean, true
+		default:
+			return jsonRankUnknown, false
+		}
+	case TpCodeInt64, TpCodeUint64, TpCodeFloat64:
+		return jsonRankNumber, isValidNumericEncoding(value)
+	case TpCodeDecimal:
+		_, ok := ParseNumeric(value)
+		return jsonRankNumber, ok
+	case TpCodeString:
+		return jsonRankString, isValidByteJsonStringEncoding(value.Data)
+	case TpCodeObject:
+		return jsonRankObject, isValidByteJsonContainer(value)
+	case TpCodeArray:
+		return jsonRankArray, isValidByteJsonContainer(value)
+	case TpCodeDate:
+		return jsonRankDate, isValidByteJsonStringEncoding(value.Data)
+	case TpCodeTime:
+		return jsonRankTime, isValidByteJsonStringEncoding(value.Data)
+	case TpCodeDatetime:
+		return jsonRankDatetime, isValidByteJsonStringEncoding(value.Data)
+	case TpCodeBlob, TpCodeOpaque, TpCodeBit:
+		binaryValue, ok := binaryJSONValue(value)
+		if !ok {
+			return jsonRankUnknown, false
+		}
+		binaryValue = resolveBinaryJSONValue(binaryValue)
+		if binaryValue.subtype == binaryJSONBit {
+			return jsonRankBit, true
+		}
+		return jsonRankBlob, true
+	default:
+		return jsonRankUnknown, false
+	}
+}
+
+func isValidByteJsonStringEncoding(data []byte) bool {
+	_, ok := bytejsonvalidate.UvarintPayload(data)
+	return ok
+}
+
+func isValidByteJsonContainer(value ByteJson) bool {
+	return bytejsonvalidate.Container(value.Type, value.Data, func(tp byte, data []byte) bool {
+		_, ok := byteJsonTypeRank(ByteJson{Type: TpCode(tp), Data: data})
+		return ok
+	})
+}
+
+func compareByteJsonContainer(left, right ByteJson, rank jsonTypeRank) (cmp int) {
+	leftCnt := left.GetElemCnt()
+	rightCnt := right.GetElemCnt()
+	if rank == jsonRankArray {
+		for i := 0; i < leftCnt && i < rightCnt; i++ {
+			cmp = CompareByteJsonTrusted(left.getArrayElem(i), right.getArrayElem(i))
+			if cmp != 0 {
+				return cmp
+			}
+		}
+		return leftCnt - rightCnt
+	}
+
+	if cmp = compareInt64(int64(leftCnt), int64(rightCnt)); cmp != 0 {
+		return cmp
+	}
+	for i := 0; i < leftCnt; i++ {
+		if cmp = bytes.Compare(left.getObjectKey(i), right.getObjectKey(i)); cmp != 0 {
+			return cmp
+		}
+		cmp = CompareByteJsonTrusted(left.getObjectVal(i), right.getObjectVal(i))
+		if cmp != 0 {
+			return cmp
+		}
+	}
+	return 0
+}
+
+func booleanLiteralOrder(literal byte) byte {
+	if literal == LiteralFalse {
+		return 0
+	}
+	return 1
+}
+
+func compareByteJsonFallback(left, right ByteJson) int {
+	if left.Type != right.Type {
+		return compareInt64(int64(left.Type), int64(right.Type))
+	}
+	return bytes.Compare(left.Data, right.Data)
+}
+
 // ParsedNumeric is an immutable, validated ByteJSON numeric scalar. Its fields
 // are deliberately private so callers can only obtain a usable value through
 // ParseNumeric. It lets a constant operand pay exact normalization once per
 // batch instead of once per compared row.
 type ParsedNumeric struct {
-	key         numericKey
-	nonFinite   float64
-	isNonFinite bool
-	valid       bool
+	key   numericKey
+	valid bool
 }
 
 // ParseNumeric validates and normalizes one ByteJSON numeric scalar without
@@ -305,14 +511,6 @@ type ParsedNumeric struct {
 func ParseNumeric(value ByteJson) (ParsedNumeric, bool) {
 	if !isValidNumericEncoding(value) {
 		return ParsedNumeric{}, false
-	}
-	if value.Type == TpCodeFloat64 {
-		floating := value.GetFloat64()
-		if math.IsNaN(floating) || math.IsInf(floating, 0) {
-			return ParsedNumeric{
-				nonFinite: floating, isNonFinite: true, valid: true,
-			}, true
-		}
 	}
 	key, ok := numericKeyFromByteJSON(value)
 	if !ok {
@@ -327,21 +525,6 @@ func ParseNumeric(value ByteJson) (ParsedNumeric, bool) {
 func CompareParsedNumeric(left, right ParsedNumeric) (comparison int, ok bool) {
 	if !left.valid || !right.valid {
 		return 0, false
-	}
-	if left.isNonFinite && right.isNonFinite {
-		return compareFloat64(left.nonFinite, right.nonFinite), true
-	}
-	if left.isNonFinite {
-		if math.IsInf(left.nonFinite, -1) {
-			return -1, true
-		}
-		return 1, true
-	}
-	if right.isNonFinite {
-		if math.IsInf(right.nonFinite, -1) {
-			return 1, true
-		}
-		return -1, true
 	}
 	return compareNumericKeys(&left.key, &right.key), true
 }
@@ -367,14 +550,16 @@ func CompareNumeric(left, right ByteJson) (comparison int, ok bool) {
 
 func isValidNumericEncoding(value ByteJson) bool {
 	switch value.Type {
-	case TpCodeInt64, TpCodeUint64, TpCodeFloat64:
-		return len(value.Data) == 8
-	case TpCodeDecimal:
-		if len(value.Data) == 0 {
+	case TpCodeInt64, TpCodeUint64:
+		return len(value.Data) == numberSize
+	case TpCodeFloat64:
+		if len(value.Data) != numberSize {
 			return false
 		}
-		payloadLength, prefixLength := binary.Uvarint(value.Data)
-		return prefixLength > 0 && payloadLength == uint64(len(value.Data)-prefixLength)
+		floating := value.GetFloat64()
+		return !math.IsNaN(floating) && !math.IsInf(floating, 0)
+	case TpCodeDecimal:
+		return isValidByteJsonStringEncoding(value.Data)
 	default:
 		return false
 	}
@@ -417,9 +602,6 @@ func compareByteJsonNumeric(left, right ByteJson) int {
 }
 
 func compareByteJsonNumericExact(left, right ByteJson) int {
-	if cmp, handled := compareNonFiniteNumeric(left, right); handled {
-		return cmp
-	}
 	leftKey, leftOK := numericKeyFromByteJSON(left)
 	rightKey, rightOK := numericKeyFromByteJSON(right)
 	if leftOK && rightOK {

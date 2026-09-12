@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -34,17 +34,81 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// These consumers never execute the SELECT through the compiler's metadata
+// lock. Missing hints must fail before EXPLAIN output or view catalog writes.
+func testIssue28639MissingHintConsumers(t *testing.T, ctx context.Context, conn *sql.Conn, database string) {
+	t.Helper()
+	table := "`" + database + "`.`hint_validation`"
+	view := "`" + database + "`.`hint_view`"
+	require.NoError(t, execIssue27487(ctx, conn, "create table "+table+" (id int primary key)"))
+	require.NoError(t, execIssue27487(ctx, conn, "insert into "+table+" values (1)"))
+	missingKey := func(t *testing.T, err error) {
+		t.Helper()
+		var mysqlErr *mysql.MySQLError
+		require.ErrorAs(t, err, &mysqlErr)
+		require.Equal(t, uint16(1176), mysqlErr.Number)
+		require.Contains(t, mysqlErr.Message, "idx_missing")
+	}
+	for i, hint := range []string{"use index", "force index", "ignore index", "force index for order by"} {
+		t.Run(hint, func(t *testing.T) {
+			query := "select id from " + table + " " + hint + " (idx_missing)"
+			for _, consumer := range []struct{ name, prefix string }{
+				{"select", ""}, {"explain text", "explain "},
+				{"explain verbose", "explain verbose "}, {"explain text option", "explain (format text) "},
+			} {
+				t.Run(consumer.name, func(t *testing.T) {
+					_, err := testutils.QueryText(ctx, conn, consumer.prefix+query)
+					missingKey(t, err)
+				})
+			}
+			t.Run("create view", func(t *testing.T) {
+				viewName := fmt.Sprintf("missing_hint_view_%d", i)
+				missingKey(t, execIssue27487(ctx, conn, "create view `"+database+"`.`"+viewName+"` as "+query))
+				var count int
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select count(*) from information_schema.views where table_schema = ? and table_name = ?", database, viewName).Scan(&count))
+				require.Zero(t, count, "failed CREATE VIEW must not publish a definition")
+			})
+		})
+	}
+	t.Run("CTAS", func(t *testing.T) {
+		missingKey(t, execIssue27487(ctx, conn, "create table `"+database+"`.`hint_ctas` as select id from "+table+" force index (idx_missing)"))
+		var count int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select count(*) from information_schema.tables where table_schema = ? and table_name = 'hint_ctas'", database).Scan(&count))
+		require.Zero(t, count, "failed CTAS must not publish a table")
+	})
+	// A valid hint remains usable, and rejected replacement/ALTER must preserve
+	// the previous view's definition and results.
+	validQuery := "select id + 10 as id from " + table + " force index (primary)"
+	_, err := testutils.QueryText(ctx, conn, "explain "+validQuery)
+	require.NoError(t, err)
+	require.NoError(t, execIssue27487(ctx, conn, "create view "+view+" as "+validQuery))
+	for _, prefix := range []string{"create or replace view ", "alter view "} {
+		t.Run(prefix, func(t *testing.T) {
+			missingKey(t, execIssue27487(ctx, conn, prefix+view+" as select id from "+table+" force index (idx_missing)"))
+			var id int
+			require.NoError(t, conn.QueryRowContext(ctx, "select id from "+view).Scan(&id))
+			require.Equal(t, 11, id)
+		})
+	}
+}
+
 type issue27487IndexCase struct {
-	name           string
-	table          string
-	createTableSQL string
-	seedSQL        string
-	heldInsertSQL  string
-	createIndexSQL string
-	probeWhileDDL  string
-	probeExpected  int
-	prepareDDL     func(context.Context, *sql.Conn) error
-	verify         func(*testing.T, context.Context, *sql.Conn)
+	name                string
+	table               string
+	createTableSQL      string
+	seedSQL             string
+	heldInsertSQL       string
+	createIndexSQL      string
+	probeWhileDDL       string
+	probeInitialErr     string
+	compiledPlanBarrier string
+	probeExpected       int
+	probeExpectedSet    bool
+	finishWriterSQL     string
+	prepareDDL          func(context.Context, *sql.Conn) error
+	verify              func(*testing.T, context.Context, *sql.Conn)
 }
 
 func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
@@ -82,6 +146,12 @@ func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
 			execSQLMaybe(t, cleanupCtx, writerDB, "drop database if exists `"+database+"`")
 		}()
 		execSQLRequire(t, ctx, writerDB, "create database `"+database+"`")
+		t.Run("missing hints without DDL race", func(t *testing.T) {
+			conn, err := writerDB.Conn(ctx)
+			require.NoError(t, err)
+			defer conn.Close()
+			testIssue28639MissingHintConsumers(t, ctx, conn, database)
+		})
 
 		lockServices := issue27487LockServices(c)
 		require.NotEmpty(t, lockServices)
@@ -93,6 +163,10 @@ func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
 				seedSQL:        "insert into `" + database + "`.`regular_docs` values (1, 1)",
 				heldInsertSQL:  "insert into `" + database + "`.`regular_docs` values (2, 27487)",
 				createIndexSQL: "create index idx_k on `" + database + "`.`regular_docs` (`k`)",
+				probeWhileDDL: "select count(*) from `" + database + "`.`regular_docs` " +
+					"force index(idx_k) where k = 27487",
+				probeInitialErr:     "Key 'idx_k' doesn't exist in table 'regular_docs'",
+				compiledPlanBarrier: "unresolved-index-hint-plan-compiled",
 				verify: func(t *testing.T, ctx context.Context, conn *sql.Conn) {
 					t.Helper()
 					const indexedSQL = "select count(*) from `" + database + "`.`regular_docs` " +
@@ -112,6 +186,37 @@ func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
 				},
 			},
 			{
+				name:           "regular secondary index writer rollback",
+				table:          "regular_rollback_docs",
+				createTableSQL: "create table `" + database + "`.`regular_rollback_docs` (id bigint primary key, k int)",
+				seedSQL:        "insert into `" + database + "`.`regular_rollback_docs` values (1, 1)",
+				heldInsertSQL:  "insert into `" + database + "`.`regular_rollback_docs` values (2, 27487)",
+				createIndexSQL: "create index idx_k on `" + database + "`.`regular_rollback_docs` (`k`)",
+				probeWhileDDL: "select count(*) from `" + database + "`.`regular_rollback_docs` " +
+					"force index(idx_k) where k = 27487",
+				probeInitialErr:     "Key 'idx_k' doesn't exist in table 'regular_rollback_docs'",
+				compiledPlanBarrier: "unresolved-index-hint-plan-compiled",
+				probeExpectedSet:    true,
+				finishWriterSQL:     "rollback",
+				verify: func(t *testing.T, ctx context.Context, conn *sql.Conn) {
+					t.Helper()
+					const indexedSQL = "select count(*) from `" + database + "`.`regular_rollback_docs` " +
+						"force index(idx_k) where k = 27487"
+					plan, err := testutils.QueryText(ctx, conn, "explain "+indexedSQL)
+					require.NoError(t, err)
+					require.Contains(t, strings.ToLower(plan), "index table scan")
+					require.Contains(t, strings.ToLower(plan), "idx_k")
+
+					var indexedRows, scannedRows int
+					require.NoError(t, conn.QueryRowContext(ctx, indexedSQL).Scan(&indexedRows))
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"select count(*) from `"+database+"`.`regular_rollback_docs` "+
+							"ignore index(idx_k) where k = 27487").Scan(&scannedRows))
+					require.Zero(t, scannedRows)
+					require.Equal(t, scannedRows, indexedRows)
+				},
+			},
+			{
 				name:           "fulltext index",
 				table:          "fulltext_docs",
 				createTableSQL: "create table `" + database + "`.`fulltext_docs` (id bigint primary key, body text)",
@@ -120,6 +225,8 @@ func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
 				createIndexSQL: "create fulltext index ft_body on `" + database + "`.`fulltext_docs` (`body`)",
 				probeWhileDDL: "select count(*) from `" + database + "`.`fulltext_docs` " +
 					"where match(body) against('heldtoken')",
+				probeInitialErr:     "MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX",
+				compiledPlanBarrier: "unresolved-fulltext-plan-compiled",
 				prepareDDL: func(ctx context.Context, conn *sql.Conn) error {
 					return execIssue27487(ctx, conn, "set experimental_fulltext_index = 1")
 				},
@@ -145,7 +252,10 @@ func TestIssue27487ConcurrentInsertIsIncludedInNewIndex(t *testing.T) {
 				createIndexSQL: "create fulltext index ft_body on `" + database + "`.`fulltext_order_docs` (`body`)",
 				probeWhileDDL: "select id from `" + database + "`.`fulltext_order_docs` " +
 					"order by match(body) against('heldtoken') desc, id desc",
-				probeExpected: 2,
+				probeInitialErr:     "MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX",
+				compiledPlanBarrier: "unresolved-fulltext-plan-compiled",
+				probeExpected:       2,
+				probeExpectedSet:    true,
 				prepareDDL: func(ctx context.Context, conn *sql.Conn) error {
 					return execIssue27487(ctx, conn, "set experimental_fulltext_index = 1")
 				},
@@ -220,11 +330,18 @@ func runIssue27487IndexCase(
 	if testCase.probeWhileDDL != "" {
 		var rows int
 		err := verifier.QueryRowContext(ctx, testCase.probeWhileDDL).Scan(&rows)
-		require.ErrorContains(t, err,
-			"MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX")
+		require.ErrorContains(t, err, testCase.probeInitialErr)
 	}
 
 	writerOpen := true
+	finishWriter := func() {
+		statement := testCase.finishWriterSQL
+		if statement == "" {
+			statement = "commit"
+		}
+		require.NoError(t, execIssue27487(ctx, writer, statement))
+		writerOpen = false
+	}
 	require.NoError(t, execIssue27487(ctx, writer, "begin"))
 	defer func() {
 		if !writerOpen {
@@ -280,16 +397,16 @@ func runIssue27487IndexCase(
 	var cancelProbe context.CancelFunc
 	if testCase.probeWhileDDL != "" {
 		const (
-			compiledPlanBarrier = "unresolved-fulltext-plan-compiled"
-			barrierWaiters      = "issue-28286-compiled-plan-barrier-waiters"
+			barrierWaiters = "issue-28286-compiled-plan-barrier-waiters"
 		)
-		require.NoError(t, fault.AddFaultPoint(ctx, compiledPlanBarrier, ":::", "wait", 0, "", false))
+		require.NotEmpty(t, testCase.compiledPlanBarrier)
+		require.NoError(t, fault.AddFaultPoint(ctx, testCase.compiledPlanBarrier, ":::", "wait", 0, "", false))
 		defer func() {
 			_, _ = fault.RemoveFaultPoint(context.Background(), barrierWaiters)
-			_, _ = fault.RemoveFaultPoint(context.Background(), compiledPlanBarrier)
+			_, _ = fault.RemoveFaultPoint(context.Background(), testCase.compiledPlanBarrier)
 		}()
 		require.NoError(t, fault.AddFaultPoint(
-			ctx, barrierWaiters, ":::", "getwaiters", 0, compiledPlanBarrier, false))
+			ctx, barrierWaiters, ":::", "getwaiters", 0, testCase.compiledPlanBarrier, false))
 
 		var probeCtx context.Context
 		probeCtx, cancelProbe = context.WithCancel(ctx)
@@ -300,7 +417,7 @@ func runIssue27487IndexCase(
 			err := verifier.QueryRowContext(probeCtx, testCase.probeWhileDDL).Scan(&value)
 			if err == nil {
 				want := testCase.probeExpected
-				if want == 0 {
+				if !testCase.probeExpectedSet {
 					want = 1
 				}
 				if value != want {
@@ -314,24 +431,23 @@ func runIssue27487IndexCase(
 			waiters, _, ok := fault.TriggerFault(barrierWaiters)
 			return ok && waiters == 1
 		}, 30*time.Second, 10*time.Millisecond,
-			"FULLTEXT query did not pause after compiling against the old schema")
+			"query did not pause after compiling against the old schema")
 		select {
 		case probeErr := <-probeDone:
-			require.Failf(t, "FULLTEXT query returned before its compiled-plan barrier was released",
+			require.Failf(t, "query returned before its compiled-plan barrier was released",
 				"error: %v", probeErr)
 		default:
 		}
 
-		require.NoError(t, execIssue27487(ctx, writer, "commit"))
-		writerOpen = false
+		finishWriter()
 		select {
 		case ddlErr := <-ddlDone:
 			ddlFinished = true
 			require.NoError(t, ddlErr)
 		case <-time.After(30 * time.Second):
-			t.Fatal("CREATE INDEX did not return after INSERT committed")
+			t.Fatal("CREATE INDEX did not return after writer transaction completed")
 		}
-		_, _ = fault.RemoveFaultPoint(ctx, compiledPlanBarrier)
+		_, _ = fault.RemoveFaultPoint(ctx, testCase.compiledPlanBarrier)
 	}
 
 	if writerOpen {
@@ -341,8 +457,7 @@ func runIssue27487IndexCase(
 			require.Failf(t, "DDL returned before INSERT committed", "error: %v", ddlErr)
 		default:
 		}
-		require.NoError(t, execIssue27487(ctx, writer, "commit"))
-		writerOpen = false
+		finishWriter()
 	}
 	if !ddlFinished {
 		select {
@@ -350,7 +465,7 @@ func runIssue27487IndexCase(
 			ddlFinished = true
 			require.NoError(t, ddlErr)
 		case <-time.After(30 * time.Second):
-			t.Fatal("CREATE INDEX did not return after INSERT committed")
+			t.Fatal("CREATE INDEX did not return after writer transaction completed")
 		}
 	}
 	if probeDone != nil {
@@ -358,14 +473,14 @@ func runIssue27487IndexCase(
 		case probeErr := <-probeDone:
 			require.NoError(t, probeErr)
 		case <-time.After(30 * time.Second):
-			t.Fatal("FULLTEXT query did not return after CREATE INDEX committed")
+			t.Fatal("query did not return after CREATE INDEX committed")
 		}
 		cancelProbe()
 	}
 
 	// Verify from the other CN. The DDL CN has the updated constraint in its
 	// transaction-local catalog, while another CN must observe it through the
-	// committed catalog logtail before planning MATCH ... AGAINST.
+	// committed catalog logtail before planning the index-dependent query.
 	testCase.verify(t, ctx, verifier)
 }
 
