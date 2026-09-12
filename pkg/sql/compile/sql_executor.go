@@ -445,6 +445,9 @@ func (exec *txnExecutor) Exec(
 		nil,
 		exec.s.taskservice,
 	)
+	// Internal DML (including CTAS population) needs the same expression error
+	// policy as frontend DML, before planning can fold any constants.
+	initInternalStatementProfile(proc, stmts[0])
 	// Attach original frontend session to support session-scoped metadata
 	// (e.g. temporary-table alias mapping) in internal SQL compilation.
 	proc.Session = getInternalExecutorSession(exec.ctx)
@@ -774,4 +777,10 @@ func (exec *txnExecutor) getDatabase() string {
 		return exec.database
 	}
 	return exec.opts.Database()
+}
+
+func initInternalStatementProfile(proc *process.Process, stmt tree.Statement) {
+	profile := &process.StmtProfile{}
+	proc.SetStmtProfile(profile)
+	profile.SetStatementRuntimeProfile(stmt.GetStatementType(), stmt.GetQueryType(), tree.IsIgnoreStatement(stmt))
 }
