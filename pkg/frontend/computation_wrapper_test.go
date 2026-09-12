@@ -3206,6 +3206,97 @@ func TestPreparedRuntimeSemanticKeyKeepsValueAndSQLSourceDomains(t *testing.T) {
 		preparedRuntimeSemanticKey(decimal("2.5", 20, 5)),
 		preparedRuntimeSemanticKey(decimal("2.5", 30, 8)),
 		"a different SQL source domain must not reuse stale arithmetic metadata")
+
+	complete := []any{plan2.ParamValue{
+		Value: "65.5", SourceType: types.T_varchar.ToType(), HasSourceType: true,
+	}}
+	suffix := []any{plan2.ParamValue{
+		Value: "65.5xyz", SourceType: types.T_varchar.ToType(), HasSourceType: true,
+	}}
+	require.NotEqual(t, preparedRuntimeSemanticKey(complete), preparedRuntimeSemanticKey(suffix),
+		"CHAR's exact numeric and prefix-string paths must not share a cached plan")
+}
+
+func TestCOMStmtCharRuntimeCacheSeparatesEffectiveIntegerDomains(t *testing.T) {
+	for i, scenario := range []struct {
+		name   string
+		first  string
+		second string
+	}{
+		{name: "signed to unsigned", first: "-9223372036854775808", second: "9223372036854775809"},
+		{name: "unsigned to signed", first: "9223372036854775809", second: "-9223372036854775808"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, uint32(230+i), "select char(?)")
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+
+			install := func(value string) {
+				cw.proc.SetPrepareParams(nil)
+				if prepareStmt.params != nil {
+					prepareStmt.params.Free(cw.proc.Mp())
+				}
+				params := vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, []byte(value), false, cw.proc.Mp()))
+				prepareStmt.params = params
+				// VAR_STRING is the real COM_STMT text shape: it has no numeric
+				// PrepareParamKind or RuntimeType, so CHAR must classify the value
+				// from the payload itself.
+				prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_VAR_STRING), 0}
+			}
+			evaluate := func(runtimePlan *plan.Plan) []byte {
+				query := runtimePlan.GetQuery()
+				require.NotNil(t, query)
+				root := query.Nodes[query.Steps[len(query.Steps)-1]]
+				require.Len(t, root.ProjectList, 1)
+				executor, err := colexec.NewExpressionExecutor(cw.proc, root.ProjectList[0])
+				require.NoError(t, err)
+				defer executor.Free()
+				result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				require.NoError(t, err)
+				require.Equal(t, 1, result.Length())
+				return append([]byte(nil), result.GetBytesAt(0)...)
+			}
+			execute := func() (*plan.Plan, []byte) {
+				_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+					execCtx, ses, cw, nil, prepareStmt.Name)
+				require.NoError(t, err)
+				if owned && executionStmt != nil {
+					executionStmt.Free()
+				}
+				return runtimePlan, evaluate(runtimePlan)
+			}
+
+			install(scenario.first)
+			firstPlan, _ := execute()
+			firstCompile := compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			require.True(t, cw.installRuntimeCacheCandidate(firstCompile))
+
+			install(scenario.second)
+			secondPlan, freshValue := execute()
+			require.NotSame(t, firstPlan, secondPlan,
+				"different effective CHAR integer domains must force a fresh specialization")
+
+			secondCompile := compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			require.True(t, cw.installRuntimeCacheCandidate(secondCompile))
+
+			install(scenario.second)
+			retComp, cachedPlan, _, _, _, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(t, err)
+			require.Same(t, secondCompile, retComp)
+			require.Same(t, secondPlan, cachedPlan)
+			require.Equal(t, freshValue, evaluate(cachedPlan),
+				"a CHAR cache hit must match the fresh specialization")
+		})
+	}
 }
 
 func TestPreparedRuntimeSemanticKeyIncludesBinaryStringDomain(t *testing.T) {

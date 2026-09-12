@@ -752,7 +752,7 @@ func (scratch *percentileArithmeticScratch) ranks(
 	scratch.quotient.QuoRem(&scratch.rank, p.Denom(), &scratch.remainder)
 	lo = scratch.quotient.Uint64()
 	hi = lo
-	if lo < count-1 {
+	if scratch.remainder.Sign() != 0 && lo < count-1 {
 		hi++
 	}
 	return lo, hi, fraction
