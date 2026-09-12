@@ -4541,7 +4541,7 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	// the type of its first argument, so a binary parameter can change the
 	// result-column type from the prepare-time placeholder domain.
 	switch name {
-	case "bin", "conv", "ntile", "sleep",
+	case "bin", "char", "conv", "ntile", "sleep",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
 		"ord", "char_length", "character_length",
 		"left", "right", "substring", "substr", "mid", "reverse",
@@ -5435,6 +5435,37 @@ func PreparedNumericPrefixTypeFromString(value string) types.Type {
 	default:
 		return types.New(types.T_decimal256, w, s)
 	}
+}
+
+// PreparedNumericStringIsComplete reports whether the whole value (apart from
+// surrounding ASCII whitespace) is one numeric lexeme accepted by the MySQL
+// numeric-prefix scanner.  CHAR's prepared-marker context uses this boundary
+// to distinguish an exact numeric value from a string with a numeric prefix
+// and a suffix, whose existing prefix-truncation semantics must be preserved.
+func PreparedNumericStringIsComplete(value string) bool {
+	trimmed := strings.Trim(value, " \t\n\v\f\r")
+	if trimmed == "" {
+		return false
+	}
+	prefix, ok := function.GetNumericStringPrefix(value)
+	return ok && prefix == trimmed
+}
+
+// PreparedCharSourceTypeFromString returns the effective source domain used by
+// a bare prepared CHAR marker.  A complete numeric lexeme uses the exact
+// integer/DECIMAL type inferred from its value; every other string follows
+// CHAR's VARCHAR prefix parser.  Keeping the fallback type explicit lets the
+// frontend runtime cache distinguish values whose numeric-prefix envelope is
+// equal but whose CHAR signedness differs.
+func PreparedCharSourceTypeFromString(value string) (types.Type, bool) {
+	if !PreparedNumericStringIsComplete(value) {
+		return types.T_varchar.ToType(), false
+	}
+	typ, ok := PreparedRuntimeTypeFromString(strings.Trim(value, " \t\n\v\f\r"))
+	if !ok {
+		return types.T_varchar.ToType(), false
+	}
+	return typ, true
 }
 
 func preparedBoundedDecimalExponent(value string, compensation int64) (int64, bool) {
