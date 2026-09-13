@@ -102,6 +102,24 @@ select is_free_lock('user_lock_bvt_case');
 select release_lock('User_Lock_Bvt_Case');
 ➤ release_lock(User_Lock_Bvt_Case)[-5,64,0]  𝄀
 null
+select get_lock('user_lock_bvt_timeout_zero_double', cast(0 as double));
+➤ get_lock(user_lock_bvt_timeout_zero_double, cast(0 as double))[-5,64,0]  𝄀
+1
+select release_lock('user_lock_bvt_timeout_zero_double');
+➤ release_lock(user_lock_bvt_timeout_zero_double)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_timeout_decimal_free', 0.5);
+➤ get_lock(user_lock_bvt_timeout_decimal_free, 0.5)[-5,64,0]  𝄀
+1
+select release_lock('user_lock_bvt_timeout_decimal_free');
+➤ release_lock(user_lock_bvt_timeout_decimal_free)[-5,64,0]  𝄀
+1
+select get_lock('user_lock_bvt_timeout_double_free', cast(0.5 as double));
+➤ get_lock(user_lock_bvt_timeout_double_free, cast(0.5 as double))[-5,64,0]  𝄀
+1
+select release_lock('user_lock_bvt_timeout_double_free');
+➤ release_lock(user_lock_bvt_timeout_double_free)[-5,64,0]  𝄀
+1
 select get_lock(NULL, NULL);
 Incorrect user-level lock name 'NULL'.
 select release_lock(NULL);

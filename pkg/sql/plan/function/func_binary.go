@@ -11043,19 +11043,33 @@ func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	}, selectList)
 }
 
+const maxGeoJSONDecimalDigits int64 = 1<<32 - 1
+
+func validateGeoJSONDecimalDigits(maxDec int64) error {
+	if maxDec < 0 || maxDec > maxGeoJSONDecimalDigits {
+		return moerr.NewInvalidInputNoCtxf(
+			"ST_AsGeoJSON maxdecimaldigits must be between 0 and %d",
+			maxGeoJSONDecimalDigits,
+		)
+	}
+	return nil
+}
+
 // StAsGeoJSONPrec renders a geometry as GeoJSON, rounding each coordinate to at
 // most maxdecimaldigits decimal places.
 func StAsGeoJSONPrec(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	return opBinaryStrFixedToStrWithErrorCheck[int64](ivecs, result, proc, length, func(v string, maxDec int64) (string, error) {
+		if err := validateGeoJSONDecimalDigits(maxDec); err != nil {
+			return "", err
+		}
 		g, err := decodeGeoGeometry(functionUtil.QuickStrToBytes(v))
 		if err != nil {
 			return "", err
 		}
-		md := int(maxDec)
-		if md < 0 {
-			md = -1
-		}
-		return geo.WriteGeoJSON(g, md), nil
+		return geo.WriteGeoJSONWithMaxDecimalDigits(g, maxDec), nil
 	}, selectList)
 }
 
