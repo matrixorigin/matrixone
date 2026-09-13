@@ -56,3 +56,59 @@ select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(3
 invalid input: Binary geometry function ST_DISTANCE given two geometries of different srids: 4326 and 0, which should have been identical.
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))', 4326), st_geomfromtext('POINT(2 2)', 0));
 invalid input: Binary geometry function ST_CONTAINS given two geometries of different srids: 4326 and 0, which should have been identical.
+create database geo_srid_checks;
+use geo_srid_checks;
+create table inputs (poly_4326 geometry srid 4326, poly_0 geometry, line_4326 geometry srid 4326, line_0 geometry, point_4326 geometry srid 4326, point_0 geometry);
+insert into inputs values (st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POLYGON((1 1,3 1,3 3,1 3,1 1))', 0), st_geomfromtext('LINESTRING(0 0,1 1)', 4326), st_geomfromtext('LINESTRING(0 0,1 1)', 0), st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 1)', 0));
+select st_union(poly_4326, poly_0) from inputs;
+invalid input: Binary geometry function ST_UNION given two geometries of different srids: 4326 and 0, which should have been identical.
+select st_intersection(poly_4326, poly_0) from inputs;
+invalid input: Binary geometry function ST_INTERSECTION given two geometries of different srids: 4326 and 0, which should have been identical.
+select st_difference(poly_4326, poly_0) from inputs;
+invalid input: Binary geometry function ST_DIFFERENCE given two geometries of different srids: 4326 and 0, which should have been identical.
+select st_symdifference(poly_4326, poly_0) from inputs;
+invalid input: Binary geometry function ST_SYMDIFFERENCE given two geometries of different srids: 4326 and 0, which should have been identical.
+select st_frechetdistance(line_4326, line_0) from inputs;
+invalid input: Binary geometry function ST_FRECHETDISTANCE given two geometries of different srids: 4326 and 0, which should have been identical.
+select st_hausdorffdistance(line_4326, line_0) from inputs;
+invalid input: Binary geometry function ST_HAUSDORFFDISTANCE given two geometries of different srids: 4326 and 0, which should have been identical.
+select mbrcontains(poly_4326, point_0) from inputs;
+invalid input: Binary geometry function MBRContains given two geometries of different srids: 4326 and 0, which should have been identical.
+select mbrcovers(poly_4326, point_0) from inputs;
+invalid input: Binary geometry function MBRCovers given two geometries of different srids: 4326 and 0, which should have been identical.
+select mbrwithin(point_4326, poly_0) from inputs;
+invalid input: Binary geometry function MBRWithin given two geometries of different srids: 4326 and 0, which should have been identical.
+select mbrcoveredby(point_4326, poly_0) from inputs;
+invalid input: Binary geometry function MBRCoveredBy given two geometries of different srids: 4326 and 0, which should have been identical.
+select mbrdisjoint(point_4326, point_0) from inputs;
+invalid input: Binary geometry function MBRDisjoint given two geometries of different srids: 4326 and 0, which should have been identical.
+select mbrintersects(point_4326, point_0) from inputs;
+invalid input: Binary geometry function MBRIntersects given two geometries of different srids: 4326 and 0, which should have been identical.
+select mbrequals(point_4326, point_0) from inputs;
+invalid input: Binary geometry function MBREquals given two geometries of different srids: 4326 and 0, which should have been identical.
+select mbroverlaps(poly_4326, poly_0) from inputs;
+invalid input: Binary geometry function MBROverlaps given two geometries of different srids: 4326 and 0, which should have been identical.
+select mbrtouches(point_4326, point_0) from inputs;
+invalid input: Binary geometry function MBRTouches given two geometries of different srids: 4326 and 0, which should have been identical.
+select st_makeenvelope(point_4326, point_0) from inputs;
+invalid input: Binary geometry function ST_MAKEENVELOPE given two geometries of different srids: 4326 and 0, which should have been identical.
+select st_collect(point_4326, point_0) from inputs;
+invalid input: Binary geometry function ST_COLLECT given two geometries of different srids: 4326 and 0, which should have been identical.
+select st_srid(st_collect(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 1)', 0))) as collect_zero_srid;
+collect_zero_srid
+0
+select st_srid(st_collect(point_4326, st_geomfromtext('POINT(1 1)', 4326))) as collect_4326_srid from inputs;
+collect_4326_srid
+4326
+select st_srid(st_union(poly_4326, st_geomfromtext('POLYGON((2 0,3 0,3 1,2 1,2 0))', 4326))) as union_4326_srid from inputs;
+union_4326_srid
+4326
+select st_srid(st_makeenvelope(point_4326, st_geomfromtext('POINT(1 1)', 4326))) as envelope_constructor_srid from inputs;
+envelope_constructor_srid
+0
+create table null_inputs (left_4326 geometry srid 4326, right_0 geometry);
+insert into null_inputs values (NULL, st_geomfromtext('POINT(1 1)', 0));
+select st_collect(left_4326, right_0) as collect_null from null_inputs;
+collect_null
+null
+drop database geo_srid_checks;
