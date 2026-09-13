@@ -272,12 +272,24 @@ insert into t_odku_row_alias values (1, 10, 0);
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = n.id);
 select * from t_odku_row_alias order by id;
 
+-- A candidate-correlated scalar cannot be evaluated safely for a multi-row
+-- candidate input before DEDUP selects each row's duplicate-key action.
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (1, 5, 0), (1, 6, 0) as n on duplicate key update b = (select s.y from t_odku_scope_source as s where s.x = n.id);
+
 -- A local FROM alias may have the same spelling as the ODKU target table. It
 -- must remain local even when its expression contains another subquery.
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select t_odku_row_alias.y + (select 1) from t_odku_scope_source as t_odku_row_alias);
 select * from t_odku_row_alias order by id;
+
+-- A nested candidate-correlated scalar is also rejected before its inner input
+-- can execute for a row that does not conflict.
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select (select q.y from t_odku_scope_multi as q) from t_odku_scope_multi as s where s.x = n.id);
 
 -- A nested subquery input cannot be guarded by the outer target-match
 -- predicate. Reject it before the unused UPDATE branch can execute.
