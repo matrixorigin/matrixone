@@ -1308,6 +1308,420 @@ func TestPreparedBitwiseAggregateRebindsExecutionSourceDomain(t *testing.T) {
 	}
 }
 
+func TestPreparedBitwiseAggregateRebindsOuterConsumerAcrossDomains(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select hex(bit_and(?))")
+	preparedHex := findPlanFunctionExpr(prepare.Plan, "hex")
+	require.NotNil(t, preparedHex)
+	_, preparedHexOverload := planfunction.DecodeOverloadID(preparedHex.GetF().Func.GetObj())
+	require.EqualValues(t, 3, preparedHexOverload) // HEX(UINT64)
+
+	varbinaryType := types.New(types.T_varbinary, 1, 0)
+	for _, test := range []struct {
+		name            string
+		param           ParamValue
+		wantAggType     types.T
+		wantHexOverload int64
+	}{
+		{
+			name: "binary source",
+			param: ParamValue{
+				Value: []byte{0x02}, SourceType: varbinaryType, HasSourceType: true, IsBin: true,
+			},
+			wantAggType:     types.T_varbinary,
+			wantHexOverload: 0, // HEX(string)
+		},
+		{
+			name: "numeric source",
+			param: ParamValue{
+				Value: int64(3), SourceType: types.T_int64.ToType(), HasSourceType: true,
+			},
+			wantAggType:     types.T_uint64,
+			wantHexOverload: 3, // HEX(UINT64)
+		},
+		{
+			name: "binary source after numeric execution",
+			param: ParamValue{
+				Value: []byte{0x02}, SourceType: varbinaryType, HasSourceType: true, IsBin: true,
+			},
+			wantAggType:     types.T_varbinary,
+			wantHexOverload: 0,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepare.Plan, []any{test.param})
+			require.NoError(t, err)
+			require.True(t, specialized)
+
+			filledHex := findPlanFunctionExpr(filled, "hex")
+			require.NotNil(t, filledHex)
+			require.Len(t, filledHex.GetF().Args, 1)
+			filledAggregate := findPlanFunctionExpr(filled, "bit_and")
+			require.Equal(t, int32(test.wantAggType), filledAggregate.Typ.Id)
+			require.Equal(t, int32(test.wantAggType), filledHex.GetF().Args[0].Typ.Id)
+			_, hexOverload := planfunction.DecodeOverloadID(filledHex.GetF().Func.GetObj())
+			require.EqualValues(t, test.wantHexOverload, hexOverload)
+
+			// Each EXECUTE specializes a copy; the cached PREPARE must retain its
+			// original UINT64-facing HEX overload for the next source domain.
+			cachedHex := findPlanFunctionExpr(prepare.Plan, "hex")
+			require.NotNil(t, cachedHex)
+			require.Equal(t, int32(types.T_uint64), cachedHex.GetF().Args[0].Typ.Id)
+			_, cachedHexOverload := planfunction.DecodeOverloadID(cachedHex.GetF().Func.GetObj())
+			require.EqualValues(t, 3, cachedHexOverload)
+		})
+	}
+}
+
+func TestPreparedBitwiseAggregateRebindsConsumerAcrossPassthroughNodes(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		sql      string
+		boundary planpb.Node_NodeType
+	}{
+		{
+			name:     "having filter",
+			sql:      "select hex(b) from (select bit_and(?) as b from nation limit 10) t where b is not null",
+			boundary: planpb.Node_FILTER,
+		},
+		{
+			name:     "order by sort",
+			sql:      "select hex(b) from (select bit_and(?) as b from nation) t order by b",
+			boundary: planpb.Node_SORT,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, test.sql)
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepare.Plan, []any{ParamValue{
+					Value: []byte{0x02}, SourceType: types.New(types.T_varbinary, 1, 0),
+					HasSourceType: true, IsBin: true,
+				}},
+			)
+			require.NoError(t, err)
+			require.True(t, specialized)
+
+			hex := findPlanFunctionExpr(filled, "hex")
+			require.NotNil(t, hex)
+			require.Equal(t, int32(types.T_varbinary), hex.GetF().Args[0].Typ.Id)
+			_, overload := planfunction.DecodeOverloadID(hex.GetF().Func.GetObj())
+			require.EqualValues(t, 0, overload)
+
+			var projectNode *planpb.Node
+			for _, node := range filled.GetQuery().Nodes {
+				for _, expr := range node.ProjectList {
+					if expr == hex {
+						projectNode = node
+						break
+					}
+				}
+			}
+			require.NotNil(t, projectNode, "HEX must be owned by a projection node")
+			require.Len(t, projectNode.Children, 1)
+			boundaryID := projectNode.Children[0]
+			require.GreaterOrEqual(t, boundaryID, int32(0))
+			require.Less(t, int(boundaryID), len(filled.GetQuery().Nodes))
+			require.Equal(t, test.boundary, filled.GetQuery().Nodes[boundaryID].NodeType)
+		})
+	}
+}
+
+func TestPreparedBitwiseWindowFilterRebindsConsumer(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t,
+		"select b from (select bit_and(?) over () as b from nation) t where hex(b) is not null")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{ParamValue{
+			Value: []byte{0x02}, SourceType: types.New(types.T_varbinary, 1, 0),
+			HasSourceType: true, IsBin: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	var findFunction func(*planpb.Expr, string) *planpb.Expr
+	findFunction = func(expr *planpb.Expr, name string) *planpb.Expr {
+		if expr == nil {
+			return nil
+		}
+		if function := expr.GetF(); function != nil {
+			if function.Func.GetObjName() == name {
+				return expr
+			}
+			for _, arg := range function.Args {
+				if found := findFunction(arg, name); found != nil {
+					return found
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if found := findFunction(item, name); found != nil {
+					return found
+				}
+			}
+		}
+		return nil
+	}
+
+	var filterHex *planpb.Expr
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_WINDOW {
+			continue
+		}
+		for _, predicate := range node.FilterList {
+			if filterHex = findFunction(predicate, "hex"); filterHex != nil {
+				break
+			}
+		}
+	}
+	require.NotNil(t, filterHex, "HEX predicate must stay on the window node")
+	require.Len(t, filterHex.GetF().Args, 1)
+	require.Equal(t, int32(types.T_varbinary), filterHex.GetF().Args[0].Typ.Id)
+	_, overload := planfunction.DecodeOverloadID(filterHex.GetF().Func.GetObj())
+	require.EqualValues(t, 0, overload) // HEX(string)
+}
+
+func TestPreparedBitwiseAggregateReconcilesSetOperationBranches(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t,
+		"select bit_and(3) as b union all select bit_and(?)")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{ParamValue{
+			Value: []byte{0x02}, SourceType: types.New(types.T_varbinary, 1, 0),
+			HasSourceType: true, IsBin: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	var setNode *planpb.Node
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_UNION_ALL {
+			setNode = node
+			break
+		}
+	}
+	require.NotNil(t, setNode, "prepared UNION ALL node must be present")
+	require.Len(t, setNode.Children, 2)
+	require.Len(t, setNode.ProjectList, 1)
+
+	staticPlan, err := runOneStmt(NewMockOptimizer(false), t,
+		"select bit_and(3) as b union all select bit_and(cast(X'02' as varbinary(1)))")
+	require.NoError(t, err)
+	var staticSetNode *planpb.Node
+	for _, node := range staticPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_UNION_ALL {
+			staticSetNode = node
+			break
+		}
+	}
+	require.NotNil(t, staticSetNode)
+	require.Equal(t, staticSetNode.ProjectList[0].Typ, setNode.ProjectList[0].Typ)
+
+	for branch, childID := range setNode.Children {
+		require.GreaterOrEqual(t, childID, int32(0))
+		require.Less(t, int(childID), len(filled.GetQuery().Nodes))
+		child := filled.GetQuery().Nodes[childID]
+		require.Len(t, child.ProjectList, 1)
+		staticChild := staticPlan.GetQuery().Nodes[staticSetNode.Children[branch]]
+		require.Equal(t, staticChild.ProjectList[0].Typ, child.ProjectList[0].Typ,
+			"runtime branch %d must match its statically typed equivalent", branch)
+		require.Equal(t, setNode.ProjectList[0].Typ.Id, child.ProjectList[0].Typ.Id,
+			"UNION ALL branch %d must satisfy the set node's output type", branch)
+	}
+
+	var cachedSetNode *planpb.Node
+	for _, node := range prepare.Plan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_UNION_ALL {
+			cachedSetNode = node
+			break
+		}
+	}
+	require.NotNil(t, cachedSetNode)
+	require.Equal(t, int32(types.T_uint64), cachedSetNode.ProjectList[0].Typ.Id,
+		"runtime reconciliation must not mutate the cached PREPARE template")
+}
+
+func TestPreparedSetOperationCommonTypeTreatsPureNullAsNeutral(t *testing.T) {
+	for _, test := range []struct {
+		name                  string
+		sql                   string
+		static                string
+		compareStaticBranches bool
+	}{
+		{
+			name:                  "bare null is neutral",
+			sql:                   "select bit_and(?) as b union all select null",
+			static:                "select bit_and(cast(X'02' as varbinary(1))) as b union all select null",
+			compareStaticBranches: true,
+		},
+		{
+			name:   "bare null through a derived projection is neutral",
+			sql:    "select bit_and(?) as b union all select x from (select null as x) t",
+			static: "select bit_and(cast(X'02' as varbinary(1))) as b union all select x from (select null as x) t",
+		},
+		{
+			name:                  "explicitly cast null participates",
+			sql:                   "select bit_and(?) as b union all select cast(null as signed)",
+			static:                "select bit_and(cast(X'02' as varbinary(1))) as b union all select cast(null as signed)",
+			compareStaticBranches: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, test.sql)
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepare.Plan, []any{ParamValue{
+					Value: []byte{0x02}, SourceType: types.New(types.T_varbinary, 1, 0),
+					HasSourceType: true, IsBin: true,
+				}},
+			)
+			require.NoError(t, err)
+			require.True(t, specialized)
+
+			staticPlan, err := runOneStmt(NewMockOptimizer(false), t, test.static)
+			require.NoError(t, err)
+			findUnionAll := func(query *planpb.Query) *planpb.Node {
+				for _, node := range query.Nodes {
+					if node.NodeType == planpb.Node_UNION_ALL {
+						return node
+					}
+				}
+				return nil
+			}
+			filledSetNode := findUnionAll(filled.GetQuery())
+			staticSetNode := findUnionAll(staticPlan.GetQuery())
+			require.NotNil(t, filledSetNode)
+			require.NotNil(t, staticSetNode)
+			require.Equal(t, staticSetNode.ProjectList[0].Typ, filledSetNode.ProjectList[0].Typ,
+				"prepared runtime output must match the equivalent statically typed set operation")
+			for branch, childID := range filledSetNode.Children {
+				require.Less(t, branch, len(staticSetNode.Children))
+				dynamicChild := filled.GetQuery().Nodes[childID]
+				require.Equal(t, filledSetNode.ProjectList[0].Typ.Id, dynamicChild.ProjectList[0].Typ.Id,
+					"runtime branch %d must satisfy the set node's output type", branch)
+				if test.compareStaticBranches {
+					staticChild := staticPlan.GetQuery().Nodes[staticSetNode.Children[branch]]
+					require.Equal(t, staticChild.ProjectList[0].Typ, dynamicChild.ProjectList[0].Typ,
+						"runtime branch %d must match static type and nullability", branch)
+				}
+			}
+		})
+	}
+}
+
+func TestPreparedSetOperationPreservesRightBranchPadSpaceProvenance(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t,
+		"select cast(1 as varchar(8)) as s union all select cast(bit_and(?) as char(8)) as s union select cast(1 as varchar(8)) as s")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{ParamValue{
+			Value: []byte{0x02}, SourceType: types.New(types.T_varbinary, 1, 0),
+			HasSourceType: true, IsBin: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	var innerUnionAll, outerUnion *planpb.Node
+	for _, node := range filled.GetQuery().Nodes {
+		switch node.NodeType {
+		case planpb.Node_UNION_ALL:
+			innerUnionAll = node
+		case planpb.Node_UNION:
+			outerUnion = node
+		}
+	}
+	require.NotNil(t, innerUnionAll, "inner VARCHAR/CHAR UNION ALL must be present")
+	require.NotNil(t, outerUnion, "outer duplicate-eliminating UNION must be present")
+	require.Len(t, innerUnionAll.ProjectList, 1)
+	require.True(t, innerUnionAll.ProjectList[0].Typ.PadSpace,
+		"the inner output must retain the right CHAR branch's PAD SPACE provenance")
+	require.True(t, outerUnion.ProjectList[0].Typ.PadSpace,
+		"the enclosing UNION must retain PAD SPACE provenance from either input")
+	require.Len(t, outerUnion.PhysicalEqualityKeyList, 1,
+		"the outer UNION must keep a canonical duplicate-elimination key")
+	keyFn := outerUnion.PhysicalEqualityKeyList[0].GetF()
+	require.NotNil(t, keyFn)
+	require.Equal(t, "cast", keyFn.Func.GetObjName())
+	_, overloadID := planfunction.DecodeOverloadID(keyFn.Func.GetObj())
+	require.EqualValues(t, 3, overloadID)
+}
+
+func TestPreparedBitwiseAggregatePreservesExplicitCastOverload(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select hex(cast(bit_and(?) as signed)) from nation")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{ParamValue{
+			Value: []byte{0x02}, SourceType: types.New(types.T_varbinary, 1, 0),
+			HasSourceType: true, IsBin: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	hex := findPlanFunctionExpr(filled, "hex")
+	require.NotNil(t, hex)
+	cast := hex.GetF().Args[0].GetF()
+	require.NotNil(t, cast)
+	require.Equal(t, "cast", cast.Func.GetObjName())
+	_, castOverload := planfunction.DecodeOverloadID(cast.Func.GetObj())
+	require.EqualValues(t, 1, castOverload)
+	require.Equal(t, int32(types.T_varbinary), cast.Args[0].Typ.Id)
+	require.Equal(t, int32(types.T_int64), hex.GetF().Args[0].Typ.Id)
+	_, hexOverload := planfunction.DecodeOverloadID(hex.GetF().Func.GetObj())
+	require.EqualValues(t, 2, hexOverload) // HEX(INT64)
+}
+
+func TestPreparedNestedBitwiseAggregatePropagatesRuntimeDomain(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t,
+		"select bit_and(b) from (select bit_and(?) as b from nation) t")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{ParamValue{
+			Value: []byte{0x02}, SourceType: types.New(types.T_varbinary, 1, 0),
+			HasSourceType: true, IsBin: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	seen := 0
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_AGG {
+			continue
+		}
+		for _, expr := range node.AggList {
+			if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "bit_and" {
+				seen++
+				require.Equal(t, int32(types.T_varbinary), expr.Typ.Id, expr.String())
+			}
+		}
+	}
+	require.Equal(t, 2, seen)
+}
+
+func TestPreparedBitwiseAggregateConsumerPreservesOuterJoinNullability(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t,
+		"select hex(r.b) from nation l left join (select bit_and(?) as b from nation) r on l.n_nationkey = 1")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{ParamValue{
+			Value: []byte{0x02}, SourceType: types.New(types.T_varbinary, 1, 0),
+			HasSourceType: true, IsBin: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	hex := findPlanFunctionExpr(filled, "hex")
+	require.NotNil(t, hex)
+	require.Equal(t, int32(types.T_varbinary), hex.GetF().Args[0].Typ.Id)
+	require.False(t, hex.GetF().Args[0].Typ.NotNullable)
+	_, overload := planfunction.DecodeOverloadID(hex.GetF().Func.GetObj())
+	require.EqualValues(t, 0, overload)
+
+	joinSeen := false
+	for _, node := range filled.GetQuery().Nodes {
+		joinSeen = joinSeen || node.NodeType == planpb.Node_JOIN
+	}
+	require.True(t, joinSeen, "the prepared result must preserve the outer-join node")
+}
+
 func TestPreparedBitwiseAggregateRebindsNestedExecutionSourceDomain(t *testing.T) {
 	ctx := context.Background()
 	marker := &planpb.Expr{
