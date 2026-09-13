@@ -28,14 +28,79 @@ forced_geodesic_dist_m
 select st_area(st_geomfromtext('POLYGON((0 0,3 0,3 4,0 4,0 0))', 4326), 0) as forced_cartesian_area;
 forced_cartesian_area
 12.0
+select st_distance(st_geomfromtext('POINT(181 0)', 4326), st_geomfromtext('POINT(0 0)', 4326));
+invalid input: SRID 4326 longitude 181 is out of range [-180, 180]
+select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(0 91)', 4326));
+invalid input: SRID 4326 latitude 91 is out of range [-90, 90]
+select st_distance(st_geomfromtext('MULTIPOINT((0 0),(181 0))', 4326), st_geomfromtext('POLYGON((-1 -1,1 -1,1 1,-1 1,-1 -1))', 4326));
+invalid input: SRID 4326 longitude 181 is out of range [-180, 180]
+select st_length(st_geomfromtext('LINESTRING(0 0,181 0)', 4326));
+invalid input: SRID 4326 longitude 181 is out of range [-180, 180]
+select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 91,0 91,0 0))', 4326));
+invalid input: SRID 4326 latitude 91 is out of range [-90, 90]
+select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(181 0)'), 4326);
+invalid input: SRID 4326 longitude 181 is out of range [-180, 180]
+select st_length(st_geomfromtext('LINESTRING(0 0,0 91)'), 4326);
+invalid input: SRID 4326 latitude 91 is out of range [-90, 90]
+select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 91,0 91,0 0))'), 4326);
+invalid input: SRID 4326 latitude 91 is out of range [-90, 90]
+select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(181 0)')) as cartesian_distance_out_of_range;
+cartesian_distance_out_of_range
+181.0
+select st_length(st_geomfromtext('LINESTRING(0 0,181 0)')) as cartesian_length_out_of_range;
+cartesian_length_out_of_range
+181.0
+select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 91,0 91,0 0))')) as cartesian_area_out_of_range;
+cartesian_area_out_of_range
+91.0
+select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(181 0)', 4326), 0) as forced_cartesian_distance_out_of_range;
+forced_cartesian_distance_out_of_range
+181.0
+select st_length(st_geomfromtext('LINESTRING(0 0,181 0)', 4326), 0) as forced_cartesian_length_out_of_range;
+forced_cartesian_length_out_of_range
+181.0
+select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 91,0 91,0 0))', 4326), 0) as forced_cartesian_area_out_of_range;
+forced_cartesian_area_out_of_range
+91.0
 drop database if exists geo_geodetic;
 create database geo_geodetic;
 use geo_geodetic;
 drop table if exists places;
-create table places(id int, g geography);
-insert into places values (1, st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))', 4326));
-select id, st_srid(g) as srid, st_area(g) as area_m2 from places order by id;
+create table places(id int, g geography, g32 geography32);
+insert into places values (1, st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))', 4326), cast('POLYGON((0 0,1 0,1 1,0 1,0 0))' as geography32)), (2, st_geomfromtext('POINT(181 0)', 4326), cast('POINT(181 0)' as geography32)), (3, st_geomfromtext('LINESTRING(0 0,0 91)', 4326), cast('LINESTRING(0 0,0 91)' as geography32)), (4, st_geomfromtext('POLYGON((0 0,1 0,1 91,0 91,0 0))', 4326), cast('POLYGON((0 0,1 0,1 91,0 91,0 0))' as geography32)), (5, st_geomfromtext('POINT(180 90)', 4326), cast('POINT(180 90)' as geography32));
+prepare geo_measure_reuse from 'select st_distance(g, g) as distance_m from places where id = ?';
+set @geo_measure_id = 1;
+execute geo_measure_reuse using @geo_measure_id;
+distance_m
+0.0
+set @geo_measure_id = 2;
+execute geo_measure_reuse using @geo_measure_id;
+invalid input: SRID 4326 longitude 181 is out of range [-180, 180]
+set @geo_measure_id = 5;
+execute geo_measure_reuse using @geo_measure_id;
+distance_m
+0.0
+deallocate prepare geo_measure_reuse;
+select id, st_srid(g) as srid, st_area(g) as area_m2 from places where id = 1;
 id    srid    area_m2
 1    4326    1.236403190946562E10
+select st_distance(g, g) from places where id = 2;
+invalid input: SRID 4326 longitude 181 is out of range [-180, 180]
+select st_length(g) from places where id = 3;
+invalid input: SRID 4326 latitude 91 is out of range [-90, 90]
+select st_area(g) from places where id = 4;
+invalid input: SRID 4326 latitude 91 is out of range [-90, 90]
+select st_distance(g32, g32) from places where id = 2;
+invalid input: SRID 4326 longitude 181 is out of range [-180, 180]
+select st_length(g32) from places where id = 3;
+invalid input: SRID 4326 latitude 91 is out of range [-90, 90]
+select st_area(g32) from places where id = 4;
+invalid input: SRID 4326 latitude 91 is out of range [-90, 90]
+select st_distance(g, g) as inclusive_geodetic_boundary from places where id = 5;
+inclusive_geodetic_boundary
+0.0
+select st_distance(g32, g32) as inclusive_geodetic_boundary32 from places where id = 5;
+inclusive_geodetic_boundary32
+0.0
 drop table places;
 drop database geo_geodetic;
