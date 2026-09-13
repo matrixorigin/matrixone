@@ -160,26 +160,26 @@ SELECT ORD(vb) AS vb_ord, ORD(bl) AS blob_ord,
        HEX(REGEXP_REPLACE(bl, CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS blob_replace
 FROM t_regexp_utf8 WHERE id = 1;
 
-# BINARY and BLOB select byte matching but, unlike VARBINARY, do not trigger
-# MySQL error 3995 when paired with a text operand.
-SELECT REGEXP_INSTR(bl, '中', 2) AS blob_text_pos,
-       REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), '中', 2) AS binary_text_pos
-FROM t_regexp_utf8 WHERE id = 1;
+# A BLOB column permits text peers, but decodes independently. An explicit
+# BINARY cast is a static binary VARCHAR item and triggers MySQL error 3995.
+SELECT REGEXP_INSTR(bl, '中', 2) AS blob_text_pos FROM t_regexp_utf8 WHERE id = 1;
+SELECT REGEXP_INSTR(CAST(_binary'中中' AS BINARY(6)), '中', 2) AS binary_text_pos;
 
 # SQL prepared parameters must be rebound from their current string domain on
 # every execution; binary -> text -> binary must not retain stale metadata.
 PREPARE regexp_domain_rebind FROM
-    'SELECT ORD(?), REGEXP_INSTR(?, CAST(_binary''中'' AS VARBINARY(3)), 2), ORD(REGEXP_SUBSTR(?, CAST(_binary''中'' AS VARBINARY(3)), 2))';
+    'SELECT ORD(?), REGEXP_INSTR(?, ?, 2), ORD(REGEXP_SUBSTR(?, ?, 2))';
+SET @regexp_pattern = _binary'中';
 SET @regexp_subject = CAST(_binary'中中' AS VARBINARY(6));
-EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_pattern, @regexp_subject, @regexp_pattern;
 SET @regexp_subject = '中中';
-EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
-# A NULL execution keeps the marker's PREPARE-time text domain; it is not the
-# same as a bare NULL literal.
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_pattern, @regexp_subject, @regexp_pattern;
+# A NULL marker remains text-typed, while a binary peer marker does not trigger
+# the static binary-item restriction.
 SET @regexp_subject = NULL;
-EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_pattern, @regexp_subject, @regexp_pattern;
 SET @regexp_subject = CAST(_binary'中中' AS BLOB);
-EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_subject;
+EXECUTE regexp_domain_rebind USING @regexp_subject, @regexp_subject, @regexp_pattern, @regexp_subject, @regexp_pattern;
 DEALLOCATE PREPARE regexp_domain_rebind;
 
 # A direct PARAM_ITEM's current binary domain selects byte execution, but does
@@ -195,6 +195,10 @@ DEALLOCATE PREPARE regexp_marker_static_text;
 # Scalar-subquery flattening must retain the runtime string domain of each
 # parameter. Rebinding the same cached plan must neither lose byte semantics
 # nor leak the prior execution's domain.
+# These scalar/derived cases pin MO's current transparent parameter-source
+# transport, using the same per-operand semantics as direct markers above.
+# MySQL materializes these aliases as text; general provenance transport is
+# outside the REGEXP-local fix and these cases are not its MySQL oracle.
 PREPARE regexp_scalar_domain_rebind FROM
     'SELECT REGEXP_INSTR((SELECT ? FROM t_regexp_utf8 LIMIT 1), (SELECT ? FROM t_regexp_utf8 LIMIT 1), 2) AS scalar_pos';
 SET @regexp_scalar_subject = CAST(_binary'中中' AS VARBINARY(6));
@@ -225,23 +229,25 @@ SET @regexp_derived_pattern = CAST(_binary'中' AS VARBINARY(3));
 EXECUTE regexp_derived_scalar_domain_rebind USING @regexp_derived_subject, @regexp_derived_pattern;
 DEALLOCATE PREPARE regexp_derived_scalar_domain_rebind;
 
-# A nested domain-preserving REGEXP expression can depend on several prepared
-# parameters jointly. PREPARE must not reject the legal binary/binary state or
-# retain it across a later text execution.
+# A REGEXP result over markers is text-typed even when EXECUTE supplies BLOB.
+# A fixed binary outer pattern is therefore rejected at PREPARE, not EXECUTE.
+PREPARE regexp_nested_static_mismatch FROM
+    'SELECT REGEXP_INSTR(REGEXP_SUBSTR(?, ?), CAST(_binary''.'' AS VARBINARY(1)), 1)';
 PREPARE regexp_nested_domain_rebind FROM
-    'SELECT ORD(REGEXP_SUBSTR(?, ?)), REGEXP_INSTR(REGEXP_SUBSTR(?, ?), CAST(_binary''.'' AS VARBINARY(1)), 1)';
+    'SELECT ORD(REGEXP_SUBSTR(?, ?)), REGEXP_INSTR(REGEXP_SUBSTR(?, ?), ?, 1)';
+SET @regexp_nested_outer_pattern = _binary'.';
 SET @regexp_nested_subject = CAST(_binary'中中' AS VARBINARY(6));
 SET @regexp_nested_pattern = CAST(_binary'中' AS VARBINARY(3));
-EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
+EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_outer_pattern;
 SET @regexp_nested_subject = '中中';
 SET @regexp_nested_pattern = '中';
-EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
+EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_outer_pattern;
 SET @regexp_nested_subject = NULL;
 SET @regexp_nested_pattern = NULL;
-EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
+EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_outer_pattern;
 SET @regexp_nested_subject = CAST(_binary'中中' AS BLOB);
 SET @regexp_nested_pattern = CAST(_binary'中' AS BLOB);
-EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern;
+EXECUTE regexp_nested_domain_rebind USING @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_subject, @regexp_nested_pattern, @regexp_nested_outer_pattern;
 DEALLOCATE PREPARE regexp_nested_domain_rebind;
 
 # REGEXP_REPLACE's replacement participates in compatibility but cannot make
