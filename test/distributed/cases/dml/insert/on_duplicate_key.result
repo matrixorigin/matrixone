@@ -359,6 +359,21 @@ select * from t_odku_row_alias order by id;
 ➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
 1  ¦  10  ¦  0  𝄀
 2  ¦  5  ¦  0
+insert into t_odku_scope_multi values (2, 30), (2, 40);
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = n.id);
+select * from t_odku_row_alias order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  ¦  0  𝄀
+2  ¦  5  ¦  0
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select t_odku_row_alias.y + (select 1) from t_odku_scope_source as t_odku_row_alias);
+select * from t_odku_row_alias order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  10  ¦  0  𝄀
+2  ¦  5  ¦  0
 -- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select (select q.y from t_odku_scope_multi as q) from t_odku_scope_multi as s where s.x = coalesce(t_odku_row_alias.id, 0));
 unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action

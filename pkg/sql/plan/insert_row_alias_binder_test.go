@@ -175,6 +175,37 @@ func TestInsertRowAliasCorrelatedScalarJoinGuardsNonConflict(t *testing.T) {
 		"target-correlated scalar ODKU subquery must be gated by the target lookup match")
 }
 
+func TestInsertRowAliasCandidateCorrelatedScalarJoinGuardsNonConflict(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
+			"where e.deptno = n.id)")
+	require.NoError(t, err)
+
+	guardedScalarJoin := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_SINGLE {
+			continue
+		}
+		for _, predicate := range node.OnList {
+			if exprContainsFunc(predicate, "isnotnull") {
+				guardedScalarJoin = true
+			}
+		}
+	}
+	require.True(t, guardedScalarJoin,
+		"candidate-correlated scalar ODKU subquery must be gated by the target lookup match")
+}
+
+func TestInsertRowAliasIgnoresLocalAliasMatchingTarget(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select dept.ename from constraint_test.emp as dept "+
+			"where dept.deptno = (select 1))")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+}
+
 func TestInsertRowAliasCorrelatedRejectsOrderedAssignmentComposition(t *testing.T) {
 	_, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
@@ -255,6 +286,38 @@ func TestOndupUpdateBinderDetectsNestedTargetCorrelationBeforeBinding(t *testing
 		context.Background(), nil, nil, 0, 0, testInsertAliasTable(), "db", "t", 1,
 	)
 	hasTarget, hasNested := binder.astSubqueryTargetCorrelation(astSubquery)
+	require.True(t, hasTarget)
+	require.True(t, hasNested)
+}
+
+func TestOndupUpdateBinderIgnoresLocalAliasMatchingTarget(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"insert into t values (2, 5, 0) as n on duplicate key update b = (select t.y from s as t where t.x = (select 1))",
+		1,
+	)
+	require.NoError(t, err)
+	insert := stmt.(*tree.Insert)
+	astSubquery, ok := scalarSubqueryExpr(insert.OnDuplicateUpdate[0].Expr)
+	require.True(t, ok)
+
+	binder := NewOndupUpdateBinder(
+		context.Background(), nil, nil, 0, 0, testInsertAliasTable(), "db", "t", 1,
+	)
+	hasTarget, hasNested := binder.astSubqueryTargetCorrelation(astSubquery)
+	require.False(t, hasTarget)
+	require.False(t, hasNested)
+
+	stmt, err = parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"insert into t values (2, 5, 0) as n on duplicate key update b = (select db.t.y from s as t where t.x = (select 1))",
+		1,
+	)
+	require.NoError(t, err)
+	insert = stmt.(*tree.Insert)
+	astSubquery, ok = scalarSubqueryExpr(insert.OnDuplicateUpdate[0].Expr)
+	require.True(t, ok)
+	hasTarget, hasNested = binder.astSubqueryTargetCorrelation(astSubquery)
 	require.True(t, hasTarget)
 	require.True(t, hasNested)
 }
