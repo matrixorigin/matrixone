@@ -7349,8 +7349,69 @@ func TestDiscreteDistances(t *testing.T) {
 
 	run(StHausdorffDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
 	run(StHausdorffDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 0, 10 0)", 0.0)
+	run(StHausdorffDistance, "LINESTRING(0 0,1 4,4 4)", "LINESTRING(0 0,4 0,4 4)", 3.0)
+	run(StHausdorffDistance, "LINESTRING(0 0,4 0,4 4)", "LINESTRING(0 0,1 4,4 4)", 4.0)
+	run(StHausdorffDistance, "LINESTRING(0 0,0 5,5 5)", "LINESTRING(0 1,0 6,3 3,5 6)", 1.0)
 	run(StFrechetDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
 	run(StFrechetDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 0, 10 5)", 5.0)
+	run(StFrechetDistance, "LINESTRING(0 0,0 5,5 5)", "LINESTRING(0 1,0 6,3 3,5 6)", 2.8284271247461903)
+
+	// Exercise the vector path with asymmetric rows and a NULL masking malformed
+	// payload, so NULL propagation must happen before geometry decoding.
+	batch := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(),
+				[]string{"LINESTRING(0 0,1 4,4 4)", "\x01", "LINESTRING(0 0,10 0)"}, []bool{false, true, false}),
+			NewFunctionTestInput(types.T_geometry.ToType(),
+				[]string{"LINESTRING(0 0,4 0,4 4)", "LINESTRING(0 0,1 4,4 4)", "LINESTRING(0 1,10 1)"}, []bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false,
+			[]float64{3.0, 0.0, 1.0}, []bool{false, true, false}), StHausdorffDistance)
+	ok, info := batch.Run()
+	require.True(t, ok, info)
+
+	g32 := func(text string) string {
+		g, err := geo.ParseWKT(text)
+		require.NoError(t, err)
+		wkb, err := geo.WriteWKBFloat32(g)
+		require.NoError(t, err)
+		return string(wkb)
+	}
+	// Geometry32 preserves direction and float32 metadata for both argument
+	// orders; its NULL row also masks malformed WKB before decoding.
+	tc32 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(),
+				[]string{g32("LINESTRING(0 0,1 4,4 4)"), g32("LINESTRING(0 0,4 0,4 4)"), "\x01"}, []bool{false, false, true}),
+			NewFunctionTestInput(types.T_geometry32.ToType(),
+				[]string{g32("LINESTRING(0 0,4 0,4 4)"), g32("LINESTRING(0 0,1 4,4 4)"), g32("LINESTRING(0 0,4 0,4 4)")}, []bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_float32.ToType(), false, []float32{3.0, 4.0, 0.0}, []bool{false, false, true}), StHausdorffDistance32)
+	ok, info = tc32.Run()
+	require.True(t, ok, info)
+
+	valid := "LINESTRING(0 0,1 4,4 4)"
+	for _, pair := range []struct {
+		name  string
+		left  string
+		right string
+	}{
+		{name: "invalid left WKB", left: "\x01", right: valid},
+		{name: "invalid right WKB", left: valid, right: "\x01"},
+		{name: "empty left geometry", left: "LINESTRING EMPTY", right: valid},
+		{name: "empty right geometry", left: valid, right: "LINESTRING EMPTY"},
+	} {
+		t.Run(pair.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{pair.left}, []bool{false}),
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{pair.right}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil), StHausdorffDistance)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestLinearReferencing(t *testing.T) {

@@ -10905,8 +10905,8 @@ func stFrechetDistance[T float32 | float64](functionName string, ivecs []*vector
 	}, selectList)
 }
 
-// StHausdorffDistance returns the discrete Hausdorff distance (planar) between
-// two geometries' vertex sets.
+// StHausdorffDistance returns the discrete directed Hausdorff distance (planar)
+// from the first geometry's vertex set to the second geometry's vertex set.
 func StHausdorffDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stHausdorffDistance[float64]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
 }
@@ -10933,7 +10933,7 @@ func stHausdorffDistance[T float32 | float64](functionName string, ivecs []*vect
 		if err != nil {
 			return 0, err
 		}
-		d, ok := geo.HausdorffDistance(a, b)
+		d, ok := geo.DirectedHausdorffDistance(a, b)
 		if !ok {
 			return 0, moerr.NewInvalidInputNoCtx("ST_HausdorffDistance: empty geometry")
 		}
