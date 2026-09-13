@@ -9506,13 +9506,6 @@ func TestUserLevelLockCleanupTestServiceUnblocksInFlightUnlock(t *testing.T) {
 	}
 }
 
-func requireUserLevelLockTxnUnlocked(t *testing.T, service *userLevelLockTestService, txnID []byte) {
-	t.Helper()
-	requireUserLevelLockTxnUnlockedFunc(t, service, func(unlocked []byte) bool {
-		return bytes.Equal(unlocked, txnID)
-	}, "txnID=%q", string(txnID))
-}
-
 func requireUserLevelLockProbeTxnUnlocked(t *testing.T, service *userLevelLockTestService, owner string, connID uint64, name, probeType string) {
 	t.Helper()
 	prefix := userLevelLockProbeTxnIDPrefix(owner, connID, name, probeType)
