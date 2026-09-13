@@ -2114,6 +2114,12 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if t1, t2, ok := integerDivBitTypes(inputs[0], inputs[1]); ok {
+					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
+						return newCheckResultWithSuccess(0)
+					}
+					return newCheckResultWithCast(0, []types.Type{t1, t2})
+				}
 				// Keep same-domain operands unchanged where possible.
 				if integerDivOperatorSupports(inputs[0], inputs[1]) {
 					return newCheckResultWithSuccess(0)
@@ -2143,6 +2149,9 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
+					if len(parameters) > 0 && parameters[0].Oid == types.T_bit {
+						return types.T_uint64.ToType()
+					}
 					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
@@ -2552,6 +2561,16 @@ var supportedOperators = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return operatorOpBitwiseBinaryNotFn
+				},
+			},
+			{
+				overloadId: 11,
+				args:       []types.T{types.T_bit},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_uint64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return operatorUnaryTilde[uint64]
 				},
 			},
 		},

@@ -10686,12 +10686,15 @@ func L1DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 
 // StGeoHashFromPoint is ST_GeoHash(point, max_length): the geohash of a point.
 func StGeoHashFromPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	return opBinaryStrFixedToStrWithErrorCheck[int64](ivecs, result, proc, length, func(v string, maxLen int64) (string, error) {
 		x, y, err := parsePointXYFromPayload(functionUtil.QuickStrToBytes(v))
 		if err != nil {
 			return "", err
 		}
-		return geo.EncodeGeoHash(x, y, int(maxLen)), nil
+		return geo.EncodeGeoHash(x, y, maxLen)
 	}, selectList)
 }
 
@@ -10718,7 +10721,11 @@ func StGeoHashFromLonLat(ivecs []*vector.Vector, result vector.FunctionResultWra
 			}
 			continue
 		}
-		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(geo.EncodeGeoHash(lon, lat, int(l))), false); err != nil {
+		hash, err := geo.EncodeGeoHash(lon, lat, l)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(hash), false); err != nil {
 			return err
 		}
 	}
@@ -12005,6 +12012,31 @@ func geometryContains(container, target []byte) (bool, error) {
 }
 
 func geometryContainsImpl(container, target []byte, containerType, targetType string) (bool, error) {
+	if targetType == "GEOMETRYCOLLECTION" && (isLinearGeometryType(containerType) || isPolygonGeometryType(containerType)) {
+		targetPoints, pointOnly, err := pointSetGeometryItems(target, targetType)
+		if err != nil {
+			return false, err
+		}
+		if pointOnly {
+			if len(targetPoints) == 0 {
+				return geometryCollectionContains(container, target, containerType, targetType)
+			}
+			switch {
+			case isLinearGeometryType(containerType):
+				containerLines, err := lineGeometryItems(container, containerType)
+				if err != nil {
+					return false, err
+				}
+				return pointCollectionContainedByLineCollection(targetPoints, containerLines), nil
+			case isPolygonGeometryType(containerType):
+				containerPolygons, err := polygonGeometryItems(container, containerType)
+				if err != nil {
+					return false, err
+				}
+				return pointCollectionContainedByPolygonCollection(targetPoints, containerPolygons), nil
+			}
+		}
+	}
 	if containerType == "GEOMETRYCOLLECTION" || targetType == "GEOMETRYCOLLECTION" {
 		return geometryCollectionContains(container, target, containerType, targetType)
 	}
@@ -12415,36 +12447,57 @@ func geometryCrosses(left, right []byte) (bool, error) {
 	if !isCrossesSupportedGeometryType(leftType) || !isCrossesSupportedGeometryType(rightType) {
 		return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
 	}
+	if leftType == "GEOMETRYCOLLECTION" && (isLinearGeometryType(rightType) || isPolygonGeometryType(rightType)) {
+		leftPoints, pointOnly, err := pointSetGeometryItems(left, leftType)
+		if err != nil {
+			return false, err
+		}
+		if pointOnly {
+			return pointCollectionCrossesGeometry(leftPoints, right, rightType)
+		}
+	}
+	if rightType == "GEOMETRYCOLLECTION" && (isLinearGeometryType(leftType) || isPolygonGeometryType(leftType)) {
+		rightPoints, pointOnly, err := pointSetGeometryItems(right, rightType)
+		if err != nil {
+			return false, err
+		}
+		if pointOnly {
+			return pointCollectionCrossesGeometry(rightPoints, left, leftType)
+		}
+	}
 	if leftType == "GEOMETRYCOLLECTION" || rightType == "GEOMETRYCOLLECTION" {
 		return geometryCollectionCrosses(left, right, leftType, rightType)
 	}
 
 	switch leftType {
 	case "POINT", "MULTIPOINT":
-		if isPolygonGeometryType(rightType) || isPointGeometryType(rightType) {
+		if isPointGeometryType(rightType) {
 			return false, nil
 		}
-		leftPoints, err := pointGeometryItems(left, leftType)
+		leftPoints, pointOnly, err := pointSetGeometryItems(left, leftType)
 		if err != nil {
 			return false, err
 		}
-		rightLines, err := lineGeometryItems(right, rightType)
-		if err != nil {
-			return false, err
+		if !pointOnly {
+			return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
 		}
-		return pointCollectionCrossesLineCollection(leftPoints, rightLines), nil
+		return pointCollectionCrossesGeometry(leftPoints, right, rightType)
 	case "LINESTRING", "MULTILINESTRING":
+		if isPointGeometryType(rightType) {
+			rightPoints, pointOnly, err := pointSetGeometryItems(right, rightType)
+			if err != nil {
+				return false, err
+			}
+			if !pointOnly {
+				return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
+			}
+			return pointCollectionCrossesGeometry(rightPoints, left, leftType)
+		}
 		leftLines, err := lineGeometryItems(left, leftType)
 		if err != nil {
 			return false, err
 		}
 		switch {
-		case isPointGeometryType(rightType):
-			rightPoints, err := pointGeometryItems(right, rightType)
-			if err != nil {
-				return false, err
-			}
-			return pointCollectionCrossesLineCollection(rightPoints, leftLines), nil
 		case isLinearGeometryType(rightType):
 			rightLines, err := lineGeometryItems(right, rightType)
 			if err != nil {
@@ -12461,8 +12514,18 @@ func geometryCrosses(left, right []byte) (bool, error) {
 			return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
 		}
 	case "POLYGON", "MULTIPOLYGON":
-		if isPointGeometryType(rightType) || isPolygonGeometryType(rightType) {
+		if isPolygonGeometryType(rightType) {
 			return false, nil
+		}
+		if isPointGeometryType(rightType) {
+			rightPoints, pointOnly, err := pointSetGeometryItems(right, rightType)
+			if err != nil {
+				return false, err
+			}
+			if !pointOnly {
+				return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
+			}
+			return pointCollectionCrossesGeometry(rightPoints, left, leftType)
 		}
 		leftPolygons, err := polygonGeometryItems(left, leftType)
 		if err != nil {
@@ -12859,13 +12922,6 @@ func lineStringTouchesLineString(left, right []geometryPoint2D) bool {
 		}
 	}
 	return touched
-}
-
-func pointCrossesLineString(point geometryPoint2D, line []geometryPoint2D) bool {
-	if !pointIntersectsLineString(point, line) {
-		return false
-	}
-	return !lineStringPointIsBoundary(line, point)
 }
 
 func lineStringCrossesLineString(left, right []geometryPoint2D) bool {
@@ -13787,6 +13843,135 @@ func pointGeometryItems(payload []byte, typeName string) ([]geometryPoint2D, err
 	return points, nil
 }
 
+type geometryCollectionFrame struct {
+	payload []byte
+	count   int64
+	next    int64
+}
+
+// pointSetGeometryItems recognizes a Point, MultiPoint, or a GeometryCollection
+// whose recursive leaves are exclusively Point/MultiPoint geometries. The
+// explicit frame stack bounds Go call-stack use for deeply nested collections.
+func pointSetGeometryItems(payload []byte, typeName string) ([]geometryPoint2D, bool, error) {
+	if isPointGeometryType(typeName) {
+		points, err := pointSetGeometryPayloadPoints(payload, typeName)
+		return points, true, err
+	}
+	if typeName != "GEOMETRYCOLLECTION" {
+		return nil, false, nil
+	}
+	count, err := geometryCountFromPayload(payload)
+	if err != nil {
+		empty, emptyErr := geometryIsExplicitlyEmpty(payload)
+		if emptyErr == nil && empty {
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+	frames := []geometryCollectionFrame{{payload: payload, count: count, next: 1}}
+	points := make([]geometryPoint2D, 0)
+	for len(frames) > 0 {
+		frameIndex := len(frames) - 1
+		frame := &frames[frameIndex]
+		if frame.next > frame.count {
+			frames = frames[:frameIndex]
+			continue
+		}
+
+		item, err := geometryNFromPayload(frame.payload, frame.next)
+		if err != nil {
+			return nil, false, err
+		}
+		frame.next++
+		itemPayload := []byte(item)
+		itemType, err := geometryTypeNameFromPayload(itemPayload)
+		if err != nil {
+			return nil, false, err
+		}
+		switch itemType {
+		case "POINT", "MULTIPOINT":
+			itemPoints, err := pointSetGeometryPayloadPoints(itemPayload, itemType)
+			if err != nil {
+				return nil, false, err
+			}
+			points = append(points, itemPoints...)
+		case "GEOMETRYCOLLECTION":
+			count, err := geometryCountFromPayload(itemPayload)
+			if err != nil {
+				empty, emptyErr := geometryIsExplicitlyEmpty(itemPayload)
+				if emptyErr == nil && empty {
+					continue
+				}
+				return nil, false, err
+			}
+			frames = append(frames, geometryCollectionFrame{payload: itemPayload, count: count, next: 1})
+		default:
+			return nil, false, nil
+		}
+	}
+	return points, true, nil
+}
+
+func pointSetGeometryPayloadPoints(payload []byte, typeName string) ([]geometryPoint2D, error) {
+	points, err := pointGeometryItems(payload, typeName)
+	if err == nil {
+		return points, nil
+	}
+	empty, emptyErr := geometryIsExplicitlyEmpty(payload)
+	if emptyErr == nil && empty {
+		return nil, nil
+	}
+	if typeName != "MULTIPOINT" {
+		return nil, err
+	}
+	items, itemsErr := geometryPayloadItems(payload, typeName)
+	if itemsErr != nil {
+		return nil, itemsErr
+	}
+	points = make([]geometryPoint2D, 0, len(items))
+	for _, item := range items {
+		x, y, pointErr := parsePointXYFromPayload(item)
+		if pointErr == nil {
+			points = append(points, geometryPoint2D{x: x, y: y})
+			continue
+		}
+		empty, emptyErr := geometryIsExplicitlyEmpty(item)
+		if emptyErr != nil {
+			return nil, emptyErr
+		}
+		if !empty {
+			return nil, pointErr
+		}
+	}
+	return points, nil
+}
+
+func pointCollectionCrossesGeometry(points []geometryPoint2D, other []byte, otherType string) (bool, error) {
+	empty, err := geometryIsExplicitlyEmpty(other)
+	if err != nil {
+		return false, err
+	}
+	if empty || len(points) == 0 {
+		return false, nil
+	}
+	switch {
+	case isLinearGeometryType(otherType):
+		lines, err := lineGeometryItems(other, otherType)
+		if err != nil {
+			return false, err
+		}
+		return pointCollectionCrossesLineCollection(points, lines), nil
+	case isPolygonGeometryType(otherType):
+		polygons, err := polygonGeometryItems(other, otherType)
+		if err != nil {
+			return false, err
+		}
+		return pointCollectionCrossesPolygonCollection(points, polygons), nil
+	default:
+		return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
+	}
+}
+
 func pointCollectionCoveredByPointCollection(candidate, container []geometryPoint2D) bool {
 	for _, candidatePoint := range candidate {
 		covered := false
@@ -13834,18 +14019,66 @@ func pointCollectionCoveredByLineCollection(candidate []geometryPoint2D, contain
 	return true
 }
 
-func pointCollectionContainedByLineCollection(candidate []geometryPoint2D, container [][]geometryPoint2D) bool {
-	for _, candidatePoint := range candidate {
-		if !pointCrossesLineCollection(candidatePoint, container) {
-			return false
+type geometryPointLocation uint8
+
+const (
+	geometryPointExterior geometryPointLocation = iota
+	geometryPointBoundary
+	geometryPointInterior
+)
+
+func pointLocationInLineCollection(point geometryPoint2D, lines [][]geometryPoint2D) geometryPointLocation {
+	onLine := false
+	boundaryParity := false
+	for _, line := range lines {
+		if pointIntersectsLineString(point, line) {
+			onLine = true
+		}
+		if len(line) == 0 {
+			continue
+		}
+		if sameGeometryPoint(point, line[0]) {
+			boundaryParity = !boundaryParity
+		}
+		if sameGeometryPoint(point, line[len(line)-1]) {
+			boundaryParity = !boundaryParity
 		}
 	}
-	return true
+	if !onLine {
+		return geometryPointExterior
+	}
+	if boundaryParity {
+		return geometryPointBoundary
+	}
+	return geometryPointInterior
+}
+
+func pointCollectionContainedByLineCollection(candidate []geometryPoint2D, container [][]geometryPoint2D) bool {
+	if len(candidate) == 0 {
+		return true
+	}
+	hasInterior := false
+	for _, candidatePoint := range candidate {
+		switch pointLocationInLineCollection(candidatePoint, container) {
+		case geometryPointExterior:
+			return false
+		case geometryPointInterior:
+			hasInterior = true
+		}
+	}
+	return hasInterior
 }
 
 func pointCollectionCrossesLineCollection(points []geometryPoint2D, lines [][]geometryPoint2D) bool {
+	hasInterior, hasExterior := false, false
 	for _, point := range points {
-		if pointCrossesLineCollection(point, lines) {
+		switch pointLocationInLineCollection(point, lines) {
+		case geometryPointExterior:
+			hasExterior = true
+		case geometryPointInterior:
+			hasInterior = true
+		}
+		if hasInterior && hasExterior {
 			return true
 		}
 	}
@@ -13944,15 +14177,6 @@ func pointIntersectsLineCollection(point geometryPoint2D, lines [][]geometryPoin
 	return false
 }
 
-func pointCrossesLineCollection(point geometryPoint2D, lines [][]geometryPoint2D) bool {
-	for _, line := range lines {
-		if pointCrossesLineString(point, line) {
-			return true
-		}
-	}
-	return false
-}
-
 func lineSegmentCoveredByLineCollection(start, end geometryPoint2D, lines [][]geometryPoint2D) bool {
 	intervals := make([]geometryParamInterval, 0, len(lines))
 	for _, line := range lines {
@@ -14015,13 +14239,21 @@ func lineCollectionCrossesPolygonCollection(lines [][]geometryPoint2D, polygons 
 	return false
 }
 
-func pointInPolygonCollection(point geometryPoint2D, polygons []polygonGeometryItem) bool {
+func pointLocationInPolygonCollection(point geometryPoint2D, polygons []polygonGeometryItem) geometryPointLocation {
+	hasBoundary := false
 	for _, polygon := range polygons {
-		if pointInPolygonGeometry(polygon.shape, point.x, point.y) {
-			return true
+		location := pointLocationInPolygonGeometry(polygon.shape, point.x, point.y)
+		switch location {
+		case geometryPointInterior:
+			return geometryPointInterior
+		case geometryPointBoundary:
+			hasBoundary = true
 		}
 	}
-	return false
+	if hasBoundary {
+		return geometryPointBoundary
+	}
+	return geometryPointExterior
 }
 
 func pointCollectionCoveredByPolygonCollection(candidate []geometryPoint2D, container []polygonGeometryItem) bool {
@@ -14034,12 +14266,35 @@ func pointCollectionCoveredByPolygonCollection(candidate []geometryPoint2D, cont
 }
 
 func pointCollectionContainedByPolygonCollection(candidate []geometryPoint2D, container []polygonGeometryItem) bool {
+	if len(candidate) == 0 {
+		return true
+	}
+	hasInterior := false
 	for _, candidatePoint := range candidate {
-		if !pointInPolygonCollection(candidatePoint, container) {
+		switch pointLocationInPolygonCollection(candidatePoint, container) {
+		case geometryPointExterior:
 			return false
+		case geometryPointInterior:
+			hasInterior = true
 		}
 	}
-	return true
+	return hasInterior
+}
+
+func pointCollectionCrossesPolygonCollection(points []geometryPoint2D, container []polygonGeometryItem) bool {
+	hasInterior, hasExterior := false, false
+	for _, point := range points {
+		switch pointLocationInPolygonCollection(point, container) {
+		case geometryPointExterior:
+			hasExterior = true
+		case geometryPointInterior:
+			hasInterior = true
+		}
+		if hasInterior && hasExterior {
+			return true
+		}
+	}
+	return false
 }
 
 func lineCollectionCoveredByPolygonCollection(lines [][]geometryPoint2D, polygons []polygonGeometryItem) bool {
@@ -14205,7 +14460,12 @@ func pointInPolygon(points []geometryPoint2D, px, py float64) bool {
 	if pointOnPolygonBoundary(points, px, py) {
 		return false
 	}
+	return pointInPolygonRingInterior(points, px, py)
+}
 
+// pointInPolygonRingInterior is called only when the point has already been
+// checked against the ring boundary.
+func pointInPolygonRingInterior(points []geometryPoint2D, px, py float64) bool {
 	inside := false
 	j := len(points) - 1
 	for i := 0; i < len(points); i++ {
@@ -14220,6 +14480,21 @@ func pointInPolygon(points []geometryPoint2D, px, py float64) bool {
 		j = i
 	}
 	return inside
+}
+
+func pointLocationInPolygonGeometry(polygon geometryPolygon2D, px, py float64) geometryPointLocation {
+	if pointOnPolygonBoundaryGeometry(polygon, px, py) {
+		return geometryPointBoundary
+	}
+	if !pointInPolygonRingInterior(polygon.outer, px, py) {
+		return geometryPointExterior
+	}
+	for _, hole := range polygon.holes {
+		if pointInPolygonRingInterior(hole, px, py) {
+			return geometryPointExterior
+		}
+	}
+	return geometryPointInterior
 }
 
 func pointInPolygonGeometry(polygon geometryPolygon2D, px, py float64) bool {
