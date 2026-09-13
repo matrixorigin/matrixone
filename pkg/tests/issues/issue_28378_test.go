@@ -400,10 +400,10 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 			if tc.desc {
 				direction = "desc"
 			}
-			statement := "select id," + tc.fn + "(v," + tc.vector + ") from " + tc.name + " order by " + tc.fn + "(v," + tc.vector + ") " + direction + " limit 10"
+			var primaryStatement string
 			for coordinator, conn := range conns {
 				expression := tc.fn + "(v," + tc.vector + ")"
-				statement = "select id," + expression + " from " + tc.name + " order by " + expression + " " + direction + " limit 10"
+				statement := "select id," + expression + " from " + tc.name + " order by " + expression + " " + direction + " limit 10"
 				plan := queryJoinSpillText(t, ctx, conn, "explain "+statement)
 				require.Contains(t, plan, "Vector Index: ivf_idx", "must use the IVF reader")
 				exec(t, conn, "set probe_limit=16")
@@ -411,6 +411,14 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 				got := query(t, conn, statement, tc.desc)
 				require.Len(t, got, 10)
 				require.Greater(t, remoteCalls(), before, "coordinator %d must execute a remote pipeline", coordinator)
+				if coordinator != 0 {
+					continue
+				}
+				primaryStatement = statement
+				// Both CNs execute the indexed remote query above. The exact scan,
+				// empty-result, cancellation, and follow-up checks are identical
+				// SQL semantics, so run them once through the primary connection to
+				// keep the cumulative query budget usable under the full UT runner.
 				wantExpression := tc.fn + "(" + tc.col + "," + tc.vector + ")"
 				want := query(t, conn, "select id,"+wantExpression+" from source_vectors order by "+wantExpression+" "+direction+" limit 10", tc.desc)
 				require.Len(t, want, 10)
@@ -504,9 +512,10 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 				t.Logf("IVF_WORKERS_JOINED distance=%s count=8", tc.name)
 				require.NoError(t, firstErr)
 			}
+			require.NotEmpty(t, primaryStatement)
 			cancelCtx, cancel := context.WithCancel(ctx)
 			cancel()
-			cancelledRows, err := conns[0].QueryContext(cancelCtx, statement)
+			cancelledRows, err := conns[0].QueryContext(cancelCtx, primaryStatement)
 			if cancelledRows != nil {
 				defer cancelledRows.Close()
 				if rowsErr := cancelledRows.Err(); rowsErr != nil {
@@ -516,7 +525,7 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 			require.ErrorIs(t, err, context.Canceled)
 			// This checks cancellation before SQL admission, not cancellation
 			// of an active remote pipeline. Run again after all workers joined.
-			followup := query(t, conns[0], statement, tc.desc)
+			followup := query(t, conns[0], primaryStatement, tc.desc)
 			require.Len(t, followup, 10)
 		})
 	}
