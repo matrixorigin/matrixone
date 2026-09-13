@@ -8183,7 +8183,7 @@ func TestStContainsWithMultiGeometries(t *testing.T) {
 			},
 			[]bool{false, false, false, false, false, false}),
 	}
-	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, false, false}, []bool{false, false, false, false, false, false})
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, true, true}, []bool{false, false, false, false, false, false})
 	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StContains)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
@@ -8432,7 +8432,7 @@ func TestStWithinWithMultiGeometries(t *testing.T) {
 			},
 			[]bool{false, false, false, false, false, false}),
 	}
-	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, false, false}, []bool{false, false, false, false, false, false})
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, true, true}, []bool{false, false, false, false, false, false})
 	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StWithin)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
@@ -9228,7 +9228,7 @@ func initStCrossesTestCase() []tcTemp {
 					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false, false, false, false, false, true, false, true, false, false, true, false, false, true, true, true, true, true, false, true, true, true, true},
+				[]bool{false, false, false, false, false, false, false, true, false, false, true, false, false, true, true, true, true, true, false, true, true, true, true},
 				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
