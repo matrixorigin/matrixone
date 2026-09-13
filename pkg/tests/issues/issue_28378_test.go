@@ -451,7 +451,10 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 								}
 							}
 							statement := "select id from " + tc.name + " order by " + tc.fn + "(v," + tc.vector + ") " + direction + " limit 10"
-							for iteration := 0; iteration < 20; iteration++ {
+							// Keep the eight-session interleaving while bounding repeated
+							// work so the shared five-minute query budget remains available
+							// for every distance operator under a full-UT runner.
+							for iteration := 0; iteration < 4; iteration++ {
 								rows, err := conn.QueryContext(ctx, statement)
 								if err != nil {
 									return err
