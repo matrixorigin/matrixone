@@ -278,6 +278,13 @@ func resolveNumericBinaryTypes(
 	right types.Type,
 	outer *types.Type,
 ) (numericTypeResolution, bool) {
+	// Resolve the BIT dividend before T_any inference and generic coercion so
+	// its unsigned result domain and declared width are not lost.
+	if op == numericOpIntegerDiv {
+		if bitLeft, bitRight, bitOperands := integerDivBitTypes(left, right); bitOperands {
+			left, right = bitLeft, bitRight
+		}
+	}
 	left, right, ok := resolveUnknownNumericOperands(left, right, outer)
 	if !ok {
 		return numericTypeResolution{}, false
@@ -287,7 +294,10 @@ func resolveNumericBinaryTypes(
 	var castLeft, castRight types.Type
 	switch op {
 	case numericOpIntegerDiv:
-		if integerDivOperatorSupports(left, right) {
+		if integerDivBitResolvedTypes(left, right) {
+			// BIT DIV preserves the left BIT column but computes in BIGINT
+			// UNSIGNED; the executor consumes this canonical signature.
+		} else if integerDivOperatorSupports(left, right) {
 			// Keep same-domain operands in their original physical type.
 		} else if mixedLeft, mixedRight, mixed := integerDivUnsignedMixedTypes(left, right); mixed {
 			left, right = mixedLeft, mixedRight
@@ -360,7 +370,8 @@ func numericOperatorSupports(op numericBinaryOp, left, right types.Type) bool {
 	case numericOpDiv:
 		return divOperatorSupports(left, right)
 	case numericOpIntegerDiv:
-		return integerDivOperatorSupports(left, right) || integerDivUnsignedMixedResolvedTypes(left, right)
+		return integerDivBitResolvedTypes(left, right) ||
+			integerDivOperatorSupports(left, right) || integerDivUnsignedMixedResolvedTypes(left, right)
 	case numericOpMod:
 		return modOperatorSupports(left, right)
 	default:
@@ -371,6 +382,9 @@ func numericOperatorSupports(op numericBinaryOp, left, right types.Type) bool {
 func numericBinaryResultType(op numericBinaryOp, left, right types.Type) types.Type {
 	switch op {
 	case numericOpIntegerDiv:
+		if integerDivBitResolvedTypes(left, right) {
+			return types.T_uint64.ToType()
+		}
 		return types.T_int64.ToType()
 	case numericOpAdd, numericOpSub:
 		if left.Oid.IsDecimal() || right.Oid.IsDecimal() {

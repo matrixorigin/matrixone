@@ -7349,8 +7349,69 @@ func TestDiscreteDistances(t *testing.T) {
 
 	run(StHausdorffDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
 	run(StHausdorffDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 0, 10 0)", 0.0)
+	run(StHausdorffDistance, "LINESTRING(0 0,1 4,4 4)", "LINESTRING(0 0,4 0,4 4)", 3.0)
+	run(StHausdorffDistance, "LINESTRING(0 0,4 0,4 4)", "LINESTRING(0 0,1 4,4 4)", 4.0)
+	run(StHausdorffDistance, "LINESTRING(0 0,0 5,5 5)", "LINESTRING(0 1,0 6,3 3,5 6)", 1.0)
 	run(StFrechetDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
 	run(StFrechetDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 0, 10 5)", 5.0)
+	run(StFrechetDistance, "LINESTRING(0 0,0 5,5 5)", "LINESTRING(0 1,0 6,3 3,5 6)", 2.8284271247461903)
+
+	// Exercise the vector path with asymmetric rows and a NULL masking malformed
+	// payload, so NULL propagation must happen before geometry decoding.
+	batch := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(),
+				[]string{"LINESTRING(0 0,1 4,4 4)", "\x01", "LINESTRING(0 0,10 0)"}, []bool{false, true, false}),
+			NewFunctionTestInput(types.T_geometry.ToType(),
+				[]string{"LINESTRING(0 0,4 0,4 4)", "LINESTRING(0 0,1 4,4 4)", "LINESTRING(0 1,10 1)"}, []bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false,
+			[]float64{3.0, 0.0, 1.0}, []bool{false, true, false}), StHausdorffDistance)
+	ok, info := batch.Run()
+	require.True(t, ok, info)
+
+	g32 := func(text string) string {
+		g, err := geo.ParseWKT(text)
+		require.NoError(t, err)
+		wkb, err := geo.WriteWKBFloat32(g)
+		require.NoError(t, err)
+		return string(wkb)
+	}
+	// Geometry32 preserves direction and float32 metadata for both argument
+	// orders; its NULL row also masks malformed WKB before decoding.
+	tc32 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(),
+				[]string{g32("LINESTRING(0 0,1 4,4 4)"), g32("LINESTRING(0 0,4 0,4 4)"), "\x01"}, []bool{false, false, true}),
+			NewFunctionTestInput(types.T_geometry32.ToType(),
+				[]string{g32("LINESTRING(0 0,4 0,4 4)"), g32("LINESTRING(0 0,1 4,4 4)"), g32("LINESTRING(0 0,4 0,4 4)")}, []bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_float32.ToType(), false, []float32{3.0, 4.0, 0.0}, []bool{false, false, true}), StHausdorffDistance32)
+	ok, info = tc32.Run()
+	require.True(t, ok, info)
+
+	valid := "LINESTRING(0 0,1 4,4 4)"
+	for _, pair := range []struct {
+		name  string
+		left  string
+		right string
+	}{
+		{name: "invalid left WKB", left: "\x01", right: valid},
+		{name: "invalid right WKB", left: valid, right: "\x01"},
+		{name: "empty left geometry", left: "LINESTRING EMPTY", right: valid},
+		{name: "empty right geometry", left: valid, right: "LINESTRING EMPTY"},
+	} {
+		t.Run(pair.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{pair.left}, []bool{false}),
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{pair.right}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil), StHausdorffDistance)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestLinearReferencing(t *testing.T) {
@@ -7435,6 +7496,118 @@ func TestGeoJSONFunctions(t *testing.T) {
 			[]string{`{"type":"Point","coordinates":[1.23,2.35]}`}, []bool{false}), StAsGeoJSONPrec)
 	ok, info = tcAsP.Run()
 	require.True(t, ok, info)
+
+	for _, tc := range []struct {
+		name   string
+		wkt    string
+		maxDec int64
+		want   string
+	}{
+		{
+			name:   "finite scale multiplication at 308",
+			wkt:    "POINT(2 -2)",
+			maxDec: 308,
+			want:   `{"type":"Point","coordinates":[2,-2]}`,
+		},
+		{
+			name:   "first infinite power of ten",
+			wkt:    "POINT(1.23456789 0)",
+			maxDec: 309,
+			want:   `{"type":"Point","coordinates":[1.23456789,0]}`,
+		},
+		{
+			name:   "large precision",
+			wkt:    "POINT(1.23456789 0)",
+			maxDec: 1000,
+			want:   `{"type":"Point","coordinates":[1.23456789,0]}`,
+		},
+		{
+			name:   "maximum accepted precision",
+			wkt:    "POINT(1.23456789 0)",
+			maxDec: 1<<32 - 1,
+			want:   `{"type":"Point","coordinates":[1.23456789,0]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eval := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.wkt}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.maxDec}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{false}),
+				StAsGeoJSONPrec)
+			ok, info := eval.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	t.Run("invalid precision is rejected", func(t *testing.T) {
+		for _, precision := range []int64{-1, math.MinInt64, 1 << 32, math.MaxInt64} {
+			require.Error(t, validateGeoJSONDecimalDigits(precision), "precision=%d", precision)
+		}
+		for _, precision := range []int64{0, 308, 1<<32 - 1} {
+			require.NoError(t, validateGeoJSONDecimalDigits(precision), "precision=%d", precision)
+		}
+	})
+
+	t.Run("invalid precision is rejected by evaluator", func(t *testing.T) {
+		for _, precision := range []int64{-1, 1 << 32, math.MaxInt64} {
+			eval := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{precision}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+				StAsGeoJSONPrec)
+			ok, info := eval.Run()
+			require.True(t, ok, info)
+		}
+	})
+
+	t.Run("NULL propagates before precision validation", func(t *testing.T) {
+		eval := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			StAsGeoJSONPrec)
+		ok, info := eval.Run()
+		require.True(t, ok, info)
+
+		nullPrecision := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			StAsGeoJSONPrec)
+		ok, info = nullPrecision.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("empty batch skips constant argument evaluation", func(t *testing.T) {
+		eval := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{}, []bool{}),
+			StAsGeoJSONPrec)
+		eval.fnLength = 0
+		ok, info := eval.Run()
+		require.True(t, ok, info)
+
+		nonEmpty := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+			StAsGeoJSONPrec)
+		ok, info = nonEmpty.Run()
+		require.True(t, ok, info)
+	})
 
 	// ST_GeomFromGeoJSON -> canonical WKT via geometry comparison.
 	tcFrom := NewFunctionTestCase(proc,
@@ -7550,6 +7723,118 @@ func TestGeoHashFunctions(t *testing.T) {
 		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{wantPt}, []bool{false}), StPointFromGeoHash)
 	ok, info = tcPt.Run()
 	require.True(t, ok, info)
+}
+
+func TestGeoHashFunctionsRejectInvalidInputsAndPreserveNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	runError := func(name string, inputs []FunctionTestInput, resultType types.Type, fn fEvalFn) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(resultType, true, nil, nil), fn)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	runError("point overload rejects out-of-range coordinates", []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(180.0001 0)"}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{12}, nil),
+	}, types.T_varchar.ToType(), StGeoHashFromPoint)
+	runError("point overload rejects excessive length", []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(0 0)"}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{101}, nil),
+	}, types.T_varchar.ToType(), StGeoHashFromPoint)
+
+	for _, tc := range []struct {
+		name     string
+		lon, lat float64
+	}{
+		{name: "longitude above range", lon: 180.0001},
+		{name: "latitude above range", lat: 90.0001},
+		{name: "nan longitude", lon: math.NaN()},
+		{name: "positive infinity latitude", lat: math.Inf(1)},
+		{name: "negative infinity longitude", lon: math.Inf(-1)},
+	} {
+		runError("lonlat overload rejects "+tc.name, []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{tc.lon}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{tc.lat}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{12}, nil),
+		}, types.T_varchar.ToType(), StGeoHashFromLonLat)
+	}
+
+	for _, maxLength := range []int64{math.MinInt64, -1, 0, 101, 1000, math.MaxInt64} {
+		runError("rejects length "+strconv.FormatInt(maxLength, 10), []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{maxLength}, nil),
+		}, types.T_varchar.ToType(), StGeoHashFromLonLat)
+	}
+
+	runError("latitude decoder rejects empty hash", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil),
+	}, types.T_float64.ToType(), StLatFromGeoHash)
+	runError("longitude decoder rejects empty hash", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil),
+	}, types.T_float64.ToType(), StLongFromGeoHash)
+	runError("point decoder rejects empty hash", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, nil),
+	}, types.T_geometry.ToType(), StPointFromGeoHash)
+
+	tcNull := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{180.0001, -5.603}, []bool{true, false}),
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{90.0001, 42.605}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{101, 5}, nil),
+	}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{"", "ezs42"}, []bool{true, false}), StGeoHashFromLonLat)
+	ok, info := tcNull.Run()
+	require.True(t, ok, info, "a NULL coordinate must bypass validation for that row")
+}
+
+func TestGeoHashFunctionsSkipInvalidConstantsForEmptyBatches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cases := []struct {
+		name       string
+		inputs     []FunctionTestInput
+		resultType types.Type
+		fn         fEvalFn
+	}{
+		{
+			name: "point encoder",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_geometry.ToType(), []string{"POINT(181 0)"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{101}, nil),
+			},
+			resultType: types.T_varchar.ToType(),
+			fn:         StGeoHashFromPoint,
+		},
+		{
+			name: "latitude decoder",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil),
+			},
+			resultType: types.T_float64.ToType(),
+			fn:         StLatFromGeoHash,
+		},
+		{
+			name: "longitude decoder",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil),
+			},
+			resultType: types.T_float64.ToType(),
+			fn:         StLongFromGeoHash,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, tc.inputs,
+				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
+			require.NoError(t, fc.result.PreExtendAndReset(0))
+			require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 0, nil))
+			require.Zero(t, fc.GetResultVectorDirectly().Length())
+		})
+	}
 }
 
 func TestPointMiscFunctions(t *testing.T) {
@@ -7959,7 +8244,7 @@ func TestStContainsWithMultiGeometries(t *testing.T) {
 			},
 			[]bool{false, false, false, false, false, false}),
 	}
-	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, false, false}, []bool{false, false, false, false, false, false})
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, true, true}, []bool{false, false, false, false, false, false})
 	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StContains)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
@@ -8208,7 +8493,7 @@ func TestStWithinWithMultiGeometries(t *testing.T) {
 			},
 			[]bool{false, false, false, false, false, false}),
 	}
-	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, false, false}, []bool{false, false, false, false, false, false})
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, true, true}, []bool{false, false, false, false, false, false})
 	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StWithin)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
@@ -9004,7 +9289,7 @@ func initStCrossesTestCase() []tcTemp {
 					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false, false, false, false, false, true, false, true, false, false, true, false, false, true, true, true, true, true, false, true, true, true, true},
+				[]bool{false, false, false, false, false, false, false, true, false, false, true, false, false, true, true, true, true, true, false, true, true, true, true},
 				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
