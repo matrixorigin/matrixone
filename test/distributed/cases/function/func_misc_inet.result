@@ -177,9 +177,9 @@ decimal64_half    decimal128_tie    decimal256_tie    double_half    double_tie_
 DROP TABLE IF EXISTS inet_ntoa_typed_inputs;
 CREATE TABLE inet_ntoa_typed_inputs (id INT PRIMARY KEY, d64 DECIMAL(18,1), d128 DECIMAL(38,1), d256 DECIMAL(65,1), f FLOAT, d DOUBLE, s BIGINT, u BIGINT UNSIGNED);
 INSERT INTO inet_ntoa_typed_inputs VALUES
-    (1, 2.5, 2.5, 2.5, 2.5, 2.5, 167772161, 4294967295),
-    (2, -0.4, -0.4, -0.4, -0.5, -0.5, -1, 4294967296),
-    (3, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+(1, 2.5, 2.5, 2.5, 2.5, 2.5, 167772161, 4294967295),
+(2, -0.4, -0.4, -0.4, -0.5, -0.5, -1, 4294967296),
+(3, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 SELECT id, INET_NTOA(d64) AS ip_d64, INET_NTOA(d128) AS ip_d128, INET_NTOA(d256) AS ip_d256, INET_NTOA(f) AS ip_float, INET_NTOA(d) AS ip_double, INET_NTOA(s) AS ip_signed, INET_NTOA(u) AS ip_unsigned FROM inet_ntoa_typed_inputs ORDER BY id;
 id    ip_d64    ip_d128    ip_d256    ip_float    ip_double    ip_signed    ip_unsigned
 1    0.0.0.3    0.0.0.3    0.0.0.3    0.0.0.2    0.0.0.2    10.0.0.1    255.255.255.255
