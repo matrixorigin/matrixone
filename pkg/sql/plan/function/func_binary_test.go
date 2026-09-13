@@ -7664,6 +7664,118 @@ func TestGeoHashFunctions(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestGeoHashFunctionsRejectInvalidInputsAndPreserveNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	runError := func(name string, inputs []FunctionTestInput, resultType types.Type, fn fEvalFn) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(resultType, true, nil, nil), fn)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	runError("point overload rejects out-of-range coordinates", []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(180.0001 0)"}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{12}, nil),
+	}, types.T_varchar.ToType(), StGeoHashFromPoint)
+	runError("point overload rejects excessive length", []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(0 0)"}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{101}, nil),
+	}, types.T_varchar.ToType(), StGeoHashFromPoint)
+
+	for _, tc := range []struct {
+		name     string
+		lon, lat float64
+	}{
+		{name: "longitude above range", lon: 180.0001},
+		{name: "latitude above range", lat: 90.0001},
+		{name: "nan longitude", lon: math.NaN()},
+		{name: "positive infinity latitude", lat: math.Inf(1)},
+		{name: "negative infinity longitude", lon: math.Inf(-1)},
+	} {
+		runError("lonlat overload rejects "+tc.name, []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{tc.lon}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{tc.lat}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{12}, nil),
+		}, types.T_varchar.ToType(), StGeoHashFromLonLat)
+	}
+
+	for _, maxLength := range []int64{math.MinInt64, -1, 0, 101, 1000, math.MaxInt64} {
+		runError("rejects length "+strconv.FormatInt(maxLength, 10), []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{maxLength}, nil),
+		}, types.T_varchar.ToType(), StGeoHashFromLonLat)
+	}
+
+	runError("latitude decoder rejects empty hash", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil),
+	}, types.T_float64.ToType(), StLatFromGeoHash)
+	runError("longitude decoder rejects empty hash", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil),
+	}, types.T_float64.ToType(), StLongFromGeoHash)
+	runError("point decoder rejects empty hash", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, nil),
+	}, types.T_geometry.ToType(), StPointFromGeoHash)
+
+	tcNull := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{180.0001, -5.603}, []bool{true, false}),
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{90.0001, 42.605}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{101, 5}, nil),
+	}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{"", "ezs42"}, []bool{true, false}), StGeoHashFromLonLat)
+	ok, info := tcNull.Run()
+	require.True(t, ok, info, "a NULL coordinate must bypass validation for that row")
+}
+
+func TestGeoHashFunctionsSkipInvalidConstantsForEmptyBatches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cases := []struct {
+		name       string
+		inputs     []FunctionTestInput
+		resultType types.Type
+		fn         fEvalFn
+	}{
+		{
+			name: "point encoder",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_geometry.ToType(), []string{"POINT(181 0)"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{101}, nil),
+			},
+			resultType: types.T_varchar.ToType(),
+			fn:         StGeoHashFromPoint,
+		},
+		{
+			name: "latitude decoder",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil),
+			},
+			resultType: types.T_float64.ToType(),
+			fn:         StLatFromGeoHash,
+		},
+		{
+			name: "longitude decoder",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil),
+			},
+			resultType: types.T_float64.ToType(),
+			fn:         StLongFromGeoHash,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, tc.inputs,
+				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
+			require.NoError(t, fc.result.PreExtendAndReset(0))
+			require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 0, nil))
+			require.Zero(t, fc.GetResultVectorDirectly().Length())
+		})
+	}
+}
+
 func TestPointMiscFunctions(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	geom := types.T_geometry.ToType()
