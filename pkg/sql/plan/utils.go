@@ -6136,6 +6136,8 @@ func replaceParamValsWithSelection(
 	selected []bool,
 ) (bool, error) {
 	originalSetOperationTypes := snapshotPreparedSetOperationOutputTypes(plan0.GetQuery())
+	originalSetOperationInputTypes := snapshotPreparedSetOperationInputTypes(
+		plan0.GetQuery(), originalSetOperationTypes)
 	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
 	params := make([]*Expr, len(paramVals))
 	sqlExecuteNumericParams := make([]*Expr, len(paramVals))
@@ -6364,7 +6366,8 @@ func replaceParamValsWithSelection(
 			return false, err
 		}
 	}
-	projectionSpecialized, err := refreshPreparedPlanProjectionTypes(ctx, plan0, originalSetOperationTypes)
+	projectionSpecialized, err := refreshPreparedPlanProjectionTypes(
+		ctx, plan0, originalSetOperationTypes, originalSetOperationInputTypes)
 	if err != nil {
 		return false, err
 	}
@@ -6711,6 +6714,56 @@ func snapshotPreparedSetOperationOutputTypes(query *plan.Query) map[*plan.Node][
 	return outputTypes
 }
 
+type preparedSetOperationInputKey struct {
+	node      *plan.Node
+	branchIdx int
+	colPos    int
+}
+
+// snapshotPreparedSetOperationInputTypes records the SQL value expression
+// exposed by each set-operation branch before execute-time parameter
+// replacement. A set-operation node can also be used by DML as an internal
+// row-merging protocol; comparing branch inputs against this snapshot limits
+// specialization to columns whose execute-time domain actually changed.
+func snapshotPreparedSetOperationInputTypes(
+	query *plan.Query,
+	originalOutputTypes map[*plan.Node][]plan.Type,
+) map[preparedSetOperationInputKey]plan.Type {
+	inputTypes := make(map[preparedSetOperationInputKey]plan.Type)
+	if query == nil {
+		return inputTypes
+	}
+	for _, node := range query.Nodes {
+		if node == nil || !isPreparedSetOperationNode(node.NodeType) {
+			continue
+		}
+		for branchIdx, childID := range node.Children {
+			if childID < 0 || int(childID) >= len(query.Nodes) || query.Nodes[childID] == nil {
+				continue
+			}
+			child := query.Nodes[childID]
+			for colPos, expr := range child.ProjectList {
+				if expr == nil {
+					continue
+				}
+				targetType := plan.Type{}
+				if originalTypes, ok := originalOutputTypes[node]; ok && colPos < len(originalTypes) {
+					targetType = originalTypes[colPos]
+				}
+				source := unwrapPreparedSetOperationCoercion(
+					query, childID, colPos, targetType, expr)
+				if source == nil {
+					continue
+				}
+				inputTypes[preparedSetOperationInputKey{
+					node: node, branchIdx: branchIdx, colPos: colPos,
+				}] = source.Typ
+			}
+		}
+	}
+	return inputTypes
+}
+
 func preparedSetOperationOutputIsPureNull(
 	query *plan.Query,
 	nodeID, colPos int32,
@@ -6950,6 +7003,7 @@ func appendPreparedSetOperationBranchProjection(
 	branchIdx int,
 	childProjectLists [][]*plan.Expr,
 	sourceExpressions []*plan.Expr,
+	eligibleColumns []bool,
 	targetTypes []types.Type,
 	targetValid []bool,
 	pureNullColumns []bool,
@@ -6965,6 +7019,9 @@ func appendPreparedSetOperationBranchProjection(
 	changed := false
 	needsUnwrappedProjection := false
 	for colPos, source := range childProjects {
+		if colPos >= len(eligibleColumns) || !eligibleColumns[colPos] {
+			continue
+		}
 		if colPos < len(sourceExpressions) && sourceExpressions[colPos] != nil && sourceExpressions[colPos] != source {
 			needsUnwrappedProjection = true
 			break
@@ -6987,8 +7044,12 @@ func appendPreparedSetOperationBranchProjection(
 		branchCopy := DeepCopyNode(branch)
 		branchCopy.NodeId = int32(len(query.Nodes))
 		branchCopy.BindingTags = []int32{tag}
+		if branchCopy.Stats == nil {
+			branchCopy.Stats = preparedSetOperationProjectionStats(branch.Stats)
+		}
 		for colPos, source := range sourceExpressions {
-			if source != nil && source != childProjects[colPos] {
+			if colPos < len(eligibleColumns) && eligibleColumns[colPos] &&
+				source != nil && source != childProjects[colPos] {
 				branchCopy.ProjectList[colPos] = DeepCopyExpr(source)
 			}
 		}
@@ -7001,7 +7062,8 @@ func appendPreparedSetOperationBranchProjection(
 	}
 	needsProjection := false
 	for colPos, source := range childProjects {
-		if source == nil || colPos >= len(targetTypes) || colPos >= len(targetValid) || !targetValid[colPos] {
+		if colPos >= len(eligibleColumns) || !eligibleColumns[colPos] ||
+			source == nil || colPos >= len(targetTypes) || colPos >= len(targetValid) || !targetValid[colPos] {
 			continue
 		}
 		sourceType := makeTypeByPlan2Expr(source)
@@ -7045,7 +7107,8 @@ func appendPreparedSetOperationBranchProjection(
 				Name:   name,
 			}},
 		}
-		if colPos < len(targetTypes) && colPos < len(targetValid) && targetValid[colPos] {
+		if colPos < len(eligibleColumns) && eligibleColumns[colPos] &&
+			colPos < len(targetTypes) && colPos < len(targetValid) && targetValid[colPos] {
 			sourceType := makeTypeByPlan2Expr(source)
 			pureNull := colPos < len(pureNullColumns) && pureNullColumns[colPos]
 			if sourceType.Oid == types.T_any || pureNull {
@@ -7073,11 +7136,31 @@ func appendPreparedSetOperationBranchProjection(
 		Children:    []int32{childID},
 		ProjectList: projects,
 		BindingTags: []int32{tag},
+		Stats:       preparedSetOperationProjectionStats(query.Nodes[childID].Stats),
 	}
 	query.Nodes = append(query.Nodes, projectNode)
 	setNode.Children[branchIdx] = projectNodeID
 	childProjectLists[branchIdx] = projects
 	return true, nil
+}
+
+// preparedSetOperationProjectionStats gives a runtime-added PROJECT the same
+// row/cardinality estimate as its input while keeping the operator-specific
+// hash/shuffle state local to the input node. Runtime plan rewrites happen
+// after the normal builder has initialized and calculated node statistics, so
+// leaving Stats nil would make later DOP calculation dereference a nil map.
+func preparedSetOperationProjectionStats(childStats *plan.Stats) *plan.Stats {
+	stats := DefaultStats()
+	if childStats == nil {
+		return stats
+	}
+	stats.TableCnt = childStats.TableCnt
+	stats.Cost = childStats.Cost
+	stats.Outcnt = childStats.Outcnt
+	stats.Selectivity = childStats.Selectivity
+	stats.BlockNum = childStats.BlockNum
+	stats.Rowsize = childStats.Rowsize
+	return stats
 }
 
 func reconcilePreparedSetOperationInputs(
@@ -7086,14 +7169,16 @@ func reconcilePreparedSetOperationInputs(
 	node *plan.Node,
 	childProjectLists [][]*plan.Expr,
 	originalOutputTypes map[*plan.Node][]plan.Type,
-) (bool, error) {
+	originalInputTypes map[preparedSetOperationInputKey]plan.Type,
+) (bool, []bool, error) {
 	if !isPreparedSetOperationNode(node.NodeType) || len(node.Children) < 2 || len(node.ProjectList) == 0 {
-		return false, nil
+		return false, nil, nil
 	}
 	targetTypes := make([]types.Type, len(node.ProjectList))
 	targetValid := make([]bool, len(node.ProjectList))
 	pureNullColumns := make([][]bool, len(childProjectLists))
 	sourceExpressions := make([][]*plan.Expr, len(childProjectLists))
+	inputTypeChanged := make([]bool, len(node.ProjectList))
 	pureNullMemo := make(map[preparedSetOperationNullKey]bool)
 	pureNullVisiting := make(map[preparedSetOperationNullKey]bool)
 	for branchIdx, projects := range childProjectLists {
@@ -7108,7 +7193,10 @@ func reconcilePreparedSetOperationInputs(
 				query, node.Children[branchIdx], int32(colPos), pureNullMemo, pureNullVisiting,
 			)
 			if !pureNullColumns[branchIdx][colPos] && projects[colPos] != nil {
-				currentOutputType := node.ProjectList[colPos].Typ
+				currentOutputType := plan.Type{}
+				if colPos < len(node.ProjectList) && node.ProjectList[colPos] != nil {
+					currentOutputType = node.ProjectList[colPos].Typ
+				}
 				if originalTypes, ok := originalOutputTypes[node]; ok && colPos < len(originalTypes) {
 					currentOutputType = originalTypes[colPos]
 				}
@@ -7116,10 +7204,32 @@ func reconcilePreparedSetOperationInputs(
 					query, node.Children[branchIdx], colPos, currentOutputType, projects[colPos],
 				)
 			}
+			if colPos < len(node.ProjectList) && sourceExpressions[branchIdx][colPos] != nil {
+				originalType, ok := originalInputTypes[preparedSetOperationInputKey{
+					node: node, branchIdx: branchIdx, colPos: colPos,
+				}]
+				if ok && !reflect.DeepEqual(sourceExpressions[branchIdx][colPos].Typ, originalType) {
+					inputTypeChanged[colPos] = true
+				}
+			}
+		}
+	}
+	// Only columns whose unwrapped SQL input type changed are eligible for
+	// execute-time reconciliation. Ineligible columns may contain an existing
+	// set-operation cast or an internal DML value (for example ROWID); retain
+	// their original branch expression and output contract byte-for-byte.
+	for branchIdx := range sourceExpressions {
+		for colPos := range sourceExpressions[branchIdx] {
+			if colPos >= len(inputTypeChanged) || !inputTypeChanged[colPos] {
+				sourceExpressions[branchIdx][colPos] = childProjectLists[branchIdx][colPos]
+			}
 		}
 	}
 	changed := false
 	for colPos := range node.ProjectList {
+		if !inputTypeChanged[colPos] {
+			continue
+		}
 		branchExprs := make([]*plan.Expr, len(childProjectLists))
 		valid := len(childProjectLists) == len(node.Children)
 		for branchIdx, projects := range childProjectLists {
@@ -7146,7 +7256,7 @@ func reconcilePreparedSetOperationInputs(
 			ctx, currentOutputType, branchExprs, pureNullBranches,
 		)
 		if err != nil {
-			return false, err
+			return false, inputTypeChanged, err
 		}
 		if !ok {
 			continue
@@ -7157,15 +7267,19 @@ func reconcilePreparedSetOperationInputs(
 	for branchIdx := range node.Children {
 		wrapped, err := appendPreparedSetOperationBranchProjection(
 			ctx, query, node, branchIdx, childProjectLists, sourceExpressions[branchIdx],
+			inputTypeChanged,
 			targetTypes, targetValid,
 			pureNullColumns[branchIdx],
 		)
 		if err != nil {
-			return false, err
+			return false, inputTypeChanged, err
 		}
 		changed = changed || wrapped
 	}
 	for colPos := range node.ProjectList {
+		if !inputTypeChanged[colPos] {
+			continue
+		}
 		if colPos >= len(childProjectLists[0]) || childProjectLists[0][colPos] == nil {
 			continue
 		}
@@ -7197,7 +7311,7 @@ func reconcilePreparedSetOperationInputs(
 			changed = true
 		}
 	}
-	return changed, nil
+	return changed, inputTypeChanged, nil
 }
 
 func refreshPreparedSetOperationPhysicalKeys(
@@ -7267,6 +7381,7 @@ func refreshPreparedPlanProjectionTypes(
 	ctx context.Context,
 	plan0 *Plan,
 	originalSetOperationTypes map[*plan.Node][]plan.Type,
+	originalSetOperationInputTypes map[preparedSetOperationInputKey]plan.Type,
 ) (bool, error) {
 	query := plan0.GetQuery()
 	if query == nil {
@@ -7300,8 +7415,9 @@ func refreshPreparedPlanProjectionTypes(
 				childProjectLists[pos] = query.Nodes[childID].ProjectList
 			}
 		}
-		setOperationSpecialized, err := reconcilePreparedSetOperationInputs(
+		setOperationSpecialized, _, err := reconcilePreparedSetOperationInputs(
 			ctx, query, node, childProjectLists, originalSetOperationTypes,
+			originalSetOperationInputTypes,
 		)
 		if err != nil {
 			return err

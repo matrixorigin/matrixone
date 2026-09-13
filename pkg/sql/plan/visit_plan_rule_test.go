@@ -1481,6 +1481,91 @@ func TestPreparedBitwiseWindowFilterRebindsConsumer(t *testing.T) {
 	require.EqualValues(t, 0, overload) // HEX(string)
 }
 
+func TestPreparedSetOperationReconciliationKeepsInternalRowIDColumn(t *testing.T) {
+	rowIDType := planpb.Type{Id: int32(types.T_Rowid), Width: 16, NotNullable: true}
+	leftValueType := planpb.Type{Id: int32(types.T_int64)}
+	rightValueType := planpb.Type{Id: int32(types.T_int32)}
+	column := func(typ planpb.Type, pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  typ,
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: pos}},
+		}
+	}
+	left := &planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		ProjectList: []*planpb.Expr{column(rowIDType, 0), column(leftValueType, 1)},
+	}
+	right := &planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		ProjectList: []*planpb.Expr{column(rowIDType, 0), column(leftValueType, 1)},
+	}
+	setNode := &planpb.Node{
+		NodeType:    planpb.Node_UNION_ALL,
+		Children:    []int32{0, 1},
+		ProjectList: []*planpb.Expr{column(rowIDType, 0), column(leftValueType, 1)},
+	}
+	query := &planpb.Query{
+		StmtType: planpb.Query_UPDATE,
+		Nodes:    []*planpb.Node{left, right, setNode},
+		Steps:    []int32{2},
+	}
+	originalOutputTypes := snapshotPreparedSetOperationOutputTypes(query)
+	originalInputTypes := snapshotPreparedSetOperationInputTypes(query, originalOutputTypes)
+
+	// Only the value column changed at EXECUTE time. The ROWID column models the
+	// fixed DML merge/lock contract and must not be sent to the SQL common-type
+	// resolver alongside the changed value column.
+	right.ProjectList[1].Typ = rightValueType
+	changed, _, err := reconcilePreparedSetOperationInputs(
+		context.Background(), query, setNode,
+		[][]*planpb.Expr{left.ProjectList, right.ProjectList},
+		originalOutputTypes, originalInputTypes,
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, rowIDType, setNode.ProjectList[0].Typ)
+	require.Equal(t, int32(types.T_int64), setNode.ProjectList[1].Typ.Id)
+}
+
+func TestPreparedSetOperationPreservesUnchangedBranchCoercion(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t,
+		"select bit_and(3) as a, bit_and(?) as b union all select cast(2.5 as decimal(4,1)), bit_and(2)")
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepare.Plan, []any{ParamValue{
+			Value: []byte{0x03}, SourceType: types.New(types.T_varbinary, 1, 0),
+			HasSourceType: true, IsBin: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	var setNode *planpb.Node
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_UNION_ALL {
+			setNode = node
+			break
+		}
+	}
+	require.NotNil(t, setNode)
+	require.Len(t, setNode.ProjectList, 2)
+	for branch, childID := range setNode.Children {
+		require.GreaterOrEqual(t, childID, int32(0))
+		require.Less(t, int(childID), len(filled.GetQuery().Nodes))
+		child := filled.GetQuery().Nodes[childID]
+		require.Len(t, child.ProjectList, 2)
+		require.NotNil(t, child.Stats, "runtime branch PROJECT must have execution statistics")
+		require.NotNil(t, child.Stats.HashmapStats,
+			"runtime branch PROJECT must have initialized hashmap statistics")
+		require.Equal(t, setNode.ProjectList[0].Typ, child.ProjectList[0].Typ,
+			"unchanged decimal-coercion column must remain compatible in branch %d", branch)
+		require.Equal(t, setNode.ProjectList[1].Typ, child.ProjectList[1].Typ,
+			"specialized bitwise column must remain compatible in branch %d", branch)
+	}
+	require.NotPanics(t, func() {
+		CalcQueryDOP(filled, 4, 1, ExecTypeAP_MULTICN)
+	}, "runtime-added PROJECT statistics must satisfy DOP calculation")
+}
+
 func TestPreparedBitwiseAggregateReconcilesSetOperationBranches(t *testing.T) {
 	prepare := buildPreparedAggregatePlan(t,
 		"select bit_and(3) as b union all select bit_and(?)")
