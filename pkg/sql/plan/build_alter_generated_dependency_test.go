@@ -219,6 +219,76 @@ func TestAlterForeignKeyValidationResolvesSelfReferencesLocally(t *testing.T) {
 	}
 }
 
+type alterForeignKeyResolveTestContext struct {
+	CompilerContext
+	tables map[uint64]*TableDef
+}
+
+func (ctx *alterForeignKeyResolveTestContext) ResolveById(tableID uint64, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+	return nil, ctx.tables[tableID], nil
+}
+
+func TestAlterForeignKeyValidationResolvesExternalReferences(t *testing.T) {
+	parent := &planpb.TableDef{
+		TblId: 100, DbName: "db", Name: "parent",
+		Cols: []*planpb.ColDef{
+			{ColId: 1, Name: "unrelated", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{ColId: 2, Name: "target", Typ: planpb.Type{Id: int32(types.T_int32)}},
+		},
+		RefChildTbls: []uint64{200},
+	}
+	child := func(includeTargetReference bool) *planpb.TableDef {
+		child := &planpb.TableDef{
+			TblId: 200, DbName: "child_db", Name: "child",
+			Fkeys: []*planpb.ForeignKeyDef{
+				{Name: "fk_other_parent", Cols: []uint64{10}, ForeignTbl: 300, ForeignCols: []uint64{2}},
+				{Name: "fk_parent_id", Cols: []uint64{11}, ForeignTbl: 100, ForeignCols: []uint64{1}},
+			},
+		}
+		if includeTargetReference {
+			child.Fkeys = append(child.Fkeys, &planpb.ForeignKeyDef{
+				Name: "fk_child_parent", Cols: []uint64{12}, ForeignTbl: 100, ForeignCols: []uint64{2},
+			})
+		}
+		return child
+	}
+
+	for _, operation := range []string{"modify", "drop"} {
+		for _, tc := range []struct {
+			name      string
+			wantError bool
+		}{
+			{name: "external FK uses target column", wantError: true},
+			{name: "external FKs use only unrelated parent or column"},
+		} {
+			t.Run(operation+"/"+tc.name, func(t *testing.T) {
+				ctx := &alterForeignKeyResolveTestContext{
+					CompilerContext: NewMockCompilerContext(false),
+					tables:          map[uint64]*TableDef{200: child(tc.wantError)},
+				}
+				var err error
+				if operation == "modify" {
+					err = checkColumnForeignkeyConstraint(ctx, parent, parent.Cols[1], &planpb.ColDef{
+						ColId: 2, Name: "target", Typ: planpb.Type{Id: int32(types.T_int64)},
+					})
+				} else {
+					err = checkDropColumnWithForeignKey(ctx, parent, parent.Cols[1])
+				}
+				if tc.wantError {
+					require.ErrorContains(t, err, "fk_child_parent")
+					if operation == "modify" {
+						require.ErrorContains(t, err, "child_db.child")
+					} else {
+						require.ErrorContains(t, err, "of table 'child'")
+					}
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	}
+}
+
 func addAlterTestIndex(t *testing.T, mock *MockOptimizer, base *planpb.TableDef, indexName, columnName string, unique bool) {
 	t.Helper()
 	if base.Name2ColIndex == nil {
