@@ -2781,14 +2781,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			rowAlias,
 		)
 		binder.SetTargetCorrelationTag(targetCorrelationTag)
-		var previousBinder Binder
-		if rowAlias != nil {
-			previousBinder = bindCtx.binder
-			bindCtx.binder = binder
-			defer func() {
-				bindCtx.binder = previousBinder
-			}()
-		}
+		// Keep the ODKU binder active while nested subqueries bind. It owns
+		// target-row correlation even when no INSERT row alias is present; without
+		// it, INSERT ... SELECT reaches generic name resolution before the safety
+		// validator can reject the unsupported shape.
+		previousBinder := bindCtx.binder
+		bindCtx.binder = binder
+		defer func() {
+			bindCtx.binder = previousBinder
+		}()
 		var updateExpr *plan.Expr
 		for _, astUpdateExpr := range astUpdateExprs {
 			colName := astUpdateExpr.Names[0].ColName()
@@ -2854,9 +2855,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			updateColIdxList = append(updateColIdxList, colIdx)
 			updateColExprList = append(updateColExprList, updateExpr)
 		}
-		if rowAlias != nil {
-			bindCtx.binder = previousBinder
-		}
+		bindCtx.binder = previousBinder
 		for _, col := range tableDef.Cols {
 			if col.OnUpdate != nil && col.OnUpdate.Expr != nil && updateExprs[col.Name] == nil {
 				newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
