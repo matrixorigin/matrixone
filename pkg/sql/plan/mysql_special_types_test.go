@@ -92,6 +92,7 @@ func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 
 func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
 	enum := &plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b,c"}
+	emptyLabelEnum := &plan.Type{Id: int32(types.T_enum), Enumvalues: ",a"}
 	duplicateEnum := &plan.Type{Id: int32(types.T_enum), Enumvalues: "a,A"}
 	set := &plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,y"}
 	ambiguousSet := &plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,"}
@@ -99,9 +100,15 @@ func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {
 	emptyMiddleSet := &plan.Type{Id: int32(types.T_uint64), Enumvalues: "x,,y"}
 
 	require.True(t, mysqlSpecialOrderTypeReversible(enum))
+	require.True(t, mysqlSpecialNumericTypeReversible(enum))
+	require.True(t, mysqlSpecialOrderTypeReversible(emptyLabelEnum))
+	require.False(t, mysqlSpecialNumericTypeReversible(emptyLabelEnum))
 	require.False(t, mysqlSpecialOrderTypeReversible(duplicateEnum))
+	require.False(t, mysqlSpecialNumericTypeReversible(duplicateEnum))
 	require.True(t, mysqlSpecialOrderTypeReversible(set))
+	require.True(t, mysqlSpecialNumericTypeReversible(set))
 	require.False(t, mysqlSpecialOrderTypeReversible(ambiguousSet))
+	require.False(t, mysqlSpecialNumericTypeReversible(ambiguousSet))
 	require.True(t, setTypeHasEmptyMember(emptyFirstSet))
 	require.True(t, setTypeHasEmptyMember(emptyMiddleSet))
 	require.True(t, setTypeHasEmptyMember(ambiguousSet))
@@ -238,7 +245,7 @@ func TestFindInSetInternalArityIsPlannerOnly(t *testing.T) {
 	_, err := BindFuncExprImplByPlanExpr(ctx, "find_in_set", internalArgs)
 	require.Error(t, err)
 
-	bound, err := bindFuncExprImplByPlanExpr(ctx, "find_in_set", internalArgs, true, nil, true)
+	bound, err := bindFuncExprImplByPlanExpr(ctx, "find_in_set", internalArgs, true, nil, nil, true)
 	require.NoError(t, err)
 	require.Len(t, bound.GetF().GetArgs(), 3)
 

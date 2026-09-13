@@ -79,9 +79,28 @@ func TestIndexOnlyScanGuard_RandomRangesScenario(t *testing.T) {
 	assert.True(t, oomRejectNew, "new guard should also reject non-selective scan (selectivity >= 0.3)")
 }
 
-func TestIndexHintMissingIndexReturnsMysqlKeyDoesNotExist(t *testing.T) {
+func TestIndexHintNonExecutingConsumers(t *testing.T) {
+	for _, prefix := range []string{"explain ", "create view v as ", "create table ctas as "} {
+		t.Run(prefix, func(t *testing.T) {
+			mock := NewMockOptimizer(true)
+			_, err := runOneStmt(mock, t, prefix+"select val from single_idx_t force index(idx_missing)")
+			var moErr *moerr.Error
+			require.ErrorAs(t, err, &moErr)
+			require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+			_, err = runOneStmt(mock, t, prefix+"select val from single_idx_t force index(idx_val)")
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestIndexHintMissingIndexDefersPermanentTableValidation(t *testing.T) {
 	mock := NewMockOptimizer(true)
-	_, err := runOneStmt(mock, t, "select val from single_idx_t force index(idx_missing) where val = 1")
+	queryPlan, err := runOneStmt(mock, t, "select val from single_idx_t force index(idx_missing) where val = 1")
+	require.NoError(t, err)
+	require.Len(t, queryPlan.GetQuery().GetUnresolvedIndexHints(), 1)
+	require.Equal(t, "idx_missing", queryPlan.GetQuery().GetUnresolvedIndexHints()[0].GetIndexName())
+
+	_, err = validateIndexHintNames(context.Background(), mock.ctxt.tables["single_idx_t"], []string{"idx_missing"})
 	require.Error(t, err)
 
 	var moErr *moerr.Error
@@ -539,6 +558,77 @@ func TestRecordIndexHintsValidatesNames(t *testing.T) {
 	require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
 }
 
+func TestRecordIndexHintsDefersMissingPermanentIndex(t *testing.T) {
+	newBuilder := func(isTemporary bool) *QueryBuilder {
+		builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+		builder.qry.Nodes = []*planpb.Node{{
+			NodeId: 0,
+			ObjRef: &planpb.ObjectRef{
+				SchemaName: "db",
+				ObjName:    "t",
+			},
+		}}
+		if isTemporary {
+			builder.qry.Nodes[0].TableDef = &planpb.TableDef{IsTemporary: true}
+		}
+		return builder
+	}
+
+	for _, testCase := range []struct {
+		name     string
+		hintType tree.IndexHintType
+	}{
+		{name: "use", hintType: tree.HintUse},
+		{name: "force", hintType: tree.HintForce},
+		{name: "ignore", hintType: tree.HintIgnore},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			builder := newBuilder(false)
+			tableDef := &planpb.TableDef{Name: "t"}
+			err := builder.recordIndexHints(0, tableDef, []*tree.IndexHint{{
+				HintType: testCase.hintType, HintScope: tree.HintForScan, IndexNames: []string{"idx_new"},
+			}})
+			require.NoError(t, err)
+			require.Len(t, builder.qry.UnresolvedIndexHints, 1)
+			hint := builder.qry.UnresolvedIndexHints[0]
+			require.Equal(t, "idx_new", hint.GetIndexName())
+			require.Equal(t, "db", hint.GetTable().GetSchemaName())
+			require.Equal(t, "t", hint.GetTable().GetObjName())
+
+			encoded, err := builder.qry.Marshal()
+			require.NoError(t, err)
+			var decoded planpb.Query
+			require.NoError(t, decoded.Unmarshal(encoded))
+			require.Equal(t, builder.qry.UnresolvedIndexHints, decoded.UnresolvedIndexHints)
+		})
+	}
+
+	t.Run("temporary table remains immediate error", func(t *testing.T) {
+		builder := newBuilder(true)
+		err := builder.recordIndexHints(0, builder.qry.Nodes[0].TableDef, []*tree.IndexHint{{
+			HintType: tree.HintForce, HintScope: tree.HintForScan, IndexNames: []string{"idx_new"},
+		}})
+		require.Error(t, err)
+		var moErr *moerr.Error
+		require.ErrorAs(t, err, &moErr)
+		require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+		require.Empty(t, builder.qry.UnresolvedIndexHints)
+	})
+
+	t.Run("prepared statement remains immediate error", func(t *testing.T) {
+		builder := newBuilder(false)
+		builder.isPrepareStatement = true
+		err := builder.recordIndexHints(0, &planpb.TableDef{Name: "t"}, []*tree.IndexHint{{
+			HintType: tree.HintForce, HintScope: tree.HintForScan, IndexNames: []string{"idx_new"},
+		}})
+		require.Error(t, err)
+		var moErr *moerr.Error
+		require.ErrorAs(t, err, &moErr)
+		require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+		require.Empty(t, builder.qry.UnresolvedIndexHints)
+	})
+}
+
 func TestIndexHintNamesUseCanonicalIdentifierComparison(t *testing.T) {
 	tableDef := &planpb.TableDef{
 		Name: "t",
@@ -901,16 +991,15 @@ func TestForceIndexOrderIncompatibleControls(t *testing.T) {
 		require.True(t, planHasSort(queryPlan))
 	})
 
-	t.Run("invalid plain force still errors", func(t *testing.T) {
+	t.Run("invalid plain force defers permanent-table validation", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
 		addIndexHintChoiceTableForTest(mock)
 
-		_, err := runOneStmt(mock, t,
+		queryPlan, err := runOneStmt(mock, t,
 			"select id from index_hint_t force index(idx_missing) where a = 1 order by b, id")
-		require.Error(t, err)
-		var moErr *moerr.Error
-		require.ErrorAs(t, err, &moErr)
-		require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+		require.NoError(t, err)
+		require.Len(t, queryPlan.GetQuery().GetUnresolvedIndexHints(), 1)
+		require.Equal(t, "idx_missing", queryPlan.GetQuery().GetUnresolvedIndexHints()[0].GetIndexName())
 	})
 }
 

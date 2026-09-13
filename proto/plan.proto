@@ -1681,6 +1681,12 @@ message Query {
   // false when the SELECT has an explicit top-level LIMIT, which takes
   // precedence according to MySQL semantics.
   bool apply_sql_select_limit = 15;
+
+  // Index hints that could not be resolved from the table definition used to
+  // build this plan. The compiler validates their table metadata before
+  // execution so a committed concurrent CREATE INDEX can rebuild the plan;
+  // without a definition change, it returns the original key-not-found error.
+  repeated UnresolvedIndexHint unresolved_index_hints = 16;
 }
 
 message TransationControl {
@@ -2344,4 +2350,9 @@ message VectorIndexScanWork {
   int32 blocks = 2;
   double vector_bytes_per_row = 3;
   int32 objects = 4;
+}
+
+message UnresolvedIndexHint {
+  ObjectRef table = 1;
+  string index_name = 2;
 }

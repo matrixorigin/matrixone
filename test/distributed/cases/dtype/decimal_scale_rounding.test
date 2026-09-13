@@ -1,0 +1,37 @@
+-- @suite
+-- @case
+-- @desc: regression coverage for multi-chunk decimal scale rounding (issue 28772)
+-- @label:bvt
+
+select
+    round(cast('1.499999999999999999999999999999' as decimal(38,30)), 0) as d128_positive,
+    round(cast('-1.499999999999999999999999999999' as decimal(38,30)), 0) as d128_negative,
+    round(cast('1.499999999999999999999999999999' as decimal(65,30)), 0) as d256_positive,
+    round(cast('-1.499999999999999999999999999999' as decimal(65,30)), 0) as d256_negative;
+
+select
+    cast('0.499999999999999999999999999999' as decimal(38,30))
+        * cast('0.000000000000000000000000000001' as decimal(38,30)) as d128_product,
+    cast('0.499999999999999999999999999999' as decimal(65,30))
+        * cast('0.000000000000000000000000000001' as decimal(65,30)) as d256_product;
+
+drop table if exists issue28772_decimal_rounding;
+create table issue28772_decimal_rounding (
+    id int primary key,
+    d128 decimal(38,0),
+    d256 decimal(65,0)
+);
+insert into issue28772_decimal_rounding
+select 1,
+    round(cast('1.499999999999999999999999999999' as decimal(38,30)), 0),
+    round(cast('1.499999999999999999999999999999' as decimal(65,30)), 0)
+union all
+select 2,
+    round(cast('-1.499999999999999999999999999999' as decimal(38,30)), 0),
+    round(cast('-1.499999999999999999999999999999' as decimal(65,30)), 0);
+select id, d128, d256 from issue28772_decimal_rounding order by id;
+select count(*) as incorrect_persisted_results
+from issue28772_decimal_rounding
+where (id = 1 and (d128 <> 1 or d256 <> 1))
+   or (id = 2 and (d128 <> -1 or d256 <> -1));
+drop table issue28772_decimal_rounding;

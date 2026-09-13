@@ -75,6 +75,18 @@ type loadedPkCase struct {
 	other any
 }
 
+func mustEncodeJSON(s string) []byte {
+	value, err := types.ParseStringToByteJson(s)
+	if err != nil {
+		panic(err)
+	}
+	encoded, err := types.EncodeJson(value)
+	if err != nil {
+		panic(err)
+	}
+	return encoded
+}
+
 func loadedPkCases() []loadedPkCase {
 	u0, _ := types.ParseUuid("12345678-1234-1234-1234-1234567890ab")
 	u1, _ := types.ParseUuid("abcdefab-cdef-abcd-efab-cdefabcdef01")
@@ -101,7 +113,7 @@ func loadedPkCases() []loadedPkCase {
 		{name: "binary", typ: types.T_binary, value: []byte{0, 1, 2}, other: []byte{0, 1, 3}},
 		{name: "varbinary", typ: types.T_varbinary, value: []byte{3, 4, 5}, other: []byte{3, 4, 6}},
 		{name: "blob", typ: types.T_blob, value: []byte{6, 7, 8}, other: []byte{6, 7, 9}},
-		{name: "json", typ: types.T_json, value: []byte(`{"k":1}`), other: []byte(`{"k":2}`)},
+		{name: "json", typ: types.T_json, value: mustEncodeJSON(`{"k":1}`), other: mustEncodeJSON(`{"k":2}`)},
 		{name: "datalink", typ: types.T_datalink, value: []byte("file://pk"), other: []byte("file://other")},
 		{name: "uuid", typ: types.T_uuid, value: u0, other: u1},
 		{name: "varchar-empty", typ: types.T_varchar, value: []byte{}, other: []byte("non-empty")},

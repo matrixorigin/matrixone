@@ -117,6 +117,10 @@ func NewAESInvalidIVNoCtx(function string, minLength int) *Error {
 	return newError(Context(), ErrAESInvalidIV, function, minLength)
 }
 
+func NewUserLockWrongNameNoCtx(name string) *Error {
+	return newError(Context(), ErrUserLockWrongName, name)
+}
+
 func NewArrayInvalidOpNoCtx(expected, actual int) *Error {
 	xmsg := fmt.Sprintf("vector ops between different dimensions (%v, %v) is not permitted.", expected, actual)
 	return newError(Context(), ErrInvalidInput, xmsg)

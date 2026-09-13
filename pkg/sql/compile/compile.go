@@ -890,6 +890,9 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
 		return nil, err
 	}
+	if err = c.unresolvedIndexHintError(); err != nil {
+		return nil, err
+	}
 	if err = c.lockTable(); err != nil {
 		return nil, err
 	}
@@ -924,6 +927,25 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 		startedSources = append(startedSources, source)
 	}
 	return startedSources, nil
+}
+
+// unresolvedIndexHintError restores the ordinary MySQL error after the
+// metadata lock has established that no concurrent definition change made the
+// hinted index visible. It runs before sources start, so an invalid hint cannot
+// execute the base-table plan produced while the hint was unresolved.
+func (c *Compile) unresolvedIndexHintError() error {
+	return plan2.ValidateUnresolvedIndexHints(c.proc.Ctx, c.pn.GetQuery())
+}
+
+func (c *Compile) appendUnresolvedIndexHintMetaTables(query *plan.Query) {
+	if query == nil {
+		return
+	}
+	for _, hint := range query.GetUnresolvedIndexHints() {
+		if hint != nil && hint.GetTable() != nil {
+			c.appendMetaTables(hint.GetTable())
+		}
+	}
 }
 
 func closeMaterializedSourceGenerations(sources []*materialized.Source) {
@@ -5002,19 +5024,63 @@ func (c *Compile) generateSeriesParallel(proc *process.Process, node *plan.Node,
 		return true, 0, nil, nil
 	}
 
-	temp := (end - start + 1) / int64(parallelSize)
-	for i := 0; i < parallelSize; i++ {
-		tempEnd := start + temp - 1
-		if i == parallelSize-1 {
-			tempEnd = end
-		}
+	offset, ok := generateSeriesOffsets(start, end, step, parallelSize)
+	if !ok {
+		return false, 0, nil, nil
+	}
+	return true, step, offset, nil
+}
 
-		arr := [2]int64{start, tempEnd}
-		offset = append(offset, arr)
-		start = tempEnd + 1
+func generateSeriesOffsets(start, end, step int64, parallelSize int) ([][2]int64, bool) {
+	if parallelSize <= 0 || step == 0 ||
+		(step > 0 && start > end) || (step < 0 && start < end) {
+		return nil, false
 	}
 
-	return true, step, offset, nil
+	var distance, stepMagnitude uint64
+	if step > 0 {
+		distance = uint64(end) - uint64(start)
+		stepMagnitude = uint64(step)
+	} else {
+		distance = uint64(start) - uint64(end)
+		stepMagnitude = uint64(-(step + 1)) + 1
+	}
+	lastIndex := distance / stepMagnitude
+	if lastIndex == math.MaxUint64 {
+		// Keep the only cardinality that cannot fit in uint64 on the serial path.
+		return nil, false
+	}
+	count := lastIndex + 1
+	shardCount := uint64(parallelSize)
+	if count < shardCount {
+		return nil, false
+	}
+
+	baseSize := count / shardCount
+	extra := count % shardCount
+	offsets := make([][2]int64, 0, parallelSize)
+	var firstIndex uint64
+	for shard := uint64(0); shard < shardCount; shard++ {
+		size := baseSize
+		if shard < extra {
+			size++
+		}
+		lastIndex := firstIndex + size - 1
+		offsets = append(offsets, [2]int64{
+			generateSeriesValueAt(start, step, stepMagnitude, firstIndex),
+			generateSeriesValueAt(start, step, stepMagnitude, lastIndex),
+		})
+		firstIndex = lastIndex + 1
+	}
+	return offsets, true
+}
+
+func generateSeriesValueAt(start, step int64, stepMagnitude, index uint64) int64 {
+	delta := index * stepMagnitude
+	if step > 0 {
+		return int64(uint64(start) + delta)
+	}
+	return int64(uint64(start) - delta)
 }
 
 func (c *Compile) compileSingleTableFunction(node *plan.Node) ([]*Scope, error) {
@@ -5046,8 +5112,14 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 		}
 
 		op.CanOpt = canOpt
-		op.GenerateSeriesCtrNumState(offset[0][0], offset[len(offset)-1][1], step, offset[0][0])
-		op.OffsetTotal = append(op.OffsetTotal, offset[startOffset:startOffset+currMcpu]...)
+		scopeOffsets := offset[startOffset : startOffset+currMcpu]
+		op.GenerateSeriesCtrNumState(
+			scopeOffsets[0][0],
+			scopeOffsets[len(scopeOffsets)-1][1],
+			step,
+			scopeOffsets[0][0],
+		)
+		op.OffsetTotal = append(op.OffsetTotal, scopeOffsets...)
 		startOffset += currMcpu
 
 		ds.NodeInfo = getEngineNode(c)
@@ -5334,6 +5406,62 @@ func prepareVectorIndexScanForExecution(source *Source, proc *process.Process) (
 	return spec, nil
 }
 
+// buildFoldedFilterExprs prepares an isolated copy of a filter list and its
+// fold executors. The caller publishes both only after every expression has
+// been rewritten (and, for storage filters, evaluated) successfully.
+func buildFoldedFilterExprs(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	existing []colexec.ExpressionExecutor,
+	evaluate bool,
+) ([]*plan.Expr, []colexec.ExpressionExecutor, error) {
+	filters := plan2.DeepCopyExprList(exprs)
+	executors := append([]colexec.ExpressionExecutor(nil), existing...)
+	firstNewExecutor := len(executors)
+	rollback := func(err error) ([]*plan.Expr, []colexec.ExpressionExecutor, error) {
+		for _, executor := range executors[firstNewExecutor:] {
+			executor.Free()
+		}
+		return nil, existing, err
+	}
+
+	for _, expr := range filters {
+		if _, err := plan2.ReplaceFoldExpr(proc, expr, &executors); err != nil {
+			return rollback(err)
+		}
+	}
+	if evaluate {
+		for _, expr := range filters {
+			if err := plan2.EvalFoldExpr(proc, expr, &executors); err != nil {
+				return rollback(err)
+			}
+		}
+	}
+	return filters, executors, nil
+}
+
+func prepareFoldedFilterExprs(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	cached []*plan.Expr,
+	executors []colexec.ExpressionExecutor,
+	evaluate bool,
+) ([]*plan.Expr, []colexec.ExpressionExecutor, bool, error) {
+	if len(exprs) != len(cached) {
+		filters, nextExecutors, err := buildFoldedFilterExprs(
+			proc, exprs, executors, evaluate)
+		return filters, nextExecutors, err == nil, err
+	}
+	if evaluate {
+		for _, expr := range cached {
+			if err := plan2.EvalFoldExpr(proc, expr, &executors); err != nil {
+				return cached, executors, false, err
+			}
+		}
+	}
+	return cached, executors, false, nil
+}
+
 func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	var err error
 	var tblDef *plan.TableDef
@@ -5376,31 +5504,25 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
 	storageFilters := filterScanStorageExprs(node.FilterList)
-	if len(storageFilters) != len(s.DataSource.FilterList) {
-		s.DataSource.FilterList = plan2.DeepCopyExprList(storageFilters)
-		for _, e := range s.DataSource.FilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
-			if err != nil {
-				return err
-			}
-		}
+	filters, executors, rebuilt, err := prepareFoldedFilterExprs(
+		c.proc, storageFilters, s.DataSource.FilterList, c.filterExprExes, true)
+	if err != nil {
+		return err
 	}
-	for _, e := range s.DataSource.FilterList {
-		err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
-		if err != nil {
-			return err
-		}
+	if rebuilt {
+		c.filterExprExes = executors
+		s.DataSource.FilterList = filters
 	}
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
-	if len(node.BlockFilterList) != len(s.DataSource.BlockFilterList) {
-		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(node.BlockFilterList)
-		for _, e := range s.DataSource.BlockFilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
-			if err != nil {
-				return err
-			}
-		}
+	filters, executors, rebuilt, err = prepareFoldedFilterExprs(
+		c.proc, node.BlockFilterList, s.DataSource.BlockFilterList, c.filterExprExes, false)
+	if err != nil {
+		return err
+	}
+	if rebuilt {
+		c.filterExprExes = executors
+		s.DataSource.BlockFilterList = filters
 	}
 
 	s.DataSource.Timestamp = ts
@@ -6735,8 +6857,14 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	buildOpScopes := make([]*Scope, 0, len(stageNodes))
 	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
 
-	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) { // probe side is shuffle scopes
+	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) {
 		for _, tmp := range probeScopeGroups {
+			// Each parallel probe worker releases one reference to the shared map.
+			// A colocated scope can contain more than one worker.
+			var probeWorkers int32
+			for _, scope := range tmp {
+				probeWorkers += int32(scope.NodeInfo.Mcpu)
+			}
 			bs := newScope(Remote)
 			bs.NodeInfo = scopeNodeWithMcpu(tmp[0].NodeInfo, 1)
 			bs.Proc = c.proc.NewNoContextChildProc(0)
@@ -6748,7 +6876,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			bs.setRootOperator(mergeOp)
 			bs.setRootOperator(constructJoinBuildOperator(
-				c, tmp[0].RootOp, int32(len(tmp)), node.RuntimeFilterBuildList))
+				c, tmp[0].RootOp, probeWorkers, node.RuntimeFilterBuildList))
 			tmp[0].PreScopes = append(tmp[0].PreScopes, bs)
 			buildOpScopes = append(buildOpScopes, bs)
 		}
@@ -10345,6 +10473,7 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 	return false
 }
 
-// SetGroupConcatMaxLenFloor binds the immutable prepared-statement value before
-// physical compilation. Zero keeps ordinary statements fully dynamic.
+// SetGroupConcatMaxLenFloor binds the prepared statement's execution floor
+// before physical compilation or Compile.Reset. Zero keeps ordinary statements
+// fully dynamic.
 func (c *Compile) SetGroupConcatMaxLenFloor(floor uint64) { c.groupConcatMaxLenFloor = floor }

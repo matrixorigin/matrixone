@@ -68,3 +68,61 @@ func TestBinStringOperandsKeepPrefixPath(t *testing.T) {
 		})
 	}
 }
+
+func TestConvBinaryNumericLiteralsUseBitNumericPath(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name  string
+		value string
+		form  plan.StringLiteralForm
+	}{
+		{name: "hex", value: string([]byte{0x0f}), form: plan.StringLiteralForm_STRING_LITERAL_HEX},
+		{name: "bit", value: string([]byte{0x0f}), form: plan.StringLiteralForm_STRING_LITERAL_BIT},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			expr := makePlan2StringConstExprWithType(tc.value, true)
+			expr.GetLit().LiteralForm = tc.form
+			fromBase := makePlan2Int64ConstExprWithType(2)
+			toBase := makePlan2Int64ConstExprWithType(10)
+			bound, err := BindFuncExprImplByPlanExpr(ctx, "conv", []*Expr{expr, fromBase, toBase})
+			require.NoError(t, err)
+			fn := bound.GetF()
+			require.NotNil(t, fn)
+			require.Len(t, fn.Args, 3)
+			require.Equal(t, types.T_bit, makeTypeByPlan2Expr(fn.Args[0]).Oid)
+		})
+	}
+}
+
+func TestBinaryNumericLiteralWidthBoundaries(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"bin", "conv"} {
+		t.Run(name, func(t *testing.T) {
+			argsFor := func(value string) []*Expr {
+				expr := makePlan2StringConstExprWithType(value, true)
+				expr.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_HEX
+				if name == "conv" {
+					return []*Expr{
+						expr,
+						makePlan2Int64ConstExprWithType(2),
+						makePlan2Int64ConstExprWithType(10),
+					}
+				}
+				return []*Expr{expr}
+			}
+
+			t.Run("empty stays on string path for NULL semantics", func(t *testing.T) {
+				bound, err := BindFuncExprImplByPlanExpr(ctx, name, argsFor(""))
+				require.NoError(t, err)
+				require.Equal(t, types.T_char, makeTypeByPlan2Expr(bound.GetF().Args[0]).Oid)
+			})
+
+			t.Run("wide value is bounded to numeric zero", func(t *testing.T) {
+				bound, err := BindFuncExprImplByPlanExpr(ctx, name, argsFor(string(make([]byte, 9))))
+				require.NoError(t, err)
+				require.Equal(t, types.T_uint64, makeTypeByPlan2Expr(bound.GetF().Args[0]).Oid)
+			})
+		})
+	}
+}
