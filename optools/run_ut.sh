@@ -1932,6 +1932,10 @@ function run_tests(){
         report_active_ut_cases
     fi
 
+    # Take the acceptance snapshot only after plan/engine/heavy helpers and all
+    # report writers have been joined. The caller stops the heartbeat next.
+    report_cgroup_memory_usage "Final race UT"
+
     # The caller must continue into ut_summary even when go test failed.
     return 0
 }

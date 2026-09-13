@@ -215,7 +215,13 @@ func TestHeavyPlanReusesReleasedEngineCapacity(t *testing.T) {
 			script := `source ./run_ut.sh UT
 trap handle_ut_termination TERM
 function logger() { :; }
-function report_cgroup_memory_usage() { :; }
+function report_cgroup_memory_usage() {
+ if [[ "$1" == "Final race UT" ]]; then
+  [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID$CLUSTER_PREBUILD_JOB_PID" ]] || exit 97
+  [[ -z "$ENGINE_RACE_REPORT$PLAN_RACE_REPORT" ]] || exit 98
+  touch "$CASE_DIR/final-memory"
+ fi
+}
 function make() { :; }
 function egrep() { echo fake.pb.go; }
 # Skip the unrelated native smoke, while retaining the real race scheduler.
@@ -249,6 +255,7 @@ run_tests
 [[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || exit 93
 [[ -d "$CASE_DIR/engine-once" && -d "$CASE_DIR/plan-once" ]] || exit 94
 [[ -z "$CURRENT_UT_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 95
+[[ -e "$CASE_DIR/final-memory" ]] || exit 96
 printf '\nREPORT\n'
 cat "$UT_REPORT"
 `
