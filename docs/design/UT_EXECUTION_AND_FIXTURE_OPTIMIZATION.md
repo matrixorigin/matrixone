@@ -1,7 +1,7 @@
 # UT 执行模型与 fixture 生命周期优化设计
 
 - 状态：Proposed for this PR，revision 10
-- 适用范围：`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 执行模型与资源预算
+- 适用范围：`Makefile` UT 默认配置、`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 执行模型与资源预算
 - 约束：UT CI 始终只使用现有的一个 runner；不增加 shard matrix、并发 job 或临时 runner。只考虑该 runner 内有界调度和有证据的测试/fixture 优化
 - 设计 owner：UT runner 与测试基础设施；各测试 package 对自己的 fixture reset/cleanup 契约负责
 - 设计门禁：跨 package、跨进程 admission、runner 取消和集群生命周期，命中 execution、ownership、resource 和 public test-contract 多个边界
@@ -24,6 +24,14 @@ plan。根因是完整套件的阶段关键路径在串行 caller 上超过硬�
 revision 直接启用这个有界候选，让本次现有 required UT job 给出结果；不为制造 control
 而额外重跑 `0`。`UT_OVERLAP_PLAN=1` 继续复用 engine 释放的进程槽，不改变测试范围或
 默认 runner 数。
+
+2026-09-13 的 first follow-up run `34770551755` / job `103759372556` 成功完成，耗时
+46m16s，但日志显示 `LIGHT OVERLAP: 0`：`Makefile` 的 `UT_OVERLAP_LIGHT ?= 0` 覆盖了
+`run_ut.sh` 的新默认值。因此该 run 是有效的 serial baseline，不是 overlap treatment。
+它记录到 `memory.max=17179869184`、`memory.peak=17181179904`、`memory.events.max=10`，
+`oom=0`、`oom_kill=0`，且层级/事件可见性均为 complete/hierarchical。后续唯一差异是
+Makefile 默认改为 `1`；用下一次同 runner、同 test scope 的结果与此 run 及其他可比历史
+完整运行比较。
 
 reusable `matrixorigin/CI` 虽提供四个静态 shard，但使用它们会增加并发 runner，违反本任务
 的硬约束；即使把 shard 顺序放到同一 runner，也不会减少总 UT 工作量。本 revision 不改
