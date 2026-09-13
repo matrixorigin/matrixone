@@ -396,7 +396,6 @@ SELECT REGEXP_INSTR(CAST(X'FF' AS BINARY(1)), CAST(X'5C784646' AS BINARY(4))) AS
 REGEXP_INSTR(CAST(X'FF' AS BINARY(1)), CAST(X'5B5C7838302D5C7846465D' AS BINARY(11))) AS byte_range;
 hex_escape    byte_range
 1    1
-
 SELECT REGEXP_INSTR('Abc abc', 'abc', 1, 1, 0, 'i') AS insensitive,
 REGEXP_INSTR('Abc abc', 'abc', 1, 1, 0, 'c') AS sensitive,
 REGEXP_INSTR('Abc abc', 'abc', 1, 1, 0, 'ic') AS rightmost_c,
