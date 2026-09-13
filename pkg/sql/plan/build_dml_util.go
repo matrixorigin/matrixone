@@ -195,7 +195,7 @@ func buildInsertPlans(
 	if stmt != nil && stmt.Columns != nil {
 		stmtCopy := *stmt
 		stmtCopy.Rows = cloneInsertRowsForGeneratedRewrite(stmt.Rows)
-		stmtCopy.Columns, err = builder.stripGeneratedDefaultCols(stmt.Columns, stmtCopy.Rows, tableDef)
+		stmtCopy.Columns, stmtCopy.Rows, err = builder.stripGeneratedDefaultCols(stmt.Columns, stmtCopy.Rows, tableDef)
 		if err != nil {
 			return err
 		}
