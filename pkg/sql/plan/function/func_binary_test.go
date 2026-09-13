@@ -7436,6 +7436,118 @@ func TestGeoJSONFunctions(t *testing.T) {
 	ok, info = tcAsP.Run()
 	require.True(t, ok, info)
 
+	for _, tc := range []struct {
+		name   string
+		wkt    string
+		maxDec int64
+		want   string
+	}{
+		{
+			name:   "finite scale multiplication at 308",
+			wkt:    "POINT(2 -2)",
+			maxDec: 308,
+			want:   `{"type":"Point","coordinates":[2,-2]}`,
+		},
+		{
+			name:   "first infinite power of ten",
+			wkt:    "POINT(1.23456789 0)",
+			maxDec: 309,
+			want:   `{"type":"Point","coordinates":[1.23456789,0]}`,
+		},
+		{
+			name:   "large precision",
+			wkt:    "POINT(1.23456789 0)",
+			maxDec: 1000,
+			want:   `{"type":"Point","coordinates":[1.23456789,0]}`,
+		},
+		{
+			name:   "maximum accepted precision",
+			wkt:    "POINT(1.23456789 0)",
+			maxDec: 1<<32 - 1,
+			want:   `{"type":"Point","coordinates":[1.23456789,0]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eval := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.wkt}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.maxDec}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{false}),
+				StAsGeoJSONPrec)
+			ok, info := eval.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	t.Run("invalid precision is rejected", func(t *testing.T) {
+		for _, precision := range []int64{-1, math.MinInt64, 1 << 32, math.MaxInt64} {
+			require.Error(t, validateGeoJSONDecimalDigits(precision), "precision=%d", precision)
+		}
+		for _, precision := range []int64{0, 308, 1<<32 - 1} {
+			require.NoError(t, validateGeoJSONDecimalDigits(precision), "precision=%d", precision)
+		}
+	})
+
+	t.Run("invalid precision is rejected by evaluator", func(t *testing.T) {
+		for _, precision := range []int64{-1, 1 << 32, math.MaxInt64} {
+			eval := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{precision}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+				StAsGeoJSONPrec)
+			ok, info := eval.Run()
+			require.True(t, ok, info)
+		}
+	})
+
+	t.Run("NULL propagates before precision validation", func(t *testing.T) {
+		eval := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			StAsGeoJSONPrec)
+		ok, info := eval.Run()
+		require.True(t, ok, info)
+
+		nullPrecision := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			StAsGeoJSONPrec)
+		ok, info = nullPrecision.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("empty batch skips constant argument evaluation", func(t *testing.T) {
+		eval := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{}, []bool{}),
+			StAsGeoJSONPrec)
+		eval.fnLength = 0
+		ok, info := eval.Run()
+		require.True(t, ok, info)
+
+		nonEmpty := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+			StAsGeoJSONPrec)
+		ok, info = nonEmpty.Run()
+		require.True(t, ok, info)
+	})
+
 	// ST_GeomFromGeoJSON -> canonical WKT via geometry comparison.
 	tcFrom := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
