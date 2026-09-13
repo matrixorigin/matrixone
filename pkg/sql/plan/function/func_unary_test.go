@@ -9246,7 +9246,8 @@ func newUserLevelLockTestProcess(t *testing.T, ls lockservice.LockService, accou
 
 type userLevelLockTestState struct {
 	sync.Mutex
-	locks map[string]string
+	locks        map[string]string
+	externalTxns map[string]struct{}
 }
 
 type userLevelLockTestService struct {
@@ -9278,12 +9279,45 @@ func (s *userLevelLockNotSupportedService) GetLockHolder(context.Context, uint64
 	return lockpb.WaitTxn{}, false, moerr.NewNotSupportedNoCtx("GetLockHolder")
 }
 
+func (s *userLevelLockNotSupportedService) RegisterExternalTxn(txnID []byte) error {
+	registry, ok := s.LockService.(lockservice.ExternalTxnLivenessRegistry)
+	if !ok {
+		return moerr.NewNotSupportedNoCtx("external transaction liveness")
+	}
+	return registry.RegisterExternalTxn(txnID)
+}
+
+func (s *userLevelLockNotSupportedService) UnregisterExternalTxn(txnID []byte) {
+	if registry, ok := s.LockService.(lockservice.ExternalTxnLivenessRegistry); ok {
+		registry.UnregisterExternalTxn(txnID)
+	}
+}
+
 func (s *userLevelLockTestService) GetServiceID() string {
 	return s.id
 }
 
 func (s *userLevelLockTestService) GetConfig() lockservice.Config {
 	return lockservice.Config{ServiceID: s.id}
+}
+
+func (s *userLevelLockTestService) RegisterExternalTxn(txnID []byte) error {
+	if len(txnID) == 0 {
+		return moerr.NewInternalErrorNoCtx("cannot register an empty external transaction ID")
+	}
+	s.state.Lock()
+	if s.state.externalTxns == nil {
+		s.state.externalTxns = make(map[string]struct{})
+	}
+	s.state.externalTxns[string(txnID)] = struct{}{}
+	s.state.Unlock()
+	return nil
+}
+
+func (s *userLevelLockTestService) UnregisterExternalTxn(txnID []byte) {
+	s.state.Lock()
+	delete(s.state.externalTxns, string(txnID))
+	s.state.Unlock()
 }
 
 func (s *userLevelLockTestService) Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options lockpb.LockOptions) (lockpb.Result, error) {
@@ -9435,6 +9469,14 @@ func runUserLevelLockTest(t *testing.T, fn func([]lockservice.LockService)) {
 	})
 }
 
+func requireUserLevelLockTxnRegistered(t *testing.T, state *userLevelLockTestState, txnID []byte, want bool) {
+	t.Helper()
+	state.Lock()
+	defer state.Unlock()
+	_, registered := state.externalTxns[string(txnID)]
+	require.Equal(t, want, registered, "external liveness registration for txn %q", txnID)
+}
+
 func TestUserLevelLockCleanupTestServiceUnblocksInFlightUnlock(t *testing.T) {
 	service := &userLevelLockTestService{
 		id:            "user-level-lock-unblock",
@@ -9464,11 +9506,12 @@ func TestUserLevelLockCleanupTestServiceUnblocksInFlightUnlock(t *testing.T) {
 	}
 }
 
-func requireUserLevelLockTxnUnlocked(t *testing.T, service *userLevelLockTestService, txnID []byte) {
+func requireUserLevelLockProbeTxnUnlocked(t *testing.T, service *userLevelLockTestService, owner string, connID uint64, name, probeType string) {
 	t.Helper()
+	prefix := userLevelLockProbeTxnIDPrefix(owner, connID, name, probeType)
 	requireUserLevelLockTxnUnlockedFunc(t, service, func(unlocked []byte) bool {
-		return bytes.Equal(unlocked, txnID)
-	}, "txnID=%q", string(txnID))
+		return bytes.HasPrefix(unlocked, prefix)
+	}, "owner=%q connID=%d name=%q probeType=%q", owner, connID, name, probeType)
 }
 
 func requireUserLevelLockTxnUnlockedFunc(t *testing.T, service *userLevelLockTestService, match func([]byte) bool, msg string, args ...any) {
@@ -9497,9 +9540,14 @@ func requireUserLevelLockTxnUnlockedForLock(t *testing.T, service *userLevelLock
 
 func TestUserLevelLockConnectionIDFromProbeTxnID(t *testing.T) {
 	txnID := userLevelLockProbeTxnID("owner-1", 1001, "probe_lock", "is_free")
+	anotherTxnID := userLevelLockProbeTxnID("owner-1", 1001, "probe_lock", "is_free")
 	connID, ok := userLevelLockConnectionIDFromTxnID(txnID)
 	require.False(t, ok)
 	require.Equal(t, uint64(0), connID)
+	require.NotEqual(t, txnID, anotherTxnID,
+		"every probe attempt needs its own ID so delayed cleanup cannot affect a later attempt")
+	require.True(t, bytes.HasPrefix(txnID,
+		userLevelLockProbeTxnIDPrefix("owner-1", 1001, "probe_lock", "is_free")))
 }
 
 func TestUserLevelLockFunctions(t *testing.T) {
@@ -9749,6 +9797,79 @@ func TestGetLockNullTimeoutMeansFastFail(t *testing.T) {
 			require.False(t, isNull)
 			require.Equal(t, int64(1), value)
 		}
+	})
+}
+
+func TestUserLevelLockLivenessTracksFailedAndSuccessfulCleanup(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		holder := newUserLevelLockTestProcess(t, services[0], "acc")
+		contender := newUserLevelLockTestProcess(t, services[1], "acc")
+		state := services[0].(*userLevelLockTestService).state
+		service := services[0].(*userLevelLockTestService)
+
+		value, err := getUserLevelLock("liveness_cleanup", 0, holder)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), value)
+		held := UserLevelLocksForMigration(holder)
+		require.Len(t, held, 1)
+		require.Len(t, held[0].TxnIDs, 1)
+		holderTxnID := held[0].TxnIDs[0]
+		requireUserLevelLockTxnRegistered(t, state, holderTxnID, true)
+
+		// Failed GET_LOCK and probe attempts must clean their temporary
+		// registrations without disturbing the live holder registration.
+		value, err = getUserLevelLock("liveness_cleanup", 0, contender)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), value)
+		_, isNull, err := releaseUserLevelLock("liveness_cleanup", contender)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		_, err = isUserLevelLockFree("liveness_cleanup", contender)
+		require.NoError(t, err)
+		requireUserLevelLockTxnRegistered(t, state, holderTxnID, true)
+		state.Lock()
+		require.Len(t, state.externalTxns, 1)
+		state.Unlock()
+
+		// A failed unlock must keep liveness registered so orphan recovery
+		// cannot release a lock whose cleanup is still being retried.
+		service.unlockErr = moerr.NewInternalErrorNoCtx("test unlock failure")
+		_, _, err = releaseUserLevelLock("liveness_cleanup", holder)
+		require.Error(t, err)
+		requireUserLevelLockTxnRegistered(t, state, holderTxnID, true)
+
+		service.unlockErr = nil
+		value, isNull, err = releaseUserLevelLock("liveness_cleanup", holder)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), value)
+		requireUserLevelLockTxnRegistered(t, state, holderTxnID, false)
+
+		// Successful RELEASE_LOCK and IS_FREE_LOCK probes also unregister their
+		// short-lived transaction IDs.
+		_, isNull, err = releaseUserLevelLock("liveness_free", holder)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		_, err = isUserLevelLockFree("liveness_free", holder)
+		require.NoError(t, err)
+		state.Lock()
+		require.Empty(t, state.externalTxns)
+		state.Unlock()
+	})
+}
+
+func TestUserLevelLockLivenessFailedAcquisitionCleanup(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		service := services[0].(*userLevelLockTestService)
+		service.lockErrAfterHold = moerr.NewInternalErrorNoCtx("test lock failure after hold")
+
+		_, err := getUserLevelLock("liveness_failed_get", 0, proc)
+		require.Error(t, err)
+		service.state.Lock()
+		require.Empty(t, service.state.externalTxns)
+		require.Empty(t, service.state.locks)
+		service.state.Unlock()
 	})
 }
 
@@ -10653,12 +10774,12 @@ func TestFailedFastFailUserLevelLockAttemptsAreUnlocked(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, isNull)
 		require.Equal(t, int64(0), v)
-		requireUserLevelLockTxnUnlocked(t, service, userLevelLockProbeTxnID(owner, connID, lockName, "release"))
+		requireUserLevelLockProbeTxnUnlocked(t, service, owner, connID, lockName, "release")
 
 		v, err = isUserLevelLockFree(lockName, contender)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), v)
-		requireUserLevelLockTxnUnlocked(t, service, userLevelLockProbeTxnID(owner, connID, lockName, "is_free"))
+		requireUserLevelLockProbeTxnUnlocked(t, service, owner, connID, lockName, "is_free")
 	})
 }
 
@@ -10680,11 +10801,11 @@ func TestFailedUserLevelLockAttemptsCleanupUnexpectedErrors(t *testing.T) {
 		_, isNull, err := releaseUserLevelLock("release_"+lockName, holder)
 		require.ErrorIs(t, err, lockErr)
 		require.False(t, isNull)
-		requireUserLevelLockTxnUnlocked(t, service, userLevelLockProbeTxnID(owner, connID, "release_"+lockName, "release"))
+		requireUserLevelLockProbeTxnUnlocked(t, service, owner, connID, "release_"+lockName, "release")
 
 		_, err = isUserLevelLockFree("free_"+lockName, holder)
 		require.ErrorIs(t, err, lockErr)
-		requireUserLevelLockTxnUnlocked(t, service, userLevelLockProbeTxnID(owner, connID, "free_"+lockName, "is_free"))
+		requireUserLevelLockProbeTxnUnlocked(t, service, owner, connID, "free_"+lockName, "is_free")
 	})
 }
 
@@ -11527,7 +11648,7 @@ func TestSuccessfulProbeCleanupRetainsOwnershipAfterSaturatedHandoff(t *testing.
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		err := unlockUserLevelLockProbe(ctx, service, owner, connID, name, "release")
+		err := unlockUserLevelLockProbe(ctx, service, owner, connID, name, "release", txnID)
 		require.Error(t, err)
 		requireUserLevelLockCleanupOwned(t, key)
 
@@ -11885,13 +12006,16 @@ func TestReleaseAndIsFreeProbeUnlocksHonorCancellationAndCleanupAfterRecovery(t 
 				if tc.name == "is_free_lock_probe" {
 					probeType = "is_free"
 				}
-				txnID := userLevelLockProbeTxnID(owner, connID, lockName, probeType)
-				cleanupKey := userLevelLockFailedAttemptCleanupKey(service, owner, connID, lockName, "probe:"+probeType, txnID)
 				err := tc.fn(lockName, proc)
 				require.ErrorIs(t, err, context.Canceled)
+				state := service.state
+				state.Lock()
+				txnID := []byte(state.locks[string(userLevelLockRow(proc, lockName))])
+				state.Unlock()
+				require.NotEmpty(t, txnID, "canceled probe must retain its locked txn until cleanup retries")
+				cleanupKey := userLevelLockFailedAttemptCleanupKey(service, owner, connID, lockName, "probe:"+probeType, txnID)
 				requireUserLevelLockCleanupOwned(t, cleanupKey)
 
-				state := service.state
 				state.Lock()
 				require.NotEmpty(t, state.locks[string(userLevelLockRow(proc, lockName))])
 				state.Unlock()
