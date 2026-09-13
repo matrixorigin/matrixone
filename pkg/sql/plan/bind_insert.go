@@ -2923,7 +2923,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			updateColExprList = append(updateColExprList, genExpr)
 		}
 	}
-	if err = builder.validateOndupTargetCorrelatedSubqueries(updateColExprList, targetCorrelationTag); err != nil {
+	if err = builder.validateOndupCorrelatedSubqueries(updateColExprList, targetCorrelationTag, selectTag); err != nil {
 		return 0, err
 	}
 
@@ -4642,13 +4642,19 @@ func updateExprListHasSubquery(exprs []*plan.Expr) bool {
 	return false
 }
 
-func (builder *QueryBuilder) validateOndupTargetCorrelatedSubqueries(exprs []*plan.Expr, targetTag int32) error {
+// validateOndupCorrelatedSubqueries rejects correlated ODKU expressions whose
+// inputs cannot be gated by the duplicate-key action. A target or candidate
+// correlation is safe only for a single-row, first-assignment expression with
+// no nested subquery input.
+func (builder *QueryBuilder) validateOndupCorrelatedSubqueries(exprs []*plan.Expr, targetTag, candidateTag int32) error {
 	for i, expr := range exprs {
-		if !builder.exprHasTargetCorrelatedSubquery(expr, targetTag) {
+		hasTargetCorrelation, hasCandidateCorrelation, hasNestedSubquery :=
+			builder.analyzeOdkuCorrelatedSubquery(expr, targetTag, candidateTag)
+		if !hasTargetCorrelation && !hasCandidateCorrelation {
 			continue
 		}
 		if i > 0 || !builder.insertInputSingleRow ||
-			builder.targetCorrelatedSubqueryHasNestedSubquery(expr) {
+			hasNestedSubquery {
 			return moerr.NewUnsupportedDML(builder.GetContext(), odkuTargetCorrelatedSubqueryCause)
 		}
 	}
