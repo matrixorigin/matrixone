@@ -2887,6 +2887,18 @@ func geometryIsEmpty(payload []byte) (bool, error) {
 	return len(content) == 0, nil
 }
 
+func geometryIsExplicitlyEmpty(payload []byte) (bool, error) {
+	s, _, _, err := decodeGeometryPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(strings.TrimSpace(s), typeName+" EMPTY"), nil
+}
+
 func StGeometryType(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
 		typeName, err := geometryTypeNameFromPayload(v)
