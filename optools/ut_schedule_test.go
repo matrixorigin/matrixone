@@ -83,6 +83,59 @@ func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...str
 	return out, err
 }
 
+func TestResolveCgroupMemoryBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, limitFile, rootLimit, parentLimit, leafLimit, wantScope, wantLimit string
+	}{
+		{"tight-parent", "memory.max", "max", "17179869184", "max", "parent", "17179869184"},
+		{"tight-leaf", "memory.max", "max", "17179869184", "4294967296", "leaf", "4294967296"},
+		{"equal-prefers-parent", "memory.max", "max", "8589934592", "8589934592", "parent", "8589934592"},
+		{"no-visible-finite-limit", "memory.max", "max", "max", "max", "leaf", "unknown"},
+		{"v1-unlimited-sentinel", "memory.limit_in_bytes", "9223372036854771712", "8589934592", "9223372036854771712", "parent", "8589934592"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "cgroup")
+			parent := filepath.Join(root, "parent")
+			leaf := filepath.Join(parent, "leaf")
+			for _, dir := range []string{root, parent, leaf} {
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for dir, limit := range map[string]string{
+				root:   tc.rootLimit,
+				parent: tc.parentLimit,
+				leaf:   tc.leafLimit,
+			} {
+				if err := os.WriteFile(filepath.Join(dir, tc.limitFile), []byte(limit+"\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			script := `source ./run_ut.sh UT
+resolve_cgroup_memory_boundary "$CGROUP_TEST_LEAF" "$CGROUP_TEST_ROOT" "$CGROUP_LIMIT_FILE"
+printf 'scope=%s limit=%s\n' "$CGROUP_MEMORY_PATH" "$CGROUP_MEMORY_LIMIT"
+`
+			out, err := scheduleHarness(t, script,
+				"CGROUP_TEST_ROOT="+root,
+				"CGROUP_TEST_LEAF="+leaf,
+				"CGROUP_LIMIT_FILE="+tc.limitFile,
+			)
+			if err != nil {
+				t.Fatalf("resolve cgroup memory boundary: %v\n%s", err, out)
+			}
+			wantPath := parent
+			if tc.wantScope == "leaf" {
+				wantPath = leaf
+			}
+			want := "scope=" + wantPath + " limit=" + tc.wantLimit + "\n"
+			if string(out) != want {
+				t.Fatalf("unexpected boundary:\n got: %q\nwant: %q", out, want)
+			}
+		})
+	}
+}
+
 func TestHeavyPlanReusesReleasedEngineCapacity(t *testing.T) {
 	for _, tc := range []struct{ name, budget, overlap, engine, heavy, plan, expected string }{
 		{"default", "3", "", "0", "0", "0", "0"},

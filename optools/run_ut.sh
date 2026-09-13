@@ -466,48 +466,127 @@ function stop_ut_heartbeat(){
     UT_HEARTBEAT_PID=""
 }
 
+CGROUP_MEMORY_PATH=""
+CGROUP_MEMORY_LIMIT="unknown"
+
+function resolve_cgroup_memory_boundary(){
+    local leaf_path=$1
+    local cgroup_root=$2
+    local limit_file=$3
+    local current_path=${leaf_path}
+    local best_path=${leaf_path}
+    local best_limit=""
+    local best_value=0
+    local candidate_limit=""
+    local candidate_value=0
+
+    CGROUP_MEMORY_PATH=${leaf_path}
+    CGROUP_MEMORY_LIMIT="unknown"
+    if [[ "${leaf_path}" != "${cgroup_root}" && "${leaf_path}" != "${cgroup_root}/"* ]]; then
+        return 0
+    fi
+
+    # A child can inherit a tighter hard limit from any visible ancestor.
+    # Walk the hierarchy and use usage/peak/events from the cgroup that owns
+    # the tightest finite limit. On ties prefer the ancestor so sibling usage
+    # is included in the measurement.
+    while [[ "${current_path}" == "${cgroup_root}" || "${current_path}" == "${cgroup_root}/"* ]]; do
+        if [[ -r "${current_path}/${limit_file}" ]]; then
+            candidate_limit=$(< "${current_path}/${limit_file}")
+            if [[ "${candidate_limit}" =~ ^[0-9]+$ ]]; then
+                candidate_value=$((10#${candidate_limit}))
+                # The v1 controller represents an unlimited limit as a very
+                # large page-aligned integer rather than the literal "max".
+                if [[ "${limit_file}" == "memory.limit_in_bytes" ]] &&
+                    (( candidate_value >= 1152921504606846976 )); then
+                    candidate_limit=""
+                fi
+                if [[ -n "${candidate_limit}" ]]; then
+                    if [[ -z "${best_limit}" ]] || (( candidate_value <= best_value )); then
+                        best_path=${current_path}
+                        best_limit=${candidate_limit}
+                        best_value=${candidate_value}
+                    fi
+                fi
+            fi
+        fi
+
+        if [[ "${current_path}" == "${cgroup_root}" ]]; then
+            break
+        fi
+        current_path=${current_path%/*}
+        if [[ -z "${current_path}" ]]; then
+            break
+        fi
+    done
+
+    if [[ -n "${best_limit}" ]]; then
+        CGROUP_MEMORY_PATH=${best_path}
+        CGROUP_MEMORY_LIMIT=${best_limit}
+    fi
+}
+
 function cgroup_memory_metrics(){
     local relative_path=""
+    local cgroup_root="/sys/fs/cgroup"
     local cgroup_path=""
-    local memory_max="unknown"
+    local memory_current="unknown"
+    local memory_peak="unknown"
     if [[ ! -r /proc/self/cgroup ]]; then
         return 0
     fi
 
     relative_path=$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)
     if [[ -n "${relative_path}" ]]; then
-        cgroup_path="/sys/fs/cgroup${relative_path}"
+        if [[ "${relative_path}" == "/" ]]; then
+            cgroup_path=${cgroup_root}
+        else
+            cgroup_path="${cgroup_root}${relative_path}"
+        fi
         if [[ -r "${cgroup_path}/memory.current" ]]; then
-            if [[ -r "${cgroup_path}/memory.max" ]]; then
-                memory_max=$(< "${cgroup_path}/memory.max")
+            resolve_cgroup_memory_boundary "${cgroup_path}" "${cgroup_root}" "memory.max"
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.current" ]]; then
+                memory_current=$(< "${CGROUP_MEMORY_PATH}/memory.current")
             fi
-            printf 'current=%s peak=%s' \
-                "$(< "${cgroup_path}/memory.current")" \
-                "$(< "${cgroup_path}/memory.peak")"
-            printf ' memory.max=%s' "${memory_max}"
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.peak" ]]; then
+                memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.peak")
+            fi
+            printf 'current=%s peak=%s memory.max=%s memory.scope=%s' \
+                "${memory_current}" "${memory_peak}" \
+                "${CGROUP_MEMORY_LIMIT}" "${CGROUP_MEMORY_PATH}"
             return 0
         fi
     fi
 
     relative_path=$(awk -F: '$2 ~ /(^|,)memory(,|$)/ { print $3; exit }' /proc/self/cgroup)
-    cgroup_path="/sys/fs/cgroup/memory${relative_path}"
+    cgroup_root="/sys/fs/cgroup/memory"
+    if [[ "${relative_path}" == "/" ]]; then
+        cgroup_path=${cgroup_root}
+    else
+        cgroup_path="${cgroup_root}${relative_path}"
+    fi
     if [[ -r "${cgroup_path}/memory.usage_in_bytes" ]]; then
-        if [[ -r "${cgroup_path}/memory.limit_in_bytes" ]]; then
-            memory_max=$(< "${cgroup_path}/memory.limit_in_bytes")
+        resolve_cgroup_memory_boundary "${cgroup_path}" "${cgroup_root}" "memory.limit_in_bytes"
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.usage_in_bytes" ]]; then
+            memory_current=$(< "${CGROUP_MEMORY_PATH}/memory.usage_in_bytes")
         fi
-        printf 'current=%s peak=%s' \
-            "$(< "${cgroup_path}/memory.usage_in_bytes")" \
-            "$(< "${cgroup_path}/memory.max_usage_in_bytes")"
-        printf ' memory.limit_in_bytes=%s' "${memory_max}"
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes" ]]; then
+            memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes")
+        fi
+        printf 'current=%s peak=%s memory.limit_in_bytes=%s memory.scope=%s' \
+            "${memory_current}" "${memory_peak}" \
+            "${CGROUP_MEMORY_LIMIT}" "${CGROUP_MEMORY_PATH}"
     fi
 }
 
 function report_cgroup_memory_usage(){
     local label=$1
     local relative_path=""
+    local cgroup_root="/sys/fs/cgroup"
     local cgroup_path=""
     local events=""
-    local memory_max="unknown"
+    local memory_current="unknown"
+    local memory_peak="unknown"
 
     if [[ ! -r /proc/self/cgroup ]]; then
         return 0
@@ -515,24 +594,49 @@ function report_cgroup_memory_usage(){
 
     relative_path=$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)
     if [[ -n "${relative_path}" ]]; then
-        cgroup_path="/sys/fs/cgroup${relative_path}"
-        if [[ -r "${cgroup_path}/memory.peak" ]]; then
-            if [[ -r "${cgroup_path}/memory.max" ]]; then
-                memory_max=$(< "${cgroup_path}/memory.max")
+        if [[ "${relative_path}" == "/" ]]; then
+            cgroup_path=${cgroup_root}
+        else
+            cgroup_path="${cgroup_root}${relative_path}"
+        fi
+        if [[ -r "${cgroup_path}/memory.current" ]]; then
+            resolve_cgroup_memory_boundary "${cgroup_path}" "${cgroup_root}" "memory.max"
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.current" ]]; then
+                memory_current=$(< "${CGROUP_MEMORY_PATH}/memory.current")
             fi
-            events=$(tr '\n' ' ' < "${cgroup_path}/memory.events")
-            logger "INF" "${label} cgroup memory: current=$(< "${cgroup_path}/memory.current") peak=$(< "${cgroup_path}/memory.peak") memory.max=${memory_max} events=${events}"
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.peak" ]]; then
+                memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.peak")
+            fi
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.events" ]]; then
+                events=$(tr '\n' ' ' < "${CGROUP_MEMORY_PATH}/memory.events")
+            else
+                events="unknown"
+            fi
+            logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.max=${CGROUP_MEMORY_LIMIT} memory.scope=${CGROUP_MEMORY_PATH} events=${events}"
             return 0
         fi
     fi
 
     relative_path=$(awk -F: '$2 ~ /(^|,)memory(,|$)/ { print $3; exit }' /proc/self/cgroup)
-    cgroup_path="/sys/fs/cgroup/memory${relative_path}"
-    if [[ -r "${cgroup_path}/memory.max_usage_in_bytes" ]]; then
-        if [[ -r "${cgroup_path}/memory.limit_in_bytes" ]]; then
-            memory_max=$(< "${cgroup_path}/memory.limit_in_bytes")
+    cgroup_root="/sys/fs/cgroup/memory"
+    if [[ "${relative_path}" == "/" ]]; then
+        cgroup_path=${cgroup_root}
+    else
+        cgroup_path="${cgroup_root}${relative_path}"
+    fi
+    if [[ -r "${cgroup_path}/memory.usage_in_bytes" ]]; then
+        resolve_cgroup_memory_boundary "${cgroup_path}" "${cgroup_root}" "memory.limit_in_bytes"
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.usage_in_bytes" ]]; then
+            memory_current=$(< "${CGROUP_MEMORY_PATH}/memory.usage_in_bytes")
         fi
-        logger "INF" "${label} cgroup memory: current=$(< "${cgroup_path}/memory.usage_in_bytes") peak=$(< "${cgroup_path}/memory.max_usage_in_bytes") memory.limit_in_bytes=${memory_max} failcnt=$(< "${cgroup_path}/memory.failcnt")"
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes" ]]; then
+            memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes")
+        fi
+        local failcnt="unknown"
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.failcnt" ]]; then
+            failcnt=$(< "${CGROUP_MEMORY_PATH}/memory.failcnt")
+        fi
+        logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.limit_in_bytes=${CGROUP_MEMORY_LIMIT} memory.scope=${CGROUP_MEMORY_PATH} failcnt=${failcnt}"
     fi
 }
 
