@@ -8065,7 +8065,9 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 
 const maxInetNtoaValue = uint64(1<<32 - 1)
 
-var errInetNtoaOutOfRange = errors.New("INET_NTOA value is outside the IPv4 range")
+var errInetNtoaOutOfRange = moerr.NewOutOfRangeNoCtx(
+	"INET_NTOA", "value is outside the IPv4 range",
+)
 
 func inetNtoaString(value uint32) string {
 	return net.IPv4(
