@@ -3153,7 +3153,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// select tag; the resolution project re-projects every incoming column at
 		// its original position under the new tag, so retarget those references.
 		for _, updateExpr := range updateColExprList {
-			replaceColRefTag(updateExpr, oldSelectTag, selectTag)
+			builder.rewriteInsertSubqueryOuterTag(updateExpr, oldSelectTag, selectTag)
 		}
 	}
 
@@ -3521,7 +3521,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 		for i, updateExpr := range updateColExprList {
 			builder.odkuTargetCorrelationGuard = nil
-			if targetCorrelationGuard != nil && builder.exprHasTargetCorrelatedSubquery(updateExpr, targetCorrelationTag) {
+			if targetCorrelationGuard != nil &&
+				(builder.exprHasTargetCorrelatedSubquery(updateExpr, targetCorrelationTag) ||
+					builder.exprHasCandidateCorrelatedSubquery(updateExpr, selectTag)) {
 				builder.odkuTargetCorrelationGuard = targetCorrelationGuard
 			}
 			previousNodeID := lastNodeID
@@ -3553,6 +3555,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				// dedup condition can retain a dangling pre-projection reference.
 				for _, expr := range appendedUniqueProjs {
 					replaceColRefTag(expr, oldSelectTag, selectTag)
+				}
+				for _, expr := range updateColExprList {
+					builder.rewriteInsertSubqueryOuterTag(expr, oldSelectTag, selectTag)
 				}
 			}
 		}
@@ -4647,29 +4652,34 @@ func (builder *QueryBuilder) validateOndupTargetCorrelatedSubqueries(exprs []*pl
 	return nil
 }
 
-// analyzeTargetCorrelatedSubquery distinguishes a target correlation inside a
-// subquery from an ordinary target reference in the ODKU expression. The latter
-// is evaluated by DedupJoin against its evolving old-row image; the former is
-// flattened into the candidate side and must not be allowed to observe a stale
-// target snapshot in an unsupported shape. It also records whether a nested
-// subquery exists, because the outer target-match guard cannot gate the inner
-// subquery's input plan.
-func (builder *QueryBuilder) analyzeTargetCorrelatedSubquery(
-	expr *plan.Expr, targetTag int32,
-) (hasTargetCorrelation, hasNestedSubquery bool) {
+// analyzeOdkuCorrelatedSubquery distinguishes correlations inside a subquery
+// from ordinary references in the ODKU expression. Target references are
+// evaluated by DedupJoin against its evolving old-row image. Candidate-row
+// references, including INSERT row aliases and VALUES(), are bound to the
+// candidate input. Both kinds need the target-match guard because a flattened
+// scalar subquery must not execute before the duplicate-key action is selected.
+// The nested-subquery result is kept separately because the outer guard cannot
+// gate an inner subquery's input plan.
+func (builder *QueryBuilder) analyzeOdkuCorrelatedSubquery(
+	expr *plan.Expr, targetTag, candidateTag int32,
+) (hasTargetCorrelation, hasCandidateCorrelation, hasNestedSubquery bool) {
 	visitedNodes := make(map[int32]struct{})
 	var visitExpr func(*plan.Expr, bool)
 	var visitNode func(int32)
 
 	visitExpr = func(current *plan.Expr, inSubquery bool) {
-		if current == nil || (hasTargetCorrelation && hasNestedSubquery) {
+		if current == nil || (hasTargetCorrelation || hasCandidateCorrelation) && hasNestedSubquery {
 			return
 		}
 		switch exprImpl := current.Expr.(type) {
 		case *plan.Expr_Corr:
-			if inSubquery && exprImpl.Corr != nil &&
-				exprImpl.Corr.Depth > 0 && exprImpl.Corr.RelPos == targetTag {
-				hasTargetCorrelation = true
+			if inSubquery && exprImpl.Corr != nil && exprImpl.Corr.Depth > 0 {
+				if targetTag != 0 && exprImpl.Corr.RelPos == targetTag {
+					hasTargetCorrelation = true
+				}
+				if candidateTag != 0 && exprImpl.Corr.RelPos == candidateTag {
+					hasCandidateCorrelation = true
+				}
 			}
 		case *plan.Expr_F:
 			if exprImpl.F == nil {
@@ -4723,7 +4733,7 @@ func (builder *QueryBuilder) analyzeTargetCorrelatedSubquery(
 	}
 
 	visitNode = func(nodeID int32) {
-		if hasTargetCorrelation && hasNestedSubquery {
+		if (hasTargetCorrelation || hasCandidateCorrelation) && hasNestedSubquery {
 			return
 		}
 		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
@@ -4777,6 +4787,18 @@ func (builder *QueryBuilder) analyzeTargetCorrelatedSubquery(
 	}
 
 	visitExpr(expr, false)
+	return hasTargetCorrelation, hasCandidateCorrelation, hasNestedSubquery
+}
+
+// analyzeTargetCorrelatedSubquery distinguishes a target correlation inside a
+// subquery from an ordinary target reference in the ODKU expression. The latter
+// is evaluated by DedupJoin against its evolving old-row image; the former is
+// flattened into the candidate side and must not be allowed to observe a stale
+// target snapshot in an unsupported shape.
+func (builder *QueryBuilder) analyzeTargetCorrelatedSubquery(
+	expr *plan.Expr, targetTag int32,
+) (hasTargetCorrelation, hasNestedSubquery bool) {
+	hasTargetCorrelation, _, hasNestedSubquery = builder.analyzeOdkuCorrelatedSubquery(expr, targetTag, 0)
 	return hasTargetCorrelation, hasNestedSubquery
 }
 
@@ -4785,6 +4807,15 @@ func (builder *QueryBuilder) analyzeTargetCorrelatedSubquery(
 func (builder *QueryBuilder) exprHasTargetCorrelatedSubquery(expr *plan.Expr, targetTag int32) bool {
 	hasTarget, _ := builder.analyzeTargetCorrelatedSubquery(expr, targetTag)
 	return hasTarget
+}
+
+// exprHasCandidateCorrelatedSubquery reports whether a subquery references the
+// incoming INSERT row. Such a reference is valid only after duplicate-key
+// arbitration has selected the UPDATE branch, so it uses the same target-match
+// guard as a target-row correlation.
+func (builder *QueryBuilder) exprHasCandidateCorrelatedSubquery(expr *plan.Expr, candidateTag int32) bool {
+	_, hasCandidate, _ := builder.analyzeOdkuCorrelatedSubquery(expr, 0, candidateTag)
+	return hasCandidate
 }
 
 // targetCorrelatedSubqueryHasNestedSubquery reports whether a target-correlated
@@ -4948,6 +4979,174 @@ func rewriteInsertScopeRefs(
 	case *plan.Expr_Sub:
 		return
 	}
+}
+
+// rewriteInsertSubqueryOuterTag retargets references to the incoming INSERT
+// row inside bound subquery plans. ODKU target arbitration inserts a
+// PRE_INSERT_UK projection between the original candidate input and the
+// dedup-update join, so the candidate binding tag changes before subqueries are
+// flattened. The ordinary expression rewriter intentionally stops at
+// Expr_Sub; walk each subquery's plan graph here so its correlation predicates
+// follow the same candidate projection.
+func (builder *QueryBuilder) rewriteInsertSubqueryOuterTag(expr *plan.Expr, oldTag, newTag int32) {
+	if expr == nil || oldTag == newTag {
+		return
+	}
+
+	visitedNodes := make(map[int32]struct{})
+	var rewriteExpr func(*plan.Expr)
+	var rewriteNode func(int32)
+
+	rewriteExpr = func(current *plan.Expr) {
+		if current == nil {
+			return
+		}
+		switch impl := current.Expr.(type) {
+		case *plan.Expr_Col:
+			if impl.Col != nil && impl.Col.RelPos == oldTag {
+				impl.Col.RelPos = newTag
+			}
+		case *plan.Expr_Corr:
+			if impl.Corr != nil && impl.Corr.RelPos == oldTag {
+				impl.Corr.RelPos = newTag
+			}
+		case *plan.Expr_F:
+			if impl.F != nil {
+				for _, arg := range impl.F.Args {
+					rewriteExpr(arg)
+				}
+			}
+		case *plan.Expr_Lit:
+			if impl.Lit != nil {
+				rewriteExpr(impl.Lit.Src)
+			}
+		case *plan.Expr_List:
+			if impl.List != nil {
+				for _, item := range impl.List.List {
+					rewriteExpr(item)
+				}
+			}
+		case *plan.Expr_Sub:
+			if impl.Sub != nil {
+				rewriteExpr(impl.Sub.Child)
+				rewriteNode(impl.Sub.NodeId)
+			}
+		case *plan.Expr_W:
+			if impl.W == nil {
+				return
+			}
+			rewriteExpr(impl.W.WindowFunc)
+			for _, item := range impl.W.PartitionBy {
+				rewriteExpr(item)
+			}
+			for _, order := range impl.W.OrderBy {
+				if order != nil {
+					rewriteExpr(order.Expr)
+				}
+			}
+			if impl.W.Frame != nil {
+				if impl.W.Frame.Start != nil {
+					rewriteExpr(impl.W.Frame.Start.Val)
+				}
+				if impl.W.Frame.End != nil {
+					rewriteExpr(impl.W.Frame.End.Val)
+				}
+			}
+		}
+	}
+
+	rewriteNode = func(nodeID int32) {
+		if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+			return
+		}
+		if _, ok := visitedNodes[nodeID]; ok {
+			return
+		}
+		visitedNodes[nodeID] = struct{}{}
+		node := builder.qry.Nodes[nodeID]
+		if node == nil {
+			return
+		}
+		for _, childID := range node.Children {
+			rewriteNode(childID)
+		}
+
+		visitExprList := func(exprs []*plan.Expr) {
+			for _, item := range exprs {
+				rewriteExpr(item)
+			}
+		}
+		visitExprList([]*plan.Expr{
+			node.Limit, node.Offset, node.Interval, node.Sliding, node.Timestamp,
+			node.WEnd, node.GapFillStart, node.GapFillEnd,
+		})
+		visitExprList(node.OnList)
+		visitExprList(node.FilterList)
+		visitExprList(node.ProjectList)
+		visitExprList(node.GroupBy)
+		visitExprList(node.AggList)
+		visitExprList(node.WinSpecList)
+		visitExprList(node.TblFuncExprList)
+		visitExprList(node.BlockFilterList)
+		visitExprList(node.FillVal)
+		visitExprList(node.OnUpdateExprs)
+		visitExprList(node.TimeWindowPartitionBy)
+		visitExprList(node.PhysicalEqualityKeyList)
+		for _, order := range node.OrderBy {
+			if order != nil {
+				rewriteExpr(order.Expr)
+			}
+		}
+
+		if param := node.IndexReaderParam; param != nil {
+			rewriteExpr(param.Limit)
+			for _, order := range param.OrderBy {
+				if order != nil {
+					rewriteExpr(order.Expr)
+				}
+			}
+			if param.DistRange != nil {
+				rewriteExpr(param.DistRange.LowerBound)
+				rewriteExpr(param.DistRange.UpperBound)
+			}
+		}
+		if scan := node.VectorIndexScan; scan != nil {
+			rewriteExpr(scan.QueryVector)
+			rewriteExpr(scan.CandidateLimit)
+			rewriteExpr(scan.FirstRoundLimit)
+			visitExprList(scan.PreFilters)
+			if scan.DistanceRange != nil {
+				rewriteExpr(scan.DistanceRange.LowerBound)
+				rewriteExpr(scan.DistanceRange.UpperBound)
+			}
+		}
+		for _, target := range node.LockTargets {
+			if target != nil {
+				rewriteExpr(target.LockRows)
+			}
+		}
+		if rowset := node.RowsetData; rowset != nil {
+			for _, col := range rowset.Cols {
+				if col == nil {
+					continue
+				}
+				for _, row := range col.Data {
+					if row != nil {
+						rewriteExpr(row.Expr)
+					}
+				}
+			}
+		}
+		if preInsert := node.PreInsertCtx; preInsert != nil {
+			rewriteExpr(preInsert.CompPkeyExpr)
+			rewriteExpr(preInsert.ClusterByExpr)
+		}
+		if dedup := node.DedupJoinCtx; dedup != nil {
+			visitExprList(dedup.UpdateColExprList)
+		}
+	}
+
+	rewriteExpr(expr)
 }
 
 // canonicalizeInsertSubqueryInput restores the DEDUP input contract after a
