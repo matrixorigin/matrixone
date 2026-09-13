@@ -31,8 +31,6 @@ select mbroverlaps(a.g, b.g) as ov_cross, mbroverlaps(a.g, c.g) as ov_inner, mbr
 from mbr_t a, mbr_t b, mbr_t c, mbr_t d where a.id = 1 and b.id = 5 and c.id = 2 and d.id = 3;
 ov_cross    ov_inner    ov_edge
 1    0    0
--- MBR interiors are dimension-aware: point/line bounds can have an empty
--- two-dimensional interior, while equal degenerate bounds have a relative one.
 select mbrtouches(a.g, b.g) as equal_point_touches,
 mbrwithin(a.g, b.g) as equal_point_within,
 mbrcontains(a.g, b.g) as equal_point_contains,
@@ -73,7 +71,6 @@ mbrcovers(a.g, b.g) as inside_line_covers
 from mbr_t a, mbr_t b where a.id = 1 and b.id = 9;
 inside_line_touches    inside_line_within    inside_line_contains    inside_line_coveredby    inside_line_covers
 0    1    1    1    1
--- Public constant-expression repros for the reported point and boundary cases.
 select mbrtouches(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as equal_points_touch,
 mbrtouches(st_geomfromtext('POINT(2 2)'), st_geomfromtext('POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))')) as interior_point_touch,
 mbrtouches(st_geomfromtext('POINT(0 2)'), st_geomfromtext('POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))')) as boundary_point_touch,
