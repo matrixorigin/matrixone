@@ -4827,16 +4827,6 @@ func (builder *QueryBuilder) exprHasCandidateCorrelatedSubquery(expr *plan.Expr,
 	return hasCandidate
 }
 
-// targetCorrelatedSubqueryHasNestedSubquery reports whether a target-correlated
-// subquery contains another subquery. The target lookup guard is a predicate on
-// the outer scalar join; it cannot prevent a nested subquery's input plan from
-// executing before that predicate is evaluated. Reject that shape until the
-// UPDATE branch can be gated at the duplicate-key action boundary.
-func (builder *QueryBuilder) targetCorrelatedSubqueryHasNestedSubquery(expr *plan.Expr) bool {
-	_, nested := builder.analyzeTargetCorrelatedSubquery(expr, 0)
-	return nested
-}
-
 // insertScopeRef is a global binding reference that must be made visible by
 // the projection which normalizes a flattened ODKU subquery input. Keeping the
 // encounter order makes the generated plan deterministic and avoids relying
