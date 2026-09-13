@@ -1736,6 +1736,9 @@ func StSwapXY(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 // StLatFromGeoHash returns the latitude of the center of a geohash cell
 // (ST_LatFromGeoHash).
 func StLatFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
 		_, lat, err := geo.DecodeGeoHash(functionUtil.QuickBytesToStr(v))
 		if err != nil {
@@ -1748,6 +1751,9 @@ func StLatFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 // StLongFromGeoHash returns the longitude of the center of a geohash cell
 // (ST_LongFromGeoHash).
 func StLongFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
 		lon, _, err := geo.DecodeGeoHash(functionUtil.QuickBytesToStr(v))
 		if err != nil {
