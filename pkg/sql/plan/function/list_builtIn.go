@@ -3269,6 +3269,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return newOpBuiltInRegexp().builtInRegexpInstr
 				},
 			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_int8, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpInstr
+				},
+			},
 		},
 	},
 
@@ -3343,6 +3353,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return newOpBuiltInRegexp().builtInRegexpReplace
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return regexpReplaceReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpReplace
+				},
+			},
 		},
 	},
 
@@ -3380,6 +3400,16 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return regexpSubstrReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpSubstr
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return regexpSubstrReturnType(parameters)
 				},
