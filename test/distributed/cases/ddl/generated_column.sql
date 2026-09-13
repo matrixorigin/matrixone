@@ -558,6 +558,91 @@ alter table t52_expr_fk_self_child modify column g1 int generated always as (a +
 select count(*) as preserved_links from t52_expr_fk_self_child c join t52_expr_fk_self_child p on c.g2 = p.id where c.id = 3 and c.g1 = 2 and c.g2 = 3;
 set foreign_key_checks = 1;
 
+-- Direct source columns are FK endpoints too. A scale-changing COPY must not
+-- replace the parent while an existing composite child relationship would be
+-- orphaned; an unrelated widening remains legal.
+create table t53_direct_fk_parent (
+    id int primary key,
+    a decimal(10,1),
+    b int,
+    payload int,
+    g int generated always as (a * 10) stored,
+    unique key uk_ab(a, b),
+    unique key uk_g(g)
+);
+create table t53_direct_fk_child (
+    id int primary key,
+    pa decimal(10,1),
+    pb int,
+    pg int,
+    constraint fk_t53_parent_ab foreign key (pa, pb) references t53_direct_fk_parent(a, b),
+    constraint fk_t53_parent_g foreign key (pg) references t53_direct_fk_parent(g)
+);
+insert into t53_direct_fk_parent (id, a, b, payload) values (1, 1.1, 7, 9);
+insert into t53_direct_fk_child values (1, 1.1, 7, 11);
+-- @regex("Cannot change column 'a'.*fk_t53_parent_ab", true)
+alter table t53_direct_fk_parent modify column a decimal(10,0);
+select p.a, p.b, p.g, c.pa, c.pb, c.pg
+from t53_direct_fk_parent p join t53_direct_fk_child c on p.a = c.pa and p.b = c.pb and p.g = c.pg
+where p.id = 1 and c.id = 1;
+alter table t53_direct_fk_parent modify column payload bigint;
+select p.a, p.b, p.g, c.pa, c.pb, c.pg
+from t53_direct_fk_parent p join t53_direct_fk_child c on p.a = c.pa and p.b = c.pb and p.g = c.pg
+where p.id = 1 and c.id = 1;
+
+-- The child-side direct endpoint must be protected independently of any
+-- generated columns on the same row.
+create table t54_direct_fk_child_parent (
+    k decimal(10,1) primary key
+);
+create table t54_direct_fk_child (
+    id int primary key,
+    pa decimal(10,1),
+    g int generated always as (pa * 10) stored,
+    constraint fk_t54_parent_key foreign key (pa) references t54_direct_fk_child_parent(k)
+);
+insert into t54_direct_fk_child_parent values (1.1);
+insert into t54_direct_fk_child (id, pa) values (1, 1.1);
+-- @regex("Cannot change column 'pa'.*fk_t54_parent_key", true)
+alter table t54_direct_fk_child modify column pa decimal(10,0);
+select c.pa, c.g, p.k
+from t54_direct_fk_child c join t54_direct_fk_child_parent p on c.pa = p.k
+where c.id = 1;
+
+-- Planner unit tests cover both durable self-reference markers (0 and the
+-- physical table ID in older metadata); this SQL case exercises the live
+-- self-reference endpoint path.
+create table t55_direct_fk_self (
+    id int primary key,
+    a decimal(10,1),
+    parent_a decimal(10,1),
+    unique key uk_a(a),
+    constraint fk_t55_self_a foreign key (parent_a) references t55_direct_fk_self(a)
+);
+insert into t55_direct_fk_self (id, a, parent_a) values (1, 1.1, 1.1);
+-- @regex("Cannot change column 'a'.*fk_t55_self_a", true)
+alter table t55_direct_fk_self modify column a decimal(10,0);
+-- @regex("Cannot change column 'parent_a'.*fk_t55_self_a", true)
+alter table t55_direct_fk_self modify column parent_a decimal(10,0);
+select id, a, parent_a from t55_direct_fk_self order by id;
+
+-- CHAR widening is a legal FK endpoint conversion: ordinary COPY assignment
+-- keeps the existing bytes (unlike BINARY, which pads with zero bytes).
+create table t56_char_fk_parent (
+    k char(10) primary key
+);
+create table t56_char_fk_child (
+    id int primary key,
+    k char(10),
+    constraint fk_t56_char_key foreign key (k) references t56_char_fk_parent(k)
+);
+insert into t56_char_fk_parent values ('edge');
+insert into t56_char_fk_child values (1, 'edge');
+alter table t56_char_fk_child modify column k char(20);
+select hex(c.k), length(c.k), char_length(c.k)
+from t56_char_fk_child c join t56_char_fk_parent p on c.k = p.k
+where c.id = 1;
+
 -- ============================================================
 -- 41. VIRTUAL generated column cannot be PRIMARY KEY
 -- ============================================================

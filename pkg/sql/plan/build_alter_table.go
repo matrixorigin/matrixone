@@ -639,40 +639,47 @@ func originalAlterSourceColumn(
 	return originalCol.Name, true, nil
 }
 
-// AlterCopyAffectedStoredGeneratedColumns returns stored generated columns
-// whose values can change during ALTER COPY because a source type or generated
-// expression changes. The original schema supplies dependency positions; the
-// final copy schema supplies the definitions after all ALTER options have been
-// applied.
-func AlterCopyAffectedStoredGeneratedColumns(
+// AlterCopyAffectedForeignKeyColumns returns the columns whose values or
+// comparison semantics can change during ALTER COPY. It includes both direct
+// foreign-key endpoints and the stored-generated closure of changed sources.
+// The original schema supplies dependency positions; the final copy schema
+// supplies the definitions after all ALTER options have been applied.
+//
+// The returned IDs are original column IDs. COPY remaps those IDs only after
+// the temporary relation has been populated, so the live FK guard must inspect
+// this set before that boundary.
+func AlterCopyAffectedForeignKeyColumns(
 	ctx context.Context,
 	originalTableDef, copyTableDef *TableDef,
 	changeColDefMap map[uint64]*ColDef,
 ) (map[uint64]string, error) {
 	if originalTableDef == nil || copyTableDef == nil {
-		return nil, moerr.NewInternalError(ctx, "missing ALTER COPY table definition for generated-column FK validation")
-	}
-	hasStoredGeneratedColumn := false
-	for _, tableDef := range []*TableDef{originalTableDef, copyTableDef} {
-		for _, col := range tableDef.Cols {
-			if col != nil && col.GeneratedCol != nil && col.GeneratedCol.IsStored {
-				hasStoredGeneratedColumn = true
-				break
-			}
-		}
-		if hasStoredGeneratedColumn {
-			break
-		}
-	}
-	if !hasStoredGeneratedColumn {
-		return nil, nil
+		return nil, moerr.NewInternalError(ctx, "missing ALTER COPY table definition for foreign-key validation")
 	}
 
 	seeds := make(map[string]struct{})
 	affected := make(map[uint64]string)
+	copyColsByName := make(map[string]*ColDef, len(copyTableDef.Cols))
+	for _, copyCol := range copyTableDef.Cols {
+		if copyCol != nil {
+			copyColsByName[strings.ToLower(copyCol.Name)] = copyCol
+		}
+	}
+	findCopyColumn := func(name string) *ColDef {
+		if col := copyColsByName[strings.ToLower(name)]; col != nil {
+			return col
+		}
+		// Keep EqualFold behavior for unusual legacy identifiers that do not
+		// normalize through strings.ToLower.
+		return FindColumn(copyTableDef.Cols, name)
+	}
+	hasOriginalGeneratedColumns := false
 	for _, originalCol := range originalTableDef.Cols {
 		if originalCol == nil || originalCol.Hidden {
 			continue
+		}
+		if originalCol.GeneratedCol != nil {
+			hasOriginalGeneratedColumns = true
 		}
 		mappedCol, ok := changeColDefMap[originalCol.ColId]
 		if !ok {
@@ -680,20 +687,25 @@ func AlterCopyAffectedStoredGeneratedColumns(
 			// it. Drop validation normally rejects that shape earlier; keeping it
 			// in the closure makes the live FK guard fail closed as well.
 			seeds[originalCol.Name] = struct{}{}
-			if originalCol.GeneratedCol != nil && originalCol.GeneratedCol.IsStored {
-				affected[originalCol.ColId] = originalCol.Name
-			}
+			affected[originalCol.ColId] = originalCol.Name
 			continue
 		}
 		if mappedCol == nil {
 			return nil, moerr.NewInternalErrorf(ctx,
 				"nil ALTER COPY column mapping for source column %q", originalCol.Name)
 		}
-		copyCol := FindColumn(copyTableDef.Cols, mappedCol.Name)
+		copyCol := findCopyColumn(mappedCol.Name)
 		if copyCol == nil {
 			return nil, moerr.NewInternalErrorf(ctx,
 				"cannot resolve ALTER COPY target column %q for source column %q",
 				mappedCol.Name, originalCol.Name)
+		}
+		// A direct source column can itself be an FK endpoint. The generated
+		// dependency closure below is intentionally broader because it drives
+		// index invalidation; this map must use the narrower FK value-change
+		// predicate so safe widening and metadata-only edits remain legal.
+		if alterCopyForeignKeyColumnMayChangeValues(originalCol.Typ, copyCol.Typ) {
+			affected[originalCol.ColId] = originalCol.Name
 		}
 		generatedDefinitionChanged := alterCopyGeneratedDefinitionMayChangeValues(
 			originalCol.GeneratedCol, copyCol.GeneratedCol,
@@ -711,7 +723,11 @@ func AlterCopyAffectedStoredGeneratedColumns(
 			seeds[originalCol.Name] = struct{}{}
 		}
 	}
-	if len(seeds) == 0 {
+	if len(seeds) == 0 || !hasOriginalGeneratedColumns {
+		// Direct FK endpoints do not need dependency-graph metadata. This is
+		// also the normal path for legacy ordinary tables whose Name2ColIndex
+		// is absent; do not turn a direct type check into a spurious metadata
+		// failure merely because there are no generated dependents to expand.
 		return affected, nil
 	}
 
@@ -727,7 +743,7 @@ func AlterCopyAffectedStoredGeneratedColumns(
 			mappedCol := changeColDefMap[col.ColId]
 			var copyCol *ColDef
 			if mappedCol != nil {
-				copyCol = FindColumn(copyTableDef.Cols, mappedCol.Name)
+				copyCol = findCopyColumn(mappedCol.Name)
 			}
 			if col.GeneratedCol.IsStored ||
 				(copyCol != nil && copyCol.GeneratedCol != nil && copyCol.GeneratedCol.IsStored) {
@@ -736,6 +752,48 @@ func AlterCopyAffectedStoredGeneratedColumns(
 		}
 	}
 	return affected, nil
+}
+
+// alterCopyForeignKeyColumnMayChangeValues classifies a direct source
+// conversion for FK validation. It deliberately differs from the broader
+// generated-dependency predicate: a proven capacity widening does not change
+// an existing endpoint value and must not turn a historically legal ALTER into
+// a blanket rejection. Scale, collation/padding, enum metadata, and all
+// narrowing or cross-type conversions remain conservative. A positive source
+// width is required before a capacity widening can be proven; zero/negative
+// legacy widths are intentionally treated as unknown.
+func alterCopyForeignKeyColumnMayChangeValues(source, target Type) bool {
+	if source.Id != target.Id ||
+		source.Scale != target.Scale ||
+		source.Enumvalues != target.Enumvalues ||
+		source.Charset != target.Charset ||
+		source.PadSpace != target.PadSpace {
+		return true
+	}
+	if source.Width == target.Width {
+		return false
+	}
+	if source.Width < target.Width {
+		if source.Width <= 0 || target.Width <= 0 {
+			return true
+		}
+		switch types.T(source.Id) {
+		case types.T_decimal64, types.T_decimal128, types.T_decimal256,
+			types.T_char, types.T_varchar, types.T_varbinary:
+			// Decimal precision and variable-length capacity widening preserve
+			// existing values when all semantic metadata above is unchanged.
+			// Ordinary COPY assignment does not pad CHAR; set-operation casts
+			// carry their own explicit padding mode and are outside this path.
+			return false
+		default:
+			// BINARY assignment pads with zero bytes; BIT, floating-point display
+			// metadata, and internal/array types need a representation-specific
+			// proof before they can be treated as value-preserving. Keep the FK
+			// guard closed for those conversions.
+			return true
+		}
+	}
+	return true
 }
 
 func alterCopyGeneratedDefinitionMayChangeValues(source, target *plan.GeneratedCol) bool {
@@ -756,7 +814,6 @@ func alterCopyColumnTypeMayChangeValues(source, target Type) bool {
 	return source.Id != target.Id ||
 		source.Width != target.Width ||
 		source.Scale != target.Scale ||
-		source.Table != target.Table ||
 		source.Enumvalues != target.Enumvalues ||
 		source.Charset != target.Charset ||
 		source.PadSpace != target.PadSpace

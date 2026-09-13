@@ -1303,10 +1303,10 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 	if !isTemp && !plan2.IsFkBannedDatabase(dbName) {
-		// COPY recomputes stored generated columns while its temporary relation
-		// has no foreign keys. Validate their live relationships before creating
-		// that relation; planner metadata may predate a recently committed FK.
-		if err = checkAlterCopyGeneratedColumnForeignKeys(
+		// COPY recomputes values while its temporary relation has no foreign
+		// keys. Validate every potentially changed endpoint before creating that
+		// relation; planner metadata may predate a recently committed FK.
+		if err = checkAlterCopyForeignKeyColumns(
 			c, qry, originRel.CopyTableDef(c.proc.Ctx), sourceForeignKeys,
 			sourceRefChildTbls, oldId, dbName, tblName,
 		); err != nil {
@@ -2175,7 +2175,7 @@ func snapshotAlterCopyForeignKeyState(
 	return foreignKeys, slices.Clone(canonicalRefChildTableIDs(constraintDef)), nil
 }
 
-func checkAlterCopyGeneratedColumnForeignKeys(
+func checkAlterCopyForeignKeyColumns(
 	c *Compile,
 	qry *plan.AlterTable,
 	sourceTableDef *plan.TableDef,
@@ -2184,14 +2184,14 @@ func checkAlterCopyGeneratedColumnForeignKeys(
 	oldTableID uint64,
 	dbName, tableName string,
 ) error {
-	affectedGeneratedColumns, err := plan2.AlterCopyAffectedStoredGeneratedColumns(
+	affectedForeignKeyColumns, err := plan2.AlterCopyAffectedForeignKeyColumns(
 		c.proc.Ctx, sourceTableDef, qry.CopyTableDef, qry.ChangeTblColIdMap,
 	)
-	if err != nil || len(affectedGeneratedColumns) == 0 {
+	if err != nil || len(affectedForeignKeyColumns) == 0 {
 		return err
 	}
-	if err = checkAlterCopyGeneratedForeignKeyColumns(
-		c.proc.Ctx, sourceForeignKeys, affectedGeneratedColumns, false, "",
+	if err = checkAlterCopyForeignKeyColumnsForKeys(
+		c.proc.Ctx, sourceForeignKeys, affectedForeignKeyColumns, false, "",
 	); err != nil {
 		return err
 	}
@@ -2202,10 +2202,10 @@ func checkAlterCopyGeneratedColumnForeignKeys(
 			selfForeignKeys = append(selfForeignKeys, foreignKey)
 		}
 	}
-	if err = checkAlterCopyGeneratedForeignKeyColumns(
+	if err = checkAlterCopyForeignKeyColumnsForKeys(
 		c.proc.Ctx,
 		selfForeignKeys,
-		affectedGeneratedColumns,
+		affectedForeignKeyColumns,
 		true,
 		dbName+"."+tableName,
 	); err != nil {
@@ -2249,10 +2249,10 @@ func checkAlterCopyGeneratedColumnForeignKeys(
 		if childDBName == "" {
 			childDBName = dbName
 		}
-		if err = checkAlterCopyGeneratedForeignKeyColumns(
+		if err = checkAlterCopyForeignKeyColumnsForKeys(
 			c.proc.Ctx,
 			incomingForeignKeys,
-			affectedGeneratedColumns,
+			affectedForeignKeyColumns,
 			true,
 			childDBName+"."+childTableName,
 		); err != nil {
@@ -2262,10 +2262,10 @@ func checkAlterCopyGeneratedColumnForeignKeys(
 	return nil
 }
 
-func checkAlterCopyGeneratedForeignKeyColumns(
+func checkAlterCopyForeignKeyColumnsForKeys(
 	ctx context.Context,
 	foreignKeys []*plan.ForeignKeyDef,
-	affectedGeneratedColumns map[uint64]string,
+	affectedForeignKeyColumns map[uint64]string,
 	foreignColumns bool,
 	referencingTable string,
 ) error {
@@ -2284,7 +2284,7 @@ func checkAlterCopyGeneratedForeignKeyColumns(
 			columnIDs = foreignKey.ForeignCols
 		}
 		for _, columnID := range columnIDs {
-			if columnName, affected := affectedGeneratedColumns[columnID]; affected {
+			if columnName, affected := affectedForeignKeyColumns[columnID]; affected {
 				if referencingTable == "" {
 					return moerr.NewErrForeignKeyColumnCannotChange(ctx, columnName, foreignKey.Name)
 				}

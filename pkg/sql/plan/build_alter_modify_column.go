@@ -257,6 +257,10 @@ func isSupportedDDLTargetJSONCast(source types.T) bool {
 func checkColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef, originalCol, newCol *ColDef) error {
 	if newCol.Typ.GetId() == originalCol.Typ.GetId() &&
 		newCol.Typ.GetWidth() == originalCol.Typ.GetWidth() &&
+		newCol.Typ.GetScale() == originalCol.Typ.GetScale() &&
+		newCol.Typ.GetEnumvalues() == originalCol.Typ.GetEnumvalues() &&
+		newCol.Typ.GetCharset() == originalCol.Typ.GetCharset() &&
+		newCol.Typ.GetPadSpace() == originalCol.Typ.GetPadSpace() &&
 		newCol.Typ.GetAutoIncr() == originalCol.Typ.GetAutoIncr() {
 		return nil
 	}
@@ -271,6 +275,11 @@ func checkColumnForeignkeyConstraint(ctx CompilerContext, tbInfo *TableDef, orig
 		}
 		for i, colId := range fkInfo.Cols {
 			if colId == originalCol.ColId {
+				if alterCopyForeignKeyColumnMayChangeValues(
+					originalCol.Typ, newCol.Typ,
+				) {
+					return moerr.NewErrForeignKeyColumnCannotChange(ctx.GetContext(), originalCol.Name, fkInfo.Name)
+				}
 				// A zero foreign-table ID is the durable self-reference marker.
 				// Resolve it from the current table instead of querying the catalog.
 				_, referTableDef, _, err := resolveAlterForeignKeyTable(ctx, tbInfo, fkInfo.ForeignTbl)

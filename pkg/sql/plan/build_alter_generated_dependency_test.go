@@ -120,7 +120,7 @@ func TestAppendAlterGeneratedDependentsSkipsTablesWithoutGeneratedColumns(t *tes
 	require.Equal(t, []string{"b"}, affectedCols)
 }
 
-func TestAlterCopyAffectedStoredGeneratedColumnsUsesFinalSourceTypes(t *testing.T) {
+func TestAlterCopyAffectedForeignKeyColumnsUsesFinalSourceTypes(t *testing.T) {
 	original := generatedDependencyTestTable()
 	for i, col := range original.Cols {
 		col.ColId = uint64(i + 1)
@@ -153,18 +153,19 @@ func TestAlterCopyAffectedStoredGeneratedColumnsUsesFinalSourceTypes(t *testing.
 	}
 	copyTable.Cols[0].Typ = planpb.Type{Id: int32(types.T_int32)}
 
-	affected, err := AlterCopyAffectedStoredGeneratedColumns(
+	affected, err := AlterCopyAffectedForeignKeyColumns(
 		context.Background(), original, copyTable, changeColDefMap,
 	)
 	require.NoError(t, err)
 	require.Equal(t, map[uint64]string{
+		original.Cols[0].ColId: "source",
 		original.Cols[1].ColId: "middle",
 		original.Cols[2].ColId: "tail",
 	}, affected,
-		"a converted source must include the full transitive stored-generated closure, but exclude unrelated and virtual generated columns")
+		"a converted source must include the direct endpoint candidate and full transitive stored-generated closure, but exclude unrelated and virtual generated columns")
 }
 
-func TestAlterCopyAffectedStoredGeneratedColumnsIncludesChangedExpressions(t *testing.T) {
+func TestAlterCopyAffectedForeignKeyColumnsIncludesChangedExpressions(t *testing.T) {
 	original := generatedDependencyTestTable()
 	changeColDefMap := make(map[uint64]*planpb.ColDef, len(original.Cols))
 	copyTable := &planpb.TableDef{
@@ -191,7 +192,7 @@ func TestAlterCopyAffectedStoredGeneratedColumnsIncludesChangedExpressions(t *te
 		IsStored:     true,
 	}
 
-	affected, err := AlterCopyAffectedStoredGeneratedColumns(
+	affected, err := AlterCopyAffectedForeignKeyColumns(
 		context.Background(), original, copyTable, changeColDefMap,
 	)
 	require.NoError(t, err)
@@ -201,7 +202,7 @@ func TestAlterCopyAffectedStoredGeneratedColumnsIncludesChangedExpressions(t *te
 	}, affected)
 }
 
-func TestAlterCopyAffectedStoredGeneratedColumnsIncludesNewStoredColumns(t *testing.T) {
+func TestAlterCopyAffectedForeignKeyColumnsIncludesNewStoredColumns(t *testing.T) {
 	original := &planpb.TableDef{
 		Cols: []*planpb.ColDef{
 			{ColId: 1, Name: "source", Typ: planpb.Type{Id: int32(types.T_int32)}},
@@ -227,12 +228,117 @@ func TestAlterCopyAffectedStoredGeneratedColumnsIncludesNewStoredColumns(t *test
 		2: {Name: "other"},
 	}
 
-	affected, err := AlterCopyAffectedStoredGeneratedColumns(
+	affected, err := AlterCopyAffectedForeignKeyColumns(
 		context.Background(), original, copyTable, changeColDefMap,
 	)
 	require.NoError(t, err)
 	require.Equal(t, map[uint64]string{1: "source"}, affected,
 		"a column converted to a stored generated value may become a new FK endpoint")
+}
+
+func TestAlterCopyAffectedForeignKeyColumnsIncludesDirectValueChanges(t *testing.T) {
+	tests := []struct {
+		name       string
+		sourceType planpb.Type
+		targetType planpb.Type
+		affected   bool
+	}{
+		{
+			name:       "decimal scale change",
+			sourceType: planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 1},
+			targetType: planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 0},
+			affected:   true,
+		},
+		{
+			name:       "varchar capacity widening",
+			sourceType: planpb.Type{Id: int32(types.T_varchar), Width: 10, Charset: uint32(types.CharsetUTF8)},
+			targetType: planpb.Type{Id: int32(types.T_varchar), Width: 20, Charset: uint32(types.CharsetUTF8)},
+		},
+		{
+			name:       "varbinary capacity widening",
+			sourceType: planpb.Type{Id: int32(types.T_varbinary), Width: 10, Charset: uint32(types.CharsetBinary)},
+			targetType: planpb.Type{Id: int32(types.T_varbinary), Width: 20, Charset: uint32(types.CharsetBinary)},
+		},
+		{
+			name:       "decimal precision widening",
+			sourceType: planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 1},
+			targetType: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 1},
+		},
+		{
+			name:       "charset change",
+			sourceType: planpb.Type{Id: int32(types.T_varchar), Width: 10, Charset: uint32(types.CharsetUTF8)},
+			targetType: planpb.Type{Id: int32(types.T_varchar), Width: 10, Charset: uint32(types.CharsetUTF8MB4Bin)},
+			affected:   true,
+		},
+		{
+			name:       "fixed width padding change",
+			sourceType: planpb.Type{Id: int32(types.T_binary), Width: 10, Charset: uint32(types.CharsetBinary)},
+			targetType: planpb.Type{Id: int32(types.T_binary), Width: 20, Charset: uint32(types.CharsetBinary)},
+			affected:   true,
+		},
+		{
+			name:       "char capacity widening",
+			sourceType: planpb.Type{Id: int32(types.T_char), Width: 10, Charset: uint32(types.CharsetUTF8)},
+			targetType: planpb.Type{Id: int32(types.T_char), Width: 20, Charset: uint32(types.CharsetUTF8)},
+		},
+		{
+			name:       "bit width change",
+			sourceType: planpb.Type{Id: int32(types.T_bit), Width: 1},
+			targetType: planpb.Type{Id: int32(types.T_bit), Width: 8},
+			affected:   true,
+		},
+		{
+			name:       "legacy unknown width widening",
+			sourceType: planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)},
+			targetType: planpb.Type{Id: int32(types.T_varchar), Width: 20, Charset: uint32(types.CharsetUTF8)},
+			affected:   true,
+		},
+		{
+			name:       "table provenance metadata only",
+			sourceType: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "source_table"},
+			targetType: planpb.Type{Id: int32(types.T_int32), Width: 32},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			original := &planpb.TableDef{
+				Cols: []*planpb.ColDef{{ColId: 1, Name: "source", Typ: tc.sourceType}},
+			}
+			copyTable := &planpb.TableDef{
+				Cols: []*planpb.ColDef{{ColId: 1, Name: "source", Typ: tc.targetType}},
+			}
+			affected, err := AlterCopyAffectedForeignKeyColumns(
+				context.Background(), original, copyTable,
+				map[uint64]*planpb.ColDef{1: {Name: "source"}},
+			)
+			require.NoError(t, err)
+			if tc.affected {
+				require.Equal(t, map[uint64]string{1: "source"}, affected)
+			} else {
+				require.Empty(t, affected)
+			}
+		})
+	}
+}
+
+func TestAlterCopyAffectedForeignKeyColumnsDoesNotSkipDirectOnlyTables(t *testing.T) {
+	original := &planpb.TableDef{
+		Cols: []*planpb.ColDef{{ColId: 1, Name: "source", Typ: planpb.Type{
+			Id: int32(types.T_decimal64), Width: 10, Scale: 1,
+		}}},
+	}
+	copyTable := &planpb.TableDef{
+		Cols: []*planpb.ColDef{{ColId: 1, Name: "source", Typ: planpb.Type{
+			Id: int32(types.T_decimal64), Width: 10, Scale: 0,
+		}}},
+	}
+	affected, err := AlterCopyAffectedForeignKeyColumns(
+		context.Background(), original, copyTable,
+		map[uint64]*planpb.ColDef{1: {Name: "source"}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{1: "source"}, affected)
 }
 
 func TestAlterForeignKeyValidationResolvesSelfReferencesLocally(t *testing.T) {
@@ -358,6 +464,119 @@ func TestAlterForeignKeyValidationResolvesExternalReferences(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAlterForeignKeyValidationRejectsScaleChangesOnEveryEndpoint(t *testing.T) {
+	decimal := func(scale int32) planpb.Type {
+		return planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: scale}
+	}
+
+	t.Run("outgoing composite child endpoint", func(t *testing.T) {
+		ctx := &alterForeignKeyResolveTestContext{
+			CompilerContext: NewMockCompilerContext(false),
+			tables: map[uint64]*TableDef{
+				200: {Cols: []*planpb.ColDef{
+					{ColId: 10, Name: "parent_a", Typ: decimal(1)},
+					{ColId: 11, Name: "parent_b", Typ: decimal(1)},
+				}},
+			},
+		}
+		child := &planpb.TableDef{
+			TblId: 100,
+			Cols: []*planpb.ColDef{
+				{ColId: 1, Name: "child_a", Typ: decimal(1)},
+				{ColId: 2, Name: "child_b", Typ: decimal(1)},
+			},
+			Fkeys: []*planpb.ForeignKeyDef{{
+				Name: "fk_composite_scale", Cols: []uint64{1, 2}, ForeignTbl: 200,
+				ForeignCols: []uint64{10, 11},
+			}},
+		}
+		err := checkColumnForeignkeyConstraint(ctx, child, child.Cols[1], &planpb.ColDef{
+			ColId: 2, Name: "child_b", Typ: decimal(0),
+		})
+		require.ErrorContains(t, err, "fk_composite_scale")
+		require.ErrorContains(t, err, "child_b")
+	})
+
+	t.Run("outgoing varchar capacity widening remains legal", func(t *testing.T) {
+		ctx := &alterForeignKeyResolveTestContext{
+			CompilerContext: NewMockCompilerContext(false),
+			tables: map[uint64]*TableDef{
+				200: {Cols: []*planpb.ColDef{{
+					ColId: 10, Name: "parent_key", Typ: planpb.Type{
+						Id: int32(types.T_varchar), Width: 10, Charset: uint32(types.CharsetUTF8),
+					},
+				}}},
+			},
+		}
+		child := &planpb.TableDef{
+			TblId: 100,
+			Cols: []*planpb.ColDef{{
+				ColId: 1, Name: "child_key", Typ: planpb.Type{
+					Id: int32(types.T_varchar), Width: 10, Charset: uint32(types.CharsetUTF8),
+				},
+			}},
+			Fkeys: []*planpb.ForeignKeyDef{{
+				Name: "fk_varchar_widen", Cols: []uint64{1}, ForeignTbl: 200,
+				ForeignCols: []uint64{10},
+			}},
+		}
+		err := checkColumnForeignkeyConstraint(ctx, child, child.Cols[0], &planpb.ColDef{
+			ColId: 1, Name: "child_key", Typ: planpb.Type{
+				Id: int32(types.T_varchar), Width: 20, Charset: uint32(types.CharsetUTF8),
+			},
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("incoming parent endpoint", func(t *testing.T) {
+		ctx := &alterForeignKeyResolveTestContext{
+			CompilerContext: NewMockCompilerContext(false),
+			tables: map[uint64]*TableDef{
+				200: {
+					Fkeys: []*planpb.ForeignKeyDef{{
+						Name: "fk_incoming_scale", Cols: []uint64{20, 21}, ForeignTbl: 100,
+						ForeignCols: []uint64{1, 2},
+					}},
+				},
+			},
+		}
+		parent := &planpb.TableDef{
+			TblId: 100, DbName: "db", Name: "scale_parent",
+			Cols: []*planpb.ColDef{
+				{ColId: 1, Name: "parent_a", Typ: decimal(1)},
+				{ColId: 2, Name: "parent_b", Typ: decimal(1)},
+			},
+			RefChildTbls: []uint64{200},
+		}
+		err := checkColumnForeignkeyConstraint(ctx, parent, parent.Cols[0], &planpb.ColDef{
+			ColId: 1, Name: "parent_a", Typ: decimal(0),
+		})
+		require.ErrorContains(t, err, "fk_incoming_scale")
+	})
+
+	for _, selfMarker := range []uint64{0, 100} {
+		t.Run(fmt.Sprintf("self endpoint marker %d", selfMarker), func(t *testing.T) {
+			table := &planpb.TableDef{
+				TblId: 100, DbName: "db", Name: "scale_self",
+				Cols: []*planpb.ColDef{
+					{ColId: 1, Name: "parent_a", Typ: decimal(1)},
+					{ColId: 2, Name: "child_a", Typ: decimal(1)},
+				},
+				Fkeys: []*planpb.ForeignKeyDef{{
+					Name: "fk_self_scale", Cols: []uint64{2}, ForeignTbl: selfMarker,
+					ForeignCols: []uint64{1},
+				}},
+				RefChildTbls: []uint64{selfMarker},
+			}
+			ctx := NewMockCompilerContext(false)
+			err := checkColumnForeignkeyConstraint(ctx, table, table.Cols[0], &planpb.ColDef{
+				ColId: 1, Name: "parent_a", Typ: decimal(0),
+			})
+			require.ErrorContains(t, err, "fk_self_scale")
+		})
 	}
 }
 

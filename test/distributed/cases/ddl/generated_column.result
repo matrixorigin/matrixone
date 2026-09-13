@@ -593,6 +593,91 @@ select count(*) as preserved_links from t52_expr_fk_self_child c join t52_expr_f
 ➤ preserved_links[-5,64,0]  𝄀
 1
 set foreign_key_checks = 1;
+create table t53_direct_fk_parent (
+id int primary key,
+a decimal(10,1),
+b int,
+payload int,
+g int generated always as (a * 10) stored,
+unique key uk_ab(a, b),
+unique key uk_g(g)
+);
+create table t53_direct_fk_child (
+id int primary key,
+pa decimal(10,1),
+pb int,
+pg int,
+constraint fk_t53_parent_ab foreign key (pa, pb) references t53_direct_fk_parent(a, b),
+constraint fk_t53_parent_g foreign key (pg) references t53_direct_fk_parent(g)
+);
+insert into t53_direct_fk_parent (id, a, b, payload) values (1, 1.1, 7, 9);
+insert into t53_direct_fk_child values (1, 1.1, 7, 11);
+alter table t53_direct_fk_parent modify column a decimal(10,0);
+-- @regex("Cannot change column 'a'.*fk_t53_parent_ab", true)
+Cannot change column 'a': used in a foreign key constraint 'fk_t53_parent_ab' of table 'test_generated_col.t53_direct_fk_child'
+select p.a, p.b, p.g, c.pa, c.pb, c.pg
+from t53_direct_fk_parent p join t53_direct_fk_child c on p.a = c.pa and p.b = c.pb and p.g = c.pg
+where p.id = 1 and c.id = 1;
+➤ a[3,10,1]  ¦  b[4,32,0]  ¦  g[4,32,0]  ¦  pa[3,10,1]  ¦  pb[4,32,0]  ¦  pg[4,32,0]  𝄀
+1.1  ¦  7  ¦  11  ¦  1.1  ¦  7  ¦  11
+alter table t53_direct_fk_parent modify column payload bigint;
+select p.a, p.b, p.g, c.pa, c.pb, c.pg
+from t53_direct_fk_parent p join t53_direct_fk_child c on p.a = c.pa and p.b = c.pb and p.g = c.pg
+where p.id = 1 and c.id = 1;
+➤ a[3,10,1]  ¦  b[4,32,0]  ¦  g[4,32,0]  ¦  pa[3,10,1]  ¦  pb[4,32,0]  ¦  pg[4,32,0]  𝄀
+1.1  ¦  7  ¦  11  ¦  1.1  ¦  7  ¦  11
+create table t54_direct_fk_child_parent (
+k decimal(10,1) primary key
+);
+create table t54_direct_fk_child (
+id int primary key,
+pa decimal(10,1),
+g int generated always as (pa * 10) stored,
+constraint fk_t54_parent_key foreign key (pa) references t54_direct_fk_child_parent(k)
+);
+insert into t54_direct_fk_child_parent values (1.1);
+insert into t54_direct_fk_child (id, pa) values (1, 1.1);
+alter table t54_direct_fk_child modify column pa decimal(10,0);
+-- @regex("Cannot change column 'pa'.*fk_t54_parent_key", true)
+Cannot change column 'pa': used in a foreign key constraint 'fk_t54_parent_key'
+select c.pa, c.g, p.k
+from t54_direct_fk_child c join t54_direct_fk_child_parent p on c.pa = p.k
+where c.id = 1;
+➤ pa[3,10,1]  ¦  g[4,32,0]  ¦  k[3,10,1]  𝄀
+1.1  ¦  11  ¦  1.1
+create table t55_direct_fk_self (
+id int primary key,
+a decimal(10,1),
+parent_a decimal(10,1),
+unique key uk_a(a),
+constraint fk_t55_self_a foreign key (parent_a) references t55_direct_fk_self(a)
+);
+insert into t55_direct_fk_self (id, a, parent_a) values (1, 1.1, 1.1);
+alter table t55_direct_fk_self modify column a decimal(10,0);
+-- @regex("Cannot change column 'a'.*fk_t55_self_a", true)
+Cannot change column 'a': used in a foreign key constraint 'fk_t55_self_a' of table 'test_generated_col.t55_direct_fk_self_copy_01a09c16-86c8-7aed-8358-9aea688892d5'
+alter table t55_direct_fk_self modify column parent_a decimal(10,0);
+-- @regex("Cannot change column 'parent_a'.*fk_t55_self_a", true)
+Cannot change column 'parent_a': used in a foreign key constraint 'fk_t55_self_a'
+select id, a, parent_a from t55_direct_fk_self order by id;
+➤ id[4,32,0]  ¦  a[3,10,1]  ¦  parent_a[3,10,1]  𝄀
+1  ¦  1.1  ¦  1.1
+create table t56_char_fk_parent (
+k char(10) primary key
+);
+create table t56_char_fk_child (
+id int primary key,
+k char(10),
+constraint fk_t56_char_key foreign key (k) references t56_char_fk_parent(k)
+);
+insert into t56_char_fk_parent values ('edge');
+insert into t56_char_fk_child values (1, 'edge');
+alter table t56_char_fk_child modify column k char(20);
+select hex(c.k), length(c.k), char_length(c.k)
+from t56_char_fk_child c join t56_char_fk_parent p on c.k = p.k
+where c.id = 1;
+➤ hex(c.k)[12,160,0]  ¦  length(c.k)[-5,64,0]  ¦  char_length(c.k)[-5,64,0]  𝄀
+65646765  ¦  4  ¦  4
 create table t39_vpk (a int, b int generated always as (a+1) virtual, primary key(b));
 not supported: defining a virtual generated column 'b' as primary key
 create table t40_qualname (a int, b int generated always as (t40_qualname.a + 1) stored);
