@@ -96,4 +96,43 @@ from t_bitwise_binary
 where id in (1, 2, 3)
 order by id;
 
+-- BIT numeric operators use MySQL's full BIGINT UNSIGNED domain. In
+-- particular, unary complement is not masked to BIT(M)'s declared width.
+drop table if exists t_bit_numeric;
+create table t_bit_numeric (
+  id int primary key,
+  b1 bit(1),
+  b8 bit(8),
+  b64 bit(64)
+);
+
+insert into t_bit_numeric values
+  (1, b'0', b'00000000', b'0000000000000000000000000000000000000000000000000000000000000000'),
+  (2, b'1', b'10000000', b'1000000000000000000000000000000000000000000000000000000000000000'),
+  (3, b'1', b'11111111', b'1111111111111111111111111111111111111111111111111111111111111111'),
+  (4, null, null, null);
+
+select id,
+       hex(~b1) as bit1_not,
+       hex(~b8) as bit8_not,
+       hex(~b64) as bit64_not,
+       b1 div 1 as bit1_div_1,
+       b8 div 1 as bit8_div_1,
+       b64 div 1 as bit64_div_1
+from t_bit_numeric
+order by id;
+
+select id, b64 div b64 as bit64_self_div
+from t_bit_numeric
+where id in (2, 3)
+order by id;
+
+create table t_bit_div_meta as
+select b64 div 1 as quotient from t_bit_numeric limit 0;
+select column_name, column_type
+from information_schema.columns
+where table_schema = database() and table_name = 't_bit_div_meta';
+drop table t_bit_div_meta;
+drop table t_bit_numeric;
+
 drop database mysql_compat_bitwise_expr;
