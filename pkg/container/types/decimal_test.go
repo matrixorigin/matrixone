@@ -90,6 +90,71 @@ func TestParse256(t *testing.T) {
 	}
 }
 
+func TestDecimal256ModScaleAlignmentOverflow(t *testing.T) {
+	maxCoefficient := new(big.Int).Sub(
+		new(big.Int).Exp(big.NewInt(10), big.NewInt(65), nil), big.NewInt(1))
+	maximum, err := ParseDecimal256(maxCoefficient.String(), 65, 0)
+	require.NoError(t, err)
+	seven := Decimal256FromInt64(7)
+
+	for _, scaleDiff := range []int32{11, 12, 30, 65} {
+		t.Run(fmt.Sprintf("scale_diff_%d", scaleDiff), func(t *testing.T) {
+			factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDiff)), nil)
+			wantMagnitude := new(big.Int).Mul(maxCoefficient, factor)
+			wantMagnitude.Mod(wantMagnitude, big.NewInt(7))
+
+			for _, signDividend := range []bool{false, true} {
+				for _, signDivisor := range []bool{false, true} {
+					dividend, divisor := maximum, seven
+					if signDividend {
+						dividend = dividend.Minus()
+					}
+					if signDivisor {
+						divisor = divisor.Minus()
+					}
+					got, resultScale, err := dividend.Mod(divisor, 0, scaleDiff)
+					require.NoError(t, err)
+					require.Equal(t, scaleDiff, resultScale)
+
+					want := new(big.Int).Set(wantMagnitude)
+					if signDividend {
+						want.Neg(want)
+					}
+					wantDecimal := Decimal256FromInt64(want.Int64())
+					require.Equal(t, wantDecimal, got)
+				}
+			}
+		})
+	}
+
+	// Scaling the divisor overflows, but it is mathematically larger than the
+	// small dividend, so the remainder remains the dividend at the common scale.
+	for _, signDividend := range []bool{false, true} {
+		for _, signDivisor := range []bool{false, true} {
+			dividend, divisor := seven, maximum
+			if signDividend {
+				dividend = dividend.Minus()
+			}
+			if signDivisor {
+				divisor = divisor.Minus()
+			}
+			got, resultScale, err := dividend.Mod(divisor, 30, 0)
+			require.NoError(t, err)
+			require.Equal(t, int32(30), resultScale)
+			want := int64(7)
+			if signDividend {
+				want = -want
+			}
+			require.Equal(t, Decimal256FromInt64(want), got)
+		}
+	}
+
+	minimum := Decimal256{B192_255: uint64(1) << 63}
+	got, _, err := minimum.Mod(seven, 77, 0)
+	require.NoError(t, err)
+	require.Equal(t, minimum, got)
+}
+
 func TestParse256LargePositiveExponentReturnsErrorWithoutPanic(t *testing.T) {
 	var err error
 	require.NotPanics(t, func() {

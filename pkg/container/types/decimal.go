@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/big"
 	"math/bits"
 	"strconv"
 
@@ -795,6 +796,65 @@ func (x Decimal256) Div(y Decimal256, scale1, scale2 int32) (z Decimal256, scale
 	return
 }
 
+func decimal256MagnitudeBigInt(x Decimal256) *big.Int {
+	if x.Sign() {
+		x = x.Minus()
+	}
+	value := new(big.Int).SetUint64(x.B192_255)
+	value.Lsh(value, 64)
+	value.Or(value, new(big.Int).SetUint64(x.B128_191))
+	value.Lsh(value, 64)
+	value.Or(value, new(big.Int).SetUint64(x.B64_127))
+	value.Lsh(value, 64)
+	value.Or(value, new(big.Int).SetUint64(x.B0_63))
+	return value
+}
+
+func decimal256FromMagnitudeBigInt(value *big.Int) Decimal256 {
+	var encoded [32]byte
+	value.FillBytes(encoded[:])
+	return Decimal256{
+		B192_255: binary.BigEndian.Uint64(encoded[0:8]),
+		B128_191: binary.BigEndian.Uint64(encoded[8:16]),
+		B64_127:  binary.BigEndian.Uint64(encoded[16:24]),
+		B0_63:    binary.BigEndian.Uint64(encoded[24:32]),
+	}
+}
+
+// decimal256ModScaleUp computes (x*10^scaleDiff)%y without materializing an
+// overflowing scaled coefficient. This is only used after Decimal256.Scale
+// rejects the normal, allocation-free path; the modular exponent keeps memory
+// bounded even when a caller supplies a large scale difference.
+func decimal256ModScaleUp(x, y Decimal256, scaleDiff int32) (Decimal256, error) {
+	modulus := decimal256MagnitudeBigInt(y)
+	if modulus.Sign() == 0 {
+		return Decimal256{}, moerr.NewDivByZeroNoCtx()
+	}
+	power := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDiff)), modulus)
+	value := decimal256MagnitudeBigInt(x)
+	value.Mul(value, power)
+	value.Mod(value, modulus)
+	return decimal256FromMagnitudeBigInt(value), nil
+}
+
+// decimal256ModByScaledDivisor computes x%(y*10^scaleDiff) after scaling y
+// overflows. For scaleDiff>=77, 10^scaleDiff is already greater than the
+// largest unsigned Decimal256 magnitude, so the positive remainder is x.
+func decimal256ModByScaledDivisor(x, y Decimal256, scaleDiff int32) (Decimal256, error) {
+	divisor := decimal256MagnitudeBigInt(y)
+	if divisor.Sign() == 0 {
+		return Decimal256{}, moerr.NewDivByZeroNoCtx()
+	}
+	if scaleDiff >= 77 {
+		return x, nil
+	}
+	power := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDiff)), nil)
+	divisor.Mul(divisor, power)
+	value := decimal256MagnitudeBigInt(x)
+	value.Mod(value, divisor)
+	return decimal256FromMagnitudeBigInt(value), nil
+}
+
 func (x Decimal256) Mod(y Decimal256, scale1, scale2 int32) (z Decimal256, scale int32, err error) {
 	signx := x.Sign()
 	x1 := x
@@ -808,16 +868,26 @@ func (x Decimal256) Mod(y Decimal256, scale1, scale2 int32) (z Decimal256, scale
 	}
 	if scale1 > scale2 {
 		scale = scale1
-		y1, err = y1.Scale(scale - scale2)
-	} else {
+		scaleDiff := scale - scale2
+		y1, err = y1.Scale(scaleDiff)
+		if err != nil {
+			z, err = decimal256ModByScaledDivisor(x1, y1, scaleDiff)
+		} else {
+			z, err = x1.Mod256(y1)
+		}
+	} else if scale1 < scale2 {
 		scale = scale2
-		x1, err = x1.Scale(scale - scale1)
+		scaleDiff := scale - scale1
+		x1, err = x1.Scale(scaleDiff)
+		if err != nil {
+			z, err = decimal256ModScaleUp(x1, y1, scaleDiff)
+		} else {
+			z, err = x1.Mod256(y1)
+		}
+	} else {
+		scale = scale1
+		z, err = x1.Mod256(y1)
 	}
-	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal256 Mod overflow: %s%%%s", x.Format(scale1), y.Format(scale2))
-		return
-	}
-	z, err = x1.Mod256(y1)
 	if err != nil {
 		err = moerr.NewInvalidInputNoCtxf("Decimal256 Mod overflow: %s%%%s", x.Format(scale1), y.Format(scale2))
 		return
