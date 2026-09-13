@@ -11,23 +11,23 @@ select st_area(st_symdifference(st_geomfromtext('POLYGON((0 0, 4 0, 4 4, 0 4, 0 
 xor_area
 24.0
 select st_geometrytype(xor_g) as xor_type,
-       st_numgeometries(xor_g) as component_count,
-       st_area(xor_g) as xor_area,
-       st_isvalid(st_geometryn(xor_g, 1)) as first_component_valid,
-       st_isvalid(st_geometryn(xor_g, 2)) as second_component_valid
+st_numgeometries(xor_g) as component_count,
+st_area(xor_g) as xor_area,
+st_isvalid(st_geometryn(xor_g, 1)) as first_component_valid,
+st_isvalid(st_geometryn(xor_g, 2)) as second_component_valid
 from (select st_symdifference(
-        st_geomfromtext('POLYGON((0 0,4 0,4 2,0 2,0 0))'),
-        st_geomfromtext('POLYGON((-2 1,1 1,1 2,-2 2,-2 1))')) as xor_g) xor_case;
+st_geomfromtext('POLYGON((0 0,4 0,4 2,0 2,0 0))'),
+st_geomfromtext('POLYGON((-2 1,1 1,1 2,-2 2,-2 1))')) as xor_g) xor_case;
 xor_type    component_count    xor_area    first_component_valid    second_component_valid
 MULTIPOLYGON    2    9.0    1    1
 select st_geometrytype(xor_g) as xor_type,
-       st_numgeometries(xor_g) as component_count,
-       st_area(xor_g) as xor_area,
-       st_isvalid(st_geometryn(xor_g, 1)) as first_component_valid,
-       st_isvalid(st_geometryn(xor_g, 2)) as second_component_valid
+st_numgeometries(xor_g) as component_count,
+st_area(xor_g) as xor_area,
+st_isvalid(st_geometryn(xor_g, 1)) as first_component_valid,
+st_isvalid(st_geometryn(xor_g, 2)) as second_component_valid
 from (select st_symdifference(
-        st_geomfromtext('POLYGON((-2 1,1 1,1 2,-2 2,-2 1))'),
-        st_geomfromtext('POLYGON((0 0,4 0,4 2,0 2,0 0))')) as xor_g) xor_case;
+st_geomfromtext('POLYGON((-2 1,1 1,1 2,-2 2,-2 1))'),
+st_geomfromtext('POLYGON((0 0,4 0,4 2,0 2,0 0))')) as xor_g) xor_case;
 xor_type    component_count    xor_area    first_component_valid    second_component_valid
 MULTIPOLYGON    2    9.0    1    1
 select st_area(st_intersection(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), st_geomfromtext('POLYGON((5 5,6 5,6 6,5 6,5 5))'))) as disjoint_inter;
