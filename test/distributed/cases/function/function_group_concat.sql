@@ -26,7 +26,6 @@ INSERT INTO group_concat_01 VALUES (3,9,'D','c');
 
 -- Test of MO simple request
 SELECT grp,group_concat(c) FROM group_concat_01 GROUP BY grp;
-SELECT grp,group_concat(c) FROM group_concat_01 GROUP BY grp;
 SELECT grp,group_concat(a,c) FROM group_concat_01 GROUP BY grp;
 SELECT grp,group_concat("(",a,":",c,")") FROM group_concat_01 GROUP BY grp;
 SELECT grp,group_concat(NULL) FROM group_concat_01 GROUP BY grp;
