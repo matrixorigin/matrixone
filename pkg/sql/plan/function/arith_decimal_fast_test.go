@@ -15,10 +15,12 @@
 package function
 
 import (
+	"math/big"
 	"math/bits"
 	"math/rand"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -2934,6 +2936,32 @@ func TestD256Mod_LargeValues(t *testing.T) {
 	}
 }
 
+func TestD256ModScaleAlignmentOverflow(t *testing.T) {
+	maxCoefficient := new(big.Int).Sub(
+		new(big.Int).Exp(big.NewInt(10), big.NewInt(65), nil), big.NewInt(1))
+	maximum, err := types.ParseDecimal256(maxCoefficient.String(), 65, 0)
+	require.NoError(t, err)
+	seven := types.Decimal256FromInt64(7)
+	negativeSeven := seven.Minus()
+	values := []types.Decimal256{maximum, maximum.Minus(), maximum, maximum.Minus()}
+	divisors := []types.Decimal256{seven, seven, negativeSeven, negativeSeven}
+	results := make([]types.Decimal256, len(values))
+	require.NoError(t, d256Mod(values, divisors, results, 0, 30, nulls.NewWithSize(len(values)), true))
+	for i, want := range []int64{4, -4, 4, -4} {
+		require.Equal(t, types.Decimal256FromInt64(want), results[i], "scale-up remainder[%d]", i)
+	}
+
+	// The reverse alignment overflows while scaling the divisor; the divisor
+	// is nevertheless larger than the dividend at the common scale.
+	values = []types.Decimal256{seven, negativeSeven, seven, negativeSeven}
+	divisors = []types.Decimal256{maximum, maximum, maximum.Minus(), maximum.Minus()}
+	results = make([]types.Decimal256, len(values))
+	require.NoError(t, d256Mod(values, divisors, results, 30, 0, nulls.NewWithSize(len(values)), true))
+	for i, want := range []int64{7, -7, 7, -7} {
+		require.Equal(t, types.Decimal256FromInt64(want), results[i], "scale-down remainder[%d]", i)
+	}
+}
+
 // TestD256Div_LargeValues tests D256 Div with values outside D128 range (generic slow path).
 func BenchmarkD256Add_Fast(b *testing.B) {
 	rng := rand.New(rand.NewSource(42))
@@ -3590,6 +3618,67 @@ func TestD256IntDiv(t *testing.T) {
 			require.Equal(t, want, rs[i], "d256IntDiv large[%d]", i)
 		}
 	})
+}
+
+func TestD256IntDivScaleAlignmentOverflow(t *testing.T) {
+	maxCoefficient := new(big.Int).Sub(
+		new(big.Int).Exp(big.NewInt(10), big.NewInt(65), nil), big.NewInt(1))
+	maximum, err := types.ParseDecimal256(maxCoefficient.String(), 65, 0)
+	require.NoError(t, err)
+	seven := types.Decimal256FromInt64(7)
+
+	// 7e-30 divided by a 65-digit integer is a representable zero even though
+	// expanding the divisor by 10^30 cannot fit in Decimal256.
+	zeroResults := make([]int64, 4)
+	zeroInputs := []types.Decimal256{seven, seven.Minus(), seven, seven.Minus()}
+	zeroDivisors := []types.Decimal256{maximum, maximum, maximum.Minus(), maximum.Minus()}
+	require.NoError(t, d256IntDiv(
+		zeroInputs, zeroDivisors, zeroResults, 30, 0, nulls.NewWithSize(4), true))
+	require.Equal(t, []int64{0, 0, 0, 0}, zeroResults)
+
+	// This distinguishes truncation from the rounded Scale operation:
+	// floor((10^60-1)/10^30)/(5*10^29) is 1, whereas rounding first yields 2.
+	truncateNumeratorCoefficient := new(big.Int).Sub(
+		new(big.Int).Exp(big.NewInt(10), big.NewInt(60), nil), big.NewInt(1))
+	truncateNumerator, err := types.ParseDecimal256(truncateNumeratorCoefficient.String(), 65, 0)
+	require.NoError(t, err)
+	truncateDivisorCoefficient := new(big.Int).Mul(big.NewInt(5), new(big.Int).Exp(big.NewInt(10), big.NewInt(29), nil))
+	truncateDivisor, err := types.ParseDecimal256(truncateDivisorCoefficient.String(), 65, 0)
+	require.NoError(t, err)
+	truncateResults := make([]int64, 2)
+	require.NoError(t, d256IntDiv(
+		[]types.Decimal256{truncateNumerator, truncateNumerator.Minus()},
+		[]types.Decimal256{truncateDivisor, truncateDivisor},
+		truncateResults, 30, 0, nulls.NewWithSize(2), true))
+	require.Equal(t, []int64{1, -1}, truncateResults)
+
+	// The positive scale adjustment can also overflow the numerator while the
+	// quotient remains representable; preserve the exact quotient and sign.
+	positiveResults := make([]int64, 4)
+	positiveNumerators := []types.Decimal256{maximum, maximum.Minus(), maximum, maximum.Minus()}
+	positiveDivisors := []types.Decimal256{maximum, maximum, maximum.Minus(), maximum.Minus()}
+	require.NoError(t, d256IntDiv(
+		positiveNumerators, positiveDivisors, positiveResults, 0, 12, nulls.NewWithSize(4), true))
+	require.Equal(t, []int64{1_000_000_000_000, -1_000_000_000_000, -1_000_000_000_000, 1_000_000_000_000}, positiveResults)
+
+	// Preserve the null-row short circuit before division-by-zero handling.
+	nullResults := make([]int64, 2)
+	nullsWithZero := nulls.NewWithSize(2)
+	nullsWithZero.Add(1)
+	require.NoError(t, d256IntDiv(
+		[]types.Decimal256{maximum, seven},
+		[]types.Decimal256{maximum, {}},
+		nullResults, 0, 12, nullsWithZero, true))
+	require.Equal(t, int64(1_000_000_000_000), nullResults[0])
+	require.True(t, nullsWithZero.Contains(1))
+
+	// A genuinely out-of-range BIGINT quotient remains an error.
+	err = d256IntDiv(
+		[]types.Decimal256{maximum},
+		[]types.Decimal256{seven},
+		make([]int64, 1), 0, 12, nulls.NewWithSize(1), true)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange))
 }
 
 // ---- D256 Diff-Scale Add/Sub correctness tests ----
