@@ -32,8 +32,11 @@ reusable `matrixorigin/CI` 虽提供四个静态 shard，但使用它们会增�
 job 评估的跨阶段候选：HNSW 仍先独占；随后 light 使用至多两个 package worker，并与
 `pkg/tests/issues` 的独占 package 阶段重叠；两边各自结束后才进入 embedded。报告私有化、
 合并、失败传播和 TERM 取消已有 scheduler contract tests。它保持 runner 数为一，但总进程
-并发提高、light 的 package 并行度降低；真实 wall-time 和合并内存峰值仍需在同一
-`8c/16GiB` runner 上测量，不能从串行两阶段时间直接推断净收益。
+并发提高、light 的 package 并行度降低。已观察到的 light 21m24s、issues 21m42s 给出的
+阶段间隔消除上限只是 `min(21m24s, 21m42s)=21m24s`；该算术上限没有计入 light 降为两个
+worker及资源争用，实际收益可能显著更低甚至为负。原现场峰值已接近 runner 的 16-GiB
+预算，而 70m run 不完整，因此既未证明并发安全，也未证明端到端 CI 节省。真实 wall-time
+和合并内存峰值仍需在同一 `8c/16GiB` runner 上测量。
 
 慢 case 排名也没有给出任意缩小数据或再合并 fixture 的证据：`pkg/tests/issues` 已共享
 canonical fixture；Arrow LOAD fanout 已是略高于 1 MiB 产品阈值的最小输入；长耗时
