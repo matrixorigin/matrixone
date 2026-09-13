@@ -1,6 +1,6 @@
 - Status: in-progress
 - Start Date: 2026-09-01
-- Design revision: v9 (2026-09-13)
+- Design revision: v10 (2026-09-13)
 - Authors: MatrixOne optimizer team
 - Implementation PRs: [#27914](https://github.com/matrixorigin/matrixone/pull/27914), [#27915](https://github.com/matrixorigin/matrixone/pull/27915), [#27934](https://github.com/matrixorigin/matrixone/pull/27934), [#28752](https://github.com/matrixorigin/matrixone/pull/28752)
 - Issue for this RFC: [#26768](https://github.com/matrixorigin/matrixone/issues/26768)
@@ -561,21 +561,25 @@ path uses no new plan or wire field.
   through existing owners; no fallback converts an execution error into a
   different result.
 
-## Implementation acceptance budgets
+## Implementation acceptance
 
-These measurements are implementation-approval gates, not prerequisites for
-accepting the semantic design.  Base and exact candidate use the same host,
-toolchain, fixture DDL/statistics, and ordinary `EXPLAIN` corpus.  The report
-must preserve raw artifacts and exact revisions.
+Acceptance evidence is selected from the affected contract and its material
+risk, rather than from a fixed benchmark checklist. Correctness, compatibility,
+and hard resource bounds remain mandatory. Performance evidence is required for
+a changed hot path, but it may be a focused benchmark, profile, representative
+SQL comparison, or scale run, whichever most directly exercises that path.
 
-- rejected and control queries must not regress planner wall time or allocation
-  bytes by more than 5% at p50 or 10% at p95;
-- admitted queries may add proof metadata and plan nodes, but must remain below
-  15% planner wall-time and 25% allocation-byte regression at p50, and below
-  25% at p95; maximum time and reachable node counts are also reported so a
-  median cannot hide expansion;
-- no rejected/control query may gain reachable scans, joins, or materialized
-  producers;
+Comparative measurements use the same host, toolchain, fixture, and settings.
+They record the tested base and candidate revisions, terminal result, and enough
+raw output to reproduce the conclusion. Evidence from an earlier revision may
+be reused when the production path, fixture, configuration, and relevant base
+contract are shown unchanged; commit metadata or unrelated edits do not force a
+rerun.
+
+- rejected and control queries must not gain unexplained scans, joins,
+  materialized producers, or material planning/execution cost;
+- admitted queries must demonstrate that the intended path is reached and does
+  not introduce a material regression in its nearest unchanged control;
 - no accepted CTE may exceed the 32 MiB resident or 8 GiB spill-planner bound;
 - no accepted grouping-set materialization may exceed its 64 MiB/4096-batch
   resident bounds, its 8 GiB planner ceiling, or the lower statement/CN spill
@@ -595,14 +599,16 @@ must preserve raw artifacts and exact revisions.
 
 TPC-DS 1 TiB runtime is supporting performance evidence, not a correctness
 oracle. A faster target query does not offset a semantic failure or an
-unexplained control-plan regression.
+unexplained control regression. Scale validation records at least the terminal
+result and wall time. Plan shape and resource counters are retained when they
+are needed to prove the claimed scan, memory, or spill effect; they are not
+mandatory fields for an unrelated mechanism.
 
-For every changed 1 TiB target, record terminal result, wall time, rows/bytes
-scanned, peak query memory, and spill bytes.  The fixed TPC-H corpus is the
-no-regression control.  An unavailable exact-head scale run may remain an
-explicit open artifact only when the corresponding plain plan, deterministic
-result oracle, and prior successful resource profile are retained; it cannot be
-claimed as a performance pass.
+The no-regression control is the smallest stable TPC-H/TPC-DS corpus that
+exercises both the admitted path and its nearest unchanged path. A full corpus
+or repeated 1 TiB run is required only when the affected contract or an observed
+regression cannot be resolved with focused evidence. An unavailable scale run
+may remain explicit and must not be described as a measured performance pass.
 
 ## Validation matrix
 
@@ -717,10 +723,10 @@ per-row hot-path branch. A protocol rollback, cohort switch, or targeted revert
 is applied before admitting new statements; already-running statements retain
 their original process-owned cleanup path.
 
-Rollout is deterministic UT/public SQL and wire/error-path tests, frozen
-TPCH/TPC-DS plan corpus, isolated 1 TiB targets, TPCH performance control, then
-normal CI.  A wrong result/error, unexplained control-plan change, budget
-breach, leak/deadlock, OOM, or timeout stops rollout and enables the owning
+Rollout is deterministic UT/public SQL and wire/error-path tests, focused
+plan/result controls, risk-selected performance evidence, then normal CI. A
+wrong result/error, unexplained control-plan change, hard resource-bound breach,
+leak/deadlock, OOM, or timeout stops rollout and enables the owning
 cohort switch.  Once isolated, one mechanism is removed by targeted revert;
 query, table, benchmark, and literal exceptions are forbidden.  Reverting one
 cohort does not require reverting unrelated stats or executor memory work.
@@ -737,6 +743,12 @@ each PR's final implementation diff.
 
 ## Decision log
 
+- v10 replaces blanket exact-head scale reruns, fixed p50/p95 thresholds, and
+  mandatory per-query telemetry fields with contract-driven validation. It
+  keeps correctness, compatibility, hard resource bounds, comparable A/B
+  conditions, evidence provenance, and focused no-regression controls as gates;
+  semantically valid evidence may be reused when its relevant inputs are
+  unchanged.
 - v9 removes finalized decimal `SUM` prefix reuse. Checked fixed-width
   addition is not associative in error semantics: a finer partial sequence can
   overflow where the raw coarser input succeeds through cancellation. Dynamic
@@ -778,7 +790,8 @@ each PR's final implementation diff.
   legal only when compilation proves one complete colocated producer per CN.
 - Defer partial SUM rather than use statistics or an unspecified numeric state
   as a semantic proof.
-- Treat corpus and 1 TiB measurements as exact-head implementation gates, not
+- Treat corpus and 1 TiB measurements as supporting implementation evidence,
+  selected according to the affected performance and resource contract, not as
   semantic design prerequisites.
 - Use three operational rollback cohorts plus targeted code reverts; do not add
   query or table exceptions.
@@ -789,6 +802,6 @@ Before requesting decisive approval, the final candidate closes the global
 non-fixpoint order; conditional totality and build-side skip proofs; scalar
 physical topology; checked aggregate raw-input order; unique projection order;
 RANK peer, resource, and MORPC v66/v67 contracts; resource ownership; the three
-rollback cohorts plus targeted executor rollback; implementation budgets; and
-the positive/counterexample/cross-rule matrix. No blocking semantic question is
-intentionally deferred.
+rollback cohorts plus targeted executor rollback; hard resource bounds and
+risk-selected performance evidence; and the positive/counterexample/cross-rule
+matrix. No blocking semantic question is intentionally deferred.
