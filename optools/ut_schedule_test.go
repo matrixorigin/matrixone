@@ -91,6 +91,7 @@ func TestResolveCgroupMemoryBoundary(t *testing.T) {
 		{"tight-leaf", "memory.max", "max", "17179869184", "4294967296", "leaf", "4294967296"},
 		{"equal-prefers-parent", "memory.max", "max", "8589934592", "8589934592", "parent", "8589934592"},
 		{"no-visible-finite-limit", "memory.max", "max", "max", "max", "leaf", "unknown"},
+		{"missing-visible-ancestor", "memory.max", "max", "", "8589934592", "leaf", "unknown"},
 		{"v1-unlimited-sentinel", "memory.limit_in_bytes", "9223372036854771712", "8589934592", "9223372036854771712", "parent", "8589934592"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -107,6 +108,9 @@ func TestResolveCgroupMemoryBoundary(t *testing.T) {
 				parent: tc.parentLimit,
 				leaf:   tc.leafLimit,
 			} {
+				if limit == "" {
+					continue
+				}
 				if err := os.WriteFile(filepath.Join(dir, tc.limitFile), []byte(limit+"\n"), 0644); err != nil {
 					t.Fatal(err)
 				}

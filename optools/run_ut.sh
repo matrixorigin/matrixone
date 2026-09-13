@@ -479,6 +479,7 @@ function resolve_cgroup_memory_boundary(){
     local best_value=0
     local candidate_limit=""
     local candidate_value=0
+    local hierarchy_complete=1
 
     CGROUP_MEMORY_PATH=${leaf_path}
     CGROUP_MEMORY_LIMIT="unknown"
@@ -508,7 +509,14 @@ function resolve_cgroup_memory_boundary(){
                         best_value=${candidate_value}
                     fi
                 fi
+            elif [[ "${limit_file}" == "memory.max" && "${candidate_limit}" == "max" ]] ||
+                [[ "${limit_file}" == "memory.limit_in_bytes" && "${candidate_limit}" == "-1" ]]; then
+                :
+            else
+                hierarchy_complete=0
             fi
+        elif [[ "${current_path}" != "${cgroup_root}" || -e "${current_path}/${limit_file}" ]]; then
+            hierarchy_complete=0
         fi
 
         if [[ "${current_path}" == "${cgroup_root}" ]]; then
@@ -520,7 +528,7 @@ function resolve_cgroup_memory_boundary(){
         fi
     done
 
-    if [[ -n "${best_limit}" ]]; then
+    if [[ "${hierarchy_complete}" == "1" && -n "${best_limit}" ]]; then
         CGROUP_MEMORY_PATH=${best_path}
         CGROUP_MEMORY_LIMIT=${best_limit}
     fi
@@ -551,9 +559,9 @@ function cgroup_memory_metrics(){
             if [[ -r "${CGROUP_MEMORY_PATH}/memory.peak" ]]; then
                 memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.peak")
             fi
-            printf 'current=%s peak=%s memory.max=%s memory.scope=%s' \
+            printf 'current=%s peak=%s memory.max=%s memory.leaf=%s memory.scope=%s' \
                 "${memory_current}" "${memory_peak}" \
-                "${CGROUP_MEMORY_LIMIT}" "${CGROUP_MEMORY_PATH}"
+                "${CGROUP_MEMORY_LIMIT}" "${cgroup_path}" "${CGROUP_MEMORY_PATH}"
             return 0
         fi
     fi
@@ -573,9 +581,9 @@ function cgroup_memory_metrics(){
         if [[ -r "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes" ]]; then
             memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes")
         fi
-        printf 'current=%s peak=%s memory.limit_in_bytes=%s memory.scope=%s' \
+        printf 'current=%s peak=%s memory.limit_in_bytes=%s memory.leaf=%s memory.scope=%s' \
             "${memory_current}" "${memory_peak}" \
-            "${CGROUP_MEMORY_LIMIT}" "${CGROUP_MEMORY_PATH}"
+            "${CGROUP_MEMORY_LIMIT}" "${cgroup_path}" "${CGROUP_MEMORY_PATH}"
     fi
 }
 
@@ -612,7 +620,7 @@ function report_cgroup_memory_usage(){
             else
                 events="unknown"
             fi
-            logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.max=${CGROUP_MEMORY_LIMIT} memory.scope=${CGROUP_MEMORY_PATH} events=${events}"
+            logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.max=${CGROUP_MEMORY_LIMIT} memory.leaf=${cgroup_path} memory.scope=${CGROUP_MEMORY_PATH} events=${events}"
             return 0
         fi
     fi
@@ -636,7 +644,7 @@ function report_cgroup_memory_usage(){
         if [[ -r "${CGROUP_MEMORY_PATH}/memory.failcnt" ]]; then
             failcnt=$(< "${CGROUP_MEMORY_PATH}/memory.failcnt")
         fi
-        logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.limit_in_bytes=${CGROUP_MEMORY_LIMIT} memory.scope=${CGROUP_MEMORY_PATH} failcnt=${failcnt}"
+        logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.limit_in_bytes=${CGROUP_MEMORY_LIMIT} memory.leaf=${cgroup_path} memory.scope=${CGROUP_MEMORY_PATH} failcnt=${failcnt}"
     fi
 }
 
