@@ -1,6 +1,6 @@
 - Status: in-progress
 - Start Date: 2026-09-01
-- Design revision: v8 (2026-09-12)
+- Design revision: v9 (2026-09-13)
 - Authors: MatrixOne optimizer team
 - Implementation PRs: [#27914](https://github.com/matrixorigin/matrixone/pull/27914), [#27915](https://github.com/matrixorigin/matrixone/pull/27915), [#27934](https://github.com/matrixorigin/matrixone/pull/27934), [#28752](https://github.com/matrixorigin/matrixone/pull/28752)
 - Issue for this RFC: [#26768](https://github.com/matrixorigin/matrixone/issues/26768)
@@ -22,8 +22,7 @@ rollback, and validation contracts for:
    LEFT/NULL-filter to ANTI, conservative ANTI cardinality, and exact
    preserved-side shuffle reuse; and
 4. bounded analytic execution: batched projection for unique residual-free
-   inner hash joins, exact decimal `SUM` prefix reuse for nested grouping sets,
-   and exact bounded per-partition `RANK` with boundary ties.
+   inner hash joins and exact bounded per-partition `RANK` with boundary ties.
 
 The implementation may use statistics to choose among plans already proved
 equivalent. Statistics, benchmark query identity, table names, scale factors,
@@ -57,7 +56,6 @@ In scope:
 - guarded LEFT-join association and LEFT-to-ANTI conversion;
 - conservative ANTI cardinality and exact shuffle-lineage reuse;
 - batching output projection for unique residual-free INNER hash joins;
-- reusing finalized exact decimal `SUM` values along strict grouping prefixes;
 - bounded per-partition `RANK` for a small literal upper bound while retaining
   every row tied at the rank boundary.
 
@@ -72,7 +70,9 @@ Not in scope:
 - computed-key distribution equivalence or inferred uniqueness;
 - partial `SUM` below a join until an aggregate-state merge contract can prove
   identical value and error semantics for an explicitly enumerated type set;
-- approximate or floating-point aggregate-state prefix reuse;
+- aggregate-prefix reuse for checked fixed-width, approximate, or
+  floating-point states without a merge contract that preserves both values
+  and error timing;
 - bounded `RANK` for prepared/dynamic bounds, unsafe predicates, unsupported
   partition-key equality, or bounds above 1024;
 - query-, schema-, table-, benchmark-, or scale-specific branches.
@@ -116,10 +116,6 @@ the pre-existing plan.
 12. **Stable ordering:** an executor specialization must preserve the legacy
     probe/output order and the SQL peer relation; batching may not regroup rows
     across source batches when that would reorder the stream.
-13. **Exact aggregate state:** reuse across grouping prefixes is allowed only
-    when rebinding the coarser aggregate over the finer finalized value returns
-    the identical exact type and scale, and preserves value, overflow, NULL,
-    empty-input, and error semantics.
 
 ## Rule architecture and ordering
 
@@ -304,41 +300,13 @@ domain. Expression-removal safety, deterministic subtree, aggregate
 configuration, type, and branch-rewrite checks still apply; an unknown or
 partial drain proof keeps the totality requirement.
 
-#### Exact decimal SUM prefix reuse
-
-Before considering dynamic grouping expansion, a strict nested prefix chain
-may reuse one already-required legacy aggregate branch as the input to its
-coarser suffix. The pivot is the finest admitted prefix. It executes the common
-raw producer and its aggregation once, writes finalized grouping columns and
-aggregate values to the bounded materialized source, and every coarser branch
-groups that stream by a strict subset of the keys. The pivot branch itself is
-rewritten as an identity reader, so its values are not aggregated twice.
-
-This alternative is exact only for the explicitly enumerated fixed-precision
-decimal128/decimal256 `SUM` values. The coarser branch binds `SUM` over the
-finalized finer values only when that binding returns the identical decimal
-type and scale. Decimal addition then uses the same exact checked accumulator
-contract as ordinary partial aggregation: NULL finer groups remain absent from
-the sum, an empty coarser group remains NULL, and an overflow remains an
-overflow. Every branch must have the same aggregate shape and a strictly nested
-`GroupingFlag` chain. Floating-point, integer widening, DISTINCT, AVG, unknown
-or configured aggregate state, a non-prefix grouping lattice, additional
-aggregate buffers, an inherited grouping sentinel, or any unsupported type
-keeps the legacy branches. Statistics choose whether the already-legal reuse is
-economic; they never establish the prefix or aggregate-state equivalence.
-
-Prefix reuse has a separate 32 GiB planner ceiling because it materializes one
-reduced legacy aggregate branch rather than multiplying detail rows across all
-grouping sets. Admission inflates the pivot cardinality estimate by four, caps
-it at the relational one-output-row-per-input-row bound, requires a twofold
-modeled byte-work advantage, and includes declared variable-width capacity.
-The 32 GiB value is not an execution allowance: the same statement/CN memory,
-spill-byte, file-descriptor, record-size, cumulative-reservation, cancellation,
-and cleanup owners described above remain authoritative. Unknown, overflowing,
-marginal, or over-budget estimates fail closed. Dynamic grouping expansion
-continues to use its more conservative 32x cardinality factor and 8 GiB planner
-ceiling because it multiplies the detailed input by the number of grouping
-sets.
+Grouping expansion never feeds finalized aggregate values into a second SQL
+aggregate. Every grouping set consumes the same raw input stream in its
+original order. This is required even for fixed-precision decimal `SUM`:
+checked fixed-width addition is not associative in error semantics, so
+`SUM(SUM(v))` can overflow on finer partial groups when the corresponding raw
+coarser `SUM(v)` succeeds through cancellation. Type/scale equality and
+statistics do not prove otherwise.
 
 Runtime-empty input is not equivalent to the absence of grouping sets.  If and
 only if an all-rolled grouping set exists, projection emits one key-only
@@ -528,13 +496,11 @@ tenant boundary.
 Grouping-set sharing adds append-only pipeline fields and is never planned
 below MORPC v49; a v48 or older deployment receives the complete legacy branch
 plan. Send and receive boundaries also fail closed if a plan containing those
-fields is transmitted after a runtime protocol rollback. Decimal prefix reuse
-uses the same v49 materialized-source representation and introduces no further
-wire field. Scalar filtering adds the optional
-`RuntimeFilterSpec.scalar_predicate` plan field.  A new executor receiving an
-old plan sees false.  An old executor ignores the unknown field; non-empty
-unsupported state cannot synthesize the exact one-value payload and therefore
-fails open with `PASS`.  Zero-row `DROP` remains a necessary condition.  The
+fields is transmitted after a runtime protocol rollback. Scalar filtering adds
+the optional `RuntimeFilterSpec.scalar_predicate` plan field.  A new executor
+receiving an old plan sees false.  An old executor ignores the unknown field;
+non-empty unsupported state cannot synthesize the exact one-value payload and
+therefore fails open with `PASS`.  Zero-row `DROP` remains a necessary condition.  The
 field must survive deep-copy and remote serialization when both peers support
 it.  Plans and messages are ephemeral, so restart, downgrade, and
 backup/restore require no migration.
@@ -572,7 +538,7 @@ path uses no new plan or wire field.
   and error. The reduced aggregate output uses the shared materialized source:
   up to 64 MiB or 4096 batches remain resident, overflow requires statement-
   admitted query-scoped spill bytes and one admitted file descriptor, and the
-  8 GiB dynamic-expansion or 32 GiB prefix-reuse planner ceiling prevents
+  8 GiB dynamic-expansion planner ceiling prevents
   obviously uneconomic plans. Reader release, cancellation, reset, and the last
   owner close both memory and spill state; retained and decoded vector
   allocations remain charged to the execution account for their complete
@@ -612,8 +578,8 @@ must preserve raw artifacts and exact revisions.
   producers;
 - no accepted CTE may exceed the 32 MiB resident or 8 GiB spill-planner bound;
 - no accepted grouping-set materialization may exceed its 64 MiB/4096-batch
-  resident bounds, its 8 GiB dynamic-expansion or 32 GiB prefix-reuse planner
-  ceiling, or the lower statement/CN spill budget; modeled saved producer
+  resident bounds, its 8 GiB planner ceiling, or the lower statement/CN spill
+  budget; modeled saved producer
   byte-work must exceed output write/read traffic by the twofold margin;
 - grouping-set sharing must reduce repeated detailed inputs and must not create
   more aggregate states than the legacy branches;
@@ -643,8 +609,7 @@ claimed as a performance pass.
 | Rule | White-box/typed proof | Black-box acceptance | Mandatory unchanged controls |
 |---|---|---|---|
 | CTE reuse | reachability, complete-evaluation witness, type, determinism, row-domain, memory/spill and build-role tests | public SQL duplicate/NULL/result checks; spill/reset/error/partial-reader paths | no-witness empty-build probe, recursive/correlated/volatile/fallible/unreachable/incompatible producers |
-| grouping sets | internal-origin marker, typed branch compatibility, every-branch drain/conditional totality, inherited-sentinel exclusion, byte-aware fanout/storage gate, MORPC v48/v49 plan and send/receive boundaries, codec round trips | distributed ROLLUP/CUBE/GROUPING SETS results with SQL NULL, rollup sentinel, duplicates, nested grouping extensions, runtime-empty input, early-stop readers, and spill | user UNION ALL, partial drain with fallible expression, incompatible state/type, inherited grouping provenance, old protocol, unknown/wide variable row, high-cardinality output, no all-rolled set |
-| decimal prefix reuse | strict nested prefix, canonical decimal SUM, identical rebound type/scale, 4x cardinality and 32 GiB/statement admission tests | exact decimal positive/negative/NULL/empty and multi-prefix rollup results with spill/reset | float/integer/AVG/DISTINCT/configured aggregate, non-prefix sets, overflow/unknown estimate, inherited sentinel |
+| grouping sets | internal-origin marker, typed branch compatibility, every-branch drain/conditional totality, inherited-sentinel exclusion, byte-aware fanout/storage gate, raw-input aggregate order, MORPC v48/v49 plan and send/receive boundaries, codec round trips | distributed ROLLUP/CUBE/GROUPING SETS results with SQL NULL, rollup sentinel, duplicates, nested grouping extensions, runtime-empty input, decimal cancellation/NULL/empty multi-prefix cases, early-stop readers, and spill | user UNION ALL, aggregate-over-aggregate prefix reuse, partial drain with fallible expression, incompatible state/type, inherited grouping provenance, old protocol, unknown/wide variable row, high-cardinality output, no all-rolled set |
 | MARK/OR EXISTS | positive marker ownership, totality, typed keys, and reachable `UNION ALL + SEMI` tests | independent EXISTS/OR results with duplicates, NULLs, multiple/composite arms | NOT/IN/ANY/projected/mixed/volatile/fallible/non-equality/correlated/different-key markers |
 | scalar filter | retained `SINGLE`, actual-cardinality state machine, exact join lineage, safe-to-skip build sibling, one-producer-per-CN topology | scalar 0/1/>1-row results/errors; local/shuffled delivery; empty/NULL/one-value sibling error and volatile controls | correlated, unsafe build sibling, right SEMI/ANTI, outer/nested-single/project/window/barrier/limit/unsafe predicate, missing/duplicate/non-colocated endpoint |
 | unique hash projection | unique residual-free admission, fixed scratch, ordered consecutive-build-batch selections | byte-identical matched/NULL/repeated-build results; allocation error and reset/reuse cleanup | non-unique, residual, unmatched-output, MARK/SINGLE/SEMI/ANTI/outer/ASOF paths |
@@ -687,9 +652,17 @@ Deferred. It needs observation, topology-switch, ownership, and rollback
 protocols. The current proposal uses existing bounded spill and deterministic
 fallbacks.
 
-### Partial SUM through a unique dimension join
+### Aggregate-prefix reuse and partial SUM through a unique dimension join
 
-Deferred.  Declared dimension uniqueness proves only that the join does not
+Deferred. Reusing finalized finer-group `SUM` values is not legal merely
+because the rebound SQL function has the same decimal type and scale. For
+`M = 9e37`, raw input ordered as `M, 0, -M, M` succeeds, while the finer
+partial sequence `M, M, -M` overflows before cancellation. A future design
+must define an explicit wider or unbounded merge-state contract and decide
+whether changing existing intermediate-overflow timing is a compatible SQL
+semantic change; statistics cannot supply that proof.
+
+Likewise, declared dimension uniqueness proves only that the join does not
 multiply a matched fact row.  It does not prove that `SUM(SUM(x))` preserves
 floating rounding, integer/decimal overflow and error timing, or the evaluation
 domain of a fallible fact expression on orphan keys.  The current series must
@@ -697,11 +670,6 @@ retain join-then-aggregate and remove the prototype rule.  A future RFC may
 admit an explicit type set only after defining an aggregate-state merge (not a
 second SQL `SUM`), orphan-row totality, overflow, NULL/empty, and exact
 black-box contracts.
-
-The decimal grouping-prefix rule does not weaken this decision. It crosses no
-join, changes no orphan-row domain, and reuses a legacy grouping branch that the
-same query is already proved to drain. Its narrower exact-type contract does
-not authorize a general partial aggregate pushdown.
 
 ### Split every rule into a separate PR
 
@@ -730,7 +698,7 @@ default to `0` (enabled): `sharedComputation=1` restores all #27914 legacy
 paths, `subqueryPredicatePlanning=1` restores all #27915 legacy paths, and
 `outerAntiPlanning=1` restores all #27934 legacy paths.  Each switch is parsed
 once at planning entry and must be covered by positive and rollback plan tests.
-The #28752 grouping-prefix/full-drain changes remain inside
+The #28752 grouping-set full-drain changes remain inside
 `sharedComputation`, and its scalar/DNF changes remain inside
 `subqueryPredicatePlanning`; those switches restore the corresponding legacy
 plans. Grouping-set execution also has a deterministic compatibility fallback:
@@ -769,9 +737,15 @@ each PR's final implementation diff.
 
 ## Decision log
 
+- v9 removes finalized decimal `SUM` prefix reuse. Checked fixed-width
+  addition is not associative in error semantics: a finer partial sequence can
+  overflow where the raw coarser input succeeds through cancellation. Dynamic
+  grouping expansion remains legal because every grouping set consumes raw
+  rows in their original order; type equality, scale equality, and statistics
+  are explicitly rejected as substitutes for that semantic proof.
 - v8 identifies follow-up #28752 and closes its design delta. It specifies the
-  all-branches-drain evaluation-domain proof, the separate 32 GiB/4x decimal
-  prefix admission, exact decimal SUM rebinding, safe build-side and shuffled
+  all-branches-drain evaluation-domain proof, the now-superseded 32 GiB/4x
+  decimal prefix proposal, safe build-side and shuffled
   scalar lineage with one-producer-per-CN compile validation, fixed-scratch
   unique hash projection, and exact peer-aware RANK Partition Top-N behind
   MORPC v67. It also records output-sensitive tie growth, compatibility
@@ -813,7 +787,7 @@ each PR's final implementation diff.
 
 Before requesting decisive approval, the final candidate closes the global
 non-fixpoint order; conditional totality and build-side skip proofs; scalar
-physical topology; exact decimal prefix semantics; unique projection order;
+physical topology; checked aggregate raw-input order; unique projection order;
 RANK peer, resource, and MORPC v66/v67 contracts; resource ownership; the three
 rollback cohorts plus targeted executor rollback; implementation budgets; and
 the positive/counterexample/cross-rule matrix. No blocking semantic question is
