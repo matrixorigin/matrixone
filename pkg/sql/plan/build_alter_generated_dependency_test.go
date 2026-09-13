@@ -373,6 +373,28 @@ func TestAlterCopyAffectedForeignKeyColumnsSkipsVirtualOnlyDependencyMetadata(t 
 	require.Equal(t, map[uint64]string{1: "source"}, affected)
 }
 
+func TestAlterCopyAffectedForeignKeyColumnsSkipsMetadataForNewStoredColumn(t *testing.T) {
+	original := &planpb.TableDef{
+		// Adding a stored generated definition to an ordinary legacy table can
+		// make the source an FK endpoint, but there are no original dependency
+		// edges to walk. The source itself is already in affected.
+		Cols: []*planpb.ColDef{{ColId: 1, Name: "source", Typ: planpb.Type{
+			Id: int32(types.T_int32), Width: 32,
+		}}},
+	}
+	copyTable := &planpb.TableDef{
+		Cols: []*planpb.ColDef{{ColId: 1, Name: "source", Typ: planpb.Type{
+			Id: int32(types.T_int32), Width: 32,
+		}, GeneratedCol: &planpb.GeneratedCol{IsStored: true, OriginString: "1"}}},
+	}
+	affected, err := AlterCopyAffectedForeignKeyColumns(
+		context.Background(), original, copyTable,
+		map[uint64]*planpb.ColDef{1: {Name: "source"}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{1: "source"}, affected)
+}
+
 func TestAlterForeignKeyValidationResolvesSelfReferencesLocally(t *testing.T) {
 	for _, selfMarker := range []uint64{0, 100} {
 		t.Run(fmt.Sprintf("self marker %d", selfMarker), func(t *testing.T) {

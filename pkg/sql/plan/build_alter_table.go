@@ -673,7 +673,14 @@ func AlterCopyAffectedForeignKeyColumns(
 		// normalize through strings.ToLower.
 		return FindColumn(copyTableDef.Cols, name)
 	}
+	hasOriginalGeneratedColumns := false
 	hasStoredGeneratedColumns := false
+	for _, col := range originalTableDef.Cols {
+		if col != nil && col.GeneratedCol != nil {
+			hasOriginalGeneratedColumns = true
+			break
+		}
+	}
 	for _, tableDef := range []*TableDef{originalTableDef, copyTableDef} {
 		for _, col := range tableDef.Cols {
 			if col != nil && col.GeneratedCol != nil && col.GeneratedCol.IsStored {
@@ -731,7 +738,7 @@ func AlterCopyAffectedForeignKeyColumns(
 			seeds[originalCol.Name] = struct{}{}
 		}
 	}
-	if len(seeds) == 0 || !hasStoredGeneratedColumns {
+	if len(seeds) == 0 || !hasOriginalGeneratedColumns || !hasStoredGeneratedColumns {
 		// Direct FK endpoints do not need dependency-graph metadata. This is
 		// also the normal path for legacy ordinary tables whose Name2ColIndex
 		// is absent; do not turn a direct type check into a spurious metadata
