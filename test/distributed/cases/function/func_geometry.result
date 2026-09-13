@@ -270,7 +270,13 @@ contains_multipolygon_multipoint
 1
 select st_contains(st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))'), st_geomfromtext('MULTIPOINT((0 0),(5 0))')) as contains_multiline_multipoint_boundary;
 contains_multiline_multipoint_boundary
-0
+1
+select st_contains(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('MULTIPOINT((0 1),(1 1))')) as contains_multipoint_boundary_and_interior;
+contains_multipoint_boundary_and_interior
+1
+select st_within(st_geomfromtext('MULTIPOINT((0 1),(1 1))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as within_multipoint_boundary_and_interior;
+within_multipoint_boundary_and_interior
+1
 select st_contains(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))'), st_geomfromtext('POINT(3 0)')) as contains_geometrycollection_point;
 contains_geometrycollection_point
 1
@@ -555,7 +561,25 @@ crosses_point_polygon_srid
 0
 select st_crosses(st_geomfromtext('POINT(1 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as crosses_point_line_interior;
 crosses_point_line_interior
+0
+select st_crosses(st_geomfromtext('MULTIPOINT((0 0),(1 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as crosses_multipoint_line_all_covered;
+crosses_multipoint_line_all_covered
+0
+select st_crosses(st_geomfromtext('MULTIPOINT((1 0),(3 0))'), st_geomfromtext('LINESTRING(0 0,2 0)')) as crosses_multipoint_line_interior_and_exterior;
+crosses_multipoint_line_interior_and_exterior
 1
+select st_crosses(st_geomfromtext('LINESTRING(0 0,2 0)'), st_geomfromtext('MULTIPOINT((1 0),(3 0))')) as crosses_line_multipoint_interior_and_exterior;
+crosses_line_multipoint_interior_and_exterior
+1
+select st_crosses(st_geomfromtext('MULTIPOINT((1 1),(3 3))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as crosses_multipoint_polygon_interior_and_exterior;
+crosses_multipoint_polygon_interior_and_exterior
+1
+select st_crosses(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))'), st_geomfromtext('MULTIPOINT((1 1),(3 3))')) as crosses_polygon_multipoint_interior_and_exterior;
+crosses_polygon_multipoint_interior_and_exterior
+1
+select st_crosses(st_geomfromtext('MULTIPOINT((0 1),(1 1))'), st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')) as crosses_multipoint_polygon_boundary_and_interior;
+crosses_multipoint_polygon_boundary_and_interior
+0
 select st_crosses(st_geomfromtext('POINT(0 0)'), st_geomfromtext('LINESTRING(0 0,2 0)')) as crosses_point_line_endpoint;
 crosses_point_line_endpoint
 0
@@ -1666,6 +1690,18 @@ delete from spatial_idx_path where id = 1;
 select id from spatial_idx_path where st_intersects(g, st_geomfromtext('POINT(1 1)')) order by id;
 id
 drop table spatial_idx_path;
+drop table if exists spatial_contains_scan;
+create table spatial_contains_scan(
+id int primary key,
+g geometry not null
+);
+insert into spatial_contains_scan values
+(1, st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))')),
+(2, st_geomfromtext('POLYGON((4 0,6 0,6 2,4 2,4 0))'));
+select id from spatial_contains_scan where st_contains(g, st_geomfromtext('MULTIPOINT((0 1),(1 1))')) order by id;
+id
+1
+drop table spatial_contains_scan;
 drop table if exists spatial_idx_nonpoint;
 create table spatial_idx_nonpoint(
 id int primary key,
@@ -1694,10 +1730,25 @@ Project
               Runtime Filter Probe: spatial_idx_nonpoint.id
         ->  Index Table Scan on spatial_idx_nonpoint.idx_g [ForceOneCN]
               Filter Cond: st_contains(__mo_index_idx_col, 'POINT(1 1)')
+explain select payload from spatial_idx_nonpoint where st_contains(g, st_geomfromtext('MULTIPOINT((0 1),(1 1))'));
+TP QUERY PLAN
+Project
+  ->  Join
+        Join Type: INDEX
+        Join Cond: (spatial_idx_nonpoint.id = __mo_index_pri_col)
+        Runtime Filter Build: #[-1,0]
+        ->  Table Scan on func_geometry.spatial_idx_nonpoint [ForceOneCN]
+              Filter Cond: st_contains(spatial_idx_nonpoint.g, 'MULTIPOINT(0 1,1 1)')
+              Runtime Filter Probe: spatial_idx_nonpoint.id
+        ->  Index Table Scan on spatial_idx_nonpoint.idx_g [ForceOneCN]
+              Filter Cond: st_contains(__mo_index_idx_col, 'MULTIPOINT(0 1,1 1)')
 select id from spatial_idx_nonpoint where st_intersects(g, st_geomfromtext('LINESTRING(10 10,12 12)')) order by id;
 id
 1
 select id from spatial_idx_nonpoint where st_contains(g, st_geomfromtext('POINT(1 1)')) order by id;
+id
+2
+select id from spatial_idx_nonpoint where st_contains(g, st_geomfromtext('MULTIPOINT((0 1),(1 1))')) order by id;
 id
 2
 select id from spatial_idx_nonpoint where st_distance(g, st_geomfromtext('POINT(5 5)')) <= 0 order by id;
@@ -1985,7 +2036,7 @@ within_multipoint_multipolygon
 1
 select st_within(st_geomfromtext('MULTIPOINT((0 0),(5 0))'), st_geomfromtext('MULTILINESTRING((0 0,2 0),(4 0,6 0))')) as within_multipoint_multiline_boundary;
 within_multipoint_multiline_boundary
-0
+1
 select st_within(st_geomfromtext('POINT(3 0)'), st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(2 0,4 0))')) as within_point_geometrycollection;
 within_point_geometrycollection
 1
