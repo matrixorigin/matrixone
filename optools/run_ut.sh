@@ -468,6 +468,19 @@ function stop_ut_heartbeat(){
 
 CGROUP_MEMORY_PATH=""
 CGROUP_MEMORY_LIMIT="unknown"
+CGROUP_MEMORY_HIERARCHY="unknown"
+CGROUP_MEMORY_HIERARCHY_COMPLETE=0
+
+function cgroup_memory_log_escape(){
+    local value=$1
+    value=${value//%/%25}
+    value=${value//|/%7C}
+    value=${value//;/%3B}
+    value=${value// /%20}
+    value=${value//$'\t'/%09}
+    value=${value//$'\n'/%0A}
+    printf '%s' "${value}"
+}
 
 function resolve_cgroup_memory_boundary(){
     local leaf_path=$1
@@ -480,17 +493,33 @@ function resolve_cgroup_memory_boundary(){
     local candidate_limit=""
     local candidate_value=0
     local hierarchy_complete=1
+    local hierarchy_metrics=""
+    local usage_file=""
+    local peak_file=""
+    local events_file=""
+    local current_value="unknown"
+    local peak_value="unknown"
+    local event_value="unknown"
+    local oom="unknown"
+    local oom_kill="unknown"
+    local failcnt="unknown"
+    local event_name=""
+    local event_count=""
+    local escaped_path=""
+    local boundary=""
 
     CGROUP_MEMORY_PATH=${leaf_path}
     CGROUP_MEMORY_LIMIT="unknown"
+    CGROUP_MEMORY_HIERARCHY="none"
+    CGROUP_MEMORY_HIERARCHY_COMPLETE=0
     if [[ "${leaf_path}" != "${cgroup_root}" && "${leaf_path}" != "${cgroup_root}/"* ]]; then
         return 0
     fi
 
-    # A child can inherit a tighter hard limit from any visible ancestor.
-    # Walk the hierarchy and use usage/peak/events from the cgroup that owns
-    # the tightest finite limit. On ties prefer the ancestor so sibling usage
-    # is included in the measurement.
+    # A child can inherit a hard limit from any visible ancestor, and a parent
+    # can be under more pressure than its child because of sibling usage. Keep
+    # every finite boundary's metrics for the A/B safety check; the tightest
+    # limit is only a concise summary. On ties prefer the ancestor.
     while [[ "${current_path}" == "${cgroup_root}" || "${current_path}" == "${cgroup_root}/"* ]]; do
         if [[ -r "${current_path}/${limit_file}" ]]; then
             candidate_limit=$(< "${current_path}/${limit_file}")
@@ -503,6 +532,74 @@ function resolve_cgroup_memory_boundary(){
                     candidate_limit=""
                 fi
                 if [[ -n "${candidate_limit}" ]]; then
+                    if [[ "${limit_file}" == "memory.max" ]]; then
+                        usage_file="memory.current"
+                        peak_file="memory.peak"
+                        events_file="memory.events"
+                    else
+                        usage_file="memory.usage_in_bytes"
+                        peak_file="memory.max_usage_in_bytes"
+                        events_file="memory.failcnt"
+                    fi
+
+                    current_value="unknown"
+                    peak_value="unknown"
+                    event_value="unknown"
+                    if [[ -r "${current_path}/${usage_file}" ]]; then
+                        current_value=$(< "${current_path}/${usage_file}")
+                        if ! [[ "${current_value}" =~ ^[0-9]+$ ]]; then
+                            current_value="unknown"
+                            hierarchy_complete=0
+                        fi
+                    else
+                        hierarchy_complete=0
+                    fi
+                    if [[ -r "${current_path}/${peak_file}" ]]; then
+                        peak_value=$(< "${current_path}/${peak_file}")
+                        if ! [[ "${peak_value}" =~ ^[0-9]+$ ]]; then
+                            peak_value="unknown"
+                            hierarchy_complete=0
+                        fi
+                    else
+                        hierarchy_complete=0
+                    fi
+
+                    if [[ "${limit_file}" == "memory.max" ]]; then
+                        oom="unknown"
+                        oom_kill="unknown"
+                        if [[ -r "${current_path}/${events_file}" ]]; then
+                            while read -r event_name event_count; do
+                                case "${event_name}" in
+                                    oom) oom=${event_count} ;;
+                                    oom_kill) oom_kill=${event_count} ;;
+                                esac
+                            done < "${current_path}/${events_file}"
+                        fi
+                        if [[ "${oom}" =~ ^[0-9]+$ && "${oom_kill}" =~ ^[0-9]+$ ]]; then
+                            event_value="oom=${oom},oom_kill=${oom_kill}"
+                        else
+                            hierarchy_complete=0
+                        fi
+                    else
+                        failcnt="unknown"
+                        if [[ -r "${current_path}/${events_file}" ]]; then
+                            failcnt=$(< "${current_path}/${events_file}")
+                        fi
+                        if [[ "${failcnt}" =~ ^[0-9]+$ ]]; then
+                            event_value="failcnt=${failcnt}"
+                        else
+                            hierarchy_complete=0
+                        fi
+                    fi
+
+                    escaped_path=$(cgroup_memory_log_escape "${current_path}")
+                    boundary="${escaped_path}|${candidate_limit}|${current_value}|${peak_value}|${event_value}"
+                    if [[ -n "${hierarchy_metrics}" ]]; then
+                        hierarchy_metrics="${hierarchy_metrics};${boundary}"
+                    else
+                        hierarchy_metrics=${boundary}
+                    fi
+
                     if [[ -z "${best_limit}" ]] || (( candidate_value <= best_value )); then
                         best_path=${current_path}
                         best_limit=${candidate_limit}
@@ -528,6 +625,10 @@ function resolve_cgroup_memory_boundary(){
         fi
     done
 
+    if [[ -n "${hierarchy_metrics}" ]]; then
+        CGROUP_MEMORY_HIERARCHY=${hierarchy_metrics}
+    fi
+    CGROUP_MEMORY_HIERARCHY_COMPLETE=${hierarchy_complete}
     if [[ "${hierarchy_complete}" == "1" && -n "${best_limit}" ]]; then
         CGROUP_MEMORY_PATH=${best_path}
         CGROUP_MEMORY_LIMIT=${best_limit}
@@ -559,9 +660,10 @@ function cgroup_memory_metrics(){
             if [[ -r "${CGROUP_MEMORY_PATH}/memory.peak" ]]; then
                 memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.peak")
             fi
-            printf 'current=%s peak=%s memory.max=%s memory.leaf=%s memory.scope=%s' \
+            printf 'current=%s peak=%s memory.max=%s memory.leaf=%s memory.scope=%s memory.hierarchy_complete=%s memory.boundaries=%s' \
                 "${memory_current}" "${memory_peak}" \
-                "${CGROUP_MEMORY_LIMIT}" "${cgroup_path}" "${CGROUP_MEMORY_PATH}"
+                "${CGROUP_MEMORY_LIMIT}" "${cgroup_path}" "${CGROUP_MEMORY_PATH}" \
+                "${CGROUP_MEMORY_HIERARCHY_COMPLETE}" "${CGROUP_MEMORY_HIERARCHY}"
             return 0
         fi
     fi
@@ -581,9 +683,10 @@ function cgroup_memory_metrics(){
         if [[ -r "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes" ]]; then
             memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes")
         fi
-        printf 'current=%s peak=%s memory.limit_in_bytes=%s memory.leaf=%s memory.scope=%s' \
+        printf 'current=%s peak=%s memory.limit_in_bytes=%s memory.leaf=%s memory.scope=%s memory.hierarchy_complete=%s memory.boundaries=%s' \
             "${memory_current}" "${memory_peak}" \
-            "${CGROUP_MEMORY_LIMIT}" "${cgroup_path}" "${CGROUP_MEMORY_PATH}"
+            "${CGROUP_MEMORY_LIMIT}" "${cgroup_path}" "${CGROUP_MEMORY_PATH}" \
+            "${CGROUP_MEMORY_HIERARCHY_COMPLETE}" "${CGROUP_MEMORY_HIERARCHY}"
     fi
 }
 
@@ -620,7 +723,7 @@ function report_cgroup_memory_usage(){
             else
                 events="unknown"
             fi
-            logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.max=${CGROUP_MEMORY_LIMIT} memory.leaf=${cgroup_path} memory.scope=${CGROUP_MEMORY_PATH} events=${events}"
+            logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.max=${CGROUP_MEMORY_LIMIT} memory.leaf=${cgroup_path} memory.scope=${CGROUP_MEMORY_PATH} memory.hierarchy_complete=${CGROUP_MEMORY_HIERARCHY_COMPLETE} memory.boundaries=${CGROUP_MEMORY_HIERARCHY} events=${events}"
             return 0
         fi
     fi
@@ -644,7 +747,7 @@ function report_cgroup_memory_usage(){
         if [[ -r "${CGROUP_MEMORY_PATH}/memory.failcnt" ]]; then
             failcnt=$(< "${CGROUP_MEMORY_PATH}/memory.failcnt")
         fi
-        logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.limit_in_bytes=${CGROUP_MEMORY_LIMIT} memory.leaf=${cgroup_path} memory.scope=${CGROUP_MEMORY_PATH} failcnt=${failcnt}"
+        logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.limit_in_bytes=${CGROUP_MEMORY_LIMIT} memory.leaf=${cgroup_path} memory.scope=${CGROUP_MEMORY_PATH} memory.hierarchy_complete=${CGROUP_MEMORY_HIERARCHY_COMPLETE} memory.boundaries=${CGROUP_MEMORY_HIERARCHY} failcnt=${failcnt}"
     fi
 }
 

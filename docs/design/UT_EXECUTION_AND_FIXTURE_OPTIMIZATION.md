@@ -53,17 +53,19 @@ fixture 兼容矩阵、reset oracle 和 A/B 数据前，不缩小这些数据、
   treatment。runner label、`ut_parallel=6`、`ut_sharded=false`、race/tags/timeout、测试选择
   及 reusable CI resolved SHA 必须相同；逐个记录 workflow run id/head SHA/CI SHA/时间/内存。
   任一 treatment 失败、超时、取消或 OOM，立即恢复默认 `0`，停止后续 treatment，不推广。
-- 为审计内存边界，诊断需沿当前 cgroup 到可见层级根查找最紧的有限硬限制，并从拥有该
-  限制的同一 cgroup 记录 `memory.max`、`memory.current`、`memory.peak`、leaf/scope 路径和
-  `memory.events` 的 `oom`/`oom_kill`。找不到有限可见限制、可见祖先缺失/不可读，或 CI
-  证据无法确认 cgroup mount/namespace 覆盖 runner 的实际限制边界时，样本不得进入 overlap
-  treatment；cgroup v1 的 `failcnt` 不是 v2 的 OOM 事件等价物，无法满足本 A/B OOM 门槛时
-  保持默认关闭。本 revision 不以 CPU throttling 作门槛（当前未采集）。
+- 为审计内存边界，诊断需沿当前 cgroup 到可见层级根逐个检查所有有限硬限制，并为每个
+  scope 记录 limit、current、peak 和 v2 `memory.events` 的 `oom`/`oom_kill`；最紧限制只作
+  摘要，安全门槛对每个有限祖先分别检查，避免较宽松父层被兄弟进程占满。找不到有限可见
+  限制、可见祖先缺失/不可读，或 CI 证据无法确认 cgroup mount/namespace 覆盖 runner 的
+  实际限制边界时，样本不得进入 overlap treatment；cgroup v1 `failcnt` 不是 v2 的 OOM
+  事件等价物，无法满足本 A/B OOM 门槛时保持默认关闭。本 revision 不以 CPU throttling
+  作门槛（当前未采集）。
   70m timeout 是 censored 样本，不能作完整 control。包和 test 选择由 `UT_SHARD=all` 的
   源码命令比较与现有 complete/disjoint partition 和 scheduler contract tests 证明相同；
   两边完整 required UT job 必须通过，报告必须合并且无丢失/重复。
-- 只有 3 个 treatment 均完整通过、race-UT job 均不超过 60 分钟、每次
-  `memory.peak <= 0.9 * memory.max`，且结束时 `memory.events` 的 `oom`/`oom_kill` 均为 0，
+- 只有 3 个 treatment 均完整通过、race-UT job 均不超过 60 分钟、每次每个可见有限 cgroup
+  scope 都满足 `memory.peak <= 0.9 * memory.max`，且结束时每个 scope 的 `memory.events`
+  `oom`/`oom_kill` 均为 0，
   并且 treatment 中位 wall-time 比 3 个完整 serial control 中位数至少改善 15%，才允许
   把默认值保留为 `1`。
   证据收齐前 PR 保持 Draft/不可合并；未达门槛则保持默认 `0`，继续按 stage/case profile

@@ -85,14 +85,15 @@ func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...str
 
 func TestResolveCgroupMemoryBoundary(t *testing.T) {
 	for _, tc := range []struct {
-		name, limitFile, rootLimit, parentLimit, leafLimit, wantScope, wantLimit string
+		name, limitFile, rootLimit, parentLimit, leafLimit, wantScope, wantLimit, wantComplete string
 	}{
-		{"tight-parent", "memory.max", "max", "17179869184", "max", "parent", "17179869184"},
-		{"tight-leaf", "memory.max", "max", "17179869184", "4294967296", "leaf", "4294967296"},
-		{"equal-prefers-parent", "memory.max", "max", "8589934592", "8589934592", "parent", "8589934592"},
-		{"no-visible-finite-limit", "memory.max", "max", "max", "max", "leaf", "unknown"},
-		{"missing-visible-ancestor", "memory.max", "max", "", "8589934592", "leaf", "unknown"},
-		{"v1-unlimited-sentinel", "memory.limit_in_bytes", "9223372036854771712", "8589934592", "9223372036854771712", "parent", "8589934592"},
+		{"tight-parent", "memory.max", "max", "17179869184", "max", "parent", "17179869184", "1"},
+		{"tight-leaf", "memory.max", "max", "17179869184", "4294967296", "leaf", "4294967296", "1"},
+		{"equal-prefers-parent", "memory.max", "max", "8589934592", "8589934592", "parent", "8589934592", "1"},
+		{"parent-pressure-within-looser-limit", "memory.max", "max", "17179869184", "8589934592", "leaf", "8589934592", "1"},
+		{"no-visible-finite-limit", "memory.max", "max", "max", "max", "leaf", "unknown", "1"},
+		{"missing-visible-ancestor", "memory.max", "max", "", "8589934592", "leaf", "unknown", "0"},
+		{"v1-unlimited-sentinel", "memory.limit_in_bytes", "9223372036854771712", "8589934592", "9223372036854771712", "parent", "8589934592", "1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := filepath.Join(t.TempDir(), "cgroup")
@@ -114,11 +115,40 @@ func TestResolveCgroupMemoryBoundary(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(dir, tc.limitFile), []byte(limit+"\n"), 0644); err != nil {
 					t.Fatal(err)
 				}
+				if tc.limitFile == "memory.max" && limit != "max" {
+					peak := "2048"
+					if tc.name == "parent-pressure-within-looser-limit" {
+						if dir == parent {
+							peak = "17000000000"
+						} else if dir == leaf {
+							peak = "6442450944"
+						}
+					}
+					for name, value := range map[string]string{
+						"memory.current": "1024",
+						"memory.peak":    peak,
+						"memory.events":  "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n",
+					} {
+						if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				} else if tc.limitFile == "memory.limit_in_bytes" && limit == "8589934592" {
+					for name, value := range map[string]string{
+						"memory.usage_in_bytes":     "1024",
+						"memory.max_usage_in_bytes": "2048",
+						"memory.failcnt":            "0",
+					} {
+						if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
 			}
 
 			script := `source ./run_ut.sh UT
 resolve_cgroup_memory_boundary "$CGROUP_TEST_LEAF" "$CGROUP_TEST_ROOT" "$CGROUP_LIMIT_FILE"
-printf 'scope=%s limit=%s\n' "$CGROUP_MEMORY_PATH" "$CGROUP_MEMORY_LIMIT"
+printf 'scope=%s limit=%s complete=%s boundaries=%s\n' "$CGROUP_MEMORY_PATH" "$CGROUP_MEMORY_LIMIT" "$CGROUP_MEMORY_HIERARCHY_COMPLETE" "$CGROUP_MEMORY_HIERARCHY"
 `
 			out, err := scheduleHarness(t, script,
 				"CGROUP_TEST_ROOT="+root,
@@ -132,9 +162,16 @@ printf 'scope=%s limit=%s\n' "$CGROUP_MEMORY_PATH" "$CGROUP_MEMORY_LIMIT"
 			if tc.wantScope == "leaf" {
 				wantPath = leaf
 			}
-			want := "scope=" + wantPath + " limit=" + tc.wantLimit + "\n"
-			if string(out) != want {
-				t.Fatalf("unexpected boundary:\n got: %q\nwant: %q", out, want)
+			wantPrefix := "scope=" + wantPath + " limit=" + tc.wantLimit + " complete=" + tc.wantComplete + " boundaries="
+			if !strings.HasPrefix(string(out), wantPrefix) {
+				t.Fatalf("unexpected boundary:\n got: %q\nwant prefix: %q", out, wantPrefix)
+			}
+			if tc.name == "parent-pressure-within-looser-limit" {
+				parentBoundary := parent + "|17179869184|1024|17000000000|oom=0,oom_kill=0"
+				leafBoundary := leaf + "|8589934592|1024|6442450944|oom=0,oom_kill=0"
+				if !strings.Contains(string(out), parentBoundary) || !strings.Contains(string(out), leafBoundary) {
+					t.Fatalf("did not retain metrics for both constraining ancestors:\n%s", out)
+				}
 			}
 		})
 	}
