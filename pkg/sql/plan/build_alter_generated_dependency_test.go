@@ -223,8 +223,8 @@ func TestAlterCopyAffectedStoredGeneratedColumnsIncludesNewStoredColumns(t *test
 		Name2ColIndex: map[string]int32{"source": 0, "other": 1},
 	}
 	changeColDefMap := map[uint64]*planpb.ColDef{
-		1: &planpb.ColDef{Name: "source"},
-		2: &planpb.ColDef{Name: "other"},
+		1: {Name: "source"},
+		2: {Name: "other"},
 	}
 
 	affected, err := AlterCopyAffectedStoredGeneratedColumns(

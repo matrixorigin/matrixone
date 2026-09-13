@@ -527,16 +527,16 @@ select count(*) as valid_links from t48_fk_self_child c join t48_fk_self_child p
 ➤ valid_links[-5,64,0]  𝄀
 1
 create table t49_expr_fk_parent (
-    id int primary key,
-    a int,
-    g1 int generated always as (a + 1) stored,
-    g2 int generated always as (g1 * 10) stored,
-    unique key uk_g2(g2)
+id int primary key,
+a int,
+g1 int generated always as (a + 1) stored,
+g2 int generated always as (g1 * 10) stored,
+unique key uk_g2(g2)
 );
 create table t49_expr_fk_child (
-    id int primary key,
-    parent_g2 int,
-    constraint fk_t49_parent_g2 foreign key (parent_g2) references t49_expr_fk_parent(g2)
+id int primary key,
+parent_g2 int,
+constraint fk_t49_parent_g2 foreign key (parent_g2) references t49_expr_fk_parent(g2)
 );
 insert into t49_expr_fk_parent (id, a) values (1, 1);
 insert into t49_expr_fk_child values (1, 20);
@@ -548,11 +548,11 @@ select count(*) as preserved_links from t49_expr_fk_parent p join t49_expr_fk_ch
 1
 create table t50_expr_fk_parent (k int primary key);
 create table t50_expr_fk_child (
-    id int primary key,
-    a int,
-    g1 int generated always as (a + 1) stored,
-    g2 int generated always as (g1 + 1) stored,
-    constraint fk_t50_generated_child foreign key (g2) references t50_expr_fk_parent(k)
+id int primary key,
+a int,
+g1 int generated always as (a + 1) stored,
+g2 int generated always as (g1 + 1) stored,
+constraint fk_t50_generated_child foreign key (g2) references t50_expr_fk_parent(k)
 );
 insert into t50_expr_fk_parent values (3);
 insert into t50_expr_fk_child (id, a) values (1, 1);
@@ -563,13 +563,13 @@ select count(*) as preserved_links from t50_expr_fk_child c join t50_expr_fk_par
 ➤ preserved_links[-5,64,0]  𝄀
 1
 create table t51_expr_fk_self_parent (
-    id int primary key,
-    a int,
-    g1 int generated always as (a + 1) stored,
-    g2 int generated always as (g1 * 10) stored,
-    parent_g2 int,
-    unique key uk_g2(g2),
-    constraint fk_t51_self_parent foreign key (parent_g2) references t51_expr_fk_self_parent(g2)
+id int primary key,
+a int,
+g1 int generated always as (a + 1) stored,
+g2 int generated always as (g1 * 10) stored,
+parent_g2 int,
+unique key uk_g2(g2),
+constraint fk_t51_self_parent foreign key (parent_g2) references t51_expr_fk_self_parent(g2)
 );
 insert into t51_expr_fk_self_parent (id, a, parent_g2) values (1, 1, 20);
 alter table t51_expr_fk_self_parent modify column g1 int generated always as (a + 2) stored;
@@ -579,11 +579,11 @@ select count(*) as preserved_links from t51_expr_fk_self_parent c join t51_expr_
 ➤ preserved_links[-5,64,0]  𝄀
 1
 create table t52_expr_fk_self_child (
-    id int primary key,
-    a int,
-    g1 int generated always as (a + 1) stored,
-    g2 int generated always as (g1 + 1) stored,
-    constraint fk_t52_self_child foreign key (g2) references t52_expr_fk_self_child(id)
+id int primary key,
+a int,
+g1 int generated always as (a + 1) stored,
+g2 int generated always as (g1 + 1) stored,
+constraint fk_t52_self_child foreign key (g2) references t52_expr_fk_self_child(id)
 );
 insert into t52_expr_fk_self_child (id, a) values (3, 1);
 alter table t52_expr_fk_self_child modify column g1 int generated always as (a + 2) stored;
