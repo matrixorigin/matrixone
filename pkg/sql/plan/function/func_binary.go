@@ -10686,12 +10686,15 @@ func L1DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 
 // StGeoHashFromPoint is ST_GeoHash(point, max_length): the geohash of a point.
 func StGeoHashFromPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	return opBinaryStrFixedToStrWithErrorCheck[int64](ivecs, result, proc, length, func(v string, maxLen int64) (string, error) {
 		x, y, err := parsePointXYFromPayload(functionUtil.QuickStrToBytes(v))
 		if err != nil {
 			return "", err
 		}
-		return geo.EncodeGeoHash(x, y, int(maxLen)), nil
+		return geo.EncodeGeoHash(x, y, maxLen)
 	}, selectList)
 }
 
@@ -10718,7 +10721,11 @@ func StGeoHashFromLonLat(ivecs []*vector.Vector, result vector.FunctionResultWra
 			}
 			continue
 		}
-		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(geo.EncodeGeoHash(lon, lat, int(l))), false); err != nil {
+		hash, err := geo.EncodeGeoHash(lon, lat, l)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(hash), false); err != nil {
 			return err
 		}
 	}
