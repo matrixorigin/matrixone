@@ -1201,6 +1201,9 @@ func (l *localLockTable) findStructuralRangePair(
 				return nil, Lock{}, false
 			}
 			if prevLock.isLockRangeStart() {
+				if l.hasFollowingRangePairLocked(key, prevLock) {
+					return nil, Lock{}, false
+				}
 				return prevKey, prevLock, true
 			}
 			if prevLock.isLockRangeEnd() {
@@ -1246,6 +1249,33 @@ func (l *localLockTable) findStructuralRangePair(
 		},
 	)
 	return pairedKey, pairedLock, found
+}
+
+// hasFollowingRangePairLocked reports whether a predecessor range-start is
+// already paired with a later range-end. Row locks may be interleaved, but a
+// range-start before the empty endpoint must not adopt the endpoint when its
+// own complete range continues beyond it.
+func (l *localLockTable) hasFollowingRangePairLocked(
+	key []byte,
+	start Lock) bool {
+	var pairedEnd Lock
+	var found bool
+	l.mu.store.Range(
+		nextKey(key, nil),
+		nil,
+		func(_ []byte, lock Lock) bool {
+			if lock.isLockRangeStart() {
+				return false
+			}
+			if lock.isLockRangeEnd() {
+				pairedEnd = lock
+				found = true
+				return false
+			}
+			return true
+		},
+	)
+	return found && sameRangeLockState(start, pairedEnd)
 }
 
 func sameRangeLockState(left, right Lock) bool {

@@ -494,6 +494,45 @@ func TestEmptyRangeEndpointDoesNotSpliceEnclosingLiveRange(t *testing.T) {
 	)
 }
 
+func TestEmptyRangeEndDoesNotSpliceEnclosingLiveRange(t *testing.T) {
+	table := uint64(14)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			txnID := newTestTxnID(1)
+			_, err := s.Lock(ctx, table, newTestRows(1, 10), txnID, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			staleWaiters := &staleSnapshotReadTrapQueue{waiterQueue: newWaiterQueue()}
+			staleWaiters.init(lt.logger)
+			staleEnd := Lock{
+				value:   flagLockRangeEnd | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: staleWaiters,
+			}
+
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{5}, staleEnd)
+			lt.deleteEmptyLockLocked([]byte{5}, staleEnd)
+			_, orphanOK := lt.mu.store.Get([]byte{5})
+			_, startOK := lt.mu.store.Get([]byte{1})
+			_, endOK := lt.mu.store.Get([]byte{10})
+			lt.mu.Unlock()
+
+			require.False(t, orphanOK, "enclosed orphan range-end should be removed")
+			require.True(t, staleWaiters.returned, "orphan state should be returned when unreferenced")
+			require.True(t, startOK)
+			require.True(t, endOK)
+
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			lt.mu.RLock()
+			require.Zero(t, lt.mu.store.Len(), "unlock should not leave an entry backed by returned pools")
+			lt.mu.RUnlock()
+		},
+	)
+}
+
 func TestMismatchedRangeEndpointRepairsLiveCounterpart(t *testing.T) {
 	table := uint64(10)
 	getRunner(false)(
