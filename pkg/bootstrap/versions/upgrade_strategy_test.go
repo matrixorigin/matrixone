@@ -112,3 +112,40 @@ func newProtocolResult(t *testing.T, value string) executor.Result {
 	require.NoError(t, executor.AppendStringRows(result, 0, []string{value}))
 	return result.GetResult()
 }
+
+// The hidden-object filters in these upgrade probes must be PREFIX tests, not LIKE patterns.
+//
+// `_` is LIKE's single-character wildcard, so '__mo_index_%' also matches any name shaped
+// [?][?]mo[?]index[?]..., and '__mo_cpkey_%' any [?][?]mo[?]cpkey[?]... . Unlike the internal
+// ids these filters were written for, the names they are compared against are USER-chosen: a
+// table named x1mo2index3foo is excluded from CheckTableDefinition, which then reports a table
+// that exists as absent, and the upgrade acts on that answer. prefix_eq is bytes.HasPrefix, so
+// the filter matches the hidden objects it names and nothing else.
+func TestUpgradeProbesFilterHiddenObjectsByPrefixNotLike(t *testing.T) {
+	seen := map[string]string{}
+	record := func(name string) func(string) (executor.Result, error) {
+		return func(sql string) (executor.Result, error) {
+			seen[name] = sql
+			return executor.Result{}, nil
+		}
+	}
+
+	_, _ = CheckTableDefinition(executor.NewMemTxnExecutor(record("table"), nil), 0, "db", "tbl")
+	_, _, _ = CheckTableComment(executor.NewMemTxnExecutor(record("comment"), nil), 0, "db", "tbl")
+	_, _ = CheckTableColumn(executor.NewMemTxnExecutor(record("column"), nil), 0, "db", "tbl", "col")
+	// The System_Account variants are separate statements and need the same filter.
+	_, _ = CheckTableDefinition(executor.NewMemTxnExecutor(record("table-sys"), nil), catalog.System_Account, "db", "tbl")
+	_, _, _ = CheckTableComment(executor.NewMemTxnExecutor(record("comment-sys"), nil), catalog.System_Account, "db", "tbl")
+	_, _ = CheckTableColumn(executor.NewMemTxnExecutor(record("column-sys"), nil), catalog.System_Account, "db", "tbl", "col")
+
+	require.Len(t, seen, 6, "every probe must have run and been captured")
+	for name, sql := range seen {
+		require.NotContains(t, sql, "LIKE", "%s still filters with a wildcard pattern", name)
+	}
+	for _, name := range []string{"table", "table-sys", "comment", "comment-sys"} {
+		require.Contains(t, seen[name], "NOT prefix_eq(tbl.relname, '__mo_index_')", name)
+	}
+	for _, name := range []string{"column", "column-sys"} {
+		require.Contains(t, seen[name], "NOT prefix_eq(att_relname, '__mo_cpkey_')", name)
+	}
+}

@@ -242,12 +242,28 @@ func AppendCanonicalNumber(dst []byte, value ByteJson) ([]byte, bool) {
 func canonicalNumberFromByteJSON(value ByteJson) (canonicalNumber, bool) {
 	switch value.Type {
 	case TpCodeInt64:
+		if len(value.Data) != numberSize {
+			return canonicalNumber{}, false
+		}
 		return canonicalInteger(value.GetInt64()), true
 	case TpCodeUint64:
+		if len(value.Data) != numberSize {
+			return canonicalNumber{}, false
+		}
 		return canonicalNumber{marker: canonicalPositiveInteger, payload: value.GetUint64()}, true
 	case TpCodeFloat64:
-		return canonicalFloat64(value.GetFloat64()), true
+		if len(value.Data) != numberSize {
+			return canonicalNumber{}, false
+		}
+		floating := value.GetFloat64()
+		if math.IsNaN(floating) || math.IsInf(floating, 0) {
+			return canonicalNumber{}, false
+		}
+		return canonicalFloat64(floating), true
 	case TpCodeDecimal:
+		if !isValidByteJsonStringEncoding(value.Data) {
+			return canonicalNumber{}, false
+		}
 		return canonicalDecimal(value.GetString())
 	default:
 		return canonicalNumber{}, false
@@ -455,33 +471,4 @@ func compareNumericKeys(left, right *numericKey) int {
 		return -result
 	}
 	return result
-}
-
-func compareNonFiniteNumeric(left, right ByteJson) (int, bool) {
-	leftFloat, leftNonFinite := nonFiniteFloat64(left)
-	rightFloat, rightNonFinite := nonFiniteFloat64(right)
-	if !leftNonFinite && !rightNonFinite {
-		return 0, false
-	}
-	if leftNonFinite && rightNonFinite {
-		return compareFloat64(leftFloat, rightFloat), true
-	}
-	if leftNonFinite {
-		if math.IsInf(leftFloat, -1) {
-			return -1, true
-		}
-		return 1, true
-	}
-	if math.IsInf(rightFloat, -1) {
-		return 1, true
-	}
-	return -1, true
-}
-
-func nonFiniteFloat64(value ByteJson) (float64, bool) {
-	if value.Type != TpCodeFloat64 {
-		return 0, false
-	}
-	floating := value.GetFloat64()
-	return floating, math.IsNaN(floating) || math.IsInf(floating, 0)
 }

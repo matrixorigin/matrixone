@@ -192,6 +192,10 @@ func TestContainsPkTypes(t *testing.T) {
 // uses the typed fallback because its docmap stores the canonical string.
 func TestLoadedContainsPkTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
+	jsonValue, jsonErr := types.ParseStringToByteJson(`{"k":1}`)
+	require.NoError(t, jsonErr)
+	jsonBytes, jsonErr := types.EncodeJson(jsonValue)
+	require.NoError(t, jsonErr)
 	u, err := types.ParseUuid("12345678-1234-1234-1234-1234567890ab")
 	require.NoError(t, err)
 	cases := []struct {
@@ -220,7 +224,7 @@ func TestLoadedContainsPkTypes(t *testing.T) {
 		{"binary", types.T_binary, []byte{0, 1, 2}},
 		{"varbinary", types.T_varbinary, []byte{3, 4, 5}},
 		{"blob", types.T_blob, []byte{6, 7, 8}},
-		{"json", types.T_json, []byte(`{"k":1}`)},
+		{"json", types.T_json, jsonBytes},
 		{"datalink", types.T_datalink, []byte("file://pk")},
 		{"uuid", types.T_uuid, u},
 		{"varchar-empty", types.T_varchar, []byte{}},

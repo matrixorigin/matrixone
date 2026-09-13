@@ -463,6 +463,7 @@ func (s *service) handleRemoteLock(
 	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
+		s.detachRejectedRemoteBind(bind)
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}
@@ -629,6 +630,7 @@ func (s *service) handleForwardLock(
 	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
+		s.detachRejectedRemoteBind(bind)
 		_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		return
 	}

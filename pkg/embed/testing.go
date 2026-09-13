@@ -170,6 +170,20 @@ func init() {
 // is non-nil solely so the caller can retain it and retry Close.
 func StartTestCluster(opts ...Option) (Cluster, error) {
 	opts = append([]Option{WithTesting()}, opts...)
+	// Keep every embedded UT cluster on the short test-only readiness cadence.
+	// Shared base clusters already use this callback, but dedicated scenarios
+	// commonly provide their own pre-start adjustment and would otherwise fall
+	// back to the production one-second polling intervals. Apply the cadence
+	// first so an explicit scenario-specific value can still override it.
+	opts = append(opts, func(c *cluster) {
+		preStart := c.options.preStart
+		c.options.preStart = func(svc ServiceOperator) {
+			adjustClusterStartupRetryIntervals(svc)
+			if preStart != nil {
+				preStart(svc)
+			}
+		}
+	})
 	c, err := NewCluster(opts...)
 	if err != nil {
 		return cleanupClusterOnError(c, err)

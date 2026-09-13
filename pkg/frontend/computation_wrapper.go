@@ -298,6 +298,10 @@ func columnsToMysqlColumns(ctx context.Context, cols []*plan2.ColDef) ([]interfa
 
 func (cwft *TxnComputationWrapper) getColumnsWithResultColumns(ctx context.Context) ([]interface{}, []*plan2.ColDef, error) {
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
+	if cwft.preparedStmt != nil {
+		overlayPreparedGroupConcatResultMetadata(
+			cwft.plan.GetQuery(), cols, cwft.preparedStmt.groupConcatMaxLenFloor)
+	}
 	columns, err := columnsToMysqlColumns(ctx, cols)
 	return columns, cols, err
 }
@@ -357,6 +361,23 @@ func preparedStatementOwner(ctx context.Context, ses FeSession) (*Session, error
 		return backSes.upstream, nil
 	}
 	return nil, moerr.NewInternalError(ctx, "prepared statement session has no client owner")
+}
+
+func preparedGroupConcatMaxLenFloor(
+	ctx context.Context, owner *Session, prepareStmt *PrepareStmt,
+) (uint64, error) {
+	value, err := owner.GetSessionSysVar("group_concat_max_len")
+	if err != nil {
+		return 0, err
+	}
+	limit, ok := groupConcatMaxLenAsUint64(value)
+	if !ok || limit < groupConcatMaxLenMinimum {
+		return 0, moerr.NewInternalErrorf(ctx, "invalid group_concat_max_len: %v", value)
+	}
+	if limit > prepareStmt.groupConcatMaxLenFloor {
+		return limit, nil
+	}
+	return prepareStmt.groupConcatMaxLenFloor, nil
 }
 
 // Compile build logical plan and then build physical plan `Compile` object
@@ -560,6 +581,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				false,
 				&cwft.schedulingTrace,
 				preparedRetry,
+				cwft.preparedStmt.groupConcatMaxLenFloor,
 			)
 			if err != nil {
 				cwft.completeRuntimeCacheCandidate(nil, err)
@@ -575,6 +597,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		} else {
 			// retComp
 			cwft.proc.ReplaceTopCtx(execCtx.reqCtx)
+			retComp.SetGroupConcatMaxLenFloor(cwft.preparedStmt.groupConcatMaxLenFloor)
 			retComp.SetBuildPlanFunc(preparedExecutionBuildPlanFunc(
 				cwft.ses,
 				cwft.stmt,
@@ -632,6 +655,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			false,
 			&cwft.schedulingTrace,
 			preparedExprRetry,
+			0,
 		)
 		if err != nil {
 			return nil, err
@@ -1218,7 +1242,12 @@ func binaryProtocolPrepareParamDomains(
 	case defines.MYSQL_TYPE_LONGLONG:
 		return signed(types.T_int64, types.T_uint64), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_BIT:
-		return signed(types.T_bit, types.T_uint64), types.Type{}, "", false, true
+		// MYSQL_TYPE_BIT carries an opaque bit-domain value.  The protocol's
+		// unsigned flag describes its wire integer encoding, not a semantic
+		// conversion to UINT64.  Keep BIT stable for prepared-plan rebinding so
+		// CONV/BIN and other BIT-aware consumers receive the same domain for
+		// both flag variants.
+		return types.T_bit.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_YEAR:
 		return types.T_year.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_FLOAT:
@@ -1280,6 +1309,16 @@ func initExecuteStmtParamWithResolverInSession(
 	originSQL := prepareStmt.Sql
 	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
 	executionPlan := preparePlan.Plan
+	groupConcatMaxLenFloor := prepareStmt.groupConcatMaxLenFloor
+	hasPreparedGroupConcat := preparedPlanContainsGroupConcat(executionPlan)
+	if hasPreparedGroupConcat {
+		groupConcatMaxLenFloor, err = preparedGroupConcatMaxLenFloor(
+			reqCtx, owner, prepareStmt)
+		if err != nil {
+			return nil, nil, nil, "", false, err
+		}
+	}
+	previousGroupConcatMaxLenFloor := prepareStmt.groupConcatMaxLenFloor
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 	currentBoolSumAvg := owner.sqlModeHasEnableBoolSumAvg()
@@ -1338,6 +1377,20 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlanNeedsRebuild(change, modeMismatch, protocolMismatch) || rebuildEveryExecute ||
 		!reusablePlanGenerationSupported(cwft.proc)
 	cwft.planGenerationReused = !needRebuild
+	var pendingGroupConcatColDefData [][]byte
+	pendingGroupConcatColDefDataSet := false
+	rebuildCommitted := false
+	rebuildPublished := false
+	defer func() {
+		if rebuildCommitted && !rebuildPublished {
+			// A rebuilt plan may be visible before execute-time parameter binding
+			// finishes. Keep the generation dirty until its metadata and all
+			// execution state are published together, so a rejected execute cannot
+			// pair the new plan with the previous wire metadata.
+			prepareStmt.needsRebuild = true
+			prepareStmt.compileNeedsRebuild = true
+		}
+	}()
 
 	// Rebuild the plan when catalog schema, session temporary-table name
 	// resolution, FK-check state, protocol, or compatibility mode changed. The
@@ -1355,8 +1408,8 @@ func initExecuteStmtParamWithResolverInSession(
 		case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
 			txnHaveDDL = sessionTxnHaveDDL(executionSes)
 		}
-		columns := getPreparedResultColumnsFromPlan(
-			prepareStmt.PrepareStmt, newPlan, txnHaveDDL)
+		columns := getPreparedResultColumnsFromPlanWithGroupConcatMaxLen(
+			prepareStmt.PrepareStmt, newPlan, txnHaveDDL, groupConcatMaxLenFloor)
 		resper := execCtx.resper
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
@@ -1369,6 +1422,7 @@ func initExecuteStmtParamWithResolverInSession(
 		preparePlan = newPreparePlan
 		executionPlan = preparePlan.Plan
 		prepareStmt.PreparePlan = newPlan
+		rebuildCommitted = true
 		prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(executionPlan)
 		prepareStmt.directResultParamPositionsSet = true
 		prepareStmt.jsonComparisonParamPositions =
@@ -1381,14 +1435,21 @@ func initExecuteStmtParamWithResolverInSession(
 			newPreparePlan.Plan)
 		prepareStmt.bitCountOverloadParamPositions = plan2.PreparedPlanBitCountFallbackParamPositions(
 			newPreparePlan.Plan)
+		prepareStmt.conversionParamPositions = plan2.PreparedPlanConversionParamPositions(
+			newPreparePlan.Plan)
 		// Parameter type evolution belongs to one prepared-plan generation. The
 		// rebuilt plan has resolved against fresh metadata and must not inherit a
 		// numeric BIT_COUNT category selected by the preceding generation.
 		prepareStmt.bitCountNumericParamTypes = nil
 		prepareStmt.refreshFixedIntegerParamPositions(newPreparePlan.Plan)
-		prepareStmt.ColDefData = newColDefData
-		if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
-			execCtx.prepareColDef = newColDefData
+		if hasPreparedGroupConcat {
+			pendingGroupConcatColDefData = newColDefData
+			pendingGroupConcatColDefDataSet = true
+		} else {
+			prepareStmt.ColDefData = newColDefData
+			if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+				execCtx.prepareColDef = newColDefData
+			}
 		}
 		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
@@ -1402,6 +1463,26 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.preparedMetadataCheckTS = preparedMetadataTS
 		prepareStmt.protocolVersion = protocolVersion
 		prepareStmt.needsRebuild = false
+	}
+	if !needRebuild && hasPreparedGroupConcat && groupConcatMaxLenFloor > previousGroupConcatMaxLenFloor {
+		// Keep the cached COM_STMT_PREPARE metadata in sync with the monotonic
+		// execution floor. The current execution gets the same bytes immediately;
+		// later executions start from the widened owner metadata.
+		if prepareStmt.ColDefData != nil && executionPlan.GetQuery() != nil {
+			columns := getPreparedResultColumnsForWithGroupConcatMaxLen(
+				prepareStmt.PrepareStmt, executionPlan, sessionTxnHaveDDL(executionSes),
+				groupConcatMaxLenFloor)
+			resper := execCtx.resper
+			if executionSes.IsBackgroundSession() {
+				resper = owner.GetResponser()
+			}
+			newColDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+			if metadataErr != nil {
+				return nil, nil, nil, "", false, metadataErr
+			}
+			pendingGroupConcatColDefData = newColDefData
+			pendingGroupConcatColDefDataSet = true
+		}
 	}
 
 	// Recreate the cached compile only when a plan dependency changed or an
@@ -1450,6 +1531,7 @@ func initExecuteStmtParamWithResolverInSession(
 					true,
 					nil,
 					nil,
+					groupConcatMaxLenFloor,
 				)
 				if err != nil {
 					if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -1488,11 +1570,12 @@ func initExecuteStmtParamWithResolverInSession(
 		preparedExplain = true
 	}
 	runtimeNumericPrefixCandidate := false
+	runtimeConversionCandidate := false
 	// The planner records deferred overloads explicitly on the prepared plan.
 	// Carry this bounded metadata into execution instead of walking every
-	// expression tree for each EXECUTE. ABS always rebinds; BIT_COUNT starts in
-	// the binary-string default and keeps the last canonical numeric parameter
-	// category it observes.
+	// expression tree for each EXECUTE. ABS and SIGN always rebind; BIT_COUNT
+	// starts in the binary-string default and keeps the last canonical numeric
+	// parameter category it observes.
 	deferredNumericOverloadCandidate := len(prepareStmt.numericOverloadParamPositions) > 0
 	deferredBitCountOverloadCandidate := len(prepareStmt.bitCountOverloadParamPositions) > 0
 	runtimeNumericOverloadCandidate := deferredNumericOverloadCandidate &&
@@ -1657,6 +1740,7 @@ func initExecuteStmtParamWithResolverInSession(
 			cwft.proc.SetOwnedPrepareParamsWithMeta(params, paramIsBin, paramKinds, paramBinaryString)
 		}
 		cwft.paramVals = paramVals
+		applyPreparedConversionRuntimeTypes(cwft.paramVals, prepareStmt.conversionParamPositions)
 		bitCountNumericOverloadCandidate := prepareStmt.applyBitCountNumericRuntimeTypes(cwft.paramVals)
 		runtimeNumericOverloadCandidate = runtimeNumericOverloadCandidate ||
 			bitCountNumericOverloadCandidate
@@ -1676,6 +1760,15 @@ func initExecuteStmtParamWithResolverInSession(
 				executionPlan, runtimeTypes)
 		}
 	}
+	// SQL EXECUTE transports user variables through a text-shaped parameter
+	// vector, so BIN/CONV still need one typed logical plan per runtime domain.
+	// Once that domain is known, reuse the same bounded runtime-plan cache used
+	// by binary EXECUTE; otherwise every repeated EXECUTE would copy and compile
+	// the plan again even when the variable type is unchanged.
+	runtimeConversionCandidate = len(prepareStmt.conversionParamPositions) > 0 &&
+		needsRuntimeSpecialization && !runtimeTextComparisonSpecialization &&
+		!prepareStmt.hasPaginationParams && !prepareStmt.hasLagLeadParams && !preparedExplain &&
+		preparedRuntimeCacheSupports(cwft.paramVals)
 	// Static binary specialization, numeric-prefix conversion, and deferred
 	// overload binding all materialize every ParamRef in the copied plan. Keep
 	// provenance for every parameter before caching so a same-category hit reads
@@ -1684,7 +1777,7 @@ func initExecuteStmtParamWithResolverInSession(
 	stableRuntimeSpecializationCandidate := binaryExecute &&
 		prepareStmt.runtimeSpecializationNeeded && !runtimeTextComparisonSpecialization &&
 		!prepareStmt.hasPaginationParams && !prepareStmt.hasLagLeadParams && !preparedExplain
-	if runtimeNumericOverloadCandidate || runtimeNumericPrefixCandidate ||
+	if runtimeNumericOverloadCandidate || runtimeNumericPrefixCandidate || runtimeConversionCandidate ||
 		stableRuntimeSpecializationCandidate {
 		retainPreparedRuntimeParamRefs(cwft.paramVals)
 	}
@@ -1711,7 +1804,7 @@ func initExecuteStmtParamWithResolverInSession(
 	var cachedRuntimeCompile *compile.Compile
 	runtimeCacheKey := ""
 	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
-		stableRuntimeSpecializationCandidate
+		runtimeConversionCandidate || stableRuntimeSpecializationCandidate
 	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate
 	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
 		(runtimeDirectResultCandidate ||
@@ -1753,8 +1846,9 @@ func initExecuteStmtParamWithResolverInSession(
 	if runtimePlanApplied {
 		executionPlan = runtimePlan
 		if binaryExecute {
-			columns := getPreparedResultColumnsFor(
-				prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes))
+			columns := getPreparedResultColumnsForWithGroupConcatMaxLen(
+				prepareStmt.PrepareStmt, runtimePlan, sessionTxnHaveDDL(executionSes),
+				groupConcatMaxLenFloor)
 			resper := execCtx.resper
 			if executionSes.IsBackgroundSession() {
 				resper = owner.GetResponser()
@@ -1802,6 +1896,19 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
+	if hasPreparedGroupConcat {
+		if pendingGroupConcatColDefDataSet {
+			prepareStmt.ColDefData = pendingGroupConcatColDefData
+			if execCtx.input != nil && execCtx.input.isBinaryProtExecute && !runtimePlanApplied {
+				execCtx.prepareColDef = pendingGroupConcatColDefData
+			}
+		}
+		// Publish only after parameter binding, validation, specialization, and
+		// all execution metadata construction have succeeded. The caller then
+		// uses this value for a fresh Compile or cached Compile.Reset.
+		prepareStmt.groupConcatMaxLenFloor = groupConcatMaxLenFloor
+	}
+	rebuildPublished = true
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
 }
 
@@ -1966,13 +2073,34 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 		if !ok {
 			return ""
 		}
+		rawValue := ""
+		if param.Value != nil {
+			switch value := param.Value.(type) {
+			case []byte:
+				rawValue = string(value)
+			default:
+				rawValue = fmt.Sprint(value)
+			}
+		}
+		if param.MaterializedValue != "" {
+			rawValue = param.MaterializedValue
+		}
 		runtimeType := param.RuntimeType
 		if !param.HasRuntimeType || runtimeType.Oid == types.T_text {
-			runtimeType = plan2.PreparedNumericPrefixTypeFromString(fmt.Sprintf("%v", param.Value))
+			runtimeType = plan2.PreparedNumericPrefixTypeFromString(rawValue)
 		}
 		fmt.Fprintf(&key, "%d:%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
 			runtimeType.Oid, runtimeType.Charset, runtimeType.Width, runtimeType.Scale)
 		fmt.Fprintf(&key, "binary:%t;domain:%d;", param.IsBinaryString, param.RuntimeStringDomain)
+		charSourceRelevant := param.IsBinaryProtocol || param.HasSourceType ||
+			(param.HasRuntimeType && types.T(param.RuntimeType.Oid).IsMySQLString())
+		if charSourceRelevant {
+			charType, charNumeric := plan2.PreparedCharSourceTypeFromString(rawValue)
+			fmt.Fprintf(&key, "char-source:%t:%d:%d:%d:%d;", charNumeric,
+				charType.Oid, charType.Charset, charType.Width, charType.Scale)
+		} else {
+			fmt.Fprint(&key, "char-source:irrelevant;")
+		}
 		if param.HasSourceType {
 			// SQL EXECUTE arithmetic specializes from the user variable's logical
 			// type. Keep that dependency in the cache identity without replacing
@@ -2448,6 +2576,81 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 	return values, nil
 }
 
+func applyPreparedConversionRuntimeTypes(paramVals []any, positions []int32) {
+	for _, position := range positions {
+		if position < 0 || int(position) >= len(paramVals) {
+			continue
+		}
+		param, ok := paramVals[position].(plan2.ParamValue)
+		if !ok || param.Value == nil || param.HasRuntimeType {
+			continue
+		}
+		runtimeType, ok := preparedConversionSourceRuntimeType(param)
+		if !ok {
+			runtimeType, ok = preparedConversionRuntimeType(param.Value)
+		}
+		if !ok {
+			continue
+		}
+		param.RuntimeType = runtimeType
+		param.HasRuntimeType = true
+		paramVals[position] = param
+	}
+}
+
+func preparedConversionSourceRuntimeType(param plan2.ParamValue) (types.Type, bool) {
+	if !param.HasSourceType {
+		return types.Type{}, false
+	}
+	typ := param.SourceType
+	if typ.IsNumeric() || typ.Oid == types.T_bool || typ.Oid == types.T_bit ||
+		typ.Oid == types.T_date || typ.Oid == types.T_datetime || typ.Oid == types.T_timestamp ||
+		typ.Oid == types.T_time || typ.Oid == types.T_year {
+		return typ, true
+	}
+	if types.StaticStringDomain(typ) == types.StringDomainBinary {
+		return typ, true
+	}
+	return types.Type{}, false
+}
+
+func preparedConversionRuntimeType(value any) (types.Type, bool) {
+	switch value.(type) {
+	case bool:
+		return types.T_bool.ToType(), true
+	case int, int8, int16, int32, int64:
+		return types.T_int64.ToType(), true
+	case uint, uint8, uint16, uint32, uint64:
+		return types.T_uint64.ToType(), true
+	case float32:
+		return types.T_float32.ToType(), true
+	case float64:
+		return types.T_float64.ToType(), true
+	case types.Decimal64:
+		return types.T_decimal64.ToType(), true
+	case types.Decimal128:
+		return types.T_decimal128.ToType(), true
+	case types.Decimal256:
+		return types.T_decimal256.ToType(), true
+	case types.Date:
+		return types.T_date.ToType(), true
+	case types.Datetime:
+		return types.T_datetime.ToType(), true
+	case types.Timestamp:
+		return types.T_timestamp.ToType(), true
+	case types.Time:
+		return types.T_time.ToType(), true
+	case types.MoYear:
+		return types.T_year.ToType(), true
+	case []byte:
+		return types.T_varbinary.ToType(), true
+	case string:
+		return types.T_text.ToType(), true
+	default:
+		return types.Type{}, false
+	}
+}
+
 func (prepareStmt *PrepareStmt) applyBitCountNumericRuntimeTypes(values []any) bool {
 	positions := prepareStmt.bitCountOverloadParamPositions
 	if len(positions) == 0 {
@@ -2754,7 +2957,16 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			RuntimeStringDomain: paramDomains[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
-		if paramBinaryString[i] && sourceType.Id != 0 {
+		if paramKinds[i] == vector.PrepareParamBoolean {
+			// SQL EXECUTE keeps its historical text transport for a bare result
+			// parameter.  Carry the logical source type so numeric consumers can
+			// rebind Boolean values as 0/1, but do not advertise a runtime result
+			// type here: that metadata is reserved for COM_STMT packets and would
+			// turn an unrelated direct `?` projection into a BOOL literal whenever
+			// another expression in the same statement is specialized.
+			paramValue.SourceType = types.T_bool.ToType()
+			paramValue.HasSourceType = true
+		} else if paramBinaryString[i] && sourceType.Id != 0 {
 			paramValue.SourceType = executeArgumentSourceType(sourceType)
 			paramValue.HasSourceType = true
 		} else if paramBinaryString[i] {
@@ -2851,6 +3063,7 @@ func createCompile(
 	isPrepare bool,
 	schedulingTrace *schedule.TraceRecorder,
 	preparedRetry *preparedExecutionRetry,
+	groupConcatMaxLenFloor uint64,
 ) (retCompile *compile.Compile, err error) {
 
 	addr := currentCNPipelineAddress(ses)
@@ -2918,6 +3131,7 @@ func createCompile(
 		getStatementStartAt(execCtx.reqCtx),
 	)
 	retCompile.SetIsPrepare(isPrepare)
+	retCompile.SetGroupConcatMaxLenFloor(groupConcatMaxLenFloor)
 	if schedulingSQLMode != nil {
 		retCompile.SetQuerySchedulingIntent(querySchedulingIntentForStatementWithSQLMode(
 			ses, schedulingSQL, *schedulingSQLMode))

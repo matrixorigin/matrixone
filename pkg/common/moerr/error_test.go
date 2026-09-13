@@ -317,6 +317,20 @@ func TestTooLongIdentMySQLError(t *testing.T) {
 	require.Equal(t, "Identifier name 'identifier' is too long", err.Error())
 }
 
+func TestUserLockWrongNameMySQLError(t *testing.T) {
+	err := NewUserLockWrongName(context.Background(), "NULL")
+	require.Equal(t, ErrUserLockWrongName, err.ErrorCode())
+	require.Equal(t, uint16(ER_USER_LOCK_WRONG_NAME), err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Incorrect user-level lock name 'NULL'.", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
 type fakeErr struct {
 }
 

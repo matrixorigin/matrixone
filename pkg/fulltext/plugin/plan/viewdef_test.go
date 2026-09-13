@@ -21,11 +21,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type viewDefTestCtx struct{}
 
 func (viewDefTestCtx) GetContext() context.Context { return context.Background() }
+
+// GetProcess returns nil: these tests plan without a service runtime.
+func (viewDefTestCtx) GetProcess() *process.Process { return nil }
 func (viewDefTestCtx) ResolveVariable(string, bool, bool) (interface{}, error) {
 	return nil, nil
 }

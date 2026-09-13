@@ -1050,8 +1050,8 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 }
 
 // PreparedPlanHasDeferredNumericFunction reports whether a prepared plan has
-// an ABS argument whose overload was deferred until execution.  This is kept
-// as a plan-introspection helper for tests and diagnostics; execute-time
+// an ABS or SIGN argument whose overload was deferred until execution. This is
+// kept as a plan-introspection helper for tests and diagnostics; execute-time
 // eligibility is cached on PrepareStmt and must not call this walker for every
 // execution.
 func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
@@ -1059,10 +1059,10 @@ func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
 }
 
 // PreparedPlanNumericFallbackParamPositions returns the parameter positions
-// whose value supplies a deferred numeric ABS argument.  The result is plan
-// metadata, not an execute-time decision: callers can compute it once when a
+// whose value supplies a deferred numeric ABS or SIGN argument. The result is
+// plan metadata, not an execute-time decision: callers can compute it once when a
 // prepared plan is built and use it to decide whether runtime values must be
-// decoded.  In particular, this avoids scanning/deep-copying the entire plan
+// decoded. In particular, this avoids scanning/deep-copying the entire plan
 // on every ordinary execution.
 func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
@@ -1071,7 +1071,7 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	positions := make(map[int32]struct{})
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "abs") || len(fn.Args) != 1 {
+		if fn == nil || fn.Func == nil || !isPreparedNumericFallbackFunction(fn.Func.GetObjName()) || len(fn.Args) != 1 {
 			return nil
 		}
 		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
@@ -1098,6 +1098,43 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 // only when execution supplies a numeric domain.
 func PreparedPlanBitCountFallbackParamPositions(preparePlan *Plan) []int32 {
 	return preparedPlanFunctionFallbackParamPositions(preparePlan, "bit_count")
+}
+
+// PreparedPlanConversionParamPositions returns the marker positions used as
+// the value operand of BIN/CONV. These functions defer their first-operand
+// domain until EXECUTE, so SQL PREPARE needs the positions once per plan
+// generation rather than rescanning the expression tree on every execution.
+func PreparedPlanConversionParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+			return nil
+		}
+		name := strings.ToLower(fn.Func.GetObjName())
+		if name != "bin" && name != "conv" {
+			return nil
+		}
+		if name == "conv" && len(fn.Args) != 3 {
+			return nil
+		}
+		if position, ok := preparedParamPosition(fn.Args[0]); ok {
+			positions[int32(position)] = struct{}{}
+		}
+		return nil
+	})
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
 }
 
 func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName string) []int32 {
@@ -1127,6 +1164,15 @@ func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName 
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
+}
+
+func isPreparedNumericFallbackFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "abs", "sign":
+		return true
+	default:
+		return false
+	}
 }
 
 func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
@@ -4137,6 +4183,11 @@ func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.E
 }
 
 func preparedExprRequiresRuntimeSpecializationAt(functionName string, argIndex int, expr *plan.Expr) bool {
+	// Only CONV's first operand changes the executor domain. The base operands
+	// are numeric controls and do not justify copying/rebinding the plan.
+	if functionName == "bin" || functionName == "conv" {
+		return argIndex == 0 && preparedExprRequiresRuntimeSpecialization(functionName, expr)
+	}
 	// LAG/LEAD/NTH_VALUE offset markers affect row selection, not the result
 	// value's type. Their value argument remains domain-sensitive, while the
 	// cached compile can safely retain an offset parameter after validation.
@@ -4252,7 +4303,7 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	// the type of its first argument, so a binary parameter can change the
 	// result-column type from the prepare-time placeholder domain.
 	switch name {
-	case "ntile", "sleep",
+	case "bin", "char", "conv", "ntile", "sleep",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
 		"ord", "char_length", "character_length",
 		"left", "right", "substring", "substr", "mid", "reverse",
@@ -5148,6 +5199,37 @@ func PreparedNumericPrefixTypeFromString(value string) types.Type {
 	}
 }
 
+// PreparedNumericStringIsComplete reports whether the whole value (apart from
+// surrounding ASCII whitespace) is one numeric lexeme accepted by the MySQL
+// numeric-prefix scanner.  CHAR's prepared-marker context uses this boundary
+// to distinguish an exact numeric value from a string with a numeric prefix
+// and a suffix, whose existing prefix-truncation semantics must be preserved.
+func PreparedNumericStringIsComplete(value string) bool {
+	trimmed := strings.Trim(value, " \t\n\v\f\r")
+	if trimmed == "" {
+		return false
+	}
+	prefix, ok := function.GetNumericStringPrefix(value)
+	return ok && prefix == trimmed
+}
+
+// PreparedCharSourceTypeFromString returns the effective source domain used by
+// a bare prepared CHAR marker.  A complete numeric lexeme uses the exact
+// integer/DECIMAL type inferred from its value; every other string follows
+// CHAR's VARCHAR prefix parser.  Keeping the fallback type explicit lets the
+// frontend runtime cache distinguish values whose numeric-prefix envelope is
+// equal but whose CHAR signedness differs.
+func PreparedCharSourceTypeFromString(value string) (types.Type, bool) {
+	if !PreparedNumericStringIsComplete(value) {
+		return types.T_varchar.ToType(), false
+	}
+	typ, ok := PreparedRuntimeTypeFromString(strings.Trim(value, " \t\n\v\f\r"))
+	if !ok {
+		return types.T_varchar.ToType(), false
+	}
+	return typ, true
+}
+
 func preparedBoundedDecimalExponent(value string, compensation int64) (int64, bool) {
 	if value == "" {
 		return compensation, absInt64Within(compensation, int64(types.T_decimal256.ToType().Width))
@@ -5861,6 +5943,14 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 	case types.T_bool:
 		value, err := strconv.ParseBool(text)
 		if err != nil {
+			switch text {
+			case "0":
+				value, err = false, nil
+			case "1":
+				value, err = true, nil
+			}
+		}
+		if err != nil {
 			return castText()
 		}
 		return makeLiteral(&plan.Literal_Bval{Bval: value}), nil
@@ -5930,6 +6020,11 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 			return castText()
 		}
 		return makeLiteral(&plan.Literal_Dval{Dval: value}), nil
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp:
+		// The plan literal protocol has no temporal oneofs. Keep the
+		// execute-time domain explicit with a typed cast so the dynamic
+		// executor receives a fixed-width temporal vector.
+		return castText()
 	case types.T_decimal64:
 		width, scale := runtimeType.Width, runtimeType.Scale
 		if width <= 0 || scale < 0 || scale > width {
@@ -5976,7 +6071,10 @@ func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 		// vector instead of treating the value as VARCHAR.
 		return castText()
 	default:
-		return makeLiteral(&plan.Literal_Sval{Sval: rawText}), nil
+		if runtimeType.Oid.IsMySQLString() {
+			return makeLiteral(&plan.Literal_Sval{Sval: rawText}), nil
+		}
+		return castText()
 	}
 }
 
@@ -6689,10 +6787,11 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 	} else {
 		for i, canFold := range argFold {
 			if canFold {
-				fn.Args[i], err = ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
-				if err != nil {
-					return false, err
+				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
+				if foldErr != nil {
+					return false, foldErr
 				}
+				fn.Args[i] = folded
 				if _, ok := fn.Args[i].Expr.(*plan.Expr_Vec); ok {
 					continue
 				}

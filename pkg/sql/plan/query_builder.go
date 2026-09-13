@@ -3793,6 +3793,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		colRefCnt := make(map[[2]int32]int)
 		builder.countColRefs(rootID, colRefCnt)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		var fusedScalarAggs bool
+		rootID, fusedScalarAggs = builder.fuseScalarAggregates(rootID)
+		if fusedScalarAggs {
+			colRefCnt = make(map[[2]int32]int)
+			builder.countColRefs(rootID, colRefCnt)
+		}
 		// Removing a proof-eliminated aggregate can expose a direct Project ->
 		// TableScan edge only after the first limit-pushdown pass. Re-run the
 		// idempotent rule so the newly streaming path can honor source demand.
@@ -5745,6 +5751,11 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	if ctx.sampleFunc.hasSampleFunc {
+		for _, group := range ctx.groups {
+			if hasSubquery(group) {
+				return 0, moerr.NewNYI(builder.GetContext(), "subquery in GROUP BY with SAMPLE")
+			}
+		}
 		// return err if it's not a legal SAMPLE function.
 		if err = validSample(ctx, builder); err != nil {
 			return 0, err
@@ -5800,8 +5811,18 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 		affineOrderBys,
 	)
 
-	// Flatten aggregate argument subqueries before building the AGG node.
+	// GROUP BY expressions are evaluated by the AGG over its input, so
+	// materialize scalar subqueries into that input before fixing the group-key
+	// layout. Projection, alias, and ordinal references already point at the
+	// corresponding group position and do not need to be rebound.
 	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
+		for i, group := range ctx.groups {
+			if nodeID, ctx.groups[i], err = builder.flattenSubqueries(nodeID, group, ctx); err != nil {
+				return
+			}
+		}
+
+		// Flatten aggregate argument subqueries before building the AGG node.
 		for i, agg := range ctx.aggregates {
 			if nodeID, ctx.aggregates[i], err = builder.flattenSubqueries(nodeID, agg, ctx); err != nil {
 				return
@@ -8395,7 +8416,9 @@ func (builder *QueryBuilder) bindGroupBy(
 		return
 	}
 
-	groupBinder := NewGroupBinder(builder, ctx, selectList)
+	allowScalarSubquery := clause != nil && astTimeWindow == nil &&
+		!clause.Apart && !clause.Cube && !clause.GroupingSets && !clause.Rollup
+	groupBinder := NewGroupBinder(builder, ctx, selectList, allowScalarSubquery)
 
 	if clause != nil {
 		for _, list := range clause.GroupByExprsList {

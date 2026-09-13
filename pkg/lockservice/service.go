@@ -564,6 +564,7 @@ func (s *service) Lock(
 	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
 		txn.Unlock()
 		s.bindChangeMu.RUnlock()
+		s.detachRejectedRemoteBind(bind)
 		return pb.Result{}, err
 	}
 	s.bindChangeMu.RUnlock()
@@ -1462,6 +1463,31 @@ func (s *service) acquireTxnBindRef(
 		s.incRef(bind.Group, bind.Table)
 	}
 	return nil
+}
+
+// detachRejectedRemoteBind lets the next request refresh a route republished
+// from an allocator reply before owner convergence. Invalidated refs cannot
+// send locks or heartbeats, so neither path would otherwise refresh this cache.
+// Keep the ref tombstone: old transactions still own its release and fences.
+// The caller must release txn and bindChangeMu before entering this transition.
+func (s *service) detachRejectedRemoteBind(bind pb.LockTable) {
+	if bind.ServiceID == s.serviceID {
+		return
+	}
+	s.bindChangeMu.Lock()
+	s.mu.RLock()
+	ref, exists := s.mu.remoteBindRefs[makeRemoteBindKey(bind)]
+	var removed lockTable
+	if exists && ref.invalidated {
+		// Pin the ref through detachment: last-release/reacquisition can create
+		// a valid ref for the same key while a rejected request is unwinding.
+		removed = s.tableGroups.detachExactBind(bind)
+	}
+	s.mu.RUnlock()
+	s.bindChangeMu.Unlock()
+	if removed != nil {
+		removed.close(closeReasonBindChanged)
+	}
 }
 
 // acquireRemoteTxnBindRef atomically couples transaction admission to the
@@ -3380,6 +3406,26 @@ func (m *lockTableHolders) removeWithFilter(
 	removed := m.detachWithFilter(filter)
 	closeLockTables(removed, reason)
 	return len(removed)
+}
+
+// detachExactBind removes only the rejected routing generation in constant
+// time. A delayed rejection must not evict a newer or metadata-distinct route.
+func (m *lockTableHolders) detachExactBind(bind pb.LockTable) lockTable {
+	m.RLock()
+	h := m.holders[bind.Group]
+	m.RUnlock()
+	if h == nil {
+		return nil
+	}
+	h.Lock()
+	defer h.Unlock()
+	table := h.tables[bind.Table]
+	if table == nil || makeRemoteBindKey(table.getBind()) != makeRemoteBindKey(bind) {
+		return nil
+	}
+	delete(h.tables, bind.Table)
+	m.version.Add(1)
+	return table
 }
 
 // detachWithFilter removes matching tables from lookup without closing them.

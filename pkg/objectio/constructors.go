@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/bits"
 	"slices"
 	"sort"
 
@@ -510,18 +511,29 @@ func (s *ReadFilterSearch) search(source *vector.Vector, sorted bool) []int64 {
 	if len(s.terms) == 1 {
 		return s.terms[0].search(source, sorted)
 	}
-	marks := make([]int64, source.Length())
+	// Keep one bit per source row while unioning the term matches. The old
+	// int64-per-row mark array dominated allocations for large object blocks;
+	// a bitset preserves the same row-order semantics at 1/64 of the size.
+	marks := make([]uint64, (source.Length()+63)/64)
 	for i := range s.terms {
 		for _, row := range s.terms[i].search(source, sorted) {
-			if row >= 0 && row < int64(len(marks)) {
-				marks[row] = 1
+			if row >= 0 && row < int64(source.Length()) {
+				index := uint64(row)
+				marks[index>>6] |= uint64(1) << (index & 63)
 			}
 		}
 	}
-	rows := marks[:0]
-	for row, matched := range marks {
-		if matched != 0 {
-			rows = append(rows, int64(row))
+
+	matchedRows := 0
+	for _, word := range marks {
+		matchedRows += bits.OnesCount64(word)
+	}
+	rows := make([]int64, 0, matchedRows)
+	for wordIndex, word := range marks {
+		for word != 0 {
+			bit := bits.TrailingZeros64(word)
+			rows = append(rows, int64(wordIndex*64+bit))
+			word &= word - 1
 		}
 	}
 	return rows

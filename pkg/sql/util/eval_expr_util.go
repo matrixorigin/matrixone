@@ -779,14 +779,14 @@ func SetInsertValueBool(proc *process.Process, numVal *tree.NumVal) (canInsert b
 		if !ok {
 			return false, false, moerr.NewInvalidInputf(proc.Ctx, "invalid int value '%s'", numVal.String())
 		}
-		num = val == 1
+		num = val != 0
 
 	case tree.P_uint64:
 		val, ok := numVal.Uint64()
 		if !ok {
 			return false, false, moerr.NewInvalidInputf(proc.Ctx, "invalid uint value '%s'", numVal.String())
 		}
-		num = val == 1
+		num = val != 0
 
 	case tree.P_decimal:
 		canInsert = false

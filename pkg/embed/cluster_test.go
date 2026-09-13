@@ -660,9 +660,7 @@ func TestCreateDB(t *testing.T) {
 // doStartLocked that are not reached by normal cluster startup tests.
 func TestDoStartLockedErrorPaths(t *testing.T) {
 	t.Run("non-CN service error returns immediately", func(t *testing.T) {
-		// A non-CN operator whose state is already 'started' will return
-		// an error from Start(), exercising the direct-return path at
-		// cluster.go line 119-121.
+		// A non-CN operator rejects duplicate startup before allocating resources.
 		op := &operator{
 			serviceType: metadata.ServiceType_LOG,
 			state:       started, // forces Start() to return error
@@ -675,10 +673,8 @@ func TestDoStartLockedErrorPaths(t *testing.T) {
 		assert.Contains(t, err.Error(), "already started")
 	})
 
-	t.Run("CN service error captured via atomic.Value", func(t *testing.T) {
-		// A CN operator whose state is already 'started' will return an
-		// error from Start(), exercising the goroutine error-capture path
-		// at cluster.go lines 128-133 and the error-return at 138-140.
+	t.Run("CN service error preserves cause", func(t *testing.T) {
+		// The concurrent startup path preserves the same rejection.
 		op := &operator{
 			serviceType: metadata.ServiceType_CN,
 			state:       started,
@@ -692,7 +688,7 @@ func TestDoStartLockedErrorPaths(t *testing.T) {
 	})
 
 	t.Run("Start propagates doStartLocked error", func(t *testing.T) {
-		// Exercises the error propagation in Start() at line 107-109.
+		// Start preserves service errors through rollback.
 		op := &operator{
 			serviceType: metadata.ServiceType_LOG,
 			state:       started,
@@ -731,6 +727,79 @@ func TestDoStartLockedErrorPaths(t *testing.T) {
 		err := c.doStartLocked(0)
 		assert.NoError(t, err)
 	})
+}
+
+// These startup regressions use the existing startFn seam: no real services,
+// ports, cluster admission, or wall-clock sleeps are needed.
+func TestDoStartLockedConcurrentErrors(t *testing.T) {
+	first := errors.New("connection refused")
+	second := &os.PathError{Op: "open", Path: "catalog", Err: os.ErrPermission}
+	c := &cluster{
+		id: 42,
+		services: []*operator{
+			{serviceType: metadata.ServiceType_CN, sid: "cn-a"},
+			{serviceType: metadata.ServiceType_CN, sid: "cn-b"},
+		},
+		startFn: func(op *operator) error {
+			if op.sid == "cn-a" {
+				return first
+			}
+			return second
+		},
+	}
+	err := c.doStartLocked(0)
+	require.ErrorIs(t, err, first)
+	require.ErrorIs(t, err, second)
+	var pathErr *os.PathError
+	require.ErrorAs(t, err, &pathErr)
+	require.Same(t, second, pathErr)
+	require.EqualError(t, err,
+		"internal error: embedded cluster 42 start CN service \"cn-a\"\n"+
+			"connection refused\n"+
+			"internal error: embedded cluster 42 start CN service \"cn-b\"\n"+
+			"open catalog: permission denied")
+
+	// Startup results belong to this invocation, including incremental CN starts.
+	c.startFn = func(op *operator) error {
+		assert.Equal(t, "cn-b", op.sid)
+		return nil
+	}
+	require.NoError(t, c.doStartLocked(1))
+}
+
+func TestDoStartLockedJoinsCNBeforeReturningInfrastructureFailure(t *testing.T) {
+	cnEntered := make(chan struct{})
+	infrastructureFailed := make(chan struct{})
+	cnErr := errors.New("CN startup failed")
+	logErr := errors.New("log startup failed")
+	var cnReturned atomic.Bool
+	c := &cluster{
+		services: []*operator{
+			{serviceType: metadata.ServiceType_CN, sid: "cn"},
+			{serviceType: metadata.ServiceType_LOG, sid: "log"},
+			{serviceType: metadata.ServiceType_TN, sid: "not-started"},
+		},
+		startFn: func(op *operator) error {
+			switch op.sid {
+			case "cn":
+				close(cnEntered)
+				<-infrastructureFailed
+				defer cnReturned.Store(true)
+				return cnErr
+			case "log":
+				<-cnEntered
+				close(infrastructureFailed)
+				return logErr
+			default:
+				t.Error("started a service after infrastructure failure")
+				return nil
+			}
+		},
+	}
+	err := c.doStartLocked(0)
+	require.True(t, cnReturned.Load(), "all startup workers must finish before caller can roll back")
+	require.ErrorIs(t, err, cnErr)
+	require.ErrorIs(t, err, logErr)
 }
 
 func TestClusterStartRollbackClosesPartiallyStartedServices(t *testing.T) {

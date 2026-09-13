@@ -3740,6 +3740,20 @@ func opUnaryFixedToFixedWithNullOnError[
 	T types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) (Tr, error), selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck(parameters, result, length, func(v T) (Tr, bool) {
+		r, err := resultFn(v)
+		return r, err != nil
+	}, selectList)
+}
+
+// opUnaryFixedToFixedWithNullCheck evaluates a unary function and marks a row
+// NULL when resultFn reports an invalid result. Unlike
+// opUnaryFixedToFixedWithNullOnError, it lets hot paths reject expected
+// row-local values without allocating an error that will only be discarded.
+func opUnaryFixedToFixedWithNullCheck[
+	T types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, length int,
+	resultFn func(v T) (Tr, bool), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
@@ -3769,8 +3783,8 @@ func opUnaryFixedToFixedWithNullOnError[
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			r, err := resultFn(v1)
-			if err != nil {
+			r, invalid := resultFn(v1)
+			if invalid {
 				nulls.AddRange(rsNull, 0, uint64(length))
 			} else {
 				rowCount := uint64(length)
@@ -3790,8 +3804,8 @@ func opUnaryFixedToFixedWithNullOnError[
 				continue
 			}
 			v1, _ := p1.GetValue(i)
-			r, err := resultFn(v1)
-			if err != nil {
+			r, invalid := resultFn(v1)
+			if invalid {
 				rsNull.Add(i)
 				continue
 			}
@@ -3803,8 +3817,8 @@ func opUnaryFixedToFixedWithNullOnError[
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
-		r, err := resultFn(v1)
-		if err != nil {
+		r, invalid := resultFn(v1)
+		if invalid {
 			rsNull.Add(i)
 			continue
 		}

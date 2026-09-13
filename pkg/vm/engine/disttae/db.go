@@ -704,7 +704,9 @@ func parseSnapshotCheckpointEntries(
 
 // requestSnapshotReadUntilReady distinguishes a temporarily lagging checkpoint
 // from a checkpoint set that cannot cover the requested snapshot. TN reports
-// the former as Succeed=false, so retry it with a bounded, context-aware wait.
+// the former as Succeed=false, so retry it with a context-aware wait. A caller
+// deadline is the operation's authoritative budget; the fallback timeout only
+// protects callers that did not provide one.
 // Once TN reports success, getOrCreateSnapPartBy still validates the returned
 // checkpoint range before using it.
 func requestSnapshotReadUntilReady(
@@ -712,19 +714,25 @@ func requestSnapshotReadUntilReady(
 	tbl *txnTable,
 	snapshot *types.TS,
 	retryInterval time.Duration,
-	retryTimeout time.Duration,
+	fallbackRetryTimeout time.Duration,
 ) (*cmd_util.SnapshotReadResp, error) {
-	retryCtx, cancel := context.WithTimeoutCause(
-		ctx,
-		retryTimeout,
-		moerr.NewServiceUnavailableNoCtx("checkpoint not ready for snapshot read"),
-	)
+	retryCtx := ctx
+	cancel := func() {}
+	if _, hasCallerDeadline := ctx.Deadline(); !hasCallerDeadline {
+		retryCtx, cancel = context.WithTimeoutCause(
+			ctx,
+			fallbackRetryTimeout,
+			moerr.NewServiceUnavailableNoCtx("checkpoint not ready for snapshot read"),
+		)
+	}
 	defer cancel()
 
 	var resp *cmd_util.SnapshotReadResp
 	err := common.RetryWithInterval(
 		retryCtx,
 		func() (bool, error) {
+			// TxnOperator.Debug requires a deadline. retryCtx preserves the caller's
+			// deadline when present and supplies the bounded fallback otherwise.
 			response, err := RequestSnapshotRead(retryCtx, tbl, snapshot)
 			if err != nil {
 				if retryCtx.Err() != nil {

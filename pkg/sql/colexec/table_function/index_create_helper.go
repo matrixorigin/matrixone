@@ -16,6 +16,7 @@ package table_function
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strings"
 
@@ -280,4 +281,25 @@ func baseElemBytes(baseOid types.T) uint64 {
 		return 2
 	}
 	return 4
+}
+
+// buildSnapshotTS is the transaction SnapshotTS the index content is built from -- the base-table
+// version this generation reflects. Recorded alongside the wall-clock ordering timestamp because
+// a wall clock cannot be compared against a named snapshot's TS. 0 when there is no txn.
+func buildSnapshotTS(proc *process.Process) int64 {
+	if proc == nil {
+		return 0
+	}
+	return sqlexec.NewSqlProcess(proc).BuildSnapshotTS()
+}
+
+// metadataProvenance reports whether this index's metadata table already carries the appended
+// nrow/build_ts columns, so the writer names them only when they exist. See
+// sqlexec.HasProvenanceColumns for why a CN can meet either shape.
+func metadataProvenance(proc *process.Process, dbName, metadataTable string) bool {
+	if proc == nil {
+		return false
+	}
+	return sqlexec.HasProvenanceColumns(
+		sqlexec.NewSqlProcess(proc), dbName, metadataTable, catalog.IndexMetadata_TblCol_Build_Ts)
 }

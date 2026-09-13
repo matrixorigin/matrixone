@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -59,6 +60,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/timewin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -75,7 +77,7 @@ import (
 
 func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	sessionMaxLen := int64(5)
+	sessionMaxLen := uint64(5)
 	proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
 		require.Equal(t, "group_concat_max_len", name)
 		require.True(t, system)
@@ -108,28 +110,55 @@ func TestRefreshGroupConcatMaxLenForPreparedCompileReuse(t *testing.T) {
 	mergeGroupArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr("|")}
 	windowArg := window.NewArgument()
 	windowArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr(",")}
+	timeArg := timewin.NewArgument()
+	timeArg.Aggs = []aggexec.AggFuncExecExpression{newGroupConcatExpr(";")}
 	scopes := []*Scope{
 		{RootOp: groupArg},
+		{RootOp: timeArg},
 		{RootOp: mergeGroupArg},
 		{RootOp: windowArg},
 	}
 
-	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
-	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), groupArg.Aggs[0].GetExtraConfig())
-	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 5), groupArg.Aggs[1].GetExtraConfig())
-	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 5), mergeGroupArg.Aggs[0].GetExtraConfig())
-	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 5), windowArg.Aggs[0].GetExtraConfig())
-
-	sessionMaxLen = 1024
-	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc))
+	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc, 1024))
+	// The prepare-time 1024-byte value is a floor. Lowering the session value
+	// for EXECUTE must not make the prepared plan truncate at 5 bytes.
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024), groupArg.Aggs[1].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
 	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(";", 1024), timeArg.Aggs[0].GetExtraConfig())
+
+	sessionMaxLen = 1024
+	require.NoError(t, refreshGroupConcatMaxLen(scopes, proc, 1024))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), groupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatOrderedConfig(orderConfig, 1024), groupArg.Aggs[1].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("|", 1024), mergeGroupArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(",", 1024), windowArg.Aggs[0].GetExtraConfig())
+	require.Equal(t, aggexec.EncodeGroupConcatConfig(";", 1024), timeArg.Aggs[0].GetExtraConfig())
+
+	// A prepared plan with a smaller floor expands for a larger execution-time
+	// value, then returns to its original floor when the session value drops.
+	lowFloor := group.NewArgument()
+	lowFloor.Aggs = []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfGroupConcat,
+			false,
+			nil,
+			aggexec.EncodeGroupConcatConfig("", 5)),
+	}
+	lowFloorScopes := []*Scope{{RootOp: lowFloor}}
+	sessionMaxLen = 1024
+	require.NoError(t, refreshGroupConcatMaxLen(lowFloorScopes, proc, 5))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 1024), lowFloor.Aggs[0].GetExtraConfig())
+	sessionMaxLen = 5
+	require.NoError(t, refreshGroupConcatMaxLen(lowFloorScopes, proc, 5))
+	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), lowFloor.Aggs[0].GetExtraConfig())
 
 	groupArg.Release()
 	mergeGroupArg.Release()
 	windowArg.Release()
+	lowFloor.Release()
+	timeArg.Release()
 }
 
 func GetFilePath() string {
@@ -2382,6 +2411,72 @@ func TestCompileBuildSideForBroadcastJoinGroupsDuplicateCN(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, dispatchOp.LocalRegs, 1)
 	require.Empty(t, dispatchOp.RemoteRegs)
+}
+
+func TestBroadcastJoinMapReferencesCountProbeWorkers(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		probes engine.Nodes
+		want   map[string]int32
+	}{
+		{
+			name:   "single packed scope",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}},
+			want:   map[string]int32{"cn1:6001": 4},
+		},
+		{
+			name:   "one packed scope per CN",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 3}},
+			want:   map[string]int32{"cn1:6001": 2, "cn2:6001": 3},
+		},
+		{
+			name:   "colocated single worker scopes",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn1:6001", Mcpu: 1}},
+			want:   map[string]int32{"cn1:6001": 2},
+		},
+		{
+			name:   "colocated packed scopes",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn1:6001", Mcpu: 3}},
+			want:   map[string]int32{"cn1:6001": 5},
+		},
+		{
+			name:   "mixed groups on multiple CNs",
+			probes: engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 4}},
+			want:   map[string]int32{"cn1:6001": 3, "cn2:6001": 4},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 4}, {Addr: "cn2:6001", Mcpu: 4}}
+			c.addr = "cn1:6001"
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			node := &plan.Node{Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{}}}
+			buildScope := generateScopeWithRootOperator(c.proc, []vm.OpType{vm.TableScan})
+			buildScope.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1}
+			probes := make([]*Scope, len(tc.probes))
+			for i, probe := range tc.probes {
+				probes[i] = generateScopeWithRootOperator(c.proc, []vm.OpType{vm.HashJoin})
+				probes[i].NodeInfo = probe
+			}
+
+			c.compileBuildSideForBroadcastJoin(node, probes, []*Scope{buildScope})
+			builds := make(map[string]*hashbuild.HashBuild)
+			for _, probe := range probes {
+				for _, pre := range probe.PreScopes {
+					if build, ok := pre.RootOp.(*hashbuild.HashBuild); ok {
+						require.NotContains(t, builds, pre.NodeInfo.Addr)
+						builds[pre.NodeInfo.Addr] = build
+					}
+				}
+			}
+			require.Len(t, builds, len(tc.want))
+			for addr, want := range tc.want {
+				require.Contains(t, builds, addr)
+				require.Equal(t, want, builds[addr].JoinMapRefCnt, addr)
+			}
+		})
+	}
 }
 
 func generateScopeWithRootOperator(proc *process.Process, operatorList []vm.OpType) *Scope {
