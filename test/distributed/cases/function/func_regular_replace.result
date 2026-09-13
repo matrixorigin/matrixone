@@ -116,7 +116,7 @@ REGEXP_SUBSTR('xa.a.', '(a)\\Q.', 2, 2) AS quoted_substr;
 quoted_all    quoted_one    quoted_after_pos    quoted_instr    quoted_substr
 aa    xaa.    xaa    4    a.
 SELECT HEX(REGEXP_REPLACE(CAST(_binary'a\\a\\' AS VARBINARY(4)),
-                          CAST(_binary'(a)\\Q\\\\E' AS VARBINARY(8)), _binary'X', 1, 0)) AS binary_quoted_backslash;
+CAST(_binary'(a)\\Q\\\\E' AS VARBINARY(8)), _binary'X', 1, 0)) AS binary_quoted_backslash;
 binary_quoted_backslash
 5858
 SELECT HEX(REGEXP_REPLACE(CAST(_binary'中中' AS BINARY(6)), CAST(_binary'中' AS BINARY(3)), _binary'X', 2, 1)) AS binary_replace,
