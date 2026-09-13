@@ -17,6 +17,7 @@ package collationkey
 import (
 	"bytes"
 	"encoding/hex"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -236,6 +237,30 @@ func TestNumericAndDecimalBoundaries(t *testing.T) {
 	}
 	if _, err := EncodePart(nil, Part{Domain: Domain{Type: Text, Charset: CharsetUTF8, Unit: PrefixCharacters, Collation: 1}, Value: []byte("a")}); err == nil {
 		t.Fatal("unregistered explicit collation was accepted")
+	}
+}
+
+func TestDecimalScaleOverflowBoundary(t *testing.T) {
+	domain := Domain{Type: Decimal, Width: 16, Scale: 2}
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{
+			name:  "max int16 fractional digits",
+			value: "0." + strings.Repeat("0", 32766) + "1",
+		},
+		{
+			name:  "int16 overflow fractional digits",
+			value: "0." + strings.Repeat("0", 32767) + "1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if encoded, err := EncodePart(nil, Part{Domain: domain, Value: []byte(tt.value)}); err == nil {
+				t.Fatalf("out-of-domain decimal was accepted: encoded=%X", encoded)
+			}
+		})
 	}
 }
 

@@ -619,7 +619,7 @@ func normalizeDecimal(value []byte, width uint16, targetScale int16) ([]byte, er
 	if !allDigits(whole) || !allDigits(frac) {
 		return nil, wrapCodecError(ErrInvalidValue, "decimal digits")
 	}
-	inputScale := int16(len(frac))
+	inputScale := len(frac)
 	coeffText := strings.TrimLeft(whole+frac, "0")
 	if coeffText == "" {
 		coeffText = "0"
