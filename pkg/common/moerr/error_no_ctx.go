@@ -109,6 +109,10 @@ func NewInvalidBitwiseAggregateOperandsSizeNoCtx() *Error {
 	return newError(Context(), ErrInvalidBitwiseAggregateOperandsSize)
 }
 
+func NewInvalidBitwiseOperandsSizeNoCtx() *Error {
+	return newError(Context(), ErrInvalidBitwiseOperandsSize)
+}
+
 func NewWrongParamCountToNativeFctNoCtx(function string) *Error {
 	return newError(Context(), ErrWrongParamCountToNativeFct, function)
 }
