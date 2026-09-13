@@ -48,10 +48,10 @@ UT_SHARD=${UT_SHARD:-"all"}
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"0"}
 UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"1"}
 # The light package wave does not own embedded-cluster fixtures.  On CI's
-# single runner it can therefore overlap the exclusive issues package when
-# enabled, but it uses its own conservative package budget so the two waves do
-# not recreate the six-way race-test pressure that this scheduler removed.
-UT_OVERLAP_LIGHT=${UT_OVERLAP_LIGHT:-"0"}
+# single runner it can therefore overlap the exclusive issues package. Its
+# conservative package budget keeps the two waves from recreating the six-way
+# race-test pressure that this scheduler removed.
+UT_OVERLAP_LIGHT=${UT_OVERLAP_LIGHT:-"1"}
 UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
 # A helper may own two independent child process groups. Its trap gives each
 # child a bounded TERM grace period, so the parent must retain the helper long
