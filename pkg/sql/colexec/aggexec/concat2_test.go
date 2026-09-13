@@ -27,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/geo"
@@ -787,46 +788,105 @@ func TestGroupConcatLargeGeometryAcrossFinalizers(t *testing.T) {
 	}
 }
 
-func TestGroupConcatLargeTextAcrossOrderedSpill(t *testing.T) {
-	mp := mpool.MustNewZero()
-	defer mpool.DeleteMPool(mp)
-
-	input := bytes.Repeat([]byte("x"), 70000)
-	exec := newGroupConcatExec(mp, multiAggInfo{
-		aggID:     AggIdOfGroupConcat,
-		argTypes:  []types.Type{types.T_text.ToType(), types.T_int64.ToType()},
-		retType:   GroupConcatReturnType([]types.Type{types.T_text.ToType()}),
-		emptyNull: true,
-	}, "").(*groupConcatExec)
-	defer exec.Free()
-	require.NoError(t, exec.SetExtraInformation(
-		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ""), 0))
-	exec.maxLen = uint64(len(input))
-	require.NoError(t, exec.GroupGrow(1))
-	ConfigureGroupConcatH0Spill(
-		exec, groupConcatMinRunSize, context.Background(),
-		func() (*os.File, error) {
-			file, err := os.CreateTemp(t.TempDir(), "group-concat-large-text-")
-			if err == nil {
-				err = os.Remove(file.Name())
-			}
-			return file, err
-		}, nil)
-
-	values := vector.NewVec(types.T_text.ToType())
-	defer values.Free(mp)
-	require.NoError(t, vector.AppendBytes(values, input, false, mp))
-	order := vector.NewVec(types.T_int64.ToType())
-	defer order.Free(mp)
-	require.NoError(t, vector.AppendFixed(order, int64(1), false, mp))
-	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values, order}))
-	require.True(t, exec.hasOrderedSpillRuns())
-
-	result, err := exec.FlushWithContext(context.Background())
+func TestGroupConcatLargeValuesAcrossOrderedSpill(t *testing.T) {
+	const sizeAboveUint16 = 1 << 16
+	jsonLiteral := `"` + strings.Repeat("j", sizeAboveUint16-2) + `"`
+	require.Len(t, jsonLiteral, sizeAboveUint16)
+	jsonValue, err := bytejson.ParseFromString(jsonLiteral)
 	require.NoError(t, err)
-	require.Len(t, result, 1)
-	defer result[0].Free(mp)
-	require.Equal(t, input, result[0].GetBytesAt(0))
+	jsonInput, err := types.EncodeJson(jsonValue)
+	require.NoError(t, err)
+
+	vectorValues := make([]float32, 1<<14)
+	for i := range vectorValues {
+		vectorValues[i] = -1
+	}
+	vectorInput := types.ArrayToBytes(vectorValues)
+	vectorOutput := "[" + strings.Repeat("-1, ", len(vectorValues)-1) + "-1]"
+	require.Len(t, vectorInput, sizeAboveUint16)
+	require.Len(t, vectorOutput, sizeAboveUint16)
+
+	cases := []struct {
+		name  string
+		typ   types.Type
+		input []byte
+		want  []byte
+	}{
+		{
+			name:  "text",
+			typ:   types.T_text.ToType(),
+			input: bytes.Repeat([]byte("x"), 70000),
+			want:  bytes.Repeat([]byte("x"), 70000),
+		},
+		{
+			name:  "json",
+			typ:   types.T_json.ToType(),
+			input: jsonInput,
+			want:  []byte(jsonLiteral),
+		},
+		{
+			name:  "float32 vector",
+			typ:   types.T_array_float32.ToType(),
+			input: vectorInput,
+			want:  []byte(vectorOutput),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Greater(t, len(tc.input), sizeAboveUint16-1)
+			require.Greater(t, len(tc.want), sizeAboveUint16-1)
+
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			defer func() {
+				require.Zero(t, mp.CurrNB())
+			}()
+
+			exec := newGroupConcatExec(mp, multiAggInfo{
+				aggID:     AggIdOfGroupConcat,
+				argTypes:  []types.Type{tc.typ, types.T_int64.ToType()},
+				retType:   GroupConcatReturnType([]types.Type{tc.typ}),
+				emptyNull: true,
+			}, "").(*groupConcatExec)
+			defer exec.Free()
+			require.NoError(t, exec.SetExtraInformation(
+				testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ""), 0))
+			exec.maxLen = uint64(len(tc.want))
+			require.NoError(t, exec.GroupGrow(1))
+			ConfigureGroupConcatH0Spill(
+				exec, groupConcatMinRunSize, context.Background(),
+				func() (*os.File, error) {
+					file, err := os.CreateTemp(t.TempDir(), "group-concat-large-value-")
+					if err == nil {
+						err = os.Remove(file.Name())
+					}
+					return file, err
+				}, nil)
+
+			values := vector.NewVec(tc.typ)
+			defer values.Free(mp)
+			require.NoError(t, vector.AppendBytes(values, tc.input, false, mp))
+			order := vector.NewVec(types.T_int64.ToType())
+			defer order.Free(mp)
+			require.NoError(t, vector.AppendFixed(order, int64(1), false, mp))
+			require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values, order}))
+			require.True(t, exec.hasOrderedSpillRuns())
+
+			result, err := exec.FlushWithContext(context.Background())
+			defer func() {
+				for _, resultVec := range result {
+					if resultVec != nil {
+						resultVec.Free(mp)
+					}
+				}
+			}()
+			require.NoError(t, err)
+			require.Len(t, result, 1)
+			require.Equal(t, types.T_text.ToType(), *result[0].GetType())
+			require.Equal(t, tc.want, result[0].GetBytesAt(0))
+		})
+	}
 }
 
 func TestGroupConcatVectorValuesAcrossFinalizers(t *testing.T) {

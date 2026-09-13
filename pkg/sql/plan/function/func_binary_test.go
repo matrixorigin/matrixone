@@ -7436,6 +7436,118 @@ func TestGeoJSONFunctions(t *testing.T) {
 	ok, info = tcAsP.Run()
 	require.True(t, ok, info)
 
+	for _, tc := range []struct {
+		name   string
+		wkt    string
+		maxDec int64
+		want   string
+	}{
+		{
+			name:   "finite scale multiplication at 308",
+			wkt:    "POINT(2 -2)",
+			maxDec: 308,
+			want:   `{"type":"Point","coordinates":[2,-2]}`,
+		},
+		{
+			name:   "first infinite power of ten",
+			wkt:    "POINT(1.23456789 0)",
+			maxDec: 309,
+			want:   `{"type":"Point","coordinates":[1.23456789,0]}`,
+		},
+		{
+			name:   "large precision",
+			wkt:    "POINT(1.23456789 0)",
+			maxDec: 1000,
+			want:   `{"type":"Point","coordinates":[1.23456789,0]}`,
+		},
+		{
+			name:   "maximum accepted precision",
+			wkt:    "POINT(1.23456789 0)",
+			maxDec: 1<<32 - 1,
+			want:   `{"type":"Point","coordinates":[1.23456789,0]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eval := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.wkt}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.maxDec}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{false}),
+				StAsGeoJSONPrec)
+			ok, info := eval.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	t.Run("invalid precision is rejected", func(t *testing.T) {
+		for _, precision := range []int64{-1, math.MinInt64, 1 << 32, math.MaxInt64} {
+			require.Error(t, validateGeoJSONDecimalDigits(precision), "precision=%d", precision)
+		}
+		for _, precision := range []int64{0, 308, 1<<32 - 1} {
+			require.NoError(t, validateGeoJSONDecimalDigits(precision), "precision=%d", precision)
+		}
+	})
+
+	t.Run("invalid precision is rejected by evaluator", func(t *testing.T) {
+		for _, precision := range []int64{-1, 1 << 32, math.MaxInt64} {
+			eval := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{precision}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+				StAsGeoJSONPrec)
+			ok, info := eval.Run()
+			require.True(t, ok, info)
+		}
+	})
+
+	t.Run("NULL propagates before precision validation", func(t *testing.T) {
+		eval := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			StAsGeoJSONPrec)
+		ok, info := eval.Run()
+		require.True(t, ok, info)
+
+		nullPrecision := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			StAsGeoJSONPrec)
+		ok, info = nullPrecision.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("empty batch skips constant argument evaluation", func(t *testing.T) {
+		eval := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{}, []bool{}),
+			StAsGeoJSONPrec)
+		eval.fnLength = 0
+		ok, info := eval.Run()
+		require.True(t, ok, info)
+
+		nonEmpty := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+			StAsGeoJSONPrec)
+		ok, info = nonEmpty.Run()
+		require.True(t, ok, info)
+	})
+
 	// ST_GeomFromGeoJSON -> canonical WKT via geometry comparison.
 	tcFrom := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
@@ -9990,6 +10102,10 @@ func TestStCoveredByWithGeometryCollections(t *testing.T) {
 // encoding the SRID into the input type's Width (srid+1) since SRID is no longer
 // stored in the payload.
 func geomInputEWKT(ewkt string) FunctionTestInput {
+	return geomInputEWKTAsType(ewkt, types.T_geometry)
+}
+
+func geomInputEWKTAsType(ewkt string, geometryType types.T) FunctionTestInput {
 	wkt := ewkt
 	srid := uint32(0)
 	if strings.HasPrefix(strings.ToUpper(ewkt), "SRID=") {
@@ -10000,7 +10116,7 @@ func geomInputEWKT(ewkt string) FunctionTestInput {
 			}
 		}
 	}
-	typ := types.T_geometry.ToType()
+	typ := geometryType.ToType()
 	if srid != 0 {
 		typ.Width = int32(srid + 1)
 	}
@@ -10117,6 +10233,295 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 		require.Contains(t, info, "ST_DISTANCE")
 		require.Contains(t, info, "different srids")
 	})
+}
+
+func TestAllBinarySpatialFunctionEvaluatorsRejectDifferentSRIDsBeforeDecoding(t *testing.T) {
+	tests := []struct {
+		name         string
+		functionName string
+		geometryType types.T
+		resultType   types.T
+		fn           fEvalFn
+	}{
+		{name: "union", functionName: "ST_UNION", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StUnion},
+		{name: "union32", functionName: "ST_UNION", geometryType: types.T_geometry32, resultType: types.T_geometry32, fn: StUnion},
+		{name: "intersection", functionName: "ST_INTERSECTION", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StIntersection},
+		{name: "intersection32", functionName: "ST_INTERSECTION", geometryType: types.T_geometry32, resultType: types.T_geometry32, fn: StIntersection},
+		{name: "difference", functionName: "ST_DIFFERENCE", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StDifference},
+		{name: "difference32", functionName: "ST_DIFFERENCE", geometryType: types.T_geometry32, resultType: types.T_geometry32, fn: StDifference},
+		{name: "symdifference", functionName: "ST_SYMDIFFERENCE", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StSymDifference},
+		{name: "symdifference32", functionName: "ST_SYMDIFFERENCE", geometryType: types.T_geometry32, resultType: types.T_geometry32, fn: StSymDifference},
+		{name: "frechet", functionName: "ST_FRECHETDISTANCE", geometryType: types.T_geometry, resultType: types.T_float64, fn: StFrechetDistance},
+		{name: "frechet32", functionName: "ST_FRECHETDISTANCE", geometryType: types.T_geometry32, resultType: types.T_float32, fn: StFrechetDistance32},
+		{name: "hausdorff", functionName: "ST_HAUSDORFFDISTANCE", geometryType: types.T_geometry, resultType: types.T_float64, fn: StHausdorffDistance},
+		{name: "hausdorff32", functionName: "ST_HAUSDORFFDISTANCE", geometryType: types.T_geometry32, resultType: types.T_float32, fn: StHausdorffDistance32},
+		{name: "mbrContains", functionName: "MBRContains", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRContains},
+		{name: "mbrCovers", functionName: "MBRCovers", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRCovers},
+		{name: "mbrWithin", functionName: "MBRWithin", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRWithin},
+		{name: "mbrCoveredBy", functionName: "MBRCoveredBy", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRCoveredBy},
+		{name: "mbrDisjoint", functionName: "MBRDisjoint", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRDisjoint},
+		{name: "mbrIntersects", functionName: "MBRIntersects", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRIntersects},
+		{name: "mbrEquals", functionName: "MBREquals", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBREquals},
+		{name: "mbrOverlaps", functionName: "MBROverlaps", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBROverlaps},
+		{name: "mbrTouches", functionName: "MBRTouches", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRTouches},
+		{name: "makeEnvelope", functionName: "ST_MAKEENVELOPE", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StMakeEnvelope},
+		{name: "collect", functionName: "ST_COLLECT", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StCollect},
+		{name: "collect32", functionName: "ST_COLLECT", geometryType: types.T_geometry32, resultType: types.T_geometry32, fn: StCollect},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range tests {
+		for _, pair := range []struct{ left, right uint32 }{{4326, 3857}, {3857, 4326}} {
+			t.Run(fmt.Sprintf("%s/%d-%d", tc.name, pair.left, pair.right), func(t *testing.T) {
+				left := geomInputEWKTAsType("not a geometry payload", tc.geometryType)
+				right := geomInputEWKTAsType("also not a geometry payload", tc.geometryType)
+				left.typ.Width = int32(pair.left + 1)
+				right.typ.Width = int32(pair.right + 1)
+				fc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{left, right},
+					NewFunctionTestResult(tc.resultType.ToType(), true, nil, nil), tc.fn)
+				require.NoError(t, fc.result.PreExtendAndReset(1))
+
+				// The invalid payloads make this a boundary test: a missed admission
+				// check would return a decode error instead of the SRID error.
+				err := tc.fn(fc.parameters, fc.result, proc, 1, nil)
+				require.Error(t, err)
+				require.ErrorContains(t, err, "Binary geometry function "+tc.functionName)
+				require.ErrorContains(t, err, fmt.Sprintf("different srids: %d and %d", pair.left, pair.right))
+				if tc.resultType == types.T_geometry || tc.resultType == types.T_geometry32 {
+					require.Zero(t, fc.GetResultVectorDirectly().Length(), "failed admission must not append a result")
+				}
+			})
+		}
+	}
+}
+
+func TestCollectTreatsUndefinedAndExplicitZeroSRIDsAsEqual(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	left := geomInputEWKT("POINT(0 0)")
+	right := geomInputEWKT("POINT(1 1)")
+	// Width 1 encodes an explicitly declared SRID 0; Width 0 is undefined/default
+	// and must resolve to the same effective SRID at the evaluator boundary.
+	right.typ.Width = 1
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{left, right},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"MULTIPOINT(0 0,1 1)"}, []bool{false}), StCollect)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestBinarySpatialSRIDMismatchPreservesNullPropagation(t *testing.T) {
+	tests := []struct {
+		name         string
+		geometryType types.T
+		resultType   types.T
+		fn           fEvalFn
+	}{
+		{name: "overlay", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StUnion},
+		{name: "frechet32", geometryType: types.T_geometry32, resultType: types.T_float32, fn: StFrechetDistance32},
+		{name: "mbr", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRContains},
+		{name: "makeEnvelope", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StMakeEnvelope},
+		{name: "collect", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StCollect},
+		{name: "distance", geometryType: types.T_geometry, resultType: types.T_float64, fn: StDistance},
+		{name: "distanceSphere", geometryType: types.T_geometry, resultType: types.T_float64, fn: StDistanceSphere},
+		{name: "contains", geometryType: types.T_geometry, resultType: types.T_bool, fn: StContains},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range tests {
+		for nullSide := 0; nullSide < 2; nullSide++ {
+			t.Run(fmt.Sprintf("%s/null_arg_%d", tc.name, nullSide), func(t *testing.T) {
+				left := geomInputEWKTAsType("not a geometry payload", tc.geometryType)
+				right := geomInputEWKTAsType("also not a geometry payload", tc.geometryType)
+				left.typ.Width = 4327
+				right.typ.Width = 1
+				if nullSide == 0 {
+					left.nullList = []bool{true}
+					left.isConst = true
+				} else {
+					right.nullList = []bool{true}
+					right.isConst = true
+				}
+				fc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{left, right},
+					NewFunctionTestResult(tc.resultType.ToType(), false, nil, nil), tc.fn)
+				require.NoError(t, fc.result.PreExtendAndReset(1))
+
+				err := tc.fn(fc.parameters, fc.result, proc, 1, nil)
+				require.NoError(t, err)
+				require.True(t, fc.GetResultVectorDirectly().IsNull(0))
+			})
+		}
+	}
+}
+
+func TestBinarySpatialSRIDMismatchSkipsMaskedAndEmptyRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	left := geomInputEWKTAsType("not a geometry payload", types.T_geometry)
+	right := geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
+	left.typ.Width = 4327
+	right.typ.Width = 1
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{left, right},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, nil, nil), StUnion)
+	selectList := &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false}}
+	require.NoError(t, fc.result.PreExtendAndReset(1))
+	require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 1, selectList))
+	require.True(t, fc.GetResultVectorDirectly().IsNull(0), "a fully masked row must not trigger SRID validation")
+
+	left = geomInputEWKTAsType("not a geometry payload", types.T_geometry)
+	right = geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
+	left.typ.Width = 4327
+	right.typ.Width = 1
+	left.values = []string{"masked malformed row", "null evaluated row"}
+	left.nullList = []bool{false, true}
+	right.values = []string{"masked malformed row", "null evaluated row"}
+	fc = NewFunctionTestCase(proc,
+		[]FunctionTestInput{left, right},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, nil, nil), StUnion)
+	selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+	require.NoError(t, fc.result.PreExtendAndReset(2))
+	require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 2, selectList))
+	require.True(t, fc.GetResultVectorDirectly().IsNull(0), "masked row must remain NULL")
+	require.True(t, fc.GetResultVectorDirectly().IsNull(1), "evaluated NULL argument must remain NULL")
+
+	left = geomInputEWKTAsType("not a geometry payload", types.T_geometry)
+	right = geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
+	left.typ.Width = 4327
+	right.typ.Width = 1
+	left.values = []string{"left NULL", "left value"}
+	left.nullList = []bool{true, false}
+	right.values = []string{"right value", "right NULL"}
+	right.nullList = []bool{false, true}
+	fc = NewFunctionTestCase(proc,
+		[]FunctionTestInput{left, right},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, nil, nil), StUnion)
+	require.NoError(t, fc.result.PreExtendAndReset(2))
+	require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 2, nil))
+	require.True(t, fc.GetResultVectorDirectly().IsNull(0), "the left-NULL pair must not require matching SRIDs")
+	require.True(t, fc.GetResultVectorDirectly().IsNull(1), "the right-NULL pair must not require matching SRIDs")
+
+	left = geomInputEWKTAsType("not a geometry payload", types.T_geometry)
+	right = geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
+	left.typ.Width = 4327
+	right.typ.Width = 1
+	left.values = []string{"masked non-null payload", "selected non-null payload"}
+	right.values = []string{"masked non-null payload", "selected non-null payload"}
+	fc = NewFunctionTestCase(proc,
+		[]FunctionTestInput{left, right},
+		NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil), StUnion)
+	selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+	require.NoError(t, fc.result.PreExtendAndReset(2))
+	err := fc.fn(fc.parameters, fc.result, proc, 2, selectList)
+	require.ErrorContains(t, err, "different srids: 4326 and 0")
+	require.Zero(t, fc.GetResultVectorDirectly().Length(), "SRID rejection must precede masked-row and result writes")
+
+	for _, fn := range []struct {
+		name string
+		fn   fEvalFn
+		out  types.T
+	}{
+		{name: "varlena", fn: StCollect, out: types.T_geometry},
+		{name: "fixed", fn: MBRContains, out: types.T_bool},
+	} {
+		t.Run("empty/"+fn.name, func(t *testing.T) {
+			left := geomInputEWKTAsType("", types.T_geometry)
+			right := geomInputEWKTAsType("", types.T_geometry)
+			left.typ.Width = 4327
+			right.typ.Width = 1
+			left.values = []string{}
+			right.values = []string{}
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{left, right},
+				NewFunctionTestResult(fn.out.ToType(), false, nil, nil), fn.fn)
+			require.NoError(t, fc.result.PreExtendAndReset(0))
+			require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 0, nil))
+			require.Zero(t, fc.GetResultVectorDirectly().Length())
+		})
+	}
+}
+
+func TestBinarySpatialSRIDMismatchFailsBeforeAppendingRows(t *testing.T) {
+	tests := []struct {
+		name       string
+		fn         fEvalFn
+		resultType types.T
+	}{
+		{name: "varlena", fn: StCollect, resultType: types.T_geometry},
+		{name: "fixed", fn: MBRContains, resultType: types.T_bool},
+	}
+	proc := testutil.NewProcess(t)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			left := geomInputEWKTAsType("not a geometry payload", types.T_geometry)
+			right := geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
+			left.typ.Width = 4327
+			right.typ.Width = 1
+			left.values = []string{"masked-result-if-evaluated", "bad non-null payload"}
+			left.nullList = []bool{true, false}
+			right.values = []string{"ignored payload", "bad non-null payload"}
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{left, right},
+				NewFunctionTestResult(tc.resultType.ToType(), true, nil, nil), tc.fn)
+			require.NoError(t, fc.result.PreExtendAndReset(2))
+
+			err := tc.fn(fc.parameters, fc.result, proc, 2, nil)
+			require.Error(t, err)
+			require.ErrorContains(t, err, "different srids: 4326 and 0")
+			if tc.resultType == types.T_geometry {
+				require.Zero(t, fc.GetResultVectorDirectly().Length(), "varlena output must not contain a prefix row")
+			} else {
+				require.False(t, fc.GetResultVectorDirectly().IsNull(0), "fixed output must not contain a prefix NULL row")
+				require.False(t, fc.GetResultVectorDirectly().IsNull(1), "fixed output must not contain a value for the rejected row")
+			}
+		})
+	}
+}
+
+func TestBinarySpatialEmptyConstBatchDoesNotDecodeInputs(t *testing.T) {
+	tests := []struct {
+		name       string
+		fn         fEvalFn
+		resultType types.T
+	}{
+		{name: "overlay", fn: StUnion, resultType: types.T_geometry},
+		{name: "frechet", fn: StFrechetDistance, resultType: types.T_float64},
+		{name: "collect", fn: StCollect, resultType: types.T_geometry},
+		{name: "mbr", fn: MBRContains, resultType: types.T_bool},
+		{name: "makeEnvelope", fn: StMakeEnvelope, resultType: types.T_geometry},
+		{name: "distance", fn: StDistance, resultType: types.T_float64},
+		{name: "distanceSphere", fn: StDistanceSphere, resultType: types.T_float64},
+		{name: "contains", fn: StContains, resultType: types.T_bool},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range tests {
+		for _, srids := range []struct {
+			name        string
+			left, right int32
+		}{
+			{name: "matching", left: 4327, right: 4327},
+			{name: "mismatched", left: 4327, right: 1},
+		} {
+			t.Run(tc.name+"/"+srids.name, func(t *testing.T) {
+				left := geomInputEWKTAsType("malformed constant payload", types.T_geometry)
+				right := geomInputEWKTAsType("also malformed constant payload", types.T_geometry)
+				left.typ.Width = srids.left
+				right.typ.Width = srids.right
+				left.isConst = true
+				right.isConst = true
+
+				fc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{left, right},
+					NewFunctionTestResult(tc.resultType.ToType(), false, nil, nil), tc.fn)
+				require.NoError(t, fc.result.PreExtendAndReset(0))
+				err := tc.fn(fc.parameters, fc.result, proc, 0, nil)
+				require.NoError(t, err, "an empty batch has no geometry pair to decode or reject")
+				require.Zero(t, fc.GetResultVectorDirectly().Length())
+				require.Zero(t, fc.GetResultVectorDirectly().GetNulls().Count())
+			})
+		}
+	}
 }
 
 func TestGeometryDistanceHelpersRejectMalformedSlices(t *testing.T) {
