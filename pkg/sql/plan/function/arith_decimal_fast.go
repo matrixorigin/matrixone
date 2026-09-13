@@ -28,6 +28,7 @@ package function
 
 import (
 	"math"
+	"math/big"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
@@ -3487,6 +3488,57 @@ func d256IntDivKernel(proc *process.Process, selectList *FunctionSelectList) fun
 	}
 }
 
+func d256MagnitudeBigInt(x types.Decimal256) *big.Int {
+	if x.Sign() {
+		x = x.Minus()
+	}
+	value := new(big.Int).SetUint64(x.B192_255)
+	value.Lsh(value, 64)
+	value.Or(value, new(big.Int).SetUint64(x.B128_191))
+	value.Lsh(value, 64)
+	value.Or(value, new(big.Int).SetUint64(x.B64_127))
+	value.Lsh(value, 64)
+	value.Or(value, new(big.Int).SetUint64(x.B0_63))
+	return value
+}
+
+// d256IntDivScaleUpOverflow computes the final quotient only when the usual
+// fixed-width numerator scaling overflows. Decimal scales are bounded by SQL,
+// and the exponent guard keeps direct callers with extreme scale metadata
+// from constructing an unbounded big.Int.
+func d256IntDivScaleUpOverflow(
+	a, b types.Decimal256,
+	scaleAdj int32,
+	negative bool,
+	dst *int64,
+) error {
+	if d256IsZero(a) {
+		*dst = 0
+		return nil
+	}
+	if scaleAdj >= 96 {
+		// Even 1*10^96 divided by the largest Decimal256 magnitude is outside
+		// BIGINT, so no exact quotient needs to be materialized.
+		return moerr.NewOutOfRangeNoCtx("BIGINT", "")
+	}
+	divisor := d256MagnitudeBigInt(b)
+	if divisor.Sign() == 0 {
+		return moerr.NewDivByZeroNoCtx()
+	}
+	multiplier := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleAdj)), nil)
+	numerator := d256MagnitudeBigInt(a)
+	numerator.Mul(numerator, multiplier)
+	quotient := new(big.Int).Quo(numerator, divisor)
+	if negative {
+		quotient.Neg(quotient)
+	}
+	if !quotient.IsInt64() {
+		return moerr.NewOutOfRangeNoCtx("BIGINT", "")
+	}
+	*dst = quotient.Int64()
+	return nil
+}
+
 func d256IntDiv(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
 	len1, len2 := len(v1), len(v2)
 	hasNull := !rsnull.IsEmpty()
@@ -3523,11 +3575,14 @@ func d256IntDiv(v1, v2 []types.Decimal256, rs []int64, scale1, scale2 int32, rsn
 			var err error
 			absA, err = absA.Scale(scaleAdj)
 			if err != nil {
-				return moerr.NewInvalidInputNoCtxf("Decimal256 IntDiv overflow: %s DIV %s", a.Format(scale1), b.Format(scale2))
+				return d256IntDivScaleUpOverflow(absA, absB, scaleAdj, signx != signy, dst)
 			}
 		} else if scaleAdj < 0 {
 			var err error
-			absB, err = absB.Scale(-scaleAdj)
+			// floor(A/(B*10^k)) equals floor(floor(A/10^k)/B) for
+			// non-negative A and positive B. Truncating the magnitude first
+			// preserves DIV's truncation toward zero without scaling B up.
+			absA, err = absA.ScaleTruncate(scaleAdj)
 			if err != nil {
 				return moerr.NewInvalidInputNoCtxf("Decimal256 IntDiv overflow: %s DIV %s", a.Format(scale1), b.Format(scale2))
 			}

@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -127,6 +128,35 @@ func cleanupBitwiseTestCase(t *testing.T, tc *FunctionTestCase) {
 		}
 		tc.result.Free()
 	})
+}
+
+func TestBitwiseStringLengthMismatchReturnsTypedError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.New(types.T_varbinary, 8, 0)
+	for _, test := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "and", fn: operatorOpBitAndStrFn},
+		{name: "or", fn: operatorOpBitOrStrFn},
+		{name: "xor", fn: operatorOpBitXorStrFn},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(typ, []string{string([]byte{0x01})}, nil),
+					NewFunctionTestInput(typ, []string{string([]byte{0x00, 0x01})}, nil),
+				},
+				NewFunctionTestResult(typ, true, nil, nil), test.fn)
+			cleanupBitwiseTestCase(t, &tc)
+
+			err := tc.result.PreExtendAndReset(tc.fnLength)
+			require.NoError(t, err)
+			err = tc.fn(tc.parameters, tc.result, tc.proc, tc.fnLength, tc.selectList)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidBitwiseOperandsSize))
+		})
+	}
 }
 
 func assertBinaryBitwiseResultType(t *testing.T, want, got types.Type) {

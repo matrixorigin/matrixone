@@ -33,6 +33,17 @@ func HausdorffDistance(a, b Geometry) (float64, bool) {
 	return math.Max(directedHausdorff(pa, pb), directedHausdorff(pb, pa)), true
 }
 
+// DirectedHausdorffDistance returns the planar discrete Hausdorff distance
+// from a to b over their vertex sets. Only explicitly represented vertices
+// are used.
+func DirectedHausdorffDistance(a, b Geometry) (float64, bool) {
+	pa, pb := coordsOf(a), coordsOf(b)
+	if len(pa) == 0 || len(pb) == 0 {
+		return 0, false
+	}
+	return directedHausdorff(pa, pb), true
+}
+
 func directedHausdorff(pa, pb []Coord) float64 {
 	maxMin := 0.0
 	for _, a := range pa {
