@@ -421,6 +421,15 @@ func (b *OndupUpdateBinder) astSubqueryTargetCorrelation(astExpr *tree.Subquery)
 	}
 
 	frames := make([]subqueryFrame, 0, 2)
+	localScopes := make([]map[string]struct{}, 0, 2)
+	isLocalQualifier := func(name string) bool {
+		for i := len(localScopes) - 1; i >= 0; i-- {
+			if _, ok := localScopes[i][name]; ok {
+				return true
+			}
+		}
+		return false
+	}
 	active := make(map[uintptr]struct{})
 	var walk func(reflect.Value)
 	walk = func(value reflect.Value) {
@@ -447,13 +456,26 @@ func (b *OndupUpdateBinder) astSubqueryTargetCorrelation(astExpr *tree.Subquery)
 
 			if value.CanInterface() {
 				switch node := value.Interface().(type) {
+				case *tree.Select:
+					localScopes = append(localScopes, b.astSelectLocalQualifiers(node.Select))
+					walk(value.Elem())
+					localScopes = localScopes[:len(localScopes)-1]
+					return
+				case *tree.SelectClause:
+					localScopes = append(localScopes, b.astSelectLocalQualifiers(node))
+					walk(value.Elem())
+					localScopes = localScopes[:len(localScopes)-1]
+					return
 				case *tree.UnresolvedName:
-					if len(frames) > 0 && node.TblName() != "" &&
-						tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare() == targetTableName &&
-						(node.DbName() == "" ||
-							tree.NewCStr(node.DbName(), b.lowerCaseTableNames).Compare() == targetDBName) {
-						frames[len(frames)-1].hasTarget = true
-						hasTarget = true
+					if len(frames) > 0 && node.TblName() != "" {
+						qualifier := tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare()
+						local := node.DbName() == "" && isLocalQualifier(qualifier)
+						if !local && qualifier == targetTableName &&
+							(node.DbName() == "" ||
+								tree.NewCStr(node.DbName(), b.lowerCaseTableNames).Compare() == targetDBName) {
+							frames[len(frames)-1].hasTarget = true
+							hasTarget = true
+						}
 					}
 					return
 				case *tree.Subquery:
@@ -494,6 +516,37 @@ func (b *OndupUpdateBinder) astSubqueryTargetCorrelation(astExpr *tree.Subquery)
 
 	walk(reflect.ValueOf(astExpr))
 	return hasTarget, hasNested
+}
+
+func (b *OndupUpdateBinder) astSelectLocalQualifiers(stmt tree.SelectStatement) map[string]struct{} {
+	names := make(map[string]struct{})
+	if selectClause, ok := stmt.(*tree.SelectClause); ok && selectClause.From != nil {
+		for _, tableExpr := range selectClause.From.Tables {
+			b.collectAstTableQualifiers(tableExpr, names)
+		}
+	}
+	return names
+}
+
+func (b *OndupUpdateBinder) collectAstTableQualifiers(expr tree.TableExpr, names map[string]struct{}) {
+	switch tableExpr := expr.(type) {
+	case *tree.TableName:
+		names[tree.NewCStr(string(tableExpr.ObjectName), b.lowerCaseTableNames).Compare()] = struct{}{}
+	case *tree.AliasedTableExpr:
+		if tableExpr.As.Alias != "" {
+			names[tree.NewCStr(string(tableExpr.As.Alias), b.lowerCaseTableNames).Compare()] = struct{}{}
+			return
+		}
+		b.collectAstTableQualifiers(tableExpr.Expr, names)
+	case *tree.ParenTableExpr:
+		b.collectAstTableQualifiers(tableExpr.Expr, names)
+	case *tree.JoinTableExpr:
+		b.collectAstTableQualifiers(tableExpr.Left, names)
+		b.collectAstTableQualifiers(tableExpr.Right, names)
+	case *tree.ApplyTableExpr:
+		b.collectAstTableQualifiers(tableExpr.Left, names)
+		b.collectAstTableQualifiers(tableExpr.Right, names)
+	}
 }
 
 func (b *OndupUpdateBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
