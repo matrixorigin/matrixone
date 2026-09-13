@@ -6560,10 +6560,30 @@ func refreshPreparedPlanProjectionExprType(
 		if exprImpl.F == nil {
 			return false, nil
 		}
+		functionName := ""
+		if exprImpl.F.Func != nil {
+			functionName = exprImpl.F.Func.GetObjName()
+		}
 		originalArgTypes := make([]plan.Type, len(exprImpl.F.Args))
+		bitwiseAggregateSourceChanged := false
 		for i, arg := range exprImpl.F.Args {
 			if arg != nil {
 				originalArgTypes[i] = arg.Typ
+			}
+			if arg != nil && i == 0 && isPreparedBitwiseAggregate(functionName) &&
+				isBitwiseAggregatePrivateCast(arg) {
+				// CAST4 is owned by the bitwise aggregate, not by the source
+				// expression. Refresh a column-backed source here, but defer
+				// rebinding the conversion until the aggregate can choose again
+				// between its numeric and binary input domains.
+				argChanged, err := refreshPreparedPlanProjectionExprType(
+					ctx, arg.GetF().Args[0], resolveColumnType)
+				if err != nil {
+					return false, err
+				}
+				changed = changed || argChanged
+				bitwiseAggregateSourceChanged = bitwiseAggregateSourceChanged || argChanged
+				continue
 			}
 			argChanged, err := refreshPreparedPlanProjectionExprType(ctx, arg, resolveColumnType)
 			if err != nil {
@@ -6579,17 +6599,25 @@ func refreshPreparedPlanProjectionExprType(
 				break
 			}
 		}
-		if !argsChanged || exprImpl.F.Func == nil || exprImpl.F.Func.GetObjName() == "" ||
+		if (!argsChanged && !bitwiseAggregateSourceChanged) || exprImpl.F.Func == nil || functionName == "" ||
 			isExplicitPreparedCast(expr) {
 			return changed, nil
 		}
 
 		originalType := expr.Typ
+		rebindArgs := DeepCopyExprList(exprImpl.F.Args)
+		if isPreparedBitwiseAggregate(functionName) && len(rebindArgs) > 0 &&
+			isBitwiseAggregatePrivateCast(rebindArgs[0]) {
+			// Re-run the aggregate binder against the refreshed source domain.
+			// It will insert CAST4 for numeric inputs or leave binary inputs on
+			// their native byte-oriented path.
+			rebindArgs[0] = DeepCopyExpr(rebindArgs[0].GetF().Args[0])
+		}
 		rebound, err := bindPreparedFuncExprImplByPlanExpr(
 			ctx,
 			expr,
-			exprImpl.F.Func.GetObjName(),
-			DeepCopyExprList(exprImpl.F.Args),
+			functionName,
+			rebindArgs,
 			nil,
 		)
 		if err != nil {

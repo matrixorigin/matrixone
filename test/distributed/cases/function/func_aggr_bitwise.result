@@ -376,3 +376,17 @@ EXECUTE bitwise_aggregate_nested_distinct_28226 USING @bitwise_aggregate_nested_
 not supported: distinct bit operations are not supported
 DEALLOCATE PREPARE bitwise_aggregate_nested_distinct_28226;
 DROP TABLE t_bitwise_nested_distinct_28226;
+SELECT BIT_AND(CAST('9223372036854775808' AS DECIMAL(20,0))) AS bit_and_positive,
+       BIT_OR(CAST('9223372036854775808' AS DECIMAL(20,0))) AS bit_or_positive,
+       BIT_XOR(CAST('9223372036854775808' AS DECIMAL(20,0))) AS bit_xor_positive;
+bit_and_positive    bit_or_positive    bit_xor_positive
+9223372036854775808    9223372036854775808    9223372036854775808
+SELECT BIT_AND(CAST('-9223372036854775809' AS DECIMAL(20,0))) AS bit_and_negative,
+       BIT_OR(CAST('-9223372036854775809' AS DECIMAL(20,0))) AS bit_or_negative,
+       BIT_XOR(CAST('-9223372036854775809' AS DECIMAL(20,0))) AS bit_xor_negative;
+bit_and_negative    bit_or_negative    bit_xor_negative
+9223372036854775807    9223372036854775807    9223372036854775807
+SELECT BIT_AND(CAST('9223372036854775807.5' AS DECIMAL(20,1))) AS bit_and_positive_half,
+       BIT_AND(CAST('-9223372036854775808.5' AS DECIMAL(20,1))) AS bit_and_negative_half;
+bit_and_positive_half    bit_and_negative_half
+9223372036854775808    9223372036854775807

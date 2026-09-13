@@ -552,7 +552,7 @@ func bitwiseAggregateDecimal128ToInt64Value(value, divisor types.Decimal128, rou
 	if quotient.B64_127 != 0 {
 		return 0, moerr.NewOutOfRangeNoCtx("int64", "")
 	}
-	return int64FromSignedMagnitude(quotient.B0_63, negative)
+	return bitwiseAggregateInt64FromSignedMagnitude(quotient.B0_63, negative), nil
 }
 
 func bitwiseAggregateDecimal256ToInt64(
@@ -644,7 +644,19 @@ func bitwiseAggregateDecimal256ToInt64Value(value, divisor types.Decimal256, rou
 	if quotient.B64_127|quotient.B128_191|quotient.B192_255 != 0 {
 		return 0, moerr.NewOutOfRangeNoCtx("int64", "")
 	}
-	return int64FromSignedMagnitude(quotient.B0_63, negative)
+	return bitwiseAggregateInt64FromSignedMagnitude(quotient.B0_63, negative), nil
+}
+
+// bitwiseAggregateInt64FromSignedMagnitude encodes a rounded DECIMAL value in
+// the int64 transport used by the numeric bitwise aggregate executor. The
+// executor interprets these bits as uint64, so narrowing must preserve the
+// unsigned 64-bit bit pattern rather than enforce the signed INT64 range.
+// Callers reject a nonzero high limb before reaching this helper.
+func bitwiseAggregateInt64FromSignedMagnitude(magnitude uint64, negative bool) int64 {
+	if negative {
+		magnitude = uint64(0) - magnitude
+	}
+	return int64(magnitude)
 }
 
 func int64FromSignedMagnitude(magnitude uint64, negative bool) (int64, error) {

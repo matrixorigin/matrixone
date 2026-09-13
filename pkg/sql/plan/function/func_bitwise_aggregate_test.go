@@ -201,6 +201,9 @@ func TestBitwiseAggregateNumericCastStringPrefixAndSelection(t *testing.T) {
 		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
 		require.Contains(t, warning.msg, "Truncated incorrect INTEGER value")
 	}
+	assertBitwiseAggregateCast(t, proc, textType,
+		[]string{"9223372036854775808"}, nil, []int64{math.MinInt64}, nil, nil)
+	require.Len(t, warnings.warnings, 3, "2^63 is a valid unsigned 64-bit bit pattern, not a warning")
 
 	// The invalid string is deliberately masked. A short-circuited CASE/IF arm
 	// must not parse it or surface a conversion error.
@@ -214,29 +217,286 @@ func TestBitwiseAggregateNumericCastStringPrefixAndSelection(t *testing.T) {
 	require.Len(t, warnings.warnings, 3)
 }
 
-func TestBitwiseAggregateDecimalCastSignedLimits(t *testing.T) {
-	d128Type := types.New(types.T_decimal128, 38, 0)
-	max, err := types.ParseDecimal128("9223372036854775807", d128Type.Width, d128Type.Scale)
-	require.NoError(t, err)
-	min, err := types.ParseDecimal128("-9223372036854775808", d128Type.Width, d128Type.Scale)
-	require.NoError(t, err)
-	value, err := bitwiseAggregateDecimal128ToInt64Value(max, types.Decimal128{B0_63: 1}, false)
-	require.NoError(t, err)
-	require.Equal(t, int64(math.MaxInt64), value)
-	value, err = bitwiseAggregateDecimal128ToInt64Value(min, types.Decimal128{B0_63: 1}, false)
-	require.NoError(t, err)
-	require.Equal(t, int64(math.MinInt64), value)
+func TestBitwiseAggregateDecimalCastUnsignedBoundaries(t *testing.T) {
+	maxUint64 := ^uint64(0)
+	for _, test := range []struct {
+		value   string
+		scale   int32
+		want    uint64
+		wantErr bool
+	}{
+		{value: "9223372036854775807", want: uint64(math.MaxInt64)},
+		{value: "9223372036854775808", want: uint64(1) << 63},
+		{value: "-9223372036854775809", want: uint64(math.MaxInt64)},
+		{value: "18446744073709551615", want: maxUint64},
+		{value: "-18446744073709551615", want: 1},
+		{value: "18446744073709551616", wantErr: true},
+		{value: "-18446744073709551616", wantErr: true},
+		{value: "9223372036854775807.5", scale: 1, want: uint64(1) << 63},
+		{value: "-9223372036854775808.5", scale: 1, want: uint64(math.MaxInt64)},
+		{value: "18446744073709551615.4", scale: 1, want: maxUint64},
+		{value: "-18446744073709551615.4", scale: 1, want: 1},
+		{value: "18446744073709551615.5", scale: 1, wantErr: true},
+		{value: "-18446744073709551615.5", scale: 1, wantErr: true},
+	} {
+		t.Run("decimal128/"+test.value, func(t *testing.T) {
+			assertBitwiseAggregateDecimal128Value(t, test.value, test.scale, test.want, test.wantErr)
+		})
+		t.Run("decimal256/"+test.value, func(t *testing.T) {
+			assertBitwiseAggregateDecimal256Value(t, test.value, test.scale, test.want, test.wantErr)
+		})
+	}
+}
 
-	overflow, err := types.ParseDecimal128("9223372036854775808", d128Type.Width, d128Type.Scale)
+func assertBitwiseAggregateDecimal128Value(t *testing.T, text string, scale int32, want uint64, wantErr bool) {
+	t.Helper()
+	typ := types.New(types.T_decimal128, 38, scale)
+	value, err := types.ParseDecimal128(text, typ.Width, typ.Scale)
 	require.NoError(t, err)
-	_, err = bitwiseAggregateDecimal128ToInt64Value(overflow, types.Decimal128{B0_63: 1}, false)
-	require.Error(t, err)
+	divisor, roundsToZero, err := decimal128RoundingDivisor(scale)
+	require.NoError(t, err)
+	got, err := bitwiseAggregateDecimal128ToInt64Value(value, divisor, roundsToZero)
+	if wantErr {
+		require.Error(t, err)
+		return
+	}
+	require.NoError(t, err)
+	require.Equal(t, int64(want), got)
+}
+
+func assertBitwiseAggregateDecimal256Value(t *testing.T, text string, scale int32, want uint64, wantErr bool) {
+	t.Helper()
+	typ := types.New(types.T_decimal256, 65, scale)
+	value, err := types.ParseDecimal256(text, typ.Width, typ.Scale)
+	require.NoError(t, err)
+	divisor, roundsToZero, err := decimal256RoundingDivisor(scale)
+	require.NoError(t, err)
+	got, err := bitwiseAggregateDecimal256ToInt64Value(value, divisor, roundsToZero)
+	if wantErr {
+		require.Error(t, err)
+		return
+	}
+	require.NoError(t, err)
+	require.Equal(t, int64(want), got)
+}
+
+func TestBitwiseAggregateDecimalCastVectorMasksAndNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
+
+	d128Type := types.New(types.T_decimal128, 38, 0)
+	d128Boundary, err := types.ParseDecimal128("9223372036854775808", d128Type.Width, d128Type.Scale)
+	require.NoError(t, err)
+	d128Overflow, err := types.ParseDecimal128("18446744073709551616", d128Type.Width, d128Type.Scale)
+	require.NoError(t, err)
+	assertBitwiseAggregateCast(t, proc, d128Type,
+		[]types.Decimal128{d128Boundary, d128Overflow, types.Decimal128{}},
+		[]bool{false, false, true},
+		[]int64{math.MinInt64, 0, 0}, []bool{false, true, true}, selectList)
 
 	d256Type := types.New(types.T_decimal256, 65, 0)
-	wide, err := types.ParseDecimal256("9223372036854775808", d256Type.Width, d256Type.Scale)
+	d256Boundary, err := types.ParseDecimal256("-9223372036854775809", d256Type.Width, d256Type.Scale)
 	require.NoError(t, err)
-	_, err = bitwiseAggregateDecimal256ToInt64Value(wide, types.Decimal256{B0_63: 1}, false)
-	require.Error(t, err)
+	d256Overflow, err := types.ParseDecimal256("18446744073709551616", d256Type.Width, d256Type.Scale)
+	require.NoError(t, err)
+	assertBitwiseAggregateCast(t, proc, d256Type,
+		[]types.Decimal256{d256Boundary, d256Overflow, types.Decimal256{}},
+		[]bool{false, false, true},
+		[]int64{math.MaxInt64, 0, 0}, []bool{false, true, true}, selectList)
+}
+
+func TestBitwiseAggregateCastRegistration(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimalType := types.New(types.T_decimal128, 38, 0)
+	resolved, err := GetFunctionByNameWithOverload(proc.Ctx, "cast",
+		[]types.Type{decimalType, types.T_int64.ToType()}, 4)
+	require.NoError(t, err)
+	fid, overloadID := DecodeOverloadID(resolved.GetEncodedOverloadID())
+	require.Equal(t, int32(CAST), fid)
+	require.Equal(t, int32(4), overloadID)
+
+	registered, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
+	require.NoError(t, err)
+	eval, _, _, _ := registered.GetExecuteMethod()
+	require.NotNil(t, eval)
+
+	value, err := types.ParseDecimal128("9223372036854775808", decimalType.Width, decimalType.Scale)
+	require.NoError(t, err)
+	testCase := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(decimalType, []types.Decimal128{value}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
+	}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{math.MinInt64}, nil), fEvalFn(eval))
+	success, info := testCase.Run()
+	require.True(t, success, info)
+}
+
+func TestBitwiseAggregateCastDispatchAndErrors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	assertBitwiseAggregateCastFails(t, proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_int32.ToType(), []int32{1}, nil),
+	}, nil)
+	assertBitwiseAggregateCastFails(t, proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_int32.ToType(), []int32{1}, nil),
+		NewFunctionTestInput(types.T_int32.ToType(), []int32{0}, nil),
+	}, nil)
+	binaryTextCase := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.NewWithCharset(types.T_varchar, 8, 0, types.CharsetBinary), []string{"1"}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
+	}, NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), NewBitwiseAggregateCast)
+	binaryTextCase.parameters[0].SetIsBin(true)
+	success, info := binaryTextCase.Run()
+	require.True(t, success, info)
+	assertBitwiseAggregateCastFails(t, proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_uuid.ToType(), []types.Uuid{{}}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
+	}, nil)
+}
+
+func TestBitwiseAggregateCastYearAndNullableRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}
+	assertBitwiseAggregateCast(t, proc, types.T_year.ToType(),
+		[]types.MoYear{2024, 2025, 0}, []bool{false, false, true},
+		[]int64{2024, 0, 0}, []bool{false, true, true}, selectList)
+
+	date1, err := types.ParseDateCast("2024-01-02")
+	require.NoError(t, err)
+	date2, err := types.ParseDateCast("2024-01-03")
+	require.NoError(t, err)
+	assertBitwiseAggregateCast(t, proc, types.T_date.ToType(),
+		[]types.Date{date1, date2, 0}, []bool{false, false, true},
+		[]int64{20240102, 0, 0}, []bool{false, true, true}, selectList)
+
+	d64Type := types.New(types.T_decimal64, 18, 1)
+	d64Value, err := types.ParseDecimal64("1.5", d64Type.Width, d64Type.Scale)
+	require.NoError(t, err)
+	d64Masked, err := types.ParseDecimal64("2.5", d64Type.Width, d64Type.Scale)
+	require.NoError(t, err)
+	assertBitwiseAggregateCast(t, proc, d64Type,
+		[]types.Decimal64{d64Value, d64Masked, 0}, []bool{false, false, true},
+		[]int64{2, 0, 0}, []bool{false, true, true}, selectList)
+
+	datetimeType := types.New(types.T_datetime, 0, 6)
+	datetime, err := types.ParseDatetime("2024-12-31 23:59:59.500000", datetimeType.Scale)
+	require.NoError(t, err)
+	maxDatetime, err := types.ParseDatetime("9999-12-31 23:59:59.500000", datetimeType.Scale)
+	require.NoError(t, err)
+	assertBitwiseAggregateCast(t, proc, datetimeType,
+		[]types.Datetime{datetime, maxDatetime, 0}, []bool{false, false, true},
+		[]int64{20250101000000, 0, 0}, []bool{false, true, true}, selectList)
+
+	timestampType := types.New(types.T_timestamp, 0, 6)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-12-31 23:59:59.500000", 6)
+	require.NoError(t, err)
+	maxTimestamp, err := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59.500000", 6)
+	require.NoError(t, err)
+	assertBitwiseAggregateCast(t, proc, timestampType,
+		[]types.Timestamp{timestamp, maxTimestamp, 0}, []bool{false, false, true},
+		[]int64{20250101000000, 0, 0}, []bool{false, true, true}, selectList)
+
+	timeType := types.New(types.T_time, 0, 6)
+	timeValue, err := types.ParseTime("-02:03:04.500000", timeType.Scale)
+	require.NoError(t, err)
+	timeMasked, err := types.ParseTime("02:03:04.500000", timeType.Scale)
+	require.NoError(t, err)
+	assertBitwiseAggregateCast(t, proc, timeType,
+		[]types.Time{timeValue, timeMasked, 0}, []bool{false, false, true},
+		[]int64{-20305, 0, 0}, []bool{false, true, true}, selectList)
+}
+
+func TestBitwiseAggregateCastFloatErrorsAndOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	warnings := &numericWarningSession{}
+	proc.WarningSink = warnings
+	assertBitwiseAggregateCast(t, proc, types.T_float32.ToType(),
+		[]float32{float32(math.Inf(1)), float32(math.Inf(-1))}, nil,
+		[]int64{math.MaxInt64, math.MinInt64}, nil, nil)
+	assertBitwiseAggregateCast(t, proc, types.T_float64.ToType(),
+		[]float64{math.Inf(1), math.Inf(-1)}, nil,
+		[]int64{math.MaxInt64, math.MinInt64}, nil, nil)
+	require.Len(t, warnings.warnings, 4)
+
+	assertBitwiseAggregateCastFails(t, proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_float32.ToType(), []float32{float32(math.NaN())}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
+	}, nil)
+	assertBitwiseAggregateCastFails(t, proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{math.NaN()}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
+	}, nil)
+}
+
+func TestBitwiseAggregateCastTemporalRoundingOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	datetimeType := types.New(types.T_datetime, 0, 6)
+	maxDatetime, err := types.ParseDatetime("9999-12-31 23:59:59.500000", datetimeType.Scale)
+	require.NoError(t, err)
+	assertBitwiseAggregateCastFails(t, proc, []FunctionTestInput{
+		NewFunctionTestInput(datetimeType, []types.Datetime{maxDatetime}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
+	}, nil)
+
+	timestampType := types.New(types.T_timestamp, 0, 6)
+	maxTimestamp, err := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59.500000", 6)
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	assertBitwiseAggregateCastFails(t, proc, []FunctionTestInput{
+		NewFunctionTestInput(timestampType, []types.Timestamp{maxTimestamp}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, nil),
+	}, nil)
+}
+
+func TestBitwiseAggregateDecimalConversionScaleAndSignedNarrowing(t *testing.T) {
+	if _, roundsToZero := decimal64RoundingDivisor(20); !roundsToZero {
+		t.Fatal("DECIMAL64 scale above its supported precision must round to zero")
+	}
+	if _, err := decimal64ToInt64(1, -1, 1, false); err == nil {
+		t.Fatal("negative DECIMAL64 scale must be rejected")
+	}
+	if got, err := decimal64ToInt64(123, 20, 0, true); err != nil || got != 0 {
+		t.Fatalf("DECIMAL64 values below the supported scale should round to zero: got %d, err %v", got, err)
+	}
+	if _, _, err := decimal128RoundingDivisor(-1); err == nil {
+		t.Fatal("negative DECIMAL128 scale must be rejected")
+	}
+	if _, roundsToZero, err := decimal128RoundingDivisor(39); err != nil || !roundsToZero {
+		t.Fatalf("DECIMAL128 scale above precision should round to zero: roundsToZero=%t, err=%v", roundsToZero, err)
+	}
+	if _, _, err := decimal256RoundingDivisor(-1); err == nil {
+		t.Fatal("negative DECIMAL256 scale must be rejected")
+	}
+	if _, roundsToZero, err := decimal256RoundingDivisor(66); err != nil || !roundsToZero {
+		t.Fatalf("DECIMAL256 scale above precision should round to zero: roundsToZero=%t, err=%v", roundsToZero, err)
+	}
+	if got, err := bitwiseAggregateDecimal128ToInt64Value(types.Decimal128{B0_63: 123}, types.Decimal128{}, true); err != nil || got != 0 {
+		t.Fatalf("DECIMAL128 value at an unsupported scale should round to zero: got %d, err %v", got, err)
+	}
+	if got, err := bitwiseAggregateDecimal256ToInt64Value(types.Decimal256{B0_63: 123}, types.Decimal256{}, true); err != nil || got != 0 {
+		t.Fatalf("DECIMAL256 value at an unsupported scale should round to zero: got %d, err %v", got, err)
+	}
+	if _, err := int64FromSignedMagnitude(uint64(math.MaxInt64)+1, false); err == nil {
+		t.Fatal("signed narrowing must reject positive values beyond INT64")
+	}
+	if _, err := int64FromSignedMagnitude(uint64(1)<<63+1, true); err == nil {
+		t.Fatal("signed narrowing must reject negative magnitudes beyond INT64")
+	}
+}
+
+func assertBitwiseAggregateCastFails(
+	t *testing.T,
+	proc *process.Process,
+	inputs []FunctionTestInput,
+	selectList *FunctionSelectList,
+) {
+	t.Helper()
+	testCase := NewFunctionTestCase(proc, inputs,
+		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), NewBitwiseAggregateCast)
+	if selectList != nil {
+		testCase = testCase.WithSelectList(selectList)
+	}
+	success, info := testCase.Run()
+	require.True(t, success, info)
 }
 
 func TestBitwiseAggregateNumericCastDateAndTemporalBoundaries(t *testing.T) {
