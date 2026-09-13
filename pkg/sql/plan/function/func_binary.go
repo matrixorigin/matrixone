@@ -14239,15 +14239,6 @@ func lineCollectionCrossesPolygonCollection(lines [][]geometryPoint2D, polygons 
 	return false
 }
 
-func pointInPolygonCollection(point geometryPoint2D, polygons []polygonGeometryItem) bool {
-	for _, polygon := range polygons {
-		if pointInPolygonGeometry(polygon.shape, point.x, point.y) {
-			return true
-		}
-	}
-	return false
-}
-
 func pointLocationInPolygonCollection(point geometryPoint2D, polygons []polygonGeometryItem) geometryPointLocation {
 	hasBoundary := false
 	for _, polygon := range polygons {
