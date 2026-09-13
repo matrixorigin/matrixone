@@ -197,6 +197,22 @@ func TestInsertRowAliasCandidateCorrelatedScalarJoinGuardsNonConflict(t *testing
 		"candidate-correlated scalar ODKU subquery must be gated by the target lookup match")
 }
 
+func TestInsertRowAliasCandidateCorrelatedRejectsMultiRowInput(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(id, name, location) "+
+			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
+			"where e.deptno = n.id)")
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+}
+
+func TestInsertRowAliasNestedCandidateCorrelationIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
+			"from constraint_test.emp as e where e.deptno = n.id)")
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+}
+
 func TestInsertRowAliasIgnoresLocalAliasMatchingTarget(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
@@ -287,6 +303,30 @@ func TestOndupUpdateBinderDetectsNestedTargetCorrelationBeforeBinding(t *testing
 	)
 	hasTarget, hasNested := binder.astSubqueryTargetCorrelation(astSubquery)
 	require.True(t, hasTarget)
+	require.True(t, hasNested)
+}
+
+func TestOndupUpdateBinderDetectsNestedCandidateCorrelationBeforeBinding(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"insert into t values (2, 5, 0) as n on duplicate key update b = (select (select q.y from q) from s where s.x = n.id)",
+		1,
+	)
+	require.NoError(t, err)
+	insert := stmt.(*tree.Insert)
+	astSubquery, ok := scalarSubqueryExpr(insert.OnDuplicateUpdate[0].Expr)
+	require.True(t, ok)
+
+	rowAlias, err := validateInsertRowAlias(
+		context.Background(), &tree.AliasClause{Alias: "n"},
+		[]string{"id", "a", "b"}, testInsertAliasTable(), "db", "t", 1,
+	)
+	require.NoError(t, err)
+	binder := NewOndupUpdateBinder(
+		context.Background(), nil, nil, 0, 0, testInsertAliasTable(), "db", "t", 1, rowAlias,
+	)
+	hasCandidate, hasNested := binder.astSubqueryCandidateCorrelation(astSubquery)
+	require.True(t, hasCandidate)
 	require.True(t, hasNested)
 }
 

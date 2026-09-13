@@ -395,7 +395,9 @@ func (b *OndupUpdateBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr,
 }
 
 func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	if _, nested := b.astSubqueryTargetCorrelation(astExpr); nested {
+	_, targetNested := b.astSubqueryTargetCorrelation(astExpr)
+	_, candidateNested := b.astSubqueryCandidateCorrelation(astExpr)
+	if targetNested || candidateNested {
 		return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
 	}
 	return b.baseBindSubquery(astExpr, isRoot)
@@ -404,20 +406,54 @@ func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*
 // astSubqueryTargetCorrelation checks the parser tree before the subquery is
 // bound and flattened. Once an inner scalar subquery is flattened into the
 // outer input plan, the plan-level walk cannot distinguish that unsafe shape
-// from an ordinary scalar expression. The check is deliberately limited to
-// explicit references to the ODKU target table; ordinary local subquery tables
-// and sibling scalar subqueries remain valid.
+// from an ordinary scalar expression. It deliberately ignores local aliases
+// that shadow the ODKU target table; ordinary local subquery tables and sibling
+// scalar subqueries remain valid.
 func (b *OndupUpdateBinder) astSubqueryTargetCorrelation(astExpr *tree.Subquery) (hasTarget, hasNested bool) {
 	if b == nil || astExpr == nil {
 		return false, false
 	}
-
 	targetTableName := tree.NewCStr(b.targetTableName, b.lowerCaseTableNames).Compare()
 	targetDBName := tree.NewCStr(b.targetDBName, b.lowerCaseTableNames).Compare()
+	return b.astSubqueryCorrelation(astExpr, func(node *tree.UnresolvedName, local bool) bool {
+		if local || node.TblName() == "" {
+			return false
+		}
+		qualifier := tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare()
+		return qualifier == targetTableName &&
+			(node.DbName() == "" ||
+				tree.NewCStr(node.DbName(), b.lowerCaseTableNames).Compare() == targetDBName)
+	})
+}
+
+// astSubqueryCandidateCorrelation performs the same pre-binding safety check
+// for INSERT row aliases. A nested candidate-correlated subquery has an input
+// plan that is materialized before duplicate-key arbitration, so the outer
+// target-match guard cannot make it safe. Local FROM aliases still shadow the
+// row alias and must not be classified as candidate references.
+func (b *OndupUpdateBinder) astSubqueryCandidateCorrelation(astExpr *tree.Subquery) (hasCandidate, hasNested bool) {
+	if b == nil || b.rowAlias == nil {
+		return false, false
+	}
+	candidateName := b.rowAlias.name
+	return b.astSubqueryCorrelation(astExpr, func(node *tree.UnresolvedName, local bool) bool {
+		return !local && node.DbName() == "" && node.TblName() != "" &&
+			tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare() == candidateName
+	})
+}
+
+func (b *OndupUpdateBinder) astSubqueryCorrelation(
+	astExpr *tree.Subquery,
+	match func(*tree.UnresolvedName, bool) bool,
+) (hasCorrelation, hasNested bool) {
+	if b == nil || astExpr == nil || match == nil {
+		return false, false
+	}
+
 	funcExprType := reflect.TypeOf(tree.FuncExpr{})
 	type subqueryFrame struct {
-		hasTarget bool
-		hasChild  bool
+		hasCorrelation bool
+		hasChild       bool
 	}
 
 	frames := make([]subqueryFrame, 0, 2)
@@ -470,11 +506,9 @@ func (b *OndupUpdateBinder) astSubqueryTargetCorrelation(astExpr *tree.Subquery)
 					if len(frames) > 0 && node.TblName() != "" {
 						qualifier := tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare()
 						local := node.DbName() == "" && isLocalQualifier(qualifier)
-						if !local && qualifier == targetTableName &&
-							(node.DbName() == "" ||
-								tree.NewCStr(node.DbName(), b.lowerCaseTableNames).Compare() == targetDBName) {
-							frames[len(frames)-1].hasTarget = true
-							hasTarget = true
+						if match(node, local) {
+							frames[len(frames)-1].hasCorrelation = true
+							hasCorrelation = true
 						}
 					}
 					return
@@ -486,7 +520,7 @@ func (b *OndupUpdateBinder) astSubqueryTargetCorrelation(astExpr *tree.Subquery)
 					walk(value.Elem())
 					frame := frames[len(frames)-1]
 					frames = frames[:len(frames)-1]
-					if frame.hasTarget && (frame.hasChild || len(frames) > 0) {
+					if frame.hasCorrelation && (frame.hasChild || len(frames) > 0) {
 						hasNested = true
 					}
 					return
@@ -515,7 +549,7 @@ func (b *OndupUpdateBinder) astSubqueryTargetCorrelation(astExpr *tree.Subquery)
 	}
 
 	walk(reflect.ValueOf(astExpr))
-	return hasTarget, hasNested
+	return hasCorrelation, hasNested
 }
 
 func (b *OndupUpdateBinder) astSelectLocalQualifiers(stmt tree.SelectStatement) map[string]struct{} {
