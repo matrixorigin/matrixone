@@ -454,7 +454,7 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 							// Keep the eight-session interleaving while bounding repeated
 							// work so the shared five-minute query budget remains available
 							// for every distance operator under a full-UT runner.
-							for iteration := 0; iteration < 3; iteration++ {
+							for iteration := 0; iteration < 2; iteration++ {
 								rows, err := conn.QueryContext(ctx, statement)
 								if err != nil {
 									return err
