@@ -5406,6 +5406,62 @@ func prepareVectorIndexScanForExecution(source *Source, proc *process.Process) (
 	return spec, nil
 }
 
+// buildFoldedFilterExprs prepares an isolated copy of a filter list and its
+// fold executors. The caller publishes both only after every expression has
+// been rewritten (and, for storage filters, evaluated) successfully.
+func buildFoldedFilterExprs(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	existing []colexec.ExpressionExecutor,
+	evaluate bool,
+) ([]*plan.Expr, []colexec.ExpressionExecutor, error) {
+	filters := plan2.DeepCopyExprList(exprs)
+	executors := append([]colexec.ExpressionExecutor(nil), existing...)
+	firstNewExecutor := len(executors)
+	rollback := func(err error) ([]*plan.Expr, []colexec.ExpressionExecutor, error) {
+		for _, executor := range executors[firstNewExecutor:] {
+			executor.Free()
+		}
+		return nil, existing, err
+	}
+
+	for _, expr := range filters {
+		if _, err := plan2.ReplaceFoldExpr(proc, expr, &executors); err != nil {
+			return rollback(err)
+		}
+	}
+	if evaluate {
+		for _, expr := range filters {
+			if err := plan2.EvalFoldExpr(proc, expr, &executors); err != nil {
+				return rollback(err)
+			}
+		}
+	}
+	return filters, executors, nil
+}
+
+func prepareFoldedFilterExprs(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	cached []*plan.Expr,
+	executors []colexec.ExpressionExecutor,
+	evaluate bool,
+) ([]*plan.Expr, []colexec.ExpressionExecutor, bool, error) {
+	if len(exprs) != len(cached) {
+		filters, nextExecutors, err := buildFoldedFilterExprs(
+			proc, exprs, executors, evaluate)
+		return filters, nextExecutors, err == nil, err
+	}
+	if evaluate {
+		for _, expr := range cached {
+			if err := plan2.EvalFoldExpr(proc, expr, &executors); err != nil {
+				return cached, executors, false, err
+			}
+		}
+	}
+	return cached, executors, false, nil
+}
+
 func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	var err error
 	var tblDef *plan.TableDef
@@ -5448,31 +5504,25 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
 	storageFilters := filterScanStorageExprs(node.FilterList)
-	if len(storageFilters) != len(s.DataSource.FilterList) {
-		s.DataSource.FilterList = plan2.DeepCopyExprList(storageFilters)
-		for _, e := range s.DataSource.FilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
-			if err != nil {
-				return err
-			}
-		}
+	filters, executors, rebuilt, err := prepareFoldedFilterExprs(
+		c.proc, storageFilters, s.DataSource.FilterList, c.filterExprExes, true)
+	if err != nil {
+		return err
 	}
-	for _, e := range s.DataSource.FilterList {
-		err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
-		if err != nil {
-			return err
-		}
+	if rebuilt {
+		c.filterExprExes = executors
+		s.DataSource.FilterList = filters
 	}
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
-	if len(node.BlockFilterList) != len(s.DataSource.BlockFilterList) {
-		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(node.BlockFilterList)
-		for _, e := range s.DataSource.BlockFilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
-			if err != nil {
-				return err
-			}
-		}
+	filters, executors, rebuilt, err = prepareFoldedFilterExprs(
+		c.proc, node.BlockFilterList, s.DataSource.BlockFilterList, c.filterExprExes, false)
+	if err != nil {
+		return err
+	}
+	if rebuilt {
+		c.filterExprExes = executors
+		s.DataSource.BlockFilterList = filters
 	}
 
 	s.DataSource.Timestamp = ts
