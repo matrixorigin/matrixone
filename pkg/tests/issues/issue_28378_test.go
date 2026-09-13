@@ -136,6 +136,11 @@ type ivfCase struct {
 	desc, concurrent          bool
 }
 
+// The vector-index path selects Multi-CN from the vector-index plan node; it
+// has no 65,536-row threshold. 4,096 rows provide 256 vectors per IVF list on
+// average while preserving the remote lifecycle and result oracles.
+const ivfFixtureRows = 4096
+
 func TestIssue28378IVFFlatRemoteLifecycle(t *testing.T) {
 	started := time.Now()
 	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
@@ -292,7 +297,7 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 		}
 		state.tx = seedTx
 		rng := rand.New(rand.NewSource(28378))
-		for start := 0; start < 65536; start += 256 {
+		for start := 0; start < ivfFixtureRows; start += 256 {
 			generationStarted := time.Now()
 			values := make([]string, 0, 256)
 			for id := start; id < start+256; id++ {
@@ -370,7 +375,7 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 			var row result
 			require.NoError(t, rows.Scan(&row.id, &row.distance))
 			require.GreaterOrEqual(t, row.id, int64(0))
-			require.Less(t, row.id, int64(65536))
+			require.Less(t, row.id, int64(ivfFixtureRows))
 			require.False(t, seen[row.id], "duplicate vector id")
 			seen[row.id] = true
 			require.False(t, math.IsNaN(row.distance) || math.IsInf(row.distance, 0))
@@ -480,7 +485,7 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 										if err := rows.Scan(&id); err != nil {
 											return err
 										}
-										if id < 0 || id >= 65536 || seen[id] {
+										if id < 0 || id >= ivfFixtureRows || seen[id] {
 											return fmt.Errorf("invalid vector id %d", id)
 										}
 										seen[id] = true
