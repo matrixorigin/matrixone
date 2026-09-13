@@ -7933,6 +7933,68 @@ func TestMBRPredicates(t *testing.T) {
 	run(MBROverlaps, outer, right, false) // edge touch is not overlap
 }
 
+func TestMBRPredicatesDegenerateBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	run := func(t *testing.T, fn fEvalFn, g1, g2 string, want bool) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g1}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g2}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		a         string
+		b         string
+		touches   bool
+		within    bool
+		coveredBy bool
+	}{
+		{"equal points", "POINT(0 0)", "POINT(0 0)", false, true, true},
+		{"distinct points", "POINT(0 0)", "POINT(1 1)", false, false, false},
+		{"point inside rectangle", "POINT(2 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"point on rectangle edge", "POINT(0 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, true},
+		{"point on rectangle corner", "POINT(0 0)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, true},
+		{"point in horizontal line interior", "POINT(2 0)", "LINESTRING(0 0, 4 0)", false, true, true},
+		{"point at horizontal line endpoint", "POINT(0 0)", "LINESTRING(0 0, 4 0)", true, false, true},
+		{"point in vertical line interior", "POINT(2 2)", "LINESTRING(2 0, 2 4)", false, true, true},
+		{"point at vertical line endpoint", "POINT(2 0)", "LINESTRING(2 0, 2 4)", true, false, true},
+		{"equal horizontal lines", "LINESTRING(0 0, 4 0)", "LINESTRING(0 0, 4 0)", false, true, true},
+		{"contained lines share endpoint", "LINESTRING(0 0, 2 0)", "LINESTRING(0 0, 4 0)", false, true, true},
+		{"collinear lines overlap", "LINESTRING(0 0, 3 0)", "LINESTRING(2 0, 4 0)", false, false, false},
+		{"collinear lines meet at endpoint", "LINESTRING(0 0, 2 0)", "LINESTRING(2 0, 4 0)", true, false, false},
+		{"perpendicular lines cross interiors", "LINESTRING(0 2, 4 2)", "LINESTRING(2 0, 2 4)", false, false, false},
+		{"line endpoint meets other interior", "LINESTRING(0 2, 2 2)", "LINESTRING(2 0, 2 4)", true, false, false},
+		{"equal vertical lines", "LINESTRING(2 0, 2 4)", "LINESTRING(2 0, 2 4)", false, true, true},
+		{"vertical lines overlap", "LINESTRING(2 0, 2 3)", "LINESTRING(2 2, 2 4)", false, false, false},
+		{"line inside rectangle", "LINESTRING(1 2, 3 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"line endpoints on rectangle boundary", "LINESTRING(0 2, 4 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"line on rectangle edge", "LINESTRING(0 1, 0 3)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, true},
+		{"line crosses rectangle from outside", "LINESTRING(-1 2, 5 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, false, false},
+		{"equal rectangles", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"contained rectangle shares edge", "POLYGON((0 1, 2 1, 2 3, 0 3, 0 1))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"partially overlapping rectangles", "POLYGON((2 2, 6 2, 6 6, 2 6, 2 2))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, false, false},
+		{"rectangles share edge", "POLYGON((-4 0, 0 0, 0 4, -4 4, -4 0))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, false},
+		{"rectangles share corner", "POLYGON((4 4, 6 4, 6 6, 4 6, 4 4))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, false},
+		{"disjoint rectangles", "POLYGON((5 5, 8 5, 8 8, 5 8, 5 5))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, false, false},
+		{"diagonal line uses its area envelope", "LINESTRING(0 0, 4 4)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run(t, MBRTouches, tc.a, tc.b, tc.touches)
+			run(t, MBRTouches, tc.b, tc.a, tc.touches)
+			run(t, MBRWithin, tc.a, tc.b, tc.within)
+			run(t, MBRContains, tc.b, tc.a, tc.within)
+			run(t, MBRCoveredBy, tc.a, tc.b, tc.coveredBy)
+			run(t, MBRCovers, tc.b, tc.a, tc.coveredBy)
+		})
+	}
+}
+
 func TestGeoHashFunctions(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
