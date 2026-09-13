@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -853,6 +854,105 @@ func TestDecimalLiteralMetadataPrecision(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(2), expr.Typ.Width)
 	require.Equal(t, int32(1), expr.Typ.Scale)
+}
+
+func TestUnquotedDecimal256LiteralKeepsAllDigits(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name      string
+		value     string
+		want      types.T
+		wantWidth int32
+		wantScale int32
+	}{
+		{
+			name:      "decimal128 control",
+			value:     strings.Repeat("9", 38),
+			want:      types.T_decimal128,
+			wantWidth: 38,
+		},
+		{
+			name:      "decimal256 39 digits",
+			value:     "12345678901234567890123456789012345678.1",
+			want:      types.T_decimal256,
+			wantWidth: 39,
+			wantScale: 1,
+		},
+		{
+			name:      "decimal256 40 digits",
+			value:     "12345678901234567890123456789012345678.12",
+			want:      types.T_decimal256,
+			wantWidth: 40,
+			wantScale: 2,
+		},
+		{
+			name:      "decimal256 65 digits",
+			value:     "12345678901234567890123456789012345.123456789012345678901234567890",
+			want:      types.T_decimal256,
+			wantWidth: 65,
+			wantScale: 30,
+		},
+		{
+			name:      "negative decimal256",
+			value:     "-12345678901234567890123456789012345678.1",
+			want:      types.T_decimal256,
+			wantWidth: 39,
+			wantScale: 1,
+		},
+		{
+			name:      "decimal256 physical boundary",
+			value:     strings.Repeat("9", 75) + ".1",
+			want:      types.T_decimal256,
+			wantWidth: 76,
+			wantScale: 1,
+		},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := makePlan2DecimalExprWithType(ctx, test.value)
+			require.NoError(t, err)
+			require.Equal(t, int32(test.want), expr.Typ.Id, expr.String())
+			require.Equal(t, test.wantWidth, expr.Typ.Width, expr.String())
+			require.Equal(t, test.wantScale, expr.Typ.Scale, expr.String())
+			require.NotNil(t, expr.GetF(), expr.String())
+			require.Len(t, expr.GetF().Args, 2, expr.String())
+			if test.want == types.T_decimal256 {
+				require.Equal(t, test.value, expr.GetF().Args[0].GetLit().GetSval())
+			}
+
+			stmt, err := runOneStmt(NewMockOptimizer(false), t, "select "+test.value)
+			require.NoError(t, err)
+			root := stmt.GetQuery().Nodes[stmt.GetQuery().Steps[len(stmt.GetQuery().Steps)-1]]
+			require.Len(t, root.ProjectList, 1)
+			require.Equal(t, int32(test.want), root.ProjectList[0].Typ.Id, root.ProjectList[0].String())
+			require.Equal(t, test.wantWidth, root.ProjectList[0].Typ.Width, root.ProjectList[0].String())
+			require.Equal(t, test.wantScale, root.ProjectList[0].Typ.Scale, root.ProjectList[0].String())
+			if test.want == types.T_decimal256 {
+				require.Contains(t, root.ProjectList[0].String(), strings.TrimPrefix(test.value, "-"))
+			}
+		})
+	}
+}
+
+func TestUnquotedScientificLiteralKeepsExistingFloatPath(t *testing.T) {
+	stmt, err := runOneStmt(NewMockOptimizer(false), t, "select 12345678901234567890123456789012345678e-30")
+	require.NoError(t, err)
+	root := stmt.GetQuery().Nodes[stmt.GetQuery().Steps[len(stmt.GetQuery().Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	require.Equal(t, int32(types.T_float64), root.ProjectList[0].Typ.Id, root.ProjectList[0].String())
+}
+
+func TestUnquotedDecimalLiteralRejectsBeyondDecimal256Precision(t *testing.T) {
+	for _, value := range []string{
+		strings.Repeat("9", 77),
+		strings.Repeat("9", 75) + ".11",
+	} {
+		t.Run(value, func(t *testing.T) {
+			_, err := makePlan2DecimalExprWithType(context.Background(), value)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestBuildIfNullMetadata(t *testing.T) {

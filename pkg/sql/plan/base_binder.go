@@ -7974,6 +7974,10 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		}
 		// Smart type selection for untyped decimal literals
 		// Choose decimal64 if value fits, otherwise decimal128
+		if isPlainDecimalLiteral(astExpr.String()) &&
+			decimalLiteralPrecision(astExpr.String()) > types.T_decimal128.ToType().Width {
+			return makePlan2DecimalExprWithType(b.GetContext(), astExpr.String())
+		}
 		d128, scale, err := types.Parse128(astExpr.String())
 		if err != nil {
 			return makePlan2DecimalExprWithType(b.GetContext(), astExpr.String())

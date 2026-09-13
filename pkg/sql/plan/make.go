@@ -67,6 +67,28 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
 	var typ plan.Type
 	width := decimalLiteralPrecision(v)
+	// Parse128 rounds the first digit after its 38-digit physical boundary and
+	// still returns nil error. Select the wide carrier from the source token
+	// before parsing so an exact DECIMAL256 literal is never materialized from
+	// an already-rounded Decimal128 value. Scientific notation keeps the
+	// existing parser path because its effective precision is exponent-sensitive.
+	if isPlainDecimalLiteral(v) && width > types.T_decimal128.ToType().Width {
+		if width > types.T_decimal256.ToType().Width {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"%s beyond the range, can't be converted to Decimal256.", v)
+		}
+		_, scale, err := types.Parse256(v)
+		if err != nil {
+			return nil, err
+		}
+		typ = plan.Type{
+			Id:          int32(types.T_decimal256),
+			Width:       width,
+			Scale:       scale,
+			NotNullable: true,
+		}
+		return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
+	}
 	_, scale, err := types.Parse128(v)
 	if err == nil && scale < 18 && len(v) < 18 {
 		typ = plan.Type{
@@ -95,6 +117,28 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 		}
 	}
 	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
+}
+
+func isPlainDecimalLiteral(v string) bool {
+	if v == "" {
+		return false
+	}
+	pos := 0
+	if v[pos] == '+' || v[pos] == '-' {
+		pos++
+	}
+	seenDigit, seenPoint := false, false
+	for ; pos < len(v); pos++ {
+		switch ch := v[pos]; {
+		case ch >= '0' && ch <= '9':
+			seenDigit = true
+		case ch == '.' && !seenPoint:
+			seenPoint = true
+		default:
+			return false
+		}
+	}
+	return seenDigit
 }
 
 func decimalLiteralPrecision(v string) int32 {

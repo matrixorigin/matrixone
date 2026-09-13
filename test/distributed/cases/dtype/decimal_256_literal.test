@@ -1,0 +1,11 @@
+drop table if exists decimal_256_unquoted_literal_t;
+create table decimal_256_unquoted_literal_t (
+id int primary key,
+d decimal(65,30)
+);
+insert into decimal_256_unquoted_literal_t values
+(1, cast('12345678901234567890123456789012345.123456789012345678901234567890' as decimal(65,30)));
+select 12345678901234567890123456789012345.123456789012345678901234567890 as unquoted_decimal256;
+select id from decimal_256_unquoted_literal_t
+where d = 12345678901234567890123456789012345.123456789012345678901234567890;
+drop table decimal_256_unquoted_literal_t;
