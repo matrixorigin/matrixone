@@ -135,6 +135,29 @@ func integerDivOperatorSupports(typ1, typ2 types.Type) bool {
 	}
 }
 
+// integerDivBitTypes preserves BIT as the dividend's result-domain marker and
+// widens only the divisor. MySQL returns BIGINT UNSIGNED for BIT DIV integer,
+// so coercing the BIT dividend to int64 would lose values above MaxInt64.
+func integerDivBitTypes(left, right types.Type) (types.Type, types.Type, bool) {
+	if left.Oid != types.T_bit {
+		return types.Type{}, types.Type{}, false
+	}
+
+	switch {
+	case right.Oid.IsSignedInt():
+		return left, types.T_int64.ToType(), true
+	case right.Oid.IsUnsignedInt(), right.Oid == types.T_bit, right.Oid == types.T_any:
+		return left, types.T_uint64.ToType(), true
+	default:
+		return types.Type{}, types.Type{}, false
+	}
+}
+
+func integerDivBitResolvedTypes(left, right types.Type) bool {
+	return left.Oid == types.T_bit &&
+		(right.Oid == types.T_int64 || right.Oid == types.T_uint64)
+}
+
 // integerDivUnsignedMixedTypes preserves the unsigned domain of the left
 // operand for the mixed DIV cases that can otherwise be coerced to a signed
 // decimal or floating-point type. The executor consumes these canonical types
@@ -544,6 +567,13 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if integerDivBitResolvedTypes(*parameters[0].GetType(), *parameters[1].GetType()) {
+		if parameters[1].GetType().Oid == types.T_int64 {
+			return integerDivBitSigned(parameters, result, proc, length, selectList)
+		}
+		return integerDivBitUnsigned(parameters, result, proc, length, selectList)
+	}
+
 	if integerDivUnsignedMixedResolvedTypes(*parameters[0].GetType(), *parameters[1].GetType()) {
 		if parameters[1].GetType().Oid == types.T_int64 {
 			return integerDivUnsignedSigned(parameters, result, proc, length, selectList)
@@ -575,6 +605,112 @@ func integerDivFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		return decimalBatchArith[types.Decimal256, int64](parameters, result, proc, length, d256IntDivKernel(proc, selectList), selectList)
 	}
 	panic("unreached code")
+}
+
+func integerDivBitSigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[uint64](result)
+	p1 := vector.OptGetParamFromWrapper[uint64](rs, 0, parameters[0])
+	p2 := vector.OptGetParamFromWrapper[int64](rs, 1, parameters[1])
+	rss := vector.MustFixedColNoTypeCheck[uint64](rs.GetResultVector())
+	rsNull := rs.GetResultVector().GetNulls()
+	done, skipMasked := maskUnselectedRows(rsNull, selectList, length)
+	if done {
+		return nil
+	}
+
+	constantLeft, constantRight := parameters[0].IsConst(), parameters[1].IsConst()
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	for i := uint64(0); i < uint64(length); i++ {
+		if skipMasked && rsNull.Contains(i) {
+			continue
+		}
+		leftIndex, rightIndex := i, i
+		if constantLeft {
+			leftIndex = 0
+		}
+		if constantRight {
+			rightIndex = 0
+		}
+		dividend, nullLeft := p1.GetValue(leftIndex)
+		divisor, nullRight := p2.GetValue(rightIndex)
+		if nullLeft || nullRight {
+			rsNull.Add(i)
+			continue
+		}
+		if divisor == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			rsNull.Add(i)
+			continue
+		}
+
+		if divisor > 0 {
+			rss[i] = dividend / uint64(divisor)
+			continue
+		}
+
+		// A non-zero negative quotient is outside BIGINT UNSIGNED. Form the
+		// divisor magnitude without overflowing for MinInt64.
+		absDivisor := uint64(-(divisor + 1)) + 1
+		if dividend/absDivisor != 0 {
+			return moerr.NewOutOfRangeNoCtx("BIGINT UNSIGNED", "")
+		}
+		rss[i] = 0
+	}
+	return nil
+}
+
+func integerDivBitUnsigned(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+
+	result.UseOptFunctionParamFrame(2)
+	rs := vector.MustFunctionResult[uint64](result)
+	p1 := vector.OptGetParamFromWrapper[uint64](rs, 0, parameters[0])
+	p2 := vector.OptGetParamFromWrapper[uint64](rs, 1, parameters[1])
+	rss := vector.MustFixedColNoTypeCheck[uint64](rs.GetResultVector())
+	rsNull := rs.GetResultVector().GetNulls()
+	done, skipMasked := maskUnselectedRows(rsNull, selectList, length)
+	if done {
+		return nil
+	}
+
+	constantLeft, constantRight := parameters[0].IsConst(), parameters[1].IsConst()
+	shouldError := checkDivisionByZeroBehavior(proc, selectList)
+	for i := uint64(0); i < uint64(length); i++ {
+		if skipMasked && rsNull.Contains(i) {
+			continue
+		}
+		leftIndex, rightIndex := i, i
+		if constantLeft {
+			leftIndex = 0
+		}
+		if constantRight {
+			rightIndex = 0
+		}
+		dividend, nullLeft := p1.GetValue(leftIndex)
+		divisor, nullRight := p2.GetValue(rightIndex)
+		if nullLeft || nullRight {
+			rsNull.Add(i)
+			continue
+		}
+		if divisor == 0 {
+			if shouldError {
+				return moerr.NewDivByZeroNoCtx()
+			}
+			rsNull.Add(i)
+			continue
+		}
+		rss[i] = dividend / divisor
+	}
+	return nil
 }
 
 // maskUnselectedRows marks rows short-circuited by selectList (e.g. the
