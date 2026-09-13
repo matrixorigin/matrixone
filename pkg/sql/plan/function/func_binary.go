@@ -11426,6 +11426,12 @@ func geodeticDistance(left, right []byte) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := geo.ValidateGeodeticCoordinates(lg); err != nil {
+		return 0, err
+	}
+	if err := geo.ValidateGeodeticCoordinates(rg); err != nil {
+		return 0, err
+	}
 	d, ok := geo.DistanceMeters(lg, rg)
 	if !ok {
 		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
