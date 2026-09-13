@@ -240,6 +240,25 @@ func TestInsertRowAliasNestedCorrelationIsRejected(t *testing.T) {
 	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
 }
 
+func TestOndupUpdateBinderDetectsNestedTargetCorrelationBeforeBinding(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"insert into t values (2, 5, 0) as n on duplicate key update b = (select (select q.y from q) from s where s.x = coalesce(t.id, 0))",
+		1,
+	)
+	require.NoError(t, err)
+	insert := stmt.(*tree.Insert)
+	astSubquery, ok := scalarSubqueryExpr(insert.OnDuplicateUpdate[0].Expr)
+	require.True(t, ok)
+
+	binder := NewOndupUpdateBinder(
+		context.Background(), nil, nil, 0, 0, testInsertAliasTable(), "db", "t", 1,
+	)
+	hasTarget, hasNested := binder.astSubqueryTargetCorrelation(astSubquery)
+	require.True(t, hasTarget)
+	require.True(t, hasNested)
+}
+
 func TestInsertRowAliasGeneratedDefaultNoKeyFallbackBuilds(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.fake_pk_no_unique_gen(a, g) values (1, default) as n(x, y) "+

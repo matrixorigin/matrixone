@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -394,7 +395,105 @@ func (b *OndupUpdateBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr,
 }
 
 func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
+	if _, nested := b.astSubqueryTargetCorrelation(astExpr); nested {
+		return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
+	}
 	return b.baseBindSubquery(astExpr, isRoot)
+}
+
+// astSubqueryTargetCorrelation checks the parser tree before the subquery is
+// bound and flattened. Once an inner scalar subquery is flattened into the
+// outer input plan, the plan-level walk cannot distinguish that unsafe shape
+// from an ordinary scalar expression. The check is deliberately limited to
+// explicit references to the ODKU target table; ordinary local subquery tables
+// and sibling scalar subqueries remain valid.
+func (b *OndupUpdateBinder) astSubqueryTargetCorrelation(astExpr *tree.Subquery) (hasTarget, hasNested bool) {
+	if b == nil || astExpr == nil {
+		return false, false
+	}
+
+	targetTableName := tree.NewCStr(b.targetTableName, b.lowerCaseTableNames).Compare()
+	targetDBName := tree.NewCStr(b.targetDBName, b.lowerCaseTableNames).Compare()
+	funcExprType := reflect.TypeOf(tree.FuncExpr{})
+	type subqueryFrame struct {
+		hasTarget bool
+		hasChild  bool
+	}
+
+	frames := make([]subqueryFrame, 0, 2)
+	active := make(map[uintptr]struct{})
+	var walk func(reflect.Value)
+	walk = func(value reflect.Value) {
+		if !value.IsValid() {
+			return
+		}
+		if value.Kind() == reflect.Interface {
+			if value.IsNil() {
+				return
+			}
+			walk(value.Elem())
+			return
+		}
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				return
+			}
+			pointer := value.Pointer()
+			if _, ok := active[pointer]; ok {
+				return
+			}
+			active[pointer] = struct{}{}
+			defer delete(active, pointer)
+
+			if value.CanInterface() {
+				switch node := value.Interface().(type) {
+				case *tree.UnresolvedName:
+					if len(frames) > 0 && node.TblName() != "" &&
+						tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare() == targetTableName &&
+						(node.DbName() == "" ||
+							tree.NewCStr(node.DbName(), b.lowerCaseTableNames).Compare() == targetDBName) {
+						frames[len(frames)-1].hasTarget = true
+						hasTarget = true
+					}
+					return
+				case *tree.Subquery:
+					if len(frames) > 0 {
+						frames[len(frames)-1].hasChild = true
+					}
+					frames = append(frames, subqueryFrame{})
+					walk(value.Elem())
+					frame := frames[len(frames)-1]
+					frames = frames[:len(frames)-1]
+					if frame.hasTarget && (frame.hasChild || len(frames) > 0) {
+						hasNested = true
+					}
+					return
+				}
+			}
+			walk(value.Elem())
+			return
+		}
+
+		switch value.Kind() {
+		case reflect.Struct:
+			valueType := value.Type()
+			for i := 0; i < value.NumField(); i++ {
+				if valueType == funcExprType && valueType.Field(i).Name == "Func" {
+					continue
+				}
+				if valueType.Field(i).PkgPath == "" {
+					walk(value.Field(i))
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < value.Len(); i++ {
+				walk(value.Index(i))
+			}
+		}
+	}
+
+	walk(reflect.ValueOf(astExpr))
+	return hasTarget, hasNested
 }
 
 func (b *OndupUpdateBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
