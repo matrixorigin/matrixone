@@ -113,6 +113,7 @@ func TestMultiInsertSingleAutoIncrTargetReportsInsertID(t *testing.T) {
 	ses.SetLastInsertID(51)
 	proc.SetLastInsertID(51)
 	proc.SetStatementLastInsertIDIfEarlier(101)
+	proc.MarkStatementLastInsertIDGenerated()
 
 	require.NoError(t, resper.respStatus(ses, execCtx))
 

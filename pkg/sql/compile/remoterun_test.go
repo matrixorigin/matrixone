@@ -328,7 +328,9 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 			},
 		},
 		&dedupjoin.DedupJoin{
-			Conditions: [][]*plan.Expr{nil, nil},
+			Conditions:                           [][]*plan.Expr{nil, nil},
+			AutoIncrementGeneratedResultPos:      -1,
+			AutoIncrementGeneratedValueResultPos: -1,
 		},
 	}
 	ctx := &scopeContext{
@@ -2030,8 +2032,10 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 
 	t.Run("ODKU metadata rejects mixed-version remote execution", func(t *testing.T) {
 		op := &dedupjoin.DedupJoin{
-			Conditions:          [][]*plan.Expr{nil, nil},
-			HasODKUAffectedRows: true,
+			Conditions:                           [][]*plan.Expr{nil, nil},
+			AutoIncrementGeneratedResultPos:      -1,
+			AutoIncrementGeneratedValueResultPos: -1,
+			HasODKUAffectedRows:                  true,
 		}
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
@@ -2047,7 +2051,10 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 
 		actionOp := &dedupjoin.DedupJoin{
-			Conditions: [][]*plan.Expr{nil, nil}, EmitActionRows: true,
+			Conditions:                           [][]*plan.Expr{nil, nil},
+			AutoIncrementGeneratedResultPos:      -1,
+			AutoIncrementGeneratedValueResultPos: -1,
+			EmitActionRows:                       true,
 		}
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		_, actionInstruction, err := convertToPipelineInstruction(actionOp, proc, ctx, 1)
@@ -2690,8 +2697,10 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 					SpillThreshold: threshold,
 				},
 				"dedupjoin": &dedupjoin.DedupJoin{
-					Conditions:     [][]*planpb.Expr{{}, {}},
-					SpillThreshold: threshold,
+					Conditions:                           [][]*planpb.Expr{{}, {}},
+					AutoIncrementGeneratedResultPos:      -1,
+					AutoIncrementGeneratedValueResultPos: -1,
+					SpillThreshold:                       threshold,
 				},
 				"rightdedupjoin": &rightdedupjoin.RightDedupJoin{
 					Conditions:      [][]*planpb.Expr{{}, {}},

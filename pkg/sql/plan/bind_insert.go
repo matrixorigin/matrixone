@@ -120,7 +120,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 
 	irregularIndexes := getIrregularIndexes(tableDef)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false, len(stmt.OnDuplicateUpdate) > 0)
+	lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err := builder.initInsertReplaceStmt(bindCtx, stmt.Rows, stmt.Columns, dmlCtx.objRefs[0], dmlCtx.tableDefs[0], false, false, len(stmt.OnDuplicateUpdate) > 0 && !builder.isInsertIgnore)
 	if err != nil {
 		return 0, err
 	}

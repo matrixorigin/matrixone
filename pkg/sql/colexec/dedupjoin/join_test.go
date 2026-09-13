@@ -1667,12 +1667,14 @@ func TestDedupFinalizeNormalWorkerAbortStopsWithoutPartialOutput(t *testing.T) {
 	require.True(t, sent)
 	require.False(t, stopped)
 	arg := &DedupJoin{
-		RightTypes:        []types.Type{typ},
-		Result:            []colexec.ResultPos{{Rel: 1, Pos: 0}},
-		NumCPU:            2,
-		IsMerger:          true,
-		Mailbox:           mailbox,
-		OnDuplicateAction: plan.Node_FAIL,
+		RightTypes:                           []types.Type{typ},
+		Result:                               []colexec.ResultPos{{Rel: 1, Pos: 0}},
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		NumCPU:                               2,
+		IsMerger:                             true,
+		Mailbox:                              mailbox,
+		OnDuplicateAction:                    plan.Node_FAIL,
 	}
 	arg.ctr.state = Finalize
 	arg.ctr.mp = joinMap
@@ -1697,12 +1699,14 @@ func TestDedupFinalizeParallelMergePreservesDataAcrossReset(t *testing.T) {
 	baseline := proc.Mp().CurrNB()
 	mailbox := NewWorkerJoinMailbox(2)
 	arg := &DedupJoin{
-		RightTypes:        []types.Type{types.T_int32.ToType()},
-		Result:            []colexec.ResultPos{{Rel: 1, Pos: 0}},
-		OnDuplicateAction: plan.Node_IGNORE,
-		NumCPU:            2,
-		IsMerger:          true,
-		Mailbox:           mailbox,
+		RightTypes:                           []types.Type{types.T_int32.ToType()},
+		Result:                               []colexec.ResultPos{{Rel: 1, Pos: 0}},
+		AutoIncrementGeneratedResultPos:      -1,
+		AutoIncrementGeneratedValueResultPos: -1,
+		OnDuplicateAction:                    plan.Node_IGNORE,
+		NumCPU:                               2,
+		IsMerger:                             true,
+		Mailbox:                              mailbox,
 	}
 	workerArg := &DedupJoin{
 		NumCPU:   2,

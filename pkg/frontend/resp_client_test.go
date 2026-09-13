@@ -136,6 +136,7 @@ func TestRespStatusUpdateUsesExprAndODKUNoOpCanPublishZero(t *testing.T) {
 	ses := &Session{seqLastValue: new(string), feSessionImpl: feSessionImpl{txnHandler: &TxnHandler{}}}
 	ses.SetLastInsertID(51)
 	proc := &process.Process{Base: &process.BaseProcess{LastInsertID: new(uint64), StatementLastInsertID: new(uint64)}}
+	proc.InitSeq()
 	proc.SetLastInsertID(51)
 	proc.SetLastInsertIDExpr(0)
 	writer := &countingMysqlWriter{testMysqlWriter: &testMysqlWriter{}, responses: make([]*Response, 0, 2)}

@@ -149,7 +149,11 @@ func TestIdentityProjectionOfChild(t *testing.T) {
 func TestJoinHashBuildTopologyPinsSpillToSingleConsumer(t *testing.T) {
 	operators := []vm.Operator{
 		&hashjoin.HashJoin{EqConds: [][]*plan.Expr{{}, {}}},
-		&dedupjoin.DedupJoin{Conditions: [][]*plan.Expr{{}, {}}},
+		&dedupjoin.DedupJoin{
+			Conditions:                           [][]*plan.Expr{{}, {}},
+			AutoIncrementGeneratedResultPos:      -1,
+			AutoIncrementGeneratedValueResultPos: -1,
+		},
 		&rightdedupjoin.RightDedupJoin{Conditions: [][]*plan.Expr{{}, {}}},
 	}
 
