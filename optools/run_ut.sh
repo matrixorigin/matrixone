@@ -469,6 +469,7 @@ function stop_ut_heartbeat(){
 function cgroup_memory_metrics(){
     local relative_path=""
     local cgroup_path=""
+    local memory_max="unknown"
     if [[ ! -r /proc/self/cgroup ]]; then
         return 0
     fi
@@ -477,9 +478,13 @@ function cgroup_memory_metrics(){
     if [[ -n "${relative_path}" ]]; then
         cgroup_path="/sys/fs/cgroup${relative_path}"
         if [[ -r "${cgroup_path}/memory.current" ]]; then
+            if [[ -r "${cgroup_path}/memory.max" ]]; then
+                memory_max=$(< "${cgroup_path}/memory.max")
+            fi
             printf 'current=%s peak=%s' \
                 "$(< "${cgroup_path}/memory.current")" \
                 "$(< "${cgroup_path}/memory.peak")"
+            printf ' memory.max=%s' "${memory_max}"
             return 0
         fi
     fi
@@ -487,9 +492,13 @@ function cgroup_memory_metrics(){
     relative_path=$(awk -F: '$2 ~ /(^|,)memory(,|$)/ { print $3; exit }' /proc/self/cgroup)
     cgroup_path="/sys/fs/cgroup/memory${relative_path}"
     if [[ -r "${cgroup_path}/memory.usage_in_bytes" ]]; then
+        if [[ -r "${cgroup_path}/memory.limit_in_bytes" ]]; then
+            memory_max=$(< "${cgroup_path}/memory.limit_in_bytes")
+        fi
         printf 'current=%s peak=%s' \
             "$(< "${cgroup_path}/memory.usage_in_bytes")" \
             "$(< "${cgroup_path}/memory.max_usage_in_bytes")"
+        printf ' memory.limit_in_bytes=%s' "${memory_max}"
     fi
 }
 
@@ -498,6 +507,7 @@ function report_cgroup_memory_usage(){
     local relative_path=""
     local cgroup_path=""
     local events=""
+    local memory_max="unknown"
 
     if [[ ! -r /proc/self/cgroup ]]; then
         return 0
@@ -507,8 +517,11 @@ function report_cgroup_memory_usage(){
     if [[ -n "${relative_path}" ]]; then
         cgroup_path="/sys/fs/cgroup${relative_path}"
         if [[ -r "${cgroup_path}/memory.peak" ]]; then
+            if [[ -r "${cgroup_path}/memory.max" ]]; then
+                memory_max=$(< "${cgroup_path}/memory.max")
+            fi
             events=$(tr '\n' ' ' < "${cgroup_path}/memory.events")
-            logger "INF" "${label} cgroup memory: current=$(< "${cgroup_path}/memory.current") peak=$(< "${cgroup_path}/memory.peak") events=${events}"
+            logger "INF" "${label} cgroup memory: current=$(< "${cgroup_path}/memory.current") peak=$(< "${cgroup_path}/memory.peak") memory.max=${memory_max} events=${events}"
             return 0
         fi
     fi
@@ -516,7 +529,10 @@ function report_cgroup_memory_usage(){
     relative_path=$(awk -F: '$2 ~ /(^|,)memory(,|$)/ { print $3; exit }' /proc/self/cgroup)
     cgroup_path="/sys/fs/cgroup/memory${relative_path}"
     if [[ -r "${cgroup_path}/memory.max_usage_in_bytes" ]]; then
-        logger "INF" "${label} cgroup memory: current=$(< "${cgroup_path}/memory.usage_in_bytes") peak=$(< "${cgroup_path}/memory.max_usage_in_bytes") failcnt=$(< "${cgroup_path}/memory.failcnt")"
+        if [[ -r "${cgroup_path}/memory.limit_in_bytes" ]]; then
+            memory_max=$(< "${cgroup_path}/memory.limit_in_bytes")
+        fi
+        logger "INF" "${label} cgroup memory: current=$(< "${cgroup_path}/memory.usage_in_bytes") peak=$(< "${cgroup_path}/memory.max_usage_in_bytes") memory.limit_in_bytes=${memory_max} failcnt=$(< "${cgroup_path}/memory.failcnt")"
     fi
 }
 
