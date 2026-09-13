@@ -341,6 +341,38 @@ func TestAlterCopyAffectedForeignKeyColumnsDoesNotSkipDirectOnlyTables(t *testin
 	require.Equal(t, map[uint64]string{1: "source"}, affected)
 }
 
+func TestAlterCopyAffectedForeignKeyColumnsSkipsVirtualOnlyDependencyMetadata(t *testing.T) {
+	original := &planpb.TableDef{
+		// A legacy table may retain a virtual generated definition without the
+		// Name2ColIndex map required by the dependency walker. Direct FK checks
+		// still need to run, but a virtual-only column is not materialized by
+		// COPY and must not force a dependency-metadata lookup.
+		Cols: []*planpb.ColDef{
+			{ColId: 1, Name: "source", Typ: planpb.Type{
+				Id: int32(types.T_decimal64), Width: 10, Scale: 1,
+			}},
+			{ColId: 2, Name: "virtual_key", Typ: planpb.Type{Id: int32(types.T_int32)},
+				GeneratedCol: &planpb.GeneratedCol{Expr: generatedColumnRefExpr(
+					planpb.Type{Id: int32(types.T_int32)}, 0, "source",
+				)}},
+		},
+	}
+	copyTable := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{ColId: 1, Name: "source", Typ: planpb.Type{
+				Id: int32(types.T_decimal64), Width: 10, Scale: 0,
+			}},
+			original.Cols[1],
+		},
+	}
+	affected, err := AlterCopyAffectedForeignKeyColumns(
+		context.Background(), original, copyTable,
+		map[uint64]*planpb.ColDef{1: {Name: "source"}, 2: {Name: "virtual_key"}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{1: "source"}, affected)
+}
+
 func TestAlterForeignKeyValidationResolvesSelfReferencesLocally(t *testing.T) {
 	for _, selfMarker := range []uint64{0, 100} {
 		t.Run(fmt.Sprintf("self marker %d", selfMarker), func(t *testing.T) {
