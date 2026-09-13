@@ -126,6 +126,7 @@ func TestAlterCopyAffectedStoredGeneratedColumnsUsesFinalSourceTypes(t *testing.
 		col.ColId = uint64(i + 1)
 		if col.GeneratedCol != nil {
 			col.GeneratedCol.IsStored = true
+			col.GeneratedCol.OriginString = "unchanged " + col.Name
 		}
 	}
 
@@ -161,6 +162,77 @@ func TestAlterCopyAffectedStoredGeneratedColumnsUsesFinalSourceTypes(t *testing.
 		original.Cols[2].ColId: "tail",
 	}, affected,
 		"a converted source must include the full transitive stored-generated closure, but exclude unrelated and virtual generated columns")
+}
+
+func TestAlterCopyAffectedStoredGeneratedColumnsIncludesChangedExpressions(t *testing.T) {
+	original := generatedDependencyTestTable()
+	changeColDefMap := make(map[uint64]*planpb.ColDef, len(original.Cols))
+	copyTable := &planpb.TableDef{
+		Cols:          make([]*planpb.ColDef, len(original.Cols)),
+		Name2ColIndex: original.Name2ColIndex,
+	}
+	for i, col := range original.Cols {
+		col.ColId = uint64(i + 1)
+		if col.GeneratedCol != nil {
+			col.GeneratedCol.IsStored = true
+			col.GeneratedCol.OriginString = "unchanged " + col.Name
+		}
+		copyCol := *col
+		copyTable.Cols[i] = &copyCol
+		changeColDefMap[col.ColId] = &planpb.ColDef{Name: col.Name}
+	}
+
+	// MODIFY keeps middle's type but changes its expression. Its own value and
+	// tail's transitive value are recomputed, while the unrelated generated key
+	// remains unchanged.
+	copyTable.Cols[1].GeneratedCol = &planpb.GeneratedCol{
+		Expr:         copyTable.Cols[1].GeneratedCol.Expr,
+		OriginString: "source + 1",
+		IsStored:     true,
+	}
+
+	affected, err := AlterCopyAffectedStoredGeneratedColumns(
+		context.Background(), original, copyTable, changeColDefMap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{
+		original.Cols[1].ColId: "middle",
+		original.Cols[2].ColId: "tail",
+	}, affected)
+}
+
+func TestAlterCopyAffectedStoredGeneratedColumnsIncludesNewStoredColumns(t *testing.T) {
+	original := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{ColId: 1, Name: "source", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{ColId: 2, Name: "other", Typ: planpb.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{"source": 0, "other": 1},
+	}
+	copyTable := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{
+				ColId: 1, Name: "source", Typ: planpb.Type{Id: int32(types.T_int32)},
+				GeneratedCol: &planpb.GeneratedCol{
+					Expr:         generatedColumnRefExpr(planpb.Type{Id: int32(types.T_int32)}, 1, "other"),
+					OriginString: "other + 1", IsStored: true,
+				},
+			},
+			{ColId: 2, Name: "other", Typ: planpb.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{"source": 0, "other": 1},
+	}
+	changeColDefMap := map[uint64]*planpb.ColDef{
+		1: &planpb.ColDef{Name: "source"},
+		2: &planpb.ColDef{Name: "other"},
+	}
+
+	affected, err := AlterCopyAffectedStoredGeneratedColumns(
+		context.Background(), original, copyTable, changeColDefMap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{1: "source"}, affected,
+		"a column converted to a stored generated value may become a new FK endpoint")
 }
 
 func TestAlterForeignKeyValidationResolvesSelfReferencesLocally(t *testing.T) {

@@ -639,10 +639,11 @@ func originalAlterSourceColumn(
 	return originalCol.Name, true, nil
 }
 
-// AlterCopyAffectedStoredGeneratedColumns returns the stored generated columns
-// whose values can change when ALTER COPY converts a source column to its final
-// type. The original schema supplies dependency positions; the final copy
-// schema supplies the target types after all ALTER options have been applied.
+// AlterCopyAffectedStoredGeneratedColumns returns stored generated columns
+// whose values can change during ALTER COPY because a source type or generated
+// expression changes. The original schema supplies dependency positions; the
+// final copy schema supplies the definitions after all ALTER options have been
+// applied.
 func AlterCopyAffectedStoredGeneratedColumns(
 	ctx context.Context,
 	originalTableDef, copyTableDef *TableDef,
@@ -652,9 +653,14 @@ func AlterCopyAffectedStoredGeneratedColumns(
 		return nil, moerr.NewInternalError(ctx, "missing ALTER COPY table definition for generated-column FK validation")
 	}
 	hasStoredGeneratedColumn := false
-	for _, col := range originalTableDef.Cols {
-		if col != nil && col.GeneratedCol != nil && col.GeneratedCol.IsStored {
-			hasStoredGeneratedColumn = true
+	for _, tableDef := range []*TableDef{originalTableDef, copyTableDef} {
+		for _, col := range tableDef.Cols {
+			if col != nil && col.GeneratedCol != nil && col.GeneratedCol.IsStored {
+				hasStoredGeneratedColumn = true
+				break
+			}
+		}
+		if hasStoredGeneratedColumn {
 			break
 		}
 	}
@@ -663,6 +669,7 @@ func AlterCopyAffectedStoredGeneratedColumns(
 	}
 
 	seeds := make(map[string]struct{})
+	affected := make(map[uint64]string)
 	for _, originalCol := range originalTableDef.Cols {
 		if originalCol == nil || originalCol.Hidden {
 			continue
@@ -673,6 +680,9 @@ func AlterCopyAffectedStoredGeneratedColumns(
 			// it. Drop validation normally rejects that shape earlier; keeping it
 			// in the closure makes the live FK guard fail closed as well.
 			seeds[originalCol.Name] = struct{}{}
+			if originalCol.GeneratedCol != nil && originalCol.GeneratedCol.IsStored {
+				affected[originalCol.ColId] = originalCol.Name
+			}
 			continue
 		}
 		if mappedCol == nil {
@@ -685,28 +695,61 @@ func AlterCopyAffectedStoredGeneratedColumns(
 				"cannot resolve ALTER COPY target column %q for source column %q",
 				mappedCol.Name, originalCol.Name)
 		}
+		generatedDefinitionChanged := alterCopyGeneratedDefinitionMayChangeValues(
+			originalCol.GeneratedCol, copyCol.GeneratedCol,
+		)
+		if generatedDefinitionChanged {
+			// The modified generated column itself may be an FK endpoint, and
+			// its dependents may also be recomputed by the copy INSERT.
+			seeds[originalCol.Name] = struct{}{}
+			if (originalCol.GeneratedCol != nil && originalCol.GeneratedCol.IsStored) ||
+				(copyCol.GeneratedCol != nil && copyCol.GeneratedCol.IsStored) {
+				affected[originalCol.ColId] = originalCol.Name
+			}
+		}
 		if alterCopyColumnTypeMayChangeValues(originalCol.Typ, copyCol.Typ) {
 			seeds[originalCol.Name] = struct{}{}
 		}
 	}
 	if len(seeds) == 0 {
-		return nil, nil
+		return affected, nil
 	}
 
 	possiblyChanged, err := collectGeneratedColumnDependents(ctx, originalTableDef, seeds)
 	if err != nil {
 		return nil, err
 	}
-	affected := make(map[uint64]string)
 	for _, col := range originalTableDef.Cols {
-		if col == nil || col.GeneratedCol == nil || !col.GeneratedCol.IsStored {
+		if col == nil || col.GeneratedCol == nil {
 			continue
 		}
 		if _, changed := possiblyChanged[col.Name]; changed {
-			affected[col.ColId] = col.Name
+			mappedCol := changeColDefMap[col.ColId]
+			var copyCol *ColDef
+			if mappedCol != nil {
+				copyCol = FindColumn(copyTableDef.Cols, mappedCol.Name)
+			}
+			if col.GeneratedCol.IsStored ||
+				(copyCol != nil && copyCol.GeneratedCol != nil && copyCol.GeneratedCol.IsStored) {
+				affected[col.ColId] = col.Name
+			}
 		}
 	}
 	return affected, nil
+}
+
+func alterCopyGeneratedDefinitionMayChangeValues(source, target *plan.GeneratedCol) bool {
+	if source == nil || target == nil {
+		return source != target
+	}
+	if source.IsStored != target.IsStored {
+		return true
+	}
+	// OriginString is the stable expression representation used to recreate
+	// generated columns for COPY. Missing text cannot prove the definitions are
+	// unchanged, so fail closed and validate the live FK endpoints.
+	return source.OriginString == "" || target.OriginString == "" ||
+		source.OriginString != target.OriginString
 }
 
 func alterCopyColumnTypeMayChangeValues(source, target Type) bool {

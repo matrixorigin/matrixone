@@ -491,6 +491,71 @@ insert into t48_fk_self_child (id, a) values (11, 1.1);
 -- @regex("Cannot change column 'g': used in a foreign key constraint 'fk_t48_self_child'", true)
 alter table t48_fk_self_child modify column a int;
 select count(*) as valid_links from t48_fk_self_child c join t48_fk_self_child p on c.g = p.id where c.id = 11 and c.a = 1.1 and c.g = 11;
+
+-- Same-type edits to a generated expression also change its stored value and
+-- every stored generated dependent, so FK endpoints must be protected.
+create table t49_expr_fk_parent (
+    id int primary key,
+    a int,
+    g1 int generated always as (a + 1) stored,
+    g2 int generated always as (g1 * 10) stored,
+    unique key uk_g2(g2)
+);
+create table t49_expr_fk_child (
+    id int primary key,
+    parent_g2 int,
+    constraint fk_t49_parent_g2 foreign key (parent_g2) references t49_expr_fk_parent(g2)
+);
+insert into t49_expr_fk_parent (id, a) values (1, 1);
+insert into t49_expr_fk_child values (1, 20);
+-- The generated column's type is unchanged, but changing g1 recomputes g2 and
+-- must not orphan the existing child row.
+-- @regex("Cannot change column 'g2'.*fk_t49_parent_g2", true)
+alter table t49_expr_fk_parent modify column g1 int generated always as (a + 2) stored;
+select count(*) as preserved_links from t49_expr_fk_parent p join t49_expr_fk_child c on p.g2 = c.parent_g2 where p.g1 = 2 and p.g2 = 20;
+
+create table t50_expr_fk_parent (k int primary key);
+create table t50_expr_fk_child (
+    id int primary key,
+    a int,
+    g1 int generated always as (a + 1) stored,
+    g2 int generated always as (g1 + 1) stored,
+    constraint fk_t50_generated_child foreign key (g2) references t50_expr_fk_parent(k)
+);
+insert into t50_expr_fk_parent values (3);
+insert into t50_expr_fk_child (id, a) values (1, 1);
+-- Same-type expression changes must protect generated columns on the child side.
+-- @regex("Cannot change column 'g2'.*fk_t50_generated_child", true)
+alter table t50_expr_fk_child modify column g1 int generated always as (a + 2) stored;
+select count(*) as preserved_links from t50_expr_fk_child c join t50_expr_fk_parent p on c.g2 = p.k where c.id = 1 and c.g1 = 2 and c.g2 = 3;
+
+create table t51_expr_fk_self_parent (
+    id int primary key,
+    a int,
+    g1 int generated always as (a + 1) stored,
+    g2 int generated always as (g1 * 10) stored,
+    parent_g2 int,
+    unique key uk_g2(g2),
+    constraint fk_t51_self_parent foreign key (parent_g2) references t51_expr_fk_self_parent(g2)
+);
+insert into t51_expr_fk_self_parent (id, a, parent_g2) values (1, 1, 20);
+-- Also protect a self-referencing FK on its referenced generated-column side.
+-- @regex("Cannot change column 'g2'.*fk_t51_self_parent", true)
+alter table t51_expr_fk_self_parent modify column g1 int generated always as (a + 2) stored;
+select count(*) as preserved_links from t51_expr_fk_self_parent c join t51_expr_fk_self_parent p on c.parent_g2 = p.g2 where c.g1 = 2 and c.g2 = 20;
+
+create table t52_expr_fk_self_child (
+    id int primary key,
+    a int,
+    g1 int generated always as (a + 1) stored,
+    g2 int generated always as (g1 + 1) stored,
+    constraint fk_t52_self_child foreign key (g2) references t52_expr_fk_self_child(id)
+);
+insert into t52_expr_fk_self_child (id, a) values (3, 1);
+-- And on the child side of a self-reference.
+-- @regex("Cannot change column 'g2'.*fk_t52_self_child", true)
+alter table t52_expr_fk_self_child modify column g1 int generated always as (a + 2) stored;
+select count(*) as preserved_links from t52_expr_fk_self_child c join t52_expr_fk_self_child p on c.g2 = p.id where c.id = 3 and c.g1 = 2 and c.g2 = 3;
 set foreign_key_checks = 1;
 
 -- ============================================================
