@@ -1694,6 +1694,8 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 
 func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
+	groupConcatMaxLenOriginalValue := val
+	groupConcatMaxLenWasTruncated := false
 
 	def, ok := gSysVarsDefs[name]
 	if !ok {
@@ -1725,6 +1727,9 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		if err != nil {
 			return err
 		}
+	}
+	if name == groupConcatMaxLenVariable {
+		val, groupConcatMaxLenWasTruncated = normalizeGroupConcatMaxLenValue(val)
 	}
 
 	if val, err = def.GetType().Convert(val); err != nil {
@@ -1761,6 +1766,11 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		return
 	}
 	ses.gSysVars.Set(canonicalName, val)
+	if groupConcatMaxLenWasTruncated {
+		ses.appendWarningDiagnostic(
+			moerr.ER_TRUNCATED_WRONG_VALUE,
+			groupConcatMaxLenTruncationWarning(groupConcatMaxLenOriginalValue))
+	}
 	return
 }
 
@@ -1819,6 +1829,8 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
+	groupConcatMaxLenOriginalValue := val
+	groupConcatMaxLenWasTruncated := false
 	oldMatrixOneNative := false
 	oldOnlyFullGroupBy := false
 	oldBoolSumAvg := false
@@ -1843,6 +1855,9 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 
 	if !def.GetDynamic() {
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
+	}
+	if name == groupConcatMaxLenVariable {
+		val, groupConcatMaxLenWasTruncated = normalizeGroupConcatMaxLenValue(val)
 	}
 
 	if val, err = def.GetType().Convert(val); err != nil {
@@ -1914,6 +1929,11 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	}
 	if err == nil {
 		ses.markMigrationSystemVarReplayable(canonicalName, false)
+		if groupConcatMaxLenWasTruncated {
+			ses.appendWarningDiagnostic(
+				moerr.ER_TRUNCATED_WRONG_VALUE,
+				groupConcatMaxLenTruncationWarning(groupConcatMaxLenOriginalValue))
+		}
 	}
 	return
 }

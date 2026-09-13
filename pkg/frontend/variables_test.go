@@ -17,8 +17,10 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -76,11 +78,13 @@ func TestGroupConcatMaxLenDefault(t *testing.T) {
 	convey.Convey("group_concat_max_len should use the MySQL default", t, func() {
 		sv, ok := gSysVarsDefs["group_concat_max_len"]
 		convey.So(ok, convey.ShouldBeTrue)
-		convey.So(sv.Default, convey.ShouldEqual, int64(1024))
+		convey.So(sv.Default, convey.ShouldEqual, uint64(1024))
+		_, isUint := sv.Type.(SystemVariableUintType)
+		convey.So(isUint, convey.ShouldBeTrue)
 
 		got, err := sv.Type.Convert(sv.Default)
 		convey.So(err, convey.ShouldBeNil)
-		convey.So(got, convey.ShouldEqual, int64(1024))
+		convey.So(got, convey.ShouldEqual, uint64(1024))
 	})
 }
 
@@ -110,6 +114,125 @@ func TestDiagnosticCountSystemVariables(t *testing.T) {
 	assert.Error(t, err)
 	err = ses.SetSessionSysVar(context.Background(), warningCountSystemVariable, uint64(0))
 	assert.Error(t, err)
+}
+
+func TestGroupConcatMaxLenAssignmentBounds(t *testing.T) {
+	tests := []struct {
+		name         string
+		value        interface{}
+		want         uint64
+		wantWarning  bool
+		warningValue string
+	}{
+		{name: "zero", value: int64(0), want: 4, wantWarning: true, warningValue: "0"},
+		{name: "one", value: int64(1), want: 4, wantWarning: true, warningValue: "1"},
+		{name: "three", value: int64(3), want: 4, wantWarning: true, warningValue: "3"},
+		{name: "minimum", value: int64(4), want: 4},
+		{name: "int64 maximum", value: int64(math.MaxInt64), want: uint64(math.MaxInt64)},
+		{name: "above int64 maximum", value: uint64(math.MaxInt64) + 1, want: uint64(math.MaxInt64) + 1},
+		{name: "uint64 maximum", value: uint64(math.MaxUint64), want: uint64(math.MaxUint64)},
+		{name: "negative one", value: int64(-1), want: 4, wantWarning: true, warningValue: "-1"},
+		{name: "default", value: uint64(1024), want: 1024},
+		{name: "numeric string", value: "5", want: 5},
+		{name: "signed numeric string at minimum", value: "+4", want: 4},
+		{name: "signed numeric string at int64 maximum", value: "+9223372036854775807", want: uint64(math.MaxInt64)},
+		{name: "signed numeric string at uint64 maximum", value: "+18446744073709551615", want: uint64(math.MaxUint64)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+			err := ses.SetSessionSysVar(context.Background(), groupConcatMaxLenVariable, tt.value)
+			assert.NoError(t, err)
+
+			got, err := ses.GetSessionSysVar(groupConcatMaxLenVariable)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+
+			info := ses.diagnosticsSnapshot()
+			if tt.wantWarning {
+				assert.Equal(t, []uint16{moerr.ER_TRUNCATED_WRONG_VALUE}, info.codes)
+				assert.Equal(t,
+					[]string{groupConcatMaxLenTruncationWarning(tt.warningValue)}, info.msgs)
+			} else {
+				assert.Empty(t, info.codes)
+			}
+		})
+	}
+}
+
+func TestNormalizeGroupConcatMaxLenValue(t *testing.T) {
+	tests := []struct {
+		name         string
+		value        interface{}
+		want         interface{}
+		wasTruncated bool
+	}{
+		{name: "int below minimum", value: int(3), want: uint64(4), wasTruncated: true},
+		{name: "int at minimum", value: int(4), want: int(4)},
+		{name: "uint below minimum", value: uint(3), want: uint64(4), wasTruncated: true},
+		{name: "uint at minimum", value: uint(4), want: uint(4)},
+		{name: "int8 below minimum", value: int8(3), want: uint64(4), wasTruncated: true},
+		{name: "int8 at minimum", value: int8(4), want: int8(4)},
+		{name: "uint8 below minimum", value: uint8(3), want: uint64(4), wasTruncated: true},
+		{name: "uint8 at minimum", value: uint8(4), want: uint8(4)},
+		{name: "int16 below minimum", value: int16(3), want: uint64(4), wasTruncated: true},
+		{name: "int16 at minimum", value: int16(4), want: int16(4)},
+		{name: "uint16 below minimum", value: uint16(3), want: uint64(4), wasTruncated: true},
+		{name: "uint16 at minimum", value: uint16(4), want: uint16(4)},
+		{name: "int32 below minimum", value: int32(3), want: uint64(4), wasTruncated: true},
+		{name: "int32 at minimum", value: int32(4), want: int32(4)},
+		{name: "uint32 below minimum", value: uint32(3), want: uint64(4), wasTruncated: true},
+		{name: "uint32 at minimum", value: uint32(4), want: uint32(4)},
+		{name: "int64 below minimum", value: int64(3), want: uint64(4), wasTruncated: true},
+		{name: "int64 at minimum", value: int64(4), want: int64(4)},
+		{name: "uint64 below minimum", value: uint64(3), want: uint64(4), wasTruncated: true},
+		{name: "uint64 at minimum", value: uint64(4), want: uint64(4)},
+		{name: "float32 below minimum", value: float32(3), want: uint64(4), wasTruncated: true},
+		{name: "float32 at minimum", value: float32(4), want: float32(4)},
+		{name: "float32 fractional", value: float32(3.5), want: float32(3.5)},
+		{name: "float64 below minimum", value: float64(3), want: uint64(4), wasTruncated: true},
+		{name: "float64 at minimum", value: float64(4), want: float64(4)},
+		{name: "float64 fractional", value: float64(3.5), want: float64(3.5)},
+		{name: "unsigned string below minimum", value: "3", want: uint64(4), wasTruncated: true},
+		{name: "unsigned string", value: "5", want: uint64(5)},
+		{name: "signed string at minimum", value: "+4", want: uint64(4)},
+		{name: "signed string above minimum", value: "+5", want: uint64(5)},
+		{name: "signed string at uint64 maximum", value: "+18446744073709551615", want: uint64(math.MaxUint64)},
+		{name: "signed string below minimum", value: "-1", want: uint64(4), wasTruncated: true},
+		{name: "invalid string", value: "invalid", want: "invalid"},
+		{name: "overflow string", value: "18446744073709551616", want: "18446744073709551616"},
+		{name: "signed overflow string", value: "+18446744073709551616", want: "+18446744073709551616"},
+		{name: "unsupported type", value: true, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, wasTruncated := normalizeGroupConcatMaxLenValue(tt.value)
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wasTruncated, wasTruncated)
+		})
+	}
+}
+
+func TestGroupConcatMaxLenFailedAssignmentKeepsPreviousValue(t *testing.T) {
+	for _, value := range []string{
+		"invalid",
+		"18446744073709551616",
+		"+18446744073709551616",
+	} {
+		t.Run(value, func(t *testing.T) {
+			ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+			assert.NoError(t, ses.SetSessionSysVar(context.Background(), groupConcatMaxLenVariable, int64(1024)))
+
+			err := ses.SetSessionSysVar(context.Background(), groupConcatMaxLenVariable, value)
+			assert.Error(t, err)
+			got, getErr := ses.GetSessionSysVar(groupConcatMaxLenVariable)
+			assert.NoError(t, getErr)
+			assert.Equal(t, uint64(1024), got)
+			assert.Empty(t, ses.diagnosticsSnapshot().codes)
+		})
+	}
 }
 
 func TestCTEMaxMemoryBytesDefinition(t *testing.T) {

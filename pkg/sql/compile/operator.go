@@ -1929,20 +1929,20 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 		if err != nil {
 			panic(err)
 		}
-		maxLen, ok := value.(int64)
-		if !ok || maxLen < 0 {
+		maxLen, ok := groupConcatMaxLenAsUint64(value)
+		if !ok {
 			panic(moerr.NewInternalErrorNoCtxf(
 				"group_concat_max_len has invalid value %v", value))
 		}
 		if f.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
-			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, uint64(maxLen))
+			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, maxLen)
 		}
 		separator := ","
 		if len(args) > 1 {
 			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
 			args = args[:len(args)-1]
 		}
-		return args, aggexec.EncodeGroupConcatConfig(separator, uint64(maxLen))
+		return args, aggexec.EncodeGroupConcatConfig(separator, maxLen)
 
 	case plan2.NameClusterCenters:
 		if len(args) > 1 {

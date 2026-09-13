@@ -7141,6 +7141,18 @@ func TestDirectSessionStrictPoolWithoutLabelSelectorFailsClosed(t *testing.T) {
 	require.Zero(t, trace.Attempts[0].Query.ResolvedCount)
 }
 
+func TestWriteExplainResultRejectsUnresolvedIndexHint(t *testing.T) {
+	query := &plan0.Query{UnresolvedIndexHints: []*plan0.UnresolvedIndexHint{{
+		Table: &plan0.ObjectRef{ObjName: "t"}, IndexName: "idx_missing",
+	}}}
+	// No session is needed: validation must finish before result publication.
+	err := writeExplainResult(context.Background(), nil, nil,
+		&plan0.Plan{Plan: &plan0.Plan_Query{Query: query}}, nil, "", nil)
+	var moErr *moerr.Error
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+}
+
 func TestWriteExplainResultSetsValidTextMetadata(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)

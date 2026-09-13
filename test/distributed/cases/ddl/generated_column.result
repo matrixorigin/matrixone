@@ -21,7 +21,7 @@ select * from t1 order by a;
 1  ¦  2  ¦  3  𝄀
 10  ¦  20  ¦  30  𝄀
 100  ¦  200  ¦  300
-insert into t1 values (5, 6);
+insert into t1(a, b) values (5, 6);
 select * from t1 order by a;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
 1  ¦  2  ¦  3  𝄀
@@ -102,7 +102,7 @@ select * from t7 order by a;
 1  ¦  2  ¦  3  𝄀
 10  ¦  20  ¦  30  𝄀
 100  ¦  200  ¦  300
-insert into t7 values (5, 6);
+insert into t7(a, b) values (5, 6);
 select * from t7 order by a;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  𝄀
 1  ¦  2  ¦  3  𝄀
@@ -428,4 +428,40 @@ select id, generated_key from t44_odku_generated_index force index for order by 
 ➤ id[4,32,0]  ¦  generated_key[4,32,0]  𝄀
 1  ¦  4  𝄀
 2  ¦  4
+create table t45_implicit_values (id int primary key, a int, g int generated always as (a + 1) stored, payload int);
+insert into t45_implicit_values values (1, 10, default, 100), (2, 20, default, 200);
+select id, a, g, payload from t45_implicit_values order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10  ¦  11  ¦  100  𝄀
+2  ¦  20  ¦  21  ¦  200
+insert into t45_implicit_values values (3, 30, 300);
+Column count doesn't match value count at row 1
+insert into t45_implicit_values values (3, 30, 31, 300);
+invalid input: the value specified for generated column 'g' in table 't45_implicit_values' is not allowed
+insert into t45_implicit_values values (8, 80, default, 800), (9, 90, 91, 900);
+invalid input: the value specified for generated column 'g' in table 't45_implicit_values' is not allowed
+select count(*) as partial_rows from t45_implicit_values where id in (3, 8, 9);
+➤ partial_rows[-5,64,0]  𝄀
+0
+insert into t45_implicit_values (id, a, payload) values (5, 50, 500);
+insert into t45_implicit_values select 6, 60, 600;
+replace into t45_implicit_values values (1, 99, default, 999);
+select id, a, g, payload from t45_implicit_values order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  99  ¦  100  ¦  999  𝄀
+2  ¦  20  ¦  21  ¦  200  𝄀
+5  ¦  50  ¦  51  ¦  500  𝄀
+6  ¦  60  ¦  61  ¦  600
+prepare t45_replace from 'replace into t45_implicit_values values (7, 70, default, 700)';
+execute t45_replace;
+alter table t45_implicit_values modify column payload bigint;
+execute t45_replace;
+deallocate prepare t45_replace;
+select count(*) as prepared_rows from t45_implicit_values where id = 7;
+➤ prepared_rows[-5,64,0]  𝄀
+1
+select id, a, g, payload from t45_implicit_values where id = 7;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  ¦  payload[5,64,0]  𝄀
+7  ¦  70  ¦  71  ¦  700
+drop table t45_implicit_values;
 drop database test_generated_col;

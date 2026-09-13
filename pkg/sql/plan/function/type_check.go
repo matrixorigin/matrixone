@@ -191,10 +191,18 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 // the original overload slice avoids planner-time allocations for matchers
 // that need to reserve a dedicated string overload.
 func fixedTypeMatchExcept(overloads []overload, inputs []types.Type, excluded int) checkResult {
+	return fixedTypeMatchSelection(overloads, inputs, excluded, -1)
+}
+
+func fixedTypeMatchOnly(overloads []overload, inputs []types.Type, selected int) checkResult {
+	return fixedTypeMatchSelection(overloads, inputs, -1, selected)
+}
+
+func fixedTypeMatchSelection(overloads []overload, inputs []types.Type, excluded, selected int) checkResult {
 	minIndex := -1
 	minCost := math.MaxInt
 	for i, ov := range overloads {
-		if i == excluded {
+		if i == excluded || (selected >= 0 && i != selected) {
 			continue
 		}
 		if len(ov.args) != len(inputs) {
@@ -237,6 +245,27 @@ func fixedTypeMatchExcept(overloads []overload, inputs []types.Type, excluded in
 		}
 	}
 	return newCheckResultWithCast(minIndex, castType)
+}
+
+// userLevelLockTypeMatch preserves the historical DOUBLE coercion for all
+// non-decimal timeout arguments, while dispatching DECIMAL inputs without an
+// intermediate DOUBLE conversion. MySQL's Item_decimal and Item_float use
+// different integer-conversion rules, so merging these domains loses SQL
+// literal semantics.
+func userLevelLockTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	selected := 0 // the existing FLOAT64 overload remains the compatibility path
+	switch inputs[1].Oid {
+	case types.T_decimal64:
+		selected = 1
+	case types.T_decimal128:
+		selected = 2
+	case types.T_decimal256:
+		selected = 3
+	}
+	return fixedTypeMatchOnly(overloads, inputs, selected)
 }
 
 // binTypeMatch keeps the existing integer, float, and string fast paths while
@@ -643,6 +672,52 @@ func unaryTildeTypeMatch(overloads []overload, inputs []types.Type) checkResult 
 		}
 	}
 	return fixedDirectlyTypeMatch(overloads, inputs)
+}
+
+func isBitwiseBinaryStringType(oid types.T) bool {
+	switch oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return false
+	}
+}
+
+func bitShiftTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	// The first four overloads are the existing numeric signatures. Keep their
+	// matching behavior isolated so adding bytewise overloads cannot make a
+	// numeric or textual left operand bind to a binary implementation.
+	numericOverloads := overloads
+	if len(numericOverloads) > 4 {
+		numericOverloads = numericOverloads[:4]
+	}
+	if len(inputs) != 2 || !isBitwiseBinaryStringType(inputs[0].Oid) {
+		return fixedTypeMatch(numericOverloads, inputs)
+	}
+
+	bestIndex := -1
+	bestCost := math.MaxInt
+	for i, candidate := range overloads {
+		if len(candidate.args) != 2 || candidate.args[0] != inputs[0].Oid {
+			continue
+		}
+		status, cost := tryToMatch([]types.Type{inputs[1]}, []types.T{candidate.args[1]})
+		if status == matchDirectly {
+			return newCheckResultWithSuccess(i)
+		}
+		if status != matchFailed && cost < bestCost {
+			bestIndex = i
+			bestCost = cost
+		}
+	}
+	if bestIndex == -1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	return newCheckResultWithCast(bestIndex, []types.Type{
+		inputs[0],
+		overloads[bestIndex].args[1].ToType(),
+	})
 }
 
 // return whether `from` can match `to` implicitly, and match cost.
