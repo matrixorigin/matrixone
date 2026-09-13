@@ -708,7 +708,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	effectiveColumns := stmt.Columns
 	if stmt.Columns != nil {
 		effectiveRows = cloneInsertRowsForGeneratedRewrite(stmt.Rows)
-		if effectiveColumns, err = builder.stripGeneratedDefaultCols(stmt.Columns, effectiveRows, tableDef); err != nil {
+		if effectiveColumns, effectiveRows, err = builder.stripGeneratedDefaultCols(stmt.Columns, effectiveRows, tableDef); err != nil {
 			return false, nil, nil, err
 		}
 	}
