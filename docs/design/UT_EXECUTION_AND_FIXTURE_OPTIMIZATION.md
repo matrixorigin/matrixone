@@ -58,8 +58,9 @@ fixture 兼容矩阵、reset oracle 和 A/B 数据前，不缩小这些数据、
   摘要，安全门槛对每个有限祖先分别检查，避免较宽松父层被兄弟进程占满。找不到有限可见
   限制、可见祖先缺失/不可读，或 CI 证据无法确认 cgroup mount/namespace 覆盖 runner 的
   实际限制边界时，样本不得进入 overlap treatment；cgroup v1 `failcnt` 不是 v2 的 OOM
-  事件等价物，无法满足本 A/B OOM 门槛时保持默认关闭。本 revision 不以 CPU throttling
-  作门槛（当前未采集）。
+  事件等价物，无法满足本 A/B OOM 门槛时保持默认关闭。v2 `memory.events` 必须确认是
+  hierarchical 模式；若 `/proc/self/mountinfo` 带 `memory_localevents` 或不可验证，样本
+  无效。本 revision 不以 CPU throttling 作门槛（当前未采集）。
   70m timeout 是 censored 样本，不能作完整 control。包和 test 选择由 `UT_SHARD=all` 的
   源码命令比较与现有 complete/disjoint partition 和 scheduler contract tests 证明相同；
   两边完整 required UT job 必须通过，报告必须合并且无丢失/重复。

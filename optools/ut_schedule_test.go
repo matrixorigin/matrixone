@@ -93,6 +93,7 @@ func TestResolveCgroupMemoryBoundary(t *testing.T) {
 		{"parent-pressure-within-looser-limit", "memory.max", "max", "17179869184", "8589934592", "leaf", "8589934592", "1"},
 		{"no-visible-finite-limit", "memory.max", "max", "max", "max", "leaf", "unknown", "1"},
 		{"missing-visible-ancestor", "memory.max", "max", "", "8589934592", "leaf", "unknown", "0"},
+		{"local-events-option", "memory.max", "max", "max", "8589934592", "leaf", "unknown", "0"},
 		{"v1-unlimited-sentinel", "memory.limit_in_bytes", "9223372036854771712", "8589934592", "9223372036854771712", "parent", "8589934592", "1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,6 +102,17 @@ func TestResolveCgroupMemoryBoundary(t *testing.T) {
 			leaf := filepath.Join(parent, "leaf")
 			for _, dir := range []string{root, parent, leaf} {
 				if err := os.MkdirAll(dir, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mountInfoPath := filepath.Join(root, "mountinfo")
+			if tc.limitFile == "memory.max" {
+				mountOptions := "rw"
+				if tc.name == "local-events-option" {
+					mountOptions += ",memory_localevents"
+				}
+				mountInfo := "36 25 0:32 / " + root + " rw - cgroup2 cgroup " + mountOptions + "\n"
+				if err := os.WriteFile(mountInfoPath, []byte(mountInfo), 0644); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -147,13 +159,14 @@ func TestResolveCgroupMemoryBoundary(t *testing.T) {
 			}
 
 			script := `source ./run_ut.sh UT
-resolve_cgroup_memory_boundary "$CGROUP_TEST_LEAF" "$CGROUP_TEST_ROOT" "$CGROUP_LIMIT_FILE"
-printf 'scope=%s limit=%s complete=%s boundaries=%s\n' "$CGROUP_MEMORY_PATH" "$CGROUP_MEMORY_LIMIT" "$CGROUP_MEMORY_HIERARCHY_COMPLETE" "$CGROUP_MEMORY_HIERARCHY"
+resolve_cgroup_memory_boundary "$CGROUP_TEST_LEAF" "$CGROUP_TEST_ROOT" "$CGROUP_LIMIT_FILE" "$CGROUP_TEST_MOUNTINFO"
+printf 'scope=%s limit=%s complete=%s events_hierarchical=%s boundaries=%s\n' "$CGROUP_MEMORY_PATH" "$CGROUP_MEMORY_LIMIT" "$CGROUP_MEMORY_HIERARCHY_COMPLETE" "$CGROUP_MEMORY_EVENTS_HIERARCHICAL" "$CGROUP_MEMORY_HIERARCHY"
 `
 			out, err := scheduleHarness(t, script,
 				"CGROUP_TEST_ROOT="+root,
 				"CGROUP_TEST_LEAF="+leaf,
 				"CGROUP_LIMIT_FILE="+tc.limitFile,
+				"CGROUP_TEST_MOUNTINFO="+mountInfoPath,
 			)
 			if err != nil {
 				t.Fatalf("resolve cgroup memory boundary: %v\n%s", err, out)
@@ -162,7 +175,13 @@ printf 'scope=%s limit=%s complete=%s boundaries=%s\n' "$CGROUP_MEMORY_PATH" "$C
 			if tc.wantScope == "leaf" {
 				wantPath = leaf
 			}
-			wantPrefix := "scope=" + wantPath + " limit=" + tc.wantLimit + " complete=" + tc.wantComplete + " boundaries="
+			wantEvents := "1"
+			if tc.limitFile == "memory.limit_in_bytes" {
+				wantEvents = "not_applicable"
+			} else if tc.name == "local-events-option" {
+				wantEvents = "0"
+			}
+			wantPrefix := "scope=" + wantPath + " limit=" + tc.wantLimit + " complete=" + tc.wantComplete + " events_hierarchical=" + wantEvents + " boundaries="
 			if !strings.HasPrefix(string(out), wantPrefix) {
 				t.Fatalf("unexpected boundary:\n got: %q\nwant prefix: %q", out, wantPrefix)
 			}
