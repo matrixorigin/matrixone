@@ -17,6 +17,7 @@ package geo
 import (
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -32,17 +33,46 @@ import (
 // longer preserve topology reliably.
 const (
 	geodeticProjectionMinCos = 1e-10
+	// At larger ordinates a float64 ULP is wider than the Cartesian kernel's
+	// geodetic snap resolution, so exact noding is no longer meaningful. Keep
+	// the supported domain bounded by the numerical precision of the projected
+	// representation rather than accepting a mathematically valid but
+	// topologically unstable near-horizon result.
+	geodeticProjectionMaxAbs = 1e6
+	// Geodetic overlays use a finer projected-plane grid than the Cartesian
+	// kernel. The projection and overlay therefore preserve shared great-circle
+	// boundaries before the source coordinates are encoded back to WGS84. The
+	// geodetic noding path still applies its explicit one-cell orientation bound.
+	geodeticOverlaySnapScale = 1e13
 	// The raw gnomonic ordinate is tan(angle) and is therefore dimensionless.
 	// Scale it into degree-equivalent units before handing it to the existing
-	// Cartesian kernel. Its 1e-9 snap/predicate tolerance then remains about
-	// 1e-9 degrees near the frame center instead of accepting distinct points
-	// separated by several 1e-8 degrees.
+	// Cartesian kernel.
 	geodeticProjectionScale = 180 / math.Pi
 )
+
+var geodeticOverlayScales = [...]float64{1e13, 1e12, 1e11, 1e10, 1e9}
 
 type sphericalVector struct {
 	x, y, z float64
 }
+
+type geodeticProjectedSegment struct {
+	source1, source2       Coord
+	projected1, projected2 Coord
+	lineKey                geodeticLineKey
+}
+
+type geodeticLineKey struct {
+	x, y, z int64
+}
+
+// geodeticLineQuantization is deliberately much finer than a user-visible
+// coordinate. It only groups independently projected representations of the
+// same great-circle plane; a real bend of 1e-6 degrees changes the normalized
+// plane normal by roughly 1e-8 and remains in a different group.
+const geodeticLineQuantization = 1e12
+
+const geodeticLineNormalTolerance = 1e-12
 
 // GeodeticProjector is a common local spherical-to-planar frame for a pair of
 // geometries. It is intentionally created from both operands so swapping
@@ -55,10 +85,10 @@ type GeodeticProjector struct {
 	// projectedVertices restores source vertices when the overlay output keeps
 	// an exact projected input coordinate.
 	projectedVertices map[Coord]Coord
-	// snappedVertices contains only unambiguous source vertices whose projected
-	// coordinates share one overlay snap cell. Ambiguous cells are deliberately
-	// omitted: restoring an arbitrary source coordinate would make output depend
-	// on operand/member order.
+	// snappedVertices contains only unambiguous source vertices for every grid
+	// that the bounded geodetic overlay recovery path may use. Ambiguous cells
+	// are deliberately omitted: restoring an arbitrary source coordinate would
+	// make output depend on operand/member order.
 	snappedVertices          map[Coord]Coord
 	ambiguousSnappedVertices map[Coord]struct{}
 	// ambiguousProjectedVertices records exact-coordinate collisions. An exact
@@ -67,6 +97,37 @@ type GeodeticProjector struct {
 	// inverse projection instead.
 	ambiguousProjectedVertices map[Coord]struct{}
 	valid                      bool
+}
+
+// Overlay applies a polygon Boolean operation in this projector's local
+// frame. It uses the geodetic noding grid required to keep shared great-circle
+// boundaries connected. Call Unproject on the returned geometry before
+// encoding it as WGS84.
+func (p GeodeticProjector) Overlay(left, right Geometry, op BoolOp) (Geometry, error) {
+	// The primary grid is selected to retain the smallest source-level
+	// projection residuals. A rare input can still land exactly on a rounding
+	// boundary and make that grid produce an invalid boundary graph. Retry with
+	// progressively coarser, bounded grids; this path is entered only after the
+	// normal overlay has failed, so valid-input performance is unchanged while
+	// numerical recovery remains deterministic and allocation-bounded.
+	var firstErr error
+	for _, scale := range geodeticOverlayScales {
+		result, err := overlayWithOptions(left, right, op, scale, true)
+		if err == nil {
+			return result, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		if !isRecoverableGeodeticOverlayError(err) {
+			return nil, err
+		}
+	}
+	return nil, firstErr
+}
+
+func isRecoverableGeodeticOverlayError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "invalid overlay boundary graph")
 }
 
 // ProjectGeodeticPair projects a WGS84 pair into one common gnomonic frame.
@@ -110,9 +171,6 @@ func ProjectGeodeticPair(left, right Geometry) (GeodeticProjector, Geometry, Geo
 	projector.ambiguousSnappedVertices = make(map[Coord]struct{})
 	projector.ambiguousProjectedVertices = make(map[Coord]struct{})
 	projectedBySource := make(map[Coord]Coord, len(coords))
-	exactCounts := make(map[Coord]int, len(coords))
-	snapCandidates := make(map[Coord]Coord, len(coords))
-	snapCounts := make(map[Coord]int, len(coords))
 	for _, c := range coords {
 		if projector.dot(toSphericalVector(c)) <= geodeticProjectionMinCos {
 			return GeodeticProjector{}, nil, nil, moerr.NewInvalidInputNoCtx(
@@ -123,23 +181,6 @@ func ProjectGeodeticPair(left, right Geometry) (GeodeticProjector, Geometry, Geo
 			return GeodeticProjector{}, nil, nil, err
 		}
 		projectedBySource[c] = projected
-		exactCounts[projected]++
-		key := snapCoord(projected)
-		snapCandidates[key] = c
-		snapCounts[key]++
-	}
-	for source, projected := range projectedBySource {
-		key := snapCoord(projected)
-		if exactCounts[projected] == 1 && snapCounts[key] == 1 {
-			projector.projectedVertices[projected] = source
-		} else if exactCounts[projected] > 1 {
-			projector.ambiguousProjectedVertices[projected] = struct{}{}
-		}
-		if snapCounts[key] == 1 {
-			projector.snappedVertices[key] = snapCandidates[key]
-		} else if snapCounts[key] > 1 {
-			projector.ambiguousSnappedVertices[key] = struct{}{}
-		}
 	}
 
 	projectedLeft, err := projector.projectGeometry(left)
@@ -149,6 +190,52 @@ func ProjectGeodeticPair(left, right Geometry) (GeodeticProjector, Geometry, Geo
 	projectedRight, err := projector.projectGeometry(right)
 	if err != nil {
 		return GeodeticProjector{}, nil, nil, err
+	}
+	// A gnomonic projection maps every great-circle edge to a line, but the
+	// two endpoints are evaluated independently in float64. When another
+	// geometry introduces a vertex in the middle of that same edge, the tiny
+	// round-off can leave a dangling overlay node. Canonicalize only edges that
+	// are identified as the same source great-circle plane within the explicit
+	// normal tolerance; this preserves
+	// genuinely bent edges and keeps the ordinary Cartesian overlay untouched.
+	canonicalProjected := canonicalizeProjectedGeodesicLines(left, projectedLeft, right, projectedRight)
+	if len(canonicalProjected) != 0 {
+		rewriteProjectedGeometry(left, projectedLeft, canonicalProjected)
+		rewriteProjectedGeometry(right, projectedRight, canonicalProjected)
+	}
+	exactCounts := make(map[Coord]int, len(coords))
+	snapCandidates := make(map[Coord]Coord, len(coords))
+	for source, projected := range projectedBySource {
+		if canonical, ok := canonicalProjected[canonicalSourceCoord(source)]; ok {
+			projected = canonical
+		}
+		exactCounts[projected]++
+		for _, scale := range geodeticOverlayScales {
+			key := snapCoordAtScale(projected, scale)
+			if previous, exists := snapCandidates[key]; exists && previous != source {
+				delete(snapCandidates, key)
+				projector.ambiguousSnappedVertices[key] = struct{}{}
+				continue
+			}
+			if _, ambiguous := projector.ambiguousSnappedVertices[key]; !ambiguous {
+				snapCandidates[key] = source
+			}
+		}
+	}
+	for source, projected := range projectedBySource {
+		if canonical, ok := canonicalProjected[canonicalSourceCoord(source)]; ok {
+			projected = canonical
+		}
+		if exactCounts[projected] == 1 {
+			projector.projectedVertices[projected] = source
+		} else if exactCounts[projected] > 1 {
+			projector.ambiguousProjectedVertices[projected] = struct{}{}
+		}
+	}
+	for key, source := range snapCandidates {
+		if _, ambiguous := projector.ambiguousSnappedVertices[key]; !ambiguous {
+			projector.snappedVertices[key] = source
+		}
 	}
 	projector.valid = true
 	return projector, projectedLeft, projectedRight, nil
@@ -407,6 +494,312 @@ func makeGeodeticProjector(center sphericalVector) GeodeticProjector {
 	return GeodeticProjector{center: center, east: east, north: north}
 }
 
+func canonicalSourceCoord(c Coord) Coord {
+	c.X = canonicalLongitude(c.X)
+	if c.X == 0 {
+		c.X = 0
+	}
+	return c
+}
+
+func collectProjectedGeodeticSegments(source, projected Geometry, out *[]geodeticProjectedSegment) {
+	appendRing := func(sourceRing, projectedRing []Coord) {
+		n := len(sourceRing)
+		if n < 2 || len(projectedRing) != n {
+			return
+		}
+		for i := 1; i < n; i++ {
+			appendProjectedGeodeticSegment(sourceRing[i-1], sourceRing[i], projectedRing[i-1], projectedRing[i], out)
+		}
+		if sourceRing[0] != sourceRing[n-1] {
+			appendProjectedGeodeticSegment(sourceRing[n-1], sourceRing[0], projectedRing[n-1], projectedRing[0], out)
+		}
+	}
+	var walk func(Geometry, Geometry)
+	walk = func(src, dst Geometry) {
+		switch s := src.(type) {
+		case Point:
+			return
+		case LineString:
+			d, ok := dst.(LineString)
+			if !ok || len(s.Points) != len(d.Points) {
+				return
+			}
+			for i := 1; i < len(s.Points); i++ {
+				appendProjectedGeodeticSegment(s.Points[i-1], s.Points[i], d.Points[i-1], d.Points[i], out)
+			}
+		case Polygon:
+			d, ok := dst.(Polygon)
+			if !ok || len(s.Rings) != len(d.Rings) {
+				return
+			}
+			for i := range s.Rings {
+				appendRing(s.Rings[i], d.Rings[i])
+			}
+		case MultiPoint:
+			return
+		case MultiLineString:
+			d, ok := dst.(MultiLineString)
+			if !ok || len(s.Lines) != len(d.Lines) {
+				return
+			}
+			for i := range s.Lines {
+				walk(s.Lines[i], d.Lines[i])
+			}
+		case MultiPolygon:
+			d, ok := dst.(MultiPolygon)
+			if !ok || len(s.Polygons) != len(d.Polygons) {
+				return
+			}
+			for i := range s.Polygons {
+				walk(s.Polygons[i], d.Polygons[i])
+			}
+		case GeometryCollection:
+			d, ok := dst.(GeometryCollection)
+			if !ok || len(s.Geometries) != len(d.Geometries) {
+				return
+			}
+			for i := range s.Geometries {
+				walk(s.Geometries[i], d.Geometries[i])
+			}
+		}
+	}
+	walk(source, projected)
+}
+
+func appendProjectedGeodeticSegment(source1, source2, projected1, projected2 Coord, out *[]geodeticProjectedSegment) {
+	if source1 == source2 || projected1 == projected2 {
+		return
+	}
+	key, ok := geodeticGreatCircleLineKey(source1, source2)
+	if !ok {
+		return
+	}
+	*out = append(*out, geodeticProjectedSegment{
+		source1: canonicalSourceCoord(source1), source2: canonicalSourceCoord(source2),
+		projected1: projected1, projected2: projected2, lineKey: key,
+	})
+}
+
+func geodeticGreatCircleLineKey(a, b Coord) (geodeticLineKey, bool) {
+	n, ok := geodeticGreatCircleNormal(a, b)
+	if !ok {
+		return geodeticLineKey{}, false
+	}
+	return geodeticLineKey{
+		x: int64(math.Round(n.x * geodeticLineQuantization)),
+		y: int64(math.Round(n.y * geodeticLineQuantization)),
+		z: int64(math.Round(n.z * geodeticLineQuantization)),
+	}, true
+}
+
+func geodeticGreatCircleNormal(a, b Coord) (sphericalVector, bool) {
+	va, vb := toSphericalVector(a), toSphericalVector(b)
+	n := sphericalVector{
+		x: va.y*vb.z - va.z*vb.y,
+		y: va.z*vb.x - va.x*vb.z,
+		z: va.x*vb.y - va.y*vb.x,
+	}
+	norm := math.Sqrt(n.x*n.x + n.y*n.y + n.z*n.z)
+	if norm <= geodeticProjectionMinCos {
+		return sphericalVector{}, false
+	}
+	n.x, n.y, n.z = n.x/norm, n.y/norm, n.z/norm
+	// A plane normal has no orientation. Canonicalize its sign before
+	// quantization so reversing an edge selects the same group.
+	if n.x < 0 || (n.x == 0 && (n.y < 0 || (n.y == 0 && n.z < 0))) {
+		n.x, n.y, n.z = -n.x, -n.y, -n.z
+	}
+	return n, true
+}
+
+func sameGeodeticGreatCircle(a, b geodeticProjectedSegment) bool {
+	na, ok := geodeticGreatCircleNormal(a.source1, a.source2)
+	if !ok {
+		return false
+	}
+	nb, ok := geodeticGreatCircleNormal(b.source1, b.source2)
+	if !ok {
+		return false
+	}
+	// Normals are sign-canonicalized. Compare the vector difference rather than
+	// 1-dot: the latter loses the distinction when dot rounds to exactly one and
+	// can even become negative when arithmetic puts dot just above one. The
+	// quantized key above is only a cheap candidate filter; this explicit bound
+	// is the actual source-line compatibility contract.
+	dx, dy, dz := na.x-nb.x, na.y-nb.y, na.z-nb.z
+	return math.Sqrt(dx*dx+dy*dy+dz*dz) <= geodeticLineNormalTolerance
+}
+
+func canonicalizeProjectedGeodesicLines(geometries ...Geometry) map[Coord]Coord {
+	if len(geometries)%2 != 0 {
+		return nil
+	}
+	segments := make([]geodeticProjectedSegment, 0)
+	for i := 0; i < len(geometries); i += 2 {
+		collectProjectedGeodeticSegments(geometries[i], geometries[i+1], &segments)
+	}
+	if len(segments) < 2 {
+		return nil
+	}
+	groups := make(map[geodeticLineKey][]int)
+	for i := range segments {
+		groups[segments[i].lineKey] = append(groups[segments[i].lineKey], i)
+	}
+	type candidate struct {
+		point Coord
+		key   geodeticLineKey
+	}
+	candidates := make(map[Coord]candidate)
+	for key, indexes := range groups {
+		if len(indexes) < 2 {
+			continue
+		}
+		sort.Slice(indexes, func(i, j int) bool {
+			a, b := segments[indexes[i]], segments[indexes[j]]
+			amin, amax := minCoord(a.source1, a.source2), maxCoord(a.source1, a.source2)
+			bmin, bmax := minCoord(b.source1, b.source2), maxCoord(b.source1, b.source2)
+			if amin != bmin {
+				return coordLess(amin, bmin)
+			}
+			return coordLess(amax, bmax)
+		})
+		reference := segments[indexes[0]]
+		dx, dy := reference.projected2.X-reference.projected1.X, reference.projected2.Y-reference.projected1.Y
+		lengthSquared := dx*dx + dy*dy
+		if lengthSquared == 0 {
+			continue
+		}
+		for _, index := range indexes {
+			segment := segments[index]
+			if !sameGeodeticGreatCircle(reference, segment) {
+				continue
+			}
+			for _, endpoint := range []struct {
+				source, projected Coord
+			}{
+				{segment.source1, segment.projected1},
+				{segment.source2, segment.projected2},
+			} {
+				dxToPoint, dyToPoint := endpoint.projected.X-reference.projected1.X, endpoint.projected.Y-reference.projected1.Y
+				t := (dxToPoint*dx + dyToPoint*dy) / lengthSquared
+				projected := Coord{X: reference.projected1.X + t*dx, Y: reference.projected1.Y + t*dy}
+				if !withinGeodeticProjectionRoundoff(endpoint.projected, projected) {
+					continue
+				}
+				source := canonicalSourceCoord(endpoint.source)
+				old, exists := candidates[source]
+				if !exists || geodeticLineKeyLess(key, old.key) {
+					candidates[source] = candidate{point: projected, key: key}
+				}
+			}
+		}
+	}
+	result := make(map[Coord]Coord, len(candidates))
+	for source, value := range candidates {
+		result[source] = value.point
+	}
+	return result
+}
+
+func withinGeodeticProjectionRoundoff(a, b Coord) bool {
+	maxAbs := math.Max(1, math.Max(math.Abs(a.X), math.Abs(a.Y)))
+	maxAbs = math.Max(maxAbs, math.Max(math.Abs(b.X), math.Abs(b.Y)))
+	tolerance := 64*float64Epsilon*maxAbs + 8/geodeticOverlaySnapScale
+	return math.Hypot(a.X-b.X, a.Y-b.Y) <= tolerance
+}
+
+func geodeticLineKeyLess(a, b geodeticLineKey) bool {
+	if a.x != b.x {
+		return a.x < b.x
+	}
+	if a.y != b.y {
+		return a.y < b.y
+	}
+	return a.z < b.z
+}
+
+func coordLess(a, b Coord) bool {
+	if a.X != b.X {
+		return a.X < b.X
+	}
+	return a.Y < b.Y
+}
+
+func minCoord(a, b Coord) Coord {
+	if coordLess(b, a) {
+		return b
+	}
+	return a
+}
+
+func maxCoord(a, b Coord) Coord {
+	if coordLess(a, b) {
+		return b
+	}
+	return a
+}
+
+func rewriteProjectedGeometry(source, projected Geometry, canonical map[Coord]Coord) {
+	lookup := func(sourceCoord, projectedCoord Coord) Coord {
+		if replacement, ok := canonical[canonicalSourceCoord(sourceCoord)]; ok {
+			return replacement
+		}
+		return projectedCoord
+	}
+	var walk func(Geometry, Geometry)
+	walk = func(src, dst Geometry) {
+		switch s := src.(type) {
+		case LineString:
+			d, ok := dst.(LineString)
+			if !ok || len(s.Points) != len(d.Points) {
+				return
+			}
+			for i := range s.Points {
+				d.Points[i] = lookup(s.Points[i], d.Points[i])
+			}
+		case Polygon:
+			d, ok := dst.(Polygon)
+			if !ok || len(s.Rings) != len(d.Rings) {
+				return
+			}
+			for i := range s.Rings {
+				if len(s.Rings[i]) != len(d.Rings[i]) {
+					continue
+				}
+				for j := range s.Rings[i] {
+					d.Rings[i][j] = lookup(s.Rings[i][j], d.Rings[i][j])
+				}
+			}
+		case MultiLineString:
+			d, ok := dst.(MultiLineString)
+			if !ok || len(s.Lines) != len(d.Lines) {
+				return
+			}
+			for i := range s.Lines {
+				walk(s.Lines[i], d.Lines[i])
+			}
+		case MultiPolygon:
+			d, ok := dst.(MultiPolygon)
+			if !ok || len(s.Polygons) != len(d.Polygons) {
+				return
+			}
+			for i := range s.Polygons {
+				walk(s.Polygons[i], d.Polygons[i])
+			}
+		case GeometryCollection:
+			d, ok := dst.(GeometryCollection)
+			if !ok || len(s.Geometries) != len(d.Geometries) {
+				return
+			}
+			for i := range s.Geometries {
+				walk(s.Geometries[i], d.Geometries[i])
+			}
+		}
+	}
+	walk(source, projected)
+}
+
 func (p GeodeticProjector) dot(v sphericalVector) float64 {
 	return p.center.x*v.x + p.center.y*v.y + p.center.z*v.z
 }
@@ -422,10 +815,16 @@ func (p GeodeticProjector) projectCoord(c Coord) (Coord, error) {
 		return Coord{}, moerr.NewInvalidInputNoCtx(
 			"SRID 4326 topology requires all vertices in one stable gnomonic hemisphere")
 	}
-	return Coord{
+	projected := Coord{
 		X: geodeticProjectionScale * (p.east.x*v.x + p.east.y*v.y + p.east.z*v.z) / cosC,
 		Y: geodeticProjectionScale * (p.north.x*v.x + p.north.y*v.y + p.north.z*v.z) / cosC,
-	}, nil
+	}
+	if math.Abs(projected.X) > geodeticProjectionMaxAbs ||
+		math.Abs(projected.Y) > geodeticProjectionMaxAbs {
+		return Coord{}, moerr.NewInvalidInputNoCtx(
+			"SRID 4326 topology is numerically unstable near the gnomonic hemisphere boundary")
+	}
+	return projected, nil
 }
 
 func (p GeodeticProjector) unprojectCoord(c Coord) Coord {

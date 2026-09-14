@@ -10903,7 +10903,15 @@ func overlayBinary(functionName string, op geo.BoolOp) fEvalFn {
 					return nil, err
 				}
 			}
-			g, oerr := geo.Overlay(a, b, op)
+			var (
+				g    geo.Geometry
+				oerr error
+			)
+			if srid == geo.SRIDWGS84 {
+				g, oerr = projector.Overlay(a, b, op)
+			} else {
+				g, oerr = geo.Overlay(a, b, op)
+			}
 			if oerr != nil {
 				return nil, oerr
 			}
