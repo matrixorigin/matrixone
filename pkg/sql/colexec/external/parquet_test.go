@@ -4864,6 +4864,23 @@ func Test_readParquetPageValues_rejectsNegativeCounts(t *testing.T) {
 	require.Contains(t, err.Error(), "NumValues() -1 is negative")
 }
 
+func TestParquet_EnsureCurrentPageRejectsNegativeRows(t *testing.T) {
+	ctx := context.Background()
+	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))
+	h := ParquetHandler{
+		pages:       make([]parquet.Pages, 1),
+		currentPage: []parquet.Page{&parquetPageWithNumRows{Page: page, numRows: -1}},
+		pageOffset:  []int64{0},
+	}
+	param := &ExternalParam{ExParamConst: ExParamConst{Ctx: ctx}}
+
+	more, err := h.ensureCurrentPage(0, param)
+	require.False(t, more)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NumRows() -1 is negative")
+}
+
 func Test_validateStringDataCount(t *testing.T) {
 	ctx := context.Background()
 

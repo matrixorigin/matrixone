@@ -4644,7 +4644,15 @@ func (h *ParquetHandler) ensureCurrentPage(colIdx int, param *ExternalParam) (bo
 			h.currentPage[colIdx] = page
 			h.pageOffset[colIdx] = 0
 		}
-		if h.pageOffset[colIdx] < page.NumRows() {
+		if page == nil {
+			return false, h.closePagesOnError(param.Ctx,
+				moerr.NewInvalidInput(param.Ctx, "parquet page reader returned a nil page without an error"))
+		}
+		numRows, err := parquetPageCount(param.Ctx, "NumRows()", page.NumRows())
+		if err != nil {
+			return false, h.closePagesOnError(param.Ctx, err)
+		}
+		if h.pageOffset[colIdx] < int64(numRows) {
 			return false, nil
 		}
 		h.currentPage[colIdx] = nil
