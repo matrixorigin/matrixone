@@ -302,3 +302,15 @@ func TestRoutinePlanCatalogIdentityAcceptsAndRejectsSQLRevision(t *testing.T) {
 		udf.SQLDefinitionSchemaVersion, "", "", "", udf.NullCallHandler,
 	))
 }
+
+func TestRoutinePlanDependenciesVisitsSharedQueriesOnce(t *testing.T) {
+	dependency := testRoutinePlanDependency()
+	query := &planpb.Query{RoutineDependencies: []*planpb.RoutinePlanDependency{dependency}}
+	for depth := 0; depth < 12; depth++ {
+		query = &planpb.Query{BackgroundQueries: []*planpb.Query{query, query}}
+	}
+	dependencies, err := routinePlanDependencies(&planpb.Plan{Plan: &planpb.Plan_Query{Query: query}})
+	require.NoError(t, err)
+	require.Len(t, dependencies, 1)
+	require.Same(t, dependency, dependencies[0])
+}
