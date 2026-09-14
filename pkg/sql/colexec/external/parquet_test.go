@@ -3110,6 +3110,15 @@ func (p *parquetPageWithNumValues) NumValues() int64 {
 	return p.numValues
 }
 
+type parquetPageWithDictionary struct {
+	parquet.Page
+	dictionary parquet.Dictionary
+}
+
+func (p *parquetPageWithDictionary) Dictionary() parquet.Dictionary {
+	return p.dictionary
+}
+
 func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Leaf(parquet.BooleanType)
@@ -3329,6 +3338,24 @@ func TestParquet_Dictionary_Bool_NullToNotNull(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), "unexpected error: %v", err)
 	require.Contains(t, err.Error(), "cannot load NULL value")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Dictionary_Bool_ValueKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary)
+	f, page := writeDictAndGetPage(t, node, []parquet.Value{parquet.BooleanValue(true)})
+	badDictionary := parquet.Int32Type.NewDictionary(0, 1, encoding.Int32Values([]int32{1}))
+	badPage := &parquetPageWithDictionary{Page: page, dictionary: badDictionary}
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "BOOLEAN dictionary with type INT32")
 	require.Zero(t, vec.Length())
 }
 

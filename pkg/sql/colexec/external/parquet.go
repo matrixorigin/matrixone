@@ -3683,6 +3683,10 @@ func copyBoolDictPageToVec(
 	indices []int32,
 	nc nullCheckInfo,
 ) error {
+	if dict.Type().Kind() != parquet.Boolean {
+		return moerr.NewInvalidInputf(proc.Ctx,
+			"malformed BOOLEAN dictionary with type %s", dict.Type().Kind())
+	}
 	dictLen := dict.Len()
 	if dictLen < 0 || dictLen > 2 {
 		return moerr.NewInvalidInputf(proc.Ctx,
