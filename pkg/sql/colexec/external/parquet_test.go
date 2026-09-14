@@ -3139,6 +3139,32 @@ func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	require.Equal(t, []bool{true}, vector.MustFixedColWithTypeCheck[bool](vec))
 }
 
+func TestParquet_Plain_Bool_UnexpectedNullRollsBack(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Leaf(parquet.BooleanType)
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(values []parquet.Value) (int, error) {
+			values[0] = parquet.NullValue()
+			return 1, io.EOF
+		}),
+	}
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "reader returned NULL value")
+	require.Zero(t, vec.Length())
+}
+
 func TestParquet_Plain_Bool_DefinitionLevelMismatch(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Optional(parquet.Leaf(parquet.BooleanType))

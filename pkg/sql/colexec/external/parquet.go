@@ -3644,6 +3644,10 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 			v := values[i]
 			row := length + readRows + i
 			if v.IsNull() {
+				if nc.noNulls {
+					return rollback(moerr.NewInvalidInput(proc.Ctx,
+						"malformed BOOLEAN page: reader returned NULL value"))
+				}
 				ret[row] = false
 				nulls.Add(vec.GetNulls(), uint64(row))
 			} else {
