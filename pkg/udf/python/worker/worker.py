@@ -41,7 +41,24 @@ from typing import Any, Dict, Iterable, Optional
 from zoneinfo import TZPATH, ZoneInfo, ZoneInfoNotFoundError
 
 import pyarrow as pa
-import pyarrow.flight as flight
+
+# Handler children only need Arrow. Avoid importing Flight on that entry path;
+# the annotations in this module are postponed, and the Flight server class is
+# never instantiated by the handler child.
+_HANDLER_ENTRY = "--execute-handler" in sys.argv
+
+
+class _NoFlightServerBase:
+    pass
+
+
+if _HANDLER_ENTRY:
+    flight = None
+    _FlightServerBase = _NoFlightServerBase
+else:
+    import pyarrow.flight as flight
+
+    _FlightServerBase = flight.FlightServerBase
 
 PROTOCOL_VERSION = 1
 MAX_CONTROL_BYTES = 1 << 20
@@ -193,7 +210,6 @@ _HANDLER_RESPONSE_ERROR = 0
 _HANDLER_RESPONSE_OK = 1
 _HANDLER_RESPONSE_FD_ENV = "MATRIXONE_HANDLER_RESPONSE_FD"
 _HANDLER_PARENT_WATCH_FD_ENV = "MATRIXONE_HANDLER_PARENT_WATCH_FD"
-_HANDLER_WATCHDOG_FD_ENV = "MATRIXONE_HANDLER_WATCHDOG_FD"
 _HANDLER_ENV_ALLOWLIST = frozenset({"PATH"})
 _MICROS_PER_SECOND = 1_000_000
 _MAX_TIME_MICROS = (838 * 60 * 60 + 59 * 60 + 59) * _MICROS_PER_SECOND
@@ -1881,34 +1897,6 @@ def _watch_parent_liveness(read_fd: int) -> None:
         os._exit(137)
 
 
-def _watch_handler_group(read_fd: int, process_group_id: int) -> None:
-    """Reap a handler process group even after its leader has exited.
-
-    This watchdog is a worker-owned reliability process, not a security
-    boundary.  It has no user-code imports and only has the group id plus a
-    read end of a worker-owned pipe.  If the worker disappears, the pipe gets
-    EOF and the watchdog kills the whole handler process group.  Keeping this
-    responsibility outside the handler leader closes the case where the
-    leader exits first while a descendant keeps running.
-    """
-    try:
-        while True:
-            if os.read(read_fd, 1) == b"":
-                if os.name == "posix":
-                    try:
-                        os.killpg(process_group_id, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                return
-    except (OSError, ValueError):
-        return
-    finally:
-        try:
-            os.close(read_fd)
-        except OSError:
-            pass
-
-
 def _execute_handler_subprocess() -> None:
     response_fd_text = os.environ.pop(_HANDLER_RESPONSE_FD_ENV, None)
     parent_watch_fd_text = os.environ.pop(_HANDLER_PARENT_WATCH_FD_ENV, None)
@@ -2289,17 +2277,19 @@ class _HandlerProcessSession:
             os.close(parent_watch_read_fd)
             parent_watch_read_fd = -1
             if os.name == "posix":
+                watchdog_path = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "watchdog.py"
+                )
                 watchdog_env = {
                     name: value
                     for name, value in os.environ.items()
                     if name in _HANDLER_ENV_ALLOWLIST
                 }
-                watchdog_env[_HANDLER_WATCHDOG_FD_ENV] = str(watchdog_read_fd)
                 self._watchdog_process = subprocess.Popen(
                     [
                         sys.executable,
-                        os.path.abspath(__file__),
-                        "--watch-handler-group",
+                        watchdog_path,
+                        str(watchdog_read_fd),
                         str(self._process.pid),
                     ],
                     stdin=subprocess.DEVNULL,
@@ -2739,7 +2729,7 @@ class _InvocationState:
                 self.condition.wait(min(remaining, 0.2))
 
 
-class RoutineFlightServer(flight.FlightServerBase):
+class RoutineFlightServer(_FlightServerBase):
     def __init__(
         self,
         location: str,
@@ -3324,6 +3314,19 @@ class RoutineFlightServer(flight.FlightServerBase):
                     for index, descriptor in enumerate(args):
                         _validate_array_values(batch.column(index), descriptor)
                     state.record_input(sequence)
+                    if handler_session is None:
+                        # Start the bounded child while the parent builds the
+                        # handler request.  The child imports the frozen
+                        # runtime concurrently with this Arrow snapshot;
+                        # admission and all input validation still happen
+                        # before a handler slot is acquired.
+                        owner_id = _handler_quota_owner(payload)
+                        handler_session = _HandlerProcessSession(
+                            self._handler_slots,
+                            handler_quota=self._handler_quota,
+                            account_id=key[0],
+                            owner_id=owner_id,
+                        )
                     execution_request = {
                         "source": source,
                         "handler": handler_name,
@@ -3346,14 +3349,6 @@ class RoutineFlightServer(flight.FlightServerBase):
                         "arrow_encoding": HANDLER_ARROW_RECORD_BATCH,
                         "input": _serialize_record_batch_message(batch),
                     }
-                    if handler_session is None:
-                        owner_id = _handler_quota_owner(payload)
-                        handler_session = _HandlerProcessSession(
-                            self._handler_slots,
-                            handler_quota=self._handler_quota,
-                            account_id=key[0],
-                            owner_id=owner_id,
-                        )
                     output_wire = handler_session.run(
                         context, execution_request, handler_timeout_seconds
                     )
@@ -3463,21 +3458,10 @@ def _safe_error(exc: Exception) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--execute-handler", action="store_true")
-    parser.add_argument("--watch-handler-group", type=int)
     parser.add_argument("--address")
     args = parser.parse_args()
     if args.execute_handler:
         _execute_handler_subprocess()
-        return
-    if args.watch_handler_group is not None:
-        watchdog_fd_text = os.environ.pop(_HANDLER_WATCHDOG_FD_ENV, None)
-        if watchdog_fd_text is None:
-            parser.error("--watch-handler-group requires a watchdog pipe")
-        try:
-            watchdog_fd = int(watchdog_fd_text)
-        except ValueError:
-            parser.error("invalid watchdog pipe")
-        _watch_handler_group(watchdog_fd, args.watch_handler_group)
         return
     if not args.address:
         parser.error("--address is required for the Flight server")
