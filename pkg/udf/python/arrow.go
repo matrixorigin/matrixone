@@ -48,6 +48,10 @@ const (
 	DefaultMaxBatchBytes   = 16 << 20
 	DefaultMaxBatchRows    = 65536
 	DefaultMaxControlBytes = 1 << 20
+	// Bulk append is only used for a large fixed-width primitive column.  The
+	// small-batch path avoids allocating a temporary validity slice and keeps
+	// the ordinary per-value path for constants and special SQL encodings.
+	bulkInputMinRows = 64
 )
 
 type TypeDescriptor struct {
@@ -591,6 +595,15 @@ func (e *inputBatchEncoder) build(start, length int) (arrow.RecordBatch, *arrow.
 	builder := array.NewRecordBuilder(memory.NewGoAllocator(), e.schema)
 	defer builder.Release()
 	for column, typ := range e.args {
+		bulk, err := appendBulkFixedInputValue(
+			builder.Field(column), e.inputs[column], typ, start, length,
+		)
+		if err != nil {
+			return nil, nil, fmt.Errorf("input column %d: %w", column, err)
+		}
+		if bulk {
+			continue
+		}
 		for row := 0; row < length; row++ {
 			if err := appendInputValue(builder.Field(column), e.inputs[column], typ, start, row); err != nil {
 				return nil, nil, fmt.Errorf("input column %d row %d: %w", column, row, err)
@@ -598,6 +611,132 @@ func (e *inputBatchEncoder) build(start, length int) (arrow.RecordBatch, *arrow.
 		}
 	}
 	return builder.NewRecordBatch(), e.schema, nil
+}
+
+// appendBulkFixedInputValue uses Arrow's typed AppendValues APIs for the
+// primitive SQL types whose MatrixOne storage already has the same physical
+// representation.  It copies only the values that Arrow must own; the source
+// vector remains the ownership boundary, and NULL positions are supplied as a
+// separate validity slice.  The return value says whether the type was
+// handled by this path.
+func appendBulkFixedInputValue(
+	builder array.Builder, v *vector.Vector, typ types.Type, start, length int,
+) (bool, error) {
+	if length < bulkInputMinRows {
+		return false, nil
+	}
+	validity := func() []bool {
+		if v.IsConstNull() {
+			return make([]bool, length)
+		}
+		if v.GetNulls() == nil || v.GetNulls().IsEmpty() {
+			return nil
+		}
+		valid := make([]bool, length)
+		for row := range valid {
+			valid[row] = !v.IsNull(uint64(sourceRow(v, start, row)))
+		}
+		return valid
+	}
+	if builder == nil || v == nil {
+		return false, fmt.Errorf("input column is missing")
+	}
+
+	switch typ.Oid {
+	case types.T_bool:
+		values, err := bulkFixedInputWindow[bool](v, start, length)
+		if err != nil {
+			return false, err
+		}
+		builder.(*array.BooleanBuilder).AppendValues(values, validity())
+	case types.T_int8:
+		values, err := bulkFixedInputWindow[int8](v, start, length)
+		if err != nil {
+			return false, err
+		}
+		builder.(*array.Int8Builder).AppendValues(values, validity())
+	case types.T_int16:
+		values, err := bulkFixedInputWindow[int16](v, start, length)
+		if err != nil {
+			return false, err
+		}
+		builder.(*array.Int16Builder).AppendValues(values, validity())
+	case types.T_int32:
+		values, err := bulkFixedInputWindow[int32](v, start, length)
+		if err != nil {
+			return false, err
+		}
+		builder.(*array.Int32Builder).AppendValues(values, validity())
+	case types.T_int64:
+		values, err := bulkFixedInputWindow[int64](v, start, length)
+		if err != nil {
+			return false, err
+		}
+		builder.(*array.Int64Builder).AppendValues(values, validity())
+	case types.T_uint8:
+		values, err := bulkFixedInputWindow[uint8](v, start, length)
+		if err != nil {
+			return false, err
+		}
+		builder.(*array.Uint8Builder).AppendValues(values, validity())
+	case types.T_uint16:
+		values, err := bulkFixedInputWindow[uint16](v, start, length)
+		if err != nil {
+			return false, err
+		}
+		builder.(*array.Uint16Builder).AppendValues(values, validity())
+	case types.T_uint32:
+		values, err := bulkFixedInputWindow[uint32](v, start, length)
+		if err != nil {
+			return false, err
+		}
+		builder.(*array.Uint32Builder).AppendValues(values, validity())
+	case types.T_uint64:
+		values, err := bulkFixedInputWindow[uint64](v, start, length)
+		if err != nil {
+			return false, err
+		}
+		builder.(*array.Uint64Builder).AppendValues(values, validity())
+	case types.T_float32:
+		values, err := bulkFixedInputWindow[float32](v, start, length)
+		if err != nil {
+			return false, err
+		}
+		builder.(*array.Float32Builder).AppendValues(values, validity())
+	case types.T_float64:
+		values, err := bulkFixedInputWindow[float64](v, start, length)
+		if err != nil {
+			return false, err
+		}
+		builder.(*array.Float64Builder).AppendValues(values, validity())
+	default:
+		return false, nil
+	}
+	return true, nil
+}
+
+func bulkFixedInputWindow[T any](v *vector.Vector, start, length int) ([]T, error) {
+	if v.IsConstNull() {
+		// A constant NULL intentionally has no physical value slot.  Arrow
+		// still needs one placeholder per logical row so its validity bitmap
+		// preserves the batch shape.
+		return make([]T, length), nil
+	}
+	values := vector.MustFixedColNoTypeCheck[T](v)
+	if v.IsConst() {
+		if len(values) == 0 {
+			return nil, fmt.Errorf("constant input column has no value")
+		}
+		expanded := make([]T, length)
+		for row := range expanded {
+			expanded[row] = values[0]
+		}
+		return expanded, nil
+	}
+	if start < 0 || length <= 0 || start > len(values) || length > len(values)-start {
+		return nil, fmt.Errorf("input column is shorter than batch range")
+	}
+	return values[start : start+length], nil
 }
 
 // canBuildFullBatch cheaply decides whether a variable-width full candidate
