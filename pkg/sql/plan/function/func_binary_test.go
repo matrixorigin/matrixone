@@ -333,6 +333,43 @@ func TestCeil(t *testing.T) {
 	}
 }
 
+func TestCeilFloorDecimal128Int64Boundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimalType := types.New(types.T_decimal128, 19, 0)
+	values := make([]types.Decimal128, 0, 6)
+	for _, value := range []string{
+		"9223372036854775807",
+		"9223372036854775808",
+		"-9223372036854775808",
+		"-9223372036854775809",
+		"9999999999999999999",
+		"-9999999999999999999",
+	} {
+		decimal, err := types.ParseDecimal128(value, decimalType.Width, decimalType.Scale)
+		require.NoError(t, err)
+		values = append(values, decimal)
+	}
+	nulls := make([]bool, len(values))
+
+	functions := []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "ceil", fn: CeilDecimal128},
+		{name: "floor", fn: FloorDecimal128},
+	}
+	for _, function := range functions {
+		t.Run(function.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(decimalType, values, nulls)},
+				NewFunctionTestResult(decimalType, false, values, nulls),
+				function.fn)
+			succeeded, info := testCase.Run()
+			require.True(t, succeeded, info)
+		})
+	}
+}
+
 func initFloorTestCase() []tcTemp {
 	rfs := []float64{0, -2, -3, math.MinInt64 + 1, math.MinInt64 + 2, -101, -2, 0,
 		0, 1, 4, 8, 16, 32, 64, math.MaxInt64, math.MaxFloat64, 0}
