@@ -2935,6 +2935,15 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	// without changing the ordinary string-prefix semantics of direct CHAR
 	// calls.
 	if b.builder != nil && b.builder.isPrepareStatement {
+		// GET_LOCK distinguishes DECIMAL timeout conversion from DOUBLE. A bare
+		// marker has no source type at PREPARE time, so use the established
+		// deferred numeric fallback and restore the runtime parameter's exact
+		// overload at EXECUTE. Explicit CASTs stay on the normal binder path.
+		if strings.EqualFold(funcName, "get_lock") && len(astExpr.Exprs) == 2 {
+			if _, directParam := unwrapParenExpr(astExpr.Exprs[1]).(*tree.ParamExpr); directParam {
+				return b.bindPreparedGetLockFuncExpr(astExpr.Exprs, depth)
+			}
+		}
 		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
 			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sign") ||
 				strings.EqualFold(funcName, "sleep") || strings.EqualFold(funcName, "char")) {
@@ -3375,6 +3384,26 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	}
 	return bindBoundFuncExprAndConstFold(
 		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+	)
+}
+
+func (b *baseBinder) bindPreparedGetLockFuncExpr(astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	if b.builder == nil || !b.builder.isPrepareStatement || len(astArgs) != 2 {
+		return b.bindFuncExprImplByAstExpr("get_lock", astArgs, depth)
+	}
+	name, err := b.impl.BindExpr(astArgs[0], depth, false)
+	if err != nil {
+		return nil, err
+	}
+	doubleType := types.T_float64.ToType()
+	target := makePlan2Type(&doubleType)
+	timeout, err := b.bindNumericExprWithContext(astArgs[1], depth, &target)
+	if err != nil {
+		return nil, err
+	}
+	b.markPreparedNumericFallback(timeout)
+	return bindBoundFuncExprAndConstFold(
+		b.GetContext(), b.builder.compCtx.GetProcess(), "get_lock", []*plan.Expr{name, timeout},
 	)
 }
 
@@ -5800,27 +5829,7 @@ func bindFuncExprImplByPlanExpr(
 		}
 	}
 
-	if name == "round" || name == "ceil" || name == "ceiling" || name == "floor" && argsType[0].IsDecimal() {
-		if len(argsType) == 1 {
-			returnType.Scale = 0
-		} else if lit, ok := args[1].Expr.(*plan.Expr_Lit); ok {
-			if litval, ok := lit.Lit.GetValue().(*plan.Literal_I64Val); ok {
-				scale := litval.I64Val
-				if scale > 38 {
-					scale = 38
-				}
-				if scale < 0 {
-					scale = 0
-				}
-				if returnType.Scale > int32(scale) {
-					returnType.Scale = int32(scale)
-					if returnType.Scale < 0 {
-						returnType.Scale = 0
-					}
-				}
-			}
-		}
-	}
+	refineDecimalRoundingReturnType(name, args, argsType, &returnType)
 
 	// Geometry constructors with an explicit constant SRID argument record the
 	// SRID in the result type's Width (geometry cells store bare WKB, so SRID
@@ -6175,6 +6184,108 @@ func bindFuncExprImplByPlanExpr(
 		},
 		Typ: Typ,
 	}, nil
+}
+
+// refineDecimalRoundingReturnType applies the exact-numeric metadata rules
+// which depend on a constant digits argument and therefore cannot be expressed
+// by an overload's type-only return callback.
+func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []types.Type, returnType *types.Type) {
+	if len(argsType) == 0 || !argsType[0].IsDecimal() {
+		return
+	}
+	input := argsType[0]
+	integerDigits := input.Width - input.Scale
+
+	switch name {
+	case "ceil", "ceiling", "floor":
+		digits := int64(0)
+		if len(args) == 2 {
+			literal := args[1].GetLit()
+			if literal == nil || literal.Isnull {
+				return
+			}
+			value, ok := literal.GetValue().(*plan.Literal_I64Val)
+			if !ok {
+				return
+			}
+			digits = value.I64Val
+		} else if len(args) != 1 {
+			return
+		}
+
+		// Keep the decimal physical type so a plan produced by an upgraded CN
+		// remains executable by older CNs during a rolling upgrade.  Only the
+		// precision and scale metadata may be refined here.
+		if digits >= int64(input.Scale) {
+			return
+		}
+		resultScale := int32(0)
+		if digits > 0 {
+			resultScale = int32(digits)
+		}
+		precision := integerDigits + resultScale + 1 // reserve a carry digit
+		if precision < 1 {
+			precision = 1
+		}
+		// A carry may require one more integer digit, but the result keeps the
+		// input decimal family for rolling-upgrade compatibility. Do not publish
+		// metadata wider than that family can represent (in particular,
+		// DECIMAL(65,0) with a negative digits argument must stay precision 65).
+		precision = min(precision, maxDecimalPrecisionForRounding(input.Oid))
+		returnType.Width = precision
+		returnType.Scale = resultScale
+
+	case "round", "truncate":
+		digits := int64(0)
+		if len(args) == 2 {
+			literal := args[1].GetLit()
+			if literal == nil || literal.Isnull {
+				return
+			}
+			value, ok := literal.GetValue().(*plan.Literal_I64Val)
+			if !ok {
+				return
+			}
+			digits = value.I64Val
+		} else if len(args) != 1 {
+			return
+		}
+
+		// Preserve the established conservative width for negative D. MySQL
+		// exposes inconsistent metadata for that case between CTAS and views;
+		// the compatibility contract here is the unambiguous nonnegative case.
+		if digits < 0 {
+			returnType.Scale = 0
+			return
+		}
+		if digits >= int64(input.Scale) {
+			return
+		}
+
+		resultScale := int32(digits)
+		precision := integerDigits + resultScale
+		if name == "round" {
+			precision++ // reserve a carry digit
+		}
+		if precision < 1 {
+			precision = 1
+		}
+		returnType.Width = precision
+		returnType.Scale = resultScale
+	}
+}
+
+func maxDecimalPrecisionForRounding(oid types.T) int32 {
+	switch oid {
+	case types.T_decimal64:
+		return 18
+	case types.T_decimal128:
+		return 38
+	case types.T_decimal256:
+		return 65
+	default:
+		return 1
+	}
 }
 
 func isCollatedTextPlanType(expr *plan.Expr) bool {
