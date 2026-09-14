@@ -4905,6 +4905,29 @@ func Test_prepareNullCheck_rejectsInvalidCounts(t *testing.T) {
 	}
 }
 
+func Test_prepareNullCheck_rejectsInconsistentNoNullLevels(t *testing.T) {
+	ctx := context.Background()
+	page := parquet.Int32Type.NewPage(0, 2, encoding.Int32Values([]int32{1, 2}))
+	mp := &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}
+
+	for _, tc := range []struct {
+		name   string
+		levels []byte
+		want   string
+	}{
+		{name: "short levels", levels: []byte{1}, want: "definition levels length"},
+		{name: "null level with zero null count", levels: []byte{1, 0}, want: "not non-null level"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wrapped := &parquetPageWithDefinitionLevels{Page: page, levels: tc.levels, numNulls: 0}
+			_, err := prepareNullCheck(ctx, mp, wrapped)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
 func Test_readParquetPageValues_rejectsNegativeCounts(t *testing.T) {
 	ctx := context.Background()
 	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))

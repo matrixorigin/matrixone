@@ -2282,6 +2282,9 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 			return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
 				"malformed page: required source has %d NULLs", numNulls)
 		}
+		if err := validateParquetNoNullDefinitionLevels(ctx, page.DefinitionLevels(), numRows, mp.maxDefinitionLevel); err != nil {
+			return nullCheckInfo{}, err
+		}
 		return nullCheckInfo{
 			noNulls:        true,
 			actualNonNulls: int64(numRows),
@@ -2290,6 +2293,9 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 
 	// Fast path: page has no null values
 	if numNulls == 0 {
+		if err := validateParquetNoNullDefinitionLevels(ctx, page.DefinitionLevels(), numRows, mp.maxDefinitionLevel); err != nil {
+			return nullCheckInfo{}, err
+		}
 		return nullCheckInfo{
 			noNulls:        true,
 			actualNonNulls: int64(numRows),
@@ -2333,6 +2339,25 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 		maxDefinitionLevel: mp.maxDefinitionLevel,
 		actualNonNulls:     actualNonNulls,
 	}, nil
+}
+
+func validateParquetNoNullDefinitionLevels(ctx context.Context, levels []byte, numRows int, maxDefinitionLevel byte) error {
+	if len(levels) == 0 {
+		return nil
+	}
+	if len(levels) != numRows {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed page: definition levels length %d != numRows %d",
+			len(levels), numRows)
+	}
+	for i, level := range levels {
+		if level != maxDefinitionLevel {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed page: definition level %d at row %d is not non-null level %d",
+				level, i, maxDefinitionLevel)
+		}
+	}
+	return nil
 }
 
 // validateStringDataCount validates that string data count matches expected non-null rows.
