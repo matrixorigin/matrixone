@@ -554,7 +554,7 @@ func newInputBatchEncoder(inputs []*vector.Vector, args []types.Type) (*inputBat
 				typ.DescString(),
 			)
 		}
-		if isStringInputType(typ.Oid) {
+		if inputs[i].Length() > 0 && isStringInputType(typ.Oid) {
 			stringParameters[i] = vector.GenerateFunctionStrParameter(inputs[i])
 		}
 	}
