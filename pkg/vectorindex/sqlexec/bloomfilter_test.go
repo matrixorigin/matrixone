@@ -318,6 +318,16 @@ func TestBuildExactPkFilter(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "10,30", result)
 	})
+
+	t.Run("bounded output rejects oversized predicate", func(t *testing.T) {
+		vec := vector.NewVec(types.New(types.T_varchar, 128, 0))
+		require.NoError(t, vector.AppendBytes(vec, []byte("hello"), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(vec, []byte("world"), false, proc.Mp()))
+
+		result, err := BuildExactPkFilterWithLimit(ctx, vec, len("'hello'"))
+		require.ErrorContains(t, err, "exact primary-key filter exceeds")
+		require.Empty(t, result)
+	})
 }
 
 func TestAppendUint64(t *testing.T) {

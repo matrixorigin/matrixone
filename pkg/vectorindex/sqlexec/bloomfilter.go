@@ -74,12 +74,50 @@ func WaitUniqueJoinKeys(sqlproc *SqlProcess) ([]byte, error) {
 
 // BuildExactPkFilter converts a vector of primary key values into a comma-separated
 // SQL literal string suitable for use in an IN (...) clause.
+//
+// This is the legacy, unbounded helper used by callers that already impose
+// their own cardinality limit. Callers that use the generated predicate as a
+// required semantic filter should use BuildExactPkFilterWithLimit instead.
 func BuildExactPkFilter(ctx context.Context, vec *vector.Vector) (string, error) {
+	return buildExactPkFilter(ctx, vec, 0)
+}
+
+// BuildExactPkFilterWithLimit is the bounded form of BuildExactPkFilter. It
+// returns an error before publishing a partial predicate once the generated
+// SQL exceeds maxBytes. A required membership filter must fail closed rather
+// than silently switching to an approximate filter, truncating the key set, or
+// emitting an unbounded SQL statement.
+func BuildExactPkFilterWithLimit(
+	ctx context.Context,
+	vec *vector.Vector,
+	maxBytes int,
+) (string, error) {
+	if maxBytes <= 0 {
+		return "", moerr.NewInvalidInputf(ctx, "ivf_search: exact primary-key filter limit must be positive")
+	}
+	return buildExactPkFilter(ctx, vec, maxBytes)
+}
+
+func buildExactPkFilter(ctx context.Context, vec *vector.Vector, maxBytes int) (string, error) {
 	var buf []byte
 	rowCount := vec.Length()
 	for i := 0; i < rowCount; i++ {
 		if vec.IsNull(uint64(i)) {
 			continue
+		}
+		separatorBytes := 0
+		if len(buf) > 0 {
+			separatorBytes = 1
+		}
+		if maxBytes > 0 {
+			if literalBytes, bounded := exactPkLiteralBytes(vec, i); bounded &&
+				literalBytes > maxBytes-len(buf)-separatorBytes {
+				return "", moerr.NewInvalidInputf(
+					ctx,
+					"ivf_search: exact primary-key filter exceeds %d bytes",
+					maxBytes,
+				)
+			}
 		}
 		if len(buf) > 0 {
 			buf = append(buf, ',')
@@ -89,8 +127,46 @@ func BuildExactPkFilter(ctx context.Context, vec *vector.Vector) (string, error)
 		if err != nil {
 			return "", err
 		}
+		if maxBytes > 0 && len(buf) > maxBytes {
+			return "", moerr.NewInvalidInputf(
+				ctx,
+				"ivf_search: exact primary-key filter exceeds %d bytes",
+				maxBytes,
+			)
+		}
 	}
 	return string(buf), nil
+}
+
+// exactPkLiteralBytes returns the exact encoded length for variable-width
+// literals. Doing this check before AppendVectorSQLLiteral prevents a single
+// oversized VARCHAR/BLOB value from forcing an allocation far beyond the
+// bounded predicate budget. Fixed-width literals are small enough that the
+// post-append check in buildExactPkFilter is sufficient.
+func exactPkLiteralBytes(vec *vector.Vector, row int) (int, bool) {
+	maxInt := int(^uint(0) >> 1)
+	switch vec.GetType().Oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		n := len(vec.GetBytesAt(row))
+		if n > (maxInt-3)/2 {
+			return maxInt, true
+		}
+		return 3 + 2*n, true // x' + two hex digits per byte + '
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+		n := 2 // opening and closing quote
+		for _, b := range vec.GetBytesAt(row) {
+			n++
+			if b == '\\' || b == '\'' {
+				if n == maxInt {
+					return maxInt, true
+				}
+				n++
+			}
+		}
+		return n, true
+	default:
+		return 0, false
+	}
 }
 
 // AppendVectorSQLLiteral appends the SQL literal representation of vec[row] to buf.
