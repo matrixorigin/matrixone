@@ -156,8 +156,10 @@ func TestRegexp2ResourceAndOffsetContracts(t *testing.T) {
 
 	prepared, err := matcher.forSubject("a😀")
 	require.NoError(t, err)
+	t.Cleanup(prepared.release)
 	input, err := newRegexp2Input("a😀", false, 0)
 	require.NoError(t, err)
+	t.Cleanup(input.release)
 	require.Equal(t, 1, input.runeIndexAtByte(1))
 	require.Equal(t, 5, input.byteOffsetAtRune(2))
 	input.release()
