@@ -65,8 +65,8 @@ func TestHasMatrixOneNativeSQLMode(t *testing.T) {
 
 func TestParserSQLModeCombinations(t *testing.T) {
 	modes := ParserSQLModeCombinations()
-	if len(modes) != 16 {
-		t.Fatalf("ParserSQLModeCombinations() returned %d modes, want 16", len(modes))
+	if len(modes) != 32 {
+		t.Fatalf("ParserSQLModeCombinations() returned %d modes, want 32", len(modes))
 	}
 	if modes[0] != "" {
 		t.Fatalf("first parser mode = %q, want default mode", modes[0])

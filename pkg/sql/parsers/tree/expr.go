@@ -1008,6 +1008,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	isConvertUsing := strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
+	isExtract := strings.EqualFold(funcName, "extract") && len(node.Exprs) == 2
 	isGroupConcat := strings.EqualFold(funcName, "group_concat") ||
 		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat")
 	if isConvertUsing {
@@ -1018,6 +1019,10 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		} else {
 			node.Exprs[1].Format(ctx)
 		}
+	} else if isExtract {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(" from ")
+		node.Exprs[1].Format(ctx)
 	} else if isGroupConcat && len(node.Exprs) > 0 {
 		// The parser stores GROUP_CONCAT's separator as the final expression so
 		// binders can consume it uniformly. It is not a concatenated argument.
@@ -1071,7 +1076,7 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 	}
 
 	switch strings.ToLower(node.FuncName.Origin()) {
-	case "timestampdiff", "extract":
+	case "timestampdiff":
 		formatExprWithSingleQuoteDisabled(ctx, node.Exprs[0])
 		if len(node.Exprs) > 1 {
 			ctx.WriteString(", ")

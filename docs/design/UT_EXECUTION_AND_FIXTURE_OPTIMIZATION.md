@@ -1,11 +1,42 @@
 # UT 执行模型与 fixture 生命周期优化设计
 
-- 状态：Proposed for this PR，revision 8
+- 状态：Proposed for this PR，revision 9
 - 适用范围：`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 资源预算
 - 约束：不增加 runner 数量；收益必须来自单 runner 的工作删除、fixture 复用或资源有界的阶段重叠
 - 设计 owner：UT runner 与测试基础设施；各测试 package 对自己的 fixture reset/cleanup 契约负责
 - 设计门禁：跨 package、跨进程 admission、runner 取消和集群生命周期，命中 execution、ownership、resource 和 public test-contract 多个边界
 - 决策记录：revision 2 接受本 PR 的 runner 账本、取消/报告所有权和有界分片；compile-only prebuild 保留为显式 opt-in，plan overlap 复用已释放 slot 并默认开启；两者都不扩大默认 heavy 资源预算。跨进程 cluster 共享和动态调度不在本 PR；本 revision 按兼容矩阵落地了一个同进程单 CN fixture 合并，并为后续专用 fixture 增加显式释放边界。
+
+## Revision 9: branch SQL regression fixture consolidation
+
+最近两天的变更横跨 SQL function/aggregate、planner/execution、向量与索引、Arrow
+LOAD/DDL/catalog、事务与服务生命周期，以及 UT/BVT runner 基建。测试优化先按生产
+边界和 oracle 分组；本 revision 只处理其中同一普通 SQL 单 CN 合约的两个 branch 回归：
+`TestIssue26111DataBranchDatabaseWithCyclicForeignKeys` 和
+`TestIssue26114CrossAccountBranchQuotaAndOwnership`。它们从
+`pkg/tests/issues/isolated` 迁入已有的 `pkg/tests/sqlintegration` canonical fixture，
+不改变生产代码、runner 分组、race/coverage/timeout 或 BVT 文件。
+
+两组回归的业务 oracle 原样保留：
+
+- 26111 继续验证循环外键的数据、元数据、非法写入、已有目标拒绝、跨账号可见性、
+  session `foreign_key_checks` 和 branch 可删除性；
+- 26114 继续验证 table/database branch 禁用、无残留、并发 quota 的一成一败、quota
+  提高后的 metadata 数量，以及旧版 `creator=0` 元数据仍计入 quota。
+
+共享 fixture 引入了新的 reset oracle，而不是删掉业务断言。每个 26114 子场景保存并
+恢复 `mo_feature_registry` 的 `BRANCH` 完整行（包括 description、JSON scope、enabled、
+created/updated timestamp 以及原行不存在的情况），并复查恢复结果。创建的 account、
+feature-limit、branch metadata、用户 snapshot 和 branch protect snapshot 在退出时有界
+清理并检查。quota 竞争的两个 goroutine 必须先全部返回，随后才能做 catalog cleanup。
+共享 fixture 只有在场景成功且清理成功时复用；失败或恢复失败由外层 cleanup 在 fixture
+锁释放后销毁，避免 callback 内自锁和脏状态串入下一场景。restore、预算、multi-CN、
+global hook、Arrow/partition/shard/upgrade 等不兼容场景继续留在 `isolated`。
+
+删除的业务 case 数量为零；删除的只是跨 package 的重复生命周期 wrapper 和旧文件定义。
+现有 feature-limit branch BVT 仍负责真实 frontend/public SQL contract，因此本 revision
+不新增重复 BVT。收益必须以同一 CGo、race、tag、topology 和 runner 配置的 before/after
+测量确认；CI admission 累计等待不能直接计为 wall-time 节省。
 
 ## Revision 8: timeout observability for partial UT runs
 
@@ -185,3 +216,39 @@ fixture，避免同时持有两个 complete cluster，且不改变现有 admissi
 3. 本 revision：按兼容矩阵迁移一小批可复用 fixture，并提供 fixture/关键路径 before-after；后续继续逐组验证，不跨越不同 topology 或 global hook 合并。
 4. 后续 PR：清理慢测试的重复 setup、无契约等待和过大数据，逐项保留 oracle 证明。
 5. 后续 PR：静态 shard/runner 资源 A/B；只有证据支持时再考虑跨进程共享 cluster。
+
+### Compatible SQL fixture consolidation
+
+`pkg/tests/sqlintegration` owns the former DDL and transaction-executor tests.
+Both packages used the same canonical single-CN fixture, but separate Go test
+processes initialized it twice. Keeping these seven test functions in one
+package removes one complete startup per package invocation. Test names,
+assertions, data sizes, topology, race instrumentation, and the existing CDC
+external-MySQL CI skip are preserved. The embedded lane discovers the new
+package through its transitive dependency on `pkg/embed`; no explicit package
+allowlist or additional runner is required. Coverage continues to execute these
+tests through normal Go package discovery.
+
+Scenarios execute sequentially under the canonical fixture lock. Test-created
+databases are dropped through the CN's MySQL frontend with a fresh bounded
+context before the callback releases that lock. A failed test (including cleanup
+failure) closes the fixture before the next scenario. `TestMain` closes the
+successful fixture after all repetitions. Existing PITR and role assertions and
+cleanup remain in place. The `scenario-body` setup event separates callback and
+cleanup time from the first test's shared startup cost; it is nested timing,
+not an independent wall-time saving.
+
+Configuration compatibility limits consolidation: Arrow LOAD cases retain
+different gates, materialization settings, topologies and restart ownership;
+partition and shard suites retain different service/heartbeat configurations;
+upgrade tests retain catalog-mutation isolation. Sharing those merely because
+they use embedded clusters would change the test contract.
+
+The report installer reuses an executable only when Go build metadata matches
+the pinned module version and contains no replacement. Stale, unreadable or
+missing metadata takes the existing bounded installation/retry path. The CI
+builder also warms that version's module/build caches. Installation savings are
+conditional on a reusable binary or restored caches; refreshing the builder is
+required to gain its new cache contents. Neither optimization changes report
+retention or failure handling. CI critical-path savings must be measured on the
+PR; overlapping admission waits must never be added to the claimed saving.

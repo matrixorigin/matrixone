@@ -133,6 +133,40 @@ func TestIsRecordExisted(t *testing.T) {
 	}
 }
 
+func TestIsRecordExistedRejectsIncompatibleStatementInfoRecord(t *testing.T) {
+	record := []string{"12345", "", "", "sys", "admin", "", "", "", "", "", "", "", "", "2021-10-10 10:00:00", "", "", "active"}
+	tbl := &table.Table{Table: "statement_info"}
+	getDBConn := func(forceNewConn bool, randomCN bool) (*sql.DB, error) {
+		t.Fatal("incompatible records must not open a database connection")
+		return nil, nil
+	}
+
+	_, err := IsRecordExisted(context.Background(), record, tbl, getDBConn)
+	require.ErrorIs(t, err, ErrIncompatibleStatementInfoRecord)
+}
+
+func TestIsRecordExistedUsesStatementInfoColumnNames(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer db.Close()
+	tbl := &table.Table{Table: "statement_info", Columns: []table.Column{
+		{Name: "statement_id"}, {Name: "status"}, {Name: "account_id"}, {Name: "request_at"},
+	}}
+	record := []string{"id", "active", "7", "2026-01-01 00:00:00"}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS(SELECT 1 FROM `system`.statement_info WHERE statement_id = ? AND status = ? AND request_at = ? AND account_id = ?)")).WithArgs("id", "active", record[3], uint32(7)).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	getDBConn := func(bool, bool) (*sql.DB, error) { return db, nil }
+	exists, err := IsRecordExisted(context.Background(), record, tbl, getDBConn)
+	require.NoError(t, err)
+	require.True(t, exists)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestIsRecordExistedRejectsSchemaLengthMismatch(t *testing.T) {
+	tbl := &table.Table{Table: "statement_info", Columns: []table.Column{{Name: "account_id"}}}
+	_, err := IsRecordExisted(context.Background(), []string{"id", "extra"}, tbl, nil)
+	require.ErrorIs(t, err, ErrIncompatibleStatementInfoRecord)
+}
+
 func TestSetLabelSelector(t *testing.T) {
 	type args struct {
 		labels map[string]string

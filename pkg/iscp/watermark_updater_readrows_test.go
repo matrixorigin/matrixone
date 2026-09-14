@@ -19,6 +19,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
@@ -318,6 +319,54 @@ func TestRenameSourcePreservesMaterializedViewTargetAndIndexJobIdentity(t *testi
 	}
 	require.Contains(t, updates[0], "job_id = 11")
 	require.Contains(t, updates[1], "job_id = 33")
+}
+
+func TestUnregisterJobPropagatesRetryableErrorWithoutLocalRetry(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		oldExecWithResult := ExecWithResult
+		defer func() { ExecWithResult = oldExecWithResult }()
+
+		mp := mpool.MustNewZero()
+		defer func() {
+			require.Equal(t, int64(0), mp.CurrNB())
+			mpool.DeleteMPool(mp)
+		}()
+
+		retryErr := moerr.NewTxnNeedRetryNoCtx()
+		calls := 0
+		ExecWithResult = func(_ context.Context, sql string, _ string, _ client.TxnOperator) (executor.Result, error) {
+			calls++
+			switch calls {
+			case 1:
+				require.Contains(t, sql, "SELECT rel_id")
+				result := executor.NewMemResult([]types.Type{types.T_uint64.ToType(), types.T_uint64.ToType()}, mp)
+				result.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{11}))
+				require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{12}))
+				return result.GetResult(), nil
+			case 2:
+				require.Contains(t, sql, "SELECT drop_at, job_id")
+				result := executor.NewMemResult([]types.Type{types.T_timestamp.ToType(), types.T_uint64.ToType()}, mp)
+				result.NewBatchWithRowCount(1)
+				require.NoError(t, executor.AppendFixedRows(result, 0, []types.Timestamp{0}))
+				require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{13}))
+				res := result.GetResult()
+				res.Batches[0].Vecs[0].SetNull(0)
+				return res, nil
+			case 3:
+				require.Contains(t, sql, "UPDATE mo_catalog.mo_iscp_log SET drop_at = now()")
+				return executor.Result{}, retryErr
+			default:
+				t.Fatalf("unexpected local retry: SQL execution %d: %s", calls, sql)
+				return executor.Result{}, nil
+			}
+		}
+
+		ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(7))
+		_, err := UnregisterJob(ctx, "", nil, &JobID{DBName: "db", TableName: "tbl", JobName: "job"})
+		require.Same(t, retryErr, err)
+		require.Equal(t, 3, calls)
+	})
 }
 
 func newTableIDResult(t *testing.T, tableIDBatches, dbIDBatches [][]uint64) (executor.Result, *mpool.MPool) {

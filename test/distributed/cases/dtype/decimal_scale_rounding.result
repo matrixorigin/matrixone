@@ -1,0 +1,39 @@
+select
+round(cast('1.499999999999999999999999999999' as decimal(38,30)), 0) as d128_positive,
+round(cast('-1.499999999999999999999999999999' as decimal(38,30)), 0) as d128_negative,
+round(cast('1.499999999999999999999999999999' as decimal(65,30)), 0) as d256_positive,
+round(cast('-1.499999999999999999999999999999' as decimal(65,30)), 0) as d256_negative;
+➤ d128_positive[3,38,0]  ¦  d128_negative[3,38,0]  ¦  d256_positive[3,65,0]  ¦  d256_negative[3,65,0]  𝄀
+1  ¦  -1  ¦  1  ¦  -1
+select
+cast('0.499999999999999999999999999999' as decimal(38,30))
+* cast('0.000000000000000000000000000001' as decimal(38,30)) as d128_product,
+cast('0.499999999999999999999999999999' as decimal(65,30))
+* cast('0.000000000000000000000000000001' as decimal(65,30)) as d256_product;
+➤ d128_product[3,38,30]  ¦  d256_product[3,65,30]  𝄀
+0E-30  ¦  0E-30
+drop table if exists issue28772_decimal_rounding;
+create table issue28772_decimal_rounding (
+id int primary key,
+d128 decimal(38,0),
+d256 decimal(65,0)
+);
+insert into issue28772_decimal_rounding
+select 1,
+round(cast('1.499999999999999999999999999999' as decimal(38,30)), 0),
+round(cast('1.499999999999999999999999999999' as decimal(65,30)), 0)
+union all
+select 2,
+round(cast('-1.499999999999999999999999999999' as decimal(38,30)), 0),
+round(cast('-1.499999999999999999999999999999' as decimal(65,30)), 0);
+select id, d128, d256 from issue28772_decimal_rounding order by id;
+➤ id[4,32,0]  ¦  d128[3,38,0]  ¦  d256[3,65,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  -1  ¦  -1
+select count(*) as incorrect_persisted_results
+from issue28772_decimal_rounding
+where (id = 1 and (d128 <> 1 or d256 <> 1))
+or (id = 2 and (d128 <> -1 or d256 <> -1));
+➤ incorrect_persisted_results[-5,64,0]  𝄀
+0
+drop table issue28772_decimal_rounding;
