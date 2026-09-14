@@ -2160,6 +2160,16 @@ def _kill_execution_process(process: subprocess.Popen) -> None:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except PermissionError:
+                # A process-group kill can be denied during a platform or
+                # teardown race even though the worker still owns the leader.
+                # Kill the Popen child directly so the handler slot is not
+                # stranded; the parent-liveness watchdog remains responsible
+                # for descendants when the group cannot be addressed here.
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
     elif process.poll() is None:
         process.kill()
     try:
