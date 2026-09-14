@@ -370,9 +370,9 @@ EXECUTE export_set_group USING @export_set_bits;
 
 # 数字 peer 在 PREPARE 隐式字符串转换/折叠后保留来源；NULLIF 的两个副本均须刷新。
 PREPARE export_set_coalesce FROM
-  "SELECT EXPORT_SET((SELECT COALESCE(x,1.0) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS coalesce_bits";
+  "SELECT EXPORT_SET((SELECT COALESCE(x,1.5) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS coalesce_bits";
 PREPARE export_set_nullif FROM
-  "SELECT EXPORT_SET((SELECT NULLIF(COALESCE(x,1.0),0) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS nullif_bits";
+  "SELECT EXPORT_SET((SELECT NULLIF(COALESCE(x,1.5),0) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS nullif_bits";
 PREPARE export_set_nullif_equal FROM
   "SELECT EXPORT_SET((SELECT NULLIF(x,1.0) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS nullif_equal_bits";
 PREPARE export_set_peer_controls FROM
@@ -398,6 +398,12 @@ EXECUTE export_set_coalesce USING @export_set_bits;
 EXECUTE export_set_nullif USING @export_set_bits;
 EXECUTE export_set_nullif_equal USING @export_set_bits;
 EXECUTE export_set_group USING @export_set_bits;
+# 自动元数据重编译不能清除已建立的参数域。
+ALTER TABLE export_set_scalar_input ADD COLUMN null_domain_extra INT;
+EXECUTE export_set_coalesce USING @export_set_bits;
+EXECUTE export_set_nullif USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_coalesce USING @export_set_bits;
 TRUNCATE TABLE export_set_scalar_input;
 SET @export_set_bits = CAST(2.5 AS DOUBLE);
 EXECUTE export_set_where USING @export_set_bits;
@@ -411,6 +417,46 @@ DEALLOCATE PREPARE export_set_coalesce;
 DEALLOCATE PREPARE export_set_nullif;
 DEALLOCATE PREPARE export_set_nullif_equal;
 DEALLOCATE PREPARE export_set_peer_controls;
+
+# 首次 NULL 不建立数值域；已建立的 DECIMAL/DOUBLE 域跨 NULL 保持。
+PREPARE export_set_scalar_null FROM
+  "SELECT EXPORT_SET(COALESCE((SELECT ?),1.5),'Y','N','',4) AS scalar_null_bits";
+SET @export_set_bits = NULL;
+EXECUTE export_set_scalar_null USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_scalar_null USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_scalar_null USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_scalar_null USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_scalar_null USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_scalar_null USING @export_set_bits;
+DEALLOCATE PREPARE export_set_scalar_null;
+PREPARE export_set_scalar_null FROM
+  "SELECT EXPORT_SET(COALESCE((SELECT ?),1.5),'Y','N','',4) AS scalar_null_bits";
+SET @export_set_bits = NULL;
+EXECUTE export_set_scalar_null USING @export_set_bits;
+DEALLOCATE PREPARE export_set_scalar_null;
+
+# 2.5 进一步区分记住的 DECIMAL 半入与 DOUBLE 偶数舍入，不能统一记成一种数值类型。
+PREPARE export_set_null_rounding FROM
+  "SELECT EXPORT_SET(COALESCE((SELECT ?),2.5),'Y','N','',4) AS null_rounding_bits";
+EXECUTE export_set_null_rounding USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_null_rounding USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_null_rounding USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_null_rounding USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_null_rounding USING @export_set_bits;
+DEALLOCATE PREPARE export_set_null_rounding;
+PREPARE export_set_null_cast FROM
+  "SELECT EXPORT_SET(CAST(COALESCE((SELECT ?),1.5) AS DECIMAL(4,1)),'Y','N','',4) AS null_cast_bits";
+EXECUTE export_set_null_cast USING @export_set_bits;
+DEALLOCATE PREPARE export_set_null_cast;
 
 DROP TABLE export_set_scalar_input;
 

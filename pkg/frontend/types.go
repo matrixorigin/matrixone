@@ -387,6 +387,12 @@ type PrepareStmt struct {
 	// belongs to the current prepared-plan generation. A zero entry means that
 	// the corresponding BIT_COUNT marker has not observed a numeric value.
 	bitCountNumericParamTypes []types.Type
+	// EXPORT_SET NULL bindings reuse the last concrete numeric source domain.
+	// Positions follow the current plan; types belong to this statement and
+	// survive automatic rebuilds. Both are bounded by its marker count and
+	// neither stores parameter values nor mutates PreparePlan.
+	exportSetParamPositions []int32
+	exportSetParamTypes     []types.Type
 	// conversionParamPositions identifies BIN/CONV value markers once per
 	// prepared-plan generation. SQL EXECUTE uses it to restore the variable's
 	// concrete domain without walking the plan for every execution.
@@ -875,6 +881,8 @@ func (prepareStmt *PrepareStmt) Close() {
 	}
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
+	prepareStmt.exportSetParamPositions = nil
+	prepareStmt.exportSetParamTypes = nil
 	prepareStmt.remapDb = nil
 }
 

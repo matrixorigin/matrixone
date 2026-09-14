@@ -3680,11 +3680,28 @@ func PreparedLagLeadParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
-func markPreparedExportSetLineage(plan0 *Plan) {
+// PreparedPlanExportSetParamPositions identifies markers whose result domains
+// are owned by EXPORT_SET, excluding explicit CAST boundaries. The cached plan
+// is immutable; source annotations belong to a private scan copy.
+func PreparedPlanExportSetParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	positions := markPreparedExportSetLineage(DeepCopyPlan(preparePlan))
+	result := make([]int32, 0, len(positions))
+	for pos := range positions {
+		result = append(result, pos)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func markPreparedExportSetLineage(plan0 *Plan) map[int32]struct{} {
 	query := plan0.GetQuery()
 	if query == nil {
-		return
+		return nil
 	}
+	allPositions := make(map[int32]struct{})
 	for nodeID, node := range query.Nodes {
 		// Share the physical-expression inventory with sequence detection, but
 		// never short-circuit: every EXPORT_SET consumer needs its own lineage.
@@ -3695,12 +3712,16 @@ func markPreparedExportSetLineage(plan0 *Plan) {
 					positions := make(map[int32]struct{})
 					collectPreparedExportSetSources(query, fn.Args[0], int32(nodeID), positions,
 						make(map[directResultTraceKey]struct{}), make(map[int32]struct{}))
+					for pos := range positions {
+						allPositions[pos] = struct{}{}
+					}
 				}
 				return nil
 			})
 			return false
 		})
 	}
+	return allPositions
 }
 
 func isExplicitPreparedLineageCast(expr *plan.Expr) bool {
@@ -6563,8 +6584,9 @@ func replaceParamValsWithSelection(
 		}
 	}
 
-	markPreparedExportSetLineage(plan0)
+	exportSetPositions := markPreparedExportSetLineage(plan0)
 	paramRule := NewResetParamRefRule(ctx, params)
+	paramRule.exportSetParamPositions = exportSetPositions
 	paramRule.sqlExecuteNumericParams = sqlExecuteNumericParams
 	paramRule.sqlExecuteStringBackedParams = sqlExecuteStringBackedParams
 	paramRule.setPreparedPlan(plan0)
@@ -6619,7 +6641,9 @@ func replaceParamValsWithSelection(
 			if param.HasRuntimeType && param.RuntimeType.Oid == types.T_text {
 				paramRule.inferTextParamTypes = true
 			}
-			if param.EnableNumericPrefix && numericPrefixPositions[i] {
+			_, exportSet := exportSetPositions[int32(i)]
+			untypedExportSetNull := exportSet && params[i].GetLit().GetIsnull() && types.T(params[i].Typ.Id) == types.T_text
+			if param.EnableNumericPrefix && numericPrefixPositions[i] && !untypedExportSetNull {
 				paramRule.numericPrefixParamPositions[i] = true
 				paramRule.numericPrefixParamKinds[i] = param.PrepareParamKind
 				// The numeric-prefix capability is the stronger execute-time

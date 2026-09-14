@@ -331,8 +331,9 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		fixedIntegerParamPositions: fixedIntegerParamPositions,
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
 			preparePlan.GetDcl().GetPrepare().Plan),
-		hasPaginationParams: hasPaginationParams,
-		hasLagLeadParams:    hasLagLeadParams,
+		exportSetParamPositions: plan2.PreparedPlanExportSetParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
+		hasPaginationParams:     hasPaginationParams,
+		hasLagLeadParams:        hasLagLeadParams,
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		preparePlan.GetDcl().GetPrepare().Plan,

@@ -592,9 +592,9 @@ EXECUTE export_set_group USING @export_set_bits;
 ➤ group_bits[12,64,0]  ¦  grouped_rows[-5,64,0]  𝄀
 NYNN  ¦  2
 PREPARE export_set_coalesce FROM
-"SELECT EXPORT_SET((SELECT COALESCE(x,1.0) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS coalesce_bits";
+"SELECT EXPORT_SET((SELECT COALESCE(x,1.5) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS coalesce_bits";
 PREPARE export_set_nullif FROM
-"SELECT EXPORT_SET((SELECT NULLIF(COALESCE(x,1.0),0) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS nullif_bits";
+"SELECT EXPORT_SET((SELECT NULLIF(COALESCE(x,1.5),0) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS nullif_bits";
 PREPARE export_set_nullif_equal FROM
 "SELECT EXPORT_SET((SELECT NULLIF(x,1.0) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS nullif_equal_bits";
 PREPARE export_set_peer_controls FROM
@@ -640,16 +640,27 @@ YYNN
 SET @export_set_bits = NULL;
 EXECUTE export_set_coalesce USING @export_set_bits;
 ➤ coalesce_bits[12,64,0]  𝄀
-YNNN
+NYNN
 EXECUTE export_set_nullif USING @export_set_bits;
 ➤ nullif_bits[12,64,0]  𝄀
-YNNN
+NYNN
 EXECUTE export_set_nullif_equal USING @export_set_bits;
 ➤ nullif_equal_bits[12,64,0]  𝄀
 null
 EXECUTE export_set_group USING @export_set_bits;
 ➤ group_bits[12,64,0]  ¦  grouped_rows[-5,64,0]  𝄀
 null  ¦  2
+ALTER TABLE export_set_scalar_input ADD COLUMN null_domain_extra INT;
+EXECUTE export_set_coalesce USING @export_set_bits;
+➤ coalesce_bits[12,64,0]  𝄀
+NYNN
+EXECUTE export_set_nullif USING @export_set_bits;
+➤ nullif_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_coalesce USING @export_set_bits;
+➤ coalesce_bits[12,64,0]  𝄀
+YYNN
 TRUNCATE TABLE export_set_scalar_input;
 SET @export_set_bits = CAST(2.5 AS DOUBLE);
 EXECUTE export_set_where USING @export_set_bits;
@@ -658,10 +669,10 @@ EXECUTE export_set_having USING @export_set_bits;
 ➤ matching_rows[-5,64,0]
 EXECUTE export_set_coalesce USING @export_set_bits;
 ➤ coalesce_bits[12,64,0]  𝄀
-YNNN
+NYNN
 EXECUTE export_set_nullif USING @export_set_bits;
 ➤ nullif_bits[12,64,0]  𝄀
-YNNN
+NYNN
 DEALLOCATE PREPARE export_set_where;
 DEALLOCATE PREPARE export_set_having;
 DEALLOCATE PREPARE export_set_group;
@@ -669,5 +680,67 @@ DEALLOCATE PREPARE export_set_coalesce;
 DEALLOCATE PREPARE export_set_nullif;
 DEALLOCATE PREPARE export_set_nullif_equal;
 DEALLOCATE PREPARE export_set_peer_controls;
+PREPARE export_set_scalar_null FROM
+"SELECT EXPORT_SET(COALESCE((SELECT ?),1.5),'Y','N','',4) AS scalar_null_bits";
+SET @export_set_bits = NULL;
+EXECUTE export_set_scalar_null USING @export_set_bits;
+➤ scalar_null_bits[12,64,0]  𝄀
+YNNN
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_scalar_null USING @export_set_bits;
+➤ scalar_null_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = NULL;
+EXECUTE export_set_scalar_null USING @export_set_bits;
+➤ scalar_null_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_scalar_null USING @export_set_bits;
+➤ scalar_null_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = NULL;
+EXECUTE export_set_scalar_null USING @export_set_bits;
+➤ scalar_null_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_scalar_null USING @export_set_bits;
+➤ scalar_null_bits[12,64,0]  𝄀
+YYNN
+DEALLOCATE PREPARE export_set_scalar_null;
+PREPARE export_set_scalar_null FROM
+"SELECT EXPORT_SET(COALESCE((SELECT ?),1.5),'Y','N','',4) AS scalar_null_bits";
+SET @export_set_bits = NULL;
+EXECUTE export_set_scalar_null USING @export_set_bits;
+➤ scalar_null_bits[12,64,0]  𝄀
+YNNN
+DEALLOCATE PREPARE export_set_scalar_null;
+PREPARE export_set_null_rounding FROM
+"SELECT EXPORT_SET(COALESCE((SELECT ?),2.5),'Y','N','',4) AS null_rounding_bits";
+EXECUTE export_set_null_rounding USING @export_set_bits;
+➤ null_rounding_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_null_rounding USING @export_set_bits;
+➤ null_rounding_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = NULL;
+EXECUTE export_set_null_rounding USING @export_set_bits;
+➤ null_rounding_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_null_rounding USING @export_set_bits;
+➤ null_rounding_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = NULL;
+EXECUTE export_set_null_rounding USING @export_set_bits;
+➤ null_rounding_bits[12,64,0]  𝄀
+NYNN
+DEALLOCATE PREPARE export_set_null_rounding;
+PREPARE export_set_null_cast FROM
+"SELECT EXPORT_SET(CAST(COALESCE((SELECT ?),1.5) AS DECIMAL(4,1)),'Y','N','',4) AS null_cast_bits";
+EXECUTE export_set_null_cast USING @export_set_bits;
+➤ null_cast_bits[12,64,0]  𝄀
+NYNN
+DEALLOCATE PREPARE export_set_null_cast;
 DROP TABLE export_set_scalar_input;
 DROP TABLE export_set_numeric_bits;

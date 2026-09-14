@@ -429,6 +429,9 @@ type ResetParamRefRule struct {
 	ctx      context.Context
 	params   []*Expr
 	exprMemo map[*plan.Expr]*plan.Expr
+	// EXPORT_SET's prepare-time numeric context does not establish a domain
+	// for a first, untyped NULL execution.
+	exportSetParamPositions map[int32]struct{}
 	// preserveRoots contains DML write expressions whose outer shape must
 	// remain stable while nested parameters are rebound.  The write operator
 	// consumes these expressions positionally; rebuilding the outer function
@@ -1003,6 +1006,14 @@ func (rule *ResetParamRefRule) typedDecimalParamExpr(pos int32) (*Expr, bool, er
 }
 
 func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, error) {
+	if pos >= 0 && pos < len(rule.params) && rule.params[pos].GetLit().GetIsnull() &&
+		preparedExportSetRuntimeNumericSource(rule.params[pos]) {
+		// A typed NULL may carry a domain established by an earlier execution.
+		// Its lack of a value must not force the provisional PREPARE cast back.
+		bound := DeepCopyExpr(rule.params[pos])
+		rule.retainRuntimeParamRef(pos, bound)
+		return bound, true, nil
+	}
 	if bound, ok := rule.typedIntegerParamExpr(int32(pos)); ok {
 		return bound, true, nil
 	}
@@ -1800,6 +1811,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		functionName := ""
 		if exprImpl.F.Func != nil {
 			functionName = exprImpl.F.Func.GetObjName()
+		}
+		if functionName == "cast" && !isExplicitPreparedLineageCast(e) {
+			_, overload := planfunction.DecodeOverloadID(exprImpl.F.Func.GetObj())
+			if param, ok := implicitPreparedParam(e); ok && overload == 0 {
+				_, exportSet := rule.exportSetParamPositions[param.Pos]
+				if pos := int(param.Pos); exportSet && pos >= 0 && pos < len(rule.params) &&
+					rule.params[pos].GetLit().GetIsnull() && types.T(rule.params[pos].Typ.Id) == types.T_text {
+					// Discard only the temporary numeric envelope; an explicit
+					// user CAST remains authoritative even when its value is NULL.
+					rule.specialized = true
+					return DeepCopyExpr(rule.params[pos]), nil
+				}
+			}
 		}
 		if strings.EqualFold(functionName, "bit_count") && len(exprImpl.F.Args) == 1 &&
 			isPreparedNumericFallbackExpr(exprImpl.F.Args[0]) &&

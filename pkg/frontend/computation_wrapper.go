@@ -1441,6 +1441,7 @@ func initExecuteStmtParamWithResolverInSession(
 		// rebuilt plan has resolved against fresh metadata and must not inherit a
 		// numeric BIT_COUNT category selected by the preceding generation.
 		prepareStmt.bitCountNumericParamTypes = nil
+		prepareStmt.refreshExportSetParamPositions(newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		prepareStmt.refreshFixedIntegerParamPositions(newPreparePlan.Plan)
 		if hasPreparedGroupConcat {
 			pendingGroupConcatColDefData = newColDefData
@@ -1749,6 +1750,7 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	prepareStmt.applyExportSetNullRuntimeTypes(cwft.paramVals)
 	if !binaryExecute && executionPlan.GetQuery() != nil {
 		// SQL EXECUTE values are already decoded as ParamValue.  The prepared
 		// plan's cached prefix-consumer bit is sufficient to decide whether the

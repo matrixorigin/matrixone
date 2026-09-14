@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -50,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	util "github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -781,6 +783,41 @@ func TestMigrateConnectionFromRejectsOversizedTemporaryTableSnapshot(t *testing.
 	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
 	require.Empty(t, resp.TempTables)
 	require.False(t, resp.TempTableStateExported)
+}
+
+func TestMigrateConnectionFromPreservesExportSetDomain(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	prepared := &PrepareStmt{Name: GetPrepareStmtName(42), exportSetParamPositions: []int32{0}}
+	require.NoError(t, ses.SetPrepareStmt(context.Background(), prepared.Name, prepared))
+	t.Cleanup(func() { ses.RemovePrepareStmt(prepared.Name) })
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+	for _, tc := range []struct {
+		value   any
+		blocked bool
+	}{
+		{nil, false},
+		{planbuilder.ParamValue{Value: 2.5, RuntimeType: types.T_float64.ToType(), HasRuntimeType: true}, true},
+		{nil, true},
+		{planbuilder.ParamValue{Value: "text", SourceType: types.T_text.ToType(), HasSourceType: true}, false},
+		{nil, false},
+	} {
+		prepared.applyExportSetNullRuntimeTypes([]any{tc.value})
+		resp := &query.MigrateConnFromResponse{}
+		err := rt.migrateConnectionFrom(resp)
+		if tc.blocked {
+			require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+			require.Empty(t, resp.PrepareStmts, "no lossy prepared state may be exported")
+		} else {
+			require.NoError(t, err)
+			require.Len(t, resp.PrepareStmts, 1)
+		}
+	}
+	require.True(t, ses.RemovePrepareStmt(prepared.Name))
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.Empty(t, resp.PrepareStmts)
 }
 
 func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {
