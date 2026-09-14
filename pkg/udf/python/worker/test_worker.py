@@ -1282,6 +1282,18 @@ class WorkerContractTest(unittest.TestCase):
         self.assertEqual(worker.HANDLER_ARROW_RECORD_BATCH, request["arrow_encoding"])
         self.assertEqual(b"arrow-payload", bytes(request["input"].raw()))
 
+    def test_handler_request_reader_keeps_readinto_payload_as_pickle_buffer(self):
+        parts, _ = worker._encode_execution_request(
+            {
+                "arrow_encoding": worker.HANDLER_ARROW_RECORD_BATCH,
+                "input": b"arrow-payload",
+            }
+        )
+        request = worker._read_execution_request(io.BytesIO(b"".join(parts)))
+        self.assertIsInstance(request["input"], pickle.PickleBuffer)
+        self.assertEqual(b"arrow-payload", bytes(request["input"].raw()))
+        self.assertTrue(request["input"].raw().readonly)
+
     def test_handler_request_encoder_rejects_non_contiguous_arrow_buffer(self):
         with self.assertRaisesRegex(ValueError, "cannot encode execution request"):
             worker._encode_execution_request(
