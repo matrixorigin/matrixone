@@ -166,6 +166,24 @@ func TestExternalRoutineEvalRejectsSelectionWithWrongRowDomain(t *testing.T) {
 	require.ErrorContains(t, err, "selection has 2 rows, expected 1")
 }
 
+func TestExternalRoutineEvalRejectsSelectionForEmptyRowDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	input := vector.NewVec(types.T_int64.ToType())
+	defer input.Free(proc.Mp())
+	evaluator, err := newExternalRoutineEval(proc, testExternalRoutineCall(t, "SCALAR", udf.NullCallHandler), []ExpressionExecutor{
+		&externalRoutineTestExecutor{vector: input},
+	}, nil)
+	require.NoError(t, err)
+	defer evaluator.Free()
+
+	emptyBatch := batch.NewWithSize(0)
+	emptyBatch.SetRowCount(0)
+	_, err = evaluator.Eval(proc, []*batch.Batch{emptyBatch}, []bool{true})
+	require.ErrorContains(t, err, "selection has 1 rows, expected 0")
+}
+
 func TestNewExpressionExecutorDispatchesTypedRoutineCall(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
