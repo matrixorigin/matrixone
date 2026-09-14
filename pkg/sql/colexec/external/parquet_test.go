@@ -1920,6 +1920,10 @@ func TestParquetCrossTypeHelperCoverage(t *testing.T) {
 	micros, err = parquetTimestampValueToMicros(ctx, parquet.Int64Value(3), parquet.Timestamp(parquet.Millisecond).Type().LogicalType())
 	require.NoError(t, err)
 	require.Equal(t, int64(3000), micros)
+	_, err = parquetTimestampValueToMicros(ctx, parquet.Int64Value(math.MaxInt64), parquet.Timestamp(parquet.Millisecond).Type().LogicalType())
+	require.ErrorContains(t, err, "overflows microseconds")
+	_, err = parquetTimestampValueToMicros(ctx, parquet.Int64Value(math.MinInt64), parquet.Timestamp(parquet.Millisecond).Type().LogicalType())
+	require.ErrorContains(t, err, "overflows microseconds")
 
 	_, err = parquetTimestampValueToDatetime(ctx, parquet.TimestampAdjusted(parquet.Microsecond, false).Type(), parquet.Int64Value(1), time.UTC)
 	require.NoError(t, err)

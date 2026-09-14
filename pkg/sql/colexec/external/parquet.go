@@ -3650,7 +3650,12 @@ func parquetTimestampValueToMicros(ctx context.Context, v parquet.Value, lt *for
 	case lt.Timestamp.Unit.Micros != nil:
 		return v.Int64(), nil
 	case lt.Timestamp.Unit.Millis != nil:
-		return v.Int64() * 1000, nil
+		millis := v.Int64()
+		if millis > math.MaxInt64/1000 || millis < math.MinInt64/1000 {
+			return 0, moerr.NewInvalidInputf(ctx,
+				"parquet timestamp %d milliseconds overflows microseconds", millis)
+		}
+		return millis * 1000, nil
 	}
 	return 0, moerr.NewInvalidInput(ctx, "missing parquet timestamp unit")
 }
