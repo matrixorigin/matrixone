@@ -434,10 +434,10 @@ YYYY
 SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
 EXECUTE export_set_union_sorted USING @export_set_bits;
 ➤ union_sorted_bits[12,64,0]  𝄀
-YYNN
+NYNN
 EXECUTE export_set_aggregate USING @export_set_bits;
 ➤ aggregate_bits[12,64,0]  𝄀
-YYNN
+NYNN
 TRUNCATE TABLE export_set_scalar_input;
 EXECUTE export_set_aggregate USING @export_set_bits;
 ➤ aggregate_bits[12,64,0]  𝄀
@@ -485,10 +485,10 @@ YYYY
 SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
 EXECUTE export_set_deep_aggregate USING @export_set_bits;
 ➤ deep_aggregate_bits[12,64,0]  𝄀
-YYNN
+NYNN
 EXECUTE export_set_aggregate_window USING @export_set_bits;
 ➤ aggregate_window_bits[12,64,0]  𝄀
-YYNN
+NYNN
 PREPARE export_set_aggregate_union FROM
 "SELECT EXPORT_SET((SELECT MAX(?) AS x FROM export_set_scalar_input UNION ALL SELECT 2 ORDER BY x DESC LIMIT 1), 'Y', 'N', '', 4) AS aggregate_union_bits";
 PREPARE export_set_aggregate_union_reverse FROM
@@ -533,10 +533,10 @@ YYYY
 SET @export_set_bits = CAST(10.5 AS DECIMAL(4,1));
 EXECUTE export_set_aggregate_union USING @export_set_bits;
 ➤ aggregate_union_bits[12,64,0]  𝄀
-YYNY
+NYNY
 EXECUTE export_set_aggregate_union_reverse USING @export_set_bits;
 ➤ aggregate_union_reverse_bits[12,64,0]  𝄀
-YYNY
+NYNY
 TRUNCATE TABLE export_set_scalar_input;
 EXECUTE export_set_deep_aggregate USING @export_set_bits;
 ➤ deep_aggregate_bits[12,64,0]  𝄀
@@ -577,12 +577,15 @@ EXECUTE export_set_group USING @export_set_bits;
 NYNN  ¦  2
 SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
 EXECUTE export_set_where USING @export_set_bits;
-➤ id[4,32,0]
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
 EXECUTE export_set_having USING @export_set_bits;
-➤ matching_rows[-5,64,0]
+➤ matching_rows[-5,64,0]  𝄀
+2
 EXECUTE export_set_group USING @export_set_bits;
 ➤ group_bits[12,64,0]  ¦  grouped_rows[-5,64,0]  𝄀
-YYNN  ¦  2
+NYNN  ¦  2
 SET @export_set_bits = CAST(2.5 AS DOUBLE);
 EXECUTE export_set_where USING @export_set_bits;
 ➤ id[4,32,0]  𝄀
@@ -633,10 +636,10 @@ null
 SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
 EXECUTE export_set_coalesce USING @export_set_bits;
 ➤ coalesce_bits[12,64,0]  𝄀
-YYNN
+NYNN
 EXECUTE export_set_nullif USING @export_set_bits;
 ➤ nullif_bits[12,64,0]  𝄀
-YYNN
+NYNN
 SET @export_set_bits = NULL;
 EXECUTE export_set_coalesce USING @export_set_bits;
 ➤ coalesce_bits[12,64,0]  𝄀
@@ -653,10 +656,10 @@ null  ¦  2
 ALTER TABLE export_set_scalar_input ADD COLUMN null_domain_extra INT;
 EXECUTE export_set_coalesce USING @export_set_bits;
 ➤ coalesce_bits[12,64,0]  𝄀
-NYNN
+YNNN
 EXECUTE export_set_nullif USING @export_set_bits;
 ➤ nullif_bits[12,64,0]  𝄀
-NYNN
+YNNN
 SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
 EXECUTE export_set_coalesce USING @export_set_bits;
 ➤ coalesce_bits[12,64,0]  𝄀
@@ -705,7 +708,7 @@ NYNN
 SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
 EXECUTE export_set_scalar_null USING @export_set_bits;
 ➤ scalar_null_bits[12,64,0]  𝄀
-YYNN
+NYNN
 DEALLOCATE PREPARE export_set_scalar_null;
 PREPARE export_set_scalar_null FROM
 "SELECT EXPORT_SET(COALESCE((SELECT ?),1.5),'Y','N','',4) AS scalar_null_bits";
@@ -735,6 +738,14 @@ SET @export_set_bits = NULL;
 EXECUTE export_set_null_rounding USING @export_set_bits;
 ➤ null_rounding_bits[12,64,0]  𝄀
 NYNN
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_null_rounding USING @export_set_bits;
+➤ null_rounding_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = NULL;
+EXECUTE export_set_null_rounding USING @export_set_bits;
+➤ null_rounding_bits[12,64,0]  𝄀
+NYNN
 DEALLOCATE PREPARE export_set_null_rounding;
 PREPARE export_set_null_cast FROM
 "SELECT EXPORT_SET(CAST(COALESCE((SELECT ?),1.5) AS DECIMAL(4,1)),'Y','N','',4) AS null_cast_bits";
@@ -742,5 +753,135 @@ EXECUTE export_set_null_cast USING @export_set_bits;
 ➤ null_cast_bits[12,64,0]  𝄀
 NYNN
 DEALLOCATE PREPARE export_set_null_cast;
+PREPARE export_set_direct_domain FROM
+"SELECT EXPORT_SET(COALESCE(?,2.5),'Y','N','',4) AS direct_domain_bits";
+SET @export_set_bits = NULL;
+EXECUTE export_set_direct_domain USING @export_set_bits;
+➤ direct_domain_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_direct_domain USING @export_set_bits;
+➤ direct_domain_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_direct_domain USING @export_set_bits;
+➤ direct_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_direct_domain USING @export_set_bits;
+➤ direct_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = NULL;
+EXECUTE export_set_direct_domain USING @export_set_bits;
+➤ direct_domain_bits[12,64,0]  𝄀
+NYNN
+DEALLOCATE PREPARE export_set_direct_domain;
+PREPARE export_set_direct_null FROM
+"SELECT EXPORT_SET(COALESCE(?,1.5),'Y','N','',4) AS direct_null_bits";
+EXECUTE export_set_direct_null USING @export_set_bits;
+➤ direct_null_bits[12,64,0]  𝄀
+NYNN
+DEALLOCATE PREPARE export_set_direct_null;
+PREPARE export_set_string_domain FROM
+"SELECT EXPORT_SET(COALESCE((SELECT ?),2.5),'Y','N','',4) AS string_domain_bits";
+SET @export_set_bits = '2.5';
+EXECUTE export_set_string_domain USING @export_set_bits;
+➤ string_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = NULL;
+EXECUTE export_set_string_domain USING @export_set_bits;
+➤ string_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_string_domain USING @export_set_bits;
+➤ string_domain_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = '2.49';
+EXECUTE export_set_string_domain USING @export_set_bits;
+➤ string_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = NULL;
+EXECUTE export_set_string_domain USING @export_set_bits;
+➤ string_domain_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = 'abc';
+EXECUTE export_set_string_domain USING @export_set_bits;
+➤ string_domain_bits[12,64,0]  𝄀
+NNNN
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_string_domain USING @export_set_bits;
+➤ string_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = '2.5';
+EXECUTE export_set_string_domain USING @export_set_bits;
+➤ string_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_string_domain USING @export_set_bits;
+➤ string_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = NULL;
+EXECUTE export_set_string_domain USING @export_set_bits;
+➤ string_domain_bits[12,64,0]  𝄀
+NYNN
+DEALLOCATE PREPARE export_set_string_domain;
+PREPARE export_set_arithmetic_domain FROM
+"SELECT EXPORT_SET(COALESCE((SELECT ?)+0,2.5),'Y','N','',4) AS arithmetic_domain_bits";
+SET @export_set_bits = NULL;
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+➤ arithmetic_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = '2.5';
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+➤ arithmetic_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = 'abc';
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+➤ arithmetic_domain_bits[12,64,0]  𝄀
+NNNN
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+➤ arithmetic_domain_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+➤ arithmetic_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+➤ arithmetic_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = NULL;
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+➤ arithmetic_domain_bits[12,64,0]  𝄀
+NYNN
+DEALLOCATE PREPARE export_set_arithmetic_domain;
+PREPARE export_set_bare_domain FROM
+"SELECT EXPORT_SET(?,'Y','N','',4) AS bare_domain_bits";
+SET @export_set_bits = '2.5';
+EXECUTE export_set_bare_domain USING @export_set_bits;
+➤ bare_domain_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_bare_domain USING @export_set_bits;
+➤ bare_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_bare_domain USING @export_set_bits;
+➤ bare_domain_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = '2.5';
+EXECUTE export_set_bare_domain USING @export_set_bits;
+➤ bare_domain_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = '1.5x';
+EXECUTE export_set_bare_domain USING @export_set_bits;
+➤ bare_domain_bits[12,64,0]  𝄀
+YNNN
+SET @export_set_bits = NULL;
+EXECUTE export_set_bare_domain USING @export_set_bits;
+➤ bare_domain_bits[12,64,0]  𝄀
+null
+DEALLOCATE PREPARE export_set_bare_domain;
 DROP TABLE export_set_scalar_input;
 DROP TABLE export_set_numeric_bits;

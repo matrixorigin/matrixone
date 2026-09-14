@@ -1128,7 +1128,7 @@ func TestPreparedExportSetInputScalarSubqueryUsesExecuteNumericSourceType(t *tes
 			require.NoError(t, err)
 			expr := findPlanFunctionExpr(filled, "export_set")
 			require.NotNil(t, expr)
-			source := expr.GetF().Args[0]
+			source := preparedExportSetNumericSourceForTest(t, expr.GetF().Args[0])
 			require.Equal(t, int32(test.wantType), source.Typ.Id, expr.String())
 			require.NotNil(t, source.GetCol(), "scalar FROM/LIMIT semantics must remain in the plan")
 			metadata := source.GetPreparedNumeric()
@@ -1191,7 +1191,7 @@ func TestPreparedExportSetTracesNestedScalarSources(t *testing.T) {
 				require.NoError(t, err)
 				expr := findPlanFunctionExpr(filled, "export_set")
 				require.NotNil(t, expr)
-				require.True(t, test.wantType(types.T(expr.GetF().Args[0].Typ.Id)), expr.String())
+				require.True(t, test.wantType(types.T(preparedExportSetNumericSourceForTest(t, expr.GetF().Args[0]).Typ.Id)), expr.String())
 			})
 		}
 		require.Equal(t, cachedPlan, queryPlan.String(),

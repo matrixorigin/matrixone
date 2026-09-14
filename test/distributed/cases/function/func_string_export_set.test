@@ -398,7 +398,7 @@ EXECUTE export_set_coalesce USING @export_set_bits;
 EXECUTE export_set_nullif USING @export_set_bits;
 EXECUTE export_set_nullif_equal USING @export_set_bits;
 EXECUTE export_set_group USING @export_set_bits;
-# 自动元数据重编译不能清除已建立的参数域。
+# 自动元数据重编译重新解析原SQL，不沿用上一代数值域。
 ALTER TABLE export_set_scalar_input ADD COLUMN null_domain_extra INT;
 EXECUTE export_set_coalesce USING @export_set_bits;
 EXECUTE export_set_nullif USING @export_set_bits;
@@ -452,11 +452,95 @@ SET @export_set_bits = CAST(2.5 AS DOUBLE);
 EXECUTE export_set_null_rounding USING @export_set_bits;
 SET @export_set_bits = NULL;
 EXECUTE export_set_null_rounding USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_null_rounding USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_null_rounding USING @export_set_bits;
 DEALLOCATE PREPARE export_set_null_rounding;
 PREPARE export_set_null_cast FROM
   "SELECT EXPORT_SET(CAST(COALESCE((SELECT ?),1.5) AS DECIMAL(4,1)),'Y','N','',4) AS null_cast_bits";
 EXECUTE export_set_null_cast USING @export_set_bits;
 DEALLOCATE PREPARE export_set_null_cast;
+
+# 直接参数可从COALESCE的同伴推断域，与标量子查询对照。
+PREPARE export_set_direct_domain FROM
+  "SELECT EXPORT_SET(COALESCE(?,2.5),'Y','N','',4) AS direct_domain_bits";
+SET @export_set_bits = NULL;
+EXECUTE export_set_direct_domain USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_direct_domain USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_direct_domain USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_direct_domain USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_direct_domain USING @export_set_bits;
+DEALLOCATE PREPARE export_set_direct_domain;
+PREPARE export_set_direct_null FROM
+  "SELECT EXPORT_SET(COALESCE(?,1.5),'Y','N','',4) AS direct_null_bits";
+EXECUTE export_set_direct_null USING @export_set_bits;
+DEALLOCATE PREPARE export_set_direct_null;
+
+# 字符串本身不建立数值域；已有域按其转换字符串，不以最新绑定类型降级。
+PREPARE export_set_string_domain FROM
+  "SELECT EXPORT_SET(COALESCE((SELECT ?),2.5),'Y','N','',4) AS string_domain_bits";
+SET @export_set_bits = '2.5';
+EXECUTE export_set_string_domain USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_string_domain USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_string_domain USING @export_set_bits;
+SET @export_set_bits = '2.49';
+EXECUTE export_set_string_domain USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_string_domain USING @export_set_bits;
+SET @export_set_bits = 'abc';
+EXECUTE export_set_string_domain USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_string_domain USING @export_set_bits;
+SET @export_set_bits = '2.5';
+EXECUTE export_set_string_domain USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_string_domain USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_string_domain USING @export_set_bits;
+DEALLOCATE PREPARE export_set_string_domain;
+
+# 算术表达式自行转换文本/NULL，不能继承另一操作数的临时BIGINT包裹。
+PREPARE export_set_arithmetic_domain FROM
+  "SELECT EXPORT_SET(COALESCE((SELECT ?)+0,2.5),'Y','N','',4) AS arithmetic_domain_bits";
+SET @export_set_bits = NULL;
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+SET @export_set_bits = '2.5';
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+SET @export_set_bits = 'abc';
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_arithmetic_domain USING @export_set_bits;
+DEALLOCATE PREPARE export_set_arithmetic_domain;
+
+# 裸参数对照：数值读取实际域，合法数值字符串使用解析域，非法尾缀保持文本。
+PREPARE export_set_bare_domain FROM
+  "SELECT EXPORT_SET(?,'Y','N','',4) AS bare_domain_bits";
+SET @export_set_bits = '2.5';
+EXECUTE export_set_bare_domain USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_bare_domain USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_bare_domain USING @export_set_bits;
+SET @export_set_bits = '2.5';
+EXECUTE export_set_bare_domain USING @export_set_bits;
+SET @export_set_bits = '1.5x';
+EXECUTE export_set_bare_domain USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_bare_domain USING @export_set_bits;
+DEALLOCATE PREPARE export_set_bare_domain;
 
 DROP TABLE export_set_scalar_input;
 

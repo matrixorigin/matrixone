@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -24,12 +25,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPreparedExportSetNullDomainHistory(t *testing.T) {
-	for _, scalar := range []bool{true, false} {
+	for _, shape := range []string{"direct", "arithmetic", "subquery-arithmetic", "scalar", "derived"} {
+		scalar := shape != "derived"
 		sql := `select export_set(coalesce((select ?),1.5),'Y','N','',4)`
+		if shape == "direct" {
+			sql = `select export_set(coalesce(?,1.5),'Y','N','',4)`
+		}
+		if shape == "arithmetic" {
+			sql = `select export_set(coalesce(?+0,1.5),'Y','N','',4)`
+		}
+		if shape == "subquery-arithmetic" {
+			sql = `select export_set(coalesce((select ?)+0,1.5),'Y','N','',4)`
+		}
 		if !scalar {
 			sql = `select export_set((select coalesce(x,1.5) from (select max(?) as x from tpch.nation) d),'Y','N','',4)`
 		}
@@ -52,11 +64,17 @@ func TestPreparedExportSetNullDomainHistory(t *testing.T) {
 				{null: true, mysql: defines.MYSQL_TYPE_NULL, want: "YNNN"},
 				{value: "2.5", mysql: defines.MYSQL_TYPE_NEWDECIMAL, want: "YYNN", decimal: true},
 				{value: "invalid", mysql: defines.MYSQL_TYPE_NEWDECIMAL, wantErr: true},
-				{null: true, mysql: defines.MYSQL_TYPE_NULL, want: "NYNN", decimal: true, rebuild: true},
+				{null: true, mysql: defines.MYSQL_TYPE_NULL, want: "NYNN", decimal: true},
 				{value: "2.5", mysql: defines.MYSQL_TYPE_DOUBLE, want: "NYNN", floating: true},
 				{null: true, mysql: defines.MYSQL_TYPE_NULL, want: "NYNN", floating: true},
-				{value: "2.5", mysql: defines.MYSQL_TYPE_NEWDECIMAL, want: "YYNN", decimal: true},
+				{value: "2.5", mysql: defines.MYSQL_TYPE_NEWDECIMAL, want: "NYNN", floating: true},
+				{value: "2.5", mysql: defines.MYSQL_TYPE_VAR_STRING, want: "NYNN", floating: true},
+				{null: true, mysql: defines.MYSQL_TYPE_NULL, want: "NYNN", floating: true},
+				{null: true, mysql: defines.MYSQL_TYPE_NULL, want: "YNNN", rebuild: true},
 			} {
+				if tc.rebuild && !scalar {
+					continue
+				}
 				cw.proc.SetPrepareParams(nil)
 				if stmt.params != nil {
 					stmt.params.Free(cw.proc.Mp())
@@ -96,20 +114,174 @@ func TestPreparedExportSetNullDomainHistory(t *testing.T) {
 					require.True(t, types.T(export.GetF().Args[0].Typ.Id).IsDecimal(), export.String())
 				}
 				if tc.floating {
-					require.Equal(t, int32(types.T_float64), export.GetF().Args[0].Typ.Id, export.String())
+					source := export.GetF().Args[0]
+					if source.Typ.Id == int32(types.T_int64) {
+						require.NotNil(t, source.GetF())
+						_, overload := function.DecodeOverloadID(source.GetF().Func.Obj)
+						require.Equal(t, int32(4), overload)
+						source = source.GetF().Args[0]
+					}
+					require.Equal(t, int32(types.T_float64), source.Typ.Id, export.String())
 				}
 				if scalar {
 					result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, export, []*batch.Batch{batch.EmptyForConstFoldBatch})
 					require.NoError(t, err)
 					func() {
 						defer free()
-						require.Equal(t, tc.want, result.GetStringAt(0), "params=%+v expr=%s", cw.paramVals, export.String())
+						want := tc.want
+						if (shape == "direct" || shape == "arithmetic" || shape == "subquery-arithmetic") && want == "YNNN" {
+							want = "NYNN"
+						}
+						require.Equal(t, want, result.GetStringAt(0), "params=%+v expr=%s", cw.paramVals, export.String())
 					}()
 				}
 				require.Equal(t, before, cached.String())
 			}
 		})
 	}
+}
+
+func TestPreparedExportSetResolvedStringAndIntegerBindings(t *testing.T) {
+	for _, shape := range []string{"scalar", "direct", "subquery-arithmetic"} {
+		direct := shape == "direct"
+		sql := `select export_set(coalesce((select ?),2.5),'Y','N','',4)`
+		if shape == "subquery-arithmetic" {
+			sql = `select export_set(coalesce((select ?)+0,2.5),'Y','N','',4)`
+		}
+		if direct {
+			sql = `select export_set(coalesce(?,2.5),'Y','N','',4)`
+		}
+		_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 393, sql)
+		func() {
+			defer stmt.Close()
+			cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
+			before := cached.String()
+			decimal := types.New(types.T_decimal64, 4, 1)
+			text := types.T_text.ToType()
+			for i, tc := range []struct {
+				value any
+				typ   types.Type
+				want  string
+			}{
+				{"2.5", text, "NYNN"},
+				{nil, text, "NYNN"},
+				{"2.5", decimal, "YYNN"},
+				{"2.49", text, "NYNN"},
+				{"abc", text, "NNNN"},
+				{int64(100000), types.T_int64.ToType(), "NNNN"},
+				{true, types.T_bool.ToType(), "YNNN"},
+				{nil, text, "YYNN"},
+				{2.5, types.T_float64.ToType(), "NYNN"},
+				{"2.5", decimal, "NYNN"},
+				{"2.5", text, "NYNN"},
+				{nil, text, "NYNN"},
+			} {
+				values := []any{plan2.ParamValue{Value: tc.value, SourceType: tc.typ, HasSourceType: true, EnableNumericPrefix: true}}
+				stmt.applyExportSetNullRuntimeTypes(values)
+				filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, cached, values)
+				require.NoError(t, err)
+				q := filled.GetQuery()
+				expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+				result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+				require.NoError(t, err)
+				func() {
+					defer free()
+					want := tc.want
+					if direct && i < 2 {
+						want = "YYNN"
+					}
+					require.Equal(t, want, result.GetStringAt(0), "step=%d direct=%t", i, direct)
+				}()
+				require.Equal(t, before, cached.String())
+			}
+		}()
+	}
+}
+
+func TestPreparedExportSetBareActualAndResolvedDomains(t *testing.T) {
+	for _, source := range []string{"?", "(select ?)"} {
+		for _, binary := range []bool{false, true} {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 394, `select export_set(`+source+`,'Y','N','',4)`)
+			func() {
+				defer stmt.Close()
+				cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
+				before := cached.String()
+				text := types.T_text.ToType()
+				decimal := types.New(types.T_decimal64, 4, 1)
+				for _, tc := range []struct {
+					value any
+					typ   types.Type
+					want  string
+				}{
+					{"2.5", text, "YYNN"},
+					{"2.5", decimal, "YYNN"},
+					{2.5, types.T_float64.ToType(), "NYNN"},
+					{"2.5", decimal, "YYNN"},
+					{"2.5", text, "NYNN"},
+					{"1.5x", text, "YNNN"},
+					{"9223372036854775808.5", types.New(types.T_decimal256, 65, 1), "YYYY"},
+					{"2.5", decimal, "YYNN"},
+					{nil, text, ""},
+				} {
+					values := []any{plan2.ParamValue{Value: tc.value, SourceType: tc.typ, HasSourceType: !binary,
+						RuntimeType: tc.typ, HasRuntimeType: binary, IsBinaryProtocol: binary, EnableNumericPrefix: true}}
+					stmt.applyExportSetNullRuntimeTypes(values)
+					filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, cached, values)
+					require.NoError(t, err)
+					q := filled.GetQuery()
+					expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+					result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+					require.NoError(t, err)
+					func() {
+						defer free()
+						if tc.value == nil {
+							require.True(t, result.GetNulls().Contains(0))
+						} else {
+							want := tc.want
+							if source != "?" && tc.typ.Oid.IsMySQLString() && want == "YYNN" {
+								want = "NYNN"
+							}
+							require.Equal(t, want, result.GetStringAt(0))
+						}
+					}()
+					require.Equal(t, before, cached.String())
+				}
+			}()
+		}
+	}
+}
+
+func TestPreparedExportSetMaterializedRealSaturation(t *testing.T) {
+	_, stmt, cw, _ := newPreparedExecuteEnvForSQLWithCompilerContext(t, 395,
+		`select export_set((select max(?) from tpch.nation),'Y','N','',4)`, plan2.NewMockCompilerContext(true))
+	defer stmt.Close()
+	values := []any{plan2.ParamValue{Value: 2.5, SourceType: types.T_float64.ToType(), HasSourceType: true}}
+	stmt.applyExportSetNullRuntimeTypes(values)
+	filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+	require.NoError(t, err)
+	q := filled.GetQuery()
+	expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+	conversion := expr.GetF().Args[0]
+	require.NotNil(t, conversion.GetF())
+	_, overload := function.DecodeOverloadID(conversion.GetF().Func.Obj)
+	require.Equal(t, int32(4), overload)
+	source := conversion.GetF().Args[0]
+	require.NotNil(t, source.GetCol())
+	require.Equal(t, int32(0), source.GetCol().ColPos)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	defer input.Clean(cw.proc.Mp())
+	for i, value := range []float64{2.5, math.Exp2(63), -math.Exp2(64), 0} {
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], value, i == 3, cw.proc.Mp()))
+	}
+	input.SetRowCount(4)
+	result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{input})
+	require.NoError(t, err)
+	defer free()
+	for i, want := range []string{"NYNN", "YYYY", "NNNN"} {
+		require.Equal(t, want, result.GetStringAt(i))
+	}
+	require.True(t, result.GetNulls().Contains(3))
 }
 
 func TestPreparedExportSetRebuildTypeOwnership(t *testing.T) {
@@ -119,9 +291,12 @@ func TestPreparedExportSetRebuildTypeOwnership(t *testing.T) {
 	decimal := types.New(types.T_decimal256, 65, 1)
 	prepared.exportSetParamTypes = []types.Type{decimal, types.T_float64.ToType(), types.T_float64.ToType()}
 	prepared.refreshExportSetParamPositions(cached, 3)
-	require.Equal(t, []types.Type{decimal, {}, {}}, prepared.exportSetParamTypes)
+	require.Equal(t, types.T_any, prepared.exportSetParamTypes[0].Oid)
+	require.Equal(t, types.T_any, prepared.exportSetParamTypes[1].Oid)
+	require.Equal(t, types.T_any, prepared.exportSetParamTypes[2].Oid)
 	prepared.refreshExportSetParamPositions(cached, 4)
-	require.Nil(t, prepared.exportSetParamTypes, "incompatible marker count invalidates the mapping")
+	require.Len(t, prepared.exportSetParamTypes, 4)
+	require.Equal(t, types.T_any, prepared.exportSetParamTypes[0].Oid)
 	prepared.exportSetParamTypes = []types.Type{decimal}
 	prepared.refreshExportSetParamPositions(nil, 1)
 	require.Nil(t, prepared.exportSetParamPositions)
@@ -136,7 +311,7 @@ func TestPreparedExportSetNullTypeStateBoundaries(t *testing.T) {
 	stmt.applyExportSetNullRuntimeTypes(values)
 	require.Equal(t, decimal, stmt.exportSetParamTypes[0])
 	require.Equal(t, types.T_any, stmt.exportSetParamTypes[1].Oid)
-	require.Nil(t, values[2], "first NULL remains untyped")
+	require.Equal(t, types.T_text, values[2].(plan2.ParamValue).RuntimeType.Oid, "first NULL remains in the default text domain")
 	values[0] = plan2.ParamValue{Value: nil, IsBinaryProtocol: true}
 	stmt.applyExportSetNullRuntimeTypes(values)
 	current := values[0].(plan2.ParamValue)
@@ -145,13 +320,13 @@ func TestPreparedExportSetNullTypeStateBoundaries(t *testing.T) {
 	require.Equal(t, decimal, current.RuntimeType)
 	values[0] = plan2.ParamValue{Value: "text", SourceType: types.T_text.ToType(), HasSourceType: true}
 	stmt.applyExportSetNullRuntimeTypes(values)
-	require.Equal(t, types.T_any, stmt.exportSetParamTypes[0].Oid)
+	require.Equal(t, decimal, stmt.exportSetParamTypes[0])
 	values[0] = nil
 	stmt.applyExportSetNullRuntimeTypes(values)
-	require.Nil(t, values[0])
+	require.Equal(t, decimal, values[0].(plan2.ParamValue).RuntimeType)
 	values[2] = plan2.ParamValue{Value: nil, HasRuntimeType: true, RuntimeType: types.T_blob.ToType()}
 	stmt.applyExportSetNullRuntimeTypes(values)
-	require.Equal(t, types.T_blob, values[2].(plan2.ParamValue).RuntimeType.Oid)
+	require.Equal(t, types.T_text, values[2].(plan2.ParamValue).RuntimeType.Oid)
 	stmt.Close()
 	require.Nil(t, stmt.exportSetParamTypes)
 	require.Nil(t, stmt.exportSetParamPositions)

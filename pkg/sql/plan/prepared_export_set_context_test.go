@@ -89,14 +89,15 @@ func TestPreparedExportSetExpressionContexts(t *testing.T) {
 							return planpb.VisitExprTree(root, func(expr *planpb.Expr) error {
 								if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "export_set" {
 									found++
+									source := preparedExportSetNumericSourceForTest(t, fn.Args[0])
 									if name == "coalesce_text" || name == "coalesce_explicit_char" || name == "nullif_explicit_char" {
 										require.Equal(t, int32(types.T_int64), fn.Args[0].Typ.Id, expr.String())
 									} else if name == "coalesce_explicit_double" || name == "coalesce_scientific" {
-										require.Equal(t, int32(types.T_float64), fn.Args[0].Typ.Id, expr.String())
+										require.Equal(t, int32(types.T_float64), source.Typ.Id, expr.String())
 									} else if typ.Oid.IsDecimal() {
-										require.True(t, types.T(fn.Args[0].Typ.Id).IsDecimal(), expr.String())
+										require.True(t, types.T(source.Typ.Id).IsDecimal(), expr.String())
 									} else {
-										require.Equal(t, int32(typ.Oid), fn.Args[0].Typ.Id, expr.String())
+										require.Equal(t, int32(typ.Oid), source.Typ.Id, expr.String())
 									}
 								}
 								return nil

@@ -35,6 +35,8 @@ func TestPreparedExportSetParamPositionOwnership(t *testing.T) {
 		{`select n_nationkey from nation where export_set((select max(?) from nation),'Y','N','',4)=?`, []int32{0}},
 		{`select export_set(cast(? as decimal(4,1)),'Y','N','',4)`, []int32{}},
 		{`select ?,?`, []int32{}},
+		{`select export_set(?,'Y','N','',4)`, []int32{0}},
+		{`select export_set(coalesce(?+0,1.5),'Y','N','',4)`, []int32{0}},
 	} {
 		opt := NewMockOptimizer(false)
 		prepared, err := runOneStmt(opt, t, `prepare s from "`+tc.sql+`"`)
@@ -76,6 +78,7 @@ func TestPreparedExportSetTypedNullDomain(t *testing.T) {
 
 func TestPreparedExportSetFirstNullDomain(t *testing.T) {
 	for _, tc := range []struct{ value, want string }{
+		{`coalesce(?,1.5)`, "NYNN"},
 		{`coalesce((select ?),1.5)`, "YNNN"},
 		{`cast(coalesce((select ?),1.5) as decimal(4,1))`, "NYNN"},
 		{`coalesce((select ?),1.5)+0`, "NYNN"},

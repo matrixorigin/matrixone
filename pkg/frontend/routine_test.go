@@ -800,8 +800,8 @@ func TestMigrateConnectionFromPreservesExportSetDomain(t *testing.T) {
 		{nil, false},
 		{planbuilder.ParamValue{Value: 2.5, RuntimeType: types.T_float64.ToType(), HasRuntimeType: true}, true},
 		{nil, true},
-		{planbuilder.ParamValue{Value: "text", SourceType: types.T_text.ToType(), HasSourceType: true}, false},
-		{nil, false},
+		{planbuilder.ParamValue{Value: "text", SourceType: types.T_text.ToType(), HasSourceType: true}, true},
+		{nil, true},
 	} {
 		prepared.applyExportSetNullRuntimeTypes([]any{tc.value})
 		resp := &query.MigrateConnFromResponse{}

@@ -2924,7 +2924,6 @@ func createPrepareStmtInSession(
 			prepareControl.Plan),
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
 			prepareControl.Plan),
-		exportSetParamPositions: plan2.PreparedPlanExportSetParamPositions(prepareControl.Plan),
 		conversionParamPositions: plan2.PreparedPlanConversionParamPositions(
 			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
@@ -2940,6 +2939,7 @@ func createPrepareStmtInSession(
 		getFromSendLongData:        make(map[int]struct{}),
 		schedulingSQLMode:          schedulingSQLMode,
 	}
+	prepareStmt.refreshExportSetParamPositions(prepareControl.Plan, len(prepareControl.ParamTypes))
 	prepareStmt.refreshNumericPrefixConsumer(
 		prepareControl.Plan, len(prepareControl.ParamTypes))
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)

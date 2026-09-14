@@ -3684,16 +3684,83 @@ func PreparedLagLeadParamPositions(preparePlan *Plan) []int32 {
 // are owned by EXPORT_SET, excluding explicit CAST boundaries. The cached plan
 // is immutable; source annotations belong to a private scan copy.
 func PreparedPlanExportSetParamPositions(preparePlan *Plan) []int32 {
+	positions, _, _ := PreparedPlanExportSetParameters(preparePlan)
+	return positions
+}
+
+// PreparedPlanExportSetParameters separates contextual parameter domains from
+// delayed scalar/aggregate producers. A result peer outside a subquery cannot
+// establish the domain of a marker inside that subquery.
+func PreparedPlanExportSetParameters(preparePlan *Plan) ([]int32, map[int32]types.Type, map[int32]bool) {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
-		return nil
+		return nil, nil, nil
 	}
-	positions := markPreparedExportSetLineage(DeepCopyPlan(preparePlan))
+	copy := DeepCopyPlan(preparePlan)
+	positions := markPreparedExportSetLineage(copy)
 	result := make([]int32, 0, len(positions))
 	for pos := range positions {
 		result = append(result, pos)
 	}
 	slices.Sort(result)
-	return result
+	if len(result) == 0 {
+		return result, nil, nil
+	}
+	domains := preparedExportSetContextDomains(copy, positions)
+	bare := make(map[int32]bool)
+	_ = plan.VisitExpressionsInOwner(copy, func(root *Expr) error {
+		return plan.VisitExprTree(root, func(expr *Expr) error {
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "export_set" || len(fn.Args) == 0 {
+				return nil
+			}
+			if pos, ok := preparedResultParamPosition(fn.Args[0], "export_set"); ok && fn.Args[0].GetF().Args[0].GetP() != nil {
+				bare[int32(pos)] = true
+				domains[int32(pos)] = types.T_int64.ToType()
+				if fn.Args[0].GetPreparedNumeric().GetFallbackSource() {
+					// A flattened scalar marker still defaults to text, but no
+					// materializing producer owns its actual numeric value.
+					domains[int32(pos)] = types.T_text.ToType()
+				}
+			}
+			return nil
+		})
+	})
+	return result, domains, bare
+}
+
+func preparedExportSetContextDomains(p *Plan, positions map[int32]struct{}) map[int32]types.Type {
+	domains := make(map[int32]types.Type)
+	if len(positions) == 0 {
+		return domains
+	}
+	_ = plan.VisitExpressionsInOwner(p, func(root *Expr) error {
+		return plan.VisitExprTree(root, func(expr *Expr) error {
+			metadata := expr.GetPreparedNumeric()
+			if metadata.GetFallbackSource() {
+				return nil
+			}
+			param, ok := implicitPreparedParam(expr)
+			if !ok {
+				return nil
+			}
+			if _, eligible := positions[param.Pos]; !eligible {
+				return nil
+			}
+			typ := makeTypeByPlan2Type(expr.Typ)
+			if typ.IsNumeric() {
+				if typ.IsDecimal() {
+					typ = mysqlPreparedDecimalReprepareType()
+				}
+				previous := domains[param.Pos]
+				if previous.Oid == types.T_float64 || previous.Oid == types.T_float32 || (previous.IsDecimal() && !typ.IsDecimal()) {
+					return nil
+				}
+				domains[param.Pos] = typ
+			}
+			return nil
+		})
+	})
+	return domains
 }
 
 func markPreparedExportSetLineage(plan0 *Plan) map[int32]struct{} {
@@ -5270,8 +5337,14 @@ func validatePreparedPaginationValue(value any) (valid bool, negative bool) {
 }
 
 type ParamValue struct {
-	Value any
-	IsBin bool
+	// ExportSetResolvedDomain makes RuntimeType the effective prepared domain,
+	// not merely the latest binding type or a hint to infer numeric text.
+	ExportSetResolvedDomain bool
+	// The resolved numeric domain converts a textual binding by MySQL's
+	// numeric-prefix rules, without changing the original protocol value.
+	ExportSetNumericString bool
+	Value                  any
+	IsBin                  bool
 	// IsBinaryString is the legacy binary-domain metadata retained for
 	// compatibility with callers that have not adopted RuntimeStringDomain.
 	IsBinaryString bool
@@ -6186,6 +6259,20 @@ func PreparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtim
 	return preparedRuntimeParamExpr(ctx, value, isBin, runtimeType)
 }
 
+func preparedExportSetStringExpr(ctx context.Context, value any, isBin bool, target types.Type) (*Expr, error) {
+	if target.Oid == types.T_float64 || target.Oid == types.T_float32 {
+		return preparedRuntimeParamExpr(ctx, value, isBin, target)
+	}
+	text := fmt.Sprint(value)
+	prefixType := PreparedNumericPrefixTypeFromString(text)
+	prefixType.Charset = 255
+	source, err := makePlan2CastExpr(ctx, makePlan2StringConstExprWithType(text, isBin), makePlan2Type(&prefixType))
+	if err != nil || target.IsDecimal() {
+		return source, err
+	}
+	return makePlan2CastExpr(ctx, source, makePlan2Type(&target))
+}
+
 func preparedSQLExecuteNumericParamExpr(
 	ctx context.Context,
 	value any,
@@ -6222,6 +6309,12 @@ func preparedSQLExecuteNumericParamExpr(
 
 func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtimeType types.Type) (*Expr, error) {
 	rawText := fmt.Sprintf("%v", value)
+	if boolean, ok := value.(bool); ok && preparedRuntimeTypeIsNumeric(runtimeType) {
+		rawText = "0"
+		if boolean {
+			rawText = "1"
+		}
+	}
 	text := strings.TrimSpace(rawText)
 	paramType := makePlan2Type(&runtimeType)
 	makeLiteral := func(literal any) *Expr {
@@ -6477,6 +6570,7 @@ func replaceParamValsWithSelection(
 		isBin := false
 		runtimeType := types.T_text.ToType()
 		hasRuntimeType := false
+		resolvedNumericString := false
 		stringDomainType := types.Type{}
 		hasStringDomainType := false
 		numericPrefixSource := false
@@ -6490,6 +6584,7 @@ func replaceParamValsWithSelection(
 			isBin = param.IsBin
 			runtimeType = param.RuntimeType
 			hasRuntimeType = param.HasRuntimeType
+			resolvedNumericString = param.ExportSetNumericString
 			numericPrefixSource = param.EnableNumericPrefix
 			retainParamRef = param.RetainParamRef
 			runtimeStringDomain = param.RuntimeStringDomain
@@ -6509,14 +6604,27 @@ func replaceParamValsWithSelection(
 			}
 			if param.HasSourceType && param.Value != nil {
 				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)
-				sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(
-					ctx, param.Value, param.IsBin, param.SourceType)
+				numericType := param.SourceType
+				if param.HasRuntimeType {
+					numericType = param.RuntimeType
+				}
+				if resolvedNumericString {
+					sqlExecuteNumericParams[i], err = preparedExportSetStringExpr(ctx, param.Value, param.IsBin, numericType)
+				} else if !param.ExportSetResolvedDomain || preparedRuntimeTypeIsNumeric(numericType) {
+					sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(ctx, param.Value, param.IsBin, numericType)
+				}
+				if param.ExportSetResolvedDomain && preparedRuntimeTypeIsNumeric(numericType) {
+					sqlExecuteStringBackedParams[i] = false
+				}
 				if err != nil {
 					return false, err
 				}
 				if sqlExecuteNumericParams[i] != nil && (numericPrefixSource || retainParamRef) {
+					if resolvedNumericString {
+						numericType = types.T_text.ToType()
+					}
 					attachPreparedRuntimeParamSource(sqlExecuteNumericParams[i], &plan.Expr{
-						Typ:  makePlan2Type(&param.SourceType),
+						Typ:  makePlan2Type(&numericType),
 						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 					})
 				}
@@ -6543,11 +6651,18 @@ func replaceParamValsWithSelection(
 			}
 		} else {
 			if hasRuntimeType {
-				params[i], err = preparedRuntimeParamExpr(ctx, val, isBin, runtimeType)
+				if resolvedNumericString {
+					params[i], err = preparedExportSetStringExpr(ctx, val, isBin, runtimeType)
+				} else {
+					params[i], err = preparedRuntimeParamExpr(ctx, val, isBin, runtimeType)
+				}
 				if err != nil {
 					return false, err
 				}
 				if numericPrefixSource || retainParamRef || directRuntimeResult {
+					if resolvedNumericString {
+						paramType = makePlan2Type(&types.Type{Oid: types.T_text})
+					}
 					attachPreparedRuntimeParamSource(params[i], &plan.Expr{
 						Typ: paramType, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 					})
@@ -6585,6 +6700,7 @@ func replaceParamValsWithSelection(
 	}
 
 	exportSetPositions := markPreparedExportSetLineage(plan0)
+	exportSetContexts := preparedExportSetContextDomains(plan0, exportSetPositions)
 	paramRule := NewResetParamRefRule(ctx, params)
 	paramRule.exportSetParamPositions = exportSetPositions
 	paramRule.sqlExecuteNumericParams = sqlExecuteNumericParams
@@ -6635,15 +6751,16 @@ func replaceParamValsWithSelection(
 			continue
 		}
 		if param, ok := val.(ParamValue); ok {
-			if param.IsBinaryProtocol {
+			if param.IsBinaryProtocol && !param.ExportSetResolvedDomain {
 				paramRule.inferTextParamPositions[i] = true
 			}
-			if param.HasRuntimeType && param.RuntimeType.Oid == types.T_text {
+			if param.HasRuntimeType && param.RuntimeType.Oid == types.T_text && !param.ExportSetResolvedDomain {
 				paramRule.inferTextParamTypes = true
 			}
 			_, exportSet := exportSetPositions[int32(i)]
-			untypedExportSetNull := exportSet && params[i].GetLit().GetIsnull() && types.T(params[i].Typ.Id) == types.T_text
-			if param.EnableNumericPrefix && numericPrefixPositions[i] && !untypedExportSetNull {
+			_, contextual := exportSetContexts[int32(i)]
+			untypedExportSetNull := exportSet && !contextual && params[i].GetLit().GetIsnull() && types.T(params[i].Typ.Id) == types.T_text
+			if param.EnableNumericPrefix && numericPrefixPositions[i] && !untypedExportSetNull && !param.ExportSetResolvedDomain {
 				paramRule.numericPrefixParamPositions[i] = true
 				paramRule.numericPrefixParamKinds[i] = param.PrepareParamKind
 				// The numeric-prefix capability is the stronger execute-time
@@ -6899,12 +7016,11 @@ func refreshPreparedPlanProjectionExprType(
 			if arg != nil {
 				originalArgTypes[i] = arg.Typ
 			}
-			if arg != nil && i == 0 && isPreparedBitwiseAggregate(functionName) &&
+			if arg != nil && i == 0 && (isPreparedBitwiseAggregate(functionName) || functionName == "export_set") &&
 				isBitwiseAggregatePrivateCast(arg) {
-				// CAST4 is owned by the bitwise aggregate, not by the source
-				// expression. Refresh a column-backed source here, but defer
-				// rebinding the conversion until the aggregate can choose again
-				// between its numeric and binary input domains.
+				// CAST4 is owned by the integer consumer, not by its source.
+				// Refresh the source before the aggregate chooses numeric/binary
+				// input or EXPORT_SET checks whether REAL conversion still applies.
 				argChanged, err := refreshPreparedPlanProjectionExprType(
 					ctx, arg.GetF().Args[0], resolveColumnType)
 				if err != nil {
@@ -6912,6 +7028,10 @@ func refreshPreparedPlanProjectionExprType(
 				}
 				changed = changed || argChanged
 				bitwiseAggregateSourceChanged = bitwiseAggregateSourceChanged || argChanged
+				if functionName == "export_set" && !types.T(arg.GetF().Args[0].Typ.Id).IsFloat() {
+					*arg = *DeepCopyExpr(arg.GetF().Args[0])
+					changed = true
+				}
 				continue
 			}
 			argChanged, err := refreshPreparedPlanProjectionExprType(ctx, arg, resolveColumnType)
@@ -6924,11 +7044,26 @@ func refreshPreparedPlanProjectionExprType(
 		// The EXPORT_SET lineage marks a deferred producer, not an explicit
 		// conversion. Discard its provisional envelope only after the producer
 		// column has been refreshed in dependency order.
-		if functionName == "cast" && !isExplicitPreparedLineageCast(expr) && len(exprImpl.F.Args) > 0 &&
+		if functionName == "cast" && !isExplicitPreparedLineageCast(expr) && !isBitwiseAggregatePrivateCast(expr) && len(exprImpl.F.Args) > 0 &&
 			exprImpl.F.Args[0].GetPreparedNumeric().GetFallbackSource() {
 			source := DeepCopyExpr(exprImpl.F.Args[0])
 			*expr = *source
 			return true, nil
+		}
+		if functionName == "export_set" && len(exprImpl.F.Args) > 0 {
+			source := exprImpl.F.Args[0]
+			if source.GetCol() != nil && source.GetPreparedNumeric().GetFallbackSource() && types.T(source.Typ.Id).IsFloat() {
+				// MySQL materialized/scalar REAL values use a saturating val_int,
+				// unlike a direct common-value function. Reuse CAST4's matching
+				// rounding/saturation contract without changing ordinary FLOATs.
+				target := types.T_int64.ToType()
+				converted, err := appendBitwiseAggregateCastBeforeExpr(ctx, source, makePlan2Type(&target))
+				if err != nil {
+					return false, err
+				}
+				exprImpl.F.Args[0] = converted
+				changed = true
+			}
 		}
 		argsChanged := false
 		for i, arg := range exprImpl.F.Args {

@@ -2088,12 +2088,13 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 			rawValue = param.MaterializedValue
 		}
 		runtimeType := param.RuntimeType
-		if !param.HasRuntimeType || runtimeType.Oid == types.T_text {
+		if !param.HasRuntimeType || (runtimeType.Oid == types.T_text && !param.ExportSetResolvedDomain) {
 			runtimeType = plan2.PreparedNumericPrefixTypeFromString(rawValue)
 		}
 		fmt.Fprintf(&key, "%d:%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
 			runtimeType.Oid, runtimeType.Charset, runtimeType.Width, runtimeType.Scale)
 		fmt.Fprintf(&key, "binary:%t;domain:%d;", param.IsBinaryString, param.RuntimeStringDomain)
+		fmt.Fprintf(&key, "export-domain:%t;export-string:%t;", param.ExportSetResolvedDomain, param.ExportSetNumericString)
 		charSourceRelevant := param.IsBinaryProtocol || param.HasSourceType ||
 			(param.HasRuntimeType && types.T(param.RuntimeType.Oid).IsMySQLString())
 		if charSourceRelevant {

@@ -953,6 +953,23 @@ func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 	return types.Type{}, false
 }
 
+func (rule *ResetParamRefRule) hasExportSetResolvedDomain(pos int) bool {
+	if pos < 0 || pos >= len(rule.paramValues) {
+		return false
+	}
+	param, ok := rule.paramValues[pos].(ParamValue)
+	return ok && param.ExportSetResolvedDomain
+}
+
+func (rule *ResetParamRefRule) materializeRuntimeParam(pos int, value any, isBin bool, typ types.Type) (*Expr, error) {
+	if pos >= 0 && pos < len(rule.paramValues) {
+		if param, ok := rule.paramValues[pos].(ParamValue); ok && param.ExportSetNumericString {
+			return preparedExportSetStringExpr(rule.ctx, value, isBin, typ)
+		}
+	}
+	return preparedRuntimeParamExpr(rule.ctx, value, isBin, typ)
+}
+
 // typedIntegerParamExpr materializes the exact integer representation of a
 // protocol value.  It intentionally refuses non-integer categories so an
 // invalid/fractional value keeps the ordinary fallback semantics.
@@ -961,7 +978,7 @@ func (rule *ResetParamRefRule) typedIntegerParamExpr(pos int32) (*Expr, bool) {
 	if !ok || value == nil {
 		return nil, false
 	}
-	if kind != vector.PrepareParamInteger && kind != vector.PrepareParamNone {
+	if kind != vector.PrepareParamInteger && kind != vector.PrepareParamNone && !rule.hasExportSetResolvedDomain(int(pos)) {
 		return nil, false
 	}
 	typ, ok := rule.runtimeParamType(int(pos))
@@ -974,7 +991,7 @@ func (rule *ResetParamRefRule) typedIntegerParamExpr(pos int32) (*Expr, bool) {
 			isBin = param.IsBin
 		}
 	}
-	bound, err := preparedRuntimeParamExpr(rule.ctx, value, isBin, typ)
+	bound, err := rule.materializeRuntimeParam(int(pos), value, isBin, typ)
 	if err != nil {
 		return nil, false
 	}
@@ -984,7 +1001,7 @@ func (rule *ResetParamRefRule) typedIntegerParamExpr(pos int32) (*Expr, bool) {
 
 func (rule *ResetParamRefRule) typedDecimalParamExpr(pos int32) (*Expr, bool, error) {
 	value, kind, ok := rule.runtimeParamValue(int(pos))
-	if !ok || value == nil || (kind != vector.PrepareParamDecimal && kind != vector.PrepareParamNone) {
+	if !ok || value == nil || (kind != vector.PrepareParamDecimal && kind != vector.PrepareParamNone && !rule.hasExportSetResolvedDomain(int(pos))) {
 		return nil, false, nil
 	}
 	typ, ok := rule.runtimeParamType(int(pos))
@@ -997,7 +1014,7 @@ func (rule *ResetParamRefRule) typedDecimalParamExpr(pos int32) (*Expr, bool, er
 			isBin = param.IsBin
 		}
 	}
-	bound, err := preparedRuntimeParamExpr(rule.ctx, value, isBin, typ)
+	bound, err := rule.materializeRuntimeParam(int(pos), value, isBin, typ)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1037,7 +1054,7 @@ func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, erro
 			isBin = param.IsBin
 		}
 	}
-	bound, err := preparedRuntimeParamExpr(rule.ctx, value, isBin, typ)
+	bound, err := rule.materializeRuntimeParam(pos, value, isBin, typ)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1057,6 +1074,10 @@ func (rule *ResetParamRefRule) retainRuntimeParamRef(pos int, expr *Expr) {
 	}
 	param, ok := rule.paramValues[pos].(ParamValue)
 	if !ok || !param.RetainParamRef {
+		return
+	}
+	if param.ExportSetNumericString {
+		attachPreparedRuntimeParamSource(expr, &Expr{Typ: makeSimplePlan2Type(types.T_text), Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(pos)}}})
 		return
 	}
 	var target *Expr
@@ -1493,7 +1514,13 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	if fallbackSource != nil {
 		if source, ok := preparedNumericFallbackSource(fallbackSource); ok {
 			positions := preparedNumericValueParamPositions(fallbackSource)
-			if len(positions) > 0 {
+			resolved := len(positions) > 0
+			for pos := range positions {
+				resolved = resolved && rule.hasExportSetResolvedDomain(int(pos))
+			}
+			// The domain-aware pass already rebound this consumer. The legacy
+			// source replay would reinstate PREPARE's provisional common casts.
+			if len(positions) > 0 && !resolved {
 				bound, changed, bindErr := rule.rebindPreparedNumericExpr(source, positions)
 				if bindErr != nil {
 					return nil, bindErr
@@ -1813,11 +1840,20 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			functionName = exprImpl.F.Func.GetObjName()
 		}
 		if functionName == "cast" && !isExplicitPreparedLineageCast(e) {
+			if e.GetPreparedNumeric().GetProvisionalResultCast() && len(exprImpl.F.Args) > 0 {
+				for pos := range preparedNumericValueParamPositions(exprImpl.F.Args[0]) {
+					if rule.hasExportSetResolvedDomain(int(pos)) {
+						rule.specialized = true
+						return rule.ApplyExpr(exprImpl.F.Args[0])
+					}
+				}
+			}
 			_, overload := planfunction.DecodeOverloadID(exprImpl.F.Func.GetObj())
 			if param, ok := implicitPreparedParam(e); ok && overload == 0 {
 				_, exportSet := rule.exportSetParamPositions[param.Pos]
 				if pos := int(param.Pos); exportSet && pos >= 0 && pos < len(rule.params) &&
-					rule.params[pos].GetLit().GetIsnull() && types.T(rule.params[pos].Typ.Id) == types.T_text {
+					(rule.hasExportSetResolvedDomain(pos) ||
+						(e.GetPreparedNumeric().GetFallbackSource() && types.T(rule.params[pos].Typ.Id) == types.T_text && rule.params[pos].GetLit().GetIsnull())) {
 					// Discard only the temporary numeric envelope; an explicit
 					// user CAST remains authoritative even when its value is NULL.
 					rule.specialized = true
@@ -1899,12 +1935,29 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		numericPrefixListArgs := make([][]bool, len(exprImpl.F.Args))
 		numericPrefixListKinds := make([][]types.StringConversionKind, len(exprImpl.F.Args))
 		var sharedControlReturnType *plan.Type
+		exportSetResolvedContext := false
 		for i, arg := range exprImpl.F.Args {
 			originalArgTyp := plan.Type{}
 			originalArgFuncObj := int64(0)
 			if arg != nil {
 				originalArgTyp = arg.Typ
 				originalArgFuncObj = preparedExprFunctionObj(arg)
+			}
+			exportSetResolvedArg := false
+			if len(rule.exportSetParamPositions) > 0 && numericFunctionArgKeepsContext(functionName, i, len(exprImpl.F.Args)) {
+				positions := make(map[int32]struct{})
+				collectNumericValueParamPositions(arg, positions)
+				for pos := range positions {
+					if rule.hasExportSetResolvedDomain(int(pos)) {
+						exportSetResolvedArg = true
+						unwrapped := unwrapPreparedImplicitCast(arg, true)
+						if unwrapped != arg {
+							arg = unwrapped
+							needResetFunction, compareArgTypes, rule.specialized = true, true, true
+						}
+						break
+					}
+				}
 			}
 			implicitParamCast := isImplicitPreparedParamCast(arg)
 			bitwiseParamCast := isPreparedBitwiseOperator(functionName) &&
@@ -2059,8 +2112,33 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					return nil, err
 				}
 			}
+			if len(rule.exportSetParamPositions) > 0 && isNumericContextFunction(functionName) && !preparedNumericResultPolymorphicFunction(functionName) &&
+				types.T(rewrittenArg.Typ.Id).IsMySQLString() {
+				for pos := range preparedNumericValueParamPositions(originalArgs[i]) {
+					if rule.hasExportSetResolvedDomain(int(pos)) && pos >= 0 && int(pos) < len(rule.params) &&
+						rule.params[pos] != nil && types.T(rule.params[pos].Typ.Id).IsMySQLString() {
+						// Arithmetic consumes a text producer through DOUBLE numeric
+						// prefix conversion, including typed NULL; it does not infer
+						// BIGINT from the other operand or change the marker's domain.
+						approximate := types.T_float64.ToType()
+						rewrittenArg, err = makePlan2CastExpr(rule.ctx, rewrittenArg, makePlan2Type(&approximate))
+						if err != nil {
+							return nil, err
+						}
+						rule.markSQLExecuteNumericDependent(rewrittenArg)
+						needResetFunction, compareArgTypes, rule.specialized = true, true, true
+						break
+					}
+				}
+			}
 			exprImpl.F.Args[i] = rewrittenArg
 			boundArgs[i] = rewrittenArg
+			if exportSetResolvedArg {
+				exportSetResolvedContext = true
+				sqlExecuteNumericSourceDependent = true
+				sqlExecuteNumericNestedDependent = true
+				sqlExecuteNumericSourceArgs[i] = true
+			}
 			if executeNumericSource != nil {
 				needResetFunction = true
 				compareArgTypes = true
@@ -2204,7 +2282,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				for i, sourceArg := range boundArgs {
 					if sqlExecuteNumericSourceArgs[i] && sourceArg != nil {
 						sqlExecuteResultType = sourceArg.Typ
-						break
+						if !exportSetResolvedContext || types.T(sourceArg.Typ.Id).IsFloat() {
+							break
+						}
 					}
 				}
 			}
@@ -2254,6 +2334,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					boundArgs[i] = unwrapped
 					needResetFunction = true
 					compareArgTypes = true
+				}
+				// A resolved approximate common-value domain owns numeric
+				// peers too. A widened DECIMAL peer from PREPARE must not pull
+				// the consumer back into DECIMAL after its producer becomes REAL.
+				if exportSetResolvedContext && types.T(sqlExecuteResultType.Id).IsFloat() && numericFunctionArgKeepsContext(functionName, i, len(boundArgs)) &&
+					preparedNumericCommonOperandType(types.T(boundArgs[i].Typ.Id)) {
+					approximate := types.T_float64.ToType()
+					coerced, castErr := appendCastBeforeExpr(rule.ctx, boundArgs[i], makePlan2Type(&approximate))
+					if castErr != nil {
+						return nil, castErr
+					}
+					boundArgs[i] = coerced
+					needResetFunction, compareArgTypes = true, true
 				}
 			}
 		}
