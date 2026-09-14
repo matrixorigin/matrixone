@@ -696,6 +696,7 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 		srcNull:            true,
 		dstNull:            !dt.NotNullable,
 		maxDefinitionLevel: maxDefinitionLevel,
+		maxRepetitionLevel: byte(leaf.MaxRepetitionLevel()),
 		allowRepetition:    true,
 		listCanBeNull:      sc.Optional(),
 		listElemCanBeNull:  elemCanBeNull,
@@ -2831,6 +2832,11 @@ func processParquetListToArray[T types.ArrayElement](
 	}
 
 	for i, v := range values {
+		if mp.allowRepetition && v.RepetitionLevel() > int(mp.maxRepetitionLevel) {
+			return rollback(moerr.NewInvalidInputf(ctx,
+				"malformed parquet list page: repetition level %d exceeds maximum %d",
+				v.RepetitionLevel(), mp.maxRepetitionLevel))
+		}
 		if i > 0 && v.RepetitionLevel() == 0 {
 			if err := flushRow(); err != nil {
 				return rollback(err)

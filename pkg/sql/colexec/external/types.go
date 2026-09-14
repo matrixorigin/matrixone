@@ -558,6 +558,7 @@ type ParquetHandler struct {
 type columnMapper struct {
 	srcNull, dstNull   bool
 	maxDefinitionLevel byte
+	maxRepetitionLevel byte
 	allowRepetition    bool
 	listCanBeNull      bool
 	listNullLevel      byte

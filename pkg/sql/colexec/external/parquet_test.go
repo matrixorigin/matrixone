@@ -1041,6 +1041,36 @@ func TestParquetListMapperRejectsValueKindMismatch(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquetListMapperRejectsRepetitionLevelOverflow(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+		{
+			parquet.FloatValue(1).Level(0, 1, 0),
+			parquet.FloatValue(2).Level(1, 1, 0),
+		},
+	})
+	var h ParquetHandler
+	_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 2})
+	require.NotNil(t, mp)
+
+	badValues := []parquet.Value{
+		parquet.FloatValue(1).Level(0, 1, 0),
+		parquet.FloatValue(2).Level(2, 1, 0),
+	}
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(dst []parquet.Value) (int, error) {
+			return copy(dst, badValues), nil
+		}),
+	}
+	vec := vector.NewVec(types.New(types.T_array_float32, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "repetition level 2 exceeds maximum 1")
+	require.Zero(t, vec.Length())
+}
+
 func TestParquetCrossTypeMappings(t *testing.T) {
 	proc := testutil.NewProc(t)
 	ctx := context.Background()
