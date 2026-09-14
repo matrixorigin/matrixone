@@ -12202,17 +12202,45 @@ func normalizePythonFunctionDefinition(definition userDefinedFunctionDefinition)
 	definition.returnDescriptor = returnDescriptor
 	definition.signatureKeySchemaVersion = udf.PythonSignatureKeySchemaVersion
 	definition.signatureFingerprint = signatureFingerprint
-	// Keep arg_types as the shared logical signature key. The exact Python
-	// descriptor belongs in canonical_input_descriptor and in the immutable
-	// revision row; mixing the two encodings makes shared SQL readers and
-	// upgrade paths depend on a language-specific workaround.
+	// The base catalog keeps the historical logical signature columns while the
+	// immutable revision keeps the exact Python descriptors.  Both are
+	// execution authority: accepting a caller-supplied args/retType pair that
+	// disagrees with the typed body would publish an identity whose shared
+	// overload key and immutable revision describe different functions.  That
+	// malformed row would only be discovered on a later read or plan bind.
 	logicalArgTypes, err := userDefinedFunctionArgumentTypesFromJSON(definition.args)
 	if err != nil {
 		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtxf(
 			"UNSUPPORTED_ROUTINE_VERSION: Python logical argument metadata is invalid: %v", err,
 		)
 	}
-	definition.argTypes = logicalArgTypes
+	expectedLogicalTypes := make([]string, len(body.ArgTypes))
+	for index, descriptor := range body.ArgTypes {
+		expectedLogicalTypes[index] = strings.ToLower(descriptor.Type().Oid.String())
+	}
+	expectedLogicalArgTypes, err := userDefinedFunctionArgumentTypes(expectedLogicalTypes)
+	if err != nil {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtxf(
+			"UNSUPPORTED_ROUTINE_VERSION: Python typed argument metadata is invalid: %v", err,
+		)
+	}
+	if logicalArgTypes != expectedLogicalArgTypes {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtxf(
+			"UNSUPPORTED_ROUTINE_VERSION: Python catalog arguments %q do not match the typed body %q",
+			logicalArgTypes, expectedLogicalArgTypes,
+		)
+	}
+	if !routineRevisionReturnTypeMatches(definition.retType, body.ReturnType.Type().Oid) {
+		return userDefinedFunctionDefinition{}, moerr.NewInvalidInputNoCtxf(
+			"UNSUPPORTED_ROUTINE_VERSION: Python catalog return type %q does not match the typed body %q",
+			definition.retType, body.ReturnType.Type().Oid.String(),
+		)
+	}
+	// Keep arg_types canonicalized from the typed body. The exact Python
+	// descriptor belongs in canonical_input_descriptor and in the immutable
+	// revision row; the shared logical key is derived from the same source so
+	// SQL readers and Python readers cannot drift.
+	definition.argTypes = expectedLogicalArgTypes
 	return definition, nil
 }
 
