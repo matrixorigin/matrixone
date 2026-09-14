@@ -58,6 +58,25 @@ func TestProjectGeodeticPairHandlesHighLatitudeGreatCircleDomain(t *testing.T) {
 	}
 }
 
+func TestProjectGeodeticPairIsStableUnderUnevenVertexDensification(t *testing.T) {
+	other := mustParse(t, "POINT(1 0)")
+	sparse := mustParse(t, "LINESTRING(-80 0,82 0)")
+	dense := mustParse(t, "LINESTRING(-80 0,80 0,81 0,82 0)")
+
+	sparseProjector, _, _, err := ProjectGeodeticPair(sparse, other)
+	require.NoError(t, err)
+	denseProjector, _, _, err := ProjectGeodeticPair(dense, other)
+	require.NoError(t, err)
+
+	// Adding collinear vertices changes neither the great-circle arc nor its
+	// valid projection domain. The selected center must not depend on vertex
+	// density, otherwise the averaged center can cross the horizon.
+	require.Equal(t, sparseProjector.center, denseProjector.center)
+	for _, c := range []Coord{{X: -80, Y: 0}, {X: 80, Y: 0}, {X: 81, Y: 0}, {X: 82, Y: 0}} {
+		require.Greater(t, sparseProjector.dot(toSphericalVector(c)), geodeticProjectionMinCos)
+	}
+}
+
 func TestProjectGeodeticPairIsIndependentOfOperandAndMemberOrder(t *testing.T) {
 	left := mustParse(t, "GEOMETRYCOLLECTION(POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1)),POINT(179.2 0))")
 	right := mustParse(t, "POLYGON((179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))")

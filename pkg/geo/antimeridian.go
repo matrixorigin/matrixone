@@ -179,33 +179,155 @@ func commonProjectionCenter(coords []Coord) (sphericalVector, error) {
 		return vectors[i].z < vectors[j].z
 	})
 
-	// Kahan summation makes the commutative aggregate independent of the
-	// original operand/member order after the canonical sort above, without
-	// making the geo package depend on a numerical helper library.
-	xs := make([]float64, len(vectors))
-	ys := make([]float64, len(vectors))
-	zs := make([]float64, len(vectors))
-	for i, v := range vectors {
-		xs[i], ys[i], zs[i] = v.x, v.y, v.z
-	}
-	center := sphericalVector{sumSorted(xs), sumSorted(ys), sumSorted(zs)}
-	norm := math.Sqrt(center.x*center.x + center.y*center.y + center.z*center.z)
-	if norm <= geodeticProjectionMinCos {
+	// The normalized vertex sum is not a valid center selection rule: repeated
+	// vertices can move the sum across the horizon even when the geometry is
+	// unchanged. Find the smallest spherical cap containing all vertices
+	// instead. Its center maximizes the minimum dot product with the vertices,
+	// so it is invariant under vertex density and remains inside every valid
+	// common hemisphere.
+	cap := smallestSphericalCap(vectors)
+	if !cap.valid {
 		return sphericalVector{}, moerr.NewInvalidInputNoCtx(
 			"SRID 4326 topology has no unambiguous common gnomonic hemisphere")
 	}
-	return sphericalVector{center.x / norm, center.y / norm, center.z / norm}, nil
+	minDot := math.Inf(1)
+	for _, v := range vectors {
+		minDot = math.Min(minDot, sphericalDot(cap.center, v))
+	}
+	if minDot <= geodeticProjectionMinCos {
+		return sphericalVector{}, moerr.NewInvalidInputNoCtx(
+			"SRID 4326 topology has no unambiguous common gnomonic hemisphere")
+	}
+	return cap.center, nil
 }
 
-func sumSorted(values []float64) float64 {
-	sum, correction := 0.0, 0.0
-	for _, value := range values {
-		y := value - correction
-		total := sum + y
-		correction = (total - sum) - y
-		sum = total
+const geodeticProjectionCenterTolerance = 1e-14
+
+type sphericalCap struct {
+	center sphericalVector
+	minDot float64
+	radius float64 // chord distance from center to the boundary
+	valid  bool
+}
+
+func sphericalDot(a, b sphericalVector) float64 {
+	return a.x*b.x + a.y*b.y + a.z*b.z
+}
+
+func sphericalNorm(v sphericalVector) float64 {
+	return math.Sqrt(sphericalDot(v, v))
+}
+
+func sphericalCapContains(cap sphericalCap, point sphericalVector) bool {
+	if !cap.valid {
+		return false
 	}
-	return sum
+	delta := sphericalVector{
+		x: cap.center.x - point.x,
+		y: cap.center.y - point.y,
+		z: cap.center.z - point.z,
+	}
+	return sphericalNorm(delta) <= cap.radius+geodeticProjectionCenterTolerance
+}
+
+// smallestSphericalCap uses the fixed-dimensional incremental algorithm for a
+// smallest enclosing circle, with a spherical cap as the circle. The sorted
+// input makes the result independent of operand and ring member order. A
+// minimum cap on S2 has at most three boundary points, so the nested loops
+// remain linear in the usual case while avoiding any vertex-density weighting.
+func smallestSphericalCap(points []sphericalVector) sphericalCap {
+	var cap sphericalCap
+	for i, point := range points {
+		if sphericalCapContains(cap, point) {
+			continue
+		}
+		cap = sphericalCapFromBoundary([]sphericalVector{point})
+		for j := 0; j < i; j++ {
+			if sphericalCapContains(cap, points[j]) {
+				continue
+			}
+			cap = sphericalCapFromBoundary([]sphericalVector{point, points[j]})
+			for k := 0; k < j; k++ {
+				if sphericalCapContains(cap, points[k]) {
+					continue
+				}
+				cap = sphericalCapFromBoundary([]sphericalVector{point, points[j], points[k]})
+			}
+		}
+	}
+	return cap
+}
+
+func sphericalCapFromBoundary(points []sphericalVector) sphericalCap {
+	var best sphericalCap
+	consider := func(candidate sphericalCap) {
+		if !candidate.valid || !sphericalCapContainsAll(candidate, points) {
+			return
+		}
+		if !best.valid || candidate.minDot > best.minDot+geodeticProjectionCenterTolerance {
+			best = candidate
+		}
+	}
+
+	for i, point := range points {
+		consider(sphericalCap{center: point, minDot: 1, valid: true})
+		for j := 0; j < i; j++ {
+			sum := sphericalVector{
+				x: point.x + points[j].x,
+				y: point.y + points[j].y,
+				z: point.z + points[j].z,
+			}
+			norm := sphericalNorm(sum)
+			if norm > geodeticProjectionCenterTolerance {
+				center := sphericalVector{sum.x / norm, sum.y / norm, sum.z / norm}
+				radius := sphericalNorm(sphericalVector{
+					x: center.x - point.x,
+					y: center.y - point.y,
+					z: center.z - point.z,
+				})
+				consider(sphericalCap{center: center, minDot: sphericalDot(center, point), radius: radius, valid: true})
+			}
+		}
+	}
+
+	if len(points) == 3 {
+		// A three-point boundary is the normal to the affine plane through the
+		// points. Choose the side with the smaller cap and verify it contains
+		// every boundary point before considering it.
+		a, b, c := points[0], points[1], points[2]
+		u := sphericalVector{b.x - a.x, b.y - a.y, b.z - a.z}
+		v := sphericalVector{c.x - a.x, c.y - a.y, c.z - a.z}
+		normal := sphericalVector{
+			x: u.y*v.z - u.z*v.y,
+			y: u.z*v.x - u.x*v.z,
+			z: u.x*v.y - u.y*v.x,
+		}
+		norm := sphericalNorm(normal)
+		if norm > geodeticProjectionCenterTolerance {
+			center := sphericalVector{normal.x / norm, normal.y / norm, normal.z / norm}
+			minDot := sphericalDot(center, a)
+			if minDot < 0 {
+				center.x, center.y, center.z = -center.x, -center.y, -center.z
+				minDot = -minDot
+			}
+			radius := sphericalNorm(sphericalVector{
+				x: center.x - a.x,
+				y: center.y - a.y,
+				z: center.z - a.z,
+			})
+			consider(sphericalCap{center: center, minDot: minDot, radius: radius, valid: true})
+		}
+	}
+	return best
+}
+
+func sphericalCapContainsAll(cap sphericalCap, points []sphericalVector) bool {
+	for _, point := range points {
+		if !sphericalCapContains(cap, point) {
+			return false
+		}
+	}
+	return true
 }
 
 func makeGeodeticProjector(center sphericalVector) GeodeticProjector {
