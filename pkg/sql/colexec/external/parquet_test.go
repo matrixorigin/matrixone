@@ -3030,6 +3030,29 @@ func TestParquet_Dictionary_Bool_IndexError(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquet_Dictionary_Bool_IndexCountError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary)
+	vals := []parquet.Value{
+		parquet.BooleanValue(true), parquet.BooleanValue(false), parquet.BooleanValue(true),
+	}
+	f, page := writeDictAndGetPage(t, node, vals)
+
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	badPage := &parquetPageWithData{
+		Page: page,
+		data: encoding.Int32Values([]int32{0, 1}),
+	}
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "dictionary indices")
+	require.Zero(t, vec.Length())
+}
+
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	// Reduce batch size so scan steps across multiple calls
 	save := maxParquetBatchCnt
