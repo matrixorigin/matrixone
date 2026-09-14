@@ -674,8 +674,10 @@ func TestIssue28319PublicationGateWaitDoesNotRecopy(t *testing.T) {
 	})
 }
 
-// A SNAPSHOT owner is released after preparation. Every entry point must wait
-// for publication and reuse its prepared relation rather than restart COPY.
+// A SNAPSHOT owner is released after preparation. Caller-owned entry points
+// must wait for publication and reuse their prepared relation rather than
+// restart COPY. Binary prepared execution is covered by the dedicated retry
+// test below because it owns a replayable auto-commit transaction.
 func TestIssue28319CopyAlterPublicationWaitReusesPrepared(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -694,7 +696,7 @@ func TestIssue28319CopyAlterPublicationWaitReusesPrepared(t *testing.T) {
 			execSQLRequire(t, cleanupCtx, db, "drop database "+database)
 		}()
 		execSQLRequire(t, ctx, db, "use "+database)
-		for _, mode := range []string{"query", "binary", "text", "executor"} {
+		for _, mode := range []string{"query", "text", "executor"} {
 			t.Run(mode, func(t *testing.T) {
 				execSQLRequire(t, ctx, db, "create table "+database+".t(id int not null, v int)")
 				execSQLRequire(t, ctx, db, "insert into "+database+".t values(1,10),(2,20)")
