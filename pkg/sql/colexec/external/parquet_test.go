@@ -3455,7 +3455,7 @@ func TestParquet_Dictionary_String_ValueKindMismatch(t *testing.T) {
 
 func TestParquet_Dictionary_StringMalformedOffsets(t *testing.T) {
 	proc := testutil.NewProc(t)
-	f, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
+	_, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
 		parquet.ByteArrayValue([]byte("1")),
 	})
 	badDictionary := parquet.String().Type().NewDictionary(0, 1,
@@ -3513,6 +3513,19 @@ func TestParquetDecodedPageSize_InvalidDictionaryIndexes(t *testing.T) {
 		data: encoding.BooleanValues([]byte{1}),
 	}
 	badPage := &parquetPageWithDictionary{Page: badData, dictionary: dict}
+
+	require.NotPanics(t, func() {
+		require.Positive(t, parquetDecodedPageSize(badPage))
+	})
+}
+
+func TestParquetDecodedPageSize_InvalidDictionaryStringOffsets(t *testing.T) {
+	f, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
+		parquet.ByteArrayValue([]byte("value")),
+	})
+	badDictionary := parquet.String().Type().NewDictionary(0, 1,
+		encoding.ByteArrayValues([]byte("value"), []uint32{0, 6}))
+	badPage := &parquetPageWithDictionary{Page: page, dictionary: badDictionary}
 
 	require.NotPanics(t, func() {
 		require.Positive(t, parquetDecodedPageSize(badPage))

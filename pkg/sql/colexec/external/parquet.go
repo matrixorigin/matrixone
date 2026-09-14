@@ -4752,12 +4752,43 @@ func parquetDecodedPageSize(page parquet.Page) uint64 {
 	}
 	size := uint64(len(page.DefinitionLevels()) + len(page.RepetitionLevels()))
 	data := page.Data()
-	if data.Kind() != encoding.Int32 {
+	fallback := func() uint64 {
 		return addParquetBytes(size, uint64(max(page.Size(), 0)))
+	}
+	if data.Kind() != encoding.Int32 {
+		return fallback()
+	}
+	dictData := dict.Page().Data()
+	switch dictData.Kind() {
+	case encoding.ByteArray:
+		buf, offsets := dictData.ByteArray()
+		for _, idx := range data.Int32() {
+			if idx < 0 || int(idx)+1 >= len(offsets) {
+				return fallback()
+			}
+			start, end := offsets[idx], offsets[idx+1]
+			if start > end || uint64(end) > uint64(len(buf)) {
+				return fallback()
+			}
+			size = addParquetBytes(size, uint64(end-start))
+		}
+		return size
+	case encoding.FixedLenByteArray:
+		buf, width := dictData.FixedLenByteArray()
+		if width <= 0 || len(buf)%width != 0 {
+			return fallback()
+		}
+		for _, idx := range data.Int32() {
+			if idx < 0 || int(idx) >= len(buf)/width {
+				return fallback()
+			}
+			size = addParquetBytes(size, uint64(width))
+		}
+		return size
 	}
 	for _, idx := range data.Int32() {
 		if idx < 0 || int(idx) >= dict.Len() {
-			return addParquetBytes(size, uint64(max(page.Size(), 0)))
+			return fallback()
 		}
 		size = addParquetBytes(size, uint64(len(dict.Index(idx).Bytes())))
 	}
