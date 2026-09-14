@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -24,6 +25,47 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGroupingSetStatsIgnoreInactiveKeys(t *testing.T) {
+	statsCache := NewStatsCache()
+	stats := NewStatsInfo()
+	stats.TableCnt = 1000
+	stats.NdvMap["active_key"] = 10
+	stats.NdvMap["rolled_key"] = 100
+	statsCache.Set(1, stats)
+	ctx := &statsCacheCompilerContext{
+		MockCompilerContext: &MockCompilerContext{ctx: context.Background()},
+		statsCache:          statsCache,
+	}
+	builder := NewQueryBuilder(pbplan.Query_SELECT, ctx, false, false)
+	table := &pbplan.TableDef{
+		TblId: 1,
+		Cols: []*pbplan.ColDef{
+			{Name: "active_key", Typ: pbplan.Type{Id: int32(types.T_int64)}},
+			{Name: "rolled_key", Typ: pbplan.Type{Id: int32(types.T_int64)}},
+		},
+	}
+	builder.tag2Table[1] = table
+	builder.qry.Nodes = []*pbplan.Node{
+		{
+			NodeId: 0, NodeType: pbplan.Node_TABLE_SCAN, TableDef: table,
+			BindingTags: []int32{1},
+			Stats:       &pbplan.Stats{Outcnt: 1000, Cost: 1000, Selectivity: 1},
+		},
+		{
+			NodeId: 1, NodeType: pbplan.Node_AGG, Children: []int32{0},
+			GroupBy: []*pbplan.Expr{
+				groupHashKeyTestCol(1, 0),
+				groupHashKeyTestCol(1, 1),
+			},
+			GroupingFlag: []bool{true, false},
+			Stats:        &pbplan.Stats{},
+		},
+	}
+
+	ReCalcNodeStats(1, builder, false, false, true)
+	require.Equal(t, float64(10), builder.qry.Nodes[1].Stats.Outcnt)
+}
 
 func groupHashKeyTestCol(tag, pos int32) *pbplan.Expr {
 	return &pbplan.Expr{
