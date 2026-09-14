@@ -24,6 +24,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	pythonudf "github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -138,17 +139,33 @@ func validateRoutineCall(call *planpb.RoutineCall) error {
 	if !udf.IsSHA256Digest(python.DefinitionFingerprint) {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: typed Python implementation has invalid definition fingerprint")
 	}
+	arguments := make([]pythonudf.TypeDescriptor, len(call.ArgumentTypes))
 	for i, argumentType := range call.ArgumentTypes {
 		if argumentType == nil {
 			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: typed Python argument %d is nil", i)
 		}
-		if _, err := function.NewPythonTypeDescriptor(planTypeToSQL(*argumentType)); err != nil {
+		descriptor, err := function.NewPythonTypeDescriptor(planTypeToSQL(*argumentType))
+		if err != nil {
 			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: typed Python argument %d is unsupported: %w", i, err)
 		}
+		arguments[i] = descriptor
 	}
-	if _, err := function.NewPythonTypeDescriptor(planTypeToSQL(call.ReturnType)); err != nil {
+	result, err := function.NewPythonTypeDescriptor(planTypeToSQL(call.ReturnType))
+	if err != nil {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: typed Python return descriptor is unsupported: %w", err)
 	}
+	fingerprint, err := pythonudf.DefinitionFingerprint(
+		int(python.DefinitionSchemaVersion), python.Handler, python.Mode, python.NullPolicy,
+		python.AbiContract, python.AdapterVersion, python.ArtifactDigest,
+		python.EnvironmentDigest, python.SdkVersion, arguments, result,
+	)
+	if err != nil {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: invalid typed Python definition: %w", err)
+	}
+	if fingerprint != python.DefinitionFingerprint {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: typed Python definition fingerprint mismatch")
+	}
+
 	return nil
 }
 
