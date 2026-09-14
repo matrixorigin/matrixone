@@ -3114,6 +3114,15 @@ func (p *parquetPageWithNumValues) NumValues() int64 {
 	return p.numValues
 }
 
+type parquetPageWithNumRows struct {
+	parquet.Page
+	numRows int64
+}
+
+func (p *parquetPageWithNumRows) NumRows() int64 {
+	return p.numRows
+}
+
 type parquetPageWithDictionary struct {
 	parquet.Page
 	dictionary parquet.Dictionary
@@ -4399,6 +4408,40 @@ func Test_prepareNullCheck_simplePaths(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, nc.noNulls)
 	require.False(t, nc.isNull(0))
+}
+
+func Test_prepareNullCheck_rejectsInvalidCounts(t *testing.T) {
+	ctx := context.Background()
+	page := parquet.Int32Type.NewPage(0, 2, encoding.Int32Values([]int32{1, 2}))
+	mp := &columnMapper{srcNull: false, dstNull: true, maxDefinitionLevel: 0}
+
+	for _, tc := range []struct {
+		name string
+		page parquet.Page
+	}{
+		{
+			name: "negative rows",
+			page: &parquetPageWithNumRows{Page: page, numRows: -1},
+		},
+		{
+			name: "negative nulls",
+			page: &parquetPageWithDefinitionLevels{Page: page, numNulls: -1},
+		},
+		{
+			name: "too many nulls",
+			page: &parquetPageWithDefinitionLevels{Page: page, numNulls: 3},
+		},
+		{
+			name: "nulls on required page",
+			page: &parquetPageWithDefinitionLevels{Page: page, numNulls: 1},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := prepareNullCheck(ctx, mp, tc.page)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		})
+	}
 }
 
 func Test_validateStringDataCount(t *testing.T) {

@@ -2130,10 +2130,28 @@ func (nc *nullCheckInfo) isNull(index int) bool {
 // prepareNullCheck prepares null check information outside of the loop.
 // It traverses DefinitionLevels to compute actual non-null count, not trusting NumNulls().
 func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) (nullCheckInfo, error) {
-	numRows := int(page.NumRows())
+	numRows64 := page.NumRows()
+	numNulls := page.NumNulls()
+	if numRows64 < 0 {
+		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+			"malformed page: NumRows() %d is negative", numRows64)
+	}
+	if numNulls < 0 {
+		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+			"malformed page: NumNulls() %d is negative", numNulls)
+	}
+	if numNulls > numRows64 {
+		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+			"malformed page: NumNulls() %d exceeds NumRows() %d", numNulls, numRows64)
+	}
+	numRows := int(numRows64)
 
 	// Fast path: source doesn't allow null
 	if !mp.srcNull {
+		if numNulls != 0 {
+			return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+				"malformed page: required source has %d NULLs", numNulls)
+		}
 		return nullCheckInfo{
 			noNulls:        true,
 			actualNonNulls: int64(numRows),
@@ -2141,7 +2159,7 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 	}
 
 	// Fast path: page has no null values
-	if page.NumNulls() == 0 {
+	if numNulls == 0 {
 		return nullCheckInfo{
 			noNulls:        true,
 			actualNonNulls: int64(numRows),
@@ -2172,7 +2190,7 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 	}
 
 	// Consistency check with NumNulls() to detect corrupted pages
-	expectedNonNulls := int64(numRows) - page.NumNulls()
+	expectedNonNulls := int64(numRows) - numNulls
 	if actualNonNulls != expectedNonNulls {
 		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
 			"malformed page: NumNulls() indicates %d non-nulls, but definition levels show %d",
@@ -3502,36 +3520,19 @@ func preExtendParquetFixedVector(
 }
 
 func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, data []T, itee func(t T) U) error {
+	nc, err := prepareNullCheck(proc.Ctx, mp, page)
+	if err != nil {
+		return err
+	}
 	n := int(page.NumRows())
-
-	// Only skip NULL check if source doesn't allow null OR page has no nulls
-	noNulls := !mp.srcNull || page.NumNulls() == 0
-
-	// Fail early: if page has NULLs and destination doesn't allow them
-	if !noNulls && !mp.dstNull {
-		return moerr.NewConstraintViolationf(proc.Ctx,
-			"cannot load NULL value into NOT NULL column")
-	}
-	expectedDataCount := int64(n)
-	if mp.srcNull {
-		expectedDataCount -= page.NumNulls()
-	}
-	if expectedDataCount < 0 {
-		return moerr.NewInvalidInputf(proc.Ctx,
-			"malformed page: NumNulls() %d exceeds NumRows() %d",
-			page.NumNulls(), page.NumRows())
-	}
+	noNulls := nc.noNulls
+	expectedDataCount := nc.actualNonNulls
 	if int64(len(data)) != expectedDataCount {
 		return moerr.NewInvalidInputf(proc.Ctx,
 			"malformed page: expected %d non-null values, but data contains %d",
 			expectedDataCount, len(data))
 	}
-	levels := page.DefinitionLevels()
-	if !noNulls && len(levels) != n {
-		return moerr.NewInvalidInputf(proc.Ctx,
-			"malformed page: definition levels length %d != numRows %d",
-			len(levels), n)
-	}
+	levels := nc.levels
 
 	length := vec.Length()
 	if err := preExtendParquetFixedVector(vec, n+length, proc, !noNulls); err != nil {
