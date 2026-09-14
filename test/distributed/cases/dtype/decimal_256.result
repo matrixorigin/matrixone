@@ -61,4 +61,32 @@ cast('999999999999999999999999999999.999999999999999999999999999999' as decimal(
 ➤ zero_div[-5,64,0]  ¦  scale_up_fit[-5,64,0]  ¦  truncate_div[-5,64,0]  𝄀
 0  ¦  1000000000000  ¦  1
 
+select cast('1' as decimal(65,30)) / cast('0.000000000000000003' as decimal(65,18)) as issue_28774_wide_quotient;
+➤ issue_28774_wide_quotient[3,65,30]  𝄀
+333333333333333333.333333333333333333333333333333
+
+select cast(
+cast('123456789012345' as decimal(38,0)) /
+cast('999999999999999.999999999999999999' as decimal(38,18))
+as decimal(65,6)
+) as issue_28775_d128_rounding;
+➤ issue_28775_d128_rounding[3,65,6]  𝄀
+0.123457
+
+select cast(
+cast('1234567890123450000000000000000000000000' as decimal(65,0)) /
+cast('9999999999999999999999999999999999999999' as decimal(65,0))
+as decimal(65,6)
+) as issue_28775_d256_control;
+➤ issue_28775_d256_control[3,65,6]  𝄀
+0.123457
+
+select
+cast(cast('85070591730234615865843651857943' as decimal(65,0)) /
+cast('-170141183460469231731687303715884105728' as decimal(65,0)) as decimal(65,6)) as issue_28774_min_d128_divisor_positive_numerator,
+cast(cast('-85070591730234615865843651857943' as decimal(65,0)) /
+cast('-170141183460469231731687303715884105728' as decimal(65,0)) as decimal(65,6)) as issue_28774_min_d128_divisor_negative_numerator;
+➤ issue_28774_min_d128_divisor_positive_numerator[3,65,6]  ¦  issue_28774_min_d128_divisor_negative_numerator[3,65,6]  𝄀
+-0.000001  ¦  0.000001
+
 drop table decimal_256_t;
