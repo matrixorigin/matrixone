@@ -3521,6 +3521,15 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 }
 
 func ensureDictionaryIndexes(ctx context.Context, dictLen int, indexes []int32) error {
+	if dictLen >= 0 && uint64(dictLen) <= uint64(^uint32(0)) {
+		limit := uint32(dictLen)
+		for _, idx := range indexes {
+			if uint32(idx) >= limit {
+				return moerr.NewInvalidInputf(ctx, "parquet dictionary index %d out of range %d", idx, dictLen)
+			}
+		}
+		return nil
+	}
 	for _, idx := range indexes {
 		if idx < 0 || int(idx) >= dictLen {
 			return moerr.NewInvalidInputf(ctx, "parquet dictionary index %d out of range %d", idx, dictLen)
