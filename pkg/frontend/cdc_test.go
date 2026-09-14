@@ -550,6 +550,10 @@ func Test_handleCreateCdc(t *testing.T) {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
+	stubCheckPitrWithExclude := gostub.Stub(&CDCCheckPitrGranularityWithExclude, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, exclude string, minLength ...int64) error {
+		return nil
+	})
+	defer stubCheckPitrWithExclude.Reset()
 
 	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, user, password string, ip string, port int, timeout string) (*sql.DB, error) {
 		db, mock, dbErr := sqlmock.New()
@@ -599,6 +603,10 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
+	stubCheckPitrWithExclude := gostub.Stub(&CDCCheckPitrGranularityWithExclude, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, exclude string, minLength ...int64) error {
+		return nil
+	})
+	defer stubCheckPitrWithExclude.Reset()
 
 	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
 		db, mock, dbErr := sqlmock.New()

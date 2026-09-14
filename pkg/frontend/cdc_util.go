@@ -274,14 +274,21 @@ var CDCCheckPitrGranularityWithExclude = func(
 								continue
 							}
 						}
-						// ExecResult intentionally exposes only typed getters. String
-						// conversion preserves the serialized constraint bytes and works
-						// for both the real result set and the test implementation.
-						constraint, err := result.GetString(ctx, row, 6)
+						constraintIsNull, err := result.ColumnIsNull(ctx, row, 6)
 						if err != nil {
 							return err
 						}
-						constraintBytes := []byte(constraint)
+						var constraintBytes []byte
+						if !constraintIsNull {
+							// ExecResult intentionally exposes only typed getters. String
+							// conversion preserves the serialized constraint bytes and works
+							// for both the real result set and the test implementation.
+							constraint, err := result.GetString(ctx, row, 6)
+							if err != nil {
+								return err
+							}
+							constraintBytes = []byte(constraint)
+						}
 						hasForeignKey, err := cdc.TableHasForeignKeyConstraint(constraintBytes)
 						if err != nil {
 							return err
