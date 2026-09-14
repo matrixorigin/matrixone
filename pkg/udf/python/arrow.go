@@ -509,12 +509,13 @@ func BuildInputRecordRange(inputs []*vector.Vector, args []types.Type, start, le
 // physical batch and every size probe.  The record builder and encoded bytes
 // remain per batch, so the encoder does not retain input or output buffers.
 type inputBatchEncoder struct {
-	inputs      []*vector.Vector
-	args        []types.Type
-	descriptors []TypeDescriptor
-	schema      *arrow.Schema
-	fixedWidth  bool
-	wire        *inputBatchWireEncoder
+	inputs           []*vector.Vector
+	args             []types.Type
+	descriptors      []TypeDescriptor
+	stringParameters []vector.FunctionParameterWrapper[types.Varlena]
+	schema           *arrow.Schema
+	fixedWidth       bool
+	wire             *inputBatchWireEncoder
 }
 
 func newInputBatchEncoder(inputs []*vector.Vector, args []types.Type) (*inputBatchEncoder, error) {
@@ -523,6 +524,7 @@ func newInputBatchEncoder(inputs []*vector.Vector, args []types.Type) (*inputBat
 	}
 	fields := make([]arrow.Field, len(args))
 	descriptors := make([]TypeDescriptor, len(args))
+	stringParameters := make([]vector.FunctionParameterWrapper[types.Varlena], len(args))
 	fixedWidth := true
 	for i, typ := range args {
 		descriptor, err := NewTypeDescriptor(typ)
@@ -552,14 +554,18 @@ func newInputBatchEncoder(inputs []*vector.Vector, args []types.Type) (*inputBat
 				typ.DescString(),
 			)
 		}
+		if isStringInputType(typ.Oid) {
+			stringParameters[i] = vector.GenerateFunctionStrParameter(inputs[i])
+		}
 	}
 	schema := arrow.NewSchema(fields, nil)
 	return &inputBatchEncoder{
-		inputs:      inputs,
-		args:        args,
-		descriptors: descriptors,
-		schema:      schema,
-		fixedWidth:  fixedWidth,
+		inputs:           inputs,
+		args:             args,
+		descriptors:      descriptors,
+		stringParameters: stringParameters,
+		schema:           schema,
+		fixedWidth:       fixedWidth,
 	}, nil
 }
 
@@ -605,7 +611,10 @@ func (e *inputBatchEncoder) build(start, length int) (arrow.RecordBatch, *arrow.
 			continue
 		}
 		for row := 0; row < length; row++ {
-			if err := appendInputValue(builder.Field(column), e.inputs[column], typ, start, row); err != nil {
+			if err := appendInputValue(
+				builder.Field(column), e.inputs[column], typ, start, row,
+				e.stringParameters[column],
+			); err != nil {
 				return nil, nil, fmt.Errorf("input column %d row %d: %w", column, row, err)
 			}
 		}
@@ -783,7 +792,7 @@ func (e *inputBatchEncoder) canBuildFullBatch(start, length, maxBytes int64) boo
 		estimate = add(estimate, perColumnOverhead)
 		estimate = add(estimate, multiply(add(length, 1), offsetWidth))
 		estimate = add(estimate, add(length, 7)/8)
-		parameter := vector.GenerateFunctionStrParameter(e.inputs[column])
+		parameter := e.stringParameters[column]
 		for row := int64(0); row < length; row++ {
 			index := sourceRow(e.inputs[column], int(start), int(row))
 			if e.inputs[column].IsNull(uint64(index)) {
@@ -813,9 +822,29 @@ func sourceRow(v *vector.Vector, start, row int) int {
 	}
 	return start + row
 }
-func appendInputValue(builder array.Builder, v *vector.Vector, typ types.Type, start, row int) error {
+
+func isStringInputType(oid types.T) bool {
+	switch oid {
+	case types.T_char, types.T_varchar, types.T_text, types.T_json,
+		types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return false
+	}
+}
+
+func appendInputValue(
+	builder array.Builder,
+	v *vector.Vector,
+	typ types.Type,
+	start, row int,
+	stringParameter vector.FunctionParameterWrapper[types.Varlena],
+) error {
 	index := sourceRow(v, start, row)
 	null := v.IsNull(uint64(index))
+	if !null && isStringInputType(typ.Oid) && stringParameter == nil {
+		return fmt.Errorf("missing cached string input parameter")
+	}
 	if typ.Oid == types.T_date || typ.Oid == types.T_datetime || typ.Oid == types.T_timestamp {
 		return appendTemporalInput(builder.(*array.StructBuilder), v, typ, index, null)
 	}
@@ -926,8 +955,7 @@ func appendInputValue(builder array.Builder, v *vector.Vector, typ types.Type, s
 		if null {
 			b.AppendNull()
 		} else {
-			p := vector.GenerateFunctionStrParameter(v)
-			value, _ := p.GetStrValue(uint64(index))
+			value, _ := stringParameter.GetStrValue(uint64(index))
 			if typ.Oid == types.T_json {
 				canonical, err := canonicalJSONInput(value)
 				if err != nil {
@@ -942,8 +970,7 @@ func appendInputValue(builder array.Builder, v *vector.Vector, typ types.Type, s
 		if null {
 			b.AppendNull()
 		} else {
-			p := vector.GenerateFunctionStrParameter(v)
-			value, _ := p.GetStrValue(uint64(index))
+			value, _ := stringParameter.GetStrValue(uint64(index))
 			b.Append(value)
 		}
 	case types.T_uuid:
@@ -1085,6 +1112,32 @@ func DecodeRecordBatch(schemaFrame, batchFrame ArrowFrame, maxBytes int64) (arro
 var ipcZeroPadding [8]byte
 
 func newIPCStreamReader(frames ...ArrowFrame) io.Reader {
+	reader := &ipcStreamReader{}
+	if len(frames) <= len(reader.inlineParts)/5 {
+		reader.parts = reader.inlineParts[:0]
+		for index, frame := range frames {
+			metadataLength := (len(frame.Header) + 7) &^ 7
+			bodyLength := (len(frame.Body) + 7) &^ 7
+			binary.LittleEndian.PutUint32(reader.prefixes[index][:4], math.MaxUint32)
+			binary.LittleEndian.PutUint32(reader.prefixes[index][4:], uint32(metadataLength))
+			reader.parts = append(reader.parts,
+				reader.prefixes[index][:],
+				frame.Header,
+				ipcZeroPadding[:metadataLength-len(frame.Header)],
+				frame.Body,
+				ipcZeroPadding[:bodyLength-len(frame.Body)],
+			)
+		}
+		// Arrow's stream reader uses an eight-byte zero continuation marker to
+		// observe the end of the stream after the one record batch.
+		reader.parts = append(reader.parts, ipcZeroPadding[:])
+		return reader
+	}
+
+	// Keep the helper correct for future callers that need more than the
+	// schema-plus-record pair. The production result path stays on the inline
+	// storage above, so this fallback does not add a per-batch allocation to
+	// the current protocol.
 	parts := make([][]byte, 0, len(frames)*5+1)
 	for _, frame := range frames {
 		metadataLength := (len(frame.Header) + 7) &^ 7
@@ -1100,16 +1153,16 @@ func newIPCStreamReader(frames ...ArrowFrame) io.Reader {
 			ipcZeroPadding[:bodyLength-len(frame.Body)],
 		)
 	}
-	// Arrow's stream reader uses an eight-byte zero continuation marker to
-	// observe the end of the stream after the one record batch.
 	parts = append(parts, ipcZeroPadding[:])
 	return &ipcStreamReader{parts: parts}
 }
 
 type ipcStreamReader struct {
-	parts  [][]byte
-	part   int
-	offset int
+	parts       [][]byte
+	inlineParts [11][]byte
+	prefixes    [2][8]byte
+	part        int
+	offset      int
 }
 
 func (r *ipcStreamReader) Read(dst []byte) (int, error) {
