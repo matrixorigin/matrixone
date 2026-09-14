@@ -26,6 +26,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"time"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -58,6 +59,7 @@ type groupConcatExec struct {
 	truncationCount  uint64
 	truncationRows   []uint64
 	warningRowCount  uint64
+	timeZone         *time.Location
 	inputRowCount    uint64
 	inputRowBase     uint64
 	inputRowBaseSet  bool
@@ -224,6 +226,18 @@ func ConsumeGroupConcatWarnings(agg AggFuncExec) (uint64, []GroupConcatWarning) 
 func (exec *groupConcatExec) clearTruncationWarnings() {
 	exec.truncationCount = 0
 	exec.truncationRows = exec.truncationRows[:0]
+}
+
+// ConfigureGroupConcatTimeZone installs the initiating session's location for
+// TIMESTAMP rendering. Process session information already carries this value
+// across CN boundaries, so finalization never depends on a worker's local zone.
+func ConfigureGroupConcatTimeZone(agg AggFuncExec, location *time.Location) {
+	if exec, ok := agg.(*groupConcatExec); ok {
+		if location == nil {
+			location = time.UTC
+		}
+		exec.timeZone = location
+	}
 }
 
 // SetGroupConcatInputRowBase supplies the source-row ordinal for the first row
@@ -513,13 +527,6 @@ func (exec *groupConcatExec) PreAllocateGroups(more int) error {
 		}
 	}
 	return exec.aggExec.PreAllocateGroups(more)
-}
-
-func isValidGroupConcatUnit(value []byte) error {
-	if len(value) > math.MaxUint16 {
-		return moerr.NewInternalErrorNoCtx("group_concat: the length of the value is too long")
-	}
-	return nil
 }
 
 func (exec *groupConcatExec) Fill(groupIndex int, row int, vectors []*vector.Vector) error {
@@ -2278,7 +2285,7 @@ func (exec *groupConcatExec) flushGroupInInputOrderAccounted(
 				if isNull || writer.truncated {
 					return nil
 				}
-				return writeGroupConcatData(writer, exec.argTypes[i], data)
+				return writeGroupConcatData(writer, exec.argTypes[i], data, exec.timeZone)
 			},
 		)
 		if err != nil {
@@ -2438,7 +2445,7 @@ func (exec *groupConcatExec) flushOrderedGroupAccounted(
 					return nil
 				}
 				return writeGroupConcatData(
-					writer, exec.argTypes[column], data)
+					writer, exec.argTypes[column], data, exec.timeZone)
 			}); err != nil {
 			return err
 		}
@@ -2471,7 +2478,7 @@ func (exec *groupConcatExec) appendConcatPayload(
 			if isNull || writer.truncated {
 				return nil
 			}
-			return writeGroupConcatData(writer, exec.argTypes[i], data)
+			return writeGroupConcatData(writer, exec.argTypes[i], data, exec.timeZone)
 		},
 	)
 	return writer.buffer, writer.truncated, err
@@ -2671,6 +2678,7 @@ func (exec *groupConcatExec) Free() {
 	exec.truncationRows = nil
 	exec.truncationCount = 0
 	exec.warningRowCount = 0
+	exec.timeZone = nil
 	exec.inputRowCount = 0
 	exec.inputRowBase = 0
 	exec.inputRowBaseSet = false

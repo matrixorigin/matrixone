@@ -85,7 +85,7 @@ func TestConvRowBasesRemoteFallback(t *testing.T) {
 		require.Equal(t, "255,10", value)
 		rt := moruntime.ServiceRuntime(peer.ServiceID())
 		oldVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion66)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion67)
 		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
 		physical, err = testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 		require.NoError(t, err)

@@ -610,7 +610,9 @@ func (o *overlay) divideSegment(e *ovEvent, p Coord) {
 	o.q.push(r)
 }
 
-// run executes the sweep and returns the result events that are in the output.
+// run executes the sweep and returns the canonical left event for each noded
+// segment. The connector uses their transition fields to select and direct the
+// result boundary.
 func (o *overlay) run() []*ovEvent {
 	var status statusLine
 	var sortedResult []*ovEvent

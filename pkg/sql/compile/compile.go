@@ -1429,6 +1429,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainConvBasesWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.constrainGroupConcatTimeZoneWorkers(qry); err != nil {
+		return nil, err
+	}
 
 	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
@@ -5409,6 +5412,62 @@ func prepareVectorIndexScanForExecution(source *Source, proc *process.Process) (
 	return spec, nil
 }
 
+// buildFoldedFilterExprs prepares an isolated copy of a filter list and its
+// fold executors. The caller publishes both only after every expression has
+// been rewritten (and, for storage filters, evaluated) successfully.
+func buildFoldedFilterExprs(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	existing []colexec.ExpressionExecutor,
+	evaluate bool,
+) ([]*plan.Expr, []colexec.ExpressionExecutor, error) {
+	filters := plan2.DeepCopyExprList(exprs)
+	executors := append([]colexec.ExpressionExecutor(nil), existing...)
+	firstNewExecutor := len(executors)
+	rollback := func(err error) ([]*plan.Expr, []colexec.ExpressionExecutor, error) {
+		for _, executor := range executors[firstNewExecutor:] {
+			executor.Free()
+		}
+		return nil, existing, err
+	}
+
+	for _, expr := range filters {
+		if _, err := plan2.ReplaceFoldExpr(proc, expr, &executors); err != nil {
+			return rollback(err)
+		}
+	}
+	if evaluate {
+		for _, expr := range filters {
+			if err := plan2.EvalFoldExpr(proc, expr, &executors); err != nil {
+				return rollback(err)
+			}
+		}
+	}
+	return filters, executors, nil
+}
+
+func prepareFoldedFilterExprs(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	cached []*plan.Expr,
+	executors []colexec.ExpressionExecutor,
+	evaluate bool,
+) ([]*plan.Expr, []colexec.ExpressionExecutor, bool, error) {
+	if len(exprs) != len(cached) {
+		filters, nextExecutors, err := buildFoldedFilterExprs(
+			proc, exprs, executors, evaluate)
+		return filters, nextExecutors, err == nil, err
+	}
+	if evaluate {
+		for _, expr := range cached {
+			if err := plan2.EvalFoldExpr(proc, expr, &executors); err != nil {
+				return cached, executors, false, err
+			}
+		}
+	}
+	return cached, executors, false, nil
+}
+
 func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	var err error
 	var tblDef *plan.TableDef
@@ -5451,31 +5510,25 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
 	storageFilters := filterScanStorageExprs(node.FilterList)
-	if len(storageFilters) != len(s.DataSource.FilterList) {
-		s.DataSource.FilterList = plan2.DeepCopyExprList(storageFilters)
-		for _, e := range s.DataSource.FilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
-			if err != nil {
-				return err
-			}
-		}
+	filters, executors, rebuilt, err := prepareFoldedFilterExprs(
+		c.proc, storageFilters, s.DataSource.FilterList, c.filterExprExes, true)
+	if err != nil {
+		return err
 	}
-	for _, e := range s.DataSource.FilterList {
-		err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
-		if err != nil {
-			return err
-		}
+	if rebuilt {
+		c.filterExprExes = executors
+		s.DataSource.FilterList = filters
 	}
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
-	if len(node.BlockFilterList) != len(s.DataSource.BlockFilterList) {
-		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(node.BlockFilterList)
-		for _, e := range s.DataSource.BlockFilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
-			if err != nil {
-				return err
-			}
-		}
+	filters, executors, rebuilt, err = prepareFoldedFilterExprs(
+		c.proc, node.BlockFilterList, s.DataSource.BlockFilterList, c.filterExprExes, false)
+	if err != nil {
+		return err
+	}
+	if rebuilt {
+		c.filterExprExes = executors
+		s.DataSource.BlockFilterList = filters
 	}
 
 	s.DataSource.Timestamp = ts
@@ -6810,8 +6863,14 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	buildOpScopes := make([]*Scope, 0, len(stageNodes))
 	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
 
-	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) { // probe side is shuffle scopes
+	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) {
 		for _, tmp := range probeScopeGroups {
+			// Each parallel probe worker releases one reference to the shared map.
+			// A colocated scope can contain more than one worker.
+			var probeWorkers int32
+			for _, scope := range tmp {
+				probeWorkers += int32(scope.NodeInfo.Mcpu)
+			}
 			bs := newScope(Remote)
 			bs.NodeInfo = scopeNodeWithMcpu(tmp[0].NodeInfo, 1)
 			bs.Proc = c.proc.NewNoContextChildProc(0)
@@ -6823,7 +6882,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			bs.setRootOperator(mergeOp)
 			bs.setRootOperator(constructJoinBuildOperator(
-				c, tmp[0].RootOp, int32(len(tmp)), node.RuntimeFilterBuildList))
+				c, tmp[0].RootOp, probeWorkers, node.RuntimeFilterBuildList))
 			tmp[0].PreScopes = append(tmp[0].PreScopes, bs)
 			buildOpScopes = append(buildOpScopes, bs)
 		}
