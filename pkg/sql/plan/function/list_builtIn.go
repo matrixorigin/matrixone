@@ -5800,7 +5800,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: ST_FRECHETDISTANCE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    spatialDistanceTypeMatch,
 		Overloads: []overload{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
 				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
@@ -5808,13 +5808,19 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
 				newOp:   func() executeLogicOfOverload { return StFrechetDistance32 }},
+			{overloadId: 2, args: []types.T{types.T_geometry, types.T_geometry, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:   func() executeLogicOfOverload { return StFrechetDistanceWithUnit }},
+			{overloadId: 3, args: []types.T{types.T_geometry32, types.T_geometry32, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
+				newOp:   func() executeLogicOfOverload { return StFrechetDistanceWithUnit32 }},
 		},
 	},
 	{
 		functionId: ST_HAUSDORFFDISTANCE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    spatialDistanceTypeMatch,
 		Overloads: []overload{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
 				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
@@ -5822,6 +5828,12 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
 				newOp:   func() executeLogicOfOverload { return StHausdorffDistance32 }},
+			{overloadId: 2, args: []types.T{types.T_geometry, types.T_geometry, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:   func() executeLogicOfOverload { return StHausdorffDistanceWithUnit }},
+			{overloadId: 3, args: []types.T{types.T_geometry32, types.T_geometry32, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
+				newOp:   func() executeLogicOfOverload { return StHausdorffDistanceWithUnit32 }},
 		},
 	},
 
@@ -6133,7 +6145,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: ST_DISTANCE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    spatialDistanceTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -6174,6 +6186,26 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return StDistanceWithSRID32
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_geometry, types.T_geometry, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StDistanceWithUnit
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_geometry32, types.T_geometry32, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StDistanceWithUnit32
 				},
 			},
 		},

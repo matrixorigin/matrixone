@@ -2252,6 +2252,44 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					rule.specialized = true
 				}
 			}
+			// ST_DISTANCE has a legacy third-argument SRID overload and a
+			// MySQL-compatible length-unit overload. A marker is provisionally
+			// wrapped as BIGINT during PREPARE, so a string-backed EXECUTE value
+			// must be rebound from the marker's text expression rather than from
+			// that stale implicit cast. Numeric SQL variables keep the explicit
+			// SRID overload and its existing conversion contract.
+			if hasParamPos && isPreparedSpatialUnitFunction(functionName, i) {
+				if preparedParamValueUsesStringDomain(rule.paramValues[paramPos]) {
+					if cast := rewrittenArg.GetF(); cast != nil &&
+						cast.Func != nil && cast.Func.GetObjName() == "cast" &&
+						isImplicitPreparedParamCast(rewrittenArg) && len(cast.Args) > 0 {
+						rewrittenArg = cast.Args[0]
+					}
+					// TEXT-to-VARCHAR is otherwise costed as a conversion to the
+					// legacy BIGINT overload. Normalize the runtime string marker to
+					// VARCHAR so the unit overload is selected unambiguously while
+					// preserving the original string payload.
+					stringType := types.T_varchar.ToType()
+					rewrittenArg.Typ = makePlan2Type(&stringType)
+				} else if param, ok := rule.paramValues[paramPos].(ParamValue); ok &&
+					param.Value != nil && param.PrepareParamKind != vector.PrepareParamNone {
+					// SQL EXECUTE still materializes the value through a text
+					// transport literal. Recreate the assignment-time numeric
+					// literal before rebinding, otherwise the already-selected unit
+					// overload would see the textual spelling of an SRID (for
+					// example, "4326") and fail as an unknown length unit.
+					numeric, numericOK, numericErr := rule.typedRuntimeParamExpr(paramPos)
+					if numericErr != nil {
+						return nil, numericErr
+					}
+					if numericOK {
+						rewrittenArg = numeric
+					}
+				}
+				boundArgs[i] = rewrittenArg
+				needResetFunction = true
+				compareArgTypes = true
+			}
 			exprImpl.F.Args[i] = rewrittenArg
 			boundArgs[i] = rewrittenArg
 			if useSQLExecuteNumericSource {
@@ -2649,6 +2687,55 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	default:
 		return e, nil
 	}
+}
+
+func isPreparedSpatialUnitFunction(name string, argIndex int) bool {
+	if argIndex != 2 {
+		return false
+	}
+	switch name {
+	case "st_distance", "st_frechetdistance", "st_hausdorffdistance":
+		return true
+	default:
+		return false
+	}
+}
+
+func preparedParamValueUsesStringDomain(value any) bool {
+	param, ok := value.(ParamValue)
+	if !ok || param.Value == nil {
+		return false
+	}
+	// SQL EXECUTE uses the marker's string type as a transport placeholder. Its
+	// assignment-time PrepareParamKind is the stronger signal: a numeric user
+	// variable must keep the legacy SRID overload even when the marker itself
+	// was provisionally typed VARCHAR during PREPARE.
+	if !param.IsBinaryProtocol && param.PrepareParamKind != vector.PrepareParamNone {
+		return false
+	}
+	// SQL EXECUTE transports user variables through a TEXT vector. When the
+	// assignment was numeric, the transport type remains TEXT but the prepared
+	// parameter kind is the authoritative numeric domain. Do not reinterpret
+	// that neutral transport type as a length-unit string.
+	if param.HasRuntimeType {
+		return isStringBackedType(param.RuntimeType)
+	}
+	if param.HasSourceType {
+		if param.SourceType.Oid == types.T_text && param.PrepareParamKind != vector.PrepareParamNone {
+			return false
+		}
+		return isStringBackedType(param.SourceType)
+	}
+	// An explicit non-string source/runtime type is authoritative even when
+	// PrepareParamKind is left at None (the SQL EXECUTE path does not attach a
+	// protocol category). Do not mistake a numeric SRID marker for a unit name.
+	if param.HasSourceType || param.HasRuntimeType {
+		return false
+	}
+	if param.IsBinaryProtocol {
+		return param.PrepareParamKind == vector.PrepareParamNone
+	}
+	return param.PrepareParamKind == vector.PrepareParamNone
 }
 
 // preparedComparisonExactIntegerExpr keeps an exact integral text prefix in
