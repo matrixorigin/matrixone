@@ -24,7 +24,7 @@ approval and does not waive the blocking design review requested on PR #28418.
 | --- | --- | --- |
 | Source locks versus global gates | Contract; Preparation; Publication | Different-table barrier and lock-wait traces |
 | `T_data`, `T_catalog`, commit visibility | Contract; Publication | Snapshot/PITR interleavings and lineage clone timestamp |
-| View -> SNAPSHOT order and write barrier | Publication; Concurrency | Gate-order and optimistic-writer tests |
+| SNAPSHOT -> View order and write barrier | Publication; Concurrency | Gate-order and optimistic-writer tests |
 | Temporary relation/task ownership | State and ownership; Preparation | No temporary View/task residue; final-ID task inspection |
 | Wait/reuse versus full retry | Contract; Retry | Copy count remains one for ordinary contention; two transaction IDs for retry |
 | Prepared AST/database/parameter ownership | Retry | PREPARE -> database change -> EXECUTE and binary retry tests |

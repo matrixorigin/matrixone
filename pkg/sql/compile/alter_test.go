@@ -1207,6 +1207,7 @@ type alterCopyInsertSpyExecutor struct {
 	resultSequences map[string][]executor.Result
 	errs            map[string]error
 	executedSQLs    []string
+	statementOpts   []executor.StatementOption
 }
 
 type alterCopyAutoIncrEpochWorkspace struct {
@@ -1863,6 +1864,7 @@ func (e *alterCopyInsertSpyExecutor) Exec(
 	opts executor.Options,
 ) (executor.Result, error) {
 	e.executedSQLs = append(e.executedSQLs, sql)
+	e.statementOpts = append(e.statementOpts, opts.StatementOption())
 	if sql == e.insertSQL {
 		e.insertCtx = ctx
 		e.insertOption = opts.StatementOption()
@@ -2449,6 +2451,60 @@ func newAlterCopyPrecheckCompile(
 		},
 	}
 	return c
+}
+
+func TestLockAlterCopyPublicationUsesCanonicalLifecycleGateOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		executorOwner bool
+		waitPolicy    lock.WaitPolicy
+	}{
+		{name: "caller-owned waits", waitPolicy: lock.WaitPolicy_Wait},
+		{name: "executor-owned fast-fails", executorOwner: true, waitPolicy: lock.WaitPolicy_FastFail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			spyExec := &alterCopyInsertSpyExecutor{}
+			c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+			c.copyAlterExecutorOwner = tc.executorOwner
+			mp := c.proc.Mp()
+			spyExec.results = map[string]executor.Result{
+				databranchutils.LineageOwnerLifecyclePessimisticLockSQL(): newAlterCopyFixedResult(
+					t, mp, types.T_uint64.ToType(), []uint64{1},
+				),
+				catalog.ViewMetadataLifecycleGateSQL: newAlterCopyFixedResult(
+					t, mp, types.T_uint64.ToType(), []uint64{1},
+				),
+			}
+
+			require.NoError(t, c.lockAlterCopyPublicationOnce())
+			require.Equal(t, []string{
+				databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
+				catalog.ViewMetadataLifecycleGateSQL,
+			}, spyExec.executedSQLs)
+			require.Equal(t, tc.waitPolicy, spyExec.statementOpts[0].WaitPolicy())
+			require.Equal(t, lock.WaitPolicy_Wait, spyExec.statementOpts[1].WaitPolicy())
+		})
+	}
+}
+
+func TestCopyAlterPublicationWaitPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name                  string
+		executorOwner         bool
+		publicationRetryOwner bool
+		want                  lock.WaitPolicy
+	}{
+		{name: "frontend caller", want: lock.WaitPolicy_Wait},
+		{name: "frontend prepared retry owner", publicationRetryOwner: true, want: lock.WaitPolicy_FastFail},
+		{name: "executor owner", executorOwner: true, want: lock.WaitPolicy_FastFail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, copyAlterPublicationWaitPolicy(
+				tc.executorOwner, tc.publicationRetryOwner,
+			))
+		})
+	}
 }
 
 func newAlterCopyConstNullResult(mp *mpool.MPool, typ types.Type) executor.Result {

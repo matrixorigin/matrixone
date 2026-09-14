@@ -316,8 +316,8 @@ func (c *Compile) alterCopyPublicationEligible() (eligible bool) {
 // after doing all of the copy work.
 func (c *Compile) alterCopyPublicationGatesReady() (bool, error) {
 	probes := []string{
-		strings.TrimSuffix(catalog.ViewMetadataLifecycleGateSQL, " for update"),
 		strings.TrimSuffix(databranchutils.LineageOwnerLifecyclePessimisticLockSQL(), " for update"),
+		strings.TrimSuffix(catalog.ViewMetadataLifecycleGateSQL, " for update"),
 	}
 	for _, sql := range probes {
 		result, err := c.runSqlWithResultAndOptions(
@@ -347,11 +347,13 @@ func (c *Compile) alterCopyPublicationGatesReady() (bool, error) {
 }
 
 // lockAlterCopyPublication acquires the global gates only after the copy and
-// synchronous index work are complete. The publication path uses the same
-// View -> SNAPSHOT order as the COPY gate probe. View admission may wait for
-// the short recovery section; SNAPSHOT uses FastFail so a competing owner
-// publication is handed to the owning frontend transaction for a bounded full
-// retry rather than keeping the prepared relation under a lock cycle.
+// synchronous index work are complete. The publication path uses the
+// canonical SNAPSHOT -> View order shared by the other lifecycle owners.
+// An entry point that owns a complete replayable automatic-commit transaction
+// uses FastFail for SNAPSHOT so a competing owner publication is handed to it
+// for a bounded full retry. Ordinary frontend statements and caller-owned
+// transactions wait at that gate so a prepared relation can be reused; View
+// retains its normal wait boundary.
 func (c *Compile) lockAlterCopyPublication(database, table string) error {
 	for attempt := 0; attempt < 2; attempt++ {
 		err := c.lockAlterCopyPublicationOnce()
@@ -376,11 +378,45 @@ func (c *Compile) lockAlterCopyPublication(database, table string) error {
 	return c.markAlterCopyPublicationRetry(moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx))
 }
 
+func (c *Compile) alterCopyPublicationWaitPolicy() lock.WaitPolicy {
+	return copyAlterPublicationWaitPolicy(
+		c.copyAlterExecutorOwner,
+		c.copyAlterPublicationRetryOwner,
+	)
+}
+
+func copyAlterPublicationWaitPolicy(executorOwner, publicationRetryOwner bool) lock.WaitPolicy {
+	if executorOwner || publicationRetryOwner {
+		return lock.WaitPolicy_FastFail
+	}
+	return lock.WaitPolicy_Wait
+}
+
 func (c *Compile) lockAlterCopyPublicationOnce() error {
 	// The regular View helper is deliberately skipped while the refresh
 	// feature is disabled. COPY ALTER still protects the revalidation marker
 	// in that window, so acquire both stable rows directly and verify that the
-	// catalog is ready.
+	// catalog is ready. SNAPSHOT must be acquired first: recovery and other
+	// lifecycle owners use the canonical SNAPSHOT -> View order, and taking
+	// View first here would reintroduce a cross-path wait cycle.
+	snapshotResult, err := c.runSqlWithResultAndOptions(
+		databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
+		int32(catalog.System_Account),
+		executor.StatementOption{}.WithWaitPolicy(c.alterCopyPublicationWaitPolicy()),
+	)
+	if err != nil {
+		snapshotResult.Close()
+		return err
+	}
+	snapshotReady := false
+	snapshotResult.ReadRows(func(rows int, _ []*vector.Vector) bool {
+		snapshotReady = rows > 0
+		return false
+	})
+	snapshotResult.Close()
+	if !snapshotReady {
+		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+	}
 	viewResult, err := c.runSqlWithResultAndOptions(
 		catalog.ViewMetadataLifecycleGateSQL,
 		int32(catalog.System_Account),
@@ -397,24 +433,6 @@ func (c *Compile) lockAlterCopyPublicationOnce() error {
 	})
 	viewResult.Close()
 	if !viewReady {
-		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
-	}
-	snapshotResult, err := c.runSqlWithResultAndOptions(
-		databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
-		int32(catalog.System_Account),
-		executor.StatementOption{}.WithWaitPolicy(lock.WaitPolicy_FastFail),
-	)
-	if err != nil {
-		snapshotResult.Close()
-		return err
-	}
-	snapshotReady := false
-	snapshotResult.ReadRows(func(rows int, _ []*vector.Vector) bool {
-		snapshotReady = rows > 0
-		return false
-	})
-	snapshotResult.Close()
-	if !snapshotReady {
 		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 	}
 	return nil

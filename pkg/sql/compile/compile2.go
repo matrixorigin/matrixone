@@ -1178,6 +1178,7 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	runC.inheritTemporaryDDLPolicy(c)
 	runC.copyAlterInternalExecutor = c.copyAlterInternalExecutor
 	runC.copyAlterExecutorOwner = c.copyAlterExecutorOwner
+	runC.copyAlterPublicationRetryOwner = c.copyAlterPublicationRetryOwner
 	runC.copyAlterAdmissionSet = c.copyAlterAdmissionSet
 	runC.copyAlterAdmitted = c.copyAlterAdmitted
 	runC.inheritLoadUniqueIndexPromotion(c)
