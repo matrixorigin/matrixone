@@ -196,6 +196,7 @@ func TestValidateInvocationRequiresFrozenContract(t *testing.T) {
 		name   string
 		mutate func(*udf.Invocation)
 	}{
+		{name: "language", mutate: func(invocation *udf.Invocation) { invocation.Language = "" }},
 		{name: "mode", mutate: func(invocation *udf.Invocation) { invocation.Mode = "" }},
 		{name: "external handler", mutate: func(invocation *udf.Invocation) { invocation.Handler = "module:add" }},
 		{name: "null policy", mutate: func(invocation *udf.Invocation) { invocation.NullPolicy = "" }},
