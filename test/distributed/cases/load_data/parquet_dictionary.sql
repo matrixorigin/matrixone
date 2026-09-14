@@ -18,7 +18,7 @@ drop table dictionary_types;
 
 -- Required BOOLEAN accepts a required dictionary page.
 create table dictionary_bool_required (bool_col BOOL NOT NULL);
-load data infile {'filepath'='$resources/parquet/parquet_dictionary_bool_required.parquet', 'format'='parquet'} into table dictionary_bool_required;
+load data infile {'filepath'='$resources/parquet/parquet_dictionary_bool_required.parquet', 'format'='parquet'} into table dictionary_bool_required parallel 'true';
 select bool_col, count(*) from dictionary_bool_required group by bool_col order by bool_col;
 drop table dictionary_bool_required;
 
