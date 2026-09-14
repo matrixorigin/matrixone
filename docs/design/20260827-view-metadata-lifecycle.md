@@ -248,7 +248,7 @@ CI 中硬编码 `if: false` 的 Upgrade jobs 只能记录为 SKIPPED，不能替
 6. **接受** rollback 后 fail closed + 再 revalidate；不承诺旧 binary 可独立开放新 lifecycle。
 7. **实现偏差**：原 prototype 使用 SQL 文本识别 `information_schema.columns`，review 发现可绕过；本版本将 section 6.3 固化为 AST contract。
 
-历史设计门禁由 `fengttt` 的 review `5126100008` 关闭，审批只覆盖上述获批 checkpoint。待审锁协议语义 checkpoint 为 `a97f8074d7514428d042de482650c7b4f3f855e1`（其 base 为 `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）；当前 conformance head 为 `dd2f2fd9d81d208bc59440a7508e32a285d092cc`（merge base `4f9d170a22`，后续仅调整 lifecycle/upgrade/生成结果 fixture 与合并冲突，不改变待审锁协议）；本次后台锁协调改变不能自动继承历史审批。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
+历史设计门禁由 `fengttt` 的 review `5126100008` 关闭，审批只覆盖上述获批 checkpoint。待审锁协议语义 checkpoint 为 `a97f8074d7514428d042de482650c7b4f3f855e1`（其 base 为 `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）；当前 conformance head 为 `3d465659549a56f808b53a5e943967d3e3a51a4b`（merge base `be30a70fe5`，后续仅调整 lifecycle/upgrade/生成结果 fixture 与合并冲突，不改变待审锁协议）；本次后台锁协调改变不能自动继承历史审批。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
 
 ### 12.1 后台恢复与显式 owner 事务的锁协调修复
 
@@ -275,3 +275,5 @@ CI run `34570593486` 表明 issue26226 的 fixture 仍比生产 authority predic
 CI run `34586253438` 的唯一 issues race producer `TestIssue28246ConcurrentNextval` 发生在 HAKeeper、LogService、TN 与 CN 心跳同时持续 timeout/connection reset 的 cluster failure window；其功能子用例均已通过，失败点为 teardown context deadline，因此不修改该测试或产品语义。PESSIMISTIC BVT 的唯一差异为 latest main 已将简单 CTAS expression heading 恢复为未限定列名，merge `8077043f3c` 接受 upstream machine-generated result。plan-cache 唯一文本冲突按并集保留 ViewMetadata dependency 与 HIGH_NOT_PRECEDENCE 两组测试；相关 frontend/plan 测试及 quota、issue26226、nextval race 各三次通过。
 
 Merge `dd2f2fd9d8` 与 main 的唯一文本冲突位于 prepared-plan rebuild publish 点。解析同时保留 `viewMetadataColumnsDependent` 的新 generation 归属计算和 upstream `rebuild uncertain until metadata publication` 标记，确保后续参数绑定失败时既不丢失 View lease dependency，也不会把未完整发布的新 plan 标为可复用。冲突相关 prepared GroupConcat/ViewMetadata/PlanCache 测试三次、完整 frontend/compile，以及 quota、issue26226、双 CN restore fence race 各三次通过。
+
+CI run `34680338003` 暴露 cluster restore probe 仍按旧协议要求后台 recovery 在 SNAPSHOT gate 上排队。`3d46565954` 将 canceled 与 successful restore 两条路径都对齐当前协议：restore 持有 SNAPSHOT 时后台 probe 必须以 lock conflict fast-fail、不得建立反向 wait edge；restore 完成释放两把 gate 后，新 probe 必须成功并观察非零 generation。该 isolated restore 用例 race 三次及 frontend/compile coverage 模式通过；main `be30a70fe5` 同时包含该 run 的 JSON ColumnBuffer fixture producer 修复，定向 coverage 十次通过。
