@@ -4553,20 +4553,34 @@ func (h *ParquetHandler) closePagesOnError(ctx context.Context, err error) error
 
 func (h *ParquetHandler) getDataRowCountOnly(bat *batch.Batch, param *ExternalParam) error {
 	batchLimit := int(h.batchCnt)
+	if batchLimit <= 0 {
+		bat.SetRowCount(0)
+		return nil
+	}
 	rowCount := 0
 
 	if h.rowCountRemaining > 0 {
-		rowCount = h.rowsToGeneratedByteBudget(min(h.rowCountRemaining, batchLimit), param)
-		h.rowCountRemaining -= rowCount
+		maxRows := min(h.rowCountRemaining, int64(batchLimit))
+		rowCount = h.rowsToGeneratedByteBudget(int(maxRows), param)
+		h.rowCountRemaining -= int64(rowCount)
 	} else {
 		if h.currentRowGroup >= len(h.rowGroups) {
 			bat.SetRowCount(0)
 			return nil
 		}
-		total := int(h.rowGroups[h.currentRowGroup].NumRows())
+		rowGroup := h.rowGroups[h.currentRowGroup]
+		if rowGroup == nil {
+			return moerr.NewInvalidInput(param.Ctx, "parquet row group is nil")
+		}
+		total := rowGroup.NumRows()
+		if total < 0 {
+			return moerr.NewInvalidInputf(param.Ctx,
+				"malformed parquet row group: NumRows() %d is negative", total)
+		}
 		h.currentRowGroup++
-		rowCount = h.rowsToGeneratedByteBudget(min(total, batchLimit), param)
-		h.rowCountRemaining = total - rowCount
+		maxRows := min(total, int64(batchLimit))
+		rowCount = h.rowsToGeneratedByteBudget(int(maxRows), param)
+		h.rowCountRemaining = total - int64(rowCount)
 	}
 
 	h.offset += int64(rowCount)

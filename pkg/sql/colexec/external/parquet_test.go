@@ -3271,6 +3271,32 @@ func (p *parquetPageWithDictionary) Dictionary() parquet.Dictionary {
 	return p.dictionary
 }
 
+type parquetRowGroupWithNumRows struct {
+	parquet.RowGroup
+	numRows int64
+}
+
+func (r *parquetRowGroupWithNumRows) NumRows() int64 {
+	return r.numRows
+}
+
+func TestParquetRowCountOnlyRejectsInvalidRowGroup(t *testing.T) {
+	param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background()}}
+	bat := batch.NewWithSize(0)
+	h := &ParquetHandler{
+		batchCnt: 1,
+		rowGroups: []parquet.RowGroup{
+			&parquetRowGroupWithNumRows{numRows: -1},
+		},
+	}
+
+	err := h.getDataRowCountOnly(bat, param)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "row group: NumRows() -1 is negative")
+	require.Zero(t, bat.RowCount())
+}
+
 func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Leaf(parquet.BooleanType)

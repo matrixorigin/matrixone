@@ -552,7 +552,7 @@ type ParquetHandler struct {
 	hasPhysicalCol                 bool
 	rowCountOnly                   bool
 	currentRowGroup                int
-	rowCountRemaining              int
+	rowCountRemaining              int64
 }
 
 type columnMapper struct {
