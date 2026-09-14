@@ -748,6 +748,9 @@ func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.
 	if len(values) == 0 {
 		return result, nil
 	}
+	if elementCol := logicalListElementColumn(col); elementCol != nil && !elementCol.Leaf() {
+		return reconstructListOfNested(ctx, elementCol, values)
+	}
 	// Empty list case: single NULL value with low definition level
 	// This indicates an empty list, not a list with a NULL element
 	if len(values) == 1 && values[0].IsNull() && values[0].RepetitionLevel() == 0 {
@@ -761,6 +764,21 @@ func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.
 		}
 	}
 	return result, nil
+}
+
+func logicalListElementColumn(col *parquet.Column) *parquet.Column {
+	if col == nil || col.Leaf() {
+		return nil
+	}
+	children := col.Columns()
+	if len(children) != 1 || children[0].Name() != "list" || !children[0].Repeated() {
+		return nil
+	}
+	elements := children[0].Columns()
+	if len(elements) != 1 {
+		return nil
+	}
+	return elements[0]
 }
 
 // reconstructMap reconstructs Map type

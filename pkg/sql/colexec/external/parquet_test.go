@@ -3570,10 +3570,11 @@ func TestParquetListOfNestedAlignsOptionalFieldsByElement(t *testing.T) {
 	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
 	require.NoError(t, err)
 	element := f.Root().Column("items").Column("list").Column("element")
+	items := f.Root().Column("items")
 	a := element.Column("a")
 	b := element.Column("b")
 
-	got, err := reconstructListOfNested(context.Background(), element, []parquet.Value{
+	got, err := reconstructNestedValue(context.Background(), items, []parquet.Value{
 		parquet.Int32Value(10).Level(0, a.MaxDefinitionLevel(), a.Index()),
 		parquet.NullValue().Level(1, a.MaxDefinitionLevel()-1, a.Index()),
 		parquet.NullValue().Level(0, b.MaxDefinitionLevel()-1, b.Index()),
