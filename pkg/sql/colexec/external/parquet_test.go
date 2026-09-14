@@ -1023,6 +1023,24 @@ func TestParquetListToVectorMapping(t *testing.T) {
 	})
 }
 
+func TestParquetListMapperRejectsValueKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+		{parquet.FloatValue(1).Level(0, 1, 0)},
+	})
+	var h ParquetHandler
+	_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 1})
+	require.NotNil(t, mp)
+
+	badPage := &parquetPageWithData{Page: page, data: encoding.Int32Values([]int32{1})}
+	vec := vector.NewVec(types.New(types.T_array_float32, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "expected FLOAT")
+	require.Zero(t, vec.Length())
+}
+
 func TestParquetCrossTypeMappings(t *testing.T) {
 	proc := testutil.NewProc(t)
 	ctx := context.Background()

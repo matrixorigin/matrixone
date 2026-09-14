@@ -797,6 +797,19 @@ func (*ParquetHandler) getNestedListMapper(sc *parquet.Column, dt plan.Type) (*p
 	default:
 		return nil, nil
 	}
+	mapper := mp.mapper
+	expectedDataKind := parquetEncodingKind(leaf.Type().Kind())
+	mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+		if page.Dictionary() == nil {
+			data := page.Data()
+			if data.Kind() != expectedDataKind {
+				return moerr.NewInvalidInputf(proc.Ctx,
+					"malformed parquet list page values with type %s, expected %s",
+					data.Kind(), expectedDataKind)
+			}
+		}
+		return mapper(mp, page, proc, vec)
+	}
 	return leaf, mp
 }
 
