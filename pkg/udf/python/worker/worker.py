@@ -1198,7 +1198,7 @@ def _validate_descriptor_domain(descriptor: Dict[str, Any]) -> None:
         if scale > 6 or charset:
             raise ValueError("TYPE_CONTRACT: temporal scale or charset is outside the supported range")
     elif type_id in (CHAR, VARCHAR, TEXT):
-        if charset > 3:
+        if charset not in (0, 2, 3):
             raise ValueError("TYPE_CONTRACT: unsupported text charset")
     elif type_id in (BINARY, VARBINARY, BLOB):
         if charset != 1:
