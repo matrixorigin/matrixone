@@ -5107,6 +5107,22 @@ func Test_prepareNullCheck_rejectsInconsistentNoNullLevels(t *testing.T) {
 	}
 }
 
+func Test_prepareNullCheck_rejectsDefinitionLevelAboveMaximum(t *testing.T) {
+	ctx := context.Background()
+	page := parquet.Int32Type.NewPage(0, 2, encoding.Int32Values([]int32{1, 2}))
+	mp := &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}
+
+	wrapped := &parquetPageWithDefinitionLevels{
+		Page:     page,
+		levels:   []byte{2, 0},
+		numNulls: 1,
+	}
+	_, err := prepareNullCheck(ctx, mp, wrapped)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "exceeds maximum")
+}
+
 func Test_readParquetPageValues_rejectsNegativeCounts(t *testing.T) {
 	ctx := context.Background()
 	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))

@@ -2319,7 +2319,12 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 
 	// Traverse levels to compute actual non-null count, not trusting NumNulls()
 	var actualNonNulls int64
-	for _, level := range levels {
+	for i, level := range levels {
+		if level > mp.maxDefinitionLevel {
+			return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
+				"malformed page: definition level %d at row %d exceeds maximum %d",
+				level, i, mp.maxDefinitionLevel)
+		}
 		if level == mp.maxDefinitionLevel {
 			actualNonNulls++
 		}
