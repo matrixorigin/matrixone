@@ -2532,6 +2532,45 @@ func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestWindowPartitionTopNSeparatesGroupingNullFromEmptyString(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"", "", ""}, nil, proc.Mp()))
+	input.Vecs[0].GetGrouping().Add(0)
+	input.Vecs[1] = testutil.MakeInt32Vector([]int32{100, 30, 20}, nil, proc.Mp())
+	input.SetRowCount(3)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "rank",
+				WindowFunc:  newFunExpr("rank"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_varchar.ToType())},
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newColExprWithType(1, types.T_int32.ToType()),
+					Flag: plan.OrderBySpec_DESC,
+				}},
+			}},
+		}},
+		Aggs:          []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		PartitionTopN: true,
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{0, 1}, arg.ctr.ps)
+	require.Equal(t, []uint64{1, 1, 2}, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[2]))
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowPartitionTopNUsesSQLOrderForFloatNaNPeers(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	makeBatch := func(partitionValue int32) *batch.Batch {
@@ -5085,6 +5124,15 @@ func BenchmarkWindowTimestampRangeFoldUnboundedValue(b *testing.B) {
 }
 
 func TestSearchLeftRightTemporalRangeOverflow(t *testing.T) {
+	t.Run("microsecond encoded lower domain", func(t *testing.T) {
+		minimum := types.DatetimeFromClock(types.MinDatetimeYear, 1, 1, 0, 0, 0, 0)
+		_, err := doDatetimeSub(minimum, 2, int64(types.MicroSecond))
+		require.Error(t, err)
+		got, err := doDatetimeSub(minimum+2, 2, int64(types.MicroSecond))
+		require.NoError(t, err)
+		require.Equal(t, minimum, got)
+	})
+
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
 

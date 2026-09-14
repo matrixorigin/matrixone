@@ -1403,7 +1403,7 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			}
 			valueSize := 0
 			if ae.preserveDistinctInputOrder {
-				valueSize = kAggArgOrdinalSz
+				valueSize = ae.distinctInputOrderValueSize()
 			}
 			return addArgumentChunkCapacityWithValue(
 				&needs, &needCount, x, candidate, valueSize)
@@ -2669,6 +2669,13 @@ func (exec *groupConcatExec) PreflightBatchFill(
 				payload += 5 + fieldSize
 			}
 		}
+		withSourceRow := !exec.distinct || exec.orderArgCnt > 0
+		if withSourceRow {
+			if payload > math.MaxInt-groupConcatSourcePayloadHeaderSize {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			payload += groupConcatSourcePayloadHeaderSize
+		}
 		headerSize := kAggArgPrefixSz
 		if !exec.aggInfo.isDistinct {
 			headerSize += kAggArgOrdinalSz
@@ -2689,6 +2696,14 @@ func (exec *groupConcatExec) PreflightBatchFill(
 				key[kAggArgPrefixSz:headerSize], ordinal)
 		}
 		keyOffset := headerSize
+		if withSourceRow {
+			copy(key[keyOffset:], groupConcatSourcePayloadMagic)
+			keyOffset += len(groupConcatSourcePayloadMagic)
+			key[keyOffset] = groupConcatSourcePayloadVersion
+			keyOffset++
+			binary.BigEndian.PutUint64(key[keyOffset:], 0)
+			keyOffset += 8
+		}
 		if exec.orderArgCnt != 0 {
 			binary.BigEndian.PutUint32(key[keyOffset:], uint32(concatPayloadSize))
 			keyOffset += 4
@@ -2768,7 +2783,7 @@ func (exec *groupConcatExec) PreflightBatchFill(
 		}
 		valueSize := 0
 		if exec.aggInfo.preserveDistinctInputOrder {
-			valueSize = kAggArgOrdinalSz
+			valueSize = exec.aggInfo.distinctInputOrderValueSize()
 		}
 		if err := addArgumentChunkCapacityWithValue(
 			&needs, &needCount, x, key, valueSize); err != nil {

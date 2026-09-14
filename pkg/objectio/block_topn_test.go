@@ -138,7 +138,10 @@ func TestBlockTopNSelections(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fs.requests, fs.conversions = nil, 0
-			r := readBlockTopNTest(t, fs, location, mp, newTopNTestOp(2))
+			stats := new(IndexReaderTopStats)
+			op := newTopNTestOp(2)
+			op.Stats = stats
+			r := readBlockTopNTest(t, fs, location, mp, op)
 			require.IsType(t, &scopedChunkedData{}, r.block.Entries[2].CachedData)
 			require.Len(t, fs.requests, 1)
 			require.Len(t, fs.requests[0], 3, "synthetic predecessor must not split or shift the physical read")
@@ -147,6 +150,17 @@ func TestBlockTopNSelections(t *testing.T) {
 			require.Equal(t, tc.want, rows)
 			require.Equal(t, tc.dists, dists)
 			require.Equal(t, tc.chunks, fs.conversions)
+			expectedRows := len(tc.selected)
+			if tc.selected == nil {
+				expectedRows = source.Length()
+			}
+			require.Equal(t, uint64(expectedRows), stats.VectorRowsScored)
+			require.Equal(t, uint64(tc.chunks), stats.VectorChunksRead)
+			require.Equal(t, uint64(len(tc.want)), stats.TopKOutputRows)
+			if tc.chunks > 0 {
+				require.Positive(t, stats.VectorCompressedBytes)
+				require.Positive(t, stats.VectorDecodedBytes)
+			}
 			require.Len(t, fs.requests, 1, "TopN must not fetch chunks again")
 			dst := vector.NewVec(types.T_array_float32.ToType())
 			defer dst.Free(mp)

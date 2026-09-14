@@ -106,6 +106,20 @@ func fixedTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
 	return false, s1, s2
 }
 
+// arithmeticTypeCastRule1 applies the fixed coercion rules used by the four
+// arithmetic operators. BIT values are stored and executed as uint64,
+// so pairing BIT with a signed bigint must use the same exact DECIMAL128
+// domain as UINT64 with a signed bigint. Keeping this adjustment here, rather
+// than changing fixedTypeCastRule1, leaves comparison coercion unchanged.
+func arithmeticTypeCastRule1(s1, s2 types.Type) (bool, types.Type, types.Type) {
+	if s1.Oid == types.T_bit && s2.Oid == types.T_int64 {
+		s1.Oid = types.T_uint64
+	} else if s1.Oid == types.T_int64 && s2.Oid == types.T_bit {
+		s2.Oid = types.T_uint64
+	}
+	return fixedTypeCastRule1(s1, s2)
+}
+
 // a fixed type cast rule for
 //  1. Div
 //  2. IntegerDiv
@@ -177,10 +191,18 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 // the original overload slice avoids planner-time allocations for matchers
 // that need to reserve a dedicated string overload.
 func fixedTypeMatchExcept(overloads []overload, inputs []types.Type, excluded int) checkResult {
+	return fixedTypeMatchSelection(overloads, inputs, excluded, -1)
+}
+
+func fixedTypeMatchOnly(overloads []overload, inputs []types.Type, selected int) checkResult {
+	return fixedTypeMatchSelection(overloads, inputs, -1, selected)
+}
+
+func fixedTypeMatchSelection(overloads []overload, inputs []types.Type, excluded, selected int) checkResult {
 	minIndex := -1
 	minCost := math.MaxInt
 	for i, ov := range overloads {
-		if i == excluded {
+		if i == excluded || (selected >= 0 && i != selected) {
 			continue
 		}
 		if len(ov.args) != len(inputs) {
@@ -225,19 +247,48 @@ func fixedTypeMatchExcept(overloads []overload, inputs []types.Type, excluded in
 	return newCheckResultWithCast(minIndex, castType)
 }
 
-// binTypeMatch keeps numeric inputs on their existing typed overloads and
-// routes MySQL string domains through the prefix-aware string executor. An
-// unresolved parameter is cast to VARCHAR so each execution can retain the
-// normal NULL and runtime string conversion behavior.
+// userLevelLockTypeMatch preserves the historical DOUBLE coercion for all
+// non-decimal timeout arguments, while dispatching DECIMAL inputs without an
+// intermediate DOUBLE conversion. MySQL's Item_decimal and Item_float use
+// different integer-conversion rules, so merging these domains loses SQL
+// literal semantics.
+func userLevelLockTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 2 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	selected := 0 // the existing FLOAT64 overload remains the compatibility path
+	switch inputs[1].Oid {
+	case types.T_decimal64:
+		selected = 1
+	case types.T_decimal128:
+		selected = 2
+	case types.T_decimal256:
+		selected = 3
+	}
+	return fixedTypeMatchOnly(overloads, inputs, selected)
+}
+
+// binTypeMatch keeps the existing integer, float, and string fast paths while
+// routing types whose numeric representation is decided by their runtime
+// vector (including prepared parameters) through the dynamic BIN executor.
+// This is intentionally local to BIN: adding temporal/decimal/BOOL casts to
+// the global implicit-cast table would change overload resolution for unrelated
+// operators.
 func binTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) != 1 || len(overloads) == 0 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
 	stringOverload := -1
+	dynamicOverload := -1
 	for i, ov := range overloads {
 		if len(ov.args) == 1 && ov.args[0] == types.T_varchar {
 			if stringOverload == -1 {
 				stringOverload = i
+			}
+		}
+		if len(ov.args) == 1 && ov.args[0] == types.T_any {
+			if dynamicOverload == -1 {
+				dynamicOverload = i
 			}
 		}
 	}
@@ -245,10 +296,23 @@ func binTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 		return fixedTypeMatch(overloads, inputs)
 	}
 	if inputs[0].Oid == types.T_any {
+		if dynamicOverload >= 0 {
+			return newCheckResultWithSuccess(dynamicOverload)
+		}
 		return newCheckResultWithCast(stringOverload, []types.Type{types.T_varchar.ToType()})
 	}
 	if inputs[0].Oid.IsMySQLString() {
 		return newCheckResultWithSuccess(stringOverload)
+	}
+	if dynamicOverload >= 0 {
+		switch inputs[0].Oid {
+		case types.T_bool,
+			types.T_bit,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256,
+			types.T_date, types.T_datetime, types.T_time, types.T_timestamp,
+			types.T_year:
+			return newCheckResultWithSuccess(dynamicOverload)
+		}
 	}
 
 	return fixedTypeMatchExcept(overloads, inputs, stringOverload)
@@ -608,6 +672,52 @@ func unaryTildeTypeMatch(overloads []overload, inputs []types.Type) checkResult 
 		}
 	}
 	return fixedDirectlyTypeMatch(overloads, inputs)
+}
+
+func isBitwiseBinaryStringType(oid types.T) bool {
+	switch oid {
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return true
+	default:
+		return false
+	}
+}
+
+func bitShiftTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	// The first four overloads are the existing numeric signatures. Keep their
+	// matching behavior isolated so adding bytewise overloads cannot make a
+	// numeric or textual left operand bind to a binary implementation.
+	numericOverloads := overloads
+	if len(numericOverloads) > 4 {
+		numericOverloads = numericOverloads[:4]
+	}
+	if len(inputs) != 2 || !isBitwiseBinaryStringType(inputs[0].Oid) {
+		return fixedTypeMatch(numericOverloads, inputs)
+	}
+
+	bestIndex := -1
+	bestCost := math.MaxInt
+	for i, candidate := range overloads {
+		if len(candidate.args) != 2 || candidate.args[0] != inputs[0].Oid {
+			continue
+		}
+		status, cost := tryToMatch([]types.Type{inputs[1]}, []types.T{candidate.args[1]})
+		if status == matchDirectly {
+			return newCheckResultWithSuccess(i)
+		}
+		if status != matchFailed && cost < bestCost {
+			bestIndex = i
+			bestCost = cost
+		}
+	}
+	if bestIndex == -1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+
+	return newCheckResultWithCast(bestIndex, []types.Type{
+		inputs[0],
+		overloads[bestIndex].args[1].ToType(),
+	})
 }
 
 // return whether `from` can match `to` implicitly, and match cost.
@@ -1165,6 +1275,7 @@ func initFixed1() {
 		// This applies to comparison, arithmetic, and multiplication operations
 		{types.T_float32, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_float32, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_char, types.T_float32, types.T_float32},
 		{types.T_float32, types.T_varchar, types.T_float32, types.T_float32},
 		{types.T_float32, types.T_binary, types.T_float32, types.T_float32},
@@ -1183,6 +1294,7 @@ func initFixed1() {
 		{types.T_float64, types.T_float32, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_float64, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_char, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_binary, types.T_float64, types.T_float64},
@@ -1927,6 +2039,7 @@ func initFixed2() {
 		// Note: Comparison operators still use float32 for performance (see comparison type rules)
 		{types.T_float32, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_float32, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_char, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_binary, types.T_float64, types.T_float64},
@@ -1944,6 +2057,7 @@ func initFixed2() {
 		{types.T_float64, types.T_uint64, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_float64, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_char, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_binary, types.T_float64, types.T_float64},

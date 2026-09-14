@@ -345,6 +345,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Limit = t.Limit
 		op.PartitionByCount = t.PartitionByCount
 		op.PreReduce = t.PreReduce
+		op.WithTies = t.WithTies
 		op.Algorithm = t.Algorithm
 		op.SpillMem = t.SpillMem
 		op.SetInfo(&info)
@@ -1929,20 +1930,20 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 		if err != nil {
 			panic(err)
 		}
-		maxLen, ok := value.(int64)
-		if !ok || maxLen < 0 {
+		maxLen, ok := groupConcatMaxLenAsUint64(value)
+		if !ok {
 			panic(moerr.NewInternalErrorNoCtxf(
 				"group_concat_max_len has invalid value %v", value))
 		}
 		if f.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
-			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, uint64(maxLen))
+			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, maxLen)
 		}
 		separator := ","
 		if len(args) > 1 {
 			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
 			args = args[:len(args)-1]
 		}
-		return args, aggexec.EncodeGroupConcatConfig(separator, uint64(maxLen))
+		return args, aggexec.EncodeGroupConcatConfig(separator, maxLen)
 
 	case plan2.NameClusterCenters:
 		if len(args) > 1 {
@@ -1987,6 +1988,7 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 		if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
 			panic(err)
 		}
+		configExpr = normalizeAggregateConfigExpr(proc, configExpr)
 		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
 		if err != nil {
 			panic(err)
@@ -2000,6 +2002,30 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 		return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending)
 	}
 	return args, nil
+}
+
+// normalizeAggregateConfigExpr materializes a semantically constant function
+// expression as a literal before a scalar aggregate configuration consumes it.
+// Some internal plans (notably CTAS's INSERT ... SELECT) bypass the optional
+// optimizer constant-fold pass.  Their expression executor can therefore
+// return a one-row flat vector for a constant cast, although the plan still
+// satisfies rule.IsConstant.  Fold a private copy here so the configuration
+// boundary does not depend on which planner path produced the expression.
+func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) *plan.Expr {
+	if expr == nil || expr.GetF() == nil {
+		return expr
+	}
+	folded, err := plan2.ConstantFold(
+		batch.EmptyForConstFoldBatch,
+		plan2.DeepCopyExpr(expr),
+		proc,
+		false,
+		true,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return folded
 }
 
 func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) string {
@@ -2279,6 +2305,7 @@ func constructPartition(node *plan.Node) *partition.Partition {
 	arg.OrderBySpecs = node.OrderBy
 	arg.Limit = node.Limit
 	arg.PartitionByCount = node.PartitionByCount
+	arg.WithTies = node.PartitionTopNWithTies
 	arg.Algorithm = node.PartitionAlgorithm
 	arg.SpillMem = node.SpillMem
 	return arg

@@ -82,6 +82,17 @@ func TestAggregateExecutorIDs(t *testing.T) {
 	}
 }
 
+func TestMinMaxRejectJSON(t *testing.T) {
+	for _, name := range []string{"min", "max"} {
+		_, err := GetFunctionByName(
+			context.Background(),
+			name,
+			[]types.Type{types.T_json.ToType()},
+		)
+		require.Error(t, err, name)
+	}
+}
+
 func TestInOverloadWireIDsRemainAppendOnly(t *testing.T) {
 	// GetFunctionByName encodes the matched slice index, and remote executors
 	// decode that index directly. These pre-existing mappings are therefore a

@@ -99,6 +99,12 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateRemoteBinaryStringPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateOctStringProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteIgnoreCheckPipelineProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -113,6 +119,12 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateStrictWriteDestination(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateGroupConcatTimeZoneDestination(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -125,10 +137,19 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateOctStringProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteIgnoreCheckPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemotePartitionTopNWithTiesPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
@@ -231,10 +252,16 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateOctStringProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemotePartitionTopNWithTiesPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
@@ -817,6 +844,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.Limit = t.Limit
 		in.PartitionByCount = t.PartitionByCount
 		in.PartitionTopNPreReduce = t.PreReduce
+		in.PartitionTopNWithTies = t.WithTies
 		in.PartitionAlgorithm = t.Algorithm
 		in.SpillMem = t.SpillMem
 	case *product.Product:
@@ -1451,6 +1479,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.Limit = opr.Limit
 		arg.PartitionByCount = opr.PartitionByCount
 		arg.PreReduce = opr.PartitionTopNPreReduce
+		arg.WithTies = opr.PartitionTopNWithTies
 		arg.Algorithm = opr.PartitionAlgorithm
 		arg.SpillMem = opr.SpillMem
 		op = arg
@@ -2063,6 +2092,18 @@ func validateRemoteExpressionPipelineProtocol(
 			"typed numeric FORMAT arguments require MORPC protocol version 59",
 		)
 	}
+	if features.TypedConversionFunctions &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion64) {
+		return moerr.NewNotSupportedNoCtx(
+			"typed BIN/CONV execution requires MORPC protocol version 64",
+		)
+	}
+	if features.ASCIIInt32Result &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion65) {
+		return moerr.NewNotSupportedNoCtx(
+			"signed INT ASCII results require MORPC protocol version 65",
+		)
+	}
 	return nil
 }
 
@@ -2129,6 +2170,39 @@ func validateRemoteDistributedOrderedTopPipelineProtocol(
 		}
 	}
 	return nil
+}
+
+func validateRemotePartitionTopNWithTiesPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		if instruction != nil && instruction.PartitionTopNWithTies &&
+			(proc == nil || !procSupportsRemotePartitionTopNWithTies(proc)) {
+			return moerr.NewNotSupportedNoCtx(
+				"RANK Partition Top-N requires MORPC protocol version 69",
+			)
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemotePartitionTopNWithTiesPipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func procSupportsRemotePartitionTopNWithTies(proc *process.Process) bool {
+	version, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion69
 }
 
 func validateRemoteRightDedupInputKeysUniquePipelineProtocol(
@@ -2336,6 +2410,18 @@ func binaryStringSemanticFunction(functionID int32) bool {
 	default:
 		return false
 	}
+}
+
+// Recheck at serialization: a scope compiled before a capability change must
+// never reach an older CN with the new meaning of CHECK_CONSTRAINT_ASSERT.
+func validateRemoteIgnoreCheckPipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+	if !statementIgnoreEnabled(proc) ||
+		supportsRemoteIgnoreCheck(proc.GetService()) ||
+		!pipelineContainsFunction(p, isCheckConstraintFunction) {
+		return nil
+	}
+	return moerr.NewNotSupportedNoCtxf(
+		"INSERT IGNORE CHECK semantics require MORPC protocol version %d", defines.MORPCVersion63)
 }
 
 func validateRemoteBinaryStringPipelineProtocol(

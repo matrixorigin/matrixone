@@ -458,6 +458,7 @@ func (r *BlockTopNRead) TopN(ctx context.Context, selected []int64) ([]int64, []
 				return err
 			}
 			defer release()
+			recordVectorChunk(r.top, entry)
 			return reader.consumeData(ctx, entry.CachedData, meta, rows, ordinal, acc)
 		})
 }
@@ -477,6 +478,7 @@ func (r *BlockTopNRead) wholeTopN(ctx context.Context, reader *chunkTopNReader, 
 		if err != nil {
 			return nil, nil, err
 		}
+		recordVectorChunk(r.top, entry)
 		var source vector.Vector
 		err = reader.bindChunk(&source, entry.CachedData, meta)
 		if err == nil {

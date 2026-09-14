@@ -75,18 +75,57 @@ export_set_null_off
 null
 SELECT EXPORT_SET(5, 'Y', 'N', NULL, 4) AS export_set_null_sep;
 export_set_null_sep
-Y,N,Y,N
+null
 SELECT EXPORT_SET(5, 'Y', 'N', ',', NULL) AS export_set_null_bits_count;
 export_set_null_bits_count
-Y,N,Y,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N,N
-CREATE TABLE t1(bits INT, on_str VARCHAR(10), off_str VARCHAR(10));
-INSERT INTO t1 VALUES (5, 'Y', 'N'), (10, 'ON', 'OFF'), (15, '1', '0');
-SELECT bits, EXPORT_SET(bits, on_str, off_str, ',', 4) AS result FROM t1;
+null
+CREATE TABLE t1(bits INT, on_str VARCHAR(10), off_str VARCHAR(10), number_of_bits INT);
+INSERT INTO t1 VALUES (5, 'Y', 'N', 4), (10, 'ON', 'OFF', 4), (15, '1', '0', 4);
+SELECT bits, EXPORT_SET(bits, on_str, off_str, ',', number_of_bits) AS result FROM t1;
 bits    result
 5    Y,N,Y,N
 10    OFF,ON,OFF,ON
 15    1,1,1,1
 DROP TABLE t1;
+CREATE TABLE t_number_of_bits(
+bits INT,
+n_int8 TINYINT,
+n_int16 SMALLINT,
+n_int32 INT,
+n_int64 BIGINT,
+n_uint8 TINYINT UNSIGNED,
+n_uint16 SMALLINT UNSIGNED,
+n_uint32 INT UNSIGNED,
+n_uint64 BIGINT UNSIGNED
+);
+INSERT INTO t_number_of_bits VALUES (5, 4, 4, 4, 4, 4, 4, 4, 4);
+SELECT
+EXPORT_SET(bits, 'Y', 'N', ',', n_int8) AS int8_result,
+EXPORT_SET(bits, 'Y', 'N', ',', n_int16) AS int16_result,
+EXPORT_SET(bits, 'Y', 'N', ',', n_int32) AS int32_result,
+EXPORT_SET(bits, 'Y', 'N', ',', n_int64) AS int64_result,
+EXPORT_SET(bits, 'Y', 'N', ',', n_uint8) AS uint8_result,
+EXPORT_SET(bits, 'Y', 'N', ',', n_uint16) AS uint16_result,
+EXPORT_SET(bits, 'Y', 'N', ',', n_uint32) AS uint32_result,
+EXPORT_SET(bits, 'Y', 'N', ',', n_uint64) AS uint64_result
+FROM t_number_of_bits;
+int8_result    int16_result    int32_result    int64_result    uint8_result    uint16_result    uint32_result    uint64_result
+Y,N,Y,N    Y,N,Y,N    Y,N,Y,N    Y,N,Y,N    Y,N,Y,N    Y,N,Y,N    Y,N,Y,N    Y,N,Y,N
+DROP TABLE t_number_of_bits;
+CREATE TABLE t_export_set_numeric(
+bits_bit BIT(8),
+bits_decimal64 DECIMAL(18, 1),
+bits_decimal128 DECIMAL(38, 1)
+);
+INSERT INTO t_export_set_numeric VALUES (b'10000101', 5.0, 5.0);
+SELECT
+EXPORT_SET(bits_bit, 'Y', 'N', ',', 8) AS bit_result,
+EXPORT_SET(bits_decimal64, 'Y', 'N', ',', 4) AS decimal64_result,
+EXPORT_SET(bits_decimal128, 'Y', 'N', ',', 4) AS decimal128_result
+FROM t_export_set_numeric;
+bit_result    decimal64_result    decimal128_result
+Y,N,Y,N,N,N,N,Y    Y,N,Y,N    Y,N,Y,N
+DROP TABLE t_export_set_numeric;
 CREATE TABLE t1(bits INT);
 INSERT INTO t1 VALUES (5), (10), (15);
 SELECT * FROM t1 WHERE EXPORT_SET(bits, 'Y', 'N', ',', 4) LIKE 'Y%';
@@ -96,7 +135,10 @@ bits
 DROP TABLE t1;
 SELECT EXPORT_SET(0, 'Y', 'N', ',', 0) AS export_set_zero_bits;
 export_set_zero_bits
-N
+
 SELECT EXPORT_SET(0, 'Y', 'N', ',', 1) AS export_set_one_bit_zero;
 export_set_one_bit_zero
 N
+SELECT LENGTH(EXPORT_SET(-1, 'Y', 'N', ',', -1)) AS export_set_negative_count_length;
+export_set_negative_count_length
+127

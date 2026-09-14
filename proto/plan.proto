@@ -1227,6 +1227,10 @@ message Node {
   // PARTITION only: optimizer-selected implementation for ordinary window
   // partitioning. Partition Top-N ignores this field.
   PartitionAlgorithm partition_algorithm = 90;
+
+  // PARTITION Top-N only: retain every peer of the Nth row so the reduced
+  // candidate stream is exact for RANK rather than only ROW_NUMBER.
+  bool partition_top_n_with_ties = 91;
 }
 
 message SnapshotExtraInfo {
@@ -1499,6 +1503,12 @@ message PreInsertUkCtx {
   int32 auto_increment_generated_column = 13;
   int32 auto_increment_key_index = 14;
   int32 auto_increment_output_column = 15;
+  // User-facing metadata for diagnostics emitted by ordered INSERT IGNORE
+  // arbitration. key_names and key_type_counts are parallel to key_columns;
+  // key_types is the concatenation of the logical types for each key.
+  repeated string key_names = 16;
+  repeated Type key_types = 17;
+  repeated int32 key_type_counts = 18;
 }
 
 message PreInsertCtx {
@@ -1675,6 +1685,12 @@ message Query {
   // false when the SELECT has an explicit top-level LIMIT, which takes
   // precedence according to MySQL semantics.
   bool apply_sql_select_limit = 15;
+
+  // Index hints that could not be resolved from the table definition used to
+  // build this plan. The compiler validates their table metadata before
+  // execution so a committed concurrent CREATE INDEX can rebuild the plan;
+  // without a definition change, it returns the original key-not-found error.
+  repeated UnresolvedIndexHint unresolved_index_hints = 16;
 }
 
 message TransationControl {
@@ -2338,4 +2354,9 @@ message VectorIndexScanWork {
   int32 blocks = 2;
   double vector_bytes_per_row = 3;
   int32 objects = 4;
+}
+
+message UnresolvedIndexHint {
+  ObjectRef table = 1;
+  string index_name = 2;
 }

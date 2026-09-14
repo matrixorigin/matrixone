@@ -18,6 +18,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,9 +87,185 @@ func TestAreaSquareMeters(t *testing.T) {
 	require.Equal(t, 0.0, AreaSquareMeters(mustParse(t, "LINESTRING(0 0,1 1)")))
 }
 
+func TestAreaSquareMetersAcrossAntimeridian(t *testing.T) {
+	outer := mustParse(t, "POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))")
+	inner := mustParse(t, "POLYGON((179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))")
+	outerArea := AreaSquareMeters(outer)
+	innerArea := AreaSquareMeters(inner)
+
+	// A two-degree by two-degree patch next to the antimeridian is a local
+	// region, not the 358-degree complement. The spherical reference is enough
+	// here; the invariant under test is the selected region and its ordering.
+	require.InEpsilon(t, 4.95e10, outerArea, 0.03)
+	require.InEpsilon(t, 1.24e10, innerArea, 0.03)
+	require.Less(t, innerArea, outerArea)
+
+	for _, wkt := range []string{
+		"POLYGON((179 1,-179 1,-179 -1,179 -1,179 1))",
+		"POLYGON((-179 -1,179 -1,179 1,-179 1,-179 -1))",
+	} {
+		require.InEpsilon(t, outerArea, AreaSquareMeters(mustParse(t, wkt)), 1e-12)
+	}
+
+	withHole := mustParse(t, "POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1),(179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))").(Polygon)
+	require.InEpsilon(t, outerArea-innerArea, AreaSquareMeters(withHole), 0.03)
+	require.False(t, GeodeticContainsPoint(Coord{180, 0}, withHole))
+	d, ok := DistanceMeters(mustParse(t, "POINT(180 0)"), withHole)
+	require.True(t, ok)
+	require.Greater(t, d, 0.0)
+
+	multi := mustParse(t, "MULTIPOLYGON(((179 -1,-179 -1,-179 1,179 1,179 -1)),((10 0,11 0,11 1,10 1,10 0)))")
+	require.InEpsilon(t, outerArea+AreaSquareMeters(mustParse(t, "POLYGON((10 0,11 0,11 1,10 1,10 0))")), AreaSquareMeters(multi), 0.03)
+	d, ok = DistanceMeters(mustParse(t, "POINT(10.5 0.5)"), multi)
+	require.True(t, ok)
+	require.Equal(t, 0.0, d)
+}
+
+func TestGeodeticRingLocalityGuard(t *testing.T) {
+	wideBelt := "POLYGON((-170 -80,-60 -80,60 -80,170 -80,170 80,60 80,-60 80,-170 80,-170 -80))"
+	wantHalfSphere := 2 * math.Pi * EarthRadiusMeters * EarthRadiusMeters
+	wideArea := AreaSquareMeters(mustParse(t, wideBelt))
+	require.False(t, geodeticRingIsLocal(mustParse(t, wideBelt).(Polygon).Rings[0][:8]))
+	require.Greater(t, wideArea, wantHalfSphere)
+	require.True(t, GeodeticContainsPoint(Coord{0, 0}, mustParse(t, wideBelt).(Polygon)))
+
+	reversedWide := "POLYGON((-170 80,-60 80,60 80,170 80,170 -80,60 -80,-60 -80,-170 -80,-170 80))"
+	require.InEpsilon(t, wideArea, AreaSquareMeters(mustParse(t, reversedWide)), 1e-12)
+
+	for _, wkt := range []string{
+		"POLYGON((-90 -1,90 -1,90 1,-90 1,-90 -1))",      // exact 180-degree span
+		"POLYGON((0 89,90 89,90 90,0 90,0 89))",          // pole vertex
+		"POLYGON((-135 85,-45 85,45 85,135 85,-135 85))", // pole-enclosing cap
+	} {
+		polygon := mustParse(t, wkt).(Polygon)
+		require.False(t, geodeticRingIsLocal(polygon.Rings[0][:len(polygon.Rings[0])-1]))
+	}
+
+	for _, wkt := range []string{
+		"POLYGON((179 80,-179 80,-179 81,179 81,179 80))",
+		"POLYGON((179 -81,-179 -81,-179 -80,179 -80,179 -81))",
+	} {
+		polygon := mustParse(t, wkt).(Polygon)
+		area := AreaSquareMeters(polygon)
+		reversed := make([]Coord, len(polygon.Rings[0]))
+		for i := range polygon.Rings[0] {
+			reversed[i] = polygon.Rings[0][len(polygon.Rings[0])-1-i]
+		}
+		require.True(t, geodeticRingIsLocal(polygon.Rings[0][:len(polygon.Rings[0])-1]))
+		require.InEpsilon(t, area, AreaSquareMeters(Polygon{Rings: [][]Coord{reversed}}), 1e-12)
+	}
+}
+
+func TestValidateGeodeticCoordinates(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		g    Geometry
+		want string
+	}{
+		{name: "point", g: Point{X: 181, Y: 0}, want: "longitude 181"},
+		{name: "line string", g: LineString{Points: []Coord{{X: 0, Y: 0}, {X: 0, Y: 91}}}, want: "latitude 91"},
+		{name: "polygon hole", g: Polygon{Rings: [][]Coord{{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 1, Y: 1}, {X: 0, Y: 0}}, {{X: -181, Y: 0}}}}, want: "longitude -181"},
+		{name: "later multipoint member", g: MultiPoint{Points: []Point{{X: 0, Y: 0}, {X: 0, Y: -91}}}, want: "latitude -91"},
+		{name: "later multiline member", g: MultiLineString{Lines: []LineString{{Points: []Coord{{X: 0, Y: 0}}}, {Points: []Coord{{X: 181, Y: 0}}}}}, want: "longitude 181"},
+		{name: "later multipolygon member", g: MultiPolygon{Polygons: []Polygon{{Rings: [][]Coord{{{X: 0, Y: 0}}}}, {Rings: [][]Coord{{{X: 0, Y: 91}}}}}}, want: "latitude 91"},
+		{name: "nested geometry collection", g: GeometryCollection{Geometries: []Geometry{GeometryCollection{Geometries: []Geometry{Point{X: 0, Y: 90.1}}}}}, want: "latitude 90.1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateGeodeticCoordinates(tc.g)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+
+	for _, coord := range []Coord{
+		{X: -180, Y: -90},
+		{X: 180, Y: 90},
+	} {
+		require.NoError(t, ValidateGeodeticCoordinates(Point{X: coord.X, Y: coord.Y}))
+	}
+
+	for _, tc := range []struct {
+		name  string
+		coord Coord
+		want  string
+	}{
+		{name: "longitude above maximum", coord: Coord{X: 180.0001}, want: "longitude 180.0001"},
+		{name: "longitude below minimum", coord: Coord{X: -180.0001}, want: "longitude -180.0001"},
+		{name: "latitude above maximum", coord: Coord{Y: 90.0001}, want: "latitude 90.0001"},
+		{name: "latitude below minimum", coord: Coord{Y: -90.0001}, want: "latitude -90.0001"},
+		{name: "NaN longitude", coord: Coord{X: math.NaN()}, want: "longitude must be finite"},
+		{name: "positive infinity longitude", coord: Coord{X: math.Inf(1)}, want: "longitude must be finite"},
+		{name: "negative infinity longitude", coord: Coord{X: math.Inf(-1)}, want: "longitude must be finite"},
+		{name: "NaN latitude", coord: Coord{Y: math.NaN()}, want: "latitude must be finite"},
+		{name: "positive infinity latitude", coord: Coord{Y: math.Inf(1)}, want: "latitude must be finite"},
+		{name: "negative infinity latitude", coord: Coord{Y: math.Inf(-1)}, want: "latitude must be finite"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateGeodeticCoordinates(Point{X: tc.coord.X, Y: tc.coord.Y})
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+
+	t.Run("empty point has no coordinate to validate", func(t *testing.T) {
+		g := GeometryCollection{Geometries: []Geometry{
+			Point{X: math.NaN(), Y: math.Inf(1), IsEmpty: true},
+			MultiPoint{Points: []Point{{X: math.Inf(-1), IsEmpty: true}}},
+		}}
+		require.NoError(t, ValidateGeodeticCoordinates(g))
+	})
+	t.Run("nil geometry", func(t *testing.T) {
+		err := ValidateGeodeticCoordinates(nil)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	})
+	t.Run("unsupported geometry", func(t *testing.T) {
+		err := ValidateGeodeticCoordinates(unsupportedGeometry{})
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	})
+	t.Run("excessive collection nesting", func(t *testing.T) {
+		var g Geometry = Point{X: 0, Y: 0}
+		for range maxGeometryNestingDepth + 1 {
+			g = GeometryCollection{Geometries: []Geometry{g}}
+		}
+		err := ValidateGeodeticCoordinates(g)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+		require.Contains(t, err.Error(), "geometry collection nesting depth")
+	})
+}
+
 func TestGeodeticContainsPoint(t *testing.T) {
 	p := mustParse(t, "POLYGON((0 0,10 0,10 10,0 10,0 0),(2 2,2 4,4 4,4 2,2 2))").(Polygon)
 	require.True(t, GeodeticContainsPoint(Coord{5, 5}, p))
 	require.False(t, GeodeticContainsPoint(Coord{20, 5}, p)) // outside
 	require.False(t, GeodeticContainsPoint(Coord{3, 3}, p))  // in hole
+}
+
+func TestGeodeticAntimeridianRingUsesLocalInterior(t *testing.T) {
+	outer := mustParse(t, "POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))").(Polygon)
+	require.True(t, GeodeticContainsPoint(Coord{180, 0}, outer))
+	require.False(t, GeodeticContainsPoint(Coord{0, 0}, outer))
+
+	for _, wkt := range []string{
+		"POLYGON((179 1,-179 1,-179 -1,179 -1,179 1))",
+		"POLYGON((-179 -1,179 -1,179 1,-179 1,-179 -1))",
+	} {
+		ring := mustParse(t, wkt).(Polygon)
+		require.True(t, GeodeticContainsPoint(Coord{180, 0}, ring))
+		require.False(t, GeodeticContainsPoint(Coord{0, 0}, ring))
+	}
+
+	withHole := mustParse(t, "POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1),(179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))").(Polygon)
+	require.False(t, GeodeticContainsPoint(Coord{180, 0}, withHole))
+
+	d, ok := DistanceMeters(mustParse(t, "POINT(180 0)"), outer)
+	require.True(t, ok)
+	require.Equal(t, 0.0, d)
+	d, ok = DistanceMeters(mustParse(t, "POINT(0 0)"), outer)
+	require.True(t, ok)
+	require.Greater(t, d, 1e6)
 }

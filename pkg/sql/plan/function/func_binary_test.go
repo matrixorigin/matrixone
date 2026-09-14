@@ -333,6 +333,43 @@ func TestCeil(t *testing.T) {
 	}
 }
 
+func TestCeilFloorDecimal128Int64Boundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimalType := types.New(types.T_decimal128, 19, 0)
+	values := make([]types.Decimal128, 0, 6)
+	for _, value := range []string{
+		"9223372036854775807",
+		"9223372036854775808",
+		"-9223372036854775808",
+		"-9223372036854775809",
+		"9999999999999999999",
+		"-9999999999999999999",
+	} {
+		decimal, err := types.ParseDecimal128(value, decimalType.Width, decimalType.Scale)
+		require.NoError(t, err)
+		values = append(values, decimal)
+	}
+	nulls := make([]bool, len(values))
+
+	functions := []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "ceil", fn: CeilDecimal128},
+		{name: "floor", fn: FloorDecimal128},
+	}
+	for _, function := range functions {
+		t.Run(function.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(decimalType, values, nulls)},
+				NewFunctionTestResult(decimalType, false, values, nulls),
+				function.fn)
+			succeeded, info := testCase.Run()
+			require.True(t, succeeded, info)
+		})
+	}
+}
+
 func initFloorTestCase() []tcTemp {
 	rfs := []float64{0, -2, -3, math.MinInt64 + 1, math.MinInt64 + 2, -101, -2, 0,
 		0, 1, 4, 8, 16, 32, 64, math.MaxInt64, math.MaxFloat64, 0}
@@ -3290,7 +3327,8 @@ func TestConvStringUsesNumericPrefix(t *testing.T) {
 }
 
 func TestConvTypeCheckAcceptsNullBase(t *testing.T) {
-	_, err := GetFunctionByName(context.Background(), "conv", []types.Type{
+	ctx := context.Background()
+	_, err := GetFunctionByName(ctx, "conv", []types.Type{
 		types.T_varchar.ToType(),
 		types.T_any.ToType(),
 		types.T_int64.ToType(),
@@ -3303,6 +3341,350 @@ func TestConvTypeCheckAcceptsNullBase(t *testing.T) {
 		types.T_any.ToType(),
 	})
 	require.NoError(t, err)
+
+	parameter, err := GetFunctionByName(ctx, "conv", []types.Type{
+		types.T_any.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(13), parameter.overloadId)
+	require.False(t, parameter.needCast)
+}
+
+func TestConvTypedNumericDispatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	date, err := types.ParseDateCast("2024-05-06")
+	require.NoError(t, err)
+	datetime, err := types.ParseDatetime("2024-05-06 12:34:56", 6)
+	require.NoError(t, err)
+	clock, err := types.ParseTime("12:34:56", 6)
+	require.NoError(t, err)
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-05-06 12:34:56", 6)
+	require.NoError(t, err)
+	decimal, err := types.ParseDecimal64("15.5", 4, 1)
+	require.NoError(t, err)
+	decimalType := types.New(types.T_decimal64, 4, 1)
+
+	testCase := func(input FunctionTestInput, wanted []string, nulls []bool) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				input,
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, wanted, nulls), Conv)
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+	}
+
+	t.Run("bool", func(t *testing.T) {
+		testCase(NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, false}, []bool{false, false, true}),
+			[]string{"1", "0", ""}, []bool{false, false, true})
+	})
+	t.Run("decimal truncates", func(t *testing.T) {
+		testCase(NewFunctionTestInput(decimalType, []types.Decimal64{decimal}, []bool{false}),
+			[]string{"F"}, []bool{false})
+	})
+	t.Run("date uses packed date", func(t *testing.T) {
+		testCase(NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false}),
+			[]string{"7E8"}, []bool{false})
+	})
+	t.Run("datetime uses date portion", func(t *testing.T) {
+		testCase(NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, []bool{false}),
+			[]string{"7E8"}, []bool{false})
+	})
+	t.Run("time uses hour", func(t *testing.T) {
+		testCase(NewFunctionTestInput(types.T_time.ToType(), []types.Time{clock}, []bool{false}),
+			[]string{"C"}, []bool{false})
+	})
+	t.Run("temporal prefix honors from base", func(t *testing.T) {
+		testTemporalCase := func(input FunctionTestInput, wanted string) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					input,
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{wanted}, []bool{false}), Conv)
+			succeed, info := fc.Run()
+			require.True(t, succeed, info)
+		}
+
+		testTemporalCase(NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false}), "8228")
+		testTemporalCase(NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{datetime}, []bool{false}), "8228")
+		testTemporalCase(NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp}, []bool{false}), "8228")
+		testTemporalCase(NewFunctionTestInput(types.T_time.ToType(), []types.Time{clock}, []bool{false}), "18")
+		testTemporalCase(NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024}, []bool{false}), "8228")
+	})
+	t.Run("typed integer prefix honors from base", func(t *testing.T) {
+		cases := []struct {
+			name  string
+			input FunctionTestInput
+			from  int64
+			to    int64
+			want  string
+		}{
+			{
+				name:  "signed decimal digits parsed as hexadecimal",
+				input: NewFunctionTestInput(types.T_int64.ToType(), []int64{15}, []bool{false}),
+				from:  16,
+				to:    10,
+				want:  "21",
+			},
+			{
+				name:  "unsigned decimal digits parsed as binary prefix",
+				input: NewFunctionTestInput(types.T_uint64.ToType(), []uint64{15}, []bool{false}),
+				from:  2,
+				to:    10,
+				want:  "1",
+			},
+			{
+				name:  "signed source keeps sign with negative from base",
+				input: NewFunctionTestInput(types.T_int64.ToType(), []int64{-15}, []bool{false}),
+				from:  -16,
+				to:    -10,
+				want:  "-21",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				fc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{
+						tc.input,
+						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{tc.from}, []bool{false}),
+						NewFunctionTestConstInput(types.T_int64.ToType(), []int64{tc.to}, []bool{false}),
+					},
+					NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{false}), Conv)
+				succeed, info := fc.Run()
+				require.True(t, succeed, info)
+			})
+		}
+	})
+	t.Run("masked rows do not access the typed vector", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(decimalType, []types.Decimal64{decimal, decimal}, []bool{false, false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10, 10}, []bool{false, false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16, 16}, []bool{false, false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", ""}, []bool{true, true}),
+			Conv).WithSelectList(&FunctionSelectList{AllNull: true})
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+	})
+}
+
+func TestConvNegativeFromBaseUsesSignedSourceDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal, err := types.ParseDecimal128("9223372036854775808", 20, 0)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		input FunctionTestInput
+		want  string
+	}{
+		{
+			name: "uint64 saturates at signed max",
+			input: NewFunctionTestInput(
+				types.T_uint64.ToType(), []uint64{math.MaxUint64}, []bool{false}),
+			want: "7FFFFFFFFFFFFFFF",
+		},
+		{
+			name: "decimal saturates at signed max",
+			input: NewFunctionTestInput(
+				types.New(types.T_decimal128, 20, 0), []types.Decimal128{decimal}, []bool{false}),
+			want: "7FFFFFFFFFFFFFFF",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					tc.input,
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-10}, []bool{false}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{false}),
+				Conv)
+			succeed, info := fc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestConvFloatUsesMySQLNumericPrefix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{1e20, -1e20, math.Ldexp(1, 63), 999999, 1e6, 1e15, 1.2345678901234567e-5, 1e-5, 1e-16},
+				[]bool{false, false, false, false, false, false, false, false, false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10, 10, -10, 10, 10, 10, 10, 10, 10}, []bool{false, false, false, false, false, false, false, false, false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16, 16, 16, 16, 16, 16, 16, 16, 16}, []bool{false, false, false, false, false, false, false, false, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"1", "FFFFFFFFFFFFFFFF", "9", "F423F", "F4240", "1", "1", "0", "1"},
+			[]bool{false, false, false, false, false, false, false, false, false}), Conv)
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestAppendMySQLNumericFloatBoundary(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		bits  int
+		want  string
+	}{
+		{name: "go exponent boundary remains fixed", value: 1e6, bits: 64, want: "1000000"},
+		{name: "small value remains fixed", value: 1e-5, bits: 64, want: "0.00001"},
+		{name: "long small value keeps scientific width fallback", value: 1.2345678901234567e-5, bits: 64, want: "1.2345678901234568e-5"},
+		{name: "mysql lower fixed boundary", value: 1e-15, bits: 64, want: "0.000000000000001"},
+		{name: "outside lower fixed boundary remains scientific", value: 1e-16, bits: 64, want: "1e-16"},
+		{name: "mysql upper fixed boundary remains scientific", value: 1e15, bits: 64, want: "1e15"},
+		{name: "negative fixed width overflow uses scientific", value: -1.2345678901234567e-4, bits: 64, want: "-1.2345678901234567e-4"},
+		{name: "scientific width rounds exponent carry", value: -9.999999999999999e-100, bits: 64, want: "-1e-99"},
+		{name: "float32 exponent boundary remains fixed", value: 1e6, bits: 32, want: "1000000"},
+		{name: "float32 small value remains fixed", value: 1e-5, bits: 32, want: "0.00001"},
+		{name: "float32 keeps MySQL significant digit limit", value: 1234567, bits: 32, want: "1234570"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := string(appendMySQLNumericFloat(nil, tc.value, tc.bits))
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestConvFloatScientificPrefixRespectsSourceBase(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{1e20}, []bool{false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"7712"}, []bool{false}), Conv)
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestConvFloatNegativeWidthBoundaryPreservesPrefix(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{-1.2345678901234567e-4}, []bool{false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-10}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-1"}, []bool{false}), Conv)
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestConvFloatScientificWidthRoundsExponentCarry(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{-9.999999999999999e-100}, []bool{false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-10}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"-1"}, []bool{false}), Conv)
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestConvCoversRemainingTypedDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	decimal128, err := types.ParseDecimal128("15.5", 20, 1)
+	require.NoError(t, err)
+	decimal256, err := types.ParseDecimal256("15.5", 65, 1)
+	require.NoError(t, err)
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-05-06 12:34:56", 6)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name   string
+		input  FunctionTestInput
+		wanted []string
+	}{
+		{name: "bit", input: NewFunctionTestInput(types.T_bit.ToType(), []uint64{15}, []bool{false}), wanted: []string{"F"}},
+		{name: "decimal128", input: NewFunctionTestInput(types.New(types.T_decimal128, 20, 1), []types.Decimal128{decimal128}, []bool{false}), wanted: []string{"F"}},
+		{name: "decimal256", input: NewFunctionTestInput(types.New(types.T_decimal256, 65, 1), []types.Decimal256{decimal256}, []bool{false}), wanted: []string{"F"}},
+		{name: "float32", input: NewFunctionTestInput(types.T_float32.ToType(), []float32{15.5, 1e6, 1e-5, 1234567}, []bool{false, false, false, false}), wanted: []string{"F", "F4240", "0", "12D68A"}},
+		{name: "timestamp", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{timestamp}, []bool{false}), wanted: []string{"7E8"}},
+		{name: "year", input: NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024}, []bool{false}), wanted: []string{"7E8"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					tc.input,
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+					NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, tc.wanted, []bool{false}), Conv)
+			succeed, info := fc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	t.Run("bit value is not reparsed from decimal text", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_bit.ToType(), []uint64{15}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{2}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"15"}, []bool{false}), Conv)
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("bit keeps the full unsigned pattern with a negative source base", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_bit.ToType(), []uint64{math.MaxUint64}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"FFFFFFFFFFFFFFFF"}, []bool{false}), Conv)
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("unsupported fixed width type is rejected", func(t *testing.T) {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_uuid.ToType(), []types.Uuid{{}}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{16}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, []bool{true}), Conv)
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+	})
+
+	t.Run("untyped marker vector returns NULL", func(t *testing.T) {
+		input := vector.NewVec(types.T_any.ToType())
+		fromBase, err := vector.NewConstFixed(types.T_int64.ToType(), int64(10), 1, proc.Mp())
+		require.NoError(t, err)
+		toBase, err := vector.NewConstFixed(types.T_int64.ToType(), int64(16), 1, proc.Mp())
+		require.NoError(t, err)
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, Conv([]*vector.Vector{input, fromBase, toBase}, result, proc, 1, nil))
+		_, isNull := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		require.True(t, isNull)
+	})
 }
 
 func TestParseBaseIntegerPrefixEdgeCases(t *testing.T) {
@@ -4197,7 +4579,7 @@ func initFromUnixTimeTestCase(t *testing.T) []tcTemp {
 					[]float64{1451606400.999999},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+			expect: NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
 				[]types.Datetime{d3},
 				[]bool{false}),
 		},
@@ -4209,7 +4591,7 @@ func initFromUnixTimeTestCase(t *testing.T) []tcTemp {
 					[]types.Decimal256{mustDecimal256ForUnixTime(t, "1451606400.999999", 6)},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+			expect: NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
 				[]types.Datetime{d3},
 				[]bool{false}),
 		},
@@ -4221,7 +4603,7 @@ func initFromUnixTimeTestCase(t *testing.T) []tcTemp {
 					[]types.Decimal256{mustDecimal256ForUnixTime(t, "32536771198.999999", 6)},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_datetime.ToType(), false,
+			expect: NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
 				[]types.Datetime{mustDatetimeForUnixTime(t, "3001-01-18 23:59:58.999999")},
 				[]bool{false}),
 		},
@@ -4294,6 +4676,200 @@ func TestFromUnixTime(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestFromUnixTimeDomainPrecisionAndFormatting(t *testing.T) {
+	proc := newTmpProcess(t)
+	epoch := mustDatetimeForUnixTime(t, "1970-01-01 00:00:00.000000")
+	epochNext := mustDatetimeForUnixTime(t, "1970-01-01 00:00:01.000000")
+	maximum := mustDatetimeForUnixTime(t, "3001-01-18 23:59:59.999999")
+	maximumSecond := mustDatetimeForUnixTime(t, "3001-01-18 23:59:59.000000")
+	formatType := types.T_varchar.ToType()
+	format := NewFunctionTestConstInput(formatType, []string{"%Y-%m-%d %H:%i:%s.%f"}, []bool{false})
+
+	tests := []struct {
+		name      string
+		inputs    []FunctionTestInput
+		result    FunctionTestResult
+		formatted FunctionTestResult
+		plainFn   fEvalFn
+		formatFn  fEvalFn
+	}{
+		{
+			name: "signed integer",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(),
+				[]int64{-1, 0, maxUnixTimestampInt + 1, 0}, []bool{false, false, false, true})},
+			result: NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{0, epoch, 0, 0}, []bool{true, false, true, true}),
+			formatted: NewFunctionTestResult(formatType, false,
+				[]string{"", "1970-01-01 00:00:00.000000", "", ""}, []bool{true, false, true, true}),
+			plainFn: FromUnixTimeInt64, formatFn: FromUnixTimeInt64Format,
+		},
+		{
+			name: "unsigned integer",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_uint64.ToType(),
+				[]uint64{0, maxUnixTimestampInt + 1, 0}, []bool{false, false, true})},
+			result: NewFunctionTestResult(types.T_datetime.ToType(), false,
+				[]types.Datetime{epoch, 0, 0}, []bool{false, true, true}),
+			formatted: NewFunctionTestResult(formatType, false,
+				[]string{"1970-01-01 00:00:00.000000", "", ""}, []bool{false, true, true}),
+			plainFn: FromUnixTimeUint64, formatFn: FromUnixTimeUint64Format,
+		},
+		{
+			name: "float",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{-1, math.NaN(), math.Inf(1), 0.9999995, 0}, []bool{false, false, false, false, true})},
+			result: NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
+				[]types.Datetime{0, 0, 0, epochNext, 0}, []bool{true, true, true, false, true}),
+			formatted: NewFunctionTestResult(formatType, false,
+				[]string{"", "", "", "1970-01-01 00:00:01.000000", ""}, []bool{true, true, true, false, true}),
+			plainFn: FromUnixTimeFloat64, formatFn: FromUnixTimeFloat64Format,
+		},
+		{
+			name: "decimal rounding and maximum",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.New(types.T_decimal256, 65, 7),
+				[]types.Decimal256{
+					mustDecimal256ForUnixTime(t, "32536771199.9999994", 7),
+					mustDecimal256ForUnixTime(t, "32536771199.9999995", 7),
+					mustDecimal256ForUnixTime(t, "32536771198.9999995", 7),
+					mustDecimal256ForUnixTime(t, "-0.0000001", 7),
+					{},
+				}, []bool{false, false, false, false, true})},
+			result: NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
+				[]types.Datetime{maximum, 0, maximumSecond, 0, 0}, []bool{false, true, false, true, true}),
+			formatted: NewFunctionTestResult(formatType, false,
+				[]string{"3001-01-18 23:59:59.999999", "", "3001-01-18 23:59:59.000000", "", ""}, []bool{false, true, false, true, true}),
+			plainFn: FromUnixTimeDecimal256, formatFn: FromUnixTimeDecimal256Format,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			plain := NewFunctionTestCase(proc, test.inputs, test.result, test.plainFn)
+			ok, info := plain.Run()
+			require.True(t, ok, info)
+			require.Equal(t, test.result.typ, *plain.GetResultVectorDirectly().GetType())
+
+			formattedInputs := append(append([]FunctionTestInput{}, test.inputs...), format)
+			formatted := NewFunctionTestCase(proc, formattedInputs, test.formatted, test.formatFn)
+			ok, info = formatted.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	for _, test := range tests {
+		t.Run(test.name+" null format", func(t *testing.T) {
+			nullFormat := NewFunctionTestConstInput(formatType, []string{""}, []bool{true})
+			formatted := NewFunctionTestCase(proc,
+				[]FunctionTestInput{test.inputs[0], nullFormat},
+				NewFunctionTestResult(formatType, false, make([]string, len(test.inputs[0].nullList)), make([]bool, len(test.inputs[0].nullList))),
+				test.formatFn)
+			for i := range formatted.expected.nullList {
+				formatted.expected.nullList[i] = true
+			}
+			ok, info := formatted.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestFromUnixTimeDecimalHighScaleRoundsOnce(t *testing.T) {
+	proc := newTmpProcess(t)
+	formatType := types.T_varchar.ToType()
+	format := NewFunctionTestConstInput(formatType, []string{"%Y-%m-%d %H:%i:%s.%f"}, []bool{false})
+	inputType := types.New(types.T_decimal256, 38, 26)
+	input := NewFunctionTestInput(inputType, []types.Decimal256{
+		mustDecimal256ForUnixTime(t, "0.12345649999999999999999999", 26),
+		mustDecimal256ForUnixTime(t, "0.12345650000000000000000000", 26),
+		mustDecimal256ForUnixTime(t, "32536771199.99999949999999999999999999", 26),
+		mustDecimal256ForUnixTime(t, "32536771199.99999950000000000000000000", 26),
+	}, []bool{false, false, false, false})
+	expected := NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false,
+		[]types.Datetime{
+			mustDatetimeForUnixTime(t, "1970-01-01 00:00:00.123456"),
+			mustDatetimeForUnixTime(t, "1970-01-01 00:00:00.123457"),
+			mustDatetimeForUnixTime(t, "3001-01-18 23:59:59.999999"),
+			0,
+		}, []bool{false, false, false, true})
+	plain := NewFunctionTestCase(proc, []FunctionTestInput{input}, expected, FromUnixTimeDecimal256)
+	ok, info := plain.Run()
+	require.True(t, ok, info)
+
+	formattedExpected := NewFunctionTestResult(formatType, false,
+		[]string{"1970-01-01 00:00:00.123456", "1970-01-01 00:00:00.123457", "3001-01-18 23:59:59.999999", ""},
+		[]bool{false, false, false, true})
+	formatted := NewFunctionTestCase(proc, []FunctionTestInput{input, format}, formattedExpected, FromUnixTimeDecimal256Format)
+	ok, info = formatted.Run()
+	require.True(t, ok, info)
+}
+
+func TestTemporalSubResultScaleMetadata(t *testing.T) {
+	proc := newTmpProcess(t)
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
+	require.NoError(t, err)
+	previous, err := types.ParseTimestamp(time.UTC, "2024-01-01 03:04:05.123456", 6)
+	require.NoError(t, err)
+	timestampCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{ts}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.Day)}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_timestamp.ToTypeWithScale(6), false, []types.Timestamp{previous}, []bool{false}),
+		TimestampSub)
+	ok, info := timestampCase.Run()
+	require.True(t, ok, info)
+
+	tm, err := types.ParseTime("10:00:00.123456", 6)
+	require.NoError(t, err)
+	expected, err := types.ParseTime("09:59:59.123456", 6)
+	require.NoError(t, err)
+	timeCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToTypeWithScale(6), []types.Time{tm}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{int64(types.Second)}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false, []types.Time{expected}, []bool{false}),
+		TimeSub)
+	ok, info = timeCase.Run()
+	require.True(t, ok, info)
+}
+
+func TestFromUnixTimeReturnType(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input types.Type
+		scale int32
+	}{
+		{name: "int", input: types.T_int64.ToType(), scale: 0},
+		{name: "uint", input: types.T_uint64.ToType(), scale: 0},
+		{name: "float", input: types.T_float64.ToType(), scale: 6},
+		{name: "decimal64 scale 3", input: types.New(types.T_decimal64, 10, 3), scale: 3},
+		{name: "decimal128 scale 3", input: types.New(types.T_decimal128, 20, 3), scale: 3},
+		{name: "decimal scale 0", input: types.New(types.T_decimal256, 65, 0), scale: 0},
+		{name: "decimal scale 3", input: types.New(types.T_decimal256, 65, 3), scale: 3},
+		{name: "decimal scale 6", input: types.New(types.T_decimal256, 65, 6), scale: 6},
+		{name: "decimal scale 9", input: types.New(types.T_decimal256, 65, 9), scale: 6},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), "from_unixtime", []types.Type{test.input})
+			require.NoError(t, err)
+			got := resolved.GetReturnType()
+			require.Equal(t, types.T_datetime, got.Oid)
+			require.Equal(t, test.scale, got.Scale)
+			require.Equal(t, test.scale, got.Width)
+			if test.input.Oid.IsDecimal() {
+				_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+				require.Equal(t, int32(3), overload)
+				formatted, err := GetFunctionByName(context.Background(), "from_unixtime", []types.Type{test.input, types.T_varchar.ToType()})
+				require.NoError(t, err)
+				_, overload = DecodeOverloadID(formatted.GetEncodedOverloadID())
+				require.Equal(t, int32(7), overload)
+			}
+		})
+	}
+
 }
 
 func initStrCmpTestCase() []tcTemp {
@@ -6550,6 +7126,291 @@ func TestStMeasuresGeodetic(t *testing.T) {
 		StArea)
 	ok, info := fcTC.Run()
 	require.True(t, ok, info)
+
+	// The SQL-facing evaluator must preserve the local antimeridian region,
+	// rather than selecting the 358-degree complement from the raw WKT order.
+	antimeridian := "POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))"
+	antimeridianAreaPayload := encodeGeometryPayload(antimeridian, 0, false)
+	wantAntimeridianArea, err := geodeticArea(antimeridianAreaPayload)
+	require.NoError(t, err)
+	antimeridianType := geom4326
+	areaCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(antimeridianType, []string{string(antimeridianAreaPayload)}, []bool{false})},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantAntimeridianArea}, []bool{false}), StArea)
+	ok, info = areaCase.Run()
+	require.True(t, ok, info)
+	require.Less(t, wantAntimeridianArea, 1e11)
+
+	inside := encodeGeometryPayload("POINT(180 0)", 0, false)
+	greenwich := encodeGeometryPayload("POINT(0 0)", 0, false)
+	wantGreenwichDistance, err := geodeticDistance(greenwich, antimeridianAreaPayload)
+	require.NoError(t, err)
+	distanceCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(antimeridianType, []string{string(inside), string(greenwich)}, []bool{false, false}),
+			NewFunctionTestInput(antimeridianType, []string{string(antimeridianAreaPayload), string(antimeridianAreaPayload)}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, wantGreenwichDistance}, []bool{false, false}), StDistance)
+	ok, info = distanceCase.Run()
+	require.True(t, ok, info)
+	require.Greater(t, wantGreenwichDistance, 1e6)
+}
+
+func TestStMeasuresGeodeticRejectInvalidCoordinates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom0 := types.T_geometry.ToType()
+	geom4326 := geom0
+	geom4326.Width = 4327 // SRID 4326
+	wantError := NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil)
+
+	// Confirm the short-circuit regression fixture is valid WKT and that its
+	// error comes from range validation, not parsing or geometry dispatch.
+	multiPoint, err := geo.ParseWKT("MULTIPOINT((0 0),(181 0))")
+	require.NoError(t, err)
+	container, err := geo.ParseWKT("POLYGON((-1 -1,1 -1,1 1,-1 1,-1 -1))")
+	require.NoError(t, err)
+	_, err = geodeticDistance(geo.WriteWKB(multiPoint), geo.WriteWKB(container))
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	require.Contains(t, err.Error(), "SRID 4326 longitude 181 is out of range")
+
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		fn     fEvalFn
+	}{
+		{
+			name: "ST_Distance longitude",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"POINT(181 0)"}, []bool{false}),
+				NewFunctionTestInput(geom4326, []string{"POINT(0 0)"}, []bool{false}),
+			},
+			fn: StDistance,
+		},
+		{
+			name: "ST_Distance invalid right operand",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"POINT(0 0)"}, []bool{false}),
+				NewFunctionTestInput(geom4326, []string{"POINT(0 91)"}, []bool{false}),
+			},
+			fn: StDistance,
+		},
+		{
+			name: "ST_Distance validates coordinates after a containment candidate",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"MULTIPOINT((0 0),(181 0))"}, []bool{false}),
+				NewFunctionTestInput(geom4326, []string{"POLYGON((-1 -1,1 -1,1 1,-1 1,-1 -1))"}, []bool{false}),
+			},
+			fn: StDistance,
+		},
+		{
+			name: "ST_Length longitude",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"LINESTRING(0 0,181 0)"}, []bool{false}),
+			},
+			fn: StLength,
+		},
+		{
+			name: "ST_Area latitude",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"POLYGON((0 0,1 0,1 91,0 91,0 0))"}, []bool{false}),
+			},
+			fn: StArea,
+		},
+		{
+			name: "ST_Distance explicit SRID 4326",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom0, []string{"POINT(0 0)"}, []bool{false}),
+				NewFunctionTestInput(geom0, []string{"POINT(181 0)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+			},
+			fn: StDistanceWithSRID,
+		},
+		{
+			name: "ST_Length explicit SRID 4326",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom0, []string{"LINESTRING(0 0,0 91)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+			},
+			fn: StLengthWithSRID,
+		},
+		{
+			name: "ST_Area explicit SRID 4326",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom0, []string{"POLYGON((0 0,1 0,1 91,0 91,0 0))"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+			},
+			fn: StAreaWithSRID,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, tc.inputs, wantError, tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestStMeasuresGeodeticEmptyGeometryBehavior(t *testing.T) {
+	emptyLine := encodeGeometryPayload("LINESTRING EMPTY", 0, false)
+	length, err := geodeticLength(emptyLine)
+	require.NoError(t, err)
+	require.Zero(t, length)
+
+	emptyPolygon := encodeGeometryPayload("POLYGON EMPTY", 0, false)
+	area, err := geometryAreaBySRID(emptyPolygon, geo.SRIDWGS84)
+	require.NoError(t, err)
+	require.Zero(t, area)
+
+	emptyPoint := encodeGeometryPayload("POINT EMPTY", 0, false)
+	validPoint := encodeGeometryPayload("POINT(0 0)", 0, false)
+	_, err = geometryDistanceBySRID(emptyPoint, validPoint, geo.SRIDWGS84)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	require.Contains(t, err.Error(), "invalid geometry payload")
+}
+
+func TestStMeasuresGeodeticGeometry32RejectInvalidCoordinates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom32SRID4326 := types.T_geometry32.ToType()
+	geom32SRID4326.Width = 4327 // SRID 4326
+	encode32 := func(wkt string) string {
+		g, err := geo.ParseWKT(wkt)
+		require.NoError(t, err)
+		payload, err := geo.WriteWKBFloat32(g)
+		require.NoError(t, err)
+		return string(payload)
+	}
+	wantError := NewFunctionTestResult(types.T_float32.ToType(), true, nil, nil)
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		fn     fEvalFn
+	}{
+		{
+			name: "ST_Distance",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom32SRID4326, []string{encode32("POINT(0 0)")}, []bool{false}),
+				NewFunctionTestInput(geom32SRID4326, []string{encode32("POINT(181 0)")}, []bool{false}),
+			},
+			fn: StDistance32,
+		},
+		{
+			name: "ST_Length",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom32SRID4326, []string{encode32("LINESTRING(0 0,0 91)")}, []bool{false}),
+			},
+			fn: StLength32,
+		},
+		{
+			name: "ST_Area",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom32SRID4326, []string{encode32("POLYGON((0 0,1 0,1 91,0 91,0 0))")}, []bool{false}),
+			},
+			fn: StArea32,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, tc.inputs, wantError, tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestStMeasuresGeodeticSRID0Compatibility(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom0 := types.T_geometry.ToType()
+	geom4326 := geom0
+	geom4326.Width = 4327
+	wantDistance := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{181}, []bool{false})
+	wantLength := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{181}, []bool{false})
+	wantArea := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{91}, []bool{false})
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		want   FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name: "default SRID 0 ST_Distance",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom0, []string{"POINT(0 0)"}, []bool{false}),
+				NewFunctionTestInput(geom0, []string{"POINT(181 0)"}, []bool{false}),
+			},
+			want: wantDistance,
+			fn:   StDistance,
+		},
+		{
+			name: "default SRID 0 ST_Length",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom0, []string{"LINESTRING(0 0,181 0)"}, []bool{false}),
+			},
+			want: wantLength,
+			fn:   StLength,
+		},
+		{
+			name: "default SRID 0 ST_Area",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom0, []string{"POLYGON((0 0,1 0,1 91,0 91,0 0))"}, []bool{false}),
+			},
+			want: wantArea,
+			fn:   StArea,
+		},
+		{
+			name: "explicit SRID 0 overrides typed SRID 4326 for ST_Distance",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"POINT(0 0)"}, []bool{false}),
+				NewFunctionTestInput(geom4326, []string{"POINT(181 0)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			},
+			want: wantDistance,
+			fn:   StDistanceWithSRID,
+		},
+		{
+			name: "explicit SRID 0 overrides typed SRID 4326 for ST_Length",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"LINESTRING(0 0,181 0)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			},
+			want: wantLength,
+			fn:   StLengthWithSRID,
+		},
+		{
+			name: "explicit SRID 0 overrides typed SRID 4326 for ST_Area",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"POLYGON((0 0,1 0,1 91,0 91,0 0))"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			},
+			want: wantArea,
+			fn:   StAreaWithSRID,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, tc.inputs, tc.want, tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	// A SQL NULL and a row masked by a preceding expression must not expose an
+	// invalid coordinate in another lane to the geodetic validator.
+	const oneDegreeMeters = 111195.0802335329
+	masked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(geom4326,
+			[]string{"LINESTRING(0 0,1 0)", "", "LINESTRING(0 0,181 0)"},
+			[]bool{false, true, false})},
+		NewFunctionTestResult(types.T_float64.ToType(), false,
+			[]float64{oneDegreeMeters, 0, 0}, []bool{false, true, true}), StLength).
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false}})
+	ok, info := masked.Run()
+	require.True(t, ok, info)
+
+	zeroRows := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(geom4326, []string{}, []bool{})},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{}, []bool{}), StLength)
+	ok, info = zeroRows.Run()
+	require.True(t, ok, info)
 }
 
 func TestGeometry32Distances(t *testing.T) {
@@ -6810,8 +7671,69 @@ func TestDiscreteDistances(t *testing.T) {
 
 	run(StHausdorffDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
 	run(StHausdorffDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 0, 10 0)", 0.0)
+	run(StHausdorffDistance, "LINESTRING(0 0,1 4,4 4)", "LINESTRING(0 0,4 0,4 4)", 3.0)
+	run(StHausdorffDistance, "LINESTRING(0 0,4 0,4 4)", "LINESTRING(0 0,1 4,4 4)", 4.0)
+	run(StHausdorffDistance, "LINESTRING(0 0,0 5,5 5)", "LINESTRING(0 1,0 6,3 3,5 6)", 1.0)
 	run(StFrechetDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 1, 10 1)", 1.0)
 	run(StFrechetDistance, "LINESTRING(0 0, 10 0)", "LINESTRING(0 0, 10 5)", 5.0)
+	run(StFrechetDistance, "LINESTRING(0 0,0 5,5 5)", "LINESTRING(0 1,0 6,3 3,5 6)", 2.8284271247461903)
+
+	// Exercise the vector path with asymmetric rows and a NULL masking malformed
+	// payload, so NULL propagation must happen before geometry decoding.
+	batch := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(),
+				[]string{"LINESTRING(0 0,1 4,4 4)", "\x01", "LINESTRING(0 0,10 0)"}, []bool{false, true, false}),
+			NewFunctionTestInput(types.T_geometry.ToType(),
+				[]string{"LINESTRING(0 0,4 0,4 4)", "LINESTRING(0 0,1 4,4 4)", "LINESTRING(0 1,10 1)"}, []bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false,
+			[]float64{3.0, 0.0, 1.0}, []bool{false, true, false}), StHausdorffDistance)
+	ok, info := batch.Run()
+	require.True(t, ok, info)
+
+	g32 := func(text string) string {
+		g, err := geo.ParseWKT(text)
+		require.NoError(t, err)
+		wkb, err := geo.WriteWKBFloat32(g)
+		require.NoError(t, err)
+		return string(wkb)
+	}
+	// Geometry32 preserves direction and float32 metadata for both argument
+	// orders; its NULL row also masks malformed WKB before decoding.
+	tc32 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry32.ToType(),
+				[]string{g32("LINESTRING(0 0,1 4,4 4)"), g32("LINESTRING(0 0,4 0,4 4)"), "\x01"}, []bool{false, false, true}),
+			NewFunctionTestInput(types.T_geometry32.ToType(),
+				[]string{g32("LINESTRING(0 0,4 0,4 4)"), g32("LINESTRING(0 0,1 4,4 4)"), g32("LINESTRING(0 0,4 0,4 4)")}, []bool{false, false, false}),
+		},
+		NewFunctionTestResult(types.T_float32.ToType(), false, []float32{3.0, 4.0, 0.0}, []bool{false, false, true}), StHausdorffDistance32)
+	ok, info = tc32.Run()
+	require.True(t, ok, info)
+
+	valid := "LINESTRING(0 0,1 4,4 4)"
+	for _, pair := range []struct {
+		name  string
+		left  string
+		right string
+	}{
+		{name: "invalid left WKB", left: "\x01", right: valid},
+		{name: "invalid right WKB", left: valid, right: "\x01"},
+		{name: "empty left geometry", left: "LINESTRING EMPTY", right: valid},
+		{name: "empty right geometry", left: valid, right: "LINESTRING EMPTY"},
+	} {
+		t.Run(pair.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{pair.left}, []bool{false}),
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{pair.right}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil), StHausdorffDistance)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestLinearReferencing(t *testing.T) {
@@ -6897,6 +7819,118 @@ func TestGeoJSONFunctions(t *testing.T) {
 	ok, info = tcAsP.Run()
 	require.True(t, ok, info)
 
+	for _, tc := range []struct {
+		name   string
+		wkt    string
+		maxDec int64
+		want   string
+	}{
+		{
+			name:   "finite scale multiplication at 308",
+			wkt:    "POINT(2 -2)",
+			maxDec: 308,
+			want:   `{"type":"Point","coordinates":[2,-2]}`,
+		},
+		{
+			name:   "first infinite power of ten",
+			wkt:    "POINT(1.23456789 0)",
+			maxDec: 309,
+			want:   `{"type":"Point","coordinates":[1.23456789,0]}`,
+		},
+		{
+			name:   "large precision",
+			wkt:    "POINT(1.23456789 0)",
+			maxDec: 1000,
+			want:   `{"type":"Point","coordinates":[1.23456789,0]}`,
+		},
+		{
+			name:   "maximum accepted precision",
+			wkt:    "POINT(1.23456789 0)",
+			maxDec: 1<<32 - 1,
+			want:   `{"type":"Point","coordinates":[1.23456789,0]}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			eval := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.wkt}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.maxDec}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{false}),
+				StAsGeoJSONPrec)
+			ok, info := eval.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	t.Run("invalid precision is rejected", func(t *testing.T) {
+		for _, precision := range []int64{-1, math.MinInt64, 1 << 32, math.MaxInt64} {
+			require.Error(t, validateGeoJSONDecimalDigits(precision), "precision=%d", precision)
+		}
+		for _, precision := range []int64{0, 308, 1<<32 - 1} {
+			require.NoError(t, validateGeoJSONDecimalDigits(precision), "precision=%d", precision)
+		}
+	})
+
+	t.Run("invalid precision is rejected by evaluator", func(t *testing.T) {
+		for _, precision := range []int64{-1, 1 << 32, math.MaxInt64} {
+			eval := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{precision}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+				StAsGeoJSONPrec)
+			ok, info := eval.Run()
+			require.True(t, ok, info)
+		}
+	})
+
+	t.Run("NULL propagates before precision validation", func(t *testing.T) {
+		eval := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{true}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			StAsGeoJSONPrec)
+		ok, info := eval.Run()
+		require.True(t, ok, info)
+
+		nullPrecision := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{-1}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}),
+			StAsGeoJSONPrec)
+		ok, info = nullPrecision.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("empty batch skips constant argument evaluation", func(t *testing.T) {
+		eval := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{}, []bool{}),
+			StAsGeoJSONPrec)
+		eval.fnLength = 0
+		ok, info := eval.Run()
+		require.True(t, ok, info)
+
+		nonEmpty := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestConstInput(types.T_geometry.ToType(), []string{"POINT(1 2)"}, []bool{false}),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{-1}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil),
+			StAsGeoJSONPrec)
+		ok, info = nonEmpty.Run()
+		require.True(t, ok, info)
+	})
+
 	// ST_GeomFromGeoJSON -> canonical WKT via geometry comparison.
 	tcFrom := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
@@ -6964,6 +7998,68 @@ func TestMBRPredicates(t *testing.T) {
 	run(MBROverlaps, outer, right, false) // edge touch is not overlap
 }
 
+func TestMBRPredicatesDegenerateBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	run := func(t *testing.T, fn fEvalFn, g1, g2 string, want bool) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g1}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g2}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		a         string
+		b         string
+		touches   bool
+		within    bool
+		coveredBy bool
+	}{
+		{"equal points", "POINT(0 0)", "POINT(0 0)", false, true, true},
+		{"distinct points", "POINT(0 0)", "POINT(1 1)", false, false, false},
+		{"point inside rectangle", "POINT(2 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"point on rectangle edge", "POINT(0 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, true},
+		{"point on rectangle corner", "POINT(0 0)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, true},
+		{"point in horizontal line interior", "POINT(2 0)", "LINESTRING(0 0, 4 0)", false, true, true},
+		{"point at horizontal line endpoint", "POINT(0 0)", "LINESTRING(0 0, 4 0)", true, false, true},
+		{"point in vertical line interior", "POINT(2 2)", "LINESTRING(2 0, 2 4)", false, true, true},
+		{"point at vertical line endpoint", "POINT(2 0)", "LINESTRING(2 0, 2 4)", true, false, true},
+		{"equal horizontal lines", "LINESTRING(0 0, 4 0)", "LINESTRING(0 0, 4 0)", false, true, true},
+		{"contained lines share endpoint", "LINESTRING(0 0, 2 0)", "LINESTRING(0 0, 4 0)", false, true, true},
+		{"collinear lines overlap", "LINESTRING(0 0, 3 0)", "LINESTRING(2 0, 4 0)", false, false, false},
+		{"collinear lines meet at endpoint", "LINESTRING(0 0, 2 0)", "LINESTRING(2 0, 4 0)", true, false, false},
+		{"perpendicular lines cross interiors", "LINESTRING(0 2, 4 2)", "LINESTRING(2 0, 2 4)", false, false, false},
+		{"line endpoint meets other interior", "LINESTRING(0 2, 2 2)", "LINESTRING(2 0, 2 4)", true, false, false},
+		{"equal vertical lines", "LINESTRING(2 0, 2 4)", "LINESTRING(2 0, 2 4)", false, true, true},
+		{"vertical lines overlap", "LINESTRING(2 0, 2 3)", "LINESTRING(2 2, 2 4)", false, false, false},
+		{"line inside rectangle", "LINESTRING(1 2, 3 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"line endpoints on rectangle boundary", "LINESTRING(0 2, 4 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"line on rectangle edge", "LINESTRING(0 1, 0 3)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, true},
+		{"line crosses rectangle from outside", "LINESTRING(-1 2, 5 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, false, false},
+		{"equal rectangles", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"contained rectangle shares edge", "POLYGON((0 1, 2 1, 2 3, 0 3, 0 1))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"partially overlapping rectangles", "POLYGON((2 2, 6 2, 6 6, 2 6, 2 2))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, false, false},
+		{"rectangles share edge", "POLYGON((-4 0, 0 0, 0 4, -4 4, -4 0))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, false},
+		{"rectangles share corner", "POLYGON((4 4, 6 4, 6 6, 4 6, 4 4))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, false},
+		{"disjoint rectangles", "POLYGON((5 5, 8 5, 8 8, 5 8, 5 5))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, false, false},
+		{"diagonal line uses its area envelope", "LINESTRING(0 0, 4 4)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run(t, MBRTouches, tc.a, tc.b, tc.touches)
+			run(t, MBRTouches, tc.b, tc.a, tc.touches)
+			run(t, MBRWithin, tc.a, tc.b, tc.within)
+			run(t, MBRContains, tc.b, tc.a, tc.within)
+			run(t, MBRCoveredBy, tc.a, tc.b, tc.coveredBy)
+			run(t, MBRCovers, tc.b, tc.a, tc.coveredBy)
+		})
+	}
+}
+
 func TestGeoHashFunctions(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
@@ -7011,6 +8107,118 @@ func TestGeoHashFunctions(t *testing.T) {
 		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{wantPt}, []bool{false}), StPointFromGeoHash)
 	ok, info = tcPt.Run()
 	require.True(t, ok, info)
+}
+
+func TestGeoHashFunctionsRejectInvalidInputsAndPreserveNulls(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	runError := func(name string, inputs []FunctionTestInput, resultType types.Type, fn fEvalFn) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(resultType, true, nil, nil), fn)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	runError("point overload rejects out-of-range coordinates", []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(180.0001 0)"}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{12}, nil),
+	}, types.T_varchar.ToType(), StGeoHashFromPoint)
+	runError("point overload rejects excessive length", []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{"POINT(0 0)"}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{101}, nil),
+	}, types.T_varchar.ToType(), StGeoHashFromPoint)
+
+	for _, tc := range []struct {
+		name     string
+		lon, lat float64
+	}{
+		{name: "longitude above range", lon: 180.0001},
+		{name: "latitude above range", lat: 90.0001},
+		{name: "nan longitude", lon: math.NaN()},
+		{name: "positive infinity latitude", lat: math.Inf(1)},
+		{name: "negative infinity longitude", lon: math.Inf(-1)},
+	} {
+		runError("lonlat overload rejects "+tc.name, []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{tc.lon}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{tc.lat}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{12}, nil),
+		}, types.T_varchar.ToType(), StGeoHashFromLonLat)
+	}
+
+	for _, maxLength := range []int64{math.MinInt64, -1, 0, 101, 1000, math.MaxInt64} {
+		runError("rejects length "+strconv.FormatInt(maxLength, 10), []FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, nil),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{maxLength}, nil),
+		}, types.T_varchar.ToType(), StGeoHashFromLonLat)
+	}
+
+	runError("latitude decoder rejects empty hash", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil),
+	}, types.T_float64.ToType(), StLatFromGeoHash)
+	runError("longitude decoder rejects empty hash", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil),
+	}, types.T_float64.ToType(), StLongFromGeoHash)
+	runError("point decoder rejects empty hash", []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, nil),
+	}, types.T_geometry.ToType(), StPointFromGeoHash)
+
+	tcNull := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{180.0001, -5.603}, []bool{true, false}),
+		NewFunctionTestInput(types.T_float64.ToType(), []float64{90.0001, 42.605}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{101, 5}, nil),
+	}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{"", "ezs42"}, []bool{true, false}), StGeoHashFromLonLat)
+	ok, info := tcNull.Run()
+	require.True(t, ok, info, "a NULL coordinate must bypass validation for that row")
+}
+
+func TestGeoHashFunctionsSkipInvalidConstantsForEmptyBatches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cases := []struct {
+		name       string
+		inputs     []FunctionTestInput
+		resultType types.Type
+		fn         fEvalFn
+	}{
+		{
+			name: "point encoder",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_geometry.ToType(), []string{"POINT(181 0)"}, nil),
+				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{101}, nil),
+			},
+			resultType: types.T_varchar.ToType(),
+			fn:         StGeoHashFromPoint,
+		},
+		{
+			name: "latitude decoder",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil),
+			},
+			resultType: types.T_float64.ToType(),
+			fn:         StLatFromGeoHash,
+		},
+		{
+			name: "longitude decoder",
+			inputs: []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, nil),
+			},
+			resultType: types.T_float64.ToType(),
+			fn:         StLongFromGeoHash,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, tc.inputs,
+				NewFunctionTestResult(tc.resultType, false, nil, nil), tc.fn)
+			require.NoError(t, fc.result.PreExtendAndReset(0))
+			require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 0, nil))
+			require.Zero(t, fc.GetResultVectorDirectly().Length())
+		})
+	}
 }
 
 func TestPointMiscFunctions(t *testing.T) {
@@ -7124,22 +8332,287 @@ func TestStDistance(t *testing.T) {
 	}
 }
 
-func TestStDistanceRejectInvalidInput(t *testing.T) {
+func TestStDistanceSupportsGeometryCollection(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
-			[]bool{false}),
+			[]string{
+				"GEOMETRYCOLLECTION(POINT(0 0),POINT(10 10))",
+				"GEOMETRYCOLLECTION(POINT EMPTY,GEOMETRYCOLLECTION(POINT(4 0),POINT(8 0)))",
+				"GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(10 0,12 0),POLYGON((20 0,22 0,22 2,20 2,20 0)))",
+				"GEOMETRYCOLLECTION(POINT(0 0),POINT(10 0))",
+				"POINT(6 0)",
+			},
+			[]bool{false, false, false, false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(0 0)"},
-			[]bool{false}),
+			[]string{
+				"POINT(1 0)",
+				"POINT(5 0)",
+				"POINT(11 1)",
+				"GEOMETRYCOLLECTION(POINT(6 0),POINT(20 0))",
+				"GEOMETRYCOLLECTION(POINT(0 0),POINT(10 0))",
+			},
+			[]bool{false, false, false, false, false}),
 	}
-	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1, 1, 1, 4, 4}, []bool{false, false, false, false, false})
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
 	succeed, info := tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	require.True(t, succeed, info)
+}
+
+func TestStDistanceGeometryCollectionEmptyMembers(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{
+			"GEOMETRYCOLLECTION EMPTY",
+			"GEOMETRYCOLLECTION(POINT EMPTY)",
+			"GEOMETRYCOLLECTION(POINT EMPTY,POINT(1 1))",
+			"GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT EMPTY),MULTIPOINT EMPTY)",
+		}, nil),
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{
+			"POINT(0 0)",
+			"POINT(0 0)",
+			"POINT(2 1)",
+			"POINT(0 0)",
+		}, nil),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0, 1, 0}, []bool{true, true, false, true})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStDistanceGeometryCollectionPrecisionAndSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom4326 := types.T_geometry.ToType()
+	geom4326.Width = 4327 // SRID 4326
+	gc := encodeGeometryPayload("GEOMETRYCOLLECTION(POINT(0 0),POINT(2 0))", 0, false)
+	point := encodeGeometryPayload("POINT(1 0)", 0, false)
+	wantGeodetic, err := geodeticDistance(gc, point)
+	require.NoError(t, err)
+	geodetic := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom4326, []string{string(gc)}, []bool{false}),
+			NewFunctionTestInput(geom4326, []string{string(point)}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantGeodetic}, []bool{false}), StDistance)
+	ok, info := geodetic.Run()
+	require.True(t, ok, info)
+	knownOneDegree := math.Pi / 180 * geo.EarthRadiusMeters
+	gotGeodetic, err := geodeticDistance(gc, point)
+	require.NoError(t, err)
+	require.InDelta(t, knownOneDegree, gotGeodetic, 1.0)
+
+	toF32 := func(wkt string) string {
+		g, err := geo.ParseWKT(wkt)
+		require.NoError(t, err)
+		b, err := geo.WriteWKBFloat32(g)
+		require.NoError(t, err)
+		return string(b)
+	}
+	geom32 := types.T_geometry32.ToType()
+	gc32 := toF32("GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(10 0,12 0))")
+	point32 := toF32("POINT(11 1)")
+	f32 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom32, []string{gc32}, []bool{false}),
+			NewFunctionTestInput(geom32, []string{point32}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float32.ToType(), false, []float32{1}, []bool{false}), StDistance32)
+	ok, info = f32.Run()
+	require.True(t, ok, info)
+}
+
+func TestStDistanceValidationOrder(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unsupported := types.T_geometry.ToType()
+	unsupported.Width = 3858
+	unsupported32 := types.T_geometry32.ToType()
+	unsupported32.Width = 3858
+
+	for _, tc := range []struct {
+		name        string
+		left, right FunctionTestInput
+		want        FunctionTestResult
+		fn          fEvalFn
+		selectList  *FunctionSelectList
+	}{
+		{
+			name:  "float64 all null",
+			left:  NewFunctionTestInput(unsupported, []string{""}, []bool{true}),
+			right: NewFunctionTestInput(unsupported, []string{""}, []bool{true}),
+			want:  NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+			fn:    StDistance,
+		},
+		{
+			name:       "float64 all masked",
+			left:       NewFunctionTestInput(unsupported, []string{"POINT(0 0)"}, []bool{false}),
+			right:      NewFunctionTestInput(unsupported, []string{"POINT(1 0)"}, []bool{false}),
+			want:       NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+			fn:         StDistance,
+			selectList: &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false}},
+		},
+		{
+			name:  "float32 all null",
+			left:  NewFunctionTestInput(unsupported32, []string{""}, []bool{true}),
+			right: NewFunctionTestInput(unsupported32, []string{""}, []bool{true}),
+			want:  NewFunctionTestResult(types.T_float32.ToType(), false, []float32{0}, []bool{true}),
+			fn:    StDistance32,
+		},
+		{
+			name:       "float32 all masked",
+			left:       NewFunctionTestInput(unsupported32, []string{"POINT(0 0)"}, []bool{false}),
+			right:      NewFunctionTestInput(unsupported32, []string{"POINT(1 0)"}, []bool{false}),
+			want:       NewFunctionTestResult(types.T_float32.ToType(), false, []float32{0}, []bool{true}),
+			fn:         StDistance32,
+			selectList: &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false}},
+		},
+		{
+			name:  "float64 unsupported SRID with evaluated row",
+			left:  NewFunctionTestInput(unsupported, []string{"POINT(0 0)"}, []bool{false}),
+			right: NewFunctionTestInput(unsupported, []string{"POINT(1 0)"}, []bool{false}),
+			want:  NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+			fn:    StDistance,
+		},
+		{
+			name:  "float32 unsupported SRID with evaluated row",
+			left:  NewFunctionTestInput(unsupported32, []string{"POINT(0 0)"}, []bool{false}),
+			right: NewFunctionTestInput(unsupported32, []string{"POINT(1 0)"}, []bool{false}),
+			want:  NewFunctionTestResult(types.T_float32.ToType(), true, nil, nil),
+			fn:    StDistance32,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, tc.want, tc.fn).
+				WithSelectList(tc.selectList)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	for _, tc := range []struct {
+		name       string
+		geomType   types.Type
+		resultType types.Type
+		fn         fEvalFn
+	}{
+		{name: "float64", geomType: types.T_geometry.ToType(), resultType: types.T_float64.ToType(), fn: StDistanceWithSRID},
+		{name: "float32", geomType: types.T_geometry32.ToType(), resultType: types.T_float32.ToType(), fn: StDistanceWithSRID32},
+	} {
+		t.Run("explicit unsupported SRID "+tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(tc.geomType, []string{"GEOMETRYCOLLECTION EMPTY"}, []bool{false}),
+				NewFunctionTestInput(tc.geomType, []string{"POINT(0 0)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3857}, []bool{false}),
+			}, NewFunctionTestResult(tc.resultType, true, nil, nil), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestStDistanceEvaluatorSelectionNullAndMalformedRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom := types.T_geometry.ToType()
+	valid := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(geom, []string{"GEOMETRYCOLLECTION(", "POINT(0 0)"}, []bool{false, false}),
+		NewFunctionTestInput(geom, []string{"GEOMETRYCOLLECTION(", "POINT(3 4)"}, []bool{false, false}),
+	}, NewFunctionTestResult(types.T_float64.ToType(), false,
+		[]float64{0, 5}, []bool{true, false}), StDistance).
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	ok, info := valid.Run()
+	require.True(t, ok, info)
+
+	null := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(geom, []string{"POINT(0 0)"}, []bool{true}),
+		NewFunctionTestInput(geom, []string{"POINT(1 0)"}, []bool{false}),
+	}, NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}), StDistance)
+	ok, info = null.Run()
+	require.True(t, ok, info)
+
+	malformed := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(geom, []string{"GEOMETRYCOLLECTION("}, []bool{false}),
+		NewFunctionTestInput(geom, []string{"POINT(1 0)"}, []bool{false}),
+	}, NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), StDistance)
+	ok, info = malformed.Run()
+	require.True(t, ok, info)
+
+	malformedRight := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(geom, []string{"POINT(0 0)"}, []bool{false}),
+		NewFunctionTestInput(geom, []string{"GEOMETRYCOLLECTION("}, []bool{false}),
+	}, NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), StDistance)
+	ok, info = malformedRight.Run()
+	require.True(t, ok, info)
+
+	for _, tc := range []struct {
+		name       string
+		fn         fEvalFn
+		leftType   types.Type
+		resultType types.Type
+	}{
+		{name: "float64", fn: StDistanceWithSRID, leftType: types.T_geometry.ToType(), resultType: types.T_float64.ToType()},
+		{name: "float32", fn: StDistanceWithSRID32, leftType: types.T_geometry32.ToType(), resultType: types.T_float32.ToType()},
+	} {
+		for _, side := range []string{"left", "right"} {
+			left, right := "POINT(0 0)", "POINT(1 0)"
+			if side == "left" {
+				left = "GEOMETRYCOLLECTION("
+			} else {
+				right = "GEOMETRYCOLLECTION("
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(tc.leftType, []string{left}, []bool{false}),
+				NewFunctionTestInput(tc.leftType, []string{right}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			}, NewFunctionTestResult(tc.resultType, true, nil, nil), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, "%s %s: %s", tc.name, side, info)
+		}
+	}
+}
+
+func TestGeometryDistanceCollectionEmptyContract(t *testing.T) {
+	payload := func(wkt string) []byte { return encodeGeometryPayload(wkt, 0, false) }
+	for _, tc := range []struct {
+		name  string
+		wkt   string
+		empty bool
+	}{
+		{name: "simple nonempty", wkt: "POINT(0 0)", empty: false},
+		{name: "top-level empty", wkt: "GEOMETRYCOLLECTION EMPTY", empty: true},
+		{name: "mixed multipoint", wkt: "MULTIPOINT(EMPTY,1 1)", empty: false},
+		{name: "nested all empty", wkt: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT EMPTY),MULTIPOINT EMPTY)", empty: true},
+		{name: "nested nonempty", wkt: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT EMPTY),POINT(3 4))", empty: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := geometryDistancePayloadEmpty(payload(tc.wkt))
+			require.NoError(t, err)
+			require.Equal(t, tc.empty, got)
+		})
+	}
+
+	_, err := geometryDistancePayloadEmpty([]byte("GEOMETRYCOLLECTION("))
+	require.Error(t, err)
+	_, err = geometryDistancePayloadEmpty(payload("GEOMETRYCOLLECTION(bad)"))
+	require.Error(t, err)
+	_, err = geometryDistancePayloadEmpty(payload("GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(bad))"))
+	require.Error(t, err)
+	_, err = geometryDistance(payload("GEOMETRYCOLLECTION EMPTY"), payload("POINT(0 0)"))
+	require.Error(t, err)
+	_, err = geometryDistance(payload("POINT(0 0)"), payload("GEOMETRYCOLLECTION EMPTY"))
+	require.Error(t, err)
+	_, err = geometryDistance([]byte("GEOMETRYCOLLECTION("), payload("POINT(0 0)"))
+	require.Error(t, err)
+	_, err = geometryDistance(payload("POINT(0 0)"), []byte("GEOMETRYCOLLECTION("))
+	require.Error(t, err)
+	got, err := multiGeometryDistance(payload("GEOMETRYCOLLECTION(POINT EMPTY,LINESTRING EMPTY)"), payload("POINT(0 0)"))
+	require.Error(t, err)
+	require.Zero(t, got)
+	_, err = multiGeometryDistance([]byte("GEOMETRYCOLLECTION("), payload("POINT(0 0)"))
+	require.Error(t, err)
+	_, err = multiGeometryDistance(payload("GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(bad))"), payload("POINT(0 0)"))
+	require.Error(t, err)
 }
 
 func TestStDistanceWithPolygonHoles(t *testing.T) {
@@ -7420,7 +8893,7 @@ func TestStContainsWithMultiGeometries(t *testing.T) {
 			},
 			[]bool{false, false, false, false, false, false}),
 	}
-	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, false, false}, []bool{false, false, false, false, false, false})
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, true, true}, []bool{false, false, false, false, false, false})
 	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StContains)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
@@ -7669,7 +9142,7 @@ func TestStWithinWithMultiGeometries(t *testing.T) {
 			},
 			[]bool{false, false, false, false, false, false}),
 	}
-	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, false, false}, []bool{false, false, false, false, false, false})
+	negativeExpect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false, false, true, true}, []bool{false, false, false, false, false, false})
 	tcc = NewFunctionTestCase(proc, negativeInputs, negativeExpect, StWithin)
 	succeed, info = tcc.Run()
 	require.True(t, succeed, info)
@@ -8465,7 +9938,7 @@ func initStCrossesTestCase() []tcTemp {
 					[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_bool.ToType(), false,
-				[]bool{false, false, false, false, false, true, false, true, false, false, true, false, false, true, true, true, true, true, false, true, true, true, true},
+				[]bool{false, false, false, false, false, false, false, true, false, false, true, false, false, true, true, true, true, true, false, true, true, true, true},
 				[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
 		},
 		{
@@ -9451,6 +10924,10 @@ func TestStCoveredByWithGeometryCollections(t *testing.T) {
 // encoding the SRID into the input type's Width (srid+1) since SRID is no longer
 // stored in the payload.
 func geomInputEWKT(ewkt string) FunctionTestInput {
+	return geomInputEWKTAsType(ewkt, types.T_geometry)
+}
+
+func geomInputEWKTAsType(ewkt string, geometryType types.T) FunctionTestInput {
 	wkt := ewkt
 	srid := uint32(0)
 	if strings.HasPrefix(strings.ToUpper(ewkt), "SRID=") {
@@ -9461,7 +10938,7 @@ func geomInputEWKT(ewkt string) FunctionTestInput {
 			}
 		}
 	}
-	typ := types.T_geometry.ToType()
+	typ := geometryType.ToType()
 	if srid != 0 {
 		typ.Width = int32(srid + 1)
 	}
@@ -9578,6 +11055,295 @@ func TestBinaryGeometryFunctionsRejectDifferentSRIDs(t *testing.T) {
 		require.Contains(t, info, "ST_DISTANCE")
 		require.Contains(t, info, "different srids")
 	})
+}
+
+func TestAllBinarySpatialFunctionEvaluatorsRejectDifferentSRIDsBeforeDecoding(t *testing.T) {
+	tests := []struct {
+		name         string
+		functionName string
+		geometryType types.T
+		resultType   types.T
+		fn           fEvalFn
+	}{
+		{name: "union", functionName: "ST_UNION", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StUnion},
+		{name: "union32", functionName: "ST_UNION", geometryType: types.T_geometry32, resultType: types.T_geometry32, fn: StUnion},
+		{name: "intersection", functionName: "ST_INTERSECTION", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StIntersection},
+		{name: "intersection32", functionName: "ST_INTERSECTION", geometryType: types.T_geometry32, resultType: types.T_geometry32, fn: StIntersection},
+		{name: "difference", functionName: "ST_DIFFERENCE", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StDifference},
+		{name: "difference32", functionName: "ST_DIFFERENCE", geometryType: types.T_geometry32, resultType: types.T_geometry32, fn: StDifference},
+		{name: "symdifference", functionName: "ST_SYMDIFFERENCE", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StSymDifference},
+		{name: "symdifference32", functionName: "ST_SYMDIFFERENCE", geometryType: types.T_geometry32, resultType: types.T_geometry32, fn: StSymDifference},
+		{name: "frechet", functionName: "ST_FRECHETDISTANCE", geometryType: types.T_geometry, resultType: types.T_float64, fn: StFrechetDistance},
+		{name: "frechet32", functionName: "ST_FRECHETDISTANCE", geometryType: types.T_geometry32, resultType: types.T_float32, fn: StFrechetDistance32},
+		{name: "hausdorff", functionName: "ST_HAUSDORFFDISTANCE", geometryType: types.T_geometry, resultType: types.T_float64, fn: StHausdorffDistance},
+		{name: "hausdorff32", functionName: "ST_HAUSDORFFDISTANCE", geometryType: types.T_geometry32, resultType: types.T_float32, fn: StHausdorffDistance32},
+		{name: "mbrContains", functionName: "MBRContains", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRContains},
+		{name: "mbrCovers", functionName: "MBRCovers", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRCovers},
+		{name: "mbrWithin", functionName: "MBRWithin", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRWithin},
+		{name: "mbrCoveredBy", functionName: "MBRCoveredBy", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRCoveredBy},
+		{name: "mbrDisjoint", functionName: "MBRDisjoint", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRDisjoint},
+		{name: "mbrIntersects", functionName: "MBRIntersects", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRIntersects},
+		{name: "mbrEquals", functionName: "MBREquals", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBREquals},
+		{name: "mbrOverlaps", functionName: "MBROverlaps", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBROverlaps},
+		{name: "mbrTouches", functionName: "MBRTouches", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRTouches},
+		{name: "makeEnvelope", functionName: "ST_MAKEENVELOPE", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StMakeEnvelope},
+		{name: "collect", functionName: "ST_COLLECT", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StCollect},
+		{name: "collect32", functionName: "ST_COLLECT", geometryType: types.T_geometry32, resultType: types.T_geometry32, fn: StCollect},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range tests {
+		for _, pair := range []struct{ left, right uint32 }{{4326, 3857}, {3857, 4326}} {
+			t.Run(fmt.Sprintf("%s/%d-%d", tc.name, pair.left, pair.right), func(t *testing.T) {
+				left := geomInputEWKTAsType("not a geometry payload", tc.geometryType)
+				right := geomInputEWKTAsType("also not a geometry payload", tc.geometryType)
+				left.typ.Width = int32(pair.left + 1)
+				right.typ.Width = int32(pair.right + 1)
+				fc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{left, right},
+					NewFunctionTestResult(tc.resultType.ToType(), true, nil, nil), tc.fn)
+				require.NoError(t, fc.result.PreExtendAndReset(1))
+
+				// The invalid payloads make this a boundary test: a missed admission
+				// check would return a decode error instead of the SRID error.
+				err := tc.fn(fc.parameters, fc.result, proc, 1, nil)
+				require.Error(t, err)
+				require.ErrorContains(t, err, "Binary geometry function "+tc.functionName)
+				require.ErrorContains(t, err, fmt.Sprintf("different srids: %d and %d", pair.left, pair.right))
+				if tc.resultType == types.T_geometry || tc.resultType == types.T_geometry32 {
+					require.Zero(t, fc.GetResultVectorDirectly().Length(), "failed admission must not append a result")
+				}
+			})
+		}
+	}
+}
+
+func TestCollectTreatsUndefinedAndExplicitZeroSRIDsAsEqual(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	left := geomInputEWKT("POINT(0 0)")
+	right := geomInputEWKT("POINT(1 1)")
+	// Width 1 encodes an explicitly declared SRID 0; Width 0 is undefined/default
+	// and must resolve to the same effective SRID at the evaluator boundary.
+	right.typ.Width = 1
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{left, right},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"MULTIPOINT(0 0,1 1)"}, []bool{false}), StCollect)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestBinarySpatialSRIDMismatchPreservesNullPropagation(t *testing.T) {
+	tests := []struct {
+		name         string
+		geometryType types.T
+		resultType   types.T
+		fn           fEvalFn
+	}{
+		{name: "overlay", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StUnion},
+		{name: "frechet32", geometryType: types.T_geometry32, resultType: types.T_float32, fn: StFrechetDistance32},
+		{name: "mbr", geometryType: types.T_geometry, resultType: types.T_bool, fn: MBRContains},
+		{name: "makeEnvelope", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StMakeEnvelope},
+		{name: "collect", geometryType: types.T_geometry, resultType: types.T_geometry, fn: StCollect},
+		{name: "distance", geometryType: types.T_geometry, resultType: types.T_float64, fn: StDistance},
+		{name: "distanceSphere", geometryType: types.T_geometry, resultType: types.T_float64, fn: StDistanceSphere},
+		{name: "contains", geometryType: types.T_geometry, resultType: types.T_bool, fn: StContains},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range tests {
+		for nullSide := 0; nullSide < 2; nullSide++ {
+			t.Run(fmt.Sprintf("%s/null_arg_%d", tc.name, nullSide), func(t *testing.T) {
+				left := geomInputEWKTAsType("not a geometry payload", tc.geometryType)
+				right := geomInputEWKTAsType("also not a geometry payload", tc.geometryType)
+				left.typ.Width = 4327
+				right.typ.Width = 1
+				if nullSide == 0 {
+					left.nullList = []bool{true}
+					left.isConst = true
+				} else {
+					right.nullList = []bool{true}
+					right.isConst = true
+				}
+				fc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{left, right},
+					NewFunctionTestResult(tc.resultType.ToType(), false, nil, nil), tc.fn)
+				require.NoError(t, fc.result.PreExtendAndReset(1))
+
+				err := tc.fn(fc.parameters, fc.result, proc, 1, nil)
+				require.NoError(t, err)
+				require.True(t, fc.GetResultVectorDirectly().IsNull(0))
+			})
+		}
+	}
+}
+
+func TestBinarySpatialSRIDMismatchSkipsMaskedAndEmptyRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	left := geomInputEWKTAsType("not a geometry payload", types.T_geometry)
+	right := geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
+	left.typ.Width = 4327
+	right.typ.Width = 1
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{left, right},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, nil, nil), StUnion)
+	selectList := &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false}}
+	require.NoError(t, fc.result.PreExtendAndReset(1))
+	require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 1, selectList))
+	require.True(t, fc.GetResultVectorDirectly().IsNull(0), "a fully masked row must not trigger SRID validation")
+
+	left = geomInputEWKTAsType("not a geometry payload", types.T_geometry)
+	right = geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
+	left.typ.Width = 4327
+	right.typ.Width = 1
+	left.values = []string{"masked malformed row", "null evaluated row"}
+	left.nullList = []bool{false, true}
+	right.values = []string{"masked malformed row", "null evaluated row"}
+	fc = NewFunctionTestCase(proc,
+		[]FunctionTestInput{left, right},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, nil, nil), StUnion)
+	selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+	require.NoError(t, fc.result.PreExtendAndReset(2))
+	require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 2, selectList))
+	require.True(t, fc.GetResultVectorDirectly().IsNull(0), "masked row must remain NULL")
+	require.True(t, fc.GetResultVectorDirectly().IsNull(1), "evaluated NULL argument must remain NULL")
+
+	left = geomInputEWKTAsType("not a geometry payload", types.T_geometry)
+	right = geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
+	left.typ.Width = 4327
+	right.typ.Width = 1
+	left.values = []string{"left NULL", "left value"}
+	left.nullList = []bool{true, false}
+	right.values = []string{"right value", "right NULL"}
+	right.nullList = []bool{false, true}
+	fc = NewFunctionTestCase(proc,
+		[]FunctionTestInput{left, right},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, nil, nil), StUnion)
+	require.NoError(t, fc.result.PreExtendAndReset(2))
+	require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 2, nil))
+	require.True(t, fc.GetResultVectorDirectly().IsNull(0), "the left-NULL pair must not require matching SRIDs")
+	require.True(t, fc.GetResultVectorDirectly().IsNull(1), "the right-NULL pair must not require matching SRIDs")
+
+	left = geomInputEWKTAsType("not a geometry payload", types.T_geometry)
+	right = geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
+	left.typ.Width = 4327
+	right.typ.Width = 1
+	left.values = []string{"masked non-null payload", "selected non-null payload"}
+	right.values = []string{"masked non-null payload", "selected non-null payload"}
+	fc = NewFunctionTestCase(proc,
+		[]FunctionTestInput{left, right},
+		NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil), StUnion)
+	selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+	require.NoError(t, fc.result.PreExtendAndReset(2))
+	err := fc.fn(fc.parameters, fc.result, proc, 2, selectList)
+	require.ErrorContains(t, err, "different srids: 4326 and 0")
+	require.Zero(t, fc.GetResultVectorDirectly().Length(), "SRID rejection must precede masked-row and result writes")
+
+	for _, fn := range []struct {
+		name string
+		fn   fEvalFn
+		out  types.T
+	}{
+		{name: "varlena", fn: StCollect, out: types.T_geometry},
+		{name: "fixed", fn: MBRContains, out: types.T_bool},
+	} {
+		t.Run("empty/"+fn.name, func(t *testing.T) {
+			left := geomInputEWKTAsType("", types.T_geometry)
+			right := geomInputEWKTAsType("", types.T_geometry)
+			left.typ.Width = 4327
+			right.typ.Width = 1
+			left.values = []string{}
+			right.values = []string{}
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{left, right},
+				NewFunctionTestResult(fn.out.ToType(), false, nil, nil), fn.fn)
+			require.NoError(t, fc.result.PreExtendAndReset(0))
+			require.NoError(t, fc.fn(fc.parameters, fc.result, proc, 0, nil))
+			require.Zero(t, fc.GetResultVectorDirectly().Length())
+		})
+	}
+}
+
+func TestBinarySpatialSRIDMismatchFailsBeforeAppendingRows(t *testing.T) {
+	tests := []struct {
+		name       string
+		fn         fEvalFn
+		resultType types.T
+	}{
+		{name: "varlena", fn: StCollect, resultType: types.T_geometry},
+		{name: "fixed", fn: MBRContains, resultType: types.T_bool},
+	}
+	proc := testutil.NewProcess(t)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			left := geomInputEWKTAsType("not a geometry payload", types.T_geometry)
+			right := geomInputEWKTAsType("also not a geometry payload", types.T_geometry)
+			left.typ.Width = 4327
+			right.typ.Width = 1
+			left.values = []string{"masked-result-if-evaluated", "bad non-null payload"}
+			left.nullList = []bool{true, false}
+			right.values = []string{"ignored payload", "bad non-null payload"}
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{left, right},
+				NewFunctionTestResult(tc.resultType.ToType(), true, nil, nil), tc.fn)
+			require.NoError(t, fc.result.PreExtendAndReset(2))
+
+			err := tc.fn(fc.parameters, fc.result, proc, 2, nil)
+			require.Error(t, err)
+			require.ErrorContains(t, err, "different srids: 4326 and 0")
+			if tc.resultType == types.T_geometry {
+				require.Zero(t, fc.GetResultVectorDirectly().Length(), "varlena output must not contain a prefix row")
+			} else {
+				require.False(t, fc.GetResultVectorDirectly().IsNull(0), "fixed output must not contain a prefix NULL row")
+				require.False(t, fc.GetResultVectorDirectly().IsNull(1), "fixed output must not contain a value for the rejected row")
+			}
+		})
+	}
+}
+
+func TestBinarySpatialEmptyConstBatchDoesNotDecodeInputs(t *testing.T) {
+	tests := []struct {
+		name       string
+		fn         fEvalFn
+		resultType types.T
+	}{
+		{name: "overlay", fn: StUnion, resultType: types.T_geometry},
+		{name: "frechet", fn: StFrechetDistance, resultType: types.T_float64},
+		{name: "collect", fn: StCollect, resultType: types.T_geometry},
+		{name: "mbr", fn: MBRContains, resultType: types.T_bool},
+		{name: "makeEnvelope", fn: StMakeEnvelope, resultType: types.T_geometry},
+		{name: "distance", fn: StDistance, resultType: types.T_float64},
+		{name: "distanceSphere", fn: StDistanceSphere, resultType: types.T_float64},
+		{name: "contains", fn: StContains, resultType: types.T_bool},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, tc := range tests {
+		for _, srids := range []struct {
+			name        string
+			left, right int32
+		}{
+			{name: "matching", left: 4327, right: 4327},
+			{name: "mismatched", left: 4327, right: 1},
+		} {
+			t.Run(tc.name+"/"+srids.name, func(t *testing.T) {
+				left := geomInputEWKTAsType("malformed constant payload", types.T_geometry)
+				right := geomInputEWKTAsType("also malformed constant payload", types.T_geometry)
+				left.typ.Width = srids.left
+				right.typ.Width = srids.right
+				left.isConst = true
+				right.isConst = true
+
+				fc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{left, right},
+					NewFunctionTestResult(tc.resultType.ToType(), false, nil, nil), tc.fn)
+				require.NoError(t, fc.result.PreExtendAndReset(0))
+				err := tc.fn(fc.parameters, fc.result, proc, 0, nil)
+				require.NoError(t, err, "an empty batch has no geometry pair to decode or reject")
+				require.Zero(t, fc.GetResultVectorDirectly().Length())
+				require.Zero(t, fc.GetResultVectorDirectly().GetNulls().Count())
+			})
+		}
+	}
 }
 
 func TestGeometryDistanceHelpersRejectMalformedSlices(t *testing.T) {
@@ -12559,6 +14325,137 @@ func TestDoDatetimeAddComprehensive(t *testing.T) {
 			} else {
 				require.Equal(t, tc.expectedValue, result, "Result should match expected value")
 			}
+		})
+	}
+}
+
+func TestTemporalMicrosecondBoundaryOverflowIsNull(t *testing.T) {
+	minDatetime, err := types.ParseDatetime("0001-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	maxTimestamp, err := types.ParseTimestamp(time.UTC, "9999-12-31 23:59:59.999999", 6)
+	require.NoError(t, err)
+	ordinaryTimestamp, err := types.ParseTimestamp(time.UTC, "2024-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	ordinaryTimestampNext, err := types.ParseTimestamp(time.UTC, "2024-01-01 00:00:00.000001", 6)
+	require.NoError(t, err)
+
+	t.Run("helpers preserve rejected domain", func(t *testing.T) {
+		for _, delta := range []int64{-1, -2} {
+			_, err = doDatetimeAdd(minDatetime, delta, types.MicroSecond)
+			require.True(t, isDatetimeOverflowMaxError(err))
+
+			_, err = doDateStringAdd("0001-01-01 00:00:00.000000", delta, types.MicroSecond)
+			require.True(t, isDatetimeOverflowMaxError(err))
+		}
+
+		got, err := doDatetimeAdd(minDatetime, 0, types.MicroSecond)
+		require.NoError(t, err)
+		require.Equal(t, minDatetime, got)
+		got, err = doDateStringAdd("0001-01-01 00:00:00.000000", 0, types.MicroSecond)
+		require.NoError(t, err)
+		require.Equal(t, minDatetime, got)
+
+		_, err = doTimestampAdd(time.UTC, maxTimestamp, 1, types.MicroSecond)
+		require.True(t, isDatetimeOverflowMaxError(err))
+	})
+
+	timestampInputs := func(t *testing.T, dateAddSyntax bool) (*process.Process, []*vector.Vector, vector.FunctionResultWrapper) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.GetSessionInfo().TimeZone = time.UTC
+		timestampVec := vector.NewVec(types.New(types.T_timestamp, 0, 6))
+		require.NoError(t, vector.AppendFixedList(timestampVec,
+			[]types.Timestamp{maxTimestamp, ordinaryTimestamp, ordinaryTimestamp}, []bool{false, false, true}, proc.Mp()))
+		intervalVec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(intervalVec, []int64{1, 1, 1}, nil, proc.Mp()))
+
+		var parameters []*vector.Vector
+		if dateAddSyntax {
+			unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 3, proc.Mp())
+			require.NoError(t, makeErr)
+			parameters = []*vector.Vector{timestampVec, intervalVec, unitVec}
+		} else {
+			unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 3, proc.Mp())
+			require.NoError(t, makeErr)
+			parameters = []*vector.Vector{unitVec, intervalVec, timestampVec}
+		}
+		result := vector.NewFunctionResultWrapper(types.T_timestamp.ToType(), proc.Mp())
+		require.NoError(t, result.PreExtendAndReset(3))
+		t.Cleanup(func() {
+			for _, parameter := range parameters {
+				parameter.Free(proc.Mp())
+			}
+			result.Free()
+		})
+		return proc, parameters, result
+	}
+
+	for _, test := range []struct {
+		name          string
+		dateAddSyntax bool
+		fn            func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+	}{
+		{name: "DATE_ADD timestamp column", dateAddSyntax: true, fn: TimestampAdd},
+		{name: "TIMESTAMPADD timestamp column", fn: TimestampAddTimestamp},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc, parameters, result := timestampInputs(t, test.dateAddSyntax)
+			require.NoError(t, test.fn(parameters, result, proc, 3, nil))
+			resultVec := result.GetResultVector()
+			require.True(t, resultVec.GetNulls().Contains(0), "upper overflow must be row-local NULL")
+			require.False(t, resultVec.GetNulls().Contains(1), "ordinary neighbor must remain valid")
+			require.True(t, resultVec.GetNulls().Contains(2), "input NULL must remain NULL")
+			got, isNull := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](resultVec).GetValue(1)
+			require.False(t, isNull)
+			require.Equal(t, ordinaryTimestampNext, got)
+		})
+	}
+
+	for _, test := range []struct {
+		name          string
+		dateAddSyntax bool
+		fn            func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+	}{
+		{name: "DATE_ADD string column", dateAddSyntax: true, fn: DateStringAdd},
+		{name: "TIMESTAMPADD string column", fn: TimestampAddString},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			stringVec := vector.NewVec(types.T_varchar.ToType())
+			require.NoError(t, vector.AppendStringList(stringVec, []string{
+				"0001-01-01 00:00:00.000000",
+				"0001-01-01 00:00:00.000000",
+				"0001-01-01 00:00:00.000000",
+				"2024-01-01 00:00:00.000000",
+			}, []bool{false, false, false, true}, proc.Mp()))
+			intervalVec := vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixedList(intervalVec, []int64{-1, -2, 0, 1}, nil, proc.Mp()))
+
+			var parameters []*vector.Vector
+			if test.dateAddSyntax {
+				unitVec, makeErr := vector.NewConstFixed(types.T_int64.ToType(), int64(types.MicroSecond), 4, proc.Mp())
+				require.NoError(t, makeErr)
+				parameters = []*vector.Vector{stringVec, intervalVec, unitVec}
+			} else {
+				unitVec, makeErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("MICROSECOND"), 4, proc.Mp())
+				require.NoError(t, makeErr)
+				parameters = []*vector.Vector{unitVec, intervalVec, stringVec}
+			}
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			require.NoError(t, result.PreExtendAndReset(4))
+			t.Cleanup(func() {
+				for _, parameter := range parameters {
+					parameter.Free(proc.Mp())
+				}
+				result.Free()
+			})
+
+			require.NoError(t, test.fn(parameters, result, proc, 4, nil))
+			resultNulls := result.GetResultVector().GetNulls()
+			require.True(t, resultNulls.Contains(0), "one microsecond below minimum must be NULL")
+			require.True(t, resultNulls.Contains(1), "two microseconds below minimum must be NULL")
+			require.False(t, resultNulls.Contains(2), "exact minimum must remain valid")
+			require.True(t, resultNulls.Contains(3), "input NULL must remain NULL")
 		})
 	}
 }

@@ -752,6 +752,46 @@ func TestPreparedNumericPrefixTypeFromString(t *testing.T) {
 	}
 }
 
+func TestPreparedNumericStringIsComplete(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "65.5", want: true},
+		{value: " 65.5e0 ", want: true},
+		{value: "+1", want: true},
+		{value: "65.5xyz", want: false},
+		{value: "abc", want: false},
+		{value: "1e+", want: false},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			require.Equal(t, test.want, PreparedNumericStringIsComplete(test.value))
+		})
+	}
+}
+
+func TestPreparedCharSourceTypeFromString(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		value     string
+		want      types.T
+		wantExact bool
+	}{
+		{name: "signed minimum", value: "-9223372036854775808", want: types.T_int64, wantExact: true},
+		{name: "unsigned above signed maximum", value: "9223372036854775809", want: types.T_uint64, wantExact: true},
+		{name: "decimal", value: "65.5e0", want: types.T_decimal64, wantExact: true},
+		{name: "numeric suffix", value: "65.5xyz", want: types.T_varchar},
+		{name: "non-numeric", value: "abc", want: types.T_varchar},
+		{name: "decimal overflow falls back to string", value: strings.Repeat("9", 77), want: types.T_varchar},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, exact := PreparedCharSourceTypeFromString(test.value)
+			require.Equal(t, test.want, got.Oid)
+			require.Equal(t, test.wantExact, exact)
+		})
+	}
+}
+
 func TestPreparedDecimalRuntimeTypePreservesWireDomain(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -790,33 +830,71 @@ func TestPreparedDecimalRuntimeTypePreservesWireDomain(t *testing.T) {
 
 func TestPreparedDecimalRuntimeDomainsCanonicalMaterialization(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		value     string
-		canonical string
-		visible   types.Type
+		name       string
+		value      string
+		normalized types.Type
+		canonical  string
+		visible    types.Type
+		exact      bool
 	}{
 		{
 			name: "decimal64 leading zeroes", value: strings.Repeat("0", 100) + "1.0",
-			canonical: "10e-1", visible: types.New(types.T_decimal64, 2, 1),
+			normalized: types.New(types.T_decimal64, 1, 0),
+			canonical:  "1", visible: types.New(types.T_decimal64, 2, 1),
 		},
 		{
 			name: "signed exponent", value: "-00012.3400e+2",
-			canonical: "-123400e-2", visible: types.New(types.T_decimal64, 6, 2),
+			normalized: types.New(types.T_decimal64, 4, 0),
+			canonical:  "-1234", visible: types.New(types.T_decimal64, 6, 2), exact: true,
+		},
+		{
+			name: "trailing zeroes fit normalized domain", value: "1.200000000000000000000000000000",
+			normalized: types.New(types.T_decimal64, 2, 1),
+			canonical:  "12e-1", visible: types.New(types.T_decimal128, 31, 30), exact: true,
 		},
 		{
 			name: "decimal256 leading zeroes", value: strings.Repeat("0", 100) + strings.Repeat("9", 65),
-			canonical: strings.Repeat("9", 65), visible: types.New(types.T_decimal256, 65, 0),
+			normalized: types.New(types.T_decimal256, 65, 0),
+			canonical:  strings.Repeat("9", 65), visible: types.New(types.T_decimal256, 65, 0),
 		},
 		{
 			name: "huge exponent zero", value: "-000.000e+999999999999999999999",
-			canonical: "0", visible: types.New(types.T_decimal64, 1, 0),
+			normalized: types.New(types.T_decimal64, 1, 0),
+			canonical:  "0", visible: types.New(types.T_decimal64, 1, 0),
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, visible, canonical, ok := PreparedDecimalRuntimeDomains(test.value)
+			normalized, visible, canonical, ok := PreparedDecimalRuntimeDomains(test.value)
 			require.True(t, ok)
+			require.Equal(t, test.normalized, normalized)
 			require.Equal(t, test.visible, visible)
 			require.Equal(t, test.canonical, canonical)
+			parse := func(value string, typ types.Type) (any, error) {
+				switch typ.Oid {
+				case types.T_decimal64:
+					parsed, err := types.ParseDecimal64(value, typ.Width, typ.Scale)
+					return parsed, err
+				case types.T_decimal128:
+					parsed, err := types.ParseDecimal128(value, typ.Width, typ.Scale)
+					return parsed, err
+				case types.T_decimal256:
+					parsed, err := types.ParseDecimal256(value, typ.Width, typ.Scale)
+					return parsed, err
+				default:
+					t.Fatalf("unexpected DECIMAL domain %s", typ.Oid)
+					return nil, nil
+				}
+			}
+			_, err := parse(canonical, normalized)
+			require.NoError(t, err, "canonical must parse in normalized domain")
+			canonicalVisible, err := parse(canonical, visible)
+			require.NoError(t, err, "canonical must parse in visible domain")
+			if test.exact {
+				originalVisible, err := parse(test.value, visible)
+				require.NoError(t, err)
+				require.Equal(t, originalVisible, canonicalVisible,
+					"canonical must preserve the visible-domain value and scale")
+			}
 		})
 	}
 
@@ -826,6 +904,8 @@ func TestPreparedDecimalRuntimeDomainsCanonicalMaterialization(t *testing.T) {
 	require.Equal(t, types.New(types.T_decimal128, 20, 0), normalized)
 	require.Equal(t, normalized, visible)
 	require.Equal(t, "90071992547409920001", canonical)
+	_, err := types.ParseDecimal128(canonical, normalized.Width, normalized.Scale)
+	require.NoError(t, err)
 
 	raw := strings.Repeat("0", 100) + "1.0"
 	_, visible, canonical, ok = PreparedDecimalRuntimeDomains(raw)
@@ -965,6 +1045,31 @@ func TestPreparedPlanDirectResultParamPositions(t *testing.T) {
 
 	require.Nil(t, PreparedPlanDirectResultParamPositions(nil))
 	require.Nil(t, PreparedPlanDirectResultParamPositions(&plan.Plan{
+		Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}},
+	}))
+}
+
+func TestPreparedPlanConversionParamPositions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "bin value", sql: "prepare bin_value from 'select bin(?)'", want: []int32{0}},
+		{name: "conv value", sql: "prepare conv_value from 'select conv(?, 10, 16)'", want: []int32{0}},
+		{name: "multiple values", sql: "prepare multiple_values from 'select bin(?), conv(?, 10, 16)'", want: []int32{0, 1}},
+		{name: "no conversion", sql: "prepare no_conversion from 'select abs(?)'", want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
+			require.Equal(t, test.want, PreparedPlanConversionParamPositions(planUnderTest))
+		})
+	}
+
+	require.Nil(t, PreparedPlanConversionParamPositions(nil))
+	require.Nil(t, PreparedPlanConversionParamPositions(&plan.Plan{
 		Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}},
 	}))
 }

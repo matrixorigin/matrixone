@@ -42,6 +42,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 	"unsafe"
@@ -425,15 +426,25 @@ func SubVectorWith3Args[T types.RealNumbers](ivecs []*vector.Vector, result vect
 	return nil
 }
 
-func StringSingle(val []byte) uint8 {
+func StringSingle(val []byte) int32 {
 	if len(val) == 0 {
 		return 0
 	}
-	return val[0]
+	return int32(val[0])
 }
 
 func AsciiString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return opUnaryBytesToFixed[uint8](ivecs, result, proc, length, func(v []byte) uint8 {
+	// The overload IDs are part of the serialized plan contract. During a
+	// rolling upgrade an old plan can still carry the historical UINT8 result
+	// type, even though new plans advertise INT32. Keep the old wrapper
+	// executable on a new binary; the remote protocol fence prevents the
+	// reverse direction (a new INT32 plan sent to an old worker).
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return opUnaryBytesToFixed[uint8](ivecs, result, proc, length, func(v []byte) uint8 {
+			return uint8(StringSingle(v))
+		}, selectList)
+	}
+	return opUnaryBytesToFixed[int32](ivecs, result, proc, length, func(v []byte) int32 {
 		return StringSingle(v)
 	}, selectList)
 }
@@ -483,9 +494,9 @@ var (
 	uints = []uint64{1e16, 1e8, 1e4, 1e2, 1e1}
 )
 
-func IntSingle[T types.Ints](val T, start int) uint8 {
+func IntSingle[T types.Ints](val T, start int) int32 {
 	if val < 0 {
-		return '-'
+		return int32('-')
 	}
 	i64Val := int64(val)
 	for _, v := range ints[start:] {
@@ -493,31 +504,41 @@ func IntSingle[T types.Ints](val T, start int) uint8 {
 			i64Val /= v
 		}
 	}
-	return uint8(i64Val) + '0'
+	return int32(i64Val) + '0'
 }
 
 func AsciiInt[T types.Ints](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	start := intStartMap[ivecs[0].GetType().Oid]
 
-	return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+			return uint8(IntSingle[T](v, start))
+		}, selectList)
+	}
+	return opUnaryFixedToFixed[T, int32](ivecs, result, proc, length, func(v T) int32 {
 		return IntSingle[T](v, start)
 	}, selectList)
 }
 
-func UintSingle[T types.UInts](val T, start int) uint8 {
+func UintSingle[T types.UInts](val T, start int) int32 {
 	u64Val := uint64(val)
 	for _, v := range uints[start:] {
 		if u64Val >= v {
 			u64Val /= v
 		}
 	}
-	return uint8(u64Val) + '0'
+	return int32(u64Val) + '0'
 }
 
 func AsciiUint[T types.UInts](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	start := intStartMap[ivecs[0].GetType().Oid]
 
-	return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+	if _, legacy := result.(*vector.FunctionResult[uint8]); legacy {
+		return opUnaryFixedToFixed[T, uint8](ivecs, result, proc, length, func(v T) uint8 {
+			return uint8(UintSingle[T](v, start))
+		}, selectList)
+	}
+	return opUnaryFixedToFixed[T, int32](ivecs, result, proc, length, func(v T) int32 {
 		return UintSingle[T](v, start)
 	}, selectList)
 }
@@ -545,10 +566,17 @@ func binInteger[T constraints.Unsigned | constraints.Signed](v T, proc *process.
 }
 
 func binFloat[T constraints.Float](v T, proc *process.Process) (string, error) {
-	if err := overflowForNumericToNumeric[T, int64](proc.Ctx, []T{v}, nil); err != nil {
+	bitSize := 64
+	if _, ok := any(v).(float32); ok {
+		bitSize = 32
+	}
+	var buf [64]byte
+	text := appendMySQLNumericFloat(buf[:0], float64(v), bitSize)
+	_, unsignedValue, _, err := parseBaseIntegerPrefix(text, 10)
+	if err != nil {
 		return "", err
 	}
-	return uintToBinary(uint64(int64(v))), nil
+	return uintToBinary(unsignedValue), nil
 }
 
 // BinString applies BIN's MySQL string contract: convert the leading base-10
@@ -559,7 +587,7 @@ func BinString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 	nParam := vector.GenerateFunctionStrParameter(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -603,6 +631,165 @@ func BinFloat[T constraints.Float](ivecs []*vector.Vector, result vector.Functio
 		}
 		return val, err
 	}, selectList)
+}
+
+// BinDynamic is the runtime-owned BIN path. It is used for prepared
+// parameters and for scalar types whose MySQL numeric representation is not
+// an integer vector with a matching fixed overload. Keeping this dispatch at
+// the batch boundary preserves the specialized hot paths for ordinary integer,
+// float, and string columns.
+func BinDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	inputType := ivecs[0].GetType()
+	switch inputType.Oid {
+	case types.T_any:
+		// A T_any vector can only carry an untyped NULL at this boundary. A
+		// prepared marker with a concrete runtime type is handled by the
+		// corresponding case below.
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob:
+		return BinString(ivecs, result, proc, length, selectList)
+	case types.T_int8:
+		return Bin[int8](ivecs, result, proc, length, selectList)
+	case types.T_int16:
+		return Bin[int16](ivecs, result, proc, length, selectList)
+	case types.T_int32:
+		return Bin[int32](ivecs, result, proc, length, selectList)
+	case types.T_int64:
+		return Bin[int64](ivecs, result, proc, length, selectList)
+	case types.T_uint8:
+		return Bin[uint8](ivecs, result, proc, length, selectList)
+	case types.T_uint16:
+		return Bin[uint16](ivecs, result, proc, length, selectList)
+	case types.T_uint32:
+		return Bin[uint32](ivecs, result, proc, length, selectList)
+	case types.T_uint64:
+		return Bin[uint64](ivecs, result, proc, length, selectList)
+	case types.T_float32:
+		return BinFloat[float32](ivecs, result, proc, length, selectList)
+	case types.T_float64:
+		return BinFloat[float64](ivecs, result, proc, length, selectList)
+	case types.T_bool:
+		return binMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[bool](ivecs[0]),
+			func(v bool) int64 {
+				if v {
+					return 1
+				}
+				return 0
+			}, result, length, selectList)
+	case types.T_bit:
+		return Bin[uint64](ivecs, result, proc, length, selectList)
+	case types.T_decimal64:
+		return binDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0]),
+			func(v types.Decimal64) string { return v.Format(inputType.Scale) },
+			result, length, selectList)
+	case types.T_decimal128:
+		return binDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0]),
+			func(v types.Decimal128) string { return v.Format(inputType.Scale) },
+			result, length, selectList)
+	case types.T_decimal256:
+		return binDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0]),
+			func(v types.Decimal256) string { return v.Format(inputType.Scale) },
+			result, length, selectList)
+	case types.T_date:
+		return binMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0]),
+			func(v types.Date) int64 { return int64(v.Year()) }, result, length, selectList)
+	case types.T_datetime:
+		return binMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0]),
+			func(v types.Datetime) int64 { return int64(v.Year()) },
+			result, length, selectList)
+	case types.T_timestamp:
+		zone := time.Local
+		if proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		return binMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0]),
+			func(v types.Timestamp) int64 { return int64(v.ToDatetime(zone).Year()) },
+			result, length, selectList)
+	case types.T_time:
+		return binMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0]),
+			func(v types.Time) int64 { return v.Hour() },
+			result, length, selectList)
+	case types.T_year:
+		return binMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[types.MoYear](ivecs[0]),
+			func(v types.MoYear) int64 { return v.ToInt64() },
+			result, length, selectList)
+	default:
+		return moerr.NewInvalidArg(proc.Ctx, "function bin", inputType.Oid)
+	}
+}
+
+func binMappedInt64[T types.FixedSizeTExceptStrType](
+	nParam vector.FunctionParameterWrapper[T], mapValue func(T) int64,
+	result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes([]byte(uintToBinary(uint64(mapValue(value)))), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func binDecimalPrefix[T types.Decimal](
+	nParam vector.FunctionParameterWrapper[T], formatValue func(T) string,
+	result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+) error {
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		_, unsignedValue, _, err := parseBaseIntegerPrefix([]byte(formatValue(value)), 10)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes([]byte(uintToBinary(unsignedValue)), false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func bitCountFromUint64(v uint64) uint64 {
@@ -1550,6 +1737,9 @@ func StSwapXY(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 // StLatFromGeoHash returns the latitude of the center of a geohash cell
 // (ST_LatFromGeoHash).
 func StLatFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
 		_, lat, err := geo.DecodeGeoHash(functionUtil.QuickBytesToStr(v))
 		if err != nil {
@@ -1562,6 +1752,9 @@ func StLatFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 // StLongFromGeoHash returns the longitude of the center of a geohash cell
 // (ST_LongFromGeoHash).
 func StLongFromGeoHash(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	return opUnaryBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v []byte) (float64, error) {
 		lon, _, err := geo.DecodeGeoHash(functionUtil.QuickBytesToStr(v))
 		if err != nil {
@@ -1772,6 +1965,9 @@ func geodeticArea(payload []byte) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := geo.ValidateGeodeticCoordinates(g); err != nil {
+		return 0, err
+	}
 	return geo.AreaSquareMeters(g), nil
 }
 
@@ -1787,6 +1983,9 @@ func geodeticLength(payload []byte) (float64, error) {
 	}
 	g, err := decodeGeoGeometry(payload)
 	if err != nil {
+		return 0, err
+	}
+	if err := geo.ValidateGeodeticCoordinates(g); err != nil {
 		return 0, err
 	}
 	return geo.LengthMeters(g), nil
@@ -2695,6 +2894,18 @@ func geometryIsEmpty(payload []byte) (bool, error) {
 	return len(content) == 0, nil
 }
 
+func geometryIsExplicitlyEmpty(payload []byte) (bool, error) {
+	s, _, _, err := decodeGeometryPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(strings.TrimSpace(s), typeName+" EMPTY"), nil
+}
+
 func StGeometryType(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
 		typeName, err := geometryTypeNameFromPayload(v)
@@ -2982,12 +3193,16 @@ func StEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func StCentroid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	f32 := geometryArgIsFloat32(ivecs, 0)
-	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		out, err := centroidFromPayload(v)
+	return opUnaryBytesToBytesWithResultNull(ivecs, result, proc, length, func(v []byte) ([]byte, bool, error) {
+		out, isNull, err := centroidFromPayload(v)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return reencodeGeom32(out, f32)
+		if isNull {
+			return nil, true, nil
+		}
+		out, err = reencodeGeom32(out, f32)
+		return out, false, err
 	}, selectList)
 }
 
@@ -3210,6 +3425,14 @@ func geometryDimensionFromTextWithDepth(wkt string, depth int) (int64, error) {
 }
 
 func isSimpleFromPayload(payload []byte) (bool, error) {
+	decoded, err := decodeGeoGeometry(payload)
+	if err != nil {
+		return false, err
+	}
+	if err := validateDerivedGeometry(decoded); err != nil {
+		return false, err
+	}
+
 	typeName, err := geometryTypeNameFromPayload(payload)
 	if err != nil {
 		return false, err
@@ -3217,12 +3440,145 @@ func isSimpleFromPayload(payload []byte) (bool, error) {
 
 	switch typeName {
 	case "POINT":
+		if empty, err := geometryIsExplicitlyEmpty(payload); err != nil {
+			return false, err
+		} else if empty {
+			return true, nil
+		}
 		if _, _, err := parsePointXYFromPayload(payload); err != nil {
 			return false, err
 		}
 		return true, nil
 	case "LINESTRING":
+		if empty, err := geometryIsExplicitlyEmpty(payload); err != nil {
+			return false, err
+		} else if empty {
+			return true, nil
+		}
 		return lineStringIsSimpleFromPayload(payload)
+	case "POLYGON":
+		if empty, err := geometryIsExplicitlyEmpty(payload); err != nil {
+			return false, err
+		} else if empty {
+			return true, nil
+		}
+		return polygonIsSimpleFromPayload(payload)
+	case "MULTIPOINT":
+		parts, err := simpleGeometryPartsFromPayload(payload, typeName)
+		if err != nil {
+			return false, err
+		}
+		for i := range parts {
+			left, err := simpleGeometryPartPoint(parts[i])
+			if err != nil {
+				return false, err
+			}
+			for j := i + 1; j < len(parts); j++ {
+				right, err := simpleGeometryPartPoint(parts[j])
+				if err != nil {
+					return false, err
+				}
+				if sameGeometryPoint(left, right) {
+					return false, nil
+				}
+			}
+		}
+		return true, nil
+	case "MULTILINESTRING":
+		parts, err := simpleGeometryPartsFromPayload(payload, typeName)
+		if err != nil {
+			return false, err
+		}
+		for _, part := range parts {
+			if simple, err := isSimpleFromPayload(part.payload); err != nil {
+				return false, err
+			} else if !simple {
+				return false, nil
+			}
+		}
+		for i := range parts {
+			for j := i + 1; j < len(parts); j++ {
+				intersects, err := simpleGeometryPartsIntersect(parts[i], parts[j])
+				if err != nil {
+					return false, err
+				}
+				if intersects {
+					touch, err := simplePartsTouchAtBothBoundaries(parts[i], parts[j])
+					if err != nil {
+						return false, err
+					}
+					if !touch {
+						return false, nil
+					}
+				}
+			}
+		}
+		return true, nil
+	case "MULTIPOLYGON":
+		parts, err := simpleGeometryPartsFromPayload(payload, typeName)
+		if err != nil {
+			return false, err
+		}
+		for _, part := range parts {
+			if simple, err := isSimpleFromPayload(part.payload); err != nil {
+				return false, err
+			} else if !simple {
+				return false, nil
+			}
+		}
+		for i := range parts {
+			for j := i + 1; j < len(parts); j++ {
+				intersects, err := simpleGeometryPartsIntersect(parts[i], parts[j])
+				if err != nil {
+					return false, err
+				}
+				if intersects {
+					touch, err := simplePartsTouchOnlyAtBoundary(parts[i], parts[j])
+					if err != nil {
+						return false, err
+					}
+					if !touch {
+						return false, nil
+					}
+				}
+			}
+		}
+		return true, nil
+	case "GEOMETRYCOLLECTION":
+		if empty, err := geometryIsExplicitlyEmpty(payload); err != nil {
+			return false, err
+		} else if empty {
+			return true, nil
+		}
+		items, err := geometryPayloadItems(payload, typeName)
+		if err != nil {
+			return false, err
+		}
+		members, err := simpleGeometryMembersFromPayload(payload, typeName)
+		if err != nil {
+			return false, err
+		}
+		for _, item := range items {
+			simple, err := isSimpleFromPayload(item)
+			if err != nil {
+				return false, err
+			}
+			if !simple {
+				return false, nil
+			}
+		}
+		for i := range members {
+			for j := i + 1; j < len(members); j++ {
+				intersects, err := simpleGeometryMembersInteriorIntersect(members[i], members[j])
+				if err != nil {
+					return false, err
+				}
+				if intersects {
+					return false, nil
+				}
+			}
+		}
+		return true, nil
 	default:
 		return false, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_IsSimple")
 	}
@@ -3234,6 +3590,779 @@ func lineStringIsSimpleFromPayload(payload []byte) (bool, error) {
 		return false, err
 	}
 	return lineStringPointsAreSimple(points), nil
+}
+
+type simpleGeometryPart struct {
+	typeName string
+	payload  []byte
+}
+
+type simpleGeometryMember struct {
+	typeName string
+	payload  []byte
+}
+
+// validateDerivedGeometry validates the structural contract needed by the
+// recursive derived-geometry kernels. The WKT/WKB readers deliberately accept
+// a few intermediate forms (for example a one-point LineString), while the
+// SQL property functions must continue to reject those as malformed input.
+func validateDerivedGeometry(g geo.Geometry) error {
+	finite := func(c geo.Coord) bool {
+		return !math.IsNaN(c.X) && !math.IsNaN(c.Y) && !math.IsInf(c.X, 0) && !math.IsInf(c.Y, 0)
+	}
+	var validate func(geo.Geometry) error
+	validate = func(value geo.Geometry) error {
+		switch v := value.(type) {
+		case geo.Point:
+			if v.IsEmpty {
+				return nil
+			}
+			if !finite(v.Coord()) {
+				return moerr.NewInvalidInputNoCtx("invalid point payload")
+			}
+		case geo.LineString:
+			if len(v.Points) == 0 {
+				return nil
+			}
+			if len(v.Points) < 2 {
+				return moerr.NewInvalidInputNoCtx("invalid linestring payload")
+			}
+			for _, c := range v.Points {
+				if !finite(c) {
+					return moerr.NewInvalidInputNoCtx("invalid linestring payload")
+				}
+			}
+		case geo.Polygon:
+			if len(v.Rings) == 0 {
+				return nil
+			}
+			for _, ring := range v.Rings {
+				ringPointCount := len(ring)
+				if len(ring) > 1 && sameGeometryPoint(
+					geometryPoint2D{x: ring[0].X, y: ring[0].Y},
+					geometryPoint2D{x: ring[len(ring)-1].X, y: ring[len(ring)-1].Y},
+				) {
+					ringPointCount--
+				}
+				if ringPointCount < 3 {
+					return moerr.NewInvalidInputNoCtx("invalid polygon payload")
+				}
+				for _, c := range ring {
+					if !finite(c) {
+						return moerr.NewInvalidInputNoCtx("invalid polygon payload")
+					}
+				}
+			}
+		case geo.MultiPoint:
+			for _, point := range v.Points {
+				if err := validate(point); err != nil {
+					return err
+				}
+			}
+		case geo.MultiLineString:
+			for _, line := range v.Lines {
+				if err := validate(line); err != nil {
+					return err
+				}
+			}
+		case geo.MultiPolygon:
+			for _, polygon := range v.Polygons {
+				if err := validate(polygon); err != nil {
+					return err
+				}
+			}
+		case geo.GeometryCollection:
+			for _, child := range v.Geometries {
+				if child == nil {
+					return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+				}
+				if err := validate(child); err != nil {
+					return err
+				}
+			}
+		default:
+			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		return nil
+	}
+	return validate(g)
+}
+
+func hasDegeneratePolygon(g geo.Geometry) bool {
+	switch v := g.(type) {
+	case geo.Polygon:
+		return len(v.Rings) > 0 && geo.CartesianArea(v) == 0
+	case geo.MultiPolygon:
+		for _, polygon := range v.Polygons {
+			if hasDegeneratePolygon(polygon) {
+				return true
+			}
+		}
+	case geo.GeometryCollection:
+		for _, child := range v.Geometries {
+			if hasDegeneratePolygon(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func firstLineCoordinate(g geo.Geometry) (geo.Coord, bool) {
+	switch v := g.(type) {
+	case geo.LineString:
+		if len(v.Points) > 0 {
+			return v.Points[0], true
+		}
+	case geo.MultiLineString:
+		for _, line := range v.Lines {
+			if coord, ok := firstLineCoordinate(line); ok {
+				return coord, true
+			}
+		}
+	case geo.GeometryCollection:
+		for _, child := range v.Geometries {
+			if coord, ok := firstLineCoordinate(child); ok {
+				return coord, true
+			}
+		}
+	}
+	return geo.Coord{}, false
+}
+
+func polygonIsSimpleFromPayload(payload []byte) (bool, error) {
+	rings, _, _, err := polygonRingsFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	parsed := make([][]geometryPoint2D, 0, len(rings))
+	for _, ring := range rings {
+		points, err := parsePolygonRingPoints(ring[1 : len(ring)-1])
+		if err != nil {
+			return false, err
+		}
+		parsed = append(parsed, points)
+	}
+	return polygonRingsAreSimple(parsed), nil
+}
+
+func polygonRingsAreSimple(rings [][]geometryPoint2D) bool {
+	if len(rings) == 0 {
+		return false
+	}
+	for _, ring := range rings {
+		if !polygonRingIsValid(ring) {
+			return false
+		}
+	}
+	exterior := rings[0]
+	shell := geometryPolygon2D{outer: exterior}
+	for i, hole := range rings[1:] {
+		if !ringContainedByPolygonShell(hole, shell) {
+			return false
+		}
+		for _, otherHole := range rings[i+2:] {
+			if ringsHaveForbiddenInteriorIntersection(hole, otherHole) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func ringsHaveForbiddenInteriorIntersection(left, right []geometryPoint2D) bool {
+	leftPolygon := geometryPolygon2D{outer: left}
+	rightPolygon := geometryPolygon2D{outer: right}
+	leftPayload := encodeGeometryPayload("POLYGON("+polygonRingText(left)+")", 0, false)
+	rightPayload := encodeGeometryPayload("POLYGON("+polygonRingText(right)+")", 0, false)
+
+	if ringsHaveLinearOverlap(left, right) {
+		return true
+	}
+	if ringsIntersect(left, right) {
+		touches, err := polygonTouchesPolygonGeometry(leftPayload, rightPayload, leftPolygon, rightPolygon)
+		if err != nil || !touches {
+			return true
+		}
+	}
+
+	leftInterior, err := polygonInteriorPointFromRing(left)
+	if err != nil || pointInPolygon(right, leftInterior.x, leftInterior.y) {
+		return true
+	}
+	rightInterior, err := polygonInteriorPointFromRing(right)
+	if err != nil || pointInPolygon(left, rightInterior.x, rightInterior.y) {
+		return true
+	}
+	return false
+}
+
+func ringsHaveLinearOverlap(left, right []geometryPoint2D) bool {
+	for i := range left {
+		leftNext := (i + 1) % len(left)
+		for j := range right {
+			rightNext := (j + 1) % len(right)
+			if collinearSegmentsOverlapWithLength(left[i], left[leftNext], right[j], right[rightNext]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ringContainedByPolygonShell permits a hole to touch the shell at isolated
+// points. A shell/hole edge may not overlap or cross the shell, and every
+// open part of the edge must remain inside the shell. This is the polygon
+// boundary rule needed by ST_IsSimple; requiring a strictly interior first
+// vertex would incorrectly reject a legal tangential contact.
+func ringContainedByPolygonShell(ring []geometryPoint2D, shell geometryPolygon2D) bool {
+	for i := range ring {
+		next := (i + 1) % len(ring)
+		if sameGeometryPoint(ring[i], ring[next]) {
+			return false
+		}
+		inside, outside, _, boundaryOverlap := lineSegmentPolygonLocationFlagsGeometry(ring[i], ring[next], shell)
+		if outside || boundaryOverlap || (!inside && !pointOnPolygonBoundaryGeometry(shell, ring[i].x, ring[i].y)) {
+			return false
+		}
+	}
+	return true
+}
+
+// simpleGeometryPartsFromPayload flattens collection members to atomic
+// Point/LineString/Polygon parts. The caller still evaluates the collection's
+// own Multi*/GeometryCollection rules; flattening is only for cross-member
+// interior checks and intentionally skips empty members.
+func simpleGeometryPartsFromPayload(payload []byte, typeName string) ([]simpleGeometryPart, error) {
+	if empty, err := geometryIsExplicitlyEmpty(payload); err != nil {
+		return nil, err
+	} else if empty {
+		return nil, nil
+	}
+	if typeName == "POINT" || typeName == "LINESTRING" || typeName == "POLYGON" {
+		return []simpleGeometryPart{{typeName: typeName, payload: payload}}, nil
+	}
+	items, err := geometryPayloadItems(payload, typeName)
+	if err != nil {
+		return nil, err
+	}
+	parts := make([]simpleGeometryPart, 0, len(items))
+	for _, item := range items {
+		itemType, err := geometryTypeNameFromPayload(item)
+		if err != nil {
+			return nil, err
+		}
+		childParts, err := simpleGeometryPartsFromPayload(item, itemType)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, childParts...)
+	}
+	return parts, nil
+}
+
+// simpleGeometryMembersFromPayload preserves the boundary semantics of each
+// top-level GeometryCollection member. In particular, a MultiLineString's
+// boundary is computed with endpoint parity across all of its component lines;
+// flattening it before comparing a Point would incorrectly treat an even-degree
+// junction as a boundary point.
+func simpleGeometryMembersFromPayload(payload []byte, typeName string) ([]simpleGeometryMember, error) {
+	if empty, err := geometryIsEmpty(payload); err != nil {
+		return nil, err
+	} else if empty {
+		return nil, nil
+	}
+	if typeName != "GEOMETRYCOLLECTION" {
+		return []simpleGeometryMember{{typeName: typeName, payload: payload}}, nil
+	}
+
+	items, err := geometryPayloadItems(payload, typeName)
+	if err != nil {
+		return nil, err
+	}
+	members := make([]simpleGeometryMember, 0, len(items))
+	for _, item := range items {
+		itemType, err := geometryTypeNameFromPayload(item)
+		if err != nil {
+			return nil, err
+		}
+		if itemType == "GEOMETRYCOLLECTION" {
+			nested, err := simpleGeometryMembersFromPayload(item, itemType)
+			if err != nil {
+				return nil, err
+			}
+			members = append(members, nested...)
+			continue
+		}
+		members = append(members, simpleGeometryMember{typeName: itemType, payload: item})
+	}
+	return members, nil
+}
+
+func simpleGeometryMemberParts(member simpleGeometryMember) ([]simpleGeometryPart, error) {
+	return simpleGeometryPartsFromPayload(member.payload, member.typeName)
+}
+
+func simpleGeometryMemberPointLocation(member simpleGeometryMember, point geometryPoint2D) (geometryPointLocation, error) {
+	switch member.typeName {
+	case "POINT":
+		if empty, err := geometryIsEmpty(member.payload); err != nil {
+			return geometryPointExterior, err
+		} else if empty {
+			return geometryPointExterior, nil
+		}
+		x, y, err := parsePointXYFromPayload(member.payload)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		if sameGeometryPoint(point, geometryPoint2D{x: x, y: y}) {
+			return geometryPointInterior, nil
+		}
+		return geometryPointExterior, nil
+	case "MULTIPOINT":
+		items, err := geometryPayloadItems(member.payload, member.typeName)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		for _, item := range items {
+			if empty, err := geometryIsEmpty(item); err != nil {
+				return geometryPointExterior, err
+			} else if empty {
+				continue
+			}
+			x, y, err := parsePointXYFromPayload(item)
+			if err != nil {
+				return geometryPointExterior, err
+			}
+			if sameGeometryPoint(point, geometryPoint2D{x: x, y: y}) {
+				return geometryPointInterior, nil
+			}
+		}
+		return geometryPointExterior, nil
+	case "LINESTRING":
+		if empty, err := geometryIsEmpty(member.payload); err != nil {
+			return geometryPointExterior, err
+		} else if empty {
+			return geometryPointExterior, nil
+		}
+		line, err := lineStringGeometryPointsFromPayload(member.payload)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		if !pointIntersectsLineString(point, line) {
+			return geometryPointExterior, nil
+		}
+		if lineStringPointIsBoundary(line, point) {
+			return geometryPointBoundary, nil
+		}
+		return geometryPointInterior, nil
+	case "MULTILINESTRING":
+		items, err := geometryPayloadItems(member.payload, member.typeName)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		lines := make([][]geometryPoint2D, 0, len(items))
+		for _, item := range items {
+			if empty, err := geometryIsEmpty(item); err != nil {
+				return geometryPointExterior, err
+			} else if empty {
+				continue
+			}
+			line, err := lineStringGeometryPointsFromPayload(item)
+			if err != nil {
+				return geometryPointExterior, err
+			}
+			lines = append(lines, line)
+		}
+		return pointLocationInLineCollection(point, lines), nil
+	case "POLYGON":
+		if empty, err := geometryIsEmpty(member.payload); err != nil {
+			return geometryPointExterior, err
+		} else if empty {
+			return geometryPointExterior, nil
+		}
+		polygon, err := polygonGeometryFromPayload(member.payload)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		return pointLocationInPolygonGeometry(polygon, point.x, point.y), nil
+	case "MULTIPOLYGON":
+		items, err := geometryPayloadItems(member.payload, member.typeName)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		polygons := make([]polygonGeometryItem, 0, len(items))
+		for _, item := range items {
+			if empty, err := geometryIsEmpty(item); err != nil {
+				return geometryPointExterior, err
+			} else if empty {
+				continue
+			}
+			polygon, err := polygonGeometryFromPayload(item)
+			if err != nil {
+				return geometryPointExterior, err
+			}
+			polygons = append(polygons, polygonGeometryItem{payload: item, shape: polygon})
+		}
+		return pointLocationInPolygonCollection(point, polygons), nil
+	case "GEOMETRYCOLLECTION":
+		members, err := simpleGeometryMembersFromPayload(member.payload, member.typeName)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		hasBoundary := false
+		for _, child := range members {
+			location, err := simpleGeometryMemberPointLocation(child, point)
+			if err != nil {
+				return geometryPointExterior, err
+			}
+			switch location {
+			case geometryPointInterior:
+				return geometryPointInterior, nil
+			case geometryPointBoundary:
+				hasBoundary = true
+			}
+		}
+		if hasBoundary {
+			return geometryPointBoundary, nil
+		}
+		return geometryPointExterior, nil
+	default:
+		return geometryPointExterior, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+}
+
+func simpleGeometryMembersInteriorIntersect(left, right simpleGeometryMember) (bool, error) {
+	leftParts, err := simpleGeometryMemberParts(left)
+	if err != nil {
+		return false, err
+	}
+	rightParts, err := simpleGeometryMemberParts(right)
+	if err != nil {
+		return false, err
+	}
+	for _, leftPart := range leftParts {
+		for _, rightPart := range rightParts {
+			intersects, err := simpleGeometryPartsIntersect(leftPart, rightPart)
+			if err != nil {
+				return false, err
+			}
+			if !intersects {
+				continue
+			}
+			interior, err := simpleGeometryAtomicInteriorIntersect(left, right, leftPart, rightPart)
+			if err != nil {
+				return false, err
+			}
+			if interior {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func simpleGeometryAtomicInteriorIntersect(left, right simpleGeometryMember, leftPart, rightPart simpleGeometryPart) (bool, error) {
+	if leftPart.typeName == "POINT" {
+		point, err := simpleGeometryPartPoint(leftPart)
+		if err != nil {
+			return false, err
+		}
+		leftLocation, err := simpleGeometryMemberPointLocation(left, point)
+		if err != nil {
+			return false, err
+		}
+		rightLocation, err := simpleGeometryMemberPointLocation(right, point)
+		return leftLocation == geometryPointInterior && rightLocation == geometryPointInterior, err
+	}
+	if rightPart.typeName == "POINT" {
+		return simpleGeometryAtomicInteriorIntersect(right, left, rightPart, leftPart)
+	}
+
+	if leftPart.typeName == "LINESTRING" {
+		leftLine, err := lineStringGeometryPointsFromPayload(leftPart.payload)
+		if err != nil {
+			return false, err
+		}
+		switch rightPart.typeName {
+		case "LINESTRING":
+			rightLine, err := lineStringGeometryPointsFromPayload(rightPart.payload)
+			if err != nil {
+				return false, err
+			}
+			return simpleLinePartsInteriorIntersect(left, right, leftLine, rightLine)
+		case "POLYGON":
+			rightPolygon, err := polygonGeometryFromPayload(rightPart.payload)
+			if err != nil {
+				return false, err
+			}
+			return simpleLinePolygonPartsInteriorIntersect(left, right, leftLine, rightPolygon)
+		}
+	}
+	if rightPart.typeName == "LINESTRING" {
+		return simpleGeometryAtomicInteriorIntersect(right, left, rightPart, leftPart)
+	}
+	if leftPart.typeName == "POLYGON" && rightPart.typeName == "POLYGON" {
+		leftPolygon, err := polygonGeometryFromPayload(leftPart.payload)
+		if err != nil {
+			return false, err
+		}
+		rightPolygon, err := polygonGeometryFromPayload(rightPart.payload)
+		if err != nil {
+			return false, err
+		}
+		touch, err := polygonTouchesPolygonGeometry(leftPart.payload, rightPart.payload, leftPolygon, rightPolygon)
+		if err != nil {
+			return false, err
+		}
+		return !touch, nil
+	}
+	return false, nil
+}
+
+func simpleLinePartsInteriorIntersect(left, right simpleGeometryMember, leftLine, rightLine []geometryPoint2D) (bool, error) {
+	for i := 0; i < len(leftLine)-1; i++ {
+		for j := 0; j < len(rightLine)-1; j++ {
+			if !lineSegmentsIntersect(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1]) {
+				continue
+			}
+			if collinearSegmentsOverlapWithLength(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1]) {
+				return true, nil
+			}
+			points := segmentIntersectionPoints(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1])
+			if len(points) == 0 {
+				if point, ok := segmentIntersectionPoint(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1]); ok {
+					points = append(points, point)
+				}
+			}
+			for _, point := range points {
+				leftLocation, err := simpleGeometryMemberPointLocation(left, point)
+				if err != nil {
+					return false, err
+				}
+				rightLocation, err := simpleGeometryMemberPointLocation(right, point)
+				if err != nil {
+					return false, err
+				}
+				if leftLocation == geometryPointInterior && rightLocation == geometryPointInterior {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+func simpleLinePolygonPartsInteriorIntersect(lineMember, polygonMember simpleGeometryMember, line []geometryPoint2D, polygon geometryPolygon2D) (bool, error) {
+	for i := 0; i < len(line)-1; i++ {
+		start, end := line[i], line[i+1]
+		if sameGeometryPoint(start, end) {
+			continue
+		}
+		params := []float64{0, 1}
+		for _, ring := range polygonGeometryRings(polygon) {
+			for j := range ring {
+				next := (j + 1) % len(ring)
+				if !lineSegmentsIntersect(start, end, ring[j], ring[next]) {
+					continue
+				}
+				points := segmentIntersectionPoints(start, end, ring[j], ring[next])
+				if len(points) == 0 {
+					if point, ok := segmentIntersectionPoint(start, end, ring[j], ring[next]); ok {
+						points = append(points, point)
+					}
+				}
+				for _, point := range points {
+					params = append(params, segmentParameter(start, end, point))
+				}
+			}
+		}
+		sort.Float64s(params)
+		params = dedupeSegmentParameters(params)
+		for j := 0; j+1 < len(params); j++ {
+			if params[j+1]-params[j] <= 1e-9 {
+				continue
+			}
+			point := interpolateSegmentPoint(start, end, (params[j]+params[j+1])/2)
+			lineLocation, err := simpleGeometryMemberPointLocation(lineMember, point)
+			if err != nil {
+				return false, err
+			}
+			polygonLocation, err := simpleGeometryMemberPointLocation(polygonMember, point)
+			if err != nil {
+				return false, err
+			}
+			if lineLocation == geometryPointInterior && polygonLocation == geometryPointInterior {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func simpleGeometryPartPoint(part simpleGeometryPart) (geometryPoint2D, error) {
+	x, y, err := parsePointXYFromPayload(part.payload)
+	if err != nil {
+		return geometryPoint2D{}, err
+	}
+	return geometryPoint2D{x: x, y: y}, nil
+}
+
+func simpleGeometryPartsIntersect(left, right simpleGeometryPart) (bool, error) {
+	if left.typeName == "POINT" {
+		point, err := simpleGeometryPartPoint(left)
+		if err != nil {
+			return false, err
+		}
+		switch right.typeName {
+		case "POINT":
+			other, err := simpleGeometryPartPoint(right)
+			if err != nil {
+				return false, err
+			}
+			return sameGeometryPoint(point, other), nil
+		case "LINESTRING":
+			line, err := lineStringGeometryPointsFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return pointIntersectsLineString(point, line), nil
+		case "POLYGON":
+			polygon, err := polygonGeometryFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return pointIntersectsPolygonGeometry(point, polygon), nil
+		}
+	}
+	if right.typeName == "POINT" {
+		return simpleGeometryPartsIntersect(right, left)
+	}
+	if left.typeName == "LINESTRING" {
+		line, err := lineStringGeometryPointsFromPayload(left.payload)
+		if err != nil {
+			return false, err
+		}
+		switch right.typeName {
+		case "LINESTRING":
+			other, err := lineStringGeometryPointsFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return lineStringIntersectsLineString(line, other), nil
+		case "POLYGON":
+			polygon, err := polygonGeometryFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return lineStringIntersectsPolygonGeometry(line, polygon), nil
+		}
+	}
+	if right.typeName == "LINESTRING" {
+		return simpleGeometryPartsIntersect(right, left)
+	}
+	leftPolygon, err := polygonGeometryFromPayload(left.payload)
+	if err != nil {
+		return false, err
+	}
+	rightPolygon, err := polygonGeometryFromPayload(right.payload)
+	if err != nil {
+		return false, err
+	}
+	return polygonIntersectsPolygonGeometry(leftPolygon, rightPolygon), nil
+}
+
+func simplePartsTouchOnlyAtBoundary(left, right simpleGeometryPart) (bool, error) {
+	if left.typeName == "POINT" {
+		point, err := simpleGeometryPartPoint(left)
+		if err != nil {
+			return false, err
+		}
+		switch right.typeName {
+		case "POINT":
+			return false, nil
+		case "LINESTRING":
+			line, err := lineStringGeometryPointsFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return pointTouchesLineString(point, line), nil
+		case "POLYGON":
+			polygon, err := polygonGeometryFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return pointOnPolygonBoundaryGeometry(polygon, point.x, point.y), nil
+		}
+	}
+	if right.typeName == "POINT" {
+		return simplePartsTouchOnlyAtBoundary(right, left)
+	}
+	if left.typeName == "LINESTRING" {
+		line, err := lineStringGeometryPointsFromPayload(left.payload)
+		if err != nil {
+			return false, err
+		}
+		switch right.typeName {
+		case "LINESTRING":
+			other, err := lineStringGeometryPointsFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return lineStringTouchesLineString(line, other), nil
+		case "POLYGON":
+			polygon, err := polygonGeometryFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return lineStringTouchesPolygonGeometry(line, polygon), nil
+		}
+	}
+	if right.typeName == "LINESTRING" {
+		return simplePartsTouchOnlyAtBoundary(right, left)
+	}
+	leftPolygon, err := polygonGeometryFromPayload(left.payload)
+	if err != nil {
+		return false, err
+	}
+	rightPolygon, err := polygonGeometryFromPayload(right.payload)
+	if err != nil {
+		return false, err
+	}
+	return polygonTouchesPolygonGeometry(left.payload, right.payload, leftPolygon, rightPolygon)
+}
+
+func simplePartsTouchAtBothBoundaries(left, right simpleGeometryPart) (bool, error) {
+	leftLine, err := lineStringGeometryPointsFromPayload(left.payload)
+	if err != nil {
+		return false, err
+	}
+	rightLine, err := lineStringGeometryPointsFromPayload(right.payload)
+	if err != nil {
+		return false, err
+	}
+	touched := false
+	for i := 0; i < len(leftLine)-1; i++ {
+		for j := 0; j < len(rightLine)-1; j++ {
+			if !lineSegmentsIntersect(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1]) {
+				continue
+			}
+			if collinearSegmentsOverlapWithLength(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1]) {
+				return false, nil
+			}
+			points := segmentIntersectionPoints(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1])
+			if len(points) == 0 {
+				return false, nil
+			}
+			for _, point := range points {
+				if !lineStringPointIsBoundary(leftLine, point) || !lineStringPointIsBoundary(rightLine, point) {
+					return false, nil
+				}
+				touched = true
+			}
+		}
+	}
+	return touched, nil
 }
 
 func isRingFromPayload(payload []byte) (bool, error) {
@@ -3248,91 +4377,95 @@ func isRingFromPayload(payload []byte) (bool, error) {
 }
 
 func envelopeFromPayload(payload []byte) ([]byte, error) {
-	typeName, err := geometryTypeNameFromPayload(payload)
+	g, err := decodeGeoGeometry(payload)
 	if err != nil {
 		return nil, err
 	}
-
-	switch typeName {
-	case "POINT":
-		x, y, err := parsePointXYFromPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		_, srid, sridDefined, err := decodeGeometryPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		return envelopeGeometryFromBounds(x, x, y, y, srid, sridDefined), nil
-	case "LINESTRING":
-		pointTexts, srid, sridDefined, err := lineStringPointsFromPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		minX, maxX, minY, maxY, err := geometryBoundsFromCoordinateTexts(pointTexts, "invalid linestring payload")
-		if err != nil {
-			return nil, err
-		}
-		return envelopeGeometryFromBounds(minX, maxX, minY, maxY, srid, sridDefined), nil
-	case "POLYGON":
-		rings, srid, sridDefined, err := polygonRingsFromPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		minX, maxX, minY, maxY, err := polygonBoundsFromRings(rings)
-		if err != nil {
-			return nil, err
-		}
-		return envelopeGeometryFromBounds(minX, maxX, minY, maxY, srid, sridDefined), nil
-	default:
-		return nil, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_Envelope")
+	if err := validateDerivedGeometry(g); err != nil {
+		return nil, err
 	}
+	bb, ok := geo.Envelope(g)
+	if !ok {
+		return geo.WriteWKB(geo.GeometryCollection{}), nil
+	}
+	return envelopeGeometryFromBounds(bb.MinX, bb.MaxX, bb.MinY, bb.MaxY, 0, false), nil
 }
 
-func centroidFromPayload(payload []byte) ([]byte, error) {
-	typeName, err := geometryTypeNameFromPayload(payload)
+func centroidFromPayload(payload []byte) ([]byte, bool, error) {
+	g, err := decodeGeoGeometry(payload)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if err := validateDerivedGeometry(g); err != nil {
+		return nil, false, err
+	}
+	if hasDegeneratePolygon(g) {
+		return nil, false, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+	dimension, hasDimension := derivedGeometryDimension(g)
+	if !hasDimension {
+		return nil, true, nil
 	}
 
-	switch typeName {
-	case "POINT":
-		x, y, err := parsePointXYFromPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		_, srid, sridDefined, err := decodeGeometryPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		return pointGeometryPayload(x, y, srid, sridDefined), nil
-	case "LINESTRING":
-		points, err := lineStringGeometryPointsFromPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		x, y, err := lineStringCentroid(points)
-		if err != nil {
-			return nil, err
-		}
-		_, srid, sridDefined, err := decodeGeometryPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		return pointGeometryPayload(x, y, srid, sridDefined), nil
-	case "POLYGON":
-		rings, srid, sridDefined, err := polygonRingsFromPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		x, y, err := polygonCentroid(rings)
-		if err != nil {
-			return nil, err
-		}
-		return pointGeometryPayload(x, y, srid, sridDefined), nil
-	default:
-		return nil, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_Centroid")
+	var coord geo.Coord
+	var ok bool
+	if dimension == 1 && geo.CartesianLength(g) == 0 {
+		// geo.Centroid intentionally falls through to points when every line
+		// segment has zero length. Once the highest dimension is known to be
+		// linear, the line's first coordinate is the required deterministic
+		// collapsed-line fallback instead of a lower-dimensional point.
+		coord, ok = firstLineCoordinate(g)
+	} else {
+		coord, ok = geo.Centroid(g)
 	}
+	if !ok {
+		return nil, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	return geo.WriteWKB(geo.Point{X: coord.X, Y: coord.Y}), false, nil
+}
+
+// derivedGeometryDimension returns the highest non-empty topological
+// dimension represented by g. It is kept separate from geo.Centroid because a
+// zero-length LineString still has linear dimension even though its weighted
+// centroid has zero weight.
+func derivedGeometryDimension(g geo.Geometry) (int, bool) {
+	switch v := g.(type) {
+	case geo.Point:
+		return 0, !v.IsEmpty
+	case geo.LineString:
+		return 1, len(v.Points) != 0
+	case geo.Polygon:
+		return 2, len(v.Rings) != 0
+	case geo.MultiPoint:
+		for _, point := range v.Points {
+			if !point.IsEmpty {
+				return 0, true
+			}
+		}
+	case geo.MultiLineString:
+		for _, line := range v.Lines {
+			if len(line.Points) != 0 {
+				return 1, true
+			}
+		}
+	case geo.MultiPolygon:
+		for _, polygon := range v.Polygons {
+			if len(polygon.Rings) != 0 {
+				return 2, true
+			}
+		}
+	case geo.GeometryCollection:
+		best := -1
+		for _, child := range v.Geometries {
+			if childDimension, ok := derivedGeometryDimension(child); ok && childDimension > best {
+				best = childDimension
+			}
+		}
+		if best >= 0 {
+			return best, true
+		}
+	}
+	return 0, false
 }
 
 func boundaryFromPayload(payload []byte) ([]byte, error) {
@@ -3889,54 +5022,6 @@ func lineStringGeometryPointsFromPayload(payload []byte) ([]geometryPoint2D, err
 	return points, nil
 }
 
-func polygonBoundsFromRings(rings []string) (float64, float64, float64, float64, error) {
-	hasBounds := false
-	var minX, maxX, minY, maxY float64
-	for _, ring := range rings {
-		pointTexts := splitTopLevelGeometryItems(ring[1 : len(ring)-1])
-		ringMinX, ringMaxX, ringMinY, ringMaxY, err := geometryBoundsFromCoordinateTexts(pointTexts, "invalid polygon payload")
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-		if !hasBounds {
-			minX, maxX, minY, maxY = ringMinX, ringMaxX, ringMinY, ringMaxY
-			hasBounds = true
-			continue
-		}
-		minX = math.Min(minX, ringMinX)
-		maxX = math.Max(maxX, ringMaxX)
-		minY = math.Min(minY, ringMinY)
-		maxY = math.Max(maxY, ringMaxY)
-	}
-	if !hasBounds {
-		return 0, 0, 0, 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-	return minX, maxX, minY, maxY, nil
-}
-
-func geometryBoundsFromCoordinateTexts(pointTexts []string, invalidMessage string) (float64, float64, float64, float64, error) {
-	if len(pointTexts) == 0 {
-		return 0, 0, 0, 0, moerr.NewInvalidInputNoCtx(invalidMessage)
-	}
-
-	firstX, firstY, err := parseCoordinatePairWithError(pointTexts[0], invalidMessage)
-	if err != nil {
-		return 0, 0, 0, 0, err
-	}
-	minX, maxX, minY, maxY := firstX, firstX, firstY, firstY
-	for _, pointText := range pointTexts[1:] {
-		x, y, err := parseCoordinatePairWithError(pointText, invalidMessage)
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-		minX = math.Min(minX, x)
-		maxX = math.Max(maxX, x)
-		minY = math.Min(minY, y)
-		maxY = math.Max(maxY, y)
-	}
-	return minX, maxX, minY, maxY, nil
-}
-
 func pointGeometryPayload(x, y float64, srid uint32, sridDefined bool) []byte {
 	xText := strconv.FormatFloat(x, 'f', -1, 64)
 	yText := strconv.FormatFloat(y, 'f', -1, 64)
@@ -3950,11 +5035,11 @@ func envelopeGeometryFromBounds(minX, maxX, minY, maxY float64, srid uint32, sri
 	maxYText := strconv.FormatFloat(maxY, 'f', -1, 64)
 
 	switch {
-	case sameGeometryCoordinate(minX, maxX) && sameGeometryCoordinate(minY, maxY):
+	case minX == maxX && minY == maxY:
 		return pointGeometryPayload(minX, minY, srid, sridDefined)
-	case sameGeometryCoordinate(minX, maxX):
+	case minX == maxX:
 		return encodeGeometryPayload("LINESTRING("+minXText+" "+minYText+","+minXText+" "+maxYText+")", srid, sridDefined)
-	case sameGeometryCoordinate(minY, maxY):
+	case minY == maxY:
 		return encodeGeometryPayload("LINESTRING("+minXText+" "+minYText+","+maxXText+" "+minYText+")", srid, sridDefined)
 	default:
 		return encodeGeometryPayload(
@@ -3968,29 +5053,6 @@ func envelopeGeometryFromBounds(minX, maxX, minY, maxY float64, srid uint32, sri
 func sameGeometryCoordinate(a, b float64) bool {
 	const epsilon = 1e-9
 	return math.Abs(a-b) <= epsilon
-}
-
-func lineStringCentroid(points []geometryPoint2D) (float64, float64, error) {
-	totalLength := 0.0
-	sumX := 0.0
-	sumY := 0.0
-	for i := 0; i < len(points)-1; i++ {
-		dx := points[i+1].x - points[i].x
-		dy := points[i+1].y - points[i].y
-		segmentLength := math.Hypot(dx, dy)
-		if sameGeometryCoordinate(segmentLength, 0) {
-			continue
-		}
-		midX := (points[i].x + points[i+1].x) / 2
-		midY := (points[i].y + points[i+1].y) / 2
-		totalLength += segmentLength
-		sumX += midX * segmentLength
-		sumY += midY * segmentLength
-	}
-	if sameGeometryCoordinate(totalLength, 0) {
-		return points[0].x, points[0].y, nil
-	}
-	return sumX / totalLength, sumY / totalLength, nil
 }
 
 func polygonCentroid(rings []string) (float64, float64, error) {
@@ -4373,82 +5435,32 @@ func parseCoordinatePairWithError(point string, errMsg string) (float64, float64
 	return x, y, nil
 }
 
-// SoundexString implements the SOUNDEX algorithm
-// Returns a phonetic code representing how a string sounds
+// soundexCodeMap maps ASCII A-Z to original Soundex digits; '0' means discard.
+const soundexCodeMap = "01230120022455012623010202"
+
+// SoundexString implements MySQL's original Soundex behavior for ASCII input.
 func SoundexString(str string) string {
-	if len(str) == 0 {
-		return "0000"
-	}
-
-	// Convert to uppercase and process only alphabetic characters
-	upper := strings.ToUpper(str)
-
-	// Find the first alphabetic character
-	firstChar := byte(0)
-	firstIdx := -1
-	for i := 0; i < len(upper); i++ {
-		if upper[i] >= 'A' && upper[i] <= 'Z' {
-			firstChar = upper[i]
-			firstIdx = i
-			break
-		}
-	}
-
-	// If no alphabetic character found, return "0000"
-	if firstChar == 0 {
-		return "0000"
-	}
-
-	// Build the soundex code
 	var code strings.Builder
-	code.WriteByte(firstChar)
-
-	// Soundex mapping: B, F, P, V → 1; C, G, J, K, Q, S, X, Z → 2; D, T → 3; L → 4; M, N → 5; R → 6
-	// Index: A=0, B=1, C=2, ..., Z=25
-	soundexMap := [26]byte{
-		0,   // A
-		'1', // B
-		'2', // C
-		'3', // D
-		0,   // E
-		'1', // F
-		'2', // G
-		0,   // H
-		0,   // I
-		'2', // J
-		'2', // K
-		'4', // L
-		'5', // M
-		'5', // N
-		0,   // O
-		'1', // P
-		'2', // Q
-		'6', // R
-		'2', // S
-		'3', // T
-		0,   // U
-		'1', // V
-		0,   // W
-		'2', // X
-		0,   // Y
-		'2', // Z
-	}
-
-	lastCode := byte(0)
-	for i := firstIdx + 1; i < len(upper) && code.Len() < 4; i++ {
-		c := upper[i]
+	firstLetter := true
+	lastCode := byte('0')
+	for i := 0; i < len(str); i++ {
+		c := str[i]
+		if c >= 'a' && c <= 'z' {
+			c -= 'a' - 'A'
+		}
 		if c < 'A' || c > 'Z' {
 			continue
 		}
-
-		codeChar := soundexMap[c-'A']
-		// Skip vowels, H, W (codeChar == 0)
-		if codeChar == 0 {
+		codeChar := soundexCodeMap[c-'A']
+		if firstLetter {
+			code.WriteByte(c)
+			lastCode = codeChar
+			firstLetter = false
 			continue
 		}
 
-		// Skip consecutive duplicate codes
-		if codeChar == lastCode {
+		// Original Soundex discards code-zero letters before suppressing duplicates.
+		if codeChar == '0' || codeChar == lastCode {
 			continue
 		}
 
@@ -4456,13 +5468,13 @@ func SoundexString(str string) string {
 		lastCode = codeChar
 	}
 
-	// Pad with zeros to make it 4 characters
-	result := code.String()
-	for len(result) < 4 {
-		result += "0"
+	if firstLetter {
+		return ""
 	}
-
-	return result
+	for code.Len() < 4 {
+		code.WriteByte('0')
+	}
+	return code.String()
 }
 
 func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -7476,11 +8488,36 @@ func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, resul
 		}, selectList)
 }
 
+func encodeBase64WithLineBreaks(data []byte) []byte {
+	encodedLen := base64.StdEncoding.EncodedLen(len(data))
+	wrappedLen := encodedLen
+	breakCount := 0
+	if encodedLen > 0 {
+		breakCount = (encodedLen - 1) / 76
+		wrappedLen += breakCount
+	}
+
+	out := make([]byte, wrappedLen)
+	base64.StdEncoding.Encode(out[:encodedLen], data)
+
+	// Move later lines first so each overlapping copy preserves the unprocessed prefix.
+	for breakIndex := breakCount; breakIndex > 0; breakIndex-- {
+		srcStart := breakIndex * 76
+		srcEnd := srcStart + 76
+		if srcEnd > encodedLen {
+			srcEnd = encodedLen
+		}
+		dstStart := srcStart + breakIndex
+		copy(out[dstStart:srcEnd+breakIndex], out[srcStart:srcEnd])
+		out[dstStart-1] = '\n'
+	}
+
+	return out
+}
+
 func ToBase64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(data []byte) ([]byte, error) {
-		buf := make([]byte, base64.StdEncoding.EncodedLen(len(functionUtil.QuickBytesToStr(data))))
-		base64.StdEncoding.Encode(buf, data)
-		return buf, nil
+		return encodeBase64WithLineBreaks(data), nil
 	}, selectList)
 }
 
@@ -7617,6 +8654,29 @@ func VecFromBase64[T types.ArrayElement](parameters []*vector.Vector, result vec
 
 const mysqlCompressedLengthMask = uint32(0x3fffffff)
 
+var (
+	errUncompressOutputTooLarge = moerr.NewInvalidInputNoCtx("advertised uncompressed length exceeds result limit")
+	uncompressSizeLimitWarning  = fmt.Sprintf("Uncompressed data size too large; the maximum size is %d (probably, length of uncompressed data was corrupted)", types.MaxBlobLen)
+)
+
+const (
+	uncompressBufferWarning = "ZLIB: Not enough room in the output buffer (probably, length of uncompressed data was corrupted)"
+	uncompressDataWarning   = "ZLIB: Input data corrupted"
+)
+
+func mysqlUncompressWarning(err error) (uint16, string) {
+	// This classifier is called only after both decoders reject the input. The
+	// size-limit sentinel and short-write error are the two non-data-error cases.
+	switch {
+	case errors.Is(err, errUncompressOutputTooLarge):
+		return moerr.ER_TOO_BIG_FOR_UNCOMPRESS, uncompressSizeLimitWarning
+	case errors.Is(err, io.ErrShortWrite):
+		return moerr.ER_ZLIB_Z_BUF_ERROR, uncompressBufferWarning
+	default:
+		return moerr.ER_ZLIB_Z_DATA_ERROR, uncompressDataWarning
+	}
+}
+
 func writeZlibCompressed(dst io.Writer, data []byte) error {
 	writer := zlib.NewWriter(dst)
 	written, err := writer.Write(data)
@@ -7706,7 +8766,7 @@ func compressedOriginalLength(data []byte, maxResultSize int) (uint32, error) {
 	}
 	originalLen := binary.LittleEndian.Uint32(data[:4]) & mysqlCompressedLengthMask
 	if uint64(originalLen) > uint64(maxResultSize) {
-		return 0, moerr.NewInternalErrorNoCtxf("uncompressed length %d exceeds result limit %d", originalLen, maxResultSize)
+		return 0, errUncompressOutputTooLarge
 	}
 	return originalLen, nil
 }
@@ -7806,6 +8866,7 @@ func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	var warnings process.WarningAccumulator
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -7826,20 +8887,26 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 
 		decompressed, err := mysqlUncompress(data, types.MaxBlobLen)
 		if err != nil {
+			primaryErr := err
 			// COMPRESS used raw DEFLATE before MatrixOne matched MySQL's zlib
 			// format. Keep those previously persisted values readable.
 			decompressed, err = legacyMatrixOneUncompress(data, types.MaxBlobLen)
-		}
-		if err != nil {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
+			if err != nil {
+				code, message := mysqlUncompressWarning(primaryErr)
+				warnings.Add(code, message)
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
 			}
-			continue
 		}
 
 		if err = rs.AppendBytes(decompressed, false); err != nil {
 			return err
 		}
+	}
+	if warnings.Total > 0 {
+		warnings.Flush(proc)
 	}
 
 	return nil
@@ -7932,95 +8999,163 @@ func reverse(str string) string {
 }
 
 func Oct[T constraints.Unsigned | constraints.Signed](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[T, types.Decimal128](ivecs, result, proc, length, oct[T], selectList)
-}
-
-func oct[T constraints.Unsigned | constraints.Signed](val T) (types.Decimal128, error) {
-	_val := uint64(val)
-	return types.ParseDecimal128(fmt.Sprintf("%o", _val), 38, 0)
+	return opUnaryFixedToStrWithErrorCheck[T](ivecs, result, proc, length, func(val T) (string, error) {
+		return strconv.FormatUint(uint64(val), 8), nil
+	}, selectList)
 }
 
 func OctFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[T, types.Decimal128](ivecs, result, proc, length, octFloat[T], selectList)
+	return opUnaryFixedToStrWithErrorCheck[T](ivecs, result, proc, length, octFloat[T], selectList)
 }
 
 func OctDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[types.Date, types.Decimal128](ivecs, result, proc, length, func(v types.Date) (types.Decimal128, error) {
+	return opUnaryFixedToStrWithErrorCheck[types.Date](ivecs, result, proc, length, func(v types.Date) (string, error) {
 		// MySQL behavior: OCT(DATE) returns octal of the year, not days since epoch
 		// Extract year from DATE and convert to octal
 		year, _, _, _ := v.Calendar(true)
-		val := int64(year)
-		return oct[int64](val)
+		return strconv.FormatUint(uint64(year), 8), nil
 	}, selectList)
 }
 
 func OctDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithErrorCheck[types.Datetime, types.Decimal128](ivecs, result, proc, length, func(v types.Datetime) (types.Decimal128, error) {
+	return opUnaryFixedToStrWithErrorCheck[types.Datetime](ivecs, result, proc, length, func(v types.Datetime) (string, error) {
 		// MySQL behavior: OCT(DATETIME) returns octal of the year, not days since epoch or microseconds
 		// Extract year from DATETIME and convert to octal
 		year, _, _, _ := v.ToDate().Calendar(true)
-		val := int64(year)
-		return oct[int64](val)
+		return strconv.FormatUint(uint64(year), 8), nil
 	}, selectList)
 }
 
-// OctString handles OCT function for string types (varchar, char, text)
-// It tries to parse the string as DATE or DATETIME, then converts to octal
+func OctTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStrWithErrorCheck[types.Time](ivecs, result, proc, length, func(v types.Time) (string, error) {
+		// TIME is a duration, not a date.  Its numeric conversion starts with
+		// the signed hour component; routing it through DATE would introduce the
+		// current year and make OCT(TIME) time-dependent.
+		hour, _, _, _, isNeg := v.ClockFormat()
+		if isNeg {
+			return strconv.FormatUint(uint64(-int64(hour)), 8), nil
+		}
+		return strconv.FormatUint(hour, 8), nil
+	}, selectList)
+}
+
+// OctString handles OCT function for string types (varchar, char, text).
+// MySQL converts a string to its integer prefix before formatting it in base 8.
+// The empty string is NULL; a non-empty string without a numeric prefix is 0.
 func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[types.Decimal128](ivecs, result, proc, length, func(v []byte) (types.Decimal128, error) {
-		s := string(v)
-		// Try to parse as DATETIME first (more common for date_add/sub results)
-		dt, err := types.ParseDatetime(s, 6)
-		if err == nil {
-			// MySQL behavior: OCT(DATETIME string) returns octal of the year, not days since epoch or microseconds
-			// Extract year from DATETIME and convert to octal
-			year, _, _, _ := dt.ToDate().Calendar(true)
-			val := int64(year)
-			return oct[int64](val)
+	isBinaryLiteral := ivecs[0].GetIsBin()
+	resultNulls := result.GetResultVector().GetNulls()
+	err := opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, func(v []byte, row int) (string, error) {
+		if len(v) == 0 {
+			if ivecs[0].IsConst() {
+				nulls.AddRange(resultNulls, 0, uint64(length))
+			} else {
+				resultNulls.Add(uint64(row))
+			}
 		}
-		// Try to parse as DATE
-		d, err2 := types.ParseDateCast(s)
-		if err2 == nil {
-			// MySQL behavior: OCT(DATE string) returns octal of the year, not days since epoch
-			// Extract year from DATE and convert to octal
-			year, _, _, _ := d.Calendar(true)
-			val := int64(year)
-			return oct[int64](val)
+		if isBinaryLiteral {
+			return strconv.FormatUint(octBinaryLiteralValue(v), 8), nil
 		}
-		// If both parsing fail, try to parse as integer directly
-		// This handles cases where the string is already a number
-		val, err3 := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-		if err3 == nil {
-			return oct[int64](val)
-		}
-		// If all parsing fails, return error (MySQL behavior: invalid input returns error)
-		return types.Decimal128{}, moerr.NewInvalidArgNoCtx("function oct", s)
+		s := trimASCIISpace(functionUtil.QuickBytesToStr(v))
+		value, _ := parseLeadingUint64(s)
+		return strconv.FormatUint(uint64(value), 8), nil
 	}, selectList)
+	return err
 }
 
-func octFloat[T constraints.Float](xs T) (types.Decimal128, error) {
-	var res types.Decimal128
+// octBinaryLiteralValue implements the integer conversion MySQL applies to
+// HEX/BIT literals before OCT formats the value. Leading zero bytes are
+// ignored; a non-zero value wider than uint64 is not representable and is
+// converted to zero by MySQL's binary-literal integer path.
+func octBinaryLiteralValue(v []byte) uint64 {
+	first := 0
+	for first < len(v) && v[first] == 0 {
+		first++
+	}
+	if len(v)-first > 8 {
+		return 0
+	}
 
-	if xs < 0 {
-		val, err := strconv.ParseInt(fmt.Sprintf("%1.0f", xs), 10, 64)
-		if err != nil {
-			return res, moerr.NewInternalErrorNoCtx("the input value is out of integer range")
+	var value uint64
+	for _, b := range v[first:] {
+		value = value<<8 | uint64(b)
+	}
+	return value
+}
+
+func octFloat[T constraints.Float](xs T) (string, error) {
+	// MySQL's OCT/CONV reads an integer prefix from the number's text, not
+	// from its integer cast. In scientific notation only the leading digit
+	// participates: OCT(1e308) is "1", as is OCT(1e-16).
+	value := float64(xs)
+	if value == 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return "0", nil
+	}
+	// Use expression formatting consistently for constants and columns.
+	// MySQL's Field_double uses a wider budget for some tiny values, but
+	// vector constness is not SQL expression provenance and must not alter OCT.
+	precision, width := -1, 22
+	if _, isFloat32 := any(xs).(float32); isFloat32 {
+		// FLOAT text has six significant digits and a 12-character budget.
+		precision, width = 5, 12
+	} else if magnitude := math.Abs(value); magnitude >= 1e-3 && magnitude < 1e15 {
+		// This DOUBLE range always fits fixed-point text and INT64, so its
+		// integer prefix is exactly truncation. Avoid temporary row strings.
+		return strconv.FormatUint(uint64(int64(value)), 8), nil
+	}
+	text := strconv.FormatFloat(value, 'e', precision, 64)
+	e := strings.IndexByte(text, 'e')
+	exponent, _ := strconv.Atoi(text[e+1:])
+	digits := strings.ReplaceAll(strings.TrimPrefix(text[:e], "-"), ".", "")
+	digits = strings.TrimRight(digits, "0")
+	decpt := exponent + 1
+	fixedWidth := decpt
+	if decpt <= 0 {
+		fixedWidth = len(digits) - decpt + 2
+	} else if decpt < len(digits) {
+		fixedWidth = len(digits) + 1
+	}
+	if value < 0 {
+		width--
+	}
+	// Match my_gcvt's fixed/scientific choice. For these type-specific
+	// budgets, a fixed representation that does not fit always favors 'e'.
+	if fixedWidth <= width && decpt >= -14 && (decpt <= 15 || len(digits) > decpt) {
+		if decpt <= 0 {
+			return "0", nil
 		}
-		res, err = oct(uint64(val))
-		if err != nil {
-			return res, err
+		if decpt < len(digits) {
+			digits = digits[:decpt]
+		} else {
+			digits += strings.Repeat("0", decpt-len(digits))
+		}
+		text = digits
+		if value < 0 {
+			text = "-" + text
 		}
 	} else {
-		val, err := strconv.ParseUint(fmt.Sprintf("%1.0f", xs), 10, 64)
-		if err != nil {
-			return res, moerr.NewInternalErrorNoCtx("the input value is out of integer range")
+		// Scientific output also obeys the character budget. Rounding can
+		// carry into the first digit that OCT reads (for example -9.999...e-100).
+		exponentWidth := 1
+		if exponent >= 10 || exponent <= -10 {
+			exponentWidth++
 		}
-		res, err = oct(val)
-		if err != nil {
-			return res, err
+		if exponent >= 100 || exponent <= -100 {
+			exponentWidth++
+		}
+		capacity := width - 1 - exponentWidth
+		if exponent < 0 {
+			capacity--
+		}
+		if len(digits) > 1 {
+			capacity--
+		}
+		if capacity < len(digits) {
+			text = strconv.FormatFloat(value, 'e', capacity-1, 64)
 		}
 	}
-	return res, nil
+	integer, _ := parseLeadingUint64(text)
+	return strconv.FormatUint(integer, 8), nil
 }
 
 func generateSHAKey(key []byte) []byte {
@@ -9633,22 +10768,59 @@ func userLevelLockSessionID(proc *process.Process) string {
 // user-level lock names (GET_LOCK, RELEASE_LOCK, IS_FREE_LOCK, IS_USED_LOCK).
 const maxUserLevelLockNameLength = 64
 
-// validateUserLevelLockName validates a MySQL user-level lock name.
-// It normalizes casing so lock-name identity is case-insensitive.
-func validateUserLevelLockName(name string) (string, error) {
-	if len(name) == 0 {
-		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not be empty")
-	}
-	if strings.IndexByte(name, 0) >= 0 {
-		return "", moerr.NewInternalErrorNoCtx("user-level lock name must not contain NUL bytes")
+func validateUserLevelLockNameInput(name string) error {
+	if len(name) == 0 || !utf8.ValidString(name) || strings.IndexByte(name, 0) >= 0 {
+		return moerr.NewUserLockWrongNameNoCtx(name)
 	}
 	if utf8.RuneCountInString(name) > maxUserLevelLockNameLength {
-		return "", moerr.NewInternalErrorNoCtxf(
+		return moerr.NewInternalErrorNoCtxf(
 			"user-level lock name exceeds maximum length of %d characters",
 			maxUserLevelLockNameLength,
 		)
 	}
+	return nil
+}
+
+func validateUserLevelLockNameBytes(name []byte) error {
+	if len(name) == 0 || !utf8.Valid(name) || bytes.IndexByte(name, 0) >= 0 {
+		return moerr.NewUserLockWrongNameNoCtx(functionUtil.QuickBytesToStr(name))
+	}
+	if utf8.RuneCount(name) > maxUserLevelLockNameLength {
+		return moerr.NewInternalErrorNoCtxf(
+			"user-level lock name exceeds maximum length of %d characters",
+			maxUserLevelLockNameLength,
+		)
+	}
+	return nil
+}
+
+// validateUserLevelLockName validates a MySQL user-level lock name.
+// It normalizes casing so lock-name identity is case-insensitive.
+func validateUserLevelLockName(name string) (string, error) {
+	if err := validateUserLevelLockNameInput(name); err != nil {
+		return "", err
+	}
 	return strings.ToLower(name), nil
+}
+
+const maxUserLevelLockTimeoutSeconds uint32 = 1<<31 - 1
+
+func validateUserLevelLockFloat64Timeout(timeout float64) error {
+	if math.IsNaN(timeout) {
+		return moerr.NewInvalidArgNoCtx("GET_LOCK timeout", timeout)
+	}
+	return nil
+}
+
+func userLevelLockTimeoutSeconds(timeout float64) (uint32, error) {
+	if err := validateUserLevelLockFloat64Timeout(timeout); err != nil {
+		return 0, err
+	}
+	seconds := math.RoundToEven(timeout)
+	if math.IsInf(timeout, 0) || seconds < 0 || seconds > float64(maxUserLevelLockTimeoutSeconds) {
+		return maxUserLevelLockTimeoutSeconds, nil
+	}
+	return uint32(seconds), nil
 }
 
 func userLevelLockTxnID(owner string, connID uint64, name string) []byte {
@@ -9679,8 +10851,20 @@ func userLevelLockTxnIDOld(owner, name string) []byte {
 }
 
 func userLevelLockProbeTxnID(owner string, connID uint64, name, probeType string) []byte {
+	sequence := userLevelLockProbeTxnIDSequence.Add(1)
+	prefix := userLevelLockProbeTxnIDPrefix(owner, connID, name, probeType)
+	var attempt [16]byte
+	if _, err := rand.Read(attempt[:]); err == nil {
+		return append(prefix, []byte(fmt.Sprintf("\x00%d\x00%s", sequence, hex.EncodeToString(attempt[:])))...)
+	}
+	return append(prefix, []byte(fmt.Sprintf("\x00%d\x00%d", sequence, time.Now().UnixNano()))...)
+}
+
+func userLevelLockProbeTxnIDPrefix(owner string, connID uint64, name, probeType string) []byte {
 	return []byte(fmt.Sprintf("mo-user-level-lock-probe\x00%s\x00%s\x00%s\x00%d", probeType, owner, name, connID))
 }
+
+var userLevelLockProbeTxnIDSequence atomic.Uint64
 
 func userLevelLockConnectionIDFromTxnID(txnID []byte) (uint64, bool) {
 	return userLevelLockConnectionIDFromTxnIDWithFallback(txnID, 0, false)
@@ -9731,11 +10915,32 @@ type userLevelLockContextUnlocker interface {
 	UnlockWithContext(ctx context.Context, txnID []byte, commitTS timestamp.Timestamp, mutations ...lockpb.ExtraMutation) error
 }
 
-func unlockUserLevelLockTxnID(ctx context.Context, ls lockservice.LockService, txnID []byte) error {
-	if unlocker, ok := ls.(userLevelLockContextUnlocker); ok {
-		return unlocker.UnlockWithContext(ctx, txnID, timestamp.Timestamp{})
+func registerUserLevelLockTxn(ls lockservice.LockService, txnID []byte) error {
+	registry, ok := ls.(lockservice.ExternalTxnLivenessRegistry)
+	if !ok {
+		return moerr.NewInternalErrorNoCtx(
+			"user-level locks require lockservice external transaction liveness support")
 	}
-	return ls.Unlock(ctx, txnID, timestamp.Timestamp{})
+	return registry.RegisterExternalTxn(txnID)
+}
+
+func unregisterUserLevelLockTxn(ls lockservice.LockService, txnID []byte) {
+	if registry, ok := ls.(lockservice.ExternalTxnLivenessRegistry); ok {
+		registry.UnregisterExternalTxn(txnID)
+	}
+}
+
+func unlockUserLevelLockTxnID(ctx context.Context, ls lockservice.LockService, txnID []byte) error {
+	var err error
+	if unlocker, ok := ls.(userLevelLockContextUnlocker); ok {
+		err = unlocker.UnlockWithContext(ctx, txnID, timestamp.Timestamp{})
+	} else {
+		err = ls.Unlock(ctx, txnID, timestamp.Timestamp{})
+	}
+	if err == nil {
+		unregisterUserLevelLockTxn(ls, txnID)
+	}
+	return err
 }
 
 func unlockUserLevelLockTxnIDs(ctx context.Context, ls lockservice.LockService, txnIDs [][]byte) error {
@@ -10649,8 +11854,7 @@ func queueDetachedUserLevelLockCleanupLocked() {
 	}
 }
 
-func unlockUserLevelLockProbe(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name, probeType string) error {
-	txnID := userLevelLockProbeTxnID(owner, connID, name, probeType)
+func unlockUserLevelLockProbe(ctx context.Context, ls lockservice.LockService, owner string, connID uint64, name, probeType string, txnID []byte) error {
 	attemptCtx, cancel := userLevelLockCleanupAttemptContext(ctx)
 	err := unlockUserLevelLockTxnID(attemptCtx, ls, txnID)
 	cancel()
@@ -10681,19 +11885,16 @@ func userLevelLockOptions(policy lockpb.WaitPolicy) lockpb.LockOptions {
 	}
 }
 
-func userLevelLockContext(proc *process.Process, timeout float64) (context.Context, context.CancelFunc, lockpb.WaitPolicy) {
+func userLevelLockContext(proc *process.Process, timeoutSeconds uint32) (context.Context, context.CancelFunc, lockpb.WaitPolicy) {
 	ctx := context.Background()
 	if proc != nil && proc.Ctx != nil {
 		ctx = proc.Ctx
 	}
-	if timeout == 0 {
+	if timeoutSeconds == 0 {
 		return ctx, func() {}, lockpb.WaitPolicy_FastFail
 	}
-	if timeout > 0 {
-		ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout*float64(time.Second)))
-		return ctx, cancel, lockpb.WaitPolicy_Wait
-	}
-	return ctx, func() {}, lockpb.WaitPolicy_Wait
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	return ctx, cancel, lockpb.WaitPolicy_Wait
 }
 
 func userLevelLockConflictOrTimeout(err error) bool {
@@ -10907,6 +12108,18 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 	if err != nil {
 		return 0, err
 	}
+	timeoutSeconds, err := userLevelLockTimeoutSeconds(timeout)
+	if err != nil {
+		return 0, err
+	}
+	return getUserLevelLockValidated(name, timeoutSeconds, proc)
+}
+
+// getUserLevelLockValidated expects an already normalized lock name and a
+// bounded timeout in whole seconds. Vector wrappers prevalidate their entire
+// evaluated batch before calling it, so an invalid later row cannot leave an
+// earlier acquisition or recursive reference behind.
+func getUserLevelLockValidated(name string, timeoutSeconds uint32, proc *process.Process) (int64, error) {
 	ls, err := userLevelLockService(proc)
 	if err != nil {
 		return 0, err
@@ -10924,7 +12137,7 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 		return 1, nil
 	}
 
-	ctx, cancel, policy := userLevelLockContext(proc, timeout)
+	ctx, cancel, policy := userLevelLockContext(proc, timeoutSeconds)
 	defer cancel()
 
 	txnID := userLevelLockAttemptTxnID(owner, connID, name)
@@ -10936,6 +12149,11 @@ func getUserLevelLock(name string, timeout float64, proc *process.Process) (int6
 	if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, cleanupKey) {
 		releaseRetainedUserLevelLockTxnCleanupSlot(closeCleanupKey)
 		return 0, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
+	}
+	if err := registerUserLevelLockTxn(ls, txnID); err != nil {
+		releaseRetainedUserLevelLockTxnCleanupSlot(cleanupKey)
+		releaseRetainedUserLevelLockTxnCleanupSlot(closeCleanupKey)
+		return 0, err
 	}
 	_, err = ls.Lock(
 		ctx,
@@ -10978,6 +12196,10 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 	if err != nil {
 		return 0, false, err
 	}
+	return releaseUserLevelLockValidated(name, proc)
+}
+
+func releaseUserLevelLockValidated(name string, proc *process.Process) (int64, bool, error) {
 	ls, err := userLevelLockService(proc)
 	if err != nil {
 		return 0, false, err
@@ -10990,6 +12212,10 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 		probeCleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:release", probeTxnID)
 		if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, probeCleanupKey) {
 			return 0, false, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
+		}
+		if err := registerUserLevelLockTxn(ls, probeTxnID); err != nil {
+			releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
+			return 0, false, err
 		}
 		// Probe the lockservice to distinguish "lock does not exist" (NULL)
 		// from "lock exists but held by another session" (0).
@@ -11017,7 +12243,7 @@ func releaseUserLevelLock(name string, proc *process.Process) (int64, bool, erro
 		}
 		// Lock did not exist — we acquired it via the probe. Release it and
 		// return NULL to signal the lock was already free.
-		if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "release"); err != nil {
+		if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "release", probeTxnID); err != nil {
 			return 0, false, err
 		}
 		releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
@@ -11039,6 +12265,10 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	return isUserLevelLockFreeValidated(name, proc)
+}
+
+func isUserLevelLockFreeValidated(name string, proc *process.Process) (int64, error) {
 	ls, err := userLevelLockService(proc)
 	if err != nil {
 		return 0, err
@@ -11049,6 +12279,10 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 	probeCleanupKey := userLevelLockFailedAttemptCleanupKey(ls, owner, connID, name, "probe:is_free", probeTxnID)
 	if !reserveRetainedUserLevelLockTxnCleanupSlot(ls, probeCleanupKey) {
 		return 0, moerr.NewInternalErrorNoCtxf("user-level lock cleanup capacity is full for %s", name)
+	}
+	if err := registerUserLevelLockTxn(ls, probeTxnID); err != nil {
+		releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
+		return 0, err
 	}
 	_, err = ls.Lock(
 		proc.Ctx,
@@ -11071,7 +12305,7 @@ func isUserLevelLockFree(name string, proc *process.Process) (int64, error) {
 		}
 		return 0, err
 	}
-	if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "is_free"); err != nil {
+	if err := unlockUserLevelLockProbe(proc.Ctx, ls, owner, connID, name, "is_free", probeTxnID); err != nil {
 		return 0, err
 	}
 	releaseRetainedUserLevelLockTxnCleanupSlot(probeCleanupKey)
@@ -11083,6 +12317,10 @@ func isUserLevelLockUsed(name string, proc *process.Process) (uint64, bool, erro
 	if err != nil {
 		return 0, false, err
 	}
+	return isUserLevelLockUsedValidated(name, proc)
+}
+
+func isUserLevelLockUsedValidated(name string, proc *process.Process) (uint64, bool, error) {
 	ls, err := userLevelLockService(proc)
 	if err != nil {
 		return 0, false, err
@@ -11202,21 +12440,258 @@ func releaseUserLevelLocksOnSessionCloseWithTimeout(proc *process.Process, timeo
 	}
 }
 
-func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	names := vector.GenerateFunctionStrParameter(ivecs[0])
-	timeouts := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1])
-	rs := vector.MustFunctionResult[int64](result)
+func validateUserLevelLockNameRows(
+	names vector.FunctionParameterWrapper[types.Varlena],
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	for i := 0; i < length; i++ {
+		row := uint64(i)
+		if functionRowSkipped(selectList, row) {
+			continue
+		}
+		name, isNull := names.GetStrValue(row)
+		if isNull {
+			return moerr.NewUserLockWrongNameNoCtx("NULL")
+		}
+		if err := validateUserLevelLockNameBytes(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
+type userLevelLockTimeoutConverter[T any] func(T) (uint32, error)
+
+func newDecimal64LockTimeoutConverter(scale int32) (userLevelLockTimeoutConverter[types.Decimal64], error) {
+	if scale < 0 || scale > 18 {
+		return nil, moerr.NewInternalErrorNoCtxf("invalid GET_LOCK DECIMAL64 scale %d", scale)
+	}
+	divisor := types.Pow10[scale]
+	return func(value types.Decimal64) (uint32, error) {
+		negative := value.Sign()
+		if negative {
+			value = value.Minus()
+		}
+		magnitude := uint64(value)
+		seconds, remainder := magnitude/divisor, magnitude%divisor
+		if scale > 0 && remainder >= divisor/2 {
+			seconds++
+		}
+		if (negative && seconds != 0) || seconds > uint64(maxUserLevelLockTimeoutSeconds) {
+			return maxUserLevelLockTimeoutSeconds, nil
+		}
+		return uint32(seconds), nil
+	}, nil
+}
+
+func decimal128LockTimeoutDivisor(scale int32) (types.Decimal128, types.Decimal128, error) {
+	if scale < 0 || scale > 38 {
+		return types.Decimal128{}, types.Decimal128{}, moerr.NewInternalErrorNoCtxf(
+			"invalid GET_LOCK DECIMAL128 scale %d", scale)
+	}
+	divisor := types.Decimal128{B0_63: 1}
+	for remaining := scale; remaining > 0; {
+		step := remaining
+		if step > 19 {
+			step = 19
+		}
+		var err error
+		divisor, err = divisor.Mul128(types.Decimal128{B0_63: types.Pow10[step]})
+		if err != nil {
+			return types.Decimal128{}, types.Decimal128{}, err
+		}
+		remaining -= step
+	}
+	if scale == 0 {
+		return divisor, types.Decimal128{}, nil
+	}
+	half, err := divisor.Div128Trunc(types.Decimal128{B0_63: 2})
+	return divisor, half, err
+}
+
+func newDecimal128LockTimeoutConverter(scale int32) (userLevelLockTimeoutConverter[types.Decimal128], error) {
+	divisor, half, err := decimal128LockTimeoutDivisor(scale)
+	if err != nil {
+		return nil, err
+	}
+	return func(value types.Decimal128) (uint32, error) {
+		negative := value.Sign()
+		if negative {
+			value = value.Minus()
+		}
+		seconds, err := value.Div128Trunc(divisor)
+		if err != nil {
+			return 0, err
+		}
+		if seconds.B64_127 != 0 || seconds.B0_63 > uint64(maxUserLevelLockTimeoutSeconds) {
+			return maxUserLevelLockTimeoutSeconds, nil
+		}
+		if scale > 0 {
+			product, err := divisor.Mul128(seconds)
+			if err != nil {
+				return 0, err
+			}
+			remainder, err := value.Sub128(product)
+			if err != nil {
+				return 0, err
+			}
+			if remainder.Compare(half) >= 0 {
+				seconds.B0_63++
+			}
+		}
+		if (negative && (seconds.B0_63 != 0 || seconds.B64_127 != 0)) ||
+			seconds.B64_127 != 0 || seconds.B0_63 > uint64(maxUserLevelLockTimeoutSeconds) {
+			return maxUserLevelLockTimeoutSeconds, nil
+		}
+		return uint32(seconds.B0_63), nil
+	}, nil
+}
+
+func decimal256LockTimeoutDivisor(scale int32) (types.Decimal256, types.Decimal256, error) {
+	if scale < 0 || scale > 76 {
+		return types.Decimal256{}, types.Decimal256{}, moerr.NewInternalErrorNoCtxf(
+			"invalid GET_LOCK DECIMAL256 scale %d", scale)
+	}
+	divisor := types.Decimal256{B0_63: 1}
+	for remaining := scale; remaining > 0; {
+		step := remaining
+		if step > 19 {
+			step = 19
+		}
+		var err error
+		divisor, err = divisor.Mul256(types.Decimal256{B0_63: types.Pow10[step]})
+		if err != nil {
+			return types.Decimal256{}, types.Decimal256{}, err
+		}
+		remaining -= step
+	}
+	if scale == 0 {
+		return divisor, types.Decimal256{}, nil
+	}
+	half, err := divisor.Div256Trunc(types.Decimal256{B0_63: 2})
+	return divisor, half, err
+}
+
+func newDecimal256LockTimeoutConverter(scale int32) (userLevelLockTimeoutConverter[types.Decimal256], error) {
+	divisor, half, err := decimal256LockTimeoutDivisor(scale)
+	if err != nil {
+		return nil, err
+	}
+	return func(value types.Decimal256) (uint32, error) {
+		negative := value.Sign()
+		if negative {
+			value = value.Minus()
+		}
+		seconds, err := value.Div256Trunc(divisor)
+		if err != nil {
+			return 0, err
+		}
+		if seconds.B192_255 != 0 || seconds.B128_191 != 0 || seconds.B64_127 != 0 ||
+			seconds.B0_63 > uint64(maxUserLevelLockTimeoutSeconds) {
+			return maxUserLevelLockTimeoutSeconds, nil
+		}
+		if scale > 0 {
+			product, err := divisor.Mul256(seconds)
+			if err != nil {
+				return 0, err
+			}
+			remainder, err := value.Sub256(product)
+			if err != nil {
+				return 0, err
+			}
+			if remainder.Compare(half) >= 0 {
+				seconds.B0_63++
+			}
+		}
+		if (negative && (seconds.B0_63 != 0 || seconds.B64_127 != 0 ||
+			seconds.B128_191 != 0 || seconds.B192_255 != 0)) ||
+			seconds.B192_255 != 0 || seconds.B128_191 != 0 || seconds.B64_127 != 0 ||
+			seconds.B0_63 > uint64(maxUserLevelLockTimeoutSeconds) {
+			return maxUserLevelLockTimeoutSeconds, nil
+		}
+		return uint32(seconds.B0_63), nil
+	}, nil
+}
+
+func getLockRows[T types.FixedSizeT](
+	names vector.FunctionParameterWrapper[types.Varlena],
+	timeouts vector.FunctionParameterWrapper[T],
+	timeoutVector *vector.Vector,
+	convert userLevelLockTimeoutConverter[T],
+	validate func(T) error,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	var constantTimeout uint32
+	constantTimeoutNull := true
+	constantTimeoutReady := false
+
+	// Validate the complete evaluated batch before touching the lock service.
+	// Constant timeout vectors are normalized once and reused below. Varying
+	// FLOAT64 values are checked for NaN here; valid DECIMAL vectors have a
+	// total fixed-width conversion after the scale/divisor is checked once, so
+	// avoid repeating 128/256-bit division in this side-effect barrier. No
+	// O(batch-size) scratch is allocated.
+	for i := 0; i < length; i++ {
+		row := uint64(i)
+		if functionRowSkipped(selectList, row) {
+			continue
+		}
+		name, nameNull := names.GetStrValue(row)
+		if nameNull {
+			return moerr.NewUserLockWrongNameNoCtx("NULL")
+		}
+		if err := validateUserLevelLockNameBytes(name); err != nil {
+			return err
+		}
+		if timeoutVector.IsConst() {
+			if !constantTimeoutReady {
+				timeout, timeoutNull := timeouts.GetValue(row)
+				constantTimeoutNull = timeoutNull
+				if !timeoutNull {
+					var err error
+					constantTimeout, err = convert(timeout)
+					if err != nil {
+						return err
+					}
+				}
+				constantTimeoutReady = true
+			}
+		} else {
+			timeout, timeoutNull := timeouts.GetValue(row)
+			if !timeoutNull && validate != nil {
+				if err := validate(timeout); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	rs := vector.MustFunctionResult[int64](result)
 	for i := uint64(0); i < uint64(length); i++ {
-		name, nameNull := names.GetStrValue(i)
-		timeout, timeoutNull := timeouts.GetValue(i)
-		if nameNull || timeoutNull {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
 		}
-		value, err := getUserLevelLock(string(name), timeout, proc)
+		name, _ := names.GetStrValue(i)
+		timeoutSeconds := uint32(0)
+		if timeoutVector.IsConst() {
+			if !constantTimeoutNull {
+				timeoutSeconds = constantTimeout
+			}
+		} else if timeout, timeoutNull := timeouts.GetValue(i); !timeoutNull {
+			var err error
+			timeoutSeconds, err = convert(timeout)
+			if err != nil {
+				return err
+			}
+		}
+		value, err := getUserLevelLockValidated(strings.ToLower(string(name)), timeoutSeconds, proc)
 		if err != nil {
 			return err
 		}
@@ -11227,19 +12702,73 @@ func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	return nil
 }
 
+func GetLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	timeoutType := ivecs[1].GetType()
+	switch timeoutType.Oid {
+	case types.T_float64:
+		return getLockRows(
+			names,
+			vector.GenerateFunctionFixedTypeParameter[float64](ivecs[1]),
+			ivecs[1],
+			userLevelLockTimeoutSeconds,
+			validateUserLevelLockFloat64Timeout,
+			result, proc, length, selectList,
+		)
+	case types.T_decimal64:
+		convert, err := newDecimal64LockTimeoutConverter(timeoutType.Scale)
+		if err != nil {
+			return err
+		}
+		return getLockRows(
+			names,
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[1]),
+			ivecs[1], convert, nil,
+			result, proc, length, selectList,
+		)
+	case types.T_decimal128:
+		convert, err := newDecimal128LockTimeoutConverter(timeoutType.Scale)
+		if err != nil {
+			return err
+		}
+		return getLockRows(
+			names,
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[1]),
+			ivecs[1], convert, nil,
+			result, proc, length, selectList,
+		)
+	case types.T_decimal256:
+		convert, err := newDecimal256LockTimeoutConverter(timeoutType.Scale)
+		if err != nil {
+			return err
+		}
+		return getLockRows(
+			names,
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[1]),
+			ivecs[1], convert, nil,
+			result, proc, length, selectList,
+		)
+	default:
+		return moerr.NewInternalErrorNoCtxf("unsupported GET_LOCK timeout type %s", timeoutType.Oid)
+	}
+}
+
 func ReleaseLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	if err := validateUserLevelLockNameRows(names, length, selectList); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[int64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		name, null := names.GetStrValue(i)
-		if null {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
 		}
-		value, isNull, err := releaseUserLevelLock(string(name), proc)
+		name, _ := names.GetStrValue(i)
+		value, isNull, err := releaseUserLevelLockValidated(strings.ToLower(string(name)), proc)
 		if err != nil {
 			return err
 		}
@@ -11252,17 +12781,20 @@ func ReleaseLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 
 func IsFreeLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	if err := validateUserLevelLockNameRows(names, length, selectList); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[int64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		name, null := names.GetStrValue(i)
-		if null {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
 		}
-		value, err := isUserLevelLockFree(string(name), proc)
+		name, _ := names.GetStrValue(i)
+		value, err := isUserLevelLockFreeValidated(strings.ToLower(string(name)), proc)
 		if err != nil {
 			return err
 		}
@@ -11275,17 +12807,20 @@ func IsFreeLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func IsUsedLock(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	names := vector.GenerateFunctionStrParameter(ivecs[0])
+	if err := validateUserLevelLockNameRows(names, length, selectList); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[uint64](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		name, null := names.GetStrValue(i)
-		if null {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
 		}
-		value, isNull, err := isUserLevelLockUsed(string(name), proc)
+		name, _ := names.GetStrValue(i)
+		value, isNull, err := isUserLevelLockUsedValidated(strings.ToLower(string(name)), proc)
 		if err != nil {
 			return err
 		}

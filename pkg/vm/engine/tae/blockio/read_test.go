@@ -416,6 +416,8 @@ func TestBlockDataReadInnerPersistedVectorTopN(t *testing.T) {
 		[]int64{}, []float64{})
 	t.Run("exact membership fused before topk", func(t *testing.T) {
 		output := newOutput()
+		top := newTop()
+		top.Stats = new(objectio.IndexReaderTopStats)
 		filter := objectio.BlockReadFilter{
 			Valid:           true,
 			ExactMembership: true,
@@ -436,7 +438,7 @@ func TestBlockDataReadInnerPersistedVectorTopN(t *testing.T) {
 			[]uint16{0},
 			[]types.Type{typesByColumn[0]},
 			filter,
-			newTop(),
+			top,
 			fileservice.Policy(0),
 			"entries",
 			output,
@@ -445,6 +447,8 @@ func TestBlockDataReadInnerPersistedVectorTopN(t *testing.T) {
 			fs,
 		))
 		assertOutput(t, output, []int64{0, 4}, []float64{100, 9})
+		require.Equal(t, uint64(5), top.Stats.StorageFilterInputRows)
+		require.Equal(t, uint64(2), top.Stats.StorageFilterOutputRows)
 		output.Clean(queryMP)
 	})
 	t.Run("exact membership all tombstoned", func(t *testing.T) {
@@ -988,9 +992,81 @@ func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
 		cacheVectors,
 		queryMP,
 		fs,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, []int64{2}, sels)
+
+	persistedInfo := info
+	persistedInfo.ObjectFlags &^= objectio.ObjectFlag_Appendable
+	prefixStats := new(objectio.IndexReaderTopStats)
+	prefixSels, err := ReadDataByFilter(
+		ctx,
+		"test",
+		&persistedInfo,
+		&blockReadTestDataSource{deleted: []uint64{1}},
+		[]uint16{0},
+		[]types.Type{types.T_varchar.ToType()},
+		types.BuildTS(7, 0),
+		nil,
+		objectio.NewReadFilterPrefixSearch(types.T_varchar, [][]byte{[]byte("k")}),
+		false,
+		cacheVectors,
+		queryMP,
+		fs,
+		prefixStats,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 2, 3, 4}, prefixSels)
+	require.Equal(t, uint64(5), prefixStats.StorageFilterInputRows)
+	require.Equal(t, uint64(4), prefixStats.StorageFilterOutputRows)
+
+	noMatchStats := new(objectio.IndexReaderTopStats)
+	noMatchSels, err := ReadDataByFilter(
+		ctx,
+		"test",
+		&persistedInfo,
+		&blockReadTestDataSource{},
+		[]uint16{0},
+		[]types.Type{types.T_varchar.ToType()},
+		types.BuildTS(7, 0),
+		nil,
+		objectio.NewReadFilterPrefixSearch(types.T_varchar, [][]byte{[]byte("missing")}),
+		false,
+		cacheVectors,
+		queryMP,
+		fs,
+		noMatchStats,
+	)
+	require.NoError(t, err)
+	require.Empty(t, noMatchSels)
+	require.Equal(t, uint64(5), noMatchStats.StorageFilterInputRows)
+	require.Zero(t, noMatchStats.StorageFilterOutputRows)
+
+	topStats := new(objectio.IndexReaderTopStats)
+	statsSels, err := ReadDataByFilter(
+		ctx,
+		"test",
+		&info,
+		&blockReadTestDataSource{},
+		[]uint16{0},
+		[]types.Type{types.T_varchar.ToType()},
+		types.BuildTS(7, 0),
+		func(vectors containers.Vectors) []int64 {
+			require.Equal(t, 5, vectors[0].Length())
+			return []int64{0, 2}
+		},
+		nil,
+		false,
+		cacheVectors,
+		queryMP,
+		fs,
+		topStats,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []int64{0, 2}, statsSels)
+	require.Equal(t, uint64(5), topStats.StorageFilterInputRows)
+	require.Equal(t, uint64(2), topStats.StorageFilterOutputRows)
 	selected := batch.NewWithSize(2)
 	selected.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	selected.Vecs[1] = vector.NewOffHeapVecWithType(objectio.RowidType)

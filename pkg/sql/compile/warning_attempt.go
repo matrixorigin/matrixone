@@ -14,7 +14,11 @@
 
 package compile
 
-import "github.com/matrixorigin/matrixone/pkg/vm/process"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
 
 // warningAttempt binds a generation-specific sink without replacing Session,
 // whose optional interfaces are still needed by expression execution.
@@ -23,18 +27,70 @@ type warningAttempt struct {
 	previous  map[*process.Process]any
 }
 
-func newWarningAttempt(proc *process.Process) *warningAttempt {
+func newWarningAttempt(proc *process.Process, required bool) *warningAttempt {
 	if proc == nil {
 		return nil
 	}
-	_, single := proc.GetWarningSink().(warningDiagnosticSink)
-	_, batch := proc.GetWarningSink().(warningDiagnosticBatchSink)
-	if !single && !batch {
+	destination := proc.GetWarningSink()
+	required = required || requiresGroupConcatCutReporting(destination)
+	_, single := destination.(warningDiagnosticSink)
+	_, batch := destination.(warningDiagnosticBatchSink)
+	_, count := destination.(warningDiagnosticCountSink)
+	if !single && !batch && !count && !required {
 		return nil
 	}
-	a := &warningAttempt{collector: &remoteWarningCollector{}, previous: make(map[*process.Process]any)}
+	a := &warningAttempt{collector: &remoteWarningCollector{requiresCutReporting: required}, previous: make(map[*process.Process]any)}
 	a.bindProcess(proc)
 	return a
+}
+
+func (a *warningAttempt) groupConcatCutDiagnostic() (bool, string) {
+	if a == nil {
+		return false, ""
+	}
+	return a.collector.groupConcatCutDiagnostic()
+}
+
+func (c *Compile) strictWriteGroupConcatPromotionEnabled() (bool, error) {
+	if c == nil {
+		return false, nil
+	}
+	switch stmt := c.stmt.(type) {
+	case *tree.Insert:
+		if len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil {
+			return false, nil
+		}
+	case *tree.Update:
+		if stmt.Ignore {
+			return false, nil
+		}
+	case *tree.Replace:
+	case *tree.CreateTable:
+		if !stmt.IsAsSelect {
+			return false, nil
+		}
+	default:
+		return false, nil
+	}
+	err, strict := StrictSqlMode(c.proc)
+	return strict, err
+}
+
+func (c *Compile) strictWriteGroupConcatCutError(
+	warnings *warningAttempt,
+	promotionEnabled bool,
+) error {
+	if !promotionEnabled {
+		return nil
+	}
+	cut, message := warnings.groupConcatCutDiagnostic()
+	if !cut {
+		if warnings != nil && warnings.collector.incompleteGroupConcatReporting() {
+			return moerr.NewNotSupportedNoCtx("strict writes require complete remote GROUP_CONCAT truncation reporting")
+		}
+		return nil
+	}
+	return moerr.NewGroupConcatCut(c.proc.Ctx, message)
 }
 
 func (a *warningAttempt) bindProcess(proc *process.Process) {
@@ -72,8 +128,18 @@ func (a *warningAttempt) finish(success bool, destination any) {
 	if a == nil {
 		return
 	}
-	total, warnings := a.collector.closeWarnings(success)
+	total, warnings, cut, cutMessage, incomplete := a.collector.closeWarnings(success)
 	a.restore()
+	if incomplete {
+		if marker, ok := destination.(groupConcatCutMarker); ok {
+			marker.markGroupConcatReportingIncomplete()
+		}
+	}
+	if cut {
+		if marker, ok := destination.(groupConcatCutMarker); ok {
+			marker.markGroupConcatCut(cutMessage)
+		}
+	}
 	if total == 0 {
 		return
 	}
@@ -82,13 +148,7 @@ func (a *warningAttempt) finish(success bool, destination any) {
 	for i, w := range warnings {
 		codes[i], messages[i] = w.Code, w.Message
 	}
-	if sink, ok := destination.(warningDiagnosticBatchSink); ok {
-		sink.AppendWarningBatch(total, codes, messages)
-	} else if sink, ok := destination.(warningDiagnosticSink); ok {
-		for i := range codes {
-			sink.AppendWarningDiagnostic(codes[i], messages[i])
-		}
-	}
+	appendWarningBatchToSink(destination, total, codes, messages)
 }
 
 func (a *warningAttempt) discard() {

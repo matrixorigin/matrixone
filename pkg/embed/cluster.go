@@ -201,40 +201,47 @@ func (c *cluster) Start() (err error) {
 }
 
 func (c *cluster) doStartLocked(from int) error {
+	services := c.services[from:]
+	// Each service owns one slot. Join only after every started CN has returned,
+	// so rollback cannot race startup and diagnostics retain all failures in
+	// configuration order regardless of completion order or concrete error type.
+	startErrors := make([]error, len(services))
 	var wg sync.WaitGroup
-	var startErr atomic.Value
-	for _, s := range c.services[from:] {
+	for i, s := range services {
 		if s.serviceType != metadata.ServiceType_CN {
 			if err := c.startServiceLocked(s); err != nil {
-				return err
+				startErrors[i] = err
+				break
 			}
 			continue
 		}
 
 		wg.Add(1)
-		go func(s *operator) {
+		go func(i int, s *operator) {
 			defer wg.Done()
-			if err := c.startServiceLocked(s); err != nil {
-				// Only the first error is captured; concurrent failures
-				// from other services are discarded since knowing that
-				// any service failed is sufficient to abort startup.
-				startErr.CompareAndSwap(nil, err)
-			}
-		}(s)
+			startErrors[i] = c.startServiceLocked(s)
+		}(i, s)
 	}
 
 	wg.Wait()
-	if v := startErr.Load(); v != nil {
-		return v.(error)
-	}
-	return nil
+	return errors.Join(startErrors...)
 }
 
 func (c *cluster) startServiceLocked(op *operator) error {
+	var err error
 	if c.startFn != nil {
-		return c.startFn(op)
+		err = c.startFn(op)
+	} else {
+		err = op.Start()
 	}
-	return op.Start()
+	if err != nil {
+		return errors.Join(
+			moerr.NewInternalErrorNoCtxf("embedded cluster %d start %s service %q",
+				c.id, op.serviceType, op.sid),
+			err,
+		)
+	}
+	return nil
 }
 
 func (c *cluster) Close() error {
