@@ -9411,6 +9411,54 @@ func TestDateTimeToWeek(t *testing.T) {
 	//TODO: Ignoring Scalar Nulls: Original code:https://github.com/m-schen/matrixone/blob/749eb739130decdbbf3dcc3dd5b21f656620edd9/pkg/sql/plan/function/builtin/unary/week_test.go#L114
 }
 
+func TestWeekUsesPerRowMode(t *testing.T) {
+	dates := []types.Date{
+		types.DateFromCalendar(2008, 1, 1),
+		types.DateFromCalendar(2008, 1, 6),
+		types.DateFromCalendar(2008, 1, 7),
+		types.DateFromCalendar(2008, 12, 31),
+	}
+	modes := []int64{0, 1, 2, -1}
+	wanted := make([]uint8, len(dates))
+	for i := range dates {
+		wanted[i] = uint8(dates[i].Week(normalizeWeekMode(modes[i])))
+	}
+
+	proc := testutil.NewProcess(t)
+	caseWithRows := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), dates, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, nil),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, wanted, nil),
+		DateToWeek)
+	ok, info := caseWithRows.Run()
+	require.True(t, ok, info)
+
+	caseWithNullMode := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), dates[:3], nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, 2}, []bool{false, true, false}),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false,
+			[]uint8{wanted[0], 0, wanted[2]}, []bool{false, true, false}),
+		DateToWeek)
+	ok, info = caseWithNullMode.Run()
+	require.True(t, ok, info)
+
+	caseDatetime := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{
+				dates[0].ToDatetime(), dates[1].ToDatetime(), dates[2].ToDatetime(), dates[3].ToDatetime(),
+			}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, nil),
+		},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, wanted, nil),
+		DatetimeToWeek)
+	ok, info = caseDatetime.Run()
+	require.True(t, ok, info)
+}
+
 // Week day
 
 func initDateToWeekdayTestCase() []tcTemp {
