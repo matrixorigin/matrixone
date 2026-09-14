@@ -2139,16 +2139,37 @@ func d256MulScaledFallback(x, y *types.Decimal256, scaleDown int32, dst *types.D
 		}
 	}
 
-	// The quotient must fit in a signed positive Decimal256. Rejecting bit 255
-	// preserves d256MulInline's existing overflow contract, including its
-	// treatment of the asymmetric negative minimum.
-	if product[4]|product[5]|product[6]|product[7] != 0 || product[3]>>63 != 0 {
+	// Decimal256 multiplication returns DECIMAL(65, resultScale), so the
+	// logical coefficient range is narrower than the physical 256-bit carrier.
+	// Preserve the asymmetric decimal boundary: +10^65 is out of range, while
+	// -10^65 is the inclusive negative boundary accepted by ParseDecimal256.
+	if !d256MulResultFits(product, sign) {
 		return false
 	}
 	result := types.Decimal256{B0_63: product[0], B64_127: product[1], B128_191: product[2], B192_255: product[3]}
 	d256Negate(&result, sign)
 	*dst = result
 	return true
+}
+
+// d256MulResultFits checks the rounded coefficient against the DECIMAL(65, s)
+// result domain. The limit is 10^65 in little-endian 64-bit limbs. Keeping the
+// comparison limb-based avoids another big.Int allocation on this exceptional
+// fallback path.
+func d256MulResultFits(product [8]uint64, negative uint64) bool {
+	if product[4]|product[5]|product[6]|product[7] != 0 {
+		return false
+	}
+	limit := [...]uint64{0, 0x4e3945ef7a25360a, 0x1c7fc3908a8bef46, 0x0000000000f31627}
+	for i := 3; i >= 0; i-- {
+		if product[i] < limit[i] {
+			return true
+		}
+		if product[i] > limit[i] {
+			return false
+		}
+	}
+	return negative != 0
 }
 
 // d256Add is the batch kernel for Decimal256 addition.

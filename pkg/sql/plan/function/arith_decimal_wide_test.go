@@ -93,10 +93,46 @@ func expectedD256ScaleDownWideTest(x, y types.Decimal256, scaleDown int32) (type
 		product = quotient
 	}
 	absolute := new(big.Int).Abs(new(big.Int).Set(product))
-	if absolute.BitLen() > 255 {
+	limit := new(big.Int).Exp(big.NewInt(10), big.NewInt(65), nil)
+	if absolute.Cmp(limit) > 0 || (absolute.Cmp(limit) == 0 && product.Sign() >= 0) {
 		return types.Decimal256{}, false
 	}
 	return decimal256FromBigWideTest(product), true
+}
+
+func TestD256MulScaledFallbackEnforcesDeclaredWidth(t *testing.T) {
+	coefficient := "1" + strings.Repeat("0", 39)
+	x, _ := parseD256WideTest(t, coefficient)
+	y, _ := parseD256WideTest(t, coefficient)
+
+	for _, tc := range []struct {
+		name string
+		left types.Decimal256
+	}{
+		{name: "positive", left: x},
+		{name: "negative", left: x.Minus()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := []types.Decimal256{{B0_63: 42}}
+			require.Error(t, d256Mul(
+				[]types.Decimal256{tc.left}, []types.Decimal256{y}, result, 11, 11, nulls.NewWithSize(1)))
+			require.Equal(t, types.Decimal256{B0_63: 42}, result[0])
+		})
+	}
+}
+
+func TestD256MulScaledFallbackHonorsNegativeWidthBoundary(t *testing.T) {
+	coefficient := "1" + strings.Repeat("0", 66)
+	positive, _ := parseD256WideTest(t, coefficient)
+	one, _ := parseD256WideTest(t, "1")
+	negative := positive.Minus()
+	want, _ := parseD256WideTest(t, "1"+strings.Repeat("0", 65))
+	want = want.Minus()
+
+	var got types.Decimal256
+	require.False(t, d256MulScaledFallback(&positive, &one, 1, &got))
+	require.True(t, d256MulScaledFallback(&negative, &one, 1, &got))
+	require.Equal(t, want, got)
 }
 
 func TestD256MulScaledRawOverflow(t *testing.T) {
@@ -145,35 +181,36 @@ func TestD256MulScaledRawOverflowPreservesOverflow(t *testing.T) {
 	require.Error(t, d256Mul([]types.Decimal256{x}, []types.Decimal256{y}, got, sx, sy, nul))
 }
 
-func TestD256MulScaledRawOverflowRoundingBoundary(t *testing.T) {
-	const scale1, scale2 = int32(6), int32(7)
+func TestD256MulScaledFallbackRoundingBoundary(t *testing.T) {
+	const scaleDown = int32(1)
 	for _, tc := range []struct {
 		name        string
 		left, right types.Decimal256
 	}{
 		// Remainders below, exactly at, and above one half of 10.
-		{name: "below_half", left: types.Decimal256{B0_63: 5, B128_191: 1}, right: types.Decimal256{B0_63: 6, B128_191: 1}},
-		{name: "exact_half", left: types.Decimal256{B0_63: 9, B128_191: 1}, right: types.Decimal256{B0_63: 3, B128_191: 1}},
-		{name: "exact_half_negative", left: types.Decimal256{B0_63: 9, B128_191: 1}.Minus(), right: types.Decimal256{B0_63: 3, B128_191: 1}},
-		{name: "above_half", left: types.Decimal256{B128_191: 1}, right: types.Decimal256{B128_191: 1}},
+		{name: "below_half", left: types.Decimal256{B0_63: 1}, right: types.Decimal256{B0_63: 4}},
+		{name: "exact_half", left: types.Decimal256{B0_63: 1}, right: types.Decimal256{B0_63: 5}},
+		{name: "exact_half_negative", left: types.Decimal256{B0_63: 1}.Minus(), right: types.Decimal256{B0_63: 5}},
+		{name: "above_half", left: types.Decimal256{B0_63: 1}, right: types.Decimal256{B0_63: 6}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			want, ok := expectedD256MulWideTest(tc.left, tc.right, scale1, scale2)
+			want, ok := expectedD256ScaleDownWideTest(tc.left, tc.right, scaleDown)
 			require.True(t, ok)
-			got := make([]types.Decimal256, 1)
-			require.NoError(t, d256Mul([]types.Decimal256{tc.left}, []types.Decimal256{tc.right}, got, scale1, scale2, nulls.NewWithSize(1)))
-			require.Equal(t, want, got[0])
+			var got types.Decimal256
+			require.True(t, d256MulScaledFallback(&tc.left, &tc.right, scaleDown, &got))
+			require.Equal(t, want, got)
 		})
 	}
 
 	// The rounded quotient is exactly 2^255 and must be rejected. Before
 	// rounding, it is max signed D256 with a half-unit discarded remainder.
+	const carryScale1, carryScale2 = int32(6), int32(7)
 	carryLeft := types.Decimal256{B0_63: 1, B128_191: 1}
 	carryRight := types.Decimal256{B0_63: ^uint64(0) - 4, B64_127: ^uint64(0), B128_191: 4}
-	_, ok := expectedD256MulWideTest(carryLeft, carryRight, scale1, scale2)
+	_, ok := expectedD256MulWideTest(carryLeft, carryRight, carryScale1, carryScale2)
 	require.False(t, ok)
 	result := []types.Decimal256{{B0_63: 42}}
-	require.Error(t, d256Mul([]types.Decimal256{carryLeft}, []types.Decimal256{carryRight}, result, scale1, scale2, nulls.NewWithSize(1)))
+	require.Error(t, d256Mul([]types.Decimal256{carryLeft}, []types.Decimal256{carryRight}, result, carryScale1, carryScale2, nulls.NewWithSize(1)))
 	require.Equal(t, types.Decimal256{B0_63: 42}, result[0], "failed fallback must not overwrite the destination")
 }
 
