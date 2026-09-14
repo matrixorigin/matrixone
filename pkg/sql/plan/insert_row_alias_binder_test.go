@@ -395,6 +395,17 @@ func TestInsertRowAliasImplicitGeneratedDefaultNoKeyFallbackBuilds(t *testing.T)
 	require.NotNil(t, logicPlan)
 }
 
+func TestInsertRowAliasImplicitGeneratedColumnsRemainInAlias(t *testing.T) {
+	for _, sql := range []string{
+		"insert into constraint_test.fake_pk_no_unique_gen values (1, default) as n(x, y) on duplicate key update a = n.x",
+		"insert into constraint_test.fake_pk_no_unique_gen values (1, default) as n on duplicate key update a = n.g",
+	} {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.NoError(t, err, sql)
+		require.NotNil(t, logicPlan, sql)
+	}
+}
+
 func TestInsertRowAliasUncorrelatedScalarSubqueryDoesNotAddTargetLookup(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+

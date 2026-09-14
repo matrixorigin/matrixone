@@ -462,6 +462,45 @@ select * from t_odku_no_key_generated order by a;
 3  ¦  4  𝄀
 4  ¦  5
 deallocate prepare s_odku_no_key_generated_implicit;
+insert into t_odku_no_key_generated values (5, default) as n(x, y) on duplicate key update a = n.x;
+insert into t_odku_no_key_generated values (6, default) as n on duplicate key update a = n.g;
+select * from t_odku_no_key_generated order by a;
+➤ a[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3  𝄀
+3  ¦  4  𝄀
+4  ¦  5  𝄀
+5  ¦  6  𝄀
+6  ¦  7
+prepare s_odku_no_key_generated_implicit_alias from insert into t_odku_no_key_generated values (?, default) as n(x, y) on duplicate key update a = n.x + ?;
+set @odku_no_key_implicit_alias_a = 7;
+set @odku_no_key_implicit_alias_delta = 1;
+execute s_odku_no_key_generated_implicit_alias using @odku_no_key_implicit_alias_a, @odku_no_key_implicit_alias_delta;
+select * from t_odku_no_key_generated order by a;
+➤ a[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3  𝄀
+3  ¦  4  𝄀
+4  ¦  5  𝄀
+5  ¦  6  𝄀
+6  ¦  7  𝄀
+7  ¦  8
+deallocate prepare s_odku_no_key_generated_implicit_alias;
+prepare s_odku_no_key_generated_implicit_generated from insert into t_odku_no_key_generated values (?, default) as n on duplicate key update a = n.g + ?;
+set @odku_no_key_implicit_generated_a = 8;
+set @odku_no_key_implicit_generated_delta = 1;
+execute s_odku_no_key_generated_implicit_generated using @odku_no_key_implicit_generated_a, @odku_no_key_implicit_generated_delta;
+select * from t_odku_no_key_generated order by a;
+➤ a[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3  𝄀
+3  ¦  4  𝄀
+4  ¦  5  𝄀
+5  ¦  6  𝄀
+6  ¦  7  𝄀
+7  ¦  8  𝄀
+8  ¦  9
+deallocate prepare s_odku_no_key_generated_implicit_generated;
 drop table t_odku_no_key_generated;
 drop table if exists t_odku_no_key_volatile;
 create table t_odku_no_key_volatile (
