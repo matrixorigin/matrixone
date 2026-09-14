@@ -211,7 +211,9 @@ func (d TypeDescriptor) Validate() error {
 			return fmt.Errorf("TYPE_CONTRACT: temporal scale or charset is outside the supported range")
 		}
 	case types.T_char, types.T_varchar, types.T_text:
-		if d.Charset > types.CharsetUTF8 {
+		switch d.Charset {
+		case types.CharsetLegacy, types.CharsetUTF8MB4Bin, types.CharsetUTF8:
+		default:
 			return fmt.Errorf("TYPE_CONTRACT: unsupported text charset %d", d.Charset)
 		}
 	case types.T_binary, types.T_varbinary, types.T_blob:
