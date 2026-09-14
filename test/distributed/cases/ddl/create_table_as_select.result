@@ -84,7 +84,7 @@ CREATE table t8 as select a as alias_a, 1 from t1;
 desc t8;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 alias_a  ¦  INT(32)  ¦  YES  ¦    ¦  123  ¦    ¦    𝄀
-1  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦  
+1  ¦  BIGINT  ¦  NO  ¦    ¦  null  ¦    ¦  
 select * from t8;
 ➤ alias_a[4,32,0]  ¦  1[-5,64,0]  𝄀
 1  ¦  1  𝄀

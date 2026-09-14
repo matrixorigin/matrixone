@@ -1426,6 +1426,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = c.constrainStrictWriteWorkers(); err != nil {
+		return nil, err
+	}
 	if err = c.constrainGroupConcatTimeZoneWorkers(qry); err != nil {
 		return nil, err
 	}
@@ -7806,7 +7809,7 @@ func hasVarianceAggregate(node *plan.Node) bool {
 }
 
 // hasWidenedDecimalSum reports SUM expressions whose public result is
-// Decimal256. Before MORPC v68, a new CN can still exchange the legacy
+// Decimal256. Before MORPC v69, a new CN can still exchange the legacy
 // Decimal128 partial state with an old CN, but a final shuffle Group evaluates
 // the state on its remote owner and sends the public result directly. That
 // final batch would be Decimal256 on the new binary and Decimal128 on the old
@@ -7879,7 +7882,7 @@ func (c *Compile) supportsRemoteWidenedDecimalSum() bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion68
+	return ok && protocolVersion >= defines.MORPCVersion69
 }
 
 func (c *Compile) supportsRemotePartitionTopN() bool {
