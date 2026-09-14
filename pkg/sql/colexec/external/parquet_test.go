@@ -5054,6 +5054,14 @@ func Test_validateStringDataCount(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	// A zero-width fixed-length value is invalid even when the page has no non-NULL values.
+	{
+		var loader strLoader
+		loader.init(encoding.FixedLenByteArrayValues(nil, 0))
+		err := validateStringDataCount(ctx, &loader, 0)
+		require.ErrorContains(t, err, "invalid fixed length 0")
+	}
+
 	for _, tc := range []struct {
 		name    string
 		offsets []uint32

@@ -2364,7 +2364,7 @@ func validateParquetNoNullDefinitionLevels(ctx context.Context, levels []byte, n
 func validateStringDataCount(ctx context.Context, loader *strLoader, expectedNonNulls int64) error {
 	var actualCount int64
 
-	if loader.size != 0 {
+	if loader.fixedLen {
 		// FixedLenByteArray
 		if loader.size <= 0 {
 			return moerr.NewInvalidInputf(ctx, "malformed page: invalid fixed length %d", loader.size)
@@ -3816,10 +3816,11 @@ func parquetValueToDecimal256(ctx context.Context, st parquet.Type, v parquet.Va
 }
 
 type strLoader struct {
-	buf     []byte
-	offsets []uint32
-	size    int
-	next    int
+	buf      []byte
+	offsets  []uint32
+	size     int
+	fixedLen bool
+	next     int
 }
 
 func (ld *strLoader) init(data encoding.Values) {
@@ -3829,6 +3830,7 @@ func (ld *strLoader) init(data encoding.Values) {
 		ld.buf, ld.offsets = data.ByteArray()
 	case encoding.FixedLenByteArray:
 		ld.buf, ld.size = data.FixedLenByteArray()
+		ld.fixedLen = true
 	default:
 		panic("not supported kind " + data.Kind().String())
 	}
@@ -3844,7 +3846,7 @@ func (ld *strLoader) initChecked(ctx context.Context, data encoding.Values) erro
 }
 
 func (ld *strLoader) loadNext() []byte {
-	if ld.size != 0 {
+	if ld.fixedLen {
 		start := int(ld.next) * ld.size
 		end := start + ld.size
 		ld.next++
@@ -3858,7 +3860,7 @@ func (ld *strLoader) loadNext() []byte {
 }
 
 func (ld *strLoader) loadAt(i int32) []byte {
-	if ld.size != 0 {
+	if ld.fixedLen {
 		start := int(i) * ld.size
 		end := start + ld.size
 		return ld.buf[start:end]
