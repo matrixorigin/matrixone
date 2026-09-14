@@ -1,89 +1,121 @@
 SELECT YEARWEEK('1987-01-01') AS result1;
-result1
+➤ result1[-5,64,0]  𝄀
 198652
 SELECT YEARWEEK('1987-01-01') AS yearweek;
-yearweek
+➤ yearweek[-5,64,0]  𝄀
 198652
 SELECT YEARWEEK('2008-02-20') AS yearweek_feb;
-yearweek_feb
+➤ yearweek_feb[-5,64,0]  𝄀
 200807
 SELECT YEARWEEK('2008-12-31') AS yearweek_dec;
-yearweek_dec
+➤ yearweek_dec[-5,64,0]  𝄀
 200852
 SELECT YEARWEEK('1987-01-01', 0) AS yearweek_mode0;
-yearweek_mode0
+➤ yearweek_mode0[-5,64,0]  𝄀
 198652
 SELECT YEARWEEK('1987-01-01', 1) AS yearweek_mode1;
-yearweek_mode1
+➤ yearweek_mode1[-5,64,0]  𝄀
 198701
 SELECT YEARWEEK('1987-01-01', 2) AS yearweek_mode2;
-yearweek_mode2
+➤ yearweek_mode2[-5,64,0]  𝄀
 198652
 SELECT YEARWEEK('1987-01-01', 3) AS yearweek_mode3;
-yearweek_mode3
+➤ yearweek_mode3[-5,64,0]  𝄀
 198701
 SELECT YEARWEEK('1987-01-01 10:30:45') AS yearweek_datetime;
-yearweek_datetime
+➤ yearweek_datetime[-5,64,0]  𝄀
 198652
 SELECT YEARWEEK('2008-02-20 12:00:00', 0) AS yearweek_datetime_mode0;
-yearweek_datetime_mode0
+➤ yearweek_datetime_mode0[-5,64,0]  𝄀
 200807
 SELECT YEARWEEK(TIMESTAMP('1987-01-01 10:30:45')) AS yearweek_timestamp;
-yearweek_timestamp
+➤ yearweek_timestamp[-5,64,0]  𝄀
 198652
 SELECT YEARWEEK('2003-12-30') AS yearweek_2003_dec;
-yearweek_2003_dec
+➤ yearweek_2003_dec[-5,64,0]  𝄀
 200352
 SELECT YEARWEEK('2004-01-02') AS yearweek_2004_jan;
-yearweek_2004_jan
+➤ yearweek_2004_jan[-5,64,0]  𝄀
 200352
 SELECT YEARWEEK('2004-12-31') AS yearweek_2004_dec;
-yearweek_2004_dec
+➤ yearweek_2004_dec[-5,64,0]  𝄀
 200452
 SELECT YEARWEEK('2005-01-01') AS yearweek_2005_jan;
-yearweek_2005_jan
+➤ yearweek_2005_jan[-5,64,0]  𝄀
 200452
 CREATE TABLE t1(d DATE);
 INSERT INTO t1 VALUES ('1987-01-01'), ('2008-02-20'), ('2008-12-31');
 SELECT d, YEARWEEK(d) AS yearweek FROM t1;
-d    yearweek
-1987-01-01    198652
-2008-02-20    200807
-2008-12-31    200852
+➤ d[91,10,0]  ¦  yearweek[-5,64,0]  𝄀
+1987-01-01  ¦  198652  𝄀
+2008-02-20  ¦  200807  𝄀
+2008-12-31  ¦  200852
 DROP TABLE t1;
 CREATE TABLE t1(d DATE);
 INSERT INTO t1 VALUES ('1987-01-01'), ('2008-06-15'), ('2008-12-31');
 SELECT * FROM t1 WHERE YEARWEEK(d) > 200800;
-d
-2008-06-15
+➤ d[91,10,0]  𝄀
+2008-06-15  𝄀
 2008-12-31
 DROP TABLE t1;
 SELECT YEARWEEK(NULL) AS null_result;
-null_result
+➤ null_result[-5,64,0]  𝄀
 null
 SELECT YEARWEEK('1987-01-01', NULL) AS null_mode;
-null_mode
+➤ null_mode[-5,64,0]  𝄀
 198652
 SELECT YEARWEEK('1987-01-01') AS yearweek_result,
 YEAR('1987-01-01') AS year_result,
 WEEK('1987-01-01', 0) AS week_result;
-yearweek_result    year_result    week_result
-198652    1987    0
+➤ yearweek_result[-5,64,0]  ¦  year_result[-5,64,0]  ¦  week_result[-6,8,0]  𝄀
+198652  ¦  1987  ¦  0
 SELECT YEARWEEK('2008-01-15') AS jan_week;
-jan_week
+➤ jan_week[-5,64,0]  𝄀
 200802
 SELECT YEARWEEK('2008-06-15') AS jun_week;
-jun_week
+➤ jun_week[-5,64,0]  𝄀
 200824
 SELECT YEARWEEK('2008-09-15') AS sep_week;
-sep_week
+➤ sep_week[-5,64,0]  𝄀
 200837
 SELECT YEARWEEK('2008-12-15') AS dec_week;
-dec_week
+➤ dec_week[-5,64,0]  𝄀
 200850
 SELECT YEARWEEK('2008-06-15') AS current_yearweek;
-current_yearweek
+➤ current_yearweek[-5,64,0]  𝄀
 200824
 SELECT YEARWEEK(DATE_ADD('1987-01-01', INTERVAL 7 DAY)) AS week_after;
-week_after
+➤ week_after[-5,64,0]  𝄀
 198701
+CREATE TABLE temporal_week_modes(
+id INT,
+d DATE,
+dt DATETIME,
+ts TIMESTAMP,
+s VARCHAR(32),
+mode INT
+);
+INSERT INTO temporal_week_modes VALUES
+(1, '2008-01-01', '2008-01-01 00:00:00', '2008-01-01 00:00:00', '2008-01-01', 0),
+(2, '2008-01-01', '2008-01-01 00:00:00', '2008-01-01 00:00:00', '2008-01-01', 1),
+(3, '2008-01-01', '2008-01-01 00:00:00', '2008-01-01 00:00:00', '2008-01-01', 3),
+(4, '2008-01-01', '2008-01-01 00:00:00', '2008-01-01 00:00:00', '2008-01-01', -1),
+(5, '2008-01-01', '2008-01-01 00:00:00', '2008-01-01 00:00:00', '2008-01-01', 8),
+(6, '2008-01-01', '2008-01-01 00:00:00', '2008-01-01 00:00:00', '2008-01-01', NULL);
+SELECT id,
+WEEK(d, mode) AS week_by_date,
+WEEK(dt, mode) AS week_by_datetime,
+YEARWEEK(d, mode) AS yearweek_by_date,
+YEARWEEK(dt, mode) AS yearweek_by_datetime,
+YEARWEEK(ts, mode) AS yearweek_by_timestamp,
+YEARWEEK(s, mode) AS yearweek_by_string
+FROM temporal_week_modes
+ORDER BY id;
+➤ id[4,32,0]  ¦  week_by_date[-6,8,0]  ¦  week_by_datetime[-6,8,0]  ¦  yearweek_by_date[-5,64,0]  ¦  yearweek_by_datetime[-5,64,0]  ¦  yearweek_by_timestamp[-5,64,0]  ¦  yearweek_by_string[-5,64,0]  𝄀
+1  ¦  0  ¦  0  ¦  200752  ¦  200752  ¦  200752  ¦  200752  𝄀
+2  ¦  1  ¦  1  ¦  200801  ¦  200801  ¦  200801  ¦  200801  𝄀
+3  ¦  1  ¦  1  ¦  200801  ¦  200801  ¦  200801  ¦  200801  𝄀
+4  ¦  53  ¦  53  ¦  200753  ¦  200753  ¦  200753  ¦  200753  𝄀
+5  ¦  0  ¦  0  ¦  200752  ¦  200752  ¦  200752  ¦  200752  𝄀
+6  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+DROP TABLE temporal_week_modes;
