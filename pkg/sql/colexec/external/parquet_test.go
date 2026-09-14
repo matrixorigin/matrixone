@@ -4765,6 +4765,23 @@ func Test_validateStringDataCount(t *testing.T) {
 		err := validateStringDataCount(ctx, &loader, 0)
 		require.NoError(t, err)
 	}
+
+	for _, tc := range []struct {
+		name    string
+		offsets []uint32
+		want    string
+	}{
+		{name: "first offset is not zero", offsets: []uint32{1, 3}, want: "first string offset"},
+		{name: "offset exceeds buffer", offsets: []uint32{0, 7}, want: "exceeds buffer length"},
+		{name: "offsets decrease", offsets: []uint32{0, 4, 3}, want: "precedes previous offset"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var loader strLoader
+			loader.init(encoding.ByteArrayValues([]byte("abcdef"), tc.offsets))
+			err := validateStringDataCount(ctx, &loader, int64(len(tc.offsets)-1))
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
 }
 
 func Test_validateDictionaryIndicesCount(t *testing.T) {

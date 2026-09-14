@@ -2319,6 +2319,27 @@ func validateStringDataCount(ctx context.Context, loader *strLoader, expectedNon
 		actualCount = int64(len(loader.buf) / loader.size)
 	} else {
 		// ByteArray
+		if len(loader.offsets) > 0 {
+			if loader.offsets[0] != 0 {
+				return moerr.NewInvalidInputf(ctx,
+					"malformed page: first string offset is %d, expected 0",
+					loader.offsets[0])
+			}
+			previous := uint32(0)
+			for i, offset := range loader.offsets {
+				if uint64(offset) > uint64(len(loader.buf)) {
+					return moerr.NewInvalidInputf(ctx,
+						"malformed page: string offset %d at index %d exceeds buffer length %d",
+						offset, i, len(loader.buf))
+				}
+				if i > 0 && offset < previous {
+					return moerr.NewInvalidInputf(ctx,
+						"malformed page: string offset %d at index %d precedes previous offset %d",
+						offset, i, previous)
+				}
+				previous = offset
+			}
+		}
 		if len(loader.offsets) == 0 {
 			actualCount = 0
 		} else {
