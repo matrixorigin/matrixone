@@ -7817,6 +7817,29 @@ func TestGeodeticDiscreteDistanceDispatchAndUnits(t *testing.T) {
 	ok, info := nullUnit.Run()
 	require.True(t, ok, info)
 
+	emptyDistance := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom4326, []string{"POINT EMPTY"}, []bool{false}),
+			NewFunctionTestInput(geom4326, []string{lineB}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre"}, []bool{false}),
+		}, NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}), StDistanceWithUnit)
+	ok, info = emptyDistance.Run()
+	require.True(t, ok, info)
+
+	// Empty geometries still validate the geographic-only unit contract. The
+	// NULL result is a geometry-semantic result, not a way to bypass an invalid
+	// computation SRID.
+	unsupportedSRID := types.T_geometry.ToType()
+	unsupportedSRID.Width = 3858 // SRID 3857
+	emptyUnsupportedSRID := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(unsupportedSRID, []string{"POINT EMPTY"}, []bool{false}),
+			NewFunctionTestInput(unsupportedSRID, []string{lineB}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre"}, []bool{false}),
+		}, unitError, StDistanceWithUnit)
+	ok, info = emptyUnsupportedSRID.Run()
+	require.True(t, ok, info)
+
 	// A NULL unit makes the row NULL before an otherwise invalid SRID pair is
 	// examined. This is required for every unit overload.
 	for _, tc := range []struct {
@@ -7865,6 +7888,24 @@ func TestGeodeticDiscreteDistanceDispatchAndUnits(t *testing.T) {
 		}, NewFunctionTestResult(types.T_float32.ToType(), false, []float32{float32(oneDegreeMeters / 0.3048)}, []bool{false}), StHausdorffDistanceWithUnit32)
 	ok, info = geom32Unit.Run()
 	require.True(t, ok, info)
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "distance", fn: StDistanceWithUnit32},
+		{name: "frechet", fn: StFrechetDistanceWithUnit32},
+	} {
+		t.Run(tc.name+" geometry32 unit", func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom32, []string{line32(lineA)}, []bool{false}),
+					NewFunctionTestInput(geom32, []string{line32(lineB)}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"kilometre"}, []bool{false}),
+				}, NewFunctionTestResult(types.T_float32.ToType(), false, []float32{float32(oneDegreeMeters / 1000)}, []bool{false}), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestSpatialDistanceUnitOverloadsResolve(t *testing.T) {

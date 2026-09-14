@@ -173,4 +173,6 @@ func TestGeodeticDiscreteDistances(t *testing.T) {
 
 	_, ok = GeodeticFrechetDistance(wkt(t, "LINESTRING EMPTY"), b)
 	require.False(t, ok)
+	_, ok = GeodeticDirectedHausdorffDistance(wkt(t, "LINESTRING EMPTY"), b)
+	require.False(t, ok)
 }
