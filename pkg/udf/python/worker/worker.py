@@ -1324,7 +1324,11 @@ def _validate_input_batch_schema(
     # every Field and its metadata for every batch was measurable overhead on
     # small W=1 bursts.  Retain the detailed validation on the mismatch path so
     # a malformed later frame still gets the same contract diagnosis.
-    if batch.schema == expected_schema:
+    # PyArrow's Schema equality ignores metadata by default.  The metadata
+    # carries the frozen logical descriptor and fingerprint, so a later batch
+    # with the same physical type but a different contract must not pass this
+    # fast path.
+    if batch.schema.equals(expected_schema, check_metadata=True):
         return
     _validate_schema(batch.schema, descriptors)
     raise ValueError("TYPE_CONTRACT: input batch schema changed")

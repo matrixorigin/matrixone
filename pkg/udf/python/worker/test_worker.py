@@ -656,6 +656,15 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Arrow type"):
             worker._validate_input_batch_schema(invalid_batch, valid_schema, [descriptor])
 
+        metadata_changed = pa.RecordBatch.from_arrays(
+            [pa.array([1], type=pa.int64())],
+            schema=pa.schema(
+                [pa.field("arg_0", pa.int64(), nullable=True, metadata={b"mo.udf.type": b"tampered"})]
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "logical metadata"):
+            worker._validate_input_batch_schema(metadata_changed, valid_schema, [descriptor])
+
     def test_closing_control_preserves_zero_last_sequence(self):
         fence = {
             "account_id": 1,
