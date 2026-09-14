@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -30,6 +31,9 @@ type expressionVersionClient struct {
 	fakeQueryClient
 	version         int64
 	calls, releases int
+	customResponse  bool
+	response        *query.Response
+	sendErr         error
 }
 
 func (c *expressionVersionClient) NewRequest(m query.CmdMethod) *query.Request {
@@ -37,6 +41,9 @@ func (c *expressionVersionClient) NewRequest(m query.CmdMethod) *query.Request {
 }
 func (c *expressionVersionClient) SendMessage(ctx context.Context, _ string, _ *query.Request) (*query.Response, error) {
 	c.calls++
+	if c.customResponse {
+		return c.response, c.sendErr
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -100,4 +107,32 @@ func TestExpressionProtocolResolvesLegacyAddressOnlyScopes(t *testing.T) {
 	require.True(t, supported)
 	require.Equal(t, 1, client.calls)
 	require.Equal(t, client.calls, client.releases)
+}
+
+func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		response *query.Response
+		err      error
+	}{
+		{"missing response", nil, nil},
+		{"missing version", &query.Response{}, nil},
+		{"error without response", nil, errors.New("probe failed")},
+		{"error with response", &query.Response{}, errors.New("probe failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			client.customResponse = true
+			client.response = tc.response
+			client.sendErr = tc.err
+			ok, err := remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}, defines.MORPCVersion67)
+			require.NoError(t, err)
+			require.False(t, ok, "unknown capabilities must select local placement")
+			want := 0
+			if tc.response != nil {
+				want = 1
+			}
+			require.Equal(t, want, client.releases)
+		})
+	}
 }
