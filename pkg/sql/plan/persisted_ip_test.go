@@ -48,7 +48,7 @@ func TestPersistedIPFunctionProtocolAdmission(t *testing.T) {
 		"create table t(a bigint, b varchar(32) generated always as (inet_ntoa(a)) stored)",
 		"create table t(a bigint, check (inet_ntoa(a) <> ''))",
 	}
-	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71} {
+	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		for _, sql := range statements {
 			t.Run(fmt.Sprintf("%s/v%d", sql, version), func(t *testing.T) {
@@ -56,8 +56,8 @@ func TestPersistedIPFunctionProtocolAdmission(t *testing.T) {
 				require.NoError(t, err)
 				defer stmt.Free()
 				_, err = BuildPlan(ctx, stmt, false)
-				if version < defines.MORPCVersion71 {
-					require.ErrorContains(t, err, "protocol version 71")
+				if version < defines.MORPCVersion72 {
+					require.ErrorContains(t, err, "protocol version 72")
 				} else {
 					require.NoError(t, err)
 				}
@@ -86,10 +86,10 @@ func TestPersistedIPFunctionProtocolAdmissionAcrossOwners(t *testing.T) {
 	expr, err := binder.BindExpr(ast, 0, false)
 	require.NoError(t, err)
 
-	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71} {
+	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		if version < defines.MORPCVersion71 {
-			require.ErrorContains(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, expr), "protocol version 71")
+		if version < defines.MORPCVersion72 {
+			require.ErrorContains(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, expr), "protocol version 72")
 		} else {
 			require.NoError(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, expr))
 		}
@@ -99,7 +99,7 @@ func TestPersistedIPFunctionProtocolAdmissionAcrossOwners(t *testing.T) {
 	require.NoError(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, plain))
 	table := &planpb.TableDef{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: expr}}}}
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
-	require.ErrorContains(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, table), "protocol version 71")
+	require.ErrorContains(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, table), "protocol version 72")
 }
 
 func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
@@ -132,7 +132,7 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 		"create table t(a bigint, b varchar(32) generated always as (inet_ntoa(a)) stored)", 1)
 	columns := []*ColDef{{Name: "a", Typ: planpb.Type{Id: int32(types.T_int64), Width: 64}}}
 
-	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71} {
+	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 			_, err := buildDefaultExprWithColumns(defaultCol,
@@ -156,8 +156,8 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 
 func checkAdmissionResult(t *testing.T, version int64, err error) {
 	t.Helper()
-	if version < defines.MORPCVersion71 {
-		require.ErrorContains(t, err, "protocol version 71")
+	if version < defines.MORPCVersion72 {
+		require.ErrorContains(t, err, "protocol version 72")
 	} else {
 		require.NoError(t, err)
 	}

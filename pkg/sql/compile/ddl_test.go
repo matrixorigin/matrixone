@@ -100,7 +100,7 @@ func TestPersistedIPFunctionAlterTargetAdmission(t *testing.T) {
 	}{
 		{name: "removed expression uses replacement", copyDef: cleanTarget, version: defines.MORPCVersion70},
 		{name: "new expression is rejected before publish", copyDef: newTarget, version: defines.MORPCVersion70, wantErr: true},
-		{name: "new expression is admitted after rollout", copyDef: newTarget, version: defines.MORPCVersion71},
+		{name: "new expression is admitted after rollout", copyDef: newTarget, version: defines.MORPCVersion72},
 		{name: "in-place target remains guarded", copyDef: nil, version: defines.MORPCVersion70, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -109,7 +109,7 @@ func TestPersistedIPFunctionAlterTargetAdmission(t *testing.T) {
 			target := persistedIPFunctionAlterTarget(qry)
 			err := plan.RequirePersistedIPFunctionProtocol(proc.Ctx, proc, target)
 			if tc.wantErr {
-				require.ErrorContains(t, err, "protocol version 71")
+				require.ErrorContains(t, err, "protocol version 72")
 			} else {
 				require.NoError(t, err)
 			}

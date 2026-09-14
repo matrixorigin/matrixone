@@ -180,9 +180,9 @@ func RequiresMORPCVersion59NumericFormatArguments(owner any) (bool, error) {
 	return features.FormatNumericArguments, err
 }
 
-// RequiresMORPCVersion71IPFunctionSemantics reports whether an owner contains
-// an IP function whose serialized execution contract changed in MORPC v71.
-func RequiresMORPCVersion71IPFunctionSemantics(owner any) (bool, error) {
+// RequiresMORPCVersion72IPFunctionSemantics reports whether an owner contains
+// an IP function whose serialized execution contract changed in MORPC v72.
+func RequiresMORPCVersion72IPFunctionSemantics(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.IPFunctionSemantics, err
 }

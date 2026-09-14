@@ -81,6 +81,10 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 			require.ErrorContains(t, err, "corrected IP function semantics require MORPC protocol version 72")
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion71)
+			err = validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+			require.ErrorContains(t, err, "corrected IP function semantics require MORPC protocol version 72")
+
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 		})
@@ -89,6 +93,9 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 	t.Run("new INET_NTOA overload", func(t *testing.T) {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 		err := validateRemoteExpressionPipelineProtocol(proc, remoteIPProtocolPipeline(function.INET_NTOA, 8))
+		require.ErrorContains(t, err, "corrected IP function semantics require MORPC protocol version 72")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion71)
+		err = validateRemoteExpressionPipelineProtocol(proc, remoteIPProtocolPipeline(function.INET_NTOA, 8))
 		require.ErrorContains(t, err, "corrected IP function semantics require MORPC protocol version 72")
 	})
 
@@ -124,6 +131,12 @@ func TestIPFunctionDestinationProtocolValidation(t *testing.T) {
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
+
+	client.version = defines.MORPCVersion71
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainIPFunctionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 
 	client.version = defines.MORPCVersion72
 	c.execType = plan2.ExecTypeAP_MULTICN

@@ -25,7 +25,7 @@ import (
 )
 
 // RequirePersistedIPFunctionProtocol admits catalog-bound expressions only
-// after the deployment-managed common protocol reaches v71. Unlike a remote
+// after the deployment-managed common protocol reaches v72. Unlike a remote
 // pipeline, a catalog default/generated/check/on-update expression can be
 // evaluated locally by an older CN and therefore bypasses the per-send
 // capability check. Call this before folding a newly bound expression and at
@@ -48,7 +48,7 @@ func RequirePersistedIPFunctionProtocol(ctx context.Context, proc *process.Proce
 		if rt := moruntime.ServiceRuntime(proc.GetService()); rt != nil {
 			value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 			version, valid := value.(int64)
-			if ok && valid && version >= defines.MORPCVersion71 {
+			if ok && valid && version >= defines.MORPCVersion72 {
 				return nil
 			}
 		}
@@ -58,6 +58,6 @@ func RequirePersistedIPFunctionProtocol(ctx context.Context, proc *process.Proce
 	}
 	return moerr.NewNotSupported(
 		ctx,
-		"persisted IP function expressions require all CNs to support protocol version 71",
+		"persisted IP function expressions require all CNs to support protocol version 72",
 	)
 }
