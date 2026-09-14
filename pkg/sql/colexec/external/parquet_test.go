@@ -4036,6 +4036,25 @@ func Test_parquet_copyPageToVecMap_valueCountError(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func Test_parquet_copyPageToVecMap_definitionLevelCountError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	st := parquet.Int32Type
+	page := st.NewPage(0, 3, encoding.Int32Values([]int32{1, 2, 3}))
+	pageWithBadLevels := &parquetPageWithDefinitionLevels{
+		Page:     page,
+		levels:   []byte{1},
+		numNulls: 1,
+	}
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	mp := &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}
+
+	err := copyPageToVec(mp, pageWithBadLevels, proc, vec, []int32{1, 2})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "definition levels length 1 != numRows 3")
+	require.Zero(t, vec.Length())
+}
+
 func Test_parquet_decimalBytes_Roundtrip_And_Overflow(t *testing.T) {
 	ctx := context.Background()
 

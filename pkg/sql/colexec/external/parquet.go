@@ -3507,6 +3507,12 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 			"malformed page: expected %d non-null values, but data contains %d",
 			expectedDataCount, len(data))
 	}
+	levels := page.DefinitionLevels()
+	if !noNulls && len(levels) != n {
+		return moerr.NewInvalidInputf(proc.Ctx,
+			"malformed page: definition levels length %d != numRows %d",
+			len(levels), n)
+	}
 
 	length := vec.Length()
 	err := vec.PreExtend(n+length, proc.Mp())
@@ -3515,7 +3521,6 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 	}
 	vec.SetLength(n + length)
 	ret := vector.MustFixedColWithTypeCheck[U](vec)
-	levels := page.DefinitionLevels()
 	if !noNulls {
 		nulls.TryExpand(vec.GetNulls(), n+length)
 	}
