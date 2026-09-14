@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"math/big"
 	"math/bits"
 	"strconv"
 
@@ -795,6 +796,65 @@ func (x Decimal256) Div(y Decimal256, scale1, scale2 int32) (z Decimal256, scale
 	return
 }
 
+func decimal256MagnitudeBigInt(x Decimal256) *big.Int {
+	if x.Sign() {
+		x = x.Minus()
+	}
+	value := new(big.Int).SetUint64(x.B192_255)
+	value.Lsh(value, 64)
+	value.Or(value, new(big.Int).SetUint64(x.B128_191))
+	value.Lsh(value, 64)
+	value.Or(value, new(big.Int).SetUint64(x.B64_127))
+	value.Lsh(value, 64)
+	value.Or(value, new(big.Int).SetUint64(x.B0_63))
+	return value
+}
+
+func decimal256FromMagnitudeBigInt(value *big.Int) Decimal256 {
+	var encoded [32]byte
+	value.FillBytes(encoded[:])
+	return Decimal256{
+		B192_255: binary.BigEndian.Uint64(encoded[0:8]),
+		B128_191: binary.BigEndian.Uint64(encoded[8:16]),
+		B64_127:  binary.BigEndian.Uint64(encoded[16:24]),
+		B0_63:    binary.BigEndian.Uint64(encoded[24:32]),
+	}
+}
+
+// decimal256ModScaleUp computes (x*10^scaleDiff)%y without materializing an
+// overflowing scaled coefficient. This is only used after Decimal256.Scale
+// rejects the normal, allocation-free path; the modular exponent keeps memory
+// bounded even when a caller supplies a large scale difference.
+func decimal256ModScaleUp(x, y Decimal256, scaleDiff int32) (Decimal256, error) {
+	modulus := decimal256MagnitudeBigInt(y)
+	if modulus.Sign() == 0 {
+		return Decimal256{}, moerr.NewDivByZeroNoCtx()
+	}
+	power := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDiff)), modulus)
+	value := decimal256MagnitudeBigInt(x)
+	value.Mul(value, power)
+	value.Mod(value, modulus)
+	return decimal256FromMagnitudeBigInt(value), nil
+}
+
+// decimal256ModByScaledDivisor computes x%(y*10^scaleDiff) after scaling y
+// overflows. For scaleDiff>=77, 10^scaleDiff is already greater than the
+// largest unsigned Decimal256 magnitude, so the positive remainder is x.
+func decimal256ModByScaledDivisor(x, y Decimal256, scaleDiff int32) (Decimal256, error) {
+	divisor := decimal256MagnitudeBigInt(y)
+	if divisor.Sign() == 0 {
+		return Decimal256{}, moerr.NewDivByZeroNoCtx()
+	}
+	if scaleDiff >= 77 {
+		return x, nil
+	}
+	power := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDiff)), nil)
+	divisor.Mul(divisor, power)
+	value := decimal256MagnitudeBigInt(x)
+	value.Mod(value, divisor)
+	return decimal256FromMagnitudeBigInt(value), nil
+}
+
 func (x Decimal256) Mod(y Decimal256, scale1, scale2 int32) (z Decimal256, scale int32, err error) {
 	signx := x.Sign()
 	x1 := x
@@ -808,16 +868,26 @@ func (x Decimal256) Mod(y Decimal256, scale1, scale2 int32) (z Decimal256, scale
 	}
 	if scale1 > scale2 {
 		scale = scale1
-		y1, err = y1.Scale(scale - scale2)
-	} else {
+		scaleDiff := scale - scale2
+		y1, err = y1.Scale(scaleDiff)
+		if err != nil {
+			z, err = decimal256ModByScaledDivisor(x1, y1, scaleDiff)
+		} else {
+			z, err = x1.Mod256(y1)
+		}
+	} else if scale1 < scale2 {
 		scale = scale2
-		x1, err = x1.Scale(scale - scale1)
+		scaleDiff := scale - scale1
+		x1, err = x1.Scale(scaleDiff)
+		if err != nil {
+			z, err = decimal256ModScaleUp(x1, y1, scaleDiff)
+		} else {
+			z, err = x1.Mod256(y1)
+		}
+	} else {
+		scale = scale1
+		z, err = x1.Mod256(y1)
 	}
-	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal256 Mod overflow: %s%%%s", x.Format(scale1), y.Format(scale2))
-		return
-	}
-	z, err = x1.Mod256(y1)
 	if err != nil {
 		err = moerr.NewInvalidInputNoCtxf("Decimal256 Mod overflow: %s%%%s", x.Format(scale1), y.Format(scale2))
 		return
@@ -1036,49 +1106,81 @@ func (x Decimal128) Div128(y Decimal128) (Decimal128, error) {
 			}
 		}
 	} else {
-		if x.Less(y) {
-			x.B64_127 = 0
-			x.B0_63 = 0
-		} else {
-			n := bits.LeadingZeros64(y.B64_127)
-			v, _ := bits.Div64(x.B64_127, x.B0_63, y.Right(64-n).B0_63)
-			v >>= 63 - n
-			if v&1 == 0 {
-				x.B0_63 = v >> 1
-			} else {
-				z, _ := y.Mul128(Decimal128{v, 0})
-				if x.Left(1).Less(z) {
-					x.B0_63 = v >> 1
-				} else {
-					x.B0_63 = (v >> 1) + 1
-				}
-			}
-			x.B64_127 = 0
+		// Avoid doubling x and y*q to decide rounding: either intermediate can
+		// overflow even when x, y, and the rounded quotient all fit in D128.
+		q, remainder, err := x.div128TruncQuoRem(y)
+		if err != nil {
+			return x, err
 		}
+
+		// Round half-up iff remainder >= ceil(y/2), without forming 2*remainder.
+		threshold := y.Right(1)
+		if y.B0_63&1 != 0 {
+			var carry uint64
+			threshold.B0_63, carry = bits.Add64(threshold.B0_63, 1, 0)
+			threshold.B64_127 += carry
+		}
+		if remainder.Compare(threshold) >= 0 {
+			// Here y >= 2^64 and x < 2^127, so the rounded quotient fits in B0_63.
+			q.B0_63++
+		}
+		return q, nil
 	}
 	return x, nil
 }
 
 func (x Decimal128) div128Trunc(y Decimal128) (Decimal128, error) {
+	q, _, err := x.div128TruncQuoRem(y)
+	return q, err
+}
+
+// div128TruncQuoRem returns an exact quotient and remainder for positive
+// operands. The normalized high-limb estimate can be one too large because
+// normalization discards low divisor bits; correct it before multiplying so
+// an otherwise representable quotient is not mistaken for overflow.
+func (x Decimal128) div128TruncQuoRem(y Decimal128) (Decimal128, Decimal128, error) {
 	if y.B0_63 == 0 && y.B64_127 == 0 {
-		return x, moerr.NewInvalidInputNoCtxf("Decimal128 Div by Zero: %s/%s", x.Format(0), y.Format(0))
+		return x, Decimal128{}, moerr.NewInvalidInputNoCtxf("Decimal128 Div by Zero: %s/%s", x.Format(0), y.Format(0))
 	}
 	if y.B64_127 == 0 {
-		x.B64_127, y.B64_127 = bits.Div64(0, x.B64_127, y.B0_63)
-		x.B0_63, _ = bits.Div64(y.B64_127, x.B0_63, y.B0_63)
-	} else {
-		if x.Less(y) {
-			x.B64_127 = 0
-			x.B0_63 = 0
-		} else {
-			n := bits.LeadingZeros64(y.B64_127)
-			v, _ := bits.Div64(x.B64_127, x.B0_63, y.Right(64-n).B0_63)
-			v >>= 63 - n
-			x.B0_63 = v >> 1
-			x.B64_127 = 0
+		qHi, remainderHi := bits.Div64(0, x.B64_127, y.B0_63)
+		qLo, remainder := bits.Div64(remainderHi, x.B0_63, y.B0_63)
+		return Decimal128{B0_63: qLo, B64_127: qHi}, Decimal128{B0_63: remainder}, nil
+	}
+	if x.Less(y) {
+		return Decimal128{}, x, nil
+	}
+
+	n := bits.LeadingZeros64(y.B64_127)
+	v, _ := bits.Div64(x.B64_127, x.B0_63, y.Right(64-n).B0_63)
+	v >>= 63 - n
+	q := Decimal128{B0_63: v >> 1}
+	product, mulErr := y.Mul128(q)
+	if mulErr != nil || product.Compare(x) > 0 {
+		var err error
+		q, err = q.Sub128(Decimal128{B0_63: 1})
+		if err != nil {
+			return Decimal128{}, Decimal128{}, err
+		}
+		product, err = y.Mul128(q)
+		if err != nil {
+			return Decimal128{}, Decimal128{}, err
+		}
+		if product.Compare(x) > 0 {
+			return Decimal128{}, Decimal128{}, moerr.NewInternalErrorNoCtx("Decimal128 division quotient correction failed")
 		}
 	}
-	return x, nil
+
+	remainder, err := x.Sub128(product)
+	if err != nil {
+		return Decimal128{}, Decimal128{}, err
+	}
+	// The normalized divisor is rounded down, so the quotient estimate cannot
+	// undershoot. After the optional decrement above, remainder must be < y.
+	if remainder.Compare(y) >= 0 {
+		return Decimal128{}, Decimal128{}, moerr.NewInternalErrorNoCtx("Decimal128 division quotient correction failed")
+	}
+	return q, remainder, nil
 }
 
 // Div128Trunc is the exported version of div128Trunc for integer division (DIV)

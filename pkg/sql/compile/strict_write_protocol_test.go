@@ -34,13 +34,13 @@ func TestStrictWriteRequiresCompleteWorkerReporting(t *testing.T) {
 	attempt := newWarningAttempt(c.proc, true)
 	defer attempt.finish(false, nil)
 	wire := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
-	for _, version := range []int64{defines.MORPCVersion66, defines.MORPCVersion67} {
+	for _, version := range []int64{defines.MORPCVersion67, defines.MORPCVersion68} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainStrictWriteWorkers())
 		err := validateStrictWriteDestination(c.proc, wire)
-		if version < defines.MORPCVersion67 {
+		if version < defines.MORPCVersion68 {
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 			require.Equal(t, c.addr, c.cnList[0].Addr)
 			require.Error(t, err)
@@ -49,7 +49,7 @@ func TestStrictWriteRequiresCompleteWorkerReporting(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
-	client.version = defines.MORPCVersion66
+	client.version = defines.MORPCVersion67
 	c.stmt = &tree.Select{} // internal SELECT inherits the strict parent's intent
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}

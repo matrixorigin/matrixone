@@ -14,7 +14,12 @@
 
 package geo
 
-import "github.com/golang/geo/s2"
+import (
+	"math"
+
+	"github.com/golang/geo/s2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
 
 // geodetic.go implements spherical (SRID 4326, WGS 84 lon/lat) measures and
 // predicates using the S2 geometry library. Distances are returned in meters
@@ -31,6 +36,98 @@ const EarthRadiusMeters = 6371008.8
 
 func s2Point(c Coord) s2.Point {
 	return s2.PointFromLatLng(s2.LatLngFromDegrees(c.Y, c.X))
+}
+
+// ValidateGeodeticCoordinates verifies that every non-empty coordinate is a
+// finite WGS 84 longitude/latitude pair. Call it at the effective SRID-4326
+// measurement boundary before invoking the kernels below: S2 normalizes
+// out-of-range coordinates instead of rejecting them. SRID-0 Cartesian callers
+// must not apply this check.
+func ValidateGeodeticCoordinates(g Geometry) error {
+	return validateGeodeticCoordinates(g, 0)
+}
+
+func validateGeodeticCoordinates(g Geometry, depth int) error {
+	if g == nil {
+		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	if depth > maxGeometryNestingDepth {
+		return moerr.NewInvalidInputNoCtxf("geometry collection nesting depth exceeds %d", maxGeometryNestingDepth)
+	}
+	switch v := g.(type) {
+	case Point:
+		if v.IsEmpty {
+			return nil
+		}
+		return validateGeodeticCoordinate(Coord{X: v.X, Y: v.Y})
+	case LineString:
+		return validateGeodeticCoordinatesInSlice(v.Points)
+	case Polygon:
+		for _, ring := range v.Rings {
+			if err := validateGeodeticCoordinatesInSlice(ring); err != nil {
+				return err
+			}
+		}
+	case MultiPoint:
+		for _, point := range v.Points {
+			if point.IsEmpty {
+				continue
+			}
+			if err := validateGeodeticCoordinate(Coord{X: point.X, Y: point.Y}); err != nil {
+				return err
+			}
+		}
+	case MultiLineString:
+		for _, line := range v.Lines {
+			if err := validateGeodeticCoordinatesInSlice(line.Points); err != nil {
+				return err
+			}
+		}
+	case MultiPolygon:
+		for _, polygon := range v.Polygons {
+			for _, ring := range polygon.Rings {
+				if err := validateGeodeticCoordinatesInSlice(ring); err != nil {
+					return err
+				}
+			}
+		}
+	case GeometryCollection:
+		for _, sub := range v.Geometries {
+			if err := validateGeodeticCoordinates(sub, depth+1); err != nil {
+				return err
+			}
+		}
+	default:
+		// Avoid formatting the interface value here: retaining a %T diagnostic
+		// makes otherwise-valid concrete geometries escape to the heap.
+		return moerr.NewInvalidInputNoCtx("unsupported geometry type for geodetic calculation")
+	}
+	return nil
+}
+
+func validateGeodeticCoordinatesInSlice(coords []Coord) error {
+	for _, coord := range coords {
+		if err := validateGeodeticCoordinate(coord); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateGeodeticCoordinate(coord Coord) error {
+	if math.IsNaN(coord.X) || math.IsInf(coord.X, 0) {
+		return moerr.NewInvalidInputNoCtx("SRID 4326 longitude must be finite")
+	}
+	if coord.X < -180 || coord.X > 180 {
+		return moerr.NewInvalidInputNoCtxf("SRID 4326 longitude %v is out of range [-180, 180]", coord.X)
+	}
+	if math.IsNaN(coord.Y) || math.IsInf(coord.Y, 0) {
+		return moerr.NewInvalidInputNoCtx("SRID 4326 latitude must be finite")
+	}
+	if coord.Y < -90 || coord.Y > 90 {
+		return moerr.NewInvalidInputNoCtxf("SRID 4326 latitude %v is out of range [-90, 90]", coord.Y)
+	}
+	return nil
 }
 
 // geomEmpty reports whether g has no coordinates.
@@ -50,6 +147,9 @@ func polylineMeters(pts []Coord) float64 {
 }
 
 // LengthMeters returns the geodesic length of all line components of g.
+// Callers must validate effective-SRID-4326 coordinates with
+// ValidateGeodeticCoordinates first; this numeric-only kernel does not return
+// coordinate-validation errors.
 func LengthMeters(g Geometry) float64 {
 	switch v := g.(type) {
 	case LineString:
@@ -74,33 +174,65 @@ func LengthMeters(g Geometry) float64 {
 // --- Area -----------------------------------------------------------------
 
 // loopFromRing builds an S2 loop from a WKB ring (dropping the repeated closing
-// vertex). The loop's winding follows the ring's: by OGC convention the enclosed
-// region lies to the left of a counter-clockwise ring, so we orient the S2 loop
-// counter-clockwise (positive planar signed area) and trust the input winding to
-// decide which side is the interior.
-//
-// We deliberately avoid s2.Loop.Normalize(), which unconditionally selects the
-// smaller of the two regions a loop bounds: that would silently turn a
-// larger-than-hemisphere polygon into its complement, inverting its area and
-// containment. (Polygons spanning a pole or the antimeridian remain a deferred
-// corner case — planar winding is ill-defined there.)
+// vertex). For a non-polar ring whose longitudes fit in an open wedge narrower
+// than 180 degrees, the ring bounds a local region; Normalize makes that choice
+// independent of input winding. This is important at the antimeridian, where a
+// local edge from 179 degrees to -179 degrees looks like a 358-degree edge to a
+// planar shoelace calculation. Outside that proven local domain, retain the
+// historical winding-based conversion because Normalize would silently replace
+// a deliberately larger-than-hemisphere region with its complement.
 func loopFromRing(ring []Coord) *s2.Loop {
 	end := len(ring)
 	if end > 1 && ring[0] == ring[end-1] {
 		end--
 	}
-	ccw := ringSignedArea(ring) >= 0
 	pts := make([]s2.Point, 0, end)
-	if ccw {
-		for i := 0; i < end; i++ {
-			pts = append(pts, s2Point(ring[i]))
-		}
-	} else {
-		for i := end - 1; i >= 0; i-- {
-			pts = append(pts, s2Point(ring[i]))
-		}
+	for i := 0; i < end; i++ {
+		pts = append(pts, s2Point(ring[i]))
+	}
+	loop := s2.LoopFromPoints(pts)
+	if geodeticRingIsLocal(ring[:end]) {
+		loop.Normalize()
+		return loop
+	}
+	if ringSignedArea(ring) >= 0 {
+		return loop
+	}
+	for i := 0; i < end/2; i++ {
+		j := end - 1 - i
+		pts[i], pts[j] = pts[j], pts[i]
 	}
 	return s2.LoopFromPoints(pts)
+}
+
+// geodeticRingIsLocal reports whether all vertices fit in an open longitude
+// wedge narrower than 180 degrees relative to the first vertex. Such a ring,
+// when it is a valid nondegenerate boundary and contains no pole vertex, lies
+// in an open hemisphere, so S2.Normalize selects its intended local region.
+// Coordinate/topology validation remains the caller's responsibility.
+func geodeticRingIsLocal(ring []Coord) bool {
+	if len(ring) < 3 {
+		return false
+	}
+	firstLon := ring[0].X
+	minOffset, maxOffset := 0.0, 0.0
+	for _, c := range ring {
+		if math.Abs(c.Y) >= 90 {
+			return false
+		}
+		offset := math.Mod(c.X-firstLon+180, 360)
+		if offset < 0 {
+			offset += 360
+		}
+		offset -= 180
+		if offset < minOffset {
+			minOffset = offset
+		}
+		if offset > maxOffset {
+			maxOffset = offset
+		}
+	}
+	return maxOffset-minOffset < 180
 }
 
 func polygonMeters2(p Polygon) float64 {
@@ -118,6 +250,9 @@ func polygonMeters2(p Polygon) float64 {
 }
 
 // AreaSquareMeters returns the geodesic area of all areal components of g.
+// Callers must validate effective-SRID-4326 coordinates with
+// ValidateGeodeticCoordinates first; this numeric-only kernel does not return
+// coordinate-validation errors.
 func AreaSquareMeters(g Geometry) float64 {
 	switch v := g.(type) {
 	case Polygon:
@@ -201,7 +336,11 @@ func polygonsOf(g Geometry) []Polygon {
 
 // DistanceMeters returns the minimum geodesic distance in meters between g1 and
 // g2. ok is false when either geometry is empty. The distance is 0 when the
-// geometries intersect or one contains a point of the other.
+// geometries intersect or one contains a point of the other. Callers must
+// validate both geometries according to their operation's coordinate
+// contract first (for effective SRID 4326, use
+// ValidateGeodeticCoordinates); this kernel's boolean reports emptiness, not
+// coordinate-validation errors.
 func DistanceMeters(g1, g2 Geometry) (dist float64, ok bool) {
 	if geomEmpty(g1) || geomEmpty(g2) {
 		return 0, false

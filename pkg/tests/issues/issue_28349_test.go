@@ -23,6 +23,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
@@ -80,6 +81,35 @@ func TestIssue28349AutoIncrementPublicPaths(t *testing.T) {
 			var value int64
 			require.NoError(t, conn.QueryRowContext(ctx, statement).Scan(&value))
 			return value
+		}
+		queryOtherInt64Rows := func(t *testing.T, otherConn *sql.Conn, statement string, columns int) [][]int64 {
+			t.Helper()
+			rows, err := otherConn.QueryContext(ctx, statement)
+			require.NoErrorf(t, err, "query failed on CN1: %s", statement)
+			defer rows.Close()
+			var result [][]int64
+			for rows.Next() {
+				values := make([]int64, columns)
+				dest := make([]any, columns)
+				for i := range values {
+					dest[i] = &values[i]
+				}
+				require.NoError(t, rows.Scan(dest...))
+				result = append(result, values)
+			}
+			require.NoError(t, rows.Err())
+			return result
+		}
+		assertAutoIncrementSeries := func(t *testing.T, rows [][]int64, source string) {
+			t.Helper()
+			require.Len(t, rows, 3, "%s must return all generated rows", source)
+			for i, row := range rows {
+				require.Equal(t, int64(i+1), row[1], "%s must preserve inserted values", source)
+				require.Equal(t, int64(3), row[0]%4, "%s IDs must follow offset 3 with increment 4", source)
+				if i > 0 {
+					require.Equal(t, int64(4), row[0]-rows[i-1][0], "%s IDs must be one increment apart", source)
+				}
+			}
 		}
 
 		exec(t, fmt.Sprintf("create database `%s`", dbName))
@@ -296,11 +326,45 @@ func TestIssue28349AutoIncrementPublicPaths(t *testing.T) {
 		require.NoError(t, err)
 		defer other.Close()
 		other.SetMaxOpenConns(1)
-		_, err = other.ExecContext(ctx, fmt.Sprintf("use `%s`", dbName))
+		otherConn, err := other.Conn(ctx)
 		require.NoError(t, err)
-		_, err = other.ExecContext(ctx,
+		defer otherConn.Close()
+		_, err = otherConn.ExecContext(ctx, fmt.Sprintf("use `%s`", dbName))
+		require.NoError(t, err)
+		insertResult, err := otherConn.ExecContext(ctx,
 			"set auto_increment_increment=4; set auto_increment_offset=3; insert into ai_remote(v) values (1),(2),(3)")
 		require.NoError(t, err)
+		writerAffectedRows, err := insertResult.RowsAffected()
+		require.NoError(t, err)
+
+		// Freshness-sacrificing mode does not promise that an independent CN0
+		// transaction immediately sees a CN1 commit. Preserve that first read
+		// as diagnostics, without treating a stale snapshot as a data-loss bug.
+		// Scan nullable aggregates so an empty result still leaves useful evidence.
+		var immediateCount, immediateMinMod, immediateSpan sql.NullInt64
+		err = conn.QueryRowContext(ctx,
+			"select count(*), min(id)%4, max(id)-min(id) from ai_remote where v>0").
+			Scan(&immediateCount, &immediateMinMod, &immediateSpan)
+		require.NoError(t, err)
+		immediateCN0Rows := queryInt64Rows(t,
+			"select id, v from ai_remote where v>0 order by id", 2)
+		writerCN1Rows := queryOtherInt64Rows(t, otherConn,
+			"select id, v from ai_remote where v>0 order by id", 2)
+		t.Logf("cross-CN auto-increment diagnostic: CN1 affected_rows=%d, immediate CN0 aggregate=(count:%+v,min(id)%%4:%+v,max-min:%+v), immediate CN0 rows=%v, CN1 rows=%v",
+			writerAffectedRows, immediateCount, immediateMinMod, immediateSpan, immediateCN0Rows, writerCN1Rows)
+
+		// Wait for the writer CN's latest committed timestamp to be applied on
+		// CN0 before asserting cross-CN visibility. The helper uses a bounded
+		// timestamp wait; no scheduler delay or polling is involved.
+		writerCommitTS := cn1.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+		require.False(t, writerCommitTS.IsEmpty(), "CN1 must publish the autocommit timestamp")
+		testutils.WaitLogtailApplied(t, writerCommitTS, cn)
+
+		require.Equal(t, int64(3), writerAffectedRows)
+		assertAutoIncrementSeries(t, writerCN1Rows, "CN1 writer session")
+		cn0RowsAfterApply := queryInt64Rows(t,
+			"select id, v from ai_remote where v>0 order by id", 2)
+		assertAutoIncrementSeries(t, cn0RowsAfterApply, "CN0 after logtail apply")
 		require.Equal(t, [][]int64{{3, 3, 8}}, queryInt64Rows(t,
 			"select count(*), min(id)%4, max(id)-min(id) from ai_remote where v>0", 3))
 		require.Equal(t, int64(4), queryInt64(t, "select count(distinct id) from ai_remote"))

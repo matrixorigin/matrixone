@@ -38,7 +38,7 @@ func (c *Compile) constrainStrictWriteWorkers() error {
 	if !required {
 		return nil
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion67)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion68)
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func validateStrictWriteDestination(proc *process.Process, p *pipeline.Pipeline)
 		return nil
 	}
 	if p != nil && p.Node != nil {
-		supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion67)
+		supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion68)
 		if err != nil {
 			return err
 		}
@@ -63,5 +63,5 @@ func validateStrictWriteDestination(proc *process.Process, p *pipeline.Pipeline)
 			return nil
 		}
 	}
-	return moerr.NewNotSupportedNoCtx("remote strict writes require complete GROUP_CONCAT cut reporting (MORPC version 67)")
+	return moerr.NewNotSupportedNoCtx("remote strict writes require complete GROUP_CONCAT cut reporting (MORPC version 68)")
 }

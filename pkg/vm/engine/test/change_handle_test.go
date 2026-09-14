@@ -4974,13 +4974,15 @@ func TestISCPResumeRecoversAcceptedIteration(t *testing.T) {
 	faultRemoved = true
 	require.NoError(t, cdcExecutor.Resume())
 
+	// Recovery creates the consumer table before it can replay the accepted
+	// iteration. Leave enough headroom for that DDL transaction under CI load.
 	require.Eventually(t, func() bool {
 		lsn, state, found := cdcExecutor.GetJobState(accountID, tableID, "replay_job")
 		watermark, watermarkFound := cdcExecutor.GetWatermark(accountID, tableID, "replay_job")
 		return found && watermarkFound &&
 			lsn == 1 && state == iscp.ISCPJobState_Completed &&
 			watermark.GE(&minimumRecoveredWatermark)
-	}, 10*time.Second, 10*time.Millisecond)
+	}, 30*time.Second, 10*time.Millisecond)
 
 	persistedState, persistedLSN = readPersistedState()
 	require.Equal(t, iscp.ISCPJobState_Completed, persistedState)

@@ -122,6 +122,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateGroupConcatTimeZoneDestination(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}

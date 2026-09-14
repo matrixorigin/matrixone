@@ -67,7 +67,7 @@ func TestStrictGroupConcatOldWorkerCannotCommit(t *testing.T) {
 			// Rollback verification must not force unrelated metadata queries
 			// (including information_schema's subscription discovery) onto CNs.
 			oldVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion66)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion67)
 			defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
 			oldForce := plan.GetForceScanOnMultiCN()
 			plan.SetForceScanOnMultiCN(true)

@@ -17,11 +17,6 @@ grp    group_concat(c, ,)
 1    a
 2    b,c
 3    E,C,D,d,d,D
-SELECT grp,group_concat(c) FROM group_concat_01 GROUP BY grp;
-grp    group_concat(c, ,)
-1    a
-2    b,c
-3    E,C,D,d,d,D
 SELECT grp,group_concat(a,c) FROM group_concat_01 GROUP BY grp;
 grp    group_concat(a, c, ,)
 1    1a
