@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -274,42 +275,109 @@ func appendLeafValue(
 
 	switch targetType {
 	case types.T_bool:
-		return vector.AppendFixed(vec, v.Boolean(), false, proc.Mp())
+		value, err := parquetValueToBool(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, value, false, proc.Mp())
 	case types.T_int8:
-		return vector.AppendFixed(vec, int8(v.Int32()), false, proc.Mp())
+		value, err := parquetRowValueToInt64(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		if value < math.MinInt8 || value > math.MaxInt8 {
+			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows TINYINT", value)
+		}
+		return vector.AppendFixed(vec, int8(value), false, proc.Mp())
 	case types.T_int16:
-		return vector.AppendFixed(vec, int16(v.Int32()), false, proc.Mp())
+		value, err := parquetRowValueToInt64(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		if value < math.MinInt16 || value > math.MaxInt16 {
+			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows SMALLINT", value)
+		}
+		return vector.AppendFixed(vec, int16(value), false, proc.Mp())
 	case types.T_int32:
-		return vector.AppendFixed(vec, v.Int32(), false, proc.Mp())
+		value, err := parquetRowValueToInt64(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		if value < math.MinInt32 || value > math.MaxInt32 {
+			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows INT", value)
+		}
+		return vector.AppendFixed(vec, int32(value), false, proc.Mp())
 	case types.T_int64:
-		if st.Kind() == parquet.Int32 {
-			return vector.AppendFixed(vec, int64(v.Int32()), false, proc.Mp())
+		value, err := parquetRowValueToInt64(proc.Ctx, st, v)
+		if err != nil {
+			return err
 		}
-		return vector.AppendFixed(vec, v.Int64(), false, proc.Mp())
+		return vector.AppendFixed(vec, value, false, proc.Mp())
 	case types.T_uint8:
-		return vector.AppendFixed(vec, uint8(v.Int32()), false, proc.Mp())
+		value, err := parquetRowValueToUint64(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		if value > math.MaxUint8 {
+			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows TINYINT UNSIGNED", value)
+		}
+		return vector.AppendFixed(vec, uint8(value), false, proc.Mp())
 	case types.T_uint16:
-		return vector.AppendFixed(vec, uint16(v.Int32()), false, proc.Mp())
+		value, err := parquetRowValueToUint64(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		if value > math.MaxUint16 {
+			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows SMALLINT UNSIGNED", value)
+		}
+		return vector.AppendFixed(vec, uint16(value), false, proc.Mp())
 	case types.T_uint32:
-		if st.Kind() == parquet.Int32 {
-			return vector.AppendFixed(vec, uint32(v.Int32()), false, proc.Mp())
+		value, err := parquetRowValueToUint64(proc.Ctx, st, v)
+		if err != nil {
+			return err
 		}
-		return vector.AppendFixed(vec, uint32(v.Int64()), false, proc.Mp())
+		if value > math.MaxUint32 {
+			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows INT UNSIGNED", value)
+		}
+		return vector.AppendFixed(vec, uint32(value), false, proc.Mp())
 	case types.T_uint64:
-		return vector.AppendFixed(vec, uint64(v.Int64()), false, proc.Mp())
-	case types.T_float32:
-		return vector.AppendFixed(vec, v.Float(), false, proc.Mp())
-	case types.T_float64:
-		if st.Kind() == parquet.Float {
-			return vector.AppendFixed(vec, float64(v.Float()), false, proc.Mp())
+		value, err := parquetRowValueToUint64(proc.Ctx, st, v)
+		if err != nil {
+			return err
 		}
-		return vector.AppendFixed(vec, v.Double(), false, proc.Mp())
+		return vector.AppendFixed(vec, value, false, proc.Mp())
+	case types.T_float32:
+		value, err := parquetValueToFloat32(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, value, false, proc.Mp())
+	case types.T_float64:
+		value, err := parquetValueToFloat64(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, value, false, proc.Mp())
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob,
 		types.T_binary, types.T_varbinary:
 		return vector.AppendBytes(vec, v.ByteArray(), false, proc.Mp())
 	default:
 		return moerr.NewNYIf(proc.Ctx, "row mode convert to %s", targetType.String())
 	}
+}
+
+func parquetRowValueToInt64(ctx context.Context, st parquet.Type, v parquet.Value) (int64, error) {
+	if isParquetRoundedIntegerSource(st) {
+		return parquetValueToRoundedInt64(ctx, st, v)
+	}
+	return parquetValueToInt64(ctx, st, v)
+}
+
+func parquetRowValueToUint64(ctx context.Context, st parquet.Type, v parquet.Value) (uint64, error) {
+	if isParquetRoundedIntegerSource(st) {
+		return parquetValueToRoundedUint64(ctx, st, v)
+	}
+	return parquetValueToUint64(ctx, st, v)
 }
 
 // processNestedValue processes a nested column value

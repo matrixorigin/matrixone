@@ -3314,6 +3314,40 @@ func TestParquetPageRowsStayWithinRowGroup(t *testing.T) {
 	require.ErrorContains(t, validateParquetPageRows(ctx, 1, 0, 6, 5), "row position 6")
 }
 
+func TestParquetRowModeLeafConversionsRejectOverflow(t *testing.T) {
+	proc := testutil.NewProc(t)
+	int32File, _ := writeColumnAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
+		{parquet.Int32Value(256).Level(0, 0, 0)},
+	})
+	int64File, _ := writeColumnAndGetPage(t, parquet.Leaf(parquet.Int64Type), []parquet.Row{
+		{parquet.Int64Value(math.MaxInt64).Level(0, 0, 0)},
+	})
+
+	cases := []struct {
+		name   string
+		col    *parquet.Column
+		value  parquet.Value
+		target types.T
+		want   string
+	}{
+		{name: "int8", col: int32File.Root().Column("c"), value: parquet.Int32Value(128), target: types.T_int8, want: "overflows TINYINT"},
+		{name: "uint8", col: int32File.Root().Column("c"), value: parquet.Int32Value(-1), target: types.T_uint8, want: "negative parquet value"},
+		{name: "int32 from int64", col: int64File.Root().Column("c"), value: parquet.Int64Value(math.MaxInt64), target: types.T_int32, want: "overflows INT"},
+		{name: "uint32", col: int64File.Root().Column("c"), value: parquet.Int64Value(1 << 32), target: types.T_uint32, want: "overflows INT UNSIGNED"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(types.New(tc.target, 0, 0))
+			def := &plan.ColDef{Typ: plan.Type{Id: int32(tc.target)}}
+			err := appendLeafValue(tc.value, tc.col, vec, def, proc)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+			require.Zero(t, vec.Length())
+		})
+	}
+}
+
 func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Leaf(parquet.BooleanType)
