@@ -1218,7 +1218,7 @@ func (l *store) updateCNLabel(ctx context.Context, label pb.CNStoreLabel) error 
 }
 
 func (l *store) updateCNWorkState(ctx context.Context, workState pb.CNWorkState) error {
-	state, err := l.getCheckerState()
+	state, err := l.getCheckerStateWithContext(ctx)
 	if err != nil {
 		return err
 	}
