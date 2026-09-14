@@ -368,6 +368,35 @@ func TestInputBatchEncoderReusesSchemaAndPreservesRange(t *testing.T) {
 	require.Equal(t, int64(30), secondValues.Value(0))
 }
 
+func TestInputBatchEncoderCachesVariableWidthParameterAcrossRanges(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer input.Free(mp)
+	for index, value := range []string{"zero", "one", "two", "three"} {
+		require.NoError(t, vector.AppendBytes(input, []byte(value), index == 2, mp))
+	}
+	encoder, err := newInputBatchEncoder(
+		[]*vector.Vector{input}, []types.Type{types.T_varchar.ToType()},
+	)
+	require.NoError(t, err)
+
+	first, _, err := encoder.build(0, 2)
+	require.NoError(t, err)
+	defer first.Release()
+	second, _, err := encoder.build(2, 2)
+	require.NoError(t, err)
+	defer second.Release()
+
+	firstValues := first.Column(0).(*array.String)
+	require.Equal(t, "zero", firstValues.Value(0))
+	require.Equal(t, "one", firstValues.Value(1))
+	secondValues := second.Column(0).(*array.String)
+	require.True(t, secondValues.IsNull(0))
+	require.Equal(t, "three", secondValues.Value(1))
+}
+
 func TestInputBatchEncoderBulkPrimitivePreservesRangeNullsAndConstants(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	defer mpool.DeleteMPool(mp)
