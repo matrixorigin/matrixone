@@ -135,11 +135,11 @@ func benchmarkEncodeInputBatch(b *testing.B, typ types.Type) {
 	}
 }
 
-// encodeInputBatchRebuildBaseline is a benchmark-only reference for the
-// pre-optimization path. It intentionally rebuilds the Arrow record for every
-// size probe while sharing the reusable Flight writer with production. This
-// measures input record construction and probe avoidance without counting
-// repeated schema serialization as a second optimization.
+// encodeInputBatchRebuildBaseline is a benchmark-only reference for repeated
+// Arrow record construction. It intentionally rebuilds the record and its
+// input encoder for every size probe while sharing the reusable Flight writer
+// with production. This measures record construction and probe avoidance
+// without counting repeated schema serialization as a second optimization.
 func encodeInputBatchRebuildBaseline(
 	encoder *inputBatchEncoder,
 	start, remaining, maxBytes, maxRows int64,
