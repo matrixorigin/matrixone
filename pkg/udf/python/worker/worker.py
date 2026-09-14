@@ -80,6 +80,11 @@ MAX_HANDLER_PROCESSES = 8
 MAX_ACCOUNT_HANDLER_PROCESSES = MAX_HANDLER_PROCESSES
 MAX_OWNER_HANDLER_PROCESSES = MAX_HANDLER_PROCESSES // 2
 _DEFAULT_HANDLER_SLOTS = threading.BoundedSemaphore(MAX_HANDLER_PROCESSES)
+# Materializing a scalar column once is useful for a substantial batch, but
+# costs more than indexed access for the tiny batches common in short calls.
+# Keep this threshold local to the worker conversion path; it is not a wire
+# or admission limit and does not change the handler's batch semantics.
+SCALAR_MATERIALIZATION_MIN_ROWS = 64
 _CONTROL_KEYS = frozenset(
     {
         "version",
@@ -1341,6 +1346,54 @@ def _scalar_input(array: pa.Array, row: int, descriptor: Dict[str, Any]):
     return value
 
 
+def _scalar_input_value(value: Any, descriptor: Dict[str, Any]):
+    if value is None:
+        return None
+    type_id = int(descriptor["type_id"])
+    if type_id in (VECF32, VECF64):
+        # A scalar vector is exposed as read-only bytes.  Consumers can use
+        # memoryview.cast("f"/"d") without receiving a mutable Arrow buffer.
+        import struct
+        values = value
+        fmt = "f" if type_id == VECF32 else "d"
+        return memoryview(struct.pack("<" + fmt * len(values), *values))
+    if type_id in (DATE, DATETIME, TIMESTAMP):
+        zero = bool(value["is_zero"])
+        child = value["value"]
+        if type_id == DATE:
+            return SqlDate(zero, None if zero else child)
+        if type_id == DATETIME:
+            return SqlDatetime(zero, None if zero else child)
+        return SqlTimestamp(zero, None if zero else child)
+    if type_id == JSON:
+        return _canonical_json_text(value)
+    if type_id == UUID:
+        return _uuid.UUID(bytes=bytes(value))
+    return value
+
+
+def _scalar_column_values(array: pa.Array):
+    """Materialize cheap fixed-width scalar columns once per batch.
+
+    Calling Array.__getitem__().as_py() for every argument and row crosses
+    the PyArrow/Python boundary repeatedly.  Primitive values have a bounded
+    representation under the batch row/byte limits, so one to_pylist() call
+    lets the scalar loop reuse those Python objects.  Keep small, nested, and
+    variable-width values on the indexed path: that avoids retaining a second
+    copy of user data while preserving the same per-row conversion contract.
+    """
+    if len(array) < SCALAR_MATERIALIZATION_MIN_ROWS:
+        return None
+    data_type = array.type
+    if (
+        pa.types.is_boolean(data_type)
+        or pa.types.is_integer(data_type)
+        or pa.types.is_floating(data_type)
+    ):
+        return array.to_pylist()
+    return None
+
+
 def _canonical_json_text(value: str) -> str:
     if not isinstance(value, str):
         raise ValueError("TYPE_CONTRACT: JSON value must be text")
@@ -1678,12 +1731,46 @@ def _execute_handler_batch(
         else:
             call_context = ScalarContext(sdk_version, _CallLogger(), statement_context)
             values = []
-            for row in range(batch.num_rows):
-                params = [_scalar_input(batch.column(index), row, args[index]) for index in range(batch.num_columns)]
-                if null_policy == NULL_RETURN and any(value is None for value in params):
-                    values.append(None)
+            if batch.num_rows < SCALAR_MATERIALIZATION_MIN_ROWS:
+                for row in range(batch.num_rows):
+                    params = [
+                        _scalar_input(batch.column(index), row, args[index])
+                        for index in range(batch.num_columns)
+                    ]
+                    if null_policy == NULL_RETURN and any(value is None for value in params):
+                        values.append(None)
+                    else:
+                        values.append(handler(call_context, *params))
+            else:
+                columns = [batch.column(index) for index in range(batch.num_columns)]
+                scalar_columns = [
+                    _scalar_column_values(column) for column in columns
+                ]
+                if not any(column_values is not None for column_values in scalar_columns):
+                    for row in range(batch.num_rows):
+                        params = [
+                            _scalar_input(columns[index], row, args[index])
+                            for index in range(batch.num_columns)
+                        ]
+                        if null_policy == NULL_RETURN and any(value is None for value in params):
+                            values.append(None)
+                        else:
+                            values.append(handler(call_context, *params))
                 else:
-                    values.append(handler(call_context, *params))
+                    for row in range(batch.num_rows):
+                        params = [
+                            _scalar_input_value(
+                                column_values[row]
+                                if column_values is not None
+                                else columns[index][row].as_py(),
+                                args[index],
+                            )
+                            for index, column_values in enumerate(scalar_columns)
+                        ]
+                        if null_policy == NULL_RETURN and any(value is None for value in params):
+                            values.append(None)
+                        else:
+                            values.append(handler(call_context, *params))
             output = values
         output_array = _output_array(output, result_descriptor, batch.num_rows)
         if result_schema is None:
