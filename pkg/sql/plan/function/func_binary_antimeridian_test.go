@@ -127,6 +127,21 @@ func TestWGS84AntimeridianTopologyIsOperandOrderIndependent(t *testing.T) {
 	}
 }
 
+func TestWGS84TopologyIsStableUnderUnevenVertexDensification(t *testing.T) {
+	point := encodeGeometryPayload("POINT(-80 0)", 0, false)
+	for _, line := range []string{
+		"LINESTRING(-80 0,82 0)",
+		"LINESTRING(-80 0,80 0,81 0,82 0)",
+	} {
+		t.Run(line, func(t *testing.T) {
+			line := encodeGeometryPayload(line, 0, false)
+			got, err := geometryPredicateBySRID(geo.SRIDWGS84, line, point, geometryIntersects)
+			require.NoError(t, err)
+			require.True(t, got)
+		})
+	}
+}
+
 func TestWGS84AntimeridianGeometry32AndMaskedRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	g32 := func(wkt string) string {
