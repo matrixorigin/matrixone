@@ -130,7 +130,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return sumAvgTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -148,7 +148,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return sumAvgTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -425,7 +425,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return mysqlNumericAggTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -443,7 +443,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return mysqlNumericAggTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -461,7 +461,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return mysqlNumericAggTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -479,7 +479,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return mysqlNumericAggTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -751,6 +751,46 @@ func typeInList(typ types.T, supported []types.T) bool {
 		}
 	}
 	return false
+}
+
+// mysqlNumericAggTypeCheck implements MySQL's numeric coercion for variance
+// and standard-deviation aggregates. Unlike SUM, these aggregates accept
+// string and temporal expressions and evaluate their numeric representation.
+// BIT's storage domain is unsigned, but its legacy aggregate state is not
+// widened. Bind through the existing UINT64 aggregate instead of changing the
+// interpretation of old BIT partial states or treating BIT width as precision.
+func sumAvgTypeCheck(inputs []types.Type) checkResult {
+	if len(inputs) == 1 && inputs[0].Oid == types.T_bit {
+		return newCheckResultWithCast(0, []types.Type{types.T_uint64.ToType()})
+	}
+	return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+}
+
+func mysqlNumericAggTypeCheck(inputs []types.Type) checkResult {
+	if len(inputs) != 1 {
+		return newCheckResultWithFailure(failedAggParametersWrong)
+	}
+
+	t := inputs[0]
+	switch {
+	case t.Oid == types.T_any:
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
+	case typeInList(t.Oid, SumSupportedTypes):
+		return newCheckResultWithSuccess(0)
+	case t.Oid.IsMySQLString():
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
+	case t.Oid == types.T_date || t.Oid == types.T_time ||
+		t.Oid == types.T_datetime || t.Oid == types.T_timestamp:
+		scale := int32(0)
+		if t.Oid != types.T_date {
+			scale = t.Scale
+		}
+		return newCheckResultWithCast(0, []types.Type{
+			types.New(types.T_decimal128, 38, scale),
+		})
+	default:
+		return newCheckResultWithFailure(failedAggParametersWrong)
+	}
 }
 
 var SumSupportedTypes = []types.T{

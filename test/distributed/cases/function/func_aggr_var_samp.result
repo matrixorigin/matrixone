@@ -31,15 +31,20 @@ select VAR_SAMP(h) from t1;
 ➤ VAR_SAMP(h)[3,38,12]  𝄀
 3005.438266666667
 select VAR_SAMP(i) from t1;
-invalid argument aggregate function var_samp, bad value [DATE]
+➤ VAR_SAMP(i)[3,38,6]  𝄀
+24690296.000000
 select VAR_SAMP(k) from t1;
-invalid argument aggregate function var_samp, bad value [DATETIME]
+➤ VAR_SAMP(k)[3,38,6]  𝄀
+958333333333333401600.000000
 select VAR_SAMP(l) from t1;
-invalid argument aggregate function var_samp, bad value [TIMESTAMP]
+➤ VAR_SAMP(l)[3,38,6]  𝄀
+16358333343166664704000.000000
 select VAR_SAMP(m) from t1;
-invalid argument aggregate function var_samp, bad value [CHAR]
+➤ VAR_SAMP(m)[8,53,31]  𝄀
+2.25
 select VAR_SAMP(n) from t1;
-invalid argument aggregate function var_samp, bad value [VARCHAR]
+➤ VAR_SAMP(n)[8,53,31]  𝄀
+2.25
 drop table t1;
 select VAR_SAMP(99999999999999999.99999);
 ➤ VAR_SAMP(99999999999999999.99999)[3,38,11]  𝄀

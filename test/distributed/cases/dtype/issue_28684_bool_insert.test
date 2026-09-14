@@ -1,0 +1,26 @@
+-- @suite
+-- @case
+-- @desc: numeric literals assigned by direct INSERT VALUES use non-zero BOOL semantics
+-- @label:bvt
+
+drop database if exists issue_28684_bool_insert;
+create database issue_28684_bool_insert;
+use issue_28684_bool_insert;
+
+create table direct_values(
+    id int primary key,
+    b bool
+);
+
+insert into direct_values values
+    (0, 0),
+    (1, 1),
+    (2, 2),
+    (3, 3),
+    (4, 4),
+    (5, -1),
+    (6, null);
+
+select id, b, b is null as b_is_null from direct_values order by id;
+
+drop database issue_28684_bool_insert;

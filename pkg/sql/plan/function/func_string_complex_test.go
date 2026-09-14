@@ -1041,10 +1041,10 @@ func Test_BuiltInCharCheck(t *testing.T) {
 		}
 	}
 
-	// numeric types (float/decimal): cast to int64
+	// numeric and boolean types (float/decimal/bool): cast to int64
 	{
 		got := builtInCharCheck(nil, []types.Type{
-			types.T_float64.ToType(), types.T_decimal128.ToType(),
+			types.T_float64.ToType(), types.T_decimal128.ToType(), types.T_bool.ToType(),
 		})
 		require.Equal(t, succeedWithCast, got.status)
 		for _, ft := range got.finalType {

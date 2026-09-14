@@ -1737,6 +1737,92 @@ func TestHandleCheckActiveTxnKeepsOnlyUnknownCommitCleanupActive(t *testing.T) {
 	)
 }
 
+func TestExternalTxnLivenessCoversActiveTxnQueriesAndLocalRecovery(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			txnID := []byte("session-level-lock")
+			s.cfg.TxnIterFunc = func(func([]byte) bool) {}
+			require.NoError(t, s.RegisterExternalTxn(txnID))
+			defer s.UnregisterExternalTxn(txnID)
+
+			checkReq := &pb.Request{
+				Method: pb.Method_CheckActiveTxn,
+				CheckActiveTxn: pb.CheckActiveTxnRequest{
+					ServiceID: s.serviceID,
+					Txn:       txnID,
+				},
+			}
+			checkResp := acquireResponse()
+			defer releaseResponse(checkResp)
+			s.handleCheckActiveTxn(
+				context.Background(),
+				nil,
+				checkReq,
+				checkResp,
+				&testClientSession{ctx: context.Background()},
+			)
+			require.True(t, checkResp.CheckActiveTxn.Valid)
+			require.True(t, checkResp.CheckActiveTxn.Active)
+
+			getReq := &pb.Request{
+				Method: pb.Method_GetActiveTxn,
+				GetActiveTxn: pb.GetActiveTxnRequest{
+					ServiceID: s.serviceID,
+				},
+			}
+			getResp := acquireResponse()
+			defer releaseResponse(getResp)
+			s.handleGetActiveTxn(
+				context.Background(),
+				nil,
+				getReq,
+				getResp,
+				&testClientSession{ctx: context.Background()},
+			)
+			require.True(t, getResp.GetActiveTxn.Valid)
+			require.Equal(t, [][]byte{txnID}, getResp.GetActiveTxn.Txn)
+
+			canUnlock, _ := s.canUnlockLocalTxn(txnID)
+			require.False(t, canUnlock,
+				"local orphan recovery must preserve externally owned lock txns")
+
+			s.UnregisterExternalTxn(txnID)
+			checkResp = acquireResponse()
+			defer releaseResponse(checkResp)
+			s.handleCheckActiveTxn(
+				context.Background(),
+				nil,
+				checkReq,
+				checkResp,
+				&testClientSession{ctx: context.Background()},
+			)
+			require.True(t, checkResp.CheckActiveTxn.Valid)
+			require.False(t, checkResp.CheckActiveTxn.Active)
+		},
+	)
+}
+
+func TestExternalTxnLivenessIsClearedOnServiceClose(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1"},
+		func(_ *lockTableAllocator, services []*service) {
+			s := services[0]
+			txnID := []byte("session-level-lock")
+			require.NoError(t, s.RegisterExternalTxn(txnID))
+			require.True(t, s.externalTxns.contains(txnID))
+
+			require.NoError(t, s.Close())
+			require.False(t, s.externalTxns.contains(txnID))
+			require.Error(t, s.RegisterExternalTxn(txnID))
+			require.Error(t, s.RegisterExternalTxn(nil))
+		},
+	)
+}
+
 func TestValidRemoteTxnUsesCheckActiveTxn(t *testing.T) {
 	runLockServiceTests(
 		t,

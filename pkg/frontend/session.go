@@ -133,6 +133,11 @@ func init() {
 // TODO: this variable should be configure by set variable
 const MoDefaultErrorCount = 64
 
+const (
+	warningCountSystemVariable = "warning_count"
+	errorCountSystemVariable   = "error_count"
+)
+
 type ShowStatementType int
 
 const (
@@ -1391,10 +1396,38 @@ func (ses *Session) sqlModeHasEnableBoolSumAvg() bool {
 	return ok && has
 }
 
+func (ses *Session) sqlModeHasHighNotPrecedence() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasHighNotPrecedenceValue(value)
+	return ok && has
+}
+
+func (ses *Session) sqlModeParserFlags() mysql.SQLModeFlags {
+	if ses == nil {
+		return 0
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return 0
+	}
+	flags, ok := sqlModeParserFlagsValue(value)
+	if !ok {
+		return 0
+	}
+	return flags
+}
+
 // updateSqlModeCaches evicts cached plans when a sql_mode token that shapes
-// the plan changes membership. Every token the planner reads at bind time
-// must be compared here: the cache is keyed by SQL text alone.
-func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg bool, val interface{}) {
+// the plan or parser output changes membership. Every token the planner or
+// parser reads at bind time must be compared here: the cache is keyed by SQL
+// text alone.
+func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence bool, oldParserFlags mysql.SQLModeFlags, val interface{}) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
 	if !ok {
@@ -1408,8 +1441,17 @@ func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSu
 	if !ok {
 		return
 	}
+	newHighNotPrecedence, ok := sqlModeHasHighNotPrecedenceValue(val)
+	if !ok {
+		return
+	}
+	newParserFlags, ok := sqlModeParserFlagsValue(val)
+	if !ok {
+		return
+	}
 	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy ||
-		oldBoolSumAvg != newBoolSumAvg {
+		oldBoolSumAvg != newBoolSumAvg || oldHighNotPrecedence != newHighNotPrecedence ||
+		oldParserFlags != newParserFlags {
 		ses.cleanCache()
 	}
 }
@@ -1428,6 +1470,7 @@ type errInfo struct {
 	levels        []string
 	maxCnt        int
 	totalWarnings uint64
+	totalErrors   uint64
 	warningBytes  int
 }
 
@@ -1436,7 +1479,9 @@ func (e *errInfo) push(code uint16, msg string) {
 }
 
 func (e *errInfo) pushWithLevel(code uint16, msg, level string) {
-	if !strings.EqualFold(level, "Error") {
+	if strings.EqualFold(level, "Error") {
+		e.addErrorCount(1)
+	} else {
 		e.addWarningCount(1)
 	}
 	e.pushStored(code, msg, level)
@@ -1475,11 +1520,18 @@ func (e *errInfo) pushStored(code uint16, msg, level string) {
 }
 
 func (e *errInfo) addWarningCount(delta uint64) {
-	if ^uint64(0)-e.totalWarnings < delta {
-		e.totalWarnings = ^uint64(0)
-	} else {
-		e.totalWarnings += delta
+	e.totalWarnings = saturatingAddUint64(e.totalWarnings, delta)
+}
+
+func (e *errInfo) addErrorCount(delta uint64) {
+	e.totalErrors = saturatingAddUint64(e.totalErrors, delta)
+}
+
+func saturatingAddUint64(value, delta uint64) uint64 {
+	if ^uint64(0)-value < delta {
+		return ^uint64(0)
 	}
+	return value + delta
 }
 
 func (e *errInfo) appendWarningCount(total uint64) {
@@ -1505,6 +1557,7 @@ func (e *errInfo) reset() {
 	e.msgs = e.msgs[:0]
 	e.levels = e.levels[:0]
 	e.totalWarnings = 0
+	e.totalErrors = 0
 	e.warningBytes = 0
 }
 
@@ -1515,12 +1568,38 @@ func (e *errInfo) snapshot() errInfo {
 		levels:        append([]string(nil), e.levels...),
 		maxCnt:        e.maxCnt,
 		totalWarnings: e.totalWarnings,
+		totalErrors:   e.totalErrors,
 		warningBytes:  e.warningBytes,
 	}
 }
 
 func (e errInfo) length() int {
 	return len(e.codes)
+}
+
+// diagnosticCounts returns the SQL-visible totals. Retained records are only
+// a bounded view for SHOW WARNINGS/ERRORS and must not be used as the count
+// source. The record fallback keeps hand-built test snapshots and any
+// pre-counter state well-defined.
+func (e errInfo) diagnosticCounts() (warningCount, errorCount uint64) {
+	warningCount = e.totalWarnings
+	errorCount = e.totalErrors
+	if warningCount != 0 || errorCount != 0 {
+		return saturatingAddUint64(warningCount, errorCount), errorCount
+	}
+
+	for i := range e.codes {
+		level := "Error"
+		if i < len(e.levels) && e.levels[i] != "" {
+			level = e.levels[i]
+		}
+		if strings.EqualFold(level, "Error") {
+			errorCount = saturatingAddUint64(errorCount, 1)
+		} else {
+			warningCount = saturatingAddUint64(warningCount, 1)
+		}
+	}
+	return saturatingAddUint64(warningCount, errorCount), errorCount
 }
 
 func (e errInfo) warningCount() uint16 {
@@ -2282,6 +2361,15 @@ func (ses *Session) diagnosticsSnapshot() errInfo {
 		return errInfo{}
 	}
 	return ses.errInfo.snapshot()
+}
+
+func (ses *Session) diagnosticsCounts() (warningCount, errorCount uint64) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return 0, 0
+	}
+	return ses.errInfo.diagnosticCounts()
 }
 
 func (ses *Session) GenNewStmtId() uint32 {

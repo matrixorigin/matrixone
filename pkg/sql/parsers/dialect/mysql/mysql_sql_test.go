@@ -60,6 +60,50 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		want      string
+		count     bool
+		errors    bool
+		hasLimit  bool
+		wantError bool
+	}{
+		{name: "warning count", input: "show count(*) warnings", want: "show count(*) warnings", count: true},
+		{name: "error count", input: "show count(*) errors", want: "show count(*) errors", count: true, errors: true},
+		{name: "warning limit", input: "show warnings limit 2", want: "show warnings limit 2", hasLimit: true},
+		{name: "error comma limit", input: "show errors limit 1, 2", want: "show errors limit 2 offset 1", hasLimit: true, errors: true},
+		{name: "warning offset limit", input: "show warnings limit 2 offset 1", want: "show warnings limit 2 offset 1", hasLimit: true},
+		{name: "count limit rejected", input: "show count(*) warnings limit 1", wantError: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.input, 1)
+			if test.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
+
+			switch stmt := stmt.(type) {
+			case *tree.ShowWarnings:
+				require.False(t, test.errors)
+				require.Equal(t, test.count, stmt.Count)
+				require.Equal(t, test.hasLimit, stmt.Limit != nil)
+			case *tree.ShowErrors:
+				require.True(t, test.errors)
+				require.Equal(t, test.count, stmt.Count)
+				require.Equal(t, test.hasLimit, stmt.Limit != nil)
+			default:
+				t.Fatalf("unexpected statement type %T", stmt)
+			}
+		})
+	}
+}
+
 func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create table t (id int, v varchar(20), key MixedCaseIdx(v), unique key `UniQue_Mix`(id))", 1)
@@ -566,6 +610,86 @@ func TestSQLModeParserModes(t *testing.T) {
 		require.Equal(t, uint32(defines.MYSQL_TYPE_FLOAT), firstColumnType(t, stmt).Oid)
 		require.Equal(t, int32(32), firstColumnType(t, stmt).Width)
 	})
+}
+
+func TestHighNotPrecedence(t *testing.T) {
+	ctx := context.Background()
+
+	parseExpr := func(t *testing.T, sql, sqlMode string) tree.Expr {
+		t.Helper()
+		stmt, err := ParseOneWithSQLMode(ctx, sql, 1, sqlMode)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		return firstSelectExpr(t, stmt)
+	}
+
+	t.Run("between changes precedence only when enabled", func(t *testing.T) {
+		defaultExpr := parseExpr(t, "select not 1 between 2 and 3", "")
+		defaultNot, ok := defaultExpr.(*tree.NotExpr)
+		require.True(t, ok)
+		require.IsType(t, &tree.RangeCond{}, defaultNot.Expr)
+
+		highExpr := parseExpr(t, "select not 1 between 2 and 3", "HIGH_NOT_PRECEDENCE")
+		highBetween, ok := highExpr.(*tree.RangeCond)
+		require.True(t, ok)
+		require.IsType(t, &tree.NotExpr{}, highBetween.Left)
+	})
+
+	t.Run("in changes precedence only when enabled", func(t *testing.T) {
+		defaultExpr := parseExpr(t, "select not 0 in (0, 1)", "")
+		defaultNot, ok := defaultExpr.(*tree.NotExpr)
+		require.True(t, ok)
+		defaultIn, ok := defaultNot.Expr.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.IN, defaultIn.Op)
+
+		highExpr := parseExpr(t, "select not 0 in (0, 1)", "HIGH_NOT_PRECEDENCE")
+		highIn, ok := highExpr.(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.IN, highIn.Op)
+		require.IsType(t, &tree.NotExpr{}, highIn.Left)
+	})
+
+	t.Run("high NOT is accepted in simple-expression unary positions", func(t *testing.T) {
+		minusExpr, ok := parseExpr(t, "select - not 0", "HIGH_NOT_PRECEDENCE").(*tree.UnaryExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.UNARY_MINUS, minusExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, minusExpr.Expr)
+
+		bangExpr, ok := parseExpr(t, "select ! not 0", "HIGH_NOT_PRECEDENCE").(*tree.UnaryExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.UNARY_MARK, bangExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, bangExpr.Expr)
+
+		likeExpr, ok := parseExpr(t, "select '1' like not 0", "HIGH_NOT_PRECEDENCE").(*tree.ComparisonExpr)
+		require.True(t, ok)
+		require.Equal(t, tree.LIKE, likeExpr.Op)
+		require.IsType(t, &tree.NotExpr{}, likeExpr.Right)
+	})
+
+	for _, sql := range []string{
+		"select not (1 between 2 and 3)",
+		"select (not 1) between 2 and 3",
+		"select 1 not in (1)",
+		"select 1 not like '2'",
+		"select 1 not ilike '2'",
+		"select 1 not regexp '2'",
+		"select 1 not between 2 and 3",
+		"select 1 is not null",
+		"select 1 is not unknown",
+		"select 1 is not true",
+		"select 1 is not false",
+		"create table if not exists t_high_not (a int not null)",
+		"alter table t_high_not alter constraint c not enforced",
+		"merge into target t using source s on t.id = s.id when not matched then insert (id) values (s.id)",
+		"merge into target t using source s on t.id = s.id when not matched then insert values (s.id)",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOneWithSQLMode(ctx, sql, 1, "HIGH_NOT_PRECEDENCE")
+			require.NoError(t, err)
+			stmt.Free()
+		})
+	}
 }
 
 // A fulltext MATCH ... AGAINST pattern is stored unescaped and re-escaped on Format.

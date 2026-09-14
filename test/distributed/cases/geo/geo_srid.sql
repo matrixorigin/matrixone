@@ -47,3 +47,56 @@ drop database geo_srid;
 select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(3 4)', 0));
 -- @regex("different srids",true)
 select st_contains(st_geomfromtext('POLYGON((0 0,4 0,4 4,0 4,0 0))', 4326), st_geomfromtext('POINT(2 2)', 0));
+
+-- Overlay, discrete-distance, MBR, envelope, and collect evaluators use the same
+-- SRID admission contract as Distance/Contains. These are typed column inputs
+-- so the execution boundary is exercised rather than only constant folding.
+create database geo_srid_checks;
+use geo_srid_checks;
+create table inputs (poly_4326 geometry srid 4326, poly_0 geometry, line_4326 geometry srid 4326, line_0 geometry, point_4326 geometry srid 4326, point_0 geometry);
+insert into inputs values (st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326), st_geomfromtext('POLYGON((1 1,3 1,3 3,1 3,1 1))', 0), st_geomfromtext('LINESTRING(0 0,1 1)', 4326), st_geomfromtext('LINESTRING(0 0,1 1)', 0), st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 1)', 0));
+-- @regex("different srids",true)
+select st_union(poly_4326, poly_0) from inputs;
+-- @regex("different srids",true)
+select st_intersection(poly_4326, poly_0) from inputs;
+-- @regex("different srids",true)
+select st_difference(poly_4326, poly_0) from inputs;
+-- @regex("different srids",true)
+select st_symdifference(poly_4326, poly_0) from inputs;
+-- @regex("different srids",true)
+select st_frechetdistance(line_4326, line_0) from inputs;
+-- @regex("different srids",true)
+select st_hausdorffdistance(line_4326, line_0) from inputs;
+-- @regex("different srids",true)
+select mbrcontains(poly_4326, point_0) from inputs;
+-- @regex("different srids",true)
+select mbrcovers(poly_4326, point_0) from inputs;
+-- @regex("different srids",true)
+select mbrwithin(point_4326, poly_0) from inputs;
+-- @regex("different srids",true)
+select mbrcoveredby(point_4326, poly_0) from inputs;
+-- @regex("different srids",true)
+select mbrdisjoint(point_4326, point_0) from inputs;
+-- @regex("different srids",true)
+select mbrintersects(point_4326, point_0) from inputs;
+-- @regex("different srids",true)
+select mbrequals(point_4326, point_0) from inputs;
+-- @regex("different srids",true)
+select mbroverlaps(poly_4326, poly_0) from inputs;
+-- @regex("different srids",true)
+select mbrtouches(point_4326, point_0) from inputs;
+-- @regex("different srids",true)
+select st_makeenvelope(point_4326, point_0) from inputs;
+-- @regex("different srids",true)
+select st_collect(point_4326, point_0) from inputs;
+
+-- Equal effective SRIDs remain valid; constructors retain their established
+-- output SRID metadata (Collect propagates input SRID; MakeEnvelope returns 0).
+select st_srid(st_collect(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 1)', 0))) as collect_zero_srid;
+select st_srid(st_collect(point_4326, st_geomfromtext('POINT(1 1)', 4326))) as collect_4326_srid from inputs;
+select st_srid(st_union(poly_4326, st_geomfromtext('POLYGON((2 0,3 0,3 1,2 1,2 0))', 4326))) as union_4326_srid from inputs;
+select st_srid(st_makeenvelope(point_4326, st_geomfromtext('POINT(1 1)', 4326))) as envelope_constructor_srid from inputs;
+create table null_inputs (left_4326 geometry srid 4326, right_0 geometry);
+insert into null_inputs values (NULL, st_geomfromtext('POINT(1 1)', 0));
+select st_collect(left_4326, right_0) as collect_null from null_inputs;
+drop database geo_srid_checks;

@@ -949,6 +949,11 @@ type BindContext struct {
 	numericTableProjectionTypes     map[string][]Type
 	numericTableProjectionAmbiguous map[string][]bool
 	numericCteByName                map[string]*tree.CTE
+	// assignmentIgnore marks a prepared UPDATE IGNORE projection. A direct
+	// parameter must stay TEXT until the writer's cast_ignore; otherwise the
+	// numeric projection context can materialize an ordinary strict cast during
+	// PREPARE and reject malformed values before IGNORE can adjust them.
+	assignmentIgnore bool
 
 	timeAsts []tree.Expr
 
@@ -1140,8 +1145,9 @@ type WhereBinder struct {
 
 type GroupBinder struct {
 	baseBinder
-	selectList        tree.SelectExprs
-	projectionExprPos int32
+	selectList          tree.SelectExprs
+	projectionExprPos   int32
+	allowScalarSubquery bool
 }
 
 type HavingBinder struct {
