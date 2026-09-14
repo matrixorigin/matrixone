@@ -881,8 +881,12 @@ d34
 select st_distance(st_geomfromtext('MULTIPOINT((0 0),(5 0))'), st_geomfromtext('MULTIPOINT((2 0),(8 0))')) as d35;
 d35
 2.0
-select st_distance(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('POINT(0 0)'));
-invalid input: ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs
+select st_distance(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('POINT(0 0)')) as geometry_collection_distance;
+geometry_collection_distance
+0.0
+select st_distance(st_geomfromtext('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT EMPTY),MULTIPOINT EMPTY)'), st_geomfromtext('POINT(0 0)')) as nested_empty_distance;
+nested_empty_distance
+null
 select st_astext(st_endpoint(st_geomfromtext('LINESTRING(0 0,3 4)'))) as last_point;
 last_point
 POINT(3 4)
