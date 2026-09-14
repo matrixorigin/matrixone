@@ -3629,6 +3629,26 @@ func TestParquet_StringJsonMappingRollsBackOnParseError(t *testing.T) {
 	require.Equal(t, seed.String(), types.DecodeJson(vec.GetBytesAt(0)).String())
 }
 
+func TestParquet_StringArrayMappingRollsBackOnParseError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
+		{parquet.ByteArrayValue([]byte("[1,2,3]")).Level(0, 0, 0)},
+		{parquet.ByteArrayValue([]byte("not-a-vector")).Level(0, 0, 0)},
+	})
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 3, NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_array_float32, 3, 0))
+	seed := []float32{9, 8, 7}
+	require.NoError(t, vector.AppendArray(vec, seed, false, proc.Mp()))
+
+	err := mp.mapping(page, proc, vec)
+	require.Error(t, err)
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, seed, vector.GetArrayAt[float32](vec, 0))
+}
+
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	// Reduce batch size so scan steps across multiple calls
 	save := maxParquetBatchCnt

@@ -2605,10 +2605,15 @@ func processStringToArray[T types.ArrayElement](
 	if err := vec.PreExtend(vec.Length()+numRows, proc.Mp()); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, numRows)
+		return err
+	}
 	for i := 0; i < numRows; i++ {
 		if nc.isNull(i) {
 			if err := vector.AppendArray[T](vec, nil, true, proc.Mp()); err != nil {
-				return err
+				return rollback(err)
 			}
 			continue
 		}
@@ -2624,13 +2629,13 @@ func processStringToArray[T types.ArrayElement](
 
 		val, parseErr := parseStringArrayValue[T](data)
 		if parseErr != nil {
-			return wrapParseError(ctx, i, parseErr)
+			return rollback(wrapParseError(ctx, i, parseErr))
 		}
 		if width != types.MaxArrayDimension && len(val) != width {
-			return moerr.NewArrayDefMismatchNoCtx(width, len(val))
+			return rollback(moerr.NewArrayDefMismatchNoCtx(width, len(val)))
 		}
 		if err := vector.AppendArray[T](vec, val, false, proc.Mp()); err != nil {
-			return err
+			return rollback(err)
 		}
 	}
 	return nil
