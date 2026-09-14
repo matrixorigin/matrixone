@@ -47,34 +47,55 @@ func ArrayToBase64[T ArrayElement](input []T) string {
 	return base64.StdEncoding.EncodeToString(EncodeSlice(input))
 }
 
-func ArrayToString[T ArrayElement](input []T) string {
-	var buffer bytes.Buffer
-	_, _ = io.WriteString(&buffer, "[")
+// WriteArrayTo writes the SQL text representation of an array to writer.
+func WriteArrayTo[T ArrayElement](writer io.Writer, input []T) error {
+	writeString := func(value string) error {
+		n, err := io.WriteString(writer, value)
+		if err == nil && n != len(value) {
+			return io.ErrShortWrite
+		}
+		return err
+	}
+
+	if err := writeString("["); err != nil {
+		return err
+	}
 	for i, value := range input {
 		if i > 0 {
-			_, _ = io.WriteString(&buffer, ", ")
+			if err := writeString(", "); err != nil {
+				return err
+			}
 		}
 
 		// following the similar logic of float32 and float64 from
 		// - output.go #extractRowFromVector()
 		// - mysql_protocol.go #makeResultSetTextRow() MYSQL_TYPE_FLOAT  & MYSQL_TYPE_DOUBLE
 		// NOTE: vector does not handle NaN and Inf.
+		var text string
 		switch value := any(value).(type) {
 		case float32:
-			_, _ = io.WriteString(&buffer, strconv.FormatFloat(float64(value), 'f', -1, 32))
+			text = strconv.FormatFloat(float64(value), 'f', -1, 32)
 		case float64:
-			_, _ = io.WriteString(&buffer, strconv.FormatFloat(value, 'f', -1, 64))
+			text = strconv.FormatFloat(value, 'f', -1, 64)
 		case BF16:
-			_, _ = io.WriteString(&buffer, strconv.FormatFloat(float64(value.ToFloat32()), 'f', -1, 32))
+			text = strconv.FormatFloat(float64(value.ToFloat32()), 'f', -1, 32)
 		case Float16:
-			_, _ = io.WriteString(&buffer, strconv.FormatFloat(float64(value.ToFloat32()), 'f', -1, 32))
+			text = strconv.FormatFloat(float64(value.ToFloat32()), 'f', -1, 32)
 		case int8:
-			_, _ = io.WriteString(&buffer, strconv.FormatInt(int64(value), 10))
+			text = strconv.FormatInt(int64(value), 10)
 		case uint8:
-			_, _ = io.WriteString(&buffer, strconv.FormatUint(uint64(value), 10))
+			text = strconv.FormatUint(uint64(value), 10)
+		}
+		if err := writeString(text); err != nil {
+			return err
 		}
 	}
-	_, _ = io.WriteString(&buffer, "]")
+	return writeString("]")
+}
+
+func ArrayToString[T ArrayElement](input []T) string {
+	var buffer bytes.Buffer
+	_ = WriteArrayTo(&buffer, input)
 	return buffer.String()
 }
 

@@ -204,7 +204,7 @@ create table t4(c1 int, c2 int);
 insert into t4 values (-3, 2);
 insert into t4 values (1, 2);
 select c1, -c2 from t4 order by -c1 desc;
-➤ c1[4,32,0]  ¦  -c2[4,32,0]  𝄀
+➤ c1[4,32,0]  ¦  -c2[-5,64,0]  𝄀
 -3  ¦  -2  𝄀
 1  ¦  -2
 drop table if exists t5;

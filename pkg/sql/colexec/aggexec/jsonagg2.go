@@ -17,7 +17,6 @@ package aggexec
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"math"
 	"slices"
 
@@ -469,10 +468,13 @@ func jsonAggregateValueSize(vec *vector.Vector, row uint64) (int, error) {
 		return 9, nil
 	case types.T_decimal64:
 		value := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row].Format(typ.Scale)
-		return jsonAggregateNumberSize(value)
+		return jsonAggregateDecimalSize(value), nil
 	case types.T_decimal128:
 		value := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].Format(typ.Scale)
-		return jsonAggregateNumberSize(value)
+		return jsonAggregateDecimalSize(value), nil
+	case types.T_decimal256:
+		value := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)[row].Format(typ.Scale)
+		return jsonAggregateDecimalSize(value), nil
 	case types.T_date:
 		length := len(vector.MustFixedColNoTypeCheck[types.Date](vec)[row].String())
 		return 1 + jsonUvarintSize(uint64(length)) + length, nil
@@ -517,24 +519,20 @@ func jsonAggregateValueSize(vec *vector.Vector, row uint64) (int, error) {
 	}
 }
 
-func jsonAggregateNumberSize(value string) (int, error) {
-	var data [8]byte
-	_, encoded, err := bytejson.AppendBinaryNumber(data[:0], json.Number(value))
-	if err != nil {
-		return 0, err
-	}
-	return 1 + len(encoded), nil
+func jsonAggregateDecimalSize(value string) int {
+	return 1 + jsonUvarintSize(uint64(len(value))) + len(value)
 }
 
-func appendJSONAggregateNumber(dst []byte, value string) ([]byte, error) {
-	var data [8]byte
-	numberType, encoded, err := bytejson.AppendBinaryNumber(
-		data[:0], json.Number(value))
-	if err != nil {
-		return nil, err
+func appendJSONAggregateDecimal(dst []byte, value string) []byte {
+	dst = append(dst, bytejson.TpCodeDecimal)
+	return appendJSONBinaryString(dst, []byte(value))
+}
+
+func jsonAggregateDecimal(value string) bytejson.ByteJson {
+	return bytejson.ByteJson{
+		Type: bytejson.TpCodeDecimal,
+		Data: appendJSONBinaryString(nil, []byte(value)),
 	}
-	dst = append(dst, byte(numberType))
-	return append(dst, encoded...), nil
 }
 
 func jsonUvarintSize(value uint64) int {
@@ -621,10 +619,13 @@ func appendJSONAggregateValue(
 		return appendJSONFloat64(dst, vector.MustFixedColNoTypeCheck[float64](vec)[row]), nil
 	case types.T_decimal64:
 		value := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[row].Format(typ.Scale)
-		return appendJSONAggregateNumber(dst, value)
+		return appendJSONAggregateDecimal(dst, value), nil
 	case types.T_decimal128:
 		value := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[row].Format(typ.Scale)
-		return appendJSONAggregateNumber(dst, value)
+		return appendJSONAggregateDecimal(dst, value), nil
+	case types.T_decimal256:
+		value := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)[row].Format(typ.Scale)
+		return appendJSONAggregateDecimal(dst, value), nil
 	case types.T_date:
 		value := vector.MustFixedColNoTypeCheck[types.Date](vec)[row].String()
 		dst = append(dst, bytejson.TpCodeString)
@@ -1069,10 +1070,13 @@ func buildValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, erro
 		return bytejson.CreateByteJSONWithCheck(vector.MustFixedColNoTypeCheck[float64](vec)[int(row)])
 	case types.T_decimal64:
 		val := vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[int(row)]
-		return bytejson.CreateByteJSONWithCheck(json.Number(val.Format(typ.Scale)))
+		return jsonAggregateDecimal(val.Format(typ.Scale)), nil
 	case types.T_decimal128:
 		val := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[int(row)]
-		return bytejson.CreateByteJSONWithCheck(json.Number(val.Format(typ.Scale)))
+		return jsonAggregateDecimal(val.Format(typ.Scale)), nil
+	case types.T_decimal256:
+		val := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)[int(row)]
+		return jsonAggregateDecimal(val.Format(typ.Scale)), nil
 	case types.T_date:
 		val := vector.MustFixedColNoTypeCheck[types.Date](vec)[int(row)]
 		return bytejson.CreateByteJSONWithCheck(val.String())

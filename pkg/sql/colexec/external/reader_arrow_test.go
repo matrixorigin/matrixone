@@ -271,7 +271,6 @@ func TestExternalArrowLoadFromLocalMinIOAndRejectsObjectChange(t *testing.T) {
 	account, err := registry.Open(64 << 20)
 	require.NoError(t, err)
 	proc := newArrowLoadTestProc(t)
-	proc.Ctx.Value(config.ParameterUnitKey).(*config.ParameterUnit).SV.ArrowLoad.S3Enabled = true
 	path := "etl:load.arrow"
 	arg := NewArgument().WithEs(externalArrowParam(fs, path, int64(len(payload)), tree.ARROW_CONTAINER_FILE))
 	require.NoError(t, arg.SetAllocationAccount(account))
@@ -603,6 +602,7 @@ func TestExternalArrowPrepareEnforcesWorkerRolloutGate(t *testing.T) {
 	// is what makes this an executing distributed scope on the worker.
 	param.Extern.Parallel = false
 	param.ArrowDistributedExecution = true
+	settings.ArrowLoad.DistributedEnabled = false
 	arg := NewArgument().WithEs(param)
 	err := arg.Prepare(proc)
 	require.ErrorContains(t, err, "distributed Arrow LOAD is disabled")
@@ -625,6 +625,7 @@ func TestExternalArrowPrepareEnforcesWorkerRolloutGate(t *testing.T) {
 	require.NoError(t, err)
 
 	settings.ArrowLoad.DistributedEnabled = false
+	settings.ArrowLoad.S3Enabled = false
 	param = externalArrowParam(nil, "s3-gate.arrow", 1, tree.ARROW_CONTAINER_FILE)
 	param.Extern.ScanType = tree.S3
 	arg = NewArgument().WithEs(param)
@@ -1034,9 +1035,6 @@ func newArrowLoadTestProc(t *testing.T) *process.Process {
 	proc := testutil.NewProc(t)
 	frontend := &config.FrontendParameters{}
 	frontend.SetDefaultValues()
-	// Reader tests exercise an admitted Arrow LOAD. Product defaults are
-	// fail-closed, so this fixture supplies the explicit local opt-in.
-	frontend.ArrowLoad.Enabled = true
 	proc.Ctx = context.WithValue(proc.Ctx, config.ParameterUnitKey,
 		config.NewParameterUnit(frontend, nil, nil, nil))
 	return proc

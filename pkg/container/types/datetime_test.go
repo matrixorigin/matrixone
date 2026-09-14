@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -647,37 +648,32 @@ func TestDatetime_ToTime(t *testing.T) {
 // TestAddIntervalMicrosecond tests AddInterval with MicroSecond unit
 // This test verifies the fix for TIMESTAMPADD(MICROSECOND, 1000000, DATE('2024-12-20'))
 func TestAddIntervalMicrosecond(t *testing.T) {
-	// Test case: DATE('2024-12-20') + 1000000 microseconds = 2024-12-20 00:00:01.000000
-	date, _ := ParseDateCast("2024-12-20")
-	dt := date.ToDatetime()
-
-	// Add 1000000 microseconds (1 second)
-	result, success := dt.AddInterval(1000000, MicroSecond, DateTimeType)
-	require.True(t, success, "AddInterval should succeed for MicroSecond")
-	require.NotEqual(t, Datetime(0), result, "Result should not be zero")
-
-	// Verify the result is 2024-12-20 00:00:01.000000
-	expected, _ := ParseDatetime("2024-12-20 00:00:01.000000", 6)
-	require.Equal(t, expected, result, "DATE + 1000000 microseconds should equal 2024-12-20 00:00:01.000000")
-
-	// Verify the string representation
-	require.Equal(t, "2024-12-20 00:00:01.000000", result.String2(6), "String representation should match")
-
-	// Test with different microsecond values
-	testCases := []struct {
-		microseconds int64
-		expected     string
+	min := DatetimeFromClock(MinDatetimeYear, 1, 1, 0, 0, 0, 0)
+	max := DatetimeFromClock(MaxDatetimeYear, 12, 31, 23, 59, 59, 999999)
+	tests := []struct {
+		name  string
+		start Datetime
+		delta int64
+		want  Datetime
+		valid bool
 	}{
-		{1000000, "2024-12-20 00:00:01.000000"}, // 1 second
-		{500000, "2024-12-20 00:00:00.500000"},  // 0.5 seconds
-		{123456, "2024-12-20 00:00:00.123456"},  // 123456 microseconds
-		{2000000, "2024-12-20 00:00:02.000000"}, // 2 seconds
+		{name: "ordinary fraction", start: DatetimeFromClock(2024, 12, 20, 0, 0, 0, 0), delta: 123456, want: DatetimeFromClock(2024, 12, 20, 0, 0, 0, 123456), valid: true},
+		{name: "exact minimum", start: min, want: min, valid: true},
+		{name: "minimum plus one", start: min, delta: 1, want: min + 1, valid: true},
+		{name: "one below minimum", start: min, delta: -1, valid: false},
+		{name: "two below minimum", start: min, delta: -2, valid: false},
+		{name: "exact maximum", start: max, want: max, valid: true},
+		{name: "one above maximum", start: max, delta: 1, valid: false},
+		{name: "signed addition overflow", start: max, delta: math.MaxInt64, valid: false},
+		{name: "signed subtraction overflow", start: min, delta: math.MinInt64, valid: false},
 	}
-
-	for _, tc := range testCases {
-		result, success := dt.AddInterval(tc.microseconds, MicroSecond, DateTimeType)
-		require.True(t, success, "AddInterval should succeed for %d microseconds", tc.microseconds)
-		require.NotEqual(t, Datetime(0), result, "Result should not be zero for %d microseconds", tc.microseconds)
-		require.Equal(t, tc.expected, result.String2(6), "Result should match expected for %d microseconds", tc.microseconds)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, valid := test.start.AddInterval(test.delta, MicroSecond, DateTimeType)
+			require.Equal(t, test.valid, valid)
+			if test.valid {
+				require.Equal(t, test.want, got)
+			}
+		})
 	}
 }

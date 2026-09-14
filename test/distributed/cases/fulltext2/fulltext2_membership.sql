@@ -94,5 +94,24 @@ create fulltext2 index ftidx_bloom on ft_bloom (body);
 select id, category from ft_bloom where match(body) against('learning') and category = 'tech' order by id;
 select count(*) from ft_bloom where match(body) against('learning') and category = 'tech';
 
+-- ============================================================================
+-- section 4: UUID PK -> CBloomFilter with typed raw-16 fallback.  The loaded
+-- docmap stores canonical UUID text, while the runtime filter hashes raw UUID
+-- bytes; both pushdown settings must still return the same source rows.
+-- ============================================================================
+create table ft_uuid (id uuid primary key, body text not null, category varchar(50) not null);
+insert into ft_uuid values
+(cast('00000000-0000-0000-0000-000000000001' as uuid), 'machine learning is a subset of artificial intelligence', 'tech'),
+(cast('00000000-0000-0000-0000-000000000002' as uuid), 'deep learning uses neural networks to learn from data', 'tech'),
+(cast('00000000-0000-0000-0000-000000000003' as uuid), 'using machine learning to recommend recipes from ingredients', 'food'),
+(cast('00000000-0000-0000-0000-000000000004' as uuid), 'french cooking techniques from around the world', 'food'),
+(cast('00000000-0000-0000-0000-000000000005' as uuid), 'machine learning is transforming sports analytics today', 'sports');
+create fulltext2 index ftidx_uuid on ft_uuid (body);
+set fulltext_bloom_filter_pushdown = 0;
+select id, category from ft_uuid where match(body) against('learning') and category = 'tech' order by id;
+set fulltext_bloom_filter_pushdown = 1;
+select id, category from ft_uuid where match(body) against('learning') and category = 'tech' order by id;
+select count(*) from ft_uuid where match(body) against('learning') and category = 'tech';
+
 set fulltext_bloom_filter_pushdown = 0;
 drop database fulltext2_pushdown;

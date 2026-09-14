@@ -1933,6 +1933,27 @@ func TestCorrelatedScalarAggregateProjectionRunsAfterJoin(t *testing.T) {
 	assertReachablePlanHasNoCorrelatedExpr(t, query)
 }
 
+func TestCorrelatedDistinctAggregateProjectionRunsAfterJoin(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		aggregate string
+	}{
+		{name: "count", aggregate: "count(distinct r.r_name)"},
+		{name: "sum", aggregate: "sum(distinct r.r_regionkey)"},
+		{name: "avg", aggregate: "avg(distinct r.r_regionkey)"},
+		{name: "group concat", aggregate: "group_concat(distinct r.r_name order by r.r_name)"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+				"select n.n_nationkey, (select "+test.aggregate+
+					" from tpch.region r where r.r_regionkey = n.n_regionkey) from tpch.nation n")
+			require.NoError(t, err)
+			require.True(t, hasCorrelatedAggregatePostJoinProjection(logicPlan.GetQuery()))
+			assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+		})
+	}
+}
+
 func assertReachablePlanHasNoCorrelatedExpr(t *testing.T, query *plan.Query) {
 	t.Helper()
 	visited := make(map[int32]bool)
@@ -2184,6 +2205,36 @@ func TestMakeAggregateEmptyResultExpr(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRestoreAggregateEmptyResultIgnoresDistinctFlag(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	for _, test := range []struct {
+		name     string
+		typ      plan.Type
+		wantCase bool
+	}{
+		{name: "count", typ: plan.Type{Id: int32(types.T_int64)}, wantCase: true},
+		{name: "sum", typ: plan.Type{Id: int32(types.T_int64)}},
+		{name: "avg", typ: plan.Type{Id: int32(types.T_float64)}},
+		{name: "group_concat", typ: plan.Type{Id: int32(types.T_text)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			aggregate := newFlattenSubqueryTestAggregate(test.name, test.typ)
+			aggregate.GetF().Func.Obj = int64(uint64(aggregate.GetF().Func.Obj) | function.Distinct)
+			projected := GetColExpr(test.typ, 10, 0)
+			projected.Typ.NotNullable = false
+
+			restored, err := builder.restoreAggregateEmptyResult(projected, aggregate, test.name)
+			require.NoError(t, err)
+			if test.wantCase {
+				require.Equal(t, "case", restored.GetF().Func.ObjName)
+				require.Equal(t, int64(0), restored.GetF().Args[1].GetLit().GetI64Val())
+			} else {
+				require.Same(t, projected, restored)
+			}
+		})
+	}
+}
+
 func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedShapes(t *testing.T) {
 	const (
 		aggregateTag int32 = 21
@@ -2320,6 +2371,7 @@ func newFlattenSubqueryTestAggregate(name string, typ plan.Type) *plan.Expr {
 	ids := map[string]int64{
 		"sum":           aggexec.AggIdOfSum,
 		"avg":           aggexec.AggIdOfAvg,
+		"group_concat":  aggexec.AggIdOfGroupConcat,
 		"min":           aggexec.AggIdOfMin,
 		"max":           aggexec.AggIdOfMax,
 		"json_arrayagg": aggexec.AggIdOfJsonArrayAgg,

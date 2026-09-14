@@ -1222,6 +1222,13 @@ type ExplainDiagnosticReader interface {
 	TakeExplainDiagnostics() []*plan.Query
 }
 
+// ExplainVectorTopStatsReader is an optional Reader capability used only by
+// standalone EXPLAIN ANALYZE. The reader borrows stats until Close and updates
+// it synchronously while executing vector Top-K pushdown.
+type ExplainVectorTopStatsReader interface {
+	SetExplainVectorTopStats(*objectio.IndexReaderTopStats)
+}
+
 // ReaderFilterResult describes which rows survived a ReaderFilter. Sels must
 // contain sorted, unique positions in the callback's input batch, and its
 // length must equal the filtered batch row count. Sels is borrowed from the

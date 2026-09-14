@@ -605,9 +605,9 @@ func TestJSONAggregateValueEncodingTypeMatrix(t *testing.T) {
 		vec.Free(mp)
 	}
 	jsonVec := vector.NewVec(types.T_json.ToType())
-	require.NoError(t, vector.AppendBytes(jsonVec, nil, false, mp))
-	_, err = appendJSONAggregateValue(nil, jsonVec, 0)
-	require.Error(t, err)
+	// Invalid JSON is rejected before it can reach the aggregate consumer.
+	require.Error(t, vector.AppendBytes(jsonVec, nil, false, mp))
+	require.Zero(t, jsonVec.Length())
 	jsonVec.Free(mp)
 
 	arrays := []*vector.Vector{
@@ -774,7 +774,7 @@ func TestAggregateStatePrimitiveBoundaryMatrix(t *testing.T) {
 	var state aggState
 	require.NoError(t, state.initWithAllocation(mp, 1, 1, saved, false, nil))
 	state.argCnt[0] = 1
-	require.ErrorContains(t, state.writeStateArg(mp, 0, io.Discard, saved),
+	require.ErrorContains(t, state.writeStateArg(mp, 0, io.Discard, saved, false),
 		"mismatch count")
 	state.free(mp)
 }

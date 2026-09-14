@@ -187,7 +187,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 	}
 
 	// 3. clear the cache
-	cache.Cache.Remove(storageDef.IndexTableName)
+	cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
 
 	// 4. delete old data first
 	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
@@ -318,9 +318,9 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 	logutil.Infof("[plugin] ivfpq HandleDropIndex: defs=%d", len(defs))
 	// Evict the cached search index so its GPU resources are freed NOW, rather
 	// than lingering until the 5-min VectorIndexCacheTTL housekeeping reaps it.
-	// Mirrors the create-side cache.Cache.Remove(storageDef.IndexTableName).
+	// Mirrors the create-side cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl").
 	if storageDef, ok := defs[catalog.Ivfpq_TblType_Storage]; ok {
-		cache.Cache.Remove(storageDef.IndexTableName)
+		cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
 	}
 	return nil
 }

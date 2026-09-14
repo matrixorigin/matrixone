@@ -8,6 +8,7 @@ remove files from stage if exists 'stage://table_dump_load_stage/full/objects/*'
 remove files from stage if exists 'stage://table_dump_load_stage/metadata/*';
 remove files from stage if exists 'stage://table_dump_load_stage/auto/*';
 remove files from stage if exists 'stage://table_dump_load_stage/auto/objects/*';
+remove files from stage if exists 'stage://table_dump_load_stage/indexed/*';
 create table src (id int primary key, value varchar(32));
 insert into src values (1, 'one'), (2, 'two'), (3, 'three');
 select mo_ctl('dn', 'flush', 'table_dump_load_bvt.src');
@@ -47,10 +48,18 @@ count(*)
 select hist_id > 100000 as auto_increment_restored from auto_dst where value = 'after-load';
 auto_increment_restored
 1
+create table index_src (id varchar(255) primary key, value varchar(32), key idx_value (value));
+dump table index_src to 'stage://table_dump_load_stage/indexed' metadata only;
+create table index_dst (id varchar(255) primary key, value varchar(32), key idx_value (value)) collate=utf8mb4_general_ci;
+load table index_dst from 'stage://table_dump_load_stage/indexed';
+select count(*) from index_dst;
+count(*)
+0
 drop database table_dump_load_bvt;
 remove files from stage if exists 'stage://table_dump_load_stage/full/*';
 remove files from stage if exists 'stage://table_dump_load_stage/full/objects/*';
 remove files from stage if exists 'stage://table_dump_load_stage/metadata/*';
 remove files from stage if exists 'stage://table_dump_load_stage/auto/*';
 remove files from stage if exists 'stage://table_dump_load_stage/auto/objects/*';
+remove files from stage if exists 'stage://table_dump_load_stage/indexed/*';
 drop stage table_dump_load_stage;
