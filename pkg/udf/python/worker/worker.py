@@ -13,8 +13,13 @@ in the sandbox and deployment policy selected for the routine.
 
 from __future__ import annotations
 
-import argparse
-import ast
+import sys
+
+# Handler children execute only the length-prefixed Arrow/pipe contract.  Keep
+# service-side modules out of that import path; the child is started for each
+# invocation burst and cannot reuse the worker's imported Python heap.
+_HANDLER_ENTRY = "--execute-handler" in sys.argv
+
 import contextlib
 import datetime as _datetime
 import decimal as _decimal
@@ -25,13 +30,8 @@ import logging
 import math
 import os
 import pickle
-import queue
-import secrets
-import selectors
 import signal
 import struct
-import subprocess
-import sys
 import threading
 import time
 import uuid as _uuid
@@ -40,13 +40,16 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Optional
 from zoneinfo import TZPATH, ZoneInfo, ZoneInfoNotFoundError
 
+if not _HANDLER_ENTRY:
+    import queue
+    import selectors
+    import subprocess
+
 import pyarrow as pa
 
 # Handler children only need Arrow. Avoid importing Flight on that entry path;
 # the annotations in this module are postponed, and the Flight server class is
 # never instantiated by the handler child.
-_HANDLER_ENTRY = "--execute-handler" in sys.argv
-
 
 class _NoFlightServerBase:
     pass
@@ -896,6 +899,8 @@ def _decode_definition_validation(data: bytes) -> Dict[str, Any]:
 
 def _validate_definition_syntax(value: Dict[str, Any]) -> None:
     """Validate source and the static handler binding without executing it."""
+    import ast
+
     try:
         compile(value["source"], "<matrixone-python-udf>", "exec")
     except SyntaxError as exc:
@@ -2329,6 +2334,10 @@ class _HandlerProcessSession:
                 self._watchdog_process = subprocess.Popen(
                     [
                         sys.executable,
+                        # The watchdog is a standard-library-only helper;
+                        # skipping site-package discovery trims its startup
+                        # without changing the handler's Python environment.
+                        "-S",
                         watchdog_path,
                         str(watchdog_read_fd),
                         str(self._process.pid),
@@ -3507,13 +3516,17 @@ def _safe_error(exc: Exception) -> str:
 
 
 def main() -> None:
+    if _HANDLER_ENTRY:
+        _execute_handler_subprocess()
+        return
+
+    import argparse
+    import secrets
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--execute-handler", action="store_true")
     parser.add_argument("--address")
     args = parser.parse_args()
-    if args.execute_handler:
-        _execute_handler_subprocess()
-        return
     if not args.address:
         parser.error("--address is required for the Flight server")
     logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s %(message)s")
