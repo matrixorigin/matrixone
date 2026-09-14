@@ -2169,6 +2169,7 @@ type fakeFS struct {
 	b           []byte
 	readErr     error
 	readLatency time.Duration
+	shortRead   bool
 
 	lastPolicy          fileservice.Policy
 	lastOffset          int64
@@ -2195,6 +2196,9 @@ func (f *fakeFS) Read(ctx context.Context, v *fileservice.IOVector) error {
 	f.lastOffset = e.Offset
 	if e.Size < 0 {
 		e.Size = int64(len(f.b)) - e.Offset
+	}
+	if f.shortRead && e.Size > 0 {
+		e.Size--
 	}
 	f.lastSize = e.Size
 	if int(e.Offset+e.Size) > len(f.b) {
@@ -5506,6 +5510,22 @@ func Test_fsReaderAt_ReadAt(t *testing.T) {
 	require.Equal(t, int64(6), fs.lastOffset)
 	require.Equal(t, int64(5), fs.lastSize)
 	require.Equal(t, int64(5), param.takeParquetProfile().BytesRead)
+}
+
+func Test_fsReaderAt_ReadAtReturnsEOFForShortRead(t *testing.T) {
+	fs := &fakeFS{b: []byte("hello"), shortRead: true}
+	r := &fsReaderAt{fs: fs, readPath: "fake:short", ctx: context.Background()}
+	buf := make([]byte, 5)
+	n, err := r.ReadAt(buf, 0)
+	require.Equal(t, 4, n)
+	require.ErrorIs(t, err, io.EOF)
+}
+
+func Test_fsReaderAt_ReadAtRejectsNegativeOffset(t *testing.T) {
+	r := &fsReaderAt{fs: &fakeFS{b: []byte("hello")}, ctx: context.Background()}
+	n, err := r.ReadAt(make([]byte, 1), -1)
+	require.Zero(t, n)
+	require.ErrorContains(t, err, "negative offset")
 }
 
 func TestParquetRangeReadAheadCoalescesSequentialReads(t *testing.T) {

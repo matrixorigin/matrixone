@@ -5367,6 +5367,15 @@ func (r *parquetRangeReadAheadReaderAt) ReadAt(p []byte, off int64) (n int, err 
 }
 
 func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if off < 0 {
+		return 0, errors.New("parquet reader received a negative offset")
+	}
+	if r.fs == nil {
+		return 0, errors.New("parquet reader has no file service")
+	}
 	vec := fileservice.IOVector{
 		FilePath: r.readPath,
 		Policy:   fileservice.SkipFullFilePreloads,
@@ -5383,9 +5392,16 @@ func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 	if err != nil {
 		return 0, err
 	}
-	n = int(vec.Entries[0].Size)
+	readSize := vec.Entries[0].Size
+	if readSize < 0 || readSize > int64(len(p)) {
+		return 0, errors.New("file service returned an invalid parquet read size")
+	}
+	n = int(readSize)
 	if n > 0 && r.param != nil {
 		r.param.addParquetProfile(process.ParquetProfileStats{BytesRead: int64(n)})
+	}
+	if n < len(p) {
+		return n, io.EOF
 	}
 	return n, nil
 }
