@@ -1,11 +1,49 @@
 # UT 执行模型与 fixture 生命周期优化设计
 
-- 状态：Proposed for this PR，revision 10
+- 状态：Proposed for this PR，revision 11
 - 适用范围：`Makefile` UT 默认配置、`optools/run_ut.sh`、Go test package 分组、embedded/shared cluster fixture、CI UT 执行模型与资源预算
 - 约束：UT CI 始终只使用现有的一个 runner；不增加 shard matrix、并发 job 或临时 runner。只考虑该 runner 内有界调度和有证据的测试/fixture 优化
 - 设计 owner：UT runner 与测试基础设施；各测试 package 对自己的 fixture reset/cleanup 契约负责
 - 设计门禁：跨 package、跨进程 admission、runner 取消和集群生命周期，命中 execution、ownership、resource 和 public test-contract 多个边界
-- 决策记录：当前 `UT_OVERLAP_PLAN=1` 复用已释放 slot；`UT_OVERLAP_LIGHT=1` 在唯一现有 runner 上启用有界 overlap（light package 并行度最多 2）。用本次 CI 结果与同配置的历史完整运行比较，不额外重跑 serial controls。不得增加 runner，也不采用四 shard 并行 CI；在单 runner 上顺序运行 shard 不能减少总工作量，也不是本 revision 的优化。compile-only prebuild 默认关闭；跨进程 cluster 共享、动态调度、任意缩减测试数据均不在本 revision。
+- 决策记录：`UT_OVERLAP_PLAN=1` 继续复用已释放 slot；light/issues overlap 经实测未达到时间和内存门槛，`UT_OVERLAP_LIGHT` 默认恢复为 `0`，仅保留显式 opt-in。不得增加 runner，也不采用四 shard 并行 CI；在单 runner 上顺序运行 shard 不能减少总工作量，也不是本 revision 的优化。compile-only prebuild 默认关闭；跨进程 cluster 共享、动态调度、任意缩减测试数据均不在本 revision。
+
+## Revision 11: reject the measured light/issues overlap default
+
+### 结果与根因
+
+serial baseline [run 34770551755/job 103759372556](https://github.com/matrixorigin/matrixone/actions/runs/34770551755/job/103759372556?pr=28824)
+耗时 46m16s；light-overlap treatment [run 34773229587/job 103766569633](https://github.com/matrixorigin/matrixone/actions/runs/34773229587/job/103766569633?pr=28824)
+耗时 1h00m53s，均通过。两次 run 的 head SHA 不同（baseline `3d55e1d8`，treatment
+`2140f77a`）；可见代码差异的调度行为只有 `UT_OVERLAP_LIGHT` 默认值从 0 改为 1，其他差异是文档。
+它们使用同一 workflow/job，但不是受控的同一 runner/cache 配对实验，且每种策略只有一次运行。因此该结果足以
+说明 treatment 未达到本 PR 的默认开启验收门槛，不足以估算稳定的平均回归幅度或证明单一因果。
+Treatment 确认实际执行 `UT_OVERLAP_LIGHT=1`，light 使用 `-p2`，并与 issues 并发；baseline 则为
+light `-p6` 后串行 issues。
+
+阶段 checkpoint 显示：baseline light 12m51s + issues 9m20s，共 22m11s；treatment 的
+light/issues 关键路径为 31m35s，反而多 9m24s。两个 run 中 issues package 自身 test 时间接近
+（9m02s vs 9m05s）；treatment 从并发命令启动到 package tests 开始多出约 5m19s，和并发
+编译/资源争用相符，但日志没有单独的 compile wall-time，因此不将其当成已证实的单因果。
+已证实的配置代价是 light 的 package parallelism 从 6 降到 2，而该降幅没有被 overlap 收益抵消。
+
+Treatment 的 HNSW 阶段从 baseline 的 24s 变为 6m04s。HNSW 被移到 light 之前；慢 case 报告
+没有对应的长 HNSW test body，因此这 5m40s 差异更像是 HNSW 首次编译/链接成本从后续被提前，
+但现有成功 artifact 没有编译阶段计时，故仍是推断，不能算作 overlap 的独立因果。embedded
+为 14m14s vs 14m50s，heavy/engine/plan tail 为 5m46s vs 5m04s，基本相近。由此不能把总 job
+差值全部归因于单一因素；不过可见的 light/issues critical path 已明确变差。
+
+Treatment 的 cgroup `memory.max=17179869184`、`memory.peak=17181175808`，`oom=0` 且
+`oom_kill=0`。虽然没有 OOM，但峰值贴近 16-GiB 上限，未满足本设计 `peak <= 0.9 * limit`
+的门槛；job 的 1h00m53s 也超过 60 分钟门槛。因此本次结果不支持默认开启 overlap。恢复
+Makefile 和 runner 脚本的默认值为 `0`；显式 `UT_OVERLAP_LIGHT=1` 仍可用于后续候选验证。
+这个回退只是止损并恢复已测得的 46m16s 调度基线，不代表相对该基线已有新的提速。
+新增 scheduler regression case 固定验证默认关闭，同时保留显式开启、单槽保护、失败传播及
+取消清理用例。不会通过盲目将 `-p2` 提至 `-p4/-p6` 来规避耗时，因为当前内存证据不支持增加
+并发预算。
+
+后续若继续探索单 runner 提速，应先分离 test-body 与编译/链接耗时，并以阶段/包级证据选择
+可重叠子集；不应再用全 light wave 降并行度来换潜在 overlap 上限。保持现有 runner/job 数量，
+也不为构造额外 serial control 重跑 CI。
 
 ## Revision 10: race-UT timeout root cause and single-runner overlap
 
@@ -296,9 +334,9 @@ checkout、race/tags、CPU/memory 和缓存模式的对比证明关键路径收�
 
 ## 7. 交付拆分与当前决策
 
-1. 已落地的前序 revision/PR：70 分钟执行阶段兜底、进程组取消与报告诊断、兼容 fixture 复用、计划阶段释放 slot 重叠；当前 `UT_OVERLAP_PLAN=1`、`UT_OVERLAP_LIGHT=1`、caller `ut_sharded: false`。
-2. 本 revision：补充 cgroup memory limit 诊断并在现有 UT check 直接启用有界 overlap；用历史完整 CI 运行作 baseline，不重跑 default-off controls。完整保留 race tests、报告、失败传播和 TERM 取消。不新增 job/runner，不改测试断言、测试数据、race 覆盖或 shard 分配。
-3. 若本次 CI 失败、超时、OOM 或无法验证内存边界，则恢复 `UT_OVERLAP_LIGHT=0`；否则根据可比历史运行报告真实收益，不以额外 3+3 次 CI 运行作为合并门槛。本 revision 不启用四 shard 并行模式。
+1. 已落地的前序 revision/PR：70 分钟执行阶段兜底、进程组取消与报告诊断、兼容 fixture 复用、计划阶段释放 slot 重叠；当前 `UT_OVERLAP_PLAN=1`、`UT_OVERLAP_LIGHT=0`、caller `ut_sharded: false`。
+2. 本 PR 保留 cgroup memory diagnostics 和有界 overlap scheduler，但默认关闭 light/issues overlap。已测 treatment 完整通过却慢于 serial baseline，且不满足 60 分钟/90% 内存门槛；恢复默认 `0`，显式 `UT_OVERLAP_LIGHT=1` 只作为未来候选，不增加 runner/job，不改测试断言、数据、race 覆盖或 shard 分配。
+3. 只有后续明确拆分编译/测试耗时、提出可验证的新调度方案，并在同一 runner 上满足 wall-time 与内存验收门槛后，才重新考虑默认开启；不为制造 serial control 重跑 CI，也不启用四 shard 并行模式。
 4. 后续仅按 profiling 结果提出重复 setup/fixture merge/data 最小化；每项保留 case oracle、reset 证明和同资源前后测量。跨进程 cluster service 仍需独立设计 ownership、租约、generation、reset、crash 和取消契约。
 
 ### Compatible SQL fixture consolidation

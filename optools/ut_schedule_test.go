@@ -494,20 +494,22 @@ exit 0
 	for _, tc := range []struct {
 		name, parallel, overlap, expectOverlap, expected string
 	}{
+		{name: "default-off", parallel: "6", overlap: "__default__", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
 		{name: "overlap", parallel: "6", overlap: "1", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end"},
 		{name: "sequential-explicit-off", parallel: "6", overlap: "0", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
 		{name: "sequential-single-slot", parallel: "1", overlap: "0", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
 		{name: "single-slot-guard", parallel: "1", overlap: "1", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			script := `source ./run_ut.sh UT
+			script := `if [[ "$UT_OVERLAP_VALUE" == "__default__" ]]; then unset UT_OVERLAP_LIGHT; fi
+source ./run_ut.sh UT
 function logger() { :; }
 function make() { :; }
 function egrep() { echo fake.pb.go; }
 	MO_CL_CUDA=1
 	UT_SHARD=all
 UT_PARALLEL=${UT_PARALLEL_VALUE}
-UT_OVERLAP_LIGHT=${UT_OVERLAP_VALUE}
+if [[ "$UT_OVERLAP_VALUE" != "__default__" ]]; then UT_OVERLAP_LIGHT=${UT_OVERLAP_VALUE}; fi
 UT_OVERLAP_LIGHT_PARALLEL=2
 UT_OVERLAP_PLAN=0
 UT_PREBUILD_EMBEDDED=0

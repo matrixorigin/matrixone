@@ -534,12 +534,10 @@ UT_PREBUILD_EMBEDDED ?= 0
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
-# On the single CI runner, overlap the dependency-disjoint light wave with the
-# exclusive issues package. HNSW remains an exclusive foreground phase first;
-# the overlap helper defaults to two package slots to limit resource pressure.
-# Compare this bounded default with prior complete runs; do not spend CI on
-# redundant serial controls.
-UT_OVERLAP_LIGHT ?= 1
+# Keep light/issues overlap opt-in: the measured treatment was slower than the
+# serial baseline and left insufficient cgroup memory headroom. Re-enable only
+# when a new schedule has same-runner timing and memory evidence.
+UT_OVERLAP_LIGHT ?= 0
 UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
