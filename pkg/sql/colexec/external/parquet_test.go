@@ -29,6 +29,7 @@ import (
 	"iter"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3406,6 +3407,53 @@ func TestParquet_Dictionary_Bool_NullableSlicedPage(t *testing.T) {
 	require.False(t, vec.GetNulls().Contains(1))
 	require.False(t, vec.GetNulls().Contains(2))
 	require.True(t, vec.GetNulls().Contains(3))
+}
+
+func TestParquet_NullableMappingWithAllocationAccount(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	vec, err := vector.NewOffHeapVecWithTypeAndAllocation(types.New(types.T_bool, 0, 0), selection)
+	require.NoError(t, err)
+	defer func() {
+		vec.Free(proc.Mp())
+		require.Zero(t, account.Snapshot().Used)
+		account.Seal()
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	}()
+
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+		{parquet.BooleanValue(false).Level(0, 1, 0)},
+	}
+	cases := []struct {
+		name string
+		node parquet.Node
+	}{
+		{name: "plain", node: parquet.Optional(parquet.Leaf(parquet.BooleanType))},
+		{name: "dictionary", node: parquet.Optional(parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary))},
+	}
+
+	var h ParquetHandler
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, page := writeColumnAndGetPage(t, tc.node, rows)
+			mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+			require.NotNil(t, mp)
+			vec.ResetWithSameType()
+			require.NoError(t, mp.mapping(page, proc, vec))
+			require.Equal(t, []bool{true, false, false}, vector.MustFixedColWithTypeCheck[bool](vec))
+			require.True(t, vec.GetNulls().Contains(1))
+		})
+	}
 }
 
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {

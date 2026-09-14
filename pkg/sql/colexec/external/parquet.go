@@ -3486,6 +3486,21 @@ func copyPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Pro
 	return copyPageToVecMap(mp, page, proc, vec, data, func(v T) T { return v })
 }
 
+func preExtendParquetFixedVector(
+	vec *vector.Vector,
+	rows int,
+	proc *process.Process,
+	needNulls bool,
+) error {
+	if err := vec.PreExtend(rows, proc.Mp()); err != nil {
+		return err
+	}
+	if needNulls {
+		return vec.PreExtendNulls(rows, proc.Mp())
+	}
+	return nil
+}
+
 func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, data []T, itee func(t T) U) error {
 	n := int(page.NumRows())
 
@@ -3519,8 +3534,7 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 	}
 
 	length := vec.Length()
-	err := vec.PreExtend(n+length, proc.Mp())
-	if err != nil {
+	if err := preExtendParquetFixedVector(vec, n+length, proc, !noNulls); err != nil {
 		return err
 	}
 	vec.SetLength(n + length)
@@ -3598,7 +3612,7 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 	}
 	n := int(numValues)
 	length := vec.Length()
-	if err := vec.PreExtend(n+length, proc.Mp()); err != nil {
+	if err := preExtendParquetFixedVector(vec, n+length, proc, !nc.noNulls); err != nil {
 		return err
 	}
 	checkpoint := vec.MakeAppendCheckpoint()
@@ -3710,7 +3724,7 @@ func copyBoolDictPageToVec(
 
 	n := int(page.NumRows())
 	length := vec.Length()
-	if err := vec.PreExtend(n+length, proc.Mp()); err != nil {
+	if err := preExtendParquetFixedVector(vec, n+length, proc, !nc.noNulls); err != nil {
 		return err
 	}
 	vec.SetLength(n + length)
