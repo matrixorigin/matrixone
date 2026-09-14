@@ -290,7 +290,7 @@ func TestBitwiseAggregateDecimalCastVectorMasksAndNulls(t *testing.T) {
 	d128Overflow, err := types.ParseDecimal128("18446744073709551616", d128Type.Width, d128Type.Scale)
 	require.NoError(t, err)
 	assertBitwiseAggregateCast(t, proc, d128Type,
-		[]types.Decimal128{d128Boundary, d128Overflow, types.Decimal128{}},
+		[]types.Decimal128{d128Boundary, d128Overflow, {}},
 		[]bool{false, false, true},
 		[]int64{math.MinInt64, 0, 0}, []bool{false, true, true}, selectList)
 
@@ -300,7 +300,7 @@ func TestBitwiseAggregateDecimalCastVectorMasksAndNulls(t *testing.T) {
 	d256Overflow, err := types.ParseDecimal256("18446744073709551616", d256Type.Width, d256Type.Scale)
 	require.NoError(t, err)
 	assertBitwiseAggregateCast(t, proc, d256Type,
-		[]types.Decimal256{d256Boundary, d256Overflow, types.Decimal256{}},
+		[]types.Decimal256{d256Boundary, d256Overflow, {}},
 		[]bool{false, false, true},
 		[]int64{math.MaxInt64, 0, 0}, []bool{false, true, true}, selectList)
 }
