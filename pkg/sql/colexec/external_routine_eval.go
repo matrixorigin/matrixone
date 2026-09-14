@@ -153,6 +153,10 @@ func validateRoutineCall(call *planpb.RoutineCall) error {
 }
 
 func (e *ExternalRoutineEval) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
+	return e.eval(proc, batches, selectList, false)
+}
+
+func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch, selectList []bool, transfer bool) (output *vector.Vector, evalErr error) {
 	if e == nil || proc == nil || proc.Base == nil {
 		return nil, fmt.Errorf("python udf: evaluator has no process")
 	}
@@ -161,6 +165,14 @@ func (e *ExternalRoutineEval) Eval(proc *process.Process, batches []*batch.Batch
 	if e.freed {
 		return nil, fmt.Errorf("python udf: evaluator is freed")
 	}
+	// Transfer under executionMu, before a concurrent Eval/Free can reuse the
+	// backing. The wrapper retains its allocation policy for the next result.
+	defer func() {
+		if transfer && evalErr == nil {
+			e.result.SetResultVector(nil)
+		}
+	}()
+
 	if err := validateRoutineCall(e.call); err != nil {
 		return nil, err
 	}
@@ -462,7 +474,7 @@ func (e *ExternalRoutineEval) scatter(proc *process.Process, selected *vector.Ve
 }
 
 func (e *ExternalRoutineEval) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
-	return e.Eval(proc, batches, selectList)
+	return e.eval(proc, batches, selectList, true)
 }
 
 func (e *ExternalRoutineEval) ResetForNextQuery() {

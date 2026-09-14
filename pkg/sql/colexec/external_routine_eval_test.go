@@ -402,3 +402,41 @@ func TestExternalRoutineEvalRejectsSourceInExecutablePlan(t *testing.T) {
 	call.GetPython().Source = "def add(ctx, value): return value + 1"
 	require.ErrorContains(t, validateRoutineCall(call), "plan contains source")
 }
+
+func TestExternalRoutineTransfersResultOwnership(t *testing.T) {
+	for _, mode := range []string{"SCALAR", "VECTOR"} {
+		t.Run(mode, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.SetQueryId("result-ownership")
+			proc.GetSessionInfo().TimeZone = time.UTC
+			proc.GetSessionInfo().User = "root"
+			proc.Base.StmtProfile = &process.StmtProfile{}
+			proc.GetStmtProfile().SetQueryStart(time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC))
+			input := vector.NewVec(types.T_int64.ToType())
+			defer input.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixed(input, int64(10), false, proc.Mp()))
+			require.NoError(t, vector.AppendFixed(input, int64(20), false, proc.Mp()))
+			bat := batch.NewWithSize(0)
+			bat.SetRowCount(2)
+			proc.Base.UdfService = &externalRoutineCaptureRuntime{}
+			evaluator, err := newExternalRoutineEval(proc, testExternalRoutineCall(t, mode, udf.NullCallHandler), []ExpressionExecutor{&externalRoutineTestExecutor{vector: input}}, nil)
+			require.NoError(t, err)
+			defer evaluator.Free()
+			owned, err := evaluator.EvalWithoutResultReusing(proc, []*batch.Batch{bat}, []bool{true, false})
+			require.NoError(t, err)
+			// Only free when ownership actually moved, so the pre-fix counterexample
+			// reports the alias without double freeing the evaluator's vector.
+			if owned != evaluator.result.GetResultVector() {
+				defer owned.Free(proc.Mp())
+			}
+			require.NotSame(t, owned, evaluator.result.GetResultVector())
+			_, err = evaluator.Eval(proc, []*batch.Batch{bat}, nil)
+			require.NoError(t, err)
+			evaluator.Free()
+			require.Equal(t, 2, owned.Length())
+			require.Equal(t, int64(11), vector.GetFixedAtNoTypeCheck[int64](owned, 0))
+			require.True(t, owned.IsNull(1))
+		})
+	}
+}
