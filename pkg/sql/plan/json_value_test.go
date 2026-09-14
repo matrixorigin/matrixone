@@ -219,6 +219,184 @@ func TestJSONValueBindingTypeAndDefaultBoundaries(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestJSONValueDefaultValidationMatrix(t *testing.T) {
+	ctx := context.Background()
+	literal := func(value string) tree.Expr {
+		return tree.NewNumVal(value, value, false, tree.P_char)
+	}
+	boolLiteral := func(value bool) tree.Expr {
+		text := "false"
+		if value {
+			text = "true"
+		}
+		return tree.NewNumVal(value, text, false, tree.P_bool)
+	}
+
+	require.Equal(t, "1", jsonValueDefaultNumericText("  TRUE "))
+	require.Equal(t, "0", jsonValueDefaultNumericText("false"))
+	require.Equal(t, "1.25", jsonValueDefaultNumericText("1.25"))
+	gotInt, ok := jsonValueDefaultInt64("true")
+	require.True(t, ok)
+	require.Equal(t, int64(1), gotInt)
+	gotUint, ok := jsonValueDefaultUint64("42")
+	require.True(t, ok)
+	require.Equal(t, uint64(42), gotUint)
+	require.True(t, jsonValueDefaultNumericExactAtScale("1.25", 2))
+	require.True(t, jsonValueDefaultNumericExactAtScale("1", -1))
+	require.False(t, jsonValueDefaultNumericExactAtScale("1.255", 2))
+	require.False(t, jsonValueDefaultNumericExactAtScale("not-a-number", 0))
+
+	text, err := jsonValueDefaultLiteralText(&tree.UnaryExpr{
+		Op:   tree.UNARY_MINUS,
+		Expr: literal("1"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "-1", text)
+	_, err = jsonValueDefaultLiteralText(tree.NewNumVal("", "", false, tree.P_null))
+	require.Error(t, err)
+	_, err = jsonValueDefaultLiteralText(&tree.UnaryExpr{Op: tree.UNARY_PLUS, Expr: tree.NewStrVal("1")})
+	require.Error(t, err)
+	_, err = jsonValueDefaultLiteralText(tree.NewStrVal("1"))
+	require.Error(t, err)
+
+	for _, oid := range []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64} {
+		require.NoError(t, validateJSONValueDefaultLiteral(ctx, literal("7"), types.New(oid, 0, 0)), oid)
+	}
+	for _, tc := range []struct {
+		name  string
+		value string
+		typ   types.Type
+	}{
+		{"int8 overflow", "128", types.New(types.T_int8, 0, 0)},
+		{"int16 overflow", "32768", types.New(types.T_int16, 0, 0)},
+		{"int32 overflow", "2147483648", types.New(types.T_int32, 0, 0)},
+		{"signed fraction", "1.5", types.New(types.T_int64, 0, 0)},
+		{"signed invalid", "not-a-number", types.New(types.T_int64, 0, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, validateJSONValueDefaultLiteral(ctx, literal(tc.value), tc.typ))
+		})
+	}
+
+	for _, oid := range []types.T{types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64} {
+		require.NoError(t, validateJSONValueDefaultLiteral(ctx, literal("7"), types.New(oid, 0, 0)), oid)
+	}
+	for _, tc := range []struct {
+		name  string
+		value string
+		typ   types.Type
+	}{
+		{"uint8 overflow", "256", types.New(types.T_uint8, 0, 0)},
+		{"uint16 overflow", "65536", types.New(types.T_uint16, 0, 0)},
+		{"uint32 overflow", "4294967296", types.New(types.T_uint32, 0, 0)},
+		{"unsigned negative", "-1", types.New(types.T_uint64, 0, 0)},
+		{"unsigned fraction", "1.5", types.New(types.T_uint64, 0, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, validateJSONValueDefaultLiteral(ctx, literal(tc.value), tc.typ))
+		})
+	}
+	require.NoError(t, validateJSONValueDefaultLiteral(ctx, boolLiteral(true), types.New(types.T_float32, 0, 0)))
+	require.NoError(t, validateJSONValueDefaultLiteral(ctx, boolLiteral(false), types.New(types.T_float64, 0, 0)))
+	require.Error(t, validateJSONValueDefaultLiteral(ctx, literal("1e1000"), types.New(types.T_float64, 0, 0)))
+
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		typ := types.New(oid, 6, 2)
+		require.NoError(t, validateJSONValueDefaultLiteral(ctx, literal("1.25"), typ), oid)
+		require.Error(t, validateJSONValueDefaultLiteral(ctx, literal("1.255"), typ), oid)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		value string
+		typ   types.Type
+	}{
+		{"date valid", "2024-01-02", types.New(types.T_date, 0, 0)},
+		{"time valid", "12:34:56.123", types.New(types.T_time, 0, 3)},
+		{"datetime valid", "2024-01-02 12:34:56.123", types.New(types.T_datetime, 0, 3)},
+		{"year valid", "2024", types.New(types.T_year, 0, 0)},
+		{"year numeric fallback", "+2024", types.New(types.T_year, 0, 0)},
+		{"json valid", "1", types.New(types.T_json, 0, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, validateJSONValueDefaultLiteral(ctx, literal(tc.value), tc.typ))
+		})
+	}
+	for _, tc := range []struct {
+		name  string
+		value string
+		typ   types.Type
+	}{
+		{"date invalid", "not-a-date", types.New(types.T_date, 0, 0)},
+		{"time invalid", "not-a-time", types.New(types.T_time, 0, 3)},
+		{"datetime invalid", "not-a-datetime", types.New(types.T_datetime, 0, 3)},
+		{"year invalid", "2156", types.New(types.T_year, 0, 0)},
+		{"json invalid", "not-json", types.New(types.T_json, 0, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Error(t, validateJSONValueDefaultLiteral(ctx, literal(tc.value), tc.typ))
+		})
+	}
+
+	require.NoError(t, validateJSONValueDefaultLiteral(ctx, literal("abc"), types.New(types.T_varchar, 3, 0)))
+	require.Error(t, validateJSONValueDefaultLiteral(ctx, literal("abcd"), types.New(types.T_varchar, 3, 0)))
+	require.NoError(t, validateJSONValueDefaultLiteral(ctx, literal("abc"), types.New(types.T_binary, 3, 0)))
+	require.Error(t, validateJSONValueDefaultLiteral(ctx, literal("abcd"), types.New(types.T_binary, 3, 0)))
+}
+
+func TestJSONValueTargetValidationBoundaries(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, requireJSONValueContractProtocol(ctx, nil))
+	require.NoError(t, validateJSONValueTarget(ctx, types.New(types.T_char, 4, 0)))
+	require.NoError(t, validateJSONValueTarget(ctx, types.New(types.T_json, 0, 0)))
+	require.Error(t, validateJSONValueTarget(ctx, types.New(types.T_bool, 0, 0)))
+	require.Error(t, validateJSONValueTarget(ctx, types.New(types.T_binary, 0, 0)))
+	require.Error(t, validateJSONValueTarget(ctx, types.New(types.T_time, 0, 7)))
+	require.Error(t, validateJSONValueTarget(ctx, types.New(types.T_decimal64, 4, 5)))
+
+	require.Error(t, validateJSONValueTargetSyntax(ctx, nil))
+	require.NoError(t, validateJSONValueTargetSyntax(ctx, &tree.T{InternalType: tree.InternalType{
+		FamilyString: "float",
+		DisplayWith:  tree.NotDefineDisplayWidth,
+		Scale:        tree.NotDefineDec,
+	}}))
+	require.Error(t, validateJSONValueTargetSyntax(ctx, &tree.T{InternalType: tree.InternalType{
+		FamilyString: "double",
+		DisplayWith:  10,
+	}}))
+	require.Error(t, validateJSONValueTargetSyntax(ctx, &tree.T{InternalType: tree.InternalType{
+		FamilyString: "year",
+		DisplayWith:  4,
+	}}))
+}
+
+func TestJSONValueBindingRejectsMalformedStructuredCalls(t *testing.T) {
+	ctx := context.Background()
+	binder := NewDefaultBinder(ctx, NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true), nil, plan.Type{}, nil)
+	document := tree.NewNumVal("1", "1", false, tree.P_char)
+	path := tree.NewNumVal("$", "$", false, tree.P_char)
+
+	_, err := binder.bindJsonValueExpr(&tree.FuncExpr{
+		Exprs:     tree.Exprs{document},
+		JsonValue: &tree.JsonValueSpec{},
+	}, 0)
+	require.Error(t, err)
+	_, err = binder.bindJsonValueExpr(&tree.FuncExpr{
+		Exprs: tree.Exprs{document, path},
+		JsonValue: &tree.JsonValueSpec{
+			Returning: &tree.JsonValueReturning{},
+		},
+	}, 0)
+	require.Error(t, err)
+	_, err = binder.bindJsonValueExpr(&tree.FuncExpr{
+		Exprs: tree.Exprs{document, path},
+		JsonValue: &tree.JsonValueSpec{
+			OnError: tree.JsonValueResponse{Mode: tree.JsonValueDefaultResponse},
+		},
+	}, 0)
+	require.Error(t, err)
+}
+
 func TestJSONValueSemanticNormalizationAndClone(t *testing.T) {
 	parseExpr := func(sql string) tree.Expr {
 		stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
