@@ -831,6 +831,9 @@ func parquetListElementLeaf(sc *parquet.Column) (*parquet.Column, bool) {
 }
 
 func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper {
+	if sc == nil || sc.Type() == nil {
+		return nil
+	}
 	st := sc.Type()
 	if st.PhysicalType() == nil {
 		return nil
