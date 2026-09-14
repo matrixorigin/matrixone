@@ -3297,6 +3297,15 @@ func TestParquetRowCountOnlyRejectsInvalidRowGroup(t *testing.T) {
 	require.Zero(t, bat.RowCount())
 }
 
+func TestParquetPageModeEOFRequiresCompleteRowGroup(t *testing.T) {
+	ctx := context.Background()
+	require.ErrorContains(t,
+		validateParquetPageModeEOF(ctx, 1, 2),
+		"page columns ended after 1 rows, expected 2")
+	require.NoError(t, validateParquetPageModeEOF(ctx, 2, 2))
+	require.ErrorContains(t, validateParquetPageModeEOF(ctx, 0, -1), "NumRows() -1 is negative")
+}
+
 func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Leaf(parquet.BooleanType)

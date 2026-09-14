@@ -4688,6 +4688,9 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 				return err
 			}
 			if eof {
+				if err := validateParquetPageModeEOF(param.Ctx, h.offset+int64(length), h.rowGroupRows); err != nil {
+					return h.closePagesOnError(param.Ctx, err)
+				}
 				finish = true
 				available = 0
 				break
@@ -4744,6 +4747,19 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 			return err
 		}
 		// File completion (FileFin/End) is now handled by Call's finishCurrentFile
+	}
+	return nil
+}
+
+func validateParquetPageModeEOF(ctx context.Context, rowsRead, expectedRows int64) error {
+	if expectedRows < 0 {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row group: NumRows() %d is negative", expectedRows)
+	}
+	if rowsRead != expectedRows {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row group: page columns ended after %d rows, expected %d",
+			rowsRead, expectedRows)
 	}
 	return nil
 }
