@@ -365,6 +365,7 @@ type PrepareStmt struct {
 	// integer write columns. Only DECIMAL/FLOAT executions of these positions
 	// need a copied plan; ordinary prepared writes keep the cached compile.
 	dmlIntegerAssignmentParamPositions []int32
+	integerSourceParamPositions        []int32
 	hasPaginationParams                bool
 	hasLagLeadParams                   bool
 	paramKinds                         []vector.PrepareParamKind
@@ -880,6 +881,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
 	prepareStmt.dmlIntegerAssignmentParamPositions = nil
+	prepareStmt.integerSourceParamPositions = nil
 	prepareStmt.remapDb = nil
 }
 

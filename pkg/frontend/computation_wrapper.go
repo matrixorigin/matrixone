@@ -560,6 +560,11 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				execCtx.input != nil && execCtx.input.isBinaryProtExecute,
 				cwft.runtimeDirectResultSpecialization,
 			)
+			if preparedRetry != nil && cwft.preparedStmt != nil {
+				preparedRetry.integerSourcePositions = append([]int32(nil), cwft.preparedStmt.integerSourceParamPositions...)
+				preparedRetry.integerSourceSQL = cwft.preparedStmt.Sql
+				preparedRetry.integerSourceSQLMode = cwft.preparedStmt.schedulingSQLMode
+			}
 			var planSnapshotTS *timestamp.Timestamp
 			if cwft.preparedStmt != nil {
 				planSnapshotTS = &cwft.preparedStmt.Ts
@@ -1481,6 +1486,7 @@ func initExecuteStmtParamWithResolverInSession(
 			newPreparePlan.Plan)
 		prepareStmt.dmlIntegerAssignmentParamPositions =
 			plan2.PreparedDMLIntegerAssignmentParamPositions(newPreparePlan.Plan)
+		prepareStmt.integerSourceParamPositions = plan2.PreparedIntegerSourceParamPositions(newPreparePlan.Plan)
 		prepareStmt.conversionParamPositions = plan2.PreparedPlanConversionParamPositions(
 			newPreparePlan.Plan)
 		// Parameter type evolution belongs to one prepared-plan generation. The
@@ -1631,7 +1637,8 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeDMLIntegerAssignmentCandidate := false
 	directResultPositions := prepareStmt.directResultParamPositions
 	runtimeDirectResultPositions := make([]int32, 0, len(directResultPositions))
-	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
+	rebindIntegerSource := len(prepareStmt.integerSourceParamPositions) > 0
+	needsRuntimeParamVals := rebindIntegerSource || !binaryExecute || binaryLiteralPlan ||
 		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain ||
 		runtimeNumericOverloadCandidate || deferredBitCountOverloadCandidate
 	cwft.paramVals = nil
@@ -1866,6 +1873,14 @@ func initExecuteStmtParamWithResolverInSession(
 	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
 		(runtimeDirectResultCandidate ||
 			(runtimeCategoryCandidate && preparedRuntimeCacheSupports(cwft.paramVals)))
+	cacheableRuntimeQuery = cacheableRuntimeQuery && !rebindIntegerSource
+	if rebindIntegerSource {
+		runtimePlan, err = rebindPreparedIntegerSource(execCtx, executionSes, prepareStmt, cwft.paramVals)
+		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		runtimeSpecialized, runtimePlanApplied = true, true
+	}
 	if cacheableRuntimeQuery {
 		if runtimeCategoryCandidate {
 			runtimeCacheKey = preparedRuntimeSemanticKey(cwft.paramVals)
@@ -2348,6 +2363,9 @@ func preparedRuntimeTextComparisonTypes(paramVals []any) []types.Type {
 // slice must not alias TxnComputationWrapper.paramVals because that field is
 // replaced on the next execution of the cached prepared statement.
 type preparedExecutionRetry struct {
+	integerSourcePositions     []int32
+	integerSourceSQL           string
+	integerSourceSQLMode       string
 	paramVals                  []any
 	binaryExecute              bool
 	directResultSpecialization bool
@@ -3263,6 +3281,13 @@ func buildPlanForCompileRetry(
 	forcePrepare bool,
 	preparedRetry *preparedExecutionRetry,
 ) (*plan2.Plan, error) {
+	// A retry must retain the same source-domain binding as the first
+	// execution, and parse its own AST rather than mutate the cached one.
+	if preparedRetry != nil && len(preparedRetry.integerSourcePositions) > 0 {
+		return buildPreparedIntegerSource(ctx, ses, compilerContext,
+			preparedRetry.integerSourceSQL, preparedRetry.integerSourceSQLMode,
+			preparedRetry.paramVals, preparedRetry.integerSourcePositions)
+	}
 	// No permission verification is required when retry execute buildPlan.
 	retryPlan, err := buildPlanWithPrepareMode(
 		ctx, ses, compilerContext, stmt, forcePrepare)

@@ -782,7 +782,9 @@ func (x Decimal256) Div(y Decimal256, scale1, scale2 int32) (z Decimal256, scale
 	}
 	x1, err = x1.Scale(scale - scale1 + scale2)
 	if err != nil {
-		err = moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
+		// The scaled numerator may overflow even when the quotient fits.
+		// Recover before losing coefficient bits, not after division.
+		z, err = decimal256DivScaleUp(x, y, int64(scale)-int64(scale1)+int64(scale2))
 		return
 	}
 	z, err = x1.Div256(y1)
@@ -794,6 +796,45 @@ func (x Decimal256) Div(y Decimal256, scale1, scale2 int32) (z Decimal256, scale
 		z = z.Minus()
 	}
 	return
+}
+
+// decimal256DivScaleUp is a bounded fallback for an overflowing intermediate
+// numerator. For nonzero x and scaleDiff >= 154, even |y| = 2^255 cannot
+// produce a representable quotient. Thus the power has at most 509 bits and
+// its product with |x| has at most 765 bits, independent of caller scale.
+func decimal256DivScaleUp(x, y Decimal256, scaleDiff int64) (Decimal256, error) {
+	divisor := decimal256MagnitudeBigInt(y)
+	if divisor.Sign() == 0 {
+		return Decimal256{}, moerr.NewDivByZeroNoCtx()
+	}
+	value := decimal256MagnitudeBigInt(x)
+	if value.Sign() == 0 {
+		return Decimal256{}, nil
+	}
+	if scaleDiff < 0 || scaleDiff >= 154 {
+		return Decimal256{}, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+	}
+	power := new(big.Int).Exp(big.NewInt(10), big.NewInt(scaleDiff), nil)
+	value.Mul(value, power)
+	var remainder big.Int
+	value.QuoRem(value, divisor, &remainder)
+	remainder.Lsh(&remainder, 1)
+	if remainder.Cmp(divisor) >= 0 {
+		value.Add(value, big.NewInt(1))
+	}
+	negative := x.Sign() != y.Sign()
+	limit := new(big.Int).Lsh(big.NewInt(1), 255)
+	if !negative {
+		limit.Sub(limit, big.NewInt(1))
+	}
+	if value.Cmp(limit) > 0 {
+		return Decimal256{}, moerr.NewInvalidInputNoCtx("Decimal256 Div overflow")
+	}
+	result := decimal256FromMagnitudeBigInt(value)
+	if negative {
+		result = result.Minus()
+	}
+	return result, nil
 }
 
 func decimal256MagnitudeBigInt(x Decimal256) *big.Int {
@@ -1891,19 +1932,33 @@ func Decimal256ToFloat64(x Decimal256, scale int32) float64 {
 	if sign {
 		x = x.Minus()
 	}
-	// Decimal128ToFloat64 treats bit 127 as a sign bit.  A positive
-	// Decimal256 can still have that bit set when its upper 128 bits are zero
-	// (for example, 2^127), so reduce such values before handing them to the
-	// signed Decimal128 converter.  Keep the scale adjustment in lockstep with
-	// the reduction to preserve the represented value.
-	for x.B128_191 != 0 || x.B192_255 != 0 || x.B64_127>>63 != 0 {
-		x, _ = x.Scale(-1)
-		scale--
+	// Convert the complete coefficient and exponent in one correctly rounded
+	// operation. Converting limbs to FLOAT first and dividing by powers of ten
+	// rounds repeatedly (e.g. 2.5 at scale 24 becomes 2.5000000000000004).
+	// Unsigned division also handles the magnitude of the minimum signed value.
+	var buf [96]byte // sign + 78 coefficient digits + exponent, independent of scale
+	pos := 79
+	for {
+		var rem uint64
+		x.B192_255, rem = bits.Div64(0, x.B192_255, 10)
+		x.B128_191, rem = bits.Div64(rem, x.B128_191, 10)
+		x.B64_127, rem = bits.Div64(rem, x.B64_127, 10)
+		x.B0_63, rem = bits.Div64(rem, x.B0_63, 10)
+		pos--
+		buf[pos] = byte(rem) + '0'
+		if x.B0_63|x.B64_127|x.B128_191|x.B192_255 == 0 {
+			break
+		}
 	}
-	y := Decimal128ToFloat64(Decimal128{x.B0_63, x.B64_127}, scale)
 	if sign {
-		y = -y
+		pos--
+		buf[pos] = '-'
 	}
+	buf[79] = 'e'
+	text := strconv.AppendInt(buf[:80], -int64(scale), 10)
+	// The generated text is always valid. ErrRange carries the correctly
+	// signed infinity; underflow is rounded to zero by ParseFloat.
+	y, _ := strconv.ParseFloat(string(text[pos:]), 64)
 	return y
 }
 

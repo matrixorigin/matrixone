@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -93,6 +94,15 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 }
 
 func (b *OndupUpdateBinder) BindAssignmentExpr(astExpr tree.Expr, target Type) (*plan.Expr, error) {
+	if types.T(target.Id).IsInteger() {
+		previous := b.sysCtx
+		b.sysCtx = withIntegerAssignmentDomain(previous)
+		defer func() { b.sysCtx = previous }()
+		if b.builder != nil {
+			restoreDomain := b.builder.enterIntegerAssignmentDomain(true)
+			defer restoreDomain()
+		}
+	}
 	if !isNumericAssignmentTarget(target) {
 		return b.BindExpr(astExpr, 0, true)
 	}

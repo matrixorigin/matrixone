@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -141,6 +142,12 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 			previousSubqueryTarget := b.numericSubqueryTarget
 			b.numericSubqueryTarget = target
 			defer func() { b.numericSubqueryTarget = previousSubqueryTarget }()
+			return b.baseBindExpr(astExpr, depth, isRoot)
+		}
+		if _, directParam := unwrapParenExpr(astExpr).(*tree.ParamExpr); directParam &&
+			types.T(target.Id).IsInteger() && inIntegerAssignmentDomain(b.GetContext()) {
+			// A bare assignment marker needs no provisional integer operator
+			// input. Keep its transport domain until cast_assign/cast_ignore.
 			return b.baseBindExpr(astExpr, depth, isRoot)
 		}
 		return b.bindNumericExprWithContext(astExpr, depth, target)

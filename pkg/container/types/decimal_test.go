@@ -346,6 +346,53 @@ func TestDecimal256Format(t *testing.T) {
 	}
 }
 
+func TestDecimal256ToFloat64ExactHalf(t *testing.T) {
+	for _, scale := range []int32{1, 18, 24, 30} {
+		for _, value := range []int64{25, -25, 35, -35} {
+			x, err := Decimal256FromInt64(value).Scale(scale - 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := float64(value) / 10
+			if got := Decimal256ToFloat64(x, scale); got != want {
+				t.Errorf("value=%d scale=%d: got %.17g, want %.17g", value, scale, got, want)
+			}
+		}
+	}
+}
+
+func TestDecimal256ToFloat64ExtremeDomain(t *testing.T) {
+	minimum := Decimal256{B192_255: uint64(1) << 63}
+	if got := Decimal256ToFloat64(minimum, 0); got != -math.Ldexp(1, 255) {
+		t.Fatalf("minimum coefficient: got %g", got)
+	}
+	for _, negative := range []bool{false, true} {
+		x := Decimal256FromInt64(1)
+		if negative {
+			x = x.Minus()
+		}
+		zero := Decimal256ToFloat64(x, math.MaxInt32)
+		if zero != 0 || math.Signbit(zero) != negative {
+			t.Fatalf("underflow sign: got %g, negative=%v", zero, negative)
+		}
+		infinity := Decimal256ToFloat64(x, math.MinInt32)
+		if !math.IsInf(infinity, 0) || math.Signbit(infinity) != negative {
+			t.Fatalf("overflow sign: got %g, negative=%v", infinity, negative)
+		}
+	}
+}
+
+func BenchmarkDecimal256ToFloat64ExactHalf(b *testing.B) {
+	x, err := Decimal256FromInt64(25).Scale(23)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = Decimal256ToFloat64(x, 24)
+	}
+}
+
 func TestDecimal256ToFloat64NegativeScale(t *testing.T) {
 	x := Decimal256FromInt64(123)
 	if got := Decimal256ToFloat64(x, -2); got != 12300 {

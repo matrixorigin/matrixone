@@ -3909,14 +3909,14 @@ func TestDecimal256ToOthersRouting(t *testing.T) {
 	intRes := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp).(*vector.FunctionResult[int64])
 	defer intRes.Free()
 	require.NoError(t, intRes.PreExtendAndReset(1))
-	require.NoError(t, decimal256ToSigned[int64](ctx, src, intRes, 64, 1, nil))
+	require.NoError(t, decimal256ToSigned[int64](ctx, src, intRes, 64, 1, nil, castModeNormal))
 	require.Equal(t, int64(42), vector.MustFixedColNoTypeCheck[int64](intRes.GetResultVector())[0])
 
 	// uint32
 	uRes := vector.NewFunctionResultWrapper(types.T_uint32.ToType(), mp).(*vector.FunctionResult[uint32])
 	defer uRes.Free()
 	require.NoError(t, uRes.PreExtendAndReset(1))
-	require.NoError(t, decimal256ToUnsigned[uint32](ctx, src, uRes, 32, 1, nil))
+	require.NoError(t, decimal256ToUnsigned[uint32](ctx, src, uRes, 32, 1, nil, castModeNormal))
 	require.Equal(t, uint32(42), vector.MustFixedColNoTypeCheck[uint32](uRes.GetResultVector())[0])
 
 	// bit

@@ -722,6 +722,9 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		syntaxHasColumnNames = true
 	}
 
+	restoreDomain := builder.enterIntegerAssignmentDomain(hasIntegerInsertTarget(insertColumns, tableDef))
+	defer restoreDomain()
+
 	var astSlt *tree.Select
 	switch slt := stmt.Rows.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
@@ -1464,10 +1467,14 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 }
 
 func normalizeExactIntegerAssignment(ctx context.Context, expr *Expr, target Type) (*Expr, error) {
+	if expr != nil && types.T(target.Id).IsInteger() && types.T(expr.Typ.Id) == types.T_decimal256 {
+		return roundRebuiltExactNumericForInteger(ctx, expr)
+	}
 	if expr == nil || !types.T(target.Id).IsInteger() || !types.T(expr.Typ.Id).IsFloat() ||
 		!function.IsExactNumericExpression(expr, nil) {
 		return expr, nil
 	}
+	ctx = withIntegerAssignmentDomain(ctx)
 	rewritten, exact, err := rebuildExactNumericExpr(ctx, expr, nil)
 	if err != nil || !exact {
 		return expr, err
@@ -1531,7 +1538,7 @@ func rebuildExactNumericExpr(
 		// directly; explicit CAST remains authoritative above.
 		return rebuildExactNumericExpr(ctx, fn.Args[0], resolve)
 	}
-	indexes, ok := function.NumericFunctionResultArgs(name, len(fn.Args))
+	indexes, ok := function.NumericFunctionResultArgs(name, len(fn.Args), false)
 	if !ok {
 		return expr, false, nil
 	}
@@ -1643,24 +1650,6 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	if err != nil || rewritten {
 		return expr, err
 	}
-	if types.T(targetType.Id).IsInteger() && types.T(expr.Typ.Id).IsFloat() &&
-		builder.isExactNumericAssignmentSource(sourceExpr, nil) {
-		rewritten, exact, rewriteErr := builder.rebuildProjectedExactNumericSource(sourceExpr, nil)
-		if rewriteErr != nil {
-			return nil, rewriteErr
-		}
-		if exact {
-			rewritten, rewriteErr = roundRebuiltExactNumericForInteger(builder.GetContext(), rewritten)
-			if rewriteErr != nil {
-				return nil, rewriteErr
-			}
-			// sourceExpr is normally the actual producer projection. Replace it in
-			// place and update the consumer ColRef so the FLOAT vector is never
-			// built. UPDATE passes the same pointer for both arguments.
-			*sourceExpr = *rewritten
-			expr.Typ = rewritten.Typ
-		}
-	}
 	if !isIgnore && types.T(targetType.Id).IsInteger() && integerLiteralFitsType(sourceExpr, makeTypeByPlan2Type(targetType)) {
 		return forceAssignmentCastExprWithName(builder.GetContext(), expr, targetType, "cast")
 	}
@@ -1734,94 +1723,6 @@ func integerLiteralFitsType(expr *Expr, target types.Type) bool {
 	default:
 		return false
 	}
-}
-
-func (builder *QueryBuilder) isExactNumericAssignmentSource(expr *Expr, visited map[[2]int32]struct{}) bool {
-	if visited == nil {
-		visited = make(map[[2]int32]struct{})
-	}
-	return function.IsExactNumericExpression(expr, func(col *Expr) bool {
-		return builder.isProjectedDisplayValueExpr(col, func(source *Expr) bool {
-			if source.GetCol() != nil {
-				return false
-			}
-			return builder.isExactNumericAssignmentSource(source, visited)
-		}, true, visited)
-	})
-}
-
-func (builder *QueryBuilder) rebuildProjectedExactNumericSource(
-	expr *Expr,
-	visited map[[2]int32]struct{},
-) (*Expr, bool, error) {
-	if visited == nil {
-		visited = make(map[[2]int32]struct{})
-	}
-	return rebuildExactNumericExpr(builder.GetContext(), expr, func(col *Expr) (*Expr, bool, error) {
-		nodeID, ok := builder.tag2NodeID[col.GetCol().RelPos]
-		if !ok {
-			return col, false, nil
-		}
-		rewritten, exact, err := builder.rebuildProjectedExactNumericAtNode(
-			nodeID, col.GetCol().ColPos, visited)
-		if err != nil || !exact {
-			return col, exact, err
-		}
-		result := DeepCopyExpr(col)
-		result.Typ = rewritten.Typ
-		return result, true, nil
-	})
-}
-
-func (builder *QueryBuilder) rebuildProjectedExactNumericAtNode(
-	nodeID, colPos int32,
-	visited map[[2]int32]struct{},
-) (*Expr, bool, error) {
-	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
-		return nil, false, nil
-	}
-	key := [2]int32{nodeID, colPos}
-	if _, ok := visited[key]; ok {
-		return nil, false, nil
-	}
-	visited[key] = struct{}{}
-	defer delete(visited, key)
-
-	node := builder.qry.Nodes[nodeID]
-	if colPos < 0 || int(colPos) >= len(node.ProjectList) {
-		return nil, false, nil
-	}
-	switch node.NodeType {
-	case plan.Node_UNION, plan.Node_UNION_ALL,
-		plan.Node_MINUS, plan.Node_MINUS_ALL,
-		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
-		if len(node.Children) == 0 {
-			return nil, false, nil
-		}
-		exactType := types.New(types.T_decimal256, 65, 30)
-		for _, childID := range node.Children {
-			child, exact, err := builder.rebuildProjectedExactNumericAtNode(childID, colPos, visited)
-			if err != nil || !exact {
-				return nil, exact, err
-			}
-			if !makeTypeByPlan2Expr(child).Eq(exactType) {
-				child, err = makePlan2CastExpr(builder.GetContext(), child, makePlan2Type(&exactType))
-				if err != nil {
-					return nil, false, err
-				}
-			}
-			builder.qry.Nodes[childID].ProjectList[colPos] = child
-		}
-		node.ProjectList[colPos].Typ = makePlan2Type(&exactType)
-		return node.ProjectList[colPos], true, nil
-	}
-
-	rewritten, exact, err := builder.rebuildProjectedExactNumericSource(node.ProjectList[colPos], visited)
-	if err != nil || !exact {
-		return nil, exact, err
-	}
-	node.ProjectList[colPos] = rewritten
-	return rewritten, true, nil
 }
 
 func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {

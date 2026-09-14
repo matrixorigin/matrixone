@@ -356,6 +356,17 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	if err != nil {
 		return 0, err
 	}
+	hasIntegerTarget := false
+	for i, columns := range dmlCtx.updateCol2Expr {
+		table := dmlCtx.tableDefs[i]
+		for name := range columns {
+			if types.T(table.Cols[table.Name2ColIndex[name]].Typ.Id).IsInteger() {
+				hasIntegerTarget = true
+			}
+		}
+	}
+	restoreDomain := builder.enterIntegerAssignmentDomain(hasIntegerTarget)
+	defer restoreDomain()
 	targetAliases := make([]string, len(dmlCtx.tableDefs))
 	for i, updateCol2Expr := range dmlCtx.updateCol2Expr {
 		if len(updateCol2Expr) > 0 {

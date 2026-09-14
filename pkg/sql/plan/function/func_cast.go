@@ -652,7 +652,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal256: {
-		types.T_bit,
+		types.T_bool, types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -2478,30 +2478,39 @@ func decimal256ToOthersWithContext(
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal256ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		for i := uint64(0); i < uint64(length); i++ {
+			value, null := source.GetValue(i)
+			if err := rs.Append(value != (types.Decimal256{}), null); err != nil {
+				return err
+			}
+		}
+		return nil
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return decimal256ToSigned(ctx, source, rs, 8, length, selectList)
+		return decimal256ToSigned(ctx, source, rs, 8, length, selectList, mode)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return decimal256ToSigned(ctx, source, rs, 16, length, selectList)
+		return decimal256ToSigned(ctx, source, rs, 16, length, selectList, mode)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return decimal256ToSigned(ctx, source, rs, 32, length, selectList)
+		return decimal256ToSigned(ctx, source, rs, 32, length, selectList, mode)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return decimal256ToSigned(ctx, source, rs, 64, length, selectList)
+		return decimal256ToSigned(ctx, source, rs, 64, length, selectList, mode)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return decimal256ToUnsigned(ctx, source, rs, 8, length, selectList)
+		return decimal256ToUnsigned(ctx, source, rs, 8, length, selectList, mode)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return decimal256ToUnsigned(ctx, source, rs, 16, length, selectList)
+		return decimal256ToUnsigned(ctx, source, rs, 16, length, selectList, mode)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return decimal256ToUnsigned(ctx, source, rs, 32, length, selectList)
+		return decimal256ToUnsigned(ctx, source, rs, 32, length, selectList, mode)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal256ToUnsigned(ctx, source, rs, 64, length, selectList)
+		return decimal256ToUnsigned(ctx, source, rs, 64, length, selectList, mode)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return decimal256ToDecimal64(source, rs, length, selectList)
@@ -5575,7 +5584,7 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 func decimal256ToSigned[T constraints.Signed](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal256],
-	to *vector.FunctionResult[T], bitSize int, length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[T], bitSize int, length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	l := uint64(length)
 	fromTyp := from.GetType()
@@ -5591,8 +5600,9 @@ func decimal256ToSigned[T constraints.Signed](
 				return err
 			}
 			xStr := x.Format(0)
+			// ParseInt returns the signed endpoint on range overflow.
 			result, err := strconv.ParseInt(xStr, 10, bitSize)
-			if err != nil {
+			if err != nil && mode != castModeAssignment && mode != castModeAssignmentIgnore {
 				return moerr.NewOutOfRangef(ctx,
 					fmt.Sprintf("int%d", bitSize),
 					"value '%v'", xStr)
@@ -5609,7 +5619,7 @@ func decimal256ToUnsigned[T constraints.Unsigned](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal256],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList) error {
+	length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	l := uint64(length)
 	fromType := from.GetType()
@@ -5622,8 +5632,10 @@ func decimal256ToUnsigned[T constraints.Unsigned](
 		} else {
 			xStr := v.Format(fromType.Scale)
 			xStr = strings.Split(xStr, ".")[0]
+			// ParseUint returns zero for negative input and the unsigned
+			// endpoint for positive overflow, matching assignment clamping.
 			result, err := strconv.ParseUint(xStr, 10, bitSize)
-			if err != nil {
+			if err != nil && mode != castModeAssignment && mode != castModeAssignmentIgnore {
 				return moerr.NewOutOfRangef(ctx,
 					fmt.Sprintf("uint%d", bitSize),
 					"value '%v'", xStr)

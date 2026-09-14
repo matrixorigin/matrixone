@@ -268,6 +268,42 @@ func TestExplicitCastFloatRoundingToEven(t *testing.T) {
 	}
 }
 
+func TestCastDecimal256ToBoolean(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.New(types.T_decimal256, 65, 24),
+			[]types.Decimal256{{}, types.Decimal256FromInt64(1), types.Decimal256FromInt64(-1), {}},
+			[]bool{false, false, false, true}),
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false,
+		[]bool{false, true, true, false}, []bool{false, false, false, true})
+	testCase := NewFunctionTestCase(proc, inputs, expect, NewCast)
+	success, info := testCase.Run()
+	require.True(t, success, info)
+}
+
+func TestAssignmentCastDecimal256Range(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(types.New(types.T_decimal256, 65, 0),
+		[]types.Decimal256{types.Decimal256FromInt64(-256), types.Decimal256FromInt64(256)}, nil)
+	for _, signed := range []bool{false, true} {
+		if signed {
+			inputs := []FunctionTestInput{input, NewFunctionTestInput(types.T_int8.ToType(), []int8{}, nil)}
+			testCase := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_int8.ToType(), false, []int8{-128, 127}, nil), NewAssignIgnoreCast)
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		} else {
+			inputs := []FunctionTestInput{input, NewFunctionTestInput(types.T_uint8.ToType(), []uint8{}, nil)}
+			testCase := NewFunctionTestCase(proc, inputs,
+				NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0, 255}, nil), NewAssignIgnoreCast)
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		}
+	}
+}
+
 func TestAssignmentCastFloatToInteger(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	t.Run("ties to even", func(t *testing.T) {

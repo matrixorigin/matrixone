@@ -1549,6 +1549,11 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 	if e == nil {
 		return nil, nil
 	}
+	if types.T(e.Typ.Id).IsInteger() {
+		previous := rule.ctx
+		rule.ctx = withIntegerAssignmentDomain(previous)
+		defer func() { rule.ctx = previous }()
+	}
 	if rewritten, ok, err := rule.rebindPreparedNumericIntegerAssignment(e); ok || err != nil {
 		return rewritten, err
 	}

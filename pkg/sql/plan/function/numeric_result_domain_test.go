@@ -41,7 +41,7 @@ func TestNumericFunctionResultArgs(t *testing.T) {
 		{name: "least", count: 2, want: []int{0, 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := NumericFunctionResultArgs(tc.name, tc.count)
+			got, ok := NumericFunctionResultArgs(tc.name, tc.count, false)
 			require.True(t, ok)
 			require.Equal(t, tc.want, got)
 		})
@@ -62,8 +62,37 @@ func TestNumericFunctionResultArgs(t *testing.T) {
 		{name: "nullif", count: 1},
 		{name: "sqrt", count: 1},
 	} {
-		_, ok := NumericFunctionResultArgs(tc.name, tc.count)
+		_, ok := NumericFunctionResultArgs(tc.name, tc.count, false)
 		require.False(t, ok, tc.name)
+	}
+}
+
+func TestNumericAggregateDependenciesDoNotSeedScalarContexts(t *testing.T) {
+	for _, name := range []string{"sum", "min", "max", "avg", "first_value", "last_value"} {
+		_, scalar := NumericFunctionResultArgs(name, 1, false)
+		require.False(t, scalar)
+		args, aggregate := NumericFunctionResultArgs(name, 1, true)
+		require.True(t, aggregate)
+		require.Equal(t, []int{0}, args)
+		_, valid := NumericFunctionResultArgs(name, 2, true)
+		require.False(t, valid)
+	}
+}
+
+func TestNumericWindowDependenciesExcludeOffsets(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		count int
+		want  []int
+	}{
+		{"lag", 1, []int{0}}, {"lead", 2, []int{0}}, {"lag", 3, []int{0, 2}},
+		{"nth_value", 2, []int{0}}, {"lag", 0, nil}, {"lead", 4, nil}, {"nth_value", 1, nil},
+	} {
+		args, ok := NumericFunctionResultArgs(tc.name, tc.count, true)
+		require.Equal(t, tc.want, args)
+		require.Equal(t, tc.want != nil, ok)
+		_, scalar := NumericFunctionResultArgs(tc.name, tc.count, false)
+		require.False(t, scalar)
 	}
 }
 

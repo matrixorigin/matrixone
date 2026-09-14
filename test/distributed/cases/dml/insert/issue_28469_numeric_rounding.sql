@@ -8,6 +8,14 @@ CREATE DATABASE issue_28469;
 USE issue_28469;
 SET sql_mode = 'STRICT_TRANS_TABLES';
 
+-- Ordinary query metadata must not inherit integer-write binding.
+SELECT 5/2 AS q;
+CREATE TABLE select_contract AS SELECT 5/2 AS q;
+SELECT q FROM select_contract;
+PREPARE ordinary_division FROM 'SELECT ?/2 AS q';
+SET @ordinary_value=5;
+EXECUTE ordinary_division USING @ordinary_value;
+
 CREATE TABLE t_rounding (
     id INT PRIMARY KEY,
     value_int INT,
@@ -69,6 +77,41 @@ INSERT INTO dst SELECT 16, ROUND(x / 2, 1) FROM src;
 INSERT INTO dst SELECT 17, TRUNCATE(x / 2, 1) FROM src;
 INSERT INTO dst SELECT 18, GREATEST(x / 2, 0) FROM src;
 INSERT INTO dst SELECT 19, LEAST(x / 2, 3) FROM src;
+-- Shared producers keep one physical type for every consumer.
+CREATE TABLE shared_dst (i BIGINT, f DOUBLE);
+INSERT INTO shared_dst SELECT q, q+0E0 FROM (SELECT x/2 AS q FROM src) s;
+SELECT * FROM shared_dst;
+-- Runtime source-domain changes rebind the shared window and all consumers.
+DELETE FROM shared_dst;
+PREPARE shared_division FROM 'INSERT INTO shared_dst SELECT q,q+0E0 FROM (SELECT SUM(?/2) OVER () AS q) s WHERE q>2.4';
+SET @shared_value=5;
+EXECUTE shared_division USING @shared_value;
+SET @shared_value=5E0;
+EXECUTE shared_division USING @shared_value;
+SET @shared_value=5;
+EXECUTE shared_division USING @shared_value;
+SELECT * FROM shared_dst ORDER BY i,f;
+DEALLOCATE PREPARE shared_division;
+CREATE TABLE relational_dst (v BIGINT);
+INSERT INTO relational_dst SELECT q FROM (SELECT x/2 AS q FROM src) s WHERE q>2.6;
+SELECT COUNT(*) FROM relational_dst;
+INSERT INTO relational_dst SELECT SUM(x/2) FROM src;
+INSERT INTO relational_dst SELECT MIN(x/2) FROM src;
+INSERT INTO relational_dst SELECT MAX(x/2) FROM src;
+INSERT INTO relational_dst SELECT AVG(x/2) FROM src;
+INSERT INTO relational_dst SELECT SUM(x/2) OVER () FROM src;
+INSERT INTO relational_dst SELECT q FROM (SELECT x/2 AS q FROM src GROUP BY x/2) s;
+SELECT * FROM relational_dst ORDER BY v;
+DELETE FROM relational_dst;
+PREPARE exact_division FROM 'INSERT INTO relational_dst VALUES (?/2)';
+SET @division_value=5;
+EXECUTE exact_division USING @division_value;
+SET @division_value=CAST(5 AS DOUBLE);
+EXECUTE exact_division USING @division_value;
+SET @division_value=7;
+EXECUTE exact_division USING @division_value;
+SELECT * FROM relational_dst ORDER BY v;
+DEALLOCATE PREPARE exact_division;
 CREATE TABLE large_src (x BIGINT);
 INSERT INTO large_src VALUES (9007199254740993);
 INSERT INTO dst SELECT 20, x / 2 FROM large_src;
@@ -77,6 +120,8 @@ INSERT INTO large_src VALUES (9223372036854775807);
 INSERT INTO dst SELECT 21, COALESCE(x / 1, 0) FROM large_src;
 INSERT INTO dst VALUES (22, 9007199254740993 / 2);
 INSERT INTO dst VALUES (23, 9223372036854775807 / 1);
+-- A wide scaled intermediate must not reject a representable quotient.
+INSERT INTO dst SELECT 24, x / CAST(1 AS DECIMAL(38,37)) FROM large_src;
 SELECT * FROM dst ORDER BY id;
 CREATE TABLE quotient_source (result BIGINT);
 INSERT INTO quotient_source VALUES (150), (250);
@@ -137,9 +182,14 @@ EXECUTE insert_unsigned USING @id, @unsigned_value;
 SELECT COUNT(*) FROM t_unsigned WHERE id = 4;
 SET sql_mode = '';
 INSERT INTO t_unsigned VALUES (2, -1E0);
+INSERT INTO t_unsigned VALUES (6, -5/2);
 SET @id = 5, @unsigned_value = CAST(-1 AS DOUBLE);
 EXECUTE insert_unsigned USING @id, @unsigned_value;
 SELECT * FROM t_unsigned ORDER BY id;
 DEALLOCATE PREPARE insert_unsigned;
 
+SELECT 5/2 AS q;
+SELECT q FROM select_contract;
+EXECUTE ordinary_division USING @ordinary_value;
+DEALLOCATE PREPARE ordinary_division;
 DROP DATABASE issue_28469;

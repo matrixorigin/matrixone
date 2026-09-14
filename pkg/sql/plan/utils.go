@@ -4450,6 +4450,18 @@ func FillValuesOfParamsInPlanWithSpecializationAtPositions(
 	paramVals []any,
 	positions []int32,
 ) (*Plan, bool, error) {
+	return fillValuesOfParamsAtPositions(ctx, preparePlan, paramVals, positions, false)
+}
+
+// FillPreparedDMLParamsAtPositions retains assignment policy while specializing
+// parameters outside an already rebound relational numeric source.
+func FillPreparedDMLParamsAtPositions(ctx context.Context, preparePlan *Plan,
+	paramVals []any, positions []int32) (*Plan, bool, error) {
+	return fillValuesOfParamsAtPositions(ctx, preparePlan, paramVals, positions, true)
+}
+
+func fillValuesOfParamsAtPositions(ctx context.Context, preparePlan *Plan,
+	paramVals []any, positions []int32, preserveDML bool) (*Plan, bool, error) {
 	selected := make([]bool, len(paramVals))
 	for _, position := range positions {
 		if position >= 0 && int(position) < len(selected) {
@@ -4457,7 +4469,7 @@ func FillValuesOfParamsInPlanWithSpecializationAtPositions(
 		}
 	}
 	return fillValuesOfParamsInPlanWithSpecializationSelected(
-		ctx, preparePlan, paramVals, false, selected)
+		ctx, preparePlan, paramVals, preserveDML, selected)
 }
 
 // FillValuesOfParamsInPlanWithPreparedNumericOverload is the execute-time

@@ -20,7 +20,9 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -30,7 +32,7 @@ import (
 func TestExactNumericSourceSurvivesFoldCopyAndWire(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, optimizerFold := range []bool{false, true} {
-		division, err := BindFuncExprImplByPlanExpr(t.Context(), "/", []*planpb.Expr{
+		division, err := BindFuncExprImplByPlanExpr(withIntegerAssignmentDomain(t.Context()), "/", []*planpb.Expr{
 			makePlan2Int64ConstExprWithType(9007199254740993),
 			makePlan2Int64ConstExprWithType(2),
 		})
@@ -49,8 +51,11 @@ func TestExactNumericSourceSurvivesFoldCopyAndWire(t *testing.T) {
 			folded, err = ConstantFold(batch.EmptyForConstFoldBatch, wrapped, proc, false, true)
 			require.NoError(t, err)
 		}
-		require.NotNil(t, folded.GetLit())
-		require.NotNil(t, folded.GetLit().Src)
+		// DECIMAL256 has no wire literal oneof; folding may retain the exact
+		// expression. Verify the executed value after the wire round trip below.
+		// Exactness now belongs to the execution type before folding, rather
+		// than a source tree attached to an already rounded FLOAT literal.
+		require.Equal(t, int32(types.T_decimal256), folded.Typ.Id)
 		require.True(t, function.IsExactNumericExpression(folded, nil))
 
 		wire, err := proto.Marshal(DeepCopyExpr(folded))
@@ -67,5 +72,13 @@ func TestExactNumericSourceSurvivesFoldCopyAndWire(t *testing.T) {
 		require.Equal(t, "round", assignment.GetF().Args[0].GetF().Args[0].GetF().Func.GetObjName())
 		require.Equal(t, int32(types.T_decimal256), assignment.GetF().Args[0].Typ.Id)
 		require.Zero(t, assignment.GetF().Args[0].Typ.Scale)
+		func() {
+			executor, err := colexec.NewExpressionExecutor(proc, assignment)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, int64(4503599627370497), vector.GetFixedAtWithTypeCheck[int64](result, 0))
+		}()
 	}
 }

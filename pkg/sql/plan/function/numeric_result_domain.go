@@ -22,8 +22,10 @@ import (
 // NumericFunctionResultArgs returns the argument positions whose numeric
 // domains determine the function result. Conditions, comparison operands and
 // precision arguments are intentionally excluded. Keep numeric context and
-// exact-domain reconstruction on this single contract.
-func NumericFunctionResultArgs(name string, argCount int) ([]int, bool) {
+// exact-domain reconstruction on this single contract. Relational dependency
+// discovery includes aggregates; scalar context seeding must leave aggregates
+// to their own binder (which supplies the deferred numeric input envelope).
+func NumericFunctionResultArgs(name string, argCount int, includeAggregates bool) ([]int, bool) {
 	all := func() ([]int, bool) {
 		if argCount == 0 {
 			return nil, false
@@ -41,6 +43,24 @@ func NumericFunctionResultArgs(name string, argCount int) ([]int, bool) {
 			return nil, false
 		}
 		return []int{0, 1}, true
+	case "lag", "lead":
+		if !includeAggregates || argCount < 1 || argCount > 3 {
+			return nil, false
+		}
+		if argCount == 3 {
+			return []int{0, 2}, true
+		}
+		return []int{0}, true
+	case "nth_value":
+		if !includeAggregates || argCount != 2 {
+			return nil, false
+		}
+		return []int{0}, true
+	case "sum", "min", "max", "avg", "first_value", "last_value":
+		if !includeAggregates || argCount != 1 {
+			return nil, false
+		}
+		return []int{0}, true
 	case "unary_plus", "unary_minus", "abs", "ceil", "ceiling", "floor":
 		if argCount != 1 {
 			return nil, false
@@ -124,7 +144,7 @@ func IsExactNumericExpression(expr *plan.Expr, resolve func(*plan.Expr) bool) bo
 		return overload == 0 && !fn.SyntaxExplicitCast && len(fn.Args) > 0 &&
 			IsExactNumericExpression(fn.Args[0], resolve)
 	}
-	indexes, ok := NumericFunctionResultArgs(name, len(fn.Args))
+	indexes, ok := NumericFunctionResultArgs(name, len(fn.Args), false)
 	if !ok {
 		return false
 	}

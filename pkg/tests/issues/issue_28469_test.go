@@ -56,6 +56,40 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			_, _ = db.ExecContext(cleanupCtx, fmt.Sprintf("drop database if exists `%s`", dbName))
 		}()
 
+		ordinaryPrepared, err := conn.PrepareContext(ctx, "select ?/2 as q")
+		require.NoError(t, err)
+		defer ordinaryPrepared.Close()
+		assertFloatRows := func(t *testing.T, query func() (*sql.Rows, error), want float64) {
+			t.Helper()
+			rows, err := query()
+			require.NoError(t, err)
+			defer rows.Close()
+			columns, err := rows.ColumnTypes()
+			require.NoError(t, err)
+			require.Len(t, columns, 1)
+			require.Equal(t, "DOUBLE", columns[0].DatabaseTypeName())
+			require.True(t, rows.Next())
+			var got float64
+			require.NoError(t, rows.Scan(&got))
+			require.Equal(t, want, got)
+			require.False(t, rows.Next())
+			require.NoError(t, rows.Err())
+		}
+		checkOrdinarySelect := func(t *testing.T) {
+			assertFloatRows(t, func() (*sql.Rows, error) {
+				return conn.QueryContext(ctx, "select 5/2 as q")
+			}, 2.5)
+			assertFloatRows(t, func() (*sql.Rows, error) {
+				return ordinaryPrepared.QueryContext(ctx, int64(5))
+			}, 2.5)
+			mustExec(t, ctx, conn, "create table select_contract as select 5/2 as q")
+			defer func() { _, _ = conn.ExecContext(ctx, "drop table select_contract") }()
+			assertFloatRows(t, func() (*sql.Rows, error) {
+				return conn.QueryContext(ctx, "select q from select_contract")
+			}, 2.5)
+		}
+		t.Run("ordinary_select_before_integer_dml", checkOrdinarySelect)
+
 		mustExec(t, ctx, conn, "create table src (x bigint)")
 		mustExec(t, ctx, conn, "insert into src values (5)")
 		mustExec(t, ctx, conn, "create table dst (v bigint)")
@@ -83,6 +117,8 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			{"truncate_wrapper", "insert into dst select truncate(x / 2, 1) from src", 3},
 			{"greatest_wrapper", "insert into dst select greatest(x / 2, 0) from src", 3},
 			{"least_wrapper", "insert into dst select least(x / 2, 3) from src", 3},
+			{"aggregate_approximate_control", "insert into dst select sum(x / 2E0) from src", 2},
+			{"aggregate_explicit_float_boundary", "insert into dst select cast(sum(x / 2) as double) from src", 2},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				mustExec(t, ctx, conn, "delete from dst")
@@ -93,6 +129,187 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 				var got int64
 				require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
 				require.Equal(t, tc.want, got)
+			})
+		}
+
+		for _, query := range []string{
+			"select sum(x/2) from src",
+			"select min(x/2) from src",
+			"select max(x/2) from src",
+			"select avg(x/2) from src",
+			"select sum(x/2) over () from src",
+			"select q from (select x/2 as q from src group by x/2) s",
+		} {
+			t.Run("exact_relational/"+query, func(t *testing.T) {
+				mustExec(t, ctx, conn, "delete from dst")
+				mustExec(t, ctx, conn, "insert into dst "+query)
+				var got int64
+				require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
+				require.Equal(t, int64(3), got)
+			})
+		}
+
+		t.Run("shared_projection", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table shared_dst (i bigint, f double)")
+			mustExec(t, ctx, conn, "insert into shared_dst select q, q+0E0 from (select x/2 as q from src) s")
+			var i int64
+			var f float64
+			require.NoError(t, conn.QueryRowContext(ctx, "select i,f from shared_dst").Scan(&i, &f))
+			require.Equal(t, int64(3), i)
+			require.Equal(t, 2.5, f)
+		})
+		t.Run("shared_prepared_projection", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table shared_prepared_dst (i bigint, f double)")
+			stmt, err := conn.PrepareContext(ctx,
+				"insert into shared_prepared_dst select q,q+0E0 from (select ?/2 as q) s")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, tc := range []struct {
+				value any
+				want  int64
+			}{{int64(5), 3}, {float64(5), 2}, {nil, 0}, {int64(5), 3}} {
+				mustExec(t, ctx, conn, "delete from shared_prepared_dst")
+				_, err = stmt.ExecContext(ctx, tc.value)
+				require.NoError(t, err)
+				var i sql.NullInt64
+				var f sql.NullFloat64
+				require.NoError(t, conn.QueryRowContext(ctx, "select i,f from shared_prepared_dst").Scan(&i, &f))
+				require.Equal(t, tc.value != nil, i.Valid)
+				require.Equal(t, tc.value != nil, f.Valid)
+				if tc.value != nil {
+					require.Equal(t, tc.want, i.Int64)
+					require.Equal(t, 2.5, f.Float64)
+				}
+			}
+		})
+		t.Run("prepared_relational_domains", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table relational_dst(i bigint, f double)")
+			for _, shape := range []struct{ name, source string }{
+				{"projection", "(select ?/2 q) s"},
+				{"predicate", "(select ?/2 q) s where q>2.4 and q<2.6"},
+				{"aggregate", "(select sum(?/2) q) s"},
+				{"empty_aggregate", "(select sum(?/2) q from src where false) s"},
+				{"window", "(select sum(?/2) over () q) s"},
+				{"window_lag", "(select lag(?/2,0) over () q) s"},
+				{"window_first", "(select first_value(?/2) over () q) s"},
+				{"group", "(select q from (select ?/2 q) s group by q) g"},
+			} {
+				for _, protocol := range []string{"sql", "binary"} {
+					t.Run(shape.name+"/"+protocol, func(t *testing.T) {
+						query := "insert into relational_dst select q,q+0E0 from " + shape.source
+						var stmt *sql.Stmt
+						if protocol == "binary" {
+							stmt, err = conn.PrepareContext(ctx, query)
+							require.NoError(t, err)
+							defer stmt.Close()
+						} else {
+							mustExec(t, ctx, conn, "prepare relational_p from '"+query+"'")
+							defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare relational_p") }()
+						}
+						for _, tc := range []struct {
+							approximate bool
+							want        int64
+						}{{false, 3}, {true, 2}, {false, 3}} {
+							mustExec(t, ctx, conn, "delete from relational_dst")
+							if protocol == "binary" {
+								var value any = int64(5)
+								if tc.approximate {
+									value = float64(5)
+								}
+								_, err = stmt.ExecContext(ctx, value)
+								require.NoError(t, err)
+							} else {
+								value := "5"
+								if tc.approximate {
+									value = "5E0"
+								}
+								mustExec(t, ctx, conn, "set @relational_v="+value)
+								mustExec(t, ctx, conn, "execute relational_p using @relational_v")
+							}
+							var i sql.NullInt64
+							var f sql.NullFloat64
+							require.NoError(t, conn.QueryRowContext(ctx, "select i,f from relational_dst").Scan(&i, &f))
+							require.Equal(t, shape.name != "empty_aggregate", i.Valid)
+							require.Equal(t, shape.name != "empty_aggregate", f.Valid)
+							if shape.name != "empty_aggregate" {
+								require.Equal(t, tc.want, i.Int64)
+								require.Equal(t, 2.5, f.Float64)
+							}
+						}
+					})
+				}
+			}
+		})
+		t.Run("prepared_source_preserves_other_assignments", func(t *testing.T) {
+			rt := moruntime.ServiceRuntime(cn.GetServiceConfig().CN.UUID)
+			oldVersion, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			require.True(t, exists)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+			defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+			mustExec(t, ctx, conn, "create table mixed_policy(i bigint, u bigint unsigned)")
+			stmt, err := conn.PrepareContext(ctx, "insert into mixed_policy select q,? from (select ?/2 q) s limit ?")
+			require.NoError(t, err)
+			defer stmt.Close()
+			mustExec(t, ctx, conn, "set sql_mode=''")
+			defer func() { _, _ = conn.ExecContext(ctx, "set sql_mode='STRICT_TRANS_TABLES'") }()
+			_, err = stmt.ExecContext(ctx, float64(-1), float64(5), uint64(1))
+			require.NoError(t, err)
+			var i int64
+			var u uint64
+			require.NoError(t, conn.QueryRowContext(ctx, "select i,u from mixed_policy").Scan(&i, &u))
+			require.Equal(t, int64(2), i)
+			require.Zero(t, u)
+			mustExec(t, ctx, conn, "delete from mixed_policy")
+			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES'")
+			_, err = stmt.ExecContext(ctx, float64(-1), int64(5), uint64(1))
+			require.Error(t, err)
+			var count int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mixed_policy").Scan(&count))
+			require.Zero(t, count)
+		})
+		t.Run("shared_predicate", func(t *testing.T) {
+			mustExec(t, ctx, conn, "delete from dst")
+			mustExec(t, ctx, conn, "insert into dst select q from (select x/2 as q from src) s where q>2.6")
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from dst").Scan(&count))
+			require.Zero(t, count)
+		})
+		for _, protocol := range []string{"sql_prepare", "com_stmt"} {
+			t.Run(protocol+"_integer_division", func(t *testing.T) {
+				mustExec(t, ctx, conn, "delete from dst")
+				if protocol == "sql_prepare" {
+					mustExec(t, ctx, conn, "prepare exact_p from 'insert into dst values (?/2)'")
+					defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare exact_p") }()
+					for _, tc := range []struct {
+						value string
+						want  int64
+					}{{"5", 3}, {"cast(5 as double)", 2}, {"7", 4}, {"5", 3}} {
+						mustExec(t, ctx, conn, "delete from dst")
+						mustExec(t, ctx, conn, "set @exact_v="+tc.value)
+						mustExec(t, ctx, conn, "execute exact_p using @exact_v")
+						var got int64
+						require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
+						require.Equal(t, tc.want, got)
+					}
+				} else {
+					stmt, err := conn.PrepareContext(ctx, "insert into dst values (?/2)")
+					require.NoError(t, err)
+					defer stmt.Close()
+					for _, tc := range []struct {
+						value any
+						want  int64
+					}{{int64(5), 3}, {float64(5), 2}, {int64(7), 4}, {int64(5), 3}} {
+						mustExec(t, ctx, conn, "delete from dst")
+						_, err = stmt.ExecContext(ctx, tc.value)
+						require.NoError(t, err)
+						var got int64
+						require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
+						require.Equal(t, tc.want, got)
+					}
+				}
+				var got int64
+				require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
+				require.Equal(t, int64(3), got)
 			})
 		}
 
@@ -132,6 +349,12 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			mustExec(t, ctx, conn, "insert into dst select coalesce(x / 1, 0) from large_src")
 			require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
 			require.Equal(t, int64(9223372036854775807), got)
+			for _, expression := range []string{"sum(x/1)", "min(x/1)", "max(x/1)", "avg(x/1)", "sum(x/1) over ()", "x/cast(1 as decimal(38,37))"} {
+				mustExec(t, ctx, conn, "delete from dst")
+				mustExec(t, ctx, conn, "insert into dst select "+expression+" from large_src")
+				require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
+				require.Equal(t, int64(9223372036854775807), got, expression)
+			}
 		})
 
 		t.Run("division_unique_key", func(t *testing.T) {
@@ -223,6 +446,10 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, "select value from u").Scan(&unsignedValue))
 		require.Zero(t, unsignedValue)
 		mustExec(t, ctx, conn, "delete from u")
+		mustExec(t, ctx, conn, "insert into u values (-5/2)")
+		require.NoError(t, conn.QueryRowContext(ctx, "select value from u").Scan(&unsignedValue))
+		require.Zero(t, unsignedValue)
+		mustExec(t, ctx, conn, "delete from u")
 
 		assignmentStmt, err := conn.PrepareContext(ctx, "insert into u values (?)")
 		require.NoError(t, err)
@@ -239,5 +466,6 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 		var count int64
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from u").Scan(&count))
 		require.Zero(t, count)
+		t.Run("ordinary_select_after_integer_dml", checkOrdinarySelect)
 	})
 }

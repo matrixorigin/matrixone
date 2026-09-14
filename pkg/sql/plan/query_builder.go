@@ -13031,7 +13031,11 @@ func (builder *QueryBuilder) GetContext() context.Context {
 	if builder == nil {
 		return context.TODO()
 	}
-	return builder.compCtx.GetContext()
+	ctx := builder.compCtx.GetContext()
+	if builder.integerAssignmentDomain {
+		ctx = withIntegerAssignmentDomain(ctx)
+	}
+	return ctx
 }
 
 func (builder *QueryBuilder) checkPlanningCanceled() error {
