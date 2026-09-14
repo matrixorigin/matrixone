@@ -1071,6 +1071,30 @@ func TestParquetListMapperRejectsRepetitionLevelOverflow(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquetListMapperRejectsDefinitionLevelNullnessMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+		{parquet.FloatValue(1).Level(0, 1, 0)},
+	})
+	var h ParquetHandler
+	_, mp := h.getNestedListMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_array_float32), Width: 1})
+	require.NotNil(t, mp)
+
+	badValues := []parquet.Value{parquet.FloatValue(1).Level(0, 0, 0)}
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(dst []parquet.Value) (int, error) {
+			return copy(dst, badValues), nil
+		}),
+	}
+	vec := vector.NewVec(types.New(types.T_array_float32, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NULL status")
+	require.Zero(t, vec.Length())
+}
+
 func TestParquetValueNullnessMustMatchDefinitionLevels(t *testing.T) {
 	proc := testutil.NewProc(t)
 	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))

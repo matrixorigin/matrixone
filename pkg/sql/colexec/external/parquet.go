@@ -2906,6 +2906,17 @@ func processParquetListToArray[T types.ArrayElement](
 		}
 
 		definitionLevel := byte(v.DefinitionLevel())
+		if v.DefinitionLevel() < 0 || definitionLevel > mp.maxDefinitionLevel {
+			return rollback(moerr.NewInvalidInputf(ctx,
+				"parquet list definition level %d exceeds maximum %d",
+				v.DefinitionLevel(), mp.maxDefinitionLevel))
+		}
+		expectedNull := definitionLevel < mp.maxDefinitionLevel
+		if v.IsNull() != expectedNull {
+			return rollback(moerr.NewInvalidInputf(ctx,
+				"malformed parquet list page: definition level and value NULL status disagree at row %d",
+				i))
+		}
 		if mp.listCanBeNull && definitionLevel == mp.listNullLevel {
 			if len(row) != 0 || rowEmpty || v.RepetitionLevel() != 0 {
 				return rollback(moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values"))
