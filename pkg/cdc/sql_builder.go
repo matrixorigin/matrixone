@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1286,6 +1287,22 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 		catalog.SystemOrdinaryRel,
 		AddSingleQuotesJoin(catalog.SystemDatabases),
 	)
+}
+
+// CollectCDCSourceCandidateSQL returns the catalog query used for CREATE CDC
+// admission. Keep it on top of CollectTableInfoSQL so admission and the
+// runtime table scanner start from exactly the same catalog candidate set
+// (ordinary user tables and no system databases).
+func CollectCDCSourceCandidateSQL(accountID uint32, dbName, tableName string) string {
+	dbNames := "*"
+	if dbName != CDCPitrGranularity_All {
+		dbNames = AddSingleQuotesJoin([]string{dbName})
+	}
+	tableNames := "*"
+	if tableName != CDCPitrGranularity_All {
+		tableNames = AddSingleQuotesJoin([]string{tableName})
+	}
+	return CDCSQLBuilder.CollectTableInfoSQL(strconv.FormatUint(uint64(accountID), 10), dbNames, tableNames)
 }
 
 func (b cdcSQLBuilder) GetTableIDSQL(

@@ -97,23 +97,23 @@ func makeForeignKeyConstraintSQLValue(t *testing.T) string {
 }
 
 func TestTableHasForeignKeyConstraint(t *testing.T) {
-	hasForeignKey, err := tableHasForeignKeyConstraint(nil)
+	hasForeignKey, err := TableHasForeignKeyConstraint(nil)
 	require.NoError(t, err)
 	assert.False(t, hasForeignKey)
 
 	primaryKeyOnly := makeConstraintSQLValue(t, &engine.PrimaryKeyDef{
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
 	})
-	hasForeignKey, err = tableHasForeignKeyConstraint([]byte(primaryKeyOnly))
+	hasForeignKey, err = TableHasForeignKeyConstraint([]byte(primaryKeyOnly))
 	require.NoError(t, err)
 	assert.False(t, hasForeignKey)
 
 	foreignKey := makeForeignKeyConstraintSQLValue(t)
-	hasForeignKey, err = tableHasForeignKeyConstraint([]byte(foreignKey))
+	hasForeignKey, err = TableHasForeignKeyConstraint([]byte(foreignKey))
 	require.NoError(t, err)
 	assert.True(t, hasForeignKey)
 
-	_, err = tableHasForeignKeyConstraint([]byte{byte(engine.ForeignKey)})
+	_, err = TableHasForeignKeyConstraint([]byte{byte(engine.ForeignKey)})
 	require.Error(t, err)
 }
 
