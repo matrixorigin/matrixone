@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -1523,7 +1524,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 
 		// Shared plugin CompileContext for the ISCP (AlterCopyInitSQL) and idxcron
 		// re-registration arms below — lazy-init, reused across loop iterations.
-		var pluginCctx *pluginCompileCtx
+		var idxcronCctx *pluginCompileCtx
 		for _, indexDef := range newTableDef.Indexes {
 
 			// DO NOT check SkipIndexesCopy here.  SkipIndexesCopy only valids for the unique/master/regular index.
@@ -1560,25 +1561,12 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 							// CDC's first iteration. Mirrors RestoreTable's plugin-InitSQL dispatch.
 							startFromNow, initSQL := false, ""
 							if p, ok := indexplugin.Get(indexDef.IndexAlgo); ok {
-								idxDefs := make(map[string]*plan.IndexDef)
-								for _, d := range newTableDef.Indexes {
-									if d.IndexName == indexDef.IndexName {
-										idxDefs[d.IndexAlgoTableType] = d
-									}
+								if idxcronCctx == nil {
+									idxcronCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
 								}
-								if pluginCctx == nil {
-									pluginCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
-								}
-								startFromNow, initSQL, err = p.Compile().AlterCopyInitSQL(pluginCctx, idxDefs)
+								startFromNow, initSQL, err = alterCopyCdcSeed(p.Compile(), idxcronCctx, indexDef.IndexName, newTableDef.Indexes)
 								if err != nil {
 									return err
-								}
-								if initSQL == "" {
-									// No rebuild InitSQL → the CDC must replay from ts=0 to
-									// rebuild the skipped (empty) index; it must not arm the
-									// tail from now, which would drop every pre-existing row.
-									// Mirrors RestoreInitSQL's dispatch (ddl.go).
-									startFromNow = false
 								}
 							}
 							sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
@@ -1587,8 +1575,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 								return err
 							}
 
-							logutil.Infof("ISCP register unaffected index db=%s, table=%s, index=%s startFromNow=%v initSQL=%q",
-								dbName, newTableDef.Name, indexDef.IndexName, startFromNow, initSQL)
+							logutil.Infof("ISCP register unaffected index db=%s, table=%s, index=%s", dbName, newTableDef.Name, indexDef.IndexName)
 						}
 					}
 
@@ -1600,10 +1587,10 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 						if p, ok := indexplugin.Get(indexDef.IndexAlgo); ok {
 							d := p.Catalog().SyncDescriptor()
 							if d.IdxcronAction != "" {
-								if pluginCctx == nil {
-									pluginCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
+								if idxcronCctx == nil {
+									idxcronCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
 								}
-								metadata, err := p.Compile().IdxcronMetadata(pluginCctx)
+								metadata, err := p.Compile().IdxcronMetadata(idxcronCctx)
 								if err != nil {
 									return err
 								}
@@ -1707,6 +1694,28 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 	return nil
+}
+
+// alterCopyCdcSeed asks the plugin how to seed the CDC job of a copy-alter replacement
+// index whose hidden tables were skipped by cloneUnaffectedIndexes: it collects the
+// index's hidden-table defs, calls AlterCopyInitSQL, and applies the no-rebuild guard.
+// An empty InitSQL means the consumer rebuilds from the ts=0 replay, so the tail MUST NOT
+// arm from now (which would drop every pre-existing row). Mirrors RestoreInitSQL (ddl.go).
+func alterCopyCdcSeed(hooks compileplugin.Hooks, cctx compileplugin.CompileContext, indexName string, indexes []*plan.IndexDef) (startFromNow bool, initSQL string, err error) {
+	idxDefs := make(map[string]*plan.IndexDef)
+	for _, d := range indexes {
+		if d.IndexName == indexName {
+			idxDefs[d.IndexAlgoTableType] = d
+		}
+	}
+	startFromNow, initSQL, err = hooks.AlterCopyInitSQL(cctx, idxDefs)
+	if err != nil {
+		return false, "", err
+	}
+	if initSQL == "" {
+		startFromNow = false
+	}
+	return startFromNow, initSQL, nil
 }
 
 func hasAlterAutoIncrementReset(actions []*plan.AlterTable_Action) bool {
