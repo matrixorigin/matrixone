@@ -2186,6 +2186,19 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 		}
 	}
 	if mp.mapper != nil {
+		mapper := mp.mapper
+		expectedDataKind := parquetEncodingKind(st.Kind())
+		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
+			if page.Dictionary() == nil {
+				data := page.Data()
+				if data.Kind() != expectedDataKind {
+					return moerr.NewInvalidInputf(proc.Ctx,
+						"malformed parquet page values with type %s, expected %s",
+						data.Kind(), expectedDataKind)
+				}
+			}
+			return mapper(mp, page, proc, vec)
+		}
 		return mp
 	}
 	return nil
@@ -3903,13 +3916,36 @@ var (
 )
 
 func validateParquetValuesKind(ctx context.Context, kind parquet.Kind, data encoding.Values) error {
-	expected := encoding.Kind(kind)
+	expected := parquetEncodingKind(kind)
 	if data.Kind() != expected {
 		return moerr.NewInvalidInputf(ctx,
 			"malformed parquet values with type %s, expected %s",
 			data.Kind(), expected)
 	}
 	return nil
+}
+
+func parquetEncodingKind(kind parquet.Kind) encoding.Kind {
+	switch kind {
+	case parquet.Boolean:
+		return encoding.Boolean
+	case parquet.Int32:
+		return encoding.Int32
+	case parquet.Int64:
+		return encoding.Int64
+	case parquet.Int96:
+		return encoding.Int96
+	case parquet.Float:
+		return encoding.Float
+	case parquet.Double:
+		return encoding.Double
+	case parquet.ByteArray:
+		return encoding.ByteArray
+	case parquet.FixedLenByteArray:
+		return encoding.FixedLenByteArray
+	default:
+		return encoding.Undefined
+	}
 }
 
 func decodeDecimal64Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal64, error) {
