@@ -457,3 +457,25 @@ func TestExternalRoutineRejectsDamagedDefinitionBeforeArguments(t *testing.T) {
 		})
 	}
 }
+
+func TestExternalRoutineSkipsArgumentsForEmptySelection(t *testing.T) {
+	for _, mode := range []string{"SCALAR", "VECTOR"} {
+		t.Run(mode, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			input := vector.NewVec(types.T_int64.ToType())
+			defer input.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixed(input, int64(1), false, proc.Mp()))
+			seen := 0
+			evaluator, err := newExternalRoutineEval(proc, testExternalRoutineCall(t, mode, udf.NullCallHandler), []ExpressionExecutor{&externalRoutineTestExecutor{vector: input, evalSeen: &seen}}, nil)
+			require.NoError(t, err)
+			defer evaluator.Free()
+			bat := batch.NewWithSize(0)
+			bat.SetRowCount(1)
+			result, err := evaluator.Eval(proc, []*batch.Batch{bat}, []bool{false})
+			require.NoError(t, err)
+			require.True(t, result.IsNull(0))
+			require.Zero(t, seen, "an unselected call must not evaluate any arguments")
+		})
+	}
+}

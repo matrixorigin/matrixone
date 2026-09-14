@@ -219,6 +219,10 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 		)
 	}
 
+	if noRowsSelected(selectList, rowCount) {
+		return e.nullResult(rowCount)
+	}
+
 	for i, parameter := range e.parameterExecutor {
 		var err error
 		e.parameterResults[i], err = parameter.Eval(proc, batches, selectList)
