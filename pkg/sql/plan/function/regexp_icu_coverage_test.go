@@ -17,7 +17,9 @@ package function
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -200,4 +202,75 @@ func TestRegexp2ResourceAndOffsetContracts(t *testing.T) {
 
 	require.Equal(t, `\99`, remapRegexp2Backreferences(`\99`, []int{0, 1}))
 	require.Equal(t, `\1`, remapRegexp2Backreferences(`\1`, []int{0, 1}))
+}
+
+func TestRegexp2EvaluationCleanupOnDeadlineAndCallbackError(t *testing.T) {
+	rs := newOpBuiltInRegexp().regMap
+	matcher, err := rs.getRegexp2MatcherWithMatchType(`a(?=b)`, "", false)
+	require.NoError(t, err)
+
+	before := regexp2ActiveSubjectBytes.Load()
+	deadlineCallbackCalled := false
+	_, err = rs.regexp2VisitMatchesAtOrAfterWithMatchTypeAndDeadline(
+		matcher, "ab", 0, false, "", 0, time.Now().Add(-time.Second),
+		func(start, end int) error {
+			deadlineCallbackCalled = true
+			return nil
+		})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "timed out")
+	require.False(t, deadlineCallbackCalled)
+	require.Equal(t, before, regexp2ActiveSubjectBytes.Load())
+
+	callbackErr := errors.New("test callback failure")
+	_, err = rs.regexp2VisitMatchesAtOrAfterWithMatchTypeAndDeadline(
+		matcher, "ab", 0, false, "", 0, time.Now().Add(time.Second),
+		func(start, end int) error {
+			return callbackErr
+		})
+	require.ErrorIs(t, err, callbackErr)
+	require.Equal(t, before, regexp2ActiveSubjectBytes.Load())
+}
+
+func TestRegexp2AdmissionExhaustionAndRecovery(t *testing.T) {
+	before := regexp2ActiveSubjectBytes.Load()
+	start := make(chan struct{})
+	release := make(chan struct{})
+	type admissionResult struct {
+		reserved int64
+		err      error
+	}
+	results := make(chan admissionResult, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			reserved, err := acquireRegexp2SubjectBudget(0, 40<<20)
+			results <- admissionResult{reserved: reserved, err: err}
+			if err == nil {
+				<-release
+				regexp2ActiveSubjectBytes.Add(-reserved)
+			}
+		}()
+	}
+	close(start)
+
+	successes := 0
+	failures := 0
+	for i := 0; i < 2; i++ {
+		result := <-results
+		if result.err == nil {
+			successes++
+		} else {
+			failures++
+			require.Contains(t, result.err.Error(), "active memory budget")
+		}
+	}
+	require.Equal(t, 1, successes)
+	require.Equal(t, 1, failures)
+	close(release)
+	wg.Wait()
+	require.Equal(t, before, regexp2ActiveSubjectBytes.Load())
 }
