@@ -1556,7 +1556,7 @@ func validateInvocationHeader(invocation *udf.Invocation) error {
 	if invocation == nil {
 		return fmt.Errorf("python udf: nil invocation")
 	}
-	if invocation.Language != "" && invocation.Language != udf.LanguagePython {
+	if invocation.Language != udf.LanguagePython {
 		return fmt.Errorf("python udf: unsupported language %q", invocation.Language)
 	}
 	if invocation.Handler == "" {
