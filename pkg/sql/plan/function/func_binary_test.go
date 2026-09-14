@@ -333,6 +333,43 @@ func TestCeil(t *testing.T) {
 	}
 }
 
+func TestCeilFloorDecimal128Int64Boundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimalType := types.New(types.T_decimal128, 19, 0)
+	values := make([]types.Decimal128, 0, 6)
+	for _, value := range []string{
+		"9223372036854775807",
+		"9223372036854775808",
+		"-9223372036854775808",
+		"-9223372036854775809",
+		"9999999999999999999",
+		"-9999999999999999999",
+	} {
+		decimal, err := types.ParseDecimal128(value, decimalType.Width, decimalType.Scale)
+		require.NoError(t, err)
+		values = append(values, decimal)
+	}
+	nulls := make([]bool, len(values))
+
+	functions := []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "ceil", fn: CeilDecimal128},
+		{name: "floor", fn: FloorDecimal128},
+	}
+	for _, function := range functions {
+		t.Run(function.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{NewFunctionTestInput(decimalType, values, nulls)},
+				NewFunctionTestResult(decimalType, false, values, nulls),
+				function.fn)
+			succeeded, info := testCase.Run()
+			require.True(t, succeeded, info)
+		})
+	}
+}
+
 func initFloorTestCase() []tcTemp {
 	rfs := []float64{0, -2, -3, math.MinInt64 + 1, math.MinInt64 + 2, -101, -2, 0,
 		0, 1, 4, 8, 16, 32, 64, math.MaxInt64, math.MaxFloat64, 0}
@@ -7089,6 +7126,34 @@ func TestStMeasuresGeodetic(t *testing.T) {
 		StArea)
 	ok, info := fcTC.Run()
 	require.True(t, ok, info)
+
+	// The SQL-facing evaluator must preserve the local antimeridian region,
+	// rather than selecting the 358-degree complement from the raw WKT order.
+	antimeridian := "POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))"
+	antimeridianAreaPayload := encodeGeometryPayload(antimeridian, 0, false)
+	wantAntimeridianArea, err := geodeticArea(antimeridianAreaPayload)
+	require.NoError(t, err)
+	antimeridianType := geom4326
+	areaCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(antimeridianType, []string{string(antimeridianAreaPayload)}, []bool{false})},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantAntimeridianArea}, []bool{false}), StArea)
+	ok, info = areaCase.Run()
+	require.True(t, ok, info)
+	require.Less(t, wantAntimeridianArea, 1e11)
+
+	inside := encodeGeometryPayload("POINT(180 0)", 0, false)
+	greenwich := encodeGeometryPayload("POINT(0 0)", 0, false)
+	wantGreenwichDistance, err := geodeticDistance(greenwich, antimeridianAreaPayload)
+	require.NoError(t, err)
+	distanceCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(antimeridianType, []string{string(inside), string(greenwich)}, []bool{false, false}),
+			NewFunctionTestInput(antimeridianType, []string{string(antimeridianAreaPayload), string(antimeridianAreaPayload)}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, wantGreenwichDistance}, []bool{false, false}), StDistance)
+	ok, info = distanceCase.Run()
+	require.True(t, ok, info)
+	require.Greater(t, wantGreenwichDistance, 1e6)
 }
 
 func TestStMeasuresGeodeticRejectInvalidCoordinates(t *testing.T) {

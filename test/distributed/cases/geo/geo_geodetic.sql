@@ -14,6 +14,12 @@ select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(3 4)'))
 select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))', 4326)) as geodesic_area_m2;
 select st_area(st_geomfromtext('POLYGON((0 0,3 0,3 4,0 4,0 0))')) as cartesian_area;
 
+-- Antimeridian-local polygons must select the two-degree patch, not its
+-- 358-degree complement. The distance probes verify the same interior choice.
+select st_area(st_geomfromtext('POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))', 4326)) as antimeridian_area_m2;
+select st_distance(st_geomfromtext('POINT(180 0)', 4326), st_geomfromtext('POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))', 4326)) as antimeridian_local_distance_m;
+select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))', 4326)) as antimeridian_greenwich_distance_m;
+
 -- The +SRID overload forces the coordinate system regardless of the type SRID.
 select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), 4326) as forced_geodesic_m2;
 select st_length(st_geomfromtext('LINESTRING(0 0,1 0)'), 4326) as forced_geodesic_len_m;
