@@ -3081,6 +3081,57 @@ func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	require.Equal(t, []int32{10, 20, 30}, got)
 }
 
+func TestParquet_ScanParquetFile_SteppedDictionaryBoolBatches(t *testing.T) {
+	save := maxParquetBatchCnt
+	maxParquetBatchCnt = 1
+	defer func() { maxParquetBatchCnt = save }()
+
+	var buf bytes.Buffer
+	schema := parquet.NewSchema("x", parquet.Group{
+		"c": parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary),
+	})
+	w := parquet.NewWriter(&buf, schema)
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+		{parquet.BooleanValue(false).Level(0, 0, 0)},
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+	}
+	_, err := w.WriteRows(rows)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	param := &ExternalParam{
+		ExParamConst: ExParamConst{
+			Ctx:      context.Background(),
+			Attrs:    []plan.ExternAttr{{ColName: "c", ColIndex: 0}},
+			Cols:     []*plan.ColDef{{Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true}}},
+			Extern:   &tree.ExternParam{ExParamConst: tree.ExParamConst{ScanType: tree.INLINE}},
+			FileSize: []int64{int64(buf.Len())},
+		},
+		ExParam: ExParam{Fileparam: &ExFileparam{FileIndex: 1, FileCnt: 1}},
+	}
+	param.Extern.Data = string(buf.Bytes())
+
+	proc := testutil.NewProc(t)
+	r := NewParquetReader(param, proc)
+	_, err = r.Open(param, proc)
+	require.NoError(t, err)
+	defer r.Close()
+
+	got := make([]bool, 0, len(rows))
+	for attempts := 0; attempts < 5; attempts++ {
+		bat := vectorBatch([]types.Type{types.New(types.T_bool, 0, 0)})
+		finished, rerr := r.ReadBatch(context.Background(), bat, proc, nil)
+		require.NoError(t, rerr)
+		vals := vector.MustFixedColWithTypeCheck[bool](bat.Vecs[0])
+		got = append(got, vals[:bat.RowCount()]...)
+		if finished {
+			break
+		}
+	}
+	require.Equal(t, []bool{true, false, true}, got)
+}
+
 func TestParquet_ScanParquetFile_MappingErrorClosesPages(t *testing.T) {
 	var buf bytes.Buffer
 	schema := parquet.NewSchema("x", parquet.Group{"c": parquet.Uint(64)})
