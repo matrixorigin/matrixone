@@ -2124,6 +2124,12 @@ func validateRemoteExpressionPipelineProtocol(
 			"signed INT ASCII results require MORPC protocol version 65",
 		)
 	}
+	if features.IPFunctionSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
+		return moerr.NewNotSupportedNoCtx(
+			"corrected IP function semantics require MORPC protocol version 72",
+		)
+	}
 	return nil
 }
 
