@@ -2029,6 +2029,149 @@ func d256ScaleDownPow10(x *types.Decimal256, pow10a uint64, twoStep bool, pow10b
 	d256Negate(x, sign)
 }
 
+// d256MulWide computes the unsigned 256x256 product in a fixed-width 512-bit
+// accumulator. It is deliberately kept off the normal multiplication path;
+// d256Mul uses it only for raw-overflow recovery or scale reductions that need
+// more than the two 19-digit limbs supported by the ordinary helpers.
+func d256MulWide(x, y *types.Decimal256) ([8]uint64, uint64) {
+	xc := *x
+	sign := d256Abs(&xc)
+	yc := *y
+	sign ^= d256Abs(&yc)
+	xl := [4]uint64{xc.B0_63, xc.B64_127, xc.B128_191, xc.B192_255}
+	yl := [4]uint64{yc.B0_63, yc.B64_127, yc.B128_191, yc.B192_255}
+	var product [8]uint64
+
+	// Add each 128-bit partial product at its limb offset. The carry chain is
+	// bounded by the eight-limb accumulator, so this remains allocation-free.
+	for i := 0; i < len(xl); i++ {
+		for j := 0; j < len(yl); j++ {
+			hi, lo := bits.Mul64(xl[i], yl[j])
+			k := i + j
+			var carry uint64
+			product[k], carry = bits.Add64(product[k], lo, 0)
+			k++
+			product[k], carry = bits.Add64(product[k], hi, carry)
+			for k++; carry != 0 && k < len(product); k++ {
+				product[k], carry = bits.Add64(product[k], 0, carry)
+			}
+		}
+	}
+	return product, sign
+}
+
+// d256Div512ByUint64 divides an unsigned 512-bit value by d in place and
+// returns the remainder. d is always a power-of-ten limb (< 2^64), so the
+// high half supplied to bits.Div64 is guaranteed to be less than d.
+func d256Div512ByUint64(value *[8]uint64, d uint64) uint64 {
+	var rem uint64
+	for i := len(value) - 1; i >= 0; i-- {
+		value[i], rem = bits.Div64(rem, value[i], d)
+	}
+	return rem
+}
+
+// d256AddUnsigned adds x to dst and reports an overflow beyond the signed
+// positive Decimal256 range. Both values are non-negative and have bit 255
+// clear when called by the wide-scale fallback.
+func d256AddUnsigned(dst *types.Decimal256, x types.Decimal256) bool {
+	var carry uint64
+	dst.B0_63, carry = bits.Add64(dst.B0_63, x.B0_63, 0)
+	dst.B64_127, carry = bits.Add64(dst.B64_127, x.B64_127, carry)
+	dst.B128_191, carry = bits.Add64(dst.B128_191, x.B128_191, carry)
+	dst.B192_255, carry = bits.Add64(dst.B192_255, x.B192_255, carry)
+	return carry != 0 || dst.B192_255>>63 != 0
+}
+
+// d256MulScaledFallback computes a multiplication through a fixed-width
+// 512-bit product and performs one round-half-up division by 10^scaleDown. It
+// is used both for raw-overflow recovery and for scale-down values that cannot
+// be represented by scalePow10Factors. It returns true only when the rounded
+// result fits in the signed positive Decimal256 domain; callers retain the
+// normal overflow error otherwise. The path is intentionally rare and has no
+// allocations.
+func d256MulScaledFallback(x, y *types.Decimal256, scaleDown int32, dst *types.Decimal256) bool {
+	if scaleDown <= 0 || scaleDown > 76 {
+		return false
+	}
+	product, sign := d256MulWide(x, y)
+
+	// Divide in at most four 19-digit limbs while retaining the complete
+	// discarded remainder. This is equivalent to one division by 10^n and
+	// avoids double-rounding in the wide fallback.
+	var remainder, factor types.Decimal256
+	factor.B0_63 = 1
+	remaining := scaleDown
+	for remaining > 19 {
+		r := d256Div512ByUint64(&product, types.Pow10[19])
+		term := factor
+		if !d256Mul1Limb(&term, r) || d256AddUnsigned(&remainder, term) {
+			return false
+		}
+		if !d256Mul1Limb(&factor, types.Pow10[19]) {
+			return false
+		}
+		remaining -= 19
+	}
+	if remaining > 0 {
+		r := d256Div512ByUint64(&product, types.Pow10[remaining])
+		term := factor
+		if !d256Mul1Limb(&term, r) || d256AddUnsigned(&remainder, term) {
+			return false
+		}
+		if !d256Mul1Limb(&factor, types.Pow10[remaining]) {
+			return false
+		}
+	}
+
+	// Round half up against the full 10^scaleDown divisor.
+	double := remainder
+	var carry uint64
+	double.B0_63, carry = bits.Add64(double.B0_63, double.B0_63, 0)
+	double.B64_127, carry = bits.Add64(double.B64_127, double.B64_127, carry)
+	double.B128_191, carry = bits.Add64(double.B128_191, double.B128_191, carry)
+	double.B192_255, carry = bits.Add64(double.B192_255, double.B192_255, carry)
+	if carry != 0 || double.Compare(factor) >= 0 {
+		var c uint64
+		product[0], c = bits.Add64(product[0], 1, 0)
+		for i := 1; i < len(product) && c != 0; i++ {
+			product[i], c = bits.Add64(product[i], 0, c)
+		}
+	}
+
+	// Decimal256 multiplication returns DECIMAL(65, resultScale), so the
+	// logical coefficient range is narrower than the physical 256-bit carrier.
+	// Preserve the asymmetric decimal boundary: +10^65 is out of range, while
+	// -10^65 is the inclusive negative boundary accepted by ParseDecimal256.
+	if !d256MulResultFits(product, sign) {
+		return false
+	}
+	result := types.Decimal256{B0_63: product[0], B64_127: product[1], B128_191: product[2], B192_255: product[3]}
+	d256Negate(&result, sign)
+	*dst = result
+	return true
+}
+
+// d256MulResultFits checks the rounded coefficient against the DECIMAL(65, s)
+// result domain. The limit is 10^65 in little-endian 64-bit limbs. Keeping the
+// comparison limb-based avoids another big.Int allocation on this exceptional
+// fallback path.
+func d256MulResultFits(product [8]uint64, negative uint64) bool {
+	if product[4]|product[5]|product[6]|product[7] != 0 {
+		return false
+	}
+	limit := [...]uint64{0, 0x4e3945ef7a25360a, 0x1c7fc3908a8bef46, 0x0000000000f31627}
+	for i := 3; i >= 0; i-- {
+		if product[i] < limit[i] {
+			return true
+		}
+		if product[i] > limit[i] {
+			return false
+		}
+	}
+	return negative != 0
+}
+
 // d256Add is the batch kernel for Decimal256 addition.
 func d256Add(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	var idx int
@@ -2692,6 +2835,14 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 		bmp = rsnull.GetBitmap()
 	}
 
+	// scalePow10Factors intentionally stores at most two 19-digit limbs and
+	// therefore cannot represent a reduction greater than 38. Decimal256's
+	// legal scale range reaches 76, so dispatch the whole operation through the
+	// fixed-width path before either small-limb fast tier can index out of range.
+	if scaleAdj < -38 {
+		return d256MulHighScale(v1, v2, rs, scale1, scale2, -scaleAdj, hasNull, bmp)
+	}
+
 	// Tier 1 prescan: if all values fit in int32, products fit in int64 →
 	// single 64-bit multiply + single 64÷64 division per scale step.
 	// Saves one DIV instruction per element vs the int64 tier.
@@ -2849,6 +3000,18 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 		return nil
 	}
 
+	// Keep the original generic raw-product loop unchanged for the common
+	// no-scale case. The scaled path is isolated below so the fallback branch
+	// and helper calls do not lengthen this hot loop.
+	if scaleAdj < 0 {
+		var pow10a, pow10b uint64
+		var twoStep bool
+		if -scaleAdj <= 38 {
+			pow10a, twoStep, pow10b = scalePow10Factors(-scaleAdj)
+		}
+		return d256MulScaledGeneric(v1, v2, rs, scale1, scale2, scaleAdj, pow10a, twoStep, pow10b, hasNull, bmp)
+	}
+
 	if len1 == len2 {
 		for i := 0; i < len1; i++ {
 			if hasNull && bmp.Contains(uint64(i)) {
@@ -2877,11 +3040,89 @@ func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			}
 		}
 	}
-	// Batch-level scale-down for slow path only.
+	return nil
+}
+
+func d256MulScaledGeneric(v1, v2, rs []types.Decimal256, scale1, scale2, scaleAdj int32, pow10a uint64, twoStep bool, pow10b uint64, hasNull bool, bmp *bitmap.Bitmap) error {
+	if len(v1) == len(v2) {
+		for i := 0; i < len(v1); i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			if err := d256MulSlowOne(&v1[i], &v2[i], &rs[i], scale1, scale2, scaleAdj, pow10a, twoStep, pow10b); err != nil {
+				return err
+			}
+		}
+	} else if len(v1) == 1 {
+		for i := 0; i < len(v2); i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			if err := d256MulSlowOne(&v1[0], &v2[i], &rs[i], scale1, scale2, scaleAdj, pow10a, twoStep, pow10b); err != nil {
+				return err
+			}
+		}
+	} else {
+		for i := 0; i < len(v1); i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			if err := d256MulSlowOne(&v1[i], &v2[0], &rs[i], scale1, scale2, scaleAdj, pow10a, twoStep, pow10b); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func d256MulHighScale(v1, v2, rs []types.Decimal256, scale1, scale2, scaleDown int32, hasNull bool, bmp *bitmap.Bitmap) error {
+	if len(v1) == len(v2) {
+		for i := 0; i < len(v1); i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			if !d256MulScaledFallback(&v1[i], &v2[i], scaleDown, &rs[i]) {
+				return moerr.NewInvalidInputNoCtxf("Decimal256 Mul overflow: %s*%s", v1[i].Format(scale1), v2[i].Format(scale2))
+			}
+		}
+	} else if len(v1) == 1 {
+		for i := 0; i < len(v2); i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			if !d256MulScaledFallback(&v1[0], &v2[i], scaleDown, &rs[i]) {
+				return moerr.NewInvalidInputNoCtxf("Decimal256 Mul overflow: %s*%s", v1[0].Format(scale1), v2[i].Format(scale2))
+			}
+		}
+	} else {
+		for i := 0; i < len(v1); i++ {
+			if hasNull && bmp.Contains(uint64(i)) {
+				continue
+			}
+			if !d256MulScaledFallback(&v1[i], &v2[0], scaleDown, &rs[i]) {
+				return moerr.NewInvalidInputNoCtxf("Decimal256 Mul overflow: %s*%s", v1[i].Format(scale1), v2[0].Format(scale2))
+			}
+		}
+	}
+	return nil
+}
+
+// d256MulSlowOne computes one multiplication on the generic path. A product
+// that does not fit in 256 bits may still become representable after reducing
+// the result scale; only that rare case (or an unsupported multi-limb scale)
+// enters the fixed-width path.
+func d256MulSlowOne(x, y, dst *types.Decimal256, scale1, scale2, scaleAdj int32, pow10a uint64, twoStep bool, pow10b uint64) error {
+	if err := d256MulInline(x, y, dst, scale1, scale2); err != nil {
+		if scaleAdj < 0 && d256MulScaledFallback(x, y, -scaleAdj, dst) {
+			return nil
+		}
+		return err
+	}
 	if scaleAdj < 0 {
-		pow10a, twoStep, pow10b := scalePow10Factors(-scaleAdj)
-		for i := range rs {
-			d256ScaleDownPow10(&rs[i], pow10a, twoStep, pow10b)
+		if pow10a == 0 {
+			d256ScaleDown(dst, -scaleAdj)
+		} else {
+			d256ScaleDownPow10(dst, pow10a, twoStep, pow10b)
 		}
 	}
 	return nil
