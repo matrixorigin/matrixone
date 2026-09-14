@@ -701,7 +701,7 @@ func TestGroupConcatLargeGeometryAcrossFinalizers(t *testing.T) {
 		{name: "ordered memory", ordered: true},
 		{name: "ordered spill", ordered: true, spill: true},
 		{name: "accounted input order", accounted: true},
-		{name: "accounted ordered", ordered: true, accounted: true},
+		{name: "accounted ordered spill", ordered: true, spill: true, accounted: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
