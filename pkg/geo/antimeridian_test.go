@@ -78,11 +78,17 @@ func TestProjectGeodeticPairIsStableUnderUnevenVertexDensification(t *testing.T)
 }
 
 func TestProjectGeodeticPairAcceptsSmallNonCollinearDomain(t *testing.T) {
-	left := mustParse(t, "LINESTRING(0 0,0.000001 0,0.0000005 0.0000008660254)")
-	right := mustParse(t, "POINT(0 0)")
-
-	_, _, _, err := ProjectGeodeticPair(left, right)
-	require.NoError(t, err)
+	for _, line := range []string{
+		"LINESTRING(0 0,0.000001 0,0.0000005 0.0000008660254)",
+		"LINESTRING(0 0,0.0001 0,0.00005 0.00008660254)",
+	} {
+		t.Run(line, func(t *testing.T) {
+			left := mustParse(t, line)
+			right := mustParse(t, "POINT(0 0)")
+			_, _, _, err := ProjectGeodeticPair(left, right)
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestProjectGeodeticPairIsIndependentOfOperandAndMemberOrder(t *testing.T) {
