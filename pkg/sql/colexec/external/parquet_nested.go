@@ -413,6 +413,9 @@ func (h *ParquetHandler) processNestedValue(
 	proc *process.Process,
 ) error {
 	colValues := extractNestedColumnValues(row, col)
+	if err := validateParquetNestedValues(proc.Ctx, col, colValues); err != nil {
+		return err
+	}
 
 	if isNestedColumnNull(colValues, col) {
 		return appendNull(vec, def, proc)
@@ -426,6 +429,35 @@ func (h *ParquetHandler) processNestedValue(
 
 	targetType := types.T(def.Typ.Id)
 	return writeNestedToVector(nested, targetType, vec, proc)
+}
+
+func validateParquetNestedValues(ctx context.Context, col *parquet.Column, values []parquet.Value) error {
+	if col == nil {
+		return moerr.NewInvalidInput(ctx, "malformed parquet nested column: column is nil")
+	}
+
+	leaves := collectLeafColumns(col)
+	byIndex := make(map[int]*parquet.Column, len(leaves))
+	for _, leaf := range leaves {
+		byIndex[leaf.Index()] = leaf
+	}
+	for i, value := range values {
+		leaf := byIndex[value.Column()]
+		if leaf == nil {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed parquet nested value at row %d: column index %d is not in %s",
+				i, value.Column(), col.Name())
+		}
+		if value.RepetitionLevel() < 0 || value.RepetitionLevel() > leaf.MaxRepetitionLevel() {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed parquet nested value at row %d: repetition level %d exceeds maximum %d",
+				i, value.RepetitionLevel(), leaf.MaxRepetitionLevel())
+		}
+		if _, err := validateParquetLeafValue(ctx, leaf, value); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // extractNestedColumnValues extracts all values for a nested column from row

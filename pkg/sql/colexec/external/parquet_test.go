@@ -3444,6 +3444,38 @@ func TestParquetNestedNullUsesColumnDefinitionLevel(t *testing.T) {
 	require.False(t, isNestedColumnNull([]parquet.Value{valueAtMaxLevel}, col))
 }
 
+func TestParquetNestedValuesRejectInvalidLevels(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"outer": parquet.Group{
+			"value": parquet.Leaf(parquet.Int32Type),
+		},
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	col := f.Root().Column("outer")
+	leaf := col.Column("value")
+
+	for _, tc := range []struct {
+		name  string
+		value parquet.Value
+		want  string
+	}{
+		{name: "definition level", value: parquet.Int32Value(1).Level(0, 1, leaf.Index()), want: "exceeds maximum"},
+		{name: "null mismatch", value: parquet.NullValue().Level(0, 0, leaf.Index()), want: "NULL status disagrees"},
+		{name: "repetition level", value: parquet.Int32Value(1).Level(1, 0, leaf.Index()), want: "repetition level"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateParquetNestedValues(context.Background(), col, []parquet.Value{tc.value})
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			require.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
 func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Leaf(parquet.BooleanType)
