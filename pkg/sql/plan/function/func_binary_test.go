@@ -7091,6 +7091,263 @@ func TestStMeasuresGeodetic(t *testing.T) {
 	require.True(t, ok, info)
 }
 
+func TestStMeasuresGeodeticRejectInvalidCoordinates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom0 := types.T_geometry.ToType()
+	geom4326 := geom0
+	geom4326.Width = 4327 // SRID 4326
+	wantError := NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil)
+
+	// Confirm the short-circuit regression fixture is valid WKT and that its
+	// error comes from range validation, not parsing or geometry dispatch.
+	multiPoint, err := geo.ParseWKT("MULTIPOINT((0 0),(181 0))")
+	require.NoError(t, err)
+	container, err := geo.ParseWKT("POLYGON((-1 -1,1 -1,1 1,-1 1,-1 -1))")
+	require.NoError(t, err)
+	_, err = geodeticDistance(geo.WriteWKB(multiPoint), geo.WriteWKB(container))
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	require.Contains(t, err.Error(), "SRID 4326 longitude 181 is out of range")
+
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		fn     fEvalFn
+	}{
+		{
+			name: "ST_Distance longitude",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"POINT(181 0)"}, []bool{false}),
+				NewFunctionTestInput(geom4326, []string{"POINT(0 0)"}, []bool{false}),
+			},
+			fn: StDistance,
+		},
+		{
+			name: "ST_Distance invalid right operand",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"POINT(0 0)"}, []bool{false}),
+				NewFunctionTestInput(geom4326, []string{"POINT(0 91)"}, []bool{false}),
+			},
+			fn: StDistance,
+		},
+		{
+			name: "ST_Distance validates coordinates after a containment candidate",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"MULTIPOINT((0 0),(181 0))"}, []bool{false}),
+				NewFunctionTestInput(geom4326, []string{"POLYGON((-1 -1,1 -1,1 1,-1 1,-1 -1))"}, []bool{false}),
+			},
+			fn: StDistance,
+		},
+		{
+			name: "ST_Length longitude",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"LINESTRING(0 0,181 0)"}, []bool{false}),
+			},
+			fn: StLength,
+		},
+		{
+			name: "ST_Area latitude",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"POLYGON((0 0,1 0,1 91,0 91,0 0))"}, []bool{false}),
+			},
+			fn: StArea,
+		},
+		{
+			name: "ST_Distance explicit SRID 4326",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom0, []string{"POINT(0 0)"}, []bool{false}),
+				NewFunctionTestInput(geom0, []string{"POINT(181 0)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+			},
+			fn: StDistanceWithSRID,
+		},
+		{
+			name: "ST_Length explicit SRID 4326",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom0, []string{"LINESTRING(0 0,0 91)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+			},
+			fn: StLengthWithSRID,
+		},
+		{
+			name: "ST_Area explicit SRID 4326",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom0, []string{"POLYGON((0 0,1 0,1 91,0 91,0 0))"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+			},
+			fn: StAreaWithSRID,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, tc.inputs, wantError, tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestStMeasuresGeodeticEmptyGeometryBehavior(t *testing.T) {
+	emptyLine := encodeGeometryPayload("LINESTRING EMPTY", 0, false)
+	length, err := geodeticLength(emptyLine)
+	require.NoError(t, err)
+	require.Zero(t, length)
+
+	emptyPolygon := encodeGeometryPayload("POLYGON EMPTY", 0, false)
+	area, err := geometryAreaBySRID(emptyPolygon, geo.SRIDWGS84)
+	require.NoError(t, err)
+	require.Zero(t, area)
+
+	emptyPoint := encodeGeometryPayload("POINT EMPTY", 0, false)
+	validPoint := encodeGeometryPayload("POINT(0 0)", 0, false)
+	_, err = geometryDistanceBySRID(emptyPoint, validPoint, geo.SRIDWGS84)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), err)
+	require.Contains(t, err.Error(), "invalid geometry payload")
+}
+
+func TestStMeasuresGeodeticGeometry32RejectInvalidCoordinates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom32SRID4326 := types.T_geometry32.ToType()
+	geom32SRID4326.Width = 4327 // SRID 4326
+	encode32 := func(wkt string) string {
+		g, err := geo.ParseWKT(wkt)
+		require.NoError(t, err)
+		payload, err := geo.WriteWKBFloat32(g)
+		require.NoError(t, err)
+		return string(payload)
+	}
+	wantError := NewFunctionTestResult(types.T_float32.ToType(), true, nil, nil)
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		fn     fEvalFn
+	}{
+		{
+			name: "ST_Distance",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom32SRID4326, []string{encode32("POINT(0 0)")}, []bool{false}),
+				NewFunctionTestInput(geom32SRID4326, []string{encode32("POINT(181 0)")}, []bool{false}),
+			},
+			fn: StDistance32,
+		},
+		{
+			name: "ST_Length",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom32SRID4326, []string{encode32("LINESTRING(0 0,0 91)")}, []bool{false}),
+			},
+			fn: StLength32,
+		},
+		{
+			name: "ST_Area",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom32SRID4326, []string{encode32("POLYGON((0 0,1 0,1 91,0 91,0 0))")}, []bool{false}),
+			},
+			fn: StArea32,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, tc.inputs, wantError, tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestStMeasuresGeodeticSRID0Compatibility(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom0 := types.T_geometry.ToType()
+	geom4326 := geom0
+	geom4326.Width = 4327
+	wantDistance := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{181}, []bool{false})
+	wantLength := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{181}, []bool{false})
+	wantArea := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{91}, []bool{false})
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		want   FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name: "default SRID 0 ST_Distance",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom0, []string{"POINT(0 0)"}, []bool{false}),
+				NewFunctionTestInput(geom0, []string{"POINT(181 0)"}, []bool{false}),
+			},
+			want: wantDistance,
+			fn:   StDistance,
+		},
+		{
+			name: "default SRID 0 ST_Length",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom0, []string{"LINESTRING(0 0,181 0)"}, []bool{false}),
+			},
+			want: wantLength,
+			fn:   StLength,
+		},
+		{
+			name: "default SRID 0 ST_Area",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom0, []string{"POLYGON((0 0,1 0,1 91,0 91,0 0))"}, []bool{false}),
+			},
+			want: wantArea,
+			fn:   StArea,
+		},
+		{
+			name: "explicit SRID 0 overrides typed SRID 4326 for ST_Distance",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"POINT(0 0)"}, []bool{false}),
+				NewFunctionTestInput(geom4326, []string{"POINT(181 0)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			},
+			want: wantDistance,
+			fn:   StDistanceWithSRID,
+		},
+		{
+			name: "explicit SRID 0 overrides typed SRID 4326 for ST_Length",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"LINESTRING(0 0,181 0)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			},
+			want: wantLength,
+			fn:   StLengthWithSRID,
+		},
+		{
+			name: "explicit SRID 0 overrides typed SRID 4326 for ST_Area",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(geom4326, []string{"POLYGON((0 0,1 0,1 91,0 91,0 0))"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			},
+			want: wantArea,
+			fn:   StAreaWithSRID,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, tc.inputs, tc.want, tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	// A SQL NULL and a row masked by a preceding expression must not expose an
+	// invalid coordinate in another lane to the geodetic validator.
+	const oneDegreeMeters = 111195.0802335329
+	masked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(geom4326,
+			[]string{"LINESTRING(0 0,1 0)", "", "LINESTRING(0 0,181 0)"},
+			[]bool{false, true, false})},
+		NewFunctionTestResult(types.T_float64.ToType(), false,
+			[]float64{oneDegreeMeters, 0, 0}, []bool{false, true, true}), StLength).
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false}})
+	ok, info := masked.Run()
+	require.True(t, ok, info)
+
+	zeroRows := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(geom4326, []string{}, []bool{})},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{}, []bool{}), StLength)
+	ok, info = zeroRows.Run()
+	require.True(t, ok, info)
+}
+
 func TestGeometry32Distances(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	g32 := func(wkt string) string {
@@ -7674,6 +7931,68 @@ func TestMBRPredicates(t *testing.T) {
 	run(MBROverlaps, outer, cross, true)
 	run(MBROverlaps, outer, inner, false) // containment is not overlap
 	run(MBROverlaps, outer, right, false) // edge touch is not overlap
+}
+
+func TestMBRPredicatesDegenerateBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	run := func(t *testing.T, fn fEvalFn, g1, g2 string, want bool) {
+		t.Helper()
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g1}, []bool{false}),
+				NewFunctionTestInput(types.T_geometry.ToType(), []string{g2}, []bool{false}),
+			},
+			NewFunctionTestResult(types.T_bool.ToType(), false, []bool{want}, []bool{false}), fn)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		a         string
+		b         string
+		touches   bool
+		within    bool
+		coveredBy bool
+	}{
+		{"equal points", "POINT(0 0)", "POINT(0 0)", false, true, true},
+		{"distinct points", "POINT(0 0)", "POINT(1 1)", false, false, false},
+		{"point inside rectangle", "POINT(2 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"point on rectangle edge", "POINT(0 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, true},
+		{"point on rectangle corner", "POINT(0 0)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, true},
+		{"point in horizontal line interior", "POINT(2 0)", "LINESTRING(0 0, 4 0)", false, true, true},
+		{"point at horizontal line endpoint", "POINT(0 0)", "LINESTRING(0 0, 4 0)", true, false, true},
+		{"point in vertical line interior", "POINT(2 2)", "LINESTRING(2 0, 2 4)", false, true, true},
+		{"point at vertical line endpoint", "POINT(2 0)", "LINESTRING(2 0, 2 4)", true, false, true},
+		{"equal horizontal lines", "LINESTRING(0 0, 4 0)", "LINESTRING(0 0, 4 0)", false, true, true},
+		{"contained lines share endpoint", "LINESTRING(0 0, 2 0)", "LINESTRING(0 0, 4 0)", false, true, true},
+		{"collinear lines overlap", "LINESTRING(0 0, 3 0)", "LINESTRING(2 0, 4 0)", false, false, false},
+		{"collinear lines meet at endpoint", "LINESTRING(0 0, 2 0)", "LINESTRING(2 0, 4 0)", true, false, false},
+		{"perpendicular lines cross interiors", "LINESTRING(0 2, 4 2)", "LINESTRING(2 0, 2 4)", false, false, false},
+		{"line endpoint meets other interior", "LINESTRING(0 2, 2 2)", "LINESTRING(2 0, 2 4)", true, false, false},
+		{"equal vertical lines", "LINESTRING(2 0, 2 4)", "LINESTRING(2 0, 2 4)", false, true, true},
+		{"vertical lines overlap", "LINESTRING(2 0, 2 3)", "LINESTRING(2 2, 2 4)", false, false, false},
+		{"line inside rectangle", "LINESTRING(1 2, 3 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"line endpoints on rectangle boundary", "LINESTRING(0 2, 4 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"line on rectangle edge", "LINESTRING(0 1, 0 3)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, true},
+		{"line crosses rectangle from outside", "LINESTRING(-1 2, 5 2)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, false, false},
+		{"equal rectangles", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"contained rectangle shares edge", "POLYGON((0 1, 2 1, 2 3, 0 3, 0 1))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+		{"partially overlapping rectangles", "POLYGON((2 2, 6 2, 6 6, 2 6, 2 2))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, false, false},
+		{"rectangles share edge", "POLYGON((-4 0, 0 0, 0 4, -4 4, -4 0))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, false},
+		{"rectangles share corner", "POLYGON((4 4, 6 4, 6 6, 4 6, 4 4))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", true, false, false},
+		{"disjoint rectangles", "POLYGON((5 5, 8 5, 8 8, 5 8, 5 5))", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, false, false},
+		{"diagonal line uses its area envelope", "LINESTRING(0 0, 4 4)", "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", false, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run(t, MBRTouches, tc.a, tc.b, tc.touches)
+			run(t, MBRTouches, tc.b, tc.a, tc.touches)
+			run(t, MBRWithin, tc.a, tc.b, tc.within)
+			run(t, MBRContains, tc.b, tc.a, tc.within)
+			run(t, MBRCoveredBy, tc.a, tc.b, tc.coveredBy)
+			run(t, MBRCovers, tc.b, tc.a, tc.coveredBy)
+		})
+	}
 }
 
 func TestGeoHashFunctions(t *testing.T) {
