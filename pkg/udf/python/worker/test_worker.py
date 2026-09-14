@@ -1397,6 +1397,41 @@ class WorkerContractTest(unittest.TestCase):
         third.release()
         self.assertEqual(({}, {}), quota.counts())
 
+    def test_handler_initialization_closes_partial_pipe_ownership(self):
+        real_pipe = os.pipe
+        for failure in ("second_pipe", "watchdog_dup"):
+            with self.subTest(failure=failure):
+                opened = []
+                slots = threading.BoundedSemaphore(1)
+                quota = worker._HandlerQuota(max_account_handlers=1, max_owner_handlers=1)
+
+                def allocate_pipe():
+                    if failure == "second_pipe" and opened:
+                        raise OSError("injected pipe exhaustion")
+                    pair = real_pipe()
+                    opened.extend(pair)
+                    return pair
+
+                try:
+                    with mock.patch.object(worker.os, "pipe", side_effect=allocate_pipe), mock.patch.object(
+                        worker.os, "dup", side_effect=OSError("injected dup exhaustion")
+                    ), mock.patch.object(worker.subprocess, "Popen") as popen:
+                        with self.assertRaisesRegex(OSError, "injected"):
+                            worker._HandlerProcessSession(slots, handler_quota=quota, account_id=1, owner_id="owner")
+                        popen.assert_not_called()
+                    self.assertEqual(({}, {}), quota.counts())
+                    self.assertTrue(slots.acquire(blocking=False))
+                    slots.release()
+                    for fd in opened:
+                        with self.assertRaises(OSError, msg=f"descriptor {fd} leaked after {failure}"):
+                            os.fstat(fd)
+                finally:
+                    for fd in opened:
+                        try:
+                            os.close(fd)
+                        except OSError:
+                            pass
+
     def test_handler_session_releases_account_owner_quota_idempotently(self):
         quota = worker._HandlerQuota(max_account_handlers=2, max_owner_handlers=1)
         session = worker._HandlerProcessSession(
