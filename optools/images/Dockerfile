@@ -55,6 +55,14 @@ RUN if [ "$TYPECHECK" = "1" ]; then \
 
 FROM matrixorigin/ubuntu:22.04
 
+# The Python UDF capability contract includes the IANA timezone database
+# version.  The worker image and the CN image must advertise the same version
+# before Python execution is admitted; the minimal MatrixOne runtime image
+# does not contain tzdata by default.
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc /etc
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/thirdparties/install/lib/*.so /usr/local/lib/
