@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"math"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -98,6 +99,49 @@ func TestIPv4ParsingPolicies(t *testing.T) {
 	if _, ok := parseIPv4DottedQuad("0001.2.3.4", 3); ok {
 		t.Fatal("strict IPv4 consumer accepted a four-digit octet")
 	}
+
+	atonTests := []struct {
+		name  string
+		input string
+		want  uint64
+		ok    bool
+	}{
+		{name: "one part", input: "1", want: 1, ok: true},
+		{name: "two parts", input: "127.1", want: 2130706433, ok: true},
+		{name: "three parts", input: "10.1.2", want: 167837698, ok: true},
+		{name: "three parts with leading zeroes", input: "010.001.002", want: 167837698, ok: true},
+		{name: "short form with four digit zero padding", input: "0001.2.3", want: 16908291, ok: true},
+		{name: "four parts", input: "192.168.1.1", want: 3232235777, ok: true},
+		{name: "four parts with leading zeroes", input: "010.000.005.009", want: 167773449, ok: true},
+		{name: "one part above byte", input: "256", ok: false},
+		{name: "two part above byte", input: "127.256", ok: false},
+		{name: "three part above byte", input: "10.1.256", ok: false},
+		{name: "empty part", input: "10..1", ok: false},
+		{name: "trailing dot", input: "10.1.", ok: false},
+		{name: "too many parts", input: "1.2.3.4.5", ok: false},
+		{name: "sign rejected", input: "+1.2", ok: false},
+		{name: "whitespace rejected", input: "1.2 ", ok: false},
+	}
+	for _, tt := range atonTests {
+		t.Run("inet_aton/"+tt.name, func(t *testing.T) {
+			_, count, ok := parseIPv4AtonParts(tt.input)
+			if ok != tt.ok {
+				t.Fatalf("parseIPv4AtonParts(%q) ok = %v, want %v", tt.input, ok, tt.ok)
+			}
+			if !ok {
+				return
+			}
+			got, ok := inetAtonValue(tt.input)
+			if !ok || got != tt.want {
+				t.Fatalf("inetAtonValue(%q) = %d, %v; want %d, true (parts=%d)", tt.input, got, ok, tt.want, count)
+			}
+		})
+	}
+	longZeroes := strings.Repeat("0", 1024) + "1"
+	longGot, longOK := inetAtonValue(longZeroes)
+	if !longOK || longGot != 1 {
+		t.Fatalf("inetAtonValue(%q...) = %d, %v; want 1, true", longZeroes[:16], longGot, longOK)
+	}
 }
 
 func TestInet6AtonAddressPreservesAddressFamily(t *testing.T) {
@@ -109,6 +153,7 @@ func TestInet6AtonAddressPreservesAddressFamily(t *testing.T) {
 		wantOK   bool
 	}{
 		{name: "plain IPv4 with leading zeroes", input: "010.000.005.009", wantHex: "0a000509", wantSize: net.IPv4len, wantOK: true},
+		{name: "short IPv4 form remains strict", input: "127.1"},
 		{name: "too many digits in plain IPv4", input: "0001.2.3.4"},
 		{name: "mapped IPv6 remains sixteen bytes", input: "::ffff:192.168.1.1", wantHex: "00000000000000000000ffffc0a80101", wantSize: net.IPv6len, wantOK: true},
 		{name: "mapped IPv6 with zero-padded tail", input: "::ffff:192.168.001.001", wantHex: "00000000000000000000ffffc0a80101", wantSize: net.IPv6len, wantOK: true},
@@ -248,11 +293,11 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 
 	t.Run("inet_aton vector and null", func(t *testing.T) {
 		out := run(t, "inet_aton", types.T_varchar.ToType(),
-			[]string{"127.0.0.1", "010.000.005.009", "bad", ""},
-			[]bool{false, false, false, true}, 4, false)
-		require.Equal(t, []uint64{2130706433, 167773449, 0, 0}, vector.MustFixedColWithTypeCheck[uint64](out))
-		require.True(t, out.IsNull(2))
-		require.True(t, out.IsNull(3))
+			[]string{"127.0.0.1", "127.1", "10.1.2", "1", "010.000.005.009", "bad", ""},
+			[]bool{false, false, false, false, false, false, true}, 7, false)
+		require.Equal(t, []uint64{2130706433, 2130706433, 167837698, 1, 167773449, 0, 0}, vector.MustFixedColWithTypeCheck[uint64](out))
+		require.True(t, out.IsNull(5))
+		require.True(t, out.IsNull(6))
 	})
 
 	t.Run("inet_aton constant", func(t *testing.T) {
@@ -299,10 +344,10 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 
 	t.Run("is_ipv4 leading zero policy", func(t *testing.T) {
 		out := run(t, "is_ipv4", types.T_varchar.ToType(),
-			[]string{"010.000.005.009", "0001.2.3.4", "192.0.2.1", ""},
-			[]bool{false, false, false, true}, 4, false)
-		require.Equal(t, []int64{1, 0, 1, 0}, vector.MustFixedColWithTypeCheck[int64](out))
-		require.True(t, out.IsNull(3))
+			[]string{"010.000.005.009", "0001.2.3.4", "127.1", "192.0.2.1", ""},
+			[]bool{false, false, false, false, true}, 5, false)
+		require.Equal(t, []int64{1, 0, 0, 1, 0}, vector.MustFixedColWithTypeCheck[int64](out))
+		require.True(t, out.IsNull(4))
 	})
 
 	t.Run("is_ipv6 accepts mapped text", func(t *testing.T) {

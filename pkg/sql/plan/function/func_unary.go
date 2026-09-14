@@ -7651,10 +7651,14 @@ func parseIPv4DottedQuad(s string, maxDigits int) ([4]byte, bool) {
 			if maxDigits > 0 && digits > maxDigits {
 				return [4]byte{}, false
 			}
-			value = value*10 + int(c-'0')
-			if value > 255 {
+			digit := int(c - '0')
+			// Keep the maxDigits==0 policy safe for arbitrarily many leading
+			// zeroes; a non-zero value above 255 is rejected before the
+			// accumulator can overflow.
+			if value > (255-digit)/10 {
 				return [4]byte{}, false
 			}
+			value = value*10 + digit
 		case c == '.':
 			if digits == 0 || octet >= len(address)-1 {
 				return [4]byte{}, false
@@ -7749,11 +7753,70 @@ func inet6AtonAddress(s string) ([16]byte, int, bool) {
 }
 
 func inetAtonValue(s string) (uint64, bool) {
-	ipv4, ok := parseIPv4DottedQuad(s, 0)
+	parts, count, ok := parseIPv4AtonParts(s)
 	if !ok {
 		return 0, false
 	}
-	return uint64(ipv4[0])<<24 | uint64(ipv4[1])<<16 | uint64(ipv4[2])<<8 | uint64(ipv4[3]), true
+
+	// MySQL accepts one-, two-, three-, and four-part IPv4 spellings for
+	// INET_ATON. Each parsed part is a decimal byte. The one-part form maps to
+	// 0.0.0.a, the two-part form to a.0.0.b, and the three-part form to a.b.0.c.
+	switch count {
+	case 1:
+		return uint64(parts[0]), true
+	case 2:
+		return uint64(parts[0])<<24 | uint64(parts[1]), true
+	case 3:
+		return uint64(parts[0])<<24 | uint64(parts[1])<<16 | uint64(parts[2]), true
+	case 4:
+		return uint64(parts[0])<<24 | uint64(parts[1])<<16 | uint64(parts[2])<<8 | uint64(parts[3]), true
+	default:
+		return 0, false
+	}
+}
+
+// parseIPv4AtonParts parses the historical INET_ATON grammar. Unlike the
+// strict four-part consumers, INET_ATON accepts one to four decimal parts and
+// treats leading zeroes as decimal digits. MySQL rejects a part above 255 even
+// in a short form, so the parser keeps every part bounded to one byte.
+func parseIPv4AtonParts(s string) ([4]byte, int, bool) {
+	var parts [4]byte
+	if len(s) == 0 {
+		return parts, 0, false
+	}
+
+	part := 0
+	value := 0
+	digits := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9':
+			digits++
+			digit := int(c - '0')
+			// Permit arbitrarily many leading zeroes without allowing the
+			// accumulator itself to overflow before the range check.
+			if value > (255-digit)/10 {
+				return [4]byte{}, 0, false
+			}
+			value = value*10 + digit
+		case c == '.':
+			if digits == 0 || part >= len(parts)-1 {
+				return [4]byte{}, 0, false
+			}
+			parts[part] = byte(value)
+			part++
+			value = 0
+			digits = 0
+		default:
+			return [4]byte{}, 0, false
+		}
+	}
+	if digits == 0 {
+		return [4]byte{}, 0, false
+	}
+	parts[part] = byte(value)
+	return parts, part + 1, true
 }
 
 func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

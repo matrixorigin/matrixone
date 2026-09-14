@@ -11,11 +11,15 @@ SELECT INET_ATON('255.255.255.255') AS max_ip;
 SELECT INET_ATON('0.0.0.0') AS zero_ip;
 SELECT INET_ATON('010.000.005.009') AS leading_zeroes;
 SELECT INET_ATON('0001.2.3.4') AS long_zero_padded_octet;
+SELECT INET_ATON('127.1') AS short_two_part;
+SELECT INET_ATON('10.1.2') AS short_three_part;
+SELECT INET_ATON('192.168.1') AS short_three_part_legacy;
+SELECT INET_ATON('1') AS short_one_part;
 SELECT INET_ATON('::ffff:192.0.2.1') AS mapped_ipv6_not_ipv4;
 
 DROP TABLE IF EXISTS inet_aton_leading_zeroes;
 CREATE TABLE inet_aton_leading_zeroes (id INT PRIMARY KEY, ip VARCHAR(50));
-INSERT INTO inet_aton_leading_zeroes VALUES (1, '010.000.005.009'), (2, '0001.2.3.4'), (3, '::ffff:192.0.2.1');
+INSERT INTO inet_aton_leading_zeroes VALUES (1, '010.000.005.009'), (2, '0001.2.3.4'), (3, '127.1'), (4, '10.1.2'), (5, '192.168.1'), (6, '1'), (7, '::ffff:192.0.2.1');
 SELECT id, ip, INET_ATON(ip) AS ip_number FROM inet_aton_leading_zeroes ORDER BY id;
 DROP TABLE inet_aton_leading_zeroes;
 
@@ -25,7 +29,8 @@ SELECT INET_ATON(NULL) AS null_input;
 # Invalid addresses (should return NULL)
 SELECT INET_ATON('invalid') AS invalid_address;
 SELECT INET_ATON('256.256.256.256') AS invalid_octet;
-SELECT INET_ATON('192.168.1') AS incomplete;
+SELECT INET_ATON('127.256') AS invalid_short_octet;
+SELECT INET_ATON('10..1') AS invalid_short_empty_part;
 SELECT INET_ATON('192.168.1.1.1') AS too_many_octets;
 SELECT INET_ATON('::1') AS ipv6_address;
 
