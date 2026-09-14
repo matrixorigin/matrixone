@@ -7169,7 +7169,7 @@ func (c *Compile) checkPitrGranularity(
 		if pt == nil {
 			continue
 		}
-		if exclude != "" {
+		if exclude != "" && pt.Source.Database != cdc.CDCPitrGranularity_All && pt.Source.Table != cdc.CDCPitrGranularity_All {
 			matched, err := regexp.MatchString(exclude, pt.Source.Database+"."+pt.Source.Table)
 			if err != nil {
 				return err
@@ -7191,8 +7191,8 @@ func (c *Compile) checkPitrGranularity(
 			if exclude != "" {
 				excludeFilter = fmt.Sprintf(" AND concat(t.%s, '.', t.%s) NOT REGEXP %s", sqlquote.Ident(catalog.SystemRelAttr_DBName), sqlquote.Ident(catalog.SystemRelAttr_Name), sqlquote.String(exclude))
 			}
-			pkSQL := fmt.Sprintf("SELECT 1 FROM %s.%s t WHERE t.%s = %d AND t.%s = 'r'%s%s%s AND NOT EXISTS (SELECT 1 FROM %s.%s p WHERE p.%s = t.%s AND p.%s = t.%s AND p.%s = t.%s AND p.%s = t.%s AND p.%s = %s AND p.%s <> %s) LIMIT 1",
-				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_TABLES), sqlquote.Ident(catalog.SystemRelAttr_AccID), accountId, sqlquote.Ident(catalog.SystemRelAttr_Kind), dbFilter, tableFilter, excludeFilter,
+			pkSQL := fmt.Sprintf("SELECT 1 FROM %s.%s t WHERE t.%s = %d AND t.%s = 'r' AND t.%s NOT IN (%s)%s%s%s AND NOT EXISTS (SELECT 1 FROM %s.%s p WHERE p.%s = t.%s AND p.%s = t.%s AND p.%s = t.%s AND p.%s = t.%s AND p.%s = %s AND p.%s <> %s) LIMIT 1",
+				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_TABLES), sqlquote.Ident(catalog.SystemRelAttr_AccID), accountId, sqlquote.Ident(catalog.SystemRelAttr_DBName), cdc.AddSingleQuotesJoin(catalog.SystemDatabases), dbFilter, tableFilter, excludeFilter,
 				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
 				sqlquote.Ident(catalog.SystemColAttr_AccID), sqlquote.Ident(catalog.SystemRelAttr_AccID),
 				sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.Ident(catalog.SystemRelAttr_DBName),
