@@ -3412,6 +3412,24 @@ func TestParquet_Dictionary_Numeric_IndexKindMismatch(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquet_Dictionary_Numeric_ValueKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Encoded(parquet.Leaf(parquet.Int32Type), &parquet.RLEDictionary)
+	f, page := writeDictAndGetPage(t, node, []parquet.Value{parquet.Int32Value(1)})
+	badDictionary := parquet.BooleanType.NewDictionary(0, 1, encoding.BooleanValues([]byte{1}))
+	badPage := &parquetPageWithDictionary{Page: page, dictionary: badDictionary}
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "dictionary values with type BOOLEAN")
+	require.Zero(t, vec.Length())
+}
+
 func TestParquet_Dictionary_Bool_NullableSlicedPage(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Optional(parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary))

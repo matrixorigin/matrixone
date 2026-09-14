@@ -1093,7 +1093,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 				data := page.Data()
 				if dict := page.Dictionary(); dict != nil {
-					dictData := dict.Page().Data()
+					dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int32)
+					if err != nil {
+						return err
+					}
 					dictValues := dictData.Int32()
 					indices, err := parquetDictionaryIndexes(proc.Ctx, data)
 					if err != nil {
@@ -1342,7 +1345,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 					data := page.Data()
 					if dict := page.Dictionary(); dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Double)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Double()
 						indices, err := parquetDictionaryIndexes(proc.Ctx, data)
 						if err != nil {
@@ -1358,7 +1364,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
 					data := page.Data()
 					if dict := page.Dictionary(); dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Float)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Float()
 						indices, err := parquetDictionaryIndexes(proc.Ctx, data)
 						if err != nil {
@@ -1431,7 +1440,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					})
 				}
 
-				dictData := dict.Page().Data()
+				dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int32)
+				if err != nil {
+					return err
+				}
 				bs, _ := dictData.Data()
 				dictDates := types.DecodeSlice[int32](bs)
 				indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
@@ -1503,7 +1515,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				switch {
 				case tsT.Unit.Nanos != nil:
 					if dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int64)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
@@ -1522,7 +1537,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					})
 				case tsT.Unit.Micros != nil:
 					if dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int64)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
@@ -1541,7 +1559,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					})
 				case tsT.Unit.Millis != nil:
 					if dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int64)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
@@ -1597,7 +1618,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					})
 				}
 
-				dictData := dict.Page().Data()
+				dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int32)
+				if err != nil {
+					return err
+				}
 				bs, _ := dictData.Data()
 				dictDates := types.DecodeSlice[int32](bs)
 				indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
@@ -1688,7 +1712,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				switch {
 				case timeT.Unit.Nanos != nil:
 					if dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int64)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Int64()
 						converted := make([]types.Time, len(dictValues))
 						for i, v := range dictValues {
@@ -1707,7 +1734,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					})
 				case timeT.Unit.Micros != nil:
 					if dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int64)
+						if err != nil {
+							return err
+						}
 						bs, _ := dictData.Data()
 						dictTimes := types.DecodeSlice[types.Time](bs)
 						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
@@ -1722,7 +1752,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					return copyPageToVec(mp, page, proc, vec, types.DecodeSlice[types.Time](bs))
 				case timeT.Unit.Millis != nil:
 					if dict != nil {
-						dictData := dict.Page().Data()
+						dictData, err := parquetDictionaryValues(proc.Ctx, dict, encoding.Int32)
+						if err != nil {
+							return err
+						}
 						dictValues := dictData.Int32()
 						converted := make([]types.Time, len(dictValues))
 						for i, v := range dictValues {
@@ -3638,6 +3671,20 @@ func parquetDictionaryIndexes(ctx context.Context, data encoding.Values) ([]int3
 	return data.Int32(), nil
 }
 
+func parquetDictionaryValues(
+	ctx context.Context,
+	dict parquet.Dictionary,
+	expected encoding.Kind,
+) (encoding.Values, error) {
+	data := dict.Page().Data()
+	if data.Kind() != expected {
+		return encoding.Values{}, moerr.NewInvalidInputf(ctx,
+			"malformed parquet dictionary values with type %s, expected %s",
+			data.Kind(), expected)
+	}
+	return data, nil
+}
+
 func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, dictLen int, indexes []int32, convert func(idx int32) T) error {
 	nc, err := prepareNullCheck(proc.Ctx, mp, page)
 	if err != nil {
@@ -3825,7 +3872,20 @@ var (
 	minInt256Big = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 255))
 )
 
+func validateParquetValuesKind(ctx context.Context, kind parquet.Kind, data encoding.Values) error {
+	expected := encoding.Kind(kind)
+	if data.Kind() != expected {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet values with type %s, expected %s",
+			data.Kind(), expected)
+	}
+	return nil
+}
+
 func decodeDecimal64Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal64, error) {
+	if err := validateParquetValuesKind(ctx, kind, data); err != nil {
+		return nil, err
+	}
 	switch kind {
 	case parquet.Int32:
 		src := data.Int32()
@@ -3879,6 +3939,9 @@ func decodeDecimal64Values(ctx context.Context, kind parquet.Kind, data encoding
 }
 
 func decodeDecimal128Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal128, error) {
+	if err := validateParquetValuesKind(ctx, kind, data); err != nil {
+		return nil, err
+	}
 	switch kind {
 	case parquet.Int32:
 		src := data.Int32()
@@ -3932,6 +3995,9 @@ func decodeDecimal128Values(ctx context.Context, kind parquet.Kind, data encodin
 }
 
 func decodeDecimal256Values(ctx context.Context, kind parquet.Kind, data encoding.Values) ([]types.Decimal256, error) {
+	if err := validateParquetValuesKind(ctx, kind, data); err != nil {
+		return nil, err
+	}
 	switch kind {
 	case parquet.Int32:
 		src := data.Int32()
