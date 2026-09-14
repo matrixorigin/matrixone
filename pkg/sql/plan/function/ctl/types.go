@@ -46,7 +46,6 @@ var (
 	TraceSpanMethod          = "TRACESPAN"
 	CoreDumpMethod           = "COREDUMP"
 	InterceptCommitMethod    = "INTERCEPTCOMMIT"
-	MergeObjectsMethod       = "MERGEOBJECTS"
 	DiskCleanerMethod        = "DISKCLEANER"
 	GetProtocolVersionMethod = "GETPROTOCOLVERSION"
 	SetProtocolVersionMethod = "SETPROTOCOLVERSION"
@@ -92,7 +91,6 @@ var (
 		TraceSpanMethod:          handleTraceSpan,
 		CoreDumpMethod:           handleCoreDump,
 		InterceptCommitMethod:    handleInterceptCommit(),
-		MergeObjectsMethod:       handleCNMerge,
 		DiskCleanerMethod:        handleDiskCleaner(),
 		GetProtocolVersionMethod: handleGetProtocolVersion,
 		SetProtocolVersionMethod: handleSetProtocolVersion,
