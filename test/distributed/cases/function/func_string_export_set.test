@@ -348,6 +348,70 @@ DEALLOCATE PREPARE export_set_aggregate_union_reverse;
 DEALLOCATE PREPARE export_set_union_user_cast;
 DEALLOCATE PREPARE export_set_union_peer_cast;
 
+# 过滤、分组与 HAVING 下推后仍须追踪聚合的真实输出域。
+INSERT INTO export_set_scalar_input VALUES (1), (2);
+PREPARE export_set_where FROM
+  "SELECT id FROM export_set_scalar_input WHERE EXPORT_SET((SELECT MAX(?) FROM export_set_scalar_input),'Y','N','',4)='NYNN' ORDER BY id";
+PREPARE export_set_having FROM
+  "SELECT COUNT(*) AS matching_rows FROM export_set_scalar_input HAVING EXPORT_SET((SELECT MAX(?) FROM export_set_scalar_input),'Y','N','',4)='NYNN'";
+PREPARE export_set_group FROM
+  "SELECT EXPORT_SET((SELECT MAX(?) FROM export_set_scalar_input),'Y','N','',4) AS group_bits, COUNT(*) AS grouped_rows FROM export_set_scalar_input GROUP BY group_bits";
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_where USING @export_set_bits;
+EXECUTE export_set_having USING @export_set_bits;
+EXECUTE export_set_group USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_where USING @export_set_bits;
+EXECUTE export_set_having USING @export_set_bits;
+EXECUTE export_set_group USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_where USING @export_set_bits;
+EXECUTE export_set_group USING @export_set_bits;
+
+# 数字 peer 在 PREPARE 隐式字符串转换/折叠后保留来源；NULLIF 的两个副本均须刷新。
+PREPARE export_set_coalesce FROM
+  "SELECT EXPORT_SET((SELECT COALESCE(x,1.0) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS coalesce_bits";
+PREPARE export_set_nullif FROM
+  "SELECT EXPORT_SET((SELECT NULLIF(COALESCE(x,1.0),0) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS nullif_bits";
+PREPARE export_set_nullif_equal FROM
+  "SELECT EXPORT_SET((SELECT NULLIF(x,1.0) FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d),'Y','N','',4) AS nullif_equal_bits";
+PREPARE export_set_peer_controls FROM
+  "SELECT EXPORT_SET(COALESCE(x,'1.0'),'Y','N','',4) AS text_peer, EXPORT_SET(COALESCE(x,CAST(1.0 AS CHAR)),'Y','N','',4) AS char_peer, EXPORT_SET(COALESCE(x,CAST(1.0 AS DOUBLE)),'Y','N','',4) AS double_peer, EXPORT_SET(COALESCE(x,1e0),'Y','N','',4) AS scientific_peer, EXPORT_SET(COALESCE(x,CAST(1.0 AS DECIMAL(6,2))),'Y','N','',4) AS decimal_peer, EXPORT_SET(COALESCE(CAST(x AS CHAR),1.0),'Y','N','',4) AS char_value FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d";
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_coalesce USING @export_set_bits;
+EXECUTE export_set_nullif USING @export_set_bits;
+EXECUTE export_set_peer_controls USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_coalesce USING @export_set_bits;
+EXECUTE export_set_nullif USING @export_set_bits;
+EXECUTE export_set_peer_controls USING @export_set_bits;
+SET @export_set_bits = CAST(9223372036854775808.5 AS DECIMAL(65,1));
+EXECUTE export_set_coalesce USING @export_set_bits;
+EXECUTE export_set_nullif USING @export_set_bits;
+SET @export_set_bits = CAST(1.0 AS DECIMAL(4,1));
+EXECUTE export_set_nullif_equal USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_coalesce USING @export_set_bits;
+EXECUTE export_set_nullif USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_coalesce USING @export_set_bits;
+EXECUTE export_set_nullif USING @export_set_bits;
+EXECUTE export_set_nullif_equal USING @export_set_bits;
+EXECUTE export_set_group USING @export_set_bits;
+TRUNCATE TABLE export_set_scalar_input;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_where USING @export_set_bits;
+EXECUTE export_set_having USING @export_set_bits;
+EXECUTE export_set_coalesce USING @export_set_bits;
+EXECUTE export_set_nullif USING @export_set_bits;
+DEALLOCATE PREPARE export_set_where;
+DEALLOCATE PREPARE export_set_having;
+DEALLOCATE PREPARE export_set_group;
+DEALLOCATE PREPARE export_set_coalesce;
+DEALLOCATE PREPARE export_set_nullif;
+DEALLOCATE PREPARE export_set_nullif_equal;
+DEALLOCATE PREPARE export_set_peer_controls;
+
 DROP TABLE export_set_scalar_input;
 
 DROP TABLE export_set_numeric_bits;

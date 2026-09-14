@@ -3685,34 +3685,21 @@ func markPreparedExportSetLineage(plan0 *Plan) {
 	if query == nil {
 		return
 	}
-	var visit func(*plan.Expr, int32)
-	visit = func(expr *plan.Expr, ownerNodeID int32) {
-		if expr == nil {
-			return
-		}
-		if fn := expr.GetF(); fn != nil {
-			if fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "export_set") && len(fn.Args) > 0 {
-				positions := make(map[int32]struct{})
-				collectPreparedExportSetSources(query, fn.Args[0], ownerNodeID, positions,
-					make(map[directResultTraceKey]struct{}), make(map[int32]struct{}))
-			}
-			for _, arg := range fn.Args {
-				visit(arg, ownerNodeID)
-			}
-		}
-		if list := expr.GetList(); list != nil {
-			for _, item := range list.List {
-				visit(item, ownerNodeID)
-			}
-		}
-	}
 	for nodeID, node := range query.Nodes {
-		if node == nil {
-			continue
-		}
-		for _, expr := range node.ProjectList {
-			visit(expr, int32(nodeID))
-		}
+		// Share the physical-expression inventory with sequence detection, but
+		// never short-circuit: every EXPORT_SET consumer needs its own lineage.
+		anyExecutableNodeExpr(node, func(expr *plan.Expr) bool {
+			_ = plan.VisitExprTree(expr, func(candidate *plan.Expr) error {
+				fn := candidate.GetF()
+				if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "export_set") && len(fn.Args) > 0 {
+					positions := make(map[int32]struct{})
+					collectPreparedExportSetSources(query, fn.Args[0], int32(nodeID), positions,
+						make(map[directResultTraceKey]struct{}), make(map[int32]struct{}))
+				}
+				return nil
+			})
+			return false
+		})
 	}
 }
 
@@ -3775,6 +3762,7 @@ func collectPreparedExportSetSources(
 	if sub := expr.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
 		if _, seen := seenSubqueries[sub.NodeId]; !seen {
 			seenSubqueries[sub.NodeId] = struct{}{}
+			defer delete(seenSubqueries, sub.NodeId)
 			nodeID, colPos, ok := collectPreparedExportSetSourceColumn(
 				query, sub.NodeId, 0, positions, seenColumns, seenSubqueries)
 			remember(nodeID, colPos, ok)
@@ -3783,6 +3771,45 @@ func collectPreparedExportSetSources(
 	if col := expr.GetCol(); col != nil && ownerNodeID >= 0 && int(ownerNodeID) < len(query.Nodes) {
 		node := query.Nodes[ownerNodeID]
 		if node != nil {
+			if col.RelPos < 0 && col.ColPos >= 0 {
+				var producer *plan.Expr
+				if node.NodeType == plan.Node_AGG {
+					if col.RelPos == -1 && int(col.ColPos) < len(node.GroupBy) {
+						producer = node.GroupBy[col.ColPos]
+					} else if pos := col.ColPos - int32(len(node.GroupBy)); col.RelPos == -2 && pos >= 0 && int(pos) < len(node.AggList) {
+						producer = node.AggList[pos]
+					}
+				} else if node.NodeType == plan.Node_WINDOW && col.RelPos == -1 && len(node.Children) == 1 {
+					child := query.Nodes[node.Children[0]]
+					if child != nil {
+						pos := int(col.ColPos) - len(child.ProjectList)
+						if pos >= 0 && pos < len(node.WinSpecList) {
+							producer = node.WinSpecList[pos]
+						}
+					}
+				}
+				if producer != nil {
+					localPositions := make(map[int32]struct{})
+					collectPreparedExportSetSources(query, producer, ownerNodeID, localPositions, seenColumns, seenSubqueries)
+					if len(localPositions) > 0 {
+						for pos := range localPositions {
+							positions[pos] = struct{}{}
+						}
+						// HAVING can reference an aggregate omitted from ProjectList.
+						// Keep the synthetic ColRef, never substitute a bare marker.
+						outputPos := int32(-1)
+						for i, output := range node.ProjectList {
+							if ref := output.GetCol(); ref != nil && ref.RelPos == col.RelPos && ref.ColPos == col.ColPos {
+								outputPos = int32(i)
+								break
+							}
+						}
+						markPreparedOutputSource(expr, ownerNodeID, outputPos, localPositions)
+						return ownerNodeID, outputPos, true
+					}
+					return 0, 0, false
+				}
+			}
 			childNodeID := int32(-1)
 			if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
 				childNodeID = node.Children[col.RelPos]
@@ -3821,6 +3848,9 @@ func collectPreparedExportSetSourceColumn(
 		return 0, 0, false
 	}
 	seenColumns[key] = struct{}{}
+	// This is a recursion guard, not a global visited set: sibling copies
+	// (notably NULLIF's CASE branches) each need their own source metadata.
+	defer delete(seenColumns, key)
 	node := query.Nodes[nodeID]
 	if node == nil {
 		return 0, 0, false
@@ -6800,12 +6830,10 @@ func attachPreparedRuntimeParamSource(expr, source *Expr) bool {
 	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") || len(fn.Args) == 0 {
 		return false
 	}
-	literal := fn.Args[0].GetLit()
-	if literal == nil {
-		return false
-	}
-	literal.Src = source
-	return true
+	// An exact decimal constant can still be CAST(TEXT AS DECIMAL) here,
+	// underneath a provisional result CAST to TEXT. Retain its source at the
+	// leaf so every subsequent fold reconstructs the complete cast chain.
+	return attachPreparedRuntimeParamSource(fn.Args[0], source)
 }
 
 type preparedPlanColumnTypeResolver func(*plan.ColRef, plan.Type) (plan.Type, bool)
@@ -6894,8 +6922,25 @@ func refreshPreparedPlanProjectionExprType(
 		rebindArgs := DeepCopyExprList(exprImpl.F.Args)
 		if preparedExprHasFallbackSource(expr) {
 			for i, arg := range rebindArgs {
-				if source, ok := provisionalExactNumericSource(arg); ok {
+				if source, ok := provisionalNumericSource(arg); ok {
 					rebindArgs[i] = source
+				}
+			}
+			if isPreparedNumericComparison(functionName) && len(rebindArgs) == 2 {
+				for i, arg := range rebindArgs {
+					oid := types.T(arg.Typ.Id)
+					if (oid == types.T_char || oid == types.T_varchar || oid == types.T_text) &&
+						makeTypeByPlan2Expr(rebindArgs[1-i]).IsNumeric() {
+						// A NULL runtime marker can leave COALESCE's domain as
+						// TEXT. Compare its numeric prefix as DOUBLE instead of
+						// reinstating a strict INT cast of a valid value like 1.0.
+						target := types.T_float64.ToType()
+						cast, err := appendComparisonCastBeforeExpr(ctx, arg, makePlan2Type(&target))
+						if err != nil {
+							return false, err
+						}
+						rebindArgs[i] = cast
+					}
 				}
 			}
 		}

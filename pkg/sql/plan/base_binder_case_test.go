@@ -872,7 +872,7 @@ func TestPreparedNumericRuntimeLiteralRebindingHelpers(t *testing.T) {
 		{name: "nil", expr: nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			source, ok := provisionalExactNumericSource(tc.expr)
+			source, ok := provisionalNumericSource(tc.expr)
 			require.Equal(t, tc.want, ok)
 			if tc.want {
 				require.Equal(t, int32(tc.wantType), source.Typ.Id)

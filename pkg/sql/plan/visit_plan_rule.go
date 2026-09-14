@@ -1268,7 +1268,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		// prepare-time envelope. Source-less scientific literals and explicit
 		// FLOAT casts are semantic FLOAT boundaries and must remain unchanged.
 		for i, arg := range copy.GetF().Args {
-			if source, sourceOK := provisionalExactNumericSource(arg); sourceOK {
+			if source, sourceOK := provisionalNumericSource(arg); sourceOK {
 				copy.GetF().Args[i] = source
 			}
 		}
@@ -1303,7 +1303,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 	return expr, false, nil
 }
 
-func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
+func provisionalNumericSource(expr *plan.Expr) (*Expr, bool) {
 	if expr == nil {
 		return nil, false
 	}
@@ -1313,20 +1313,20 @@ func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
 	}
 	lit := expr.GetLit()
 	if lit != nil && lit.Src != nil {
-		if source, ok := provisionalExactNumericSource(lit.Src); ok {
+		if source, ok := provisionalNumericSource(lit.Src); ok {
 			return source, true
 		}
 		sourceType := makeTypeByPlan2Expr(lit.Src)
-		if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
+		if preparedNumericCommonOperandType(sourceType.Oid) && (target.IsMySQLString() || !sourceType.Oid.IsFloat()) {
 			return DeepCopyExpr(lit.Src), true
 		}
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 {
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
-		provisionalCast := (target.IsMySQLString() && !fn.GetSyntaxExplicitCast()) ||
-			(target.IsFloat() && overload == 0)
+		provisionalCast := (target.IsMySQLString() && !isExplicitPreparedLineageCast(expr)) ||
+			(target.IsFloat() && overload == 0 && !fn.GetSyntaxExplicitCast())
 		sourceType := makeTypeByPlan2Expr(fn.Args[0])
-		if provisionalCast && preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
+		if provisionalCast && preparedNumericCommonOperandType(sourceType.Oid) && (target.IsMySQLString() || !sourceType.Oid.IsFloat()) {
 			return DeepCopyExpr(fn.Args[0]), true
 		}
 	}
@@ -1404,7 +1404,7 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 			return copy.GetF().Args[0], true, nil
 		}
 		for i, arg := range copy.GetF().Args {
-			if source, ok := provisionalExactNumericSource(arg); ok {
+			if source, ok := provisionalNumericSource(arg); ok {
 				copy.GetF().Args[i] = source
 			}
 		}
@@ -2193,7 +2193,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				candidate := arg
 				if sqlExecuteNumericPeerDependent && !sqlExecuteNumericSourceArgs[i] && originalArgs[i] != nil {
 					candidate = originalArgs[i]
-					if source, ok := provisionalExactNumericSource(candidate); ok {
+					if source, ok := provisionalNumericSource(candidate); ok {
 						boundArgs[i] = source
 						candidate = source
 						needResetFunction = true
@@ -3155,7 +3155,7 @@ func unwrapPreparedImplicitCast(expr *plan.Expr, eligible bool) *plan.Expr {
 func unwrapNumericPrefixDependentImplicitCast(expr *plan.Expr) (*plan.Expr, bool) {
 	current := expr
 	changed := false
-	if source, ok := provisionalExactNumericSource(current); ok {
+	if source, ok := provisionalNumericSource(current); ok {
 		return source, true
 	}
 	for current != nil {

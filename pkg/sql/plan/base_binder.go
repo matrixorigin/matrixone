@@ -3199,9 +3199,43 @@ func (b *baseBinder) collectPreparedParamSources(
 		if sub.Typ == plan.SubqueryRef_SCALAR {
 			if _, seen := seenSubqueries[sub.NodeId]; !seen {
 				seenSubqueries[sub.NodeId] = struct{}{}
+				defer delete(seenSubqueries, sub.NodeId)
 				nodeID, colPos, ok := b.collectPreparedParamSourceColumn(
 					sub.NodeId, 0, positions, seenColumns, seenSubqueries, mark)
 				remember(nodeID, colPos, ok)
+			}
+		}
+	}
+	if col := expr.GetCol(); col != nil && b.builder != nil && b.builder.qry != nil && col.RelPos >= 0 {
+		if nodeID, ok := b.builder.tag2NodeID[col.RelPos]; ok && nodeID >= 0 && int(nodeID) < len(b.builder.qry.Nodes) {
+			// Before remapping RelPos is a binding tag, not a child index.
+			// Separate tag keys from the physical node keys used below.
+			key := directResultTraceKey{nodeID: -col.RelPos - 1, colPos: col.ColPos}
+			if _, seen := seenColumns[key]; seen {
+				return 0, 0, false
+			}
+			seenColumns[key] = struct{}{}
+			defer delete(seenColumns, key)
+			node := b.builder.qry.Nodes[nodeID]
+			if node != nil && col.ColPos >= 0 {
+				sources := node.ProjectList
+				switch node.NodeType {
+				case plan.Node_AGG:
+					for i, tag := range node.BindingTags {
+						if tag == col.RelPos {
+							if i == 0 {
+								sources = node.GroupBy
+							} else {
+								sources = node.AggList
+							}
+						}
+					}
+				case plan.Node_WINDOW:
+					sources = node.WinSpecList
+				}
+				if int(col.ColPos) < len(sources) {
+					return b.collectPreparedParamSources(sources[col.ColPos], nodeID, positions, seenColumns, seenSubqueries, mark)
+				}
 			}
 		}
 	}
@@ -3252,6 +3286,7 @@ func (b *baseBinder) collectPreparedParamSourceColumn(
 		return 0, 0, false
 	}
 	seenColumns[key] = struct{}{}
+	defer delete(seenColumns, key)
 	node := b.builder.qry.Nodes[nodeID]
 	if node == nil {
 		return 0, 0, false
@@ -3783,9 +3818,16 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if err != nil {
 			return nil, err
 		}
-		if !preparedNumericProvenance && (preparedSQLExecuteNumericResultConsumer(name) || name == "iff") {
+		if !preparedNumericProvenance {
 			for _, arg := range args {
 				if preparedExprContainsParam(arg) {
+					preparedNumericProvenance = true
+					break
+				}
+				// A derived/aggregate column can hide the marker from the AST
+				// scan. Preserve exact peers before common-type binding folds
+				// them to TEXT; execute-time lineage alone cannot recover them.
+				if _, found := b.firstPreparedParamPosition(arg, nil); found {
 					preparedNumericProvenance = true
 					break
 				}
@@ -3826,15 +3868,16 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 			if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 &&
-				(!explicitPeerCast || makeTypeByPlan2Expr(arg).Oid.IsMySQLString()) &&
+				!explicitPeerCast && !isExplicitPreparedLineageCast(arg) &&
 				!preparedExprContainsParam(fn.Args[0]) &&
 				preparedNumericCommonOperandType(makeTypeByPlan2Expr(fn.Args[0]).Oid) {
 				source = fn.Args[0]
 			}
 			sourceType := makeTypeByPlan2Expr(source)
-			if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
-				// Preserve only a proven exact peer. Scientific FLOAT literals and
-				// explicit FLOAT casts remain source-less semantic FLOAT boundaries.
+			if preparedNumericCommonOperandType(sourceType.Oid) {
+				// Preserve the original numeric domain before TEXT coercion.
+				// Scientific literals and explicit FLOAT casts keep FLOAT sources;
+				// they must never be reconstructed as exact DECIMAL peers.
 				preparedPeerSources[i] = DeepCopyExpr(source)
 			}
 		}
