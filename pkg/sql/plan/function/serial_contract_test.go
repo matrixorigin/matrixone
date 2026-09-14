@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -194,4 +195,37 @@ func TestSerialDecimal256Encoding(t *testing.T) {
 	for i := range values {
 		require.Equal(t, want[i], packers[i].GetBuf())
 	}
+
+	t.Run("nulls use both serial contracts", func(t *testing.T) {
+		nullVec := vector.NewVec(typ)
+		defer nullVec.Free(mp)
+		require.NoError(t, vector.AppendFixedList(
+			nullVec, values, []bool{false, true}, mp))
+
+		fullPackers := types.NewPackerArray(len(values))
+		defer func() {
+			for _, packer := range fullPackers {
+				packer.Close()
+			}
+		}()
+		SerialHelper(nullVec, nil, fullPackers, true)
+		require.Equal(t, want[0], fullPackers[0].GetBuf())
+		nullPacker := types.NewPacker()
+		nullPacker.EncodeNull()
+		require.Equal(t, nullPacker.GetBuf(), fullPackers[1].GetBuf())
+		nullPacker.Close()
+
+		bitmap := nulls.NewWithSize(len(values))
+		compactPackers := types.NewPackerArray(len(values))
+		defer func() {
+			for _, packer := range compactPackers {
+				packer.Close()
+			}
+		}()
+		SerialHelper(nullVec, bitmap, compactPackers, false)
+		require.Equal(t, want[0], compactPackers[0].GetBuf())
+		require.True(t, bitmap.Contains(1))
+		require.False(t, bitmap.Contains(0))
+		require.Empty(t, compactPackers[1].GetBuf())
+	})
 }
