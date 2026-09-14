@@ -1091,6 +1091,25 @@ func TestParquetValueNullnessMustMatchDefinitionLevels(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquetGenericMappingRejectsValueKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(dst []parquet.Value) (int, error) {
+			dst[0] = parquet.BooleanValue(true)
+			return 1, nil
+		}),
+	}
+	vec := vector.NewVec(types.T_int32.ToType())
+	err := processParquetValuesToFixed[int32](context.Background(), &columnMapper{}, badPage, proc, vec, 0,
+		func(v parquet.Value) (int32, error) { return v.Int32(), nil })
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "value kind BOOLEAN")
+	require.Zero(t, vec.Length())
+}
+
 func TestParquetGenericDictionaryMappingRejectsOutOfRangeIndex(t *testing.T) {
 	proc := testutil.NewProc(t)
 	f, page := writeColumnAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{

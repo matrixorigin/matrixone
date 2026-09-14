@@ -2792,6 +2792,9 @@ func readParquetPageValues(ctx context.Context, page parquet.Page) ([]parquet.Va
 	if read != n {
 		return nil, moerr.NewInternalErrorf(ctx, "short read parquet values: got %d, expected %d", read, n)
 	}
+	if err := validateParquetValueKinds(ctx, page, values); err != nil {
+		return nil, err
+	}
 	return values, nil
 }
 
@@ -2808,7 +2811,25 @@ func readParquetPageAllValues(ctx context.Context, page parquet.Page) ([]parquet
 	if read != n {
 		return nil, moerr.NewInternalErrorf(ctx, "short read parquet values: got %d, expected %d", read, n)
 	}
+	if err := validateParquetValueKinds(ctx, page, values); err != nil {
+		return nil, err
+	}
 	return values, nil
+}
+
+func validateParquetValueKinds(ctx context.Context, page parquet.Page, values []parquet.Value) error {
+	expected := page.Type().Kind()
+	for i, value := range values {
+		if value.IsNull() {
+			continue
+		}
+		if value.Kind() != expected {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed parquet page: value kind %s at row %d, expected %s",
+				value.Kind(), i, expected)
+		}
+	}
+	return nil
 }
 
 func processParquetListToArray[T types.ArrayElement](
