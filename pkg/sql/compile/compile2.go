@@ -157,6 +157,7 @@ func (c *Compile) Compile(
 	// statistical information record and trace.
 	compileStart := time.Now()
 	hasUnresolvedFullTextPlan := false
+	hasUnresolvedIndexHintPlan := false
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
 	defer func() {
 		if e := recover(); e != nil {
@@ -194,6 +195,8 @@ func (c *Compile) Compile(
 			switch qry.Query.StmtType {
 			case plan.Query_SELECT:
 				c.needLockMeta, hasUnresolvedFullTextPlan = selectMetaLockRequirement(qry.Query)
+				hasUnresolvedIndexHintPlan = len(qry.Query.GetUnresolvedIndexHints()) > 0
+				c.needLockMeta = c.needLockMeta || hasUnresolvedIndexHintPlan
 			case plan.Query_INSERT:
 				markInsertTableScansNotLockMeta(qry.Query)
 				c.needLockMeta = true
@@ -250,6 +253,13 @@ func (c *Compile) Compile(
 		// its pre-pipeline metadata lock validates the catalog generation.
 		fault.TriggerFaultWithContext(c.proc.Ctx, unresolvedFullTextPlanCompiledFault)
 	}
+	if hasUnresolvedIndexHintPlan {
+		// This marker is inert outside the deterministic cross-CN regression test.
+		// The preceding metadata lock either requests a definition retry or leaves
+		// unresolvedIndexHintError to return the original MySQL error.
+		c.appendUnresolvedIndexHintMetaTables(queryPlan.GetQuery())
+		fault.TriggerFaultWithContext(c.proc.Ctx, unresolvedIndexHintPlanCompiledFault)
+	}
 	// todo: this is redundant.
 	for _, s := range c.scopes {
 		if len(s.NodeInfo.Addr) == 0 {
@@ -261,6 +271,8 @@ func (c *Compile) Compile(
 }
 
 const unresolvedFullTextPlanCompiledFault = "unresolved-fulltext-plan-compiled"
+
+const unresolvedIndexHintPlanCompiledFault = "unresolved-index-hint-plan-compiled"
 
 // selectMetaLockRequirement reports whether a SELECT must validate its table
 // definitions against mo_tables before execution. An unresolved fulltext

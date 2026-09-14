@@ -241,8 +241,9 @@ func configureMockGeneratedIndex(t *testing.T, mock *MockOptimizer, unique bool)
 	generatedCol := base.Cols[generatedPos]
 	generatedCol.Typ = sourceCol.Typ
 	generatedCol.GeneratedCol = &planpb.GeneratedCol{
-		Expr:     generatedColumnRefExpr(sourceCol.Typ, sourcePos, sourceCol.Name),
-		IsStored: true,
+		Expr:         generatedColumnRefExpr(sourceCol.Typ, sourcePos, sourceCol.Name),
+		IsStored:     true,
+		OriginString: "val",
 	}
 	// Keep this fixture focused on explicit ODKU dependencies rather than the
 	// separate ON UPDATE no-op behavior covered by bind_upsert_affect_rows_test.go.
@@ -251,7 +252,7 @@ func configureMockGeneratedIndex(t *testing.T, mock *MockOptimizer, unique bool)
 	indexTableName := catalog.SecondaryIndexTableNamePrefix + "odku-generated-g"
 	base.Indexes = []*planpb.IndexDef{{
 		IndexName:      "idx_generated_g",
-		Parts:          []string{catalog.CreateAlias("g")},
+		Parts:          []string{"g"},
 		Unique:         unique,
 		IndexTableName: indexTableName,
 		TableExist:     true,
@@ -267,8 +268,9 @@ func configureMockGeneratedPrimaryKey(t *testing.T, mock *MockOptimizer) {
 	sourcePos := mockTableColPos(t, base, "val")
 	idCol := base.Cols[mockTableColPos(t, base, "id")]
 	idCol.GeneratedCol = &planpb.GeneratedCol{
-		Expr:     generatedColumnRefExpr(idCol.Typ, sourcePos, "val"),
-		IsStored: true,
+		Expr:         generatedColumnRefExpr(idCol.Typ, sourcePos, "val"),
+		IsStored:     true,
+		OriginString: "val",
 	}
 	base.Cols[mockTableColPos(t, base, "updated_at")].OnUpdate = nil
 	base.Indexes = nil
