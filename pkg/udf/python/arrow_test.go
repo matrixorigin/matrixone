@@ -648,6 +648,7 @@ func TestTypeDescriptorRejectsNonCanonicalDomain(t *testing.T) {
 		{TypeID: int32(types.T_json), OffsetWidth: 32},
 		{TypeID: int32(types.T_date), OffsetWidth: 32},
 		{TypeID: int32(types.T_array_float32), Width: types.MaxArrayDimension + 1},
+		{TypeID: int32(types.T_varchar), Width: 16, Charset: types.CharsetBinary, OffsetWidth: 32},
 	}
 	for _, descriptor := range invalid {
 		_, err := descriptor.Field("value")

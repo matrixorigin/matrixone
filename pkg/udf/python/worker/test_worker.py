@@ -626,6 +626,15 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "offset_width must be an integer"):
             worker._field("result", {"type_id": worker.INT64, "offset_width": "32"})
 
+    def test_text_descriptor_rejects_opaque_binary_charset(self):
+        for type_id in (worker.CHAR, worker.VARCHAR, worker.TEXT):
+            with self.subTest(type_id=type_id):
+                with self.assertRaisesRegex(ValueError, "unsupported text charset"):
+                    worker._field(
+                        "result",
+                        {"type_id": type_id, "width": 16, "charset": 1, "offset_width": 32},
+                    )
+
     def test_malformed_control_is_reported_as_protocol_error(self):
         with self.assertRaisesRegex(ValueError, "PROTOCOL: invalid control UTF-8"):
             worker._decode_control(b"\xff")
