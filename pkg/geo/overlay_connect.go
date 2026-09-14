@@ -804,10 +804,6 @@ func Overlay(a, b Geometry, op BoolOp) (Geometry, error) {
 	return overlayWithOptions(a, b, op, snapScale, false)
 }
 
-func overlayWithSnapScale(a, b Geometry, op BoolOp, scale float64) (Geometry, error) {
-	return overlayWithOptions(a, b, op, scale, false)
-}
-
 func overlayWithOptions(a, b Geometry, op BoolOp, scale float64, allowSnapError bool) (Geometry, error) {
 	if scale <= 0 || math.IsNaN(scale) || math.IsInf(scale, 0) {
 		scale = snapScale

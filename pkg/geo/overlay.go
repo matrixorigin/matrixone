@@ -79,10 +79,6 @@ func ovSignedArea(p0, p1, p2 Coord) float64 {
 const snapScale = 1e9
 const float64Epsilon = 2.220446049250313e-16
 
-func snapCoord(c Coord) Coord {
-	return snapCoordAtScale(c, snapScale)
-}
-
 func snapCoordAtScale(c Coord, scale float64) Coord {
 	return Coord{
 		X: ovRound(c.X*scale) / scale,
