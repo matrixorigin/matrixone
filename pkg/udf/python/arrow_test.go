@@ -314,6 +314,8 @@ func TestZeroArgumentRecordPreservesRows(t *testing.T) {
 
 func TestBuildInputRecordRejectsEmptyConstantVector(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
 	input := vector.NewConstNull(types.T_int64.ToType(), 0, mp)
 	defer input.Free(mp)
 
@@ -323,6 +325,23 @@ func TestBuildInputRecordRejectsEmptyConstantVector(t *testing.T) {
 		0,
 		1,
 	)
+	require.ErrorContains(t, err, "shorter than batch range")
+
+	textInput, err := vector.NewConstBytes(types.T_varchar.ToType(), nil, 0, mp)
+	require.NoError(t, err)
+	defer textInput.Free(mp)
+	var record arrow.RecordBatch
+	require.NotPanics(t, func() {
+		record, _, err = BuildInputRecordRange(
+			[]*vector.Vector{textInput},
+			[]types.Type{types.T_varchar.ToType()},
+			0,
+			1,
+		)
+	})
+	if record != nil {
+		record.Release()
+	}
 	require.ErrorContains(t, err, "shorter than batch range")
 }
 
