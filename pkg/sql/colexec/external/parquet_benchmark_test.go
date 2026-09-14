@@ -53,6 +53,9 @@ func benchmarkParquetBoolPage(b *testing.B, dictionary, nullable bool) (parquet.
 	if err != nil {
 		b.Fatal(err)
 	}
+	if (page.Dictionary() != nil) != dictionary {
+		b.Fatalf("dictionary=%t, page dictionary=%t", dictionary, page.Dictionary() != nil)
+	}
 	proc := testutil.NewProc(b)
 	var h ParquetHandler
 	mp := h.getMapper(col, plan.Type{Id: int32(types.T_bool), NotNullable: !nullable})
