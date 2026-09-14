@@ -73,8 +73,8 @@ func normalizeInsertColumnName(name string) string {
 
 // validateInsertRowAlias checks the row alias after the target table and the
 // effective INSERT column order are known. The effective order is the explicit
-// INSERT list or SET list, or the legal implicit set returned by
-// getInsertColsFromStmt (which excludes the fake hidden key).
+// INSERT list or SET list, or the visible implicit source sequence returned by
+// getInsertColsForRowAlias (which retains represented generated columns).
 func validateInsertRowAlias(
 	ctx context.Context,
 	rowAlias *tree.AliasClause,

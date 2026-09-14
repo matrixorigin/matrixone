@@ -5279,7 +5279,7 @@ func (builder *QueryBuilder) getInsertColsForRowAlias(astCols tree.IdentifierLis
 	if astCols == nil {
 		columns := make([]string, 0, len(tableDef.Cols))
 		for _, col := range tableDef.Cols {
-			if col != nil && !col.Hidden && col.GeneratedCol == nil {
+			if col != nil && !col.Hidden {
 				columns = append(columns, col.Name)
 			}
 		}
