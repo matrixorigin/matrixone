@@ -5324,7 +5324,7 @@ func (r *parquetRangeReadAheadReaderAt) ReadAt(p []byte, off int64) (n int, err 
 	requestSize := int64(len(p))
 	if off < 0 || off > r.fileSize || requestSize > r.fileSize-off ||
 		requestSize > parquetRangeReadAheadMaxRequest {
-		return r.reader.ReadAt(p, off)
+		return readParquetReaderAt(r.reader, p, off)
 	}
 
 	if off >= r.windowOffset {
@@ -5340,7 +5340,7 @@ func (r *parquetRangeReadAheadReaderAt) ReadAt(p []byte, off int64) (n int, err 
 		min(parquetRangeReadAheadMaxBytes, requestSize*parquetRangeReadAheadAmplification),
 	)
 	if fetchSize <= requestSize {
-		return r.reader.ReadAt(p, off)
+		return readParquetReaderAt(r.reader, p, off)
 	}
 	if int64(cap(r.window)) < fetchSize {
 		r.window = make([]byte, fetchSize)
@@ -5348,7 +5348,7 @@ func (r *parquetRangeReadAheadReaderAt) ReadAt(p []byte, off int64) (n int, err 
 		r.window = r.window[:fetchSize]
 	}
 
-	n, err = r.reader.ReadAt(r.window, off)
+	n, err = readParquetReaderAt(r.reader, r.window, off)
 	if err != nil && !errors.Is(err, io.EOF) {
 		r.window = r.window[:0]
 		return min(n, len(p)), err
@@ -5364,6 +5364,14 @@ func (r *parquetRangeReadAheadReaderAt) ReadAt(p []byte, off int64) (n int, err 
 	r.window = r.window[:n]
 	copy(p, r.window[:len(p)])
 	return len(p), nil
+}
+
+func readParquetReaderAt(reader io.ReaderAt, p []byte, off int64) (int, error) {
+	n, err := reader.ReadAt(p, off)
+	if n < 0 || n > len(p) {
+		return 0, errors.New("underlying parquet reader returned an invalid byte count")
+	}
+	return n, err
 }
 
 func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {

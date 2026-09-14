@@ -5586,6 +5586,23 @@ func TestParquetRangeReadAheadPropagatesErrors(t *testing.T) {
 	require.Empty(t, reader.window)
 }
 
+type malformedParquetReaderAt struct{}
+
+func (malformedParquetReaderAt) ReadAt(p []byte, _ int64) (int, error) {
+	return len(p) + 1, nil
+}
+
+func TestParquetRangeReadAheadRejectsInvalidReaderCount(t *testing.T) {
+	reader := &parquetRangeReadAheadReaderAt{
+		reader:   malformedParquetReaderAt{},
+		fileSize: int64(parquetRangeReadAheadMaxBytes),
+	}
+	n, err := reader.ReadAt(make([]byte, 64*1024), 0)
+	require.Zero(t, n)
+	require.ErrorContains(t, err, "invalid byte count")
+	require.Empty(t, reader.window)
+}
+
 func TestParquetRangeReadAheadConcurrentReaderAt(t *testing.T) {
 	data := make([]byte, 2*parquetRangeReadAheadMaxBytes)
 	for i := range data {
