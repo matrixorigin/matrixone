@@ -11134,22 +11134,57 @@ func mbrPredicate(left, right []byte, pred func(a, b geo.BBox) bool) (bool, erro
 	return pred(a, b), nil
 }
 
-func bboxContains(a, b geo.BBox) bool {
+// bboxCovers reports whether the closed bounds of b are contained by a.
+func bboxCovers(a, b geo.BBox) bool {
 	return a.MinX <= b.MinX && a.MinY <= b.MinY && a.MaxX >= b.MaxX && a.MaxY >= b.MaxY
+}
+
+// intervalInteriorsIntersect reports whether the relative interiors of two
+// closed intervals intersect. A degenerate interval's interior is its point;
+// the interior of a non-degenerate interval is open.
+func intervalInteriorsIntersect(aMin, aMax, bMin, bMax float64) bool {
+	aPoint := aMin == aMax
+	bPoint := bMin == bMax
+	switch {
+	case aPoint && bPoint:
+		return aMin == bMin
+	case aPoint:
+		return bMin < aMin && aMin < bMax
+	case bPoint:
+		return aMin < bMin && bMin < aMax
+	default:
+		return aMin < bMax && bMin < aMax
+	}
+}
+
+// bboxInteriorsIntersect tests the relative interiors of two MBRs. Since each
+// MBR interior is the product of its x/y interval interiors, both axes must
+// intersect.
+func bboxInteriorsIntersect(a, b geo.BBox) bool {
+	return intervalInteriorsIntersect(a.MinX, a.MaxX, b.MinX, b.MaxX) &&
+		intervalInteriorsIntersect(a.MinY, a.MaxY, b.MinY, b.MaxY)
+}
+
+// bboxContains requires closed coverage and a non-empty interior intersection.
+func bboxContains(a, b geo.BBox) bool {
+	return bboxCovers(a, b) && bboxInteriorsIntersect(a, b)
+}
+
+func bboxWithin(a, b geo.BBox) bool {
+	return bboxContains(b, a)
 }
 
 func bboxDisjoint(a, b geo.BBox) bool {
 	return a.MaxX < b.MinX || a.MinX > b.MaxX || a.MaxY < b.MinY || a.MinY > b.MaxY
 }
 
+func bboxIntersects(a, b geo.BBox) bool {
+	return a.MinX <= b.MaxX && b.MinX <= a.MaxX &&
+		a.MinY <= b.MaxY && b.MinY <= a.MaxY
+}
+
 func bboxTouches(a, b geo.BBox) bool {
-	ix1, iy1 := math.Max(a.MinX, b.MinX), math.Max(a.MinY, b.MinY)
-	ix2, iy2 := math.Min(a.MaxX, b.MaxX), math.Min(a.MaxY, b.MaxY)
-	if ix1 > ix2 || iy1 > iy2 {
-		return false
-	}
-	// Intersect, but only along an edge or at a point (zero-area intersection).
-	return ix1 == ix2 || iy1 == iy2
+	return bboxIntersects(a, b) && !bboxInteriorsIntersect(a, b)
 }
 
 func bboxOverlaps(a, b geo.BBox) bool {
@@ -11158,7 +11193,7 @@ func bboxOverlaps(a, b geo.BBox) bool {
 	if ix1 >= ix2 || iy1 >= iy2 {
 		return false // disjoint or touching only
 	}
-	return !bboxContains(a, b) && !bboxContains(b, a)
+	return !bboxCovers(a, b) && !bboxCovers(b, a)
 }
 
 func mbrBinary(name string, pred func(a, b geo.BBox) bool) fEvalFn {
@@ -11181,15 +11216,15 @@ func MBRContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func MBRCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return mbrBinary("MBRCovers", bboxContains)(ivecs, result, proc, length, selectList)
+	return mbrBinary("MBRCovers", bboxCovers)(ivecs, result, proc, length, selectList)
 }
 
 func MBRWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return mbrBinary("MBRWithin", func(a, b geo.BBox) bool { return bboxContains(b, a) })(ivecs, result, proc, length, selectList)
+	return mbrBinary("MBRWithin", bboxWithin)(ivecs, result, proc, length, selectList)
 }
 
 func MBRCoveredBy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return mbrBinary("MBRCoveredBy", func(a, b geo.BBox) bool { return bboxContains(b, a) })(ivecs, result, proc, length, selectList)
+	return mbrBinary("MBRCoveredBy", func(a, b geo.BBox) bool { return bboxCovers(b, a) })(ivecs, result, proc, length, selectList)
 }
 
 func MBRDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -11424,6 +11459,12 @@ func geodeticDistance(left, right []byte) (float64, error) {
 	}
 	rg, err := decodeGeoGeometry(right)
 	if err != nil {
+		return 0, err
+	}
+	if err := geo.ValidateGeodeticCoordinates(lg); err != nil {
+		return 0, err
+	}
+	if err := geo.ValidateGeodeticCoordinates(rg); err != nil {
 		return 0, err
 	}
 	d, ok := geo.DistanceMeters(lg, rg)
