@@ -86,11 +86,24 @@ type TableConfig struct {
 	// index's generation is dropped. Set by the planner for an async json probe (current or
 	// snapshot). false = ordinary MATCH / a synchronous covered probe, which needs no tail.
 	ProbeTail bool `json:"probe_tail,omitempty"`
-	// ProbeTailWhere is the json predicate, rebuilt against the source columns
-	// (json_extract_string(`col`, '$.path') <op> <lit>), that the ProbeTail tail appends to its
-	// table_changes query so only matching gap rows are returned -- evaluated directly on the changed
-	// rows, no index. Empty ⇒ the tail is unfiltered (the base scan re-checks, so still correct).
+	// ProbeTailWhere is the json predicate the operator pushes into BOTH its table_changes tail and its
+	// base-table fallback, rendered with the json_extract_*_internal twins
+	// (json_extract_string_internal(`col`, '$.path') <op> <lit>). The internal name is byte-identical
+	// in evaluation to the public json_extract but is NEVER matched by the mandatory-filter rewrite, so
+	// the fallback's base-table scan cannot re-trigger the probe and recurse (and the tail is future-
+	// proof against the rewrite ever touching table_changes columns). It filters both queries to
+	// matching rows -- no index. Empty ⇒ the planner declined the probe (never emitted with ProbeTail).
 	ProbeTailWhere string `json:"probe_tail_where,omitempty"`
+	// ProbeTailBar / ProbeTailBarLogical are the max source commit as of the read (SourceCommitTS),
+	// carried as its physical and logical halves, computed once at plan time. The operator compares the
+	// searched generation (a physical-only build_ts) against this FULL timestamp to decide, at runtime,
+	// whether the index is caught up (no tail) or behind (→ tail). The logical half MUST be carried:
+	// build_ts is physical-only, so a bar of (P, L>0) with a generation at physical P is NOT caught up
+	// (it may miss the (P, L) commit); comparing physical-only would drop that row at the mandatory
+	// join. It is the plan's only generation-related input; the searched generation is read at execution
+	// so the tail/no-tail/fallback choice is bound to what was searched, not to a plan-time guess.
+	ProbeTailBar        int64  `json:"probe_tail_bar,omitempty"`
+	ProbeTailBarLogical uint32 `json:"probe_tail_bar_logical,omitempty"`
 }
 
 // runSql / runStreamingSql indirect the sqlexec executor entry points so unit tests can

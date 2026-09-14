@@ -29,6 +29,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -38,12 +39,19 @@ import (
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // ft2RunStreamingSql indirects the streaming SQL executor so the self-completing json-probe tail
 // (startProbeTail) can be driven by a unit test without a live cluster.
 var ft2RunStreamingSql = sqlexec.RunStreamingSql
+
+// ft2TailSpansSchema indirects the schema-version span check so a unit test can drive the behind
+// branch's tail-vs-fallback decision without a live engine.
+var ft2TailSpansSchema = func(u *fulltext2SearchState, proc *process.Process, searched int64) bool {
+	return u.probeTailSpansSchema(proc, searched)
+}
 
 // fulltext2SearchState answers a MATCH over a fulltext2 index: it loads the
 // index's segments (base + CDC tail) once via the shared VectorIndexCache and reuses
@@ -329,9 +337,15 @@ func (u *fulltext2SearchState) emitProbeTail(proc *process.Process) (vm.CallResu
 		select {
 		case res, ok := <-u.tailStreamCh:
 			if !ok {
-				// producer finished; surface any error it buffered before closing.
+				// producer finished; surface any error it buffered before closing. Call cancel() (not
+				// just drop it) so the WithCancel context created in startProbeStream releases its
+				// resources on the normal-completion path -- closeProbeTail only cancels when tailCancel
+				// is still set, and this path clears it.
 				u.tailStreamCh = nil
-				u.tailCancel = nil
+				if u.tailCancel != nil {
+					u.tailCancel()
+					u.tailCancel = nil
+				}
 				select {
 				case err := <-u.tailErrCh:
 					return vm.CancelResult, err
@@ -357,44 +371,103 @@ func (u *fulltext2SearchState) emitProbeTail(proc *process.Process) (vm.CallResu
 	}
 }
 
-// startProbeTail launches the table_changes gap query as a stream. The lower bound is EXCLUSIVE and
-// is the generation the bulk search actually reached -- read from the CACHE via GetBuildTS(cacheKey),
-// NOT from the search object we passed in (a warm hit searches the cache's own instance, leaving ours
-// unloaded), so it is the generation execution truly used. (searched, snapshot] is exactly the gap;
-// the upper bound is the read snapshot. It runs on tailSp, which carries the read's snapshot/tenant,
-// so table_changes reads the same point the base scan does. table_changes is ALIASED so its reserved
-// metadata columns (change_type) bind; only the pk is projected -- the base scan re-checks the json
-// predicate, so the tail is a superset the group-by dedup and INNER JOIN above narrow. An empty gap
-// starts no stream.
+// startProbeTail chooses how to self-complete the probe based on the generation the bulk search
+// ACTUALLY reached (tailSearchedBuildTS, set under the cache entry lock via rt.SearchedBuildTS -- so
+// it is immune to a concurrent evict+reload and to a held in-flight load, and it is what the plan
+// could not know). Every choice is validated against the read; whichever query it picks streams pks
+// that the group-by dedup and INNER JOIN above narrow, and the base scan re-checks the json predicate.
+//
+//   - searched > read snapshot: the generation is NEWER than the read (it may have removed a posting a
+//     long-running transaction must still see). A forward tail cannot recover a deletion, and the bulk
+//     is already unsound -> FALLBACK to a full pk scan as of the read.
+//   - searched >= bar (max source commit as of the read): CAUGHT UP. The bulk already reflects every
+//     row the read sees -> NO tail. (Common CREATE-INDEX-on-existing-data case: build_ts predates the
+//     create's schema-version bump, but there is nothing to recover, so we neither tail -- which would
+//     span the bump -- nor fall back.)
+//   - behind, and (searched, S] crosses a schema-version change: table_changes cannot span a DDL ->
+//     FALLBACK to a full pk scan.
+//   - behind, single schema version: run table_changes(searched, S].
 func (u *fulltext2SearchState) startProbeTail(proc *process.Process) error {
-	// tailSearchedBuildTS was set under the cache entry lock during the bulk search (rt.SearchedBuildTS),
-	// so it is exactly the generation searched -- immune to a concurrent evict+reload. 0 means the
-	// searched generation had no build_ts (empty/pre-migration index): the tail spans from genesis,
-	// which is correct (just wider), never a dropped gap.
-	from := types.BuildTS(u.tailSearchedBuildTS, 0)
-	to := types.TimestampToTS(u.tailSnap)
-	if !from.LT(&to) {
-		return nil // the searched generation already reaches the read snapshot: no gap
-	}
 	if u.tblcfg.SrcTable == "" || u.tblcfg.PKey == "" {
 		return moerr.NewInternalError(proc.Ctx, "fulltext2_search: probe_tail requires source table and pk in config")
 	}
-	fromStr := fmt.Sprintf("%d-%d", from.Physical(), from.Logical())
+	searched := u.tailSearchedBuildTS
+	if searched > u.tailSnap.PhysicalTime { // newer than the read
+		return u.startProbeStream(proc, u.probeFallbackSQL())
+	}
+	// Caught up iff the searched generation covers the full bar. build_ts is physical-only, so compare
+	// it as BuildTS(searched, 0) against the FULL bar (physical + logical): a bar of (P, L>0) is NOT
+	// covered by a generation at physical P -- it may miss the (P, L) commit -- so a physical-only
+	// compare would skip the tail and drop that row at the mandatory join.
+	bar := types.BuildTS(u.tblcfg.ProbeTailBar, u.tblcfg.ProbeTailBarLogical)
+	sTS := types.BuildTS(searched, 0)
+	if !sTS.LT(&bar) { // caught up: bulk is complete, no tail
+		return nil
+	}
+	if ft2TailSpansSchema(u, proc, searched) { // behind across a DDL: table_changes can't span it
+		return u.startProbeStream(proc, u.probeFallbackSQL())
+	}
+	return u.startProbeStream(proc, u.probeTailSQL(searched))
+}
+
+// probeTailSQL is table_changes(searched, S] restricted to inserts (and, when the planner could
+// render it, the json predicate), projected to the pk. table_changes is ALIASED so its reserved
+// metadata columns (change_type) bind. Both endpoints live in one schema version (guaranteed by the
+// caller), so it never hits the schema-span guard.
+func (u *fulltext2SearchState) probeTailSQL(searched int64) string {
+	fromStr := fmt.Sprintf("%d-%d", searched, 0)
+	to := types.TimestampToTS(u.tailSnap)
 	toStr := fmt.Sprintf("%d-%d", to.Physical(), to.Logical())
-	const tc = "mo_tc" // alias so table_changes' reserved metadata columns resolve
+	const tc = "mo_tc"
 	sql := fmt.Sprintf("SELECT %s.%s FROM table_changes(%s, %s, %s, %s) AS %s WHERE %s.%s = 'insert'",
 		tc, sqlquote.Ident(u.tblcfg.PKey),
-		sqlquote.String(u.tblcfg.DbName),
-		sqlquote.String(u.tblcfg.SrcTable),
-		sqlquote.String(fromStr),
-		sqlquote.String(toStr),
+		sqlquote.String(u.tblcfg.DbName), sqlquote.String(u.tblcfg.SrcTable),
+		sqlquote.String(fromStr), sqlquote.String(toStr),
 		tc, tc, catalog.TableChangesAttrChangeType)
-	// Filter the gap to actual matches by re-evaluating the json predicate directly on the changed
-	// rows (no index). Rebuilt by the planner against the source columns (bare, which resolve under
-	// the alias). Empty ⇒ unfiltered tail; the base scan re-checks either way, so this only shrinks it.
 	if u.tblcfg.ProbeTailWhere != "" {
 		sql += " AND (" + u.tblcfg.ProbeTailWhere + ")"
 	}
+	return sql
+}
+
+// probeFallbackSQL is a selective full scan of the source as of the read: `SELECT pk FROM db.src
+// WHERE <json predicate>`, projecting the matching pks the INNER JOIN + base re-check turn into the
+// correct answer -- i.e. the query degrades to a full scan, but only the matching rows flow into the
+// join (not every pk, which would make the mandatory join a full self-join). The predicate
+// (ProbeTailWhere) uses the json_extract_*_internal twins: this scans the BASE table, where the public
+// json_extract name would re-trigger the probe rewrite and recurse. Used when the searched generation
+// is incompatible with the read (newer than it, or a DDL sits in the gap so table_changes cannot span
+// the window). The planner only sets ProbeTail when the predicate rendered, so ProbeTailWhere is
+// non-empty here; if it somehow is not, fall back to the (sound but unselective) all-pks scan.
+func (u *fulltext2SearchState) probeFallbackSQL() string {
+	sql := fmt.Sprintf("SELECT %s FROM %s",
+		sqlquote.Ident(u.tblcfg.PKey), sqlquote.QualifiedIdent(u.tblcfg.DbName, u.tblcfg.SrcTable))
+	if u.tblcfg.ProbeTailWhere != "" {
+		sql += " WHERE " + u.tblcfg.ProbeTailWhere
+	}
+	return sql
+}
+
+// probeTailSpansSchema reports whether (searched, S] crosses a schema-version change on the source,
+// which table_changes refuses to span. It reuses table_changes' own resolution/comparison at the two
+// endpoints. Fail-closed: any resolve failure returns true so the caller takes the safe full-scan
+// fallback rather than emit a tail that would error.
+func (u *fulltext2SearchState) probeTailSpansSchema(proc *process.Process, searched int64) bool {
+	e, ok := proc.Ctx.Value(defines.EngineKey{}).(engine.Engine)
+	if !ok {
+		return true
+	}
+	atSearched, err1 := tableChangesTableDefAt(proc.Ctx, e, proc, u.tblcfg.DbName, u.tblcfg.SrcTable, types.BuildTS(searched, 0))
+	atRead, err2 := tableChangesTableDefAt(proc.Ctx, e, proc, u.tblcfg.DbName, u.tblcfg.SrcTable, types.TimestampToTS(u.tailSnap))
+	if err1 != nil || err2 != nil {
+		return true
+	}
+	return !sameTableChangesSchema(atSearched, atRead)
+}
+
+// startProbeStream launches sql on tailSp (which carries the read's snapshot/tenant) as a stream that
+// emitProbeTail drains. On abort, closeProbeTail cancels this context and drains to the producer's close.
+func (u *fulltext2SearchState) startProbeStream(proc *process.Process, sql string) error {
 	u.tailStreamCh = make(chan executor.Result, 8)
 	u.tailErrCh = make(chan error, 2)
 	ctx, cancel := context.WithCancel(proc.Ctx)

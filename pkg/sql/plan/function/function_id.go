@@ -844,9 +844,17 @@ const (
 	INTERNAL_JSON_COMPARISON_PARAM = 577
 	INTERNAL_JSON_MEMBER_OF        = 578
 
+	// json_extract_string_internal / json_extract_float64_internal are byte-identical twins of
+	// json_extract_string / json_extract_float64, used ONLY in the self-completing json probe's tail
+	// and fallback SQL. The mandatory-filter rewrite matches json_extract by name, so an internal name
+	// lets the fallback push the predicate onto the base table without re-triggering the probe rewrite
+	// (which would recurse). Same overload/eval, so results never diverge from the public function.
+	JSON_EXTRACT_STRING_INTERNAL  = 579
+	JSON_EXTRACT_FLOAT64_INTERNAL = 580
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 579
+	FUNCTION_END_NUMBER = 581
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1126,6 +1134,8 @@ var functionIdRegister = map[string]int32{
 	"json_extract":                   JSON_EXTRACT,
 	"json_extract_string":            JSON_EXTRACT_STRING,
 	"json_extract_float64":           JSON_EXTRACT_FLOAT64,
+	"json_extract_string_internal":   JSON_EXTRACT_STRING_INTERNAL,
+	"json_extract_float64_internal":  JSON_EXTRACT_FLOAT64_INTERNAL,
 	"json_object":                    JSON_OBJECT,
 	"json_arrayagg":                  JSON_ARRAYAGG,
 	"json_objectagg":                 JSON_OBJECTAGG,

@@ -1369,6 +1369,49 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_extract_string_internal`: a byte-identical twin of json_extract_string, used only
+	// in the self-completing json probe's fallback SQL so the base-table scan can push the predicate
+	// without re-triggering the probe rewrite (which matches json_extract by name and would recurse).
+	{
+		functionId: JSON_EXTRACT_STRING_INTERNAL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonExtractCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonExtract().jsonExtractString
+				},
+			},
+		},
+	},
+
+	// function `json_extract_float64_internal`: a byte-identical twin of json_extract_float64, same
+	// purpose as json_extract_string_internal above.
+	{
+		functionId: JSON_EXTRACT_FLOAT64_INTERNAL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonExtractCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInJsonExtract().jsonExtractFloat64
+				},
+			},
+		},
+	},
+
 	// internal normalization for prepared JSON ordering parameters
 	{
 		functionId: INTERNAL_JSON_ORDERING_PARAM,

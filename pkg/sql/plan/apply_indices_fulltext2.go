@@ -137,9 +137,14 @@ func (builder *QueryBuilder) buildFulltext2SearchCfg(scanNode *plan.Node, idxdef
 			if scanNode.TableDef.Pkey != nil {
 				cfgMap["pkey"] = scanNode.TableDef.Pkey.PkeyColName
 			}
-			// The json predicate, rebuilt against the tail's columns, so the operator's table_changes
-			// tail returns only matching gap rows (evaluated directly, no index). Empty ⇒ unfiltered
-			// tail (the base scan still re-checks, so this only widens the superset).
+			// bar (max source commit as of the read), physical + logical: the operator compares it
+			// against the generation it actually searched to choose no-tail / tail / fallback. The
+			// logical half is required -- a physical-only compare would drop a (P, L>0) commit's row.
+			cfgMap["probe_tail_bar"] = info.bar
+			cfgMap["probe_tail_bar_logical"] = info.barLogical
+			// The json predicate (json_extract_*_internal twins), pushed into both the operator's
+			// table_changes tail and its base-table fallback. The planner only records a probe when it
+			// renders, so this is set whenever probe_tail is.
 			if info.whereSQL != "" {
 				cfgMap["probe_tail_where"] = info.whereSQL
 			}
