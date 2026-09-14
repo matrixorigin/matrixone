@@ -1348,7 +1348,11 @@ func (g *Gateway) receiveResultBatch(
 			if err := snapshot.Validate(len(data.DataBody), ""); err != nil {
 				return 0, err
 			}
-			decoded, err := DecodeRecordBatch(**schemaFrame, ArrowFrame{Header: append([]byte(nil), data.DataHeader...), Body: snapshot.TrustedBytes()}, g.cfg.MaxBatchBytes)
+			// DecodeRecordBatch consumes the result header synchronously before
+			// the next Recv.  The schema header is retained across batches, but
+			// this per-batch header has no cross-call lifetime, so keep the
+			// Flight-owned slice and avoid a redundant allocation/copy.
+			decoded, err := DecodeRecordBatch(**schemaFrame, ArrowFrame{Header: data.DataHeader, Body: snapshot.TrustedBytes()}, g.cfg.MaxBatchBytes)
 			if err != nil {
 				return 0, fmt.Errorf("python udf: decode result: %w", err)
 			}
