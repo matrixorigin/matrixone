@@ -1815,13 +1815,17 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			var cache []*types.Varlena
 			dict := page.Dictionary()
 			if dict == nil {
-				loader.init(page.Data())
+				if err := loader.initChecked(proc.Ctx, page.Data()); err != nil {
+					return err
+				}
 				// Validate string data count for non-dictionary mode
 				if err := validateStringDataCount(proc.Ctx, &loader, nc.actualNonNulls); err != nil {
 					return err
 				}
 			} else {
-				loader.init(dict.Page().Data())
+				if err := loader.initChecked(proc.Ctx, dict.Page().Data()); err != nil {
+					return err
+				}
 				data := page.Data()
 				indices, err = parquetDictionaryIndexes(proc.Ctx, data)
 				if err != nil {
@@ -2374,13 +2378,17 @@ func processStringToFixed[T any](
 	dict := page.Dictionary()
 
 	if dict == nil {
-		loader.init(page.Data())
+		if err := loader.initChecked(ctx, page.Data()); err != nil {
+			return err
+		}
 		// 1.3 Validate plain page data count
 		if err := validateStringDataCount(ctx, &loader, nc.actualNonNulls); err != nil {
 			return err
 		}
 	} else {
-		loader.init(dict.Page().Data())
+		if err := loader.initChecked(ctx, dict.Page().Data()); err != nil {
+			return err
+		}
 		data := page.Data()
 		indices, err = parquetDictionaryIndexes(ctx, data)
 		if err != nil {
@@ -2459,12 +2467,16 @@ func processStringToJson(
 	var indices []int32
 	dict := page.Dictionary()
 	if dict == nil {
-		loader.init(page.Data())
+		if err := loader.initChecked(ctx, page.Data()); err != nil {
+			return err
+		}
 		if err := validateStringDataCount(ctx, &loader, nc.actualNonNulls); err != nil {
 			return err
 		}
 	} else {
-		loader.init(dict.Page().Data())
+		if err := loader.initChecked(ctx, dict.Page().Data()); err != nil {
+			return err
+		}
 		data := page.Data()
 		indices, err = parquetDictionaryIndexes(ctx, data)
 		if err != nil {
@@ -2534,12 +2546,16 @@ func processStringToArray[T types.ArrayElement](
 	var indices []int32
 	dict := page.Dictionary()
 	if dict == nil {
-		loader.init(page.Data())
+		if err := loader.initChecked(ctx, page.Data()); err != nil {
+			return err
+		}
 		if err := validateStringDataCount(ctx, &loader, nc.actualNonNulls); err != nil {
 			return err
 		}
 	} else {
-		loader.init(dict.Page().Data())
+		if err := loader.initChecked(ctx, dict.Page().Data()); err != nil {
+			return err
+		}
 		data := page.Data()
 		indices, err = parquetDictionaryIndexes(ctx, data)
 		if err != nil {
@@ -3559,6 +3575,15 @@ func (ld *strLoader) init(data encoding.Values) {
 	default:
 		panic("not supported kind " + data.Kind().String())
 	}
+}
+
+func (ld *strLoader) initChecked(ctx context.Context, data encoding.Values) error {
+	if data.Kind() != encoding.ByteArray && data.Kind() != encoding.FixedLenByteArray {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet string values with type %s", data.Kind())
+	}
+	ld.init(data)
+	return nil
 }
 
 func (ld *strLoader) loadNext() []byte {
