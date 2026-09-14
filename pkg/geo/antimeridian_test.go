@@ -91,6 +91,14 @@ func TestProjectGeodeticPairAcceptsSmallNonCollinearDomain(t *testing.T) {
 	}
 }
 
+func TestProjectGeodeticPairKeepsAllActiveCapConstraints(t *testing.T) {
+	left := mustParse(t, "MULTIPOINT((-7 -80),(-70 -77),(9 60),(25 32),(62 -13),(-12 60),(-8 39),(56 55))")
+	right := mustParse(t, "POINT(-7 -80)")
+
+	_, _, _, err := ProjectGeodeticPair(left, right)
+	require.NoError(t, err)
+}
+
 func TestProjectGeodeticPairIsIndependentOfOperandAndMemberOrder(t *testing.T) {
 	left := mustParse(t, "GEOMETRYCOLLECTION(POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1)),POINT(179.2 0))")
 	right := mustParse(t, "POLYGON((179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))")

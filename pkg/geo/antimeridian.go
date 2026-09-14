@@ -277,6 +277,13 @@ func smallestSphericalCap(points []sphericalVector) sphericalCap {
 }
 
 func sphericalCapFromBoundary(points []sphericalVector) sphericalCap {
+	if len(points) == 0 {
+		return sphericalCap{}
+	}
+	if len(points) == 1 {
+		return sphericalCapForCenter(points[0], points)
+	}
+
 	var best sphericalCap
 	consider := func(candidate sphericalCap) {
 		if !candidate.valid || !sphericalCapContainsAll(candidate, points) {
@@ -287,46 +294,74 @@ func sphericalCapFromBoundary(points []sphericalVector) sphericalCap {
 		}
 	}
 
-	for i, point := range points {
-		consider(sphericalCapForCenter(point, []sphericalVector{point}))
-		for j := 0; j < i; j++ {
-			sum := sphericalVector{
-				x: point.x + points[j].x,
-				y: point.y + points[j].y,
-				z: point.z + points[j].z,
-			}
-			norm := sphericalNorm(sum)
-			if norm > geodeticProjectionCenterTolerance {
-				center := sphericalVector{sum.x / norm, sum.y / norm, sum.z / norm}
-				consider(sphericalCapForCenter(center, []sphericalVector{point, points[j]}))
+	pairCap := func(a, b sphericalVector) sphericalCap {
+		sum := sphericalVector{x: a.x + b.x, y: a.y + b.y, z: a.z + b.z}
+		norm := sphericalNorm(sum)
+		if norm <= geodeticProjectionCenterTolerance {
+			return sphericalCap{}
+		}
+		center := sphericalVector{sum.x / norm, sum.y / norm, sum.z / norm}
+		return sphericalCapForCenter(center, []sphericalVector{a, b})
+	}
+
+	if len(points) == 2 {
+		return pairCap(points[0], points[1])
+	}
+
+	// A pair cap can be used as a degenerate three-point boundary only when
+	// every forced boundary point is actually on that cap. In particular, do
+	// not replace a three-point boundary with a pair cap that puts one of its
+	// constraints strictly in the interior; the incremental solver relies on
+	// those constraints remaining active.
+	for i := range len(points) {
+		for j := i + 1; j < len(points); j++ {
+			candidate := pairCap(points[i], points[j])
+			if sphericalCapHasBoundaryPoints(candidate, points) {
+				consider(candidate)
 			}
 		}
 	}
 
-	if len(points) == 3 {
-		// A three-point boundary is the normal to the affine plane through the
-		// points. Choose the side with the smaller cap and verify it contains
-		// every boundary point before considering it.
-		a, b, c := points[0], points[1], points[2]
-		u := sphericalVector{b.x - a.x, b.y - a.y, b.z - a.z}
-		v := sphericalVector{c.x - a.x, c.y - a.y, c.z - a.z}
-		normal := sphericalVector{
-			x: u.y*v.z - u.z*v.y,
-			y: u.z*v.x - u.x*v.z,
-			z: u.x*v.y - u.y*v.x,
+	// A non-degenerate three-point boundary is the normal to the affine plane
+	// through the points. Choose the side with the smaller cap and let
+	// sphericalCapForCenter compute the radius from all three points so small
+	// floating-point errors cannot reject an otherwise valid boundary.
+	a, b, c := points[0], points[1], points[2]
+	u := sphericalVector{b.x - a.x, b.y - a.y, b.z - a.z}
+	v := sphericalVector{c.x - a.x, c.y - a.y, c.z - a.z}
+	normal := sphericalVector{
+		x: u.y*v.z - u.z*v.y,
+		y: u.z*v.x - u.x*v.z,
+		z: u.x*v.y - u.y*v.x,
+	}
+	norm := sphericalNorm(normal)
+	scale := math.Max(sphericalNorm(u), sphericalNorm(v))
+	if scale > 0 && norm > geodeticProjectionCenterRelativeTolerance*scale*scale {
+		center := sphericalVector{normal.x / norm, normal.y / norm, normal.z / norm}
+		orientation := sphericalDot(center, a) + sphericalDot(center, b) + sphericalDot(center, c)
+		if orientation < 0 {
+			center.x, center.y, center.z = -center.x, -center.y, -center.z
 		}
-		norm := sphericalNorm(normal)
-		scale := math.Max(sphericalNorm(u), sphericalNorm(v))
-		if scale > 0 && norm > geodeticProjectionCenterRelativeTolerance*scale*scale {
-			center := sphericalVector{normal.x / norm, normal.y / norm, normal.z / norm}
-			orientation := sphericalDot(center, a) + sphericalDot(center, b) + sphericalDot(center, c)
-			if orientation < 0 {
-				center.x, center.y, center.z = -center.x, -center.y, -center.z
-			}
-			consider(sphericalCapForCenter(center, points))
-		}
+		consider(sphericalCapForCenter(center, points))
 	}
 	return best
+}
+
+func sphericalCapHasBoundaryPoints(cap sphericalCap, points []sphericalVector) bool {
+	if !cap.valid {
+		return false
+	}
+	for _, point := range points {
+		delta := sphericalVector{
+			x: cap.center.x - point.x,
+			y: cap.center.y - point.y,
+			z: cap.center.z - point.z,
+		}
+		if cap.radius-sphericalNorm(delta) > geodeticProjectionCenterTolerance {
+			return false
+		}
+	}
+	return sphericalCapContainsAll(cap, points)
 }
 
 func sphericalCapForCenter(center sphericalVector, points []sphericalVector) sphericalCap {
