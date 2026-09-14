@@ -55,6 +55,19 @@ func TestGatewayAdmissionFencesDuplicateAndReleasesOnce(t *testing.T) {
 	require.ErrorIs(t, err, protocol.ErrDuplicate)
 }
 
+func TestGatewayAdmissionRejectsAfterClose(t *testing.T) {
+	gateway := newAdmissionTestGateway(t, 1)
+	require.NoError(t, gateway.Close())
+
+	_, err := gateway.admitInvocation(validInvocation())
+	require.ErrorIs(t, err, errGatewayClosed)
+	if gateway.ledger != nil {
+		entries, _ := gateway.ledger.Counts()
+		require.Zero(t, entries)
+	}
+	require.Len(t, gateway.active, 0)
+}
+
 func TestGatewayAdmissionRejectsAtKWithoutLeavingLedgerEntry(t *testing.T) {
 	gateway := newAdmissionTestGateway(t, 1)
 	first := validInvocation()
