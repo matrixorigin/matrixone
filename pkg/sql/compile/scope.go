@@ -1598,6 +1598,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 					message.NeedNotReply = false
 					message.Uuid = uuid
 
+					sender.markReportingRequestStarted()
 					if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
 						closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 						return
