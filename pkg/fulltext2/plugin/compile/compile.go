@@ -369,6 +369,28 @@ func (Hooks) RestoreInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.I
 	return true, "SELECT 1", nil
 }
 
+// AlterCopyInitSQL — a COPY ALTER's cloneUnaffectedIndexes SKIPS this (SkipWholeIndex)
+// async index, so unlike RestoreInitSQL the storage/metadata rows are NOT present.
+// fulltext2's base (tag=0) + metadata are written only by buildFromSource, and the CDC
+// consumer only appends the cdc_tail — so a from-0 CDC alone leaves a queryable-less
+// tail with no base and MATCH returns empty (#28837). Rebuild from source via a REINDEX
+// FORCE_SYNC run as the CDC's InitSQL (post-commit), then tail from the post-build
+// watermark. startFromNow=true so the tail does not replay the rows the rebuild covered.
+func (Hooks) AlterCopyInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	var idxName string
+	for _, d := range indexDefs {
+		if d != nil {
+			idxName = d.IndexName
+			break
+		}
+	}
+	if idxName == "" {
+		return false, "", moerr.NewInternalErrorNoCtx("fulltext2 AlterCopyInitSQL: no index def")
+	}
+	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` FULLTEXT2 FORCE_SYNC",
+		ctx.QryDatabase(), ctx.OriginalTableDef().Name, idxName), nil
+}
+
 // ValidateReindexParams — fulltext2 honors position_free on a rebuild (its only
 // reindex-time param): POSITION_FREE=TRUE sets it, =FALSE clears it (→ a positional
 // rebuild that re-derives positions from source), absence keeps the current setting.

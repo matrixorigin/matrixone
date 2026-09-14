@@ -121,6 +121,29 @@ func indexDefs(algoParams string) map[string]*plan.IndexDef {
 	}
 }
 
+// AlterCopyInitSQL must rebuild fulltext2 from source on a COPY ALTER: cloneUnaffectedIndexes
+// SKIPS the storage clone (SkipWholeIndex) and the CDC consumer only appends a cdc_tail (the base
+// tag=0 + metadata are written ONLY by buildFromSource), so without an explicit REINDEX the
+// replacement index has no base and MATCH returns empty (#28837). It differs from RestoreInitSQL,
+// whose "SELECT 1" is valid only because Restore's block clone copies the base.
+func TestAlterCopyInitSQL(t *testing.T) {
+	ctx := newStubCtx()
+
+	startFromNow, initSQL, err := (Hooks{}).AlterCopyInitSQL(ctx, indexDefs(""))
+	require.NoError(t, err)
+	require.True(t, startFromNow)
+	require.Equal(t, "ALTER TABLE `db`.`src` ALTER REINDEX `idx` FULLTEXT2 FORCE_SYNC", initSQL)
+
+	// Contrast: RestoreInitSQL is the clone-optimized no-op (the base is cloned there).
+	_, restoreSQL, err := (Hooks{}).RestoreInitSQL(ctx, indexDefs(""))
+	require.NoError(t, err)
+	require.Equal(t, "SELECT 1", restoreSQL)
+
+	// Fail closed when no index def is available.
+	_, _, err = (Hooks{}).AlterCopyInitSQL(ctx, map[string]*plan.IndexDef{})
+	require.Error(t, err)
+}
+
 // --- param readers ---------------------------------------------------------
 
 func TestParserFromParams(t *testing.T) {

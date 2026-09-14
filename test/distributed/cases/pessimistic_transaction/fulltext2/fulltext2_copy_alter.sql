@@ -1,0 +1,70 @@
+-- Regression for #28837 (fulltext2): an UNRELATED COPY ALTER (ADD COLUMN, which does not
+-- touch the indexed column) must not leave the FULLTEXT2 index empty. cloneUnaffectedIndexes
+-- marks fulltext2 SkipWholeIndex, so the ALTER clones the table to a NEW id with an empty
+-- index and rebuilds it from the CDC log. Before the fix the consumer wrote only a tag=1
+-- cdc_tail (no tag=0 base) and the querying CN kept its warm doc-less cache, so MATCH stayed
+-- empty for minutes until a reindex/restart. The fix rebuilds a real tag=0 base at copy time
+-- (AlterCopyInitSQL REINDEX FORCE_SYNC) and refreshes the idle cache on the CDC flush
+-- (cache.RemoveIdle). Readiness is polled on the REPLACEMENT index's durable tag=0 base
+-- (never poll MATCH -- that can pin a stale per-CN cache); that base is exactly the signal
+-- the fix produces and the bug does not, so pre-fix this case times out at the second wait.
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_copy_alter_case;
+create database ft2_copy_alter_case;
+use ft2_copy_alter_case;
+
+-- Force-build over an already-populated table: CREATE builds a tag=0 base from source.
+create table docs(id bigint primary key, body text);
+insert into docs values
+  (1,'quantum physics is deep'),(2,'classical mechanics only'),
+  (3,'quantum computing rocks'),(4,'organic chemistry notes'),(5,'a quantum leap forward');
+create fulltext2 index ftidx on docs(body);
+
+set @ft2_index = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'ftidx' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'docs')
+    limit 1
+);
+-- The synchronous CREATE build wrote one tag=0 base row; confirm before searching.
+set @wait_base_sql = concat(
+    'select count(*) > 0 as ready from `', database(), '`.`', @ft2_index, '` where tag = 0');
+prepare wait_base from @wait_base_sql;
+-- @wait_expect(1, 120)
+execute wait_base;
+deallocate prepare wait_base;
+
+-- Base-table oracle vs MATCH BEFORE the alter: the index is queryable and agrees.
+select id from docs where body like '%quantum%' order by id;
+select id from docs where match(body) against('quantum') order by id;
+
+-- The UNRELATED COPY ALTER: adds a column the fulltext2 index does not cover.
+alter table docs add column extra int;
+
+-- The ALTER cloned docs to a new table id, so the fulltext2 index has a NEW hidden table.
+-- Re-resolve it and wait on ITS tag=0 base. Pre-fix the CDC consumer writes only tag=1, so
+-- this base never appears and the wait times out (reproducing #28837); post-fix REINDEX
+-- writes it.
+set @ft2_index2 = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'ftidx' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'docs')
+    limit 1
+);
+set @wait_base2_sql = concat(
+    'select count(*) > 0 as ready from `', database(), '`.`', @ft2_index2, '` where tag = 0');
+prepare wait_base2 from @wait_base2_sql;
+-- @wait_expect(1, 120)
+execute wait_base2;
+deallocate prepare wait_base2;
+
+-- MATCH after the copy alter == the base-table oracle. This is the first MATCH on the new
+-- index, so the CN cache loads fresh. An empty result here is the #28837 bug.
+select id from docs where body like '%quantum%' order by id;
+select id from docs where match(body) against('quantum') order by id;
+
+-- The unrelated column is present and MATCH composes with a predicate on it.
+show create table docs;
+select id, extra from docs where match(body) against('quantum') order by id;
+
+drop database ft2_copy_alter_case;

@@ -1133,6 +1133,25 @@ func (c *VectorIndexCache) RemoveWithReason(key, reason string) {
 	c.evictEntry(key, nil, reason)
 }
 
+// RemoveIdle drops the cached entry for key ONLY if no search is in flight on it,
+// so the next Search reloads the post-append generation. Unlike Remove it never
+// evicts a busy entry: a concurrent reader keeps the warm object and RemoveIdle
+// returns false, deferring the refresh to a later idle moment (or the pull-based
+// IsStale sweep). Called on a CDC/ISCP append where staleness is tolerable but a
+// forced evict on every flush would thrash concurrent readers. Current entry only
+// — an append does not invalidate a snapshot generation (see RemoveAllGenerations).
+func (c *VectorIndexCache) RemoveIdle(key, reason string) bool {
+	value, loaded := c.IndexMap.Load(key)
+	if !loaded {
+		return false
+	}
+	algo, ok := value.(*VectorIndexSearch)
+	if !ok {
+		return false
+	}
+	return c.evictIdleEntry(key, algo, reason)
+}
+
 // RemoveAllGenerations drops the index's CURRENT entry and every named-snapshot generation of
 // it. For DDL only -- CREATE, DROP INDEX, DROP TABLE, DROP DATABASE -- where the index table
 // itself is going away or being rebuilt, so its history is no longer readable.

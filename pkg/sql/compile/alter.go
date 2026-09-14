@@ -1521,9 +1521,9 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		extra := newRel.GetExtraInfo()
 		id := newRel.GetTableID(c.proc.Ctx)
 
-		// cctx for the idxcron re-registration arm below — lazy-init,
-		// reused across loop iterations.
-		var idxcronCctx *pluginCompileCtx
+		// Shared plugin CompileContext for the ISCP (AlterCopyInitSQL) and idxcron
+		// re-registration arms below — lazy-init, reused across loop iterations.
+		var pluginCctx *pluginCompileCtx
 		for _, indexDef := range newTableDef.Indexes {
 
 			// DO NOT check SkipIndexesCopy here.  SkipIndexesCopy only valids for the unique/master/regular index.
@@ -1550,31 +1550,60 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 						}
 
 						if valid {
-							// index table may not be fully sync'd with source table via ISCP during alter table
-							// clone index table (with ISCP) may not be a complete clone
-							// so register ISCP job with startFromNow = false
+							// The replacement table's hidden index tables may be empty: cloneUnaffectedIndexes
+							// SKIPS the clone for a SkipWholeIndex async index and the CDC is registered from
+							// ts=0. Ask the plugin how to seed it (#28837): almost every algo returns (false, "")
+							// because its consumer rebuilds the whole index from the ts=0 replay (hnsw/cagra/
+							// ivfpq via RunHnsw/RunCuvs, ivfflat entries, classic row-based fulltext). fulltext2
+							// is the exception: RunFulltext2 only appends a cdc_tail and its base is built ONLY by
+							// buildFromSource, so it returns a REINDEX FORCE_SYNC InitSQL, run post-commit by the
+							// CDC's first iteration. Mirrors RestoreTable's plugin-InitSQL dispatch.
+							startFromNow, initSQL := false, ""
+							if p, ok := indexplugin.Get(indexDef.IndexAlgo); ok {
+								idxDefs := make(map[string]*plan.IndexDef)
+								for _, d := range newTableDef.Indexes {
+									if d.IndexName == indexDef.IndexName {
+										idxDefs[d.IndexAlgoTableType] = d
+									}
+								}
+								if pluginCctx == nil {
+									pluginCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
+								}
+								startFromNow, initSQL, err = p.Compile().AlterCopyInitSQL(pluginCctx, idxDefs)
+								if err != nil {
+									return err
+								}
+								if initSQL == "" {
+									// No rebuild InitSQL → the CDC must replay from ts=0 to
+									// rebuild the skipped (empty) index; it must not arm the
+									// tail from now, which would drop every pre-existing row.
+									// Mirrors RestoreInitSQL's dispatch (ddl.go).
+									startFromNow = false
+								}
+							}
 							sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
-							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, newTableDef.TblId, indexDef.IndexName, sinker_type, false, "", newTableDef)
+							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, newTableDef.TblId, indexDef.IndexName, sinker_type, startFromNow, initSQL, newTableDef)
 							if err != nil {
 								return err
 							}
 
-							logutil.Infof("ISCP register unaffected index db=%s, table=%s, index=%s", dbName, newTableDef.Name, indexDef.IndexName)
+							logutil.Infof("ISCP register unaffected index db=%s, table=%s, index=%s startFromNow=%v initSQL=%q",
+								dbName, newTableDef.Name, indexDef.IndexName, startFromNow, initSQL)
 						}
 					}
 
 					{
 						// idxcron — register the algorithm's scheduled
 						// maintenance task via the plugin. Plugins
-						// without IdxcronAction (HNSW / CAGRA / IVF-PQ
-						// today) are skipped.
+						// without IdxcronAction (HNSW and classic
+						// fulltext today) are skipped.
 						if p, ok := indexplugin.Get(indexDef.IndexAlgo); ok {
 							d := p.Catalog().SyncDescriptor()
 							if d.IdxcronAction != "" {
-								if idxcronCctx == nil {
-									idxcronCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
+								if pluginCctx == nil {
+									pluginCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
 								}
-								metadata, err := p.Compile().IdxcronMetadata(idxcronCctx)
+								metadata, err := p.Compile().IdxcronMetadata(pluginCctx)
 								if err != nil {
 									return err
 								}
