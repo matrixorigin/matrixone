@@ -5022,54 +5022,6 @@ func lineStringGeometryPointsFromPayload(payload []byte) ([]geometryPoint2D, err
 	return points, nil
 }
 
-func polygonBoundsFromRings(rings []string) (float64, float64, float64, float64, error) {
-	hasBounds := false
-	var minX, maxX, minY, maxY float64
-	for _, ring := range rings {
-		pointTexts := splitTopLevelGeometryItems(ring[1 : len(ring)-1])
-		ringMinX, ringMaxX, ringMinY, ringMaxY, err := geometryBoundsFromCoordinateTexts(pointTexts, "invalid polygon payload")
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-		if !hasBounds {
-			minX, maxX, minY, maxY = ringMinX, ringMaxX, ringMinY, ringMaxY
-			hasBounds = true
-			continue
-		}
-		minX = math.Min(minX, ringMinX)
-		maxX = math.Max(maxX, ringMaxX)
-		minY = math.Min(minY, ringMinY)
-		maxY = math.Max(maxY, ringMaxY)
-	}
-	if !hasBounds {
-		return 0, 0, 0, 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-	return minX, maxX, minY, maxY, nil
-}
-
-func geometryBoundsFromCoordinateTexts(pointTexts []string, invalidMessage string) (float64, float64, float64, float64, error) {
-	if len(pointTexts) == 0 {
-		return 0, 0, 0, 0, moerr.NewInvalidInputNoCtx(invalidMessage)
-	}
-
-	firstX, firstY, err := parseCoordinatePairWithError(pointTexts[0], invalidMessage)
-	if err != nil {
-		return 0, 0, 0, 0, err
-	}
-	minX, maxX, minY, maxY := firstX, firstX, firstY, firstY
-	for _, pointText := range pointTexts[1:] {
-		x, y, err := parseCoordinatePairWithError(pointText, invalidMessage)
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-		minX = math.Min(minX, x)
-		maxX = math.Max(maxX, x)
-		minY = math.Min(minY, y)
-		maxY = math.Max(maxY, y)
-	}
-	return minX, maxX, minY, maxY, nil
-}
-
 func pointGeometryPayload(x, y float64, srid uint32, sridDefined bool) []byte {
 	xText := strconv.FormatFloat(x, 'f', -1, 64)
 	yText := strconv.FormatFloat(y, 'f', -1, 64)
@@ -5101,29 +5053,6 @@ func envelopeGeometryFromBounds(minX, maxX, minY, maxY float64, srid uint32, sri
 func sameGeometryCoordinate(a, b float64) bool {
 	const epsilon = 1e-9
 	return math.Abs(a-b) <= epsilon
-}
-
-func lineStringCentroid(points []geometryPoint2D) (float64, float64, error) {
-	totalLength := 0.0
-	sumX := 0.0
-	sumY := 0.0
-	for i := 0; i < len(points)-1; i++ {
-		dx := points[i+1].x - points[i].x
-		dy := points[i+1].y - points[i].y
-		segmentLength := math.Hypot(dx, dy)
-		if sameGeometryCoordinate(segmentLength, 0) {
-			continue
-		}
-		midX := (points[i].x + points[i+1].x) / 2
-		midY := (points[i].y + points[i+1].y) / 2
-		totalLength += segmentLength
-		sumX += midX * segmentLength
-		sumY += midY * segmentLength
-	}
-	if sameGeometryCoordinate(totalLength, 0) {
-		return points[0].x, points[0].y, nil
-	}
-	return sumX / totalLength, sumY / totalLength, nil
 }
 
 func polygonCentroid(rings []string) (float64, float64, error) {
