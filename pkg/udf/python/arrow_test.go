@@ -705,6 +705,35 @@ func TestBuildInputRecordCanonicalizesJSONText(t *testing.T) {
 	require.Equal(t, `{"a":1,"b":[true,null,"中"]}`, values.Value(0))
 }
 
+func TestArrowValueDomainRequiresCanonicalJSONText(t *testing.T) {
+	descriptor, err := NewTypeDescriptor(types.T_json.ToType())
+	require.NoError(t, err)
+
+	for _, test := range []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		{name: "canonical", value: `{"a":1,"b":[true,null]}`, valid: true},
+		{name: "whitespace", value: ` { "a": 1, "b": [true, null] } `},
+		{name: "invalid", value: `{"a":}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder := array.NewStringBuilder(memory.NewGoAllocator())
+			builder.Append(test.value)
+			values := builder.NewStringArray()
+			defer values.Release()
+
+			err := validateArrowValueDomain(descriptor, values)
+			if test.valid {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "JSON row 0")
+			}
+		})
+	}
+}
+
 func TestGoPythonTypeDescriptorFixtures(t *testing.T) {
 	data, err := os.ReadFile("testdata/type_descriptors.json")
 	require.NoError(t, err)

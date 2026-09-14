@@ -1039,9 +1039,25 @@ func appendInputValue(
 // though scalar JSON values happen to work.
 func canonicalJSONInput(value []byte) ([]byte, error) {
 	text := []byte(types.DecodeJson(value).String())
-	var compact bytes.Buffer
-	if err := json.Compact(&compact, text); err != nil {
+	canonical, err := canonicalJSONTextBytes(text)
+	if err != nil {
 		return nil, fmt.Errorf("TYPE_CONTRACT: invalid JSON input: %w", err)
+	}
+	return canonical, nil
+}
+
+func canonicalJSONText(value string) (string, error) {
+	canonical, err := canonicalJSONTextBytes([]byte(value))
+	if err != nil {
+		return "", err
+	}
+	return string(canonical), nil
+}
+
+func canonicalJSONTextBytes(value []byte) ([]byte, error) {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, value); err != nil {
+		return nil, err
 	}
 	return compact.Bytes(), nil
 }
@@ -1470,6 +1486,15 @@ func validateArrowValueDomain(descriptor TypeDescriptor, input arrow.Array) erro
 		case types.T_char, types.T_varchar, types.T_text:
 			if descriptor.Width > 0 && int32(utf8.RuneCountInString(input.(*array.String).Value(row))) > descriptor.Width {
 				return fmt.Errorf("TYPE_CONTRACT: string row %d exceeds width %d", row, descriptor.Width)
+			}
+		case types.T_json:
+			value := input.(*array.String).Value(row)
+			canonical, err := canonicalJSONText(value)
+			if err != nil {
+				return fmt.Errorf("TYPE_CONTRACT: JSON row %d is not valid canonical text: %w", row, err)
+			}
+			if canonical != value {
+				return fmt.Errorf("TYPE_CONTRACT: JSON row %d is not canonical text", row)
 			}
 		case types.T_binary, types.T_varbinary, types.T_blob:
 			if descriptor.Width > 0 && int32(len(input.(*array.Binary).Value(row))) > descriptor.Width {
