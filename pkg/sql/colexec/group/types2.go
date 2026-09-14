@@ -260,6 +260,8 @@ type container struct {
 	// aggs, which holds the intermediate state of agg functions.
 	aggList                []aggexec.GroupAggFuncExec
 	aggExprs               []aggexec.AggFuncExecExpression
+	warningRetentionLimit  int
+	warningRetentionSet    bool
 	groupConcatWarnings    aggexec.GroupConcatWarningAccumulator
 	prepareParamKind       aggexec.PrepareParamKindStates
 	prepareParamKindWireV1 bool

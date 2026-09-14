@@ -9324,6 +9324,7 @@ func Uncompress(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	var warnings process.WarningAccumulator
+	warnings.SetWarningRetentionLimit(process.WarningDiagnosticRetentionLimitForProcess(proc))
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {

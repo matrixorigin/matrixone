@@ -170,6 +170,33 @@ func TestRemoteSecToTimeConversionWarningsRemainBounded(t *testing.T) {
 	require.Len(t, initiatingSession.warnings, 3)
 }
 
+func TestRemoteWarningCollectorConfiguredRetentionPrefixAndZero(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit int
+		want  int
+	}{
+		{name: "zero", limit: 0, want: 0},
+		{name: "prefix", limit: 3, want: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			collector := &remoteWarningCollector{
+				maxRetained:    tc.limit,
+				maxRetainedSet: true,
+			}
+			collector.AppendWarningBatch(5,
+				[]uint16{1, 2, 3, 4, 5},
+				[]string{"one", "two", "three", "four", "five"})
+			total, warnings := collector.SnapshotWarnings()
+			require.Equal(t, uint64(5), total)
+			require.Len(t, warnings, tc.want)
+			for i := range warnings {
+				require.Equal(t, uint16(i+1), warnings[i].Code)
+			}
+		})
+	}
+}
+
 func TestRemoteNumericCastWarningCountIsIndependentOfBatching(t *testing.T) {
 	buildCast := func(proc *process.Process) *plan.Expr {
 		proc.Session = &remoteWarningSession{}
@@ -382,6 +409,42 @@ func TestRemoteWarningCollectorBoundsRetention(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Less(t, len(data), 1024)
+}
+
+func TestRemoteWarningCollectorLegacyPayloadFallsBackTo64(t *testing.T) {
+	collector := &remoteWarningCollector{}
+	for i := 0; i < remoteWarningRetentionLimit+1; i++ {
+		collector.AppendWarningDiagnostic(1292, "legacy")
+	}
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(remoteWarningRetentionLimit+1), total)
+	require.Len(t, retained, remoteWarningRetentionLimit)
+}
+
+func TestRemoteTerminalEnvelopeByteBudgetCapsMaxCapacity(t *testing.T) {
+	const total = 65535
+	message := strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes)
+	warnings := make([]remoteWarningDiagnostic, total)
+	for i := range warnings {
+		warnings[i] = remoteWarningDiagnostic{Code: uint16(i), Message: message}
+	}
+
+	data, err := marshalRemoteTerminalEnvelope(remoteTerminalEnvelope{
+		WarningCount:       total,
+		WarningDiagnostics: warnings,
+	}, 64*1024)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(data), 64*1024)
+
+	var envelope remoteTerminalEnvelope
+	require.NoError(t, json.Unmarshal(data, &envelope))
+	require.Equal(t, uint64(total), envelope.WarningCount)
+	require.NotEmpty(t, envelope.WarningDiagnostics)
+	require.Less(t, len(envelope.WarningDiagnostics), total)
+	for i, warning := range envelope.WarningDiagnostics {
+		require.Equal(t, uint16(i), warning.Code)
+		require.Equal(t, message, warning.Message)
+	}
 }
 
 func TestRemoteWarningCollectorMergesDescendantCountsAndRecords(t *testing.T) {

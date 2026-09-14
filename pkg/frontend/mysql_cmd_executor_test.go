@@ -280,7 +280,7 @@ func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {
 	require.Equal(t, uint64(2), ses.GetMysqlResultSet().GetRowCount())
 	level, err = ses.GetMysqlResultSet().GetString(context.Background(), 0, 0)
 	require.NoError(t, err)
-	require.Equal(t, "Warning", level)
+	require.Equal(t, "Error", level)
 }
 
 func TestShowDiagnosticCountsUseIndependentTotals(t *testing.T) {
@@ -361,7 +361,7 @@ func TestShowDiagnosticsLimitFiltersBeforePagination(t *testing.T) {
 		require.Equal(t, wantCode, code)
 	}
 
-	showDiagnostics(&tree.ShowErrors{Limit: limit(1, 1)}, "1001")
+	showDiagnostics(&tree.ShowErrors{Limit: limit(1, 1)}, "1003")
 	showDiagnostics(&tree.ShowWarnings{Limit: limit(1, 1)}, "1002")
 
 	ses.SetMysqlResultSet(&MysqlResultSet{})
@@ -451,8 +451,228 @@ func TestAppendWarningBatchBoundsRecordsAndPreservesTotal(t *testing.T) {
 
 	info := ses.diagnosticsSnapshot()
 	require.Len(t, info.codes, 3)
-	require.Equal(t, []uint16{2, 3, 4}, info.codes)
+	require.Equal(t, []uint16{1, 2, 3}, info.codes)
 	require.Equal(t, uint16(100), info.warningCount())
+}
+
+func TestMaxErrorCountSessionCapacityAndZero(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: make(map[string]interface{})},
+		},
+		errInfo: &errInfo{maxCnt: MoDefaultErrorCount},
+	}
+	ctx := context.Background()
+	require.Equal(t, MoDefaultErrorCount, ses.GetWarningRetentionLimit())
+	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(3)))
+	// SET changes the configured session value immediately, while the active
+	// capacity remains fixed until the next top-level statement boundary.
+	require.Equal(t, MoDefaultErrorCount, ses.GetWarningRetentionLimit())
+	ses.beginWarningDiagnostics()
+	require.Equal(t, 3, ses.GetWarningRetentionLimit())
+	ses.appendErrorDiagnostic(1064, "error")
+	ses.appendWarningDiagnostic(1329, "warning")
+	ses.appendWarningDiagnostic(1000, "note")
+	ses.appendWarningDiagnostic(1001, "discarded")
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, []uint16{1064, 1329, 1000}, info.codes)
+	require.Equal(t, uint64(3), info.totalWarnings)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(0)))
+	require.Equal(t, 3, ses.GetWarningRetentionLimit())
+	ses.beginWarningDiagnostics()
+	require.Equal(t, 0, ses.GetWarningRetentionLimit())
+	ses.appendErrorDiagnostic(1064, "not retained")
+	ses.appendWarningDiagnostic(1329, "not retained")
+	info = ses.diagnosticsSnapshot()
+	require.Empty(t, info.codes)
+	require.Equal(t, uint64(1), info.totalWarnings)
+	require.Error(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(-1)))
+	require.Error(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(65536)))
+}
+
+func TestSetMaxErrorCountDefersActiveCapacityUntilStatementBoundary(t *testing.T) {
+	ctx := context.Background()
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			sesSysVars: &SystemVariables{mp: make(map[string]interface{})},
+		},
+		errInfo: &errInfo{maxCnt: 10},
+	}
+	ses.appendWarningDiagnostic(1329, "warning from SET statement")
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(0)))
+	require.Equal(t, 10, ses.GetWarningRetentionLimit())
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, []uint16{1329}, info.codes)
+	require.Equal(t, []string{"warning from SET statement"}, info.msgs)
+
+	// The following SHOW WARNINGS is diagnostic and therefore must not reset or
+	// re-trim the records produced by the SET statement. A later non-diagnostic
+	// statement applies the newly configured zero capacity.
+	execCtx := &ExecCtx{}
+	input := &UserInput{}
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.ShowWarnings{})
+	require.Equal(t, 1, ses.diagnosticsSnapshot().length())
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Select{})
+	require.Zero(t, ses.GetWarningRetentionLimit())
+	require.Empty(t, ses.diagnosticsSnapshot().codes)
+}
+
+func TestStatementWarningRetentionSnapshotSurvivesSetAssignmentOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		setBeforeNested bool
+	}{
+		{name: "max_error_count_first", setBeforeNested: true},
+		{name: "user_assignment_first", setBeforeNested: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			ses := &Session{
+				feSessionImpl: feSessionImpl{
+					sesSysVars: &SystemVariables{mp: make(map[string]interface{})},
+				},
+				errInfo: &errInfo{maxCnt: 10},
+			}
+			require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(10)))
+
+			proc := &process.Process{Base: &process.BaseProcess{}}
+			execCtx := &ExecCtx{reqCtx: ctx, proc: proc}
+			input := &UserInput{}
+			resetDiagnosticsForStatement(ses, execCtx, input, &tree.SetVar{})
+			limit, ok := process.WarningRetentionLimitFromContext(execCtx.reqCtx)
+			require.True(t, ok)
+			require.Equal(t, 10, limit)
+
+			if tc.setBeforeNested {
+				require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(0)))
+			}
+
+			// This models the internal SELECT used to evaluate a later SET RHS.
+			// It must keep the statement snapshot even after the session variable
+			// has changed.
+			refreshStatementScopedSessionInfo(ses, proc)
+			require.Equal(t, 10, proc.Base.SessionInfo.MaxErrorCount)
+			require.True(t, proc.Base.SessionInfo.MaxErrorCountSet)
+
+			backSes := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
+			backProc := &process.Process{Base: &process.BaseProcess{}}
+			backProc.ReplaceTopCtx(execCtx.reqCtx)
+			refreshBackgroundStatementScopedSessionInfo(backSes, input, backProc)
+			require.Equal(t, 10, backProc.Base.SessionInfo.MaxErrorCount)
+			require.True(t, backProc.Base.SessionInfo.MaxErrorCountSet)
+
+			if !tc.setBeforeNested {
+				require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(0)))
+			}
+
+			// The next top-level statement applies the new value and replaces the
+			// context snapshot; it must not inherit the previous generation.
+			next := &ExecCtx{reqCtx: execCtx.reqCtx, proc: proc}
+			resetDiagnosticsForStatement(ses, next, input, &tree.Select{})
+			refreshStatementScopedSessionInfo(ses, proc)
+			require.Zero(t, proc.Base.SessionInfo.MaxErrorCount)
+			limit, ok = process.WarningRetentionLimitFromContext(next.reqCtx)
+			require.True(t, ok)
+			require.Zero(t, limit)
+		})
+	}
+}
+
+func TestStatementWarningRetentionSnapshotReachesNestedSetRHS(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "max_error_count_first", sql: "set max_error_count = 0, @w = sec_to_time(4000000)"},
+		{name: "user_assignment_first", sql: "set @w = sec_to_time(4000000), max_error_count = 0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(10)))
+
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			setStmt := stmt.(*tree.SetVar)
+			execCtx := &ExecCtx{reqCtx: ctx, proc: ses.proc, ses: ses}
+			ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+			resetDiagnosticsForStatement(ses, execCtx, &UserInput{sql: tc.sql}, setStmt)
+
+			var observed int
+			nestedErr := errors.New("stop nested RHS after snapshot inspection")
+			dummy := testutil.NewProc(t)
+			stub := gostub.Stub(&GetComputationWrapper, func(
+				nestedCtx *ExecCtx,
+				db string,
+				user string,
+				eng engine.Engine,
+				proc *process.Process,
+				nestedSes *Session,
+			) ([]ComputationWrapper, error) {
+				observed = proc.Base.SessionInfo.MaxErrorCount
+				// executeStmtInSameSession frees the process stored in the temporary
+				// context after doComQuery returns. Keep the session process alive.
+				nestedCtx.proc = dummy
+				return nil, nestedErr
+			})
+			defer stub.Reset()
+
+			err = doSetVar(ses, execCtx, setStmt, tc.sql, false)
+			require.ErrorContains(t, err, nestedErr.Error())
+			require.Equal(t, 10, observed)
+		})
+	}
+}
+
+func TestMaxErrorCountSessionCapacityPrefixes(t *testing.T) {
+	ctx := context.Background()
+	for _, limit := range []int{0, 1, 10, 64, 128, 1024, 65535} {
+		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
+			ses := &Session{
+				feSessionImpl: feSessionImpl{
+					sesSysVars: &SystemVariables{mp: make(map[string]interface{})},
+				},
+				errInfo: &errInfo{maxCnt: MoDefaultErrorCount},
+			}
+			require.NoError(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(limit)))
+			ses.beginWarningDiagnostics()
+			for i := 0; i < 100; i++ {
+				ses.appendWarningDiagnostic(uint16(2000+i), fmt.Sprintf("warning-%d", i))
+			}
+			info := ses.diagnosticsSnapshot()
+			want := limit
+			if want > 100 {
+				want = 100
+			}
+			require.Len(t, info.codes, want)
+			require.Equal(t, uint64(100), info.totalWarnings)
+			for i := 0; i < want; i++ {
+				require.Equal(t, uint16(2000+i), info.codes[i])
+			}
+		})
+	}
+}
+
+func TestShowWarningsPreservesGenerationOrder(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		errInfo:       &errInfo{maxCnt: 10},
+	}
+	ses.appendWarningDiagnostic(1329, "first")
+	ses.appendWarningDiagnostic(1000, "second")
+	execCtx := &ExecCtx{reqCtx: context.Background(), stmt: &tree.ShowWarnings{}}
+	require.NoError(t, doShowErrors(ses, execCtx))
+	require.Equal(t, uint64(2), ses.GetMysqlResultSet().GetRowCount())
+	first, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 2)
+	require.NoError(t, err)
+	second, err := ses.GetMysqlResultSet().GetString(context.Background(), 1, 2)
+	require.NoError(t, err)
+	require.Equal(t, "first", first)
+	require.Equal(t, "second", second)
 }
 
 func TestAppendWarningCountSaturatesAndBoundsMessageBytes(t *testing.T) {
