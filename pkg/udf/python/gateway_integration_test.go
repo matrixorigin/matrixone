@@ -118,6 +118,53 @@ func TestGatewayExecutesAgainstRealPythonWorker(t *testing.T) {
 		require.Equal(t, []int64{11, 12, 13}, vector.MustFixedColNoTypeCheck[int64](result.GetResultVector()))
 	})
 
+	for _, mode := range []string{ModeScalar, ModeVector} {
+		t.Run("JSON canonical text/"+mode, func(t *testing.T) {
+			mp := mpool.MustNewZeroNoFixed()
+			defer mpool.DeleteMPool(mp)
+			typ := types.T_json.ToType()
+			input := vector.NewVec(typ)
+			defer input.Free(mp)
+			// ByteJson renders this finite number as 0.000001. Python's
+			// loads/dumps would rewrite it to 1e-06, violating the shared
+			// compact-text contract before the handler even runs.
+			value, err := types.ParseStringToByteJson("0.000001")
+			require.NoError(t, err)
+			raw, err := value.Marshal()
+			require.NoError(t, err)
+			for _, null := range []bool{false, true, false} {
+				require.NoError(t, vector.AppendBytes(input, raw, null, mp))
+			}
+			result := vector.NewFunctionResultWrapper(typ, mp)
+			defer result.Free()
+			invocation := integrationInvocationForArgs(
+				mode, "identity", "def identity(ctx, value): return value",
+				[]types.Type{typ}, []*vector.Vector{input}, 3,
+				protocol.FencingTuple{AccountID: 1, StatementID: "json-" + mode,
+					GroupID: "json-group-" + mode, GroupEpoch: 1, InvocationID: "json-" + mode, LeaseEpoch: 1},
+			)
+			invocation.ReturnType = typ
+			descriptor, err := NewTypeDescriptor(typ)
+			require.NoError(t, err)
+			invocation.DefinitionFingerprint, err = DefinitionFingerprint(
+				invocation.DefinitionSchemaVersion, invocation.Handler, invocation.Mode,
+				invocation.NullPolicy, invocation.ABIContract, invocation.AdapterVersion,
+				invocation.ArtifactDigest, invocation.EnvironmentDigest, invocation.SDKVersion,
+				[]TypeDescriptor{descriptor}, descriptor,
+			)
+			require.NoError(t, err)
+			publishIntegrationArtifact(t, artifactStore, invocation)
+			require.NoError(t, gateway.Execute(context.Background(), invocation, result, mp))
+			output := result.GetResultVector()
+			require.Equal(t, 3, output.Length())
+			require.True(t, output.IsNull(1))
+			for _, row := range []int{0, 2} {
+				require.False(t, output.IsNull(uint64(row)))
+				require.Equal(t, "0.000001", types.DecodeJson(output.GetBytesAt(row)).String())
+			}
+		})
+	}
+
 	t.Run("zero-argument scalar", func(t *testing.T) {
 		mp := mpool.MustNewZeroNoFixed()
 		defer mpool.DeleteMPool(mp)
