@@ -3673,14 +3673,14 @@ func TestParquetStringMappingValidatesBeforeAllocating(t *testing.T) {
 	})
 	badPage := &parquetPageWithData{
 		Page: page,
-		data: encoding.ByteArrayValues([]byte("value"), []uint32{1, 5}),
+		data: encoding.ByteArrayValues([]byte("value"), []uint32{0, 6}),
 	}
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), NotNullable: true})
 	require.NotNil(t, mp)
 	usedBefore := account.Snapshot().Used
 	err = mp.mapping(badPage, proc, vec)
-	require.ErrorContains(t, err, "first string offset")
+	require.ErrorContains(t, err, "exceeds buffer length")
 	require.Zero(t, vec.Length())
 	require.Equal(t, usedBefore, account.Snapshot().Used)
 }
@@ -4814,7 +4814,6 @@ func Test_validateStringDataCount(t *testing.T) {
 		offsets []uint32
 		want    string
 	}{
-		{name: "first offset is not zero", offsets: []uint32{1, 3}, want: "first string offset"},
 		{name: "offset exceeds buffer", offsets: []uint32{0, 7}, want: "exceeds buffer length"},
 		{name: "offsets decrease", offsets: []uint32{0, 4, 3}, want: "precedes previous offset"},
 	} {
@@ -4825,6 +4824,10 @@ func Test_validateStringDataCount(t *testing.T) {
 			require.ErrorContains(t, err, tc.want)
 		})
 	}
+
+	var sharedBufferLoader strLoader
+	sharedBufferLoader.init(encoding.ByteArrayValues([]byte("abcdef"), []uint32{1, 3}))
+	require.NoError(t, validateStringDataCount(ctx, &sharedBufferLoader, 1))
 }
 
 func Test_validateDictionaryIndicesCount(t *testing.T) {

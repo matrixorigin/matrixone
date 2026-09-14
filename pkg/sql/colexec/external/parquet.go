@@ -2327,11 +2327,8 @@ func validateStringDataCount(ctx context.Context, loader *strLoader, expectedNon
 	} else {
 		// ByteArray
 		if len(loader.offsets) > 0 {
-			if loader.offsets[0] != 0 {
-				return moerr.NewInvalidInputf(ctx,
-					"malformed page: first string offset is %d, expected 0",
-					loader.offsets[0])
-			}
+			// Page slices may keep offsets relative to a shared backing buffer,
+			// so the first offset is not required to be zero.
 			previous := uint32(0)
 			for i, offset := range loader.offsets {
 				if uint64(offset) > uint64(len(loader.buf)) {
