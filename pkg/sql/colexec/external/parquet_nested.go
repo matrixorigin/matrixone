@@ -709,6 +709,9 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 		}
 
 		for i := 0; i < len(keys); i++ {
+			if keys[i].IsNull() {
+				return nil, moerr.NewInvalidInput(ctx, "parquet map key cannot be NULL")
+			}
 			keyStr := stringifyMapKey(keys[i])
 			if _, exists := result[keyStr]; exists {
 				return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
@@ -764,6 +767,9 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 		}
 
 		for i, key := range keys {
+			if key.IsNull() {
+				return nil, moerr.NewInvalidInput(ctx, "parquet map key cannot be NULL")
+			}
 			keyStr := stringifyMapKey(key)
 			if _, exists := result[keyStr]; exists {
 				return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)

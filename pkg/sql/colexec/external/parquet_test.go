@@ -3502,6 +3502,29 @@ func TestParquetNestedOptionalGroupNullIsPreserved(t *testing.T) {
 	require.Nil(t, result["nested"])
 }
 
+func TestParquetMapRejectsNullKey(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"m": parquet.Map(parquet.String(), parquet.Optional(parquet.String())),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	m := f.Root().Column("m")
+	kv := m.Column("key_value")
+	key := kv.Column("key")
+	value := kv.Column("value")
+
+	_, err = reconstructMap(context.Background(), kv, []parquet.Value{
+		parquet.NullValue().Level(0, key.MaxDefinitionLevel()-1, key.Index()),
+		parquet.ByteArrayValue([]byte("v")).Level(0, value.MaxDefinitionLevel(), value.Index()),
+	})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "map key cannot be NULL")
+}
+
 func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Leaf(parquet.BooleanType)
