@@ -274,20 +274,14 @@ var CDCCheckPitrGranularityWithExclude = func(
 								continue
 							}
 						}
-						constraint, err := result.GetValue(ctx, row, 6)
+						// ExecResult intentionally exposes only typed getters. String
+						// conversion preserves the serialized constraint bytes and works
+						// for both the real result set and the test implementation.
+						constraint, err := result.GetString(ctx, row, 6)
 						if err != nil {
 							return err
 						}
-						var constraintBytes []byte
-						switch value := constraint.(type) {
-						case nil:
-						case []byte:
-							constraintBytes = value
-						case string:
-							constraintBytes = []byte(value)
-						default:
-							return moerr.NewInternalErrorf(ctx, "invalid CDC table constraint type %T", constraint)
-						}
+						constraintBytes := []byte(constraint)
 						hasForeignKey, err := cdc.TableHasForeignKeyConstraint(constraintBytes)
 						if err != nil {
 							return err
