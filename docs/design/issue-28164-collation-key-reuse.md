@@ -1,6 +1,11 @@
 # Collation-aware keys using existing indexes (#28164)
 
-Status: replacement design proposal; implementation and product acceptance pending.
+Status: replacement design proposal with independent candidate-selection evidence; production format freeze, implementation acceptance and product acceptance pending.
+
+See [the comparative selection report](issue-28164-collation-selection.md) and
+[its evidence](issue-28164-selection-evidence.json). These supersede earlier
+provisional backend/format conclusions; local prototype bytes are not frozen
+as a production format.
 
 ## 1. Scope and supersession
 
@@ -73,8 +78,8 @@ Inspected candidates (pinned source, not moving branch names):
 
 | Candidate | Relevant API | Decision |
 | --- | --- | --- |
-| Existing MO TiDB-derived general-ci weights; TiDB v8.5.3 `dc2548aac79a712265e831cff2a3a896bc0a5a38` | `Collator.Compare`, `Key`, `KeyWithoutTrimRightSpace`, `CanUseRawMemAsKey` | Primary implementation route for the existing supported general-ci class: extract the already present weight owner into a dependency-light shared package and add an append-to-buffer key adapter. Do not import all of TiDB. |
-| Vitess v22.0.1 `aafd40357555438f9df7b7e28afe7e0828502896` | `colldata.Collation.Collate`, `WeightString`, `WeightStringLen` | MySQL-oriented reference and alternative if the existing mapping fails the agreed compatibility oracle. Its padding/length options require an explicit adapter; do not call with an arbitrary buffer capacity. |
+| Existing MO TiDB-derived general-ci weights; TiDB v8.5.3 `dc2548aac79a712265e831cff2a3a896bc0a5a38` | `Collator.Compare`, `Key`, `KeyWithoutTrimRightSpace`, `CanUseRawMemAsKey` | Evaluated against Vitess and actual MySQL. Recommended for the narrowly scoped existing general-ci class after that comparison; not a universal Unicode backend. See the selection report for performance, API and remaining format gates. |
+| Vitess v22.0.1 `aafd40357555438f9df7b7e28afe7e0828502896` | `colldata.Collation.Collate`, `WeightString`, `WeightStringLen` | Executed against native MySQL in six named domains. Verified PAD-stream and NO-PAD adapters are described in the selection report; direct APIs are not universal SQL identity keys. The pinned module also needs a toolchain/dependency integration decision. |
 | `golang.org/x/text/collate` (MO already depends on x/text v0.35.0) | `Key`, `KeyFromString`, `Compare` | Useful Unicode API, but locale options do not establish MySQL named-collation compatibility. Not the production selection for this issue. |
 | MySQL `MY_COLLATION_HANDLER::strnxfrm` | charset-specific transformation | Semantics reference. A direct C integration/port needs dependency, license and deployment evaluation; it is not needed merely because the analogous C API exists. |
 
@@ -83,8 +88,10 @@ not be copied blindly. Resolve only supported domains; preserve MO's existing
 malformed legacy-value contract until a separately tested policy changes it.
 Do not use process-global libc locale state for persisted keys.
 
-Implementation route is selected; the final byte format is deliberately NOT
-frozen until the independent compatibility and performance spike below passes.
+The independent comparison now supports a scoped backend recommendation,
+recorded in the selection report. The final production byte format is NOT
+frozen: actual tuple malformed-input checks failed and metadata/admission plus
+consumer review remain open.
 If that spike fails, revise the adapter/selection before connecting writers.
 Do not compensate for a comparator mismatch by creating another storage layer.
 
@@ -359,6 +366,8 @@ coverage. #28519's formal CHANGES_REQUESTED remains the reviewer's decision.
 
 Review must explicitly accept the supported-domain/alias policy, final PAD/order
 adapter, original-value retrieval tradeoff and rollout boundary. Source research
-and the local candidate probe are complete for this document; design approval,
-native MySQL differential testing, production implementation, BVT, upgrade and QA
-are pending. No timing or exact-head CI statement in an older PR is reused here.
+and independent Vitess/MO/MySQL comparison are now recorded in the selection
+report. Native comparisons and valid tuple checks passed for the
+selected experimental adapters; generic tuple malformed-input validation failed.
+Design approval, production format freeze, full implementation, BVT, upgrade and
+QA remain pending. No timing or exact-head CI statement in an older PR is reused here.

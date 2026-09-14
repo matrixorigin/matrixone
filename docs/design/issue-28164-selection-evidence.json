@@ -1,0 +1,1823 @@
+{
+  "status": {
+    "semantic_comparison": "PASS within tested named domains and selected adapters",
+    "valid_tuple": "PASS",
+    "malformed_generic_tuple": "FAIL: three missing terminators accepted",
+    "MO_original_row_lookup": "NOT_RUN on transformed storage",
+    "production_format_freeze": "NOT_APPROVED",
+    "production_integration": "NOT_EXPANDED"
+  },
+  "mysql": {
+    "version": "8.0.45 aarch64",
+    "image_digest": "sha256:4af1f8815716546f5b12410f7621f37f93db8dd11a184706ef59111930b8c2ff"
+  },
+  "vitess": {
+    "module": "vitess.io/vitess v0.22.1",
+    "commit": "aafd40357555438f9df7b7e28afe7e0828502896",
+    "toolchain": "go1.24.4 darwin/arm64",
+    "go1_26_4_import": "BUILD_FAILED: internal runtime Swiss map layout assertion"
+  },
+  "mo_reference": {
+    "base": "c54e2fc5e9057c3bfcc5a1ee1a2dfd75b3feb1d7",
+    "candidate_and_tuple_commit": "86c030d6b2",
+    "status": "experimental local commit, not production-activated"
+  },
+  "corpus_count": 244,
+  "comparison_modes": {
+    "binary/mo-existing-comparator": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "binary/mo-pad-candidate": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "binary/vitess-collate": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "binary/vitess-collate-trim": {
+      "Pairs": 59536,
+      "EqualityErrors": 12,
+      "OrderErrors": 186,
+      "Examples": [
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": " "
+        },
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": "  "
+        },
+        {
+          "got": 0,
+          "left": " ",
+          "mysql": 1,
+          "right": ""
+        }
+      ]
+    },
+    "binary/vitess-fixed-2-unsafe": {
+      "Pairs": 59536,
+      "EqualityErrors": 270,
+      "OrderErrors": 0,
+      "Examples": [
+        {
+          "got": 0,
+          "left": "Alpha",
+          "mysql": -1,
+          "right": "Alpha "
+        },
+        {
+          "got": 0,
+          "left": "Alpha ",
+          "mysql": 1,
+          "right": "Alpha"
+        },
+        {
+          "got": 0,
+          "left": "a\u0000",
+          "mysql": -1,
+          "right": "a\u0000 "
+        }
+      ]
+    },
+    "binary/vitess-fixed-domain": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "binary/vitess-pad-capacity": {
+      "Pairs": 59536,
+      "EqualityErrors": 6,
+      "OrderErrors": 0,
+      "Examples": [
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": "\u0000"
+        },
+        {
+          "got": 0,
+          "left": "a",
+          "mysql": -1,
+          "right": "a\u0000"
+        },
+        {
+          "got": 0,
+          "left": "a\u0000",
+          "mysql": 1,
+          "right": "a"
+        }
+      ]
+    },
+    "binary/vitess-weight-0": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "binary/vitess-weight-trim-0": {
+      "Pairs": 59536,
+      "EqualityErrors": 12,
+      "OrderErrors": 186,
+      "Examples": [
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": " "
+        },
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": "  "
+        },
+        {
+          "got": 0,
+          "left": " ",
+          "mysql": 1,
+          "right": ""
+        }
+      ]
+    },
+    "utf8mb4_0900_ai_ci/vitess-collate": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_0900_ai_ci/vitess-collate-trim": {
+      "Pairs": 59536,
+      "EqualityErrors": 168,
+      "OrderErrors": 24,
+      "Examples": [
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": " "
+        },
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": "  "
+        },
+        {
+          "got": 0,
+          "left": " ",
+          "mysql": 1,
+          "right": ""
+        }
+      ]
+    },
+    "utf8mb4_0900_ai_ci/vitess-fixed-2-unsafe": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_0900_ai_ci/vitess-fixed-domain": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_0900_ai_ci/vitess-pad-capacity": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_0900_ai_ci/vitess-weight-0": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_0900_ai_ci/vitess-weight-trim-0": {
+      "Pairs": 59536,
+      "EqualityErrors": 168,
+      "OrderErrors": 24,
+      "Examples": [
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": " "
+        },
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": "  "
+        },
+        {
+          "got": 0,
+          "left": " ",
+          "mysql": 1,
+          "right": ""
+        }
+      ]
+    },
+    "utf8mb4_0900_bin/vitess-collate": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_0900_bin/vitess-collate-trim": {
+      "Pairs": 59536,
+      "EqualityErrors": 12,
+      "OrderErrors": 186,
+      "Examples": [
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": " "
+        },
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": "  "
+        },
+        {
+          "got": 0,
+          "left": " ",
+          "mysql": 1,
+          "right": ""
+        }
+      ]
+    },
+    "utf8mb4_0900_bin/vitess-fixed-2-unsafe": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_0900_bin/vitess-fixed-domain": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_0900_bin/vitess-pad-capacity": {
+      "Pairs": 59536,
+      "EqualityErrors": 6,
+      "OrderErrors": 0,
+      "Examples": [
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": "\u0000"
+        },
+        {
+          "got": 0,
+          "left": "a",
+          "mysql": -1,
+          "right": "a\u0000"
+        },
+        {
+          "got": 0,
+          "left": "a\u0000",
+          "mysql": 1,
+          "right": "a"
+        }
+      ]
+    },
+    "utf8mb4_0900_bin/vitess-weight-0": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_0900_bin/vitess-weight-trim-0": {
+      "Pairs": 59536,
+      "EqualityErrors": 12,
+      "OrderErrors": 186,
+      "Examples": [
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": " "
+        },
+        {
+          "got": 0,
+          "left": "",
+          "mysql": -1,
+          "right": "  "
+        },
+        {
+          "got": 0,
+          "left": " ",
+          "mysql": 1,
+          "right": ""
+        }
+      ]
+    },
+    "utf8mb4_bin/mo-existing-comparator": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 324,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0000"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0001"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0002"
+        }
+      ]
+    },
+    "utf8mb4_bin/mo-pad-candidate": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_bin/vitess-collate": {
+      "Pairs": 59536,
+      "EqualityErrors": 12,
+      "OrderErrors": 138,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": " "
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": "  "
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0000"
+        }
+      ]
+    },
+    "utf8mb4_bin/vitess-collate-trim": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 324,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0000"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0001"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0002"
+        }
+      ]
+    },
+    "utf8mb4_bin/vitess-fixed-2-unsafe": {
+      "Pairs": 59536,
+      "EqualityErrors": 190,
+      "OrderErrors": 0,
+      "Examples": [
+        {
+          "got": 0,
+          "left": "a",
+          "mysql": -1,
+          "right": "a !"
+        },
+        {
+          "got": 0,
+          "left": "a",
+          "mysql": -1,
+          "right": "a  !"
+        },
+        {
+          "got": 0,
+          "left": "a",
+          "mysql": 1,
+          "right": "a \u0001"
+        }
+      ]
+    },
+    "utf8mb4_bin/vitess-fixed-domain": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_bin/vitess-pad-adapter": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_bin/vitess-pad-capacity": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_bin/vitess-pad-weight-stream": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_bin/vitess-weight-0": {
+      "Pairs": 59536,
+      "EqualityErrors": 12,
+      "OrderErrors": 138,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": " "
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": "  "
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0000"
+        }
+      ]
+    },
+    "utf8mb4_bin/vitess-weight-trim-0": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 324,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0000"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0001"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0002"
+        }
+      ]
+    },
+    "utf8mb4_general_ci/mo-existing-comparator": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 368,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0000"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0001"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0002"
+        }
+      ]
+    },
+    "utf8mb4_general_ci/mo-pad-candidate": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_general_ci/vitess-collate": {
+      "Pairs": 59536,
+      "EqualityErrors": 16,
+      "OrderErrors": 182,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": " "
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": "  "
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0000"
+        }
+      ]
+    },
+    "utf8mb4_general_ci/vitess-collate-trim": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 368,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0000"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0001"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0002"
+        }
+      ]
+    },
+    "utf8mb4_general_ci/vitess-fixed-2-unsafe": {
+      "Pairs": 59536,
+      "EqualityErrors": 292,
+      "OrderErrors": 0,
+      "Examples": [
+        {
+          "got": 0,
+          "left": "a",
+          "mysql": -1,
+          "right": "a !"
+        },
+        {
+          "got": 0,
+          "left": "a",
+          "mysql": -1,
+          "right": "a  !"
+        },
+        {
+          "got": 0,
+          "left": "a",
+          "mysql": 1,
+          "right": "a \u0001"
+        }
+      ]
+    },
+    "utf8mb4_general_ci/vitess-fixed-domain": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_general_ci/vitess-pad-adapter": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_general_ci/vitess-pad-capacity": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_general_ci/vitess-pad-weight-stream": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_general_ci/vitess-weight-0": {
+      "Pairs": 59536,
+      "EqualityErrors": 16,
+      "OrderErrors": 182,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": " "
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": "  "
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0000"
+        }
+      ]
+    },
+    "utf8mb4_general_ci/vitess-weight-trim-0": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 368,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0000"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0001"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\u0002"
+        }
+      ]
+    },
+    "utf8mb4_unicode_ci/vitess-collate": {
+      "Pairs": 59536,
+      "EqualityErrors": 404,
+      "OrderErrors": 320,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": " "
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": "  "
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": "\u00a0"
+        }
+      ]
+    },
+    "utf8mb4_unicode_ci/vitess-collate-trim": {
+      "Pairs": 59536,
+      "EqualityErrors": 252,
+      "OrderErrors": 340,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": "\u00a0"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": "\u2000"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\t"
+        }
+      ]
+    },
+    "utf8mb4_unicode_ci/vitess-fixed-2-unsafe": {
+      "Pairs": 59536,
+      "EqualityErrors": 488,
+      "OrderErrors": 0,
+      "Examples": [
+        {
+          "got": 1,
+          "left": "",
+          "mysql": 0,
+          "right": "\u0000"
+        },
+        {
+          "got": 1,
+          "left": "",
+          "mysql": 0,
+          "right": "\u0001"
+        },
+        {
+          "got": 1,
+          "left": "",
+          "mysql": 0,
+          "right": "\u0002"
+        }
+      ]
+    },
+    "utf8mb4_unicode_ci/vitess-fixed-domain": {
+      "Pairs": 59536,
+      "EqualityErrors": 408,
+      "OrderErrors": 0,
+      "Examples": [
+        {
+          "got": 1,
+          "left": "",
+          "mysql": 0,
+          "right": "\u0000"
+        },
+        {
+          "got": 1,
+          "left": "",
+          "mysql": 0,
+          "right": "\u0001"
+        },
+        {
+          "got": 1,
+          "left": "",
+          "mysql": 0,
+          "right": "\u0002"
+        }
+      ]
+    },
+    "utf8mb4_unicode_ci/vitess-pad-capacity": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_unicode_ci/vitess-pad-weight-stream": {
+      "Pairs": 59536,
+      "EqualityErrors": 0,
+      "OrderErrors": 0,
+      "Examples": null
+    },
+    "utf8mb4_unicode_ci/vitess-weight-0": {
+      "Pairs": 59536,
+      "EqualityErrors": 404,
+      "OrderErrors": 320,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": " "
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": "  "
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": "\u00a0"
+        }
+      ]
+    },
+    "utf8mb4_unicode_ci/vitess-weight-trim-0": {
+      "Pairs": 59536,
+      "EqualityErrors": 252,
+      "OrderErrors": 340,
+      "Examples": [
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": "\u00a0"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 0,
+          "right": "\u2000"
+        },
+        {
+          "got": -1,
+          "left": "",
+          "mysql": 1,
+          "right": "\t"
+        }
+      ]
+    }
+  },
+  "option_samples": [
+    {
+      "collation": "utf8mb4_general_ci",
+      "n2": "00200020",
+      "n8": "00200020002000200020002000200020",
+      "pad-cap0": "",
+      "pad-cap1": "00",
+      "pad-cap16": "00200020002000200020002000200020",
+      "pad-cap2": "0020",
+      "pad-cap4": "00200020",
+      "value": "",
+      "zero": ""
+    },
+    {
+      "collation": "utf8mb4_general_ci",
+      "n2": "00410020",
+      "n8": "00410020002000200020002000200020",
+      "pad-cap0": "0041002000200020",
+      "pad-cap1": "0041002000200020",
+      "pad-cap16": "00410020002000200020002000200020",
+      "pad-cap2": "0041",
+      "pad-cap4": "00410020",
+      "value": "a",
+      "zero": "0041"
+    },
+    {
+      "collation": "utf8mb4_general_ci",
+      "n2": "00410020",
+      "n8": "00410020002000200020002000200020",
+      "pad-cap0": "0041002000200020",
+      "pad-cap1": "0041002000200020",
+      "pad-cap16": "00410020002000200020002000200020",
+      "pad-cap2": "0041002000200020",
+      "pad-cap4": "00410020",
+      "value": "a ",
+      "zero": "00410020"
+    },
+    {
+      "collation": "utf8mb4_general_ci",
+      "n2": "00410042",
+      "n8": "00410042004300440045004600200020",
+      "pad-cap0": "00410042004300440045004600200020",
+      "pad-cap1": "00410042004300440045004600200020",
+      "pad-cap16": "00410042004300440045004600200020",
+      "pad-cap2": "00410042004300440045004600200020",
+      "pad-cap4": "00410042004300440045004600200020",
+      "value": "abcdef",
+      "zero": "004100420043004400450046"
+    },
+    {
+      "collation": "utf8mb4_general_ci",
+      "n2": "00410000",
+      "n8": "00410000002000200020002000200020",
+      "pad-cap0": "0041000000200020",
+      "pad-cap1": "0041000000200020",
+      "pad-cap16": "00410000002000200020002000200020",
+      "pad-cap2": "0041000000200020",
+      "pad-cap4": "00410000",
+      "value": "a\u0000",
+      "zero": "00410000"
+    },
+    {
+      "collation": "utf8mb4_general_ci",
+      "n2": "00450020",
+      "n8": "00450020002000200020002000200020",
+      "pad-cap0": "0045002000200020",
+      "pad-cap1": "0045002000200020",
+      "pad-cap16": "00450020002000200020002000200020",
+      "pad-cap2": "0045",
+      "pad-cap4": "00450020",
+      "value": "\u00e9",
+      "zero": "0045"
+    },
+    {
+      "collation": "utf8mb4_general_ci",
+      "n2": "fffd0020",
+      "n8": "fffd0020002000200020002000200020",
+      "pad-cap0": "fffd002000200020",
+      "pad-cap1": "fffd002000200020",
+      "pad-cap16": "fffd0020002000200020002000200020",
+      "pad-cap2": "fffd",
+      "pad-cap4": "fffd0020",
+      "value": "\ud83d\ude00",
+      "zero": "fffd"
+    },
+    {
+      "collation": "utf8mb4_bin",
+      "n2": "000020000020",
+      "n8": "000020000020000020000020000020000020000020000020",
+      "pad-cap0": "",
+      "pad-cap1": "00",
+      "pad-cap16": "00002000002000002000002000002000",
+      "pad-cap2": "0000",
+      "pad-cap4": "00002000",
+      "value": "",
+      "zero": ""
+    },
+    {
+      "collation": "utf8mb4_bin",
+      "n2": "000061000020",
+      "n8": "000061000020000020000020000020000020000020000020",
+      "pad-cap0": "0000610000200000",
+      "pad-cap1": "0000610000200000",
+      "pad-cap16": "00006100002000002000002000002000",
+      "pad-cap2": "0000610000200000",
+      "pad-cap4": "00006100",
+      "value": "a",
+      "zero": "000061"
+    },
+    {
+      "collation": "utf8mb4_bin",
+      "n2": "000061000020",
+      "n8": "000061000020000020000020000020000020000020000020",
+      "pad-cap0": "0000610000200000",
+      "pad-cap1": "0000610000200000",
+      "pad-cap16": "00006100002000002000002000002000",
+      "pad-cap2": "0000610000200000",
+      "pad-cap4": "0000610000200000",
+      "value": "a ",
+      "zero": "000061000020"
+    },
+    {
+      "collation": "utf8mb4_bin",
+      "n2": "000061000062",
+      "n8": "000061000062000063000064000065000066000020000020",
+      "pad-cap0": "0000610000620000630000640000650000660000200000200000200000200000",
+      "pad-cap1": "0000610000620000630000640000650000660000200000200000200000200000",
+      "pad-cap16": "0000610000620000630000640000650000660000200000200000200000200000",
+      "pad-cap2": "0000610000620000630000640000650000660000200000200000200000200000",
+      "pad-cap4": "0000610000620000630000640000650000660000200000200000200000200000",
+      "value": "abcdef",
+      "zero": "000061000062000063000064000065000066"
+    },
+    {
+      "collation": "utf8mb4_bin",
+      "n2": "000061000000",
+      "n8": "000061000000000020000020000020000020000020000020",
+      "pad-cap0": "0000610000000000",
+      "pad-cap1": "0000610000000000",
+      "pad-cap16": "00006100000000002000002000002000",
+      "pad-cap2": "0000610000000000",
+      "pad-cap4": "0000610000000000",
+      "value": "a\u0000",
+      "zero": "000061000000"
+    },
+    {
+      "collation": "utf8mb4_bin",
+      "n2": "0000e9000020",
+      "n8": "0000e9000020000020000020000020000020000020000020",
+      "pad-cap0": "0000e90000200000",
+      "pad-cap1": "0000e90000200000",
+      "pad-cap16": "0000e900002000002000002000002000",
+      "pad-cap2": "0000e90000200000",
+      "pad-cap4": "0000e900",
+      "value": "\u00e9",
+      "zero": "0000e9"
+    },
+    {
+      "collation": "utf8mb4_bin",
+      "n2": "01f600000020",
+      "n8": "01f600000020000020000020000020000020000020000020",
+      "pad-cap0": "01f6000000200000",
+      "pad-cap1": "01f6000000200000",
+      "pad-cap16": "01f60000002000002000002000002000",
+      "pad-cap2": "01f6000000200000",
+      "pad-cap4": "01f60000",
+      "value": "\ud83d\ude00",
+      "zero": "01f600"
+    },
+    {
+      "collation": "utf8mb4_unicode_ci",
+      "n2": "02090209",
+      "n8": "02090209020902090209020902090209",
+      "pad-cap0": "",
+      "pad-cap1": "02",
+      "pad-cap16": "02090209020902090209020902090209",
+      "pad-cap2": "0209",
+      "pad-cap4": "02090209",
+      "value": "",
+      "zero": ""
+    },
+    {
+      "collation": "utf8mb4_unicode_ci",
+      "n2": "0e330209",
+      "n8": "0e330209020902090209020902090209",
+      "pad-cap0": "0e33020902090209",
+      "pad-cap1": "0e33020902090209",
+      "pad-cap16": "0e330209020902090209020902090209",
+      "pad-cap2": "0e33",
+      "pad-cap4": "0e330209",
+      "value": "a",
+      "zero": "0e33"
+    },
+    {
+      "collation": "utf8mb4_unicode_ci",
+      "n2": "0e330209",
+      "n8": "0e330209020902090209020902090209",
+      "pad-cap0": "0e33020902090209",
+      "pad-cap1": "0e33020902090209",
+      "pad-cap16": "0e330209020902090209020902090209",
+      "pad-cap2": "0e33020902090209",
+      "pad-cap4": "0e330209",
+      "value": "a ",
+      "zero": "0e330209"
+    },
+    {
+      "collation": "utf8mb4_unicode_ci",
+      "n2": "0e330e4a0e600e6d0e8b0eb9",
+      "n8": "0e330e4a0e600e6d0e8b0eb902090209",
+      "pad-cap0": "0e330e4a0e600e6d0e8b0eb902090209",
+      "pad-cap1": "0e330e4a0e600e6d0e8b0eb902090209",
+      "pad-cap16": "0e330e4a0e600e6d0e8b0eb902090209",
+      "pad-cap2": "0e330e4a0e600e6d0e8b0eb902090209",
+      "pad-cap4": "0e330e4a0e600e6d0e8b0eb902090209",
+      "value": "abcdef",
+      "zero": "0e330e4a0e600e6d0e8b0eb9"
+    },
+    {
+      "collation": "utf8mb4_unicode_ci",
+      "n2": "0e33",
+      "n8": "0e33020902090209020902090209",
+      "pad-cap0": "0e33020902090209",
+      "pad-cap1": "0e33020902090209",
+      "pad-cap16": "0e330209020902090209020902090209",
+      "pad-cap2": "0e33",
+      "pad-cap4": "0e330209",
+      "value": "a\u0000",
+      "zero": "0e33"
+    },
+    {
+      "collation": "utf8mb4_unicode_ci",
+      "n2": "0e8b0209",
+      "n8": "0e8b0209020902090209020902090209",
+      "pad-cap0": "0e8b020902090209",
+      "pad-cap1": "0e8b020902090209",
+      "pad-cap16": "0e8b0209020902090209020902090209",
+      "pad-cap2": "0e8b",
+      "pad-cap4": "0e8b0209",
+      "value": "\u00e9",
+      "zero": "0e8b"
+    },
+    {
+      "collation": "utf8mb4_unicode_ci",
+      "n2": "fffd0209",
+      "n8": "fffd0209020902090209020902090209",
+      "pad-cap0": "fffd020902090209",
+      "pad-cap1": "fffd020902090209",
+      "pad-cap16": "fffd0209020902090209020902090209",
+      "pad-cap2": "fffd",
+      "pad-cap4": "fffd0209",
+      "value": "\ud83d\ude00",
+      "zero": "fffd"
+    },
+    {
+      "collation": "utf8mb4_0900_ai_ci",
+      "n2": "",
+      "n8": "",
+      "pad-cap0": "",
+      "pad-cap1": "00",
+      "pad-cap16": "00000000000000000000000000000000",
+      "pad-cap2": "0000",
+      "pad-cap4": "00000000",
+      "value": "",
+      "zero": ""
+    },
+    {
+      "collation": "utf8mb4_0900_ai_ci",
+      "n2": "1c47",
+      "n8": "1c47",
+      "pad-cap0": "1c47000000000000",
+      "pad-cap1": "1c47000000000000",
+      "pad-cap16": "1c470000000000000000000000000000",
+      "pad-cap2": "1c47",
+      "pad-cap4": "1c470000",
+      "value": "a",
+      "zero": "1c47"
+    },
+    {
+      "collation": "utf8mb4_0900_ai_ci",
+      "n2": "1c470209",
+      "n8": "1c470209",
+      "pad-cap0": "1c47020900000000",
+      "pad-cap1": "1c47020900000000",
+      "pad-cap16": "1c470209000000000000000000000000",
+      "pad-cap2": "1c47020900000000",
+      "pad-cap4": "1c470209",
+      "value": "a ",
+      "zero": "1c470209"
+    },
+    {
+      "collation": "utf8mb4_0900_ai_ci",
+      "n2": "1c471c601c7a1c8f1caa1ce5",
+      "n8": "1c471c601c7a1c8f1caa1ce5",
+      "pad-cap0": "1c471c601c7a1c8f1caa1ce500000000",
+      "pad-cap1": "1c471c601c7a1c8f1caa1ce500000000",
+      "pad-cap16": "1c471c601c7a1c8f1caa1ce500000000",
+      "pad-cap2": "1c471c601c7a1c8f1caa1ce500000000",
+      "pad-cap4": "1c471c601c7a1c8f1caa1ce500000000",
+      "value": "abcdef",
+      "zero": "1c471c601c7a1c8f1caa1ce5"
+    },
+    {
+      "collation": "utf8mb4_0900_ai_ci",
+      "n2": "1c47",
+      "n8": "1c47",
+      "pad-cap0": "1c47000000000000",
+      "pad-cap1": "1c47000000000000",
+      "pad-cap16": "1c470000000000000000000000000000",
+      "pad-cap2": "1c47",
+      "pad-cap4": "1c470000",
+      "value": "a\u0000",
+      "zero": "1c47"
+    },
+    {
+      "collation": "utf8mb4_0900_ai_ci",
+      "n2": "1caa",
+      "n8": "1caa",
+      "pad-cap0": "1caa000000000000",
+      "pad-cap1": "1caa000000000000",
+      "pad-cap16": "1caa0000000000000000000000000000",
+      "pad-cap2": "1caa",
+      "pad-cap4": "1caa0000",
+      "value": "\u00e9",
+      "zero": "1caa"
+    },
+    {
+      "collation": "utf8mb4_0900_ai_ci",
+      "n2": "15fb",
+      "n8": "15fb",
+      "pad-cap0": "15fb000000000000",
+      "pad-cap1": "15fb000000000000",
+      "pad-cap16": "15fb0000000000000000000000000000",
+      "pad-cap2": "15fb",
+      "pad-cap4": "15fb0000",
+      "value": "\ud83d\ude00",
+      "zero": "15fb"
+    },
+    {
+      "collation": "utf8mb4_0900_bin",
+      "n2": "",
+      "n8": "",
+      "pad-cap0": "",
+      "pad-cap1": "00",
+      "pad-cap16": "00000000000000000000000000000000",
+      "pad-cap2": "0000",
+      "pad-cap4": "00000000",
+      "value": "",
+      "zero": ""
+    },
+    {
+      "collation": "utf8mb4_0900_bin",
+      "n2": "61",
+      "n8": "61",
+      "pad-cap0": "6100000000000000",
+      "pad-cap1": "61",
+      "pad-cap16": "61000000000000000000000000000000",
+      "pad-cap2": "6100",
+      "pad-cap4": "61000000",
+      "value": "a",
+      "zero": "61"
+    },
+    {
+      "collation": "utf8mb4_0900_bin",
+      "n2": "6120",
+      "n8": "6120",
+      "pad-cap0": "6120000000000000",
+      "pad-cap1": "6120000000000000",
+      "pad-cap16": "61200000000000000000000000000000",
+      "pad-cap2": "6120",
+      "pad-cap4": "61200000",
+      "value": "a ",
+      "zero": "6120"
+    },
+    {
+      "collation": "utf8mb4_0900_bin",
+      "n2": "616263646566",
+      "n8": "616263646566",
+      "pad-cap0": "6162636465660000",
+      "pad-cap1": "6162636465660000",
+      "pad-cap16": "61626364656600000000000000000000",
+      "pad-cap2": "6162636465660000",
+      "pad-cap4": "6162636465660000",
+      "value": "abcdef",
+      "zero": "616263646566"
+    },
+    {
+      "collation": "utf8mb4_0900_bin",
+      "n2": "6100",
+      "n8": "6100",
+      "pad-cap0": "6100000000000000",
+      "pad-cap1": "6100000000000000",
+      "pad-cap16": "61000000000000000000000000000000",
+      "pad-cap2": "6100",
+      "pad-cap4": "61000000",
+      "value": "a\u0000",
+      "zero": "6100"
+    },
+    {
+      "collation": "utf8mb4_0900_bin",
+      "n2": "c3a9",
+      "n8": "c3a9",
+      "pad-cap0": "c3a9000000000000",
+      "pad-cap1": "c3a9000000000000",
+      "pad-cap16": "c3a90000000000000000000000000000",
+      "pad-cap2": "c3a9",
+      "pad-cap4": "c3a90000",
+      "value": "\u00e9",
+      "zero": "c3a9"
+    },
+    {
+      "collation": "utf8mb4_0900_bin",
+      "n2": "f09f9880",
+      "n8": "f09f9880",
+      "pad-cap0": "f09f988000000000",
+      "pad-cap1": "f09f988000000000",
+      "pad-cap16": "f09f9880000000000000000000000000",
+      "pad-cap2": "f09f988000000000",
+      "pad-cap4": "f09f9880",
+      "value": "\ud83d\ude00",
+      "zero": "f09f9880"
+    },
+    {
+      "collation": "binary",
+      "n2": "",
+      "n8": "",
+      "pad-cap0": "",
+      "pad-cap1": "00",
+      "pad-cap16": "00000000000000000000000000000000",
+      "pad-cap2": "0000",
+      "pad-cap4": "00000000",
+      "value": "",
+      "zero": ""
+    },
+    {
+      "collation": "binary",
+      "n2": "61",
+      "n8": "61",
+      "pad-cap0": "6100000000000000",
+      "pad-cap1": "61",
+      "pad-cap16": "61000000000000000000000000000000",
+      "pad-cap2": "6100",
+      "pad-cap4": "61000000",
+      "value": "a",
+      "zero": "61"
+    },
+    {
+      "collation": "binary",
+      "n2": "6120",
+      "n8": "6120",
+      "pad-cap0": "6120000000000000",
+      "pad-cap1": "6120000000000000",
+      "pad-cap16": "61200000000000000000000000000000",
+      "pad-cap2": "6120",
+      "pad-cap4": "61200000",
+      "value": "a ",
+      "zero": "6120"
+    },
+    {
+      "collation": "binary",
+      "n2": "6162",
+      "n8": "616263646566",
+      "pad-cap0": "6162636465660000",
+      "pad-cap1": "6162636465660000",
+      "pad-cap16": "61626364656600000000000000000000",
+      "pad-cap2": "6162636465660000",
+      "pad-cap4": "6162636465660000",
+      "value": "abcdef",
+      "zero": "616263646566"
+    },
+    {
+      "collation": "binary",
+      "n2": "6100",
+      "n8": "6100",
+      "pad-cap0": "6100000000000000",
+      "pad-cap1": "6100000000000000",
+      "pad-cap16": "61000000000000000000000000000000",
+      "pad-cap2": "6100",
+      "pad-cap4": "61000000",
+      "value": "a\u0000",
+      "zero": "6100"
+    },
+    {
+      "collation": "binary",
+      "n2": "c3a9",
+      "n8": "c3a9",
+      "pad-cap0": "c3a9000000000000",
+      "pad-cap1": "c3a9000000000000",
+      "pad-cap16": "c3a90000000000000000000000000000",
+      "pad-cap2": "c3a9",
+      "pad-cap4": "c3a90000",
+      "value": "\u00e9",
+      "zero": "c3a9"
+    },
+    {
+      "collation": "binary",
+      "n2": "f09f",
+      "n8": "f09f9880",
+      "pad-cap0": "f09f988000000000",
+      "pad-cap1": "f09f988000000000",
+      "pad-cap16": "f09f9880000000000000000000000000",
+      "pad-cap2": "f09f988000000000",
+      "pad-cap4": "f09f9880",
+      "value": "\ud83d\ude00",
+      "zero": "f09f9880"
+    }
+  ],
+  "sizes": [
+    {
+      "mode": "binary/mo-pad-candidate",
+      "payload_max": 1000,
+      "payload_mean": 29.1,
+      "tuple_mean": 32.31,
+      "tuple_max": 1004,
+      "Alpha_payload": 5,
+      "Alpha_tuple": 8
+    },
+    {
+      "mode": "binary/vitess-fixed-2-unsafe",
+      "payload_max": 2,
+      "payload_mean": 1.47,
+      "tuple_mean": 4.52,
+      "tuple_max": 6,
+      "Alpha_payload": 2,
+      "Alpha_tuple": 5
+    },
+    {
+      "mode": "binary/vitess-fixed-domain",
+      "payload_max": 1000,
+      "payload_mean": 29.1,
+      "tuple_mean": 32.31,
+      "tuple_max": 1004,
+      "Alpha_payload": 5,
+      "Alpha_tuple": 8
+    },
+    {
+      "mode": "binary/vitess-pad-capacity",
+      "payload_max": 4008,
+      "payload_mean": 4008,
+      "tuple_mean": 7990.11,
+      "tuple_max": 8019,
+      "Alpha_payload": 4008,
+      "Alpha_tuple": 8014
+    },
+    {
+      "mode": "binary/vitess-weight-0",
+      "payload_max": 1000,
+      "payload_mean": 29.1,
+      "tuple_mean": 32.31,
+      "tuple_max": 1004,
+      "Alpha_payload": 5,
+      "Alpha_tuple": 8
+    },
+    {
+      "mode": "binary/vitess-weight-trim-0",
+      "payload_max": 1000,
+      "payload_mean": 29.06,
+      "tuple_mean": 32.27,
+      "tuple_max": 1004,
+      "Alpha_payload": 5,
+      "Alpha_tuple": 8
+    },
+    {
+      "mode": "utf8mb4_0900_ai_ci/vitess-fixed-2-unsafe",
+      "payload_max": 2000,
+      "payload_mean": 49.93,
+      "tuple_mean": 52.94,
+      "tuple_max": 2003,
+      "Alpha_payload": 10,
+      "Alpha_tuple": 13
+    },
+    {
+      "mode": "utf8mb4_0900_ai_ci/vitess-fixed-domain",
+      "payload_max": 2000,
+      "payload_mean": 49.93,
+      "tuple_mean": 52.94,
+      "tuple_max": 2003,
+      "Alpha_payload": 10,
+      "Alpha_tuple": 13
+    },
+    {
+      "mode": "utf8mb4_0900_ai_ci/vitess-pad-capacity",
+      "payload_max": 16032,
+      "payload_mean": 16032,
+      "tuple_mean": 32017.07,
+      "tuple_max": 32067,
+      "Alpha_payload": 16032,
+      "Alpha_tuple": 32057
+    },
+    {
+      "mode": "utf8mb4_0900_ai_ci/vitess-weight-0",
+      "payload_max": 2000,
+      "payload_mean": 49.93,
+      "tuple_mean": 52.94,
+      "tuple_max": 2003,
+      "Alpha_payload": 10,
+      "Alpha_tuple": 13
+    },
+    {
+      "mode": "utf8mb4_0900_ai_ci/vitess-weight-trim-0",
+      "payload_max": 2000,
+      "payload_mean": 49.86,
+      "tuple_mean": 52.86,
+      "tuple_max": 2003,
+      "Alpha_payload": 10,
+      "Alpha_tuple": 13
+    },
+    {
+      "mode": "utf8mb4_0900_bin/vitess-fixed-2-unsafe",
+      "payload_max": 1000,
+      "payload_mean": 29.1,
+      "tuple_mean": 32.31,
+      "tuple_max": 1004,
+      "Alpha_payload": 5,
+      "Alpha_tuple": 8
+    },
+    {
+      "mode": "utf8mb4_0900_bin/vitess-fixed-domain",
+      "payload_max": 1000,
+      "payload_mean": 29.1,
+      "tuple_mean": 32.31,
+      "tuple_max": 1004,
+      "Alpha_payload": 5,
+      "Alpha_tuple": 8
+    },
+    {
+      "mode": "utf8mb4_0900_bin/vitess-pad-capacity",
+      "payload_max": 4008,
+      "payload_mean": 4008,
+      "tuple_mean": 7990.11,
+      "tuple_max": 8019,
+      "Alpha_payload": 4008,
+      "Alpha_tuple": 8014
+    },
+    {
+      "mode": "utf8mb4_0900_bin/vitess-weight-0",
+      "payload_max": 1000,
+      "payload_mean": 29.1,
+      "tuple_mean": 32.31,
+      "tuple_max": 1004,
+      "Alpha_payload": 5,
+      "Alpha_tuple": 8
+    },
+    {
+      "mode": "utf8mb4_0900_bin/vitess-weight-trim-0",
+      "payload_max": 1000,
+      "payload_mean": 29.06,
+      "tuple_mean": 32.27,
+      "tuple_max": 1004,
+      "Alpha_payload": 5,
+      "Alpha_tuple": 8
+    },
+    {
+      "mode": "utf8mb4_bin/mo-pad-candidate",
+      "payload_max": 1001,
+      "payload_mean": 30.06,
+      "tuple_mean": 33.06,
+      "tuple_max": 1004,
+      "Alpha_payload": 6,
+      "Alpha_tuple": 9
+    },
+    {
+      "mode": "utf8mb4_bin/vitess-fixed-2-unsafe",
+      "payload_max": 6,
+      "payload_mean": 6,
+      "tuple_mean": 12.92,
+      "tuple_max": 14,
+      "Alpha_payload": 6,
+      "Alpha_tuple": 13
+    },
+    {
+      "mode": "utf8mb4_bin/vitess-fixed-domain",
+      "payload_max": 3006,
+      "payload_mean": 3006,
+      "tuple_mean": 5010.13,
+      "tuple_max": 5016,
+      "Alpha_payload": 3006,
+      "Alpha_tuple": 5013
+    },
+    {
+      "mode": "utf8mb4_bin/vitess-pad-adapter",
+      "payload_max": 1001,
+      "payload_mean": 30.06,
+      "tuple_mean": 33.06,
+      "tuple_max": 1004,
+      "Alpha_payload": 6,
+      "Alpha_tuple": 9
+    },
+    {
+      "mode": "utf8mb4_bin/vitess-pad-capacity",
+      "payload_max": 3006,
+      "payload_mean": 3006,
+      "tuple_mean": 5010.13,
+      "tuple_max": 5016,
+      "Alpha_payload": 3006,
+      "Alpha_tuple": 5013
+    },
+    {
+      "mode": "utf8mb4_bin/vitess-pad-weight-stream",
+      "payload_max": 4001,
+      "payload_mean": 89.92,
+      "tuple_mean": 134.27,
+      "tuple_max": 6005,
+      "Alpha_payload": 21,
+      "Alpha_tuple": 34
+    },
+    {
+      "mode": "utf8mb4_bin/vitess-weight-0",
+      "payload_max": 3000,
+      "payload_mean": 67.83,
+      "tuple_mean": 113.18,
+      "tuple_max": 5004,
+      "Alpha_payload": 15,
+      "Alpha_tuple": 28
+    },
+    {
+      "mode": "utf8mb4_bin/vitess-weight-trim-0",
+      "payload_max": 3000,
+      "payload_mean": 67.72,
+      "tuple_mean": 113.0,
+      "tuple_max": 5004,
+      "Alpha_payload": 15,
+      "Alpha_tuple": 28
+    },
+    {
+      "mode": "utf8mb4_general_ci/mo-pad-candidate",
+      "payload_max": 1001,
+      "payload_mean": 29.73,
+      "tuple_mean": 32.73,
+      "tuple_max": 1004,
+      "Alpha_payload": 6,
+      "Alpha_tuple": 9
+    },
+    {
+      "mode": "utf8mb4_general_ci/vitess-fixed-2-unsafe",
+      "payload_max": 4,
+      "payload_mean": 4,
+      "tuple_mean": 8.93,
+      "tuple_max": 10,
+      "Alpha_payload": 4,
+      "Alpha_tuple": 9
+    },
+    {
+      "mode": "utf8mb4_general_ci/vitess-fixed-domain",
+      "payload_max": 2004,
+      "payload_mean": 2004,
+      "tuple_mean": 3006.14,
+      "tuple_max": 3012,
+      "Alpha_payload": 2004,
+      "Alpha_tuple": 3009
+    },
+    {
+      "mode": "utf8mb4_general_ci/vitess-pad-adapter",
+      "payload_max": 1001,
+      "payload_mean": 29.73,
+      "tuple_mean": 32.73,
+      "tuple_max": 1004,
+      "Alpha_payload": 6,
+      "Alpha_tuple": 9
+    },
+    {
+      "mode": "utf8mb4_general_ci/vitess-pad-capacity",
+      "payload_max": 2004,
+      "payload_mean": 2004,
+      "tuple_mean": 3006.14,
+      "tuple_max": 3012,
+      "Alpha_payload": 2004,
+      "Alpha_tuple": 3009
+    },
+    {
+      "mode": "utf8mb4_general_ci/vitess-pad-weight-stream",
+      "payload_max": 3001,
+      "payload_mean": 67.8,
+      "tuple_mean": 90.05,
+      "tuple_max": 4005,
+      "Alpha_payload": 16,
+      "Alpha_tuple": 24
+    },
+    {
+      "mode": "utf8mb4_general_ci/vitess-weight-0",
+      "payload_max": 2000,
+      "payload_mean": 45.22,
+      "tuple_mean": 67.97,
+      "tuple_max": 3004,
+      "Alpha_payload": 10,
+      "Alpha_tuple": 18
+    },
+    {
+      "mode": "utf8mb4_general_ci/vitess-weight-trim-0",
+      "payload_max": 2000,
+      "payload_mean": 45.15,
+      "tuple_mean": 67.86,
+      "tuple_max": 3004,
+      "Alpha_payload": 10,
+      "Alpha_tuple": 18
+    },
+    {
+      "mode": "utf8mb4_unicode_ci/vitess-fixed-2-unsafe",
+      "payload_max": 2000,
+      "payload_mean": 51.15,
+      "tuple_mean": 54.15,
+      "tuple_max": 2003,
+      "Alpha_payload": 10,
+      "Alpha_tuple": 13
+    },
+    {
+      "mode": "utf8mb4_unicode_ci/vitess-fixed-domain",
+      "payload_max": 2670,
+      "payload_mean": 2008.7,
+      "tuple_mean": 2011.7,
+      "tuple_max": 2673,
+      "Alpha_payload": 2004,
+      "Alpha_tuple": 2007
+    },
+    {
+      "mode": "utf8mb4_unicode_ci/vitess-pad-capacity",
+      "payload_max": 32064,
+      "payload_mean": 32064,
+      "tuple_mean": 32067,
+      "tuple_max": 32067,
+      "Alpha_payload": 32064,
+      "Alpha_tuple": 32067
+    },
+    {
+      "mode": "utf8mb4_unicode_ci/vitess-pad-weight-stream",
+      "payload_max": 3001,
+      "payload_mean": 74.66,
+      "tuple_mean": 77.66,
+      "tuple_max": 3004,
+      "Alpha_payload": 16,
+      "Alpha_tuple": 19
+    },
+    {
+      "mode": "utf8mb4_unicode_ci/vitess-weight-0",
+      "payload_max": 2000,
+      "payload_mean": 49.92,
+      "tuple_mean": 52.92,
+      "tuple_max": 2003,
+      "Alpha_payload": 10,
+      "Alpha_tuple": 13
+    },
+    {
+      "mode": "utf8mb4_unicode_ci/vitess-weight-trim-0",
+      "payload_max": 2000,
+      "payload_mean": 49.84,
+      "tuple_mean": 52.84,
+      "tuple_max": 2003,
+      "Alpha_payload": 10,
+      "Alpha_tuple": 13
+    }
+  ],
+  "distinguishing_native_cases": {
+    "('', '\\x00')": {
+      "utf8mb4_general_ci": 1,
+      "utf8mb4_bin": 1,
+      "utf8mb4_unicode_ci": 0,
+      "utf8mb4_0900_ai_ci": 0,
+      "utf8mb4_0900_bin": -1,
+      "binary": -1
+    },
+    "('Alpha', 'Alpha ')": {
+      "utf8mb4_general_ci": 0,
+      "utf8mb4_bin": 0,
+      "utf8mb4_unicode_ci": 0,
+      "utf8mb4_0900_ai_ci": -1,
+      "utf8mb4_0900_bin": -1,
+      "binary": -1
+    },
+    "('\u00e9', 'e\u0301')": {
+      "utf8mb4_general_ci": -1,
+      "utf8mb4_bin": 1,
+      "utf8mb4_unicode_ci": 0,
+      "utf8mb4_0900_ai_ci": 0,
+      "utf8mb4_0900_bin": 1,
+      "binary": 1
+    },
+    "('\u00df', 'ss')": {
+      "utf8mb4_general_ci": -1,
+      "utf8mb4_bin": 1,
+      "utf8mb4_unicode_ci": 0,
+      "utf8mb4_0900_ai_ci": 0,
+      "utf8mb4_0900_bin": 1,
+      "binary": 1
+    }
+  },
+  "prefix_comparisons": 15138,
+  "actual_tuple_fields": 9272,
+  "actual_tuple_comparisons": 2262368,
+  "bench_lines": [
+    "BenchmarkSelection/binary/vitess-weight-0/inputbytes16-8         \t46920435\t         4.964 ns/op\t3223.46 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/binary/mo-pad-candidate/inputbytes16-8        \t96181166\t         3.017 ns/op\t5303.71 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_bin/vitess-weight-0/inputbytes16-8    \t 2785815\t        89.76 ns/op\t 178.26 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_bin/vitess-pad-stream-prepared/inputbytes16-8         \t 1297135\t       175.9 ns/op\t  90.94 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_bin/vitess-compact-prepared/inputbytes16-8            \t 1624690\t       151.2 ns/op\t 105.80 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_bin/mo-pad-candidate/inputbytes16-8                   \t 3037776\t        79.69 ns/op\t 200.77 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_general_ci/vitess-weight-0/inputbytes16-8             \t 2834418\t        88.65 ns/op\t 180.49 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_general_ci/vitess-pad-stream-prepared/inputbytes16-8  \t 1314482\t       182.5 ns/op\t  87.66 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_general_ci/vitess-compact-prepared/inputbytes16-8     \t 1561292\t       154.8 ns/op\t 103.35 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_general_ci/mo-pad-candidate/inputbytes16-8            \t 2271390\t       104.9 ns/op\t 152.47 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_unicode_ci/vitess-pad-stream-prepared/inputbytes16-8  \t  818529\t       303.4 ns/op\t  52.73 MB/s\t      80 B/op\t       1 allocs/op",
+    "BenchmarkSelection/utf8mb4_unicode_ci/vitess-weight-0/inputbytes16-8             \t 1000000\t       204.1 ns/op\t  78.40 MB/s\t      80 B/op\t       1 allocs/op",
+    "BenchmarkSelection/utf8mb4_0900_ai_ci/vitess-weight-0/inputbytes16-8             \t 6785186\t        34.09 ns/op\t 469.36 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/binary/vitess-weight-0/inputbytes128-8                        \t50978413\t         4.807 ns/op\t26627.55 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/binary/mo-pad-candidate/inputbytes128-8                       \t98933373\t         2.400 ns/op\t53338.23 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_bin/vitess-pad-stream-prepared/inputbytes128-8        \t  188799\t      1298 ns/op\t  98.64 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_bin/vitess-compact-prepared/inputbytes128-8           \t  228242\t      1059 ns/op\t 120.88 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_bin/mo-pad-candidate/inputbytes128-8                  \t  435409\t       578.6 ns/op\t 221.24 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_bin/vitess-weight-0/inputbytes128-8                   \t  500677\t       480.7 ns/op\t 266.27 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_general_ci/vitess-compact-prepared/inputbytes128-8    \t  217766\t      1120 ns/op\t 114.25 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_general_ci/mo-pad-candidate/inputbytes128-8           \t  325520\t       780.4 ns/op\t 164.03 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_general_ci/vitess-weight-0/inputbytes128-8            \t  396237\t       606.4 ns/op\t 211.08 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_general_ci/vitess-pad-stream-prepared/inputbytes128-8 \t  183967\t      1334 ns/op\t  95.95 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_unicode_ci/vitess-weight-0/inputbytes128-8            \t  181046\t      1301 ns/op\t  98.40 MB/s\t      80 B/op\t       1 allocs/op",
+    "BenchmarkSelection/utf8mb4_unicode_ci/vitess-pad-stream-prepared/inputbytes128-8 \t  116632\t      2039 ns/op\t  62.78 MB/s\t      80 B/op\t       1 allocs/op",
+    "BenchmarkSelection/utf8mb4_0900_ai_ci/vitess-weight-0/inputbytes128-8            \t 2150080\t       126.5 ns/op\t1011.92 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/binary/vitess-weight-0/inputbytes1152-8                       \t11985566\t        19.23 ns/op\t59919.32 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/binary/mo-pad-candidate/inputbytes1152-8                      \t100000000\t         2.417 ns/op\t476565.99 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_bin/vitess-weight-0/inputbytes1152-8                  \t  131748\t      1819 ns/op\t 633.36 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_bin/vitess-pad-stream-prepared/inputbytes1152-8       \t   59536\t      4115 ns/op\t 279.97 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_bin/vitess-compact-prepared/inputbytes1152-8          \t   53583\t      4272 ns/op\t 269.68 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_bin/mo-pad-candidate/inputbytes1152-8                 \t   56095\t      4296 ns/op\t 268.15 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_general_ci/vitess-weight-0/inputbytes1152-8           \t  118899\t      2054 ns/op\t 560.89 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_general_ci/vitess-pad-stream-prepared/inputbytes1152-8         \t   57268\t      4170 ns/op\t 276.24 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_general_ci/vitess-compact-prepared/inputbytes1152-8            \t   58246\t      4121 ns/op\t 279.51 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_general_ci/mo-pad-candidate/inputbytes1152-8                   \t   51312\t      4699 ns/op\t 245.18 MB/s\t       0 B/op\t       0 allocs/op",
+    "BenchmarkSelection/utf8mb4_unicode_ci/vitess-weight-0/inputbytes1152-8                    \t   53491\t      4514 ns/op\t 255.20 MB/s\t      80 B/op\t       1 allocs/op",
+    "BenchmarkSelection/utf8mb4_unicode_ci/vitess-pad-stream-prepared/inputbytes1152-8         \t   33499\t      7188 ns/op\t 160.26 MB/s\t      80 B/op\t       1 allocs/op",
+    "BenchmarkSelection/utf8mb4_0900_ai_ci/vitess-weight-0/inputbytes1152-8                    \t   45297\t      5317 ns/op\t 216.67 MB/s\t       0 B/op\t       0 allocs/op"
+  ],
+  "artifact_sha256": {
+    "extra-tests-final.log": "197a8c59f4f3e9c281a7d1e182468126dc69f0db63687aef0729c2116785e2f7",
+    "prefix.tsv": "9e61c0f14775e8f5136e709b79c8b1c63e1d19db74a9551abf59499ab96a15a4",
+    "tuple-malformed.log": "a41dfd118032a987aac6012acf925d4bfbf8f4d3515164702de004011fa42065",
+    "overlay.json": "644c4d9c48c029171ab4bf1960c5f45eec137acb6a00d3329d7706fefda8d6a8",
+    "originals-reference.tsv": "fd689ae73c28a1d2201807af6d9cc382e44ab8d9da9636c9edde632088b4bcd9",
+    "metadata.tsv": "be6fbeb04127e87aee25ae39a7906afcc7cddd89b33c3a78d3324bd63cbc8751",
+    "collations.json": "5de564045e48a36726a5cbbfaa069c0c056b146d606ca856d484e354783351db",
+    "context.log": "01666ec060466c14b9fa06c613fbac449163f2a2017558fe16526209ab78c6b0",
+    "oracle-start.log": "d17e291cddaf695ce9a1292a9f39b41f800a27489b6ec4837c021ba946552f15",
+    "extra-tests.log": "9e1b071d672a54a9242dd47620d6ea2cce96abaa7544d2e15bad0d85cd7218af",
+    "tuple_selection_test.go": "98de251e799f7f71d827f1d611031ea5e5a52ca03906cd848b288b1276a98c1c",
+    "comparison.json": "a437169b7df8562698dd3dd6f6c9066dd6e3a8fdc2cc4e789737643093ee52a2",
+    "oracle.tsv": "817e3c021c16e6ed7378e8eca3af20a6b97bf0ef03d2328c200c76694efdfd44",
+    "sizes.json": "d9ac1047ac88624460218de2c2804aff8ae5ac72e9a040a6e07ed5b57df1b432",
+    "tidy.log": "71e7857028ffa5abf136465ad20db4ab5cea81eb9db75b0af952490806bff3c2",
+    "weightstringlen-precondition.log": "1541eb3be9158b620bb24bb63f842438b79baef3ac4f55da5eeb76a4f6b0ce9e",
+    "prefix.sql": "18246eea62f7901be11af62a574d8aace25b55f94ddd4a17e27d9031b37745f9",
+    "keys.json": "b2217ee552be863ad5db0d169ee837bb3a39e9a4b253c927c7bcd78ee106913b",
+    "comparison.log": "579d53000ab343802834fb6119a2bd5aa3eab323ef48b57b353169b2e7656004",
+    "tuple.log": "e7e77b99075635c0ff181cba84014b559824606a5065c7bde4abf495bff511e4",
+    "oracle.sql": "548a053cadbdb0af8c6bc662f7aea3191bc93154b0fc9c727228738ac4c7b2f1",
+    "container.log": "96bdcfde51ff3862271ac170b9f6091231b0e3e44f31e34e7b1a1400918af99d",
+    "download.log": "5426eddcba874d601a54234ab81a0092210789397e881f57b2a5e05fd0e36c7e",
+    "values.json": "48094d31b3cac393331ace9f8b27e75ca52877659d518bc7b0c2887c307e5fe9",
+    "originals-reference.sql": "c8e8524b215054068bd361a75ad358fa42e2ca93a55a4267e20a4b3dad4d8ba1",
+    "bench.log": "6789aedf36275861c4e05c75e66e076df68c512ebeeeba1c919e23b562657a47",
+    "probe/go.mod": "3cd20cd98a01c0839190284a2bb7845c3496ddec816e0d4c8c372ab57a241202",
+    "probe/go.sum": "8ef6640d5e13654c3cd9cf1427fcea44733b31961608a1322bcf9062a842303d",
+    "probe/extra_test.go": "a8ac6592a184e4da21785ed1c44e170f5c97a10e30f311df66e073d1573b83a0",
+    "probe/main.go": "4e70d3aa3e03db5078b7e7b8776607e9c46ec79b2fddfd5a42753ba9a6573200",
+    "probe/candidate/general_ci.go": "b9df94a5c6341b24febec13d8bacf5a2b2fa2747890b7d05cd2e93926b14ef77",
+    "probe/candidate/key.go": "5193f43d4c80a0786debba7bd857b62d41fbfd7f3f02ca813efd66d3ed2b6ea1"
+  },
+  "native_character_weight_pairs": 65536,
+  "malformed_UTF8_contract": "Vitess general_ci weight-0 silently stops at ff; candidate UTF8 admission rejects before conversion"
+}
