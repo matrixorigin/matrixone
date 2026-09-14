@@ -356,6 +356,13 @@ func RunBaseClusterTests(
 	})
 }
 
+// CloseBaseClusterTests releases and resets the process-local shared two-CN
+// fixture if it was initialized. Call only after RunBaseClusterTests returns,
+// because Run holds the fixture mutex for the duration of its callback.
+func CloseBaseClusterTests() error {
+	return basicClusterState.CloseIfActive()
+}
+
 // RunSingleCNBaseClusterTests reuses the same base-cluster configuration with
 // one CN. A test package should use this only when every shared-cluster case in
 // that package is single-CN; mixing both helpers would start two fixtures and

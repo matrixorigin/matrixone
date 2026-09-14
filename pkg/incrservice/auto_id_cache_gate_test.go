@@ -79,14 +79,14 @@ func TestAutoIDCacheDDLAndProtocolGate(t *testing.T) {
 		enabled := NewIncrService(t.Name(), NewMemStore(), Config{EnableAutoIDCache: true})
 		defer enabled.Close()
 		rt.SetGlobalVariables(runtime.AutoIncrementService, enabled)
-		for _, version := range []any{nil, "65", defines.MORPCVersion57, defines.MORPCVersion58, defines.MORPCVersion59, defines.MORPCVersion60, defines.MORPCVersion61, defines.MORPCVersion62, defines.MORPCVersion63, defines.MORPCVersion64} {
+		for _, version := range []any{nil, "67", defines.MORPCVersion57, defines.MORPCVersion58, defines.MORPCVersion59, defines.MORPCVersion60, defines.MORPCVersion61, defines.MORPCVersion62, defines.MORPCVersion63, defines.MORPCVersion64, defines.MORPCVersion65, defines.MORPCVersion66} {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
-			require.ErrorContains(t, CheckAutoIDCache(t.Context(), t.Name(), 1), "version 65")
+			require.ErrorContains(t, CheckAutoIDCache(t.Context(), t.Name(), 1), "version 67")
 			// The service path is independently fenced even if the caller bypasses DDL planning.
-			require.ErrorContains(t, enabled.Create(t.Context(), 42, []AutoColumn{{ColName: "id", Step: 1, CacheSize: 1}}, nil), "version 65")
+			require.ErrorContains(t, enabled.Create(t.Context(), 42, []AutoColumn{{ColName: "id", Step: 1, CacheSize: 1}}, nil), "version 67")
 			require.NoError(t, CheckAutoIDCache(t.Context(), t.Name(), 0))
 		}
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion65)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion67)
 		require.NoError(t, CheckAutoIDCache(t.Context(), t.Name(), 1))
 	})
 }

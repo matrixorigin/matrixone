@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"errors"
 	"net"
 	"syscall"
 	"testing"
@@ -97,12 +98,32 @@ func TestProbeTestPortRejectsOccupiedSockets(t *testing.T) {
 		require.ErrorIs(t, probeTestPort(listener.Addr().(*net.TCPAddr).Port), syscall.EADDRINUSE)
 	})
 	t.Run("udp", func(t *testing.T) {
-		listener, err := net.ListenPacket("udp4", "127.0.0.1:0")
-		require.NoError(t, err)
+		listener, port := listenUDPOnTCPAvailablePort(t)
 		defer listener.Close()
-		port := listener.LocalAddr().(*net.UDPAddr).Port
 		require.ErrorIs(t, probeTestPort(port), syscall.EADDRINUSE)
 		// A UDP-owned port does not imply that its TCP counterpart is free.
 		// Cleanup is checked separately without racing another process's bind.
 	})
+}
+
+func listenUDPOnTCPAvailablePort(t *testing.T) (net.PacketConn, int) {
+	t.Helper()
+	for range maxPortAllocationAttempts {
+		// Reserve a TCP-selected ephemeral port while opening UDP on the same
+		// address. Selecting the port with UDP alone is racy because the kernel's
+		// TCP and UDP ephemeral-port allocators are independent.
+		tcp, err := net.Listen("tcp4", "127.0.0.1:0")
+		require.NoError(t, err)
+		port := tcp.Addr().(*net.TCPAddr).Port
+		udp, udpErr := net.ListenPacket("udp4", tcp.Addr().String())
+		require.NoError(t, tcp.Close())
+		if udpErr == nil {
+			return udp, port
+		}
+		if !errors.Is(udpErr, syscall.EADDRINUSE) {
+			require.NoError(t, udpErr)
+		}
+	}
+	require.FailNow(t, "could not reserve a UDP port that is also available to TCP")
+	return nil, 0
 }

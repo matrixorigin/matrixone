@@ -158,6 +158,10 @@ func TestSiriusCompileFastRejections(t *testing.T) {
 	require.False(t, siriusStatementEligible(&tree.Select{Ep: &tree.ExportParam{}}))
 	require.False(t, siriusStatementEligible(sqlCalcFoundRowsTestStatement()))
 	require.False(t, siriusStatementEligible(nil))
+	require.False(t, siriusPlanEligible(&planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		UnresolvedIndexHints: []*planpb.UnresolvedIndexHint{{IndexName: "idx_new"}},
+	}}}))
+	require.True(t, siriusPlanEligible(&planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{}}}))
 
 	requested := WithSiriusOffload(context.Background())
 	for _, c := range []*Compile{

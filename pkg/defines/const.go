@@ -100,8 +100,10 @@ const (
 	MORPCVersion62     int64 = 62 // VARCHAR OCT overload identities
 	MORPCVersion63     int64 = 63 // INSERT IGNORE CHECK warning diagnostics
 	MORPCVersion64     int64 = 64 // typed BIN/CONV execution contracts
-	MORPCVersion65     int64 = 65 // opt-in table-owned AUTO_ID_CACHE and its PRE_INSERT wire marker
-	MORPCLatestVersion       = MORPCVersion65
+	MORPCVersion65     int64 = 65 // signed INT result contract for ASCII
+	MORPCVersion66     int64 = 66 // GROUP_CONCAT source-row diagnostics in aggregate partial state
+	MORPCVersion67     int64 = 67 // opt-in table-owned AUTO_ID_CACHE and its PRE_INSERT wire marker
+	MORPCLatestVersion       = MORPCVersion67
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -1804,17 +1804,17 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// function and selects a numeric overload.
 			return e, nil
 		}
-		isAbs := strings.EqualFold(functionName, "abs") && len(exprImpl.F.Args) == 1
-		var originalAbsArg *plan.Expr
-		var hasPreparedAbsValue bool
-		if isAbs {
+		isDeferredNumeric := isPreparedNumericFallbackFunction(functionName) && len(exprImpl.F.Args) == 1
+		var originalDeferredNumericArg *plan.Expr
+		var hasPreparedDeferredNumericValue bool
+		if isDeferredNumeric {
 			// Keep an immutable copy of the marker-bearing argument. Recursive
 			// replacement can rebuild CASE/IF/scalar-subquery nodes and discard
 			// the explicit fallback metadata; the copy is the provenance source
-			// for the final ABS overload decision.
-			originalAbsArg = DeepCopyExpr(exprImpl.F.Args[0])
-			hasPreparedAbsValue = isPreparedNumericFallbackExpr(originalAbsArg) &&
-				len(preparedNumericValueParamPositions(originalAbsArg)) > 0
+			// for the final ABS/SIGN overload decision.
+			originalDeferredNumericArg = DeepCopyExpr(exprImpl.F.Args[0])
+			hasPreparedDeferredNumericValue = isPreparedNumericFallbackExpr(originalDeferredNumericArg) &&
+				len(preparedNumericValueParamPositions(originalDeferredNumericArg)) > 0
 		}
 		if isPreparedPrefixFilter(exprImpl.F.Func.GetObjName()) {
 			rule.markSerializedDecimalParamTypes(e)
@@ -1877,6 +1877,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				originalArgFuncObj = preparedExprFunctionObj(arg)
 			}
 			implicitParamCast := isImplicitPreparedParamCast(arg)
+			bitwiseParamCast := isPreparedBitwiseOperator(functionName) &&
+				isPreparedBitwiseParamCast(arg)
 			paramPos, hasParamPos := preparedParamPosition(arg)
 			if !hasParamPos && preparedFunctionArgUsesSQLExecuteNumericSource(
 				e, functionName, i, len(exprImpl.F.Args)) {
@@ -1940,11 +1942,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 				compareArgTypes = true
 			}
-			if implicitParamCast {
-				// The prepare-time TEXT marker may have been wrapped in an
-				// implicit numeric cast selected by overload resolution.  The
-				// cast is provisional; the execute-time value must participate in
-				// resolving the outer function again.
+			if implicitParamCast || bitwiseParamCast {
+				// The prepare-time parameter may have been wrapped in a provisional
+				// cast selected by overload resolution. The execute-time value must
+				// participate in resolving the outer function again.
 				needResetFunction = true
 			}
 			var rewrittenArg *plan.Expr
@@ -2037,6 +2038,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// bound against the old child domain and must be resolved again.
 				needResetFunction = true
 				compareArgTypes = true
+			}
+			if bitwiseParamCast {
+				if unwrapped, ok := unwrapImplicitPreparedBinaryParamCast(rewrittenArg); ok {
+					boundArgs[i] = unwrapped
+					compareArgTypes = true
+				}
 			}
 			if implicitParamCast {
 				// Keep decimal casts: decimal arithmetic requires every operand to
@@ -2208,12 +2215,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			compareArgTypes = true
 		}
 
-		if isAbs && hasPreparedAbsValue {
-			// A flattened scalar subquery leaves the ABS argument as a column
+		if isDeferredNumeric && hasPreparedDeferredNumericValue {
+			// A flattened scalar subquery leaves the ABS/SIGN argument as a column
 			// reference.  Its inner projection has already been rebound above;
-			// refresh the reference type and rebind ABS, but keep the reference so
+			// refresh the reference type and rebind ABS/SIGN, but keep the reference so
 			// empty/multi-row scalar-subquery semantics remain intact.
-			if originalAbsArg.GetPreparedNumeric().GetFallbackSource() {
+			if originalDeferredNumericArg.GetPreparedNumeric().GetFallbackSource() {
 				refreshed, changed, refreshErr := rule.refreshPreparedNumericSource(boundArgs[0])
 				if refreshErr != nil {
 					return nil, refreshErr
@@ -2232,8 +2239,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					return rewritten, nil
 				}
 			}
-			source, sourceOK := preparedNumericFallbackSource(originalAbsArg)
-			positions := preparedNumericValueParamPositions(originalAbsArg)
+			source, sourceOK := preparedNumericFallbackSource(originalDeferredNumericArg)
+			positions := preparedNumericValueParamPositions(originalDeferredNumericArg)
 			if sourceOK && len(positions) > 0 {
 				rebound, changed, reboundErr := rule.rebindPreparedNumericExpr(source, positions)
 				if reboundErr != nil {
@@ -3450,6 +3457,67 @@ func implicitPreparedParam(expr *plan.Expr) (*plan.ParamRef, bool) {
 		current = fn.Args[0]
 	}
 	return nil, false
+}
+
+func isPreparedBitwiseOperator(name string) bool {
+	switch name {
+	case "&", "|", "^", "<<", ">>", "unary_tilde":
+		return true
+	default:
+		return false
+	}
+}
+
+// isPreparedBitwiseParamCast recognizes a provisional cast chain around a
+// prepared marker when bitwise overload resolution used either the ordinary
+// cast or the comparison-cast overload. Explicit and set-operation casts stay
+// semantic boundaries.
+func isPreparedBitwiseParamCast(expr *plan.Expr) bool {
+	current := expr
+	seenCast := false
+	for current != nil {
+		if param := current.GetP(); param != nil {
+			return seenCast && param.Pos >= 0
+		}
+		fn := current.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 ||
+			fn.GetSyntaxExplicitCast() {
+			return false
+		}
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 && overload != 2 {
+			return false
+		}
+		seenCast = true
+		current = fn.Args[0]
+	}
+	return false
+}
+
+// unwrapImplicitPreparedBinaryParamCast removes the prepare-time overload
+// casts around a binary protocol value before rebinding a bitwise operator.
+// The caller has already verified that the original expression contains only
+// provisional casts, so explicit CAST remains authoritative.
+func unwrapImplicitPreparedBinaryParamCast(rewritten *plan.Expr) (*plan.Expr, bool) {
+	current := rewritten
+	for current != nil {
+		fn := current.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+			break
+		}
+		if fn.GetSyntaxExplicitCast() {
+			return nil, false
+		}
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 && overload != 2 {
+			return nil, false
+		}
+		current = fn.Args[0]
+	}
+	if current == nil || types.StaticStringDomain(makeTypeByPlan2Expr(current)) != types.StringDomainBinary {
+		return nil, false
+	}
+	return current, true
 }
 
 // unwrapImplicitPreparedParamCast strips a provisional overload cast only when

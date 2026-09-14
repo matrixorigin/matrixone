@@ -46,15 +46,15 @@ func TestArrowLoadBVT(t *testing.T) {
 	mustExec(t, db, "create database if not exists arrow_bvt")
 	mustExec(t, db, "use arrow_bvt")
 
-	// The multi-CN fan-out test uses the same default-path cluster. It runs before
+	// Keep the established DistributedRecordBatchFanout selector. It runs before
 	// ClusterRestartPersistence, which deliberately invalidates every connection
 	// and must remain the final subtest in this lifecycle.
 	t.Run("DistributedRecordBatchFanout", func(t *testing.T) {
 		multiDB := openArrowLoadDB(t, c, 0)
 		mustExec(t, multiDB, "create database if not exists arrow_multicn")
 		mustExec(t, multiDB, "use arrow_multicn")
-		path, ddl := fixtureLarge(t)
-		testArrowMultiCNFanout(t, multiDB, path, ddl)
+		path, ddl := fixtureFanout(t)
+		testArrowRecordBatchFanout(t, multiDB, path, ddl)
 	})
 	t.Run("TypeMatrixNumeric", func(t *testing.T) { testArrowTypeMatrixNumeric(t, db) })
 	t.Run("TypeMatrixTimestampDict", func(t *testing.T) { testArrowTypeMatrixTimestampDict(t, db) })
