@@ -2955,25 +2955,79 @@ func TestParquet_ensureDictionaryIndexes_outOfRange(t *testing.T) {
 	require.Contains(t, err.Error(), "out of range")
 }
 
-func TestParquet_Bool_DictionaryNYI(t *testing.T) {
+func TestParquet_Dictionary_Bool(t *testing.T) {
 	proc := testutil.NewProc(t)
-	// Dictionary-encoded boolean column should be NYI in mapper
+
+	t.Run("required", func(t *testing.T) {
+		node := parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary)
+		vals := []parquet.Value{
+			parquet.BooleanValue(true), parquet.BooleanValue(false), parquet.BooleanValue(true),
+		}
+		f, page := writeDictAndGetPage(t, node, vals)
+		require.NotNil(t, page.Dictionary())
+
+		vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []bool{true, false, true}, vector.MustFixedColWithTypeCheck[bool](vec))
+	})
+
+	t.Run("nullable", func(t *testing.T) {
+		node := parquet.Optional(parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary))
+		rows := []parquet.Row{
+			{parquet.BooleanValue(true).Level(0, 1, 0)},
+			{parquet.NullValue().Level(0, 0, 0)},
+			{parquet.BooleanValue(false).Level(0, 1, 0)},
+			{parquet.BooleanValue(true).Level(0, 1, 0)},
+		}
+		f, page := writeColumnAndGetPage(t, node, rows)
+		require.NotNil(t, page.Dictionary())
+
+		vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []bool{true, false, false, true}, vector.MustFixedColWithTypeCheck[bool](vec))
+		require.True(t, vec.GetNulls().Contains(1))
+		require.False(t, vec.GetNulls().Contains(0))
+		require.False(t, vec.GetNulls().Contains(2))
+		require.False(t, vec.GetNulls().Contains(3))
+	})
+}
+
+type parquetPageWithData struct {
+	parquet.Page
+	data encoding.Values
+}
+
+func (p *parquetPageWithData) Data() encoding.Values {
+	return p.data
+}
+
+func TestParquet_Dictionary_Bool_IndexError(t *testing.T) {
+	proc := testutil.NewProc(t)
 	node := parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary)
 	vals := []parquet.Value{
 		parquet.BooleanValue(true), parquet.BooleanValue(false), parquet.BooleanValue(true),
 	}
 	f, page := writeDictAndGetPage(t, node, vals)
+
 	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
 	var h ParquetHandler
 	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
 	require.NotNil(t, mp)
-	err := mp.mapping(page, proc, vec)
+	badPage := &parquetPageWithData{
+		Page: page,
+		data: encoding.Int32Values([]int32{0, 2, 1}),
+	}
+	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNYI))
+	require.Contains(t, err.Error(), "out of range")
+	require.Zero(t, vec.Length())
 }
-
-// Note: Constructing explicit nulls for pages requires internal helpers.
-// Mapping null behavior is indirectly exercised in other branches.
 
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	// Reduce batch size so scan steps across multiple calls

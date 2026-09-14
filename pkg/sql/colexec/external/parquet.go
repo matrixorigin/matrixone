@@ -864,8 +864,17 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			if page.Dictionary() != nil {
-				return moerr.NewNYIf(proc.Ctx, "indexed %s page", st)
+			if dict := page.Dictionary(); dict != nil {
+				nc, err := prepareNullCheck(proc.Ctx, mp, page)
+				if err != nil {
+					return err
+				}
+				data := page.Data()
+				indices := data.Int32()
+				if err := validateDictionaryIndicesCount(proc.Ctx, indices, nc.actualNonNulls); err != nil {
+					return err
+				}
+				return copyBoolDictPageToVec(mp, page, proc, vec, dict, indices, nc)
 			}
 
 			// Fail early: if page has NULLs and destination doesn't allow them
@@ -3540,6 +3549,48 @@ func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process
 		return err
 	}
 	return copyPageToVecMap(mp, page, proc, vec, indexes, convert)
+}
+
+func copyBoolDictPageToVec(
+	mp *columnMapper,
+	page parquet.Page,
+	proc *process.Process,
+	vec *vector.Vector,
+	dict parquet.Dictionary,
+	indices []int32,
+	nc nullCheckInfo,
+) error {
+	dictLen := dict.Len()
+	if dictLen < 0 || dictLen > 2 {
+		return moerr.NewInvalidInputf(proc.Ctx,
+			"malformed BOOLEAN dictionary with %d values", dictLen)
+	}
+	if err := ensureDictionaryIndexes(proc.Ctx, dictLen, indices); err != nil {
+		return err
+	}
+
+	var values [2]bool
+	for i := 0; i < dictLen; i++ {
+		values[i] = dict.Index(int32(i)).Boolean()
+	}
+
+	n := int(page.NumRows())
+	length := vec.Length()
+	if err := vec.PreExtend(n+length, proc.Mp()); err != nil {
+		return err
+	}
+	vec.SetLength(n + length)
+	ret := vector.MustFixedColWithTypeCheck[bool](vec)
+	j := 0
+	for i := 0; i < n; i++ {
+		if nc.isNull(i) {
+			nulls.Add(vec.GetNulls(), uint64(i+length))
+			continue
+		}
+		ret[i+length] = values[indices[j]]
+		j++
+	}
+	return nil
 }
 
 var (
