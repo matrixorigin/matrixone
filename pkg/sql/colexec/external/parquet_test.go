@@ -3650,6 +3650,41 @@ func TestParquet_StringArrayMappingRollsBackOnParseError(t *testing.T) {
 	require.Equal(t, seed, vector.GetArrayAt[float32](vec, 0))
 }
 
+func TestParquetStringMappingValidatesBeforeAllocating(t *testing.T) {
+	proc := testutil.NewProc(t)
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	vec, err := vector.NewOffHeapVecWithTypeAndAllocation(types.T_varchar.ToType(), selection)
+	require.NoError(t, err)
+	defer func() {
+		vec.Free(proc.Mp())
+		require.Zero(t, account.Snapshot().Used)
+		account.Seal()
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	}()
+
+	f, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
+		{parquet.ByteArrayValue([]byte("value")).Level(0, 0, 0)},
+	})
+	badPage := &parquetPageWithData{
+		Page: page,
+		data: encoding.ByteArrayValues([]byte("value"), []uint32{1, 5}),
+	}
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_varchar), NotNullable: true})
+	require.NotNil(t, mp)
+	usedBefore := account.Snapshot().Used
+	err = mp.mapping(badPage, proc, vec)
+	require.ErrorContains(t, err, "first string offset")
+	require.Zero(t, vec.Length())
+	require.Equal(t, usedBefore, account.Snapshot().Used)
+}
+
 func TestParquetValuesToFixedRollsBackOnConversionError(t *testing.T) {
 	proc := testutil.NewProc(t)
 	page := parquet.Int32Type.NewPage(0, 2, encoding.Int32Values([]int32{1, 2}))

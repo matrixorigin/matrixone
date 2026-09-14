@@ -1808,11 +1808,6 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				return err
 			}
 
-			err = vec.PreExtend(numRows, proc.Mp())
-			if err != nil {
-				return err
-			}
-
 			var loader strLoader
 			var indices []int32
 			var cache []*types.Varlena
@@ -1835,7 +1830,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					return err
 				}
 				dictLen := int(dict.Len())
-				cache = make([]*types.Varlena, dictLen)
+				if err := validateStringDataCount(proc.Ctx, &loader, int64(dictLen)); err != nil {
+					return err
+				}
 
 				// Validate dictionary indices count matches expected non-null rows
 				if err := validateDictionaryIndicesCount(proc.Ctx, indices, nc.actualNonNulls); err != nil {
@@ -1846,12 +1843,22 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if err := ensureDictionaryIndexes(proc.Ctx, dictLen, indices); err != nil {
 					return err
 				}
+				cache = make([]*types.Varlena, dictLen)
+			}
+
+			if err := vec.PreExtend(vec.Length()+numRows, proc.Mp()); err != nil {
+				return err
+			}
+			checkpoint := vec.MakeAppendCheckpoint()
+			rollback := func(err error) error {
+				vec.RollbackAppend(checkpoint, numRows)
+				return err
 			}
 			for i := 0; i < numRows; i++ {
 				if nc.isNull(i) {
 					err := vector.AppendBytes(vec, nil, true, proc.Mp())
 					if err != nil {
-						return err
+						return rollback(err)
 					}
 					continue
 				}
@@ -1860,7 +1867,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					data := loader.loadNext()
 					err := vector.AppendBytes(vec, data, false, proc.Mp())
 					if err != nil {
-						return err
+						return rollback(err)
 					}
 					continue
 				}
@@ -1871,7 +1878,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if cache[idx] != nil {
 					err := vector.AppendFixed(vec, *cache[idx], false, proc.Mp())
 					if err != nil {
-						return err
+						return rollback(err)
 					}
 					continue
 				}
@@ -1882,7 +1889,7 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					va := vector.GetFixedAtNoTypeCheck[types.Varlena](vec, vec.Length()-1)
 					cache[idx] = &va
 				} else {
-					return err
+					return rollback(err)
 				}
 			}
 			return nil
