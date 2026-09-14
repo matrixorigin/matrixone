@@ -219,6 +219,7 @@ func TestUTHeartbeatStopsCleanly(t *testing.T) {
 	script := `source ./run_ut.sh UT
 mkfifo "$CASE_DIR/heartbeat-ready"
 exec 9<> "$CASE_DIR/heartbeat-ready"
+trap 'stop_ut_heartbeat; exec 9>&-' EXIT
 function logger() {
     printf "%s\n" "$2" >> "$CASE_DIR/ut.log"
     if [[ "$2" == *active_cases=2* && "$2" == *TestPrivate* && "$2" == *TestShard* ]]; then
