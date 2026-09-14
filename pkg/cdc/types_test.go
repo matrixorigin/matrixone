@@ -908,8 +908,8 @@ func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
 }
 
 func TestValidateLosslessNoFullStartProtocolBoundary(t *testing.T) {
-	require.ErrorContains(t, ValidateLosslessNoFullStartProtocol(context.Background(), defines.MORPCVersion66), "protocol version 67")
-	require.NoError(t, ValidateLosslessNoFullStartProtocol(context.Background(), defines.MORPCVersion67))
+	require.ErrorContains(t, ValidateLosslessNoFullStartProtocol(context.Background(), defines.MORPCVersion67), "protocol version 68")
+	require.NoError(t, ValidateLosslessNoFullStartProtocol(context.Background(), defines.MORPCVersion68))
 }
 
 func TestActiveRoutine_ClosePause(t *testing.T) {

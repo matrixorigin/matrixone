@@ -16,6 +16,15 @@ geodesic_area_m2
 select st_area(st_geomfromtext('POLYGON((0 0,3 0,3 4,0 4,0 0))')) as cartesian_area;
 cartesian_area
 12.0
+select st_area(st_geomfromtext('POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))', 4326)) as antimeridian_area_m2;
+antimeridian_area_m2
+49459893267.9109
+select st_distance(st_geomfromtext('POINT(180 0)', 4326), st_geomfromtext('POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))', 4326)) as antimeridian_local_distance_m;
+antimeridian_local_distance_m
+0.0
+select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))', 4326)) as antimeridian_greenwich_distance_m;
+antimeridian_greenwich_distance_m
+19857864.843561903
 select st_area(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 1,0 0))'), 4326) as forced_geodesic_m2;
 forced_geodesic_m2
 1.236403190946562E10
