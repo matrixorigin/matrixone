@@ -3721,7 +3721,7 @@ func TestParquet_Plain_Bool_UnexpectedNullRollsBack(t *testing.T) {
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
-	require.Contains(t, err.Error(), "reader returned NULL value")
+	require.Contains(t, err.Error(), "NULL status disagrees")
 	require.Zero(t, vec.Length())
 }
 
