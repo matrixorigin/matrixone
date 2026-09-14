@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -125,6 +126,26 @@ func TestCompare(t *testing.T) {
 		tc.vecs[0].Free(tc.proc.Mp())
 		tc.vecs[1].Free(tc.proc.Mp())
 	}
+}
+
+func TestNewOrderJSONUsesSQLComparison(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_json.ToType())
+	defer vec.Free(mp)
+	for _, value := range []string{"0", "1", "false", "true", "1.0"} {
+		jsonValue, err := bytejson.ParseFromString(value)
+		require.NoError(t, err)
+		encoded, err := jsonValue.Marshal()
+		require.NoError(t, err)
+		require.NoError(t, vector.AppendBytes(vec, encoded, false, mp))
+	}
+
+	c := NewOrder(types.T_json.ToType(), false, false)
+	c.Set(0, vec)
+	c.Set(1, vec)
+	require.Negative(t, c.Compare(0, 1, 0, 2), "SQL JSON numbers sort before booleans")
+	require.Zero(t, c.Compare(0, 1, 1, 4), "SQL JSON numeric peers compare equal")
+	require.Negative(t, c.Compare(0, 1, 2, 3), "false sorts before true")
 }
 
 func TestCopyGrowsAccountedRowMetadata(t *testing.T) {

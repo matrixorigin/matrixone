@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -40,6 +41,24 @@ func TestSortBatchSpillsAndPreservesOrder(t *testing.T) {
 
 	got.Clean(proc.Mp())
 	input.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestSortBatchFreesSingleBatchExpressionKey(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := newValuesBatch(proc, []int8{3, 1, 2})
+	key := testutil.NewVector(3, types.T_int8.ToType(), proc.Mp(), false, []int8{1, 2, 3})
+	ctr := &container{
+		batchList: []*batch.Batch{input},
+		orderCols: [][]*vector.Vector{{key}},
+	}
+	analyzer := process.NewAnalyzer(0, false, false, "single-batch-expression-key")
+	fs := []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8)}}
+
+	got, err := ctr.collectSortedBatch(proc, fs, analyzer)
+	require.NoError(t, err)
+	got.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }

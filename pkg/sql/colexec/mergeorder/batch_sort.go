@@ -324,9 +324,15 @@ func (ctr *container) collectSortedBatch(
 	proc *process.Process,
 	fs []*plan.OrderBySpec,
 	analyzer process.Analyzer,
-) (*batch.Batch, error) {
+) (result *batch.Batch, err error) {
+	var output *batch.Batch
+	defer func() {
+		if err != nil && output != nil {
+			output.Clean(proc.Mp())
+		}
+	}()
 	if ctr.spilling {
-		if err := ctr.prepareSpillFinalMerge(proc, fs, analyzer); err != nil {
+		if err = ctr.prepareSpillFinalMerge(proc, fs, analyzer); err != nil {
 			return nil, err
 		}
 		return ctr.collectSpillResult(proc)
@@ -334,6 +340,7 @@ func (ctr *container) collectSortedBatch(
 
 	if len(ctr.batchList) == 1 {
 		result := ctr.batchList[0]
+		freeOrderColumns(proc.Mp(), result, ctr.orderCols[0])
 		ctr.batchList[0] = nil
 		ctr.orderCols[0] = nil
 		return result, nil
@@ -341,22 +348,24 @@ func (ctr *container) collectSortedBatch(
 	if len(ctr.batchList) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("merge-order produced no sorted batch")
 	}
-	if err := ctr.prepareInMemoryMerge(proc, fs); err != nil {
+	if err = ctr.prepareInMemoryMerge(proc, fs); err != nil {
 		return nil, err
 	}
 
-	var output *batch.Batch
 	for {
 		result := vm.NewCallResult()
-		done, err := ctr.pickAndSend(proc, &result)
+		var done bool
+		done, err = ctr.pickAndSend(proc, &result)
 		if err != nil {
 			return nil, err
 		}
 		if result.Batch != nil && result.Batch.RowCount() > 0 {
-			output, err = appendSortedResult(proc, output, result.Batch)
+			var next *batch.Batch
+			next, err = appendSortedResult(proc, output, result.Batch)
 			if err != nil {
 				return nil, err
 			}
+			output = next
 		}
 		if done {
 			return output, nil
@@ -365,18 +374,29 @@ func (ctr *container) collectSortedBatch(
 }
 
 func (ctr *container) collectSpillResult(proc *process.Process) (*batch.Batch, error) {
-	var output *batch.Batch
+	var (
+		output *batch.Batch
+		err    error
+	)
+	defer func() {
+		if err != nil && output != nil {
+			output.Clean(proc.Mp())
+		}
+	}()
 	for {
 		result := vm.NewCallResult()
-		done, err := ctr.sendSpillResult(proc, &result)
+		var done bool
+		done, err = ctr.sendSpillResult(proc, &result)
 		if err != nil {
 			return nil, err
 		}
 		if result.Batch != nil && result.Batch.RowCount() > 0 {
-			output, err = appendSortedResult(proc, output, result.Batch)
+			var next *batch.Batch
+			next, err = appendSortedResult(proc, output, result.Batch)
 			if err != nil {
 				return nil, err
 			}
+			output = next
 		}
 		if done {
 			return output, nil
