@@ -99,14 +99,31 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 		})
 	}
 
-	bh := &backgroundExecTest{}
-	bh.init()
-	pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{
-		{Source: cdc.PatternTable{Database: cdc.CDCPitrGranularity_All, Table: cdc.CDCPitrGranularity_All}},
-	}}
-	err := CDCCheckPitrGranularity(context.Background(), bh, "acc", pts)
-	require.NoError(t, err)
-	require.Empty(t, bh.executedSQLs)
+	t.Run("wildcard validates discovered no primary key table", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{
+			{Source: cdc.PatternTable{Database: "db", Table: cdc.CDCPitrGranularity_All}},
+		}}
+		candidateSQL := cdc.CollectCDCSourceCandidateSQL(1, "db", cdc.CDCPitrGranularity_All)
+		bh.sql2result[candidateSQL] = &MysqlResultSet{Columns: make([]Column, 7), Data: [][]interface{}{{uint64(1), "without_pk", uint64(1), "db", "", uint32(1), []byte{}}}}
+		bh.sql2result[query("db", "without_pk")] = &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{uint64(0)}}}
+		ctx := defines.AttachAccountId(context.Background(), 1)
+		require.Error(t, CDCCheckPitrGranularityWithExclude(ctx, bh, "acc", pts, ""))
+	})
+
+	t.Run("wildcard applies raw exclude to discovered table", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{
+			{Source: cdc.PatternTable{Database: "db", Table: cdc.CDCPitrGranularity_All}},
+		}}
+		candidateSQL := cdc.CollectCDCSourceCandidateSQL(1, "db", cdc.CDCPitrGranularity_All)
+		bh.sql2result[candidateSQL] = &MysqlResultSet{Columns: make([]Column, 7), Data: [][]interface{}{{uint64(1), "without_pk", uint64(1), "db", "", uint32(1), []byte{}}}}
+		ctx := defines.AttachAccountId(context.Background(), 1)
+		require.NoError(t, CDCCheckPitrGranularityWithExclude(ctx, bh, "acc", pts, `^db\.without_pk$`))
+		require.Len(t, bh.executedSQLs, 1)
+	})
 
 	t.Run("catalog query error is returned", func(t *testing.T) {
 		bh := &backgroundExecTest{}

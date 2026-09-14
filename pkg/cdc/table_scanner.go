@@ -765,7 +765,7 @@ func (s *TableDetector) scanTable() error {
 			dbName := cols[3].GetStringAt(i)
 			createSql := cols[4].GetStringAt(i)
 			accountId := vector.MustFixedColWithTypeCheck[uint32](cols[5])[i]
-			hasForeignKey, decodeErr := tableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
+			hasForeignKey, decodeErr := TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
 			if decodeErr != nil {
 				scanErr = decodeErr
 				logutil.Warn(
@@ -824,7 +824,10 @@ func (s *TableDetector) scanTable() error {
 	return nil
 }
 
-func tableHasForeignKeyConstraint(data []byte) (hasForeignKey bool, err error) {
+// TableHasForeignKeyConstraint decodes the persisted constraint metadata used
+// by the runtime table scanner. CREATE CDC admission uses the same check so it
+// does not reject foreign-key children that the scanner will never consume.
+func TableHasForeignKeyConstraint(data []byte) (hasForeignKey bool, err error) {
 	if len(data) == 0 {
 		return false, nil
 	}

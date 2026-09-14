@@ -6953,35 +6953,62 @@ func (c *Compile) checkPitrGranularity(
 			}
 		}
 		if pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
-			dbFilter := ""
-			if pt.Source.Database != cdc.CDCPitrGranularity_All {
-				dbFilter = fmt.Sprintf(" AND t.%s = %s", sqlquote.Ident(catalog.SystemRelAttr_DBName), sqlquote.String(pt.Source.Database))
-			}
-			tableFilter := ""
-			if pt.Source.Table != cdc.CDCPitrGranularity_All {
-				tableFilter = fmt.Sprintf(" AND t.%s = %s", sqlquote.Ident(catalog.SystemRelAttr_Name), sqlquote.String(pt.Source.Table))
-			}
-			excludeFilter := ""
-			if exclude != "" {
-				excludeFilter = fmt.Sprintf(" AND concat(t.%s, '.', t.%s) NOT REGEXP %s", sqlquote.Ident(catalog.SystemRelAttr_DBName), sqlquote.Ident(catalog.SystemRelAttr_Name), sqlquote.String(exclude))
-			}
-			pkSQL := fmt.Sprintf("SELECT 1 FROM %s.%s t WHERE t.%s = %d AND t.%s = 'r' AND t.%s NOT IN (%s)%s%s%s AND NOT EXISTS (SELECT 1 FROM %s.%s p WHERE p.%s = t.%s AND p.%s = t.%s AND p.%s = t.%s AND p.%s = t.%s AND p.%s = %s AND p.%s <> %s) LIMIT 1",
-				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_TABLES), sqlquote.Ident(catalog.SystemRelAttr_AccID), accountId, sqlquote.Ident(catalog.SystemRelAttr_DBName), cdc.AddSingleQuotesJoin(catalog.SystemDatabases), dbFilter, tableFilter, excludeFilter,
-				sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
-				sqlquote.Ident(catalog.SystemColAttr_AccID), sqlquote.Ident(catalog.SystemRelAttr_AccID),
-				sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.Ident(catalog.SystemRelAttr_DBName),
-				sqlquote.Ident(catalog.SystemColAttr_RelName), sqlquote.Ident(catalog.SystemRelAttr_Name),
-				sqlquote.Ident(catalog.SystemColAttr_RelID), sqlquote.Ident(catalog.SystemRelAttr_ID),
-				sqlquote.Ident(catalog.SystemColAttr_ConstraintType), sqlquote.String("p"),
-				sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.String(catalog.FakePrimaryKeyColName))
-			res, err := c.runSqlWithResultAndOptions(pkSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+			// Use the runtime scanner's catalog predicate, then apply Exclude and
+			// the foreign-key rule to real names. In particular, do not match a
+			// regexp against the synthetic "db.*" tuple.
+			res, err := c.runSqlWithResultAndOptions(
+				cdc.CollectCDCSourceCandidateSQL(accountId, pt.Source.Database, pt.Source.Table),
+				int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
 			if err != nil {
 				return err
 			}
-			invalid := len(res.Batches) > 0 && res.Batches[0].RowCount() > 0
+			var validationErr error
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				for i := 0; i < rows; i++ {
+					dbName := cols[3].GetStringAt(i)
+					tableName := cols[1].GetStringAt(i)
+					if exclude != "" {
+						matched, matchErr := regexp.MatchString(exclude, dbName+"."+tableName)
+						if matchErr != nil {
+							validationErr = matchErr
+							return false
+						}
+						if matched {
+							continue
+						}
+					}
+					hasForeignKey, decodeErr := cdc.TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
+					if decodeErr != nil {
+						validationErr = decodeErr
+						return false
+					}
+					if hasForeignKey {
+						continue
+					}
+					pkSQL := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = %d AND %s = %s AND %s = %s AND %s = 'p' AND %s <> %s LIMIT 1",
+						sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
+						sqlquote.Ident(catalog.SystemColAttr_AccID), accountId,
+						sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.String(dbName),
+						sqlquote.Ident(catalog.SystemColAttr_RelName), sqlquote.String(tableName),
+						sqlquote.Ident(catalog.SystemColAttr_ConstraintType),
+						sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.String(catalog.FakePrimaryKeyColName))
+					pkRes, queryErr := c.runSqlWithResultAndOptions(pkSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+					if queryErr != nil {
+						validationErr = queryErr
+						return false
+					}
+					valid := len(pkRes.Batches) > 0 && pkRes.Batches[0].RowCount() > 0
+					pkRes.Close()
+					if !valid {
+						validationErr = moerr.NewInternalErrorf(ctx, "CDC source scope %s contains a table without a primary key; CDC does not support tables without a user-visible primary key", pt.Source)
+						return false
+					}
+				}
+				return true
+			})
 			res.Close()
-			if invalid {
-				return moerr.NewInternalErrorf(ctx, "CDC source scope %s contains a table without a primary key; CDC does not support tables without a user-visible primary key", pt.Source)
+			if validationErr != nil {
+				return validationErr
 			}
 			continue
 		}

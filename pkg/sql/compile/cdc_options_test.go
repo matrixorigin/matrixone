@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -40,9 +41,24 @@ func TestCheckPitrGranularityRejectsWildcardNoPrimaryKey(t *testing.T) {
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
 
-	exec := &recordingInternalSQLExecutor{mocker: func(string) (executor.Result, error) {
-		result := executor.NewMemResult([]types.Type{types.T_uint8.ToType()}, proc.Mp())
-		result.NewBatchWithRowCount(1)
+	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		if strings.Contains(sql, catalog.MO_TABLES) {
+			result := executor.NewMemResult([]types.Type{
+				types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(),
+			}, proc.Mp())
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1}))
+			require.NoError(t, executor.AppendStringRows(result, 1, []string{"without_pk"}))
+			require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{1}))
+			require.NoError(t, executor.AppendStringRows(result, 3, []string{"db"}))
+			require.NoError(t, executor.AppendStringRows(result, 4, []string{""}))
+			require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7}))
+			require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{{}}))
+			return result.GetResult(), nil
+		}
+		result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
+		result.NewBatchWithRowCount(0)
 		return result.GetResult(), nil
 	}}
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -63,7 +79,7 @@ func TestCheckPitrGranularityRejectsWildcardNoPrimaryKey(t *testing.T) {
 	}}}}
 	err := c.checkPitrGranularity(ctx, pts, "")
 	require.Error(t, err)
-	require.Len(t, exec.sqls, 1)
+	require.Len(t, exec.sqls, 2)
 	require.Contains(t, exec.sqls[0], "mo_tables")
 }
 
