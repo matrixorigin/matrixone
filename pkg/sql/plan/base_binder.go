@@ -2913,6 +2913,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	if strings.EqualFold(funcName, "grouping") {
 		return b.bindGroupingFuncExpr(astExpr)
 	}
+	if astExpr.IsGeneric && mysqlparser.IsSQLModeSensitiveFunctionName(funcName) {
+		return b.bindGenericFunctionExpr(funcName, astExpr.Exprs, depth)
+	}
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
 		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
 	}
@@ -2973,6 +2976,33 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	}
 
 	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+}
+
+// bindGenericFunctionExpr keeps a whitespace-separated sensitive function
+// name on the stored-function/UDF path. With IGNORE_SPACE disabled, MySQL does
+// not recognize that spelling as a native built-in call.
+func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
+	args := make([]*Expr, len(astArgs))
+	for i, arg := range astArgs {
+		expr, err := b.impl.BindExpr(arg, depth, false)
+		if err != nil {
+			return nil, err
+		}
+		args[i] = expr
+	}
+
+	if b.builder == nil {
+		return nil, moerr.NewInvalidInputf(
+			b.GetContext(),
+			"function '%s' is not allowed in this expression",
+			name,
+		)
+	}
+	udf, err := b.builder.compCtx.ResolveUdf(name, args)
+	if err != nil {
+		return nil, err
+	}
+	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered
@@ -5505,26 +5535,42 @@ func bindFuncExprImplByPlanExpr(
 				return nil, err
 			}
 		}
-	case "oct", "bit_and", "bit_or", "bit_xor":
+	case "oct":
 		if len(args) == 0 {
 			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
 		}
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) ||
-			(name == "oct" && args[0].Typ.Id == int32(types.T_decimal256)) {
-			target := types.T_float64
-			if name == "oct" {
-				// OCT reads the integer prefix of the decimal's exact text.
-				// Going through FLOAT64 loses digits above 2^53.
-				target = types.T_varchar
-			}
-			targetType := target.ToType()
+			args[0].Typ.Id == int32(types.T_decimal256) {
+			// OCT reads the integer prefix of the decimal's exact text.
+			// Going through FLOAT64 loses digits above 2^53.
+			targetType := types.T_varchar.ToType()
 			args[0], err = appendCastBeforeExpr(ctx, args[0], plan.Type{
-				Id:          int32(target),
+				Id:          int32(types.T_varchar),
 				Width:       targetType.Width,
 				NotNullable: args[0].Typ.NotNullable,
 			})
 			if err != nil {
 				return nil, err
+			}
+		}
+	case "bit_and", "bit_or", "bit_xor":
+		if len(args) != 1 {
+			return nil, moerr.NewInvalidArg(ctx, name+" function have invalid input args length", len(args))
+		}
+		if bitmap, ok := storedSetBitmapExpr(args[0]); ok {
+			// SET's display wrapper is a VARCHAR presentation of a stored uint64
+			// bitmap. Bitwise aggregates are numeric consumers: use that bitmap
+			// directly so it retains the native uint64 aggregate path instead of
+			// routing an unsupported uint64 input through the numeric CAST4 helper.
+			args[0] = bitmap
+		} else {
+			argType := makeTypeByPlan2Expr(args[0])
+			if isBitwiseAggregateConversionInput(argType) {
+				targetType := types.T_int64.ToType()
+				args[0], err = appendBitwiseAggregateCastBeforeExpr(ctx, args[0], makePlan2Type(&targetType))
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	case "like", "ilike":
@@ -5934,27 +5980,7 @@ func bindFuncExprImplByPlanExpr(
 		}
 	}
 
-	if name == "round" || name == "ceil" || name == "ceiling" || name == "floor" && argsType[0].IsDecimal() {
-		if len(argsType) == 1 {
-			returnType.Scale = 0
-		} else if lit, ok := args[1].Expr.(*plan.Expr_Lit); ok {
-			if litval, ok := lit.Lit.GetValue().(*plan.Literal_I64Val); ok {
-				scale := litval.I64Val
-				if scale > 38 {
-					scale = 38
-				}
-				if scale < 0 {
-					scale = 0
-				}
-				if returnType.Scale > int32(scale) {
-					returnType.Scale = int32(scale)
-					if returnType.Scale < 0 {
-						returnType.Scale = 0
-					}
-				}
-			}
-		}
-	}
+	refineDecimalRoundingReturnType(name, args, argsType, &returnType)
 
 	// Geometry constructors with an explicit constant SRID argument record the
 	// SRID in the result type's Width (geometry cells store bare WKB, so SRID
@@ -6309,6 +6335,108 @@ func bindFuncExprImplByPlanExpr(
 		},
 		Typ: Typ,
 	}, nil
+}
+
+// refineDecimalRoundingReturnType applies the exact-numeric metadata rules
+// which depend on a constant digits argument and therefore cannot be expressed
+// by an overload's type-only return callback.
+func refineDecimalRoundingReturnType(name string, args []*plan.Expr, argsType []types.Type, returnType *types.Type) {
+	if len(argsType) == 0 || !argsType[0].IsDecimal() {
+		return
+	}
+	input := argsType[0]
+	integerDigits := input.Width - input.Scale
+
+	switch name {
+	case "ceil", "ceiling", "floor":
+		digits := int64(0)
+		if len(args) == 2 {
+			literal := args[1].GetLit()
+			if literal == nil || literal.Isnull {
+				return
+			}
+			value, ok := literal.GetValue().(*plan.Literal_I64Val)
+			if !ok {
+				return
+			}
+			digits = value.I64Val
+		} else if len(args) != 1 {
+			return
+		}
+
+		// Keep the decimal physical type so a plan produced by an upgraded CN
+		// remains executable by older CNs during a rolling upgrade.  Only the
+		// precision and scale metadata may be refined here.
+		if digits >= int64(input.Scale) {
+			return
+		}
+		resultScale := int32(0)
+		if digits > 0 {
+			resultScale = int32(digits)
+		}
+		precision := integerDigits + resultScale + 1 // reserve a carry digit
+		if precision < 1 {
+			precision = 1
+		}
+		// A carry may require one more integer digit, but the result keeps the
+		// input decimal family for rolling-upgrade compatibility. Do not publish
+		// metadata wider than that family can represent (in particular,
+		// DECIMAL(65,0) with a negative digits argument must stay precision 65).
+		precision = min(precision, maxDecimalPrecisionForRounding(input.Oid))
+		returnType.Width = precision
+		returnType.Scale = resultScale
+
+	case "round", "truncate":
+		digits := int64(0)
+		if len(args) == 2 {
+			literal := args[1].GetLit()
+			if literal == nil || literal.Isnull {
+				return
+			}
+			value, ok := literal.GetValue().(*plan.Literal_I64Val)
+			if !ok {
+				return
+			}
+			digits = value.I64Val
+		} else if len(args) != 1 {
+			return
+		}
+
+		// Preserve the established conservative width for negative D. MySQL
+		// exposes inconsistent metadata for that case between CTAS and views;
+		// the compatibility contract here is the unambiguous nonnegative case.
+		if digits < 0 {
+			returnType.Scale = 0
+			return
+		}
+		if digits >= int64(input.Scale) {
+			return
+		}
+
+		resultScale := int32(digits)
+		precision := integerDigits + resultScale
+		if name == "round" {
+			precision++ // reserve a carry digit
+		}
+		if precision < 1 {
+			precision = 1
+		}
+		returnType.Width = precision
+		returnType.Scale = resultScale
+	}
+}
+
+func maxDecimalPrecisionForRounding(oid types.T) int32 {
+	switch oid {
+	case types.T_decimal64:
+		return 18
+	case types.T_decimal128:
+		return 38
+	case types.T_decimal256:
+		return 65
+	default:
+		return 1
+	}
 }
 
 func isCollatedTextPlanType(expr *plan.Expr) bool {
@@ -8013,6 +8141,30 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
 
 // --- util functions ----
+
+// isBitwiseAggregateConversionInput selects only MySQL numeric-evaluation
+// inputs for BIT_AND/OR/XOR. Keep native numeric, BIT, and binary-string
+// aggregate paths untouched; binary strings must not be routed through an
+// integer conversion.
+func isBitwiseAggregateConversionInput(t types.Type) bool {
+	if t.Charset == types.CharsetBinary {
+		return false
+	}
+	switch t.Oid {
+	case types.T_any,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
+		types.T_float32, types.T_float64,
+		types.T_char, types.T_varchar, types.T_text,
+		types.T_date, types.T_datetime, types.T_timestamp, types.T_time, types.T_year:
+		return true
+	default:
+		return false
+	}
+}
+
+func appendBitwiseAggregateCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	return appendCastBeforeExprWithOverload(ctx, expr, toType, 4)
+}
 
 func appendCastBeforeExpr(ctx context.Context, expr *Expr, toType Type, isBin ...bool) (*Expr, error) {
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 0, isBin...)
