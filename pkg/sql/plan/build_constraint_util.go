@@ -718,6 +718,17 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		if effectiveColumns, effectiveRows, err = builder.stripGeneratedDefaultCols(stmt.Columns, effectiveRows, tableDef); err != nil {
 			return false, nil, nil, err
 		}
+	} else if values, ok := stmt.Rows.Select.(*tree.ValuesClause); ok {
+		implicitColumns, _, hasGenerated := implicitInsertValueColumns(tableDef)
+		if hasGenerated && len(values.Rows) > 0 && values.Rows[0] != nil {
+			// Keep the implicit VALUES positions long enough to validate and strip
+			// generated-column DEFAULTs. The legacy fallback otherwise compares the
+			// original tuple with only the writable columns and rejects a valid row.
+			effectiveRows = cloneInsertRowsForGeneratedRewrite(stmt.Rows)
+			if effectiveColumns, effectiveRows, err = builder.stripGeneratedDefaultCols(implicitColumns, effectiveRows, tableDef); err != nil {
+				return false, nil, nil, err
+			}
+		}
 	}
 
 	// dbName := string(stmt.Table.(*tree.TableName).SchemaName)

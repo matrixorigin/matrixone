@@ -3440,10 +3440,20 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		// sibling, so it cannot satisfy a depth-one correlation while the
 		// candidate-side subquery is flattened. Make a snapshot lookup of the
 		// resolved target row part of the candidate subtree first. The lookup is
-		// only needed for statements that actually contain a subquery; ordinary
-		// ODKU expressions keep their existing two-input plan and cost.
+		// only needed for expressions with an actual target/candidate correlation;
+		// ordinary and uncorrelated ODKU expressions keep their existing two-input
+		// plan and cost.
 		var targetCorrelationGuard *plan.Expr
-		if updateExprListHasSubquery(updateColExprList) {
+		needsTargetCorrelationGuard := false
+		for _, updateExpr := range updateColExprList {
+			hasTargetCorrelation, hasCandidateCorrelation, _ :=
+				builder.analyzeOdkuCorrelatedSubquery(updateExpr, targetCorrelationTag, selectTag)
+			if hasTargetCorrelation || hasCandidateCorrelation {
+				needsTargetCorrelationGuard = true
+				break
+			}
+		}
+		if needsTargetCorrelationGuard {
 			lookupKeyPos := targetPkPos
 			if lookupKeyPos < 0 {
 				var ok bool
@@ -3517,13 +3527,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			updateExprs[tableDef.Cols[updateColIdxList[i]].Name] = updateExpr
 			if lastNodeID != previousNodeID {
 				oldSelectTag := selectTag
+				canonicalTargetTag := int32(0)
+				if targetCorrelationGuard != nil {
+					canonicalTargetTag = targetCorrelationTag
+				}
 				lastNodeID, selectTag, selectNode, err = builder.canonicalizeInsertSubqueryInput(
 					bindCtx,
 					lastNodeID,
 					selectNode,
 					selectTag,
 					scanTag,
-					targetCorrelationTag,
+					canonicalTargetTag,
 					tableDef,
 					updateColExprList,
 				)
@@ -4610,15 +4624,6 @@ func insertUniqueLockKeyPrefixLengths(idxDef *IndexDef, skip bool) (map[string]i
 func isOnDupIncomingColumn(expr *plan.Expr, selectTag, colPos int32) bool {
 	col := expr.GetCol()
 	return col != nil && col.RelPos == selectTag && col.ColPos == colPos
-}
-
-func updateExprListHasSubquery(exprs []*plan.Expr) bool {
-	for _, expr := range exprs {
-		if exprHasSubquery(expr) {
-			return true
-		}
-	}
-	return false
 }
 
 // validateOndupCorrelatedSubqueries rejects correlated ODKU expressions whose
