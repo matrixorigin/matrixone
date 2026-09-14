@@ -269,6 +269,51 @@ func TestPersistPythonCreateRejectsMalformedDefinitionBeforeWriting(t *testing.T
 	require.Empty(t, bh.executedSqls)
 }
 
+func TestNormalizePythonDefinitionRejectsCatalogSignatureDrift(t *testing.T) {
+	body := pythonCatalogTestBody(t, types.T_int64)
+	cases := []struct {
+		name    string
+		args    string
+		retType string
+		message string
+	}{
+		{
+			name:    "arguments",
+			args:    `[{"name":"value","type":"varchar"}]`,
+			retType: "bigint",
+			message: "catalog arguments",
+		},
+		{
+			name:    "return",
+			args:    `[{"name":"value","type":"bigint"}]`,
+			retType: "varchar",
+			message: "catalog return type",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := normalizePythonFunctionDefinition(userDefinedFunctionDefinition{
+				args:    tc.args,
+				retType: tc.retType,
+				body:    body,
+			})
+			require.ErrorContains(t, err, "UNSUPPORTED_ROUTINE_VERSION")
+			require.ErrorContains(t, err, tc.message)
+		})
+	}
+}
+
+func TestNormalizePythonDefinitionDerivesLogicalSignatureFromTypedBody(t *testing.T) {
+	normalized, err := normalizePythonFunctionDefinition(userDefinedFunctionDefinition{
+		args:    `[{"name":"value","type":"int"}]`,
+		retType: "int",
+		body:    pythonCatalogTestBody(t, types.T_int32),
+	})
+	require.NoError(t, err)
+	require.Equal(t, `["int"]`, normalized.argTypes)
+}
+
 func TestPersistPythonCreateIdentityLookupIncludesLanguage(t *testing.T) {
 	definition := userDefinedFunctionDefinition{
 		name:                     "python_identity",
