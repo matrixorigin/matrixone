@@ -2139,8 +2139,37 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	makeArgFs(ap)
 	ctr.ps = nil
 
-	if bat.RowCount() > 1 && int64(bat.Size()) > colexec.ResolveSpillThreshold(ap.SpillThreshold) {
-		sorted, err := mergeorder.SortBatch(proc, bat, ap.Fs, ap.SpillThreshold, ap.OpAnalyzer)
+	sortSize := int64(bat.Size())
+	for i := range ctr.aggVecs {
+		for _, vec := range ctr.aggVecs[i].Vec {
+			if vec != nil && !vec.IsConst() {
+				sortSize += int64(vec.Size())
+			}
+		}
+	}
+	if bat.RowCount() > 1 && sortSize > colexec.ResolveSpillThreshold(ap.SpillThreshold) {
+		var (
+			extraAggVecs []*vector.Vector
+			extraRefs    [][2]int
+		)
+		for i := range ctr.aggVecs {
+			for j, vec := range ctr.aggVecs[i].Vec {
+				if vec == nil || vec.IsConst() {
+					continue
+				}
+				extraAggVecs = append(extraAggVecs, vec)
+				extraRefs = append(extraRefs, [2]int{i, j})
+			}
+		}
+
+		sorted, sortedAggVecs, err := mergeorder.SortBatchWithExtraVectors(
+			proc,
+			bat,
+			ap.Fs,
+			ap.SpillThreshold,
+			ap.OpAnalyzer,
+			extraAggVecs,
+		)
 		if err != nil {
 			return false, err
 		}
@@ -2149,10 +2178,22 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		}
 		ctr.bat = sorted
 		bat = sorted
-		// evalAggVector ran before the order pass. Re-evaluate after the external
-		// merge so every window argument remains aligned with the sorted rows.
-		if err = ctr.evalAggVector(bat, proc); err != nil {
-			return false, err
+		if len(sortedAggVecs) != len(extraRefs) {
+			for _, vec := range sortedAggVecs {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			return false, moerr.NewInternalErrorNoCtx("window aggregate vector count mismatch")
+		}
+		// Keep the values evaluated before sorting. Re-evaluating here would both
+		// duplicate work and change the result of volatile window arguments.
+		for k, ref := range extraRefs {
+			old := ctr.aggVecs[ref[0]].Vec[ref[1]]
+			if old != nil {
+				old.Free(proc.Mp())
+			}
+			ctr.aggVecs[ref[0]].Vec[ref[1]] = sortedAggVecs[k]
 		}
 	}
 

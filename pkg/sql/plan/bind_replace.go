@@ -133,6 +133,7 @@ func (builder *QueryBuilder) appendReplaceConflictLookup(
 			}},
 			WindowIdx:   0,
 			BindingTags: []int32{ordinalTag},
+			SpillMem:    builder.sortSpillMem,
 		}, bindCtx)
 
 		sourceTag := builder.genNewBindTag()

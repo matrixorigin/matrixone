@@ -98,6 +98,61 @@ func SortBatch(
 	return ctr.collectSortedBatch(proc, fs, analyzer)
 }
 
+// SortBatchWithExtraVectors sorts input together with row-aligned vectors that
+// are evaluated before the order pass. The extra vectors are returned in the
+// same order after sorting and are owned by the caller. Every extra vector must
+// have one value per input row; constant vectors should be omitted because
+// their value is independent of row order.
+func SortBatchWithExtraVectors(
+	proc *process.Process,
+	input *batch.Batch,
+	fs []*plan.OrderBySpec,
+	threshold int64,
+	analyzer process.Analyzer,
+	extra []*vector.Vector,
+) (*batch.Batch, []*vector.Vector, error) {
+	if proc == nil || input == nil {
+		return nil, nil, moerr.NewInvalidInputNoCtx("invalid merge-order sort input")
+	}
+	for _, vec := range extra {
+		if vec == nil || vec.Length() != input.RowCount() {
+			return nil, nil, moerr.NewInvalidInputNoCtx("invalid merge-order extra vector")
+		}
+	}
+	if len(extra) == 0 {
+		sorted, err := SortBatch(proc, input, fs, threshold, analyzer)
+		return sorted, nil, err
+	}
+
+	// The combined batch borrows all source vectors. SortBatch duplicates each
+	// chunk before it shuffles or spills, so the borrowed source remains owned by
+	// the caller throughout this operation.
+	combined := batch.NewWithSize(len(input.Vecs) + len(extra))
+	combined.Vecs = append(combined.Vecs[:0], input.Vecs...)
+	combined.Vecs = append(combined.Vecs, extra...)
+	combined.Attrs = make([]string, len(combined.Vecs))
+	copy(combined.Attrs, input.Attrs)
+	combined.Recursive = input.Recursive
+	combined.SetRowCount(input.RowCount())
+
+	sorted, err := SortBatch(proc, combined, fs, threshold, analyzer)
+	if err != nil {
+		return nil, nil, err
+	}
+	dataCols := len(input.Vecs)
+	if sorted == nil || len(sorted.Vecs) != dataCols+len(extra) {
+		if sorted != nil {
+			sorted.Clean(proc.Mp())
+		}
+		return nil, nil, moerr.NewInternalErrorNoCtx("merge-order extra vector count mismatch")
+	}
+
+	sortedExtra := append([]*vector.Vector(nil), sorted.Vecs[dataCols:]...)
+	sorted.Vecs = sorted.Vecs[:dataCols]
+	sorted.Attrs = append([]string(nil), input.Attrs...)
+	return sorted, sortedExtra, nil
+}
+
 func orderFlags(fs []*plan.OrderBySpec) (desc, nullsLast []bool) {
 	desc = make([]bool, len(fs))
 	nullsLast = make([]bool, len(fs))

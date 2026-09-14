@@ -67,7 +67,7 @@ func TestWindowOrderSpillsAndKeepsArgumentsAligned(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
-func TestWindowOrderSpillReevaluatesAggregateArguments(t *testing.T) {
+func TestWindowOrderSpillPreservesAggregateArguments(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
