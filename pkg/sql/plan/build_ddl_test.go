@@ -1911,6 +1911,264 @@ func TestMaterializedViewUnionAllIncrementalPlan(t *testing.T) {
 	require.Empty(t, encoded, "branches with incompatible aggregate state must not use FAST")
 }
 
+func TestMaterializedViewIncrementalExpressionAndAdmissionCoverage(t *testing.T) {
+	parse := func(query string) *tree.Select {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, query, 1)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		return stmt.(*tree.Select)
+	}
+
+	// Exercise every row-local expression family accepted by FAST. These
+	// expressions are also used by HAVING, where aggregate calls are allowed.
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  bool
+	}{
+		{name: "binary comparison", query: "select k from t where a + 1 > 2", want: true},
+		{name: "logical and", query: "select k from t where a = 1 and c = 2", want: true},
+		{name: "logical or", query: "select k from t where a = 1 or c = 2", want: true},
+		{name: "range", query: "select k from t where a between 1 and 2", want: true},
+		{name: "unary", query: "select k from t where -a > 0", want: true},
+		{name: "is null", query: "select k from t where a is null", want: true},
+		{name: "is not null", query: "select k from t where a is not null", want: true},
+		{name: "cast", query: "select k from t where cast(a as signed) > 0", want: true},
+		{name: "case", query: "select k from t where case when a > 0 then b else c end > 1", want: true},
+		{name: "scalar functions", query: "select k from t where coalesce(a, b) > 0", want: true},
+		{name: "date trunc", query: "select k from t where date_trunc('minute', a) > 0", want: true},
+		{name: "ifnull", query: "select k from t where ifnull(a, b) > 0", want: true},
+		{name: "abs", query: "select k from t where abs(a) > 0", want: true},
+		{name: "floor", query: "select k from t where floor(a) > 0", want: true},
+		{name: "ceil", query: "select k from t where ceil(a) > 0", want: true},
+		{name: "unsupported function", query: "select k from t where now() > 0", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt := parse(tc.query)
+			clause := stmt.Select.(*tree.SelectClause)
+			require.NotNil(t, clause.Where)
+			require.Equal(t, tc.want, materializedViewIncrementalScalarSupported(clause.Where.Expr))
+		})
+	}
+
+	for _, query := range []string{
+		"select k, count(*) from t group by k having count(*) > 1",
+		"select k, sum(a) from t group by k having sum(a) between 1 and 2 and max(a) > 0",
+		"select k, sum(a) from t group by k having case when count(*) > 0 then sum(a) else 0 end > 0",
+		"select k, sum(a) from t group by k having coalesce(sum(a), 0) > 0",
+		"select k, min(a) from t group by k having min(a) > 0 and max(a) < 10",
+		"select k, avg(a) from t group by k having ifnull(avg(a), 0) > 0",
+	} {
+		stmt := parse(query)
+		clause := stmt.Select.(*tree.SelectClause)
+		require.NotNil(t, clause.Having)
+		require.True(t, materializedViewIncrementalHavingSupported(clause.Having.Expr))
+	}
+	// Keep the boolean expression cases explicit as well.  The MySQL parser
+	// represents these nodes differently depending on their operands, so use
+	// the AST forms directly to exercise the recursive admission branches.
+	zero := &tree.NumVal{}
+	require.True(t, materializedViewIncrementalScalarSupported(&tree.NotExpr{Expr: zero}))
+	require.True(t, materializedViewIncrementalScalarSupported(&tree.XorExpr{Left: zero, Right: zero}))
+	require.True(t, materializedViewIncrementalHavingSupported(&tree.NotExpr{Expr: zero}))
+	require.True(t, materializedViewIncrementalHavingSupported(&tree.XorExpr{Left: zero, Right: zero}))
+
+	distinctStmt := parse("select count(distinct a) from t")
+	distinctExpr := distinctStmt.Select.(*tree.SelectClause).Exprs[0].Expr
+	require.False(t, materializedViewIncrementalScalarSupported(distinctExpr))
+	rankStmt := parse("select k from t")
+	rankStmt.RankOption = &tree.RankOption{}
+	require.Equal(t, "MV_FAST_UNSUPPORTED_TOP_K", materializedViewIncrementalUnsupportedReason(rankStmt))
+	shapeStmt := parse("select k from t")
+	shapeStmt.Select = &tree.ParenSelect{}
+	require.Equal(t, "MV_FAST_UNSUPPORTED_QUERY_SHAPE", materializedViewIncrementalUnsupportedReason(shapeStmt))
+	noFromStmt := parse("select k from t")
+	noFromStmt.Select.(*tree.SelectClause).From = nil
+	require.Equal(t, "MV_FAST_UNSUPPORTED_QUERY_SHAPE", materializedViewIncrementalUnsupportedReason(noFromStmt))
+
+	for _, tc := range []struct {
+		name   string
+		query  string
+		reason string
+	}{
+		{name: "cte", query: "with x as (select k from t) select k from x", reason: "MV_FAST_UNSUPPORTED_CTE"},
+		{name: "limit", query: "select k, count(*) from t group by k limit 1", reason: "MV_FAST_UNSUPPORTED_LIMIT"},
+		{name: "no from", query: "select 1", reason: "MV_FAST_UNSUPPORTED_EXPRESSION_OR_GROUPING"},
+		{name: "multiple sources", query: "select k, count(*) from t, u group by k", reason: "MV_FAST_UNSUPPORTED_JOIN_OR_MULTIPLE_SOURCES"},
+		{name: "unsupported filter", query: "select k, count(*) from t where now() > 0 group by k", reason: "MV_FAST_UNSUPPORTED_FILTER_EXPRESSION"},
+		{name: "unsupported aggregate", query: "select k, stddev(a) from t group by k", reason: "MV_FAST_UNSUPPORTED_AGGREGATE"},
+		{name: "top k", query: "select k, count(*) from t group by k", reason: "MV_FAST_UNSUPPORTED_EXPRESSION_OR_GROUPING"},
+		{name: "set operation", query: "select k from t union select k from u", reason: "MV_FAST_UNSUPPORTED_SET_OPERATION"},
+		{name: "grouping set", query: "select k, count(*) from t group by rollup(k)", reason: "MV_FAST_UNSUPPORTED_GROUPING_SET"},
+		{name: "distinct aggregate", query: "select k, min(distinct a) from t group by k", reason: "MV_FAST_UNSUPPORTED_DISTINCT_AGGREGATE"},
+		{name: "unsupported grouping", query: "select k from t group by k", reason: "MV_FAST_UNSUPPORTED_EXPRESSION_OR_GROUPING"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt := parse(tc.query)
+			require.Equal(t, tc.reason, materializedViewIncrementalUnsupportedReason(stmt))
+		})
+	}
+
+	require.Equal(t, "MV_FAST_INVALID_DEFINITION", materializedViewIncrementalUnsupportedReason(nil))
+	_, _, _ = buildMaterializedViewIncrementalPlan(nil, nil)
+	for _, query := range []string{
+		"select k from t",
+		"select distinct k from t group by k",
+		"select distinct k, count(*) from t",
+		"select k, count(*) from t, u group by k",
+		"select k, count(*) from t where now() > 0 group by k",
+		"select k, stddev(a) from t group by k",
+		"select k, count(*) over () from t group by k",
+	} {
+		stmt := parse(query)
+		clause := stmt.Select.(*tree.SelectClause)
+		outputs := make([]*ColDef, len(clause.Exprs))
+		for i, expr := range clause.Exprs {
+			name := fmt.Sprintf("col_%d", i)
+			if col, ok := expr.Expr.(*tree.UnresolvedName); ok {
+				name = col.ColName()
+			}
+			outputs[i] = &ColDef{Name: name, Typ: Type{Id: int32(types.T_int64)}}
+		}
+		encoded, _, refresh := buildMaterializedViewIncrementalPlan(stmt, outputs)
+		require.Empty(t, encoded, query)
+		require.Empty(t, refresh, query)
+	}
+
+	valid := parse("select k, count(*) from t group by k")
+	validOutputs := []*ColDef{{Name: "k", Typ: Type{Id: int32(types.T_int64)}}, {Name: "n", Typ: Type{Id: int32(types.T_int64)}}}
+	for name, mutate := range map[string]func(*tree.Select){
+		"with":        func(s *tree.Select) { s.With = &tree.With{} },
+		"time window": func(s *tree.Select) { s.TimeWindow = &tree.TimeWindow{} },
+		"limit":       func(s *tree.Select) { s.Limit = &tree.Limit{} },
+		"rank":        func(s *tree.Select) { s.RankOption = &tree.RankOption{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			copyStmt := *valid
+			mutate(&copyStmt)
+			encoded, _, refresh := buildMaterializedViewIncrementalPlan(&copyStmt, validOutputs)
+			require.Empty(t, encoded)
+			require.Empty(t, refresh)
+		})
+	}
+
+	for name, mutate := range map[string]func(*tree.SelectClause){
+		"missing from": func(c *tree.SelectClause) { c.From = nil },
+		"multiple sources": func(c *tree.SelectClause) {
+			c.From.Tables = append(c.From.Tables, c.From.Tables[0])
+		},
+		"distinct with group": func(c *tree.SelectClause) { c.Distinct = true },
+		"missing group":       func(c *tree.SelectClause) { c.GroupBy = nil },
+		"cube group":          func(c *tree.SelectClause) { c.GroupBy.Cube = true },
+		"unsupported group expression": func(c *tree.SelectClause) {
+			c.GroupBy.GroupByExprsList = []tree.Exprs{{tree.NewStrVal("unsupported")}}
+		},
+		"missing group output": func(c *tree.SelectClause) {
+			c.Exprs = c.Exprs[1:]
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			copyStmt := *valid
+			copyClause := *(valid.Select.(*tree.SelectClause))
+			copyStmt.Select = &copyClause
+			mutate(&copyClause)
+			encoded, _, refresh := buildMaterializedViewIncrementalPlan(&copyStmt, validOutputs)
+			require.Empty(t, encoded)
+			require.Empty(t, refresh)
+		})
+	}
+	_, ok := materializedViewRefreshSQLWithState(valid, []string{"not valid SQL"}, []string{"n"})
+	require.False(t, ok)
+}
+
+func TestMaterializedViewIncrementalPlannerHelpers(t *testing.T) {
+	parse := func(query string) *tree.Select {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, query, 1)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		return stmt.(*tree.Select)
+	}
+
+	stmt := parse("select k, count(*) from t group by k")
+	clause := stmt.Select.(*tree.SelectClause)
+	groupExprs := clause.GroupBy.GroupByExprsList
+	require.Len(t, groupExprs, 1)
+
+	cols := []*ColDef{{Name: "k", Typ: Type{Id: int32(types.T_int64)}}, {Name: "n", Typ: Type{Id: int32(types.T_int64)}}}
+	require.True(t, materializedViewStateColumnsCompatible(cols, cols))
+	require.False(t, materializedViewStateColumnsCompatible(cols, cols[:1]))
+	different := append([]*ColDef(nil), cols...)
+	different[0] = &ColDef{Name: "other", Typ: cols[0].Typ}
+	require.False(t, materializedViewStateColumnsCompatible(cols, different))
+
+	left := &materializedViewIncrementalDescription{
+		Groups:     []materializedViewIncrementalGroup{{OutputColumn: "k"}},
+		Aggregates: []materializedViewIncrementalAggregate{{Kind: "count_star", OutputColumn: "n"}},
+	}
+	right := *left
+	right.Groups = append([]materializedViewIncrementalGroup(nil), left.Groups...)
+	right.Aggregates = append([]materializedViewIncrementalAggregate(nil), left.Aggregates...)
+	require.True(t, materializedViewIncrementalBranchesCompatible(left, &right))
+	require.False(t, materializedViewIncrementalBranchesCompatible(nil, &right))
+	right.Groups[0].OutputColumn = "different"
+	require.False(t, materializedViewIncrementalBranchesCompatible(left, &right))
+	right.Groups[0].OutputColumn = "k"
+	right.Aggregates[0].Kind = "sum"
+	require.False(t, materializedViewIncrementalBranchesCompatible(left, &right))
+	right.Aggregates[0].Kind = "count_star"
+	right.StateTable = "state"
+	require.False(t, materializedViewIncrementalBranchesCompatible(left, &right))
+
+	badCols := append([]*ColDef(nil), cols...)
+	badCols[1] = &ColDef{Name: cols[1].Name, Typ: Type{Id: int32(types.T_varchar)}}
+	require.False(t, materializedViewStateColumnsCompatible(cols, badCols))
+	require.False(t, materializedViewStateColumnsCompatible(nil, cols))
+
+	_, ok := materializedViewUnionAllClauses(nil)
+	require.False(t, ok)
+	_, ok = materializedViewUnionAllClauses(&tree.ParenSelect{})
+	require.False(t, ok)
+	_, ok = materializedViewUnionAllClauses(&tree.UnionClause{Type: tree.INTERSECT, All: true})
+	require.False(t, ok)
+	_, ok = materializedViewUnionAllClauses(&tree.UnionClause{Type: tree.UNION, All: true})
+	require.False(t, ok)
+	require.Empty(t, materializedViewIncrementalFunctionName(nil))
+	require.Empty(t, materializedViewIncrementalFunctionName(&tree.FuncExpr{}))
+	require.Equal(t, "custom", materializedViewIncrementalFunctionName(&tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("custom")),
+	}))
+
+	encoded, stateCols, refreshSQL := buildMaterializedViewIncrementalPlan(stmt, cols)
+	require.NotEmpty(t, encoded)
+	require.NotEmpty(t, stateCols)
+	require.NotEmpty(t, refreshSQL)
+	require.Equal(t, []string{"__mo_mv_group_key"}, materializedViewIncrementalPrimaryKey(encoded))
+	require.Equal(t, "__mo_mv_group_key_1", materializedViewUniqueStateColumn(
+		[]*ColDef{{Name: "__mo_mv_group_key"}}, "__mo_mv_group_key"))
+	state := materializedViewStateColumn("state", Type{Id: int32(types.T_int64)}, true)
+	require.True(t, state.Hidden)
+	require.False(t, state.NotNull)
+
+	collector := &materializedViewIncrementalColumnCollector{}
+	require.True(t, collector.collect(clause.Exprs[0].Expr))
+	require.Equal(t, []string{"k"}, collector.columns())
+
+	badSQL, ok := materializedViewRefreshSQLWithState(stmt, []string{"count(*)"}, nil)
+	require.False(t, ok)
+	require.Empty(t, badSQL)
+	goodSQL, ok := materializedViewRefreshSQLWithState(stmt, []string{"count(*)"}, []string{"n"})
+	require.True(t, ok)
+	require.Contains(t, goodSQL, "count(*)")
+
+	distinct := parse("select distinct k from t")
+	distinctClause := distinct.Select.(*tree.SelectClause)
+	_, ok = materializedViewRefreshSQLWithStateForMode(distinct, []string{"k"}, []string{"k"}, true, []tree.Exprs{{distinctClause.Exprs[0].Expr}})
+	require.True(t, ok)
+	union := parse("select k from t union all select k from u")
+	_, ok = materializedViewRefreshSQLWithStateForMode(union, []string{"k"}, []string{"k"}, true, groupExprs)
+	require.False(t, ok)
+}
+
 func TestMaterializedViewRefreshCanWriteHiddenState(t *testing.T) {
 	mock := NewMockOptimizer(true)
 	ctx := &mock.ctxt

@@ -338,6 +338,55 @@ func TestMaterializedViewDeltaDescriptionPredicates(t *testing.T) {
 	require.True(t, materializedViewDeltaCanUpsert(union))
 }
 
+func TestMaterializedViewDeltaAggregateStateSQLBranches(t *testing.T) {
+	desc := &incrementalDescription{
+		GroupKeyColumn: "__group_key", RowCountColumn: "__row_count",
+		Groups: []incrementalGroup{{OutputColumn: "service"}},
+		Aggregates: []incrementalAggregate{
+			{Kind: "count_star", OutputColumn: "n"},
+			{Kind: "sum", OutputColumn: "total", StateCountColumn: "__sum_count"},
+			{Kind: "sum", OutputColumn: "total2", StateSumColumn: "__sum", StateCountColumn: "__sum_count2"},
+			{Kind: "avg", OutputColumn: "average", StateSumColumn: "__avg", StateCountColumn: "__avg_count"},
+			{Kind: "min", OutputColumn: "minimum"},
+			{Kind: "max", OutputColumn: "maximum"},
+			{Kind: "count_distinct", OutputColumn: "distinct_n"},
+		},
+	}
+	upsert := strings.Join(materializedViewDeltaUpsertSets(desc), "\n")
+	require.Contains(t, upsert, "`n` = `n` + VALUES(`n`)")
+	require.Contains(t, upsert, "`__sum_count` = `__sum_count` + VALUES(`__sum_count`)")
+	require.Contains(t, upsert, "`__sum` = coalesce(`__sum`,0) + coalesce(VALUES(`__sum`),0)")
+	require.Contains(t, upsert, "`__avg` = coalesce(`__avg`,0) + coalesce(VALUES(`__avg`),0)")
+	require.Contains(t, upsert, "least(`minimum`,VALUES(`minimum`))")
+	require.Contains(t, upsert, "greatest(`maximum`,VALUES(`maximum`))")
+
+	update := strings.Join(materializedViewDeltaUpdateSets(desc, "t", "d"), "\n")
+	require.Contains(t, update, "t.`total` = CASE")
+	require.Contains(t, update, "t.`total2` = CASE")
+	require.Contains(t, update, "t.`average` = CASE")
+	require.Contains(t, update, "least(t.`minimum`,d.__mo_a_4_sum)")
+	require.Contains(t, update, "greatest(t.`maximum`,d.__mo_a_5_sum)")
+
+	columns, values := materializedViewDeltaInsertProjection(desc, "d")
+	require.Equal(t, len(columns), len(values))
+	require.Contains(t, strings.Join(values, ","), "CAST(0 AS BIGINT)")
+	require.Contains(t, strings.Join(values, ","), "NULL")
+	require.Equal(t, []string{"7", "d.__mo_g_0"}, materializedViewGroupKeySQL(&incrementalDescription{BranchID: 7}, []string{"d.__mo_g_0"}))
+
+	info := &ConsumerInfo{SrcTables: []TableInfo{{DBName: "db", TableName: "events", TableID: 1}}}
+	matched, ok := materializedViewSourceForBranch(info, &incrementalDescription{SourceDatabase: "DB", SourceTable: "EVENTS"})
+	require.True(t, ok)
+	require.Len(t, matched, 1)
+	_, ok = materializedViewSourceForBranch(info, &incrementalDescription{SourceDatabase: "other", SourceTable: "events"})
+	require.False(t, ok)
+	branches := materializedViewLeafDescriptions(&incrementalDescription{Strategy: "union-all", Branches: []incrementalBranch{{}, {Description: desc}}})
+	require.Len(t, branches, 1)
+	require.Equal(t, "__mo_sign", materializedViewDeltaSignColumn(&incrementalDescription{}))
+	require.Equal(t, "__mo_sign_2", materializedViewDeltaSignColumn(&incrementalDescription{SourceColumns: []string{"__mo_sign", "__mo_sign_1"}}))
+	_, ok = materializedViewSourceForBranch(nil, desc)
+	require.False(t, ok)
+}
+
 func TestMaterializedViewDeltaTransportAvoidsUserSignColumns(t *testing.T) {
 	desc := &incrementalDescription{
 		SourceAlias: "e", SourceColumns: []string{"__mo_sign", "__MO_SIGN_1"},

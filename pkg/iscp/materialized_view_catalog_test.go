@@ -217,3 +217,93 @@ func TestMaterializedViewForceFallbackRequiresKnownRollback(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadMaterializedViewDefinitionValidatesCatalogEnvelope(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), 0)
+	_, err := MaterializedViewInfo(&mvdefinition.Definition{})
+	require.Error(t, err)
+	_, err = LoadMaterializedViewDefinition(t.Context(), nil, "cn", nil, nil, false)
+	require.Error(t, err)
+	_, err = LoadMaterializedViewDefinition(ctx, nil, "cn", nil, nil, false)
+	require.Error(t, err)
+
+	info := &ConsumerInfo{DBName: "db", TableName: "mv", MVReference: &mvdefinition.Reference{}}
+	_, err = LoadMaterializedViewDefinition(ctx, nil, "cn", nil, info, false)
+	require.Error(t, err)
+
+	info = &ConsumerInfo{DBName: "db", TableName: "mv", RefreshSQL: "select service, count(*) requests from db.events group by service"}
+	catalog := newMVTestCatalog(t, info)
+	_, err = LoadMaterializedViewDefinition(ctx, nil, "cn", catalog.txn, info, false)
+	require.Error(t, err)
+
+	loaded, err := LoadMaterializedViewDefinition(ctx, catalog, "cn", catalog.txn, info, true)
+	require.NoError(t, err)
+	require.Equal(t, catalog.definition.Target.ID, loaded.Target.ID)
+
+	lockFailure := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		return executor.Result{}, errors.New("lock failed")
+	})
+	require.ErrorContains(t, lockMaterializedViewDefinition(ctx, "cn", catalog.txn, catalog.definition), "lock failed")
+	lockFailure.Reset()
+	rowMismatch := gostub.Stub(&ExecWithResult, func(context.Context, string, string, client.TxnOperator) (executor.Result, error) {
+		return executor.Result{}, nil
+	})
+	require.ErrorContains(t, lockMaterializedViewDefinition(ctx, "cn", catalog.txn, catalog.definition), "catalog identity disappeared")
+	rowMismatch.Reset()
+	_, err = LoadMaterializedViewDefinition(t.Context(), catalog, "cn", catalog.txn, info, false)
+	require.Error(t, err)
+
+	badSources := *info
+	badSources.SrcTables = append([]TableInfo(nil), info.SrcTables...)
+	badSources.SrcTables[0].TableID++
+	_, err = LoadMaterializedViewDefinition(ctx, catalog, "cn", catalog.txn, &badSources, false)
+	require.ErrorContains(t, err, "job source projection changed")
+
+	missingTarget := *info
+	missingTarget.TableName = "missing_mv"
+	_, err = LoadMaterializedViewDefinition(ctx, catalog, "cn", catalog.txn, &missingTarget, false)
+	require.ErrorContains(t, err, "target is unavailable")
+
+	missingSource := *catalog
+	missingSource.relations = make(map[string]*materializedViewTestRelation, len(catalog.relations))
+	for name, rel := range catalog.relations {
+		missingSource.relations[name] = rel
+	}
+	delete(missingSource.relations, "db.events")
+	_, err = LoadMaterializedViewDefinition(ctx, &missingSource, "cn", catalog.txn, info, false)
+	require.Error(t, err)
+
+	otherAccount := defines.AttachAccountId(t.Context(), 1)
+	_, err = LoadMaterializedViewDefinition(otherAccount, catalog, "cn", catalog.txn, info, false)
+	require.ErrorContains(t, err, "account identity changed")
+
+	stateInfo := &ConsumerInfo{DBName: "db", TableName: "mv_stateful", RefreshMethod: "force",
+		RefreshSQL: "select service, count(*) requests from db.events group by service"}
+	stateCatalog := newMVTestCatalog(t, stateInfo)
+	state := &mvdefinition.Relation{Database: "db", Name: "__mo_mv_state_mv_stateful", DatabaseID: 1, ID: 101}
+	stateCatalog.definition.State = state
+	stateOwner := mvdefinition.Owner{Format: mvdefinition.Format, AccountID: stateCatalog.definition.AccountID,
+		TargetID: stateCatalog.definition.Target.ID, Generation: stateCatalog.definition.Generation, StateID: state.ID}
+	stateDef := &planpb.TableDef{DbName: state.Database, Name: state.Name, DbId: state.DatabaseID, TblId: state.ID,
+		TableType: "i", Props: []*planpb.PropertyDef{{Key: mvdefinition.OwnerProperty, Value: mvdefinition.EncodeOwner(stateOwner)}}}
+	stateCatalog.relations[state.Database+"."+state.Name] = &materializedViewTestRelation{def: stateDef}
+	encoded, encodeErr := mvdefinition.Encode(stateCatalog.definition)
+	require.NoError(t, encodeErr)
+	stateCatalog.target.Props[0].Value = encoded
+	projected, projectErr := MaterializedViewInfo(stateCatalog.definition)
+	require.NoError(t, projectErr)
+	*stateInfo = *projected
+	stateLocks := gostub.Stub(&ExecWithResult, func(_ context.Context, sql, _ string, _ client.TxnOperator) (executor.Result, error) {
+		rows := 1
+		if strings.HasPrefix(sql, "SELECT rel_id") {
+			rows = 3
+		}
+		b := batch.NewWithSize(0)
+		b.SetRowCount(rows)
+		return executor.Result{Batches: []*batch.Batch{b}}, nil
+	})
+	loaded, err = LoadMaterializedViewDefinition(ctx, stateCatalog, "cn", stateCatalog.txn, stateInfo, true)
+	require.NoError(t, err)
+	require.Equal(t, state.Name, loaded.State.Name)
+	stateLocks.Reset()
+}

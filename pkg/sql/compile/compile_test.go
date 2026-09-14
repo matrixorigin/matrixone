@@ -2097,6 +2097,23 @@ func TestMultiSourceISCPGatedByProtocolVersion(t *testing.T) {
 		"rollback must reject multi-source jobs before contacting old CNs")
 }
 
+func TestMaterializedViewCapabilityAndReadValidationGuards(t *testing.T) {
+	c := NewMockCompile(t)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	// A compile without a query plan is a valid path for utility/internal
+	// statements and must not attempt MV catalog validation.
+	require.NoError(t, c.validateMaterializedViewReads())
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
+	require.NoError(t, c.validateMaterializedViewReads())
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion63)
+	require.Error(t, requireMaterializedViewCapability(c))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion64)
+	require.NoError(t, requireMaterializedViewCapability(c))
+}
+
 func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 	newNode := func() *plan.Node {
 		return &plan.Node{

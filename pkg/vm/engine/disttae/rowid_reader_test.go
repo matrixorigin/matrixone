@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -35,6 +36,33 @@ func TestRowIDReaderValuePreservesNull(t *testing.T) {
 	require.Equal(t, 20.0, rowIDReaderValue(vec, 1))
 	vec.Free(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestRowIDReaderValueHandlesConstVectors(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+	constant, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("constant"), 2, mp)
+	require.NoError(t, err)
+	require.Equal(t, []byte("constant"), rowIDReaderValue(constant, 1))
+	constant.Free(mp)
+
+	constNull := vector.NewConstNull(types.T_varchar.ToType(), 2, mp)
+	require.Nil(t, rowIDReaderValue(constNull, 1))
+	constNull.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestRowIDReaderRejectsOversizedVariableValueBeforeCharging(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	defer mpool.DeleteMPool(mp)
+	vec := vector.NewVec(types.T_varchar.ToType())
+	defer vec.Free(mp)
+	value := []byte(strings.Repeat("x", engine.MaxRowIDReadBytes/2+1))
+	require.NoError(t, vector.AppendBytes(vec, value, false, mp))
+	budget := &engine.RowIDReadBudget{RemainingBytes: engine.MaxRowIDReadBytes}
+	_, err := copyRowIDReaderRow([]*vector.Vector{vec}, 0, budget)
+	require.ErrorIs(t, err, engine.ErrRowIDReadLimit)
+	require.Equal(t, engine.MaxRowIDReadBytes, budget.RemainingBytes)
 }
 
 func TestRowIDReaderOwnsVariableValuesAndChargesBeforeCopy(t *testing.T) {
