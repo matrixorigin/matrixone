@@ -3642,8 +3642,18 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 		}
 		for i := 0; i < read; i++ {
 			v := values[i]
-			row := length + readRows + i
-			if v.IsNull() {
+			rowIndex := readRows + i
+			row := length + rowIndex
+			isNull := v.IsNull()
+			if !nc.noNulls {
+				expectedNull := nc.levels[rowIndex] != nc.maxDefinitionLevel
+				if isNull != expectedNull {
+					return rollback(moerr.NewInvalidInputf(proc.Ctx,
+						"malformed BOOLEAN page: definition level and value NULL status disagree at row %d",
+						rowIndex))
+				}
+			}
+			if isNull {
 				if nc.noNulls {
 					return rollback(moerr.NewInvalidInput(proc.Ctx,
 						"malformed BOOLEAN page: reader returned NULL value"))

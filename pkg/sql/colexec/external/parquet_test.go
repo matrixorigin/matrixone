@@ -3191,6 +3191,34 @@ func TestParquet_Plain_Bool_UnexpectedValueKindRollsBack(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquet_Plain_Bool_DefinitionLevelValueMismatchRollsBack(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Optional(parquet.Leaf(parquet.BooleanType))
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+	require.NotNil(t, mp)
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(values []parquet.Value) (int, error) {
+			values[0] = parquet.BooleanValue(true)
+			values[1] = parquet.BooleanValue(false)
+			return 2, io.EOF
+		}),
+	}
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "definition level and value NULL status disagree")
+	require.Zero(t, vec.Length())
+}
+
 func TestParquet_Plain_Bool_DefinitionLevelMismatch(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Optional(parquet.Leaf(parquet.BooleanType))
