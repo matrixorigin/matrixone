@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -337,6 +338,95 @@ func TestResolveNumericBinaryTypesResult(t *testing.T) {
 			require.Equal(t, test.wantType, got.result.Oid)
 			require.Equal(t, test.wantWidth, got.result.Width)
 			require.Equal(t, test.wantScale, got.result.Scale)
+		})
+	}
+}
+
+func TestResolveNumericIntegerDivDomains(t *testing.T) {
+	tests := []struct {
+		name       string
+		left       types.Type
+		right      types.Type
+		wantLeft   types.T
+		wantRight  types.T
+		wantResult types.T
+	}{
+		{
+			name:       "mixed unsigned integers",
+			left:       types.T_uint32.ToType(),
+			right:      types.T_uint64.ToType(),
+			wantLeft:   types.T_uint64,
+			wantRight:  types.T_uint64,
+			wantResult: types.T_int64,
+		},
+		{
+			name:       "mixed signed integers",
+			left:       types.T_int32.ToType(),
+			right:      types.T_int64.ToType(),
+			wantLeft:   types.T_int64,
+			wantRight:  types.T_int64,
+			wantResult: types.T_int64,
+		},
+		{
+			name:       "signed and unsigned integers",
+			left:       types.T_int64.ToType(),
+			right:      types.T_uint64.ToType(),
+			wantLeft:   types.T_decimal256,
+			wantRight:  types.T_decimal256,
+			wantResult: types.T_int64,
+		},
+		{
+			name:       "unsigned dividend and signed divisor",
+			left:       types.T_uint32.ToType(),
+			right:      types.T_int64.ToType(),
+			wantLeft:   types.T_uint64,
+			wantRight:  types.T_int64,
+			wantResult: types.T_int64,
+		},
+		{
+			name:       "canonical unsigned dividend and signed divisor",
+			left:       types.T_uint64.ToType(),
+			right:      types.T_int64.ToType(),
+			wantLeft:   types.T_uint64,
+			wantRight:  types.T_int64,
+			wantResult: types.T_int64,
+		},
+		{
+			name:       "unsigned dividend and decimal divisor",
+			left:       types.T_uint64.ToType(),
+			right:      types.New(types.T_decimal64, 10, 2),
+			wantLeft:   types.T_uint64,
+			wantRight:  types.T_decimal256,
+			wantResult: types.T_int64,
+		},
+		{
+			name:       "floating point fallback",
+			left:       types.T_float64.ToType(),
+			right:      types.T_int64.ToType(),
+			wantLeft:   types.T_float64,
+			wantRight:  types.T_float64,
+			wantResult: types.T_int64,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := resolveNumericBinaryTypes(numericOpIntegerDiv, test.left, test.right, nil)
+			require.True(t, ok)
+			require.Equal(t, test.wantLeft, got.left.Oid)
+			require.Equal(t, test.wantRight, got.right.Oid)
+			require.Equal(t, test.wantResult, got.result.Oid)
+
+			resolved, err := GetFunctionByName(context.Background(), "div", []types.Type{test.left, test.right})
+			require.NoError(t, err)
+			targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			if test.left.Oid == test.wantLeft && test.right.Oid == test.wantRight {
+				require.False(t, shouldCast)
+				return
+			}
+			require.True(t, shouldCast)
+			require.Equal(t, test.wantLeft, targets[0].Oid)
+			require.Equal(t, test.wantRight, targets[1].Oid)
 		})
 	}
 }

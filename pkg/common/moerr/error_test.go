@@ -164,6 +164,20 @@ func TestMaxPreparedStmtCountReachedMySQLError(t *testing.T) {
 		err.Error())
 }
 
+func TestInvalidBitwiseOperandsSizeMySQLError(t *testing.T) {
+	for _, err := range []*Error{
+		NewInvalidBitwiseOperandsSize(context.Background()),
+		NewInvalidBitwiseOperandsSizeNoCtx(),
+	} {
+		require.Equal(t, ErrInvalidBitwiseOperandsSize, err.ErrorCode())
+		require.Equal(t, ER_INVALID_BITWISE_OPERANDS_SIZE, err.MySQLCode())
+		require.Equal(t, "HY000", err.SqlState())
+		require.Equal(t,
+			"Binary operands of bitwise operators must be of equal length",
+			err.Error())
+	}
+}
+
 func TestIsMoErrCode(t *testing.T) {
 	err := NewDivByZero(context.TODO())
 	require.True(t, IsMoErrCode(err, ErrDivByZero))
@@ -317,6 +331,20 @@ func TestTooLongIdentMySQLError(t *testing.T) {
 	require.Equal(t, "Identifier name 'identifier' is too long", err.Error())
 }
 
+func TestUserLockWrongNameMySQLError(t *testing.T) {
+	err := NewUserLockWrongName(context.Background(), "NULL")
+	require.Equal(t, ErrUserLockWrongName, err.ErrorCode())
+	require.Equal(t, uint16(ER_USER_LOCK_WRONG_NAME), err.MySQLCode())
+	require.Equal(t, "42000", err.SqlState())
+	require.Equal(t, "Incorrect user-level lock name 'NULL'.", err.Error())
+
+	data, marshalErr := err.MarshalBinary()
+	require.NoError(t, marshalErr)
+	decoded := new(Error)
+	require.NoError(t, decoded.UnmarshalBinary(data))
+	require.Equal(t, err, decoded)
+}
+
 type fakeErr struct {
 }
 
@@ -401,6 +429,11 @@ func TestNewErrTooBigPrecision(t *testing.T) {
 
 func Test_ForCoverage(t *testing.T) {
 	ctx := context.Background()
+	cut := NewGroupConcatCut(ctx, "Row 2 was cut by GROUP_CONCAT()")
+	require.True(t, IsMoErrCode(cut, ErrGroupConcatCut))
+	require.Equal(t, ER_CUT_VALUE_GROUP_CONCAT, cut.MySQLCode())
+	require.Equal(t, "Row 2 was cut by GROUP_CONCAT()", cut.Error())
+
 	err := NewDataTruncatedf(ctx, "test", "test")
 	require.True(t, IsMoErrCode(err, ErrDataTruncated))
 

@@ -88,6 +88,7 @@ func TestReallocPhysicalFailureRestoresOwnership(t *testing.T) {
 	const (
 		child                     = "MO_TEST_REALLOC_PHYSICAL_FAILURE"
 		physicalFailureTargetSize = 512 << 20
+		physicalFailureHeadroom   = 256 << 20
 	)
 	if os.Getenv(child) != "1" {
 		// A process-local address-space limit injects real OS allocation failure
@@ -130,12 +131,12 @@ func TestReallocPhysicalFailureRestoresOwnership(t *testing.T) {
 			var limit unix.Rlimit
 			require.NoError(t, unix.Getrlimit(unix.RLIMIT_AS, &limit))
 			restricted := limit
-			restricted.Cur = pages*uint64(os.Getpagesize()) + 64<<20
+			restricted.Cur = pages*uint64(os.Getpagesize()) + physicalFailureHeadroom
 			require.NoError(t, unix.Setrlimit(unix.RLIMIT_AS, &restricted))
 			// Stay below MPoolStats' 1 GiB high-watermark logging boundary. The
-			// RLIMIT_AS budget leaves only 64 MiB above the current address space,
-			// so this target still forces mmap to fail without making the Go logger
-			// allocate while the limit is active.
+			// RLIMIT_AS budget remains below the requested mapping, while leaving
+			// enough headroom for the Go runtime to construct and return the expected
+			// allocation error in coverage-instrumented test binaries.
 			next, resizeErr := mp.ReallocZero(old, physicalFailureTargetSize, true)
 			// Restore before assertions or other test work can allocate memory.
 			restoreErr := unix.Setrlimit(unix.RLIMIT_AS, &limit)
