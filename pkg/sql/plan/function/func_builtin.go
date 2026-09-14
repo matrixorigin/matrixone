@@ -3245,6 +3245,11 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 			val := vector.GetFixedAtNoTypeCheck[types.Decimal128](v, idx)
 			ps.EncodeDecimal128(val)
 		}, nil
+	case types.T_decimal256:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.Decimal256](v, idx)
+			ps.EncodeDecimal256(val)
+		}, nil
 	case types.T_uuid:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := vector.GetFixedAtNoTypeCheck[types.Uuid](v, idx)
@@ -3647,6 +3652,25 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 		} else {
 			for i, b := range s {
 				ps[i].EncodeDecimal128(b)
+			}
+		}
+	case types.T_decimal256:
+		s := vector.ExpandFixedCol[types.Decimal256](v)
+		if hasNull {
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					if isFull {
+						ps[i].EncodeNull()
+					} else {
+						nulls.Add(bitMap, uint64(i))
+					}
+				} else {
+					ps[i].EncodeDecimal256(b)
+				}
+			}
+		} else {
+			for i, b := range s {
+				ps[i].EncodeDecimal256(b)
 			}
 		}
 	case types.T_uuid:
