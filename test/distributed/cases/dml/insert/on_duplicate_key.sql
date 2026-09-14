@@ -359,6 +359,21 @@ set @odku_no_key_implicit_a = 4;
 execute s_odku_no_key_generated_implicit using @odku_no_key_implicit_a;
 select * from t_odku_no_key_generated order by a;
 deallocate prepare s_odku_no_key_generated_implicit;
+insert into t_odku_no_key_generated values (5, default) as n(x, y) on duplicate key update a = n.x;
+insert into t_odku_no_key_generated values (6, default) as n on duplicate key update a = n.g;
+select * from t_odku_no_key_generated order by a;
+prepare s_odku_no_key_generated_implicit_alias from insert into t_odku_no_key_generated values (?, default) as n(x, y) on duplicate key update a = n.x + ?;
+set @odku_no_key_implicit_alias_a = 7;
+set @odku_no_key_implicit_alias_delta = 1;
+execute s_odku_no_key_generated_implicit_alias using @odku_no_key_implicit_alias_a, @odku_no_key_implicit_alias_delta;
+select * from t_odku_no_key_generated order by a;
+deallocate prepare s_odku_no_key_generated_implicit_alias;
+prepare s_odku_no_key_generated_implicit_generated from insert into t_odku_no_key_generated values (?, default) as n on duplicate key update a = n.g + ?;
+set @odku_no_key_implicit_generated_a = 8;
+set @odku_no_key_implicit_generated_delta = 1;
+execute s_odku_no_key_generated_implicit_generated using @odku_no_key_implicit_generated_a, @odku_no_key_implicit_generated_delta;
+select * from t_odku_no_key_generated order by a;
+deallocate prepare s_odku_no_key_generated_implicit_generated;
 drop table t_odku_no_key_generated;
 
 -- A volatile DEFAULT must be evaluated once before a stored generated column
