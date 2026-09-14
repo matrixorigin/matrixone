@@ -1034,6 +1034,14 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 					return false
 				}
 			}
+		case types.T_decimal256:
+			_, err := types.ParseDecimal256(field.Val, col.Typ.Width, col.Typ.Scale)
+			if err != nil {
+				// we tolerate loss of digits.
+				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+					return false
+				}
+			}
 		case types.T_timestamp:
 			// Note: isLegalLine is only used for file offset calculation in parallel LOAD DATA,
 			// not for actual data loading. It uses time.Local as fallback since proc is not available.
@@ -1215,7 +1223,7 @@ func isLoadNumericZeroFillType(id types.T) bool {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128:
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
 		return false
@@ -1227,7 +1235,7 @@ func isLoadNumericAdjustedValueType(id types.T) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128:
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
 		return false
@@ -1316,6 +1324,8 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 		return vector.AppendFixed(vec, types.Decimal64(0), false, mp)
 	case types.T_decimal128:
 		return vector.AppendFixed(vec, types.Decimal128{}, false, mp)
+	case types.T_decimal256:
+		return vector.AppendFixed(vec, types.Decimal256{}, false, mp)
 	default:
 		return moerr.NewInternalErrorNoCtxf("unsupported type %v for empty numeric LOAD DATA zero-fill", id)
 	}
@@ -2043,6 +2053,18 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 			if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
 				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
 				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is invalid Decimal128 type for column %d", field.Val, colIdx)
+			}
+		}
+		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
+			return err
+		}
+	case types.T_decimal256:
+		d, err := types.ParseDecimal256(field.Val, vec.GetType().Width, vec.GetType().Scale)
+		if err != nil {
+			// we tolerate loss of digits.
+			if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is invalid Decimal256 type for column %d", field.Val, colIdx)
 			}
 		}
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
