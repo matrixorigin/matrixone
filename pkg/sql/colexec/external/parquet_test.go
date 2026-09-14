@@ -3469,6 +3469,20 @@ func TestParquet_Plain_Numeric_ValueKindMismatch(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquetDecodedPageSize_InvalidDictionaryIndexes(t *testing.T) {
+	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{0}))
+	dict := parquet.Int32Type.NewDictionary(0, 1, encoding.Int32Values([]int32{1}))
+	badData := &parquetPageWithData{
+		Page: page,
+		data: encoding.BooleanValues([]byte{1}),
+	}
+	badPage := &parquetPageWithDictionary{Page: badData, dictionary: dict}
+
+	require.NotPanics(t, func() {
+		require.Positive(t, parquetDecodedPageSize(badPage))
+	})
+}
+
 func TestParquet_Dictionary_Bool_NullableSlicedPage(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Optional(parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary))

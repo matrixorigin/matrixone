@@ -4632,6 +4632,9 @@ func parquetDecodedPageSize(page parquet.Page) uint64 {
 	}
 	size := uint64(len(page.DefinitionLevels()) + len(page.RepetitionLevels()))
 	data := page.Data()
+	if data.Kind() != encoding.Int32 {
+		return addParquetBytes(size, uint64(max(page.Size(), 0)))
+	}
 	for _, idx := range data.Int32() {
 		if idx < 0 || int(idx) >= dict.Len() {
 			return addParquetBytes(size, uint64(max(page.Size(), 0)))
