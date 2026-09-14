@@ -780,6 +780,24 @@ func (e *inputBatchEncoder) canBuildFullBatch(start, length, maxBytes int64) boo
 		if !typ.IsVarlen() {
 			return false
 		}
+		if elementWidth, ok := arrayElementByteWidth(typ.Oid); ok {
+			// Vector arguments use a fixed-size-list physical type.  They are
+			// varlen in MatrixOne's storage, but do not have a Varlena wrapper
+			// or Arrow string/binary offsets to inspect.  Account for every
+			// child value and the parent validity bitmap instead of treating
+			// the vector as a byte string.
+			valueBytes := multiply(int64(typ.Width), elementWidth)
+			estimate = add(estimate, multiply(valueBytes, length))
+			estimate = add(estimate, add(length, 7)/8)
+			estimate = add(estimate, multiply(length, perRowOverhead))
+			continue
+		}
+		if !isVarlenaInputType(typ.Oid) {
+			// An unsupported variable-width physical type must use the
+			// ordinary bounded probe path.  In particular, never call a nil
+			// Varlena wrapper while estimating a batch.
+			return false
+		}
 		descriptor := e.descriptors[column]
 		offsetWidth := int64(descriptor.OffsetWidth)
 		if offsetWidth == 0 {
@@ -814,6 +832,17 @@ func (e *inputBatchEncoder) canBuildFullBatch(start, length, maxBytes int64) boo
 		return false
 	}
 	return estimate*safetyNumerator <= maxBytes*safetyDenominator
+}
+
+func arrayElementByteWidth(oid types.T) (int64, bool) {
+	switch oid {
+	case types.T_array_float32:
+		return 4, true
+	case types.T_array_float64:
+		return 8, true
+	default:
+		return 0, false
+	}
 }
 
 func sourceRow(v *vector.Vector, start, row int) int {
