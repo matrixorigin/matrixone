@@ -3521,6 +3521,40 @@ func TestParquet_NullableMappingWithAllocationAccount(t *testing.T) {
 	}
 }
 
+func TestParquet_NullableStringFixedMappingWithAllocationAccount(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
+	require.NoError(t, err)
+	account, err := registry.Open(1 << 20)
+	require.NoError(t, err)
+	selection, err := vector.NewAllocationAccountSelection(account, 1, 1, 2, 3, 4)
+	require.NoError(t, err)
+	vec, err := vector.NewOffHeapVecWithTypeAndAllocation(types.New(types.T_int32, 0, 0), selection)
+	require.NoError(t, err)
+	defer func() {
+		vec.Free(proc.Mp())
+		require.Zero(t, account.Snapshot().Used)
+		account.Seal()
+		_, err := registry.Finalize(account)
+		require.NoError(t, err)
+	}()
+
+	rows := []parquet.Row{
+		{parquet.ByteArrayValue([]byte("1")).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+		{parquet.ByteArrayValue([]byte("2")).Level(0, 1, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, parquet.Optional(parquet.String()), rows)
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32)})
+	require.NotNil(t, mp)
+	require.NoError(t, mp.mapping(page, proc, vec))
+	require.Equal(t, []int32{1, 0, 2}, vector.MustFixedColWithTypeCheck[int32](vec))
+	require.True(t, vec.GetNulls().Contains(1))
+}
+
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	// Reduce batch size so scan steps across multiple calls
 	save := maxParquetBatchCnt

@@ -2407,7 +2407,7 @@ func processStringToFixed[T any](
 	// ========== Phase 2: Extend vector (only after validation passes) ==========
 
 	length := vec.Length()
-	if err := vec.PreExtend(numRows+length, proc.Mp()); err != nil {
+	if err := preExtendParquetFixedVector(vec, numRows+length, proc, !nc.noNulls); err != nil {
 		return err
 	}
 	vec.SetLength(numRows + length)
