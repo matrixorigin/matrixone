@@ -3916,6 +3916,20 @@ func Test_parquet_copyDictPageToVec_indexError(t *testing.T) {
 	require.Error(t, err)
 }
 
+func Test_parquet_copyDictPageToVec_indexCountError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	st := parquet.Int32Type
+	page := st.NewPage(0, 3, encoding.Int32Values([]int32{0, 2, 1}))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	mp := &columnMapper{srcNull: false, dstNull: false, maxDefinitionLevel: 0}
+
+	err := copyDictPageToVec[int32](mp, page, proc, vec, 3, []int32{0, 2}, func(idx int32) int32 { return idx })
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "dictionary indices")
+	require.Zero(t, vec.Length())
+}
+
 func Test_parquet_decimalBytes_Roundtrip_And_Overflow(t *testing.T) {
 	ctx := context.Background()
 
