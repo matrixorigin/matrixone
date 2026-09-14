@@ -3620,6 +3620,67 @@ func TestParquetMapOfNestedAlignsOptionalValuesByEntry(t *testing.T) {
 	}, got)
 }
 
+func TestParquetListPreservesNullElement(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"items": parquet.List(parquet.Optional(parquet.Leaf(parquet.Int32Type))),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	items := f.Root().Column("items")
+	element := items.Column("list").Column("element")
+	emptyLevel := listEmptyDefinitionLevel(element)
+
+	empty, err := reconstructNestedValue(context.Background(), items, []parquet.Value{
+		parquet.NullValue().Level(0, emptyLevel, element.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []any{}, empty)
+
+	withNull, err := reconstructNestedValue(context.Background(), items, []parquet.Value{
+		parquet.NullValue().Level(0, emptyLevel+1, element.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []any{nil}, withNull)
+}
+
+func TestParquetMapOfNestedListAndScalarAlignsByEntry(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"m": parquet.Map(parquet.String(), parquet.Group{
+			"a": parquet.List(parquet.Leaf(parquet.Int32Type)),
+			"b": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+		}),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	m := f.Root().Column("m")
+	kv := m.Column("key_value")
+	key := kv.Column("key")
+	value := kv.Column("value")
+	a := value.Column("a").Column("list").Column("element")
+	b := value.Column("b")
+
+	got, err := reconstructNestedValue(context.Background(), m, []parquet.Value{
+		parquet.ByteArrayValue([]byte("first")).Level(0, key.MaxDefinitionLevel(), key.Index()),
+		parquet.ByteArrayValue([]byte("second")).Level(1, key.MaxDefinitionLevel(), key.Index()),
+		parquet.Int32Value(1).Level(0, a.MaxDefinitionLevel(), a.Index()),
+		parquet.Int32Value(2).Level(2, a.MaxDefinitionLevel(), a.Index()),
+		parquet.Int32Value(3).Level(1, a.MaxDefinitionLevel(), a.Index()),
+		parquet.Int32Value(10).Level(0, b.MaxDefinitionLevel(), b.Index()),
+		parquet.Int32Value(20).Level(1, b.MaxDefinitionLevel(), b.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"first":  map[string]any{"a": []any{int64(1), int64(2)}, "b": int64(10)},
+		"second": map[string]any{"a": []any{int64(3)}, "b": int64(20)},
+	}, got)
+}
+
 func TestParquetLogicalListOfMapsReconstructsOuterElements(t *testing.T) {
 	schema := parquet.NewSchema("x", parquet.Group{
 		"items": parquet.List(parquet.Map(parquet.String(), parquet.String())),

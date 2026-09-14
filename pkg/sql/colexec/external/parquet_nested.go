@@ -785,12 +785,16 @@ func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.
 	if len(values) == 0 {
 		return result, nil
 	}
-	if elementCol := logicalListElementColumn(col); elementCol != nil && !elementCol.Leaf() {
+	elementCol := listElementColumn(col)
+	if elementCol != nil && !elementCol.Leaf() {
 		return reconstructListOfNested(ctx, elementCol, values)
 	}
-	// Empty list case: single NULL value with low definition level
-	// This indicates an empty list, not a list with a NULL element
-	if len(values) == 1 && values[0].IsNull() && values[0].RepetitionLevel() == 0 {
+	// An empty list is represented by a NULL placeholder at the definition
+	// level immediately before the element becomes defined. An optional
+	// element has one additional definition level, so a NULL element must not
+	// be mistaken for the empty-list marker.
+	if len(values) == 1 && values[0].IsNull() && values[0].RepetitionLevel() == 0 &&
+		elementCol != nil && values[0].DefinitionLevel() == listEmptyDefinitionLevel(elementCol) {
 		return result, nil
 	}
 	for _, v := range values {
@@ -816,6 +820,28 @@ func logicalListElementColumn(col *parquet.Column) *parquet.Column {
 		return nil
 	}
 	return elements[0]
+}
+
+func listElementColumn(col *parquet.Column) *parquet.Column {
+	if elementCol := logicalListElementColumn(col); elementCol != nil {
+		return elementCol
+	}
+	if col == nil || !col.Repeated() || col.Name() != "list" {
+		return nil
+	}
+	children := col.Columns()
+	if len(children) != 1 {
+		return nil
+	}
+	return children[0]
+}
+
+func listEmptyDefinitionLevel(elementCol *parquet.Column) int {
+	level := elementCol.MaxDefinitionLevel() - 1
+	if elementCol.Optional() {
+		level--
+	}
+	return level
 }
 
 // reconstructMap reconstructs Map type
@@ -878,12 +904,6 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 
 	// Complex case: value is nested (List/Struct/Map)
 	if valueCol != nil && !valueCol.Leaf() {
-		valueStartIdx, valueEndIdx := getNestedColumnIndexRange(valueCol)
-		groupCap := valueEndIdx - valueStartIdx
-		if groupCap < 0 {
-			groupCap = 0
-		}
-
 		// Collect all keys. They are stored in one leaf column and therefore
 		// retain entry order even though the nested value leaves are column-major.
 		var keys []parquet.Value
@@ -916,26 +936,16 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 			return result, nil
 		}
 
-		// Group values by RepetitionLevel
-		// Rep=0 or Rep=1 starts a new map entry, Rep>=2 continues current entry
-		valueGroups := make([][]parquet.Value, 0)
-		currentGroup := make([]parquet.Value, 0, groupCap)
-
-		for _, v := range values {
-			colIdx := v.Column()
-			if colIdx >= valueStartIdx && colIdx < valueEndIdx {
-				rep := v.RepetitionLevel()
-				// Rep <= 1 means new map entry (0=new row, 1=new key_value)
-				if rep <= 1 && len(currentGroup) > 0 {
-					valueGroups = append(valueGroups, currentGroup)
-					currentGroup = make([]parquet.Value, 0, groupCap)
-				}
-				currentGroup = append(currentGroup, v)
-			}
-		}
-		if len(currentGroup) > 0 {
-			valueGroups = append(valueGroups, currentGroup)
-		}
+		// Group each leaf column independently before merging by entry ordinal.
+		// The first value in a column can have repetition level zero even when
+		// another leaf column already emitted values for the same map entry.
+		// Grouping the column-major stream as one sequence would split one
+		// nested value into multiple map entries.
+		valueGroups := groupNestedValuesByOuterRepetition(
+			valueCol,
+			collectLeafColumns(valueCol),
+			values,
+		)
 
 		for i, key := range keys {
 			if key.IsNull() {
