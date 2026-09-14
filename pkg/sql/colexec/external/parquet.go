@@ -3577,7 +3577,14 @@ func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process
 }
 
 func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vector.Vector, nc nullCheckInfo) error {
-	n := int(page.NumValues())
+	numRows := page.NumRows()
+	numValues := page.NumValues()
+	if numRows < 0 || numValues < 0 || numValues != numRows {
+		return moerr.NewInvalidInputf(proc.Ctx,
+			"malformed BOOLEAN page: NumValues() %d does not match NumRows() %d",
+			numValues, numRows)
+	}
+	n := int(numValues)
 	length := vec.Length()
 	if err := vec.PreExtend(n+length, proc.Mp()); err != nil {
 		return err

@@ -3101,6 +3101,15 @@ func (p *parquetPageWithDefinitionLevels) NumNulls() int64 {
 	return p.numNulls
 }
 
+type parquetPageWithNumValues struct {
+	parquet.Page
+	numValues int64
+}
+
+func (p *parquetPageWithNumValues) NumValues() int64 {
+	return p.numValues
+}
+
 func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Leaf(parquet.BooleanType)
@@ -3152,6 +3161,28 @@ func TestParquet_Plain_Bool_DefinitionLevelMismatch(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	require.Contains(t, err.Error(), "NumNulls() indicates")
+	require.Zero(t, vec.Length())
+}
+
+func TestParquet_Plain_Bool_ValueCountMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Leaf(parquet.BooleanType)
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+		{parquet.BooleanValue(false).Level(0, 0, 0)},
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	badPage := &parquetPageWithNumValues{Page: page, numValues: 2}
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NumValues() 2 does not match NumRows() 3")
 	require.Zero(t, vec.Length())
 }
 
