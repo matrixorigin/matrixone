@@ -4829,13 +4829,37 @@ func parquetDecodedPageSize(page parquet.Page) uint64 {
 		}
 		return size
 	}
-	for _, idx := range data.Int32() {
-		if idx < 0 || int(idx) >= dict.Len() {
+	indices := data.Int32()
+	dictLen := dict.Len()
+	if dictLen < 0 {
+		return fallback()
+	}
+	for _, idx := range indices {
+		if idx < 0 || int64(idx) >= int64(dictLen) {
 			return fallback()
 		}
-		size = addParquetBytes(size, uint64(len(dict.Index(idx).Bytes())))
 	}
-	return size
+	var width uint64
+	switch dictData.Kind() {
+	case encoding.Boolean:
+		width = 1
+	case encoding.Int32, encoding.Float:
+		width = 4
+	case encoding.Int64, encoding.Double:
+		width = 8
+	case encoding.Int96:
+		width = 12
+	default:
+		for _, idx := range indices {
+			size = addParquetBytes(size, uint64(len(dict.Index(idx).Bytes())))
+		}
+		return size
+	}
+	count := uint64(len(indices))
+	if width != 0 && count > ^uint64(0)/width {
+		return ^uint64(0)
+	}
+	return addParquetBytes(size, count*width)
 }
 
 func nextParquetBatchRows(currentRows, maxRows, currentBytes int, budget uint64) int {

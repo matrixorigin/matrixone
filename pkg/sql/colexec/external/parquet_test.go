@@ -3604,6 +3604,14 @@ func TestParquetDecodedPageSize_InvalidDictionaryIndexes(t *testing.T) {
 	})
 }
 
+func TestParquetDecodedPageSize_FixedWidthDictionary(t *testing.T) {
+	page := parquet.Int32Type.NewPage(0, 3, encoding.Int32Values([]int32{0, 1, 0}))
+	dict := parquet.Int32Type.NewDictionary(0, 2, encoding.Int32Values([]int32{10, 20}))
+	withDict := &parquetPageWithDictionary{Page: page, dictionary: dict}
+
+	require.Equal(t, uint64(12), parquetDecodedPageSize(withDict))
+}
+
 func TestParquetDecodedPageSize_InvalidDictionaryStringOffsets(t *testing.T) {
 	_, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
 		parquet.ByteArrayValue([]byte("value")),
