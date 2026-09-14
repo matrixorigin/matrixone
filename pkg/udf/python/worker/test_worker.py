@@ -201,6 +201,30 @@ class WorkerContractTest(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_definition_validation_rejects_handler_rebound_after_definition(self):
+        payload = complete_definition_validation_payload(
+            "def f(ctx, value): return value\n"
+            "f = 1\n"
+        )
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        try:
+            results = list(
+                server.do_action(
+                    None,
+                    flight.Action(
+                        "ValidatePythonDefinition",
+                        json.dumps(payload, separators=(",", ":")).encode(),
+                    ),
+                )
+            )
+            response = json.loads(bytes(results[0].body))
+            self.assertEqual("ERROR", response["status"])
+            self.assertIn("not a module-level function", response["reason"])
+            self.assertEqual({}, server._active)
+            self.assertEqual({}, server._terminal)
+        finally:
+            server.shutdown()
+
     def test_capability_advertises_worker_instance_lease(self):
         encoded = worker._encode_capabilities(
             {"protocol_version": worker.PROTOCOL_VERSION}, lease_epoch=17

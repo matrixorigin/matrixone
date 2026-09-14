@@ -918,20 +918,29 @@ def _validate_definition_syntax(value: Dict[str, Any]) -> None:
     tree = ast.parse(value["source"], filename="<matrixone-python-udf>", mode="exec")
     binding = None
     for node in tree.body:
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == handler:
-            raise ValueError("USER_CODE: Python handler must be synchronous")
-        if isinstance(node, ast.FunctionDef) and node.name == handler:
-            binding = node
-            break
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Lambda):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == handler:
+            # Continue scanning: a later module-level assignment can replace
+            # the function object that exec() will expose to the runtime.
+            binding = "async" if isinstance(node, ast.AsyncFunctionDef) else "sync"
+            continue
+        if isinstance(node, ast.ClassDef) and node.name == handler:
+            binding = "other"
+            continue
+        if isinstance(node, ast.Assign):
             if any(isinstance(target, ast.Name) and target.id == handler for target in node.targets):
-                binding = node
-                break
-        if isinstance(node, ast.AnnAssign) and isinstance(node.value, ast.Lambda):
+                binding = "lambda" if isinstance(node.value, ast.Lambda) else "other"
+                continue
+        if isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name) and node.target.id == handler:
-                binding = node
-                break
-    if binding is None:
+                binding = "lambda" if isinstance(node.value, ast.Lambda) else "other"
+                continue
+        if isinstance(node, ast.Delete):
+            if any(isinstance(target, ast.Name) and target.id == handler for target in node.targets):
+                binding = "other"
+                continue
+    if binding == "async":
+        raise ValueError("USER_CODE: Python handler must be synchronous")
+    if binding not in ("sync", "lambda"):
         raise ValueError(
             f"USER_CODE: Python handler {handler!r} is not a module-level function"
         )
