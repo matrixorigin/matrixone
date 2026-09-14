@@ -2445,6 +2445,9 @@ func processStringToFixed[T any](
 		if err := loader.initChecked(ctx, dict.Page().Data()); err != nil {
 			return err
 		}
+		if err := validateStringDataCount(ctx, &loader, int64(dict.Len())); err != nil {
+			return err
+		}
 		data := page.Data()
 		indices, err = parquetDictionaryIndexes(ctx, data)
 		if err != nil {
@@ -2541,6 +2544,9 @@ func processStringToJson(
 		if err := loader.initChecked(ctx, dict.Page().Data()); err != nil {
 			return err
 		}
+		if err := validateStringDataCount(ctx, &loader, int64(dict.Len())); err != nil {
+			return err
+		}
 		data := page.Data()
 		indices, err = parquetDictionaryIndexes(ctx, data)
 		if err != nil {
@@ -2626,6 +2632,9 @@ func processStringToArray[T types.ArrayElement](
 		}
 	} else {
 		if err := loader.initChecked(ctx, dict.Page().Data()); err != nil {
+			return err
+		}
+		if err := validateStringDataCount(ctx, &loader, int64(dict.Len())); err != nil {
 			return err
 		}
 		data := page.Data()

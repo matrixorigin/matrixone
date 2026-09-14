@@ -3449,6 +3449,37 @@ func TestParquet_Dictionary_String_ValueKindMismatch(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquet_Dictionary_StringMalformedOffsets(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
+		parquet.ByteArrayValue([]byte("1")),
+	})
+	badDictionary := parquet.String().Type().NewDictionary(0, 1,
+		encoding.ByteArrayValues([]byte("1"), []uint32{0, 2}))
+	badPage := &parquetPageWithDictionary{Page: page, dictionary: badDictionary}
+
+	cases := []struct {
+		name string
+		dt   plan.Type
+		vec  *vector.Vector
+	}{
+		{name: "fixed", dt: plan.Type{Id: int32(types.T_int32), NotNullable: true}, vec: vector.NewVec(types.T_int32.ToType())},
+		{name: "json", dt: plan.Type{Id: int32(types.T_json), NotNullable: true}, vec: vector.NewVec(types.T_json.ToType())},
+		{name: "array", dt: plan.Type{Id: int32(types.T_array_float32), Width: 1, NotNullable: true}, vec: vector.NewVec(types.New(types.T_array_float32, 1, 0))},
+	}
+	var h ParquetHandler
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := h.getMapper(f.Root().Column("c"), tc.dt)
+			require.NotNil(t, mp)
+			var err error
+			require.NotPanics(t, func() { err = mp.mapping(badPage, proc, tc.vec) })
+			require.ErrorContains(t, err, "exceeds buffer length")
+			require.Zero(t, tc.vec.Length())
+		})
+	}
+}
+
 func TestParquet_Plain_Numeric_ValueKindMismatch(t *testing.T) {
 	proc := testutil.NewProc(t)
 	f, page := writeColumnAndGetPage(t, parquet.Leaf(parquet.Int32Type), []parquet.Row{
