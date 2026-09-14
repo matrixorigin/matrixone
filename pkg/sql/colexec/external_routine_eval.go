@@ -205,18 +205,21 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 	if err != nil {
 		return nil, err
 	}
-	if rowCount == 0 {
-		if err := e.result.PreExtendAndReset(0); err != nil {
-			return nil, err
-		}
-		return e.result.GetResultVector(), nil
-	}
+	// Keep the row-domain contract strict even for an empty batch. Returning
+	// early before this check would let a stale selection mask cross the
+	// physical boundary and hide a relation-position bug in the caller.
 	if selectList != nil && len(selectList) != rowCount {
 		return nil, fmt.Errorf(
 			"external routine selection has %d rows, expected %d",
 			len(selectList),
 			rowCount,
 		)
+	}
+	if rowCount == 0 {
+		if err := e.result.PreExtendAndReset(0); err != nil {
+			return nil, err
+		}
+		return e.result.GetResultVector(), nil
 	}
 
 	if noRowsSelected(selectList, rowCount) {
