@@ -3608,6 +3608,27 @@ func TestParquet_StringFixedMappingRollsBackOnParseError(t *testing.T) {
 	require.Equal(t, []int32{99}, vector.MustFixedColWithTypeCheck[int32](vec))
 }
 
+func TestParquet_StringJsonMappingRollsBackOnParseError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
+		{parquet.ByteArrayValue([]byte(`{"seed":1}`)).Level(0, 0, 0)},
+		{parquet.ByteArrayValue([]byte(`not-json`)).Level(0, 0, 0)},
+	})
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_json), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.T_json.ToType())
+	seed, err := types.ParseStringToByteJson(`{"existing":true}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(vec, seed, false, proc.Mp()))
+
+	err = mp.mapping(page, proc, vec)
+	require.Error(t, err)
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, seed.String(), types.DecodeJson(vec.GetBytesAt(0)).String())
+}
+
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	// Reduce batch size so scan steps across multiple calls
 	save := maxParquetBatchCnt

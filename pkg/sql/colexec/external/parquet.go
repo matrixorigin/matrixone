@@ -2518,10 +2518,15 @@ func processStringToJson(
 	if err := vec.PreExtend(vec.Length()+numRows, proc.Mp()); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, numRows)
+		return err
+	}
 	for i := 0; i < numRows; i++ {
 		if nc.isNull(i) {
 			if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
-				return err
+				return rollback(err)
 			}
 			continue
 		}
@@ -2537,10 +2542,10 @@ func processStringToJson(
 
 		val, parseErr := types.ParseSliceToByteJson(bytes.TrimSpace(data))
 		if parseErr != nil {
-			return wrapParseError(ctx, i, parseErr)
+			return rollback(wrapParseError(ctx, i, parseErr))
 		}
 		if err := vector.AppendByteJson(vec, val, false, proc.Mp()); err != nil {
-			return err
+			return rollback(err)
 		}
 	}
 	return nil
