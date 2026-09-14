@@ -2925,6 +2925,10 @@ func processParquetValuesToFixed[T any](
 	zeroVal T,
 	convert func(parquet.Value) (T, error),
 ) error {
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
 	values, err := readParquetPageValues(ctx, page)
 	if err != nil {
 		return err
@@ -2938,7 +2942,10 @@ func processParquetValuesToFixed[T any](
 		return err
 	}
 	for i, v := range values {
-		if v.IsNull() {
+		if err := validateParquetValueNullness(ctx, nc, i, v); err != nil {
+			return rollback(err)
+		}
+		if parquetValueIsNull(nc, i) {
 			if !mp.dstNull {
 				return rollback(moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column"))
 			}
@@ -2966,6 +2973,10 @@ func processParquetValuesToBytes(
 	vec *vector.Vector,
 	convert func(parquet.Value) ([]byte, error),
 ) error {
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
 	values, err := readParquetPageValues(ctx, page)
 	if err != nil {
 		return err
@@ -2979,7 +2990,10 @@ func processParquetValuesToBytes(
 		return err
 	}
 	for i, v := range values {
-		if v.IsNull() {
+		if err := validateParquetValueNullness(ctx, nc, i, v); err != nil {
+			return rollback(err)
+		}
+		if parquetValueIsNull(nc, i) {
 			if !mp.dstNull {
 				return rollback(moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column"))
 			}
@@ -3007,6 +3021,10 @@ func processParquetValuesToJson(
 	vec *vector.Vector,
 	convert func(parquet.Value) (bytejson.ByteJson, error),
 ) error {
+	nc, err := prepareNullCheck(ctx, mp, page)
+	if err != nil {
+		return err
+	}
 	values, err := readParquetPageValues(ctx, page)
 	if err != nil {
 		return err
@@ -3020,7 +3038,10 @@ func processParquetValuesToJson(
 		return err
 	}
 	for i, v := range values {
-		if v.IsNull() {
+		if err := validateParquetValueNullness(ctx, nc, i, v); err != nil {
+			return rollback(err)
+		}
+		if parquetValueIsNull(nc, i) {
 			if !mp.dstNull {
 				return rollback(moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column"))
 			}
@@ -3036,6 +3057,19 @@ func processParquetValuesToJson(
 		if err := vector.AppendByteJson(vec, val, false, proc.Mp()); err != nil {
 			return rollback(err)
 		}
+	}
+	return nil
+}
+
+func parquetValueIsNull(nc nullCheckInfo, row int) bool {
+	return !nc.noNulls && nc.levels[row] != nc.maxDefinitionLevel
+}
+
+func validateParquetValueNullness(ctx context.Context, nc nullCheckInfo, row int, value parquet.Value) error {
+	if value.IsNull() != parquetValueIsNull(nc, row) {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet page: value NULL status disagrees with definition level at row %d",
+			row)
 	}
 	return nil
 }

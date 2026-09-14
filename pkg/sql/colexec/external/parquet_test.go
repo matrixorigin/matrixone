@@ -1071,6 +1071,26 @@ func TestParquetListMapperRejectsRepetitionLevelOverflow(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquetValueNullnessMustMatchDefinitionLevels(t *testing.T) {
+	proc := testutil.NewProc(t)
+	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquet.ValueReaderFunc(func(dst []parquet.Value) (int, error) {
+			dst[0] = parquet.NullValue().Level(0, 0, 0)
+			return 1, nil
+		}),
+	}
+	vec := vector.NewVec(types.T_int32.ToType())
+	err := processParquetValuesToFixed[int32](context.Background(),
+		&columnMapper{srcNull: false, dstNull: true}, badPage, proc, vec, 0,
+		func(v parquet.Value) (int32, error) { return v.Int32(), nil })
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "value NULL status disagrees")
+	require.Zero(t, vec.Length())
+}
+
 func TestParquetCrossTypeMappings(t *testing.T) {
 	proc := testutil.NewProc(t)
 	ctx := context.Background()
