@@ -27,6 +27,67 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestHexCatalogMigrationPreservesColumnMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
+	t.Cleanup(func() {
+		if present {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
+		}
+	})
+	for _, overload := range []int32{5, function.HexFloat64Overload} {
+		for _, wrapper := range []string{"default", "generated", "on_update"} {
+			t.Run(fmt.Sprintf("%s_%d", wrapper, overload), func(t *testing.T) {
+				expr := &pb.Expr{Typ: pb.Type{Id: int32(types.T_varchar)}, Expr: &pb.Expr_F{F: &pb.Function{
+					Func: &pb.ObjectRef{Obj: function.EncodeOverloadID(function.HEX, overload), ObjName: "hex"},
+					Args: []*pb.Expr{MakePlan2Float64ConstExprWithType(14.5)},
+				}}}
+				col := &pb.ColDef{ColId: 42, Name: "h", OriginName: "H", Typ: expr.Typ,
+					NotNull: true, LowCard: true, Headers: true, Header: "header-key",
+					Hidden: true, Comment: "keep", Seqnum: 7, ClusterBy: true, Primary: true,
+					Pkidx: 2, TblName: "t", DbName: "db", Unique: true, OriginTblName: "source"}
+				switch wrapper {
+				case "default":
+					col.Default = &pb.Default{Expr: expr, OriginString: "hex(x)", NullAbility: true}
+				case "generated":
+					col.GeneratedCol = &pb.GeneratedCol{Expr: expr, OriginString: "hex(x)", IsStored: true}
+				case "on_update":
+					col.OnUpdate = &pb.OnUpdate{Expr: expr, OriginString: "hex(x)"}
+				}
+				before, err := col.Marshal()
+				require.NoError(t, err)
+				// Build the independent expected value through protobuf, not the
+				// potentially incomplete copy helper under test.
+				want := new(pb.ColDef)
+				require.NoError(t, want.Unmarshal(before))
+				var wantExpr *pb.Expr
+				switch wrapper {
+				case "default":
+					wantExpr = want.Default.Expr
+				case "generated":
+					wantExpr = want.GeneratedCol.Expr
+				case "on_update":
+					wantExpr = want.OnUpdate.Expr
+				}
+				wantExpr.GetF().Func.Obj = function.EncodeOverloadID(function.HEX, function.HexFloat64Overload)
+				catalog := &pb.TableDef{Cols: []*pb.ColDef{col}}
+				owned := CloneTableDefForPlan(catalog, true)
+				for range 2 {
+					require.NoError(t, MigrateLegacyHexTableDef(proc, owned))
+					require.Equal(t, want, owned.Cols[0], "only the target overload may change")
+					after, err := col.Marshal()
+					require.NoError(t, err)
+					require.Equal(t, before, after, "catalog must remain unchanged")
+				}
+			})
+		}
+	}
+}
+
 func TestHexCatalogMigrationOwnsAllExpressionWrappers(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())

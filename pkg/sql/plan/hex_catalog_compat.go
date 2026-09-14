@@ -57,12 +57,28 @@ func MigrateLegacyHexTableDef(proc *process.Process, tableDef *plan.TableDef) er
 		if col == nil {
 			continue
 		}
-		// Resolver clones share ColDef, wrappers and expression trees. Detach
-		// the entire affected column before any recursive overload rewrite.
+		// Preserve the complete column value (including schema metadata), and
+		// detach only wrappers and expression trees before overload rewrites.
 		if exprContainsHexOverload(col.GetGeneratedCol().GetExpr(), 0) ||
 			exprContainsHexOverload(col.GetOnUpdate().GetExpr(), 0) ||
 			exprContainsHexOverload(col.GetDefault().GetExpr(), 0) {
-			col = DeepCopyColDef(col)
+			owned := *col
+			if col.Default != nil {
+				def := *col.Default
+				def.Expr = DeepCopyExpr(def.Expr)
+				owned.Default = &def
+			}
+			if col.OnUpdate != nil {
+				update := *col.OnUpdate
+				update.Expr = DeepCopyExpr(update.Expr)
+				owned.OnUpdate = &update
+			}
+			if col.GeneratedCol != nil {
+				generated := *col.GeneratedCol
+				generated.Expr = DeepCopyExpr(generated.Expr)
+				owned.GeneratedCol = &generated
+			}
+			col = &owned
 			tableDef.Cols[i] = col
 		}
 		if col.GeneratedCol != nil {
