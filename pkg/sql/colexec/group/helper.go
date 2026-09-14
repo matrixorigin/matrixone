@@ -1854,6 +1854,7 @@ func (ctr *container) makeAggListWithAllocation(
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
+		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
 		// mtyp is the logical Group mode and survives resident-spill resets.
 		// Preserve it in each rebuilt GROUP_CONCAT executor even when the
 		// current spill bucket contains only one group.
