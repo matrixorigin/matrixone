@@ -5,6 +5,12 @@ ranges, probe dispatch, and the optimizer rule wired into `applyIndices`
 (`addJSONFulltextProbes`). Covered by BVT `fulltext2_json_probe.sql` and the
 rewritten json section of `fulltext2_parser.sql`. §7 lists what remains.
 
+Approved-by: cpegeric — the runtime redesign in this revision (self-completing
+json probe: probe dispatch, coverage/`build_ts` gating, and the `applyIndices`
+rewrite) is reviewed and approved for implementation. This approval covers the
+revised design as it stands here and supersedes any approval that predated the
+redesign.
+
 ## 1. Where we are today
 
 Three facts from the current tree drive the whole design.
