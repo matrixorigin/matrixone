@@ -3068,6 +3068,54 @@ func (p *parquetPageWithData) Data() encoding.Values {
 	return p.data
 }
 
+type parquetPageWithValues struct {
+	parquet.Page
+	values parquet.ValueReader
+}
+
+func (p *parquetPageWithValues) Values() parquet.ValueReader {
+	return p.values
+}
+
+type parquetBooleanReaderFunc func([]bool) (int, error)
+
+func (f parquetBooleanReaderFunc) ReadBooleans(values []bool) (int, error) {
+	return f(values)
+}
+
+func (f parquetBooleanReaderFunc) ReadValues([]parquet.Value) (int, error) {
+	return 0, io.EOF
+}
+
+func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Leaf(parquet.BooleanType)
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+		{parquet.BooleanValue(false).Level(0, 0, 0)},
+		{parquet.BooleanValue(true).Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	require.NoError(t, vector.AppendFixed(vec, true, false, proc.Mp()))
+
+	badPage := &parquetPageWithValues{
+		Page: page,
+		values: parquetBooleanReaderFunc(func(values []bool) (int, error) {
+			values[0] = false
+			return 1, io.EOF
+		}),
+	}
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "short read bool")
+	require.Equal(t, []bool{true}, vector.MustFixedColWithTypeCheck[bool](vec))
+}
+
 func TestParquet_Dictionary_Bool_IndexError(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary)

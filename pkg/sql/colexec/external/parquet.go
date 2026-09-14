@@ -3564,9 +3564,14 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 	if err := vec.PreExtend(n+length, proc.Mp()); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
 	vec.SetLength(n + length)
 	ret := vector.MustFixedColWithTypeCheck[bool](vec)
 	reader := page.Values()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, n)
+		return err
+	}
 	if !nc.noNulls {
 		nulls.TryExpand(vec.GetNulls(), n+length)
 	}
@@ -3578,10 +3583,10 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 		if booleanReader, ok := reader.(parquet.BooleanReader); ok {
 			read, err := booleanReader.ReadBooleans(ret[length : length+n])
 			if err != nil && !errors.Is(err, io.EOF) {
-				return moerr.ConvertGoError(proc.Ctx, err)
+				return rollback(moerr.ConvertGoError(proc.Ctx, err))
 			}
 			if read != n {
-				return moerr.NewInternalError(proc.Ctx, "short read bool")
+				return rollback(moerr.NewInternalError(proc.Ctx, "short read bool"))
 			}
 			return nil
 		}
@@ -3600,10 +3605,10 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 		}
 		read, err := reader.ReadValues(values[:want])
 		if err != nil && !errors.Is(err, io.EOF) {
-			return moerr.ConvertGoError(proc.Ctx, err)
+			return rollback(moerr.ConvertGoError(proc.Ctx, err))
 		}
 		if read != want {
-			return moerr.NewInternalError(proc.Ctx, "short read bool")
+			return rollback(moerr.NewInternalError(proc.Ctx, "short read bool"))
 		}
 		for i := 0; i < read; i++ {
 			v := values[i]
