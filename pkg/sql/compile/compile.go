@@ -7003,7 +7003,11 @@ func (c *Compile) compilePostDml(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
-	if node.Limit != nil && c.supportsRemotePartitionTopN() {
+	partitionTopNSupported := c.supportsRemotePartitionTopN()
+	if node.PartitionTopNWithTies {
+		partitionTopNSupported = c.supportsRemotePartitionTopNWithTies()
+	}
+	if node.Limit != nil && partitionTopNSupported {
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			op := constructPartition(node)
@@ -7056,6 +7060,7 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 		arg.OrderBySpecs = node.OrderBy[:node.PartitionByCount]
 		arg.Limit = nil
 		arg.PartitionByCount = 0
+		arg.WithTies = false
 	}
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
@@ -7860,6 +7865,16 @@ func (c *Compile) supportsRemotePartitionTopN() bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion19
+}
+
+func (c *Compile) supportsRemotePartitionTopNWithTies() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion69
 }
 
 func (c *Compile) supportsRemoteHashPartition() bool {
