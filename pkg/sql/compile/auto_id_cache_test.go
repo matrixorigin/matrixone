@@ -45,7 +45,7 @@ func installAutoIDCacheTestService(t *testing.T, proc *process.Process, enabled 
 		if hadVersion {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion67)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
 		}
 		svc.Close()
 	})
@@ -73,7 +73,7 @@ func TestAutoIDCacheDDLRejectsBeforeMetadataWork(t *testing.T) {
 func TestAutoIDCacheRemoteWireGate(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := installAutoIDCacheTestService(t, proc, true)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion67)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
 	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
 	op := &preinsert.PreInsert{HasAutoCol: true, TableDef: &plan.TableDef{Name: "t", AutoIdCache: 1}}
 	_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
@@ -97,14 +97,14 @@ func TestAutoIDCacheRemoteWireGate(t *testing.T) {
 	_, _, err = convertToPipelineInstruction(op, nil, ctx, 1)
 	require.ErrorContains(t, err, "requires a process")
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion66)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion68)
 	_, _, err = convertToPipelineInstruction(op, proc, ctx, 1)
-	require.ErrorContains(t, err, "version 67")
+	require.ErrorContains(t, err, "version 69")
 	wire, err = p.Marshal()
 	require.NoError(t, err)
 	_, err = decodeScope(wire, proc, true, nil)
-	require.ErrorContains(t, err, "version 67")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion67)
+	require.ErrorContains(t, err, "version 69")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
 	installAutoIDCacheTestService(t, proc, false)
 	_, err = decodeScope(wire, proc, true, nil)
 	require.ErrorContains(t, err, "AUTO_ID_CACHE is disabled")

@@ -427,6 +427,117 @@ func TestPreparedMaxByRuntimeTypeReachesResultProjection(t *testing.T) {
 	}
 }
 
+func TestPreparedBitwiseAggregateScansForRuntimeSpecialization(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select bit_and(?) from nation")
+	aggregate := findPlanFunctionExpr(prepare.Plan, "bit_and")
+	require.NotNil(t, aggregate)
+	require.Len(t, aggregate.GetF().Args, 1)
+	privateCast := aggregate.GetF().Args[0]
+	require.True(t, isBitwiseAggregatePrivateCast(privateCast))
+	require.False(t, isExplicitPreparedCast(privateCast))
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
+}
+
+func TestPreparedBitwiseAggregateRebindsChangedValueWithinSameDomain(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t, "select bit_and(?) from nation")
+	require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepare.Plan))
+	decimalType := types.New(types.T_decimal64, 2, 1)
+
+	for _, test := range []struct {
+		value string
+		want  int64
+	}{{value: "2.5", want: 25}, {value: "4.0", want: 40}} {
+		filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+			context.Background(),
+			prepare.Plan,
+			[]any{ParamValue{
+				Value: test.value, SourceType: decimalType, HasSourceType: true,
+				RetainParamRef: true,
+			}},
+		)
+		require.NoError(t, err)
+		require.True(t, specialized)
+
+		aggregate := findPlanFunctionExpr(filled, "bit_and")
+		require.NotNil(t, aggregate)
+		require.Len(t, aggregate.GetF().Args, 1)
+		aggregateCast := aggregate.GetF().Args[0]
+		require.True(t, isBitwiseAggregatePrivateCast(aggregateCast))
+		source := aggregateCast.GetF().Args[0]
+		require.Equal(t, int32(types.T_decimal64), source.Typ.Id)
+		require.Equal(t, test.want, source.GetLit().GetDecimal64Val().A)
+		sourceRef := source.GetLit().GetSrc()
+		require.NotNil(t, sourceRef)
+		require.NotNil(t, sourceRef.GetP())
+		require.Equal(t, int32(0), sourceRef.GetP().GetPos())
+	}
+}
+
+func TestPreparedBitwiseAggregateProjectionRefreshPreservesPrivateCast(t *testing.T) {
+	prepare := buildPreparedAggregatePlan(t,
+		"select bit_and(v) from (select max(?) as v from nation) d")
+	preparedAggregate := findPlanFunctionExpr(prepare.Plan, "bit_and")
+	require.NotNil(t, preparedAggregate)
+	require.Len(t, preparedAggregate.GetF().Args, 1)
+	preparedCast := preparedAggregate.GetF().Args[0]
+	require.True(t, isBitwiseAggregatePrivateCast(preparedCast))
+	require.NotNil(t, preparedCast.GetF().Args[0].GetCol(), preparedCast.String())
+
+	for _, test := range []struct {
+		name        string
+		value       any
+		sourceType  types.Type
+		isBinary    bool
+		wantPrivate bool
+		wantSource  types.T
+	}{
+		{
+			name:        "DECIMAL64 fractional input keeps numeric conversion",
+			value:       "2.5",
+			sourceType:  types.New(types.T_decimal64, 2, 1),
+			wantPrivate: true,
+			wantSource:  types.T_decimal64,
+		},
+		{
+			name:        "DECIMAL128 keeps unsigned numeric conversion",
+			value:       "9223372036854775808",
+			sourceType:  types.New(types.T_decimal128, 20, 0),
+			wantPrivate: true,
+			wantSource:  types.T_decimal128,
+		},
+		{
+			name:       "VARBINARY returns to native byte semantics",
+			value:      []byte{0x02},
+			sourceType: types.New(types.T_varbinary, 1, 0),
+			isBinary:   true,
+			wantSource: types.T_varbinary,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepare.Plan, []any{ParamValue{
+					Value: test.value, SourceType: test.sourceType, HasSourceType: true,
+					IsBin: test.isBinary, RetainParamRef: true,
+				}},
+			)
+			require.NoError(t, err)
+			require.True(t, specialized)
+
+			filledAggregate := findPlanFunctionExpr(filled, "bit_and")
+			require.NotNil(t, filledAggregate)
+			require.Len(t, filledAggregate.GetF().Args, 1)
+			aggregateArg := filledAggregate.GetF().Args[0]
+			require.Equal(t, test.wantPrivate,
+				isBitwiseAggregatePrivateCast(aggregateArg), aggregateArg.String())
+			if test.wantPrivate {
+				require.Equal(t, int32(types.T_int64), aggregateArg.Typ.Id)
+				aggregateArg = aggregateArg.GetF().Args[0]
+			}
+			require.Equal(t, int32(test.wantSource), aggregateArg.Typ.Id)
+		})
+	}
+}
+
 func TestPreparedRuntimeSpecializationCoversResultDomainAggregates(t *testing.T) {
 	for _, name := range []string{
 		"min", "max", "any_value", "max_by", "max_by_non_null",

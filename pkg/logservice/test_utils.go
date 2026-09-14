@@ -111,8 +111,7 @@ func probeTestPortAddress(addr string) error {
 	return probeTestPortAddressWithListeners(addr, net.Listen, net.ListenPacket)
 }
 
-func probeTestPortAddressWithListeners(
-	addr string,
+func probeTestPortAddressWithListeners(addr string,
 	listen func(string, string) (net.Listener, error),
 	listenPacket func(string, string) (net.PacketConn, error),
 ) error {

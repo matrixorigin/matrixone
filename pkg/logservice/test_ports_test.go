@@ -64,32 +64,6 @@ func TestTestPortAllocation(t *testing.T) {
 	}
 }
 
-type probeCloseListener struct {
-	net.Listener
-	closed bool
-}
-
-func (l *probeCloseListener) Close() error {
-	l.closed = true
-	return nil
-}
-
-func TestProbeTestPortClosesTCPOnUDPFailure(t *testing.T) {
-	listener := &probeCloseListener{}
-	err := probeTestPortAddressWithListeners("127.0.0.1:1234",
-		func(network, address string) (net.Listener, error) {
-			require.Equal(t, "tcp4", network)
-			return listener, nil
-		},
-		func(network, address string) (net.PacketConn, error) {
-			require.Equal(t, "udp4", network)
-			require.False(t, listener.closed)
-			return nil, syscall.EADDRINUSE
-		})
-	require.ErrorIs(t, err, syscall.EADDRINUSE)
-	require.True(t, listener.closed)
-}
-
 func TestProbeTestPortRejectsOccupiedSockets(t *testing.T) {
 	t.Run("tcp", func(t *testing.T) {
 		listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -101,11 +75,33 @@ func TestProbeTestPortRejectsOccupiedSockets(t *testing.T) {
 		listener, port := listenUDPOnTCPAvailablePort(t)
 		defer listener.Close()
 		require.ErrorIs(t, probeTestPort(port), syscall.EADDRINUSE)
-		// A UDP-owned port does not imply that its TCP counterpart is free.
-		// Cleanup is checked separately without racing another process's bind.
+	})
+	t.Run("udp failure closes tcp", func(t *testing.T) {
+		// A UDP-selected ephemeral port may already be occupied by unrelated
+		// TCP traffic. Prove cleanup directly, not by racing to rebind it.
+		tcp := &portProbeCloseTracker{}
+		err := probeTestPortAddressWithListeners("test-address",
+			func(network, addr string) (net.Listener, error) {
+				require.Equal(t, "tcp4", network)
+				require.Equal(t, "test-address", addr)
+				return tcp, nil
+			},
+			func(network, addr string) (net.PacketConn, error) {
+				require.Equal(t, "udp4", network)
+				require.Equal(t, "test-address", addr)
+				return nil, syscall.EADDRINUSE
+			})
+		require.ErrorIs(t, err, syscall.EADDRINUSE)
+		require.Equal(t, 1, tcp.closes)
 	})
 }
 
+type portProbeCloseTracker struct {
+	net.Listener
+	closes int
+}
+
+func (l *portProbeCloseTracker) Close() error { l.closes++; return nil }
 func listenUDPOnTCPAvailablePort(t *testing.T) (net.PacketConn, int) {
 	t.Helper()
 	for range maxPortAllocationAttempts {
