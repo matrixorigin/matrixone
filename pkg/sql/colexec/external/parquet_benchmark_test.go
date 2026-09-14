@@ -24,7 +24,7 @@ func benchmarkParquetBoolPage(b *testing.B, dictionary, nullable bool) (parquet.
 		node = parquet.Optional(node)
 	}
 	schema := parquet.NewSchema("x", parquet.Group{"c": node})
-	w := parquet.NewWriter(&buf, schema)
+	w := parquet.NewWriter(&buf, schema, parquet.PageBufferSize(8<<20))
 	rows := make([]parquet.Row, rowsCount)
 	for i := range rows {
 		v := parquet.BooleanValue(i&1 == 0)
@@ -62,6 +62,12 @@ func benchmarkParquetBoolPage(b *testing.B, dictionary, nullable bool) (parquet.
 	if (page.Dictionary() != nil) != dictionary {
 		b.Fatalf("dictionary=%t, page dictionary=%t", dictionary, page.Dictionary() != nil)
 	}
+	if page.NumRows() != rowsCount {
+		b.Fatalf("benchmark page has %d rows, expected %d", page.NumRows(), rowsCount)
+	}
+	if page.Size() <= 0 {
+		b.Fatalf("benchmark page has invalid encoded size %d", page.Size())
+	}
 	proc := testutil.NewProc(b)
 	var h ParquetHandler
 	mp := h.getMapper(col, plan.Type{Id: int32(types.T_bool), NotNullable: !nullable})
@@ -87,7 +93,7 @@ func BenchmarkParquetDictionaryBoolMapping(b *testing.B) {
 			defer proc.Free()
 			vec := vector.NewVec(types.New(types.T_bool, 0, 0))
 			defer vec.Free(proc.Mp())
-			b.SetBytes(page.NumRows())
+			b.SetBytes(page.Size())
 			b.ReportMetric(float64(page.NumRows()), "rows/op")
 			b.ReportAllocs()
 			b.ResetTimer()
