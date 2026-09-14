@@ -1838,6 +1838,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	oldHighNotPrecedence := false
 	oldNoUnsignedSubtraction := false
 	oldParserFlags := mysql.SQLModeFlags(0)
+	oldIgnoreSpace := false
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
@@ -1845,6 +1846,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		oldHighNotPrecedence = ses.sqlModeHasHighNotPrecedence()
 		oldNoUnsignedSubtraction = ses.sqlModeHasNoUnsignedSubtraction()
 		oldParserFlags = ses.sqlModeParserFlags()
+		oldIgnoreSpace = ses.sqlModeHasIgnoreSpace()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1907,7 +1909,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction, oldParserFlags, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction, oldParserFlags, oldIgnoreSpace, val)
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {

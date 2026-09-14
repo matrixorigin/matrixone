@@ -217,13 +217,22 @@ exit 0
 
 func TestUTHeartbeatStopsCleanly(t *testing.T) {
 	script := `source ./run_ut.sh UT
-function logger() { printf "%s\n" "$2" >> "$CASE_DIR/ut.log"; }
+mkfifo "$CASE_DIR/heartbeat-ready"
+exec 9<> "$CASE_DIR/heartbeat-ready"
+function logger() {
+    printf "%s\n" "$2" >> "$CASE_DIR/ut.log"
+    if [[ "$2" == *active_cases=2* && "$2" == *TestPrivate* && "$2" == *TestShard* ]]; then
+        printf 'ready\n' >&9
+    fi
+}
 UT_HEARTBEAT_INTERVAL=60
 start_ut_heartbeat
-before=$(date +%s)
+heartbeat_pid="$UT_HEARTBEAT_PID"
 stop_ut_heartbeat
-after=$(date +%s)
-[[ $((after - before)) -lt 3 ]] || exit 90
+# The enclosing harness deadline is shorter than this 60-second interval.
+# Completion proves cancellation without making host scheduling speed an oracle.
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 90
+! kill -0 "$heartbeat_pid" 2>/dev/null || exit 90
 
 UT_HEARTBEAT_INTERVAL=1
 start_ut_heartbeat
@@ -234,8 +243,9 @@ EOF
 cat > "$G_WKSP/${G_TS}-engine-race-report.out.1" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/engine","Test":"TestShard"}
 EOF
-sleep 2
+read -r -t 10 heartbeat_ready <&9 || exit 92
 stop_ut_heartbeat
+exec 9>&-
 [[ -z "$UT_HEARTBEAT_PID" ]] || exit 91
 grep -q 'event=heartbeat' "$UT_CHECKPOINT"
 grep -q 'active_cases=2' "$CASE_DIR/ut.log"

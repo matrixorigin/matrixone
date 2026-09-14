@@ -128,6 +128,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if err = validateStrictWriteDestination(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateGroupConcatTimeZoneDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -2096,8 +2099,8 @@ func validateRemoteExpressionPipelineProtocol(
 			"typed BIN/CONV execution requires MORPC protocol version 64",
 		)
 	}
-	if features.IntegerArithmeticDomains && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion68) {
-		return moerr.NewNotSupportedNoCtx("checked integer arithmetic requires MORPC protocol version 68")
+	if features.IntegerArithmeticDomains && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion69) {
+		return moerr.NewNotSupportedNoCtx("checked integer arithmetic requires MORPC protocol version 69")
 	}
 	if features.ASCIIInt32Result &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion65) {
