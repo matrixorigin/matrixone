@@ -24,15 +24,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func (c *Compile) constrainIntegerDomainWorkers(qry *plan.Query) error {
+func (c *Compile) constrainConvBasesWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
 	}
 	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || !features.IntegerArithmeticDomains {
+	if err != nil || !features.RowDependentConvBases {
 		return err
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion71)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion70)
 	if err != nil {
 		return err
 	}
@@ -43,16 +43,16 @@ func (c *Compile) constrainIntegerDomainWorkers(qry *plan.Query) error {
 	c.cnList, err = c.scheduleQueryWorkers()
 	return err
 }
-func validateIntegerDomainDestination(proc *process.Process, p *pipeline.Pipeline) error {
+func validateConvBasesDestination(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil || p.Node == nil {
-		return moerr.NewNotSupportedNoCtx("checked integer arithmetic requires a versioned remote destination")
+		return moerr.NewNotSupportedNoCtx("row-dependent CONV bases requires a versioned remote destination")
 	}
-	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion71)
+	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion70)
 	if err != nil {
 		return err
 	}
 	if !supported {
-		return moerr.NewNotSupportedNoCtx("remote destination does not support checked integer arithmetic (MORPC version 71)")
+		return moerr.NewNotSupportedNoCtx("remote destination does not support row-dependent CONV bases (MORPC version 70)")
 	}
 	return nil
 }

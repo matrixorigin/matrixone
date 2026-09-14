@@ -32,13 +32,25 @@ import (
 func TestIntegerArithmeticNegotiatesWorkerVersionAndFencesSender(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	ctx := function.WithNoUnsignedSubtraction(context.Background(), true)
+	convExpr, err := plan2.BindFuncExprImplByPlanExpr(ctx, "conv", []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}},
+		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 3}}},
+		plan2.MakePlan2Int64ConstExprWithType(10),
+	})
+	require.NoError(t, err)
 	for _, name := range []string{"+", "-", "*"} {
 		expr, err := plan2.BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
 			{Typ: planpb.Type{Id: int32(types.T_uint64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
 			{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}})
 		require.NoError(t, err)
-		qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
-		client.version = defines.MORPCVersion69
+		// Main's row-dependent CONV capability and this PR's arithmetic can
+		// coexist in one pipeline; the stronger arithmetic gate must still win.
+		qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr, convExpr}}}, Steps: []int32{0}}
+		features, err := planpb.RequiredRemoteExpressionFeatures(qry)
+		require.NoError(t, err)
+		require.True(t, features.RowDependentConvBases)
+		require.True(t, features.IntegerArithmeticDomains)
+		client.version = defines.MORPCVersion70
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainIntegerDomainWorkers(qry))
@@ -53,7 +65,7 @@ func TestIntegerArithmeticNegotiatesWorkerVersionAndFencesSender(t *testing.T) {
 		scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: value_scan.NewArgument(), Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: qry}}}
 		_, err = encodeRemoteScope(scope, c.proc)
 		require.ErrorContains(t, err, "remote destination")
-		client.version = defines.MORPCVersion70
+		client.version = defines.MORPCVersion71
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainIntegerDomainWorkers(qry))
@@ -63,10 +75,10 @@ func TestIntegerArithmeticNegotiatesWorkerVersionAndFencesSender(t *testing.T) {
 		wire := new(pipeline.Pipeline)
 		require.NoError(t, wire.Unmarshal(data))
 		rt := moruntime.ServiceRuntime(c.proc.GetService())
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 70")
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
-		client.version = defines.MORPCVersion69
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 71")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion71)
+		client.version = defines.MORPCVersion70
 		_, err = encodeRemoteScope(scope, c.proc)
 		require.Error(t, err)
 	}

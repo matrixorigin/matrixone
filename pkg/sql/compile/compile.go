@@ -1429,6 +1429,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainIntegerDomainWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.constrainConvBasesWorkers(qry); err != nil {
+		return nil, err
+	}
 	if err = c.constrainStrictWriteWorkers(); err != nil {
 		return nil, err
 	}
