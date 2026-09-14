@@ -1578,6 +1578,18 @@ class WorkerContractTest(unittest.TestCase):
             if session._slot_acquired:
                 slots.release()
 
+    @unittest.skipUnless(os.name == "posix", "process-group cleanup fallback")
+    def test_process_cleanup_falls_back_to_owned_leader_on_group_permission_error(self):
+        process = mock.Mock(pid=1234)
+        process.poll.return_value = None
+        process.wait.return_value = 0
+
+        with mock.patch.object(worker.os, "killpg", side_effect=PermissionError):
+            worker._kill_execution_process(process)
+
+        process.kill.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=1.0)
+
     def test_handler_close_retains_process_for_a_later_cleanup_retry(self):
         session = object.__new__(worker._HandlerProcessSession)
         session._slots = threading.BoundedSemaphore(1)
