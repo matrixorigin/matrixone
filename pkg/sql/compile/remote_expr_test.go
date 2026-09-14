@@ -1153,7 +1153,7 @@ func TestViewDefinitionRemoteProtocolValidationAtPrepareSendAndReceiveBoundaries
 		if hadPrevious {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion66)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion67)
 		}
 	})
 
@@ -1188,7 +1188,7 @@ func TestViewDefinitionRemoteProtocolValidationAtPrepareSendAndReceiveBoundaries
 		ProjectList: []*plan.Expr{viewCheckOption},
 	}}}
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion67)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion68)
 	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithFunction))
 	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithCheckOption))
 
@@ -1202,27 +1202,27 @@ func TestViewDefinitionRemoteProtocolValidationAtPrepareSendAndReceiveBoundaries
 	_, err = encodeScope(prepared)
 	require.NoError(t, err)
 
-	// v66 is the immediate predecessor after the main-branch rebase; it
-	// supports the main GROUP_CONCAT contract but not these new function IDs.
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion66)
+	// v67 is the immediate predecessor after the main-branch rebase; it
+	// supports the main named-process-timezone contract but not these new function IDs.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion67)
 	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, &pipeline.Pipeline{}))
 	require.ErrorContains(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithFunction),
-		"requires MORPC protocol version 67")
+		"requires MORPC protocol version 68")
 	require.ErrorContains(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithCheckOption),
-		"requires MORPC protocol version 67")
+		"requires MORPC protocol version 68")
 	_, err = encodeRemoteScope(prepared, proc)
-	require.ErrorContains(t, err, "requires MORPC protocol version 67")
+	require.ErrorContains(t, err, "requires MORPC protocol version 68")
 	_, err = encodeScope(prepared)
-	require.ErrorContains(t, err, "requires MORPC protocol version 67")
+	require.ErrorContains(t, err, "requires MORPC protocol version 68")
 	_, err = decodeScope(data, proc, true, nil)
-	require.ErrorContains(t, err, "requires MORPC protocol version 67")
+	require.ErrorContains(t, err, "requires MORPC protocol version 68")
 }
 
-func TestViewDefinitionRemoteProtocolValidationV67FastPathIsAllocationFree(t *testing.T) {
+func TestViewDefinitionRemoteProtocolValidationV68FastPathIsAllocationFree(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion67)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion68)
 
 	// A large ordinary pipeline makes an accidental reflective traversal visible.
 	ordinary := &pipeline.Pipeline{InstructionList: make([]*pipeline.Instruction, 1_000)}
