@@ -1601,9 +1601,14 @@ def _validate_array_values(array: pa.Array, descriptor: Dict[str, Any]) -> None:
         struct = array
         for index in range(len(struct)):
             if not struct[index].is_valid: continue
-            is_zero = bool(struct.field("is_zero")[index].as_py())
-            value = struct.field("value")[index].as_py()
-            if value is None: raise ValueError("TYPE_CONTRACT: temporal child is null")
+            is_zero_scalar = struct.field("is_zero")[index]
+            value_scalar = struct.field("value")[index]
+            if not is_zero_scalar.is_valid:
+                raise ValueError("TYPE_CONTRACT: temporal zero flag is null")
+            if not value_scalar.is_valid:
+                raise ValueError("TYPE_CONTRACT: temporal child is null")
+            is_zero = bool(is_zero_scalar.as_py())
+            value = value_scalar.as_py()
             if is_zero and ((type_id == DATE and value != _datetime.date(1970, 1, 1)) or (type_id == DATETIME and value != _datetime.datetime(1970, 1, 1)) or (type_id == TIMESTAMP and value != _datetime.datetime(1970, 1, 1, tzinfo=_datetime.timezone.utc))):
                 raise ValueError("TYPE_CONTRACT: temporal zero placeholder is invalid")
             if not is_zero:
