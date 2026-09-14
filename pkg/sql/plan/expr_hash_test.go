@@ -671,6 +671,46 @@ func TestApplyDistributivityFindsJoinKeyBesideTernaryPredicate(t *testing.T) {
 	require.Equal(t, "or", conjuncts[1].GetF().Func.ObjName)
 }
 
+func TestApplyDistributivityFactorsSafeSubsetOfCommonPredicates(t *testing.T) {
+	ctx := context.Background()
+	intType := planpb.Type{Id: int32(types.T_int64)}
+	boolType := planpb.Type{Id: int32(types.T_bool)}
+	col := func(rel, pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: intType, Expr: &planpb.Expr_Col{
+			Col: &planpb.ColRef{RelPos: rel, ColPos: pos},
+		}}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+
+	joinKey := bind("=", col(0, 0), col(1, 0))
+	fallible := &planpb.Expr{Typ: boolType, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "fallible_test_predicate"},
+		Args: []*planpb.Expr{col(1, 1)},
+	}}}
+	leftOnly := bind("=", col(0, 2), col(1, 2))
+	rightOnly := bind("=", col(0, 3), col(1, 3))
+	orExpr := bind("or",
+		bind("and", bind("and", DeepCopyExpr(joinKey), DeepCopyExpr(fallible)), leftOnly),
+		bind("and", bind("and", DeepCopyExpr(joinKey), DeepCopyExpr(fallible)), rightOnly))
+
+	result := applyDistributivity(ctx, orExpr)
+	conjuncts := splitPlanConjunction(result)
+	require.Len(t, conjuncts, 2)
+	require.True(t, exprStructuralEqual(joinKey, conjuncts[0]),
+		"a fallible common predicate must not hide an independent safe join key")
+	require.Equal(t, "or", conjuncts[1].GetF().Func.ObjName)
+	for _, branch := range conjuncts[1].GetF().Args {
+		branchConds := splitPlanConjunction(branch)
+		require.Len(t, branchConds, 2)
+		require.True(t, exprStructuralEqual(fallible, branchConds[0]),
+			"the unfactored predicate must remain in every residual branch")
+	}
+}
+
 func TestApplyDistributivityFactorsCommonWideningCharPredicate(t *testing.T) {
 	ctx := context.Background()
 	intType := planpb.Type{Id: int32(types.T_int64)}

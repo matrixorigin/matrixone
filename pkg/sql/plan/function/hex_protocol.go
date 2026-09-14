@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	// HexMySQLNumericOverloadStart separates the pre-MORPCVersion69 HEX
+	// HexMySQLNumericOverloadStart separates the pre-MORPCVersion70 HEX
 	// identities from corrected numeric identities. Keep IDs 0..7 and their
 	// executors stable for plans compiled by older versions.
 	HexMySQLNumericOverloadStart = 8
@@ -31,7 +31,7 @@ const (
 )
 
 // MigrateLegacyHexOverload upgrades one persisted HEX expression after every CN
-// supports MORPCVersion69. Callers supply an execution-owned TableDef copy;
+// supports MORPCVersion70. Callers supply an execution-owned TableDef copy;
 // catalog protobufs remain unchanged.
 func MigrateLegacyHexOverload(expr *plan.Expr) {
 	fn := expr.GetF()

@@ -31,12 +31,12 @@ func TestHexCatalogMigrationPreservesColumnMetadata(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
 	t.Cleanup(func() {
 		if present {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
 		}
 	})
 	for _, overload := range []int32{5, function.HexFloat64Overload} {
@@ -92,12 +92,12 @@ func TestHexCatalogMigrationOwnsAllExpressionWrappers(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
 	t.Cleanup(func() {
 		if present {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
 		}
 	})
 	legacy := &pb.Expr{Typ: pb.Type{Id: int32(types.T_varchar)}, Expr: &pb.Expr_F{F: &pb.Function{

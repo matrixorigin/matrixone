@@ -7597,7 +7597,7 @@ func HexUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 // HexLegacyFloat32 and HexLegacyFloat64 preserve overloads 4 and 5 exactly.
-// Their wire identities predate MORPCVersion69 and can execute on old CNs.
+// Their wire identities predate MORPCVersion70 and can execute on old CNs.
 func HexLegacyFloat32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return opUnaryFixedToStr[float32](ivecs, result, proc, length, func(value float32) string {
 		return fmt.Sprintf("%X", uint64(math.Round(float64(value))))
