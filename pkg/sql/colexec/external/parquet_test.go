@@ -3038,6 +3038,15 @@ func TestParquet_Plain_Bool(t *testing.T) {
 		var h ParquetHandler
 		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
 		require.NotNil(t, mp)
+		seedFile, seedPage := writeColumnAndGetPage(t, parquet.Leaf(parquet.BooleanType), []parquet.Row{
+			{parquet.BooleanValue(true).Level(0, 0, 0)},
+			{parquet.BooleanValue(true).Level(0, 0, 0)},
+			{parquet.BooleanValue(true).Level(0, 0, 0)},
+			{parquet.BooleanValue(true).Level(0, 0, 0)},
+		})
+		seedMapper := h.getMapper(seedFile.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+		require.NoError(t, seedMapper.mapping(seedPage, proc, vec))
+		vec.ResetWithSameType()
 		require.NoError(t, mp.mapping(page, proc, vec))
 		require.Equal(t, []bool{false, false, true, false}, vector.MustFixedColWithTypeCheck[bool](vec))
 		require.True(t, vec.GetNulls().Contains(0))

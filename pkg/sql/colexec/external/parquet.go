@@ -3584,6 +3584,7 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 			v := values[i]
 			row := length + readRows + i
 			if v.IsNull() {
+				ret[row] = false
 				nulls.Add(vec.GetNulls(), uint64(row))
 			} else {
 				ret[row] = v.Boolean()
@@ -3630,6 +3631,7 @@ func copyBoolDictPageToVec(
 	j := 0
 	for i := 0; i < n; i++ {
 		if nc.isNull(i) {
+			ret[i+length] = false
 			nulls.Add(vec.GetNulls(), uint64(i+length))
 			continue
 		}
