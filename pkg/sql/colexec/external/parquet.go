@@ -4819,6 +4819,24 @@ func validateParquetPageModeEOF(ctx context.Context, rowsRead, expectedRows int6
 	return nil
 }
 
+func validateParquetRowModeEOF(ctx context.Context, rowsRead, expectedRows int64) error {
+	if expectedRows < 0 {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row group: NumRows() %d is negative", expectedRows)
+	}
+	if rowsRead < 0 || rowsRead > expectedRows {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row reader position %d for %d rows",
+			rowsRead, expectedRows)
+	}
+	if rowsRead != expectedRows {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row reader ended after %d rows, expected %d",
+			rowsRead, expectedRows)
+	}
+	return nil
+}
+
 func validateParquetPageRows(ctx context.Context, pageRows, pageOffset, rowsRead, expectedRows int64) error {
 	if pageRows < 0 {
 		return moerr.NewInvalidInputf(ctx,

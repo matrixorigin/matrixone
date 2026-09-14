@@ -3379,6 +3379,16 @@ func TestParquetPageModeEOFRequiresCompleteRowGroup(t *testing.T) {
 	require.ErrorContains(t, validateParquetPageModeEOF(ctx, 0, -1), "NumRows() -1 is negative")
 }
 
+func TestParquetRowModeEOFRequiresCompleteRowGroup(t *testing.T) {
+	ctx := context.Background()
+	require.ErrorContains(t,
+		validateParquetRowModeEOF(ctx, 1, 2),
+		"row reader ended after 1 rows, expected 2")
+	require.NoError(t, validateParquetRowModeEOF(ctx, 2, 2))
+	require.ErrorContains(t, validateParquetRowModeEOF(ctx, 3, 2), "row reader position 3")
+	require.ErrorContains(t, validateParquetRowModeEOF(ctx, 0, -1), "NumRows() -1 is negative")
+}
+
 func TestParquetPageRowsStayWithinRowGroup(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, validateParquetPageRows(ctx, 2, 1, 3, 5))

@@ -152,6 +152,11 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 		if err != nil && !errors.Is(err, io.EOF) {
 			return moerr.ConvertGoError(param.Ctx, err)
 		}
+		if n < 0 || n > len(rowBuf) {
+			return moerr.NewInvalidInputf(param.Ctx,
+				"malformed parquet row reader: returned %d rows for buffer of %d",
+				n, len(rowBuf))
+		}
 		if errors.Is(err, io.EOF) {
 			eof = true
 		}
@@ -183,6 +188,12 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 		}
 		if n == 0 || eof || batchBoundary || h.parquetBatchAtByteBudget(bat, rowsRead, param) {
 			break
+		}
+	}
+	if eof && !batchBoundary {
+		if err := validateParquetRowModeEOF(param.Ctx, h.offset+int64(rowsRead), h.rowGroupRows); err != nil {
+			h.cleanup()
+			return err
 		}
 	}
 
