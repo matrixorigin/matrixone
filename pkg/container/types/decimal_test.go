@@ -352,6 +352,54 @@ func TestDecimal256ToFloat64NegativeScale(t *testing.T) {
 		t.Fatalf("unexpected Decimal256ToFloat64 result: %v", got)
 	}
 }
+
+func TestDecimal256ToFloat64PreservesLow128SignBit(t *testing.T) {
+	tests := []struct {
+		name  string
+		value Decimal256
+		scale int32
+		want  float64
+	}{
+		{
+			name:  "2^127-1",
+			value: Decimal256{B0_63: ^uint64(0), B64_127: 1<<63 - 1},
+			want:  math.Ldexp(1, 127) - 1,
+		},
+		{
+			name:  "2^127",
+			value: Decimal256{B64_127: 1 << 63},
+			want:  math.Ldexp(1, 127),
+		},
+		{
+			name:  "3*2^126",
+			value: Decimal256{B64_127: 3 << 62},
+			want:  3 * math.Ldexp(1, 126),
+		},
+		{
+			name:  "2^127 scaled",
+			value: Decimal256{B64_127: 1 << 63},
+			scale: 30,
+			want:  math.Ldexp(1, 127) / 1e30,
+		},
+		{
+			name:  "2^128",
+			value: Decimal256{B128_191: 1},
+			want:  math.Ldexp(1, 128),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Decimal256ToFloat64(tc.value, tc.scale)
+			require.InEpsilon(t, tc.want, got, 1e-15)
+
+			negative := tc.value.Minus()
+			gotNegative := Decimal256ToFloat64(negative, tc.scale)
+			require.InEpsilon(t, -tc.want, gotNegative, 1e-15)
+		})
+	}
+}
+
 func TestCompare64(t *testing.T) {
 	x := Decimal64(0)
 	y := ^x

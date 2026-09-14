@@ -397,8 +397,12 @@ func expressionsContainUnresolvedFullText(expressions []*plan.Expr) bool {
 
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
+	promoteGroupConcatCut, err := c.strictWriteGroupConcatPromotionEnabled()
+	if err != nil {
+		return nil, err
+	}
 	warningDestination := c.proc.GetWarningSink()
-	warnings := newWarningAttempt(c.proc)
+	warnings := newWarningAttempt(c.proc, promoteGroupConcatCut)
 	warnings.bindScopes(c.scopes)
 	warningsSucceeded := false
 	defer func() { warnings.finish(warningsSucceeded, warningDestination) }()
@@ -765,7 +769,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		resetStatsInfoPreRun(stats, isInExecutor)
 
 		// Retry compilation can itself emit expression diagnostics.
-		warnings = newWarningAttempt(c.proc)
+		warnings = newWarningAttempt(c.proc, promoteGroupConcatCut)
 		nextRunC, buildErr := c.buildRetryCompile(defChanged || forcePreMode)
 		carriedPreRunWall = time.Since(attemptStart)
 		attemptPreRunWall = carriedPreRunWall
@@ -797,6 +801,13 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		attemptPreRunWall = carriedPreRunWall
 		coordinatorPhaseStart = time.Time{}
 		coordinatorPhaseBase = 0
+	}
+	if promotionErr := c.strictWriteGroupConcatCutError(
+		warnings, promoteGroupConcatCut); promotionErr != nil {
+		err = joinAllocationLifecycleErrors(promotionErr, finishAllocationAttempt())
+		err = abortSinkAttempt(err)
+		finishCurrentAttempt(false)
+		return nil, err
 	}
 	queryResult.AffectRows = runC.getAffectedRows()
 	if c.uid != "mo_logger" &&
