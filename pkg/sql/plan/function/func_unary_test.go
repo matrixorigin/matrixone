@@ -1751,9 +1751,21 @@ func TestGeometry32ReturningUnary(t *testing.T) {
 	check(StBoundary, "LINESTRING(0 0,1 1,0 0)", "MULTIPOINT EMPTY")
 	check(StConvexHull, "MULTIPOINT(0 0, 4 0, 4 4, 0 4, 2 2)", "POLYGON((0 0,4 0,4 4,0 4,0 0))")
 	check(StEnvelope, "LINESTRING(0 0, 2 3)", "POLYGON((0 0,2 0,2 3,0 3,0 0))")
+	check(StEnvelope, "MULTIPOINT(0 0, 2 2)", "POLYGON((0 0,2 0,2 2,0 2,0 0))")
+	check(StCentroid, "MULTIPOINT(0 0, 2 2)", "POINT(1 1)")
 	check(StStartPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(1 2)")
 	check(StEndPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(5 6)")
 	check(StExteriorRing, "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", "LINESTRING(0 0,4 0,4 4,0 4,0 0)")
+}
+
+func TestStIsSimpleGeometry32(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(types.T_geometry32.ToType(),
+		[]string{geom32WKB(t, "MULTILINESTRING((0 0,1 0),(1 0,2 0))")}, []bool{false})
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false})
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{input}, expect, StIsSimple)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
 }
 
 func TestGeometry32Measures(t *testing.T) {
@@ -2507,25 +2519,53 @@ func TestStIsSimpleRejectInvalidInput(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
 
-	unsupportedInputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,1 0,1 1,0 0))"},
-			[]bool{false}),
-	}
-	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StIsSimple)
-	s, info := fcTC.Run()
-	require.False(t, s)
-	require.Contains(t, info, "geometry type is not supported by ST_IsSimple")
-
 	invalidLineInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"LINESTRING(0 0)"},
 			[]bool{false}),
 	}
-	fcTC = NewFunctionTestCase(proc, invalidLineInputs, expect, StIsSimple)
-	s, info = fcTC.Run()
+	fcTC := NewFunctionTestCase(proc, invalidLineInputs, expect, StIsSimple)
+	s, info := fcTC.Run()
 	require.False(t, s)
 	require.Contains(t, info, "invalid linestring payload")
+}
+
+func TestStIsSimpleCollections(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{
+			"POLYGON((0 0,2 0,2 2,0 0))",
+			"MULTIPOINT(0 0,1 1)",
+			"MULTIPOINT(0 0,1 1,0 0)",
+			"MULTIPOINT(EMPTY,1 1)",
+			"MULTILINESTRING((0 0,1 0),(0 1,1 1))",
+			"MULTILINESTRING((0 0,1 0),(1 0,2 0))",
+			"MULTILINESTRING((0 0,2 2),(0 2,2 0))",
+			"MULTILINESTRING((0 0,2 0),(1 0,1 1))",
+			"MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 0,3 0,3 1,2 0)))",
+			"MULTIPOLYGON(((0 0,2 0,2 2,0 0)),((1 0,3 0,3 2,1 0)))",
+			"GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,2 0))",
+			"GEOMETRYCOLLECTION(POINT(1 0),LINESTRING(0 0,2 0))",
+			"GEOMETRYCOLLECTION(POINT(3 3),POLYGON((0 0,2 0,2 2,0 0)))",
+			"GEOMETRYCOLLECTION(POINT(1 0),POLYGON((0 0,2 0,2 2,0 0)))",
+			"GEOMETRYCOLLECTION EMPTY",
+			"GEOMETRYCOLLECTION(MULTILINESTRING((0 0,1 0),(1 0,2 0)),POINT(1 0))",
+			"GEOMETRYCOLLECTION(MULTILINESTRING((0 0,1 0),(2 0,3 0)),POINT(1 0))",
+			"POLYGON((0 0,4 0,4 4,0 4,0 0),(0 2,1 1,1 3,0 2))",
+			"POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1),(2 2,3 2,3 3,2 3,2 2))",
+			"GEOMETRYCOLLECTION(POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1),(2 2,3 2,3 3,2 3,2 2)))",
+			"POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,4 1,4 4,1 4,1 1),(2 2,3 2,3 3,2 3,2 2))",
+			"POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,4 1,4 4,1 4,1 1),(3 1,5 1,5 2,3 2,3 1))",
+			"POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1),(2 1,3 1,3 2,2 2,2 1))",
+			"GEOMETRYCOLLECTION(POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1),(2 1,3 1,3 2,2 2,2 1)))",
+		}, []bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false,
+		[]bool{true, true, false, true, true, true, false, false, true, false, true, false, true, true, true, false, true, true, true, true, false, false, false, false},
+		[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false})
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StIsSimple)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
 }
 
 func initStIsRingTestCase() []tcTemp {
@@ -2650,15 +2690,44 @@ func TestStEnvelopeRejectInvalidInput(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
 
-	unsupportedInputs := []FunctionTestInput{
+	invalidInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]string{"LINESTRING(0 0)"},
 			[]bool{false}),
 	}
-	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StEnvelope)
+	fcTC := NewFunctionTestCase(proc, invalidInputs, expect, StEnvelope)
 	s, info := fcTC.Run()
 	require.False(t, s)
-	require.Contains(t, info, "geometry type is not supported by ST_Envelope")
+	require.Contains(t, info, "invalid linestring payload")
+}
+
+func TestStEnvelopeCollections(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{
+			"MULTIPOINT((0 0),(2 2),(1 1))",
+			"MULTIPOINT(EMPTY,1 2)",
+			"MULTILINESTRING(EMPTY,(0 0,2 3))",
+			"MULTIPOLYGON(EMPTY,((0 0,2 0,2 2,0 0)))",
+			"GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,2 3))",
+			"GEOMETRYCOLLECTION EMPTY",
+			"MULTIPOINT EMPTY",
+			"POLYGON((0 0,0.0000000001 0,0.0000000001 1,0 0))",
+		}, []bool{false, false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{
+		"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+		"POINT(1 2)",
+		"POLYGON((0 0,2 0,2 3,0 3,0 0))",
+		"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+		"POLYGON((0 0,2 0,2 3,0 3,0 0))",
+		"GEOMETRYCOLLECTION EMPTY",
+		"GEOMETRYCOLLECTION EMPTY",
+		"POLYGON((0 0,0.0000000001 0,0.0000000001 1,0 1,0 0))",
+	}, []bool{false, false, false, false, false, false, false, false})
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StEnvelope)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
 }
 
 func initStCentroidTestCase() []tcTemp {
@@ -2713,15 +2782,87 @@ func TestStCentroidRejectInvalidInput(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
 
-	unsupportedInputs := []FunctionTestInput{
+	invalidInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]string{"LINESTRING(0 0)"},
 			[]bool{false}),
 	}
-	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StCentroid)
+	fcTC := NewFunctionTestCase(proc, invalidInputs, expect, StCentroid)
 	s, info := fcTC.Run()
 	require.False(t, s)
-	require.Contains(t, info, "geometry type is not supported by ST_Centroid")
+	require.Contains(t, info, "invalid linestring payload")
+}
+
+func TestStCentroidCollections(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{
+			"MULTIPOINT(0 0,2 2,4 0)",
+			"MULTILINESTRING((0 0,2 0),(0 10,0 11))",
+			"MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)),((10 0,12 0,12 2,10 2,10 0)))",
+			"GEOMETRYCOLLECTION(POINT(100 100),LINESTRING(0 0,2 0),POLYGON((0 0,2 0,2 2,0 2,0 0)))",
+			"MULTIPOINT(EMPTY,1 2)",
+			"LINESTRING(1 1,1 1)",
+			"MULTILINESTRING(EMPTY,(1 1,1 1))",
+			"POINT EMPTY",
+			"GEOMETRYCOLLECTION EMPTY",
+			"GEOMETRYCOLLECTION(LINESTRING(1 1,1 1),POINT(100 100))",
+			"GEOMETRYCOLLECTION(POINT(100 100),LINESTRING(1 1,1 1))",
+			"GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(100 100),LINESTRING(1 1,1 1)),POINT(200 200))",
+		}, []bool{false, false, false, false, false, false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{
+		"POINT(2 0.6666666666666666)",
+		"POINT(0.6666666666666666 3.5)",
+		"POINT(8.9 0.9)",
+		"POINT(1 1)",
+		"POINT(1 2)",
+		"POINT(1 1)",
+		"POINT(1 1)",
+		"",
+		"",
+		"POINT(1 1)",
+		"POINT(1 1)",
+		"POINT(1 1)",
+	}, []bool{false, false, false, false, false, false, false, true, true, false, false, false})
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StCentroid)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
+}
+
+func TestDerivedGeometryRejectsMalformedCollectionMember(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cases := []struct {
+		name       string
+		fn         fEvalFn
+		resultType types.T
+		input      string
+		errText    string
+	}{
+		{name: "is_simple", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
+		{name: "envelope", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
+		{name: "centroid", fn: StCentroid, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
+		{name: "is_simple_malformed_polygon_after_false", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid polygon payload"},
+		{name: "is_simple_malformed_polygon_first", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POLYGON((0 0,1 0,0 0)),MULTIPOINT(0 0,0 0))", errText: "invalid polygon payload"},
+		{name: "is_simple_malformed_polygon_nested", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0))))", errText: "invalid polygon payload"},
+		{name: "envelope_malformed_polygon_after_false", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid polygon payload"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := NewFunctionTestInput(types.T_geometry.ToType(),
+				[]string{tc.input}, []bool{false})
+			var expect FunctionTestResult
+			if tc.resultType == types.T_bool {
+				expect = NewFunctionTestResult(tc.resultType.ToType(), false, []bool{false}, []bool{false})
+			} else {
+				expect = NewFunctionTestResult(tc.resultType.ToType(), false, []string{""}, []bool{false})
+			}
+			functionTest := NewFunctionTestCase(proc, []FunctionTestInput{input}, expect, tc.fn)
+			ok, info := functionTest.Run()
+			require.False(t, ok)
+			require.Contains(t, info, tc.errText)
+		})
+	}
 }
 
 func initStBoundaryTestCase() []tcTemp {
