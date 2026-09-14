@@ -1565,6 +1565,11 @@ func TestSerialAndSerialFullEncodeNonNullRowsIdentically(t *testing.T) {
 	parameters := []*vector.Vector{
 		newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{-1, 0, 42}, nil),
 		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"a", "b\x00c", "世界"}, nil),
+		newVectorByType(proc.Mp(), types.New(types.T_decimal256, 65, 2), []types.Decimal256{
+			mustParseDecimal256(t, "-1.23", 2),
+			mustParseDecimal256(t, "0.00", 2),
+			mustParseDecimal256(t, "123.45", 2),
+		}, nil),
 	}
 	for _, parameter := range parameters {
 		defer parameter.Free(proc.Mp())
