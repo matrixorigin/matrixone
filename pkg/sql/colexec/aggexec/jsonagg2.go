@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"encoding/json"
 	"math"
 	"slices"
 
@@ -535,15 +534,6 @@ func jsonArrayAggregateValueSize(vec *vector.Vector, row uint64) (int, error) {
 		return 0, err
 	}
 	return 1 + len(value.Data), nil
-}
-
-func jsonAggregateNumberSize(value string) (int, error) {
-	var data [8]byte
-	_, encoded, err := bytejson.AppendBinaryNumber(data[:0], json.Number(value))
-	if err != nil {
-		return 0, err
-	}
-	return 1 + len(encoded), nil
 }
 
 func appendJSONAggregateDecimal(dst []byte, value string) []byte {
