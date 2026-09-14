@@ -96,6 +96,7 @@ func routinePlanDependencies(p *planpb.Plan) ([]*planpb.RoutinePlanDependency, e
 	dependencyBytes := 0
 	stack := []queryFrame{{query: query}}
 	active := map[*planpb.Query]struct{}{query: {}}
+	completed := make(map[*planpb.Query]struct{})
 	for len(stack) != 0 {
 		frameIndex := len(stack) - 1
 		frame := &stack[frameIndex]
@@ -119,6 +120,7 @@ func routinePlanDependencies(p *planpb.Plan) ([]*planpb.RoutinePlanDependency, e
 		backgroundQueries := frame.query.GetBackgroundQueries()
 		if frame.next >= len(backgroundQueries) {
 			delete(active, frame.query)
+			completed[frame.query] = struct{}{}
 			stack = stack[:frameIndex]
 			continue
 		}
@@ -132,6 +134,12 @@ func routinePlanDependencies(p *planpb.Plan) ([]*planpb.RoutinePlanDependency, e
 		}
 		if _, exists := active[background]; exists {
 			return nil, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine dependency query graph contains a cycle")
+		}
+		// Shared background queries contribute their immutable dependencies
+		// once. Re-expanding a DAG as a tree can turn a small plan into
+		// exponential work (even when it contains no routine dependencies).
+		if _, exists := completed[background]; exists {
+			continue
 		}
 		active[background] = struct{}{}
 		stack = append(stack, queryFrame{query: background, depth: frame.depth + 1})
