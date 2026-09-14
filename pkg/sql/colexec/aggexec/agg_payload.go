@@ -224,16 +224,10 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 		return writeGroupConcatArrayData(writer, typ, data)
 	case types.T_blob, types.T_text, types.T_datalink, types.T_varbinary, types.T_binary,
 		types.T_char, types.T_varchar, types.T_enum:
-		if err := isValidGroupConcatUnit(data); err != nil {
-			return err
-		}
 		return writeBytes(data)
 	case types.T_geometry, types.T_geometry32:
 		return writeBytes(data)
 	case types.T_json:
-		if err := isValidGroupConcatUnit(data); err != nil {
-			return err
-		}
 		return writeValue(types.DecodeJson(data).String())
 	case types.T_interval:
 		return writeValue(*util.UnsafeFromBytes[types.IntervalType](data))
@@ -250,9 +244,6 @@ func writeGroupConcatData(writer io.Writer, typ types.Type, data []byte) error {
 }
 
 func writeGroupConcatArrayData(writer io.Writer, typ types.Type, data []byte) error {
-	if err := isValidGroupConcatUnit(data); err != nil {
-		return err
-	}
 	if !typ.Oid.IsArrayRelate() || len(data)%typ.GetArrayElementSize() != 0 {
 		return moerr.NewInternalErrorNoCtxf(
 			"invalid group_concat array payload size for %s", typ.String())

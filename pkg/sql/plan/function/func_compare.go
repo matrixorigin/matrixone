@@ -2628,7 +2628,7 @@ func operatorOpBitAndInt64Uint64Fn(parameters []*vector.Vector, result vector.Fu
 func operatorOpBitAndStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return operatorOpStrFn(parameters, result, proc, length, func(i []byte, i2 []byte) ([]byte, error) {
 		if len(i) != len(i2) {
-			return nil, moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
+			return nil, moerr.NewInvalidBitwiseOperandsSizeNoCtx()
 		}
 		rv := make([]byte, len(i))
 		for j := range rv {
@@ -2657,7 +2657,7 @@ func operatorOpBitXorInt64Uint64Fn(parameters []*vector.Vector, result vector.Fu
 func operatorOpBitXorStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return operatorOpStrFn(parameters, result, proc, length, func(i []byte, i2 []byte) ([]byte, error) {
 		if len(i) != len(i2) {
-			return nil, moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
+			return nil, moerr.NewInvalidBitwiseOperandsSizeNoCtx()
 		}
 		rv := make([]byte, len(i))
 		for j := range rv {
@@ -2686,7 +2686,7 @@ func operatorOpBitOrInt64Uint64Fn(parameters []*vector.Vector, result vector.Fun
 func operatorOpBitOrStrFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return operatorOpStrFn(parameters, result, proc, length, func(i []byte, i2 []byte) ([]byte, error) {
 		if len(i) != len(i2) {
-			return nil, moerr.NewInternalErrorNoCtx("Binary operands of bitwise operators must be of equal length")
+			return nil, moerr.NewInvalidBitwiseOperandsSizeNoCtx()
 		}
 		rv := make([]byte, len(i))
 		for j := range rv {

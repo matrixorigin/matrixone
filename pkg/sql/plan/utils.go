@@ -1050,8 +1050,8 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 }
 
 // PreparedPlanHasDeferredNumericFunction reports whether a prepared plan has
-// an ABS argument whose overload was deferred until execution.  This is kept
-// as a plan-introspection helper for tests and diagnostics; execute-time
+// an ABS or SIGN argument whose overload was deferred until execution. This is
+// kept as a plan-introspection helper for tests and diagnostics; execute-time
 // eligibility is cached on PrepareStmt and must not call this walker for every
 // execution.
 func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
@@ -1059,10 +1059,10 @@ func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
 }
 
 // PreparedPlanNumericFallbackParamPositions returns the parameter positions
-// whose value supplies a deferred numeric ABS argument.  The result is plan
-// metadata, not an execute-time decision: callers can compute it once when a
+// whose value supplies a deferred numeric ABS or SIGN argument. The result is
+// plan metadata, not an execute-time decision: callers can compute it once when a
 // prepared plan is built and use it to decide whether runtime values must be
-// decoded.  In particular, this avoids scanning/deep-copying the entire plan
+// decoded. In particular, this avoids scanning/deep-copying the entire plan
 // on every ordinary execution.
 func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
@@ -1071,7 +1071,7 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	positions := make(map[int32]struct{})
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "abs") || len(fn.Args) != 1 {
+		if fn == nil || fn.Func == nil || !isPreparedNumericFallbackFunction(fn.Func.GetObjName()) || len(fn.Args) != 1 {
 			return nil
 		}
 		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
@@ -1164,6 +1164,15 @@ func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName 
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
+}
+
+func isPreparedNumericFallbackFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "abs", "sign":
+		return true
+	default:
+		return false
+	}
 }
 
 func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
@@ -5519,7 +5528,11 @@ func PreparedDecimalRuntimeTypes(value string) (normalized, visible types.Type, 
 }
 
 // PreparedDecimalRuntimeDomains additionally returns a bounded canonical
-// lexeme suitable for typed literal materialization.
+// lexeme suitable for typed literal materialization. The canonical lexeme is
+// always emitted in the normalized domain, so it is parseable by both the
+// normalized runtime type and the optional visible result type. Redundant
+// trailing zeroes are represented by the target type's scale instead of by
+// an oversized coefficient.
 func PreparedDecimalRuntimeDomains(value string) (normalized, visible types.Type, canonical string, ok bool) {
 	return preparedDecimalRuntimeDomains(value, true)
 }
@@ -5630,8 +5643,6 @@ func preparedDecimalRuntimeDomains(
 		return types.Type{}, types.Type{}, "", false
 	}
 
-	canonicalCoefficientDigits := coefficientDigits
-	canonicalExponent := visibleExponent
 	if visibleExponentBounded {
 		visible, ok = preparedDecimalTypeFromCoefficient(coefficientDigits, visibleExponent)
 	}
@@ -5641,24 +5652,19 @@ func preparedDecimalRuntimeDomains(
 		// falling back to its normalized domain instead of rejecting it before
 		// normalization or materializing the unbounded visible spelling.
 		visible = normalized
-		canonicalCoefficientDigits = normalizedCoefficientDigits
-		canonicalExponent = normalizedExponent
-	}
-	if canonicalCoefficientDigits > int64(len(coefficient)) {
-		return types.Type{}, types.Type{}, "", false
 	}
 	if !materialize {
 		return normalized, visible, "", true
 	}
 	var canonicalBuilder strings.Builder
-	canonicalBuilder.Grow(int(canonicalCoefficientDigits) + 21)
+	canonicalBuilder.Grow(int(normalizedCoefficientDigits) + 21)
 	if negative {
 		canonicalBuilder.WriteByte('-')
 	}
-	canonicalBuilder.Write(coefficient[:int(canonicalCoefficientDigits)])
-	if canonicalExponent != 0 {
+	canonicalBuilder.Write(coefficient[:int(normalizedCoefficientDigits)])
+	if normalizedExponent != 0 {
 		canonicalBuilder.WriteByte('e')
-		canonicalBuilder.WriteString(strconv.FormatInt(canonicalExponent, 10))
+		canonicalBuilder.WriteString(strconv.FormatInt(normalizedExponent, 10))
 	}
 	return normalized, visible, canonicalBuilder.String(), true
 }
@@ -7044,10 +7050,11 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 	} else {
 		for i, canFold := range argFold {
 			if canFold {
-				fn.Args[i], err = ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
-				if err != nil {
-					return false, err
+				folded, foldErr := ConstantFold(batch.EmptyForConstFoldBatch, fn.Args[i], proc, false, true)
+				if foldErr != nil {
+					return false, foldErr
 				}
+				fn.Args[i] = folded
 				if _, ok := fn.Args[i].Expr.(*plan.Expr_Vec); ok {
 					continue
 				}
