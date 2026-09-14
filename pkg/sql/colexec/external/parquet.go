@@ -5381,6 +5381,9 @@ func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 	if off < 0 {
 		return 0, errors.New("parquet reader received a negative offset")
 	}
+	if off > math.MaxInt64-int64(len(p)) {
+		return 0, errors.New("parquet reader offset overflows int64")
+	}
 	if r.fs == nil {
 		return 0, errors.New("parquet reader has no file service")
 	}

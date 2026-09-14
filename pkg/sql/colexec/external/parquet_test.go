@@ -5528,6 +5528,13 @@ func Test_fsReaderAt_ReadAtRejectsNegativeOffset(t *testing.T) {
 	require.ErrorContains(t, err, "negative offset")
 }
 
+func Test_fsReaderAt_ReadAtRejectsOffsetOverflow(t *testing.T) {
+	r := &fsReaderAt{fs: &fakeFS{b: []byte("hello")}, ctx: context.Background()}
+	n, err := r.ReadAt(make([]byte, 2), math.MaxInt64)
+	require.Zero(t, n)
+	require.ErrorContains(t, err, "overflows int64")
+}
+
 func TestParquetRangeReadAheadCoalescesSequentialReads(t *testing.T) {
 	data := make([]byte, 2*parquetRangeReadAheadMaxBytes)
 	fs := &fakeFS{b: data}
