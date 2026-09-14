@@ -3306,6 +3306,14 @@ func TestParquetPageModeEOFRequiresCompleteRowGroup(t *testing.T) {
 	require.ErrorContains(t, validateParquetPageModeEOF(ctx, 0, -1), "NumRows() -1 is negative")
 }
 
+func TestParquetPageRowsStayWithinRowGroup(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, validateParquetPageRows(ctx, 2, 1, 3, 5))
+	require.ErrorContains(t, validateParquetPageRows(ctx, 3, 0, 3, 5), "row group has 5 rows")
+	require.ErrorContains(t, validateParquetPageRows(ctx, 2, 3, 0, 5), "page offset 3")
+	require.ErrorContains(t, validateParquetPageRows(ctx, 1, 0, 6, 5), "row position 6")
+}
+
 func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Leaf(parquet.BooleanType)

@@ -4696,6 +4696,10 @@ func (h *ParquetHandler) getDataByPage(bat *batch.Batch, param *ExternalParam, p
 				break
 			}
 			page := h.currentPage[colIdx]
+			if err := validateParquetPageRows(param.Ctx, page.NumRows(), h.pageOffset[colIdx],
+				h.offset+int64(length), h.rowGroupRows); err != nil {
+				return h.closePagesOnError(param.Ctx, err)
+			}
 			if len(page.RepetitionLevels()) != 0 && !h.mappers[colIdx].allowRepetition {
 				err := moerr.NewNYI(param.Ctx, "page has repetition")
 				return h.closePagesOnError(param.Ctx, err)
@@ -4760,6 +4764,31 @@ func validateParquetPageModeEOF(ctx context.Context, rowsRead, expectedRows int6
 		return moerr.NewInvalidInputf(ctx,
 			"malformed parquet row group: page columns ended after %d rows, expected %d",
 			rowsRead, expectedRows)
+	}
+	return nil
+}
+
+func validateParquetPageRows(ctx context.Context, pageRows, pageOffset, rowsRead, expectedRows int64) error {
+	if pageRows < 0 {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet page: NumRows() %d is negative", pageRows)
+	}
+	if pageOffset < 0 || pageOffset > pageRows {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet page offset %d for %d rows", pageOffset, pageRows)
+	}
+	if expectedRows < 0 {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row group: NumRows() %d is negative", expectedRows)
+	}
+	if rowsRead < 0 || rowsRead > expectedRows {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet row position %d for %d rows", rowsRead, expectedRows)
+	}
+	if pageRows-pageOffset > expectedRows-rowsRead {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet page: %d rows remain after row %d, but row group has %d rows",
+			pageRows-pageOffset, rowsRead, expectedRows)
 	}
 	return nil
 }
