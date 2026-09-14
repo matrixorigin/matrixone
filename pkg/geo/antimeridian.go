@@ -288,7 +288,7 @@ func sphericalCapFromBoundary(points []sphericalVector) sphericalCap {
 	}
 
 	for i, point := range points {
-		consider(sphericalCap{center: point, minDot: 1, valid: true})
+		consider(sphericalCapForCenter(point, []sphericalVector{point}))
 		for j := 0; j < i; j++ {
 			sum := sphericalVector{
 				x: point.x + points[j].x,
@@ -298,12 +298,7 @@ func sphericalCapFromBoundary(points []sphericalVector) sphericalCap {
 			norm := sphericalNorm(sum)
 			if norm > geodeticProjectionCenterTolerance {
 				center := sphericalVector{sum.x / norm, sum.y / norm, sum.z / norm}
-				radius := sphericalNorm(sphericalVector{
-					x: center.x - point.x,
-					y: center.y - point.y,
-					z: center.z - point.z,
-				})
-				consider(sphericalCap{center: center, minDot: sphericalDot(center, point), radius: radius, valid: true})
+				consider(sphericalCapForCenter(center, []sphericalVector{point, points[j]}))
 			}
 		}
 	}
@@ -324,20 +319,28 @@ func sphericalCapFromBoundary(points []sphericalVector) sphericalCap {
 		scale := math.Max(sphericalNorm(u), sphericalNorm(v))
 		if scale > 0 && norm > geodeticProjectionCenterRelativeTolerance*scale*scale {
 			center := sphericalVector{normal.x / norm, normal.y / norm, normal.z / norm}
-			minDot := sphericalDot(center, a)
-			if minDot < 0 {
+			orientation := sphericalDot(center, a) + sphericalDot(center, b) + sphericalDot(center, c)
+			if orientation < 0 {
 				center.x, center.y, center.z = -center.x, -center.y, -center.z
-				minDot = -minDot
 			}
-			radius := sphericalNorm(sphericalVector{
-				x: center.x - a.x,
-				y: center.y - a.y,
-				z: center.z - a.z,
-			})
-			consider(sphericalCap{center: center, minDot: minDot, radius: radius, valid: true})
+			consider(sphericalCapForCenter(center, points))
 		}
 	}
 	return best
+}
+
+func sphericalCapForCenter(center sphericalVector, points []sphericalVector) sphericalCap {
+	minDot := math.Inf(1)
+	radius := 0.0
+	for _, point := range points {
+		minDot = math.Min(minDot, sphericalDot(center, point))
+		radius = math.Max(radius, sphericalNorm(sphericalVector{
+			x: center.x - point.x,
+			y: center.y - point.y,
+			z: center.z - point.z,
+		}))
+	}
+	return sphericalCap{center: center, minDot: minDot, radius: radius, valid: true}
 }
 
 func sphericalCapContainsAll(cap sphericalCap, points []sphericalVector) bool {
