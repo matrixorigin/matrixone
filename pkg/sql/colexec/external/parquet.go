@@ -1566,7 +1566,11 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						dictValues := dictData.Int64()
 						converted := make([]types.Timestamp, len(dictValues))
 						for i, v := range dictValues {
-							converted[i] = convert(v * 1000)
+							micros, err := parquetTimestampMillisToMicros(proc.Ctx, v)
+							if err != nil {
+								return err
+							}
+							converted[i] = convert(micros)
 						}
 						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
 						if err != nil {
@@ -1576,7 +1580,13 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 							return converted[int(idx)]
 						})
 					}
-					return copyPageToVecMap(mp, page, proc, vec, data.Int64(), func(v int64) types.Timestamp {
+					rawValues := data.Int64()
+					for _, v := range rawValues {
+						if _, err := parquetTimestampMillisToMicros(proc.Ctx, v); err != nil {
+							return err
+						}
+					}
+					return copyPageToVecMap(mp, page, proc, vec, rawValues, func(v int64) types.Timestamp {
 						return convert(v * 1000)
 					})
 				default:
@@ -3650,14 +3660,17 @@ func parquetTimestampValueToMicros(ctx context.Context, v parquet.Value, lt *for
 	case lt.Timestamp.Unit.Micros != nil:
 		return v.Int64(), nil
 	case lt.Timestamp.Unit.Millis != nil:
-		millis := v.Int64()
-		if millis > math.MaxInt64/1000 || millis < math.MinInt64/1000 {
-			return 0, moerr.NewInvalidInputf(ctx,
-				"parquet timestamp %d milliseconds overflows microseconds", millis)
-		}
-		return millis * 1000, nil
+		return parquetTimestampMillisToMicros(ctx, v.Int64())
 	}
 	return 0, moerr.NewInvalidInput(ctx, "missing parquet timestamp unit")
+}
+
+func parquetTimestampMillisToMicros(ctx context.Context, millis int64) (int64, error) {
+	if millis > math.MaxInt64/1000 || millis < math.MinInt64/1000 {
+		return 0, moerr.NewInvalidInputf(ctx,
+			"parquet timestamp %d milliseconds overflows microseconds", millis)
+	}
+	return millis * 1000, nil
 }
 
 func parquetSessionLocation(proc *process.Process) *time.Location {

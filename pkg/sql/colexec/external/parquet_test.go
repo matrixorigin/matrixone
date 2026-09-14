@@ -1957,6 +1957,43 @@ func TestParquetTimestampLogicalMissingUnit(t *testing.T) {
 	require.ErrorContains(t, err, "missing parquet timestamp unit")
 }
 
+func TestParquetTimestampMillisOverflowInFastPath(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Timestamp(parquet.Millisecond)
+	cases := []struct {
+		name string
+	}{
+		{
+			name: "plain",
+		},
+		{
+			name: "dictionary",
+		},
+	}
+	for i := range cases {
+		t.Run(cases[i].name, func(t *testing.T) {
+			var page parquet.Page
+			var file *parquet.File
+			if cases[i].name == "dictionary" {
+				file, page = writeDictAndGetPage(t, parquet.Encoded(node, &parquet.RLEDictionary), []parquet.Value{
+					parquet.Int64Value(math.MaxInt64),
+				})
+			} else {
+				file, page = writeColumnAndGetPage(t, node, []parquet.Row{
+					{parquet.Int64Value(math.MaxInt64).Level(0, 0, 0)},
+				})
+			}
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			var h ParquetHandler
+			mp := h.getMapper(file.Root().Column("c"), plan.Type{Id: int32(types.T_timestamp), NotNullable: true})
+			require.NotNil(t, mp)
+			err := mp.mapping(page, proc, vec)
+			require.ErrorContains(t, err, "overflows microseconds")
+			require.Zero(t, vec.Length())
+		})
+	}
+}
+
 // fakeFS is a minimal ETL-compatible FileService for testing fsReaderAt.
 type fakeFS struct {
 	b           []byte
@@ -3455,7 +3492,7 @@ func TestParquet_Dictionary_String_ValueKindMismatch(t *testing.T) {
 
 func TestParquet_Dictionary_StringMalformedOffsets(t *testing.T) {
 	proc := testutil.NewProc(t)
-	_, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
+	f, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
 		parquet.ByteArrayValue([]byte("1")),
 	})
 	badDictionary := parquet.String().Type().NewDictionary(0, 1,
@@ -3520,7 +3557,7 @@ func TestParquetDecodedPageSize_InvalidDictionaryIndexes(t *testing.T) {
 }
 
 func TestParquetDecodedPageSize_InvalidDictionaryStringOffsets(t *testing.T) {
-	f, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
+	_, page := writeDictAndGetPage(t, parquet.Encoded(parquet.String(), &parquet.RLEDictionary), []parquet.Value{
 		parquet.ByteArrayValue([]byte("value")),
 	})
 	badDictionary := parquet.String().Type().NewDictionary(0, 1,
