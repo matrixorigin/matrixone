@@ -708,6 +708,15 @@ class WorkerContractTest(unittest.TestCase):
             worker._scalar_input(array, 0, descriptor),
         )
 
+    def test_json_canonical_text_preserves_number_and_string_tokens(self):
+        descriptor = {"type_id": worker.JSON, "offset_width": 32, "json_encoding": "canonical_text"}
+        for value in ('1e-7', '1e+20', r'{"escaped":"\u4e2d","number":1e-7}'):
+            with self.subTest(value=value):
+                self.assertEqual(value, worker._check_scalar(value, descriptor))
+                self.assertEqual(value, worker._scalar_input(pa.array([value]), 0, descriptor))
+        self.assertEqual('{"space":"a b","number":1e-7}',
+                         worker._canonical_json_text(' { "space" : "a b", "number" : 1e-7 } '))
+
     def test_json_rejects_nonstandard_numbers(self):
         descriptor = {"type_id": worker.JSON, "offset_width": 32, "json_encoding": "canonical_text"}
         for value in ("NaN", "Infinity", "-Infinity", "1e9999"):
