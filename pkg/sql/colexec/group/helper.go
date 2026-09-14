@@ -1822,6 +1822,11 @@ func (ctr *container) makeAggListWithAllocation(
 	allocation *aggexec.AllocationAccount,
 ) ([]aggexec.GroupAggFuncExec, error) {
 	var err error
+	limit := process.WarningDiagnosticDefaultRetentionLimit
+	if ctr.warningRetentionSet {
+		limit = ctr.warningRetentionLimit
+	}
+	ctr.groupConcatWarnings.SetWarningRetentionLimit(limit)
 	aggList := make([]aggexec.GroupAggFuncExec, len(aggExprs))
 	for i, agExpr := range aggExprs {
 		typs := make([]types.Type, len(agExpr.GetArgExpressions()))
@@ -1857,6 +1862,7 @@ func (ctr *container) makeAggListWithAllocation(
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
+		aggexec.ConfigureGroupConcatWarningRetention(aggList[i], limit)
 		if ctr.legacyApproxPercentileState {
 			aggexec.ConfigureApproxPercentileLegacyState(aggList[i])
 		}

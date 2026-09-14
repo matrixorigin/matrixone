@@ -39,7 +39,14 @@ func newWarningAttempt(proc *process.Process, required bool) *warningAttempt {
 	if !single && !batch && !count && !required {
 		return nil
 	}
-	a := &warningAttempt{collector: &remoteWarningCollector{requiresCutReporting: required}, previous: make(map[*process.Process]any)}
+	a := &warningAttempt{
+		collector: &remoteWarningCollector{
+			maxRetained:          process.WarningDiagnosticRetentionLimitForProcess(proc),
+			maxRetainedSet:       true,
+			requiresCutReporting: required,
+		},
+		previous: make(map[*process.Process]any),
+	}
 	a.bindProcess(proc)
 	return a
 }
