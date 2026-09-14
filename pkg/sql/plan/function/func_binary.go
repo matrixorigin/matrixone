@@ -10886,6 +10886,7 @@ func overlayBinary(functionName string, op geo.BoolOp) fEvalFn {
 		}
 		// float32 output only when both operands are GEOMETRY32.
 		f32 := geometryArgIsFloat32(ivecs, 0) && geometryArgIsFloat32(ivecs, 1)
+		srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 		return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
 			a, err := decodeGeoGeometry(v1)
 			if err != nil {
@@ -10895,9 +10896,19 @@ func overlayBinary(functionName string, op geo.BoolOp) fEvalFn {
 			if err != nil {
 				return nil, err
 			}
+			var projector geo.GeodeticProjector
+			if srid == geo.SRIDWGS84 {
+				projector, a, b, err = geo.ProjectGeodeticPair(a, b)
+				if err != nil {
+					return nil, err
+				}
+			}
 			g, oerr := geo.Overlay(a, b, op)
 			if oerr != nil {
 				return nil, oerr
+			}
+			if srid == geo.SRIDWGS84 {
+				g = projector.Unproject(g)
 			}
 			return geoEncodeWKB(g, f32)
 		}, selectList)
@@ -11633,8 +11644,9 @@ func StContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryContains(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryContains)
 	}, selectList)
 }
 
@@ -11646,8 +11658,9 @@ func StWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryWithin(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryWithin)
 	}, selectList)
 }
 
@@ -11659,8 +11672,9 @@ func StIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryIntersects(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryIntersects)
 	}, selectList)
 }
 
@@ -11672,8 +11686,9 @@ func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryDisjoint(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryDisjoint)
 	}, selectList)
 }
 
@@ -11685,8 +11700,9 @@ func StTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryTouches(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryTouches)
 	}, selectList)
 }
 
@@ -11698,8 +11714,9 @@ func StCrosses(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryCrosses(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryCrosses)
 	}, selectList)
 }
 
@@ -11711,8 +11728,9 @@ func StOverlaps(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryOverlaps(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryOverlaps)
 	}, selectList)
 }
 
@@ -11724,8 +11742,9 @@ func StEquals(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryEquals(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryEquals)
 	}, selectList)
 }
 
@@ -11737,8 +11756,9 @@ func StCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryCovers(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryCovers)
 	}, selectList)
 }
 
@@ -11750,8 +11770,9 @@ func StCoveredBy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryCoveredBy(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryCoveredBy)
 	}, selectList)
 }
 
@@ -11852,6 +11873,35 @@ func checkBinaryGeometryTypeSRID(functionName string, ivecs []*vector.Vector, le
 		return false, moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, left, right)
 	}
 	return false, nil
+}
+
+// geometryPredicateBySRID keeps the existing predicate matrix as the single
+// source of truth while adapting WGS84 inputs to one common local gnomonic
+// frame for its Cartesian segment kernel. The vector type carries the SRID;
+// bare WKB payloads intentionally do not, so this must happen at the evaluated
+// function boundary rather than inside geometryContains/geometryIntersects.
+func geometryPredicateBySRID(
+	srid uint32,
+	left, right []byte,
+	predicate func([]byte, []byte) (bool, error),
+) (bool, error) {
+	if srid != geo.SRIDWGS84 {
+		return predicate(left, right)
+	}
+
+	leftGeometry, err := decodeGeoGeometry(left)
+	if err != nil {
+		return false, err
+	}
+	rightGeometry, err := decodeGeoGeometry(right)
+	if err != nil {
+		return false, err
+	}
+	_, leftGeometry, rightGeometry, err = geo.ProjectGeodeticPair(leftGeometry, rightGeometry)
+	if err != nil {
+		return false, err
+	}
+	return predicate(geo.WriteWKB(leftGeometry), geo.WriteWKB(rightGeometry))
 }
 
 func geometryDistance(left, right []byte) (float64, error) {
@@ -14756,24 +14806,40 @@ func pointOnPolygonBoundaryGeometry(polygon geometryPolygon2D, px, py float64) b
 }
 
 func pointOnSegment(px, py float64, start, end geometryPoint2D) bool {
-	const epsilon = 1e-9
-
-	cross := (px-start.x)*(end.y-start.y) - (py-start.y)*(end.x-start.x)
-	if math.Abs(cross) > epsilon {
+	dx, dy := end.x-start.x, end.y-start.y
+	segmentLength := math.Hypot(dx, dy)
+	if segmentLength == 0 {
+		return math.Hypot(px-start.x, py-start.y) <= geometryPredicateDistanceTolerance
+	}
+	// The cross product has units of length squared. Compare it with the
+	// segment length times epsilon so epsilon remains a perpendicular-distance
+	// tolerance for both very short and very long segments. A fixed cross-product
+	// threshold otherwise makes short segments far too permissive and lets
+	// floating-point error on long segments reject points on the segment.
+	cross := (px-start.x)*dy - (py-start.y)*dx
+	if !geometryCrossWithinDistance(cross, segmentLength) {
 		return false
 	}
-	if px < math.Min(start.x, end.x)-epsilon || px > math.Max(start.x, end.x)+epsilon {
+	if px < math.Min(start.x, end.x)-geometryPredicateDistanceTolerance || px > math.Max(start.x, end.x)+geometryPredicateDistanceTolerance {
 		return false
 	}
-	if py < math.Min(start.y, end.y)-epsilon || py > math.Max(start.y, end.y)+epsilon {
+	if py < math.Min(start.y, end.y)-geometryPredicateDistanceTolerance || py > math.Max(start.y, end.y)+geometryPredicateDistanceTolerance {
 		return false
 	}
 	return true
 }
 
 func sameGeometryPoint(a, b geometryPoint2D) bool {
-	const epsilon = 1e-9
-	return math.Abs(a.x-b.x) <= epsilon && math.Abs(a.y-b.y) <= epsilon
+	return math.Abs(a.x-b.x) <= geometryPredicateDistanceTolerance && math.Abs(a.y-b.y) <= geometryPredicateDistanceTolerance
+}
+
+const geometryPredicateDistanceTolerance = 1e-9
+
+func geometryCrossWithinDistance(cross, segmentLength float64) bool {
+	// Cross products are area-like (length squared). Normalize their tolerance
+	// by the segment length so all orientation and point-on-segment decisions
+	// use the same perpendicular-distance contract.
+	return math.Abs(cross) <= geometryPredicateDistanceTolerance*segmentLength
 }
 
 func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
