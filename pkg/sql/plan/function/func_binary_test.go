@@ -8399,6 +8399,10 @@ func TestStDistanceGeometryCollectionPrecisionAndSRID(t *testing.T) {
 		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantGeodetic}, []bool{false}), StDistance)
 	ok, info := geodetic.Run()
 	require.True(t, ok, info)
+	knownOneDegree := math.Pi / 180 * geo.EarthRadiusMeters
+	gotGeodetic, err := geodeticDistance(gc, point)
+	require.NoError(t, err)
+	require.InDelta(t, knownOneDegree, gotGeodetic, 1.0)
 
 	toF32 := func(wkt string) string {
 		g, err := geo.ParseWKT(wkt)
@@ -8464,6 +8468,20 @@ func TestStDistanceValidationOrder(t *testing.T) {
 			fn:         StDistance32,
 			selectList: &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false}},
 		},
+		{
+			name:  "float64 unsupported SRID with evaluated row",
+			left:  NewFunctionTestInput(unsupported, []string{"POINT(0 0)"}, []bool{false}),
+			right: NewFunctionTestInput(unsupported, []string{"POINT(1 0)"}, []bool{false}),
+			want:  NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil),
+			fn:    StDistance,
+		},
+		{
+			name:  "float32 unsupported SRID with evaluated row",
+			left:  NewFunctionTestInput(unsupported32, []string{"POINT(0 0)"}, []bool{false}),
+			right: NewFunctionTestInput(unsupported32, []string{"POINT(1 0)"}, []bool{false}),
+			want:  NewFunctionTestResult(types.T_float32.ToType(), true, nil, nil),
+			fn:    StDistance32,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, tc.want, tc.fn).
@@ -8492,6 +8510,109 @@ func TestStDistanceValidationOrder(t *testing.T) {
 			require.True(t, ok, info)
 		})
 	}
+}
+
+func TestStDistanceEvaluatorSelectionNullAndMalformedRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom := types.T_geometry.ToType()
+	valid := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(geom, []string{"GEOMETRYCOLLECTION(", "POINT(0 0)"}, []bool{false, false}),
+		NewFunctionTestInput(geom, []string{"GEOMETRYCOLLECTION(", "POINT(3 4)"}, []bool{false, false}),
+	}, NewFunctionTestResult(types.T_float64.ToType(), false,
+		[]float64{0, 5}, []bool{true, false}), StDistance).
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	ok, info := valid.Run()
+	require.True(t, ok, info)
+
+	null := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(geom, []string{"POINT(0 0)"}, []bool{true}),
+		NewFunctionTestInput(geom, []string{"POINT(1 0)"}, []bool{false}),
+	}, NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}), StDistance)
+	ok, info = null.Run()
+	require.True(t, ok, info)
+
+	malformed := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(geom, []string{"GEOMETRYCOLLECTION("}, []bool{false}),
+		NewFunctionTestInput(geom, []string{"POINT(1 0)"}, []bool{false}),
+	}, NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), StDistance)
+	ok, info = malformed.Run()
+	require.True(t, ok, info)
+
+	malformedRight := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(geom, []string{"POINT(0 0)"}, []bool{false}),
+		NewFunctionTestInput(geom, []string{"GEOMETRYCOLLECTION("}, []bool{false}),
+	}, NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), StDistance)
+	ok, info = malformedRight.Run()
+	require.True(t, ok, info)
+
+	for _, tc := range []struct {
+		name       string
+		fn         fEvalFn
+		leftType   types.Type
+		resultType types.Type
+	}{
+		{name: "float64", fn: StDistanceWithSRID, leftType: types.T_geometry.ToType(), resultType: types.T_float64.ToType()},
+		{name: "float32", fn: StDistanceWithSRID32, leftType: types.T_geometry32.ToType(), resultType: types.T_float32.ToType()},
+	} {
+		for _, side := range []string{"left", "right"} {
+			left, right := "POINT(0 0)", "POINT(1 0)"
+			if side == "left" {
+				left = "GEOMETRYCOLLECTION("
+			} else {
+				right = "GEOMETRYCOLLECTION("
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(tc.leftType, []string{left}, []bool{false}),
+				NewFunctionTestInput(tc.leftType, []string{right}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0}, []bool{false}),
+			}, NewFunctionTestResult(tc.resultType, true, nil, nil), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, "%s %s: %s", tc.name, side, info)
+		}
+	}
+}
+
+func TestGeometryDistanceCollectionEmptyContract(t *testing.T) {
+	payload := func(wkt string) []byte { return encodeGeometryPayload(wkt, 0, false) }
+	for _, tc := range []struct {
+		name  string
+		wkt   string
+		empty bool
+	}{
+		{name: "simple nonempty", wkt: "POINT(0 0)", empty: false},
+		{name: "top-level empty", wkt: "GEOMETRYCOLLECTION EMPTY", empty: true},
+		{name: "mixed multipoint", wkt: "MULTIPOINT(EMPTY,1 1)", empty: false},
+		{name: "nested all empty", wkt: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT EMPTY),MULTIPOINT EMPTY)", empty: true},
+		{name: "nested nonempty", wkt: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT EMPTY),POINT(3 4))", empty: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := geometryDistancePayloadEmpty(payload(tc.wkt))
+			require.NoError(t, err)
+			require.Equal(t, tc.empty, got)
+		})
+	}
+
+	_, err := geometryDistancePayloadEmpty([]byte("GEOMETRYCOLLECTION("))
+	require.Error(t, err)
+	_, err = geometryDistancePayloadEmpty(payload("GEOMETRYCOLLECTION(bad)"))
+	require.Error(t, err)
+	_, err = geometryDistancePayloadEmpty(payload("GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(bad))"))
+	require.Error(t, err)
+	_, err = geometryDistance(payload("GEOMETRYCOLLECTION EMPTY"), payload("POINT(0 0)"))
+	require.Error(t, err)
+	_, err = geometryDistance(payload("POINT(0 0)"), payload("GEOMETRYCOLLECTION EMPTY"))
+	require.Error(t, err)
+	_, err = geometryDistance([]byte("GEOMETRYCOLLECTION("), payload("POINT(0 0)"))
+	require.Error(t, err)
+	_, err = geometryDistance(payload("POINT(0 0)"), []byte("GEOMETRYCOLLECTION("))
+	require.Error(t, err)
+	got, err := multiGeometryDistance(payload("GEOMETRYCOLLECTION(POINT EMPTY,LINESTRING EMPTY)"), payload("POINT(0 0)"))
+	require.Error(t, err)
+	require.Zero(t, got)
+	_, err = multiGeometryDistance([]byte("GEOMETRYCOLLECTION("), payload("POINT(0 0)"))
+	require.Error(t, err)
+	_, err = multiGeometryDistance(payload("GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(bad))"), payload("POINT(0 0)"))
+	require.Error(t, err)
 }
 
 func TestStDistanceWithPolygonHoles(t *testing.T) {
