@@ -61,11 +61,6 @@ const (
 	// point, and lets a lifecycle test observe that shutdown has actually
 	// entered before it releases an admitted statement.
 	ArrowLoadRolloutShutdown = "fj/embed/arrow_load_rollout_shutdown"
-
-	// StandaloneLifecycleClose is a test-only lifecycle boundary for
-	// non-feature-specific embedded standalone acceptance tests. Production
-	// clusters never trigger this point.
-	StandaloneLifecycleClose = "fj/embed/standalone_lifecycle_close"
 )
 
 type clusterPortLease struct {
@@ -255,7 +250,6 @@ func (c *cluster) Close() error {
 	// goroutine that may not have entered shutdown yet.
 	if c.options.testing {
 		fault.TriggerFault(ArrowLoadRolloutShutdown)
-		fault.TriggerFault(StandaloneLifecycleClose)
 	}
 
 	c.Lock()
