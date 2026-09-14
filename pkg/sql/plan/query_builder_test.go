@@ -797,6 +797,7 @@ func buildViewsForLowerCaseTest(
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
+	ctx.EXPECT().SetContext(gomock.Any()).AnyTimes()
 	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
 	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()
 	ctx.EXPECT().GetSubscriptionMeta(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
