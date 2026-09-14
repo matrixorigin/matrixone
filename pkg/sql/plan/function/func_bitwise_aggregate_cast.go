@@ -593,7 +593,12 @@ func decimal256RoundingDivisor(scale int32) (types.Decimal256, bool, error) {
 	if scale < 0 {
 		return types.Decimal256{}, false, moerr.NewInvalidInputNoCtxf("invalid DECIMAL scale %d", scale)
 	}
-	if scale > 65 {
+	// SQL DDL currently caps DECIMAL precision at 65, but the physical
+	// DECIMAL256 domain (including binary-protocol prepared parameters) can
+	// carry up to 76 digits. Keep the conversion exact across that complete
+	// runtime domain; only an out-of-domain scale (greater than the supported
+	// precision) can use the zero shortcut without inspecting its coefficient.
+	if scale > types.T_decimal256.ToType().Width {
 		return types.Decimal256{}, true, nil
 	}
 	divisor := types.Decimal256{B0_63: 1}

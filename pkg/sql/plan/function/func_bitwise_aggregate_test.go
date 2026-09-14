@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -265,8 +266,14 @@ func assertBitwiseAggregateDecimal128Value(t *testing.T, text string, scale int3
 }
 
 func assertBitwiseAggregateDecimal256Value(t *testing.T, text string, scale int32, want uint64, wantErr bool) {
+	assertBitwiseAggregateDecimal256ValueWithWidth(t, text, 65, scale, want, wantErr)
+}
+
+func assertBitwiseAggregateDecimal256ValueWithWidth(
+	t *testing.T, text string, width, scale int32, want uint64, wantErr bool,
+) {
 	t.Helper()
-	typ := types.New(types.T_decimal256, 65, scale)
+	typ := types.New(types.T_decimal256, width, scale)
 	value, err := types.ParseDecimal256(text, typ.Width, typ.Scale)
 	require.NoError(t, err)
 	divisor, roundsToZero, err := decimal256RoundingDivisor(scale)
@@ -466,8 +473,14 @@ func TestBitwiseAggregateDecimalConversionScaleAndSignedNarrowing(t *testing.T) 
 	if _, _, err := decimal256RoundingDivisor(-1); err == nil {
 		t.Fatal("negative DECIMAL256 scale must be rejected")
 	}
-	if _, roundsToZero, err := decimal256RoundingDivisor(66); err != nil || !roundsToZero {
-		t.Fatalf("DECIMAL256 scale above precision should round to zero: roundsToZero=%t, err=%v", roundsToZero, err)
+	if _, roundsToZero, err := decimal256RoundingDivisor(66); err != nil || roundsToZero {
+		t.Fatalf("DECIMAL256 runtime scale 66 must retain exact rounding: roundsToZero=%t, err=%v", roundsToZero, err)
+	}
+	if _, roundsToZero, err := decimal256RoundingDivisor(types.T_decimal256.ToType().Width); err != nil || roundsToZero {
+		t.Fatalf("DECIMAL256 physical scale upper bound must retain exact rounding: roundsToZero=%t, err=%v", roundsToZero, err)
+	}
+	if _, roundsToZero, err := decimal256RoundingDivisor(types.T_decimal256.ToType().Width + 1); err != nil || !roundsToZero {
+		t.Fatalf("DECIMAL256 scale above physical capacity should round to zero: roundsToZero=%t, err=%v", roundsToZero, err)
 	}
 	if got, err := bitwiseAggregateDecimal128ToInt64Value(types.Decimal128{B0_63: 123}, types.Decimal128{}, true); err != nil || got != 0 {
 		t.Fatalf("DECIMAL128 value at an unsupported scale should round to zero: got %d, err %v", got, err)
@@ -480,6 +493,65 @@ func TestBitwiseAggregateDecimalConversionScaleAndSignedNarrowing(t *testing.T) 
 	}
 	if _, err := int64FromSignedMagnitude(uint64(1)<<63+1, true); err == nil {
 		t.Fatal("signed narrowing must reject negative magnitudes beyond INT64")
+	}
+}
+
+func TestBitwiseAggregateDecimal256ExtendedScaleRounding(t *testing.T) {
+	maxUint64 := ^uint64(0)
+	for _, test := range []struct {
+		name  string
+		value string
+		width int32
+		scale int32
+		want  uint64
+	}{
+		{
+			name:  "scale 66 below half",
+			value: "0.4" + strings.Repeat("0", 64) + "1",
+			width: 66,
+			scale: 66,
+			want:  0,
+		},
+		{
+			name:  "scale 66 exact half rounds away from zero",
+			value: "0.5" + strings.Repeat("0", 65),
+			width: 66,
+			scale: 66,
+			want:  1,
+		},
+		{
+			name:  "scale 66 above half",
+			value: "0.9" + strings.Repeat("0", 64) + "1",
+			width: 66,
+			scale: 66,
+			want:  1,
+		},
+		{
+			name:  "scale 76 below half",
+			value: "0.4" + strings.Repeat("0", 74) + "1",
+			width: 76,
+			scale: 76,
+			want:  0,
+		},
+		{
+			name:  "scale 76 exact negative half rounds away from zero",
+			value: "-0.5" + strings.Repeat("0", 75),
+			width: 76,
+			scale: 76,
+			want:  maxUint64,
+		},
+		{
+			name:  "scale 76 above half",
+			value: "0.5" + strings.Repeat("0", 74) + "1",
+			width: 76,
+			scale: 76,
+			want:  1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertBitwiseAggregateDecimal256ValueWithWidth(
+				t, test.value, test.width, test.scale, test.want, false)
+		})
 	}
 }
 
