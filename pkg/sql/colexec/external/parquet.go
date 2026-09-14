@@ -2810,6 +2810,9 @@ func processParquetListToArray[T types.ArrayElement](
 	width int,
 	convert func(parquet.Value) (T, error),
 ) error {
+	if err := validateParquetDictionaryPage(ctx, page, nil); err != nil {
+		return err
+	}
 	values, err := readParquetPageAllValues(ctx, page)
 	if err != nil {
 		return err
@@ -2929,6 +2932,9 @@ func processParquetValuesToFixed[T any](
 	if err != nil {
 		return err
 	}
+	if err := validateParquetDictionaryPage(ctx, page, &nc.actualNonNulls); err != nil {
+		return err
+	}
 	values, err := readParquetPageValues(ctx, page)
 	if err != nil {
 		return err
@@ -2975,6 +2981,9 @@ func processParquetValuesToBytes(
 ) error {
 	nc, err := prepareNullCheck(ctx, mp, page)
 	if err != nil {
+		return err
+	}
+	if err := validateParquetDictionaryPage(ctx, page, &nc.actualNonNulls); err != nil {
 		return err
 	}
 	values, err := readParquetPageValues(ctx, page)
@@ -3025,6 +3034,9 @@ func processParquetValuesToJson(
 	if err != nil {
 		return err
 	}
+	if err := validateParquetDictionaryPage(ctx, page, &nc.actualNonNulls); err != nil {
+		return err
+	}
 	values, err := readParquetPageValues(ctx, page)
 	if err != nil {
 		return err
@@ -3063,6 +3075,23 @@ func processParquetValuesToJson(
 
 func parquetValueIsNull(nc nullCheckInfo, row int) bool {
 	return !nc.noNulls && nc.levels[row] != nc.maxDefinitionLevel
+}
+
+func validateParquetDictionaryPage(ctx context.Context, page parquet.Page, expectedNonNulls *int64) error {
+	dict := page.Dictionary()
+	if dict == nil {
+		return nil
+	}
+	indexes, err := parquetDictionaryIndexes(ctx, page.Data())
+	if err != nil {
+		return err
+	}
+	if expectedNonNulls != nil {
+		if err := validateDictionaryIndicesCount(ctx, indexes, *expectedNonNulls); err != nil {
+			return err
+		}
+	}
+	return ensureDictionaryIndexes(ctx, dict.Len(), indexes)
 }
 
 func validateParquetValueNullness(ctx context.Context, nc nullCheckInfo, row int, value parquet.Value) error {

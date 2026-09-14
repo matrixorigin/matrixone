@@ -1091,6 +1091,35 @@ func TestParquetValueNullnessMustMatchDefinitionLevels(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquetGenericDictionaryMappingRejectsOutOfRangeIndex(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeColumnAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+		{parquet.FloatValue(1).Level(0, 0, 0)},
+	})
+	dict := parquet.FloatType.NewDictionary(0, 1, encoding.FloatValues([]float32{1}))
+	badData := &parquetPageWithData{Page: page, data: encoding.Int32Values([]int32{1})}
+	badValues := &parquetPageWithValues{
+		Page: badData,
+		values: parquet.ValueReaderFunc(func(dst []parquet.Value) (int, error) {
+			dict.Lookup([]int32{1}, dst[:1])
+			return 1, nil
+		}),
+	}
+	badPage := &parquetPageWithDictionary{Page: badValues, dictionary: dict}
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.T_int32.ToType())
+	require.NotPanics(t, func() {
+		err := mp.mapping(badPage, proc, vec)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		require.Contains(t, err.Error(), "dictionary index 1 out of range")
+	})
+	require.Zero(t, vec.Length())
+}
+
 func TestParquetCrossTypeMappings(t *testing.T) {
 	proc := testutil.NewProc(t)
 	ctx := context.Background()
