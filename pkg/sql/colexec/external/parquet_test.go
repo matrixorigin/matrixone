@@ -3704,6 +3704,29 @@ func TestParquetValuesToBytesAndJsonRollBackOnConversionError(t *testing.T) {
 	require.Equal(t, seed.String(), types.DecodeJson(jsonVec.GetBytesAt(0)).String())
 }
 
+func TestParquetListToArrayRollsBackOnConversionError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	_, page := writeListAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
+		{parquet.FloatValue(1).Level(0, 1, 0)},
+		{parquet.FloatValue(2).Level(0, 1, 0)},
+	})
+
+	vec := vector.NewVec(types.New(types.T_array_float32, 1, 0))
+	seed := []float32{9}
+	require.NoError(t, vector.AppendArray(vec, seed, false, proc.Mp()))
+
+	err := processParquetListToArray[float32](context.Background(), &columnMapper{maxDefinitionLevel: 1}, page, proc, vec, 1,
+		func(v parquet.Value) (float32, error) {
+			if v.Float() == 2 {
+				return 0, errors.New("conversion failed")
+			}
+			return v.Float(), nil
+		})
+	require.ErrorContains(t, err, "row 1")
+	require.Equal(t, 1, vec.Length())
+	require.Equal(t, seed, vector.GetArrayAt[float32](vec, 0))
+}
+
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	// Reduce batch size so scan steps across multiple calls
 	save := maxParquetBatchCnt

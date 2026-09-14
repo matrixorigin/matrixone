@@ -2730,6 +2730,11 @@ func processParquetListToArray[T types.ArrayElement](
 	if err := vec.PreExtend(vec.Length()+numRows, proc.Mp()); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, numRows)
+		return err
+	}
 
 	capHint := width
 	if capHint == types.MaxArrayDimension {
@@ -2754,7 +2759,7 @@ func processParquetListToArray[T types.ArrayElement](
 	for i, v := range values {
 		if i > 0 && v.RepetitionLevel() == 0 {
 			if err := flushRow(); err != nil {
-				return err
+				return rollback(err)
 			}
 			row = row[:0]
 			rowNull = false
@@ -2764,44 +2769,44 @@ func processParquetListToArray[T types.ArrayElement](
 		definitionLevel := byte(v.DefinitionLevel())
 		if mp.listCanBeNull && definitionLevel == mp.listNullLevel {
 			if len(row) != 0 || rowEmpty || v.RepetitionLevel() != 0 {
-				return moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values")
+				return rollback(moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values"))
 			}
 			if !mp.dstNull {
-				return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+				return rollback(moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column"))
 			}
 			rowNull = true
 			continue
 		}
 		if mp.listElemCanBeNull && definitionLevel == mp.listElemNullLevel {
-			return moerr.NewInvalidInput(ctx, "parquet list NULL elements are not supported for vector columns")
+			return rollback(moerr.NewInvalidInput(ctx, "parquet list NULL elements are not supported for vector columns"))
 		}
 		if definitionLevel == mp.listEmptyLevel {
 			if len(row) != 0 || rowNull || v.RepetitionLevel() != 0 {
-				return moerr.NewInvalidInput(ctx, "malformed parquet list page: empty row has repeated values")
+				return rollback(moerr.NewInvalidInput(ctx, "malformed parquet list page: empty row has repeated values"))
 			}
 			rowEmpty = true
 			continue
 		}
 		if definitionLevel != mp.maxDefinitionLevel {
-			return moerr.NewInvalidInputf(ctx,
+			return rollback(moerr.NewInvalidInputf(ctx,
 				"parquet list value cannot map to vector: definition level %d, expected %d",
-				definitionLevel, mp.maxDefinitionLevel)
+				definitionLevel, mp.maxDefinitionLevel))
 		}
 		if rowNull || rowEmpty {
-			return moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values")
+			return rollback(moerr.NewInvalidInput(ctx, "malformed parquet list page: NULL row has repeated values"))
 		}
 
 		val, err := convert(v)
 		if err != nil {
-			return wrapParseError(ctx, rowCount, err)
+			return rollback(wrapParseError(ctx, rowCount, err))
 		}
 		row = append(row, val)
 	}
 	if err := flushRow(); err != nil {
-		return err
+		return rollback(err)
 	}
 	if rowCount != numRows {
-		return moerr.NewInvalidInputf(ctx, "malformed parquet list page: mapped %d rows, expected %d", rowCount, numRows)
+		return rollback(moerr.NewInvalidInputf(ctx, "malformed parquet list page: mapped %d rows, expected %d", rowCount, numRows))
 	}
 	return nil
 }
