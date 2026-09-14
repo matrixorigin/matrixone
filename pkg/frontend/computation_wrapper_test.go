@@ -1935,25 +1935,55 @@ func TestPreparedParamValuesCarriesBothDecimalDomains(t *testing.T) {
 	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 214, "select ?")
 	defer prepareStmt.Close()
 
-	params := vector.NewVec(types.T_text.ToType())
-	require.NoError(t, vector.AppendBytes(params, []byte("0e+77"), false, cw.proc.Mp()))
-	cw.proc.SetPrepareParamsWithMeta(
-		params, []bool{false}, []vector.PrepareParamKind{vector.PrepareParamDecimal})
-	defer func() {
-		cw.proc.SetPrepareParams(nil)
-		params.Free(cw.proc.Mp())
-	}()
-	values, err := preparedParamValues(cw.proc, []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0})
-	require.NoError(t, err)
-	require.Len(t, values, 1)
-	value := values[0].(plan2.ParamValue)
-	require.Equal(t, types.New(types.T_decimal64, 1, 0), value.RuntimeType)
-	require.True(t, value.HasRuntimeType)
-	require.Equal(t, types.New(types.T_decimal64, 1, 0), value.DirectResultType)
-	require.True(t, value.HasDirectResultType)
-	require.Equal(t, "0", value.MaterializedValue)
-	require.Equal(t, "0", cw.proc.GetPrepareParams().GetStringAt(0),
-		"the restored typed ParamRef must execute against the bounded canonical lexeme")
+	for _, test := range []struct {
+		name       string
+		mysqlType  defines.MysqlType
+		value      string
+		normalized types.Type
+		visible    types.Type
+		canonical  string
+	}{
+		{
+			name: "zero with huge positive exponent", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL,
+			value: "0e+77", normalized: types.New(types.T_decimal64, 1, 0),
+			visible: types.New(types.T_decimal64, 1, 0), canonical: "0",
+		},
+		{
+			name: "newdecimal trailing zeroes", mysqlType: defines.MYSQL_TYPE_NEWDECIMAL,
+			value:      "1.200000000000000000000000000000",
+			normalized: types.New(types.T_decimal64, 2, 1),
+			visible:    types.New(types.T_decimal128, 31, 30), canonical: "12e-1",
+		},
+		{
+			name: "decimal trailing zeroes", mysqlType: defines.MYSQL_TYPE_DECIMAL,
+			value:      "1.200000000000000000000000000000",
+			normalized: types.New(types.T_decimal64, 2, 1),
+			visible:    types.New(types.T_decimal128, 31, 30), canonical: "12e-1",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			params := vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(params, []byte(test.value), false, cw.proc.Mp()))
+			cw.proc.SetPrepareParamsWithMeta(
+				params, []bool{false}, []vector.PrepareParamKind{vector.PrepareParamDecimal})
+			t.Cleanup(func() {
+				cw.proc.SetPrepareParams(nil)
+				params.Free(cw.proc.Mp())
+			})
+			values, err := preparedParamValues(cw.proc, []byte{byte(test.mysqlType), 0})
+			require.NoError(t, err)
+			require.Len(t, values, 1)
+			value := values[0].(plan2.ParamValue)
+			require.Equal(t, test.value, value.Value)
+			require.Equal(t, test.normalized, value.RuntimeType)
+			require.True(t, value.HasRuntimeType)
+			require.Equal(t, test.visible, value.DirectResultType)
+			require.True(t, value.HasDirectResultType)
+			require.Equal(t, test.canonical, value.MaterializedValue)
+			require.Equal(t, test.canonical, cw.proc.GetPrepareParams().GetStringAt(0),
+				"the restored typed ParamRef must execute against the bounded canonical lexeme")
+		})
+	}
 }
 
 func TestPreparedParamValuesBoundsInvalidDecimalError(t *testing.T) {
@@ -2136,6 +2166,53 @@ func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
 	require.Equal(t, value, vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0))
 	originalProjectNode := originalPlan.GetQuery().Nodes[originalPlan.GetQuery().Steps[len(originalPlan.GetQuery().Steps)-1]]
 	require.Equal(t, int32(types.T_text), originalProjectNode.ProjectList[0].Typ.Id)
+}
+
+func TestInitExecuteStmtParamAcceptsPaddedBinaryDecimal(t *testing.T) {
+	const value = "1.200000000000000000000000000000"
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 28771, "select ? + cast(0 as decimal(65, 30))")
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		prepareStmt.Close()
+	}()
+
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, ioses.Close()) })
+	proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+	proto.SetSession(ses)
+	require.NoError(t, proto.ParseExecuteData(
+		execCtx.reqCtx, cw.proc, prepareStmt,
+		buildStringExecutePacket(proto, defines.MYSQL_TYPE_NEWDECIMAL, value), 0))
+
+	_, runtimePlan, stmt, _, owned, err := initExecuteStmtParam(
+		execCtx, ses, cw, nil, prepareStmt.Name)
+	if owned && stmt != nil {
+		defer stmt.Free()
+	}
+	require.NoError(t, err)
+	require.NotNil(t, runtimePlan)
+
+	query := runtimePlan.GetQuery()
+	projectNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+	require.Len(t, projectNode.ProjectList, 1)
+	project := projectNode.ProjectList[0]
+	executor, err := colexec.NewExpressionExecutor(cw.proc, project)
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.False(t, result.IsNull(0))
+	require.Equal(t, types.T_decimal256, result.GetType().Oid)
+	want, err := types.ParseDecimal256(value, result.GetType().Width, result.GetType().Scale)
+	require.NoError(t, err)
+	require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
+	require.Equal(t, "12e-1", cw.proc.GetPrepareParams().GetStringAt(0),
+		"binary DECIMAL execution must use the bounded normalized canonical lexeme")
 }
 
 func TestInitExecuteStmtParamKeepsDirectResultSpecializationAcrossNoOpPlanScan(t *testing.T) {
