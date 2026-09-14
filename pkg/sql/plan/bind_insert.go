@@ -5478,7 +5478,6 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		if err != nil {
 			return 0, nil, nil, -1, err
 		}
-		rowsForInsert = effectiveRows
 	} else if values, ok := astRows.Select.(*tree.ValuesClause); ok {
 		implicitColumns, implicitInsertColumns, hasGenerated := implicitInsertValueColumns(tableDef)
 		insertColumns = implicitInsertColumns
