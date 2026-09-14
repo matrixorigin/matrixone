@@ -1794,7 +1794,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			break
 		}
 		mp.mapper = func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error {
-			numRows := int(page.NumRows())
+			numRows, err := parquetPageCount(proc.Ctx, "NumRows()", page.NumRows())
+			if err != nil {
+				return err
+			}
 			if numRows == 0 {
 				return nil
 			}
@@ -2225,21 +2228,19 @@ func (nc *nullCheckInfo) isNull(index int) bool {
 // prepareNullCheck prepares null check information outside of the loop.
 // It traverses DefinitionLevels to compute actual non-null count, not trusting NumNulls().
 func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) (nullCheckInfo, error) {
-	numRows64 := page.NumRows()
-	numNulls := page.NumNulls()
-	if numRows64 < 0 {
-		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
-			"malformed page: NumRows() %d is negative", numRows64)
+	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return nullCheckInfo{}, err
 	}
+	numNulls := page.NumNulls()
 	if numNulls < 0 {
 		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
 			"malformed page: NumNulls() %d is negative", numNulls)
 	}
-	if numNulls > numRows64 {
+	if numNulls > int64(numRows) {
 		return nullCheckInfo{}, moerr.NewInvalidInputf(ctx,
-			"malformed page: NumNulls() %d exceeds NumRows() %d", numNulls, numRows64)
+			"malformed page: NumNulls() %d exceeds NumRows() %d", numNulls, numRows)
 	}
-	numRows := int(numRows64)
 
 	// Fast path: source doesn't allow null
 	if !mp.srcNull {
@@ -2372,7 +2373,10 @@ func processStringToFixed[T any](
 	parseFunc func(data []byte) (T, error),
 	zeroVal T,
 ) error {
-	numRows := int(page.NumRows())
+	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return err
+	}
 	if numRows == 0 {
 		return nil
 	}
@@ -2471,7 +2475,10 @@ func processStringToJson(
 	proc *process.Process,
 	vec *vector.Vector,
 ) error {
-	numRows := int(page.NumRows())
+	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return err
+	}
 	if numRows == 0 {
 		return nil
 	}
@@ -2547,7 +2554,10 @@ func processStringToArray[T types.ArrayElement](
 	vec *vector.Vector,
 	width int,
 ) error {
-	numRows := int(page.NumRows())
+	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return err
+	}
 	if numRows == 0 {
 		return nil
 	}
@@ -3676,7 +3686,10 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 	if err != nil {
 		return err
 	}
-	n := int(page.NumRows())
+	n, err := parquetPageCount(proc.Ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return err
+	}
 	noNulls := nc.noNulls
 	expectedDataCount := nc.actualNonNulls
 	if int64(len(data)) != expectedDataCount {
@@ -3761,8 +3774,11 @@ func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process
 	if err := ensureDictionaryIndexes(proc.Ctx, dictLen, indexes); err != nil {
 		return err
 	}
-	if !mp.srcNull || page.NumNulls() == 0 {
-		n := int(page.NumRows())
+	if nc.noNulls {
+		n, err := parquetPageCount(proc.Ctx, "NumRows()", page.NumRows())
+		if err != nil {
+			return err
+		}
 		length := vec.Length()
 		if err := vec.PreExtend(n+length, proc.Mp()); err != nil {
 			return err
@@ -3778,14 +3794,22 @@ func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process
 }
 
 func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vector.Vector, nc nullCheckInfo) error {
-	numRows := page.NumRows()
-	numValues := page.NumValues()
-	if numRows < 0 || numValues < 0 || numValues != numRows {
+	numRows64 := page.NumRows()
+	numValues64 := page.NumValues()
+	numRows, err := parquetPageCount(proc.Ctx, "NumRows()", numRows64)
+	if err != nil {
+		return err
+	}
+	numValues, err := parquetPageCount(proc.Ctx, "NumValues()", numValues64)
+	if err != nil {
+		return err
+	}
+	if numValues != numRows {
 		return moerr.NewInvalidInputf(proc.Ctx,
 			"malformed BOOLEAN page: NumValues() %d does not match NumRows() %d",
-			numValues, numRows)
+			numValues64, numRows64)
 	}
-	n := int(numValues)
+	n := numValues
 	length := vec.Length()
 	if err := preExtendParquetFixedVector(vec, n+length, proc, !nc.noNulls); err != nil {
 		return err
@@ -3897,7 +3921,10 @@ func copyBoolDictPageToVec(
 		values[i] = dict.Index(int32(i)).Boolean()
 	}
 
-	n := int(page.NumRows())
+	n, err := parquetPageCount(proc.Ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return err
+	}
 	length := vec.Length()
 	if err := preExtendParquetFixedVector(vec, n+length, proc, !nc.noNulls); err != nil {
 		return err
