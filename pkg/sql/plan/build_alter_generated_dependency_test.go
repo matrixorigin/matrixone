@@ -1,0 +1,779 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/stretchr/testify/require"
+)
+
+func TestOriginalAlterSourceColumnUsesCurrentLineage(t *testing.T) {
+	original := generatedDependencyTestTable()
+	copyTable := &planpb.TableDef{Cols: make([]*planpb.ColDef, len(original.Cols))}
+	for i, col := range original.Cols {
+		colCopy := *col
+		copyTable.Cols[i] = &colCopy
+	}
+	alterCtx := initAlterTableContext(original, copyTable, "test")
+
+	copyTable.Cols[0].Name = "renamed_source"
+	alterCtx.renameColumnSource("source", "renamed_source")
+	source, ok, err := originalAlterSourceColumn(
+		context.Background(), original, copyTable, alterCtx, "renamed_source",
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "source", source,
+		"a renamed target must retain its original copy-source lineage")
+
+	copyTable.Cols = append(copyTable.Cols, &planpb.ColDef{Name: "added"})
+	alterCtx.alterColMap["added"] = selectExpr{sexprType: exprConstValue, sexprStr: "0"}
+	source, ok, err = originalAlterSourceColumn(
+		context.Background(), original, copyTable, alterCtx, "added",
+	)
+	require.NoError(t, err)
+	require.False(t, ok, "constant-populated columns must not seed original dependencies")
+	require.Empty(t, source)
+
+	delete(alterCtx.alterColMap, "added")
+	_, ok, err = originalAlterSourceColumn(
+		context.Background(), original, copyTable, alterCtx, "added",
+	)
+	require.NoError(t, err)
+	require.False(t, ok, "an absent mapping must not be inferred from a matching name")
+
+	alterCtx.alterColMap["renamed_source"] = selectExpr{
+		sexprType: exprColumnName,
+		sexprStr:  "missing_original",
+	}
+	_, _, err = originalAlterSourceColumn(
+		context.Background(), original, copyTable, alterCtx, "renamed_source",
+	)
+	require.ErrorContains(t, err, "cannot resolve original source column")
+}
+
+func TestAppendAlterGeneratedDependentsRebuildsChainedIndexes(t *testing.T) {
+	tableDef := generatedDependencyTestTable()
+	tableDef.Indexes = []*planpb.IndexDef{
+		{
+			IndexName: "idx_middle",
+			IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+			Parts:     []string{catalog.CreateAlias("middle")},
+		},
+		{
+			IndexName: "idx_tail",
+			IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+			Parts:     []string{catalog.CreateAlias("tail")},
+		},
+		{
+			IndexName: "idx_other",
+			IndexAlgo: catalog.MoIndexDefaultAlgo.ToString(),
+			Parts:     []string{catalog.CreateAlias("other")},
+		},
+	}
+
+	affectedCols, primaryKeyAffected, err := appendAlterGeneratedDependents(
+		context.Background(), tableDef, []string{"source"}, map[string]struct{}{"source": {}},
+	)
+	require.NoError(t, err)
+	require.False(t, primaryKeyAffected)
+	require.Equal(t, []string{"source", "middle", "tail"}, affectedCols)
+
+	affectedIndexes, err := collectAffectedIndexNamesForAlter(tableDef.Indexes, affectedCols)
+	require.NoError(t, err)
+	require.Equal(t, []string{"idx_middle", "idx_tail"}, affectedIndexes)
+	require.NotContains(t, affectedIndexes, "idx_other",
+		"unrelated indexes must remain eligible for COPY cloning")
+}
+
+func TestAppendAlterGeneratedDependentsSkipsTablesWithoutGeneratedColumns(t *testing.T) {
+	tableDef := &planpb.TableDef{
+		// Legacy table metadata can omit Name2ColIndex. With no generated
+		// expressions there is no dependency graph to resolve.
+		Cols: []*planpb.ColDef{{Name: "b"}},
+	}
+	affectedCols, primaryKeyAffected, err := appendAlterGeneratedDependents(
+		context.Background(), tableDef, []string{"b"}, map[string]struct{}{"b": {}},
+	)
+	require.NoError(t, err)
+	require.False(t, primaryKeyAffected)
+	require.Equal(t, []string{"b"}, affectedCols)
+}
+
+func TestAlterCopyAffectedForeignKeyColumnsUsesFinalSourceTypes(t *testing.T) {
+	original := generatedDependencyTestTable()
+	for i, col := range original.Cols {
+		col.ColId = uint64(i + 1)
+		if col.GeneratedCol != nil {
+			col.GeneratedCol.IsStored = true
+			col.GeneratedCol.OriginString = "unchanged " + col.Name
+		}
+	}
+
+	virtual := &planpb.ColDef{
+		ColId: 7,
+		Name:  "virtual",
+		Typ:   planpb.Type{Id: int32(types.T_int64)},
+		GeneratedCol: &planpb.GeneratedCol{
+			Expr: generatedColumnRefExpr(planpb.Type{Id: int32(types.T_int64)}, 0, "source"),
+		},
+	}
+	original.Cols = append(original.Cols, virtual)
+	original.Name2ColIndex[virtual.Name] = int32(len(original.Cols) - 1)
+
+	copyTable := &planpb.TableDef{
+		Cols:          make([]*planpb.ColDef, len(original.Cols)),
+		Name2ColIndex: original.Name2ColIndex,
+	}
+	changeColDefMap := make(map[uint64]*planpb.ColDef, len(original.Cols))
+	for i, col := range original.Cols {
+		copyCol := *col
+		copyTable.Cols[i] = &copyCol
+		changeColDefMap[col.ColId] = &planpb.ColDef{Name: col.Name}
+	}
+	copyTable.Cols[0].Typ = planpb.Type{Id: int32(types.T_int32)}
+
+	affected, err := AlterCopyAffectedForeignKeyColumns(
+		context.Background(), original, copyTable, changeColDefMap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{
+		original.Cols[0].ColId: "source",
+		original.Cols[1].ColId: "middle",
+		original.Cols[2].ColId: "tail",
+	}, affected,
+		"a converted source must include the direct endpoint candidate and full transitive stored-generated closure, but exclude unrelated and virtual generated columns")
+}
+
+func TestAlterCopyAffectedForeignKeyColumnsIncludesChangedExpressions(t *testing.T) {
+	original := generatedDependencyTestTable()
+	changeColDefMap := make(map[uint64]*planpb.ColDef, len(original.Cols))
+	copyTable := &planpb.TableDef{
+		Cols:          make([]*planpb.ColDef, len(original.Cols)),
+		Name2ColIndex: original.Name2ColIndex,
+	}
+	for i, col := range original.Cols {
+		col.ColId = uint64(i + 1)
+		if col.GeneratedCol != nil {
+			col.GeneratedCol.IsStored = true
+			col.GeneratedCol.OriginString = "unchanged " + col.Name
+		}
+		copyCol := *col
+		copyTable.Cols[i] = &copyCol
+		changeColDefMap[col.ColId] = &planpb.ColDef{Name: col.Name}
+	}
+
+	// MODIFY keeps middle's type but changes its expression. Its own value and
+	// tail's transitive value are recomputed, while the unrelated generated key
+	// remains unchanged.
+	copyTable.Cols[1].GeneratedCol = &planpb.GeneratedCol{
+		Expr:         copyTable.Cols[1].GeneratedCol.Expr,
+		OriginString: "source + 1",
+		IsStored:     true,
+	}
+
+	affected, err := AlterCopyAffectedForeignKeyColumns(
+		context.Background(), original, copyTable, changeColDefMap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{
+		original.Cols[1].ColId: "middle",
+		original.Cols[2].ColId: "tail",
+	}, affected)
+}
+
+func TestAlterCopyAffectedForeignKeyColumnsIncludesNewStoredColumns(t *testing.T) {
+	original := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{ColId: 1, Name: "source", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{ColId: 2, Name: "other", Typ: planpb.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{"source": 0, "other": 1},
+	}
+	copyTable := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{
+				ColId: 1, Name: "source", Typ: planpb.Type{Id: int32(types.T_int32)},
+				GeneratedCol: &planpb.GeneratedCol{
+					Expr:         generatedColumnRefExpr(planpb.Type{Id: int32(types.T_int32)}, 1, "other"),
+					OriginString: "other + 1", IsStored: true,
+				},
+			},
+			{ColId: 2, Name: "other", Typ: planpb.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{"source": 0, "other": 1},
+	}
+	changeColDefMap := map[uint64]*planpb.ColDef{
+		1: {Name: "source"},
+		2: {Name: "other"},
+	}
+
+	affected, err := AlterCopyAffectedForeignKeyColumns(
+		context.Background(), original, copyTable, changeColDefMap,
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{1: "source"}, affected,
+		"a column converted to a stored generated value may become a new FK endpoint")
+}
+
+func TestAlterCopyAffectedForeignKeyColumnsIncludesDirectValueChanges(t *testing.T) {
+	tests := []struct {
+		name       string
+		sourceType planpb.Type
+		targetType planpb.Type
+		affected   bool
+	}{
+		{
+			name:       "decimal scale change",
+			sourceType: planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 1},
+			targetType: planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 0},
+			affected:   true,
+		},
+		{
+			name:       "varchar capacity widening",
+			sourceType: planpb.Type{Id: int32(types.T_varchar), Width: 10, Charset: uint32(types.CharsetUTF8)},
+			targetType: planpb.Type{Id: int32(types.T_varchar), Width: 20, Charset: uint32(types.CharsetUTF8)},
+		},
+		{
+			name:       "varbinary capacity widening",
+			sourceType: planpb.Type{Id: int32(types.T_varbinary), Width: 10, Charset: uint32(types.CharsetBinary)},
+			targetType: planpb.Type{Id: int32(types.T_varbinary), Width: 20, Charset: uint32(types.CharsetBinary)},
+		},
+		{
+			name:       "decimal precision widening",
+			sourceType: planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 1},
+			targetType: planpb.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 1},
+		},
+		{
+			name:       "charset change",
+			sourceType: planpb.Type{Id: int32(types.T_varchar), Width: 10, Charset: uint32(types.CharsetUTF8)},
+			targetType: planpb.Type{Id: int32(types.T_varchar), Width: 10, Charset: uint32(types.CharsetUTF8MB4Bin)},
+			affected:   true,
+		},
+		{
+			name:       "fixed width padding change",
+			sourceType: planpb.Type{Id: int32(types.T_binary), Width: 10, Charset: uint32(types.CharsetBinary)},
+			targetType: planpb.Type{Id: int32(types.T_binary), Width: 20, Charset: uint32(types.CharsetBinary)},
+			affected:   true,
+		},
+		{
+			name:       "char capacity widening",
+			sourceType: planpb.Type{Id: int32(types.T_char), Width: 10, Charset: uint32(types.CharsetUTF8)},
+			targetType: planpb.Type{Id: int32(types.T_char), Width: 20, Charset: uint32(types.CharsetUTF8)},
+		},
+		{
+			name:       "bit width change",
+			sourceType: planpb.Type{Id: int32(types.T_bit), Width: 1},
+			targetType: planpb.Type{Id: int32(types.T_bit), Width: 8},
+			affected:   true,
+		},
+		{
+			name:       "legacy unknown width widening",
+			sourceType: planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8)},
+			targetType: planpb.Type{Id: int32(types.T_varchar), Width: 20, Charset: uint32(types.CharsetUTF8)},
+			affected:   true,
+		},
+		{
+			name:       "table provenance metadata only",
+			sourceType: planpb.Type{Id: int32(types.T_int32), Width: 32, Table: "source_table"},
+			targetType: planpb.Type{Id: int32(types.T_int32), Width: 32},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			original := &planpb.TableDef{
+				Cols: []*planpb.ColDef{{ColId: 1, Name: "source", Typ: tc.sourceType}},
+			}
+			copyTable := &planpb.TableDef{
+				Cols: []*planpb.ColDef{{ColId: 1, Name: "source", Typ: tc.targetType}},
+			}
+			affected, err := AlterCopyAffectedForeignKeyColumns(
+				context.Background(), original, copyTable,
+				map[uint64]*planpb.ColDef{1: {Name: "source"}},
+			)
+			require.NoError(t, err)
+			if tc.affected {
+				require.Equal(t, map[uint64]string{1: "source"}, affected)
+			} else {
+				require.Empty(t, affected)
+			}
+		})
+	}
+}
+
+func TestAlterCopyAffectedForeignKeyColumnsDoesNotSkipDirectOnlyTables(t *testing.T) {
+	original := &planpb.TableDef{
+		Cols: []*planpb.ColDef{{ColId: 1, Name: "source", Typ: planpb.Type{
+			Id: int32(types.T_decimal64), Width: 10, Scale: 1,
+		}}},
+	}
+	copyTable := &planpb.TableDef{
+		Cols: []*planpb.ColDef{{ColId: 1, Name: "source", Typ: planpb.Type{
+			Id: int32(types.T_decimal64), Width: 10, Scale: 0,
+		}}},
+	}
+	affected, err := AlterCopyAffectedForeignKeyColumns(
+		context.Background(), original, copyTable,
+		map[uint64]*planpb.ColDef{1: {Name: "source"}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{1: "source"}, affected)
+}
+
+func TestAlterCopyAffectedForeignKeyColumnsSkipsVirtualOnlyDependencyMetadata(t *testing.T) {
+	original := &planpb.TableDef{
+		// A legacy table may retain a virtual generated definition without the
+		// Name2ColIndex map required by the dependency walker. Direct FK checks
+		// still need to run, but a virtual-only column is not materialized by
+		// COPY and must not force a dependency-metadata lookup.
+		Cols: []*planpb.ColDef{
+			{ColId: 1, Name: "source", Typ: planpb.Type{
+				Id: int32(types.T_decimal64), Width: 10, Scale: 1,
+			}},
+			{ColId: 2, Name: "virtual_key", Typ: planpb.Type{Id: int32(types.T_int32)},
+				GeneratedCol: &planpb.GeneratedCol{Expr: generatedColumnRefExpr(
+					planpb.Type{Id: int32(types.T_int32)}, 0, "source",
+				)}},
+		},
+	}
+	copyTable := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{ColId: 1, Name: "source", Typ: planpb.Type{
+				Id: int32(types.T_decimal64), Width: 10, Scale: 0,
+			}},
+			original.Cols[1],
+		},
+	}
+	affected, err := AlterCopyAffectedForeignKeyColumns(
+		context.Background(), original, copyTable,
+		map[uint64]*planpb.ColDef{1: {Name: "source"}, 2: {Name: "virtual_key"}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{1: "source"}, affected)
+}
+
+func TestAlterCopyAffectedForeignKeyColumnsSkipsMetadataForNewStoredColumn(t *testing.T) {
+	original := &planpb.TableDef{
+		// Adding a stored generated definition to an ordinary legacy table can
+		// make the source an FK endpoint, but there are no original dependency
+		// edges to walk. The source itself is already in affected.
+		Cols: []*planpb.ColDef{{ColId: 1, Name: "source", Typ: planpb.Type{
+			Id: int32(types.T_int32), Width: 32,
+		}}},
+	}
+	copyTable := &planpb.TableDef{
+		Cols: []*planpb.ColDef{{ColId: 1, Name: "source", Typ: planpb.Type{
+			Id: int32(types.T_int32), Width: 32,
+		}, GeneratedCol: &planpb.GeneratedCol{IsStored: true, OriginString: "1"}}},
+	}
+	affected, err := AlterCopyAffectedForeignKeyColumns(
+		context.Background(), original, copyTable,
+		map[uint64]*planpb.ColDef{1: {Name: "source"}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[uint64]string{1: "source"}, affected)
+}
+
+func TestAlterForeignKeyValidationResolvesSelfReferencesLocally(t *testing.T) {
+	for _, selfMarker := range []uint64{0, 100} {
+		t.Run(fmt.Sprintf("self marker %d", selfMarker), func(t *testing.T) {
+			ctx := NewMockCompilerContext(false)
+			int32Type := planpb.Type{Id: int32(types.T_int32)}
+			int64Type := planpb.Type{Id: int32(types.T_int64)}
+			selfTable := func() *planpb.TableDef {
+				return &planpb.TableDef{
+					TblId: 100, DbName: "db", Name: "self_ref",
+					Cols: []*planpb.ColDef{
+						{ColId: 1, Name: "id", Typ: int32Type},
+						{ColId: 2, Name: "generated_key", Typ: int32Type},
+						{ColId: 3, Name: "child_key_a", Typ: int32Type},
+						{ColId: 4, Name: "child_key_b", Typ: int32Type},
+					},
+					Fkeys: []*planpb.ForeignKeyDef{
+						{Name: "fk_unrelated", Cols: []uint64{3}, ForeignTbl: selfMarker, ForeignCols: []uint64{1}},
+						{Name: "fk_second_self_reference", Cols: []uint64{4}, ForeignTbl: selfMarker, ForeignCols: []uint64{2}},
+					},
+					RefChildTbls: []uint64{selfMarker},
+				}
+			}
+
+			t.Run("modify scans every incoming self FK", func(t *testing.T) {
+				table := selfTable()
+				err := checkColumnForeignkeyConstraint(
+					ctx, table, table.Cols[1], &planpb.ColDef{
+						ColId: table.Cols[1].ColId, Name: table.Cols[1].Name, Typ: int64Type,
+					},
+				)
+				require.ErrorContains(t, err, "fk_second_self_reference")
+				require.ErrorContains(t, err, "db.self_ref")
+			})
+
+			t.Run("modify resolves outgoing self FK", func(t *testing.T) {
+				table := selfTable()
+				table.Fkeys = []*planpb.ForeignKeyDef{{
+					Name: "fk_outgoing_self", Cols: []uint64{3}, ForeignTbl: selfMarker, ForeignCols: []uint64{1},
+				}}
+				err := checkColumnForeignkeyConstraint(
+					ctx, table, table.Cols[2], &planpb.ColDef{
+						ColId: table.Cols[2].ColId, Name: table.Cols[2].Name, Typ: int64Type,
+					},
+				)
+				require.ErrorContains(t, err, "fk_outgoing_self")
+			})
+
+			t.Run("drop scans every incoming self FK", func(t *testing.T) {
+				table := selfTable()
+				err := checkDropColumnWithForeignKey(ctx, table, table.Cols[1])
+				require.ErrorContains(t, err, "fk_second_self_reference")
+			})
+		})
+	}
+}
+
+type alterForeignKeyResolveTestContext struct {
+	CompilerContext
+	tables map[uint64]*TableDef
+}
+
+func (ctx *alterForeignKeyResolveTestContext) ResolveById(tableID uint64, _ *Snapshot) (*ObjectRef, *TableDef, error) {
+	return nil, ctx.tables[tableID], nil
+}
+
+func TestAlterForeignKeyValidationResolvesExternalReferences(t *testing.T) {
+	parent := &planpb.TableDef{
+		TblId: 100, DbName: "db", Name: "parent",
+		Cols: []*planpb.ColDef{
+			{ColId: 1, Name: "unrelated", Typ: planpb.Type{Id: int32(types.T_int32)}},
+			{ColId: 2, Name: "target", Typ: planpb.Type{Id: int32(types.T_int32)}},
+		},
+		RefChildTbls: []uint64{200},
+	}
+	child := func(includeTargetReference bool) *planpb.TableDef {
+		child := &planpb.TableDef{
+			TblId: 200, DbName: "child_db", Name: "child",
+			Fkeys: []*planpb.ForeignKeyDef{
+				{Name: "fk_other_parent", Cols: []uint64{10}, ForeignTbl: 300, ForeignCols: []uint64{2}},
+				{Name: "fk_parent_id", Cols: []uint64{11}, ForeignTbl: 100, ForeignCols: []uint64{1}},
+			},
+		}
+		if includeTargetReference {
+			child.Fkeys = append(child.Fkeys, &planpb.ForeignKeyDef{
+				Name: "fk_child_parent", Cols: []uint64{12}, ForeignTbl: 100, ForeignCols: []uint64{2},
+			})
+		}
+		return child
+	}
+
+	for _, operation := range []string{"modify", "drop"} {
+		for _, tc := range []struct {
+			name      string
+			wantError bool
+		}{
+			{name: "external FK uses target column", wantError: true},
+			{name: "external FKs use only unrelated parent or column"},
+		} {
+			t.Run(operation+"/"+tc.name, func(t *testing.T) {
+				ctx := &alterForeignKeyResolveTestContext{
+					CompilerContext: NewMockCompilerContext(false),
+					tables:          map[uint64]*TableDef{200: child(tc.wantError)},
+				}
+				var err error
+				if operation == "modify" {
+					err = checkColumnForeignkeyConstraint(ctx, parent, parent.Cols[1], &planpb.ColDef{
+						ColId: 2, Name: "target", Typ: planpb.Type{Id: int32(types.T_int64)},
+					})
+				} else {
+					err = checkDropColumnWithForeignKey(ctx, parent, parent.Cols[1])
+				}
+				if tc.wantError {
+					require.ErrorContains(t, err, "fk_child_parent")
+					if operation == "modify" {
+						require.ErrorContains(t, err, "child_db.child")
+					} else {
+						require.ErrorContains(t, err, "of table 'child'")
+					}
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	}
+}
+
+func TestAlterForeignKeyValidationRejectsScaleChangesOnEveryEndpoint(t *testing.T) {
+	decimal := func(scale int32) planpb.Type {
+		return planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: scale}
+	}
+
+	t.Run("outgoing composite child endpoint", func(t *testing.T) {
+		ctx := &alterForeignKeyResolveTestContext{
+			CompilerContext: NewMockCompilerContext(false),
+			tables: map[uint64]*TableDef{
+				200: {Cols: []*planpb.ColDef{
+					{ColId: 10, Name: "parent_a", Typ: decimal(1)},
+					{ColId: 11, Name: "parent_b", Typ: decimal(1)},
+				}},
+			},
+		}
+		child := &planpb.TableDef{
+			TblId: 100,
+			Cols: []*planpb.ColDef{
+				{ColId: 1, Name: "child_a", Typ: decimal(1)},
+				{ColId: 2, Name: "child_b", Typ: decimal(1)},
+			},
+			Fkeys: []*planpb.ForeignKeyDef{{
+				Name: "fk_composite_scale", Cols: []uint64{1, 2}, ForeignTbl: 200,
+				ForeignCols: []uint64{10, 11},
+			}},
+		}
+		err := checkColumnForeignkeyConstraint(ctx, child, child.Cols[1], &planpb.ColDef{
+			ColId: 2, Name: "child_b", Typ: decimal(0),
+		})
+		require.ErrorContains(t, err, "fk_composite_scale")
+		require.ErrorContains(t, err, "child_b")
+	})
+
+	t.Run("outgoing varchar capacity widening remains legal", func(t *testing.T) {
+		ctx := &alterForeignKeyResolveTestContext{
+			CompilerContext: NewMockCompilerContext(false),
+			tables: map[uint64]*TableDef{
+				200: {Cols: []*planpb.ColDef{{
+					ColId: 10, Name: "parent_key", Typ: planpb.Type{
+						Id: int32(types.T_varchar), Width: 10, Charset: uint32(types.CharsetUTF8),
+					},
+				}}},
+			},
+		}
+		child := &planpb.TableDef{
+			TblId: 100,
+			Cols: []*planpb.ColDef{{
+				ColId: 1, Name: "child_key", Typ: planpb.Type{
+					Id: int32(types.T_varchar), Width: 10, Charset: uint32(types.CharsetUTF8),
+				},
+			}},
+			Fkeys: []*planpb.ForeignKeyDef{{
+				Name: "fk_varchar_widen", Cols: []uint64{1}, ForeignTbl: 200,
+				ForeignCols: []uint64{10},
+			}},
+		}
+		err := checkColumnForeignkeyConstraint(ctx, child, child.Cols[0], &planpb.ColDef{
+			ColId: 1, Name: "child_key", Typ: planpb.Type{
+				Id: int32(types.T_varchar), Width: 20, Charset: uint32(types.CharsetUTF8),
+			},
+		})
+		require.NoError(t, err)
+	})
+
+	t.Run("incoming parent endpoint", func(t *testing.T) {
+		ctx := &alterForeignKeyResolveTestContext{
+			CompilerContext: NewMockCompilerContext(false),
+			tables: map[uint64]*TableDef{
+				200: {
+					Fkeys: []*planpb.ForeignKeyDef{{
+						Name: "fk_incoming_scale", Cols: []uint64{20, 21}, ForeignTbl: 100,
+						ForeignCols: []uint64{1, 2},
+					}},
+				},
+			},
+		}
+		parent := &planpb.TableDef{
+			TblId: 100, DbName: "db", Name: "scale_parent",
+			Cols: []*planpb.ColDef{
+				{ColId: 1, Name: "parent_a", Typ: decimal(1)},
+				{ColId: 2, Name: "parent_b", Typ: decimal(1)},
+			},
+			RefChildTbls: []uint64{200},
+		}
+		err := checkColumnForeignkeyConstraint(ctx, parent, parent.Cols[0], &planpb.ColDef{
+			ColId: 1, Name: "parent_a", Typ: decimal(0),
+		})
+		require.ErrorContains(t, err, "fk_incoming_scale")
+	})
+
+	for _, selfMarker := range []uint64{0, 100} {
+		t.Run(fmt.Sprintf("self endpoint marker %d", selfMarker), func(t *testing.T) {
+			table := &planpb.TableDef{
+				TblId: 100, DbName: "db", Name: "scale_self",
+				Cols: []*planpb.ColDef{
+					{ColId: 1, Name: "parent_a", Typ: decimal(1)},
+					{ColId: 2, Name: "child_a", Typ: decimal(1)},
+				},
+				Fkeys: []*planpb.ForeignKeyDef{{
+					Name: "fk_self_scale", Cols: []uint64{2}, ForeignTbl: selfMarker,
+					ForeignCols: []uint64{1},
+				}},
+				RefChildTbls: []uint64{selfMarker},
+			}
+			ctx := NewMockCompilerContext(false)
+			err := checkColumnForeignkeyConstraint(ctx, table, table.Cols[0], &planpb.ColDef{
+				ColId: 1, Name: "parent_a", Typ: decimal(0),
+			})
+			require.ErrorContains(t, err, "fk_self_scale")
+		})
+	}
+}
+
+func addAlterTestIndex(t *testing.T, mock *MockOptimizer, base *planpb.TableDef, indexName, columnName string, unique bool) {
+	t.Helper()
+	if base.Name2ColIndex == nil {
+		base.Name2ColIndex = make(map[string]int32, len(base.Cols))
+	}
+	for i, col := range base.Cols {
+		base.Name2ColIndex[col.Name] = int32(i)
+	}
+	indexTableName := catalog.SecondaryIndexTableNamePrefix + "alter-generated-" + indexName
+	base.Indexes = append(base.Indexes, &planpb.IndexDef{
+		IndexName:      indexName,
+		IndexAlgo:      catalog.MoIndexDefaultAlgo.ToString(),
+		Parts:          []string{columnName},
+		Unique:         unique,
+		IndexTableName: indexTableName,
+		TableExist:     true,
+	})
+	registerMockGeneratedIndexTable(t, mock, base, indexTableName, base.Cols[mockTableColPos(t, base, columnName)])
+	registerAlterIndexVisibilityRows(t, mock, base)
+}
+
+func registerAlterIndexVisibilityRows(t *testing.T, mock *MockOptimizer, base *planpb.TableDef) {
+	t.Helper()
+	proc := mock.ctxt.GetProcess()
+	require.NotNil(t, mock.ctxt.processHolder)
+	mock.ctxt.processHolder.internalSQLExecutor = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		require.Equal(t, fmt.Sprintf(
+			"SELECT name, is_visible FROM mo_catalog.mo_indexes WHERE table_id = %d",
+			base.TblId,
+		), sql)
+		result := executor.NewMemResult(
+			[]types.Type{types.T_varchar.ToType(), types.T_int8.ToType()}, proc.Mp(),
+		)
+		result.NewBatchWithRowCount(len(base.Indexes))
+		names := make([]string, len(base.Indexes))
+		visible := make([]int8, len(base.Indexes))
+		for i, index := range base.Indexes {
+			names[i] = index.IndexName
+			visible[i] = 1
+		}
+		require.NoError(t, executor.AppendStringRows(result, 0, names))
+		require.NoError(t, executor.AppendFixedRows(result, 1, visible))
+		return result.GetResult(), nil
+	})
+}
+
+func newGeneratedIndexAlterMock(t *testing.T) *MockOptimizer {
+	t.Helper()
+	mock := NewMockOptimizer(false)
+	configureMockGeneratedIndex(t, mock, true)
+	base := mock.ctxt.tables["t_on_update_gen"]
+	addAlterTestIndex(t, mock, base, "idx_val", "val", false)
+	addAlterTestIndex(t, mock, base, "idx_unaffected", "id", false)
+	return mock
+}
+
+func TestAlterModifyRebuildsOnlyDirectAndGeneratedDependentIndexes(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "modify",
+			sql:  "alter table constraint_test.t_on_update_gen modify column val bigint",
+		},
+		{
+			name: "same-name change",
+			sql:  "alter table constraint_test.t_on_update_gen change column val val bigint",
+		},
+		{
+			name: "reorder then modify",
+			sql:  "alter table constraint_test.t_on_update_gen modify column val int after updated_at, modify column val bigint",
+		},
+		{
+			name: "rename unrelated then modify",
+			sql:  "alter table constraint_test.t_on_update_gen change column updated_at changed_at timestamp, modify column val bigint",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newGeneratedIndexAlterMock(t)
+			logicPlan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.NotNil(t, alter)
+			require.NotNil(t, alter.Options)
+			require.Contains(t, strings.ToLower(alter.CreateTmpTableSql), "generated always as (val) stored",
+				"the COPY DDL must serialize and rebind the generated expression")
+			require.False(t, alter.Options.SkipIndexesCopy["idx_val"],
+				"an index on the directly modified source column must be rebuilt")
+			require.False(t, alter.Options.SkipIndexesCopy["idx_generated_g"],
+				"an index on a dependent generated column must be rebuilt")
+			require.True(t, alter.Options.SkipIndexesCopy["idx_unaffected"],
+				"an unrelated index must remain cloneable")
+			require.False(t, alter.Options.SkipUniqueIdxDedup["idx_generated_g"],
+				"COPY must retain dedup for a generated unique key")
+
+			if tc.name == "reorder then modify" {
+				copyTable := alter.GetCopyTableDef()
+				valPos := mockTableColPos(t, mock.ctxt.tables["t_on_update_gen"], "val")
+				val := FindColumn(copyTable.Cols, "val")
+				g := FindColumn(copyTable.Cols, "g")
+				require.NotNil(t, val)
+				require.NotNil(t, g)
+				require.NotEqual(t, valPos, mockTableColPos(t, copyTable, "val"))
+				require.Equal(t, int32(mockTableColPos(t, copyTable, "val")), g.GeneratedCol.Expr.GetCol().ColPos,
+					"the generated expression must reference the source's final position")
+			}
+		})
+	}
+}
+
+func TestAlterAddThenModifyDoesNotSeedOriginalGeneratedDependencies(t *testing.T) {
+	mock := newGeneratedIndexAlterMock(t)
+	logicPlan, err := runOneStmt(mock, t,
+		"alter table constraint_test.t_on_update_gen add column added int not null default 0, modify column added bigint")
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.NotNil(t, alter)
+	require.True(t, alter.Options.SkipIndexesCopy["idx_generated_g"],
+		"the added column has no source value that could change the original generated key")
+}
+
+func TestAlterSourceAffectingGeneratedPrimaryKeyRebuildsAllIndexes(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	configureMockGeneratedPrimaryKey(t, mock)
+	base := mock.ctxt.tables["t_on_update_gen"]
+	addAlterTestIndex(t, mock, base, "idx_pk_payload", "updated_at", true)
+
+	logicPlan, err := runOneStmt(mock, t,
+		"alter table constraint_test.t_on_update_gen modify column val bigint")
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.NotNil(t, alter)
+	require.Contains(t, strings.ToLower(alter.CreateTmpTableSql), "generated always as (val) stored",
+		"the generated primary-key expression must survive temporary-table serialization")
+	require.False(t, alter.Options.SkipIndexesCopy["idx_pk_payload"],
+		"secondary index entries carry the primary key and must be rebuilt when its generated value can change")
+}
