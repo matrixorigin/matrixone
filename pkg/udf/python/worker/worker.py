@@ -1355,14 +1355,35 @@ def _canonical_json_text(value: str) -> str:
         return parsed
 
     try:
-        parsed = json.loads(
+        json.loads(
             value,
             parse_constant=reject_nonstandard_number,
             parse_float=reject_nonfinite_float,
         )
     except Exception as exc:
         raise ValueError("TYPE_CONTRACT: invalid JSON input") from exc
-    return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+    # Match the Gateway's json.Compact contract: remove insignificant
+    # whitespace without rewriting number or string tokens. A loads/dumps
+    # round trip changes e.g. 1e-7 to 1e-07 and makes SCALAR and VECTOR
+    # handlers observe different text for the same SQL value.
+    compact = []
+    in_string = False
+    escaped = False
+    for char in value:
+        if in_string:
+            compact.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+            compact.append(char)
+        elif char not in " \t\r\n":
+            compact.append(char)
+    return "".join(compact)
 
 
 def _check_json(value: str) -> str:
