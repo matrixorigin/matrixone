@@ -139,6 +139,18 @@ func TestAlterCopyInitSQL(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "SELECT 1", restoreSQL)
 
+	// Embedded backticks in db/table/index names are escaped (doubled) via the shared
+	// identifier helper, so the post-commit REINDEX is valid SQL rather than malformed (P2).
+	btctx := newStubCtx()
+	btctx.qryDatabase = "d`b"
+	btctx.origTable = &plan.TableDef{Name: "s`rc", Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"}}
+	btdefs := map[string]*plan.IndexDef{
+		catalog.FullText2Index_TblType_Metadata: {IndexName: "id`x"},
+	}
+	_, btSQL, err := (Hooks{}).AlterCopyInitSQL(btctx, btdefs)
+	require.NoError(t, err)
+	require.Equal(t, "ALTER TABLE `d``b`.`s``rc` ALTER REINDEX `id``x` FULLTEXT2 FORCE_SYNC", btSQL)
+
 	// Fail closed when no index def is available.
 	_, _, err = (Hooks{}).AlterCopyInitSQL(ctx, map[string]*plan.IndexDef{})
 	require.Error(t, err)
