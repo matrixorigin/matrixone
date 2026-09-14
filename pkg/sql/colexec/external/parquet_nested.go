@@ -151,6 +151,7 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 	rowsRead := 0
 	eof := false
 	batchBoundary := false
+	checkpoints := make([]vector.AppendCheckpoint, len(bat.Vecs))
 	for rowsRead < batchLimit && !h.parquetBatchAtByteBudget(bat, rowsRead, param) {
 		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), batchLimit-rowsRead), h.estimatedBatchSize(bat, rowsRead, param), param.maxBatchSize)
 		n, err := h.rowReader.ReadRows(rowBuf[:toRead])
@@ -166,7 +167,6 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 			eof = true
 		}
 		for _, row := range rowBuf[:n] {
-			checkpoints := make([]vector.AppendCheckpoint, len(bat.Vecs))
 			for colIdx, vec := range bat.Vecs {
 				if vec != nil {
 					checkpoints[colIdx] = vec.MakeAppendCheckpoint()
