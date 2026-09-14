@@ -2569,7 +2569,7 @@ var (
 			input: "select a as promo_revenue from (select * from r) as c_orders(c_custkey, c_count)",
 		}, {
 			input:  "select extract(year from l_shipdate) as l_year from t",
-			output: "select extract(year, l_shipdate) as l_year from t",
+			output: "select extract(year from l_shipdate) as l_year from t",
 		}, {
 			input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112' day",
 			output: "select * from r inner join s on R.uid = S.uid where l_shipdate <= date(1998-12-01) - INTERVAL 112 day",
@@ -5863,12 +5863,12 @@ func TestCreateSQLTaskPreservesTimestampUnits(t *testing.T) {
 	createStmt, ok := stmt.(*tree.CreateSQLTask)
 	require.True(t, ok)
 	require.Contains(t, createStmt.SQLBody, "timestampdiff(hour, current_timestamp(), current_timestamp())")
-	require.Contains(t, createStmt.SQLBody, "extract(hour, current_timestamp())")
+	require.Contains(t, createStmt.SQLBody, "extract(hour from current_timestamp())")
 	require.Contains(t, createStmt.SQLBody, "INTERVAL 1 hour")
 
 	formatted := tree.StringWithOpts(createStmt, dialect.MYSQL, tree.WithSingleQuoteString())
 	require.Contains(t, formatted, "timestampdiff(hour, current_timestamp(), current_timestamp())")
-	require.Contains(t, formatted, "extract(hour, current_timestamp())")
+	require.Contains(t, formatted, "extract(hour from current_timestamp())")
 	require.Contains(t, formatted, "INTERVAL 1 hour")
 }
 
