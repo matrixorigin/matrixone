@@ -613,16 +613,7 @@ func reconstructListFromPattern(ctx context.Context, col *parquet.Column, values
 	if len(listChild.Columns()) == 0 {
 		return nil, moerr.NewInternalErrorf(ctx, "list child has no element column")
 	}
-	elementCol := listChild.Columns()[0]
-
-	// Check if element is a leaf or nested structure
-	if elementCol.Leaf() {
-		// Simple case: list of primitive values
-		return reconstructList(ctx, listChild, values)
-	} else {
-		// Complex case: list of structs/maps/lists
-		return reconstructListOfNested(ctx, elementCol, values)
-	}
+	return reconstructList(ctx, listChild, values)
 }
 
 // reconstructMapFromPattern reconstructs Map from pattern
@@ -786,16 +777,15 @@ func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.
 		return result, nil
 	}
 	elementCol := listElementColumn(col)
-	if elementCol != nil && !elementCol.Leaf() {
-		return reconstructListOfNested(ctx, elementCol, values)
-	}
 	// An empty list is represented by a NULL placeholder at the definition
 	// level immediately before the element becomes defined. An optional
 	// element has one additional definition level, so a NULL element must not
 	// be mistaken for the empty-list marker.
-	if len(values) == 1 && values[0].IsNull() && values[0].RepetitionLevel() == 0 &&
-		elementCol != nil && values[0].DefinitionLevel() == listEmptyDefinitionLevel(elementCol) {
+	if elementCol != nil && isEmptyListValues(elementCol, values) {
 		return result, nil
+	}
+	if elementCol != nil && !elementCol.Leaf() {
+		return reconstructListOfNested(ctx, elementCol, values)
 	}
 	for _, v := range values {
 		if v.IsNull() {
@@ -844,6 +834,19 @@ func listEmptyDefinitionLevel(elementCol *parquet.Column) int {
 	return level
 }
 
+func isEmptyListValues(elementCol *parquet.Column, values []parquet.Value) bool {
+	if len(values) == 0 {
+		return false
+	}
+	emptyLevel := listEmptyDefinitionLevel(elementCol)
+	for _, value := range values {
+		if !value.IsNull() || value.DefinitionLevel() != emptyLevel {
+			return false
+		}
+	}
+	return true
+}
+
 // reconstructMap reconstructs Map type
 func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.Value) (map[string]any, error) {
 	result := make(map[string]any)
@@ -862,7 +865,13 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 		return result, nil
 	}
 
-	keyColIdx := keyCol.Index()
+	keys, err := collectMapKeys(ctx, keyCol, values)
+	if err != nil {
+		return nil, err
+	}
+	if len(keys) == 0 {
+		return result, nil
+	}
 
 	// Simple case: both key and value are leaf columns
 	if keyCol.Leaf() && (valueCol == nil || valueCol.Leaf()) {
@@ -871,11 +880,9 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 			valColIdx = valueCol.Index()
 		}
 
-		var keys, vals []parquet.Value
+		var vals []parquet.Value
 		for _, v := range values {
 			switch v.Column() {
-			case keyColIdx:
-				keys = append(keys, v)
 			case valColIdx:
 				vals = append(vals, v)
 			}
@@ -904,15 +911,6 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 
 	// Complex case: value is nested (List/Struct/Map)
 	if valueCol != nil && !valueCol.Leaf() {
-		// Collect all keys. They are stored in one leaf column and therefore
-		// retain entry order even though the nested value leaves are column-major.
-		var keys []parquet.Value
-		for _, v := range values {
-			if v.Column() == keyColIdx {
-				keys = append(keys, v)
-			}
-		}
-
 		if !hasNestedRepeatedDescendant(valueCol) {
 			valueGroups := groupNestedValuesByLeafOrdinal(collectLeafColumns(valueCol), values)
 			for i, key := range keys {
@@ -968,6 +966,51 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 	}
 
 	return result, nil
+}
+
+func collectMapKeys(ctx context.Context, keyCol *parquet.Column, values []parquet.Value) ([]parquet.Value, error) {
+	keyValues := make([]parquet.Value, 0)
+	for _, value := range values {
+		if value.Column() == keyCol.Index() {
+			keyValues = append(keyValues, value)
+		}
+	}
+
+	hasPresentKey := false
+	for _, key := range keyValues {
+		if !key.IsNull() {
+			hasPresentKey = true
+			break
+		}
+	}
+	if hasPresentKey {
+		for _, key := range keyValues {
+			if key.IsNull() {
+				return nil, moerr.NewInvalidInput(ctx, "parquet map key cannot be NULL")
+			}
+		}
+		return keyValues, nil
+	}
+
+	// A repeated key_value group that is absent is represented by NULL
+	// placeholders at the definition level immediately before that group.
+	// Treat the whole row as an empty map only when every key is such a
+	// placeholder and no value leaf proves that an entry was present.
+	emptyLevel := keyCol.MaxDefinitionLevel() - 1
+	for _, key := range keyValues {
+		if key.DefinitionLevel() != emptyLevel {
+			return nil, moerr.NewInvalidInput(ctx, "parquet map key cannot be NULL")
+		}
+	}
+	for _, value := range values {
+		if value.Column() == keyCol.Index() {
+			continue
+		}
+		if !value.IsNull() || value.DefinitionLevel() > emptyLevel {
+			return nil, moerr.NewInvalidInput(ctx, "parquet map key cannot be NULL")
+		}
+	}
+	return nil, nil
 }
 
 // stringifyMapKey converts map key to string

@@ -3646,6 +3646,59 @@ func TestParquetListPreservesNullElement(t *testing.T) {
 	require.Equal(t, []any{nil}, withNull)
 }
 
+func TestParquetNestedEmptyListMarkers(t *testing.T) {
+	t.Run("logical list of optional struct", func(t *testing.T) {
+		schema := parquet.NewSchema("x", parquet.Group{
+			"items": parquet.List(parquet.Optional(parquet.Group{
+				"value": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+				"other": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+			})),
+		})
+		var buf bytes.Buffer
+		w := parquet.NewWriter(&buf, schema)
+		require.NoError(t, w.Close())
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+		items := f.Root().Column("items")
+		element := items.Column("list").Column("element")
+		leaf := element.Column("value")
+		other := element.Column("other")
+
+		got, err := reconstructNestedValue(context.Background(), items, []parquet.Value{
+			parquet.NullValue().Level(0, listEmptyDefinitionLevel(element), leaf.Index()),
+			parquet.NullValue().Level(0, listEmptyDefinitionLevel(element), other.Index()),
+		})
+		require.NoError(t, err)
+		require.Equal(t, []any{}, got)
+	})
+
+	t.Run("unannotated list pattern", func(t *testing.T) {
+		schema := parquet.NewSchema("x", parquet.Group{
+			"items": parquet.Group{
+				"list": parquet.Repeated(parquet.Group{
+					"element": parquet.Optional(parquet.Group{
+						"value": parquet.Leaf(parquet.Int32Type),
+					}),
+				}),
+			},
+		})
+		var buf bytes.Buffer
+		w := parquet.NewWriter(&buf, schema)
+		require.NoError(t, w.Close())
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+		items := f.Root().Column("items")
+		element := items.Column("list").Column("element")
+		leaf := element.Column("value")
+
+		got, err := reconstructNestedValue(context.Background(), items, []parquet.Value{
+			parquet.NullValue().Level(0, listEmptyDefinitionLevel(element), leaf.Index()),
+		})
+		require.NoError(t, err)
+		require.Equal(t, []any{}, got)
+	})
+}
+
 func TestParquetMapOfNestedListAndScalarAlignsByEntry(t *testing.T) {
 	schema := parquet.NewSchema("x", parquet.Group{
 		"m": parquet.Map(parquet.String(), parquet.Group{
@@ -3678,6 +3731,81 @@ func TestParquetMapOfNestedListAndScalarAlignsByEntry(t *testing.T) {
 	require.Equal(t, map[string]any{
 		"first":  map[string]any{"a": []any{int64(1), int64(2)}, "b": int64(10)},
 		"second": map[string]any{"a": []any{int64(3)}, "b": int64(20)},
+	}, got)
+}
+
+func TestParquetEmptyMapMarkers(t *testing.T) {
+	t.Run("scalar value", func(t *testing.T) {
+		schema := parquet.NewSchema("x", parquet.Group{
+			"m": parquet.Map(parquet.String(), parquet.Optional(parquet.String())),
+		})
+		var buf bytes.Buffer
+		w := parquet.NewWriter(&buf, schema)
+		require.NoError(t, w.Close())
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+		m := f.Root().Column("m")
+		kv := m.Column("key_value")
+		key := kv.Column("key")
+		value := kv.Column("value")
+		emptyLevel := key.MaxDefinitionLevel() - 1
+
+		got, err := reconstructNestedValue(context.Background(), m, []parquet.Value{
+			parquet.NullValue().Level(0, emptyLevel, key.Index()),
+			parquet.NullValue().Level(0, emptyLevel, value.Index()),
+		})
+		require.NoError(t, err)
+		require.Equal(t, map[string]any{}, got)
+	})
+
+	t.Run("nested list value", func(t *testing.T) {
+		schema := parquet.NewSchema("x", parquet.Group{
+			"m": parquet.Map(parquet.String(), parquet.List(parquet.Leaf(parquet.Int32Type))),
+		})
+		var buf bytes.Buffer
+		w := parquet.NewWriter(&buf, schema)
+		require.NoError(t, w.Close())
+		f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+		require.NoError(t, err)
+		m := f.Root().Column("m")
+		kv := m.Column("key_value")
+		key := kv.Column("key")
+		value := kv.Column("value").Column("list").Column("element")
+		emptyLevel := key.MaxDefinitionLevel() - 1
+
+		got, err := reconstructNestedValue(context.Background(), m, []parquet.Value{
+			parquet.NullValue().Level(0, emptyLevel, key.Index()),
+			parquet.NullValue().Level(0, emptyLevel, value.Index()),
+		})
+		require.NoError(t, err)
+		require.Equal(t, map[string]any{}, got)
+	})
+}
+
+func TestParquetMapNestedEmptyListByEntry(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"m": parquet.Map(parquet.String(), parquet.List(parquet.Leaf(parquet.Int32Type))),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	m := f.Root().Column("m")
+	kv := m.Column("key_value")
+	key := kv.Column("key")
+	element := kv.Column("value").Column("list").Column("element")
+
+	got, err := reconstructNestedValue(context.Background(), m, []parquet.Value{
+		parquet.ByteArrayValue([]byte("first")).Level(0, key.MaxDefinitionLevel(), key.Index()),
+		parquet.ByteArrayValue([]byte("second")).Level(1, key.MaxDefinitionLevel(), key.Index()),
+		parquet.Int32Value(1).Level(0, element.MaxDefinitionLevel(), element.Index()),
+		parquet.NullValue().Level(1, listEmptyDefinitionLevel(element), element.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"first":  []any{int64(1)},
+		"second": []any{},
 	}, got)
 }
 
@@ -5708,6 +5836,41 @@ func TestParquetRangeReadAheadRejectsInvalidReaderCount(t *testing.T) {
 	require.Zero(t, n)
 	require.ErrorContains(t, err, "invalid byte count")
 	require.Empty(t, reader.window)
+}
+
+type partialParquetReaderAt struct {
+	data []byte
+	n    int
+	err  error
+}
+
+func (r partialParquetReaderAt) ReadAt(p []byte, _ int64) (int, error) {
+	n := min(r.n, len(p))
+	copy(p[:n], r.data[:n])
+	return n, r.err
+}
+
+func TestParquetRangeReadAheadCopiesPartialBytesOnError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "eof", err: io.EOF},
+		{name: "underlying error", err: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &parquetRangeReadAheadReaderAt{
+				reader:   partialParquetReaderAt{data: []byte("partial"), n: 2, err: tc.err},
+				fileSize: 1024,
+			}
+			buf := bytes.Repeat([]byte{0xff}, 4)
+			n, err := reader.ReadAt(buf, 0)
+			require.Equal(t, 2, n)
+			require.ErrorIs(t, err, tc.err)
+			require.Equal(t, []byte("pa"), buf[:2])
+			require.Equal(t, []byte{0xff, 0xff}, buf[2:])
+		})
+	}
 }
 
 func TestParquetRangeReadAheadConcurrentReaderAt(t *testing.T) {

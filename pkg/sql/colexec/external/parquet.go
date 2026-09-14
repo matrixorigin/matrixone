@@ -5350,10 +5350,12 @@ func (r *parquetRangeReadAheadReaderAt) ReadAt(p []byte, off int64) (n int, err 
 
 	n, err = readParquetReaderAt(r.reader, r.window, off)
 	if err != nil && !errors.Is(err, io.EOF) {
+		copy(p, r.window[:min(n, len(p))])
 		r.window = r.window[:0]
 		return min(n, len(p)), err
 	}
 	if n < len(p) {
+		copy(p, r.window[:n])
 		r.window = r.window[:0]
 		if err == nil {
 			err = io.EOF
