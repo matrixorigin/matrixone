@@ -3963,6 +3963,23 @@ func Test_parquet_copyDictPageToVec_definitionLevelMismatch(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func Test_parquet_copyPageToVecMap_valueCountError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	st := parquet.Int32Type
+	page := st.NewPage(0, 3, encoding.Int32Values([]int32{1, 2, 3}))
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	mp := &columnMapper{srcNull: false, dstNull: false, maxDefinitionLevel: 0}
+
+	err := copyPageToVec(mp, &parquetPageWithData{
+		Page: page,
+		data: encoding.Int32Values([]int32{1, 2}),
+	}, proc, vec, []int32{1, 2})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "expected 3 non-null values")
+	require.Zero(t, vec.Length())
+}
+
 func Test_parquet_decimalBytes_Roundtrip_And_Overflow(t *testing.T) {
 	ctx := context.Background()
 

@@ -3496,6 +3496,20 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 		return moerr.NewConstraintViolationf(proc.Ctx,
 			"cannot load NULL value into NOT NULL column")
 	}
+	expectedDataCount := int64(n)
+	if mp.srcNull {
+		expectedDataCount -= page.NumNulls()
+	}
+	if expectedDataCount < 0 {
+		return moerr.NewInvalidInputf(proc.Ctx,
+			"malformed page: NumNulls() %d exceeds NumRows() %d",
+			page.NumNulls(), page.NumRows())
+	}
+	if int64(len(data)) != expectedDataCount {
+		return moerr.NewInvalidInputf(proc.Ctx,
+			"malformed page: expected %d non-null values, but data contains %d",
+			expectedDataCount, len(data))
+	}
 
 	length := vec.Length()
 	err := vec.PreExtend(n+length, proc.Mp())
