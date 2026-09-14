@@ -294,7 +294,8 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
-	// Captured once even when AP or specialization discards the physical compile.
+	// Monotonic high-water mark for GROUP_CONCAT across this prepared lifetime,
+	// including executions whose AP or specialization path discards the compile.
 	groupConcatMaxLenFloor uint64
 	Name                   string
 	Sql                    string
@@ -1134,6 +1135,13 @@ type ExecCtx struct {
 	// singleStatementQuery is true only for a raw COM_QUERY containing one
 	// statement, which is the only input the proxy records for raw replay.
 	singleStatementQuery bool
+	// diagnosticCountsSnapshot holds the two values exposed to diagnostic
+	// system-variable expressions while this statement is being evaluated.
+	// The live diagnostic records are still reset normally at the statement
+	// boundary; only these scalar inputs survive that reset.
+	diagnosticCountsSnapshotSet    bool
+	diagnosticWarningCountSnapshot uint64
+	diagnosticErrorCountSnapshot   uint64
 	// tenant name
 	tenant          string
 	userName        string
@@ -1179,6 +1187,40 @@ func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
 		execCtx.effectiveTxnDefaultDatabase = input.preparedDefaultDatabase
 	}
 	execCtx.persistentDropTableTargets = nil
+	execCtx.clearDiagnosticCountsSnapshot()
+}
+
+func (execCtx *ExecCtx) captureDiagnosticCountsSnapshot(ses *Session) {
+	if execCtx == nil || ses == nil {
+		return
+	}
+	warningCount, errorCount := ses.diagnosticsCounts()
+	execCtx.diagnosticWarningCountSnapshot = warningCount
+	execCtx.diagnosticErrorCountSnapshot = errorCount
+	execCtx.diagnosticCountsSnapshotSet = true
+}
+
+func (execCtx *ExecCtx) clearDiagnosticCountsSnapshot() {
+	if execCtx == nil {
+		return
+	}
+	execCtx.diagnosticCountsSnapshotSet = false
+	execCtx.diagnosticWarningCountSnapshot = 0
+	execCtx.diagnosticErrorCountSnapshot = 0
+}
+
+func (execCtx *ExecCtx) diagnosticCountSnapshot(name string) (uint64, bool) {
+	if execCtx == nil || !execCtx.diagnosticCountsSnapshotSet {
+		return 0, false
+	}
+	switch strings.ToLower(name) {
+	case warningCountSystemVariable:
+		return execCtx.diagnosticWarningCountSnapshot, true
+	case errorCountSystemVariable:
+		return execCtx.diagnosticErrorCountSnapshot, true
+	default:
+		return 0, false
+	}
 }
 
 func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
@@ -1209,6 +1251,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.implicitCommitBefore = false
 	execCtx.persistentDropTableTargets = nil
 	execCtx.singleStatementQuery = false
+	execCtx.clearDiagnosticCountsSnapshot()
 	execCtx.tenant = ""
 	execCtx.userName = ""
 	execCtx.sqlOfStmt = ""
@@ -1656,6 +1699,8 @@ func (ses *feSessionImpl) GetGlobalSysVar(name string) (interface{}, error) {
 
 func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
+	groupConcatMaxLenOriginalValue := val
+	groupConcatMaxLenWasTruncated := false
 
 	def, ok := gSysVarsDefs[name]
 	if !ok {
@@ -1687,6 +1732,9 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		if err != nil {
 			return err
 		}
+	}
+	if name == groupConcatMaxLenVariable {
+		val, groupConcatMaxLenWasTruncated = normalizeGroupConcatMaxLenValue(val)
 	}
 
 	if val, err = def.GetType().Convert(val); err != nil {
@@ -1723,6 +1771,11 @@ func (ses *Session) SetGlobalSysVar(ctx context.Context, name string, val interf
 		return
 	}
 	ses.gSysVars.Set(canonicalName, val)
+	if groupConcatMaxLenWasTruncated {
+		ses.appendWarningDiagnostic(
+			moerr.ER_TRUNCATED_WRONG_VALUE,
+			groupConcatMaxLenTruncationWarning(groupConcatMaxLenOriginalValue))
+	}
 	return
 }
 
@@ -1734,6 +1787,13 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	name = strings.ToLower(name)
 	if _, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
+	}
+	if name == warningCountSystemVariable || name == errorCountSystemVariable {
+		warningCount, errorCount := ses.diagnosticsCounts()
+		if name == warningCountSystemVariable {
+			return warningCount, nil
+		}
+		return errorCount, nil
 	}
 
 	// init SystemVariables GlobalSysVarsMgr need to read table, read table need to use SessionSysVar
@@ -1774,17 +1834,21 @@ func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 
 func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val interface{}) (err error) {
 	name = strings.ToLower(name)
+	groupConcatMaxLenOriginalValue := val
+	groupConcatMaxLenWasTruncated := false
 	oldMatrixOneNative := false
 	oldOnlyFullGroupBy := false
 	oldBoolSumAvg := false
 	oldHighNotPrecedence := false
 	oldParserFlags := mysql.SQLModeFlags(0)
+	oldIgnoreSpace := false
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
 		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
 		oldHighNotPrecedence = ses.sqlModeHasHighNotPrecedence()
 		oldParserFlags = ses.sqlModeParserFlags()
+		oldIgnoreSpace = ses.sqlModeHasIgnoreSpace()
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1798,6 +1862,9 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 
 	if !def.GetDynamic() {
 		return moerr.NewInternalErrorNoCtx(errorSystemVariableIsReadOnly())
+	}
+	if name == groupConcatMaxLenVariable {
+		val, groupConcatMaxLenWasTruncated = normalizeGroupConcatMaxLenValue(val)
 	}
 
 	if val, err = def.GetType().Convert(val); err != nil {
@@ -1844,7 +1911,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldParserFlags, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldParserFlags, oldIgnoreSpace, val)
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
@@ -1869,6 +1936,11 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	}
 	if err == nil {
 		ses.markMigrationSystemVarReplayable(canonicalName, false)
+		if groupConcatMaxLenWasTruncated {
+			ses.appendWarningDiagnostic(
+				moerr.ER_TRUNCATED_WRONG_VALUE,
+				groupConcatMaxLenTruncationWarning(groupConcatMaxLenOriginalValue))
+		}
 	}
 	return
 }

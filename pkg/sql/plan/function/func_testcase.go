@@ -975,7 +975,14 @@ func newVectorByType(mp *mpool.MPool, typ types.Type, val any, nsp *nulls.Nulls)
 		vector.AppendFixedList(vec, values, nil, mp)
 	case types.T_json:
 		values := val.([]string)
-		vector.AppendStringList(vec, values, nil, mp)
+		for i, value := range values {
+			// Null payload bytes are unspecified; install the null at admission,
+			// rather than appending an invalid empty JSON value and marking it later.
+			isNull := nsp != nil && nsp.Contains(uint64(i))
+			if err := vector.AppendBytes(vec, []byte(value), isNull, mp); err != nil {
+				panic(err)
+			}
+		}
 	case types.T_enum:
 		values := val.([]types.Enum)
 		vector.AppendFixedList(vec, values, nil, mp)

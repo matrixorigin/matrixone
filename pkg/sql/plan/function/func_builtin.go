@@ -1352,8 +1352,13 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 			// char/text/blob/binary/varbinary -> varchar (truncated in builtInChar)
 			shouldCast = true
 			ret[i] = types.T_varchar.ToType()
+		case source.Oid == types.T_bool:
+			// BOOL is represented as a distinct MatrixOne type, but MySQL
+			// treats it as the numeric value 0 or 1 for CHAR.
+			shouldCast = true
+			ret[i] = types.T_int64.ToType()
 		default:
-			// float/decimal/bool/bit/... -> int64 (rounded by the cast, like MySQL)
+			// float/decimal/bit/... -> int64 (rounded by the cast, like MySQL)
 			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
 			if c == matchFailed {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)

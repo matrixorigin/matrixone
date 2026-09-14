@@ -15,7 +15,9 @@
 package types
 
 import (
+	"bytes"
 	"encoding/base64"
+	"io"
 	"reflect"
 	"testing"
 
@@ -155,6 +157,75 @@ func TestArrayToString(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWriteArrayTo(t *testing.T) {
+	cases := []struct {
+		name  string
+		write func(io.Writer) error
+		want  string
+	}{
+		{
+			name: "float32",
+			write: func(writer io.Writer) error {
+				return WriteArrayTo(writer, []float32{1.5, -2})
+			},
+			want: "[1.5, -2]",
+		},
+		{
+			name: "float64",
+			write: func(writer io.Writer) error {
+				return WriteArrayTo(writer, []float64{1.25, -2.5})
+			},
+			want: "[1.25, -2.5]",
+		},
+		{
+			name: "bf16",
+			write: func(writer io.Writer) error {
+				return WriteArrayTo(writer, Float32ToBF16Slice([]float32{-1, 0, 4}))
+			},
+			want: "[-1, 0, 4]",
+		},
+		{
+			name: "float16",
+			write: func(writer io.Writer) error {
+				return WriteArrayTo(writer, Float32ToFloat16Slice([]float32{1.5, -2, 4}))
+			},
+			want: "[1.5, -2, 4]",
+		},
+		{
+			name: "int8",
+			write: func(writer io.Writer) error {
+				return WriteArrayTo(writer, []int8{1, -2, 127, -128})
+			},
+			want: "[1, -2, 127, -128]",
+		},
+		{
+			name: "uint8",
+			write: func(writer io.Writer) error {
+				return WriteArrayTo(writer, []uint8{1, 2, 255})
+			},
+			want: "[1, 2, 255]",
+		},
+		{
+			name: "empty",
+			write: func(writer io.Writer) error {
+				return WriteArrayTo(writer, []float32(nil))
+			},
+			want: "[]",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buffer bytes.Buffer
+			require.NoError(t, tc.write(&buffer))
+			require.Equal(t, tc.want, buffer.String())
+		})
+	}
+
+	require.ErrorIs(t,
+		WriteArrayTo(shortWriter{}, []float32{1}), io.ErrShortWrite)
 }
 
 func TestArraysToString(t *testing.T) {

@@ -3978,3 +3978,34 @@ func TestRemoteVarianceUsesLegacyStateBeforeProtocolV35(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion35)
 	require.False(t, useLegacyVarianceStateForRemote(proc))
 }
+
+func TestGroupConcatSourceRowProtocolGates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for _, test := range []struct {
+		name           string
+		version        int64
+		payloadEnabled bool
+		markerEnabled  bool
+	}{
+		{name: "legacy v64", version: defines.MORPCVersion64},
+		{name: "ascii v65", version: defines.MORPCVersion65},
+		{name: "group concat v66", version: defines.MORPCVersion66, payloadEnabled: true, markerEnabled: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
+			proc.SetGroupConcatSourceRowProvenanceTrusted(true)
+			require.Equal(t, test.payloadEnabled, groupConcatSourceRowWireEnabled(proc))
+			require.Equal(t, test.markerEnabled, groupConcatSourceRowProvenanceWireEnabled(proc))
+
+			proc.SetGroupConcatSourceRowProvenanceTrusted(false)
+			require.False(t, groupConcatSourceRowWireEnabled(proc),
+				"independent producers must not send source ordinals")
+			require.Equal(t, test.markerEnabled, groupConcatSourceRowProvenanceWireEnabled(proc),
+				"remote producers still need the v66 trust marker")
+		})
+	}
+}

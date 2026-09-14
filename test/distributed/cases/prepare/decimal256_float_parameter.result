@@ -1,0 +1,54 @@
+SET @issue_28766_text = '1.2';
+PREPARE issue_28766_left FROM
+'SELECT
+? + CAST(1.0 AS DECIMAL(65, 30)) AS plus_result,
+? - CAST(1.0 AS DECIMAL(65, 30)) AS minus_result,
+? * CAST(1.0 AS DECIMAL(65, 30)) AS multiply_result,
+? / CAST(1.0 AS DECIMAL(65, 30)) AS divide_result,
+? % CAST(1.0 AS DECIMAL(65, 30)) AS mod_result,
+? DIV CAST(1.0 AS DECIMAL(65, 30)) AS integer_div_result';
+PREPARE issue_28766_right FROM
+'SELECT
+CAST(1.0 AS DECIMAL(65, 30)) + ? AS plus_result,
+CAST(1.0 AS DECIMAL(65, 30)) - ? AS minus_result,
+CAST(1.0 AS DECIMAL(65, 30)) * ? AS multiply_result,
+CAST(1.0 AS DECIMAL(65, 30)) / ? AS divide_result,
+CAST(1.0 AS DECIMAL(65, 30)) % ? AS mod_result,
+CAST(1.0 AS DECIMAL(65, 30)) DIV ? AS integer_div_result';
+EXECUTE issue_28766_left USING
+@issue_28766_text, @issue_28766_text, @issue_28766_text,
+@issue_28766_text, @issue_28766_text, @issue_28766_text;
+➤ plus_result[8,53,31]  ¦  minus_result[8,53,31]  ¦  multiply_result[8,53,31]  ¦  divide_result[8,53,31]  ¦  mod_result[8,53,31]  ¦  integer_div_result[-5,64,0]  𝄀
+2.2  ¦  0.19999999999999996  ¦  1.2  ¦  1.2  ¦  0.19999999999999996  ¦  1
+EXECUTE issue_28766_right USING
+@issue_28766_text, @issue_28766_text, @issue_28766_text,
+@issue_28766_text, @issue_28766_text, @issue_28766_text;
+➤ plus_result[8,53,16]  ¦  minus_result[8,53,16]  ¦  multiply_result[8,53,16]  ¦  divide_result[8,53,16]  ¦  mod_result[8,53,16]  ¦  integer_div_result[-5,64,0]  𝄀
+2.2  ¦  -0.19999999999999996  ¦  1.2  ¦  0.8333333333333334  ¦  1.0  ¦  0
+SET @issue_28766_text = CAST('1.2' AS DECIMAL(65, 30));
+EXECUTE issue_28766_left USING
+@issue_28766_text, @issue_28766_text, @issue_28766_text,
+@issue_28766_text, @issue_28766_text, @issue_28766_text;
+➤ plus_result[3,65,30]  ¦  minus_result[3,65,30]  ¦  multiply_result[3,65,30]  ¦  divide_result[3,65,30]  ¦  mod_result[3,65,30]  ¦  integer_div_result[-5,64,0]  𝄀
+2.200000000000000000000000000000  ¦  0.200000000000000000000000000000  ¦  1.200000000000000000000000000000  ¦  1.200000000000000000000000000000  ¦  0.200000000000000000000000000000  ¦  1
+EXECUTE issue_28766_right USING
+@issue_28766_text, @issue_28766_text, @issue_28766_text,
+@issue_28766_text, @issue_28766_text, @issue_28766_text;
+➤ plus_result[3,65,30]  ¦  minus_result[3,65,30]  ¦  multiply_result[3,65,30]  ¦  divide_result[3,65,30]  ¦  mod_result[3,65,30]  ¦  integer_div_result[-5,64,0]  𝄀
+2.200000000000000000000000000000  ¦  -0.200000000000000000000000000000  ¦  1.200000000000000000000000000000  ¦  0.833333333333333333333333333333  ¦  1.000000000000000000000000000000  ¦  0
+SET @issue_28766_text = '1.2';
+EXECUTE issue_28766_left USING
+@issue_28766_text, @issue_28766_text, @issue_28766_text,
+@issue_28766_text, @issue_28766_text, @issue_28766_text;
+➤ plus_result[8,53,31]  ¦  minus_result[8,53,31]  ¦  multiply_result[8,53,31]  ¦  divide_result[8,53,31]  ¦  mod_result[8,53,31]  ¦  integer_div_result[-5,64,0]  𝄀
+2.2  ¦  0.19999999999999996  ¦  1.2  ¦  1.2  ¦  0.19999999999999996  ¦  1
+EXECUTE issue_28766_right USING
+@issue_28766_text, @issue_28766_text, @issue_28766_text,
+@issue_28766_text, @issue_28766_text, @issue_28766_text;
+➤ plus_result[8,53,16]  ¦  minus_result[8,53,16]  ¦  multiply_result[8,53,16]  ¦  divide_result[8,53,16]  ¦  mod_result[8,53,16]  ¦  integer_div_result[-5,64,0]  𝄀
+2.2  ¦  -0.19999999999999996  ¦  1.2  ¦  0.8333333333333334  ¦  1.0  ¦  0
+DEALLOCATE PREPARE issue_28766_left;
+DEALLOCATE PREPARE issue_28766_right;
+SELECT 1 AS after_cleanup;
+➤ after_cleanup[-5,64,0]  𝄀
+1

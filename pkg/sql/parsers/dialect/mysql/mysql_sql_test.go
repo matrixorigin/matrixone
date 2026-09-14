@@ -60,6 +60,50 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		want      string
+		count     bool
+		errors    bool
+		hasLimit  bool
+		wantError bool
+	}{
+		{name: "warning count", input: "show count(*) warnings", want: "show count(*) warnings", count: true},
+		{name: "error count", input: "show count(*) errors", want: "show count(*) errors", count: true, errors: true},
+		{name: "warning limit", input: "show warnings limit 2", want: "show warnings limit 2", hasLimit: true},
+		{name: "error comma limit", input: "show errors limit 1, 2", want: "show errors limit 2 offset 1", hasLimit: true, errors: true},
+		{name: "warning offset limit", input: "show warnings limit 2 offset 1", want: "show warnings limit 2 offset 1", hasLimit: true},
+		{name: "count limit rejected", input: "show count(*) warnings limit 1", wantError: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.input, 1)
+			if test.wantError {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
+
+			switch stmt := stmt.(type) {
+			case *tree.ShowWarnings:
+				require.False(t, test.errors)
+				require.Equal(t, test.count, stmt.Count)
+				require.Equal(t, test.hasLimit, stmt.Limit != nil)
+			case *tree.ShowErrors:
+				require.True(t, test.errors)
+				require.Equal(t, test.count, stmt.Count)
+				require.Equal(t, test.hasLimit, stmt.Limit != nil)
+			default:
+				t.Fatalf("unexpected statement type %T", stmt)
+			}
+		})
+	}
+}
+
 func TestCreateTablePreservesIndexIdentifierCase(t *testing.T) {
 	stmt, err := ParseOne(context.Background(),
 		"create table t (id int, v varchar(20), key MixedCaseIdx(v), unique key `UniQue_Mix`(id))", 1)

@@ -50,6 +50,10 @@ func siriusStatementEligible(stmt tree.Statement) bool {
 	return ok && !selectStmt.IsPerform && selectStmt.Ep == nil && !statementHasSQLCalcFoundRows(stmt)
 }
 
+func siriusPlanEligible(queryPlan *planpb.Plan) bool {
+	return queryPlan == nil || len(queryPlan.GetQuery().GetUnresolvedIndexHints()) == 0
+}
+
 // SiriusRuntime is initialized and closed by one CN service. Production lease
 // managers are supplied by the storage/GC integration because constructing an
 // unprotected CN-local substitute would violate snapshot safety. The only
@@ -155,6 +159,11 @@ func (o *siriusReadOwner) finish(ctx context.Context, succeeded bool) error {
 
 func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Plan) (bool, error) {
 	if c == nil || !siriusOffloadRequested(ctx) || c.isPrepare || c.isInternal || !siriusStatementEligible(c.stmt) {
+		return false, nil
+	}
+	if !siriusPlanEligible(queryPlan) {
+		// Normal compilation owns the metadata-lock/retry boundary for a stale
+		// index hint. An offloaded plan cannot bypass that validation.
 		return false, nil
 	}
 	runtime, ok := lookupSiriusRuntime(c.proc.GetService())
