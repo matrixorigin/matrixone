@@ -86,14 +86,16 @@ func (s *Supervisor) wait(cmd *exec.Cmd, done chan struct{}) {
 	err := cmd.Wait()
 	s.mu.Lock()
 	if s.cmd == cmd {
-		// cmd is cleared so a later Start can launch a new worker, while done is
-		// retained as the completed notification that Start's caller captured.
+		// Keep the terminal state transition and Done close under the same lock.
+		// Otherwise Start can observe cmd == nil in the small interval after
+		// Wait clears it but before the old Done channel is closed, and launch a
+		// replacement while a concurrent Close is still waiting for the old
+		// worker.
 		s.cmd = nil
 		s.lastErr = err
-		s.closing = false
 	}
-	s.mu.Unlock()
 	close(done)
+	s.mu.Unlock()
 	if err != nil {
 		logutil.Errorf("Python UDF worker exited: %v", err)
 	}
@@ -122,7 +124,7 @@ func (s *Supervisor) Err() error {
 func (s *Supervisor) Close() error {
 	s.mu.Lock()
 	cmd, done := s.cmd, s.done
-	if cmd != nil {
+	if cmd != nil || done != nil {
 		s.closing = true
 	}
 	s.mu.Unlock()
@@ -135,5 +137,13 @@ func (s *Supervisor) Close() error {
 	if done != nil {
 		<-done
 	}
+	// Keep Start fenced until the worker observed by this Close has published
+	// its terminal notification.  This also clears the fence when Close is
+	// called after an unexpected exit, where cmd is already nil.
+	s.mu.Lock()
+	if s.cmd == nil && s.done == done {
+		s.closing = false
+	}
+	s.mu.Unlock()
 	return closeErr
 }
