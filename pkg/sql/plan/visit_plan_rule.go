@@ -715,20 +715,17 @@ func preparedNumericPrefixPositionContext(
 	args []*plan.Expr,
 	positions map[int]types.StringConversionKind,
 ) bool {
-	if name == "substring_index" {
-		for i, arg := range args {
-			pos, ok := preparedNumericPrefixFunctionParamPosition(arg)
-			kind, eligible := positions[pos]
-			if !ok || !eligible || kind == types.StringConversionString {
-				continue
-			}
-			cast := arg.GetF()
-			if mysqlNumericPrefixFunctionArg(
-				name, i, len(args), makeTypeByPlan2Expr(cast.Args[0]), makeTypeByPlan2Expr(arg)) {
-				// A typed SQL variable must enter a fixed numeric argument through
-				// its source domain, not through the prepare-time TEXT prefix cast.
-				return true
-			}
+	for i, arg := range args {
+		if !planfunction.HasIntegerArgument(name, i) {
+			continue
+		}
+		pos, ok := preparedParamPosition(arg)
+		if !ok {
+			pos, ok = preparedNumericPrefixFunctionParamPosition(arg)
+		}
+		kind, eligible := positions[pos]
+		if ok && eligible && kind != types.StringConversionString {
+			return true
 		}
 	}
 
@@ -3465,21 +3462,14 @@ func preparedFunctionArgUsesSQLExecuteNumericSource(
 	if parent == nil {
 		return false
 	}
-	// SUBSTRING_INDEX has a fixed numeric count contract despite returning text.
-	// Materialize a typed SQL variable in its source domain before rebinding so
-	// DECIMAL counts use the ordinary implicit CAST conversion.
-	if name == "substring_index" && argIndex == 2 && argIndex < len(parent.GetF().GetArgs()) {
+	// Integer argument contracts apply independently of the function's return
+	// type. Rebind typed parameters in their source domain before conversion.
+	if planfunction.HasIntegerArgument(name, argIndex) && argIndex >= 0 && argIndex < len(parent.GetF().GetArgs()) {
 		arg := parent.GetF().GetArgs()[argIndex]
-		if isImplicitPreparedParamCast(arg) && makeTypeByPlan2Expr(arg).IsNumeric() {
+		if arg.GetP() != nil || isImplicitPreparedParamCast(arg) {
 			return true
 		}
-		// Textual arguments with MySQL numeric-prefix semantics use the existing
-		// comparison-cast overload for rolling-upgrade compatibility. That cast is
-		// likewise provisional when SQL EXECUTE supplies a typed numeric variable.
-		if cast := arg.GetF(); cast != nil && cast.Func != nil && cast.Func.GetObjName() == "cast" &&
-			!cast.GetSyntaxExplicitCast() && len(cast.Args) > 0 &&
-			mysqlNumericPrefixFunctionArg(
-				name, argIndex, argCount, makeTypeByPlan2Expr(cast.Args[0]), makeTypeByPlan2Expr(arg)) {
+		if _, ok := preparedNumericPrefixFunctionParamPosition(arg); ok {
 			return true
 		}
 	}

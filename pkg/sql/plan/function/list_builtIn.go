@@ -4451,10 +4451,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `substring_index`
 	{
-		functionId: SUBSTRING_INDEX,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    substringIndexTypeMatch,
+		functionId:       SUBSTRING_INDEX,
+		integerArguments: []int{2},
+		class:            plan.Function_STRICT,
+		layout:           STANDARD_FUNCTION,
+		checkFn:          stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -8703,10 +8704,11 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `hex`
 	{
-		functionId: HEX,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:       HEX,
+		integerArguments: []int{0},
+		class:            plan.Function_STRICT,
+		layout:           STANDARD_FUNCTION,
+		checkFn:          stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -13080,10 +13082,11 @@ var supportedControlBuiltIns = []FuncNew{
 
 	// function `period_add`
 	{
-		functionId: PERIOD_ADD,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:       PERIOD_ADD,
+		integerArguments: []int{0, 1},
+		class:            plan.Function_STRICT,
+		layout:           STANDARD_FUNCTION,
+		checkFn:          fixedTypeMatch,
 		Overloads: []overload{
 			{
 				overloadId: 0,
@@ -13160,10 +13163,11 @@ var supportedControlBuiltIns = []FuncNew{
 
 	// function `period_diff`
 	{
-		functionId: PERIOD_DIFF,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:       PERIOD_DIFF,
+		integerArguments: []int{0, 1},
+		class:            plan.Function_STRICT,
+		layout:           STANDARD_FUNCTION,
+		checkFn:          fixedTypeMatch,
 		Overloads: []overload{
 			{
 				overloadId: 0,

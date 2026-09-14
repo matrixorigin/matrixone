@@ -104,8 +104,7 @@ select substring_index("aaa.bbb.ccc.ddd.eee",'.',18446744073709551613);
 substring_index(aaa.bbb.ccc.ddd.eee, ., 18446744073709551613)
 aaa.bbb.ccc.ddd.eee
 select substring_index("aaa.bbb.ccc.ddd.eee",'.',-18446744073709551613);
-substring_index(aaa.bbb.ccc.ddd.eee, ., -18446744073709551613)
-aaa.bbb.ccc.ddd.eee
+Data truncation: data out of range: data type int64, value '-18446744073709551613'
 select substring_index(null, 'abc', 9223372036854775808);
 substring_index(null, abc, 9223372036854775808)
 null

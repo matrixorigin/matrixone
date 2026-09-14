@@ -216,10 +216,7 @@ func getFunctionByName(
 		return r, moerr.NewNYIf(ctx, "should implement the function %s", name)
 	}
 
-	check := f.checkFn(f.Overloads, args)
-	if f.stringDomainCheckFn != nil && len(stringDomainModes) > 0 {
-		check = f.stringDomainCheckFn(f.Overloads, args, stringDomainModes)
-	}
+	check := f.checkArgumentTypes(args, stringDomainModes)
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -273,7 +270,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		return FuncGetResult{}, false
 	}
 
-	check := f.checkFn(f.Overloads, args)
+	check := f.checkArgumentTypes(args, nil)
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -601,6 +598,10 @@ type FuncNew struct {
 	// if matched, return the corresponding id of overload. If type conversion was required,
 	// the required type should be returned at the same time.
 	checkFn func(overloads []overload, inputs []types.Type) checkResult
+
+	// integerArguments declares positions whose exact numeric inputs require
+	// integer evaluation. FLOAT inputs retain their existing overload semantics.
+	integerArguments []int
 
 	// stringDomainCheckFn is the optional second-stage checker for functions
 	// whose string compatibility depends on operand provenance as well as the

@@ -41,6 +41,71 @@ func TestIssue28401SubstringIndexDecimalCount(t *testing.T) {
 		conn, err := db.Conn(ctx)
 		require.NoError(t, err)
 		defer conn.Close()
+		t.Run("shared integer argument contracts", func(t *testing.T) {
+			for _, width := range []int{18, 38, 65} {
+				for _, tc := range []struct{ value, period, hex string }{
+					{"1.4", "202402", "1"}, {"1.5", "202403", "2"},
+					{"1.9", "202403", "2"}, {"2.5", "202404", "3"},
+					{"-1.4", "202312", "FFFFFFFFFFFFFFFF"}, {"-1.5", "202311", "FFFFFFFFFFFFFFFE"},
+					{"-1.9", "202311", "FFFFFFFFFFFFFFFE"}, {"-2.5", "202310", "FFFFFFFFFFFFFFFD"},
+				} {
+					value := fmt.Sprintf("cast(%s as decimal(%d,1))", tc.value, width)
+					var period, hex string
+					require.NoError(t, conn.QueryRowContext(ctx, "select period_add(202401,"+value+"), hex("+value+")").Scan(&period, &hex))
+					require.Equal(t, tc.period, period, value)
+					require.Equal(t, tc.hex, hex, value)
+				}
+			}
+			for _, tc := range []struct{ query, want string }{
+				{"select period_add(202401.5,0)", "202402"},
+				{"select period_diff(202402.5,202401)", "2"},
+				{"select hex(cast('9007199254740993' as decimal(20,0)))", "20000000000001"},
+				{"select hex(cast('9223372036854775807' as decimal(20,0)))", "7FFFFFFFFFFFFFFF"},
+				{"select hex(cast('-9223372036854775808' as decimal(20,0)))", "8000000000000000"},
+				{"select period_add(202401,cast(1.5 as double))", "202402"},
+				{"select hex(cast('9007199254740993' as double))", "20000000000000"},
+			} {
+				var got string
+				require.NoError(t, conn.QueryRowContext(ctx, tc.query).Scan(&got))
+				require.Equal(t, tc.want, got, tc.query)
+			}
+			// MO intentionally rejects overflow in ordinary integer argument casts,
+			// rather than using MySQL's saturation plus warning policy.
+			for _, value := range []string{"9223372036854775808", "-9223372036854775809"} {
+				for _, format := range []string{
+					"substring_index('a,b',',',%s)", "period_add(202401,%s)",
+					"period_add(%s,0)", "period_diff(%s,202401)", "period_diff(202401,%s)", "hex(%s)",
+				} {
+					expression := fmt.Sprintf(format, "cast('"+value+"' as decimal(20,0))")
+					var got string
+					err := conn.QueryRowContext(ctx, "select "+expression).Scan(&got)
+					require.ErrorContains(t, err, "data out of range", expression)
+				}
+			}
+			for _, expression := range []string{"period_add(202401,NULL)", "period_diff(NULL,202401)", "hex(NULL)"} {
+				var got sql.NullString
+				require.NoError(t, conn.QueryRowContext(ctx, "select "+expression).Scan(&got))
+				require.False(t, got.Valid)
+			}
+			for _, tc := range []struct{ expr, value, want string }{
+				{"period_add(202401,?)", "1.5", "202403"},
+				{"period_add(?,0)", "202401.5", "202402"},
+				{"period_diff(?,202401)", "202402.5", "2"},
+				{"period_diff(202403,?)", "202401.5", "1"},
+				{"hex(?)", "9007199254740993", "20000000000001"},
+			} {
+				func() {
+					require.NoError(t, execIssue28401(ctx, conn, "prepare shared_integer from 'select "+tc.expr+"'"))
+					defer func() {
+						require.NoError(t, execIssue28401(context.Background(), conn, "deallocate prepare shared_integer"))
+					}()
+					require.NoError(t, execIssue28401(ctx, conn, "set @shared_integer=cast("+tc.value+" as decimal(38,1))"))
+					var got string
+					require.NoError(t, conn.QueryRowContext(ctx, "execute shared_integer using @shared_integer").Scan(&got))
+					require.Equal(t, tc.want, got, tc.expr)
+				}()
+			}
+		})
 		for _, tc := range []struct {
 			expression string
 			want       string
