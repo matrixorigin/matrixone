@@ -338,6 +338,14 @@ func TestInsertRowAliasNestedBareCandidateCorrelationIsRejected(t *testing.T) {
 	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
 }
 
+func TestInsertRowAliasNestedBareCandidateCorrelationSingleRowIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(k, incoming_a, incoming_b) "+
+			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
+			"from constraint_test.emp as s where s.deptno = k)")
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+}
+
 func TestInsertRowAliasNestedBareLocalColumnDoesNotCountAsCandidate(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY'), (1000, 'Marketing', 'LA') as n(empno, incoming_a, incoming_b) "+
