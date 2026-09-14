@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"strconv"
 	"testing"
 
@@ -22,12 +23,30 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+func remoteIPProtocolPipeline(functionID, overloadID int32) *pipeline.Pipeline {
+	return &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		ProjectList: []*planpb.Expr{{
+			Typ: planpb.Type{Id: 10},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					Obj:     function.EncodeOverloadID(functionID, overloadID),
+					ObjName: "ip-function",
+				},
+			}},
+		}},
+	}}}
+}
 
 func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -39,36 +58,23 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			for _, value := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72} {
+				rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, value)
+			}
 		}
 	})
 
-	makePipeline := func(functionID, overloadID int32) *pipeline.Pipeline {
-		return &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
-			ProjectList: []*planpb.Expr{{
-				Typ: planpb.Type{Id: 10},
-				Expr: &planpb.Expr_F{F: &planpb.Function{
-					Func: &planpb.ObjectRef{
-						Obj:     function.EncodeOverloadID(functionID, overloadID),
-						ObjName: "ip-function",
-					},
-				}},
-			}},
-		}}}
-	}
-
 	for _, functionID := range []int32{
-		392, // INET6_ATON
-		393, // INET6_NTOA
-		394, // INET_ATON
-		395, // INET_NTOA
-		396, // IS_IPV4
-		397, // IS_IPV6
-		398, // IS_IPV4_COMPAT
-		399, // IS_IPV4_MAPPED
+		function.INET6_ATON,
+		function.INET6_NTOA,
+		function.INET_ATON,
+		function.INET_NTOA,
+		function.IS_IPV4,
+		function.IS_IPV6,
+		function.IS_IPV4_COMPAT,
 	} {
 		t.Run("function-"+strconv.Itoa(int(functionID)), func(t *testing.T) {
-			remotePipeline := makePipeline(functionID, 0)
+			remotePipeline := remoteIPProtocolPipeline(functionID, 0)
 
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 			err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
@@ -82,12 +88,50 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 
 	t.Run("new INET_NTOA overload", func(t *testing.T) {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
-		err := validateRemoteExpressionPipelineProtocol(proc, makePipeline(function.INET_NTOA, 8))
+		err := validateRemoteExpressionPipelineProtocol(proc, remoteIPProtocolPipeline(function.INET_NTOA, 8))
 		require.ErrorContains(t, err, "corrected IP function semantics require MORPC protocol version 72")
 	})
 
 	t.Run("ordinary function is not fenced", func(t *testing.T) {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
-		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, makePipeline(function.ABS, 0)))
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remoteIPProtocolPipeline(function.ABS, 0)))
 	})
+}
+
+func TestIPFunctionDestinationProtocolValidation(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "inet_aton", []*planpb.Expr{{
+		Typ:  planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+	}})
+	require.NoError(t, err)
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+	op := projection.NewArgument()
+	defer op.Release()
+	op.ProjectList = []*planpb.Expr{expr}
+	scope := &Scope{
+		Magic:    Remote,
+		Proc:     c.proc,
+		NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
+		RootOp:   op,
+	}
+
+	c.proc.Base.QueryClient = client
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	client.version = defines.MORPCVersion70
+	require.NoError(t, c.constrainIPFunctionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "remote destination")
+
+	client.version = defines.MORPCVersion72
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainIPFunctionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+	data, err := encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+	require.Equal(t, client.calls, client.releases)
 }

@@ -180,6 +180,13 @@ func RequiresMORPCVersion59NumericFormatArguments(owner any) (bool, error) {
 	return features.FormatNumericArguments, err
 }
 
+// RequiresMORPCVersion71IPFunctionSemantics reports whether an owner contains
+// an IP function whose serialized execution contract changed in MORPC v71.
+func RequiresMORPCVersion71IPFunctionSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.IPFunctionSemantics, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -244,7 +251,6 @@ const (
 	remoteIPIsIPv4FunctionID       int32 = 396
 	remoteIPIsIPv6FunctionID       int32 = 397
 	remoteIPIsIPv4CompatFunctionID int32 = 398
-	remoteIPIsIPv4MappedFunctionID int32 = 399
 )
 
 func isRemoteIPFunction(functionID int32) bool {
@@ -255,8 +261,7 @@ func isRemoteIPFunction(functionID int32) bool {
 		remoteIPInetNtoaFunctionID,
 		remoteIPIsIPv4FunctionID,
 		remoteIPIsIPv6FunctionID,
-		remoteIPIsIPv4CompatFunctionID,
-		remoteIPIsIPv4MappedFunctionID:
+		remoteIPIsIPv4CompatFunctionID:
 		return true
 	default:
 		return false
