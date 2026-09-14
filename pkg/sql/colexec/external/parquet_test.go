@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -3664,6 +3665,43 @@ func TestParquetValuesToFixedRollsBackOnConversionError(t *testing.T) {
 		})
 	require.ErrorContains(t, err, "row 1: conversion failed")
 	require.Equal(t, []int32{99}, vector.MustFixedColWithTypeCheck[int32](vec))
+}
+
+func TestParquetValuesToBytesAndJsonRollBackOnConversionError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	bytesPage := parquet.ByteArrayType.NewPage(0, 2,
+		encoding.ByteArrayValues([]byte("onetwo"), []uint32{0, 3, 6}))
+	bytesVec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bytesVec, []byte("seed"), false, proc.Mp()))
+
+	err := processParquetValuesToBytes(context.Background(), &columnMapper{}, bytesPage, proc, bytesVec,
+		func(v parquet.Value) ([]byte, error) {
+			if string(v.ByteArray()) == "two" {
+				return nil, errors.New("conversion failed")
+			}
+			return v.ByteArray(), nil
+		})
+	require.ErrorContains(t, err, "row 1: conversion failed")
+	require.Equal(t, 1, bytesVec.Length())
+	require.Equal(t, "seed", string(bytesVec.GetBytesAt(0)))
+
+	jsonFirst := []byte(`{"a":1}`)
+	jsonSecond := []byte(`not-json`)
+	jsonData := append(append([]byte{}, jsonFirst...), jsonSecond...)
+	jsonPage := parquet.ByteArrayType.NewPage(0, 2,
+		encoding.ByteArrayValues(jsonData, []uint32{0, uint32(len(jsonFirst)), uint32(len(jsonData))}))
+	jsonVec := vector.NewVec(types.T_json.ToType())
+	seed, err := types.ParseStringToByteJson(`{"existing":true}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(jsonVec, seed, false, proc.Mp()))
+
+	err = processParquetValuesToJson(context.Background(), &columnMapper{}, jsonPage, proc, jsonVec,
+		func(v parquet.Value) (bytejson.ByteJson, error) {
+			return types.ParseSliceToByteJson(v.ByteArray())
+		})
+	require.Error(t, err)
+	require.Equal(t, 1, jsonVec.Length())
+	require.Equal(t, seed.String(), types.DecodeJson(jsonVec.GetBytesAt(0)).String())
 }
 
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {

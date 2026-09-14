@@ -2863,22 +2863,27 @@ func processParquetValuesToBytes(
 	if err := vec.PreExtend(vec.Length()+len(values), proc.Mp()); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, len(values))
+		return err
+	}
 	for i, v := range values {
 		if v.IsNull() {
 			if !mp.dstNull {
-				return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+				return rollback(moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column"))
 			}
 			if err := vector.AppendBytes(vec, nil, true, proc.Mp()); err != nil {
-				return err
+				return rollback(err)
 			}
 			continue
 		}
 		val, err := convert(v)
 		if err != nil {
-			return wrapParseError(ctx, i, err)
+			return rollback(wrapParseError(ctx, i, err))
 		}
 		if err := vector.AppendBytes(vec, val, false, proc.Mp()); err != nil {
-			return err
+			return rollback(err)
 		}
 	}
 	return nil
@@ -2899,22 +2904,27 @@ func processParquetValuesToJson(
 	if err := vec.PreExtend(vec.Length()+len(values), proc.Mp()); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, len(values))
+		return err
+	}
 	for i, v := range values {
 		if v.IsNull() {
 			if !mp.dstNull {
-				return moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column")
+				return rollback(moerr.NewConstraintViolationf(ctx, "cannot load NULL value into NOT NULL column"))
 			}
 			if err := vector.AppendByteJson(vec, bytejson.ByteJson{}, true, proc.Mp()); err != nil {
-				return err
+				return rollback(err)
 			}
 			continue
 		}
 		val, err := convert(v)
 		if err != nil {
-			return wrapParseError(ctx, i, err)
+			return rollback(wrapParseError(ctx, i, err))
 		}
 		if err := vector.AppendByteJson(vec, val, false, proc.Mp()); err != nil {
-			return err
+			return rollback(err)
 		}
 	}
 	return nil
