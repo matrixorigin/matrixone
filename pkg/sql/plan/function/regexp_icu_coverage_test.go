@@ -224,7 +224,7 @@ func TestRegexp2EvaluationCleanupOnDeadlineAndCallbackError(t *testing.T) {
 
 	callbackErr := errors.New("test callback failure")
 	_, err = rs.regexp2VisitMatchesAtOrAfterWithMatchTypeAndDeadline(
-		matcher, "ab", 0, false, "", 0, time.Now().Add(time.Second),
+		matcher, "ab", 0, false, "", 0, time.Now().Add(time.Hour),
 		func(start, end int) error {
 			return callbackErr
 		})
@@ -234,6 +234,7 @@ func TestRegexp2EvaluationCleanupOnDeadlineAndCallbackError(t *testing.T) {
 
 func TestRegexp2AdmissionExhaustionAndRecovery(t *testing.T) {
 	before := regexp2ActiveSubjectBytes.Load()
+	require.Zero(t, before)
 	start := make(chan struct{})
 	release := make(chan struct{})
 	type admissionResult struct {
@@ -242,6 +243,16 @@ func TestRegexp2AdmissionExhaustionAndRecovery(t *testing.T) {
 	}
 	results := make(chan admissionResult, 2)
 	var wg sync.WaitGroup
+	cleaned := false
+	cleanup := func() {
+		if cleaned {
+			return
+		}
+		close(release)
+		wg.Wait()
+		cleaned = true
+	}
+	t.Cleanup(cleanup)
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func() {
@@ -270,7 +281,75 @@ func TestRegexp2AdmissionExhaustionAndRecovery(t *testing.T) {
 	}
 	require.Equal(t, 1, successes)
 	require.Equal(t, 1, failures)
-	close(release)
-	wg.Wait()
+	cleanup()
+	recovered, err := acquireRegexp2SubjectBudget(0, 40<<20)
+	require.NoError(t, err)
+	regexp2ActiveSubjectBytes.Add(-recovered)
 	require.Equal(t, before, regexp2ActiveSubjectBytes.Load())
+}
+
+func TestRegexp2OrdinaryPathBypassesCompatibilityState(t *testing.T) {
+	rs := newOpBuiltInRegexp().regMap
+	beforeICUEntries := len(rs.icu)
+	beforeActiveBytes := regexp2ActiveSubjectBytes.Load()
+	matched, err := rs.regularMatchWithMode(`ab`, "ab", false)
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, beforeICUEntries, len(rs.icu))
+	require.Equal(t, beforeActiveBytes, regexp2ActiveSubjectBytes.Load())
+}
+
+func BenchmarkRegexp2CompatibilityPaths(b *testing.B) {
+	subject := strings.Repeat("ab", 128)
+	benchmarks := []struct {
+		name string
+		fn   func(*regexpSet) error
+	}{
+		{
+			name: "RE2Match",
+			fn: func(rs *regexpSet) error {
+				_, err := rs.regularMatchWithMode(`ab`, subject, false)
+				return err
+			},
+		},
+		{
+			name: "Regexp2Match",
+			fn: func(rs *regexpSet) error {
+				_, err := rs.regularMatchWithMode(`a(?=b)`, subject, false)
+				return err
+			},
+		},
+		{
+			name: "Regexp2Grapheme",
+			fn: func(rs *regexpSet) error {
+				_, err := rs.regularMatchWithMode(`^\X$`, "e\u0301", false)
+				return err
+			},
+		},
+		{
+			name: "RE2Replace",
+			fn: func(rs *regexpSet) error {
+				_, err := rs.regularReplaceWithMode(`ab`, subject, "X", 1, 0, false)
+				return err
+			},
+		},
+		{
+			name: "Regexp2ReplaceTwoPass",
+			fn: func(rs *regexpSet) error {
+				_, err := rs.regularReplaceWithMode(`a(?=b)`, subject, "X", 1, 0, false)
+				return err
+			},
+		},
+	}
+	for _, benchmark := range benchmarks {
+		b.Run(benchmark.name, func(b *testing.B) {
+			rs := newOpBuiltInRegexp().regMap
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				if err := benchmark.fn(&rs); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }

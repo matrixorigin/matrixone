@@ -70,7 +70,9 @@ could parse a form in isolation:
 | Lookaround, numeric/named backreference, atomic group, possessive quantifier, `\X`, `\U`, `\c` | compatibility path | translated and exercised by function/resource tests |
 | `(?x)` / `(?ix:...)` | RE2 unless another row admits the pattern | free-spacing state is preserved by the compatibility translator; standalone `(?x)` remains outside this change because the scanner does not route it |
 | `\Q...\E` without another admitted construct | RE2 | Go RE2 already accepts quoted literals; the compatibility path preserves them when combined with an admitted construct |
-| Escaped text or a construct inside a quoted literal/class | ordinary surrounding route | must not cause false admission; class/quote cases are tested |
+| Named capture declaration `(?<name>...)` | compatibility path | routed so named-capture numbering/backreference mapping is preserved |
+| Escaped lookaround/backreference/possessive text inside a quoted literal/class | ordinary surrounding route | must not cause false admission; quote/class cases are tested |
+| `\U` / `\c` inside a character class | compatibility path | explicit code-point/control escape is translated and covered by class tests |
 | Binary Unicode property/code-point escape | compatibility validation | rejected before the private-use byte alphabet can be addressed |
 
 The compatibility oracle for this issue is the MySQL 8.0.45 behavior recorded
@@ -82,8 +84,10 @@ ICU release has identical grapheme tables.
 ## Invariants
 
 1. **Stable engine selection.** The syntax scanner ignores escaped text,
-   quoted literals, character classes, and free-spacing comments when deciding
-   whether the compatibility path is required. A pattern remains on RE2 or is
+   quoted literals, ordinary character-class contents, and free-spacing
+   comments when deciding whether the compatibility path is required. Explicit
+   `\U`/`\c` escapes in a class and named-capture declarations remain the
+   exceptions defined by the routing matrix. A pattern remains on RE2 or is
    admitted to the bounded compatibility path; it is not silently retried
    through a different engine.
 2. **Function-scoped position semantics.** `SUBSTR` and `REPLACE` retain the
@@ -234,6 +238,21 @@ may populate the ICU cache or leave active-budget bytes behind.
   restart migration. Cached metadata may be evicted without restarting a
   session.
 
+The time model is cooperative rather than an end-to-end hard deadline:
+
+| Phase | Clock / check point | Uncovered work |
+| --- | --- | --- |
+| Public validation, cache lookup, and cache-miss translation/compile | source, translated-expression, code, and memory admission; the outer iteration deadline is created only after the public compatibility matcher is obtained | no wall-clock deadline for initial admission/compile |
+| Per-subject `forSubject` and input construction | occurrence/replacement helpers carry the deadline created at helper entry; memory admission remains the primary bound | dependency compile work is not interrupted by SQL context |
+| One regexp2 engine match | regexp2 `MatchTimeout` is one second | timeout is coarse-grained and dependency-owned |
+| Occurrence/replacement iteration | checks wall clock before each next match; replacement performs a second bounded pass when needed | the final match and callback are not followed by another deadline check |
+| Callback, output builder, and cleanup | output is bounded by `types.MaxBlobLen`; deferred cleanup always runs | no hard timeout check is made inside callback, builder, or dependency cleanup |
+
+The two-second value is therefore a cooperative iteration budget, not a claim
+that every public call returns within two seconds. The one-second engine
+timeout and the documented admission limits are the actual safeguards for a
+single predicate; cleanup may take a small dependency-defined amount of time.
+
 ## Alternatives considered
 
 ### Continue rejecting unsupported syntax
@@ -274,6 +293,17 @@ patterns retain RE2. Rollback is a source-level removal of the compatibility
 branch and dependencies; no data migration is needed. If a construct proves
 unsafe, its admission can be removed without changing the ordinary path.
 
+The rollout rule is to upgrade every CN that may receive a workload before
+enabling that workload's admitted ICU syntax. During a mixed-version window,
+clients must use RE2-safe patterns only; the same advanced pattern must not be
+sent to a session whose execution may land on an older CN. The implementation
+owner, XuPeng-SH, records the canary BVT result on this PR; the release operator
+owns the all-CN version check. Before rollback, drain or stop sessions and
+prepared statements using admitted ICU syntax, then verify the canary is back
+to RE2-safe SQL before reverting binaries. Because no pattern metadata is
+persisted by this change, rollback needs no data migration, but session state
+must still be drained/reprepared.
+
 Budget, timeout, and invalid-pattern failures surface as bounded SQL errors.
 No new metric or log schema is introduced; future observability must not log
 user patterns or subjects and should be a separately reviewed change.
@@ -293,10 +323,31 @@ Acceptance on the implementation head requires:
 - distributed/JDBC BVT coverage for supported ICU constructs;
 - `git diff --check`, SCA/static analysis, and the normal MatrixOne CI gates.
 
-The current resource test covers error conversion and repeated cleanup. The
-past-deadline, callback-error, and admission-contention cases are the required
-deterministic closure for the corresponding lifecycle claims; a synthetic
-error-string test is not counted as proof of a real timeout cleanup.
+The evidence map is:
+
+| Requirement | Test / harness | Oracle |
+| --- | --- | --- |
+| Routing and entry-point semantics | `TestRegexp2PatternRouting`, `TestRegexp2PatternCompatibilityFunctions`, `TestRegexp2PatternFunctionsPreserveEntryPointSemantics`, `TestRegexp2OrdinaryPathBypassesCompatibilityState`, and `regexp_icu_coverage_test.go` | exact boolean/index/string/NULL/mask results; class/quote routes match the matrix and ordinary calls leave ICU state unchanged |
+| Lifecycle failure cleanup | `TestRegexp2EvaluationCleanupOnDeadlineAndCallbackError`, `TestRegexp2AdmissionExhaustionAndRecovery`, `TestRegexp2ResourceAndOffsetContracts` | callback is not called after a past deadline; callback/deadline/admission failures restore `regexp2ActiveSubjectBytes`; admission succeeds after release |
+| Race and package correctness | `go test -race -count=1 ./pkg/sql/plan/function` with native CGo flags | pass with no race, panic, or leaked active budget |
+| Cost model | `BenchmarkRegexp2CompatibilityPaths` via `go test -run '^$' -bench BenchmarkRegexp2CompatibilityPaths -benchmem -count=5 ./pkg/sql/plan/function`, compared with the same command on latest `main` using `benchstat` | report `ns/op`, `allocs/op`, and `B/op` for RE2, regexp2, `\\X`, and two-pass replacement; RE2 subbenchmarks must stay within a same-host 10% regression budget or have an explained variance, while compatibility samples must remain finite/stable and within the admission/output limits |
+| End-to-end compatibility | `test/distributed/cases/function/func_regular_icu.test` through the JDBC/BVT harness | output remains equal to the checked-in result and the canary runs on every target CN |
+
+Absolute benchmark numbers are host-dependent and are recorded as evidence,
+not treated as a universal latency promise. The required performance property
+is bounded, explainable cost on the exceptional path and unchanged routing of
+ordinary RE2 patterns. The benchmark fixture uses an independent `regexpSet`
+per sub-benchmark; the ordinary-path state oracle is a separate unit test, so
+benchmark ordering cannot hide ICU-cache or active-budget changes. Local full
+function UT, targeted race tests, and the five-run benchmark pass; the remote
+CI/BVT result remains implementation acceptance evidence to be attached to
+the PR.
+
+The resource tests now cover error conversion, a real past-deadline iteration,
+callback-error cleanup, repeated cleanup, and deterministic admission
+exhaustion/recovery. The past-deadline case proves iteration-deadline cleanup;
+it is intentionally not described as proof of the regexp2 engine's own
+one-second timeout, which remains dependency behavior.
 
 The pull request records the exact implementation commit and the design-first
 review decision. Implementation review is blocked until that record is
