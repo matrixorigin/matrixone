@@ -437,6 +437,21 @@ func hexTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return stringDomainFixedTypeMatch(overloads, inputs)
 }
 
+// spatialDistanceTypeMatch keeps the historical integer third argument for
+// ST_DISTANCE while making a statically string-backed third argument select
+// the MySQL length-unit overload. fixedTypeMatch treats both conversions as
+// equally valid and then lets registration order choose the SRID overload,
+// which makes a TEXT column containing "kilometre" fail at execution time.
+// T_any remains ambiguous and intentionally follows the legacy SRID overload;
+// the prepared execution rebinder can select the unit overload once the value
+// domain is known.
+func spatialDistanceTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 3 && inputs[2].Oid.IsMySQLString() {
+		return stringDomainFixedTypeMatch(overloads, inputs)
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 // sha2TypeMatch defers an unknown hash-length operand to SHA2's string
 // overload. A parameter marker is represented as T_any during prepare, but a
 // later execution may bind a character value such as "256tail". Resolving it
