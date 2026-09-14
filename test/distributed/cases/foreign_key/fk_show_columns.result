@@ -2,63 +2,63 @@ drop account if exists fk_show_column;
 create account fk_show_column admin_name 'root' identified by '111';
 desc	mo_catalog.mo_database                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-dat_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+dat_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 datname  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 dat_catalog_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dat_createsql  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 dat_type  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_tables                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-rel_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relname  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 reldatabase  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-reldatabase_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+reldatabase_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relpersistence  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relkind  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_createsql  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-partitioned  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+partitioned  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 partition_info  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 viewdef  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 constraint  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-catalog_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
+rel_version  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+catalog_version  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_logical_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
 desc	mo_catalog.mo_columns                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 att_uniq_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_database_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+att_database_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_database  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_relname_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_relname_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_relname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 attname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 atttyp  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attnum  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_length  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attnotnull  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-atthasdef  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attnum  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_length  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attnotnull  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+atthasdef  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_default  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attisdropped  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attisdropped  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_constraint_type  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_unsigned  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_auto_increment  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_unsigned  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_auto_increment  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_comment  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_hidden  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_has_update  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_hidden  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_update  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_update  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_is_clusterby  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_seqnum  ¦  SMALLINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_generated  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_account                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -224,7 +224,7 @@ comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_sessions                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-conn_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+conn_id  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 session_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 user  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -290,8 +290,8 @@ desc	mo_catalog.mo_cache                   ;
 node_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-used  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-free  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+used  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+free  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 hit_ratio  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_foreign_keys            ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -327,63 +327,63 @@ obj_id  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 kind  ¦  VARCHAR(32)  ¦  NO  ¦    ¦  user  ¦    ¦
 show columns from	mo_catalog.mo_database                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-dat_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+dat_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 datname  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 dat_catalog_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dat_createsql  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 dat_type  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_tables                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-rel_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relname  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 reldatabase  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-reldatabase_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+reldatabase_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relpersistence  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relkind  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_createsql  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-partitioned  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+partitioned  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 partition_info  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 viewdef  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 constraint  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-catalog_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
+rel_version  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+catalog_version  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_logical_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_columns                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 att_uniq_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_database_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+att_database_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_database  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_relname_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_relname_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_relname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 attname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 atttyp  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attnum  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_length  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attnotnull  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-atthasdef  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attnum  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_length  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attnotnull  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+atthasdef  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_default  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attisdropped  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attisdropped  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_constraint_type  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_unsigned  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_auto_increment  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_unsigned  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_auto_increment  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_comment  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_hidden  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_has_update  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_hidden  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_update  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_update  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_is_clusterby  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_seqnum  ¦  SMALLINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_generated  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_account                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -549,7 +549,7 @@ comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_sessions                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-conn_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+conn_id  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 session_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 user  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -615,8 +615,8 @@ show columns from	mo_catalog.mo_cache                   ;
 node_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-used  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-free  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+used  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+free  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 hit_ratio  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_foreign_keys            ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -652,63 +652,63 @@ obj_id  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 kind  ¦  VARCHAR(32)  ¦  NO  ¦    ¦  user  ¦    ¦
 desc	mo_catalog.mo_database                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-dat_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+dat_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 datname  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 dat_catalog_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dat_createsql  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 dat_type  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_tables                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-rel_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relname  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 reldatabase  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-reldatabase_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+reldatabase_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relpersistence  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relkind  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_createsql  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-partitioned  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+partitioned  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 partition_info  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 viewdef  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 constraint  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-catalog_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
+rel_version  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+catalog_version  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_logical_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
 desc	mo_catalog.mo_columns                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 att_uniq_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_database_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+att_database_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_database  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_relname_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_relname_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_relname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 attname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 atttyp  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attnum  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_length  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attnotnull  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-atthasdef  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attnum  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_length  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attnotnull  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+atthasdef  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_default  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attisdropped  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attisdropped  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_constraint_type  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_unsigned  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_auto_increment  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_unsigned  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_auto_increment  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_comment  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_hidden  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_has_update  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_hidden  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_update  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_update  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_is_clusterby  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_seqnum  ¦  SMALLINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_generated  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_account                 ;
 no such table mo_catalog.mo_account
@@ -852,7 +852,7 @@ comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_sessions                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-conn_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+conn_id  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 session_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 user  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -918,8 +918,8 @@ desc	mo_catalog.mo_cache                   ;
 node_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-used  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-free  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+used  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+free  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 hit_ratio  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_foreign_keys            ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -955,63 +955,63 @@ obj_id  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 kind  ¦  VARCHAR(32)  ¦  NO  ¦    ¦  user  ¦    ¦
 show columns from	mo_catalog.mo_database                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-dat_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+dat_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 datname  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 dat_catalog_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 dat_createsql  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 dat_type  ¦  VARCHAR(32)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_tables                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-rel_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relname  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 reldatabase  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-reldatabase_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+reldatabase_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relpersistence  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relkind  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_createsql  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-partitioned  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+partitioned  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 partition_info  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 viewdef  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 constraint  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-catalog_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
+rel_version  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+catalog_version  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_logical_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_columns                 ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 att_uniq_name  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_database_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+att_database_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_database  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-att_relname_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_relname_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_relname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 attname  ¦  VARCHAR(256)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 atttyp  ¦  VARCHAR(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attnum  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_length  ¦  INT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attnotnull  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-atthasdef  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attnum  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_length  ¦  INT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attnotnull  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+atthasdef  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_default  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attisdropped  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attisdropped  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_constraint_type  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_unsigned  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_auto_increment  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_unsigned  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_auto_increment  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 att_comment  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-att_is_hidden  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_has_update  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+att_is_hidden  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_update  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_update  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_is_clusterby  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_seqnum  ¦  SMALLINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_is_clusterby  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_seqnum  ¦  SMALLINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_enum  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-attr_has_generated  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+attr_has_generated  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 attr_generated  ¦  VARCHAR(2048)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_account                 ;
 no such table mo_catalog.mo_account
@@ -1155,7 +1155,7 @@ comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_sessions                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-conn_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+conn_id  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 session_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 account  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 user  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -1221,8 +1221,8 @@ show columns from	mo_catalog.mo_cache                   ;
 node_type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 type  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-used  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-free  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+used  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+free  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 hit_ratio  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_foreign_keys            ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
