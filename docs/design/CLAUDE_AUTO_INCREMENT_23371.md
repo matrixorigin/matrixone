@@ -67,7 +67,7 @@
 1. 全局号段由持久 allocator 高水位事务独占，跨 CN 不重叠。修改 C 不改变取号线性化点，不回收业务回滚的保留区间。
 2. 会话 S/O 只读选择候选，不改 `AutoColumn.Step` 或共享 cache 的序列定义；legacy 非 1 step 继续使用上游算法。
 3. CACHE 的唯一持久所有者为表 metadata，CREATE/冷 CN/重启/LIKE/COPY/CLONE/dump/restore 的读取一致。
-4. 默认 0 的 SQL 行为、预取与发号热路径请求次数保持 main 行为；PRE_INSERT 的已解析 TableDef 与 internal_auto_increment 已打开的 relation 提供 typed policy，绑定物理 tableID 后传给冷加载；匹配时只读 allocator 行。缺少可靠 metadata、tableID 刷新不匹配或 Reset 替换ID不匹配时，仍在同一 SQL 快照查询持久表属性，不因开关关闭而跳过policy发现。新策略不引入 session cache、worker、广播、retry 层。
+4. 默认 0 的 SQL 行为、预取与发号热路径请求次数保持 main 行为；PRE_INSERT 的已解析 TableDef 与 internal_auto_increment 已打开的 relation 提供 typed policy，绑定物理 tableID 后传给冷加载；TRUNCATE、原地/复制 ALTER、CLONE 与 LOAD TABLE 的 Reset/SetOffset 同样使用已解析目标表定义传递策略，匹配时只读 allocator 行。缺少可靠 metadata、tableID 刷新不匹配或 Reset 替换ID不匹配时，仍在同一 SQL 快照查询持久表属性，不因开关关闭而跳过policy发现。新策略不引入 session cache、worker、广播、retry 层。
 5. CHECK、PK/UK 锁、base/index 共用最终行、上游结果发布边界保持；CACHE 不能制造未探测/未锁定的新候选。
 6. TS 随实际保留区间保存，查重下界不晚于本批任何候选来源；末端值、skipped、跨段与错误清理同样成立。
 7. 加法、乘法、int 转换、末端值均受既有边界检查；新预算计算不能在已有 checked helper 之前溢出。
@@ -88,6 +88,10 @@
 ### 冷目录成本与观察一致性
 
 2026-09-11 review修复：使用同一真实embedded集群的SQL executor，对64/1024张默认策略空表，逐表调用GetColumns（绕过allocator缓存，三轮），对比无hint的原catalog子查询与已有typed policy的路径。1024表总读取中位数2.977s → 0.516s，约82.7%下降；64表36.675ms → 9.613ms。表创建/清理不计入计时；没有执行号段分配。该测量只证明cold policy读取路径的成本差异，不是端到端吞吐、严格复杂度或生产catalog容量承诺。未知tableID-only caller的fallback仍有目录读取成本。
+
+2026-09-14 review修复：扩展所有已拥有表定义的 Reset/SetOffset 生产调用点；空段 `CurrentValue` 改走 store 的 `GetColumnValue`，以 `(table_id, col_name)` 主键仅读 offset/step。私有 CREATE 继续使用 cache 持有的 txn，commit 后使用新快照，每次观测仍执行一次 SQL，避免跨 CN 过期高水位；不再取 policy、列名/索引或解码完整 AutoColumn 列表。缺失/重复 allocator 行、SQL失败、零step/溢出仍报错，不分配或缓存观测结果。
+
+同一真实双CN环境，64/1024张 CACHE=1 空表逐表读取，三轮中位值分别为：fallback 21.904ms/951.706ms；typed policy 11.390ms/204.496ms；offset/step点查8.485ms/133.514ms。目录hint路径与原fallback对比约减少48.0%/78.5%；点查与已有hint的完整列读取对比约减少25.5%/34.7%。DDL/清理不计时，无号段分配；这是store路径成本而非端到端SHOW/DDL吞吐或复杂度证明。裸tableID且没有权威metadata的调用仍保留fallback。
 
 空 demand-only cache 每次观察仍读持久offset：另一CN发号/显式值推进后，现有公开契约和跨CN回归要求下次观察推进。仅依据“曾分配过”或本地最后offset做缓存不能正确失效；本轮不新增跨CN失效协议，也不将过期数值当作当前值返回。优化目录策略读取与保留实时水位读取是两个独立决定。
 
@@ -121,7 +125,7 @@
 2. 持列锁观察无可用段时，无投机分配在途；调用事务 SnapshotTS 可作为后续新保留的保守下界。新共享保留在该快照之后提交，私有保留采用 owning snapshot。缺少有效 snapshot 时拒绝，不使用零或 wall clock。
 3. CurrentValue 有本地游标/terminal 则直接读；无段时由实际 table cache owner 执行 SQL 读取 offset+step，checked overflow，不用创建 cache 时的陈旧 offset，不触发分配。未提交 CREATE 使用该 cache 的 txnOp；commit 后 owner 清空为 nil，使用已提交快照。lazy private wrapper 转交到同一实际 owner，并在整个查询期间保留 acquire/release；不持 cache 锁跨 SQL I/O。已建立的 cache owner 将不可变策略传给观察查询，仅重新读取 allocator offset/step，不再重复读取 mo_tables。PRE_INSERT/元数据函数的冷加载复用绑定物理ID的typed policy；未知调用者仍独立发现策略，所有路径继续校验开关/版本，不缓存陈旧offset。
 4. mixed batch 的自动行真实需求在 manual 位移之前同步保留，使 `(NULL,100,NULL)` 的前一自动行仍能沿用上游 skipped-range 顺序。全显式不预留，estimate/low-water 不参与。
-5. cold GetColumns 同 SQL 快照读取 allocator rows 与 SchemaExtra；Reset 的旧 catalog 行可能已被 TRUNCATE 删除，因此该次读取明确指定新物理表为 metadata owner。无新增 public service/store API。
+5. cold GetColumns 同 SQL 快照读取 allocator rows 与 SchemaExtra；Reset 的旧 catalog 行可能已被 TRUNCATE 删除，因此该次读取明确指定新物理表为 metadata owner。无新增 public service API；store 增加只读 `GetColumnValue` 接口，并同步 mem/SQL 实现与生成mock。
 
 ## 7. 兼容、失败与资源
 

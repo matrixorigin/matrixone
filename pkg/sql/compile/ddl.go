@@ -5455,7 +5455,7 @@ func maybeResetAutoIncrement(
 	}
 	if containAuto {
 		err = incrservice.GetAutoIncrementService(sid).Reset(
-			ctx,
+			incrservice.WithAutoIDCachePolicy(ctx, tblDef.TblId, tblDef.AutoIdCache),
 			oldId,
 			newId,
 			keepAutoIncrement,
@@ -5573,7 +5573,7 @@ func (c *Compile) appendAlterAutoIncrementReqs(
 			return err
 		}
 		if err = svc.SetOffset(
-			c.proc.Ctx,
+			incrservice.WithAutoIDCachePolicy(c.proc.Ctx, tableDef.TblId, tableDef.AutoIdCache),
 			tid,
 			col.ColIndex,
 			targetCol.Name,

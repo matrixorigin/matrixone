@@ -182,20 +182,14 @@ func (c *tableCache) currentValue(
 			// An uncommitted CREATE owns private allocator rows. Observe through
 			// that cache's transaction, not a new committed snapshot. getTxn
 			// releases its lock before I/O and returns nil after cache commit.
-			observationCtx := WithAutoIDCachePolicy(ctx, tableID, col.CacheSize)
-			cols, err := store.GetColumns(observationCtx, tableID, c.getTxn())
+			offset, step, err := store.GetColumnValue(ctx, tableID, targetCol, c.getTxn())
 			if err != nil {
 				return 0, err
 			}
-			for _, column := range cols {
-				if column.ColName == targetCol {
-					if column.Step == 0 || column.Offset > math.MaxUint64-column.Step {
-						return 0, moerr.NewOutOfRange(ctx, "AUTO_INCREMENT", "no next value is representable")
-					}
-					return column.Offset + column.Step, nil
-				}
+			if step == 0 || offset > math.MaxUint64-step {
+				return 0, moerr.NewOutOfRange(ctx, "AUTO_INCREMENT", "no next value is representable")
 			}
-			return 0, moerr.NewInternalErrorf(ctx, "AUTO_INCREMENT column %q is missing for table %d", targetCol, tableID)
+			return offset + step, nil
 		}
 	}
 	return 0, nil

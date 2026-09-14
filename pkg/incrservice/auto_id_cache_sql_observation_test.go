@@ -16,6 +16,7 @@ package incrservice
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -31,7 +32,11 @@ func TestAutoIDCacheKnownPolicyObservationSQL(t *testing.T) {
 	exec := mock_executor.NewMockSQLExecutor(gomock.NewController(t))
 	exec.EXPECT().Exec(gomock.Any(), gomock.Any(), gomock.Any()).Times(6).DoAndReturn(func(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
 		require.NotContains(t, sql, "mo_tables")
-		require.Contains(t, sql, "where table_id = 42")
+		tableID := uint64(42)
+		if _, reset := ctx.Value(autoColumnPolicyTableKey{}).(uint64); reset {
+			tableID = 7
+		}
+		require.Contains(t, sql, fmt.Sprintf("where table_id = %d", tableID))
 		mem := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_int32.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType()}, mp)
 		mem.NewBatchWithRowCount(1)
 		require.NoError(t, executor.AppendStringRows(mem, 0, []string{"id"}))
@@ -43,14 +48,19 @@ func TestAutoIDCacheKnownPolicyObservationSQL(t *testing.T) {
 	})
 	store := &sqlStore{exec: exec}
 	for _, size := range []uint64{0, 1, MaxAutoIDCache + 1} {
-		ctx := WithAutoIDCachePolicy(t.Context(), 42, size)
-		for range 2 {
-			cols, err := store.GetColumns(ctx, 42, nil)
+		for _, reset := range []bool{false, true} {
+			ctx := WithAutoIDCachePolicy(t.Context(), 42, size)
+			tableID := uint64(42)
+			if reset {
+				tableID = 7
+				ctx = context.WithValue(ctx, autoColumnPolicyTableKey{}, uint64(42))
+			}
+			cols, err := store.GetColumns(ctx, tableID, nil)
 			if size > MaxAutoIDCache {
 				require.ErrorContains(t, err, "AUTO_ID_CACHE")
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, []AutoColumn{{TableID: 42, ColName: "id", Offset: 123, Step: 1, CacheSize: size}}, cols)
+				require.Equal(t, []AutoColumn{{TableID: tableID, ColName: "id", Offset: 123, Step: 1, CacheSize: size}}, cols)
 			}
 			require.Zero(t, mp.CurrNB())
 		}

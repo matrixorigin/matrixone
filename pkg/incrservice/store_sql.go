@@ -504,18 +504,7 @@ func (s *sqlStore) GetColumns(
 	fetchSQL := fmt.Sprintf(`select col_name, col_index, offset, step,
 		%s as table_extra from %s where table_id = %d order by col_index`,
 		policySQL, incrTableName, tableID)
-	opts := executor.Options{}.
-		WithDatabase(database).
-		WithTxn(txnOp).
-		WithStatementOption(executor.StatementOption{}.WithDisableLog())
-
-	if txnOp != nil {
-		opts = opts.WithDisableIncrStatement()
-	} else {
-		opts = opts.WithEnableTrace().WithDisableWaitPaused()
-	}
-
-	res, err := s.exec.Exec(ctx, fetchSQL, opts)
+	res, err := s.exec.Exec(ctx, fetchSQL, autoColumnReadOptions(txnOp))
 	if err != nil {
 		return nil, err
 	}
@@ -570,6 +559,44 @@ func (s *sqlStore) GetColumns(
 		}
 	}
 	return cols, nil
+}
+
+func autoColumnReadOptions(txnOp client.TxnOperator) executor.Options {
+	opts := executor.Options{}.
+		WithDatabase(database).
+		WithTxn(txnOp).
+		WithStatementOption(executor.StatementOption{}.WithDisableLog())
+	if txnOp != nil {
+		return opts.WithDisableIncrStatement()
+	}
+	return opts.WithEnableTrace().WithDisableWaitPaused()
+}
+
+// GetColumnValue uses the allocator's (table_id, col_name) key. Policy is
+// already validated by the cache owner; every observation still reads fresh
+// allocator state, including reservations made by another CN.
+func (s *sqlStore) GetColumnValue(ctx context.Context, tableID uint64, colName string, txnOp client.TxnOperator) (uint64, uint64, error) {
+	query := fmt.Sprintf("select offset, step from %s where table_id = %d and col_name = '%s'",
+		incrTableName, tableID, sqlquote.EscapeString(colName))
+	res, err := s.exec.Exec(ctx, query, autoColumnReadOptions(txnOp))
+	if err != nil {
+		return 0, 0, err
+	}
+	defer res.Close()
+	var offset, step uint64
+	var count int
+	res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+		count += rows
+		if rows > 0 {
+			offset = executor.GetFixedRows[uint64](cols[0])[0]
+			step = executor.GetFixedRows[uint64](cols[1])[0]
+		}
+		return true
+	})
+	if count != 1 {
+		return 0, 0, moerr.NewInternalErrorf(ctx, "AUTO_INCREMENT column %q for table %d: expected one allocator row, got %d", colName, tableID, count)
+	}
+	return offset, step, nil
 }
 
 func (s *sqlStore) Close() {

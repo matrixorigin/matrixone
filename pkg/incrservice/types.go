@@ -199,6 +199,8 @@ type valueAllocator interface {
 type IncrValueStore interface {
 	// GetColumns return auto columns of table.
 	GetColumns(ctx context.Context, tableID uint64, txnOp client.TxnOperator) ([]AutoColumn, error)
+	// GetColumnValue observes fresh offset/step without reserving IDs or reading table policy.
+	GetColumnValue(ctx context.Context, tableID uint64, colName string, txnOp client.TxnOperator) (uint64, uint64, error)
 	// Create add metadata records into catalog.AutoIncrTableName.
 	Create(ctx context.Context, tableID uint64, cols []AutoColumn, txnOp client.TxnOperator) error
 	// Allocate allocate new range for auto-increment column.

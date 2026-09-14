@@ -134,6 +134,21 @@ func (s *memStore) GetColumns(
 	return append([]AutoColumn(nil), m[tableID]...), nil
 }
 
+func (s *memStore) GetColumnValue(ctx context.Context, tableID uint64, colName string, txnOp client.TxnOperator) (uint64, uint64, error) {
+	s.Lock()
+	defer s.Unlock()
+	m := s.caches
+	if txnOp != nil {
+		m = s.uncommitted[string(txnOp.Txn().ID)]
+	}
+	for _, col := range m[tableID] {
+		if col.ColName == colName {
+			return col.Offset, col.Step, nil
+		}
+	}
+	return 0, 0, moerr.NewInternalErrorf(ctx, "AUTO_INCREMENT column %q is missing for table %d", colName, tableID)
+}
+
 func (s *memStore) Allocate(
 	ctx context.Context,
 	tableID uint64,
