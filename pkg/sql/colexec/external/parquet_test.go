@@ -3571,6 +3571,39 @@ func TestParquetListOfNestedAlignsOptionalFieldsByElement(t *testing.T) {
 	}, got)
 }
 
+func TestParquetMapOfNestedAlignsOptionalValuesByEntry(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"m": parquet.Map(parquet.String(), parquet.Group{
+			"a": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+			"b": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+		}),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	kv := f.Root().Column("m").Column("key_value")
+	key := kv.Column("key")
+	value := kv.Column("value")
+	a := value.Column("a")
+	b := value.Column("b")
+
+	got, err := reconstructMap(context.Background(), kv, []parquet.Value{
+		parquet.ByteArrayValue([]byte("first")).Level(0, key.MaxDefinitionLevel(), key.Index()),
+		parquet.ByteArrayValue([]byte("second")).Level(1, key.MaxDefinitionLevel(), key.Index()),
+		parquet.Int32Value(10).Level(0, a.MaxDefinitionLevel(), a.Index()),
+		parquet.NullValue().Level(1, a.MaxDefinitionLevel()-1, a.Index()),
+		parquet.NullValue().Level(0, b.MaxDefinitionLevel()-1, b.Index()),
+		parquet.Int32Value(20).Level(1, b.MaxDefinitionLevel(), b.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"first":  map[string]any{"a": int64(10), "b": nil},
+		"second": map[string]any{"a": nil, "b": int64(20)},
+	}, got)
+}
+
 func TestParquetMapRejectsNullKey(t *testing.T) {
 	schema := parquet.NewSchema("x", parquet.Group{
 		"m": parquet.Map(parquet.String(), parquet.Optional(parquet.String())),

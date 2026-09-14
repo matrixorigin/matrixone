@@ -640,29 +640,7 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 	// fields are populated in different columns. Nested repeated fields need
 	// repetition-level grouping below because their leaf counts can differ.
 	if !hasNestedRepeatedDescendant(elementCol) {
-		valuesByColumn := make(map[int][]parquet.Value, len(leafCols))
-		maxValues := 0
-		for _, v := range values {
-			if !containsNestedLeaf(leafCols, v.Column()) {
-				continue
-			}
-			valuesByColumn[v.Column()] = append(valuesByColumn[v.Column()], v)
-			if len(valuesByColumn[v.Column()]) > maxValues {
-				maxValues = len(valuesByColumn[v.Column()])
-			}
-		}
-
-		for i := 0; i < maxValues; i++ {
-			group := make([]parquet.Value, 0, len(leafCols))
-			for _, leaf := range leafCols {
-				columnValues := valuesByColumn[leaf.Index()]
-				if i < len(columnValues) {
-					group = append(group, columnValues[i])
-				}
-			}
-			if len(group) == 0 {
-				continue
-			}
+		for _, group := range groupNestedValuesByLeafOrdinal(leafCols, values) {
 			nested, err := reconstructNestedByType(ctx, elementCol, group)
 			if err != nil {
 				return nil, err
@@ -712,13 +690,37 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 	return result, nil
 }
 
-func containsNestedLeaf(leafCols []*parquet.Column, columnIndex int) bool {
+func groupNestedValuesByLeafOrdinal(leafCols []*parquet.Column, values []parquet.Value) [][]parquet.Value {
+	valuesByColumn := make(map[int][]parquet.Value, len(leafCols))
+	expectedCols := make(map[int]struct{}, len(leafCols))
+	maxValues := 0
 	for _, leaf := range leafCols {
-		if leaf.Index() == columnIndex {
-			return true
+		expectedCols[leaf.Index()] = struct{}{}
+	}
+	for _, v := range values {
+		if _, ok := expectedCols[v.Column()]; !ok {
+			continue
+		}
+		valuesByColumn[v.Column()] = append(valuesByColumn[v.Column()], v)
+		if len(valuesByColumn[v.Column()]) > maxValues {
+			maxValues = len(valuesByColumn[v.Column()])
 		}
 	}
-	return false
+
+	groups := make([][]parquet.Value, 0, maxValues)
+	for i := 0; i < maxValues; i++ {
+		group := make([]parquet.Value, 0, len(leafCols))
+		for _, leaf := range leafCols {
+			columnValues := valuesByColumn[leaf.Index()]
+			if i < len(columnValues) {
+				group = append(group, columnValues[i])
+			}
+		}
+		if len(group) > 0 {
+			groups = append(groups, group)
+		}
+	}
+	return groups
 }
 
 func hasNestedRepeatedDescendant(col *parquet.Column) bool {
@@ -817,12 +819,36 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 			groupCap = 0
 		}
 
-		// Collect all keys
+		// Collect all keys. They are stored in one leaf column and therefore
+		// retain entry order even though the nested value leaves are column-major.
 		var keys []parquet.Value
 		for _, v := range values {
 			if v.Column() == keyColIdx {
 				keys = append(keys, v)
 			}
+		}
+
+		if !hasNestedRepeatedDescendant(valueCol) {
+			valueGroups := groupNestedValuesByLeafOrdinal(collectLeafColumns(valueCol), values)
+			for i, key := range keys {
+				if key.IsNull() {
+					return nil, moerr.NewInvalidInput(ctx, "parquet map key cannot be NULL")
+				}
+				keyStr := stringifyMapKey(key)
+				if _, exists := result[keyStr]; exists {
+					return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
+				}
+				if i >= len(valueGroups) || len(valueGroups[i]) == 0 {
+					result[keyStr] = nil
+					continue
+				}
+				nested, err := reconstructNestedByType(ctx, valueCol, valueGroups[i])
+				if err != nil {
+					return nil, err
+				}
+				result[keyStr] = nested
+			}
+			return result, nil
 		}
 
 		// Group values by RepetitionLevel
