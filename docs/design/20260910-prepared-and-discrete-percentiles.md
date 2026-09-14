@@ -237,16 +237,16 @@ raw value bytes
 There is no untagged string variant. Inherited domain and expression source are
 encoded explicitly as their enum values, so user data beginning with the magic
 prefix occurs only after this envelope and cannot be mistaken for framing. The
-v70 decoder rejects a missing envelope, unknown metadata version, or invalid
+v71 decoder rejects a missing envelope, unknown metadata version, or invalid
 enum and restores the metadata before sorting. Merge and intermediate/spill
 serialization copy this inner payload byte-for-byte. Result publication uses
 `Vector.UnionOne`, so the chosen row's raw value, domain, and source reach the
 result together.
 
-This representation is not a promise that pre-v70 workers can execute extended
+This representation is not a promise that pre-v71 workers can execute extended
 types: those workers know the aggregate ID from v17 but do not know the new
 executor or metadata payload. There is no lossy wire downgrade. Correctness is
-provided by fail-closed remote admission at v70, not by asking an old worker to
+provided by fail-closed remote admission at v71, not by asking an old worker to
 ignore the header. Numeric exact-percentile state and
 `APPROX_PERCENTILE` sketch state retain their previous representation and
 remain admitted at their existing v17 boundary.
@@ -258,33 +258,34 @@ remain admitted at their existing v17 boundary.
 `MORPCVersion64` to typed BIN/CONV execution contracts, `MORPCVersion65` to
 signed INT results for ASCII, `MORPCVersion66` to GROUP_CONCAT source-row
 diagnostics, `MORPCVersion67` to named process timezone identity,
-`MORPCVersion68` to complete GROUP_CONCAT cut reporting for strict writes, and
-`MORPCVersion69` to the widened DECIMAL SUM partial state in #28624. This
-feature therefore uses `MORPCVersion70` and must merge after #28624, so a v70
+`MORPCVersion68` to complete GROUP_CONCAT cut reporting for strict writes,
+`MORPCVersion69` to exact bounded per-partition RANK with boundary ties, and
+`MORPCVersion70` to the widened DECIMAL SUM partial state in #28624. This
+feature therefore uses `MORPCVersion71` and must merge after #28624, so a v71
 binary implements the complete monotonic protocol prefix.
 When serializing a remote `Group` or `MergeGroup`, the coordinator identifies
 a `PERCENTILE_DISC` input outside the historical numeric family. If the
-configured protocol version is below 70,
+configured protocol version is below 71,
 serialization fails before dispatch with a not-supported error. Numeric
 ordered-set percentiles continue to require only version 17.
 
 The operational rollout is:
 
-1. merge and deploy #28624, then deploy binaries containing the v70 executor
+1. merge and deploy #28624, then deploy binaries containing the v71 executor
    and decoder to every participating CN while the configured protocol remains
-   at most 69;
+   at most 70;
 2. run mixed-version qualification; extended local work may be tested, but
    distributed extended-percentile work must continue to fail closed;
 3. after every participating worker is capable, raise the configured protocol
-   to 70 and enable distributed use; and
+   to 71 and enable distributed use; and
 4. monitor protocol rejection, allocation/spill errors, and result regressions.
 
-To roll back, first lower the configured protocol to 69 so no new extended
+To roll back, first lower the configured protocol to 70 so no new extended
 remote pipeline is dispatched, drain in-flight queries and prepared sessions,
 then roll back binaries. Aggregate state and private spill files are ephemeral
 and query-owned; no catalog rows, user tables, durable object format, backups,
 or restore procedures are changed. A process crash follows existing temporary
-spill cleanup. Downgrading a live query or injecting a v70 partial state into an
+spill cleanup. Downgrading a live query or injecting a v71 partial state into an
 older worker is unsupported and must fail at admission rather than fall back to
 numeric or text coercion.
 
@@ -312,7 +313,7 @@ rollout precondition.
   rejected until that scratch participates in the Group allocation bound.
 - Silently running extended types only on the coordinator would avoid a wire
   version, but changes placement and memory behavior and can be defeated by
-  later optimizer changes. An explicit fail-closed v70 contract is selected.
+  later optimizer changes. An explicit fail-closed v71 contract is selected.
 - Dropping string runtime metadata keeps the old raw saved-argument payload but
   can change downstream binary/text semantics. The versioned inner metadata
   envelope is selected; static binary types remain represented by their type.
@@ -333,10 +334,10 @@ does not substitute for traceable approval of this design revision.
 | retained-state ownership/accounting and merge | `TestOrderedPercentileDiscreteSortableTypes`, `TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip` |
 | JSON and array/vector paths cannot bypass the hard allocation account | `TestPercentileDiscRejectsUnaccountedSortScratch`, `TestOrderedSetPercentileCheck` |
 | row-exact string domain/source and unambiguous magic-prefix values through selection and wire merge | `TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip`, `TestOrderedPercentileDiscreteVarcharSelectedRuntimeDomain`, `TestOrderedPercentileDiscreteRawMagicPrefixRoundTrip` |
-| v69 rejection, v70 admission, and unchanged v17 numeric boundary | `pkg/sql/compile/remote_expr_test.go` |
+| v70 rejection, v71 admission, and unchanged v17 numeric boundary | `pkg/sql/compile/remote_expr_test.go` |
 | build and changed-package regression | `make build`; targeted `go test` commands recorded on PR #28540 |
 
-Before enabling protocol 70 in a release, deployment qualification must also
+Before enabling protocol 71 in a release, deployment qualification must also
 exercise a real mixed-version cluster, upgrade then downgrade admission, query
 cancellation during a large extended percentile, allocation failure/spill and
 reload, and process termination cleanup. Those are release/operational tests;

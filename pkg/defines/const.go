@@ -104,9 +104,10 @@ const (
 	MORPCVersion66     int64 = 66 // GROUP_CONCAT source-row diagnostics in aggregate partial state
 	MORPCVersion67     int64 = 67 // named process timezone identity
 	MORPCVersion68     int64 = 68 // complete GROUP_CONCAT cut reporting for strict writes
-	MORPCVersion69     int64 = 69 // widened DECIMAL SUM partial state
-	MORPCVersion70     int64 = 70 // extended discrete percentile input types
-	MORPCLatestVersion       = MORPCVersion70
+	MORPCVersion69     int64 = 69 // exact bounded per-partition RANK with boundary ties
+	MORPCVersion70     int64 = 70 // widened DECIMAL SUM partial state
+	MORPCVersion71     int64 = 71 // extended discrete percentile input types
+	MORPCLatestVersion       = MORPCVersion71
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
