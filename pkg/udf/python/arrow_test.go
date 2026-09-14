@@ -6,8 +6,10 @@
 package python
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/decimal128"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -66,6 +69,184 @@ func TestEncodeRecordBatchUsesFlightPayloadFrames(t *testing.T) {
 	require.Equal(t, int64(1), decodedValues.Value(0))
 	require.Equal(t, int64(2), decodedValues.Value(1))
 	require.Equal(t, int64(3), decodedValues.Value(2))
+}
+
+func BenchmarkDecodeRecordBatch(b *testing.B) {
+	descriptor, err := NewTypeDescriptor(types.T_int64.ToType())
+	require.NoError(b, err)
+	field, err := descriptor.Field("arg_0")
+	require.NoError(b, err)
+	builder := array.NewInt64Builder(memory.NewGoAllocator())
+	values := make([]int64, 8192)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	builder.AppendValues(values, nil)
+	arrayValues := builder.NewInt64Array()
+	defer arrayValues.Release()
+	record := array.NewRecordBatch(
+		arrow.NewSchema([]arrow.Field{field}, nil),
+		[]arrow.Array{arrayValues},
+		int64(len(values)),
+	)
+	defer record.Release()
+	frames, err := EncodeRecordBatch(record, DefaultMaxBatchBytes)
+	require.NoError(b, err)
+	b.SetBytes(int64(len(frames[1].Body)))
+
+	b.Run("copy_baseline", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			decoded, err := decodeRecordBatchCopyBaseline(frames[0], frames[1], DefaultMaxBatchBytes)
+			if err != nil {
+				b.Fatal(err)
+			}
+			decoded.Release()
+		}
+	})
+	b.Run("snapshot_reader", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			decoded, err := DecodeRecordBatch(frames[0], frames[1], DefaultMaxBatchBytes)
+			if err != nil {
+				b.Fatal(err)
+			}
+			decoded.Release()
+		}
+	})
+}
+
+func BenchmarkAppendArrowResultFixedWidth(b *testing.B) {
+	builder := array.NewInt64Builder(memory.NewGoAllocator())
+	values := make([]int64, 8192)
+	for i := range values {
+		values[i] = int64(i)
+	}
+	builder.AppendValues(values, nil)
+	input := builder.NewInt64Array()
+	defer input.Release()
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	b.SetBytes(int64(len(values) * 8))
+
+	bench := func(b *testing.B, appendResult func(vector.FunctionResultWrapper) error) {
+		result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+		defer result.Free()
+		require.NoError(b, result.PreExtendAndReset(len(values)))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := result.PreExtendAndReset(len(values)); err != nil {
+				b.Fatal(err)
+			}
+			if err := appendResult(result); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	b.Run("wrapper_each_row", func(b *testing.B) {
+		bench(b, func(result vector.FunctionResultWrapper) error {
+			for i := 0; i < input.Len(); i++ {
+				if err := vector.MustFunctionResult[int64](result).Append(input.Value(i), input.IsNull(i)); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	})
+	b.Run("wrapper_once", func(b *testing.B) {
+		bench(b, func(result vector.FunctionResultWrapper) error {
+			return appendFixedArrowValues(input.Int64Values(), input, result)
+		})
+	})
+}
+
+func BenchmarkAppendArrowResultVariableWidth(b *testing.B) {
+	builder := array.NewStringBuilder(memory.NewGoAllocator())
+	values := make([]string, 8192)
+	for i := range values {
+		values[i] = fmt.Sprintf("value-%d", i)
+	}
+	builder.AppendValues(values, nil)
+	input := builder.NewStringArray()
+	defer input.Release()
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	b.SetBytes(int64(len(values) * 8))
+
+	bench := func(b *testing.B, appendResult func(vector.FunctionResultWrapper) error) {
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+		defer result.Free()
+		require.NoError(b, result.PreExtendAndReset(len(values)))
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			if err := result.PreExtendAndReset(len(values)); err != nil {
+				b.Fatal(err)
+			}
+			if err := appendResult(result); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+
+	b.Run("string_to_bytes_copy", func(b *testing.B) {
+		bench(b, func(result vector.FunctionResultWrapper) error {
+			output := vector.MustFunctionResult[types.Varlena](result)
+			for i := 0; i < input.Len(); i++ {
+				if err := output.AppendBytes([]byte(input.Value(i)), input.IsNull(i)); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	})
+	b.Run("borrowed_string_view", func(b *testing.B) {
+		bench(b, func(result vector.FunctionResultWrapper) error {
+			return appendStringArrowResult(input, result)
+		})
+	})
+}
+
+func decodeRecordBatchCopyBaseline(schemaFrame, batchFrame ArrowFrame, maxBytes int64) (arrow.RecordBatch, error) {
+	stream := make([]byte, 0, len(schemaFrame.Header)+len(batchFrame.Header)+len(batchFrame.Body)+32)
+	stream = appendIPCFrameCopyBaseline(stream, schemaFrame.Header, schemaFrame.Body)
+	stream = appendIPCFrameCopyBaseline(stream, batchFrame.Header, batchFrame.Body)
+	stream = append(stream, 0, 0, 0, 0, 0, 0, 0, 0)
+	reader, err := ipc.NewReader(bytes.NewReader(stream), ipc.WithAllocator(memory.NewGoAllocator()))
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Release()
+	if !reader.Next() {
+		return nil, reader.Err()
+	}
+	record := reader.RecordBatch()
+	if record == nil {
+		return nil, fmt.Errorf("missing record batch")
+	}
+	record.Retain()
+	return record, nil
+}
+
+func appendIPCFrameCopyBaseline(dst, header, body []byte) []byte {
+	metadataLength := (len(header) + 7) &^ 7
+	var prefix [8]byte
+	binary.LittleEndian.PutUint32(prefix[:4], math.MaxUint32)
+	binary.LittleEndian.PutUint32(prefix[4:], uint32(metadataLength))
+	dst = append(dst, prefix[:]...)
+	dst = append(dst, header...)
+	for len(dst)%8 != 0 {
+		dst = append(dst, 0)
+	}
+	dst = append(dst, body...)
+	for len(dst)%8 != 0 {
+		dst = append(dst, 0)
+	}
+	return dst
 }
 
 func TestDecodeRecordBatchRequiresSchemaAndRecordHeaders(t *testing.T) {
