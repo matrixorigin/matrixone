@@ -386,6 +386,7 @@ func TestStrictWriteGroupConcatPromotionPolicy(t *testing.T) {
 		{name: "select", sql: "select 1", mode: "STRICT_TRANS_TABLES"},
 		{name: "insert select", sql: "insert into dst select 1", mode: "STRICT_TRANS_TABLES", enabled: true},
 		{name: "insert ignore", sql: "insert ignore into dst select 1", mode: "STRICT_TRANS_TABLES"},
+		{name: "insert ignore on duplicate", sql: "insert ignore into dst select 1 on duplicate key update a = values(a)", mode: "STRICT_TRANS_TABLES"},
 		{name: "update", sql: "update dst set a = 1", mode: "STRICT_ALL_TABLES", enabled: true},
 		{name: "update ignore", sql: "update ignore dst set a = 1", mode: "STRICT_TRANS_TABLES"},
 		{name: "replace", sql: "replace into dst select 1", mode: "STRICT_TRANS_TABLES", enabled: true},
