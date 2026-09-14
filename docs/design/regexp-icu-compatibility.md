@@ -330,7 +330,7 @@ The evidence map is:
 | Routing and entry-point semantics | `TestRegexp2PatternRouting`, `TestRegexp2PatternCompatibilityFunctions`, `TestRegexp2PatternFunctionsPreserveEntryPointSemantics`, `TestRegexp2OrdinaryPathBypassesCompatibilityState`, and `regexp_icu_coverage_test.go` | exact boolean/index/string/NULL/mask results; class/quote routes match the matrix and ordinary calls leave ICU state unchanged |
 | Lifecycle failure cleanup | `TestRegexp2EvaluationCleanupOnDeadlineAndCallbackError`, `TestRegexp2AdmissionExhaustionAndRecovery`, `TestRegexp2ResourceAndOffsetContracts` | callback is not called after a past deadline; callback/deadline/admission failures restore `regexp2ActiveSubjectBytes`; admission succeeds after release |
 | Race and package correctness | `go test -race -count=1 ./pkg/sql/plan/function` with native CGo flags | pass with no race, panic, or leaked active budget |
-| Cost model | `BenchmarkRegexp2CompatibilityPaths` via `go test -run '^$' -bench BenchmarkRegexp2CompatibilityPaths -benchmem -count=5 ./pkg/sql/plan/function`, compared with the same command on latest `main` using `benchstat` | report `ns/op`, `allocs/op`, and `B/op` for RE2, regexp2, `\\X`, and two-pass replacement; RE2 subbenchmarks must stay within a same-host 10% regression budget or have an explained variance, while compatibility samples must remain finite/stable and within the admission/output limits |
+| Cost model | `BenchmarkRegexp2CompatibilityPaths` via `go test -run '^$' -bench BenchmarkRegexp2CompatibilityPaths -benchmem -count=5 ./pkg/sql/plan/function` | report `ns/op`, `allocs/op`, and `B/op` for RE2, regexp2, `\\X`, and two-pass replacement; all five samples must complete, `ns/op` max/min must be at most 1.25, and non-zero `B/op`/`allocs/op` must vary by at most 1% (zero remains exact) |
 | End-to-end compatibility | `test/distributed/cases/function/func_regular_icu.test` through the JDBC/BVT harness | output remains equal to the checked-in result and the canary runs on every target CN |
 
 Absolute benchmark numbers are host-dependent and are recorded as evidence,
@@ -339,9 +339,13 @@ is bounded, explainable cost on the exceptional path and unchanged routing of
 ordinary RE2 patterns. The benchmark fixture uses an independent `regexpSet`
 per sub-benchmark; the ordinary-path state oracle is a separate unit test, so
 benchmark ordering cannot hide ICU-cache or active-budget changes. Local full
-function UT, targeted race tests, and the five-run benchmark pass; the remote
-CI/BVT result remains implementation acceptance evidence to be attached to
-the PR.
+function UT, targeted race tests, and the five-run benchmark pass those
+stability rules; the remote CI/BVT result remains implementation acceptance
+evidence to be attached to the PR. The merge-base `c61ed374a8a6` does not have
+this new compatibility benchmark, so this PR does not claim a cross-commit
+absolute performance regression number. A future before/after study must
+apply the identical test-only fixture to both recorded source SHAs and use
+`benchstat` on the same host.
 
 The resource tests now cover error conversion, a real past-deadline iteration,
 callback-error cleanup, repeated cleanup, and deterministic admission
