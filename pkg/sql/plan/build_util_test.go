@@ -1077,11 +1077,13 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 	}
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
 	require.Equal(t, "cast", assignmentCastFunctionName(
+		plan.Type{Id: int32(types.T_int64)}, false, proc))
+	require.Equal(t, "cast", assignmentCastFunctionName(
 		plan.Type{Id: int32(types.T_int64)}, true, proc))
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
 	require.Equal(t, "cast_ignore", assignmentCastFunctionName(
 		plan.Type{Id: int32(types.T_int64)}, true, proc))
-	require.Equal(t, "cast", assignmentCastFunctionName(
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(
 		plan.Type{Id: int32(types.T_int64)}, false, proc))
 	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
 		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
@@ -1105,7 +1107,7 @@ func TestPreparedIntegerIgnoreOverridesProvisionalCast(t *testing.T) {
 	}{
 		{defines.MORPCVersion4, true, "cast"},
 		{defines.MORPCVersion5, true, "cast_ignore"},
-		{defines.MORPCVersion5, false, "cast"},
+		{defines.MORPCVersion5, false, "cast_assign"},
 	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.version)
 		target := types.T_uint64.ToType()

@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -1400,7 +1399,7 @@ func forceCastExpr2WithProcess(
 	// Target-aware parameter binding may already have inserted a generic cast.
 	// That provisional cast is not the DML assignment policy: unwrap it before
 	// the same-type fast path so IGNORE can own the conversion and range check.
-	if isIgnore && t2.Oid.IsInteger() && assignmentCastProtocolSupported(proc) &&
+	if t2.Oid.IsInteger() && assignmentCastProtocolSupported(proc) &&
 		isImplicitPreparedParamCast(expr) {
 		expr = expr.GetF().Args[0]
 	}
@@ -1414,6 +1413,12 @@ func forceCastExpr2WithProcess(
 	// cast. Other temporal assignments retain cast_strict behavior, while the
 	// remaining conversions continue to use the generic cast.
 	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
+	if funcName == "cast_assign" && integerLiteralFitsType(expr, t2) {
+		// This conversion cannot warn or clamp under any sql_mode. Keep the
+		// immutable cast foldable so literal propagation and generated-column
+		// planning are not blocked by an unnecessarily volatile assignment cast.
+		funcName = "cast"
+	}
 	expr, err = normalizeExactIntegerAssignment(ctx, expr, targetType.Typ)
 	if err != nil {
 		return nil, err
@@ -1460,17 +1465,125 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 
 func normalizeExactIntegerAssignment(ctx context.Context, expr *Expr, target Type) (*Expr, error) {
 	if expr == nil || !types.T(target.Id).IsInteger() || !types.T(expr.Typ.Id).IsFloat() ||
-		!rule.IsExactNumeric(expr, nil) {
+		!function.IsExactNumericExpression(expr, nil) {
 		return expr, nil
 	}
-	// Round once at the integer assignment boundary. Scale zero avoids the
-	// precision loss and range restriction of multiplying by 10^18 first.
-	// DECIMAL128 contains the entire signed and unsigned 64-bit integer range.
-	exactType := types.New(types.T_decimal128, 38, 0)
-	return makePlan2CastExpr(ctx, expr, makePlan2Type(&exactType))
+	rewritten, exact, err := rebuildExactNumericExpr(ctx, expr, nil)
+	if err != nil || !exact {
+		return expr, err
+	}
+	return roundRebuiltExactNumericForInteger(ctx, rewritten)
+}
+
+func roundRebuiltExactNumericForInteger(ctx context.Context, rewritten *Expr) (*Expr, error) {
+	if types.T(rewritten.Typ.Id).IsDecimal() && rewritten.Typ.Scale != 0 {
+		// The exact tree above retains all significant integer bits. ROUND on a
+		// DECIMAL implements SQL exact-numeric half-away rounding; a DECIMAL
+		// scale cast truncates and therefore cannot own this boundary.
+		rounded, err := BindFuncExprImplByPlanExpr(ctx, "round", []*Expr{
+			rewritten, makePlan2Int64ConstExprWithType(0),
+		})
+		if err != nil {
+			return nil, err
+		}
+		integerDomain := types.New(types.T_decimal256, 65, 0)
+		return makePlan2CastExpr(ctx, rounded, makePlan2Type(&integerDomain))
+	}
+	return rewritten, nil
+}
+
+func rebuildExactNumericExpr(
+	ctx context.Context,
+	expr *Expr,
+	resolve func(*Expr) (*Expr, bool, error),
+) (*Expr, bool, error) {
+	if expr == nil {
+		return expr, false, nil
+	}
+	if isNullLiteralExpr(expr) || types.T(expr.Typ.Id).IsInteger() || types.T(expr.Typ.Id).IsDecimal() {
+		return DeepCopyExpr(expr), true, nil
+	}
+	if expr.GetCol() != nil {
+		if resolve == nil {
+			return expr, false, nil
+		}
+		return resolve(expr)
+	}
+	if !types.T(expr.Typ.Id).IsFloat() {
+		return expr, false, nil
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Src != nil &&
+		function.IsExactNumericExpression(lit.Src, nil) {
+		return rebuildExactNumericExpr(ctx, lit.Src, resolve)
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr, false, nil
+	}
+	name := fn.Func.GetObjName()
+	if name == "cast" {
+		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 || fn.SyntaxExplicitCast || len(fn.Args) == 0 {
+			return expr, false, nil
+		}
+		// This implicit FLOAT cast is a physical coercion, not a
+		// user-selected approximate-domain boundary. Rebuild its source
+		// directly; explicit CAST remains authoritative above.
+		return rebuildExactNumericExpr(ctx, fn.Args[0], resolve)
+	}
+	indexes, ok := function.NumericFunctionResultArgs(name, len(fn.Args))
+	if !ok {
+		return expr, false, nil
+	}
+	args := make([]*Expr, len(fn.Args))
+	for i := range fn.Args {
+		args[i] = DeepCopyExpr(fn.Args[i])
+	}
+	for _, index := range indexes {
+		rewritten, exact, err := rebuildExactNumericExpr(ctx, fn.Args[index], resolve)
+		if err != nil || !exact {
+			return expr, false, err
+		}
+		args[index] = rewritten
+	}
+	if name == "/" {
+		// Integer `/` is physically FLOAT in the general expression engine.
+		// Scale only the dividend: scaling a full-width divisor too makes the
+		// decimal divider multiply MaxInt64 by that scale a second time. Twenty-
+		// four fractional digits distinguish either side of 0.5 for every pair
+		// of 64-bit integers (the minimum non-zero distance is > 1/(2*2^64)).
+		for resultPos, index := range indexes {
+			if types.T(args[index].Typ.Id).IsInteger() {
+				scale := int32(0)
+				if resultPos == 0 {
+					scale = 24
+				}
+				exactType := types.New(types.T_decimal256, 65, scale)
+				var err error
+				args[index], err = makePlan2CastExpr(ctx, args[index], makePlan2Type(&exactType))
+				if err != nil {
+					return nil, false, err
+				}
+			}
+		}
+	}
+	rewritten, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+	if err != nil {
+		return nil, false, err
+	}
+	return rewritten, true, nil
 }
 
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
+	if types.T(targetType.Id).IsInteger() {
+		if !assignmentCastProtocolSupported(proc) {
+			return "cast"
+		}
+		if isIgnore {
+			return "cast_ignore"
+		}
+		return "cast_assign"
+	}
 	if isIgnore && useIgnoreConversionAssignmentCast(targetType) && assignmentCastProtocolSupported(proc) {
 		return "cast_ignore"
 	}
@@ -1530,17 +1643,104 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	if err != nil || rewritten {
 		return expr, err
 	}
-	if types.T(expr.Typ.Id).IsFloat() && builder.isExactNumericAssignmentSource(sourceExpr, nil) {
-		rule.MarkExactNumeric(expr)
+	if types.T(targetType.Id).IsInteger() && types.T(expr.Typ.Id).IsFloat() &&
+		builder.isExactNumericAssignmentSource(sourceExpr, nil) {
+		rewritten, exact, rewriteErr := builder.rebuildProjectedExactNumericSource(sourceExpr, nil)
+		if rewriteErr != nil {
+			return nil, rewriteErr
+		}
+		if exact {
+			rewritten, rewriteErr = roundRebuiltExactNumericForInteger(builder.GetContext(), rewritten)
+			if rewriteErr != nil {
+				return nil, rewriteErr
+			}
+			// sourceExpr is normally the actual producer projection. Replace it in
+			// place and update the consumer ColRef so the FLOAT vector is never
+			// built. UPDATE passes the same pointer for both arguments.
+			*sourceExpr = *rewritten
+			expr.Typ = rewritten.Typ
+		}
+	}
+	if !isIgnore && types.T(targetType.Id).IsInteger() && integerLiteralFitsType(sourceExpr, makeTypeByPlan2Type(targetType)) {
+		return forceAssignmentCastExprWithName(builder.GetContext(), expr, targetType, "cast")
 	}
 	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore)
+}
+
+func integerLiteralFitsType(expr *Expr, target types.Type) bool {
+	if expr == nil || !target.Oid.IsInteger() {
+		return false
+	}
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return false
+	}
+	var value int64
+	var unsigned uint64
+	var isUnsigned bool
+	switch literal := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		value = int64(literal.I8Val)
+	case *plan.Literal_I16Val:
+		value = int64(literal.I16Val)
+	case *plan.Literal_I32Val:
+		value = int64(literal.I32Val)
+	case *plan.Literal_I64Val:
+		value = literal.I64Val
+	case *plan.Literal_U8Val:
+		unsigned, isUnsigned = uint64(literal.U8Val), true
+	case *plan.Literal_U16Val:
+		unsigned, isUnsigned = uint64(literal.U16Val), true
+	case *plan.Literal_U32Val:
+		unsigned, isUnsigned = uint64(literal.U32Val), true
+	case *plan.Literal_U64Val:
+		unsigned, isUnsigned = literal.U64Val, true
+	default:
+		return false
+	}
+	if target.Oid.IsUnsignedInt() {
+		if !isUnsigned {
+			if value < 0 {
+				return false
+			}
+			unsigned = uint64(value)
+		}
+		switch target.Oid {
+		case types.T_uint8:
+			return unsigned <= uint64(^uint8(0))
+		case types.T_uint16:
+			return unsigned <= uint64(^uint16(0))
+		case types.T_uint32:
+			return unsigned <= uint64(^uint32(0))
+		case types.T_uint64:
+			return true
+		}
+	}
+	if isUnsigned {
+		if unsigned > uint64(^uint64(0)>>1) {
+			return false
+		}
+		value = int64(unsigned)
+	}
+	switch target.Oid {
+	case types.T_int8:
+		return value >= -1<<7 && value <= 1<<7-1
+	case types.T_int16:
+		return value >= -1<<15 && value <= 1<<15-1
+	case types.T_int32:
+		return value >= -1<<31 && value <= 1<<31-1
+	case types.T_int64:
+		return true
+	default:
+		return false
+	}
 }
 
 func (builder *QueryBuilder) isExactNumericAssignmentSource(expr *Expr, visited map[[2]int32]struct{}) bool {
 	if visited == nil {
 		visited = make(map[[2]int32]struct{})
 	}
-	return rule.IsExactNumeric(expr, func(col *Expr) bool {
+	return function.IsExactNumericExpression(expr, func(col *Expr) bool {
 		return builder.isProjectedDisplayValueExpr(col, func(source *Expr) bool {
 			if source.GetCol() != nil {
 				return false
@@ -1548,6 +1748,80 @@ func (builder *QueryBuilder) isExactNumericAssignmentSource(expr *Expr, visited 
 			return builder.isExactNumericAssignmentSource(source, visited)
 		}, true, visited)
 	})
+}
+
+func (builder *QueryBuilder) rebuildProjectedExactNumericSource(
+	expr *Expr,
+	visited map[[2]int32]struct{},
+) (*Expr, bool, error) {
+	if visited == nil {
+		visited = make(map[[2]int32]struct{})
+	}
+	return rebuildExactNumericExpr(builder.GetContext(), expr, func(col *Expr) (*Expr, bool, error) {
+		nodeID, ok := builder.tag2NodeID[col.GetCol().RelPos]
+		if !ok {
+			return col, false, nil
+		}
+		rewritten, exact, err := builder.rebuildProjectedExactNumericAtNode(
+			nodeID, col.GetCol().ColPos, visited)
+		if err != nil || !exact {
+			return col, exact, err
+		}
+		result := DeepCopyExpr(col)
+		result.Typ = rewritten.Typ
+		return result, true, nil
+	})
+}
+
+func (builder *QueryBuilder) rebuildProjectedExactNumericAtNode(
+	nodeID, colPos int32,
+	visited map[[2]int32]struct{},
+) (*Expr, bool, error) {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return nil, false, nil
+	}
+	key := [2]int32{nodeID, colPos}
+	if _, ok := visited[key]; ok {
+		return nil, false, nil
+	}
+	visited[key] = struct{}{}
+	defer delete(visited, key)
+
+	node := builder.qry.Nodes[nodeID]
+	if colPos < 0 || int(colPos) >= len(node.ProjectList) {
+		return nil, false, nil
+	}
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		if len(node.Children) == 0 {
+			return nil, false, nil
+		}
+		exactType := types.New(types.T_decimal256, 65, 30)
+		for _, childID := range node.Children {
+			child, exact, err := builder.rebuildProjectedExactNumericAtNode(childID, colPos, visited)
+			if err != nil || !exact {
+				return nil, exact, err
+			}
+			if !makeTypeByPlan2Expr(child).Eq(exactType) {
+				child, err = makePlan2CastExpr(builder.GetContext(), child, makePlan2Type(&exactType))
+				if err != nil {
+					return nil, false, err
+				}
+			}
+			builder.qry.Nodes[childID].ProjectList[colPos] = child
+		}
+		node.ProjectList[colPos].Typ = makePlan2Type(&exactType)
+		return node.ProjectList[colPos], true, nil
+	}
+
+	rewritten, exact, err := builder.rebuildProjectedExactNumericSource(node.ProjectList[colPos], visited)
+	if err != nil || !exact {
+		return nil, exact, err
+	}
+	node.ProjectList[colPos] = rewritten
+	return rewritten, true, nil
 }
 
 func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {

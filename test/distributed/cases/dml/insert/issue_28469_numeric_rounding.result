@@ -48,6 +48,11 @@ SELECT * FROM t_rounding WHERE id = 15;
 15  ¦  3  ¦  -3
 CREATE TABLE src (x BIGINT);
 INSERT INTO src VALUES (5);
+CREATE TABLE float_dst (v DOUBLE);
+INSERT INTO float_dst SELECT x / 2 FROM src;
+SELECT * FROM float_dst;
+➤ v[8,53,31]  𝄀
+2.5
 CREATE TABLE dst (id INT PRIMARY KEY, v BIGINT);
 INSERT INTO dst VALUES (1, 5 / 2);
 INSERT INTO dst SELECT 2, x / 2 FROM src;
@@ -60,6 +65,23 @@ INSERT INTO dst SELECT 7, x / 2E0 FROM src;
 INSERT INTO dst VALUES (8, ABS(5E0 / 2) + 0);
 INSERT INTO dst SELECT 9, CAST(x / 2 AS DOUBLE) FROM src;
 INSERT INTO dst SELECT 10, ABS(q) FROM (SELECT x / 2 AS q FROM src) s;
+INSERT INTO dst SELECT 11, COALESCE(x / 2, 0) FROM src;
+INSERT INTO dst SELECT 12, IF(TRUE, x / 2, 0) FROM src;
+INSERT INTO dst SELECT 13, IFNULL(x / 2, 0) FROM src;
+INSERT INTO dst SELECT 14, NULLIF(x / 2, 0) FROM src;
+INSERT INTO dst SELECT 15, CASE WHEN TRUE THEN x / 2 ELSE 0 END FROM src;
+INSERT INTO dst SELECT 16, ROUND(x / 2, 1) FROM src;
+INSERT INTO dst SELECT 17, TRUNCATE(x / 2, 1) FROM src;
+INSERT INTO dst SELECT 18, GREATEST(x / 2, 0) FROM src;
+INSERT INTO dst SELECT 19, LEAST(x / 2, 3) FROM src;
+CREATE TABLE large_src (x BIGINT);
+INSERT INTO large_src VALUES (9007199254740993);
+INSERT INTO dst SELECT 20, x / 2 FROM large_src;
+DELETE FROM large_src;
+INSERT INTO large_src VALUES (9223372036854775807);
+INSERT INTO dst SELECT 21, COALESCE(x / 1, 0) FROM large_src;
+INSERT INTO dst VALUES (22, 9007199254740993 / 2);
+INSERT INTO dst VALUES (23, 9223372036854775807 / 1);
 SELECT * FROM dst ORDER BY id;
 ➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
 1  ¦  3  𝄀
@@ -71,7 +93,20 @@ SELECT * FROM dst ORDER BY id;
 7  ¦  2  𝄀
 8  ¦  2  𝄀
 9  ¦  2  𝄀
-10  ¦  3
+10  ¦  3  𝄀
+11  ¦  3  𝄀
+12  ¦  3  𝄀
+13  ¦  3  𝄀
+14  ¦  3  𝄀
+15  ¦  3  𝄀
+16  ¦  3  𝄀
+17  ¦  3  𝄀
+18  ¦  3  𝄀
+19  ¦  3  𝄀
+20  ¦  4503599627370497  𝄀
+21  ¦  9223372036854775807  𝄀
+22  ¦  4503599627370497  𝄀
+23  ¦  9223372036854775807
 CREATE TABLE quotient_source (result BIGINT);
 INSERT INTO quotient_source VALUES (150), (250);
 CREATE TABLE quotient_target (a BIGINT, b BIGINT, PRIMARY KEY(a,b));
@@ -114,14 +149,14 @@ SET @nested_value = CAST(-2.5 AS DOUBLE);
 EXECUTE insert_nested_abs USING @nested_value;
 SET @nested_value = CAST(-2.5 AS DOUBLE);
 EXECUTE insert_nested_add USING @nested_value;
+invalid argument cast to int, bad value -2.5
 SET @nested_id = 1, @nested_value = 2.5;
 EXECUTE insert_nested_explicit USING @nested_id, @nested_value;
 SELECT * FROM t_nested_abs;
 ➤ value_bigint[-5,64,0]  𝄀
 2
 SELECT * FROM t_nested_add;
-➤ value_bigint[-5,64,0]  𝄀
--2
+➤ value_bigint[-5,64,0]
 SELECT * FROM t_nested_explicit;
 ➤ id[4,32,0]  ¦  value_bigint[-5,64,0]  𝄀
 1  ¦  2
@@ -130,16 +165,24 @@ DEALLOCATE PREPARE insert_nested_add;
 DEALLOCATE PREPARE insert_nested_explicit;
 CREATE TABLE t_unsigned (id INT PRIMARY KEY, value_bigint BIGINT UNSIGNED);
 INSERT INTO t_unsigned VALUES (1, -1E0);
-Data truncation: data out of range: data type float, value '-1'
+Data truncation: data out of range: data type BIGINT UNSIGNED, value '-1'
 SELECT COUNT(*) FROM t_unsigned WHERE id = 1;
 ➤ COUNT(*)[-5,64,0]  𝄀
 0
 PREPARE insert_unsigned FROM 'INSERT INTO t_unsigned VALUES (?, ?)';
 SET @id = 4, @unsigned_value = CAST(-1 AS DOUBLE);
 EXECUTE insert_unsigned USING @id, @unsigned_value;
-Data truncation: data out of range: data type float, value '-1'
+Data truncation: data out of range: data type BIGINT UNSIGNED, value '-1'
 SELECT COUNT(*) FROM t_unsigned WHERE id = 4;
 ➤ COUNT(*)[-5,64,0]  𝄀
 0
+SET sql_mode = '';
+INSERT INTO t_unsigned VALUES (2, -1E0);
+SET @id = 5, @unsigned_value = CAST(-1 AS DOUBLE);
+EXECUTE insert_unsigned USING @id, @unsigned_value;
+SELECT * FROM t_unsigned ORDER BY id;
+➤ id[4,32,0]  ¦  value_bigint[-5,64,0]  𝄀
+2  ¦  0  𝄀
+5  ¦  0
 DEALLOCATE PREPARE insert_unsigned;
 DROP DATABASE issue_28469;

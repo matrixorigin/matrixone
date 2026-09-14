@@ -21,50 +21,51 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNumericDomainSurvivesFoldCopyAndWire(t *testing.T) {
+func TestExactNumericSourceSurvivesFoldCopyAndWire(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	for _, approximate := range []bool{false, true} {
-		for _, optimizerFold := range []bool{false, true} {
-			x := makePlan2Int64ConstExprWithType(5)
-			if approximate {
-				x = makePlan2Float64ConstExprWithType(5)
-			}
-			division, err := BindFuncExprImplByPlanExpr(t.Context(), "/", []*planpb.Expr{x, makePlan2Int64ConstExprWithType(2)})
+	for _, optimizerFold := range []bool{false, true} {
+		division, err := BindFuncExprImplByPlanExpr(t.Context(), "/", []*planpb.Expr{
+			makePlan2Int64ConstExprWithType(9007199254740993),
+			makePlan2Int64ConstExprWithType(2),
+		})
+		require.NoError(t, err)
+		wrapped, err := BindFuncExprImplByPlanExpr(t.Context(), "coalesce", []*planpb.Expr{
+			division, makePlan2Int64ConstExprWithType(0),
+		})
+		require.NoError(t, err)
+
+		var folded *planpb.Expr
+		if optimizerFold {
+			node := &planpb.Node{ProjectList: []*planpb.Expr{wrapped}}
+			rule.NewConstantFold(false).Apply(node, nil, proc)
+			folded = node.ProjectList[0]
+		} else {
+			folded, err = ConstantFold(batch.EmptyForConstFoldBatch, wrapped, proc, false, true)
 			require.NoError(t, err)
-			wrapped, err := BindFuncExprImplByPlanExpr(t.Context(), "abs", []*planpb.Expr{division})
-			require.NoError(t, err)
-			var folded *planpb.Expr
-			if optimizerFold {
-				node := &planpb.Node{ProjectList: []*planpb.Expr{wrapped}}
-				rule.NewConstantFold(false).Apply(node, nil, proc)
-				folded = node.ProjectList[0]
-			} else {
-				folded, err = ConstantFold(batch.EmptyForConstFoldBatch, wrapped, proc, false, true)
-				require.NoError(t, err)
-			}
-			require.NotNil(t, folded.GetLit())
-			require.Equal(t, !approximate, folded.GetPreparedNumeric().GetExactNumeric())
-			copied := DeepCopyExpr(folded)
-			wire, err := proto.Marshal(copied)
-			require.NoError(t, err)
-			var decoded planpb.Expr
-			require.NoError(t, proto.Unmarshal(wire, &decoded))
-			require.Equal(t, !approximate, rule.IsExactNumeric(&decoded, nil))
-			target := types.T_int64.ToType()
-			assignment, err := forceAssignmentCastExpr(t.Context(), &decoded, makePlan2Type(&target))
-			require.NoError(t, err)
-			result, err := ConstantFold(batch.EmptyForConstFoldBatch, assignment, proc, false, true)
-			require.NoError(t, err)
-			want := int64(3)
-			if approximate {
-				want = 2
-			}
-			require.Equal(t, want, result.GetLit().GetI64Val())
 		}
+		require.NotNil(t, folded.GetLit())
+		require.NotNil(t, folded.GetLit().Src)
+		require.True(t, function.IsExactNumericExpression(folded, nil))
+
+		wire, err := proto.Marshal(DeepCopyExpr(folded))
+		require.NoError(t, err)
+		var decoded planpb.Expr
+		require.NoError(t, proto.Unmarshal(wire, &decoded))
+		require.True(t, function.IsExactNumericExpression(&decoded, nil))
+
+		target := types.T_int64.ToType()
+		assignment, err := forceAssignmentCastExpr(t.Context(), &decoded, makePlan2Type(&target))
+		require.NoError(t, err)
+		require.Equal(t, "cast_assign", assignment.GetF().Func.GetObjName())
+		require.Equal(t, "cast", assignment.GetF().Args[0].GetF().Func.GetObjName())
+		require.Equal(t, "round", assignment.GetF().Args[0].GetF().Args[0].GetF().Func.GetObjName())
+		require.Equal(t, int32(types.T_decimal256), assignment.GetF().Args[0].Typ.Id)
+		require.Zero(t, assignment.GetF().Args[0].Typ.Scale)
 	}
 }

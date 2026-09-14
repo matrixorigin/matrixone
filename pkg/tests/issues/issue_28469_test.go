@@ -74,6 +74,15 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			{"explicit_float_boundary", "insert into dst select cast(x / 2 as double) from src", 2},
 			{"derived_projection", "insert into dst select abs(q) from (select x / 2 as q from src) s", 3},
 			{"negative_constant", "insert into dst values (-(5 / 2))", -3},
+			{"coalesce_wrapper", "insert into dst select coalesce(x / 2, 0) from src", 3},
+			{"if_wrapper", "insert into dst select if(true, x / 2, 0) from src", 3},
+			{"ifnull_wrapper", "insert into dst select ifnull(x / 2, 0) from src", 3},
+			{"nullif_wrapper", "insert into dst select nullif(x / 2, 0) from src", 3},
+			{"case_wrapper", "insert into dst select case when true then x / 2 else 0 end from src", 3},
+			{"round_wrapper", "insert into dst select round(x / 2, 1) from src", 3},
+			{"truncate_wrapper", "insert into dst select truncate(x / 2, 1) from src", 3},
+			{"greatest_wrapper", "insert into dst select greatest(x / 2, 0) from src", 3},
+			{"least_wrapper", "insert into dst select least(x / 2, 3) from src", 3},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				mustExec(t, ctx, conn, "delete from dst")
@@ -86,6 +95,44 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 				require.Equal(t, tc.want, got)
 			})
 		}
+
+		t.Run("float_target_preserves_fraction", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table float_dst (v double)")
+			mustExec(t, ctx, conn, "insert into float_dst select x / 2 from src")
+			var got float64
+			require.NoError(t, conn.QueryRowContext(ctx, "select v from float_dst").Scan(&got))
+			require.Equal(t, 2.5, got)
+		})
+
+		t.Run("large_exact_division", func(t *testing.T) {
+			mustExec(t, ctx, conn, "delete from dst")
+			mustExec(t, ctx, conn, "insert into dst values (9007199254740993 / 2)")
+			var got int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
+			require.Equal(t, int64(4503599627370497), got)
+			mustExec(t, ctx, conn, "delete from dst")
+			mustExec(t, ctx, conn, "insert into dst values (9223372036854775807 / 1)")
+			require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
+			require.Equal(t, int64(9223372036854775807), got)
+
+			mustExec(t, ctx, conn, "create table large_src (x bigint)")
+			mustExec(t, ctx, conn, "insert into large_src values (9007199254740993)")
+			mustExec(t, ctx, conn, "delete from dst")
+			mustExec(t, ctx, conn, "insert into dst select x / 2 from large_src")
+			require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
+			require.Equal(t, int64(4503599627370497), got)
+
+			mustExec(t, ctx, conn, "delete from large_src")
+			mustExec(t, ctx, conn, "insert into large_src values (9223372036854775807)")
+			mustExec(t, ctx, conn, "delete from dst")
+			mustExec(t, ctx, conn, "insert into dst select x / 1 from large_src")
+			require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
+			require.Equal(t, int64(9223372036854775807), got)
+			mustExec(t, ctx, conn, "delete from dst")
+			mustExec(t, ctx, conn, "insert into dst select coalesce(x / 1, 0) from large_src")
+			require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
+			require.Equal(t, int64(9223372036854775807), got)
+		})
 
 		t.Run("division_unique_key", func(t *testing.T) {
 			mustExec(t, ctx, conn, "create table quotient_source (result bigint)")
@@ -163,12 +210,31 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 		require.NoError(t, conn.QueryRowContext(ctx, "select value from t_add").Scan(&value))
 		require.Equal(t, int64(-2), value)
 
-		mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES'")
+		rt := moruntime.ServiceRuntime(cn.GetServiceConfig().CN.UUID)
+		oldVersion, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+		require.True(t, exists)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+
 		mustExec(t, ctx, conn, "create table u (value bigint unsigned)")
-		strictStmt, err := conn.PrepareContext(ctx, "insert into u values (?)")
+		mustExec(t, ctx, conn, "set sql_mode=''")
+		mustExec(t, ctx, conn, "insert into u values (-1E0)")
+		var unsignedValue uint64
+		require.NoError(t, conn.QueryRowContext(ctx, "select value from u").Scan(&unsignedValue))
+		require.Zero(t, unsignedValue)
+		mustExec(t, ctx, conn, "delete from u")
+
+		assignmentStmt, err := conn.PrepareContext(ctx, "insert into u values (?)")
 		require.NoError(t, err)
-		defer strictStmt.Close()
-		_, err = strictStmt.ExecContext(ctx, float64(-1))
+		defer assignmentStmt.Close()
+		_, err = assignmentStmt.ExecContext(ctx, float64(-1))
+		require.NoError(t, err)
+		require.NoError(t, conn.QueryRowContext(ctx, "select value from u").Scan(&unsignedValue))
+		require.Zero(t, unsignedValue)
+		mustExec(t, ctx, conn, "delete from u")
+
+		mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES'")
+		_, err = assignmentStmt.ExecContext(ctx, float64(-1))
 		require.Error(t, err)
 		var count int64
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from u").Scan(&count))

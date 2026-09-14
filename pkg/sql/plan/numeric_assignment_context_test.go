@@ -1458,6 +1458,38 @@ func TestInsertValuesFractionalLiteralsKeepSourceDomain(t *testing.T) {
 	}
 }
 
+func TestExactDivisionIntegerAssignmentPlanUsesDecimalExecution(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(),
+		"insert into constraint_test.emp (empno) values (5 / 2)", 1)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+	require.NoError(t, err)
+	exprs := insertValueRowsetExprs(t, queryPlan)
+	require.Len(t, exprs, 1)
+	require.Equal(t, "cast_assign", exprs[0].GetF().Func.GetObjName())
+	require.Equal(t, "cast", exprs[0].GetF().Args[0].GetF().Func.GetObjName())
+	require.Equal(t, "round", exprs[0].GetF().Args[0].GetF().Args[0].GetF().Func.GetObjName())
+}
+
+func TestProjectedExactDivisionUsesDecimalExecution(t *testing.T) {
+	optimizer := NewMockOptimizer(false)
+	stmts, err := mysql.Parse(optimizer.CurrentContext().GetContext(),
+		"insert into constraint_test.emp (empno) select n_nationkey / 2 from nation", 1)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(optimizer.CurrentContext(), stmts[0], false)
+	require.NoError(t, err)
+	division := findPlanFunctionExpr(queryPlan, "/")
+	assignment := findPlanFunctionExpr(queryPlan, "cast_assign")
+	require.NotNil(t, division)
+	require.Equal(t, int32(types.T_decimal256), division.Typ.Id)
+	require.Equal(t, int32(24), division.GetF().Args[0].Typ.Scale)
+	require.Zero(t, division.GetF().Args[1].Typ.Scale)
+	require.NotNil(t, assignment)
+	require.Equal(t, int32(types.T_decimal256), assignment.GetF().Args[0].Typ.Id)
+	require.Zero(t, assignment.GetF().Args[0].Typ.Scale)
+}
+
 func TestExactDivisionIntegerAssignmentRestoresDecimalBoundary(t *testing.T) {
 	ctx := t.Context()
 	exactDivision, err := BindFuncExprImplByPlanExpr(ctx, "/", []*planpb.Expr{
@@ -1468,7 +1500,25 @@ func TestExactDivisionIntegerAssignmentRestoresDecimalBoundary(t *testing.T) {
 	targetExpr := &planpb.Expr{Typ: makePlan2Type(&target), Expr: &planpb.Expr_T{T: &planpb.TargetType{}}}
 	assignment, err := forceCastExpr2WithProcess(ctx, exactDivision, target, targetExpr, false, nil)
 	require.NoError(t, err)
-	require.Equal(t, int32(types.T_decimal128), assignment.GetF().Args[0].Typ.Id)
+	rounded := assignment.GetF().Args[0]
+	require.Equal(t, int32(types.T_decimal256), rounded.Typ.Id)
+	require.Zero(t, rounded.Typ.Scale)
+	require.Equal(t, "cast", rounded.GetF().Func.GetObjName())
+	require.Equal(t, "round", rounded.GetF().Args[0].GetF().Func.GetObjName())
+	division := rounded.GetF().Args[0].GetF().Args[0]
+	require.Equal(t, "/", division.GetF().Func.GetObjName())
+	for _, arg := range division.GetF().Args {
+		require.Equal(t, int32(types.T_decimal256), arg.Typ.Id)
+	}
+
+	floatType := types.T_float64.ToType()
+	implicitFloat, err := makePlan2CastExpr(ctx, exactDivision, makePlan2Type(&floatType))
+	require.NoError(t, err)
+	assignment, err = forceCastExpr2WithProcess(ctx, implicitFloat, target, targetExpr, false, nil)
+	require.NoError(t, err)
+	implicitDivision := assignment.GetF().Args[0].GetF().Args[0].GetF().Args[0]
+	require.Equal(t, "/", implicitDivision.GetF().Func.GetObjName())
+	require.Equal(t, int32(types.T_decimal256), implicitDivision.Typ.Id)
 
 	approximateDivision, err := BindFuncExprImplByPlanExpr(ctx, "/", []*planpb.Expr{
 		makePlan2Float64ConstExprWithType(5), makePlan2Int64ConstExprWithType(2),

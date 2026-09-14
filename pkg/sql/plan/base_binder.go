@@ -2039,34 +2039,7 @@ func isNumericContextFunction(name string) bool {
 }
 
 func numericFunctionResultArgs(name string, argCount int) ([]int, bool) {
-	switch name {
-	case "mod":
-		if argCount != 2 {
-			return nil, false
-		}
-		return []int{0, 1}, true
-	case "if":
-		if argCount != 3 {
-			return nil, false
-		}
-		return []int{1, 2}, true
-	case "coalesce", "ifnull":
-		if argCount == 0 {
-			return nil, false
-		}
-		indexes := make([]int, argCount)
-		for i := range indexes {
-			indexes[i] = i
-		}
-		return indexes, true
-	case "nullif":
-		if argCount != 2 {
-			return nil, false
-		}
-		return []int{0}, true
-	default:
-		return nil, false
-	}
+	return function.NumericFunctionResultArgs(name, argCount)
 }
 
 func numericFunctionArgKeepsContext(name string, idx, argCount int) bool {

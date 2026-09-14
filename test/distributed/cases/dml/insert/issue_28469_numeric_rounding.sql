@@ -36,8 +36,8 @@ SELECT * FROM t_rounding ORDER BY id;
 INSERT INTO t_rounding VALUES (14, '2.5', '-2.5');
 SELECT COUNT(*) FROM t_rounding WHERE id = 14;
 
--- Exact numeric expressions may execute through FLOAT vectors, but retain
--- half-away-from-zero assignment semantics.
+-- Exact numeric expressions retain exact execution until the final
+-- half-away-from-zero integer-assignment boundary.
 SET @exact_five = 5, @exact_two = 2;
 INSERT INTO t_rounding VALUES (15, @exact_five / @exact_two, -@exact_five / @exact_two);
 SELECT * FROM t_rounding WHERE id = 15;
@@ -45,6 +45,9 @@ SELECT * FROM t_rounding WHERE id = 15;
 -- Folding, projection and numeric wrappers retain the exact source domain.
 CREATE TABLE src (x BIGINT);
 INSERT INTO src VALUES (5);
+CREATE TABLE float_dst (v DOUBLE);
+INSERT INTO float_dst SELECT x / 2 FROM src;
+SELECT * FROM float_dst;
 CREATE TABLE dst (id INT PRIMARY KEY, v BIGINT);
 INSERT INTO dst VALUES (1, 5 / 2);
 INSERT INTO dst SELECT 2, x / 2 FROM src;
@@ -57,6 +60,23 @@ INSERT INTO dst SELECT 7, x / 2E0 FROM src;
 INSERT INTO dst VALUES (8, ABS(5E0 / 2) + 0);
 INSERT INTO dst SELECT 9, CAST(x / 2 AS DOUBLE) FROM src;
 INSERT INTO dst SELECT 10, ABS(q) FROM (SELECT x / 2 AS q FROM src) s;
+INSERT INTO dst SELECT 11, COALESCE(x / 2, 0) FROM src;
+INSERT INTO dst SELECT 12, IF(TRUE, x / 2, 0) FROM src;
+INSERT INTO dst SELECT 13, IFNULL(x / 2, 0) FROM src;
+INSERT INTO dst SELECT 14, NULLIF(x / 2, 0) FROM src;
+INSERT INTO dst SELECT 15, CASE WHEN TRUE THEN x / 2 ELSE 0 END FROM src;
+INSERT INTO dst SELECT 16, ROUND(x / 2, 1) FROM src;
+INSERT INTO dst SELECT 17, TRUNCATE(x / 2, 1) FROM src;
+INSERT INTO dst SELECT 18, GREATEST(x / 2, 0) FROM src;
+INSERT INTO dst SELECT 19, LEAST(x / 2, 3) FROM src;
+CREATE TABLE large_src (x BIGINT);
+INSERT INTO large_src VALUES (9007199254740993);
+INSERT INTO dst SELECT 20, x / 2 FROM large_src;
+DELETE FROM large_src;
+INSERT INTO large_src VALUES (9223372036854775807);
+INSERT INTO dst SELECT 21, COALESCE(x / 1, 0) FROM large_src;
+INSERT INTO dst VALUES (22, 9007199254740993 / 2);
+INSERT INTO dst VALUES (23, 9223372036854775807 / 1);
 SELECT * FROM dst ORDER BY id;
 CREATE TABLE quotient_source (result BIGINT);
 INSERT INTO quotient_source VALUES (150), (250);
@@ -115,6 +135,11 @@ PREPARE insert_unsigned FROM 'INSERT INTO t_unsigned VALUES (?, ?)';
 SET @id = 4, @unsigned_value = CAST(-1 AS DOUBLE);
 EXECUTE insert_unsigned USING @id, @unsigned_value;
 SELECT COUNT(*) FROM t_unsigned WHERE id = 4;
+SET sql_mode = '';
+INSERT INTO t_unsigned VALUES (2, -1E0);
+SET @id = 5, @unsigned_value = CAST(-1 AS DOUBLE);
+EXECUTE insert_unsigned USING @id, @unsigned_value;
+SELECT * FROM t_unsigned ORDER BY id;
 DEALLOCATE PREPARE insert_unsigned;
 
 DROP DATABASE issue_28469;

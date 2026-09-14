@@ -15,6 +15,7 @@
 package rule
 
 import (
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -218,7 +219,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		// digits before execute-time common-type specialization can run.
 		return expr
 	}
-	exactNumeric := types.T(expr.Typ.Id).IsFloat() && IsExactNumeric(expr, nil)
+	var exactSource *plan.Expr
+	if types.T(expr.Typ.Id).IsFloat() && function.IsExactNumericExpression(expr, nil) {
+		exactSource = proto.Clone(expr).(*plan.Expr)
+	}
 	isVec := false
 	for i := range fn.Args {
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
@@ -327,6 +331,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			}
 		}
 	}
+	if exactSource != nil {
+		c.Src = exactSource
+	}
 
 	ec := &plan.Expr_Lit{
 		Lit: c,
@@ -339,9 +346,6 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	// We should preserve the retType (DATETIME) to ensure consistency
 	expr.Typ.Scale = vec.GetType().Scale
 	expr.Typ.Width = vec.GetType().Width
-	if exactNumeric {
-		MarkExactNumeric(expr)
-	}
 	expr.Expr = ec
 
 	return expr
