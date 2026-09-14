@@ -28,7 +28,13 @@ func TestDistanceUnitScale(t *testing.T) {
 	}{
 		{unit: "metre", want: 1, valid: true},
 		{unit: "KILOMETRE", want: 1000, valid: true},
+		{unit: "centimetre", want: 0.01, valid: true},
+		{unit: "millimetre", want: 0.001, valid: true},
+		{unit: "micrometre", want: 0.000001, valid: true},
+		{unit: "inch", want: 0.0254, valid: true},
 		{unit: "foot", want: 0.3048, valid: true},
+		{unit: "yard", want: 0.9144, valid: true},
+		{unit: "mile", want: 1609.344, valid: true},
 		{unit: "nautical mile", want: 1852, valid: true},
 		{unit: "not-a-unit", valid: false},
 	} {
