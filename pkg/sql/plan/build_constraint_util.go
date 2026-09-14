@@ -1045,8 +1045,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		col := tableDef.Cols[projectPos]
 		genExpr := builder.applyGeneratedColumnAssignmentCast(
 			DeepCopyExpr(col.GeneratedCol.Expr), builder.isInsertIgnore)
-		inlineGeneratedColExpr(genExpr, colIdxToProjPos, projectList)
-		projectList[projectPos] = genExpr
+		// Keep the raw generated expression for the materialization helper. The
+		// projected copy is inlined for the legacy row image, but replacing the
+		// raw expression itself would hide volatile default dependencies.
+		columnExprs[int32(projectPos)] = genExpr
+		projectExpr := DeepCopyExpr(genExpr)
+		inlineGeneratedColExpr(projectExpr, colIdxToProjPos, projectList)
+		projectList[projectPos] = projectExpr
 		// Publish the generated column only after its expression is materialized.
 		// This preserves the order for chained generated columns and avoids
 		// inlining a placeholder nil expression into a later generated column.
