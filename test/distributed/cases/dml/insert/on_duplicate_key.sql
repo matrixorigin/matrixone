@@ -352,6 +352,13 @@ set @odku_no_key_delta = 3;
 execute s_odku_no_key_generated using @odku_no_key_a, @odku_no_key_delta;
 select * from t_odku_no_key_generated order by a;
 deallocate prepare s_odku_no_key_generated;
+insert into t_odku_no_key_generated values (3, default) as n on duplicate key update a = n.a;
+select * from t_odku_no_key_generated order by a;
+prepare s_odku_no_key_generated_implicit from insert into t_odku_no_key_generated values (?, default) as n on duplicate key update a = n.a;
+set @odku_no_key_implicit_a = 4;
+execute s_odku_no_key_generated_implicit using @odku_no_key_implicit_a;
+select * from t_odku_no_key_generated order by a;
+deallocate prepare s_odku_no_key_generated_implicit;
 drop table t_odku_no_key_generated;
 
 -- A volatile DEFAULT must be evaluated once before a stored generated column

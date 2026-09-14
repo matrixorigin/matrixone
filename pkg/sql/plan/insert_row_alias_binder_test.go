@@ -387,6 +387,30 @@ func TestInsertRowAliasGeneratedDefaultNoKeyFallbackBuilds(t *testing.T) {
 	require.NotNil(t, logicPlan)
 }
 
+func TestInsertRowAliasImplicitGeneratedDefaultNoKeyFallbackBuilds(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.fake_pk_no_unique_gen values (1, default) as n "+
+			"on duplicate key update a = n.a")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+}
+
+func TestInsertRowAliasUncorrelatedScalarSubqueryDoesNotAddTargetLookup(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select max(e.deptno) from constraint_test.emp as e)")
+	require.NoError(t, err)
+
+	targetScans := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == "dept" {
+			targetScans++
+		}
+	}
+	require.Equal(t, 2, targetScans,
+		"an uncorrelated ODKU subquery must not add a target-correlation lookup")
+}
+
 func TestInsertRowAliasBinderRejectsAmbiguousAndInvalidNames(t *testing.T) {
 	tableDef := testInsertAliasTable()
 	binding, err := validateInsertRowAlias(

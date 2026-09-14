@@ -448,6 +448,20 @@ select * from t_odku_no_key_generated order by a;
 1  ¦  2  𝄀
 2  ¦  3
 deallocate prepare s_odku_no_key_generated;
+insert into t_odku_no_key_generated values (3, default) as n on duplicate key update a = n.a;
+select * from t_odku_no_key_generated order by a;
+➤ a[4,32,0]  ¦  g[4,32,0]  𝄀
+3  ¦  4
+prepare s_odku_no_key_generated_implicit from insert into t_odku_no_key_generated values (?, default) as n on duplicate key update a = n.a;
+set @odku_no_key_implicit_a = 4;
+execute s_odku_no_key_generated_implicit using @odku_no_key_implicit_a;
+select * from t_odku_no_key_generated order by a;
+➤ a[4,32,0]  ¦  g[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3  𝄀
+3  ¦  4  𝄀
+4  ¦  5
+deallocate prepare s_odku_no_key_generated_implicit;
 drop table t_odku_no_key_generated;
 drop table if exists t_odku_no_key_volatile;
 create table t_odku_no_key_volatile (
