@@ -1,6 +1,6 @@
 - Status: in-progress
 - Start Date: 2026-09-01
-- Design revision: v10 (2026-09-13)
+- Design revision: v11 (2026-09-14)
 - Authors: MatrixOne optimizer team
 - Implementation PRs: [#27914](https://github.com/matrixorigin/matrixone/pull/27914), [#27915](https://github.com/matrixorigin/matrixone/pull/27915), [#27934](https://github.com/matrixorigin/matrixone/pull/27934), [#28752](https://github.com/matrixorigin/matrixone/pull/28752)
 - Issue for this RFC: [#26768](https://github.com/matrixorigin/matrixone/issues/26768)
@@ -516,11 +516,11 @@ violates that relation, both optional endpoints are removed before execution.
 
 Exact bounded `RANK` adds append-only `partition_top_n_with_ties` fields to the
 plan node and pipeline instruction. Planning and physical compilation require
-MORPC v67. A v66 or older negotiated runtime compiles the annotated node through
+MORPC v68. A v67 or older negotiated runtime compiles the annotated node through
 the historical full partition sort/window path with its limit and with-ties
-state removed; a remotely received pipeline that nevertheless contains the v67
+state removed; a remotely received pipeline that nevertheless contains the v68
 field is rejected before execution. Encode/decode and recursive child-pipeline
-validation use the same v66/v67 boundary, so plan caching or a live protocol
+validation use the same v67/v68 boundary, so plan caching or a live protocol
 rollback cannot silently discard boundary peers. The unique hash-join batching
 path uses no new plan or wire field.
 
@@ -576,10 +576,12 @@ be reused when the production path, fixture, configuration, and relevant base
 contract are shown unchanged; commit metadata or unrelated edits do not force a
 rerun.
 
-- rejected and control queries must not gain unexplained scans, joins,
-  materialized producers, or material planning/execution cost;
-- admitted queries must demonstrate that the intended path is reached and does
-  not introduce a material regression in its nearest unchanged control;
+- rejected shapes must retain the legacy path and result/error semantics in
+  focused tests; they need runtime measurement only if their execution path
+  changed;
+- an admitted hot path needs one direct comparison against its own legacy path:
+  either the same SQL on base/candidate revisions or old/new methods over the
+  same focused benchmark fixture. Unrelated queries are not acceptance controls;
 - no accepted CTE may exceed the 32 MiB resident or 8 GiB spill-planner bound;
 - no accepted grouping-set materialization may exceed its 64 MiB/4096-batch
   resident bounds, its 8 GiB planner ceiling, or the lower statement/CN spill
@@ -598,17 +600,20 @@ rerun.
   repartitions outside its admitted shape.
 
 TPC-DS 1 TiB runtime is supporting performance evidence, not a correctness
-oracle. A faster target query does not offset a semantic failure or an
-unexplained control regression. Scale validation records at least the terminal
-result and wall time. Plan shape and resource counters are retained when they
-are needed to prove the claimed scan, memory, or spill effect; they are not
-mandatory fields for an unrelated mechanism.
+oracle. A faster target query does not offset a semantic failure. Scale
+validation records at least the terminal result and wall time. Plan shape and
+resource counters are retained when they are needed to prove the claimed scan,
+memory, or spill effect; they are not mandatory fields for an unrelated
+mechanism.
 
-The no-regression control is the smallest stable TPC-H/TPC-DS corpus that
-exercises both the admitted path and its nearest unchanged path. A full corpus
-or repeated 1 TiB run is required only when the affected contract or an observed
-regression cannot be resolved with focused evidence. An unavailable scale run
-may remain explicit and must not be described as a measured performance pass.
+No-regression evidence is mechanism-local. For an executor change, compare the
+legacy and new methods on the same fixture or the same SQL on base and candidate.
+For a planner rewrite, compare the same SQL's legacy/current plan and result.
+Numerically adjacent or otherwise unrelated benchmark queries prove neither and
+are not required. A broader corpus or repeated 1 TiB run is required only when
+the affected surface cannot be bounded or an observed regression needs
+attribution. An unavailable scale run may remain explicit and must not be
+described as a measured performance pass.
 
 ## Validation matrix
 
@@ -619,7 +624,7 @@ may remain explicit and must not be described as a measured performance pass.
 | MARK/OR EXISTS | positive marker ownership, totality, typed keys, and reachable `UNION ALL + SEMI` tests | independent EXISTS/OR results with duplicates, NULLs, multiple/composite arms | NOT/IN/ANY/projected/mixed/volatile/fallible/non-equality/correlated/different-key markers |
 | scalar filter | retained `SINGLE`, actual-cardinality state machine, exact join lineage, safe-to-skip build sibling, one-producer-per-CN topology | scalar 0/1/>1-row results/errors; local/shuffled delivery; empty/NULL/one-value sibling error and volatile controls | correlated, unsafe build sibling, right SEMI/ANTI, outer/nested-single/project/window/barrier/limit/unsafe predicate, missing/duplicate/non-colocated endpoint |
 | unique hash projection | unique residual-free admission, fixed scratch, ordered consecutive-build-batch selections | byte-identical matched/NULL/repeated-build results; allocation error and reset/reuse cleanup | non-unique, residual, unmatched-output, MARK/SINGLE/SEMI/ANTI/outer/ASOF paths |
-| RANK Partition Top-N | literal-bound recognition, complete peer comparator, obsolete-tie recycle, two-stage exactness, mpool ownership, MORPC v66/v67 boundary and codec round trip | differential ROW_NUMBER/RANK results with NULL/order ties, >batch peer output, grouping sentinel, reset/cancel/error | prepared/dynamic/>1024/OR/wrapped/unsafe bounds, unsupported partition equality, multi-window, old protocol |
+| RANK Partition Top-N | literal-bound recognition, complete peer comparator, obsolete-tie recycle, two-stage exactness, mpool ownership, MORPC v67/v68 boundary and codec round trip | differential ROW_NUMBER/RANK results with NULL/order ties, >batch peer output, grouping sentinel, reset/cancel/error | prepared/dynamic/>1024/OR/wrapped/unsafe bounds, unsupported partition equality, multi-window, old protocol |
 | DNF key | exact total common-key, complete relation walk, residual retention | differential DNF results/errors with NULLs and duplicates | single-table range DNF, missing-arm key, computed/fallible/incompatible/volatile/ambiguous key |
 | LEFT/ANTI | null-rejection, pure marker lineage, complete uniqueness and rule-order tests | public outer/anti result checks with duplicates and NULLs | nullable/computed marker, partial PK, non-total predicate, RIGHT/FULL/non-equi join |
 | ANTI estimate | bounded estimate and complete-key tests | plan-only cost comparison; SQL result unchanged | missing/partial/computed/nullable/non-equality key |
@@ -713,9 +718,9 @@ scalar runtime filter keeps its runtime `PASS` fallback for
 non-selective scalar results; an unproved current-CN topology instead removes
 the physical filter before execution, independently of the planner switch.
 
-Bounded `RANK` is additionally contained by MORPC v67: lowering the negotiated
-version to v66 selects the legacy full-partition path, and a stray v67 pipeline
-is rejected. Unique hash projection and the v67 executor loop have no durable
+Bounded `RANK` is additionally contained by MORPC v68: lowering the negotiated
+version to v67 selects the legacy full-partition path, and a stray v68 pipeline
+is rejected. Unique hash projection and the v68 executor loop have no durable
 state or cross-query switch; after an incident their bounded implementation
 commits are independently revertible without changing plan, catalog, or stored
 data. They are not folded into an unrelated optimizer hint merely to create a
@@ -743,6 +748,10 @@ each PR's final implementation diff.
 
 ## Decision log
 
+- v11 makes performance acceptance mechanism-local: one direct same-query or
+  same-fixture old/new comparison is sufficient for a bounded hot-path change.
+  Unrelated or merely adjacent benchmark queries are explicitly not controls.
+  It also moves bounded `RANK` to MORPC v68 after v67 was allocated on `main`.
 - v10 replaces blanket exact-head scale reruns, fixed p50/p95 thresholds, and
   mandatory per-query telemetry fields with contract-driven validation. It
   keeps correctness, compatibility, hard resource bounds, comparable A/B
@@ -759,8 +768,8 @@ each PR's final implementation diff.
   all-branches-drain evaluation-domain proof, the now-superseded 32 GiB/4x
   decimal prefix proposal, safe build-side and shuffled
   scalar lineage with one-producer-per-CN compile validation, fixed-scratch
-  unique hash projection, and exact peer-aware RANK Partition Top-N behind
-  MORPC v67. It also records output-sensitive tie growth, compatibility
+  unique hash projection, and exact peer-aware RANK Partition Top-N behind the
+  then-unallocated MORPC v67 (now v68). It also records output-sensitive tie growth, compatibility
   fallback, rollback ownership, and deterministic positive/negative evidence.
 - v7 aligns the accepted contract with independently released bounded
   materialization: one guaranteed CTE legacy drain preserves eager producer
@@ -801,7 +810,7 @@ each PR's final implementation diff.
 Before requesting decisive approval, the final candidate closes the global
 non-fixpoint order; conditional totality and build-side skip proofs; scalar
 physical topology; checked aggregate raw-input order; unique projection order;
-RANK peer, resource, and MORPC v66/v67 contracts; resource ownership; the three
+RANK peer, resource, and MORPC v67/v68 contracts; resource ownership; the three
 rollback cohorts plus targeted executor rollback; hard resource bounds and
 risk-selected performance evidence; and the positive/counterexample/cross-rule
 matrix. No blocking semantic question is intentionally deferred.
