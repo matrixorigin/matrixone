@@ -4573,6 +4573,21 @@ func Test_prepareNullCheck_rejectsInvalidCounts(t *testing.T) {
 	}
 }
 
+func Test_readParquetPageValues_rejectsNegativeCounts(t *testing.T) {
+	ctx := context.Background()
+	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))
+
+	_, err := readParquetPageValues(ctx, &parquetPageWithNumRows{Page: page, numRows: -1})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NumRows() -1 is negative")
+
+	_, err = readParquetPageAllValues(ctx, &parquetPageWithNumValues{Page: page, numValues: -1})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NumValues() -1 is negative")
+}
+
 func Test_validateStringDataCount(t *testing.T) {
 	ctx := context.Background()
 

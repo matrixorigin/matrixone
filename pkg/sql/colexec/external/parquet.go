@@ -2636,8 +2636,24 @@ func isEmptyArrayText(text string) bool {
 	return strings.TrimSpace(text[1:len(text)-1]) == ""
 }
 
+func parquetPageCount(ctx context.Context, name string, count int64) (int, error) {
+	if count < 0 {
+		return 0, moerr.NewInvalidInputf(ctx,
+			"malformed page: %s %d is negative", name, count)
+	}
+	n := int(count)
+	if int64(n) != count {
+		return 0, moerr.NewInvalidInputf(ctx,
+			"malformed page: %s %d does not fit in int", name, count)
+	}
+	return n, nil
+}
+
 func readParquetPageValues(ctx context.Context, page parquet.Page) ([]parquet.Value, error) {
-	n := int(page.NumRows())
+	n, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return nil, err
+	}
 	values := make([]parquet.Value, n)
 	read, err := page.Values().ReadValues(values)
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -2650,7 +2666,10 @@ func readParquetPageValues(ctx context.Context, page parquet.Page) ([]parquet.Va
 }
 
 func readParquetPageAllValues(ctx context.Context, page parquet.Page) ([]parquet.Value, error) {
-	n := int(page.NumValues())
+	n, err := parquetPageCount(ctx, "NumValues()", page.NumValues())
+	if err != nil {
+		return nil, err
+	}
 	values := make([]parquet.Value, n)
 	read, err := page.Values().ReadValues(values)
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -2675,7 +2694,10 @@ func processParquetListToArray[T types.ArrayElement](
 	if err != nil {
 		return err
 	}
-	numRows := int(page.NumRows())
+	numRows, err := parquetPageCount(ctx, "NumRows()", page.NumRows())
+	if err != nil {
+		return err
+	}
 	if numRows == 0 {
 		return nil
 	}
