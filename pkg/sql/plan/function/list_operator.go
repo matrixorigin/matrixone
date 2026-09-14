@@ -96,6 +96,13 @@ func decimalArithmeticDomain(input types.Type) (width, scale int32, ok bool) {
 	if input.IsIntOrUint() {
 		return integerIntegralWidth(input.Oid), 0, true
 	}
+	// BIT participates in exact numeric coercion as an unsigned integer even
+	// though it is intentionally outside IsIntOrUint. BIT(64) spans the full
+	// uint64 domain, so reserve all 20 decimal digits when deriving a widened
+	// arithmetic result.
+	if input.Oid == types.T_bit {
+		return 20, 0, true
+	}
 	return 0, 0, false
 }
 
