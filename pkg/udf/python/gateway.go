@@ -733,7 +733,9 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 	}
 	// g.mu -> admissionMu is the lifecycle lock order. Close uses the same
 	// order so a concurrent shutdown cannot return while this invocation is
-	// still being admitted.
+	// still being admitted. Keep g.mu held until the complete claim is either
+	// published or rolled back; otherwise Close could return in the gap between
+	// the group claim and the ledger/K reservation becoming owned.
 	g.mu.Lock()
 	if g.closed {
 		g.mu.Unlock()
@@ -749,9 +751,9 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 		return nil, err
 	}
 	g.admissionMu.Unlock()
-	g.mu.Unlock()
 	if ledger == nil || active == nil {
 		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.mu.Unlock()
 		return nil, fmt.Errorf("python udf: admission state is not initialized")
 	}
 	// Expire is intentionally limited to tombstones by TerminalLedger. An
@@ -764,11 +766,13 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 	credit, err := ledger.Reserve(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch, 1, entryBytes)
 	if err != nil {
 		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.mu.Unlock()
 		return nil, fmt.Errorf("RESOURCE_EXHAUSTED: Python UDF terminal ledger: %w", err)
 	}
 	if err := credit.Add(key, entryBytes, time.Now().Add(ttl)); err != nil {
 		credit.ReleaseUnused()
 		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.mu.Unlock()
 		return nil, err
 	}
 	select {
@@ -780,6 +784,7 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 		_ = ledger.Abandon(key)
 		credit.ReleaseUnused()
 		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.mu.Unlock()
 		return nil, fmt.Errorf("RESOURCE_EXHAUSTED: Python UDF active invocation slots are full")
 	}
 
@@ -797,6 +802,7 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 		_ = ledger.Abandon(key)
 		credit.ReleaseUnused()
 		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.mu.Unlock()
 		return nil, err
 	}
 	token, err := group.BeginOpen(invocation.Tuple.InvocationID)
@@ -804,14 +810,17 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 		_ = group.Close(protocol.ReasonPartialOpenError)
 		_ = ledger.Abandon(key)
 		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.mu.Unlock()
 		return nil, err
 	}
 	if err := token.Commit(); err != nil {
 		_ = group.Close(protocol.ReasonPartialOpenError)
 		_ = ledger.Abandon(key)
 		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.mu.Unlock()
 		return nil, err
 	}
+	g.mu.Unlock()
 	return &invocationAdmission{
 		gateway:      g,
 		group:        group,
