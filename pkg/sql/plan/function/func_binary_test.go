@@ -3853,6 +3853,49 @@ func TestFormat(t *testing.T) {
 	}
 }
 
+func TestDateFormatUsesPerRowFormat(t *testing.T) {
+	dates := make([]types.Datetime, 3)
+	for i, value := range []string{"2020-01-02 03:04:05", "2021-02-03 04:05:06", "2022-03-04 05:06:07"} {
+		var err error
+		dates[i], err = types.ParseDatetime(value, 6)
+		require.NoError(t, err)
+	}
+
+	proc := testutil.NewProcess(t)
+	caseWithRows := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), dates, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y", "%m", "%Y-%m-%d"}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"2020", "02", "2022-03-04"}, nil),
+		DateFormat)
+	ok, info := caseWithRows.Run()
+	require.True(t, ok, info)
+
+	caseWithNullFormat := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), dates, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y", "", "%d"}, []bool{false, true, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"2020", "", "04"}, []bool{false, true, false}),
+		DateFormat)
+	ok, info = caseWithNullFormat.Run()
+	require.True(t, ok, info)
+
+	caseWithSelection := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), dates, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y", "%m", "%d"}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"2020", "", "04"}, []bool{false, true, false}),
+		DateFormat).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+	ok, info = caseWithSelection.Run()
+	require.True(t, ok, info)
+}
+
 func TestDateFormatZeroDatetimeMatchesMySQL(t *testing.T) {
 	valid, err := types.ParseDatetime("2024-01-01 00:00:00", 0)
 	require.NoError(t, err)
@@ -12632,6 +12675,121 @@ func TestTimeFormat(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestTimeFormatUsesPerRowFormat(t *testing.T) {
+	times := make([]types.Time, 3)
+	for i, value := range []string{"03:04:05.000006", "14:05:06.000007", "23:06:07.000008"} {
+		var err error
+		times[i], err = types.ParseTime(value, 6)
+		require.NoError(t, err)
+	}
+
+	proc := testutil.NewProcess(t)
+	caseWithRows := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToType(), times, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"%H", "%i", "%s.%f"}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"03", "05", "07.000008"}, nil),
+		TimeFormat)
+	ok, info := caseWithRows.Run()
+	require.True(t, ok, info)
+
+	caseWithNullFormat := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToType(), times, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"%H", "", "%i"}, []bool{false, true, false}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"03", "", "06"}, []bool{false, true, false}),
+		TimeFormat)
+	ok, info = caseWithNullFormat.Run()
+	require.True(t, ok, info)
+
+	caseWithSelection := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToType(), times, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"%H", "%i", "%s"}, nil),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"03", "", "07"}, []bool{false, true, false}),
+		TimeFormat).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+	ok, info = caseWithSelection.Run()
+	require.True(t, ok, info)
+}
+
+func TestYearWeekUsesPerRowMode(t *testing.T) {
+	dates := []types.Date{
+		types.DateFromCalendar(2008, 1, 1),
+		types.DateFromCalendar(2008, 1, 6),
+		types.DateFromCalendar(2008, 1, 7),
+	}
+	modes := []int64{0, 1, -1}
+	wanted := make([]int64, len(dates))
+	for i := range dates {
+		year, week := dates[i].YearWeek(normalizeWeekMode(modes[i]))
+		wanted[i] = int64(year*100 + week)
+	}
+
+	proc := testutil.NewProcess(t)
+	dateCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), dates, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, wanted, nil),
+		YearWeekDate)
+	ok, info := dateCase.Run()
+	require.True(t, ok, info)
+
+	datetimeValues := []types.Datetime{dates[0].ToDatetime(), dates[1].ToDatetime(), dates[2].ToDatetime()}
+	datetimeCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_datetime.ToType(), datetimeValues, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, wanted, nil),
+		YearWeekDatetime)
+	ok, info = datetimeCase.Run()
+	require.True(t, ok, info)
+
+	stringCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"2008-01-01", "2008-01-06", "2008-01-07"}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, wanted, nil),
+		YearWeekString)
+	ok, info = stringCase.Run()
+	require.True(t, ok, info)
+
+	timestampValues := []types.Timestamp{
+		dates[0].ToTimestamp(time.Local),
+		dates[1].ToTimestamp(time.Local),
+		dates[2].ToTimestamp(time.Local),
+	}
+	timestampCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_timestamp.ToType(), timestampValues, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, wanted, nil),
+		YearWeekTimestamp)
+	ok, info = timestampCase.Run()
+	require.True(t, ok, info)
+
+	nullModeCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_date.ToType(), dates, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), modes, []bool{false, true, false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{wanted[0], 0, wanted[2]}, []bool{false, true, false}),
+		YearWeekDate)
+	ok, info = nullModeCase.Run()
+	require.True(t, ok, info)
 }
 
 func TestSecToTimeMySQLRangeAndFraction(t *testing.T) {

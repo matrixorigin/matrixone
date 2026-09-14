@@ -4628,50 +4628,73 @@ func subTimeFromString(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	return nil
 }
 
-func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	if !ivecs[1].IsConst() {
-		return moerr.NewInvalidArg(proc.Ctx, "date format format", "not constant")
+func dateFormatOperator(format string) DateFormatFunc {
+	switch format {
+	case "%d/%m/%Y":
+		return date_format_combine_pattern1
+	case "%Y%m%d":
+		return date_format_combine_pattern2
+	case "%Y":
+		return date_format_combine_pattern3
+	case "%Y-%m-%d":
+		return date_format_combine_pattern4
+	case "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %T":
+		return date_format_combine_pattern5
+	case "%Y/%m/%d":
+		return date_format_combine_pattern6
+	case "%Y/%m/%d %H:%i:%s", "%Y/%m/%d %T":
+		return date_format_combine_pattern7
 	}
+	return datetimeFormat
+}
 
+func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
-	fmt, null2 := formats.GetStrValue(0)
-	null2 = null2 || len(fmt) == 0
-
-	var dateFmtOperator DateFormatFunc
-	switch string(fmt) {
-	case "%d/%m/%Y":
-		dateFmtOperator = date_format_combine_pattern1
-	case "%Y%m%d":
-		dateFmtOperator = date_format_combine_pattern2
-	case "%Y":
-		dateFmtOperator = date_format_combine_pattern3
-	case "%Y-%m-%d":
-		dateFmtOperator = date_format_combine_pattern4
-	case "%Y-%m-%d %H:%i:%s", "%Y-%m-%d %T":
-		dateFmtOperator = date_format_combine_pattern5
-	case "%Y/%m/%d":
-		dateFmtOperator = date_format_combine_pattern6
-	case "%Y/%m/%d %H:%i:%s", "%Y/%m/%d %T":
-		dateFmtOperator = date_format_combine_pattern7
-	default:
-		dateFmtOperator = datetimeFormat
+	constantFormat := ivecs[1].IsConst()
+	var constFmt string
+	var constNull bool
+	var constOperator DateFormatFunc
+	if constantFormat {
+		fmtBytes, null := formats.GetStrValue(0)
+		constFmt = functionUtil.QuickBytesToStr(fmtBytes)
+		constNull = null
+		if !constNull && len(constFmt) > 0 {
+			constOperator = dateFormatOperator(constFmt)
+		}
 	}
 
-	//format := "%b %D %M"   -> []func{func1,func2,  func3}
 	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
 		d, null1 := dates.GetValue(i)
-		if null1 || null2 {
+		fmt := constFmt
+		null2 := constNull
+		if !constantFormat {
+			fmtBytes, null := formats.GetStrValue(i)
+			fmt = functionUtil.QuickBytesToStr(fmtBytes)
+			null2 = null
+		}
+		if null1 || null2 || len(fmt) == 0 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
 			buf.Reset()
 			var isNull bool
-			if isNull, err = dateFmtOperator(proc.Ctx, d, string(fmt), &buf); err != nil {
+			operator := constOperator
+			if !constantFormat {
+				operator = dateFormatOperator(fmt)
+			}
+			if isNull, err = operator(proc.Ctx, d, fmt, &buf); err != nil {
 				return err
 			}
 			if isNull {
@@ -5135,27 +5158,43 @@ func makeDateFormat(_ context.Context, t types.Datetime, b rune, buf *bytes.Buff
 // TimeFormat: format the time value according to the format string.
 // TIME_FORMAT only supports time-related format specifiers: %H, %h, %I, %i, %k, %l, %S, %s, %f, %p, %r, %T
 func TimeFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	if !ivecs[1].IsConst() {
-		return moerr.NewInvalidArg(proc.Ctx, "time format format", "not constant")
-	}
-
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	times := vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
 	formats := vector.GenerateFunctionStrParameter(ivecs[1])
-	fmt, null2 := formats.GetStrValue(0)
-	emptyFormat := len(fmt) == 0
+	constantFormat := ivecs[1].IsConst()
+	var constFmt string
+	var constNull bool
+	if constantFormat {
+		fmtBytes, null := formats.GetStrValue(0)
+		constFmt = functionUtil.QuickBytesToStr(fmtBytes)
+		constNull = null
+	}
 
 	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && selectList.Contains(i) {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
 		t, null1 := times.GetValue(i)
-		if null1 || null2 || emptyFormat {
+		fmt := constFmt
+		null2 := constNull
+		if !constantFormat {
+			fmtBytes, null := formats.GetStrValue(i)
+			fmt = functionUtil.QuickBytesToStr(fmtBytes)
+			null2 = null
+		}
+		if null1 || null2 || len(fmt) == 0 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
 			buf.Reset()
-			if err = timeFormat(proc.Ctx, t, string(fmt), &buf); err != nil {
+			if err = timeFormat(proc.Ctx, t, fmt, &buf); err != nil {
 				return err
 			}
 			if err = rs.AppendBytes(buf.Bytes(), false); err != nil {
@@ -8044,17 +8083,9 @@ var validDatetimeUnit = map[string]struct{}{
 func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		// Clamp mode to valid range [0, 7]
-		if mode < 0 {
-			mode = 0
-		} else if mode > 7 {
-			mode = 7
-		}
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -8065,8 +8096,9 @@ func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 			continue
 		}
 
+		mode, modeNull := weekModeAt(modes, i)
 		date, null := dates.GetValue(i)
-		if null || date == types.ZeroDate {
+		if null || modeNull || date == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -8087,17 +8119,9 @@ func YearWeekDate(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 func YearWeekDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
 	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		// Clamp mode to valid range [0, 7]
-		if mode < 0 {
-			mode = 0
-		} else if mode > 7 {
-			mode = 7
-		}
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -8108,8 +8132,9 @@ func YearWeekDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 
+		mode, modeNull := weekModeAt(modes, i)
 		dt, null := datetimes.GetValue(i)
-		if null || dt == types.ZeroDatetime {
+		if null || modeNull || dt == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -8135,16 +8160,9 @@ func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		loc = time.Local
 	}
 
-	// Get mode (default 0 if not provided)
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		// Clamp mode to valid range [0, 7]
-		if mode < 0 {
-			mode = 0
-		} else if mode > 7 {
-			mode = 7
-		}
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -8155,8 +8173,9 @@ func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			continue
 		}
 
+		mode, modeNull := weekModeAt(modes, i)
 		ts, null := timestamps.GetValue(i)
-		if null || ts == types.ZeroTimestamp {
+		if null || modeNull || ts == types.ZeroTimestamp {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -8179,17 +8198,9 @@ func YearWeekTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
 	dateParam := vector.GenerateFunctionStrParameter(ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		// Clamp mode to valid range [0, 7]
-		if mode < 0 {
-			mode = 0
-		} else if mode > 7 {
-			mode = 7
-		}
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
 	}
 
 	scale := int32(6) // Use max scale for string inputs
@@ -8202,8 +8213,9 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
+		mode, modeNull := weekModeAt(modes, i)
 		dateStr, null := dateParam.GetStrValue(i)
-		if null {
+		if null || modeNull {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
