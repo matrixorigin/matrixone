@@ -365,6 +365,54 @@ func TestGatewayRejectsThePreviousWorkerLeaseAfterRestart(t *testing.T) {
 	require.Equal(t, []int64{10}, vector.MustFixedColNoTypeCheck[int64](secondResult.GetResultVector()))
 }
 
+func TestGatewayReadinessRefreshesLeaseAfterWorkerRestart(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	require.NoError(t, err, "python3 is required for the real worker contract test")
+	workerPath := realWorkerPath(t)
+	port := freeTCPPort(t)
+	first := startRealWorker(t, python, workerPath, port)
+
+	gateway, err := NewGateway(ClientConfig{
+		Enabled:              true,
+		AllowUnisolated:      true,
+		ServerAddress:        "127.0.0.1:" + strconv.Itoa(port),
+		MaxBatchBytes:        1 << 20,
+		MaxBatchRows:         1024,
+		MaxActiveInvocations: 1,
+		RequestTimeout:       2 * time.Second,
+		MaxTerminalEntries:   32,
+		MaxTerminalBytes:     1 << 20,
+		TerminalRecordTTL:    time.Minute,
+	})
+	require.NoError(t, err)
+	defer gateway.Close()
+
+	readyContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	require.NoError(t, gateway.CheckLanguageReady(readyContext, udf.LanguagePython))
+	cancel()
+	gateway.mu.Lock()
+	firstEpoch := gateway.workerLeaseEpoch
+	gateway.mu.Unlock()
+	require.NotZero(t, firstEpoch)
+
+	stopRealWorker(first)
+	second := startRealWorker(t, python, workerPath, port)
+	defer stopRealWorker(second)
+
+	// CheckLanguageReady is a live admission check. It must probe the
+	// replacement worker rather than returning the cached success from the
+	// previous process, even though the endpoint and software contract are the
+	// same.
+	readyContext, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	require.NoError(t, gateway.CheckLanguageReady(readyContext, udf.LanguagePython))
+	cancel()
+	gateway.mu.Lock()
+	secondEpoch := gateway.workerLeaseEpoch
+	gateway.mu.Unlock()
+	require.NotZero(t, secondEpoch)
+	require.NotEqual(t, firstEpoch, secondEpoch, "readiness must bind to the replacement worker instance")
+}
+
 func TestGatewayCloseCancelsAnInFlightExchange(t *testing.T) {
 	python, err := exec.LookPath("python3")
 	require.NoError(t, err, "python3 is required for the real worker contract test")
