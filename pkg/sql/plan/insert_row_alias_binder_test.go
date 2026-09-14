@@ -330,6 +330,23 @@ func TestOndupUpdateBinderDetectsNestedCandidateCorrelationBeforeBinding(t *test
 	require.True(t, hasNested)
 }
 
+func TestInsertRowAliasNestedBareCandidateCorrelationIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(k, incoming_a, incoming_b) "+
+			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
+			"from constraint_test.emp as s where s.deptno = k)")
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+}
+
+func TestInsertRowAliasNestedBareLocalColumnDoesNotCountAsCandidate(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY'), (1000, 'Marketing', 'LA') as n(empno, incoming_a, incoming_b) "+
+			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
+			"from constraint_test.emp as s where s.deptno = empno)")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+}
+
 func TestOndupUpdateBinderIgnoresLocalAliasMatchingTarget(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		context.Background(), dialect.MYSQL,

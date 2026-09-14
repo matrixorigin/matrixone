@@ -291,6 +291,11 @@ select * from t_odku_row_alias order by id;
 -- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select (select q.y from t_odku_scope_multi as q) from t_odku_scope_multi as s where s.x = n.id);
 
+-- The same nested candidate-correlated shape must be rejected when the
+-- incoming row alias is referenced by a bare column name.
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (2, 5, 0) as n(k, incoming_a, incoming_b) on duplicate key update b = (select (select q.y from t_odku_scope_multi as q) from t_odku_scope_multi as s where s.x = k);
+
 -- A nested subquery input cannot be guarded by the outer target-match
 -- predicate. Reject it before the unused UPDATE branch can execute.
 -- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action",true)
@@ -348,6 +353,18 @@ execute s_odku_no_key_generated using @odku_no_key_a, @odku_no_key_delta;
 select * from t_odku_no_key_generated order by a;
 deallocate prepare s_odku_no_key_generated;
 drop table t_odku_no_key_generated;
+
+-- A volatile DEFAULT must be evaluated once before a stored generated column
+-- reads it on the no-key ODKU fallback path.
+drop table if exists t_odku_no_key_volatile;
+create table t_odku_no_key_volatile (
+    id int,
+    a double default (rand()),
+    g double generated always as (a) stored
+);
+insert into t_odku_no_key_volatile(id) values (1) as n on duplicate key update id = n.id;
+select a = g from t_odku_no_key_volatile;
+drop table t_odku_no_key_volatile;
 
 create table t_null_dup (id int primary key, a int, b int);
 insert into t_null_dup values (1, 100, 100), (3, 300, 300);
