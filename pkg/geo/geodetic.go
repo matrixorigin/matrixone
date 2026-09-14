@@ -174,33 +174,65 @@ func LengthMeters(g Geometry) float64 {
 // --- Area -----------------------------------------------------------------
 
 // loopFromRing builds an S2 loop from a WKB ring (dropping the repeated closing
-// vertex). The loop's winding follows the ring's: by OGC convention the enclosed
-// region lies to the left of a counter-clockwise ring, so we orient the S2 loop
-// counter-clockwise (positive planar signed area) and trust the input winding to
-// decide which side is the interior.
-//
-// We deliberately avoid s2.Loop.Normalize(), which unconditionally selects the
-// smaller of the two regions a loop bounds: that would silently turn a
-// larger-than-hemisphere polygon into its complement, inverting its area and
-// containment. (Polygons spanning a pole or the antimeridian remain a deferred
-// corner case — planar winding is ill-defined there.)
+// vertex). For a non-polar ring whose longitudes fit in an open wedge narrower
+// than 180 degrees, the ring bounds a local region; Normalize makes that choice
+// independent of input winding. This is important at the antimeridian, where a
+// local edge from 179 degrees to -179 degrees looks like a 358-degree edge to a
+// planar shoelace calculation. Outside that proven local domain, retain the
+// historical winding-based conversion because Normalize would silently replace
+// a deliberately larger-than-hemisphere region with its complement.
 func loopFromRing(ring []Coord) *s2.Loop {
 	end := len(ring)
 	if end > 1 && ring[0] == ring[end-1] {
 		end--
 	}
-	ccw := ringSignedArea(ring) >= 0
 	pts := make([]s2.Point, 0, end)
-	if ccw {
-		for i := 0; i < end; i++ {
-			pts = append(pts, s2Point(ring[i]))
-		}
-	} else {
-		for i := end - 1; i >= 0; i-- {
-			pts = append(pts, s2Point(ring[i]))
-		}
+	for i := 0; i < end; i++ {
+		pts = append(pts, s2Point(ring[i]))
+	}
+	loop := s2.LoopFromPoints(pts)
+	if geodeticRingIsLocal(ring[:end]) {
+		loop.Normalize()
+		return loop
+	}
+	if ringSignedArea(ring) >= 0 {
+		return loop
+	}
+	for i := 0; i < end/2; i++ {
+		j := end - 1 - i
+		pts[i], pts[j] = pts[j], pts[i]
 	}
 	return s2.LoopFromPoints(pts)
+}
+
+// geodeticRingIsLocal reports whether all vertices fit in an open longitude
+// wedge narrower than 180 degrees relative to the first vertex. Such a ring,
+// when it is a valid nondegenerate boundary and contains no pole vertex, lies
+// in an open hemisphere, so S2.Normalize selects its intended local region.
+// Coordinate/topology validation remains the caller's responsibility.
+func geodeticRingIsLocal(ring []Coord) bool {
+	if len(ring) < 3 {
+		return false
+	}
+	firstLon := ring[0].X
+	minOffset, maxOffset := 0.0, 0.0
+	for _, c := range ring {
+		if math.Abs(c.Y) >= 90 {
+			return false
+		}
+		offset := math.Mod(c.X-firstLon+180, 360)
+		if offset < 0 {
+			offset += 360
+		}
+		offset -= 180
+		if offset < minOffset {
+			minOffset = offset
+		}
+		if offset > maxOffset {
+			maxOffset = offset
+		}
+	}
+	return maxOffset-minOffset < 180
 }
 
 func polygonMeters2(p Polygon) float64 {

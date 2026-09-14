@@ -3979,7 +3979,7 @@ func TestRemoteVarianceUsesLegacyStateBeforeProtocolV35(t *testing.T) {
 	require.False(t, useLegacyVarianceStateForRemote(proc))
 }
 
-func TestDecimalSumUsesLegacyStateBeforeProtocolV67(t *testing.T) {
+func TestDecimalSumUsesLegacyStateBeforeProtocolV68(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -3987,12 +3987,12 @@ func TestDecimalSumUsesLegacyStateBeforeProtocolV67(t *testing.T) {
 
 	// The coordinator-side MergeGroup is intentionally gated too; it can read
 	// a partial emitted by an older CN even though its process is not remote.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion66)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion67)
 	require.True(t, useLegacyDecimalSumState(proc))
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
 	require.True(t, useLegacyDecimalSumState(proc))
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion67)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion68)
 	require.False(t, useLegacyDecimalSumState(proc))
 }
 
@@ -4025,8 +4025,8 @@ func TestRemoteFinalDecimalSumPreservesOldCoordinatorResult(t *testing.T) {
 				version int64
 				want    types.T
 			}{
-				{name: "old coordinator v66", version: defines.MORPCVersion66, want: types.T_decimal128},
-				{name: "new coordinator v67", version: defines.MORPCVersion67, want: types.T_decimal256},
+				{name: "old coordinator v67", version: defines.MORPCVersion67, want: types.T_decimal128},
+				{name: "new coordinator v68", version: defines.MORPCVersion68, want: types.T_decimal256},
 			} {
 				t.Run(protocol.name, func(t *testing.T) {
 					proc := testutil.NewProcess(t)
@@ -4056,8 +4056,8 @@ func TestRemoteFinalDecimalSumPreservesOldCoordinatorResult(t *testing.T) {
 					})
 
 					require.NoError(t, group.Prepare(proc))
-					require.True(t, group.ctr.legacyDecimalSumState == (protocol.version < defines.MORPCVersion67))
-					require.True(t, group.ctr.legacyDecimalSumResult == (protocol.version < defines.MORPCVersion67))
+					require.True(t, group.ctr.legacyDecimalSumState == (protocol.version < defines.MORPCVersion68))
+					require.True(t, group.ctr.legacyDecimalSumResult == (protocol.version < defines.MORPCVersion68))
 					outputs := collectBatches(t, group, proc)
 					require.Len(t, outputs, 1)
 					require.Len(t, outputs[0].Vecs, 1)
