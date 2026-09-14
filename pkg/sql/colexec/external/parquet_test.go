@@ -3620,6 +3620,33 @@ func TestParquetMapOfNestedAlignsOptionalValuesByEntry(t *testing.T) {
 	}, got)
 }
 
+func TestParquetLogicalListOfMapsReconstructsOuterElements(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"items": parquet.List(parquet.Map(parquet.String(), parquet.String())),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	items := f.Root().Column("items")
+	element := items.Column("list").Column("element")
+	key := element.Column("key_value").Column("key")
+	value := element.Column("key_value").Column("value")
+
+	got, err := reconstructNestedValue(context.Background(), items, []parquet.Value{
+		parquet.ByteArrayValue([]byte("first")).Level(0, key.MaxDefinitionLevel(), key.Index()),
+		parquet.ByteArrayValue([]byte("second")).Level(1, key.MaxDefinitionLevel(), key.Index()),
+		parquet.ByteArrayValue([]byte("one")).Level(0, value.MaxDefinitionLevel(), value.Index()),
+		parquet.ByteArrayValue([]byte("two")).Level(1, value.MaxDefinitionLevel(), value.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []any{
+		map[string]any{"first": "one"},
+		map[string]any{"second": "two"},
+	}, got)
+}
+
 func TestParquetMapRejectsNullKey(t *testing.T) {
 	schema := parquet.NewSchema("x", parquet.Group{
 		"m": parquet.Map(parquet.String(), parquet.Optional(parquet.String())),

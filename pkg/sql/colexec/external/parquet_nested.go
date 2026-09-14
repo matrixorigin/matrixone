@@ -660,36 +660,7 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 		return result, nil
 	}
 
-	expectedCols := make(map[int]bool)
-	for _, leaf := range leafCols {
-		expectedCols[leaf.Index()] = true
-	}
-
-	// Group values by column repetition - when we see a column again, new element starts
-	var groups [][]parquet.Value
-	currentGroup := make([]parquet.Value, 0, len(leafCols))
-	seenCols := make(map[int]bool)
-
-	for _, v := range values {
-		colIdx := v.Column()
-		if !expectedCols[colIdx] {
-			continue
-		}
-		if seenCols[colIdx] {
-			if len(currentGroup) > 0 {
-				groups = append(groups, currentGroup)
-			}
-			currentGroup = make([]parquet.Value, 0, len(leafCols))
-			seenCols = make(map[int]bool)
-		}
-		currentGroup = append(currentGroup, v)
-		seenCols[colIdx] = true
-	}
-	if len(currentGroup) > 0 {
-		groups = append(groups, currentGroup)
-	}
-
-	for _, group := range groups {
+	for _, group := range groupNestedValuesByOuterRepetition(elementCol, leafCols, values) {
 		nested, err := reconstructNestedByType(ctx, elementCol, group)
 		if err != nil {
 			return nil, err
@@ -698,6 +669,72 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 	}
 
 	return result, nil
+}
+
+func groupNestedValuesByOuterRepetition(
+	elementCol *parquet.Column,
+	leafCols []*parquet.Column,
+	values []parquet.Value,
+) [][]parquet.Value {
+	valuesByColumn := make(map[int][][]parquet.Value, len(leafCols))
+	maxGroups := 0
+	for _, leaf := range leafCols {
+		localRepetitionLevel, ok := repeatedDepthToLeaf(elementCol, leaf)
+		if !ok {
+			continue
+		}
+		outerRepetitionLevel := leaf.MaxRepetitionLevel() - localRepetitionLevel
+		if outerRepetitionLevel < 0 {
+			outerRepetitionLevel = 0
+		}
+		columnGroups := make([][]parquet.Value, 0)
+		for _, value := range values {
+			if value.Column() != leaf.Index() {
+				continue
+			}
+			if len(columnGroups) == 0 || int(value.RepetitionLevel()) <= outerRepetitionLevel {
+				columnGroups = append(columnGroups, nil)
+			}
+			last := len(columnGroups) - 1
+			columnGroups[last] = append(columnGroups[last], value)
+		}
+		valuesByColumn[leaf.Index()] = columnGroups
+		if len(columnGroups) > maxGroups {
+			maxGroups = len(columnGroups)
+		}
+	}
+
+	groups := make([][]parquet.Value, 0, maxGroups)
+	for i := 0; i < maxGroups; i++ {
+		group := make([]parquet.Value, 0, len(leafCols))
+		for _, leaf := range leafCols {
+			columnGroups := valuesByColumn[leaf.Index()]
+			if i < len(columnGroups) {
+				group = append(group, columnGroups[i]...)
+			}
+		}
+		if len(group) > 0 {
+			groups = append(groups, group)
+		}
+	}
+	return groups
+}
+
+func repeatedDepthToLeaf(col, target *parquet.Column) (int, bool) {
+	if col == target {
+		return 0, true
+	}
+	for _, child := range col.Columns() {
+		depth, ok := repeatedDepthToLeaf(child, target)
+		if !ok {
+			continue
+		}
+		if child.Repeated() {
+			depth++
+		}
+		return depth, true
+	}
+	return 0, false
 }
 
 func groupNestedValuesByLeafOrdinal(leafCols []*parquet.Column, values []parquet.Value) [][]parquet.Value {
@@ -989,6 +1026,10 @@ func reconstructNestedByType(ctx context.Context, col *parquet.Column, values []
 			return reconstructList(ctx, col, values)
 		}
 		if logicalType.Map != nil {
+			children := col.Columns()
+			if len(children) == 1 {
+				return reconstructMap(ctx, children[0], values)
+			}
 			return reconstructMap(ctx, col, values)
 		}
 	}
