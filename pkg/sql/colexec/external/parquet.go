@@ -870,6 +870,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					return err
 				}
 				data := page.Data()
+				if data.Kind() != encoding.Int32 {
+					return moerr.NewInvalidInputf(proc.Ctx,
+						"malformed BOOLEAN dictionary indexes with type %s", data.Kind())
+				}
 				indices := data.Int32()
 				if err := validateDictionaryIndicesCount(proc.Ctx, indices, nc.actualNonNulls); err != nil {
 					return err

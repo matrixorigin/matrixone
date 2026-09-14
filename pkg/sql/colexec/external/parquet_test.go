@@ -3359,6 +3359,26 @@ func TestParquet_Dictionary_Bool_ValueKindMismatch(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquet_Dictionary_Bool_IndexKindMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary)
+	f, page := writeDictAndGetPage(t, node, []parquet.Value{parquet.BooleanValue(true)})
+	badPage := &parquetPageWithData{
+		Page: page,
+		data: encoding.BooleanValues([]byte{1}),
+	}
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "BOOLEAN dictionary indexes with type BOOLEAN")
+	require.Zero(t, vec.Length())
+}
+
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	// Reduce batch size so scan steps across multiple calls
 	save := maxParquetBatchCnt
