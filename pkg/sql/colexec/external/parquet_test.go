@@ -3382,6 +3382,32 @@ func TestParquet_Dictionary_Bool_IndexKindMismatch(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquet_Dictionary_Bool_NullableSlicedPage(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Optional(parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary))
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+		{parquet.BooleanValue(false).Level(0, 1, 0)},
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+	require.NotNil(t, page.Dictionary())
+	page = page.Slice(1, 5)
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	require.NoError(t, mp.mapping(page, proc, vec))
+	require.Equal(t, []bool{false, false, true, false}, vector.MustFixedColWithTypeCheck[bool](vec))
+	require.True(t, vec.GetNulls().Contains(0))
+	require.False(t, vec.GetNulls().Contains(1))
+	require.False(t, vec.GetNulls().Contains(2))
+	require.True(t, vec.GetNulls().Contains(3))
+}
+
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	// Reduce batch size so scan steps across multiple calls
 	save := maxParquetBatchCnt
