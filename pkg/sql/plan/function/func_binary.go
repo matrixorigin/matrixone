@@ -11433,10 +11433,55 @@ func stDistance[T float32 | float64](ivecs []*vector.Vector, result vector.Funct
 		return nil
 	}
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
-	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
+	return stDistanceWithFixedSRID[T](ivecs, result, proc, length, selectList, srid)
+}
+
+func stDistanceWithFixedSRID[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, srid uint32) error {
+	left := vector.GenerateFunctionStrParameter(ivecs[0])
+	right := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[T](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v1, n1 := left.GetStrValue(i)
+		v2, n2 := right.GetStrValue(i)
+		if n1 || n2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := validateComputationSRID(srid); err != nil {
+			return err
+		}
+		empty1, err := geometryDistancePayloadEmpty(v1)
+		if err != nil {
+			return err
+		}
+		empty2, err := geometryDistancePayloadEmpty(v2)
+		if err != nil {
+			return err
+		}
+		if empty1 || empty2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		d, err := geometryDistanceBySRID(v1, v2, srid)
-		return T(d), err
-	}, selectList)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(T(d), false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // StDistanceWithSRID is the ST_Distance(geom, geom, srid) overload: the explicit
@@ -11476,6 +11521,23 @@ func stDistanceWithSRID[T float32 | float64](ivecs []*vector.Vector, result vect
 		if err != nil {
 			return err
 		}
+		if err := validateComputationSRID(su); err != nil {
+			return err
+		}
+		empty1, err := geometryDistancePayloadEmpty(v1)
+		if err != nil {
+			return err
+		}
+		empty2, err := geometryDistancePayloadEmpty(v2)
+		if err != nil {
+			return err
+		}
+		if empty1 || empty2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		d, err := geometryDistanceBySRID(v1, v2, su)
 		if err != nil {
 			return err
@@ -11499,7 +11561,7 @@ func geodeticDistance(left, right []byte) (float64, error) {
 		return 0, err
 	}
 	if !isDistanceSupportedGeometryType(leftType) || !isDistanceSupportedGeometryType(rightType) {
-		return 0, moerr.NewInvalidInputNoCtx("ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+		return 0, moerr.NewInvalidInputNoCtx(stDistanceSupportedPairsError)
 	}
 	lg, err := decodeGeoGeometry(left)
 	if err != nil {
@@ -11520,6 +11582,47 @@ func geodeticDistance(left, right []byte) (float64, error) {
 		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
 	return d, nil
+}
+
+// geometryDistancePayloadEmpty reports whether a payload has no non-empty
+// component that can contribute to ST_DISTANCE. GeometryCollection members
+// may themselves be collections, and empty members are ignored when another
+// member is available. A top-level all-empty geometry is surfaced by the
+// evaluator as SQL NULL, matching the spatial distance contract.
+func geometryDistancePayloadEmpty(payload []byte) (bool, error) {
+	empty, err := geometryIsEmpty(payload)
+	if err != nil {
+		return false, err
+	}
+	if empty {
+		return true, nil
+	}
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	if typeName != "MULTIPOINT" && typeName != "MULTILINESTRING" &&
+		typeName != "MULTIPOLYGON" && typeName != "GEOMETRYCOLLECTION" {
+		return false, nil
+	}
+	count, err := geometryCountFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	for i := int64(1); i <= count; i++ {
+		item, err := geometryNFromPayload(payload, i)
+		if err != nil {
+			return false, err
+		}
+		itemEmpty, err := geometryDistancePayloadEmpty([]byte(item))
+		if err != nil {
+			return false, err
+		}
+		if !itemEmpty {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func StContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -11668,7 +11771,7 @@ type geometryParamInterval struct {
 }
 
 const (
-	stDistanceSupportedPairsError       = "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs"
+	stDistanceSupportedPairsError       = "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs"
 	stTouchesSupportedPairsError        = "ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs"
 	stOverlapsSupportedPairsError       = "ST_OVERLAPS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs"
 	stEqualsSupportedPairsError         = "ST_EQUALS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs"
@@ -11690,7 +11793,7 @@ func isIntersectsSupportedGeometryType(typeName string) bool {
 }
 
 func isDistanceSupportedGeometryType(typeName string) bool {
-	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON" || typeName == "GEOMETRYCOLLECTION"
 }
 
 func geometrySRIDFromPayload(payload []byte) (uint32, error) {
@@ -11752,6 +11855,18 @@ func checkBinaryGeometryTypeSRID(functionName string, ivecs []*vector.Vector, le
 }
 
 func geometryDistance(left, right []byte) (float64, error) {
+	leftEmpty, err := geometryDistancePayloadEmpty(left)
+	if err != nil {
+		return 0, err
+	}
+	rightEmpty, err := geometryDistancePayloadEmpty(right)
+	if err != nil {
+		return 0, err
+	}
+	if leftEmpty || rightEmpty {
+		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+
 	leftType, err := geometryTypeNameFromPayload(left)
 	if err != nil {
 		return 0, err
@@ -11765,10 +11880,10 @@ func geometryDistance(left, right []byte) (float64, error) {
 			return 0, err
 		}
 	}
-	if leftType == "MULTIPOINT" || leftType == "MULTILINESTRING" || leftType == "MULTIPOLYGON" {
+	if isDistanceCollectionType(leftType) {
 		return multiGeometryDistance(left, right)
 	}
-	if rightType == "MULTIPOINT" || rightType == "MULTILINESTRING" || rightType == "MULTIPOLYGON" {
+	if isDistanceCollectionType(rightType) {
 		return multiGeometryDistance(right, left)
 	}
 
@@ -11866,6 +11981,10 @@ func geometryDistance(left, right []byte) (float64, error) {
 	default:
 		return 0, moerr.NewInvalidInputNoCtx(stDistanceSupportedPairsError)
 	}
+}
+
+func isDistanceCollectionType(typeName string) bool {
+	return typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON" || typeName == "GEOMETRYCOLLECTION"
 }
 
 func pointDistanceToLineString(point geometryPoint2D, line []geometryPoint2D) (float64, error) {
@@ -14507,16 +14626,28 @@ func multiGeometryDistance(collection, other []byte) (float64, error) {
 		return 0, err
 	}
 	minDistance := math.MaxFloat64
+	found := false
 	for i := int64(1); i <= count; i++ {
 		item, err := geometryNFromPayload(collection, i)
 		if err != nil {
 			return 0, err
 		}
+		empty, err := geometryDistancePayloadEmpty([]byte(item))
+		if err != nil {
+			return 0, err
+		}
+		if empty {
+			continue
+		}
 		distance, err := geometryDistance([]byte(item), other)
 		if err != nil {
 			return 0, err
 		}
+		found = true
 		minDistance = math.Min(minDistance, distance)
+	}
+	if !found {
+		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
 	return minDistance, nil
 }
