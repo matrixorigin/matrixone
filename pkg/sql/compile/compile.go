@@ -7000,7 +7000,11 @@ func (c *Compile) compilePostDml(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
-	if node.Limit != nil && c.supportsRemotePartitionTopN() {
+	partitionTopNSupported := c.supportsRemotePartitionTopN()
+	if node.PartitionTopNWithTies {
+		partitionTopNSupported = c.supportsRemotePartitionTopNWithTies()
+	}
+	if node.Limit != nil && partitionTopNSupported {
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			op := constructPartition(node)
@@ -7053,6 +7057,7 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 		arg.OrderBySpecs = node.OrderBy[:node.PartitionByCount]
 		arg.Limit = nil
 		arg.PartitionByCount = 0
+		arg.WithTies = false
 	}
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
@@ -7809,7 +7814,7 @@ func hasVarianceAggregate(node *plan.Node) bool {
 }
 
 // hasWidenedDecimalSum reports SUM expressions whose public result is
-// Decimal256. Before MORPC v69, a new CN can still exchange the legacy
+// Decimal256. Before MORPC v70, a new CN can still exchange the legacy
 // Decimal128 partial state with an old CN, but a final shuffle Group evaluates
 // the state on its remote owner and sends the public result directly. That
 // final batch would be Decimal256 on the new binary and Decimal128 on the old
@@ -7882,7 +7887,7 @@ func (c *Compile) supportsRemoteWidenedDecimalSum() bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion69
+	return ok && protocolVersion >= defines.MORPCVersion70
 }
 
 func (c *Compile) supportsRemotePartitionTopN() bool {
@@ -7893,6 +7898,16 @@ func (c *Compile) supportsRemotePartitionTopN() bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion19
+}
+
+func (c *Compile) supportsRemotePartitionTopNWithTies() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion69
 }
 
 func (c *Compile) supportsRemoteHashPartition() bool {

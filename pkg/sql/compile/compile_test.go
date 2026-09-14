@@ -2176,22 +2176,22 @@ func TestCompileShuffleGroupGatesWidenedDecimalSumByProtocolVersion(t *testing.T
 			}},
 		}}
 
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion68)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
 		require.True(t, hasWidenedDecimalSum(aggNode))
 		require.False(t, c.supportsRemoteWidenedDecimalSum())
 		require.False(t, c.canCompileShuffleGroup(aggNode),
 			"mixed-version clusters must finalize widened decimal SUM on the coordinator")
 
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 		require.True(t, c.supportsRemoteWidenedDecimalSum())
 		require.True(t, c.canCompileShuffleGroup(aggNode))
 	}
 
 	// DECIMAL(16,2) SUM stays Decimal128 and therefore keeps the established
-	// final shuffle result type on both sides of a v68/v69 rolling upgrade.
+	// final shuffle result type on both sides of a v69/v70 rolling upgrade.
 	aggNode.AggList[0].GetF().Args[0].Typ.Width = 16
 	aggNode.AggList[0].GetF().Args[0].Typ.Id = int32(types.T_decimal64)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion68)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
 	require.False(t, hasWidenedDecimalSum(aggNode))
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
@@ -2233,6 +2233,10 @@ func TestCompilePartitionTopNGatedByProtocolVersion(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion19)
 	require.True(t, c.supportsRemotePartitionTopN())
+	require.False(t, c.supportsRemotePartitionTopNWithTies())
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
+	require.True(t, c.supportsRemotePartitionTopNWithTies())
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
 	require.False(t, c.supportsRemotePartitionTopN(), "rollback must select the legacy partition path")
@@ -2281,6 +2285,26 @@ func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 		windowScopes := c.compileWin(&plan.Node{}, partitionScopes)
 		physicalWindow := windowScopes[0].RootOp.(*windowop.Window)
 		require.False(t, physicalWindow.PartitionTopN)
+	})
+
+	t.Run("rank with ties requires v68", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		rt := runtime.ServiceRuntime(c.proc.GetService())
+		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		node := newNode()
+		node.PartitionTopNWithTies = true
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion68)
+		legacyScopes := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
+		legacyPartition := legacyScopes[0].RootOp.(*partitionop.Partition)
+		require.Nil(t, legacyPartition.Limit)
+		require.False(t, legacyPartition.WithTies)
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
+		boundedScopes := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
+		boundedPartition := boundedScopes[0].RootOp.(*partitionop.Partition)
+		require.NotNil(t, boundedPartition.Limit)
+		require.True(t, boundedPartition.WithTies)
 	})
 }
 

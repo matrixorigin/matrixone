@@ -1908,7 +1908,7 @@ func useLegacyVarianceStateForRemote(proc *process.Process) bool {
 	return !ok || !valid || version < defines.MORPCVersion35
 }
 
-// Decimal SUM must use the pre-v69 state on every side of a distributed
+// Decimal SUM must use the pre-v70 state on every side of a distributed
 // aggregation while the cluster protocol is still mixed. Unlike the older
 // remote-only gates, this includes the coordinator's local MergeGroup: it may
 // consume a partial produced by an older CN.
@@ -1922,11 +1922,11 @@ func useLegacyDecimalSumState(proc *process.Process) bool {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion69
+	return !ok || !valid || version < defines.MORPCVersion70
 }
 
 // An old coordinator can send a final Group to an upgraded worker without
-// running the upgraded shuffle-plan gate. Below v69 that Group must preserve
+// running the upgraded shuffle-plan gate. Below v70 that Group must preserve
 // the old Decimal128 result contract. Partial Groups still use the legacy wire
 // state, while local final Groups and coordinator MergeGroups publish the
 // widened result selected by the upgraded plan.
