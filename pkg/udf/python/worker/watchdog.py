@@ -20,6 +20,13 @@ def _watch(read_fd: int, process_group_id: int) -> None:
                     pass
                 return
     except (OSError, ValueError):
+        # A broken descriptor means the worker death signal can no longer be
+        # observed.  Kill the owned group before the watchdog exits so a
+        # handler descendant cannot outlive both its owners.
+        try:
+            os.killpg(process_group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         return
     finally:
         try:
