@@ -105,7 +105,8 @@ const (
 	MORPCVersion67     int64 = 67 // named process timezone identity
 	MORPCVersion68     int64 = 68 // complete GROUP_CONCAT cut reporting for strict writes
 	MORPCVersion69     int64 = 69 // exact bounded per-partition RANK with boundary ties
-	MORPCLatestVersion       = MORPCVersion69
+	MORPCVersion70     int64 = 70 // row-dependent and unsigned CONV bases
+	MORPCLatestVersion       = MORPCVersion70
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -3190,34 +3190,18 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// Get base parameters (must be constants)
-	if !ivecs[1].IsConst() || !ivecs[2].IsConst() {
-		return moerr.NewInvalidArg(proc.Ctx, "conv bases", "not constant")
-	}
-
-	fromBaseVec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-	toBaseVec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
-
-	fromBase, null1 := fromBaseVec.GetValue(0)
-	toBase, null2 := toBaseVec.GetValue(0)
-
-	if null1 || null2 {
-		// If bases are NULL, return NULL for all rows
-		for i := uint64(0); i < uint64(length); i++ {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
+	if length == 0 {
 		return nil
 	}
-
-	absFromBase := absInt64(fromBase)
-	absToBase := absInt64(toBase)
-
-	// Invalid bases return NULL.
-	if absFromBase < 2 || absFromBase > 36 || absToBase < 2 || absToBase > 36 {
-		for i := uint64(0); i < uint64(length); i++ {
-			if err = rs.AppendBytes(nil, true); err != nil {
+	bases, err := newConvBases(ivecs[1], ivecs[2])
+	if err != nil {
+		return err
+	}
+	// Preserve the existing all-NULL fast path without inspecting N when a
+	// constant base is NULL or invalid.
+	if bases.constant && !bases.valid {
+		for i := 0; i < length; i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		}
@@ -3235,7 +3219,7 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	switch inputType.Oid {
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob:
-		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+		return convString(ivecs[0], bases, rs, length, selectList)
 	case types.T_bool:
 		return convMappedInt64(
 			vector.GenerateFunctionFixedTypeParameter[bool](ivecs[0]),
@@ -3244,11 +3228,11 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 					return 1
 				}
 				return 0
-			}, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_bit:
 		return convUnsignedDirect(
 			vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0]),
-			toBase, rs, length, selectList)
+			bases, rs, length, selectList)
 	case types.T_any:
 		// T_any is only the function-local representation of an untyped NULL
 		// or a marker before execute-time specialization. It must propagate
@@ -3268,76 +3252,76 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 		case types.T_int8:
 			return convSignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		case types.T_int16:
 			return convSignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		case types.T_int32:
 			return convSignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		default:
 			return convSignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		}
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		switch inputType.Oid {
 		case types.T_uint8:
 			return convUnsignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		case types.T_uint16:
 			return convUnsignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		case types.T_uint32:
 			return convUnsignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		default:
 			return convUnsignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		}
 	case types.T_float32, types.T_float64:
 		// Floating values use MySQL's string/prefix conversion semantics.
 		if inputType.Oid == types.T_float32 {
 			return convFloatPrefix(
 				vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0]),
-				32, fromBase, toBase, rs, length, selectList)
+				32, bases, rs, length, selectList)
 		}
 		return convFloatPrefix(
 			vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0]),
-			64, fromBase, toBase, rs, length, selectList)
+			64, bases, rs, length, selectList)
 	case types.T_decimal64:
 		return convDecimalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0]),
 			func(v types.Decimal64) string { return v.Format(inputType.Scale) },
-			fromBase, toBase, rs, length, selectList)
+			bases, rs, length, selectList)
 	case types.T_decimal128:
 		return convDecimalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0]),
 			func(v types.Decimal128) string { return v.Format(inputType.Scale) },
-			fromBase, toBase, rs, length, selectList)
+			bases, rs, length, selectList)
 	case types.T_decimal256:
 		return convDecimalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0]),
 			func(v types.Decimal256) string { return v.Format(inputType.Scale) },
-			fromBase, toBase, rs, length, selectList)
+			bases, rs, length, selectList)
 	case types.T_date:
 		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0]),
 			func(dst []byte, v types.Date) []byte {
 				return strconv.AppendInt(dst, int64(v.Year()), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_datetime:
 		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0]),
 			func(dst []byte, v types.Datetime) []byte {
 				return strconv.AppendInt(dst, int64(v.Year()), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_timestamp:
 		zone := time.Local
 		if proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
@@ -3347,19 +3331,19 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0]),
 			func(dst []byte, v types.Timestamp) []byte {
 				return strconv.AppendInt(dst, int64(v.ToDatetime(zone).Year()), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_time:
 		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0]),
 			func(dst []byte, v types.Time) []byte {
 				return strconv.AppendInt(dst, v.Hour(), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_year:
 		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.MoYear](ivecs[0]),
 			func(dst []byte, v types.MoYear) []byte {
 				return strconv.AppendInt(dst, v.ToInt64(), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	default:
 		// Never pass a fixed-width vector to GenerateFunctionStrParameter:
 		// doing so is the panic reported by #28461. Unsupported input types
@@ -3383,11 +3367,19 @@ func formatUnsignedToBase(val uint64, toBase int64) string {
 	return strings.ToUpper(strconv.FormatUint(val, int(base)))
 }
 
-func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+func convString(nVec *vector.Vector, bases convBases, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
 	nParam := vector.GenerateFunctionStrParameter(nVec)
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3420,10 +3412,18 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 
 func convMappedInt64[T types.FixedSizeTExceptStrType](
 	nParam vector.FunctionParameterWrapper[T], mapValue func(T) int64,
-	toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+	bases convBases, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		_, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3464,11 +3464,19 @@ func appendConvPrefix(
 // formatting the remainder of every date/time value on the hot path.
 func convTemporalPrefix[T types.FixedSizeTExceptStrType](
 	nParam vector.FunctionParameterWrapper[T], appendPrefix func([]byte, T) []byte,
-	fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+	bases convBases, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	var prefix [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3495,10 +3503,18 @@ func convTemporalPrefix[T types.FixedSizeTExceptStrType](
 
 func convDecimalPrefix[T types.Decimal](
 	nParam vector.FunctionParameterWrapper[T], formatValue func(T) string,
-	fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+	bases convBases, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3524,11 +3540,19 @@ func convDecimalPrefix[T types.Decimal](
 }
 
 func convFloatPrefix[T types.Floats](
-	nParam vector.FunctionParameterWrapper[T], bitSize int, fromBase, toBase int64,
+	nParam vector.FunctionParameterWrapper[T], bitSize int, bases convBases,
 	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3912,12 +3936,20 @@ func isConvWhitespace(ch byte) bool {
 }
 
 func convSignedPrefix[T constraints.Signed](
-	nParam vector.FunctionParameterWrapper[T], fromBase, toBase int64,
+	nParam vector.FunctionParameterWrapper[T], bases convBases,
 	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	var text [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3951,12 +3983,20 @@ func convSignedPrefix[T constraints.Signed](
 }
 
 func convUnsignedPrefix[T constraints.Unsigned](
-	nParam vector.FunctionParameterWrapper[T], fromBase, toBase int64,
+	nParam vector.FunctionParameterWrapper[T], bases convBases,
 	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	var text [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -4002,11 +4042,19 @@ func convUnsignedPrefix[T constraints.Unsigned](
 // bits must not be reparsed using from_base. The value is formatted as an
 // unsigned bit pattern, including the existing signed-to_base behavior.
 func convUnsignedDirect[T constraints.Unsigned](
-	nParam vector.FunctionParameterWrapper[T], toBase int64,
+	nParam vector.FunctionParameterWrapper[T], bases convBases,
 	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		_, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
