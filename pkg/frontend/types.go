@@ -372,6 +372,12 @@ type PrepareStmt struct {
 	jsonComparisonParamPositions []int32
 	jsonMemberOfParamPositions   []int32
 	paramConcreteTypes           []types.T
+	// geometrySRID*ParamPositions are computed once per prepared-plan
+	// generation. EXECUTE only encodes the values at these positions; it must
+	// not rediscover geometry dependencies by walking the whole plan.
+	geometrySRIDParamPositions       []int32
+	geometrySRIDSourceParamPositions []int32
+	geometrySRIDPositionsPlan        *plan.Plan
 	// numericOverloadParamPositions is computed from explicit plan metadata
 	// once per prepared-plan generation.  It identifies ABS arguments whose
 	// runtime integer/decimal domain may require overload rebinding without

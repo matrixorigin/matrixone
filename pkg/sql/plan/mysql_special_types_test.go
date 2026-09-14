@@ -21,6 +21,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -462,6 +463,38 @@ func TestPreparedGeometrySRIDPlanIsValueSpecialized(t *testing.T) {
 	})
 	require.NotEmpty(t, key)
 	require.NotEqual(t, key, otherKey)
+	nullKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
+		ParamValue{RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+	})
+	sentinelKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
+		ParamValue{Value: "<null>", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+	})
+	require.NotEqual(t, nullKey, sentinelKey,
+		"a typed NULL must not alias a user value equal to the old NULL sentinel")
+}
+
+func TestPreparedGeometrySRIDSemanticKeyTracksFixedSRIDSource(t *testing.T) {
+	ctx := context.Background()
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"select st_geomfromwkb(?, 4326)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	prepared, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
+	require.NoError(t, err)
+	require.NoError(t, NormalizePrepareParamRefs(ctx, prepared))
+	require.Empty(t, PreparedPlanGeometrySRIDParamPositions(prepared),
+		"the fixed SRID literal is not itself a runtime parameter")
+
+	nullKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
+		ParamValue{RuntimeType: types.T_blob.ToType(), HasRuntimeType: true},
+	})
+	valueKey := PreparedPlanGeometrySRIDSemanticKey(prepared, []any{
+		ParamValue{Value: "wkb", RuntimeType: types.T_blob.ToType(), HasRuntimeType: true},
+	})
+	require.NotEmpty(t, nullKey)
+	require.NotEqual(t, nullKey, valueKey,
+		"a fixed SRID still needs source NULL state in the runtime cache key")
 }
 
 // TestFuncCastForGeometrySRID verifies that SRID compatibility is enforced at
@@ -551,6 +584,95 @@ func TestGeometrySRIDWidthEncoding(t *testing.T) {
 	srid, ok = decodeGeometrySRIDWidth(encodeGeometrySRIDWidth(4326, true))
 	require.True(t, ok)
 	require.Equal(t, uint32(4326), srid)
+}
+
+func TestGeometrySRIDLiteralValueCoversPlanIntegerDomains(t *testing.T) {
+	tests := []struct {
+		name string
+		lit  *plan.Literal
+		want int64
+	}{
+		{name: "i8", lit: &plan.Literal{Value: &plan.Literal_I8Val{I8Val: -8}}, want: -8},
+		{name: "i16", lit: &plan.Literal{Value: &plan.Literal_I16Val{I16Val: -16}}, want: -16},
+		{name: "i32", lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: -32}}, want: -32},
+		{name: "i64", lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: -64}}, want: -64},
+		{name: "u8", lit: &plan.Literal{Value: &plan.Literal_U8Val{U8Val: 8}}, want: 8},
+		{name: "u16", lit: &plan.Literal{Value: &plan.Literal_U16Val{U16Val: 16}}, want: 16},
+		{name: "u32", lit: &plan.Literal{Value: &plan.Literal_U32Val{U32Val: 32}}, want: 32},
+		{name: "u64", lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 64}}, want: 64},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, isNull, ok := geometrySRIDLiteralValue(test.lit)
+			require.True(t, ok)
+			require.False(t, isNull)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	got, isNull, ok := geometrySRIDLiteralValue(nil)
+	require.False(t, ok)
+	require.False(t, isNull)
+	require.Zero(t, got)
+	got, isNull, ok = geometrySRIDLiteralValue(&plan.Literal{Isnull: true})
+	require.True(t, ok)
+	require.True(t, isNull)
+	require.Zero(t, got)
+	got, isNull, ok = geometrySRIDLiteralValue(&plan.Literal{Value: &plan.Literal_Sval{Sval: "4326"}})
+	require.False(t, ok)
+	require.False(t, isNull)
+	require.Zero(t, got)
+}
+
+func TestGeometrySRIDRuntimeValueValidation(t *testing.T) {
+	valid := []struct {
+		name  string
+		value any
+		want  uint32
+	}{
+		{name: "nil", value: nil, want: 0},
+		{name: "int8", value: int8(8), want: 8},
+		{name: "int16", value: int16(16), want: 16},
+		{name: "int32", value: int32(32), want: 32},
+		{name: "int64", value: int64(64), want: 64},
+		{name: "uint8", value: uint8(8), want: 8},
+		{name: "uint16", value: uint16(16), want: 16},
+		{name: "uint32", value: uint32(32), want: 32},
+		{name: "uint64", value: uint64(64), want: 64},
+		{name: "string", value: " 4326 ", want: 4326},
+		{name: "bytes", value: []byte("4326"), want: 4326},
+	}
+	for _, test := range valid {
+		t.Run(test.name, func(t *testing.T) {
+			got, isNull, err := geometrySRIDRuntimeValue(test.value)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+			require.Equal(t, test.value == nil, isNull)
+		})
+	}
+
+	for _, test := range []struct {
+		name  string
+		value any
+	}{
+		{name: "negative int8", value: int8(-1)},
+		{name: "negative int16", value: int16(-1)},
+		{name: "negative int32", value: int32(-1)},
+		{name: "negative int64", value: int64(-1)},
+		{name: "negative text", value: "-1"},
+		{name: "empty text", value: ""},
+		{name: "invalid text", value: "4326.0"},
+		{name: "oversized text", value: "2147483647"},
+		{name: "oversized uint", value: uint64(geo.MaxSRID) + 1},
+		{name: "fraction", value: 4326.0},
+		{name: "boolean", value: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, isNull, err := geometrySRIDRuntimeValue(test.value)
+			require.False(t, isNull)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestGeometrySubtypeCompatible(t *testing.T) {

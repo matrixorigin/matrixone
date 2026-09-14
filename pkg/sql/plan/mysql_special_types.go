@@ -165,6 +165,24 @@ func isPreparedGeometrySRIDFunction(name string) bool {
 	}
 }
 
+// isGeometrySRIDProducingFunction covers every geometry constructor whose
+// explicit SRID is encoded in the result type.  The prepared marker support is
+// intentionally narrower (see isPreparedGeometrySRIDFunction), but a static
+// SRID constructor still has value-dependent metadata when its geometry source
+// is a typed runtime NULL.
+func isGeometrySRIDProducingFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "st_srid", "st_geomfromtext", "st_geomfromwkb", "st_geomfrombinary",
+		"st_geometryfromtext", "st_geometryfromwkb", "st_pointfromtext",
+		"st_linefromtext", "st_polygonfromtext", "st_mpointfromtext",
+		"st_mlinefromtext", "st_mpolyfromtext", "st_geomcollfromtext",
+		"st_pointfromgeohash", "st_geomfromgeojson":
+		return true
+	default:
+		return false
+	}
+}
+
 // geometryExprHasDeferredSRID reports whether a geometry expression contains
 // a direct prepared SRID marker.  A Width of zero is also the representation
 // of an ordinary, unconstrained geometry, so Width alone cannot tell the DML
@@ -175,7 +193,7 @@ func geometryExprHasDeferredSRID(expr *plan.Expr) bool {
 	}
 	if fn := expr.GetF(); fn != nil {
 		if fn.Func != nil && isPreparedGeometrySRIDFunction(fn.Func.GetObjName()) && len(fn.Args) >= 2 &&
-			isDirectPreparedGeometrySRIDArg(fn.Args[len(fn.Args)-1]) {
+			len(preparedGeometrySRIDParamPositionsInExpr(fn.Args[len(fn.Args)-1])) > 0 {
 			return true
 		}
 		for _, arg := range fn.Args {
@@ -215,8 +233,8 @@ func geometrySRIDSourceIsStaticNull(expr *plan.Expr) bool {
 			// Generic CAST stores the source first and the TargetType second.
 			return geometrySRIDSourceIsStaticNull(fn.Args[0])
 		}
-		if isPreparedGeometrySRIDFunction(name) && len(fn.Args) >= 2 {
-			// Both functions are strict NULL propagators: a NULL geometry or a
+		if isGeometrySRIDProducingFunction(name) && len(fn.Args) >= 2 {
+			// These functions are strict NULL propagators: a NULL geometry or a
 			// NULL SRID produces a NULL geometry result. This matters at a DML
 			// assignment boundary, where the result Width is otherwise the same
 			// encoding as an unconstrained geometry and could be mistaken for a

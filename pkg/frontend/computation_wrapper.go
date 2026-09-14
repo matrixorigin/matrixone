@@ -1137,6 +1137,16 @@ func (prepareStmt *PrepareStmt) refreshFixedIntegerParamPositions(preparePlan *p
 		prepareStmt.hasLagLeadParams = preparedFixedIntegerParamPositions(preparePlan)
 }
 
+func (prepareStmt *PrepareStmt) refreshGeometrySRIDParamPositions(preparePlan *plan2.Plan) {
+	if prepareStmt.geometrySRIDPositionsPlan == preparePlan {
+		return
+	}
+	prepareStmt.geometrySRIDParamPositions,
+		prepareStmt.geometrySRIDSourceParamPositions =
+		plan2.PreparedPlanGeometrySRIDCacheParamPositions(preparePlan)
+	prepareStmt.geometrySRIDPositionsPlan = preparePlan
+}
+
 func preparedPositionHasStaticExactNumericPeer(preparePlan *plan2.Plan, position int) bool {
 	found := false
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
@@ -1464,6 +1474,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.protocolVersion = protocolVersion
 		prepareStmt.needsRebuild = false
 	}
+	prepareStmt.refreshGeometrySRIDParamPositions(executionPlan)
 	if !needRebuild && hasPreparedGroupConcat && groupConcatMaxLenFloor > previousGroupConcatMaxLenFloor {
 		// Keep the cached COM_STMT_PREPARE metadata in sync with the monotonic
 		// execution floor. The current execution gets the same bytes immediately;
@@ -1812,7 +1823,9 @@ func initExecuteStmtParamWithResolverInSession(
 	if cacheableRuntimeQuery {
 		if runtimeCategoryCandidate {
 			runtimeCacheKey = preparedRuntimeSemanticKey(cwft.paramVals)
-			if geometryKey := plan2.PreparedPlanGeometrySRIDSemanticKey(executionPlan, cwft.paramVals); geometryKey != "" {
+			if geometryKey := plan2.PreparedPlanGeometrySRIDSemanticKeyForPositions(
+				cwft.paramVals, prepareStmt.geometrySRIDParamPositions,
+				prepareStmt.geometrySRIDSourceParamPositions); geometryKey != "" {
 				runtimeCacheKey += geometryKey
 			}
 		} else {

@@ -1891,7 +1891,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		compareArgTypes := regexpDomainsDeferred
 		geometrySRIDParamPos := -1
 		if isPreparedGeometrySRIDFunction(functionName) && len(originalArgs) >= 2 {
-			if position, ok := preparedParamPosition(originalArgs[len(originalArgs)-1]); ok {
+			positions := preparedGeometrySRIDParamPositionsInExpr(originalArgs[len(originalArgs)-1])
+			if len(positions) == 1 {
+				position := int(positions[0])
 				geometrySRIDParamPos = position
 				// The SRID is part of the result type metadata, so the function
 				// must be rebound even when the parameter's scalar type stays
