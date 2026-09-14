@@ -1115,6 +1115,23 @@ func TestParquetValueNullnessMustMatchDefinitionLevels(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquetOptionalNoNullPageRetainsDefinitionLevel(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeColumnAndGetPage(t, parquet.Optional(parquet.Leaf(parquet.BooleanType)), []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.BooleanValue(false).Level(0, 1, 0)},
+	})
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, mp.mapping(page, proc, vec))
+	require.Equal(t, []bool{true, false}, vector.MustFixedColWithTypeCheck[bool](vec))
+	require.False(t, vec.GetNulls().Contains(0))
+	require.False(t, vec.GetNulls().Contains(1))
+}
+
 func TestParquetGenericMappingRejectsValueKindMismatch(t *testing.T) {
 	proc := testutil.NewProc(t)
 	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))
@@ -5501,10 +5518,16 @@ func Test_prepareNullCheck_simplePaths(t *testing.T) {
 	require.False(t, nc.isNull(1))
 
 	// when srcNull true but page has no nulls -> noNulls should be true
-	mp = &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 0}
-	nc, err = prepareNullCheck(ctx, mp, page)
+	optionalPage := &parquetPageWithDefinitionLevels{
+		Page:     page,
+		levels:   []byte{1, 1},
+		numNulls: 0,
+	}
+	mp = &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}
+	nc, err = prepareNullCheck(ctx, mp, optionalPage)
 	require.NoError(t, err)
 	require.True(t, nc.noNulls)
+	require.Equal(t, byte(1), nc.maxDefinitionLevel)
 	require.False(t, nc.isNull(0))
 }
 

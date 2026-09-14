@@ -2286,8 +2286,9 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 			return nullCheckInfo{}, err
 		}
 		return nullCheckInfo{
-			noNulls:        true,
-			actualNonNulls: int64(numRows),
+			noNulls:            true,
+			maxDefinitionLevel: mp.maxDefinitionLevel,
+			actualNonNulls:     int64(numRows),
 		}, nil
 	}
 
@@ -2297,8 +2298,9 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 			return nullCheckInfo{}, err
 		}
 		return nullCheckInfo{
-			noNulls:        true,
-			actualNonNulls: int64(numRows),
+			noNulls:            true,
+			maxDefinitionLevel: mp.maxDefinitionLevel,
+			actualNonNulls:     int64(numRows),
 		}, nil
 	}
 
