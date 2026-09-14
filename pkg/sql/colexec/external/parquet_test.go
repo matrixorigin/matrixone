@@ -3053,6 +3053,26 @@ func TestParquet_Dictionary_Bool_IndexCountError(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquet_Dictionary_Bool_NullToNotNull(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Optional(parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary))
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+	require.NotNil(t, mp)
+	err := mp.mapping(page, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation), "unexpected error: %v", err)
+	require.Contains(t, err.Error(), "cannot load NULL value")
+	require.Zero(t, vec.Length())
+}
+
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	// Reduce batch size so scan steps across multiple calls
 	save := maxParquetBatchCnt
