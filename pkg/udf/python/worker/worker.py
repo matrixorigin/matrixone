@@ -2186,10 +2186,12 @@ class _HandlerProcessSession:
                 raise ValueError("RESOURCE_EXHAUSTED: handler execution slots are full")
             self._slot_acquired = True
             response_read_fd, response_write_fd = os.pipe()
-            parent_watch_read_fd, parent_watch_write_fd = os.pipe()
-            watchdog_read_fd = os.dup(parent_watch_read_fd)
+            # Publish each acquired descriptor to its cleanup owner before
+            # the next allocation can fail (in particular under FD pressure).
             self._response_read_fd = response_read_fd
+            parent_watch_read_fd, parent_watch_write_fd = os.pipe()
             self._parent_watch_write_fd = parent_watch_write_fd
+            watchdog_read_fd = os.dup(parent_watch_read_fd)
             popen_kwargs = {
                 "stdin": subprocess.PIPE,
                 # Handler output is diagnostic-only.  It must never share the
