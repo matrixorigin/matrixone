@@ -90,6 +90,71 @@ func TestParse256(t *testing.T) {
 	}
 }
 
+func TestDecimal256ModScaleAlignmentOverflow(t *testing.T) {
+	maxCoefficient := new(big.Int).Sub(
+		new(big.Int).Exp(big.NewInt(10), big.NewInt(65), nil), big.NewInt(1))
+	maximum, err := ParseDecimal256(maxCoefficient.String(), 65, 0)
+	require.NoError(t, err)
+	seven := Decimal256FromInt64(7)
+
+	for _, scaleDiff := range []int32{11, 12, 30, 65} {
+		t.Run(fmt.Sprintf("scale_diff_%d", scaleDiff), func(t *testing.T) {
+			factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleDiff)), nil)
+			wantMagnitude := new(big.Int).Mul(maxCoefficient, factor)
+			wantMagnitude.Mod(wantMagnitude, big.NewInt(7))
+
+			for _, signDividend := range []bool{false, true} {
+				for _, signDivisor := range []bool{false, true} {
+					dividend, divisor := maximum, seven
+					if signDividend {
+						dividend = dividend.Minus()
+					}
+					if signDivisor {
+						divisor = divisor.Minus()
+					}
+					got, resultScale, err := dividend.Mod(divisor, 0, scaleDiff)
+					require.NoError(t, err)
+					require.Equal(t, scaleDiff, resultScale)
+
+					want := new(big.Int).Set(wantMagnitude)
+					if signDividend {
+						want.Neg(want)
+					}
+					wantDecimal := Decimal256FromInt64(want.Int64())
+					require.Equal(t, wantDecimal, got)
+				}
+			}
+		})
+	}
+
+	// Scaling the divisor overflows, but it is mathematically larger than the
+	// small dividend, so the remainder remains the dividend at the common scale.
+	for _, signDividend := range []bool{false, true} {
+		for _, signDivisor := range []bool{false, true} {
+			dividend, divisor := seven, maximum
+			if signDividend {
+				dividend = dividend.Minus()
+			}
+			if signDivisor {
+				divisor = divisor.Minus()
+			}
+			got, resultScale, err := dividend.Mod(divisor, 30, 0)
+			require.NoError(t, err)
+			require.Equal(t, int32(30), resultScale)
+			want := int64(7)
+			if signDividend {
+				want = -want
+			}
+			require.Equal(t, Decimal256FromInt64(want), got)
+		}
+	}
+
+	minimum := Decimal256{B192_255: uint64(1) << 63}
+	got, _, err := minimum.Mod(seven, 77, 0)
+	require.NoError(t, err)
+	require.Equal(t, minimum, got)
+}
+
 func TestParse256LargePositiveExponentReturnsErrorWithoutPanic(t *testing.T) {
 	var err error
 	require.NotPanics(t, func() {
@@ -420,6 +485,100 @@ func TestDecimal128OverDiv(t *testing.T) {
 	if err != nil || z.Format(0) != "10000000000000000000000000000000000" {
 		panic("wrong")
 	}
+}
+
+func TestDecimal128Div128HalfUpLargeDivisor(t *testing.T) {
+	fromBig := func(value *big.Int) Decimal128 {
+		t.Helper()
+		if value.Sign() < 0 || value.BitLen() > 127 {
+			t.Fatalf("value does not fit a positive Decimal128: %s", value)
+		}
+		hi := new(big.Int).Rsh(new(big.Int).Set(value), 64).Uint64()
+		return Decimal128{B0_63: value.Uint64(), B64_127: hi}
+	}
+	toBig := func(value Decimal128) *big.Int {
+		result := new(big.Int).SetUint64(value.B64_127)
+		result.Lsh(result, 64)
+		return result.Or(result, new(big.Int).SetUint64(value.B0_63))
+	}
+
+	for _, divisorCase := range []struct {
+		name  string
+		value string
+	}{
+		{name: "even", value: "100000000000000000000"},
+		{name: "odd", value: "100000000000000000001"},
+	} {
+		divisor, ok := new(big.Int).SetString(divisorCase.value, 10)
+		require.True(t, ok)
+		half := new(big.Int).Rsh(new(big.Int).Set(divisor), 1)
+		for _, quotient := range []int64{0, 1, 123456, 850705917302346158} {
+			for _, delta := range []int64{-1, 0, 1} {
+				t.Run(fmt.Sprintf("%s_q_%d_delta_%d", divisorCase.name, quotient, delta), func(t *testing.T) {
+					x := new(big.Int).Mul(big.NewInt(quotient), divisor)
+					x.Add(x, half)
+					x.Add(x, big.NewInt(delta))
+					input := fromBig(x)
+					divisor128 := fromBig(divisor)
+
+					got, err := input.Div128(divisor128)
+					require.NoError(t, err)
+
+					want, remainder := new(big.Int), new(big.Int)
+					want.QuoRem(x, divisor, remainder)
+					if new(big.Int).Lsh(remainder, 1).Cmp(divisor) >= 0 {
+						want.Add(want, big.NewInt(1))
+					}
+					require.Equal(t, want, toBig(got))
+				})
+			}
+		}
+	}
+
+	t.Run("odd half threshold carries into high limb", func(t *testing.T) {
+		x := new(big.Int).Lsh(big.NewInt(1), 64)
+		y := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 65), big.NewInt(1))
+		got, err := fromBig(x).Div128(fromBig(y))
+		require.NoError(t, err)
+		require.Equal(t, big.NewInt(1), toBig(got))
+	})
+
+	t.Run("corrects high quotient estimate at signed limit", func(t *testing.T) {
+		x := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
+		y := new(big.Int).Add(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(3))
+		input, divisor := fromBig(x), fromBig(y)
+
+		truncated, err := input.Div128Trunc(divisor)
+		require.NoError(t, err)
+		wantTruncated := new(big.Int).Quo(new(big.Int).Set(x), y)
+		require.Equal(t, wantTruncated, toBig(truncated))
+
+		got, err := input.Div128(divisor)
+		require.NoError(t, err)
+
+		want, remainder := new(big.Int), new(big.Int)
+		want.QuoRem(x, y, remainder)
+		if new(big.Int).Lsh(remainder, 1).Cmp(y) >= 0 {
+			want.Add(want, big.NewInt(1))
+		}
+		require.Equal(t, big.NewInt(9223372036854775807), want)
+		require.Equal(t, want, toBig(got))
+	})
+
+	t.Run("rounded quotient reaches the high bit of the low limb", func(t *testing.T) {
+		x := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
+		y := new(big.Int).Lsh(big.NewInt(1), 64)
+		got, err := fromBig(x).Div128(fromBig(y))
+		require.NoError(t, err)
+		want := new(big.Int).Lsh(big.NewInt(1), 63)
+		require.Equal(t, want, toBig(got))
+	})
+}
+
+func TestDecimal128Div128TruncByZero(t *testing.T) {
+	_, err := (Decimal128{B0_63: 1}).Div128Trunc(Decimal128{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Decimal128 Div by Zero")
 }
 
 func TestParseFormat(t *testing.T) {

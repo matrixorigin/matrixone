@@ -164,6 +164,20 @@ func TestMaxPreparedStmtCountReachedMySQLError(t *testing.T) {
 		err.Error())
 }
 
+func TestInvalidBitwiseOperandsSizeMySQLError(t *testing.T) {
+	for _, err := range []*Error{
+		NewInvalidBitwiseOperandsSize(context.Background()),
+		NewInvalidBitwiseOperandsSizeNoCtx(),
+	} {
+		require.Equal(t, ErrInvalidBitwiseOperandsSize, err.ErrorCode())
+		require.Equal(t, ER_INVALID_BITWISE_OPERANDS_SIZE, err.MySQLCode())
+		require.Equal(t, "HY000", err.SqlState())
+		require.Equal(t,
+			"Binary operands of bitwise operators must be of equal length",
+			err.Error())
+	}
+}
+
 func TestIsMoErrCode(t *testing.T) {
 	err := NewDivByZero(context.TODO())
 	require.True(t, IsMoErrCode(err, ErrDivByZero))
