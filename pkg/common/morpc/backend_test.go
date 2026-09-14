@@ -504,9 +504,13 @@ func TestWaitWriteWakesWhenBackendStops(t *testing.T) {
 }
 
 func TestReadTimeoutWithNormalMessageMissed(t *testing.T) {
+	accepted := make(chan struct{}, 1)
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
 			request := msg.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
 			if request.internal {
 				if m, ok := request.Message.(*flagOnlyMessage); ok {
 					switch m.flag {
@@ -524,6 +528,9 @@ func TestReadTimeoutWithNormalMessageMissed(t *testing.T) {
 					}
 				}
 			}
+			if !request.internal {
+				accepted <- struct{}{}
+			}
 			// no response
 			return nil
 		},
@@ -534,6 +541,7 @@ func TestReadTimeoutWithNormalMessageMissed(t *testing.T) {
 			f, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f.Close()
+			requireTestRequestAccepted(t, accepted)
 			_, err = f.Get()
 			assert.Equal(t, ctx.Err(), err)
 		},
@@ -542,8 +550,16 @@ func TestReadTimeoutWithNormalMessageMissed(t *testing.T) {
 }
 
 func TestReadTimeout(t *testing.T) {
+	accepted := make(chan struct{}, 1)
 	testBackendSend(t,
-		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
+		func(_ goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
+			if !request.internal {
+				accepted <- struct{}{}
+			}
 			// no response
 			return nil
 		},
@@ -554,6 +570,7 @@ func TestReadTimeout(t *testing.T) {
 			f, err := b.Send(ctx, req)
 			assert.NoError(t, err)
 			defer f.Close()
+			requireTestRequestAccepted(t, accepted)
 			_, err = f.Get()
 			assert.NotEqual(t, backendClosed, err)
 		},
@@ -955,10 +972,16 @@ func TestTimedOutRequestStillDrainsBlackholedBackend(t *testing.T) {
 	accepted := make(chan struct{}, 1)
 	probed := make(chan struct{}, 1)
 	testBackendSend(t,
-		func(goetty.IOSession, interface{}, uint64) error {
-			// Simulate a request accepted by the peer whose data response path
-			// never makes progress.
-			accepted <- struct{}{}
+		func(_ goetty.IOSession, value interface{}, _ uint64) error {
+			request := value.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
+			// Simulate a user request accepted by the peer whose data response
+			// path never makes progress. Control traffic is not a send barrier.
+			if !request.internal {
+				accepted <- struct{}{}
+			}
 			return nil
 		},
 		func(b *remoteBackend) {
@@ -972,11 +995,7 @@ func TestTimedOutRequestStillDrainsBlackholedBackend(t *testing.T) {
 					f.Close()
 				}
 			}()
-			select {
-			case <-accepted:
-			case <-time.After(time.Second):
-				t.Fatal("peer did not accept the request")
-			}
+			requireTestRequestAccepted(t, accepted)
 			ctx.expire()
 			_, err = f.Get()
 			require.ErrorIs(t, err, context.DeadlineExceeded)
@@ -1008,28 +1027,44 @@ func TestTimedOutRequestStillDrainsBlackholedBackend(t *testing.T) {
 func TestContinuousTimedOutRequestsCannotPostponeProbe(t *testing.T) {
 	var probes atomic.Int32
 	probeCalled := make(chan struct{}, 1)
+	accepted := make(chan struct{}, 1)
 	testBackendSend(t,
-		func(goetty.IOSession, interface{}, uint64) error {
+		func(_ goetty.IOSession, message interface{}, _ uint64) error {
+			request := message.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
+			// A response timeout must be tested after the request has crossed the
+			// transport. Otherwise a short context can expire while the writer is
+			// still encoding the frame, and the writer correctly retires a
+			// connection after an encode failure.
+			if !request.internal {
+				accepted <- struct{}{}
+			}
 			return nil
 		},
 		func(b *remoteBackend) {
 			deadline := time.Now().Add(time.Second)
 			probeObserved := false
 			for !probeObserved && time.Now().Before(deadline) {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
-				f, err := b.Send(ctx, newTestMessage(1))
-				if err == nil {
-					_, _ = f.Get()
-					f.Close()
-				} else {
-					require.Truef(
-						t,
-						errors.Is(err, context.DeadlineExceeded) || errors.Is(err, backendDraining),
-						"unexpected request error before draining publication: %v",
-						err,
-					)
-				}
-				cancel()
+				func() {
+					// Keep the transport deadline well beyond the send barrier, then
+					// expire the request explicitly. This isolates response timeout
+					// accounting from queue and codec scheduling.
+					ctx := newManuallyExpiringContext(time.Now().Add(time.Hour))
+					defer ctx.expire()
+					f, err := b.Send(ctx, newTestMessage(1))
+					if err == nil {
+						defer f.Close()
+						requireTestRequestAccepted(t, accepted)
+						ctx.expire()
+						_, err = f.Get()
+						require.ErrorIs(t, err, context.DeadlineExceeded)
+					} else {
+						require.ErrorIs(t, err, backendDraining,
+							"unexpected request error before draining publication")
+					}
+				}()
 				select {
 				case <-probeCalled:
 					probeObserved = true
@@ -1059,6 +1094,24 @@ func TestContinuousTimedOutRequestsCannotPostponeProbe(t *testing.T) {
 			return nil
 		}),
 	)
+}
+
+func requireTestRequestAccepted(t *testing.T, accepted <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("peer did not accept the request")
+	}
+}
+
+func requireTestFutureReleased(t *testing.T, released <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("Future release did not complete")
+	}
 }
 
 func TestDataProgressLatchPreservesWriteReadOrdering(t *testing.T) {
@@ -1395,50 +1448,128 @@ func TestSendWithPayloadCannotTimeout(t *testing.T) {
 }
 
 func TestSendWithPayloadCannotBlockIfFutureRemoved(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
+	entered := make(chan struct{})
+	responseWriteErr := make(chan error, 1)
+	responseHandled := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
+	var releaseOnce sync.Once
+	var responseHandledOnce sync.Once
+	releaseHandler := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
-			wg.Wait()
-			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+			request := msg.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
+			if request.internal {
+				return nil
+			}
+			enteredOnce.Do(func() { close(entered) })
+			<-release
+			err := conn.Write(msg, goetty.WriteOptions{Flush: true})
+			responseWriteErr <- err
+			return err
 		},
 		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
-			defer cancel()
+			defer releaseHandler()
+			ctx := newManuallyExpiringContext(time.Now().Add(time.Hour))
+			defer ctx.expire()
 			req := newTestMessage(1)
 			req.payload = []byte("hello")
 			f, err := b.Send(ctx, req)
 			require.NoError(t, err)
+			var closeOnce sync.Once
+			closeFuture := func() {
+				closeOnce.Do(func() { f.Close() })
+			}
+			defer closeFuture()
+
+			released := make(chan struct{})
+			f.mu.Lock()
+			originalRelease := f.releaseFunc
+			if originalRelease == nil {
+				f.mu.Unlock()
+				t.Fatal("backend Future has no release callback")
+			}
+			f.releaseFunc = func(releasedFuture *Future) {
+				releasedFuture.mu.Lock()
+				releasedFuture.releaseFunc = originalRelease
+				releasedFuture.mu.Unlock()
+				originalRelease(releasedFuture)
+				close(released)
+			}
+			f.mu.Unlock()
+
+			requireTestRequestAccepted(t, entered)
+			require.NoError(t, f.waitSendCompleted())
 			id := f.getSendMessageID()
-			// keep future in the futures map
-			f.ref()
-			defer f.unRef()
-			f.Close()
+			closeFuture()
+			requireTestFutureReleased(t, released)
 			b.mu.RLock()
 			_, ok := b.mu.futures[id]
-			assert.True(t, ok)
 			b.mu.RUnlock()
-			wg.Done()
-			time.Sleep(time.Second)
+			require.False(t, ok,
+				"Future release must remove the request before the response is allowed")
+			releaseHandler()
+			select {
+			case err := <-responseWriteErr:
+				require.NoError(t, err,
+					"server response write failed after the Future was removed")
+			case <-time.After(time.Second):
+				t.Fatal("server response remained blocked after the Future was removed")
+			}
+			// In payload mode this callback runs after requestDone has released the
+			// read buffer, so the test also proves the orphan response was consumed.
+			select {
+			case <-responseHandled:
+			case <-time.After(time.Second):
+				t.Fatal("client did not finish handling the orphaned payload response")
+			}
 		},
-		WithBackendHasPayloadResponse())
+		WithBackendHasPayloadResponse(),
+		WithBackendFreeOrphansResponse(func(Message) {
+			responseHandledOnce.Do(func() { close(responseHandled) })
+		}))
 }
 
 func TestSendWithPayloadCannotBlockIfFutureClosed(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(1)
+	entered := make(chan struct{})
+	responseWriteErr := make(chan error, 1)
+	responseHandled := make(chan struct{})
+	release := make(chan struct{})
+	var enteredOnce sync.Once
+	var releaseOnce sync.Once
+	var responseHandledOnce sync.Once
+	releaseHandler := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, _ uint64) error {
-			wg.Wait()
-			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+			request := msg.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
+			if request.internal {
+				return nil
+			}
+			enteredOnce.Do(func() { close(entered) })
+			<-release
+			err := conn.Write(msg, goetty.WriteOptions{Flush: true})
+			responseWriteErr <- err
+			return err
 		},
 		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*100)
-			defer cancel()
+			defer releaseHandler()
+			ctx := newManuallyExpiringContext(time.Now().Add(time.Hour))
+			defer ctx.expire()
 			req := newTestMessage(1)
 			req.payload = []byte("hello")
 			f, err := b.Send(ctx, req)
 			require.NoError(t, err)
+			requireTestRequestAccepted(t, entered)
 			id := f.getSendMessageID()
 			f.mu.Lock()
 			f.mu.closed = true
@@ -1448,10 +1579,26 @@ func TestSendWithPayloadCannotBlockIfFutureClosed(t *testing.T) {
 			_, ok := b.mu.futures[id]
 			b.mu.RUnlock()
 			assert.True(t, ok)
-			wg.Done()
-			time.Sleep(time.Second)
+			releaseHandler()
+			select {
+			case err := <-responseWriteErr:
+				require.NoError(t, err,
+					"server response write failed after the Future was closed")
+			case <-time.After(time.Second):
+				t.Fatal("server response remained blocked after the Future was closed")
+			}
+			// In payload mode this callback runs after requestDone has released the
+			// read buffer, so the test also proves the closed Future response was consumed.
+			select {
+			case <-responseHandled:
+			case <-time.After(time.Second):
+				t.Fatal("client did not finish handling the closed Future payload response")
+			}
 		},
-		WithBackendHasPayloadResponse())
+		WithBackendHasPayloadResponse(),
+		WithBackendFreeOrphansResponse(func(Message) {
+			responseHandledOnce.Do(func() { close(responseHandled) })
+		}))
 }
 
 func TestCloseWhileContinueSending(t *testing.T) {
@@ -1528,22 +1675,31 @@ func TestSendWithAlreadyContextDone(t *testing.T) {
 }
 
 func TestSendWithTimeout(t *testing.T) {
+	accepted := make(chan struct{}, 1)
 	testBackendSend(t,
-		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+		func(_ goetty.IOSession, msg interface{}, _ uint64) error {
+			request := msg.(RPCMessage)
+			if request.Cancel != nil {
+				defer request.Cancel()
+			}
+			if !request.internal {
+				accepted <- struct{}{}
+			}
 			return nil
 		},
 		func(b *remoteBackend) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*200)
-			defer cancel()
+			ctx := newManuallyExpiringContext(time.Now().Add(time.Hour))
+			defer ctx.expire()
 			req := &testMessage{id: 1}
 			f, err := b.Send(ctx, req)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			defer f.Close()
+			requireTestRequestAccepted(t, accepted)
 
+			ctx.expire()
 			resp, err := f.Get()
-			assert.Error(t, err)
-			assert.Nil(t, resp)
-			assert.Equal(t, err, ctx.Err())
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.Nil(t, resp)
 		},
 	)
 }

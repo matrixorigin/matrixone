@@ -1668,6 +1668,13 @@ func doDateStringAdd(startStr string, diff int64, iTyp types.IntervalType) (type
 		}
 		return dt, nil
 	} else {
+		// AddInterval validates microsecond results in the encoded datetime
+		// domain.  Do not reconstruct a rejected negative value below: integer
+		// division in ToDate can otherwise make -1..-999999 microseconds look
+		// like the minimum date and publish ZeroDatetime instead of NULL.
+		if iTyp == types.MicroSecond {
+			return 0, datetimeOverflowMaxError
+		}
 		// MySQL behavior:
 		// - If overflow beyond maximum (diff > 0), return NULL
 		// - If overflow beyond minimum (diff < 0):
@@ -1764,7 +1771,11 @@ func doTimestampAdd(loc *time.Location, start types.Timestamp, diff int64, iTyp 
 		}
 		return dt.ToTimestamp(loc), nil
 	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("timestamp", "")
+		// The vector callers translate this sentinel into a row-local NULL.
+		// AddInterval returning false means the computed calendar value is
+		// outside the supported temporal domain, not that the whole query is
+		// malformed.
+		return 0, datetimeOverflowMaxError
 	}
 }
 
@@ -2420,7 +2431,7 @@ func DatetimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		scale = 6
 	}
 	rs := vector.MustFunctionResult[types.Datetime](result)
-	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+	rs.TempSetType(types.New(types.T_datetime, scale, scale))
 
 	// Use custom implementation to handle maximum overflow (return NULL)
 	result.UseOptFunctionParamFrame(2)
@@ -2543,7 +2554,7 @@ func TimestampAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.MicroSecond:
 		scale = 6
 	}
-	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+	rs.TempSetType(types.New(types.T_timestamp, scale, scale))
 
 	result.UseOptFunctionParamFrame(2)
 	p1 := vector.OptGetParamFromWrapper[types.Timestamp](rs, 0, ivecs[0])
@@ -2592,7 +2603,7 @@ func TimeAdd(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	case types.MicroSecond:
 		scale = 6
 	}
-	rs.TempSetType(types.New(types.T_time, 0, scale))
+	rs.TempSetType(types.New(types.T_time, scale, scale))
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Time, int64, types.Time](ivecs, result, proc, length, func(v1 types.Time, v2 int64) (types.Time, error) {
 		return doTimeAdd(v1, v2, iTyp)
@@ -2640,7 +2651,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			if resultType == types.T_date {
 				// Result wrapper is DATE, but we need to return DATETIME
 				// Convert to DATETIME type
-				vec.SetTypeAndFixData(types.New(types.T_datetime, 0, scale), proc.GetMPool())
+				vec.SetTypeAndFixData(types.New(types.T_datetime, scale, scale), proc.GetMPool())
 				rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 				rsNull := vec.GetNulls()
 
@@ -2668,7 +2679,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			} else {
 				// Result wrapper is DATETIME (backward compatibility)
 				rsDatetime := vector.MustFunctionResult[types.Datetime](result)
-				rsDatetime.TempSetType(types.New(types.T_datetime, 0, scale))
+				rsDatetime.TempSetType(types.New(types.T_datetime, scale, scale))
 				rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 				rsNull := vec.GetNulls()
 
@@ -2782,7 +2793,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		scale := maxScale
 		if resultType == types.T_date {
 			// Result wrapper is DATE, but we need to return DATETIME
-			vec.SetTypeAndFixData(types.New(types.T_datetime, 0, scale), proc.GetMPool())
+			vec.SetTypeAndFixData(types.New(types.T_datetime, scale, scale), proc.GetMPool())
 			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 			rsNull := vec.GetNulls()
 
@@ -2815,7 +2826,7 @@ func TimestampAddDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		} else {
 			// Result wrapper is DATETIME
 			rsDatetime := vector.MustFunctionResult[types.Datetime](result)
-			rsDatetime.TempSetType(types.New(types.T_datetime, 0, scale))
+			rsDatetime.TempSetType(types.New(types.T_datetime, scale, scale))
 			rss := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 			rsNull := vec.GetNulls()
 
@@ -2932,7 +2943,7 @@ func TimestampAddDatetime(ivecs []*vector.Vector, result vector.FunctionResultWr
 		}
 	}
 	rs := vector.MustFunctionResult[types.Datetime](result)
-	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+	rs.TempSetType(types.New(types.T_datetime, scale, scale))
 
 	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[2])
 	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -2983,7 +2994,7 @@ func TimestampAddTimestamp(ivecs []*vector.Vector, result vector.FunctionResultW
 		scale = 6
 	}
 	rs := vector.MustFunctionResult[types.Timestamp](result)
-	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+	rs.TempSetType(types.New(types.T_timestamp, scale, scale))
 
 	timestamps := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[2])
 	intervals := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
@@ -3215,45 +3226,145 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 
 	// Handle different input types for N
 	// MySQL behavior:
-	// - For numeric types: always treat as base 10, regardless of from_base
-	// - For string types: parse according to from_base
+	// - For ordinary numeric types: render the value as text and parse its
+	//   leading digits according to from_base.
+	// - BIT/bit literals are the exception: MySQL reads their numeric value
+	//   directly and does not reparse it using from_base.
+	// - For string types: parse according to from_base.
 	inputType := ivecs[0].GetType()
 	switch inputType.Oid {
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob:
 		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+	case types.T_bool:
+		return convMappedInt64(
+			vector.GenerateFunctionFixedTypeParameter[bool](ivecs[0]),
+			func(v bool) int64 {
+				if v {
+					return 1
+				}
+				return 0
+			}, toBase, rs, length, selectList)
+	case types.T_bit:
+		return convUnsignedDirect(
+			vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0]),
+			toBase, rs, length, selectList)
+	case types.T_any:
+		// T_any is only the function-local representation of an untyped NULL
+		// or a marker before execute-time specialization. It must propagate
+		// NULL and never reach a fixed-width/string accessor.
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-		// Numeric types are always treated as base 10
+		// Numeric values are first rendered in their decimal form, then their
+		// leading digits are parsed using from_base. This is the same prefix
+		// contract as string inputs; the typed vector only avoids formatting the
+		// value through a general-purpose string cast.
 		switch inputType.Oid {
 		case types.T_int8:
-			return convInt8Direct(ivecs[0], toBase, rs, length, selectList)
+			return convSignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		case types.T_int16:
-			return convInt16Direct(ivecs[0], toBase, rs, length, selectList)
+			return convSignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		case types.T_int32:
-			return convInt32Direct(ivecs[0], toBase, rs, length, selectList)
+			return convSignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		default:
-			return convInt64Direct(ivecs[0], toBase, rs, length, selectList)
+			return convSignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		}
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		// Numeric types are always treated as base 10
 		switch inputType.Oid {
 		case types.T_uint8:
-			return convUint8Direct(ivecs[0], toBase, rs, length, selectList)
+			return convUnsignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		case types.T_uint16:
-			return convUint16Direct(ivecs[0], toBase, rs, length, selectList)
+			return convUnsignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		case types.T_uint32:
-			return convUint32Direct(ivecs[0], toBase, rs, length, selectList)
+			return convUnsignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		default:
-			return convUint64Direct(ivecs[0], toBase, rs, length, selectList)
+			return convUnsignedPrefix(
+				vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0]),
+				fromBase, toBase, rs, length, selectList)
 		}
 	case types.T_float32, types.T_float64:
-		// Numeric types are always treated as base 10
+		// Floating values use MySQL's string/prefix conversion semantics.
 		if inputType.Oid == types.T_float32 {
-			return convFloat32Direct(ivecs[0], toBase, rs, length, selectList)
+			return convFloatPrefix(
+				vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0]),
+				32, fromBase, toBase, rs, length, selectList)
 		}
-		return convFloat64Direct(ivecs[0], toBase, rs, length, selectList)
+		return convFloatPrefix(
+			vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0]),
+			64, fromBase, toBase, rs, length, selectList)
+	case types.T_decimal64:
+		return convDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0]),
+			func(v types.Decimal64) string { return v.Format(inputType.Scale) },
+			fromBase, toBase, rs, length, selectList)
+	case types.T_decimal128:
+		return convDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0]),
+			func(v types.Decimal128) string { return v.Format(inputType.Scale) },
+			fromBase, toBase, rs, length, selectList)
+	case types.T_decimal256:
+		return convDecimalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0]),
+			func(v types.Decimal256) string { return v.Format(inputType.Scale) },
+			fromBase, toBase, rs, length, selectList)
+	case types.T_date:
+		return convTemporalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0]),
+			func(dst []byte, v types.Date) []byte {
+				return strconv.AppendInt(dst, int64(v.Year()), 10)
+			}, fromBase, toBase, rs, length, selectList)
+	case types.T_datetime:
+		return convTemporalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0]),
+			func(dst []byte, v types.Datetime) []byte {
+				return strconv.AppendInt(dst, int64(v.Year()), 10)
+			}, fromBase, toBase, rs, length, selectList)
+	case types.T_timestamp:
+		zone := time.Local
+		if proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		return convTemporalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0]),
+			func(dst []byte, v types.Timestamp) []byte {
+				return strconv.AppendInt(dst, int64(v.ToDatetime(zone).Year()), 10)
+			}, fromBase, toBase, rs, length, selectList)
+	case types.T_time:
+		return convTemporalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0]),
+			func(dst []byte, v types.Time) []byte {
+				return strconv.AppendInt(dst, v.Hour(), 10)
+			}, fromBase, toBase, rs, length, selectList)
+	case types.T_year:
+		return convTemporalPrefix(
+			vector.GenerateFunctionFixedTypeParameter[types.MoYear](ivecs[0]),
+			func(dst []byte, v types.MoYear) []byte {
+				return strconv.AppendInt(dst, v.ToInt64(), 10)
+			}, fromBase, toBase, rs, length, selectList)
 	default:
-		// For other types, try to convert to string first
-		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+		// Never pass a fixed-width vector to GenerateFunctionStrParameter:
+		// doing so is the panic reported by #28461. Unsupported input types
+		// must fail at the function boundary instead.
+		return moerr.NewInvalidArg(proc.Ctx, "function conv", inputType.Oid)
 	}
 }
 
@@ -3276,7 +3387,7 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 	nParam := vector.GenerateFunctionStrParameter(nVec)
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3300,21 +3411,392 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 			continue
 		}
 
-		signedVal, unsignedVal, signed, err := parseBaseIntegerPrefix(nStr, fromBase)
-		if err != nil {
-			return err
-		}
-		if signed {
-			if err := rs.AppendBytes([]byte(formatSignedToBase(signedVal, toBase)), false); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := rs.AppendBytes([]byte(formatUnsignedToBase(unsignedVal, toBase)), false); err != nil {
+		if err := appendConvPrefix(rs, nStr, fromBase, toBase); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func convMappedInt64[T types.FixedSizeTExceptStrType](
+	nParam vector.FunctionParameterWrapper[T], mapValue func(T) int64,
+	toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes([]byte(formatSignedToBase(mapValue(value), toBase)), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendConvPrefix(
+	rs *vector.FunctionResult[types.Varlena], text []byte, fromBase, toBase int64,
+) error {
+	signedValue, unsignedValue, signed, err := parseBaseIntegerPrefix(text, fromBase)
+	if err != nil {
+		return err
+	}
+	if signed {
+		return rs.AppendBytes([]byte(formatSignedToBase(signedValue, toBase)), false)
+	}
+	return rs.AppendBytes([]byte(formatUnsignedToBase(unsignedValue, toBase)), false)
+}
+
+// convTemporalPrefix preserves CONV's string-prefix semantics for temporal
+// values. MySQL obtains a temporal value's textual form first (for example,
+// "2024-05-06" or "12:34:56") and parses the leading year/hour using
+// from_base. Only that leading numeric prefix is needed here, which avoids
+// formatting the remainder of every date/time value on the hot path.
+func convTemporalPrefix[T types.FixedSizeTExceptStrType](
+	nParam vector.FunctionParameterWrapper[T], appendPrefix func([]byte, T) []byte,
+	fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	var prefix [32]byte
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Reuse one stack buffer per batch row. The temporal prefix is at most
+		// the signed hour/year representation and never needs heap storage.
+		text := appendPrefix(prefix[:0], value)
+		if err := appendConvPrefix(rs, text, fromBase, toBase); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convDecimalPrefix[T types.Decimal](
+	nParam vector.FunctionParameterWrapper[T], formatValue func(T) string,
+	fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// DECIMAL is numeric input to CONV. MySQL consumes the integer
+		// prefix (15.9 -> 15), while the existing decimal-to-integer cast
+		// helpers round; do not reuse those helpers here.
+		if err := appendConvPrefix(rs, []byte(formatValue(value)), fromBase, toBase); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func convFloatPrefix[T types.Floats](
+	nParam vector.FunctionParameterWrapper[T], bitSize int, fromBase, toBase int64,
+	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		value, null := nParam.GetValue(i)
+		if null {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// MySQL's CONV first obtains the string representation of a floating
+		// value and then consumes the valid numeric prefix. In particular,
+		// 1e20 is parsed as the prefix "1", not as an integer conversion of
+		// the binary float. Keep the representation on the stack and share the
+		// same signed/unsigned parser as character and decimal inputs.
+		var buf [64]byte
+		text := appendMySQLNumericFloat(buf[:0], float64(value), bitSize)
+		if err := appendConvPrefix(rs, text, fromBase, toBase); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MySQL renders floating-point values with a fixed-point representation for a
+// wider exponent range than strconv's 'g' format. CONV and BIN consume the
+// integer prefix of that representation, so using Go's default boundary would
+// turn values such as 1000000 ("1e+06") into the prefix 1 instead of 1000000.
+//
+// This is the prefix-relevant part of MySQL's my_gcvt policy. A decimal point
+// position of -14 through 15 uses fixed notation when that representation fits
+// MySQL's type-specific output width; values outside that range remain
+// scientific unless the shortest representation has enough significant digits
+// to retain a fractional part beyond the 15-digit boundary.
+const (
+	mysqlFloatMaxDecimalPoint   = 15
+	mysqlFloat32MaxStringLength = 12 // FLT_DIG + 6
+	mysqlFloat64MaxStringLength = 22 // DBL_DIG + 7
+)
+
+func appendMySQLNumericFloat(dst []byte, value float64, bitSize int) []byte {
+	// my_gcvt uses FLT_DIG significant digits for FLOAT, while DOUBLE keeps
+	// the shortest round-trippable representation. Keep the rounded text as
+	// the source of any fixed-point rendering below; re-formatting the value
+	// with 'f' would put the discarded FLOAT digits back.
+	precision := -1
+	if bitSize == 32 {
+		precision = 6 // FLT_DIG
+	}
+	var textBuf [64]byte
+	text := strconv.AppendFloat(textBuf[:0], value, 'g', precision, bitSize)
+	maxLength := mysqlFloat64MaxStringLength
+	if bitSize == 32 {
+		maxLength = mysqlFloat32MaxStringLength
+	}
+	exponentPos := -1
+	for i, ch := range text {
+		if ch == 'e' || ch == 'E' {
+			exponentPos = i
+			break
+		}
+	}
+	if exponentPos < 0 {
+		// Go may choose fixed notation even when the complete representation
+		// exceeds my_gcvt's type-specific width. Re-render those rare values in
+		// scientific notation so CONV/BIN see the same integer prefix as MySQL.
+		if len(text) <= maxLength {
+			return append(dst[:0], text...)
+		}
+		return appendMySQLScientificValue(dst[:0], value, bitSize, maxLength)
+	}
+
+	exponent, ok := parseFloatExponent(text[exponentPos+1:])
+	if !ok {
+		// strconv only emits a valid exponent. Keep this defensive fallback
+		// total and preserve its original representation if that ever changes.
+		return text
+	}
+	decimalPoint := exponent + 1
+	significantDigits := 0
+	for _, ch := range text[:exponentPos] {
+		if ch >= '0' && ch <= '9' {
+			significantDigits++
+		}
+	}
+
+	if decimalPoint >= -mysqlFloatMaxDecimalPoint+1 &&
+		(decimalPoint <= mysqlFloatMaxDecimalPoint || significantDigits > decimalPoint) {
+		fixedLength := significantDigits
+		switch {
+		case decimalPoint <= 0:
+			fixedLength += 2 - decimalPoint // "0." plus leading zeroes
+		case decimalPoint < significantDigits:
+			fixedLength++ // decimal point between significant digits
+		default:
+			fixedLength = decimalPoint // trailing zeroes after the digits
+		}
+		if text[0] == '-' {
+			fixedLength++
+		}
+		if fixedLength > maxLength {
+			return appendMySQLScientificValue(dst[:0], value, bitSize, maxLength)
+		}
+		return appendMySQLFixedFloat(dst[:0], text[:exponentPos], exponent)
+	}
+	return appendMySQLScientificValue(dst[:0], value, bitSize, maxLength)
+}
+
+func appendMySQLFixedFloat(dst, mantissa []byte, exponent int) []byte {
+	var digits [64]byte
+	digitCount := 0
+	for _, ch := range mantissa {
+		if ch >= '0' && ch <= '9' {
+			digits[digitCount] = ch
+			digitCount++
+		}
+	}
+
+	if len(mantissa) > 0 && mantissa[0] == '-' {
+		dst = append(dst, '-')
+	}
+	decimalPoint := exponent + 1
+	switch {
+	case decimalPoint <= 0:
+		dst = append(dst, '0', '.')
+		for i := 0; i < -decimalPoint; i++ {
+			dst = append(dst, '0')
+		}
+		dst = append(dst, digits[:digitCount]...)
+	case decimalPoint < digitCount:
+		dst = append(dst, digits[:decimalPoint]...)
+		dst = append(dst, '.')
+		dst = append(dst, digits[decimalPoint:digitCount]...)
+	default:
+		dst = append(dst, digits[:digitCount]...)
+		for i := digitCount; i < decimalPoint; i++ {
+			dst = append(dst, '0')
+		}
+	}
+	return dst
+}
+
+func appendMySQLScientificFloat(dst, mantissa []byte, exponent int) []byte {
+	end := len(mantissa)
+	dot := -1
+	for i, ch := range mantissa {
+		if ch == '.' {
+			dot = i
+			break
+		}
+	}
+	if dot >= 0 {
+		for end > dot+1 && mantissa[end-1] == '0' {
+			end--
+		}
+		if end == dot+1 {
+			end--
+		}
+	}
+	dst = append(dst, mantissa[:end]...)
+	dst = append(dst, 'e')
+	// MySQL's e-format omits the plus sign and exponent zero padding.
+	return strconv.AppendInt(dst, int64(exponent), 10)
+}
+
+func appendMySQLScientificValue(dst []byte, value float64, bitSize, maxLength int) []byte {
+	precision := -1
+	if bitSize == 32 {
+		// 'e' precision counts digits after the decimal point.
+		precision = 5 // FLT_DIG - 1
+	}
+	var textBuf [64]byte
+	text := strconv.AppendFloat(textBuf[:0], value, 'e', precision, bitSize)
+	exponentPos := scientificFloatExponentPos(text)
+	if exponentPos < 0 {
+		return append(dst, text...)
+	}
+	exponent, ok := parseFloatExponent(text[exponentPos+1:])
+	if !ok {
+		return append(dst, text...)
+	}
+	var normalized [64]byte
+	text = appendMySQLScientificFloat(normalized[:0], text[:exponentPos], exponent)
+	if len(text) <= maxLength {
+		return append(dst, text...)
+	}
+
+	maxDigits := scientificFloatMantissaDigits(maxLength, value < 0, exponent)
+	for digits := maxDigits; digits > 0; digits-- {
+		text = strconv.AppendFloat(textBuf[:0], value, 'e', digits-1, bitSize)
+		exponentPos = scientificFloatExponentPos(text)
+		if exponentPos < 0 {
+			continue
+		}
+		exponent, ok = parseFloatExponent(text[exponentPos+1:])
+		if !ok {
+			continue
+		}
+		text = appendMySQLScientificFloat(normalized[:0], text[:exponentPos], exponent)
+		if len(text) <= maxLength {
+			return append(dst, text...)
+		}
+	}
+
+	return append(dst, text...)
+}
+
+func scientificFloatExponentPos(text []byte) int {
+	for i, ch := range text {
+		if ch == 'e' || ch == 'E' {
+			return i
+		}
+	}
+	return -1
+}
+
+func scientificFloatMantissaDigits(maxLength int, negative bool, exponent int) int {
+	exponentText := strconv.Itoa(exponent)
+	if exponentText[0] == '-' {
+		exponentText = exponentText[1:]
+	}
+	overhead := 1 + len(exponentText) // 'e' plus exponent digits
+	if exponent < 0 {
+		overhead++
+	}
+	if negative {
+		overhead++
+	}
+	available := maxLength - overhead
+	if available <= 1 {
+		return 1
+	}
+	// A mantissa with more than one significant digit needs one decimal
+	// point. The one-digit form remains available for the smallest width.
+	return available - 1
+}
+
+func parseFloatExponent(text []byte) (int, bool) {
+	if len(text) == 0 {
+		return 0, false
+	}
+
+	sign := 1
+	pos := 0
+	switch text[0] {
+	case '+':
+		pos++
+	case '-':
+		sign = -1
+		pos++
+	}
+	if pos == len(text) {
+		return 0, false
+	}
+
+	exponent := 0
+	for ; pos < len(text); pos++ {
+		ch := text[pos]
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+		exponent = exponent*10 + int(ch-'0')
+	}
+	return sign * exponent, true
 }
 
 func formatSignedToBase(val int64, toBase int64) string {
@@ -3429,18 +3911,20 @@ func isConvWhitespace(ch byte) bool {
 	}
 }
 
-func convInt8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[int8](nVec)
-
+func convSignedPrefix[T constraints.Signed](
+	nParam vector.FunctionParameterWrapper[T], fromBase, toBase int64,
+	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	var text [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		n, null := nParam.GetValue(i)
+		value, null := nParam.GetValue(i)
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -3448,26 +3932,38 @@ func convInt8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult
 			continue
 		}
 
-		result := formatSignedToBase(int64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
+		// Keep the common decimal-source path allocation-free. Parsing the
+		// decimal text is required only when from_base changes the meaning of
+		// the numeric digits; +/-10 has the same result as the direct formatter.
+		if absInt64(fromBase) == 10 {
+			if err := rs.AppendBytes([]byte(formatSignedToBase(int64(value), toBase)), false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		prefix := strconv.AppendInt(text[:0], int64(value), 10)
+		if err := appendConvPrefix(rs, prefix, fromBase, toBase); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func convInt16Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[int16](nVec)
-
+func convUnsignedPrefix[T constraints.Unsigned](
+	nParam vector.FunctionParameterWrapper[T], fromBase, toBase int64,
+	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
+	var text [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		n, null := nParam.GetValue(i)
+		value, null := nParam.GetValue(i)
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -3475,26 +3971,49 @@ func convInt16Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResul
 			continue
 		}
 
-		result := formatSignedToBase(int64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
+		// Preserve the old typed fast path for the overwhelmingly common
+		// decimal-source form. A negative from_base selects signed output and
+		// saturates values above INT64_MAX exactly as the bounded parser does.
+		if absInt64(fromBase) == 10 {
+			if fromBase < 0 {
+				uvalue := uint64(value)
+				if uvalue > uint64(math.MaxInt64) {
+					uvalue = uint64(math.MaxInt64)
+				}
+				if err := rs.AppendBytes([]byte(formatSignedToBase(int64(uvalue), toBase)), false); err != nil {
+					return err
+				}
+			} else if err := rs.AppendBytes([]byte(formatUnsignedToBase(uint64(value), toBase)), false); err != nil {
+				return err
+			}
+			continue
+		}
+
+		prefix := strconv.AppendUint(text[:0], uint64(value), 10)
+		if err := appendConvPrefix(rs, prefix, fromBase, toBase); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func convInt32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[int32](nVec)
-
+// convUnsignedDirect preserves MySQL's BIT/bit-literal contract. Unlike an
+// ordinary numeric value, a BIT value is already a numeric bit pattern; its
+// bits must not be reparsed using from_base. The value is formatted as an
+// unsigned bit pattern, including the existing signed-to_base behavior.
+func convUnsignedDirect[T constraints.Unsigned](
+	nParam vector.FunctionParameterWrapper[T], toBase int64,
+	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+) error {
 	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
+		if functionRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 			continue
 		}
 
-		n, null := nParam.GetValue(i)
+		value, null := nParam.GetValue(i)
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -3502,199 +4021,7 @@ func convInt32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResul
 			continue
 		}
 
-		result := formatSignedToBase(int64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convInt64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[int64](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		result := formatSignedToBase(n, toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convUint8Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[uint8](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		result := formatUnsignedToBase(uint64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convUint16Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[uint16](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		result := formatUnsignedToBase(uint64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convUint32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[uint32](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		result := formatUnsignedToBase(uint64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convUint64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[uint64](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Convert uint64 to string in to_base
-		result := formatUnsignedToBase(n, toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convFloat32Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[float32](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		result := formatSignedToBase(int64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func convFloat64Direct(nVec *vector.Vector, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
-	nParam := vector.GenerateFunctionFixedTypeParameter[float64](nVec)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		n, null := nParam.GetValue(i)
-		if null {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Convert float64 to int64 first (truncate), then to string in to_base
-		result := formatSignedToBase(int64(n), toBase)
-		if err := rs.AppendBytes([]byte(result), false); err != nil {
+		if err := rs.AppendBytes([]byte(formatUnsignedToBase(uint64(value), toBase)), false); err != nil {
 			return err
 		}
 	}
@@ -5164,7 +5491,7 @@ func DatetimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 		scale = 6
 	}
 	rs := vector.MustFunctionResult[types.Datetime](result)
-	rs.TempSetType(types.New(types.T_datetime, 0, scale))
+	rs.TempSetType(types.New(types.T_datetime, scale, scale))
 
 	// Use custom implementation to handle maximum overflow (return NULL)
 	result.UseOptFunctionParamFrame(2)
@@ -5287,7 +5614,7 @@ func TimestampSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		scale = 6
 	}
 	rs := vector.MustFunctionResult[types.Timestamp](result)
-	rs.TempSetType(types.New(types.T_timestamp, 0, scale))
+	rs.TempSetType(types.New(types.T_timestamp, scale, scale))
 
 	// Use custom implementation to handle maximum overflow (return NULL)
 	result.UseOptFunctionParamFrame(2)
@@ -5336,7 +5663,7 @@ func TimeSub(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	if iTyp == types.MicroSecond {
 		scale = 6
 	}
-	rs.TempSetType(types.New(types.T_time, 0, scale))
+	rs.TempSetType(types.New(types.T_time, scale, scale))
 
 	return opBinaryFixedFixedToFixedWithErrorCheck[types.Time, int64, types.Time](ivecs, result, proc, length, func(v1 types.Time, v2 int64) (types.Time, error) {
 		return doTimeSub(v1, v2, iTyp)
@@ -5806,6 +6133,42 @@ func makeSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
+// makeSetDecimalToBits implements the signed DECIMAL val_int conversion used
+// by MAKE_SET: round half away from zero, then saturate to the int64 range.
+func makeSetDecimalToBits(value types.Decimal128, scale int32) uint64 {
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
+	}
+	if scale > 0 {
+		var power types.Decimal128
+		if scale <= 19 {
+			power = types.Decimal128{B0_63: types.Pow10[scale]}
+		} else {
+			power, _ = (types.Decimal128{B0_63: types.Pow10[19]}).Mul128(types.Decimal128{B0_63: types.Pow10[scale-19]})
+		}
+		quotient, _ := value.Div128Trunc(power)
+		product, _ := quotient.Mul128(power)
+		remainder, _ := value.Sub128(product)
+		halfPower, _ := power.Div128Trunc(types.Decimal128{B0_63: 2})
+		if remainder.Compare(halfPower) >= 0 {
+			quotient, _ = quotient.Add128(types.Decimal128{B0_63: 1})
+		}
+		value = quotient
+	}
+	limit := uint64(math.MaxInt64)
+	if negative {
+		limit++
+	}
+	if value.B64_127 != 0 || value.B0_63 > limit {
+		return limit
+	}
+	if negative {
+		return -value.B0_63
+	}
+	return value.B0_63
+}
+
 // MakeSet: MAKE_SET(bits, str1, str2, ...) - Returns a set value (a string containing substrings separated by ',' characters) consisting of the strings that have the corresponding bit in bits set.
 func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -5905,6 +6268,26 @@ func MakeSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 				return 0, true
 			}
 			return uint64(int64(val)), false
+		}
+	case types.T_decimal64:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return makeSetDecimalToBits(types.Decimal128FromInt64(int64(val)), scale), false
+		}
+	case types.T_decimal128:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0])
+		scale := ivecs[0].GetType().Scale
+		getBitsValue = func(i uint64) (uint64, bool) {
+			val, null := param.GetValue(i)
+			if null {
+				return 0, true
+			}
+			return makeSetDecimalToBits(val, scale), false
 		}
 	default:
 		// Fallback to int64
@@ -6050,7 +6433,132 @@ func exportSetCheck(overloads []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithSuccess(0)
 }
 
+type exportSetInteger interface {
+	int8 | int16 | int32 | int64 | uint8 | uint16 | uint32 | uint64
+}
+
+func makeExportSetIntegerGetter[T exportSetInteger](vec *vector.Vector) func(uint64) (uint64, bool) {
+	param := vector.GenerateFunctionFixedTypeParameter[T](vec)
+	return func(i uint64) (uint64, bool) {
+		value, isNull := param.GetValue(i)
+		if isNull {
+			return 0, true
+		}
+		return uint64(value), false
+	}
+}
+
+func makeExportSetBitsGetter(vec *vector.Vector) (func(uint64) (uint64, bool), error) {
+	if vec.IsConstNull() {
+		return func(uint64) (uint64, bool) { return 0, true }, nil
+	}
+
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return makeExportSetIntegerGetter[int8](vec), nil
+	case types.T_int16:
+		return makeExportSetIntegerGetter[int16](vec), nil
+	case types.T_int32:
+		return makeExportSetIntegerGetter[int32](vec), nil
+	case types.T_int64:
+		return makeExportSetIntegerGetter[int64](vec), nil
+	case types.T_uint8:
+		return makeExportSetIntegerGetter[uint8](vec), nil
+	case types.T_uint16:
+		return makeExportSetIntegerGetter[uint16](vec), nil
+	case types.T_uint32:
+		return makeExportSetIntegerGetter[uint32](vec), nil
+	case types.T_uint64:
+		return makeExportSetIntegerGetter[uint64](vec), nil
+	case types.T_bit:
+		return makeExportSetIntegerGetter[uint64](vec), nil
+	case types.T_float32:
+		param := vector.GenerateFunctionFixedTypeParameter[float32](vec)
+		return func(i uint64) (uint64, bool) {
+			value, isNull := param.GetValue(i)
+			if isNull {
+				return 0, true
+			}
+			return uint64(int64(value)), false
+		}, nil
+	case types.T_float64:
+		param := vector.GenerateFunctionFixedTypeParameter[float64](vec)
+		return func(i uint64) (uint64, bool) {
+			value, isNull := param.GetValue(i)
+			if isNull {
+				return 0, true
+			}
+			return uint64(int64(value)), false
+		}, nil
+	case types.T_decimal64:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](vec)
+		scale := vec.GetType().Scale
+		return func(i uint64) (uint64, bool) {
+			value, isNull := param.GetValue(i)
+			if isNull {
+				return 0, true
+			}
+			return makeSetDecimalToBits(types.Decimal128FromInt64(int64(value)), scale), false
+		}, nil
+	case types.T_decimal128:
+		param := vector.GenerateFunctionFixedTypeParameter[types.Decimal128](vec)
+		scale := vec.GetType().Scale
+		return func(i uint64) (uint64, bool) {
+			value, isNull := param.GetValue(i)
+			if isNull {
+				return 0, true
+			}
+			return makeSetDecimalToBits(value, scale), false
+		}, nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported EXPORT_SET bits type %s", vec.GetType().Oid)
+	}
+}
+
+func makeExportSetNumberOfBitsGetter(vec *vector.Vector) (func(uint64) (uint64, bool), error) {
+	if vec.IsConstNull() {
+		return func(uint64) (uint64, bool) { return 0, true }, nil
+	}
+
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return makeExportSetIntegerGetter[int8](vec), nil
+	case types.T_int16:
+		return makeExportSetIntegerGetter[int16](vec), nil
+	case types.T_int32:
+		return makeExportSetIntegerGetter[int32](vec), nil
+	case types.T_int64:
+		return makeExportSetIntegerGetter[int64](vec), nil
+	case types.T_uint8:
+		return makeExportSetIntegerGetter[uint8](vec), nil
+	case types.T_uint16:
+		return makeExportSetIntegerGetter[uint16](vec), nil
+	case types.T_uint32:
+		return makeExportSetIntegerGetter[uint32](vec), nil
+	case types.T_uint64:
+		return makeExportSetIntegerGetter[uint64](vec), nil
+	case types.T_bit:
+		return makeExportSetIntegerGetter[uint64](vec), nil
+	default:
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported EXPORT_SET number_of_bits type %s", vec.GetType().Oid)
+	}
+}
+
+func normalizeExportSetNumberOfBits(value uint64) int64 {
+	if value > 64 {
+		return 64
+	}
+	return int64(value)
+}
+
 func exportSetResultByteLength(bitsValue uint64, on, off, separator []byte, numberOfBits int64, maxResultLen int64) (int, bool) {
+	if numberOfBits < 0 || numberOfBits > 64 {
+		return 0, false
+	}
+	if numberOfBits == 0 {
+		return 0, true
+	}
+
 	size := int64(0)
 	add := func(count int64, width int) bool {
 		if count == 0 || width == 0 {
@@ -6094,114 +6602,9 @@ func writeExportSetResult(dst []byte, bitsValue uint64, on, off, separator []byt
 func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// First argument: bits (numeric) - handle different numeric types
-	bitsType := ivecs[0].GetType().Oid
-	var bitsUint uint64
-	var nullBits bool
-
-	// Create appropriate parameter wrapper based on type (once, outside loop)
-	var getBitsValue func(uint64) (uint64, bool)
-	switch bitsType {
-	case types.T_int8:
-		param := vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_int16:
-		param := vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_int32:
-		param := vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_int64:
-		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_uint8:
-		param := vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_uint16:
-		param := vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_uint32:
-		param := vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
-	case types.T_uint64:
-		param := vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return val, false
-		}
-	case types.T_float32:
-		param := vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(int64(val)), false
-		}
-	case types.T_float64:
-		param := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(int64(val)), false
-		}
-	default:
-		// Fallback to int64
-		param := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0])
-		getBitsValue = func(i uint64) (uint64, bool) {
-			val, null := param.GetValue(i)
-			if null {
-				return 0, true
-			}
-			return uint64(val), false
-		}
+	getBitsValue, err := makeExportSetBitsGetter(ivecs[0])
+	if err != nil {
+		return err
 	}
 
 	// Second argument: on (string)
@@ -6217,11 +6620,14 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 		separatorParam = vector.GenerateFunctionStrParameter(ivecs[3])
 	}
 
-	// Optional fifth argument: number_of_bits (int64, default 64)
-	var numberOfBitsParam vector.FunctionParameterWrapper[int64]
+	// Optional fifth argument: number_of_bits (integer, default 64)
+	var getNumberOfBits func(uint64) (uint64, bool)
 	numberOfBitsProvided := len(ivecs) > 4
 	if numberOfBitsProvided {
-		numberOfBitsParam = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[4])
+		getNumberOfBits, err = makeExportSetNumberOfBitsGetter(ivecs[4])
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -6232,8 +6638,8 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			continue
 		}
 
-		// Extract bits value using the appropriate getter
-		bitsUint, nullBits = getBitsValue(i)
+		// Extract bits value using the appropriate getter.
+		bitsUint, nullBits := getBitsValue(i)
 
 		if nullBits {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -6251,32 +6657,36 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			continue
 		}
 
-		// Get separator (default ',')
-		separator := ","
-		if separatorProvided && !ivecs[3].IsConstNull() {
-			sep, nullSep := separatorParam.GetStrValue(i)
-			if !nullSep {
-				separator = functionUtil.QuickBytesToStr(sep)
-			}
-		}
-
-		// Get number_of_bits (default 64, max 64)
-		numberOfBits := int64(64)
-		if numberOfBitsProvided && !ivecs[4].IsConstNull() {
-			nBits, nullNBits := numberOfBitsParam.GetValue(i)
-			if !nullNBits {
-				if nBits < 1 {
-					numberOfBits = 1
-				} else if nBits > 64 {
-					numberOfBits = 64
-				} else {
-					numberOfBits = nBits
+		// Get separator (default ','). A supplied NULL is distinct from an
+		// omitted argument and makes the result NULL.
+		separator := functionUtil.QuickStrToBytes(",")
+		if separatorProvided {
+			var nullSep bool
+			separator, nullSep = separatorParam.GetStrValue(i)
+			if nullSep {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
 				}
+				continue
 			}
 		}
 
-		separatorBytes := functionUtil.QuickStrToBytes(separator)
-		size, ok := exportSetResultByteLength(bitsUint, on, off, separatorBytes, numberOfBits,
+		// MySQL treats number_of_bits as an unsigned value and clips it to 64.
+		// Converting signed values to uint64 before clipping preserves the
+		// established -1 => 64 behavior without narrowing uint64 inputs.
+		numberOfBits := int64(64)
+		if numberOfBitsProvided {
+			nBits, nullNBits := getNumberOfBits(i)
+			if nullNBits {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			numberOfBits = normalizeExportSetNumberOfBits(nBits)
+		}
+
+		size, ok := exportSetResultByteLength(bitsUint, on, off, separator, numberOfBits,
 			maxStringFunctionResultLength(result))
 		if !ok {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -6285,7 +6695,7 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			continue
 		}
 		if err := rs.AppendBytesWithWriter(size, func(dst []byte) error {
-			writeExportSetResult(dst, bitsUint, on, off, separatorBytes, numberOfBits)
+			writeExportSetResult(dst, bitsUint, on, off, separator, numberOfBits)
 			return nil
 		}); err != nil {
 			return err
@@ -6600,7 +7010,7 @@ func FromUnixTimeInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > maxUnixTimestampInt) {
+		if null || v < 0 || v > maxUnixTimestampInt {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
@@ -6634,11 +7044,24 @@ func FromUnixTimeUint64(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	return nil
 }
 
-func splitDecimalToIntAndFrac(f float64) (int64, int64) {
-	intPart := int64(f)
-	nano := (f - float64(intPart)) * math.Pow10(9)
-	fracPart := int64(nano)
-	return intPart, fracPart
+func floatUnixTimeParts(v float64) (sec int64, nsec int64, ok bool) {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return 0, 0, false
+	}
+	whole, fraction := math.Modf(v)
+	if whole > float64(maxUnixTimestampInt) {
+		return 0, 0, false
+	}
+	sec = int64(whole)
+	microseconds := int64(math.Round(fraction * 1_000_000))
+	if microseconds == 1_000_000 {
+		sec++
+		microseconds = 0
+	}
+	if sec > maxUnixTimestampInt {
+		return 0, 0, false
+	}
+	return sec, microseconds * 1_000, true
 }
 
 func decimal256ToInt64ForUnix(v types.Decimal256) (int64, error) {
@@ -6660,6 +7083,29 @@ func decimal256ToInt64ForUnix(v types.Decimal256) (int64, error) {
 		return 0, moerr.NewOutOfRangeNoCtx("BIGINT", "")
 	}
 	return int64(v.B0_63), nil
+}
+
+func decimal256Pow10ForUnix(n int32) (types.Decimal256, error) {
+	if n < 0 {
+		return types.Decimal256{}, moerr.NewInvalidInputNoCtxf("negative decimal power: %d", n)
+	}
+	result := types.Decimal256{B0_63: 1}
+	for n >= 19 {
+		var err error
+		result, err = result.Mul256(types.Decimal256{B0_63: types.Pow10[19]})
+		if err != nil {
+			return types.Decimal256{}, err
+		}
+		n -= 19
+	}
+	if n > 0 {
+		var err error
+		result, err = result.Mul256(types.Decimal256{B0_63: types.Pow10[n]})
+		if err != nil {
+			return types.Decimal256{}, err
+		}
+	}
+	return result, nil
 }
 
 func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec int64, ok bool, err error) {
@@ -6695,39 +7141,69 @@ func decimal256UnixTimeParts(v types.Decimal256, scale int32) (sec int64, nsec i
 		return sec, 0, true, nil
 	}
 
-	if scale > 9 {
-		frac, err = frac.ScaleTruncate(-(scale - 9))
-	} else if scale < 9 {
-		frac, err = frac.Scale(9 - scale)
+	if scale > 6 {
+		// Divide once at microsecond precision. Decimal256.Scale rounds each
+		// 19-digit chunk, which can double-round when scale-6 exceeds 19.
+		divisor, powerErr := decimal256Pow10ForUnix(scale - 6)
+		if powerErr != nil {
+			return 0, 0, false, powerErr
+		}
+		quotient, divErr := frac.Div256Trunc(divisor)
+		if divErr != nil {
+			return 0, 0, false, divErr
+		}
+		remainder, modErr := frac.Mod256(divisor)
+		if modErr != nil {
+			return 0, 0, false, modErr
+		}
+		doubled, mulErr := remainder.Mul256(types.Decimal256{B0_63: 2})
+		if mulErr != nil {
+			return 0, 0, false, mulErr
+		}
+		if doubled.Compare(divisor) >= 0 {
+			quotient, err = quotient.Add256(types.Decimal256{B0_63: 1})
+			if err != nil {
+				return 0, 0, false, err
+			}
+		}
+		frac = quotient
+	} else if scale < 6 {
+		frac, err = frac.Scale(6 - scale)
 	}
 	if err != nil {
 		return 0, 0, false, err
 	}
-	nsec, err = decimal256ToInt64ForUnix(frac)
+	microseconds, err := decimal256ToInt64ForUnix(frac)
 	if err != nil {
 		return 0, 0, false, err
 	}
-	if sec == maxUnixTimestampInt && nsec > 0 {
+	if microseconds == 1_000_000 {
+		sec++
+		microseconds = 0
+	}
+	if sec > maxUnixTimestampInt {
 		return 0, 0, false, nil
 	}
-	return sec, nsec, true, nil
+	return sec, microseconds * 1_000, true, nil
 }
 
 func FromUnixTimeFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	vs := vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0])
-	rs.TempSetType(types.New(types.T_datetime, 0, 6))
 	var d types.Datetime
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > maxUnixTimestampInt) {
+		if null {
+			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+		} else if sec, nsec, ok := floatUnixTimeParts(v); !ok {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
 		} else {
-			x, y := splitDecimalToIntAndFrac(v)
-			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y), false); err != nil {
+			if err = rs.Append(types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, sec, nsec), false); err != nil {
 				return err
 			}
 		}
@@ -6739,16 +7215,20 @@ func FromUnixTimeDecimal256(ivecs []*vector.Vector, result vector.FunctionResult
 	rs := vector.MustFunctionResult[types.Datetime](result)
 	vs := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0])
 	scale := ivecs[0].GetType().Scale
-	rs.TempSetType(types.New(types.T_datetime, 0, 6))
 	var d types.Datetime
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
+		if null {
+			if err = rs.Append(d, true); err != nil {
+				return err
+			}
+			continue
+		}
 		sec, nsec, ok, convErr := decimal256UnixTimeParts(v, scale)
 		if convErr != nil {
 			return convErr
 		}
-
-		if null || !ok {
+		if !ok {
 			if err = rs.Append(d, true); err != nil {
 				return err
 			}
@@ -6775,7 +7255,7 @@ func FromUnixTimeInt64Format(ivecs []*vector.Vector, result vector.FunctionResul
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > maxUnixTimestampInt) || null1 {
+		if null || v < 0 || v > maxUnixTimestampInt || null1 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -6839,14 +7319,14 @@ func FromUnixTimeFloat64Format(ivecs []*vector.Vector, result vector.FunctionRes
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
 
-		if null || (v < 0 || v > maxUnixTimestampInt) || null1 {
+		sec, nsec, ok := floatUnixTimeParts(v)
+		if null || !ok || null1 {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
 			buf.Reset()
-			x, y := splitDecimalToIntAndFrac(v)
-			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, x, y)
+			r := types.DatetimeFromUnixWithNsec(proc.GetSessionInfo().TimeZone, sec, nsec)
 			if _, err = datetimeFormat(proc.Ctx, r, f, &buf); err != nil {
 				return err
 			}
@@ -6872,12 +7352,18 @@ func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.Function
 	var buf bytes.Buffer
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := vs.GetValue(i)
+		if null || null1 {
+			if err = rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		sec, nsec, ok, convErr := decimal256UnixTimeParts(v, scale)
 		if convErr != nil {
 			return convErr
 		}
 
-		if null || !ok || null1 {
+		if !ok {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -7378,6 +7864,23 @@ func ExtractFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWra
 		return nil
 	}
 	unit := functionUtil.QuickBytesToStr(v1)
+	if unit == "minute" {
+		// The unit is constant for the vector. Keep this hot path out of the
+		// generic per-row unit lookup, switch, and integer formatter.
+		for i := uint64(0); i < uint64(length); i++ {
+			v2, null2 := p2.GetValue(i)
+			if null2 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(formatExtractMinute(int(v2.Minute()))), false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i := uint64(0); i < uint64(length); i++ {
 		v2, null2 := p2.GetValue(i)
 		if null2 {
@@ -7634,6 +8137,16 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
+const extractMinuteDigits = "000102030405060708091011121314151617181920212223242526272829303132333435363738394041424344454647484950515253545556575859"
+
+func formatExtractMinute(minute int) string {
+	if minute >= 0 && minute < 60 {
+		start := minute * 2
+		return extractMinuteDigits[start : start+2]
+	}
+	return fmt.Sprintf("%02d", minute)
+}
+
 func extractFromDatetime(unit string, d types.Datetime) (string, error) {
 	if _, ok := validDatetimeUnit[unit]; !ok {
 		return "", moerr.NewInternalErrorNoCtx("invalid unit")
@@ -7794,6 +8307,23 @@ func ExtractFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWr
 	}
 	unit := functionUtil.QuickBytesToStr(v1)
 	zone := proc.GetSessionInfo().TimeZone
+	if unit == "minute" {
+		// Preserve the per-row timezone conversion before extracting the minute.
+		for i := uint64(0); i < uint64(length); i++ {
+			v2, null2 := p2.GetValue(i)
+			if null2 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			dt := v2.ToDatetime(zone)
+			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(formatExtractMinute(int(dt.Minute()))), false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i := uint64(0); i < uint64(length); i++ {
 		v2, null2 := p2.GetValue(i)
 		if null2 {
@@ -10156,12 +10686,15 @@ func L1DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 
 // StGeoHashFromPoint is ST_GeoHash(point, max_length): the geohash of a point.
 func StGeoHashFromPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	return opBinaryStrFixedToStrWithErrorCheck[int64](ivecs, result, proc, length, func(v string, maxLen int64) (string, error) {
 		x, y, err := parsePointXYFromPayload(functionUtil.QuickStrToBytes(v))
 		if err != nil {
 			return "", err
 		}
-		return geo.EncodeGeoHash(x, y, int(maxLen)), nil
+		return geo.EncodeGeoHash(x, y, maxLen)
 	}, selectList)
 }
 
@@ -10188,7 +10721,11 @@ func StGeoHashFromLonLat(ivecs []*vector.Vector, result vector.FunctionResultWra
 			}
 			continue
 		}
-		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(geo.EncodeGeoHash(lon, lat, int(l))), false); err != nil {
+		hash, err := geo.EncodeGeoHash(lon, lat, l)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(hash), false); err != nil {
 			return err
 		}
 	}
@@ -10290,8 +10827,15 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 // overlayBinary builds an eval function for a polygon Boolean operation.
-func overlayBinary(op geo.BoolOp) fEvalFn {
+func overlayBinary(functionName string, op geo.BoolOp) fEvalFn {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
+		if err != nil {
+			return err
+		}
+		if emptyBatch {
+			return nil
+		}
 		// float32 output only when both operands are GEOMETRY32.
 		f32 := geometryArgIsFloat32(ivecs, 0) && geometryArgIsFloat32(ivecs, 1)
 		return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
@@ -10314,36 +10858,43 @@ func overlayBinary(op geo.BoolOp) fEvalFn {
 
 // StUnion returns the polygon union of two areal geometries.
 func StUnion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return overlayBinary(geo.OpUnion)(ivecs, result, proc, length, selectList)
+	return overlayBinary("ST_UNION", geo.OpUnion)(ivecs, result, proc, length, selectList)
 }
 
 // StIntersection returns the polygon intersection of two areal geometries.
 func StIntersection(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return overlayBinary(geo.OpIntersection)(ivecs, result, proc, length, selectList)
+	return overlayBinary("ST_INTERSECTION", geo.OpIntersection)(ivecs, result, proc, length, selectList)
 }
 
 // StDifference returns the polygon difference (g1 minus g2).
 func StDifference(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return overlayBinary(geo.OpDifference)(ivecs, result, proc, length, selectList)
+	return overlayBinary("ST_DIFFERENCE", geo.OpDifference)(ivecs, result, proc, length, selectList)
 }
 
 // StSymDifference returns the polygon symmetric difference of two geometries.
 func StSymDifference(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return overlayBinary(geo.OpXOR)(ivecs, result, proc, length, selectList)
+	return overlayBinary("ST_SYMDIFFERENCE", geo.OpXOR)(ivecs, result, proc, length, selectList)
 }
 
 // StFrechetDistance returns the discrete Fréchet distance (planar) between two
 // geometries' vertex sequences.
 func StFrechetDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stFrechetDistance[float64](ivecs, result, proc, length, selectList)
+	return stFrechetDistance[float64]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
 }
 
 // StFrechetDistance32 is the GEOMETRY32 overload of ST_FrechetDistance.
 func StFrechetDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stFrechetDistance[float32](ivecs, result, proc, length, selectList)
+	return stFrechetDistance[float32]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
 }
 
-func stFrechetDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func stFrechetDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
+	if err != nil {
+		return err
+	}
+	if emptyBatch {
+		return nil
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
 		a, err := decodeGeoGeometry(v1)
 		if err != nil {
@@ -10361,18 +10912,25 @@ func stFrechetDistance[T float32 | float64](ivecs []*vector.Vector, result vecto
 	}, selectList)
 }
 
-// StHausdorffDistance returns the discrete Hausdorff distance (planar) between
-// two geometries' vertex sets.
+// StHausdorffDistance returns the discrete directed Hausdorff distance (planar)
+// from the first geometry's vertex set to the second geometry's vertex set.
 func StHausdorffDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stHausdorffDistance[float64](ivecs, result, proc, length, selectList)
+	return stHausdorffDistance[float64]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
 }
 
 // StHausdorffDistance32 is the GEOMETRY32 overload of ST_HausdorffDistance.
 func StHausdorffDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stHausdorffDistance[float32](ivecs, result, proc, length, selectList)
+	return stHausdorffDistance[float32]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
 }
 
-func stHausdorffDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func stHausdorffDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
+	if err != nil {
+		return err
+	}
+	if emptyBatch {
+		return nil
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
 		a, err := decodeGeoGeometry(v1)
 		if err != nil {
@@ -10382,7 +10940,7 @@ func stHausdorffDistance[T float32 | float64](ivecs []*vector.Vector, result vec
 		if err != nil {
 			return 0, err
 		}
-		d, ok := geo.HausdorffDistance(a, b)
+		d, ok := geo.DirectedHausdorffDistance(a, b)
 		if !ok {
 			return 0, moerr.NewInvalidInputNoCtx("ST_HausdorffDistance: empty geometry")
 		}
@@ -10471,6 +11029,13 @@ func StSimplify(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 // StCollect bundles two geometries into the most specific aggregate (multi or
 // collection).
 func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_COLLECT", ivecs, length, selectList)
+	if err != nil {
+		return err
+	}
+	if emptyBatch {
+		return nil
+	}
 	f32 := geometryArgIsFloat32(ivecs, 0) && geometryArgIsFloat32(ivecs, 1)
 	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
 		a, err := decodeGeoGeometry(v1)
@@ -10485,19 +11050,33 @@ func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	}, selectList)
 }
 
+const maxGeoJSONDecimalDigits int64 = 1<<32 - 1
+
+func validateGeoJSONDecimalDigits(maxDec int64) error {
+	if maxDec < 0 || maxDec > maxGeoJSONDecimalDigits {
+		return moerr.NewInvalidInputNoCtxf(
+			"ST_AsGeoJSON maxdecimaldigits must be between 0 and %d",
+			maxGeoJSONDecimalDigits,
+		)
+	}
+	return nil
+}
+
 // StAsGeoJSONPrec renders a geometry as GeoJSON, rounding each coordinate to at
 // most maxdecimaldigits decimal places.
 func StAsGeoJSONPrec(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	return opBinaryStrFixedToStrWithErrorCheck[int64](ivecs, result, proc, length, func(v string, maxDec int64) (string, error) {
+		if err := validateGeoJSONDecimalDigits(maxDec); err != nil {
+			return "", err
+		}
 		g, err := decodeGeoGeometry(functionUtil.QuickStrToBytes(v))
 		if err != nil {
 			return "", err
 		}
-		md := int(maxDec)
-		if md < 0 {
-			md = -1
-		}
-		return geo.WriteGeoJSON(g, md), nil
+		return geo.WriteGeoJSONWithMaxDecimalDigits(g, maxDec), nil
 	}, selectList)
 }
 
@@ -10555,22 +11134,57 @@ func mbrPredicate(left, right []byte, pred func(a, b geo.BBox) bool) (bool, erro
 	return pred(a, b), nil
 }
 
-func bboxContains(a, b geo.BBox) bool {
+// bboxCovers reports whether the closed bounds of b are contained by a.
+func bboxCovers(a, b geo.BBox) bool {
 	return a.MinX <= b.MinX && a.MinY <= b.MinY && a.MaxX >= b.MaxX && a.MaxY >= b.MaxY
+}
+
+// intervalInteriorsIntersect reports whether the relative interiors of two
+// closed intervals intersect. A degenerate interval's interior is its point;
+// the interior of a non-degenerate interval is open.
+func intervalInteriorsIntersect(aMin, aMax, bMin, bMax float64) bool {
+	aPoint := aMin == aMax
+	bPoint := bMin == bMax
+	switch {
+	case aPoint && bPoint:
+		return aMin == bMin
+	case aPoint:
+		return bMin < aMin && aMin < bMax
+	case bPoint:
+		return aMin < bMin && bMin < aMax
+	default:
+		return aMin < bMax && bMin < aMax
+	}
+}
+
+// bboxInteriorsIntersect tests the relative interiors of two MBRs. Since each
+// MBR interior is the product of its x/y interval interiors, both axes must
+// intersect.
+func bboxInteriorsIntersect(a, b geo.BBox) bool {
+	return intervalInteriorsIntersect(a.MinX, a.MaxX, b.MinX, b.MaxX) &&
+		intervalInteriorsIntersect(a.MinY, a.MaxY, b.MinY, b.MaxY)
+}
+
+// bboxContains requires closed coverage and a non-empty interior intersection.
+func bboxContains(a, b geo.BBox) bool {
+	return bboxCovers(a, b) && bboxInteriorsIntersect(a, b)
+}
+
+func bboxWithin(a, b geo.BBox) bool {
+	return bboxContains(b, a)
 }
 
 func bboxDisjoint(a, b geo.BBox) bool {
 	return a.MaxX < b.MinX || a.MinX > b.MaxX || a.MaxY < b.MinY || a.MinY > b.MaxY
 }
 
+func bboxIntersects(a, b geo.BBox) bool {
+	return a.MinX <= b.MaxX && b.MinX <= a.MaxX &&
+		a.MinY <= b.MaxY && b.MinY <= a.MaxY
+}
+
 func bboxTouches(a, b geo.BBox) bool {
-	ix1, iy1 := math.Max(a.MinX, b.MinX), math.Max(a.MinY, b.MinY)
-	ix2, iy2 := math.Min(a.MaxX, b.MaxX), math.Min(a.MaxY, b.MaxY)
-	if ix1 > ix2 || iy1 > iy2 {
-		return false
-	}
-	// Intersect, but only along an edge or at a point (zero-area intersection).
-	return ix1 == ix2 || iy1 == iy2
+	return bboxIntersects(a, b) && !bboxInteriorsIntersect(a, b)
 }
 
 func bboxOverlaps(a, b geo.BBox) bool {
@@ -10579,11 +11193,18 @@ func bboxOverlaps(a, b geo.BBox) bool {
 	if ix1 >= ix2 || iy1 >= iy2 {
 		return false // disjoint or touching only
 	}
-	return !bboxContains(a, b) && !bboxContains(b, a)
+	return !bboxCovers(a, b) && !bboxCovers(b, a)
 }
 
 func mbrBinary(name string, pred func(a, b geo.BBox) bool) fEvalFn {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		emptyBatch, err := checkBinaryGeometryTypeSRID(name, ivecs, length, selectList)
+		if err != nil {
+			return err
+		}
+		if emptyBatch {
+			return nil
+		}
 		return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 			return mbrPredicate(v1, v2, pred)
 		}, selectList)
@@ -10595,15 +11216,15 @@ func MBRContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func MBRCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return mbrBinary("MBRCovers", bboxContains)(ivecs, result, proc, length, selectList)
+	return mbrBinary("MBRCovers", bboxCovers)(ivecs, result, proc, length, selectList)
 }
 
 func MBRWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return mbrBinary("MBRWithin", func(a, b geo.BBox) bool { return bboxContains(b, a) })(ivecs, result, proc, length, selectList)
+	return mbrBinary("MBRWithin", bboxWithin)(ivecs, result, proc, length, selectList)
 }
 
 func MBRCoveredBy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return mbrBinary("MBRCoveredBy", func(a, b geo.BBox) bool { return bboxContains(b, a) })(ivecs, result, proc, length, selectList)
+	return mbrBinary("MBRCoveredBy", func(a, b geo.BBox) bool { return bboxCovers(b, a) })(ivecs, result, proc, length, selectList)
 }
 
 func MBRDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -10629,6 +11250,13 @@ func MBRTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 // StMakeEnvelope builds the axis-aligned rectangle polygon spanning two corner
 // points (ST_MakeEnvelope).
 func StMakeEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_MAKEENVELOPE", ivecs, length, selectList)
+	if err != nil {
+		return err
+	}
+	if emptyBatch {
+		return nil
+	}
 	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
 		x1, y1, err := parsePointXYFromPayload(v1)
 		if err != nil {
@@ -10657,14 +11285,18 @@ func StDistanceSphere32(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func stDistanceSphere[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_DISTANCE_SPHERE", ivecs, length, selectList)
+	if err != nil {
+		return err
+	}
+	if emptyBatch {
+		return nil
+	}
 	// ST_Distance_Sphere has stricter constraints than ST_Distance: the two
 	// operands must share an SRID, must be POINT/MULTIPOINT, and their ordinates
 	// must be valid longitude/latitude (the sphere kernel interprets X/Y as
 	// degrees regardless of SRID). Mirror MySQL rather than silently feeding any
 	// geometry, mixed SRID, or out-of-range coordinate to the geodetic kernel.
-	if err := checkBinaryGeometryTypeSRID("ST_DISTANCE_SPHERE", ivecs); err != nil {
-		return err
-	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
 		lg, err := decodeGeoGeometry(v1)
 		if err != nil {
@@ -10745,8 +11377,12 @@ func StDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 }
 
 func stDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_DISTANCE", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_DISTANCE", ivecs, length, selectList)
+	if err != nil {
 		return err
+	}
+	if emptyBatch {
+		return nil
 	}
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
@@ -10825,6 +11461,12 @@ func geodeticDistance(left, right []byte) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := geo.ValidateGeodeticCoordinates(lg); err != nil {
+		return 0, err
+	}
+	if err := geo.ValidateGeodeticCoordinates(rg); err != nil {
+		return 0, err
+	}
 	d, ok := geo.DistanceMeters(lg, rg)
 	if !ok {
 		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
@@ -10833,8 +11475,12 @@ func geodeticDistance(left, right []byte) (float64, error) {
 }
 
 func StContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_CONTAINS", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_CONTAINS", ivecs, length, selectList)
+	if err != nil {
 		return err
+	}
+	if emptyBatch {
+		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryContains(v1, v2)
@@ -10842,8 +11488,12 @@ func StContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func StWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_WITHIN", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_WITHIN", ivecs, length, selectList)
+	if err != nil {
 		return err
+	}
+	if emptyBatch {
+		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryWithin(v1, v2)
@@ -10851,8 +11501,12 @@ func StWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 func StIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_INTERSECTS", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_INTERSECTS", ivecs, length, selectList)
+	if err != nil {
 		return err
+	}
+	if emptyBatch {
+		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryIntersects(v1, v2)
@@ -10860,8 +11514,12 @@ func StIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 }
 
 func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_DISJOINT", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_DISJOINT", ivecs, length, selectList)
+	if err != nil {
 		return err
+	}
+	if emptyBatch {
+		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryDisjoint(v1, v2)
@@ -10869,8 +11527,12 @@ func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func StTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_TOUCHES", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_TOUCHES", ivecs, length, selectList)
+	if err != nil {
 		return err
+	}
+	if emptyBatch {
+		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryTouches(v1, v2)
@@ -10878,8 +11540,12 @@ func StTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func StCrosses(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_CROSSES", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_CROSSES", ivecs, length, selectList)
+	if err != nil {
 		return err
+	}
+	if emptyBatch {
+		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryCrosses(v1, v2)
@@ -10887,8 +11553,12 @@ func StCrosses(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 }
 
 func StOverlaps(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_OVERLAPS", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_OVERLAPS", ivecs, length, selectList)
+	if err != nil {
 		return err
+	}
+	if emptyBatch {
+		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryOverlaps(v1, v2)
@@ -10896,8 +11566,12 @@ func StOverlaps(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func StEquals(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_EQUALS", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_EQUALS", ivecs, length, selectList)
+	if err != nil {
 		return err
+	}
+	if emptyBatch {
+		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryEquals(v1, v2)
@@ -10905,8 +11579,12 @@ func StEquals(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 func StCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_COVERS", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_COVERS", ivecs, length, selectList)
+	if err != nil {
 		return err
+	}
+	if emptyBatch {
+		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryCovers(v1, v2)
@@ -10914,8 +11592,12 @@ func StCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 }
 
 func StCoveredBy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_COVEREDBY", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_COVEREDBY", ivecs, length, selectList)
+	if err != nil {
 		return err
+	}
+	if emptyBatch {
+		return nil
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 		return geometryCoveredBy(v1, v2)
@@ -10989,20 +11671,36 @@ func ensureMatchingGeometrySRID(functionName string, left, right []byte) error {
 	return nil
 }
 
-// checkBinaryGeometryTypeSRID rejects a binary spatial function whose two
-// operands carry different SRIDs. SRID lives in the column/expression type
-// (Width), not in the bare-WKB payload, so the two input vectors' types are
-// compared.
-func checkBinaryGeometryTypeSRID(functionName string, ivecs []*vector.Vector) error {
-	if len(ivecs) < 2 {
-		return nil
+// checkBinaryGeometryTypeSRID rejects an evaluated pair of non-NULL geometry
+// arguments whose effective SRIDs differ. The SRID is carried by the vector
+// type (Width), not by the bare-WKB payload. NULL and short-circuited rows keep
+// the strict-function NULL result; they have no geometry pair to compare. It
+// reports an empty batch separately so callers can avoid invoking a scalar
+// geometry kernel on constant operands when there are no output rows.
+func checkBinaryGeometryTypeSRID(functionName string, ivecs []*vector.Vector, length int, selectList *FunctionSelectList) (emptyBatch bool, err error) {
+	if length == 0 {
+		return true, nil
+	}
+	if len(ivecs) < 2 || (selectList != nil && selectList.IgnoreAllRow()) {
+		return false, nil
 	}
 	left := sridFromTypeWidth(ivecs[0].GetType().Width)
 	right := sridFromTypeWidth(ivecs[1].GetType().Width)
-	if left != right {
-		return moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, left, right)
+	if left == right {
+		return false, nil
 	}
-	return nil
+
+	masked := selectList != nil && !selectList.ShouldEvalAllRow()
+	for row := uint64(0); row < uint64(length); row++ {
+		if masked && selectList.Contains(row) {
+			continue
+		}
+		if ivecs[0].IsNull(row) || ivecs[1].IsNull(row) {
+			continue
+		}
+		return false, moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, left, right)
+	}
+	return false, nil
 }
 
 func geometryDistance(left, right []byte) (float64, error) {
@@ -11355,6 +12053,31 @@ func geometryContains(container, target []byte) (bool, error) {
 }
 
 func geometryContainsImpl(container, target []byte, containerType, targetType string) (bool, error) {
+	if targetType == "GEOMETRYCOLLECTION" && (isLinearGeometryType(containerType) || isPolygonGeometryType(containerType)) {
+		targetPoints, pointOnly, err := pointSetGeometryItems(target, targetType)
+		if err != nil {
+			return false, err
+		}
+		if pointOnly {
+			if len(targetPoints) == 0 {
+				return geometryCollectionContains(container, target, containerType, targetType)
+			}
+			switch {
+			case isLinearGeometryType(containerType):
+				containerLines, err := lineGeometryItems(container, containerType)
+				if err != nil {
+					return false, err
+				}
+				return pointCollectionContainedByLineCollection(targetPoints, containerLines), nil
+			case isPolygonGeometryType(containerType):
+				containerPolygons, err := polygonGeometryItems(container, containerType)
+				if err != nil {
+					return false, err
+				}
+				return pointCollectionContainedByPolygonCollection(targetPoints, containerPolygons), nil
+			}
+		}
+	}
 	if containerType == "GEOMETRYCOLLECTION" || targetType == "GEOMETRYCOLLECTION" {
 		return geometryCollectionContains(container, target, containerType, targetType)
 	}
@@ -11765,36 +12488,57 @@ func geometryCrosses(left, right []byte) (bool, error) {
 	if !isCrossesSupportedGeometryType(leftType) || !isCrossesSupportedGeometryType(rightType) {
 		return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
 	}
+	if leftType == "GEOMETRYCOLLECTION" && (isLinearGeometryType(rightType) || isPolygonGeometryType(rightType)) {
+		leftPoints, pointOnly, err := pointSetGeometryItems(left, leftType)
+		if err != nil {
+			return false, err
+		}
+		if pointOnly {
+			return pointCollectionCrossesGeometry(leftPoints, right, rightType)
+		}
+	}
+	if rightType == "GEOMETRYCOLLECTION" && (isLinearGeometryType(leftType) || isPolygonGeometryType(leftType)) {
+		rightPoints, pointOnly, err := pointSetGeometryItems(right, rightType)
+		if err != nil {
+			return false, err
+		}
+		if pointOnly {
+			return pointCollectionCrossesGeometry(rightPoints, left, leftType)
+		}
+	}
 	if leftType == "GEOMETRYCOLLECTION" || rightType == "GEOMETRYCOLLECTION" {
 		return geometryCollectionCrosses(left, right, leftType, rightType)
 	}
 
 	switch leftType {
 	case "POINT", "MULTIPOINT":
-		if isPolygonGeometryType(rightType) || isPointGeometryType(rightType) {
+		if isPointGeometryType(rightType) {
 			return false, nil
 		}
-		leftPoints, err := pointGeometryItems(left, leftType)
+		leftPoints, pointOnly, err := pointSetGeometryItems(left, leftType)
 		if err != nil {
 			return false, err
 		}
-		rightLines, err := lineGeometryItems(right, rightType)
-		if err != nil {
-			return false, err
+		if !pointOnly {
+			return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
 		}
-		return pointCollectionCrossesLineCollection(leftPoints, rightLines), nil
+		return pointCollectionCrossesGeometry(leftPoints, right, rightType)
 	case "LINESTRING", "MULTILINESTRING":
+		if isPointGeometryType(rightType) {
+			rightPoints, pointOnly, err := pointSetGeometryItems(right, rightType)
+			if err != nil {
+				return false, err
+			}
+			if !pointOnly {
+				return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
+			}
+			return pointCollectionCrossesGeometry(rightPoints, left, leftType)
+		}
 		leftLines, err := lineGeometryItems(left, leftType)
 		if err != nil {
 			return false, err
 		}
 		switch {
-		case isPointGeometryType(rightType):
-			rightPoints, err := pointGeometryItems(right, rightType)
-			if err != nil {
-				return false, err
-			}
-			return pointCollectionCrossesLineCollection(rightPoints, leftLines), nil
 		case isLinearGeometryType(rightType):
 			rightLines, err := lineGeometryItems(right, rightType)
 			if err != nil {
@@ -11811,8 +12555,18 @@ func geometryCrosses(left, right []byte) (bool, error) {
 			return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
 		}
 	case "POLYGON", "MULTIPOLYGON":
-		if isPointGeometryType(rightType) || isPolygonGeometryType(rightType) {
+		if isPolygonGeometryType(rightType) {
 			return false, nil
+		}
+		if isPointGeometryType(rightType) {
+			rightPoints, pointOnly, err := pointSetGeometryItems(right, rightType)
+			if err != nil {
+				return false, err
+			}
+			if !pointOnly {
+				return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
+			}
+			return pointCollectionCrossesGeometry(rightPoints, left, leftType)
 		}
 		leftPolygons, err := polygonGeometryItems(left, leftType)
 		if err != nil {
@@ -12209,13 +12963,6 @@ func lineStringTouchesLineString(left, right []geometryPoint2D) bool {
 		}
 	}
 	return touched
-}
-
-func pointCrossesLineString(point geometryPoint2D, line []geometryPoint2D) bool {
-	if !pointIntersectsLineString(point, line) {
-		return false
-	}
-	return !lineStringPointIsBoundary(line, point)
 }
 
 func lineStringCrossesLineString(left, right []geometryPoint2D) bool {
@@ -13137,6 +13884,135 @@ func pointGeometryItems(payload []byte, typeName string) ([]geometryPoint2D, err
 	return points, nil
 }
 
+type geometryCollectionFrame struct {
+	payload []byte
+	count   int64
+	next    int64
+}
+
+// pointSetGeometryItems recognizes a Point, MultiPoint, or a GeometryCollection
+// whose recursive leaves are exclusively Point/MultiPoint geometries. The
+// explicit frame stack bounds Go call-stack use for deeply nested collections.
+func pointSetGeometryItems(payload []byte, typeName string) ([]geometryPoint2D, bool, error) {
+	if isPointGeometryType(typeName) {
+		points, err := pointSetGeometryPayloadPoints(payload, typeName)
+		return points, true, err
+	}
+	if typeName != "GEOMETRYCOLLECTION" {
+		return nil, false, nil
+	}
+	count, err := geometryCountFromPayload(payload)
+	if err != nil {
+		empty, emptyErr := geometryIsExplicitlyEmpty(payload)
+		if emptyErr == nil && empty {
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+	frames := []geometryCollectionFrame{{payload: payload, count: count, next: 1}}
+	points := make([]geometryPoint2D, 0)
+	for len(frames) > 0 {
+		frameIndex := len(frames) - 1
+		frame := &frames[frameIndex]
+		if frame.next > frame.count {
+			frames = frames[:frameIndex]
+			continue
+		}
+
+		item, err := geometryNFromPayload(frame.payload, frame.next)
+		if err != nil {
+			return nil, false, err
+		}
+		frame.next++
+		itemPayload := []byte(item)
+		itemType, err := geometryTypeNameFromPayload(itemPayload)
+		if err != nil {
+			return nil, false, err
+		}
+		switch itemType {
+		case "POINT", "MULTIPOINT":
+			itemPoints, err := pointSetGeometryPayloadPoints(itemPayload, itemType)
+			if err != nil {
+				return nil, false, err
+			}
+			points = append(points, itemPoints...)
+		case "GEOMETRYCOLLECTION":
+			count, err := geometryCountFromPayload(itemPayload)
+			if err != nil {
+				empty, emptyErr := geometryIsExplicitlyEmpty(itemPayload)
+				if emptyErr == nil && empty {
+					continue
+				}
+				return nil, false, err
+			}
+			frames = append(frames, geometryCollectionFrame{payload: itemPayload, count: count, next: 1})
+		default:
+			return nil, false, nil
+		}
+	}
+	return points, true, nil
+}
+
+func pointSetGeometryPayloadPoints(payload []byte, typeName string) ([]geometryPoint2D, error) {
+	points, err := pointGeometryItems(payload, typeName)
+	if err == nil {
+		return points, nil
+	}
+	empty, emptyErr := geometryIsExplicitlyEmpty(payload)
+	if emptyErr == nil && empty {
+		return nil, nil
+	}
+	if typeName != "MULTIPOINT" {
+		return nil, err
+	}
+	items, itemsErr := geometryPayloadItems(payload, typeName)
+	if itemsErr != nil {
+		return nil, itemsErr
+	}
+	points = make([]geometryPoint2D, 0, len(items))
+	for _, item := range items {
+		x, y, pointErr := parsePointXYFromPayload(item)
+		if pointErr == nil {
+			points = append(points, geometryPoint2D{x: x, y: y})
+			continue
+		}
+		empty, emptyErr := geometryIsExplicitlyEmpty(item)
+		if emptyErr != nil {
+			return nil, emptyErr
+		}
+		if !empty {
+			return nil, pointErr
+		}
+	}
+	return points, nil
+}
+
+func pointCollectionCrossesGeometry(points []geometryPoint2D, other []byte, otherType string) (bool, error) {
+	empty, err := geometryIsExplicitlyEmpty(other)
+	if err != nil {
+		return false, err
+	}
+	if empty || len(points) == 0 {
+		return false, nil
+	}
+	switch {
+	case isLinearGeometryType(otherType):
+		lines, err := lineGeometryItems(other, otherType)
+		if err != nil {
+			return false, err
+		}
+		return pointCollectionCrossesLineCollection(points, lines), nil
+	case isPolygonGeometryType(otherType):
+		polygons, err := polygonGeometryItems(other, otherType)
+		if err != nil {
+			return false, err
+		}
+		return pointCollectionCrossesPolygonCollection(points, polygons), nil
+	default:
+		return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
+	}
+}
+
 func pointCollectionCoveredByPointCollection(candidate, container []geometryPoint2D) bool {
 	for _, candidatePoint := range candidate {
 		covered := false
@@ -13184,18 +14060,66 @@ func pointCollectionCoveredByLineCollection(candidate []geometryPoint2D, contain
 	return true
 }
 
-func pointCollectionContainedByLineCollection(candidate []geometryPoint2D, container [][]geometryPoint2D) bool {
-	for _, candidatePoint := range candidate {
-		if !pointCrossesLineCollection(candidatePoint, container) {
-			return false
+type geometryPointLocation uint8
+
+const (
+	geometryPointExterior geometryPointLocation = iota
+	geometryPointBoundary
+	geometryPointInterior
+)
+
+func pointLocationInLineCollection(point geometryPoint2D, lines [][]geometryPoint2D) geometryPointLocation {
+	onLine := false
+	boundaryParity := false
+	for _, line := range lines {
+		if pointIntersectsLineString(point, line) {
+			onLine = true
+		}
+		if len(line) == 0 {
+			continue
+		}
+		if sameGeometryPoint(point, line[0]) {
+			boundaryParity = !boundaryParity
+		}
+		if sameGeometryPoint(point, line[len(line)-1]) {
+			boundaryParity = !boundaryParity
 		}
 	}
-	return true
+	if !onLine {
+		return geometryPointExterior
+	}
+	if boundaryParity {
+		return geometryPointBoundary
+	}
+	return geometryPointInterior
+}
+
+func pointCollectionContainedByLineCollection(candidate []geometryPoint2D, container [][]geometryPoint2D) bool {
+	if len(candidate) == 0 {
+		return true
+	}
+	hasInterior := false
+	for _, candidatePoint := range candidate {
+		switch pointLocationInLineCollection(candidatePoint, container) {
+		case geometryPointExterior:
+			return false
+		case geometryPointInterior:
+			hasInterior = true
+		}
+	}
+	return hasInterior
 }
 
 func pointCollectionCrossesLineCollection(points []geometryPoint2D, lines [][]geometryPoint2D) bool {
+	hasInterior, hasExterior := false, false
 	for _, point := range points {
-		if pointCrossesLineCollection(point, lines) {
+		switch pointLocationInLineCollection(point, lines) {
+		case geometryPointExterior:
+			hasExterior = true
+		case geometryPointInterior:
+			hasInterior = true
+		}
+		if hasInterior && hasExterior {
 			return true
 		}
 	}
@@ -13294,15 +14218,6 @@ func pointIntersectsLineCollection(point geometryPoint2D, lines [][]geometryPoin
 	return false
 }
 
-func pointCrossesLineCollection(point geometryPoint2D, lines [][]geometryPoint2D) bool {
-	for _, line := range lines {
-		if pointCrossesLineString(point, line) {
-			return true
-		}
-	}
-	return false
-}
-
 func lineSegmentCoveredByLineCollection(start, end geometryPoint2D, lines [][]geometryPoint2D) bool {
 	intervals := make([]geometryParamInterval, 0, len(lines))
 	for _, line := range lines {
@@ -13365,13 +14280,21 @@ func lineCollectionCrossesPolygonCollection(lines [][]geometryPoint2D, polygons 
 	return false
 }
 
-func pointInPolygonCollection(point geometryPoint2D, polygons []polygonGeometryItem) bool {
+func pointLocationInPolygonCollection(point geometryPoint2D, polygons []polygonGeometryItem) geometryPointLocation {
+	hasBoundary := false
 	for _, polygon := range polygons {
-		if pointInPolygonGeometry(polygon.shape, point.x, point.y) {
-			return true
+		location := pointLocationInPolygonGeometry(polygon.shape, point.x, point.y)
+		switch location {
+		case geometryPointInterior:
+			return geometryPointInterior
+		case geometryPointBoundary:
+			hasBoundary = true
 		}
 	}
-	return false
+	if hasBoundary {
+		return geometryPointBoundary
+	}
+	return geometryPointExterior
 }
 
 func pointCollectionCoveredByPolygonCollection(candidate []geometryPoint2D, container []polygonGeometryItem) bool {
@@ -13384,12 +14307,35 @@ func pointCollectionCoveredByPolygonCollection(candidate []geometryPoint2D, cont
 }
 
 func pointCollectionContainedByPolygonCollection(candidate []geometryPoint2D, container []polygonGeometryItem) bool {
+	if len(candidate) == 0 {
+		return true
+	}
+	hasInterior := false
 	for _, candidatePoint := range candidate {
-		if !pointInPolygonCollection(candidatePoint, container) {
+		switch pointLocationInPolygonCollection(candidatePoint, container) {
+		case geometryPointExterior:
 			return false
+		case geometryPointInterior:
+			hasInterior = true
 		}
 	}
-	return true
+	return hasInterior
+}
+
+func pointCollectionCrossesPolygonCollection(points []geometryPoint2D, container []polygonGeometryItem) bool {
+	hasInterior, hasExterior := false, false
+	for _, point := range points {
+		switch pointLocationInPolygonCollection(point, container) {
+		case geometryPointExterior:
+			hasExterior = true
+		case geometryPointInterior:
+			hasInterior = true
+		}
+		if hasInterior && hasExterior {
+			return true
+		}
+	}
+	return false
 }
 
 func lineCollectionCoveredByPolygonCollection(lines [][]geometryPoint2D, polygons []polygonGeometryItem) bool {
@@ -13555,7 +14501,12 @@ func pointInPolygon(points []geometryPoint2D, px, py float64) bool {
 	if pointOnPolygonBoundary(points, px, py) {
 		return false
 	}
+	return pointInPolygonRingInterior(points, px, py)
+}
 
+// pointInPolygonRingInterior is called only when the point has already been
+// checked against the ring boundary.
+func pointInPolygonRingInterior(points []geometryPoint2D, px, py float64) bool {
 	inside := false
 	j := len(points) - 1
 	for i := 0; i < len(points); i++ {
@@ -13570,6 +14521,21 @@ func pointInPolygon(points []geometryPoint2D, px, py float64) bool {
 		j = i
 	}
 	return inside
+}
+
+func pointLocationInPolygonGeometry(polygon geometryPolygon2D, px, py float64) geometryPointLocation {
+	if pointOnPolygonBoundaryGeometry(polygon, px, py) {
+		return geometryPointBoundary
+	}
+	if !pointInPolygonRingInterior(polygon.outer, px, py) {
+		return geometryPointExterior
+	}
+	for _, hole := range polygon.holes {
+		if pointInPolygonRingInterior(hole, px, py) {
+			return geometryPointExterior
+		}
+	}
+	return geometryPointInterior
 }
 
 func pointInPolygonGeometry(polygon geometryPolygon2D, px, py float64) bool {

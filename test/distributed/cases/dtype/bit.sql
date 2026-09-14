@@ -110,3 +110,50 @@ SELECT id, b1 IS NULL, b8 IS NULL, b64 IS NULL, HEX(b1), HEX(b8), HEX(b64)
 FROM prepared_bit_null ORDER BY id;
 DEALLOCATE PREPARE prepared_bit_insert;
 DROP TABLE prepared_bit_null;
+
+-- BIT(64) arithmetic must preserve the unsigned upper half when paired with
+-- signed integer literals.
+DROP TABLE IF EXISTS issue_28685_bit64;
+CREATE TABLE issue_28685_bit64 (id INT PRIMARY KEY, b BIT(64));
+INSERT INTO issue_28685_bit64 VALUES
+    (1, 0),
+    (2, 9223372036854775807),
+    (3, 9223372036854775808),
+    (4, 18446744073709551615),
+    (5, NULL);
+SELECT b * b * b * b * b * b * b * b + 0 AS bit8_derived
+FROM (SELECT CAST(255 AS BIT(8)) AS b) AS bit8_source;
+SELECT (b + 0) * (b + 0) AS overflow_value
+FROM issue_28685_bit64 WHERE id = 4;
+SELECT 1 AS after_overflow;
+SELECT id,
+       b + 0 AS plus_zero,
+       0 + b AS reverse_plus,
+       b - 1 AS minus_one,
+       1 - b AS reverse_minus,
+       b * 1 AS multiply_one,
+       1 * b AS reverse_multiply,
+       b % 2 AS mod_two
+FROM issue_28685_bit64 ORDER BY id;
+
+PREPARE issue_28685_bit64_stmt FROM
+    'SELECT id, b + ? AS value FROM issue_28685_bit64 ORDER BY id';
+SET @issue_28685_bit64_param = 0;
+EXECUTE issue_28685_bit64_stmt USING @issue_28685_bit64_param;
+SET @issue_28685_bit64_param = -1;
+EXECUTE issue_28685_bit64_stmt USING @issue_28685_bit64_param;
+SET @issue_28685_bit64_param = 0;
+EXECUTE issue_28685_bit64_stmt USING @issue_28685_bit64_param;
+DEALLOCATE PREPARE issue_28685_bit64_stmt;
+
+DROP TABLE IF EXISTS issue_28685_bit64_ctas;
+CREATE TABLE issue_28685_bit64_ctas AS
+    SELECT id, b + 0 AS value FROM issue_28685_bit64;
+SELECT column_name, data_type, numeric_precision, numeric_scale
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name = 'issue_28685_bit64_ctas'
+ORDER BY ordinal_position;
+SELECT id, value FROM issue_28685_bit64_ctas ORDER BY id;
+DROP TABLE issue_28685_bit64_ctas;
+DROP TABLE issue_28685_bit64;

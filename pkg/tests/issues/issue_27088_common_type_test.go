@@ -45,6 +45,156 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.Close()
 
+		t.Run("issue 28484 prepared Boolean math", func(t *testing.T) {
+			const query = "SELECT CAST(? AS DOUBLE), SIN(?), ACOS(?)"
+			mustExec(t, ctx, conn, "PREPARE bool_math FROM '"+query+"'")
+			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_math")
+			for _, value := range []string{"TRUE", "FALSE", "NULL", "TRUE", "'true'", "TRUE"} {
+				mustExec(t, ctx, conn, "SET @bool_math = "+value)
+				var got, expected [3]sql.NullFloat64
+				require.NoError(t, conn.QueryRowContext(ctx, "EXECUTE bool_math USING @bool_math, @bool_math, @bool_math").Scan(&got[0], &got[1], &got[2]))
+				reference := strings.ReplaceAll(query, "?", value)
+				require.NoError(t, conn.QueryRowContext(ctx, reference).Scan(&expected[0], &expected[1], &expected[2]))
+				require.Equal(t, expected, got, value)
+			}
+			const integerQuery = "SELECT ABS(?), ROUND(?), SIGN(?), POWER(?,?), SQRT(?)"
+			mustExec(t, ctx, conn, "PREPARE bool_numeric FROM '"+integerQuery+"'")
+			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_numeric")
+			for _, value := range []string{"TRUE", "FALSE", "NULL", "TRUE"} {
+				mustExec(t, ctx, conn, "SET @bool_math = "+value)
+				var got, expected [5]sql.NullFloat64
+				require.NoError(t, conn.QueryRowContext(ctx, "EXECUTE bool_numeric USING @bool_math, @bool_math, @bool_math, @bool_math, @bool_math, @bool_math").Scan(&got[0], &got[1], &got[2], &got[3], &got[4]))
+				require.NoError(t, conn.QueryRowContext(ctx, strings.ReplaceAll(integerQuery, "?", value)).Scan(&expected[0], &expected[1], &expected[2], &expected[3], &expected[4]))
+				require.Equal(t, expected, got, value)
+			}
+			for index, query := range []string{
+				"SELECT ROUND(1.25, ?), TRUNCATE(1.25, ?)",
+				"SELECT ROUND(?, 2), TRUNCATE(?, 2)",
+			} {
+				name := fmt.Sprintf("bool_precision_%d", index)
+				mustExec(t, ctx, conn, "PREPARE "+name+" FROM '"+query+"'")
+				for _, value := range []string{"TRUE", "FALSE", "NULL", "1", "0"} {
+					mustExec(t, ctx, conn, "SET @bool_precision = "+value)
+					var got, expected [2]sql.NullFloat64
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"EXECUTE "+name+" USING @bool_precision, @bool_precision").Scan(&got[0], &got[1]))
+					require.NoError(t, conn.QueryRowContext(ctx,
+						strings.ReplaceAll(query, "?", value)).Scan(&expected[0], &expected[1]))
+					require.Equal(t, expected, got, name+" "+value)
+				}
+				mustExec(t, ctx, conn, "DEALLOCATE PREPARE "+name)
+			}
+			mustExec(t, ctx, conn, `PREPARE bool_json FROM 'SELECT ?, JSON_TYPE(JSON_EXTRACT(JSON_ARRAY(?), "$[0]"))'`)
+			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_json")
+			var direct, jsonKind string
+			require.NoError(t, conn.QueryRowContext(ctx, "EXECUTE bool_json USING @bool_math, @bool_math").Scan(&direct, &jsonKind))
+			require.Equal(t, "true", direct)
+			require.Equal(t, "BOOLEAN", jsonKind)
+			const mixedQuery = "SELECT ?, ROUND(?)"
+			mustExec(t, ctx, conn, "PREPARE bool_mixed FROM '"+mixedQuery+"'")
+			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_mixed")
+			for _, test := range []struct {
+				value       string
+				wantDirect  string
+				wantDirectN bool
+				wantRound   float64
+				wantRoundN  bool
+			}{
+				{value: "TRUE", wantDirect: "true", wantRound: 1},
+				{value: "FALSE", wantDirect: "false"},
+				{value: "NULL", wantDirectN: true, wantRoundN: true},
+				{value: "TRUE", wantDirect: "true", wantRound: 1},
+			} {
+				mustExec(t, ctx, conn, "SET @bool_mixed = "+test.value)
+				func() {
+					rows, err := conn.QueryContext(ctx,
+						"EXECUTE bool_mixed USING @bool_mixed, @bool_mixed")
+					require.NoError(t, err)
+					defer rows.Close()
+					columns, err := rows.ColumnTypes()
+					require.NoError(t, err)
+					require.Len(t, columns, 2)
+					require.Equal(t, "TEXT", columns[0].DatabaseTypeName(),
+						"a direct SQL EXECUTE parameter keeps its text result contract")
+					require.True(t, rows.Next())
+					var gotDirect sql.NullString
+					var gotRound sql.NullFloat64
+					require.NoError(t, rows.Scan(&gotDirect, &gotRound))
+					require.False(t, rows.Next())
+					require.NoError(t, rows.Err())
+					require.Equal(t, test.wantDirectN, !gotDirect.Valid, test.value)
+					if !test.wantDirectN {
+						require.Equal(t, test.wantDirect, gotDirect.String, test.value)
+					}
+					require.Equal(t, test.wantRoundN, !gotRound.Valid, test.value)
+					if !test.wantRoundN {
+						require.Equal(t, test.wantRound, gotRound.Float64, test.value)
+					}
+				}()
+			}
+			const mixedAroundQuery = "SELECT ? AS before_value, ROUND(?) AS numeric_value, ? AS after_value"
+			mustExec(t, ctx, conn, "PREPARE bool_mixed_around FROM '"+mixedAroundQuery+"'")
+			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_mixed_around")
+			for _, value := range []string{"TRUE", "FALSE", "NULL", "TRUE"} {
+				mustExec(t, ctx, conn, "SET @bool_mixed = "+value)
+				func() {
+					rows, err := conn.QueryContext(ctx,
+						"EXECUTE bool_mixed_around USING @bool_mixed, @bool_mixed, @bool_mixed")
+					require.NoError(t, err)
+					defer rows.Close()
+					columns, err := rows.ColumnTypes()
+					require.NoError(t, err)
+					require.Len(t, columns, 3)
+					require.Equal(t, "TEXT", columns[0].DatabaseTypeName(), "direct parameter before numeric sibling")
+					require.Equal(t, "TEXT", columns[2].DatabaseTypeName(), "direct parameter after numeric sibling")
+					require.True(t, rows.Next())
+					var before, after sql.NullString
+					var numeric sql.NullFloat64
+					require.NoError(t, rows.Scan(&before, &numeric, &after))
+					require.False(t, rows.Next())
+					require.NoError(t, rows.Err())
+					require.Equal(t, value == "NULL", !before.Valid, value)
+					require.Equal(t, value == "NULL", !after.Valid, value)
+					if value != "NULL" {
+						require.Equal(t, strings.ToLower(value), before.String, value)
+						require.Equal(t, strings.ToLower(value), after.String, value)
+					}
+					require.Equal(t, value == "NULL", !numeric.Valid, value)
+					if value != "NULL" {
+						want := float64(0)
+						if value == "TRUE" {
+							want = 1
+						}
+						require.Equal(t, want, numeric.Float64, value)
+					}
+				}()
+			}
+			stmt, err := conn.PrepareContext(ctx, query)
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, value := range []any{true, false, nil, true} {
+				var got [3]sql.NullFloat64
+				require.NoError(t, stmt.QueryRowContext(ctx, value, value, value).Scan(&got[0], &got[1], &got[2]))
+				if value == nil {
+					require.Equal(t, [3]sql.NullFloat64{}, got)
+				} else if value == true {
+					for _, result := range got {
+						require.True(t, result.Valid)
+					}
+					require.Equal(t, float64(1), got[0].Float64)
+					require.InDelta(t, 0.8414709848078965, got[1].Float64, 1e-15)
+					require.Equal(t, float64(0), got[2].Float64)
+				} else {
+					for _, result := range got {
+						require.True(t, result.Valid)
+					}
+					require.Equal(t, float64(0), got[0].Float64)
+					require.Equal(t, float64(0), got[1].Float64)
+					require.InDelta(t, 1.5707963267948966, got[2].Float64, 1e-15)
+				}
+			}
+		})
+
 		dbName := testutils.GetDatabaseName(t)
 		mustExec(t, ctx, conn, fmt.Sprintf("create database `%s`", dbName))
 		mustExec(t, ctx, conn, fmt.Sprintf("use `%s`", dbName))

@@ -15,6 +15,7 @@
 package isolated
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -22,8 +23,15 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
 )
 
@@ -129,7 +137,9 @@ func TestIssue26640ClusterRestoreRebindsSubscriptionPrivileges(t *testing.T) {
 	// in a deferred phase after the publication has been reconstructed.
 	execSQLRequire(t, ctx, sysDB, "drop account `"+subscriberAccount+"`")
 	execSQLRequire(t, ctx, sysDB, "drop account `"+publisherAccount+"`")
-	execSQLRequire(t, ctx, sysDB, "restore cluster{snapshot='"+snapshotName+"'}")
+	runIssue28742CanceledRestoreWithMetadataProbe(t, ctx, cluster, sysDB, snapshotName,
+		publisherAccount, subscriberAccount)
+	runIssue28742RestoreWithMetadataProbe(t, ctx, cluster, sysDB, snapshotName)
 	var targetPublisherID, targetSubscriberID uint64
 	require.NoError(t, sysDB.QueryRowContext(ctx,
 		"select account_id from mo_catalog.mo_account where account_name = ?", publisherAccount,
@@ -182,4 +192,283 @@ func TestIssue26640ClusterRestoreRebindsSubscriptionPrivileges(t *testing.T) {
 	require.NoError(t, readerDB.QueryRowContext(ctx,
 		"select count(*) from `"+subscriptionDB+"`.orders").Scan(&count))
 	require.Equal(t, 1, count)
+}
+
+func runIssue28742CanceledRestoreWithMetadataProbe(
+	t *testing.T,
+	parent context.Context,
+	cluster embed.Cluster,
+	sysDB *sql.DB,
+	snapshotName string,
+	publisherAccount string,
+	subscriberAccount string,
+) {
+	t.Helper()
+	const restoreGate = "restore-before-view-metadata-lifecycle"
+	const restoreGateWaiters = restoreGate + "-waiters"
+
+	cn1, err := cluster.GetCNService(1)
+	require.NoError(t, err)
+	cn1Service, ok := cn1.RawService().(cnservice.Service)
+	require.True(t, ok, "CN service does not expose the SQL executor")
+	probeExecutor := cn1Service.GetSQLExecutor()
+	require.NotNil(t, probeExecutor)
+	services := issue28742LockServices(cluster)
+	require.NotEmpty(t, services)
+
+	faultEnabledHere := fault.Enable()
+	if faultEnabledHere {
+		defer fault.Disable()
+	}
+	require.NoError(t, fault.AddFaultPoint(
+		parent, restoreGate, ":::", "wait", 0, "", false))
+	require.NoError(t, fault.AddFaultPoint(
+		parent, restoreGateWaiters, ":::", "getwaiters", 0, restoreGate, false))
+
+	restoreCtx, cancelRestore := context.WithTimeout(parent, 90*time.Second)
+	probeCtx, cancelProbe := context.WithCancel(restoreCtx)
+	defer cancelProbe()
+	defer cancelRestore()
+	restoreDone := make(chan error, 1)
+	probeDone := make(chan error, 1)
+	restoreStarted := false
+	probeStarted := false
+	defer func() {
+		_, _ = fault.RemoveFaultPoint(context.Background(), restoreGateWaiters)
+		_, _ = fault.RemoveFaultPoint(context.Background(), restoreGate)
+		cancelProbe()
+		cancelRestore()
+		if restoreStarted {
+			select {
+			case <-restoreDone:
+			case <-time.After(30 * time.Second):
+				t.Errorf("canceled restore goroutine did not exit during cleanup")
+			}
+		}
+		if probeStarted {
+			select {
+			case <-probeDone:
+			case <-time.After(30 * time.Second):
+				t.Errorf("canceled view-metadata fence goroutine did not exit during cleanup")
+			}
+		}
+	}()
+
+	go func() {
+		_, restoreErr := sysDB.ExecContext(restoreCtx,
+			"restore cluster{snapshot='"+snapshotName+"'}")
+		restoreDone <- restoreErr
+	}()
+	restoreStarted = true
+	require.Eventually(t, func() bool {
+		waiters, _, exists := fault.TriggerFault(restoreGateWaiters)
+		return exists && waiters == 1
+	}, 30*time.Second, 10*time.Millisecond,
+		"restore did not reach the cancellation barrier")
+
+	go func() {
+		probeDone <- compile.RequireViewMetadataRevalidation(probeCtx, probeExecutor)
+	}()
+	probeStarted = true
+	require.Eventually(t, func() bool {
+		return issue28742HasFeatureRegistryMetadataWaiter(services)
+	}, 20*time.Second, 10*time.Millisecond,
+		"feature-registry metadata probe did not wait before cancellation")
+
+	cancelProbe()
+	select {
+	case err = <-probeDone:
+		probeStarted = false
+		require.Error(t, err)
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "canceled view-metadata fence did not return")
+	}
+
+	cancelRestore()
+	_, err = fault.RemoveFaultPoint(parent, restoreGate)
+	require.NoError(t, err)
+	select {
+	case err = <-restoreDone:
+		restoreStarted = false
+		require.Error(t, err)
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "canceled restore did not return")
+	}
+
+	freshCtx, freshCancel := context.WithTimeout(parent, 15*time.Second)
+	defer freshCancel()
+	err = probeExecutor.ExecTxn(freshCtx, func(txn executor.TxnExecutor) error {
+		for _, sql := range []string{
+			catalog.FeatureRegistryCatalogGateSQL,
+			catalog.SnapshotLifecycleGateSQL,
+		} {
+			result, execErr := txn.Exec(sql, executor.StatementOption{})
+			if execErr != nil {
+				return execErr
+			}
+			result.Close()
+		}
+		return nil
+	}, executor.Options{}.WithAccountID(catalog.System_Account))
+	require.NoError(t, err)
+
+	var remaining int
+	require.NoError(t, sysDB.QueryRowContext(parent,
+		"select count(*) from mo_catalog.mo_account where account_name in (?, ?)",
+		publisherAccount, subscriberAccount).Scan(&remaining))
+	require.Zero(t, remaining)
+}
+
+func runIssue28742RestoreWithMetadataProbe(
+	t *testing.T,
+	parent context.Context,
+	cluster embed.Cluster,
+	sysDB *sql.DB,
+	snapshotName string,
+) {
+	t.Helper()
+	const restoreGate = "restore-before-view-metadata-lifecycle"
+	const restoreGateWaiters = restoreGate + "-waiters"
+
+	cn1, err := cluster.GetCNService(1)
+	require.NoError(t, err)
+	cn1Service, ok := cn1.RawService().(cnservice.Service)
+	require.True(t, ok, "CN service does not expose the SQL executor")
+	probeExecutor := cn1Service.GetSQLExecutor()
+	require.NotNil(t, probeExecutor)
+
+	services := issue28742LockServices(cluster)
+	require.NotEmpty(t, services)
+
+	faultEnabledHere := fault.Enable()
+	if faultEnabledHere {
+		defer fault.Disable()
+	}
+	require.NoError(t, fault.AddFaultPoint(
+		parent, restoreGate, ":::", "wait", 0, "", false))
+	require.NoError(t, fault.AddFaultPoint(
+		parent, restoreGateWaiters, ":::", "getwaiters", 0, restoreGate, false))
+
+	ctx, cancel := context.WithTimeout(parent, 180*time.Second)
+	defer cancel()
+	restoreDone := make(chan error, 1)
+	probeDone := make(chan error, 1)
+	restoreStarted := false
+	probeStarted := false
+	restoreConsumed := false
+	probeConsumed := false
+	defer func() {
+		_, _ = fault.RemoveFaultPoint(context.Background(), restoreGateWaiters)
+		_, _ = fault.RemoveFaultPoint(context.Background(), restoreGate)
+		cancel()
+		if restoreStarted && !restoreConsumed {
+			select {
+			case <-restoreDone:
+			case <-time.After(30 * time.Second):
+				t.Errorf("restore goroutine did not exit during cleanup")
+			}
+		}
+		if probeStarted && !probeConsumed {
+			select {
+			case <-probeDone:
+			case <-time.After(30 * time.Second):
+				t.Errorf("view-metadata fence goroutine did not exit during cleanup")
+			}
+		}
+	}()
+
+	go func() {
+		_, restoreErr := sysDB.ExecContext(ctx,
+			"restore cluster{snapshot='"+snapshotName+"'}")
+		restoreDone <- restoreErr
+	}()
+	restoreStarted = true
+
+	require.Eventually(t, func() bool {
+		waiters, _, exists := fault.TriggerFault(restoreGateWaiters)
+		return exists && waiters == 1
+	}, 30*time.Second, 10*time.Millisecond,
+		"restore did not reach the lifecycle coordination barrier")
+
+	probeCtx, cancelProbe := context.WithTimeout(ctx, 120*time.Second)
+	defer cancelProbe()
+	go func() {
+		probeDone <- compile.RequireViewMetadataRevalidation(probeCtx, probeExecutor)
+	}()
+	probeStarted = true
+
+	// The fixed path owns the feature-registry identity exclusively before it
+	// pauses at restoreGate. The probe therefore queues on that same metadata
+	// key instead of holding a shared key while waiting on SNAPSHOT. On the old
+	// path this condition cannot become true until the restore is released,
+	// which makes the regression discriminate the original lock order.
+	require.Eventually(t, func() bool {
+		return issue28742HasFeatureRegistryMetadataWaiter(services)
+	}, 15*time.Second, 10*time.Millisecond,
+		"feature-registry metadata probe did not wait behind restore admission")
+
+	_, err = fault.RemoveFaultPoint(parent, restoreGate)
+	require.NoError(t, err)
+
+	select {
+	case err = <-restoreDone:
+		restoreConsumed = true
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatalf("restore did not return: %v", ctx.Err())
+	}
+	select {
+	case err = <-probeDone:
+		probeConsumed = true
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatalf("feature-registry metadata probe did not return: %v", ctx.Err())
+	}
+
+	var generation uint64
+	require.NoError(t, sysDB.QueryRowContext(parent,
+		"select dependency_generation from mo_catalog.mo_view_dependencies "+
+			"where account_id=0 and target_relation_id=0 and dependency_ordinal=0",
+	).Scan(&generation))
+	require.Greater(t, generation, uint64(0))
+}
+
+func issue28742LockServices(cluster embed.Cluster) []lockservice.LockService {
+	var services []lockservice.LockService
+	cluster.ForeachServices(func(service embed.ServiceOperator) bool {
+		if service.ServiceType() == metadata.ServiceType_CN {
+			services = append(services, lockservice.GetLockServiceByServiceID(service.ServiceID()))
+		}
+		return true
+	})
+	return services
+}
+
+func issue28742HasFeatureRegistryMetadataWaiter(services []lockservice.LockService) bool {
+	for _, service := range services {
+		found := false
+		service.IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool {
+			if tableID != catalog.MO_TABLES_ID || !issue28742HasKey(keys, []byte("mo_feature_registry")) {
+				return true
+			}
+			lock.IterWaiters(func(pblock.WaitTxn) bool {
+				found = true
+				return false
+			})
+			return !found
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func issue28742HasKey(keys [][]byte, needle []byte) bool {
+	for _, key := range keys {
+		if bytes.Contains(key, needle) {
+			return true
+		}
+	}
+	return false
 }

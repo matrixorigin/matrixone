@@ -134,6 +134,9 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.beginSchedulingTraceAttempt()
 
@@ -154,6 +157,7 @@ func (c *Compile) Compile(
 	// statistical information record and trace.
 	compileStart := time.Now()
 	hasUnresolvedFullTextPlan := false
+	hasUnresolvedIndexHintPlan := false
 	_, task := gotrace.NewTask(context.TODO(), "pipeline.Compile")
 	defer func() {
 		if e := recover(); e != nil {
@@ -191,6 +195,8 @@ func (c *Compile) Compile(
 			switch qry.Query.StmtType {
 			case plan.Query_SELECT:
 				c.needLockMeta, hasUnresolvedFullTextPlan = selectMetaLockRequirement(qry.Query)
+				hasUnresolvedIndexHintPlan = len(qry.Query.GetUnresolvedIndexHints()) > 0
+				c.needLockMeta = c.needLockMeta || hasUnresolvedIndexHintPlan
 			case plan.Query_INSERT:
 				markInsertTableScansNotLockMeta(qry.Query)
 				c.needLockMeta = true
@@ -247,6 +253,13 @@ func (c *Compile) Compile(
 		// its pre-pipeline metadata lock validates the catalog generation.
 		fault.TriggerFaultWithContext(c.proc.Ctx, unresolvedFullTextPlanCompiledFault)
 	}
+	if hasUnresolvedIndexHintPlan {
+		// This marker is inert outside the deterministic cross-CN regression test.
+		// The preceding metadata lock either requests a definition retry or leaves
+		// unresolvedIndexHintError to return the original MySQL error.
+		c.appendUnresolvedIndexHintMetaTables(queryPlan.GetQuery())
+		fault.TriggerFaultWithContext(c.proc.Ctx, unresolvedIndexHintPlanCompiledFault)
+	}
 	// todo: this is redundant.
 	for _, s := range c.scopes {
 		if len(s.NodeInfo.Addr) == 0 {
@@ -258,6 +271,8 @@ func (c *Compile) Compile(
 }
 
 const unresolvedFullTextPlanCompiledFault = "unresolved-fulltext-plan-compiled"
+
+const unresolvedIndexHintPlanCompiledFault = "unresolved-index-hint-plan-compiled"
 
 // selectMetaLockRequirement reports whether a SELECT must validate its table
 // definitions against mo_tables before execution. An unresolved fulltext
@@ -388,6 +403,10 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	warningsSucceeded := false
 	defer func() { warnings.finish(warningsSucceeded, warningDestination) }()
 
+	// Cached plans can outlive the negotiated cluster capability.
+	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
 	var txnOperator = c.proc.GetTxnOperator()
 
 	// init context for pipeline.
@@ -819,7 +838,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		}
 		sinkAttemptOpen = false
 	}
-
 	resourceRecorder.finishAttempt(
 		uint64(retryTimes), attemptStart, attemptPreRunWall, attemptRemoteWait, stats,
 		attemptScopes, attemptAnal, c.addr, false,
@@ -835,7 +853,6 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	if isExplainPhyPlan {
 		c.refreshExplainPhyPlanBuffer(runC, queryResult, option)
 	}
-
 	warningsSucceeded = err == nil
 	return queryResult, err
 }

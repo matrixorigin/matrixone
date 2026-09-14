@@ -187,6 +187,9 @@ func TestCagraSearchLoad(t *testing.T) {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
 	sqlproc := sqlexec.NewSqlProcess(proc)
+	// Preload sizes the CDC tail through sqlexec.RunSql, not the runSql stubbed below, and
+	// refuses a tail it cannot size. This model has no tail; say so readably.
+	installEmptyTailSizing(t, proc.GetService())
 
 	built := buildTestModel(t, "search-load", nil)
 	tarPath := built.Path

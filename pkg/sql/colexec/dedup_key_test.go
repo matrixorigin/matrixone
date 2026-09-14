@@ -53,14 +53,30 @@ func TestFormatDedupKeyDecodesFloatIdentity(t *testing.T) {
 
 func TestFormatDedupKeyRejectsMalformedEncodedIdentity(t *testing.T) {
 	pool := mpool.MustNewZero()
+	_, err := FormatDedupKey(nil, 0, []plan.Type{{Id: int32(types.T_int64)}})
+	require.Error(t, err)
 	vec := vector.NewVec(types.T_varchar.ToType())
 	defer vec.Free(pool)
 	require.NoError(t, vector.AppendBytes(vec, []byte{0xff}, false, pool))
 
-	_, err := FormatDedupKey(vec, 0, []plan.Type{{Id: int32(types.T_float64)}})
+	_, err = FormatDedupKey(vec, 0, []plan.Type{{Id: int32(types.T_float64)}})
+	require.Error(t, err)
+	_, err = FormatDedupKey(vec, 1, []plan.Type{{Id: int32(types.T_float64)}})
 	require.Error(t, err)
 
-	_, err = FormatDedupKey(vec, 0, []plan.Type{
+	// A truncated integer tuple used to panic inside StringifyTuple while
+	// rendering an already-rejected IGNORE row. Diagnostic formatting must stay
+	// best-effort and return an error instead.
+	truncated := vector.NewVec(types.T_varchar.ToType())
+	defer truncated.Free(pool)
+	require.NoError(t, vector.AppendBytes(truncated, []byte{0x3b}, false, pool))
+	_, err = FormatDedupKey(truncated, 0, []plan.Type{
+		{Id: int32(types.T_int64)},
+		{Id: int32(types.T_int64)},
+	})
+	require.Error(t, err)
+
+	_, err = FormatDedupKey(truncated, 0, []plan.Type{
 		{Id: int32(types.T_float64)},
 		{Id: int32(types.T_int64)},
 	})

@@ -18,10 +18,12 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -212,4 +214,114 @@ func TestSQLTaskCronJobTaskSnapshotConcurrent(t *testing.T) {
 		require.Equal(t, uint64(1), taskID)
 	default:
 	}
+}
+
+// Exercise the real refresh/removal path: the observer must see deletion only
+// after reconciliation, never merely because storage has deleted the row.
+func TestSQLTaskRefreshObserver(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
+	ts := NewTaskService(runtime.DefaultRuntime(), store).(*taskService)
+	defer func() { require.NoError(t, ts.Close()) }()
+	var snapshots [][]uint64
+	restore := SetSQLTaskRefreshHookForTest(func(serviceID string, ids []uint64) {
+		require.Equal(t, ts.rt.ServiceUUID(), serviceID)
+		snapshots = append(snapshots, ids)
+	}, nil)
+	defer restore()
+	sqlTask := newTestSQLTask("observer", 1)
+	sqlTask.CronExpr = "0 0 0 1 1 *"
+	sqlTask.Timezone = "UTC"
+	sqlTask.NextFireTime = time.Now().Add(24 * time.Hour).UnixMilli()
+	mustAddTestSQLTask(t, store, 1, sqlTask)
+	created := mustGetTestSQLTask(t, store, 1, WithTaskName(EQ, "observer"))[0]
+	// Drive refresh synchronously, avoiding a concurrent scheduler in this test.
+	ts.sqlCrons.jobs = make(map[uint64]*sqlTaskCronJob)
+	defer func() {
+		for id := range ts.sqlCrons.jobs {
+			ts.removeSQLTask(id)
+		}
+	}()
+	ts.loadSQLTasks(context.Background())
+	require.Equal(t, [][]uint64{{created.TaskID}}, snapshots)
+	_, err := store.DeleteSQLTask(context.Background(), WithTaskIDCond(EQ, created.TaskID))
+	require.NoError(t, err)
+	require.Len(t, snapshots, 1)
+	ts.loadSQLTasks(context.Background())
+	require.Len(t, snapshots, 2)
+	require.Empty(t, snapshots[1])
+	require.Empty(t, ts.sqlCrons.jobs)
+	require.Equal(t, []uint64{created.TaskID}, snapshots[0], "snapshots must be independently owned")
+}
+
+// The overdue path is managed by the stopper, not cron.Stop. Hold it across
+// deletion and prove an empty refresh snapshot alone is insufficient.
+func TestSQLTaskRefreshObserverTracksOverdueExecution(t *testing.T) {
+	ctx := context.Background()
+	mem := NewMemTaskStorage().(*memTaskStorage)
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	store := &blockedSQLTaskObserverStorage{TaskStorage: mem, entered: make(chan struct{}), release: release}
+	ts := NewTaskService(runtime.DefaultRuntime(), store).(*taskService)
+	ts.sqlCrons.stopper = stopper.NewStopper("observer-test")
+	ts.sqlCrons.jobs = make(map[uint64]*sqlTaskCronJob)
+	defer func() {
+		unblock()
+		ts.sqlCrons.stopper.Stop()
+		for id := range ts.sqlCrons.jobs {
+			ts.removeSQLTask(id)
+		}
+		require.NoError(t, ts.Close())
+	}()
+	var active atomic.Int64
+	snapshots := make(chan []uint64, 2)
+	restore := SetSQLTaskRefreshHookForTest(func(_ string, ids []uint64) { snapshots <- ids },
+		func(_ string, _ uint64, started bool) {
+			if started {
+				active.Add(1)
+			} else {
+				active.Add(-1)
+			}
+		})
+	defer restore()
+	item := newTestSQLTask("overdue-observer", 1)
+	item.CronExpr = "0 0 0 1 1 *"
+	item.Timezone = "UTC"
+	item.NextFireTime = time.Now().Add(-time.Minute).UnixMilli()
+	mustAddTestSQLTask(t, mem, 1, item)
+	created := mustGetTestSQLTask(t, mem, 1, WithTaskName(EQ, item.TaskName))[0]
+	ts.loadSQLTasks(ctx)
+	select {
+	case <-store.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("catch-up did not enter storage")
+	}
+	require.Equal(t, []uint64{created.TaskID}, <-snapshots)
+	require.Equal(t, int64(1), active.Load())
+	_, err := mem.DeleteSQLTask(ctx, WithTaskIDCond(EQ, created.TaskID))
+	require.NoError(t, err)
+	ts.loadSQLTasks(ctx)
+	require.Empty(t, <-snapshots)
+	require.Equal(t, int64(1), active.Load(), "cache removal must not hide an in-flight catch-up")
+	unblock()
+	require.Eventually(t, func() bool { return active.Load() == 0 }, 5*time.Second, time.Millisecond)
+}
+
+type blockedSQLTaskObserverStorage struct {
+	TaskStorage
+	queries atomic.Int64
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockedSQLTaskObserverStorage) QuerySQLTask(ctx context.Context, conds ...Condition) ([]SQLTask, error) {
+	if s.queries.Add(1) == 2 {
+		close(s.entered)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return s.TaskStorage.QuerySQLTask(ctx, conds...)
 }

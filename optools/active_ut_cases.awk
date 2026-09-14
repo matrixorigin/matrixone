@@ -28,6 +28,13 @@ function json_string_field(line, name,    marker, start, rest, i, ch, escaped) {
 }
 
 {
+    # Go's -json stream can contain a very large number of output events. They
+    # cannot change active package/test state, so avoid scanning their payload
+    # (which may contain megabytes of SQL/setup output) on every heartbeat.
+    if (index($0, "\"Action\":\"output\"") > 0) {
+        next
+    }
+
     action = json_string_field($0, "Action")
     package_name = json_string_field($0, "Package")
     test_name = json_string_field($0, "Test")

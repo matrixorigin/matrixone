@@ -148,7 +148,7 @@ func (Hooks) handleCreate(ctx compileplugin.CompileContext, indexDefs map[string
 		return nil
 	}
 
-	cache.Cache.Remove(storageDef.IndexTableName)
+	cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
 
 	sqls, err := genDeleteSQL(indexDefs, ctx.QryDatabase())
 	if err != nil {
@@ -263,9 +263,9 @@ func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, defs map[string]*pl
 	logutil.Infof("[plugin] cagra HandleDropIndex: defs=%d", len(defs))
 	// Evict the cached search index so its GPU resources are freed NOW, rather
 	// than lingering until the 5-min VectorIndexCacheTTL housekeeping reaps it.
-	// Mirrors the create-side cache.Cache.Remove(storageDef.IndexTableName).
+	// Mirrors the create-side cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl").
 	if storageDef, ok := defs[catalog.Cagra_TblType_Storage]; ok {
-		cache.Cache.Remove(storageDef.IndexTableName)
+		cache.Cache.RemoveAllGenerations(storageDef.IndexTableName, "ddl")
 	}
 	return nil
 }

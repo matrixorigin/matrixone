@@ -47,6 +47,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -277,7 +279,7 @@ func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
 		require.Equal(t, "group_concat_max_len", name)
 		require.True(t, system)
 		require.False(t, global)
-		return int64(5), nil
+		return uint64(5), nil
 	})
 
 	valueArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
@@ -289,6 +291,42 @@ func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
 
 	require.Equal(t, []*plan.Expr{valueArg}, args)
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), config)
+}
+
+func TestGroupConcatMaxLenAsUint64(t *testing.T) {
+	tests := []struct {
+		name  string
+		value interface{}
+		want  uint64
+		ok    bool
+	}{
+		{name: "int", value: int(5), want: 5, ok: true},
+		{name: "negative int", value: int(-1)},
+		{name: "uint", value: uint(5), want: 5, ok: true},
+		{name: "int8", value: int8(5), want: 5, ok: true},
+		{name: "negative int8", value: int8(-1)},
+		{name: "uint8", value: uint8(5), want: 5, ok: true},
+		{name: "int16", value: int16(5), want: 5, ok: true},
+		{name: "negative int16", value: int16(-1)},
+		{name: "uint16", value: uint16(5), want: 5, ok: true},
+		{name: "int32", value: int32(5), want: 5, ok: true},
+		{name: "negative int32", value: int32(-1)},
+		{name: "uint32", value: uint32(5), want: 5, ok: true},
+		{name: "int64", value: int64(5), want: 5, ok: true},
+		{name: "negative int64", value: int64(-1)},
+		{name: "uint64", value: uint64(5), want: 5, ok: true},
+		{name: "float", value: float64(5)},
+		{name: "string", value: "5"},
+		{name: "nil", value: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := groupConcatMaxLenAsUint64(tt.value)
+			require.Equal(t, tt.want, got)
+			require.Equal(t, tt.ok, ok)
+		})
+	}
 }
 
 func TestConstructAggregateConfigPreservesOrderedGroupConcatArgs(t *testing.T) {
@@ -381,6 +419,57 @@ func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 	}, proc)
 	require.Equal(t, []*plan.Expr{value}, args)
 	require.Equal(t, aggexec.EncodeOrderedPercentileConfig([]byte("0"), false), config)
+}
+
+func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   string
+		desc bool
+	}{
+		{name: "continuous ascending", fn: plan2.NamePercentileCont},
+		{name: "discrete descending", fn: plan2.NamePercentileDisc, desc: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := plan2.NewMockCompilerContext(false)
+			direction := ""
+			if tc.desc {
+				direction = " desc"
+			}
+			stmt, err := parsers.ParseOne(
+				context.Background(),
+				dialect.MYSQL,
+				"select "+tc.fn+"(0.5) within group (order by n_nationkey"+direction+") from nation",
+				1,
+			)
+			require.NoError(t, err)
+			defer stmt.Free()
+			queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+
+			var percentileFn *plan.Function
+			for _, node := range queryPlan.GetQuery().GetNodes() {
+				for _, aggregate := range node.GetAggList() {
+					if fn := aggregate.GetF(); fn != nil && fn.GetFunc().GetObjName() == tc.fn {
+						percentileFn = fn
+					}
+				}
+			}
+			require.NotNil(t, percentileFn)
+			require.Len(t, percentileFn.GetArgs(), 2)
+			require.NotNil(t, percentileFn.GetArgs()[1].GetF(), "raw planner output should retain the static cast")
+			originalConfigExpr := plan2.DeepCopyExpr(percentileFn.GetArgs()[1])
+
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			args, config := constructAggregateConfig(percentileFn, proc)
+			require.Len(t, args, 1)
+			require.Equal(t,
+				aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), tc.desc),
+				config)
+			require.Equal(t, originalConfigExpr, percentileFn.GetArgs()[1])
+		})
+	}
 }
 
 func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing.T) {

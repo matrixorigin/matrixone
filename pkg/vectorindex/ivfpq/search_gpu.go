@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
@@ -34,13 +35,17 @@ import (
 
 // IvfpqSearch implements cache.VectorIndexSearchIf for GPU IVF-PQ indexes.
 type IvfpqSearch[B, Q cuvs.VectorType] struct {
-	Idxcfg        vectorindex.IndexConfig
-	Tblcfg        vectorindex.IndexTableConfig
-	Indexes       []*IvfpqModel[B, Q]
-	MultiIndex    *cuvs.MultiGpuIvfPq[B, Q]
-	Overflow      cuvs.BruteForceOverflow[B] // CDC insert overflow; nil when no overflow records exist
-	Devices       []int
-	ThreadsSearch int64
+	Idxcfg     vectorindex.IndexConfig
+	Tblcfg     vectorindex.IndexTableConfig
+	Indexes    []*IvfpqModel[B, Q]
+	MultiIndex *cuvs.MultiGpuIvfPq[B, Q]
+	Overflow   cuvs.BruteForceOverflow[B] // CDC insert overflow; nil when no overflow records exist
+	// overflowRowsEstimate is the tail's row count read from its metadata rows at Preload, so
+	// admission can reserve the overflow's VRAM BEFORE Load allocates it. Superseded by the
+	// real count once Overflow exists.
+	overflowRowsEstimate int64
+	Devices              []int
+	ThreadsSearch        int64
 
 	// Generation captured at Load for the cross-CN cache freshness check (IsStale): a
 	// REBUILD/MERGE bumps MAX(metadata.timestamp); a CDC append bumps the (CdcTailId,tag=1)
@@ -155,30 +160,85 @@ func (s *IvfpqSearch[B, Q]) SearchFloat32(proc *sqlexec.SqlProcess, query any, r
 }
 
 // Load implements cache.VectorIndexSearchIf.
-func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
+// Preload reads the metadata, fetches every sub-index artifact, and runs the device admission
+// gate -- everything up to the first deserialize. Afterwards GetIndexSize reports the arena split
+// cuvs.MeasureTar measured, so the cache can reclaim room for this index before Load claims it.
+//
+// The gate stays HERE, interleaved with the fetch loop, rather than moving to Load: the running
+// aggregate is re-checked after each tar so a IVF-PQ index that cannot fit is refused as soon as
+// the total says so, instead of after downloading the remaining gigabytes. That early abort is
+// worth more than letting the gate see the room the governor is about to free, and it keeps the
+// gate running exactly once.
+//
+// On refusal the deferred cleanup in admitIndexes removes the tars this call fetched. Past the
+// gate they are owned by s.Indexes, and Destroy removes them if the load is abandoned before or
+// during Load -- IvfpqModel[B, Q].Destroy releases the tar as well as the GPU handle.
+func (s *IvfpqSearch[B, Q]) Preload(sqlproc *sqlexec.SqlProcess) (err error) {
 	indexes, err := LoadMetadata[B, Q](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
 	}
+	// Size the CDC overflow from the tail's metadata rows, BEFORE anything is allocated. Without
+	// this a generation whose rows all arrived by CDC measures 0 at Preload, so admission
+	// reserves nothing and Load allocates its VRAM unreserved -- and no post-load pass can undo
+	// an allocation.
+	//
+	// A tail whose size cannot be read REFUSES the load, here, before a single tar is fetched.
+	// Carrying on with 0 reserves nothing and then allocates anyway, which is the outcome the
+	// estimate exists to prevent, and the refusal costs little: the sizing reads the same two
+	// tables loadCdcTail reads moments later, so a tail that cannot be counted is usually one
+	// that cannot be read either. Where the failure is transient instead, the query retries --
+	// against a reservation that exists, rather than against none.
+	rows, rerr := sqlexec.CdcTailRowsUpperBound(sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable,
+		s.Tblcfg.IndexTable, s.overflowVectorBytes())
+	if rerr != nil {
+		return rerr
+	}
+	s.overflowRowsEstimate = rows
 	if len(indexes) > 0 {
 		// This algorithm's own fraction, not the governor default: IVF-PQ claims at
 		// 65% (ivf_pq_cost::kBudgetPercent), so a gate left on 75% would admit an
 		// index the very first deserialize then refuses.
-		indexes, err = s.loadIndexes(sqlproc, indexes, cuvs.BudgetFor(s.Idxcfg.Type))
-		if err != nil {
+		if err = s.admitIndexes(sqlproc, indexes, cuvs.BudgetFor(s.Idxcfg.Type)); err != nil {
 			return err
 		}
 	}
+	// From here the artifacts are owned by s: Destroy is what releases them.
 	s.Indexes = indexes
-	// From here the GPU sub-indexes are owned by s. If a later step fails, the
-	// cache drops the entry WITHOUT calling Destroy (see VectorIndexCache.Search),
-	// and there is no finalizer, so release them here to avoid orphaning GPU
-	// memory on every failed load. Destroy is idempotent and safe on partial state.
+	return nil
+}
+
+func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
+	// Preload normally ran already; a caller that skipped it still gets a correct load.
+	if s.Indexes == nil {
+		if err = s.Preload(sqlproc); err != nil {
+			return err
+		}
+	}
+	// If any step below fails, the cache drops the entry WITHOUT calling Destroy (see
+	// VectorIndexCache.Search), and there is no finalizer, so release the sub-indexes here to
+	// avoid orphaning GPU memory and fetched tars on every failed load. Destroy is idempotent
+	// and safe on partial state.
 	defer func() {
 		if err != nil {
 			s.Destroy()
 		}
 	}()
+
+	// Situational admission, HERE and not in Preload: this runs after the cache's makeRoom
+	// has evicted, so it sees the VRAM the governor just freed. Preload's gate is permanent
+	// only (can this ever fit on the hardware).
+	if err = s.deviceFitsFreeNow(cuvs.BudgetFor(s.Idxcfg.Type)); err != nil {
+		return err
+	}
+
+	// Deserialize onto the GPU. Past both gates, and past the cache's reclaim.
+	for _, idx := range s.Indexes {
+		idx.Devices = s.Devices
+		if err = idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
+			return err
+		}
+	}
 	if err = s.loadCdcTail(sqlproc); err != nil {
 		return err
 	}
@@ -199,6 +259,61 @@ func (s *IvfpqSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 		}
 	}
 	return nil
+}
+
+// GetIndexSize reports this IVF-PQ index's resident footprint split by arena, from the exact
+// quantities its load gate measured with cuvs.MeasureTar: DeviceComponentBytes is what was
+// deserialized onto the GPU, HostComponentBytes is what stayed in RAM (ids, INCLUDE blobs,
+// quantizer, bitset). The tar's FileSize is deliberately NOT used -- it conflates the two, and
+// charging it to either budget would be wrong for the same reason the load gate refuses it.
+func (s *IvfpqSearch[B, Q]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	for _, idx := range s.Indexes {
+		if idx == nil {
+			continue
+		}
+		hostBytes += idx.HostComponentBytes
+		for _, sz := range idx.DeviceComponentBytes {
+			deviceBytes += sz
+		}
+	}
+	deviceBytes += s.overflowDeviceBytes()
+	return hostBytes, deviceBytes
+}
+
+// overflowDeviceBytes is the CDC overflow's device footprint: a cuVS brute-force index over
+// the tag=1 vectors, resident for the cache entry's whole lifetime like the built sub-indexes.
+// Omitting it charged 0/0 to an index whose rows all arrived by CDC, and an entry measuring 0
+// is skipped by snapshotResidents -- so it held VRAM the governor never saw and never
+// reclaimed. The element type mirrors buildOverflow: the index storage Q when cuVS brute
+// force can store it, else the base B.
+//
+// Charged from Preload, not only after Load: a generation whose rows all arrived by CDC would
+// otherwise measure 0, admission would reserve nothing, and Load would allocate the VRAM
+// unreserved -- which no post-load pass can undo. The tail's per-frame metadata rows carry nrow,
+// which sums to its record count without reading the tail (sqlexec.CdcTailRowsUpperBound). It
+// counts deletes the overflow does not hold, so it is an upper bound, and the real count
+// replaces it once Overflow exists.
+func (s *IvfpqSearch[B, Q]) overflowDeviceBytes() int64 {
+	rows := s.overflowRowsEstimate
+	if s.Overflow != nil {
+		// Built: the real count replaces the estimate, which counted deletes it does not hold.
+		rows = int64(s.Overflow.Len())
+	}
+	if rows <= 0 {
+		return 0
+	}
+	return rows * s.overflowVectorBytes()
+}
+
+// overflowVectorBytes is the device width of ONE overflow vector. The element type mirrors
+// buildOverflow: the index storage Q when cuVS brute force can store it, else the base B.
+func (s *IvfpqSearch[B, Q]) overflowVectorBytes() int64 {
+	elem := int64(util.UnsafeSizeOf[B]())
+	switch cuvs.GetQuantization[Q]() {
+	case cuvs.F32, cuvs.F16:
+		elem = int64(util.UnsafeSizeOf[Q]())
+	}
+	return int64(s.Idxcfg.CuvsIvfpq.Dimensions) * elem
 }
 
 // IsStale reports whether the loaded index has fallen behind the persisted one (REBUILD bumps
@@ -277,6 +392,15 @@ func (s *IvfpqSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 		if m.Index != nil {
 			if err = m.Index.DeleteIds(delPkids); err != nil {
 				return err
+			}
+			// The SHARED tail's deletes build the same id_to_index_ map as a model's own
+			// deletes would, for every row of the index, and it stays resident for the
+			// index's life. This is the path a base artifact with no per-model deletes
+			// takes, so charging only in LoadIndex left the map uncharged exactly when
+			// the shared tail is what materialises it. chargeIdMap is idempotent, so an
+			// index that already paid in LoadIndex is not charged twice.
+			if len(delPkids) > 0 {
+				m.chargeIdMap(m.Index.Len())
 			}
 		}
 	}
@@ -417,6 +541,14 @@ func buildOverflowBF[B, OB cuvs.VectorType, Q cuvs.VectorType](
 				return nil, err
 			}
 		}
+		// The Go-side copies are dead once the rows are in the device index: every reader
+		// of them is in this loop. Release them here instead of holding
+		// rows * dim * sizeof(B) of heap for the cache entry's whole lifetime -- the model
+		// pointers live until Destroy, and GetIndexSize does not count these bytes, so they
+		// would be host memory the governor never sees. OverflowPkids is kept: it is
+		// 8 bytes/row against the vectors' dim * sizeof(B), and it names the rows in logs.
+		m.OverflowVecs = nil
+		m.OverflowIncludeBytes = nil
 	}
 	if err = bf.Build(); err != nil {
 		bf.Destroy()
@@ -480,8 +612,8 @@ func (s *IvfpqSearch[B, Q]) buildMultiIndex() (*cuvs.MultiGpuIvfPq[B, Q], error)
 // -- the short-circuit is the whole point of checking per tar, and a version that
 // fetched them all would otherwise still pass every assertion. Production passes
 // cuvs.BudgetFor, the same value the CREATE gate is given.
-func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[B, Q],
-	budget memory.DeviceBudget) ([]*IvfpqModel[B, Q], error) {
+func (s *IvfpqSearch[B, Q]) admitIndexes(sqlproc *sqlexec.SqlProcess, indexes []*IvfpqModel[B, Q],
+	budget memory.DeviceBudget) error {
 	// Fetch, admit, and only then load. Splitting the download from the load is
 	// what lets the gate see the SAME quantity CREATE checked: the device-resident
 	// components of each packed artifact, measured with cuvs.MeasureTar and reduced
@@ -490,14 +622,14 @@ func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 	// the quantizer, the bitset -- none of which reach the GPU, and CREATE would
 	// then commit artifacts refused here at every free level.
 
-	// Tars this call fetched, and only those. Until the load loop below takes
-	// them over -- LoadIndex removes each one in view mode once Unpack has read
-	// it, and Destroy removes it on a failed load -- nothing else will: Load
-	// returns before it assigns s.Indexes or arms its deferred Destroy, so an
-	// early return from here is the end of the line. While the download lived
-	// inside LoadIndex its own defer covered this; now that it is hoisted out,
-	// a refusal from the aggregate gate would otherwise leak the whole
-	// multi-gigabyte download on every retried query.
+	// Tars this call fetched, and only those. Until Preload takes them over --
+	// it assigns s.Indexes only after this returns cleanly, and from there
+	// LoadIndex removes each one in view mode once Unpack has read it, while
+	// Destroy removes any that are left -- nothing else will: an early return
+	// from here happens before s.Indexes is assigned, so it is the end of the
+	// line. While the download lived inside LoadIndex its own defer covered
+	// this; now that it is hoisted out, a refusal from the aggregate gate would
+	// otherwise leak the whole multi-gigabyte download on every retried query.
 	var fetchedHere []*IvfpqModel[B, Q]
 	admitted := false
 	defer func() {
@@ -517,14 +649,14 @@ func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 		if len(idx.Path) == 0 {
 			fetched, ferr := idx.FetchArtifact(sqlproc, s.Tblcfg)
 			if ferr != nil {
-				return nil, ferr
+				return ferr
 			}
 			idx.Path = fetched
 			fetchedHere = append(fetchedHere, idx)
 		}
 		sizes, merr := cuvs.MeasureTar(idx.Path)
 		if merr != nil {
-			return nil, merr
+			return merr
 		}
 		device := make(map[string]int64, len(sizes.Files))
 		for name, sz := range sizes.Files {
@@ -533,6 +665,12 @@ func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 			}
 		}
 		comps = append(comps, device)
+		// Stamp what the gate just measured onto the model, so the loaded sub-index can
+		// report its own footprint to the cache's byte governor. The build path stamps
+		// the same two fields in saveToFile; without this the load path would leave a
+		// model that knows its tar size but not how that tar splits across RAM and VRAM.
+		idx.DeviceComponentBytes = device
+		idx.HostComponentBytes = sizes.Host
 
 		// Re-check the RUNNING aggregate rather than waiting for the last tar.
 		// A sub-index only adds bytes to the device that holds it, so the peak is
@@ -545,29 +683,50 @@ func (s *IvfpqSearch[B, Q]) loadIndexes(sqlproc *sqlexec.SqlProcess, indexes []*
 		// also the complete gate; there is no separate check after the loop.
 		// Only the devices this index occupies: a SINGLE_GPU index loads onto
 		// devices[0] alone, so a busy or smaller second card must not veto it.
+		// PERMANENT gate only: can this index EVER fit on this hardware? A refusal here
+		// is final -- no amount of eviction creates VRAM the cards do not have -- so
+		// aborting mid-download is right, and it keeps the early-abort benefit that put
+		// the gate inside this loop.
+		//
+		// The SITUATIONAL free-VRAM gate is deliberately NOT here. It runs in Load, after
+		// the cache's makeRoom has had its chance to evict: asking "does it fit in free
+		// VRAM?" before eviction refuses loads that would have succeeded -- an old 6 GiB
+		// index resident, 5 GiB free, a new 6 GiB index that needs it, where evicting the
+		// old one leaves 11 GiB. See deviceFitsFreeNow.
 		participants := memory.DeviceParticipants(s.Devices,
 			s.Idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
-		if err := memory.DeviceAggregateFitsFree(
-			memory.PerDeviceDemand(participants, comps),
-			len(comps), len(indexes), budget,
+		if err := memory.DeviceAggregateFitsHardware(
+			memory.PerDeviceDemand(participants, comps), len(comps), budget,
 		); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	// Past the gate the loads own the tars; the cleanup above must not race them.
 	admitted = true
 
-	for _, idx := range indexes {
-		idx.Devices = s.Devices
-		if err := idx.LoadIndex(sqlproc, s.Idxcfg, s.Tblcfg, s.ThreadsSearch, true); err != nil {
-			for _, idx2 := range indexes {
-				idx2.Destroy()
-			}
-			return nil, err
+	return nil
+}
+
+// deviceFitsFreeNow is the situational half of admission: does this index fit in the VRAM that
+// is free RIGHT NOW. It runs at the top of Load -- after Preload measured and after the cache's
+// makeRoom evicted -- so it sees the room the governor just freed. admitIndexes keeps only the
+// permanent hardware gate, which no eviction can change.
+func (s *IvfpqSearch[B, Q]) deviceFitsFreeNow(budget memory.DeviceBudget) error {
+	comps := make([]map[string]int64, 0, len(s.Indexes))
+	for _, idx := range s.Indexes {
+		if idx == nil || len(idx.DeviceComponentBytes) == 0 {
+			continue
 		}
+		comps = append(comps, idx.DeviceComponentBytes)
 	}
-	return indexes, nil
+	if len(comps) == 0 {
+		return nil
+	}
+	participants := memory.DeviceParticipants(s.Devices,
+		s.Idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
+	return memory.DeviceAggregateFitsFree(
+		memory.PerDeviceDemand(participants, comps), len(comps), len(comps), budget)
 }
 
 // Destroy implements cache.VectorIndexSearchIf.
@@ -587,4 +746,32 @@ func (s *IvfpqSearch[B, Q]) Destroy() {
 // from the []any Search per the SearchOutput plan. Mirrors fulltext2's SearchFloat32 stub.
 func (s *IvfpqSearch[B, Q]) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
 	return moerr.NewInternalErrorNoCtx("SearchInto not supported")
+}
+
+// DeviceResidency reports this index's device bytes BY CARD, so the cache can bound the GPU it
+// actually occupies rather than a sum across every card. A SINGLE_GPU index lives on devices[0]
+// alone; sharded components land on the card their rank names. Implements the cache's
+// devicePlacement interface.
+func (s *IvfpqSearch[B, Q]) DeviceResidency() map[int]int64 {
+	if len(s.Devices) == 0 {
+		return nil
+	}
+	comps := make([]map[string]int64, 0, len(s.Indexes))
+	for _, idx := range s.Indexes {
+		if idx != nil && len(idx.DeviceComponentBytes) > 0 {
+			comps = append(comps, idx.DeviceComponentBytes)
+		}
+	}
+	participants := memory.DeviceParticipants(s.Devices,
+		s.Idxcfg.CuvsIvfpq.DistributionMode == uint16(vectorindex.DistributionMode_SINGLE_GPU))
+	perCard := memory.PerDeviceDemand(participants, comps)
+
+	// The overflow buffer lives with the index, on its first participating card.
+	if overflow := s.overflowDeviceBytes(); overflow > 0 && len(participants) > 0 {
+		if perCard == nil {
+			perCard = make(map[int]int64, 1)
+		}
+		perCard[participants[0]] += overflow
+	}
+	return perCard
 }

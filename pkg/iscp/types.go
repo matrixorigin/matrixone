@@ -58,6 +58,13 @@ type DataRetriever interface {
 	GetDataType() int8
 	GetAccountID() uint32
 	GetTableID() uint64
+	// GetToTS is the upper bound of the change range this iteration carries -- the same
+	// value UpdateWatermark persists. It is the data version an index generation built from
+	// this data reflects, so a consumer can record it as the generation's build_ts.
+	//
+	// Deliberately NOT the consumer's own transaction SnapshotTS, which is >= this and would
+	// claim coverage of changes committed after the range was collected but not applied.
+	GetToTS() types.TS
 }
 
 // In an iteration, the table's data is propagated downstream.

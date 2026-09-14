@@ -272,6 +272,11 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	typ, str := l.scanner.Scan()
 	lval.pos = l.scanner.Pos
 	l.scanner.LastToken = str
+	// yacc precedence is static, so HIGH_NOT_PRECEDENCE uses a distinct token
+	// that the grammar places at the unary-operator precedence.
+	if typ == NOT && l.HasSQLMode(SQLModeHighNotPrecedence) {
+		typ = HIGH_NOT
+	}
 	if typ == OFFSET && l.syntaxLastToken == int(')') && l.lastClosedTableParen && l.scanner.offsetAliasColumnListAhead() {
 		// OFFSET is non-reserved. In a table-factor context, the established
 		// `(...) offset (c1, c2)` syntax is an implicit alias plus column list,

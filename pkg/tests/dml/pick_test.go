@@ -306,15 +306,18 @@ func runPickConflictMatrix(t *testing.T, parentCtx context.Context, db *sql.DB) 
 
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {
+			// PICK reads the source without mutating it. Share that immutable
+			// branch across policies, while each policy gets a fresh destination
+			// with the same common ancestor and conflict state.
+			src := fmt.Sprintf("src_%s", shape.name)
+			execSQLDB(t, ctx, db, fmt.Sprintf("data branch create table %s from conflict_base", src))
+			execSQLDB(t, ctx, db, fmt.Sprintf(shape.srcMutation, src))
+			sourceRows := queryStringRows(t, ctx, db, "select * from "+src+" order by a")
 			for _, policy := range []string{"skip", "accept", "fail"} {
 				t.Run(policy, func(t *testing.T) {
-					src := fmt.Sprintf("src_%s_%s", shape.name, policy)
 					dst := fmt.Sprintf("dst_%s_%s", shape.name, policy)
 					execSQLDB(t, ctx, db, fmt.Sprintf(
-						"data branch create table %s from conflict_base", src))
-					execSQLDB(t, ctx, db, fmt.Sprintf(
 						"data branch create table %s from conflict_base", dst))
-					execSQLDB(t, ctx, db, fmt.Sprintf(shape.srcMutation, src))
 					execSQLDB(t, ctx, db, fmt.Sprintf(shape.dstMutation, dst))
 
 					stmt := fmt.Sprintf(
@@ -327,6 +330,8 @@ func runPickConflictMatrix(t *testing.T, parentCtx context.Context, db *sql.DB) 
 						execSQLDB(t, ctx, db, stmt)
 					}
 					shape.verify(t, ctx, db, dst, policy)
+					require.Equal(t, sourceRows, queryStringRows(t, ctx, db,
+						"select * from "+src+" order by a"), "PICK must leave the source unchanged")
 				})
 			}
 		})

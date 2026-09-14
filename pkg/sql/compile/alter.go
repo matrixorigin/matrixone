@@ -1063,6 +1063,27 @@ func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.Alt
 	return opt, nil
 }
 
+// alterCopyCreateOptions builds the statement options for the ALTER ... COPY replica create.
+//
+// Both carried values exist because the replica is created from regenerated DDL, which cannot
+// express them: KeepLogicalId preserves the table's logical id, and KeepRelKind preserves its
+// relkind. Without the latter buildCreateTable derives a kind from the replica's temporary
+// name -- and for a hidden index table that kind is the only thing keeping it out of the
+// relkind-keyed restore/CLONE filters, so losing it silently promotes the table to an
+// ordinary one.
+//
+// Split out so the carried values are assertable without an executor.
+func alterCopyCreateOptions(qry *plan.AlterTable) executor.StatementOption {
+	// The temporary relation is not externally visible. Its parent backrefs are
+	// reconciled after the original relation is replaced, so avoid materializing
+	// an intermediate parent->temporary-table relationship here.
+	opts := executor.StatementOption{}.WithIgnoreForeignKey()
+	if oldLogicalId := qry.GetTableDef().GetLogicalId(); oldLogicalId != 0 {
+		opts = opts.WithKeepLogicalId(oldLogicalId)
+	}
+	return opts.WithKeepRelKind(qry.GetTableDef().GetTableType())
+}
+
 func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 	cleanup := newAlterAutoIncrementResetCleanup(c)
 	defer cleanup.finish(&err)
@@ -1281,18 +1302,21 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if err != nil {
 		return err
 	}
+	if !isTemp && !plan2.IsFkBannedDatabase(dbName) {
+		// COPY recomputes values while its temporary relation has no foreign
+		// keys. Validate every potentially changed endpoint before creating that
+		// relation; planner metadata may predate a recently committed FK.
+		if err = checkAlterCopyForeignKeyColumns(
+			c, qry, originRel.CopyTableDef(c.proc.Ctx), sourceForeignKeys,
+			sourceRefChildTbls, oldId, dbName, tblName,
+		); err != nil {
+			return err
+		}
+	}
 
 	// 3. create temporary replica table which doesn't have foreign key constraints
 	// Get logicalId from tableDef and pass it when creating the temporary table
-	oldLogicalId := qry.GetTableDef().GetLogicalId()
-	// The temporary relation is not externally visible. Its parent backrefs are
-	// reconciled after the original relation is replaced, so avoid materializing
-	// an intermediate parent->temporary-table relationship here.
-	createTmpOpts := executor.StatementOption{}.WithIgnoreForeignKey()
-
-	if oldLogicalId != 0 {
-		createTmpOpts = createTmpOpts.WithKeepLogicalId(oldLogicalId)
-	}
+	createTmpOpts := alterCopyCreateOptions(qry)
 	err = c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "Create copy table for alter table",
@@ -2149,6 +2173,128 @@ func snapshotAlterCopyForeignKeyState(
 		}
 	}
 	return foreignKeys, slices.Clone(canonicalRefChildTableIDs(constraintDef)), nil
+}
+
+func checkAlterCopyForeignKeyColumns(
+	c *Compile,
+	qry *plan.AlterTable,
+	sourceTableDef *plan.TableDef,
+	sourceForeignKeys []*plan.ForeignKeyDef,
+	sourceRefChildTbls []uint64,
+	oldTableID uint64,
+	dbName, tableName string,
+) error {
+	affectedForeignKeyColumns, err := plan2.AlterCopyAffectedForeignKeyColumns(
+		c.proc.Ctx, sourceTableDef, qry.CopyTableDef, qry.ChangeTblColIdMap,
+	)
+	if err != nil || len(affectedForeignKeyColumns) == 0 {
+		return err
+	}
+	if err = checkAlterCopyForeignKeyColumnsForKeys(
+		c.proc.Ctx, sourceForeignKeys, affectedForeignKeyColumns, false, "",
+	); err != nil {
+		return err
+	}
+
+	selfForeignKeys := make([]*plan.ForeignKeyDef, 0, len(sourceForeignKeys))
+	for _, foreignKey := range sourceForeignKeys {
+		if foreignKey != nil && (foreignKey.ForeignTbl == 0 || foreignKey.ForeignTbl == oldTableID) {
+			selfForeignKeys = append(selfForeignKeys, foreignKey)
+		}
+	}
+	if err = checkAlterCopyForeignKeyColumnsForKeys(
+		c.proc.Ctx,
+		selfForeignKeys,
+		affectedForeignKeyColumns,
+		true,
+		dbName+"."+tableName,
+	); err != nil {
+		return err
+	}
+
+	for _, childTableID := range uniqueNonZeroTableIDs(sourceRefChildTbls) {
+		if childTableID == oldTableID {
+			// The source's live FK snapshot already covers both sides of a
+			// self-reference, whether catalog metadata stores its sentinel as 0
+			// or the current physical table ID.
+			continue
+		}
+		childDBName, childTableName, childRel, getErr := c.e.GetRelationById(
+			c.proc.Ctx, c.proc.GetTxnOperator(), childTableID,
+		)
+		if getErr != nil {
+			return getErr
+		}
+		constraintDef, getErr := GetConstraintDef(c.proc.Ctx, childRel)
+		if getErr != nil {
+			return getErr
+		}
+		var incomingForeignKeys []*plan.ForeignKeyDef
+		for _, constraint := range constraintDef.Cts {
+			foreignKeyDef, ok := constraint.(*engine.ForeignKeyDef)
+			if !ok {
+				continue
+			}
+			for _, foreignKey := range foreignKeyDef.Fkeys {
+				if foreignKey == nil {
+					return moerr.NewInternalError(
+						c.proc.Ctx, "nil foreign key definition in ALTER COPY child constraint",
+					)
+				}
+				if foreignKey.ForeignTbl == oldTableID {
+					incomingForeignKeys = append(incomingForeignKeys, foreignKey)
+				}
+			}
+		}
+		if childDBName == "" {
+			childDBName = dbName
+		}
+		if err = checkAlterCopyForeignKeyColumnsForKeys(
+			c.proc.Ctx,
+			incomingForeignKeys,
+			affectedForeignKeyColumns,
+			true,
+			childDBName+"."+childTableName,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkAlterCopyForeignKeyColumnsForKeys(
+	ctx context.Context,
+	foreignKeys []*plan.ForeignKeyDef,
+	affectedForeignKeyColumns map[uint64]string,
+	foreignColumns bool,
+	referencingTable string,
+) error {
+	for _, foreignKey := range foreignKeys {
+		if foreignKey == nil {
+			return moerr.NewInternalError(ctx, "nil foreign key definition in ALTER COPY")
+		}
+		if len(foreignKey.Cols) != len(foreignKey.ForeignCols) {
+			return moerr.NewInternalErrorf(ctx,
+				"foreign key %s has mismatched child and parent columns in ALTER COPY",
+				foreignKey.Name,
+			)
+		}
+		columnIDs := foreignKey.Cols
+		if foreignColumns {
+			columnIDs = foreignKey.ForeignCols
+		}
+		for _, columnID := range columnIDs {
+			if columnName, affected := affectedForeignKeyColumns[columnID]; affected {
+				if referencingTable == "" {
+					return moerr.NewErrForeignKeyColumnCannotChange(ctx, columnName, foreignKey.Name)
+				}
+				return moerr.NewErrForeignKeyColumnCannotChangeChild(
+					ctx, columnName, foreignKey.Name, referencingTable,
+				)
+			}
+		}
+	}
+	return nil
 }
 
 func applyAlterCopyForeignKeyState(

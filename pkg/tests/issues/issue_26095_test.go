@@ -32,13 +32,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestIssue26095ConcurrentDataBranchDeletion(t *testing.T) {
+func TestTenantCatalogRegressions(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(c embed.Cluster) {
-		runIssue26095ConcurrentDataBranchDeletion(t, c)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		rootDB := openIssue26095DB(t, ctx, fmt.Sprintf("sys#root#moadmin:111@tcp(127.0.0.1:%d)/", port))
+		defer rootDB.Close()
+		tenantName := fmt.Sprintf("catalog_fixture_%d", time.Now().UnixNano())
+		execSQLRequire(t, ctx, rootDB, fmt.Sprintf(
+			"create account `%s` admin_name 'admin' identified by '111'", tenantName))
+		defer cleanupIssue26095SQL(t, rootDB, fmt.Sprintf("drop account if exists `%s`", tenantName))
+		// These cases need a real ordinary tenant, but neither tests account
+		// creation or deletion. Each subtest cleans its own databases/catalog rows.
+		t.Run("Issue26095ConcurrentDataBranchDeletion", func(t *testing.T) {
+			runIssue26095ConcurrentDataBranchDeletion(t, c, tenantName)
+		})
+		t.Run("Issue26342MoSubsModernUpdate", func(t *testing.T) {
+			runIssue26342MoSubsModernUpdate(t, c, tenantName)
+		})
 	})
 }
 
-func runIssue26095ConcurrentDataBranchDeletion(t *testing.T, c embed.Cluster) {
+func runIssue26095ConcurrentDataBranchDeletion(t *testing.T, c embed.Cluster, tenantName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -48,12 +66,6 @@ func runIssue26095ConcurrentDataBranchDeletion(t *testing.T, c embed.Cluster) {
 	rootDB := openIssue26095DB(t, ctx, fmt.Sprintf("sys#root#moadmin:111@tcp(127.0.0.1:%d)/", port))
 	defer rootDB.Close()
 
-	tenantName := fmt.Sprintf("issue26095_%d", time.Now().UnixNano())
-	execSQLRequire(t, ctx, rootDB, fmt.Sprintf(
-		"create account `%s` admin_name 'admin' identified by '111'", tenantName,
-	))
-	defer cleanupIssue26095SQL(t, rootDB,
-		fmt.Sprintf("drop account if exists `%s`", tenantName))
 	tenantID := queryIssue26095AccountID(t, ctx, rootDB, tenantName)
 	require.NotZero(t, tenantID)
 	tenantDB := openIssue26095DB(t, ctx, fmt.Sprintf(
