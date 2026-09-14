@@ -3651,6 +3651,11 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 				ret[row] = false
 				nulls.Add(vec.GetNulls(), uint64(row))
 			} else {
+				if v.Kind() != parquet.Boolean {
+					return rollback(moerr.NewInvalidInputf(proc.Ctx,
+						"malformed BOOLEAN page: reader returned %s value",
+						v.Kind()))
+				}
 				ret[row] = v.Boolean()
 			}
 		}
