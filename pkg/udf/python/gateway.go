@@ -171,7 +171,10 @@ func (g *Gateway) CheckLanguageReady(ctx context.Context, language string) error
 	if err != nil {
 		return err
 	}
-	return g.ensureCapabilities(ctx, client)
+	// Readiness is an external admission decision. Refresh the worker
+	// capability record so a worker replacement at the same endpoint cannot
+	// inherit a stale success from the previous process.
+	return g.ensureCapabilities(ctx, client, true)
 }
 
 // ValidateDefinition asks the current worker to compile the exact artifact
@@ -284,7 +287,11 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 	if err != nil {
 		return err
 	}
-	if err := g.ensureCapabilities(ctx, client); err != nil {
+	// Definition validation is a Flight Action and therefore has no invocation
+	// lease in its request. It must perform its own worker-instance handshake;
+	// relying on a cached readiness result could validate against a replacement
+	// worker with a different contract.
+	if err := g.ensureCapabilities(ctx, client, true); err != nil {
 		return err
 	}
 	payload, err := json.Marshal(definitionValidationPayload{
@@ -539,7 +546,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if err != nil {
 		return err
 	}
-	if err := g.ensureCapabilities(streamCtx, client); err != nil {
+	if err := g.ensureCapabilities(streamCtx, client, false); err != nil {
 		return err
 	}
 	// The worker instance owns the lease epoch. Copy the invocation before
@@ -1065,10 +1072,17 @@ type capabilityResponse struct {
 // Gateway connection before OpenInvocation, and it caches only a successful
 // match. A worker with an unknown or different contract therefore cannot run
 // user code, while ordinary SQL remains independent of this client.
-func (g *Gateway) ensureCapabilities(ctx context.Context, client flight.FlightServiceClient) error {
+func (g *Gateway) ensureCapabilities(ctx context.Context, client flight.FlightServiceClient, forceRefresh bool) error {
 	g.capabilityMu.Lock()
 	defer g.capabilityMu.Unlock()
 	g.mu.Lock()
+	if forceRefresh {
+		// Clear the old lease before probing. If the probe fails, callers must
+		// observe the worker as unavailable rather than retaining a stale
+		// success that could authorize a lease-less Flight Action.
+		g.capabilityReady = false
+		g.workerLeaseEpoch = 0
+	}
 	ready := g.capabilityReady
 	closed := g.closed
 	g.mu.Unlock()
