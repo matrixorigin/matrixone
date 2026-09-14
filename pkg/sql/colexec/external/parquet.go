@@ -3675,6 +3675,7 @@ type strLoader struct {
 }
 
 func (ld *strLoader) init(data encoding.Values) {
+	*ld = strLoader{}
 	switch data.Kind() {
 	case encoding.ByteArray:
 		ld.buf, ld.offsets = data.ByteArray()

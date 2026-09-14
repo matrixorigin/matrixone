@@ -4473,6 +4473,14 @@ func Test_parquet_strLoader(t *testing.T) {
 	require.Equal(t, "abc", string(ld2.loadNext()))
 	require.Equal(t, "def", string(ld2.loadAt(1)))
 
+	// Reinitializing a loader must clear the previous representation and cursor.
+	var reused strLoader
+	reused.init(encoding.FixedLenByteArrayValues([]byte("abcd"), 2))
+	require.Equal(t, "ab", string(reused.loadNext()))
+	reused.init(encoding.ByteArrayValues([]byte("xyz"), []uint32{0, 1, 3}))
+	require.Equal(t, "x", string(reused.loadNext()))
+	require.Equal(t, "yz", string(reused.loadNext()))
+
 	// Unsupported kind panics
 	defer func() {
 		if r := recover(); r == nil {
