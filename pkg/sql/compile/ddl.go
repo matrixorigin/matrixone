@@ -6597,22 +6597,23 @@ type CDCUserInfo struct {
 }
 
 type CDCCreateTaskOptions struct {
-	TaskName     string
-	TaskId       string
-	UserInfo     *CDCUserInfo
-	Exclude      string
-	StartTs      string
-	EndTs        string
-	MaxSqlLength int64
-	PitrTables   string // json encoded pitr tables: cdc2.PatternTuples
-	SrcUri       string // json encoded source uri: cdc2.UriInfo
-	SrcUriInfo   cdc.UriInfo
-	SinkUri      string // json encoded sink uri: cdc2.UriInfo
-	SinkUriInfo  cdc.UriInfo
-	ExtraOpts    string // json encoded extra opts: map[string]any
-	SinkType     string
-	NoFull       bool
-	ConfigFile   string
+	TaskName       string
+	TaskId         string
+	UserInfo       *CDCUserInfo
+	Exclude        string
+	ExcludePattern string
+	StartTs        string
+	EndTs          string
+	MaxSqlLength   int64
+	PitrTables     string // json encoded pitr tables: cdc2.PatternTuples
+	SrcUri         string // json encoded source uri: cdc2.UriInfo
+	SrcUriInfo     cdc.UriInfo
+	SinkUri        string // json encoded sink uri: cdc2.UriInfo
+	SinkUriInfo    cdc.UriInfo
+	ExtraOpts      string // json encoded extra opts: map[string]any
+	SinkType       string
+	NoFull         bool
+	ConfigFile     string
 
 	// control options
 	UseConsole bool
@@ -6642,6 +6643,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	// before the option switch reaches the Exclude case.
 	if exclude := tmpOpts[cdc.CDCRequestOptions_Exclude]; exclude != "" {
 		opts.Exclude = exclude
+		opts.ExcludePattern = exclude
 	}
 
 	// extract source uri and check connection
@@ -6864,7 +6866,7 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 
 	// ensure PITR checks run with the target tenant account id
 	ctx = defines.AttachAccountId(ctx, opts.UserInfo.AccountId)
-	if err = c.checkPitrGranularity(ctx, patterTupples, opts.Exclude); err != nil {
+	if err = c.checkPitrGranularity(ctx, patterTupples, opts.ExcludePattern); err != nil {
 		return
 	}
 
@@ -6937,6 +6939,15 @@ func (c *Compile) checkPitrGranularity(
 	for _, pt := range pts.Pts {
 		if pt == nil {
 			continue
+		}
+		if exclude != "" {
+			matched, err := regexp.MatchString(exclude, pt.Source.Database+"."+pt.Source.Table)
+			if err != nil {
+				return err
+			}
+			if matched {
+				continue
+			}
 		}
 		if pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
 			dbFilter := ""
@@ -7138,7 +7149,7 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 		return
 	}
 
-	if err = c.checkPitrGranularity(ctx, patterTupples, opts.Exclude, normalized); err != nil {
+	if err = c.checkPitrGranularity(ctx, patterTupples, opts.ExcludePattern, normalized); err != nil {
 		return err
 	}
 	return nil
