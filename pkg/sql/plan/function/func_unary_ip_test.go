@@ -15,12 +15,17 @@
 package function
 
 import (
+	"bytes"
 	"encoding/hex"
 	"math"
 	"net"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 )
 
 func TestInet6NtoaString(t *testing.T) {
@@ -190,6 +195,188 @@ func TestInetNtoaNumericRoundingAndRange(t *testing.T) {
 			if err == nil && got != tt.want {
 				t.Fatalf("got %q, want %q", got, tt.want)
 			}
+		})
+	}
+}
+
+func TestIPFunctionRegisteredExecutors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	makeInput := func(typ types.Type, values any, flags []bool, constant bool) *vector.Vector {
+		var nsp *nulls.Nulls
+		if len(flags) > 0 {
+			nsp = nulls.NewWithSize(len(flags))
+			for i, isNull := range flags {
+				if isNull {
+					nsp.Add(uint64(i))
+				}
+			}
+		}
+		input := newVectorByType(mp, typ, values, nsp)
+		if constant {
+			input.SetClass(vector.CONSTANT)
+		}
+		return input
+	}
+	run := func(t *testing.T, name string, typ types.Type, values any, flags []bool, length int, constant bool) *vector.Vector {
+		t.Helper()
+		resolved, err := GetFunctionByName(proc.Ctx, name, []types.Type{typ})
+		require.NoError(t, err)
+		input := makeInput(typ, values, flags, constant)
+		t.Cleanup(func() {
+			input.Free(mp)
+		})
+		out, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), []*vector.Vector{input}, length)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			out.Free(mp)
+		})
+		return out
+	}
+	assertStrings := func(t *testing.T, out *vector.Vector, want []string, wantNull []bool) {
+		t.Helper()
+		param := vector.GenerateFunctionStrParameter(out)
+		for i, expected := range want {
+			got, isNull := param.GetStrValue(uint64(i))
+			require.Equal(t, wantNull[i], isNull, "row %d", i)
+			if !isNull {
+				require.Equal(t, expected, string(got), "row %d", i)
+			}
+		}
+	}
+
+	t.Run("inet_aton vector and null", func(t *testing.T) {
+		out := run(t, "inet_aton", types.T_varchar.ToType(),
+			[]string{"127.0.0.1", "010.000.005.009", "bad", ""},
+			[]bool{false, false, false, true}, 4, false)
+		require.Equal(t, []uint64{2130706433, 167773449, 0, 0}, vector.MustFixedColWithTypeCheck[uint64](out))
+		require.True(t, out.IsNull(2))
+		require.True(t, out.IsNull(3))
+	})
+
+	t.Run("inet_aton constant", func(t *testing.T) {
+		out := run(t, "inet_aton", types.T_varchar.ToType(), []string{"127.0.0.1"}, nil, 3, true)
+		require.True(t, out.IsConst())
+		require.Equal(t, []uint64{2130706433}, vector.MustFixedColWithTypeCheck[uint64](out))
+	})
+
+	t.Run("inet6_aton preserves mapped family", func(t *testing.T) {
+		out := run(t, "inet6_aton", types.T_varchar.ToType(),
+			[]string{"::ffff:192.0.2.1", "010.000.005.009", "bad", ""},
+			[]bool{false, false, false, true}, 4, false)
+		param := vector.GenerateFunctionStrParameter(out)
+		want := [][]byte{
+			{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 0, 2, 1},
+			{10, 0, 5, 9}, nil, nil,
+		}
+		for i, expected := range want {
+			got, isNull := param.GetStrValue(uint64(i))
+			require.Equal(t, expected == nil, isNull, "row %d", i)
+			if expected != nil {
+				require.True(t, bytes.Equal(expected, got), "row %d: got %x want %x", i, got, expected)
+			}
+		}
+	})
+
+	t.Run("inet6_aton constant", func(t *testing.T) {
+		out := run(t, "inet6_aton", types.T_varchar.ToType(), []string{"::1"}, nil, 2, true)
+		param := vector.GenerateFunctionStrParameter(out)
+		for i := 0; i < 2; i++ {
+			got, isNull := param.GetStrValue(uint64(i))
+			require.False(t, isNull)
+			require.Equal(t, []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}, got)
+		}
+	})
+
+	t.Run("inet6_ntoa mapped and invalid", func(t *testing.T) {
+		mapped := string([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 0, 2, 1})
+		out := run(t, "inet6_ntoa", types.T_varbinary.ToType(),
+			[]string{mapped, string([]byte{192, 0, 2, 1}), "x", ""},
+			[]bool{false, false, false, true}, 4, false)
+		assertStrings(t, out, []string{"::ffff:192.0.2.1", "192.0.2.1", "", ""}, []bool{false, false, true, true})
+	})
+
+	t.Run("is_ipv4 leading zero policy", func(t *testing.T) {
+		out := run(t, "is_ipv4", types.T_varchar.ToType(),
+			[]string{"010.000.005.009", "0001.2.3.4", "192.0.2.1", ""},
+			[]bool{false, false, false, true}, 4, false)
+		require.Equal(t, []int64{1, 0, 1, 0}, vector.MustFixedColWithTypeCheck[int64](out))
+		require.True(t, out.IsNull(3))
+	})
+
+	t.Run("is_ipv6 accepts mapped text", func(t *testing.T) {
+		out := run(t, "is_ipv6", types.T_varchar.ToType(),
+			[]string{"::ffff:192.0.2.1", "::192.0.2.1", "192.0.2.1", "bad", ""},
+			[]bool{false, false, false, false, true}, 5, false)
+		require.Equal(t, []int64{1, 1, 0, 0, 0}, vector.MustFixedColWithTypeCheck[int64](out))
+		require.True(t, out.IsNull(4))
+	})
+
+	t.Run("is_ipv4_compat reserved boundaries", func(t *testing.T) {
+		out := run(t, "is_ipv4_compat", types.T_varbinary.ToType(), []string{
+			string(make([]byte, 16)),
+			string(append(make([]byte, 15), 1)),
+			string(append(make([]byte, 15), 2)),
+			string([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 0, 2, 1}),
+			"x", "",
+		}, []bool{false, false, false, false, false, true}, 6, false)
+		require.Equal(t, []int64{0, 0, 1, 0, 0, 0}, vector.MustFixedColWithTypeCheck[int64](out))
+		require.True(t, out.IsNull(5))
+	})
+
+	for _, tc := range []struct {
+		name  string
+		typ   types.Type
+		value any
+		flags []bool
+		want  []string
+		nulls []bool
+	}{
+		{name: "float64", typ: types.T_float64.ToType(), value: []float64{1.5, 4294967295.5, math.NaN(), 16909060}, want: []string{"0.0.0.2", "", "", "1.2.3.4"}, nulls: []bool{false, true, true, false}},
+		{name: "float32", typ: types.T_float32.ToType(), value: []float32{1.5, -1}, want: []string{"0.0.0.2", ""}, nulls: []bool{false, true}},
+		{name: "decimal64", typ: types.New(types.T_decimal64, 18, 1), value: []types.Decimal64{5, 15, 42949672945, 42949672955}, want: []string{"0.0.0.1", "0.0.0.2", "255.255.255.255", ""}, nulls: []bool{false, false, false, true}},
+		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 1), value: []types.Decimal128{types.Decimal128FromInt64(25)}, want: []string{"0.0.0.3"}, nulls: []bool{false}},
+		{name: "decimal256", typ: types.New(types.T_decimal256, 76, 1), value: []types.Decimal256{types.Decimal256FromInt64(25)}, want: []string{"0.0.0.3"}, nulls: []bool{false}},
+	} {
+		t.Run("inet_ntoa/"+tc.name, func(t *testing.T) {
+			out := run(t, "inet_ntoa", tc.typ, tc.value, tc.flags, len(tc.want), false)
+			assertStrings(t, out, tc.want, tc.nulls)
+		})
+	}
+}
+
+func TestIPFunctionsSelectionMasksInvalidRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	selected := &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}
+
+	tests := []struct {
+		name   string
+		input  FunctionTestInput
+		result FunctionTestResult
+		fn     fEvalFn
+	}{
+		{
+			name:  "inet_aton",
+			input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-an-ip", "127.0.0.1"}, nil),
+			result: NewFunctionTestResult(types.T_uint64.ToType(), false,
+				[]uint64{0, 2130706433}, []bool{true, false}),
+			fn: InetAton,
+		},
+		{
+			name:  "inet_ntoa",
+			input: NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, 16909060}, nil),
+			result: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"", "1.2.3.4"}, []bool{true, false}),
+			fn: InetNtoa,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			caseRun := NewFunctionTestCase(proc, []FunctionTestInput{tc.input}, tc.result, tc.fn).
+				WithSelectList(selected)
+			ok, info := caseRun.Run()
+			require.True(t, ok, info)
 		})
 	}
 }
