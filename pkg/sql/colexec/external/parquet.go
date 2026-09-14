@@ -2410,8 +2410,13 @@ func processStringToFixed[T any](
 	if err := preExtendParquetFixedVector(vec, numRows+length, proc, !nc.noNulls); err != nil {
 		return err
 	}
+	checkpoint := vec.MakeAppendCheckpoint()
 	vec.SetLength(numRows + length)
 	ret := vector.MustFixedColWithTypeCheck[T](vec)
+	rollback := func(err error) error {
+		vec.RollbackAppend(checkpoint, numRows)
+		return err
+	}
 
 	// ========== Phase 3: Process data ==========
 
@@ -2438,7 +2443,7 @@ func processStringToFixed[T any](
 		// Parse and write
 		val, parseErr := parseFunc(data)
 		if parseErr != nil {
-			return wrapParseError(ctx, i, parseErr)
+			return rollback(wrapParseError(ctx, i, parseErr))
 		}
 		ret[i+length] = val
 	}

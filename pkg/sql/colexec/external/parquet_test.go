@@ -3555,6 +3555,24 @@ func TestParquet_NullableStringFixedMappingWithAllocationAccount(t *testing.T) {
 	require.True(t, vec.GetNulls().Contains(1))
 }
 
+func TestParquet_StringFixedMappingRollsBackOnParseError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, page := writeColumnAndGetPage(t, parquet.String(), []parquet.Row{
+		{parquet.ByteArrayValue([]byte("1")).Level(0, 0, 0)},
+		{parquet.ByteArrayValue([]byte("not-an-int")).Level(0, 0, 0)},
+	})
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_int32), NotNullable: true})
+	require.NotNil(t, mp)
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	require.NoError(t, vector.AppendFixed(vec, int32(99), false, proc.Mp()))
+
+	err := mp.mapping(page, proc, vec)
+	require.Error(t, err)
+	require.Equal(t, []int32{99}, vector.MustFixedColWithTypeCheck[int32](vec))
+}
+
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	// Reduce batch size so scan steps across multiple calls
 	save := maxParquetBatchCnt
