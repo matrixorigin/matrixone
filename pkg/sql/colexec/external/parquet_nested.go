@@ -436,13 +436,8 @@ func validateParquetNestedValues(ctx context.Context, col *parquet.Column, value
 		return moerr.NewInvalidInput(ctx, "malformed parquet nested column: column is nil")
 	}
 
-	leaves := collectLeafColumns(col)
-	byIndex := make(map[int]*parquet.Column, len(leaves))
-	for _, leaf := range leaves {
-		byIndex[leaf.Index()] = leaf
-	}
 	for i, value := range values {
-		leaf := byIndex[value.Column()]
+		leaf := findNestedLeafByIndex(col, value.Column())
 		if leaf == nil {
 			return moerr.NewInvalidInputf(ctx,
 				"malformed parquet nested value at row %d: column index %d is not in %s",
@@ -455,6 +450,24 @@ func validateParquetNestedValues(ctx context.Context, col *parquet.Column, value
 		}
 		if _, err := validateParquetLeafValue(ctx, leaf, value); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func findNestedLeafByIndex(col *parquet.Column, index int) *parquet.Column {
+	if col == nil {
+		return nil
+	}
+	if col.Leaf() {
+		if col.Index() == index {
+			return col
+		}
+		return nil
+	}
+	for _, child := range col.Columns() {
+		if leaf := findNestedLeafByIndex(child, index); leaf != nil {
+			return leaf
 		}
 	}
 	return nil
