@@ -400,7 +400,24 @@ func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*
 	if targetNested || candidateNested {
 		return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
 	}
-	return b.baseBindSubquery(astExpr, isRoot)
+
+	// Bare INSERT row-alias columns cannot be classified reliably from the AST:
+	// an identically named column in a local FROM scope must shadow the outer
+	// row alias. Bind the subquery first, while its nested Expr_Sub nodes still
+	// retain their provenance, then reject a candidate correlation that occurs
+	// across a nested subquery boundary. Flattening happens later in the INSERT
+	// builder and would erase that distinction.
+	expr, err := b.baseBindSubquery(astExpr, isRoot)
+	if err != nil {
+		return nil, err
+	}
+	if b.builder != nil && b.selectTag != 0 {
+		_, hasCandidate, hasNested := b.builder.analyzeOdkuCorrelatedSubquery(expr, 0, b.selectTag)
+		if hasCandidate && hasNested {
+			return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
+		}
+	}
+	return expr, nil
 }
 
 // astSubqueryTargetCorrelation checks the parser tree before the subquery is
