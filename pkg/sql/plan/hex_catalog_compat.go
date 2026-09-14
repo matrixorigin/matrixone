@@ -185,7 +185,11 @@ func migrateFoldedHexDefault(proc *process.Process, col *plan.ColDef) error {
 	}
 	newValue, err := fold(bound)
 	if err != nil {
-		return err
+		// Migration is best-effort at the resolver boundary, not a DEFAULT
+		// assignment requested by this statement. A valid legacy value can
+		// become unassignable (e.g. "10" -> "F" for DECIMAL). Keep it intact
+		// rather than making even SELECT unable to resolve the old table.
+		return nil
 	}
 	if lit := newValue.GetLit(); lit != nil {
 		lit.Src = DeepCopyExpr(bound)

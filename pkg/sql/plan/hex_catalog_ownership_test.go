@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -26,6 +27,52 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestHexDefaultMigrationPreservesUnassignableLegacyValue(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
+	t.Cleanup(func() {
+		if present {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
+		}
+	})
+	for _, typ := range []pb.Type{
+		{Id: int32(types.T_decimal64), Width: 5, Scale: 1},
+		{Id: int32(types.T_decimal128), Width: 30, Scale: 1},
+	} {
+		t.Run(fmt.Sprintf("type_%d", typ.Id), func(t *testing.T) {
+			legacy := &pb.Expr{Typ: pb.Type{Id: int32(types.T_varchar)}, Expr: &pb.Expr_F{F: &pb.Function{
+				Func: &pb.ObjectRef{Obj: function.EncodeOverloadID(function.HEX, 5), ObjName: "hex"},
+				Args: []*pb.Expr{MakePlan2Float64ConstExprWithType(15.5)},
+			}}}
+			assigned, err := makePlan2AssignmentCastExpr(proc.Ctx, legacy, typ)
+			require.NoError(t, err)
+			stored, err := ConstantFold(batch.EmptyForConstFoldBatch, assigned, proc, false, true)
+			require.NoError(t, err)
+			require.NotNil(t, stored.GetLit())
+			stored.GetLit().Src = nil // Legacy catalog did not persist HEX provenance.
+			catalog := &pb.TableDef{Cols: []*pb.ColDef{{Name: "v", Typ: typ,
+				Default: &pb.Default{Expr: stored, OriginString: "(hex(cast(15.5 as double)))"},
+			}}}
+			wire, err := catalog.Marshal()
+			require.NoError(t, err)
+			loaded := new(pb.TableDef)
+			require.NoError(t, loaded.Unmarshal(wire))
+			execution := CloneTableDefForPlan(loaded, true)
+			for range 2 {
+				require.NoError(t, MigrateLegacyHexTableDef(proc, execution))
+				require.Same(t, loaded.Cols[0], execution.Cols[0], "failed migration must not publish a replacement")
+				after, err := execution.Marshal()
+				require.NoError(t, err)
+				require.Equal(t, wire, after)
+			}
+		})
+	}
+}
 
 func TestHexCatalogMigrationPreservesColumnMetadata(t *testing.T) {
 	proc := testutil.NewProcess(t)

@@ -521,6 +521,49 @@ func TestRecoverTableDefForPlanMigratesLegacyHex(t *testing.T) {
 	require.Equal(t, int32(function.HexFloat64Overload), overloadID)
 }
 
+func TestResolveByIdPreservesUnassignableLegacyHexDefault(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
+	t.Cleanup(func() {
+		if present {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
+		}
+	})
+	typ := pbplan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 1}
+	catalogDef := &pbplan.TableDef{DbName: "db", Name: "t", Cols: []*pbplan.ColDef{{Name: "v", Typ: typ,
+		Default: &pbplan.Default{OriginString: "(hex(cast(15.5 as double)))", Expr: &pbplan.Expr{Typ: typ,
+			Expr: &pbplan.Expr_Lit{Lit: &pbplan.Literal{Value: &pbplan.Literal_Decimal64Val{
+				Decimal64Val: &pbplan.Decimal64{A: 100},
+			}}},
+		}},
+	}}}
+	wire, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	storage := mock_frontend.NewMockEngine(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("db", "t", relation, nil).Times(2)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef).Times(2)
+	ses, _ := newObservedProtocolSession()
+	ses.txnHandler = InitTxnHandler("", storage, proc.Ctx, txnOp)
+	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: proc.Ctx, ses: ses, proc: proc}}
+	for range 2 {
+		obj, resolved, err := tcc.ResolveById(42, nil)
+		require.NoError(t, err)
+		require.Equal(t, "t", obj.ObjName)
+		require.Equal(t, int64(100), resolved.Cols[0].Default.Expr.GetLit().GetDecimal64Val().A)
+		require.Same(t, catalogDef.Cols[0].Default, resolved.Cols[0].Default)
+	}
+	after, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, wire, after)
+}
+
 func TestDatabaseExistsSuppressesOnlyExpectedEOBLog(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ctx := context.Background()
