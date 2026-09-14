@@ -47,5 +47,24 @@ select
     cast('99999999999999999999999999999999999999999999999999999999999999999' as decimal(65,0)) div cast('99999999999999999999999999999999999999999999999999999.999999999999' as decimal(65,12)) as scale_up_fit,
     cast('999999999999999999999999999999.999999999999999999999999999999' as decimal(65,30)) div cast('500000000000000000000000000000' as decimal(65,0)) as truncate_div;
 
+select cast('1' as decimal(65,30)) / cast('0.000000000000000003' as decimal(65,18)) as issue_28774_wide_quotient;
+
+select cast(
+    cast('123456789012345' as decimal(38,0)) /
+    cast('999999999999999.999999999999999999' as decimal(38,18))
+    as decimal(65,6)
+) as issue_28775_d128_rounding;
+
+select cast(
+    cast('1234567890123450000000000000000000000000' as decimal(65,0)) /
+    cast('9999999999999999999999999999999999999999' as decimal(65,0))
+    as decimal(65,6)
+) as issue_28775_d256_control;
+
+select
+    cast(cast('85070591730234615865843651857943' as decimal(65,0)) /
+        cast('-170141183460469231731687303715884105728' as decimal(65,0)) as decimal(65,6)) as issue_28774_min_d128_divisor_positive_numerator,
+    cast(cast('-85070591730234615865843651857943' as decimal(65,0)) /
+        cast('-170141183460469231731687303715884105728' as decimal(65,0)) as decimal(65,6)) as issue_28774_min_d128_divisor_negative_numerator;
 
 drop table decimal_256_t;
