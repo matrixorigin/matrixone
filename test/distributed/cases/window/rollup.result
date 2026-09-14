@@ -1454,4 +1454,60 @@ order by g, a, b;
 a	b	c	s	g
 null	null	0	null	3
 drop table grouping_set_empty_input;
+drop table if exists grouping_set_decimal_sum_order;
+create table grouping_set_decimal_sum_order (a varchar(4), b varchar(4), c varchar(4), v decimal(38, 0));
+insert into grouping_set_decimal_sum_order
+select 'seed', cast(result as varchar), 'seed', 0 from generate_series(1, 1000, 1) g;
+delete from grouping_set_decimal_sum_order;
+insert into grouping_set_decimal_sum_order values
+('X', 'A', 'a', 90000000000000000000000000000000000000),
+('X', 'B', 'b1', 0),
+('X', 'C', 'c', -90000000000000000000000000000000000000),
+('X', 'B', 'b2', 90000000000000000000000000000000000000),
+('X', 'D', 'd', null);
+set @saved_optimizer_hints = @@optimizer_hints;
+set optimizer_hints = '';
+select a, b, c, sum(v) as s, grouping(a, b, c) as g
+from grouping_set_decimal_sum_order
+group by rollup(a, b, c)
+order by g, a, b, c;
+a	b	c	s	g
+X	A	a	90000000000000000000000000000000000000	0
+X	B	b1	0	0
+X	B	b2	90000000000000000000000000000000000000	0
+X	C	c	-90000000000000000000000000000000000000	0
+X	D	d	null	0
+X	A	null	90000000000000000000000000000000000000	1
+X	B	null	90000000000000000000000000000000000000	1
+X	C	null	-90000000000000000000000000000000000000	1
+X	D	null	null	1
+X	null	null	90000000000000000000000000000000000000	3
+null	null	null	90000000000000000000000000000000000000	7
+set optimizer_hints = 'sharedComputation=1';
+select a, b, c, sum(v) as s, grouping(a, b, c) as g
+from grouping_set_decimal_sum_order
+group by rollup(a, b, c)
+order by g, a, b, c;
+a	b	c	s	g
+X	A	a	90000000000000000000000000000000000000	0
+X	B	b1	0	0
+X	B	b2	90000000000000000000000000000000000000	0
+X	C	c	-90000000000000000000000000000000000000	0
+X	D	d	null	0
+X	A	null	90000000000000000000000000000000000000	1
+X	B	null	90000000000000000000000000000000000000	1
+X	C	null	-90000000000000000000000000000000000000	1
+X	D	null	null	1
+X	null	null	90000000000000000000000000000000000000	3
+null	null	null	90000000000000000000000000000000000000	7
+set optimizer_hints = '';
+select a, b, c, sum(v) as s, grouping(a, b, c) as g
+from grouping_set_decimal_sum_order
+where false
+group by rollup(a, b, c)
+order by g, a, b, c;
+a	b	c	s	g
+null	null	null	null	7
+set optimizer_hints = @saved_optimizer_hints;
+drop table grouping_set_decimal_sum_order;
 drop database rollup_test;
