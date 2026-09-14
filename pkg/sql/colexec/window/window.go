@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -2137,6 +2138,23 @@ func (ctr *container) evalOrderVector(bat *batch.Batch, proc *process.Process) (
 func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *process.Process) (bool, error) {
 	makeArgFs(ap)
 	ctr.ps = nil
+
+	if bat.RowCount() > 1 && int64(bat.Size()) > colexec.ResolveSpillThreshold(ap.SpillThreshold) {
+		sorted, err := mergeorder.SortBatch(proc, bat, ap.Fs, ap.SpillThreshold, ap.OpAnalyzer)
+		if err != nil {
+			return false, err
+		}
+		if ctr.bat == bat {
+			bat.Clean(proc.Mp())
+		}
+		ctr.bat = sorted
+		bat = sorted
+		// evalAggVector ran before the order pass. Re-evaluate after the external
+		// merge so every window argument remains aligned with the sorted rows.
+		if err = ctr.evalAggVector(bat, proc); err != nil {
+			return false, err
+		}
+	}
 
 	if err := ctr.evalOrderVector(bat, proc); err != nil {
 		return false, err
