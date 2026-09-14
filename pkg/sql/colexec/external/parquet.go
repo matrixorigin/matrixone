@@ -876,12 +876,9 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				}
 				return copyBoolDictPageToVec(mp, page, proc, vec, dict, indices, nc)
 			}
-			nc := nullCheckInfo{
-				noNulls: !mp.srcNull || page.NumNulls() == 0,
-			}
-			if !nc.noNulls && !mp.dstNull {
-				return moerr.NewConstraintViolationf(proc.Ctx,
-					"cannot load NULL value into NOT NULL column")
+			nc, err := prepareNullCheck(proc.Ctx, mp, page)
+			if err != nil {
+				return err
 			}
 			return copyPlainBoolPageToVec(page, proc, vec, nc)
 		}

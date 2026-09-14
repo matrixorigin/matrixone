@@ -3130,6 +3130,31 @@ func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	require.Equal(t, []bool{true}, vector.MustFixedColWithTypeCheck[bool](vec))
 }
 
+func TestParquet_Plain_Bool_DefinitionLevelMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	node := parquet.Optional(parquet.Leaf(parquet.BooleanType))
+	rows := []parquet.Row{
+		{parquet.BooleanValue(true).Level(0, 1, 0)},
+		{parquet.NullValue().Level(0, 0, 0)},
+	}
+	f, page := writeColumnAndGetPage(t, node, rows)
+
+	var h ParquetHandler
+	mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+	require.NotNil(t, mp)
+	badPage := &parquetPageWithDefinitionLevels{
+		Page:     page,
+		levels:   []byte{1, 1},
+		numNulls: 1,
+	}
+	vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+	err := mp.mapping(badPage, proc, vec)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NumNulls() indicates")
+	require.Zero(t, vec.Length())
+}
+
 func TestParquet_Dictionary_Bool_IndexError(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Encoded(parquet.Leaf(parquet.BooleanType), &parquet.RLEDictionary)
