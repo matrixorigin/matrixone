@@ -473,6 +473,48 @@ func TestInputBatchEncoderBulkPrimitivePreservesRangeNullsAndConstants(t *testin
 	}
 }
 
+func TestInputBatchEncoderVectorSizeProbeDoesNotUseVarlenaWrapper(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "vecf32", typ: types.New(types.T_array_float32, 3, 0)},
+		{name: "vecf64", typ: types.New(types.T_array_float64, 3, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := vector.NewVec(tc.typ)
+			defer input.Free(mp)
+			for row := 0; row < 64; row++ {
+				var err error
+				switch tc.typ.Oid {
+				case types.T_array_float32:
+					err = vector.AppendArray(input, []float32{float32(row), 1, 2}, row%11 == 0, mp)
+				case types.T_array_float64:
+					err = vector.AppendArray(input, []float64{float64(row), 1, 2}, row%11 == 0, mp)
+				}
+				require.NoError(t, err)
+			}
+
+			encoder, err := newInputBatchEncoder([]*vector.Vector{input}, []types.Type{tc.typ})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, encoder.close()) }()
+
+			var batch encodedRecordBatch
+			require.NotPanics(t, func() {
+				batch, err = encodeInputBatchWithEncoder(
+					encoder, 0, 64, DefaultMaxBatchBytes, 64,
+				)
+			})
+			require.NoError(t, err)
+			require.Equal(t, int64(64), batch.Rows)
+			require.Len(t, batch.Frames, 2)
+		})
+	}
+}
+
 func TestInputBatchWireEncoderReusesSchemaAcrossBatches(t *testing.T) {
 	descriptor, err := NewTypeDescriptor(types.T_int64.ToType())
 	require.NoError(t, err)
