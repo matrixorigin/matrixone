@@ -1095,7 +1095,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if dict := page.Dictionary(); dict != nil {
 					dictData := dict.Page().Data()
 					dictValues := dictData.Int32()
-					indices := data.Int32()
+					indices, err := parquetDictionaryIndexes(proc.Ctx, data)
+					if err != nil {
+						return err
+					}
 					return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) int32 {
 						return dictValues[int(idx)]
 					})
@@ -1341,7 +1344,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					if dict := page.Dictionary(); dict != nil {
 						dictData := dict.Page().Data()
 						dictValues := dictData.Double()
-						indices := data.Int32()
+						indices, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
 							return dictValues[int(idx)]
 						})
@@ -1354,7 +1360,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 					if dict := page.Dictionary(); dict != nil {
 						dictData := dict.Page().Data()
 						dictValues := dictData.Float()
-						indices := data.Int32()
+						indices, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indices, func(idx int32) float64 {
 							return float64(dictValues[int(idx)])
 						})
@@ -1425,7 +1434,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				dictData := dict.Page().Data()
 				bs, _ := dictData.Data()
 				dictDates := types.DecodeSlice[int32](bs)
-				indexes := data.Int32()
+				indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+				if err != nil {
+					return err
+				}
 				return copyDictPageToVec(mp, page, proc, vec, len(dictDates), indexes, func(idx int32) types.Date {
 					return types.DaysFromUnixEpochToDate(dictDates[int(idx)])
 				})
@@ -1497,7 +1509,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						for i, v := range dictValues {
 							converted[i] = convert(v / 1000)
 						}
-						indexes := data.Int32()
+						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
 							return converted[int(idx)]
 						})
@@ -1513,7 +1528,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						for i, v := range dictValues {
 							converted[i] = convert(v)
 						}
-						indexes := data.Int32()
+						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
 							return converted[int(idx)]
 						})
@@ -1529,7 +1547,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						for i, v := range dictValues {
 							converted[i] = convert(v * 1000)
 						}
-						indexes := data.Int32()
+						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Timestamp {
 							return converted[int(idx)]
 						})
@@ -1579,7 +1600,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				dictData := dict.Page().Data()
 				bs, _ := dictData.Data()
 				dictDates := types.DecodeSlice[int32](bs)
-				indexes := data.Int32()
+				indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+				if err != nil {
+					return err
+				}
 				return copyDictPageToVec(mp, page, proc, vec, len(dictDates), indexes, func(idx int32) types.Datetime {
 					return types.DaysFromUnixEpochToDate(dictDates[int(idx)]).ToDatetime()
 				})
@@ -1670,7 +1694,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						for i, v := range dictValues {
 							converted[i] = types.Time(v / 1000)
 						}
-						indexes := data.Int32()
+						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
 							return converted[int(idx)]
 						})
@@ -1683,7 +1710,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						dictData := dict.Page().Data()
 						bs, _ := dictData.Data()
 						dictTimes := types.DecodeSlice[types.Time](bs)
-						indexes := data.Int32()
+						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(dictTimes), indexes, func(idx int32) types.Time {
 							return dictTimes[int(idx)]
 						})
@@ -1698,7 +1728,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 						for i, v := range dictValues {
 							converted[i] = types.Time(v) * 1000
 						}
-						indexes := data.Int32()
+						indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+						if err != nil {
+							return err
+						}
 						return copyDictPageToVec(mp, page, proc, vec, len(converted), indexes, func(idx int32) types.Time {
 							return converted[int(idx)]
 						})
@@ -1757,7 +1790,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 			} else {
 				loader.init(dict.Page().Data())
 				data := page.Data()
-				indices = data.Int32()
+				indices, err = parquetDictionaryIndexes(proc.Ctx, data)
+				if err != nil {
+					return err
+				}
 				dictLen := int(dict.Len())
 				cache = make([]*types.Varlena, dictLen)
 
@@ -1847,7 +1883,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if err != nil {
 					return err
 				}
-				indexes := data.Int32()
+				indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+				if err != nil {
+					return err
+				}
 				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal64 {
 					return dictValues[int(idx)]
 				})
@@ -1906,7 +1945,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if err != nil {
 					return err
 				}
-				indexes := data.Int32()
+				indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+				if err != nil {
+					return err
+				}
 				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal128 {
 					return dictValues[int(idx)]
 				})
@@ -1958,7 +2000,10 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				if err != nil {
 					return err
 				}
-				indexes := data.Int32()
+				indexes, err := parquetDictionaryIndexes(proc.Ctx, data)
+				if err != nil {
+					return err
+				}
 				return copyDictPageToVec(mp, page, proc, vec, len(dictValues), indexes, func(idx int32) types.Decimal256 {
 					return dictValues[int(idx)]
 				})
@@ -2304,7 +2349,10 @@ func processStringToFixed[T any](
 	} else {
 		loader.init(dict.Page().Data())
 		data := page.Data()
-		indices = data.Int32()
+		indices, err = parquetDictionaryIndexes(ctx, data)
+		if err != nil {
+			return err
+		}
 		// 1.4 Validate dictionary indices count
 		if err := validateDictionaryIndicesCount(ctx, indices, nc.actualNonNulls); err != nil {
 			return err
@@ -2385,7 +2433,10 @@ func processStringToJson(
 	} else {
 		loader.init(dict.Page().Data())
 		data := page.Data()
-		indices = data.Int32()
+		indices, err = parquetDictionaryIndexes(ctx, data)
+		if err != nil {
+			return err
+		}
 		if err := validateDictionaryIndicesCount(ctx, indices, nc.actualNonNulls); err != nil {
 			return err
 		}
@@ -2457,7 +2508,10 @@ func processStringToArray[T types.ArrayElement](
 	} else {
 		loader.init(dict.Page().Data())
 		data := page.Data()
-		indices = data.Int32()
+		indices, err = parquetDictionaryIndexes(ctx, data)
+		if err != nil {
+			return err
+		}
 		if err := validateDictionaryIndicesCount(ctx, indices, nc.actualNonNulls); err != nil {
 			return err
 		}
@@ -3574,6 +3628,14 @@ func ensureDictionaryIndexes(ctx context.Context, dictLen int, indexes []int32) 
 		}
 	}
 	return nil
+}
+
+func parquetDictionaryIndexes(ctx context.Context, data encoding.Values) ([]int32, error) {
+	if data.Kind() != encoding.Int32 {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"malformed parquet dictionary indexes with type %s", data.Kind())
+	}
+	return data.Int32(), nil
 }
 
 func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, dictLen int, indexes []int32, convert func(idx int32) T) error {
