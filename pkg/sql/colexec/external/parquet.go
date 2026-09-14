@@ -3505,6 +3505,9 @@ func copyPageToVecMap[T, U any](mp *columnMapper, page parquet.Page, proc *proce
 	vec.SetLength(n + length)
 	ret := vector.MustFixedColWithTypeCheck[U](vec)
 	levels := page.DefinitionLevels()
+	if !noNulls {
+		nulls.TryExpand(vec.GetNulls(), n+length)
+	}
 	j := 0
 	for i := 0; i < n; i++ {
 		if !noNulls && levels[i] != mp.maxDefinitionLevel {
@@ -3529,6 +3532,19 @@ func ensureDictionaryIndexes(ctx context.Context, dictLen int, indexes []int32) 
 func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, dictLen int, indexes []int32, convert func(idx int32) T) error {
 	if err := ensureDictionaryIndexes(proc.Ctx, dictLen, indexes); err != nil {
 		return err
+	}
+	if !mp.srcNull || page.NumNulls() == 0 {
+		n := int(page.NumRows())
+		length := vec.Length()
+		if err := vec.PreExtend(n+length, proc.Mp()); err != nil {
+			return err
+		}
+		vec.SetLength(n + length)
+		ret := vector.MustFixedColWithTypeCheck[T](vec)
+		for i := 0; i < n; i++ {
+			ret[length+i] = convert(indexes[i])
+		}
+		return nil
 	}
 	return copyPageToVecMap(mp, page, proc, vec, indexes, convert)
 }
