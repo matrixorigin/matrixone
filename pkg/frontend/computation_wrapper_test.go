@@ -2215,6 +2215,89 @@ func TestInitExecuteStmtParamAcceptsPaddedBinaryDecimal(t *testing.T) {
 		"binary DECIMAL execution must use the bounded normalized canonical lexeme")
 }
 
+func TestCOMStmtPreparedBitwiseAggregateDecimal256HighScale(t *testing.T) {
+	// Binary-protocol DECIMAL parameters retain the complete physical
+	// DECIMAL256 scale domain.  This value has 66 fractional digits and remains
+	// just above 0.5 after conversion; it must not take the old scale>65
+	// round-to-zero shortcut.
+	value := "0.9" + strings.Repeat("0", 64) + "1"
+
+	for index, aggregateName := range []string{"bit_and", "bit_or", "bit_xor"} {
+		t.Run(aggregateName, func(t *testing.T) {
+			// Keep the test independent of a selected database/table while still
+			// exercising COM_STMT_EXECUTE parameter decoding and aggregate
+			// expression specialization.
+			query := fmt.Sprintf("select %s(?)", aggregateName)
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+				t, uint32(28779+index), query)
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+
+			setSessionAlloc("", NewLeakCheckAllocator())
+			ioses, err := NewIOSession(&testConn{}, getPu(""), "")
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, ioses.Close()) })
+			proto := NewMysqlClientProtocol("", 0, ioses, 1024, getPu("").SV)
+			proto.SetSession(ses)
+			require.NoError(t, proto.ParseExecuteData(
+				execCtx.reqCtx,
+				cw.proc,
+				prepareStmt,
+				buildStringExecutePacket(proto, defines.MYSQL_TYPE_NEWDECIMAL, value),
+				0,
+			))
+
+			_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+				execCtx, ses, cw, nil, prepareStmt.Name)
+			if owned && executionStmt != nil {
+				defer executionStmt.Free()
+			}
+			require.NoError(t, err)
+			require.NotNil(t, runtimePlan)
+
+			var aggregate *plan.Expr
+			for _, node := range runtimePlan.GetQuery().Nodes {
+				if node == nil {
+					continue
+				}
+				for _, candidate := range node.AggList {
+					if fn := candidate.GetF(); fn != nil && fn.Func != nil &&
+						fn.Func.GetObjName() == aggregateName {
+						aggregate = candidate
+						break
+					}
+				}
+				if aggregate != nil {
+					break
+				}
+			}
+			require.NotNil(t, aggregate, "prepared plan must retain %s aggregate", aggregateName)
+			require.Len(t, aggregate.GetF().Args, 1)
+			conversion := aggregate.GetF().Args[0]
+			require.Equal(t, int32(types.T_int64), conversion.Typ.Id,
+				"bitwise aggregate must execute through its numeric conversion")
+			require.NotNil(t, conversion.GetF())
+			require.Len(t, conversion.GetF().Args, 2)
+			require.Equal(t, int32(types.T_decimal256), conversion.GetF().Args[0].Typ.Id)
+			require.Equal(t, int32(66), conversion.GetF().Args[0].Typ.Width)
+			require.Equal(t, int32(66), conversion.GetF().Args[0].Typ.Scale)
+			require.Equal(t, int32(types.T_int64), conversion.GetF().Args[1].Typ.Id)
+
+			executor, err := colexec.NewExpressionExecutor(cw.proc, conversion)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.Equal(t, types.T_int64, result.GetType().Oid)
+			require.False(t, result.GetNulls().Contains(0))
+			require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result, 0),
+				"DECIMAL256(66,66) value above 0.5 must round to one")
+		})
+	}
+}
+
 func TestInitExecuteStmtParamKeepsDirectResultSpecializationAcrossNoOpPlanScan(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 114, "select ?, ? = ?")
 	defer func() {

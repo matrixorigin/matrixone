@@ -7126,6 +7126,34 @@ func TestStMeasuresGeodetic(t *testing.T) {
 		StArea)
 	ok, info := fcTC.Run()
 	require.True(t, ok, info)
+
+	// The SQL-facing evaluator must preserve the local antimeridian region,
+	// rather than selecting the 358-degree complement from the raw WKT order.
+	antimeridian := "POLYGON((179 -1,-179 -1,-179 1,179 1,179 -1))"
+	antimeridianAreaPayload := encodeGeometryPayload(antimeridian, 0, false)
+	wantAntimeridianArea, err := geodeticArea(antimeridianAreaPayload)
+	require.NoError(t, err)
+	antimeridianType := geom4326
+	areaCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(antimeridianType, []string{string(antimeridianAreaPayload)}, []bool{false})},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantAntimeridianArea}, []bool{false}), StArea)
+	ok, info = areaCase.Run()
+	require.True(t, ok, info)
+	require.Less(t, wantAntimeridianArea, 1e11)
+
+	inside := encodeGeometryPayload("POINT(180 0)", 0, false)
+	greenwich := encodeGeometryPayload("POINT(0 0)", 0, false)
+	wantGreenwichDistance, err := geodeticDistance(greenwich, antimeridianAreaPayload)
+	require.NoError(t, err)
+	distanceCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(antimeridianType, []string{string(inside), string(greenwich)}, []bool{false, false}),
+			NewFunctionTestInput(antimeridianType, []string{string(antimeridianAreaPayload), string(antimeridianAreaPayload)}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, wantGreenwichDistance}, []bool{false, false}), StDistance)
+	ok, info = distanceCase.Run()
+	require.True(t, ok, info)
+	require.Greater(t, wantGreenwichDistance, 1e6)
 }
 
 func TestStMeasuresGeodeticRejectInvalidCoordinates(t *testing.T) {
