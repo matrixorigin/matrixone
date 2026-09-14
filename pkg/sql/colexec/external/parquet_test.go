@@ -3025,6 +3025,7 @@ func TestParquet_Dictionary_Bool_IndexError(t *testing.T) {
 	}
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	require.Contains(t, err.Error(), "out of range")
 	require.Zero(t, vec.Length())
 }
