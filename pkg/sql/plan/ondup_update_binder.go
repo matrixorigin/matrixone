@@ -397,6 +397,7 @@ func (b *OndupUpdateBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr,
 func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	_, targetNested := b.astSubqueryTargetCorrelation(astExpr)
 	_, candidateNested := b.astSubqueryCandidateCorrelation(astExpr)
+	hasNestedAst := astSubqueryContainsNestedSubquery(astExpr)
 	if targetNested || candidateNested {
 		return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
 	}
@@ -413,11 +414,76 @@ func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*
 	}
 	if b.builder != nil && b.selectTag != 0 {
 		_, hasCandidate, hasNested := b.builder.analyzeOdkuCorrelatedSubquery(expr, 0, b.selectTag)
-		if hasCandidate && hasNested {
+		if hasCandidate && (hasNested || hasNestedAst) {
 			return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
 		}
 	}
 	return expr, nil
+}
+
+// astSubqueryContainsNestedSubquery preserves the nesting information that is
+// lost when bindSelect flattens a scalar subquery into its input plan. The
+// plan-level walk remains the authority for whether an identifier resolved to
+// an INSERT row alias; this helper only supplies the structural fact that a
+// child subquery existed.
+func astSubqueryContainsNestedSubquery(astExpr *tree.Subquery) bool {
+	if astExpr == nil {
+		return false
+	}
+
+	active := make(map[uintptr]struct{})
+	hasNested := false
+	var walk func(reflect.Value)
+	walk = func(value reflect.Value) {
+		if hasNested || !value.IsValid() {
+			return
+		}
+		if value.Kind() == reflect.Interface {
+			if value.IsNil() {
+				return
+			}
+			walk(value.Elem())
+			return
+		}
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				return
+			}
+			if value.CanInterface() {
+				if node, ok := value.Interface().(*tree.Subquery); ok {
+					if node != astExpr {
+						hasNested = true
+						return
+					}
+				}
+			}
+			pointer := value.Pointer()
+			if _, ok := active[pointer]; ok {
+				return
+			}
+			active[pointer] = struct{}{}
+			defer delete(active, pointer)
+			walk(value.Elem())
+			return
+		}
+
+		switch value.Kind() {
+		case reflect.Struct:
+			valueType := value.Type()
+			for i := 0; i < value.NumField(); i++ {
+				if valueType.Field(i).PkgPath == "" {
+					walk(value.Field(i))
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < value.Len(); i++ {
+				walk(value.Index(i))
+			}
+		}
+	}
+
+	walk(reflect.ValueOf(astExpr))
+	return hasNested
 }
 
 // astSubqueryTargetCorrelation checks the parser tree before the subquery is
