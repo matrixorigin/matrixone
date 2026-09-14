@@ -1786,14 +1786,34 @@ def _execute_handler_batch(
         return _serialize_record_batch(result_batch)
 
 
-def _read_exact(stream, size: int) -> bytes:
-    result = bytearray()
-    while len(result) < size:
-        chunk = stream.read(size - len(result))
+def _read_exact(stream, size: int) -> bytearray:
+    if size < 0:
+        raise ValueError("execution frame read size is negative")
+    result = bytearray(size)
+    readinto = getattr(stream, "readinto", None)
+    if callable(readinto):
+        view = memoryview(result)
+        offset = 0
+        try:
+            while offset < size:
+                count = readinto(view[offset:])
+                if not isinstance(count, int) or count <= 0:
+                    raise EOFError("execution frame ended unexpectedly")
+                offset += count
+        finally:
+            view.release()
+        return result
+
+    # Keep compatibility with the small stream doubles used by the contract
+    # tests and with file-like readers that expose only read().
+    offset = 0
+    while offset < size:
+        chunk = stream.read(size - offset)
         if not chunk:
             raise EOFError("execution frame ended unexpectedly")
-        result.extend(chunk)
-    return bytes(result)
+        result[offset : offset + len(chunk)] = chunk
+        offset += len(chunk)
+    return result
 
 
 def _write_execution_frame_parts(stream, parts: Iterable[bytes]) -> None:
@@ -1867,7 +1887,9 @@ def _read_execution_request(stream) -> Optional[Dict[str, Any]]:
         return None
     if len(first) != 1:
         raise EOFError("execution request header ended unexpectedly")
-    header = bytes(first) + _read_exact(stream, 7)
+    header = bytearray(8)
+    header[0] = first[0]
+    header[1:] = _read_exact(stream, 7)
     payload_size = struct.unpack(">Q", header)[0]
     if payload_size > MAX_EXECUTION_FRAME_BYTES or payload_size < 8:
         raise ValueError("RESOURCE_EXHAUSTED: execution request is too large")
@@ -1881,7 +1903,12 @@ def _read_execution_request(stream) -> Optional[Dict[str, Any]]:
     arrow_wire = _read_exact(stream, arrow_size)
     try:
         request = pickle.loads(
-            metadata_wire, buffers=[pickle.PickleBuffer(arrow_wire)]
+            metadata_wire,
+            # A readonly memoryview preserves the protocol-5 PickleBuffer
+            # type when the exact-read backing is a bytearray, while keeping
+            # the Arrow payload zero-copy and preventing handler code from
+            # mutating the receive buffer through the request object.
+            buffers=[pickle.PickleBuffer(memoryview(arrow_wire).toreadonly())],
         )
     except (EOFError, pickle.PickleError, TypeError, ValueError) as exc:
         raise ValueError("PROTOCOL: execution request metadata is invalid") from exc
