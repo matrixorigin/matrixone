@@ -262,7 +262,7 @@ func TestStringAssignmentWarningAttemptDiscard(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	session := &remoteWarningSession{}
 	proc.Session = session
-	attempt := newWarningAttempt(proc)
+	attempt := newWarningAttempt(proc, false)
 	require.NotNil(t, attempt)
 
 	source := vector.NewVec(types.T_varchar.ToType())
