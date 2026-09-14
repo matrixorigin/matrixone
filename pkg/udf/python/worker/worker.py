@@ -2478,16 +2478,21 @@ class _HandlerProcessSession:
         request_parts, request_size = _encode_execution_request(
             request, compact=self._burst_batches > 0
         )
-        if time.monotonic() >= deadline:
-            raise TimeoutError("DEADLINE_EXCEEDED: handler execution timeout")
+
+        def check_budget() -> None:
+            if _context_is_cancelled(context):
+                raise TimeoutError("DEADLINE_EXCEEDED: handler execution cancelled")
+            if time.monotonic() >= deadline:
+                raise TimeoutError("DEADLINE_EXCEEDED: handler execution timeout")
+
+        check_budget()
         request_part_index = 0
         request_part_offset = 0
         stdin_fd = self._process.stdin.fileno()
         self._selector.register(stdin_fd, selectors.EVENT_WRITE, "request")
         try:
             while True:
-                if _context_is_cancelled(context):
-                    raise TimeoutError("DEADLINE_EXCEEDED: handler execution cancelled")
+                check_budget()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("DEADLINE_EXCEEDED: handler execution timeout")
@@ -2499,6 +2504,11 @@ class _HandlerProcessSession:
                     if event.data == "request":
                         try:
                             while request_part_index < len(request_parts):
+                                # A single writable notification can drain many
+                                # small frame parts. Re-check the caller budget
+                                # inside that loop so serialization/write work
+                                # cannot outrun cancellation or the deadline.
+                                check_budget()
                                 part = request_parts[request_part_index]
                                 if request_part_offset == len(part):
                                     request_part_index += 1
@@ -2508,6 +2518,7 @@ class _HandlerProcessSession:
                                 if written <= 0:
                                     raise BrokenPipeError("handler request channel made no progress")
                                 request_part_offset += written
+                                check_budget()
                                 if request_part_offset < len(part):
                                     break
                         except BlockingIOError:
