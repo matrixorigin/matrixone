@@ -1,6 +1,6 @@
 services:
   minio:
-    image: minio/minio:RELEASE.2023-11-01T18-37-25Z
+    image: quay.io/minio/minio:RELEASE.2023-11-01T18-37-25Z
     container_name: mo-minio-local
     platform: ${DOCKER_PLATFORM:-linux/amd64}
     ports:
@@ -61,7 +61,7 @@ services:
 
   # Create default buckets via mc client
   createbuckets:
-    image: minio/mc:RELEASE.2023-10-30T18-43-32Z
+    image: quay.io/minio/mc:RELEASE.2023-10-30T18-43-32Z
     container_name: mo-minio-createbuckets
     platform: ${DOCKER_PLATFORM:-linux/amd64}
     depends_on:
