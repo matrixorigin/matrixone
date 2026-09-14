@@ -392,7 +392,14 @@ func (u *fulltext2SearchState) startProbeTail(proc *process.Process) error {
 		return moerr.NewInternalError(proc.Ctx, "fulltext2_search: probe_tail requires source table and pk in config")
 	}
 	searched := u.tailSearchedBuildTS
-	if searched > u.tailSnap.PhysicalTime { // newer than the read
+	// Newer than the read -> the generation may have removed a posting a long-running read must still
+	// see, which a forward tail cannot recover -> FALLBACK. build_ts is physical-only (the logical
+	// component is dropped at write, e.g. GetToTS().Physical()), so at EQUAL physical time we cannot
+	// prove the generation is not newer: one built at (P, L>0) records build_ts P, and a read at
+	// (P, L'<L) would be kept here by a strict `>` compare, then have the (P, L) deletion dropped at
+	// the mandatory join. Fall back whenever searched >= the read's physical time; only a strictly
+	// older physical generation is provably not newer and reaches the caught-up/tail logic below.
+	if searched >= u.tailSnap.PhysicalTime {
 		return u.startProbeStream(proc, u.probeFallbackSQL())
 	}
 	// Caught up iff the searched generation covers the full bar. build_ts is physical-only, so compare

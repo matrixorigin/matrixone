@@ -752,6 +752,37 @@ func TestFulltext2SearchProbeTailNewerFallback(t *testing.T) {
 	require.NotContains(t, capturedSQL, "table_changes")
 }
 
+// TestFulltext2SearchProbeTailPhysicalTieFallback guards the same-physical/later-logical hazard:
+// build_ts is physical-only, so a generation built at (P, L>0) records build_ts P. A read at
+// (P, L'<L) shares the physical time but is OLDER than the generation, which may have removed a
+// posting the read must still see. At equal physical time the compare cannot prove the generation
+// is not newer, so the operator must FALL BACK to a full pk scan -- not tail (a forward tail cannot
+// recover the deletion) and not treat it as caught up. stubTailSpansSchema(false) makes this
+// discriminating: without the tie fallback the single-schema window would run the tail.
+func TestFulltext2SearchProbeTailPhysicalTieFallback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	stubTailSpansSchema(t, false)
+
+	orig := ft2RunStreamingSql
+	defer func() { ft2RunStreamingSql = orig }()
+	var capturedSQL string
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ chan executor.Result, _ chan error) (executor.Result, error) {
+		capturedSQL = sql
+		return executor.Result{}, nil
+	}
+
+	st := probeTailState()
+	st.tailSearchedBuildTS = 3000                                         // generation build_ts physical == read physical
+	st.tailSnap = timestamp.Timestamp{PhysicalTime: 3000, LogicalTime: 1} // read (3000,1); generation may be (3000, L>1)
+	st.tailSp = sqlexec.NewSqlProcess(proc)
+
+	_, err := st.emitProbeTail(proc)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT `id` FROM `db`.`t` WHERE json_extract_string_internal(`j`, '$.foo') = 'needle'", capturedSQL)
+	require.NotContains(t, capturedSQL, "table_changes", "a physical-time tie must fall back, not tail")
+}
+
 // TestFulltext2SearchProbeTailSchemaSpanFallback: BEHIND, but a DDL sits in (searched, S] so
 // table_changes cannot span the window -- fall back to a full pk scan.
 func TestFulltext2SearchProbeTailSchemaSpanFallback(t *testing.T) {
