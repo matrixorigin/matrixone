@@ -88,6 +88,13 @@ func TestGatewayExecutesAgainstRealPythonWorker(t *testing.T) {
 		cancel()
 		require.NoFileExists(t, marker, "definition validation executed top-level Python code")
 
+		invalidLanguage := routineDefinitionForIntegration(valid)
+		invalidLanguage.Language = ""
+		validationContext, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		err = gateway.ValidateDefinition(validationContext, invalidLanguage)
+		cancel()
+		require.ErrorContains(t, err, "unsupported UDF language")
+
 		invalid := integrationInvocationForArgs(
 			ModeScalar, "add", "def add(ctx, value) return value",
 			[]types.Type{types.T_int64.ToType()}, nil, 0,
