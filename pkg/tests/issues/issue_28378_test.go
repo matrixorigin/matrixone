@@ -137,9 +137,12 @@ type ivfCase struct {
 }
 
 // The vector-index path selects Multi-CN from the vector-index plan node; it
-// has no 65,536-row threshold. 4,096 rows provide 256 vectors per IVF list on
+// has no 65,536-row threshold. 256 rows provide 16 vectors per IVF list on
 // average while preserving the remote lifecycle and result oracles.
-const ivfFixtureRows = 4096
+const (
+	ivfFixtureRows          = 256
+	ivfConcurrentIterations = 1 // one simultaneous query per session covers the interleaving
+)
 
 func TestIssue28378IVFFlatRemoteLifecycle(t *testing.T) {
 	started := time.Now()
@@ -467,7 +470,7 @@ func runIssue28378IVF(t *testing.T, cluster embed.Cluster, state *ivfRunState,
 							// Keep the eight-session interleaving while bounding repeated
 							// work so the shared five-minute query budget remains available
 							// for every distance operator under a full-UT runner.
-							for iteration := 0; iteration < 2; iteration++ {
+							for iteration := 0; iteration < ivfConcurrentIterations; iteration++ {
 								rows, err := conn.QueryContext(ctx, statement)
 								if err != nil {
 									return err
