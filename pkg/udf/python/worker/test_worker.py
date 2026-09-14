@@ -2190,6 +2190,19 @@ except Exception:
                     except ProcessLookupError:
                         pass
 
+    @unittest.skipUnless(os.name == "posix", "handler process-group cleanup")
+    def test_parent_watch_read_error_kills_own_group_before_handler_exit(self):
+        with (
+            mock.patch.object(worker.os, "read", side_effect=OSError("closed")),
+            mock.patch.object(worker.os, "getpgrp", return_value=23),
+            mock.patch.object(worker.os, "killpg") as killpg,
+            mock.patch.object(worker.os, "_exit", side_effect=SystemExit(137)),
+        ):
+            with self.assertRaises(SystemExit):
+                worker._watch_parent_liveness(17)
+
+        killpg.assert_called_once_with(23, worker.signal.SIGKILL)
+
     def test_handler_stdout_cannot_inject_parent_protocol(self):
         descriptor = {"type_id": worker.INT64, "offset_width": 32}
         batch = pa.RecordBatch.from_arrays([pa.array([1], type=pa.int64())], ["arg_0"])

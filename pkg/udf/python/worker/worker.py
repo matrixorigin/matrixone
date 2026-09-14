@@ -1953,6 +1953,15 @@ def _watch_parent_liveness(read_fd: int) -> None:
                         pass
                 os._exit(137)
     except (OSError, ValueError):
+        # A broken watch descriptor is also a lost parent notification.  The
+        # handler must terminate its whole process group before leaving; an
+        # ordinary thread exit would leave descendants alive after the worker
+        # has already lost ownership of them.
+        if os.name == "posix":
+            try:
+                os.killpg(os.getpgrp(), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         os._exit(137)
 
 
