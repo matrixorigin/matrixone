@@ -111,24 +111,85 @@ func SortBatchWithExtraVectors(
 	analyzer process.Analyzer,
 	extra []*vector.Vector,
 ) (*batch.Batch, []*vector.Vector, error) {
+	sorted, _, sortedExtra, err := sortBatchWithColumns(
+		proc, input, fs, threshold, analyzer, nil, extra)
+	return sorted, sortedExtra, err
+}
+
+// SortBatchWithPrecomputedOrder sorts input by orderCols, which must already
+// contain the values of fs in input-row order. It returns the sorted order
+// columns and extra vectors alongside the sorted input. This lets a caller
+// evaluate an order expression once, spill it, and reuse the same values after
+// the merge.
+func SortBatchWithPrecomputedOrder(
+	proc *process.Process,
+	input *batch.Batch,
+	fs []*plan.OrderBySpec,
+	threshold int64,
+	analyzer process.Analyzer,
+	orderCols []*vector.Vector,
+	extra []*vector.Vector,
+) (*batch.Batch, []*vector.Vector, []*vector.Vector, error) {
+	if len(orderCols) != len(fs) {
+		return nil, nil, nil, moerr.NewInvalidInputNoCtx("merge-order key count mismatch")
+	}
+	dataCols := 0
+	if input != nil {
+		dataCols = len(input.Vecs)
+	}
+	precomputed := make([]*plan.OrderBySpec, len(fs))
+	for i, spec := range fs {
+		if spec == nil || spec.Expr == nil {
+			return nil, nil, nil, moerr.NewInvalidInputNoCtx("invalid merge-order specification")
+		}
+		precomputed[i] = &plan.OrderBySpec{
+			Expr: &plan.Expr{
+				Typ: spec.Expr.Typ,
+				Expr: &plan2.Expr_Col{Col: &plan2.ColRef{
+					ColPos: int32(dataCols + i),
+				}},
+			},
+			Collation: spec.Collation,
+			Flag:      spec.Flag,
+		}
+	}
+	return sortBatchWithColumns(
+		proc, input, precomputed, threshold, analyzer, orderCols, extra)
+}
+
+func sortBatchWithColumns(
+	proc *process.Process,
+	input *batch.Batch,
+	fs []*plan.OrderBySpec,
+	threshold int64,
+	analyzer process.Analyzer,
+	orderCols []*vector.Vector,
+	extra []*vector.Vector,
+) (*batch.Batch, []*vector.Vector, []*vector.Vector, error) {
 	if proc == nil || input == nil {
-		return nil, nil, moerr.NewInvalidInputNoCtx("invalid merge-order sort input")
+		return nil, nil, nil, moerr.NewInvalidInputNoCtx("invalid merge-order sort input")
+	}
+	for _, vec := range orderCols {
+		if vec == nil || vec.Length() != input.RowCount() {
+			return nil, nil, nil, moerr.NewInvalidInputNoCtx("invalid merge-order carry vector")
+		}
 	}
 	for _, vec := range extra {
 		if vec == nil || vec.Length() != input.RowCount() {
-			return nil, nil, moerr.NewInvalidInputNoCtx("invalid merge-order extra vector")
+			return nil, nil, nil, moerr.NewInvalidInputNoCtx("invalid merge-order carry vector")
 		}
 	}
-	if len(extra) == 0 {
+	if len(orderCols) == 0 && len(extra) == 0 {
 		sorted, err := SortBatch(proc, input, fs, threshold, analyzer)
-		return sorted, nil, err
+		return sorted, nil, nil, err
 	}
 
 	// The combined batch borrows all source vectors. SortBatch duplicates each
 	// chunk before it shuffles or spills, so the borrowed source remains owned by
 	// the caller throughout this operation.
-	combined := batch.NewWithSize(len(input.Vecs) + len(extra))
+	combined := batch.NewWithSize(len(input.Vecs) + len(orderCols) + len(extra))
 	combined.Vecs = append(combined.Vecs[:0], input.Vecs...)
+	combined.Vecs = append(combined.Vecs, orderCols...)
 	combined.Vecs = append(combined.Vecs, extra...)
 	combined.Attrs = make([]string, len(combined.Vecs))
 	copy(combined.Attrs, input.Attrs)
@@ -137,20 +198,22 @@ func SortBatchWithExtraVectors(
 
 	sorted, err := SortBatch(proc, combined, fs, threshold, analyzer)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	dataCols := len(input.Vecs)
-	if sorted == nil || len(sorted.Vecs) != dataCols+len(extra) {
+	orderCount := len(orderCols)
+	if sorted == nil || len(sorted.Vecs) != dataCols+orderCount+len(extra) {
 		if sorted != nil {
 			sorted.Clean(proc.Mp())
 		}
-		return nil, nil, moerr.NewInternalErrorNoCtx("merge-order extra vector count mismatch")
+		return nil, nil, nil, moerr.NewInternalErrorNoCtx("merge-order carry vector count mismatch")
 	}
 
-	sortedExtra := append([]*vector.Vector(nil), sorted.Vecs[dataCols:]...)
+	sortedOrder := append([]*vector.Vector(nil), sorted.Vecs[dataCols:dataCols+orderCount]...)
+	sortedExtra := append([]*vector.Vector(nil), sorted.Vecs[dataCols+orderCount:]...)
 	sorted.Vecs = sorted.Vecs[:dataCols]
 	sorted.Attrs = append([]string(nil), input.Attrs...)
-	return sorted, sortedExtra, nil
+	return sorted, sortedOrder, sortedExtra, nil
 }
 
 func orderFlags(fs []*plan.OrderBySpec) (desc, nullsLast []bool) {

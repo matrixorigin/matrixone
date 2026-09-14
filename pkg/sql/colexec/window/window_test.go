@@ -2553,8 +2553,9 @@ func TestWindowPartitionTopNSeparatesGroupingNullFromEmptyString(t *testing.T) {
 				}},
 			}},
 		}},
-		Aggs:          []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
-		PartitionTopN: true,
+		Aggs:           []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		PartitionTopN:  true,
+		SpillThreshold: 1,
 	}
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 	arg.AppendChild(child)
