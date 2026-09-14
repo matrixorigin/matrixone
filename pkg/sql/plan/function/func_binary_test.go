@@ -8332,22 +8332,166 @@ func TestStDistance(t *testing.T) {
 	}
 }
 
-func TestStDistanceRejectInvalidInput(t *testing.T) {
+func TestStDistanceSupportsGeometryCollection(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"GEOMETRYCOLLECTION(POINT(0 0))"},
-			[]bool{false}),
+			[]string{
+				"GEOMETRYCOLLECTION(POINT(0 0),POINT(10 10))",
+				"GEOMETRYCOLLECTION(POINT EMPTY,GEOMETRYCOLLECTION(POINT(4 0),POINT(8 0)))",
+				"GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(10 0,12 0),POLYGON((20 0,22 0,22 2,20 2,20 0)))",
+				"GEOMETRYCOLLECTION(POINT(0 0),POINT(10 0))",
+				"POINT(6 0)",
+			},
+			[]bool{false, false, false, false, false}),
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POINT(0 0)"},
-			[]bool{false}),
+			[]string{
+				"POINT(1 0)",
+				"POINT(5 0)",
+				"POINT(11 1)",
+				"GEOMETRYCOLLECTION(POINT(6 0),POINT(20 0))",
+				"GEOMETRYCOLLECTION(POINT(0 0),POINT(10 0))",
+			},
+			[]bool{false, false, false, false, false}),
 	}
-	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{false})
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1, 1, 1, 4, 4}, []bool{false, false, false, false, false})
 
 	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
 	succeed, info := tcc.Run()
-	require.False(t, succeed)
-	require.Contains(t, info, "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+	require.True(t, succeed, info)
+}
+
+func TestStDistanceGeometryCollectionEmptyMembers(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{
+			"GEOMETRYCOLLECTION EMPTY",
+			"GEOMETRYCOLLECTION(POINT EMPTY)",
+			"GEOMETRYCOLLECTION(POINT EMPTY,POINT(1 1))",
+			"GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT EMPTY),MULTIPOINT EMPTY)",
+		}, nil),
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{
+			"POINT(0 0)",
+			"POINT(0 0)",
+			"POINT(2 1)",
+			"POINT(0 0)",
+		}, nil),
+	}
+	expect := NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0, 0, 1, 0}, []bool{true, true, false, true})
+	tcc := NewFunctionTestCase(proc, inputs, expect, StDistance)
+	succeed, info := tcc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestStDistanceGeometryCollectionPrecisionAndSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom4326 := types.T_geometry.ToType()
+	geom4326.Width = 4327 // SRID 4326
+	gc := encodeGeometryPayload("GEOMETRYCOLLECTION(POINT(0 0),POINT(2 0))", 0, false)
+	point := encodeGeometryPayload("POINT(1 0)", 0, false)
+	wantGeodetic, err := geodeticDistance(gc, point)
+	require.NoError(t, err)
+	geodetic := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom4326, []string{string(gc)}, []bool{false}),
+			NewFunctionTestInput(geom4326, []string{string(point)}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{wantGeodetic}, []bool{false}), StDistance)
+	ok, info := geodetic.Run()
+	require.True(t, ok, info)
+
+	toF32 := func(wkt string) string {
+		g, err := geo.ParseWKT(wkt)
+		require.NoError(t, err)
+		b, err := geo.WriteWKBFloat32(g)
+		require.NoError(t, err)
+		return string(b)
+	}
+	geom32 := types.T_geometry32.ToType()
+	gc32 := toF32("GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(10 0,12 0))")
+	point32 := toF32("POINT(11 1)")
+	f32 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom32, []string{gc32}, []bool{false}),
+			NewFunctionTestInput(geom32, []string{point32}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float32.ToType(), false, []float32{1}, []bool{false}), StDistance32)
+	ok, info = f32.Run()
+	require.True(t, ok, info)
+}
+
+func TestStDistanceValidationOrder(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	unsupported := types.T_geometry.ToType()
+	unsupported.Width = 3858
+	unsupported32 := types.T_geometry32.ToType()
+	unsupported32.Width = 3858
+
+	for _, tc := range []struct {
+		name        string
+		left, right FunctionTestInput
+		want        FunctionTestResult
+		fn          fEvalFn
+		selectList  *FunctionSelectList
+	}{
+		{
+			name:  "float64 all null",
+			left:  NewFunctionTestInput(unsupported, []string{""}, []bool{true}),
+			right: NewFunctionTestInput(unsupported, []string{""}, []bool{true}),
+			want:  NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+			fn:    StDistance,
+		},
+		{
+			name:       "float64 all masked",
+			left:       NewFunctionTestInput(unsupported, []string{"POINT(0 0)"}, []bool{false}),
+			right:      NewFunctionTestInput(unsupported, []string{"POINT(1 0)"}, []bool{false}),
+			want:       NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}),
+			fn:         StDistance,
+			selectList: &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false}},
+		},
+		{
+			name:  "float32 all null",
+			left:  NewFunctionTestInput(unsupported32, []string{""}, []bool{true}),
+			right: NewFunctionTestInput(unsupported32, []string{""}, []bool{true}),
+			want:  NewFunctionTestResult(types.T_float32.ToType(), false, []float32{0}, []bool{true}),
+			fn:    StDistance32,
+		},
+		{
+			name:       "float32 all masked",
+			left:       NewFunctionTestInput(unsupported32, []string{"POINT(0 0)"}, []bool{false}),
+			right:      NewFunctionTestInput(unsupported32, []string{"POINT(1 0)"}, []bool{false}),
+			want:       NewFunctionTestResult(types.T_float32.ToType(), false, []float32{0}, []bool{true}),
+			fn:         StDistance32,
+			selectList: &FunctionSelectList{AnyNull: true, AllNull: true, SelectList: []bool{false}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.left, tc.right}, tc.want, tc.fn).
+				WithSelectList(tc.selectList)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	for _, tc := range []struct {
+		name       string
+		geomType   types.Type
+		resultType types.Type
+		fn         fEvalFn
+	}{
+		{name: "float64", geomType: types.T_geometry.ToType(), resultType: types.T_float64.ToType(), fn: StDistanceWithSRID},
+		{name: "float32", geomType: types.T_geometry32.ToType(), resultType: types.T_float32.ToType(), fn: StDistanceWithSRID32},
+	} {
+		t.Run("explicit unsupported SRID "+tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(tc.geomType, []string{"GEOMETRYCOLLECTION EMPTY"}, []bool{false}),
+				NewFunctionTestInput(tc.geomType, []string{"POINT(0 0)"}, []bool{false}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{3857}, []bool{false}),
+			}, NewFunctionTestResult(tc.resultType, true, nil, nil), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 func TestStDistanceWithPolygonHoles(t *testing.T) {
