@@ -8134,6 +8134,8 @@ func (builder *QueryBuilder) bindSelectClause(
 	}
 
 	// build FROM clause
+	ctx.fullGroupByInputReady = false
+	ctx.fullGroupByProof = nil
 	if nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot); err != nil {
 		return
 	}
@@ -8253,6 +8255,8 @@ func (builder *QueryBuilder) bindSelectClause(
 		queryBlockHasPendingAggregate(selectList, clause.Having, astOrderBy)
 
 	// bind HAVING clause
+	ctx.fullGroupByInputNode = nodeID
+	ctx.fullGroupByInputReady = true
 	havingBinder = NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
 		boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder)

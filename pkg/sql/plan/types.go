@@ -1009,6 +1009,12 @@ type BindContext struct {
 
 	groupingFlag []bool
 
+	// Only GROUP BY validation consumes this query-block-local proof. It is
+	// never a physical uniqueness property or prepared-execution state.
+	fullGroupByInputNode  int32
+	fullGroupByInputReady bool
+	fullGroupByProof      *fullGroupByDependencyProof
+
 	remapOption *tree.RewriteOption
 }
 
