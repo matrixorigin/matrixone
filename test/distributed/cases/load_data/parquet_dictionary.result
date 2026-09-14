@@ -43,3 +43,5 @@ null  ¦  1  𝄀
 1  ¦  2
 drop table dictionary_bool_nullable;
 drop database parquet_dictionary;
+show databases like 'parquet_dictionary';
+➤ Database[12,5000,0]

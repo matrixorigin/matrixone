@@ -35,3 +35,4 @@ select nullable_bool_col, count(*) from dictionary_bool_nullable group by nullab
 drop table dictionary_bool_nullable;
 
 drop database parquet_dictionary;
+show databases like 'parquet_dictionary';
