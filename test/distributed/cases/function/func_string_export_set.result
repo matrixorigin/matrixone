@@ -395,5 +395,55 @@ EXECUTE export_set_window_stmt USING @export_set_bits;
 ➤ window_bits[12,64,0]  𝄀
 YYNN
 DEALLOCATE PREPARE export_set_window_stmt;
+PREPARE export_set_union_sorted FROM
+"SELECT EXPORT_SET((SELECT ? AS x UNION ALL SELECT 1 ORDER BY x DESC LIMIT 1), 'Y', 'N', '', 4) AS union_sorted_bits";
+PREPARE export_set_union_reversed FROM
+"SELECT EXPORT_SET((SELECT 1 AS x UNION SELECT ? ORDER BY x DESC LIMIT 1), 'Y', 'N', '', 4) AS union_reversed_bits";
+PREPARE export_set_aggregate FROM
+"SELECT EXPORT_SET((SELECT MAX(?) FROM export_set_scalar_input), 'Y', 'N', '', 4) AS aggregate_bits";
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_union_sorted USING @export_set_bits;
+➤ union_sorted_bits[12,64,0]  𝄀
+YYNN
+EXECUTE export_set_union_reversed USING @export_set_bits;
+➤ union_reversed_bits[12,64,0]  𝄀
+YYNN
+EXECUTE export_set_aggregate USING @export_set_bits;
+➤ aggregate_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_union_sorted USING @export_set_bits;
+➤ union_sorted_bits[12,64,0]  𝄀
+NYNN
+EXECUTE export_set_union_reversed USING @export_set_bits;
+➤ union_reversed_bits[12,64,0]  𝄀
+NYNN
+EXECUTE export_set_aggregate USING @export_set_bits;
+➤ aggregate_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(9223372036854775808.5 AS DECIMAL(65,1));
+EXECUTE export_set_union_sorted USING @export_set_bits;
+➤ union_sorted_bits[12,64,0]  𝄀
+YYYY
+EXECUTE export_set_union_reversed USING @export_set_bits;
+➤ union_reversed_bits[12,64,0]  𝄀
+YYYY
+EXECUTE export_set_aggregate USING @export_set_bits;
+➤ aggregate_bits[12,64,0]  𝄀
+YYYY
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_union_sorted USING @export_set_bits;
+➤ union_sorted_bits[12,64,0]  𝄀
+YYNN
+EXECUTE export_set_aggregate USING @export_set_bits;
+➤ aggregate_bits[12,64,0]  𝄀
+YYNN
+TRUNCATE TABLE export_set_scalar_input;
+EXECUTE export_set_aggregate USING @export_set_bits;
+➤ aggregate_bits[12,64,0]  𝄀
+null
+DEALLOCATE PREPARE export_set_union_sorted;
+DEALLOCATE PREPARE export_set_union_reversed;
+DEALLOCATE PREPARE export_set_aggregate;
 DROP TABLE export_set_scalar_input;
 DROP TABLE export_set_numeric_bits;

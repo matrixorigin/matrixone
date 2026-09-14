@@ -3824,6 +3824,35 @@ func collectPreparedExportSetSourceColumn(
 	if node == nil {
 		return 0, 0, false
 	}
+	if preparedSetOperation(node) && int(colPos) < len(node.ProjectList) {
+		localPositions := make(map[int32]struct{})
+		for _, child := range node.Children {
+			collectPreparedExportSetSourceColumn(query, child, colPos, localPositions, seenColumns, seenSubqueries)
+		}
+		for pos := range localPositions {
+			positions[pos] = struct{}{}
+		}
+		if len(localPositions) > 0 {
+			markPreparedOutputSource(node.ProjectList[colPos], nodeID, colPos, localPositions)
+			return nodeID, colPos, true
+		}
+		return 0, 0, false
+	}
+	if producer := preparedAggregateOutput(node, colPos); producer != nil {
+		localPositions := make(map[int32]struct{})
+		collectPreparedExportSetSources(query, producer, nodeID, localPositions, seenColumns, seenSubqueries)
+		for pos := range localPositions {
+			positions[pos] = struct{}{}
+		}
+		if len(localPositions) > 0 {
+			metadata := ensurePreparedNumericMetadata(producer)
+			metadata.Fallback = true
+			metadata.ParamPos = minimumPreparedPosition(localPositions)
+			markPreparedOutputSource(node.ProjectList[colPos], nodeID, colPos, localPositions)
+			return nodeID, colPos, true
+		}
+		return 0, 0, false
+	}
 	if node.NodeType == plan.Node_WINDOW && int(colPos) < len(node.ProjectList) {
 		projected := node.ProjectList[colPos]
 		if projectedCol := projected.GetCol(); projectedCol != nil && projectedCol.RelPos < 0 && len(node.Children) == 1 {

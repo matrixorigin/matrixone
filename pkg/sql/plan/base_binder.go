@@ -3226,6 +3226,39 @@ func (b *baseBinder) collectPreparedParamSourceColumn(
 	if node == nil {
 		return 0, 0, false
 	}
+	if preparedSetOperation(node) && int(colPos) < len(node.ProjectList) {
+		localPositions := make(map[int32]struct{})
+		for _, child := range node.Children {
+			b.collectPreparedParamSourceColumn(child, colPos, localPositions, seenColumns, seenSubqueries, mark)
+		}
+		for pos := range localPositions {
+			positions[pos] = struct{}{}
+		}
+		if len(localPositions) > 0 {
+			if mark {
+				markPreparedOutputSource(node.ProjectList[colPos], nodeID, colPos, localPositions)
+			}
+			return nodeID, colPos, true
+		}
+		return 0, 0, false
+	}
+	if producer := preparedAggregateOutput(node, colPos); producer != nil {
+		localPositions := make(map[int32]struct{})
+		b.collectPreparedParamSources(producer, nodeID, localPositions, seenColumns, seenSubqueries, mark)
+		for pos := range localPositions {
+			positions[pos] = struct{}{}
+		}
+		if len(localPositions) > 0 {
+			if mark {
+				metadata := ensurePreparedNumericMetadata(producer)
+				metadata.Fallback = true
+				metadata.ParamPos = minimumPreparedPosition(localPositions)
+				markPreparedOutputSource(node.ProjectList[colPos], nodeID, colPos, localPositions)
+			}
+			return nodeID, colPos, true
+		}
+		return 0, 0, false
+	}
 	if node.NodeType == plan.Node_WINDOW && int(colPos) < len(node.ProjectList) {
 		projected := node.ProjectList[colPos]
 		if projectedCol := projected.GetCol(); projectedCol != nil && projectedCol.RelPos < 0 && len(node.Children) == 1 {

@@ -1451,10 +1451,12 @@ type preparedNumericSourceRefreshRule struct {
 	reset *ResetParamRefRule
 }
 
-func (rule *preparedNumericSourceRefreshRule) MatchNode(_ *Node) bool { return false }
-func (rule *preparedNumericSourceRefreshRule) IsApplyExpr() bool      { return true }
-func (rule *preparedNumericSourceRefreshRule) ApplyNode(_ *Node) error {
-	return nil
+func (rule *preparedNumericSourceRefreshRule) MatchNode(node *Node) bool {
+	return preparedSetOperation(node)
+}
+func (rule *preparedNumericSourceRefreshRule) IsApplyExpr() bool { return true }
+func (rule *preparedNumericSourceRefreshRule) ApplyNode(node *Node) error {
+	return rule.rebindSetOperation(node)
 }
 func (rule *preparedNumericSourceRefreshRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
 	refreshed, changed, err := rule.reset.refreshPreparedNumericSource(expr)
