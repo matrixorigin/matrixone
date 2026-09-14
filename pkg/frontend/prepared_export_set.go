@@ -22,23 +22,23 @@ import (
 // refreshExportSetParamPositions retains source types across automatic plan
 // rebuilds, but drops positions that no longer belong to EXPORT_SET. An explicit
 // PREPARE creates a different statement owner with no inherited type history.
-func (stmt *PrepareStmt) refreshExportSetParamPositions(preparePlan *plan2.Plan, paramCount int) {
-	stmt.exportSetParamPositions = plan2.PreparedPlanExportSetParamPositions(preparePlan)
-	previous := stmt.exportSetParamTypes
-	stmt.exportSetParamTypes = nil
-	if len(previous) != paramCount || len(previous) == 0 || len(stmt.exportSetParamPositions) == 0 {
+func (prepareStmt *PrepareStmt) refreshExportSetParamPositions(preparePlan *plan2.Plan, paramCount int) {
+	prepareStmt.exportSetParamPositions = plan2.PreparedPlanExportSetParamPositions(preparePlan)
+	previous := prepareStmt.exportSetParamTypes
+	prepareStmt.exportSetParamTypes = nil
+	if len(previous) != paramCount || len(previous) == 0 || len(prepareStmt.exportSetParamPositions) == 0 {
 		return
 	}
-	stmt.exportSetParamTypes = make([]types.Type, paramCount)
-	for _, pos := range stmt.exportSetParamPositions {
+	prepareStmt.exportSetParamTypes = make([]types.Type, paramCount)
+	for _, pos := range prepareStmt.exportSetParamPositions {
 		if pos >= 0 && int(pos) < paramCount {
-			stmt.exportSetParamTypes[pos] = previous[pos]
+			prepareStmt.exportSetParamTypes[pos] = previous[pos]
 		}
 	}
 }
 
-func (stmt *PrepareStmt) hasExportSetNumericHistory() bool {
-	for _, typ := range stmt.exportSetParamTypes {
+func (prepareStmt *PrepareStmt) hasExportSetNumericHistory() bool {
+	for _, typ := range prepareStmt.exportSetParamTypes {
 		if typ.Oid != types.T_any {
 			return true
 		}
@@ -50,21 +50,21 @@ func (stmt *PrepareStmt) hasExportSetNumericHistory() bool {
 // session's serial execution path. A NULL never establishes a numeric domain,
 // but a later NULL must not undo a domain established by a concrete value.
 // The original NULL and protocol provenance are retained; only its type changes.
-func (stmt *PrepareStmt) applyExportSetNullRuntimeTypes(values []any) {
-	if len(stmt.exportSetParamPositions) == 0 {
+func (prepareStmt *PrepareStmt) applyExportSetNullRuntimeTypes(values []any) {
+	if len(prepareStmt.exportSetParamPositions) == 0 {
 		return
 	}
-	if len(stmt.exportSetParamTypes) != len(values) {
-		stmt.exportSetParamTypes = make([]types.Type, len(values))
+	if len(prepareStmt.exportSetParamTypes) != len(values) {
+		prepareStmt.exportSetParamTypes = make([]types.Type, len(values))
 	}
-	for _, pos := range stmt.exportSetParamPositions {
+	for _, pos := range prepareStmt.exportSetParamPositions {
 		if pos < 0 || int(pos) >= len(values) {
 			continue
 		}
 		value, wrapped := values[pos].(plan2.ParamValue)
 		isNull := values[pos] == nil || wrapped && value.Value == nil
 		if isNull {
-			previous := stmt.exportSetParamTypes[pos]
+			previous := prepareStmt.exportSetParamTypes[pos]
 			if previous.Oid == types.T_any || value.HasRuntimeType {
 				continue
 			}
@@ -77,7 +77,7 @@ func (stmt *PrepareStmt) applyExportSetNullRuntimeTypes(values []any) {
 		if !numeric {
 			// Keep existing nonnumeric execution semantics. A concrete text/binary
 			// binding ends this numeric history; NULL itself never clears it.
-			stmt.exportSetParamTypes[pos] = types.Type{}
+			prepareStmt.exportSetParamTypes[pos] = types.Type{}
 			continue
 		}
 		if wrapped {
@@ -89,6 +89,6 @@ func (stmt *PrepareStmt) applyExportSetNullRuntimeTypes(values []any) {
 				typ = value.SourceType
 			}
 		}
-		stmt.exportSetParamTypes[pos] = typ
+		prepareStmt.exportSetParamTypes[pos] = typ
 	}
 }
