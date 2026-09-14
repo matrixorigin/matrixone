@@ -3476,6 +3476,32 @@ func TestParquetNestedValuesRejectInvalidLevels(t *testing.T) {
 	}
 }
 
+func TestParquetNestedOptionalGroupNullIsPreserved(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"outer": parquet.Group{
+			"nested": parquet.Optional(parquet.Group{
+				"value": parquet.Leaf(parquet.Int32Type),
+			}),
+		},
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	outer := f.Root().Column("outer")
+	leaf := outer.Column("nested").Column("value")
+
+	value, err := reconstructNestedByType(context.Background(), outer, []parquet.Value{
+		parquet.NullValue().Level(0, 0, leaf.Index()),
+	})
+	require.NoError(t, err)
+	result, ok := value.(map[string]any)
+	require.True(t, ok)
+	require.Contains(t, result, "nested")
+	require.Nil(t, result["nested"])
+}
+
 func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Leaf(parquet.BooleanType)

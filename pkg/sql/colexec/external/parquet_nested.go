@@ -839,6 +839,10 @@ func filterValuesByColumn(values []parquet.Value, col *parquet.Column) []parquet
 
 // reconstructNestedByType reconstructs nested structure by type
 func reconstructNestedByType(ctx context.Context, col *parquet.Column, values []parquet.Value) (any, error) {
+	if col.Optional() && isNestedColumnNull(values, col) {
+		return nil, nil
+	}
+
 	logicalType := col.Type().LogicalType()
 	if logicalType != nil {
 		if logicalType.List != nil {
