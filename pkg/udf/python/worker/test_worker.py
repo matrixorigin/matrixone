@@ -2923,6 +2923,57 @@ except Exception:
             if session is not None:
                 session.close()
 
+    @unittest.skipUnless(os.name == "posix", "non-blocking write budget test")
+    def test_handler_request_write_rechecks_budget_within_one_write_event(self):
+        class CancelAfterWrites:
+            def __init__(self):
+                self.writes = 0
+
+            def is_cancelled(self):
+                return self.writes >= 2
+
+        class FakeStdin:
+            def fileno(self):
+                return 123
+
+        class FakeProcess:
+            stdin = FakeStdin()
+
+            def poll(self):
+                return None
+
+        class FakeSelector:
+            def register(self, *args):
+                pass
+
+            def unregister(self, *args):
+                pass
+
+            def select(self, _timeout):
+                return [(types.SimpleNamespace(data="request"), None)]
+
+        context = CancelAfterWrites()
+        session = object.__new__(worker._HandlerProcessSession)
+        session._closed = False
+        session._process = FakeProcess()
+        session._selector = FakeSelector()
+        session._response_buffer = bytearray()
+        session._burst_batches = 0
+
+        request_parts = tuple(b"x" for _ in range(100))
+
+        def write(_fd, data):
+            context.writes += 1
+            return len(data)
+
+        with mock.patch.object(
+            worker, "_encode_execution_request", return_value=(request_parts, 100)
+        ), mock.patch.object(worker.os, "write", side_effect=write):
+            with self.assertRaisesRegex(TimeoutError, "handler execution cancelled"):
+                session.run(context, {"input": b"x"}, 10)
+
+        self.assertLess(context.writes, len(request_parts))
+
     def test_zero_argument_vector_uses_context_rows(self):
         descriptor = {"type_id": worker.INT64, "offset_width": 32}
         output = pa.array([7, 7, 7], type=pa.int64())
