@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"reflect"
 	"unicode/utf8"
@@ -34,6 +35,7 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/arrowipc"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -919,11 +921,13 @@ func DecodeRecordBatch(schemaFrame, batchFrame ArrowFrame, maxBytes int64) (arro
 	if batchInfo.HeaderType != arrowipc.MessageHeaderRecordBatch {
 		return nil, fmt.Errorf("invalid Arrow record frame header %d", batchInfo.HeaderType)
 	}
-	stream := make([]byte, 0, len(schemaFrame.Header)+len(batchFrame.Header)+len(batchFrame.Body)+32)
-	stream = appendIPCFrame(stream, schemaFrame.Header, schemaFrame.Body)
-	stream = appendIPCFrame(stream, batchFrame.Header, batchFrame.Body)
-	stream = append(stream, 0, 0, 0, 0, 0, 0, 0, 0)
-	reader, err := ipc.NewReader(bytes.NewReader(stream), ipc.WithAllocator(memory.NewGoAllocator()))
+	// The snapshot is already the immutable validation/publication backing.
+	// Feed that backing directly to Arrow's stream reader instead of assembling
+	// another stream-sized byte slice around it.  The small IPC continuation
+	// prefixes and alignment padding are separate readers; the body remains
+	// owned by the validated snapshot until Arrow releases the record.
+	stream := newIPCStreamReader(schemaFrame, batchFrame)
+	reader, err := ipc.NewReader(stream, ipc.WithAllocator(memory.NewGoAllocator()))
 	if err != nil {
 		return nil, fmt.Errorf("decode Arrow output: %w", err)
 	}
@@ -938,21 +942,57 @@ func DecodeRecordBatch(schemaFrame, batchFrame ArrowFrame, maxBytes int64) (arro
 	record.Retain()
 	return record, nil
 }
-func appendIPCFrame(dst, header, body []byte) []byte {
-	metadataLength := (len(header) + 7) &^ 7
-	var prefix [8]byte
-	binary.LittleEndian.PutUint32(prefix[:4], math.MaxUint32)
-	binary.LittleEndian.PutUint32(prefix[4:], uint32(metadataLength))
-	dst = append(dst, prefix[:]...)
-	dst = append(dst, header...)
-	for len(dst)%8 != 0 {
-		dst = append(dst, 0)
+
+var ipcZeroPadding [8]byte
+
+func newIPCStreamReader(frames ...ArrowFrame) io.Reader {
+	parts := make([][]byte, 0, len(frames)*5+1)
+	for _, frame := range frames {
+		metadataLength := (len(frame.Header) + 7) &^ 7
+		bodyLength := (len(frame.Body) + 7) &^ 7
+		var prefix [8]byte
+		binary.LittleEndian.PutUint32(prefix[:4], math.MaxUint32)
+		binary.LittleEndian.PutUint32(prefix[4:], uint32(metadataLength))
+		parts = append(parts,
+			prefix[:],
+			frame.Header,
+			ipcZeroPadding[:metadataLength-len(frame.Header)],
+			frame.Body,
+			ipcZeroPadding[:bodyLength-len(frame.Body)],
+		)
 	}
-	dst = append(dst, body...)
-	for len(dst)%8 != 0 {
-		dst = append(dst, 0)
+	// Arrow's stream reader uses an eight-byte zero continuation marker to
+	// observe the end of the stream after the one record batch.
+	parts = append(parts, ipcZeroPadding[:])
+	return &ipcStreamReader{parts: parts}
+}
+
+type ipcStreamReader struct {
+	parts  [][]byte
+	part   int
+	offset int
+}
+
+func (r *ipcStreamReader) Read(dst []byte) (int, error) {
+	if len(dst) == 0 {
+		return 0, nil
 	}
-	return dst
+	read := 0
+	for read < len(dst) && r.part < len(r.parts) {
+		source := r.parts[r.part]
+		if r.offset >= len(source) {
+			r.part++
+			r.offset = 0
+			continue
+		}
+		copied := copy(dst[read:], source[r.offset:])
+		r.offset += copied
+		read += copied
+	}
+	if read != 0 {
+		return read, nil
+	}
+	return 0, io.EOF
 }
 
 func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vector.FunctionResultWrapper, mp *mpool.MPool) error {
@@ -976,53 +1016,39 @@ func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vect
 	}
 	result.GetResultVector().SetTypeScale(descriptor.Scale)
 	typ := types.T(descriptor.TypeID)
+	switch typ {
+	case types.T_bool:
+		return appendBoolArrowResult(input.(*array.Boolean), result)
+	case types.T_int8:
+		return appendFixedArrowValues(input.(*array.Int8).Int8Values(), input, result)
+	case types.T_int16:
+		return appendFixedArrowValues(input.(*array.Int16).Int16Values(), input, result)
+	case types.T_int32:
+		return appendFixedArrowValues(input.(*array.Int32).Int32Values(), input, result)
+	case types.T_int64:
+		return appendFixedArrowValues(input.(*array.Int64).Int64Values(), input, result)
+	case types.T_uint8:
+		return appendFixedArrowValues(input.(*array.Uint8).Uint8Values(), input, result)
+	case types.T_uint16:
+		return appendFixedArrowValues(input.(*array.Uint16).Uint16Values(), input, result)
+	case types.T_uint32:
+		return appendFixedArrowValues(input.(*array.Uint32).Uint32Values(), input, result)
+	case types.T_uint64:
+		return appendFixedArrowValues(input.(*array.Uint64).Uint64Values(), input, result)
+	case types.T_float32:
+		return appendFixedArrowValues(input.(*array.Float32).Float32Values(), input, result)
+	case types.T_float64:
+		return appendFixedArrowValues(input.(*array.Float64).Float64Values(), input, result)
+	case types.T_char, types.T_varchar, types.T_text:
+		return appendStringArrowResult(input.(*array.String), result)
+	case types.T_json:
+		return appendJSONArrowResult(input.(*array.String), result)
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return appendBinaryArrowResult(input.(*array.Binary), result)
+	}
 	for i := 0; i < input.Len(); i++ {
 		null := input.IsNull(i)
 		switch typ {
-		case types.T_bool:
-			if err := vector.MustFunctionResult[bool](result).Append(input.(*array.Boolean).Value(i), null); err != nil {
-				return err
-			}
-		case types.T_int8:
-			if err := vector.MustFunctionResult[int8](result).Append(input.(*array.Int8).Value(i), null); err != nil {
-				return err
-			}
-		case types.T_int16:
-			if err := vector.MustFunctionResult[int16](result).Append(input.(*array.Int16).Value(i), null); err != nil {
-				return err
-			}
-		case types.T_int32:
-			if err := vector.MustFunctionResult[int32](result).Append(input.(*array.Int32).Value(i), null); err != nil {
-				return err
-			}
-		case types.T_int64:
-			if err := vector.MustFunctionResult[int64](result).Append(input.(*array.Int64).Value(i), null); err != nil {
-				return err
-			}
-		case types.T_uint8:
-			if err := vector.MustFunctionResult[uint8](result).Append(input.(*array.Uint8).Value(i), null); err != nil {
-				return err
-			}
-		case types.T_uint16:
-			if err := vector.MustFunctionResult[uint16](result).Append(input.(*array.Uint16).Value(i), null); err != nil {
-				return err
-			}
-		case types.T_uint32:
-			if err := vector.MustFunctionResult[uint32](result).Append(input.(*array.Uint32).Value(i), null); err != nil {
-				return err
-			}
-		case types.T_uint64:
-			if err := vector.MustFunctionResult[uint64](result).Append(input.(*array.Uint64).Value(i), null); err != nil {
-				return err
-			}
-		case types.T_float32:
-			if err := vector.MustFunctionResult[float32](result).Append(input.(*array.Float32).Value(i), null); err != nil {
-				return err
-			}
-		case types.T_float64:
-			if err := vector.MustFunctionResult[float64](result).Append(input.(*array.Float64).Value(i), null); err != nil {
-				return err
-			}
 		case types.T_decimal64:
 			var value types.Decimal64
 			if !null {
@@ -1045,28 +1071,6 @@ func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vect
 				value = converted.(types.Decimal128)
 			}
 			if err := vector.MustFunctionResult[types.Decimal128](result).Append(value, null); err != nil {
-				return err
-			}
-		case types.T_char, types.T_varchar, types.T_text:
-			if err := vector.MustFunctionResult[types.Varlena](result).AppendBytes([]byte(input.(*array.String).Value(i)), null); err != nil {
-				return err
-			}
-		case types.T_json:
-			if null {
-				if err := vector.MustFunctionResult[types.Varlena](result).AppendBytes(nil, true); err != nil {
-					return err
-				}
-				continue
-			}
-			encoded, err := bytejson.ParseJsonByteFromString(input.(*array.String).Value(i))
-			if err != nil {
-				return fmt.Errorf("TYPE_CONTRACT: invalid JSON result: %w", err)
-			}
-			if err = vector.MustFunctionResult[types.Varlena](result).AppendBytes(encoded, false); err != nil {
-				return err
-			}
-		case types.T_binary, types.T_varbinary, types.T_blob:
-			if err := vector.MustFunctionResult[types.Varlena](result).AppendBytes(input.(*array.Binary).Value(i), null); err != nil {
 				return err
 			}
 		case types.T_uuid:
@@ -1095,6 +1099,92 @@ func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vect
 			}
 		default:
 			return fmt.Errorf("unsupported output type %s", typ.String())
+		}
+	}
+	return nil
+}
+
+func appendStringArrowResult(input *array.String, result vector.FunctionResultWrapper) error {
+	output := vector.MustFunctionResult[types.Varlena](result)
+	for i := 0; i < input.Len(); i++ {
+		// AppendBytes copies synchronously into the MO-owned area. The unsafe
+		// view therefore never escapes the call and does not retain Arrow's
+		// backing buffer after the decoded record is released.
+		if err := output.AppendBytes(
+			commonutil.UnsafeStringToBytes(input.Value(i)), input.IsNull(i),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendJSONArrowResult(input *array.String, result vector.FunctionResultWrapper) error {
+	output := vector.MustFunctionResult[types.Varlena](result)
+	for i := 0; i < input.Len(); i++ {
+		if input.IsNull(i) {
+			if err := output.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		encoded, err := bytejson.ParseJsonByteFromString(input.Value(i))
+		if err != nil {
+			return fmt.Errorf("TYPE_CONTRACT: invalid JSON result: %w", err)
+		}
+		if err = output.AppendBytes(encoded, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendBinaryArrowResult(input *array.Binary, result vector.FunctionResultWrapper) error {
+	output := vector.MustFunctionResult[types.Varlena](result)
+	for i := 0; i < input.Len(); i++ {
+		if err := output.AppendBytes(input.Value(i), input.IsNull(i)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type nullableArrowArray interface {
+	NullN() int
+	IsNull(int) bool
+}
+
+func appendBoolArrowResult(input *array.Boolean, result vector.FunctionResultWrapper) error {
+	output := vector.MustFunctionResult[bool](result)
+	if input.NullN() == 0 {
+		for i := 0; i < input.Len(); i++ {
+			output.AppendMustValue(input.Value(i))
+		}
+		return nil
+	}
+	for i := 0; i < input.Len(); i++ {
+		if input.IsNull(i) {
+			output.AppendMustNull()
+		} else {
+			output.AppendMustValue(input.Value(i))
+		}
+	}
+	return nil
+}
+
+func appendFixedArrowValues[T types.FixedSizeT](values []T, input nullableArrowArray, result vector.FunctionResultWrapper) error {
+	output := vector.MustFunctionResult[T](result)
+	if input.NullN() == 0 {
+		for _, value := range values {
+			output.AppendMustValue(value)
+		}
+		return nil
+	}
+	for i, value := range values {
+		if input.IsNull(i) {
+			output.AppendMustNull()
+		} else {
+			output.AppendMustValue(value)
 		}
 	}
 	return nil
