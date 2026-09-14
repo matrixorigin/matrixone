@@ -60,22 +60,16 @@ func executeStmtWithMaxExecutionTime(ses *Session, execCtx *ExecCtx) (err error)
 }
 
 // canRetryAlterCopyPublication is deliberately narrower than the generic
-// transaction retry rules. Only a statement-owned, automatic-commit frontend
-// transaction may be recreated; explicit transactions retain their existing
-// protocol and are never replayed here.
+// transaction retry rules. Only a statement-owned, automatic-commit binary
+// prepared frontend transaction may be recreated; ordinary frontend statements
+// wait at publication and explicit transactions retain their existing protocol.
 func canRetryAlterCopyPublication(execCtx *ExecCtx, err error) bool {
 	if execCtx == nil || execCtx.proc == nil || execCtx.proc.GetTxnOperator() == nil || err == nil ||
 		!sqlcompile.IsAlterCopyPublicationRetry(err, execCtx.proc.GetTxnOperator().Txn().ID) {
 		return false
 	}
-	if !execCtx.txnOpt.autoCommit || execCtx.txnOpt.byBegin || execCtx.txnOpt.byCommit ||
-		execCtx.txnOpt.byRollback {
-		return false
-	}
-	if !execCtx.txnOpt.activeTxnAtStartKnown || execCtx.txnOpt.activeTxnAtStart {
-		return false
-	}
-	return execCtx.reqCtx == nil || execCtx.reqCtx.Err() == nil
+	return isCopyAlterPublicationRetryOwner(execCtx) &&
+		(execCtx.reqCtx == nil || execCtx.reqCtx.Err() == nil)
 }
 
 // startMaxExecutionTimer installs a deadline on both ExecCtx and the session's

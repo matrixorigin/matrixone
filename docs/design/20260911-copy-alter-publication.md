@@ -48,9 +48,15 @@ the publication step succeeds.
   `T_data`; refreshing it never changes which source rows were copied.
 * Commit time is the visibility point of the new business relation. It is not
   substituted for either `T_data` or `T_catalog`.
-* Publication acquires lifecycle gates in the single order **View then
-  SNAPSHOT**. The SNAPSHOT row keeps the existing `FOR UPDATE`/no-op UPDATE
-  write barrier used by optimistic validation and GC.
+* Publication acquires lifecycle gates in the single order **SNAPSHOT then
+  View**, matching the canonical order used by view-metadata recovery and
+  other lifecycle owners. The SNAPSHOT row keeps the existing `FOR UPDATE`/
+  no-op UPDATE write barrier used by optimistic validation and GC. An entry
+  point that owns a complete replayable automatic-commit transaction (the
+  internal SQL executor or binary prepared frontend execution) uses FastFail
+  for this first gate; ordinary frontend statements and caller-owned
+  transactions wait so a prepared relation can be reused. The View row
+  retains its normal cancellation and wait boundary.
 * Publication rechecks source table ID, logical ID, branch/history owners,
   Snapshot/PITR coverage, View state, foreign-key/publication metadata and
   final task identities after the gates are held. A preparation-time “no
@@ -124,10 +130,12 @@ may publish a temporary task or View dependency after the phase transition.
 
 After preparation, the operation enters a short coordination section:
 
-1. acquire the View lifecycle row with the original cancellation and wait
+1. acquire the SNAPSHOT lifecycle row with the existing `FOR UPDATE`; an
+   entry point that owns a complete replayable automatic-commit transaction
+   uses FastFail, while ordinary frontend and caller-owned transactions use
+   the normal wait policy so they can reuse the prepared relation;
+2. acquire the View lifecycle row with the original cancellation and wait
    boundary;
-2. acquire the SNAPSHOT lifecycle row with the existing `FOR UPDATE` and
-   FastFail policy;
 3. advance the workspace snapshot with `Workspace.AdvanceSnapshot` to a
    value no earlier than the current transaction snapshot and the gate-lock
    service time, then create fresh publication-read contexts;
@@ -140,8 +148,11 @@ After preparation, the operation enters a short coordination section:
 
 The operation does not restore the old transaction snapshot or move it
 backwards. `T_data` remains independent and continues to define copied data.
-If either gate row is absent or not ready, the operation fails through the
-normal cleanup path; a missing row is not treated as a successful lock.
+The non-locking admission probe runs before private preparation. If it cannot
+observe both rows during bootstrap or a rolling upgrade, split publication is
+not selected and the old COPY ordering remains the safe fallback. If a split
+attempt later observes a missing row, it returns through the retry and normal
+cleanup path; a missing row is never treated as a successful lock.
 
 Lineage cleanup is split at this boundary. Synchronous old-generation
 reference maintenance needed to make the replacement safe remains in the
@@ -170,8 +181,8 @@ are known; arbitrary SQL string substitution is not used.
   validation. The optimization does not replace `FOR UPDATE` with a shared
   read or remove the UPDATE.
 * View invalidation, owner protection and old-generation reclamation are
-  serialized by the same View -> SNAPSHOT order, so no reverse lock edge is
-  introduced.
+  serialized by the same SNAPSHOT -> View order used by the shared lifecycle
+  helper, so no reverse lock edge is introduced.
 
 ## Retry, prepared statements and cleanup
 
