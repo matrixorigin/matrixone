@@ -3650,12 +3650,19 @@ func copyBoolDictPageToVec(
 	}
 	vec.SetLength(n + length)
 	ret := vector.MustFixedColWithTypeCheck[bool](vec)
-	if !nc.noNulls {
-		nulls.TryExpand(vec.GetNulls(), n+length)
+	if nc.noNulls {
+		for i := 0; i < n; i++ {
+			ret[i+length] = values[indices[i]]
+		}
+		return nil
 	}
+
+	nulls.TryExpand(vec.GetNulls(), n+length)
+	levels := nc.levels
+	maxDefinitionLevel := nc.maxDefinitionLevel
 	j := 0
 	for i := 0; i < n; i++ {
-		if nc.isNull(i) {
+		if levels[i] != maxDefinitionLevel {
 			ret[i+length] = false
 			nulls.Add(vec.GetNulls(), uint64(i+length))
 			continue
