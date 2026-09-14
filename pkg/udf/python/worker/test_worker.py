@@ -2,6 +2,7 @@
 
 import datetime
 import decimal
+import io
 import importlib.util
 import json
 import os
@@ -1244,6 +1245,20 @@ class WorkerContractTest(unittest.TestCase):
         self.assertIsInstance(metadata["input"], pickle.PickleBuffer)
         self.assertEqual(arrow_wire, bytes(metadata["input"].raw()))
 
+        compact_parts, compact_size = worker._encode_execution_request(
+            {"source": "must-not-repeat", "input": arrow_wire}, compact=True
+        )
+        compact_metadata = pickle.loads(
+            compact_parts[2], buffers=[pickle.PickleBuffer(compact_parts[3])]
+        )
+        self.assertEqual(
+            worker._HANDLER_REQUEST_BATCH,
+            compact_metadata[worker._HANDLER_REQUEST_KIND_KEY],
+        )
+        self.assertNotIn("source", compact_metadata)
+        self.assertEqual(arrow_wire, bytes(compact_metadata["input"].raw()))
+        self.assertLess(compact_size, payload_size)
+
     def test_handler_request_reader_accepts_fragmented_headers(self):
         parts, _ = worker._encode_execution_request(
             {
@@ -1272,6 +1287,24 @@ class WorkerContractTest(unittest.TestCase):
             worker._encode_execution_request(
                 {"input": memoryview(b"arrow-payload")[::2]}
             )
+
+    def test_handler_response_frame_separates_status_from_payload(self):
+        session = object.__new__(worker._HandlerProcessSession)
+        session._response_buffer = bytearray(struct.pack(">Q", 4) + b"\x01abc")
+        self.assertEqual(
+            (worker._HANDLER_RESPONSE_OK, b"abc"), session._take_response()
+        )
+        self.assertEqual(bytearray(), session._response_buffer)
+        session._response_buffer = bytearray(struct.pack(">Q", 0))
+        with self.assertRaisesRegex(ValueError, "empty response"):
+            session._take_response()
+
+    def test_handler_response_frame_parts_keep_one_wire_frame(self):
+        stream = io.BytesIO()
+        worker._write_execution_frame_parts(
+            stream, (b"\x01", memoryview(b"abc"))
+        )
+        self.assertEqual(struct.pack(">Q", 4) + b"\x01abc", stream.getvalue())
 
     def test_handler_process_accepts_schema_free_record_batch_messages(self):
         descriptor = {"type_id": worker.INT64, "offset_width": 32}
