@@ -445,5 +445,117 @@ null
 DEALLOCATE PREPARE export_set_union_sorted;
 DEALLOCATE PREPARE export_set_union_reversed;
 DEALLOCATE PREPARE export_set_aggregate;
+INSERT INTO export_set_scalar_input VALUES (1), (2);
+PREPARE export_set_deep_aggregate FROM
+"SELECT EXPORT_SET((SELECT MAX(y) FROM (SELECT MAX(x) AS y FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d) e), 'Y', 'N', '', 4) AS deep_aggregate_bits";
+PREPARE export_set_aggregate_window FROM
+"SELECT EXPORT_SET((SELECT FIRST_VALUE(x) OVER () FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d LIMIT 1), 'Y', 'N', '', 4) AS aggregate_window_bits";
+PREPARE export_set_window_aggregate FROM
+"SELECT EXPORT_SET((SELECT MAX(y) FROM (SELECT FIRST_VALUE(x) OVER () AS y FROM (SELECT MAX(?) AS x FROM export_set_scalar_input) d) e), 'Y', 'N', '', 4) AS window_aggregate_bits";
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_deep_aggregate USING @export_set_bits;
+➤ deep_aggregate_bits[12,64,0]  𝄀
+YYNN
+EXECUTE export_set_aggregate_window USING @export_set_bits;
+➤ aggregate_window_bits[12,64,0]  𝄀
+YYNN
+EXECUTE export_set_window_aggregate USING @export_set_bits;
+➤ window_aggregate_bits[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_deep_aggregate USING @export_set_bits;
+➤ deep_aggregate_bits[12,64,0]  𝄀
+NYNN
+EXECUTE export_set_aggregate_window USING @export_set_bits;
+➤ aggregate_window_bits[12,64,0]  𝄀
+NYNN
+EXECUTE export_set_window_aggregate USING @export_set_bits;
+➤ window_aggregate_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(9223372036854775808.5 AS DECIMAL(65,1));
+EXECUTE export_set_deep_aggregate USING @export_set_bits;
+➤ deep_aggregate_bits[12,64,0]  𝄀
+YYYY
+EXECUTE export_set_aggregate_window USING @export_set_bits;
+➤ aggregate_window_bits[12,64,0]  𝄀
+YYYY
+EXECUTE export_set_window_aggregate USING @export_set_bits;
+➤ window_aggregate_bits[12,64,0]  𝄀
+YYYY
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_deep_aggregate USING @export_set_bits;
+➤ deep_aggregate_bits[12,64,0]  𝄀
+YYNN
+EXECUTE export_set_aggregate_window USING @export_set_bits;
+➤ aggregate_window_bits[12,64,0]  𝄀
+YYNN
+PREPARE export_set_aggregate_union FROM
+"SELECT EXPORT_SET((SELECT MAX(?) AS x FROM export_set_scalar_input UNION ALL SELECT 2 ORDER BY x DESC LIMIT 1), 'Y', 'N', '', 4) AS aggregate_union_bits";
+PREPARE export_set_aggregate_union_reverse FROM
+"SELECT EXPORT_SET((SELECT 2 AS x UNION SELECT MAX(?) FROM export_set_scalar_input ORDER BY x DESC LIMIT 1), 'Y', 'N', '', 4) AS aggregate_union_reverse_bits";
+PREPARE export_set_union_user_cast FROM
+"SELECT EXPORT_SET((SELECT CAST(MAX(?) AS CHAR) AS x FROM export_set_scalar_input UNION ALL SELECT 2 ORDER BY x DESC LIMIT 1), 'Y', 'N', '', 4) AS union_user_cast_bits";
+PREPARE export_set_union_peer_cast FROM
+"SELECT EXPORT_SET((SELECT MAX(?) AS x FROM export_set_scalar_input UNION ALL SELECT CAST(2 AS CHAR) ORDER BY x DESC LIMIT 1), 'Y', 'N', '', 4) AS union_peer_cast_bits";
+SET @export_set_bits = CAST(10.5 AS DECIMAL(4,1));
+EXECUTE export_set_aggregate_union USING @export_set_bits;
+➤ aggregate_union_bits[12,64,0]  𝄀
+YYNY
+EXECUTE export_set_aggregate_union_reverse USING @export_set_bits;
+➤ aggregate_union_reverse_bits[12,64,0]  𝄀
+YYNY
+EXECUTE export_set_union_user_cast USING @export_set_bits;
+➤ union_user_cast_bits[12,64,0]  𝄀
+NYNN
+EXECUTE export_set_union_peer_cast USING @export_set_bits;
+➤ union_peer_cast_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(10.5 AS DOUBLE);
+EXECUTE export_set_aggregate_union USING @export_set_bits;
+➤ aggregate_union_bits[12,64,0]  𝄀
+NYNY
+EXECUTE export_set_aggregate_union_reverse USING @export_set_bits;
+➤ aggregate_union_reverse_bits[12,64,0]  𝄀
+NYNY
+EXECUTE export_set_union_user_cast USING @export_set_bits;
+➤ union_user_cast_bits[12,64,0]  𝄀
+NYNN
+EXECUTE export_set_union_peer_cast USING @export_set_bits;
+➤ union_peer_cast_bits[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = CAST(9223372036854775808.5 AS DECIMAL(65,1));
+EXECUTE export_set_aggregate_union USING @export_set_bits;
+➤ aggregate_union_bits[12,64,0]  𝄀
+YYYY
+EXECUTE export_set_aggregate_union_reverse USING @export_set_bits;
+➤ aggregate_union_reverse_bits[12,64,0]  𝄀
+YYYY
+SET @export_set_bits = CAST(10.5 AS DECIMAL(4,1));
+EXECUTE export_set_aggregate_union USING @export_set_bits;
+➤ aggregate_union_bits[12,64,0]  𝄀
+YYNY
+EXECUTE export_set_aggregate_union_reverse USING @export_set_bits;
+➤ aggregate_union_reverse_bits[12,64,0]  𝄀
+YYNY
+TRUNCATE TABLE export_set_scalar_input;
+EXECUTE export_set_deep_aggregate USING @export_set_bits;
+➤ deep_aggregate_bits[12,64,0]  𝄀
+null
+EXECUTE export_set_aggregate_window USING @export_set_bits;
+➤ aggregate_window_bits[12,64,0]  𝄀
+null
+EXECUTE export_set_window_aggregate USING @export_set_bits;
+➤ window_aggregate_bits[12,64,0]  𝄀
+null
+EXECUTE export_set_aggregate_union USING @export_set_bits;
+➤ aggregate_union_bits[12,64,0]  𝄀
+NYNN
+DEALLOCATE PREPARE export_set_deep_aggregate;
+DEALLOCATE PREPARE export_set_aggregate_window;
+DEALLOCATE PREPARE export_set_window_aggregate;
+DEALLOCATE PREPARE export_set_aggregate_union;
+DEALLOCATE PREPARE export_set_aggregate_union_reverse;
+DEALLOCATE PREPARE export_set_union_user_cast;
+DEALLOCATE PREPARE export_set_union_peer_cast;
 DROP TABLE export_set_scalar_input;
 DROP TABLE export_set_numeric_bits;

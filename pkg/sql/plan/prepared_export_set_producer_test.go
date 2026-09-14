@@ -25,18 +25,31 @@ import (
 )
 
 func TestPreparedExportSetProducerDomains(t *testing.T) {
-	for _, sql := range []string{
+	queries := []string{
 		`select export_set((select ? as x union all select 1 order by x desc limit 1), 'Y','N','',4)`,
 		`select export_set((select 1 as x union all select ? order by x desc limit 1), 'Y','N','',4)`,
 		`select export_set((select ? as x union select 1 order by x desc limit 1), 'Y','N','',4)`,
 		`select export_set((select max(?) from nation), 'Y','N','',4)`,
+		`select export_set((select max(x) from (select max(?) as x from nation) d), 'Y','N','',4)`,
+		`select export_set((select max(y) from (select max(x) as y from (select max(?) as x from nation) d) e), 'Y','N','',4)`,
+		`select export_set((select first_value(x) over () from (select max(?) as x from nation) d limit 1), 'Y','N','',4)`,
+		`select export_set((select max(?) as x from nation union all select 2 order by x desc limit 1), 'Y','N','',4)`,
+		`select export_set((select 2 as x union select max(?) from nation order by x desc limit 1), 'Y','N','',4)`,
+		`select export_set((select max(?) as x from nation union all select min(?) from nation order by x desc limit 1), 'Y','N','',4)`,
+		`select export_set((select max(y) from (select first_value(x) over () as y from (select max(?) as x from nation) d) e), 'Y','N','',4)`,
 		`select export_set((select min(?) from nation group by n_regionkey limit 1), 'Y','N','',4)`,
 		`select export_set((select x from (select ? as x from nation group by x) d limit 1), 'Y','N','',4)`,
 		`select export_set((select x from (select ? as x union all select 1) a union all select 3 order by x desc limit 1), 'Y','N','',4)`,
 		`select export_set((select ? as x union all select ? order by x desc limit 1), 'Y','N','',4)`,
 		`select export_set((select ? as x intersect select 1 limit 1), 'Y','N','',4)`,
 		`select export_set((select ? as x minus select 1 limit 1), 'Y','N','',4)`,
-	} {
+	}
+	nested := `select max(?) as x from nation`
+	for depth := 0; depth < 12; depth++ {
+		nested = `select max(x) as x from (` + nested + `) d`
+	}
+	queries = append(queries, `select export_set((`+nested+`), 'Y','N','',4)`)
+	for _, sql := range queries {
 		t.Run(sql, func(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false), t, `prepare s from "`+sql+`"`)
 			require.NoError(t, err)
@@ -69,6 +82,12 @@ func TestPreparedExportSetProducerDomains(t *testing.T) {
 									require.Equal(t, output.Typ.Scale, input.Typ.Scale, "set branch scale")
 									require.Equal(t, output.Typ.Width, input.Typ.Width, "set branch width")
 								}
+							}
+						}
+						if node.NodeType == planpb.Node_WINDOW {
+							for _, win := range node.WinSpecList {
+								require.Equal(t, export.GetF().Args[0].Typ.Id, win.Typ.Id)
+								require.Equal(t, win.Typ.Id, win.GetW().WindowFunc.Typ.Id, "window vector ABI")
 							}
 						}
 						if node.NodeType == planpb.Node_AGG && len(node.AggList) > 0 && (strings.Contains(sql, "max(?)") || strings.Contains(sql, "min(?)")) {

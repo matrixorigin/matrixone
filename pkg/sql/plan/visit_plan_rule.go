@@ -1441,25 +1441,6 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 	return expr, false, nil
 }
 
-type preparedNumericSourceRefreshRule struct {
-	reset *ResetParamRefRule
-}
-
-func (rule *preparedNumericSourceRefreshRule) MatchNode(node *Node) bool {
-	return preparedSetOperation(node)
-}
-func (rule *preparedNumericSourceRefreshRule) IsApplyExpr() bool { return true }
-func (rule *preparedNumericSourceRefreshRule) ApplyNode(node *Node) error {
-	return rule.rebindSetOperation(node)
-}
-func (rule *preparedNumericSourceRefreshRule) ApplyExpr(expr *plan.Expr) (*plan.Expr, error) {
-	refreshed, changed, err := rule.reset.refreshPreparedNumericSource(expr)
-	if changed {
-		rule.reset.specialized = true
-	}
-	return refreshed, err
-}
-
 func (rule *ResetParamRefRule) MatchNode(_ *Node) bool {
 	return false
 }

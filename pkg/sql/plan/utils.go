@@ -6642,14 +6642,6 @@ func replaceParamValsWithSelection(
 		if err != nil {
 			return false, err
 		}
-		// VisitPlan rewrites consumers before some scalar-subquery producer
-		// projections. Once all parameters have their execute-time domains, make
-		// one narrow bottom-up refresh pass so ColRef-based numeric expressions
-		// are rebound from those finalized source types.
-		refreshRule := &preparedNumericSourceRefreshRule{reset: paramRule}
-		if err = NewVisitPlan(plan0, []VisitPlanRule{refreshRule}).Visit(ctx); err != nil {
-			return false, err
-		}
 	}
 	projectionSpecialized, err := refreshPreparedPlanProjectionTypes(
 		ctx, plan0, originalSetOperationTypes, originalSetOperationInputTypes)
@@ -6877,6 +6869,15 @@ func refreshPreparedPlanProjectionExprType(
 			changed = changed || argChanged
 		}
 
+		// The EXPORT_SET lineage marks a deferred producer, not an explicit
+		// conversion. Discard its provisional envelope only after the producer
+		// column has been refreshed in dependency order.
+		if functionName == "cast" && !isExplicitPreparedLineageCast(expr) && len(exprImpl.F.Args) > 0 &&
+			exprImpl.F.Args[0].GetPreparedNumeric().GetFallbackSource() {
+			source := DeepCopyExpr(exprImpl.F.Args[0])
+			*expr = *source
+			return true, nil
+		}
 		argsChanged := false
 		for i, arg := range exprImpl.F.Args {
 			if arg != nil && !reflect.DeepEqual(arg.Typ, originalArgTypes[i]) {
@@ -6891,6 +6892,13 @@ func refreshPreparedPlanProjectionExprType(
 
 		originalType := expr.Typ
 		rebindArgs := DeepCopyExprList(exprImpl.F.Args)
+		if preparedExprHasFallbackSource(expr) {
+			for i, arg := range rebindArgs {
+				if source, ok := provisionalExactNumericSource(arg); ok {
+					rebindArgs[i] = source
+				}
+			}
+		}
 		if isPreparedBitwiseAggregate(functionName) && len(rebindArgs) > 0 &&
 			isBitwiseAggregatePrivateCast(rebindArgs[0]) {
 			// Re-run the aggregate binder against the refreshed source domain.
