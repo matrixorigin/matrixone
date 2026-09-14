@@ -1320,30 +1320,7 @@ def _load_handler(source: str, handler: str):
 
 
 def _scalar_input(array: pa.Array, row: int, descriptor: Dict[str, Any]):
-    value = array[row].as_py()
-    if value is None:
-        return None
-    type_id = int(descriptor["type_id"])
-    if type_id in (VECF32, VECF64):
-        # A scalar vector is exposed as read-only bytes.  Consumers can use
-        # memoryview.cast("f"/"d") without receiving a mutable Arrow buffer.
-        import struct
-        values = value
-        fmt = "f" if type_id == VECF32 else "d"
-        return memoryview(struct.pack("<" + fmt * len(values), *values))
-    if type_id in (DATE, DATETIME, TIMESTAMP):
-        zero = bool(value["is_zero"])
-        child = value["value"]
-        if type_id == DATE:
-            return SqlDate(zero, None if zero else child)
-        if type_id == DATETIME:
-            return SqlDatetime(zero, None if zero else child)
-        return SqlTimestamp(zero, None if zero else child)
-    if type_id == JSON:
-        return _canonical_json_text(value)
-    if type_id == UUID:
-        return _uuid.UUID(bytes=bytes(value))
-    return value
+    return _scalar_input_value(array[row].as_py(), descriptor)
 
 
 def _scalar_input_value(value: Any, descriptor: Dict[str, Any]):
