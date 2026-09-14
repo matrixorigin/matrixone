@@ -11017,21 +11017,27 @@ func stFrechetDistance[T float32 | float64](functionName string, ivecs []*vector
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
-		a, err := decodeGeoGeometry(v1)
-		if err != nil {
-			return 0, err
-		}
-		b, err := decodeGeoGeometry(v2)
-		if err != nil {
-			return 0, err
-		}
-		d, ok := geo.FrechetDistance(a, b)
-		if !ok {
-			return 0, moerr.NewInvalidInputNoCtx("ST_FrechetDistance: empty geometry")
-		}
-		return T(d), nil
+		d, err := discreteFrechetDistanceBySRID(v1, v2, srid)
+		return T(d), err
 	}, selectList)
+}
+
+// StFrechetDistanceWithUnit is the geographic ST_FrechetDistance overload
+// whose third argument requests the output length unit.
+func StFrechetDistanceWithUnit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistanceWithUnit[float64](ivecs, result, proc, length, selectList)
+}
+
+// StFrechetDistanceWithUnit32 is the GEOMETRY32 geographic overload.
+func StFrechetDistanceWithUnit32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistanceWithUnit[float32](ivecs, result, proc, length, selectList)
+}
+
+func stFrechetDistanceWithUnit[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDiscreteDistanceWithUnit[T]("ST_FrechetDistance", ivecs, result, length, selectList,
+		discreteFrechetDistanceBySRID)
 }
 
 // StHausdorffDistance returns the discrete directed Hausdorff distance (planar)
@@ -11053,21 +11059,150 @@ func stHausdorffDistance[T float32 | float64](functionName string, ivecs []*vect
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
-		a, err := decodeGeoGeometry(v1)
-		if err != nil {
-			return 0, err
-		}
-		b, err := decodeGeoGeometry(v2)
-		if err != nil {
-			return 0, err
-		}
-		d, ok := geo.DirectedHausdorffDistance(a, b)
-		if !ok {
-			return 0, moerr.NewInvalidInputNoCtx("ST_HausdorffDistance: empty geometry")
-		}
-		return T(d), nil
+		d, err := discreteHausdorffDistanceBySRID(v1, v2, srid)
+		return T(d), err
 	}, selectList)
+}
+
+// StHausdorffDistanceWithUnit is the geographic ST_HausdorffDistance overload
+// whose third argument requests the output length unit.
+func StHausdorffDistanceWithUnit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistanceWithUnit[float64](ivecs, result, proc, length, selectList)
+}
+
+// StHausdorffDistanceWithUnit32 is the GEOMETRY32 geographic overload.
+func StHausdorffDistanceWithUnit32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistanceWithUnit[float32](ivecs, result, proc, length, selectList)
+}
+
+func stHausdorffDistanceWithUnit[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDiscreteDistanceWithUnit[T]("ST_HausdorffDistance", ivecs, result, length, selectList,
+		discreteHausdorffDistanceBySRID)
+}
+
+type discreteDistanceBySRID func(left, right []byte, srid uint32) (float64, error)
+
+func stDiscreteDistanceWithUnit[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
+	emptyBatch, err := checkBinaryGeometryTypeSRIDWithUnit(functionName, ivecs, length, selectList)
+	if err != nil {
+		return err
+	}
+	if emptyBatch {
+		return nil
+	}
+	left := vector.GenerateFunctionStrParameter(ivecs[0])
+	right := vector.GenerateFunctionStrParameter(ivecs[1])
+	units := vector.GenerateFunctionStrParameter(ivecs[2])
+	rs := vector.MustFunctionResult[T](result)
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v1, n1 := left.GetStrValue(i)
+		v2, n2 := right.GetStrValue(i)
+		unit, n3 := units.GetStrValue(i)
+		if n1 || n2 || n3 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		scale, err := geographicDistanceUnitScale(functionName, srid, functionUtil.QuickBytesToStr(unit))
+		if err != nil {
+			return err
+		}
+		d, err := distanceFn(v1, v2, srid)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(T(d/scale), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func discreteFrechetDistanceBySRID(left, right []byte, srid uint32) (float64, error) {
+	if err := validateComputationSRID(srid); err != nil {
+		return 0, err
+	}
+	a, err := decodeGeoGeometry(left)
+	if err != nil {
+		return 0, err
+	}
+	b, err := decodeGeoGeometry(right)
+	if err != nil {
+		return 0, err
+	}
+	if srid == geo.SRIDWGS84 {
+		if err := geo.ValidateGeodeticCoordinates(a); err != nil {
+			return 0, err
+		}
+		if err := geo.ValidateGeodeticCoordinates(b); err != nil {
+			return 0, err
+		}
+	}
+	var d float64
+	var ok bool
+	if srid == geo.SRIDWGS84 {
+		d, ok = geo.GeodeticFrechetDistance(a, b)
+	} else {
+		d, ok = geo.FrechetDistance(a, b)
+	}
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtx("ST_FrechetDistance: empty geometry")
+	}
+	return d, nil
+}
+
+func discreteHausdorffDistanceBySRID(left, right []byte, srid uint32) (float64, error) {
+	if err := validateComputationSRID(srid); err != nil {
+		return 0, err
+	}
+	a, err := decodeGeoGeometry(left)
+	if err != nil {
+		return 0, err
+	}
+	b, err := decodeGeoGeometry(right)
+	if err != nil {
+		return 0, err
+	}
+	if srid == geo.SRIDWGS84 {
+		if err := geo.ValidateGeodeticCoordinates(a); err != nil {
+			return 0, err
+		}
+		if err := geo.ValidateGeodeticCoordinates(b); err != nil {
+			return 0, err
+		}
+	}
+	var d float64
+	var ok bool
+	if srid == geo.SRIDWGS84 {
+		d, ok = geo.GeodeticDirectedHausdorffDistance(a, b)
+	} else {
+		d, ok = geo.DirectedHausdorffDistance(a, b)
+	}
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtx("ST_HausdorffDistance: empty geometry")
+	}
+	return d, nil
+}
+
+func geographicDistanceUnitScale(functionName string, srid uint32, unit string) (float64, error) {
+	if srid != geo.SRIDWGS84 {
+		return 0, moerr.NewInvalidInputNoCtxf("%s length units require SRID %d", functionName, geo.SRIDWGS84)
+	}
+	scale, ok := geo.DistanceUnitScale(unit)
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtxf("unknown length unit %q", unit)
+	}
+	return scale, nil
 }
 
 // requireLineString decodes a geometry payload and asserts it is a LINESTRING.
@@ -11496,6 +11631,19 @@ func StDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 // StDistance32 is the GEOMETRY32 overload of ST_Distance (returns float32).
 func StDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stDistance[float32](ivecs, result, proc, length, selectList)
+}
+
+// StDistanceWithUnit is the geographic ST_Distance overload whose third
+// argument requests the output length unit.
+func StDistanceWithUnit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDiscreteDistanceWithUnit[float64]("ST_DISTANCE", ivecs, result, length, selectList,
+		geometryDistanceBySRID)
+}
+
+// StDistanceWithUnit32 is the GEOMETRY32 geographic overload.
+func StDistanceWithUnit32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDiscreteDistanceWithUnit[float32]("ST_DISTANCE", ivecs, result, length, selectList,
+		geometryDistanceBySRID)
 }
 
 func stDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -11965,6 +12113,32 @@ func geometryPredicateBySRID(
 		return false, err
 	}
 	return predicate(geo.WriteWKB(leftGeometry), geo.WriteWKB(rightGeometry))
+}
+
+// checkBinaryGeometryTypeSRIDWithUnit is the SRID guard for the three-argument
+// length-unit overloads. A NULL unit makes the whole row NULL, so it must be
+// considered alongside the two geometry operands before reporting a mismatch.
+// The ordinary two-argument guard remains unchanged for all other functions.
+func checkBinaryGeometryTypeSRIDWithUnit(functionName string, ivecs []*vector.Vector, length int, selectList *FunctionSelectList) (emptyBatch bool, err error) {
+	if length == 0 {
+		return true, nil
+	}
+	if len(ivecs) < 3 || (selectList != nil && selectList.IgnoreAllRow()) {
+		return false, nil
+	}
+	leftSRID := sridFromTypeWidth(ivecs[0].GetType().Width)
+	rightSRID := sridFromTypeWidth(ivecs[1].GetType().Width)
+	if leftSRID == rightSRID {
+		return false, nil
+	}
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) || ivecs[0].IsNull(row) ||
+			ivecs[1].IsNull(row) || ivecs[2].IsNull(row) {
+			continue
+		}
+		return false, moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, leftSRID, rightSRID)
+	}
+	return false, nil
 }
 
 func geometryDistance(left, right []byte) (float64, error) {
