@@ -38,7 +38,7 @@ func TestIntegerArithmeticNegotiatesWorkerVersionAndFencesSender(t *testing.T) {
 			{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}})
 		require.NoError(t, err)
 		qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
-		client.version = defines.MORPCVersion68
+		client.version = defines.MORPCVersion69
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainIntegerDomainWorkers(qry))
@@ -53,7 +53,7 @@ func TestIntegerArithmeticNegotiatesWorkerVersionAndFencesSender(t *testing.T) {
 		scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: value_scan.NewArgument(), Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: qry}}}
 		_, err = encodeRemoteScope(scope, c.proc)
 		require.ErrorContains(t, err, "remote destination")
-		client.version = defines.MORPCVersion69
+		client.version = defines.MORPCVersion70
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainIntegerDomainWorkers(qry))
@@ -63,10 +63,10 @@ func TestIntegerArithmeticNegotiatesWorkerVersionAndFencesSender(t *testing.T) {
 		wire := new(pipeline.Pipeline)
 		require.NoError(t, wire.Unmarshal(data))
 		rt := moruntime.ServiceRuntime(c.proc.GetService())
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion68)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 69")
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
-		client.version = defines.MORPCVersion68
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 70")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
+		client.version = defines.MORPCVersion69
 		_, err = encodeRemoteScope(scope, c.proc)
 		require.Error(t, err)
 	}
