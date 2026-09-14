@@ -3520,6 +3520,7 @@ func TestParquetNestedValuesRejectInvalidLevels(t *testing.T) {
 		{name: "definition level", value: parquet.Int32Value(1).Level(0, 1, leaf.Index()), want: "exceeds maximum"},
 		{name: "null mismatch", value: parquet.NullValue().Level(0, 0, leaf.Index()), want: "NULL status disagrees"},
 		{name: "repetition level", value: parquet.Int32Value(1).Level(1, 0, leaf.Index()), want: "repetition level"},
+		{name: "value kind", value: parquet.BooleanValue(true).Level(0, 0, leaf.Index()), want: "value kind BOOLEAN"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateParquetNestedValues(context.Background(), col, []parquet.Value{tc.value})

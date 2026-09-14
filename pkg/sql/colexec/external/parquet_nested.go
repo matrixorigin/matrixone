@@ -467,6 +467,11 @@ func validateParquetNestedValues(ctx context.Context, col *parquet.Column, value
 		if _, err := validateParquetLeafValue(ctx, leaf, value); err != nil {
 			return err
 		}
+		if !value.IsNull() && value.Kind() != leaf.Type().Kind() {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed parquet nested value at row %d: value kind %s, expected %s",
+				i, value.Kind(), leaf.Type().Kind())
+		}
 	}
 	return nil
 }
