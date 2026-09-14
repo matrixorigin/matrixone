@@ -465,9 +465,9 @@ deallocate prepare s_odku_no_key_generated_implicit;
 drop table t_odku_no_key_generated;
 drop table if exists t_odku_no_key_volatile;
 create table t_odku_no_key_volatile (
-    id int,
-    a double default (rand()),
-    g double generated always as (a) stored
+id int,
+a double default (rand()),
+g double generated always as (a) stored
 );
 insert into t_odku_no_key_volatile(id) values (1) as n on duplicate key update id = n.id;
 select a = g from t_odku_no_key_volatile;
