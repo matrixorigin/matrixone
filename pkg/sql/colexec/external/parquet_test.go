@@ -1134,6 +1134,36 @@ func TestParquetGenericMappingRejectsValueKindMismatch(t *testing.T) {
 	require.Zero(t, vec.Length())
 }
 
+func TestParquetGenericMappingRejectsValueLevelMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	page := parquet.Int32Type.NewPage(0, 1, encoding.Int32Values([]int32{1}))
+	for _, tc := range []struct {
+		name  string
+		value parquet.Value
+		want  string
+	}{
+		{name: "definition", value: parquet.Int32Value(1).Level(0, 1, 0), want: "definition level"},
+		{name: "repetition", value: parquet.Int32Value(1).Level(1, 0, 0), want: "repetition level"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			badPage := &parquetPageWithValues{
+				Page: page,
+				values: parquet.ValueReaderFunc(func(dst []parquet.Value) (int, error) {
+					dst[0] = tc.value
+					return 1, nil
+				}),
+			}
+			vec := vector.NewVec(types.T_int32.ToType())
+			err := processParquetValuesToFixed[int32](context.Background(), &columnMapper{}, badPage, proc, vec, 0,
+				func(v parquet.Value) (int32, error) { return v.Int32(), nil })
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			require.Contains(t, err.Error(), tc.want)
+			require.Zero(t, vec.Length())
+		})
+	}
+}
+
 func TestParquetGenericDictionaryMappingRejectsOutOfRangeIndex(t *testing.T) {
 	proc := testutil.NewProc(t)
 	f, page := writeColumnAndGetPage(t, parquet.Leaf(parquet.FloatType), []parquet.Row{
@@ -3630,7 +3660,7 @@ func TestParquet_Plain_Bool_DefinitionLevelValueMismatchRollsBack(t *testing.T) 
 	err := mp.mapping(badPage, proc, vec)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
-	require.Contains(t, err.Error(), "definition level and value NULL status disagree")
+	require.Contains(t, err.Error(), "value definition level")
 	require.Zero(t, vec.Length())
 }
 

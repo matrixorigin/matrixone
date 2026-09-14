@@ -3137,6 +3137,20 @@ func validateParquetDictionaryPage(ctx context.Context, page parquet.Page, expec
 }
 
 func validateParquetValueNullness(ctx context.Context, nc nullCheckInfo, row int, value parquet.Value) error {
+	expectedDefinitionLevel := int(nc.maxDefinitionLevel)
+	if !nc.noNulls {
+		expectedDefinitionLevel = int(nc.levels[row])
+	}
+	if value.DefinitionLevel() != expectedDefinitionLevel {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet page: value definition level %d disagrees with page level %d at row %d",
+			value.DefinitionLevel(), expectedDefinitionLevel, row)
+	}
+	if value.RepetitionLevel() != 0 {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed parquet page: scalar value repetition level %d at row %d",
+			value.RepetitionLevel(), row)
+	}
 	if value.IsNull() != parquetValueIsNull(nc, row) {
 		return moerr.NewInvalidInputf(ctx,
 			"malformed parquet page: value NULL status disagrees with definition level at row %d",
@@ -4115,15 +4129,10 @@ func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vecto
 			v := values[i]
 			rowIndex := readRows + i
 			row := length + rowIndex
-			isNull := v.IsNull()
-			if !nc.noNulls {
-				expectedNull := nc.levels[rowIndex] != nc.maxDefinitionLevel
-				if isNull != expectedNull {
-					return rollback(moerr.NewInvalidInputf(proc.Ctx,
-						"malformed BOOLEAN page: definition level and value NULL status disagree at row %d",
-						rowIndex))
-				}
+			if err := validateParquetValueNullness(proc.Ctx, nc, rowIndex, v); err != nil {
+				return rollback(err)
 			}
+			isNull := v.IsNull()
 			if isNull {
 				if nc.noNulls {
 					return rollback(moerr.NewInvalidInput(proc.Ctx,
