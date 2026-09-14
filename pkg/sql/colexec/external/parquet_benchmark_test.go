@@ -49,7 +49,13 @@ func benchmarkParquetBoolPage(b *testing.B, dictionary, nullable bool) (parquet.
 		b.Fatal(err)
 	}
 	col := f.Root().Column("c")
-	page, err := col.Pages().ReadPage()
+	pages := col.Pages()
+	defer func() {
+		if err := pages.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}()
+	page, err := pages.ReadPage()
 	if err != nil {
 		b.Fatal(err)
 	}
