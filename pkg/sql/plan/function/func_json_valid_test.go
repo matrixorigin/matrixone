@@ -2292,7 +2292,7 @@ func TestJsonValueContractBoundaries(t *testing.T) {
 
 	t.Run("malformed binary JSON follows ON ERROR", func(t *testing.T) {
 		inputs := []FunctionTestInput{
-			NewFunctionTestInput(types.T_json.ToType(), []string{""}, []bool{false}),
+			NewFunctionTestInput(types.T_json.ToType(), []string{mustJsonBinaryString(t, `[0,0]`)}, []bool{false}),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"$"}, []bool{false}),
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
 			NewFunctionTestConstInput(types.T_int64.ToType(), []int64{1}, []bool{false}),
@@ -2302,6 +2302,9 @@ func TestJsonValueContractBoundaries(t *testing.T) {
 		}
 		fc := NewFunctionTestCase(proc, inputs,
 			NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"fallback"}, []bool{false}), JsonValue)
+		// JSON vectors validate their bytes on admission; corrupt the admitted
+		// value afterward so this test still exercises the malformed-wire path.
+		fc.parameters[0].GetBytesAt(0)[1+8+5] = 0xfd
 		s, info := fc.Run()
 		require.True(t, s, info)
 	})
