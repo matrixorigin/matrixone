@@ -17,6 +17,7 @@ package plan
 import (
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -38,14 +39,31 @@ func MigrateLegacyHexTableDef(proc *process.Process, tableDef *plan.TableDef) er
 	if !supportsHexMySQLNumericProtocol(proc) || tableDef == nil {
 		return nil
 	}
-	for _, check := range tableDef.Checks {
-		if check != nil {
-			migrateLegacyHexExpr(check.Check)
+	checksOwned := false
+	for i, check := range tableDef.Checks {
+		if check == nil || !exprContainsHexOverload(check.Check, 0) {
+			continue
 		}
+		if !checksOwned {
+			tableDef.Checks = slices.Clone(tableDef.Checks)
+			checksOwned = true
+		}
+		owned := *check
+		owned.Check = DeepCopyExpr(check.Check)
+		migrateLegacyHexExpr(owned.Check)
+		tableDef.Checks[i] = &owned
 	}
 	for i, col := range tableDef.Cols {
 		if col == nil {
 			continue
+		}
+		// Resolver clones share ColDef, wrappers and expression trees. Detach
+		// the entire affected column before any recursive overload rewrite.
+		if exprContainsHexOverload(col.GetGeneratedCol().GetExpr(), 0) ||
+			exprContainsHexOverload(col.GetOnUpdate().GetExpr(), 0) ||
+			exprContainsHexOverload(col.GetDefault().GetExpr(), 0) {
+			col = DeepCopyColDef(col)
+			tableDef.Cols[i] = col
 		}
 		if col.GeneratedCol != nil {
 			migrateLegacyHexExpr(col.GeneratedCol.Expr)
@@ -173,7 +191,7 @@ func supportsHexMySQLNumericProtocol(proc *process.Process) bool {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion65
+	return ok && valid && version >= defines.MORPCVersion69
 }
 
 func requireHexMySQLNumericProtocol(proc *process.Process, expr *plan.Expr) error {
@@ -182,7 +200,7 @@ func requireHexMySQLNumericProtocol(proc *process.Process, expr *plan.Expr) erro
 	}
 	return moerr.NewNotSupportedNoCtxf(
 		"MySQL numeric HEX semantics require all CNs to support MORPC protocol version %d",
-		defines.MORPCVersion65)
+		defines.MORPCVersion69)
 }
 
 func exprContainsNewHexOverload(expr *plan.Expr) bool {

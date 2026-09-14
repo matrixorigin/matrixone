@@ -505,7 +505,7 @@ func TestRecoverTableDefForPlanMigratesLegacyHex(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
 
 	hexExpr := &pbplan.Expr{Typ: plan2.MakePlan2Type(&types.Type{Oid: types.T_varchar}), Expr: &pbplan.Expr_F{
 		F: &pbplan.Function{
@@ -517,7 +517,7 @@ func TestRecoverTableDefForPlanMigratesLegacyHex(t *testing.T) {
 	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: context.Background(), proc: proc}}
 
 	require.NoError(t, tcc.recoverLegacyTinyText(context.Background(), "db", tableDef, nil, nil))
-	_, overloadID := function.DecodeOverloadID(hexExpr.GetF().GetFunc().GetObj())
+	_, overloadID := function.DecodeOverloadID(tableDef.Checks[0].Check.GetF().GetFunc().GetObj())
 	require.Equal(t, int32(function.HexFloat64Overload), overloadID)
 }
 

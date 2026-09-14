@@ -711,11 +711,11 @@ func TestBuildPlanFencesHexDefaultBeforeConstantFold(t *testing.T) {
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	const ddl = "create table t(v varchar(16) default (hex(cast(15.5 as double))))"
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion68)
 	_, err := buildSingleStmt(mock, t, ddl)
-	require.ErrorContains(t, err, "protocol version 65")
+	require.ErrorContains(t, err, "protocol version 69")
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
 	built, err := buildSingleStmt(mock, t, ddl)
 	require.NoError(t, err)
 	def := built.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault()
@@ -727,7 +727,7 @@ func TestMigrateLegacyHexDoesNotReparseFoldedDefault(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
 
 	stmt, err := mysql.ParseOneWithSQLMode(t.Context(),
 		"create table t(v varchar(16) default (hex(cast(16777215.9 as real))))", 1, "REAL_AS_FLOAT")
@@ -789,10 +789,10 @@ func TestMigrateLegacyHexFoldedDefaultWhitelist(t *testing.T) {
 			loaded := new(plan.TableDef)
 			require.NoError(t, loaded.Unmarshal(wire))
 			execution := CloneTableDefForPlan(loaded, true)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion64)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion68)
 			require.NoError(t, MigrateLegacyHexTableDef(proc, execution))
 			require.Equal(t, tc.old, execution.Cols[0].Default.Expr.GetLit().GetSval())
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion65)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
 			for range 2 {
 				require.NoError(t, MigrateLegacyHexTableDef(proc, execution))
 				require.Equal(t, tc.want, execution.Cols[0].Default.Expr.GetLit().GetSval())
@@ -1185,6 +1185,52 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
 	}, true, proc))
 	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_text)}, false, proc))
+}
+
+func TestIgnoreConversionAssignmentCastTargets(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	targets := []struct {
+		name string
+		typ  types.Type
+		text string
+	}{
+		{name: "signed integer", typ: types.T_int32.ToType(), text: "abc"},
+		{name: "unsigned integer", typ: types.T_uint32.ToType(), text: "-1"},
+		{name: "decimal", typ: types.New(types.T_decimal64, 10, 2), text: "abc"},
+		{name: "date", typ: types.T_date.ToType(), text: "2024-02-30"},
+		{name: "datetime", typ: types.T_datetime.ToTypeWithScale(6), text: "2024-02-30 25:00:00"},
+		{name: "timestamp", typ: types.T_timestamp.ToTypeWithScale(6), text: "2024-02-30 25:00:00"},
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
+	for _, target := range targets {
+		t.Run(target.name, func(t *testing.T) {
+			targetPlanType := makePlan2Type(&target.typ)
+			require.Equal(t, "cast_ignore", assignmentCastFunctionName(targetPlanType, true, proc))
+
+			expr, err := MakeInsertValueConstExpr(
+				proc,
+				tree.NewNumVal(target.text, target.text, false, tree.P_char),
+				&target.typ,
+				true,
+			)
+			require.NoError(t, err)
+			require.Equal(t, "cast_ignore", expr.GetF().GetFunc().GetObjName())
+			require.Equal(t, int32(types.T_varchar), expr.GetF().GetArgs()[0].Typ.Id)
+		})
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
+	for _, target := range targets {
+		want := "cast"
+		if target.typ.Oid == types.T_date || target.typ.Oid == types.T_datetime || target.typ.Oid == types.T_timestamp {
+			want = "cast_strict"
+		}
+		require.Equal(t, want, assignmentCastFunctionName(makePlan2Type(&target.typ), true, proc), target.name)
+	}
 }
 
 func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {

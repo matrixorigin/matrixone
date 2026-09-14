@@ -17,6 +17,7 @@ package mpool
 import (
 	"fmt"
 	"math"
+	"math/bits"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -422,6 +423,10 @@ type MPool struct {
 	resource resourceMemoryStats
 	epoch    atomic.Pointer[ResourcePeakEpoch]
 	details  *mpoolDetails
+	// onHeapShardHints is a conservative set of global registry shards this
+	// pool has published on-heap pointers into. It only narrows destroy-time
+	// diagnostics; the pointer registry remains authoritative.
+	onHeapShardHints [(numPtrShards + 63) / 64]atomic.Uint64
 
 	noLock bool
 	ptrs   map[unsafe.Pointer]memHdr
@@ -471,6 +476,9 @@ const (
 
 func (mp *MPool) recordPtrHdr(ptr unsafe.Pointer, pHdr memHdr) error {
 	if !mp.noLock {
+		if !pHdr.isOffHeap() {
+			return gRecordOnHeapPtr(ptr, pHdr, mp)
+		}
 		return gRecordPtr(ptr, pHdr)
 	}
 	if _, ok := mp.ptrs[ptr]; ok {
@@ -607,7 +615,12 @@ func (mp *MPool) Cap() int64 {
 }
 
 func (mp *MPool) destroy() {
-	onHeapBytes, onHeapObjects := mp.OnHeapOutstanding()
+	var onHeapBytes, onHeapObjects int64
+	if mp.noLock {
+		onHeapBytes, onHeapObjects = mp.OnHeapOutstanding()
+	} else {
+		onHeapBytes, onHeapObjects = mp.scanOnHeapOutstandingHinted()
+	}
 	if onHeapBytes != 0 {
 		logutil.Warn(
 			"mpool closed with outstanding on-heap ownership",
@@ -756,6 +769,40 @@ func (mp *MPool) OnHeapOutstanding() (bytes, objects int64) {
 	return bytes, objects
 }
 
+// scanOnHeapOutstandingHinted is used only at pool teardown. Allocation sets
+// a shard bit once, while frees leave it set, so every shard containing a
+// pointer owned by this pool is scanned and empty shards are merely false
+// positives. The pointer map remains authoritative for exact leak reporting.
+func (mp *MPool) scanOnHeapOutstandingHinted() (bytes, objects int64) {
+	for wordIndex := range mp.onHeapShardHints {
+		shards := mp.onHeapShardHints[wordIndex].Load()
+		for shards != 0 {
+			bit := bits.TrailingZeros64(shards)
+			shard := &globalPtrShards[wordIndex*64+bit]
+			shard.mu.Lock()
+			for _, hdr := range shard.m {
+				if hdr.poolId == mp.id && !hdr.isOffHeap() {
+					bytes += int64(hdr.allocSz)
+					objects++
+				}
+			}
+			shard.mu.Unlock()
+			shards &= shards - 1
+		}
+	}
+	return bytes, objects
+}
+
+func (mp *MPool) recordOnHeapShardHint(shardIndex int) {
+	word := &mp.onHeapShardHints[shardIndex/64]
+	mask := uint64(1) << (shardIndex % 64)
+	for current := word.Load(); current&mask == 0; current = word.Load() {
+		if word.CompareAndSwap(current, current|mask) {
+			return
+		}
+	}
+}
+
 // ResourcePeakLiveBytes returns the peak observed by token.  Ended tokens
 // remain readable so the owner can seal the statement after workers quiesce;
 // a token belonging to another open epoch is rejected.
@@ -882,7 +929,7 @@ type ptrShard struct {
 
 var globalPtrShards [numPtrShards]ptrShard
 
-func getPtrShard(ptr unsafe.Pointer) *ptrShard {
+func getPtrShardIndex(ptr unsafe.Pointer) int {
 	hash := uintptr(ptr) >> 4
 	// Better hash mixing to distribute load evenly
 	hash ^= hash >> 17
@@ -890,7 +937,11 @@ func getPtrShard(ptr unsafe.Pointer) *ptrShard {
 	hash ^= hash >> 13
 	hash *= 0xc2b2ae35
 	hash ^= hash >> 16
-	return &globalPtrShards[hash%numPtrShards]
+	return int(hash % numPtrShards)
+}
+
+func getPtrShard(ptr unsafe.Pointer) *ptrShard {
+	return &globalPtrShards[getPtrShardIndex(ptr)]
 }
 
 func InitCap(cap int64) {
@@ -1737,7 +1788,17 @@ func gRecordPtr(
 	ptr unsafe.Pointer,
 	hdr memHdr,
 ) error {
-	shard := getPtrShard(ptr)
+	shardIndex := getPtrShardIndex(ptr)
+	return gRecordPtrInShard(ptr, hdr, shardIndex, nil)
+}
+
+func gRecordOnHeapPtr(ptr unsafe.Pointer, hdr memHdr, owner *MPool) error {
+	shardIndex := getPtrShardIndex(ptr)
+	return gRecordPtrInShard(ptr, hdr, shardIndex, owner)
+}
+
+func gRecordPtrInShard(ptr unsafe.Pointer, hdr memHdr, shardIndex int, owner *MPool) error {
+	shard := &globalPtrShards[shardIndex]
 	shard.mu.Lock()
 	defer shard.mu.Unlock()
 	if _, ok := shard.m[ptr]; ok {
@@ -1747,6 +1808,9 @@ func gRecordPtr(
 		return moerr.NewInternalErrorNoCtx("ptr already recorded")
 	}
 	shard.m[ptr] = hdr
+	if owner != nil {
+		owner.recordOnHeapShardHint(shardIndex)
+	}
 	return nil
 }
 
