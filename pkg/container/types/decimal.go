@@ -1891,7 +1891,12 @@ func Decimal256ToFloat64(x Decimal256, scale int32) float64 {
 	if sign {
 		x = x.Minus()
 	}
-	for x.B128_191 != 0 || x.B192_255 != 0 {
+	// Decimal128ToFloat64 treats bit 127 as a sign bit.  A positive
+	// Decimal256 can still have that bit set when its upper 128 bits are zero
+	// (for example, 2^127), so reduce such values before handing them to the
+	// signed Decimal128 converter.  Keep the scale adjustment in lockstep with
+	// the reduction to preserve the represented value.
+	for x.B128_191 != 0 || x.B192_255 != 0 || x.B64_127>>63 != 0 {
 		x, _ = x.Scale(-1)
 		scale--
 	}
