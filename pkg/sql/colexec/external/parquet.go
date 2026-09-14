@@ -2348,6 +2348,11 @@ func prepareNullCheck(ctx context.Context, mp *columnMapper, page parquet.Page) 
 
 func validateParquetNoNullDefinitionLevels(ctx context.Context, levels []byte, numRows int, maxDefinitionLevel byte) error {
 	if len(levels) == 0 {
+		if numRows > 0 && maxDefinitionLevel > 0 {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed page: definition levels are empty for %d optional rows",
+				numRows)
+		}
 		return nil
 	}
 	if len(levels) != numRows {

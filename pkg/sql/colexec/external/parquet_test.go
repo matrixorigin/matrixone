@@ -5094,6 +5094,7 @@ func Test_prepareNullCheck_rejectsInconsistentNoNullLevels(t *testing.T) {
 		levels []byte
 		want   string
 	}{
+		{name: "missing levels", levels: nil, want: "definition levels are empty"},
 		{name: "short levels", levels: []byte{1}, want: "definition levels length"},
 		{name: "null level with zero null count", levels: []byte{1, 0}, want: "not non-null level"},
 	} {
