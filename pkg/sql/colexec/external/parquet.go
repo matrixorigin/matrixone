@@ -3539,16 +3539,11 @@ func ensureDictionaryIndexes(ctx context.Context, dictLen int, indexes []int32) 
 }
 
 func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector, dictLen int, indexes []int32, convert func(idx int32) T) error {
-	expectedNonNulls := page.NumRows()
-	if mp.srcNull {
-		expectedNonNulls -= page.NumNulls()
+	nc, err := prepareNullCheck(proc.Ctx, mp, page)
+	if err != nil {
+		return err
 	}
-	if expectedNonNulls < 0 {
-		return moerr.NewInvalidInputf(proc.Ctx,
-			"malformed page: NumNulls() %d exceeds NumRows() %d",
-			page.NumNulls(), page.NumRows())
-	}
-	if err := validateDictionaryIndicesCount(proc.Ctx, indexes, expectedNonNulls); err != nil {
+	if err := validateDictionaryIndicesCount(proc.Ctx, indexes, nc.actualNonNulls); err != nil {
 		return err
 	}
 	if err := ensureDictionaryIndexes(proc.Ctx, dictLen, indexes); err != nil {

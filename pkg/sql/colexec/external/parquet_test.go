@@ -3087,6 +3087,20 @@ func (f parquetBooleanReaderFunc) ReadValues([]parquet.Value) (int, error) {
 	return 0, io.EOF
 }
 
+type parquetPageWithDefinitionLevels struct {
+	parquet.Page
+	levels   []byte
+	numNulls int64
+}
+
+func (p *parquetPageWithDefinitionLevels) DefinitionLevels() []byte {
+	return p.levels
+}
+
+func (p *parquetPageWithDefinitionLevels) NumNulls() int64 {
+	return p.numNulls
+}
+
 func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Leaf(parquet.BooleanType)
@@ -3927,6 +3941,25 @@ func Test_parquet_copyDictPageToVec_indexCountError(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	require.Contains(t, err.Error(), "dictionary indices")
+	require.Zero(t, vec.Length())
+}
+
+func Test_parquet_copyDictPageToVec_definitionLevelMismatch(t *testing.T) {
+	proc := testutil.NewProc(t)
+	st := parquet.Int32Type
+	page := st.NewPage(0, 3, encoding.Int32Values([]int32{0, 2, 1}))
+	pageWithBadLevels := &parquetPageWithDefinitionLevels{
+		Page:     page,
+		levels:   []byte{0, 0, 0},
+		numNulls: 1,
+	}
+	vec := vector.NewVec(types.New(types.T_int32, 0, 0))
+	mp := &columnMapper{srcNull: true, dstNull: true, maxDefinitionLevel: 1}
+
+	err := copyDictPageToVec[int32](mp, pageWithBadLevels, proc, vec, 3, []int32{0, 2}, func(idx int32) int32 { return idx })
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	require.Contains(t, err.Error(), "NumNulls() indicates")
 	require.Zero(t, vec.Length())
 }
 
