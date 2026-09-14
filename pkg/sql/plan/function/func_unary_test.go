@@ -1353,6 +1353,24 @@ func TestStGeomFromTextWithSRID(t *testing.T) {
 	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 }
 
+func TestStGeomFromWKBWithSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	wkb := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	for _, inputType := range []types.T{types.T_varchar, types.T_blob, types.T_varbinary} {
+		t.Run(inputType.String(), func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(inputType.ToType(), []string{wkb, wkb, ""}, []bool{false, false, true}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 4326, 3857}, []bool{false, false, false}),
+			}
+			expect := NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{"POINT(1 2)", "POINT(1 2)", ""}, []bool{false, false, true})
+			tc := NewFunctionTestCase(proc, inputs, expect, StGeomFromWKBWithSRID)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestStGeomFromTextWithSRIDRejectNonFiniteCoordinates(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
@@ -1487,6 +1505,50 @@ func TestStSRID(t *testing.T) {
 	fcTC2 := NewFunctionTestCase(proc, inputs2, expect2, StSRID)
 	s2, info2 := fcTC2.Run()
 	require.True(t, s2, fmt.Sprintf("err info is '%s'", info2))
+}
+
+func TestStSRIDWithSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geomType := types.T_geometry32.ToType()
+	geomType.Scale = 1
+	wkb, err := encodeGeometryPayloadFloat32("POINT(1 2)")
+	require.NoError(t, err)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{string(wkb), string(wkb), ""}, []bool{false, false, true}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, 0, 3857}, []bool{false, false, true}),
+	}
+	expect := NewFunctionTestResult(geomType, false,
+		[]string{"POINT(1 2)", "POINT(1 2)", ""}, []bool{false, false, true})
+	tc := NewFunctionTestCase(proc, inputs, expect, StSRIDWithSRID)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestStSRIDWithSRIDRejectsMalformedPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geomType := types.T_geometry.ToType()
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{"not-a-geometry"}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil)
+	tc := NewFunctionTestCase(proc, inputs, expect, StSRIDWithSRID)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestStSRIDWithSRIDRejectsWrongGeometry32Payload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geomType := types.T_geometry32.ToType()
+	wkb64 := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{wkb64}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry32.ToType(), true, nil, nil)
+	tc := NewFunctionTestCase(proc, inputs, expect, StSRIDWithSRID)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
 }
 
 func initStGeometryTypeTestCase() []tcTemp {

@@ -896,6 +896,42 @@ func (rule *ResetParamRefRule) runtimeParamValue(pos int) (any, vector.PreparePa
 	return nil, kind, false
 }
 
+func (rule *ResetParamRefRule) preparedGeometrySRIDParamExpr(pos int, sourceIsNull bool) (*Expr, bool, error) {
+	value, _, ok := rule.runtimeParamValue(pos)
+	if !ok {
+		return nil, false, nil
+	}
+	if sourceIsNull {
+		// Geometry evaluators short-circuit a NULL source before validating a
+		// scalar SRID. Materialize a typed NULL here as well, otherwise the
+		// binder would reject an otherwise NULL result for an invalid SRID.
+		typ := types.T_int64.ToType()
+		return &Expr{
+			Typ:  makePlan2Type(&typ),
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		}, true, nil
+	}
+	if pos >= 0 && pos < len(rule.paramValues) {
+		if param, isParam := rule.paramValues[pos].(ParamValue); isParam &&
+			value == nil && param.MaterializedValue != "" {
+			value = param.MaterializedValue
+		}
+	}
+	srid, isNull, err := geometrySRIDRuntimeValue(value)
+	if err != nil {
+		return nil, false, err
+	}
+	typ := types.T_int64.ToType()
+	literal := &plan.Literal{Isnull: isNull}
+	if !isNull {
+		literal.Value = &plan.Literal_I64Val{I64Val: int64(srid)}
+	}
+	return &Expr{
+		Typ:  makePlan2Type(&typ),
+		Expr: &plan.Expr_Lit{Lit: literal},
+	}, true, nil
+}
+
 func (rule *ResetParamRefRule) preparedBitCountUsesNumericRuntime(expr *plan.Expr) bool {
 	for pos := range preparedNumericValueParamPositions(expr) {
 		if pos >= 0 && int(pos) < len(rule.paramValues) {
@@ -1537,6 +1573,15 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 		if exprImpl.F == nil {
 			return e, nil
 		}
+		if isPreparedGeometrySRIDFunction(exprImpl.F.Func.GetObjName()) &&
+			len(exprImpl.F.Args) >= 2 {
+			if _, ok := preparedParamPosition(exprImpl.F.Args[len(exprImpl.F.Args)-1]); ok {
+				// A geometry SRID setter/constructor owns value-dependent
+				// result metadata. It cannot remain a preserved write root or
+				// the destination cast would see the prepare-time undefined SRID.
+				return rule.applyExpr(e)
+			}
+		}
 		if rule.validateFunctionArgs != nil {
 			if err := rule.validateFunctionArgs(exprImpl.F.Func.GetObjName(), exprImpl.F.Args); err != nil {
 				return nil, err
@@ -1548,6 +1593,11 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 				return nil, err
 			}
 			exprImpl.F.Args[i] = rewritten
+		}
+		if strings.EqualFold(exprImpl.F.Func.GetObjName(), moGeometryCastToSubtypeFun) {
+			if err := validateGeometryAssignmentSRID(rule.ctx, e, e.Typ); err != nil {
+				return nil, err
+			}
 		}
 		return e, nil
 	case *plan.Expr_W:
@@ -1839,6 +1889,17 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		regexpDomainsDeferred := preparedRegexpStringDomainCheckModes(functionName, originalArgs) != nil
 		needResetFunction := regexpDomainsDeferred
 		compareArgTypes := regexpDomainsDeferred
+		geometrySRIDParamPos := -1
+		if isPreparedGeometrySRIDFunction(functionName) && len(originalArgs) >= 2 {
+			if position, ok := preparedParamPosition(originalArgs[len(originalArgs)-1]); ok {
+				geometrySRIDParamPos = position
+				// The SRID is part of the result type metadata, so the function
+				// must be rebound even when the parameter's scalar type stays
+				// int64 across executions.
+				needResetFunction = true
+				compareArgTypes = true
+			}
+		}
 		numericPrefixDependent := false
 		sqlExecuteNumericSourceDependent := false
 		sqlExecuteNumericNestedDependent := false
@@ -2014,6 +2075,23 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				err = applyErr
 				if err != nil {
 					return nil, err
+				}
+			}
+			if geometrySRIDParamPos >= 0 && i == len(exprImpl.F.Args)-1 &&
+				hasParamPos && paramPos == geometrySRIDParamPos {
+				sourceIsNull := len(boundArgs) > 0 && geometrySRIDSourceIsStaticNull(boundArgs[0])
+				geometryArg, known, geometryErr := rule.preparedGeometrySRIDParamExpr(paramPos, sourceIsNull)
+				if geometryErr != nil {
+					return nil, geometryErr
+				}
+				if known {
+					// Do not retain the provisional cast around the marker. The
+					// normalized int64 literal makes the geometry binder apply the
+					// current SRID to Width, including NULL -> undefined metadata.
+					rewrittenArg = geometryArg
+					needResetFunction = true
+					compareArgTypes = true
+					rule.specialized = true
 				}
 			}
 			exprImpl.F.Args[i] = rewrittenArg

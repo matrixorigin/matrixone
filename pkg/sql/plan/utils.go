@@ -4109,6 +4109,12 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			return
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		if isPreparedGeometrySRIDFunction(name) && len(exprImpl.F.Args) >= 2 {
+			if _, ok := preparedParamPosition(exprImpl.F.Args[len(exprImpl.F.Args)-1]); ok {
+				rule.needs = true
+				return
+			}
+		}
 		if name == "bit_count" && len(exprImpl.F.Args) == 1 &&
 			isPreparedNumericFallbackExpr(exprImpl.F.Args[0]) {
 			// BIT_COUNT has its own value-aware trigger; text/BLOB executions keep
@@ -4163,6 +4169,68 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			}
 		}
 	}
+}
+
+// PreparedPlanGeometrySRIDParamPositions returns the direct prepared markers
+// that own geometry SRID metadata. The positions are part of the runtime cache
+// key because two executions with the same scalar parameter type can still
+// produce different geometry result types (for example SRID 0 and 4326).
+func PreparedPlanGeometrySRIDParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || !isPreparedGeometrySRIDFunction(fn.Func.GetObjName()) || len(fn.Args) < 2 {
+			return nil
+		}
+		position, ok := preparedParamPosition(fn.Args[len(fn.Args)-1])
+		if ok {
+			positions[int32(position)] = struct{}{}
+		}
+		return nil
+	})
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+// PreparedPlanGeometrySRIDSemanticKey adds the value-dependent part of the
+// runtime cache key for prepared geometry SRID setters/constructors. The
+// regular prepared key intentionally groups values by scalar domain; geometry
+// Width is metadata and therefore must distinguish each SRID value.
+func PreparedPlanGeometrySRIDSemanticKey(preparePlan *Plan, paramVals []any) string {
+	positions := PreparedPlanGeometrySRIDParamPositions(preparePlan)
+	if len(positions) == 0 {
+		return ""
+	}
+	var key strings.Builder
+	for _, position := range positions {
+		if position < 0 || int(position) >= len(paramVals) {
+			return ""
+		}
+		param, ok := paramVals[position].(ParamValue)
+		if !ok {
+			return ""
+		}
+		rawValue := "<null>"
+		if param.MaterializedValue != "" {
+			rawValue = param.MaterializedValue
+		} else if param.Value != nil {
+			switch value := param.Value.(type) {
+			case []byte:
+				rawValue = string(value)
+			default:
+				rawValue = fmt.Sprint(value)
+			}
+		}
+		fmt.Fprintf(&key, "geometry-srid:%d:%s;", position, rawValue)
+	}
+	return key.String()
 }
 
 func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.Expr) bool {

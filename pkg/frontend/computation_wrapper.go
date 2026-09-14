@@ -1812,6 +1812,9 @@ func initExecuteStmtParamWithResolverInSession(
 	if cacheableRuntimeQuery {
 		if runtimeCategoryCandidate {
 			runtimeCacheKey = preparedRuntimeSemanticKey(cwft.paramVals)
+			if geometryKey := plan2.PreparedPlanGeometrySRIDSemanticKey(executionPlan, cwft.paramVals); geometryKey != "" {
+				runtimeCacheKey += geometryKey
+			}
 		} else {
 			runtimeCacheKey = preparedDirectResultSemanticKey(cwft.paramVals, runtimeDirectResultPositions)
 		}
