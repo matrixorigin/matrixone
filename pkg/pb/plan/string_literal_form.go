@@ -203,7 +203,7 @@ const (
 // its overload IDs but changes its physical result vector from UINT8 to INT32.
 // A struct makes compatibility call sites name every capability instead of
 // relying on positional booleans.
-// RowDependentConvBases requires MORPC v68 for nonconstant or unsigned bases.
+// RowDependentConvBases requires MORPC v69 for nonconstant or unsigned bases.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool

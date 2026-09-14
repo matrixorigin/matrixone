@@ -41,13 +41,13 @@ func TestConvBasesPlacementAndActualSender(t *testing.T) {
 	defer op.Release()
 	op.ProjectList = []*planpb.Expr{expr}
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	for _, version := range []int64{defines.MORPCVersion67, defines.MORPCVersion68} {
+	for _, version := range []int64{defines.MORPCVersion68, defines.MORPCVersion69} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainConvBasesWorkers(qry))
 		data, err := encodeRemoteScope(scope, c.proc)
-		if version < defines.MORPCVersion68 {
+		if version < defines.MORPCVersion69 {
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 			require.Equal(t, c.addr, c.cnList[0].Addr)
 			require.ErrorContains(t, err, "remote destination")
@@ -57,12 +57,12 @@ func TestConvBasesPlacementAndActualSender(t *testing.T) {
 			wire := new(pipeline.Pipeline)
 			require.NoError(t, wire.Unmarshal(data))
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion67)
-			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 68")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion68)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 69")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion69)
 		}
 	}
-	client.version = defines.MORPCVersion67
+	client.version = defines.MORPCVersion68
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.Error(t, err, "a downgrade after placement must be fenced")
 	require.Positive(t, client.calls)

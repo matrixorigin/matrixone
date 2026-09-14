@@ -64,12 +64,20 @@ func TestConvDynamicBasesPreserveTypedInputs(t *testing.T) {
 	}{
 		{"string", NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"10"}, nil), []string{"2", "A", "16"}},
 		{"signed", NewFunctionTestConstInput(types.T_int64.ToType(), []int64{10}, nil), []string{"2", "A", "16"}},
+		{"int8", NewFunctionTestConstInput(types.T_int8.ToType(), []int8{10}, nil), []string{"2", "A", "16"}},
+		{"int16", NewFunctionTestConstInput(types.T_int16.ToType(), []int16{10}, nil), []string{"2", "A", "16"}},
+		{"int32", NewFunctionTestConstInput(types.T_int32.ToType(), []int32{10}, nil), []string{"2", "A", "16"}},
 		{"unsigned", NewFunctionTestConstInput(types.T_uint64.ToType(), []uint64{10}, nil), []string{"2", "A", "16"}},
+		{"uint8", NewFunctionTestConstInput(types.T_uint8.ToType(), []uint8{10}, nil), []string{"2", "A", "16"}},
+		{"uint16", NewFunctionTestConstInput(types.T_uint16.ToType(), []uint16{10}, nil), []string{"2", "A", "16"}},
+		{"uint32", NewFunctionTestConstInput(types.T_uint32.ToType(), []uint32{10}, nil), []string{"2", "A", "16"}},
 		{"bit", NewFunctionTestConstInput(types.T_bit.ToType(), []uint64{10}, nil), []string{"10", "A", "10"}},
 		{"bool", NewFunctionTestConstInput(types.T_bool.ToType(), []bool{true}, nil), []string{"1", "1", "1"}},
 		{"float", NewFunctionTestConstInput(types.T_float64.ToType(), []float64{10}, nil), []string{"2", "A", "16"}},
 		{"decimal", NewFunctionTestConstInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{{B0_63: 10}}, nil), []string{"2", "A", "16"}},
 		{"year", NewFunctionTestConstInput(types.T_year.ToType(), []types.MoYear{2024}, nil), []string{"0", "7E8", "8228"}},
+		{"date", NewFunctionTestConstInput(types.T_date.ToType(), []types.Date{types.DateFromCalendar(2024, 5, 6)}, nil), []string{"0", "7E8", "8228"}},
+		{"time", NewFunctionTestConstInput(types.T_time.ToType(), []types.Time{types.TimeFromClock(false, 12, 34, 56, 0)}, nil), []string{"1", "C", "18"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -89,6 +97,20 @@ func TestConvDynamicBasesPreserveTypedInputs(t *testing.T) {
 			}
 			for row := uint64(3); row < 6; row++ {
 				require.True(t, fc.result.GetResultVector().IsNull(row), "invalid/NULL bases must be handled by every typed conversion loop")
+			}
+			// Reuse the output with one selected valid row, masked valid rows,
+			// and the same invalid/NULL base rows. Every typed loop must honor
+			// selection without retaining values from the previous evaluation.
+			require.NoError(t, fc.result.PreExtendAndReset(6))
+			require.NoError(t, Conv(fc.parameters, fc.result, proc, 6,
+				&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false, true, true, true}}))
+			for row := uint64(0); row < 6; row++ {
+				if row == 1 {
+					require.False(t, fc.result.GetResultVector().IsNull(row))
+					require.Equal(t, tc.want[1], string(fc.result.GetResultVector().GetBytesAt(int(row))))
+				} else {
+					require.True(t, fc.result.GetResultVector().IsNull(row))
+				}
 			}
 		})
 	}

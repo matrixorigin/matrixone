@@ -1184,6 +1184,44 @@ func Test_BuiltIn_MoShowVisibleBinGeometryWithLen(t *testing.T) {
 	require.True(t, succeed, tc.info, info)
 }
 
+func Test_BuiltIn_MoShowVisibleBinIntegerMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		want string
+	}{
+		{name: "tinyint", typ: types.New(types.T_int8, 0, 0), want: "TINYINT"},
+		{name: "tinyint unsigned", typ: types.New(types.T_uint8, 0, 0), want: "TINYINT UNSIGNED"},
+		{name: "smallint", typ: types.New(types.T_int16, 0, 0), want: "SMALLINT"},
+		{name: "smallint unsigned", typ: types.New(types.T_uint16, 0, 0), want: "SMALLINT UNSIGNED"},
+		{name: "int", typ: types.New(types.T_int32, 0, 0), want: "INT"},
+		{name: "int unsigned", typ: types.New(types.T_uint32, 0, 0), want: "INT UNSIGNED"},
+		{name: "bigint", typ: types.New(types.T_int64, 0, 0), want: "BIGINT"},
+		{name: "bigint unsigned", typ: types.New(types.T_uint64, 0, 0), want: "BIGINT UNSIGNED"},
+		{name: "int with physical width", typ: types.New(types.T_int32, 32, 0), want: "INT(32)"},
+		{name: "bit keeps width zero", typ: types.New(types.T_bit, 0, 0), want: "BIT(0)"},
+		{name: "decimal keeps precision", typ: types.New(types.T_decimal64, 10, 2), want: "DECIMAL(10,2)"},
+		{name: "varchar keeps length", typ: types.New(types.T_varchar, 20, 0), want: "VARCHAR(20)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typeBytes, err := types.Encode(&tc.typ)
+			require.NoError(t, err)
+			input := tcTemp{
+				info: "show visible bin metadata",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
+					NewFunctionTestInput(types.T_uint8.ToType(), []uint8{typWithLen}, nil),
+				},
+				expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil),
+			}
+			tcc := NewFunctionTestCase(proc, input.inputs, input.expect, builtInMoShowVisibleBin)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, input.info, info)
+		})
+	}
+}
+
 func Test_BuiltIn_MoShowVisibleBinTextFamilyWithLen(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
