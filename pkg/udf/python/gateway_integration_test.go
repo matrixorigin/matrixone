@@ -554,6 +554,85 @@ def add(ctx, value):
 	})
 }
 
+// BenchmarkGatewayRealPythonWorkerLargeBatch compares the two handler modes
+// on one 8,192-row batch. The small-batch burst benchmark above is dominated
+// by process startup and Flight control traffic; this benchmark makes the
+// scalar conversion cost visible while keeping the complete Gateway/Flight/
+// worker/materialization path intact.
+func BenchmarkGatewayRealPythonWorkerLargeBatch(b *testing.B) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		b.Skip("python3 is required for the real worker benchmark")
+	}
+	workerPath := realWorkerPath(b)
+	port := freeTCPPort(b)
+	worker := startRealWorker(b, python, workerPath, port)
+	defer stopRealWorker(worker)
+
+	gateway, err := NewGateway(ClientConfig{
+		Enabled:                  true,
+		AllowUnisolated:          true,
+		ServerAddress:            "127.0.0.1:" + strconv.Itoa(port),
+		MaxBatchBytes:            1 << 20,
+		MaxBatchRows:             8192,
+		MaxActiveInvocations:     2,
+		MaxInvocationRows:        1 << 20,
+		MaxInvocationResultBytes: 1 << 20,
+		RequestTimeout:           30 * time.Second,
+		MaxTerminalEntries:       1024,
+		MaxTerminalBytes:         1 << 20,
+		TerminalRecordTTL:        time.Minute,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer gateway.Close()
+	readyContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := gateway.CheckLanguageReady(readyContext, udf.LanguagePython); err != nil {
+		cancel()
+		b.Fatal(err)
+	}
+	cancel()
+
+	const rows = 8192
+	run := func(b *testing.B, mode, source, label string) {
+		input, mp := integrationInput(b, make([]int64, rows))
+		defer func() {
+			input.Free(mp)
+			mpool.DeleteMPool(mp)
+		}()
+		result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+		defer result.Free()
+		b.ReportAllocs()
+		b.SetBytes(int64(rows * 8))
+		b.ResetTimer()
+		for iteration := 0; iteration < b.N; iteration++ {
+			runID := realWorkerBenchmarkRun.Add(1)
+			invocation := integrationInvocationForArgs(
+				mode, "add", source, []types.Type{types.T_int64.ToType()},
+				[]*vector.Vector{input}, rows,
+				protocol.FencingTuple{
+					AccountID: 1, StatementID: fmt.Sprintf("large-%s-%d-%d", label, runID, iteration),
+					GroupID: fmt.Sprintf("large-%s-group-%d-%d", label, runID, iteration), GroupEpoch: 1,
+					InvocationID: fmt.Sprintf("large-%s-invocation-%d-%d", label, runID, iteration), LeaseEpoch: 1,
+				},
+			)
+			if err := gateway.Execute(context.Background(), invocation, result, mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+		b.ReportMetric(float64(rows*b.N)/float64(b.Elapsed().Nanoseconds())*1e9, "rows/s")
+	}
+
+	b.Run("scalar", func(b *testing.B) {
+		run(b, ModeScalar, "def add(ctx, value): return value + 1", "scalar")
+	})
+	b.Run("vector", func(b *testing.B) {
+		run(b, ModeVector, "import pyarrow.compute as pc\ndef add(ctx, values): return pc.add(values, 1)", "vector")
+	})
+}
+
 func realWorkerPath(t testing.TB) string {
 	t.Helper()
 	_, sourceFile, _, ok := runtime.Caller(0)
