@@ -36,6 +36,9 @@ import (
 func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	t.Cleanup(func() {
+		proc.Free()
+	})
 	mb := message.NewMessageBoard()
 	proc.SetMessageBoard(mb)
 	sqlproc := sqlexec.NewSqlProcess(proc)
@@ -46,6 +49,9 @@ func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	}
 	data, err := keyvec.MarshalBinary()
 	require.NoError(t, err)
+	// MarshalBinary returns an independent byte buffer. Release the build-side
+	// vector before the helper returns; the process owns only the message board.
+	keyvec.Free(m)
 
 	tag := int32(42)
 	message.SendMessage(message.RuntimeFilterMessage{
@@ -62,6 +68,9 @@ func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 func setupVarcharKeyFilter(t *testing.T, n int, mustApply bool) *sqlexec.SqlProcess {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	t.Cleanup(func() {
+		proc.Free()
+	})
 	mb := message.NewMessageBoard()
 	proc.SetMessageBoard(mb)
 	sqlproc := sqlexec.NewSqlProcess(proc)
@@ -77,6 +86,7 @@ func setupVarcharKeyFilter(t *testing.T, n int, mustApply bool) *sqlexec.SqlProc
 	}
 	data, err := keyvec.MarshalBinary()
 	require.NoError(t, err)
+	keyvec.Free(m)
 
 	tag := int32(43)
 	message.SendMessage(message.RuntimeFilterMessage{
