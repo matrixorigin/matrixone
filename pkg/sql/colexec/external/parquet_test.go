@@ -3649,6 +3649,23 @@ func TestParquet_StringArrayMappingRollsBackOnParseError(t *testing.T) {
 	require.Equal(t, seed, vector.GetArrayAt[float32](vec, 0))
 }
 
+func TestParquetValuesToFixedRollsBackOnConversionError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	page := parquet.Int32Type.NewPage(0, 2, encoding.Int32Values([]int32{1, 2}))
+	vec := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixed(vec, int32(99), false, proc.Mp()))
+
+	err := processParquetValuesToFixed[int32](context.Background(), &columnMapper{}, page, proc, vec, 0,
+		func(v parquet.Value) (int32, error) {
+			if v.Int32() == 2 {
+				return 0, errors.New("conversion failed")
+			}
+			return v.Int32(), nil
+		})
+	require.ErrorContains(t, err, "row 1: conversion failed")
+	require.Equal(t, []int32{99}, vector.MustFixedColWithTypeCheck[int32](vec))
+}
+
 func TestParquet_ScanParquetFile_SteppedBatches(t *testing.T) {
 	// Reduce batch size so scan steps across multiple calls
 	save := maxParquetBatchCnt
