@@ -1879,9 +1879,7 @@ func regexp2RepeatBodyAlwaysConsumes(code *regexp2syntax.Code, start, end int) b
 		if pos+size > end || pos+size > len(code.Codes) {
 			return false
 		}
-		for _, next := range regexp2ZeroCostSuccessors(code, pos, end, op, size) {
-			stack = append(stack, next)
-		}
+		stack = append(stack, regexp2ZeroCostSuccessors(code, pos, end, op, size)...)
 	}
 	return true
 }
@@ -2310,20 +2308,6 @@ func (rs *regexpSet) regexp2MatchWithMatchType(
 	return match != nil, err
 }
 
-func (rs *regexpSet) regexp2VisitMatchesAtOrAfterWithMatchType(
-	matcher *regexp2Matcher,
-	str string,
-	startByte int,
-	subjectIsBinary bool,
-	pureMatchType string,
-	limit int64,
-	visit func(start, end int) error,
-) (int64, error) {
-	return rs.regexp2VisitMatchesAtOrAfterWithMatchTypeAndDeadline(
-		matcher, str, startByte, subjectIsBinary, pureMatchType, limit,
-		time.Now().Add(regexp2MaxEvaluation), visit)
-}
-
 func (rs *regexpSet) regexp2VisitMatchesAtOrAfterWithMatchTypeAndDeadline(
 	matcher *regexp2Matcher,
 	str string,
@@ -2379,20 +2363,6 @@ func (rs *regexpSet) regexp2VisitMatchesAtOrAfterWithMatchTypeAndDeadline(
 		}
 	}
 	return visited, nil
-}
-
-func (rs *regexpSet) regexp2VisitSubmatchesAtOrAfterWithMatchType(
-	matcher *regexp2Matcher,
-	str string,
-	startByte int,
-	subjectIsBinary bool,
-	pureMatchType string,
-	limit int64,
-	visit func([]int) error,
-) (int64, error) {
-	return rs.regexp2VisitSubmatchesAtOrAfterWithMatchTypeAndDeadline(
-		matcher, str, startByte, subjectIsBinary, pureMatchType, limit,
-		time.Now().Add(regexp2MaxEvaluation), visit)
 }
 
 func (rs *regexpSet) regexp2VisitSubmatchesAtOrAfterWithMatchTypeAndDeadline(
@@ -2489,19 +2459,6 @@ func (rs *regexpSet) regexp2NthMatchAtOrAfterWithMatchTypeAndDeadline(
 		return [2]int{}, false, err
 	}
 	return selected, visited >= occurrence, nil
-}
-
-func (rs *regexpSet) regexp2NthSubmatchesAtOrAfterWithMatchType(
-	matcher *regexp2Matcher,
-	str string,
-	startByte int,
-	subjectIsBinary bool,
-	pureMatchType string,
-	occurrence int64,
-) ([]int, bool, error) {
-	return rs.regexp2NthSubmatchesAtOrAfterWithMatchTypeAndDeadline(
-		matcher, str, startByte, subjectIsBinary, pureMatchType, occurrence,
-		time.Now().Add(regexp2MaxEvaluation))
 }
 
 func (rs *regexpSet) regexp2NthSubmatchesAtOrAfterWithMatchTypeAndDeadline(
