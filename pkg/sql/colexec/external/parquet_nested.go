@@ -132,6 +132,11 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 			RowModeTime: time.Since(rowModeStart).Nanoseconds(),
 		})
 	}()
+	if h.batchCnt <= 0 {
+		bat.SetRowCount(0)
+		return nil
+	}
+	batchLimit := int(h.batchCnt)
 
 	if h.offset > 0 {
 		if err := h.rowReader.SeekToRow(h.offset); err != nil {
@@ -142,12 +147,12 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 	// Bound decoder lookahead before the actual materialized batch size can be
 	// checked. Any unread rows are revisited from h.offset on the next call.
 	const maxReadRows = 1024
-	rowBuf := make([]parquet.Row, min(int(h.batchCnt), maxReadRows))
+	rowBuf := make([]parquet.Row, min(batchLimit, maxReadRows))
 	rowsRead := 0
 	eof := false
 	batchBoundary := false
-	for rowsRead < int(h.batchCnt) && !h.parquetBatchAtByteBudget(bat, rowsRead, param) {
-		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), int(h.batchCnt)-rowsRead), h.estimatedBatchSize(bat, rowsRead, param), param.maxBatchSize)
+	for rowsRead < batchLimit && !h.parquetBatchAtByteBudget(bat, rowsRead, param) {
+		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), batchLimit-rowsRead), h.estimatedBatchSize(bat, rowsRead, param), param.maxBatchSize)
 		n, err := h.rowReader.ReadRows(rowBuf[:toRead])
 		if err != nil && !errors.Is(err, io.EOF) {
 			return moerr.ConvertGoError(param.Ctx, err)

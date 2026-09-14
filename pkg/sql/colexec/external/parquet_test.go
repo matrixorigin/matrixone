@@ -3393,6 +3393,16 @@ func TestParquetRowModeEOFRequiresCompleteRowGroup(t *testing.T) {
 	require.ErrorContains(t, validateParquetRowModeEOF(ctx, 0, -1), "NumRows() -1 is negative")
 }
 
+func TestParquetRowModeZeroBatchCountDoesNotAllocateNegativeBuffer(t *testing.T) {
+	proc := testutil.NewProc(t)
+	param := &ExternalParam{ExParamConst: ExParamConst{Ctx: context.Background()}}
+	bat := batch.NewWithSize(0)
+	h := &ParquetHandler{batchCnt: -1}
+
+	require.NoError(t, h.getDataByRow(bat, param, proc))
+	require.Zero(t, bat.RowCount())
+}
+
 func TestParquetPageRowsStayWithinRowGroup(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, validateParquetPageRows(ctx, 2, 1, 3, 5))
