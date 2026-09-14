@@ -321,6 +321,17 @@ func (c *client) lookupLockServiceAddress(
 	return address, err
 }
 
+// activeTxnOwnerPresent consults the local raw membership view, without an RPC,
+// a discovery refresh, or a connection reset. Absence is only a reason to defer
+// probing: it is not an authoritative negative GetActiveTxn response.
+func (c *client) activeTxnOwnerPresent(ctx context.Context, serviceID string) (bool, error) {
+	address, err := c.lookupLockServiceAddress(ctx, getUUIDFromServiceIdentifier(serviceID))
+	if err == nil && address == "" {
+		v2.TxnLockActiveTxnRecoveryCounter.WithLabelValues("owner-absent").Inc()
+	}
+	return address != "", err
+}
+
 func (c *client) asyncSend(
 	ctx context.Context,
 	request *pb.Request,

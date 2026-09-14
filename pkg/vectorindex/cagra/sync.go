@@ -74,6 +74,9 @@ type CagraSync struct {
 	// SQL-emit helpers stay parameterized rather than hard-coding the
 	// constant in dozens of fmt.Sprintfs).
 	activeIndexId string
+	// buildTS is the base-table version this sync's frames reflect: the upper bound of the
+	// change range ISCP applied, set via SetBuildTS. 0 when no consumer supplied one.
+	buildTS int64
 
 	dim                int
 	vecBytesPerRow     int // dim * base element size (4*dim for f32, 2*dim for f16)
@@ -305,7 +308,51 @@ func (s *CagraSync) Save(sqlproc *sqlexec.SqlProcess) error {
 	// uses it when no tag=0 sub-index is loaded (small-data-only
 	// indexes); when a sub-index IS loaded the search prefers the
 	// model tar's colMetaJSON, so the redundancy is harmless.
-	sqls, serr := cuvscdc.CdcAppendEventsSql(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes, s.colMetaJSON)
+	sqls, chunkMetas, serr := cuvscdc.CdcAppendEventsSqlChecksummed(s.tblcfg, s.activeIndexId, nextId, s.pendingRecords, s.pendingSizes, s.colMetaJSON)
+	if serr == nil && len(sqls) > 0 {
+		// One metadata row per CHUNK this flush wrote, each keyed by its own chunk id and
+		// carrying that chunk's stored length, record count, and the base-table version it
+		// applied. Written in THIS transaction with the chunks they describe, so an index's
+		// recorded coverage cannot disagree with the bytes it stores.
+		//
+		// Per chunk, not per flush, because the reader derives the chunks a row covers as
+		// ceil(filesize / MaxChunkSize) and one row per flush cannot make that exact: a flush
+		// packs records into a payload budget of MaxChunkSize minus the frame overhead and the
+		// embedded colMetaJSON header, and never splits a record, so its record-byte total
+		// always divides into FEWER chunks than it actually wrote. Every fully described tail
+		// then read as partly undescribed, and CdcTailRowsUpperBound added a chunk's worth of
+		// phantom rows for each -- inflating the overflow reservation and refusing loads that
+		// fit. Here one frame is one chunk, so each row owns exactly one and the division is
+		// exact. This is the shape fulltext2 already writes (one row per frame).
+		// The frame row is written ONLY once the table has the provenance columns, which is
+		// also what makes it safe to write. A row without build_ts is still a row, and an
+		// un-upgraded CN reads this table with SELECT * and treats every row as a sub-index --
+		// it would try to load 'cdc_tail:N' as one and find no tar. The v4_0_7 migration that
+		// widens the table cannot start until every service reports this code's protocol.
+		// The table's shape decides whether naming build_ts works; the deployment's rollout
+		// gate decides whether a 'cdc_tail:N' row can meet a CN that would read it as a base
+		// sub-index. A wide table no longer implies the second -- once activated, CREATE INDEX
+		// produces one too -- so both are required.
+		provenance := sqlexec.ClusterHasIndexProvenance(sqlproc) &&
+			sqlexec.HasProvenanceColumns(sqlproc, s.tblcfg.DbName, s.tblcfg.MetadataTable,
+				catalog.Cagra_TblCol_Metadata_Build_Ts)
+		if provenance {
+			now := time.Now().UnixMicro()
+			rows := make([]string, 0, len(chunkMetas))
+			for _, c := range chunkMetas {
+				rows = append(rows, catalog.IndexMetadataRow(provenance,
+					vectorindex.TailFrameMetaId(c.ChunkId),
+					vectorindex.CdcChunkSetChecksum([]uint32{c.Checksum}),
+					now, int64(c.FrameLen), int64(c.Records), s.buildTS))
+			}
+			for len(rows) > 0 {
+				n := min(len(rows), vectorindex.MaxMetadataInsertTuples)
+				sqls = append(sqls, catalog.IndexMetadataInsertSql(
+					s.tblcfg.DbName, s.tblcfg.MetadataTable, provenance, rows[:n]))
+				rows = rows[n:]
+			}
+		}
+	}
 	if serr != nil {
 		return serr
 	}
@@ -362,3 +409,8 @@ func (s *CagraSync) runSqls(sqlproc *sqlexec.SqlProcess, sqls []string) error {
 		return nil
 	})
 }
+
+// SetBuildTS records the data version this sync's frames will reflect: the upper bound of the
+// change range ISCP applied, not the writing transaction's SnapshotTS, which is later and would
+// claim coverage of changes collected after the range but never applied.
+func (s *CagraSync) SetBuildTS(ts int64) { s.buildTS = ts }

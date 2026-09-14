@@ -31,15 +31,20 @@ select var_pop(h) from t1;
 ➤ var_pop(h)[3,38,12]  𝄀
 2254.078700000000
 select var_pop(i) from t1;
-invalid argument aggregate function var_pop, bad value [DATE]
+➤ var_pop(i)[3,38,6]  𝄀
+18517722.000000
 select var_pop(k) from t1;
-invalid argument aggregate function var_pop, bad value [DATETIME]
+➤ var_pop(k)[3,38,6]  𝄀
+718750000000000102400.000000
 select var_pop(l) from t1;
-invalid argument aggregate function var_pop, bad value [TIMESTAMP]
+➤ var_pop(l)[3,38,6]  𝄀
+12268750007374997504000.000000
 select var_pop(m) from t1;
-invalid argument aggregate function var_pop, bad value [CHAR]
+➤ var_pop(m)[8,53,31]  𝄀
+1.6875
 select var_pop(n) from t1;
-invalid argument aggregate function var_pop, bad value [VARCHAR]
+➤ var_pop(n)[8,53,31]  𝄀
+1.6875
 drop table t1;
 select var_pop(99999999999999999.99999);
 ➤ var_pop(99999999999999999.99999)[3,38,11]  𝄀

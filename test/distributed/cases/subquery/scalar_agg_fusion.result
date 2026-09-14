@@ -1,0 +1,63 @@
+drop database if exists scalar_agg_fusion;
+create database scalar_agg_fusion;
+use scalar_agg_fusion;
+create table t(k int, v decimal(10,2));
+create table x(id int);
+insert into x values (1),(1),(2);
+insert into t values (1,10),(1,10),(1,null),(2,40),(null,90);
+select id, (select count(*) from t a where a.k=1) c,
+(select count(b.v) from t b where b.k=1) n,
+(select avg(d.v) from t d where d.k=1) av
+from x order by id;
+id    c    n    av
+1    3    2    10.000000
+1    3    2    10.000000
+2    3    2    10.000000
+select id, c, n, av from x cross join
+(select count(*) c, count(v) n, avg(v) av from t where k=1) a order by id;
+id    c    n    av
+1    3    2    10.000000
+1    3    2    10.000000
+2    3    2    10.000000
+select a.c, b.s from (select count(*) c from t where k=1) a,
+(select sum(v) s from t where k=1) b;
+c    s
+3    20.00
+select a.c, b.s, b.m from (select count(*) c from t) a,
+(select s,m from (select sum(v) s from t) c, (select max(k) m from t) d) b;
+c    s    m
+5    150.00    2
+select (select count(*) from t where k=1) c,
+(select avg(v) from t where k=2) av;
+c    av
+3    40.000000
+select (select count(*) from t having count(*) > 10) c,
+(select count(v) from t) n;
+c    n
+null    4
+select a.c, b.s from (select count(*) c from t) a left join
+(select sum(v) s from t) b on a.c=b.s;
+c    s
+5    null
+prepare p from 'select (select count(*) from t where k=?) c, (select avg(v) from t where k=?) av';
+set @a=1;
+set @b=2;
+execute p using @a,@a;
+c    av
+3    10.000000
+execute p using @a,@b;
+c    av
+3    40.000000
+deallocate prepare p;
+delete from t;
+select (select count(*) from t) c, (select count(v) from t) n,
+(select avg(v) from t) av, (select sum(v) from t) s;
+c    n    av    s
+0    0    null    null
+select count(*) c, count(v) n, avg(v) av, sum(v) s from t;
+c    n    av    s
+0    0    null    null
+delete from x;
+select id, (select count(*) from t) c, (select avg(v) from t) av from x;
+id    c    av
+drop database scalar_agg_fusion;

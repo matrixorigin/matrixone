@@ -221,6 +221,39 @@ func TestConstantFoldPreservesSerialCastSemantics(t *testing.T) {
 	)
 }
 
+func TestReplaceFoldExprKeepsChildWhenConstantFoldFails(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := types.New(types.T_decimal256, 65, 30)
+	badCast, err := makePlan2CastExpr(
+		context.Background(),
+		MakePlan2StringConstExprWithType("not-a-decimal"),
+		makePlan2Type(&target),
+	)
+	require.NoError(t, err)
+
+	column := &planpb.Expr{
+		Typ: makePlan2Type(&target),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			Name: "d",
+		}},
+	}
+	filter, err := BindFuncExprImplByPlanExpr(
+		context.Background(), "=", []*planpb.Expr{column, badCast},
+	)
+	require.NoError(t, err)
+
+	var executors []colexec.ExpressionExecutor
+	t.Cleanup(func() {
+		for _, executor := range executors {
+			executor.Free()
+		}
+	})
+	_, err = ReplaceFoldExpr(proc, filter, &executors)
+	require.Error(t, err)
+	require.NotNil(t, filter.GetF().Args[1], "a failed fold must not replace its child with nil")
+	require.Equal(t, "cast", filter.GetF().Args[1].GetF().GetFunc().GetObjName())
+}
+
 func TestOptimizerPreservesByteIdenticalSerializedProvenance(t *testing.T) {
 	for _, test := range []struct {
 		name           string

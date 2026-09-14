@@ -106,9 +106,11 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		return nil, err
 	}
 	sender.proc = s.Proc
-	if sink, ok := s.Proc.GetWarningSink().(warningDiagnosticSink); ok {
-		sender.warningSink = sink
-	}
+	// Capture the execution-attempt sink, rather than looking it up from proc
+	// when the terminal message arrives. Retry/reuse can replace proc.WarningSink
+	// before an old RPC callback is delivered; a closed captured sink then drops
+	// that stale callback instead of publishing it into the new attempt.
+	sender.warningSink = s.Proc.GetWarningSink()
 
 	debugMsg := ""
 	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
@@ -442,10 +444,12 @@ type messageSenderOnClient struct {
 	anal *AnalyzeModule
 	proc *process.Process
 
-	// warningSink is the session-owned diagnostic destination on the initiating
-	// process. Remote terminal warnings are applied here only after the remote
-	// pipeline has finished, preserving one warning per actual evaluated row.
-	warningSink warningDiagnosticSink
+	// warningSink is the captured diagnostic destination on the initiating
+	// process for this execution attempt. Remote terminal warnings are applied
+	// here only after the remote pipeline has finished, preserving one warning
+	// per actual evaluated row and preventing a late retry callback from finding
+	// a newer destination.
+	warningSink any
 
 	// message sender and its data receiver.
 	streamSender morpc.Stream
@@ -955,20 +959,14 @@ func (sender *messageSenderOnClient) dealRemoteTerminal(data []byte) error {
 	if len(envelope.LocalScope) > 0 {
 		sender.dealRemoteAnalysis(envelope.PhyPlan)
 	}
-	if sender.warningSink != nil {
-		if sink, ok := sender.warningSink.(warningDiagnosticBatchSink); ok {
-			codes := make([]uint16, 0, len(envelope.WarningDiagnostics))
-			messages := make([]string, 0, len(envelope.WarningDiagnostics))
-			for _, warning := range envelope.WarningDiagnostics {
-				codes = append(codes, warning.Code)
-				messages = append(messages, warning.Message)
-			}
-			sink.AppendWarningBatch(envelope.WarningCount, codes, messages)
-		} else {
-			for _, warning := range envelope.WarningDiagnostics {
-				sender.warningSink.AppendWarningDiagnostic(warning.Code, warning.Message)
-			}
+	if sender.warningSink != nil && envelope.WarningCount > 0 {
+		codes := make([]uint16, 0, len(envelope.WarningDiagnostics))
+		messages := make([]string, 0, len(envelope.WarningDiagnostics))
+		for _, warning := range envelope.WarningDiagnostics {
+			codes = append(codes, warning.Code)
+			messages = append(messages, warning.Message)
 		}
+		appendWarningBatchToSink(sender.warningSink, envelope.WarningCount, codes, messages)
 	}
 	if sender.anal != nil && envelope.TerminalResourceVersion > 0 {
 		if envelope.Allocation.GenerationCount != 0 {

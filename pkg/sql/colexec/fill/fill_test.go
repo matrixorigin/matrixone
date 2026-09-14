@@ -1527,6 +1527,12 @@ func TestConsumeNextStabilizesSelfAliasedVarlenSources(t *testing.T) {
 
 			const rows = 1001
 			payload := bytes.Repeat([]byte("b"), 256)
+			if typ.Oid == types.T_json {
+				value, err := types.ParseStringToByteJson(`"` + string(payload) + `"`)
+				require.NoError(t, err)
+				payload, err = types.EncodeJson(value)
+				require.NoError(t, err)
+			}
 			vec := vector.NewOffHeapVecWithType(typ)
 			require.NoError(t, vec.PreExtend(rows, proc.Mp()))
 			vec.SetLength(rows)

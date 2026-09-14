@@ -51,6 +51,18 @@ select g,
 from t_ordered_set_bvt
 group by g order by g;
 
+drop table if exists t_ordered_set_ctas_bvt;
+create table t_ordered_set_ctas_bvt as
+select g,
+       percentile_cont(0.5) within group (order by v) as p50_cont,
+       percentile_disc(0.5) within group (order by v) as p50_disc
+from t_ordered_set_bvt
+group by g;
+select g, p50_cont, p50_disc
+from t_ordered_set_ctas_bvt
+order by g;
+drop table t_ordered_set_ctas_bvt;
+
 select percentile_cont(0) within group (order by v) as cont_min,
        percentile_cont(1) within group (order by v) as cont_max,
        percentile_disc(0) within group (order by v desc) as disc_desc_p0,

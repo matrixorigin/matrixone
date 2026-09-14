@@ -109,12 +109,20 @@ func NewInvalidBitwiseAggregateOperandsSizeNoCtx() *Error {
 	return newError(Context(), ErrInvalidBitwiseAggregateOperandsSize)
 }
 
+func NewInvalidBitwiseOperandsSizeNoCtx() *Error {
+	return newError(Context(), ErrInvalidBitwiseOperandsSize)
+}
+
 func NewWrongParamCountToNativeFctNoCtx(function string) *Error {
 	return newError(Context(), ErrWrongParamCountToNativeFct, function)
 }
 
 func NewAESInvalidIVNoCtx(function string, minLength int) *Error {
 	return newError(Context(), ErrAESInvalidIV, function, minLength)
+}
+
+func NewUserLockWrongNameNoCtx(name string) *Error {
+	return newError(Context(), ErrUserLockWrongName, name)
 }
 
 func NewArrayInvalidOpNoCtx(expected, actual int) *Error {

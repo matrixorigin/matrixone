@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -341,6 +342,95 @@ func TestResolveNumericBinaryTypesResult(t *testing.T) {
 	}
 }
 
+func TestResolveNumericIntegerDivDomains(t *testing.T) {
+	tests := []struct {
+		name       string
+		left       types.Type
+		right      types.Type
+		wantLeft   types.T
+		wantRight  types.T
+		wantResult types.T
+	}{
+		{
+			name:       "mixed unsigned integers",
+			left:       types.T_uint32.ToType(),
+			right:      types.T_uint64.ToType(),
+			wantLeft:   types.T_uint64,
+			wantRight:  types.T_uint64,
+			wantResult: types.T_int64,
+		},
+		{
+			name:       "mixed signed integers",
+			left:       types.T_int32.ToType(),
+			right:      types.T_int64.ToType(),
+			wantLeft:   types.T_int64,
+			wantRight:  types.T_int64,
+			wantResult: types.T_int64,
+		},
+		{
+			name:       "signed and unsigned integers",
+			left:       types.T_int64.ToType(),
+			right:      types.T_uint64.ToType(),
+			wantLeft:   types.T_decimal256,
+			wantRight:  types.T_decimal256,
+			wantResult: types.T_int64,
+		},
+		{
+			name:       "unsigned dividend and signed divisor",
+			left:       types.T_uint32.ToType(),
+			right:      types.T_int64.ToType(),
+			wantLeft:   types.T_uint64,
+			wantRight:  types.T_int64,
+			wantResult: types.T_int64,
+		},
+		{
+			name:       "canonical unsigned dividend and signed divisor",
+			left:       types.T_uint64.ToType(),
+			right:      types.T_int64.ToType(),
+			wantLeft:   types.T_uint64,
+			wantRight:  types.T_int64,
+			wantResult: types.T_int64,
+		},
+		{
+			name:       "unsigned dividend and decimal divisor",
+			left:       types.T_uint64.ToType(),
+			right:      types.New(types.T_decimal64, 10, 2),
+			wantLeft:   types.T_uint64,
+			wantRight:  types.T_decimal256,
+			wantResult: types.T_int64,
+		},
+		{
+			name:       "floating point fallback",
+			left:       types.T_float64.ToType(),
+			right:      types.T_int64.ToType(),
+			wantLeft:   types.T_float64,
+			wantRight:  types.T_float64,
+			wantResult: types.T_int64,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := resolveNumericBinaryTypes(numericOpIntegerDiv, test.left, test.right, nil)
+			require.True(t, ok)
+			require.Equal(t, test.wantLeft, got.left.Oid)
+			require.Equal(t, test.wantRight, got.right.Oid)
+			require.Equal(t, test.wantResult, got.result.Oid)
+
+			resolved, err := GetFunctionByName(context.Background(), "div", []types.Type{test.left, test.right})
+			require.NoError(t, err)
+			targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			if test.left.Oid == test.wantLeft && test.right.Oid == test.wantRight {
+				require.False(t, shouldCast)
+				return
+			}
+			require.True(t, shouldCast)
+			require.Equal(t, test.wantLeft, targets[0].Oid)
+			require.Equal(t, test.wantRight, targets[1].Oid)
+		})
+	}
+}
+
 func TestResolveNumericBinaryTypesRejectsNonNumericInput(t *testing.T) {
 	_, ok := resolveNumericBinaryTypes(
 		numericOpAdd,
@@ -427,6 +517,32 @@ func TestResolveNumericBinaryTypesByName(t *testing.T) {
 			require.NotEqual(t, types.T_any, left.Oid)
 			require.NotEqual(t, types.T_any, right.Oid)
 		})
+	}
+}
+
+func TestResolveNumericBinaryTypesBitSignedBigintUsesDecimal(t *testing.T) {
+	bit64 := types.New(types.T_bit, 64, 0)
+	int64Type := types.New(types.T_int64, 64, 0)
+	want := types.New(types.T_decimal128, 38, 0)
+
+	for _, operator := range []string{"+", "-", "*", "%"} {
+		for _, operands := range []struct {
+			name        string
+			left, right types.Type
+		}{
+			{name: "bit-left", left: bit64, right: int64Type},
+			{name: "bit-right", left: int64Type, right: bit64},
+		} {
+			t.Run(operator+"/"+operands.name, func(t *testing.T) {
+				left, right, result, ok := ResolveNumericBinaryTypes(
+					operator, operands.left, operands.right, nil,
+				)
+				require.True(t, ok)
+				require.Equal(t, want, left)
+				require.Equal(t, want, right)
+				require.Equal(t, want, result)
+			})
+		}
 	}
 }
 
