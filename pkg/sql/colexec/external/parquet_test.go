@@ -2956,6 +2956,9 @@ func TestParquet_ensureDictionaryIndexes_outOfRange(t *testing.T) {
 	err = ensureDictionaryIndexes(ctx, 3, []int32{-1})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "out of range")
+	err = ensureDictionaryIndexes(ctx, -1, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "dictionary length -1 is invalid")
 }
 
 func TestParquet_Dictionary_Bool(t *testing.T) {
