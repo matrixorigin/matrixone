@@ -187,26 +187,38 @@ const (
 	internalJSONComparisonFunctionID int32 = 577
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
+	binFunctionID                    int32 = 270
+	convFunctionID                   int32 = 367
+	asciiFunctionID                  int32 = 52
+	asciiInt32ResultTypeID           int32 = 22
 )
 
 // RemoteExpressionFeatures is the complete set of versioned expression
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
-// MORPC v59. A struct makes compatibility call sites name every capability
-// instead of relying on positional booleans.
+// MORPC v59. TypedConversionFunctions requires MORPC v64 because BIN/CONV
+// overload identities and their fixed-width execution contracts changed in
+// the same release. ASCIIInt32Result requires MORPC v65 because ASCII keeps
+// its overload IDs but changes its physical result vector from UINT8 to INT32.
+// A struct makes compatibility call sites name every capability instead of
+// relying on positional booleans.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool
 	MixedJSONBooleanEquality bool
 	FormatNumericArguments   bool
+	TypedConversionFunctions bool
+	ASCIIInt32Result         bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
-		features.FormatNumericArguments
+		features.FormatNumericArguments ||
+		features.TypedConversionFunctions ||
+		features.ASCIIInt32Result
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -235,10 +247,81 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if formatNumericArguments {
 				features.FormatNumericArguments = true
 			}
+			if !features.TypedConversionFunctions && isTypedConversionFunction(fn) {
+				features.TypedConversionFunctions = true
+			}
+			if !features.ASCIIInt32Result && isASCIIInt32Result(current) {
+				features.ASCIIInt32Result = true
+			}
 			return nil
 		})
 	})
 	return
+}
+
+// isASCIIInt32Result identifies the new physical result contract of ASCII.
+// Older serialized plans use the same overload IDs with UINT8 results, so the
+// result type must participate in the feature check; gating every ASCII call
+// would unnecessarily block compatible legacy plans during a rolling upgrade.
+func isASCIIInt32Result(expr *Expr) bool {
+	if expr == nil || expr.Typ.Id != asciiInt32ResultTypeID {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	return int32(fn.Func.Obj>>32) == asciiFunctionID ||
+		strings.EqualFold(fn.Func.GetObjName(), "ascii")
+}
+
+// RequiresMORPCVersion64TypedConversion reports whether an owner contains a
+// BIN/CONV expression whose serialized overload or physical argument contract
+// is not executable with the pre-v64 function registry.
+func RequiresMORPCVersion64TypedConversion(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.TypedConversionFunctions, err
+}
+
+// RequiresMORPCVersion65ASCIIResult reports whether an owner contains the
+// signed INT physical result contract introduced for ASCII.
+func RequiresMORPCVersion65ASCIIResult(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.ASCIIInt32Result, err
+}
+
+// isTypedConversionFunction identifies only the BIN/CONV forms changed by the
+// typed-dispatch fix. Plain string BIN/CONV and integer BIN retain their old
+// wire/execution contract and remain usable during a rolling upgrade.
+func isTypedConversionFunction(function *Function) bool {
+	if function == nil || function.Func == nil {
+		return false
+	}
+
+	functionID := int32(function.Func.Obj >> 32)
+	name := strings.ToLower(function.Func.GetObjName())
+	firstType := int32(0)
+	if len(function.Args) > 0 && function.Args[0] != nil {
+		firstType = function.Args[0].Typ.Id
+	}
+	overloadID := int32(function.Func.Obj)
+
+	switch {
+	case functionID == convFunctionID || name == "conv":
+		// CONV overloads 3..12 are the typed integer/float forms. The dynamic
+		// overload is 13. BOOL/DECIMAL/temporal values use the historical
+		// overload 0 but carry a fixed-width vector, so inspect the argument
+		// type as well.
+		return overloadID >= 3 || !isPlanMySQLStringType(firstType)
+	case functionID == binFunctionID || name == "bin":
+		// BIN overloads 8/9 are FLOAT32/FLOAT64 and now use MySQL's numeric
+		// prefix representation. Overload 11 is the new dynamic fixed-width
+		// path; overload 10 remains the string path.
+		return overloadID == 8 || overloadID == 9 || overloadID >= 11 ||
+			firstType == 30 || firstType == 31 // FLOAT32/FLOAT64
+	default:
+		return false
+	}
 }
 
 // FORMAT reuses its historical VARCHAR overload IDs for the new typed numeric

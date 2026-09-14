@@ -85,6 +85,11 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		}
 	}
 	if !shuffle.ctr.shufflePool.hold() {
+		// Preserve cancellation and the primary execution failure for the
+		// scope collector; a generic admission error would mask their cause.
+		if err := shuffle.ctr.shufflePool.terminalError(); err != nil {
+			return err
+		}
 		return moerr.NewInternalError(proc.Ctx, "shuffle pool was aborted before prepare completed")
 	}
 	shuffle.ctr.held = true

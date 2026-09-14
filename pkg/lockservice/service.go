@@ -58,6 +58,7 @@ type service struct {
 	deadlockDetector      *detector
 	events                *waiterEvents
 	unknownCommitResolver *unknownCommitResolver
+	externalTxns          externalTxnLiveness
 	clock                 clock.Clock
 	stopper               *stopper.Stopper
 	stopOnce              sync.Once
@@ -1897,6 +1898,26 @@ func (s *service) GetServiceID() string {
 	return s.serviceID
 }
 
+func (s *service) RegisterExternalTxn(txnID []byte) error {
+	if len(txnID) == 0 {
+		return moerr.NewInternalErrorNoCtx("cannot register an empty external transaction ID")
+	}
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.lifecycle.closing {
+		return moerr.NewBackendClosedNoCtx()
+	}
+	s.externalTxns.register(txnID)
+	return nil
+}
+
+func (s *service) UnregisterExternalTxn(txnID []byte) {
+	if len(txnID) == 0 {
+		return
+	}
+	s.externalTxns.unregister(txnID)
+}
+
 func (s *service) GetConfig() Config {
 	return s.cfg
 }
@@ -1936,6 +1957,7 @@ func (s *service) Close() error {
 		s.deadlockDetector.close()
 		s.events.close()
 		s.activeTxnHolder.close()
+		s.externalTxns.clear()
 		if s.unknownCommitResolver != nil {
 			// The resolver task is joined and callback admission is sealed. Drain
 			// every remaining reservation by transferring invocation out of service

@@ -119,6 +119,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateGroupConcatTimeZoneDestination(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -2076,6 +2079,18 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion59) {
 		return moerr.NewNotSupportedNoCtx(
 			"typed numeric FORMAT arguments require MORPC protocol version 59",
+		)
+	}
+	if features.TypedConversionFunctions &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion64) {
+		return moerr.NewNotSupportedNoCtx(
+			"typed BIN/CONV execution requires MORPC protocol version 64",
+		)
+	}
+	if features.ASCIIInt32Result &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion65) {
+		return moerr.NewNotSupportedNoCtx(
+			"signed INT ASCII results require MORPC protocol version 65",
 		)
 	}
 	return nil

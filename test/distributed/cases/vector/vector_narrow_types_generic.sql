@@ -35,9 +35,8 @@ select mo_table_col_max('narrowgen', 'nv', 'bf');
 select mo_table_col_max('narrowgen', 'nv', 'i8');
 select mo_table_col_max('narrowgen', 'nv', 'u8');
 
--- group_concat: failed with "unsupported type for group_concat payload".
--- Vectors concat as their raw storage bytes (this is also what vecf32 does), so
--- hex() keeps the expected output textual and stable.
+-- group_concat: vectors use their canonical SQL text representation. hex() keeps
+-- the expected text bytes stable while also guarding against raw storage output.
 select hex(group_concat(i8 order by a)) from nv;
 select hex(group_concat(u8 order by a)) from nv;
 select hex(group_concat(bf order by a)) from nv where a = 1;

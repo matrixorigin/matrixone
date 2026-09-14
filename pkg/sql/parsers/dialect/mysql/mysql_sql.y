@@ -5333,13 +5333,21 @@ global_scope:
 show_warnings_stmt:
     SHOW WARNINGS limit_opt
     {
-        $$ = &tree.ShowWarnings{}
+        $$ = &tree.ShowWarnings{Limit: $3}
+    }
+|   SHOW COUNT '(' '*' ')' WARNINGS
+    {
+        $$ = &tree.ShowWarnings{Count: true}
     }
 
 show_errors_stmt:
     SHOW ERRORS limit_opt
     {
-        $$ = &tree.ShowErrors{}
+        $$ = &tree.ShowErrors{Limit: $3}
+    }
+|   SHOW COUNT '(' '*' ')' ERRORS
+    {
+        $$ = &tree.ShowErrors{Count: true}
     }
 
 show_process_stmt:
@@ -12153,7 +12161,7 @@ column_name_unresolved:
 ident:
     ID
     {
-		$$ = tree.NewCStr($1, 1)
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 |	QUOTE_ID
 	{
@@ -12161,11 +12169,11 @@ ident:
     }
 |   not_keyword
 	{
-    	$$ = tree.NewCStr($1, 1)
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 |   non_reserved_keyword
 	{
-    	$$ = tree.NewCStr($1, 1)
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 
 db_name_ident:
@@ -13781,6 +13789,7 @@ function_call_generic:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
+            IsGeneric: isSQLModeSensitiveFunctionName($1),
             Exprs: $3,
         }
     }

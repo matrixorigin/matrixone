@@ -91,10 +91,12 @@ test('API failure falls back to full and both sides of pagination check the revi
 });
 
 function results() {
-  const needs = Object.fromEntries(['change-scope', 'docs-check', 'bvt-group-plan', 'matrixone-ci',
+  const needs = Object.fromEntries(['docs-check', 'matrixone-ci',
     'matrixone-ut-coverage', 'matrixone-compose-ci', 'matrixone-standalone-ci',
     'matrixone-coverage-merge'].map(job => [job, { result: 'success' }]));
-  needs['check-pr-valid'] = { result: 'success', outputs: { pr_valid: 'true' } };
+  needs.preflight = { result: 'success', outputs: {
+    pr_valid: 'true', compose_group: '0', launch_group: '1', generation: '123-1',
+  } };
   needs['matrixone-ut-coverage'].outputs = { coverage_ready: 'true' };
   return needs;
 }
@@ -109,9 +111,10 @@ function checkoutSpec(block) {
   const lines = block.split('\n');
   const checkoutIndex = lines.findIndex(line => /^      - uses: actions\/checkout@/.test(line));
   assert.notEqual(checkoutIndex, -1, 'job must contain the trusted checkout');
-  assert.equal(lines[checkoutIndex + 1].trim(), 'with:');
+  const withIndex = checkoutIndex + (lines[checkoutIndex + 1].trim().startsWith('if:') ? 2 : 1);
+  assert.equal(lines[withIndex].trim(), 'with:');
   const spec = {};
-  for (const line of lines.slice(checkoutIndex + 2)) {
+  for (const line of lines.slice(withIndex + 1)) {
     if (/^      (?:- |#)/.test(line) || /^  [\w-]+:/.test(line)) break;
     const match = line.match(/^\s{10}([\w-]+):\s*(.+)$/);
     if (match) spec[match[1]] = match[2];
@@ -164,17 +167,17 @@ function provenanceScript(block) {
 test('gates accept intentional omissions but reject failed, cancelled, skipped or missing required work', () => {
   const jobs = {
     docs: ['docs-check'], ut: ['matrixone-ci'],
-    bvt: ['bvt-group-plan', 'matrixone-compose-ci', 'matrixone-standalone-ci'],
-    full: ['bvt-group-plan', 'matrixone-ci', 'matrixone-ut-coverage', 'matrixone-compose-ci',
+    bvt: ['matrixone-compose-ci', 'matrixone-standalone-ci'],
+    full: ['matrixone-ci', 'matrixone-ut-coverage', 'matrixone-compose-ci',
       'matrixone-standalone-ci', 'matrixone-coverage-merge'],
   };
   for (const [scope, required] of Object.entries(jobs)) {
     const needs = results();
     for (const job of Object.keys(needs)) {
-      if (!['change-scope', 'check-pr-valid', ...required].includes(job)) needs[job].result = 'skipped';
+      if (!['preflight', ...required].includes(job)) needs[job].result = 'skipped';
     }
     assert.match(verifyResults(scope, needs), /passed/);
-    for (const job of ['change-scope', 'check-pr-valid', ...required]) {
+    for (const job of ['preflight', ...required]) {
       for (const result of ['failure', 'cancelled', 'skipped', undefined]) {
         assert.throws(() => verifyResults(scope, { ...needs, [job]: { result } }));
       }
@@ -182,7 +185,7 @@ test('gates accept intentional omissions but reject failed, cancelled, skipped o
   }
   assert.throws(() => verifyResults('', results()));
   const needs = results();
-  needs['check-pr-valid'].outputs.pr_valid = 'false';
+  needs['preflight'].outputs.pr_valid = 'false';
   assert.throws(() => verifyResults('docs', needs));
 });
 
@@ -196,19 +199,88 @@ test('a successful eligibility job cannot hide skipped UT coverage', () => {
   }
 });
 
+test('successful preflight cannot hide a missing or non-complementary BVT plan', () => {
+  for (const scope of ['bvt', 'full']) {
+    for (const override of [
+      { compose_group: undefined }, { launch_group: '' }, { launch_group: '0' },
+      { compose_group: '2' }, { generation: '' }, { generation: '123' },
+    ]) {
+      const needs = results();
+      Object.assign(needs.preflight.outputs, override);
+      assert.throws(() => verifyResults(scope, needs), /BVT plan/);
+    }
+  }
+  for (const scope of ['docs', 'ut']) {
+    const needs = results();
+    needs.preflight.outputs = { pr_valid: 'true' };
+    assert.match(verifyResults(scope, needs), /passed/);
+  }
+});
+
+test('preflight runs classification only for valid modern PRs and plans only BVT scopes', () => {
+  const block = entrypointJobs().preflight;
+  const steps = block.split(/^      - /m).slice(1);
+  const checkout = steps.find(step => step.startsWith('uses: actions/checkout@'));
+  const scopeStep = steps.find(step => /id: scope\n/.test(step));
+  const plan = steps.find(step => step.startsWith('id: plan\n'));
+  const selected = (step, scope, valid, base) => {
+    const expression = step.match(/^        if: \$\{\{ (.*) \}\}$/m)[1];
+    return runInNewContext(expression, {
+      steps: { check_pr_valid: { outputs: { pull_valid: valid } }, scope: { outputs: { scope } } },
+      github: { base_ref: base }, fromJSON: JSON.parse, contains: (values, value) => values.includes(value),
+    });
+  };
+  for (const scope of ['docs', 'ut', 'bvt', 'full']) {
+    for (const base of ['main', '4.2-dev', '3.0-dev']) {
+      for (const valid of ['true', 'false', '']) {
+        const modernValid = valid === 'true' && base !== '3.0-dev';
+        assert.equal(selected(checkout, scope, valid, base), modernValid);
+        assert.equal(selected(scopeStep, scope, valid, base), modernValid);
+        assert.equal(selected(plan, scope, valid, base), modernValid && ['bvt', 'full'].includes(scope));
+      }
+    }
+  }
+  assert.match(block, /pr_valid: \$\{\{ steps.check_pr_valid.outputs.pull_valid \}\}/);
+  for (const output of ['compose_group', 'launch_group', 'generation']) {
+    assert.ok(block.includes(`${output}: \u0024{{ steps.plan.outputs.${output} }}`));
+  }
+  for (const [job, jobBlock] of Object.entries(entrypointJobs())) {
+    assert.doesNotMatch(jobBlock, /needs[.:].*(?:check-pr-valid|change-scope|bvt-group-plan)/, job);
+    if (job.endsWith('-30')) {
+      assert.match(jobBlock, /needs: preflight/);
+      assert.match(jobBlock, /needs.preflight.outputs.pr_valid == 'true' && github.base_ref == '3.0-dev'/);
+    }
+  }
+});
+
+test('trusted control jobs share the configurable runner while PR diff and test jobs stay separate', () => {
+  const blocks = entrypointJobs();
+  const controller = readFileSync(join(__dirname, '../workflows/ci-cancellation.yml'), 'utf8');
+  for (const block of [blocks.preflight, blocks['ci-required'], controller]) {
+    const expression = block.match(/^    runs-on: \$\{\{ (.*) \}\}$/m)[1];
+    for (const label of ['', undefined, 'ci-control-linux']) {
+      assert.equal(runInNewContext(expression, { vars: { CI_CONTROL_RUNNER_LABEL: label } }), label || 'ubuntu-latest');
+    }
+    assert.match(block, /timeout-minutes: [56]/);
+  }
+  assert.equal(Object.keys(blocks).filter(job => /^(?:preflight|check-pr-valid|change-scope|bvt-group-plan)$/.test(job)).length, 1);
+  assert.doesNotMatch(blocks['docs-check'], /CI_CONTROL_RUNNER_LABEL/);
+  assert.doesNotMatch(blocks['matrixone-ci'], /CI_CONTROL_RUNNER_LABEL/);
+});
+
 test('entrypoint routes each scope through one required check', () => {
   const blocks = entrypointJobs();
-  const routed = ['docs-check', 'bvt-group-plan', 'matrixone-shared-build', 'matrixone-ci',
+  const routed = ['docs-check', 'matrixone-shared-build', 'matrixone-ci',
     'matrixone-ut-coverage', 'matrixone-upgrade-ci', 'matrixone-compose-ci',
     'matrixone-standalone-ci', 'matrixone-coverage-merge'];
   const expected = {
     docs: ['docs-check'], ut: ['matrixone-ci'],
-    bvt: ['bvt-group-plan', 'matrixone-shared-build', 'matrixone-compose-ci', 'matrixone-standalone-ci'],
+    bvt: ['matrixone-shared-build', 'matrixone-compose-ci', 'matrixone-standalone-ci'],
     full: routed.filter(job => job !== 'docs-check'),
   };
   for (const [scope, wanted] of Object.entries(expected)) {
     const needs = results();
-    needs['change-scope'].outputs = { scope };
+    needs.preflight.outputs.scope = scope;
     needs['matrixone-shared-build'] = { result: 'success' };
     const selected = routed.filter(job => {
       const expression = blocks[job].match(/^    if: \$\{\{ (.*) \}\}$/m)[1]
@@ -231,7 +303,7 @@ test('entrypoint routes each scope through one required check', () => {
     assert.match(blocks[job], /name: .* execution\n/);
     assert.ok(gates.match(/^    needs: (.*)$/m)[1].includes(job));
   }
-  for (const job of ['change-scope', 'ci-required']) {
+  for (const job of ['preflight', 'ci-required']) {
     assert.match(blocks[job], /repository: \$\{\{ github.repository \}\}/);
     assert.match(blocks[job], /ref: \$\{\{ github.workflow_sha \}\}/);
     assert.doesNotMatch(blocks[job], /ref: \$\{\{ github.event.pull_request.base.sha \}\}/);
@@ -259,7 +331,7 @@ test('provenance remains available when helper loading or checkout fails', () =>
       PR_BASE_SHA: 'base-sha',
       PR_HEAD_SHA: 'head-sha',
     };
-    for (const job of ['change-scope', 'ci-required']) {
+    for (const job of ['preflight', 'ci-required']) {
       const summaryPath = join(root, `${job}.md`);
       const result = spawnSync('/bin/bash', [
         '-eu',
@@ -304,7 +376,7 @@ test('workflow provenance selects both helpers from the actual checkout config',
       headSha: 'head-sha',
     };
     const blocks = entrypointJobs();
-    const changeScopeCheckout = selectFixtureCheckout(blocks['change-scope'], context, refs);
+    const changeScopeCheckout = selectFixtureCheckout(blocks['preflight'], context, refs);
     const ciRequiredCheckout = selectFixtureCheckout(blocks['ci-required'], context, refs);
     assert.equal(changeScopeCheckout.refName, 'workflow');
     assert.deepEqual(ciRequiredCheckout, changeScopeCheckout);
