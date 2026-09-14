@@ -514,6 +514,23 @@ class WorkerContractTest(unittest.TestCase):
             else:
                 self.assertEqual(value, round_trip, name)
 
+    def test_scalar_column_materialization_preserves_fixed_width_values(self):
+        small_arrays = (
+            pa.array([1, None, 3], type=pa.int64()),
+            pa.array([True, None, False], type=pa.bool_()),
+            pa.array([1.25, None, 3.5], type=pa.float64()),
+        )
+        for array in small_arrays:
+            self.assertIsNone(worker._scalar_column_values(array))
+        for array in (
+            pa.array([1, None] + list(range(2, 64)), type=pa.int64()),
+            pa.array([True, None] + [False] * 62, type=pa.bool_()),
+            pa.array([1.25, None] + [float(value) for value in range(2, 64)], type=pa.float64()),
+        ):
+            with self.subTest(type=array.type):
+                self.assertEqual(array.to_pylist(), worker._scalar_column_values(array))
+        self.assertIsNone(worker._scalar_column_values(pa.array(["a", None], type=pa.string())))
+
     def test_go_python_fingerprint_vectors(self):
         cases = [
             ({"type_id": worker.INT64, "offset_width": 32}, "482d3c55b8a9d662c2b41326b3ca55cbae65153e662c47c4919ba020d006262b"),
