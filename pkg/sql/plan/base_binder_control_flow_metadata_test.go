@@ -944,12 +944,21 @@ func TestUnquotedScientificLiteralKeepsExistingFloatPath(t *testing.T) {
 }
 
 func TestUnquotedDecimalLiteralRejectsBeyondDecimal256Precision(t *testing.T) {
-	for _, value := range []string{
-		strings.Repeat("9", 77),
-		strings.Repeat("9", 75) + ".11",
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{name: "77-digit integer", value: strings.Repeat("9", 77)},
+		{name: "76-digit integer and two fractional digits", value: strings.Repeat("9", 75) + ".11"},
 	} {
-		t.Run(value, func(t *testing.T) {
-			_, err := makePlan2DecimalExprWithType(context.Background(), value)
+		t.Run(test.name, func(t *testing.T) {
+			_, err := makePlan2DecimalExprWithType(context.Background(), test.value)
+			require.Error(t, err)
+
+			// These cases must go through the parser and binder as well. The
+			// parser classifies a decimal point as P_float64; falling back to
+			// astExpr.Float64 there would hide the Decimal256 range error.
+			_, err = runOneStmt(NewMockOptimizer(false), t, "select "+test.value)
 			require.Error(t, err)
 		})
 	}
