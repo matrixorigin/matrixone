@@ -3542,6 +3542,35 @@ func TestParquetNestedOptionalGroupNullIsPreserved(t *testing.T) {
 	require.Nil(t, result["nested"])
 }
 
+func TestParquetListOfNestedAlignsOptionalFieldsByElement(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"items": parquet.List(parquet.Group{
+			"a": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+			"b": parquet.Optional(parquet.Leaf(parquet.Int32Type)),
+		}),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	element := f.Root().Column("items").Column("list").Column("element")
+	a := element.Column("a")
+	b := element.Column("b")
+
+	got, err := reconstructListOfNested(context.Background(), element, []parquet.Value{
+		parquet.Int32Value(10).Level(0, a.MaxDefinitionLevel(), a.Index()),
+		parquet.NullValue().Level(1, a.MaxDefinitionLevel()-1, a.Index()),
+		parquet.NullValue().Level(0, b.MaxDefinitionLevel()-1, b.Index()),
+		parquet.Int32Value(20).Level(1, b.MaxDefinitionLevel(), b.Index()),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []any{
+		map[string]any{"a": int64(10), "b": nil},
+		map[string]any{"a": nil, "b": int64(20)},
+	}, got)
+}
+
 func TestParquetMapRejectsNullKey(t *testing.T) {
 	schema := parquet.NewSchema("x", parquet.Group{
 		"m": parquet.Map(parquet.String(), parquet.Optional(parquet.String())),

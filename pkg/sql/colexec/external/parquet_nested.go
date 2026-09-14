@@ -634,6 +634,44 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 		return result, nil
 	}
 
+	// Values in a parquet row are stored column-major. For an element made up
+	// only of non-repeated fields, the value at ordinal n in every leaf belongs
+	// to the same list element. This also preserves elements whose optional
+	// fields are populated in different columns. Nested repeated fields need
+	// repetition-level grouping below because their leaf counts can differ.
+	if !hasNestedRepeatedDescendant(elementCol) {
+		valuesByColumn := make(map[int][]parquet.Value, len(leafCols))
+		maxValues := 0
+		for _, v := range values {
+			if !containsNestedLeaf(leafCols, v.Column()) {
+				continue
+			}
+			valuesByColumn[v.Column()] = append(valuesByColumn[v.Column()], v)
+			if len(valuesByColumn[v.Column()]) > maxValues {
+				maxValues = len(valuesByColumn[v.Column()])
+			}
+		}
+
+		for i := 0; i < maxValues; i++ {
+			group := make([]parquet.Value, 0, len(leafCols))
+			for _, leaf := range leafCols {
+				columnValues := valuesByColumn[leaf.Index()]
+				if i < len(columnValues) {
+					group = append(group, columnValues[i])
+				}
+			}
+			if len(group) == 0 {
+				continue
+			}
+			nested, err := reconstructNestedByType(ctx, elementCol, group)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, nested)
+		}
+		return result, nil
+	}
+
 	expectedCols := make(map[int]bool)
 	for _, leaf := range leafCols {
 		expectedCols[leaf.Index()] = true
@@ -672,6 +710,24 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 	}
 
 	return result, nil
+}
+
+func containsNestedLeaf(leafCols []*parquet.Column, columnIndex int) bool {
+	for _, leaf := range leafCols {
+		if leaf.Index() == columnIndex {
+			return true
+		}
+	}
+	return false
+}
+
+func hasNestedRepeatedDescendant(col *parquet.Column) bool {
+	for _, child := range col.Columns() {
+		if child.Repeated() || hasNestedRepeatedDescendant(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.Value) ([]any, error) {
