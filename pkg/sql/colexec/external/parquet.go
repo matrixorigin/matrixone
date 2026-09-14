@@ -5369,7 +5369,7 @@ func (r *parquetRangeReadAheadReaderAt) ReadAt(p []byte, off int64) (n int, err 
 func readParquetReaderAt(reader io.ReaderAt, p []byte, off int64) (int, error) {
 	n, err := reader.ReadAt(p, off)
 	if n < 0 || n > len(p) {
-		return 0, errors.New("underlying parquet reader returned an invalid byte count")
+		return 0, moerr.NewInternalErrorNoCtx("underlying parquet reader returned an invalid byte count")
 	}
 	return n, err
 }
@@ -5379,13 +5379,13 @@ func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 		return 0, nil
 	}
 	if off < 0 {
-		return 0, errors.New("parquet reader received a negative offset")
+		return 0, moerr.NewInternalError(r.ctx, "parquet reader received a negative offset")
 	}
 	if off > math.MaxInt64-int64(len(p)) {
-		return 0, errors.New("parquet reader offset overflows int64")
+		return 0, moerr.NewInternalError(r.ctx, "parquet reader offset overflows int64")
 	}
 	if r.fs == nil {
-		return 0, errors.New("parquet reader has no file service")
+		return 0, moerr.NewInternalError(r.ctx, "parquet reader has no file service")
 	}
 	vec := fileservice.IOVector{
 		FilePath: r.readPath,
@@ -5405,7 +5405,7 @@ func (r *fsReaderAt) ReadAt(p []byte, off int64) (n int, err error) {
 	}
 	readSize := vec.Entries[0].Size
 	if readSize < 0 || readSize > int64(len(p)) {
-		return 0, errors.New("file service returned an invalid parquet read size")
+		return 0, moerr.NewInternalError(r.ctx, "file service returned an invalid parquet read size")
 	}
 	n = int(readSize)
 	if n > 0 && r.param != nil {
