@@ -199,7 +199,7 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 	if definition == nil {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: nil Python routine definition")
 	}
-	if definition.Language != "" && definition.Language != udf.LanguagePython {
+	if definition.Language != udf.LanguagePython {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported UDF language %q", definition.Language)
 	}
 	if strings.TrimSpace(definition.Handler) == "" {
