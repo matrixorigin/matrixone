@@ -3376,6 +3376,31 @@ func TestParquetRowModeLeafDefinitionLevelMatchesNullness(t *testing.T) {
 	}
 }
 
+func TestParquetNestedNullUsesColumnDefinitionLevel(t *testing.T) {
+	schema := parquet.NewSchema("x", parquet.Group{
+		"outer": parquet.Optional(parquet.Group{
+			"nested": parquet.Optional(parquet.Group{
+				"value": parquet.Leaf(parquet.Int32Type),
+			}),
+		}),
+	})
+	var buf bytes.Buffer
+	w := parquet.NewWriter(&buf, schema)
+	require.NoError(t, w.Close())
+	f, err := parquet.OpenFile(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	require.NoError(t, err)
+	col := f.Root().Column("outer").Column("nested")
+	leaf := col.Column("value")
+	require.True(t, col.Optional())
+	require.Greater(t, col.MaxDefinitionLevel(), 1)
+
+	nullAtOuterLevel := parquet.Int32Value(1).Level(0, 1, leaf.Index())
+	require.True(t, isNestedColumnNull([]parquet.Value{nullAtOuterLevel}, col))
+
+	valueAtMaxLevel := parquet.Int32Value(1).Level(0, col.MaxDefinitionLevel(), leaf.Index())
+	require.False(t, isNestedColumnNull([]parquet.Value{valueAtMaxLevel}, col))
+}
+
 func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Leaf(parquet.BooleanType)

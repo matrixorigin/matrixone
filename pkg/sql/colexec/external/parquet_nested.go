@@ -469,8 +469,8 @@ func isNestedColumnNull(values []parquet.Value, col *parquet.Column) bool {
 	if len(values) == 0 {
 		return true
 	}
-	if col != nil && col.Optional() && len(values) > 0 {
-		return values[0].DefinitionLevel() == 0
+	if col != nil && col.Optional() {
+		return values[0].DefinitionLevel() < col.MaxDefinitionLevel()
 	}
 	return false
 }
