@@ -397,9 +397,13 @@ func (g *Gateway) Close() error {
 		g.mu.Unlock()
 		return nil
 	}
+	// Serialize the close barrier with group admission.  Once this lock is
+	// released, no caller can pass the admission check after Close returns.
+	g.admissionMu.Lock()
 	g.closed = true
 	conn := g.conn
 	g.conn = nil
+	g.admissionMu.Unlock()
 	g.mu.Unlock()
 	if conn == nil {
 		return nil
@@ -727,15 +731,25 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 	if err != nil {
 		return nil, err
 	}
+	// g.mu -> admissionMu is the lifecycle lock order. Close uses the same
+	// order so a concurrent shutdown cannot return while this invocation is
+	// still being admitted.
+	g.mu.Lock()
+	if g.closed {
+		g.mu.Unlock()
+		return nil, errGatewayClosed
+	}
 	g.admissionMu.Lock()
 	ledger := g.ledger
 	ttl := g.ledgerTTL
 	active := g.active
 	if err := g.claimGroupLocked(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch); err != nil {
 		g.admissionMu.Unlock()
+		g.mu.Unlock()
 		return nil, err
 	}
 	g.admissionMu.Unlock()
+	g.mu.Unlock()
 	if ledger == nil || active == nil {
 		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
 		return nil, fmt.Errorf("python udf: admission state is not initialized")
