@@ -28,6 +28,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPercentileDiscRejectsUnaccountedSortScratch(t *testing.T) {
+	for _, typ := range []types.T{
+		types.T_json,
+		types.T_array_float32,
+		types.T_array_float64,
+		types.T_array_bf16,
+		types.T_array_float16,
+		types.T_array_int8,
+		types.T_array_uint8,
+	} {
+		require.False(t, PercentileDiscSupportedType(typ), "type=%s", typ)
+	}
+}
+
 func TestOrderedPercentileExecNumericAndDirection(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()

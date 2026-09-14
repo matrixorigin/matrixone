@@ -63,7 +63,8 @@ func orderedSetPercentileCheckWithMode(inputs []types.Type, continuous bool) che
 		}
 	} else if !aggexec.PercentileDiscSupportedType(finalTypes[0].Oid) {
 		// A discrete percentile selects one input value without interpolation,
-		// so every scalar type with a defined SQL ordering can be retained.
+		// so ordered types can be retained when their sort path is fully covered
+		// by the aggregate allocation account.
 		return newCheckResultWithFailure(failedAggParametersWrong)
 	}
 	if needCast {

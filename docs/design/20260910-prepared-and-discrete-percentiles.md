@@ -36,9 +36,9 @@ The existing percentile implementation has two independent limitations:
 The goals are to admit a prepared marker for `p` in `APPROX_PERCENTILE`,
 `PERCENTILE_CONT`, and `PERCENTILE_DISC`; evaluate that marker exactly once per
 execution; prevent any physical compile from retaining a previous execution's
-value; and make `PERCENTILE_DISC` accept every scalar/vector type supported by
-the shared MatrixOne sort implementation while preserving the selected value's
-type and string provenance.
+value; and make `PERCENTILE_DISC` accept the scalar types whose shared
+MatrixOne sort path keeps all O(N) scratch in the aggregate allocation account,
+while preserving the selected value's type and string provenance.
 
 The following remain non-goals:
 
@@ -75,8 +75,9 @@ all-NULL groups return NULL. Equal sort keys are peers and no stable input-order
 tie break is promised; the returned value is nevertheless one original peer,
 not a converted or interpolated value.
 
-`PERCENTILE_DISC` accepts a value type exactly when `sort.IsSupportedType`
-accepts its resolved type. The supported families and their order are:
+`PERCENTILE_DISC` accepts a resolved value type when `sort.IsSupportedType`
+accepts it and that sort path does not allocate unaccounted O(N) scratch. The
+supported families and their order are:
 
 - booleans and bits; signed and unsigned integers; floating point using the
   engine SQL total order, including its defined NaN placement;
@@ -86,9 +87,12 @@ accepts its resolved type. The supported families and their order are:
 - `UUID`, transaction timestamps, row IDs, and block IDs by their native
   engine comparison;
 - character, text, binary, blob, and datalink values by the same bytewise
-  relation used by the shared physical `ORDER BY` sorter;
-- JSON by `bytejson.CompareByteJson`; and
-- supported array/vector types by the shared element-wise array comparison.
+  relation used by the shared physical `ORDER BY` sorter.
+
+JSON and array/vector inputs remain rejected. Their shared sort paths currently
+materialize O(N) Go-heap sidecars outside the MPool/allocation account, so
+admitting them would violate the hard memory bound below. They may be enabled
+in a later change after those sidecars become allocator-aware or are removed.
 
 The result has the complete input `types.Type`, including width, scale, and
 charset. For MySQL string values, it also carries the runtime string domain and
@@ -301,6 +305,9 @@ rollout precondition.
 - Adding one typed executor per sortable type would duplicate sort semantics
   and omit future supported types. Reusing the shared vector sorter keeps one
   ordering boundary and one generic retained representation.
+- Admitting JSON and array/vector types now would reuse their SQL ordering, but
+  their sorter sidecars grow O(N) on the unaccounted Go heap. They remain
+  rejected until that scratch participates in the Group allocation bound.
 - Silently running extended types only on the coordinator would avoid a wire
   version, but changes placement and memory behavior and can be defeated by
   later optimizer changes. An explicit fail-closed v68 contract is selected.
@@ -322,6 +329,7 @@ does not substitute for traceable approval of this design revision.
 | rank, direction, NULL, groups, native numeric order, exact decimal and NaN behavior | `pkg/sql/colexec/aggexec/ordered_percentile_test.go` |
 | `VARCHAR`, `DATE`, and `DECIMAL256` execution and unchanged result type | executor tests above and the ordered-set public BVT |
 | retained-state ownership/accounting and merge | `TestOrderedPercentileDiscreteSortableTypes`, `TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip` |
+| JSON and array/vector paths cannot bypass the hard allocation account | `TestPercentileDiscRejectsUnaccountedSortScratch`, `TestOrderedSetPercentileCheck` |
 | row-exact string domain/source and unambiguous magic-prefix values through selection and wire merge | `TestOrderedPercentileDiscreteVarcharMergeAndWireRoundTrip`, `TestOrderedPercentileDiscreteVarcharSelectedRuntimeDomain`, `TestOrderedPercentileDiscreteRawMagicPrefixRoundTrip` |
 | v67 rejection, v68 admission, and unchanged v17 numeric boundary | `pkg/sql/compile/remote_expr_test.go` |
 | build and changed-package regression | `make build`; targeted `go test` commands recorded on PR #28540 |

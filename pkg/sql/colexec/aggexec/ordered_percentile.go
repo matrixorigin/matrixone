@@ -156,9 +156,16 @@ func PercentileDiscReturnType(args []types.Type) types.Type {
 }
 
 // PercentileDiscSupportedType reports whether the engine has a SQL ordering
-// implementation for a type. Unlike PERCENTILE_CONT, PERCENTILE_DISC returns
-// one of its input values and therefore does not require numeric interpolation.
+// implementation for a type whose sort path keeps all O(N) scratch in the
+// aggregate allocation account. JSON and arrays are deliberately excluded:
+// their shared sorter currently builds O(N) Go-heap sidecars that the Group
+// account cannot reject or spill. Unlike PERCENTILE_CONT, PERCENTILE_DISC
+// returns one of its input values and therefore does not require numeric
+// interpolation.
 func PercentileDiscSupportedType(typ types.T) bool {
+	if typ == types.T_json || typ.IsArrayRelate() {
+		return false
+	}
 	return mosort.IsSupportedType(typ)
 }
 
