@@ -368,6 +368,63 @@ func TestInputBatchEncoderReusesSchemaAndPreservesRange(t *testing.T) {
 	require.Equal(t, int64(30), secondValues.Value(0))
 }
 
+func TestInputBatchEncoderBulkPrimitivePreservesRangeNullsAndConstants(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	input := vector.NewVec(types.T_int64.ToType())
+	defer input.Free(mp)
+	for row := 0; row < 128; row++ {
+		require.NoError(t, vector.AppendFixed(input, int64(row+100), row%19 == 0, mp))
+	}
+	encoder, err := newInputBatchEncoder(
+		[]*vector.Vector{input}, []types.Type{types.T_int64.ToType()},
+	)
+	require.NoError(t, err)
+	record, _, err := encoder.build(7, 100)
+	require.NoError(t, err)
+	defer record.Release()
+	values := record.Column(0).(*array.Int64)
+	for row := 0; row < 100; row++ {
+		sourceRow := row + 7
+		require.Equal(t, sourceRow%19 == 0, values.IsNull(row), "row %d", row)
+		if !values.IsNull(row) {
+			require.Equal(t, int64(sourceRow+100), values.Value(row), "row %d", row)
+		}
+	}
+
+	constant, err := vector.NewConstFixed(types.T_int64.ToType(), int64(42), 128, mp)
+	require.NoError(t, err)
+	defer constant.Free(mp)
+	constantEncoder, err := newInputBatchEncoder(
+		[]*vector.Vector{constant}, []types.Type{types.T_int64.ToType()},
+	)
+	require.NoError(t, err)
+	constantRecord, _, err := constantEncoder.build(32, 96)
+	require.NoError(t, err)
+	defer constantRecord.Release()
+	constantValues := constantRecord.Column(0).(*array.Int64)
+	require.Equal(t, 96, int(constantRecord.NumRows()))
+	for row := 0; row < 96; row++ {
+		require.False(t, constantValues.IsNull(row))
+		require.Equal(t, int64(42), constantValues.Value(row))
+	}
+
+	nullConstant := vector.NewConstNull(types.T_int64.ToType(), 128, mp)
+	defer nullConstant.Free(mp)
+	nullConstantEncoder, err := newInputBatchEncoder(
+		[]*vector.Vector{nullConstant}, []types.Type{types.T_int64.ToType()},
+	)
+	require.NoError(t, err)
+	nullConstantRecord, _, err := nullConstantEncoder.build(0, 96)
+	require.NoError(t, err)
+	defer nullConstantRecord.Release()
+	nullConstantValues := nullConstantRecord.Column(0).(*array.Int64)
+	for row := 0; row < 96; row++ {
+		require.True(t, nullConstantValues.IsNull(row))
+	}
+}
+
 func TestInputBatchWireEncoderReusesSchemaAcrossBatches(t *testing.T) {
 	descriptor, err := NewTypeDescriptor(types.T_int64.ToType())
 	require.NoError(t, err)

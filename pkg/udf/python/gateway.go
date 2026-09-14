@@ -1341,7 +1341,11 @@ func (g *Gateway) receiveResultBatch(
 			if err != nil {
 				return 0, err
 			}
-			if err := snapshot.Validate(len(data.DataBody), snapshot.Digest()); err != nil {
+			// FreezeOutput already stores the digest of its private copy. An
+			// empty expectedDigest still makes Validate rehash that same
+			// backing and detect any trusted-boundary mutation, without
+			// allocating the hexadecimal digest string twice on every batch.
+			if err := snapshot.Validate(len(data.DataBody), ""); err != nil {
 				return 0, err
 			}
 			decoded, err := DecodeRecordBatch(**schemaFrame, ArrowFrame{Header: append([]byte(nil), data.DataHeader...), Body: snapshot.TrustedBytes()}, g.cfg.MaxBatchBytes)
