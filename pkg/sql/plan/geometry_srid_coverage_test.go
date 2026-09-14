@@ -157,7 +157,7 @@ func TestGeometrySRIDBinderBoundaryCases(t *testing.T) {
 	_, defined = decodeGeometrySRIDWidth(got.Typ.Width)
 	require.False(t, defined)
 
-	_, err = BindFuncExprImplByPlanExpr(ctx, "st_geomfromtext", []*planpb.Expr{text(false), &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Dval{Dval: 1.5}}}}})
+	_, err = BindFuncExprImplByPlanExpr(ctx, "st_geomfromtext", []*planpb.Expr{text(false), {Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Dval{Dval: 1.5}}}}})
 	require.Error(t, err)
 	setter, err := BindFuncExprImplByPlanExpr(ctx, "st_srid", []*planpb.Expr{
 		{Typ: *geometryPlanType(types.T_geometry, "POINT", 0, false)}, numeric(4326),
