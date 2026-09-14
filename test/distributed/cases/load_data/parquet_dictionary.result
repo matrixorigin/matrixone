@@ -1,0 +1,45 @@
+drop database if exists parquet_dictionary;
+create database parquet_dictionary;
+use parquet_dictionary;
+create table dictionary_types (
+int_col INT,
+float_col FLOAT,
+bool_col BOOL,
+nullable_bool_col BOOL
+);
+load data infile {'filepath'='$resources/parquet/parquet_dictionary_types.parquet', 'format'='parquet'} into table dictionary_types;
+select int_col, float_col, bool_col, nullable_bool_col
+from dictionary_types order by int_col, nullable_bool_col;
+➤ int_col[4,32,0]  ¦  float_col[7,23,31]  ¦  bool_col[-7,1,0]  ¦  nullable_bool_col[-7,1,0]  𝄀
+1  ¦  1.5  ¦  1  ¦  0  𝄀
+1  ¦  1.5  ¦  1  ¦  1  𝄀
+2  ¦  2.5  ¦  0  ¦  null  𝄀
+3  ¦  3.5  ¦  0  ¦  1
+select count(*), min(int_col), max(int_col), min(float_col), max(float_col)
+from dictionary_types;
+➤ count(*)[-5,64,0]  ¦  min(int_col)[4,32,0]  ¦  max(int_col)[4,32,0]  ¦  min(float_col)[7,23,31]  ¦  max(float_col)[7,23,31]  𝄀
+4  ¦  1  ¦  3  ¦  1.5  ¦  3.5
+drop table dictionary_types;
+create table dictionary_bool_required (bool_col BOOL NOT NULL);
+load data infile {'filepath'='$resources/parquet/parquet_dictionary_bool_required.parquet', 'format'='parquet'} into table dictionary_bool_required;
+select bool_col, count(*) from dictionary_bool_required group by bool_col order by bool_col;
+➤ bool_col[-7,1,0]  ¦  count(*)[-5,64,0]  𝄀
+0  ¦  1  𝄀
+1  ¦  3
+drop table dictionary_bool_required;
+create table dictionary_bool_not_null_guard (nullable_bool_col BOOL NOT NULL);
+load data infile {'filepath'='$resources/parquet/parquet_dictionary_bool_nullable.parquet', 'format'='parquet'} into table dictionary_bool_not_null_guard;
+constraint violation: cannot load NULL value into NOT NULL column
+select count(*) from dictionary_bool_not_null_guard;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table dictionary_bool_not_null_guard;
+create table dictionary_bool_nullable (nullable_bool_col BOOL);
+load data infile {'filepath'='$resources/parquet/parquet_dictionary_bool_nullable.parquet', 'format'='parquet'} into table dictionary_bool_nullable;
+select nullable_bool_col, count(*) from dictionary_bool_nullable group by nullable_bool_col order by nullable_bool_col;
+➤ nullable_bool_col[-7,1,0]  ¦  count(*)[-5,64,0]  𝄀
+null  ¦  1  𝄀
+0  ¦  1  𝄀
+1  ¦  2
+drop table dictionary_bool_nullable;
+drop database parquet_dictionary;
