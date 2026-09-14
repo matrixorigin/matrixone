@@ -440,3 +440,20 @@ func TestExternalRoutineTransfersResultOwnership(t *testing.T) {
 		})
 	}
 }
+
+func TestExternalRoutineRejectsDamagedDefinitionBeforeArguments(t *testing.T) {
+	for _, damage := range []string{"precision", "fingerprint", "argument-type"} {
+		t.Run(damage, func(t *testing.T) {
+			call := testExternalRoutineCall(t, "SCALAR", udf.NullCallHandler)
+			switch damage {
+			case "precision":
+				call.ReturnType = planpb.Type{Id: int32(types.T_decimal64), Width: 19, Scale: 2}
+			case "fingerprint":
+				call.GetPython().DefinitionFingerprint = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			case "argument-type":
+				call.ArgumentTypes[0].Id = int32(types.T_int32)
+			}
+			require.Error(t, validateRoutineCall(call))
+		})
+	}
+}
