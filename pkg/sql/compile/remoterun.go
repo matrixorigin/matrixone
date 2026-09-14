@@ -119,6 +119,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateGroupConcatTimeZoneDestination(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -1900,7 +1903,7 @@ func validateRemoteAggregateProtocol(
 				orderedSetPercentileDiscUsesExtendedType(agg) &&
 				!supportsRemoteOrderedSetExtendedTypes(proc.GetService()) {
 				return moerr.NewNotSupportedNoCtx(
-					"extended discrete percentile input types require MORPC protocol version 68",
+					"extended discrete percentile input types require MORPC protocol version 69",
 				)
 			}
 		}

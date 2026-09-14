@@ -573,15 +573,15 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
 		plan.AggregateConfigType_AGG_CONFIG_NONE,
 	)}
-	// Version 67 belongs to widened DECIMAL SUM partial state and must remain below
+	// Version 68 belongs to widened DECIMAL SUM partial state and must remain below
 	// the admission boundary for extended discrete-percentile inputs.
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion67)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion68)
 	require.ErrorContains(
 		t,
 		validateRemoteAggregateProtocol(proc, extended),
-		"extended discrete percentile input types require MORPC protocol version 68",
+		"extended discrete percentile input types require MORPC protocol version 69",
 	)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion68)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, extended))
 }
 

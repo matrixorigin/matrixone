@@ -781,6 +781,9 @@ message SessionInfo {
   // value of one on the receiving CN.
   uint64 auto_increment_increment = 15;
   uint64 auto_increment_offset = 16;
+  // IANA identity preserves historical and DST rules. Empty means the legacy
+  // time_zone bytes describe a fixed-offset location.
+  string time_zone_name = 17;
 }
 
 message SessionLoggerInfo {
