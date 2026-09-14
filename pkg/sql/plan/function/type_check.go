@@ -1275,6 +1275,7 @@ func initFixed1() {
 		// This applies to comparison, arithmetic, and multiplication operations
 		{types.T_float32, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_float32, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_char, types.T_float32, types.T_float32},
 		{types.T_float32, types.T_varchar, types.T_float32, types.T_float32},
 		{types.T_float32, types.T_binary, types.T_float32, types.T_float32},
@@ -1293,6 +1294,7 @@ func initFixed1() {
 		{types.T_float64, types.T_float32, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_float64, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_char, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_binary, types.T_float64, types.T_float64},
@@ -2037,6 +2039,7 @@ func initFixed2() {
 		// Note: Comparison operators still use float32 for performance (see comparison type rules)
 		{types.T_float32, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_float32, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_char, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_float32, types.T_binary, types.T_float64, types.T_float64},
@@ -2054,6 +2057,7 @@ func initFixed2() {
 		{types.T_float64, types.T_uint64, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_decimal64, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_decimal128, types.T_float64, types.T_float64},
+		{types.T_float64, types.T_decimal256, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_char, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_varchar, types.T_float64, types.T_float64},
 		{types.T_float64, types.T_binary, types.T_float64, types.T_float64},
