@@ -3342,7 +3342,7 @@ func preparedFunctionArgUsesSQLExecuteNumericSource(
 	}
 	// SUBSTRING_INDEX has a fixed numeric count contract despite returning text.
 	// Materialize a typed SQL variable in its source domain before rebinding so
-	// DECIMAL counts use the established explicit CAST conversion.
+	// DECIMAL counts use the ordinary implicit CAST conversion.
 	if name == "substring_index" && argIndex == 2 && argIndex < len(parent.GetF().GetArgs()) {
 		arg := parent.GetF().GetArgs()[argIndex]
 		if isImplicitPreparedParamCast(arg) && makeTypeByPlan2Expr(arg).IsNumeric() {

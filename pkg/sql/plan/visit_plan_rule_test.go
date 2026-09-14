@@ -1349,7 +1349,7 @@ func TestFillValuesOfParamsInPlanPreservesSubstringIndexIntegerContract(t *testi
 	require.Equal(t, "cast", count.GetF().Func.GetObjName(), result.String())
 	require.Equal(t, int32(types.T_decimal64), count.GetF().Args[0].Typ.Id, result.String())
 	_, castOverload := planfunction.DecodeOverloadID(count.GetF().Func.GetObj())
-	require.Equal(t, int32(1), castOverload, "DECIMAL count should reuse the established explicit CAST contract")
+	require.Equal(t, int32(0), castOverload, "DECIMAL count should use the ordinary implicit CAST contract")
 }
 
 func TestFillValuesOfParamsInPlanPreservesMaterializedBinaryStringDomain(t *testing.T) {
