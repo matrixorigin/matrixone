@@ -2326,23 +2326,8 @@ func validateStringDataCount(ctx context.Context, loader *strLoader, expectedNon
 		actualCount = int64(len(loader.buf) / loader.size)
 	} else {
 		// ByteArray
-		if len(loader.offsets) > 0 {
-			// Page slices may keep offsets relative to a shared backing buffer,
-			// so the first offset is not required to be zero.
-			previous := uint32(0)
-			for i, offset := range loader.offsets {
-				if uint64(offset) > uint64(len(loader.buf)) {
-					return moerr.NewInvalidInputf(ctx,
-						"malformed page: string offset %d at index %d exceeds buffer length %d",
-						offset, i, len(loader.buf))
-				}
-				if i > 0 && offset < previous {
-					return moerr.NewInvalidInputf(ctx,
-						"malformed page: string offset %d at index %d precedes previous offset %d",
-						offset, i, previous)
-				}
-				previous = offset
-			}
+		if err := validateParquetByteArrayOffsets(ctx, loader.buf, loader.offsets); err != nil {
+			return err
 		}
 		if len(loader.offsets) == 0 {
 			actualCount = 0
@@ -2357,6 +2342,35 @@ func validateStringDataCount(ctx context.Context, loader *strLoader, expectedNon
 			expectedNonNulls, actualCount)
 	}
 
+	return nil
+}
+
+func validateParquetByteArrayOffsets(ctx context.Context, buf []byte, offsets []uint32) error {
+	if len(offsets) == 0 {
+		return nil
+	}
+	// Page slices may keep offsets relative to a shared backing buffer, so the
+	// first offset is not required to be zero.
+	previous := offsets[0]
+	if uint64(previous) > uint64(len(buf)) {
+		return moerr.NewInvalidInputf(ctx,
+			"malformed page: string offset %d at index 0 exceeds buffer length %d",
+			previous, len(buf))
+	}
+	for i := 1; i < len(offsets); i++ {
+		offset := offsets[i]
+		if uint64(offset) > uint64(len(buf)) {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed page: string offset %d at index %d exceeds buffer length %d",
+				offset, i, len(buf))
+		}
+		if offset < previous {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed page: string offset %d at index %d precedes previous offset %d",
+				offset, i, previous)
+		}
+		previous = offset
+	}
 	return nil
 }
 
@@ -4074,6 +4088,9 @@ func decodeDecimal64Values(ctx context.Context, kind parquet.Kind, data encoding
 		return dst, nil
 	case parquet.ByteArray:
 		buf, offsets := data.ByteArray()
+		if err := validateParquetByteArrayOffsets(ctx, buf, offsets); err != nil {
+			return nil, err
+		}
 		if len(offsets) == 0 {
 			return nil, nil
 		}
@@ -4130,6 +4147,9 @@ func decodeDecimal128Values(ctx context.Context, kind parquet.Kind, data encodin
 		return dst, nil
 	case parquet.ByteArray:
 		buf, offsets := data.ByteArray()
+		if err := validateParquetByteArrayOffsets(ctx, buf, offsets); err != nil {
+			return nil, err
+		}
 		if len(offsets) == 0 {
 			return nil, nil
 		}
@@ -4186,6 +4206,9 @@ func decodeDecimal256Values(ctx context.Context, kind parquet.Kind, data encodin
 		return dst, nil
 	case parquet.ByteArray:
 		buf, offsets := data.ByteArray()
+		if err := validateParquetByteArrayOffsets(ctx, buf, offsets); err != nil {
+			return nil, err
+		}
 		if len(offsets) == 0 {
 			return nil, nil
 		}

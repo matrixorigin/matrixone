@@ -4632,6 +4632,11 @@ func Test_parquet_decodeDecimal_AllBranches(t *testing.T) {
 	require.Len(t, vals64, 2)
 	require.Equal(t, int64(1), int64(vals64[0]))
 	require.Equal(t, int64(-2), int64(vals64[1]))
+	var badErr error
+	require.NotPanics(t, func() {
+		_, badErr = decodeDecimal64Values(ctx, parquet.ByteArray, encoding.ByteArrayValues([]byte{1}, []uint32{0, 2}))
+	})
+	require.ErrorContains(t, badErr, "exceeds buffer length")
 	// fixed len incorrect size
 	_, err = decodeDecimal64Values(ctx, parquet.FixedLenByteArray, encoding.FixedLenByteArrayValues([]byte{0, 1, 2}, 2))
 	require.Error(t, err)
@@ -4655,6 +4660,11 @@ func Test_parquet_decodeDecimal_AllBranches(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, len(vals128))
 	}
+	badErr = nil
+	require.NotPanics(t, func() {
+		_, badErr = decodeDecimal128Values(ctx, parquet.ByteArray, encoding.ByteArrayValues([]byte{1}, []uint32{0, 2}))
+	})
+	require.ErrorContains(t, badErr, "exceeds buffer length")
 
 	// decimal256 branches
 	_, err = decodeDecimal256Values(ctx, parquet.FixedLenByteArray, encoding.FixedLenByteArrayValues([]byte{0, 0, 0, 1}, 0))
@@ -4674,6 +4684,11 @@ func Test_parquet_decodeDecimal_AllBranches(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 2, len(vals256))
 	}
+	badErr = nil
+	require.NotPanics(t, func() {
+		_, badErr = decodeDecimal256Values(ctx, parquet.ByteArray, encoding.ByteArrayValues([]byte{1}, []uint32{0, 2}))
+	})
+	require.ErrorContains(t, badErr, "exceeds buffer length")
 
 	// decimal128/256 from int32/int64 success
 	vals128, err := decodeDecimal128Values(ctx, parquet.Int32, encoding.Int32Values([]int32{1, -1}))
