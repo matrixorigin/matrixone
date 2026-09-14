@@ -268,6 +268,9 @@ func TestWaitUniqueJoinKeysForTableFunction(t *testing.T) {
 func TestBuildExactPkFilter(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)
+	t.Cleanup(func() {
+		proc.Free()
+	})
 	ctx := context.Background()
 
 	t.Run("int64 values", func(t *testing.T) {
@@ -317,6 +320,83 @@ func TestBuildExactPkFilter(t *testing.T) {
 		result, err := BuildExactPkFilter(ctx, vec)
 		require.NoError(t, err)
 		require.Equal(t, "10,30", result)
+	})
+
+	t.Run("bounded output rejects oversized predicate", func(t *testing.T) {
+		vec := vector.NewVec(types.New(types.T_varchar, 128, 0))
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		require.NoError(t, vector.AppendBytes(vec, []byte("hello"), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(vec, []byte("world"), false, proc.Mp()))
+
+		result, err := BuildExactPkFilterWithLimit(ctx, vec, len("'hello'"))
+		require.ErrorContains(t, err, "exact primary-key filter exceeds")
+		require.Empty(t, result)
+	})
+}
+
+func TestBuildExactPkFilterWithLimitBoundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	t.Cleanup(func() {
+		proc.Free()
+	})
+	ctx := context.Background()
+
+	t.Run("exact byte budget is inclusive", func(t *testing.T) {
+		vec := vector.NewVec(types.New(types.T_varchar, 128, 0))
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		require.NoError(t, vector.AppendBytes(vec, []byte("hello"), false, proc.Mp()))
+
+		const literal = "'hello'"
+		result, err := BuildExactPkFilterWithLimit(ctx, vec, len(literal))
+		require.NoError(t, err)
+		require.Equal(t, literal, result)
+
+		result, err = BuildExactPkFilterWithLimit(ctx, vec, len(literal)-1)
+		require.ErrorContains(t, err, "exact primary-key filter exceeds")
+		require.Empty(t, result)
+	})
+
+	t.Run("quotes and backslashes are counted after escaping", func(t *testing.T) {
+		vec := vector.NewVec(types.New(types.T_varchar, 128, 0))
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		require.NoError(t, vector.AppendBytes(vec, []byte("a'b\\c"), false, proc.Mp()))
+
+		const literal = "'a\\'b\\\\c'"
+		result, err := BuildExactPkFilterWithLimit(ctx, vec, len(literal))
+		require.NoError(t, err)
+		require.Equal(t, literal, result)
+
+		result, err = BuildExactPkFilterWithLimit(ctx, vec, len(literal)-1)
+		require.ErrorContains(t, err, "exact primary-key filter exceeds")
+		require.Empty(t, result)
+	})
+
+	t.Run("binary literals use their encoded byte length", func(t *testing.T) {
+		vec := vector.NewVec(types.New(types.T_varbinary, 128, 0))
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		require.NoError(t, vector.AppendBytes(vec, []byte{0x00, 0xff}, false, proc.Mp()))
+
+		const literal = "x'00ff'"
+		result, err := BuildExactPkFilterWithLimit(ctx, vec, len(literal))
+		require.NoError(t, err)
+		require.Equal(t, literal, result)
+
+		result, err = BuildExactPkFilterWithLimit(ctx, vec, len(literal)-1)
+		require.ErrorContains(t, err, "exact primary-key filter exceeds")
+		require.Empty(t, result)
+	})
+
+	t.Run("non-positive budgets fail before building", func(t *testing.T) {
+		vec := vector.NewVec(types.New(types.T_int64, 8, 0))
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		require.NoError(t, vector.AppendFixed(vec, int64(1), false, proc.Mp()))
+
+		for _, limit := range []int{0, -1} {
+			result, err := BuildExactPkFilterWithLimit(ctx, vec, limit)
+			require.ErrorContains(t, err, "limit must be positive")
+			require.Empty(t, result)
+		}
 	})
 }
 

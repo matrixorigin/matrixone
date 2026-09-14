@@ -683,7 +683,8 @@ END_FULLTEXT:
 			// plugin-registered algo) through the vector ANN rewrite
 			// path. indexplugin.Get alone is not sufficient — fulltext
 			// is plugin-registered too.
-			if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) {
+			if !indexplugin.IsVectorIndexAlgo(multiTableIndex.IndexAlgo) ||
+				!vectorIndexSupportsContext(vecCtx, multiTableIndex.IndexAlgo) {
 				continue
 			}
 			p, ok := indexplugin.Get(multiTableIndex.IndexAlgo)
@@ -1458,7 +1459,8 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 	// explicit predicate keeps that boundary even if the upstream
 	// collectVectorIndexes filter is ever loosened.
 	for _, multi := range multiTableIndexes {
-		if !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) {
+		if !indexplugin.IsVectorIndexAlgo(multi.IndexAlgo) ||
+			!vectorIndexSupportsContext(vecCtx, multi.IndexAlgo) {
 			continue
 		}
 		p, ok := indexplugin.Get(multi.IndexAlgo)
@@ -1475,6 +1477,10 @@ func (builder *QueryBuilder) detectVectorGuard(projNode *plan.Node) []int32 {
 		}
 	}
 	return nil
+}
+
+func vectorIndexSupportsContext(vecCtx *vectorSortContext, algo string) bool {
+	return vecCtx == nil || !vecCtx.hasMembership || algo == catalog.MoIndexIvfFlatAlgo.ToString()
 }
 
 func (builder *QueryBuilder) collectVectorIndexes(scanNode *plan.Node) (map[string]*MultiTableIndex, error) {

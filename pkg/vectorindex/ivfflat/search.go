@@ -40,11 +40,20 @@ import (
 
 // exactPkFilterThreshold controls when WaitUniqueJoinKeys converts the received
 // unique join keys into an exact "pk IN (...)" filter instead of building a
-// bloom filter. For very small PK sets, bloom filter false positives interact
-// poorly with centroid pruning in IVF pre mode. Keeping this threshold small
-// avoids overly large IN lists while preserving the bloom filter performance
-// path for larger sets. Adjust this number if future workloads show a better cutoff.
+// membership filter. For very small PK sets, approximate membership false
+// positives interact poorly with centroid pruning in IVF pre mode. Keeping
+// this threshold small avoids overly large IN lists for optional filters while
+// preserving the membership-filter performance path for larger sets.
 const exactPkFilterThreshold = 100
+
+// maxExactPkFilterBytes bounds the SQL predicate used when an IVF membership
+// filter is required for correctness. A required non-integer-PK membership
+// filter cannot use the approximate Bloom fallback: a false positive can occupy
+// the pre-filter Top-K and be removed only after the limit. The bound prevents
+// that correctness path from creating an unbounded SQL statement; callers get
+// an explicit error and the query is not allowed to continue with a weaker
+// filter.
+const maxExactPkFilterBytes = 8 << 20
 
 var runSql = sqlexec.RunSql
 
@@ -243,7 +252,7 @@ prepare the runtime doc_id pushdown filter for pre-filtering.
 
 1. get the unique join keys from hashbuild
 2. for a very small key set, emit an exact "pk IN (...)" SQL filter and return
-3. otherwise build an exact doc_id membership filter directly from the keys
+3. otherwise build a doc_id membership filter directly from the keys
 
 There is no need to first intersect the keys with the selected centroids'
 entries. The reader only scans entries within the selected centroids, and an
@@ -252,6 +261,8 @@ full key set yields the identical result as the (former) centroid-narrowed set.
 The old centroid-bloom narrowing only mattered to keep an approximate bloom
 filter small; with docfilter's exact integer set (cbitmap / Sorted64) it is a no-op,
 so the per-centroid bloom build/merge (and its preload path) has been removed.
+Required non-integer keys use the bounded exact predicate below so that
+approximation cannot alter pre-filter Top-K semantics.
 */
 func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (err error) {
 
@@ -286,6 +297,11 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 		return
 	}
 
+	membershipMustApply := false
+	if len(sqlproc.RuntimeFilterSpecs) > 0 && sqlproc.RuntimeFilterSpecs[0] != nil {
+		membershipMustApply = sqlproc.RuntimeFilterSpecs[0].MustApply
+	}
+
 	// Deserialize the unique join keys.
 	keyvec := new(vector.Vector)
 	err = keyvec.UnmarshalBinary(vecbytes)
@@ -300,9 +316,22 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 
 	// Small PK set: build an exact "pk IN (...)" SQL filter instead of a
 	// pushdown doc_id filter. For very small sets the IN-list is cheaper and
-	// more selective at the scan than a runtime membership filter.
-	if exactPkFilterThreshold > 0 && keyvec.Length() <= exactPkFilterThreshold {
-		exactPk, buildErr := sqlexec.BuildExactPkFilter(sqlproc.GetContext(), keyvec)
+	// more selective at the scan than a runtime membership filter. A required
+	// membership filter also takes this exact path for every non-integer PK
+	// cardinality: docfilter's non-integer representation is an approximate
+	// Bloom filter, whose false positives can change IVF pre-filter Top-K
+	// results. The bounded builder makes this correctness requirement explicit
+	// instead of allowing an unbounded SQL statement.
+	requiresExactNonInteger := membershipMustApply && !docfilter.SupportsBitset(*keyvec.GetType())
+	if (exactPkFilterThreshold > 0 && keyvec.Length() <= exactPkFilterThreshold) || requiresExactNonInteger {
+		var exactPk string
+		var buildErr error
+		if requiresExactNonInteger {
+			exactPk, buildErr = sqlexec.BuildExactPkFilterWithLimit(
+				sqlproc.GetContext(), keyvec, maxExactPkFilterBytes)
+		} else {
+			exactPk, buildErr = sqlexec.BuildExactPkFilter(sqlproc.GetContext(), keyvec)
+		}
 		if buildErr != nil {
 			err = buildErr
 			return

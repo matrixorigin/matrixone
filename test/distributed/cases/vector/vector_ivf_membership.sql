@@ -103,6 +103,70 @@ where category = 'cat1' and score > 2.0
 order by l2_distance(embedding, '[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]')
 limit 3 by rank with option 'mode=pre';
 
+-- ============================================================================
+-- section 4: IN-subquery membership is applied before the candidate limit.
+-- The globally nearest rows are ineligible; the eligible nearest row must
+-- still be returned through the IVF path.
+-- ============================================================================
+create table ivf_semi_chunks (
+    id varchar(64) primary key,
+    document_id varchar(64) not null,
+    embedding vecf32(2)
+);
+insert into ivf_semi_chunks values
+('v01', 'ineligible', '[0.0,0.0]'),
+('v02', 'ineligible', '[0.1,0.1]'),
+('v03', 'ineligible', '[0.2,0.2]'),
+('v04', 'eligible',   '[1.0,1.0]'),
+('v05', 'eligible',   '[2.0,2.0]');
+create table ivf_semi_filters (document_id varchar(64));
+insert into ivf_semi_filters values ('eligible'), ('eligible'), (null);
+create index idx_semi using ivfflat on ivf_semi_chunks(embedding) lists=1 op_type 'vector_l2_ops';
+
+select c.id from ivf_semi_chunks c
+where c.document_id in (select f.document_id from ivf_semi_filters f)
+  and l2_distance(c.embedding, '[0.0,0.0]') <= 10
+order by l2_distance(c.embedding, '[0.0,0.0]')
+limit 1 by rank with option 'mode=pre';
+
+-- ============================================================================
+-- section 5: required VARCHAR membership remains exact above the small-list
+-- threshold.  The ineligible key (a\0) is a deterministic Bloom collision for
+-- the eligible key (a) in the old approximate path.  If the membership filter
+-- is applied only after IVF's candidate LIMIT, the ineligible row consumes the
+-- sole candidate and this query incorrectly returns no rows.  The no-index
+-- query is the independent result oracle.
+-- ============================================================================
+set probe_limit = 1;
+create table ivf_semi_varchar_chunks (
+    id varchar(64) primary key,
+    document_id varchar(64) not null,
+    embedding vecf32(2)
+);
+insert into ivf_semi_varchar_chunks values
+('a', 'eligible', '[1.0,1.0]');
+insert into ivf_semi_varchar_chunks
+select concat('f', result), 'eligible', '[2.0,2.0]'
+from generate_series(1, 100) g;
+insert into ivf_semi_varchar_chunks values
+(concat('a', char(0)), 'ineligible', '[0.0,0.0]');
+create table ivf_semi_varchar_filters (document_id varchar(64));
+insert into ivf_semi_varchar_filters values ('eligible'), ('eligible'), (null);
+
+-- Independent base-table oracle, before the IVF index exists.
+select hex(c.id) as id_hex from ivf_semi_varchar_chunks c
+where c.document_id in (select f.document_id from ivf_semi_varchar_filters f)
+  and l2_distance(c.embedding, '[0.0,0.0]') <= 10
+order by l2_distance(c.embedding, '[0.0,0.0]')
+limit 1 by rank with option 'mode=pre';
+
+create index idx_semi_varchar using ivfflat on ivf_semi_varchar_chunks(embedding) lists=1 op_type 'vector_l2_ops';
+select hex(c.id) as id_hex from ivf_semi_varchar_chunks c
+where c.document_id in (select f.document_id from ivf_semi_varchar_filters f)
+  and l2_distance(c.embedding, '[0.0,0.0]') <= 10
+order by l2_distance(c.embedding, '[0.0,0.0]')
+limit 1 by rank with option 'mode=pre';
+
 set ivf_preload_entries = 0;
 set probe_limit = 5;
 drop database ivf_membership;

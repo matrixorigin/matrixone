@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -35,6 +36,9 @@ import (
 func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	m := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", m)
+	t.Cleanup(func() {
+		proc.Free()
+	})
 	mb := message.NewMessageBoard()
 	proc.SetMessageBoard(mb)
 	sqlproc := sqlexec.NewSqlProcess(proc)
@@ -45,6 +49,9 @@ func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	}
 	data, err := keyvec.MarshalBinary()
 	require.NoError(t, err)
+	// MarshalBinary returns an independent byte buffer. Release the build-side
+	// vector before the helper returns; the process owns only the message board.
+	keyvec.Free(m)
 
 	tag := int32(42)
 	message.SendMessage(message.RuntimeFilterMessage{
@@ -54,6 +61,41 @@ func setupKeyFilter(t *testing.T, n int) *sqlexec.SqlProcess {
 	}, mb)
 	sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
 		{Tag: tag, UseMembershipFilter: true},
+	}
+	return sqlproc
+}
+
+func setupVarcharKeyFilter(t *testing.T, n int, mustApply bool) *sqlexec.SqlProcess {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	t.Cleanup(func() {
+		proc.Free()
+	})
+	mb := message.NewMessageBoard()
+	proc.SetMessageBoard(mb)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	keyvec := vector.NewVec(types.New(types.T_varchar, 128, 0))
+	for i := 0; i < n; i++ {
+		require.NoError(t, vector.AppendBytes(
+			keyvec,
+			[]byte(fmt.Sprintf("key-%06d", i+1)),
+			false,
+			m,
+		))
+	}
+	data, err := keyvec.MarshalBinary()
+	require.NoError(t, err)
+	keyvec.Free(m)
+
+	tag := int32(43)
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag:  tag,
+		Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
+		Data: data,
+	}, mb)
+	sqlproc.RuntimeFilterSpecs = []*plan.RuntimeFilterSpec{
+		{Tag: tag, UseMembershipFilter: true, MustApply: mustApply},
 	}
 	return sqlproc
 }
@@ -72,7 +114,7 @@ func runGetBloomFilter(t *testing.T, sqlproc *sqlexec.SqlProcess) {
 	}
 }
 
-// Larger-than-threshold key set -> builds an exact doc_id pushdown filter.
+// Larger-than-threshold integer key set -> builds an exact doc_id pushdown filter.
 func TestGetBloomFilter_DocFilter(t *testing.T) {
 	sqlproc := setupKeyFilter(t, exactPkFilterThreshold+50)
 	runGetBloomFilter(t, sqlproc)
@@ -84,6 +126,34 @@ func TestGetBloomFilter_DocFilter(t *testing.T) {
 	f, err := docfilter.New(sqlproc.IvfMembershipFilter)
 	require.NoError(t, err)
 	require.True(t, f.Valid())
+	f.Free()
+}
+
+// A required membership filter cannot use the approximate non-integer Bloom
+// representation: a false positive can occupy IVF pre-filter Top-K and be
+// removed only after the limit. It must therefore remain an exact PK predicate
+// even when the key set is larger than the optional small-list threshold.
+func TestGetBloomFilter_RequiredVarcharUsesExactPkAboveThreshold(t *testing.T) {
+	sqlproc := setupVarcharKeyFilter(t, exactPkFilterThreshold+1, true)
+	runGetBloomFilter(t, sqlproc)
+
+	require.NotEmpty(t, sqlproc.ExactPkFilter)
+	require.Empty(t, sqlproc.IvfMembershipFilter)
+	require.Contains(t, sqlproc.ExactPkFilter, "'key-000001'")
+	require.Contains(t, sqlproc.ExactPkFilter, "'key-000101'")
+}
+
+// Optional non-integer membership filters retain the approximate Bloom path so
+// the correctness-only exact fallback does not regress ordinary performance.
+func TestGetBloomFilter_OptionalVarcharUsesBloomAboveThreshold(t *testing.T) {
+	sqlproc := setupVarcharKeyFilter(t, exactPkFilterThreshold+1, false)
+	runGetBloomFilter(t, sqlproc)
+
+	require.Empty(t, sqlproc.ExactPkFilter)
+	require.NotEmpty(t, sqlproc.IvfMembershipFilter)
+	f, err := docfilter.New(sqlproc.IvfMembershipFilter)
+	require.NoError(t, err)
+	require.False(t, f.Exact())
 	f.Free()
 }
 

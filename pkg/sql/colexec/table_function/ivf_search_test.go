@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -40,6 +41,73 @@ import (
 type ivfSearchTestCase struct {
 	arg  *TableFunction
 	proc *process.Process
+}
+
+func TestWaitRuntimeFilterDataForTableFunctionRequiredMembership(t *testing.T) {
+	tests := []struct {
+		name      string
+		mustApply bool
+		message   message.RuntimeFilterMessage
+		wantData  []byte
+		wantErr   bool
+	}{
+		{
+			name:      "required exact payload",
+			mustApply: true,
+			message: message.RuntimeFilterMessage{
+				Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
+				Data: []byte{1, 2, 3},
+			},
+			wantData: []byte{1, 2, 3},
+		},
+		{
+			name:      "required pass",
+			mustApply: true,
+			message:   message.RuntimeFilterMessage{Typ: message.RuntimeFilter_PASS},
+			wantErr:   true,
+		},
+		{
+			name:      "required empty payload",
+			mustApply: true,
+			message:   message.RuntimeFilterMessage{Typ: message.RuntimeFilter_UNIQUEJOINKEYS},
+			wantErr:   true,
+		},
+		{
+			name:      "required empty build",
+			mustApply: true,
+			message:   message.RuntimeFilterMessage{Typ: message.RuntimeFilter_DROP},
+		},
+		{
+			name:    "optional pass",
+			message: message.RuntimeFilterMessage{Typ: message.RuntimeFilter_PASS},
+		},
+	}
+
+	for i := range tests {
+		test := tests[i]
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			board := message.NewMessageBoard()
+			defer board.Reset()
+			proc.SetMessageBoard(board)
+			spec := &plan.RuntimeFilterSpec{
+				Tag:                 77,
+				UseMembershipFilter: true,
+				MustApply:           test.mustApply,
+			}
+			test.message.Tag = spec.Tag
+			message.SendMessage(test.message, board)
+
+			data, err := waitRuntimeFilterDataForTableFunction(
+				&TableFunction{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{spec}}, proc)
+			if test.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, test.wantData, data)
+			}
+		})
+	}
 }
 
 var (
