@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"runtime"
 	"sort"
 	"sync"
@@ -25,16 +27,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lni/dragonboat/v4"
+
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
 
 type cnWorkStateInventory interface {
-	DebugUpdateCNWorkState(uuid string, state int) error
+	clusterservice.CNWorkStateUpdaterWithContext
 	GetCNService(selector clusterservice.Selector, apply func(metadata.CNService) bool)
 	GetCNServiceWithoutWorkingState(selector clusterservice.Selector, apply func(metadata.CNService) bool)
 }
+
+// A saved CI failure showed an approximately 9s HAKeeper commit under race
+// load. Keep state transitions bounded but give this integration test the
+// same 30s budget as its existing CN-readiness phase.
+const (
+	cnWorkStateOperationTimeout = 30 * time.Second
+	cnWorkStatePollInterval     = 100 * time.Millisecond
+)
 
 type cnReadinessSnapshot struct {
 	lastRefreshErr       error
@@ -66,6 +80,9 @@ func waitForCNReadiness(
 			}
 			return snapshot, fmt.Errorf("waiting for both base-cluster CNs: %w", err)
 		}
+		if snapshot.lastRefreshErr != nil && !isTransientCNControlPlaneError(snapshot.lastRefreshErr) {
+			return snapshot, fmt.Errorf("refreshing base-cluster CN inventory: %w", snapshot.lastRefreshErr)
+		}
 		if snapshot.lastRefreshErr == nil {
 			all := collectCNServices(inventory, true)
 			working := collectCNServices(inventory, false)
@@ -85,6 +102,94 @@ func waitForCNReadiness(
 		case <-ticker.C:
 		}
 	}
+}
+
+// waitForCNInventory polls only authoritative reads. A successful snapshot
+// that contradicts an acknowledged update is a correctness failure; a failed
+// read is retried only for transient control-plane errors, within the caller's
+// single phase deadline.
+func waitForCNInventory(
+	ctx context.Context,
+	interval time.Duration,
+	refresher clusterservice.AuthoritativeRefresher,
+	verify func() error,
+	retryMismatchedInventory bool,
+) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	var lastRefreshErr error
+	var lastVerifyErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			return cnInventoryWaitError(lastRefreshErr, lastVerifyErr, err)
+		}
+
+		lastRefreshErr = refresher.Refresh(ctx)
+		if err := ctx.Err(); err != nil {
+			if lastRefreshErr == nil {
+				lastRefreshErr = err
+			}
+			return cnInventoryWaitError(lastRefreshErr, lastVerifyErr, err)
+		}
+		if lastRefreshErr != nil {
+			if !isTransientCNControlPlaneError(lastRefreshErr) {
+				return fmt.Errorf("refreshing authoritative CN inventory: %w", lastRefreshErr)
+			}
+		} else {
+			lastVerifyErr = verify()
+			if lastVerifyErr == nil {
+				return nil
+			}
+			if !retryMismatchedInventory {
+				return fmt.Errorf("authoritative CN inventory contradicts the expected topology: %w", lastVerifyErr)
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return cnInventoryWaitError(lastRefreshErr, lastVerifyErr, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func cnInventoryWaitError(lastRefreshErr, lastVerifyErr, waitErr error) error {
+	var errs []error
+	if lastRefreshErr != nil {
+		errs = append(errs, fmt.Errorf("last authoritative refresh: %w", lastRefreshErr))
+	}
+	if lastVerifyErr != nil {
+		errs = append(errs, fmt.Errorf("last topology check: %w", lastVerifyErr))
+	}
+	errs = append(errs, fmt.Errorf("waiting for authoritative CN inventory: %w", waitErr))
+	return errors.Join(errs...)
+}
+
+func isTransientCNControlPlaneError(err error) bool {
+	// LogService's RPC decoder can return raw Dragonboat sentinels instead of
+	// their wire-level moerr codes. Match Dragonboat's temporary classification
+	// and LogService's ErrShardNotFound exception, then cover transport errors.
+	var networkErr net.Error
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		dragonboat.IsTempError(err) ||
+		errors.Is(err, dragonboat.ErrShardNotFound) ||
+		errors.As(err, &networkErr) ||
+		logutil.IsExpectedConnectionCloseError(err) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrBackendCannotConnect) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoAvailableBackend) ||
+		moerr.IsMoErrCode(err, moerr.ErrConnectionReset) ||
+		moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) ||
+		moerr.IsMoErrCode(err, moerr.ErrDragonboatTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrDragonboatShardNotReady) ||
+		moerr.IsMoErrCode(err, moerr.ErrDragonboatSystemClosed) ||
+		moerr.IsMoErrCode(err, moerr.ErrDragonboatShardNotFound) ||
+		moerr.IsMoErrCode(err, moerr.ErrRPCTimeout) ||
+		moerr.IsMoErrCode(err, moerr.ErrUnexpectedEOF)
 }
 
 func formatCNWorkStates(services map[string]metadata.CNService) []string {
@@ -125,18 +230,19 @@ func withCNDraining(
 			return
 		}
 
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), cnWorkStateOperationTimeout)
 		defer cancel()
-		updateErr := inventory.DebugUpdateCNWorkState(targetID, int(metadata.WorkState_Working))
-		refreshErr := refresher.Refresh(cleanupCtx)
-		var verifyErr error
-		if refreshErr == nil {
-			verifyErr = verifyWorkingCNTopology(inventory, targetID, expectedIDs)
-		}
-		if refreshErr != nil || verifyErr != nil {
+		updateErr := inventory.DebugUpdateCNWorkStateWithContext(cleanupCtx, targetID, int(metadata.WorkState_Working))
+		verifyErr := waitForCNInventory(
+			cleanupCtx,
+			cnWorkStatePollInterval,
+			refresher,
+			func() error { return verifyWorkingCNTopology(inventory, targetID, expectedIDs) },
+			isTransientCNControlPlaneError(updateErr),
+		)
+		if verifyErr != nil {
 			cleanupErr := errors.Join(
 				wrapCNStateError("set CN back to Working", updateErr),
-				wrapCNStateError("refresh authoritative CN inventory", refreshErr),
 				wrapCNStateError("verify restored CN topology", verifyErr),
 			)
 			cleanupErr = fmt.Errorf("CN %q work-state restoration could not be verified: %w", targetID, cleanupErr)
@@ -145,16 +251,21 @@ func withCNDraining(
 		}
 	}()
 
-	if err := inventory.DebugUpdateCNWorkState(targetID, int(metadata.WorkState_Draining)); err != nil {
+	transitionCtx, cancelTransition := context.WithTimeout(ctx, cnWorkStateOperationTimeout)
+	defer cancelTransition()
+	if err := inventory.DebugUpdateCNWorkStateWithContext(transitionCtx, targetID, int(metadata.WorkState_Draining)); err != nil {
 		transitionErr := fmt.Errorf("setting CN %q to Draining returned an ambiguous result: %w", targetID, err)
 		invalidate(transitionErr)
 		return transitionErr
 	}
 	restore = true
-	if err := refresher.Refresh(ctx); err != nil {
-		return fmt.Errorf("refresh CN inventory after setting %q to Draining: %w", targetID, err)
-	}
-	if err := verifyDrainingCNTopology(inventory, targetID, expectedIDs); err != nil {
+	if err := waitForCNInventory(
+		transitionCtx,
+		cnWorkStatePollInterval,
+		refresher,
+		func() error { return verifyDrainingCNTopology(inventory, targetID, expectedIDs) },
+		false,
+	); err != nil {
 		return fmt.Errorf("verify CN topology after draining %q: %w", targetID, err)
 	}
 	body()
@@ -265,9 +376,10 @@ func verifyCNIDs(name string, actual map[string]metadata.CNService, expected map
 }
 
 type fakeCNWorkStateInventory struct {
-	services map[string]metadata.CNService
-	updates  []int
-	onUpdate func(string, int) error
+	services  map[string]metadata.CNService
+	updates   []int
+	deadlines []time.Time
+	onUpdate  func(context.Context, string, int) error
 }
 
 func newFakeCNWorkStateInventory(ids ...string) *fakeCNWorkStateInventory {
@@ -278,10 +390,13 @@ func newFakeCNWorkStateInventory(ids ...string) *fakeCNWorkStateInventory {
 	return inventory
 }
 
-func (f *fakeCNWorkStateInventory) DebugUpdateCNWorkState(id string, state int) error {
+func (f *fakeCNWorkStateInventory) DebugUpdateCNWorkStateWithContext(ctx context.Context, id string, state int) error {
 	f.updates = append(f.updates, state)
+	if deadline, ok := ctx.Deadline(); ok {
+		f.deadlines = append(f.deadlines, deadline)
+	}
 	if f.onUpdate != nil {
-		return f.onUpdate(id, state)
+		return f.onUpdate(ctx, id, state)
 	}
 	service, ok := f.services[id]
 	if !ok {
@@ -322,12 +437,20 @@ func (f *fakeCNWorkStateInventory) sortedIDs() []string {
 }
 
 type fakeCNInventoryRefresher struct {
-	calls int
-	err   error
+	calls     int
+	err       error
+	deadlines []time.Time
+	fn        func(context.Context, int) error
 }
 
-func (f *fakeCNInventoryRefresher) Refresh(context.Context) error {
+func (f *fakeCNInventoryRefresher) Refresh(ctx context.Context) error {
 	f.calls++
+	if deadline, ok := ctx.Deadline(); ok {
+		f.deadlines = append(f.deadlines, deadline)
+	}
+	if f.fn != nil {
+		return f.fn(ctx, f.calls)
+	}
 	return f.err
 }
 
@@ -384,10 +507,72 @@ func TestWaitForCNReadinessWaitsForRefreshCancellation(t *testing.T) {
 	}
 }
 
+func TestWaitForCNInventoryRetriesTransientRefreshError(t *testing.T) {
+	refresher := &fakeCNInventoryRefresher{
+		fn: func(_ context.Context, call int) error {
+			if call == 1 {
+				return fmt.Errorf("HAKeeper Refresh: %w", dragonboat.ErrTimeout)
+			}
+			return nil
+		},
+	}
+	verified := false
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	err := waitForCNInventory(ctx, time.Millisecond, refresher, func() error {
+		verified = true
+		return nil
+	}, false)
+
+	require.NoError(t, err)
+	require.True(t, verified)
+	require.Equal(t, 2, refresher.calls)
+}
+
+func TestIsTransientCNControlPlaneErrorIncludesHAKeeperRPCDecode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "decoded raft timeout", err: dragonboat.ErrTimeout, want: true},
+		{name: "wrapped decoded raft timeout", err: fmt.Errorf("refresh: %w", dragonboat.ErrTimeout), want: true},
+		{name: "local raft timeout code", err: moerr.NewDragonboatTimeout(context.Background(), "HAKeeper read timed out"), want: true},
+		{name: "decoded shard not ready", err: dragonboat.ErrShardNotReady, want: true},
+		{name: "decoded shard not found", err: dragonboat.ErrShardNotFound, want: true},
+		{name: "rejected proposal is not retried", err: dragonboat.ErrRejected, want: false},
+		{name: "unrelated error is not retried", err: errors.New("invalid cluster response"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isTransientCNControlPlaneError(tt.err))
+		})
+	}
+}
+
+func TestWaitForCNInventoryDeadlineReportsLastTopology(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	refresher := &fakeCNInventoryRefresher{}
+	lastTopologyErr := errors.New("target CN is still Draining")
+	verifyCalls := 0
+
+	err := waitForCNInventory(ctx, time.Hour, refresher, func() error {
+		verifyCalls++
+		cancel()
+		return lastTopologyErr
+	}, true)
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, lastTopologyErr)
+	require.Equal(t, 1, refresher.calls)
+	require.Equal(t, 1, verifyCalls)
+}
+
 func TestWithCNDrainingRejectsAmbiguousTransition(t *testing.T) {
 	transitionErr := errors.New("timed out after request admission")
 	inventory := newFakeCNWorkStateInventory("cn0", "cn1")
-	inventory.onUpdate = func(id string, state int) error {
+	inventory.onUpdate = func(_ context.Context, id string, state int) error {
 		service := inventory.services[id]
 		service.WorkState = metadata.WorkState(state)
 		inventory.services[id] = service
@@ -416,7 +601,7 @@ func TestWithCNDrainingRejectsAmbiguousTransition(t *testing.T) {
 
 func TestWithCNDrainingRejectsUnpublishedTransition(t *testing.T) {
 	inventory := newFakeCNWorkStateInventory("cn0", "cn1")
-	inventory.onUpdate = func(id string, state int) error {
+	inventory.onUpdate = func(_ context.Context, id string, state int) error {
 		if state == int(metadata.WorkState_Working) {
 			service := inventory.services[id]
 			service.WorkState = metadata.WorkState(state)
@@ -439,6 +624,12 @@ func TestWithCNDrainingRejectsUnpublishedTransition(t *testing.T) {
 	require.Equal(t, metadata.WorkState_Working, inventory.services["cn0"].WorkState)
 	require.Equal(t, []int{int(metadata.WorkState_Draining), int(metadata.WorkState_Working)}, inventory.updates)
 	require.Equal(t, 2, refresher.calls)
+	require.Len(t, inventory.deadlines, 2)
+	require.Len(t, refresher.deadlines, 2)
+	require.True(t, inventory.deadlines[0].Equal(refresher.deadlines[0]),
+		"Draining update and its authoritative verification must share one deadline")
+	require.True(t, inventory.deadlines[1].Equal(refresher.deadlines[1]),
+		"Working restoration and its authoritative verification must share one deadline")
 }
 
 func TestWithCNDrainingRestoresAfterGoexit(t *testing.T) {
@@ -470,18 +661,27 @@ func TestWithCNDrainingRestoresAfterGoexit(t *testing.T) {
 }
 
 func TestWithCNDrainingReconcilesAmbiguousRestoreResponse(t *testing.T) {
-	restoreErr := errors.New("restore response lost")
+	restoreErr := context.DeadlineExceeded
 	inventory := newFakeCNWorkStateInventory("cn0", "cn1")
-	inventory.onUpdate = func(id string, state int) error {
-		service := inventory.services[id]
-		service.WorkState = metadata.WorkState(state)
-		inventory.services[id] = service
+	inventory.onUpdate = func(_ context.Context, id string, state int) error {
 		if state == int(metadata.WorkState_Working) {
 			return restoreErr
 		}
+		service := inventory.services[id]
+		service.WorkState = metadata.WorkState(state)
+		inventory.services[id] = service
 		return nil
 	}
-	refresher := &fakeCNInventoryRefresher{}
+	refresher := &fakeCNInventoryRefresher{
+		fn: func(_ context.Context, call int) error {
+			if call == 3 {
+				service := inventory.services["cn0"]
+				service.WorkState = metadata.WorkState_Working
+				inventory.services["cn0"] = service
+			}
+			return nil
+		},
+	}
 	var invalidationErr error
 	bodyCalled := false
 
@@ -495,14 +695,15 @@ func TestWithCNDrainingReconcilesAmbiguousRestoreResponse(t *testing.T) {
 	require.NoError(t, invalidationErr)
 	require.Equal(t, metadata.WorkState_Working, inventory.services["cn0"].WorkState)
 	require.Equal(t, []int{int(metadata.WorkState_Draining), int(metadata.WorkState_Working)}, inventory.updates)
-	require.Equal(t, 2, refresher.calls)
+	require.Equal(t, 3, refresher.calls,
+		"after an ambiguous restore response, read-only polling must wait for the authoritative Working view")
 }
 
 func TestWithCNDrainingInvalidatesUnverifiedRestore(t *testing.T) {
 	t.Run("CN remains draining", func(t *testing.T) {
 		restoreErr := errors.New("restore rejected")
 		inventory := newFakeCNWorkStateInventory("cn0", "cn1")
-		inventory.onUpdate = func(id string, state int) error {
+		inventory.onUpdate = func(_ context.Context, id string, state int) error {
 			if state == int(metadata.WorkState_Working) {
 				return restoreErr
 			}

@@ -51,15 +51,31 @@ func AvgReturnType(typs []types.Type) types.Type {
 		}
 		return types.New(types.T_decimal256, precision, scale)
 	case types.T_decimal256:
-		precision := min(typ.Width+4, maxAvgDecimalPrecision)
-		scale := avgDecimalScale(typ.Scale)
-		if precision < scale {
-			precision = scale
-		}
-		return types.New(types.T_decimal256, precision, scale)
+		return avgDecimal256ReturnType(typ)
 	default:
 		return types.T_float64.ToType()
 	}
+}
+
+// avgDecimal256ReturnType adds the usual four fractional digits without
+// reducing the input's integer capacity when the public precision cap is
+// reached. Decimal256 types wider than the public cap are internal domains;
+// retain their historical result rule until a separate contract defines their
+// AVG result domain.
+func avgDecimal256ReturnType(typ types.Type) types.Type {
+	precision := min(typ.Width+avgResultScaleIncrement, maxAvgDecimalPrecision)
+	scale := avgDecimalScale(typ.Scale)
+	if typ.Width <= maxAvgDecimalPrecision {
+		integerDigits := typ.Width - typ.Scale
+		maxScale := precision - integerDigits
+		if scale > maxScale {
+			scale = maxScale
+		}
+	}
+	if precision < scale {
+		precision = scale
+	}
+	return types.New(types.T_decimal256, precision, scale)
 }
 
 const (

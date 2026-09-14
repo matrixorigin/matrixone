@@ -1024,6 +1024,57 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 	return nil
 }
 
+// d128DivOneToD256 keeps the fast D128 path when the scaled numerator fits,
+// but preserves the full D256 quotient when called by a D256 result path.
+func d128DivOneToD256(x, y types.Decimal128, dst *types.Decimal256, scaleAdj int32,
+	rsnull *nulls.Nulls, idx uint64, shouldError bool, scale1, scale2 int32) error {
+	if d128IsZero(y) {
+		if shouldError {
+			return moerr.NewDivByZeroNoCtx()
+		}
+		rsnull.Add(idx)
+		return nil
+	}
+
+	// The existing D128 implementation is safe only when both absolute
+	// operands fit in the positive D128 domain. In particular, abs(MinInt128)
+	// is 2^127 and cannot be represented as a positive D128. Probe on copies
+	// because the helpers mutate their arguments.
+	scaled := x
+	d128Abs(&scaled)
+	numeratorFits := d128MulPow10(&scaled, scaleAdj) && scaled.B64_127>>63 == 0
+	absY := y
+	d128Abs(&absY)
+	divisorFits := absY.B64_127>>63 == 0
+	if numeratorFits && divisorFits {
+		var result128 types.Decimal128
+		if err := d128DivOne(x, y, &result128, scaleAdj, rsnull, idx, shouldError, scale1, scale2); err != nil {
+			return err
+		}
+		signExt := ^uint64(0) * (result128.B64_127 >> 63)
+		*dst = types.Decimal256{
+			B0_63: result128.B0_63, B64_127: result128.B64_127,
+			B128_191: signExt, B192_255: signExt,
+		}
+		return nil
+	}
+
+	signX := d128Abs(&x)
+	signY := d128Abs(&y)
+	x256 := types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
+	y256 := types.Decimal256{B0_63: y.B0_63, B64_127: y.B64_127}
+	if !d256MulPow10(&x256, scaleAdj) {
+		return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
+	}
+	result, err := x256.Div256(y256)
+	if err != nil {
+		return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
+	}
+	d256Negate(&result, signX^signY)
+	*dst = result
+	return nil
+}
+
 // d128DivInline is the fast inline path for D128 division.
 // Pre-conditions: absY > 0, absY fits in 64 bits (absY64 > 0),
 // scaleAdj ≤ 19. x is a signed D128. signy is the sign of the divisor.
@@ -3065,11 +3116,12 @@ func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj i
 				signy := d128Abs(&y)
 				var r128 types.Decimal128
 				if !d128DivInline(d256toD128(v1[i]), y.B0_63, signy, scaleFactor, &r128) {
-					if err := d128DivOne(d256toD128(v1[i]), d256toD128(v2[i]), &r128, scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+					if err := d128DivOneToD256(d256toD128(v1[i]), d256toD128(v2[i]), &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 						return err
 					}
+				} else {
+					rs[i] = d128toD256(r128)
 				}
-				rs[i] = d128toD256(r128)
 			}
 			return nil
 		}
@@ -3085,11 +3137,9 @@ func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj i
 				rsnull.Add(uint64(i))
 				continue
 			}
-			var r128 types.Decimal128
-			if err := d128DivOne(d256toD128(v1[i]), y, &r128, scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+			if err := d128DivOneToD256(d256toD128(v1[i]), y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 				return err
 			}
-			rs[i] = d128toD256(r128)
 		}
 	} else if len1 == 1 {
 		x := d256toD128(v1[0])
@@ -3109,11 +3159,12 @@ func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj i
 				signy := d128Abs(&y)
 				var r128 types.Decimal128
 				if !d128DivInline(x, y.B0_63, signy, scaleFactor, &r128) {
-					if err := d128DivOne(x, d256toD128(v2[i]), &r128, scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+					if err := d128DivOneToD256(x, d256toD128(v2[i]), &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 						return err
 					}
+				} else {
+					rs[i] = d128toD256(r128)
 				}
-				rs[i] = d128toD256(r128)
 			}
 			return nil
 		}
@@ -3129,11 +3180,9 @@ func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj i
 				rsnull.Add(uint64(i))
 				continue
 			}
-			var r128 types.Decimal128
-			if err := d128DivOne(x, y, &r128, scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+			if err := d128DivOneToD256(x, y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 				return err
 			}
-			rs[i] = d128toD256(r128)
 		}
 	} else {
 		y := d256toD128(v2[0])
@@ -3156,11 +3205,12 @@ func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj i
 					}
 					var r128 types.Decimal128
 					if !d128DivInline(d256toD128(v1[i]), absY64, signyU, scaleFactor, &r128) {
-						if err := d128DivOne(d256toD128(v1[i]), y, &r128, scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+						if err := d128DivOneToD256(d256toD128(v1[i]), y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 							return err
 						}
+					} else {
+						rs[i] = d128toD256(r128)
 					}
-					rs[i] = d128toD256(r128)
 				}
 				return nil
 			}
@@ -3169,11 +3219,9 @@ func d256DivViaD128(v1, v2 []types.Decimal256, rs []types.Decimal256, scaleAdj i
 			if hasNull && bmp.Contains(uint64(i)) {
 				continue
 			}
-			var r128 types.Decimal128
-			if err := d128DivOne(d256toD128(v1[i]), y, &r128, scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
+			if err := d128DivOneToD256(d256toD128(v1[i]), y, &rs[i], scaleAdj, rsnull, uint64(i), shouldError, scale1, scale2); err != nil {
 				return err
 			}
-			rs[i] = d128toD256(r128)
 		}
 	}
 	return nil

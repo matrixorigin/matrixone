@@ -5317,7 +5317,11 @@ func PreparedDecimalRuntimeTypes(value string) (normalized, visible types.Type, 
 }
 
 // PreparedDecimalRuntimeDomains additionally returns a bounded canonical
-// lexeme suitable for typed literal materialization.
+// lexeme suitable for typed literal materialization. The canonical lexeme is
+// always emitted in the normalized domain, so it is parseable by both the
+// normalized runtime type and the optional visible result type. Redundant
+// trailing zeroes are represented by the target type's scale instead of by
+// an oversized coefficient.
 func PreparedDecimalRuntimeDomains(value string) (normalized, visible types.Type, canonical string, ok bool) {
 	return preparedDecimalRuntimeDomains(value, true)
 }
@@ -5428,8 +5432,6 @@ func preparedDecimalRuntimeDomains(
 		return types.Type{}, types.Type{}, "", false
 	}
 
-	canonicalCoefficientDigits := coefficientDigits
-	canonicalExponent := visibleExponent
 	if visibleExponentBounded {
 		visible, ok = preparedDecimalTypeFromCoefficient(coefficientDigits, visibleExponent)
 	}
@@ -5439,24 +5441,19 @@ func preparedDecimalRuntimeDomains(
 		// falling back to its normalized domain instead of rejecting it before
 		// normalization or materializing the unbounded visible spelling.
 		visible = normalized
-		canonicalCoefficientDigits = normalizedCoefficientDigits
-		canonicalExponent = normalizedExponent
-	}
-	if canonicalCoefficientDigits > int64(len(coefficient)) {
-		return types.Type{}, types.Type{}, "", false
 	}
 	if !materialize {
 		return normalized, visible, "", true
 	}
 	var canonicalBuilder strings.Builder
-	canonicalBuilder.Grow(int(canonicalCoefficientDigits) + 21)
+	canonicalBuilder.Grow(int(normalizedCoefficientDigits) + 21)
 	if negative {
 		canonicalBuilder.WriteByte('-')
 	}
-	canonicalBuilder.Write(coefficient[:int(canonicalCoefficientDigits)])
-	if canonicalExponent != 0 {
+	canonicalBuilder.Write(coefficient[:int(normalizedCoefficientDigits)])
+	if normalizedExponent != 0 {
 		canonicalBuilder.WriteByte('e')
-		canonicalBuilder.WriteString(strconv.FormatInt(canonicalExponent, 10))
+		canonicalBuilder.WriteString(strconv.FormatInt(normalizedExponent, 10))
 	}
 	return normalized, visible, canonicalBuilder.String(), true
 }

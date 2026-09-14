@@ -49,12 +49,15 @@ func TestBitSumAvgExactRemote(t *testing.T) {
 		require.NoError(t, err)
 		peer, err := c.GetCNService(1)
 		require.NoError(t, err)
-		inventory := clusterservice.GetMOCluster(cn.ServiceID())
-		refresher := inventory.(clusterservice.AuthoritativeRefresher)
+		clusterInventory := clusterservice.GetMOCluster(cn.ServiceID())
+		inventory, ok := clusterInventory.(cnWorkStateInventory)
+		require.True(t, ok, "CN inventory must support caller-bounded work-state updates")
+		refresher, ok := clusterInventory.(clusterservice.AuthoritativeRefresher)
+		require.True(t, ok, "CN inventory must support authoritative refresh")
 		readinessCtx, cancelReadiness := context.WithTimeout(ctx, 30*time.Second)
 		defer cancelReadiness()
 		readiness, readinessErr := waitForCNReadiness(
-			readinessCtx, 100*time.Millisecond, inventory, refresher, cn.ServiceID(), peer.ServiceID())
+			readinessCtx, cnWorkStatePollInterval, inventory, refresher, cn.ServiceID(), peer.ServiceID())
 		cancelReadiness()
 		require.NoError(t, readinessErr,
 			"last refresh error=%v, admission-ready CNs=%v, normally discoverable CNs=%v",
