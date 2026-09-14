@@ -178,6 +178,7 @@ func commonProjectionCenter(coords []Coord) (sphericalVector, error) {
 		}
 		return vectors[i].z < vectors[j].z
 	})
+	deterministicShuffleSphericalVectors(vectors)
 
 	// The normalized vertex sum is not a valid center selection rule: repeated
 	// vertices can move the sum across the horizon even when the geometry is
@@ -202,6 +203,7 @@ func commonProjectionCenter(coords []Coord) (sphericalVector, error) {
 }
 
 const geodeticProjectionCenterTolerance = 1e-14
+const geodeticProjectionCenterRelativeTolerance = 1e-12
 
 type sphericalCap struct {
 	center sphericalVector
@@ -230,11 +232,27 @@ func sphericalCapContains(cap sphericalCap, point sphericalVector) bool {
 	return sphericalNorm(delta) <= cap.radius+geodeticProjectionCenterTolerance
 }
 
+// deterministicShuffleSphericalVectors keeps the incremental cap solver's
+// expected linear behavior without making the result depend on geometry
+// member order. The input is canonically sorted first, so this fixed-seed
+// permutation is stable for the same set of coordinates.
+func deterministicShuffleSphericalVectors(points []sphericalVector) {
+	state := uint64(0x9e3779b97f4a7c15)
+	for i := len(points) - 1; i > 0; i-- {
+		state += 0x9e3779b97f4a7c15
+		z := state
+		z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9
+		z = (z ^ (z >> 27)) * 0x94d049bb133111eb
+		z ^= z >> 31
+		j := int(z % uint64(i+1))
+		points[i], points[j] = points[j], points[i]
+	}
+}
+
 // smallestSphericalCap uses the fixed-dimensional incremental algorithm for a
-// smallest enclosing circle, with a spherical cap as the circle. The sorted
-// input makes the result independent of operand and ring member order. A
-// minimum cap on S2 has at most three boundary points, so the nested loops
-// remain linear in the usual case while avoiding any vertex-density weighting.
+// smallest enclosing circle, with a spherical cap as the circle. A minimum
+// cap on S2 has at most three boundary points; the deterministic permutation
+// keeps the expected cost linear while avoiding any vertex-density weighting.
 func smallestSphericalCap(points []sphericalVector) sphericalCap {
 	var cap sphericalCap
 	for i, point := range points {
@@ -303,7 +321,8 @@ func sphericalCapFromBoundary(points []sphericalVector) sphericalCap {
 			z: u.x*v.y - u.y*v.x,
 		}
 		norm := sphericalNorm(normal)
-		if norm > geodeticProjectionCenterTolerance {
+		scale := math.Max(sphericalNorm(u), sphericalNorm(v))
+		if scale > 0 && norm > geodeticProjectionCenterRelativeTolerance*scale*scale {
 			center := sphericalVector{normal.x / norm, normal.y / norm, normal.z / norm}
 			minDot := sphericalDot(center, a)
 			if minDot < 0 {
