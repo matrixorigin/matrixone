@@ -760,6 +760,18 @@ class WorkerContractTest(unittest.TestCase):
         self.assertEqual(True, array.field("is_zero")[0].as_py())
         self.assertEqual(datetime.date(1970, 1, 1), array.field("value")[0].as_py())
 
+    def test_temporal_valid_row_requires_both_child_fields(self):
+        descriptor = {"type_id": worker.DATE, "offset_width": 32, "temporal_encoding": "sql_zero_struct"}
+        array = pa.StructArray.from_arrays(
+            [
+                pa.array([None, False], type=pa.bool_()),
+                pa.array([datetime.date(1970, 1, 1), datetime.date(2024, 1, 2)], type=pa.date32()),
+            ],
+            names=["is_zero", "value"],
+        )
+        with self.assertRaisesRegex(ValueError, "temporal zero flag is null"):
+            worker._validate_array_values(array, descriptor)
+
     def test_json_input_is_canonicalized_before_handler(self):
         descriptor = {"type_id": worker.JSON, "offset_width": 32, "json_encoding": "canonical_text"}
         array = pa.array(['{"b": [true, null, "中"], "a": 1}'], type=pa.string())
