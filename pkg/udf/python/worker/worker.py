@@ -208,6 +208,9 @@ _DESCRIPTOR_INT_KEYS = frozenset(
 _DESCRIPTOR_TEXT_KEYS = frozenset({"json_encoding", "temporal_encoding"})
 _HANDLER_RESPONSE_ERROR = 0
 _HANDLER_RESPONSE_OK = 1
+_HANDLER_REQUEST_KIND_KEY = "__matrixone_handler_request_kind"
+_HANDLER_REQUEST_FULL = "full"
+_HANDLER_REQUEST_BATCH = "batch"
 _HANDLER_RESPONSE_FD_ENV = "MATRIXONE_HANDLER_RESPONSE_FD"
 _HANDLER_PARENT_WATCH_FD_ENV = "MATRIXONE_HANDLER_PARENT_WATCH_FD"
 _HANDLER_ENV_ALLOWLIST = frozenset({"PATH"})
@@ -1788,15 +1791,22 @@ def _read_exact(stream, size: int) -> bytes:
     return bytes(result)
 
 
-def _write_execution_frame(stream, payload: bytes) -> None:
-    if len(payload) > MAX_EXECUTION_FRAME_BYTES:
+def _write_execution_frame_parts(stream, parts: Iterable[bytes]) -> None:
+    parts = tuple(parts)
+    payload_size = sum(len(part) for part in parts)
+    if payload_size > MAX_EXECUTION_FRAME_BYTES:
         raise ValueError("RESOURCE_EXHAUSTED: execution frame is too large")
-    stream.write(struct.pack(">Q", len(payload)))
-    stream.write(payload)
+    stream.write(struct.pack(">Q", payload_size))
+    for part in parts:
+        stream.write(part)
     stream.flush()
 
 
-def _encode_execution_request(request: Dict[str, Any]):
+def _write_execution_frame(stream, payload: bytes) -> None:
+    _write_execution_frame_parts(stream, (payload,))
+
+
+def _encode_execution_request(request: Dict[str, Any], *, compact: bool = False):
     """Build a handler frame without copying Arrow bytes into pickle.
 
     The outer length bounds the complete frame.  The first eight bytes of the
@@ -1813,7 +1823,11 @@ def _encode_execution_request(request: Dict[str, Any]):
         raise ValueError("PROTOCOL: execution request Arrow batch is not bytes-like")
     if not input_wire:
         raise ValueError("PROTOCOL: execution request Arrow batch is empty")
-    metadata = dict(request)
+    if compact:
+        metadata = {_HANDLER_REQUEST_KIND_KEY: _HANDLER_REQUEST_BATCH}
+    else:
+        metadata = dict(request)
+        metadata[_HANDLER_REQUEST_KIND_KEY] = _HANDLER_REQUEST_FULL
     buffers = []
     try:
         metadata["input"] = pickle.PickleBuffer(input_wire)
@@ -1920,6 +1934,7 @@ def _execute_handler_subprocess() -> None:
         # frozen contract; input Arrow batches remain independently validated
         # by the parent and by _execute_handler_batch.
         frozen = None
+        frozen_request = None
         handler = None
         statement_context = None
         input_schema = None
@@ -1930,6 +1945,20 @@ def _execute_handler_subprocess() -> None:
                 if request is None:
                     # EOF before a new frame is the normal burst shutdown.
                     break
+                request_kind = request.get(_HANDLER_REQUEST_KIND_KEY)
+                if request_kind not in (
+                    _HANDLER_REQUEST_FULL,
+                    _HANDLER_REQUEST_BATCH,
+                ):
+                    raise ValueError("PROTOCOL: handler request kind is invalid")
+                if request_kind == _HANDLER_REQUEST_BATCH:
+                    if frozen is None or frozen_request is None:
+                        raise ValueError(
+                            "PROTOCOL: compact handler request arrived before the full contract"
+                        )
+                    batch_input = request.get("input")
+                    request = dict(frozen_request)
+                    request["input"] = batch_input
                 contract = {
                     key: request.get(key)
                     for key in (
@@ -1942,6 +1971,12 @@ def _execute_handler_subprocess() -> None:
                 }
                 if frozen is None:
                     frozen = contract
+                    # Do not retain the first Arrow batch while the child is
+                    # reused. The immutable contract is enough to reconstruct
+                    # later compact requests.
+                    frozen_request = {
+                        key: value for key, value in request.items() if key != "input"
+                    }
                     statement_context = _statement_context(request.get("context"))
                     handler = _load_handler(request["source"], request["handler"])
                     if request.get("arrow_encoding") == HANDLER_ARROW_RECORD_BATCH:
@@ -1949,19 +1984,25 @@ def _execute_handler_subprocess() -> None:
                         result_schema = pa.schema([_field("result", request["return"])])
                 elif contract != frozen:
                     raise ValueError("PROTOCOL: handler burst contract changed")
-                response = bytes([_HANDLER_RESPONSE_OK]) + _execute_handler_batch(
+                output = _execute_handler_batch(
                     request,
                     handler=handler,
                     statement_context=statement_context,
                     input_schema=input_schema,
                     result_schema=result_schema,
                 )
+                response_parts = (bytes([_HANDLER_RESPONSE_OK]), output)
+                succeeded = True
             except Exception as exc:
-                response = bytes([_HANDLER_RESPONSE_ERROR]) + _safe_error(exc).encode("utf-8")
+                response_parts = (
+                    bytes([_HANDLER_RESPONSE_ERROR]),
+                    _safe_error(exc).encode("utf-8"),
+                )
+                succeeded = False
             # This descriptor is created by the adapter and is distinct from
             # process stdout/stderr descriptors available to handler code.
-            _write_execution_frame(response_stream, response)
-            if response[0] == _HANDLER_RESPONSE_ERROR:
+            _write_execution_frame_parts(response_stream, response_parts)
+            if not succeeded:
                 break
     finally:
         response_stream.close()
@@ -2335,7 +2376,7 @@ class _HandlerProcessSession:
             or time.monotonic() - self._burst_started >= DEFAULT_BURST_SECONDS
         )
 
-    def _take_response(self) -> Optional[bytes]:
+    def _take_response(self) -> Optional[tuple[int, bytes]]:
         if len(self._response_buffer) < 8:
             return None
         expected = struct.unpack(">Q", self._response_buffer[:8])[0]
@@ -2343,9 +2384,19 @@ class _HandlerProcessSession:
             raise ValueError("RESOURCE_EXHAUSTED: execution response is too large")
         if len(self._response_buffer) < expected + 8:
             return None
-        payload = bytes(self._response_buffer[8 : expected + 8])
+        if expected < 1:
+            raise ValueError("PROTOCOL: handler process returned an empty response")
+        status = self._response_buffer[8]
+        # A memoryview avoids an intermediate bytearray slice. Release it
+        # before resizing the receive buffer below; the returned Arrow bytes
+        # remain the only copy needed by the parent decoder.
+        response_view = memoryview(self._response_buffer)
+        try:
+            payload = bytes(response_view[9 : expected + 8])
+        finally:
+            response_view.release()
         del self._response_buffer[: expected + 8]
-        return payload
+        return status, payload
 
     def run(self, context, request: Dict[str, Any], timeout_seconds: float) -> bytes:
         if self._closed or self._process is None or self._selector is None:
@@ -2356,7 +2407,9 @@ class _HandlerProcessSession:
         # unbounded part of the caller's budget before the deadline was even
         # installed.
         deadline = time.monotonic() + timeout_seconds
-        request_parts, request_size = _encode_execution_request(request)
+        request_parts, request_size = _encode_execution_request(
+            request, compact=self._burst_batches > 0
+        )
         if time.monotonic() >= deadline:
             raise TimeoutError("DEADLINE_EXCEEDED: handler execution timeout")
         request_part_index = 0
@@ -2411,19 +2464,17 @@ class _HandlerProcessSession:
                     if _execution_group_alive(self._process):
                         raise ValueError("USER_CODE: handler process left descendant processes")
                     raise ValueError("USER_CODE: handler process exited before the burst completed")
-            if not response:
-                raise ValueError("PROTOCOL: handler process returned an empty response")
-            if response[0] == _HANDLER_RESPONSE_ERROR:
+            status, output = response
+            if status == _HANDLER_RESPONSE_ERROR:
                 try:
-                    message = response[1:].decode("utf-8")
+                    message = output.decode("utf-8")
                 except UnicodeDecodeError as exc:
                     raise ValueError("PROTOCOL: handler process returned an invalid error") from exc
                 raise ValueError(message or "USER_CODE: handler process failed")
-            if response[0] != _HANDLER_RESPONSE_OK:
+            if status != _HANDLER_RESPONSE_OK:
                 raise ValueError("PROTOCOL: handler process returned an unknown status")
-            output = response[1:]
             self._burst_batches += 1
-            self._burst_bytes += request_size + len(response)
+            self._burst_bytes += request_size + len(output) + 1
             return output
         finally:
             # A failed write/read must not leave a stale registration that a
