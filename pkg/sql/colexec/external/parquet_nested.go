@@ -247,11 +247,35 @@ func (h *ParquetHandler) processLeafValue(
 		}
 	}
 
-	if !found || value.IsNull() {
+	if !found {
+		return appendNull(vec, def, proc)
+	}
+	isNull, err := validateParquetLeafValue(proc.Ctx, col, value)
+	if err != nil {
+		return err
+	}
+	if isNull {
 		return appendNull(vec, def, proc)
 	}
 
 	return appendLeafValue(value, col, vec, def, proc)
+}
+
+func validateParquetLeafValue(ctx context.Context, col *parquet.Column, value parquet.Value) (bool, error) {
+	maxDefinitionLevel := col.MaxDefinitionLevel()
+	definitionLevel := value.DefinitionLevel()
+	if definitionLevel > maxDefinitionLevel {
+		return false, moerr.NewInvalidInputf(ctx,
+			"malformed parquet leaf value: definition level %d exceeds maximum %d",
+			definitionLevel, maxDefinitionLevel)
+	}
+	expectedNull := definitionLevel < maxDefinitionLevel
+	if expectedNull != value.IsNull() {
+		return false, moerr.NewInvalidInputf(ctx,
+			"malformed parquet leaf value: NULL status disagrees with definition level %d",
+			definitionLevel)
+	}
+	return expectedNull, nil
 }
 
 // appendNull appends a NULL value to vector

@@ -3348,6 +3348,34 @@ func TestParquetRowModeLeafConversionsRejectOverflow(t *testing.T) {
 	}
 }
 
+func TestParquetRowModeLeafDefinitionLevelMatchesNullness(t *testing.T) {
+	proc := testutil.NewProc(t)
+	f, _ := writeColumnAndGetPage(t, parquet.Optional(parquet.Leaf(parquet.Int32Type)), []parquet.Row{
+		{parquet.Int32Value(1).Level(0, 1, 0)},
+	})
+	col := f.Root().Column("c")
+	def := &plan.ColDef{Typ: plan.Type{Id: int32(types.T_int32)}}
+
+	for _, tc := range []struct {
+		name  string
+		value parquet.Value
+		want  string
+	}{
+		{name: "value at null level", value: parquet.Int32Value(1).Level(0, 0, 0), want: "NULL status disagrees"},
+		{name: "null at value level", value: parquet.NullValue().Level(0, 1, 0), want: "NULL status disagrees"},
+		{name: "definition level overflow", value: parquet.Int32Value(1).Level(0, 2, 0), want: "exceeds maximum"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(types.T_int32.ToType())
+			h := &ParquetHandler{}
+			err := h.processLeafValue(parquet.Row{tc.value}, col, vec, def, proc)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.want)
+			require.Zero(t, vec.Length())
+		})
+	}
+}
+
 func TestParquet_Plain_Bool_ReadErrorRollsBack(t *testing.T) {
 	proc := testutil.NewProc(t)
 	node := parquet.Leaf(parquet.BooleanType)
