@@ -2998,6 +2998,55 @@ func TestParquet_Dictionary_Bool(t *testing.T) {
 	})
 }
 
+func TestParquet_Plain_Bool(t *testing.T) {
+	proc := testutil.NewProc(t)
+
+	t.Run("required sliced page", func(t *testing.T) {
+		node := parquet.Leaf(parquet.BooleanType)
+		rows := []parquet.Row{
+			{parquet.BooleanValue(true).Level(0, 0, 0)},
+			{parquet.BooleanValue(false).Level(0, 0, 0)},
+			{parquet.BooleanValue(true).Level(0, 0, 0)},
+			{parquet.BooleanValue(false).Level(0, 0, 0)},
+		}
+		f, page := writeColumnAndGetPage(t, node, rows)
+		require.Nil(t, page.Dictionary())
+		page = page.Slice(1, 4)
+
+		vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool), NotNullable: true})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []bool{false, true, false}, vector.MustFixedColWithTypeCheck[bool](vec))
+	})
+
+	t.Run("nullable sliced page", func(t *testing.T) {
+		node := parquet.Optional(parquet.Leaf(parquet.BooleanType))
+		rows := []parquet.Row{
+			{parquet.BooleanValue(true).Level(0, 1, 0)},
+			{parquet.NullValue().Level(0, 0, 0)},
+			{parquet.BooleanValue(false).Level(0, 1, 0)},
+			{parquet.BooleanValue(true).Level(0, 1, 0)},
+			{parquet.NullValue().Level(0, 0, 0)},
+		}
+		f, page := writeColumnAndGetPage(t, node, rows)
+		require.Nil(t, page.Dictionary())
+		page = page.Slice(1, 5)
+
+		vec := vector.NewVec(types.New(types.T_bool, 0, 0))
+		var h ParquetHandler
+		mp := h.getMapper(f.Root().Column("c"), plan.Type{Id: int32(types.T_bool)})
+		require.NotNil(t, mp)
+		require.NoError(t, mp.mapping(page, proc, vec))
+		require.Equal(t, []bool{false, false, true, false}, vector.MustFixedColWithTypeCheck[bool](vec))
+		require.True(t, vec.GetNulls().Contains(0))
+		require.False(t, vec.GetNulls().Contains(1))
+		require.False(t, vec.GetNulls().Contains(2))
+		require.True(t, vec.GetNulls().Contains(3))
+	})
+}
+
 type parquetPageWithData struct {
 	parquet.Page
 	data encoding.Values

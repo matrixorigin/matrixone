@@ -876,32 +876,14 @@ func (*ParquetHandler) getMapper(sc *parquet.Column, dt plan.Type) *columnMapper
 				}
 				return copyBoolDictPageToVec(mp, page, proc, vec, dict, indices, nc)
 			}
-
-			// Fail early: if page has NULLs and destination doesn't allow them
-			if mp.srcNull && page.NumNulls() > 0 && !mp.dstNull {
+			nc := nullCheckInfo{
+				noNulls: !mp.srcNull || page.NumNulls() == 0,
+			}
+			if !nc.noNulls && !mp.dstNull {
 				return moerr.NewConstraintViolationf(proc.Ctx,
 					"cannot load NULL value into NOT NULL column")
 			}
-
-			p := make([]parquet.Value, page.NumValues())
-			n, err := page.Values().ReadValues(p)
-			if err != nil && !errors.Is(err, io.EOF) {
-				return moerr.ConvertGoError(proc.Ctx, err)
-			}
-			if n != int(page.NumValues()) {
-				return moerr.NewInternalError(proc.Ctx, "short read bool")
-			}
-			for _, v := range p {
-				if v.IsNull() {
-					err = vector.AppendFixed(vec, false, true, proc.Mp())
-				} else {
-					err = vector.AppendFixed(vec, v.Boolean(), false, proc.Mp())
-				}
-				if err != nil {
-					return err
-				}
-			}
-			return nil
+			return copyPlainBoolPageToVec(page, proc, vec, nc)
 		}
 	case types.T_uint8:
 		if isParquetRoundedIntegerSource(st) {
@@ -3551,6 +3533,67 @@ func copyDictPageToVec[T any](mp *columnMapper, page parquet.Page, proc *process
 	return copyPageToVecMap(mp, page, proc, vec, indexes, convert)
 }
 
+func copyPlainBoolPageToVec(page parquet.Page, proc *process.Process, vec *vector.Vector, nc nullCheckInfo) error {
+	n := int(page.NumValues())
+	length := vec.Length()
+	if err := vec.PreExtend(n+length, proc.Mp()); err != nil {
+		return err
+	}
+	vec.SetLength(n + length)
+	ret := vector.MustFixedColWithTypeCheck[bool](vec)
+	reader := page.Values()
+	if !nc.noNulls {
+		nulls.TryExpand(vec.GetNulls(), n+length)
+	}
+
+	// Required BOOLEAN pages expose a typed reader. Decode directly into the
+	// vector to avoid constructing one parquet.Value per row and appending each
+	// row through the vector metadata path.
+	if nc.noNulls {
+		if booleanReader, ok := reader.(parquet.BooleanReader); ok {
+			read, err := booleanReader.ReadBooleans(ret[length : length+n])
+			if err != nil && !errors.Is(err, io.EOF) {
+				return moerr.ConvertGoError(proc.Ctx, err)
+			}
+			if read != n {
+				return moerr.NewInternalError(proc.Ctx, "short read bool")
+			}
+			return nil
+		}
+	}
+
+	// Optional BOOLEAN pages need definition levels interleaved with the
+	// physical values. Read in bounded chunks so a large page does not require
+	// a temporary parquet.Value for every row.
+	const valueChunkSize = 256
+	var values [valueChunkSize]parquet.Value
+	readRows := 0
+	for readRows < n {
+		want := n - readRows
+		if want > len(values) {
+			want = len(values)
+		}
+		read, err := reader.ReadValues(values[:want])
+		if err != nil && !errors.Is(err, io.EOF) {
+			return moerr.ConvertGoError(proc.Ctx, err)
+		}
+		if read != want {
+			return moerr.NewInternalError(proc.Ctx, "short read bool")
+		}
+		for i := 0; i < read; i++ {
+			v := values[i]
+			row := length + readRows + i
+			if v.IsNull() {
+				nulls.Add(vec.GetNulls(), uint64(row))
+			} else {
+				ret[row] = v.Boolean()
+			}
+		}
+		readRows += read
+	}
+	return nil
+}
+
 func copyBoolDictPageToVec(
 	mp *columnMapper,
 	page parquet.Page,
@@ -3581,6 +3624,9 @@ func copyBoolDictPageToVec(
 	}
 	vec.SetLength(n + length)
 	ret := vector.MustFixedColWithTypeCheck[bool](vec)
+	if !nc.noNulls {
+		nulls.TryExpand(vec.GetNulls(), n+length)
+	}
 	j := 0
 	for i := 0; i < n; i++ {
 		if nc.isNull(i) {
