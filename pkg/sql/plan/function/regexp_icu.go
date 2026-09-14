@@ -27,6 +27,7 @@ import (
 	"github.com/clipperhouse/uax29/v2/graphemes"
 	"github.com/dlclark/regexp2"
 	regexp2syntax "github.com/dlclark/regexp2/syntax"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // regexp2MatchTimeout bounds the only path in which MatrixOne permits
@@ -74,6 +75,14 @@ const (
 )
 
 var regexp2ActiveSubjectBytes atomic.Int64
+
+func regexp2InvalidInputf(format string, args ...any) error {
+	return moerr.NewInvalidInputNoCtxf(format, args...)
+}
+
+func regexp2InternalErrorf(format string, args ...any) error {
+	return moerr.NewInternalErrorNoCtxf(format, args...)
+}
 
 // regexp2Matcher is deliberately kept separate from *regexp.Regexp. The
 // latter remains the hot path and the existing cache/test contracts continue
@@ -610,14 +619,14 @@ func regexp2CaptureMapping(pattern string, tree *regexp2syntax.RegexTree) ([]int
 		if name != "" {
 			slot, ok := tree.Capnames[name]
 			if !ok || slot <= 0 {
-				return nil, nil, fmt.Errorf("regexp capture group %q is not addressable", name)
+				return nil, nil, regexp2InternalErrorf("regexp capture group %q is not addressable", name)
 			}
 			userToEngine[userIndex] = slot
 			groupName[name] = userIndex
 			continue
 		}
 		if unnamedIndex >= len(unnamedSlots) {
-			return nil, nil, fmt.Errorf("regexp capture group numbering is inconsistent")
+			return nil, nil, regexp2InternalErrorf("regexp capture group numbering is inconsistent")
 		}
 		userToEngine[userIndex] = unnamedSlots[unnamedIndex]
 		unnamedIndex++
@@ -702,10 +711,10 @@ func remapRegexp2Backreferences(expression string, userToEngine []int) string {
 // subject-specific expansion cannot be reused for a different value.
 func regexp2GraphemePatternForSubject(subject string) (string, error) {
 	if len(subject) > regexp2MaxGraphemeSubjectBytes {
-		return "", fmt.Errorf("regular expression subject with \\X exceeds the maximum supported size of %d bytes", regexp2MaxGraphemeSubjectBytes)
+		return "", regexp2InvalidInputf("regular expression subject with \\X exceeds the maximum supported size of %d bytes", regexp2MaxGraphemeSubjectBytes)
 	}
 	if !utf8.ValidString(subject) {
-		return "", fmt.Errorf("regular expression subject with \\X must be valid UTF-8")
+		return "", regexp2InvalidInputf("regular expression subject with \\X must be valid UTF-8")
 	}
 	totalRunes := utf8.RuneCountInString(subject)
 	runeOffsets := make([]int, totalRunes+1)
@@ -781,7 +790,7 @@ func regexp2GraphemePatternForSubject(subject string) (string, error) {
 func appendRegexp2TranslatedPart(out *strings.Builder, value string) error {
 	if len(value) > regexp2MaxTranslatedPatternBytes ||
 		out.Len() > regexp2MaxTranslatedPatternBytes-len(value) {
-		return fmt.Errorf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+		return regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
 	}
 	out.WriteString(value)
 	return nil
@@ -976,7 +985,7 @@ func translateRegexp2PatternWithGrapheme(
 
 		if pattern[i] == '{' {
 			if _, ok := regexpQuantifierEnd(pattern, i); !ok {
-				return "", fmt.Errorf("invalid regular expression quantifier")
+				return "", regexp2InvalidInputf("invalid regular expression quantifier")
 			}
 		}
 		if quantifierEnd, ok := regexpQuantifierEnd(pattern, i); ok {
@@ -1069,12 +1078,12 @@ func validateRegexp2TranslationBudget(pattern, graphemePattern string) error {
 		count := int64(regexp2GraphemeTokenCount(pattern))
 		expansion := int64(len(graphemePattern)) - 2
 		if expansion > 0 && count > (int64(regexp2MaxTranslatedPatternBytes)-upper)/expansion {
-			return fmt.Errorf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+			return regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
 		}
 		upper += count * expansion
 	}
 	if upper > int64(regexp2MaxTranslatedPatternBytes) {
-		return fmt.Errorf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+		return regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
 	}
 	return nil
 }
@@ -1220,7 +1229,7 @@ func validateRegexp2SourceRepeatBounds(pattern string) error {
 		if pattern[i] == '{' {
 			end, ok := regexpQuantifierEnd(pattern, i)
 			if !ok {
-				return fmt.Errorf("invalid regular expression quantifier")
+				return regexp2InvalidInputf("invalid regular expression quantifier")
 			}
 			if err := validateRegexp2QuantifierModifiers(pattern, i, end); err != nil {
 				return err
@@ -1248,12 +1257,12 @@ func validateRegexp2RepeatBody(body string) error {
 	comma := strings.IndexByte(body, ',')
 	if comma < 0 {
 		if body == "" {
-			return fmt.Errorf("invalid regular expression quantifier")
+			return regexp2InvalidInputf("invalid regular expression quantifier")
 		}
 		return validateRegexp2RepeatNumber(body)
 	}
 	if comma == 0 || strings.IndexByte(body[comma+1:], ',') >= 0 {
-		return fmt.Errorf("invalid regular expression quantifier")
+		return regexp2InvalidInputf("invalid regular expression quantifier")
 	}
 	if err := validateRegexp2RepeatNumber(body[:comma]); err != nil {
 		return err
@@ -1269,18 +1278,18 @@ func validateRegexp2QuantifierModifiers(pattern string, start, end int) error {
 		return nil
 	}
 	if pattern[end] == '?' {
-		return fmt.Errorf("invalid regular expression quantifier")
+		return regexp2InvalidInputf("invalid regular expression quantifier")
 	}
 	if pattern[end] != '+' {
 		return nil
 	}
 	if end > start+1 && pattern[end-1] == '?' ||
 		end+1 < len(pattern) && (pattern[end+1] == '*' || pattern[end+1] == '+' || pattern[end+1] == '?') {
-		return fmt.Errorf("invalid regular expression quantifier")
+		return regexp2InvalidInputf("invalid regular expression quantifier")
 	}
 	if end+1 < len(pattern) && pattern[end+1] == '{' {
 		if _, ok := regexpQuantifierEnd(pattern, end+1); ok {
-			return fmt.Errorf("invalid regular expression quantifier")
+			return regexp2InvalidInputf("invalid regular expression quantifier")
 		}
 	}
 	return nil
@@ -1292,10 +1301,10 @@ func validateRegexp2RepeatNumber(value string) error {
 	}
 	n, err := strconv.ParseUint(value, 10, 32)
 	if err != nil {
-		return fmt.Errorf("invalid regular expression quantifier")
+		return regexp2InvalidInputf("invalid regular expression quantifier")
 	}
 	if n > regexp2MaxRepeatCount {
-		return fmt.Errorf("regular expression repetition exceeds the maximum supported count of %d", regexp2MaxRepeatCount)
+		return regexp2InvalidInputf("regular expression repetition exceeds the maximum supported count of %d", regexp2MaxRepeatCount)
 	}
 	return nil
 }
@@ -1314,7 +1323,7 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 		return matcher, nil
 	}
 	if len(rule) > regexp2MaxPatternBytes {
-		return nil, fmt.Errorf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
+		return nil, regexp2InvalidInputf("regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxPatternBytes)
 	}
 	if binary {
 		if err := validateBinaryRegexpPattern(rule); err != nil {
@@ -1331,7 +1340,7 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 		return nil, err
 	}
 	if len(expression) > regexp2MaxTranslatedPatternBytes {
-		return nil, fmt.Errorf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+		return nil, regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
 	}
 	if binary {
 		expression, err = encodeBinaryRegexpPattern(expression, binaryCaseFold)
@@ -1339,15 +1348,15 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 			return nil, err
 		}
 		if len(expression) > regexp2MaxTranslatedPatternBytes {
-			return nil, fmt.Errorf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+			return nil, regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
 		}
 	}
 	estimatedBytes := regexp2EstimatedMatcherBytes(len(rule), len(expression))
 	if estimatedBytes > regexp2MaxCachedBytes {
-		return nil, fmt.Errorf("compiled regular expression exceeds the maximum supported cache size of %d bytes", regexp2MaxCachedBytes)
+		return nil, regexp2InvalidInputf("compiled regular expression exceeds the maximum supported cache size of %d bytes", regexp2MaxCachedBytes)
 	}
 	if int64(estimatedBytes) > regexp2MaxEvaluationMemoryBytes {
-		return nil, fmt.Errorf("compiled regular expression exceeds the maximum supported evaluation size of %d bytes", regexp2MaxEvaluationMemoryBytes)
+		return nil, regexp2InvalidInputf("compiled regular expression exceeds the maximum supported evaluation size of %d bytes", regexp2MaxEvaluationMemoryBytes)
 	}
 	tree, _, release, err := regexp2PrepareExpression(expression)
 	if err != nil {
@@ -1398,7 +1407,7 @@ func regexp2PrepareExpression(
 ) (*regexp2syntax.RegexTree, *regexp2syntax.Code, func(), error) {
 	compileBudget := int64(64<<10) + int64(len(expression))*8
 	if compileBudget > int64(regexp2MaxEvaluationMemoryBytes) {
-		return nil, nil, nil, fmt.Errorf("compiled regular expression exceeds the maximum supported evaluation size of %d bytes", regexp2MaxEvaluationMemoryBytes)
+		return nil, nil, nil, regexp2InvalidInputf("compiled regular expression exceeds the maximum supported evaluation size of %d bytes", regexp2MaxEvaluationMemoryBytes)
 	}
 	reserved, err := acquireRegexp2SubjectBudget(0, compileBudget)
 	if err != nil {
@@ -1429,23 +1438,23 @@ func regexp2PrepareExpression(
 
 func validateRegexp2CodeBudget(code *regexp2syntax.Code) error {
 	if code == nil {
-		return fmt.Errorf("regular expression compiler returned no code")
+		return regexp2InternalErrorf("regular expression compiler returned no code")
 	}
 	if code.TrackCount > regexp2MaxTrackCount {
-		return fmt.Errorf("regular expression backtracking state exceeds the maximum supported size")
+		return regexp2InvalidInputf("regular expression backtracking state exceeds the maximum supported size")
 	}
 	for i := 0; i < len(code.Codes); {
 		op := regexp2syntax.InstOp(code.Codes[i]) & regexp2syntax.Mask
 		size := regexp2OpcodeSize(op)
 		if i+size > len(code.Codes) {
-			return fmt.Errorf("regular expression compiler returned truncated code")
+			return regexp2InternalErrorf("regular expression compiler returned truncated code")
 		}
 		if regexp2OpcodeHasRepeatLimit(op) && code.Codes[i+size-1] != int(regexp2InfiniteRepeat) &&
 			code.Codes[i+size-1] > regexp2MaxRepeatCount {
-			return fmt.Errorf("regular expression repetition exceeds the maximum supported count of %d", regexp2MaxRepeatCount)
+			return regexp2InvalidInputf("regular expression repetition exceeds the maximum supported count of %d", regexp2MaxRepeatCount)
 		}
 		if op == regexp2syntax.Setcount && code.Codes[i+1] < 1-regexp2MaxRepeatCount {
-			return fmt.Errorf("regular expression repetition exceeds the maximum supported count of %d", regexp2MaxRepeatCount)
+			return regexp2InvalidInputf("regular expression repetition exceeds the maximum supported count of %d", regexp2MaxRepeatCount)
 		}
 		i += size
 	}
@@ -1502,7 +1511,7 @@ func regexp2NullableRepeatStateBudget(code *regexp2syntax.Code) (int64, error) {
 
 func regexp2RepeatStateBudget(code *regexp2syntax.Code, subjectRunes int64) (int64, error) {
 	if subjectRunes < 0 {
-		return 0, fmt.Errorf("invalid regular expression subject size")
+		return 0, regexp2InvalidInputf("invalid regular expression subject size")
 	}
 	repeats, err := regexp2CollectRepeats(code)
 	if err != nil {
@@ -1515,7 +1524,7 @@ func regexp2RepeatStateBudget(code *regexp2syntax.Code, subjectRunes int64) (int
 		}
 		cost, ok := regexp2RepeatCost(repeats, i, subjectRunes)
 		if !ok || cost > regexp2MaxNullableRepeatStates-stateBudget {
-			return 0, fmt.Errorf("nested nullable repetition exceeds the maximum supported state count of %d", regexp2MaxNullableRepeatStates)
+			return 0, regexp2InvalidInputf("nested nullable repetition exceeds the maximum supported state count of %d", regexp2MaxNullableRepeatStates)
 		}
 		stateBudget += cost
 	}
@@ -1531,22 +1540,22 @@ func regexp2CollectRepeats(code *regexp2syntax.Code) ([]regexp2Repeat, error) {
 		op := regexp2syntax.InstOp(code.Codes[i]) & regexp2syntax.Mask
 		size := regexp2OpcodeSize(op)
 		if i+size > len(code.Codes) {
-			return nil, fmt.Errorf("regular expression compiler returned truncated code")
+			return nil, regexp2InternalErrorf("regular expression compiler returned truncated code")
 		}
 		if op == regexp2syntax.Branchcount || op == regexp2syntax.Branchmark ||
 			op == regexp2syntax.Lazybranchcount || op == regexp2syntax.Lazybranchmark {
 			if i+1 >= len(code.Codes) {
-				return nil, fmt.Errorf("regular expression compiler returned an invalid repetition target")
+				return nil, regexp2InternalErrorf("regular expression compiler returned an invalid repetition target")
 			}
 			bodyStart := code.Codes[i+1]
 			if bodyStart < 0 {
-				return nil, fmt.Errorf("regular expression compiler returned an invalid repetition body")
+				return nil, regexp2InternalErrorf("regular expression compiler returned an invalid repetition body")
 			}
 			if bodyStart < i {
 				maximum, infinite := regexp2RepeatedMaximum(code, i, op, bodyStart)
 				nullable := !regexp2RepeatBodyAlwaysConsumes(code, bodyStart, i)
 				if nullable && (infinite || maximum > regexp2MaxNullableRepeatCount) {
-					return nil, fmt.Errorf("regular expression nullable repetition exceeds the maximum supported count of %d", regexp2MaxNullableRepeatCount)
+					return nil, regexp2InvalidInputf("regular expression nullable repetition exceeds the maximum supported count of %d", regexp2MaxNullableRepeatCount)
 				}
 				if infinite || maximum > 0 {
 					repeats = append(repeats, regexp2Repeat{
@@ -1674,7 +1683,7 @@ func regexp2RepeatCost(repeats []regexp2Repeat, parent int, subjectRunes int64) 
 
 func regexp2CaptureHistoryBudget(code *regexp2syntax.Code, subjectRunes int64) (int64, error) {
 	if subjectRunes < 0 {
-		return 0, fmt.Errorf("invalid regular expression subject size")
+		return 0, regexp2InvalidInputf("invalid regular expression subject size")
 	}
 	repeats, err := regexp2CollectRepeats(code)
 	if err != nil {
@@ -1687,7 +1696,7 @@ func regexp2CaptureHistoryBudget(code *regexp2syntax.Code, subjectRunes int64) (
 		}
 		entries, ok := regexp2RepeatCaptureHistoryCost(repeats, code, i, subjectRunes)
 		if !ok || entries > regexp2MaxEvaluationMemoryBytes/regexp2CaptureHistoryBytes-totalEntries {
-			return 0, fmt.Errorf("regular expression evaluation exceeds the maximum supported memory of %d bytes", regexp2MaxEvaluationMemoryBytes)
+			return 0, regexp2InvalidInputf("regular expression evaluation exceeds the maximum supported memory of %d bytes", regexp2MaxEvaluationMemoryBytes)
 		}
 		totalEntries += entries
 	}
@@ -1982,18 +1991,18 @@ func regexp2EvaluationMemoryBudget(
 	compiledBytes int,
 ) (int64, error) {
 	if code == nil || subjectRunes < 0 || compiledBytes < 0 {
-		return 0, fmt.Errorf("invalid regular expression evaluation budget")
+		return 0, regexp2InvalidInputf("invalid regular expression evaluation budget")
 	}
 	trackCount := code.TrackCount
 	if trackCount < 1 {
 		trackCount = 1
 	}
 	if trackCount > regexp2MaxTrackCount {
-		return 0, fmt.Errorf("regular expression backtracking state exceeds the maximum supported size")
+		return 0, regexp2InvalidInputf("regular expression backtracking state exceeds the maximum supported size")
 	}
 	states := int64(subjectRunes+1) * int64(trackCount)
 	if states > regexp2MaxEvaluationStates {
-		return 0, fmt.Errorf("regular expression evaluation exceeds the maximum supported backtracking state")
+		return 0, regexp2InvalidInputf("regular expression evaluation exceeds the maximum supported backtracking state")
 	}
 	nullableStates, err := regexp2RepeatStateBudget(code, int64(subjectRunes))
 	if err != nil {
@@ -2012,7 +2021,7 @@ func regexp2EvaluationMemoryBudget(
 	captureBytes := int64(code.Capsize+1) * 32
 	total := compiled + runnerBytes + nullableRunnerBytes + captureHistoryBytes + captureBytes
 	if total > regexp2MaxEvaluationMemoryBytes {
-		return 0, fmt.Errorf("regular expression evaluation exceeds the maximum supported memory of %d bytes", regexp2MaxEvaluationMemoryBytes)
+		return 0, regexp2InvalidInputf("regular expression evaluation exceeds the maximum supported memory of %d bytes", regexp2MaxEvaluationMemoryBytes)
 	}
 	return total, nil
 }
@@ -2040,7 +2049,7 @@ func compileRegexp2Expression(expression string, userGroupToEngine []int) (*rege
 
 func (m *regexp2Matcher) forSubject(subject string) (*regexp2Matcher, error) {
 	if m == nil {
-		return nil, fmt.Errorf("nil regular expression matcher")
+		return nil, regexp2InternalErrorf("nil regular expression matcher")
 	}
 	if err := validateRegexp2Subject(subject); err != nil {
 		return nil, err
@@ -2058,7 +2067,7 @@ func (m *regexp2Matcher) forSubject(subject string) (*regexp2Matcher, error) {
 		}
 	}
 	if len(expression) > regexp2MaxTranslatedPatternBytes {
-		return nil, fmt.Errorf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
+		return nil, regexp2InvalidInputf("translated regular expression pattern exceeds the maximum supported size of %d bytes", regexp2MaxTranslatedPatternBytes)
 	}
 	_, code, release, err := regexp2PrepareExpression(expression)
 	if err != nil {
@@ -2119,14 +2128,14 @@ func regexp2MatchError(err error) error {
 	// or retain user data in a SQL error; all runtime failures are intentionally
 	// collapsed to a bounded diagnostic.
 	if strings.Contains(err.Error(), "match timeout") {
-		return fmt.Errorf("regexp match timed out")
+		return regexp2InvalidInputf("regexp match timed out")
 	}
-	return fmt.Errorf("regexp match failed")
+	return regexp2InternalErrorf("regexp match failed")
 }
 
 func validateRegexp2Subject(str string) error {
 	if len(str) > regexp2MaxSubjectBytes {
-		return fmt.Errorf("regular expression subject exceeds the maximum supported size of %d bytes", regexp2MaxSubjectBytes)
+		return regexp2InvalidInputf("regular expression subject exceeds the maximum supported size of %d bytes", regexp2MaxSubjectBytes)
 	}
 	return nil
 }
@@ -2145,16 +2154,16 @@ func acquireRegexp2SubjectBudget(valueBytes int, evaluationBytes int64) (int64, 
 	// per-evaluation regexp, so concurrent ICU evaluations have a bounded
 	// aggregate footprint.
 	if evaluationBytes < 0 {
-		return 0, fmt.Errorf("invalid regular expression evaluation budget")
+		return 0, regexp2InvalidInputf("invalid regular expression evaluation budget")
 	}
 	budget := int64(valueBytes)*16 + 64<<10 + evaluationBytes
 	if budget > regexp2MaxActiveSubjectBytes {
-		return 0, fmt.Errorf("regular expression subject exceeds the maximum active memory budget")
+		return 0, regexp2InvalidInputf("regular expression subject exceeds the maximum active memory budget")
 	}
 	for {
 		active := regexp2ActiveSubjectBytes.Load()
 		if active+budget > regexp2MaxActiveSubjectBytes {
-			return 0, fmt.Errorf("regular expression evaluation exceeds the maximum active memory budget")
+			return 0, regexp2InvalidInputf("regular expression evaluation exceeds the maximum active memory budget")
 		}
 		if regexp2ActiveSubjectBytes.CompareAndSwap(active, active+budget) {
 			return budget, nil
@@ -2346,7 +2355,7 @@ func (rs *regexpSet) regexp2VisitMatchesAtOrAfterWithMatchTypeAndDeadline(
 	nextStart := input.runeIndexAtByte(searchStart)
 	for nextStart <= len(input.runes) {
 		if time.Now().After(deadline) {
-			return visited, fmt.Errorf("regexp match timed out")
+			return visited, regexp2InvalidInputf("regexp match timed out")
 		}
 		match, err := evaluationMatcher.findAtOrAfter(input, nextStart)
 		if err != nil {
@@ -2417,7 +2426,7 @@ func (rs *regexpSet) regexp2VisitSubmatchesAtOrAfterWithMatchTypeAndDeadline(
 	nextStart := input.runeIndexAtByte(searchStart)
 	for nextStart <= len(input.runes) {
 		if time.Now().After(deadline) {
-			return visited, fmt.Errorf("regexp match timed out")
+			return visited, regexp2InvalidInputf("regexp match timed out")
 		}
 		match, err := evaluationMatcher.findAtOrAfter(input, nextStart)
 		if err != nil {
@@ -2428,7 +2437,7 @@ func (rs *regexpSet) regexp2VisitSubmatchesAtOrAfterWithMatchTypeAndDeadline(
 		}
 		indices := regexp2SubmatchIndices(evaluationMatcher, input, match)
 		if len(indices) < 2 {
-			return visited, fmt.Errorf("regexp match returned no whole-match span")
+			return visited, regexp2InternalErrorf("regexp match returned no whole-match span")
 		}
 		if err := visit(indices); err != nil {
 			return visited, err
@@ -2536,10 +2545,10 @@ func (rs *regexpSet) regexp2ReplaceWithMatchType(
 	}
 	startByte, ok := regexpSearchStartByte(str, pos, subjectIsBinary)
 	if !ok {
-		return "", fmt.Errorf("regexp_replace: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, regexpSubjectLength(str, subjectIsBinary))
+		return "", regexp2InvalidInputf("regexp_replace: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, regexpSubjectLength(str, subjectIsBinary))
 	}
 	if occurrence < 0 {
-		return "", fmt.Errorf("regexp_replace have Index out of bounds in regular expression search, return occurrence %d", occurrence)
+		return "", regexp2InvalidInputf("regexp_replace have Index out of bounds in regular expression search, return occurrence %d", occurrence)
 	}
 	if len(str) == 0 {
 		return str, nil
@@ -2663,7 +2672,7 @@ func (rs *regexpSet) regexp2ReplaceLiteralWithLimitAndDeadline(
 		return "", err
 	}
 	if uint64(result.Len()) != size {
-		return "", fmt.Errorf("regexp_replace: output size changed during replacement")
+		return "", regexp2InternalErrorf("regexp_replace: output size changed during replacement")
 	}
 	return result.String(), nil
 }
@@ -2826,7 +2835,7 @@ func (rs *regexpSet) regexp2ReplaceWithTemplate(
 		return "", err
 	}
 	if uint64(result.Len()) != size {
-		return "", fmt.Errorf("regexp_replace: output size changed during replacement")
+		return "", regexp2InternalErrorf("regexp_replace: output size changed during replacement")
 	}
 	return result.String(), nil
 }
@@ -2849,10 +2858,10 @@ func (rs *regexpSet) regexp2SubstrWithMatchType(
 	}
 	startByte, ok := regexpSearchStartByte(str, pos, subjectIsBinary)
 	if !ok {
-		return false, "", fmt.Errorf("regexp_substr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, regexpSubjectLength(str, subjectIsBinary))
+		return false, "", regexp2InvalidInputf("regexp_substr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, regexpSubjectLength(str, subjectIsBinary))
 	}
 	if occurrence < 1 {
-		return false, "", fmt.Errorf("regexp_substr have Index out of bounds in regular expression search, return occurrence %d", occurrence)
+		return false, "", regexp2InvalidInputf("regexp_substr have Index out of bounds in regular expression search, return occurrence %d", occurrence)
 	}
 	match, found, err := rs.regexp2NthMatchAtOrAfterWithMatchType(
 		matcher, str, startByte, subjectIsBinary, pureMatchType, occurrence)
@@ -2887,13 +2896,13 @@ func (rs *regexpSet) regexp2InstrWithMatchType(
 		startByte, ok = regexpSearchStartByte(str, pos, subjectIsBinary)
 	}
 	if !ok {
-		return 0, fmt.Errorf("regexp_instr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, regexpSubjectLength(str, subjectIsBinary))
+		return 0, regexp2InvalidInputf("regexp_instr: Index out of bounds in regular expression search. Search start position: %d, Search string length: %d", pos, regexpSubjectLength(str, subjectIsBinary))
 	}
 	if occurrence < 1 {
-		return 0, fmt.Errorf("regexp_instr have Index out of bounds in regular expression search, return occurrence %d", occurrence)
+		return 0, regexp2InvalidInputf("regexp_instr have Index out of bounds in regular expression search, return occurrence %d", occurrence)
 	}
 	if retOption < 0 || retOption > 1 {
-		return 0, fmt.Errorf("regexp_instr have Index out of bounds in regular expression search, return option %d", retOption)
+		return 0, regexp2InvalidInputf("regexp_instr have Index out of bounds in regular expression search, return option %d", retOption)
 	}
 	searchSubject := str[startByte:]
 	match, found, err := rs.regexp2NthMatchAtOrAfterWithMatchType(
