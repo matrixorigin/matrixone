@@ -1790,6 +1790,45 @@ func decimal128WidthLimit(width int32) Decimal128 {
 	return limit
 }
 
+func decimal128IntegralFloat64(x float64) (magnitude Decimal128, integral, fits bool) {
+	if x == 0 {
+		return Decimal128{}, true, true
+	}
+
+	value := math.Float64bits(x)
+	mantissa := value & ((uint64(1) << 52) - 1)
+	exponentBits := int((value >> 52) & 0x7ff)
+	exponent := exponentBits - 1023
+	if exponentBits == 0 {
+		exponent = -1022
+	} else {
+		mantissa |= uint64(1) << 52
+	}
+
+	shift := exponent - 52
+	if shift < 0 {
+		fractionalBits := -shift
+		if fractionalBits >= 64 || mantissa&((uint64(1)<<fractionalBits)-1) != 0 {
+			return Decimal128{}, false, true
+		}
+		mantissa >>= fractionalBits
+		shift = 0
+	}
+	if bits.Len64(mantissa)+shift > 127 {
+		return Decimal128{}, true, false
+	}
+
+	if shift < 64 {
+		magnitude.B0_63 = mantissa << uint(shift)
+		if shift > 0 {
+			magnitude.B64_127 = mantissa >> uint(64-shift)
+		}
+	} else {
+		magnitude.B64_127 = mantissa << uint(shift-64)
+	}
+	return magnitude, true, true
+}
+
 func Decimal128FromFloat64(x float64, width, scale int32) (y Decimal128, err error) {
 	if math.IsInf(x, 0) || math.IsNaN(x) {
 		return Decimal128{}, moerr.NewInvalidInputNoCtx("Can't convert Float64 To Decimal128, Float64 is Inf or NaN")
@@ -1797,31 +1836,61 @@ func Decimal128FromFloat64(x float64, width, scale int32) (y Decimal128, err err
 	if width > 38 || width < 1 || scale > width || scale < 0 {
 		return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
 	}
-	// Keep exact integral float64 values on the integer path. Do not scale x in
-	// float64: the scaled value may no longer retain integer precision.
-	if math.Trunc(x) == x && math.Abs(x) < FloatHigh {
-		negative := x < 0
-		magnitude := Decimal128{B0_63: uint64(math.Abs(x))}
-		magnitude, err = magnitude.Scale(scale)
-		if err != nil || magnitude.B64_127>>63 != 0 || !magnitude.Less(decimal128WidthLimit(width)) {
+
+	limit := decimal128WidthLimit(width)
+	if magnitude, integral, fits := decimal128IntegralFloat64(x); integral {
+		if !fits {
 			return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
 		}
-		if negative {
+		magnitude, err = magnitude.Scale(scale)
+		if err != nil || !magnitude.Less(limit) {
+			return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
+		}
+		if x < 0 {
 			magnitude = magnitude.Minus()
 		}
 		return magnitude, nil
 	}
 
-	y, err = ParseDecimal128(strconv.FormatFloat(x, 'g', -1, 64), width, scale)
-	if err != nil {
-		// Keep the legacy Float64 conversion error contract instead of leaking
-		// the parser's implementation-specific overflow text.
+	z := x
+	signx := false
+	n := scale
+	if x < 0 {
+		z = -z
+		signx = true
+	}
+	for n > 19 {
+		n -= 19
+		z *= float64(Pow10[19])
+	}
+	z *= float64(Pow10[n])
+	if z > FloatHigh {
+		n = 0
+		for z > FloatHigh {
+			z /= 10
+			n++
+		}
+		if z < float64(Pow10[19]) {
+			if n > 19 || width-n < 19 {
+				return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
+			}
+		} else if n > 18 || width-n < 20 {
+			return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
+		}
+		y.B0_63 = uint64(z)
+		y, _ = y.Scale(n)
+	} else {
+		if z*2 > FloatHigh || uint64(z*2)&1 == 0 {
+			y.B0_63 = uint64(z)
+		} else {
+			y.B0_63 = uint64(z) + 1
+		}
+	}
+	if !y.Less(limit) {
 		return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
 	}
-	// ParseDecimal128 permits the signed minimum coefficient, while the legacy
-	// float conversion enforces a strict symmetric magnitude bound.
-	if y.Sign() && y == decimal128WidthLimit(width).Minus() {
-		return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
+	if signx {
+		y = y.Minus()
 	}
 	return y, nil
 }

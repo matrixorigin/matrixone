@@ -510,8 +510,10 @@ func TestDecimal128FromFloat64IntegralBoundaries(t *testing.T) {
 		{name: "negative 2^63", value: -math.Ldexp(1, 63), want: "-9223372036854775808"},
 		{name: "positive next below 2^64", value: math.Nextafter(math.Ldexp(1, 64), 0), want: "18446744073709549568"},
 		{name: "negative next below 2^64", value: -math.Nextafter(math.Ldexp(1, 64), 0), want: "-18446744073709549568"},
-		{name: "positive 2^64 shortest decimal", value: math.Ldexp(1, 64), want: "18446744073709552000"},
-		{name: "negative 2^64 shortest decimal", value: -math.Ldexp(1, 64), want: "-18446744073709552000"},
+		{name: "positive 2^64", value: math.Ldexp(1, 64), want: "18446744073709551616"},
+		{name: "negative 2^64", value: -math.Ldexp(1, 64), want: "-18446744073709551616"},
+		{name: "positive 2^126", value: math.Ldexp(1, 126), want: "85070591730234615865843651857942052864"},
+		{name: "negative 2^126", value: -math.Ldexp(1, 126), want: "-85070591730234615865843651857942052864"},
 	}
 
 	for _, test := range tests {
@@ -522,6 +524,10 @@ func TestDecimal128FromFloat64IntegralBoundaries(t *testing.T) {
 		})
 	}
 
+	result, err := Decimal128FromFloat64(math.Ldexp(1, 64), 38, 6)
+	require.NoError(t, err)
+	require.Equal(t, "18446744073709551616.000000", result.Format(6))
+
 	for _, value := range []float64{
 		math.Ldexp(1, 63),
 		-math.Ldexp(1, 63),
@@ -531,6 +537,10 @@ func TestDecimal128FromFloat64IntegralBoundaries(t *testing.T) {
 		-math.Ldexp(1, 64),
 	} {
 		_, err := Decimal128FromFloat64(value, 38, 38)
+		require.Error(t, err)
+	}
+	for _, value := range []float64{math.Ldexp(1, 127), -math.Ldexp(1, 127)} {
+		_, err := Decimal128FromFloat64(value, 38, 0)
 		require.Error(t, err)
 	}
 }
@@ -558,9 +568,15 @@ func TestDecimal128FromFloat64KeepsDecimalRoundingAndRangeChecks(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "1000000000001.000000", result.Format(6))
 
+	for _, width := range []int32{18, 19} {
+		result, err = Decimal128FromFloat64(1.005, width, 2)
+		require.NoError(t, err)
+		require.Equal(t, "1.00", result.Format(2))
+	}
+
 	result, err = Decimal128FromFloat64(1.0000000000000002, 38, 18)
 	require.NoError(t, err)
-	require.Equal(t, "1.000000000000000200", result.Format(18))
+	require.Equal(t, "1.000000000000000256", result.Format(18))
 
 	_, err = Decimal128FromFloat64(1000000000001, 18, 6)
 	require.Error(t, err)
@@ -571,6 +587,60 @@ func TestDecimal128FromFloat64KeepsDecimalRoundingAndRangeChecks(t *testing.T) {
 
 	_, err = Decimal128FromFloat64(1e20, 19, 6)
 	require.EqualError(t, err, "invalid input: Can't convert Float64 To Decimal128: 100000000000000000000.000000(19,6)")
+}
+
+var decimal128FromFloat64Sink Decimal128
+
+func TestDecimal128FromFloat64DoesNotAllocate(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		width int32
+		scale int32
+	}{
+		{name: "integral", value: 1000000000001, width: 38, scale: 6},
+		{name: "integral above uint64", value: math.Ldexp(1, 64), width: 38, scale: 0},
+		{name: "fractional", value: 12345.6789, width: 38, scale: 6},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := Decimal128FromFloat64(test.value, test.width, test.scale)
+			require.NoError(t, err)
+			decimal128FromFloat64Sink = result
+
+			allocs := testing.AllocsPerRun(100, func() {
+				decimal128FromFloat64Sink, _ = Decimal128FromFloat64(test.value, test.width, test.scale)
+			})
+			require.Zero(t, allocs)
+		})
+	}
+}
+
+func BenchmarkDecimal128FromFloat64(b *testing.B) {
+	tests := []struct {
+		name  string
+		value float64
+		width int32
+		scale int32
+	}{
+		{name: "integral", value: 1000000000001, width: 38, scale: 6},
+		{name: "integral above uint64", value: math.Ldexp(1, 64), width: 38, scale: 0},
+		{name: "fractional", value: 12345.6789, width: 38, scale: 6},
+	}
+
+	for _, test := range tests {
+		b.Run(test.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				result, err := Decimal128FromFloat64(test.value, test.width, test.scale)
+				if err != nil {
+					b.Fatal(err)
+				}
+				decimal128FromFloat64Sink = result
+			}
+		})
+	}
 }
 
 func TestDecimal128FromFloat64RejectsSpecialValuesAndInvalidTypes(t *testing.T) {

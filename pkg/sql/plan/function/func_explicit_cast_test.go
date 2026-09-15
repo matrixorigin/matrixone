@@ -703,17 +703,18 @@ func TestExplicitCastFloat64ToDecimal128PreservesScaledIntegerPrecision(t *testi
 	base := types.Decimal128{B0_63: 1000000000001000000}
 	lower := types.Decimal128{B0_63: 1000000000000000000}
 	higher := types.Decimal128{B0_63: 1000000000002000000}
-	inputs := []float64{1000000000001, -1000000000001, 1000000000000, 1000000000002, 0}
+	twoTo64 := types.Decimal128{B64_127: 1000000}
+	inputs := []float64{1000000000001, -1000000000001, 1000000000000, 1000000000002, math.Ldexp(1, 64), -math.Ldexp(1, 64), 0}
 	expect := NewFunctionTestResult(
 		target,
 		false,
-		[]types.Decimal128{base, base.Minus(), lower, higher, {}},
-		[]bool{false, false, false, false, true},
+		[]types.Decimal128{base, base.Minus(), lower, higher, twoTo64, twoTo64.Minus(), {}},
+		[]bool{false, false, false, false, false, false, true},
 	)
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
-			NewFunctionTestInput(types.T_float64.ToType(), inputs, []bool{false, false, false, false, true}),
+			NewFunctionTestInput(types.T_float64.ToType(), inputs, []bool{false, false, false, false, false, false, true}),
 			NewFunctionTestInput(target, []types.Decimal128{}, nil),
 		},
 		expect,
