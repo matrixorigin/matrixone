@@ -56,6 +56,7 @@ import (
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	hnswruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
@@ -66,6 +67,58 @@ import (
 type mongoDBMappingTestExecutor struct {
 	results map[string]executor.Result
 	sqls    []string
+}
+
+func TestPersistedIPFunctionAlterTargetAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	inetNtoa, err := planfunction.GetFunctionByName(t.Context(), "inet_ntoa", []types.Type{types.T_int64.ToType()})
+	require.NoError(t, err)
+	ipExpr := &plan2.Expr{
+		Typ: plan2.Type{Id: int32(types.T_varchar)},
+		Expr: &plan2.Expr_F{F: &plan2.Function{
+			Func: &plan2.ObjectRef{Obj: inetNtoa.GetEncodedOverloadID(), ObjName: "inet_ntoa"},
+			Args: []*plan2.Expr{{
+				Typ:  plan2.Type{Id: int32(types.T_int64)},
+				Expr: &plan2.Expr_Col{Col: &plan2.ColRef{ColPos: 0}},
+			}},
+		}},
+	}
+	source := &plan2.TableDef{Cols: []*plan2.ColDef{{Default: &plan2.Default{Expr: ipExpr}}}}
+	cleanTarget := &plan2.TableDef{Cols: []*plan2.ColDef{{Default: &plan2.Default{}}}}
+	newTarget := &plan2.TableDef{Cols: []*plan2.ColDef{{Default: &plan2.Default{Expr: ipExpr}}}}
+
+	for _, tc := range []struct {
+		name    string
+		copyDef *plan2.TableDef
+		version int64
+		wantErr bool
+	}{
+		{name: "removed expression uses replacement", copyDef: cleanTarget, version: defines.MORPCVersion70},
+		{name: "new expression is rejected before publish", copyDef: newTarget, version: defines.MORPCVersion70, wantErr: true},
+		{name: "new expression is admitted after rollout", copyDef: newTarget, version: defines.MORPCVersion72},
+		{name: "in-place target remains guarded", copyDef: nil, version: defines.MORPCVersion70, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.version)
+			qry := &plan2.AlterTable{TableDef: source, CopyTableDef: tc.copyDef}
+			target := persistedIPFunctionAlterTarget(qry)
+			err := plan.RequirePersistedIPFunctionProtocol(proc.Ctx, proc, target)
+			if tc.wantErr {
+				require.ErrorContains(t, err, "protocol version 72")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func (e *mongoDBMappingTestExecutor) Exec(

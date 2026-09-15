@@ -12210,7 +12210,7 @@ column_name_unresolved:
 ident:
     ID
     {
-		$$ = tree.NewCStr($1, 1)
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 |	QUOTE_ID
 	{
@@ -12218,11 +12218,11 @@ ident:
     }
 |   not_keyword
 	{
-    	$$ = tree.NewCStr($1, 1)
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 |   non_reserved_keyword
 	{
-    	$$ = tree.NewCStr($1, 1)
+		if rejectSQLModeReservedFunctionName(yylex, $1) { goto ret1 }; $$ = tree.NewCStr($1, 1)
     }
 
 db_name_ident:
@@ -13838,6 +13838,7 @@ function_call_generic:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
+            IsGeneric: isSQLModeSensitiveFunctionName($1),
             Exprs: $3,
         }
     }

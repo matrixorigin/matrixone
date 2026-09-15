@@ -103,6 +103,49 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 	require.Zero(t, rolledBack.expandProjects)
 }
 
+func TestGroupingSetInputSharingKeepsDecimalSumOnRawInput(t *testing.T) {
+	const sql = `select l_returnflag, l_linestatus, l_shipmode,
+		grouping(l_returnflag, l_linestatus, l_shipmode), sum(l_extendedprice)
+		from lineitem
+		group by rollup(l_returnflag, l_linestatus, l_shipmode)`
+
+	ctx := NewMockCompilerContext(true)
+	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+	rt.SetGlobalVariables("optimizer_hints", "")
+
+	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	shape := reachableGroupingSetShape(built.GetQuery())
+	// Checked fixed-width SUM is not associative in error semantics. Every
+	// grouping set must therefore aggregate the raw rows in their original
+	// order; SUM(SUM(x)) prefix reuse could introduce an intermediate overflow.
+	require.Equal(t, 1, shape.tableScans)
+	require.Equal(t, 1, shape.aggregates)
+	require.Equal(t, 1, shape.expandProjects)
+	require.Equal(t, 1, shape.aggregatesOnExpand)
+	require.Equal(t, 4, shape.sinkScans)
+	require.Equal(t, 1, shape.materializedSinks)
+}
+
 func TestGroupingSetInputSharingRejectsInheritedGroupingSentinel(t *testing.T) {
 	const sql = `select d.l_returnflag, grouping(d.l_returnflag), count(*)
 		from (
@@ -182,6 +225,43 @@ func TestGroupingSetInputSharingRequiresLegacyDrainWitness(t *testing.T) {
 	shape := reachableGroupingSetShape(built.GetQuery())
 	require.Zero(t, shape.expandProjects)
 	require.Zero(t, shape.sinkScans)
+}
+
+func TestGroupingSetInputSharingAllowsFallibleKeyWhenAllBranchesDrain(t *testing.T) {
+	const sql = `select cast(l_returnflag as bigint),
+		grouping(cast(l_returnflag as bigint)), count(*)
+		from lineitem
+		group by rollup(cast(l_returnflag as bigint))`
+
+	ctx := NewMockCompilerContext(true)
+	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion49)
+	rt.SetGlobalVariables("optimizer_hints", "")
+
+	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	shape := reachableGroupingSetShape(built.GetQuery())
+	require.Equal(t, 1, shape.tableScans)
+	require.Equal(t, 1, shape.expandProjects)
+	require.Equal(t, 2, shape.sinkScans)
 }
 
 func TestGroupingSetSentinelDetectionFollowsMaterializedSource(t *testing.T) {
@@ -300,6 +380,7 @@ func TestGroupingSetSharingFitsCostAndStorage(t *testing.T) {
 		{name: "single output row exceeds record safety bound", producerCost: 1e15, inputSize: 8, rows: 1, outSize: float64(materialized.MaxSpillBatchBytes)/2 + 1, branches: 3},
 		{name: "branch scan traffic loses", producerCost: 40, inputSize: 8, rows: 10, outSize: 16, branches: 20},
 		{name: "spill ceiling", producerCost: math.MaxFloat64 / 16, inputSize: 8, rows: groupingSetEstimatedSpillBytesLimit/8 + 1, outSize: 8, branches: 2},
+		{name: "wide high-cardinality result exceeds spill ceiling", producerCost: 300_000_000, inputSize: 1000, rows: 13_500_000, outSize: 1000, branches: 9},
 		{name: "single branch", producerCost: 1000, inputSize: 8, rows: 10, outSize: 16, branches: 1},
 		{name: "unknown input width", producerCost: 1000, rows: 10, outSize: 16, branches: 3},
 		{name: "nan producer", producerCost: math.NaN(), inputSize: 8, rows: 10, outSize: 16, branches: 3},
@@ -308,6 +389,29 @@ func TestGroupingSetSharingFitsCostAndStorage(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			require.Equal(t, test.want, groupingSetSharingFitsCostAndStorage(
 				test.producerCost, test.inputSize, test.rows, test.outSize, test.branches))
+		})
+	}
+}
+
+func TestGroupingSetMaterializedRowsForAdmission(t *testing.T) {
+	for _, test := range []struct {
+		name                              string
+		producerRows, aggregateRows, want float64
+		branches                          int
+		ok                                bool
+	}{
+		{name: "inflate optimistic groups", producerRows: 1_000_000, aggregateRows: 100, branches: 4, want: 3200, ok: true},
+		{name: "cap at relational ceiling", producerRows: 100, aggregateRows: 90, branches: 3, want: 300, ok: true},
+		{name: "keep larger aggregate estimate", producerRows: 10, aggregateRows: 40, branches: 3, want: 40, ok: true},
+		{name: "invalid producer", aggregateRows: 1, branches: 2},
+		{name: "single branch", producerRows: 10, aggregateRows: 1, branches: 1},
+		{name: "overflow", producerRows: math.MaxFloat64, aggregateRows: 1, branches: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := groupingSetMaterializedRowsForAdmission(
+				test.producerRows, test.aggregateRows, test.branches)
+			require.Equal(t, test.ok, ok)
+			require.Equal(t, test.want, got)
 		})
 	}
 }

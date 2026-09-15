@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"path"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -538,8 +539,16 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr, exposeCrossTableK
 				}
 			}
 			if matched != nil {
-				commonConds = append(commonConds, cond)
-				matched.side = JoinSideBoth
+				// Factoring evaluates a common predicate before the residual OR.
+				// Keep predicates that are not proven total in both residual
+				// branches, but do not let one such predicate hide an independent,
+				// safe common join key.
+				if !exposeCrossTable || isTruncationSafePredicateExpr(cond) {
+					commonConds = append(commonConds, cond)
+					matched.side = JoinSideBoth
+				} else {
+					leftOnlyConds = append(leftOnlyConds, cond)
+				}
 			} else {
 				leftOnlyConds = append(leftOnlyConds, cond)
 			}
@@ -554,14 +563,6 @@ func applyDistributivity(ctx context.Context, expr *plan.Expr, exposeCrossTableK
 		if len(commonConds) == 0 {
 			return expr
 		}
-		// Factoring evaluates a common predicate before the residual OR. That is
-		// only observationally equivalent when the common predicate is total and
-		// side-effect-free; otherwise it can expose an error or volatile call on
-		// rows for which the original expression short-circuited.
-		if exposeCrossTable && !areTruncationSafePredicates(commonConds) {
-			return expr
-		}
-
 		expr, _ = combinePlanConjunction(ctx, commonConds)
 
 		if len(leftOnlyConds) == 0 || len(rightOnlyConds) == 0 {
@@ -4108,6 +4109,12 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			return
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		if isPreparedGeometrySRIDFunction(name) && len(exprImpl.F.Args) >= 2 {
+			if len(preparedGeometrySRIDParamPositionsInExpr(exprImpl.F.Args[len(exprImpl.F.Args)-1])) > 0 {
+				rule.needs = true
+				return
+			}
+		}
 		if name == "bit_count" && len(exprImpl.F.Args) == 1 &&
 			isPreparedNumericFallbackExpr(exprImpl.F.Args[0]) {
 			// BIT_COUNT has its own value-aware trigger; text/BLOB executions keep
@@ -4160,6 +4167,218 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			for _, item := range exprImpl.List.List {
 				rule.scanExpr(item, false)
 			}
+		}
+	}
+}
+
+// PreparedPlanGeometrySRIDParamPositions returns the direct prepared markers
+// that own geometry SRID metadata. The positions are part of the runtime cache
+// key because two executions with the same scalar parameter type can still
+// produce different geometry result types (for example SRID 0 and 4326).
+func PreparedPlanGeometrySRIDParamPositions(preparePlan *Plan) []int32 {
+	sridPositions, _ := PreparedPlanGeometrySRIDCacheParamPositions(preparePlan)
+	return sridPositions
+}
+
+// PreparedPlanGeometrySRIDSourceParamPositions returns the prepared markers at
+// the geometry input of explicit-SRID constructors. A typed runtime NULL at
+// these positions changes the result metadata to an undefined SRID even when
+// the explicit SRID is a constant.
+func PreparedPlanGeometrySRIDSourceParamPositions(preparePlan *Plan) []int32 {
+	_, sourcePositions := PreparedPlanGeometrySRIDCacheParamPositions(preparePlan)
+	return sourcePositions
+}
+
+// PreparedPlanGeometrySRIDCacheParamPositions collects both classes of
+// geometry-SRID cache dependencies in one plan walk. Callers that execute a
+// prepared statement repeatedly should retain the returned slices for the
+// lifetime of that prepared-plan generation.
+func PreparedPlanGeometrySRIDCacheParamPositions(preparePlan *Plan) ([]int32, []int32) {
+	if preparePlan == nil {
+		return nil, nil
+	}
+	sridPositions := make(map[int32]struct{})
+	sourcePositions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		collectPreparedGeometrySRIDPositions(expr, sridPositions, sourcePositions)
+		return nil
+	})
+	return sortedPreparedGeometrySRIDPositions(sridPositions),
+		sortedPreparedGeometrySRIDPositions(sourcePositions)
+}
+
+func sortedPreparedGeometrySRIDPositions(positions map[int32]struct{}) []int32 {
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+// PreparedPlanGeometrySRIDSemanticKey adds the value-dependent part of the
+// runtime cache key for prepared geometry SRID setters/constructors. The
+// regular prepared key intentionally groups values by scalar domain; geometry
+// Width is metadata and therefore must distinguish each SRID value.
+func PreparedPlanGeometrySRIDSemanticKey(preparePlan *Plan, paramVals []any) string {
+	sridPositions, sourcePositions := PreparedPlanGeometrySRIDCacheParamPositions(preparePlan)
+	return PreparedPlanGeometrySRIDSemanticKeyForPositions(paramVals, sridPositions, sourcePositions)
+}
+
+// PreparedPlanGeometrySRIDSemanticKeyForPositions encodes the runtime values
+// for precomputed geometry-SRID dependencies. Keeping plan discovery separate
+// from value encoding lets EXECUTE avoid walking an otherwise unrelated plan.
+func PreparedPlanGeometrySRIDSemanticKeyForPositions(
+	paramVals []any, sridPositions, sourcePositions []int32,
+) string {
+	if len(sridPositions) == 0 && len(sourcePositions) == 0 {
+		return ""
+	}
+	var key strings.Builder
+	for _, position := range sridPositions {
+		if position < 0 || int(position) >= len(paramVals) {
+			return ""
+		}
+		param, ok := paramVals[position].(ParamValue)
+		if !ok {
+			return ""
+		}
+		if preparedParamValueIsNull(param) {
+			fmt.Fprintf(&key, "geometry-srid:%d:null;", position)
+			continue
+		}
+		rawValue := param.MaterializedValue
+		if rawValue == "" && param.Value != nil {
+			switch value := param.Value.(type) {
+			case []byte:
+				rawValue = string(value)
+			default:
+				rawValue = fmt.Sprint(value)
+			}
+		}
+		// Encode the value length as well as its contents.  The explicit NULL
+		// token keeps a user value such as "<null>" from aliasing a typed
+		// protocol NULL, while the length keeps delimiters in a value from
+		// colliding with the next cache-key field.
+		fmt.Fprintf(&key, "geometry-srid:%d:value:%d:%s;", position, len(rawValue), rawValue)
+	}
+	// A NULL geometry source can make the binder produce an undefined-SRID
+	// result even when the SRID marker itself is valid. That metadata decision
+	// is part of the specialized plan, so a typed protocol NULL and a non-NULL
+	// payload must not share one cache category merely because their physical
+	// source type is the same (for example BLOB NULL -> WKB).
+	for _, position := range sourcePositions {
+		if position < 0 || int(position) >= len(paramVals) {
+			return ""
+		}
+		param, ok := paramVals[position].(ParamValue)
+		if !ok {
+			return ""
+		}
+		fmt.Fprintf(&key, "geometry-source-null:%d:%t;", position, preparedParamValueIsNull(param))
+	}
+	return key.String()
+}
+
+func preparedParamValueIsNull(param ParamValue) bool {
+	return param.Value == nil && param.MaterializedValue == ""
+}
+
+func collectPreparedGeometrySRIDSourceParamPositions(expr *plan.Expr, positions map[int32]struct{}) {
+	collectPreparedGeometryParamPositions(expr, positions)
+}
+
+func collectPreparedGeometrySRIDPositions(
+	expr *plan.Expr,
+	sridPositions map[int32]struct{},
+	sourcePositions map[int32]struct{},
+) {
+	if expr == nil {
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil && isGeometrySRIDProducingFunction(fn.Func.GetObjName()) && len(fn.Args) >= 2 {
+			if sridPositions != nil && isPreparedGeometrySRIDFunction(fn.Func.GetObjName()) {
+				for _, position := range preparedGeometrySRIDParamPositionsInExpr(fn.Args[len(fn.Args)-1]) {
+					sridPositions[position] = struct{}{}
+				}
+			}
+			if sourcePositions != nil {
+				collectPreparedGeometrySRIDSourceParamPositions(fn.Args[0], sourcePositions)
+			}
+		}
+		for _, arg := range fn.Args {
+			collectPreparedGeometrySRIDPositions(arg, sridPositions, sourcePositions)
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		collectPreparedGeometrySRIDPositions(window.WindowFunc, sridPositions, sourcePositions)
+		for _, arg := range window.PartitionBy {
+			collectPreparedGeometrySRIDPositions(arg, sridPositions, sourcePositions)
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				collectPreparedGeometrySRIDPositions(order.Expr, sridPositions, sourcePositions)
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			collectPreparedGeometrySRIDPositions(item, sridPositions, sourcePositions)
+		}
+	}
+	if sub := expr.GetSub(); sub != nil {
+		collectPreparedGeometrySRIDPositions(sub.Child, sridPositions, sourcePositions)
+	}
+}
+
+func preparedGeometrySRIDParamPositionsInExpr(expr *plan.Expr) []int32 {
+	positions := make(map[int32]struct{})
+	collectPreparedGeometryParamPositions(expr, positions)
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func collectPreparedGeometryParamPositions(expr *plan.Expr, positions map[int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 {
+		positions[param.Pos] = struct{}{}
+		return
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F != nil {
+			for _, arg := range exprImpl.F.Args {
+				collectPreparedGeometryParamPositions(arg, positions)
+			}
+		}
+	case *plan.Expr_W:
+		if exprImpl.W != nil {
+			collectPreparedGeometryParamPositions(exprImpl.W.WindowFunc, positions)
+			for _, arg := range exprImpl.W.PartitionBy {
+				collectPreparedGeometryParamPositions(arg, positions)
+			}
+			for _, order := range exprImpl.W.OrderBy {
+				if order != nil {
+					collectPreparedGeometryParamPositions(order.Expr, positions)
+				}
+			}
+		}
+	case *plan.Expr_List:
+		if exprImpl.List != nil {
+			for _, item := range exprImpl.List.List {
+				collectPreparedGeometryParamPositions(item, positions)
+			}
+		}
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil {
+			collectPreparedGeometryParamPositions(exprImpl.Sub.Child, positions)
 		}
 	}
 }
@@ -5281,7 +5500,11 @@ func PreparedDecimalRuntimeTypes(value string) (normalized, visible types.Type, 
 }
 
 // PreparedDecimalRuntimeDomains additionally returns a bounded canonical
-// lexeme suitable for typed literal materialization.
+// lexeme suitable for typed literal materialization. The canonical lexeme is
+// always emitted in the normalized domain, so it is parseable by both the
+// normalized runtime type and the optional visible result type. Redundant
+// trailing zeroes are represented by the target type's scale instead of by
+// an oversized coefficient.
 func PreparedDecimalRuntimeDomains(value string) (normalized, visible types.Type, canonical string, ok bool) {
 	return preparedDecimalRuntimeDomains(value, true)
 }
@@ -5392,8 +5615,6 @@ func preparedDecimalRuntimeDomains(
 		return types.Type{}, types.Type{}, "", false
 	}
 
-	canonicalCoefficientDigits := coefficientDigits
-	canonicalExponent := visibleExponent
 	if visibleExponentBounded {
 		visible, ok = preparedDecimalTypeFromCoefficient(coefficientDigits, visibleExponent)
 	}
@@ -5403,24 +5624,19 @@ func preparedDecimalRuntimeDomains(
 		// falling back to its normalized domain instead of rejecting it before
 		// normalization or materializing the unbounded visible spelling.
 		visible = normalized
-		canonicalCoefficientDigits = normalizedCoefficientDigits
-		canonicalExponent = normalizedExponent
-	}
-	if canonicalCoefficientDigits > int64(len(coefficient)) {
-		return types.Type{}, types.Type{}, "", false
 	}
 	if !materialize {
 		return normalized, visible, "", true
 	}
 	var canonicalBuilder strings.Builder
-	canonicalBuilder.Grow(int(canonicalCoefficientDigits) + 21)
+	canonicalBuilder.Grow(int(normalizedCoefficientDigits) + 21)
 	if negative {
 		canonicalBuilder.WriteByte('-')
 	}
-	canonicalBuilder.Write(coefficient[:int(canonicalCoefficientDigits)])
-	if canonicalExponent != 0 {
+	canonicalBuilder.Write(coefficient[:int(normalizedCoefficientDigits)])
+	if normalizedExponent != 0 {
 		canonicalBuilder.WriteByte('e')
-		canonicalBuilder.WriteString(strconv.FormatInt(canonicalExponent, 10))
+		canonicalBuilder.WriteString(strconv.FormatInt(normalizedExponent, 10))
 	}
 	return normalized, visible, canonicalBuilder.String(), true
 }
@@ -6137,6 +6353,9 @@ func replaceParamValsWithSelection(
 	preserveDMLWrites bool,
 	selected []bool,
 ) (bool, error) {
+	originalSetOperationTypes := snapshotPreparedSetOperationOutputTypes(plan0.GetQuery())
+	originalSetOperationInputTypes := snapshotPreparedSetOperationInputTypes(
+		plan0.GetQuery(), originalSetOperationTypes)
 	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
 	params := make([]*Expr, len(paramVals))
 	sqlExecuteNumericParams := make([]*Expr, len(paramVals))
@@ -6365,13 +6584,17 @@ func replaceParamValsWithSelection(
 			return false, err
 		}
 	}
-	refreshPreparedPlanProjectionTypes(plan0)
+	projectionSpecialized, err := refreshPreparedPlanProjectionTypes(
+		ctx, plan0, originalSetOperationTypes, originalSetOperationInputTypes)
+	if err != nil {
+		return false, err
+	}
 
 	// A direct SELECT parameter is part of the result-column contract. Propagate
 	// its execute-time type through transparent projection/sort/distinct nodes
 	// so the final visible ColDef agrees with the rewritten source expression.
 	directResultSpecialized := propagatePreparedDirectResultTypes(plan0, paramVals)
-	return paramRule.specialized || directResultSpecialized, nil
+	return paramRule.specialized || projectionSpecialized || directResultSpecialized, nil
 }
 
 func propagatePreparedDirectResultTypes(plan0 *Plan, paramVals []any) bool {
@@ -6526,117 +6749,1073 @@ func attachPreparedRuntimeParamSource(expr, source *Expr) bool {
 	return true
 }
 
+type preparedPlanColumnTypeResolver func(*plan.ColRef, plan.Type) (plan.Type, bool)
+
+// refreshPreparedPlanProjectionExprType propagates execute-time source types
+// through one plan expression. When an input domain changes, its enclosing
+// function must be rebound too; otherwise the plan can pair a runtime vector
+// with an overload selected for the PREPARE-time type.
+func refreshPreparedPlanProjectionExprType(
+	ctx context.Context,
+	expr *plan.Expr,
+	resolveColumnType preparedPlanColumnTypeResolver,
+) (bool, error) {
+	if expr == nil {
+		return false, nil
+	}
+
+	changed := false
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		typ, ok := resolveColumnType(exprImpl.Col, expr.Typ)
+		if !ok {
+			return false, nil
+		}
+		changed = !reflect.DeepEqual(expr.Typ, typ)
+		expr.Typ = typ
+
+	case *plan.Expr_F:
+		if exprImpl.F == nil {
+			return false, nil
+		}
+		functionName := ""
+		if exprImpl.F.Func != nil {
+			functionName = exprImpl.F.Func.GetObjName()
+		}
+		originalArgTypes := make([]plan.Type, len(exprImpl.F.Args))
+		bitwiseAggregateSourceChanged := false
+		for i, arg := range exprImpl.F.Args {
+			if arg != nil {
+				originalArgTypes[i] = arg.Typ
+			}
+			if arg != nil && i == 0 && isPreparedBitwiseAggregate(functionName) &&
+				isBitwiseAggregatePrivateCast(arg) {
+				// CAST4 is owned by the bitwise aggregate, not by the source
+				// expression. Refresh a column-backed source here, but defer
+				// rebinding the conversion until the aggregate can choose again
+				// between its numeric and binary input domains.
+				argChanged, err := refreshPreparedPlanProjectionExprType(
+					ctx, arg.GetF().Args[0], resolveColumnType)
+				if err != nil {
+					return false, err
+				}
+				changed = changed || argChanged
+				bitwiseAggregateSourceChanged = bitwiseAggregateSourceChanged || argChanged
+				continue
+			}
+			argChanged, err := refreshPreparedPlanProjectionExprType(ctx, arg, resolveColumnType)
+			if err != nil {
+				return false, err
+			}
+			changed = changed || argChanged
+		}
+
+		argsChanged := false
+		for i, arg := range exprImpl.F.Args {
+			if arg != nil && !reflect.DeepEqual(arg.Typ, originalArgTypes[i]) {
+				argsChanged = true
+				break
+			}
+		}
+		if (!argsChanged && !bitwiseAggregateSourceChanged) || exprImpl.F.Func == nil || functionName == "" ||
+			isExplicitPreparedCast(expr) {
+			return changed, nil
+		}
+
+		originalType := expr.Typ
+		rebindArgs := DeepCopyExprList(exprImpl.F.Args)
+		if isPreparedBitwiseAggregate(functionName) && len(rebindArgs) > 0 &&
+			isBitwiseAggregatePrivateCast(rebindArgs[0]) {
+			// Re-run the aggregate binder against the refreshed source domain.
+			// It will insert CAST4 for numeric inputs or leave binary inputs on
+			// their native byte-oriented path.
+			rebindArgs[0] = DeepCopyExpr(rebindArgs[0].GetF().Args[0])
+		}
+		rebound, err := bindPreparedFuncExprImplByPlanExpr(
+			ctx,
+			expr,
+			functionName,
+			rebindArgs,
+			nil,
+		)
+		if err != nil {
+			return false, err
+		}
+		if rebound == nil {
+			return false, moerr.NewInternalError(ctx, "prepared projection function rebind returned nil")
+		}
+		if reboundFn := rebound.GetF(); reboundFn != nil {
+			preserveReboundFunctionMetadata(exprImpl.F, reboundFn)
+		}
+		expr.Typ = rebound.Typ
+		expr.Expr = rebound.Expr
+		return changed || !reflect.DeepEqual(expr.Typ, originalType) || argsChanged, nil
+
+	case *plan.Expr_List:
+		if exprImpl.List == nil {
+			return false, nil
+		}
+		for _, item := range exprImpl.List.List {
+			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType)
+			if err != nil {
+				return false, err
+			}
+			changed = changed || itemChanged
+		}
+
+	case *plan.Expr_W:
+		if exprImpl.W == nil {
+			return false, nil
+		}
+		if exprImpl.W.WindowFunc != nil {
+			windowFuncChanged, err := refreshPreparedPlanProjectionExprType(ctx, exprImpl.W.WindowFunc, resolveColumnType)
+			if err != nil {
+				return false, err
+			}
+			changed = changed || windowFuncChanged
+			if !reflect.DeepEqual(expr.Typ, exprImpl.W.WindowFunc.Typ) {
+				expr.Typ = exprImpl.W.WindowFunc.Typ
+				changed = true
+			}
+		}
+		for _, item := range exprImpl.W.PartitionBy {
+			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType)
+			if err != nil {
+				return false, err
+			}
+			changed = changed || itemChanged
+		}
+		for _, order := range exprImpl.W.OrderBy {
+			if order == nil {
+				continue
+			}
+			orderChanged, err := refreshPreparedPlanProjectionExprType(ctx, order.Expr, resolveColumnType)
+			if err != nil {
+				return false, err
+			}
+			changed = changed || orderChanged
+		}
+		if exprImpl.W.Frame != nil {
+			for _, bound := range []*plan.FrameBound{exprImpl.W.Frame.Start, exprImpl.W.Frame.End} {
+				if bound == nil {
+					continue
+				}
+				boundChanged, err := refreshPreparedPlanProjectionExprType(ctx, bound.Val, resolveColumnType)
+				if err != nil {
+					return false, err
+				}
+				changed = changed || boundChanged
+			}
+		}
+	}
+
+	return changed, nil
+}
+
+type preparedSetOperationNullKey struct {
+	nodeID int32
+	colPos int32
+}
+
+func isPreparedBareNullLiteral(expr *plan.Expr) bool {
+	if !isNullLiteralExpr(expr) {
+		return false
+	}
+	source := expr.GetLit().GetStringSource()
+	// A folded CAST(NULL AS T) is represented as a null literal whose source is
+	// an expression. Do not erase that explicit type contract. Zero is the
+	// legacy encoding for a source SQL literal; newer plans encode Literal as
+	// StringSource + 1.
+	return source == 0 || source == uint32(types.StringSourceLiteral)+1
+}
+
+func isPreparedSetOperationNode(nodeType plan.Node_NodeType) bool {
+	switch nodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+		plan.Node_MINUS, plan.Node_MINUS_ALL:
+		return true
+	default:
+		return false
+	}
+}
+
+func snapshotPreparedSetOperationOutputTypes(query *plan.Query) map[*plan.Node][]plan.Type {
+	if query == nil {
+		return nil
+	}
+	outputTypes := make(map[*plan.Node][]plan.Type)
+	for _, node := range query.Nodes {
+		if node == nil || !isPreparedSetOperationNode(node.NodeType) {
+			continue
+		}
+		typesByColumn := make([]plan.Type, len(node.ProjectList))
+		for colPos, expr := range node.ProjectList {
+			if expr != nil {
+				typesByColumn[colPos] = expr.Typ
+			}
+		}
+		outputTypes[node] = typesByColumn
+	}
+	return outputTypes
+}
+
+type preparedSetOperationInputKey struct {
+	node      *plan.Node
+	branchIdx int
+	colPos    int
+}
+
+// snapshotPreparedSetOperationInputTypes records the SQL value expression
+// exposed by each set-operation branch before execute-time parameter
+// replacement. A set-operation node can also be used by DML as an internal
+// row-merging protocol; comparing branch inputs against this snapshot limits
+// specialization to columns whose execute-time domain actually changed.
+func snapshotPreparedSetOperationInputTypes(
+	query *plan.Query,
+	originalOutputTypes map[*plan.Node][]plan.Type,
+) map[preparedSetOperationInputKey]plan.Type {
+	inputTypes := make(map[preparedSetOperationInputKey]plan.Type)
+	if query == nil {
+		return inputTypes
+	}
+	for _, node := range query.Nodes {
+		if node == nil || !isPreparedSetOperationNode(node.NodeType) {
+			continue
+		}
+		for branchIdx, childID := range node.Children {
+			if childID < 0 || int(childID) >= len(query.Nodes) || query.Nodes[childID] == nil {
+				continue
+			}
+			child := query.Nodes[childID]
+			for colPos, expr := range child.ProjectList {
+				if expr == nil {
+					continue
+				}
+				targetType := plan.Type{}
+				if originalTypes, ok := originalOutputTypes[node]; ok && colPos < len(originalTypes) {
+					targetType = originalTypes[colPos]
+				}
+				source := unwrapPreparedSetOperationCoercion(
+					query, childID, colPos, targetType, expr)
+				if source == nil {
+					continue
+				}
+				inputTypes[preparedSetOperationInputKey{
+					node: node, branchIdx: branchIdx, colPos: colPos,
+				}] = source.Typ
+			}
+		}
+	}
+	return inputTypes
+}
+
+func preparedSetOperationOutputIsPureNull(
+	query *plan.Query,
+	nodeID, colPos int32,
+	memo map[preparedSetOperationNullKey]bool,
+	visiting map[preparedSetOperationNullKey]bool,
+) bool {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
+		return false
+	}
+	key := preparedSetOperationNullKey{nodeID: nodeID, colPos: colPos}
+	if result, ok := memo[key]; ok {
+		return result
+	}
+	if visiting[key] {
+		return false
+	}
+	visiting[key] = true
+	defer delete(visiting, key)
+
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	if isPreparedSetOperationNode(node.NodeType) {
+		if len(node.Children) == 0 {
+			return false
+		}
+		for _, childID := range node.Children {
+			if !preparedSetOperationOutputIsPureNull(query, childID, colPos, memo, visiting) {
+				memo[key] = false
+				return false
+			}
+		}
+		memo[key] = true
+		return true
+	}
+
+	// Only follow nodes whose output can transparently preserve one child value.
+	// In particular, do not look through an explicit CAST: CAST(NULL AS T) has
+	// a real type contract and must participate in common-type selection.
+	switch node.NodeType {
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_ASSERT,
+		plan.Node_MATERIAL, plan.Node_PARTITION, plan.Node_SORT,
+		plan.Node_DISTINCT, plan.Node_SAMPLE:
+	default:
+		return false
+	}
+	if len(node.Children) != 1 {
+		return false
+	}
+	if int(colPos) >= len(node.ProjectList) {
+		result := preparedSetOperationOutputIsPureNull(
+			query, node.Children[0], colPos, memo, visiting,
+		)
+		memo[key] = result
+		return result
+	}
+	expr := node.ProjectList[colPos]
+	if isPreparedBareNullLiteral(expr) {
+		memo[key] = true
+		return true
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	result := preparedSetOperationOutputIsPureNull(
+		query, node.Children[0], col.ColPos, memo, visiting,
+	)
+	memo[key] = result
+	return result
+}
+
+func samePreparedSetOperationType(left, right plan.Type) bool {
+	left.NotNullable, right.NotNullable = false, false
+	left.PadSpace, right.PadSpace = false, false
+	return reflect.DeepEqual(left, right)
+}
+
+func unwrapPreparedSetOperationCoercion(
+	query *plan.Query,
+	nodeID int32,
+	colPos int,
+	targetType plan.Type,
+	expr *plan.Expr,
+) *plan.Expr {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || expr == nil {
+		return expr
+	}
+	branch := query.Nodes[nodeID]
+	if branch == nil || branch.NodeType != plan.Node_PROJECT || colPos >= len(branch.ProjectList) ||
+		branch.ProjectList[colPos] != expr {
+		return expr
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || strings.ToLower(fn.Func.GetObjName()) != "cast" ||
+		fn.GetSyntaxExplicitCast() || len(fn.Args) != 2 || fn.Args[1] == nil || fn.Args[1].GetT() == nil {
+		return expr
+	}
+	_, overloadID := function.DecodeOverloadID(fn.Func.GetObj())
+	if overloadID != 0 && overloadID != 3 || !samePreparedSetOperationType(expr.Typ, targetType) {
+		return expr
+	}
+	return fn.Args[0]
+}
+
+func preparedSetOperationCommonType(
+	ctx context.Context,
+	currentOutputType plan.Type,
+	branchExprs []*plan.Expr,
+	pureNullBranches []bool,
+) (types.Type, bool, error) {
+	argTypes := make([]types.Type, 0, len(branchExprs))
+	argExprs := make([]*plan.Expr, 0, len(branchExprs))
+	hasDecimalInput := false
+	for branchIdx, expr := range branchExprs {
+		if expr == nil || branchIdx < len(pureNullBranches) && pureNullBranches[branchIdx] {
+			continue
+		}
+		typ := makeTypeByPlan2Expr(expr)
+		if typ.Oid == types.T_any {
+			continue
+		}
+		argTypes = append(argTypes, typ)
+		argExprs = append(argExprs, expr)
+		hasDecimalInput = hasDecimalInput || typ.Oid.IsDecimal()
+	}
+	if len(argTypes) == 0 {
+		return types.Type{}, false, nil
+	}
+	preserveGroupingBinary :=
+		(types.T(currentOutputType.Id) == types.T_binary || types.T(currentOutputType.Id) == types.T_varbinary) &&
+			(argTypes[0].Oid == types.T_binary || argTypes[0].Oid == types.T_varbinary)
+	for _, typ := range argTypes[1:] {
+		if typ.Oid != argTypes[0].Oid {
+			preserveGroupingBinary = false
+			break
+		}
+	}
+	if hasDecimalInput {
+		for i, expr := range argExprs {
+			if exact, ok := setOperationIntegerLiteralDecimalType(expr); ok {
+				argTypes[i] = exact
+			}
+		}
+	}
+
+	coalesce, err := function.GetFunctionByName(ctx, "coalesce", argTypes)
+	if err != nil {
+		return types.Type{}, false, err
+	}
+	castTypes, _ := coalesce.ShouldDoImplicitTypeCast()
+	targetType := argTypes[0]
+	if len(castTypes) > 0 {
+		targetType = castTypes[0]
+		if targetType.Oid == types.T_datetime {
+			for i := range castTypes {
+				castTypes[i].Scale = 0
+			}
+			targetType = castTypes[0]
+		}
+	} else if targetType.Oid == types.T_varchar || targetType.Oid == types.T_char {
+		for _, typ := range argTypes {
+			if targetType.Width < typ.Width {
+				targetType.Width = typ.Width
+			}
+		}
+	}
+
+	// Grouping-set DISTINCT plans deliberately preserve matching binary input
+	// domains. Ordinary set operations widen binary outputs to BLOB; retaining
+	// the prepared binary output here preserves that special planner contract.
+	if (targetType.Oid == types.T_binary || targetType.Oid == types.T_varbinary) && !preserveGroupingBinary {
+		targetType = types.T_blob.ToType()
+	} else if preserveGroupingBinary {
+		targetType = argTypes[0]
+		for _, typ := range argTypes[1:] {
+			if targetType.Width < typ.Width {
+				targetType.Width = typ.Width
+			}
+		}
+	}
+	return targetType, true, nil
+}
+
+func preparedSetOperationOutputType(
+	nodeType plan.Node_NodeType,
+	leftType, rightType plan.Type,
+	branchExprs []*plan.Expr,
+) plan.Type {
+	outputType := setOperationOutputType(nodeType, leftType, rightType)
+	if types.T(outputType.Id) != types.T_varchar && types.T(outputType.Id) != types.T_text {
+		return outputType
+	}
+	hasChar, hasVariableString := false, false
+	hasPadSpaceProvenance := outputType.PadSpace
+	for _, expr := range branchExprs {
+		if expr == nil {
+			continue
+		}
+		switch types.T(expr.Typ.Id) {
+		case types.T_char:
+			hasChar = true
+		case types.T_varchar, types.T_text:
+			hasVariableString = true
+		}
+		hasPadSpaceProvenance = hasPadSpaceProvenance || hasPadSpaceStringProvenance(expr)
+	}
+	if hasPadSpaceProvenance || hasChar && hasVariableString {
+		outputType.PadSpace = true
+	}
+	return outputType
+}
+
+func nextPreparedPlanBindingTag(query *plan.Query) (int32, error) {
+	maxTag := int32(-1)
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		for _, tag := range node.BindingTags {
+			if tag > maxTag {
+				maxTag = tag
+			}
+		}
+	}
+	if maxTag == math.MaxInt32 {
+		return 0, moerr.NewInternalErrorNoCtx("prepared plan exhausted binding tags")
+	}
+	return maxTag + 1, nil
+}
+
+func appendPreparedSetOperationBranchProjection(
+	ctx context.Context,
+	query *plan.Query,
+	setNode *plan.Node,
+	branchIdx int,
+	childProjectLists [][]*plan.Expr,
+	sourceExpressions []*plan.Expr,
+	eligibleColumns []bool,
+	targetTypes []types.Type,
+	targetValid []bool,
+	pureNullColumns []bool,
+) (bool, error) {
+	if branchIdx < 0 || branchIdx >= len(setNode.Children) || branchIdx >= len(childProjectLists) {
+		return false, nil
+	}
+	childID := setNode.Children[branchIdx]
+	if childID < 0 || int(childID) >= len(query.Nodes) || query.Nodes[childID] == nil {
+		return false, nil
+	}
+	childProjects := childProjectLists[branchIdx]
+	changed := false
+	needsUnwrappedProjection := false
+	for colPos, source := range childProjects {
+		if colPos >= len(eligibleColumns) || !eligibleColumns[colPos] {
+			continue
+		}
+		if colPos < len(sourceExpressions) && sourceExpressions[colPos] != nil && sourceExpressions[colPos] != source {
+			needsUnwrappedProjection = true
+			break
+		}
+	}
+	if needsUnwrappedProjection {
+		branch := query.Nodes[childID]
+		if branch == nil || branch.NodeType != plan.Node_PROJECT || len(branch.ProjectList) != len(sourceExpressions) {
+			return false, moerr.NewInternalErrorf(ctx,
+				"prepared set-operation coercion source cannot be isolated for node %d branch %d",
+				setNode.NodeId, branchIdx)
+		}
+		if len(query.Nodes) >= math.MaxInt32 {
+			return false, moerr.NewInternalError(ctx, "prepared plan exhausted node ids")
+		}
+		tag, err := nextPreparedPlanBindingTag(query)
+		if err != nil {
+			return false, err
+		}
+		branchCopy := DeepCopyNode(branch)
+		branchCopy.NodeId = int32(len(query.Nodes))
+		branchCopy.BindingTags = []int32{tag}
+		if branchCopy.Stats == nil {
+			branchCopy.Stats = preparedSetOperationProjectionStats(branch.Stats)
+		}
+		for colPos, source := range sourceExpressions {
+			if colPos < len(eligibleColumns) && eligibleColumns[colPos] &&
+				source != nil && source != childProjects[colPos] {
+				branchCopy.ProjectList[colPos] = DeepCopyExpr(source)
+			}
+		}
+		query.Nodes = append(query.Nodes, branchCopy)
+		setNode.Children[branchIdx] = branchCopy.NodeId
+		childID = branchCopy.NodeId
+		childProjects = branchCopy.ProjectList
+		childProjectLists[branchIdx] = childProjects
+		changed = true
+	}
+	needsProjection := false
+	for colPos, source := range childProjects {
+		if colPos >= len(eligibleColumns) || !eligibleColumns[colPos] ||
+			source == nil || colPos >= len(targetTypes) || colPos >= len(targetValid) || !targetValid[colPos] {
+			continue
+		}
+		sourceType := makeTypeByPlan2Expr(source)
+		pureNull := colPos < len(pureNullColumns) && pureNullColumns[colPos]
+		if sourceType.Oid == types.T_any || pureNull || !sourceType.Eq(targetTypes[colPos]) {
+			needsProjection = true
+			break
+		}
+	}
+	if !needsProjection {
+		return changed, nil
+	}
+	if len(childProjects) != len(setNode.ProjectList) {
+		return false, moerr.NewInternalErrorf(ctx,
+			"prepared set-operation branch width %d does not match output width %d",
+			len(childProjects), len(setNode.ProjectList))
+	}
+	if len(query.Nodes) >= math.MaxInt32 {
+		return false, moerr.NewInternalError(ctx, "prepared plan exhausted node ids")
+	}
+	tag, err := nextPreparedPlanBindingTag(query)
+	if err != nil {
+		return false, err
+	}
+
+	projects := make([]*plan.Expr, len(childProjects))
+	for colPos, source := range childProjects {
+		if source == nil {
+			return false, moerr.NewInternalErrorf(ctx,
+				"prepared set-operation branch has a nil projection at column %d", colPos)
+		}
+		name := ""
+		if sourceCol := source.GetCol(); sourceCol != nil {
+			name = sourceCol.Name
+		}
+		expr := &plan.Expr{
+			Typ: source.Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: 0,
+				ColPos: int32(colPos),
+				Name:   name,
+			}},
+		}
+		if colPos < len(eligibleColumns) && eligibleColumns[colPos] &&
+			colPos < len(targetTypes) && colPos < len(targetValid) && targetValid[colPos] {
+			sourceType := makeTypeByPlan2Expr(source)
+			pureNull := colPos < len(pureNullColumns) && pureNullColumns[colPos]
+			if sourceType.Oid == types.T_any || pureNull {
+				expr.Typ = makePlan2Type(&targetTypes[colPos])
+				expr.Typ.NotNullable = source.Typ.NotNullable
+			} else if !sourceType.Eq(targetTypes[colPos]) {
+				targetPlanType := makePlan2Type(&targetTypes[colPos])
+				if targetTypes[colPos].Oid == types.T_char {
+					expr, err = appendSetOperationCastBeforeExpr(ctx, expr, targetPlanType)
+				} else {
+					expr, err = appendCastBeforeExpr(ctx, expr, targetPlanType)
+				}
+				if err != nil {
+					return false, err
+				}
+			}
+		}
+		projects[colPos] = expr
+	}
+
+	projectNodeID := int32(len(query.Nodes))
+	projectNode := &plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		NodeId:      projectNodeID,
+		Children:    []int32{childID},
+		ProjectList: projects,
+		BindingTags: []int32{tag},
+		Stats:       preparedSetOperationProjectionStats(query.Nodes[childID].Stats),
+	}
+	query.Nodes = append(query.Nodes, projectNode)
+	setNode.Children[branchIdx] = projectNodeID
+	childProjectLists[branchIdx] = projects
+	return true, nil
+}
+
+// preparedSetOperationProjectionStats gives a runtime-added PROJECT the same
+// row/cardinality estimate as its input while keeping the operator-specific
+// hash/shuffle state local to the input node. Runtime plan rewrites happen
+// after the normal builder has initialized and calculated node statistics, so
+// leaving Stats nil would make later DOP calculation dereference a nil map.
+func preparedSetOperationProjectionStats(childStats *plan.Stats) *plan.Stats {
+	stats := DefaultStats()
+	if childStats == nil {
+		return stats
+	}
+	stats.TableCnt = childStats.TableCnt
+	stats.Cost = childStats.Cost
+	stats.Outcnt = childStats.Outcnt
+	stats.Selectivity = childStats.Selectivity
+	stats.BlockNum = childStats.BlockNum
+	stats.Rowsize = childStats.Rowsize
+	return stats
+}
+
+func reconcilePreparedSetOperationInputs(
+	ctx context.Context,
+	query *plan.Query,
+	node *plan.Node,
+	childProjectLists [][]*plan.Expr,
+	originalOutputTypes map[*plan.Node][]plan.Type,
+	originalInputTypes map[preparedSetOperationInputKey]plan.Type,
+) (bool, []bool, error) {
+	if !isPreparedSetOperationNode(node.NodeType) || len(node.Children) < 2 || len(node.ProjectList) == 0 {
+		return false, nil, nil
+	}
+	targetTypes := make([]types.Type, len(node.ProjectList))
+	targetValid := make([]bool, len(node.ProjectList))
+	pureNullColumns := make([][]bool, len(childProjectLists))
+	sourceExpressions := make([][]*plan.Expr, len(childProjectLists))
+	inputTypeChanged := make([]bool, len(node.ProjectList))
+	pureNullMemo := make(map[preparedSetOperationNullKey]bool)
+	pureNullVisiting := make(map[preparedSetOperationNullKey]bool)
+	for branchIdx, projects := range childProjectLists {
+		pureNullColumns[branchIdx] = make([]bool, len(projects))
+		sourceExpressions[branchIdx] = make([]*plan.Expr, len(projects))
+		if branchIdx >= len(node.Children) {
+			continue
+		}
+		for colPos := range projects {
+			sourceExpressions[branchIdx][colPos] = projects[colPos]
+			pureNullColumns[branchIdx][colPos] = preparedSetOperationOutputIsPureNull(
+				query, node.Children[branchIdx], int32(colPos), pureNullMemo, pureNullVisiting,
+			)
+			if !pureNullColumns[branchIdx][colPos] && projects[colPos] != nil {
+				currentOutputType := plan.Type{}
+				if colPos < len(node.ProjectList) && node.ProjectList[colPos] != nil {
+					currentOutputType = node.ProjectList[colPos].Typ
+				}
+				if originalTypes, ok := originalOutputTypes[node]; ok && colPos < len(originalTypes) {
+					currentOutputType = originalTypes[colPos]
+				}
+				sourceExpressions[branchIdx][colPos] = unwrapPreparedSetOperationCoercion(
+					query, node.Children[branchIdx], colPos, currentOutputType, projects[colPos],
+				)
+			}
+			if colPos < len(node.ProjectList) && sourceExpressions[branchIdx][colPos] != nil {
+				originalType, ok := originalInputTypes[preparedSetOperationInputKey{
+					node: node, branchIdx: branchIdx, colPos: colPos,
+				}]
+				if ok && !reflect.DeepEqual(sourceExpressions[branchIdx][colPos].Typ, originalType) {
+					inputTypeChanged[colPos] = true
+				}
+			}
+		}
+	}
+	// Only columns whose unwrapped SQL input type changed are eligible for
+	// execute-time reconciliation. Ineligible columns may contain an existing
+	// set-operation cast or an internal DML value (for example ROWID); retain
+	// their original branch expression and output contract byte-for-byte.
+	for branchIdx := range sourceExpressions {
+		for colPos := range sourceExpressions[branchIdx] {
+			if colPos >= len(inputTypeChanged) || !inputTypeChanged[colPos] {
+				sourceExpressions[branchIdx][colPos] = childProjectLists[branchIdx][colPos]
+			}
+		}
+	}
+	changed := false
+	for colPos := range node.ProjectList {
+		if !inputTypeChanged[colPos] {
+			continue
+		}
+		branchExprs := make([]*plan.Expr, len(childProjectLists))
+		valid := len(childProjectLists) == len(node.Children)
+		for branchIdx, projects := range childProjectLists {
+			if !valid || colPos >= len(projects) || projects[colPos] == nil {
+				valid = false
+				break
+			}
+			branchExprs[branchIdx] = sourceExpressions[branchIdx][colPos]
+		}
+		if !valid {
+			continue
+		}
+		currentOutputType := node.ProjectList[colPos].Typ
+		if originalTypes, ok := originalOutputTypes[node]; ok && colPos < len(originalTypes) {
+			currentOutputType = originalTypes[colPos]
+		}
+		pureNullBranches := make([]bool, len(branchExprs))
+		for branchIdx := range branchExprs {
+			if branchIdx < len(pureNullColumns) && colPos < len(pureNullColumns[branchIdx]) {
+				pureNullBranches[branchIdx] = pureNullColumns[branchIdx][colPos]
+			}
+		}
+		targetType, ok, err := preparedSetOperationCommonType(
+			ctx, currentOutputType, branchExprs, pureNullBranches,
+		)
+		if err != nil {
+			return false, inputTypeChanged, err
+		}
+		if !ok {
+			continue
+		}
+		targetTypes[colPos] = targetType
+		targetValid[colPos] = true
+	}
+	for branchIdx := range node.Children {
+		wrapped, err := appendPreparedSetOperationBranchProjection(
+			ctx, query, node, branchIdx, childProjectLists, sourceExpressions[branchIdx],
+			inputTypeChanged,
+			targetTypes, targetValid,
+			pureNullColumns[branchIdx],
+		)
+		if err != nil {
+			return false, inputTypeChanged, err
+		}
+		changed = changed || wrapped
+	}
+	for colPos := range node.ProjectList {
+		if !inputTypeChanged[colPos] {
+			continue
+		}
+		if colPos >= len(childProjectLists[0]) || childProjectLists[0][colPos] == nil {
+			continue
+		}
+		outputType := childProjectLists[0][colPos].Typ
+		for branchIdx := 1; branchIdx < len(childProjectLists); branchIdx++ {
+			if colPos >= len(childProjectLists[branchIdx]) || childProjectLists[branchIdx][colPos] == nil {
+				continue
+			}
+			outputType = setOperationOutputType(
+				node.NodeType, outputType, childProjectLists[branchIdx][colPos].Typ,
+			)
+		}
+		branchExprs := make([]*plan.Expr, len(childProjectLists))
+		for branchIdx, projects := range childProjectLists {
+			if colPos < len(projects) {
+				branchExprs[branchIdx] = projects[colPos]
+			}
+		}
+		if len(branchExprs) > 1 && branchExprs[0] != nil && branchExprs[1] != nil {
+			outputType = preparedSetOperationOutputType(
+				node.NodeType,
+				branchExprs[0].Typ,
+				branchExprs[1].Typ,
+				branchExprs,
+			)
+		}
+		if !reflect.DeepEqual(node.ProjectList[colPos].Typ, outputType) {
+			node.ProjectList[colPos].Typ = outputType
+			changed = true
+		}
+	}
+	return changed, inputTypeChanged, nil
+}
+
+func refreshPreparedSetOperationPhysicalKeys(
+	ctx context.Context,
+	node *plan.Node,
+	childProjectLists [][]*plan.Expr,
+) error {
+	switch node.NodeType {
+	case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS:
+	default:
+		return nil
+	}
+	required := make([]bool, len(node.ProjectList))
+	anyRequired := false
+	for colPos, output := range node.ProjectList {
+		if output == nil || (types.T(output.Typ.Id) != types.T_varchar && types.T(output.Typ.Id) != types.T_text) {
+			continue
+		}
+		hasChar, hasVariableString, hasPromotedChar := false, false, output.Typ.PadSpace
+		for _, projects := range childProjectLists {
+			if colPos >= len(projects) || projects[colPos] == nil {
+				continue
+			}
+			expr := projects[colPos]
+			switch types.T(expr.Typ.Id) {
+			case types.T_char:
+				hasChar = true
+			case types.T_varchar, types.T_text:
+				hasVariableString = true
+			}
+			hasPromotedChar = hasPromotedChar || hasPadSpaceStringProvenance(expr)
+		}
+		required[colPos] = hasPromotedChar || hasChar && hasVariableString
+		anyRequired = anyRequired || required[colPos]
+	}
+	if !anyRequired {
+		node.PhysicalEqualityKeyList = nil
+		return nil
+	}
+	keys := make([]*plan.Expr, len(node.ProjectList))
+	for colPos, expr := range node.ProjectList {
+		if expr == nil {
+			return moerr.NewInternalErrorf(ctx,
+				"prepared set-operation output has a nil projection at column %d", colPos)
+		}
+		keys[colPos] = DeepCopyExpr(expr)
+		if required[colPos] {
+			var err error
+			keys[colPos], err = appendSetOperationCastBeforeExpr(ctx, keys[colPos], keys[colPos].Typ)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	node.PhysicalEqualityKeyList = keys
+	return nil
+}
+
 // refreshPreparedPlanProjectionTypes repairs synthetic column expressions
 // whose source expression changed type while a prepared plan was rebound.
 // Aggregate and window nodes expose their computed values through positional
 // column references; the expression visitor updates the source expression but
-// cannot infer the cached type on those references. Downstream PROJECT nodes
-// must be refreshed as well so result metadata and vector decoding agree.
-func refreshPreparedPlanProjectionTypes(plan0 *Plan) {
+// cannot infer the cached type on those references. Downstream nodes must
+// refresh both their nested references and the overloads of functions
+// consuming those references.
+func refreshPreparedPlanProjectionTypes(
+	ctx context.Context,
+	plan0 *Plan,
+	originalSetOperationTypes map[*plan.Node][]plan.Type,
+	originalSetOperationInputTypes map[preparedSetOperationInputKey]plan.Type,
+) (bool, error) {
 	query := plan0.GetQuery()
 	if query == nil {
-		return
+		return false, nil
 	}
 
+	specialized := false
 	visited := make(map[int32]bool)
-	var refreshNode func(int32)
-	refreshNode = func(nodeID int32) {
+	var refreshNode func(int32) error
+	refreshNode = func(nodeID int32) error {
 		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
-			return
+			return nil
 		}
 		visited[nodeID] = true
 		node := query.Nodes[nodeID]
 		if node == nil {
-			return
+			return nil
 		}
 		for _, childID := range node.Children {
-			refreshNode(childID)
+			if err := refreshNode(childID); err != nil {
+				return err
+			}
 		}
 
-		switch node.NodeType {
-		case plan.Node_AGG:
-			groupSize := int32(len(node.GroupBy))
-			for _, expr := range node.ProjectList {
-				if expr == nil {
-					continue
-				}
-				col := expr.GetCol()
-				if col == nil {
-					continue
-				}
+		// Nodes keep typed ColRefs in their output projections and local
+		// expressions (for example FILTER predicates and SORT keys). Refresh all
+		// such references after their children, then rebind consumers bottom-up.
+		childProjectLists := make([][]*plan.Expr, len(node.Children))
+		for pos, childID := range node.Children {
+			if childID >= 0 && int(childID) < len(query.Nodes) && query.Nodes[childID] != nil {
+				childProjectLists[pos] = query.Nodes[childID].ProjectList
+			}
+		}
+		setOperationSpecialized, _, err := reconcilePreparedSetOperationInputs(
+			ctx, query, node, childProjectLists, originalSetOperationTypes,
+			originalSetOperationInputTypes,
+		)
+		if err != nil {
+			return err
+		}
+		specialized = specialized || setOperationSpecialized
+		childProjectSize := int32(0)
+		if len(childProjectLists) == 1 {
+			childProjectSize = int32(len(childProjectLists[0]))
+		}
+		resolveColumnType := func(col *plan.ColRef, currentType plan.Type) (plan.Type, bool) {
+			if col == nil || col.ColPos < 0 {
+				return plan.Type{}, false
+			}
+			switch node.NodeType {
+			case plan.Node_AGG:
 				switch col.RelPos {
 				case -1:
-					if col.ColPos >= 0 && int(col.ColPos) < len(node.GroupBy) {
-						expr.Typ = node.GroupBy[col.ColPos].Typ
+					if int(col.ColPos) < len(node.GroupBy) && node.GroupBy[col.ColPos] != nil {
+						return node.GroupBy[col.ColPos].Typ, true
 					}
 				case -2:
-					aggPos := col.ColPos - groupSize
-					if aggPos >= 0 && int(aggPos) < len(node.AggList) {
-						expr.Typ = node.AggList[aggPos].Typ
+					aggPos := col.ColPos - int32(len(node.GroupBy))
+					if aggPos >= 0 && int(aggPos) < len(node.AggList) && node.AggList[aggPos] != nil {
+						return node.AggList[aggPos].Typ, true
 					}
 				}
+			case plan.Node_WINDOW:
+				if col.RelPos == -1 {
+					winPos := col.ColPos - childProjectSize
+					if winPos >= 0 && int(winPos) < len(node.WinSpecList) && node.WinSpecList[winPos] != nil {
+						return node.WinSpecList[winPos].Typ, true
+					}
+				}
+			case plan.Node_JOIN, plan.Node_APPLY:
+				if col.RelPos >= 0 && int(col.RelPos) < len(childProjectLists) {
+					childProjectList := childProjectLists[col.RelPos]
+					if int(col.ColPos) < len(childProjectList) && childProjectList[col.ColPos] != nil {
+						typ := childProjectList[col.ColPos].Typ
+						typ.NotNullable = currentType.NotNullable
+						return typ, true
+					}
+				}
+			case plan.Node_UNION, plan.Node_UNION_ALL,
+				plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+				plan.Node_MINUS, plan.Node_MINUS_ALL:
+				if len(childProjectLists) == 0 || int(col.ColPos) >= len(childProjectLists[0]) ||
+					childProjectLists[0][col.ColPos] == nil {
+					return plan.Type{}, false
+				}
+				leftType := childProjectLists[0][col.ColPos].Typ
+				rightType := plan.Type{}
+				hasRightType := len(childProjectLists) > 1 && int(col.ColPos) < len(childProjectLists[1]) &&
+					childProjectLists[1][col.ColPos] != nil
+				if hasRightType {
+					rightType = childProjectLists[1][col.ColPos].Typ
+				}
+				if (node.NodeType == plan.Node_UNION || node.NodeType == plan.Node_UNION_ALL) &&
+					!hasRightType {
+					return plan.Type{}, false
+				}
+				branchExprs := []*plan.Expr{childProjectLists[0][col.ColPos]}
+				if hasRightType {
+					branchExprs = append(branchExprs, childProjectLists[1][col.ColPos])
+				}
+				return preparedSetOperationOutputType(
+					node.NodeType, leftType, rightType, branchExprs,
+				), true
+			}
+			if col.RelPos < 0 || int(col.RelPos) >= len(childProjectLists) {
+				return plan.Type{}, false
+			}
+			childProjectList := childProjectLists[col.RelPos]
+			if int(col.ColPos) >= len(childProjectList) || childProjectList[col.ColPos] == nil {
+				return plan.Type{}, false
+			}
+			return childProjectList[col.ColPos].Typ, true
+		}
+		refreshExpr := func(expr *plan.Expr) error {
+			changed, err := refreshPreparedPlanProjectionExprType(ctx, expr, resolveColumnType)
+			specialized = specialized || changed
+			return err
+		}
+		refreshExprList := func(exprs []*plan.Expr) error {
+			for _, expr := range exprs {
+				if err := refreshExpr(expr); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		// These nodes' output references depend on expressions stored in other
+		// fields. Refresh those producers first so ProjectList/FilterList/OrderBy
+		// consumers observe their execute-time types regardless of field order.
+		switch node.NodeType {
+		case plan.Node_AGG:
+			if err := refreshExprList(node.GroupBy); err != nil {
+				return err
+			}
+			if err := refreshExprList(node.AggList); err != nil {
+				return err
 			}
 		case plan.Node_WINDOW:
-			// The outer W expression retains the type used by the original
-			// window function unless it is explicitly synchronized here.
-			for _, expr := range node.WinSpecList {
-				if expr == nil || expr.GetW() == nil || expr.GetW().WindowFunc == nil {
-					continue
-				}
-				expr.Typ = expr.GetW().WindowFunc.Typ
-			}
-			var child *plan.Node
-			if len(node.Children) == 1 {
-				childID := node.Children[0]
-				if childID >= 0 && int(childID) < len(query.Nodes) {
-					child = query.Nodes[childID]
-				}
-			}
-			childProjectSize := int32(0)
-			if child != nil {
-				childProjectSize = int32(len(child.ProjectList))
-			}
-			for _, expr := range node.ProjectList {
-				if expr == nil {
-					continue
-				}
-				col := expr.GetCol()
-				if col == nil || col.RelPos != -1 {
-					continue
-				}
-				winPos := col.ColPos - childProjectSize
-				if winPos >= 0 && int(winPos) < len(node.WinSpecList) {
-					expr.Typ = node.WinSpecList[winPos].Typ
-				}
+			if err := refreshExprList(node.WinSpecList); err != nil {
+				return err
 			}
 		}
-
-		// A projection node exposes its child columns through RelPos == 0.
-		// Propagate the child's refreshed type so final result metadata and the
-		// vector decoder agree with the runtime expression domain.
-		if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
-			childID := node.Children[0]
-			if childID >= 0 && int(childID) < len(query.Nodes) {
-				child := query.Nodes[childID]
-				if child != nil {
-					for _, expr := range node.ProjectList {
-						if expr == nil {
-							continue
-						}
-						col := expr.GetCol()
-						if col == nil || col.RelPos != 0 || col.ColPos < 0 || int(col.ColPos) >= len(child.ProjectList) {
-							continue
-						}
-						expr.Typ = child.ProjectList[col.ColPos].Typ
+		if err := refreshExprList(node.ProjectList); err != nil {
+			return err
+		}
+		switch node.NodeType {
+		case plan.Node_AGG:
+			if err := refreshExprList(node.FilterList); err != nil {
+				return err
+			}
+		case plan.Node_WINDOW:
+			if err := refreshExprList(node.FilterList); err != nil {
+				return err
+			}
+		case plan.Node_FILTER, plan.Node_ASSERT:
+			if err := refreshExprList(node.FilterList); err != nil {
+				return err
+			}
+		case plan.Node_SORT, plan.Node_PARTITION:
+			for _, order := range node.OrderBy {
+				if order != nil {
+					if err := refreshExpr(order.Expr); err != nil {
+						return err
 					}
 				}
 			}
+		case plan.Node_JOIN:
+			if err := refreshExprList(node.OnList); err != nil {
+				return err
+			}
+			if err := refreshExprList(node.FilterList); err != nil {
+				return err
+			}
 		}
+		if setOperationSpecialized {
+			if err := refreshPreparedSetOperationPhysicalKeys(ctx, node, childProjectLists); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	for _, step := range query.Steps {
-		refreshNode(step)
+		if err := refreshNode(step); err != nil {
+			return false, err
+		}
 	}
+	return specialized, nil
 }
 
 func runtimeParamHasExplicitType(value any) bool {

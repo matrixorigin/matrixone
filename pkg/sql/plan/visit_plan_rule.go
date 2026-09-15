@@ -896,6 +896,42 @@ func (rule *ResetParamRefRule) runtimeParamValue(pos int) (any, vector.PreparePa
 	return nil, kind, false
 }
 
+func (rule *ResetParamRefRule) preparedGeometrySRIDParamExpr(pos int, sourceIsNull bool) (*Expr, bool, error) {
+	value, _, ok := rule.runtimeParamValue(pos)
+	if !ok {
+		return nil, false, nil
+	}
+	if sourceIsNull {
+		// Geometry evaluators short-circuit a NULL source before validating a
+		// scalar SRID. Materialize a typed NULL here as well, otherwise the
+		// binder would reject an otherwise NULL result for an invalid SRID.
+		typ := types.T_int64.ToType()
+		return &Expr{
+			Typ:  makePlan2Type(&typ),
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		}, true, nil
+	}
+	if pos >= 0 && pos < len(rule.paramValues) {
+		if param, isParam := rule.paramValues[pos].(ParamValue); isParam &&
+			value == nil && param.MaterializedValue != "" {
+			value = param.MaterializedValue
+		}
+	}
+	srid, isNull, err := geometrySRIDRuntimeValue(value)
+	if err != nil {
+		return nil, false, err
+	}
+	typ := types.T_int64.ToType()
+	literal := &plan.Literal{Isnull: isNull}
+	if !isNull {
+		literal.Value = &plan.Literal_I64Val{I64Val: int64(srid)}
+	}
+	return &Expr{
+		Typ:  makePlan2Type(&typ),
+		Expr: &plan.Expr_Lit{Lit: literal},
+	}, true, nil
+}
+
 func (rule *ResetParamRefRule) preparedBitCountUsesNumericRuntime(expr *plan.Expr) bool {
 	for pos := range preparedNumericValueParamPositions(expr) {
 		if pos >= 0 && int(pos) < len(rule.paramValues) {
@@ -1264,6 +1300,10 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if !changed {
 			return expr, false, nil
 		}
+		if isExplicitPreparedCast(expr) {
+			bound, err := rebindExplicitPreparedCast(rule.ctx, expr, copy.GetF().Args)
+			return bound, true, err
+		}
 		// Recover only peers whose source explicitly proves that FLOAT was a
 		// prepare-time envelope. Source-less scientific literals and explicit
 		// FLOAT casts are semantic FLOAT boundaries and must remain unchanged.
@@ -1276,14 +1316,12 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if name == "cast" && isImplicitPreparedParamCast(expr) {
 			return copy.GetF().Args[0], true, nil
 		}
+		restorePreparedIntegerArithmeticOperands(name, copy.GetF().Args)
 		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
 		if err != nil {
 			return nil, false, err
 		}
-		if boundFn := bound.GetF(); boundFn != nil {
-			boundFn.AggConfig = bytes.Clone(fn.AggConfig)
-			boundFn.AggConfigType = fn.AggConfigType
-		}
+		preserveReboundFunctionMetadata(fn, bound.GetF())
 		return bound, true, nil
 	}
 	// Flattened scalar subqueries can expose the deferred source as a ColRef.
@@ -1304,6 +1342,25 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		}
 	}
 	return expr, false, nil
+}
+
+// A user CAST fixes the target domain and conversion semantics. Revalidate its
+// current source type, but do not resolve it as a new implicit CAST or elide a
+// now-redundant boundary before the enclosing arithmetic is rebound.
+func rebindExplicitPreparedCast(ctx context.Context, original *Expr, args []*Expr) (*Expr, error) {
+	if len(args) != 2 || args[0] == nil || args[1] == nil {
+		return nil, moerr.NewInternalError(ctx, "invalid prepared CAST arguments")
+	}
+	_, overload := planfunction.DecodeOverloadID(original.GetF().Func.Obj)
+	_, err := planfunction.GetFunctionByNameWithOverload(ctx, "cast", []types.Type{
+		makeTypeByPlan2Expr(args[0]), makeTypeByPlan2Expr(args[1]),
+	}, overload)
+	if err != nil {
+		return nil, err
+	}
+	bound := DeepCopyExpr(original)
+	bound.GetF().Args = args
+	return bound, nil
 }
 
 func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
@@ -1334,6 +1391,31 @@ func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
 		}
 	}
 	return nil, false
+}
+
+// Integer widening casts inserted for the PREPARE-time overload are not source
+// domains. Re-resolve arithmetic from those sources when a parameter changes;
+// otherwise a BIT peer widened to UINT64 acquires checked unsigned semantics
+// that the equivalent directly bound BIT expression does not have.
+func restorePreparedIntegerArithmeticOperands(name string, args []*Expr) {
+	if name != "+" && name != "-" && name != "*" {
+		return
+	}
+	for i, arg := range args {
+		for arg != nil && types.T(arg.Typ.Id).IsInteger() {
+			fn := arg.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || fn.SyntaxExplicitCast || len(fn.Args) == 0 || fn.Args[0] == nil {
+				break
+			}
+			_, overload := planfunction.DecodeOverloadID(fn.Func.Obj)
+			source := types.T(fn.Args[0].Typ.Id)
+			if overload != 0 || (!source.IsInteger() && source != types.T_bit) {
+				break
+			}
+			arg = fn.Args[0]
+			args[i] = arg
+		}
+	}
 }
 
 func (rule *ResetParamRefRule) rebindPreparedIntegerExpr(expr *plan.Expr) (*Expr, bool, error) {
@@ -1403,10 +1485,7 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 		if err != nil {
 			return nil, false, err
 		}
-		if boundFn := bound.GetF(); boundFn != nil {
-			boundFn.AggConfig = bytes.Clone(fn.AggConfig)
-			boundFn.AggConfigType = fn.AggConfigType
-		}
+		preserveReboundFunctionMetadata(fn, bound.GetF())
 		return bound, true, nil
 	}
 	if list := expr.GetList(); list != nil {
@@ -1543,6 +1622,15 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 		if exprImpl.F == nil {
 			return e, nil
 		}
+		if isPreparedGeometrySRIDFunction(exprImpl.F.Func.GetObjName()) &&
+			len(exprImpl.F.Args) >= 2 {
+			if _, ok := preparedParamPosition(exprImpl.F.Args[len(exprImpl.F.Args)-1]); ok {
+				// A geometry SRID setter/constructor owns value-dependent
+				// result metadata. It cannot remain a preserved write root or
+				// the destination cast would see the prepare-time undefined SRID.
+				return rule.applyExpr(e)
+			}
+		}
 		if rule.validateFunctionArgs != nil {
 			if err := rule.validateFunctionArgs(exprImpl.F.Func.GetObjName(), exprImpl.F.Args); err != nil {
 				return nil, err
@@ -1554,6 +1642,11 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 				return nil, err
 			}
 			exprImpl.F.Args[i] = rewritten
+		}
+		if strings.EqualFold(exprImpl.F.Func.GetObjName(), moGeometryCastToSubtypeFun) {
+			if err := validateGeometryAssignmentSRID(rule.ctx, e, e.Typ); err != nil {
+				return nil, err
+			}
 		}
 		return e, nil
 	case *plan.Expr_W:
@@ -1845,6 +1938,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		regexpDomainsDeferred := preparedRegexpStringDomainCheckModes(functionName, originalArgs) != nil
 		needResetFunction := regexpDomainsDeferred
 		compareArgTypes := regexpDomainsDeferred
+		geometrySRIDParamPos := -1
+		if isPreparedGeometrySRIDFunction(functionName) && len(originalArgs) >= 2 {
+			positions := preparedGeometrySRIDParamPositionsInExpr(originalArgs[len(originalArgs)-1])
+			if len(positions) == 1 {
+				position := int(positions[0])
+				geometrySRIDParamPos = position
+				// The SRID is part of the result type metadata, so the function
+				// must be rebound even when the parameter's scalar type stays
+				// int64 across executions.
+				needResetFunction = true
+				compareArgTypes = true
+			}
+		}
 		numericPrefixDependent := false
 		sqlExecuteNumericSourceDependent := false
 		sqlExecuteNumericNestedDependent := false
@@ -1880,6 +1986,25 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			bitwiseParamCast := isPreparedBitwiseOperator(functionName) &&
 				isPreparedBitwiseParamCast(arg)
 			paramPos, hasParamPos := preparedParamPosition(arg)
+			var preparedBitwiseSource *plan.Expr
+			var hasPreparedBitwiseSource bool
+			var nestedPreparedBitwiseSource *plan.Expr
+			if hasParamPos && isPreparedBitwiseAggregate(functionName) && i == 0 &&
+				isBitwiseAggregatePrivateCast(arg) {
+				preparedBitwiseSource, hasPreparedBitwiseSource, err =
+					rule.preparedBitwiseAggregateSource(paramPos)
+				if err != nil {
+					return nil, err
+				}
+			} else if !hasParamPos && isPreparedBitwiseAggregate(functionName) && i == 0 &&
+				isBitwiseAggregatePrivateCast(arg) && len(preparedNumericValueParamPositions(arg.GetF().Args[0])) > 0 {
+				// The aggregate's private conversion owns the final input contract.
+				// Rebinding it as an ordinary CAST while a nested expression (for
+				// example COALESCE(?, 0)) changes type can replace CAST4 with CAST0
+				// and silently change tie rounding. Rebind the nested source first,
+				// then let the aggregate binder select the execute-time conversion.
+				nestedPreparedBitwiseSource = arg.GetF().Args[0]
+			}
 			if !hasParamPos && preparedFunctionArgUsesSQLExecuteNumericSource(
 				e, functionName, i, len(exprImpl.F.Args)) {
 				paramPos, hasParamPos = preparedResultParamPosition(arg, functionName)
@@ -1907,7 +2032,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			useSQLExecuteNumericSource := hasParamPos &&
 				preparedFunctionArgUsesSQLExecuteNumericSource(
 					e, functionName, i, len(exprImpl.F.Args)) &&
-				(hasPreparedCharSource || charStringSourceFallback || (paramPos >= 0 &&
+				(hasPreparedBitwiseSource || hasPreparedCharSource || charStringSourceFallback || (paramPos >= 0 &&
 					paramPos < len(rule.sqlExecuteNumericParams) &&
 					rule.sqlExecuteNumericParams[paramPos] != nil)) &&
 				preparedSQLExecuteNumericSourceOwnsResultDomain(
@@ -1949,14 +2074,26 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				needResetFunction = true
 			}
 			var rewrittenArg *plan.Expr
-			if useSQLExecuteNumericSource {
+			if nestedPreparedBitwiseSource != nil {
+				var applyErr error
+				rewrittenArg, applyErr = rule.ApplyExpr(DeepCopyExpr(nestedPreparedBitwiseSource))
+				if applyErr != nil {
+					return nil, applyErr
+				}
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
+			} else if useSQLExecuteNumericSource {
 				sqlExecuteNumericSourceDependent = true
 				sqlExecuteNumericSourceArgs[i] = true
 				// The prepare-time implicit cast is provisional. Materialize the
 				// SQL user variable's current source domain before descending into
 				// that cast; evaluating it first can reject a valid DECIMAL value
 				// using the overload selected for the initial TEXT marker.
-				source := preparedCharSource
+				source := preparedBitwiseSource
+				if source == nil {
+					source = preparedCharSource
+				}
 				if source == nil && paramPos >= 0 && paramPos < len(rule.sqlExecuteNumericParams) {
 					source = rule.sqlExecuteNumericParams[paramPos]
 				}
@@ -1989,6 +2126,23 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				err = applyErr
 				if err != nil {
 					return nil, err
+				}
+			}
+			if geometrySRIDParamPos >= 0 && i == len(exprImpl.F.Args)-1 &&
+				hasParamPos && paramPos == geometrySRIDParamPos {
+				sourceIsNull := len(boundArgs) > 0 && geometrySRIDSourceIsStaticNull(boundArgs[0])
+				geometryArg, known, geometryErr := rule.preparedGeometrySRIDParamExpr(paramPos, sourceIsNull)
+				if geometryErr != nil {
+					return nil, geometryErr
+				}
+				if known {
+					// Do not retain the provisional cast around the marker. The
+					// normalized int64 literal makes the geometry binder apply the
+					// current SRID to Width, including NULL -> undefined metadata.
+					rewrittenArg = geometryArg
+					needResetFunction = true
+					compareArgTypes = true
+					rule.specialized = true
 				}
 			}
 			exprImpl.F.Args[i] = rewrittenArg
@@ -2231,10 +2385,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					if bindErr != nil {
 						return nil, bindErr
 					}
-					if rewrittenFn := rewritten.GetF(); rewrittenFn != nil {
-						rewrittenFn.AggConfig = bytes.Clone(exprImpl.F.AggConfig)
-						rewrittenFn.AggConfigType = exprImpl.F.AggConfigType
-					}
+					preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 					rule.specialized = true
 					return rewritten, nil
 				}
@@ -2252,10 +2403,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					if bindErr != nil {
 						return nil, bindErr
 					}
-					if rewrittenFn := rewritten.GetF(); rewrittenFn != nil {
-						rewrittenFn.AggConfig = bytes.Clone(exprImpl.F.AggConfig)
-						rewrittenFn.AggConfigType = exprImpl.F.AggConfigType
-					}
+					preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 					rule.specialized = true
 					return rewritten, nil
 				}
@@ -2273,26 +2421,29 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
+			restorePreparedIntegerArithmeticOperands(functionName, boundArgs)
 			stringDomainModes, resolveErr := rule.resolvePreparedRegexpStringDomainCheckModes(
 				functionName, boundArgs, originalArgs)
 			if resolveErr != nil {
 				return nil, resolveErr
 			}
-			rewritten, err := bindPreparedFuncExprImplByPlanExpr(
-				rule.ctx,
-				originalTemporalExpr,
-				exprImpl.F.Func.GetObjName(),
-				boundArgs,
-				stringDomainModes,
-			)
+			var rewritten *Expr
+			if isExplicitPreparedCast(e) {
+				rewritten, err = rebindExplicitPreparedCast(rule.ctx, e, boundArgs)
+				rule.specialized = true
+			} else {
+				rewritten, err = bindPreparedFuncExprImplByPlanExpr(
+					rule.ctx,
+					originalTemporalExpr,
+					exprImpl.F.Func.GetObjName(),
+					boundArgs,
+					stringDomainModes,
+				)
+			}
 			if err != nil {
 				return nil, err
 			}
-			rewrittenFn := rewritten.GetF()
-			if rewrittenFn != nil {
-				rewrittenFn.AggConfig = bytes.Clone(exprImpl.F.AggConfig)
-				rewrittenFn.AggConfigType = exprImpl.F.AggConfigType
-			}
+			preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 			if functionBindingChanged(originalTyp, originalFuncObj, originalArgTypes, rewritten, compareArgTypes) {
 				rule.specialized = true
 			}
@@ -3149,6 +3300,13 @@ func isExplicitPreparedCast(expr *plan.Expr) bool {
 	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" {
 		return false
 	}
+	// BIT_AND/BIT_OR/BIT_XOR insert CAST4 while binding a bare parameter.
+	// This is an implementation cast for the aggregate's input contract, not
+	// a SQL-authored cast that fixes the parameter domain. Keep the source type
+	// visible to prepared-plan runtime specialization.
+	if isBitwiseAggregatePrivateCast(expr) {
+		return false
+	}
 	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 	return overload != 0 || fn.GetSyntaxExplicitCast()
 }
@@ -3185,7 +3343,8 @@ func windowHasNumericPrefixDependency(
 }
 
 func preparedSQLExecuteNumericResultConsumer(name string) bool {
-	return preparedNumericResultPolymorphicFunction(name) || strings.EqualFold(name, "char")
+	return preparedNumericResultPolymorphicFunction(name) || strings.EqualFold(name, "char") ||
+		isPreparedBitwiseAggregate(name)
 }
 
 func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int) bool {
@@ -3197,6 +3356,8 @@ func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int
 	case "case", "if", "coalesce", "ifnull", "nullif":
 		return numericFunctionArgKeepsContext(name, argIndex, argCount)
 	case "sum", "avg", "min", "max", "any_value":
+		return argCount == 1 && argIndex == 0
+	case "bit_and", "bit_or", "bit_xor":
 		return argCount == 1 && argIndex == 0
 	case "first_value", "last_value", "lag", "lead", "nth_value", "max_by", "max_by_non_null":
 		return argCount > 0 && argIndex == 0
@@ -3232,6 +3393,11 @@ func preparedSQLExecuteNumericSourceOwnsResultDomain(
 	paramPos int,
 	stringBacked []bool,
 ) bool {
+	if isPreparedBitwiseAggregate(name) {
+		// The binder-inserted private cast is removed before rebinding so the
+		// execute-time source can select numeric-prefix or binary-string semantics.
+		return true
+	}
 	// CHAR's prepared marker is deliberately numeric even when SQL EXECUTE
 	// supplies a string-backed user variable. This is different from common
 	// value consumers, where a string source remains the comparison/result
@@ -3244,6 +3410,15 @@ func preparedSQLExecuteNumericSourceOwnsResultDomain(
 		return true
 	}
 	return paramPos >= 0 && paramPos < len(stringBacked) && !stringBacked[paramPos]
+}
+
+func isPreparedBitwiseAggregate(name string) bool {
+	switch strings.ToLower(name) {
+	case "bit_and", "bit_or", "bit_xor":
+		return true
+	default:
+		return false
+	}
 }
 
 // preparedCharSourceExpr keeps CHAR's two string contracts separate at
@@ -3299,6 +3474,85 @@ func (rule *ResetParamRefRule) preparedCharSourceExpr(pos int) (*plan.Expr, bool
 	return nil, false, nil
 }
 
+// preparedBitwiseAggregateSource reconstructs the execute-time operand using
+// its protocol type or SQL user-variable source type. Keeping the original
+// source domain lets the aggregate binder choose the integer or byte-string
+// path again instead of inheriting the provisional CAST4(INT64) from PREPARE.
+func (rule *ResetParamRefRule) preparedBitwiseAggregateSource(pos int) (*plan.Expr, bool, error) {
+	if pos < 0 || pos >= len(rule.paramValues) || pos >= len(rule.params) {
+		return nil, false, nil
+	}
+	param, ok := rule.paramValues[pos].(ParamValue)
+	if !ok {
+		return nil, false, nil
+	}
+
+	var sourceType types.Type
+	switch {
+	case param.IsBinaryProtocol && param.HasRuntimeType:
+		sourceType = param.RuntimeType
+	case param.HasSourceType:
+		sourceType = param.SourceType
+	case param.HasRuntimeType:
+		sourceType = param.RuntimeType
+	default:
+		return nil, false, nil
+	}
+	if sourceType.Oid == types.T_any {
+		return nil, false, nil
+	}
+	if sourceType.Oid.IsMySQLString() &&
+		(param.IsBinaryString || param.IsBin || param.RuntimeStringDomain == types.RuntimeStringBinary) {
+		sourceType.Charset = types.CharsetBinary
+	}
+
+	if param.Value == nil {
+		// rule.params may hold a non-NULL placeholder from PREPARE. Never reuse
+		// its literal payload for a runtime NULL; type the fresh NULL from the
+		// execute-time metadata and leave the cached plan untouched.
+		source := &plan.Expr{
+			Typ: makePlan2Type(&sourceType),
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Isnull: true,
+				IsBin:  param.IsBin,
+				Value:  &plan.Literal_Sval{Sval: ""},
+			}},
+		}
+		setPreparedRuntimeStringDomain(source, param.RuntimeStringDomain)
+		rule.retainRuntimeParamRef(pos, source)
+		return source, true, nil
+	}
+
+	value := param.Value
+	if param.MaterializedValue != "" {
+		value = param.MaterializedValue
+	} else if bytes, ok := value.([]byte); ok {
+		value = string(bytes)
+	}
+	source, err := preparedRuntimeParamExpr(rule.ctx, value, param.IsBin, sourceType)
+	if err != nil {
+		return nil, false, err
+	}
+	domain := param.RuntimeStringDomain
+	if domain == types.RuntimeStringInherit &&
+		(param.IsBinaryString || param.IsBin) {
+		domain = types.RuntimeStringBinary
+	}
+	setPreparedRuntimeStringDomain(source, domain)
+	rule.retainRuntimeParamRef(pos, source)
+	return source, true, nil
+}
+
+func isBitwiseAggregatePrivateCast(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") ||
+		len(fn.Args) == 0 || fn.GetSyntaxExplicitCast() {
+		return false
+	}
+	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	return overload == 4
+}
+
 func preparedParamValueText(param ParamValue) string {
 	if param.MaterializedValue != "" {
 		return param.MaterializedValue
@@ -3347,6 +3601,22 @@ func preparedExprBindingChanged(originalTyp plan.Type, originalFuncObj int64, re
 		return true
 	}
 	return preparedExprFunctionObj(rewritten) != originalFuncObj
+}
+
+func preserveReboundFunctionMetadata(original, rebound *plan.Function) {
+	if original == nil || rebound == nil {
+		return
+	}
+	rebound.AggConfig = bytes.Clone(original.AggConfig)
+	rebound.AggConfigType = original.AggConfigType
+	if original.Func != nil && rebound.Func != nil {
+		// DISTINCT is encoded in the high bit of the function object ID, not in
+		// the aggregate config. Binding from a name recreates only the base
+		// overload, so keep this semantic flag when a prepared expression is
+		// rebound against its execute-time source type.
+		rebound.Func.Obj = int64(uint64(rebound.Func.Obj) |
+			(uint64(original.Func.Obj) & uint64(planfunction.Distinct)))
+	}
 }
 
 func isPreparedNumericComparison(name string) bool {
@@ -3450,7 +3720,7 @@ func implicitPreparedParam(expr *plan.Expr) (*plan.ParamRef, bool) {
 			return nil, false
 		}
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
-		if overload != 0 {
+		if overload != 0 && overload != 4 {
 			return nil, false
 		}
 		seenCast = true

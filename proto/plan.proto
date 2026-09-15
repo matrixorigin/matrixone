@@ -1227,6 +1227,10 @@ message Node {
   // PARTITION only: optimizer-selected implementation for ordinary window
   // partitioning. Partition Top-N ignores this field.
   PartitionAlgorithm partition_algorithm = 90;
+
+  // PARTITION Top-N only: retain every peer of the Nth row so the reduced
+  // candidate stream is exact for RANK rather than only ROW_NUMBER.
+  bool partition_top_n_with_ties = 91;
 }
 
 message SnapshotExtraInfo {
