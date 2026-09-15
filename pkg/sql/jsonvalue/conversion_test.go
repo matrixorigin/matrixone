@@ -471,3 +471,162 @@ func TestAppendResultRejectsErrorsWithoutMutatingVector(t *testing.T) {
 	require.ErrorIs(t, AppendResult(vectorValue, missing, mp), ErrMissingJSONTableValue)
 	require.Equal(t, 3, vectorValue.Length())
 }
+
+func TestConversionStatusNamesAndScalarBoundaries(t *testing.T) {
+	for status, want := range map[ConversionStatus]string{
+		StatusMissing:         "missing",
+		StatusSuccess:         "success",
+		StatusJSONNull:        "json-null",
+		StatusComposite:       "composite",
+		StatusConversionError: "conversion-error",
+		StatusRangeError:      "range-error",
+		StatusTruncated:       "truncated",
+		StatusStatementError:  "statement-error",
+	} {
+		require.Equal(t, want, status.String())
+	}
+	require.Equal(t, "unknown", ConversionStatus(0xff).String())
+
+	successes := []struct {
+		name     string
+		document string
+		target   types.Type
+	}{
+		{name: "bool false", document: `false`, target: types.T_bool.ToType()},
+		{name: "int16", document: `32767`, target: types.T_int16.ToType()},
+		{name: "int32", document: `2147483647`, target: types.T_int32.ToType()},
+		{name: "uint8", document: `255`, target: types.T_uint8.ToType()},
+		{name: "uint16", document: `65535`, target: types.T_uint16.ToType()},
+		{name: "float32", document: `1.25`, target: types.T_float32.ToType()},
+		{name: "float64", document: `1.25`, target: types.T_float64.ToType()},
+		{name: "decimal128", document: `12.34`, target: types.New(types.T_decimal128, 20, 2)},
+		{name: "decimal256", document: `12.34`, target: types.New(types.T_decimal256, 40, 2)},
+		{name: "time", document: `"04:05:06"`, target: types.T_time.ToType()},
+		{name: "datetime", document: `"2024-02-03 04:05:06"`, target: types.T_datetime.ToType()},
+		{name: "year", document: `"2024"`, target: types.T_year.ToType()},
+		{name: "bit", document: `3`, target: types.New(types.T_bit, 2, 0)},
+		{name: "binary", document: `"abc"`, target: types.New(types.T_binary, 8, 0)},
+	}
+	for _, test := range successes {
+		t.Run(test.name, func(t *testing.T) {
+			result := ConvertScalar(parseConversionValue(t, test.document), test.target)
+			require.Equal(t, StatusSuccess, result.Status)
+			require.NoError(t, result.Err)
+			require.NotNil(t, result.Value)
+		})
+	}
+
+	var nilCtx context.Context
+	result := ConvertScalarWithContext(nilCtx, parseConversionValue(t, `1`), types.T_int64.ToType(), ConversionOptions{})
+	require.Equal(t, StatusSuccess, result.Status)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	result = ConvertScalarWithContext(cancelled, parseConversionValue(t, `1`), types.T_int64.ToType(), ConversionOptions{})
+	require.Equal(t, StatusStatementError, result.Status)
+	require.ErrorIs(t, result.Err, context.Canceled)
+
+	invalid := []struct {
+		name     string
+		document string
+		target   types.Type
+		status   ConversionStatus
+	}{
+		{name: "signed int16 range", document: `32768`, target: types.T_int16.ToType(), status: StatusRangeError},
+		{name: "signed int32 range", document: `2147483648`, target: types.T_int32.ToType(), status: StatusRangeError},
+		{name: "uint8 range", document: `256`, target: types.T_uint8.ToType(), status: StatusRangeError},
+		{name: "uint16 range", document: `65536`, target: types.T_uint16.ToType(), status: StatusRangeError},
+		{name: "float parse", document: `"not-a-float"`, target: types.T_float64.ToType(), status: StatusConversionError},
+		{name: "float range", document: `"1e1000"`, target: types.T_float64.ToType(), status: StatusRangeError},
+		{name: "float32 range", document: `"1e39"`, target: types.T_float32.ToType(), status: StatusRangeError},
+		{name: "decimal64 range", document: `"12345"`, target: types.New(types.T_decimal64, 3, 0), status: StatusRangeError},
+		{name: "decimal128 conversion", document: `"not-decimal"`, target: types.New(types.T_decimal128, 20, 2), status: StatusConversionError},
+		{name: "date conversion", document: `"2024-99-99"`, target: types.T_date.ToType(), status: StatusConversionError},
+		{name: "time conversion", document: `"99:99:99"`, target: types.T_time.ToType(), status: StatusConversionError},
+		{name: "datetime conversion", document: `"2024-99-99 99:99:99"`, target: types.T_datetime.ToType(), status: StatusConversionError},
+		{name: "timestamp conversion", document: `"2024-99-99 99:99:99"`, target: types.T_timestamp.ToType(), status: StatusConversionError},
+		{name: "year conversion", document: `"not-a-year"`, target: types.T_year.ToType(), status: StatusConversionError},
+		{name: "bit range", document: `4`, target: types.New(types.T_bit, 2, 0), status: StatusRangeError},
+		{name: "bool conversion", document: `"maybe"`, target: types.T_bool.ToType(), status: StatusConversionError},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			result := ConvertScalar(parseConversionValue(t, test.document), test.target)
+			require.Equal(t, test.status, result.Status)
+			require.Error(t, result.Err)
+		})
+	}
+
+	for _, test := range []struct {
+		name   string
+		value  bytejson.ByteJson
+		target types.Type
+		status ConversionStatus
+	}{
+		{name: "numeric text range", value: parseConversionValue(t, `"999999999999999999999999999"`), target: types.T_int64.ToType(), status: StatusRangeError},
+		{name: "non numeric text", value: parseConversionValue(t, `"x"`), target: types.T_int64.ToType(), status: StatusConversionError},
+		{name: "float NaN bool", value: bytejson.ByteJson{Type: bytejson.TpCodeFloat64, Data: func() []byte {
+			data := make([]byte, 8)
+			binary.LittleEndian.PutUint64(data, math.Float64bits(math.NaN()))
+			return data
+		}()}, target: types.T_bool.ToType(), status: StatusConversionError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := ConvertScalar(test.value, test.target)
+			require.Equal(t, test.status, result.Status)
+			require.Error(t, result.Err)
+		})
+	}
+}
+
+func TestJSONValueConversionAndAppendBoundaryStates(t *testing.T) {
+	invalidJSONValues := []bytejson.ByteJson{
+		{Type: bytejson.TpCodeString, Data: []byte{0x80}},
+		{Type: bytejson.TpCodeFloat64, Data: func() []byte {
+			data := make([]byte, 8)
+			binary.LittleEndian.PutUint64(data, math.Float64bits(math.Inf(1)))
+			return data
+		}()},
+		{Type: bytejson.TpCodeLiteral, Data: []byte{0xff}},
+	}
+	for _, value := range invalidJSONValues {
+		result := ConvertScalar(value, types.T_json.ToType())
+		require.Equal(t, StatusStatementError, result.Status)
+		require.Error(t, result.Err)
+	}
+
+	result := convertJSONValueWithLimit(context.Background(), parseConversionValue(t, `null`), 1)
+	require.Equal(t, StatusJSONNull, result.Status)
+	result = convertJSONValueWithLimit(context.Background(), parseConversionValue(t, `1`), 0)
+	require.Equal(t, StatusStatementError, result.Status)
+	require.Error(t, result.Err)
+	result = convertJSONValueWithLimit(context.Background(), parseConversionValue(t, `1`), 64)
+	require.Equal(t, StatusSuccess, result.Status)
+
+	result = ConvertPathMatchesWithLimitContext(nil, nil, types.T_json.ToType(), 64)
+	require.Equal(t, StatusStatementError, result.Status)
+	require.Error(t, result.Err)
+	result = ConvertPathMatchesWithLimit(nil, types.T_json.ToType(), 1)
+	require.Equal(t, StatusStatementError, result.Status)
+	require.Error(t, result.Err)
+
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_int32.ToType())
+	defer vec.Free(mp)
+	require.Error(t, AppendResult(nil, Result{Status: StatusJSONNull}, mp))
+	require.Error(t, AppendResult(vec, Result{Status: StatusJSONNull}, nil))
+	require.Error(t, AppendResult(vec, Result{Status: StatusSuccess, Value: int64(1)}, mp))
+	require.Error(t, AppendResult(vec, Result{Status: StatusStatementError}, mp))
+	require.NoError(t, AppendConvertedResult(vec, Result{Status: StatusSuccess, Value: int32(1)}, mp))
+	require.Equal(t, 1, vec.Length())
+
+	constVec, err := vector.NewConstFixed(types.T_int32.ToType(), int32(1), 1, mp)
+	require.NoError(t, err)
+	defer constVec.Free(mp)
+	require.Error(t, AppendResult(constVec, Result{Status: StatusSuccess, Value: int32(2)}, mp))
+
+	bytesVec := vector.NewVec(types.T_varchar.ToType())
+	defer bytesVec.Free(mp)
+	require.NoError(t, AppendResult(bytesVec, Result{Status: StatusTruncated, Value: []byte("x")}, mp))
+	require.Equal(t, 1, bytesVec.Length())
+	require.False(t, appendValueCompatible(types.T_any, nil))
+}

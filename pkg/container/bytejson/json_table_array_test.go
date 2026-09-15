@@ -398,3 +398,103 @@ func TestJSONTableArrayBuilderNestedObjectStorageSize(t *testing.T) {
 		bounded.Close()
 	}
 }
+
+func TestJSONTableArrayBuilderCoversNilAndAdmissionBoundaries(t *testing.T) {
+	var nilBuilder *JSONTableArrayBuilder
+	require.Error(t, nilBuilder.AppendContext(nil, parseBuilderValue(t, `1`)))
+	_, err := nilBuilder.Build()
+	require.Error(t, err)
+	require.Zero(t, nilBuilder.Count())
+	require.Zero(t, nilBuilder.Bytes())
+	nilBuilder.Close()
+
+	builder, err := NewJSONTableArrayBuilder(128)
+	require.NoError(t, err)
+	require.NoError(t, builder.AppendContext(nil, parseBuilderValue(t, `1`)))
+	builder.count = math.MaxUint32
+	require.Error(t, builder.Append(parseBuilderValue(t, `2`)))
+	builder.Close()
+
+	value := parseBuilderValue(t, `1`)
+	encoded, err := value.Marshal()
+	require.NoError(t, err)
+	_, err = StorageCompatibleDataSizeWithLimit(nil, value, -1)
+	require.Error(t, err)
+	dataSize, err := StorageCompatibleDataSizeWithLimit(nil, value, len(encoded)-1)
+	require.NoError(t, err)
+	require.Equal(t, len(encoded)-1, dataSize)
+	bounded, err := MarshalStorageCompatibleWithLimit(nil, value, len(encoded))
+	require.NoError(t, err)
+	require.Equal(t, encoded, bounded)
+	_, err = MarshalStorageCompatibleWithLimit(context.Background(), value, 0)
+	require.Error(t, err)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = MarshalStorageCompatibleWithLimit(cancelled, value, len(encoded))
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestStoragePreflightRejectsMalformedScalarAndContainerValues(t *testing.T) {
+	floatNaN := make([]byte, numberSize)
+	binary.LittleEndian.PutUint64(floatNaN, math.Float64bits(math.NaN()))
+	values := []ByteJson{
+		{Type: TpCodeLiteral, Data: []byte{0xff}},
+		{Type: TpCodeInt64, Data: []byte{1}},
+		{Type: TpCodeFloat64, Data: floatNaN},
+		{Type: TpCodeString, Data: []byte{0x80}},
+		{Type: TpCodeOpaque, Data: []byte{0x80}},
+		{Type: TpCode(0xff), Data: []byte{1}},
+	}
+	for _, value := range values {
+		_, err := StorageCompatibleDataSizeWithLimit(context.Background(), value, math.MaxInt)
+		require.Error(t, err)
+	}
+
+	arrayHeader := ByteJson{Type: TpCodeArray, Data: make([]byte, headerSize)}
+	_, err := StorageCompatibleDataSizeWithLimit(context.Background(), arrayHeader, math.MaxInt)
+	require.Error(t, err)
+
+	arrayTable := make([]byte, headerSize+valEntrySize)
+	binary.LittleEndian.PutUint32(arrayTable[docSizeOff:], uint32(len(arrayTable)))
+	binary.LittleEndian.PutUint32(arrayTable[:4], 2)
+	_, err = StorageCompatibleDataSizeWithLimit(context.Background(), ByteJson{Type: TpCodeArray, Data: arrayTable}, math.MaxInt)
+	require.Error(t, err)
+
+	arrayOffset := make([]byte, headerSize+valEntrySize+numberSize)
+	binary.LittleEndian.PutUint32(arrayOffset[docSizeOff:], uint32(len(arrayOffset)))
+	binary.LittleEndian.PutUint32(arrayOffset[:4], 1)
+	arrayOffset[headerSize] = byte(TpCodeInt64)
+	binary.LittleEndian.PutUint32(arrayOffset[headerSize+valTypeSize:], 0)
+	_, err = StorageCompatibleDataSizeWithLimit(context.Background(), ByteJson{Type: TpCodeArray, Data: arrayOffset}, math.MaxInt)
+	require.Error(t, err)
+
+	arrayChild := make([]byte, headerSize+valEntrySize+numberSize)
+	binary.LittleEndian.PutUint32(arrayChild[docSizeOff:], uint32(len(arrayChild)))
+	binary.LittleEndian.PutUint32(arrayChild[:4], 1)
+	arrayChild[headerSize] = byte(TpCode(0xff))
+	binary.LittleEndian.PutUint32(arrayChild[headerSize+valTypeSize:], uint32(headerSize+valEntrySize))
+	_, err = StorageCompatibleDataSizeWithLimit(context.Background(), ByteJson{Type: TpCodeArray, Data: arrayChild}, math.MaxInt)
+	require.Error(t, err)
+
+	arrayLiteral := make([]byte, headerSize+valEntrySize)
+	binary.LittleEndian.PutUint32(arrayLiteral[docSizeOff:], uint32(len(arrayLiteral)))
+	binary.LittleEndian.PutUint32(arrayLiteral[:4], 1)
+	arrayLiteral[headerSize] = byte(TpCodeLiteral)
+	arrayLiteral[headerSize+valTypeSize] = 0xff
+	_, err = StorageCompatibleDataSizeWithLimit(context.Background(), ByteJson{Type: TpCodeArray, Data: arrayLiteral}, math.MaxInt)
+	require.Error(t, err)
+
+	object := make([]byte, headerSize+keyEntrySize+valEntrySize+1)
+	binary.LittleEndian.PutUint32(object[docSizeOff:], uint32(len(object)))
+	binary.LittleEndian.PutUint32(object[:4], 1)
+	object[headerSize] = 0
+	object[headerSize+keyOriginOff] = 1
+	object[headerSize+keyOriginOff+1] = 0
+	_, err = StorageCompatibleDataSizeWithLimit(context.Background(), ByteJson{Type: TpCodeObject, Data: object}, math.MaxInt)
+	require.Error(t, err)
+
+	deep := aliasedNestedArrayForStoragePreflight(JSONDocumentMaxNestingDepth + 1)
+	_, err = StorageCompatibleDataSizeWithLimit(context.Background(), deep, math.MaxInt)
+	require.Error(t, err)
+}
