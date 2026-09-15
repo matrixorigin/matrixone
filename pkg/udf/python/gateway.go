@@ -1595,6 +1595,17 @@ func validateInvocation(invocation *udf.Invocation) error {
 	if invocation.Source == "" {
 		return fmt.Errorf("python udf: handler and source are required")
 	}
+	// ArtifactResolver is an execution boundary, so the Gateway must enforce
+	// the same immutable source contract even when a custom resolver does not
+	// use FileArtifactStore. Do this before hashing or building the Open frame;
+	// otherwise an oversized or invalid source can consume a large temporary
+	// allocation and only fail at the Flight control-size boundary.
+	if !utf8.ValidString(invocation.Source) {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source is not valid UTF-8")
+	}
+	if int64(len([]byte(invocation.Source))) > DefaultMaxArtifactBytes {
+		return fmt.Errorf("RESOURCE_EXHAUSTED: Python artifact exceeds %d bytes", DefaultMaxArtifactBytes)
+	}
 	if invocation.ArtifactDigest != udf.PythonInlineArtifactDigest(invocation.Handler, invocation.Source) {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact digest does not match the immutable source")
 	}
