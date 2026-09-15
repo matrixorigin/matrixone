@@ -16,8 +16,10 @@ package function
 
 import (
 	"context"
+	"encoding/binary"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -51,8 +53,19 @@ func TestJsonStorageRegistrationAndTypeCheck(t *testing.T) {
 			}
 
 			for _, typ := range []types.Type{
-				types.T_bool.ToType(), types.T_int64.ToType(),
-				types.T_date.ToType(), types.T_geometry.ToType(),
+				types.T_bool.ToType(), types.T_bit.ToType(),
+				types.T_int8.ToType(), types.T_int16.ToType(),
+				types.T_int32.ToType(), types.T_int64.ToType(),
+				types.T_uint8.ToType(), types.T_uint16.ToType(),
+				types.T_uint32.ToType(), types.T_uint64.ToType(),
+				types.T_float32.ToType(), types.T_float64.ToType(),
+				types.T_decimal64.ToType(), types.T_decimal128.ToType(),
+				types.T_decimal256.ToType(), types.T_year.ToType(),
+				types.T_date.ToType(), types.T_time.ToType(),
+				types.T_datetime.ToType(), types.T_timestamp.ToType(),
+				types.T_enum.ToType(), types.T_uuid.ToType(),
+				types.T_geometry.ToType(), types.T_geometry32.ToType(),
+				types.T_array_float32.ToType(), types.T_array_float64.ToType(),
 			} {
 				_, err := GetFunctionByName(ctx, tc.name, []types.Type{typ})
 				require.Error(t, err, typ)
@@ -198,5 +211,151 @@ func TestJsonStorageRejectsInvalidJSON(t *testing.T) {
 			NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), fn)
 		succeed, info := fc.Run()
 		require.True(t, succeed, info)
+	}
+}
+
+func TestJsonStorageSizeNumericTextUsesByteJsonMarshal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	texts := []string{
+		"-1",
+		"0",
+		"18446744073709551615",
+		"1.2300",
+		"-0.000",
+		"1e+20",
+	}
+	want := make([]int64, len(texts))
+	for i, text := range texts {
+		bj, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err, text)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err, text)
+		want[i] = int64(len(encoded))
+	}
+
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), texts, nil)},
+		NewFunctionTestResult(types.T_int64.ToType(), false, want, nil),
+		JsonStorageSize)
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestJsonStorageSizeUsesPersistedSpecialByteJson(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	newBinaryValue := func(tp bytejson.TpCode, payload []byte) bytejson.ByteJson {
+		data := binary.AppendUvarint(nil, uint64(len(payload)))
+		data = append(data, payload...)
+		return bytejson.ByteJson{Type: tp, Data: data}
+	}
+	opaque := newBinaryValue(bytejson.TpCodeOpaque, []byte{0x01, 0x02})
+	bit := newBinaryValue(bytejson.TpCodeBit, []byte{0x03})
+	nested, err := bytejson.CreateByteJSON([]any{opaque, bit})
+	require.NoError(t, err)
+
+	input := vector.NewVec(types.T_json.ToType())
+	defer input.Free(proc.Mp())
+	values := []bytejson.ByteJson{opaque, bit, nested}
+	want := make([]int64, len(values))
+	for i, value := range values {
+		encoded, marshalErr := value.Marshal()
+		require.NoError(t, marshalErr)
+		want[i] = int64(len(encoded))
+		require.NoError(t, vector.AppendByteJson(input, value, false, proc.Mp()))
+		require.Equal(t, encoded, input.GetBytesAt(i), "row %d must use persisted bytes", i)
+	}
+
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(len(values)))
+	require.NoError(t, JsonStorageSize([]*vector.Vector{input}, result, proc, len(values), nil))
+	got := vector.GenerateFunctionFixedTypeParameter[int64](result.GetResultVector())
+	for i, expected := range want {
+		value, isNull := got.GetValue(uint64(i))
+		require.False(t, isNull)
+		require.Equal(t, expected, value, "row %d", i)
+	}
+}
+
+func TestJsonStorageRejectsPreparedNonStringDomains(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, fn := range []fEvalFn{JsonStorageSize, JsonStorageFree} {
+		fc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil)},
+			NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), fn)
+		succeed, info := fc.Run()
+		require.True(t, succeed, info)
+	}
+	for _, fn := range []fEvalFn{JsonStorageSize, JsonStorageFree} {
+		for _, tc := range []struct {
+			name string
+			typ  types.T
+			kind vector.PrepareParamKind
+		}{
+			{name: "integer", typ: types.T_int64, kind: vector.PrepareParamInteger},
+			{name: "unsigned", typ: types.T_uint64, kind: vector.PrepareParamInteger},
+			{name: "float", typ: types.T_float64, kind: vector.PrepareParamFloat},
+			{name: "decimal", typ: types.T_decimal128, kind: vector.PrepareParamDecimal},
+			{name: "boolean", typ: types.T_bool, kind: vector.PrepareParamBoolean},
+			{name: "date", typ: types.T_date, kind: vector.PrepareParamNone},
+			{name: "geometry", typ: types.T_geometry, kind: vector.PrepareParamNone},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				input := vector.NewVec(types.T_varchar.ToType())
+				defer input.Free(proc.Mp())
+				require.NoError(t, vector.AppendBytes(input, []byte("1"), false, proc.Mp()))
+				input.SetPrepareParamKind(tc.kind)
+				input.SetPrepareParamType(tc.typ)
+				result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+				defer result.Free()
+				require.NoError(t, result.PreExtendAndReset(1))
+				require.Error(t, fn([]*vector.Vector{input}, result, proc, 1, nil), tc.name)
+			})
+		}
+	}
+
+	fc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"1"}, nil)},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{9}, nil),
+		JsonStorageSize)
+	fc.parameters[0].SetPrepareParamKind(vector.PrepareParamNone)
+	fc.parameters[0].SetPrepareParamType(types.T_varchar)
+	succeed, info := fc.Run()
+	require.True(t, succeed, info)
+}
+
+func TestJsonStorageErrorRecoveryAfterInvalidText(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+		want int64
+	}{
+		{name: "size", fn: JsonStorageSize, want: 4},
+		{name: "free", fn: JsonStorageFree, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := vector.NewVec(types.T_varchar.ToType())
+			defer input.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+			defer result.Free()
+			run := func(text string) error {
+				input.ResetWithSameType()
+				require.NoError(t, vector.AppendBytes(input, []byte(text), false, proc.Mp()))
+				require.NoError(t, result.PreExtendAndReset(1))
+				return tc.fn([]*vector.Vector{input}, result, proc, 1, nil)
+			}
+
+			require.NoError(t, run(`{"a":1}`))
+			require.Error(t, run(`{"a":`))
+			require.NoError(t, run(`"ok"`))
+			value, isNull := vector.GenerateFunctionFixedTypeParameter[int64](result.GetResultVector()).GetValue(0)
+			require.False(t, isNull)
+			require.Equal(t, tc.want, value)
+		})
 	}
 }

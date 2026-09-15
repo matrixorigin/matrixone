@@ -45,6 +45,49 @@ func jsonStorageInvalidArg(proc *process.Process, functionName string) error {
 	return moerr.NewInvalidArg(proc.Ctx, functionName, "invalid JSON document")
 }
 
+// Prepared parameters are transported as text, but their source domain is
+// retained in the vector metadata. Do not let an implicit T_any -> VARCHAR
+// cast turn a numeric (or other non-string) parameter into JSON text. Static
+// SQL NULL remains valid regardless of its prepared source type.
+func jsonStorageCheckPreparedInput(
+	input *vector.Vector,
+	proc *process.Process,
+	functionName string,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	if input == nil || selectList != nil && selectList.IgnoreAllRow() {
+		return nil
+	}
+	preparedType := input.GetPrepareParamType()
+	for row := 0; row < length; row++ {
+		if selectList != nil && selectList.Contains(uint64(row)) {
+			continue
+		}
+		physicalRow := row
+		if input.IsConst() {
+			physicalRow = 0
+		}
+		if input.IsNull(uint64(physicalRow)) {
+			continue
+		}
+		runtimeType := input.GetType().Oid
+		if runtimeType != types.T_any && runtimeType != types.T_json && !runtimeType.IsMySQLString() {
+			return jsonStorageInvalidArg(proc, functionName)
+		}
+		if preparedType != types.T_any {
+			if preparedType != types.T_json && !preparedType.IsMySQLString() {
+				return jsonStorageInvalidArg(proc, functionName)
+			}
+			continue
+		}
+		if input.GetPrepareParamKindAt(physicalRow) != vector.PrepareParamNone {
+			return jsonStorageInvalidArg(proc, functionName)
+		}
+	}
+	return nil
+}
+
 func JsonStorageSize(
 	ivecs []*vector.Vector,
 	result vector.FunctionResultWrapper,
@@ -52,6 +95,9 @@ func JsonStorageSize(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
+	if err := jsonStorageCheckPreparedInput(ivecs[0], proc, "json_storage_size", length, selectList); err != nil {
+		return err
+	}
 	if ivecs[0].GetType().Oid == types.T_json {
 		return opUnaryBytesToFixed[int64](ivecs, result, proc, length,
 			func(value []byte) int64 { return int64(len(value)) }, selectList)
@@ -73,6 +119,9 @@ func JsonStorageFree(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
+	if err := jsonStorageCheckPreparedInput(ivecs[0], proc, "json_storage_free", length, selectList); err != nil {
+		return err
+	}
 	return opUnaryBytesToFixedWithErrorCheck[int64](ivecs, result, proc, length,
 		func(value []byte) (int64, error) {
 			if ivecs[0].GetType().Oid == types.T_json {
