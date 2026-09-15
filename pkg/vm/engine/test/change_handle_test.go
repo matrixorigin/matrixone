@@ -3844,7 +3844,13 @@ func TestGCInMemoryJob(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, txn.Commit(ctxWithTimeout))
 
-	const jobName = "hnsw_idx"
+	const (
+		jobName       = "hnsw_idx"
+		watermarkWait = 30 * time.Second
+	)
+	// Creating the consumer table and committing its first batch can exceed ten
+	// seconds on a loaded race runner. Keep the wait bounded while allowing the
+	// asynchronous ISCP path to make progress under scheduler pressure.
 	target := types.TimestampToTS(txn.Txn().CommitTS)
 	waitForISCPWatermark(
 		t,
@@ -3852,7 +3858,7 @@ func TestGCInMemoryJob(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
 		target,
-		10*time.Second,
+		watermarkWait,
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -3881,7 +3887,7 @@ func TestGCInMemoryJob(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
-		10*time.Second,
+		watermarkWait,
 		10*time.Millisecond,
 		accountId,
 		tableID,
