@@ -85,7 +85,7 @@ func TestPreparedJSONStorageRejectsEnumAndRecovers(t *testing.T) {
 			got, err = evaluate(defines.MYSQL_TYPE_ENUM)
 			require.Equal(t, int64(0), got)
 			require.Error(t, err, "ENUM must not be accepted as text by %s", functionName)
-			require.ErrorContains(t, err, "invalid argument "+functionName)
+			require.ErrorContains(t, err, "invalid argument function "+functionName)
 			require.Equal(t, types.T_enum, cw.proc.GetPrepareParamType(0),
 				"COM_STMT metadata must retain ENUM source domain")
 			cw.proc.SetPrepareParams(nil)
