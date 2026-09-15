@@ -12295,10 +12295,6 @@ func persistUserDefinedFunction(
 			if previousRevision == 0 || previousNamespace == 0 {
 				return moerr.NewInvalidInputNoCtx("UNSUPPORTED_ROUTINE_VERSION: legacy Python definition requires DROP and CREATE")
 			}
-			definition, err = normalizePythonFunctionDefinition(definition)
-			if err != nil {
-				return err
-			}
 			candidate, err := function.DecodePythonRoutineBody(definition.body)
 			if err != nil {
 				return moerr.NewInvalidInputNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python definition rejected before publication: %v", err)
@@ -12315,6 +12311,17 @@ func persistUserDefinedFunction(
 				return moerr.NewInvalidInputNoCtxf(
 					"UNSUPPORTED_ROUTINE_VERSION: Python REPLACE cannot change input or return descriptor; use DROP and CREATE",
 				)
+			}
+			// Compare the immutable candidate signature with the active revision
+			// before validating the compatibility columns. A REPLACE that changes
+			// the descriptor must report the stable identity error even when its
+			// caller-supplied logical args/return fields are stale; otherwise the
+			// same invalid operation produces a different error depending on which
+			// catalog projection is checked first. No catalog write has happened
+			// at this point.
+			definition, err = normalizePythonFunctionDefinition(definition)
+			if err != nil {
+				return err
 			}
 		} else if revisionCatalogReady {
 			var readErr error
