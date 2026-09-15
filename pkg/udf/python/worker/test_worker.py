@@ -3572,6 +3572,34 @@ except Exception:
             next(server.do_action(None, action))
         self.assertEqual(worker._TERMINAL_CANCELLED, server._terminal[key].outcome)
 
+    def test_cancelled_or_shutdown_action_cannot_ack_active_invocation(self):
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        key = (1, "statement", "action-cancel", 1, "active", 1)
+        state = server._admit(key)
+        state.mark_finish_sent("finish-active")
+        tuple_value = {
+            "account_id": key[0], "statement_id": key[1], "group_id": key[2],
+            "group_epoch": key[3], "invocation_id": key[4], "lease_epoch": key[5],
+        }
+        action = types.SimpleNamespace(
+            type="AcknowledgeFinish",
+            body=worker._encode_control({
+                "kind": "AcknowledgeFinish", "tuple": tuple_value,
+                "finish_id": "finish-active",
+            }),
+        )
+        cancelled_context = types.SimpleNamespace(is_cancelled=lambda: True)
+        with self.assertRaisesRegex(TimeoutError, "DEADLINE_EXCEEDED"):
+            next(server.do_action(cancelled_context, action))
+        self.assertFalse(state.finish_acked)
+
+        server._shutdown_event.set()
+        with self.assertRaisesRegex(TimeoutError, "DEADLINE_EXCEEDED"):
+            next(server.do_action(None, action))
+        self.assertFalse(state.finish_acked)
+        state.mark_cancelled()
+        server._finish_invocation(key, state)
+
     def test_active_fence_cannot_be_admitted_twice(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
         key = (1, "statement", "group", 1, "invocation", 1)
