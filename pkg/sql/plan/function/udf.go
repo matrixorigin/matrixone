@@ -304,10 +304,10 @@ func (u *Udf) GetRoutineCall() (*plan.RoutineCall, error) {
 	if u == nil {
 		return nil, fmt.Errorf("routine call requires a non-nil routine")
 	}
-	if strings.EqualFold(u.Language, udf.LanguageSQL) {
+	if u.Language == udf.LanguageSQL {
 		return u.getSQLRoutineCall()
 	}
-	if !strings.EqualFold(u.Language, udf.LanguagePython) {
+	if u.Language != udf.LanguagePython {
 		return nil, fmt.Errorf("routine call has unsupported language %q", u.Language)
 	}
 	if u.FunctionID <= 0 || u.DatabaseID == 0 || u.Revision == 0 || u.NamespaceVersion == 0 {
@@ -343,7 +343,7 @@ func (u *Udf) GetRoutineCall() (*plan.RoutineCall, error) {
 			AccountId:        u.AccountID,
 			DatabaseId:       u.DatabaseID,
 		},
-		Language:      strings.ToLower(u.Language),
+		Language:      udf.LanguagePython,
 		ArgumentTypes: arguments,
 		ReturnType:    *returnType,
 		Volatility:    "VOLATILE",
