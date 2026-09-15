@@ -1734,7 +1734,8 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			Epoch:                s.state.ViewMetadataAdmissionEpoch,
 			RevalidationRequired: s.state.ViewMetadataRevalidationRequired,
 			CatalogFencedEpoch:   s.state.ViewMetadataCatalogFencedEpoch,
-			PersistedExpressionRequiredProtocolVersion: s.state.PersistedExpressionRequiredProtocolVersion,
+			PersistedExpressionRequiredProtocolVersion:   s.state.PersistedExpressionRequiredProtocolVersion,
+			PersistedExpressionProtocolActivationPending: s.state.PersistedExpressionProtocolActivationPending,
 		}
 	}
 	for uuid, info := range s.state.CNState.Stores {

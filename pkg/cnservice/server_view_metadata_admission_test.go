@@ -467,6 +467,84 @@ func TestCNViewMetadataAdmissionSeparatesReadAndAuthoringFloors(t *testing.T) {
 	require.Equal(t, int64(defines.MORPCVersion72), authoringFloor)
 }
 
+func TestCNViewMetadataAdmissionPendingActivationClosesAuthoringAfterRecovery(t *testing.T) {
+	serviceID := "cn-admission-pending-authoring-floor"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() {
+		for _, name := range []string{
+			runtime.PersistedExpressionProtocolFloor,
+			runtime.PersistedExpressionProtocolAuthoringFloor,
+		} {
+			if value, ok := rt.GetGlobalVariables(name); ok {
+				rt.CompareAndDeleteGlobalVariables(name, value)
+			}
+		}
+	})
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, int64(0))
+	s := &service{
+		cfg:                             &Config{UUID: serviceID},
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+	}
+
+	// An earlier acknowledged epoch opened the authoring gate.
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Ready:                true,
+		Admitted:             true,
+		Epoch:                2,
+		Generation:           9,
+		RevalidationRequired: true,
+		CatalogFencedEpoch:   2,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion72),
+	}))
+	authoringFloor, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	require.True(t, ok)
+	require.Equal(t, int64(defines.MORPCVersion72), authoringFloor)
+
+	// A rejected floor raise can carry the old enabled/ready/authoring shape
+	// plus the new durable floor. The pending bit must close authoring even
+	// after the snapshot is serialized and recovered by this CN.
+	pending := &logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Ready:                true,
+		Admitted:             true,
+		Epoch:                2,
+		Generation:           9,
+		RevalidationRequired: true,
+		CatalogFencedEpoch:   2,
+		PersistedExpressionRequiredProtocolVersion:   uint64(defines.MORPCVersion72 + 1),
+		PersistedExpressionProtocolActivationPending: true,
+	}
+	encoded, err := pending.Marshal()
+	require.NoError(t, err)
+	recovered := new(logservicepb.ViewMetadataAdmission)
+	require.NoError(t, recovered.Unmarshal(encoded))
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), recovered))
+	authoringFloor, ok = rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	require.True(t, ok)
+	require.Zero(t, authoringFloor,
+		"pending activation must keep the upgraded CN from authoring new metadata")
+
+	// Only the completed new epoch/catalog fence may reopen authoring.
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Ready:                true,
+		Admitted:             true,
+		Epoch:                3,
+		Generation:           9,
+		RevalidationRequired: true,
+		CatalogFencedEpoch:   3,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion72 + 1),
+	}))
+	authoringFloor, ok = rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	require.True(t, ok)
+	require.Equal(t, int64(defines.MORPCVersion72+1), authoringFloor)
+}
+
 func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
 	missingTable := moerr.NewNoSuchTableNoCtx("mo_catalog", "t")
 	missingDatabase := moerr.NewBadDBNoCtx("mo_catalog")

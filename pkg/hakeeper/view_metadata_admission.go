@@ -837,7 +837,8 @@ func (s *stateMachine) viewMetadataAdmissionSnapshot(uuid string, proxy bool) *p
 		CatalogFencedEpoch:   s.state.ViewMetadataCatalogFencedEpoch,
 		Ready:                !s.viewMetadataAdmissionActive(),
 		Admitted:             !s.viewMetadataAdmissionActive(),
-		PersistedExpressionRequiredProtocolVersion: s.state.PersistedExpressionRequiredProtocolVersion,
+		PersistedExpressionRequiredProtocolVersion:   s.state.PersistedExpressionRequiredProtocolVersion,
+		PersistedExpressionProtocolActivationPending: s.state.PersistedExpressionProtocolActivationPending,
 	}
 	if proxy {
 		if store, ok := s.state.ProxyState.Stores[uuid]; ok {
