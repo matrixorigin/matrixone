@@ -539,6 +539,18 @@ func pythonCatalogTypeNameMatches(name string, oid types.T) bool {
 	return name == strings.ToLower(oid.String())
 }
 
+// PythonCatalogTypeName returns the logical type name stored in the shared
+// catalog signature columns for a Python descriptor.  The exact width and
+// scale remain in the typed descriptor; the historical logical namespace
+// intentionally represents both supported decimal physical widths as
+// "decimal".
+func PythonCatalogTypeName(typ types.Type) string {
+	if typ.Oid == types.T_decimal64 || typ.Oid == types.T_decimal128 {
+		return "decimal"
+	}
+	return strings.ToLower(typ.Oid.String())
+}
+
 func validatePythonTypeDescriptor(descriptor PythonTypeDescriptor) error {
 	typ := descriptor.Type()
 	canonical, err := NewPythonTypeDescriptor(typ)
