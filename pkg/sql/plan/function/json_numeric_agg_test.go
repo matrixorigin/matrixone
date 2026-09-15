@@ -30,9 +30,8 @@ import (
 )
 
 type jsonNumericAggExpectation struct {
-	name     string
-	want     float64
-	wantNull bool
+	name string
+	want float64
 }
 
 var jsonNumericAggExpectations = []jsonNumericAggExpectation{
