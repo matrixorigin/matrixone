@@ -25,12 +25,12 @@ obj2
 DROP TABLE t_dup;
 DROP TABLE t3;
 CREATE TABLE t_obj_numeric(
-    row_id INT,
-    signed_key BIGINT,
-    unsigned_key BIGINT UNSIGNED,
-    float_key FLOAT,
-    decimal_key DECIMAL(12,2),
-    value VARCHAR(20)
+row_id INT,
+signed_key BIGINT,
+unsigned_key BIGINT UNSIGNED,
+float_key FLOAT,
+decimal_key DECIMAL(12,2),
+value VARCHAR(20)
 );
 INSERT INTO t_obj_numeric VALUES
 (1, -7, 18446744073709551615, 1.25, 12.30, 'first'),
