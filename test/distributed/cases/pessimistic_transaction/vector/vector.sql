@@ -201,6 +201,7 @@ create table items_new (
     category varchar(50),
     created_at timestamp default now()
 );
+-- #28917: copying vecf32(4) image_vector into the vecf32(5) column must fail, not silently store a mixed-dimension row
 insert into items_new (id, name, description, image_vector, text_vector, category, created_at)
 select
     id,
