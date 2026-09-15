@@ -53,6 +53,11 @@ const (
 
 	// MOProtocolVersion is the protocol version of the MO services
 	MOProtocolVersion = "protocol-version"
+	// PersistedExpressionProtocolFloor is the locally committed HAKeeper floor
+	// for catalog-bound expression semantics.  It is initialized to zero by a
+	// CN and raised monotonically when an authoritative admission snapshot is
+	// accepted; a missing key keeps standalone/unit-test runtimes compatible.
+	PersistedExpressionProtocolFloor = "persisted-expression-protocol-floor"
 
 	// BackgroundCNSelector is the labels of the CN handing the background requests, including mo-logger, task-service.
 	BackgroundCNSelector = "background-cn-selector"

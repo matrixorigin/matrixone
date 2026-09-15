@@ -53,7 +53,14 @@ func (s *service) initViewMetadataAdmission(ctx context.Context) error {
 		return moerr.NewInternalErrorNoCtx("HAKeeper returned zero view metadata admission generation")
 	}
 	s.viewMetadataAdmissionGeneration = generation
-	runtime.ServiceRuntime(s.cfg.UUID).SetGlobalVariables(
+	rt := runtime.ServiceRuntime(s.cfg.UUID)
+	if rt == nil {
+		return moerr.NewInternalErrorNoCtx("CN runtime is not initialized")
+	}
+	if _, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolFloor); !ok {
+		rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
+	}
+	rt.SetGlobalVariables(
 		compile.ViewMetadataEpochFenceRuntimeKey,
 		s.viewMetadataEpochFence,
 	)
@@ -118,8 +125,46 @@ func (s *service) applyViewMetadataAdmission(
 		s.revokeViewMetadataGeneration(snapshot.Generation)
 		return nil
 	}
+	if snapshot.PersistedExpressionRequiredProtocolVersion >
+		uint64(defines.MORPCLatestVersion) {
+		// Reject before advancing the epoch, publishing the snapshot, or
+		// running catalog regeneration.  A downgraded CN must remain closed and
+		// leave the previous admission state untouched until it is upgraded.
+		err := moerr.NewNotSupportedf(
+			ctx,
+			"CN %s requires persisted expression protocol version %d (local version %d)",
+			s.cfg.UUID,
+			snapshot.PersistedExpressionRequiredProtocolVersion,
+			defines.MORPCLatestVersion)
+		// Do not leave an older admitted snapshot published after rejecting a
+		// future floor.  Startup/readiness consumers must observe a closed,
+		// poisoned snapshot until this CN is upgraded.
+		copy := *snapshot
+		copy.Preparing = true
+		copy.Enabled = false
+		copy.Ready = false
+		copy.Admitted = false
+		s.lockViewMetadataAdmission()
+		s.viewMetadataAdmission.Store(&copy)
+		s.notifyViewMetadataAdmissionUpdated()
+		s.viewMetadataAdmissionMu.Unlock()
+		return err
+	}
 	if s.viewMetadataEpochFence == nil {
 		return moerr.NewInternalErrorNoCtx("view metadata epoch fence is not initialized")
+	}
+	if snapshot.PersistedExpressionRequiredProtocolVersion > 0 {
+		if rt := runtime.ServiceRuntime(s.cfg.UUID); rt != nil {
+			value, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolFloor)
+			current, valid := value.(int64)
+			required := int64(snapshot.PersistedExpressionRequiredProtocolVersion)
+			if !ok || !valid || current < required {
+				// Publish the durable floor before the epoch fence or catalog SQL;
+				// no planner/restore path can write or bind a marked view in the
+				// window between those operations.
+				rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, required)
+			}
+		}
 	}
 	if err := s.viewMetadataEpochFence.Advance(ctx, snapshot.Epoch); err != nil {
 		return err
@@ -400,6 +445,15 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool) error
 				s.cfg.UUID,
 				s.viewMetadataAdmissionGeneration,
 				snapshot.Generation)
+		}
+		if snapshot != nil && snapshot.PersistedExpressionRequiredProtocolVersion >
+			uint64(defines.MORPCLatestVersion) {
+			return moerr.NewNotSupportedf(
+				operationCtx,
+				"CN %s requires persisted expression protocol version %d (local version %d)",
+				s.cfg.UUID,
+				snapshot.PersistedExpressionRequiredProtocolVersion,
+				defines.MORPCLatestVersion)
 		}
 		if snapshot != nil && snapshot.Epoch > 0 && s.viewMetadataEpochFence.Epoch() < snapshot.Epoch {
 			if err := s.viewMetadataEpochFence.Advance(operationCtx, snapshot.Epoch); err != nil {

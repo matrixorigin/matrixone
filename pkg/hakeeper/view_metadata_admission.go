@@ -55,10 +55,10 @@ func GetEnableViewMetadataAdmissionCmdForConfig(cfg Config) []byte {
 }
 
 // GetEnableViewMetadataAdmissionCmdForConfigWithProtocol carries the
-// deployment's persisted-expression compatibility floor through the same
-// replicated admission barrier as the timeout targets. The legacy helper
-// intentionally keeps the field at zero so old timeout-only callers remain
-// wire-compatible; the upgraded log-service store supplies the real floor.
+// deployment's persisted-expression compatibility floor through the
+// independent, one-way protocol activation entry. The legacy helper
+// intentionally keeps the field at zero so timeout-only phase-two callers
+// remain wire-compatible; the upgraded log-service store supplies the floor.
 func GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
 	cfg Config,
 	requiredProtocolVersion uint64,
@@ -71,10 +71,27 @@ func GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
 		EvaluateCurrentStores:  true,
 		PersistedExpressionRequiredProtocolVersion: requiredProtocolVersion,
 	}
+	if requiredProtocolVersion > 0 {
+		return getPersistedExpressionProtocolActivationCmd(&targets)
+	}
 	return getEnableViewMetadataAdmissionCmd(&targets)
 }
 
 func getEnableViewMetadataAdmissionCmd(targets *pb.ViewMetadataAdmissionTargets) []byte {
+	return getViewMetadataAdmissionCmd(pb.EnableViewMetadataAdmissionUpdate, targets)
+}
+
+func getPersistedExpressionProtocolActivationCmd(
+	targets *pb.ViewMetadataAdmissionTargets,
+) []byte {
+	return getViewMetadataAdmissionCmd(
+		pb.ActivatePersistedExpressionProtocolUpdate, targets)
+}
+
+func getViewMetadataAdmissionCmd(
+	tag pb.HAKeeperUpdateType,
+	targets *pb.ViewMetadataAdmissionTargets,
+) []byte {
 	payload := []byte(nil)
 	if targets != nil {
 		payload = make([]byte, targets.ProtoSize())
@@ -83,7 +100,7 @@ func getEnableViewMetadataAdmissionCmd(targets *pb.ViewMetadataAdmissionTargets)
 		}
 	}
 	cmd := make([]byte, headerSize+len(payload))
-	binaryEnc.PutUint32(cmd, uint32(pb.EnableViewMetadataAdmissionUpdate))
+	binaryEnc.PutUint32(cmd, uint32(tag))
 	copy(cmd[headerSize:], payload)
 	return cmd
 }
@@ -197,6 +214,12 @@ func (s *stateMachine) startViewMetadataRequiredEpoch() {
 	s.state.ViewMetadataAdmissionEpoch++
 	s.state.ViewMetadataRevalidationRequired = true
 	s.state.ViewMetadataCatalogFencedEpoch = 0
+	// Epoch acknowledgements are generation-scoped.  A protocol-floor raise
+	// must not reuse readiness or catalog-fence observations collected for the
+	// preceding epoch, even when the service generation is unchanged.
+	s.state.ViewMetadataAdmissionLogReady = make(map[string]bool)
+	s.state.ViewMetadataAdmissionCNReady = make(map[string]bool)
+	s.state.ViewMetadataAdmissionProxyReady = make(map[string]bool)
 	s.state.ViewMetadataAdmissionCNTargets = make(map[string]uint64)
 	s.state.ViewMetadataAdmissionProxyTargets = make(map[string]uint64)
 	s.state.ViewMetadataAdmissionCNTargetTicks = make(map[string]uint64)
@@ -382,23 +405,20 @@ func (s *stateMachine) expireViewMetadataAdmissionTargets(targets pb.ViewMetadat
 
 func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 	targets, hasTargets := parseEnableViewMetadataAdmissionCmd(cmd)
+	if hasTargets && targets.PersistedExpressionRequiredProtocolVersion > 0 {
+		// Protocol-bearing admission commands use the independent activation tag.
+		// Keeping the legacy handler fail-closed prevents an accidentally crafted
+		// old-tag command from publishing a floor without the new barrier.
+		return sm.Result{}
+	}
+	return s.handleEnableViewMetadataAdmissionLegacy(targets, hasTargets)
+}
+
+func (s *stateMachine) handleEnableViewMetadataAdmissionLegacy(
+	targets pb.ViewMetadataAdmissionTargets,
+	hasTargets bool,
+) sm.Result {
 	if s.state.ViewMetadataAdmissionEnabled {
-		if hasTargets && targets.PersistedExpressionRequiredProtocolVersion >
-			s.state.PersistedExpressionRequiredProtocolVersion {
-			// A floor raise is serialized with admission reconciliation. Do not
-			// publish it while a live lower-capability CN can still serve catalog
-			// metadata; the next heartbeat retries the same deterministic command.
-			if !s.persistedExpressionProtocolReady(
-				targets.PersistedExpressionRequiredProtocolVersion,
-				targets.CNStoreTimeoutTicks) {
-				return sm.Result{}
-			}
-			s.state.PersistedExpressionRequiredProtocolVersion =
-				targets.PersistedExpressionRequiredProtocolVersion
-			if !s.state.ViewMetadataRevalidationRequired {
-				s.startViewMetadataRequiredEpoch()
-			}
-		}
 		if hasTargets {
 			s.expireViewMetadataAdmissionTargets(targets)
 			s.tryPromoteViewMetadataAdmissions(&targets)
@@ -437,9 +457,9 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 		if !s.state.ViewMetadataAdmissionLogReady[uuid] {
 			return sm.Result{}
 		}
-		if targets.PersistedExpressionRequiredProtocolVersion > 0 {
+		if s.state.PersistedExpressionRequiredProtocolVersion > 0 {
 			store, ok := s.state.LogState.Stores[uuid]
-			if !ok || !store.ViewMetadataAdmissionProtocolV2Supported {
+			if !ok || !store.ViewMetadataAdmissionProtocolV3Supported {
 				return sm.Result{}
 			}
 		}
@@ -448,9 +468,9 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 		if !s.state.ViewMetadataAdmissionLogReady[uuid] {
 			return sm.Result{}
 		}
-		if targets.PersistedExpressionRequiredProtocolVersion > 0 {
+		if s.state.PersistedExpressionRequiredProtocolVersion > 0 {
 			store, ok := s.state.LogState.Stores[uuid]
-			if !ok || !store.ViewMetadataAdmissionProtocolV2Supported {
+			if !ok || !store.ViewMetadataAdmissionProtocolV3Supported {
 				return sm.Result{}
 			}
 		}
@@ -470,9 +490,8 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 		if !s.state.ViewMetadataAdmissionCNReady[uuid] {
 			return sm.Result{}
 		}
-		if targets.PersistedExpressionRequiredProtocolVersion > 0 &&
-			store.PersistedExpressionProtocolVersion <
-				targets.PersistedExpressionRequiredProtocolVersion {
+		if required := s.state.PersistedExpressionRequiredProtocolVersion; required > 0 &&
+			store.PersistedExpressionProtocolVersion < required {
 			return sm.Result{}
 		}
 	}
@@ -486,14 +505,6 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 	}
 	if s.state.ViewMetadataCatalogFencedEpoch < s.state.ViewMetadataAdmissionEpoch {
 		return sm.Result{}
-	}
-	if hasTargets && targets.PersistedExpressionRequiredProtocolVersion >
-		s.state.PersistedExpressionRequiredProtocolVersion {
-		// Capability checks above passed for every live CN. Set this before the
-		// enabled bit is published so every RSM observes the same floor and
-		// snapshot thereafter.
-		s.state.PersistedExpressionRequiredProtocolVersion =
-			targets.PersistedExpressionRequiredProtocolVersion
 	}
 	for uuid, store := range s.state.CNState.Stores {
 		store.ViewMetadataAdmissionReady = false
@@ -525,6 +536,114 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 	return sm.Result{Value: 1}
 }
 
+// viewMetadataLogStoresProtocolReady is the RSM-side proof that every member
+// of the HAKeeper shard can decode the protocol-bearing activation entry.  It
+// intentionally considers only current voting/non-voting members; historical
+// Store records are handled by logScheduleCommandDeliverable before admission.
+func (s *stateMachine) viewMetadataLogStoresProtocolReady() bool {
+	shard, ok := s.state.LogState.Shards[DefaultHAKeeperShardID]
+	if !ok || len(shard.Replicas) == 0 {
+		return false
+	}
+	check := func(uuid string) bool {
+		store, exists := s.state.LogState.Stores[uuid]
+		return exists && store.ViewMetadataAdmissionSupported &&
+			store.ViewMetadataAdmissionProtocolV3Supported
+	}
+	for _, uuid := range shard.Replicas {
+		if !check(uuid) {
+			return false
+		}
+	}
+	for _, uuid := range shard.NonVotingReplicas {
+		if !check(uuid) {
+			return false
+		}
+	}
+	return true
+}
+
+// handleActivatePersistedExpressionProtocol performs the protocol-floor
+// transition behind a new HAKeeper update tag.  The first entry commits the
+// floor and starts a fresh admission epoch; a later entry, after post-barrier
+// heartbeats and catalog fences, publishes the enabled state.  Splitting the
+// replicated state transition this way prevents a capability/fence observed
+// before the floor was raised from satisfying the new contract.
+func (s *stateMachine) handleActivatePersistedExpressionProtocol(
+	cmd []byte,
+) sm.Result {
+	targets, hasTargets := parseEnableViewMetadataAdmissionCmd(cmd)
+	if !hasTargets || !targets.Explicit || !targets.EvaluateCurrentStores ||
+		targets.PersistedExpressionRequiredProtocolVersion == 0 {
+		return sm.Result{}
+	}
+	required := targets.PersistedExpressionRequiredProtocolVersion
+	if s.state.PersistedExpressionRequiredProtocolVersion > required {
+		return sm.Result{}
+	}
+	if !s.viewMetadataLogStoresProtocolReady() ||
+		!s.persistedExpressionProtocolReady(required, targets.CNStoreTimeoutTicks) {
+		return sm.Result{}
+	}
+	if s.hasPendingHAKeeperAdmission() {
+		return sm.Result{}
+	}
+	if !s.viewMetadataAdmissionActive() {
+		if s.hasPendingHAKeeperAdmission() {
+			return sm.Result{}
+		}
+		// Initial protocol activation is the phase-one barrier.  Commit the
+		// floor and the preparation epoch together so no CN can publish or
+		// consume persisted view metadata under a lower contract.
+		s.state.PersistedExpressionRequiredProtocolVersion = required
+		s.state.ViewMetadataAdmissionPreparing = true
+		if s.state.ViewMetadataAdmissionEpoch == 0 {
+			s.state.ViewMetadataAdmissionEpoch = 1
+		}
+		s.state.ViewMetadataRevalidationRequired = true
+		s.state.ViewMetadataCatalogFencedEpoch = 0
+		s.resetViewMetadataAdmissionBarrier()
+		return sm.Result{Value: 2}
+	}
+	if s.state.ViewMetadataAdmissionEnabled && s.state.ViewMetadataAdmissionPending {
+		// A floor raise is serialized after the current admission epoch has
+		// converged; otherwise two independent revalidation epochs could race
+		// and an older pending target could be lost.
+		return sm.Result{}
+	}
+
+	// Commit the monotonic floor before any completion check.  Raising it also
+	// unconditionally starts a new epoch and clears all old acknowledgements,
+	// including a catalog fence produced by a lower-capability CN.
+	if s.state.PersistedExpressionRequiredProtocolVersion < required {
+		s.state.PersistedExpressionRequiredProtocolVersion = required
+		if s.state.ViewMetadataAdmissionPreparing {
+			// A legacy phase-one barrier may already be in flight.  Its target
+			// maps describe pre-floor observations and must be discarded rather
+			// than carried into the new protocol epoch.
+			if s.state.ViewMetadataAdmissionEpoch == 0 {
+				s.state.ViewMetadataAdmissionEpoch = 1
+			} else {
+				s.state.ViewMetadataAdmissionEpoch++
+			}
+			s.state.ViewMetadataRevalidationRequired = true
+			s.state.ViewMetadataCatalogFencedEpoch = 0
+			s.resetViewMetadataAdmissionBarrier()
+		} else {
+			s.startViewMetadataRequiredEpoch()
+		}
+		return sm.Result{}
+	}
+	// Once the floor has been committed, phase two is intentionally driven by
+	// the legacy admission/reconciliation tag.  A protocol tag with no floor
+	// transition is a harmless retry/no-op.
+	if s.state.ViewMetadataAdmissionPreparing {
+		return sm.Result{}
+	}
+
+	return sm.Result{}
+}
+
 // updateCNViewMetadataAdmission installs a heartbeat unless a newer process
 // generation already owns this UUID. It returns false for a stale heartbeat.
 func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) bool {
@@ -532,6 +651,18 @@ func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) boo
 	active := s.viewMetadataAdmissionActive()
 	if active && existed &&
 		hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
+		if s.state.PersistedExpressionRequiredProtocolVersion > 0 &&
+			hb.PersistedExpressionProtocolVersion <
+				s.state.PersistedExpressionRequiredProtocolVersion {
+			// A restarted/downgraded CN can report an older generation before the
+			// allocator hands out a new one. Do not replace the authoritative
+			// metadata, but immediately remove the old UUID from routing so its
+			// previous ready bit cannot survive until timeout.
+			previous.ViewMetadataAdmissionReady = false
+			s.state.CNState.Stores[hb.UUID] = previous
+			delete(s.state.ViewMetadataAdmissionCNReady, hb.UUID)
+			s.state.ViewMetadataAdmissionPending = true
+		}
 		return false
 	}
 	newGeneration := !existed ||
@@ -556,6 +687,19 @@ func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) boo
 			s.state.ViewMetadataAdmissionCNTargetTicks = make(map[string]uint64)
 		}
 		s.state.ViewMetadataAdmissionCNTargetTicks[hb.UUID] = store.Tick
+	} else if newGeneration && s.state.PersistedExpressionRequiredProtocolVersion > 0 {
+		// The old owner's target is no longer authoritative once a newer
+		// generation has published a compatible heartbeat. Replace it in the
+		// current epoch so the new owner can restore readiness immediately after
+		// observing the epoch and catalog fence; waiting for the old target's
+		// timeout would unnecessarily withdraw a healthy replacement.
+		if _, ok := s.state.ViewMetadataAdmissionCNTargets[hb.UUID]; ok {
+			s.state.ViewMetadataAdmissionCNTargets[hb.UUID] = hb.ViewMetadataAdmissionGeneration
+			if s.state.ViewMetadataAdmissionCNTargetTicks == nil {
+				s.state.ViewMetadataAdmissionCNTargetTicks = make(map[string]uint64)
+			}
+			s.state.ViewMetadataAdmissionCNTargetTicks[hb.UUID] = store.Tick
+		}
 	}
 	if newGeneration {
 		store.ViewMetadataAdmissionReady = false
@@ -571,6 +715,14 @@ func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) boo
 		s.state.CNState.Stores[hb.UUID] = store
 		return true
 	}
+	if required := s.state.PersistedExpressionRequiredProtocolVersion; required > 0 &&
+		hb.PersistedExpressionProtocolVersion < required {
+		store.ViewMetadataAdmissionReady = false
+		delete(s.state.ViewMetadataAdmissionCNReady, hb.UUID)
+		s.state.ViewMetadataAdmissionPending = true
+		s.state.CNState.Stores[hb.UUID] = store
+		return true
+	}
 	if hb.ViewMetadataObservedEpoch >= s.state.ViewMetadataAdmissionEpoch {
 		if s.state.ViewMetadataAdmissionPreparing {
 			if s.state.ViewMetadataAdmissionCNReady == nil {
@@ -582,7 +734,9 @@ func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) boo
 		}
 	}
 	if hb.ViewMetadataCatalogFencedEpoch == s.state.ViewMetadataAdmissionEpoch &&
-		hb.ViewMetadataObservedEpoch >= hb.ViewMetadataCatalogFencedEpoch {
+		hb.ViewMetadataObservedEpoch >= hb.ViewMetadataCatalogFencedEpoch &&
+		hb.PersistedExpressionProtocolVersion >=
+			s.state.PersistedExpressionRequiredProtocolVersion {
 		s.state.ViewMetadataCatalogFencedEpoch = hb.ViewMetadataCatalogFencedEpoch
 	}
 	if s.state.ViewMetadataAdmissionEnabled && !store.ViewMetadataAdmissionReady {

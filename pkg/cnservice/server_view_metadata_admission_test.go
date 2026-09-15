@@ -330,6 +330,74 @@ func TestCNViewMetadataAdmissionRejectsUnknownPersistedExpressionProtocol(t *tes
 	require.NoError(t, err)
 }
 
+func TestCNApplyViewMetadataAdmissionFutureFloorFailsClosedBeforeAdvance(t *testing.T) {
+	serviceID := "cn-future-floor-early-gate"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() {
+		if value, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(runtime.PersistedExpressionProtocolFloor, value)
+		}
+	})
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
+	s := &service{
+		cfg:                             &Config{UUID: serviceID},
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
+		Enabled:    true,
+		Epoch:      3,
+		Generation: 9,
+		Admitted:   true,
+		Ready:      true,
+	})
+	err := s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+		Enabled:    true,
+		Epoch:      4,
+		Generation: 9,
+		Admitted:   true,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion + 1),
+	})
+	require.ErrorContains(t, err, "requires persisted expression protocol version")
+	require.Zero(t, s.viewMetadataEpochFence.Epoch())
+	poisoned := s.viewMetadataAdmission.Load()
+	require.NotNil(t, poisoned)
+	require.False(t, poisoned.Admitted)
+	require.False(t, poisoned.Ready)
+}
+
+func TestCNApplyViewMetadataAdmissionPublishesDurableFloorBeforeFence(t *testing.T) {
+	serviceID := "cn-future-floor-publish-order"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() {
+		if value, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(runtime.PersistedExpressionProtocolFloor, value)
+		}
+	})
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
+	s := &service{
+		cfg:                             &Config{UUID: serviceID},
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+	}
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+		Enabled:    true,
+		Epoch:      2,
+		Generation: 9,
+		Admitted:   true,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion72),
+	}))
+	floor, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolFloor)
+	require.True(t, ok)
+	require.Equal(t, int64(defines.MORPCVersion72), floor)
+	require.Equal(t, uint64(2), s.viewMetadataEpochFence.Epoch())
+}
+
 func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
 	missingTable := moerr.NewNoSuchTableNoCtx("mo_catalog", "t")
 	missingDatabase := moerr.NewBadDBNoCtx("mo_catalog")
