@@ -222,7 +222,8 @@ func (s *service) persistedExpressionAuthoringSnapshotReady(
 	snapshot *logservicepb.ViewMetadataAdmission,
 ) bool {
 	if snapshot == nil || snapshot.PersistedExpressionRequiredProtocolVersion == 0 ||
-		!snapshot.Enabled || !snapshot.Ready || !snapshot.Admitted {
+		!snapshot.Enabled || !snapshot.Ready || !snapshot.Admitted ||
+		snapshot.PersistedExpressionProtocolActivationPending {
 		return false
 	}
 	if !snapshot.RevalidationRequired {

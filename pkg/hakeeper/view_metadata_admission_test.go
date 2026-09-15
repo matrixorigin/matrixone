@@ -221,6 +221,62 @@ func TestPersistedExpressionProtocolActivationStartsBarrier(t *testing.T) {
 	require.True(t, rsm.state.ViewMetadataAdmissionEnabled)
 }
 
+func TestPersistedExpressionProtocolPendingSnapshotClosesOnlyAuthoring(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.ViewMetadataAdmissionEnabled = true
+	rsm.state.ViewMetadataAdmissionEpoch = 2
+	rsm.state.ViewMetadataRevalidationRequired = true
+	rsm.state.ViewMetadataCatalogFencedEpoch = 2
+	rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
+		Replicas: map[uint64]string{1: "log-1"},
+	}
+	updateViewMetadataLogWithProtocol(t, rsm, "log-1", true)
+	rsm.state.CNState.Stores["cn-low"] = pb.CNStoreInfo{
+		Tick:                            10,
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 1,
+		ViewMetadataObservedEpoch:       2,
+		ViewMetadataCatalogFencedEpoch:  2,
+		ViewMetadataAdmissionReady:      true,
+		ViewMetadataIngressReady:        true,
+	}
+	rsm.state.CNState.Stores["cn-ready"] = pb.CNStoreInfo{
+		Tick:                               10,
+		ViewMetadataAdmissionSupported:     true,
+		ViewMetadataAdmissionGeneration:    1,
+		ViewMetadataObservedEpoch:          2,
+		ViewMetadataCatalogFencedEpoch:     2,
+		ViewMetadataAdmissionReady:         true,
+		ViewMetadataIngressReady:           true,
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
+	}
+	cfg := Config{TickPerSecond: 1, CNStoreTimeout: 10 * time.Second}
+	result, err := rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd: GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
+			cfg, uint64(defines.MORPCLatestVersion)),
+	})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.True(t, rsm.state.PersistedExpressionProtocolActivationPending)
+	require.False(t, rsm.state.CNState.Stores["cn-low"].ViewMetadataAdmissionReady)
+
+	// The upgraded CN may still read/revalidate existing metadata while the
+	// decoder floor is durable, but the CN-facing snapshot must not let it
+	// publish the new authoring floor before the new epoch starts.
+	ready := rsm.viewMetadataAdmissionSnapshot("cn-ready", false)
+	require.True(t, ready.Ready)
+	require.True(t, ready.Admitted)
+	require.True(t, ready.PersistedExpressionProtocolActivationPending)
+	low := rsm.viewMetadataAdmissionSnapshot("cn-low", false)
+	require.False(t, low.Ready)
+	require.False(t, low.Admitted)
+	require.True(t, low.PersistedExpressionProtocolActivationPending)
+	details := rsm.handleClusterDetailsQuery(cfg)
+	require.NotNil(t, details.ViewMetadataAdmission)
+	require.True(t, details.ViewMetadataAdmission.PersistedExpressionProtocolActivationPending)
+}
+
 func TestViewMetadataAdmissionFloorRejectsLegacyCNAndLogReplica(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.ViewMetadataAdmissionEnabled = true
