@@ -405,12 +405,17 @@ cleanup() {
     if [[ -z "$timer_pid" && -f "$CASE_DIR/heartbeat-child.pid" ]]; then
         timer_pid=$(cat "$CASE_DIR/heartbeat-child.pid")
     fi
+    # Unblock the injected launch-window hook before terminating its owner.
+    printf 'cleanup\n' >&8 2>/dev/null || true
     if [[ -n "$timer_pid" ]]; then
         kill -KILL "$timer_pid" 2>/dev/null || true
     fi
     if [[ -n "$heartbeat_pid" ]]; then
         kill -KILL "$heartbeat_pid" 2>/dev/null || true
+        wait "$heartbeat_pid" 2>/dev/null || true
     fi
+    timer_pid=""
+    heartbeat_pid=""
     exec 7>&-
     exec 8>&-
     exec 9>&-
@@ -450,8 +455,14 @@ kill "-${HEARTBEAT_STOP_SIGNAL}" "$heartbeat_pid" || exit 92
 printf 'release\n' >&8
 stop_ut_heartbeat
 [[ -z "$UT_HEARTBEAT_PID" ]] || exit 93
-! kill -0 "$heartbeat_pid" 2>/dev/null || exit 94
-! kill -0 "$timer_pid" 2>/dev/null || exit 95
+if kill -0 "$heartbeat_pid" 2>/dev/null; then
+    exit 94
+fi
+heartbeat_pid=""
+if kill -0 "$timer_pid" 2>/dev/null; then
+    exit 95
+fi
+timer_pid=""
 `
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
