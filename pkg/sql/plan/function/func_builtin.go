@@ -456,6 +456,11 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 				default:
 					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 				}
+			} else if typ.IsIntOrUint() && typ.Width == 0 {
+				// Width is the physical type width for stored integer columns, but
+				// expression-only integer types may leave it unset. Do not expose
+				// that internal zero as a MySQL display width.
+				ret = ts
 			} else {
 				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}

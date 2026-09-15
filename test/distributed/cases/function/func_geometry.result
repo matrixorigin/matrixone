@@ -88,8 +88,18 @@ srid_centroid
 select st_astext(st_centroid(st_geomfromtext(null))) as null_centroid;
 null_centroid
 null
-select st_centroid(st_geomfromtext('MULTIPOINT((0 0),(1 1))'));
-invalid input: geometry type is not supported by ST_Centroid
+select st_astext(st_centroid(st_geomfromtext('MULTIPOINT(0 0,2 2,4 0)'))) as multipoint_centroid;
+multipoint_centroid
+POINT(2 0.6666666666666666)
+select st_astext(st_centroid(st_geomfromtext('MULTILINESTRING((0 0,2 0),(0 10,0 11))'))) as multiline_centroid;
+multiline_centroid
+POINT(0.6666666666666666 3.5)
+select st_astext(st_centroid(st_geomfromtext('MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)),((10 0,12 0,12 2,10 2,10 0)))'))) as multipolygon_centroid;
+multipolygon_centroid
+POINT(8.9 0.9)
+select st_astext(st_centroid(st_geomfromtext('GEOMETRYCOLLECTION EMPTY'))) as empty_collection_centroid;
+empty_collection_centroid
+null
 drop table if exists geo_point_ok;
 create table geo_point_ok(g point);
 insert into geo_point_ok values (st_geomfromtext('POINT(1 1)'));
@@ -702,7 +712,7 @@ disjoint_polygons
 1
 select st_disjoint(st_geomfromtext('LINESTRING(0 0,2 2)', 4326), st_geomfromtext('POINT(1 1)', 4326)) as disjoint_srid;
 disjoint_srid
-0
+1
 select st_disjoint(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)')) as disjoint_multipoint_point;
 disjoint_multipoint_point
 0
@@ -871,8 +881,12 @@ d34
 select st_distance(st_geomfromtext('MULTIPOINT((0 0),(5 0))'), st_geomfromtext('MULTIPOINT((2 0),(8 0))')) as d35;
 d35
 2.0
-select st_distance(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('POINT(0 0)'));
-invalid input: ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs
+select st_distance(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0))'), st_geomfromtext('POINT(0 0)')) as geometry_collection_distance;
+geometry_collection_distance
+0.0
+select st_distance(st_geomfromtext('GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT EMPTY),MULTIPOINT EMPTY)'), st_geomfromtext('POINT(0 0)')) as nested_empty_distance;
+nested_empty_distance
+null
 select st_astext(st_endpoint(st_geomfromtext('LINESTRING(0 0,3 4)'))) as last_point;
 last_point
 POINT(3 4)
@@ -905,8 +919,15 @@ srid_envelope
 select st_astext(st_envelope(st_geomfromtext(null))) as null_envelope;
 null_envelope
 null
-select st_envelope(st_geomfromtext('MULTIPOINT((0 0),(1 1))'));
-invalid input: geometry type is not supported by ST_Envelope
+select st_astext(st_envelope(st_geomfromtext('MULTIPOINT((0 0),(1 1))'))) as multipoint_envelope;
+multipoint_envelope
+POLYGON((0 0,1 0,1 1,0 1,0 0))
+select st_astext(st_envelope(st_geomfromtext('GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,2 3))'))) as collection_envelope;
+collection_envelope
+POLYGON((0 0,2 0,2 3,0 3,0 0))
+select st_astext(st_envelope(st_geomfromtext('GEOMETRYCOLLECTION EMPTY'))) as empty_collection_envelope;
+empty_collection_envelope
+GEOMETRYCOLLECTION EMPTY
 select st_equals(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(0 0)')) as equals_point_point_same;
 equals_point_point_same
 1
@@ -1164,7 +1185,7 @@ intersects_disjoint_polygons
 0
 select st_intersects(st_geomfromtext('LINESTRING(0 0,2 2)', 4326), st_geomfromtext('POINT(1 1)', 4326)) as intersects_srid;
 intersects_srid
-1
+0
 select st_intersects(st_geomfromtext('MULTIPOINT((0 0),(1 1))'), st_geomfromtext('POINT(1 1)')) as intersects_multipoint_point;
 intersects_multipoint_point
 1
@@ -1304,11 +1325,21 @@ crossing_line
 select st_issimple(st_geomfromtext('LINESTRING(0 0,1 0,0 0)')) as backtracking_line;
 backtracking_line
 0
+select st_issimple(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 0))')) as simple_polygon;
+simple_polygon
+1
+select st_issimple(st_geomfromtext('MULTIPOINT(0 0,1 1,0 0)')) as duplicate_multipoint;
+duplicate_multipoint
+0
+select st_issimple(st_geomfromtext('MULTILINESTRING((0 0,1 0),(1 0,2 0))')) as endpoint_multiline;
+endpoint_multiline
+1
+select st_issimple(st_geomfromtext('GEOMETRYCOLLECTION(POINT(1 0),LINESTRING(0 0,2 0))')) as interior_collection;
+interior_collection
+0
 select st_issimple(st_geomfromtext(null)) as null_simple;
 null_simple
 null
-select st_issimple(st_geomfromtext('POLYGON((0 0,1 0,1 1,0 0))'));
-invalid input: geometry type is not supported by ST_IsSimple
 select st_isvalid(st_geomfromtext('POINT(1 2)')) as point_valid;
 point_valid
 1
