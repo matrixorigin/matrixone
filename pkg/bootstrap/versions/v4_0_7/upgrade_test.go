@@ -28,14 +28,14 @@ func TestPythonFunctionRevisionUpgradeContract(t *testing.T) {
 	if metadata.Version != "4.0.7" || metadata.MinUpgradeVersion != "4.0.6" {
 		t.Fatalf("unexpected version metadata: %+v", metadata)
 	}
-	if metadata.UpgradeCluster != versions.No || metadata.UpgradeTenant != versions.Yes {
-		t.Fatalf("python catalog upgrade must be tenant scoped: %+v", metadata)
+	if metadata.UpgradeCluster != versions.Yes || metadata.UpgradeTenant != versions.Yes {
+		t.Fatalf("4.0.7 must run both cluster and tenant upgrades: %+v", metadata)
 	}
 	if metadata.VersionOffset != uint32(len(tenantUpgEntries)) {
 		t.Fatalf("version offset %d does not match tenant entries %d", metadata.VersionOffset, len(tenantUpgEntries))
 	}
-	if metadata.RequiredProtocolVersion != defines.MORPCVersion48 {
-		t.Fatalf("unexpected protocol gate: %v", metadata.RequiredProtocolVersion)
+	if metadata.RequiredProtocolVersion != defines.MORPCVersion61 {
+		t.Fatalf("unexpected 4.0.7 protocol gate: %v", metadata.RequiredProtocolVersion)
 	}
 
 	if len(tenantUpgEntries) != 9 {
