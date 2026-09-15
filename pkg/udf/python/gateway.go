@@ -609,6 +609,12 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	openAttempted := false
 	defer func() {
 		reason := admissionReason(streamCtx, openAttempted, err)
+		// Cancel the Flight exchange before returning the local K slot and
+		// terminal-ledger ownership. On an input/send/receive failure the
+		// worker may still be running; releasing admission first would let a
+		// replacement invocation start while the old handler has not yet seen
+		// its cancellation.
+		cancel()
 		if cleanupErr := admission.finish(openAttempted, reason); err == nil && cleanupErr != nil {
 			err = cleanupErr
 		}
