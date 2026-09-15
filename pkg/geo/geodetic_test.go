@@ -84,6 +84,13 @@ func TestAreaSquareMeters(t *testing.T) {
 	want := EarthRadiusMeters * EarthRadiusMeters * dLon * band
 	require.InEpsilon(t, want, got, 0.01)
 
+	// Crossing the antimeridian must describe the same one-degree local patch
+	// as the longitude-equivalent region around zero, not its near-global
+	// spherical complement.
+	dateline := AreaSquareMeters(mustParse(t, "POLYGON((179.5 -0.5,-179.5 -0.5,-179.5 0.5,179.5 0.5,179.5 -0.5))"))
+	local := AreaSquareMeters(mustParse(t, "POLYGON((-0.5 -0.5,0.5 -0.5,0.5 0.5,-0.5 0.5,-0.5 -0.5))"))
+	require.InEpsilon(t, local, dateline, 1e-9)
+
 	require.Equal(t, 0.0, AreaSquareMeters(mustParse(t, "LINESTRING(0 0,1 1)")))
 }
 

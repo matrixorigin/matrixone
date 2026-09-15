@@ -123,8 +123,8 @@ func TestCalculateCUMem(t *testing.T) {
 				durationNS: 309319808921,
 				cfg:        defaultCUConfig,
 			},
-			// want: 806598.2280355261,
-			want: 806598.2280355261,
+			// Decimal256ToFloat64 applies one correctly rounded conversion.
+			want: 806598.228035526,
 		},
 	}
 	for _, tt := range tests {
@@ -162,8 +162,8 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 				durationNS: 86400e9,
 				cfg:        &dummyOBConfig,
 			},
-			//    3,354,742,523.444667
-			want: 3.354742523444667e+09,
+			//    3,354,742,523.4446673
+			want: 3.3547425234446673e+09,
 		},
 		{
 			name: "128(GB)*7*86400(sec)",
@@ -173,7 +173,7 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 				cfg:        &dummyOBConfig,
 			},
 			//  562,886,586.3021176
-			want: 5.628865863021175e+08,
+			want: 5.628865863021176e+08,
 		},
 		{
 			name: "573384797164(byte)*1e9(ns)",
@@ -272,7 +272,7 @@ func TestCalculateCU(t *testing.T) {
 				durationNS: 309319808921,
 				cfg:        defaultCUConfig,
 			},
-			want: 807058.4750616836,
+			want: 807058.4750616834,
 		},
 	}
 
