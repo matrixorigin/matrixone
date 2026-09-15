@@ -3936,6 +3936,26 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 			},
 			{
+				overloadId: 1,
+				args:       []types.T{types.T_array_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ToBase64
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_array_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return ToBase64
+				},
+			},
+			{
 				overloadId: 3,
 				args:       []types.T{types.T_binary},
 				retType:    base64ReturnType,
@@ -3955,26 +3975,6 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_blob},
 				retType:    base64ReturnType,
-				newOp: func() executeLogicOfOverload {
-					return ToBase64
-				},
-			},
-			{
-				overloadId: 1,
-				args:       []types.T{types.T_array_float32},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_text.ToType()
-				},
-				newOp: func() executeLogicOfOverload {
-					return ToBase64
-				},
-			},
-			{
-				overloadId: 2,
-				args:       []types.T{types.T_array_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_text.ToType()
-				},
 				newOp: func() executeLogicOfOverload {
 					return ToBase64
 				},

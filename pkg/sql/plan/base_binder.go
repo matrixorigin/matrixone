@@ -6688,15 +6688,7 @@ func stringExprBound(expr *plan.Expr, binary bool) (uint64, bool) {
 	if binary {
 		return binaryExprByteBound(expr)
 	}
-	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
-		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
-			return uint64(utf8.RuneCountInString(value.Sval)), true
-		}
-	}
-	if expr.Typ.Width > 0 && types.T(expr.Typ.Id) != types.T_text {
-		return uint64(expr.Typ.Width), true
-	}
-	return 0, false
+	return function.TextSourceCharacterBound(expr)
 }
 
 func binaryExprByteBound(expr *plan.Expr) (uint64, bool) {

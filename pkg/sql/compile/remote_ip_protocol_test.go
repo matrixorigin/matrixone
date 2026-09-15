@@ -146,6 +146,42 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 	})
 }
 
+func TestResolvedToBase64OverloadsUseV73AdmissionBoundaries(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     types.Type
+		wantIndex int32
+		wantV73   bool
+	}{
+		{name: "varchar", input: types.New(types.T_varchar, 8, 0), wantIndex: 0, wantV73: true},
+		{name: "array float32", input: types.T_array_float32.ToType(), wantIndex: 1},
+		{name: "array float64", input: types.T_array_float64.ToType(), wantIndex: 2},
+		{name: "binary", input: types.NewWithCharset(types.T_binary, 8, 0, types.CharsetBinary), wantIndex: 3, wantV73: true},
+		{name: "varbinary", input: types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), wantIndex: 4, wantV73: true},
+		{name: "blob", input: types.T_blob.ToType(), wantIndex: 5, wantV73: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := function.GetFunctionByName(context.Background(), "to_base64", []types.Type{test.input})
+			require.NoError(t, err)
+			functionID, overloadID := function.DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, int32(function.TO_BASE64), functionID)
+			require.Equal(t, test.wantIndex, overloadID)
+
+			result := resolved.GetReturnType()
+			expr := &planpb.Expr{
+				Typ: planpb.Type{Id: int32(result.Oid), Width: result.Width, Scale: result.Scale},
+				Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{
+					Obj: resolved.GetEncodedOverloadID(),
+				}}},
+			}
+			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, test.wantV73, features.IPFunctionSemanticsV73)
+		})
+	}
+}
+
 func TestIPFunctionDestinationProtocolValidation(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "inet_aton", []*planpb.Expr{{

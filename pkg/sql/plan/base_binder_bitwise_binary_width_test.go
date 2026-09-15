@@ -233,6 +233,36 @@ func TestRefineCharacterSubstringAndLeftRightReturnTypes(t *testing.T) {
 	}
 }
 
+func TestRefineCharacterStringReturnTypesUseFormattedNumericBounds(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal64, 5, 2)
+	source := &planpb.Expr{
+		Typ: makePlan2Type(&decimalType),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0,
+			ColPos: 0,
+		}},
+	}
+
+	for _, name := range []string{"substring", "left", "right"} {
+		t.Run(name, func(t *testing.T) {
+			args := []*planpb.Expr{source, makePlan2Int64ConstExprWithType(1)}
+			if name == "substring" {
+				args = append(args, makePlan2Int64ConstExprWithType(20))
+			} else {
+				args[1] = makePlan2Int64ConstExprWithType(20)
+			}
+
+			bound, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), bound.Typ.Id)
+			// DECIMAL(5,2) can format -123.45 as seven characters. The
+			// refinement must use that cast bound, not precision five.
+			require.Equal(t, int32(7), bound.Typ.Width)
+		})
+	}
+}
+
 func TestBindBitwiseAggregateLeavesBlobSubstringInTextDomain(t *testing.T) {
 	ctx := context.Background()
 	sourceType := types.T_blob.ToType()

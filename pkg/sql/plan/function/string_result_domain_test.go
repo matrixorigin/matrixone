@@ -143,6 +143,33 @@ func TestBoundedBuiltinReturnTypes(t *testing.T) {
 	}
 }
 
+func TestToBase64ResolverKeepsWireOverloadIDs(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	tests := []struct {
+		name     string
+		input    types.Type
+		overload int32
+	}{
+		{name: "varchar", input: types.New(types.T_varchar, 8, 0), overload: 0},
+		{name: "array float32", input: types.T_array_float32.ToType(), overload: 1},
+		{name: "array float64", input: types.T_array_float64.ToType(), overload: 2},
+		{name: "binary", input: types.NewWithCharset(types.T_binary, 8, 0, types.CharsetBinary), overload: 3},
+		{name: "varbinary", input: types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), overload: 4},
+		{name: "blob", input: types.T_blob.ToType(), overload: 5},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "to_base64", []types.Type{test.input})
+			require.NoError(t, err)
+			functionID, overloadID := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, int32(TO_BASE64), functionID)
+			require.Equal(t, test.overload, overloadID)
+		})
+	}
+}
+
 func TestBase64ResultBoundIncludesLineBreaks(t *testing.T) {
 	for _, test := range []struct {
 		input uint64

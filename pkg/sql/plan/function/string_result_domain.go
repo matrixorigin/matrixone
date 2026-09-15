@@ -201,6 +201,14 @@ func RefineTextSubstringReturnType(args []*planpb.Expr, returnType *types.Type) 
 	return true
 }
 
+// TextSourceCharacterBound returns a conservative character-count bound for a
+// value before a string-domain cast. Character declarations count characters;
+// fixed scalar values use the same formatted-string bound as the cast planner.
+// Binary declarations are intentionally not treated as text.
+func TextSourceCharacterBound(expr *planpb.Expr) (uint64, bool) {
+	return substringTextSourceBound(expr)
+}
+
 func substringLengthBound(lit *planpb.Literal) (uint64, bool) {
 	if lit == nil || lit.Isnull {
 		return 0, false
@@ -248,8 +256,24 @@ func substringTextSourceBound(expr *planpb.Expr) (uint64, bool) {
 			return uint64(utf8.RuneCountInString(value.Sval)), true
 		}
 	}
-	if expr.Typ.Width > 0 && types.T(expr.Typ.Id) != types.T_text {
-		return uint64(expr.Typ.Width), true
+	sourceType := types.T(expr.Typ.Id)
+	switch sourceType {
+	case types.T_char, types.T_varchar, types.T_text:
+		if expr.Typ.Width > 0 {
+			return uint64(expr.Typ.Width), true
+		}
+		return 0, false
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return 0, false
+	default:
+		bound := formattedStringByteBound(types.Type{
+			Oid:   sourceType,
+			Width: expr.Typ.Width,
+			Scale: expr.Typ.Scale,
+		})
+		if !bound.unknown {
+			return bound.bytes, true
+		}
 	}
 	return 0, false
 }
