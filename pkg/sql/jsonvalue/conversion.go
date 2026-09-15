@@ -108,7 +108,7 @@ type ConversionOptions struct {
 // ErrMissingJSONTableValue is returned by AppendResult when the caller tries
 // to append a result for which the path produced no match. JSON_TABLE owns the
 // ON EMPTY decision, so this package never silently appends SQL NULL here.
-var ErrMissingJSONTableValue = errors.New("JSON_TABLE path produced no match")
+var ErrMissingJSONTableValue = moerr.NewInvalidInputNoCtx("JSON_TABLE path produced no match")
 
 // ConvertScalar converts one ByteJson value to a MatrixOne SQL scalar type.
 // The caller owns ON EMPTY and ON ERROR policy. In particular, this function
@@ -132,7 +132,7 @@ func ConvertScalarWithContext(ctx context.Context, value bytejson.ByteJson, targ
 		if recovered := recover(); recovered != nil {
 			result = Result{
 				Status: StatusStatementError,
-				Err:    fmt.Errorf("invalid ByteJson value: %v", recovered),
+				Err:    moerr.NewInvalidInputNoCtxf("invalid ByteJson value: %v", recovered),
 			}
 		}
 	}()
@@ -289,7 +289,7 @@ func ConvertPathMatchesWithLimitContext(
 	maxBytes int,
 ) Result {
 	if iterator == nil {
-		return Result{Status: StatusStatementError, Err: errors.New("nil JSON_TABLE path iterator")}
+		return Result{Status: StatusStatementError, Err: moerr.NewInvalidStateNoCtx("nil JSON_TABLE path iterator")}
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -315,7 +315,7 @@ func ConvertPathMatchesWithLimitContext(
 	if target.Oid != types.T_json {
 		return Result{
 			Status: StatusConversionError,
-			Err:    fmt.Errorf("JSON_TABLE path returned multiple values for %s", target.DescString()),
+			Err:    moerr.NewInvalidInputNoCtxf("JSON_TABLE path returned multiple values for %s", target.DescString()),
 		}
 	}
 
@@ -356,7 +356,7 @@ func convertJSONValueWithLimit(ctx context.Context, value bytejson.ByteJson, max
 	if maxBytes <= 0 {
 		return Result{
 			Status: StatusStatementError,
-			Err:    fmt.Errorf("invalid JSON_TABLE JSON cell limit %d", maxBytes),
+			Err:    moerr.NewInvalidInputNoCtxf("invalid JSON_TABLE JSON cell limit %d", maxBytes),
 		}
 	}
 	if isJSONNull(value) {
@@ -379,20 +379,20 @@ func convertJSONValueWithLimit(ctx context.Context, value bytejson.ByteJson, max
 // failure.
 func AppendResult(vec *vector.Vector, result Result, mp *mpool.MPool) (err error) {
 	if vec == nil {
-		return errors.New("nil destination vector")
+		return moerr.NewInvalidStateNoCtx("nil destination vector")
 	}
 	if mp == nil {
-		return errors.New("nil destination vector mpool")
+		return moerr.NewInvalidStateNoCtx("nil destination vector mpool")
 	}
 	if vec.IsConst() {
-		return errors.New("cannot append JSON_TABLE value to a constant vector")
+		return moerr.NewInvalidStateNoCtx("cannot append JSON_TABLE value to a constant vector")
 	}
 	switch result.Status {
 	case StatusJSONNull:
 		// handled below
 	case StatusSuccess, StatusTruncated:
 		if !appendValueCompatible(vec.GetType().Oid, result.Value) {
-			return fmt.Errorf("JSON_TABLE conversion result %s is incompatible with %s", result.Status, vec.GetType().DescString())
+			return moerr.NewInvalidInputNoCtxf("JSON_TABLE conversion result %s is incompatible with %s", result.Status, vec.GetType().DescString())
 		}
 	case StatusMissing:
 		return ErrMissingJSONTableValue
@@ -400,7 +400,7 @@ func AppendResult(vec *vector.Vector, result Result, mp *mpool.MPool) (err error
 		if result.Err != nil {
 			return result.Err
 		}
-		return fmt.Errorf("JSON_TABLE conversion did not produce a value: %s", result.Status)
+		return moerr.NewInternalErrorNoCtxf("JSON_TABLE conversion did not produce a value: %s", result.Status)
 	}
 
 	checkpoint := vec.MakeAppendCheckpoint()
@@ -427,7 +427,7 @@ func isJSONNull(value bytejson.ByteJson) bool {
 func safeMarshal(value bytejson.ByteJson) (data []byte, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("invalid ByteJson value: %v", recovered)
+			err = moerr.NewInvalidInputNoCtxf("invalid ByteJson value: %v", recovered)
 			data = nil
 		}
 	}()
@@ -441,7 +441,7 @@ func validateJSONValue(value bytejson.ByteJson) error {
 	if validJSONValue(value) {
 		return nil
 	}
-	return fmt.Errorf("invalid ByteJson value of type %#x", value.Type)
+	return moerr.NewInvalidInputNoCtxf("invalid ByteJson value of type %#x", value.Type)
 }
 
 func validJSONValue(value bytejson.ByteJson) bool {
@@ -483,7 +483,7 @@ func validJSONScalar(tp byte, data []byte) bool {
 func safeScalarText(value bytejson.ByteJson) (text string, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("invalid ByteJson scalar: %v", recovered)
+			err = moerr.NewInvalidInputNoCtxf("invalid ByteJson scalar: %v", recovered)
 			text = ""
 		}
 	}()
