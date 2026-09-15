@@ -201,3 +201,36 @@ func remoteWorkerProtocolVersion(ctx context.Context, proc *process.Process, wor
 	}
 	return resp.GetProtocolVersion.Version, true, nil
 }
+
+// AllCNsSupportProtocol verifies a protocol capability against the current
+// coordinator and every CN in the cluster inventory. An incomplete inventory
+// is reported as unsupported so callers keep the predecessor definition.
+func AllCNsSupportProtocol(proc *process.Process, minimum int64) (bool, error) {
+	if proc == nil {
+		return false, nil
+	}
+	parent := proc.Ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	if err := parent.Err(); err != nil {
+		return false, err
+	}
+	version, known := remoteMORPCProtocolVersion(proc.GetService())
+	if !known || version < minimum {
+		return false, nil
+	}
+	cluster, err := clusterservice.GetMOClusterWithContext(parent, proc.GetService())
+	if err != nil {
+		return false, err
+	}
+	workers := make(engine.Nodes, 0)
+	err = clusterservice.GetCNServiceRawWithContext(parent, cluster, clusterservice.NewSelector(), func(cn metadata.CNService) bool {
+		workers = append(workers, engine.Node{Id: cn.ServiceID, Addr: cn.PipelineServiceAddress})
+		return true
+	})
+	if err != nil || len(workers) == 0 {
+		return false, err
+	}
+	return remoteWorkersSupportProtocol(proc, workers, minimum)
+}

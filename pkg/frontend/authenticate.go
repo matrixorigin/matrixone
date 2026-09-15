@@ -75,6 +75,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TenantInfo struct {
@@ -10626,7 +10627,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, ses.GetService())
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, ses.GetService(), ses.GetProc())
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -11002,7 +11003,7 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, service string) error {
+func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, service string, proc *process.Process) error {
 	start := time.Now()
 	defer func() {
 		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -11013,7 +11014,7 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	// TODO: when we have the auto_increment column, we need new strategy.
 
 	var err error
-	protocol := protocolVersionForTenantInitialization(service)
+	protocol := protocolVersionForTenantInitialization(service, proc)
 	if protocol >= defines.MORPCVersion100 {
 		// A new CN can already speak a newer protocol while an older CN still
 		// serves the cluster. Do not persist a View using a function that peer
@@ -11065,7 +11066,7 @@ func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec, re
 	return versions.CheckProtocolVersionResponse(encoded, requiredProtocol)
 }
 
-func protocolVersionForTenantInitialization(service string) int64 {
+func protocolVersionForTenantInitialization(service string, proc *process.Process) int64 {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
 		return defines.MORPCMinVersion
@@ -11077,6 +11078,12 @@ func protocolVersionForTenantInitialization(service string) int64 {
 	version, ok := value.(int64)
 	if !ok {
 		return defines.MORPCMinVersion
+	}
+	if version >= defines.MORPCVersion73 && proc != nil {
+		supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion73)
+		if err != nil || !supported {
+			return defines.MORPCVersion72
+		}
 	}
 	return version
 }
