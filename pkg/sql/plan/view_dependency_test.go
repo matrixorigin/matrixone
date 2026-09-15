@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -426,9 +427,10 @@ func TestRegenerateViewDefinitionRejectsInvalidPersistedDefinitions(t *testing.T
 	require.Error(t, err)
 	_, err = RegenerateViewDefinition(ctx, `{"Stmt":"select 1"}`)
 	require.Error(t, err)
+	futureVersion := defines.MORPCLatestVersion + 1
 	_, err = RegenerateViewDefinition(ctx,
-		`{"Stmt":"select (","required_protocol_version":73}`)
-	require.ErrorContains(t, err, "protocol version 73")
+		fmt.Sprintf(`{"Stmt":"select (","required_protocol_version":%d}`, futureVersion))
+	require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", futureVersion))
 	_, err = RegenerateViewDefinition(ctx,
 		`{"Stmt":"select (","required_protocol_version":-1}`)
 	require.ErrorContains(t, err, "must not be negative")
