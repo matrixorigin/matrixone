@@ -177,7 +177,17 @@ func (s *stateMachine) resetViewMetadataAdmissionBarrier() {
 		// A legacy binary has no ingress-ready field, so its zero value must not
 		// withdraw an already-serving CN during a rolling upgrade. A capable CN,
 		// however, is routable only after it has published ingress readiness.
-		if store.ViewMetadataAdmissionSupported &&
+		if required := s.state.PersistedExpressionRequiredProtocolVersion; required > 0 {
+			// Once the durable floor is committed, a CN remains routable only
+			// when its heartbeat proves the floor.  In particular, do not keep a
+			// stale/partitioned lower-capability CN routable while the new epoch
+			// is preparing; cluster-service routing is based on this ready bit.
+			store.ViewMetadataAdmissionReady =
+				store.ViewMetadataAdmissionSupported &&
+					store.ViewMetadataAdmissionGeneration != 0 &&
+					store.ViewMetadataIngressReady &&
+					store.PersistedExpressionProtocolVersion >= required
+		} else if store.ViewMetadataAdmissionSupported &&
 			store.ViewMetadataAdmissionGeneration != 0 {
 			store.ViewMetadataAdmissionReady = store.ViewMetadataIngressReady
 		} else {
@@ -617,6 +627,16 @@ func (s *stateMachine) handleActivatePersistedExpressionProtocol(
 	// including a catalog fence produced by a lower-capability CN.
 	if s.state.PersistedExpressionRequiredProtocolVersion < required {
 		s.state.PersistedExpressionRequiredProtocolVersion = required
+		// The readiness bit is consumed directly by cluster-service routing. A
+		// store that was already stale or lower-capability must be withdrawn
+		// before the new epoch can capture any old-generation targets.
+		for uuid, store := range s.state.CNState.Stores {
+			if store.PersistedExpressionProtocolVersion < required {
+				store.ViewMetadataAdmissionReady = false
+				s.state.CNState.Stores[uuid] = store
+				delete(s.state.ViewMetadataAdmissionCNReady, uuid)
+			}
+		}
 		if s.state.ViewMetadataAdmissionPreparing {
 			// A legacy phase-one barrier may already be in flight.  Its target
 			// maps describe pre-floor observations and must be discarded rather
@@ -687,19 +707,6 @@ func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) boo
 			s.state.ViewMetadataAdmissionCNTargetTicks = make(map[string]uint64)
 		}
 		s.state.ViewMetadataAdmissionCNTargetTicks[hb.UUID] = store.Tick
-	} else if newGeneration && s.state.PersistedExpressionRequiredProtocolVersion > 0 {
-		// The old owner's target is no longer authoritative once a newer
-		// generation has published a compatible heartbeat. Replace it in the
-		// current epoch so the new owner can restore readiness immediately after
-		// observing the epoch and catalog fence; waiting for the old target's
-		// timeout would unnecessarily withdraw a healthy replacement.
-		if _, ok := s.state.ViewMetadataAdmissionCNTargets[hb.UUID]; ok {
-			s.state.ViewMetadataAdmissionCNTargets[hb.UUID] = hb.ViewMetadataAdmissionGeneration
-			if s.state.ViewMetadataAdmissionCNTargetTicks == nil {
-				s.state.ViewMetadataAdmissionCNTargetTicks = make(map[string]uint64)
-			}
-			s.state.ViewMetadataAdmissionCNTargetTicks[hb.UUID] = store.Tick
-		}
 	}
 	if newGeneration {
 		store.ViewMetadataAdmissionReady = false

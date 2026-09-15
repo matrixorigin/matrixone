@@ -275,7 +275,6 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	storeInfo.Locality = hb.Locality
 	storeInfo.CommandDeliverySupported = hb.CommandDeliverySupported
 	storeInfo.ViewMetadataAdmissionSupported = hb.ViewMetadataAdmissionSupported
-	storeInfo.ViewMetadataAdmissionProtocolV2Supported = hb.ViewMetadataAdmissionProtocolV2Supported
 	storeInfo.ViewMetadataAdmissionProtocolV3Supported = hb.ViewMetadataAdmissionProtocolV3Supported
 	// Preserve a known incarnation when receiving a heartbeat from an older
 	// binary during a rolling upgrade. Incarnation fencing is enabled only once

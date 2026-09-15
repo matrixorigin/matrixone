@@ -81,14 +81,13 @@ func updateViewMetadataLogWithProtocol(
 	t *testing.T,
 	rsm *stateMachine,
 	uuid string,
-	protocolV2 bool,
+	protocolV3 bool,
 ) {
 	t.Helper()
 	data, err := (&pb.LogStoreHeartbeat{
 		UUID:                                     uuid,
 		ViewMetadataAdmissionSupported:           true,
-		ViewMetadataAdmissionProtocolV2Supported: protocolV2,
-		ViewMetadataAdmissionProtocolV3Supported: protocolV2,
+		ViewMetadataAdmissionProtocolV3Supported: protocolV3,
 	}).Marshal()
 	require.NoError(t, err)
 	_, err = rsm.Update(sm.Entry{
@@ -247,7 +246,8 @@ func TestViewMetadataAdmissionFloorRejectsLegacyCNAndLogReplica(t *testing.T) {
 	require.False(t, batch.ViewMetadataAdmission.Ready)
 	require.False(t, rsm.state.CNState.Stores["legacy-cn"].ViewMetadataAdmissionReady)
 
-	// A late LogStore join must understand the v2 admission payload before its
+	// A late LogStore join must understand the protocol-bearing admission
+	// payload before its
 	// replica can be added to the HAKeeper RSM. The old admission bit alone is
 	// not enough once the floor is active.
 	command := pb.ScheduleCommand{
@@ -294,7 +294,9 @@ func TestViewMetadataAdmissionDeAdmitsLowerGenerationAfterFloor(t *testing.T) {
 		PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
 	})
 	require.Equal(t, uint64(5), rsm.state.ViewMetadataAdmissionEpoch)
-	require.True(t, rsm.state.CNState.Stores["cn-1"].ViewMetadataAdmissionReady)
+	require.Equal(t, uint64(9), rsm.state.ViewMetadataAdmissionCNTargets["cn-1"])
+	require.False(t, rsm.state.CNState.Stores["cn-1"].ViewMetadataAdmissionReady,
+		"a newer generation must not bypass the previous owner's drain target")
 }
 
 func TestViewMetadataAdmissionRaisesFloorOnlyAfterLiveCNUpgrade(t *testing.T) {
@@ -362,6 +364,87 @@ func TestViewMetadataAdmissionRaisesFloorOnlyAfterLiveCNUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), result.Value)
 	require.True(t, rsm.state.CNState.Stores["cn-1"].ViewMetadataAdmissionReady)
+}
+
+func TestPersistedExpressionProtocolActivationRevokesStaleLowerCN(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.Tick = 100
+	rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
+		Replicas: map[uint64]string{1: "log-1"},
+	}
+	updateViewMetadataLogWithProtocol(t, rsm, "log-1", true)
+	// This CN was routable before the floor transition, but its last heartbeat
+	// is both expired and incapable of proving the new persisted-expression
+	// contract. It must be withdrawn in the same RSM entry that starts the
+	// protocol barrier; cluster-service uses this bit directly for routing.
+	rsm.state.CNState.Stores["stale-cn"] = pb.CNStoreInfo{
+		Tick:                            1,
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 7,
+		ViewMetadataAdmissionReady:      true,
+		ViewMetadataIngressReady:        true,
+	}
+	cfg := Config{TickPerSecond: 1, CNStoreTimeout: 10 * time.Second}
+	result, err := rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(cfg, uint64(defines.MORPCLatestVersion)),
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), result.Value)
+	require.True(t, rsm.state.ViewMetadataAdmissionPreparing)
+	require.False(t, rsm.state.CNState.Stores["stale-cn"].ViewMetadataAdmissionReady)
+	details := rsm.handleClusterDetailsQuery(cfg)
+	for _, store := range details.CNStores {
+		require.NotEqual(t, "stale-cn", store.UUID)
+	}
+}
+
+func TestPersistedExpressionProtocolRaiseKeepsOldGenerationDrainTarget(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.Tick = 100
+	rsm.state.ViewMetadataAdmissionEnabled = true
+	rsm.state.ViewMetadataAdmissionEpoch = 3
+	rsm.state.ViewMetadataRevalidationRequired = true
+	rsm.state.ViewMetadataCatalogFencedEpoch = 3
+	rsm.state.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion72)
+	rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
+		Replicas: map[uint64]string{1: "log-1"},
+	}
+	updateViewMetadataLogWithProtocol(t, rsm, "log-1", true)
+	rsm.state.CNState.Stores["cn-1"] = pb.CNStoreInfo{
+		Tick:                               1,
+		ViewMetadataAdmissionSupported:     true,
+		ViewMetadataAdmissionGeneration:    10,
+		ViewMetadataAdmissionReady:         true,
+		ViewMetadataIngressReady:           true,
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCVersion72),
+	}
+	// The old generation is expired, so it cannot block committing the raise,
+	// but a newer process must still not replace its drain target. This keeps
+	// the generation handoff safety rule independent of the protocol floor.
+	result, err := rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd: GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
+			Config{TickPerSecond: 1, CNStoreTimeout: 10 * time.Second},
+			uint64(defines.MORPCVersion72+1),
+		),
+	})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.Equal(t, uint64(defines.MORPCVersion72+1),
+		rsm.state.PersistedExpressionRequiredProtocolVersion)
+	require.False(t, rsm.state.CNState.Stores["cn-1"].ViewMetadataAdmissionReady)
+
+	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                               "cn-1",
+		ViewMetadataAdmissionSupported:     true,
+		ViewMetadataAdmissionGeneration:    11,
+		ViewMetadataObservedEpoch:          rsm.state.ViewMetadataAdmissionEpoch,
+		ViewMetadataIngressReady:           true,
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCVersion72 + 1),
+	})
+	require.Equal(t, uint64(10), rsm.state.ViewMetadataAdmissionCNTargets["cn-1"])
+	require.False(t, rsm.state.CNState.Stores["cn-1"].ViewMetadataAdmissionReady)
 }
 
 func TestViewMetadataAdmissionPreparingKeepsLegacyAndHidesPendingCN(t *testing.T) {
