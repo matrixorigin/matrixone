@@ -387,9 +387,22 @@ func (b *sqlJSONPlanBuilder) addNodeDetails(item *sqlJSONNode, node *plan.Node) 
 		plan.Node_FUNCTION_SCAN, plan.Node_EXTERNAL_FUNCTION:
 		exprs := node.ProjectList
 		if node.NodeType == plan.Node_FUNCTION_SCAN || node.NodeType == plan.Node_EXTERNAL_FUNCTION {
+			if node.TableDef == nil || node.TableDef.TblFunc == nil || node.TableDef.TblFunc.Name == "" {
+				return moerr.NewInvalidInput(b.ctx, "table function metadata is missing")
+			}
+			item.TableName = node.TableDef.TblFunc.Name
 			exprs = node.TblFuncExprList
 		}
 		item.Expressions, err = sqlJSONExprValues(b.ctx, exprs, &b.textOpts)
+		if err != nil {
+			return err
+		}
+	case plan.Node_VECTOR_INDEX_SCAN:
+		if node.VectorIndexScan == nil || node.VectorIndexScan.Index == nil || node.VectorIndexScan.Index.IndexName == "" {
+			return moerr.NewInvalidInput(b.ctx, "vector index scan metadata is missing")
+		}
+		item.TableName = sqlJSONTableName(node)
+		item.Expressions, err = sqlJSONVectorIndexExpressions(b.ctx, node.VectorIndexScan, &b.textOpts)
 		if err != nil {
 			return err
 		}
@@ -535,6 +548,42 @@ func sqlJSONExprList(ctx context.Context, exprs []*plan.Expr, options *ExplainOp
 		return "", err
 	}
 	return strings.Join(values, ", "), nil
+}
+
+func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.VectorIndexScan, options *ExplainOptions) ([]string, error) {
+	if spec == nil || spec.Index == nil {
+		return nil, moerr.NewInvalidInput(ctx, "vector index scan metadata is missing")
+	}
+	values := make([]string, 0, 4+len(spec.PreFilters))
+	values = append(values, "index="+spec.Index.IndexName)
+	if spec.DistanceFunction != "" {
+		values = append(values, "metric="+spec.DistanceFunction)
+	}
+	for _, field := range []struct {
+		name string
+		expr *plan.Expr
+	}{
+		{name: "query_vector", expr: spec.QueryVector},
+		{name: "candidate_limit", expr: spec.CandidateLimit},
+	} {
+		value, err := sqlJSONExpr(ctx, field.expr, options)
+		if err != nil {
+			return nil, err
+		}
+		if value != "" {
+			values = append(values, field.name+"="+value)
+		}
+	}
+	for i, expr := range spec.PreFilters {
+		value, err := sqlJSONExpr(ctx, expr, options)
+		if err != nil {
+			return nil, err
+		}
+		if value != "" {
+			values = append(values, "pre_filter["+strconv.Itoa(i)+"]="+value)
+		}
+	}
+	return values, nil
 }
 
 func sqlJSONOrderByValues(ctx context.Context, specs []*plan.OrderBySpec, options *ExplainOptions) ([]sqlJSONOrderBy, error) {

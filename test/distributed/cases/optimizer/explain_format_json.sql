@@ -23,6 +23,10 @@ explain format=json with c as (select id from t) select * from c;
 -- @regex("(?s)matrixone.*operator.*Window",true)
 explain format=json select id, row_number() over (order by id) as rn from t;
 
+-- Typed table-function identity must remain visible in the MatrixOne graph.
+-- @regex("(?s)matrixone.*operator.*Function Scan.*table_name.*generate_series",true)
+explain format=json select * from generate_series(1, 5) g;
+
 -- ANALYZE FALSE is normalized to ordinary JSON EXPLAIN and must not start a runner.
 -- @regex("(?s)query_block.*matrixone.*schema_version",true)
 explain (analyze false, format json) select * from t;
