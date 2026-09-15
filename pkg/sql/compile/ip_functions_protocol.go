@@ -52,7 +52,7 @@ func (c *Compile) constrainIPFunctionWorkers(qry *plan.Query) error {
 // validateIPFunctionDestination rechecks the actual serialized destination at
 // send time. A worker can be downgraded or replaced after compile-time
 // placement, so a coordinator-only version check is insufficient for any
-// expression capability carried by the v72/v73 IP admission fence.
+// expression capability carried by the v72/v79 IP admission fence.
 func validateIPFunctionDestination(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil || p.Node == nil {
 		return moerr.NewNotSupportedNoCtx(
@@ -80,7 +80,7 @@ func validateIPFunctionDestination(proc *process.Process, p *pipeline.Pipeline) 
 
 func requiredIPFunctionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	if features.IPFunctionSemanticsV73 {
-		return defines.MORPCVersion73
+		return defines.MORPCVersion79
 	}
 	return defines.MORPCVersion72
 }

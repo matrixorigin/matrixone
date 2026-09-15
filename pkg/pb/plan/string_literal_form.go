@@ -321,7 +321,7 @@ func isRemoteIPFunctionV73(expr *Expr) bool {
 	switch functionID {
 	case remoteTOBase64FunctionID:
 		// The VARCHAR overload changed its result domain and the binary
-		// overloads are new identities. Both must stay on v73 workers.
+		// overloads are new identities. Both must stay on v79 workers.
 		return overloadID == 0 || overloadID >= 3 && overloadID <= 5
 	case remoteCoalesceFunctionID:
 		return overloadID == 29 || overloadID == 30
@@ -331,7 +331,7 @@ func isRemoteIPFunctionV73(expr *Expr) bool {
 		remoteIPIsIPv6FunctionID,
 		remoteIPIsIPv4CompatFunctionID,
 		remoteIPIsIPv4MappedFunctionID:
-		// v73 changed the physical result vector from BIGINT to INT.
+		// v79 changed the physical result vector from BIGINT to INT.
 		return expr.Typ.Id == 22
 	default:
 		return false

@@ -62,7 +62,7 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
-			for _, value := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72, defines.MORPCVersion73} {
+			for _, value := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72, defines.MORPCVersion78, defines.MORPCVersion79} {
 				rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, value)
 			}
 		}
@@ -109,7 +109,7 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remoteIPProtocolPipeline(function.ABS, 0)))
 	})
 
-	t.Run("post-v72 overloads and result widths require v73", func(t *testing.T) {
+	t.Run("post-v72 overloads and result widths require v79", func(t *testing.T) {
 		cases := []struct {
 			name       string
 			functionID int32
@@ -124,24 +124,24 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				p := remoteIPProtocolPipelineWithType(tc.functionID, tc.overloadID, tc.resultType)
-				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion78)
 				err := validateRemoteExpressionPipelineProtocol(proc, p)
-				require.ErrorContains(t, err, "protocol version 73")
-				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+				require.ErrorContains(t, err, "protocol version 79")
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
 				require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, p))
 			})
 		}
 	})
 
-	t.Run("actual destination is checked for v73", func(t *testing.T) {
+	t.Run("actual destination is checked for v79", func(t *testing.T) {
 		p := remoteIPProtocolPipelineWithType(function.TO_BASE64, 3, 65)
 		p.Node = &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}
 		c, client := expressionProtocolTestCompile(t)
 		c.proc.Base.QueryClient = client
-		client.version = defines.MORPCVersion72
+		client.version = defines.MORPCVersion78
 		err := validateIPFunctionDestination(c.proc, p)
-		require.ErrorContains(t, err, "version 73")
-		client.version = defines.MORPCVersion73
+		require.ErrorContains(t, err, "version 79")
+		client.version = defines.MORPCVersion79
 		require.NoError(t, validateIPFunctionDestination(c.proc, p))
 	})
 }
@@ -226,7 +226,7 @@ func TestIPFunctionDestinationProtocolValidation(t *testing.T) {
 	require.Equal(t, client.calls, client.releases)
 }
 
-func TestV73ExpressionConstrainsPlacementUntilWorkerIsReady(t *testing.T) {
+func TestV79ExpressionConstrainsPlacementUntilWorkerIsReady(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	wire := remoteIPProtocolPipelineWithType(function.TO_BASE64, 3, 65)
 	planExpr := wire.InstructionList[0].ProjectList[0]
@@ -234,15 +234,15 @@ func TestV73ExpressionConstrainsPlacementUntilWorkerIsReady(t *testing.T) {
 
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	client.version = defines.MORPCVersion72
+	client.version = defines.MORPCVersion78
 	require.NoError(t, c.constrainIPFunctionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType,
-		"a v73 expression must not be sent to a v72 worker")
+		"a v79 expression must not be sent to a v78 worker")
 
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	client.version = defines.MORPCVersion73
+	client.version = defines.MORPCVersion79
 	require.NoError(t, c.constrainIPFunctionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType,
-		"all workers supporting v73 should retain distributed placement")
+		"all workers supporting v79 should retain distributed placement")
 }

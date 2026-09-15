@@ -2162,9 +2162,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.IPFunctionSemanticsV73 &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion73) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion79) {
 		return moerr.NewNotSupportedNoCtx(
-			"extended IP function semantics require MORPC protocol version 73",
+			"extended IP function semantics require MORPC protocol version 79",
 		)
 	}
 	return nil
