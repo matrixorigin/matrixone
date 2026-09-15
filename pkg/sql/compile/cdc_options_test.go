@@ -35,7 +35,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCheckPitrGranularityWildcardFiltersNoPrimaryKey(t *testing.T) {
+func TestCheckPitrGranularityWildcardRejectsNoPrimaryKey(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx := defines.AttachAccountId(context.Background(), 7)
 	proc.Ctx = ctx
@@ -81,11 +81,11 @@ func TestCheckPitrGranularityWildcardFiltersNoPrimaryKey(t *testing.T) {
 		Database: "db", Table: cdc.CDCPitrGranularity_All,
 	}}}}
 	err := c.checkPitrGranularity(ctx, pts, "")
-	require.NoError(t, err)
-	require.Len(t, exec.sqls, 2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "db.without_pk")
+	require.Len(t, exec.sqls, 1)
 	require.Contains(t, exec.sqls[0], "mo_tables")
 	require.Contains(t, exec.sqls[0], "mo_columns")
-	require.NotContains(t, exec.sqls[1], "mo_columns")
 }
 
 func TestCheckPitrGranularityWildcardExcludeAndPrimaryKey(t *testing.T) {
