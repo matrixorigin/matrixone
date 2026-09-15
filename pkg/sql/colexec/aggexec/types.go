@@ -325,6 +325,11 @@ type ExactCountDistinctSpillState interface {
 	BeginArgumentDrain(replacement *AllocationAccount) (DistinctArgumentDrain, error)
 	RehomeDistinctArgumentState(allocation *AllocationAccount) error
 	InsertDistinctArgument(group int, payload []byte) error
+	InsertDistinctArgumentWithRepresentative(
+		group int,
+		payload []byte,
+		representative []byte,
+	) error
 	AddDistinctCountContribution(
 		group int,
 		count uint64,
@@ -337,6 +342,9 @@ type ExactCountDistinctSpillState interface {
 // the duration of the callback.
 type DistinctArgumentDrain interface {
 	ForEach(func(group int, payload []byte) error) error
+	ForEachWithRepresentative(
+		func(group int, payload, representative []byte) error,
+	) error
 	KeyCount() uint64
 	RetainedBytes() uint64
 	Commit() error

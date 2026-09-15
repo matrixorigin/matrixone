@@ -133,6 +133,39 @@ func TestCountDistinctArgumentDrainUsesCanonicalMembershipKey(t *testing.T) {
 	exec.Free()
 }
 
+func TestCountDistinctArgumentDrainKeepsRepresentative(t *testing.T) {
+	mp := mpool.MustNewZero()
+	json, err := types.ParseStringToByteJson("1")
+	require.NoError(t, err)
+	raw, err := types.EncodeJson(json)
+	require.NoError(t, err)
+	values := vector.NewVec(types.T_json.ToType())
+	require.NoError(t, vector.AppendBytes(values, raw, false, mp))
+
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+
+	drain, err := exec.BeginArgumentDrain(nil)
+	require.NoError(t, err)
+	var membership, representative []byte
+	require.NoError(t, drain.ForEachWithRepresentative(
+		func(_ int, payload, value []byte) error {
+			membership = bytes.Clone(payload)
+			representative = bytes.Clone(value)
+			return nil
+		}))
+	require.NotEqual(t, raw, membership)
+	require.Equal(t, raw, representative)
+	drain.Abort()
+
+	exec.Free()
+	values.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestCountDistinctStateRestoresLegacyRawOpaqueKeys(t *testing.T) {
 	mp := mpool.MustNewZero()
 	exec := newCountColumnExec(

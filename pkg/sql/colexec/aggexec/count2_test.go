@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"io"
 	"math"
 	"strconv"
 	"strings"
@@ -196,6 +197,30 @@ func TestCountDistinctFloat64SignedZeroSurvivesIntermediateMerge(t *testing.T) {
 
 	minusZero := makePartial(math.Copysign(0, -1))
 	plusZero := makePartial(0)
+	legacyPayload := func(encoded []byte) []byte {
+		r := bytes.NewReader(encoded)
+		magic, err := types.ReadUint64(r)
+		require.NoError(t, err)
+		require.Equal(t, magicNumber, magic)
+		chunks, err := types.ReadInt32(r)
+		require.NoError(t, err)
+		require.Equal(t, int32(1), chunks)
+		rows, err := types.ReadInt32(r)
+		require.NoError(t, err)
+		require.Equal(t, int32(1), rows)
+		count, err := types.ReadUint32(r)
+		require.NoError(t, err)
+		require.Equal(t, uint32(1), count)
+		payload := make([]byte, 8)
+		_, err = io.ReadFull(r, payload)
+		require.NoError(t, err)
+		return payload
+	}
+	// A pre-canonical fixed-width reader compares the wire bytes directly.
+	// The legacy output must therefore carry canonical +0, even when the
+	// retained in-memory representative was -0.
+	require.Equal(t, make([]byte, 8), legacyPayload(minusZero))
+	require.Equal(t, make([]byte, 8), legacyPayload(plusZero))
 	target := newCountColumnExec(
 		mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()},
 	).(*countColumnExec)
