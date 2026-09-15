@@ -772,10 +772,10 @@ func ConfigureHLLLegacyState(aggregate AggFuncExec) {
 	}
 }
 
-// ConfigureHLLFloatZeroState makes a newly constructed remote executor emit
-// the version-3 hash semantics used by protocol v73: only scalar floating
-// point signed zero is canonicalized. Protocol v74 introduces the complete
-// typed SQL-equivalence key and must not be sent this compatibility state.
+// ConfigureHLLFloatZeroState makes an APPROX_COUNT_DISTINCT executor emit the
+// version-3 hash semantics used by protocol v73: only scalar floating-point
+// signed zero is canonicalized. HLL_ADD_AGG and HLL_MERGE_AGG are persisted
+// v2 states and must never be changed by this remote compatibility knob.
 func ConfigureHLLFloatZeroState(aggregate AggFuncExec) {
 	if configurable, ok := aggregate.(interface{ setFloatZeroHLLState() }); ok {
 		configurable.setFloatZeroHLLState()
@@ -794,6 +794,9 @@ func (exec *hllStateExec) setLegacyHLLState() {
 }
 
 func (exec *hllStateExec) setFloatZeroHLLState() {
+	if exec.family != hllStateFamilyApproxCount {
+		return
+	}
 	exec.legacyWireState = true
 	exec.floatZeroWireState = true
 	exec.aggInfo.makeMarshalerUnmarshaler = makeFloatZeroHllSketch

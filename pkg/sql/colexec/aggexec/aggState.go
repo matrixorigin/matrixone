@@ -549,35 +549,36 @@ func (ag *aggState) readStateArg(
 			if _, err = io.ReadFull(r, fixedKey[kAggArgPrefixSz:]); err != nil {
 				return err
 			}
-			if info.isDistinct && len(info.argTypes) == 1 {
+			var retainedRaw []byte
+			if info.isDistinct && len(info.argTypes) == 1 &&
+				!info.preserveDistinctInputOrder {
 				switch info.argTypes[0].Oid {
 				case types.T_float32:
 					var raw [4]byte
 					copy(raw[:], fixedKey[kAggArgPrefixSz:])
 					canonical := keycodec.NewFloat32Codec(info.argTypes[0].Scale).CanonicalBytes(
 						types.DecodeFixed[float32](raw[:]))
-					copy(fixedKey[kAggArgPrefixSz:], canonical[:])
-					if err := inserted(ag.insertArgValue(mp, fixedKey, raw[:])); err != nil {
-						return err
+					if !bytes.Equal(raw[:], canonical[:]) {
+						copy(fixedKey[kAggArgPrefixSz:], canonical[:])
+						retainedRaw = raw[:]
 					}
-					continue
 				case types.T_float64:
 					var raw [8]byte
 					copy(raw[:], fixedKey[kAggArgPrefixSz:])
 					canonical := keycodec.CanonicalFloat64Bytes(
 						types.DecodeFixed[float64](raw[:]))
-					copy(fixedKey[kAggArgPrefixSz:], canonical[:])
-					if err := inserted(ag.insertArgValue(mp, fixedKey, raw[:])); err != nil {
-						return err
+					if !bytes.Equal(raw[:], canonical[:]) {
+						copy(fixedKey[kAggArgPrefixSz:], canonical[:])
+						retainedRaw = raw[:]
 					}
-					continue
 				}
 			}
 			if info.preserveDistinctInputOrder {
 				err = ag.insertArgValue(
 					mp, fixedKey, makeDistinctInputOrderValue(ui, 0))
 			} else {
-				err = ag.insertArgValueWithInserter(mp, fixedKey, nil, &inserter)
+				err = ag.insertArgValueWithInserter(
+					mp, fixedKey, retainedRaw, &inserter)
 			}
 			if err = inserted(err); err != nil {
 				return err
@@ -2751,19 +2752,15 @@ func (ae *aggExec) freeStandby() {
 	ae.standby = nil
 }
 
-// canonicalDistinctArgumentSize reports the fixed-width key size for a signed
-// zero. The caller writes the canonical all-zero payload into its existing
-// accounted scratch buffer, avoiding a temporary slice and heap allocation.
+// canonicalDistinctArgumentSize reports the fixed-width key size for a float
+// argument. The caller writes its canonical payload into existing accounted
+// scratch, avoiding a temporary slice and heap allocation.
 func canonicalDistinctArgumentSize(vec *vector.Vector, row int) (int, bool) {
 	switch vec.GetType().Oid {
 	case types.T_float32:
-		if vector.MustFixedColNoTypeCheck[float32](vec)[row] == 0 {
-			return 4, true
-		}
+		return 4, true
 	case types.T_float64:
-		if vector.MustFixedColNoTypeCheck[float64](vec)[row] == 0 {
-			return 8, true
-		}
+		return 8, true
 	}
 	return 0, false
 }
@@ -2773,7 +2770,16 @@ func canonicalDistinctArgumentSize(vec *vector.Vector, row int) (int, bool) {
 // canonical keys are not necessarily valid values for result reconstruction.
 func copyCanonicalDistinctArgument(dst []byte, vec *vector.Vector, row int) int {
 	if size, ok := canonicalDistinctArgumentSize(vec, row); ok {
-		clear(dst[:size])
+		switch vec.GetType().Oid {
+		case types.T_float32:
+			encoded := keycodec.NewFloat32Codec(vec.GetType().Scale).CanonicalBytes(
+				vector.MustFixedColNoTypeCheck[float32](vec)[row])
+			copy(dst[:size], encoded[:])
+		case types.T_float64:
+			encoded := keycodec.CanonicalFloat64Bytes(
+				vector.MustFixedColNoTypeCheck[float64](vec)[row])
+			copy(dst[:size], encoded[:])
+		}
 		return size
 	}
 	canonical := keycodec.AppendCanonicalValue(
@@ -2789,11 +2795,19 @@ func distinctFixedValue(vec *vector.Vector, row, width int) (uint64, error) {
 	if vec == nil || row < 0 || width <= 0 || width > 8 {
 		return 0, mpool.ErrAllocationAccountInvariant
 	}
-	if size, ok := canonicalDistinctArgumentSize(vec, row); ok {
-		if size != width {
+	switch vec.GetType().Oid {
+	case types.T_float32:
+		if width != 4 {
 			return 0, mpool.ErrAllocationAccountInvariant
 		}
-		return 0, nil
+		return uint64(keycodec.NewFloat32Codec(vec.GetType().Scale).CanonicalBits(
+			vector.MustFixedColNoTypeCheck[float32](vec)[row])), nil
+	case types.T_float64:
+		if width != 8 {
+			return 0, mpool.ErrAllocationAccountInvariant
+		}
+		return keycodec.CanonicalFloat64Bits(
+			vector.MustFixedColNoTypeCheck[float64](vec)[row]), nil
 	}
 	raw := vec.GetRawBytesAt(row)
 	if len(raw) != width {
