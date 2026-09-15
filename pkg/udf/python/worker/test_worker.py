@@ -785,6 +785,22 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "immutable artifact catalog"):
             worker._load_handler("def add(ctx, value): return value", "module:add")
 
+    def test_handler_load_revalidates_static_binding_before_exec(self):
+        with tempfile.TemporaryDirectory(prefix="mo-udf-handler-load-") as directory:
+            marker = pathlib.Path(directory) / "executed"
+            source = (
+                "from pathlib import Path\n"
+                f"Path({str(marker)!r}).write_text('executed')\n"
+                "def f(ctx, value): return value\n"
+                "f = 1\n"
+            )
+            with self.assertRaisesRegex(ValueError, "not a module-level function"):
+                worker._load_handler(source, "f")
+            self.assertFalse(
+                marker.exists(),
+                "execution must reject invalid handler binding before running module code",
+            )
+
     def test_go_python_type_descriptor_fixtures(self):
         fixture_path = WORKER_PATH.parent.parent / "testdata" / "type_descriptors.json"
         fixtures = json.loads(fixture_path.read_text())
