@@ -1126,10 +1126,11 @@ def _validate_control_fields(value: Dict[str, Any], wire: bool) -> None:
     if kind == "Ack":
         if ("ack_sequence" in value) == ("finish_id" in value):
             raise ValueError("PROTOCOL: Ack requires exactly one acknowledgement identity")
-    elif kind == "OpenInvocation" and (
-        "payload" not in value or (wire and value["payload"] is None)
-    ):
-        raise ValueError("PROTOCOL: control kind 'OpenInvocation' is missing field 'payload'")
+    elif kind == "OpenInvocation":
+        if "payload" not in value:
+            raise ValueError("PROTOCOL: control kind 'OpenInvocation' is missing field 'payload'")
+        if not isinstance(value["payload"], dict):
+            raise ValueError("PROTOCOL: control kind 'OpenInvocation' payload must be an object")
 
 
 def _encode_control(value: Dict[str, Any]) -> bytes:
