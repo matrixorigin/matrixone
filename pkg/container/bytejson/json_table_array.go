@@ -18,15 +18,15 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/binary"
-	"errors"
-	"fmt"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // ErrJSONTableCellLimit identifies a JSON_TABLE JSON result cell that would
 // exceed its configured encoded-byte limit. This is a statement-level error;
 // callers must not route it through a column ON ERROR action.
-var ErrJSONTableCellLimit = errors.New("JSON_TABLE JSON cell exceeds limit")
+var ErrJSONTableCellLimit = moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell exceeds limit")
 
 // JSONTableArrayBuilder constructs one JSON array incrementally. It owns the
 // output buffer and copies each value into the final binary-JSON layout, so it
@@ -51,16 +51,16 @@ const (
 // the complete encoded cell size, including the top-level type byte.
 func NewJSONTableArrayBuilder(maxBytes int) (*JSONTableArrayBuilder, error) {
 	if maxBytes <= 0 {
-		return nil, fmt.Errorf("invalid JSON_TABLE JSON cell limit %d", maxBytes)
+		return nil, moerr.NewInvalidInputNoCtxf("invalid JSON_TABLE JSON cell limit %d", maxBytes)
 	}
 	if uint64(maxBytes) > maxJSONTableArrayCellBytes {
-		return nil, fmt.Errorf("JSON_TABLE JSON cell limit %d exceeds uint32 storage size", maxBytes)
+		return nil, moerr.NewInvalidInputNoCtxf("JSON_TABLE JSON cell limit %d exceeds uint32 storage size", maxBytes)
 	}
 	// The array header plus the top-level type byte must fit before any value is
 	// appended. Keeping this check here makes a limit smaller than the binary
 	// JSON header deterministic rather than dependent on the first append.
 	if maxBytes < 1+headerSize+valEntrySize {
-		return nil, fmt.Errorf("JSON_TABLE JSON cell limit %d is too small", maxBytes)
+		return nil, moerr.NewInvalidInputNoCtxf("JSON_TABLE JSON cell limit %d is too small", maxBytes)
 	}
 	return &JSONTableArrayBuilder{
 		maxBytes: maxBytes,
@@ -78,10 +78,10 @@ func (b *JSONTableArrayBuilder) Append(value ByteJson) error {
 // interruptible without introducing a worker or an unbounded queue.
 func (b *JSONTableArrayBuilder) AppendContext(ctx context.Context, value ByteJson) error {
 	if b == nil {
-		return errors.New("nil JSON_TABLE array builder")
+		return moerr.NewInvalidStateNoCtx("nil JSON_TABLE array builder")
 	}
 	if b.done {
-		return errors.New("JSON_TABLE array builder is closed")
+		return moerr.NewInvalidStateNoCtx("JSON_TABLE array builder is closed")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -90,10 +90,10 @@ func (b *JSONTableArrayBuilder) AppendContext(ctx context.Context, value ByteJso
 		return err
 	}
 	if value.Type == TpCodeLiteral && len(value.Data) != 1 {
-		return fmt.Errorf("invalid JSON literal payload length %d", len(value.Data))
+		return moerr.NewInvalidInputNoCtxf("invalid JSON literal payload length %d", len(value.Data))
 	}
 	if b.count == math.MaxUint32 {
-		return fmt.Errorf("JSON_TABLE JSON array has too many elements")
+		return moerr.NewInvalidInputNoCtx("JSON_TABLE JSON array has too many elements")
 	}
 	// Admission must happen before StorageCompatible can materialize an
 	// Opaque/Bit base64 payload or rebuild a nested container. Literal values
@@ -122,7 +122,7 @@ func (b *JSONTableArrayBuilder) AppendContext(ctx context.Context, value ByteJso
 		return err
 	}
 	if stored.Type == TpCodeLiteral && len(stored.Data) != 1 {
-		return fmt.Errorf("invalid JSON literal payload length %d", len(stored.Data))
+		return moerr.NewInvalidInputNoCtxf("invalid JSON literal payload length %d", len(stored.Data))
 	}
 
 	payloadLen := 0
@@ -132,11 +132,11 @@ func (b *JSONTableArrayBuilder) AppendContext(ctx context.Context, value ByteJso
 	if stored.Type == TpCodeLiteral {
 		storedDataLen = len(stored.Data)
 	} else if len(stored.Data) != storedDataLen {
-		return fmt.Errorf("JSON_TABLE storage size changed during admission: measured %d, encoded %d", storedDataLen, len(stored.Data))
+		return moerr.NewInternalErrorNoCtxf("JSON_TABLE storage size changed during admission: measured %d, encoded %d", storedDataLen, len(stored.Data))
 	}
 	const entrySize = valEntrySize
 	if payloadLen > math.MaxInt-(headerSize+len(b.entries)+entrySize+len(b.payload)) {
-		return fmt.Errorf("JSON_TABLE JSON cell size overflows int")
+		return moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell size overflows int")
 	}
 	nextLen := headerSize + len(b.entries) + entrySize + len(b.payload) + payloadLen
 	// ByteJson.Marshal adds one byte for the top-level type code.
@@ -144,7 +144,7 @@ func (b *JSONTableArrayBuilder) AppendContext(ctx context.Context, value ByteJso
 		return jsonTableCellLimitError()
 	}
 	if uint64(nextLen) > math.MaxUint32 {
-		return errors.New("JSON_TABLE JSON cell exceeds uint32 storage size")
+		return moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell exceeds uint32 storage size")
 	}
 
 	entryOffset := len(b.entries)
@@ -153,13 +153,13 @@ func (b *JSONTableArrayBuilder) AppendContext(ctx context.Context, value ByteJso
 	if stored.Type == TpCodeLiteral {
 		if stored.Data[0] != LiteralNull && stored.Data[0] != LiteralTrue && stored.Data[0] != LiteralFalse {
 			b.entries = b.entries[:entryOffset]
-			return fmt.Errorf("invalid JSON literal type %d", stored.Data[0])
+			return moerr.NewInvalidInputNoCtxf("invalid JSON literal type %d", stored.Data[0])
 		}
 		b.entries[entryOffset+valTypeSize] = stored.Data[0]
 	} else {
 		if uint64(len(b.payload)) > math.MaxUint32 {
 			b.entries = b.entries[:entryOffset]
-			return fmt.Errorf("JSON_TABLE JSON cell offset exceeds uint32")
+			return moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell offset exceeds uint32")
 		}
 		binary.LittleEndian.PutUint32(
 			b.entries[entryOffset+valTypeSize:],
@@ -175,7 +175,7 @@ func storageCompatibleJSONValue(value ByteJson) (stored ByteJson, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			stored = ByteJson{}
-			err = fmt.Errorf("invalid JSON value: %v", recovered)
+			err = moerr.NewInvalidInputNoCtxf("invalid JSON value: %v", recovered)
 		}
 	}()
 	return value.StorageCompatible()
@@ -189,7 +189,7 @@ func storageCompatibleJSONValue(value ByteJson) (stored ByteJson, err error) {
 // included in this size.
 func StorageCompatibleDataSizeWithLimit(ctx context.Context, value ByteJson, maxDataBytes int) (int, error) {
 	if maxDataBytes < 0 {
-		return 0, errors.New("invalid JSON_TABLE storage data limit")
+		return 0, moerr.NewInvalidInputNoCtx("invalid JSON_TABLE storage data limit")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -206,7 +206,7 @@ func StorageCompatibleDataSizeWithLimit(ctx context.Context, value ByteJson, max
 // final detached cell.
 func MarshalStorageCompatibleWithLimit(ctx context.Context, value ByteJson, maxBytes int) ([]byte, error) {
 	if maxBytes <= 0 {
-		return nil, fmt.Errorf("invalid JSON_TABLE JSON cell limit %d", maxBytes)
+		return nil, moerr.NewInvalidInputNoCtxf("invalid JSON_TABLE JSON cell limit %d", maxBytes)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -223,7 +223,7 @@ func MarshalStorageCompatibleWithLimit(ctx context.Context, value ByteJson, maxB
 		return nil, err
 	}
 	if len(encoded) != dataSize+1 {
-		return nil, fmt.Errorf("JSON_TABLE storage size changed during admission: measured %d, encoded %d", dataSize+1, len(encoded))
+		return nil, moerr.NewInternalErrorNoCtxf("JSON_TABLE storage size changed during admission: measured %d, encoded %d", dataSize+1, len(encoded))
 	}
 	if len(encoded) > maxBytes {
 		return nil, jsonTableCellLimitError()
@@ -244,26 +244,26 @@ func jsonTableCellLimitError() error {
 // int before a value reaches StorageCompatible or a base64 encoder.
 func jsonTableArrayPayloadBudget(maxBytes, entriesLen, payloadLen int) (int, error) {
 	if maxBytes <= 0 {
-		return 0, fmt.Errorf("invalid JSON_TABLE JSON cell limit %d", maxBytes)
+		return 0, moerr.NewInvalidInputNoCtxf("invalid JSON_TABLE JSON cell limit %d", maxBytes)
 	}
 	if uint64(maxBytes) > maxJSONTableArrayCellBytes {
-		return 0, fmt.Errorf("JSON_TABLE JSON cell limit %d exceeds uint32 storage size", maxBytes)
+		return 0, moerr.NewInvalidInputNoCtxf("JSON_TABLE JSON cell limit %d exceeds uint32 storage size", maxBytes)
 	}
 	if entriesLen < 0 || payloadLen < 0 {
-		return 0, errors.New("invalid JSON_TABLE JSON array buffer length")
+		return 0, moerr.NewInternalErrorNoCtx("invalid JSON_TABLE JSON array buffer length")
 	}
 
 	base := uint64(headerSize)
 	if uint64(entriesLen) > maxJSONTableArrayDataBytes-base {
-		return 0, errors.New("JSON_TABLE JSON cell exceeds uint32 storage size")
+		return 0, moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell exceeds uint32 storage size")
 	}
 	base += uint64(entriesLen)
 	if uint64(valEntrySize) > maxJSONTableArrayDataBytes-base {
-		return 0, errors.New("JSON_TABLE JSON cell exceeds uint32 storage size")
+		return 0, moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell exceeds uint32 storage size")
 	}
 	base += uint64(valEntrySize)
 	if uint64(payloadLen) > maxJSONTableArrayDataBytes-base {
-		return 0, errors.New("JSON_TABLE JSON cell exceeds uint32 storage size")
+		return 0, moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell exceeds uint32 storage size")
 	}
 	base += uint64(payloadLen)
 
@@ -291,29 +291,29 @@ func storageCompatibleDataSizeWithBudget(ctx context.Context, value ByteJson, li
 	switch value.Type {
 	case TpCodeLiteral:
 		if len(value.Data) != 1 || value.Data[0] < LiteralNull || value.Data[0] > LiteralFalse {
-			return 0, false, fmt.Errorf("invalid JSON literal payload")
+			return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON literal payload")
 		}
 		return storageSizeWithinLimit(1, limit, false)
 	case TpCodeInt64, TpCodeUint64, TpCodeFloat64:
 		if len(value.Data) != numberSize {
-			return 0, false, fmt.Errorf("invalid JSON numeric payload length %d", len(value.Data))
+			return 0, false, moerr.NewInvalidInputNoCtxf("invalid JSON numeric payload length %d", len(value.Data))
 		}
 		if value.Type == TpCodeFloat64 {
 			floating := math.Float64frombits(binary.LittleEndian.Uint64(value.Data))
 			if math.IsNaN(floating) || math.IsInf(floating, 0) {
-				return 0, false, fmt.Errorf("invalid JSON float payload")
+				return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON float payload")
 			}
 		}
 		return storageSizeWithinLimit(numberSize, limit, false)
 	case TpCodeString, TpCodeDecimal, TpCodeDate, TpCodeTime, TpCodeDatetime, TpCodeBlob:
 		if !validStorageStringData(value.Data) {
-			return 0, false, fmt.Errorf("invalid JSON string payload")
+			return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON string payload")
 		}
 		return storageSizeWithinLimit(len(value.Data), limit, false)
 	case TpCodeOpaque, TpCodeBit:
 		payload, ok := storageStringPayload(value.Data)
 		if !ok {
-			return 0, false, fmt.Errorf("invalid JSON binary payload")
+			return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON binary payload")
 		}
 		encodedLen, err := checkedBase64EncodedLen(len(payload))
 		if err != nil {
@@ -321,19 +321,19 @@ func storageCompatibleDataSizeWithBudget(ctx context.Context, value ByteJson, li
 		}
 		if value.Type == TpCodeBit {
 			if len(persistedBitPrefix) > math.MaxInt-encodedLen {
-				return 0, false, errors.New("JSON_TABLE JSON cell size overflows int")
+				return 0, false, moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell size overflows int")
 			}
 			encodedLen += len(persistedBitPrefix)
 		}
 		prefixLen := storageUvarintSize(uint64(encodedLen))
 		if encodedLen > math.MaxInt-prefixLen {
-			return 0, false, errors.New("JSON_TABLE JSON cell size overflows int")
+			return 0, false, moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell size overflows int")
 		}
 		return storageSizeWithinLimit(prefixLen+encodedLen, limit, true)
 	case TpCodeArray, TpCodeObject:
 		return storageCompatibleContainerDataSizeWithBudget(ctx, value, limit, depth, remaining)
 	default:
-		return 0, false, fmt.Errorf("invalid JSON value type %#x", value.Type)
+		return 0, false, moerr.NewInvalidInputNoCtxf("invalid JSON value type %#x", value.Type)
 	}
 }
 
@@ -344,14 +344,14 @@ func storageCompatibleContainerDataSize(ctx context.Context, value ByteJson, lim
 
 func storageCompatibleContainerDataSizeWithBudget(ctx context.Context, value ByteJson, limit, depth int, remaining *uint64) (int, bool, error) {
 	if depth > JSONDocumentMaxNestingDepth {
-		return 0, false, fmt.Errorf("json document nesting depth exceeds %d", JSONDocumentMaxNestingDepth)
+		return 0, false, moerr.NewInvalidInputNoCtxf("json document nesting depth exceeds %d", JSONDocumentMaxNestingDepth)
 	}
 	data := value.Data
 	if len(data) < headerSize {
-		return 0, false, errors.New("invalid JSON container header")
+		return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON container header")
 	}
 	if uint64(len(data)) > math.MaxUint32 || binary.LittleEndian.Uint32(data[docSizeOff:]) != uint32(len(data)) {
-		return 0, false, errors.New("invalid JSON container size")
+		return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON container size")
 	}
 	count := uint64(binary.LittleEndian.Uint32(data[:4]))
 	keyTableSize := uint64(0)
@@ -361,7 +361,7 @@ func storageCompatibleContainerDataSizeWithBudget(ctx context.Context, value Byt
 	valueTableSize := count * uint64(valEntrySize)
 	minimumSize := uint64(headerSize) + keyTableSize + valueTableSize
 	if minimumSize > uint64(len(data)) || minimumSize > math.MaxInt {
-		return 0, false, errors.New("invalid JSON container table")
+		return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON container table")
 	}
 	if len(data) > limit {
 		// StorageCompatible only replaces descendants with larger legacy
@@ -370,7 +370,7 @@ func storageCompatibleContainerDataSizeWithBudget(ctx context.Context, value Byt
 		return 0, false, jsonTableCellLimitError()
 	}
 	if !consumeStoragePreflightWork(remaining, minimumSize) {
-		return 0, false, errors.New("invalid JSON container serialized work")
+		return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON container serialized work")
 	}
 	valueTableStart := int(uint64(headerSize) + keyTableSize)
 	payloadStart := int(minimumSize)
@@ -384,20 +384,20 @@ func storageCompatibleContainerDataSizeWithBudget(ctx context.Context, value Byt
 			keyOffset := uint64(binary.LittleEndian.Uint32(data[entryOffset:]))
 			keyLength := uint64(binary.LittleEndian.Uint16(data[entryOffset+keyOriginOff:]))
 			if keyOffset < uint64(payloadStart) || keyOffset > uint64(len(data)) || keyLength > uint64(len(data))-keyOffset {
-				return 0, false, errors.New("invalid JSON object key")
+				return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON object key")
 			}
 			if keyLength > uint64(math.MaxInt-keyBytes) {
-				return 0, false, errors.New("JSON_TABLE JSON cell size overflows int")
+				return 0, false, moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell size overflows int")
 			}
 			if !consumeStoragePreflightWork(remaining, keyLength) {
-				return 0, false, errors.New("invalid JSON container serialized work")
+				return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON container serialized work")
 			}
 			keyBytes += int(keyLength)
 		}
 	}
 
 	if keyBytes > math.MaxInt-int(minimumSize) {
-		return 0, false, errors.New("JSON_TABLE JSON cell size overflows int")
+		return 0, false, moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell size overflows int")
 	}
 	canonicalSize := int(minimumSize) + keyBytes
 	expands := false
@@ -410,20 +410,20 @@ func storageCompatibleContainerDataSizeWithBudget(ctx context.Context, value Byt
 		if childType == TpCodeLiteral {
 			literal := data[entryOffset+valTypeSize]
 			if literal < LiteralNull || literal > LiteralFalse {
-				return 0, false, errors.New("invalid JSON literal type")
+				return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON literal type")
 			}
 			continue
 		}
 		childOffset := uint64(binary.LittleEndian.Uint32(data[entryOffset+valTypeSize:]))
 		if childOffset < uint64(payloadStart) || childOffset >= uint64(len(data)) {
-			return 0, false, errors.New("invalid JSON value offset")
+			return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON value offset")
 		}
 		child, ok := storageCompatibleChild(childType, data[childOffset:])
 		if !ok {
-			return 0, false, errors.New("invalid JSON container value")
+			return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON container value")
 		}
 		if childType != TpCodeArray && childType != TpCodeObject && !consumeStoragePreflightWork(remaining, uint64(len(child.Data))) {
-			return 0, false, errors.New("invalid JSON container serialized work")
+			return 0, false, moerr.NewInvalidInputNoCtx("invalid JSON container serialized work")
 		}
 		childSize, childExpands, err := storageCompatibleDataSizeWithBudget(ctx, child, limit, depth+1, remaining)
 		if err != nil {
@@ -431,7 +431,7 @@ func storageCompatibleContainerDataSizeWithBudget(ctx context.Context, value Byt
 		}
 		if childType != TpCodeLiteral {
 			if childSize > math.MaxInt-canonicalSize {
-				return 0, false, errors.New("JSON_TABLE JSON cell size overflows int")
+				return 0, false, moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell size overflows int")
 			}
 			canonicalSize += childSize
 			if canonicalSize > limit {
@@ -442,7 +442,7 @@ func storageCompatibleContainerDataSizeWithBudget(ctx context.Context, value Byt
 	}
 	if expands {
 		if canonicalSize > math.MaxUint32 {
-			return 0, false, errors.New("JSON_TABLE JSON cell exceeds uint32 storage size")
+			return 0, false, moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell exceeds uint32 storage size")
 		}
 		return canonicalSize, true, nil
 	}
@@ -504,11 +504,11 @@ func storageStringPayload(data []byte) ([]byte, bool) {
 
 func checkedBase64EncodedLen(inputLen int) (int, error) {
 	if inputLen > math.MaxInt-2 {
-		return 0, errors.New("JSON_TABLE JSON cell size overflows int")
+		return 0, moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell size overflows int")
 	}
 	groups := (inputLen + 2) / 3
 	if groups > math.MaxInt/4 {
-		return 0, errors.New("JSON_TABLE JSON cell size overflows int")
+		return 0, moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell size overflows int")
 	}
 	return base64.StdEncoding.EncodedLen(inputLen), nil
 }
@@ -533,17 +533,17 @@ func storageSizeWithinLimit(size, limit int, expands bool) (int, bool, error) {
 // cannot be appended to after Build; Close may still be called by cleanup code.
 func (b *JSONTableArrayBuilder) Build() (ByteJson, error) {
 	if b == nil {
-		return ByteJson{}, errors.New("nil JSON_TABLE array builder")
+		return ByteJson{}, moerr.NewInvalidStateNoCtx("nil JSON_TABLE array builder")
 	}
 	if b.done {
-		return ByteJson{}, errors.New("JSON_TABLE array builder is closed")
+		return ByteJson{}, moerr.NewInvalidStateNoCtx("JSON_TABLE array builder is closed")
 	}
 	if b.count == 0 {
-		return ByteJson{}, errors.New("cannot build an empty JSON_TABLE array")
+		return ByteJson{}, moerr.NewInvalidStateNoCtx("cannot build an empty JSON_TABLE array")
 	}
 	dataLen := headerSize + len(b.entries) + len(b.payload)
 	if dataLen > math.MaxUint32 {
-		return ByteJson{}, errors.New("JSON_TABLE JSON cell exceeds uint32 storage size")
+		return ByteJson{}, moerr.NewInvalidInputNoCtx("JSON_TABLE JSON cell exceeds uint32 storage size")
 	}
 	data := make([]byte, dataLen)
 	binary.LittleEndian.PutUint32(data[:4], b.count)
