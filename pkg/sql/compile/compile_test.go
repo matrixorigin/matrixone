@@ -2199,6 +2199,52 @@ func TestCompilePartitionTopNGatedByProtocolVersion(t *testing.T) {
 	require.False(t, c.supportsRemotePartitionTopN(), "rollback must select the legacy partition path")
 }
 
+func TestMultiSourceISCPGatedByProtocolVersion(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	service := proc.GetService()
+	rt := runtime.ServiceRuntime(service)
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
+	require.False(t, supportsMultiSourceISCP(service))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion43)
+	require.False(t, supportsMultiSourceISCP(service))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion56)
+	require.False(t, supportsMultiSourceISCP(service))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion63)
+	require.False(t, supportsMultiSourceISCP(service),
+		"the MV capability must not reuse a previously published protocol")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion64)
+	require.False(t, supportsMultiSourceISCP(service),
+		"MV capability must not reuse the typed BIN/CONV protocol")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+	require.False(t, supportsMultiSourceISCP(service))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+	require.True(t, supportsMultiSourceISCP(service))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
+	require.False(t, supportsMultiSourceISCP(service),
+		"rollback must reject multi-source jobs before contacting old CNs")
+}
+
+func TestMaterializedViewCapabilityAndReadValidationGuards(t *testing.T) {
+	c := NewMockCompile(t)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	// A compile without a query plan is a valid path for utility/internal
+	// statements and must not attempt MV catalog validation.
+	require.NoError(t, c.validateMaterializedViewReads())
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
+	require.NoError(t, c.validateMaterializedViewReads())
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+	require.Error(t, requireMaterializedViewCapability(c))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+	require.NoError(t, requireMaterializedViewCapability(c))
+}
+
 func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 	newNode := func() *plan.Node {
 		return &plan.Node{

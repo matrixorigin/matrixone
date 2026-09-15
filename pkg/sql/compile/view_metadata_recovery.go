@@ -1087,7 +1087,8 @@ func discoverLegacyViewPage(
 		"select t.account_id,t.reldatabase_id,t.rel_id,t.rel_logical_id,t.reldatabase,t.relname,"+
 			"t.relkind,r.target_relation_id,r.status from %s.%s t left join %s.%s r "+
 			"on t.account_id=r.account_id and t.rel_id=r.target_relation_id where t.relkind='%s' "+
-			"and t.reldatabase not in ('%s') and "+
+			"and lower(coalesce(t.viewdef,'')) not like '%%create materialized view %%' "+
+			"and t.relname not like '__mo_mv_state_%%' and t.reldatabase not in ('%s') and "+
 			"(t.account_id>%d or (t.account_id=%d and t.reldatabase>'%s') or "+
 			"(t.account_id=%d and t.reldatabase='%s' and t.relname>'%s')) "+
 			"order by t.account_id,t.reldatabase,t.relname limit %d",

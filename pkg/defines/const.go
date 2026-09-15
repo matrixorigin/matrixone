@@ -99,7 +99,7 @@ const (
 	MORPCVersion61     int64 = 61 // index metadata provenance columns (nrow, build_ts)
 	MORPCVersion62     int64 = 62 // VARCHAR OCT overload identities
 	MORPCVersion63     int64 = 63 // INSERT IGNORE CHECK warning diagnostics
-	MORPCVersion64     int64 = 64 // typed BIN/CONV execution contracts
+	MORPCVersion64     int64 = 64 // materialized view catalog/job protocol and typed BIN/CONV execution contracts
 	MORPCVersion65     int64 = 65 // signed INT result contract for ASCII
 	MORPCVersion66     int64 = 66 // GROUP_CONCAT source-row diagnostics in aggregate partial state
 	MORPCVersion67     int64 = 67 // named process timezone identity
@@ -108,7 +108,9 @@ const (
 	MORPCVersion70     int64 = 70 // row-dependent and unsigned CONV bases
 	MORPCVersion71     int64 = 71 // checked integer arithmetic overloads
 	MORPCVersion72     int64 = 72 // corrected IP function semantics and overload identities
-	MORPCLatestVersion       = MORPCVersion72
+	MORPCVersion73     int64 = 73 // reserved for lossless physical/logical NoFull CDC start watermark
+	MORPCVersion74     int64 = 74 // materialized view catalog/job protocol
+	MORPCLatestVersion       = MORPCVersion74
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

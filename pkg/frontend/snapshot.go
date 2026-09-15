@@ -50,6 +50,7 @@ import (
 type tableType string
 
 const view tableType = "VIEW"
+const materializedView tableType = "MATERIALIZED VIEW"
 
 const clusterTable tableType = "CLUSTER TABLE"
 
@@ -1461,7 +1462,10 @@ func restoreToDatabaseOrTable(
 		}
 
 		// skip view
-		if tblInfo.typ == view {
+		if isMaterializedViewState(tblInfo) {
+			continue
+		}
+		if isViewLike(tblInfo) {
 			viewMap[key] = tblInfo
 			continue
 		}
@@ -2361,9 +2365,11 @@ func buildTableInfoListSQL(dbName string, tblName string, ts int64, accountId ui
 	}
 	whereClause := buildTableInfoListWhereClause(dbName, tblName, accountId)
 	sql := fmt.Sprintf(
-		"select relname, case relkind when %s then 'VIEW' when %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, relkind, viewdef from %s.mo_tables%s where %s",
+		"select relname, case when relkind = %s and lower(viewdef) like '%%create materialized view %%' then 'MATERIALIZED VIEW' when relkind = %s then 'VIEW' when relkind = %s then 'CLUSTER TABLE' else 'BASE TABLE' end as table_type, case when relkind = %s and lower(viewdef) like '%%create materialized view %%' then 'm' else relkind end, viewdef from %s.mo_tables%s where %s",
+		quoteSQLStringLiteral(catalog.SystemViewRel),
 		quoteSQLStringLiteral(catalog.SystemViewRel),
 		quoteSQLStringLiteral(catalog.SystemClusterRel),
+		quoteSQLStringLiteral(catalog.SystemViewRel),
 		moCatalog,
 		snapshotSpec,
 		whereClause,
@@ -2466,6 +2472,9 @@ func getTableInfos(
 					},
 				)
 			}
+			if sql, ok := materializedViewCreateSQL(tblInfo); ok {
+				return sql, nil
+			}
 			return getCreateTableSql(ctx, bh, snapshot, tblInfo.dbName, tblInfo.tblName)
 		},
 	)
@@ -2482,6 +2491,29 @@ func snapshotPhysicalTime(snapshot *plan.Snapshot) int64 {
 
 func isSequence(tblInfo *tableInfo) bool {
 	return tblInfo != nil && tblInfo.relKind == catalog.SystemSequenceRel
+}
+
+func isViewLike(tblInfo *tableInfo) bool {
+	return tblInfo != nil && (tblInfo.typ == view || tblInfo.typ == materializedView)
+}
+
+func isMaterializedViewState(tblInfo *tableInfo) bool {
+	return tblInfo != nil && strings.HasPrefix(strings.ToLower(tblInfo.tblName), "__mo_mv_state_")
+}
+
+func materializedViewCreateSQL(tblInfo *tableInfo) (string, bool) {
+	if tblInfo == nil || tblInfo.typ != materializedView {
+		return "", false
+	}
+	var data struct{ Stmt string }
+	if json.Unmarshal([]byte(tblInfo.viewDef), &data) != nil {
+		return "", false
+	}
+	stmt := strings.TrimSpace(data.Stmt)
+	if !strings.HasPrefix(strings.ToLower(stmt), "create materialized view ") {
+		return "", false
+	}
+	return stmt, true
 }
 
 func getCreateSequenceSQL(
@@ -2578,6 +2610,8 @@ func dropCurrentRestoreObject(
 		dropSQL = "drop sequence if exists " + name
 	case catalog.SystemViewRel:
 		dropSQL = "drop view if exists " + name
+	case catalog.SystemMaterializedRel:
+		dropSQL = "drop materialized view if exists " + name
 	default:
 		dropSQL = dropTableIfExistsSQL(dbName, tblName)
 	}

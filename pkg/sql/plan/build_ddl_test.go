@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -30,6 +31,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -1426,6 +1428,772 @@ func tableDefCreateSQL(tableDef *plan.TableDef) string {
 		}
 	}
 	return ""
+}
+
+func TestIsMaterializedViewTableDefUsesCatalogIdentity(t *testing.T) {
+	require.True(t, IsMaterializedViewTableDef(&plan.TableDef{TableType: "m"}))
+	require.True(t, IsMaterializedViewTableDef(&plan.TableDef{
+		Createsql: "  CREATE MATERIALIZED VIEW mv AS SELECT 1",
+	}))
+	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
+		Createsql: "create view v as select 1",
+	}))
+	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
+		Createsql: "create table t comment 'create materialized view'",
+	}))
+	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
+		Props: []*plan.PropertyDef{{Key: "mv_materialized", Value: "true"}},
+	}))
+	require.True(t, IsMaterializedViewTableDef(&plan.TableDef{
+		Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{Properties: []*plan.Property{{
+				Key: catalog.SystemRelAttr_CreateSQL, Value: "CREATE MATERIALIZED VIEW mv AS SELECT 1",
+			}}},
+		}}},
+	}))
+	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
+		Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{Properties: []*plan.Property{{
+				Key: catalog.SystemRelAttr_Comment, Value: materializedViewMarkerComment,
+			}}},
+		}}},
+	}))
+	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
+		Createsql: "CREATE TABLE ordinary (note VARCHAR(64) COMMENT 'mv_materialized')",
+	}))
+	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
+		Createsql: "CREATE TABLE ordinary (id INT)",
+		Cols:      []*plan.ColDef{{Name: "note", Comment: "mv_materialized"}},
+	}))
+	require.False(t, IsMaterializedViewTableDef(&plan.TableDef{
+		Createsql: "CREATE TABLE ordinary (id INT)",
+		Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{Properties: []*plan.Property{{
+				Key:   catalog.SystemRelAttr_CreateSQL,
+				Value: "CREATE TABLE ordinary (note VARCHAR(64) COMMENT 'mv_materialized')",
+			}}},
+		}}},
+	}))
+}
+
+func TestIsMaterializedViewStateTableDefUsesCatalogOwner(t *testing.T) {
+	require.False(t, IsMaterializedViewStateTableDef(&plan.TableDef{Name: "__mo_mv_state_0123456789abcdef"}))
+	require.True(t, IsMaterializedViewStateTableDef(&plan.TableDef{
+		Name:      "__mo_mv_state_0123456789abcdef",
+		TableType: catalog.SystemIndexRel,
+		TblId:     101,
+		Props: []*plan.PropertyDef{{Key: mvdefinition.OwnerProperty, Value: mvdefinition.EncodeOwner(mvdefinition.Owner{
+			Format: 1, AccountID: 0, TargetID: 100, Generation: 1, StateID: 101,
+		})}},
+	}))
+	require.True(t, IsMaterializedViewStateTableDef(&plan.TableDef{
+		Name:      "__mo_mv_state_0123456789abcdef",
+		TableType: catalog.SystemIndexRel,
+		TblId:     101,
+		Props:     []*plan.PropertyDef{{Key: mvdefinition.OwnerProperty, Value: `{"format":99,"state_id":101}`}},
+	}))
+	require.False(t, IsMaterializedViewStateTableDef(&plan.TableDef{
+		Name: "state", Createsql: "create table state (a int) comment = 'matrixone materialized view state'",
+	}))
+	require.False(t, IsMaterializedViewStateTableDef(&plan.TableDef{Name: "user_state"}))
+}
+
+func TestCreateTableRejectsMaterializedViewStateReservedTarget(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	_, err := runOneStmt(mock, t, "create table tpch.__mo_mv_state_0123456789abcdef (a bigint)")
+	require.ErrorContains(t, err, "reserved for materialized view state")
+}
+
+func TestDropMaterializedViewStateAllowsInternalDatabaseCleanup(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	name := "__mo_mv_state_0123456789abcdef"
+	mock.ctxt.objects[name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: 424241}
+	mock.ctxt.tables[name] = &plan.TableDef{
+		Name:      name,
+		TableType: catalog.SystemIndexRel,
+		TblId:     424241,
+		Props:     []*plan.PropertyDef{{Key: mvdefinition.OwnerProperty, Value: `{"format":99,"state_id":424241}`}},
+	}
+	_, err := runOneStmt(mock, t, "drop table tpch."+name)
+	require.ErrorContains(t, err, "must be dropped with its materialized view")
+
+	mock.ctxt.SetContext(context.WithValue(context.Background(), defines.InternalExecutorKey{}, true))
+	_, err = runOneStmt(mock, t, "drop table tpch."+name)
+	require.NoError(t, err)
+}
+
+func TestInsertRejectsMaterializedViewStateReservedTarget(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	name := "__mo_mv_state_0123456789abcdef"
+	mock.ctxt.objects[name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: 424242}
+	mock.ctxt.tables[name] = &plan.TableDef{
+		Name:      name,
+		TableType: catalog.SystemIndexRel,
+		TblId:     424242,
+		Cols:      []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}},
+		Props: []*plan.PropertyDef{{Key: mvdefinition.OwnerProperty, Value: mvdefinition.EncodeOwner(mvdefinition.Owner{
+			Format: 1, AccountID: 0, TargetID: 424241, Generation: 1, StateID: 424242,
+		})}},
+	}
+	_, err := runOneStmt(mock, t, "insert into tpch."+name+" values (1)")
+	require.ErrorContains(t, err, "materialized view internal state")
+}
+
+func TestInsertRejectsMaterializedViewTarget(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	name := "mv_events"
+	mock.ctxt.objects[name] = &plan.ObjectRef{SchemaName: "tpch", ObjName: name, Obj: 424243}
+	mock.ctxt.tables[name] = &plan.TableDef{
+		Name: name, TableType: "m",
+		Createsql: "create materialized view mv_events as select 1 as a",
+		Cols:      []*plan.ColDef{{Name: "a", Typ: plan.Type{Id: int32(types.T_int64)}}},
+	}
+	_, err := runOneStmt(mock, t, "insert into tpch."+name+" values (1)")
+	require.ErrorContains(t, err, "materialized views can only be written by their refresh")
+}
+
+func TestValidateMaterializedViewSources(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	mv, d := testMaterializedViewTable(t, "mv")
+	d.Sources[0].Name = "missing_orders"
+	encoded, err := mvdefinition.Encode(d)
+	require.NoError(t, err)
+	mv.Props[0].Value = encoded
+	err = ValidateMaterializedViewSources(ctx, mv)
+	require.ErrorContains(t, err, "missing_orders")
+	ctx.tables["missing_orders"] = &plan.TableDef{Name: "missing_orders", DbName: "tpch", DbId: 1, TblId: 11, TableType: "r"}
+	require.NoError(t, ValidateMaterializedViewSources(ctx, mv))
+	ctx.tables["missing_orders"].TblId++
+	require.ErrorContains(t, ValidateMaterializedViewSources(ctx, mv), "changed")
+}
+
+func TestValidateMaterializedViewSourceTableRejectsUnsupportedRelations(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.tables["missing_orders"] = &plan.TableDef{Name: "missing_orders", DbName: "tpch", TableType: catalog.SystemOrdinaryRel}
+	ctx.tables["external_orders"] = &plan.TableDef{Name: "external_orders", DbName: "tpch", TableType: catalog.SystemExternalRel}
+	ctx.tables["view_orders"] = &plan.TableDef{Name: "view_orders", DbName: "tpch", TableType: catalog.SystemViewRel}
+	ctx.tables["temp_orders"] = &plan.TableDef{Name: "temp_orders", DbName: "tpch", TableType: catalog.SystemTemporaryTable}
+	ctx.tables["mv_orders"] = &plan.TableDef{
+		Name: "mv_orders", DbName: "tpch", TableType: "m",
+		Createsql: "create materialized view mv_orders as select * from tpch.missing_orders",
+	}
+
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{name: "external_orders", want: "external"},
+		{name: "view_orders", want: "relation type"},
+		{name: "temp_orders", want: "temporary"},
+		{name: "mv_orders", want: "materialized view"},
+	} {
+		err := validateMaterializedViewSourceTable(ctx, "tpch", tc.name)
+		require.Error(t, err, tc.name)
+		require.Contains(t, err.Error(), tc.want, tc.name)
+	}
+	require.NoError(t, validateMaterializedViewSourceTable(ctx, "tpch", "missing_orders"))
+}
+
+func TestMaterializedViewRefreshSQLIsReparseable(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create materialized view mv as select service, date_trunc('minute', event_ts), count(*) from events where status >= 500 group by service, date_trunc('minute', event_ts)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	refreshSQL := materializedViewRefreshSQL(stmt.(*tree.CreateView).AsSource)
+	require.Contains(t, refreshSQL, "date_trunc('minute'")
+	require.Contains(t, refreshSQL, "status >= 500")
+	reparsed, err := parsers.ParseOne(t.Context(), dialect.MYSQL, refreshSQL, 1)
+	require.NoError(t, err)
+	reparsed.Free()
+}
+
+func TestBuildMaterializedViewRefreshModes(t *testing.T) {
+	property := func(def *plan.TableDef, key string) string {
+		d, err := mvdefinition.Decode(mvdefinition.PropertyValue(def, mvdefinition.Property), false)
+		require.NoError(t, err)
+		switch key {
+		case "mv_refresh_method":
+			return d.Method
+		case "mv_refresh_timing":
+			return d.Timing
+		case "mv_incremental_spec":
+			return d.Incremental
+		}
+		t.Fatalf("unexpected property %s", key)
+		return ""
+	}
+	mock := NewMockOptimizer(true)
+	for name, def := range mock.ctxt.tables {
+		def.DbName = "tpch"
+		def.DbId = 1
+		if def.TblId == 0 {
+			t.Fatalf("source %s needs table ID", name)
+		}
+	}
+
+	forcePlan, err := runOneStmt(mock, t, "create materialized view mv_force as select n_regionkey, count(*) c from nation group by n_regionkey")
+	require.NoError(t, err)
+	forceDef := forcePlan.GetDdl().GetCreateView().GetTableDef()
+	require.Equal(t, "force", property(forceDef, "mv_refresh_method"))
+	require.Equal(t, "change", property(forceDef, "mv_refresh_timing"))
+	require.NotEmpty(t, property(forceDef, "mv_incremental_spec"))
+
+	fastPlan, err := runOneStmt(mock, t, "create materialized view mv_fast refresh incremental on change as select n_regionkey, sum(n_nationkey) s from nation group by n_regionkey")
+	require.NoError(t, err)
+	fastDef := fastPlan.GetDdl().GetCreateView().GetTableDef()
+	require.Equal(t, "fast", property(fastDef, "mv_refresh_method"))
+	require.NotEmpty(t, property(fastDef, "mv_incremental_spec"))
+
+	unionPlan, err := runOneStmt(mock, t, "create materialized view mv_union refresh fast on change as "+
+		"select n_regionkey k, count(*) c from nation group by n_regionkey "+
+		"union all select r_regionkey region_alias, count(*) rows_seen from region group by r_regionkey")
+	require.NoError(t, err)
+	unionDef := unionPlan.GetDdl().GetCreateView().GetTableDef()
+	require.NotEmpty(t, property(unionDef, "mv_incremental_spec"))
+	unionDefinition, err := mvdefinition.Decode(mvdefinition.PropertyValue(unionDef, mvdefinition.Property), false)
+	require.NoError(t, err)
+	require.Len(t, unionDefinition.Sources, 2)
+
+	_, err = runOneStmt(mock, t, "create materialized view mv_union_distinct refresh fast on change as "+
+		"select n_regionkey k, count(*) c from nation group by n_regionkey "+
+		"union distinct select r_regionkey, count(*) from region group by r_regionkey")
+	require.ErrorContains(t, err, "direct base sources or UNION ALL branches")
+
+	tooManyBranches := "create materialized view mv_union_wide refresh force on change as " +
+		"select n_regionkey k, count(*) c from nation group by n_regionkey" +
+		strings.Repeat(" union all select n_regionkey, count(*) from nation group by n_regionkey", materializedViewMaxDirectInputs)
+	_, err = runOneStmt(mock, t, tooManyBranches)
+	require.ErrorContains(t, err, "1 to 16 direct base sources or UNION ALL branches")
+
+	_, err = runOneStmt(mock, t, "create materialized view mv_bad refresh fast as select n_regionkey, count(*) c from nation group by n_regionkey limit 1")
+	require.ErrorContains(t, err, "MV_FAST_UNSUPPORTED_LIMIT")
+
+	completePlan, err := runOneStmt(mock, t, "create materialized view mv_complete refresh complete on change as select n_regionkey, count(*) c from nation group by n_regionkey")
+	require.NoError(t, err)
+	completeDef := completePlan.GetDdl().GetCreateView().GetTableDef()
+	require.Equal(t, "complete", property(completeDef, "mv_refresh_method"))
+	require.Equal(t, "change", property(completeDef, "mv_refresh_timing"))
+	require.Empty(t, property(completeDef, "mv_incremental_spec"))
+
+	_, err = runOneStmt(mock, t, "create materialized view mv_bad_demand refresh force on demand as select n_regionkey, count(*) c from nation group by n_regionkey")
+	require.ErrorContains(t, err, "ON DEMAND requires COMPLETE")
+
+	demandPlan, err := runOneStmt(mock, t, "create materialized view mv_demand refresh full on demand as select n_regionkey, count(*) c from nation group by n_regionkey")
+	require.NoError(t, err)
+	demandDef := demandPlan.GetDdl().GetCreateView().GetTableDef()
+	require.Equal(t, "complete", property(demandDef, "mv_refresh_method"))
+	require.Equal(t, "demand", property(demandDef, "mv_refresh_timing"))
+	require.Empty(t, property(demandDef, "mv_incremental_spec"))
+	demandDef.Createsql = "create materialized view mv_demand refresh complete on demand as select n_regionkey, count(*) c from nation group by n_regionkey"
+
+	finalizeTestMaterializedView(t, demandDef, 101)
+	mock.ctxt.tables["mv_demand"] = demandDef
+	mock.ctxt.objects["mv_demand"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mv_demand"}
+	refreshPlan, err := runOneStmt(mock, t, "refresh materialized view mv_demand")
+	require.NoError(t, err)
+	require.Equal(t, plan.DataDefinition_REFRESH_MATERIALIZED_VIEW, refreshPlan.GetDdl().GetDdlType())
+	require.Equal(t, "mv_demand", refreshPlan.GetDdl().GetRefreshMaterializedView().GetName())
+
+	finalizeTestMaterializedView(t, forceDef, 102)
+	mock.ctxt.tables["mv_force"] = forceDef
+	forceDef.Createsql = "create materialized view mv_force as select n_regionkey, count(*) c from nation group by n_regionkey"
+	mock.ctxt.objects["mv_force"] = &plan.ObjectRef{SchemaName: "tpch", ObjName: "mv_force"}
+	_, err = runOneStmt(mock, t, "refresh materialized view mv_force")
+	require.ErrorContains(t, err, "only supported")
+}
+
+func TestMaterializedViewAdmissionTracksAllInputs(t *testing.T) {
+	for _, tc := range []struct {
+		query string
+		valid bool
+	}{
+		{"select k,sum(v) from src group by k having count(*)>1", true},
+		{"select a.k,sum(a.v) from src a join dim b on a.k=b.k group by a.k", true},
+		{"select k,(select max(v) from src) from src", false},
+		{"select k from src where exists(select 1 from dim)", false},
+		{"select k,count(*) from src group by k having count(*)>(select max(v) from dim)", false},
+		{"select a.k from src a join dim b on a.k=(select max(k) from dim)", false},
+		{"select row_number() over(partition by (select max(k) from dim)) from src", false},
+		{"select k from src order by (select max(k) from dim)", false},
+		{"select k,count(*) from src group by k having rand()>0.5", false},
+		{"select k,now() from src", false},
+		{"select k from src where k=@limit", false},
+		{"select k from src where k=?", false},
+		{"with d as (select k from dim) select k from src", false},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.query, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			err = validateMaterializedViewQuery(t.Context(), stmt.(*tree.Select))
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "requires deterministic expressions")
+			}
+		})
+	}
+}
+
+func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		query    string
+		outputs  []string
+		eligible bool
+	}{
+		{name: "direct aggregate", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
+		{name: "where", query: "select service, count(*) requests, sum(bytes) bytes_sum from events where status = 500 group by service", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
+		{name: "time bucket avg conditional", query: "select service, date_trunc('minute', event_ts) minute, count(*) requests, sum(case when status >= 500 then 1 else 0 end) errors, avg(duration) avg_duration from events where region = 'us' group by service, date_trunc('minute', event_ts)", outputs: []string{"service", "minute", "requests", "errors", "avg_duration"}, eligible: false},
+		{name: "min max", query: "select service, min(duration) min_duration, max(duration) max_duration from events group by service", outputs: []string{"service", "min_duration", "max_duration"}, eligible: true},
+		{name: "count distinct", query: "select service, count(distinct trace_id) traces from events group by service", outputs: []string{"service", "traces"}, eligible: true},
+		{name: "sum distinct", query: "select service, sum(distinct bytes) bytes_sum from events group by service", outputs: []string{"service", "bytes_sum"}, eligible: true},
+		{name: "avg distinct", query: "select service, avg(distinct bytes) bytes_avg from events group by service", outputs: []string{"service", "bytes_avg"}, eligible: true},
+		{name: "select distinct rows", query: "select distinct service, region from events", outputs: []string{"service", "region"}, eligible: true},
+		{name: "having", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service having count(*) > 1", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
+		{name: "having-only-input", query: "select service, count(*) requests from events group by service having sum(status) > 1", outputs: []string{"service", "requests"}, eligible: true},
+		{name: "inner join", query: "select events.service, count(*) requests from events join services on events.service = services.name group by events.service", outputs: []string{"service", "requests"}},
+		{name: "distinct select", query: "select distinct service, count(*) requests, sum(bytes) bytes_sum from events group by service", outputs: []string{"service", "requests", "bytes_sum"}},
+		{name: "limit", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service limit 1", outputs: []string{"service", "requests", "bytes_sum"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.query, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			outputCols := make([]*ColDef, len(tc.outputs))
+			for i, name := range tc.outputs {
+				outputCols[i] = &ColDef{Name: name, Typ: Type{Id: int32(types.T_float64)}}
+			}
+			spec, stateCols, refreshSQL := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputCols, "__state")
+			require.Equal(t, tc.eligible, spec != "")
+			if !tc.eligible {
+				if tc.name == "inner join" {
+					require.Equal(t, "MV_FAST_UNSUPPORTED_JOIN_OR_MULTIPLE_SOURCES", materializedViewIncrementalUnsupportedReason(stmt.(*tree.Select)))
+				}
+				require.Empty(t, stateCols)
+				require.Empty(t, refreshSQL)
+				return
+			}
+			decoded, err := base64.StdEncoding.DecodeString(spec)
+			require.NoError(t, err)
+			var desc materializedViewIncrementalDescription
+			require.NoError(t, json.Unmarshal(decoded, &desc))
+			require.NotEmpty(t, desc.RowCountColumn)
+			require.Contains(t, refreshSQL, "count(*)")
+			require.Equal(t, 2, desc.Version)
+			if tc.name == "time bucket avg conditional" {
+				require.Equal(t, "region = 'us'", desc.Filter)
+				require.Len(t, desc.Groups, 2)
+				require.Len(t, desc.Aggregates, 3)
+				require.Equal(t, "avg", desc.Aggregates[2].Kind)
+				require.Contains(t, refreshSQL, "sum(duration)")
+				require.Contains(t, refreshSQL, "count(duration)")
+			}
+			if tc.name == "min max" {
+				require.Equal(t, "hybrid-affected-group", desc.Strategy)
+				require.Equal(t, "__state", desc.StateTable)
+				require.Equal(t, "min", desc.Aggregates[0].Kind)
+				require.Equal(t, "max", desc.Aggregates[1].Kind)
+			}
+			if tc.name == "count distinct" {
+				require.Equal(t, "__state", desc.StateTable)
+				require.Equal(t, "count_distinct", desc.Aggregates[0].Kind)
+				require.Positive(t, desc.Aggregates[0].StateIndex)
+			}
+			if tc.name == "sum distinct" || tc.name == "avg distinct" {
+				require.Equal(t, "__state", desc.StateTable)
+				require.Equal(t, tc.name[:3]+"_distinct", desc.Aggregates[0].Kind)
+				require.NotEmpty(t, desc.Aggregates[0].StateSumColumn)
+				require.NotEmpty(t, desc.Aggregates[0].StateCountColumn)
+				require.Positive(t, desc.Aggregates[0].StateIndex)
+				require.Contains(t, strings.ToLower(refreshSQL), "sum(distinct bytes) as "+desc.Aggregates[0].StateSumColumn)
+				require.Contains(t, strings.ToLower(refreshSQL), "count(distinct bytes) as "+desc.Aggregates[0].StateCountColumn)
+			}
+			if tc.name == "having" {
+				require.Equal(t, "hybrid-affected-group", desc.Strategy)
+				require.Equal(t, "count(*) > 1", desc.Having)
+				require.Equal(t, "__state", desc.StateTable)
+			}
+			if tc.name == "having-only-input" {
+				require.Equal(t, "hybrid-affected-group", desc.Strategy)
+				require.Equal(t, "sum(status) > 1", desc.Having)
+				require.Equal(t, "__state", desc.StateTable)
+				require.Contains(t, desc.SourceColumns, "status")
+			}
+			if tc.name == "select distinct rows" {
+				require.Empty(t, desc.StateTable)
+				require.Empty(t, desc.Aggregates)
+				require.Contains(t, strings.ToLower(refreshSQL), "group by service, region")
+				require.NotContains(t, strings.ToLower(refreshSQL), "select distinct")
+			}
+			if tc.name == "direct aggregate" {
+				require.Empty(t, desc.StateTable)
+			}
+			for _, stateCol := range stateCols {
+				require.Contains(t, refreshSQL, "as "+stateCol.Name)
+			}
+		})
+	}
+}
+
+func TestMaterializedViewIncrementalSpecPreservesGroupNullability(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select service, count(*) requests from events group by service", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	outputs := []*ColDef{
+		{Name: "service", Typ: Type{Id: int32(types.T_int64), NotNullable: true}},
+		{Name: "requests", Typ: Type{Id: int32(types.T_int64), NotNullable: true}},
+	}
+	spec, _, _ := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputs)
+	require.NotEmpty(t, spec)
+	decoded, err := base64.StdEncoding.DecodeString(spec)
+	require.NoError(t, err)
+	var desc materializedViewIncrementalDescription
+	require.NoError(t, json.Unmarshal(decoded, &desc))
+	require.Len(t, desc.Groups, 1)
+	require.True(t, desc.Groups[0].NotNullable)
+	require.NotEmpty(t, desc.GroupKeyColumn)
+	require.Equal(t, []string{desc.GroupKeyColumn}, materializedViewIncrementalPrimaryKey(spec))
+	desc.Groups[0].NotNullable = false
+	decoded, err = json.Marshal(desc)
+	require.NoError(t, err)
+	require.Equal(t, []string{desc.GroupKeyColumn}, materializedViewIncrementalPrimaryKey(base64.StdEncoding.EncodeToString(decoded)))
+}
+
+func TestMaterializedViewUnionAllIncrementalPlan(t *testing.T) {
+	parse := func(query string) *tree.Select {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, query, 1)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		return stmt.(*tree.Select)
+	}
+	outputs := []*ColDef{
+		{Name: "service", Typ: Type{Id: int32(types.T_varchar)}},
+		{Name: "requests", Typ: Type{Id: int32(types.T_int64)}},
+		{Name: "duration_sum", Typ: Type{Id: int32(types.T_int64)}},
+	}
+	query := "select service, count(*) requests, sum(duration) duration_sum from events group by service " +
+		"union all select region, count(*) rows_seen, sum(latency) latency_sum from archive group by region"
+	encoded, stateCols, refreshSQL := buildMaterializedViewIncrementalPlanForDatabase(parse(query), outputs, "obs", "__state")
+	require.NotEmpty(t, encoded)
+	require.NotEmpty(t, stateCols)
+	require.Contains(t, refreshSQL, "serial_full(1, service)")
+	require.Contains(t, refreshSQL, "serial_full(2, region)")
+	require.Contains(t, strings.ToLower(refreshSQL), "union all")
+	reparsed, err := parsers.ParseOne(t.Context(), dialect.MYSQL, refreshSQL, 1)
+	require.NoError(t, err)
+	reparsed.Free()
+
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	require.NoError(t, err)
+	var desc materializedViewIncrementalDescription
+	require.NoError(t, json.Unmarshal(decoded, &desc))
+	require.Equal(t, 3, desc.Version)
+	require.Equal(t, "union-all", desc.Strategy)
+	require.Len(t, desc.Branches, 2)
+	require.Equal(t, 1, desc.Branches[0].Description.BranchID)
+	require.Equal(t, "obs", desc.Branches[0].Description.SourceDatabase)
+	require.Equal(t, "events", desc.Branches[0].Description.SourceTable)
+	require.Equal(t, 2, desc.Branches[1].Description.BranchID)
+	require.Equal(t, "archive", desc.Branches[1].Description.SourceTable)
+	require.Equal(t, "service", desc.Branches[1].Description.Groups[0].OutputColumn)
+	require.Equal(t, "requests", desc.Branches[1].Description.Aggregates[0].OutputColumn)
+
+	encoded, _, _ = buildMaterializedViewIncrementalPlanForDatabase(parse(strings.Replace(query, "union all", "union distinct", 1)), outputs, "obs", "__state")
+	require.Empty(t, encoded)
+	encoded, _, _ = buildMaterializedViewIncrementalPlanForDatabase(parse(
+		"select service, count(*) requests, sum(duration) duration_sum from events group by service "+
+			"union all select region, sum(latency) rows_seen, sum(latency) latency_sum from archive group by region",
+	), outputs, "obs", "__state")
+	require.Empty(t, encoded, "branches with incompatible aggregate state must not use FAST")
+}
+
+func TestMaterializedViewIncrementalExpressionAndAdmissionCoverage(t *testing.T) {
+	parse := func(query string) *tree.Select {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, query, 1)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		return stmt.(*tree.Select)
+	}
+
+	// Exercise every row-local expression family accepted by FAST. These
+	// expressions are also used by HAVING, where aggregate calls are allowed.
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  bool
+	}{
+		{name: "binary comparison", query: "select k from t where a + 1 > 2", want: true},
+		{name: "logical and", query: "select k from t where a = 1 and c = 2", want: true},
+		{name: "logical or", query: "select k from t where a = 1 or c = 2", want: true},
+		{name: "range", query: "select k from t where a between 1 and 2", want: true},
+		{name: "unary", query: "select k from t where -a > 0", want: true},
+		{name: "is null", query: "select k from t where a is null", want: true},
+		{name: "is not null", query: "select k from t where a is not null", want: true},
+		{name: "cast", query: "select k from t where cast(a as signed) > 0", want: true},
+		{name: "case", query: "select k from t where case when a > 0 then b else c end > 1", want: true},
+		{name: "scalar functions", query: "select k from t where coalesce(a, b) > 0", want: true},
+		{name: "date trunc", query: "select k from t where date_trunc('minute', a) > 0", want: false},
+		{name: "ifnull", query: "select k from t where ifnull(a, b) > 0", want: true},
+		{name: "abs", query: "select k from t where abs(a) > 0", want: true},
+		{name: "floor", query: "select k from t where floor(a) > 0", want: true},
+		{name: "ceil", query: "select k from t where ceil(a) > 0", want: true},
+		{name: "unsupported function", query: "select k from t where now() > 0", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt := parse(tc.query)
+			clause := stmt.Select.(*tree.SelectClause)
+			require.NotNil(t, clause.Where)
+			require.Equal(t, tc.want, materializedViewIncrementalScalarSupported(clause.Where.Expr))
+		})
+	}
+
+	for _, query := range []string{
+		"select k, count(*) from t group by k having count(*) > 1",
+		"select k, sum(a) from t group by k having sum(a) between 1 and 2 and max(a) > 0",
+		"select k, sum(a) from t group by k having case when count(*) > 0 then sum(a) else 0 end > 0",
+		"select k, sum(a) from t group by k having coalesce(sum(a), 0) > 0",
+		"select k, min(a) from t group by k having min(a) > 0 and max(a) < 10",
+		"select k, avg(a) from t group by k having ifnull(avg(a), 0) > 0",
+	} {
+		stmt := parse(query)
+		clause := stmt.Select.(*tree.SelectClause)
+		require.NotNil(t, clause.Having)
+		require.True(t, materializedViewIncrementalHavingSupported(clause.Having.Expr))
+	}
+	// Keep the boolean expression cases explicit as well.  The MySQL parser
+	// represents these nodes differently depending on their operands, so use
+	// the AST forms directly to exercise the recursive admission branches.
+	zero := &tree.NumVal{}
+	require.True(t, materializedViewIncrementalScalarSupported(&tree.NotExpr{Expr: zero}))
+	require.True(t, materializedViewIncrementalScalarSupported(&tree.XorExpr{Left: zero, Right: zero}))
+	require.True(t, materializedViewIncrementalHavingSupported(&tree.NotExpr{Expr: zero}))
+	require.True(t, materializedViewIncrementalHavingSupported(&tree.XorExpr{Left: zero, Right: zero}))
+
+	distinctStmt := parse("select count(distinct a) from t")
+	distinctExpr := distinctStmt.Select.(*tree.SelectClause).Exprs[0].Expr
+	require.False(t, materializedViewIncrementalScalarSupported(distinctExpr))
+	rankStmt := parse("select k from t")
+	rankStmt.RankOption = &tree.RankOption{}
+	require.Equal(t, "MV_FAST_UNSUPPORTED_TOP_K", materializedViewIncrementalUnsupportedReason(rankStmt))
+	shapeStmt := parse("select k from t")
+	shapeStmt.Select = &tree.ParenSelect{}
+	require.Equal(t, "MV_FAST_UNSUPPORTED_QUERY_SHAPE", materializedViewIncrementalUnsupportedReason(shapeStmt))
+	noFromStmt := parse("select k from t")
+	noFromStmt.Select.(*tree.SelectClause).From = nil
+	require.Equal(t, "MV_FAST_UNSUPPORTED_QUERY_SHAPE", materializedViewIncrementalUnsupportedReason(noFromStmt))
+
+	for _, tc := range []struct {
+		name   string
+		query  string
+		reason string
+	}{
+		{name: "cte", query: "with x as (select k from t) select k from x", reason: "MV_FAST_UNSUPPORTED_CTE"},
+		{name: "limit", query: "select k, count(*) from t group by k limit 1", reason: "MV_FAST_UNSUPPORTED_LIMIT"},
+		{name: "no from", query: "select 1", reason: "MV_FAST_UNSUPPORTED_EXPRESSION_OR_GROUPING"},
+		{name: "multiple sources", query: "select k, count(*) from t, u group by k", reason: "MV_FAST_UNSUPPORTED_JOIN_OR_MULTIPLE_SOURCES"},
+		{name: "unsupported filter", query: "select k, count(*) from t where now() > 0 group by k", reason: "MV_FAST_UNSUPPORTED_FILTER_EXPRESSION"},
+		{name: "unsupported aggregate", query: "select k, stddev(a) from t group by k", reason: "MV_FAST_UNSUPPORTED_AGGREGATE"},
+		{name: "top k", query: "select k, count(*) from t group by k", reason: "MV_FAST_UNSUPPORTED_EXPRESSION_OR_GROUPING"},
+		{name: "set operation", query: "select k from t union select k from u", reason: "MV_FAST_UNSUPPORTED_SET_OPERATION"},
+		{name: "grouping set", query: "select k, count(*) from t group by rollup(k)", reason: "MV_FAST_UNSUPPORTED_GROUPING_SET"},
+		{name: "distinct aggregate", query: "select k, min(distinct a) from t group by k", reason: "MV_FAST_UNSUPPORTED_DISTINCT_AGGREGATE"},
+		{name: "unsupported grouping", query: "select k from t group by k", reason: "MV_FAST_UNSUPPORTED_EXPRESSION_OR_GROUPING"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt := parse(tc.query)
+			require.Equal(t, tc.reason, materializedViewIncrementalUnsupportedReason(stmt))
+		})
+	}
+
+	require.Equal(t, "MV_FAST_INVALID_DEFINITION", materializedViewIncrementalUnsupportedReason(nil))
+	_, _, _ = buildMaterializedViewIncrementalPlan(nil, nil)
+	for _, query := range []string{
+		"select k from t",
+		"select distinct k from t group by k",
+		"select distinct k, count(*) from t",
+		"select k, count(*) from t, u group by k",
+		"select k, count(*) from t where now() > 0 group by k",
+		"select k, stddev(a) from t group by k",
+		"select k, count(*) over () from t group by k",
+	} {
+		stmt := parse(query)
+		clause := stmt.Select.(*tree.SelectClause)
+		outputs := make([]*ColDef, len(clause.Exprs))
+		for i, expr := range clause.Exprs {
+			name := fmt.Sprintf("col_%d", i)
+			if col, ok := expr.Expr.(*tree.UnresolvedName); ok {
+				name = col.ColName()
+			}
+			outputs[i] = &ColDef{Name: name, Typ: Type{Id: int32(types.T_int64)}}
+		}
+		encoded, _, refresh := buildMaterializedViewIncrementalPlan(stmt, outputs)
+		require.Empty(t, encoded, query)
+		require.Empty(t, refresh, query)
+	}
+
+	valid := parse("select k, count(*) from t group by k")
+	validOutputs := []*ColDef{{Name: "k", Typ: Type{Id: int32(types.T_int64)}}, {Name: "n", Typ: Type{Id: int32(types.T_int64)}}}
+	for name, mutate := range map[string]func(*tree.Select){
+		"with":        func(s *tree.Select) { s.With = &tree.With{} },
+		"time window": func(s *tree.Select) { s.TimeWindow = &tree.TimeWindow{} },
+		"limit":       func(s *tree.Select) { s.Limit = &tree.Limit{} },
+		"rank":        func(s *tree.Select) { s.RankOption = &tree.RankOption{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			copyStmt := *valid
+			mutate(&copyStmt)
+			encoded, _, refresh := buildMaterializedViewIncrementalPlan(&copyStmt, validOutputs)
+			require.Empty(t, encoded)
+			require.Empty(t, refresh)
+		})
+	}
+
+	for name, mutate := range map[string]func(*tree.SelectClause){
+		"missing from": func(c *tree.SelectClause) { c.From = nil },
+		"multiple sources": func(c *tree.SelectClause) {
+			c.From.Tables = append(c.From.Tables, c.From.Tables[0])
+		},
+		"distinct with group": func(c *tree.SelectClause) { c.Distinct = true },
+		"missing group":       func(c *tree.SelectClause) { c.GroupBy = nil },
+		"cube group":          func(c *tree.SelectClause) { c.GroupBy.Cube = true },
+		"unsupported group expression": func(c *tree.SelectClause) {
+			c.GroupBy.GroupByExprsList = []tree.Exprs{{tree.NewStrVal("unsupported")}}
+		},
+		"missing group output": func(c *tree.SelectClause) {
+			c.Exprs = c.Exprs[1:]
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			copyStmt := *valid
+			copyClause := *(valid.Select.(*tree.SelectClause))
+			copyStmt.Select = &copyClause
+			mutate(&copyClause)
+			encoded, _, refresh := buildMaterializedViewIncrementalPlan(&copyStmt, validOutputs)
+			require.Empty(t, encoded)
+			require.Empty(t, refresh)
+		})
+	}
+	_, ok := materializedViewRefreshSQLWithState(valid, []string{"not valid SQL"}, []string{"n"})
+	require.False(t, ok)
+}
+
+func TestMaterializedViewIncrementalPlannerHelpers(t *testing.T) {
+	parse := func(query string) *tree.Select {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, query, 1)
+		require.NoError(t, err)
+		t.Cleanup(stmt.Free)
+		return stmt.(*tree.Select)
+	}
+
+	stmt := parse("select k, count(*) from t group by k")
+	clause := stmt.Select.(*tree.SelectClause)
+	groupExprs := clause.GroupBy.GroupByExprsList
+	require.Len(t, groupExprs, 1)
+
+	cols := []*ColDef{{Name: "k", Typ: Type{Id: int32(types.T_int64)}}, {Name: "n", Typ: Type{Id: int32(types.T_int64)}}}
+	require.True(t, materializedViewStateColumnsCompatible(cols, cols))
+	require.False(t, materializedViewStateColumnsCompatible(cols, cols[:1]))
+	different := append([]*ColDef(nil), cols...)
+	different[0] = &ColDef{Name: "other", Typ: cols[0].Typ}
+	require.False(t, materializedViewStateColumnsCompatible(cols, different))
+
+	left := &materializedViewIncrementalDescription{
+		Groups:     []materializedViewIncrementalGroup{{OutputColumn: "k"}},
+		Aggregates: []materializedViewIncrementalAggregate{{Kind: "count_star", OutputColumn: "n"}},
+	}
+	right := *left
+	right.Groups = append([]materializedViewIncrementalGroup(nil), left.Groups...)
+	right.Aggregates = append([]materializedViewIncrementalAggregate(nil), left.Aggregates...)
+	require.True(t, materializedViewIncrementalBranchesCompatible(left, &right))
+	require.False(t, materializedViewIncrementalBranchesCompatible(nil, &right))
+	right.Groups[0].OutputColumn = "different"
+	require.False(t, materializedViewIncrementalBranchesCompatible(left, &right))
+	right.Groups[0].OutputColumn = "k"
+	right.Aggregates[0].Kind = "sum"
+	require.False(t, materializedViewIncrementalBranchesCompatible(left, &right))
+	right.Aggregates[0].Kind = "count_star"
+	right.StateTable = "state"
+	require.False(t, materializedViewIncrementalBranchesCompatible(left, &right))
+
+	badCols := append([]*ColDef(nil), cols...)
+	badCols[1] = &ColDef{Name: cols[1].Name, Typ: Type{Id: int32(types.T_varchar)}}
+	require.False(t, materializedViewStateColumnsCompatible(cols, badCols))
+	require.False(t, materializedViewStateColumnsCompatible(nil, cols))
+
+	_, ok := materializedViewUnionAllClauses(nil)
+	require.False(t, ok)
+	_, ok = materializedViewUnionAllClauses(&tree.ParenSelect{})
+	require.False(t, ok)
+	_, ok = materializedViewUnionAllClauses(&tree.UnionClause{Type: tree.INTERSECT, All: true})
+	require.False(t, ok)
+	_, ok = materializedViewUnionAllClauses(&tree.UnionClause{Type: tree.UNION, All: true})
+	require.False(t, ok)
+	require.Empty(t, materializedViewIncrementalFunctionName(nil))
+	require.Empty(t, materializedViewIncrementalFunctionName(&tree.FuncExpr{}))
+	require.Equal(t, "custom", materializedViewIncrementalFunctionName(&tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("custom")),
+	}))
+
+	encoded, stateCols, refreshSQL := buildMaterializedViewIncrementalPlan(stmt, cols)
+	require.NotEmpty(t, encoded)
+	require.NotEmpty(t, stateCols)
+	require.NotEmpty(t, refreshSQL)
+	require.Equal(t, []string{"__mo_mv_group_key"}, materializedViewIncrementalPrimaryKey(encoded))
+	require.Equal(t, "__mo_mv_group_key_1", materializedViewUniqueStateColumn(
+		[]*ColDef{{Name: "__mo_mv_group_key"}}, "__mo_mv_group_key"))
+	state := materializedViewStateColumn("state", Type{Id: int32(types.T_int64)}, true)
+	require.True(t, state.Hidden)
+	require.False(t, state.NotNull)
+
+	collector := &materializedViewIncrementalColumnCollector{}
+	require.True(t, collector.collect(clause.Exprs[0].Expr))
+	require.Equal(t, []string{"k"}, collector.columns())
+
+	badSQL, ok := materializedViewRefreshSQLWithState(stmt, []string{"count(*)"}, nil)
+	require.False(t, ok)
+	require.Empty(t, badSQL)
+	goodSQL, ok := materializedViewRefreshSQLWithState(stmt, []string{"count(*)"}, []string{"n"})
+	require.True(t, ok)
+	require.Contains(t, goodSQL, "count(*)")
+
+	distinct := parse("select distinct k from t")
+	distinctClause := distinct.Select.(*tree.SelectClause)
+	_, ok = materializedViewRefreshSQLWithStateForMode(distinct, []string{"k"}, []string{"k"}, true, []tree.Exprs{{distinctClause.Exprs[0].Expr}})
+	require.True(t, ok)
+	union := parse("select k from t union all select k from u")
+	_, ok = materializedViewRefreshSQLWithStateForMode(union, []string{"k"}, []string{"k"}, true, groupExprs)
+	require.False(t, ok)
+}
+
+func TestMaterializedViewRefreshCanWriteHiddenState(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	ctx := &mock.ctxt
+	ctx.SetContext(context.Background())
+	def := &TableDef{
+		Name: "mv_state", DbName: "tpch", TblId: 100, DbId: 1, TableType: "m",
+		Createsql: "create materialized view mv_state as select service, count(*) from nation group by service",
+		Cols: []*ColDef{
+			{Name: "service", Typ: Type{Id: int32(types.T_varchar)}},
+			{Name: "__mv_state", Hidden: true, Typ: Type{Id: int32(types.T_int64)}},
+			{Name: catalog.FakePrimaryKeyColName, Hidden: true, Primary: true, Typ: Type{Id: int32(types.T_uint64), AutoIncr: true}},
+			{Name: catalog.Row_ID, Hidden: true, Typ: Type{Id: int32(types.T_Rowid)}},
+		},
+		Pkey: &PrimaryKeyDef{Names: []string{catalog.FakePrimaryKeyColName}, PkeyColName: catalog.FakePrimaryKeyColName},
+	}
+	ctx.tables[def.Name] = def
+	ctx.objects[def.Name] = &ObjectRef{SchemaName: "tpch", ObjName: def.Name}
+
+	fixture, d := testMaterializedViewTable(t, "mv_state")
+	def.Props = fixture.Props
+	ctx.SetContext(mvdefinition.WithAuthority(defines.AttachAccountId(context.Background(), 0), d))
+	_, err := runOneStmt(mock, t, "insert into mv_state (service, __mv_state, __mo_fake_pk_col) select 'api', 1, 1")
+	require.NoError(t, err)
+	_, err = runOneStmt(mock, t, "update mv_state set __mv_state = __mv_state + 1 where service = 'api'")
+	require.NoError(t, err)
 }
 
 func TestGenViewTableDefCapturesRootSQLOnce(t *testing.T) {
@@ -4245,6 +5013,11 @@ func TestBuildAlterView(t *testing.T) {
 		&plan.TableDef{
 			TableType: catalog.SystemViewRel},
 	}
+	store["db.mv"] = arg{&plan.ObjectRef{},
+		&plan.TableDef{
+			TableType: catalog.SystemMaterializedRel,
+			ViewSql:   &plan.ViewDef{View: `{"Stmt":"create materialized view mv as select a from a"}`},
+		}}
 
 	ctx := NewMockCompilerContext2(ctrl)
 	ctx.EXPECT().GetUserName().Return("sys:dump").AnyTimes()
@@ -4310,6 +5083,12 @@ func TestBuildAlterView(t *testing.T) {
 	assert.NoError(t, err)
 	_, err = buildAlterView(stmt5.(*tree.AlterView), ctx)
 	assert.Error(t, err)
+
+	sql6 := "alter view mv as select a from a"
+	stmt6, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql6, 1)
+	assert.NoError(t, err)
+	_, err = buildAlterView(stmt6.(*tree.AlterView), ctx)
+	assert.ErrorContains(t, err, "ALTER, RENAME and TRUNCATE require dropping and recreating")
 }
 
 func TestBuildLockTables(t *testing.T) {
@@ -6727,4 +7506,28 @@ func TestForwardForeignKeyCatalogLifecycle(t *testing.T) {
 	require.Equal(t,
 		"update `mo_catalog`.`mo_foreign_keys` set referenced_index_name = 'PRIMARY' where db_name = 'db' and table_name = 'child' and constraint_name = 'fk_child_parent'",
 		getSqlForUpdateFkReferencedIndex("db", "child", "fk_child_parent", resolved.Def.ReferencedIndexName))
+}
+
+func testMaterializedViewTable(t *testing.T, name string) (*plan.TableDef, *mvdefinition.Definition) {
+	t.Helper()
+	version := uint32(0)
+	d := &mvdefinition.Definition{Format: 1, RequiredCapability: mvdefinition.RequiredCapability, Target: mvdefinition.Relation{Database: "tpch", Name: name, DatabaseID: 1, ID: 100}, Generation: 1, CreateSQL: "create materialized view " + name + " as select * from nation", RefreshSQL: "select * from nation", Method: "complete", Timing: "demand", Columns: []string{"service"}, Sources: []mvdefinition.Source{{Relation: mvdefinition.Relation{Database: "tpch", Name: "nation", DatabaseID: 1, ID: 11}, Version: &version}}}
+	encoded, err := mvdefinition.Encode(d)
+	require.NoError(t, err)
+	return &plan.TableDef{Name: name, DbName: "tpch", TblId: 100, DbId: 1, TableType: "m", Props: []*plan.PropertyDef{{Key: mvdefinition.Property, Value: encoded}}}, d
+}
+func finalizeTestMaterializedView(t *testing.T, def *plan.TableDef, id uint64) {
+	t.Helper()
+	d, err := mvdefinition.Decode(mvdefinition.PropertyValue(def, mvdefinition.Property), false)
+	require.NoError(t, err)
+	d.Target.ID = id
+	d.Target.DatabaseID = 1
+	encoded, err := mvdefinition.Encode(d)
+	require.NoError(t, err)
+	def.TblId = id
+	def.DbId = 1
+	def.DbName = d.Target.Database
+	def.TableType = "m"
+	def.ViewSql = nil
+	def.Props = []*plan.PropertyDef{{Key: mvdefinition.Property, Value: encoded}}
 }

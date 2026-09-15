@@ -28,6 +28,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog/mvdefinition"
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -255,7 +256,7 @@ func (tbl *txnTable) PrefetchAllMeta(ctx context.Context) bool {
 func (tbl *txnTable) Stats(ctx context.Context, sync bool) (*pb.StatsInfo, error) {
 	//Stats only stats the committed data of the table.
 	if tbl.db.getTxn().tableOps.existCreatedInTxn(tbl.tableId) ||
-		strings.ToUpper(tbl.relKind) == "V" {
+		tbl.isLogicalView(ctx) {
 		return nil, nil
 	}
 	key := pb.StatsInfoKey{
@@ -1682,6 +1683,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 				Value: tbl.createSql,
 			})
 			Createsql = tbl.createSql
+
 		}
 
 		if len(properties) > 0 {
@@ -1736,6 +1738,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
 		}
 	}
+	mvdefinition.PlannerKind(tbl.tableDef)
 	return tbl.tableDef
 }
 
@@ -2047,6 +2050,9 @@ func (tbl *txnTable) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, e
 }
 
 func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
+	if err := tbl.checkMaterializedViewWrite(ctx); err != nil {
+		return err
+	}
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("write operation is not allowed in snapshot transaction")
 	}
@@ -2205,6 +2211,9 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 func (tbl *txnTable) Delete(
 	ctx context.Context, bat *batch.Batch, name string,
 ) error {
+	if err := tbl.checkMaterializedViewWrite(ctx); err != nil {
+		return err
+	}
 	if tbl.db.op.IsSnapOp() {
 		return moerr.NewInternalErrorNoCtx("delete operation is not allowed in snapshot transaction")
 	}
@@ -2662,7 +2671,7 @@ func (tbl *txnTable) getPartitionState(
 
 	// no need to subscribe a view
 	// for issue #19192
-	if createdInTxn || strings.ToUpper(tbl.relKind) == "V" {
+	if createdInTxn || tbl.isLogicalView(ctx) {
 		//return an empty partition state.
 		ps = tbl.getTxn().engine.GetOrCreateLatestPart(
 			ctx,
@@ -3830,4 +3839,22 @@ func dupVectorWithoutNulls(v *vector.Vector, mp *mpool.MPool) (*vector.Vector, e
 		}
 	}
 	return filtered, nil
+}
+
+func (tbl *txnTable) checkMaterializedViewWrite(ctx context.Context) error {
+	def := tbl.GetTableDef(ctx)
+	if (mvdefinition.PropertyValue(def, mvdefinition.Property) != "" || mvdefinition.PropertyValue(def, mvdefinition.OwnerProperty) != "") && !mvdefinition.CanWrite(ctx, def) {
+		return mvdefinition.Invalid("refresh does not own this relation")
+	}
+	return nil
+}
+
+// Only physical views need definition projection. Ordinary hot paths neither
+// rebuild table metadata nor allocate just to decide whether to subscribe.
+func (tbl *txnTable) isLogicalView(ctx context.Context) bool {
+	if !strings.EqualFold(tbl.relKind, catalog.SystemViewRel) {
+		return false
+	}
+	kind := tbl.GetTableDef(ctx).GetTableType()
+	return kind != catalog.SystemMaterializedRel && kind != catalog.SystemIndexRel
 }

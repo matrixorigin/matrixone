@@ -131,6 +131,9 @@ func (c *Compile) persistViewDependencies(
 	databaseName string,
 	viewDef *planpb.TableDef,
 ) error {
+	if plan2.IsMaterializedViewTableDef(viewDef) || plan2.IsMaterializedViewStateTableDef(viewDef) {
+		return nil
+	}
 	if needSkipDbs[databaseName] || c.proc.GetSessionInfo().IsRestore {
 		return nil
 	}
