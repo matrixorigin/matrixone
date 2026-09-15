@@ -51,7 +51,8 @@ type opBuiltInRegexp struct {
 func newOpBuiltInRegexp() *opBuiltInRegexp {
 	return &opBuiltInRegexp{
 		regMap: regexpSet{
-			mp: make(map[regexpCacheKey]*regexp.Regexp, mapSizeForRegexp),
+			mp:  make(map[regexpCacheKey]*regexp.Regexp, mapSizeForRegexp),
+			icu: make(map[regexpCacheKey]*regexp2Matcher, mapSizeForRegexp),
 		},
 	}
 }
@@ -1030,6 +1031,31 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 
 		patternString := functionUtil.QuickBytesToStr(pattern)
 		binary := regexpMatchUsesBinary(parameters, int(i))
+		if requiresRegexp2Pattern(patternString) {
+			matcher, err := op.regMap.getRegexp2MatcherWithMatchType(
+				patternString, pureMatchType, binary)
+			if err != nil {
+				return err
+			}
+			if subjectNull {
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+				continue
+			}
+			match, err := op.regMap.regexp2MatchWithMatchType(
+				matcher, functionUtil.QuickBytesToStr(subject), binary, pureMatchType)
+			if err != nil {
+				return err
+			}
+			if negate {
+				match = !match
+			}
+			if err = rs.Append(match, false); err != nil {
+				return err
+			}
+			continue
+		}
 		var reg *regexp.Regexp
 		var err error
 		if like {
@@ -1897,6 +1923,8 @@ func regexpRowMasked(selectList *FunctionSelectList, row uint64) bool {
 type regexpSet struct {
 	mp            map[regexpCacheKey]*regexp.Regexp
 	mayMatchEmpty map[regexpCacheKey]bool
+	icu           map[regexpCacheKey]*regexp2Matcher
+	icuBytes      int
 }
 
 func (rs *regexpSet) getRegularMatcher(pat string) (*regexp.Regexp, error) {
@@ -1926,12 +1954,8 @@ func (rs *regexpSet) getRegularMatcherInfoWithBinaryCaseFold(
 	key := regexpCacheKey{pattern: pat, binary: binary, binaryCaseFold: binaryCaseFold}
 	reg, ok := rs.mp[key]
 	if !ok {
-		if len(rs.mp) == mapSizeForRegexp {
-			for key := range rs.mp {
-				delete(rs.mp, key)
-				delete(rs.mayMatchEmpty, key)
-				break
-			}
+		if len(rs.mp)+len(rs.icu) >= mapSizeForRegexp {
+			rs.evictRegexpCacheEntry()
 		}
 
 		// pat can be a zero-copy string backed by a reusable input vector. Both
@@ -2037,6 +2061,16 @@ func regexpCompileError(functionName, pat string, err error) error {
 func (rs *regexpSet) validateCompiledRegexpWithMode(
 	pat string, binary bool, functionName string,
 ) error {
+	if requiresRegexp2Pattern(pat) {
+		if err := validateRegexpPattern(pat); err != nil {
+			return err
+		}
+		_, err := rs.getRegexp2MatcherWithMatchType(pat, "", binary)
+		if err != nil {
+			return regexpCompileError(functionName, pat, err)
+		}
+		return nil
+	}
 	_, err := rs.getCompiledRegexpWithMode(pat, binary, functionName)
 	return err
 }
@@ -2060,6 +2094,16 @@ func (rs *regexpSet) validateRegexpBeforeNullableResultWithMatchType(
 	pureMatchType string,
 ) error {
 	if laterArgumentIsNull {
+		if requiresRegexp2Pattern(pat) {
+			if err := validateRegexpPattern(pat); err != nil {
+				return err
+			}
+			_, err := rs.getRegexp2MatcherWithMatchType(pat, pureMatchType, binary)
+			if err != nil {
+				return regexpCompileError(functionName, pat, err)
+			}
+			return nil
+		}
 		_, err := rs.getCompiledRegexpWithMatchType(pat, pureMatchType, binary, functionName)
 		return err
 	}
@@ -2067,6 +2111,16 @@ func (rs *regexpSet) validateRegexpBeforeNullableResultWithMatchType(
 }
 
 func (rs *regexpSet) regularMatchWithMode(pat, str string, binary bool) (bool, error) {
+	if requiresRegexp2Pattern(pat) {
+		if err := validateRegexpPattern(pat); err != nil {
+			return false, err
+		}
+		matcher, err := rs.getRegexp2MatcherWithMatchType(pat, "", binary)
+		if err != nil {
+			return false, err
+		}
+		return rs.regexp2MatchWithMatchType(matcher, str, binary, "")
+	}
 	reg, err := rs.getRegularMatcherForMatchWithMode(pat, binary)
 	if err != nil {
 		return false, err
@@ -2166,6 +2220,10 @@ func (rs *regexpSet) regularSubstrWithMatchType(
 	subjectIsBinary bool,
 	pureMatchType string,
 ) (match bool, substr string, err error) {
+	if requiresRegexp2Pattern(pat) {
+		return rs.regexp2SubstrWithMatchType(
+			pat, str, pos, occurrence, subjectIsBinary, pureMatchType)
+	}
 	reg, err := rs.getCompiledRegexpWithMatchType(
 		pat, pureMatchType, subjectIsBinary, "regexp_substr")
 	if err != nil {
@@ -2209,6 +2267,10 @@ func (rs *regexpSet) regularReplaceWithMatchType(
 ) (r string, err error) {
 	if err = validateRegexpPattern(pat); err != nil {
 		return "", err
+	}
+	if requiresRegexp2Pattern(pat) {
+		return rs.regexp2ReplaceWithMatchType(
+			pat, str, repl, pos, occurrence, subjectIsBinary, pureMatchType)
 	}
 	reg, mayMatchEmpty, err := rs.getRegularMatcherInfoWithMatchType(
 		pat, pureMatchType, subjectIsBinary)
@@ -2308,6 +2370,10 @@ func (rs *regexpSet) regularInstrWithMatchType(
 	subjectIsBinary bool,
 	pureMatchType string,
 ) (index int64, err error) {
+	if requiresRegexp2Pattern(pat) {
+		return rs.regexp2InstrWithMatchType(
+			pat, str, pos, occurrence, retOption, subjectIsBinary, pureMatchType)
+	}
 	reg, err := rs.getCompiledRegexpWithMatchType(
 		pat, pureMatchType, subjectIsBinary, "regexp_instr")
 	if err != nil {
@@ -2714,20 +2780,99 @@ func writeBinaryRegexpPatternByte(b *strings.Builder, value byte, caseFold bool)
 // byte). Reject them before encoding while preserving quoted or escaped text.
 func validateBinaryRegexpPattern(pattern string) error {
 	quoted := false
+	class := false
+	freeSpacing := false
+	freeSpacingStack := make([]bool, 0, 8)
 	for i := 0; i < len(pattern); {
+		if quoted {
+			if pattern[i] == '\\' && i+1 < len(pattern) && pattern[i+1] == 'E' {
+				quoted = false
+				i += 2
+				continue
+			}
+			i++
+			continue
+		}
+		if class {
+			if pattern[i] == ']' {
+				class = false
+				i++
+				continue
+			}
+			if pattern[i] == '\\' && i+1 < len(pattern) {
+				switch pattern[i+1] {
+				case 'p', 'P':
+					return moerr.NewInvalidInputNoCtx(
+						"binary regular expressions do not support Unicode property escapes")
+				case 'u', 'U':
+					return moerr.NewInvalidInputNoCtx(
+						"binary regular expressions do not support Unicode code-point escapes")
+				case 'x':
+					if i+2 < len(pattern) && pattern[i+2] == '{' {
+						close := strings.IndexByte(pattern[i+3:], '}')
+						if close < 0 {
+							return nil
+						}
+						end := i + 3 + close
+						value, err := strconv.ParseUint(pattern[i+3:end], 16, 32)
+						if err == nil && value > 0xff {
+							return moerr.NewInvalidInputNoCtx(
+								"binary regular expressions only support byte escapes up to \\x{FF}")
+						}
+						i = end + 1
+						continue
+					}
+				}
+				i += regexpEscapeTokenLen(pattern, i)
+				continue
+			}
+			i++
+			continue
+		}
+		if freeSpacing {
+			if isRegexpPatternWhitespace(pattern[i]) {
+				i++
+				continue
+			}
+			if pattern[i] == '#' {
+				for i < len(pattern) && pattern[i] != '\n' {
+					i++
+				}
+				continue
+			}
+		}
+		if pattern[i] == '(' {
+			if end, enabled, scoped, ok := regexpInlineFreeSpacing(pattern, i, freeSpacing); ok {
+				if scoped {
+					freeSpacingStack = append(freeSpacingStack, freeSpacing)
+					freeSpacing = enabled
+				} else {
+					freeSpacing = enabled
+				}
+				i = end
+				continue
+			}
+			freeSpacingStack = append(freeSpacingStack, freeSpacing)
+		}
+		if pattern[i] == ')' {
+			if n := len(freeSpacingStack); n > 0 {
+				freeSpacing = freeSpacingStack[n-1]
+				freeSpacingStack = freeSpacingStack[:n-1]
+			}
+			i++
+			continue
+		}
+		if pattern[i] == '[' {
+			class = true
+			i++
+			continue
+		}
 		if pattern[i] != '\\' {
 			i++
 			continue
 		}
 		if i+1 >= len(pattern) {
 			break
-		}
-		if quoted {
-			if pattern[i+1] == 'E' {
-				quoted = false
-			}
-			i += 2
-			continue
 		}
 		switch pattern[i+1] {
 		case 'Q':
@@ -2736,6 +2881,9 @@ func validateBinaryRegexpPattern(pattern string) error {
 		case 'p', 'P':
 			return moerr.NewInvalidInputNoCtx(
 				"binary regular expressions do not support Unicode property escapes")
+		case 'u', 'U':
+			return moerr.NewInvalidInputNoCtx(
+				"binary regular expressions do not support Unicode code-point escapes")
 		case 'x':
 			if i+2 >= len(pattern) || pattern[i+2] != '{' {
 				i += 2
@@ -2755,9 +2903,9 @@ func validateBinaryRegexpPattern(pattern string) error {
 			}
 			i = end + 1
 		default:
-			// Consume the escaped token as a unit so \\p is treated as a
-			// literal backslash followed by p, not a property escape.
-			i += 2
+			// Consume the escaped token as a unit so a backslash in quoted or
+			// escaped text cannot be mistaken for a byte escape.
+			i += regexpEscapeTokenLen(pattern, i)
 		}
 	}
 	return nil
@@ -2959,6 +3107,16 @@ func (rs *regexpSet) regularLikeWithMode(pat string, str string, matchType strin
 	pureMatchType, err := getPureMatchType(matchType)
 	if err != nil {
 		return false, err
+	}
+	if requiresRegexp2Pattern(pat) {
+		if err := validateRegexpPattern(pat); err != nil {
+			return false, err
+		}
+		matcher, err := rs.getRegexp2MatcherWithMatchType(pat, pureMatchType, binary)
+		if err != nil {
+			return false, err
+		}
+		return rs.regexp2MatchWithMatchType(matcher, str, binary, pureMatchType)
 	}
 	reg, err := rs.getRegularLikeMatcherForPureMatchTypeWithMode(pat, pureMatchType, binary)
 	if err != nil {

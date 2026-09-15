@@ -1461,14 +1461,16 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		}
 		args := []*planpb.Expr{first}
 		if name == "conv" {
+			// This suite isolates the v64 first-argument contract. Row-dependent
+			// bases were never executable by v64 and have a separate v65 fence.
 			args = append(args,
 				&planpb.Expr{
 					Typ:  planpb.Type{Id: int32(types.T_int64)},
-					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
+					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 16}}},
 				},
 				&planpb.Expr{
 					Typ:  planpb.Type{Id: int32(types.T_int64)},
-					Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}},
+					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 10}}},
 				},
 			)
 		}
