@@ -1659,7 +1659,7 @@ func initExecuteStmtParamWithResolverInSession(
 			// kind metadata and therefore do not need a second type section.
 			if kind == vector.PrepareParamNone {
 				concreteType, supported := binaryProtocolPrepareParamConcreteType(mysqlType, isUnsigned)
-				if supported && concreteType.Oid != types.T_any && !concreteType.Oid.IsMySQLString() {
+				if supported && concreteType != types.T_any && !concreteType.IsMySQLString() {
 					prepareStmt.paramConcreteTypes[i] = concreteType
 					hasConcreteType = true
 				}
