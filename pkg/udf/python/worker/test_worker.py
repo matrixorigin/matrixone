@@ -813,6 +813,12 @@ class WorkerContractTest(unittest.TestCase):
             worker._validate_field(with_extra, "result", descriptor)
         with self.assertRaisesRegex(ValueError, "field name"):
             worker._validate_field(pa.field("other", field.type, metadata=field.metadata), "result", descriptor)
+        with self.assertRaisesRegex(ValueError, "nullable"):
+            worker._validate_field(
+                pa.field("result", field.type, nullable=False, metadata=field.metadata),
+                "result",
+                descriptor,
+            )
 
     def test_type_descriptor_shape_is_strict(self):
         with self.assertRaisesRegex(ValueError, "unsupported descriptor field"):
