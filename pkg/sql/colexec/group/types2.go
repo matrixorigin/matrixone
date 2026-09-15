@@ -258,16 +258,18 @@ type container struct {
 	groupConcatSourceRowsUntrusted bool
 
 	// aggs, which holds the intermediate state of agg functions.
-	aggList                []aggexec.GroupAggFuncExec
-	aggExprs               []aggexec.AggFuncExecExpression
-	groupConcatWarnings    aggexec.GroupConcatWarningAccumulator
-	prepareParamKind       aggexec.PrepareParamKindStates
-	prepareParamKindWireV1 bool
-	legacyTextMinMax       bool
-	legacyVarianceState    bool
-	legacyDecimalSumState  bool
-	legacyDecimalSumResult bool
-	timeZone               *time.Location
+	aggList                     []aggexec.GroupAggFuncExec
+	aggExprs                    []aggexec.AggFuncExecExpression
+	groupConcatWarnings         aggexec.GroupConcatWarningAccumulator
+	prepareParamKind            aggexec.PrepareParamKindStates
+	prepareParamKindWireV1      bool
+	legacyTextMinMax            bool
+	legacyVarianceState         bool
+	legacyDecimalSumState       bool
+	legacyDecimalSumResult      bool
+	legacyApproxPercentileState bool
+	legacyHLLState              bool
+	timeZone                    *time.Location
 
 	// spill, agglist to load spilled data.
 	spillMem        int64
