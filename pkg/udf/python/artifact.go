@@ -68,6 +68,12 @@ func NewFileArtifactStore(fs fileservice.FileService, maxSize int64) (*FileArtif
 	if maxSize <= 0 {
 		maxSize = DefaultMaxArtifactBytes
 	}
+	if maxSize > DefaultMaxArtifactBytes {
+		return nil, fmt.Errorf(
+			"UNSUPPORTED_ROUTINE_VERSION: Python artifact limit %d exceeds the current contract limit %d",
+			maxSize, DefaultMaxArtifactBytes,
+		)
+	}
 	return &FileArtifactStore{fs: shared, maxSize: maxSize}, nil
 }
 
