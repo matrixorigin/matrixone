@@ -168,6 +168,20 @@ func (s *remoteWarningCollector) GetWarningDiagnosticBudget() *process.WarningDi
 	return s.warningBudget
 }
 
+func (s *remoteWarningCollector) ensureProcessWarningBudget(limit uint64) *process.WarningDiagnosticBudget {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.warningBudget == nil ||
+		(s.warningBudget.Limit() > limit &&
+			s.warningChargeBytes == 0 && s.warningBudget.Used() == 0) {
+		s.warningBudget = process.NewWarningDiagnosticBudget(limit)
+	}
+	return s.warningBudget
+}
+
 func (s *remoteWarningCollector) warningRetentionLimitLocked() int {
 	if s.maxRetainedSet {
 		if s.maxRetained < 0 {

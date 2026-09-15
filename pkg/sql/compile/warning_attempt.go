@@ -39,11 +39,21 @@ func newWarningAttempt(proc *process.Process, required bool) *warningAttempt {
 	if !single && !batch && !count && !required {
 		return nil
 	}
+	var warningBudget *process.WarningDiagnosticBudget
+	if remote, ok := destination.(*remoteWarningCollector); ok && remote != nil {
+		// The remote collector is itself a budget provider. Initialize or narrow
+		// that provider before using it, otherwise its lazy compatibility budget
+		// would hide a smaller process limitation from this new attempt.
+		warningBudget = remote.ensureProcessWarningBudget(
+			process.WarningDiagnosticBudgetLimitForProcess(proc))
+	} else {
+		warningBudget = process.WarningDiagnosticBudgetForProcess(proc)
+	}
 	a := &warningAttempt{
 		collector: &remoteWarningCollector{
 			maxRetained:          process.WarningDiagnosticRetentionLimitForProcess(proc),
 			maxRetainedSet:       true,
-			warningBudget:        process.WarningDiagnosticBudgetForProcess(proc),
+			warningBudget:        warningBudget,
 			requiresCutReporting: required,
 		},
 		previous: make(map[*process.Process]any),
