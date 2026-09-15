@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -52,6 +53,167 @@ func TestJSONStringConsumerJSONOverloads(t *testing.T) {
 			_, shouldCast := got.ShouldDoImplicitTypeCast()
 			require.False(t, shouldCast)
 			require.Equal(t, wantType, got.GetReturnType())
+		})
+	}
+}
+
+func TestJSONStringConsumerRegisteredExecutors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+
+	tests := []struct {
+		name   string
+		args   []types.Type
+		inputs []FunctionTestInput
+		want   string
+	}{
+		{
+			name: "concat",
+			args: []types.Type{types.T_json.ToType(), types.T_varchar.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{mustJsonBinaryString(t, `{"a":1}`)}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"!"}, nil),
+			},
+			want: `{"a": 1}!`,
+		},
+		{
+			name: "concat_ws",
+			args: []types.Type{types.T_json.ToType(), types.T_varchar.ToType(), types.T_json.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{mustJsonBinaryString(t, `"|"`)}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"x"}, nil),
+				NewFunctionTestInput(types.T_json.ToType(), []string{mustJsonBinaryString(t, `1`)}, nil),
+			},
+			want: `x"|"1`,
+		},
+		{
+			name: "elt",
+			args: []types.Type{types.T_int64.ToType(), types.T_json.ToType()},
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
+				NewFunctionTestInput(types.T_json.ToType(), []string{mustJsonBinaryString(t, `[1]`)}, nil),
+			},
+			want: `[1]`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := GetFunctionByName(proc.Ctx, tc.name, tc.args)
+			require.NoError(t, err)
+			_, overloadIndex := DecodeOverloadID(got.GetEncodedOverloadID())
+			require.Equal(t, int32(1), overloadIndex)
+
+			inputs := make([]*vector.Vector, len(tc.inputs))
+			for i, input := range tc.inputs {
+				inputs[i] = newVectorByType(proc.Mp(), input.typ, input.values, nil)
+			}
+			defer func() {
+				for _, input := range inputs {
+					input.Free(proc.Mp())
+				}
+			}()
+
+			result, err := RunFunctionDirectly(proc, got.GetEncodedOverloadID(), inputs, 1)
+			require.NoError(t, err)
+			defer result.Free(proc.Mp())
+			require.Equal(t, tc.want, string(result.GetBytesAt(0)))
+		})
+	}
+}
+
+func TestJSONStringConsumerBinaryReturnType(t *testing.T) {
+	binaryType := types.T_blob.ToType()
+	for _, name := range []string{"concat", "concat_ws", "elt"} {
+		t.Run(name, func(t *testing.T) {
+			args := map[string][]types.Type{
+				"concat":    []types.Type{types.T_json.ToType(), binaryType},
+				"concat_ws": []types.Type{types.T_json.ToType(), binaryType},
+				"elt":       []types.Type{types.T_int64.ToType(), types.T_json.ToType(), binaryType},
+			}[name]
+			got, err := GetFunctionByName(context.Background(), name, args)
+			require.NoError(t, err)
+			_, overloadIndex := DecodeOverloadID(got.GetEncodedOverloadID())
+			require.Equal(t, int32(1), overloadIndex)
+			require.Equal(t, binaryType, got.GetReturnType())
+		})
+	}
+}
+
+func TestJSONStringConsumerChecksRejectMissingOverload(t *testing.T) {
+	missingJSONOverload := []overload{{overloadId: 0}}
+	for _, tc := range []struct {
+		name  string
+		check func([]overload, []types.Type) checkResult
+		args  []types.Type
+	}{
+		{name: "concat", check: builtInConcatCheck, args: []types.Type{types.T_json.ToType(), types.T_varchar.ToType()}},
+		{name: "concat_ws", check: concatWsCheck, args: []types.Type{types.T_json.ToType(), types.T_varchar.ToType()}},
+		{name: "elt", check: eltCheck, args: []types.Type{types.T_int64.ToType(), types.T_json.ToType()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.check(missingJSONOverload, tc.args)
+			require.Equal(t, failedFunctionParametersWrong, got.status)
+		})
+	}
+}
+
+func TestJSONStringConsumersRejectMalformedStoredJSON(t *testing.T) {
+	validJSON := mustJsonBinaryString(t, `1`)
+	for _, tc := range []struct {
+		name   string
+		inputs []FunctionTestInput
+		jsonAt int
+		fn     fEvalFn
+	}{
+		{
+			name: "concat",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{validJSON}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"x"}, nil),
+			},
+			jsonAt: 0,
+			fn:     builtInConcat,
+		},
+		{
+			name: "concat_ws separator",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_json.ToType(), []string{validJSON}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"x"}, nil),
+			},
+			jsonAt: 0,
+			fn:     ConcatWs,
+		},
+		{
+			name: "concat_ws value",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"|"}, nil),
+				NewFunctionTestInput(types.T_json.ToType(), []string{validJSON}, nil),
+			},
+			jsonAt: 1,
+			fn:     ConcatWs,
+		},
+		{
+			name: "elt selected value",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1}, nil),
+				NewFunctionTestInput(types.T_json.ToType(), []string{validJSON}, nil),
+			},
+			jsonAt: 1,
+			fn:     Elt,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			caseUnderTest := NewFunctionTestCase(
+				proc, tc.inputs,
+				NewFunctionTestResult(types.T_text.ToType(), true, nil, nil),
+				tc.fn,
+			)
+			caseUnderTest.parameters[tc.jsonAt].GetBytesAt(0)[0] = 0xff
+			ok, info := caseUnderTest.Run()
+			require.True(t, ok, info)
 		})
 	}
 }

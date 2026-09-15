@@ -1,0 +1,44 @@
+drop database if exists issue28905_json_string_consumers;
+create database issue28905_json_string_consumers;
+use issue28905_json_string_consumers;
+create table src (id int primary key, js json, v varchar(20));
+insert into src values
+(1, '{"b":2,"a":1}', 'A'),
+(2, '1', ''),
+(3, 'null', null),
+(4, null, null);
+select id, concat('', js) as concat_left, concat(js, '') as concat_right, concat('', js) is null as concat_left_is_null, concat(js, '') is null as concat_right_is_null, concat_ws('|', 'x', js, 'y') as concat_ws_middle, concat_ws('|', js, v) as concat_ws_column, concat_ws('|', js, v) = '' as concat_ws_empty from src order by id;
+id    concat_left    concat_right    concat_left_is_null    concat_right_is_null    concat_ws_middle    concat_ws_column    concat_ws_empty
+1    {"a": 1, "b": 2}    {"a": 1, "b": 2}    0    0    x|{"a": 1, "b": 2}|y    {"a": 1, "b": 2}|A    0
+2    1    1    0    0    x|1|y    1|    0
+3    null    null    0    0    x|null|y    null    0
+4            1    1    x|y        1
+select id, elt(2, 'fallback', js, 'other') as elt_selected from src order by id;
+id    elt_selected
+1    {"a": 1, "b": 2}
+2    1
+3    null
+4    null
+create view json_string_view as select id, concat_ws('|', 'x', js, 'y') as c from src;
+select id, c from json_string_view order by id;
+id    c
+1    x|{"a": 1, "b": 2}|y
+2    x|1|y
+3    x|null|y
+4    x|y
+create table json_string_ctas as select id, concat('', js) as c from src;
+select id, c from json_string_ctas order by id;
+id    c
+1    {"a": 1, "b": 2}
+2    1
+3    null
+4    null
+prepare json_string_stmt from 'select id, concat_ws(''|'',''x'',js,''y'') as c from src order by id';
+execute json_string_stmt;
+id    c
+1    x|{"a": 1, "b": 2}|y
+2    x|1|y
+3    x|null|y
+4    x|y
+deallocate prepare json_string_stmt;
+drop database issue28905_json_string_consumers;
