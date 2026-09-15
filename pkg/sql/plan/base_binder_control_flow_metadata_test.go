@@ -448,6 +448,58 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.True(t, expr.Typ.NotNullable)
 	})
 
+	for _, test := range []struct {
+		name string
+		fn   string
+		args func(*planpb.Expr, *planpb.Expr) []*planpb.Expr
+		oid  types.T
+	}{
+		{
+			name: "coalesce datetime keeps maximum fsp",
+			fn:   "coalesce",
+			args: func(high, low *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{high, low} },
+			oid:  types.T_datetime,
+		},
+		{
+			name: "coalesce time keeps maximum fsp",
+			fn:   "coalesce",
+			args: func(high, low *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{high, low} },
+			oid:  types.T_time,
+		},
+		{
+			name: "if timestamp and datetime keeps precision",
+			fn:   "if",
+			args: func(high, low *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{makePlan2BoolConstExprWithType(true), high, low}
+			},
+			oid: types.T_datetime,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			high := makePlan2DateTimeConstExprWithType(0)
+			high.Typ.Scale, high.Typ.Width = 6, 6
+			low := makePlan2DateTimeConstExprWithType(0)
+			low.Typ.Scale, low.Typ.Width = 3, 3
+			if test.oid == types.T_time {
+				high = makePlan2TimeConstExprWithType(0)
+				high.Typ.Scale, high.Typ.Width = 6, 6
+				low = makePlan2TimeConstExprWithType(0)
+				low.Typ.Scale, low.Typ.Width = 3, 3
+			}
+			if test.name == "if timestamp and datetime keeps precision" {
+				high = makePlan2TimestampConstExprWithType(0)
+				high.Typ.Scale, high.Typ.Width = 6, 6
+				low = makePlan2DateTimeConstExprWithType(0)
+				low.Typ.Scale, low.Typ.Width = 3, 3
+			}
+			expr, err := BindFuncExprImplByPlanExpr(ctx, test.fn, test.args(high, low))
+			require.NoError(t, err)
+			require.Equal(t, int32(test.oid), expr.Typ.Id)
+			require.Equal(t, int32(6), expr.Typ.Scale)
+			require.Equal(t, int32(6), expr.Typ.Width)
+		})
+	}
+
 	t.Run("if binary character uses literal byte metadata", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
 			makePlan2BoolConstExprWithType(true),
