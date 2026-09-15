@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 )
@@ -275,6 +276,15 @@ func (s *service) acceptViewMetadataAdmissionSnapshot(
 			return false, upgradeResult, nil
 		}
 	} else {
+		if fenced.PersistedExpressionRequiredProtocolVersion >
+			uint64(defines.MORPCLatestVersion) {
+			return false, upgradeResult, moerr.NewNotSupportedf(
+				context.Background(),
+				"CN %s requires persisted expression protocol version %d (local version %d)",
+				s.cfg.UUID,
+				fenced.PersistedExpressionRequiredProtocolVersion,
+				defines.MORPCLatestVersion)
+		}
 		if !current.Admitted || current.Epoch > 0 &&
 			(s.viewMetadataEpochFence == nil || s.viewMetadataEpochFence.Epoch() < current.Epoch) {
 			return false, upgradeResult, nil

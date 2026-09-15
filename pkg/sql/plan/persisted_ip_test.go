@@ -102,6 +102,31 @@ func TestPersistedIPFunctionProtocolAdmissionAcrossOwners(t *testing.T) {
 	require.ErrorContains(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, table), "protocol version 72")
 }
 
+func TestPersistedProtocolVersionAdmissionRejectsFutureReader(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	require.NoError(t, RequirePersistedProtocolVersion(
+		proc.Ctx, proc, defines.MORPCLatestVersion))
+	require.ErrorContains(t, RequirePersistedProtocolVersion(
+		proc.Ctx, proc, defines.MORPCLatestVersion+1), "protocol version")
+
+	// A lower local runtime cannot bind an expression whose marker was already
+	// persisted by a newer writer, even when the marker is not IP-specific.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion71)
+	require.ErrorContains(t, RequirePersistedProtocolVersion(
+		proc.Ctx, proc, defines.MORPCVersion72), "protocol version 72")
+}
+
 func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	proc := ctx.GetProcess()

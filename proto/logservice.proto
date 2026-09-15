@@ -170,6 +170,11 @@ message CNStoreHeartbeat {
   // ViewMetadataIngressReady is published only after every public CN ingress
   // listener has started successfully. Admission alone is not routability.
   bool            ViewMetadataIngressReady = 24;
+  // PersistedExpressionProtocolVersion is the highest catalog-expression
+  // protocol this CN can bind/evaluate locally. A zero value is emitted by
+  // older binaries and is therefore never admitted after the expression
+  // compatibility floor is raised.
+  uint64          PersistedExpressionProtocolVersion = 25;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -211,6 +216,11 @@ message LogStoreHeartbeat {
   // this Log store. It remains stable across process restarts and changes when
   // the store starts from a new data directory.
   string StoreIncarnation = 11;
+  // ViewMetadataAdmissionProtocolV2Supported proves that this HAKeeper RSM
+  // understands the persisted-expression protocol floor carried by admission
+  // commands and snapshots. It is a separate capability because the original
+  // admission bit predates expression compatibility checks.
+  bool ViewMetadataAdmissionProtocolV2Supported = 12;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -655,6 +665,9 @@ message ViewMetadataAdmission {
   // Admitted authorizes a CN heartbeat sender to finish local startup. Ready
   // is stronger: it also requires the CN's public ingress to be prepared.
   bool Admitted = 8;
+  // PersistedExpressionRequiredProtocolVersion is the durable cluster floor
+  // that a CN must support before it can be admitted to read catalog metadata.
+  uint64 PersistedExpressionRequiredProtocolVersion = 9;
 }
 
 // ViewMetadataAdmissionTargets makes timeout-based phase-two/reconciliation
@@ -664,6 +677,9 @@ message ViewMetadataAdmissionTargets {
   uint64 CNStoreTimeoutTicks = 2;
   uint64 ProxyStoreTimeoutTicks = 3;
   bool EvaluateCurrentStores = 4;
+  // PersistedExpressionRequiredProtocolVersion raises the durable expression
+  // floor monotonically once every live CN can advertise that capability.
+  uint64 PersistedExpressionRequiredProtocolVersion = 5;
 }
 
 // CNStoreInfo contains information on a CN store.
@@ -697,6 +713,7 @@ message CNStoreInfo {
   uint64 ViewMetadataRevalidatedEpoch = 24;
   bool ViewMetadataAdmissionReady = 25;
   bool ViewMetadataIngressReady = 26;
+  uint64 PersistedExpressionProtocolVersion = 27;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -808,6 +825,10 @@ message LogStoreInfo {
   bool CommandDeliverySupported = 9;
   bool ViewMetadataAdmissionSupported = 10;
   string StoreIncarnation = 11;
+  // ViewMetadataAdmissionProtocolV2Supported proves that this HAKeeper RSM
+  // understands the persisted-expression protocol floor carried by admission
+  // commands and snapshots.
+  bool ViewMetadataAdmissionProtocolV2Supported = 12;
 }
 
 message LogState {
@@ -928,6 +949,10 @@ message HAKeeperRSMState {
   // this liveness proof for an older process.
   map<string, uint64> ViewMetadataAdmissionCNTargetTicks = 41;
   map<string, uint64> ViewMetadataAdmissionProxyTargetTicks = 42;
+  // PersistedExpressionRequiredProtocolVersion is monotonic. It is retained
+  // across rolling restarts and snapshots and is never lowered by a downgrade
+  // or by a stale heartbeat.
+  uint64 PersistedExpressionRequiredProtocolVersion = 43;
 }
 
 // ReplicaInfo contains details of a replica

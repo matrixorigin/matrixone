@@ -32,9 +32,13 @@ type ViewMetadataAdmissionState struct {
 	Enabled                bool
 	Pending                bool
 	HAKeeperAdmissionReady bool
-	LogReady               map[string]bool
-	CNReady                map[string]bool
-	ProxyReady             map[string]bool
+	// RequiredProtocolVersion is the durable floor already committed by the
+	// HAKeeper RSM. Callers use it to avoid proposing a lower compatibility
+	// target after a restart or leadership change.
+	RequiredProtocolVersion uint64
+	LogReady                map[string]bool
+	CNReady                 map[string]bool
+	ProxyReady              map[string]bool
 }
 
 // GetEnableViewMetadataAdmissionCmd starts phase one. It must only be proposed
@@ -47,12 +51,25 @@ func GetEnableViewMetadataAdmissionCmd() []byte {
 // preparing, and expires dead transition targets while enabled. Timeout ticks
 // are carried in the replicated entry so every RSM makes the same decision.
 func GetEnableViewMetadataAdmissionCmdForConfig(cfg Config) []byte {
+	return GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(cfg, 0)
+}
+
+// GetEnableViewMetadataAdmissionCmdForConfigWithProtocol carries the
+// deployment's persisted-expression compatibility floor through the same
+// replicated admission barrier as the timeout targets. The legacy helper
+// intentionally keeps the field at zero so old timeout-only callers remain
+// wire-compatible; the upgraded log-service store supplies the real floor.
+func GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
+	cfg Config,
+	requiredProtocolVersion uint64,
+) []byte {
 	cfg.Fill()
 	targets := pb.ViewMetadataAdmissionTargets{
 		Explicit:               true,
 		CNStoreTimeoutTicks:    uint64(cfg.CNStoreTimeout/time.Second) * uint64(cfg.TickPerSecond),
 		ProxyStoreTimeoutTicks: uint64(cfg.ProxyStoreTimeout/time.Second) * uint64(cfg.TickPerSecond),
 		EvaluateCurrentStores:  true,
+		PersistedExpressionRequiredProtocolVersion: requiredProtocolVersion,
 	}
 	return getEnableViewMetadataAdmissionCmd(&targets)
 }
@@ -96,9 +113,32 @@ func (s *stateMachine) cnViewMetadataAdmitted(uuid string, store pb.CNStoreInfo)
 		store.ViewMetadataObservedEpoch < s.state.ViewMetadataAdmissionEpoch {
 		return false
 	}
+	if required := s.state.PersistedExpressionRequiredProtocolVersion; required > 0 &&
+		store.PersistedExpressionProtocolVersion < required {
+		return false
+	}
 	return !s.state.ViewMetadataRevalidationRequired ||
 		s.state.ViewMetadataCatalogFencedEpoch >= s.state.ViewMetadataAdmissionEpoch ||
 		store.ViewMetadataCatalogFencedEpoch >= s.state.ViewMetadataAdmissionEpoch
+}
+
+// persistedExpressionProtocolReady is evaluated only while a replicated
+// admission command is being applied. It deliberately ignores expired CNs;
+// their existing routing entry will be removed by the same target expiry
+// barrier, while a live lower-capability CN must block the monotonic raise.
+func (s *stateMachine) persistedExpressionProtocolReady(required, timeoutTicks uint64) bool {
+	if required == 0 {
+		return true
+	}
+	for _, store := range s.state.CNState.Stores {
+		if timeoutTicks > 0 && commandDeliveryStoreExpired(store.Tick, s.state.Tick, timeoutTicks) {
+			continue
+		}
+		if store.PersistedExpressionProtocolVersion < required {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *stateMachine) proxyViewMetadataAdmitted(uuid string, store pb.ProxyStore) bool {
@@ -343,6 +383,22 @@ func (s *stateMachine) expireViewMetadataAdmissionTargets(targets pb.ViewMetadat
 func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 	targets, hasTargets := parseEnableViewMetadataAdmissionCmd(cmd)
 	if s.state.ViewMetadataAdmissionEnabled {
+		if hasTargets && targets.PersistedExpressionRequiredProtocolVersion >
+			s.state.PersistedExpressionRequiredProtocolVersion {
+			// A floor raise is serialized with admission reconciliation. Do not
+			// publish it while a live lower-capability CN can still serve catalog
+			// metadata; the next heartbeat retries the same deterministic command.
+			if !s.persistedExpressionProtocolReady(
+				targets.PersistedExpressionRequiredProtocolVersion,
+				targets.CNStoreTimeoutTicks) {
+				return sm.Result{}
+			}
+			s.state.PersistedExpressionRequiredProtocolVersion =
+				targets.PersistedExpressionRequiredProtocolVersion
+			if !s.state.ViewMetadataRevalidationRequired {
+				s.startViewMetadataRequiredEpoch()
+			}
+		}
 		if hasTargets {
 			s.expireViewMetadataAdmissionTargets(targets)
 			s.tryPromoteViewMetadataAdmissions(&targets)
@@ -381,10 +437,22 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 		if !s.state.ViewMetadataAdmissionLogReady[uuid] {
 			return sm.Result{}
 		}
+		if targets.PersistedExpressionRequiredProtocolVersion > 0 {
+			store, ok := s.state.LogState.Stores[uuid]
+			if !ok || !store.ViewMetadataAdmissionProtocolV2Supported {
+				return sm.Result{}
+			}
+		}
 	}
 	for _, uuid := range shard.NonVotingReplicas {
 		if !s.state.ViewMetadataAdmissionLogReady[uuid] {
 			return sm.Result{}
+		}
+		if targets.PersistedExpressionRequiredProtocolVersion > 0 {
+			store, ok := s.state.LogState.Stores[uuid]
+			if !ok || !store.ViewMetadataAdmissionProtocolV2Supported {
+				return sm.Result{}
+			}
 		}
 	}
 	if !hasTargets || !targets.EvaluateCurrentStores {
@@ -402,6 +470,11 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 		if !s.state.ViewMetadataAdmissionCNReady[uuid] {
 			return sm.Result{}
 		}
+		if targets.PersistedExpressionRequiredProtocolVersion > 0 &&
+			store.PersistedExpressionProtocolVersion <
+				targets.PersistedExpressionRequiredProtocolVersion {
+			return sm.Result{}
+		}
 	}
 	for uuid, store := range s.state.ProxyState.Stores {
 		if commandDeliveryStoreExpired(store.Tick, s.state.Tick, targets.ProxyStoreTimeoutTicks) {
@@ -413,6 +486,14 @@ func (s *stateMachine) handleEnableViewMetadataAdmission(cmd []byte) sm.Result {
 	}
 	if s.state.ViewMetadataCatalogFencedEpoch < s.state.ViewMetadataAdmissionEpoch {
 		return sm.Result{}
+	}
+	if hasTargets && targets.PersistedExpressionRequiredProtocolVersion >
+		s.state.PersistedExpressionRequiredProtocolVersion {
+		// Capability checks above passed for every live CN. Set this before the
+		// enabled bit is published so every RSM observes the same floor and
+		// snapshot thereafter.
+		s.state.PersistedExpressionRequiredProtocolVersion =
+			targets.PersistedExpressionRequiredProtocolVersion
 	}
 	for uuid, store := range s.state.CNState.Stores {
 		store.ViewMetadataAdmissionReady = false
@@ -495,7 +576,9 @@ func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) boo
 			if s.state.ViewMetadataAdmissionCNReady == nil {
 				s.state.ViewMetadataAdmissionCNReady = make(map[string]bool)
 			}
-			s.state.ViewMetadataAdmissionCNReady[hb.UUID] = true
+			s.state.ViewMetadataAdmissionCNReady[hb.UUID] =
+				hb.PersistedExpressionProtocolVersion >=
+					s.state.PersistedExpressionRequiredProtocolVersion
 		}
 	}
 	if hb.ViewMetadataCatalogFencedEpoch == s.state.ViewMetadataAdmissionEpoch &&
@@ -569,6 +652,7 @@ func (s *stateMachine) viewMetadataAdmissionSnapshot(uuid string, proxy bool) *p
 		CatalogFencedEpoch:   s.state.ViewMetadataCatalogFencedEpoch,
 		Ready:                !s.viewMetadataAdmissionActive(),
 		Admitted:             !s.viewMetadataAdmissionActive(),
+		PersistedExpressionRequiredProtocolVersion: s.state.PersistedExpressionRequiredProtocolVersion,
 	}
 	if proxy {
 		if store, ok := s.state.ProxyState.Stores[uuid]; ok {

@@ -289,6 +289,13 @@ func genViewTableDef(
 	if err = validateViewDefinitionPlugins(ctx, query); err != nil {
 		return nil, err
 	}
+	viewRequiredProtocol, err := RequiredPersistedIPFunctionProtocolVersion(query)
+	if err != nil {
+		return nil, err
+	}
+	if err = RequirePersistedIPFunctionProtocol(ctx.GetContext(), ctx.GetProcess(), query); err != nil {
+		return nil, err
+	}
 	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
@@ -346,13 +353,18 @@ func genViewTableDef(
 	}
 
 	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
+	var persistedRequiredProtocol *int64
+	if viewRequiredProtocol > 0 {
+		persistedRequiredProtocol = &viewRequiredProtocol
+	}
 	viewData, err := json.Marshal(ViewData{
-		Stmt:                viewSql,
-		DefaultDatabase:     ctx.DefaultDatabase(),
-		SQLMode:             parserSQLModeFromContext(ctx),
-		SecurityType:        getViewSecurityTypeFromContext(ctx),
-		LowerCaseTableNames: &lowerCaseTableNames,
-		Dependencies:        dependencyCapture.dependencies(),
+		Stmt:                    viewSql,
+		DefaultDatabase:         ctx.DefaultDatabase(),
+		SQLMode:                 parserSQLModeFromContext(ctx),
+		SecurityType:            getViewSecurityTypeFromContext(ctx),
+		LowerCaseTableNames:     &lowerCaseTableNames,
+		Dependencies:            dependencyCapture.dependencies(),
+		RequiredProtocolVersion: persistedRequiredProtocol,
 	})
 	if err != nil {
 		return nil, err

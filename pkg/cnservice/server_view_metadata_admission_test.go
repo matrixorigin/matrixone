@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -297,6 +298,36 @@ func TestCNViewMetadataCatalogFenceShortcuts(t *testing.T) {
 		require.NoError(t, s.fenceViewMetadataCatalog(context.Background(), snapshot))
 		require.Zero(t, s.viewMetadataCatalogFencedEpoch.Load())
 	})
+}
+
+func TestCNViewMetadataAdmissionRejectsUnknownPersistedExpressionProtocol(t *testing.T) {
+	s := &service{
+		cfg:                             &Config{UUID: "legacy-cn"},
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+	}
+	s.viewMetadataAdmission.Store(&logservicepb.ViewMetadataAdmission{
+		Generation: 9,
+		Admitted:   true,
+	})
+
+	ok, _, err := s.acceptViewMetadataAdmissionSnapshot(
+		&logservicepb.ViewMetadataAdmission{
+			Generation: 9,
+			Admitted:   true,
+			PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion + 1),
+		}, false, false, nil)
+	require.False(t, ok)
+	require.ErrorContains(t, err, "requires persisted expression protocol version")
+
+	ok, _, err = s.acceptViewMetadataAdmissionSnapshot(
+		&logservicepb.ViewMetadataAdmission{
+			Generation: 9,
+			Admitted:   true,
+			PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCLatestVersion),
+		}, false, false, nil)
+	require.True(t, ok)
+	require.NoError(t, err)
 }
 
 func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
