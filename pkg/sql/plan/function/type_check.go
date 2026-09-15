@@ -449,9 +449,9 @@ func stringDomainMatchSingleOverload(overloads []overload, inputs []types.Type, 
 
 // crc32TypeMatch retains CRC32's historical acceptance of every varlen type
 // while extending the function to scalar values through the normal formatted
-// string cast. The executor hashes the resulting bytes, so changing the
-// matcher must not make JSON/vector inputs (which are also varlen internally)
-// stop binding.
+// string cast. The executor serializes JSON values before hashing and hashes
+// other varlen values as-is, so changing the matcher must not make JSON/vector
+// inputs (which are also varlen internally) stop binding.
 func crc32TypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) == 1 && (inputs[0].IsVarlen() || inputs[0].Oid == types.T_any) {
 		return newCheckResultWithSuccess(0)

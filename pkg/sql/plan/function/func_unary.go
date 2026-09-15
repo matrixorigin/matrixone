@@ -8780,9 +8780,17 @@ func newCrc32ExecContext() *crc32ExecContext {
 }
 
 func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	isJSON := parameters[0].GetType().Oid == types.T_json
 	return opUnaryBytesToFixedWithErrorCheck[uint32](
 		parameters,
 		result, proc, length, func(v []byte) (uint32, error) {
+			if isJSON {
+				var err error
+				v, err = types.DecodeJson(v).MarshalJSON()
+				if err != nil {
+					return 0, err
+				}
+			}
 			content.hah.Reset()
 			_, err := content.hah.Write(v)
 			if err != nil {
