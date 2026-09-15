@@ -398,6 +398,8 @@ function start_ut_heartbeat(){
             trap - TERM INT
             if [[ -n "${heartbeat_sleep_pid}" ]]; then
                 kill -TERM "${heartbeat_sleep_pid}" 2>/dev/null || true
+                wait "${heartbeat_sleep_pid}" 2>/dev/null || true
+                heartbeat_sleep_pid=""
             fi
             exit 0
         }
