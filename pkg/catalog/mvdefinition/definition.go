@@ -32,7 +32,7 @@ const (
 	// MV jobs use a dedicated protocol fence.  Do not reuse an older
 	// capability number: older CNs can otherwise accept the catalog definition
 	// and later misinterpret the MV job as an index job.
-	RequiredCapability = defines.MORPCVersion73
+	RequiredCapability = defines.MORPCVersion74
 	Property           = "mv_definition"
 	OwnerProperty      = "mv_owner"
 	StatePrefix        = "__mo_mv_state_"
