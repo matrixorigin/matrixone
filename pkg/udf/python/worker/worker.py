@@ -871,6 +871,7 @@ def _decode_control(data: bytes) -> Dict[str, Any]:
 def _decode_capability_request(data: bytes) -> Dict[str, Any]:
     if not data or len(data) > MAX_CONTROL_BYTES:
         raise ValueError("PROTOCOL: invalid capability request size")
+    _validate_json_nesting(data)
     try:
         value = json.loads(
             bytes(data).decode("utf-8"),
@@ -890,6 +891,7 @@ def _decode_definition_validation(data: bytes) -> Dict[str, Any]:
     """Decode the strict, pre-publication definition validation payload."""
     if not data or len(data) > MAX_DEFINITION_VALIDATION_BYTES:
         raise ValueError("PROTOCOL: invalid definition validation size")
+    _validate_json_nesting(data)
     try:
         value = json.loads(
             bytes(data).decode("utf-8"),
