@@ -1672,9 +1672,14 @@ func (e *errInfo) setMaxCnt(limit int) {
 	// Do not retain a large backing array after a substantial capacity
 	// reduction. Small changes keep the existing storage to avoid churn.
 	if cap(e.codes) > limit*2 || cap(e.msgs) > limit*2 || cap(e.levels) > limit*2 {
-		codes := append([]uint16(nil), e.codes...)
-		msgs := append([]string(nil), e.msgs...)
-		levels := append([]string(nil), e.levels...)
+		// Use exact-length allocations: append(nil, ...) may round a one-element
+		// copy up to a larger capacity, defeating the backing-array bound.
+		codes := make([]uint16, len(e.codes))
+		msgs := make([]string, len(e.msgs))
+		levels := make([]string, len(e.levels))
+		copy(codes, e.codes)
+		copy(msgs, e.msgs)
+		copy(levels, e.levels)
 		e.codes, e.msgs, e.levels = codes, msgs, levels
 	}
 }
