@@ -166,6 +166,64 @@ func TestCountDistinctArgumentDrainKeepsRepresentative(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestCountDistinctStateRestoresFloatEquivalencePeers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		data [][]byte
+	}{
+		{
+			name: "float32",
+			typ:  types.T_float32.ToType(),
+			data: [][]byte{
+				types.EncodeFixed(math.Float32frombits(0x7fc00000)),
+				types.EncodeFixed(math.Float32frombits(0xffc00001)),
+				types.EncodeFixed(float32(math.Copysign(0, -1))),
+				types.EncodeFixed(float32(0)),
+			},
+		},
+		{
+			name: "float64",
+			typ:  types.T_float64.ToType(),
+			data: [][]byte{
+				types.EncodeFixed(math.Float64frombits(0x7ff8000000000000)),
+				types.EncodeFixed(math.Float64frombits(0xfff8000000000001)),
+				types.EncodeFixed(math.Copysign(0, -1)),
+				types.EncodeFixed(float64(0)),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			exec := newCountColumnExec(
+				mp, AggIdOfCountColumn, true, []types.Type{tc.typ},
+			).(*countColumnExec)
+			require.NoError(t, exec.GroupGrow(1))
+
+			// This is the pre-canonical fixed-width DISTINCT state: every raw
+			// spelling is present on the wire, even though the receiver must
+			// rebuild SQL-equivalence membership.
+			var wire bytes.Buffer
+			require.NoError(t, types.WriteInt32(&wire, 1))
+			require.NoError(t, types.WriteUint32(&wire, uint32(len(tc.data))))
+			for _, value := range tc.data {
+				_, err := wire.Write(value)
+				require.NoError(t, err)
+			}
+			_, err := exec.state[0].readState(mp, &wire, &exec.aggInfo)
+			require.NoError(t, err)
+
+			result, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, []int64{2},
+				vector.MustFixedColNoTypeCheck[int64](result[0]))
+			result[0].Free(mp)
+			exec.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestCountDistinctStateRestoresLegacyRawOpaqueKeys(t *testing.T) {
 	mp := mpool.MustNewZero()
 	exec := newCountColumnExec(

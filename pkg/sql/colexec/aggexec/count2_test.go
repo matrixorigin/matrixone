@@ -315,7 +315,7 @@ func TestCountDistinctUsesCanonicalTypedKeys(t *testing.T) {
 	}
 }
 
-func TestCountDistinctFixedIndexPreservesFloatNaNIdentity(t *testing.T) {
+func TestCountDistinctFixedIndexCanonicalizesFloatNaNPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
 	values := []float64{
 		math.Float64frombits(0x7ff8000000000001),
@@ -355,12 +355,11 @@ func TestCountDistinctFixedIndexPreservesFloatNaNIdentity(t *testing.T) {
 		return got
 	}
 
-	// The fixed index must preserve the pre-existing byte-exact aggregate key
-	// contract: equal NaN payloads remain one key, distinct payloads remain
-	// distinct, and signed zeroes remain one key.
+	// The fixed index must use the same SQL equivalence key as the canonical
+	// skiplist path: all NaN payloads are one key and signed zeroes are one key.
 	legacy := count(t, 1)
 	fixed := count(t, distinctFixedIndexMinGroups)
-	require.Equal(t, int64(3), legacy)
+	require.Equal(t, int64(2), legacy)
 	require.Equal(t, legacy, fixed)
 	require.Zero(t, mp.CurrNB())
 }
