@@ -848,6 +848,21 @@ class WorkerContractTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     worker._field("value", descriptor)
 
+    def test_fencing_tuple_rejects_oversized_identity_components(self):
+        for field in ("statement_id", "group_id", "invocation_id"):
+            value = {
+                "account_id": 1,
+                "statement_id": "statement",
+                "group_id": "group",
+                "group_epoch": 1,
+                "invocation_id": "invocation",
+                "lease_epoch": 1,
+            }
+            value[field] = "x" * (worker.MAX_FENCE_COMPONENT_BYTES + 1)
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "component is too large"):
+                    worker._tuple_key(value)
+
     def test_scalar_vector_null_keeps_fixed_size_child_slots(self):
         descriptor = {"type_id": worker.VECF32, "width": 2, "offset_width": 0}
         array = worker._output_array(
