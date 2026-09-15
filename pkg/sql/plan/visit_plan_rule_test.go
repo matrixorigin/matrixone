@@ -2190,6 +2190,59 @@ func TestFillValuesOfParamsInstallsValueOnlyNumericSourceRewrite(t *testing.T) {
 	}
 }
 
+func TestFillValuesOfParamsMaterializesNativePrecisionSources(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"round", "truncate"} {
+		t.Run(name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare stmt_native_precision from 'select "+name+"(1.25, ?)'")
+			require.NoError(t, err)
+			for _, test := range []struct {
+				name     string
+				value    ParamValue
+				wantCast bool
+			}{
+				{
+					name:     "boolean",
+					value:    ParamValue{Value: "true", SourceType: types.T_bool.ToType(), HasSourceType: true},
+					wantCast: true,
+				},
+				{
+					name:  "integer",
+					value: ParamValue{Value: "2", SourceType: types.T_int64.ToType(), HasSourceType: true},
+				},
+				{
+					name:     "decimal",
+					value:    ParamValue{Value: "1.5", SourceType: types.New(types.T_decimal64, 4, 1), HasSourceType: true},
+					wantCast: true,
+				},
+				{
+					name:     "float",
+					value:    ParamValue{Value: "1.5", SourceType: types.T_float64.ToType(), HasSourceType: true},
+					wantCast: true,
+				},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					filled, specialized, fillErr := FillValuesOfParamsInPlanWithSpecialization(
+						ctx, prepared.GetDcl().GetPrepare().Plan, []any{test.value})
+					require.NoError(t, fillErr)
+					require.True(t, specialized, filled.String())
+					result := findPlanFunctionExpr(filled, name)
+					require.NotNil(t, result, filled.String())
+					precision := result.GetF().Args[1]
+					require.Equal(t, int32(types.T_int64), precision.Typ.Id, result.String())
+					if test.wantCast {
+						cast := precision.GetF()
+						require.NotNil(t, cast, result.String())
+						require.Equal(t, "cast", cast.GetFunc().GetObjName(), result.String())
+						require.NotNil(t, cast.Args[0].GetLit(), result.String())
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestFillValuesOfParamsInPlanUsesSQLExecuteSourceTypeInPreparedResultConsumers(t *testing.T) {
 	ctx := context.Background()
 	for _, test := range []struct {
