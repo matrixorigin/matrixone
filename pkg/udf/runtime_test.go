@@ -107,6 +107,20 @@ func TestStatementContextAcceptsUnixEpoch(t *testing.T) {
 	require.NoError(t, snapshot.Validate())
 }
 
+func TestStatementContextMatchesPythonDatetimeRange(t *testing.T) {
+	base := StatementContext{
+		ContractVersion:     StatementContextContractVersion,
+		TimezoneKind:        "FIXED_OFFSET",
+		CurrentUser:         "alice",
+		ConnectionCollation: "utf8mb4_bin",
+	}
+	for _, timestamp := range []int64{minStatementTimestampUTC - 1, maxStatementTimestampUTC + 1} {
+		context := base
+		context.StatementTimestampUTC = timestamp
+		require.ErrorContains(t, context.Validate(), "outside the Python datetime range")
+	}
+}
+
 func TestSecurityFrameRejectsEffectivePrincipalChange(t *testing.T) {
 	frame := SecurityFrame{
 		ContractVersion: SecurityFrameContractVersion,
