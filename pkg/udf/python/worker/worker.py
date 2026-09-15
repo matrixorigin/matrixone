@@ -70,6 +70,11 @@ MAX_CONTROL_BYTES = 1 << 20
 # single oversized identity would otherwise consume most of every ledger
 # entry and would be accepted by the worker after Go rejected it.
 MAX_FENCE_COMPONENT_BYTES = 256
+# SecurityFrame uses uint32 principal identifiers in the language-neutral
+# contract.  Keep the Python decoder's acceptance domain identical to Go;
+# checking only for a non-negative Python int would admit values that no Go
+# caller can represent and would make quota/security identity non-canonical.
+MAX_SECURITY_PRINCIPAL_ID = (1 << 32) - 1
 # Admission bounds cover active fences and retained terminal tombstones.  The
 # names deliberately describe the whole ledger so a future cleanup change
 # cannot mistake active work for reclaimable terminal state.
@@ -608,7 +613,12 @@ def _validate_typed_call_contract(payload: Dict[str, Any]) -> None:
     if frame.get("contract_version") != 1 or frame.get("mode") != "INVOKER":
         raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported Python security frame")
     integer_fields = ("invoker_user_id", "invoker_role_id", "effective_user_id", "effective_role_id")
-    if any(type(frame.get(key)) is not int or frame[key] < 0 for key in integer_fields):
+    if any(
+        type(frame.get(key)) is not int
+        or frame[key] < 0
+        or frame[key] > MAX_SECURITY_PRINCIPAL_ID
+        for key in integer_fields
+    ):
         raise ValueError("UNSUPPORTED_ROUTINE_VERSION: invalid Python security frame")
     if frame["invoker_user_id"] != frame["effective_user_id"] or frame["invoker_role_id"] != frame["effective_role_id"]:
         raise ValueError("UNSUPPORTED_ROUTINE_VERSION: Python security frame changed effective principal")
