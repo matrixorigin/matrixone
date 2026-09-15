@@ -130,7 +130,15 @@ func TestCheckPitrGranularityWildcardExcludeAndPrimaryKey(t *testing.T) {
 				return validPitrResult(), nil
 			}}
 			rt := moruntime.ServiceRuntime(proc.GetService())
+			previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
 			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+			t.Cleanup(func() {
+				if hadPrevious {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+				}
+			})
 			c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
 			defer c.Release()
 			pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: cdc.CDCPitrGranularity_All}}}}
