@@ -1745,6 +1745,26 @@ class WorkerContractTest(unittest.TestCase):
         )
         self.assertEqual(struct.pack(">Q", 4) + b"\x01abc", stream.getvalue())
 
+    def test_handler_response_frame_parts_handle_short_writes(self):
+        class ShortWriter:
+            def __init__(self):
+                self.data = bytearray()
+
+            def write(self, value):
+                value = bytes(value)
+                count = max(1, len(value) // 2)
+                self.data.extend(value[:count])
+                return count
+
+            def flush(self):
+                return None
+
+        stream = ShortWriter()
+        worker._write_execution_frame_parts(stream, (b"\x01", b"abcdef"))
+        self.assertEqual(
+            struct.pack(">Q", 7) + b"\x01abcdef", bytes(stream.data)
+        )
+
     def test_handler_process_accepts_schema_free_record_batch_messages(self):
         descriptor = {"type_id": worker.INT64, "offset_width": 32}
         schema = worker._schema_from_descriptors([descriptor], "arg")
