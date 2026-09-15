@@ -1192,16 +1192,18 @@ def _validate_descriptor_domain(descriptor: Dict[str, Any]) -> None:
         if charset:
             raise ValueError("TYPE_CONTRACT: decimal descriptor carries a charset")
     elif type_id == DATE:
-        if scale or charset:
+        if width or scale or charset:
             raise ValueError("TYPE_CONTRACT: DATE descriptor has invalid scale or charset")
     elif type_id in (TIME, DATETIME, TIMESTAMP):
-        if scale > 6 or charset:
+        if width or scale > 6 or charset:
             raise ValueError("TYPE_CONTRACT: temporal scale or charset is outside the supported range")
     elif type_id in (CHAR, VARCHAR, TEXT):
+        if scale:
+            raise ValueError("TYPE_CONTRACT: text descriptor carries an unused scale")
         if charset not in (0, 2, 3):
             raise ValueError("TYPE_CONTRACT: unsupported text charset")
     elif type_id in (BINARY, VARBINARY, BLOB):
-        if charset != 1:
+        if scale or charset != 1:
             raise ValueError("TYPE_CONTRACT: binary descriptor must use the binary charset")
     elif type_id == UUID:
         if width or scale or charset:
