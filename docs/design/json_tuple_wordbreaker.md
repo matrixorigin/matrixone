@@ -7,8 +7,21 @@ rewritten json section of `fulltext2_parser.sql`. §7 lists what remains.
 
 Revision (this PR): self-completing json probe — probe dispatch, coverage/`build_ts`
 gating, the `applyIndices` rewrite, and the rolling-upgrade runtime contract (§10.3).
-Design approval is the PR approval by its reviewers; no separate approval is recorded
-in this doc.
+
+Design approval (revised runtime contract): **APPROVED by cpegeric, 2026-09-15.**
+This is a distinct design approval, prior to and separate from the implementation PR
+approval; it supersedes the earlier "PR approval by its reviewers" note, which
+covered revisions before the current runtime contract. It approves the revised design
+as described in this document:
+- generation binding — the probe runs against the generation actually searched, bound
+  by that generation's `build_ts` coverage of the read snapshot (§10, §10.1–§10.2);
+- self-completion fallback — the partial `table_changes` tail over `(searched, snapshot]`,
+  with a base-table fallback when the tail cannot serve a schema-version span (§5.1, §10.3);
+- mixed-version protocol fencing — decline the probe at plan time below `MORPCVersion73`,
+  and re-check the destination's current version at the remote sender boundary
+  (`encodeRemoteScope`) before serialization (§10.3).
+
+It does not authorize operational rollout or waive release validation.
 
 ## 1. Where we are today
 
