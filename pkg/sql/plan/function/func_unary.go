@@ -7757,7 +7757,7 @@ func hexFloat[T constraints.Float](ivecs []*vector.Vector, result vector.Functio
 	if truncate {
 		return opUnaryFixedToStrWithErrorCheck[T](ivecs, result, proc, length, func(value T) (string, error) {
 			converted := math.Trunc(float64(value))
-			if converted >= float64(math.MaxInt64) || converted < float64(math.MinInt64) {
+			if converted >= float64(math.MaxInt64) || converted <= float64(math.MinInt64) {
 				return "", moerr.NewOutOfRange(proc.Ctx, "BIGINT", fmt.Sprintf("'%v'", value))
 			}
 			if math.IsNaN(converted) {

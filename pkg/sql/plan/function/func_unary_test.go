@@ -6628,8 +6628,10 @@ func TestHexExplicitFloatRejectsSignedIntegerOverflow(t *testing.T) {
 	}{
 		{"float32_positive", NewFunctionTestInput(types.T_float32.ToType(), []float32{1e20}, nil), HexExplicitFloat32},
 		{"float32_negative", NewFunctionTestInput(types.T_float32.ToType(), []float32{-1e20}, nil), HexExplicitFloat32},
+		{"float32_exact_min", NewFunctionTestInput(types.T_float32.ToType(), []float32{float32(math.MinInt64)}, nil), HexExplicitFloat32},
 		{"float64_positive", NewFunctionTestInput(types.T_float64.ToType(), []float64{1e20}, nil), HexExplicitFloat64},
 		{"float64_negative", NewFunctionTestInput(types.T_float64.ToType(), []float64{-1e20}, nil), HexExplicitFloat64},
+		{"float64_exact_min", NewFunctionTestInput(types.T_float64.ToType(), []float64{float64(math.MinInt64)}, nil), HexExplicitFloat64},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
@@ -6639,12 +6641,20 @@ func TestHexExplicitFloatRejectsSignedIntegerOverflow(t *testing.T) {
 		})
 	}
 
-	// A masked overflow row must not fail short-circuit evaluation.
+	// The next representable float64 toward zero remains inside the accepted domain.
+	insideMin := math.Nextafter(float64(math.MinInt64), 0)
 	fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(),
+		[]float64{insideMin}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{fmt.Sprintf("%X", uint64(int64(insideMin)))}, nil), HexExplicitFloat64)
+	ok, info := fc.Run()
+	require.True(t, ok, info)
+
+	// A masked overflow row must not fail short-circuit evaluation.
+	fc = NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(),
 		[]float64{1e20, 15.5}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false,
 		[]string{"", "F"}, []bool{true, false}), HexExplicitFloat64).
 		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
-	ok, info := fc.Run()
+	ok, info = fc.Run()
 	require.True(t, ok, info)
 }
 
