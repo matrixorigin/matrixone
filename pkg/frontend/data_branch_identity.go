@@ -23,7 +23,7 @@ import (
 )
 
 func dataBranchDatabaseIdentitySupported(protocolVersion int64) bool {
-	return protocolVersion >= defines.MORPCVersion64
+	return protocolVersion >= defines.MORPCVersion75
 }
 
 func requireDataBranchDatabaseIdentity(ctx context.Context, protocolVersion int64) error {
@@ -33,7 +33,7 @@ func requireDataBranchDatabaseIdentity(ctx context.Context, protocolVersion int6
 	return moerr.NewInternalErrorf(
 		ctx,
 		"DATA BRANCH CREATE DATABASE requires MORPC protocol version %d",
-		defines.MORPCVersion64,
+		defines.MORPCVersion75,
 	)
 }
 
@@ -76,7 +76,7 @@ func prepareLogicalRestoreDatabase(
 			ctx,
 			"restoring data-branch database '%s' requires MORPC protocol version %d",
 			dbName,
-			defines.MORPCVersion64,
+			defines.MORPCVersion75,
 		)
 	}
 	return context.WithValue(ctx, defines.DatTypKey{}, catalog.SystemDBTypeDataBranch), nil
