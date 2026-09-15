@@ -12150,12 +12150,17 @@ func matchUserDefinedFunctionCandidates(
 					return nil, err
 				}
 			}
-			if strings.EqualFold(existingLanguage, string(tree.PYTHON)) && existingCanonical != "" {
+			if strings.EqualFold(existingLanguage, string(tree.PYTHON)) {
+				if columnCount < 5 || existingCanonical == "" {
+					return nil, moerr.NewInvalidInputNoCtxf(
+						"UNSUPPORTED_ROUTINE_VERSION: Python function %d has no exact input descriptor",
+						functionID,
+					)
+				}
 				isMatch = existingCanonical == exactArgTypes
 			} else {
-				// A legacy/partially upgraded Python row is rejected as the
-				// same logical identity. It cannot be silently replaced with a
-				// different exact descriptor.
+				// SQL and Python share the historical logical namespace. The
+				// exact descriptor is only authoritative for a Python row.
 				isMatch = existingLogical == logicalArgTypes
 			}
 		} else {
