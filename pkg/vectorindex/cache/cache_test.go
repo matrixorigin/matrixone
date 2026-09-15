@@ -276,16 +276,23 @@ func TestCache(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	VectorIndexCacheTTL = 5 * time.Second
-	VectorIndexCacheTTL = 5 * time.Second
-	Cache = NewVectorIndexCache()
-	Cache.TickerInterval = 5 * time.Second
+	oldTTL := VectorIndexCacheTTL
+	oldCache := Cache
+	VectorIndexCacheTTL = 50 * time.Millisecond
+	cache := NewVectorIndexCache()
+	Cache = cache
+	cache.TickerInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		cache.Destroy()
+		VectorIndexCacheTTL = oldTTL
+		Cache = oldCache
+	})
 
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
+	cache.Once()
+	cache.Once()
+	cache.Once()
+	cache.Once()
+	cache.Once()
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -302,14 +309,15 @@ func TestCache(t *testing.T) {
 	}
 	require.Equal(t, distances[0], float64(2.0))
 
-	os.Stderr.WriteString("cache sleep\n")
-	time.Sleep(8 * time.Second)
-
-	// cache expired
+	os.Stderr.WriteString("cache expire\n")
+	require.Eventually(t, func() bool {
+		_, loaded := cache.IndexMap.Load(tblcfg.IndexTable)
+		return !loaded
+	}, time.Second, 10*time.Millisecond, "ticker housekeeping should evict the expired cache entry")
 
 	// new search
 	m3 := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
-	anykeys2, distances, err := Cache.Search(sqlproc, tblcfg.IndexTable, m3, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	anykeys2, distances, err := cache.Search(sqlproc, tblcfg.IndexTable, m3, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 	require.Nil(t, err)
 	if keys2, ok := anykeys2.([]int64); ok {
 		require.Equal(t, len(keys2), 1)
@@ -317,28 +325,30 @@ func TestCache(t *testing.T) {
 	}
 	require.Equal(t, distances[0], float64(2.0))
 
-	os.Stderr.WriteString("cache.Destroy\n")
-	Cache.Destroy()
-	os.Stderr.WriteString("cache.Destroy end\n")
-	Cache = nil
 }
 
 func TestCacheConcurrent(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	VectorIndexCacheTTL = 2 * time.Second
-	VectorIndexCacheTTL = 2 * time.Second
-	Cache = NewVectorIndexCache()
-	Cache.TickerInterval = 1 * time.Second
+	oldTTL := VectorIndexCacheTTL
+	oldCache := Cache
+	VectorIndexCacheTTL = 50 * time.Millisecond
+	cache := NewVectorIndexCache()
+	Cache = cache
+	cache.TickerInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		cache.Destroy()
+		VectorIndexCacheTTL = oldTTL
+		Cache = oldCache
+	})
 
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
+	cache.Once()
+	cache.Once()
+	cache.Once()
+	cache.Once()
+	cache.Once()
 
-	time.Sleep(1999 * time.Millisecond)
 	var wg sync.WaitGroup
 	nthread := 8
 	for i := 0; i < nthread; i++ {
@@ -353,7 +363,7 @@ func TestCacheConcurrent(t *testing.T) {
 				m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 				//os.Stderr.WriteString("cache search\n")
 				fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-				anykeys, distances, err := Cache.Search(sqlproc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				anykeys, distances, err := cache.Search(sqlproc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 				require.Nil(t, err)
 				if keys, ok := anykeys.([]int64); ok {
 					require.Equal(t, len(keys), 1)
@@ -365,12 +375,10 @@ func TestCacheConcurrent(t *testing.T) {
 	}
 
 	wg.Wait()
-	time.Sleep(4 * time.Second)
-
-	os.Stderr.WriteString("cache.Destroy\n")
-	Cache.Destroy()
-	os.Stderr.WriteString("cache.Destroy end\n")
-	Cache = nil
+	require.Eventually(t, func() bool {
+		_, loaded := cache.IndexMap.Load("__secondary_index")
+		return !loaded
+	}, time.Second, 10*time.Millisecond, "ticker housekeeping should evict the expired concurrent cache entry")
 }
 
 func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
@@ -388,7 +396,6 @@ func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
 	Cache.Once()
 	Cache.Once()
 
-	time.Sleep(1999 * time.Millisecond)
 	var wg sync.WaitGroup
 	nthread := 8
 	for i := 0; i < nthread; i++ {
