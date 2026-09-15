@@ -305,6 +305,36 @@ class WorkerContractTest(unittest.TestCase):
                 }
             )
 
+    def test_typed_contract_versions_require_integer_wire_values(self):
+        typed_context = {
+            "contract_version": True,
+            "statement_timestamp_utc": 0,
+            "timezone_kind": "FIXED_OFFSET",
+            "timezone_offset_minutes": 0,
+            "sql_mode": [],
+            "current_user": "alice",
+            "connection_collation": "utf8mb4_bin",
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported statement context contract"):
+            worker._typed_statement_context(typed_context)
+
+        payload = {
+            "callsite_id": "python/1",
+            "may_error": True,
+            "security_mode": "INVOKER",
+            "leakproof": False,
+            "security_frame": {
+                "contract_version": True,
+                "mode": "INVOKER",
+                "invoker_user_id": 7,
+                "invoker_role_id": 8,
+                "effective_user_id": 7,
+                "effective_role_id": 8,
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported Python security frame"):
+            worker._validate_typed_call_contract(payload)
+
     def test_typed_routine_semantics_reject_partial_or_definer_contract(self):
         payload = {
             "callsite_id": "python/1",
