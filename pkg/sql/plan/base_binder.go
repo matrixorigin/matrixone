@@ -6510,17 +6510,7 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		// the literal start may change the value, but keeping the source bound is
 		// the only sound metadata guarantee.  Only the explicit three-argument
 		// length can narrow a character result.
-		if len(args) != 3 {
-			return
-		}
-		length, known := binarySubstringLengthBound(args[2].GetLit())
-		if !known {
-			return
-		}
-		if sourceBound, sourceKnown := stringExprBound(args[0], false); sourceKnown && sourceBound < length {
-			length = sourceBound
-		}
-		refineKnownStringResultType(returnType, length, false)
+		function.RefineTextSubstringReturnType(args, returnType)
 		return
 	}
 
@@ -6567,6 +6557,9 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 // form, the second argument is always the requested result length.
 func refineLeftRightLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
 	if len(args) != 2 {
+		return
+	}
+	if makeTypeByPlan2Expr(args[0]).Oid == types.T_blob {
 		return
 	}
 	length, known := binarySubstringLengthBound(args[1].GetLit())

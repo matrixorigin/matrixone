@@ -1724,6 +1724,12 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		return false, nil
 	}
 	result := resolved.GetReturnType()
+	if kind == semanticScalar && name == "substring" {
+		// The binder may narrow a character SUBSTRING with a constant length.
+		// Apply the same proven bound before comparing the serialized result;
+		// type-only overload resolution cannot see that value fact.
+		function.RefineTextSubstringReturnType(args, &result)
+	}
 	if int32(result.Oid) != out.Id || result.Width != out.Width || result.Scale != out.Scale {
 		return false, nil
 	}

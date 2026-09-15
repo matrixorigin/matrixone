@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 // stringResultBound is a planner-only payload bound. unknown is deliberately
@@ -168,6 +169,89 @@ func fixedBinaryResultType(width int32) types.Type {
 
 func fixedTextResultType(width uint64) types.Type {
 	return textStringResultType(stringResultBound{bytes: width}, types.CharsetUTF8)
+}
+
+// RefineTextSubstringReturnType applies the bounded character SUBSTRING
+// metadata rule used by both the planner binder and Sirius eligibility checks.
+// It returns false when the expression shape or requested length is not
+// provably bounded; callers must then retain the function's conservative
+// return type.
+func RefineTextSubstringReturnType(args []*planpb.Expr, returnType *types.Type) bool {
+	if len(args) != 3 || args[0] == nil || args[2] == nil || returnType == nil {
+		return false
+	}
+	sourceType := types.T(args[0].Typ.Id)
+	if sourceType == types.T_blob {
+		return false
+	}
+	length, known := substringLengthBound(args[2].GetLit())
+	if !known {
+		return false
+	}
+	if sourceBound, sourceKnown := substringTextSourceBound(args[0]); sourceKnown && sourceBound < length {
+		length = sourceBound
+	}
+	if length > uint64(types.MaxVarcharLen) {
+		return false
+	}
+	charset := returnType.Charset
+	*returnType = types.T_varchar.ToType()
+	returnType.Width = int32(length)
+	returnType.Charset = charset
+	return true
+}
+
+func substringLengthBound(lit *planpb.Literal) (uint64, bool) {
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	switch value := lit.Value.(type) {
+	case *planpb.Literal_I8Val:
+		if value.I8Val <= 0 {
+			return 0, true
+		}
+		return uint64(value.I8Val), true
+	case *planpb.Literal_I16Val:
+		if value.I16Val <= 0 {
+			return 0, true
+		}
+		return uint64(value.I16Val), true
+	case *planpb.Literal_I32Val:
+		if value.I32Val <= 0 {
+			return 0, true
+		}
+		return uint64(value.I32Val), true
+	case *planpb.Literal_I64Val:
+		if value.I64Val <= 0 {
+			return 0, true
+		}
+		return uint64(value.I64Val), true
+	case *planpb.Literal_U8Val:
+		return uint64(value.U8Val), true
+	case *planpb.Literal_U16Val:
+		return uint64(value.U16Val), true
+	case *planpb.Literal_U32Val:
+		return uint64(value.U32Val), true
+	case *planpb.Literal_U64Val:
+		return value.U64Val, true
+	default:
+		return 0, false
+	}
+}
+
+func substringTextSourceBound(expr *planpb.Expr) (uint64, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.GetValue().(*planpb.Literal_Sval); ok {
+			return uint64(utf8.RuneCountInString(value.Sval)), true
+		}
+	}
+	if expr.Typ.Width > 0 && types.T(expr.Typ.Id) != types.T_text {
+		return uint64(expr.Typ.Width), true
+	}
+	return 0, false
 }
 
 // base64ResultBound is the encoded payload plus the line-feed inserted after
