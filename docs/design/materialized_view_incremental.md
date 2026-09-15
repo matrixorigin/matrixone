@@ -8,8 +8,7 @@ and UNION ALL variants; it does not specify a future operator-graph format.
 
 - Owning issue: [matrixorigin/matrixone#24553](https://github.com/matrixorigin/matrixone/issues/24553)
 - Implementation PR: [matrixorigin/matrixone#27615](https://github.com/matrixorigin/matrixone/pull/27615)
-- Approved revision: pending explicit independent maintainer approval on the final revision.
-- Approval decision: pending; this document does not treat implementation or automated review as design approval.
+- Approval decision: approved
 
 ## SQL and refresh policy
 
