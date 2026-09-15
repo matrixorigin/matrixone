@@ -48,3 +48,14 @@ func TestClientConfigRejectsInvalidInvocationBudgets(t *testing.T) {
 	config.MaxInvocationResultBytes = -1
 	require.ErrorContains(t, config.Validate(), "max invocation result bytes")
 }
+
+func TestClientConfigMatchesWorkerHandlerTimeoutContract(t *testing.T) {
+	config := &ClientConfig{
+		Enabled: true, AllowUnisolated: true, ServerAddress: "127.0.0.1:50051",
+		RequestTimeout: maxHandlerTimeout,
+	}
+	require.NoError(t, config.Validate())
+
+	config.RequestTimeout = maxHandlerTimeout + time.Nanosecond
+	require.ErrorContains(t, config.Validate(), "request timeout")
+}
