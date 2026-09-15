@@ -347,6 +347,7 @@ func genViewTableDef(
 		persistedCreateSQL = stableViewSQL
 		definitionStmt = stableSelect
 	}
+	definitionStmt = tree.WithViewColumnNames(definitionStmt, colNames)
 
 	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	viewData, err := json.Marshal(ViewData{

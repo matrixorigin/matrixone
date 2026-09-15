@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -838,7 +839,8 @@ func TestPadSpaceRemoteProtocolValidationV40FastPathIsAllocationFree(t *testing.
 }
 
 func TestViewDefinitionRemoteProtocolValidationAtPrepareSendAndReceiveBoundaries(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	c, client := expressionProtocolTestCompile(t)
+	proc := c.proc
 	rt := runtime.ServiceRuntime(proc.GetService())
 	previous, hadPrevious := rt.GetGlobalVariables(runtime.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -881,17 +883,29 @@ func TestViewDefinitionRemoteProtocolValidationAtPrepareSendAndReceiveBoundaries
 	}}}
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+	client.version = defines.MORPCVersion73
 	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithFunction))
 	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithCheckOption))
 
 	prepared := newScope(Remote)
 	prepared.Proc = proc
+	prepared.NodeInfo = engine.Node{Id: "old-worker", Addr: "remote:6001"}
 	projection := projection.NewArgument()
 	projection.ProjectList = []*plan.Expr{viewDefinition}
 	prepared.setRootOperator(projection)
 	data, err := encodeRemoteScope(prepared, proc)
 	require.NoError(t, err)
 	_, err = encodeScope(prepared)
+	require.NoError(t, err)
+
+	// The coordinator can remain on v73 while a selected worker is rolled
+	// back or replaced by a v72 CN. The sender must probe that destination
+	// before serializing a pipeline containing either new function ID.
+	client.version = defines.MORPCVersion72
+	_, err = encodeRemoteScope(prepared, proc)
+	require.ErrorContains(t, err, "remote destination does not support view metadata functions")
+	client.version = defines.MORPCVersion73
+	_, err = encodeRemoteScope(prepared, proc)
 	require.NoError(t, err)
 
 	// v72 is the immediate predecessor after the main-branch rebase; it
