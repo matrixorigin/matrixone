@@ -3730,6 +3730,16 @@ except Exception:
         state.ack_finish("finish-race")
         self.assertEqual(worker._TERMINAL_SUCCESS, state.freeze_terminal())
 
+    def test_frozen_success_rejects_stale_result_ack(self):
+        state = worker._InvocationState({}, 128)
+        state.last_result = 2
+        state.mark_finish_sent("finish-stale-result")
+        state.ack_finish("finish-stale-result")
+        self.assertEqual(worker._TERMINAL_SUCCESS, state.freeze_terminal())
+        with self.assertRaisesRegex(ValueError, "completed result"):
+            state.ack_result(1)
+        state.ack_result(2)
+
     def test_cancelled_terminal_is_frozen_and_rejects_late_ack(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
         key = (1, "statement", "cancel-group", 1, "cancelled", 1)
