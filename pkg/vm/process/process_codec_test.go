@@ -271,7 +271,10 @@ func TestProcessCodecHelpers(t *testing.T) {
 func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	proc.Base.IsFrontend = false
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+	proc.SetResolveVariableFunc(func(name string, _ bool, _ bool) (interface{}, error) {
+		if name == "max_digest_length" {
+			return int64(DefaultMaxDigestLength), nil
+		}
 		return "", nil
 	})
 
@@ -335,15 +338,16 @@ func TestBuildProcessInfoPreservesMaxDigestLengthAcrossForwards(t *testing.T) {
 	}
 }
 
-func TestBuildProcessInfoNormalizesLegacyAndMalformedMaxDigestLength(t *testing.T) {
+func TestBuildProcessInfoResolvesLegacyAndRejectsMalformedMaxDigestLength(t *testing.T) {
 	for _, test := range []struct {
-		name  string
-		value int64
-		set   bool
+		name      string
+		value     int64
+		set       bool
+		wantError bool
 	}{
 		{name: "legacy absent", value: 0, set: false},
-		{name: "malformed negative", value: -1, set: true},
-		{name: "malformed too large", value: MaximumMaxDigestLength + 1, set: true},
+		{name: "malformed negative", value: -1, set: true, wantError: true},
+		{name: "malformed too large", value: MaximumMaxDigestLength + 1, set: true, wantError: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			proc, _ := newCodecTestProcess(t)
@@ -353,6 +357,10 @@ func TestBuildProcessInfoNormalizesLegacyAndMalformedMaxDigestLength(t *testing.
 			proc.Base.SessionInfo.MaxDigestLengthSet = test.set
 
 			info, err := proc.BuildProcessInfo("select 1")
+			if test.wantError {
+				require.ErrorContains(t, err, "invalid max_digest_length value")
+				return
+			}
 			require.NoError(t, err)
 			require.True(t, info.SessionInfo.MaxDigestLengthSet)
 			require.Equal(t, int64(DefaultMaxDigestLength), info.SessionInfo.MaxDigestLength)

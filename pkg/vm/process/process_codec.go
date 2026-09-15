@@ -152,6 +152,10 @@ func (proc *Process) BuildProcessInfo(
 			return procInfo, err
 		}
 
+		maxDigestLength, err := resolveMaxDigestLengthForProcessInfo(proc)
+		if err != nil {
+			return procInfo, err
+		}
 		procInfo.SessionInfo = pipeline.SessionInfo{
 			User:                   proc.Base.SessionInfo.GetUser(),
 			Host:                   proc.Base.SessionInfo.GetHost(),
@@ -168,7 +172,7 @@ func (proc *Process) BuildProcessInfo(
 			SqlMode:                ResolveSqlMode(proc),
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
-			MaxDigestLength:        int64(ResolveMaxDigestLength(proc)),
+			MaxDigestLength:        int64(maxDigestLength),
 			MaxDigestLengthSet:     true,
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)

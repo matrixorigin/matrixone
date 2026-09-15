@@ -1,7 +1,7 @@
 # `STATEMENT_DIGEST` / `STATEMENT_DIGEST_TEXT` compatibility design
 
 - Status: proposed; implementation review blocked pending independent design approval
-- Design revision: v8 (2026-09-14; consolidated hash/text implementation)
+- Design revision: v9 (2026-09-15; consolidated hash/text implementation and fail-closed setting resolution)
 - Owning issue: [matrixorigin/matrixone#23025](https://github.com/matrixorigin/matrixone/issues/23025)
 - Implementation PRs: [matrixorigin/matrixone#27990](https://github.com/matrixorigin/matrixone/pull/27990) and [matrixorigin/matrixone#27988](https://github.com/matrixorigin/matrixone/pull/27988)
 - Compatibility target: MySQL 8.0.42 behavior, with the MySQL 8.4 documented SQL surface
@@ -226,20 +226,23 @@ result and must not mutate the cached plan.
 ### 5.5 Token budget and truncation
 
 `max_digest_length` is read as a global system variable once for each statement
-generation. The accepted range is 0 through 1 MiB and the fallback is 1024 when
-the initiating process resolver is absent, fails, returns an unsupported type,
-or yields an out-of-range value. The validated result is cached in the shared
-base process, so local child pipelines cannot re-resolve a different value.
-Frontend multi-statement execution clears the presence bit at each statement
-boundary, allowing a later execution of a cached/prepared plan to observe a
-new setting.
+generation. The accepted range is 0 through 1 MiB. An absent resolver (the
+normal remote/background-process case) uses the bounded default of 1024, but a
+resolver error, unsupported type, or out-of-range value is an execution error;
+it is never silently replaced with a different token budget. The validated
+result is cached in the shared base process, so local child pipelines cannot
+re-resolve a different value. Frontend multi-statement execution clears the
+presence bit at each statement boundary, allowing a later execution of a
+cached/prepared plan to observe a new setting.
 
 The initiating CN serializes both `max_digest_length` and
 `max_digest_length_set` in the remote `SessionInfo`. The explicit presence bit
 is required because zero means an empty digest and is not an unset sentinel. A
 remote CN has no session resolver and consumes the carried snapshot. If it
 forwards the pipeline again, it serializes the same value and presence bit.
-Absent legacy fields and malformed carried values use the bounded default 1024.
+Absent legacy fields use the bounded default 1024; malformed carried values are
+rejected at the process-codec/function boundary rather than normalized into a
+potentially different digest contract.
 
 The limit applies to MySQL-compatible stored token size, not directly to the
 rendered UTF-8 byte length. Collection stops before the first complete token
@@ -371,8 +374,9 @@ types and therefore different plan contracts. The text ID was moved from the
 unreleased #27990 draft value 579 to 580 so 579 can remain the hash ID already
 used by #27988. This is a compatibility choice for the pre-merge branches, not
 an instruction to reinterpret an ID in a released plan. A protocol-v72 peer is
-rejected for either function, so a sender cannot mix one projection with a
-receiver that only understands the other.
+rejected for either function. The v73 gate is necessary for the shared wire
+contract, but it is not by itself proof that a v73 worker implements both IDs;
+the capability-complete rollout rule is therefore part of the contract below.
 
 The two projections can differ in rendering details without producing
 inconsistent grouping: the hash is computed from its pinned canonical token
@@ -383,6 +387,47 @@ errors, binary/geometry inputs, masked rows, and repeated process forwarding
 for both paths. Any future change to token semantics, the MySQL target version,
 IDs, or the protocol fence requires a new design revision and independent
 approval.
+
+### 8.2 Why the PRs remain separate and how they land
+
+The two PRs are separate review units, not conflicting implementations:
+
+- **Dependency:** #27988 owns the MySQL-compatible token-byte/hash projection
+  and function ID 579. #27990 owns the MatrixOne-rendered text projection and
+  function ID 580. Both depend on the same parser-admission helper,
+  provenance/error policy, statement-scoped `sql_mode`/
+  `max_digest_length` snapshots, protobuf fields 18/19, and MORPC v73 fence.
+  Those shared decisions are defined here once; neither PR may carry a
+  divergent copy of them.
+- **Landing order:** the source changes may be reviewed and merged in order:
+  #27988 first (reserving 579), then #27990 rebased onto that exact head and
+  adding 580 plus the shared contract updates. This is a source/ownership
+  order, not permission for an intermediate mixed-version rollout. Because
+  both IDs currently use the same v73 fence, a deployable release must contain
+  both implementations and must be rolled to every candidate worker before a
+  coordinator routes a 580 plan. A combined/squashed landing is equivalent
+  only when the resulting tree preserves both IDs and one v73 gate. If the
+  project requires independent rollout, text must receive a separately
+  approved capability/version fence; that is outside this PR. #27990 must not
+  land first while reserving 579, and a rebase is required if #27988 changes
+  the shared helper or protocol allocation.
+- **Version differences:** both functions target the same MySQL 8.4 lexical
+  admission, SQL modes, setting snapshots, and v73 transport contract. They
+  intentionally differ only in result projection: 579 hashes canonical
+  `mysql_digest` token bytes, while 580 renders the documented MatrixOne text
+  form (including its terminal-semicolon rule and other listed deltas). The
+  projection difference is not a version mismatch and must not be bridged by
+  reinterpreting one function ID as the other.
+- **Consistency and rollback:** a shared validator, provenance classification,
+  fail-closed setting resolution, and the same v73 sender/receiver fence are
+  tested for both IDs. Differential cases compare each projection separately;
+  they do not require text bytes to equal hash input bytes. During rollout, a
+  worker set that contains only 579 is not a valid target for a 580 plan; the
+  coordinator must wait for the all-capability deployment (or use the future
+  separately approved fence). Rollback must first drain 580 plans and restore
+  the prior routing fence before removing the combined build. Any change to
+  IDs, protocol version, setting fields, target MySQL version, or projection
+  semantics requires a new revision and another independent design approval.
 
 ## 9. Security and diagnostic exposure
 
@@ -450,7 +495,7 @@ forwarding.
 | encoding confidentiality | malformed UTF-8 in text literals and binary inputs always returns 3677; valid UTF-8 controls | malformed bytes never disclose parser context |
 | binary/geometry boundary | valid and malformed BINARY/VARBINARY/BLOB; GEOMETRY/GEOMETRY32; binary provenance on text OID | `_binary` and `CAST AS BINARY` valid controls |
 | runtime registration | `CannotFold` and `IsRealTimeRelated` | generated-column rejection |
-| runtime settings | statement generation cache; child sharing; resolver fallback/range/type table | SQL mode changed and restored; prepared plan reused |
+| runtime settings | statement generation cache; child sharing; absent-resolver default plus resolver-error/range/type rejection | SQL mode changed and restored; prepared plan reused; failed setting lookup never publishes a default snapshot |
 | distributed setting snapshot | encode/decode/re-encode at 0/default/custom; absent/malformed controls; resolver-free evaluation | one-CN public result plus multi-CN CI topology |
 | mixed-version fence | function IDs 579 and 580 in plan and instruction owners; v72 rejects on encode and decode, v73 accepts; ordinary owner control | rolling-upgrade CI / service-version routing |
 | SQL modes | ANSI quotes, pipes, hint quoting; retained empty resolver vs frontend clear; error/type/nil/sentinel fallback; repeated forwarding | quoted user-variable identifier under `ANSI_QUOTES` |
@@ -485,12 +530,13 @@ head:
 - a complete delivery diff with no generated, temporary, credential, container,
   or unrelated artifacts.
 
-Design-review record for v8:
+Design-review record for v9:
 
 - Trigger: more than 500 production lines and a new public SQL compatibility
   contract.
 - Status: proposed after the missing-design review, distributed-setting review,
-  and #27988/#27990 consolidation on the implementation PRs.
+  #27988/#27990 consolidation, and fail-closed `max_digest_length` review on
+  the implementation PRs.
 - Independent reviewer: pending.
 - Reviewed commit: pending.
 - Blocking design questions: none known in the document; independent review may

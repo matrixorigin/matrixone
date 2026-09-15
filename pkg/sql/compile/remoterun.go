@@ -2111,6 +2111,15 @@ func validateRemoteExpressionPipelineProtocol(
 			"statement digest functions require MORPC protocol version 73",
 		)
 	}
+	if features.StatementDigestFunction || features.StatementDigestText {
+		// Resolve the initiating statement's token budget before either the
+		// pipeline or ProcessInfo can be dispatched. A resolver failure or an
+		// invalid value must abort the remote path; falling back to 1024 here
+		// would let local and remote fragments compute different digests.
+		if _, err := process.ResolveMaxDigestLengthWithError(proc); err != nil {
+			return err
+		}
+	}
 	if features.FormatNumericArguments &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion59) {
 		return moerr.NewNotSupportedNoCtx(

@@ -106,30 +106,63 @@ The initiating CN is authoritative for the variables that affect the digest:
 | State | Owner and transport | Receiver rule |
 |---|---|---|
 | `sql_mode` | `process.SessionInfo.SqlMode`, serialized by the process codec | A remote CN honors the captured value. `EmptySqlModeSentinel` represents an explicitly empty coordinator setting and cannot be overwritten by a background resolver. |
-| `max_digest_length` | `SessionInfo.MaxDigestLength` plus `MaxDigestLengthSet`, serialized in `pipeline.SessionInfo` fields 18/19 | A remote CN honors an explicit snapshot, including zero; otherwise it uses the existing local/default resolution rules. |
+| `max_digest_length` | `SessionInfo.MaxDigestLength` plus `MaxDigestLengthSet`, serialized in `pipeline.SessionInfo` fields 18/19 | A remote CN honors an explicit snapshot, including zero; an absent resolver uses the bounded default, while resolver/range/type errors fail closed. |
 | MySQL executable-comment target | explicit digest option | The feature currently targets the declared MySQL 8.4 compatibility version; changing the target requires a design and oracle-test update. |
 
 The codec copies these values at process serialization and reconstructs them
 on receipt. A second remote forward preserves a decoded snapshot rather than
-substituting a receiving node's compiled default. Invalid variable types or
-out-of-range lengths fail through the evaluator's existing error path.
+substituting a receiving node's compiled default. Resolver failures, invalid
+variable types, out-of-range lengths, and malformed carried snapshots fail
+through the evaluator or process-codec error path; they are not converted into
+the default because that would make local and remote results diverge.
 
 ### Mixed-version safety and rollback
 
 `STATEMENT_DIGEST` has plan function ID 579 and `STATEMENT_DIGEST_TEXT` has
 plan function ID 580. Either may occur inside a remote scope. The coordinator
 therefore rejects remote dispatch when the peer has no MORPC version, or
-reports a version below `MORPCVersion73`. Version 73 is the shared fence because
-both functions depend on the same parser-admission, provenance, and
-process-setting contract; the guard in remote planning is fail-closed and names
-the required version in its error.
+reports a version below `MORPCVersion73`. Version 73 is the shared minimum
+fence because both functions depend on the same parser-admission, provenance,
+and process-setting contract; the guard in remote planning is fail-closed and
+names the required version in its error. The version check does not prove that
+a transitional v73 worker has both function IDs, so rollout must also enforce
+the capability-complete deployment rule described below.
 
 The added protobuf fields are unknown-field compatible, but that alone is not
-sufficient because an older CN also lacks the function ID. The protocol gate
-is the authoritative rollout boundary. There is no stored data or migration:
-rollback consists of removing statements that use these functions before
-routing them to an older binary. A new coordinator never sends such a plan to an old
-CN; it returns a deterministic not-supported error instead.
+sufficient because an older CN also lacks the function ID. The protocol gate is
+the wire minimum; the all-capability deployment rule is the authoritative
+runtime rollout boundary. There is no stored data or migration: rollback
+consists of draining statements that use these functions, restoring the prior
+routing fence, and only then removing the combined build. A new coordinator
+must not send a 580 plan to a transitional v73/hash-only CN; it waits for the
+capability-complete deployment (or returns a deterministic not-supported error).
+
+### Why the implementation is split across #27988 and #27990
+
+The PRs are intentionally separate review units for two result projections,
+not two competing normalization engines. #27988 owns `STATEMENT_DIGEST` and
+reserves function ID 579 for the bounded MySQL token-byte/SHA-256 projection;
+#27990 owns `STATEMENT_DIGEST_TEXT` with function ID 580 for MatrixOne's
+client-facing rendered projection. They share parser admission,
+provenance/error disclosure, statement-setting snapshots, protobuf fields, and
+the MORPC v73 fence, but the output bytes are deliberately different and are
+tested against separate contracts.
+
+When the source PRs land independently, #27988 should land first so 579 is
+stable, then #27990 rebases onto that exact head and integrates the shared
+contract plus 580. That is a review/ownership order, not an independent runtime
+deployment plan: with one v73 fence, a deployable release must contain both
+implementations and must reach every candidate worker before a coordinator
+sends a 580 plan. A squashed landing is valid only if it preserves both IDs and
+one v73 fence. If the hash PR changes a shared helper, setting field,
+target-version rule, or protocol allocation, the text PR must rebase and rerun
+its design/test matrix; #27990 must not reserve or reinterpret 579. A worker
+that has only 579 is not a valid target for 580; independent rollout would
+require a separately approved capability/version fence. Rollback must drain
+580 plans and restore the prior routing fence before removing the combined
+build. This order and the shared validator/snapshot/fail-closed checks are the
+mechanism that prevents version drift or result inconsistency during rolling
+upgrades and rollback.
 
 ## Resource and failure contract
 

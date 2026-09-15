@@ -57,7 +57,10 @@ func StatementDigest(
 	}
 	parserMode := statementDigestSQLMode(proc)
 	digestMode := statementDigestHashMode(parserMode)
-	maxDigestLength := statementDigestMaxLength(proc)
+	maxDigestLength, err := statementDigestMaxLength(proc)
+	if err != nil {
+		return err
+	}
 	binaryInput := statementDigestTextHasBinaryInput(parameters[0], length, selectList)
 	discloseParseError := statementDigestTextAllLiteralInputs(parameters[0], length, selectList) && !binaryInput
 	if statementDigestTextHasGeometryInput(parameters[0], length, selectList) {
@@ -141,7 +144,10 @@ func StatementDigestText(
 		ctx = proc.Ctx
 	}
 	sqlMode := statementDigestSQLMode(proc)
-	maxDigestLength := statementDigestMaxLength(proc)
+	maxDigestLength, err := statementDigestMaxLength(proc)
+	if err != nil {
+		return err
+	}
 	// MySQL only exposes parser diagnostics for a source SQL literal.  A
 	// constant vector is not sufficient: it can be the result of a folded
 	// expression, a cast, a subquery, or a prepared parameter.  String-source
@@ -261,8 +267,8 @@ func statementDigestTextHasGeometryInput(
 	return false
 }
 
-func statementDigestMaxLength(proc *process.Process) int {
-	return process.ResolveMaxDigestLength(proc)
+func statementDigestMaxLength(proc *process.Process) (int, error) {
+	return process.ResolveMaxDigestLengthWithError(proc)
 }
 
 func statementDigestSQLMode(proc *process.Process) string {

@@ -73,6 +73,36 @@ func TestStatementDigestTextErrors(t *testing.T) {
 	require.Equal(t, uint16(moerr.ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN), moerr.DowncastError(err).MySQLCode())
 }
 
+func TestStatementDigestRejectsMaxDigestLengthResolverFailure(t *testing.T) {
+	for _, functionName := range []string{"statement_digest", "statement_digest_text"} {
+		t.Run(functionName, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return "", nil
+				}
+				return nil, fmt.Errorf("max_digest_length unavailable")
+			})
+			input, err := vector.NewConstBytes(
+				types.T_varchar.ToType(), []byte("SELECT 1"), 1, proc.Mp(),
+			)
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			require.NoError(t, input.SetStringSource(types.StringSourceLiteral))
+			fn, err := GetFunctionByName(proc.Ctx, functionName, []types.Type{types.T_varchar.ToType()})
+			require.NoError(t, err)
+
+			result, err := RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, 1)
+			if result != nil {
+				result.Free(proc.Mp())
+			}
+			require.ErrorContains(t, err, "resolve max_digest_length: max_digest_length unavailable")
+			require.False(t, proc.GetSessionInfo().MaxDigestLengthSet,
+				"a failed setting lookup must not be cached as the default")
+		})
+	}
+}
+
 func TestStatementDigestTextIsRuntimeDependent(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{types.T_varchar.ToType()})
@@ -399,7 +429,9 @@ func TestStatementDigestTextOverloadsAndCharset(t *testing.T) {
 
 func TestStatementDigestSettings(t *testing.T) {
 	require.Equal(t, "", statementDigestSQLMode(nil))
-	require.Equal(t, 1024, statementDigestMaxLength(nil))
+	maxLength, err := statementDigestMaxLength(nil)
+	require.NoError(t, err)
+	require.Equal(t, 1024, maxLength)
 
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().SqlMode = "NO_BACKSLASH_ESCAPES"
@@ -418,25 +450,34 @@ func TestStatementDigestSettings(t *testing.T) {
 		}
 	})
 	require.Equal(t, "ANSI_QUOTES", statementDigestSQLMode(proc))
-	require.Equal(t, 2048, statementDigestMaxLength(proc))
+	maxLength, err = statementDigestMaxLength(proc)
+	require.NoError(t, err)
+	require.Equal(t, 2048, maxLength)
 
 	for _, test := range []struct {
-		name  string
-		value interface{}
-		want  int
+		name    string
+		value   interface{}
+		want    int
+		wantErr bool
 	}{
 		{name: "zero", value: uint64(0), want: 0},
 		{name: "maximum", value: 1 << 20, want: 1 << 20},
-		{name: "negative", value: int64(-1), want: 1024},
-		{name: "too large", value: uint64(1 << 21), want: 1024},
-		{name: "wrong type", value: "1024", want: 1024},
+		{name: "negative", value: int64(-1), wantErr: true},
+		{name: "too large", value: uint64(1 << 21), wantErr: true},
+		{name: "wrong type", value: "1024", wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			p := testutil.NewProcess(t)
 			p.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 				return test.value, nil
 			})
-			require.Equal(t, test.want, statementDigestMaxLength(p))
+			got, err := statementDigestMaxLength(p)
+			if test.wantErr {
+				require.ErrorContains(t, err, "invalid max_digest_length value")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
 		})
 	}
 
@@ -446,7 +487,8 @@ func TestStatementDigestSettings(t *testing.T) {
 		return nil, fmt.Errorf("resolver unavailable")
 	})
 	require.Equal(t, "NO_BACKSLASH_ESCAPES", statementDigestSQLMode(fallback))
-	require.Equal(t, 1024, statementDigestMaxLength(fallback))
+	_, err = statementDigestMaxLength(fallback)
+	require.ErrorContains(t, err, "resolve max_digest_length: resolver unavailable")
 	fallback.GetSessionInfo().SqlMode = process.EmptySqlModeSentinel
 	require.Equal(t, "", statementDigestSQLMode(fallback))
 }
