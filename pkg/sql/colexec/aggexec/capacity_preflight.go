@@ -3114,13 +3114,6 @@ func accountedJSONValueSizeWithProtocol(
 	return jsonAggregateValueSizeWithProtocol(vec, uint64(row), protocolVersion)
 }
 
-func accountedJSONArrayValueSize(
-	vec *vector.Vector,
-	logicalRow int,
-) (int, error) {
-	return accountedJSONArrayValueSizeWithProtocol(vec, logicalRow, 0)
-}
-
 func accountedJSONArrayValueSizeWithProtocol(
 	vec *vector.Vector,
 	logicalRow int,

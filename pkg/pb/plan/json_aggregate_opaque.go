@@ -40,18 +40,15 @@ func RequiresJSONAggregateOpaqueValues(owner any) (bool, error) {
 				return nil
 			}
 			functionID := int32((uint64(fn.Func.Obj) & jsonAggregateFunctionIDMask) >> 32)
-			valueIndex := -1
 			switch functionID {
 			case jsonArrayAggFunctionID:
-				valueIndex = 0
+				if len(fn.Args) > 0 && isJSONAggregateOpaqueType(fn.Args[0]) {
+					required = true
+				}
 			case jsonObjectAggFunctionID:
-				valueIndex = 1
-			default:
-				return nil
-			}
-			if valueIndex >= 0 && valueIndex < len(fn.Args) &&
-				isJSONAggregateOpaqueType(fn.Args[valueIndex]) {
-				required = true
+				if len(fn.Args) > 1 && isJSONAggregateOpaqueType(fn.Args[1]) {
+					required = true
+				}
 			}
 			return nil
 		})

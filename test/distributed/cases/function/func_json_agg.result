@@ -374,7 +374,7 @@ JSON_ARRAYAGG(blob_value) AS blob_array
 FROM t_json_opaque_agg GROUP BY id ORDER BY id;
 ➤ id[4,32,0]  ¦  bit_array[-1,2147483647,0]  ¦  binary_array[-1,2147483647,0]  ¦  varbinary_array[-1,2147483647,0]  ¦  blob_array[-1,2147483647,0]  𝄀
 1  ¦  ["base64:type16:qg=="]  ¦  ["base64:type254:AP9B"]  ¦  ["base64:type15:AP9B"]  ¦  ["base64:type252:AA=="]  𝄀
-2  ¦  [null]  ¦  [null]  ¦  ["base64:type15:"]  ¦  [null]  𝄀
+2  ¦  [null]  ¦  [null]  ¦  ["base64:type15:"]  ¦  [null]
 SELECT
 JSON_OBJECTAGG(CAST(id AS CHAR), bit_value) AS bit_object,
 JSON_OBJECTAGG(CAST(id AS CHAR), binary_value) AS binary_object,
