@@ -2226,8 +2226,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					return nil, err
 				}
 			}
-			if len(rule.exportSetParamPositions) > 0 && isNumericContextFunction(functionName) && !preparedNumericResultPolymorphicFunction(functionName) &&
-				types.T(rewrittenArg.Typ.Id).IsMySQLString() {
+			if len(rule.exportSetParamPositions) > 0 &&
+				(isNumericContextFunction(functionName) || supportsGenericNumericFunctionContext(functionName)) &&
+				!preparedNumericResultPolymorphicFunction(functionName) && types.T(rewrittenArg.Typ.Id).IsMySQLString() {
 				for pos := range preparedNumericValueParamPositions(originalArgs[i]) {
 					if rule.hasExportSetResolvedDomain(int(pos)) && pos >= 0 && int(pos) < len(rule.params) &&
 						rule.params[pos] != nil && types.T(rule.params[pos].Typ.Id).IsMySQLString() {

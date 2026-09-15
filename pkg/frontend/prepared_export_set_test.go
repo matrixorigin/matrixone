@@ -297,6 +297,50 @@ func TestPreparedExportSetFoldedDerivedSourceDomain(t *testing.T) {
 	}
 }
 
+func TestPreparedExportSetNestedFoldedDerivedConsumers(t *testing.T) {
+	for _, consumer := range []string{"round(x,0)", "abs(x)"} {
+		_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 397,
+			`select export_set(`+consumer+`,'Y','N','',4) from (select ? as x) d`)
+		func() {
+			defer stmt.Close()
+			require.False(t, stmt.exportSetBareParams[0])
+			require.Equal(t, types.T_text, stmt.exportSetParamTypes[0].Oid)
+			cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
+			before := cached.String()
+			for step, tc := range []struct {
+				value any
+				typ   types.Type
+				want  string
+				null  bool
+			}{
+				{"2.5", types.T_text.ToType(), "NYNN", false},
+				{"2.5", types.New(types.T_decimal64, 4, 1), "YYNN", false},
+				{2.5, types.T_float64.ToType(), "NYNN", false},
+				{"2.5", types.New(types.T_decimal64, 4, 1), "NYNN", false},
+				{nil, types.T_text.ToType(), "", true},
+			} {
+				values := []any{plan2.ParamValue{Value: tc.value, SourceType: tc.typ, HasSourceType: true, EnableNumericPrefix: true}}
+				stmt.applyExportSetNullRuntimeTypes(values)
+				filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, cached, values)
+				require.NoError(t, err)
+				q := filled.GetQuery()
+				expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+				result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+				require.NoError(t, err)
+				func() {
+					defer free()
+					if tc.null {
+						require.True(t, result.GetNulls().Contains(0), "consumer=%s step=%d", consumer, step)
+					} else {
+						require.Equal(t, tc.want, result.GetStringAt(0), "consumer=%s step=%d expr=%s", consumer, step, expr.String())
+					}
+				}()
+				require.Equal(t, before, cached.String())
+			}
+		}()
+	}
+}
+
 func TestPreparedExportSetMaterializedRealSaturation(t *testing.T) {
 	_, stmt, cw, _ := newPreparedExecuteEnvForSQLWithCompilerContext(t, 395,
 		`select export_set((select max(?) from tpch.nation),'Y','N','',4)`, plan2.NewMockCompilerContext(true))

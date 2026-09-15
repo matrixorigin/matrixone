@@ -3735,26 +3735,50 @@ func preparedExportSetFoldedSourceKinds(p *Plan) (map[int32]bool, map[int32]bool
 			if fn == nil || fn.Func == nil || fn.Func.ObjName != "export_set" || len(fn.Args) == 0 {
 				return nil
 			}
-			pos, ok := preparedResultParamPosition(fn.Args[0], "export_set")
-			if !ok {
-				return nil
+			positions := make(map[int32]bool)
+			collectPreparedExportSetFoldedParams(fn.Args[0], false, positions)
+			for position, producer := range positions {
+				if producer {
+					producers[position] = true
+				}
 			}
-			source := fn.Args[0].GetF().Args[0]
-			if source.GetP() == nil {
-				return nil
-			}
-			position := int32(pos)
-			producer := source.GetPreparedNumeric().GetFallback()
-			if producer {
-				producers[position] = true
-			}
-			if !producer || fn.Args[0].GetPreparedNumeric().GetFallbackSource() {
-				bare[position] = true
+			if pos, ok := preparedResultParamPosition(fn.Args[0], "export_set"); ok {
+				source := fn.Args[0].GetF().Args[0]
+				if source.GetP() != nil {
+					position := int32(pos)
+					producer := positions[position]
+					scalarSource := fn.Args[0].GetPreparedNumeric().GetFallbackSource()
+					if scalarSource {
+						producers[position] = true
+					}
+					if !producer || scalarSource {
+						bare[position] = true
+					}
+				}
 			}
 			return nil
 		})
 	})
 	return bare, producers
+}
+
+func collectPreparedExportSetFoldedParams(expr *Expr, scalarSource bool, positions map[int32]bool) {
+	if expr == nil || isExplicitPreparedLineageCast(expr) {
+		return
+	}
+	scalarSource = scalarSource || expr.GetPreparedNumeric().GetFallbackSource()
+	if param := expr.GetP(); param != nil && param.Pos >= 0 {
+		positions[param.Pos] = positions[param.Pos] || expr.GetPreparedNumeric().GetFallback() && !scalarSource
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			collectPreparedExportSetFoldedParams(arg, scalarSource, positions)
+		}
+	}
+	if sub := expr.GetSub(); sub != nil {
+		collectPreparedExportSetFoldedParams(sub.Child, scalarSource, positions)
+	}
 }
 
 func preparedExportSetContextDomains(p *Plan, positions map[int32]struct{}) map[int32]types.Type {

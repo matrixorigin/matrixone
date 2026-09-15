@@ -57,6 +57,8 @@ func TestPreparedExportSetFoldedProducerIsNotBare(t *testing.T) {
 		{`select export_set(?,'Y','N','',4)`, true, types.T_int64},
 		{`select export_set((select ?),'Y','N','',4)`, true, types.T_text},
 		{`select export_set(x,'Y','N','',4) from (select ? as x) d`, false, types.T_text},
+		{`select export_set(round(x,0),'Y','N','',4) from (select ? as x) d`, false, types.T_text},
+		{`select export_set(abs(x),'Y','N','',4) from (select ? as x) d`, false, types.T_text},
 	} {
 		prepared, err := runOneStmt(NewMockOptimizer(false), t, `prepare s from "`+tc.sql+`"`)
 		require.NoError(t, err)
