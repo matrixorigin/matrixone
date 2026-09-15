@@ -280,6 +280,31 @@ class WorkerContractTest(unittest.TestCase):
             statement.statement_timestamp_utc,
         )
 
+    def test_typed_statement_context_rejects_timestamp_outside_int64(self):
+        typed = {
+            "contract_version": 1,
+            "statement_timestamp_utc": worker.MAX_INT64 + 1,
+            "timezone_kind": "FIXED_OFFSET",
+            "timezone_offset_minutes": 0,
+            "sql_mode": [],
+            "current_user": "alice",
+            "connection_collation": "utf8mb4_bin",
+        }
+        with self.assertRaisesRegex(ValueError, "invalid typed statement timestamp"):
+            worker._typed_statement_context(typed)
+
+        with self.assertRaisesRegex(ValueError, "invalid statement_timestamp_utc"):
+            worker._statement_context(
+                {
+                    "statement_timestamp_utc": str(worker.MIN_INT64 - 1),
+                    "session_timezone_kind": "FIXED_OFFSET",
+                    "session_timezone_offset_minutes": "0",
+                    "sql_mode": "[]",
+                    "current_user": "alice",
+                    "connection_collation": "utf8mb4_bin",
+                }
+            )
+
     def test_typed_routine_semantics_reject_partial_or_definer_contract(self):
         payload = {
             "callsite_id": "python/1",
