@@ -438,3 +438,36 @@ func TestPathIteratorAliasAndErrorTextAreStable(t *testing.T) {
 	_, _, err = iterator.Next()
 	require.ErrorContains(t, err, "requires a path")
 }
+
+func TestPathIteratorNilReceiverAndBoundarySteps(t *testing.T) {
+	var nilIterator *PathIterator
+	nilIterator.Reset(ByteJson{}, nil)
+	nilIterator.Close()
+	value, matched, err := nilIterator.NextContext(nil)
+	require.NoError(t, err)
+	require.False(t, matched)
+	require.Equal(t, ByteJson{}, value)
+
+	var empty PathIterator
+	empty.popFrame()
+
+	root, err := ParseFromString(`{"value":1}`)
+	require.NoError(t, err)
+	path, err := ParseJsonPath(`$`)
+	require.NoError(t, err)
+	iterator := NewPathIterator(root, &path)
+	_, _, err = iterator.NextContext(nil)
+	require.NoError(t, err)
+	iterator.Close()
+
+	// Index zero autowraps both objects and scalars; a non-zero index must not
+	// manufacture a match for either representation.
+	require.Equal(t, []string{`{"value":1}`}, collectIteratorMatches(t, `{"value":1}`, `$[0]`))
+	require.Empty(t, collectIteratorMatches(t, `{"value":1}`, `$[1]`))
+	require.Empty(t, collectIteratorMatches(t, `1`, `$[1]`))
+	require.Equal(t, []string{"1"}, collectIteratorMatches(t, `1`, `$[0 to 0]`))
+	require.Empty(t, collectIteratorMatches(t, `[1,2]`, `$[last-8 to last-7]`))
+	require.Empty(t, collectIteratorMatches(t, `1`, `$**.value`))
+	require.Empty(t, collectIteratorMatches(t, `{}`, `$.*`))
+	require.Empty(t, collectIteratorMatches(t, `1`, `$.value`))
+}
