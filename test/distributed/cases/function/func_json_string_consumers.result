@@ -12,7 +12,7 @@ id    concat_left    concat_right    concat_left_is_null    concat_right_is_null
 1    {"a": 1, "b": 2}    {"a": 1, "b": 2}    0    0    x|{"a": 1, "b": 2}|y    {"a": 1, "b": 2}|A    0
 2    1    1    0    0    x|1|y    1|    0
 3    null    null    0    0    x|null|y    null    0
-4            1    1    x|y        1
+4    null    null    1    1    x|y        1
 select id, elt(2, 'fallback', js, 'other') as elt_selected from src order by id;
 id    elt_selected
 1    {"a": 1, "b": 2}
