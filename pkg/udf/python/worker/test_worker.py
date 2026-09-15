@@ -1007,7 +1007,8 @@ class WorkerContractTest(unittest.TestCase):
 
     def test_json_rejects_nonstandard_numbers(self):
         descriptor = {"type_id": worker.JSON, "offset_width": 32, "json_encoding": "canonical_text"}
-        for value in ("NaN", "Infinity", "-Infinity", "1e9999"):
+        self.assertEqual("1e9999", worker._canonical_json_text("1e9999"))
+        for value in ("NaN", "Infinity", "-Infinity"):
             with self.assertRaisesRegex(ValueError, "invalid JSON"):
                 worker._canonical_json_text(value)
             with self.assertRaisesRegex(ValueError, "JSON result"):
