@@ -22,6 +22,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
@@ -57,6 +58,10 @@ type CagraSearch[B, Q cuvs.VectorType] struct {
 	loadedTs   int64
 	loadedTail int64
 	genValid   bool
+
+	// buildTS is MAX(metadata.build_ts) over the WHOLE metadata table (base generations +
+	// cdc_tail frames), captured at Preload. 0 = unknown. See BuildTS.
+	buildTS int64
 }
 
 func NewCagraSearch[B, Q cuvs.VectorType](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, devices []int) *CagraSearch[B, Q] {
@@ -197,6 +202,9 @@ func (s *CagraSearch[B, Q]) Preload(sqlproc *sqlexec.SqlProcess) (err error) {
 	if err != nil {
 		return err
 	}
+	// LoadMetadata reads BASE rows only; the async freshness gate needs the whole table so the
+	// cdc_tail's fresher build_ts is included.
+	s.buildTS = sqlexec.MaxBuildTS(sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable, catalog.Cagra_TblCol_Metadata_Build_Ts)
 	// Size the CDC overflow from the tail's metadata rows, BEFORE anything is allocated. Without
 	// this a generation whose rows all arrived by CDC measures 0 at Preload, so admission
 	// reserves nothing and Load allocates its VRAM unreserved -- and no post-load pass can undo
@@ -285,6 +293,12 @@ func (s *CagraSearch[B, Q]) Load(sqlproc *sqlexec.SqlProcess) (err error) {
 // deserialized onto the GPU, HostComponentBytes is what stayed in RAM (ids, INCLUDE blobs,
 // quantizer, bitset). The tar's FileSize is deliberately NOT used -- it conflates the two, and
 // charging it to either budget would be wrong for the same reason the load gate refuses it.
+// BuildTS reports the greatest source-table commit this loaded generation reflects
+// (MAX(metadata.build_ts) over base + cdc_tail), for the async-index freshness gate.
+func (s *CagraSearch[B, Q]) BuildTS() int64 {
+	return s.buildTS
+}
+
 func (s *CagraSearch[B, Q]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	for _, idx := range s.Indexes {
 		if idx == nil {

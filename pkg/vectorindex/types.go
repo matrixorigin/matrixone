@@ -370,6 +370,15 @@ type RuntimeConfig struct {
 	IvfPrepareRouteOnly bool
 	// IvfRoutePrepared distinguishes an empty prepared route from an uninitialized cursor.
 	IvfRoutePrepared bool
+
+	// SearchedBuildTS, when non-nil, receives the build_ts of the generation this search ACTUALLY
+	// ran on, captured UNDER the cache entry's read lock (atomic with the search) and observed by
+	// the caller after Search returns. A caller that must bound follow-up work to the SAME
+	// generation -- the fulltext2 json-probe table_changes tail -- MUST use this, never a
+	// post-search GetBuildTS: the entry lock is released when Search returns, so a concurrent
+	// evict+reload can publish a NEWER generation before that later read, binding the follow-up
+	// above what was searched and silently dropping the rows in the gap between.
+	SearchedBuildTS *int64
 }
 
 type IvfIncludeResult struct {
