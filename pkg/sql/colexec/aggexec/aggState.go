@@ -391,18 +391,25 @@ func (ag *aggState) writeStateArg(
 			it := ag.argSkl.NewIter(lk, uk)
 			defer it.Close()
 			if !info.usesOpaqueArgEncoding() {
-				for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
+				for ok, k, stored := it.SeekGE(lk); ok; ok, k, stored = it.Next() {
 					/*
 						checkI := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
 						if checkI != uint16(i) {
 							panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch i: %d != %d", checkI, i))
 						}
 					*/
-					// Fixed-width legacy readers compare the bytes they receive
-					// directly. Re-export the canonical key bytes rather than a
-					// retained raw representative, in particular so -0 and +0
-					// remain one key on a pre-canonical reader.
 					payload := k[kAggArgPrefixSz:]
+					if info.isDistinct && len(stored) != 0 {
+						// Keep the physical representative for value-producing
+						// DISTINCT aggregates such as scaled FLOAT32 SUM. The one
+						// exception is negative zero: an old fixed-width reader
+						// compares wire bytes directly, so emit canonical +0 to
+						// keep -0 and +0 as one key across the rollout.
+						payload = stored
+						if fixedDistinctRepresentativeIsNegativeZero(info, stored) {
+							payload = k[kAggArgPrefixSz:]
+						}
+					}
 					n, err := writer.Write(payload)
 					if err != nil {
 						return err
@@ -748,6 +755,25 @@ func usesCanonicalDistinctWire(info *aggInfo) bool {
 	return info != nil && info.isDistinct && info.saveArg &&
 		info.usesOpaqueArgEncoding() && !info.preserveDistinctInputOrder &&
 		!info.legacyCanonicalDistinctKeyWire
+}
+
+func fixedDistinctRepresentativeIsNegativeZero(
+	info *aggInfo,
+	representative []byte,
+) bool {
+	if info == nil || len(info.argTypes) != 1 {
+		return false
+	}
+	switch info.argTypes[0].Oid {
+	case types.T_float32:
+		return len(representative) == 4 &&
+			math.Float32bits(types.DecodeFixed[float32](representative)) == 1<<31
+	case types.T_float64:
+		return len(representative) == 8 &&
+			math.Float64bits(types.DecodeFixed[float64](representative)) == 1<<63
+	default:
+		return false
+	}
 }
 
 func canonicalizeLegacyDistinctPayload(

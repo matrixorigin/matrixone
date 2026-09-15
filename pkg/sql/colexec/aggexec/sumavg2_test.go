@@ -1062,6 +1062,34 @@ func TestSumDistinctUsesRepresentativePayloadAcrossExecutionShapes(t *testing.T)
 	}
 }
 
+func TestSumDistinctScaledFloat32PreservesRepresentativeAcrossIntermediateRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	typ := types.New(types.T_float32, 10, 2)
+	values := []float32{1.2300001, 1.23}
+	input := buildAvgFixedVector(t, mp, typ, values)
+	defer input.Free(mp)
+
+	source := makeSumDistinctExec(t, mp, typ)
+	require.NoError(t, source.GroupGrow(1))
+	require.NoError(t, source.BatchFill(0, []uint64{1, 1}, []*vector.Vector{input}))
+	SetCanonicalDistinctKeyWire(source, false)
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResultOfChunk(0, &encoded))
+	source.Free()
+
+	restored := makeSumDistinctExec(t, mp, typ)
+	defer restored.Free()
+	SetCanonicalDistinctKeyWire(restored, false)
+	require.NoError(t, restored.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+	result, err := restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, float64(values[0]),
+		vector.MustFixedColNoTypeCheck[float64](result[0])[0])
+	result[0].Free(mp)
+}
+
 func TestAvg(t *testing.T) {
 	testSumAvg(t, makeAvgExec, newExpectedSumAvg(6.1666666666, 5.88888888, 6.4444444444, 126000))
 }
