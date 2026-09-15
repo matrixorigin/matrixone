@@ -229,6 +229,9 @@ type container struct {
 	mtyp        int32
 	keyWidth    int32
 	keyNullable bool
+	// legacyH8CharSemantics keeps pre-v75 CHAR bytes intact when this
+	// container must merge a short variable-length H8 partial.
+	legacyH8CharSemantics bool
 	// groupingAware selects the collision-free HStr key grammar whenever a
 	// grouping-set rollup sentinel can appear, including NOT NULL input keys.
 	groupingAware bool

@@ -153,6 +153,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 }
 
 func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
+	group.ctr.legacyH8CharSemantics = false
 	if len(group.ctr.groupByEvaluate.Executor) == len(group.GroupBy) {
 		group.ctr.groupByEvaluate.ResetForNextQuery()
 	} else {
@@ -195,6 +196,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 
 		legacyShortVariableKey := variableLengthKey && group.ctr.keyWidth <= 8 &&
 			!groupHashStringWireEnabled(proc)
+		group.ctr.legacyH8CharSemantics = legacyShortVariableKey
 		if group.ctr.keyWidth == 0 {
 			group.ctr.mtyp = H0
 		} else if (compactHashKey || legacyShortVariableKey) && group.ctr.keyWidth <= 8 {
@@ -889,6 +891,16 @@ func (ctr *container) buildHashTable(ctx context.Context, preAllocated uint64) e
 		ctr.hashIterator,
 	); err != nil {
 		return err
+	}
+	if ctr.mtyp == H8 && ctr.legacyH8CharSemantics {
+		legacy, ok := ctr.hr.Hash.(*hashmap.IntHashMap)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx(
+				"legacy H8 CHAR semantics require IntHashMap")
+		}
+		if err := legacy.SetLegacyCharPadding(true); err != nil {
+			return err
+		}
 	}
 
 	// pre-allocate groups for each agg.
