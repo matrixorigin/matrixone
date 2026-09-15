@@ -1003,7 +1003,7 @@ func (l *store) tryEnableViewMetadataAdmission(
 		return false, nil
 	}
 	if admission.Enabled && !admission.Pending &&
-		admission.RequiredProtocolVersion >= uint64(defines.MORPCVersion72) {
+		admission.RequiredProtocolVersion >= uint64(defines.MORPCLatestVersion) {
 		return true, nil
 	}
 	if state == nil {
@@ -1043,8 +1043,8 @@ func (l *store) tryEnableViewMetadataAdmission(
 		cfg := l.cfg.GetHAKeeperConfig()
 		cfg.Fill()
 		requiredProtocol := admission.RequiredProtocolVersion
-		if requiredProtocol < uint64(defines.MORPCVersion72) {
-			requiredProtocol = uint64(defines.MORPCVersion72)
+		if requiredProtocol < uint64(defines.MORPCLatestVersion) {
+			requiredProtocol = uint64(defines.MORPCLatestVersion)
 		}
 		hasLiveCN := false
 		for _, info := range state.CNState.Stores {
@@ -1062,8 +1062,8 @@ func (l *store) tryEnableViewMetadataAdmission(
 	cmd := hakeeper.GetEnableViewMetadataAdmissionCmd()
 	if !admission.Preparing && !admission.Enabled {
 		requiredProtocol := admission.RequiredProtocolVersion
-		if requiredProtocol < uint64(defines.MORPCVersion72) {
-			requiredProtocol = uint64(defines.MORPCVersion72)
+		if requiredProtocol < uint64(defines.MORPCLatestVersion) {
+			requiredProtocol = uint64(defines.MORPCLatestVersion)
 		}
 		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
 			l.cfg.GetHAKeeperConfig(), requiredProtocol)
@@ -1074,12 +1074,12 @@ func (l *store) tryEnableViewMetadataAdmission(
 		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
 			l.cfg.GetHAKeeperConfig())
 	} else if admission.Enabled {
-		if admission.RequiredProtocolVersion < uint64(defines.MORPCVersion72) {
+		if admission.RequiredProtocolVersion < uint64(defines.MORPCLatestVersion) {
 			if !l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true) {
 				return false, nil
 			}
 			cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
-				l.cfg.GetHAKeeperConfig(), uint64(defines.MORPCVersion72))
+				l.cfg.GetHAKeeperConfig(), uint64(defines.MORPCLatestVersion))
 		} else {
 			cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
 				l.cfg.GetHAKeeperConfig())

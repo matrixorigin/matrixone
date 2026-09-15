@@ -179,7 +179,7 @@ func TestPersistedExpressionProtocolActivationStartsBarrier(t *testing.T) {
 		ViewMetadataAdmissionSupported:     true,
 		ViewMetadataAdmissionGeneration:    10,
 		ViewMetadataIngressReady:           true,
-		PersistedExpressionProtocolVersion: uint64(defines.MORPCVersion72),
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
 	})
 	updateViewMetadataProxy(t, rsm, pb.ProxyHeartbeat{
 		UUID:                            "proxy-1",
@@ -189,13 +189,13 @@ func TestPersistedExpressionProtocolActivationStartsBarrier(t *testing.T) {
 	cfg := Config{TickPerSecond: 1, CNStoreTimeout: 10 * time.Second, ProxyStoreTimeout: 10 * time.Second}
 	result, err := rsm.Update(sm.Entry{
 		Index: rsm.state.Index + 1,
-		Cmd:   GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(cfg, uint64(defines.MORPCVersion72)),
+		Cmd:   GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(cfg, uint64(defines.MORPCLatestVersion)),
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), result.Value)
 	require.True(t, rsm.state.ViewMetadataAdmissionPreparing)
 	require.Equal(t, uint64(1), rsm.state.ViewMetadataAdmissionEpoch)
-	require.Equal(t, uint64(defines.MORPCVersion72), rsm.state.PersistedExpressionRequiredProtocolVersion)
+	require.Equal(t, uint64(defines.MORPCLatestVersion), rsm.state.PersistedExpressionRequiredProtocolVersion)
 
 	updateViewMetadataLogWithProtocol(t, rsm, "log-1", true)
 	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
@@ -205,7 +205,7 @@ func TestPersistedExpressionProtocolActivationStartsBarrier(t *testing.T) {
 		ViewMetadataObservedEpoch:          1,
 		ViewMetadataCatalogFencedEpoch:     1,
 		ViewMetadataIngressReady:           true,
-		PersistedExpressionProtocolVersion: uint64(defines.MORPCVersion72),
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
 	})
 	updateViewMetadataProxy(t, rsm, pb.ProxyHeartbeat{
 		UUID:                            "proxy-1",
@@ -227,7 +227,7 @@ func TestViewMetadataAdmissionFloorRejectsLegacyCNAndLogReplica(t *testing.T) {
 	rsm.state.ViewMetadataAdmissionEnabled = true
 	rsm.state.ViewMetadataAdmissionEpoch = 4
 	rsm.state.ViewMetadataCatalogFencedEpoch = 4
-	rsm.state.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion72)
+	rsm.state.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCLatestVersion)
 	rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
 		Replicas: map[uint64]string{1: "log-1"},
 	}
@@ -267,13 +267,13 @@ func TestViewMetadataAdmissionDeAdmitsLowerGenerationAfterFloor(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.ViewMetadataAdmissionEnabled = true
 	rsm.state.ViewMetadataAdmissionEpoch = 4
-	rsm.state.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion72)
+	rsm.state.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCLatestVersion)
 	rsm.state.CNState.Stores["cn-1"] = pb.CNStoreInfo{
 		ViewMetadataAdmissionSupported:     true,
 		ViewMetadataAdmissionGeneration:    9,
 		ViewMetadataAdmissionReady:         true,
 		ViewMetadataIngressReady:           true,
-		PersistedExpressionProtocolVersion: uint64(defines.MORPCVersion72),
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
 	}
 	accepted := updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
 		UUID:                            "cn-1",
@@ -291,7 +291,7 @@ func TestViewMetadataAdmissionDeAdmitsLowerGenerationAfterFloor(t *testing.T) {
 		ViewMetadataObservedEpoch:          5,
 		ViewMetadataCatalogFencedEpoch:     5,
 		ViewMetadataIngressReady:           true,
-		PersistedExpressionProtocolVersion: uint64(defines.MORPCVersion72),
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
 	})
 	require.Equal(t, uint64(5), rsm.state.ViewMetadataAdmissionEpoch)
 	require.True(t, rsm.state.CNState.Stores["cn-1"].ViewMetadataAdmissionReady)
@@ -319,7 +319,7 @@ func TestViewMetadataAdmissionRaisesFloorOnlyAfterLiveCNUpgrade(t *testing.T) {
 	cfg := Config{TickPerSecond: 1, CNStoreTimeout: 10 * time.Second, ProxyStoreTimeout: 10 * time.Second}
 	result, err := rsm.Update(sm.Entry{
 		Index: rsm.state.Index + 1,
-		Cmd:   GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(cfg, uint64(defines.MORPCVersion72)),
+		Cmd:   GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(cfg, uint64(defines.MORPCLatestVersion)),
 	})
 	require.NoError(t, err)
 	require.Zero(t, result.Value)
@@ -332,15 +332,15 @@ func TestViewMetadataAdmissionRaisesFloorOnlyAfterLiveCNUpgrade(t *testing.T) {
 		ViewMetadataObservedEpoch:          2,
 		ViewMetadataCatalogFencedEpoch:     2,
 		ViewMetadataIngressReady:           true,
-		PersistedExpressionProtocolVersion: uint64(defines.MORPCVersion72),
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
 	})
 	result, err = rsm.Update(sm.Entry{
 		Index: rsm.state.Index + 1,
-		Cmd:   GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(cfg, uint64(defines.MORPCVersion72)),
+		Cmd:   GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(cfg, uint64(defines.MORPCLatestVersion)),
 	})
 	require.NoError(t, err)
 	require.Zero(t, result.Value)
-	require.Equal(t, uint64(defines.MORPCVersion72), rsm.state.PersistedExpressionRequiredProtocolVersion)
+	require.Equal(t, uint64(defines.MORPCLatestVersion), rsm.state.PersistedExpressionRequiredProtocolVersion)
 	require.Equal(t, uint64(3), rsm.state.ViewMetadataAdmissionEpoch)
 	require.Zero(t, rsm.state.ViewMetadataCatalogFencedEpoch)
 	require.True(t, rsm.state.ViewMetadataRevalidationRequired,
@@ -353,7 +353,7 @@ func TestViewMetadataAdmissionRaisesFloorOnlyAfterLiveCNUpgrade(t *testing.T) {
 		ViewMetadataObservedEpoch:          3,
 		ViewMetadataCatalogFencedEpoch:     3,
 		ViewMetadataIngressReady:           true,
-		PersistedExpressionProtocolVersion: uint64(defines.MORPCVersion72),
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
 	})
 	result, err = rsm.Update(sm.Entry{
 		Index: rsm.state.Index + 1,
@@ -949,7 +949,7 @@ func TestViewMetadataAdmissionSnapshotRoundTripAndOldSnapshotFailClosed(t *testi
 
 func TestHAKeeperSnapshotEnvelopeRejectsInvalidPayloadWithoutMutation(t *testing.T) {
 	source := NewStateMachine(0, 1).(*stateMachine)
-	source.state.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion72)
+	source.state.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCLatestVersion)
 	buf := bytes.NewBuffer(nil)
 	require.NoError(t, source.SaveSnapshot(buf, nil, nil))
 	snapshotBytes := append([]byte(nil), buf.Bytes()...)
