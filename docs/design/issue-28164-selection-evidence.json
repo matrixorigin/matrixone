@@ -23,7 +23,7 @@
   },
   "mo_reference": {
     "base": "c54e2fc5e9057c3bfcc5a1ee1a2dfd75b3feb1d7",
-    "candidate_and_tuple_commit": "86c030d6b2 + working tree 2026-09-15",
+    "candidate_and_tuple_commit": "72a659dff2",
     "status": "candidate implementation, admission closed, not production-activated"
   },
   "corpus_count": 244,
