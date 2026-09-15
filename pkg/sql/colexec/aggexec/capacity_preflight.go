@@ -604,20 +604,37 @@ func distinctArgumentRowHash(
 	group uint64,
 	vectors []*vector.Vector,
 	logicalRow int,
+	scratch []byte,
 ) (uint64, error) {
 	// Start from the target group because DISTINCT is scoped to one aggregate
 	// group. Hash combination preserves column boundaries for multi-argument
 	// DISTINCT; full row comparison below remains the collision oracle.
 	hash := group * 0x9e3779b97f4a7c15
-	var zero [8]byte
 	for _, vec := range vectors {
 		row, err := preflightPhysicalRow(vec, logicalRow)
 		if err != nil {
 			return 0, err
 		}
-		value := vec.GetRawBytesAt(row)
-		if size, ok := canonicalDistinctArgumentSize(vec, row); ok {
-			value = zero[:size]
+		typ := *vec.GetType()
+		var value []byte
+		switch typ.Oid {
+		case types.T_float32:
+			values := vector.MustFixedColNoTypeCheck[float32](vec)
+			encoded := keycodec.NewFloat32Codec(typ.Scale).CanonicalBytes(values[row])
+			value = encoded[:]
+		case types.T_float64:
+			values := vector.MustFixedColNoTypeCheck[float64](vec)
+			encoded := keycodec.CanonicalFloat64Bytes(values[row])
+			value = encoded[:]
+		case types.T_char:
+			value = keycodec.CanonicalCharValue(vec.GetRawBytesAt(row))
+		case types.T_json, types.T_array_float32, types.T_array_float64,
+			types.T_array_bf16, types.T_array_float16:
+			scratch = keycodec.AppendCanonicalValue(
+				scratch[:0], typ, vec.GetRawBytesAt(row))
+			value = scratch
+		default:
+			value = vec.GetRawBytesAt(row)
 		}
 		hash = keycodec.HashCombine(hash, xxhash.Sum64(value))
 	}
@@ -629,11 +646,17 @@ func (batch *distinctArgumentBatch) seenOrInsert(
 	vectors []*vector.Vector,
 	offset int,
 	row int,
+	scratchArgs ...[]byte,
 ) (bool, error) {
 	if batch == nil || row < 0 || row >= len(groups) || len(groups) > hashmap.UnitLimit {
 		return false, mpool.ErrAllocationAccountInvalid
 	}
-	hash, err := distinctArgumentRowHash(groups[row], vectors, offset+row)
+	var scratch []byte
+	if len(scratchArgs) > 0 {
+		scratch = scratchArgs[0]
+	}
+	hash, err := distinctArgumentRowHash(
+		groups[row], vectors, offset+row, scratch)
 	if err != nil {
 		return false, err
 	}
@@ -658,6 +681,39 @@ func (batch *distinctArgumentBatch) seenOrInsert(
 			return true, nil
 		}
 	}
+}
+
+func (ae *aggExec) distinctArgumentHashScratch(
+	group uint64,
+	vectors []*vector.Vector,
+	logicalRow int,
+) ([]byte, error) {
+	_, _, state, err := ae.validatePreflightTarget(group)
+	if err != nil {
+		return nil, err
+	}
+	if state == nil {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
+	maxSize := 0
+	for _, vec := range vectors {
+		row, err := preflightPhysicalRow(vec, logicalRow)
+		if err != nil {
+			return nil, err
+		}
+		if vec.IsNull(uint64(row)) || !canonicalValueNeedsScratch(*vec.GetType()) {
+			continue
+		}
+		size := keycodec.CanonicalValueSize(
+			*vec.GetType(), vec.GetRawBytesAt(row))
+		if size > maxSize {
+			maxSize = size
+		}
+	}
+	if maxSize == 0 {
+		return nil, nil
+	}
+	return state.resizeArgScratch(ae.mp, maxSize)
 }
 
 func (ag *aggState) preparePreflightArgumentKey(
@@ -693,7 +749,9 @@ func (ag *aggState) preparePreflightArgumentKey(
 		}
 		raw := vectors[0].GetRawBytesAt(row)
 		if distinct {
-			copyCanonicalDistinctArgument(key[off:], vectors[0], row)
+			if copied := copyCanonicalDistinctArgument(key[off:], vectors[0], row); copied != payload {
+				return nil, mpool.ErrAllocationAccountInvariant
+			}
 		} else {
 			copy(key[off:], raw)
 		}
@@ -704,14 +762,20 @@ func (ag *aggState) preparePreflightArgumentKey(
 				return nil, err
 			}
 			raw := vec.GetRawBytesAt(row)
-			binary.BigEndian.PutUint32(key[off:], uint32(len(raw)))
+			valueSize := len(raw)
+			if distinct {
+				valueSize = canonicalDistinctArgumentKeySize(vec, row)
+			}
+			binary.BigEndian.PutUint32(key[off:], uint32(valueSize))
 			off += 4
 			if distinct {
-				copyCanonicalDistinctArgument(key[off:], vec, row)
+				if copied := copyCanonicalDistinctArgument(key[off:], vec, row); copied != valueSize {
+					return nil, mpool.ErrAllocationAccountInvariant
+				}
 			} else {
 				copy(key[off:], raw)
 			}
-			off += len(raw)
+			off += valueSize
 		}
 	}
 	return key, nil
@@ -920,7 +984,19 @@ func (ae *aggExec) addDistinctArgumentCapacity(
 	if state.argSkl.Contains(key) {
 		return nil
 	}
-	return addArgumentChunkCapacity(needs, needCount, x, key)
+	valueSize := 0
+	if len(vectors) == 1 && vectors[0].GetType().Oid == types.T_float32 &&
+		vectors[0].GetType().Scale > 0 {
+		row, err := preflightPhysicalRow(vectors[0], logicalRow)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(key[kAggArgPrefixSz:], vectors[0].GetRawBytesAt(row)) {
+			valueSize = len(vectors[0].GetRawBytesAt(row))
+		}
+	}
+	return addArgumentChunkCapacityWithValue(
+		needs, needCount, x, key, valueSize)
 }
 
 func (ae *aggExec) preflightDistinctBatchFillArgs(
@@ -982,10 +1058,14 @@ func (ae *aggExec) preflightDistinctBatchFillArgsOnce(
 					break
 				}
 				raw := vec.GetRawBytesAt(row)
-				if len(raw) > math.MaxInt-payload-4 {
+				valueSize := len(raw)
+				if len(vectors) > 1 {
+					valueSize = canonicalDistinctArgumentKeySize(vec, row)
+				}
+				if valueSize > math.MaxInt-payload-4 {
 					return mpool.ErrAllocationAllocatorLimit
 				}
-				payload += 4 + len(raw)
+				payload += 4 + valueSize
 			}
 			if payload < 0 {
 				continue
@@ -1006,7 +1086,7 @@ func (ae *aggExec) preflightDistinctBatchFillArgsOnce(
 		if len(vectors) == 1 {
 			// Duplicate rows need neither a retained key nor its payload size.
 			// Delay the raw-value access until exact admission accepts this row.
-			payload = len(vectors[0].GetRawBytesAt(physicalRow))
+			payload = canonicalDistinctArgumentKeySize(vectors[0], physicalRow)
 		}
 		if payload > math.MaxInt-kAggArgPrefixSz {
 			return mpool.ErrAllocationAllocatorLimit
@@ -1127,8 +1207,14 @@ func (ae *aggExec) preflightDistinctBatchFillArgsHashed(
 	}
 	var hashed distinctArgumentBatch
 	for i := uint16(0); i < linear.count; i++ {
+		row := int(linear.rows[i])
+		scratch, err := ae.distinctArgumentHashScratch(
+			groups[row], vectors, offset+row)
+		if err != nil {
+			return err
+		}
 		duplicate, err := hashed.seenOrInsert(
-			groups, vectors, offset, int(linear.rows[i]))
+			groups, vectors, offset, row, scratch)
 		if err != nil {
 			return err
 		}
@@ -1176,7 +1262,13 @@ func (ae *aggExec) preflightDistinctBatchFillArgsHashed(
 				continue
 			}
 		}
-		duplicate, err := hashed.seenOrInsert(groups, vectors, offset, i)
+		scratch, err := ae.distinctArgumentHashScratch(
+			group, vectors, logicalRow)
+		if err != nil {
+			return err
+		}
+		duplicate, err := hashed.seenOrInsert(
+			groups, vectors, offset, i, scratch)
 		if err != nil {
 			return err
 		}
@@ -1321,7 +1413,7 @@ func (ae *aggExec) preflightBatchMergeArgs(
 				targetIter = state.argSkl.NewIter(nil, upper[:])
 			}
 		}
-		err = sourceState.iter(otherY, func(key []byte) error {
+		err = sourceState.iterWithValue(otherY, func(key, stored []byte) error {
 			if len(key) < kAggArgPrefixSz {
 				return mpool.ErrAllocationAccountInvariant
 			}
@@ -1402,6 +1494,9 @@ func (ae *aggExec) preflightBatchMergeArgs(
 				)
 			}
 			valueSize := 0
+			if ae.isDistinct && len(stored) != 0 {
+				valueSize = len(stored)
+			}
 			if ae.preserveDistinctInputOrder {
 				valueSize = ae.distinctInputOrderValueSize()
 			}

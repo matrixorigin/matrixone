@@ -438,10 +438,14 @@ func fillVarlenaKey(itr *intHashMapIterator, vec *vector.Vector, start int, n in
 	keys := itr.keys
 	keyOffs := itr.keyOffs
 	vcol, _ := vector.MustVarlenaRawData(vec)
+	isChar := vec.GetType().Oid == types.T_char
 	if !vec.GetNulls().Any() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
 				v := vcol[i+start].ByteSlice()
+				if isChar {
+					v = keycodec.CanonicalCharValue(v)
+				}
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
 				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[keyOffs[i]+1:], v)
 				keyOffs[i] += uint32(len(v) + 1)
@@ -449,6 +453,9 @@ func fillVarlenaKey(itr *intHashMapIterator, vec *vector.Vector, start int, n in
 		} else {
 			for i := 0; i < n; i++ {
 				v := vcol[i+start].ByteSlice()
+				if isChar {
+					v = keycodec.CanonicalCharValue(v)
+				}
 				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[keyOffs[i]:], v)
 				keyOffs[i] += uint32(len(v))
 			}
@@ -462,6 +469,9 @@ func fillVarlenaKey(itr *intHashMapIterator, vec *vector.Vector, start int, n in
 					keyOffs[i]++
 				} else {
 					v := vcol[i+start].ByteSlice()
+					if isChar {
+						v = keycodec.CanonicalCharValue(v)
+					}
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
 					copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[keyOffs[i]+1:], v)
 					keyOffs[i] += uint32(len(v) + 1)
@@ -474,6 +484,9 @@ func fillVarlenaKey(itr *intHashMapIterator, vec *vector.Vector, start int, n in
 					continue
 				}
 				v := vcol[i+start].ByteSlice()
+				if isChar {
+					v = keycodec.CanonicalCharValue(v)
+				}
 				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[keyOffs[i]:], v)
 				keyOffs[i] += uint32(len(v))
 			}
@@ -484,6 +497,7 @@ func fillVarlenaKey(itr *intHashMapIterator, vec *vector.Vector, start int, n in
 func fillStrKey(itr *intHashMapIterator, vec *vector.Vector, start int, n int) {
 	keys := itr.keys
 	keyOffs := itr.keyOffs
+	isChar := vec.GetType().Oid == types.T_char
 	if vec.IsConstNull() {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
@@ -499,6 +513,9 @@ func fillStrKey(itr *intHashMapIterator, vec *vector.Vector, start int, n int) {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
 				v := vec.GetBytesAt(i + start)
+				if isChar {
+					v = keycodec.CanonicalCharValue(v)
+				}
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
 				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[keyOffs[i]+1:], v)
 				keyOffs[i] += uint32(len(v) + 1)
@@ -506,6 +523,9 @@ func fillStrKey(itr *intHashMapIterator, vec *vector.Vector, start int, n int) {
 		} else {
 			for i := 0; i < n; i++ {
 				v := vec.GetBytesAt(i + start)
+				if isChar {
+					v = keycodec.CanonicalCharValue(v)
+				}
 				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[keyOffs[i]:], v)
 				keyOffs[i] += uint32(len(v))
 			}
@@ -519,6 +539,9 @@ func fillStrKey(itr *intHashMapIterator, vec *vector.Vector, start int, n int) {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
 					keyOffs[i]++
 				} else {
+					if isChar {
+						v = keycodec.CanonicalCharValue(v)
+					}
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
 					copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[keyOffs[i]+1:], v)
 					keyOffs[i] += uint32(len(v) + 1)
@@ -530,6 +553,9 @@ func fillStrKey(itr *intHashMapIterator, vec *vector.Vector, start int, n int) {
 				if nsp.Contains(uint64(i + start)) {
 					itr.zValues[i] = 0
 					continue
+				}
+				if isChar {
+					v = keycodec.CanonicalCharValue(v)
 				}
 				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[keyOffs[i]:], v)
 				keyOffs[i] += uint32(len(v))

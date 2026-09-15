@@ -688,8 +688,8 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 					seen := int64(0)
 					var origin A
 					hasExactOrigin := hasExactVarianceOrigin(exec.aggInfo.argTypes[0].Oid)
-					err := exec.state[i].iter(uint16(j), func(k []byte) error {
-						ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+					err := exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+						ptr := util.UnsafeFromBytes[A](aggPayloadFromKeyValue(&exec.aggInfo, k, stored))
 						var fv float64
 						if hasExactOrigin {
 							if seen == 0 {
@@ -807,8 +807,8 @@ func (exec *varStdDevExec[T, A]) flushLegacy() (_ []*vector.Vector, retErr error
 			}
 			sum, sumsq := 0.0, 0.0
 			if exec.IsDistinct() {
-				err := exec.state[i].iter(uint16(j), func(k []byte) error {
-					value := exec.a2f(*util.UnsafeFromBytes[A](k[kAggArgPrefixSz:]), exec.aggInfo.argTypes[0].Scale)
+				err := exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+					value := exec.a2f(*util.UnsafeFromBytes[A](aggPayloadFromKeyValue(&exec.aggInfo, k, stored)), exec.aggInfo.argTypes[0].Scale)
 					sum += value
 					sumsq += value * value
 					return nil

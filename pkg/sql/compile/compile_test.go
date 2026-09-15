@@ -2287,6 +2287,11 @@ func TestCompileShuffleGroupGatesHLLByProtocolVersion(t *testing.T) {
 	require.Len(t, local, 1)
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+	require.False(t, c.supportsRemoteHLL(),
+		"v73 peers must not receive the v4 typed-key HLL state")
+	require.False(t, c.canCompileShuffleGroup(aggNode))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
 	require.True(t, c.supportsRemoteHLL())
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }

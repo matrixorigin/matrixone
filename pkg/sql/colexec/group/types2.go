@@ -269,6 +269,7 @@ type container struct {
 	legacyDecimalSumResult      bool
 	legacyApproxPercentileState bool
 	legacyHLLState              bool
+	floatZeroHLLState           bool
 	timeZone                    *time.Location
 
 	// spill, agglist to load spilled data.
