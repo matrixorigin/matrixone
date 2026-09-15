@@ -91,10 +91,19 @@ func WithBackendBatchSendSize(size int) BackendOption {
 	}
 }
 
-// WithBackendConnectTimeout set the timeout for connect to remote. Default 5s.
+// WithBackendConnectTimeout sets the total timeout for connecting to a remote,
+// including retry waits. Default 5s.
 func WithBackendConnectTimeout(timeout time.Duration) BackendOption {
 	return func(rb *remoteBackend) {
 		rb.options.connectTimeout = timeout
+	}
+}
+
+// WithBackendConnectAttemptTimeout sets the timeout for one TCP connect
+// attempt. By default, one attempt may consume the complete connect timeout.
+func WithBackendConnectAttemptTimeout(timeout time.Duration) BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.connectAttemptTimeout = timeout
 	}
 }
 
@@ -196,19 +205,20 @@ type remoteBackend struct {
 	livenessEpoch   time.Time
 
 	options struct {
-		hasPayloadResponse  bool
-		goettyOptions       []goetty.Option
-		connectTimeout      time.Duration
-		bufferSize          int
-		busySize            int
-		batchSendSize       int
-		streamBufferSize    int
-		disconnectAfterRead int
-		filter              func(msg Message, backendAddr string) bool
-		readTimeout         time.Duration
-		livenessProbe       func(context.Context, string) error
-		freeResponse        func(Message)
-		releaseRequest      func(Message)
+		hasPayloadResponse    bool
+		goettyOptions         []goetty.Option
+		connectTimeout        time.Duration
+		connectAttemptTimeout time.Duration
+		bufferSize            int
+		busySize              int
+		batchSendSize         int
+		streamBufferSize      int
+		disconnectAfterRead   int
+		filter                func(msg Message, backendAddr string) bool
+		readTimeout           time.Duration
+		livenessProbe         func(context.Context, string) error
+		freeResponse          func(Message)
+		releaseRequest        func(Message)
 	}
 
 	stateMu struct {
@@ -340,6 +350,10 @@ func (rb *remoteBackend) adjust() {
 	}
 	if rb.options.connectTimeout == 0 {
 		rb.options.connectTimeout = time.Second * 5
+	}
+	if rb.options.connectAttemptTimeout <= 0 ||
+		rb.options.connectAttemptTimeout > rb.options.connectTimeout {
+		rb.options.connectAttemptTimeout = rb.options.connectTimeout
 	}
 	if rb.options.streamBufferSize == 0 {
 		rb.options.streamBufferSize = 16
@@ -1185,6 +1199,7 @@ func (rb *remoteBackend) running() bool {
 
 func (rb *remoteBackend) resetConn() error {
 	start := time.Now()
+	deadline := start.Add(rb.options.connectTimeout)
 	defer func() {
 		rb.metrics.connectDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
@@ -1200,11 +1215,21 @@ func (rb *remoteBackend) resetConn() error {
 			return backendClosed
 		default:
 		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			err := moerr.NewRPCTimeoutNoCtx()
+			rb.metrics.observeBackendError(rb.remote, "connect", err)
+			return err
+		}
 
 		rb.logger.Debug("start connect to remote", rb.logFields()...)
 		rb.closeConn(false)
 		rb.metrics.connectCounter.Inc()
-		err := rb.conn.Connect(rb.remote, rb.options.connectTimeout)
+		attemptTimeout := rb.options.connectAttemptTimeout
+		if attemptTimeout > remaining {
+			attemptTimeout = remaining
+		}
+		err := rb.conn.Connect(rb.remote, attemptTimeout)
 		if err == nil {
 			rb.logger.Debug("connect to remote succeed", rb.logFields()...)
 			// Transport-progress evidence belongs to one physical connection.
@@ -1233,18 +1258,29 @@ func (rb *remoteBackend) resetConn() error {
 		}
 		duration := time.Duration(0)
 		for {
-			time.Sleep(sleep)
-			duration += sleep
-			if time.Since(start) > rb.options.connectTimeout {
+			remaining = time.Until(deadline)
+			if remaining <= 0 {
 				err := moerr.NewRPCTimeoutNoCtx()
 				rb.metrics.observeBackendError(rb.remote, "connect", err)
 				return err
 			}
-			select {
-			case <-rb.ctx.Done():
-				return backendClosed
-			default:
+			delay := sleep
+			if delay > remaining {
+				delay = remaining
 			}
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-rb.ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return backendClosed
+			}
+			duration += delay
 			if duration >= wait {
 				break
 			}
