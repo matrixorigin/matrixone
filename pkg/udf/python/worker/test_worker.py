@@ -655,15 +655,32 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid worker lease epoch"):
             worker.RoutineFlightServer("grpc://127.0.0.1:0", lease_epoch=0)
 
-    @unittest.skipUnless(os.name == "posix", "Flight shutdown cancellation test")
-    def test_flight_shutdown_cancels_an_active_exchange(self):
+    @unittest.skipUnless(os.name == "posix", "Flight shutdown reader lifetime test")
+    def test_flight_shutdown_does_not_race_native_input_reader(self):
+        """A native Flight reader must finish before its RPC is destroyed.
+
+        FlightServerBase.shutdown waits for active callbacks; it does not
+        cancel a client that still owns the input direction. Close that
+        direction first, then shut down the server and verify the exchange
+        has no leftover native reader or ledger owner. The real client-side
+        cancellation path is covered by the Gateway integration test.
+        """
         entered = threading.Event()
+        reader_closed = threading.Event()
+        adapters = []
         original_reader = worker._ExchangeInputReader
 
         class NotifyingReader(original_reader):
             def __init__(self, reader):
                 entered.set()
                 super().__init__(reader)
+                adapters.append(self)
+
+            def close(self):
+                try:
+                    return super().close()
+                finally:
+                    reader_closed.set()
 
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
         client = flight.FlightClient(("127.0.0.1", server.port))
@@ -716,6 +733,26 @@ class WorkerContractTest(unittest.TestCase):
                     options=flight.FlightCallOptions(timeout=5),
                 )
                 self.assertTrue(entered.wait(2), "exchange did not reach its input reader")
+                self.assertEqual(1, len(adapters))
+                self.assertIsNone(
+                    adapters[0]._thread,
+                    "native Flight reader must stay on the RPC callback thread",
+                )
+                # FlightServerBase.shutdown does not cancel an active client
+                # RPC. Close the client channel first; this is the same
+                # transport cancellation used by Gateway.Close and lets the
+                # native reader finish on its owning callback thread.
+                try:
+                    writer.close()
+                except Exception:
+                    # EndInput is intentionally omitted here; the worker may
+                    # report the protocol error while closing the stream.
+                    pass
+                client.close()
+                self.assertTrue(
+                    reader_closed.wait(2),
+                    "client cancellation did not finish the native reader",
+                )
 
                 def shutdown():
                     try:
@@ -2385,7 +2422,10 @@ request = {{
         "import json, os, pathlib, subprocess, sys, time\n"
         "def f(ctx, x):\n"
         f"    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
-        f"    pathlib.Path({str(marker)!r}).write_text(json.dumps(dict(handler_pid=os.getpid(), child_pid=child.pid, pgid=os.getpgrp())))\n"
+        f"    marker = pathlib.Path({str(marker)!r})\n"
+        "    temporary = marker.with_suffix('.tmp')\n"
+        "    temporary.write_text(json.dumps(dict(handler_pid=os.getpid(), child_pid=child.pid, pgid=os.getpgrp())))\n"
+        "    os.replace(temporary, marker)\n"
         "    time.sleep(60)\n"
         "    return x\n"
     )!r},
@@ -2457,7 +2497,7 @@ worker._run_handler_process(None, request, 60)
         with tempfile.TemporaryDirectory(prefix="mo-udf-leader-exit-") as artifact:
             marker = pathlib.Path(artifact) / "handler-and-watchdog.json"
             relay_source = f'''
-import importlib.util, json, pathlib, pyarrow as pa, sys, time
+import importlib.util, json, os, pathlib, pyarrow as pa, sys, time
 worker_path = pathlib.Path({str(WORKER_PATH)!r})
 spec = importlib.util.spec_from_file_location("relay_worker_leader_exit", worker_path)
 worker = importlib.util.module_from_spec(spec)
@@ -2470,7 +2510,10 @@ request = {{
         "import json, os, pathlib, subprocess, sys\n"
         "def f(ctx, x):\n"
         f"    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
-        f"    pathlib.Path({str(marker)!r}).write_text(json.dumps(dict(handler_pid=os.getpid(), child_pid=child.pid, pgid=os.getpgrp())))\n"
+        f"    marker = pathlib.Path({str(marker)!r})\n"
+        "    temporary = marker.with_suffix('.tmp')\n"
+        "    temporary.write_text(json.dumps(dict(handler_pid=os.getpid(), child_pid=child.pid, pgid=os.getpgrp())))\n"
+        "    os.replace(temporary, marker)\n"
         "    os._exit(7)\n"
     )!r},
     "handler": "f", "mode": worker.MODE_SCALAR, "null_policy": worker.NULL_CALL,
@@ -2482,9 +2525,12 @@ session = worker._HandlerProcessSession()
 try:
     session.run(None, request, 60)
 except Exception:
-    payload = json.loads(pathlib.Path({str(marker)!r}).read_text())
+    marker = pathlib.Path({str(marker)!r})
+    payload = json.loads(marker.read_text())
     payload["watchdog_pid"] = session._watchdog_process.pid
-    pathlib.Path({str(marker)!r}).write_text(json.dumps(payload))
+    temporary = marker.with_suffix('.watchdog.tmp')
+    temporary.write_text(json.dumps(payload))
+    os.replace(temporary, marker)
     time.sleep(60)
 '''
             relay = subprocess.Popen(
