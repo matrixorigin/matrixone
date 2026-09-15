@@ -314,6 +314,37 @@ func TestNormalizePythonDefinitionDerivesLogicalSignatureFromTypedBody(t *testin
 	require.Equal(t, `["int"]`, normalized.argTypes)
 }
 
+func TestNormalizePythonDefinitionAcceptsDecimalLogicalAlias(t *testing.T) {
+	descriptor, err := function.NewPythonTypeDescriptor(types.New(types.T_decimal128, 38, 10))
+	require.NoError(t, err)
+	source := "def f(ctx, value): return value"
+	environment, err := udf.PythonEnvironmentDigest()
+	require.NoError(t, err)
+	body, err := json.Marshal(function.PythonRoutineBody{
+		DefinitionSchemaVersion: udf.PythonDefinitionSchemaVersion,
+		Handler:                 "f",
+		Source:                  source,
+		Mode:                    "SCALAR",
+		NullPolicy:              udf.NullCallHandler,
+		ABIContract:             udf.PythonABIContract,
+		AdapterVersion:          udf.PythonAdapterVersion,
+		ArtifactDigest:          udf.PythonInlineArtifactDigest("f", source),
+		EnvironmentDigest:       environment,
+		SDKVersion:              udf.PythonSDKVersion,
+		ArgTypes:                []function.PythonTypeDescriptor{descriptor},
+		ReturnType:              &descriptor,
+	})
+	require.NoError(t, err)
+
+	normalized, err := normalizePythonFunctionDefinition(userDefinedFunctionDefinition{
+		args:    `[{"name":"value","type":"decimal"}]`,
+		retType: "decimal",
+		body:    string(body),
+	})
+	require.NoError(t, err)
+	require.Equal(t, `["decimal"]`, normalized.argTypes)
+}
+
 func TestPersistPythonCreateIdentityLookupIncludesLanguage(t *testing.T) {
 	definition := userDefinedFunctionDefinition{
 		name:                     "python_identity",

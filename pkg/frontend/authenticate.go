@@ -12221,7 +12221,7 @@ func normalizePythonFunctionDefinition(definition userDefinedFunctionDefinition)
 	}
 	expectedLogicalTypes := make([]string, len(body.ArgTypes))
 	for index, descriptor := range body.ArgTypes {
-		expectedLogicalTypes[index] = strings.ToLower(descriptor.Type().Oid.String())
+		expectedLogicalTypes[index] = function.PythonCatalogTypeName(descriptor.Type())
 	}
 	expectedLogicalArgTypes, err := userDefinedFunctionArgumentTypes(expectedLogicalTypes)
 	if err != nil {
