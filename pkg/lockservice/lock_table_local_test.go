@@ -587,6 +587,62 @@ func TestMultipleEmptyRangeEndsDoNotRetainLiveStateAfterUnlock(t *testing.T) {
 	)
 }
 
+func TestMixedEmptyRangeEndpointsDoNotRetainLiveStateAfterUnlock(t *testing.T) {
+	table := uint64(16)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			txnID := newTestTxnID(1)
+			_, err := s.Lock(ctx, table, newTestRows(1, 10), txnID, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			w := acquireWaiter(
+				pb.WaitTxn{TxnID: []byte("mixed-orphan-endpoints")},
+				"mixed orphan endpoint test",
+				lt.logger,
+			)
+			defer w.close("mixed orphan endpoint test", lt.logger)
+
+			orphanEndWaiters := &staleSnapshotReadTrapQueue{waiterQueue: newWaiterQueue()}
+			orphanEndWaiters.init(lt.logger)
+			orphanEndWaiters.put(w)
+			orphanStartWaiters := &staleSnapshotReadTrapQueue{waiterQueue: newWaiterQueue()}
+			orphanStartWaiters.init(lt.logger)
+			orphanStartWaiters.put(w)
+
+			lt.mu.Lock()
+			lt.mu.store.Add([]byte{5}, Lock{
+				value:   flagLockRangeEnd | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: orphanEndWaiters,
+			})
+			lt.mu.store.Add([]byte{7}, Lock{
+				value:   flagLockRangeStart | flagLockExclusiveMode,
+				holders: newHolders(),
+				waiters: orphanStartWaiters,
+			})
+			// A missing last-wait key forces the batch cleanup path, which snapshots
+			// both mixed orphan endpoints before deleting either one.
+			c := &lockContext{
+				txn:              &activeTxn{txnKey: "mixed-orphan-endpoints"},
+				rangeLastWaitKey: []byte{9},
+			}
+			lt.closeRangeWaiterLocked(c, w, false)
+			lt.mu.Unlock()
+
+			require.True(t, orphanEndWaiters.returned)
+			require.True(t, orphanStartWaiters.returned)
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+
+			lt.mu.RLock()
+			remaining := lt.mu.store.Len()
+			lt.mu.RUnlock()
+			require.Zero(t, remaining, "unlock must remove every endpoint backed by the returned live state")
+		},
+	)
+}
+
 func TestMismatchedRangeEndpointRepairsLiveCounterpart(t *testing.T) {
 	table := uint64(10)
 	getRunner(false)(
