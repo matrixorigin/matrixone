@@ -993,6 +993,24 @@ func TestMatchUserDefinedFunctionCandidatesUsesExactPythonDescriptor(t *testing.
 	require.Equal(t, []int64{51, 52, 53}, ids)
 }
 
+func TestMatchUserDefinedFunctionCandidatesRejectsPythonRowWithoutExactDescriptor(t *testing.T) {
+	result := &MysqlResultSet{}
+	for _, name := range []string{"function_id", "args", "language", "arg_types", "canonical_input_descriptor"} {
+		column := &MysqlColumn{}
+		column.SetName(name)
+		if name == "function_id" {
+			column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+		} else {
+			column.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+		}
+		result.AddColumn(column)
+	}
+	result.AddRow([]interface{}{int64(54), `[{"name":"value","type":"int"}]`, "python", `["int"]`, ""})
+
+	_, err := matchUserDefinedFunctionCandidates(context.Background(), []ExecResult{result}, "python", `["int"]`, `{"types":[]}`)
+	require.ErrorContains(t, err, "has no exact input descriptor")
+}
+
 func TestMatchUserDefinedFunctionCandidatesRejectsSplitResultSets(t *testing.T) {
 	result := emptyCatalogProbeResult(5)
 	_, err := matchUserDefinedFunctionCandidates(
