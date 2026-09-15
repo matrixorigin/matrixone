@@ -3393,6 +3393,28 @@ func TestGroupHashWidthUsesGlobalNullability(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestRemoteShortVarlenaGroupKeepsLegacyH8BeforeProtocolV75(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	groupBy := []*plan.Expr{{
+		Typ:  plan.Type{Id: int32(types.T_varchar), Width: 2},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}}
+
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion74)
+	legacy := newGroupOp(proc, groupBy, nil)
+	require.NoError(t, legacy.Prepare(proc))
+	require.Equal(t, int32(H8), legacy.ctr.mtyp)
+	legacy.Free(proc, false, nil)
+
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion75)
+	current := newGroupOp(proc, groupBy, nil)
+	require.NoError(t, current.Prepare(proc))
+	require.Equal(t, int32(HStr), current.ctr.mtyp)
+	current.Free(proc, false, nil)
+}
+
 func TestGroupCompositeShortCharKeysPreserveFieldBoundaries(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -3430,9 +3452,10 @@ func TestMergeGroupNormalizesLegacyH8VarlenaMetadata(t *testing.T) {
 	partial := batch.NewWithSize(2)
 	partial.Vecs[0] = vector.NewVec(varcharType)
 	partial.Vecs[1] = vector.NewVec(varcharType)
-	// An old H8 producer concatenates these as "abc" in its compact hash
-	// slot. The new receiver must use the separate vector fields to recover
-	// the two distinct tuples ("a", "bc") and ("ab", "c").
+	// These rows are already separate partial rows. A legacy H8 producer could
+	// have collapsed the same tuple boundary before serialization, which a
+	// receiver cannot recover. When separate rows do arrive, the new receiver
+	// must normalize the metadata and preserve their field boundaries.
 	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("ab"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("bc"), false, proc.Mp()))

@@ -24,6 +24,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCanonicalDistinctKeyWireCanUseLegacyPeerFormat(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	agg, err := MakeAgg(mp, AggIdOfCountColumn, true, types.T_varchar.ToType())
+	require.NoError(t, err)
+	defer agg.Free()
+	require.True(t, RequiresCanonicalDistinctKeyWire(agg))
+
+	SetCanonicalDistinctKeyWire(agg, false)
+	require.False(t, RequiresCanonicalDistinctKeyWire(agg))
+	SetCanonicalDistinctKeyWire(agg, true)
+	require.True(t, RequiresCanonicalDistinctKeyWire(agg))
+}
+
 func TestGroupConcatIntermediateRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() {

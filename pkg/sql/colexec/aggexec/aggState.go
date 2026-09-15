@@ -118,6 +118,10 @@ type aggInfo struct {
 	groupConcatSourceRowWire           bool
 	groupConcatSourceRowTrusted        bool
 	groupConcatSourceRowProvenanceWire bool
+	// legacyCanonicalDistinctKeyWire keeps a remote producer on the pre-v76
+	// length-delimited opaque DISTINCT payload. Readers accept both forms, but
+	// old peers do not understand the marker-bearing canonical form.
+	legacyCanonicalDistinctKeyWire bool
 	// stableEmptyOpaqueState preserves an aggregate's historical partial-result
 	// representation when its resident implementation can now omit empty state.
 	// Private spill records deliberately keep the compact zero-size marker.
@@ -599,7 +603,8 @@ func writeCanonicalDistinctWirePayload(writer io.Writer, payload []byte) error {
 
 func usesCanonicalDistinctWire(info *aggInfo) bool {
 	return info != nil && info.isDistinct && info.saveArg &&
-		info.usesOpaqueArgEncoding() && !info.preserveDistinctInputOrder
+		info.usesOpaqueArgEncoding() && !info.preserveDistinctInputOrder &&
+		!info.legacyCanonicalDistinctKeyWire
 }
 
 func canonicalizeLegacyDistinctPayload(
@@ -1726,6 +1731,24 @@ type aggExec struct {
 	standby                []aggState
 	allocation             *AllocationAccount
 	distinctFixedAdmission distinctFixedAdmissionPlan
+}
+
+// SetCanonicalDistinctKeyWire selects the v76 marker-bearing opaque DISTINCT
+// payload. A remote producer must disable it while the deployment rollout
+// gate is below v76; the receiver canonicalizes the legacy payload after
+// decoding it.
+func SetCanonicalDistinctKeyWire(agg AggFuncExec, enabled bool) {
+	if configurable, ok := agg.(interface {
+		setCanonicalDistinctKeyWire(bool)
+	}); ok {
+		configurable.setCanonicalDistinctKeyWire(enabled)
+	}
+}
+
+func (ae *aggExec) setCanonicalDistinctKeyWire(enabled bool) {
+	if ae != nil {
+		ae.aggInfo.legacyCanonicalDistinctKeyWire = !enabled
+	}
 }
 
 func (ae *aggExec) requiresCanonicalDistinctKeyWire() bool {
