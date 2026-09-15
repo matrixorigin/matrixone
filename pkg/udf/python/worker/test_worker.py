@@ -707,6 +707,23 @@ class WorkerContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "TYPE_CONTRACT"):
                 worker._field("value", descriptor)
 
+    def test_descriptor_integer_fields_match_go_int32_wire_domain(self):
+        descriptor = {
+            "type_id": worker.VARCHAR,
+            "width": worker.MAX_INT32,
+            "offset_width": 32,
+        }
+        self.assertEqual(pa.string(), worker._field("value", descriptor).type)
+        for key in ("type_id", "width", "scale", "offset_width"):
+            invalid = dict(descriptor)
+            invalid[key] = worker.MAX_INT32 + 1
+            if key == "scale":
+                invalid["type_id"] = worker.DECIMAL128
+                invalid["width"] = 38
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(ValueError, "outside int32 range"):
+                    worker._field("value", invalid)
+
     def test_float_descriptors_round_trip_for_scalar_and_vector_contracts(self):
         for type_id, arrow_type in (
             (worker.FLOAT32, pa.float32()),
