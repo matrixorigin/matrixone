@@ -303,6 +303,24 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "incomplete typed routine semantic contract"):
             worker._validate_typed_call_contract(payload)
 
+    def test_typed_routine_semantics_rejects_non_uint32_principal(self):
+        payload = {
+            "callsite_id": "python/1",
+            "may_error": True,
+            "security_mode": "INVOKER",
+            "leakproof": False,
+            "security_frame": {
+                "contract_version": 1,
+                "mode": "INVOKER",
+                "invoker_user_id": worker.MAX_SECURITY_PRINCIPAL_ID + 1,
+                "invoker_role_id": 8,
+                "effective_user_id": worker.MAX_SECURITY_PRINCIPAL_ID + 1,
+                "effective_role_id": 8,
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "invalid Python security frame"):
+            worker._validate_typed_call_contract(payload)
+
     def test_handler_quota_uses_typed_effective_principal(self):
         payload = complete_open_payload(
             {
