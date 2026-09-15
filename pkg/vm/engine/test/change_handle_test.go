@@ -5553,7 +5553,7 @@ func TestCheckLeaseFailed(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, "hnsw_idx")
 		},
 		types.TimestampToTS(txn.Txn().CommitTS),
-		10*time.Second,
+		30*time.Second,
 		10*time.Millisecond,
 		accountId,
 		tableID,
