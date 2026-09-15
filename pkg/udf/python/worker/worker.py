@@ -2276,15 +2276,22 @@ class _ExchangeContext:
 
 
 class _ExchangeInputReader:
-    """Make a blocking Flight input read observable to cancellation.
+    """Read Flight input without letting native reader ownership escape.
 
-    ``FlightStreamReader.read_chunk`` is a blocking native call.  Polling the
-    Flight context around that call is insufficient: a cancelled RPC can
-    remain stuck in the native reader and therefore keep the invocation, its
-    handler, and its ledger entry alive.  Keep at most one chunk in flight and
-    interrupt the native reader through its cancellation API when the server
-    context is cancelled.  The reader thread is bounded by the admitted
-    exchange, and is joined before the exchange returns.
+    The reader passed to a Flight server callback is a PyArrow C++ object whose
+    lifetime is owned by the RPC.  It must be read by the callback thread: a
+    daemon thread that is still inside ``read_chunk`` when
+    ``FlightServerBase.shutdown`` destroys the RPC can dereference a freed
+    native reader and crash the worker.  The Flight implementation itself
+    interrupts a direct ``read_chunk`` when the RPC is cancelled.  A
+    ``FlightServerBase.shutdown`` waits for an open input RPC; it is not a
+    cancellation mechanism, so the owner must cancel the client exchange (or
+    terminate the worker process) before waiting for server shutdown.
+
+    Some contract tests and non-native adapters expose an explicit
+    ``cancel``/``close`` operation but do not have Flight's RPC cancellation
+    semantics.  Keep the bounded polling thread only for those cooperative
+    readers.  Never use it for a reader from PyArrow's native Flight module.
     """
 
     _POLL_SECONDS = 0.05
@@ -2293,12 +2300,31 @@ class _ExchangeInputReader:
         self._reader = reader
         self._stop = threading.Event()
         self._items = queue.Queue(maxsize=1)
-        self._thread = threading.Thread(
-            target=self._read_loop,
-            name="matrixone-udf-flight-reader",
-            daemon=True,
-        )
-        self._thread.start()
+        self._thread = None
+        self._native_cancel = self._find_cancel(reader)
+        if not self._is_native_flight_reader(reader) and self._native_cancel is not None:
+            self._thread = threading.Thread(
+                target=self._read_loop,
+                name="matrixone-udf-flight-reader",
+                daemon=True,
+            )
+            self._thread.start()
+
+    @staticmethod
+    def _is_native_flight_reader(reader):
+        # PyArrow exposes the server-side reader as a private extension type
+        # (currently MetadataRecordBatchReader).  The module check is kept at
+        # this narrow boundary so the execution path does not depend on a
+        # particular private class name across supported PyArrow releases.
+        return type(reader).__module__.startswith("pyarrow._flight")
+
+    @staticmethod
+    def _find_cancel(reader):
+        cancel = getattr(reader, "cancel", None)
+        if callable(cancel):
+            return cancel
+        close = getattr(reader, "close", None)
+        return close if callable(close) else None
 
     def _publish(self, kind, value=None):
         item = (kind, value)
@@ -2323,18 +2349,29 @@ class _ExchangeInputReader:
             self._publish("error", exc)
 
     def _cancel_native_reader(self):
-        cancel = getattr(self._reader, "cancel", None)
-        if not callable(cancel):
-            cancel = getattr(self._reader, "close", None)
-        if callable(cancel):
+        if self._native_cancel is not None:
             try:
-                cancel()
+                self._native_cancel()
             except Exception:
-                # The RPC is already being torn down.  The join below still
-                # verifies whether the native read actually returned.
+                # The RPC may already be tearing down.  The join below still
+                # verifies whether a cooperative reader actually returned.
                 pass
 
     def next(self, context):
+        if self._thread is None:
+            if _context_is_cancelled(context):
+                self.cancel()
+                raise TimeoutError("DEADLINE_EXCEEDED: input stream cancelled")
+            try:
+                chunk = self._reader.read_chunk()
+            except StopIteration:
+                if _context_is_cancelled(context):
+                    raise TimeoutError("DEADLINE_EXCEEDED: input stream cancelled")
+                raise
+            if _context_is_cancelled(context):
+                self.cancel()
+                raise TimeoutError("DEADLINE_EXCEEDED: input stream cancelled")
+            return chunk
         while True:
             if _context_is_cancelled(context):
                 self.cancel()
@@ -2355,6 +2392,8 @@ class _ExchangeInputReader:
 
     def close(self):
         self.cancel()
+        if self._thread is None:
+            return
         self._thread.join(timeout=1.0)
         if self._thread.is_alive():
             raise ValueError(
