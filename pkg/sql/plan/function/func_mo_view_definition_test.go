@@ -73,6 +73,24 @@ func TestViewDefinitionFromPersistedData(t *testing.T) {
 			ok:        true,
 		},
 		{
+			name:      "legacy dash line comment before AS",
+			persisted: "{\"Stmt\":\"create view v -- migration comment\\nas select 1\"}",
+			want:      "select 1",
+			ok:        true,
+		},
+		{
+			name:      "legacy hash line comment before AS",
+			persisted: "{\"Stmt\":\"create view v # migration comment\\nas select 1\"}",
+			want:      "select 1",
+			ok:        true,
+		},
+		{
+			name:      "legacy slash line comment before AS",
+			persisted: "{\"Stmt\":\"create view v // migration comment\\nas select 1\"}",
+			want:      "select 1",
+			ok:        true,
+		},
+		{
 			name:      "legacy executable wrapper preserves quoted terminator",
 			persisted: `{"Stmt":"/*!50001 CREATE VIEW v AS SELECT 'x*/y' AS s */;"}`,
 			want:      "x*/y",
@@ -99,7 +117,19 @@ func TestViewDefinitionFromPersistedData(t *testing.T) {
 		{
 			name:      "legacy explicit view columns are replayable as output aliases",
 			persisted: `{"Stmt":"CREATE VIEW v (view_name) AS SELECT 1"}`,
-			want:      "select 1 as `view_name`",
+			want:      "select `__mo_view_definition`.`view_name` as `view_name` from (select 1) as `__mo_view_definition`(`view_name`)",
+			ok:        true,
+		},
+		{
+			name:      "legacy explicit columns preserve an inner order alias",
+			persisted: `{"Stmt":"CREATE VIEW v (view_name) AS SELECT 1 AS source_name ORDER BY source_name"}`,
+			want:      "select `__mo_view_definition`.`view_name` as `view_name` from (select 1 as `source_name` order by `source_name`) as `__mo_view_definition`(`view_name`)",
+			ok:        true,
+		},
+		{
+			name:      "legacy explicit columns preserve an inner having alias",
+			persisted: `{"Stmt":"CREATE VIEW v (view_name) AS SELECT 1 AS source_name HAVING source_name = 1"}`,
+			want:      "select `__mo_view_definition`.`view_name` as `view_name` from (select 1 as `source_name` having `source_name` = 1) as `__mo_view_definition`(`view_name`)",
 			ok:        true,
 		},
 		{

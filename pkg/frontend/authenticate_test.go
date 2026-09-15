@@ -39,6 +39,7 @@ import (
 	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -51,6 +52,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
@@ -273,13 +275,12 @@ func TestViewMetadataSQLAcceptsQuotedIdentifiers(t *testing.T) {
 	require.Contains(t, metaSQL, "relname = "+escapeSQLString(viewName))
 	require.Contains(t, metaSQL, "reldatabase = "+escapeSQLString(dbName))
 
-	snapshotSQL, err := getSqlForCheckViewMetaWithSnapshot(ctx, dbName, viewName, timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 7})
+	snapshotSQL, err := getSqlForCheckViewMetaWithSnapshot(ctx, dbName, viewName, 123)
 	require.NoError(t, err)
-	require.Contains(t, snapshotSQL, "MO_TS = '123-7'")
 	require.Contains(t, snapshotSQL, "relname = "+escapeSQLString(viewName))
 	require.Contains(t, snapshotSQL, "reldatabase = "+escapeSQLString(dbName))
 
-	queries := append(make([]string, 0, 9), checkSQL, metaSQL, snapshotSQL)
+	queries := []string{checkSQL, metaSQL, snapshotSQL}
 	for _, build := range []func() (string, error){
 		func() (string, error) { return getSqlForCheckDatabase(ctx, dbName) },
 		func() (string, error) { return getSqlForCheckDatabaseByAccount(ctx, dbName) },
@@ -354,6 +355,8 @@ func TestFormSql(t *testing.T) {
 		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(checkTenantFormat, "a"))
 		sql, _ = getSqlForPasswordOfUser(context.TODO(), "u")
 		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(getPasswordOfUserFormat, "u"))
+		sql, _ = getSqlForCheckRoleExists(context.TODO(), 0, "r")
+		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(checkRoleExistsFormat, 0, "r"))
 		sql, _ = getSqlForRoleIdOfRole(context.TODO(), "r")
 		convey.So(sql, convey.ShouldEqual, fmt.Sprintf(roleIdOfRoleFormat, "r"))
 		sql, _ = getSqlForRoleOfUser(context.TODO(), 0, "r")
@@ -401,16 +404,6 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 
 		ses := newSes(nil, ctrl)
 		ses.tenant = tenant
-		originalAcquire := acquireAccountLifecycleSharedGates
-		acquireAccountLifecycleSharedGates = func(
-			context.Context,
-			*Session,
-			BackgroundExec,
-			...accountLifecycleGate,
-		) error {
-			return nil
-		}
-		defer func() { acquireAccountLifecycleSharedGates = originalAcquire }()
 
 		err = InitGeneralTenant(ctx, bh, ses, &createAccount{
 			Name:        "test",
@@ -481,20 +474,12 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Close().Return().AnyTimes()
-		protocolQuery := false
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			protocolQuery = sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')"
-			return nil
-		}).AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-		msr := newMrsForCheckTenant([][]interface{}{{1, "test"}})
-		protocolResult := newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:109"}`}})
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			if protocolQuery {
-				return []interface{}{protocolResult}
-			}
-			return []interface{}{msr}
-		}).AnyTimes()
+		msr := newMrsForCheckTenant([][]interface{}{
+			{1, "test"},
+		})
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{msr}).AnyTimes()
 
 		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer bhStub.Reset()
@@ -615,123 +600,225 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 	}
 }
 
-func TestCreateTenantInformationSchemaWaitsForAllProtocol100Peers(t *testing.T) {
-	moruntime.RunTest("", func(rt moruntime.Runtime) {
-		previous, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
-		defer func() {
-			if exists {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
-			} else {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-			}
-		}()
-		for _, tc := range []struct {
-			name, response string
-			wantError      bool
-		}{
-			{name: "mixed", response: `{"result":"cn-a:96,cn-b:95"}`, wantError: true},
-			{name: "missing response", wantError: true},
-			{name: "all ready", response: `{"result":"cn-a:100,cn-b:100"}`},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				ctrl := gomock.NewController(t)
-				bh := mock_frontend.NewMockBackgroundExec(ctrl)
-				var executed []string
-				tenantCtx := defines.AttachAccount(t.Context(), 42, 1, 2)
-				bh.EXPECT().ClearExecResultSet().AnyTimes()
-				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(execCtx context.Context, sql string) error {
-					account, err := defines.GetAccountId(execCtx)
-					require.NoError(t, err)
-					if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
-						require.Equal(t, uint32(catalog.System_Account), account)
-						require.Equal(t, uint32(catalog.System_User), defines.GetUserId(execCtx))
-						require.Equal(t, uint32(catalog.System_Role), defines.GetRoleId(execCtx))
-					} else {
-						require.Equal(t, uint32(42), account)
-						require.Equal(t, uint32(1), defines.GetUserId(execCtx))
-						require.Equal(t, uint32(2), defines.GetRoleId(execCtx))
-					}
-					require.Equal(t, tenantCtx.Done(), execCtx.Done())
-					executed = append(executed, sql)
-					return nil
-				}).AnyTimes()
-				var rows [][]interface{}
-				if tc.response != "" {
-					rows = [][]interface{}{{tc.response}}
-				}
-				bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant(rows)}).AnyTimes()
-				err := createTablesInInformationSchemaOfGeneralTenant(tenantCtx, bh, "")
-				if tc.wantError {
-					require.ErrorContains(t, err, "protocol version 100")
-					require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
-				} else {
-					require.NoError(t, err)
-					require.Contains(t, executed, sysview.InformationSchemaColumnsV100DDL())
-				}
-			})
-		}
-		for _, protocol := range []int64{defines.MORPCVersion94, defines.MORPCVersion95, defines.MORPCVersion96, defines.MORPCVersion97, defines.MORPCVersion98, defines.MORPCVersion99} {
-			t.Run(fmt.Sprintf("CN%d uses legacy definition", protocol), func(t *testing.T) {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, protocol)
-				ctrl := gomock.NewController(t)
-				bh := mock_frontend.NewMockBackgroundExec(ctrl)
-				var executed []string
-				bh.EXPECT().ClearExecResultSet().AnyTimes()
-				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-					executed = append(executed, sql)
-					return nil
-				}).AnyTimes()
-				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, ""))
-				require.Contains(t, executed, sysview.InformationSchemaColumnsV58DDL())
-				require.NotContains(t, executed, sysview.InformationSchemaColumnsDDL)
-				require.NotContains(t, executed, "SELECT mo_ctl('cn', 'GetProtocolVersion', '')")
-			})
-		}
-	})
+type tenantInitializationProtocolCluster struct {
+	clusterservice.MOCluster
+	cns []metadata.CNService
 }
 
-func TestCreateTenantInformationSchemaWaitsForAllProtocol109Peers(t *testing.T) {
-	moruntime.RunTest("", func(rt moruntime.Runtime) {
-		previous, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion109)
-		defer func() {
-			if exists {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
-			} else {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-			}
-		}()
+func TestCreateTablesInformationSchemaWithoutProcessRejectsUnknownProtocol(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
 
-		for _, tc := range []struct {
-			name, response string
-			wantError      bool
-		}{
-			{name: "one peer is still on protocol 108", response: `{"result":"cn-a:109,cn-b:108"}`, wantError: true},
-			{name: "all peers support native view", response: `{"result":"cn-a:109,cn-b:109"}`},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				ctrl := gomock.NewController(t)
-				bh := mock_frontend.NewMockBackgroundExec(ctrl)
-				var executed []string
-				bh.EXPECT().ClearExecResultSet().AnyTimes()
-				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+	rt := moruntime.ServiceRuntime("")
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+
+	var executed []string
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().ClearExecResultSet().AnyTimes()
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, sql string) error {
+			executed = append(executed, sql)
+			return nil
+		}).AnyTimes()
+
+	require.Error(t, createTablesInInformationSchemaOfGeneralTenant(
+		context.Background(), bh, "", nil))
+	require.Empty(t, executed)
+}
+
+func (c *tenantInitializationProtocolCluster) GetCNServiceWithoutWorkingState(
+	_ clusterservice.Selector,
+	apply func(metadata.CNService) bool,
+) {
+	for _, cn := range c.cns {
+		if !apply(cn) {
+			return
+		}
+	}
+}
+
+func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	service := proc.GetService()
+	rt := moruntime.ServiceRuntime(service)
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
+	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
+		{ServiceID: "cn-v73", QueryAddress: "cn-v73-query", PipelineServiceAddress: "cn-v73-pipeline"},
+		{ServiceID: "cn-v72", QueryAddress: "cn-v72-query", PipelineServiceAddress: "cn-v72-pipeline"},
+	}}
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+		}
+		if hadCluster {
+			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
+		}
+	})
+
+	queryClient := newMockQueryClient()
+	proc.Base.QueryClient = queryClient
+	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+
+	setProtocolResponse := func(address string, version int64) {
+		queryClient.cnResponses[address] = &querypb.Response{
+			GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: version},
+		}
+	}
+
+	for _, test := range []struct {
+		name       string
+		responses  map[string]int64
+		sendErrors map[string]error
+		wantLatest bool
+		wantError  bool
+	}{
+		{
+			name: "mixed versions reject tenant initialization",
+			responses: map[string]int64{
+				"cn-v73-query": defines.MORPCVersion73,
+				"cn-v72-query": defines.MORPCVersion72,
+			},
+			wantError: true,
+		},
+		{
+			name: "all CNs at v73 use current DDL",
+			responses: map[string]int64{
+				"cn-v73-query": defines.MORPCVersion73,
+				"cn-v72-query": defines.MORPCVersion73,
+			},
+			wantLatest: true,
+		},
+		{
+			name: "unknown CN capability rejects tenant initialization",
+			responses: map[string]int64{
+				"cn-v73-query": defines.MORPCVersion73,
+			},
+			wantError: true,
+		},
+		{
+			name: "RPC failure rejects tenant initialization",
+			responses: map[string]int64{
+				"cn-v73-query": defines.MORPCVersion73,
+			},
+			sendErrors: map[string]error{
+				"cn-v72-query": errors.New("protocol probe failed"),
+			},
+			wantError: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			queryClient.cnResponses = make(map[string]*querypb.Response)
+			queryClient.sendError = make(map[string]error)
+			for address, version := range test.responses {
+				setProtocolResponse(address, version)
+			}
+			for address, err := range test.sendErrors {
+				queryClient.sendError[address] = err
+			}
+
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			var executed []string
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bh.EXPECT().ClearExecResultSet().AnyTimes()
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, sql string) error {
 					executed = append(executed, sql)
 					return nil
 				}).AnyTimes()
-				bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{tc.response}})}).AnyTimes()
 
-				err := createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, "")
-				if tc.wantError {
-					require.ErrorContains(t, err, "protocol version 109")
-					require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
-				} else {
-					require.NoError(t, err)
-					require.Contains(t, executed, sysview.InformationSchemaColumnsDDL)
-				}
-			})
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+			err := createTablesInInformationSchemaOfGeneralTenant(
+				context.Background(), bh, service, proc)
+			if test.wantError {
+				require.Error(t, err)
+				require.Empty(t, executed)
+				return
+			}
+			require.NoError(t, err)
+			if test.wantLatest {
+				require.Contains(t, executed, sysview.InformationSchemaViewsDDL)
+				require.NotContains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
+			}
+		})
+	}
+}
+
+func TestCreateTenantInformationSchemaWaitsForAllProtocol110Peers(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	service := proc.GetService()
+	rt := moruntime.ServiceRuntime(service)
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
+	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
+		{ServiceID: "cn-v110-a", QueryAddress: "cn-v110-a-query", PipelineServiceAddress: "cn-v110-a-pipeline"},
+		{ServiceID: "cn-v110-b", QueryAddress: "cn-v110-b-query", PipelineServiceAddress: "cn-v110-b-pipeline"},
+	}}
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+		}
+		if hadCluster {
+			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
 		}
 	})
+	queryClient := newMockQueryClient()
+	proc.Base.QueryClient = queryClient
+	queryClient.cnResponses["cn-v110-a-query"] = &querypb.Response{
+		GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: defines.MORPCVersion73},
+	}
+	queryClient.cnResponses["cn-v110-b-query"] = &querypb.Response{
+		GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: defines.MORPCVersion73},
+	}
+	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion110)
+
+	for _, tc := range []struct {
+		name, response string
+		wantError      bool
+	}{
+		{name: "one peer is still on protocol 109", response: `{"result":"cn-a:110,cn-b:109"}`, wantError: true},
+		{name: "all peers support native view", response: `{"result":"cn-a:110,cn-b:110"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			var executed []string
+			bh.EXPECT().ClearExecResultSet().AnyTimes()
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+				executed = append(executed, sql)
+				return nil
+			}).AnyTimes()
+			bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{tc.response}})}).AnyTimes()
+
+			err := createTablesInInformationSchemaOfGeneralTenant(t.Context(), bh, service, proc)
+			if tc.wantError {
+				require.ErrorContains(t, err, "protocol version 110")
+				require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, executed)
+			} else {
+				require.NoError(t, err)
+				require.Contains(t, executed, sysview.InformationSchemaColumnsDDL)
+			}
+		})
+	}
 }
 
 func containsSQL(sqls []string, expected string) bool {
@@ -2722,10 +2809,10 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
-			bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 			// Mock getDatabaseOrTableId for scoped levels.
 			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR ||
@@ -2900,10 +2987,10 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
-			bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 			// Mock getDatabaseOrTableId for scoped levels.
 			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR ||
@@ -3051,8 +3138,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkSql, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db")
 		convey.So(err, convey.ShouldBeNil)
@@ -3108,9 +3195,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkTableSql, err := getSqlForCheckDatabaseTable(ctx, "db", "t1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3171,9 +3258,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
 		convey.So(err, convey.ShouldBeNil)
@@ -3226,9 +3313,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
 		convey.So(err, convey.ShouldBeNil)
@@ -3282,8 +3369,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkSql, err := getSqlForCheckDatabase(ses.GetTxnHandler().GetTxnCtx(), "db1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3343,9 +3430,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkTableSql, err := getSqlForCheckDatabaseTable(ctx, "db1", "t1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3412,9 +3499,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3489,9 +3576,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v2")
 		require.NoError(t, err)
@@ -3566,9 +3653,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v3")
 		require.NoError(t, err)
@@ -3641,9 +3728,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		privType, err := convertAstPrivilegeTypeToPrivilegeType(context.TODO(), stmt.Privileges[0].Type, stmt.ObjType)
 		require.NoError(t, err)
@@ -3695,9 +3782,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3770,9 +3857,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v1")
 		convey.So(err, convey.ShouldBeNil)
@@ -3857,9 +3944,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkTableSql, err := getSqlForCheckDatabaseTable(ctx, "db", "missing_t")
 		convey.So(err, convey.ShouldBeNil)
@@ -3921,9 +4008,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkTableSql, err := getSqlForCheckDatabaseTable(ctx, "db", "missing_t")
 		convey.So(err, convey.ShouldBeNil)
@@ -3992,9 +4079,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkSql, err := getSqlForCheckDatabaseView(ctx, "db", "v1")
 		convey.So(err, convey.ShouldBeNil)
@@ -4068,9 +4155,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkDbSql, err := getSqlForCheckDatabase(ctx, "db1")
 		convey.So(err, convey.ShouldBeNil)
@@ -4127,9 +4214,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkDbSql, err := getSqlForCheckDatabase(ctx, "db1")
 		convey.So(err, convey.ShouldBeNil)
@@ -4195,9 +4282,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: 1001,
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		globalSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndExactLevel(
 			int64(PrivilegeTypeDropTable), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership),
@@ -4253,9 +4340,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: uint32(internRoleID),
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		globalSql := getSqlForCheckRoleHasPrivilegeWGOOrWithOwnershipWithObjAndExactLevel(
 			int64(PrivilegeTypeDropTable), int64(PrivilegeTypeDatabaseAll), int64(PrivilegeTypeDatabaseOwnership),
@@ -4318,9 +4405,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: uint32(internRoleID),
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkTableSql, err := getSqlForCheckDatabaseTable(ctx, "db", "t1")
 		convey.So(err, convey.ShouldBeNil)
@@ -4394,9 +4481,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: uint32(internRoleID),
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		checkViewSql, err := getSqlForCheckDatabaseView(ctx, "db", "v1")
 		convey.So(err, convey.ShouldBeNil)
@@ -4479,9 +4566,9 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			UserID:        1001,
 			DefaultRoleID: uint32(internRoleID),
 		}
+		ses.markActiveRoleGrantValid()
 		ctx := ses.GetTxnHandler().GetTxnCtx()
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 
 		wgoSql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeDropDatabase)
 		bh.sql2result[wgoSql] = newMrsForPrivilegeWGO([][]interface{}{
@@ -4555,10 +4642,10 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
-			bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 			for _, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -4637,10 +4724,10 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
-			bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 			for i, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -4710,10 +4797,10 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
-			bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 			for _, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -4772,10 +4859,10 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				UserID:        1001,
 				DefaultRoleID: 1001,
 			}
+			ses.markActiveRoleGrantValid()
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
-			bh.sql2result[getSqlForCheckUserGrantForAuthorization(1001, 1001)] = newMrsForCheckUserGrant([][]interface{}{{int64(1001), int64(1001), false}})
 			for i, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -6259,9 +6346,7 @@ func TestExtractPrivilegeTipsFromPlanInsertDedupTargetScan(t *testing.T) {
 			}}}
 
 			got := make([]tipKey, 0, len(p.GetQuery().GetNodes()))
-			tips, err := extractPrivilegeTipsFromPlan(p)
-			require.NoError(t, err)
-			for _, tip := range tips {
+			for _, tip := range extractPrivilegeTipsFromPlan(p) {
 				got = append(got, tipKey{tip.typ, tip.databaseName, tip.tableName})
 			}
 			require.ElementsMatch(t, tc.want, got)
@@ -6304,10 +6389,8 @@ func TestExtractPrivilegeTipsFromPlanKeepsUserDedupJoinSources(t *testing.T) {
 		typ   PrivilegeType
 		table string
 	}
-	tips, err := extractPrivilegeTipsFromPlan(p)
-	require.NoError(t, err)
-	got := make([]tipKey, 0, len(tips))
-	for _, tip := range tips {
+	got := make([]tipKey, 0)
+	for _, tip := range extractPrivilegeTipsFromPlan(p) {
 		got = append(got, tipKey{typ: tip.typ, table: tip.tableName})
 	}
 	require.ElementsMatch(t, []tipKey{
@@ -6411,8 +6494,7 @@ func Test_extractPrivilegeTipsFromPlan_Subscription(t *testing.T) {
 			},
 		},
 	}
-	arr, err := extractPrivilegeTipsFromPlan(p)
-	require.NoError(t, err)
+	arr := extractPrivilegeTipsFromPlan(p)
 	assert.Equal(t, 1, len(arr))
 	assert.Equal(t, "sub2", arr[0].databaseName)
 	assert.Equal(t, "t1", arr[0].tableName)
@@ -6426,13 +6508,15 @@ func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
 	)
 
 	for _, tc := range []struct {
-		name     string
-		viewPath []*plan.ViewStep
+		name        string
+		originViews []string
+		directView  string
 	}{
 		{name: "direct table"},
 		{
-			name:     "view",
-			viewPath: []*plan.ViewStep{{DatabaseName: dbName, ViewName: viewName, Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
+			name:        "view",
+			originViews: []string{dbName + "." + viewName},
+			directView:  dbName + "." + viewName,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -6454,22 +6538,22 @@ func TestExtractPrivilegeTipsFromPlanIncludesMongoDBExternalScan(t *testing.T) {
 										Collection: "events",
 									},
 								},
-								ViewPath: tc.viewPath,
+								OriginViews: tc.originViews,
+								DirectView:  tc.directView,
 							},
 						},
 					},
 				},
 			}
 
-			arr, err := extractPrivilegeTipsFromPlan(p)
-
-			require.NoError(t, err)
+			arr := extractPrivilegeTipsFromPlan(p)
 			require.Len(t, arr, 1)
 			require.Equal(t, PrivilegeTypeSelect, arr[0].typ)
 			require.Equal(t, objectTypeTable, arr[0].objType)
 			require.Equal(t, dbName, arr[0].databaseName)
 			require.Equal(t, tableName, arr[0].tableName)
-			require.Equal(t, tc.viewPath, arr[0].viewPath)
+			require.Equal(t, tc.originViews, arr[0].originViews)
+			require.Equal(t, tc.directView, arr[0].directView)
 		})
 	}
 }
@@ -6503,7 +6587,8 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 
 	for _, tc := range []struct {
 		name           string
-		viewPath       []*plan.ViewStep
+		originViews    []string
+		directView     string
 		tableSelect    bool
 		addRevokedView bool
 		want           bool
@@ -6512,7 +6597,8 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 		{name: "table select granted", tableSelect: true, want: true},
 		{
 			name:           "view select revoked",
-			viewPath:       []*plan.ViewStep{{DatabaseName: dbName, ViewName: viewName, Snapshot: &plan.Snapshot{Tenant: &plan.SnapshotTenant{}}}},
+			originViews:    []string{dbName + "." + viewName},
+			directView:     dbName + "." + viewName,
 			tableSelect:    true,
 			addRevokedView: true,
 		},
@@ -6560,7 +6646,8 @@ func TestAuthenticateMongoDBExternalScanSelectPrivilege(t *testing.T) {
 							Type:        int32(plan.ExternType_MONGODB_TB),
 							MongodbScan: &plan.MongoScan{},
 						},
-						ViewPath: tc.viewPath,
+						OriginViews: tc.originViews,
+						DirectView:  tc.directView,
 					},
 				},
 			}}}
@@ -6593,8 +6680,7 @@ func TestExtractPrivilegeTipsFromTableChanges(t *testing.T) {
 					TableDef: &plan2.TableDef{TableType: "func_table", TblFunc: &plan.TableFunction{Name: "table_changes"}},
 				}},
 			}}}
-			arr, err := extractPrivilegeTipsFromPlan(p)
-			require.NoError(t, err)
+			arr := extractPrivilegeTipsFromPlan(p)
 			require.Len(t, arr, 1)
 			assert.Equal(t, PrivilegeTypeSelect, arr[0].typ)
 			assert.Equal(t, tt.databaseName, arr[0].databaseName)
@@ -6694,9 +6780,7 @@ func Test_determineDML(t *testing.T) {
 
 			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, nil, nil, nil, nil, nil, nil, nil)
 
-			arr, err := extractPrivilegeTipsFromPlan(a.p)
-
-			require.NoError(t, err)
+			arr := extractPrivilegeTipsFromPlan(a.p)
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			roleIds := []int{
@@ -6705,7 +6789,7 @@ func Test_determineDML(t *testing.T) {
 
 			for _, roleId := range roleIds {
 				for _, entry := range priv.entries {
-					sql, _ := getSqlForCheckRoleHasTableLevelPrivilegeWithObjType(context.TODO(), objectTypeTable, int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
+					sql, _ := getSqlForCheckRoleHasTableLevelPrivilege(context.TODO(), int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
 					sql2result[sql] = newMrsForWithGrantOptionPrivilege([][]interface{}{
 						{entry.privilegeId, true},
 					})
@@ -6742,10 +6826,6 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
 						makeSql(tempEntry)
-						for _, typ := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
-							tempEntry.privilegeId = typ
-							makeSql(tempEntry)
-						}
 					}
 				}
 			}
@@ -6785,9 +6865,7 @@ func Test_determineDML(t *testing.T) {
 
 			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, nil, nil, nil, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 
-			arr, err := extractPrivilegeTipsFromPlan(a.p)
-
-			require.NoError(t, err)
+			arr := extractPrivilegeTipsFromPlan(a.p)
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			//role 0 does not have the select
@@ -6841,10 +6919,6 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
 						makeSql(tempEntry)
-						for _, typ := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
-							tempEntry.privilegeId = typ
-							makeSql(tempEntry)
-						}
 					}
 				}
 			}
@@ -6889,9 +6963,7 @@ func Test_determineDML(t *testing.T) {
 
 			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, nil, nil, nil, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 
-			arr, err := extractPrivilegeTipsFromPlan(a.p)
-
-			require.NoError(t, err)
+			arr := extractPrivilegeTipsFromPlan(a.p)
 			convertPrivilegeTipsToPrivilege(priv, arr)
 
 			//role 0,1 does not have the select
@@ -6933,10 +7005,6 @@ func Test_determineDML(t *testing.T) {
 						tempEntry.privilegeEntryTyp = privilegeEntryTypeGeneral
 						tempEntry.compound = nil
 						makeSql(tempEntry)
-						for _, typ := range []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership} {
-							tempEntry.privilegeId = typ
-							makeSql(tempEntry)
-						}
 					}
 				}
 			}
@@ -7123,8 +7191,7 @@ func TestExtractPrivilegeTipsFromPlanSkipsInvalidMultiUpdateCtx(t *testing.T) {
 	}
 
 	require.NotPanics(t, func() {
-		arr, err := extractPrivilegeTipsFromPlan(p)
-		require.NoError(t, err)
+		arr := extractPrivilegeTipsFromPlan(p)
 		require.Len(t, arr, 1)
 		require.Equal(t, PrivilegeTypeUpdate, arr[0].typ)
 		require.Equal(t, dbName, arr[0].databaseName)
@@ -7144,11 +7211,10 @@ func TestNamedWindowValidationDependencyRequiresSelectPrivilege(t *testing.T) {
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"select 1 from nation window unused_w as (order by (select r_name from region limit 1))", 1)
 	require.NoError(t, err)
-	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true, newPlanTestProcess(t)), stmt, false)
+	queryPlan, err := plan2.BuildPlan(plan2.NewMockCompilerContext(true), stmt, false)
 	require.NoError(t, err)
-	dependencies := queryPlan.GetQuery().GetCatalogDependencies()
-	require.Len(t, dependencies, 2)
-	require.ElementsMatch(t, []string{nation, region}, []string{dependencies[0].ObjName, dependencies[1].ObjName})
+	require.Len(t, queryPlan.GetQuery().GetCatalogDependencies(), 1)
+	require.Equal(t, region, queryPlan.GetQuery().GetCatalogDependencies()[0].GetObjName())
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -7223,7 +7289,7 @@ func TestNamedWindowValidationSpecialScansRequireSelectPrivilege(t *testing.T) {
 
 	newCompilerContext := func() *namedWindowAuthorizationCompilerContext {
 		return &namedWindowAuthorizationCompilerContext{
-			MockCompilerContext: plan2.NewMockCompilerContext(true, newPlanTestProcess(t)),
+			MockCompilerContext: plan2.NewMockCompilerContext(true),
 			mongoObject: &plan.ObjectRef{
 				Db: 1, Obj: 2, SchemaName: "mongo_window_auth", ObjName: "events",
 			},
@@ -9516,24 +9582,6 @@ func TestGrantPrivilegeLocksObjectLifecycle(t *testing.T) {
 }
 
 func Test_doRevokePrivilege(t *testing.T) {
-	registerLockedObjects := func(ctx context.Context, bh *backgroundExecTest, database, relation string, isView bool) {
-		if database == "" {
-			return
-		}
-		dbSQL, err := getSqlForCheckDatabaseByAccount(ctx, database)
-		require.NoError(t, err)
-		bh.sql2result[strings.TrimSuffix(dbSQL, ";")+" for share;"] = newMrsForCheckDatabase([][]interface{}{{0}})
-		if relation != "" {
-			var sql string
-			if isView {
-				sql, err = getSqlForCheckDatabaseView(ctx, database, relation)
-			} else {
-				sql, err = getSqlForCheckDatabaseTable(ctx, database, relation)
-			}
-			require.NoError(t, err)
-			bh.sql2result[strings.TrimSuffix(sql, ";")+" for share;"] = bh.sql2result[sql]
-		}
-	}
 	convey.Convey("revoke account, role succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -9695,7 +9743,6 @@ func Test_doRevokePrivilege(t *testing.T) {
 				}
 			}
 
-			registerLockedObjects(ses.GetTxnHandler().GetTxnCtx(), bh, "d", "", false)
 			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}
@@ -9840,7 +9887,6 @@ func Test_doRevokePrivilege(t *testing.T) {
 				}
 			}
 
-			registerLockedObjects(ctx, bh, dbName, tableName, false)
 			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}
@@ -9985,7 +10031,6 @@ func Test_doRevokePrivilege(t *testing.T) {
 				}
 			}
 
-			registerLockedObjects(ctx, bh, dbName, tableName, true)
 			err = doRevokePrivilege(ses.GetTxnHandler().GetTxnCtx(), ses, stmt, bh)
 			convey.So(err, convey.ShouldBeNil)
 		}
@@ -12959,13 +13004,11 @@ type backgroundExecTest struct {
 	currentSql                     string
 	parserSQLMode                  string
 	sql2result                     map[string]ExecResult
-	resultSets                     []interface{}
 	sql2err                        map[string]error
 	executedSQLs                   []string
 	beforeExec                     func(string)
 	dropDatabaseIgnoresForeignKeys bool
 	systemCTELimits                []bool
-	lockWriterFair                 []bool
 	executionAccountIDs            []uint32
 	executionDatabaseTypes         []string
 }
@@ -12979,13 +13022,6 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
-	originalAcquire := acquireAccountLifecycleSharedGates
-	acquireAccountLifecycleSharedGates = func(
-		context.Context, *Session, BackgroundExec, ...accountLifecycleGate,
-	) error {
-		return nil
-	}
-	t.Cleanup(func() { acquireAccountLifecycleSharedGates = originalAcquire })
 	runtime := moruntime.ServiceRuntime(ses.GetService())
 	readyCluster := &mockMOCluster{cnServices: []metadata.CNService{{
 		ServiceID: "ready-cn", WorkState: metadata.WorkState_Working,
@@ -13003,9 +13039,9 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 	t.Run("inherits active generation", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
-		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses, 42))
+		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses.GetService(), 42))
 		require.Len(t, bh.executedSQLs, 3)
-		require.Equal(t, []string{catalog.SnapshotLifecycleSharedGateSQL, catalog.ViewMetadataLifecycleSharedGateSQL}, bh.executedSQLs[:2])
+		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, bh.executedSQLs[:2])
 		require.Contains(t, bh.executedSQLs[2], "select 42,0,0,0")
 		require.Contains(t, bh.executedSQLs[2], "d.dependency_generation")
 		require.Contains(t, bh.executedSQLs[2], "d.source_relation_kind")
@@ -13022,36 +13058,29 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 		defer runtime.SetGlobalVariables(moruntime.ClusterService, readyCluster)
 		bh := &backgroundExecTest{}
 		bh.init()
-		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses, 42))
+		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses.GetService(), 42))
 		require.Len(t, bh.executedSQLs, 3)
-		require.Equal(t, []string{catalog.SnapshotLifecycleSharedGateSQL, catalog.ViewMetadataLifecycleSharedGateSQL}, bh.executedSQLs[:2])
+		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, bh.executedSQLs[:2])
 		require.Contains(t, bh.executedSQLs[2], "select 42,0,0,0")
 
 		missing := &backgroundExecTest{}
 		missing.init()
-		missing.sql2err[catalog.ViewMetadataLifecycleSharedGateSQL] =
+		missing.sql2err[catalog.ViewMetadataLifecycleGateSQL] =
 			moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
 		require.NoError(t, inheritViewMetadataRevalidation(
-			context.Background(), missing, ses, 43))
-		require.Equal(t, []string{catalog.SnapshotLifecycleSharedGateSQL, catalog.ViewMetadataLifecycleSharedGateSQL}, missing.executedSQLs)
+			context.Background(), missing, ses.GetService(), 43))
+		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, missing.executedSQLs)
 	})
 }
 
-func TestInitGeneralTenantLocksSharedSnapshotBeforeAccountName(t *testing.T) {
+func TestInitGeneralTenantLocksSnapshotBeforeAccountName(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newSes(nil, ctrl)
-	originalAcquire := acquireAccountLifecycleSharedGates
-	acquireAccountLifecycleSharedGates = func(
-		context.Context, *Session, BackgroundExec, ...accountLifecycleGate,
-	) error {
-		return nil
-	}
-	t.Cleanup(func() { acquireAccountLifecycleSharedGates = originalAcquire })
 
 	bh := &backgroundExecTest{}
 	bh.init()
 	wantErr := errors.New("snapshot lifecycle gate failed")
-	bh.sql2err[catalog.SnapshotLifecycleSharedGateSQL] = wantErr
+	bh.sql2err[catalog.SnapshotLifecycleGateSQL] = wantErr
 
 	err := InitGeneralTenant(context.Background(), bh, ses, &createAccount{
 		Name:      "issue_28433_account",
@@ -13064,7 +13093,7 @@ func TestInitGeneralTenantLocksSharedSnapshotBeforeAccountName(t *testing.T) {
 	accountLock, err := getSqlForLockMoAccountNameFormat(context.Background(), "issue_28433_account")
 	require.NoError(t, err)
 	require.Equal(t,
-		[]string{"begin;", catalog.SnapshotLifecycleSharedGateSQL, "rollback;"},
+		[]string{"begin;", catalog.SnapshotLifecycleGateSQL, "rollback;"},
 		bh.executedSQLs,
 	)
 	require.NotContains(t, bh.executedSQLs, accountLock)
@@ -13103,7 +13132,6 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
 	bt.systemCTELimits = append(bt.systemCTELimits, process.HasSystemCTELimits(ctx))
-	bt.lockWriterFair = append(bt.lockWriterFair, defines.IsLockWriterFair(ctx))
 	accountID, _ := defines.GetAccountId(ctx)
 	bt.executionAccountIDs = append(bt.executionAccountIDs, accountID)
 	databaseType, _ := ctx.Value(defines.DatTypKey{}).(string)
@@ -13131,9 +13159,6 @@ func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from ui
 }
 
 func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
-	if bt.resultSets != nil {
-		return bt.resultSets
-	}
 	result, ok := bt.sql2result[bt.currentSql]
 	if !ok &&
 		strings.HasPrefix(bt.currentSql, "select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = ") {
@@ -13479,15 +13504,12 @@ func mockSnapshotQuotaResult(
 	})
 
 	countSQL := fmt.Sprintf(
-		"select count(*) from %s.%s where account_name = '%s' and level = '%s' and kind != '%s'",
-		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, accountName, scope, databranchutils.BranchSnapshotKind,
+		"select count(*) from %s.%s where account_name = '%s' and level = '%s'",
+		catalog.MO_CATALOG, catalog.MO_SNAPSHOTS, accountName, scope,
 	)
 	bh.sql2result[countSQL] = newMrsForSnapshotCount([][]interface{}{
 		{int64(0)},
 	})
-	if accountId != sysAccountID && scope == tree.SNAPSHOTLEVELACCOUNT.String() {
-		bh.sql2result[fmt.Sprintf("%s and obj_id = %d", countSQL, accountId)] = newMrsForSnapshotCount([][]interface{}{{int64(0)}})
-	}
 
 	return nil
 }
@@ -14020,38 +14042,97 @@ func Test_graph(t *testing.T) {
 	})
 }
 
-func TestPrivilegeCacheScopes(t *testing.T) {
-	cache := &privilegeCache{}
-	for _, scope := range []struct {
-		object objectType
-		level  privilegeLevelType
-	}{
-		{objectTypeTable, privilegeLevelStarStar},
-		{objectTypeTable, privilegeLevelDatabaseStar},
-		{objectTypeTable, privilegeLevelDatabaseTable},
-		{objectTypeView, privilegeLevelDatabaseTable},
-		{objectTypeDatabase, privilegeLevelDatabase},
-		{objectTypeAccount, privilegeLevelStar},
-	} {
-		require.False(t, cache.has(scope.object, scope.level, "db", "t", PrivilegeTypeSelect))
-		cache.add(scope.object, scope.level, "db", "t", PrivilegeTypeSelect)
-		require.True(t, cache.has(scope.object, scope.level, "db", "t", PrivilegeTypeSelect))
-		require.False(t, cache.has(scope.object, scope.level, "db", "t", PrivilegeTypeUpdate))
-		cache.invalidate()
-		require.False(t, cache.has(scope.object, scope.level, "db", "t", PrivilegeTypeSelect))
+func Test_cache(t *testing.T) {
+	type arg struct {
+		db    string
+		table string
 	}
-	for i := range maxPrivilegeCacheScopes + 1 {
-		name := fmt.Sprint(i)
-		require.False(t, cache.has(objectTypeTable, privilegeLevelTable, name, "t", PrivilegeTypeSelect))
+	cnt := 10
+	args := make([]arg, 10)
+	for i := 0; i < cnt; i++ {
+		args[i].db = fmt.Sprintf("db%d", i)
+		args[i].table = fmt.Sprintf("table%d", i)
 	}
-	require.Zero(t, cache.cachedScopes)
-	require.Zero(t, cache.storeForTable3.Len(), "cache misses must not retain empty scopes")
-	for i := range maxPrivilegeCacheScopes + 1 {
-		cache.add(objectTypeTable, privilegeLevelTable, "db", fmt.Sprint(i), PrivilegeTypeSelect)
+
+	cache1 := &privilegeCache{}
+	convey.Convey("has", t, func() {
+		for _, a := range args {
+			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeFalse)
+		}
+	})
+
+	//add some privilege
+	for _, a := range args {
+		for i := PrivilegeTypeCreateAccount; i < PrivilegeTypeCreateObject; i++ {
+			cache1.add(objectTypeTable, privilegeLevelStar, a.db, a.table, i)
+		}
 	}
-	require.LessOrEqual(t, cache.cachedScopes, maxPrivilegeCacheScopes)
-	require.True(t, cache.has(objectTypeTable, privilegeLevelTable, "db", fmt.Sprint(maxPrivilegeCacheScopes), PrivilegeTypeSelect))
-	require.False(t, cache.has(objectTypeTable, privilegeLevelTable, "db", "0", PrivilegeTypeSelect))
+
+	convey.Convey("has2", t, func() {
+		for _, a := range args {
+			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeTrue)
+			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeFalse)
+		}
+	})
+
+	for _, a := range args {
+		for i := PrivilegeTypeCreateObject; i < PrivilegeTypeExecute; i++ {
+			cache1.add(objectTypeTable, privilegeLevelStar, a.db, a.table, i)
+		}
+	}
+
+	convey.Convey("has3", t, func() {
+		for _, a := range args {
+			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeTrue)
+			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeTrue)
+		}
+	})
+
+	//set
+	for _, a := range args {
+		for i := PrivilegeTypeCreateObject; i < PrivilegeTypeExecute; i++ {
+			cache1.set(objectTypeTable, privilegeLevelStar, a.db, a.table)
+		}
+	}
+
+	convey.Convey("has4", t, func() {
+		for _, a := range args {
+			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeFalse)
+			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeFalse)
+		}
+	})
+
+	for _, a := range args {
+		for i := PrivilegeTypeCreateAccount; i < PrivilegeTypeExecute; i++ {
+			cache1.add(objectTypeTable, privilegeLevelStarStar, a.db, a.table, i)
+		}
+	}
+
+	convey.Convey("has4", t, func() {
+		for _, a := range args {
+			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeFalse)
+			ret = cache1.has(objectTypeTable, privilegeLevelStarStar, a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeTrue)
+		}
+	})
+
+	cache1.invalidate()
+	convey.Convey("has4", t, func() {
+		for _, a := range args {
+			ret := cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateAccount)
+			convey.So(ret, convey.ShouldBeFalse)
+			ret = cache1.has(objectTypeTable, privilegeLevelStar, a.db, a.table, PrivilegeTypeCreateObject)
+			convey.So(ret, convey.ShouldBeFalse)
+		}
+	})
 }
 
 func TestActiveRoleGrantCacheLifecycle(t *testing.T) {
@@ -14527,7 +14608,7 @@ func TestRevokedActiveRoleCannotUseAuthorizationFallbacks(t *testing.T) {
 			DefaultRole:   "reader",
 			DefaultRoleID: 3,
 		})
-		ses.GetPrivilegeCache().setActiveRoleGrant(2, 3, true)
+		ses.GetPrivilegeCache().setActiveRoleGrant(2, 3, false)
 		return ses
 	}
 
@@ -14536,7 +14617,6 @@ func TestRevokedActiveRoleCannotUseAuthorizationFallbacks(t *testing.T) {
 		ses := newRevokedSession(determinePrivilegeSetOfStatement(stmt))
 		bh := &backgroundExecTest{}
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(3, 2)] = newMrsForCheckUserGrant(nil)
 		bh.sql2result[getSqlForGetOwnerOfDatabase("owned_db")] = newMrsForOwner(
 			[][]interface{}{{int64(3)}})
 		backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
@@ -14546,7 +14626,7 @@ func TestRevokedActiveRoleCannotUseAuthorizationFallbacks(t *testing.T) {
 			context.Background(), ses, stmt)
 		require.False(t, ok)
 		require.Error(t, err)
-		require.Equal(t, []string{"begin;", getSqlForCheckUserGrantForAuthorization(3, 2), "commit;"}, bh.executedSQLs, "revoked role must not reach ownership fallback")
+		require.Empty(t, bh.executedSQLs, "revoked role must not reach ownership fallback")
 	})
 
 	t.Run("privilege grant option", func(t *testing.T) {
@@ -14558,7 +14638,6 @@ func TestRevokedActiveRoleCannotUseAuthorizationFallbacks(t *testing.T) {
 		ses := newRevokedSession(determinePrivilegeSetOfStatement(stmt))
 		bh := &backgroundExecTest{}
 		bh.init()
-		bh.sql2result[getSqlForCheckUserGrantForAuthorization(3, 2)] = newMrsForCheckUserGrant(nil)
 		backgroundExecStub := gostub.StubFunc(&NewBackgroundExec, bh)
 		defer backgroundExecStub.Reset()
 
@@ -14566,7 +14645,7 @@ func TestRevokedActiveRoleCannotUseAuthorizationFallbacks(t *testing.T) {
 			context.Background(), ses, stmt)
 		require.False(t, ok)
 		require.NoError(t, err)
-		require.Equal(t, []string{"begin;", getSqlForCheckUserGrantForAuthorization(3, 2), "commit;"}, bh.executedSQLs, "revoked role must not reach WITH GRANT OPTION traversal")
+		require.Empty(t, bh.executedSQLs, "revoked role must not reach WITH GRANT OPTION traversal")
 	})
 
 	t.Run("role switch remains available", func(t *testing.T) {
@@ -15422,6 +15501,18 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 		require.Equal(t, 0, roleSet.Len())
 	})
 
+	t.Run("table ownership uses object scoped ownership query", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
 	t.Run("table ownership uses object type scoped ownership query", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
@@ -15430,6 +15521,18 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 
 		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObjType(
 			ctx, bh, PrivilegeTypeTableOwnership, objectTypeView)
+		require.NoError(t, err)
+		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("unsupported scoped privilege falls back to unscoped WGO sql", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGODependsOnPrivType(PrivilegeTypeCreateDatabase)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{roleID}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
+			ctx, bh, PrivilegeTypeCreateDatabase, objectTypeTable, objectIDAll)
 		require.NoError(t, err)
 		require.True(t, roleSet.Contains(roleID))
 	})
@@ -15444,6 +15547,30 @@ func TestGetRoleSetThatPrivilegeGrantedToWGOScopedCoverageEdges(t *testing.T) {
 			ctx, bh, PrivilegeTypeCreateDatabase, objectTypeView)
 		require.NoError(t, err)
 		require.True(t, roleSet.Contains(roleID))
+	})
+
+	t.Run("object scoped exec error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
+		bh.sql2err[sql] = moerr.NewInternalError(ctx, "object scoped WGO failed")
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
+	})
+
+	t.Run("object scoped row decode error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		sql := getSqlForCheckRoleHasPrivilegeWGOWithObj(int64(PrivilegeTypeTableOwnership), objectTypeTable, 10001)
+		bh.sql2result[sql] = newMrsForPrivilegeWGO([][]interface{}{{"bad-role-id"}})
+
+		roleSet, err := getRoleSetThatPrivilegeGrantedToWGOWithObj(
+			ctx, bh, PrivilegeTypeTableOwnership, objectTypeTable, 10001)
+		require.Error(t, err)
+		require.Nil(t, roleSet)
 	})
 
 	t.Run("object type scoped exec error is returned", func(t *testing.T) {
@@ -17998,7 +18125,7 @@ func TestDoCreateSnapshot(t *testing.T) {
 		mrs2 := newMrsForPasswordOfUser([][]interface{}{{1}})
 		bh.sql2result[sql2] = mrs2
 
-		quotaErr := mockSnapshotQuotaResult(bh, "acc1", 1, tree.SNAPSHOTLEVELACCOUNT.String())
+		quotaErr := mockSnapshotQuotaResult(bh, tenant.Tenant, tenant.TenantID, tree.SNAPSHOTLEVELACCOUNT.String())
 		convey.So(quotaErr, convey.ShouldBeNil)
 
 		err := doCreateSnapshot(ctx, ses, cs)
@@ -19154,84 +19281,4 @@ func filterExecutedSQLsForTest(sqls []string, prefix string) []string {
 		}
 	}
 	return result
-}
-
-func TestLogicalViewPrivilegeCoverage(t *testing.T) {
-	step := func(name string, ts int64, tenant uint32) *plan.ViewStep {
-		snapshot := &plan.Snapshot{Tenant: &plan.SnapshotTenant{TenantID: tenant}}
-		if ts != 0 {
-			snapshot.TS = &timestamp.Timestamp{PhysicalTime: ts}
-		}
-		return &plan.ViewStep{DatabaseName: "db", ViewName: name, Snapshot: snapshot}
-	}
-	outer, inner := step("outer", 0, 0), step("inner", 42, 0)
-	otherTime, otherTenant := step("inner", 43, 0), step("inner", 42, 1)
-	otherLogical := step("inner", 42, 0)
-	otherLogical.Snapshot.TS.LogicalTime = 1
-	otherGrant := step("inner", 42, 0)
-	otherGrant.SubscriptionName = "subscription"
-	provenance := step("inner", 42, 0)
-	provenance.Snapshot.ExtraInfo = &plan.SnapshotExtraInfo{Name: "alias"}
-	ref := func(path ...*plan.ViewStep) *plan.ViewReference { return &plan.ViewReference{ViewPath: path} }
-	physical := privilegeTipsArray{{typ: PrivilegeTypeSelect, viewPath: []*plan.ViewStep{outer, inner}}}
-	for _, tc := range []struct {
-		name       string
-		physical   privilegeTipsArray
-		references []*plan.ViewReference
-		want       [][]*plan.ViewStep
-	}{
-		{name: "plain select"},
-		{name: "constant nested", references: []*plan.ViewReference{ref(outer), ref(outer, inner)}, want: [][]*plan.ViewStep{{outer, inner}}},
-		{name: "scan covers complete path", physical: physical, references: []*plan.ViewReference{ref(outer), ref(outer, inner)}},
-		{name: "unscanned sibling", physical: physical, references: []*plan.ViewReference{ref(outer, step("sibling", 0, 0))}, want: [][]*plan.ViewStep{{outer, step("sibling", 0, 0)}}},
-		{name: "distinct outer role path", references: []*plan.ViewReference{ref(outer, inner), ref(step("other", 0, 0), inner)}, want: [][]*plan.ViewStep{{outer, inner}, {step("other", 0, 0), inner}}},
-		{name: "duplicate", references: []*plan.ViewReference{ref(outer), ref(outer)}, want: [][]*plan.ViewStep{{outer}}},
-		{name: "inner timestamp differs", physical: physical, references: []*plan.ViewReference{ref(outer, otherTime)}, want: [][]*plan.ViewStep{{outer, otherTime}}},
-		{name: "inner tenant differs", physical: physical, references: []*plan.ViewReference{ref(outer, otherTenant)}, want: [][]*plan.ViewStep{{outer, otherTenant}}},
-		{name: "inner logical timestamp differs", physical: physical, references: []*plan.ViewReference{ref(outer, otherLogical)}, want: [][]*plan.ViewStep{{outer, otherLogical}}},
-		{name: "grant namespace differs", physical: physical, references: []*plan.ViewReference{ref(outer, otherGrant)}, want: [][]*plan.ViewStep{{outer, otherGrant}}},
-		{name: "snapshot alias is equivalent", physical: physical, references: []*plan.ViewReference{ref(outer, provenance)}},
-		{name: "literal timestamp identifier", references: []*plan.ViewReference{ref(step("v@ts=42", 0, 0))}, want: [][]*plan.ViewStep{{step("v@ts=42", 0, 0)}}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			q := &plan.Query{ViewReferences: tc.references}
-			original := plan2.DeepCopyQuery(q)
-			tips, err := appendLogicalViewPrivilegeTips(tc.physical, q)
-			require.NoError(t, err)
-			require.Len(t, tips, len(tc.physical)+len(tc.want))
-			for i, path := range tc.want {
-				tip := tips[len(tc.physical)+i]
-				require.Equal(t, objectTypeView, tip.objType)
-				require.Equal(t, PrivilegeTypeSelect, tip.typ)
-				require.Equal(t, path, tip.viewPath)
-			}
-			require.Equal(t, original.ViewReferences, q.ViewReferences, "authorization must not mutate cached binding contexts")
-		})
-	}
-	for _, reference := range []*plan.ViewReference{nil, {}, ref(nil), ref(&plan.ViewStep{DatabaseName: "db", ViewName: "v"}), ref(&plan.ViewStep{DatabaseName: "db", ViewName: "v", Snapshot: &plan.Snapshot{}})} {
-		_, err := appendLogicalViewPrivilegeTips(physical, &plan.Query{ViewReferences: []*plan.ViewReference{reference}})
-		require.Error(t, err, "malformed logical metadata must not disappear behind physical coverage")
-	}
-}
-
-func TestCompoundObjectPrivilegesDoNotAuthorizeSibling(t *testing.T) {
-	ses := newTestSession(t, gomock.NewController(t))
-	t.Cleanup(ses.Close)
-	ses.SetTenantInfo(getDefaultAccount())
-	cache := ses.GetPrivilegeCache()
-	tips := privilegeTipsArray{
-		{typ: PrivilegeTypeSelect, objType: objectTypeTable, databaseName: "app", tableName: "owned"},
-		{typ: PrivilegeTypeSelect, objType: objectTypeTable, databaseName: "app", tableName: "protected"},
-	}
-	priv := &privilege{objType: objectTypeTable}
-	convertPrivilegeTipsToPrivilege(priv, tips)
-	require.Len(t, priv.entries, 1)
-	cache.add(objectTypeTable, privilegeLevelDatabaseTable, "app", "owned", PrivilegeTypeTableOwnership)
-	allowed, err := checkPrivilegeInCache(t.Context(), ses, priv, true)
-	require.NoError(t, err)
-	require.False(t, allowed)
-	cache.add(objectTypeTable, privilegeLevelDatabaseTable, "app", "protected", PrivilegeTypeTableAll)
-	allowed, err = checkPrivilegeInCache(t.Context(), ses, priv, true)
-	require.NoError(t, err)
-	require.True(t, allowed, "object-level alternatives still authorize each object")
 }
