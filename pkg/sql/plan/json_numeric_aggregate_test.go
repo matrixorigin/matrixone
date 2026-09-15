@@ -119,7 +119,7 @@ func TestNumericAggregateBindingPreservesExistingDomains(t *testing.T) {
 	for _, name := range []string{"sum", "avg"} {
 		t.Run(name+" distinct rewrite", func(t *testing.T) {
 			bound := requireJSONNumericAggregateBinding(t, name)
-			bound.GetF().Func.Obj |= function.Distinct
+			bound.GetF().Func.Obj = int64(uint64(bound.GetF().Func.Obj) | function.Distinct)
 			builder, outer := newDistinctAggTestBuilder(
 				1_000, 10, 100, []*planpb.Expr{bound})
 			require.NoError(t, builder.optimizeDistinctAgg(1))
@@ -134,7 +134,7 @@ func TestNumericAggregateBindingPreservesExistingDomains(t *testing.T) {
 
 		t.Run(name+" sibling aggregate keeps bound argument", func(t *testing.T) {
 			bound := requireJSONNumericAggregateBinding(t, name)
-			bound.GetF().Func.Obj |= function.Distinct
+			bound.GetF().Func.Obj = int64(uint64(bound.GetF().Func.Obj) | function.Distinct)
 			sibling := distinctAggTestExpr(
 				function.SUM, false, planpb.Type{Id: int32(types.T_float64)},
 				distinctAggTestCol(types.T_float64, 1, 2, 100))
