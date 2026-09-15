@@ -1842,6 +1842,22 @@ func findMergeGroup(op vm.Operator) *group.MergeGroup {
 	return findMergeGroup(base.GetChildren(0))
 }
 
+func (s *Scope) readerContext(c *Compile) context.Context {
+	// Reader construction belongs to the source scope's pipeline. Using the
+	// compile/root context here leaves ParallelRun's child context unaware of a
+	// StopSending cancellation until after BuildReaders returns, which races the
+	// build-failure cleanup classification. The source context is derived from
+	// the same query context and still carries the account/snapshot values that
+	// callers add below.
+	if s != nil && s.Proc != nil && s.Proc.Ctx != nil {
+		return s.Proc.Ctx
+	}
+	if c != nil && c.proc != nil {
+		return c.proc.Ctx
+	}
+	return nil
+}
+
 func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// StarCount-only path: aggOptimize already called rel.StarCount() and set PartialResults.
 	// Return EmptyReaders so no data flows; MergeGroup will use PartialResults only.
@@ -1892,7 +1908,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 	// state, so it must use the relation reader below.
 	case s.IsRemote && (s.NodeInfo.CNCNT != 1 || s.DataSource.Rel == nil):
 		// this cannot use c.proc.Ctx directly, please refer to `default case`.
-		ctx := c.proc.Ctx
+		ctx := s.readerContext(c)
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)
 		}
@@ -1925,7 +1941,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		}
 	// Reader can be generated from the relation on the executing CN.
 	case s.DataSource.Rel != nil:
-		ctx := c.proc.Ctx
+		ctx := s.readerContext(c)
 		if s.IsRemote {
 			if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 				ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -1987,7 +2003,7 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 		// This cannot modify the c.proc.Ctx here, but I don't know why.
 		// Maybe there are some account related things stores in the context (using the context.WithValue),
 		// and modify action will change the account.
-		ctx := c.proc.Ctx
+		ctx := s.readerContext(c)
 
 		if util.TableIsClusterTable(s.DataSource.TableDef.GetTableType()) {
 			ctx = defines.AttachAccountId(ctx, catalog.System_Account)

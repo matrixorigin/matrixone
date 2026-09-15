@@ -843,10 +843,14 @@ const (
 
 	INTERNAL_JSON_COMPARISON_PARAM = 577
 	INTERNAL_JSON_MEMBER_OF        = 578
+	// JSON_STORAGE_SIZE and JSON_STORAGE_FREE expose MatrixOne's ByteJson
+	// logical payload size and currently-supported free-space contract.
+	JSON_STORAGE_SIZE = 579
+	JSON_STORAGE_FREE = 580
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 579
+	FUNCTION_END_NUMBER = 581
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1143,6 +1147,8 @@ var functionIdRegister = map[string]int32{
 	"json_type":                      JSON_TYPE,
 	"json_valid":                     JSON_VALID,
 	"json_length":                    JSON_LENGTH,
+	"json_storage_size":              JSON_STORAGE_SIZE,
+	"json_storage_free":              JSON_STORAGE_FREE,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_merge_patch":               JSON_MERGE_PATCH,
