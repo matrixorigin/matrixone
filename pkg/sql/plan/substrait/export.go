@@ -1525,6 +1525,11 @@ type semanticDeclaration struct {
 var semanticDeclarations = []semanticDeclaration{
 	{semanticScalar, function.AND, "and", "and", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
 	{semanticScalar, function.OR, "or", "or", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_datetime.ToType()}, "sirius-v1:extract"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_date.ToType()}, "sirius-v1:extract"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_time.ToType()}, "sirius-v1:extract"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()}, "sirius-v1:extract"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_timestamp.ToType()}, "sirius-v1:extract"},
 	{semanticScalar, function.NOT, "not", "not", []types.Type{types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
 	{semanticScalar, function.EQUAL, "=", "equal", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
 	{semanticScalar, function.NOT_EQUAL, "!=", "not_equal", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
