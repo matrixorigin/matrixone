@@ -83,6 +83,119 @@ func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...str
 	return out, err
 }
 
+func TestResolveCgroupMemoryBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, limitFile, rootLimit, parentLimit, leafLimit, wantScope, wantLimit, wantComplete string
+	}{
+		{"tight-parent", "memory.max", "max", "17179869184", "max", "parent", "17179869184", "1"},
+		{"tight-leaf", "memory.max", "max", "17179869184", "4294967296", "leaf", "4294967296", "1"},
+		{"equal-prefers-parent", "memory.max", "max", "8589934592", "8589934592", "parent", "8589934592", "1"},
+		{"parent-pressure-within-looser-limit", "memory.max", "max", "17179869184", "8589934592", "leaf", "8589934592", "1"},
+		{"no-visible-finite-limit", "memory.max", "max", "max", "max", "leaf", "unknown", "1"},
+		{"missing-visible-ancestor", "memory.max", "max", "", "8589934592", "leaf", "unknown", "0"},
+		{"local-events-option", "memory.max", "max", "max", "8589934592", "leaf", "unknown", "0"},
+		{"v1-unlimited-sentinel", "memory.limit_in_bytes", "9223372036854771712", "8589934592", "9223372036854771712", "parent", "8589934592", "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "cgroup")
+			parent := filepath.Join(root, "parent")
+			leaf := filepath.Join(parent, "leaf")
+			for _, dir := range []string{root, parent, leaf} {
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mountInfoPath := filepath.Join(root, "mountinfo")
+			if tc.limitFile == "memory.max" {
+				mountOptions := "rw"
+				if tc.name == "local-events-option" {
+					mountOptions += ",memory_localevents"
+				}
+				mountInfo := "36 25 0:32 / " + root + " rw - cgroup2 cgroup " + mountOptions + "\n"
+				if err := os.WriteFile(mountInfoPath, []byte(mountInfo), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for dir, limit := range map[string]string{
+				root:   tc.rootLimit,
+				parent: tc.parentLimit,
+				leaf:   tc.leafLimit,
+			} {
+				if limit == "" {
+					continue
+				}
+				if err := os.WriteFile(filepath.Join(dir, tc.limitFile), []byte(limit+"\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if tc.limitFile == "memory.max" && limit != "max" {
+					peak := "2048"
+					if tc.name == "parent-pressure-within-looser-limit" {
+						if dir == parent {
+							peak = "17000000000"
+						} else if dir == leaf {
+							peak = "6442450944"
+						}
+					}
+					for name, value := range map[string]string{
+						"memory.current": "1024",
+						"memory.peak":    peak,
+						"memory.events":  "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n",
+					} {
+						if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				} else if tc.limitFile == "memory.limit_in_bytes" && limit == "8589934592" {
+					for name, value := range map[string]string{
+						"memory.usage_in_bytes":     "1024",
+						"memory.max_usage_in_bytes": "2048",
+						"memory.failcnt":            "0",
+					} {
+						if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			}
+
+			script := `source ./run_ut.sh UT
+resolve_cgroup_memory_boundary "$CGROUP_TEST_LEAF" "$CGROUP_TEST_ROOT" "$CGROUP_LIMIT_FILE" "$CGROUP_TEST_MOUNTINFO"
+printf 'scope=%s limit=%s complete=%s events_hierarchical=%s boundaries=%s\n' "$CGROUP_MEMORY_PATH" "$CGROUP_MEMORY_LIMIT" "$CGROUP_MEMORY_HIERARCHY_COMPLETE" "$CGROUP_MEMORY_EVENTS_HIERARCHICAL" "$CGROUP_MEMORY_HIERARCHY"
+`
+			out, err := scheduleHarness(t, script,
+				"CGROUP_TEST_ROOT="+root,
+				"CGROUP_TEST_LEAF="+leaf,
+				"CGROUP_LIMIT_FILE="+tc.limitFile,
+				"CGROUP_TEST_MOUNTINFO="+mountInfoPath,
+			)
+			if err != nil {
+				t.Fatalf("resolve cgroup memory boundary: %v\n%s", err, out)
+			}
+			wantPath := parent
+			if tc.wantScope == "leaf" {
+				wantPath = leaf
+			}
+			wantEvents := "1"
+			if tc.limitFile == "memory.limit_in_bytes" {
+				wantEvents = "not_applicable"
+			} else if tc.name == "local-events-option" {
+				wantEvents = "0"
+			}
+			wantPrefix := "scope=" + wantPath + " limit=" + tc.wantLimit + " complete=" + tc.wantComplete + " events_hierarchical=" + wantEvents + " boundaries="
+			if !strings.HasPrefix(string(out), wantPrefix) {
+				t.Fatalf("unexpected boundary:\n got: %q\nwant prefix: %q", out, wantPrefix)
+			}
+			if tc.name == "parent-pressure-within-looser-limit" {
+				parentBoundary := parent + "|17179869184|1024|17000000000|oom=0,oom_kill=0"
+				leafBoundary := leaf + "|8589934592|1024|6442450944|oom=0,oom_kill=0"
+				if !strings.Contains(string(out), parentBoundary) || !strings.Contains(string(out), leafBoundary) {
+					t.Fatalf("did not retain metrics for both constraining ancestors:\n%s", out)
+				}
+			}
+		})
+	}
+}
+
 func TestHeavyPlanReusesReleasedEngineCapacity(t *testing.T) {
 	for _, tc := range []struct{ name, budget, overlap, engine, heavy, plan, expected string }{
 		{"default", "3", "", "0", "0", "0", "0"},
@@ -102,7 +215,13 @@ func TestHeavyPlanReusesReleasedEngineCapacity(t *testing.T) {
 			script := `source ./run_ut.sh UT
 trap handle_ut_termination TERM
 function logger() { :; }
-function report_cgroup_memory_usage() { :; }
+function report_cgroup_memory_usage() {
+ if [[ "$1" == "Final race UT" ]]; then
+  [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID$CLUSTER_PREBUILD_JOB_PID" ]] || exit 97
+  [[ -z "$ENGINE_RACE_REPORT$PLAN_RACE_REPORT" ]] || exit 98
+  touch "$CASE_DIR/final-memory"
+ fi
+}
 function make() { :; }
 function egrep() { echo fake.pb.go; }
 # Skip the unrelated native smoke, while retaining the real race scheduler.
@@ -136,6 +255,7 @@ run_tests
 [[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || exit 93
 [[ -d "$CASE_DIR/engine-once" && -d "$CASE_DIR/plan-once" ]] || exit 94
 [[ -z "$CURRENT_UT_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 95
+[[ -e "$CASE_DIR/final-memory" ]] || exit 96
 printf '\nREPORT\n'
 cat "$UT_REPORT"
 `
@@ -385,20 +505,22 @@ exit 0
 	for _, tc := range []struct {
 		name, parallel, overlap, expectOverlap, expected string
 	}{
+		{name: "default-off", parallel: "6", overlap: "__default__", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
 		{name: "overlap", parallel: "6", overlap: "1", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end"},
 		{name: "sequential-explicit-off", parallel: "6", overlap: "0", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
 		{name: "sequential-single-slot", parallel: "1", overlap: "0", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
 		{name: "single-slot-guard", parallel: "1", overlap: "1", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			script := `source ./run_ut.sh UT
+			script := `if [[ "$UT_OVERLAP_VALUE" == "__default__" ]]; then unset UT_OVERLAP_LIGHT; fi
+source ./run_ut.sh UT
 function logger() { :; }
 function make() { :; }
 function egrep() { echo fake.pb.go; }
 	MO_CL_CUDA=1
 	UT_SHARD=all
 UT_PARALLEL=${UT_PARALLEL_VALUE}
-UT_OVERLAP_LIGHT=${UT_OVERLAP_VALUE}
+if [[ "$UT_OVERLAP_VALUE" != "__default__" ]]; then UT_OVERLAP_LIGHT=${UT_OVERLAP_VALUE}; fi
 UT_OVERLAP_LIGHT_PARALLEL=2
 UT_OVERLAP_PLAN=0
 UT_PREBUILD_EMBEDDED=0

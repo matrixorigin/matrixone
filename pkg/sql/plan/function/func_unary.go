@@ -1506,6 +1506,57 @@ func StGeomFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	}, selectList)
 }
 
+// StGeomFromWKBWithSRID is the two-argument WKB constructor. The SRID is
+// metadata on the result type; geometry values continue to carry bare WKB.
+func StGeomFromWKBWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	srids := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	maxPoints := maxPointsInGeometryLimit(proc)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		v, null1 := source.GetStrValue(i)
+		sridValue, null2 := srids.GetValue(i)
+		if null1 || null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if sridValue < 0 || sridValue > int64(geo.MaxSRID) {
+			return moerr.NewInvalidInputNoCtxf("SRID should be between 0 and %d", geo.MaxSRID)
+		}
+
+		g, err := geo.ReadWKB(v)
+		if err != nil {
+			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		if err := validateGeometryTextForStorage(geo.WriteWKT(g), maxPoints); err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(geo.WriteWKB(g), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func StGeomFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	maxPoints := maxPointsInGeometryLimit(proc)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
@@ -1826,6 +1877,54 @@ func StSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	return nil
 }
 
+// StSRIDWithSRID changes only the type-level SRID metadata. Preserve the
+// payload and the source geometry precision; the binder specializes the result
+// type's Width for a constant or prepared SRID argument.
+func StSRIDWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	srids := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	maxPoints := maxPointsInGeometryLimit(proc)
+	float32Payload := geometryArgIsFloat32(ivecs, 0)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		v, null1 := source.GetStrValue(i)
+		sridValue, null2 := srids.GetValue(i)
+		if null1 || null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if sridValue < 0 || sridValue > int64(geo.MaxSRID) {
+			return moerr.NewInvalidInputNoCtxf("SRID should be between 0 and %d", geo.MaxSRID)
+		}
+		if err := validateGeometryPayloadForInput(v, maxPoints, float32Payload); err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(v, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // sridFromTypeWidth decodes the SRID stored in a geometry type's Width
 // (srid+1 when defined, 0 when undefined → SRID 0).
 func sridFromTypeWidth(width int32) uint32 {
@@ -1879,10 +1978,36 @@ func geometryResultType(parameters []types.Type) types.Type {
 	return t
 }
 
+// geometrySetSRIDResultType preserves the source geometry's precision and
+// subtype metadata while allowing the binder to replace only Width (the SRID).
+func geometrySetSRIDResultType(parameters []types.Type) types.Type {
+	t := geometryResultType(parameters)
+	if len(parameters) > 0 && (parameters[0].Oid == types.T_geometry || parameters[0].Oid == types.T_geometry32) {
+		t.Scale = parameters[0].Scale
+	}
+	return t
+}
+
 // geometryArgIsFloat32 reports whether the i-th argument vector is a GEOMETRY32
 // (float32-coordinate) value, so an eval function can emit matching output.
 func geometryArgIsFloat32(ivecs []*vector.Vector, i int) bool {
 	return i < len(ivecs) && ivecs[i].GetType().Oid == types.T_geometry32
+}
+
+// validateGeometryPayloadForInput validates a setter payload without changing
+// its bytes. GEOMETRY32 must be decoded with the float32 WKB reader; using the
+// permissive float64-then-float32 decoder here would accept a payload whose
+// declared precision is wrong and then preserve that malformed representation.
+func validateGeometryPayloadForInput(payload []byte, maxPoints int64, float32Payload bool) error {
+	if float32Payload && payloadIsWKB(payload) {
+		g, err := geo.ReadWKBFloat32(payload)
+		if err != nil {
+			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		return validateGeometryTextForStorage(geo.WriteWKT(g), maxPoints)
+	}
+	_, _, _, _, err := validateGeometryPayload(payload, maxPoints)
+	return err
 }
 
 // geoEncodeWKB writes g as float32 WKB when f32 is set, else standard float64 WKB.
@@ -4942,10 +5067,8 @@ func lineSegmentsIntersect(a, b, c, d geometryPoint2D) bool {
 }
 
 func geometryOrientation(a, b, c geometryPoint2D) int {
-	const epsilon = 1e-9
-
 	cross := (b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x)
-	if math.Abs(cross) <= epsilon {
+	if geometryCrossWithinDistance(cross, math.Hypot(b.x-a.x, b.y-a.y)) {
 		return 0
 	}
 	if cross > 0 {

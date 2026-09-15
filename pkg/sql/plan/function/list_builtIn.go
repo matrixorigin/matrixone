@@ -4980,6 +4980,36 @@ var supportedStringBuiltIns = []FuncNew{
 					return StGeomFromWKB
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StGeomFromWKBWithSRID
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_blob, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StGeomFromWKBWithSRID
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StGeomFromWKBWithSRID
+				},
+			},
 		},
 	},
 
@@ -6091,6 +6121,22 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return StSRID
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_geometry, types.T_int64},
+				retType:    geometrySetSRIDResultType,
+				newOp: func() executeLogicOfOverload {
+					return StSRIDWithSRID
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_geometry32, types.T_int64},
+				retType:    geometrySetSRIDResultType,
+				newOp: func() executeLogicOfOverload {
+					return StSRIDWithSRID
 				},
 			},
 		},

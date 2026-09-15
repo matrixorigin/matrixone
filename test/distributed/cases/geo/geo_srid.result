@@ -7,6 +7,24 @@ srid_0
 select st_srid(st_geomfromtext('POINT(1 2)')) as srid_default;
 srid_default
 0
+select st_srid(st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(1 2)')), 4326)) as wkb_blob_srid;
+wkb_blob_srid
+4326
+select st_srid(st_geomfrombinary(st_aswkb(st_geomfromtext('POINT(1 2)')), 3857)) as wkb_binary_srid;
+wkb_binary_srid
+3857
+select st_srid(st_geometryfromwkb(cast(st_aswkb(st_geomfromtext('POINT(1 2)')) as varbinary), 0)) as wkb_varbinary_srid;
+wkb_varbinary_srid
+0
+select st_astext(st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(1 2)')), 4326)) as wkb_setter_wkt;
+wkb_setter_wkt
+POINT(1 2)
+select st_srid(st_srid(st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(1 2)')), 4326), 3857)) as srid_setter_3857;
+srid_setter_3857
+3857
+select st_srid(st_srid(st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(1 2)')), 4326), NULL)) as srid_setter_null;
+srid_setter_null
+null
 select st_srid(st_centroid(st_geomfromtext('POLYGON((0 0,2 0,2 2,0 2,0 0))', 4326))) as srid_centroid;
 srid_centroid
 4326
@@ -44,6 +62,61 @@ invalid input: The SRID of the geometry does not match the SRID of the column. T
 insert into gs values (st_geomfromtext('POINT(3 3)'));
 invalid input: The SRID of the geometry does not match the SRID of the column. The SRID of the geometry is 0, but the SRID of the column is 4326.
 drop table gs;
+set @geo_srid_value = 4326;
+prepare geo_srid_stmt from 'select st_srid(st_srid(st_geomfromtext(''POINT(4 4)''), ?)) as prepared_srid';
+execute geo_srid_stmt using @geo_srid_value;
+prepared_srid
+4326
+set @geo_srid_value = 3857;
+execute geo_srid_stmt using @geo_srid_value;
+prepared_srid
+3857
+set @geo_srid_value = NULL;
+execute geo_srid_stmt using @geo_srid_value;
+prepared_srid
+null
+set @geo_srid_value = 0;
+execute geo_srid_stmt using @geo_srid_value;
+prepared_srid
+0
+deallocate prepare geo_srid_stmt;
+drop table if exists gs_prepared;
+create table gs_prepared(g point srid 4326);
+prepare gs_prepared_insert from 'insert into gs_prepared values (st_srid(st_geomfromtext(''POINT(4 4)''), ?))';
+set @gs_prepared_srid = 4326;
+execute gs_prepared_insert using @gs_prepared_srid;
+set @gs_prepared_srid = NULL;
+execute gs_prepared_insert using @gs_prepared_srid;
+prepare gs_prepared_wkb from 'insert into gs_prepared values (st_geomfromwkb(st_aswkb(st_geomfromtext(''POINT(5 5)'')), ?))';
+set @gs_prepared_srid = 4326;
+execute gs_prepared_wkb using @gs_prepared_srid;
+deallocate prepare gs_prepared_insert;
+deallocate prepare gs_prepared_wkb;
+prepare gs_prepared_invalid from 'insert into gs_prepared values (st_srid(st_geomfromtext(''POINT(4 4)''), ?))';
+set @gs_prepared_srid = 3857;
+execute gs_prepared_invalid using @gs_prepared_srid;
+invalid input: The SRID of the geometry does not match the SRID of the column. The SRID of the geometry is 3857, but the SRID of the column is 4326.
+prepare gs_prepared_recovery from 'insert into gs_prepared values (st_srid(st_geomfromtext(''POINT(8 8)''), ?))';
+set @gs_prepared_srid = 4326;
+execute gs_prepared_recovery using @gs_prepared_srid;
+deallocate prepare gs_prepared_recovery;
+select st_astext(g) as prepared_wkt, st_srid(g) as prepared_srid from gs_prepared order by 1;
+prepared_wkt    prepared_srid
+null    null
+POINT(4 4)    4326
+POINT(5 5)    4326
+POINT(8 8)    4326
+create view gs_srid_view as select st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(6 6)')), 4326) as g;
+select st_srid(g) as view_srid from gs_srid_view;
+view_srid
+4326
+drop view gs_srid_view;
+create table gs_srid_ctas as select st_geomfromwkb(st_aswkb(st_geomfromtext('POINT(7 7)')), 4326) as g;
+select st_srid(g) as ctas_srid from gs_srid_ctas;
+ctas_srid
+4326
+drop table gs_srid_ctas;
+drop table gs_prepared;
 drop table if exists gp;
 create table gp(g geometry);
 insert into gp values (st_geomfromtext('POINT(1 1)'));

@@ -40,6 +40,212 @@ func validateGeometrySRID(srid int64) error {
 	return nil
 }
 
+// geometrySRIDLiteralValue extracts the integer literal forms emitted by the
+// parser and constant folder. Keep the conversion signed until validation so
+// an oversized uint64 cannot wrap into an apparently valid SRID.
+func geometrySRIDLiteralValue(lit *plan.Literal) (int64, bool, bool) {
+	if lit == nil {
+		return 0, false, false
+	}
+	if lit.Isnull {
+		return 0, true, true
+	}
+	switch value := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		return int64(value.I8Val), false, true
+	case *plan.Literal_I16Val:
+		return int64(value.I16Val), false, true
+	case *plan.Literal_I32Val:
+		return int64(value.I32Val), false, true
+	case *plan.Literal_I64Val:
+		return value.I64Val, false, true
+	case *plan.Literal_U8Val:
+		return int64(value.U8Val), false, true
+	case *plan.Literal_U16Val:
+		return int64(value.U16Val), false, true
+	case *plan.Literal_U32Val:
+		return int64(value.U32Val), false, true
+	case *plan.Literal_U64Val:
+		return int64(value.U64Val), false, true
+	default:
+		return 0, false, false
+	}
+}
+
+// geometrySRIDRuntimeValue validates a prepared SRID before it is narrowed to
+// the type Width. Runtime protocol values are commonly represented by native
+// integers, while SQL EXECUTE values may arrive as strings or byte slices.
+// Fractional, boolean, and arbitrary textual values are rejected rather than
+// silently accepting a lossy cast.
+func geometrySRIDRuntimeValue(value any) (uint32, bool, error) {
+	if value == nil {
+		return 0, true, nil
+	}
+	var srid uint64
+	switch value := value.(type) {
+	case int8:
+		if value < 0 {
+			return 0, false, validateGeometrySRID(-1)
+		}
+		srid = uint64(value)
+	case int16:
+		if value < 0 {
+			return 0, false, validateGeometrySRID(-1)
+		}
+		srid = uint64(value)
+	case int32:
+		if value < 0 {
+			return 0, false, validateGeometrySRID(-1)
+		}
+		srid = uint64(value)
+	case int64:
+		if value < 0 {
+			return 0, false, validateGeometrySRID(value)
+		}
+		srid = uint64(value)
+	case uint8:
+		srid = uint64(value)
+	case uint16:
+		srid = uint64(value)
+	case uint32:
+		srid = uint64(value)
+	case uint64:
+		srid = value
+	case string:
+		return parseGeometrySRIDText(value)
+	case []byte:
+		return parseGeometrySRIDText(string(value))
+	default:
+		return 0, false, moerr.NewInvalidInputNoCtx("SRID should be an integer")
+	}
+	if srid > uint64(geo.MaxSRID) {
+		return 0, false, moerr.NewInvalidInputNoCtxf("SRID should be between 0 and %d", geo.MaxSRID)
+	}
+	return uint32(srid), false, nil
+}
+
+func parseGeometrySRIDText(value string) (uint32, bool, error) {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return 0, false, moerr.NewInvalidInputNoCtx("SRID should be an integer")
+	}
+	if strings.HasPrefix(text, "-") {
+		srid, err := strconv.ParseInt(text, 10, 64)
+		if err == nil && srid < 0 {
+			return 0, false, validateGeometrySRID(srid)
+		}
+		return 0, false, moerr.NewInvalidInputNoCtx("SRID should be an integer")
+	}
+	srid, err := strconv.ParseUint(text, 10, 64)
+	if err != nil {
+		return 0, false, moerr.NewInvalidInputNoCtx("SRID should be an integer")
+	}
+	if srid > uint64(geo.MaxSRID) {
+		return 0, false, moerr.NewInvalidInputNoCtxf("SRID should be between 0 and %d", geo.MaxSRID)
+	}
+	return uint32(srid), false, nil
+}
+
+func isDirectPreparedGeometrySRIDArg(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetP() != nil {
+		return true
+	}
+	return isImplicitPreparedParamCast(expr)
+}
+
+func isPreparedGeometrySRIDFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "st_srid", "st_geomfromwkb", "st_geomfrombinary", "st_geometryfromwkb":
+		return true
+	default:
+		return false
+	}
+}
+
+// isGeometrySRIDProducingFunction covers every geometry constructor whose
+// explicit SRID is encoded in the result type.  The prepared marker support is
+// intentionally narrower (see isPreparedGeometrySRIDFunction), but a static
+// SRID constructor still has value-dependent metadata when its geometry source
+// is a typed runtime NULL.
+func isGeometrySRIDProducingFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "st_srid", "st_geomfromtext", "st_geomfromwkb", "st_geomfrombinary",
+		"st_geometryfromtext", "st_geometryfromwkb", "st_pointfromtext",
+		"st_linefromtext", "st_polygonfromtext", "st_mpointfromtext",
+		"st_mlinefromtext", "st_mpolyfromtext", "st_geomcollfromtext",
+		"st_pointfromgeohash", "st_geomfromgeojson":
+		return true
+	default:
+		return false
+	}
+}
+
+// geometryExprHasDeferredSRID reports whether a geometry expression contains
+// a direct prepared SRID marker.  A Width of zero is also the representation
+// of an ordinary, unconstrained geometry, so Width alone cannot tell the DML
+// binder whether a mismatch check must be deferred until EXECUTE.
+func geometryExprHasDeferredSRID(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil && isPreparedGeometrySRIDFunction(fn.Func.GetObjName()) && len(fn.Args) >= 2 &&
+			len(preparedGeometrySRIDParamPositionsInExpr(fn.Args[len(fn.Args)-1])) > 0 {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if geometryExprHasDeferredSRID(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if geometryExprHasDeferredSRID(item) {
+				return true
+			}
+		}
+	}
+	if sub := expr.GetSub(); sub != nil && sub.Child != nil {
+		return geometryExprHasDeferredSRID(sub.Child)
+	}
+	return false
+}
+
+// geometrySRIDSourceIsStaticNull is deliberately narrower than a general
+// constant-folding predicate. It recognizes NULL at the geometry input of an
+// SRID-producing expression, including a cast around NULL, so an invalid SRID
+// cannot mask the SQL NULL result. Row-varying NULLs are left to the runtime
+// evaluator and do not bypass scalar SRID validation.
+func geometrySRIDSourceIsStaticNull(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if isNullLiteralExpr(expr) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		name := strings.ToLower(fn.Func.GetObjName())
+		if (name == "cast" || name == "cast_assign" || name == "cast_strict") && len(fn.Args) > 0 {
+			// Generic CAST stores the source first and the TargetType second.
+			return geometrySRIDSourceIsStaticNull(fn.Args[0])
+		}
+		if isGeometrySRIDProducingFunction(name) && len(fn.Args) >= 2 {
+			// These functions are strict NULL propagators: a NULL geometry or a
+			// NULL SRID produces a NULL geometry result. This matters at a DML
+			// assignment boundary, where the result Width is otherwise the same
+			// encoding as an unconstrained geometry and could be mistaken for a
+			// mismatched SRID.
+			return geometrySRIDSourceIsStaticNull(fn.Args[0]) ||
+				geometrySRIDSourceIsStaticNull(fn.Args[len(fn.Args)-1])
+		}
+	}
+	return false
+}
+
 func isEnumPlanType(typ *plan.Type) bool {
 	return typ != nil && typ.Id == int32(types.T_enum) && len(typ.GetEnumvalues()) > 0
 }
@@ -797,7 +1003,8 @@ func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (
 	// SRID is enforced here at bind time, from the types (the WKB payload does
 	// not carry an SRID). A SRID-constrained column requires the value to carry
 	// the same SRID; an unconstrained column (Width 0) accepts any SRID.
-	if columnSRID, columnDefined := geometrySRIDValue(&targetType); columnDefined {
+	if columnSRID, columnDefined := geometrySRIDValue(&targetType); columnDefined &&
+		!geometryExprHasDeferredSRID(expr) && !geometrySRIDSourceIsStaticNull(expr) {
 		valueSRID, _ := geometrySRIDValue(&expr.Typ)
 		if valueSRID != columnSRID {
 			return nil, moerr.NewInvalidInputf(ctx,
@@ -835,6 +1042,35 @@ func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (
 	}
 	castedExpr.Typ = targetType
 	return castedExpr, nil
+}
+
+// validateGeometryAssignmentSRID rechecks a preserved DML assignment cast
+// after execute-time specialization. The write root is intentionally kept
+// stable for SQL-mode/physical-layout semantics, but its source geometry's
+// SRID is value-dependent and must still agree with a constrained target.
+func validateGeometryAssignmentSRID(ctx context.Context, expr *Expr, targetType Type) error {
+	if !isGeometryPlanType(&targetType) {
+		return nil
+	}
+	columnSRID, columnDefined := geometrySRIDValue(&targetType)
+	if !columnDefined || expr == nil {
+		return nil
+	}
+	source := expr
+	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
+		strings.EqualFold(fn.Func.GetObjName(), moGeometryCastToSubtypeFun) && len(fn.Args) >= 2 {
+		source = fn.Args[len(fn.Args)-1]
+	}
+	if source == nil || geometrySRIDSourceIsStaticNull(source) || !isGeometryPlanType(&source.Typ) {
+		return nil
+	}
+	valueSRID, _ := geometrySRIDValue(&source.Typ)
+	if valueSRID != columnSRID {
+		return moerr.NewInvalidInputf(ctx,
+			"The SRID of the geometry does not match the SRID of the column. The SRID of the geometry is %d, but the SRID of the column is %d.",
+			valueSRID, columnSRID)
+	}
+	return nil
 }
 
 func funcCastForTypedArrayType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
