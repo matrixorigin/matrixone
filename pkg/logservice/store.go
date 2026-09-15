@@ -967,10 +967,6 @@ func (l *store) getViewMetadataAdmissionState(
 	return v.(hakeeper.ViewMetadataAdmissionState), nil
 }
 
-func (l *store) viewMetadataAdmissionLogStoresReady(state *pb.CheckerState) bool {
-	return l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, false)
-}
-
 func (l *store) viewMetadataAdmissionLogStoresReadyWithProtocol(
 	state *pb.CheckerState,
 	requireProtocolV3 bool,
