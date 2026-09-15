@@ -1897,3 +1897,36 @@ func TestAlterTemporaryTableRenameDestination(t *testing.T) {
 		})
 	}
 }
+
+// #28917: ALTER ... MODIFY/CHANGE copies rows without re-encoding vectors, so changing a vector
+// column's declared dimension would leave a mixed-dimension column. checkChangeTypeCompatible must
+// reject a dimension change (same element type, different Width) while leaving same-dimension and
+// non-vector width changes alone.
+func TestCheckChangeTypeCompatibleVectorDimension(t *testing.T) {
+	ctx := context.Background()
+	vec := func(id types.T, w int32) *plan.Type { return &plan.Type{Id: int32(id), Width: w} }
+
+	// Every width-bearing vector type is covered, not just VECF32 (#28917 review).
+	for _, id := range []types.T{
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+	} {
+		require.Error(t, checkChangeTypeCompatible(ctx, vec(id, 3), vec(id, 4)),
+			"growing the dimension of %s must be rejected", id.String())
+		require.Error(t, checkChangeTypeCompatible(ctx, vec(id, 4), vec(id, 3)),
+			"shrinking the dimension of %s must be rejected", id.String())
+		require.NoError(t, checkChangeTypeCompatible(ctx, vec(id, 3), vec(id, 3)),
+			"same dimension for %s is allowed (nullability/default change)", id.String())
+	}
+
+	// A dimension change across element types is rejected at validation too (not left to the
+	// per-row cast to fail mid-copy).
+	require.Error(t, checkChangeTypeCompatible(ctx, vec(types.T_array_float32, 3), vec(types.T_array_float64, 4)),
+		"vecf32(3)->vecf64(4) (element + dimension change) must be rejected")
+	// An element-type change that KEEPS the dimension is allowed: the array cast re-encodes rows.
+	require.NoError(t, checkChangeTypeCompatible(ctx, vec(types.T_array_float32, 3), vec(types.T_array_float64, 3)),
+		"vecf32(3)->vecf64(3) (element change, same dimension) is allowed")
+
+	require.NoError(t, checkChangeTypeCompatible(ctx, vec(types.T_varchar, 10), vec(types.T_varchar, 20)),
+		"a non-vector same-type width change is unaffected")
+}
