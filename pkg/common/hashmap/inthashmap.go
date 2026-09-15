@@ -73,6 +73,18 @@ func (m *IntHashMap) SetRejectNaN() error {
 	return nil
 }
 
+// SetLegacyCharPadding keeps CHAR bytes unchanged in the historical H8
+// concatenation grammar. It is used only while a remote merge boundary still
+// accepts pre-v75 partials; the current H8 path uses SQL PAD SPACE keys.
+// It must be selected before inserting the first row.
+func (m *IntHashMap) SetLegacyCharPadding(enabled bool) error {
+	if m == nil || m.rows != 0 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	m.legacyCharPadding = enabled
+	return nil
+}
+
 func (m *IntHashMap) HasNull() bool {
 	return m.hasNull
 }
@@ -443,7 +455,7 @@ func fillVarlenaKey(itr *intHashMapIterator, vec *vector.Vector, start int, n in
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
 				v := vcol[i+start].ByteSlice()
-				if isChar {
+				if isChar && !itr.mp.legacyCharPadding {
 					v = keycodec.CanonicalCharValue(v)
 				}
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
@@ -453,7 +465,7 @@ func fillVarlenaKey(itr *intHashMapIterator, vec *vector.Vector, start int, n in
 		} else {
 			for i := 0; i < n; i++ {
 				v := vcol[i+start].ByteSlice()
-				if isChar {
+				if isChar && !itr.mp.legacyCharPadding {
 					v = keycodec.CanonicalCharValue(v)
 				}
 				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[keyOffs[i]:], v)
@@ -469,7 +481,7 @@ func fillVarlenaKey(itr *intHashMapIterator, vec *vector.Vector, start int, n in
 					keyOffs[i]++
 				} else {
 					v := vcol[i+start].ByteSlice()
-					if isChar {
+					if isChar && !itr.mp.legacyCharPadding {
 						v = keycodec.CanonicalCharValue(v)
 					}
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
@@ -484,7 +496,7 @@ func fillVarlenaKey(itr *intHashMapIterator, vec *vector.Vector, start int, n in
 					continue
 				}
 				v := vcol[i+start].ByteSlice()
-				if isChar {
+				if isChar && !itr.mp.legacyCharPadding {
 					v = keycodec.CanonicalCharValue(v)
 				}
 				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[keyOffs[i]:], v)
@@ -513,7 +525,7 @@ func fillStrKey(itr *intHashMapIterator, vec *vector.Vector, start int, n int) {
 		if itr.mp.hasNull {
 			for i := 0; i < n; i++ {
 				v := vec.GetBytesAt(i + start)
-				if isChar {
+				if isChar && !itr.mp.legacyCharPadding {
 					v = keycodec.CanonicalCharValue(v)
 				}
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
@@ -523,7 +535,7 @@ func fillStrKey(itr *intHashMapIterator, vec *vector.Vector, start int, n int) {
 		} else {
 			for i := 0; i < n; i++ {
 				v := vec.GetBytesAt(i + start)
-				if isChar {
+				if isChar && !itr.mp.legacyCharPadding {
 					v = keycodec.CanonicalCharValue(v)
 				}
 				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[keyOffs[i]:], v)
@@ -539,7 +551,7 @@ func fillStrKey(itr *intHashMapIterator, vec *vector.Vector, start int, n int) {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
 					keyOffs[i]++
 				} else {
-					if isChar {
+					if isChar && !itr.mp.legacyCharPadding {
 						v = keycodec.CanonicalCharValue(v)
 					}
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
@@ -554,7 +566,7 @@ func fillStrKey(itr *intHashMapIterator, vec *vector.Vector, start int, n int) {
 					itr.zValues[i] = 0
 					continue
 				}
-				if isChar {
+				if isChar && !itr.mp.legacyCharPadding {
 					v = keycodec.CanonicalCharValue(v)
 				}
 				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[keyOffs[i]:], v)
