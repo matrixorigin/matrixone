@@ -10581,12 +10581,22 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 			return rtnErr
 		}
 
+		var protocolVersion int64
 		if exists {
 			if !ca.IfNotExists { // do nothing
 				return moerr.NewInternalErrorf(ctx, "the tenant %s exists", ca.Name)
 			}
 			return rtnErr
 		} else {
+			// A newly created account is stamped with the current final version below.
+			// Resolve the VIEWS DDL capability before that stamp so an old or
+			// incompletely upgraded cluster cannot create a tenant that will never
+			// revisit the predecessor metadata definition.
+			protocolVersion, rtnErr = protocolVersionForTenantInitialization(
+				ses.GetService(), ses.GetProc())
+			if rtnErr != nil {
+				return rtnErr
+			}
 			newTenant, newTenantCtx, rtnErr = createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 			if rtnErr != nil {
 				return rtnErr
@@ -10650,7 +10660,8 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, ses.GetService(), ses.GetProc())
+		rtnErr = createTablesInInformationSchemaOfGeneralTenantWithProtocol(
+			newTenantCtx, bh, protocolVersion)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -11010,6 +11021,18 @@ func createTablesInInformationSchemaOfGeneralTenant(
 	service string,
 	proc *process.Process,
 ) error {
+	protocolVersion, err := protocolVersionForTenantInitialization(service, proc)
+	if err != nil {
+		return err
+	}
+	return createTablesInInformationSchemaOfGeneralTenantWithProtocol(ctx, bh, protocolVersion)
+}
+
+func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
+	ctx context.Context,
+	bh BackgroundExec,
+	protocolVersion int64,
+) error {
 	start := time.Now()
 	defer func() {
 		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -11019,12 +11042,8 @@ func createTablesInInformationSchemaOfGeneralTenant(
 	// with new tenant
 	// TODO: when we have the auto_increment column, we need new strategy.
 
-	var err error
-	protocolVersion, err := protocolVersionForTenantInitialization(service, proc)
-	if err != nil {
-		return err
-	}
 	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersion)
+	var err error
 	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
 	sqls = append(sqls, "use information_schema;")
@@ -11045,32 +11064,34 @@ func createTablesInInformationSchemaOfGeneralTenant(
 func protocolVersionForTenantInitialization(service string, proc *process.Process) (int64, error) {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
-		return defines.MORPCMinVersion, nil
+		return 0, moerr.NewInvalidStateNoCtxf(
+			"cannot initialize tenant without a known MORPC protocol version")
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {
-		return defines.MORPCMinVersion, nil
+		return 0, moerr.NewInvalidStateNoCtxf(
+			"cannot initialize tenant without a known MORPC protocol version")
 	}
 	version, ok := value.(int64)
-	if !ok {
-		return defines.MORPCMinVersion, nil
+	if !ok || version < defines.MORPCVersion73 {
+		return 0, moerr.NewInvalidStateNoCtxf(
+			"cannot initialize tenant until the local CN supports MORPC v%d",
+			defines.MORPCVersion73)
 	}
-	if version >= defines.MORPCVersion73 {
-		supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion73)
-		if err != nil {
-			return 0, moerr.NewInternalErrorNoCtxf(
-				"cannot verify MORPC v%d support for tenant initialization: %v",
-				defines.MORPCVersion73, err)
-		}
-		if !supported {
-			// Publishing the v73 VIEWS DDL is unsafe until every CN can bind
-			// both new metadata functions. Abort the account transaction so a
-			// transiently incomplete probe cannot commit a permanently stale
-			// tenant at the final version.
-			return 0, moerr.NewInvalidStateNoCtxf(
-				"cannot initialize tenant until every CN supports MORPC v%d",
-				defines.MORPCVersion73)
-		}
+	supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion73)
+	if err != nil {
+		return 0, moerr.NewInternalErrorNoCtxf(
+			"cannot verify MORPC v%d support for tenant initialization: %v",
+			defines.MORPCVersion73, err)
+	}
+	if !supported {
+		// Publishing the v73 VIEWS DDL is unsafe until every CN can bind
+		// both new metadata functions. Abort the account transaction so a
+		// transiently incomplete probe cannot commit a permanently stale
+		// tenant at the final version.
+		return 0, moerr.NewInvalidStateNoCtxf(
+			"cannot initialize tenant until every CN supports MORPC v%d",
+			defines.MORPCVersion73)
 	}
 	return version, nil
 }
