@@ -366,6 +366,41 @@ func TestStableEmptyHLLStatePropagatesWriterErrors(t *testing.T) {
 		io.ErrShortWrite)
 }
 
+func TestConfigureHLLFloatZeroStateOnlyChangesApproxCount(t *testing.T) {
+	mp := mpool.MustNewZero()
+	values := vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixed(
+		values, math.Copysign(0, -1), false, mp))
+
+	approx := makeApproxCount(mp, AggIdOfApproxCountDistinct,
+		types.T_float64.ToType()).(*approxCountExec)
+	ConfigureHLLFloatZeroState(approx)
+	require.NoError(t, approx.GroupGrow(1))
+	require.NoError(t, approx.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+	require.Equal(t, hllFloatZeroVersion,
+		approx.state[0].mobs[0].(*hllSketch).effectiveWireVersion())
+	approx.Free()
+
+	for _, makePersisted := range []func() AggFuncExec{
+		func() AggFuncExec { return makeHllAdd(mp, AggIdOfHllAdd, types.T_float64.ToType()) },
+		func() AggFuncExec {
+			return makeHllMerge(mp, AggIdOfHllMerge, types.T_varbinary.ToType())
+		},
+	} {
+		exec := makePersisted()
+		ConfigureHLLFloatZeroState(exec)
+		require.NoError(t, exec.GroupGrow(1))
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Equal(t, hllLegacyVersion, results[0].GetBytesAt(0)[0])
+		results[0].Free(mp)
+		exec.Free()
+	}
+
+	values.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestHllWireVersionValidation(t *testing.T) {
 	require.Equal(t, hllVersion, (&hllSketch{}).effectiveWireVersion())
 	sketch := &hllSketch{regs: make([]byte, hllRegisterCnt), wireVersion: hllVersion}
@@ -396,6 +431,18 @@ func TestHllV4UsesCanonicalTypedValues(t *testing.T) {
 			typ:   types.T_array_float32.ToType(),
 			left:  types.ArrayToBytes([]float32{1, 0, 3}),
 			right: types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}),
+		},
+		{
+			name:  "float32-nan-payload",
+			typ:   types.T_float32.ToType(),
+			left:  types.EncodeFixed(math.Float32frombits(0x7fc00000)),
+			right: types.EncodeFixed(math.Float32frombits(0xffc00001)),
+		},
+		{
+			name:  "float64-nan-payload",
+			typ:   types.T_float64.ToType(),
+			left:  types.EncodeFixed(math.Float64frombits(0x7ff8000000000000)),
+			right: types.EncodeFixed(math.Float64frombits(0xfff8000000000001)),
 		},
 	}
 	for _, tc := range tests {
