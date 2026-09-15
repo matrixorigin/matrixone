@@ -6200,17 +6200,7 @@ func preparedSQLExecuteNumericParamExpr(
 		return appendExplicitCastBeforeExpr(ctx, source, makeSimplePlan2Type(types.T_float64))
 	}
 	if sourceType.Oid == types.T_bool {
-		value := int64(0)
-		if literal := source.GetLit(); literal != nil && literal.GetBval() {
-			value = 1
-		}
-		return &Expr{
-			Typ: makeSimplePlan2Type(types.T_int64),
-			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-				IsBin: isBin,
-				Value: &plan.Literal_I64Val{I64Val: value},
-			}},
-		}, nil
+		return makePlan2CastExpr(ctx, source, makeSimplePlan2Type(types.T_int64))
 	}
 	if sourceType.Oid == types.T_bit {
 		return makePlan2CastExpr(ctx, source, makeSimplePlan2Type(types.T_uint64))
