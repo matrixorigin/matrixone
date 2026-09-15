@@ -3190,34 +3190,18 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// Get base parameters (must be constants)
-	if !ivecs[1].IsConst() || !ivecs[2].IsConst() {
-		return moerr.NewInvalidArg(proc.Ctx, "conv bases", "not constant")
-	}
-
-	fromBaseVec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-	toBaseVec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
-
-	fromBase, null1 := fromBaseVec.GetValue(0)
-	toBase, null2 := toBaseVec.GetValue(0)
-
-	if null1 || null2 {
-		// If bases are NULL, return NULL for all rows
-		for i := uint64(0); i < uint64(length); i++ {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
+	if length == 0 {
 		return nil
 	}
-
-	absFromBase := absInt64(fromBase)
-	absToBase := absInt64(toBase)
-
-	// Invalid bases return NULL.
-	if absFromBase < 2 || absFromBase > 36 || absToBase < 2 || absToBase > 36 {
-		for i := uint64(0); i < uint64(length); i++ {
-			if err = rs.AppendBytes(nil, true); err != nil {
+	bases, err := newConvBases(ivecs[1], ivecs[2])
+	if err != nil {
+		return err
+	}
+	// Preserve the existing all-NULL fast path without inspecting N when a
+	// constant base is NULL or invalid.
+	if bases.constant && !bases.valid {
+		for i := 0; i < length; i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		}
@@ -3235,7 +3219,7 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	switch inputType.Oid {
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob:
-		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+		return convString(ivecs[0], bases, rs, length, selectList)
 	case types.T_bool:
 		return convMappedInt64(
 			vector.GenerateFunctionFixedTypeParameter[bool](ivecs[0]),
@@ -3244,11 +3228,11 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 					return 1
 				}
 				return 0
-			}, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_bit:
 		return convUnsignedDirect(
 			vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0]),
-			toBase, rs, length, selectList)
+			bases, rs, length, selectList)
 	case types.T_any:
 		// T_any is only the function-local representation of an untyped NULL
 		// or a marker before execute-time specialization. It must propagate
@@ -3268,76 +3252,76 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 		case types.T_int8:
 			return convSignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		case types.T_int16:
 			return convSignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		case types.T_int32:
 			return convSignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		default:
 			return convSignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		}
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		switch inputType.Oid {
 		case types.T_uint8:
 			return convUnsignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		case types.T_uint16:
 			return convUnsignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		case types.T_uint32:
 			return convUnsignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		default:
 			return convUnsignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		}
 	case types.T_float32, types.T_float64:
 		// Floating values use MySQL's string/prefix conversion semantics.
 		if inputType.Oid == types.T_float32 {
 			return convFloatPrefix(
 				vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0]),
-				32, fromBase, toBase, rs, length, selectList)
+				32, bases, rs, length, selectList)
 		}
 		return convFloatPrefix(
 			vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0]),
-			64, fromBase, toBase, rs, length, selectList)
+			64, bases, rs, length, selectList)
 	case types.T_decimal64:
 		return convDecimalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0]),
 			func(v types.Decimal64) string { return v.Format(inputType.Scale) },
-			fromBase, toBase, rs, length, selectList)
+			bases, rs, length, selectList)
 	case types.T_decimal128:
 		return convDecimalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0]),
 			func(v types.Decimal128) string { return v.Format(inputType.Scale) },
-			fromBase, toBase, rs, length, selectList)
+			bases, rs, length, selectList)
 	case types.T_decimal256:
 		return convDecimalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0]),
 			func(v types.Decimal256) string { return v.Format(inputType.Scale) },
-			fromBase, toBase, rs, length, selectList)
+			bases, rs, length, selectList)
 	case types.T_date:
 		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0]),
 			func(dst []byte, v types.Date) []byte {
 				return strconv.AppendInt(dst, int64(v.Year()), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_datetime:
 		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0]),
 			func(dst []byte, v types.Datetime) []byte {
 				return strconv.AppendInt(dst, int64(v.Year()), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_timestamp:
 		zone := time.Local
 		if proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
@@ -3347,19 +3331,19 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0]),
 			func(dst []byte, v types.Timestamp) []byte {
 				return strconv.AppendInt(dst, int64(v.ToDatetime(zone).Year()), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_time:
 		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0]),
 			func(dst []byte, v types.Time) []byte {
 				return strconv.AppendInt(dst, v.Hour(), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_year:
 		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.MoYear](ivecs[0]),
 			func(dst []byte, v types.MoYear) []byte {
 				return strconv.AppendInt(dst, v.ToInt64(), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	default:
 		// Never pass a fixed-width vector to GenerateFunctionStrParameter:
 		// doing so is the panic reported by #28461. Unsupported input types
@@ -3383,11 +3367,19 @@ func formatUnsignedToBase(val uint64, toBase int64) string {
 	return strings.ToUpper(strconv.FormatUint(val, int(base)))
 }
 
-func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+func convString(nVec *vector.Vector, bases convBases, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
 	nParam := vector.GenerateFunctionStrParameter(nVec)
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3420,10 +3412,18 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 
 func convMappedInt64[T types.FixedSizeTExceptStrType](
 	nParam vector.FunctionParameterWrapper[T], mapValue func(T) int64,
-	toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+	bases convBases, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		_, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3464,11 +3464,19 @@ func appendConvPrefix(
 // formatting the remainder of every date/time value on the hot path.
 func convTemporalPrefix[T types.FixedSizeTExceptStrType](
 	nParam vector.FunctionParameterWrapper[T], appendPrefix func([]byte, T) []byte,
-	fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+	bases convBases, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	var prefix [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3495,10 +3503,18 @@ func convTemporalPrefix[T types.FixedSizeTExceptStrType](
 
 func convDecimalPrefix[T types.Decimal](
 	nParam vector.FunctionParameterWrapper[T], formatValue func(T) string,
-	fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+	bases convBases, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3524,11 +3540,19 @@ func convDecimalPrefix[T types.Decimal](
 }
 
 func convFloatPrefix[T types.Floats](
-	nParam vector.FunctionParameterWrapper[T], bitSize int, fromBase, toBase int64,
+	nParam vector.FunctionParameterWrapper[T], bitSize int, bases convBases,
 	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3912,12 +3936,20 @@ func isConvWhitespace(ch byte) bool {
 }
 
 func convSignedPrefix[T constraints.Signed](
-	nParam vector.FunctionParameterWrapper[T], fromBase, toBase int64,
+	nParam vector.FunctionParameterWrapper[T], bases convBases,
 	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	var text [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3951,12 +3983,20 @@ func convSignedPrefix[T constraints.Signed](
 }
 
 func convUnsignedPrefix[T constraints.Unsigned](
-	nParam vector.FunctionParameterWrapper[T], fromBase, toBase int64,
+	nParam vector.FunctionParameterWrapper[T], bases convBases,
 	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	var text [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -4002,11 +4042,19 @@ func convUnsignedPrefix[T constraints.Unsigned](
 // bits must not be reparsed using from_base. The value is formatted as an
 // unsigned bit pattern, including the existing signed-to_base behavior.
 func convUnsignedDirect[T constraints.Unsigned](
-	nParam vector.FunctionParameterWrapper[T], toBase int64,
+	nParam vector.FunctionParameterWrapper[T], bases convBases,
 	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		_, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -10884,6 +10932,7 @@ func overlayBinary(functionName string, op geo.BoolOp) fEvalFn {
 		}
 		// float32 output only when both operands are GEOMETRY32.
 		f32 := geometryArgIsFloat32(ivecs, 0) && geometryArgIsFloat32(ivecs, 1)
+		srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 		return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
 			a, err := decodeGeoGeometry(v1)
 			if err != nil {
@@ -10893,9 +10942,27 @@ func overlayBinary(functionName string, op geo.BoolOp) fEvalFn {
 			if err != nil {
 				return nil, err
 			}
-			g, oerr := geo.Overlay(a, b, op)
+			var projector geo.GeodeticProjector
+			if srid == geo.SRIDWGS84 {
+				projector, a, b, err = geo.ProjectGeodeticPair(a, b)
+				if err != nil {
+					return nil, err
+				}
+			}
+			var (
+				g    geo.Geometry
+				oerr error
+			)
+			if srid == geo.SRIDWGS84 {
+				g, oerr = projector.Overlay(a, b, op)
+			} else {
+				g, oerr = geo.Overlay(a, b, op)
+			}
 			if oerr != nil {
 				return nil, oerr
+			}
+			if srid == geo.SRIDWGS84 {
+				g = projector.Unproject(g)
 			}
 			return geoEncodeWKB(g, f32)
 		}, selectList)
@@ -11631,8 +11698,9 @@ func StContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryContains(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryContains)
 	}, selectList)
 }
 
@@ -11644,8 +11712,9 @@ func StWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryWithin(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryWithin)
 	}, selectList)
 }
 
@@ -11657,8 +11726,9 @@ func StIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryIntersects(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryIntersects)
 	}, selectList)
 }
 
@@ -11670,8 +11740,9 @@ func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryDisjoint(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryDisjoint)
 	}, selectList)
 }
 
@@ -11683,8 +11754,9 @@ func StTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryTouches(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryTouches)
 	}, selectList)
 }
 
@@ -11696,8 +11768,9 @@ func StCrosses(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryCrosses(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryCrosses)
 	}, selectList)
 }
 
@@ -11709,8 +11782,9 @@ func StOverlaps(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryOverlaps(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryOverlaps)
 	}, selectList)
 }
 
@@ -11722,8 +11796,9 @@ func StEquals(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryEquals(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryEquals)
 	}, selectList)
 }
 
@@ -11735,8 +11810,9 @@ func StCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryCovers(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryCovers)
 	}, selectList)
 }
 
@@ -11748,8 +11824,9 @@ func StCoveredBy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryCoveredBy(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryCoveredBy)
 	}, selectList)
 }
 
@@ -11850,6 +11927,35 @@ func checkBinaryGeometryTypeSRID(functionName string, ivecs []*vector.Vector, le
 		return false, moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, left, right)
 	}
 	return false, nil
+}
+
+// geometryPredicateBySRID keeps the existing predicate matrix as the single
+// source of truth while adapting WGS84 inputs to one common local gnomonic
+// frame for its Cartesian segment kernel. The vector type carries the SRID;
+// bare WKB payloads intentionally do not, so this must happen at the evaluated
+// function boundary rather than inside geometryContains/geometryIntersects.
+func geometryPredicateBySRID(
+	srid uint32,
+	left, right []byte,
+	predicate func([]byte, []byte) (bool, error),
+) (bool, error) {
+	if srid != geo.SRIDWGS84 {
+		return predicate(left, right)
+	}
+
+	leftGeometry, err := decodeGeoGeometry(left)
+	if err != nil {
+		return false, err
+	}
+	rightGeometry, err := decodeGeoGeometry(right)
+	if err != nil {
+		return false, err
+	}
+	_, leftGeometry, rightGeometry, err = geo.ProjectGeodeticPair(leftGeometry, rightGeometry)
+	if err != nil {
+		return false, err
+	}
+	return predicate(geo.WriteWKB(leftGeometry), geo.WriteWKB(rightGeometry))
 }
 
 func geometryDistance(left, right []byte) (float64, error) {
@@ -14754,24 +14860,40 @@ func pointOnPolygonBoundaryGeometry(polygon geometryPolygon2D, px, py float64) b
 }
 
 func pointOnSegment(px, py float64, start, end geometryPoint2D) bool {
-	const epsilon = 1e-9
-
-	cross := (px-start.x)*(end.y-start.y) - (py-start.y)*(end.x-start.x)
-	if math.Abs(cross) > epsilon {
+	dx, dy := end.x-start.x, end.y-start.y
+	segmentLength := math.Hypot(dx, dy)
+	if segmentLength == 0 {
+		return math.Hypot(px-start.x, py-start.y) <= geometryPredicateDistanceTolerance
+	}
+	// The cross product has units of length squared. Compare it with the
+	// segment length times epsilon so epsilon remains a perpendicular-distance
+	// tolerance for both very short and very long segments. A fixed cross-product
+	// threshold otherwise makes short segments far too permissive and lets
+	// floating-point error on long segments reject points on the segment.
+	cross := (px-start.x)*dy - (py-start.y)*dx
+	if !geometryCrossWithinDistance(cross, segmentLength) {
 		return false
 	}
-	if px < math.Min(start.x, end.x)-epsilon || px > math.Max(start.x, end.x)+epsilon {
+	if px < math.Min(start.x, end.x)-geometryPredicateDistanceTolerance || px > math.Max(start.x, end.x)+geometryPredicateDistanceTolerance {
 		return false
 	}
-	if py < math.Min(start.y, end.y)-epsilon || py > math.Max(start.y, end.y)+epsilon {
+	if py < math.Min(start.y, end.y)-geometryPredicateDistanceTolerance || py > math.Max(start.y, end.y)+geometryPredicateDistanceTolerance {
 		return false
 	}
 	return true
 }
 
 func sameGeometryPoint(a, b geometryPoint2D) bool {
-	const epsilon = 1e-9
-	return math.Abs(a.x-b.x) <= epsilon && math.Abs(a.y-b.y) <= epsilon
+	return math.Abs(a.x-b.x) <= geometryPredicateDistanceTolerance && math.Abs(a.y-b.y) <= geometryPredicateDistanceTolerance
+}
+
+const geometryPredicateDistanceTolerance = 1e-9
+
+func geometryCrossWithinDistance(cross, segmentLength float64) bool {
+	// Cross products are area-like (length squared). Normalize their tolerance
+	// by the segment length so all orientation and point-on-segment decisions
+	// use the same perpendicular-distance contract.
+	return math.Abs(cross) <= geometryPredicateDistanceTolerance*segmentLength
 }
 
 func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
