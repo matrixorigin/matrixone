@@ -396,9 +396,11 @@ func TestUTHeartbeatStopDuringSleepRegistration(t *testing.T) {
 mkfifo "$CASE_DIR/heartbeat-child"
 mkfifo "$CASE_DIR/heartbeat-release"
 mkfifo "$CASE_DIR/timer-input"
+mkfifo "$CASE_DIR/heartbeat-stop"
 exec 7<> "$CASE_DIR/heartbeat-child"
 exec 8<> "$CASE_DIR/heartbeat-release"
 exec 9<> "$CASE_DIR/timer-input"
+exec 6<> "$CASE_DIR/heartbeat-stop"
 timer_pid=""
 heartbeat_pid=""
 cleanup() {
@@ -414,8 +416,10 @@ cleanup() {
         kill -KILL "$heartbeat_pid" 2>/dev/null || true
         wait "$heartbeat_pid" 2>/dev/null || true
     fi
+    rm -f "$CASE_DIR/heartbeat-child.pid"
     timer_pid=""
     heartbeat_pid=""
+    exec 6>&-
     exec 7>&-
     exec 8>&-
     exec 9>&-
@@ -445,6 +449,9 @@ ut_test_before_heartbeat_sleep_registration() {
         :
     done
 }
+ut_test_heartbeat_stop_requested() {
+    printf '%s\n' "$heartbeat_stop_requested" >&6
+}
 
 UT_HEARTBEAT_INTERVAL=60
 start_ut_heartbeat
@@ -452,18 +459,23 @@ heartbeat_pid="$UT_HEARTBEAT_PID"
 read -r -t 10 timer_pid <&7 || exit 90
 [[ "$timer_pid" =~ ^[0-9]+$ ]] || exit 91
 kill "-${HEARTBEAT_STOP_SIGNAL}" "$heartbeat_pid" || exit 92
+read -r -t 10 stop_state <&6 || exit 93
+[[ "$stop_state" == 1 ]] || exit 94
 printf 'release\n' >&8
-stop_ut_heartbeat
-[[ -z "$UT_HEARTBEAT_PID" ]] || exit 93
+heartbeat_status=0
+wait "$heartbeat_pid" || heartbeat_status=$?
+[[ "$heartbeat_status" == 0 ]] || exit 95
 if kill -0 "$heartbeat_pid" 2>/dev/null; then
-    exit 94
+    exit 96
 fi
-heartbeat_pid=""
 if kill -0 "$timer_pid" 2>/dev/null; then
-    exit 95
+    exit 97
 fi
 rm -f "$CASE_DIR/heartbeat-child.pid"
 timer_pid=""
+UT_HEARTBEAT_PID=""
+heartbeat_pid=""
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 98
 `
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
@@ -474,8 +486,14 @@ exit 0
 		if got := strings.Count(text, anchor); got != 1 {
 			t.Fatalf("heartbeat registration anchor count = %d, want 1", got)
 		}
-		return strings.Replace(text, anchor,
+		text = strings.Replace(text, anchor,
 			"            ut_test_before_heartbeat_sleep_registration \"$!\"\n"+anchor, 1)
+		const stopAnchor = "            heartbeat_stop_requested=1\n"
+		if got := strings.Count(text, stopAnchor); got != 1 {
+			t.Fatalf("heartbeat stop anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, stopAnchor,
+			stopAnchor+"            ut_test_heartbeat_stop_requested\n", 1)
 	}
 	for _, signal := range []string{"TERM", "INT"} {
 		t.Run(strings.ToLower(signal), func(t *testing.T) {
