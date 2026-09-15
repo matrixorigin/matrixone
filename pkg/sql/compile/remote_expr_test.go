@@ -829,9 +829,9 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 	}
 
 	t.Run("legacy-length-utf8-uint64-v58", func(t *testing.T) {
-		// A pre-v78 serialized LENGTH_UTF8 result is UINT64.  It keeps the
+		// A pre-v79 serialized LENGTH_UTF8 result is UINT64.  It keeps the
 		// v58 binary-string fence, but must not be mistaken for the corrected
-		// INT64 result contract introduced at v78.
+		// INT64 result contract introduced at v79.
 		p := semanticPipeline(function.LENGTH_UTF8, types.T_uint64)
 		project := projection.NewArgument()
 		defer project.Release()
@@ -858,7 +858,7 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 	})
 
 	// LENGTH_UTF8 keeps the historical UINT64 wrapper at MORPC v58. The
-	// corrected result wrappers are a separate v78 contract and must not be
+	// corrected result wrappers are a separate v79 contract and must not be
 	// folded into the legacy binary-string semantic gate above.
 	for _, test := range []struct {
 		name string
@@ -875,7 +875,7 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 			p := semanticPipeline(test.id, test.typ)
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
 			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, p),
-				"corrected string numeric result contracts require MORPC protocol version 78")
+				"corrected string numeric result contracts require MORPC protocol version 79")
 
 			c, client := expressionProtocolTestCompile(t)
 			cRT := runtime.ServiceRuntime(c.proc.GetService())
@@ -889,12 +889,12 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 				RootOp:   op,
 			}
 			client.version = defines.MORPCVersion72
-			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion78)
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
 			_, err := encodeRemoteScope(scope, c.proc)
 			require.ErrorContains(t, err,
-				"remote destination does not support corrected string numeric result contracts (MORPC version 78)")
+				"remote destination does not support corrected string numeric result contracts (MORPC version 79)")
 
-			client.version = defines.MORPCVersion78
+			client.version = defines.MORPCVersion79
 			data, err := encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
 
@@ -902,12 +902,12 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 			require.NoError(t, wire.Unmarshal(data))
 			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
 			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire),
-				"corrected string numeric result contracts require MORPC protocol version 78")
+				"corrected string numeric result contracts require MORPC protocol version 79")
 			_, err = decodeScope(data, c.proc, true, nil)
 			require.ErrorContains(t, err,
-				"corrected string numeric result contracts require MORPC protocol version 78")
+				"corrected string numeric result contracts require MORPC protocol version 79")
 
-			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion78)
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
 			_, err = decodeScope(data, c.proc, true, nil)
 			require.NoError(t, err)
 		})

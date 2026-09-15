@@ -274,10 +274,10 @@ func TestPersistedStringNumericResultProtocolAdmission(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.StringNumericResultContracts)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion77)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 78")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion78)
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 79")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion79)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 	require.NoError(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, expr),
 		"legacy catalog-builder wrapper must use the shared maximum-version gate")

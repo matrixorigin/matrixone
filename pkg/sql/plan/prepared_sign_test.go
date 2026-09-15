@@ -20,7 +20,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,4 +96,85 @@ func TestPreparedSignRebindsRuntimeNumericDomain(t *testing.T) {
 func signOverloadForTest(expr *Expr) int32 {
 	_, overload := function.DecodeOverloadID(expr.GetF().GetFunc().GetObj())
 	return overload
+}
+
+func TestPreparedEltRebindsRuntimeNumericDomain(t *testing.T) {
+	ctx := context.Background()
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_elt from 'select elt(?, ''a'', ''b'', ''c'')'")
+	require.NoError(t, err)
+	preparePlan := prepared.GetDcl().GetPrepare().Plan
+
+	fn := findPlanFunctionExpr(preparePlan, "elt")
+	require.NotNil(t, fn)
+	require.Equal(t, int32(types.T_int64), fn.GetF().Args[0].Typ.Id)
+	require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(preparePlan))
+	require.True(t, PreparedPlanHasDeferredNumericFunction(preparePlan))
+	prepareSnapshot := preparePlan.String()
+
+	for _, test := range []struct {
+		name        string
+		value       any
+		kind        vector.PrepareParamKind
+		want        string
+		wantType    types.T
+		wantNull    bool
+		specialized bool
+	}{
+		{name: "decimal rounds one point four", value: "1.4", kind: vector.PrepareParamDecimal, want: "a", wantType: types.T_int64, specialized: true},
+		{name: "decimal rounds one point five", value: "1.5", kind: vector.PrepareParamDecimal, want: "b", wantType: types.T_int64, specialized: true},
+		{name: "decimal rounds two point five", value: "2.5", kind: vector.PrepareParamDecimal, want: "c", wantType: types.T_int64, specialized: true},
+		{name: "decimal rounds two point six", value: "2.6", kind: vector.PrepareParamDecimal, want: "c", wantType: types.T_int64, specialized: true},
+		{name: "numeric text follows decimal conversion", value: "1.6", kind: vector.PrepareParamNone, want: "b", wantType: types.T_int64, specialized: true},
+		{name: "numeric prefix remains accepted", value: "2tail", kind: vector.PrepareParamNone, want: "b", wantType: types.T_int64, specialized: false},
+		{name: "integer remains exact", value: "1", kind: vector.PrepareParamInteger, want: "a", wantType: types.T_int64, specialized: true},
+		{name: "out of range index", value: "4", kind: vector.PrepareParamInteger, wantNull: true, wantType: types.T_int64, specialized: true},
+		{name: "non-numeric text maps to zero", value: "foo", kind: vector.PrepareParamNone, wantNull: true, wantType: types.T_int64, specialized: false},
+		{name: "null index", value: nil, kind: vector.PrepareParamNone, wantNull: true, specialized: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtimePlan, specialized, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(
+				ctx, preparePlan, []any{ParamValue{
+					Value: test.value, PrepareParamKind: test.kind,
+				}})
+			require.NoError(t, err)
+			require.Equal(t, test.specialized, specialized)
+			bound := findPlanFunctionExpr(runtimePlan, "elt")
+			require.NotNil(t, bound, runtimePlan.String())
+			if test.wantType != types.T_any {
+				require.Equal(t, int32(test.wantType), bound.GetF().Args[0].Typ.Id,
+					runtimePlan.String())
+			}
+
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			executor, err := colexec.NewExpressionExecutor(proc, bound)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, nil, nil)
+			require.NoError(t, err)
+			if test.wantNull {
+				require.True(t, result.IsNull(0))
+			} else {
+				require.Equal(t, test.want, result.GetStringAt(0))
+			}
+			require.Equal(t, prepareSnapshot, preparePlan.String(),
+				"execute-time rebinding must not mutate the cached prepared plan")
+		})
+	}
+
+	preparedDouble, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_elt_double from 'select elt(cast(? as double), ''a'', ''b'')'")
+	require.NoError(t, err)
+	doublePlan := preparedDouble.GetDcl().GetPrepare().Plan
+	require.Empty(t, PreparedPlanNumericFallbackParamPositions(doublePlan))
+	filled, specialized, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(
+		ctx, doublePlan, []any{ParamValue{
+			Value: "1.5", PrepareParamKind: vector.PrepareParamFloat,
+		}})
+	require.NoError(t, err)
+	require.False(t, specialized)
+	doubleFn := findPlanFunctionExpr(filled, "elt")
+	require.NotNil(t, doubleFn)
+	require.Equal(t, int32(types.T_float64), doubleFn.GetF().Args[0].GetF().Args[0].Typ.Id)
 }
