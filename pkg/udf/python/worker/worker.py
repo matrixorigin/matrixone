@@ -1026,7 +1026,10 @@ def _validate_definition_syntax(value: Dict[str, Any]) -> None:
         def visit_ExceptHandler(self, node):
             if node.name == handler:
                 self._mark()
-            self.visit(node.type)
+            # A bare ``except:`` has no exception-expression node.  Keep
+            # walking its body without asking NodeVisitor to visit None.
+            if node.type is not None:
+                self.visit(node.type)
             self.visit_nodes(node.body)
 
         def visit_MatchAs(self, node):

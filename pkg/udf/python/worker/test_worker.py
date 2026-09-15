@@ -266,6 +266,17 @@ class WorkerContractTest(unittest.TestCase):
             )
         )
 
+    def test_definition_validation_accepts_bare_except(self):
+        worker._validate_definition_syntax(
+            complete_definition_validation_payload(
+                "def f(ctx, value): return value\n"
+                "try:\n"
+                "    pass\n"
+                "except:\n"
+                "    pass\n"
+            )
+        )
+
     def test_capability_advertises_worker_instance_lease(self):
         encoded = worker._encode_capabilities(
             {"protocol_version": worker.PROTOCOL_VERSION}, lease_epoch=17
