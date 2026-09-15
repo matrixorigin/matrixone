@@ -3426,14 +3426,17 @@ func TestMergeGroupNormalizesLegacyH8VarlenaMetadata(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	charType := types.New(types.T_char, 2, 0)
+	varcharType := types.New(types.T_varchar, 2, 0)
 	partial := batch.NewWithSize(2)
-	partial.Vecs[0] = vector.NewVec(charType)
-	partial.Vecs[1] = vector.NewVec(charType)
-	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("a "), false, proc.Mp()))
+	partial.Vecs[0] = vector.NewVec(varcharType)
+	partial.Vecs[1] = vector.NewVec(varcharType)
+	// An old H8 producer concatenates these as "abc" in its compact hash
+	// slot. The new receiver must use the separate vector fields to recover
+	// the two distinct tuples ("a", "bc") and ("ab", "c").
+	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("a"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("ab"), false, proc.Mp()))
 	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("bc"), false, proc.Mp()))
-	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("c "), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("c"), false, proc.Mp()))
 	partial.SetRowCount(2)
 	var extra bytes.Buffer
 	mtyp := int32(H8)
@@ -4216,7 +4219,7 @@ func TestRemoteHLLUsesLegacyStateBeforeProtocolV74(t *testing.T) {
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)}}
-	makeVersion := func() byte {
+	makeVersion := func(aggID int64) byte {
 		ctr := &container{
 			mp:                proc.Mp(),
 			mtyp:              H0,
@@ -4225,7 +4228,7 @@ func TestRemoteHLLUsesLegacyStateBeforeProtocolV74(t *testing.T) {
 		}
 		aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
 			aggexec.MakeAggFunctionExpression(
-				aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
+				aggID, false, []*plan.Expr{arg}, nil),
 		})
 		require.NoError(t, err)
 		values := vector.NewVec(types.T_float32.ToType())
@@ -4244,14 +4247,14 @@ func TestRemoteHLLUsesLegacyStateBeforeProtocolV74(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
 	require.True(t, useLegacyHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
 		"pre-v73 peers must receive the raw-value v2 HLL state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
 	require.True(t, useLegacyHLLStateForRemote(proc),
 		"v73 peers must receive a compatibility HLL state")
 	require.True(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(3), makeVersion(),
-		"v73 peers must receive the signed-zero-compatible v3 HLL state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+		"v73 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
 	require.False(t, useLegacyHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
