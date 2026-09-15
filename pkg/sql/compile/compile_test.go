@@ -2296,6 +2296,41 @@ func TestCompileShuffleGroupGatesHLLByProtocolVersion(t *testing.T) {
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
 
+func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	aggNode.GroupBy[0].Typ = plan.Type{
+		Id:    int32(types.T_varchar),
+		Width: 2,
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+	require.True(t, hasVariableLengthGroupKey(aggNode))
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"short variable-length group keys must stay local before MORPC v75")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+
+	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 2}}
+	aggNode.AggList = []*plan.Expr{{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				Obj:     int64(uint64(function.EncodeOverloadID(function.COUNT, 0)) | uint64(function.Distinct)),
+				ObjName: "count",
+			},
+			Args: []*plan.Expr{arg},
+		}},
+	}}
+	require.True(t, hasCanonicalDistinctKeyWire(aggNode))
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"canonical opaque DISTINCT keys must stay local before MORPC v76")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
 func TestRemoteApproxPercentileAndHLLCapabilitiesDefaultClosed(t *testing.T) {
 	service := "missing-protocol-" + t.Name()
 	rt := runtime.NewRuntime(metadata.ServiceType_CN, service, nil)
