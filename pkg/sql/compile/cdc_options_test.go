@@ -155,6 +155,58 @@ func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {
 		context.Background(), nil, true))
 }
 
+func TestValidateLosslessNoFullStartCompileProtocol(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := &Compile{proc: proc}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion72)
+	require.ErrorContains(t, validateLosslessNoFullStartCompileProtocol(
+		context.Background(), c), "protocol version 73")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+	require.NoError(t, validateLosslessNoFullStartCompileProtocol(
+		context.Background(), c))
+	require.Error(t, validateLosslessNoFullStartCompileProtocol(
+		context.Background(), nil))
+}
+
+func TestFinalizeCDCInitialSnapshotOptions(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+
+	opts := &CDCCreateTaskOptions{NoFull: true, startTsFromSnapshot: true}
+	extra := make(map[string]any)
+	require.NoError(t, finalizeCDCInitialSnapshotOptions(
+		context.Background(), &Compile{proc: proc}, opts, extra))
+	require.Equal(t, cdc.CDCInitialSnapshotProtocolNoFullHLC,
+		extra[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol])
+
+	legacy := &CDCCreateTaskOptions{}
+	legacyExtra := make(map[string]any)
+	require.NoError(t, finalizeCDCInitialSnapshotOptions(
+		context.Background(), &Compile{proc: proc}, legacy, legacyExtra))
+	_, ok := legacyExtra[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
+	require.False(t, ok)
+}
+
 func TestDeleteManyWatermarkRetainsSnapshotEpochOnRestart(t *testing.T) {
 	keys := map[taskservice.CDCTaskKey]struct{}{
 		{AccountId: 7, TaskId: "task"}: {},

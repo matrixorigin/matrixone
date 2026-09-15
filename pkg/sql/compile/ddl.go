@@ -6834,19 +6834,8 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
-	if opts.NoFull && opts.startTsFromSnapshot {
-		extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol] = cdc.CDCInitialSnapshotProtocolNoFullHLC
-	}
-	if !opts.NoFull {
-		cdc.FinalizeInitialSnapshotOptions(extraOpts)
-		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
-		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, stable); err != nil {
-			return
-		}
-	} else if opts.startTsFromSnapshot {
-		if err = validateLosslessNoFullStartCompileProtocol(ctx, c); err != nil {
-			return
-		}
+	if err = finalizeCDCInitialSnapshotOptions(ctx, c, opts, extraOpts); err != nil {
+		return
 	}
 
 	var extraOptsBytes []byte
@@ -6857,6 +6846,26 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	opts.ExtraOpts = string(extraOptsBytes)
 
 	return
+}
+
+func finalizeCDCInitialSnapshotOptions(
+	ctx context.Context,
+	c *Compile,
+	opts *CDCCreateTaskOptions,
+	extraOpts map[string]any,
+) error {
+	if opts.NoFull && opts.startTsFromSnapshot {
+		extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol] = cdc.CDCInitialSnapshotProtocolNoFullHLC
+	}
+	if !opts.NoFull {
+		cdc.FinalizeInitialSnapshotOptions(extraOpts)
+		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
+		return validateStableInitialSnapshotCompileProtocol(ctx, c, stable)
+	}
+	if opts.startTsFromSnapshot {
+		return validateLosslessNoFullStartCompileProtocol(ctx, c)
+	}
+	return nil
 }
 
 func validateStableInitialSnapshotCompileProtocol(

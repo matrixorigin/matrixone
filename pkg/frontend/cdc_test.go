@@ -1299,6 +1299,51 @@ func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
 	require.Empty(t, noSnapshot.StartTs)
 }
 
+func TestCDCCreateTaskOptionsValidateAndFillNoFullSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	snapshot := timestamp.Timestamp{PhysicalTime: 1710000000000000000, LogicalTime: 7}
+	txnOp.EXPECT().SnapshotTS().Return(snapshot)
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	ses.txnHandler.txnOp = txnOp
+
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn,
+		func(context.Context, string, string, string, int, string) (*sql.DB, error) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			mock.ExpectClose()
+			return db, nil
+		})
+	defer stubOpenDbConn.Reset()
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity,
+		func(context.Context, BackgroundExec, string, *cdc.PatternTuples, ...int64) error {
+			return nil
+		})
+	defer stubCheckPitr.Reset()
+
+	req := &CDCCreateTaskRequest{
+		TaskName:  "no-full-watermark",
+		SourceUri: "mysql://root:111@127.0.0.1:6001",
+		SinkType:  cdc.CDCSinkType_MySQL,
+		SinkUri:   "mysql://root:111@127.0.0.1:3306",
+		Tables:    "db1.t1",
+		Option: []string{
+			cdc.CDCRequestOptions_NoFull, "true",
+			cdc.CDCRequestOptions_Level, cdc.CDCPitrGranularity_Table,
+		},
+	}
+
+	var opts CDCCreateTaskOptions
+	require.NoError(t, opts.ValidateAndFill(context.Background(), ses, req))
+	require.Equal(t, snapshot.DebugString(), opts.StartTs)
+	require.Equal(t, task.TaskCode_InitCdcLosslessStart, opts.BuildTaskMetadata().Executor)
+	require.Contains(t, opts.ExtraOpts, cdc.CDCInitialSnapshotProtocolNoFullHLC)
+}
+
 func TestRegisterCdcExecutor(t *testing.T) {
 	type args struct {
 		logger       *zap.Logger
