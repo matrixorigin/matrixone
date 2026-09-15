@@ -301,6 +301,19 @@ class WorkerContractTest(unittest.TestCase):
                 {"protocol_version": worker.PROTOCOL_VERSION}, lease_epoch=0
             )
 
+    def test_cleanup_reaper_can_be_stopped_independently(self):
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        try:
+            with server._pending_cleanup_condition:
+                server._ensure_pending_cleanup_thread_locked()
+                thread = server._pending_cleanup_thread
+            server._stop_pending_cleanup_reaper()
+            self.assertTrue(server._pending_cleanup_stopping)
+            self.assertIsNotNone(thread)
+            self.assertFalse(thread.is_alive())
+        finally:
+            server.shutdown()
+
     def test_typed_statement_context_matches_canonical_handler_context(self):
         typed = {
             "contract_version": 1,

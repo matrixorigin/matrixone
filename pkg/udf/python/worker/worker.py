@@ -3342,9 +3342,10 @@ class RoutineFlightServer(_FlightServerBase):
                         finish_error,
                     )
 
-    def shutdown(self):
-        self._shutdown_event.set()
-        result = super().shutdown()
+    def _stop_pending_cleanup_reaper(self) -> None:
+        # The base Flight server may fail while interrupting an RPC. The
+        # worker still owns its cleanup reaper in that case, so stopping and
+        # joining it cannot depend on the base shutdown returning normally.
         with self._pending_cleanup_condition:
             self._pending_cleanup_stopping = True
             self._pending_cleanup_condition.notify_all()
@@ -3362,7 +3363,13 @@ class RoutineFlightServer(_FlightServerBase):
                     "Python UDF worker shutdown left %d handler cleanups pending",
                     pending,
                 )
-        return result
+
+    def shutdown(self):
+        self._shutdown_event.set()
+        try:
+            return super().shutdown()
+        finally:
+            self._stop_pending_cleanup_reaper()
 
     def _cleanup_exchange(
         self,
