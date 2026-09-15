@@ -5877,35 +5877,75 @@ func bindFuncExprImplByPlanExpr(
 
 	refineDecimalRoundingReturnType(name, args, argsType, &returnType)
 
-	// Geometry constructors with an explicit constant SRID argument record the
-	// SRID in the result type's Width (geometry cells store bare WKB, so SRID
-	// lives in the type). A non-constant SRID cannot be represented this way.
+	// Geometry constructors with an explicit SRID argument record the SRID in
+	// the result type's Width (geometry cells store bare WKB, so SRID lives in
+	// the type). A direct prepared marker is admitted for the WKB constructor
+	// and ST_SRID setter; ResetParamRefRule binds and validates its value at
+	// execute time, while row-varying expressions remain unsupported.
 	if returnType.Oid == types.T_geometry || returnType.Oid == types.T_geometry32 {
 		switch name {
-		case "st_geomfromtext", "st_geomfromwkb", "st_geometryfromtext", "st_pointfromtext",
+		case "st_geomfromtext", "st_geomfromwkb", "st_geomfrombinary", "st_geometryfromtext", "st_geometryfromwkb", "st_pointfromtext",
 			"st_linefromtext", "st_polygonfromtext", "st_mpointfromtext", "st_mlinefromtext",
 			"st_mpolyfromtext", "st_geomcollfromtext", "st_pointfromgeohash",
 			"st_geomfromgeojson":
 			if len(args) >= 2 {
-				// The SRID is carried in the result type's Width, so it must be
-				// a constant known at bind time. A non-constant SRID (column,
-				// parameter, or CAST/arithmetic expression) cannot be
-				// represented this way and is rejected rather than being
-				// silently dropped.
+				sourceIsNull := len(args) > 0 && geometrySRIDSourceIsStaticNull(args[0])
 				lit, ok := args[len(args)-1].Expr.(*plan.Expr_Lit)
 				if !ok || lit.Lit == nil {
+					if (name == "st_geomfromwkb" || name == "st_geomfrombinary" || name == "st_geometryfromwkb") &&
+						isDirectPreparedGeometrySRIDArg(args[len(args)-1]) {
+						returnType.Width = 0
+						break
+					}
 					return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
 				}
-				if !lit.Lit.Isnull {
-					iv, ok := lit.Lit.GetValue().(*plan.Literal_I64Val)
-					if !ok {
-						return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
-					}
-					if err := validateGeometrySRID(iv.I64Val); err != nil {
-						return nil, err
-					}
-					returnType.Width = encodeGeometrySRIDWidth(uint32(iv.I64Val), true)
+				iv, isNull, ok := geometrySRIDLiteralValue(lit.Lit)
+				if !ok {
+					return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
 				}
+				if isNull {
+					returnType.Width = 0
+					break
+				}
+				if sourceIsNull {
+					// The SQL NULL geometry is the result regardless of the SRID
+					// value. Do not report an SRID range error before NULL
+					// propagation has a chance to take effect.
+					returnType.Width = 0
+					break
+				}
+				if err := validateGeometrySRID(iv); err != nil {
+					return nil, err
+				}
+				returnType.Width = encodeGeometrySRIDWidth(uint32(iv), true)
+			}
+		case "st_srid":
+			if len(args) == 2 {
+				sourceIsNull := geometrySRIDSourceIsStaticNull(args[0])
+				lit, ok := args[1].Expr.(*plan.Expr_Lit)
+				if !ok || lit.Lit == nil {
+					if isDirectPreparedGeometrySRIDArg(args[1]) {
+						returnType.Width = 0
+						break
+					}
+					return nil, moerr.NewInvalidInput(ctx, "the SRID argument of ST_SRID must be a constant integer")
+				}
+				iv, isNull, ok := geometrySRIDLiteralValue(lit.Lit)
+				if !ok {
+					return nil, moerr.NewInvalidInput(ctx, "the SRID argument of ST_SRID must be a constant integer")
+				}
+				if isNull {
+					returnType.Width = 0
+					break
+				}
+				if sourceIsNull {
+					returnType.Width = 0
+					break
+				}
+				if err := validateGeometrySRID(iv); err != nil {
+					return nil, err
+				}
+				returnType.Width = encodeGeometrySRIDWidth(uint32(iv), true)
 			}
 		}
 	}

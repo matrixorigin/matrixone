@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -22,7 +23,7 @@ import (
 // mysqlFullGroupByRejectedColumn implements the MySQL ONLY_FULL_GROUP_BY
 // exceptions that are local to one query block: a projected column is valid
 // when it is constrained to one statement-stable value by WHERE, or when its
-// table's complete declared primary key is present in the active grouping set.
+// table's complete primary or eligible NOT NULL UNIQUE key is grouped.
 // It returns the first column that does not satisfy either exception.
 func (builder *QueryBuilder) mysqlFullGroupByRejectedColumn(ctx *BindContext, columns []boundColumn) (string, bool) {
 	for _, column := range columns {
@@ -68,7 +69,55 @@ func (builder *QueryBuilder) mysqlFullGroupByAllowsExprColumns(ctx *BindContext,
 
 func (builder *QueryBuilder) mysqlFullGroupByAllowsColumn(ctx *BindContext, binding *Binding, columnPos int32) bool {
 	return filterListHasSingleValueEqualityOnCol(ctx.whereFilters, binding.tag, columnPos) ||
-		builder.groupByIncludesPrimaryKey(ctx, binding)
+		builder.groupByIncludesPrimaryKey(ctx, binding) ||
+		builder.groupByIncludesNotNullUniqueKey(ctx, binding)
+}
+
+// This is a binding-local acceptance proof, not a uniqueness property for
+// optimizer rewrites. In particular, it does not infer keys through joins or
+// derived relations, or turn filtered nullable keys into NOT NULL keys.
+func (builder *QueryBuilder) groupByIncludesNotNullUniqueKey(ctx *BindContext, binding *Binding) bool {
+	if binding.nodeId < 0 || int(binding.nodeId) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[binding.nodeId]
+	if node == nil || node.NodeType != pbplan.Node_TABLE_SCAN || node.TableDef == nil {
+		return false
+	}
+	for _, index := range node.TableDef.Indexes {
+		if index == nil || !index.Unique || !index.TableExist || index.IndexTableName == "" || len(index.Parts) == 0 ||
+			!catalog.IsRegularIndexAlgo(index.IndexAlgo) || catalog.IsRTreeIndexAlgo(index.IndexAlgo) {
+			continue
+		}
+		prefixes, err := catalog.IndexPrefixLengthsFromParamsWithError(index.IndexAlgoParams)
+		if err != nil || len(prefixes) != 0 {
+			continue
+		}
+		if groupByIncludesNotNullUniqueParts(ctx, binding, node.TableDef, index.Parts) {
+			return true
+		}
+	}
+	return false
+}
+
+func groupByIncludesNotNullUniqueParts(ctx *BindContext, binding *Binding, table *pbplan.TableDef, parts []string) bool {
+	seen := make(map[int32]struct{}, len(parts))
+	for _, name := range parts {
+		pos, ok := tableColumnPosition(table, name)
+		if !ok || pos < 0 || int(pos) >= len(binding.cols) {
+			return false
+		}
+		if _, duplicate := seen[pos]; duplicate {
+			return false
+		}
+		seen[pos] = struct{}{}
+		col := table.Cols[pos]
+		if col.Hidden || col.GeneratedCol != nil || col.Default == nil || col.Default.NullAbility ||
+			!primaryKeyColumnTypeSupportsSQLEqualityProof(col.Typ) || !groupByContainsColumn(ctx, binding.tag, pos) {
+			return false
+		}
+	}
+	return true
 }
 
 func (bc *BindContext) aggregateQueryForFullGroupBy() bool {

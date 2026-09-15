@@ -2190,6 +2190,10 @@ func TestCompilePartitionTopNGatedByProtocolVersion(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion19)
 	require.True(t, c.supportsRemotePartitionTopN())
+	require.False(t, c.supportsRemotePartitionTopNWithTies())
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
+	require.True(t, c.supportsRemotePartitionTopNWithTies())
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
 	require.False(t, c.supportsRemotePartitionTopN(), "rollback must select the legacy partition path")
@@ -2238,6 +2242,26 @@ func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 		windowScopes := c.compileWin(&plan.Node{}, partitionScopes)
 		physicalWindow := windowScopes[0].RootOp.(*windowop.Window)
 		require.False(t, physicalWindow.PartitionTopN)
+	})
+
+	t.Run("rank with ties requires v68", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		rt := runtime.ServiceRuntime(c.proc.GetService())
+		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		node := newNode()
+		node.PartitionTopNWithTies = true
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion68)
+		legacyScopes := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
+		legacyPartition := legacyScopes[0].RootOp.(*partitionop.Partition)
+		require.Nil(t, legacyPartition.Limit)
+		require.False(t, legacyPartition.WithTies)
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
+		boundedScopes := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
+		boundedPartition := boundedScopes[0].RootOp.(*partitionop.Partition)
+		require.NotNil(t, boundedPartition.Limit)
+		require.True(t, boundedPartition.WithTies)
 	})
 }
 
