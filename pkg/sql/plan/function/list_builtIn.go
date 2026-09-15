@@ -570,7 +570,55 @@ func wkbConstructor(id int, fn executeLogicOfOverload) FuncNew {
 	}
 }
 
+func statementDigestTextFunction() FuncNew {
+	stringTypes := []types.T{
+		types.T_varchar, types.T_char, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob,
+		// Geometry values are byte-backed and carry binary semantics.  Keep
+		// overload resolution deterministic, then reject them at execution with
+		// the same undisclosed error as other non-text inputs.
+		types.T_geometry, types.T_geometry32,
+	}
+	overloads := make([]overload, 0, len(stringTypes))
+	for i, typ := range stringTypes {
+		overloads = append(overloads, overload{
+			overloadId: i,
+			args:       []types.T{typ},
+			retType: func(parameters []types.Type) types.Type {
+				return statementDigestTextReturnType(parameters)
+			},
+			newOp: func() executeLogicOfOverload {
+				return StatementDigestText
+			},
+			// The result depends on session sql_mode and the global digest
+			// length limit.  It must therefore never be folded or admitted into
+			// persistent expressions such as generated columns.
+			volatile:        true,
+			realTimeRelated: true,
+		})
+	}
+	return FuncNew{
+		functionId: STATEMENT_DIGEST_TEXT,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads:  overloads,
+	}
+}
+
+// statementDigestTextReturnType always returns text. The normalized digest is
+// not a byte-preserving transform, so it must not inherit a binary input's
+// OID; preserve only the source charset for collation propagation.
+func statementDigestTextReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_text.ToType()
+	}
+	return textStringResultType(unknownStringResultBound(), parameters[0].Charset)
+}
+
 var supportedStringBuiltIns = []FuncNew{
+	statementDigestTextFunction(),
+
 	// function `ascii`
 	{
 		functionId: ASCII,
@@ -7048,6 +7096,77 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return SHA2StringLengthFunc
+				},
+			},
+		},
+	},
+
+	// function `statement_digest`
+	{
+		functionId: STATEMENT_DIGEST,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId:      0,
+				args:            []types.T{types.T_varchar},
+				retType:         statementDigestReturnType,
+				volatile:        true,
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return StatementDigest
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_text},
+				retType:         statementDigestReturnType,
+				volatile:        true,
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return StatementDigest
+				},
+			},
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_blob},
+				retType:         statementDigestReturnType,
+				volatile:        true,
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return StatementDigest
+				},
+			},
+			{
+				overloadId:      3,
+				args:            []types.T{types.T_char},
+				retType:         statementDigestReturnType,
+				volatile:        true,
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return StatementDigest
+				},
+			},
+			{
+				overloadId:      4,
+				args:            []types.T{types.T_binary},
+				retType:         statementDigestReturnType,
+				volatile:        true,
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return StatementDigest
+				},
+			},
+			{
+				overloadId:      5,
+				args:            []types.T{types.T_varbinary},
+				retType:         statementDigestReturnType,
+				volatile:        true,
+				realTimeRelated: true,
+				newOp: func() executeLogicOfOverload {
+					return StatementDigest
 				},
 			},
 		},

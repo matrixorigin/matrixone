@@ -118,9 +118,13 @@ func decodePipelineFileDescriptorBytes(t *testing.T, compressed []byte) *descrip
 
 func decodePipelineFileDescriptor(t *testing.T) *descriptor.FileDescriptorProto {
 	t.Helper()
-	compressed := proto.FileDescriptor("pipeline.proto")
+	// Use the descriptor embedded in generated code instead of hard-coding the
+	// registry key.  The key is generator/worktree-layout dependent (for
+	// example, "pipeline.proto" versus "proto/pipeline.proto"), while the
+	// embedded descriptor is the source of truth for the messages and options.
+	compressed, _ := (&Message{}).Descriptor()
 	if len(compressed) == 0 {
-		t.Fatal("pipeline protobuf descriptor is not registered")
+		t.Fatal("pipeline protobuf descriptor is empty")
 	}
 	reader, err := gzip.NewReader(bytes.NewReader(compressed))
 	if err != nil {
@@ -139,15 +143,25 @@ func decodePipelineFileDescriptor(t *testing.T) *descriptor.FileDescriptorProto 
 }
 
 func TestPipelineDescriptorRegistryNameMatchesEmbeddedDescriptor(t *testing.T) {
-	compressed := proto.FileDescriptor("pipeline.proto")
-	if len(compressed) == 0 {
-		t.Fatal("pipeline protobuf descriptor is not registered under its canonical name")
+	compressed, _ := (&Message{}).Descriptor()
+	embedded := decodePipelineFileDescriptorBytes(t, compressed)
+	name := embedded.GetName()
+	if name == "" {
+		t.Fatal("pipeline descriptor has no file name")
 	}
-	if stale := proto.FileDescriptor("proto/pipeline.proto"); len(stale) != 0 {
-		t.Fatal("pipeline protobuf descriptor remains registered under a stale path")
+	registered := proto.FileDescriptor(name)
+	if len(registered) == 0 {
+		t.Fatalf("pipeline protobuf descriptor is not registered under embedded name %q", name)
 	}
-	if got, want := decodePipelineFileDescriptorBytes(t, compressed).GetName(), "pipeline.proto"; got != want {
-		t.Fatalf("pipeline descriptor name = %q, want %q", got, want)
+	if !bytes.Equal(registered, compressed) {
+		t.Fatalf("registry descriptor for %q differs from generated descriptor", name)
+	}
+	// Ensure the generator does not leave a duplicate registration under the
+	// alternate historical path.
+	for _, alternate := range []string{"pipeline.proto", "proto/pipeline.proto"} {
+		if alternate != name && len(proto.FileDescriptor(alternate)) != 0 {
+			t.Fatalf("pipeline protobuf descriptor remains registered under stale path %q", alternate)
+		}
 	}
 }
 

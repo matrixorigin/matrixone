@@ -843,10 +843,12 @@ const (
 
 	INTERNAL_JSON_COMPARISON_PARAM = 577
 	INTERNAL_JSON_MEMBER_OF        = 578
+	STATEMENT_DIGEST               = 579
+	STATEMENT_DIGEST_TEXT          = 580
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 579
+	FUNCTION_END_NUMBER = 581
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1187,6 +1189,7 @@ var functionIdRegister = map[string]int32{
 	"hex":                            HEX,
 	"unhex":                          UNHEX,
 	"md5":                            MD5,
+	"statement_digest_text":          STATEMENT_DIGEST_TEXT,
 	"to_base64":                      TO_BASE64,
 	"from_base64":                    FROM_BASE64,
 	"vecf32_from_base64":             VECF32_FROM_BASE64,
@@ -1429,6 +1432,7 @@ var functionIdRegister = map[string]int32{
 	"lcase":                          LOWER,
 	"sha1":                           SHA1,
 	"sha":                            SHA1,
+	"statement_digest":               STATEMENT_DIGEST,
 
 	"summation":         SUMMATION,
 	"l1_norm":           L1_NORM,
