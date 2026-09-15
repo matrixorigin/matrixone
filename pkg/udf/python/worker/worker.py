@@ -3087,10 +3087,20 @@ class _InvocationState:
         with self.condition:
             if self.cancelled:
                 raise ValueError("PROTOCOL: invocation terminal outcome is CANCELLED")
-            if self.terminal_outcome is not None and self.terminal_outcome != _TERMINAL_SUCCESS:
-                raise ValueError(
-                    f"PROTOCOL: invocation terminal outcome is {self.terminal_outcome}"
-                )
+            if self.terminal_outcome is not None:
+                if self.terminal_outcome != _TERMINAL_SUCCESS:
+                    raise ValueError(
+                        f"PROTOCOL: invocation terminal outcome is {self.terminal_outcome}"
+                    )
+                # An action can retain a state reference while cleanup moves
+                # that state to the terminal ledger.  Once SUCCESS is frozen,
+                # only the final result sequence is an idempotent confirmation;
+                # accepting an earlier cumulative ACK would bypass the
+                # terminal ledger's exact-fence rule.
+                if sequence != self.last_result:
+                    raise ValueError(
+                        "PROTOCOL: terminal result ACK does not match the completed result"
+                    )
             if sequence <= 0 or sequence < self.acked_result or sequence > self.last_result:
                 raise ValueError("PROTOCOL: result ACK is outside the received range")
             self.acked_result = sequence
