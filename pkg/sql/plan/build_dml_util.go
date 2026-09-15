@@ -4710,6 +4710,58 @@ func appendDeleteIndexTablePlan(
 	return lastNodeId, nil
 }
 
+// appendDeleteIndexTablePlanWithRoute adds the parent partition ordinal to the
+// hidden-index delete source. The ordinary helper above is intentionally kept
+// unchanged for non-partitioned callers; only a routed partition maintenance
+// consumer needs this extra source column.
+func appendDeleteIndexTablePlanWithRoute(
+	builder *QueryBuilder,
+	bindCtx *BindContext,
+	parentTableDef *TableDef,
+	uniqueObjRef *ObjectRef,
+	uniqueTableDef *TableDef,
+	indexdef *IndexDef,
+	typMap map[string]plan.Type,
+	posMap map[string]int,
+	baseNodeId int32,
+	isUK bool,
+	preserveProjection bool,
+	preserveActionRows bool,
+	matchedDeleteOnly bool,
+	disableRuntimeFilter bool,
+) (int32, int32, error) {
+	lastNodeId, err := appendDeleteIndexTablePlan(
+		builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap,
+		baseNodeId, isUK, preserveProjection, preserveActionRows, matchedDeleteOnly,
+		disableRuntimeFilter,
+	)
+	if err != nil {
+		return -1, -1, err
+	}
+	if parentTableDef == nil || !features.IsPartitioned(parentTableDef.FeatureFlag) ||
+		parentTableDef.Partition == nil || len(parentTableDef.Partition.PartitionDefs) == 0 {
+		return lastNodeId, -1, nil
+	}
+
+	outputNode := builder.qry.Nodes[lastNodeId]
+	if outputNode == nil || len(outputNode.ProjectList) == 0 {
+		return -1, -1, moerr.NewInternalError(builder.GetContext(),
+			"partitioned index delete is missing its projected source")
+	}
+	firstCol := outputNode.ProjectList[0].GetCol()
+	if firstCol == nil {
+		return -1, -1, moerr.NewInternalError(builder.GetContext(),
+			"partitioned index delete source is not column projected")
+	}
+	routeExpr, err := buildPartitionRouteExpr(builder.GetContext(), parentTableDef, firstCol.RelPos)
+	if err != nil {
+		return -1, -1, err
+	}
+	routePos := int32(len(outputNode.ProjectList))
+	outputNode.ProjectList = append(outputNode.ProjectList, routeExpr)
+	return lastNodeId, routePos, nil
+}
+
 func appendIndexPrefixProjection(
 	builder *QueryBuilder,
 	bindCtx *BindContext,
@@ -6517,6 +6569,8 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	Else IVFFLAT index would fail
 	********/
 	isUpdate := delCtx.updateColLength > 0
+	partitionedDelete := !isUpdate && features.IsPartitioned(delCtx.tableDef.FeatureFlag) &&
+		delCtx.tableDef.Partition != nil && len(delCtx.tableDef.Partition.PartitionDefs) > 0
 
 	var isUk = indexdef.Unique
 	var isSK = !isUk && catalog.IsRegularIndexAlgo(indexdef.IndexAlgo)
@@ -6551,7 +6605,7 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 	var uniqueTblPkPos int
 	var uniqueTblPkTyp Type
 
-	if delCtx.isUnrestrictedDelete {
+	if delCtx.isUnrestrictedDelete && !partitionedDelete {
 		lastNodeId, err = appendDeleteIndexTablePlanWithoutFilters(builder, bindCtx, uniqueObjRef, uniqueTableDef)
 		uniqueDeleteIdx = getRowIdPos(uniqueTableDef)
 		uniqueTblPkPos, uniqueTblPkTyp = getPkPos(uniqueTableDef, false)
@@ -6581,11 +6635,88 @@ func buildDeleteRegularIndex(ctx CompilerContext, builder *QueryBuilder, bindCtx
 			preserveIndexProjection = false
 			preserveActionRows = false
 		}
-		lastNodeId, err = appendDeleteIndexTablePlan(
-			builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap,
-			lastNodeId, isUk, preserveIndexProjection, preserveActionRows, rebuildCompositeSetNullIndex,
-			delCtx.isPostCreateQueryFkSetNullAction,
-		)
+		if partitionedDelete {
+			var routePos int32
+			lastNodeId, routePos, err = appendDeleteIndexTablePlanWithRoute(
+				builder, bindCtx, delCtx.tableDef, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap,
+				lastNodeId, isUk, preserveIndexProjection, preserveActionRows, rebuildCompositeSetNullIndex,
+				delCtx.isPostCreateQueryFkSetNullAction,
+			)
+			if err == nil {
+				if routePos < 0 {
+					err = moerr.NewInternalError(builder.GetContext(),
+						"partitioned index delete is missing its route column")
+				} else {
+					if isUk {
+						inputTags := slices.Clone(builder.qry.Nodes[lastNodeId].BindingTags)
+						rowIDRelPos := int32(0)
+						if len(inputTags) > 0 {
+							rowIDRelPos = inputTags[0]
+						}
+						rowIDTyp := types.T_Rowid.ToType()
+						rowIDExpr := &plan.Expr{
+							Typ: makePlan2Type(&rowIDTyp),
+							Expr: &plan.Expr_Col{Col: &plan.ColRef{
+								RelPos: rowIDRelPos,
+								ColPos: int32(len(delCtx.tableDef.Cols)),
+							}},
+						}
+						filterExpr, filterErr := BindFuncExprImplByPlanExpr(
+							builder.GetContext(), "is_not_null", []*Expr{rowIDExpr})
+						if filterErr != nil {
+							err = filterErr
+						} else {
+							lastNodeId = builder.appendNode(&plan.Node{
+								NodeType:    plan.Node_FILTER,
+								Children:    []int32{lastNodeId},
+								FilterList:  []*plan.Expr{filterExpr},
+								ProjectList: getProjectionByLastNode(builder, lastNodeId),
+								BindingTags: inputTags,
+							}, bindCtx)
+							lastNodeId = builder.appendNode(&plan.Node{
+								NodeType: plan.Node_LOCK_OP,
+								Children: []int32{lastNodeId},
+								LockTargets: []*plan.LockTarget{{
+									TableId:            uniqueTableDef.TblId,
+									PrimaryColRelPos:   rowIDRelPos,
+									PrimaryColIdxInBat: int32(len(delCtx.tableDef.Cols) + 1),
+									PrimaryColTyp:      uniqueTblPkTyp,
+									RefreshTsIdxInBat:  -1,
+									LockTable:          delCtx.lockTable,
+								}},
+							}, bindCtx)
+						}
+					}
+					if err != nil {
+						return err
+					}
+					lastNodeId = builder.appendNode(&plan.Node{
+						NodeType:    plan.Node_MULTI_UPDATE,
+						Children:    []int32{lastNodeId},
+						BindingTags: []int32{builder.genNewBindTag()},
+						UpdateCtxList: []*plan.UpdateCtx{{
+							ObjRef:             uniqueObjRef,
+							TableDef:           uniqueTableDef,
+							DeleteCols:         []plan.ColRef{{ColPos: int32(len(delCtx.tableDef.Cols))}, {ColPos: int32(len(delCtx.tableDef.Cols) + 1)}},
+							IgnoreAffectedRows: true,
+							PartitionIndexCtx: &plan.PartitionIndexCtx{
+								ParentRef:    DeepCopyObjectRef(delCtx.objRef),
+								ParentTable:  DeepCopyTableDef(delCtx.tableDef, true),
+								PartitionCol: plan.ColRef{ColPos: routePos},
+							},
+						}},
+					}, bindCtx)
+					builder.appendStep(lastNodeId)
+					return nil
+				}
+			}
+		} else {
+			lastNodeId, err = appendDeleteIndexTablePlan(
+				builder, bindCtx, uniqueObjRef, uniqueTableDef, indexdef, typMap, posMap,
+				lastNodeId, isUk, preserveIndexProjection, preserveActionRows, rebuildCompositeSetNullIndex,
+				delCtx.isPostCreateQueryFkSetNullAction,
+			)
+		}
 		uniqueDeleteIdx = len(delCtx.tableDef.Cols) + delCtx.updateColLength
 		uniqueTblPkPos = uniqueDeleteIdx + 1
 		uniqueTblPkTyp = uniqueTableDef.Cols[0].Typ
