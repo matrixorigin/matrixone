@@ -591,6 +591,17 @@ EXECUTE export_set_folded_abs USING @export_set_bits;
 DEALLOCATE PREPARE export_set_folded_round;
 DEALLOCATE PREPARE export_set_folded_abs;
 
+# ROUND/TRUNCATE 的精度参数使用整数转换，不能按值参数先转 DOUBLE。
+PREPARE export_set_round_precision FROM
+  "SELECT EXPORT_SET(ROUND(15.5,x),'Y','N','',4) FROM (SELECT ? AS x) d";
+PREPARE export_set_truncate_precision FROM
+  "SELECT EXPORT_SET(TRUNCATE(15.5,x),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = '-0.5';
+EXECUTE export_set_round_precision USING @export_set_bits;
+EXECUTE export_set_truncate_precision USING @export_set_bits;
+DEALLOCATE PREPARE export_set_round_precision;
+DEALLOCATE PREPARE export_set_truncate_precision;
+
 DROP TABLE export_set_scalar_input;
 
 DROP TABLE export_set_numeric_bits;

@@ -2226,8 +2226,20 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					return nil, err
 				}
 			}
-			if len(rule.exportSetParamPositions) > 0 &&
-				(isNumericContextFunction(functionName) || supportsGenericNumericFunctionContext(functionName)) &&
+			if len(rule.exportSetParamPositions) > 0 && preparedExportSetIntegerPrecisionArg(functionName, i) &&
+				types.T(rewrittenArg.Typ.Id).IsMySQLString() {
+				for pos := range preparedNumericValueParamPositions(originalArgs[i]) {
+					if rule.hasExportSetResolvedDomain(int(pos)) {
+						target := makePlan2Type(&types.Type{Oid: types.T_int64})
+						rewrittenArg, err = appendCastBeforeExprWithOverload(rule.ctx, rewrittenArg, target, 4)
+						if err != nil {
+							return nil, err
+						}
+						break
+					}
+				}
+			}
+			if len(rule.exportSetParamPositions) > 0 && preparedExportSetNumericStringAsReal(functionName, i) &&
 				!preparedNumericResultPolymorphicFunction(functionName) && types.T(rewrittenArg.Typ.Id).IsMySQLString() {
 				for pos := range preparedNumericValueParamPositions(originalArgs[i]) {
 					if rule.hasExportSetResolvedDomain(int(pos)) && pos >= 0 && int(pos) < len(rule.params) &&
@@ -3486,6 +3498,22 @@ func windowHasNumericPrefixDependency(
 		}
 	}
 	return false
+}
+
+func preparedExportSetIntegerPrecisionArg(functionName string, argIndex int) bool {
+	return argIndex == 1 && (functionName == "round" || functionName == "truncate")
+}
+
+func preparedExportSetNumericStringAsReal(functionName string, argIndex int) bool {
+	if isNumericContextFunction(functionName) {
+		return true
+	}
+	if !supportsGenericNumericFunctionContext(functionName) {
+		return false
+	}
+	// ROUND and TRUNCATE's optional second argument is integer precision,
+	// not a value in the result's numeric domain.
+	return argIndex == 0 || functionName != "round" && functionName != "truncate"
 }
 
 func preparedSQLExecuteNumericResultConsumer(name string) bool {

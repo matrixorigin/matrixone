@@ -341,6 +341,35 @@ func TestPreparedExportSetNestedFoldedDerivedConsumers(t *testing.T) {
 	}
 }
 
+func TestPreparedExportSetNestedPrecisionConsumerRole(t *testing.T) {
+	for _, tc := range []struct {
+		consumer string
+		want     string
+	}{
+		{"round(15.5,x)", "NNNN"},
+		{"truncate(15.5,x)", "YYYY"},
+	} {
+		_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 398,
+			`select export_set(`+tc.consumer+`,'Y','N','',4) from (select ? as x) d`)
+		func() {
+			defer stmt.Close()
+			cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
+			values := []any{plan2.ParamValue{Value: "-0.5", SourceType: types.T_text.ToType(), HasSourceType: true,
+				EnableNumericPrefix: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, cached, values)
+			require.NoError(t, err)
+			q := filled.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr,
+				[]*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, tc.want, result.GetStringAt(0), "consumer=%s expr=%s", tc.consumer, expr.String())
+		}()
+	}
+}
+
 func TestPreparedExportSetMaterializedRealSaturation(t *testing.T) {
 	_, stmt, cw, _ := newPreparedExecuteEnvForSQLWithCompilerContext(t, 395,
 		`select export_set((select max(?) from tpch.nation),'Y','N','',4)`, plan2.NewMockCompilerContext(true))
