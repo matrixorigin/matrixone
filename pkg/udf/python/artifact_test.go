@@ -76,6 +76,11 @@ func TestNewFileArtifactStoreRequiresSharedFileService(t *testing.T) {
 	require.NoError(t, err)
 	_, err = NewFileArtifactStore(local, 0)
 	require.ErrorContains(t, err, "shared FileService")
+
+	shared, err := fileservice.NewMemoryFS(defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	_, err = NewFileArtifactStore(shared, DefaultMaxArtifactBytes+1)
+	require.ErrorContains(t, err, "exceeds the current contract limit")
 }
 
 func TestFileArtifactStoreRejectsInvalidDirectConstruction(t *testing.T) {
