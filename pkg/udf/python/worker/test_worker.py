@@ -247,6 +247,10 @@ class WorkerContractTest(unittest.TestCase):
             "    pass\n",
             "def f(ctx, value): return value\n"
             "from math import pi as f\n",
+            "def f(ctx, value): return value\n"
+            "match {\"value\": 1, \"other\": 2}:\n"
+            "    case {\"value\": value, **f}:\n"
+            "        pass\n",
         )
         for source in sources:
             with self.subTest(source=source):
