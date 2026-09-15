@@ -5066,10 +5066,8 @@ func lineSegmentsIntersect(a, b, c, d geometryPoint2D) bool {
 }
 
 func geometryOrientation(a, b, c geometryPoint2D) int {
-	const epsilon = 1e-9
-
 	cross := (b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x)
-	if math.Abs(cross) <= epsilon {
+	if geometryCrossWithinDistance(cross, math.Hypot(b.x-a.x, b.y-a.y)) {
 		return 0
 	}
 	if cross > 0 {
