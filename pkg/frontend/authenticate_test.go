@@ -505,8 +505,6 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		_, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, "", nil)
-		convey.So(err, convey.ShouldBeNil)
 	})
 }
 
@@ -515,7 +513,7 @@ func TestMoRoleGrantHasGranteeLookupIndex(t *testing.T) {
 		"key idx_mo_role_grant_grantee_id(grantee_id)")
 }
 
-func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(t *testing.T) {
+func TestInitInformationSchemaSysTablesForProtocol_UsesProtocolAwareViews(t *testing.T) {
 	tests := []struct {
 		name                   string
 		protocol               int64
@@ -564,38 +562,14 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			moruntime.RunTest("", func(rt moruntime.Runtime) {
-				oldProtocol, oldProtocolExists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-				defer func() {
-					if oldProtocolExists {
-						rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
-					} else {
-						rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-					}
-				}()
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.protocol)
+			executed := sysview.InitInformationSchemaSysTablesForProtocol(test.protocol)
 
-				ctrl := gomock.NewController(t)
-				defer ctrl.Finish()
-
-				var executed []string
-				bh := mock_frontend.NewMockBackgroundExec(ctrl)
-				bh.EXPECT().ClearExecResultSet().AnyTimes()
-				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
-					func(_ context.Context, sql string) error {
-						executed = append(executed, sql)
-						return nil
-					}).AnyTimes()
-
-				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(context.Background(), bh, "", nil))
-
-				require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
-				require.Equal(t, test.wantCurrentRoles, containsSQLFragment(executed, "mo_current_roles()"))
-				require.Equal(t, test.wantCompatibilityRoles,
-					containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
-				require.Equal(t, test.wantCanonicalViews,
-					containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
-			})
+			require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
+			require.Equal(t, test.wantCurrentRoles, containsSQLFragment(executed, "mo_current_roles()"))
+			require.Equal(t, test.wantCompatibilityRoles,
+				containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
+			require.Equal(t, test.wantCanonicalViews,
+				containsSQL(executed, sysview.InformationSchemaTableConstraintsDDL))
 		})
 	}
 }
@@ -605,10 +579,7 @@ type tenantInitializationProtocolCluster struct {
 	cns []metadata.CNService
 }
 
-func TestCreateTablesInformationSchemaWithoutProcessRejectsUnknownProtocol(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
+func TestCreateTablesInformationSchemaWithoutProcessRejectsUnknownOrPredecessorProtocol(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -618,20 +589,60 @@ func TestCreateTablesInformationSchemaWithoutProcessRejectsUnknownProtocol(t *te
 			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+	for _, test := range []struct {
+		name       string
+		protocol   int64
+		wantReason string
+	}{
+		{
+			name:       "predecessor local protocol",
+			protocol:   defines.MORPCVersion72,
+			wantReason: "local CN supports MORPC v73",
+		},
+		{
+			name:       "known local protocol without process",
+			protocol:   defines.MORPCVersion73,
+			wantReason: "every CN supports MORPC v73",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.protocol)
 
-	var executed []string
-	bh := mock_frontend.NewMockBackgroundExec(ctrl)
-	bh.EXPECT().ClearExecResultSet().AnyTimes()
-	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(_ context.Context, sql string) error {
-			executed = append(executed, sql)
-			return nil
-		}).AnyTimes()
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			var executed []string
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bh.EXPECT().ClearExecResultSet().AnyTimes()
+			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, sql string) error {
+					executed = append(executed, sql)
+					return nil
+				}).AnyTimes()
 
-	require.Error(t, createTablesInInformationSchemaOfGeneralTenant(
-		context.Background(), bh, "", nil))
-	require.Empty(t, executed)
+			err := createTablesInInformationSchemaOfGeneralTenant(
+				context.Background(), bh, "", nil)
+			require.ErrorContains(t, err, test.wantReason)
+			require.Empty(t, executed)
+		})
+	}
+}
+
+func TestProtocolVersionForTenantInitializationRejectsUnknownRuntime(t *testing.T) {
+	_, err := protocolVersionForTenantInitialization("missing-pr27716-runtime", nil)
+	require.ErrorContains(t, err, "known MORPC protocol version")
+
+	rt := moruntime.ServiceRuntime("")
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, "invalid")
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, "invalid")
+	_, err = protocolVersionForTenantInitialization("", nil)
+	require.ErrorContains(t, err, "local CN supports MORPC v73")
 }
 
 func (c *tenantInitializationProtocolCluster) GetCNServiceWithoutWorkingState(

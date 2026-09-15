@@ -139,6 +139,12 @@ func TestViewDefinitionFromPersistedData(t *testing.T) {
 			ok:        true,
 		},
 		{
+			name:      "legacy wildcard is parser-derived without a historical column snapshot",
+			persisted: `{"Stmt":"CREATE VIEW v AS SELECT * FROM t"}`,
+			want:      "select * from `t`",
+			ok:        true,
+		},
+		{
 			name:      "malformed JSON remains null",
 			persisted: `{`,
 		},

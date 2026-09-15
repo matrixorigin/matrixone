@@ -27,6 +27,7 @@ import (
 func TestViewsUpgradeIsScheduledForCompletedV406Tenants(t *testing.T) {
 	require.Equal(t, "4.0.7", Handler.Metadata().Version)
 	require.Equal(t, "4.0.6", Handler.Metadata().MinUpgradeVersion)
+	require.Equal(t, int64(defines.MORPCVersion73), Handler.Metadata().RequiredProtocolVersion)
 	require.Len(t, tenantUpgEntries, 1)
 
 	entry := tenantUpgEntries[0]

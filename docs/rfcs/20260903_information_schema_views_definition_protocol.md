@@ -18,10 +18,14 @@ v73.
 
 Schema-diff and migration clients replay `VIEW_DEFINITION`. A full CREATE
 statement is not a standalone SELECT and falsely marks aggregate views as
-updatable. The invariant is that every visible current or legacy view returns
-its parser-derived frozen SELECT (or NULL only for a malformed catalog row),
-and no CN that cannot resolve either function ID can receive a pipeline or catalog view
-that references it.
+updatable. Current rows, and legacy rows that have already acquired the additive
+metadata, return their parser-derived frozen SELECT. A legacy row that contains
+only the historical `Stmt` is parsed into a defining SELECT, but a raw
+`SELECT *` cannot be expanded to its creation-time column list because that
+snapshot was never persisted. Such a row therefore preserves the stored
+wildcard expression instead of claiming a historical freeze. Malformed catalog
+rows may return NULL. No CN that cannot resolve either function ID can receive a
+pipeline or catalog view that references it.
 
 ## Design
 
@@ -38,6 +42,13 @@ stored fields without writes; for an older row that lacks them, they parse only
 the stored statement using its persisted SQL mode and identifier-case settings.
 This bounded, side-effect-free fallback avoids a second SQL regexp lexer and
 does not depend on background recovery.
+
+The fallback cannot infer metadata that is absent from a legacy row. In
+particular, it does not promise to reconstruct the historical expansion of a
+wildcard; the authoritative freeze begins when the additive fields are written
+by CREATE/ALTER or by the bounded regeneration path. Adding a historical column
+snapshot to the legacy catalog format would be a separate compatibility
+migration and is outside this PR.
 
 MORPC v73 is allocated as `MORPCLatestVersion + 1` from official main v72,
 which already owns v70 through v72. The two function IDs are the next available
@@ -84,14 +95,17 @@ NotSupported error rather than returning wrong metadata.
 ## Validation
 
 Focused parser/function tests cover current and legacy definitions, quoted and
-commented inputs, malformed rows, frozen wildcard expansion, explicit
-derived-table column lists with inner alias preservation, and CHECK OPTION.
+commented inputs, malformed rows, frozen wildcard expansion, the documented
+legacy raw-wildcard boundary, explicit derived-table column lists with inner
+alias preservation, and CHECK OPTION.
 Protocol tests cover the v72 predecessor
 rejection and v73 acceptance at prepare, sender, and receiver boundaries,
 including a mixed-version destination probe and the all-CN capability fence.
 System-view tests prove mixed, unknown, and RPC-failing CN capability probes
 abort before any tenant metadata is written, while an all-v73 inventory uses the
-parser-derived DDL; upgrade tests prove the VIEWS entry requires v73. The
+parser-derived DDL. Tenant initialization tests also reject a predecessor or
+unknown local protocol before the final-version account row is inserted.
+Upgrade tests prove both the v4.0.7 handler and its VIEWS entry require v73. The
 predecessor-init test is also the rollback guard: it proves that the restoration
 target has no function reference before an older CN is admitted.
 
