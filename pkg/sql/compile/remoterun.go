@@ -133,8 +133,18 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if features.IPFunctionSemantics {
+	if features.IPFunctionSemantics || features.IPFunctionSemanticsV73 {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.StringNumericResultContracts {
+		if err = validateStringNumericResultDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.SpatialDistanceSemantics {
+		if err = validateSpatialDistanceDestination(proc, p); err != nil {
 			return nil, err
 		}
 	}
@@ -1930,6 +1940,21 @@ func validateRemoteAggregateProtocol(
 				)
 			}
 		}
+		if agg.GetAggID() == aggexec.AggIdOfApproxPercentile &&
+			(proc == nil || !supportsRemoteApproxPercentile(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"approx_percentile remote execution requires MORPC protocol version 74",
+			)
+		}
+		if (agg.GetAggID() == aggexec.AggIdOfApproxCount ||
+			agg.GetAggID() == aggexec.AggIdOfApproxCountDistinct ||
+			agg.GetAggID() == aggexec.AggIdOfHllAdd ||
+			agg.GetAggID() == aggexec.AggIdOfHllMerge) &&
+			(proc == nil || !supportsRemoteHLL(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"HLL remote execution requires MORPC protocol version 75",
+			)
+		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
 			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
 				return moerr.NewNotSupportedNoCtx(
@@ -2129,10 +2154,28 @@ func validateRemoteExpressionPipelineProtocol(
 			"signed INT ASCII results require MORPC protocol version 65",
 		)
 	}
+	if features.StringNumericResultContracts &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion78) {
+		return moerr.NewNotSupportedNoCtx(
+			"corrected string numeric result contracts require MORPC protocol version 78",
+		)
+	}
 	if features.IPFunctionSemantics &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
 		return moerr.NewNotSupportedNoCtx(
 			"corrected IP function semantics require MORPC protocol version 72",
+		)
+	}
+	if features.IPFunctionSemanticsV73 &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion79) {
+		return moerr.NewNotSupportedNoCtx(
+			"extended IP function semantics require MORPC protocol version 79",
+		)
+	}
+	if features.SpatialDistanceSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {
+		return moerr.NewNotSupportedNoCtx(
+			"geodetic spatial-distance semantics require MORPC protocol version 80",
 		)
 	}
 	return nil

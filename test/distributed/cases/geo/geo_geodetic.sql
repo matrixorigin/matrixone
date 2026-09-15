@@ -26,6 +26,11 @@ select st_length(st_geomfromtext('LINESTRING(0 0,1 0)'), 4326) as forced_geodesi
 select st_distance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('POINT(1 0)'), 4326) as forced_geodesic_dist_m;
 select st_area(st_geomfromtext('POLYGON((0 0,3 0,3 4,0 4,0 0))', 4326), 0) as forced_cartesian_area;
 
+-- MySQL-compatible length-unit overloads.
+select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'kilometre') as geodesic_distance_km;
+select st_frechetdistance(st_geomfromtext('LINESTRING(0 0,1 0)', 4326), st_geomfromtext('LINESTRING(0 1,1 1)', 4326), 'kilometre') as geodesic_frechet_km;
+select st_hausdorffdistance(st_geomfromtext('LINESTRING(0 0,1 0)', 4326), st_geomfromtext('LINESTRING(0 1,1 1)', 4326), 'kilometre') as geodesic_hausdorff_km;
+
 -- S2 normalizes finite out-of-range coordinates. SRID-4326 measurement
 -- functions must reject them before entering the S2 kernels; validate both
 -- operands and every coordinate, even when distance could return early.
@@ -66,6 +71,20 @@ execute geo_measure_reuse using @geo_measure_id;
 set @geo_measure_id = 5;
 execute geo_measure_reuse using @geo_measure_id;
 deallocate prepare geo_measure_reuse;
+-- Re-specialize one prepared plan across string, numeric, string and NULL
+-- runtime domains instead of retaining the first overload choice.
+prepare geo_distance_overload from 'select st_distance(st_geomfromtext(?,4326), st_geomfromtext(?,4326), ?) as distance_m';
+set @geo_distance_left = 'POINT(0 0)';
+set @geo_distance_right = 'POINT(1 0)';
+set @geo_distance_arg = 'kilometre';
+execute geo_distance_overload using @geo_distance_left, @geo_distance_right, @geo_distance_arg;
+set @geo_distance_arg = 4326;
+execute geo_distance_overload using @geo_distance_left, @geo_distance_right, @geo_distance_arg;
+set @geo_distance_arg = 'metre';
+execute geo_distance_overload using @geo_distance_left, @geo_distance_right, @geo_distance_arg;
+set @geo_distance_arg = NULL;
+execute geo_distance_overload using @geo_distance_left, @geo_distance_right, @geo_distance_arg;
+deallocate prepare geo_distance_overload;
 select id, st_srid(g) as srid, st_area(g) as area_m2 from places where id = 1;
 select st_distance(g, g) from places where id = 2;
 select st_length(g) from places where id = 3;
@@ -75,5 +94,6 @@ select st_length(g32) from places where id = 3;
 select st_area(g32) from places where id = 4;
 select st_distance(g, g) as inclusive_geodetic_boundary from places where id = 5;
 select st_distance(g32, g32) as inclusive_geodetic_boundary32 from places where id = 5;
+select st_distance(g32, g32, 'kilometre') as geometry32_distance_km from places where id = 1;
 drop table places;
 drop database geo_geodetic;

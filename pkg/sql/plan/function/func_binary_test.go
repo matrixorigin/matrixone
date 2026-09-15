@@ -7736,6 +7736,220 @@ func TestDiscreteDistances(t *testing.T) {
 	}
 }
 
+func TestGeodeticDiscreteDistanceDispatchAndUnits(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom4326 := types.T_geometry.ToType()
+	geom4326.Width = 4327 // SRID 4326
+	oneDegreeMeters := math.Pi / 180 * geo.EarthRadiusMeters
+
+	lineA := "LINESTRING(0 0,1 0)"
+	lineB := "LINESTRING(0 1,1 1)"
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "frechet", fn: StFrechetDistance},
+		{name: "hausdorff", fn: StHausdorffDistance},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom4326, []string{lineA}, []bool{false}),
+					NewFunctionTestInput(geom4326, []string{lineB}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{oneDegreeMeters}, []bool{false}), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "distance", fn: StDistanceWithUnit},
+		{name: "frechet", fn: StFrechetDistanceWithUnit},
+		{name: "hausdorff", fn: StHausdorffDistanceWithUnit},
+	} {
+		t.Run(tc.name+" kilometre", func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom4326, []string{lineA}, []bool{false}),
+					NewFunctionTestInput(geom4326, []string{lineB}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"kilometre"}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{oneDegreeMeters / 1000}, []bool{false}), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	// The unit overload is geographic-only; the legacy two-argument overload
+	// remains unitless Cartesian for SRID 0.
+	geom0 := types.T_geometry.ToType()
+	unitError := NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil)
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "distance", fn: StDistanceWithUnit},
+		{name: "frechet", fn: StFrechetDistanceWithUnit},
+		{name: "hausdorff", fn: StHausdorffDistanceWithUnit},
+	} {
+		t.Run(tc.name+" rejects SRID 0 units", func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom0, []string{lineA}, []bool{false}),
+					NewFunctionTestInput(geom0, []string{lineB}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre"}, []bool{false}),
+				}, unitError, tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	nullUnit := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom4326, []string{lineA}, []bool{false}),
+			NewFunctionTestInput(geom4326, []string{lineB}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre"}, []bool{true}),
+		}, NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}), StDistanceWithUnit)
+	ok, info := nullUnit.Run()
+	require.True(t, ok, info)
+
+	emptyDistance := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom4326, []string{"POINT EMPTY"}, []bool{false}),
+			NewFunctionTestInput(geom4326, []string{lineB}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre"}, []bool{false}),
+		}, NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}), StDistanceWithUnit)
+	ok, info = emptyDistance.Run()
+	require.True(t, ok, info)
+
+	// Empty geometries still validate the geographic-only unit contract. The
+	// NULL result is a geometry-semantic result, not a way to bypass an invalid
+	// computation SRID.
+	unsupportedSRID := types.T_geometry.ToType()
+	unsupportedSRID.Width = 3858 // SRID 3857
+	emptyUnsupportedSRID := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(unsupportedSRID, []string{"POINT EMPTY"}, []bool{false}),
+			NewFunctionTestInput(unsupportedSRID, []string{lineB}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre"}, []bool{false}),
+		}, unitError, StDistanceWithUnit)
+	ok, info = emptyUnsupportedSRID.Run()
+	require.True(t, ok, info)
+
+	// A NULL unit makes the row NULL before an otherwise invalid SRID pair is
+	// examined. This is required for every unit overload.
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "distance", fn: StDistanceWithUnit},
+		{name: "frechet", fn: StFrechetDistanceWithUnit},
+		{name: "hausdorff", fn: StHausdorffDistanceWithUnit},
+	} {
+		t.Run(tc.name+" NULL unit masks SRID mismatch", func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom0, []string{lineA}, []bool{false}),
+					NewFunctionTestInput(geom4326, []string{lineB}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre"}, []bool{true}),
+				}, NewFunctionTestResult(types.T_float64.ToType(), false, []float64{0}, []bool{true}), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	invalidUnit := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom4326, []string{lineA}, []bool{false}),
+			NewFunctionTestInput(geom4326, []string{lineB}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"parsec"}, []bool{false}),
+		}, unitError, StDistanceWithUnit)
+	ok, info = invalidUnit.Run()
+	require.True(t, ok, info)
+
+	geom32 := types.T_geometry32.ToType()
+	geom32.Width = 4327 // SRID 4326
+	line32 := func(wkt string) string {
+		g, err := geo.ParseWKT(wkt)
+		require.NoError(t, err)
+		payload, err := geo.WriteWKBFloat32(g)
+		require.NoError(t, err)
+		return string(payload)
+	}
+	geom32Unit := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(geom32, []string{line32(lineA)}, []bool{false}),
+			NewFunctionTestInput(geom32, []string{line32(lineB)}, []bool{false}),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"foot"}, []bool{false}),
+		}, NewFunctionTestResult(types.T_float32.ToType(), false, []float32{float32(oneDegreeMeters / 0.3048)}, []bool{false}), StHausdorffDistanceWithUnit32)
+	ok, info = geom32Unit.Run()
+	require.True(t, ok, info)
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "distance", fn: StDistanceWithUnit32},
+		{name: "frechet", fn: StFrechetDistanceWithUnit32},
+	} {
+		t.Run(tc.name+" geometry32 unit", func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom32, []string{line32(lineA)}, []bool{false}),
+					NewFunctionTestInput(geom32, []string{line32(lineB)}, []bool{false}),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"kilometre"}, []bool{false}),
+				}, NewFunctionTestResult(types.T_float32.ToType(), false, []float32{float32(oneDegreeMeters / 1000)}, []bool{false}), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestSpatialDistanceUnitOverloadsResolve(t *testing.T) {
+	geom := types.T_geometry.ToType()
+	geom32 := types.T_geometry32.ToType()
+	unit := types.T_varchar.ToType()
+	intSRID := types.T_int64.ToType()
+	for _, tc := range []struct {
+		name       string
+		args       []types.Type
+		want       int32
+		legacyArgs []types.Type
+		legacyWant int32
+	}{
+		{name: "st_distance geometry unit", args: []types.Type{geom, geom, unit}, want: 4, legacyArgs: []types.Type{geom, geom, intSRID}, legacyWant: 1},
+		{name: "st_distance geometry text unit", args: []types.Type{geom, geom, types.T_text.ToType()}, want: 4},
+		{name: "st_distance geometry32 unit", args: []types.Type{geom32, geom32, unit}, want: 5, legacyArgs: []types.Type{geom32, geom32, intSRID}, legacyWant: 3},
+		{name: "st_distance geometry32 text unit", args: []types.Type{geom32, geom32, types.T_text.ToType()}, want: 5},
+		{name: "st_frechet geometry unit", args: []types.Type{geom, geom, unit}, want: 2},
+		{name: "st_frechet geometry32 unit", args: []types.Type{geom32, geom32, unit}, want: 3},
+		{name: "st_hausdorff geometry unit", args: []types.Type{geom, geom, unit}, want: 2},
+		{name: "st_hausdorff geometry32 unit", args: []types.Type{geom32, geom32, unit}, want: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var name string
+			if strings.Contains(tc.name, "distance") {
+				name = "st_distance"
+			} else if strings.Contains(tc.name, "frechet") {
+				name = "st_frechetdistance"
+			} else {
+				name = "st_hausdorffdistance"
+			}
+			resolved, err := GetFunctionByName(context.Background(), name, tc.args)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, resolved.overloadId)
+			if tc.legacyArgs != nil {
+				legacy, err := GetFunctionByName(context.Background(), name, tc.legacyArgs)
+				require.NoError(t, err)
+				require.Equal(t, tc.legacyWant, legacy.overloadId)
+			}
+		})
+	}
+}
+
 func TestLinearReferencing(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

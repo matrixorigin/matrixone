@@ -562,6 +562,59 @@ func TestSemanticRegistryRejectsForgedNullability(t *testing.T) {
 	require.True(t, supported)
 }
 
+func TestTPCHSubstringSemanticCapabilityAcceptsExactAndBoundedWidths(t *testing.T) {
+	resolved, err := function.GetFunctionByName(
+		context.Background(),
+		"substring",
+		[]types.Type{types.New(types.T_varchar, 15, 0), types.T_int64.ToType(), types.T_int64.ToType()},
+	)
+	require.NoError(t, err)
+	ref := &planpb.ObjectRef{ObjName: "substring", Obj: resolved.GetEncodedOverloadID()}
+	source := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_varchar), Width: 15, NotNullable: true},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+	}
+	args := []*planpb.Expr{source, i64(1), i64(2)}
+
+	bounded := planpb.Type{Id: int32(types.T_varchar), Width: 2, NotNullable: true}
+	supported, err := hasSemanticCapability(semanticScalar, "substring", ref, args, &bounded)
+	require.NoError(t, err)
+	require.True(t, supported, "a literal length may narrow the declared result")
+
+	conservative := planpb.Type{Id: int32(types.T_varchar), Width: 15, NotNullable: true}
+	supported, err = hasSemanticCapability(semanticScalar, "substring", ref, args, &conservative)
+	require.NoError(t, err)
+	require.True(t, supported, "a folded length may retain the exact type-only result contract")
+
+	wrongWidth := conservative
+	wrongWidth.Width = 3
+	supported, err = hasSemanticCapability(semanticScalar, "substring", ref, args, &wrongWidth)
+	require.NoError(t, err)
+	require.False(t, supported)
+
+	wrongOverload := &planpb.ObjectRef{ObjName: "substring", Obj: function.EncodeOverloadID(function.SUBSTRING, 3)}
+	supported, err = hasSemanticCapability(semanticScalar, "substring", wrongOverload, args, &bounded)
+	require.NoError(t, err)
+	require.False(t, supported)
+
+	wrongNullability := bounded
+	wrongNullability.NotNullable = false
+	supported, err = hasSemanticCapability(semanticScalar, "substring", ref, args, &wrongNullability)
+	require.NoError(t, err)
+	require.False(t, supported)
+
+	plusLength := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int64), NotNullable: true},
+		Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{
+			ObjName: "+", Obj: function.EncodeOverloadID(function.PLUS, 0),
+		}, Args: []*planpb.Expr{i64(1), i64(1)}}},
+	}
+	conservativeArgs := []*planpb.Expr{source, i64(1), plusLength}
+	supported, err = hasSemanticCapability(semanticScalar, "substring", ref, conservativeArgs, &conservative)
+	require.NoError(t, err)
+	require.True(t, supported, "an unfurled constant expression uses the type-only result")
+}
+
 func TestSemanticNullabilityUsesConcreteNonNullLiteralFact(t *testing.T) {
 	resolved, err := function.GetFunctionByName(
 		context.Background(),

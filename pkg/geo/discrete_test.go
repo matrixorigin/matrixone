@@ -158,3 +158,21 @@ func TestFrechetDistance(t *testing.T) {
 	require.True(t, ok)
 	require.InDelta(t, 5.0, d2, 1e-9)
 }
+
+func TestGeodeticDiscreteDistances(t *testing.T) {
+	a := wkt(t, "LINESTRING(0 0, 1 0)")
+	b := wkt(t, "LINESTRING(0 1, 1 1)")
+
+	d, ok := GeodeticFrechetDistance(a, b)
+	require.True(t, ok)
+	require.InDelta(t, oneDegreeMeters, d, 1e-6)
+
+	d, ok = GeodeticDirectedHausdorffDistance(a, b)
+	require.True(t, ok)
+	require.InDelta(t, oneDegreeMeters, d, 1e-6)
+
+	_, ok = GeodeticFrechetDistance(wkt(t, "LINESTRING EMPTY"), b)
+	require.False(t, ok)
+	_, ok = GeodeticDirectedHausdorffDistance(wkt(t, "LINESTRING EMPTY"), b)
+	require.False(t, ok)
+}

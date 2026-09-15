@@ -1614,6 +1614,40 @@ func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
 	}
 }
 
+func TestCoalesceBoundedStringBranchesKeepTheirDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+		oid    types.T
+		width  int32
+		cs     uint8
+	}{
+		{
+			name:   "char and varchar",
+			inputs: []types.Type{types.New(types.T_char, 4, 0), types.New(types.T_varchar, 12, 0)},
+			oid:    types.T_varchar,
+			width:  12,
+			cs:     types.CharsetUTF8,
+		},
+		{
+			name:   "binary and varbinary",
+			inputs: []types.Type{types.New(types.T_binary, 4, 0), types.New(types.T_varbinary, 12, 0)},
+			oid:    types.T_varbinary,
+			width:  12,
+			cs:     types.CharsetBinary,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "coalesce", test.inputs)
+			require.NoError(t, err)
+			require.Equal(t, test.oid, resolved.GetReturnType().Oid)
+			require.Equal(t, test.width, resolved.GetReturnType().Width)
+			require.Equal(t, test.cs, resolved.GetReturnType().Charset)
+		})
+	}
+}
+
 func Test_CoalesceCheck_JSONCharacterResolution(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

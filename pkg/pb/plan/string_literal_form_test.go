@@ -534,3 +534,111 @@ func TestRequiredRemoteExpressionFeaturesASCIIResultContract(t *testing.T) {
 		"legacy UINT8 ASCII plans remain executable on a newer worker")
 
 }
+
+func TestRequiredRemoteExpressionFeaturesV73OverloadBoundaries(t *testing.T) {
+	functionExpr := func(functionID, overloadID, resultType int32) *Expr {
+		return &Expr{
+			Typ: Type{Id: resultType},
+			Expr: &Expr_F{F: &Function{Func: &ObjectRef{
+				Obj: int64(functionID)<<32 | int64(overloadID),
+			}}},
+		}
+	}
+	feature := func(expr *Expr) bool {
+		features, err := RequiredRemoteExpressionFeatures(expr)
+		require.NoError(t, err)
+		return features.IPFunctionSemanticsV73
+	}
+
+	for _, test := range []struct {
+		name      string
+		function  int32
+		overload  int32
+		resultTyp int32
+		want      bool
+	}{
+		{name: "TO_BASE64 legacy", function: remoteTOBase64FunctionID, overload: 0, want: true},
+		{name: "TO_BASE64 overload 1", function: remoteTOBase64FunctionID, overload: 1},
+		{name: "TO_BASE64 overload 2", function: remoteTOBase64FunctionID, overload: 2},
+		{name: "TO_BASE64 binary 3", function: remoteTOBase64FunctionID, overload: 3, want: true},
+		{name: "TO_BASE64 binary 4", function: remoteTOBase64FunctionID, overload: 4, want: true},
+		{name: "TO_BASE64 binary 5", function: remoteTOBase64FunctionID, overload: 5, want: true},
+		{name: "TO_BASE64 future 6", function: remoteTOBase64FunctionID, overload: 6},
+		{name: "COALESCE legacy", function: remoteCoalesceFunctionID, overload: 28},
+		{name: "COALESCE binary 29", function: remoteCoalesceFunctionID, overload: 29, want: true},
+		{name: "COALESCE binary 30", function: remoteCoalesceFunctionID, overload: 30, want: true},
+		{name: "COALESCE future 31", function: remoteCoalesceFunctionID, overload: 31},
+		{name: "INET_NTOA legacy 8", function: remoteIPInetNtoaFunctionID, overload: 8},
+		{name: "INET_NTOA dynamic 9", function: remoteIPInetNtoaFunctionID, overload: 9, want: true},
+		{name: "INET_NTOA dynamic 22", function: remoteIPInetNtoaFunctionID, overload: 22, want: true},
+		{name: "INET_NTOA future 23", function: remoteIPInetNtoaFunctionID, overload: 23},
+		{name: "IS_IPV4 INT32", function: remoteIPIsIPv4FunctionID, resultTyp: asciiInt32ResultTypeID, want: true},
+		{name: "IS_IPV6 INT32", function: remoteIPIsIPv6FunctionID, resultTyp: asciiInt32ResultTypeID, want: true},
+		{name: "IS_IPV4_COMPAT INT32", function: remoteIPIsIPv4CompatFunctionID, resultTyp: asciiInt32ResultTypeID, want: true},
+		{name: "IS_IPV4_MAPPED INT32", function: remoteIPIsIPv4MappedFunctionID, resultTyp: asciiInt32ResultTypeID, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, feature(functionExpr(test.function, test.overload, test.resultTyp)))
+		})
+	}
+
+	for overload := int32(9); overload <= 22; overload++ {
+		require.True(t, feature(functionExpr(remoteIPInetNtoaFunctionID, overload, 12)), "INET_NTOA overload %d", overload)
+	}
+	for _, functionID := range []int32{
+		remoteIPIsIPv4FunctionID,
+		remoteIPIsIPv6FunctionID,
+		remoteIPIsIPv4CompatFunctionID,
+		remoteIPIsIPv4MappedFunctionID,
+	} {
+		require.False(t, feature(functionExpr(functionID, 0, 23)), "legacy predicate %d", functionID)
+	}
+}
+
+func TestRequiredRemoteExpressionFeaturesSpatialDistance(t *testing.T) {
+	spatial := func(functionID, overloadID int32) *Expr {
+		return &Expr{
+			Typ: Type{Id: 30},
+			Expr: &Expr_F{F: &Function{Func: &ObjectRef{
+				Obj: int64(functionID)<<32 | int64(overloadID),
+			}}},
+		}
+	}
+	for _, tc := range []struct {
+		name     string
+		id       int32
+		overload int32
+		want     bool
+	}{
+		{name: "legacy frechet geometry", id: remoteFrechetDistanceFunctionID, overload: 0, want: true},
+		{name: "legacy frechet geometry32", id: remoteFrechetDistanceFunctionID, overload: 1, want: true},
+		{name: "unit frechet geometry", id: remoteFrechetDistanceFunctionID, overload: 2, want: true},
+		{name: "unit frechet geometry32", id: remoteFrechetDistanceFunctionID, overload: 3, want: true},
+		{name: "legacy hausdorff geometry", id: remoteHausdorffDistanceFunctionID, overload: 0, want: true},
+		{name: "legacy hausdorff geometry32", id: remoteHausdorffDistanceFunctionID, overload: 1, want: true},
+		{name: "unit hausdorff geometry", id: remoteHausdorffDistanceFunctionID, overload: 2, want: true},
+		{name: "unit hausdorff geometry32", id: remoteHausdorffDistanceFunctionID, overload: 3, want: true},
+		{name: "new distance geometry unit", id: remoteSpatialDistanceFunctionID, overload: 4, want: true},
+		{name: "new distance geometry32 unit", id: remoteSpatialDistanceFunctionID, overload: 5, want: true},
+		{name: "legacy distance", id: remoteSpatialDistanceFunctionID, overload: 0, want: false},
+		{name: "explicit SRID distance", id: remoteSpatialDistanceFunctionID, overload: 1, want: false},
+		{name: "geometry32 explicit SRID distance", id: remoteSpatialDistanceFunctionID, overload: 3, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(spatial(tc.id, tc.overload))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.SpatialDistanceSemantics)
+			require.Equal(t, tc.want, features.Any())
+		})
+	}
+
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expressions []*Expr }{
+		Expressions: []*Expr{
+			spatial(remoteSpatialDistanceFunctionID, 0),
+			spatial(remoteSpatialDistanceFunctionID, 4),
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, features.SpatialDistanceSemantics,
+		"a nested/new unit overload must fence the whole owner")
+}
