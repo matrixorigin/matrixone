@@ -4304,7 +4304,7 @@ func TestRemoteApproxPercentileUsesLegacyStateBeforeProtocolV71(t *testing.T) {
 	require.True(t, math.IsNaN(vector.GetFixedAtNoTypeCheck[float64](results[0], 0)))
 }
 
-func TestRemoteHLLUsesLegacyStateBeforeProtocolV74(t *testing.T) {
+func TestRemoteHLLAddRetainsLegacyStateAcrossProtocolVersions(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
@@ -4350,6 +4350,8 @@ func TestRemoteHLLUsesLegacyStateBeforeProtocolV74(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
 	require.False(t, useLegacyHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+		"persisted HLL_ADD_AGG must retain the raw-value v2 state")
 }
 
 func TestLegacyHLLStateRequiresRemoteProcess(t *testing.T) {

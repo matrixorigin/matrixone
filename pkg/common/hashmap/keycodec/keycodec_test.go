@@ -379,14 +379,23 @@ func TestCanonicalVecF32Contract(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
 	positive := types.ArrayToBytes([]float32{1, 0, 3})
 	negative := types.ArrayToBytes([]float32{1, negativeZero, 3})
+	nanPayload0 := types.ArrayToBytes([]float32{1, math.Float32frombits(0x7fc00000), 3})
+	nanPayload1 := types.ArrayToBytes([]float32{1, math.Float32frombits(0xffc00001), 3})
 	negativeBefore := append([]byte(nil), negative...)
+	nanBefore := append([]byte(nil), nanPayload1...)
 
 	require.Equal(
 		t,
 		AppendCanonicalVecF32(nil, positive),
 		AppendCanonicalVecF32(nil, negative),
 	)
+	require.Equal(
+		t,
+		AppendCanonicalVecF32(nil, nanPayload0),
+		AppendCanonicalVecF32(nil, nanPayload1),
+	)
 	require.Equal(t, negativeBefore, negative, "canonicalization must not mutate vector storage")
+	require.Equal(t, nanBefore, nanPayload1, "canonicalization must not mutate vector storage")
 	require.NotEqual(
 		t,
 		AppendCanonicalVecF32(nil, positive),
@@ -398,14 +407,23 @@ func TestCanonicalVecF64Contract(t *testing.T) {
 	negativeZero := math.Copysign(0, -1)
 	positive := types.ArrayToBytes([]float64{1, 0, 3})
 	negative := types.ArrayToBytes([]float64{1, negativeZero, 3})
+	nanPayload0 := types.ArrayToBytes([]float64{1, math.Float64frombits(0x7ff8000000000000), 3})
+	nanPayload1 := types.ArrayToBytes([]float64{1, math.Float64frombits(0xfff8000000000001), 3})
 	negativeBefore := append([]byte(nil), negative...)
+	nanBefore := append([]byte(nil), nanPayload1...)
 
 	require.Equal(
 		t,
 		AppendCanonicalVecF64(nil, positive),
 		AppendCanonicalVecF64(nil, negative),
 	)
+	require.Equal(
+		t,
+		AppendCanonicalVecF64(nil, nanPayload0),
+		AppendCanonicalVecF64(nil, nanPayload1),
+	)
 	require.Equal(t, negativeBefore, negative, "canonicalization must not mutate vector storage")
+	require.Equal(t, nanBefore, nanPayload1, "canonicalization must not mutate vector storage")
 	require.NotEqual(
 		t,
 		AppendCanonicalVecF64(nil, positive),
@@ -758,6 +776,16 @@ func TestFloat32CodecContract(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
 	require.Equal(t, uint32(0), unscaled.CanonicalBits(negativeZero))
 	require.Equal(t, scaled.CanonicalBits(float32(0)), scaled.CanonicalBits(negativeZero))
+	require.Equal(t, uint32(0x7fc00000), unscaled.CanonicalBits(
+		math.Float32frombits(0x7fc00000)))
+	require.Equal(t, unscaled.CanonicalBits(math.Float32frombits(0x7fc00000)),
+		unscaled.CanonicalBits(math.Float32frombits(0xffc00001)))
+	require.Equal(t, unscaled.CanonicalBits(math.Float32frombits(0x7f800001)),
+		unscaled.CanonicalBits(math.Float32frombits(0x7fc12345)))
+	require.Equal(t, uint64(0x7ff8000000000000), CanonicalFloat64Bits(
+		math.Float64frombits(0x7ff8000000000000)))
+	require.Equal(t, CanonicalFloat64Bits(math.Float64frombits(0x7ff8000000000000)),
+		CanonicalFloat64Bits(math.Float64frombits(0xfff0000000000001)))
 }
 
 func TestSupportsExactRawRuntimeFilter(t *testing.T) {

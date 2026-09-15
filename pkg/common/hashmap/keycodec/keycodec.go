@@ -168,10 +168,18 @@ func (c Float32Codec) CanonicalBits(value float32) uint32 {
 	return CanonicalFloat32Bits(c.normalizer.Normalize(value))
 }
 
+const (
+	canonicalFloat32NaNBits = uint32(0x7fc00000)
+	canonicalFloat64NaNBits = uint64(0x7ff8000000000000)
+)
+
 // CanonicalFloat32Bits returns canonical bits for a FLOAT32 value after any
-// required scale normalization. SQL equality identifies signed zero, so both
-// zero representations use the single all-zero key.
+// required scale normalization. SQL equality identifies signed zero and all
+// NaN sign/payload encodings, so each equivalence class has one hash key.
 func CanonicalFloat32Bits(value float32) uint32 {
+	if math.IsNaN(float64(value)) {
+		return canonicalFloat32NaNBits
+	}
 	bits := math.Float32bits(value)
 	if bits<<1 == 0 {
 		return 0
@@ -186,8 +194,12 @@ func (c Float32Codec) CanonicalBytes(value float32) [4]byte {
 	return *(*[4]byte)(unsafe.Pointer(&bits))
 }
 
-// CanonicalFloat64Bits makes SQL-equal signed zero values use one hash key.
+// CanonicalFloat64Bits makes SQL-equal signed zero and NaN values use one hash
+// key while preserving finite values and infinities.
 func CanonicalFloat64Bits(value float64) uint64 {
+	if math.IsNaN(value) {
+		return canonicalFloat64NaNBits
+	}
 	bits := math.Float64bits(value)
 	if bits<<1 == 0 {
 		return 0
@@ -349,26 +361,18 @@ func canonicalVecEqual(left, right []byte, elementSize int) bool {
 				return false
 			}
 		case 4:
-			leftBits := binary.LittleEndian.Uint32(left[offset:])
-			rightBits := binary.LittleEndian.Uint32(right[offset:])
-			if leftBits<<1 == 0 {
-				leftBits = 0
-			}
-			if rightBits<<1 == 0 {
-				rightBits = 0
-			}
+			leftBits := CanonicalFloat32Bits(
+				math.Float32frombits(binary.LittleEndian.Uint32(left[offset:])))
+			rightBits := CanonicalFloat32Bits(
+				math.Float32frombits(binary.LittleEndian.Uint32(right[offset:])))
 			if leftBits != rightBits {
 				return false
 			}
 		case 8:
-			leftBits := binary.LittleEndian.Uint64(left[offset:])
-			rightBits := binary.LittleEndian.Uint64(right[offset:])
-			if leftBits<<1 == 0 {
-				leftBits = 0
-			}
-			if rightBits<<1 == 0 {
-				rightBits = 0
-			}
+			leftBits := CanonicalFloat64Bits(
+				math.Float64frombits(binary.LittleEndian.Uint64(left[offset:])))
+			rightBits := CanonicalFloat64Bits(
+				math.Float64frombits(binary.LittleEndian.Uint64(right[offset:])))
 			if leftBits != rightBits {
 				return false
 			}
@@ -503,8 +507,9 @@ func AppendCanonicalVecF32(dst, value []byte) []byte {
 	canonical := dst[start:]
 	for offset := 0; offset < len(canonical); offset += 4 {
 		bits := binary.LittleEndian.Uint32(canonical[offset:])
-		if bits<<1 == 0 {
-			binary.LittleEndian.PutUint32(canonical[offset:], 0)
+		canonicalBits := CanonicalFloat32Bits(math.Float32frombits(bits))
+		if bits != canonicalBits {
+			binary.LittleEndian.PutUint32(canonical[offset:], canonicalBits)
 		}
 	}
 	return dst
@@ -521,8 +526,9 @@ func AppendCanonicalVecF64(dst, value []byte) []byte {
 	canonical := dst[start:]
 	for offset := 0; offset < len(canonical); offset += 8 {
 		bits := binary.LittleEndian.Uint64(canonical[offset:])
-		if bits<<1 == 0 {
-			binary.LittleEndian.PutUint64(canonical[offset:], 0)
+		canonicalBits := CanonicalFloat64Bits(math.Float64frombits(bits))
+		if bits != canonicalBits {
+			binary.LittleEndian.PutUint64(canonical[offset:], canonicalBits)
 		}
 	}
 	return dst
