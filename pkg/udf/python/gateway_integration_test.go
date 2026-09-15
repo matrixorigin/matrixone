@@ -494,7 +494,7 @@ def add(ctx, value):
 	gateway.admissionMu.Lock()
 	require.Empty(t, gateway.admittedGroups)
 	require.Empty(t, gateway.active)
-	closedEpoch := gateway.closedGroups[invocation.Tuple.GroupID]
+	closedEpoch := gateway.closedGroups[scopedGroupKey(invocation.Tuple.AccountID, invocation.Tuple.GroupID)]
 	gateway.admissionMu.Unlock()
 	require.Equal(t, uint64(1), closedEpoch)
 	entries, _ := gateway.ledger.Counts()
