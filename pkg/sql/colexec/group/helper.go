@@ -1891,7 +1891,7 @@ func (ctr *container) makeAggListWithAllocation(
 }
 
 // hllFloatZeroStateSupported is deliberately limited to APPROX_COUNT
-// families. Protocol v74 introduced signed-zero canonicalization for those
+// families. Protocol v75 introduced signed-zero canonicalization for those
 // newly versioned states; persisted HLL_ADD_AGG/HLL_MERGE_AGG states retain
 // their v2 raw-value wire contract until a future explicit migration.
 func hllFloatZeroStateSupported(aggID int64) bool {
@@ -1955,7 +1955,7 @@ func useLegacyApproxPercentileStateForRemote(proc *process.Process) bool {
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion74
+	return !ok || !valid || version < defines.MORPCVersion75
 }
 
 // An old coordinator can send a final Group to an upgraded worker without
@@ -1982,7 +1982,7 @@ func useLegacyHLLStateForRemote(proc *process.Process) bool {
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion75
+	return !ok || !valid || version < defines.MORPCVersion76
 }
 
 func useFloatZeroHLLStateForRemote(proc *process.Process) bool {
@@ -1996,7 +1996,7 @@ func useFloatZeroHLLStateForRemote(proc *process.Process) bool {
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version == defines.MORPCVersion74
+	return ok && valid && version == defines.MORPCVersion75
 }
 
 func groupHashStringWireEnabled(proc *process.Process) bool {
@@ -2010,7 +2010,7 @@ func groupHashStringWireEnabled(proc *process.Process) bool {
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion76
+	return ok && valid && version >= defines.MORPCVersion77
 }
 
 func canonicalDistinctKeyWireEnabled(proc *process.Process) bool {
@@ -2024,7 +2024,7 @@ func canonicalDistinctKeyWireEnabled(proc *process.Process) bool {
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion77
+	return ok && valid && version >= defines.MORPCVersion78
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

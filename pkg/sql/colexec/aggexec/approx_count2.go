@@ -764,7 +764,7 @@ func stableEmptyHLLState(version byte) func(io.Writer) error {
 }
 
 // ConfigureHLLLegacyState makes a newly constructed remote executor emit the
-// version-2 hash semantics understood by pre-v74 peers. It is applied before
+// version-2 hash semantics understood by pre-v75 peers. It is applied before
 // GroupGrow so lazy and preflight allocations use the same version.
 func ConfigureHLLLegacyState(aggregate AggFuncExec) {
 	if configurable, ok := aggregate.(interface{ setLegacyHLLState() }); ok {
@@ -773,7 +773,7 @@ func ConfigureHLLLegacyState(aggregate AggFuncExec) {
 }
 
 // ConfigureHLLFloatZeroState makes an APPROX_COUNT_DISTINCT executor emit the
-// version-3 hash semantics used by protocol v74: only scalar floating-point
+// version-3 hash semantics used by protocol v75: only scalar floating-point
 // signed zero is canonicalized. HLL_ADD_AGG and HLL_MERGE_AGG are persisted
 // v2 states and must never be changed by this remote compatibility knob.
 func ConfigureHLLFloatZeroState(aggregate AggFuncExec) {

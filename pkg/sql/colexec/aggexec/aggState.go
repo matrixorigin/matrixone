@@ -119,7 +119,7 @@ type aggInfo struct {
 	groupConcatSourceRowWire           bool
 	groupConcatSourceRowTrusted        bool
 	groupConcatSourceRowProvenanceWire bool
-	// legacyCanonicalDistinctKeyWire keeps a remote producer on the pre-v77
+	// legacyCanonicalDistinctKeyWire keeps a remote producer on the pre-v78
 	// length-delimited opaque DISTINCT payload. Readers accept both forms, but
 	// old peers do not understand the marker-bearing canonical form.
 	legacyCanonicalDistinctKeyWire bool
@@ -446,7 +446,7 @@ func (ag *aggState) writeStateArg(
 						xcnt++
 						continue
 					}
-					// Before v77, an opaque DISTINCT argument was sent as the
+					// Before v78, an opaque DISTINCT argument was sent as the
 					// original length-delimited value. Canonical keys are only an
 					// in-memory equivalence representation; sending one here would
 					// make an old peer see a second value when it merges the same
@@ -660,7 +660,7 @@ func (ag *aggState) readStateArg(
 				payload := kbuf[kAggArgPrefixSz:]
 				// Retain the legacy representative as the skiplist value. A
 				// current receiver may later have to re-export this state to a
-				// pre-v77 peer, which cannot consume the canonical key bytes.
+				// pre-v78 peer, which cannot consume the canonical key bytes.
 				legacyValue = payload
 				canonical, owned, canonicalErr := canonicalizeLegacyDistinctPayload(
 					ag, mp, info, kbuf[:kAggArgPrefixSz], payload)
@@ -758,7 +758,7 @@ func usesCanonicalDistinctWire(info *aggInfo) bool {
 }
 
 // canonicalDistinctMembershipEnabled controls the in-memory equivalence key,
-// independently of whether the peer can read the v77 marker-bearing wire
+// independently of whether the peer can read the v78 marker-bearing wire
 // format. A current receiver must normalize legacy raw payloads before they
 // can be appended to or merged with current canonical keys.
 func canonicalDistinctMembershipEnabled(info *aggInfo) bool {
@@ -1938,9 +1938,9 @@ type aggExec struct {
 	distinctFixedAdmission distinctFixedAdmissionPlan
 }
 
-// SetCanonicalDistinctKeyWire selects the v77 marker-bearing opaque DISTINCT
+// SetCanonicalDistinctKeyWire selects the v78 marker-bearing opaque DISTINCT
 // payload. A remote producer must disable it while the deployment rollout
-// gate is below v77; the receiver canonicalizes the legacy payload after
+// gate is below v78; the receiver canonicalizes the legacy payload after
 // decoding it.
 func SetCanonicalDistinctKeyWire(agg AggFuncExec, enabled bool) {
 	if configurable, ok := agg.(interface {
@@ -3174,7 +3174,7 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			continue
 		}
 
-		// A multi-column canonical key may not be sent to a pre-v77 peer.
+		// A multi-column canonical key may not be sent to a pre-v78 peer.
 		// Retain one raw, length-delimited tuple only when it differs from the
 		// canonical key; insertPreparedArgWithValue copies it into the skiplist
 		// while the reusable accounted scratch remains valid.
