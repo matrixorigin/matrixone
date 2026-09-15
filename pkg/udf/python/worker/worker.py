@@ -2119,6 +2119,19 @@ def _context_is_cancelled(context) -> bool:
         return False
 
 
+class _ExchangeContext:
+    """Combine the Flight cancellation state with server shutdown intent."""
+
+    __slots__ = ("_context", "_shutdown")
+
+    def __init__(self, context, shutdown: threading.Event):
+        self._context = context
+        self._shutdown = shutdown
+
+    def is_cancelled(self) -> bool:
+        return self._shutdown.is_set() or _context_is_cancelled(self._context)
+
+
 class _ExchangeInputReader:
     """Make a blocking Flight input read observable to cancellation.
 
@@ -2949,6 +2962,11 @@ class RoutineFlightServer(_FlightServerBase):
         self._pending_cleanups: Dict[tuple, _PendingInvocationCleanup] = {}
         self._pending_cleanup_thread: Optional[threading.Thread] = None
         self._pending_cleanup_stopping = False
+        # FlightServerBase.shutdown waits for active RPC methods to return.
+        # Set this before entering that wait so input readers, handler loops,
+        # and ACK waits have an independent cancellation source during a
+        # graceful worker shutdown.
+        self._shutdown_event = threading.Event()
 
     @staticmethod
     def _entry_bytes(key: tuple) -> int:
@@ -3215,6 +3233,7 @@ class RoutineFlightServer(_FlightServerBase):
                     )
 
     def shutdown(self):
+        self._shutdown_event.set()
         result = super().shutdown()
         with self._pending_cleanup_condition:
             self._pending_cleanup_stopping = True
@@ -3375,12 +3394,15 @@ class RoutineFlightServer(_FlightServerBase):
         return value
 
     def do_exchange(self, context, descriptor, reader, writer):
+        exchange_context = _ExchangeContext(context, self._shutdown_event)
         state = None
         key = None
         handler_session = None
         input_reader = None
         writer_started = False
         try:
+            if exchange_context.is_cancelled():
+                raise TimeoutError("DEADLINE_EXCEEDED: Flight server is shutting down")
             command = getattr(descriptor, "command", None)
             if command is None:
                 raise ValueError("PROTOCOL: exchange is missing the invocation descriptor")
@@ -3475,14 +3497,14 @@ class RoutineFlightServer(_FlightServerBase):
             input_reader = _ExchangeInputReader(reader)
             while True:
                 try:
-                    chunk = input_reader.next(context)
+                    chunk = input_reader.next(exchange_context)
                 except StopIteration:
                     break
                 # The reader can publish a chunk at the same instant that the
                 # RPC is cancelled.  Re-check after the blocking handoff so a
                 # chunk already dequeued after cancellation cannot start user
                 # code or consume another handler slot.
-                if _context_is_cancelled(context):
+                if exchange_context.is_cancelled():
                     raise TimeoutError("DEADLINE_EXCEEDED: input stream cancelled")
                 if chunk is None or (chunk.data is None and not chunk.app_metadata):
                     raise ValueError("PROTOCOL: empty input frame")
@@ -3543,7 +3565,7 @@ class RoutineFlightServer(_FlightServerBase):
                         "input": _serialize_record_batch_message(batch),
                     }
                     output_wire = handler_session.run(
-                        context, execution_request, handler_timeout_seconds
+                        exchange_context, execution_request, handler_timeout_seconds
                     )
                     output_batch = _deserialize_record_batch_message(
                         output_wire, result_schema
@@ -3575,7 +3597,7 @@ class RoutineFlightServer(_FlightServerBase):
                         "released_batches": 1,
                     }))
                     writer.write_with_metadata(output_batch, _encode_control({"kind": "ResultBatch", "tuple": open_control["tuple"], "sequence": sequence}))
-                    state.wait_result_ack(sequence, context)
+                    state.wait_result_ack(sequence, exchange_context)
                     if handler_session.should_rollover:
                         handler_session.close()
                         handler_session = None
@@ -3607,9 +3629,9 @@ class RoutineFlightServer(_FlightServerBase):
                 "last_sequence": last_input,
                 "last_result_sequence": last_result,
             }))
-            state.wait_finish_ack(context)
+            state.wait_finish_ack(exchange_context)
         except Exception as exc:
-            if state is not None and _is_cancellation_error(exc, context):
+            if state is not None and _is_cancellation_error(exc, exchange_context):
                 state.mark_cancelled()
             if writer_started and key is not None:
                 try:

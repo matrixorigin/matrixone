@@ -570,6 +570,95 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid worker lease epoch"):
             worker.RoutineFlightServer("grpc://127.0.0.1:0", lease_epoch=0)
 
+    @unittest.skipUnless(os.name == "posix", "Flight shutdown cancellation test")
+    def test_flight_shutdown_cancels_an_active_exchange(self):
+        entered = threading.Event()
+        original_reader = worker._ExchangeInputReader
+
+        class NotifyingReader(original_reader):
+            def __init__(self, reader):
+                entered.set()
+                super().__init__(reader)
+
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        client = flight.FlightClient(("127.0.0.1", server.port))
+        server_thread = threading.Thread(target=server.serve, daemon=True)
+        server_thread.start()
+        writer = None
+        shutdown_error = []
+        descriptor = {"type_id": worker.INT64, "offset_width": 32}
+        payload = complete_open_payload(
+            {
+                "function_ref": {
+                    "account_id": 1,
+                    "database_id": 2,
+                    "function_id": 3,
+                    "revision": 1,
+                    "namespace_version": 1,
+                },
+                "source": "def f(ctx, x): return x",
+                "handler": "f",
+                "mode": worker.MODE_SCALAR,
+                "null_policy": worker.NULL_CALL,
+                "abi_contract": worker.ABI_CONTRACT,
+                "adapter_version": worker.ADAPTER_VERSION,
+                "sdk_version": worker.SDK_VERSION,
+                "args": [descriptor],
+                "return": descriptor,
+                "max_batch_bytes": 1 << 20,
+                "max_batch_rows": 8,
+                "handler_timeout_seconds": 60,
+            }
+        )
+        fence = {
+            "account_id": 1,
+            "statement_id": "shutdown",
+            "group_id": "shutdown-group",
+            "group_epoch": 1,
+            "invocation_id": "shutdown-invocation",
+            "lease_epoch": 1,
+        }
+
+        def control(kind, **fields):
+            return worker._encode_control({"kind": kind, "tuple": fence, **fields})
+
+        try:
+            with mock.patch.object(worker, "_ExchangeInputReader", NotifyingReader):
+                writer, reader = client.do_exchange(
+                    flight.FlightDescriptor.for_command(
+                        control("OpenInvocation", payload=payload)
+                    ),
+                    options=flight.FlightCallOptions(timeout=5),
+                )
+                self.assertTrue(entered.wait(2), "exchange did not reach its input reader")
+
+                def shutdown():
+                    try:
+                        server.shutdown()
+                    except Exception as exc:
+                        shutdown_error.append(exc)
+
+                shutdown_thread = threading.Thread(target=shutdown)
+                shutdown_thread.start()
+                shutdown_thread.join(5)
+                self.assertFalse(
+                    shutdown_thread.is_alive(),
+                    "server shutdown waited for an active exchange",
+                )
+            self.assertEqual([], shutdown_error)
+            self.assertFalse(server._active)
+            with server._pending_cleanup_condition:
+                self.assertFalse(server._pending_cleanups)
+        finally:
+            if writer is not None:
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+            client.close()
+            if server_thread.is_alive():
+                server_thread.join(2)
+
     def test_inline_contract_rejects_external_handler_import(self):
         with self.assertRaisesRegex(ValueError, "immutable artifact catalog"):
             worker._load_handler("def add(ctx, value): return value", "module:add")
