@@ -201,6 +201,12 @@ func validateControlFields(control Control, wire map[string]json.RawMessage) err
 		if len(control.Payload) == 0 && wire == nil {
 			return fmt.Errorf("%w: control kind %q is missing field %q", ErrProtocol, control.Kind, "payload")
 		}
+		if len(control.Payload) != 0 {
+			var payload map[string]json.RawMessage
+			if err := json.Unmarshal(control.Payload, &payload); err != nil || payload == nil {
+				return fmt.Errorf("%w: control kind %q payload must be a JSON object", ErrProtocol, control.Kind)
+			}
+		}
 	case "InputBatch", "ResultBatch":
 		if control.Sequence == 0 {
 			return fmt.Errorf("%w: control kind %q requires a positive sequence", ErrProtocol, control.Kind)
