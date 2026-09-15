@@ -1645,6 +1645,29 @@ func decimal256FitsPrecision(value types.Decimal256, width int32) bool {
 	return value.Less(limit)
 }
 
+// validateDecimal256SumResult checks the SQL precision at the final SUM
+// publication boundary. Intermediate aggregate states use the full physical
+// Decimal256 range so partial sums can cancel during a later merge.
+func validateDecimal256SumResult(value any, resultType types.Type) error {
+	if resultType.Oid != types.T_decimal256 {
+		return nil
+	}
+	if resultType.Width <= 0 || resultType.Width >= int32(len(decimal256PrecisionLimits)) ||
+		resultType.Scale < 0 || resultType.Scale > resultType.Width {
+		return moerr.NewInternalErrorNoCtxf("invalid decimal sum result type %s", resultType.String())
+	}
+	decimal, ok := value.(types.Decimal256)
+	if !ok {
+		return moerr.NewInternalErrorNoCtxf("invalid decimal sum state type %T", value)
+	}
+	if !decimal256FitsPrecision(decimal, resultType.Width) {
+		return moerr.NewInvalidInputNoCtxf(
+			"%s beyond the range, can't be converted to Decimal256(%d,%d).",
+			decimal.Format(resultType.Scale), resultType.Width, resultType.Scale)
+	}
+	return nil
+}
+
 func decimal256AvgAtScale(value types.Decimal256, count int64, argScale, resultScale int32) (types.Decimal256, error) {
 	if count <= 0 {
 		return value, moerr.NewInvalidInputNoCtxf("Decimal256 Div by Zero")
@@ -1857,6 +1880,9 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 					}
 
 					if exec.isSum {
+						if err := validateDecimal256SumResult(sum, resultType); err != nil {
+							return nil, err
+						}
 						if err := vector.AppendFixed(vecs[i], sum, false, exec.mp); err != nil {
 							return nil, err
 						}
@@ -1876,6 +1902,17 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 		for i := range vecs {
 			sumVec := exec.state[i].vecs[0]
 			sums := vector.MustFixedColNoTypeCheck[S](sumVec)
+
+			if exec.isSum && resultType.Oid == types.T_decimal256 {
+				for j, sum := range sums {
+					if sumVec.IsNull(uint64(j)) {
+						continue
+					}
+					if err := validateDecimal256SumResult(sum, resultType); err != nil {
+						return nil, err
+					}
+				}
+			}
 
 			if !exec.isSum {
 				cntVec := exec.state[i].vecs[1]
