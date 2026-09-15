@@ -1120,7 +1120,10 @@ def _encode_control(value: Dict[str, Any]) -> bytes:
         raise ValueError("PROTOCOL: unsupported control field")
     value.setdefault("version", PROTOCOL_VERSION)
     _tuple_key(value["tuple"])
-    _validate_control_fields(value, wire=False)
+    # The encoder is the last boundary before bytes leave the worker. It
+    # must enforce the same required fields as the decoder; otherwise a new
+    # producer can emit a frame that Go's MarshalControl would reject.
+    _validate_control_fields(value, wire=True)
     try:
         data = json.dumps(
             value,
