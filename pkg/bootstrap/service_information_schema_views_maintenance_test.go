@@ -304,6 +304,106 @@ func TestMaintainInformationSchemaViewsWaitsForProtocol(t *testing.T) {
 	require.Zero(t, service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
 }
 
+func TestMaintainInformationSchemaViewsTransitionsLegacyDefinitionForPublicConsumers(t *testing.T) {
+	const accountID = int32(10)
+	state := &transactionalInformationSchemaViewsState{
+		definition: sysview.InformationSchemaViewsLegacyDDL,
+		protocolResponses: []string{
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:72"}`,
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:73"}`,
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:73"}`,
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:73"}`,
+		},
+	}
+	installTransactionalInformationSchemaViewsCheck(t, state, accountID)
+	service := newTransactionalInformationSchemaViewsMaintenanceTestService(t, state)
+
+	// A tenant created while capability discovery is unavailable keeps the
+	// predecessor definition, which is safe for every public VIEWS consumer.
+	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
+	require.Equal(t, sysview.InformationSchemaViewsLegacyDDL, state.definition)
+	require.Zero(t, state.replacementCalls.Load())
+	require.Contains(t, state.definition, "tbl.rel_createsql AS `VIEW_DEFINITION`")
+	require.Contains(t, state.definition, "'YES' AS `IS_UPDATABLE`")
+
+	// Once all-CN capability is available, maintenance replaces the same
+	// persisted definition transactionally and exposes the current contract.
+	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
+	require.Equal(t, sysview.InformationSchemaViewsDDL, state.definition)
+	require.Equal(t, int32(1), state.replacementCalls.Load())
+	require.Contains(t, state.definition, "mo_view_definition(tbl.viewdef)")
+	require.Contains(t, state.definition, "cast('NO' as varchar(3)) AS `IS_UPDATABLE`")
+
+	// The current definition is the durable idempotence marker; a later pass
+	// must not replace it again.
+	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
+	require.Equal(t, int32(1), state.replacementCalls.Load())
+}
+
+func TestInformationSchemaViewsProtocolGateClassifier(t *testing.T) {
+	rollbackErr := errors.New("transaction rollback failed")
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "gate only", err: errInformationSchemaViewsProtocolUnavailable, want: true},
+		{name: "different not supported", err: moerr.NewNotSupportedNoCtx("different capability"), want: false},
+		{name: "gate with rollback error", err: errors.Join(errInformationSchemaViewsProtocolUnavailable, rollbackErr), want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, isOnlyInformationSchemaViewsProtocolGateError(test.err))
+		})
+	}
+}
+
+func TestMaintainInformationSchemaViewsSkipsAccountDroppedDuringScan(t *testing.T) {
+	const droppedAccountID = int32(10)
+	const survivingAccountID = int32(20)
+	var replacements int
+
+	oldCheck := versions.CheckViewDefinition
+	versions.CheckViewDefinition = func(
+		_ executor.TxnExecutor,
+		id uint32,
+		_ string,
+		_ string,
+	) (bool, string, error) {
+		switch int32(id) {
+		case droppedAccountID:
+			return false, "", moerr.NewNoSuchTableNoCtx("mo_catalog", "mo_user")
+		case survivingAccountID:
+			return true, sysview.InformationSchemaViewsLegacyDDL, nil
+		default:
+			t.Fatalf("unexpected account %d", id)
+			return false, "", nil
+		}
+	}
+	t.Cleanup(func() { versions.CheckViewDefinition = oldCheck })
+
+	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
+		switch {
+		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:73"}`), nil
+		case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
+			require.Contains(t, sql, "account_id >= 0")
+			return buildInformationSchemaViewsMaintenanceAccountRows(droppedAccountID, survivingAccountID), nil
+		case sql == sysview.InformationSchemaViewsDDL:
+			replacements++
+			return executor.Result{}, nil
+		case strings.HasPrefix(sql, "DROP VIEW IF EXISTS information_schema.VIEWS"):
+			return executor.Result{}, nil
+		default:
+			return executor.Result{}, fmt.Errorf("unexpected sql: %s", sql)
+		}
+	})
+
+	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
+	require.Equal(t, 1, replacements)
+	require.Equal(t, int32(survivingAccountID+1),
+		service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
+}
+
 func TestMaintainInformationSchemaViewsFindsLateAccountAfterWrap(t *testing.T) {
 	definitions := map[int32]string{
 		10: sysview.InformationSchemaViewsDDL,
