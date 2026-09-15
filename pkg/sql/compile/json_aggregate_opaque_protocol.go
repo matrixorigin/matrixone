@@ -16,8 +16,8 @@ package compile
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -25,6 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// MORPC v52 describes the scalar MySQL opaque JSON representation. It does
+// not establish that a peer has the JSON aggregate consumer, which was added
+// here. Keep the aggregate capability on its own protocol version so a v73
+// parent cannot be admitted as an aggregate worker.
+const jsonAggregateOpaqueCapabilityVersion = defines.MORPCVersion75
 
 func (c *Compile) constrainJSONAggregateOpaqueWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
@@ -35,7 +41,7 @@ func (c *Compile) constrainJSONAggregateOpaqueWorkers(qry *plan.Query) error {
 		return err
 	}
 	supported, err := remoteWorkersSupportProtocol(
-		c.proc, c.cnList, bytejson.MySQLOpaqueProtocolVersion)
+		c.proc, c.cnList, jsonAggregateOpaqueCapabilityVersion)
 	if err != nil {
 		return err
 	}
@@ -62,7 +68,7 @@ func validateJSONAggregateOpaquePipelineProtocol(
 		return jsonAggregateOpaqueProtocolError()
 	}
 	version, ok := remoteMORPCProtocolVersion(proc.GetService())
-	if !ok || version < bytejson.MySQLOpaqueProtocolVersion {
+	if !ok || version < jsonAggregateOpaqueCapabilityVersion {
 		return jsonAggregateOpaqueProtocolError()
 	}
 	return nil
@@ -83,7 +89,7 @@ func validateJSONAggregateOpaqueDestination(
 	supported, err := remoteWorkersSupportProtocol(
 		proc,
 		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}},
-		bytejson.MySQLOpaqueProtocolVersion,
+		jsonAggregateOpaqueCapabilityVersion,
 	)
 	if err != nil {
 		return err
@@ -163,7 +169,7 @@ func validateJSONAggregateOpaqueAggregateProtocol(
 			return jsonAggregateOpaqueProtocolError()
 		}
 		version, ok := remoteMORPCProtocolVersion(proc.GetService())
-		if !ok || version < bytejson.MySQLOpaqueProtocolVersion {
+		if !ok || version < jsonAggregateOpaqueCapabilityVersion {
 			return jsonAggregateOpaqueProtocolError()
 		}
 	}
@@ -188,5 +194,5 @@ func isJSONAggregateOpaqueType(expr *plan.Expr) bool {
 func jsonAggregateOpaqueProtocolError() error {
 	return moerr.NewNotSupportedNoCtxf(
 		"JSON aggregate opaque values require MORPC protocol version %d",
-		bytejson.MySQLOpaqueProtocolVersion)
+		jsonAggregateOpaqueCapabilityVersion)
 }
