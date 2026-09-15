@@ -358,13 +358,7 @@ const (
 		"%s" +
 		"%s" +
 		" AND tbl.relkind = '%s' " +
-		" AND tbl.reldatabase NOT IN (%s)" +
-		" AND EXISTS (SELECT 1 FROM `mo_catalog`.`mo_columns` pk " +
-		"WHERE pk.account_id = tbl.account_id " +
-		"AND pk.db_name = tbl.reldatabase " +
-		"AND pk.relname = tbl.relname " +
-		"AND pk.constraint_type = 'p' " +
-		"AND pk.name <> '__mo_fake_pk_col')"
+		" AND tbl.reldatabase NOT IN (%s)"
 	CDCInsertMOISCPLogSqlTemplate = `REPLACE INTO mo_catalog.mo_iscp_log (` +
 		`account_id,` +
 		`table_id,` +
@@ -1295,10 +1289,9 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 	)
 }
 
-// CollectCDCSourceCandidateSQL returns the catalog query used for CREATE CDC
-// admission. Keep it on top of CollectTableInfoSQL so admission and the
-// runtime table scanner start from exactly the same catalog candidate set
-// (ordinary user tables and no system databases).
+// CollectCDCSourceCandidateSQL returns the runtime scanner candidate set with
+// an explicit user-primary-key status. Do not filter no-PK tables here: CREATE
+// CDC must reject them and an active task must observe a later PK loss.
 func CollectCDCSourceCandidateSQL(accountID uint32, dbName, tableName string) string {
 	dbNames := "*"
 	if dbName != CDCPitrGranularity_All {
@@ -1308,7 +1301,21 @@ func CollectCDCSourceCandidateSQL(accountID uint32, dbName, tableName string) st
 	if tableName != CDCPitrGranularity_All {
 		tableNames = AddSingleQuotesJoin([]string{tableName})
 	}
-	return CDCSQLBuilder.CollectTableInfoSQL(strconv.FormatUint(uint64(accountID), 10), dbNames, tableNames)
+	return fmt.Sprintf("SELECT tbl.rel_id, tbl.relname, tbl.reldatabase_id, tbl.reldatabase, tbl.rel_createsql, tbl.account_id, tbl.`constraint`, EXISTS (SELECT 1 FROM `mo_catalog`.`mo_columns` pk WHERE pk.account_id = tbl.account_id AND pk.db_name = tbl.reldatabase AND pk.relname = tbl.relname AND pk.constraint_type = 'p' AND pk.name <> %s) AS has_user_pk FROM `mo_catalog`.`mo_tables` tbl WHERE tbl.account_id IN (%s)%s%s AND tbl.relkind = '%s' AND tbl.reldatabase NOT IN (%s)",
+		"'"+catalog.FakePrimaryKeyColName+"'", strconv.FormatUint(uint64(accountID), 10),
+		func() string {
+			if dbNames == "*" {
+				return ""
+			}
+			return " AND tbl.reldatabase IN (" + dbNames + ")"
+		}(),
+		func() string {
+			if tableNames == "*" {
+				return ""
+			}
+			return " AND tbl.relname IN (" + tableNames + ")"
+		}(),
+		catalog.SystemOrdinaryRel, AddSingleQuotesJoin(catalog.SystemDatabases))
 }
 
 func (b cdcSQLBuilder) GetTableIDSQL(

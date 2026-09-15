@@ -48,7 +48,7 @@ func TestCheckPitrGranularityWildcardFiltersNoPrimaryKey(t *testing.T) {
 		if strings.Contains(sql, catalog.MO_TABLES) {
 			result := executor.NewMemResult([]types.Type{
 				types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
-				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(),
+				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType(),
 			}, proc.Mp())
 			result.NewBatchWithRowCount(1)
 			require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1}))
@@ -58,6 +58,7 @@ func TestCheckPitrGranularityWildcardFiltersNoPrimaryKey(t *testing.T) {
 			require.NoError(t, executor.AppendStringRows(result, 4, []string{""}))
 			require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7}))
 			require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{{}}))
+			require.NoError(t, executor.AppendFixedRows(result, 7, []bool{false}))
 			return result.GetResult(), nil
 		}
 		result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, proc.Mp())
@@ -97,7 +98,7 @@ func TestCheckPitrGranularityWildcardExcludeAndPrimaryKey(t *testing.T) {
 	proc.ReplaceTopCtx(ctx)
 
 	candidateResult := func(table string) executor.Result {
-		result := executor.NewMemResult([]types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType()}, proc.Mp())
+		result := executor.NewMemResult([]types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType()}, proc.Mp())
 		result.NewBatchWithRowCount(1)
 		require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1}))
 		require.NoError(t, executor.AppendStringRows(result, 1, []string{table}))
@@ -106,6 +107,7 @@ func TestCheckPitrGranularityWildcardExcludeAndPrimaryKey(t *testing.T) {
 		require.NoError(t, executor.AppendStringRows(result, 4, []string{""}))
 		require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7}))
 		require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{{}}))
+		require.NoError(t, executor.AppendFixedRows(result, 7, []bool{table == "with_pk"}))
 		return result.GetResult()
 	}
 	validPitrResult := func() executor.Result {
