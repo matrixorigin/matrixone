@@ -11425,6 +11425,7 @@ func (builder *QueryBuilder) bindView(
 		builder.compCtx.SetQueryingSubscription(metadataSubscription.Meta)
 		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
+	viewNodeStart := len(builder.qry.Nodes)
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
 		return
@@ -11434,7 +11435,8 @@ func (builder *QueryBuilder) bindView(
 	// outer query; the cluster admission floor protects older CN binaries, and
 	// this local check protects a capable reader with a stale catalog marker.
 	if err = RequirePersistedIPFunctionProtocol(
-		builder.GetContext(), builder.compCtx.GetProcess(), builder.qry); err != nil {
+		builder.GetContext(), builder.compCtx.GetProcess(),
+		builder.qry.Nodes[viewNodeStart:]); err != nil {
 		return
 	}
 	nodeID, err = builder.appendMySQLSpecialTypeBoundary(

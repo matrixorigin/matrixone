@@ -106,6 +106,18 @@ func RegenerateViewDefinition(
 	if err := json.Unmarshal([]byte(persistedViewData), &viewData); err != nil {
 		return nil, err
 	}
+	if viewData.RequiredProtocolVersion != nil {
+		if *viewData.RequiredProtocolVersion < 0 {
+			return nil, moerr.NewInvalidInputf(
+				ctx.GetContext(),
+				"persisted view protocol version must not be negative: %d",
+				*viewData.RequiredProtocolVersion)
+		}
+		if err := RequirePersistedProtocolVersion(
+			ctx.GetContext(), ctx.GetProcess(), *viewData.RequiredProtocolVersion); err != nil {
+			return nil, err
+		}
+	}
 	parserSQLMode := legacyViewParserSQLMode
 	if viewData.SQLMode != nil {
 		parserSQLMode = *viewData.SQLMode

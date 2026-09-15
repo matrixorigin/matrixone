@@ -980,7 +980,7 @@ func (l *store) viewMetadataAdmissionLogStoresReadyWithProtocol(
 	for _, info := range state.LogState.Stores {
 		if !cfg.LogStoreExpired(info.Tick, state.Tick) &&
 			(!info.ViewMetadataAdmissionSupported ||
-				(requireProtocolV2 && !info.ViewMetadataAdmissionProtocolV2Supported)) {
+				(requireProtocolV2 && !info.ViewMetadataAdmissionProtocolV3Supported)) {
 			return false
 		}
 	}
@@ -1002,7 +1002,8 @@ func (l *store) tryEnableViewMetadataAdmission(
 	if admission.RequiredProtocolVersion > uint64(defines.MORPCLatestVersion) {
 		return false, nil
 	}
-	if admission.Enabled && !admission.Pending {
+	if admission.Enabled && !admission.Pending &&
+		admission.RequiredProtocolVersion >= uint64(defines.MORPCVersion72) {
 		return true, nil
 	}
 	if state == nil {
@@ -1036,16 +1037,22 @@ func (l *store) tryEnableViewMetadataAdmission(
 	}
 	if !admission.Preparing && !admission.Enabled {
 		if !admission.HAKeeperAdmissionReady ||
-			!l.viewMetadataAdmissionLogStoresReady(state) {
+			!l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true) {
 			return false, nil
 		}
 		cfg := l.cfg.GetHAKeeperConfig()
 		cfg.Fill()
+		requiredProtocol := admission.RequiredProtocolVersion
+		if requiredProtocol < uint64(defines.MORPCVersion72) {
+			requiredProtocol = uint64(defines.MORPCVersion72)
+		}
 		hasLiveCN := false
 		for _, info := range state.CNState.Stores {
 			if !cfg.CNStoreExpired(info.Tick, state.Tick) {
 				hasLiveCN = true
-				break
+				if info.PersistedExpressionProtocolVersion < requiredProtocol {
+					return false, nil
+				}
 			}
 		}
 		if !hasLiveCN {
@@ -1053,16 +1060,30 @@ func (l *store) tryEnableViewMetadataAdmission(
 		}
 	}
 	cmd := hakeeper.GetEnableViewMetadataAdmissionCmd()
-	if admission.Preparing || admission.Enabled {
-		if !l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true) {
-			return false, nil
-		}
+	if !admission.Preparing && !admission.Enabled {
 		requiredProtocol := admission.RequiredProtocolVersion
 		if requiredProtocol < uint64(defines.MORPCVersion72) {
 			requiredProtocol = uint64(defines.MORPCVersion72)
 		}
 		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
 			l.cfg.GetHAKeeperConfig(), requiredProtocol)
+	} else if admission.Preparing {
+		// The protocol-bearing tag is reserved for the initial floor commit and
+		// later monotonic raises. Phase-two admission reconciliation remains on
+		// the legacy tag after the floor is durable.
+		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
+			l.cfg.GetHAKeeperConfig())
+	} else if admission.Enabled {
+		if admission.RequiredProtocolVersion < uint64(defines.MORPCVersion72) {
+			if !l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true) {
+				return false, nil
+			}
+			cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
+				l.cfg.GetHAKeeperConfig(), uint64(defines.MORPCVersion72))
+		} else {
+			cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
+				l.cfg.GetHAKeeperConfig())
+		}
 	}
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
@@ -1684,6 +1705,7 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		CommandDeliverySupported:                 true,
 		ViewMetadataAdmissionSupported:           true,
 		ViewMetadataAdmissionProtocolV2Supported: true,
+		ViewMetadataAdmissionProtocolV3Supported: true,
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,

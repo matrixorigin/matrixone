@@ -293,8 +293,11 @@ func genViewTableDef(
 	if err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocol(ctx.GetContext(), ctx.GetProcess(), query); err != nil {
-		return nil, err
+	if viewRequiredProtocol > 0 {
+		if err = RequirePersistedProtocolVersion(
+			ctx.GetContext(), ctx.GetProcess(), viewRequiredProtocol); err != nil {
+			return nil, err
+		}
 	}
 	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {

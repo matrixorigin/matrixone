@@ -18,6 +18,7 @@ Package hakeeper implements MO's hakeeper component.
 package hakeeper
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -43,6 +44,11 @@ var (
 var (
 	binaryEnc = binary.BigEndian
 )
+
+// hakeeperSnapshotMagic is an intentionally invalid protobuf prefix.  A
+// pre-floor HAKeeper decoder therefore rejects a post-floor snapshot instead
+// of silently ignoring the additive fields and rejoining with unsafe state.
+var hakeeperSnapshotMagic = []byte{0x0f, 'M', 'O', 'H', '2'}
 
 const (
 	// When bootstrapping, k8s will first bootstrap the HAKeeper by starting some
@@ -903,7 +909,7 @@ func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) boo
 	// ViewMetadataAdmissionSupported bit predates that contract and is not
 	// sufficient to keep a downgraded LogStore out of the RSM membership.
 	if s.state.PersistedExpressionRequiredProtocolVersion > 0 &&
-		!store.ViewMetadataAdmissionProtocolV2Supported {
+		!store.ViewMetadataAdmissionProtocolV3Supported {
 		return false
 	}
 	return true
@@ -1646,6 +1652,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleEnableCommandDelivery(cmd), nil
 	case pb.EnableViewMetadataAdmissionUpdate:
 		return s.handleEnableViewMetadataAdmission(cmd), nil
+	case pb.ActivatePersistedExpressionProtocolUpdate:
+		return s.handleActivatePersistedExpressionProtocol(cmd), nil
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
@@ -1926,7 +1934,14 @@ func (s *stateMachine) SaveSnapshot(w io.Writer,
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(data[:n])
+	if s.state.PersistedExpressionRequiredProtocolVersion == 0 {
+		_, err = w.Write(data[:n])
+		return err
+	}
+	output := make([]byte, len(hakeeperSnapshotMagic)+n)
+	copy(output, hakeeperSnapshotMagic)
+	copy(output[len(hakeeperSnapshotMagic):], data[:n])
+	_, err = w.Write(output)
 	return err
 }
 
@@ -1936,32 +1951,28 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	if err != nil {
 		return err
 	}
-	// The state machine is initialized with maps for normal operation. Clear all
-	// delivery fields before decoding so an older snapshot, or a snapshot
-	// recovery on a reused instance, cannot retain a newer barrier generation or
-	// the one-time BatchID scan marker when those fields are absent on disk.
-	s.state.CommandDeliveryEnabled = false
-	s.state.CommandDeliveryPreparing = false
-	s.state.CommandDeliveryReady = nil
-	s.state.CommandDeliveryCNReady = nil
-	s.state.CommandDeliveryTNReady = nil
-	s.state.CommandDeliveryBatchIDsAssigned = false
-	s.state.CommandDeliveryCommandIDsAssigned = false
-	s.state.ViewMetadataAdmissionPreparing = false
-	s.state.ViewMetadataAdmissionEnabled = false
-	s.state.ViewMetadataAdmissionEpoch = 0
-	s.state.ViewMetadataRevalidationRequired = false
-	s.state.ViewMetadataCatalogFencedEpoch = 0
-	s.state.ViewMetadataAdmissionLogReady = nil
-	s.state.ViewMetadataAdmissionCNReady = nil
-	s.state.ViewMetadataAdmissionProxyReady = nil
-	s.state.ViewMetadataAdmissionCNTargets = nil
-	s.state.ViewMetadataAdmissionProxyTargets = nil
-	s.state.ViewMetadataAdmissionCNTargetTicks = nil
-	s.state.ViewMetadataAdmissionProxyTargetTicks = nil
-	s.state.ViewMetadataAdmissionPending = false
-	// The persisted-expression floor is intentionally not reset here. An older
-	// snapshot has a zero value, while a newer snapshot must retain its
-	// monotonic safety boundary across recovery and rolling restarts.
-	return s.state.Unmarshal(data)
+	enveloped := bytes.HasPrefix(data, hakeeperSnapshotMagic)
+	if enveloped {
+		data = data[len(hakeeperSnapshotMagic):]
+	}
+	decoded := pb.NewRSMState()
+	if err := decoded.Unmarshal(data); err != nil {
+		return err
+	}
+	if enveloped && decoded.PersistedExpressionRequiredProtocolVersion == 0 {
+		return moerr.NewInvalidInputNoCtx(
+			"persisted HAKeeper snapshot envelope is missing its protocol floor")
+	}
+	// Keep the legacy omitted-map shape for the command-delivery barrier.  The
+	// zero-value is meaningful to the recovery code (it rebuilds these maps on
+	// the next activation), while NewRSMState initializes them for normal
+	// construction.
+	if len(decoded.CommandDeliveryCNReady) == 0 {
+		decoded.CommandDeliveryCNReady = nil
+	}
+	if len(decoded.CommandDeliveryTNReady) == 0 {
+		decoded.CommandDeliveryTNReady = nil
+	}
+	s.state = decoded
+	return nil
 }
