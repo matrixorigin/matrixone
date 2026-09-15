@@ -16,6 +16,7 @@ package process
 
 import (
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -38,9 +39,137 @@ const (
 const WarningDiagnosticMaxMessageBytes = 4 << 10
 
 // WarningDiagnosticMaxBytes is retained for source compatibility with older
-// callers which used the former byte-budget constant. Diagnostic retention is
-// now bounded by max_error_count and WarningDiagnosticMaxMessageBytes.
+// callers which used the former byte-budget constant. It is also the default
+// statement-wide payload budget for retained diagnostics; max_error_count and
+// the per-message bound remain independent semantic limits.
 const WarningDiagnosticMaxBytes = 256 << 10
+
+// WarningDiagnosticRecordOverhead accounts for the Go slice/string headers
+// retained alongside one diagnostic payload, including the code/message/level
+// arrays and their bounded append slack in the largest sink. The value is
+// deliberately conservative: the budget is a safety bound, not an allocator
+// measurement.
+const WarningDiagnosticRecordOverhead = 96
+
+// WarningDiagnosticBudget is the statement/session ownership account for
+// retained diagnostic payloads. It is separate from the mpool allocation
+// account because warning messages are Go-heap strings and may outlive the
+// execution generation until SHOW WARNINGS is replaced. One budget is shared
+// by local accumulators, remote attempts, and the initiating session whenever
+// they are on the same CN; transfers move the existing charge instead of
+// charging a second copy.
+type WarningDiagnosticBudget struct {
+	mu    sync.Mutex
+	limit uint64
+	used  uint64
+}
+
+func NewWarningDiagnosticBudget(limit uint64) *WarningDiagnosticBudget {
+	return &WarningDiagnosticBudget{limit: limit}
+}
+
+func (b *WarningDiagnosticBudget) Limit() uint64 {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.limit
+}
+
+func (b *WarningDiagnosticBudget) Used() uint64 {
+	if b == nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.used
+}
+
+func (b *WarningDiagnosticBudget) Reserve(size uint64) bool {
+	if b == nil || size == 0 {
+		return size == 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if size > b.limit-b.used {
+		return false
+	}
+	b.used += size
+	return true
+}
+
+func (b *WarningDiagnosticBudget) Release(size uint64) {
+	if b == nil || size == 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if size > b.used {
+		panic("warning diagnostic budget release underflow")
+	}
+	b.used -= size
+}
+
+func WarningDiagnosticRecordBytes(message string) uint64 {
+	return uint64(len(message)) + WarningDiagnosticRecordOverhead
+}
+
+// WarningDiagnosticBudgetProvider exposes the account captured by one
+// statement/session generation without widening process.Session.
+type WarningDiagnosticBudgetProvider interface {
+	GetWarningDiagnosticBudget() *WarningDiagnosticBudget
+}
+
+// WarningDiagnosticBatchTransfer is implemented by sinks which can accept
+// already-owned warning strings. The return value is true when the source
+// charge was consumed as an ownership transfer (including releasing records
+// rejected by the destination); false means the caller still owns the source
+// charge and must release it after the destination copied or rejected it.
+type WarningDiagnosticBatchTransfer interface {
+	AppendWarningBatchOwned(
+		total uint64,
+		codes []uint16,
+		messages []string,
+		source *WarningDiagnosticBudget,
+		chargedBytes uint64,
+	) bool
+}
+
+func warningDiagnosticBudgetLimit(proc *Process) uint64 {
+	limit := uint64(WarningDiagnosticMaxBytes)
+	if proc != nil && proc.Base != nil && proc.Base.Lim.Size > 0 {
+		if statementLimit := uint64(proc.Base.Lim.Size); statementLimit < limit {
+			limit = statementLimit
+		}
+	}
+	return limit
+}
+
+// WarningDiagnosticBudgetForProcess resolves the account captured by the
+// current sink first, then falls back to the process generation. A process
+// limitation smaller than the compatibility budget narrows the fallback.
+func WarningDiagnosticBudgetForProcess(proc *Process) *WarningDiagnosticBudget {
+	if proc != nil {
+		if sink := proc.GetWarningSink(); sink != nil {
+			if provider, ok := sink.(WarningDiagnosticBudgetProvider); ok {
+				if budget := provider.GetWarningDiagnosticBudget(); budget != nil {
+					return budget
+				}
+			}
+		}
+		if proc.Base != nil {
+			proc.Base.warningDiagnosticBudgetMu.Lock()
+			defer proc.Base.warningDiagnosticBudgetMu.Unlock()
+			if proc.Base.warningDiagnosticBudget == nil {
+				proc.Base.warningDiagnosticBudget = NewWarningDiagnosticBudget(
+					warningDiagnosticBudgetLimit(proc))
+			}
+			return proc.Base.warningDiagnosticBudget
+		}
+	}
+	return NewWarningDiagnosticBudget(WarningDiagnosticMaxBytes)
+}
 
 // WarningDiagnosticBatchAppender carries an exact count separately from the
 // bounded records retained for SHOW WARNINGS. It is intentionally optional:
@@ -195,6 +324,39 @@ func AppendWarningBatchToSink(destination any, total uint64, codes []uint16, mes
 	}
 }
 
+// AppendWarningBatchToSinkOwned publishes a batch whose message strings are
+// already charged to source. Same-budget sinks can transfer those strings
+// without cloning; all other sinks copy and the caller's charge is released.
+func AppendWarningBatchToSinkOwned(
+	destination any,
+	total uint64,
+	codes []uint16,
+	messages []string,
+	source *WarningDiagnosticBudget,
+	chargedBytes uint64,
+) bool {
+	if destination == nil {
+		if source != nil {
+			source.Release(chargedBytes)
+		}
+		return false
+	}
+	if transfer, ok := destination.(WarningDiagnosticBatchTransfer); ok {
+		if transfer.AppendWarningBatchOwned(total, codes, messages, source, chargedBytes) {
+			return true
+		}
+		if source != nil {
+			source.Release(chargedBytes)
+		}
+		return false
+	}
+	AppendWarningBatchToSink(destination, total, codes, messages)
+	if source != nil {
+		source.Release(chargedBytes)
+	}
+	return false
+}
+
 // WarningAccumulator keeps the exact statement warning count while retaining
 // only the bounded records required by SHOW WARNINGS.  It is deliberately
 // allocation-free after the first retained records and is local to one
@@ -205,8 +367,62 @@ type WarningAccumulator struct {
 	Codes             []uint16
 	Messages          []string
 	bytes             int
+	budgetBytes       uint64
+	budget            *WarningDiagnosticBudget
 	retentionLimit    int
 	retentionLimitSet bool
+}
+
+func (a *WarningAccumulator) ensureBudget() *WarningDiagnosticBudget {
+	if a == nil {
+		return nil
+	}
+	if a.budget == nil {
+		a.budget = NewWarningDiagnosticBudget(WarningDiagnosticMaxBytes)
+	}
+	return a.budget
+}
+
+// SetWarningBudget binds the accumulator to the statement-wide account. It is
+// normally called before the first Add; existing records are re-admitted in
+// production order when a reused accumulator is rebound.
+func (a *WarningAccumulator) SetWarningBudget(budget *WarningDiagnosticBudget) {
+	if a == nil || a.budget == budget {
+		return
+	}
+	if a.budget != nil {
+		a.budget.Release(a.budgetBytes)
+	}
+	if budget == nil {
+		budget = NewWarningDiagnosticBudget(WarningDiagnosticMaxBytes)
+	}
+	a.budget = budget
+	a.budgetBytes = 0
+	keep := 0
+	a.bytes = 0
+	for keep < len(a.Messages) {
+		charge := WarningDiagnosticRecordBytes(a.Messages[keep])
+		if !budget.Reserve(charge) {
+			break
+		}
+		a.budgetBytes += charge
+		a.bytes += len(a.Messages[keep])
+		keep++
+	}
+	clear(a.Codes[keep:])
+	clear(a.Messages[keep:])
+	a.Codes = a.Codes[:keep]
+	a.Messages = a.Messages[:keep]
+}
+
+// SetWarningRetentionForProcess binds both semantic capacity and the
+// statement-wide resource account in one call for row-level producers.
+func (a *WarningAccumulator) SetWarningRetentionForProcess(proc *Process) {
+	if a == nil {
+		return
+	}
+	a.SetWarningRetentionLimit(WarningDiagnosticRetentionLimitForProcess(proc))
+	a.SetWarningBudget(WarningDiagnosticBudgetForProcess(proc))
 }
 
 // SetWarningRetentionLimit binds the accumulator to one execution's session
@@ -219,19 +435,30 @@ func (a *WarningAccumulator) SetWarningRetentionLimit(limit int) {
 	a.retentionLimit = clampWarningRetentionLimit(limit)
 	a.retentionLimitSet = true
 	if len(a.Codes) > a.retentionLimit {
+		if budget := a.budget; budget != nil {
+			for _, message := range a.Messages[a.retentionLimit:] {
+				budget.Release(WarningDiagnosticRecordBytes(message))
+			}
+		}
 		clear(a.Codes[a.retentionLimit:])
 		clear(a.Messages[a.retentionLimit:])
 		a.Codes = a.Codes[:a.retentionLimit]
 		a.Messages = a.Messages[:a.retentionLimit]
 		a.bytes = 0
+		a.budgetBytes = 0
 		for _, message := range a.Messages {
 			a.bytes += len(message)
+			a.budgetBytes += WarningDiagnosticRecordBytes(message)
 		}
 	}
 	if a.retentionLimit == 0 {
+		if budget := a.budget; budget != nil {
+			budget.Release(a.budgetBytes)
+		}
 		a.Codes = nil
 		a.Messages = nil
 		a.bytes = 0
+		a.budgetBytes = 0
 		return
 	}
 	if cap(a.Codes) > a.retentionLimit*2 || cap(a.Messages) > a.retentionLimit*2 {
@@ -255,10 +482,25 @@ func (a *WarningAccumulator) Add(code uint16, message string) {
 	if len(a.Codes) >= a.warningRetentionLimit() {
 		return
 	}
+	if budget := a.ensureBudget(); budget != nil {
+		candidateBytes := len(message)
+		if candidateBytes > WarningDiagnosticMaxMessageBytes {
+			candidateBytes = WarningDiagnosticMaxMessageBytes
+		}
+		available := budget.Limit() - budget.Used()
+		if uint64(candidateBytes)+WarningDiagnosticRecordOverhead > available {
+			return
+		}
+	}
 	message = BoundWarningMessage(message, WarningDiagnosticMaxMessageBytes)
+	charge := WarningDiagnosticRecordBytes(message)
+	if !a.ensureBudget().Reserve(charge) {
+		return
+	}
 	a.Codes = append(a.Codes, code)
 	a.Messages = append(a.Messages, message)
 	a.bytes += len(message)
+	a.budgetBytes += charge
 }
 
 // AddCount records a warning that is not retained because its diagnostic is
@@ -276,18 +518,53 @@ func (a *WarningAccumulator) AddCount() {
 // Callers can use it to avoid formatting large internal keys once the bounded
 // diagnostic buffer is full.
 func (a *WarningAccumulator) NeedsDiagnostic() bool {
-	return a != nil && len(a.Codes) < a.warningRetentionLimit()
+	if a == nil || len(a.Codes) >= a.warningRetentionLimit() {
+		return false
+	}
+	if a.budget == nil {
+		return true
+	}
+	return a.budget.Used()+WarningDiagnosticRecordOverhead < a.budget.Limit()
 }
 
 func (a *WarningAccumulator) Flush(proc *Process) {
-	if a == nil || a.Total == 0 {
+	if a == nil {
 		return
 	}
-	AppendWarningBatch(proc, a.Total, a.Codes, a.Messages)
+	if a.Total != 0 {
+		var destination any
+		if proc != nil {
+			destination = proc.GetWarningSink()
+		}
+		AppendWarningBatchToSinkOwned(
+			destination, a.Total, a.Codes, a.Messages,
+			a.budget, a.budgetBytes)
+	} else if a.budget != nil {
+		a.budget.Release(a.budgetBytes)
+	}
 	a.Total = 0
 	clear(a.Codes)
 	clear(a.Messages)
 	a.Codes = a.Codes[:0]
 	a.Messages = a.Messages[:0]
 	a.bytes = 0
+	a.budgetBytes = 0
+}
+
+// Reset releases retained payload ownership without publishing it. It is the
+// cleanup path for a producer which aborts before Flush.
+func (a *WarningAccumulator) Reset() {
+	if a == nil {
+		return
+	}
+	if a.budget != nil {
+		a.budget.Release(a.budgetBytes)
+	}
+	a.Total = 0
+	clear(a.Codes)
+	clear(a.Messages)
+	a.Codes = a.Codes[:0]
+	a.Messages = a.Messages[:0]
+	a.bytes = 0
+	a.budgetBytes = 0
 }

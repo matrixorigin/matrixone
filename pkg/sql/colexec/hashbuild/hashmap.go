@@ -505,13 +505,15 @@ func (hb *HashmapBuilder) buildHashmap(
 		proc.GetStmtProfile().GetStatementIgnore() && hb.IsDedup &&
 		hb.OnDuplicateAction == plan.Node_IGNORE
 	var duplicateWarnings process.WarningAccumulator
-	duplicateWarnings.SetWarningRetentionLimit(process.WarningDiagnosticRetentionLimitForProcess(proc))
+	duplicateWarnings.SetWarningRetentionForProcess(proc)
 	defer func() {
 		// Warnings belong to a successfully completed statement.  If the build
 		// fails, the statement is rolled back and diagnostics from this partial
 		// execution must not leak into the next statement.
 		if retErr == nil && warningsEnabled {
 			duplicateWarnings.Flush(proc)
+		} else {
+			duplicateWarnings.Reset()
 		}
 	}()
 	recordDuplicateWarning := func(vec *vector.Vector, row int) {
