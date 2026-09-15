@@ -265,6 +265,8 @@ type container struct {
 	prepareParamKindWireV1 bool
 	legacyTextMinMax       bool
 	legacyVarianceState    bool
+	legacyDecimalSumState  bool
+	legacyDecimalSumResult bool
 	timeZone               *time.Location
 
 	// spill, agglist to load spilled data.
