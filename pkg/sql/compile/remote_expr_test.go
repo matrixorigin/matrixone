@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -831,6 +832,112 @@ func TestPadSpaceRemoteProtocolValidationV40FastPathIsAllocationFree(t *testing.
 	require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, ordinary))
 	allocs := testing.AllocsPerRun(100, func() {
 		if err := validateRemotePadSpacePipelineProtocol(proc, ordinary); err != nil {
+			panic(err)
+		}
+	})
+	require.Equal(t, float64(0), allocs)
+}
+
+func TestViewDefinitionRemoteProtocolValidationAtPrepareSendAndReceiveBoundaries(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	proc := c.proc
+	rt := runtime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+		}
+	})
+
+	viewDefinitionType := types.T_text.ToType()
+	viewDefinition := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&viewDefinitionType),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				Obj:     function.EncodeOverloadID(function.MO_VIEW_DEFINITION, 0),
+				ObjName: "mo_view_definition",
+			},
+			Args: []*plan.Expr{plan2.MakePlan2StringConstExprWithType("{}", false)},
+		}},
+	}
+	pipelineWithFunction := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op:          int32(vm.Projection),
+		ProjectList: []*plan.Expr{viewDefinition},
+	}}}
+	viewCheckOptionType := types.T_varchar.ToType()
+	viewCheckOption := &plan.Expr{
+		Typ: plan2.MakePlan2Type(&viewCheckOptionType),
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				Obj:     function.EncodeOverloadID(function.MO_VIEW_CHECK_OPTION, 0),
+				ObjName: "mo_view_check_option",
+			},
+			Args: []*plan.Expr{plan2.MakePlan2StringConstExprWithType("{}", false)},
+		}},
+	}
+	pipelineWithCheckOption := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op:          int32(vm.Projection),
+		ProjectList: []*plan.Expr{viewCheckOption},
+	}}}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+	client.version = defines.MORPCVersion73
+	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithFunction))
+	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithCheckOption))
+
+	prepared := newScope(Remote)
+	prepared.Proc = proc
+	prepared.NodeInfo = engine.Node{Id: "old-worker", Addr: "remote:6001"}
+	projection := projection.NewArgument()
+	projection.ProjectList = []*plan.Expr{viewDefinition}
+	prepared.setRootOperator(projection)
+	data, err := encodeRemoteScope(prepared, proc)
+	require.NoError(t, err)
+	_, err = encodeScope(prepared)
+	require.NoError(t, err)
+
+	// The coordinator can remain on v73 while a selected worker is rolled
+	// back or replaced by a v72 CN. The sender must probe that destination
+	// before serializing a pipeline containing either new function ID.
+	client.version = defines.MORPCVersion72
+	_, err = encodeRemoteScope(prepared, proc)
+	require.ErrorContains(t, err, "remote destination does not support view metadata functions")
+	client.version = defines.MORPCVersion73
+	_, err = encodeRemoteScope(prepared, proc)
+	require.NoError(t, err)
+
+	// v72 is the immediate predecessor after the main-branch rebase; it
+	// supports all main contracts through v72 but not these new function IDs.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, &pipeline.Pipeline{}))
+	require.ErrorContains(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithFunction),
+		"requires MORPC protocol version 73")
+	require.ErrorContains(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithCheckOption),
+		"requires MORPC protocol version 73")
+	_, err = encodeRemoteScope(prepared, proc)
+	require.ErrorContains(t, err, "requires MORPC protocol version 73")
+	_, err = encodeScope(prepared)
+	require.ErrorContains(t, err, "requires MORPC protocol version 73")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "requires MORPC protocol version 73")
+}
+
+func TestViewDefinitionRemoteProtocolValidationV73FastPathIsAllocationFree(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+
+	// A large ordinary pipeline makes an accidental reflective traversal visible.
+	ordinary := &pipeline.Pipeline{InstructionList: make([]*pipeline.Instruction, 1_000)}
+	for i := range ordinary.InstructionList {
+		ordinary.InstructionList[i] = &pipeline.Instruction{Op: int32(vm.Projection)}
+	}
+	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, ordinary))
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := validateRemoteViewDefinitionPipelineProtocol(proc, ordinary); err != nil {
 			panic(err)
 		}
 	})

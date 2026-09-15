@@ -109,6 +109,27 @@ func TestExpressionProtocolResolvesLegacyAddressOnlyScopes(t *testing.T) {
 	require.Equal(t, client.calls, client.releases)
 }
 
+func TestAllCNsSupportProtocolProbesEveryCN(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	client.version = defines.MORPCVersion73
+
+	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion73)
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, 1, client.calls)
+
+	client.version = defines.MORPCVersion72
+	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion73)
+	require.NoError(t, err)
+	require.False(t, supported)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion72)
+	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion73)
+	require.NoError(t, err)
+	require.False(t, supported)
+}
+
 func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

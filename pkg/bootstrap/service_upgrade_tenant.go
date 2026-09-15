@@ -337,6 +337,11 @@ func (s *service) newTenantUpgradePass(ctx context.Context) func() (bool, error)
 			return false, err
 		}
 		if !hasUpgradeTenants && s.upgrade.finalVersionCompleted.Load() {
+			if err := s.maintainInformationSchemaViews(ctx); err != nil {
+				err = moerr.AttachCause(ctx, err)
+				s.logger.Error("information schema views maintenance failed", zap.Error(err))
+				return false, err
+			}
 			if err := s.maintainOrphanObjectPrivileges(ctx); err != nil {
 				err = moerr.AttachCause(ctx, err)
 				s.logger.Error("orphan object privilege maintenance failed", zap.Error(err))

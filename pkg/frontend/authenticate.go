@@ -72,6 +72,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TenantInfo struct {
@@ -10574,12 +10575,23 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 			return rtnErr
 		}
 
+		var protocolVersion int64
 		if exists {
 			if !ca.IfNotExists { // do nothing
 				return moerr.NewInternalErrorf(ctx, "the tenant %s exists", ca.Name)
 			}
 			return rtnErr
 		} else {
+			// A newly created account is stamped with the current final version below.
+			// Resolve the VIEWS DDL capability before that stamp so an old or
+			// incompletely upgraded cluster cannot create a tenant that will never
+			// revisit the predecessor metadata definition.
+			protocolVersion, rtnErr = protocolVersionForTenantInitializationWithContext(
+				ctx,
+				ses.GetService(), ses.GetProc())
+			if rtnErr != nil {
+				return rtnErr
+			}
 			newTenant, newTenantCtx, rtnErr = createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 			if rtnErr != nil {
 				return rtnErr
@@ -10643,7 +10655,8 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, ses.GetService())
+		rtnErr = createTablesInInformationSchemaOfGeneralTenantWithProtocol(
+			newTenantCtx, bh, protocolVersion)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -10997,7 +11010,24 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, service string) error {
+func createTablesInInformationSchemaOfGeneralTenant(
+	ctx context.Context,
+	bh BackgroundExec,
+	service string,
+	proc *process.Process,
+) error {
+	protocolVersion, err := protocolVersionForTenantInitializationWithContext(ctx, service, proc)
+	if err != nil {
+		return err
+	}
+	return createTablesInInformationSchemaOfGeneralTenantWithProtocol(ctx, bh, protocolVersion)
+}
+
+func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
+	ctx context.Context,
+	bh BackgroundExec,
+	protocolVersion int64,
+) error {
 	start := time.Now()
 	defer func() {
 		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -11007,8 +11037,8 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	// with new tenant
 	// TODO: when we have the auto_increment column, we need new strategy.
 
+	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersion)
 	var err error
-	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersionForTenantInitialization(service))
 	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
 	sqls = append(sqls, "use information_schema;")
@@ -11026,20 +11056,47 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	return err
 }
 
-func protocolVersionForTenantInitialization(service string) int64 {
+func protocolVersionForTenantInitialization(service string, proc *process.Process) (int64, error) {
+	return protocolVersionForTenantInitializationWithContext(context.Background(), service, proc)
+}
+
+func protocolVersionForTenantInitializationWithContext(
+	ctx context.Context,
+	service string,
+	proc *process.Process,
+) (int64, error) {
+	// Account creation must remain available while the cluster is rolling out
+	// the parser-derived VIEWS functions. The predecessor definition is safe on
+	// every CN and the final-version account row is revisited by bootstrap
+	// maintenance once the capability becomes available.
+	legacyVersion := defines.MORPCVersion72
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
-		return defines.MORPCMinVersion
+		return legacyVersion, nil
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {
-		return defines.MORPCMinVersion
+		return legacyVersion, nil
 	}
 	version, ok := value.(int64)
-	if !ok {
-		return defines.MORPCMinVersion
+	if !ok || version < defines.MORPCVersion73 {
+		return legacyVersion, nil
 	}
-	return version
+	supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion73)
+	if err != nil {
+		// Capability discovery is deliberately best-effort for account
+		// creation. Do not turn a temporary inventory/RPC failure into a
+		// failed CREATE ACCOUNT, but preserve cancellation of the owning
+		// process so shutdown and request cancellation still propagate.
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		return legacyVersion, nil
+	}
+	if !supported {
+		return legacyVersion, nil
+	}
+	return version, nil
 }
 
 // createSubscription insert records into mo_subs of To-All-Publications

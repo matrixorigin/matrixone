@@ -99,6 +99,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateRemoteBinaryStringPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteViewDefinitionPipelineProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateOctStringProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
@@ -148,6 +151,12 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteViewDefinitionPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteViewDefinitionDestinationProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
@@ -263,6 +272,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteViewDefinitionPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
@@ -2590,6 +2602,64 @@ func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.
 		if err := validateRemoteArrowLoadPipelineProtocol(proc, child); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateRemoteViewDefinitionPipelineProtocol protects the function IDs that
+// occur in the persisted VIEWS definition. It is used at both marshal and
+// unmarshal boundaries, so a stale prepared or remote pipeline fails closed
+// instead of being bound by a CN that predates the function registration.
+func validateRemoteViewDefinitionPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	// A current peer cannot reject this function. Avoid a reflective traversal
+	// of every ordinary remote pipeline once the negotiated capability is known.
+	if proc != nil && supportsRemoteViewDefinitionFunction(proc.GetService()) {
+		return nil
+	}
+	if p == nil || (!pipelineContainsFunctionID(p, function.MO_VIEW_DEFINITION) &&
+		!pipelineContainsFunctionID(p, function.MO_VIEW_CHECK_OPTION)) {
+		return nil
+	}
+	if proc == nil || !supportsRemoteViewDefinitionFunction(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"view metadata remote execution requires MORPC protocol version 73",
+		)
+	}
+	return nil
+}
+
+// validateRemoteViewDefinitionDestinationProtocol closes the sender-side
+// race between compile-time placement and RemoteRun. The coordinator's
+// protocol version is not evidence that the selected destination CN has the
+// new function registrations.
+func validateRemoteViewDefinitionDestinationProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	if p == nil || (!pipelineContainsFunctionID(p, function.MO_VIEW_DEFINITION) &&
+		!pipelineContainsFunctionID(p, function.MO_VIEW_CHECK_OPTION)) {
+		return nil
+	}
+	if p.Node == nil {
+		return moerr.NewNotSupportedNoCtx(
+			"view metadata remote execution requires a versioned remote destination",
+		)
+	}
+	supported, err := remoteWorkersSupportProtocol(
+		proc,
+		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}},
+		defines.MORPCVersion73,
+	)
+	if err != nil {
+		return err
+	}
+	if !supported {
+		return moerr.NewNotSupportedNoCtx(
+			"remote destination does not support view metadata functions (MORPC version 73)",
+		)
 	}
 	return nil
 }
