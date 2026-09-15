@@ -465,8 +465,14 @@ func (a *WarningAccumulator) SetWarningRetentionLimit(limit int) {
 		return
 	}
 	if cap(a.Codes) > a.retentionLimit*2 || cap(a.Messages) > a.retentionLimit*2 {
-		a.Codes = append([]uint16(nil), a.Codes...)
-		a.Messages = append([]string(nil), a.Messages...)
+		// Keep the compacted backing arrays within the advertised capacity bound;
+		// append(nil, ...) is allowed to round a small allocation upward.
+		codes := make([]uint16, len(a.Codes))
+		messages := make([]string, len(a.Messages))
+		copy(codes, a.Codes)
+		copy(messages, a.Messages)
+		a.Codes = codes
+		a.Messages = messages
 	}
 }
 
