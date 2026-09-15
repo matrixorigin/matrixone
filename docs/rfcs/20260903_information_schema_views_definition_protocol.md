@@ -12,7 +12,7 @@
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through parser-aware metadata functions. The functions
 are new distributed plan functions (IDs 579 and 580), so the catalog contract is fenced by MORPC
-v70.
+v73.
 
 ## Problem and invariant
 
@@ -34,19 +34,22 @@ the stored statement using its persisted SQL mode and identifier-case settings.
 This bounded, side-effect-free fallback avoids a second SQL regexp lexer and
 does not depend on background recovery.
 
-MORPC v70 is allocated as `MORPCLatestVersion + 1` from official main v69,
-which is assigned to the exact bounded per-partition RANK contract. It is specific to
-these functions and the persisted VIEWS definition. The v4.0.6 VIEWS upgrade
-waits for common v70. New tenant initialization at v69 or below installs the
-predecessor VIEWS DDL, which has no function reference; v70 installs the new
-DDL. Pipeline preparation, remote
-marshal, and remote unmarshal reject a pipeline containing either function ID
-below v70. The receiver check protects stale prepared work as well as normal
-sender dispatch. Before admitting any v69-or-earlier CN during rollback,
-operators must restore `InformationSchemaViewsLegacyDDL` and wait for that
-catalog change to converge; merely draining v69-dependent requests is not
-sufficient because the new persisted view text references the function. The
-new JSON fields are additive and old binaries keep treating them as unknown.
+MORPC v73 is allocated as `MORPCLatestVersion + 1` from official main v72,
+which already owns v70 through v72. The two function IDs are the next available
+IDs after main's exclusive function bound 579, and the bound advances to 581.
+The capability is specific to these functions and the persisted VIEWS definition.
+The v4.0.6 VIEWS upgrade waits for common v73. New tenant initialization at v72
+or below preserves all existing metadata definitions, including the v58 COLUMNS
+contract, while installing the function-free predecessor VIEWS DDL; v73 installs
+the new DDL. Pipeline preparation, remote marshal, and remote unmarshal reject a
+pipeline containing either function ID below v73. The receiver check protects
+stale prepared work as well as normal sender dispatch. Before admitting any
+v72-or-earlier CN during rollback, operators must pause related metadata plans,
+restore `InformationSchemaViewsLegacyDDL`, wait for the catalog change and
+in-flight work to converge, and only then admit the older binary. Merely draining
+v72-dependent requests is not sufficient because the new persisted view text
+references the functions. The new JSON fields are additive and old binaries keep
+treating them as unknown.
 
 ## Alternatives
 
@@ -54,27 +57,30 @@ Keeping raw SQL regexp extraction was rejected because it repeatedly diverged
 from the SQL lexer for comments and quoted strings. Eagerly rewriting every
 legacy row was rejected because the existing recovery lifecycle is deliberately
 inactive and a metadata read must not perform unbounded catalog writes. Allowing
-the DDL before v70 was rejected because an old CN cannot bind the metadata functions.
+the DDL before v73 was rejected because an old CN cannot bind the metadata functions.
 
 ## Bounds, security, and operations
 
 The compatibility parse is per visible legacy row and is linear in that row's
-stored statement; current rows return their stored definition directly. It
+stored statement; current rows return their stored definition directly. If both
+legacy metadata columns are requested, the row may be parsed once per function;
+each parse is still bounded by the stored statement and query cardinality. It
 creates no durable work, goroutine, queue, retry, or cache. Existing visibility
-joins remain the authorization boundary, so parsing happens only after the view
-row is selected. A mixed-version request fails before dispatch with a stable
+joins remain the authorization boundary; the functions do not broaden the
+selected row set. A mixed-version request fails before dispatch with a stable
 NotSupported error rather than returning wrong metadata.
 
 ## Validation
 
 Focused parser/function tests cover current and legacy definitions, quoted and
 commented inputs, malformed rows, frozen wildcard expansion, and CHECK OPTION.
-Protocol tests cover the v69 predecessor rejection and v70 acceptance at
-prepare, sender, and receiver boundaries. System-view tests prove v69 tenant
-initialization uses the predecessor DDL and v70 uses the parser-derived DDL;
-upgrade tests prove the VIEWS entry requires v70. The predecessor-init test is
-also the rollback guard: it proves that the restoration target has no function
-reference before an older CN is admitted.
+Protocol tests cover the v72 predecessor rejection and v73 acceptance at
+prepare, sender, and receiver boundaries. System-view tests prove v72 tenant
+initialization preserves the v58 COLUMNS contract and uses the predecessor VIEWS
+DDL, while v73 uses the parser-derived DDL; upgrade tests prove the VIEWS entry
+requires v73. The predecessor-init test is also the rollback guard: it proves
+that the restoration target has no function reference before an older CN is
+admitted.
 
 ## Unresolved questions
 
