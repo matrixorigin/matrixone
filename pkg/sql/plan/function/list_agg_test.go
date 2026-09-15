@@ -257,12 +257,20 @@ func TestJSONObjectAggKeyTypeBoundaries(t *testing.T) {
 
 	for _, keyType := range []types.Type{
 		types.T_bit.ToType(),
+		types.T_bool.ToType(),
+		types.T_date.ToType(),
+		types.T_time.ToType(),
 		types.T_year.ToType(),
 		types.T_datetime.ToType(),
+		types.T_timestamp.ToType(),
+		types.T_enum.ToType(),
 		types.T_json.ToType(),
 		types.T_uuid.ToType(),
 	} {
 		t.Run("rejected/"+keyType.Oid.String(), func(t *testing.T) {
+			if keyType.Oid == types.T_bit {
+				require.True(t, keyType.IsNumeric(), "BIT is numeric in the shared type predicate")
+			}
 			_, err := GetFunctionByName(ctx, "json_objectagg", []types.Type{keyType, valueType})
 			require.Error(t, err)
 		})
@@ -277,6 +285,12 @@ func TestJSONObjectAggKeyTypeBoundaries(t *testing.T) {
 		require.Error(t, err)
 	}
 
-	_, err := GetFunctionByName(ctx, "json_objectagg", []types.Type{types.T_int64.ToType()})
-	require.Error(t, err)
+	for _, inputs := range [][]types.Type{
+		nil,
+		{types.T_int64.ToType()},
+		{types.T_int64.ToType(), valueType, valueType},
+	} {
+		_, err := GetFunctionByName(ctx, "json_objectagg", inputs)
+		require.Error(t, err)
+	}
 }

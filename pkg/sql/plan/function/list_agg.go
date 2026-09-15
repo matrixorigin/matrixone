@@ -278,6 +278,8 @@ var supportedAggInNewFramework = []FuncNew{
 			case key.Oid == types.T_any:
 				key = types.T_varchar.ToType()
 			case key.IsNumeric() && key.Oid != types.T_bit:
+				// BIT is included in IsNumeric, but remains outside the
+				// conventional numeric-key compatibility set.
 				key = types.T_varchar.ToType()
 			case !key.Oid.IsMySQLString():
 				return newCheckResultWithFailure(failedAggParametersWrong)
