@@ -152,6 +152,9 @@ func TestValidateRoutinePlanDependencyShapeRejectsCrossAccountAndUnknownContract
 		{name: "missing identity", mutate: func(d *planpb.RoutinePlanDependency) {
 			d.FunctionRef = nil
 		}},
+		{name: "noncanonical language", mutate: func(d *planpb.RoutinePlanDependency) {
+			d.Language = "PYTHON"
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -162,6 +165,16 @@ func TestValidateRoutinePlanDependencyShapeRejectsCrossAccountAndUnknownContract
 				"UNSUPPORTED_ROUTINE_VERSION")
 		})
 	}
+}
+
+func TestRoutinePlanDependenciesChangedRequiresCanonicalLanguage(t *testing.T) {
+	dependency := testRoutinePlanDependency()
+	dependency.Language = "PYTHON"
+
+	require.True(t, routinePlanDependenciesChanged(
+		[]*planpb.RoutinePlanDependency{dependency},
+		map[uint64]routinePlanCatalogState{41: testRoutinePlanState()},
+	))
 }
 
 func TestRoutinePlanDependenciesIncludesBackgroundQueries(t *testing.T) {
