@@ -673,6 +673,11 @@ message ViewMetadataAdmission {
   // PersistedExpressionRequiredProtocolVersion is the durable cluster floor
   // that a CN must support before it can be admitted to read catalog metadata.
   uint64 PersistedExpressionRequiredProtocolVersion = 9;
+  // PersistedExpressionProtocolActivationPending distinguishes a durable
+  // decoder floor from a completed activation barrier.  A CN may read and
+  // revalidate existing metadata while this is true, but it must not publish
+  // the authoring floor until the new epoch and catalog fence complete.
+  bool PersistedExpressionProtocolActivationPending = 10;
 }
 
 // ViewMetadataAdmissionTargets makes timeout-based phase-two/reconciliation
