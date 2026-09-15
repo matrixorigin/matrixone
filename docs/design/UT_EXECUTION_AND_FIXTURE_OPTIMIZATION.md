@@ -124,6 +124,22 @@ fixture 兼容矩阵、reset oracle 和 A/B 数据前，不缩小这些数据、
   建 issue、不改 assignee、不关闭 issue。单 runner overlap 的配置/耗时结果由该 issue 的跟进更新
   维护。
 
+## PR #28872：GPU 向量测试等待优化说明
+
+本 PR 只处理 GPU 向量 case 的 CDC/readiness 等待，所有 10 个场景继续留在
+GPU case 体系内执行，不迁移到外部回归，不删除业务 case，也不把固定等待替换成无界重试。
+
+### GPU 向量等待
+
+异步和 load case 各使用一个 bounded、metadata-only readiness gate，等待已提交的 CDC
+或存储 tail 前进；就绪查询不执行向量检索。四个 delete case 使用 bounded exact-match
+vector readiness probes，只有在删除行被排除且 survivor/untouched probe 返回预期 id 后
+才继续，因此 readiness 也覆盖了 per-device/remote vector cache 的失效边界。原有最终
+向量查询和 `.result` oracle 全部保留，包含 async insert/delete/update、vecf16、10k load
+和 two-shard delete 场景。多阶段 DDL、snapshot 等依赖阶段顺序的等待保持独立。
+
+GPU 路径的执行及 before/after wall time、GPU 占用和失败率必须在相同 CUDA 环境上验证。
+
 ## Revision 9: branch SQL regression fixture consolidation
 
 最近两天的变更横跨 SQL function/aggregate、planner/execution、向量与索引、Arrow

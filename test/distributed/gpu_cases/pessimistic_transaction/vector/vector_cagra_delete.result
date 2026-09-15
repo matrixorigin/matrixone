@@ -16,12 +16,21 @@ select id from t order by l2_distance(v, '[160,160,160,160,160,160,160,160]') as
 ➤ id[-5,64,0]  𝄀
 5
 delete from t where id = 5;
-select sleep(30);
-➤ sleep(30)[-6,8,0]  𝄀
-0
 select count(*) from t;
 ➤ count(*)[-5,64,0]  𝄀
 9
+select 1 as ready
+from (
+select 'delete-160' as probe_name, q.id as actual_id, 4 as expected_id
+from (select id from t order by l2_distance(v, '[160,160,160,160,160,160,160,160]') asc limit 1) q
+union all
+select 'untouched-1280' as probe_name, q.id as actual_id, 8 as expected_id
+from (select id from t order by l2_distance(v, '[1280,1280,1280,1280,1280,1280,1280,1280]') asc limit 1) q
+) readiness
+having count(*) = 2
+and sum(case when actual_id = expected_id then 1 else 0 end) = 2;
+➤ ready[-5,64,0]  𝄀
+1
 select id from t order by l2_distance(v, '[160,160,160,160,160,160,160,160]') asc limit 1;
 ➤ id[-5,64,0]  𝄀
 4

@@ -3,10 +3,10 @@
 --
 -- GPU REQUIRED. SHARDED variant of vector_ivfpq_delete: builds a 2-shard
 -- IVF-PQ index under the single-GPU simulation (gpu_multi_simulation=2 maps
--- both shards to physical device 0), deletes one row in EACH shard, and after
--- the ISCP/CDC consumer propagates the deletes (hence SELECT SLEEP) confirms
--- search excludes both. Lives under pessimistic_transaction/ because it
--- depends on CDC catch-up.
+-- both shards to physical device 0), deletes one row in EACH shard, and uses
+-- one bounded combined readiness query to wait for both CDC deletes. The
+-- original searches then confirm both are excluded. Lives under
+-- pessimistic_transaction/ because it depends on CDC catch-up.
 --
 -- This is the end-to-end check for the per-shard delete-bitset cache fix
 -- (cgo/cuvs/index_base.hpp device_shard_bitsets_, keyed by RANK): pre-fix the
@@ -175,9 +175,26 @@ select id from t order by l2_distance(v, '[128,128,128,128,128,128,128,128]') as
 -- Delete one row in EACH shard; CDC must propagate to both shards' deleted
 -- bitsets before search reflects it.
 delete from t where id in (1, 128);
-select sleep(30);
 
 select count(*) from t;
+-- One readiness gate covers all CDC-dependent probes. It returns one row
+-- only after every probe has its expected search result.
+-- @wait_expect(1, 60)
+select 1 as ready
+from (
+    select 'delete-1' as probe_name, q.id as actual_id, 2 as expected_id
+    from (select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') asc limit 1) q
+    union all
+    select 'delete-128' as probe_name, q.id as actual_id, 127 as expected_id
+    from (select id from t order by l2_distance(v, '[128,128,128,128,128,128,128,128]') asc limit 1) q
+    union all
+    select 'untouched-64' as probe_name, q.id as actual_id, 64 as expected_id
+    from (select id from t order by l2_distance(v, '[64,64,64,64,64,64,64,64]') asc limit 1) q
+) readiness
+having count(*) = 3
+   and sum(case when actual_id = expected_id then 1 else 0 end) = 3;
+
+
 -- Both deleted rows are excluded across both shards -> unique next survivor
 -- (id 1 -> 2 in shard 0; id 128 -> 127 in shard 1). A middle row is untouched.
 select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') asc limit 1;
