@@ -1857,6 +1857,12 @@ func (ctr *container) makeAggListWithAllocation(
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
+		if ctr.legacyApproxPercentileState {
+			aggexec.ConfigureApproxPercentileLegacyState(aggList[i])
+		}
+		if ctr.legacyHLLState {
+			aggexec.ConfigureHLLLegacyState(aggList[i])
+		}
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
 		// mtyp is the logical Group mode and survives resident-spill resets.
 		// Preserve it in each rebuilt GROUP_CONCAT executor even when the
@@ -1925,6 +1931,20 @@ func useLegacyDecimalSumState(proc *process.Process) bool {
 	return !ok || !valid || version < defines.MORPCVersion73
 }
 
+func useLegacyApproxPercentileStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion73
+}
+
 // An old coordinator can send a final Group to an upgraded worker without
 // running the upgraded shuffle-plan gate. Below v73 that Group must preserve
 // the old Decimal128 result contract. Partial Groups still use the legacy wire
@@ -1936,6 +1956,20 @@ func useLegacyDecimalSumResultForRemote(proc *process.Process, needEval bool) bo
 	}
 	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
 	return remote
+}
+
+func useLegacyHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion73
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

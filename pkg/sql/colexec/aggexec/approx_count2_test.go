@@ -17,6 +17,8 @@ package aggexec
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
+	"math"
 	"testing"
 
 	hll "github.com/axiomhq/hyperloglog"
@@ -25,6 +27,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+type hllStableEmptyWriter struct {
+	err   error
+	short bool
+	calls int
+}
+
+func (w *hllStableEmptyWriter) Write(data []byte) (int, error) {
+	w.calls++
+	if w.err != nil {
+		return 0, w.err
+	}
+	if w.short && w.calls == 2 {
+		return len(data) - 1, nil
+	}
+	return len(data), nil
+}
 
 func TestAccountedHllLazilyActivatesNonNullGroups(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -119,6 +138,8 @@ func TestHllSketchMarshalAndUnmarshalFromReader(t *testing.T) {
 	restored := restoredMU.(*hllSketch)
 	require.NoError(t, restored.UnmarshalBinary(data))
 	require.Equal(t, hlls.Estimate(), restored.Estimate())
+	require.NoError(t, restored.UnmarshalBinary(canonicalEmptyHLL[:]))
+	require.False(t, restored.hasValue)
 
 	readerRestoredMU, err := makeHllSketch(mp, nil)
 	require.NoError(t, err)
@@ -152,7 +173,9 @@ func TestHllSketchLegacyWireAndEstimateCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	currentBytes, err := current.MarshalBinary()
 	require.NoError(t, err)
-	require.Equal(t, legacyBytes, currentBytes)
+	require.Equal(t, hllLegacyVersion, legacyBytes[0])
+	require.Equal(t, hllVersion, currentBytes[0])
+	require.Equal(t, legacyBytes[1:], currentBytes[1:])
 	require.Equal(t, legacy.Estimate(), current.Estimate())
 
 	legacyDecoder := hll.NewNoSparse()
@@ -164,6 +187,7 @@ func TestHllSketchLegacyWireAndEstimateCompatibility(t *testing.T) {
 	currentDecoder := currentDecoderMU.(*hllSketch)
 	defer currentDecoder.Free()
 	require.NoError(t, currentDecoder.UnmarshalBinary(legacyBytes))
+	require.Equal(t, hllLegacyVersion, currentDecoder.wireVersion)
 	require.Equal(t, legacy.Estimate(), currentDecoder.Estimate())
 }
 
@@ -182,8 +206,291 @@ func TestHllSketchMergesLegacySparseWire(t *testing.T) {
 	current := currentMU.(*hllSketch)
 	require.NoError(t, current.mergeBytes(legacyBytes))
 	require.Equal(t, legacy.Estimate(), current.Estimate())
+	legacySparseCurrent := bytes.Clone(legacyBytes)
+	legacySparseCurrent[0] = hllVersion
+	require.ErrorContains(t, current.mergeBytes(legacySparseCurrent), "invalid HLL sparse hash version")
+
+	currentNonEmptyMU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	currentNonEmpty := currentNonEmptyMU.(*hllSketch)
+	currentNonEmpty.Insert(types.EncodeInt64(ptr(int64(101))))
+	require.ErrorContains(t, currentNonEmpty.mergeBytes(legacyBytes), "incompatible HLL hash versions")
+	currentNonEmpty.Free()
 	current.Free()
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestHllMergeEmptyStatesAreVersionNeutral(t *testing.T) {
+	mp := mpool.MustNewZero()
+	legacySource := hll.NewNoSparse()
+	legacyValue := types.EncodeInt64(ptr(int64(1)))
+	legacySource.Insert(legacyValue)
+	legacyBytes, err := legacySource.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, hllLegacyVersion, legacyBytes[0])
+
+	currentMU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	currentSource := currentMU.(*hllSketch)
+	currentSource.Insert(legacyValue)
+	currentBytes, err := currentSource.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, hllVersion, currentBytes[0])
+	currentSource.Free()
+
+	sparse, err := hll.New().MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, byte(1), sparse[3])
+	require.Len(t, sparse, 20)
+	sparseLegacy := bytes.Clone(sparse)
+	sparseLegacy[0] = hllLegacyVersion
+	sparseCurrent := bytes.Clone(sparse)
+	sparseCurrent[0] = hllVersion
+
+	emptyDenseLegacy := bytes.Clone(canonicalEmptyHLL[:])
+	emptyDenseLegacy[0] = hllLegacyVersion
+	emptyDenseCurrent := bytes.Clone(canonicalEmptyHLL[:])
+	emptyDenseCurrent[0] = hllVersion
+
+	for _, tc := range []struct {
+		name        string
+		destination []byte
+		empties     [][]byte
+		version     byte
+	}{
+		{
+			name:        "legacy destination accepts all empty versions",
+			destination: legacyBytes,
+			empties:     [][]byte{emptyDenseCurrent, emptyDenseLegacy, sparseCurrent, sparseLegacy},
+			version:     hllLegacyVersion,
+		},
+		{
+			name:        "current destination accepts all empty versions",
+			destination: currentBytes,
+			empties:     [][]byte{emptyDenseLegacy, emptyDenseCurrent, sparseLegacy, sparseCurrent},
+			version:     hllVersion,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			destinationMU, err := makeHllSketch(mp, nil)
+			require.NoError(t, err)
+			destination := destinationMU.(*hllSketch)
+			defer destination.Free()
+			require.NoError(t, destination.UnmarshalBinary(tc.destination))
+			want := bytes.Clone(destination.regs)
+			for _, empty := range tc.empties {
+				require.NoError(t, destination.mergeBytes(empty))
+			}
+			require.Equal(t, want, destination.regs)
+			require.Equal(t, tc.version, destination.effectiveWireVersion())
+		})
+	}
+
+	empties := [][]byte{emptyDenseLegacy, emptyDenseCurrent, sparseLegacy, sparseCurrent}
+	for _, empty := range empties {
+		for _, nonEmpty := range [][]byte{legacyBytes, currentBytes} {
+			t.Run("empty then non-empty", func(t *testing.T) {
+				destinationMU, err := makeHllSketch(mp, nil)
+				require.NoError(t, err)
+				destination := destinationMU.(*hllSketch)
+				defer destination.Free()
+				require.NoError(t, destination.mergeBytes(empty))
+				require.False(t, destination.hasRegisters())
+
+				require.NoError(t, destination.mergeBytes(nonEmpty))
+				expectedMU, err := makeHllSketch(mp, nil)
+				require.NoError(t, err)
+				expected := expectedMU.(*hllSketch)
+				require.NoError(t, expected.UnmarshalBinary(nonEmpty))
+				require.Equal(t, expected.regs, destination.regs)
+				require.Equal(t, nonEmpty[0], destination.effectiveWireVersion())
+				expected.Free()
+			})
+		}
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestStableEmptyHLLStateUsesRequestedVersion(t *testing.T) {
+	for _, version := range []byte{hllLegacyVersion, hllVersion} {
+		var encoded bytes.Buffer
+		require.NoError(t, stableEmptyHLLState(version)(&encoded))
+		data := encoded.Bytes()
+		require.Len(t, data, 4+hllEncodedSize)
+		require.Equal(t, int32(hllEncodedSize), int32(binary.LittleEndian.Uint32(data[:4])))
+		require.Equal(t, version, data[4])
+
+		mp := mpool.MustNewZero()
+		mu, err := makeHllSketch(mp, nil)
+		require.NoError(t, err)
+		require.NoError(t, mu.(*hllSketch).UnmarshalBinary(data[4:]))
+		mu.(*hllSketch).Free()
+		require.Zero(t, mp.CurrNB())
+	}
+}
+
+func TestStableEmptyHLLStatePropagatesWriterErrors(t *testing.T) {
+	require.ErrorIs(t,
+		stableEmptyHLLState(hllVersion)(&hllStableEmptyWriter{err: io.ErrClosedPipe}),
+		io.ErrClosedPipe)
+	require.ErrorIs(t,
+		stableEmptyHLLState(hllVersion)(&hllStableEmptyWriter{short: true}),
+		io.ErrShortWrite)
+}
+
+func TestHllWireVersionValidation(t *testing.T) {
+	require.Equal(t, hllVersion, (&hllSketch{}).effectiveWireVersion())
+	sketch := &hllSketch{regs: make([]byte, hllRegisterCnt), wireVersion: hllVersion}
+	require.Equal(t, hllVersion, sketch.effectiveWireVersion())
+	require.ErrorContains(t, sketch.useWireVersion(1), "invalid HLL hash version")
+}
+
+func TestHllLegacyWireStateCoversEmptyAndFloatingPointWidths(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "float32", typ: types.T_float32.ToType()},
+		{name: "float64", typ: types.T_float64.ToType()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			exec := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			ConfigureHLLLegacyState(exec)
+			require.NoError(t, exec.GroupGrow(1))
+
+			empty, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, hllLegacyVersion, empty[0].GetBytesAt(0)[0])
+			empty[0].Free(mp)
+
+			values := vector.NewVec(tc.typ)
+			if tc.typ.Oid == types.T_float32 {
+				require.NoError(t, vector.AppendFixed(values,
+					float32(math.Copysign(0, -1)), false, mp))
+			} else {
+				require.NoError(t, vector.AppendFixed(values,
+					math.Copysign(0, -1), false, mp))
+			}
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+			result, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, hllLegacyVersion, result[0].GetBytesAt(0)[0])
+			expected := hll.NewNoSparse()
+			expected.Insert(values.GetRawBytesAt(0))
+			expectedBytes, err := expected.MarshalBinary()
+			require.NoError(t, err)
+			require.Equal(t, expectedBytes[hllHeaderSize:],
+				result[0].GetBytesAt(0)[hllHeaderSize:])
+
+			values.Free(mp)
+			result[0].Free(mp)
+			exec.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestHllLegacyWireStateUsesPreflightAndRoundTripsIntermediate(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "float32", typ: types.T_float32.ToType()},
+		{name: "float64", typ: types.T_float64.ToType()},
+	} {
+		for _, accounted := range []bool{false, true} {
+			mode := "lazy"
+			if accounted {
+				mode = "accounted-preflight"
+			}
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				var registry *mpool.AllocationAccountRegistry
+				var account *mpool.AllocationAccount
+				var allocation *AllocationAccount
+				if accounted {
+					registry, account, allocation = newTestAggregateAllocation(t)
+				}
+				source := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+				ConfigureHLLLegacyState(source)
+				sourceOwner := any(source).(AllocationAccountOwner)
+				if accounted {
+					require.NoError(t, sourceOwner.SetAllocationAccount(allocation))
+				}
+				require.NoError(t, source.GroupGrow(1))
+
+				values := vector.NewVec(tc.typ)
+				if tc.typ.Oid == types.T_float32 {
+					require.NoError(t, vector.AppendFixed(values,
+						float32(math.Copysign(0, -1)), false, mp))
+				} else {
+					require.NoError(t, vector.AppendFixed(values,
+						math.Copysign(0, -1), false, mp))
+				}
+				if accounted {
+					require.NoError(t, source.PreflightBatchFill(
+						0, []uint64{1}, []*vector.Vector{values}))
+				}
+				require.NoError(t, source.BulkFill(0, []*vector.Vector{values}))
+
+				var intermediate bytes.Buffer
+				require.NoError(t, source.SaveIntermediateResult(
+					1, [][]uint8{{1}}, &intermediate))
+				restored := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+				ConfigureHLLLegacyState(restored)
+				require.NoError(t, restored.UnmarshalFromReader(
+					bytes.NewReader(intermediate.Bytes()), mp))
+				result, err := restored.Flush()
+				require.NoError(t, err)
+				require.Equal(t, hllLegacyVersion, result[0].GetBytesAt(0)[0])
+				expected := hll.NewNoSparse()
+				expected.Insert(values.GetRawBytesAt(0))
+				expectedBytes, err := expected.MarshalBinary()
+				require.NoError(t, err)
+				require.Equal(t, expectedBytes[hllHeaderSize:],
+					result[0].GetBytesAt(0)[hllHeaderSize:])
+				legacyDecoder := hll.NewNoSparse()
+				require.NoError(t, legacyDecoder.UnmarshalBinary(
+					result[0].GetBytesAt(0)))
+
+				emptySource := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+				ConfigureHLLLegacyState(emptySource)
+				emptyOwner := any(emptySource).(AllocationAccountOwner)
+				if accounted {
+					require.NoError(t, emptyOwner.SetAllocationAccount(allocation))
+				}
+				require.NoError(t, emptySource.GroupGrow(1))
+				var emptyIntermediate bytes.Buffer
+				require.NoError(t, emptySource.SaveIntermediateResult(
+					1, [][]uint8{{1}}, &emptyIntermediate))
+				emptyRestored := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+				ConfigureHLLLegacyState(emptyRestored)
+				require.NoError(t, emptyRestored.UnmarshalFromReader(
+					bytes.NewReader(emptyIntermediate.Bytes()), mp))
+				emptyResult, err := emptyRestored.Flush()
+				require.NoError(t, err)
+				require.Equal(t, hllLegacyVersion, emptyResult[0].GetBytesAt(0)[0])
+				expectedEmpty := bytes.Clone(canonicalEmptyHLL[:])
+				expectedEmpty[0] = hllLegacyVersion
+				require.Equal(t, expectedEmpty, emptyResult[0].GetBytesAt(0))
+
+				emptyResult[0].Free(mp)
+				emptyRestored.Free()
+				emptySource.Free()
+				result[0].Free(mp)
+				restored.Free()
+				values.Free(mp)
+				source.Free()
+				if accounted {
+					require.NoError(t, emptyOwner.ClearAllocationAccount(allocation))
+					require.NoError(t, sourceOwner.ClearAllocationAccount(allocation))
+					finishTestAggregateAllocation(t, registry, account)
+				}
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
 }
 
 func TestHllSketchMalformedSparseMergeIsAtomic(t *testing.T) {
@@ -219,6 +526,16 @@ func TestHllSketchMalformedSparseMergeIsAtomic(t *testing.T) {
 
 	require.Error(t, destination.mergeBytes(malformed))
 	require.Equal(t, want, destination.regs)
+
+	emptyDestinationMU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	emptyDestination := emptyDestinationMU.(*hllSketch)
+	emptyWant := bytes.Clone(emptyDestination.regs)
+	require.Error(t, emptyDestination.mergeBytes(malformed))
+	require.Equal(t, emptyWant, emptyDestination.regs)
+	require.False(t, emptyDestination.hasValue)
+	require.Equal(t, hllVersion, emptyDestination.effectiveWireVersion())
+	emptyDestination.Free()
 }
 
 func TestApproxCountExecFillMergeFlush(t *testing.T) {
@@ -261,6 +578,164 @@ func TestApproxCountExecFillMergeFlush(t *testing.T) {
 	vecs[0].Free(mp)
 	left.Free()
 	right.Free()
+}
+
+func TestHllFloatSignedZeroUsesOneSQLValue(t *testing.T) {
+	mp := mpool.MustNewZero()
+	values := vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixedList(values,
+		[]float64{0, math.Copysign(0, -1)}, nil, mp))
+
+	approx := makeApproxCount(mp, 1, types.T_float64.ToType()).(*approxCountExec)
+	require.NoError(t, approx.GroupGrow(1))
+	require.NoError(t, approx.BatchFill(0, []uint64{1, 1}, []*vector.Vector{values}))
+	approxResult, err := approx.Flush()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), vector.GetFixedAtNoTypeCheck[uint64](approxResult[0], 0))
+
+	hllAdd := makeHllAdd(mp, 1, types.T_float64.ToType()).(*hllAddExec)
+	require.NoError(t, hllAdd.GroupGrow(1))
+	require.NoError(t, hllAdd.BatchFill(0, []uint64{1, 1}, []*vector.Vector{values}))
+	hllResult, err := hllAdd.Flush()
+	require.NoError(t, err)
+	restored, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	require.NoError(t, restored.(*hllSketch).UnmarshalBinary(hllResult[0].GetBytesAt(0)))
+	require.Equal(t, uint64(1), restored.(*hllSketch).Estimate())
+
+	values.Free(mp)
+	approxResult[0].Free(mp)
+	hllResult[0].Free(mp)
+	restored.(*hllSketch).Free()
+	approx.Free()
+	hllAdd.Free()
+
+	float32Values := vector.NewVec(types.T_float32.ToType())
+	require.NoError(t, vector.AppendFixedList(float32Values,
+		[]float32{0, float32(math.Copysign(0, -1))}, nil, mp))
+	float32Approx := makeApproxCount(mp, 1, types.T_float32.ToType()).(*approxCountExec)
+	require.NoError(t, float32Approx.GroupGrow(1))
+	require.NoError(t, float32Approx.BatchFill(
+		0, []uint64{1, 1}, []*vector.Vector{float32Values}))
+	float32Result, err := float32Approx.Flush()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), vector.GetFixedAtNoTypeCheck[uint64](float32Result[0], 0))
+	float32Values.Free(mp)
+	float32Result[0].Free(mp)
+	float32Approx.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestHllFloatSignedZeroHashVersionsCannotBeMerged(t *testing.T) {
+	tests := []struct {
+		name       string
+		typ        types.Type
+		legacyZero []byte
+		newZero    []byte
+	}{
+		{
+			name:       "float32",
+			typ:        types.T_float32.ToType(),
+			legacyZero: types.EncodeFixed(float32(math.Copysign(0, -1))),
+			newZero:    types.EncodeFixed(float32(0)),
+		},
+		{
+			name:       "float64",
+			typ:        types.T_float64.ToType(),
+			legacyZero: types.EncodeFixed(math.Copysign(0, -1)),
+			newZero:    types.EncodeFixed(float64(0)),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			legacy := hll.NewNoSparse()
+			legacy.Insert(tc.legacyZero)
+			legacyBytes, err := legacy.MarshalBinary()
+			require.NoError(t, err)
+			require.Equal(t, hllLegacyVersion, legacyBytes[0])
+
+			currentMU, err := makeHllSketch(mp, nil)
+			require.NoError(t, err)
+			current := currentMU.(*hllSketch)
+			defer func() {
+				current.Free()
+				require.Zero(t, mp.CurrNB())
+			}()
+			insertHLLValue(current, tc.typ, tc.newZero)
+			currentBytes, err := current.MarshalBinary()
+			require.NoError(t, err)
+			require.Equal(t, hllVersion, currentBytes[0])
+			require.NotEqual(t, legacyBytes[hllHeaderSize:], currentBytes[hllHeaderSize:])
+			require.Equal(t, uint64(1), current.Estimate())
+
+			legacyRestoredMU, err := makeHllSketch(mp, nil)
+			require.NoError(t, err)
+			legacyRestored := legacyRestoredMU.(*hllSketch)
+			defer legacyRestored.Free()
+			require.NoError(t, legacyRestored.UnmarshalBinary(legacyBytes))
+			require.Equal(t, uint64(1), legacyRestored.Estimate())
+
+			currentRestoredMU, err := makeHllSketch(mp, nil)
+			require.NoError(t, err)
+			currentRestored := currentRestoredMU.(*hllSketch)
+			defer currentRestored.Free()
+			require.NoError(t, currentRestored.UnmarshalBinary(currentBytes))
+			require.Equal(t, uint64(1), currentRestored.Estimate())
+
+			legacyRegs := bytes.Clone(legacyRestored.regs)
+			require.ErrorContains(t, legacyRestored.Merge(currentRestored), "incompatible HLL hash versions")
+			require.Equal(t, legacyRegs, legacyRestored.regs)
+			currentRegs := bytes.Clone(currentRestored.regs)
+			require.ErrorContains(t, currentRestored.Merge(legacyRestored), "incompatible HLL hash versions")
+			require.Equal(t, currentRegs, currentRestored.regs)
+
+			legacyDestinationMU, err := makeHllSketch(mp, nil)
+			require.NoError(t, err)
+			legacyDestination := legacyDestinationMU.(*hllSketch)
+			defer legacyDestination.Free()
+			require.NoError(t, legacyDestination.mergeBytes(legacyBytes))
+			require.ErrorContains(t, legacyDestination.mergeBytes(currentBytes), "incompatible HLL hash versions")
+
+			currentDestinationMU, err := makeHllSketch(mp, nil)
+			require.NoError(t, err)
+			currentDestination := currentDestinationMU.(*hllSketch)
+			defer currentDestination.Free()
+			require.NoError(t, currentDestination.mergeBytes(currentBytes))
+			require.ErrorContains(t, currentDestination.mergeBytes(legacyBytes), "incompatible HLL hash versions")
+		})
+	}
+}
+
+func TestHllMergePreservesLegacyWireVersion(t *testing.T) {
+	mp := mpool.MustNewZero()
+	legacy := hll.NewNoSparse()
+	value := types.EncodeFixed(math.Copysign(0, -1))
+	legacy.Insert(value)
+	legacyBytes, err := legacy.MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, hllLegacyVersion, legacyBytes[0])
+
+	exec := makeHllMerge(mp, 1, types.T_varbinary.ToType()).(*hllMergeExec)
+	values := vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytes(values, legacyBytes, false, mp))
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, hllLegacyVersion, result[0].GetBytesAt(0)[0])
+
+	restoredMU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	restored := restoredMU.(*hllSketch)
+	require.NoError(t, restored.UnmarshalBinary(result[0].GetBytesAt(0)))
+	require.Equal(t, uint64(1), restored.Estimate())
+
+	values.Free(mp)
+	result[0].Free(mp)
+	restored.Free()
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestHllAddExecFillMergeFlush(t *testing.T) {
