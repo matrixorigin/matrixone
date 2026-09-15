@@ -3809,13 +3809,18 @@ func (v *Vector) GetBytesAt(i int) []byte {
 // recorded in sidecar metadata, so the ordinary typed accessor would reject
 // this valid representation under the race detector.
 func (v *Vector) GetBytesAtNoTypeCheck(i int) []byte {
+	physicalLength := v.length
 	if v.IsConst() {
 		i = 0
+		// A constant vector stores one physical descriptor and broadcasts it
+		// over its logical length.  The logical length is therefore not a safe
+		// cast length for the backing descriptor slice.
+		physicalLength = 1
 	}
-	if v.length == 0 {
+	if physicalLength == 0 {
 		return nil
 	}
-	bs := util.UnsafeSliceCastToLength[types.Varlena](v.data, v.length)
+	bs := util.UnsafeSliceCastToLength[types.Varlena](v.data, physicalLength)
 	return bs[i].GetByteSlice(v.area)
 }
 

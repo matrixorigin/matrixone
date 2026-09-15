@@ -454,7 +454,7 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 	t.Run("inet_ntoa prepared any domains", func(t *testing.T) {
 		input := vector.NewVec(types.T_text.ToType())
 		t.Cleanup(func() { input.Free(mp) })
-		values := []string{"1.5", "25.5", "true", "16909060", "2tail", "", "not-a-float"}
+		values := []string{"2.5", "2.5", "true", "16909060", "2tail", "", "not-a-float"}
 		for row, value := range values {
 			require.NoError(t, vector.AppendBytes(input, []byte(value), row == 5, mp))
 		}
@@ -474,7 +474,7 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { out.Free(mp) })
 		assertStrings(t, out,
-			[]string{"0.0.0.2", "0.0.0.26", "0.0.0.1", "1.2.3.4", "0.0.0.2", "", ""},
+			[]string{"0.0.0.2", "0.0.0.3", "0.0.0.1", "1.2.3.4", "0.0.0.2", "", ""},
 			[]bool{false, false, false, false, false, true, true})
 
 		masked := vector.NewVec(types.T_text.ToType())
@@ -489,6 +489,20 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 		require.NoError(t, InetNtoaDynamic([]*vector.Vector{masked}, result, proc, 2,
 			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
 		assertStrings(t, result.GetResultVector(), []string{"0.0.0.2", ""}, []bool{false, true})
+	})
+
+	t.Run("inet_ntoa prepared any constant broadcasts safely", func(t *testing.T) {
+		input, err := vector.NewConstBytes(types.T_text.ToType(), []byte("2.5"), 2, mp)
+		require.NoError(t, err)
+		t.Cleanup(func() { input.Free(mp) })
+		input.SetType(types.T_any.ToType())
+		input.SetPrepareParamKind(vector.PrepareParamFloat)
+		resolved, err := GetFunctionByName(proc.Ctx, "inet_ntoa", []types.Type{types.T_any.ToType()})
+		require.NoError(t, err)
+		out, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), []*vector.Vector{input}, 2)
+		require.NoError(t, err)
+		t.Cleanup(func() { out.Free(mp) })
+		assertStrings(t, out, []string{"0.0.0.2", "0.0.0.2"}, []bool{false, false})
 	})
 }
 
