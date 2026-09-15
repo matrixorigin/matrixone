@@ -88,12 +88,28 @@ func ToInterval(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *
 			}
 			continue
 		}
-		number, _, err := types.NormalizeInterval(string(value), types.IntervalType(unit))
+		intervalType := types.IntervalType(unit)
+		number, normalizedType, err := types.NormalizeInterval(string(value), intervalType)
 		if err != nil {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
 			continue
+		}
+		// Dynamic composite SECOND intervals have a single result type for the
+		// whole vector. Use microseconds so rows with fractional seconds do not
+		// mix units with rows containing only whole seconds.
+		if normalizedType == types.Second {
+			switch intervalType {
+			case types.Minute_Second, types.Hour_Second, types.Day_Second:
+				if number > math.MaxInt64/types.MicroSecsPerSec || number < math.MinInt64/types.MicroSecsPerSec {
+					if err := rs.Append(0, true); err != nil {
+						return err
+					}
+					continue
+				}
+				number *= types.MicroSecsPerSec
+			}
 		}
 		if err := rs.Append(number, false); err != nil {
 			return err
@@ -4086,6 +4102,13 @@ func builtInFromDays(parameters []*vector.Vector, result vector.FunctionResultWr
 		// So FROM_DAYS(N) should reverse this:
 		// DateTimeDiff(intervalUnitDAY, DatetimeEpoch, date) = N - ADZeroDays
 		// date = DatetimeEpoch + (N - ADZeroDays) days
+		// Values before 0001-01-01 use the non-NULL zero-date sentinel.
+		if dayNumber < ADZeroDays {
+			if err := rs.Append(types.ZeroDate, false); err != nil {
+				return err
+			}
+			continue
+		}
 		daysToAdd := dayNumber - ADZeroDays
 		dt, success := types.DatetimeEpoch.AddInterval(daysToAdd, types.Day, types.DateTimeType)
 		if !success {

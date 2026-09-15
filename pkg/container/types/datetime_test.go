@@ -180,6 +180,32 @@ func TestSubDateTime(t *testing.T) {
 	}
 }
 
+func TestConvertToMonthHonorsTimeOfDay(t *testing.T) {
+	start, err := ParseDatetime("2024-01-31 10:00:00.000001", 6)
+	require.NoError(t, err)
+	end, err := ParseDatetime("2024-03-31 10:00:00.000000", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), end.ConvertToMonth(start))
+
+	start, err = ParseDatetime("2024-01-31 10:00:00.000000", 6)
+	require.NoError(t, err)
+	end, err = ParseDatetime("2024-03-31 10:00:00.000001", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), end.ConvertToMonth(start))
+
+	start, err = ParseDatetime("2024-03-31 10:00:00.000000", 6)
+	require.NoError(t, err)
+	end, err = ParseDatetime("2024-01-31 10:00:00.000001", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(-1), end.ConvertToMonth(start))
+
+	start, err = ParseDatetime("2000-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	end, err = ParseDatetime("1999-12-31 23:59:59.999999", 6)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), end.ConvertToMonth(start))
+}
+
 func TestParseDatetime(t *testing.T) {
 	tests := []struct {
 		name    string
