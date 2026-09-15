@@ -7222,9 +7222,9 @@ func (c *Compile) checkPitrGranularity(
 			if validationErr != nil {
 				return validationErr
 			}
-			// The shared candidate query requires a user-visible primary key.
-			// The runtime scanner uses the same predicate, so future no-PK tables
-			// are never admitted and no per-table catalog queries are needed here.
+			// The shared candidate query retains every runtime table and returns its
+			// user-primary-key status. That avoids N+1 catalog queries while both
+			// admission and runtime can fail closed for a no-PK table.
 			continue
 		}
 		pkSQL := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = %d AND %s = %s AND %s = %s AND %s = 'p' AND %s <> %s LIMIT 1",
