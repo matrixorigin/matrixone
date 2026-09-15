@@ -546,7 +546,7 @@ def _typed_statement_context(raw: Any) -> Optional[Dict[str, Any]]:
         return None
     if not isinstance(raw, dict) or set(raw) - _TYPED_STATEMENT_CONTEXT_KEYS:
         raise ValueError("PROTOCOL: unsupported typed statement context field")
-    if raw.get("contract_version") != 1:
+    if type(raw.get("contract_version")) is not int or raw["contract_version"] != 1:
         raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported statement context contract")
     timestamp = raw.get("statement_timestamp_utc")
     if (
@@ -619,7 +619,11 @@ def _validate_typed_call_contract(payload: Dict[str, Any]) -> None:
     frame = payload.get("security_frame")
     if not isinstance(frame, dict) or set(frame) != _SECURITY_FRAME_KEYS:
         raise ValueError("UNSUPPORTED_ROUTINE_VERSION: incomplete Python security frame")
-    if frame.get("contract_version") != 1 or frame.get("mode") != "INVOKER":
+    if (
+        type(frame.get("contract_version")) is not int
+        or frame["contract_version"] != 1
+        or frame.get("mode") != "INVOKER"
+    ):
         raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported Python security frame")
     integer_fields = ("invoker_user_id", "invoker_role_id", "effective_user_id", "effective_role_id")
     if any(
