@@ -391,17 +391,18 @@ func (ag *aggState) writeStateArg(
 			it := ag.argSkl.NewIter(lk, uk)
 			defer it.Close()
 			if !info.usesOpaqueArgEncoding() {
-				for ok, k, stored := it.SeekGE(lk); ok; ok, k, stored = it.Next() {
+				for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
 					/*
 						checkI := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
 						if checkI != uint16(i) {
 							panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch i: %d != %d", checkI, i))
 						}
 					*/
+					// Fixed-width legacy readers compare the bytes they receive
+					// directly. Re-export the canonical key bytes rather than a
+					// retained raw representative, in particular so -0 and +0
+					// remain one key on a pre-canonical reader.
 					payload := k[kAggArgPrefixSz:]
-					if info.isDistinct && len(stored) != 0 {
-						payload = stored
-					}
 					n, err := writer.Write(payload)
 					if err != nil {
 						return err
@@ -1535,6 +1536,24 @@ func (ag *aggState) fillArg(mp *mpool.MPool, y uint16, val []byte, distinct bool
 		copy(k[kAggArgPrefixSz+kAggArgOrdinalSz:], val)
 	}
 	return ag.insertPreparedArg(mp, y, k, distinct)
+}
+
+func (ag *aggState) fillDistinctArgWithValue(
+	mp *mpool.MPool,
+	y uint16,
+	val []byte,
+	representative []byte,
+) error {
+	if len(val) > math.MaxInt-kAggArgPrefixSz {
+		return mpool.ErrAllocationAllocatorLimit
+	}
+	k, err := ag.resizeArgScratch(mp, kAggArgPrefixSz+len(val))
+	if err != nil {
+		return err
+	}
+	binary.BigEndian.PutUint16(k[:kAggArgPrefixSz], y)
+	copy(k[kAggArgPrefixSz:], val)
+	return ag.insertPreparedArgWithValue(mp, y, k, true, representative)
 }
 
 func (ag *aggState) fillDistinctArgInInputOrder(
@@ -3103,6 +3122,12 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 				copy(key[off:], raw)
 			}
 			off += valueSize
+		}
+		// Preflight intentionally skips resident keys. Check the same
+		// membership before constructing the retained raw tuple so a duplicate
+		// that canonicalizes differently cannot allocate after publication.
+		if distinct && state.argSkl.Contains(key) {
+			continue
 		}
 
 		// A multi-column canonical key may not be sent to a pre-v76 peer.
