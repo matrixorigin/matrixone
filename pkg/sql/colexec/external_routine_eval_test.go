@@ -387,6 +387,15 @@ func TestBuildRoutineContextRejectsUnstableTimezone(t *testing.T) {
 	}
 }
 
+func TestBuildRoutineContextRejectsSubMinuteFixedTimezone(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.GetSessionInfo().TimeZone = time.FixedZone("FixedZone", 8*60*60+30)
+
+	_, err := buildRoutineContext(proc)
+	require.ErrorContains(t, err, "whole number of minutes")
+}
+
 func testExternalRoutineCall(t *testing.T, mode, nullPolicy string) *planpb.RoutineCall {
 	t.Helper()
 	descriptor, err := function.NewPythonTypeDescriptor(types.T_int64.ToType())
