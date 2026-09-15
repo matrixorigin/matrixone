@@ -41,6 +41,12 @@ const (
 	PythonABIContract    = "PYTHON_ARROW"
 	PythonAdapterVersion = "2026-09"
 	PythonSDKVersion     = "1.0"
+	// Python materializes statement timestamps as datetime.datetime. Keep the
+	// Go boundary identical to Python's year-1 through year-9999 UTC range;
+	// accepting the full int64 domain here would let a plan pass CN validation
+	// and fail only after the worker starts decoding its context.
+	minStatementTimestampUTC int64 = -62135596800000000
+	maxStatementTimestampUTC int64 = 253402300799999999
 	// These numeric contracts are persisted in catalog and plan records. They
 	// are intentionally separate from the human-facing adapter/SDK names:
 	// changing a wire or persistent shape must fail closed before user code is
@@ -85,6 +91,9 @@ type StatementContext struct {
 func (c StatementContext) Validate() error {
 	if c.ContractVersion != StatementContextContractVersion {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported statement context contract %d", c.ContractVersion)
+	}
+	if c.StatementTimestampUTC < minStatementTimestampUTC || c.StatementTimestampUTC > maxStatementTimestampUTC {
+		return fmt.Errorf("python udf: statement timestamp is outside the Python datetime range")
 	}
 	if c.CurrentUser == "" || c.ConnectionCollation == "" {
 		return fmt.Errorf("python udf: statement context has no authenticated user or collation")
