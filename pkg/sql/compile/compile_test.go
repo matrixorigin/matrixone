@@ -1403,6 +1403,128 @@ func TestFrozenResultMetadataRejectsIncompatibleDefinitionRetry(t *testing.T) {
 	}
 }
 
+func TestFrozenResultMetadataAcceptsEquivalentVectorAccessPath(t *testing.T) {
+	sourceTable := &plan.TableDef{
+		Name:         "source_alias",
+		OriginalName: "source_table",
+		DbName:       "source_db",
+		Pkey:         &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "embedding", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
+			{
+				Name:    "id",
+				Primary: true,
+				Typ: plan.Type{
+					Id:          int32(types.T_int64),
+					NotNullable: true,
+					AutoIncr:    true,
+				},
+			},
+			{Name: "category", NotNull: true, Typ: plan.Type{Id: int32(types.T_varchar), Width: 32}},
+		},
+		Name2ColIndex: map[string]int32{
+			"embedding": 0,
+			"payload":   1,
+			"id":        2,
+			"category":  3,
+		},
+		Indexes: []*plan.IndexDef{{Parts: []string{"category"}, Unique: true}},
+	}
+	scoreType := plan.Type{Id: int32(types.T_float64), Width: 8}
+	colExpr := func(tag, pos int32, typ plan.Type, name string) *plan.Expr {
+		return &plan.Expr{
+			Typ: typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{
+				RelPos: tag,
+				ColPos: pos,
+				Name:   name,
+			}},
+		}
+	}
+	makeTablePlan := func() *plan.Plan {
+		const scanTag = int32(20)
+		scanProjectList := []*plan.Expr{
+			colExpr(scanTag, 0, sourceTable.Cols[0].Typ, "embedding"),
+			colExpr(scanTag, 1, sourceTable.Cols[1].Typ, "payload"),
+			colExpr(scanTag, 2, sourceTable.Cols[2].Typ, "id"),
+			colExpr(scanTag, 3, sourceTable.Cols[3].Typ, "category"),
+		}
+		resultProjectList := []*plan.Expr{
+			colExpr(scanTag, 2, sourceTable.Cols[2].Typ, "id"),
+			colExpr(scanTag, 3, sourceTable.Cols[3].Typ, "category"),
+			{Typ: scoreType, Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}},
+			colExpr(scanTag, 1, sourceTable.Cols[1].Typ, "payload"),
+		}
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{1},
+			Nodes: []*plan.Node{
+				{NodeId: 0, NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{scanTag}, TableDef: sourceTable, ProjectList: scanProjectList},
+				{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: resultProjectList},
+			},
+			Headings: []string{"id", "category", "score", "payload"},
+		}}}
+	}
+	makeVectorPlan := func() *plan.Plan {
+		const vectorTag = int32(10)
+		vectorSpec := &plan.VectorIndexScan{
+			SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
+			SourceTableDef: sourceTable,
+			IncludedColumns: []string{
+				"category",
+				"payload",
+			},
+		}
+		vectorProjectList := []*plan.Expr{
+			colExpr(vectorTag, 1, scoreType, "score"),
+			colExpr(vectorTag, 2, sourceTable.Cols[3].Typ, "category"),
+			colExpr(vectorTag, 0, sourceTable.Cols[2].Typ, "pkid"),
+			colExpr(vectorTag, 3, sourceTable.Cols[1].Typ, "payload"),
+		}
+		resultProjectList := []*plan.Expr{
+			colExpr(vectorTag, 0, sourceTable.Cols[2].Typ, "pkid"),
+			colExpr(vectorTag, 2, sourceTable.Cols[3].Typ, "category"),
+			colExpr(vectorTag, 1, scoreType, "score"),
+			colExpr(vectorTag, 3, sourceTable.Cols[1].Typ, "payload"),
+		}
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{1},
+			Nodes: []*plan.Node{
+				{
+					NodeId:      0,
+					NodeType:    plan.Node_VECTOR_INDEX_SCAN,
+					BindingTags: []int32{vectorTag},
+					TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+						{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
+						{Name: "score", Typ: scoreType},
+						{Name: "__mo_index_include_category", Typ: sourceTable.Cols[3].Typ},
+						{Name: "__mo_index_include_payload", Typ: sourceTable.Cols[1].Typ},
+					}},
+					ProjectList:     vectorProjectList,
+					VectorIndexScan: vectorSpec,
+				},
+				{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: resultProjectList},
+			},
+			Headings: []string{"id", "category", "score", "payload"},
+		}}}
+	}
+
+	original := makeTablePlan()
+	equivalent := makeVectorPlan()
+	require.True(t, sameResultMetadata(original, equivalent))
+
+	c := &Compile{pn: original}
+	c.FreezeResultMetadata()
+	require.NoError(t, c.validateRetryResultMetadata(context.Background(), equivalent))
+
+	changed := makeVectorPlan()
+	changed.GetQuery().Nodes[1].ProjectList[0].Typ.Id = int32(types.T_varchar)
+	err := c.validateRetryResultMetadata(context.Background(), changed)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+}
+
 func TestSelectIntoRetryRevalidatesResultArity(t *testing.T) {
 	makeResultPlan := func(columnTypes ...types.T) *plan.Plan {
 		projectList := make([]*plan.Expr, len(columnTypes))
@@ -2068,6 +2190,10 @@ func TestCompilePartitionTopNGatedByProtocolVersion(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion19)
 	require.True(t, c.supportsRemotePartitionTopN())
+	require.False(t, c.supportsRemotePartitionTopNWithTies())
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
+	require.True(t, c.supportsRemotePartitionTopNWithTies())
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
 	require.False(t, c.supportsRemotePartitionTopN(), "rollback must select the legacy partition path")
@@ -2116,6 +2242,26 @@ func TestCompilePartitionTopNPhysicalTopology(t *testing.T) {
 		windowScopes := c.compileWin(&plan.Node{}, partitionScopes)
 		physicalWindow := windowScopes[0].RootOp.(*windowop.Window)
 		require.False(t, physicalWindow.PartitionTopN)
+	})
+
+	t.Run("rank with ties requires v68", func(t *testing.T) {
+		c := newCompileForShuffleGroupTest(t)
+		rt := runtime.ServiceRuntime(c.proc.GetService())
+		defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		node := newNode()
+		node.PartitionTopNWithTies = true
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion68)
+		legacyScopes := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
+		legacyPartition := legacyScopes[0].RootOp.(*partitionop.Partition)
+		require.Nil(t, legacyPartition.Limit)
+		require.False(t, legacyPartition.WithTies)
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
+		boundedScopes := c.compilePartition(node, []*Scope{newShuffleGroupInputScope(t, 1)})
+		boundedPartition := boundedScopes[0].RootOp.(*partitionop.Partition)
+		require.NotNil(t, boundedPartition.Limit)
+		require.True(t, boundedPartition.WithTies)
 	})
 }
 

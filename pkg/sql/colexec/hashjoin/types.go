@@ -254,6 +254,12 @@ type HashJoin struct {
 	recursiveProbe bool
 
 	vm.OperatorBase
+
+	// Fixed scratch for one Find chunk; every selected slot is overwritten.
+	// Keep it last to preserve the locality of existing hot state/config fields.
+	// Operator ownership avoids per-chunk heap escapes through Vector.Union.
+	uniqueLeftRows  [hashmap.UnitLimit]int64
+	uniqueRightRows [hashmap.UnitLimit]int64
 }
 
 func (hashJoin *HashJoin) SetAllocationAccount(

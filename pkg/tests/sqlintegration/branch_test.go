@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package isolated
+package sqlintegration
 
 import (
 	"context"
@@ -38,17 +38,6 @@ const (
 	issue26111TargetAccount  = "i26111t"
 )
 
-func execSQLRequire(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
-	t.Helper()
-	_, err := db.ExecContext(ctx, statement)
-	require.NoErrorf(t, err, "exec failed: %s", statement)
-}
-
-func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
-	t.Helper()
-	_, _ = db.ExecContext(ctx, statement)
-}
-
 func cleanupIssue26111Catalog(ctx context.Context, db *sql.DB) error {
 	statements := []string{
 		"drop snapshot if exists " + issue26111SnapshotName,
@@ -68,26 +57,13 @@ func cleanupIssue26111Catalog(ctx context.Context, db *sql.DB) error {
 }
 
 func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
-	embed.RunSingleCNBaseClusterTests(t, func(c embed.Cluster) {
+	runSQLIntegration(t, func(c embed.Cluster) {
 		runIssue26111DataBranchDatabaseWithCyclicForeignKeys(t, c)
 	})
 }
 
 func runIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T, c embed.Cluster) {
 	t.Helper()
-
-	// RunSingleCNBaseClusterTests holds the shared fixture mutex while this
-	// callback executes. Register the discard at the test boundary so a dirty
-	// fixture is closed only after Run has released that mutex.
-	fixtureDirty := true
-	t.Cleanup(func() {
-		if !fixtureDirty {
-			return
-		}
-		if closeErr := embed.CloseSingleCNBaseClusterTests(); closeErr != nil {
-			t.Errorf("close dirty shared single-CN fixture: %v", closeErr)
-		}
-	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
@@ -100,7 +76,7 @@ func runIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T, c embed.
 	db.SetMaxOpenConns(1)
 	defer db.Close()
 	execSQLRequire(t, ctx, db, "set role moadmin")
-	require.NoError(t, waitSystemBootstrap(ctx, db))
+	require.NoError(t, testutils.WaitSystemBootstrap(ctx, db))
 
 	const (
 		sourceDB       = issue26111SourceDB
@@ -115,23 +91,14 @@ func runIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T, c embed.
 	// here therefore has an explicit reset path; the regression keeps its
 	// cross-database and cross-account oracles while leaving no catalog state for
 	// the next scenario.
-	preCleanFailed := false
 	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cleanupCancel()
-	if cleanupErr := cleanupIssue26111Catalog(cleanupCtx, db); cleanupErr != nil {
-		preCleanFailed = true
-		require.NoError(t, cleanupErr)
-	}
+	require.NoError(t, cleanupIssue26111Catalog(cleanupCtx, db))
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cleanupCancel()
 		if cleanupErr := cleanupIssue26111Catalog(cleanupCtx, db); cleanupErr != nil {
-			fixtureDirty = true
 			t.Errorf("issue 26111 catalog cleanup failed: %v", cleanupErr)
-			return
-		}
-		if !preCleanFailed {
-			fixtureDirty = false
 		}
 	}()
 

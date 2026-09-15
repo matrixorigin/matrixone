@@ -66,25 +66,25 @@ show triggers;
 use mo_catalog;
 show columns from mo_tables;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-rel_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relname  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
 reldatabase  ¦  VARCHAR(5000)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-reldatabase_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+reldatabase_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relpersistence  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relkind  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_createsql  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-creator  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-owner  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_id  ¦  INT UNSIGNED(0)  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
-partitioned  ¦  TINYINT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_id  ¦  INT UNSIGNED  ¦  YES  ¦  PRI  ¦  null  ¦    ¦    𝄀
+partitioned  ¦  TINYINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 partition_info  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 viewdef  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 constraint  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-catalog_version  ¦  INT UNSIGNED(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_logical_id  ¦  BIGINT UNSIGNED(0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
+rel_version  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+catalog_version  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_logical_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦  UNI  ¦  null  ¦    ¦
 select datname, dat_createsql from mo_database;
 ➤ datname[12,-1,0]  ¦  dat_createsql[12,-1,0]  𝄀
 mo_catalog  ¦    𝄀

@@ -484,6 +484,7 @@ func (ctr *container) newAggregateExecutor(
 	if err != nil {
 		return nil, err
 	}
+	aggexec.ConfigureGroupConcatTimeZone(exec, proc.Base.SessionInfo.TimeZone)
 	succeeded := false
 	defer func() {
 		if !succeeded {
@@ -1027,10 +1028,15 @@ func (ctr *container) processOrderFuncRange(
 					peerEnd = int(ctr.os[peerIndex+1])
 				}
 			}
+			partitionStart := 0
+			if ctr.ps != nil {
+				partitionStart, _ = buildPartitionInterval(ctr.ps, j, n)
+			}
 			if funcName == "rank" {
-				values[j-outputStart] = uint64(peerStart + 1)
+				values[j-outputStart] = uint64(peerStart - partitionStart + 1)
 			} else {
-				values[j-outputStart] = uint64(peerIndex + 1)
+				partitionPeerIndex, _, _ := peerInterval(ctr.os, partitionStart, n)
+				values[j-outputStart] = uint64(peerIndex - partitionPeerIndex + 1)
 			}
 		}
 		vec := vector.NewVec(types.T_uint64.ToType())
@@ -2139,8 +2145,22 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 		return false, nil
 	}
 
-	ovec := ctr.orderVecs[0].Vec[0]
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	if ap.PartitionTopN {
+		// Grouping-set sentinels are SQL NULLs to a downstream PARTITION BY.
+		// Normalize only the private order-key copies: otherwise the sorter can
+		// compare their physical zero payload with an ordinary value (for example
+		// an empty string) and the boundary detector can merge two partitions.
+		for i := 0; i < len(w.PartitionBy); i++ {
+			vec := ctr.orderVecs[i].Vec[0]
+			if vec.HasGrouping() {
+				vec.GetNulls().Or(vec.GetGrouping())
+				vec.SetGrouping(nil)
+			}
+		}
+	}
+
+	ovec := ctr.orderVecs[0].Vec[0]
 	partitionKeyCount := 0
 	if ap.PartitionTopN {
 		// PartitionTopN coalesces input partitions, so its order-vector prefix
@@ -2180,6 +2200,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(ctr.sels))
+	var jsonOrderScratch sort.JSONOrderScratch
 
 	i, j := 1, len(ctr.orderVecs)
 	for ; i < j; i++ {
@@ -2194,9 +2215,14 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			ps = partition.PartitionForOrder(ctr.sels, ds, ps, ovec)
 		}
 		vec := ctr.orderVecs[i].Vec[0]
+		var scratch *sort.JSONOrderScratch
+		nullCnt := vec.GetNulls().Count()
+		if i >= partitionKeyCount && !vec.IsConst() && vec.GetType().Oid == types.T_json && nullCnt < vec.Length() {
+			jsonOrderScratch.Prepare(ctr.sels, vec)
+			scratch = &jsonOrderScratch
+		}
 		// skip sort for const vector
 		if !vec.IsConst() {
-			nullCnt := vec.GetNulls().Count()
 			if nullCnt < vec.Length() {
 				for group, groupCount := 0, len(ps); group < groupCount; group++ {
 					if err := checkCanceled(proc, group); err != nil {
@@ -2210,7 +2236,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 					if i < partitionKeyCount {
 						sort.Sort(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
 					} else {
-						sort.SortForSQLOrder(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec)
+						sort.SortForSQLOrderWithScratch(desc, nullsLast, nullCnt > 0, ctr.sels[start:end], vec, scratch)
 					}
 				}
 			}

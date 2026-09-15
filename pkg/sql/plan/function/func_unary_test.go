@@ -661,8 +661,8 @@ func initAsciiStringTestCase() []tcTemp {
 					[]string{"-23", "9999999", "-11"},
 					[]bool{false, false, false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{45, 57, 45},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{45, 57, 45},
 				[]bool{false, false, false}),
 		},
 	}
@@ -690,8 +690,8 @@ func initAsciiIntTestCase() []tcTemp {
 					[]int64{11},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{49},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{49},
 				[]bool{false}),
 		},
 	}
@@ -719,8 +719,8 @@ func initAsciiUintTestCase() []tcTemp {
 					[]uint64{11},
 					[]bool{false}),
 			},
-			expect: NewFunctionTestResult(types.T_uint8.ToType(), false,
-				[]uint8{49},
+			expect: NewFunctionTestResult(types.T_int32.ToType(), false,
+				[]int32{49},
 				[]bool{false}),
 		},
 	}
@@ -737,6 +737,76 @@ func TestAsciiUint(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestAsciiRegisteredOverloadsReturnInt32(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name       string
+		input      types.Type
+		overloadID int32
+	}{
+		{name: "varchar", input: types.T_varchar.ToType(), overloadID: 0},
+		{name: "char", input: types.T_char.ToType(), overloadID: 1},
+		{name: "text", input: types.T_text.ToType(), overloadID: 2},
+		{name: "int8", input: types.T_int8.ToType(), overloadID: 3},
+		{name: "int16", input: types.T_int16.ToType(), overloadID: 4},
+		{name: "int32", input: types.T_int32.ToType(), overloadID: 5},
+		{name: "int64", input: types.T_int64.ToType(), overloadID: 6},
+		{name: "uint8", input: types.T_uint8.ToType(), overloadID: 7},
+		{name: "uint16", input: types.T_uint16.ToType(), overloadID: 8},
+		{name: "uint32", input: types.T_uint32.ToType(), overloadID: 9},
+		{name: "uint64", input: types.T_uint64.ToType(), overloadID: 10},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "ascii", []types.Type{test.input})
+			require.NoError(t, err)
+			require.Equal(t, types.T_int32, resolved.GetReturnType().Oid)
+
+			functionID, overloadID := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, int32(ASCII), functionID)
+			require.Equal(t, test.overloadID, overloadID)
+		})
+	}
+}
+
+func TestAsciiKeepsLegacyUint8ResultWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Run("string", func(t *testing.T) {
+		input := testutil.MakeVarlenaVector(
+			[][]byte{[]byte("A")}, nil, types.T_varchar.ToType(), proc.Mp())
+		defer input.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, AsciiString(
+			[]*vector.Vector{input}, result, proc, 1, nil))
+		require.Equal(t, []uint8{65}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
+	})
+	t.Run("signed integer", func(t *testing.T) {
+		input := testutil.MakeInt64Vector([]int64{11}, nil, proc.Mp())
+		defer input.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, AsciiInt[int64](
+			[]*vector.Vector{input}, result, proc, 1, nil))
+		require.Equal(t, []uint8{'1'}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
+	})
+	t.Run("unsigned integer", func(t *testing.T) {
+		input := testutil.MakeUint64Vector([]uint64{11}, nil, proc.Mp())
+		defer input.Free(proc.Mp())
+
+		result := vector.NewFunctionResultWrapper(types.T_uint8.ToType(), proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		require.NoError(t, AsciiUint[uint64](
+			[]*vector.Vector{input}, result, proc, 1, nil))
+		require.Equal(t, []uint8{'1'}, vector.MustFixedColNoTypeCheck[uint8](result.GetResultVector()))
+	})
 }
 
 // ORD
@@ -980,6 +1050,8 @@ func TestQuoteHonorsSelectList(t *testing.T) {
 
 // SOUNDEX
 func initSoundexTestCase() []tcTemp {
+	lateGrowthInput := strings.Repeat("BEB", 4096) + strings.Repeat("BC", 64)
+	lateGrowthWant := "B2" + strings.Repeat("12", 63)
 	return []tcTemp{
 		{
 			info: "test soundex basic",
@@ -1007,12 +1079,12 @@ func initSoundexTestCase() []tcTemp {
 			info: "test soundex with non-alphabetic",
 			inputs: []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(),
-					[]string{"Hello123", "Test!@#", "123ABC"},
-					[]bool{false, false, false}),
+					[]string{"Hello123", "Test!@#", "123ABC", "123!", "123!ABC"},
+					[]bool{false, false, false, false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"H400", "T230", "A120"},
-				[]bool{false, false, false}),
+				[]string{"H400", "T230", "A120", "", "A120"},
+				[]bool{false, false, false, false, false}),
 		},
 		{
 			info: "test soundex empty string",
@@ -1022,7 +1094,7 @@ func initSoundexTestCase() []tcTemp {
 					[]bool{false}),
 			},
 			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"0000"},
+				[]string{""},
 				[]bool{false}),
 		},
 		{
@@ -1036,21 +1108,28 @@ func initSoundexTestCase() []tcTemp {
 				[]string{""},
 				[]bool{true}),
 		},
-		/*
-			// TODO: fix this test case, according to MySQL behavior,
-			// I have no idea what the correct result should be.
-			{
-				info: "test soundex with consecutive duplicates",
-				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(),
-						[]string{"LLL", "RRR", "MMM"},
-						[]bool{false, false, false}),
-				},
-				expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-					[]string{"L000", "R000", "M000"},
-					[]bool{false, false, false}),
+		{
+			info: "test soundex with mixed NULL and non-NULL rows",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Pfister", "ignored", "Ashcraft"},
+					[]bool{false, true, false}),
 			},
-		*/
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"P236", "", "A2613"},
+				[]bool{false, true, false}),
+		},
+		{
+			info: "test soundex first-letter and discarded-letter duplicate suppression",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"LLL", "RRR", "MMM", "BEB", "BHB", "BWB", "B-B"},
+					[]bool{false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"L000", "R000", "M000", "B000", "B000", "B000", "B000"},
+				[]bool{false, false, false, false, false, false, false}),
+		},
 		{
 			info: "test soundex with H and W",
 			inputs: []FunctionTestInput{
@@ -1073,6 +1152,17 @@ func initSoundexTestCase() []tcTemp {
 				[]string{"A000", "A100", "A120"},
 				[]bool{false, false, false}),
 		},
+		{
+			info: "test MySQL original Soundex and variable-length results",
+			inputs: []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(),
+					[]string{"Ashcraft", "Pfister", "Tymczak", "Quadratically", "pfister", "BDFJLMPR", "BDFJLMPRB", lateGrowthInput},
+					[]bool{false, false, false, false, false, false, false, false}),
+			},
+			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
+				[]string{"A2613", "P236", "T520", "Q36324", "P236", "B3124516", "B31245161", lateGrowthWant},
+				[]bool{false, false, false, false, false, false, false, false}),
+		},
 	}
 }
 
@@ -1085,6 +1175,21 @@ func TestSoundex(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestSoundexLongTextOutput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := strings.Repeat("BC", 32769)
+	want := "B" + strings.Repeat("21", 32768) + "2"
+
+	fcTC := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_text.ToType(), []string{input}, []bool{false})},
+		NewFunctionTestResult(types.New(types.T_text, types.MaxLongTextLen, 0), false, []string{want}, []bool{false}),
+		Soundex,
+	)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("long TEXT Soundex result was truncated: %s", info))
 }
 
 func initStAsTextTestCase() []tcTemp {
@@ -1248,6 +1353,131 @@ func TestStGeomFromTextWithSRID(t *testing.T) {
 	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 }
 
+func TestStGeomFromWKBWithSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	wkb := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	for _, inputType := range []types.T{types.T_varchar, types.T_blob, types.T_varbinary} {
+		t.Run(inputType.String(), func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(inputType.ToType(), []string{wkb, wkb, ""}, []bool{false, false, true}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 4326, 3857}, []bool{false, false, false}),
+			}
+			expect := NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{"POINT(1 2)", "POINT(1 2)", ""}, []bool{false, false, true})
+			tc := NewFunctionTestCase(proc, inputs, expect, StGeomFromWKBWithSRID)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestGeometrySRIDOverloadsResolve(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name      string
+		function  string
+		args      []types.Type
+		overload  int32
+		returnOID types.T
+	}{
+		{
+			name:      "wkb varchar with srid",
+			function:  "st_geomfromwkb",
+			args:      []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+			overload:  3,
+			returnOID: types.T_geometry,
+		},
+		{
+			name:      "wkb blob with srid",
+			function:  "st_geomfromwkb",
+			args:      []types.Type{types.T_blob.ToType(), types.T_int64.ToType()},
+			overload:  4,
+			returnOID: types.T_geometry,
+		},
+		{
+			name:      "wkb varbinary with srid",
+			function:  "st_geomfromwkb",
+			args:      []types.Type{types.T_varbinary.ToType(), types.T_int64.ToType()},
+			overload:  5,
+			returnOID: types.T_geometry,
+		},
+		{
+			name:      "geometry setter",
+			function:  "st_srid",
+			args:      []types.Type{types.T_geometry.ToType(), types.T_int64.ToType()},
+			overload:  2,
+			returnOID: types.T_geometry,
+		},
+		{
+			name:      "geometry32 setter",
+			function:  "st_srid",
+			args:      []types.Type{types.T_geometry32.ToType(), types.T_int64.ToType()},
+			overload:  3,
+			returnOID: types.T_geometry32,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, tc.function, tc.args)
+			require.NoError(t, err)
+			_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, tc.overload, overload)
+			require.Equal(t, tc.returnOID, resolved.GetReturnType().Oid)
+
+			registered, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
+			require.NoError(t, err)
+			execute, _, _, _ := registered.GetExecuteMethod()
+			require.NotNil(t, execute)
+		})
+	}
+}
+
+func TestStGeomFromWKBWithSRIDRejectsInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	validWKB := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	for _, tc := range []struct {
+		name string
+		wkb  string
+		srid int64
+	}{
+		{name: "negative srid", wkb: validWKB, srid: -1},
+		{name: "oversized srid", wkb: validWKB, srid: int64(geo.MaxSRID) + 1},
+		{name: "malformed wkb", wkb: "not-a-wkb", srid: 4326},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.wkb}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.srid}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil), StGeomFromWKBWithSRID)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	masked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-wkb", validWKB}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, 4326}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", "POINT(1 2)"}, []bool{true, false}),
+		StGeomFromWKBWithSRID).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	ok, info := masked.Run()
+	require.True(t, ok, info)
+
+	allMasked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-wkb", "not-a-wkb"}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -1}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", ""}, []bool{true, true}),
+		StGeomFromWKBWithSRID).WithSelectList(&FunctionSelectList{AllNull: true})
+	ok, info = allMasked.Run()
+	require.True(t, ok, info)
+}
+
 func TestStGeomFromTextWithSRIDRejectNonFiniteCoordinates(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
@@ -1382,6 +1612,95 @@ func TestStSRID(t *testing.T) {
 	fcTC2 := NewFunctionTestCase(proc, inputs2, expect2, StSRID)
 	s2, info2 := fcTC2.Run()
 	require.True(t, s2, fmt.Sprintf("err info is '%s'", info2))
+}
+
+func TestStSRIDWithSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geomType := types.T_geometry32.ToType()
+	geomType.Scale = 1
+	wkb, err := encodeGeometryPayloadFloat32("POINT(1 2)")
+	require.NoError(t, err)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{string(wkb), string(wkb), ""}, []bool{false, false, true}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, 0, 3857}, []bool{false, false, true}),
+	}
+	expect := NewFunctionTestResult(geomType, false,
+		[]string{"POINT(1 2)", "POINT(1 2)", ""}, []bool{false, false, true})
+	tc := NewFunctionTestCase(proc, inputs, expect, StSRIDWithSRID)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestStSRIDWithSRIDRejectsMalformedPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geomType := types.T_geometry.ToType()
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{"not-a-geometry"}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil)
+	tc := NewFunctionTestCase(proc, inputs, expect, StSRIDWithSRID)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestStSRIDWithSRIDRejectsWrongGeometry32Payload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geomType := types.T_geometry32.ToType()
+	wkb64 := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{wkb64}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry32.ToType(), true, nil, nil)
+	tc := NewFunctionTestCase(proc, inputs, expect, StSRIDWithSRID)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestStSRIDWithSRIDRejectsInvalidInputAndHonorsSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	validWKB := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	for _, tc := range []struct {
+		name string
+		wkb  string
+		srid int64
+	}{
+		{name: "negative srid", wkb: validWKB, srid: -1},
+		{name: "oversized srid", wkb: validWKB, srid: int64(geo.MaxSRID) + 1},
+		{name: "malformed geometry", wkb: "not-a-geometry", srid: 4326},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.wkb}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.srid}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil), StSRIDWithSRID)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	masked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"not-a-geometry", validWKB}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, 4326}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", "POINT(1 2)"}, []bool{true, false}),
+		StSRIDWithSRID).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	ok, info := masked.Run()
+	require.True(t, ok, info)
+
+	allMasked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"not-a-geometry", "not-a-geometry"}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -1}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", ""}, []bool{true, true}),
+		StSRIDWithSRID).WithSelectList(&FunctionSelectList{AllNull: true})
+	ok, info = allMasked.Run()
+	require.True(t, ok, info)
 }
 
 func initStGeometryTypeTestCase() []tcTemp {
@@ -1646,9 +1965,21 @@ func TestGeometry32ReturningUnary(t *testing.T) {
 	check(StBoundary, "LINESTRING(0 0,1 1,0 0)", "MULTIPOINT EMPTY")
 	check(StConvexHull, "MULTIPOINT(0 0, 4 0, 4 4, 0 4, 2 2)", "POLYGON((0 0,4 0,4 4,0 4,0 0))")
 	check(StEnvelope, "LINESTRING(0 0, 2 3)", "POLYGON((0 0,2 0,2 3,0 3,0 0))")
+	check(StEnvelope, "MULTIPOINT(0 0, 2 2)", "POLYGON((0 0,2 0,2 2,0 2,0 0))")
+	check(StCentroid, "MULTIPOINT(0 0, 2 2)", "POINT(1 1)")
 	check(StStartPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(1 2)")
 	check(StEndPoint, "LINESTRING(1 2, 3 4, 5 6)", "POINT(5 6)")
 	check(StExteriorRing, "POLYGON((0 0, 4 0, 4 4, 0 4, 0 0))", "LINESTRING(0 0,4 0,4 4,0 4,0 0)")
+}
+
+func TestStIsSimpleGeometry32(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(types.T_geometry32.ToType(),
+		[]string{geom32WKB(t, "MULTILINESTRING((0 0,1 0),(1 0,2 0))")}, []bool{false})
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true}, []bool{false})
+	tc := NewFunctionTestCase(proc, []FunctionTestInput{input}, expect, StIsSimple)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
 }
 
 func TestGeometry32Measures(t *testing.T) {
@@ -2402,25 +2733,53 @@ func TestStIsSimpleRejectInvalidInput(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	expect := NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false}, []bool{false})
 
-	unsupportedInputs := []FunctionTestInput{
-		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"POLYGON((0 0,1 0,1 1,0 0))"},
-			[]bool{false}),
-	}
-	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StIsSimple)
-	s, info := fcTC.Run()
-	require.False(t, s)
-	require.Contains(t, info, "geometry type is not supported by ST_IsSimple")
-
 	invalidLineInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
 			[]string{"LINESTRING(0 0)"},
 			[]bool{false}),
 	}
-	fcTC = NewFunctionTestCase(proc, invalidLineInputs, expect, StIsSimple)
-	s, info = fcTC.Run()
+	fcTC := NewFunctionTestCase(proc, invalidLineInputs, expect, StIsSimple)
+	s, info := fcTC.Run()
 	require.False(t, s)
 	require.Contains(t, info, "invalid linestring payload")
+}
+
+func TestStIsSimpleCollections(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{
+			"POLYGON((0 0,2 0,2 2,0 0))",
+			"MULTIPOINT(0 0,1 1)",
+			"MULTIPOINT(0 0,1 1,0 0)",
+			"MULTIPOINT(EMPTY,1 1)",
+			"MULTILINESTRING((0 0,1 0),(0 1,1 1))",
+			"MULTILINESTRING((0 0,1 0),(1 0,2 0))",
+			"MULTILINESTRING((0 0,2 2),(0 2,2 0))",
+			"MULTILINESTRING((0 0,2 0),(1 0,1 1))",
+			"MULTIPOLYGON(((0 0,1 0,1 1,0 0)),((2 0,3 0,3 1,2 0)))",
+			"MULTIPOLYGON(((0 0,2 0,2 2,0 0)),((1 0,3 0,3 2,1 0)))",
+			"GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,2 0))",
+			"GEOMETRYCOLLECTION(POINT(1 0),LINESTRING(0 0,2 0))",
+			"GEOMETRYCOLLECTION(POINT(3 3),POLYGON((0 0,2 0,2 2,0 0)))",
+			"GEOMETRYCOLLECTION(POINT(1 0),POLYGON((0 0,2 0,2 2,0 0)))",
+			"GEOMETRYCOLLECTION EMPTY",
+			"GEOMETRYCOLLECTION(MULTILINESTRING((0 0,1 0),(1 0,2 0)),POINT(1 0))",
+			"GEOMETRYCOLLECTION(MULTILINESTRING((0 0,1 0),(2 0,3 0)),POINT(1 0))",
+			"POLYGON((0 0,4 0,4 4,0 4,0 0),(0 2,1 1,1 3,0 2))",
+			"POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1),(2 2,3 2,3 3,2 3,2 2))",
+			"GEOMETRYCOLLECTION(POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1),(2 2,3 2,3 3,2 3,2 2)))",
+			"POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,4 1,4 4,1 4,1 1),(2 2,3 2,3 3,2 3,2 2))",
+			"POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,4 1,4 4,1 4,1 1),(3 1,5 1,5 2,3 2,3 1))",
+			"POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1),(2 1,3 1,3 2,2 2,2 1))",
+			"GEOMETRYCOLLECTION(POLYGON((0 0,6 0,6 6,0 6,0 0),(1 1,2 1,2 2,1 2,1 1),(2 1,3 1,3 2,2 2,2 1)))",
+		}, []bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_bool.ToType(), false,
+		[]bool{true, true, false, true, true, true, false, false, true, false, true, false, true, true, true, false, true, true, true, true, false, false, false, false},
+		[]bool{false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false})
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StIsSimple)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
 }
 
 func initStIsRingTestCase() []tcTemp {
@@ -2545,15 +2904,44 @@ func TestStEnvelopeRejectInvalidInput(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
 
-	unsupportedInputs := []FunctionTestInput{
+	invalidInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]string{"LINESTRING(0 0)"},
 			[]bool{false}),
 	}
-	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StEnvelope)
+	fcTC := NewFunctionTestCase(proc, invalidInputs, expect, StEnvelope)
 	s, info := fcTC.Run()
 	require.False(t, s)
-	require.Contains(t, info, "geometry type is not supported by ST_Envelope")
+	require.Contains(t, info, "invalid linestring payload")
+}
+
+func TestStEnvelopeCollections(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{
+			"MULTIPOINT((0 0),(2 2),(1 1))",
+			"MULTIPOINT(EMPTY,1 2)",
+			"MULTILINESTRING(EMPTY,(0 0,2 3))",
+			"MULTIPOLYGON(EMPTY,((0 0,2 0,2 2,0 0)))",
+			"GEOMETRYCOLLECTION(POINT(0 0),LINESTRING(0 0,2 3))",
+			"GEOMETRYCOLLECTION EMPTY",
+			"MULTIPOINT EMPTY",
+			"POLYGON((0 0,0.0000000001 0,0.0000000001 1,0 0))",
+		}, []bool{false, false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{
+		"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+		"POINT(1 2)",
+		"POLYGON((0 0,2 0,2 3,0 3,0 0))",
+		"POLYGON((0 0,2 0,2 2,0 2,0 0))",
+		"POLYGON((0 0,2 0,2 3,0 3,0 0))",
+		"GEOMETRYCOLLECTION EMPTY",
+		"GEOMETRYCOLLECTION EMPTY",
+		"POLYGON((0 0,0.0000000001 0,0.0000000001 1,0 1,0 0))",
+	}, []bool{false, false, false, false, false, false, false, false})
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StEnvelope)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
 }
 
 func initStCentroidTestCase() []tcTemp {
@@ -2608,15 +2996,87 @@ func TestStCentroidRejectInvalidInput(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{""}, []bool{false})
 
-	unsupportedInputs := []FunctionTestInput{
+	invalidInputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_geometry.ToType(),
-			[]string{"MULTIPOINT((0 0),(1 1))"},
+			[]string{"LINESTRING(0 0)"},
 			[]bool{false}),
 	}
-	fcTC := NewFunctionTestCase(proc, unsupportedInputs, expect, StCentroid)
+	fcTC := NewFunctionTestCase(proc, invalidInputs, expect, StCentroid)
 	s, info := fcTC.Run()
 	require.False(t, s)
-	require.Contains(t, info, "geometry type is not supported by ST_Centroid")
+	require.Contains(t, info, "invalid linestring payload")
+}
+
+func TestStCentroidCollections(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_geometry.ToType(), []string{
+			"MULTIPOINT(0 0,2 2,4 0)",
+			"MULTILINESTRING((0 0,2 0),(0 10,0 11))",
+			"MULTIPOLYGON(((0 0,1 0,1 1,0 1,0 0)),((10 0,12 0,12 2,10 2,10 0)))",
+			"GEOMETRYCOLLECTION(POINT(100 100),LINESTRING(0 0,2 0),POLYGON((0 0,2 0,2 2,0 2,0 0)))",
+			"MULTIPOINT(EMPTY,1 2)",
+			"LINESTRING(1 1,1 1)",
+			"MULTILINESTRING(EMPTY,(1 1,1 1))",
+			"POINT EMPTY",
+			"GEOMETRYCOLLECTION EMPTY",
+			"GEOMETRYCOLLECTION(LINESTRING(1 1,1 1),POINT(100 100))",
+			"GEOMETRYCOLLECTION(POINT(100 100),LINESTRING(1 1,1 1))",
+			"GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(100 100),LINESTRING(1 1,1 1)),POINT(200 200))",
+		}, []bool{false, false, false, false, false, false, false, false, false, false, false, false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), false, []string{
+		"POINT(2 0.6666666666666666)",
+		"POINT(0.6666666666666666 3.5)",
+		"POINT(8.9 0.9)",
+		"POINT(1 1)",
+		"POINT(1 2)",
+		"POINT(1 1)",
+		"POINT(1 1)",
+		"",
+		"",
+		"POINT(1 1)",
+		"POINT(1 1)",
+		"POINT(1 1)",
+	}, []bool{false, false, false, false, false, false, false, true, true, false, false, false})
+	fcTC := NewFunctionTestCase(proc, inputs, expect, StCentroid)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
+}
+
+func TestDerivedGeometryRejectsMalformedCollectionMember(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	cases := []struct {
+		name       string
+		fn         fEvalFn
+		resultType types.T
+		input      string
+		errText    string
+	}{
+		{name: "is_simple", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
+		{name: "envelope", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
+		{name: "centroid", fn: StCentroid, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(POINT(1 1),LINESTRING(0 0))", errText: "invalid linestring payload"},
+		{name: "is_simple_malformed_polygon_after_false", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid polygon payload"},
+		{name: "is_simple_malformed_polygon_first", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(POLYGON((0 0,1 0,0 0)),MULTIPOINT(0 0,0 0))", errText: "invalid polygon payload"},
+		{name: "is_simple_malformed_polygon_nested", fn: StIsSimple, resultType: types.T_bool, input: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0))))", errText: "invalid polygon payload"},
+		{name: "envelope_malformed_polygon_after_false", fn: StEnvelope, resultType: types.T_geometry, input: "GEOMETRYCOLLECTION(MULTIPOINT(0 0,0 0),POLYGON((0 0,1 0,0 0)))", errText: "invalid polygon payload"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := NewFunctionTestInput(types.T_geometry.ToType(),
+				[]string{tc.input}, []bool{false})
+			var expect FunctionTestResult
+			if tc.resultType == types.T_bool {
+				expect = NewFunctionTestResult(tc.resultType.ToType(), false, []bool{false}, []bool{false})
+			} else {
+				expect = NewFunctionTestResult(tc.resultType.ToType(), false, []string{""}, []bool{false})
+			}
+			functionTest := NewFunctionTestCase(proc, []FunctionTestInput{input}, expect, tc.fn)
+			ok, info := functionTest.Run()
+			require.False(t, ok)
+			require.Contains(t, info, tc.errText)
+		})
+	}
 }
 
 func initStBoundaryTestCase() []tcTemp {
@@ -6260,6 +6720,9 @@ func TestUnhex(t *testing.T) {
 
 // ToBase64
 func initToBase64TestCase() []tcTemp {
+	line76 := strings.Repeat("YWFh", 19)
+	line76B := strings.Repeat("YmJi", 19)
+	line56 := strings.Repeat("YWFh", 18) + "YWE="
 	regularCases := []struct {
 		info  string
 		data  []string
@@ -6269,6 +6732,33 @@ func initToBase64TestCase() []tcTemp {
 			info:  "test encode - string to base64",
 			data:  []string{"", "abc", "a\nb", `a\nb`, "a\"b"},
 			wants: []string{"", "YWJj", "YQpi", "YVxuYg==", "YSJi"},
+		},
+		{
+			info: "test base64 line breaks at 76 encoded characters",
+			data: []string{
+				strings.Repeat("a", 56),
+				strings.Repeat("a", 57),
+				strings.Repeat("a", 58),
+				strings.Repeat("a", 59),
+				strings.Repeat("a", 60),
+				strings.Repeat("a", 113),
+				strings.Repeat("a", 114),
+				strings.Repeat("a", 115),
+				strings.Repeat("a", 57) + strings.Repeat("b", 57),
+				strings.Repeat("a", 1000),
+			},
+			wants: []string{
+				line56,
+				line76,
+				line76 + "\nYQ==",
+				line76 + "\nYWE=",
+				line76 + "\nYWFh",
+				line76 + "\n" + line56,
+				line76 + "\n" + line76,
+				line76 + "\n" + line76 + "\nYQ==",
+				line76 + "\n" + line76B,
+				strings.Repeat(line76+"\n", 17) + strings.Repeat("YWFh", 10) + "YQ==",
+			},
 		},
 	}
 
@@ -6297,6 +6787,25 @@ func TestToBase64(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestToBase64BinaryWrapBoundary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(
+		types.T_varbinary.ToType(),
+		[]string{string(bytes.Repeat([]byte{0}, 58))},
+		[]bool{false},
+	)
+	want := NewFunctionTestResult(
+		types.T_text.ToType(),
+		false,
+		[]string{strings.Repeat("A", 76) + "\nAA=="},
+		[]bool{false},
+	)
+
+	fcTC := NewFunctionTestCase(proc, []FunctionTestInput{input}, want, ToBase64)
+	s, info := fcTC.Run()
+	require.True(t, s, fmt.Sprintf("binary boundary case failed: %s", info))
 }
 
 // FromBase64
@@ -9092,21 +9601,29 @@ func newUserLevelLockTestProcess(t *testing.T, ls lockservice.LockService, accou
 
 type userLevelLockTestState struct {
 	sync.Mutex
-	locks map[string]string
+	locks        map[string]string
+	externalTxns map[string]struct{}
 }
 
 type userLevelLockTestService struct {
-	id               string
-	state            *userLevelLockTestState
-	lockErrAfterHold error
-	unlockErr        error
-	unlockErrOnce    atomic.Bool
-	unlockErrByTxnID map[string]error
-	blockUnlock      atomic.Bool
-	unlockStarted    chan struct{}
-	unlockResume     chan struct{}
-	unlockMu         sync.Mutex
-	unlockedTxnIDs   [][]byte
+	id                string
+	state             *userLevelLockTestState
+	lockErrAfterHold  error
+	lockTimeoutChecks chan userLevelLockTimeoutCheck
+	unlockErr         error
+	unlockErrOnce     atomic.Bool
+	unlockErrByTxnID  map[string]error
+	blockUnlock       atomic.Bool
+	unlockStarted     chan struct{}
+	unlockResume      chan struct{}
+	unlockMu          sync.Mutex
+	unlockedTxnIDs    [][]byte
+}
+
+type userLevelLockTimeoutCheck struct {
+	policy      lockpb.WaitPolicy
+	hasDeadline bool
+	deadlineIn  time.Duration
 }
 
 type userLevelLockNotSupportedService struct {
@@ -9117,12 +9634,45 @@ func (s *userLevelLockNotSupportedService) GetLockHolder(context.Context, uint64
 	return lockpb.WaitTxn{}, false, moerr.NewNotSupportedNoCtx("GetLockHolder")
 }
 
+func (s *userLevelLockNotSupportedService) RegisterExternalTxn(txnID []byte) error {
+	registry, ok := s.LockService.(lockservice.ExternalTxnLivenessRegistry)
+	if !ok {
+		return moerr.NewNotSupportedNoCtx("external transaction liveness")
+	}
+	return registry.RegisterExternalTxn(txnID)
+}
+
+func (s *userLevelLockNotSupportedService) UnregisterExternalTxn(txnID []byte) {
+	if registry, ok := s.LockService.(lockservice.ExternalTxnLivenessRegistry); ok {
+		registry.UnregisterExternalTxn(txnID)
+	}
+}
+
 func (s *userLevelLockTestService) GetServiceID() string {
 	return s.id
 }
 
 func (s *userLevelLockTestService) GetConfig() lockservice.Config {
 	return lockservice.Config{ServiceID: s.id}
+}
+
+func (s *userLevelLockTestService) RegisterExternalTxn(txnID []byte) error {
+	if len(txnID) == 0 {
+		return moerr.NewInternalErrorNoCtx("cannot register an empty external transaction ID")
+	}
+	s.state.Lock()
+	if s.state.externalTxns == nil {
+		s.state.externalTxns = make(map[string]struct{})
+	}
+	s.state.externalTxns[string(txnID)] = struct{}{}
+	s.state.Unlock()
+	return nil
+}
+
+func (s *userLevelLockTestService) UnregisterExternalTxn(txnID []byte) {
+	s.state.Lock()
+	delete(s.state.externalTxns, string(txnID))
+	s.state.Unlock()
 }
 
 func (s *userLevelLockTestService) Lock(ctx context.Context, tableID uint64, rows [][]byte, txnID []byte, options lockpb.LockOptions) (lockpb.Result, error) {
@@ -9141,6 +9691,18 @@ func (s *userLevelLockTestService) Lock(ctx context.Context, tableID uint64, row
 		}
 		s.state.Unlock()
 
+		if s.lockTimeoutChecks != nil {
+			deadline, hasDeadline := ctx.Deadline()
+			check := userLevelLockTimeoutCheck{policy: options.Policy, hasDeadline: hasDeadline}
+			if hasDeadline {
+				check.deadlineIn = time.Until(deadline)
+			}
+			select {
+			case s.lockTimeoutChecks <- check:
+			default:
+			}
+			return lockpb.Result{}, lockservice.ErrLockConflict
+		}
 		if options.Policy == lockpb.WaitPolicy_FastFail {
 			return lockpb.Result{}, lockservice.ErrLockConflict
 		}
@@ -9262,6 +9824,14 @@ func runUserLevelLockTest(t *testing.T, fn func([]lockservice.LockService)) {
 	})
 }
 
+func requireUserLevelLockTxnRegistered(t *testing.T, state *userLevelLockTestState, txnID []byte, want bool) {
+	t.Helper()
+	state.Lock()
+	defer state.Unlock()
+	_, registered := state.externalTxns[string(txnID)]
+	require.Equal(t, want, registered, "external liveness registration for txn %q", txnID)
+}
+
 func TestUserLevelLockCleanupTestServiceUnblocksInFlightUnlock(t *testing.T) {
 	service := &userLevelLockTestService{
 		id:            "user-level-lock-unblock",
@@ -9291,11 +9861,12 @@ func TestUserLevelLockCleanupTestServiceUnblocksInFlightUnlock(t *testing.T) {
 	}
 }
 
-func requireUserLevelLockTxnUnlocked(t *testing.T, service *userLevelLockTestService, txnID []byte) {
+func requireUserLevelLockProbeTxnUnlocked(t *testing.T, service *userLevelLockTestService, owner string, connID uint64, name, probeType string) {
 	t.Helper()
+	prefix := userLevelLockProbeTxnIDPrefix(owner, connID, name, probeType)
 	requireUserLevelLockTxnUnlockedFunc(t, service, func(unlocked []byte) bool {
-		return bytes.Equal(unlocked, txnID)
-	}, "txnID=%q", string(txnID))
+		return bytes.HasPrefix(unlocked, prefix)
+	}, "owner=%q connID=%d name=%q probeType=%q", owner, connID, name, probeType)
 }
 
 func requireUserLevelLockTxnUnlockedFunc(t *testing.T, service *userLevelLockTestService, match func([]byte) bool, msg string, args ...any) {
@@ -9324,9 +9895,14 @@ func requireUserLevelLockTxnUnlockedForLock(t *testing.T, service *userLevelLock
 
 func TestUserLevelLockConnectionIDFromProbeTxnID(t *testing.T) {
 	txnID := userLevelLockProbeTxnID("owner-1", 1001, "probe_lock", "is_free")
+	anotherTxnID := userLevelLockProbeTxnID("owner-1", 1001, "probe_lock", "is_free")
 	connID, ok := userLevelLockConnectionIDFromTxnID(txnID)
 	require.False(t, ok)
 	require.Equal(t, uint64(0), connID)
+	require.NotEqual(t, txnID, anotherTxnID,
+		"every probe attempt needs its own ID so delayed cleanup cannot affect a later attempt")
+	require.True(t, bytes.HasPrefix(txnID,
+		userLevelLockProbeTxnIDPrefix("owner-1", 1001, "probe_lock", "is_free")))
 }
 
 func TestUserLevelLockFunctions(t *testing.T) {
@@ -9380,15 +9956,6 @@ func TestUserLevelLockFunctions(t *testing.T) {
 				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}),
 				fn:     IsFreeLock,
 			},
-			{
-				name: "get lock returns null for null name",
-				inputs: []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
-					NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{false}),
-				},
-				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
-				fn:     GetLock,
-			},
 		}
 
 		for _, tc := range cases {
@@ -9412,27 +9979,36 @@ func TestUserLevelLockFunctionNullInputs(t *testing.T) {
 			fn     fEvalFn
 		}{
 			{
-				name: "release lock returns null for null name",
+				name: "get lock rejects null name before null timeout",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
+					NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{true}),
+				},
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
+				fn:     GetLock,
+			},
+			{
+				name: "release lock rejects null name",
 				inputs: []FunctionTestInput{
 					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
 				},
-				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
 				fn:     ReleaseLock,
 			},
 			{
-				name: "is free lock returns null for null name",
+				name: "is free lock rejects null name",
 				inputs: []FunctionTestInput{
 					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
 				},
-				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+				expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}),
 				fn:     IsFreeLock,
 			},
 			{
-				name: "is used lock returns null for null name",
+				name: "is used lock rejects null name",
 				inputs: []FunctionTestInput{
 					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{true}),
 				},
-				expect: NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0}, []bool{true}),
+				expect: NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{0}, []bool{false}),
 				fn:     IsUsedLock,
 			},
 		}
@@ -9440,10 +10016,367 @@ func TestUserLevelLockFunctionNullInputs(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, tc.fn)
-				s, info := fcTC.Run()
-				require.True(t, s, info)
+				_, err := fcTC.DebugRun()
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrUserLockWrongName), err)
+				require.Equal(t, uint16(moerr.ER_USER_LOCK_WRONG_NAME), err.(*moerr.Error).MySQLCode())
+				require.Equal(t, "Incorrect user-level lock name 'NULL'.", err.Error())
 			})
 		}
+		require.Empty(t, UserLevelLocksForMigration(proc), "invalid NULL names must not create locks")
+	})
+}
+
+func TestUserLevelLockTimeoutConversion(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout float64
+		want    uint32
+		wantErr bool
+	}{
+		{name: "zero", timeout: 0, want: 0},
+		{name: "fraction rounds to zero", timeout: 0.2, want: 0},
+		{name: "half ties to even zero", timeout: 0.5, want: 0},
+		{name: "fraction rounds up", timeout: 0.8, want: 1},
+		{name: "fraction above one", timeout: 1.2, want: 1},
+		{name: "half ties to even two", timeout: 1.5, want: 2},
+		{name: "fraction rounds to two", timeout: 1.8, want: 2},
+		{name: "half ties to even two from odd", timeout: 2.5, want: 2},
+		{name: "negative fraction rounds to zero", timeout: -0.2, want: 0},
+		{name: "negative half ties to zero", timeout: -0.5, want: 0},
+		{name: "negative rounded timeout caps", timeout: -0.6, want: maxUserLevelLockTimeoutSeconds},
+		{name: "negative fraction caps", timeout: -1.2, want: maxUserLevelLockTimeoutSeconds},
+		{name: "positive timeout caps", timeout: float64(maxUserLevelLockTimeoutSeconds) + 10, want: maxUserLevelLockTimeoutSeconds},
+		{name: "large positive timeout caps", timeout: math.MaxFloat64, want: maxUserLevelLockTimeoutSeconds},
+		{name: "large negative timeout caps", timeout: -math.MaxFloat64, want: maxUserLevelLockTimeoutSeconds},
+		{name: "positive infinity caps", timeout: math.Inf(1), want: maxUserLevelLockTimeoutSeconds},
+		{name: "negative infinity caps", timeout: math.Inf(-1), want: maxUserLevelLockTimeoutSeconds},
+		{name: "NaN is rejected", timeout: math.NaN(), wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := userLevelLockTimeoutSeconds(test.timeout)
+			if test.wantErr {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestUserLevelLockDecimalTimeoutConversion(t *testing.T) {
+	decimal64, err := newDecimal64LockTimeoutConverter(2)
+	require.NoError(t, err)
+	for _, test := range []struct {
+		value string
+		want  uint32
+	}{
+		{value: "2.49", want: 2},
+		{value: "2.50", want: 3}, // DECIMAL uses MySQL's half-up conversion.
+		{value: "-0.40", want: 0},
+		{value: "-0.50", want: maxUserLevelLockTimeoutSeconds},
+		{value: "2147483647.49", want: maxUserLevelLockTimeoutSeconds},
+	} {
+		value, err := types.ParseDecimal64(test.value, 18, 2)
+		require.NoError(t, err)
+		got, err := decimal64(value)
+		require.NoError(t, err)
+		require.Equal(t, test.want, got, test.value)
+	}
+
+	decimal128, err := newDecimal128LockTimeoutConverter(20)
+	require.NoError(t, err)
+	for _, test := range []struct {
+		value string
+		want  uint32
+	}{
+		{value: "0.49999999999999999999", want: 0},
+		{value: "0.50000000000000000000", want: 1},
+	} {
+		value, err := types.ParseDecimal128(test.value, 38, 20)
+		require.NoError(t, err)
+		got, err := decimal128(value)
+		require.NoError(t, err)
+		require.Equal(t, test.want, got, test.value)
+	}
+
+	decimal256, err := newDecimal256LockTimeoutConverter(20)
+	require.NoError(t, err)
+	for _, test := range []struct {
+		value string
+		want  uint32
+	}{
+		{value: "0.49999999999999999999", want: 0},
+		{value: "0.50000000000000000000", want: 1},
+		{value: "2147483647.50000000000000000000", want: maxUserLevelLockTimeoutSeconds},
+	} {
+		value, err := types.ParseDecimal256(test.value, 65, 20)
+		require.NoError(t, err)
+		got, err := decimal256(value)
+		require.NoError(t, err)
+		require.Equal(t, test.want, got, test.value)
+	}
+
+	_, err = newDecimal64LockTimeoutConverter(19)
+	require.Error(t, err, "invalid decimal scales fail before any lock operation")
+}
+
+func TestGetLockNullTimeoutMeansFastFail(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
+		proc2 := newUserLevelLockTestProcess(t, services[1], "acc")
+		lockName := "null_timeout_lock"
+
+		runGetLock := func(proc *process.Process, want int64) {
+			t.Helper()
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{lockName}, []bool{false}),
+				NewFunctionTestInput(types.T_float64.ToType(), []float64{0}, []bool{true}),
+			}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{want}, []bool{false}), GetLock)
+			succeeded, info := fc.Run()
+			require.True(t, succeeded, info)
+		}
+
+		runGetLock(proc1, 1) // a NULL timeout acquires a free lock
+		runGetLock(proc1, 1) // same-session acquisition remains reentrant
+		runGetLock(proc2, 0) // another session fails immediately
+		owner := userLevelLockOwner(proc1)
+		require.Equal(t, uint64(2), userLevelLockRefCount(owner, lockName))
+
+		for range 2 {
+			value, isNull, err := releaseUserLevelLock(lockName, proc1)
+			require.NoError(t, err)
+			require.False(t, isNull)
+			require.Equal(t, int64(1), value)
+		}
+	})
+}
+
+func TestUserLevelLockLivenessTracksFailedAndSuccessfulCleanup(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		holder := newUserLevelLockTestProcess(t, services[0], "acc")
+		contender := newUserLevelLockTestProcess(t, services[1], "acc")
+		state := services[0].(*userLevelLockTestService).state
+		service := services[0].(*userLevelLockTestService)
+
+		value, err := getUserLevelLock("liveness_cleanup", 0, holder)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), value)
+		held := UserLevelLocksForMigration(holder)
+		require.Len(t, held, 1)
+		require.Len(t, held[0].TxnIDs, 1)
+		holderTxnID := held[0].TxnIDs[0]
+		requireUserLevelLockTxnRegistered(t, state, holderTxnID, true)
+
+		// Failed GET_LOCK and probe attempts must clean their temporary
+		// registrations without disturbing the live holder registration.
+		value, err = getUserLevelLock("liveness_cleanup", 0, contender)
+		require.NoError(t, err)
+		require.Equal(t, int64(0), value)
+		_, isNull, err := releaseUserLevelLock("liveness_cleanup", contender)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		_, err = isUserLevelLockFree("liveness_cleanup", contender)
+		require.NoError(t, err)
+		requireUserLevelLockTxnRegistered(t, state, holderTxnID, true)
+		state.Lock()
+		require.Len(t, state.externalTxns, 1)
+		state.Unlock()
+
+		// A failed unlock must keep liveness registered so orphan recovery
+		// cannot release a lock whose cleanup is still being retried.
+		service.unlockErr = moerr.NewInternalErrorNoCtx("test unlock failure")
+		_, _, err = releaseUserLevelLock("liveness_cleanup", holder)
+		require.Error(t, err)
+		requireUserLevelLockTxnRegistered(t, state, holderTxnID, true)
+
+		service.unlockErr = nil
+		value, isNull, err = releaseUserLevelLock("liveness_cleanup", holder)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), value)
+		requireUserLevelLockTxnRegistered(t, state, holderTxnID, false)
+
+		// Successful RELEASE_LOCK and IS_FREE_LOCK probes also unregister their
+		// short-lived transaction IDs.
+		_, isNull, err = releaseUserLevelLock("liveness_free", holder)
+		require.NoError(t, err)
+		require.True(t, isNull)
+		_, err = isUserLevelLockFree("liveness_free", holder)
+		require.NoError(t, err)
+		state.Lock()
+		require.Empty(t, state.externalTxns)
+		state.Unlock()
+	})
+}
+
+func TestUserLevelLockLivenessFailedAcquisitionCleanup(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		service := services[0].(*userLevelLockTestService)
+		service.lockErrAfterHold = moerr.NewInternalErrorNoCtx("test lock failure after hold")
+
+		_, err := getUserLevelLock("liveness_failed_get", 0, proc)
+		require.Error(t, err)
+		service.state.Lock()
+		require.Empty(t, service.state.externalTxns)
+		require.Empty(t, service.state.locks)
+		service.state.Unlock()
+	})
+}
+
+func TestGetLockDecimalTimeoutUsesDecimalRounding(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		holder := newUserLevelLockTestProcess(t, services[0], "acc")
+		contender := newUserLevelLockTestProcess(t, services[1], "acc")
+		service := services[1].(*userLevelLockTestService)
+		service.lockTimeoutChecks = make(chan userLevelLockTimeoutCheck, 2)
+		const lockName = "timeout_rounding_domains"
+
+		value, err := getUserLevelLock(lockName, 0, holder)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), value)
+
+		decimalHalf, err := types.ParseDecimal64("0.5", 10, 1)
+		require.NoError(t, err)
+		decimalType := types.T_decimal64.ToType()
+		decimalType.Width = 10
+		decimalType.Scale = 1
+		decimalCall := NewFunctionTestCase(contender, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{lockName}, []bool{false}),
+			NewFunctionTestInput(decimalType, []types.Decimal64{decimalHalf}, []bool{false}),
+		}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}), GetLock)
+		succeeded, info := decimalCall.Run()
+		require.True(t, succeeded, info)
+		decimalCheck := <-service.lockTimeoutChecks
+		require.Equal(t, lockpb.WaitPolicy_Wait, decimalCheck.policy)
+		require.True(t, decimalCheck.hasDeadline)
+		require.Greater(t, decimalCheck.deadlineIn, time.Duration(0))
+		require.LessOrEqual(t, decimalCheck.deadlineIn, time.Second)
+
+		doubleCall := NewFunctionTestCase(contender, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{lockName}, []bool{false}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0.5}, []bool{false}),
+		}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{false}), GetLock)
+		succeeded, info = doubleCall.Run()
+		require.True(t, succeeded, info)
+		doubleCheck := <-service.lockTimeoutChecks
+		require.Equal(t, lockpb.WaitPolicy_FastFail, doubleCheck.policy)
+		require.False(t, doubleCheck.hasDeadline)
+
+		released, isNull, err := releaseUserLevelLock(lockName, holder)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), released)
+	})
+}
+
+func TestGetLockSupportsAllDecimalTimeoutWidths(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		decimal64, err := types.ParseDecimal64("0.5", 10, 1)
+		require.NoError(t, err)
+		decimal128, err := types.ParseDecimal128("0.5", 20, 1)
+		require.NoError(t, err)
+		decimal256, err := types.ParseDecimal256("0.5", 40, 1)
+		require.NoError(t, err)
+		for _, test := range []struct {
+			name   string
+			inputs []FunctionTestInput
+		}{
+			{
+				name: "decimal64",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{false}),
+					NewFunctionTestInput(decimalLockType(types.T_decimal64, 10, 1), []types.Decimal64{decimal64}, []bool{false}),
+				},
+			},
+			{
+				name: "decimal128",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{false}),
+					NewFunctionTestInput(decimalLockType(types.T_decimal128, 20, 1), []types.Decimal128{decimal128}, []bool{false}),
+				},
+			},
+			{
+				name: "decimal256",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, []bool{false}),
+					NewFunctionTestInput(decimalLockType(types.T_decimal256, 40, 1), []types.Decimal256{decimal256}, []bool{false}),
+				},
+			},
+		} {
+			lockName := "get_lock_" + test.name
+			test.inputs[0].values = []string{lockName}
+			call := NewFunctionTestCase(proc, test.inputs,
+				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1}, []bool{false}), GetLock)
+			succeeded, info := call.Run()
+			require.True(t, succeeded, info)
+			released, isNull, err := releaseUserLevelLock(lockName, proc)
+			require.NoError(t, err)
+			require.False(t, isNull)
+			require.Equal(t, int64(1), released)
+		}
+	})
+}
+
+func decimalLockType(oid types.T, width, scale int32) types.Type {
+	typ := oid.ToType()
+	typ.Width = width
+	typ.Scale = scale
+	return typ
+}
+
+func TestUserLevelLockBatchValidationPreventsPartialEffects(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+
+		getLock := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"batch_get_first", ""}, []bool{false, true}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 0}, []bool{false, false}),
+		}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{false, false}), GetLock)
+		_, err := getLock.DebugRun()
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrUserLockWrongName), err)
+		require.Empty(t, UserLevelLocksForMigration(proc))
+		free, err := isUserLevelLockFree("batch_get_first", proc)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), free)
+
+		const heldName = "batch_release_first"
+		value, err := getUserLevelLock(heldName, 0, proc)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), value)
+		release := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{heldName, ""}, []bool{false, true}),
+		}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0}, []bool{false, false}), ReleaseLock)
+		_, err = release.DebugRun()
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrUserLockWrongName), err)
+		require.Equal(t, uint64(1), userLevelLockRefCount(userLevelLockOwner(proc), heldName))
+		value, isNull, err := releaseUserLevelLock(heldName, proc)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), value)
+	})
+}
+
+func TestUserLevelLockBatchSelectionSkipsNullName(t *testing.T) {
+	runUserLevelLockTest(t, func(services []lockservice.LockService) {
+		proc := newUserLevelLockTestProcess(t, services[0], "acc")
+		fc := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"selected_lock", ""}, []bool{false, true}),
+			NewFunctionTestInput(types.T_float64.ToType(), []float64{0, math.NaN()}, []bool{false, false}),
+		}, NewFunctionTestResult(types.T_int64.ToType(), false, []int64{1, 0}, []bool{false, true}), GetLock)
+		fc.selectList = &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}
+		succeeded, info := fc.Run()
+		require.True(t, succeeded, info)
+		require.Equal(t, uint64(1), userLevelLockRefCount(userLevelLockOwner(proc), "selected_lock"))
+		value, isNull, err := releaseUserLevelLock("selected_lock", proc)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, int64(1), value)
 	})
 }
 
@@ -9510,6 +10443,8 @@ func TestUserLevelLockTimeoutAndCancellation(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, int64(1), v)
 
+		// MySQL converts DOUBLE seconds with round-to-even; this sub-second
+		// timeout therefore uses the zero-second FastFail path.
 		v, err = getUserLevelLock("timeout_lock", 0.05, proc2)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), v)
@@ -10151,7 +11086,7 @@ func TestGetLockTimeoutTransfersExactTxnCleanup(t *testing.T) {
 		contender := newUserLevelLockTestProcess(t, services[1], "acc")
 		lockName := "get_lock_timeout_cleanup"
 
-		v, err := getUserLevelLock(lockName, 0.01, holder)
+		v, err := getUserLevelLock(lockName, 1, holder)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), v)
 		require.Empty(t, UserLevelLocksForMigration(holder))
@@ -10194,12 +11129,12 @@ func TestFailedFastFailUserLevelLockAttemptsAreUnlocked(t *testing.T) {
 		require.NoError(t, err)
 		require.False(t, isNull)
 		require.Equal(t, int64(0), v)
-		requireUserLevelLockTxnUnlocked(t, service, userLevelLockProbeTxnID(owner, connID, lockName, "release"))
+		requireUserLevelLockProbeTxnUnlocked(t, service, owner, connID, lockName, "release")
 
 		v, err = isUserLevelLockFree(lockName, contender)
 		require.NoError(t, err)
 		require.Equal(t, int64(0), v)
-		requireUserLevelLockTxnUnlocked(t, service, userLevelLockProbeTxnID(owner, connID, lockName, "is_free"))
+		requireUserLevelLockProbeTxnUnlocked(t, service, owner, connID, lockName, "is_free")
 	})
 }
 
@@ -10221,11 +11156,11 @@ func TestFailedUserLevelLockAttemptsCleanupUnexpectedErrors(t *testing.T) {
 		_, isNull, err := releaseUserLevelLock("release_"+lockName, holder)
 		require.ErrorIs(t, err, lockErr)
 		require.False(t, isNull)
-		requireUserLevelLockTxnUnlocked(t, service, userLevelLockProbeTxnID(owner, connID, "release_"+lockName, "release"))
+		requireUserLevelLockProbeTxnUnlocked(t, service, owner, connID, "release_"+lockName, "release")
 
 		_, err = isUserLevelLockFree("free_"+lockName, holder)
 		require.ErrorIs(t, err, lockErr)
-		requireUserLevelLockTxnUnlocked(t, service, userLevelLockProbeTxnID(owner, connID, "free_"+lockName, "is_free"))
+		requireUserLevelLockProbeTxnUnlocked(t, service, owner, connID, "free_"+lockName, "is_free")
 	})
 }
 
@@ -11068,7 +12003,7 @@ func TestSuccessfulProbeCleanupRetainsOwnershipAfterSaturatedHandoff(t *testing.
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		err := unlockUserLevelLockProbe(ctx, service, owner, connID, name, "release")
+		err := unlockUserLevelLockProbe(ctx, service, owner, connID, name, "release", txnID)
 		require.Error(t, err)
 		requireUserLevelLockCleanupOwned(t, key)
 
@@ -11426,13 +12361,16 @@ func TestReleaseAndIsFreeProbeUnlocksHonorCancellationAndCleanupAfterRecovery(t 
 				if tc.name == "is_free_lock_probe" {
 					probeType = "is_free"
 				}
-				txnID := userLevelLockProbeTxnID(owner, connID, lockName, probeType)
-				cleanupKey := userLevelLockFailedAttemptCleanupKey(service, owner, connID, lockName, "probe:"+probeType, txnID)
 				err := tc.fn(lockName, proc)
 				require.ErrorIs(t, err, context.Canceled)
+				state := service.state
+				state.Lock()
+				txnID := []byte(state.locks[string(userLevelLockRow(proc, lockName))])
+				state.Unlock()
+				require.NotEmpty(t, txnID, "canceled probe must retain its locked txn until cleanup retries")
+				cleanupKey := userLevelLockFailedAttemptCleanupKey(service, owner, connID, lockName, "probe:"+probeType, txnID)
 				requireUserLevelLockCleanupOwned(t, cleanupKey)
 
-				state := service.state
 				state.Lock()
 				require.NotEmpty(t, state.locks[string(userLevelLockRow(proc, lockName))])
 				state.Unlock()
@@ -11620,13 +12558,13 @@ func TestUserLevelLockEmptyName(t *testing.T) {
 		proc1 := newUserLevelLockTestProcess(t, services[0], "acc")
 
 		_, err := getUserLevelLock("", 0, proc1)
-		require.Error(t, err, "GET_LOCK with empty name should return error")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrUserLockWrongName), err)
 
 		_, _, err = releaseUserLevelLock("", proc1)
-		require.Error(t, err, "RELEASE_LOCK with empty name should return error")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrUserLockWrongName), err)
 
 		_, err = isUserLevelLockFree("", proc1)
-		require.Error(t, err, "IS_FREE_LOCK with empty name should return error")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrUserLockWrongName), err)
 	})
 }
 
@@ -11636,16 +12574,19 @@ func TestUserLevelLockNameContainsNUL(t *testing.T) {
 		name := "bad\x00lock"
 
 		_, err := getUserLevelLock(name, 0, proc1)
-		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrUserLockWrongName), err)
 
 		_, _, err = releaseUserLevelLock(name, proc1)
-		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrUserLockWrongName), err)
 
 		_, err = isUserLevelLockFree(name, proc1)
-		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrUserLockWrongName), err)
 
 		_, _, err = isUserLevelLockUsed(name, proc1)
-		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrUserLockWrongName), err)
+
+		_, err = getUserLevelLock(string([]byte{0xff}), 0, proc1)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrUserLockWrongName), err)
 	})
 }
 

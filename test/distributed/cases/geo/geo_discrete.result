@@ -16,3 +16,24 @@ fd_diverge
 select st_hausdorffdistance(st_geomfromtext('MULTIPOINT(0 0, 0 3)'), st_geomfromtext('MULTIPOINT(4 0, 4 3)')) as hd_points;
 hd_points
 4.0
+select st_hausdorffdistance(st_geomfromtext('LINESTRING(0 0,1 4,4 4)'), st_geomfromtext('LINESTRING(0 0,4 0,4 4)')) as hd_forward,
+st_hausdorffdistance(st_geomfromtext('LINESTRING(0 0,4 0,4 4)'), st_geomfromtext('LINESTRING(0 0,1 4,4 4)')) as hd_reverse,
+st_hausdorffdistance(st_geomfromtext('LINESTRING(0 0,0 5,5 5)'), st_geomfromtext('LINESTRING(0 1,0 6,3 3,5 6)')) as hd_manual,
+st_frechetdistance(st_geomfromtext('LINESTRING(0 0,0 5,5 5)'), st_geomfromtext('LINESTRING(0 1,0 6,3 3,5 6)')) as fd_control,
+st_hausdorffdistance(st_geomfromtext('POINT(0 0)'), st_geomfromtext('MULTIPOINT(0 0,3 4)')) as hd_point_to_multipoint,
+st_hausdorffdistance(st_geomfromtext('MULTIPOINT(0 0,3 4)'), st_geomfromtext('POINT(0 0)')) as hd_multipoint_to_point;
+hd_forward    hd_reverse    hd_manual    fd_control    hd_point_to_multipoint    hd_multipoint_to_point
+3.0    4.0    1.0    2.8284271247461903    0.0    5.0
+drop table if exists hausdorff_pairs;
+create table hausdorff_pairs(id int, g geometry, g32 geometry32);
+insert into hausdorff_pairs values
+(1, st_geomfromtext('LINESTRING(0 0,1 4,4 4)'), st_geomfromtext('LINESTRING(0 0,1 4,4 4)')),
+(2, st_geomfromtext('LINESTRING(0 0,4 0,4 4)'), st_geomfromtext('LINESTRING(0 0,4 0,4 4)'));
+select st_hausdorffdistance(a.g, b.g) as hd_forward,
+st_hausdorffdistance(b.g, a.g) as hd_reverse,
+st_hausdorffdistance(a.g32, b.g32) as hd32_forward,
+st_hausdorffdistance(b.g32, a.g32) as hd32_reverse
+from hausdorff_pairs a, hausdorff_pairs b where a.id = 1 and b.id = 2;
+hd_forward    hd_reverse    hd32_forward    hd32_reverse
+3.0    4.0    3.0    4.0
+drop table hausdorff_pairs;
