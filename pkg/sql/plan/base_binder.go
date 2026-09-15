@@ -10179,6 +10179,12 @@ func bindStringIntervalExpr(ctx context.Context, expr *Expr, intervalType types.
 	if err != nil {
 		return nil, types.IntervalTypeInvalid, false, err
 	}
+	if normalizedType == types.Second {
+		switch intervalType {
+		case types.Minute_Second, types.Hour_Second, types.Day_Second:
+			normalizedType = types.MicroSecond
+		}
+	}
 	numberExpr, err := BindFuncExprImplByPlanExpr(ctx, "to_interval", []*Expr{
 		expr,
 		makePlan2Int64ConstExprWithType(int64(intervalType)),

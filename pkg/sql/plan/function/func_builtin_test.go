@@ -687,7 +687,7 @@ func TestToIntervalNormalizesDynamicStrings(t *testing.T) {
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"1 02:03:04", ""}, []bool{false, true}),
 				NewFunctionTestConstInput(types.T_int64.ToType(), []int64{int64(types.Day_Second)}, []bool{false}),
 			},
-			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{93784, 0}, []bool{false, true}),
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{93784 * types.MicroSecsPerSec, 0}, []bool{false, true}),
 			ToInterval,
 		)
 		ok, info := tc.Run()

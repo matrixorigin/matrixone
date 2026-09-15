@@ -11756,8 +11756,8 @@ func initExtractTestCase() []tcTemp {
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"year", "year", "year", "year"}, []bool{false, false, false, false}),
 				NewFunctionTestInput(types.T_date.ToType(), MakeDates("2020-01-01", "2021-02-03", "2024-03-04", ""), []bool{false, false, false, true}),
 			},
-			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-				[]uint32{2020, 2021, 2024, 1},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{2020, 2021, 2024, 1},
 				[]bool{false, false, false, true}),
 			//TODO: Comments migrated from original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract_test.go#L39
 			// XXX why?  This seems to be wrong.  ExtractFromDate "" should error out,
@@ -11772,8 +11772,8 @@ func initExtractTestCase() []tcTemp {
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"month", "month", "month", "month"}, []bool{false, false, false, false}),
 				NewFunctionTestInput(types.T_date.ToType(), MakeDates("2020-01-01", "2021-02-03", "2024-03-04", ""), []bool{false, false, false, true}),
 			},
-			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-				[]uint32{1, 2, 3, 1},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 2, 3, 1},
 				[]bool{false, false, false, true}),
 			//TODO: Comments migrated from original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract_test.go#L39
 			// XXX same as above.
@@ -11786,8 +11786,8 @@ func initExtractTestCase() []tcTemp {
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"day", "day", "day", "day"}, []bool{}),
 				NewFunctionTestInput(types.T_date.ToType(), MakeDates("2020-01-01", "2021-02-03", "2024-03-04", ""), []bool{false, false, false, true}),
 			},
-			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-				[]uint32{1, 3, 4, 1},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 3, 4, 1},
 				[]bool{false, false, false, true}),
 			//TODO: Comments migrated from original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract_test.go#L39
 			// XXX Same
@@ -11800,8 +11800,8 @@ func initExtractTestCase() []tcTemp {
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"year_month", "year_month", "year_month", "year_month"}, []bool{}),
 				NewFunctionTestInput(types.T_date.ToType(), MakeDates("2020-01-01", "2021-02-03", "2024-03-04", ""), []bool{false, false, false, true}),
 			},
-			expect: NewFunctionTestResult(types.T_uint32.ToType(), false,
-				[]uint32{202001, 202102, 202403, 101},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{202001, 202102, 202403, 101},
 				[]bool{false, false, false, true}),
 			//TODO: Comments migrated from original code: https://github.com/m-schen/matrixone/blob/0c480ca11b6302de26789f916a3e2faca7f79d47/pkg/sql/plan/function/builtin/binary/extract_test.go#L39
 			// XXX same
@@ -11814,8 +11814,8 @@ func initExtractTestCase() []tcTemp {
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"year", "year", "year", "year"}, []bool{}),
 				NewFunctionTestInput(types.T_datetime.ToType(), MakeDateTimes("2020-01-01 11:12:13.0006", "2006-01-02 15:03:04.1234", "2024-03-04 12:13:14", ""), []bool{false, false, false, true}),
 			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"2020", "2006", "2024", ""},
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{2020, 2006, 2024, 0},
 				[]bool{false, false, false, true}),
 		},
 	}
@@ -11854,7 +11854,7 @@ func TestExtractWeekZeroTemporalsReturnZero(t *testing.T) {
 				unit,
 				NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil),
 			},
-			expect: NewFunctionTestResult(types.T_uint32.ToType(), false, []uint32{0}, nil),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, nil),
 			fn:     ExtractFromDate,
 		},
 		{
@@ -11863,7 +11863,7 @@ func TestExtractWeekZeroTemporalsReturnZero(t *testing.T) {
 				unit,
 				NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil),
 			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"00"}, nil),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, nil),
 			fn:     ExtractFromDatetime,
 		},
 		{
@@ -11872,7 +11872,7 @@ func TestExtractWeekZeroTemporalsReturnZero(t *testing.T) {
 				unit,
 				NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp}, nil),
 			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"00"}, nil),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, nil),
 			fn:     ExtractFromTimestamp,
 		},
 		{
@@ -11881,7 +11881,7 @@ func TestExtractWeekZeroTemporalsReturnZero(t *testing.T) {
 				unit,
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"0000-00-00 00:00:00"}, nil),
 			},
-			expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"00"}, nil),
+			expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, nil),
 			fn:     ExtractFromVarchar,
 		},
 	} {
@@ -11897,12 +11897,12 @@ func TestExtractFromVarcharTimeIsNotColonDate(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		unit   string
-		expect string
+		expect int64
 	}{
-		{unit: "hour_minute", expect: "1011"},
-		{unit: "hour_second", expect: "101112"},
-		{unit: "minute", expect: "11"},
-		{unit: "minute_second", expect: "1112"},
+		{unit: "hour_minute", expect: 1011},
+		{unit: "hour_second", expect: 101112},
+		{unit: "minute", expect: 11},
+		{unit: "minute_second", expect: 1112},
 	} {
 		t.Run(tc.unit, func(t *testing.T) {
 			testCase := NewFunctionTestCase(
@@ -11911,7 +11911,7 @@ func TestExtractFromVarcharTimeIsNotColonDate(t *testing.T) {
 					NewFunctionTestConstInput(types.T_varchar.ToType(), []string{tc.unit}, nil),
 					NewFunctionTestInput(types.T_varchar.ToType(), []string{"10:11:12"}, nil),
 				},
-				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.expect}, nil),
+				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{tc.expect}, nil),
 				ExtractFromVarchar,
 			)
 
@@ -11929,7 +11929,7 @@ func TestExtractFromVarcharColonDateForDateUnit(t *testing.T) {
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"year"}, nil),
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"10:11:12"}, nil),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"2010"}, nil),
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2010}, nil),
 		ExtractFromVarchar,
 	)
 
@@ -11955,7 +11955,7 @@ func TestExtractMicrosecondFromDateAddString(t *testing.T) {
 	require.NoError(t, err)
 
 	parameters := []*vector.Vector{unitVec, resultVec}
-	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
 
 	fnLength := resultVec.Length()
 	err = result.PreExtendAndReset(fnLength)
@@ -11967,13 +11967,11 @@ func TestExtractMicrosecondFromDateAddString(t *testing.T) {
 	// Verify result
 	v := result.GetResultVector()
 	require.Equal(t, fnLength, v.Length())
-	require.Equal(t, types.T_varchar, v.GetType().Oid)
-
-	strParam := vector.GenerateFunctionStrParameter(v)
-	resultBytes, null := strParam.GetStrValue(0)
+	require.Equal(t, types.T_int64, v.GetType().Oid)
+	intParam := vector.GenerateFunctionFixedTypeParameter[int64](v)
+	resultValue, null := intParam.GetValue(0)
 	require.False(t, null, "Result should not be null")
-	resultStr := string(resultBytes)
-	require.Equal(t, "123456", resultStr, "EXTRACT(MICROSECOND FROM DATE_ADD result) should extract microseconds correctly")
+	require.Equal(t, int64(123456), resultValue, "EXTRACT(MICROSECOND FROM DATE_ADD result) should extract microseconds correctly")
 
 	// Cleanup
 	unitVec.Free(proc.Mp())
@@ -17464,13 +17462,13 @@ func TestAddAndSubTimeZeroTemporalReturnsNull(t *testing.T) {
 		{
 			name:   "addtime string datetime",
 			input:  zeroDatetimeString,
-			expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 6), false, []types.Datetime{0}, []bool{true}),
+			expect: NewFunctionTestResult(types.New(types.T_varchar, 0, 6), false, []string{""}, []bool{true}),
 			fn:     AddTime,
 		},
 		{
 			name:   "subtime string datetime",
 			input:  zeroDatetimeString,
-			expect: NewFunctionTestResult(types.New(types.T_datetime, 0, 6), false, []types.Datetime{0}, []bool{true}),
+			expect: NewFunctionTestResult(types.New(types.T_varchar, 0, 6), false, []string{""}, []bool{true}),
 			fn:     SubTime,
 		},
 	} {
@@ -17480,6 +17478,42 @@ func TestAddAndSubTimeZeroTemporalReturnsNull(t *testing.T) {
 			require.True(t, succeed, info)
 		})
 	}
+}
+
+func TestStringTimeArithmeticKeepsTimeDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	first := NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"12:00:00", "838:59:59", "1 12:34:56.123456", "12:00:00"}, nil)
+	second := NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"01:00:00", "00:00:01", "01:02:03.500000", "2024-01-01 01:00:00"}, nil)
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+		want []string
+	}{
+		{"add", AddTime, []string{"13:00:00", "838:59:59", "37:36:59.623456", ""}},
+		{"sub", SubTime, []string{"11:00:00", "838:59:58", "35:32:52.623456", ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			case1 := NewFunctionTestCase(proc, []FunctionTestInput{first, second},
+				NewFunctionTestResult(types.New(types.T_varchar, 0, 6), false, tc.want, []bool{false, false, false, true}), tc.fn)
+			ok, info := case1.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestTimeDiffStringRejectsMixedKinds(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	case1 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-01-02 12:00:00"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"01:00:00"}, nil),
+		},
+		NewFunctionTestResult(types.T_time.ToTypeWithScale(6), false, []types.Time{0}, []bool{true}),
+		TimeDiffString)
+	ok, info := case1.Run()
+	require.True(t, ok, info)
 }
 
 func TestTimeDiffZeroDatetimeReturnsNull(t *testing.T) {

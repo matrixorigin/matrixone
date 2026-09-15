@@ -460,5 +460,5 @@ func TestResetDateFunctionArgsDoesNotFoldTextExpression(t *testing.T) {
 	require.Equal(t, "to_interval", args[1].GetF().GetFunc().GetObjName())
 	require.Equal(t, textExpr, args[1].GetF().GetArgs()[0])
 	require.Equal(t, int64(types.Day_Second), extractInt64Value(args[1].GetF().GetArgs()[1]))
-	require.Equal(t, int64(types.Second), extractInt64Value(args[2]))
+	require.Equal(t, int64(types.MicroSecond), extractInt64Value(args[2]))
 }
