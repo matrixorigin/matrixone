@@ -108,7 +108,9 @@ const (
 	MORPCVersion70     int64 = 70 // row-dependent and unsigned CONV bases
 	MORPCVersion71     int64 = 71 // checked integer arithmetic overloads
 	MORPCVersion72     int64 = 72 // corrected IP function semantics and overload identities
-	MORPCLatestVersion       = MORPCVersion72
+	MORPCVersion73     int64 = 73 // widened DECIMAL SUM partial state
+	MORPCVersion74     int64 = 74 // extended discrete percentile input types
+	MORPCLatestVersion       = MORPCVersion74
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
