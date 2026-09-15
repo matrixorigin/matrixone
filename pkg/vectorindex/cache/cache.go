@@ -603,7 +603,11 @@ func (s *VectorIndexSearch) Search(sqlproc *sqlexec.SqlProcess, newalgo VectorIn
 	if !s.extendForSearch() {
 		return nil, nil, errIndexDestroyed
 	}
-	return s.Algo.Search(sqlproc, query, rt)
+	keys, distances, err = s.Algo.Search(sqlproc, query, rt)
+	if rt.EmptyGeneration != nil {
+		*rt.EmptyGeneration = algoEmptyGeneration(s)
+	}
+	return keys, distances, err
 }
 
 // SearchInto mirrors Search but routes to the box-free SearchInto (caller-owned out
@@ -636,7 +640,11 @@ func (s *VectorIndexSearch) SearchInto(sqlproc *sqlexec.SqlProcess, query any, r
 	if !s.extendForSearch() {
 		return errIndexDestroyed
 	}
-	return s.Algo.SearchInto(sqlproc, query, rt, out)
+	err := s.Algo.SearchInto(sqlproc, query, rt, out)
+	if rt.EmptyGeneration != nil {
+		*rt.EmptyGeneration = algoEmptyGeneration(s)
+	}
+	return err
 }
 
 // implementation of VectorIndexCache
@@ -791,7 +799,8 @@ func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch
 // algoEmptyGeneration reports a freshly loaded generation the cache should NOT retain: one
 // with no tag=0 base AND no tag=1 cdc_tail (the transient copy-alter init window before the
 // REINDEX builds the base, or an empty table). Only fulltext2 implements the optional
-// interface; every other algorithm is cached as before.
+// interface; every other algorithm is cached as before. Callers must hold the entry's
+// read lock: it reads algo.Algo state that DestroyWithReason mutates under the write lock.
 func algoEmptyGeneration(algo *VectorIndexSearch) bool {
 	e, ok := algo.Algo.(interface{ EmptyGeneration() bool })
 	return ok && e.EmptyGeneration()
@@ -919,6 +928,8 @@ func (c *VectorIndexCache) Destroy() {
 // Get index from cache and return VectorIndexSearchIf interface
 func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
+	var emptyGen bool
+	rt.EmptyGeneration = &emptyGen
 	for {
 		s := newVectorIndexSearch(newalgo)
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
@@ -1030,7 +1041,7 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 		// reader already completed on the same generation); the CDC-flush RemoveIdle still
 		// refreshes a NON-empty stale generation. The evicted result is empty, so its keys alias
 		// no index memory the teardown frees.
-		if !loaded && algoEmptyGeneration(algo) {
+		if !loaded && emptyGen {
 			c.evictEntry(key, algo, "fulltext2-empty-generation")
 		}
 		return keys, distances, nil
@@ -1042,6 +1053,8 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 // Same LoadOrStore / retryable-load discipline as Search.
 func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, newalgo VectorIndexSearchIf,
 	query any, rt vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	var emptyGen bool
+	rt.EmptyGeneration = &emptyGen
 	for {
 		s := newVectorIndexSearch(newalgo)
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
@@ -1133,7 +1146,7 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 		}
 		// Do not retain a base-less + cdc_tail-less generation; see Search. out already holds
 		// the (empty) result and is caller-owned, so the teardown frees nothing it references.
-		if !loaded && algoEmptyGeneration(algo) {
+		if !loaded && emptyGen {
 			c.evictEntry(key, algo, "fulltext2-empty-generation")
 		}
 		return nil

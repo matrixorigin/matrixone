@@ -370,6 +370,11 @@ type RuntimeConfig struct {
 	IvfPrepareRouteOnly bool
 	// IvfRoutePrepared distinguishes an empty prepared route from an uninitialized cursor.
 	IvfRoutePrepared bool
+
+	// EmptyGeneration, when non-nil, receives the searched index's empty-generation flag
+	// captured under the cache entry's read lock during Search/SearchInto. The cache reads
+	// it back to decide eviction without touching the underlying algo unsynchronized.
+	EmptyGeneration *bool
 }
 
 type IvfIncludeResult struct {
