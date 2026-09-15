@@ -822,6 +822,35 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 		})
 	}
 
+	t.Run("legacy-length-utf8-uint64-v58", func(t *testing.T) {
+		// A pre-v73 serialized LENGTH_UTF8 result is UINT64.  It keeps the
+		// v58 binary-string fence, but must not be mistaken for the corrected
+		// INT64 result contract introduced at v73.
+		p := semanticPipeline(function.LENGTH_UTF8, types.T_uint64)
+		project := projection.NewArgument()
+		defer project.Release()
+		project.ProjectList = p.InstructionList[0].ProjectList
+		scope := &Scope{Proc: proc, RootOp: project}
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, p))
+		_, err := encodeRemoteScope(scope, proc)
+		require.ErrorContains(t, err, "require MORPC protocol version 58")
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
+		data, err := encodeRemoteScope(scope, proc)
+		require.NoError(t, err)
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
+		_, err = decodeScope(data, proc, true, nil)
+		require.ErrorContains(t, err, "require MORPC protocol version 58")
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
+		decoded, err := decodeScope(data, proc, true, nil)
+		require.NoError(t, err)
+		require.NotNil(t, decoded)
+	})
+
 	// LENGTH_UTF8 keeps the historical UINT64 wrapper at MORPC v58. The
 	// corrected result wrappers are a separate v73 contract and must not be
 	// folded into the legacy binary-string semantic gate above.
