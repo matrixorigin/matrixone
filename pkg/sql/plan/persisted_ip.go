@@ -24,38 +24,53 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// RequirePersistedIPFunctionProtocol validates catalog-bound expressions
-// against the durable protocol floor while they are read or rebound. DDL
-// construction uses RequirePersistedIPFunctionProtocolForAuthoring below so
-// the phase-one admission barrier cannot publish new metadata.
+// RequirePersistedExpressionProtocol validates catalog-bound expressions
+// against the durable protocol floor while they are read or rebound.
+// Authoring uses the explicit ForAuthoring variant below so the phase-one
+// admission barrier cannot publish metadata before the catalog fence.
 //
 // The owner may be an Expr or a TableDef (or another protobuf owner containing
-// expressions). RequiredRemoteExpressionFeatures walks only expression roots
-// and returns immediately for owners that do not use the changed IP functions.
-// The protocol lookup is consequently on DDL/metadata paths, never on row
-// execution hot paths.
-func RequirePersistedIPFunctionProtocol(ctx context.Context, proc *process.Process, owner any) error {
-	return requirePersistedIPFunctionProtocol(ctx, proc, owner, false)
+// expressions). RequiredRemoteExpressionFeatures walks only expression roots,
+// so this check remains on DDL/metadata paths rather than row execution.
+func RequirePersistedExpressionProtocol(ctx context.Context, proc *process.Process, owner any) error {
+	return requirePersistedExpressionProtocol(ctx, proc, owner, false)
 }
 
-// RequirePersistedIPFunctionProtocolForAuthoring validates a newly authored
-// catalog definition. The authoring gate is raised only after the HAKeeper
-// admission epoch is enabled and catalog-fenced on this CN.
+// RequirePersistedExpressionProtocolForAuthoring validates a newly authored
+// catalog definition after the HAKeeper admission epoch is enabled and
+// catalog-fenced on this CN.
+func RequirePersistedExpressionProtocolForAuthoring(
+	ctx context.Context,
+	proc *process.Process,
+	owner any,
+) error {
+	return requirePersistedExpressionProtocol(ctx, proc, owner, true)
+}
+
+// RequirePersistedIPFunctionProtocol is retained for source compatibility
+// with existing catalog builders. It now shares the complete feature walk so
+// IP and string numeric requirements cannot mask one another.
+func RequirePersistedIPFunctionProtocol(ctx context.Context, proc *process.Process, owner any) error {
+	return RequirePersistedExpressionProtocol(ctx, proc, owner)
+}
+
+// RequirePersistedIPFunctionProtocolForAuthoring is the compatibility wrapper
+// for existing DDL callers that need the write-side admission gate.
 func RequirePersistedIPFunctionProtocolForAuthoring(
 	ctx context.Context,
 	proc *process.Process,
 	owner any,
 ) error {
-	return requirePersistedIPFunctionProtocol(ctx, proc, owner, true)
+	return RequirePersistedExpressionProtocolForAuthoring(ctx, proc, owner)
 }
 
-func requirePersistedIPFunctionProtocol(
+func requirePersistedExpressionProtocol(
 	ctx context.Context,
 	proc *process.Process,
 	owner any,
 	authoring bool,
 ) error {
-	requiredVersion, err := RequiredPersistedIPFunctionProtocolVersion(owner)
+	requiredVersion, err := RequiredPersistedExpressionProtocolVersion(owner)
 	if err != nil {
 		return err
 	}
@@ -68,10 +83,35 @@ func requirePersistedIPFunctionProtocol(
 	return RequirePersistedProtocolVersion(ctx, proc, requiredVersion)
 }
 
+// RequiredPersistedExpressionProtocolVersion reports the durable floor needed
+// by a catalog-bound owner. Keep this separate from runtime checks so VIEW
+// metadata can persist the requirement and readers can reapply it without
+// relying on a transient placement decision.
+func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	if err != nil {
+		return 0, err
+	}
+	requiredVersion := int64(0)
+	if features.IPFunctionSemantics {
+		requiredVersion = defines.MORPCVersion72
+	}
+	if features.StringNumericResultContracts && requiredVersion < defines.MORPCVersion79 {
+		requiredVersion = defines.MORPCVersion79
+	}
+	return requiredVersion, nil
+}
+
+// RequiredPersistedIPFunctionProtocolVersion is retained for callers that
+// used the old name; the returned floor includes all protected expression
+// contracts so a mixed owner is never admitted at an incomplete version.
+func RequiredPersistedIPFunctionProtocolVersion(owner any) (int64, error) {
+	return RequiredPersistedExpressionProtocolVersion(owner)
+}
+
 // RequirePersistedProtocolVersion checks an explicit catalog-expression floor
-// against the local deployment protocol. It is used for persisted metadata
-// that was written before the version marker was introduced and must be
-// rejected before local binding can expose it to execution.
+// against the local deployment protocol. It rejects old or not-yet-fenced CNs
+// before local binding can expose persisted metadata to execution.
 func RequirePersistedProtocolVersion(
 	ctx context.Context,
 	proc *process.Process,
@@ -97,9 +137,8 @@ func RequirePersistedProtocolVersion(
 }
 
 // RequirePersistedProtocolVersionForAuthoring checks the local write gate for
-// a newly persisted catalog expression. During phase one the durable read floor
-// is already installed, but authoring must wait until this CN receives an
-// enabled, admitted, catalog-fenced snapshot.
+// a newly persisted catalog expression. The read floor is insufficient during
+// phase one: authoring waits for an enabled, admitted, catalog-fenced snapshot.
 func RequirePersistedProtocolVersionForAuthoring(
 	ctx context.Context,
 	proc *process.Process,
@@ -125,9 +164,7 @@ func RequirePersistedProtocolVersionForAuthoring(
 }
 
 // RequirePersistedProtocolVersionForService is the process-independent form
-// used by restore/background executors. Restore code has a service identity
-// but not a planner process; it must still reject a persisted marker before
-// executing its SQL on a downgraded CN.
+// used by restore/background executors that only have a service identity.
 func RequirePersistedProtocolVersionForService(
 	ctx context.Context,
 	service string,
@@ -153,21 +190,15 @@ func RequirePersistedProtocolVersionForService(
 }
 
 // persistedProtocolRuntimeAllows keeps the fast DDL/metadata admission check
-// independent from row execution.  The deployment protocol must be new
-// enough, and when a CN has installed the durable HAKeeper-floor key that
-// floor must have reached the requested version too.  A missing floor key is
-// retained as a compatibility fallback for standalone/unit-test runtimes.
-func persistedProtocolRuntimeAllows(
-	rt moruntime.Runtime,
-	requiredVersion int64,
-) bool {
+// independent from row execution. A missing floor key is retained only for
+// standalone/unit-test runtimes created before the admission protocol.
+func persistedProtocolRuntimeAllows(rt moruntime.Runtime, requiredVersion int64) bool {
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
 	if !ok || !valid || version < requiredVersion {
 		return false
 	}
-	floorValue, floorPresent := rt.GetGlobalVariables(
-		moruntime.PersistedExpressionProtocolFloor)
+	floorValue, floorPresent := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
 	if !floorPresent {
 		return true
 	}
@@ -175,38 +206,18 @@ func persistedProtocolRuntimeAllows(
 	return valid && floor >= requiredVersion
 }
 
-func persistedProtocolAuthoringRuntimeAllows(
-	rt moruntime.Runtime,
-	requiredVersion int64,
-) bool {
+func persistedProtocolAuthoringRuntimeAllows(rt moruntime.Runtime, requiredVersion int64) bool {
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
 	if !ok || !valid || version < requiredVersion {
 		return false
 	}
-	floorValue, floorPresent := rt.GetGlobalVariables(
-		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	floorValue, floorPresent := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
 	if !floorPresent {
-		// Standalone/unit-test runtimes created before the admission protocol
-		// was introduced have no write-gate key. Production CN initialization
-		// always installs it, so this fallback preserves historical test setup.
+		// Production CN initialization always installs this key; the fallback
+		// preserves historical standalone/unit-test runtime setup.
 		return true
 	}
 	floor, valid := floorValue.(int64)
 	return valid && floor >= requiredVersion
-}
-
-// RequiredPersistedIPFunctionProtocolVersion reports the durable protocol
-// floor needed by a catalog-bound owner. It is intentionally separate from
-// the runtime check so view metadata can persist the requirement and readers
-// can reapply it without rescanning SQL text.
-func RequiredPersistedIPFunctionProtocolVersion(owner any) (int64, error) {
-	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
-	if err != nil {
-		return 0, err
-	}
-	if features.IPFunctionSemantics {
-		return defines.MORPCVersion72, nil
-	}
-	return 0, nil
 }

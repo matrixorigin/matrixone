@@ -2159,9 +2159,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.StringNumericResultContracts &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion73) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion78) {
 		return moerr.NewNotSupportedNoCtx(
-			"corrected string numeric result contracts require MORPC protocol version 73",
+			"corrected string numeric result contracts require MORPC protocol version 78",
 		)
 	}
 	if features.IPFunctionSemantics &&
