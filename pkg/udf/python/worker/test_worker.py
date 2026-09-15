@@ -873,7 +873,7 @@ class WorkerContractTest(unittest.TestCase):
             self.assertEqual("close failed", str(cleanup_error))
             self.assertNotIn(key, server._active)
             self.assertIn(key, server._terminal)
-            self.assertNotIn(key[2], server._active_groups)
+            self.assertNotIn((key[0], key[2]), server._active_groups)
         finally:
             server.shutdown()
 
@@ -3154,13 +3154,13 @@ except Exception:
             first = (1, "statement", "reserved-first", 1, "first", 1)
             second = (1, "statement", "reserved-second", 1, "second", 1)
             first_state = server._admit(first)
-            self.assertIn(first[2], server._reserved_groups)
+            self.assertIn((first[0], first[2]), server._reserved_groups)
             with self.assertRaisesRegex(ValueError, "closed-group fence is full"):
                 server._admit(second)
 
             server._finish_invocation(first, first_state)
-            self.assertNotIn(first[2], server._reserved_groups)
-            self.assertIn(first[2], server._closed_groups)
+            self.assertNotIn((first[0], first[2]), server._reserved_groups)
+            self.assertIn((first[0], first[2]), server._closed_groups)
             with self.assertRaisesRegex(ValueError, "already closed"):
                 server._admit((1, "statement", first[2], 1, "late", 1))
         finally:
@@ -3176,6 +3176,31 @@ except Exception:
                 server._admit((1, "statement", "single-owner", 1, "second", 1))
         finally:
             server._finish_invocation(first, first_state)
+
+    def test_group_fence_is_scoped_by_account(self):
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        first = (1, "statement-a", "same-name", 1, "first", 1)
+        second = (2, "statement-b", "same-name", 1, "second", 1)
+        first_state = server._admit(first)
+        second_state = server._admit(second)
+        try:
+            self.assertIn((1, "same-name"), server._active_groups)
+            self.assertIn((2, "same-name"), server._active_groups)
+            server._finish_invocation(first, first_state)
+            self.assertIn(second, server._active)
+            self.assertIn((1, "same-name"), server._closed_groups)
+            self.assertNotIn((2, "same-name"), server._closed_groups)
+        finally:
+            server._finish_invocation(second, second_state)
+
+        # Each account can advance its own epoch independently after the
+        # previous same-named group has closed.
+        self.assertIsNotNone(
+            server._admit((1, "statement-a-2", "same-name", 2, "third", 1))
+        )
+        self.assertIsNotNone(
+            server._admit((2, "statement-b-2", "same-name", 2, "fourth", 1))
+        )
 
     def test_terminal_ack_requires_the_completed_fence(self):
         server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
