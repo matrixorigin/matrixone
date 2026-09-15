@@ -351,7 +351,16 @@ const (
 		" tbl.reldatabase, " +
 		" tbl.rel_createsql, " +
 		" tbl.account_id, " +
-		" tbl.`constraint` " +
+		" tbl.`constraint`, " +
+		// Keep unsupported tables visible to the scanner. The boolean lets both
+		// admission and an already-running task reject a missing user key instead
+		// of silently omitting the table from discovery.
+		" EXISTS (SELECT 1 FROM `mo_catalog`.`mo_columns` pk " +
+		"WHERE pk.account_id = tbl.account_id " +
+		"AND pk.db_name = tbl.reldatabase " +
+		"AND pk.relname = tbl.relname " +
+		"AND pk.constraint_type = 'p' " +
+		"AND pk.name <> '" + catalog.FakePrimaryKeyColName + "') AS has_user_pk " +
 		"FROM `mo_catalog`.`mo_tables` tbl " +
 		"WHERE " +
 		" tbl.account_id IN (%s) " +
@@ -1301,21 +1310,8 @@ func CollectCDCSourceCandidateSQL(accountID uint32, dbName, tableName string) st
 	if tableName != CDCPitrGranularity_All {
 		tableNames = AddSingleQuotesJoin([]string{tableName})
 	}
-	return fmt.Sprintf("SELECT tbl.rel_id, tbl.relname, tbl.reldatabase_id, tbl.reldatabase, tbl.rel_createsql, tbl.account_id, tbl.`constraint`, EXISTS (SELECT 1 FROM `mo_catalog`.`mo_columns` pk WHERE pk.account_id = tbl.account_id AND pk.db_name = tbl.reldatabase AND pk.relname = tbl.relname AND pk.constraint_type = 'p' AND pk.name <> %s) AS has_user_pk FROM `mo_catalog`.`mo_tables` tbl WHERE tbl.account_id IN (%s)%s%s AND tbl.relkind = '%s' AND tbl.reldatabase NOT IN (%s)",
-		"'"+catalog.FakePrimaryKeyColName+"'", strconv.FormatUint(uint64(accountID), 10),
-		func() string {
-			if dbNames == "*" {
-				return ""
-			}
-			return " AND tbl.reldatabase IN (" + dbNames + ")"
-		}(),
-		func() string {
-			if tableNames == "*" {
-				return ""
-			}
-			return " AND tbl.relname IN (" + tableNames + ")"
-		}(),
-		catalog.SystemOrdinaryRel, AddSingleQuotesJoin(catalog.SystemDatabases))
+	return CDCSQLBuilder.CollectTableInfoSQL(
+		strconv.FormatUint(uint64(accountID), 10), dbNames, tableNames)
 }
 
 func (b cdcSQLBuilder) GetTableIDSQL(

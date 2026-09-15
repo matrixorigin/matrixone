@@ -5596,6 +5596,57 @@ func TestCdcTask_handleNewTablesStopsReaderRemovedFromScan(t *testing.T) {
 	require.Equal(t, "live_sink_table", readerInfo.SinkTblName)
 }
 
+func TestCdcTask_handleNewTablesFailsWhenRunningTableLosesPrimaryKey(t *testing.T) {
+	stubGetTxnOp := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stubGetTxnOp.Reset()
+	stubFinishTxnOp := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stubFinishTxnOp.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil)
+
+	closeCh := make(chan struct{})
+	reader := &mockChangeReader{
+		info:    &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "orders", SourceTblId: 1001},
+		closeCh: closeCh,
+	}
+	executor := &captureCDCExecutor{}
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId: "task-pk-dropped", TaskName: "task-pk-dropped",
+			Accounts: []*task.Account{{Id: 0}},
+		},
+		tables: cdc.PatternTuples{Pts: []*cdc.PatternTuple{{
+			Source: cdc.PatternTable{Database: "db1", Table: cdc.CDCPitrGranularity_All},
+			Sink:   cdc.PatternTable{Database: cdc.CDCPitrGranularity_All, Table: cdc.CDCPitrGranularity_All},
+		}}},
+		cnEngine: eng, ie: executor, stateMachine: NewExecutorStateMachine(),
+		activeRoutine: cdc.NewCdcActiveRoutine(), holdCh: make(chan int, 1),
+		runningReaders: &sync.Map{},
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+	cdcTask.runningReaders.Store("db1.orders", reader)
+
+	err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {
+		"db1.orders": {
+			SourceDbName: "db1", SourceTblName: "orders", SourceTblId: 1001,
+			PrimaryKeyChecked: true, HasUserPrimaryKey: false,
+		},
+	}})
+	require.Error(t, err)
+	require.Equal(t, StateFailed, cdcTask.stateMachine.State())
+	select {
+	case <-closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("expected reader to be closed after primary-key loss")
+	}
+}
+
 func TestCdcTask_handleNewTablesKeepsBlockedRemovedReaderOwnership(t *testing.T) {
 	stub1 := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
 		return nil, nil

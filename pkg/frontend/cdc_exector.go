@@ -2789,6 +2789,26 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 	exec.stopReadersMissingFromScan(accountTbls)
 
 	for key, info := range accountTbls {
+		if exec.exclude != nil && exec.exclude.MatchString(key) {
+			continue
+		}
+		if !exec.matchAnyPattern(key, info) {
+			continue
+		}
+
+		// The scanner intentionally retains no-PK tables instead of filtering
+		// them. A new task is rejected at admission; an active wildcard task
+		// must stop and fail rather than silently losing a table after its key is
+		// dropped. Check this before the already-running fast path.
+		if info.PrimaryKeyChecked && !info.HasUserPrimaryKey {
+			if val, ok := exec.runningReaders.Load(key); ok {
+				if reader, ok := val.(cdc.ChangeReader); ok {
+					exec.stopRemovedReader(key, key, reader)
+				}
+			}
+			return exec.failTaskForPermanentTableError(ctx, info)
+		}
+
 		// already running
 		if val, ok := exec.runningReaders.Load(key); ok {
 			if reader, ok := val.(cdc.ChangeReader); ok {
@@ -2826,14 +2846,7 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			}
 		}
 
-		if exec.exclude != nil && exec.exclude.MatchString(key) {
-			continue
-		}
-
 		newTableInfo := info.Clone()
-		if !exec.matchAnyPattern(key, newTableInfo) {
-			continue
-		}
 		hasError, err := GetTableErrMsg(ctx, accountId, exec.ie, exec.spec.TaskId, newTableInfo)
 		if err != nil {
 			logutil.Error(
