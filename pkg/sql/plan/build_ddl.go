@@ -280,6 +280,9 @@ func genViewTableDef(
 	}
 
 	query := stmtPlan.GetQuery()
+	if err = ValidateUnresolvedIndexHints(ctx.GetContext(), query); err != nil {
+		return nil, err
+	}
 	// Must run on the OPTIMIZED plan, which is why it is not part of the validate hook
 	// above: that hook fires before createQuery, where every MATCH is still an unresolved
 	// function whether or not an index exists.
@@ -1385,6 +1388,9 @@ func genAsSelectCols(
 	if err != nil {
 		return nil, nil, err
 	}
+	if err = ValidateUnresolvedIndexHints(ctx.GetContext(), query); err != nil {
+		return nil, nil, err
+	}
 	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
@@ -1660,6 +1666,9 @@ func buildCTASDefaultFromOrigin(
 		return nil, err
 	}
 	if err = preservePersistedFormatCompatibility(ctx.GetContext(), defaultExpr); err != nil {
+		return nil, err
+	}
+	if err = RequirePersistedIPFunctionProtocol(ctx.GetContext(), ctx.GetProcess(), defaultExpr); err != nil {
 		return nil, err
 	}
 	if exprHasLocalColumnRef(defaultExpr) {
@@ -3995,6 +4004,9 @@ func appendCheckDef(
 		return err
 	}
 	if err = preservePersistedFormatCompatibility(ctx.GetContext(), checkExpr); err != nil {
+		return err
+	}
+	if err = RequirePersistedIPFunctionProtocol(ctx.GetContext(), ctx.GetProcess(), checkExpr); err != nil {
 		return err
 	}
 	if err = validateCheckExpr(ctx.GetContext(), tableDef, checkExpr, columnPos); err != nil {

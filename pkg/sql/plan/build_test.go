@@ -8726,8 +8726,19 @@ func countGroupConcatAggregateSlots(query *plan.Query) int {
 	return count
 }
 
-func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
+func TestGroupConcatOrderByScalarSubqueryIsFlattened(t *testing.T) {
 	tests := map[string]string{
+		"correlated explicit": `SELECT GROUP_CONCAT(
+		                              n.N_NAME
+		                              ORDER BY (SELECT r.R_REGIONKEY
+		                                          FROM REGION r
+		                                         WHERE r.R_REGIONKEY = n.N_NATIONKEY))
+		                         FROM NATION n`,
+		"uncorrelated explicit": `SELECT GROUP_CONCAT(
+		                                n.N_NAME
+		                                ORDER BY (SELECT MAX(r.R_REGIONKEY)
+		                                            FROM REGION r))
+		                           FROM NATION n`,
 		"positional": `SELECT n.N_REGIONKEY,
 		                     GROUP_CONCAT(
 		                         (SELECT r.R_NAME
@@ -8756,9 +8767,27 @@ func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
 
 	for name, sql := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "subquery in group_concat ORDER BY")
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+
+			foundGroupConcat := false
+			foundJoin := false
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_JOIN {
+					foundJoin = true
+				}
+				for _, agg := range node.AggList {
+					fn := agg.GetF()
+					if fn == nil || fn.Func == nil || fn.Func.ObjName != NameGroupConcat {
+						continue
+					}
+					foundGroupConcat = true
+					require.False(t, hasSubquery(agg), "GROUP_CONCAT contains an executable Expr_Sub")
+					require.Equal(t, plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER, fn.AggConfigType)
+				}
+			}
+			require.True(t, foundGroupConcat)
+			require.True(t, foundJoin, "scalar order key was not flattened into a join")
 		})
 	}
 }

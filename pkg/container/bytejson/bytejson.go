@@ -601,6 +601,9 @@ type binaryJSONValueView struct {
 }
 
 func binaryJSONValue(bj ByteJson) (binaryJSONValueView, bool) {
+	if !isValidByteJsonStringEncoding(bj.Data) {
+		return binaryJSONValueView{}, false
+	}
 	switch bj.Type {
 	case TpCodeBlob:
 		payload := bj.GetString()

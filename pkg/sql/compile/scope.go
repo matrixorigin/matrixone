@@ -275,12 +275,12 @@ func refreshGroupConcatExprMaxLen(
 		if err != nil {
 			return err
 		}
-		sessionMaxLen, ok := value.(int64)
-		if !ok || sessionMaxLen < 0 {
+		sessionMaxLen, ok := groupConcatMaxLenAsUint64(value)
+		if !ok {
 			return moerr.NewInternalErrorNoCtxf(
 				"group_concat_max_len has invalid value %v", value)
 		}
-		*maxLen = uint64(sessionMaxLen)
+		*maxLen = sessionMaxLen
 		*resolved = true
 	}
 	agg.SetExtraConfig(aggexec.RefreshGroupConcatConfigMaxLen(agg.GetExtraConfig(), max(*maxLen, preparedFloor)))
@@ -1598,6 +1598,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 					message.NeedNotReply = false
 					message.Uuid = uuid
 
+					sender.markReportingRequestStarted()
 					if errSend := sender.streamSender.Send(sender.ctx, message); errSend != nil {
 						closeWithError(errSend, s.Proc.Reg.MergeReceivers[receiverIdx], sender)
 						return

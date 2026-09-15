@@ -587,7 +587,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AsciiString
@@ -597,7 +597,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AsciiString
@@ -607,7 +607,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AsciiString
@@ -617,7 +617,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_int8},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AsciiInt[int8]
@@ -627,7 +627,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_int16},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AsciiInt[int16]
@@ -637,7 +637,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_int32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AsciiInt[int32]
@@ -647,7 +647,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 6,
 				args:       []types.T{types.T_int64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AsciiInt[int64]
@@ -657,7 +657,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 7,
 				args:       []types.T{types.T_uint8},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AsciiUint[uint8]
@@ -667,7 +667,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 8,
 				args:       []types.T{types.T_uint16},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AsciiUint[uint16]
@@ -677,7 +677,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 9,
 				args:       []types.T{types.T_uint32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AsciiUint[uint32]
@@ -687,7 +687,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 10,
 				args:       []types.T{types.T_uint64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return AsciiUint[uint64]
@@ -2287,28 +2287,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: CONV,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) != 3 {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			// First parameter can be any type (string or numeric)
-			// Second and third parameters must be int64, but NULL constants arrive as ANY
-			if (inputs[1].Oid != types.T_int64 && inputs[1].Oid != types.T_any) ||
-				(inputs[2].Oid != types.T_int64 && inputs[2].Oid != types.T_any) {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			// Keep an untyped NULL or prepared marker dynamic. The executor
-			// must see the actual runtime vector instead of losing its domain
-			// through the VARCHAR overload.
-			if inputs[0].Oid == types.T_any {
-				for i, ov := range overloads {
-					if len(ov.args) == 3 && ov.args[0] == types.T_any {
-						return newCheckResultWithSuccess(i)
-					}
-				}
-			}
-			return newCheckResultWithSuccess(0)
-		},
+		checkFn:    convTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -3269,6 +3248,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return newOpBuiltInRegexp().builtInRegexpInstr
 				},
 			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_int8, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpInstr
+				},
+			},
 		},
 	},
 
@@ -3343,6 +3332,16 @@ var supportedStringBuiltIns = []FuncNew{
 					return newOpBuiltInRegexp().builtInRegexpReplace
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return regexpReplaceReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpReplace
+				},
+			},
 		},
 	},
 
@@ -3380,6 +3379,16 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return regexpSubstrReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return newOpBuiltInRegexp().builtInRegexpSubstr
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
 					return regexpSubstrReturnType(parameters)
 				},
@@ -4094,10 +4103,13 @@ var supportedStringBuiltIns = []FuncNew{
 		layout:     STANDARD_FUNCTION,
 		checkFn:    stringDomainFixedTypeMatch,
 
+		// Invalid inputs produce execution-attempt diagnostics, so constants must
+		// not be evaluated while planning.
 		Overloads: []overload{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_blob},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
@@ -4108,6 +4120,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
@@ -4118,6 +4131,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_char},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
@@ -4128,6 +4142,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_text},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_blob.ToType()
 				},
@@ -4963,6 +4978,36 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return StGeomFromWKB
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StGeomFromWKBWithSRID
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_blob, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StGeomFromWKBWithSRID
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StGeomFromWKBWithSRID
 				},
 			},
 		},
@@ -6078,6 +6123,22 @@ var supportedStringBuiltIns = []FuncNew{
 					return StSRID
 				},
 			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_geometry, types.T_int64},
+				retType:    geometrySetSRIDResultType,
+				newOp: func() executeLogicOfOverload {
+					return StSRIDWithSRID
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_geometry32, types.T_int64},
+				retType:    geometrySetSRIDResultType,
+				newOp: func() executeLogicOfOverload {
+					return StSRIDWithSRID
+				},
+			},
 		},
 	},
 
@@ -6932,7 +6993,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return soundexReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Soundex
@@ -6942,7 +7003,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return soundexReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Soundex
@@ -6952,7 +7013,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_varchar.ToType()
+					return soundexReturnType(parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return Soundex
@@ -12507,12 +12568,48 @@ var supportedControlBuiltIns = []FuncNew{
 		functionId: GET_LOCK,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    userLevelLockTypeMatch,
 
 		Overloads: []overload{
 			{
 				overloadId:      0,
 				args:            []types.T{types.T_varchar, types.T_float64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return GetLock
+				},
+			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_decimal64},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return GetLock
+				},
+			},
+			{
+				overloadId:      2,
+				args:            []types.T{types.T_varchar, types.T_decimal128},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return GetLock
+				},
+			},
+			{
+				overloadId:      3,
+				args:            []types.T{types.T_varchar, types.T_decimal256},
 				volatile:        true,
 				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
@@ -13468,6 +13565,56 @@ var supportedOthersBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_int32},
+				retType: func(parameters []types.Type) types.Type {
+					return inetNtoaReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return inetNtoaReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return inetNtoaReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_decimal64},
+				retType: func(parameters []types.Type) types.Type {
+					return inetNtoaReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_decimal128},
+				retType: func(parameters []types.Type) types.Type {
+					return inetNtoaReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_decimal256},
 				retType: func(parameters []types.Type) types.Type {
 					return inetNtoaReturnType(parameters)
 				},

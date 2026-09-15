@@ -493,6 +493,18 @@ type BaseProcess struct {
 	// It is intentionally not part of SessionInfo: remote/rebuilt session state
 	// must not copy or replace a live synchronization object.
 	sequenceGate sequenceGate
+	// groupConcatInputRowCounters gives each logical Group operator one
+	// statement-scoped source-row cursor. A BaseProcess is shared by local
+	// parallel child processes, so partial producers do not restart at row 1.
+	// The map is reset with the query context and is not serialized to remote
+	// processes; remote state keeps the source rows assigned by its producer.
+	groupConcatInputRowCountersMu sync.Mutex
+	groupConcatInputRowCounters   map[int]*atomic.Uint64
+	// groupConcatSourceRowProvenanceUntrusted is true on a remote process that
+	// cannot share the coordinator's input-row namespace. It is kept on the
+	// shared BaseProcess so child pipelines inherit the same decision. The
+	// negative form keeps zero-value test processes compatible with local use.
+	groupConcatSourceRowProvenanceUntrusted bool
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
