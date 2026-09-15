@@ -293,16 +293,6 @@ func restoreToAccountFromTS(
 	if restoreDBNames, err = showDatabasesFromTS(ctx, sid, bh, snapshotTs, restoreAccount, toAccountId); err != nil {
 		return
 	}
-	if err = preflightLogicalRestoreDatabases(
-		ctx,
-		restoreDBNames,
-		currentProtocolVersionForService(bh.Service()),
-		func(dbName string) (logicalRestoreDatabaseDefinition, error) {
-			return getCreateDatabaseSqlFromTS(ctx, sid, bh, dbName, snapshotTs, restoreAccount, toAccountId)
-		},
-	); err != nil {
-		return
-	}
 
 	// delete current dbs from to account
 	if currentDBNames, err = showDatabases(toCtx, sid, bh, ""); err != nil {
@@ -359,6 +349,32 @@ func restoreToAccountFromTS(
 	}
 
 	return
+}
+
+func preflightLogicalRestoreAccountFromTS(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotTS int64,
+	sourceAccount uint32,
+	targetAccount uint32,
+) error {
+	databaseNames, err := showDatabasesFromTS(
+		ctx, sid, bh, snapshotTS, sourceAccount, targetAccount,
+	)
+	if err != nil {
+		return err
+	}
+	return preflightLogicalRestoreDatabases(
+		ctx,
+		databaseNames,
+		currentProtocolVersionForService(bh.Service()),
+		func(dbName string) (logicalRestoreDatabaseDefinition, error) {
+			return getCreateDatabaseSqlFromTS(
+				ctx, sid, bh, dbName, snapshotTS, sourceAccount, targetAccount,
+			)
+		},
+	)
 }
 
 func showDatabasesFromTS(ctx context.Context, sid string, bh BackgroundExec, ts int64, from, to uint32) ([]string, error) {

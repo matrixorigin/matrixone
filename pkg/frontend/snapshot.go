@@ -800,6 +800,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if err = checkRestorePriv(ctx, ses, snapshot, stmt); err != nil {
 		return stats, err
 	}
+	// Validate every database identity before resolving the target account.
+	// Target resolution may create a dropped account, and account restore later
+	// invalidates view metadata, so neither may happen before capability admission.
+	if err = preflightRestoreSnapshotEntry(ctx, ses, bh, stmt, *snapshot); err != nil {
+		return stats, err
+	}
 
 	// default restore to src account
 	restoreAccount, toAccountId, err = getFromAccountIdAndToAccountId(ctx, ses, bh, stmt, *snapshot)
@@ -968,6 +974,51 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	return
+}
+
+func preflightRestoreSnapshotEntry(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	stmt *tree.RestoreSnapShot,
+	snapshot snapshotRecord,
+) error {
+	switch stmt.Level {
+	case tree.RESTORELEVELCLUSTER, tree.RESTORELEVELTABLE:
+		// Cluster restore builds and validates its complete account plan before
+		// the first account mutation. Table restore does not recreate a database.
+		return nil
+	case tree.RESTORELEVELACCOUNT:
+		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
+			account, err := getAccountRecordByTs(
+				ctx, ses, bh, snapshot.snapshotName, snapshot.ts, string(stmt.AccountName),
+			)
+			if err != nil {
+				return err
+			}
+			accountID := uint32(account.accountId)
+			return preflightLogicalRestoreAccountFromTS(
+				ctx, ses.GetService(), bh, snapshot.ts, accountID, accountID,
+			)
+		}
+		return preflightLogicalRestoreAccountFromSnapshot(
+			ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts, uint32(snapshot.objId),
+		)
+	case tree.RESTORELEVELDATABASE:
+		return preflightLogicalRestoreDatabases(
+			ctx,
+			[]string{string(stmt.DatabaseName)},
+			currentProtocolVersionForService(bh.Service()),
+			func(dbName string) (logicalRestoreDatabaseDefinition, error) {
+				return getCreateDatabaseSql(
+					ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts,
+					dbName, ses.GetTenantInfo().GetTenantID(),
+				)
+			},
+		)
+	default:
+		return nil
+	}
 }
 
 func restoreReplacesLineageOwnerCatalogs(level tree.RestoreLevel) bool {
@@ -1204,20 +1255,7 @@ func restoreToAccount(
 	var currentDBNames, restoreDBNames []string
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 
-	// Resolve every source database identity before replacing any current
-	// database. This makes an incompatible marked snapshot fail before the
-	// first destructive DDL in an account restore.
 	if restoreDBNames, err = showDatabases(ctx, sid, bh, snapshotName); err != nil {
-		return
-	}
-	if err = preflightLogicalRestoreDatabases(
-		ctx,
-		restoreDBNames,
-		currentProtocolVersionForService(bh.Service()),
-		func(dbName string) (logicalRestoreDatabaseDefinition, error) {
-			return getCreateDatabaseSql(ctx, sid, bh, snapshotName, snapshotTs, dbName, restoreAccount)
-		},
-	); err != nil {
 		return
 	}
 
@@ -1274,6 +1312,28 @@ func restoreToAccount(
 		return
 	}
 	return
+}
+
+func preflightLogicalRestoreAccountFromSnapshot(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	snapshotTS int64,
+	sourceAccount uint32,
+) error {
+	databaseNames, err := showDatabases(ctx, sid, bh, snapshotName)
+	if err != nil {
+		return err
+	}
+	return preflightLogicalRestoreDatabases(
+		ctx,
+		databaseNames,
+		currentProtocolVersionForService(bh.Service()),
+		func(dbName string) (logicalRestoreDatabaseDefinition, error) {
+			return getCreateDatabaseSql(ctx, sid, bh, snapshotName, snapshotTS, dbName, sourceAccount)
+		},
+	)
 }
 
 func restoreToDatabase(
@@ -3131,6 +3191,17 @@ func restoreToCluster(ctx context.Context,
 	pastExistsAccount, err = getPastExistsAccounts(ctx, ses.GetService(), bh, snapshotName, snapshotTs)
 	if err != nil {
 		return err
+	}
+	// Validate every source account before dropping an account that is absent
+	// from the snapshot. Account drop terminates sessions and sends cross-CN
+	// kill requests that a catalog transaction rollback cannot undo.
+	for _, account := range pastExistsAccount {
+		accountID := uint32(account.accountId)
+		if err = preflightLogicalRestoreAccountFromTS(
+			ctx, ses.GetService(), bh, snapshotTs, accountID, accountID,
+		); err != nil {
+			return err
+		}
 	}
 
 	var currentMap = make(map[string]bool)

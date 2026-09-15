@@ -41,10 +41,10 @@ func setProtocolVersionForTest(t testing.TB, service string, version int64) {
 
 func TestDataBranchDatabaseIdentityCapability(t *testing.T) {
 	ctx := context.Background()
-	require.False(t, dataBranchDatabaseIdentitySupported(defines.MORPCVersion73))
+	require.False(t, dataBranchDatabaseIdentitySupported(defines.MORPCVersion74))
 	require.True(t, dataBranchDatabaseIdentitySupported(defines.MORPCVersion75))
 	require.ErrorContains(t,
-		requireDataBranchDatabaseIdentity(ctx, defines.MORPCVersion73),
+		requireDataBranchDatabaseIdentity(ctx, defines.MORPCVersion74),
 		"requires MORPC protocol version 75",
 	)
 	require.NoError(t, requireDataBranchDatabaseIdentity(ctx, defines.MORPCVersion75))
@@ -52,7 +52,7 @@ func TestDataBranchDatabaseIdentityCapability(t *testing.T) {
 
 func TestDataBranchCreateDatabaseRejectsBeforeExecutorBelowCapability(t *testing.T) {
 	ses := newValidateSession(t)
-	setProtocolVersionForTest(t, ses.proc.GetService(), defines.MORPCVersion73)
+	setProtocolVersionForTest(t, ses.proc.GetService(), defines.MORPCVersion74)
 
 	_, err := dataBranchCreateDatabase(
 		&ExecCtx{reqCtx: context.Background()},
@@ -70,13 +70,13 @@ func TestPrepareLogicalRestoreDatabaseCapability(t *testing.T) {
 		databaseType: catalog.SystemDBTypeDataBranch,
 	}
 
-	for _, version := range []int64{defines.MORPCVersion73, defines.MORPCVersion75} {
+	for _, version := range []int64{defines.MORPCVersion74, defines.MORPCVersion75} {
 		prepared, err := prepareLogicalRestoreDatabase(ctx, "ordinary", ordinary, version)
 		require.NoError(t, err)
 		require.Empty(t, prepared.Value(defines.DatTypKey{}))
 	}
 
-	prepared, err := prepareLogicalRestoreDatabase(ctx, "branch_db", marked, defines.MORPCVersion73)
+	prepared, err := prepareLogicalRestoreDatabase(ctx, "branch_db", marked, defines.MORPCVersion74)
 	require.ErrorContains(t, err, "restoring data-branch database 'branch_db' requires MORPC protocol version 75")
 	require.Nil(t, prepared)
 
@@ -113,7 +113,7 @@ func TestPreflightLogicalRestoreDatabases(t *testing.T) {
 		return definition, nil
 	}
 
-	err := preflightLogicalRestoreDatabases(ctx, dbNames, defines.MORPCVersion73, load)
+	err := preflightLogicalRestoreDatabases(ctx, dbNames, defines.MORPCVersion74, load)
 	require.ErrorContains(t, err, "restoring data-branch database 'branch_db' requires MORPC protocol version 75")
 	require.Equal(t, []string{"ordinary", "branch_db"}, loaded)
 

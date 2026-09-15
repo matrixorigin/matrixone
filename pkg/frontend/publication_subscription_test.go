@@ -40,12 +40,12 @@ import (
 )
 
 func TestIsUserDatabaseType(t *testing.T) {
-	for _, version := range []int64{defines.MORPCVersion73, defines.MORPCVersion75} {
+	for _, version := range []int64{defines.MORPCVersion74, defines.MORPCVersion75} {
 		require.True(t, isUserDatabaseType("", version))
 		require.False(t, isUserDatabaseType(catalog.SystemDBTypeSubscription, version))
 		require.False(t, isUserDatabaseType("unknown", version))
 	}
-	require.False(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion73))
+	require.False(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion74))
 	require.True(t, isUserDatabaseType(catalog.SystemDBTypeDataBranch, defines.MORPCVersion75))
 }
 
@@ -476,8 +476,8 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 		wantErr             bool
 	}{
 		{
-			name:          "v73 explicit database rejects",
-			protocol:      defines.MORPCVersion73,
+			name:          "v74 explicit database rejects",
+			protocol:      defines.MORPCVersion74,
 			publication:   "branch_db",
 			publicationID: 7,
 			statement:     "alter publication pub1 account acc1 database replacement_db comment 'updated'",
@@ -485,8 +485,8 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 			wantErr:       true,
 		},
 		{
-			name:            "v73 effective database rejects",
-			protocol:        defines.MORPCVersion73,
+			name:            "v74 effective database rejects",
+			protocol:        defines.MORPCVersion74,
 			publication:     "branch_db",
 			publicationID:   7,
 			statement:       "alter publication pub1 account acc1 comment 'updated'",
@@ -532,7 +532,7 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 		},
 		{
 			name:        "account level remains database independent",
-			protocol:    defines.MORPCVersion73,
+			protocol:    defines.MORPCVersion74,
 			publication: pubsub.TableAll,
 			statement:   "alter publication pub1 account acc1 comment 'updated'",
 		},

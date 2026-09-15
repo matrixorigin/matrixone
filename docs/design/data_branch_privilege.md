@@ -886,19 +886,26 @@ Implement these decisions in this change:
 ## 12. Database-level Branch Identity Amendment
 
 - Status: proposed and implemented; independent revision review pending
-- Independent decision: pending for exact revision r18
+- Independent decision: pending for exact revision r19
 - Tracking issue: [matrixorigin/matrixone#26068](https://github.com/matrixorigin/matrixone/issues/26068)
 - Implementation PR: [matrixorigin/matrixone#28272](https://github.com/matrixorigin/matrixone/pull/28272)
-- Design revision: `data-branch-database-identity-2026-09-16-r18`
+- Design revision: `data-branch-database-identity-2026-09-16-r19`
 - Required rollout capability: `MORPCVersion75`
 
-Revision r18 moves the capability from v74 to v75 because current main now owns
+Revision r19 reserves v75 for this PR and requires the concurrently open JSON
+MIN/MAX capability PR #28950 to merge afterward as v76. Sharing v75 would let
+one feature mistake the other's capability for its own during a rolling upgrade.
+The v74/v75 boundary is covered explicitly. Revision r19 also moves cluster and
+account restore identity admission ahead of account creation, account deletion,
+view-metadata invalidation, foreign-key cleanup, and per-database replacement.
+
+Revision r18 moved the capability from v74 to v75 because current main owns
 v74 for corrected numeric HEX overload identities. Versions v64 through v73
 remain owned by typed BIN/CONV execution, signed ASCII results,
 GROUP_CONCAT diagnostics and strict-write reporting, named process time zones,
 bounded RANK ties, row-dependent CONV bases, checked integer arithmetic, and
 corrected IP-function semantics. The semantic contract is unchanged from the
-independently approved r13 revision; r18 changes only the capability number,
+independently approved r13 revision; r18 changed only the capability number,
 the preceding-version matrix, and the v74 ownership record.
 
 ### 12.1 Problem and invariant

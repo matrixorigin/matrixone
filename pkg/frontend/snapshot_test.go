@@ -973,7 +973,7 @@ func TestRestorePitrExternalTable(t *testing.T) {
 }
 
 func TestMarkedDatabaseRestoreRejectsBeforeDestructiveWorkBelowCapability(t *testing.T) {
-	setProtocolVersionForTest(t, "", defines.MORPCVersion73)
+	setProtocolVersionForTest(t, "", defines.MORPCVersion74)
 	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
 	const (
 		dbName       = "issue26068_restore"
@@ -1046,7 +1046,7 @@ func TestMarkedDatabaseRestoreRejectsBeforeDestructiveWorkBelowCapability(t *tes
 }
 
 func TestMarkedAccountRestorePreflightsBeforeDestructiveWorkBelowCapability(t *testing.T) {
-	setProtocolVersionForTest(t, "", defines.MORPCVersion73)
+	setProtocolVersionForTest(t, "", defines.MORPCVersion74)
 	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
 	const (
 		dbName       = "issue26068_restore"
@@ -1066,10 +1066,8 @@ func TestMarkedAccountRestorePreflightsBeforeDestructiveWorkBelowCapability(t *t
 			showSQL:   "show databases {snapshot = '" + snapshotName + "'}",
 			createSQL: fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName),
 			run: func(bh BackgroundExec) error {
-				return restoreToAccount(
-					ctx, "", bh, snapshotName, uint32(sysAccountID),
-					map[string]*tableInfo{}, map[string]*tableInfo{}, ts,
-					uint32(sysAccountID), false, nil,
+				return preflightLogicalRestoreAccountFromSnapshot(
+					ctx, "", bh, snapshotName, ts, uint32(sysAccountID),
 				)
 			},
 		},
@@ -1078,9 +1076,8 @@ func TestMarkedAccountRestorePreflightsBeforeDestructiveWorkBelowCapability(t *t
 			showSQL:   fmt.Sprintf("show databases {MO_TS = %d}", ts),
 			createSQL: fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = 0", ts, dbName),
 			run: func(bh BackgroundExec) error {
-				return restoreToAccountFromTS(
+				return preflightLogicalRestoreAccountFromTS(
 					ctx, "", bh, ts, uint32(sysAccountID), uint32(sysAccountID),
-					map[string]*tableInfo{}, map[string]*tableInfo{}, false, nil,
 				)
 			},
 		},
@@ -1112,6 +1109,60 @@ func TestMarkedAccountRestorePreflightsBeforeDestructiveWorkBelowCapability(t *t
 			require.Equal(t, []string{test.showSQL, test.createSQL}, bh.executedSQLs)
 		})
 	}
+}
+
+func TestClusterRestorePreflightsBeforeAccountSideEffects(t *testing.T) {
+	setProtocolVersionForTest(t, "", defines.MORPCVersion74)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	const (
+		snapshotName = "issue26068_cluster"
+		dbName       = "marked_branch"
+		snapshotTS   = int64(100)
+		sourceID     = uint32(1)
+	)
+	ctx := defines.AttachAccountId(context.Background(), uint32(sysAccountID))
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	currentAccountsSQL := getCurrentExistsAccountsFmt
+	pastAccountsSQL := fmt.Sprintf(getPastAccountsFmt, snapshotTS)
+	showDatabasesSQL := fmt.Sprintf("show databases {MO_TS = %d}", snapshotTS)
+	createDatabaseSQL := fmt.Sprintf(
+		"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d } where datname = '%s' and account_id = %d",
+		snapshotTS, dbName, sourceID,
+	)
+	bh.sql2result[currentAccountsSQL] = newMrsForRestoreStringRows(
+		[]string{"account_id", "account_name"},
+		[][]interface{}{{"1", "source"}, {"2", "must_not_be_dropped"}},
+	)
+	bh.sql2result[pastAccountsSQL] = newMrsForRestoreStringRows(
+		[]string{"account_id", "account_name", "admin_name", "comments"},
+		[][]interface{}{{"1", "source", "admin", ""}},
+	)
+	bh.sql2result[showDatabasesSQL] = newMrsForSqlForShowDatabases(
+		[][]interface{}{{dbName}},
+	)
+	bh.sql2result[createDatabaseSQL] = newMrsForRestoreStringRows(
+		[]string{"datname", "dat_createsql", "dat_type"},
+		[][]interface{}{{dbName, "create database " + dbName, catalog.SystemDBTypeDataBranch}},
+	)
+
+	var retiredAccountIDs []uint32
+	err := restoreToCluster(
+		ctx, ses, bh, snapshotName, snapshotTS, &retiredAccountIDs,
+	)
+	require.ErrorContains(t, err, "requires MORPC protocol version 75")
+	require.Empty(t, retiredAccountIDs)
+	require.Equal(t, []string{
+		currentAccountsSQL,
+		pastAccountsSQL,
+		showDatabasesSQL,
+		createDatabaseSQL,
+	}, bh.executedSQLs)
 }
 
 func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
