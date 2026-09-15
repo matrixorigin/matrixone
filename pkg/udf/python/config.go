@@ -15,6 +15,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
+// maxHandlerTimeout is part of the current Gateway/worker payload contract.
+// The worker rejects a handler timeout above one hour; reject it while loading
+// the CN configuration so an enabled runtime cannot appear healthy and then
+// fail every invocation at the Flight boundary.
+const maxHandlerTimeout = time.Hour
+
 type Config struct {
 	UUID    string `toml:"uuid"`
 	Address string `toml:"address"`
@@ -89,7 +95,7 @@ func (c *ClientConfig) Validate() error {
 	if c.MaxActiveInvocations < 0 || c.MaxActiveInvocations > 1<<20 {
 		return moerr.NewInternalError(context.Background(), "invalid python udf max active invocations")
 	}
-	if c.RequestTimeout < 0 {
+	if c.RequestTimeout < 0 || c.RequestTimeout > maxHandlerTimeout {
 		return moerr.NewInternalError(context.Background(), "invalid python udf request timeout")
 	}
 	if c.MaxTerminalEntries < 0 || c.MaxTerminalEntries > 1<<30 {
