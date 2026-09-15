@@ -2226,10 +2226,17 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					return nil, err
 				}
 			}
-			if len(rule.exportSetParamPositions) > 0 && preparedExportSetIntegerPrecisionArg(functionName, i) &&
-				types.T(rewrittenArg.Typ.Id).IsMySQLString() {
+			if len(rule.exportSetParamPositions) > 0 && preparedExportSetIntegerPrecisionArg(functionName, i) {
 				for pos := range preparedNumericValueParamPositions(originalArgs[i]) {
 					if rule.hasExportSetResolvedDomain(int(pos)) {
+						sourceType := types.T(rewrittenArg.Typ.Id)
+						if sourceType.IsDecimal() || sourceType == types.T_float32 || sourceType == types.T_float64 {
+							rewrittenArg, err = BindFuncExprImplByPlanExpr(rule.ctx, "truncate",
+								[]*Expr{rewrittenArg, makePlan2Int64ConstExprWithType(0)})
+							if err != nil {
+								return nil, err
+							}
+						}
 						target := makePlan2Type(&types.Type{Oid: types.T_int64})
 						rewrittenArg, err = appendCastBeforeExprWithOverload(rule.ctx, rewrittenArg, target, 4)
 						if err != nil {

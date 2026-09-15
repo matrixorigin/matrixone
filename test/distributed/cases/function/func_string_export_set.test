@@ -599,6 +599,15 @@ PREPARE export_set_truncate_precision FROM
 SET @export_set_bits = '-0.5';
 EXECUTE export_set_round_precision USING @export_set_bits;
 EXECUTE export_set_truncate_precision USING @export_set_bits;
+SET @export_set_bits = CAST(-0.5 AS DOUBLE);
+EXECUTE export_set_round_precision USING @export_set_bits;
+EXECUTE export_set_truncate_precision USING @export_set_bits;
+SET @export_set_bits = '-0.5';
+EXECUTE export_set_round_precision USING @export_set_bits;
+EXECUTE export_set_truncate_precision USING @export_set_bits;
+SET @export_set_bits = CAST(-0.5 AS DECIMAL(2,1));
+EXECUTE export_set_round_precision USING @export_set_bits;
+EXECUTE export_set_truncate_precision USING @export_set_bits;
 DEALLOCATE PREPARE export_set_round_precision;
 DEALLOCATE PREPARE export_set_truncate_precision;
 

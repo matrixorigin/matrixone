@@ -354,18 +354,32 @@ func TestPreparedExportSetNestedPrecisionConsumerRole(t *testing.T) {
 		func() {
 			defer stmt.Close()
 			cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
-			values := []any{plan2.ParamValue{Value: "-0.5", SourceType: types.T_text.ToType(), HasSourceType: true,
-				EnableNumericPrefix: true}}
-			stmt.applyExportSetNullRuntimeTypes(values)
-			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, cached, values)
-			require.NoError(t, err)
-			q := filled.GetQuery()
-			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
-			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr,
-				[]*batch.Batch{batch.EmptyForConstFoldBatch})
-			require.NoError(t, err)
-			defer free()
-			require.Equal(t, tc.want, result.GetStringAt(0), "consumer=%s expr=%s", tc.consumer, expr.String())
+			before := cached.String()
+			for step, binding := range []struct {
+				value any
+				typ   types.Type
+			}{
+				{"-0.5", types.T_text.ToType()},
+				{-0.5, types.T_float64.ToType()},
+				{"-0.5", types.T_text.ToType()},
+				{"-0.5", types.New(types.T_decimal64, 2, 1)},
+			} {
+				values := []any{plan2.ParamValue{Value: binding.value, SourceType: binding.typ, HasSourceType: true,
+					EnableNumericPrefix: true}}
+				stmt.applyExportSetNullRuntimeTypes(values)
+				filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, cached, values)
+				require.NoError(t, err)
+				q := filled.GetQuery()
+				expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+				result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr,
+					[]*batch.Batch{batch.EmptyForConstFoldBatch})
+				require.NoError(t, err)
+				func() {
+					defer free()
+					require.Equal(t, tc.want, result.GetStringAt(0), "consumer=%s step=%d expr=%s", tc.consumer, step, expr.String())
+				}()
+				require.Equal(t, before, cached.String())
+			}
 		}()
 	}
 }
