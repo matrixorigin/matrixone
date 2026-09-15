@@ -337,6 +337,16 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 	if err := proc.Base.UdfService.Execute(proc.Ctx, invocation, selectedResult, proc.Mp()); err != nil {
 		return nil, err
 	}
+	if selectedResult.ResultLength() != len(e.selectedRows) {
+		return nil, fmt.Errorf(
+			"python udf: runtime produced %d result rows, expected %d",
+			selectedResult.ResultLength(),
+			len(e.selectedRows),
+		)
+	}
+	if selectedResult.GetResultVector() == nil {
+		return nil, fmt.Errorf("python udf: runtime returned no result vector")
+	}
 	if len(e.selectedRows) == rowCount {
 		return e.result.GetResultVector(), nil
 	}
