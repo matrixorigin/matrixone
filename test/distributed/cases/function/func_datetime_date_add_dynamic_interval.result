@@ -7,10 +7,10 @@ timestampdiff(second, '2026-01-01', date_add('2026-01-01', interval (1000 + floo
 timestampdiff(second, '2026-01-01', date_add('2026-01-01', interval (floor(result / 1000) + 1000) second)) as literal_second_offset
 from generate_series(0, 2000, 1000) g
 order by result;
-result    direct_offset    literal_first_offset    literal_second_offset
-0    0    1000    1000
-1000    1    1001    1001
-2000    2    1002    1002
+➤ result[-5,64,0]  ¦  direct_offset[-5,64,0]  ¦  literal_first_offset[-5,64,0]  ¦  literal_second_offset[-5,64,0]  𝄀
+0  ¦  0  ¦  1000  ¦  1000  𝄀
+1000  ¦  1  ¦  1001  ¦  1001  𝄀
+2000  ¦  2  ¦  1002  ¦  1002
 create table t_dynamic_interval as
 select result,
 date_add('2026-01-01', interval (1000 + floor(result / 1000)) second) as ts
@@ -19,65 +19,65 @@ select result,
 timestampdiff(second, '2026-01-01', ts) as persisted_offset
 from t_dynamic_interval
 order by result;
-result    persisted_offset
-0    1000
-1000    1001
-2000    1002
+➤ result[-5,64,0]  ¦  persisted_offset[-5,64,0]  𝄀
+0  ¦  1000  𝄀
+1000  ¦  1001  𝄀
+2000  ¦  1002
 select count(distinct ts) as distinct_ts from t_dynamic_interval;
-distinct_ts
+➤ distinct_ts[-5,64,0]  𝄀
 3
 prepare issue_27320_second from 'select date_add(''2026-01-01'', interval ? second) as added, date_sub(''2026-01-01'', interval ? second) as subtracted';
 set @issue_27320_interval = 3;
 execute issue_27320_second using @issue_27320_interval, @issue_27320_interval;
-added    subtracted
-2026-01-01 00:00:03    2025-12-31 23:59:57
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+2026-01-01 00:00:03  ¦  2025-12-31 23:59:57
 set @issue_27320_interval = -3;
 execute issue_27320_second using @issue_27320_interval, @issue_27320_interval;
-added    subtracted
-2025-12-31 23:59:57    2026-01-01 00:00:03
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+2025-12-31 23:59:57  ¦  2026-01-01 00:00:03
 set @issue_27320_interval = null;
 execute issue_27320_second using @issue_27320_interval, @issue_27320_interval;
-added    subtracted
-NULL    NULL
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+null  ¦  null
 set @issue_27320_interval = '4';
 execute issue_27320_second using @issue_27320_interval, @issue_27320_interval;
-added    subtracted
-2026-01-01 00:00:04    2025-12-31 23:59:56
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+2026-01-01 00:00:04  ¦  2025-12-31 23:59:56
 set @issue_27320_interval = 'not-an-interval';
 execute issue_27320_second using @issue_27320_interval, @issue_27320_interval;
-added    subtracted
-NULL    NULL
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+null  ¦  null
 set @issue_27320_interval = 5;
 execute issue_27320_second using @issue_27320_interval, @issue_27320_interval;
-added    subtracted
-2026-01-01 00:00:05    2025-12-31 23:59:55
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+2026-01-01 00:00:05  ¦  2025-12-31 23:59:55
 deallocate prepare issue_27320_second;
 prepare issue_27320_day_second from 'select date_add(''2026-01-01'', interval ? day_second) as added, date_sub(''2026-01-01'', interval ? day_second) as subtracted';
 set @issue_27320_interval = '1 02:03:04';
 execute issue_27320_day_second using @issue_27320_interval, @issue_27320_interval;
-added    subtracted
-2026-01-02 02:03:04    2025-12-30 21:56:56
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+2026-01-02 02:03:04.000000  ¦  2025-12-30 21:56:56.000000
 set @issue_27320_interval = '1 02:03:04:05';
 execute issue_27320_day_second using @issue_27320_interval, @issue_27320_interval;
-added    subtracted
-NULL    NULL
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+null  ¦  null
 set @issue_27320_interval = '0 00:00:01';
 execute issue_27320_day_second using @issue_27320_interval, @issue_27320_interval;
-added    subtracted
-2026-01-01 00:00:01    2025-12-31 23:59:59
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+2026-01-01 00:00:01.000000  ¦  2025-12-31 23:59:59.000000
 deallocate prepare issue_27320_day_second;
 prepare issue_27320_year_month from 'select date_add(''2026-01-01'', interval ? year_month) as added, date_sub(''2026-01-01'', interval ? year_month) as subtracted';
 set @issue_27320_interval = '1-2';
 execute issue_27320_year_month using @issue_27320_interval, @issue_27320_interval;
-added    subtracted
-2027-03-01    2024-11-01
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+2027-03-01  ¦  2024-11-01
 set @issue_27320_interval = '1-2-3';
 execute issue_27320_year_month using @issue_27320_interval, @issue_27320_interval;
-added    subtracted
-NULL    NULL
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+null  ¦  null
 set @issue_27320_interval = '0-1';
 execute issue_27320_year_month using @issue_27320_interval, @issue_27320_interval;
-added    subtracted
-2026-02-01    2025-12-01
+➤ added[12,65535,0]  ¦  subtracted[12,65535,0]  𝄀
+2026-02-01  ¦  2025-12-01
 deallocate prepare issue_27320_year_month;
 drop database date_add_dynamic_interval;
