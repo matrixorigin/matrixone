@@ -95,3 +95,68 @@ func TestIntegerArithmeticFeatureLeavesLegacyOperatorsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+func TestPreparedUnsignedArithmeticBoundProtocolFence(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_decimal128)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{
+			Obj:     function.EncodeOverloadID(function.INTERNAL_UNSIGNED_ARITHMETIC_BOUND, 0),
+			ObjName: "__unsigned_arithmetic_bound",
+		}}},
+	}
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(qry)
+	require.NoError(t, err)
+	require.True(t, features.PreparedUnsignedArithmeticBound)
+	require.False(t, features.IntegerArithmeticDomains)
+
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: value_scan.NewArgument(), Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: qry}}}
+	for _, tc := range []struct {
+		name               string
+		workerVersion      int64
+		coordinatorVersion int64
+		multi              bool
+		wantEncodeErr      bool
+	}{
+		{name: "legacy worker is isolated", workerVersion: defines.MORPCVersion74, coordinatorVersion: defines.MORPCVersion75, wantEncodeErr: true},
+		{name: "coordinator gate rejects old version", workerVersion: defines.MORPCVersion75, coordinatorVersion: defines.MORPCVersion74, wantEncodeErr: true},
+		{name: "new worker accepts helper", workerVersion: defines.MORPCVersion75, coordinatorVersion: defines.MORPCVersion75, multi: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client.version = tc.workerVersion
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.coordinatorVersion)
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+			require.NoError(t, c.constrainIntegerDomainWorkers(qry))
+			if tc.multi {
+				require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+			} else {
+				require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+			}
+
+			data, encodeErr := encodeRemoteScope(scope, c.proc)
+			if tc.multi {
+				if tc.wantEncodeErr {
+					require.ErrorContains(t, encodeErr, "protocol version 75")
+				} else {
+					require.NoError(t, encodeErr)
+					wire := new(pipeline.Pipeline)
+					require.NoError(t, wire.Unmarshal(data))
+				}
+			} else {
+				require.ErrorContains(t, encodeErr, "protocol version 75")
+			}
+		})
+	}
+
+	// A coordinator may be at v75 while a selected destination has
+	// rolled back to v74. The final sender-side probe must reject the helper
+	// even when compile-time placement was performed against a newer view.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
+	client.version = defines.MORPCVersion74
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "protocol version 75")
+}

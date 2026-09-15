@@ -36,11 +36,14 @@ func TestPreparedNumericFallbackMetadataSurvivesProtoRoundTrip(t *testing.T) {
 	original := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_float64)},
 		PreparedNumeric: &planpb.PreparedNumericMetadata{
-			Fallback:             true,
-			ParamPos:             0,
-			FallbackSource:       true,
-			FallbackSourceNodeId: 7,
-			FallbackSourceColPos: 2,
+			Fallback:                           true,
+			ParamPos:                           0,
+			FallbackSource:                     true,
+			FallbackSourceNodeId:               7,
+			FallbackSourceColPos:               2,
+			DeferredUnsignedArithmeticBoundary: true,
+			NativeBitArithmeticBoundary:        true,
+			StrictUnsignedArithmeticBoundary:   true,
 			StringDomainSource: &planpb.Expr{
 				Typ:  planpb.Type{Id: int32(types.T_varchar)},
 				Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 1}},
@@ -59,6 +62,9 @@ func TestPreparedNumericFallbackMetadataSurvivesProtoRoundTrip(t *testing.T) {
 	require.True(t, metadata.GetFallbackSource())
 	require.Equal(t, int32(7), metadata.GetFallbackSourceNodeId())
 	require.Equal(t, int32(2), metadata.GetFallbackSourceColPos())
+	require.True(t, metadata.GetDeferredUnsignedArithmeticBoundary())
+	require.True(t, metadata.GetNativeBitArithmeticBoundary())
+	require.True(t, metadata.GetStrictUnsignedArithmeticBoundary())
 	require.Equal(t, int32(1), metadata.GetStringDomainSource().GetP().GetPos())
 	require.Zero(t, restored.AuxId,
 		"prepared numeric provenance must not be encoded as an executor memo id")

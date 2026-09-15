@@ -187,17 +187,27 @@ func RequiresMORPCVersion72IPFunctionSemantics(owner any) (bool, error) {
 	return features.IPFunctionSemantics, err
 }
 
+// RequiresMORPCVersion75PreparedUnsignedArithmeticBound reports whether an
+// owner contains the strict runtime range-check helper introduced for
+// prepared unsigned arithmetic. Older workers do not have that internal
+// function in their registry and must not receive such a plan.
+func RequiresMORPCVersion75PreparedUnsignedArithmeticBound(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.PreparedUnsignedArithmeticBound, err
+}
+
 const (
-	equalFunctionID                  int32 = 0
-	notEqualFunctionID               int32 = 1
-	nullSafeEqualFunctionID          int32 = 406
-	internalJSONComparisonFunctionID int32 = 577
-	planBooleanTypeID                int32 = 10
-	planJSONTypeID                   int32 = 62
-	binFunctionID                    int32 = 270
-	convFunctionID                   int32 = 367
-	asciiFunctionID                  int32 = 52
-	asciiInt32ResultTypeID           int32 = 22
+	equalFunctionID                           int32 = 0
+	notEqualFunctionID                        int32 = 1
+	nullSafeEqualFunctionID                   int32 = 406
+	internalJSONComparisonFunctionID          int32 = 577
+	planBooleanTypeID                         int32 = 10
+	planJSONTypeID                            int32 = 62
+	binFunctionID                             int32 = 270
+	convFunctionID                            int32 = 367
+	asciiFunctionID                           int32 = 52
+	asciiInt32ResultTypeID                    int32 = 22
+	internalUnsignedArithmeticBoundFunctionID int32 = 581
 )
 
 // RemoteExpressionFeatures is the complete set of versioned expression
@@ -213,16 +223,19 @@ const (
 // RowDependentConvBases requires MORPC v69 for nonconstant or unsigned bases.
 // IPFunctionSemantics requires MORPC v72 because the IP functions change
 // existing overload semantics and add numeric INET_NTOA overloads.
+// PreparedUnsignedArithmeticBound requires MORPC v75 because the strict
+// runtime range-check helper is a new internal function registry entry.
 type RemoteExpressionFeatures struct {
-	NumericPrefix            bool
-	JSONComparisonParam      bool
-	MixedJSONBooleanEquality bool
-	FormatNumericArguments   bool
-	TypedConversionFunctions bool
-	IntegerArithmeticDomains bool
-	RowDependentConvBases    bool
-	ASCIIInt32Result         bool
-	IPFunctionSemantics      bool
+	NumericPrefix                   bool
+	JSONComparisonParam             bool
+	MixedJSONBooleanEquality        bool
+	FormatNumericArguments          bool
+	TypedConversionFunctions        bool
+	IntegerArithmeticDomains        bool
+	PreparedUnsignedArithmeticBound bool
+	RowDependentConvBases           bool
+	ASCIIInt32Result                bool
+	IPFunctionSemantics             bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -233,6 +246,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.TypedConversionFunctions ||
 		features.ASCIIInt32Result ||
 		features.IntegerArithmeticDomains ||
+		features.PreparedUnsignedArithmeticBound ||
 		features.RowDependentConvBases ||
 		features.IPFunctionSemantics
 }
@@ -281,6 +295,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				// PLUS/MINUS/MULTI are stable function IDs 10/11/12.
 				if (id >= 10 && id <= 12 && overload == 2) || (id == 11 && overload == 3) {
 					features.IntegerArithmeticDomains = true
+				}
+				if id == internalUnsignedArithmeticBoundFunctionID {
+					features.PreparedUnsignedArithmeticBound = true
 				}
 			}
 			if !features.NumericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&

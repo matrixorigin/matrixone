@@ -3688,6 +3688,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 		preparedNumericPeer = preparedNumericProvenance && (name == "/" || name == "div")
 	}
+	unsignedArithmeticResultDeferred := b.unsignedIntegerArithmeticResultDeferred(name, astArgs, args)
+	nativeBitArithmeticBoundary := b.nativeBitArithmeticBoundary(name, astArgs, args)
+	unsignedArithmeticResultType := b.unsignedIntegerArithmeticResultType(name, astArgs, args)
 	if b.numericParamType != nil || preparedNumericPeer {
 		var err error
 		args, err = b.resolvePreparedNumericArgs(name, args)
@@ -3756,6 +3759,14 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		return nil, rewriteErr
 	}
 	args = rewrittenArgs
+	// A deferred unsigned arithmetic node needs a strict intermediate check only
+	// when an enclosing arithmetic expression could otherwise cancel its
+	// overflow. Mark those descendants after their own binding has attached the
+	// deferred provenance. Top-level nodes still rebind at EXECUTE, but retain
+	// the native BIGINT error contract used by non-prepared arithmetic.
+	if isPreparedUnsignedArithmeticOperator(name) {
+		markNestedPreparedUnsignedArithmeticBoundaries(args)
+	}
 	if b.builder != nil && b.builder.isPrepareStatement {
 		b.markPreparedStringDomainSubquerySources(name, args)
 	}
@@ -3873,6 +3884,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
+			markPreparedUnsignedArithmeticBoundary(e, unsignedArithmeticResultDeferred)
+			markNativeBitArithmeticBoundary(e, nativeBitArithmeticBoundary)
+			if unsignedArithmeticResultType != nil {
+				return appendCastBeforeExpr(b.GetContext(), e, *unsignedArithmeticResultType)
+			}
 			return e, nil
 		}
 		if !strings.Contains(err.Error(), "not supported") {
@@ -3893,6 +3909,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		if err == nil {
 			if isIfNull {
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+			}
+			markPreparedUnsignedArithmeticBoundary(builtinExpr, unsignedArithmeticResultDeferred)
+			markNativeBitArithmeticBoundary(builtinExpr, nativeBitArithmeticBoundary)
+			if unsignedArithmeticResultType != nil {
+				return appendCastBeforeExpr(b.GetContext(), builtinExpr, *unsignedArithmeticResultType)
 			}
 			return builtinExpr, nil
 		}
@@ -4056,6 +4077,72 @@ func markPreparedResultCastsProvisional(
 	}
 }
 
+// markPreparedUnsignedArithmeticBoundary records a deferred result boundary on
+// the arithmetic node itself. The operator bit is deliberately independent of
+// ProvisionalResultCast: the latter describes a removable implicit CAST on an
+// operand and has different consumers. The bit is set on the operator (not on
+// either operand) because a bare marker may be the only runtime-dependent peer.
+func markPreparedUnsignedArithmeticBoundary(expr *plan.Expr, deferred bool) {
+	if !deferred || expr == nil || expr.GetF() == nil {
+		return
+	}
+	ensurePreparedNumericMetadata(expr).DeferredUnsignedArithmeticBoundary = true
+}
+
+func markStrictPreparedUnsignedArithmeticBoundary(expr *plan.Expr) {
+	if expr == nil || !expr.GetPreparedNumeric().GetDeferredUnsignedArithmeticBoundary() {
+		return
+	}
+	ensurePreparedNumericMetadata(expr).StrictUnsignedArithmeticBoundary = true
+}
+
+func isModuloArithmeticName(name string) bool {
+	return name == "%" || name == "mod"
+}
+
+func isPreparedUnsignedArithmeticOperator(name string) bool {
+	switch name {
+	case "-", "+", "*", "%", "mod", "div":
+		return true
+	default:
+		return false
+	}
+}
+
+func markNestedPreparedUnsignedArithmeticBoundaries(args []*Expr) {
+	var visit func(*Expr)
+	visit = func(expr *Expr) {
+		if expr == nil {
+			return
+		}
+		if expr.GetF() != nil {
+			if fn := expr.GetF().Func; fn != nil &&
+				isPreparedUnsignedArithmeticOperator(fn.GetObjName()) {
+				markStrictPreparedUnsignedArithmeticBoundary(expr)
+			}
+			for _, arg := range expr.GetF().Args {
+				visit(arg)
+			}
+			return
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				visit(item)
+			}
+		}
+	}
+	for _, arg := range args {
+		visit(arg)
+	}
+}
+
+func markNativeBitArithmeticBoundary(expr *plan.Expr, native bool) {
+	if !native || expr == nil || expr.GetF() == nil {
+		return
+	}
+	ensurePreparedNumericMetadata(expr).NativeBitArithmeticBoundary = true
+}
+
 func (b *baseBinder) markVolatileInLeft(left *plan.Expr) {
 	if list := left.GetList(); list != nil {
 		for _, elem := range list.List {
@@ -4126,6 +4213,10 @@ func bindFuncExprImplUdf(
 		if udf.SQLMode != nil {
 			parserSQLMode = *udf.SQLMode
 		}
+		restoreSQLMode := b.pushNoUnsignedSubtractionOverride(
+			mysqlparser.HasSQLMode(parserSQLMode, mysqlparser.SQLModeNoUnsignedSubtraction),
+		)
+		defer restoreSQLMode()
 		sql, udfArgs := b.expandSQLUdfArguments(udf.Body, boundArgs, parserSQLMode)
 		restoreUdfArgs := b.pushSQLUdfArguments(udfArgs)
 		defer restoreUdfArgs()
@@ -6402,6 +6493,605 @@ func maxDecimalPrecisionForRounding(oid types.T) int32 {
 	}
 }
 
+// unsignedIntegerArithmeticResultDeferred reports the prepare-time cases in
+// which an integer arithmetic node must be rebound at EXECUTE. A bare marker's
+// signedness is unknown, so its visible result cast is deferred. An explicit
+// numeric CAST fixes the operand domain but still carries a runtime value and
+// therefore needs the same rebind; its result cast remains in the template.
+// The metadata lets nested nodes receive a strict intermediate check without
+// changing the native top-level integer error contract.
+func (b *baseBinder) unsignedIntegerArithmeticResultDeferred(
+	name string, astArgs []tree.Expr, args []*Expr,
+) bool {
+	if b.builder == nil || !b.builder.isPrepareStatement || len(astArgs) != 2 || len(args) != 2 {
+		return false
+	}
+	switch name {
+	case "+", "*", "%", "mod", "div":
+	default:
+		return false
+	}
+	leftMarker := preparedArithmeticOperandHasUnresolvedMarker(args[0]) &&
+		!isDirectExplicitNumericCast(astArgs[0])
+	rightMarker := preparedArithmeticOperandHasUnresolvedMarker(args[1]) &&
+		!isDirectExplicitNumericCast(astArgs[1])
+	// Explicit numeric CASTs fix an operand's domain, but a parameter inside
+	// such a cast still needs to be rebound at EXECUTE. Mark that arithmetic
+	// node as deferred too; the runtime path can then select the native integer
+	// overload for a top-level node and install the strict intermediate guard
+	// only when the node is nested below another arithmetic expression.
+	if !leftMarker && !rightMarker &&
+		!preparedExprContainsParam(args[0]) && !preparedExprContainsParam(args[1]) {
+		return false
+	}
+	// BIT arithmetic has a separate DECIMAL128 contract in the native
+	// resolver.  Do not leave a generic deferred unsigned boundary on this
+	// node; the runtime BIT path must remain authoritative.
+	for _, arg := range args {
+		if planExprContainsBitValue(arg) {
+			return false
+		}
+	}
+	for _, arg := range astArgs {
+		if astExprContainsBitValue(b.GetContext(), arg) {
+			return false
+		}
+	}
+	leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(astArgs[0], args[0])
+	rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(astArgs[1], args[1])
+	resultUnsigned := leftUnsigned || rightUnsigned
+	if isModuloArithmeticName(name) {
+		// MOD inherits the dividend's signedness.  An unsigned divisor alone
+		// must not force a signed remainder through the UINT64 boundary.
+		resultUnsigned = leftUnsigned
+	}
+	return leftInteger && rightInteger && resultUnsigned
+}
+
+// nativeBitArithmeticBoundary records the separate execution contract for a
+// prepared arithmetic node that combines a BIT value with a bare marker. The
+// normal unsigned boundary must never replace the native DECIMAL128 resolver,
+// but runtime rebinding still has to remove stale implementation casts around
+// the marker before invoking that resolver.
+func (b *baseBinder) nativeBitArithmeticBoundary(
+	name string, astArgs []tree.Expr, args []*Expr,
+) bool {
+	if b.builder == nil || !b.builder.isPrepareStatement || len(astArgs) != 2 || len(args) != 2 {
+		return false
+	}
+	switch name {
+	case "+", "*", "%", "mod", "div":
+	default:
+		return false
+	}
+	if !preparedArithmeticOperandHasUnresolvedMarker(args[0]) &&
+		!preparedArithmeticOperandHasUnresolvedMarker(args[1]) {
+		return false
+	}
+	for _, arg := range astArgs {
+		if astExprContainsBitValue(b.GetContext(), arg) {
+			return true
+		}
+	}
+	for _, arg := range args {
+		if planExprContainsBitValue(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+// unsignedIntegerArithmeticResultType returns MySQL's result domain for an
+// integer arithmetic node involving an unsigned operand. This is intentionally
+// decided before prepared numeric argument reconciliation: that reconciliation
+// may temporarily widen an explicit unsigned cast containing a parameter to
+// DECIMAL128. Applying the cast at every node is important: a final cast on
+// only the outer subtraction lets a DECIMAL128 intermediate overflow and then
+// be cancelled by its parent.
+func (b *baseBinder) unsignedIntegerArithmeticResultType(name string, astArgs []tree.Expr, args []*Expr) *Type {
+	if len(astArgs) != 2 || len(args) != 2 {
+		return nil
+	}
+	switch name {
+	case "-", "+", "*", "%", "mod", "div":
+	default:
+		return nil
+	}
+	// DIV has its own native resolver for prepared numeric parameters. Let it
+	// retain the operand-specific UINT64/INT64 contract instead of inserting
+	// the generic DECIMAL128 bridge used for a fully bound nested DIV node.
+	if name == "div" && b.builder != nil && b.builder.isPrepareStatement &&
+		(preparedExprContainsParam(args[0]) || preparedExprContainsParam(args[1])) {
+		return nil
+	}
+	// BIT arithmetic has a separate exact-domain contract in the function
+	// resolver: BIT combined with a signed BIGINT is evaluated in DECIMAL128 so
+	// the full uint64 range (and negative subtraction results) remain visible.
+	// Do not replace that result with the unsigned-subtraction boundary below;
+	// doing so changes both the public result type and underflow behavior.  The
+	// check walks nested plan arguments because a parent arithmetic node may
+	// receive an already-bound decimal child whose source is still BIT.
+	for _, arg := range args {
+		if planExprContainsBitValue(arg) {
+			return nil
+		}
+	}
+	// Constant folding can erase the BIT node from the bound plan while the
+	// parsed expression still carries the explicit CAST. Keep that provenance
+	// as a second guard so a folded `(CAST(0 AS BIT) + 0) - 1` cannot be routed
+	// through the unsigned-subtraction boundary.
+	for _, arg := range astArgs {
+		if astExprContainsBitValue(b.GetContext(), arg) {
+			return nil
+		}
+	}
+	if b.unsignedIntegerArithmeticResultDeferred(name, astArgs, args) {
+		leftMarker := preparedArithmeticOperandHasUnresolvedMarker(args[0]) &&
+			!isDirectExplicitNumericCast(astArgs[0])
+		rightMarker := preparedArithmeticOperandHasUnresolvedMarker(args[1]) &&
+			!isDirectExplicitNumericCast(astArgs[1])
+		if leftMarker || rightMarker {
+			// A bare marker's signedness is an execute-time property. Freezing
+			// the unsigned peer's physical type into that marker makes a later
+			// signed value (for example, u16 + -2) fail before arithmetic runs.
+			// ResetParamRefRule restores the deferred result boundary once the
+			// marker's execution-time domain is known.
+			return nil
+		}
+		// Explicit CASTs already fix the result domain at PREPARE. The deferred
+		// bit still forces an EXECUTE-time native rebind, but the visible
+		// UINT64/INT64 result boundary remains in the template.
+	}
+
+	leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(astArgs[0], args[0])
+	rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(astArgs[1], args[1])
+	if !leftInteger || !rightInteger || (!leftUnsigned && !rightUnsigned) {
+		return nil
+	}
+
+	// MOD keeps the signedness of its dividend.  Unlike the other integer
+	// arithmetic operators handled here, an unsigned divisor alone must not
+	// turn a signed remainder into UINT64 (for example, -3 % CAST(2 AS
+	// UNSIGNED) remains -1).  An unsigned dividend still gets the normal
+	// unsigned result boundary.
+	resultUnsigned := leftUnsigned || rightUnsigned
+	if isModuloArithmeticName(name) {
+		resultUnsigned = leftUnsigned
+	}
+	if !resultUnsigned {
+		return nil
+	}
+
+	resultType := types.New(types.T_uint64, 64, -1)
+	if name == "-" && b.noUnsignedSubtractionEnabled() {
+		resultType = types.New(types.T_int64, 64, -1)
+	}
+	planType := makePlan2Type(&resultType)
+	return &planType
+}
+
+// preparedArithmeticOperandHasUnresolvedMarker reports whether an arithmetic
+// operand still derives its numeric domain from a bare runtime marker. An
+// explicit CAST is a user-selected type boundary, not an unresolved marker:
+// callers must be able to protect the result of arithmetic on that fixed
+// domain even though the cast's child is a parameter.
+func preparedArithmeticOperandHasUnresolvedMarker(expr *Expr) bool {
+	if expr == nil || isExplicitPreparedCast(expr) {
+		return false
+	}
+	if expr.GetP() != nil || expr.GetV() != nil {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if preparedArithmeticOperandHasUnresolvedMarker(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if preparedArithmeticOperandHasUnresolvedMarker(item) {
+				return true
+			}
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		if preparedArithmeticOperandHasUnresolvedMarker(window.WindowFunc) {
+			return true
+		}
+		for _, item := range window.PartitionBy {
+			if preparedArithmeticOperandHasUnresolvedMarker(item) {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && preparedArithmeticOperandHasUnresolvedMarker(order.Expr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func planExprContainsBitValue(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if types.T(expr.Typ.Id) == types.T_bit {
+		return true
+	}
+	if literal := expr.GetLit(); literal != nil && literal.GetSrc() != nil {
+		if planExprContainsBitValue(literal.GetSrc()) {
+			return true
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func == nil {
+			return false
+		}
+		switch fn.Func.GetObjName() {
+		case "cast":
+			if len(fn.Args) > 1 && fn.Args[1] != nil && fn.Args[1].GetT() != nil &&
+				types.T(fn.Args[1].Typ.Id) == types.T_bit {
+				return true
+			}
+			// Binder-inserted casts preserve the source arithmetic domain. A
+			// user-authored non-BIT cast is a semantic boundary and must hide
+			// the BIT source from the enclosing arithmetic node.
+			if isExplicitPreparedCast(expr) {
+				return false
+			}
+			for _, arg := range fn.Args {
+				if planExprContainsBitValue(arg) {
+					return true
+				}
+			}
+		case "+", "-", "*", "%", "mod", "unary_plus", "unary_minus":
+			for _, arg := range fn.Args {
+				if planExprContainsBitValue(arg) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func astExprContainsBitValue(ctx context.Context, expr tree.Expr) bool {
+	switch expr := expr.(type) {
+	case nil:
+		return false
+	case *tree.ParenExpr:
+		return astExprContainsBitValue(ctx, expr.Expr)
+	case *tree.CastExpr:
+		typ, err := getTypeFromAst(ctx, expr.Type)
+		if err == nil && types.T(typ.Id) == types.T_bit {
+			return true
+		}
+		// An explicit non-BIT cast is a semantic boundary. Do not let a BIT
+		// source hidden behind CAST(... AS UNSIGNED/DECIMAL/...) influence the
+		// enclosing arithmetic node.
+		return false
+	case *tree.BitCastExpr:
+		typ, err := getTypeFromAst(ctx, expr.Type)
+		if err == nil && types.T(typ.Id) == types.T_bit {
+			return true
+		}
+		return false
+	case *tree.BinaryExpr:
+		switch expr.Op {
+		case tree.PLUS, tree.MINUS, tree.MULTI, tree.MOD:
+			return astExprContainsBitValue(ctx, expr.Left) || astExprContainsBitValue(ctx, expr.Right)
+		default:
+			// Bitwise operators establish a new UINT64 result domain. Their
+			// BIT operands must not make an enclosing arithmetic node inherit
+			// the native BIT/DECIMAL contract.
+			return false
+		}
+	case *tree.UnaryExpr:
+		switch expr.Op {
+		case tree.UNARY_PLUS, tree.UNARY_MINUS:
+			return astExprContainsBitValue(ctx, expr.Expr)
+		default:
+			// Unary bitwise NOT likewise returns an unsigned integer value.
+			return false
+		}
+	case *tree.FuncExpr:
+		if numericAstFunctionName(expr) == "mod" {
+			for _, arg := range expr.Exprs {
+				if astExprContainsBitValue(ctx, arg) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// integerArithmeticOperandDomain combines the parsed expression with its
+// bound expression. The bound arithmetic node may already contain implicit
+// DECIMAL casts, whereas the AST distinguishes that implementation detail from
+// a user-written DECIMAL cast, which remains a non-integer boundary. If an
+// entirely constant nested expression has already folded, the AST is also the
+// only surviving record of its logical integer/unsigned domain.
+func (b *baseBinder) integerArithmeticOperandDomain(astExpr tree.Expr, expr *Expr) (integer, unsigned bool) {
+	astExpr = unwrapParenExpr(astExpr)
+	if literal, ok := astExpr.(*tree.NumVal); ok {
+		return literal.ValType == tree.P_int64 || literal.ValType == tree.P_uint64, literal.ValType == tree.P_uint64
+	}
+	if cast, ok := astExpr.(*tree.CastExpr); ok {
+		typ, err := getTypeFromAst(b.GetContext(), cast.Type)
+		if err != nil {
+			return false, false
+		}
+		oid := types.T(typ.Id)
+		return integerSubtractionOperand(oid), unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+	}
+	if unary, ok := astExpr.(*tree.UnaryExpr); ok &&
+		(unary.Op == tree.UNARY_PLUS || unary.Op == tree.UNARY_MINUS) {
+		child := expr
+		if expr != nil {
+			if fn := expr.GetF(); fn != nil && fn.Func != nil && len(fn.Args) == 1 &&
+				(fn.Func.GetObjName() == "unary_plus" || fn.Func.GetObjName() == "unary_minus") {
+				child = fn.Args[0]
+			}
+		}
+		return b.integerArithmeticOperandDomain(unary.Expr, child)
+	}
+	if _, ok := astExpr.(*tree.ParamExpr); ok {
+		// A parameter's concrete numeric domain is not known until EXECUTE, but
+		// subtraction still needs its prepare-time SQL-mode result boundary. The
+		// execute-time parameter reset preserves the cast while supplying the
+		// actual signed/unsigned value to the arithmetic node.
+		return true, false
+	}
+	// Result-selecting numeric functions can retain an integer parameter domain
+	// even when prepare-time common-type reconciliation gives the wrapper a
+	// DECIMAL type.  Inspect the AST branches before falling back to the bound
+	// result type so a fixed unsigned peer still gets a durable runtime boundary
+	// through ABS/COALESCE/IF/CASE/GREATEST/LEAST.  A fractional branch remains
+	// a deliberate non-integer boundary and therefore returns false here.
+	if function, ok := astExpr.(*tree.FuncExpr); ok {
+		if integer, unsigned := b.integerArithmeticFunctionDomain(function, expr); integer {
+			return integer, unsigned
+		}
+	}
+	if caseExpr, ok := astExpr.(*tree.CaseExpr); ok {
+		if integer, unsigned := b.integerArithmeticCaseDomain(caseExpr, expr); integer {
+			return integer, unsigned
+		}
+	}
+	// An already-bound implicit result cast is semantic, rather than a
+	// user-written DECIMAL boundary. Prefer it before interpreting the binary
+	// AST: a protected nested unsigned operation reaches its parent as CAST(...
+	// AS UNSIGNED), whose function arguments no longer correspond one-to-one
+	// with the original binary expression.
+	if expr != nil {
+		oid := types.T(expr.Typ.Id)
+		if integerSubtractionOperand(oid) {
+			return true, unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+		}
+	}
+
+	if binary, ok := astExpr.(*tree.BinaryExpr); ok && integerArithmeticBinaryOperator(binary.Op) {
+		if expr == nil || expr.GetF() == nil || len(expr.GetF().Args) != 2 {
+			// Constant folding can replace the bound function with a literal before
+			// its parent subtraction is bound. The AST still carries the logical
+			// integer domain, so preserve it rather than relying on the folded
+			// physical DECIMAL result.
+			leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(binary.Left, nil)
+			rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(binary.Right, nil)
+			resultUnsigned := leftUnsigned || rightUnsigned
+			if binary.Op == tree.MOD {
+				resultUnsigned = leftUnsigned
+			}
+			return leftInteger && rightInteger, resultUnsigned
+		}
+		fn := expr.GetF()
+		leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(binary.Left, fn.Args[0])
+		rightInteger, rightUnsigned := b.integerArithmeticOperandDomain(binary.Right, fn.Args[1])
+		resultUnsigned := leftUnsigned || rightUnsigned
+		if binary.Op == tree.MOD {
+			resultUnsigned = leftUnsigned
+		}
+		return leftInteger && rightInteger, resultUnsigned
+	}
+
+	if expr == nil {
+		return false, false
+	}
+	oid := types.T(expr.Typ.Id)
+	return integerSubtractionOperand(oid), unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+}
+
+// integerArithmeticFunctionDomain derives the exact integer domain of a
+// result-selecting wrapper from its AST value branches. The bound expression
+// is used only to line up children after prepare-time casts or constant
+// folding; the AST remains authoritative about user-authored DECIMAL literals
+// and explicit casts.
+func (b *baseBinder) integerArithmeticFunctionDomain(astExpr *tree.FuncExpr, expr *Expr) (integer, unsigned bool) {
+	name := canonicalPreparedResultFunctionName(strings.ToLower(numericAstFunctionName(astExpr)))
+	if name == "abs" {
+		if len(astExpr.Exprs) != 1 {
+			return false, false
+		}
+		return b.integerArithmeticOperandDomain(astExpr.Exprs[0], boundArithmeticFunctionArg(expr, 0))
+	}
+	if name == "mod" {
+		if len(astExpr.Exprs) != 2 {
+			return false, false
+		}
+		leftInteger, leftUnsigned := b.integerArithmeticOperandDomain(
+			astExpr.Exprs[0], boundArithmeticFunctionArg(expr, 0),
+		)
+		rightInteger, _ := b.integerArithmeticOperandDomain(
+			astExpr.Exprs[1], boundArithmeticFunctionArg(expr, 1),
+		)
+		// MOD, like %, inherits signedness from its dividend. An unsigned
+		// divisor is still an integer operand, but must not turn a negative
+		// signed remainder into UINT64.
+		return leftInteger && rightInteger, leftUnsigned
+	}
+
+	indexes, ok := numericFunctionResultArgs(name, len(astExpr.Exprs))
+	if !ok {
+		switch name {
+		case "greatest", "least":
+			indexes = make([]int, len(astExpr.Exprs))
+			for i := range indexes {
+				indexes[i] = i
+			}
+		default:
+			return false, false
+		}
+	}
+	seen := false
+	for _, index := range indexes {
+		if index < 0 || index >= len(astExpr.Exprs) {
+			return false, false
+		}
+		if isNullNumericAstValue(astExpr.Exprs[index]) {
+			continue
+		}
+		branchInteger, branchUnsigned := b.integerArithmeticOperandDomain(
+			astExpr.Exprs[index], boundArithmeticFunctionArg(expr, index),
+		)
+		if !branchInteger {
+			return false, false
+		}
+		seen = true
+		unsigned = unsigned || branchUnsigned
+	}
+	return seen, unsigned
+}
+
+// integerArithmeticCaseDomain mirrors bindCaseExpr's alternating condition /
+// value argument layout. Conditions and a simple CASE selector do not
+// contribute to the result domain; only THEN/ELSE branches do.
+func (b *baseBinder) integerArithmeticCaseDomain(astExpr *tree.CaseExpr, expr *Expr) (integer, unsigned bool) {
+	seen := false
+	for i, whenExpr := range astExpr.Whens {
+		index := i*2 + 1
+		if index >= len(exprFunctionArgs(expr)) {
+			return false, false
+		}
+		if isNullNumericAstValue(whenExpr.Val) {
+			continue
+		}
+		branchInteger, branchUnsigned := b.integerArithmeticOperandDomain(
+			whenExpr.Val, boundArithmeticFunctionArg(expr, index),
+		)
+		if !branchInteger {
+			return false, false
+		}
+		seen = true
+		unsigned = unsigned || branchUnsigned
+	}
+	if astExpr.Else != nil && !isNullNumericAstValue(astExpr.Else) {
+		index := len(astExpr.Whens) * 2
+		if index >= len(exprFunctionArgs(expr)) {
+			return false, false
+		}
+		branchInteger, branchUnsigned := b.integerArithmeticOperandDomain(
+			astExpr.Else, boundArithmeticFunctionArg(expr, index),
+		)
+		if !branchInteger {
+			return false, false
+		}
+		seen = true
+		unsigned = unsigned || branchUnsigned
+	}
+	return seen, unsigned
+}
+
+func exprFunctionArgs(expr *Expr) []*Expr {
+	if expr == nil || expr.GetF() == nil {
+		return nil
+	}
+	return expr.GetF().Args
+}
+
+func boundArithmeticFunctionArg(expr *Expr, index int) *Expr {
+	args := exprFunctionArgs(expr)
+	if index < 0 || index >= len(args) {
+		return nil
+	}
+	return args[index]
+}
+
+func isNullNumericAstValue(expr tree.Expr) bool {
+	literal, ok := unwrapParenExpr(expr).(*tree.NumVal)
+	return ok && literal.ValType == tree.P_null
+}
+
+func integerArithmeticBinaryOperator(op tree.BinaryOp) bool {
+	switch op {
+	case tree.PLUS, tree.MULTI, tree.MOD, tree.INTEGER_DIV:
+		// '/' deliberately produces a fractional domain. A nested '-' already
+		// has the selected final integer type, and the bitwise operators retain
+		// their UINT64 physical result, so neither needs AST provenance here.
+		return true
+	default:
+		return false
+	}
+}
+
+func integerSubtractionOperand(typ types.T) bool {
+	return typ.IsInteger() || typ == types.T_bit || typ == types.T_year
+}
+
+func unsignedIntegerSubtractionOperand(typ types.T) bool {
+	switch typ {
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_bit:
+		return true
+	default:
+		return false
+	}
+}
+
+func (b *baseBinder) noUnsignedSubtractionEnabled() bool {
+	if b.hasNoUnsignedSubtractionOverride {
+		return b.noUnsignedSubtractionOverride
+	}
+	return b.builder != nil && b.builder.noUnsignedSubtraction
+}
+
+func (b *baseBinder) pushNoUnsignedSubtractionOverride(enabled bool) func() {
+	oldEnabled := b.noUnsignedSubtractionOverride
+	oldHasOverride := b.hasNoUnsignedSubtractionOverride
+	var oldBuilderEnabled bool
+	if b.builder != nil {
+		oldBuilderEnabled = b.builder.noUnsignedSubtraction
+		// SELECT-form SQL UDF bodies create nested binders from this builder, so
+		// the stored mode must be visible beyond the current baseBinder too.
+		b.builder.noUnsignedSubtraction = enabled
+	}
+	b.noUnsignedSubtractionOverride = enabled
+	b.hasNoUnsignedSubtractionOverride = true
+	return func() {
+		if b.builder != nil {
+			b.builder.noUnsignedSubtraction = oldBuilderEnabled
+		}
+		b.noUnsignedSubtractionOverride = oldEnabled
+		b.hasNoUnsignedSubtractionOverride = oldHasOverride
+	}
+}
+
+func (b *baseBinder) setNoUnsignedSubtractionOverride(enabled bool) {
+	b.noUnsignedSubtractionOverride = enabled
+	b.hasNoUnsignedSubtractionOverride = true
+}
+
+func noUnsignedSubtractionMode(ctx CompilerContext) bool {
+	mode, err := ctx.ResolveVariable("sql_mode", true, false)
+	if err != nil {
+		return false
+	}
+	modeString, ok := mode.(string)
+	return ok && mysqlparser.HasSQLMode(modeString, mysqlparser.SQLModeNoUnsignedSubtraction)
+}
+
 func isCollatedTextPlanType(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
@@ -8101,7 +8791,18 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	}
 }
 
-func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
+func (b *baseBinder) GetContext() context.Context {
+	if b.hasNoUnsignedSubtractionOverride {
+		// Builtin integer overload selection reads this policy from the context,
+		// while DDL/default and SQL-UDF binders carry it as binder-local state.
+		// Project the effective mode at the boundary instead of letting those
+		// binders silently fall back to the caller's context.  The projection is
+		// intentionally lazy so ordinary query binding keeps the original
+		// context identity and allocation behavior.
+		return function.WithNoUnsignedSubtraction(b.sysCtx, b.noUnsignedSubtractionOverride)
+	}
+	return b.sysCtx
+}
 
 // --- util functions ----
 

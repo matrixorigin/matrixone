@@ -29,10 +29,14 @@ func (c *Compile) constrainIntegerDomainWorkers(qry *plan.Query) error {
 		return nil
 	}
 	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || !features.IntegerArithmeticDomains {
+	if err != nil || (!features.IntegerArithmeticDomains && !features.PreparedUnsignedArithmeticBound) {
 		return err
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion71)
+	minimum := defines.MORPCVersion71
+	if features.PreparedUnsignedArithmeticBound {
+		minimum = defines.MORPCVersion75
+	}
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, minimum)
 	if err != nil {
 		return err
 	}
@@ -53,6 +57,20 @@ func validateIntegerDomainDestination(proc *process.Process, p *pipeline.Pipelin
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx("remote destination does not support checked integer arithmetic (MORPC version 71)")
+	}
+	return nil
+}
+
+func validatePreparedUnsignedArithmeticBoundDestination(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil || p.Node == nil {
+		return moerr.NewNotSupportedNoCtx("prepared unsigned arithmetic runtime bounds require a versioned remote destination")
+	}
+	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion75)
+	if err != nil {
+		return err
+	}
+	if !supported {
+		return moerr.NewNotSupportedNoCtx("prepared unsigned arithmetic runtime bounds require MORPC protocol version 75")
 	}
 	return nil
 }

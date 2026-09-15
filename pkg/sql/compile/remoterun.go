@@ -131,6 +131,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if features.PreparedUnsignedArithmeticBound {
+		if err = validatePreparedUnsignedArithmeticBoundDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if features.RowDependentConvBases {
 		if err = validateConvBasesDestination(proc, p); err != nil {
 			return nil, err
@@ -2128,6 +2133,9 @@ func validateRemoteExpressionPipelineProtocol(
 	}
 	if features.IntegerArithmeticDomains && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion71) {
 		return moerr.NewNotSupportedNoCtx("checked integer arithmetic requires MORPC protocol version 71")
+	}
+	if features.PreparedUnsignedArithmeticBound && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion75) {
+		return moerr.NewNotSupportedNoCtx("prepared unsigned arithmetic runtime bounds require MORPC protocol version 75")
 	}
 	if features.RowDependentConvBases && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion70) {
 		return moerr.NewNotSupportedNoCtx("row-dependent CONV bases require MORPC protocol version 70")

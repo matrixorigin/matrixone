@@ -114,7 +114,7 @@ set @a = 1;
 set @b = 2;
 set @c = 3;
 prepare affine_sum_stmt from
-'select sum(u16 + ?) s1, sum(u16 + ?) s2, sum(u16 + ?) s3 from affine_sum_family.t';
+'select sum(cast(u16 as signed) + ?) s1, sum(cast(u16 as signed) + ?) s2, sum(cast(u16 as signed) + ?) s3 from affine_sum_family.t';
 execute affine_sum_stmt using @a, @b, @c;
 ➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
 131074  ¦  131078  ¦  131082
@@ -125,6 +125,16 @@ execute affine_sum_stmt using @a, @b, @c;
 ➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
 131110  ¦  131062  ¦  131470
 deallocate prepare affine_sum_stmt;
+set @a = 1;
+prepare affine_sum_unsigned_stmt from
+'select sum(u16 + ?) s from affine_sum_family.t';
+execute affine_sum_unsigned_stmt using @a;
+➤ s[3,38,0]  𝄀
+131074
+set @a = -2;
+execute affine_sum_unsigned_stmt using @a;
+Data truncation: data out of range: data type uint64, value '-2'
+deallocate prepare affine_sum_unsigned_stmt;
 select sum(s + 1) s1, sum(s + 2) s2, sum(s + 3) s3 from t;
 ➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
 2  ¦  6  ¦  10

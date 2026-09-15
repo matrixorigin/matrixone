@@ -260,9 +260,9 @@ message PreparedNumericMetadata {
   bool fallback_source = 3;
   int32 fallback_source_node_id = 4;
   int32 fallback_source_col_pos = 5;
-  // Marks a result-arm cast introduced only because a prepared marker is TEXT
-  // before SQL EXECUTE supplies its source domain. User-authored CAST never
-  // carries this bit and remains an authoritative boundary.
+  // Marks a provisional result boundary introduced while a prepared marker is
+  // TEXT before SQL EXECUTE supplies its source domain. User-authored CAST
+  // never carries this bit and remains an authoritative boundary.
   bool provisional_result_cast = 6;
   // Marks a result peer coerced into the marker's prepare-time TEXT envelope.
   bool provisional_result_peer = 7;
@@ -274,6 +274,21 @@ message PreparedNumericMetadata {
   // expression needed to recompute a runtime string domain after scalar-
   // subquery flattening without adding another pointer to every Expr.
   Expr string_domain_source = 11;
+  // Marks an arithmetic node whose unsigned result boundary was deferred
+  // until EXECUTE supplied a bare marker's domain. This is deliberately
+  // separate from provisional_result_cast: that bit belongs to a removable
+  // implicit CAST, while this bit belongs to the operator itself.
+  bool deferred_unsigned_arithmetic_boundary = 12;
+  // Preserves the native BIT arithmetic contract when a prepared marker is
+  // rebound. The runtime resolver must remove only implementation envelopes
+  // and then bind the expression in its DECIMAL128 BIT domain.
+  bool native_bit_arithmetic_boundary = 13;
+  // Requires a strict unsigned range check for this deferred arithmetic node.
+  // The bit is set only when the node is nested below another arithmetic
+  // expression whose result could otherwise cancel an overflowing
+  // intermediate. A top-level deferred node still needs runtime rebinding,
+  // but must retain the native arithmetic error contract.
+  bool strict_unsigned_arithmetic_boundary = 14;
 }
 
 message Expr {

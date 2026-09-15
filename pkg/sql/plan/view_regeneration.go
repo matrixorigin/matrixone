@@ -65,6 +65,7 @@ type viewRegenerationContext struct {
 	CompilerContext
 	defaultDatabase     string
 	rootSQL             string
+	sqlMode             string
 	lowerCaseTableNames int64
 }
 
@@ -72,6 +73,13 @@ func (c *viewRegenerationContext) DefaultDatabase() string { return c.defaultDat
 func (c *viewRegenerationContext) GetRootSql() string      { return c.rootSQL }
 func (c *viewRegenerationContext) GetLowerCaseTableNames() int64 {
 	return c.lowerCaseTableNames
+}
+
+func (c *viewRegenerationContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
+	if varName == "sql_mode" {
+		return c.sqlMode, nil
+	}
+	return c.CompilerContext.ResolveVariable(varName, isSystemVar, isGlobalVar)
 }
 
 func (c *viewRegenerationContext) ResolveViewDependencyAccount(
@@ -148,6 +156,7 @@ func RegenerateViewDefinition(
 		CompilerContext:     ctx,
 		defaultDatabase:     viewData.DefaultDatabase,
 		rootSQL:             viewData.Stmt,
+		sqlMode:             parserSQLMode,
 		lowerCaseTableNames: lowerCaseTableNames,
 	}
 	tableDef, err := genViewTableDef(

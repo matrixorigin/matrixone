@@ -137,9 +137,9 @@ func TestPersistedFormatDefaultCompatibility(t *testing.T) {
 	// Exercise the catalog builder defensively for callers constructing an AST.
 	col.Attributes = append(col.Attributes, tree.NewAttributeOnUpdate(col.Attributes[0].(*tree.AttributeDefault).Expr))
 	typ := planpb.Type{Id: int32(types.T_varchar), Width: 100}
-	def, err := buildDefaultExpr(col, typ, proc)
+	def, err := buildDefaultExpr(col, typ, proc, false)
 	require.NoError(t, err)
-	update, err := buildOnUpdate(col, typ, proc)
+	update, err := buildOnUpdate(col, typ, proc, false)
 	require.NoError(t, err)
 	ctas, err := buildCTASDefaultFromOrigin(NewMockCompilerContext(false), typ, true, "format(2.5, 0)")
 	require.NoError(t, err)
