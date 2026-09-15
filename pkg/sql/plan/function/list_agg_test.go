@@ -76,6 +76,35 @@ func TestMySQLNumericAggTypeCheck(t *testing.T) {
 	}
 }
 
+func TestJSONNumericAggResolution(t *testing.T) {
+	for _, name := range []string{
+		"sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp",
+		"variance", "std", "stddev",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := GetFunctionByName(context.Background(), name, []types.Type{types.T_json.ToType()})
+			require.NoError(t, err)
+			castTypes, shouldCast := got.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Equal(t, []types.Type{types.T_float64.ToType()}, castTypes)
+			require.Equal(t, types.T_float64, got.GetReturnType().Oid)
+		})
+	}
+}
+
+func TestJSONNumericAggResolutionRejectsInvalidShapes(t *testing.T) {
+	for _, name := range []string{
+		"sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := GetFunctionByName(context.Background(), name, nil)
+			require.Error(t, err)
+			_, err = GetFunctionByName(context.Background(), name, []types.Type{types.T_bool.ToType()})
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestMySQLNumericAggSupportsDecimal256(t *testing.T) {
 	input := types.New(types.T_decimal256, 65, 30)
 	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp"} {
