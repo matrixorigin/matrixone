@@ -114,7 +114,7 @@ null
 select json_value(null, '$.a');
 json_value(null, $.a)
 null
-select json_value(null, '$[');
+select json_value('{}', '$[');
 invalid argument json_value, bad value invalid path expression
 select json_value('{"a": 1}', null);
 json_value({"a": 1}, null)
