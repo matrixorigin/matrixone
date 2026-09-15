@@ -552,12 +552,13 @@ type ParquetHandler struct {
 	hasPhysicalCol                 bool
 	rowCountOnly                   bool
 	currentRowGroup                int
-	rowCountRemaining              int
+	rowCountRemaining              int64
 }
 
 type columnMapper struct {
 	srcNull, dstNull   bool
 	maxDefinitionLevel byte
+	maxRepetitionLevel byte
 	allowRepetition    bool
 	listCanBeNull      bool
 	listNullLevel      byte

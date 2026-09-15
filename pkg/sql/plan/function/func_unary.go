@@ -37,6 +37,7 @@ import (
 	"math/big"
 	"math/bits"
 	"net"
+	"net/netip"
 	"runtime"
 	"sort"
 	"strconv"
@@ -1505,6 +1506,57 @@ func StGeomFromWKB(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 	}, selectList)
 }
 
+// StGeomFromWKBWithSRID is the two-argument WKB constructor. The SRID is
+// metadata on the result type; geometry values continue to carry bare WKB.
+func StGeomFromWKBWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	srids := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	maxPoints := maxPointsInGeometryLimit(proc)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		v, null1 := source.GetStrValue(i)
+		sridValue, null2 := srids.GetValue(i)
+		if null1 || null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if sridValue < 0 || sridValue > int64(geo.MaxSRID) {
+			return moerr.NewInvalidInputNoCtxf("SRID should be between 0 and %d", geo.MaxSRID)
+		}
+
+		g, err := geo.ReadWKB(v)
+		if err != nil {
+			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		if err := validateGeometryTextForStorage(geo.WriteWKT(g), maxPoints); err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(geo.WriteWKB(g), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func StGeomFromText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	maxPoints := maxPointsInGeometryLimit(proc)
 	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
@@ -1825,6 +1877,54 @@ func StSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	return nil
 }
 
+// StSRIDWithSRID changes only the type-level SRID metadata. Preserve the
+// payload and the source geometry precision; the binder specializes the result
+// type's Width for a constant or prepared SRID argument.
+func StSRIDWithSRID(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	source := vector.GenerateFunctionStrParameter(ivecs[0])
+	srids := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	maxPoints := maxPointsInGeometryLimit(proc)
+	float32Payload := geometryArgIsFloat32(ivecs, 0)
+
+	if selectList != nil && selectList.IgnoreAllRow() {
+		for i := uint64(0); i < uint64(length); i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		v, null1 := source.GetStrValue(i)
+		sridValue, null2 := srids.GetValue(i)
+		if null1 || null2 {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if sridValue < 0 || sridValue > int64(geo.MaxSRID) {
+			return moerr.NewInvalidInputNoCtxf("SRID should be between 0 and %d", geo.MaxSRID)
+		}
+		if err := validateGeometryPayloadForInput(v, maxPoints, float32Payload); err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(v, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // sridFromTypeWidth decodes the SRID stored in a geometry type's Width
 // (srid+1 when defined, 0 when undefined → SRID 0).
 func sridFromTypeWidth(width int32) uint32 {
@@ -1878,10 +1978,36 @@ func geometryResultType(parameters []types.Type) types.Type {
 	return t
 }
 
+// geometrySetSRIDResultType preserves the source geometry's precision and
+// subtype metadata while allowing the binder to replace only Width (the SRID).
+func geometrySetSRIDResultType(parameters []types.Type) types.Type {
+	t := geometryResultType(parameters)
+	if len(parameters) > 0 && (parameters[0].Oid == types.T_geometry || parameters[0].Oid == types.T_geometry32) {
+		t.Scale = parameters[0].Scale
+	}
+	return t
+}
+
 // geometryArgIsFloat32 reports whether the i-th argument vector is a GEOMETRY32
 // (float32-coordinate) value, so an eval function can emit matching output.
 func geometryArgIsFloat32(ivecs []*vector.Vector, i int) bool {
 	return i < len(ivecs) && ivecs[i].GetType().Oid == types.T_geometry32
+}
+
+// validateGeometryPayloadForInput validates a setter payload without changing
+// its bytes. GEOMETRY32 must be decoded with the float32 WKB reader; using the
+// permissive float64-then-float32 decoder here would accept a payload whose
+// declared precision is wrong and then preserve that malformed representation.
+func validateGeometryPayloadForInput(payload []byte, maxPoints int64, float32Payload bool) error {
+	if float32Payload && payloadIsWKB(payload) {
+		g, err := geo.ReadWKBFloat32(payload)
+		if err != nil {
+			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		return validateGeometryTextForStorage(geo.WriteWKT(g), maxPoints)
+	}
+	_, _, _, _, err := validateGeometryPayload(payload, maxPoints)
+	return err
 }
 
 // geoEncodeWKB writes g as float32 WKB when f32 is set, else standard float64 WKB.
@@ -3193,12 +3319,16 @@ func StEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 
 func StCentroid(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	f32 := geometryArgIsFloat32(ivecs, 0)
-	return opUnaryBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v []byte) ([]byte, error) {
-		out, err := centroidFromPayload(v)
+	return opUnaryBytesToBytesWithResultNull(ivecs, result, proc, length, func(v []byte) ([]byte, bool, error) {
+		out, isNull, err := centroidFromPayload(v)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return reencodeGeom32(out, f32)
+		if isNull {
+			return nil, true, nil
+		}
+		out, err = reencodeGeom32(out, f32)
+		return out, false, err
 	}, selectList)
 }
 
@@ -3421,6 +3551,14 @@ func geometryDimensionFromTextWithDepth(wkt string, depth int) (int64, error) {
 }
 
 func isSimpleFromPayload(payload []byte) (bool, error) {
+	decoded, err := decodeGeoGeometry(payload)
+	if err != nil {
+		return false, err
+	}
+	if err := validateDerivedGeometry(decoded); err != nil {
+		return false, err
+	}
+
 	typeName, err := geometryTypeNameFromPayload(payload)
 	if err != nil {
 		return false, err
@@ -3428,12 +3566,145 @@ func isSimpleFromPayload(payload []byte) (bool, error) {
 
 	switch typeName {
 	case "POINT":
+		if empty, err := geometryIsExplicitlyEmpty(payload); err != nil {
+			return false, err
+		} else if empty {
+			return true, nil
+		}
 		if _, _, err := parsePointXYFromPayload(payload); err != nil {
 			return false, err
 		}
 		return true, nil
 	case "LINESTRING":
+		if empty, err := geometryIsExplicitlyEmpty(payload); err != nil {
+			return false, err
+		} else if empty {
+			return true, nil
+		}
 		return lineStringIsSimpleFromPayload(payload)
+	case "POLYGON":
+		if empty, err := geometryIsExplicitlyEmpty(payload); err != nil {
+			return false, err
+		} else if empty {
+			return true, nil
+		}
+		return polygonIsSimpleFromPayload(payload)
+	case "MULTIPOINT":
+		parts, err := simpleGeometryPartsFromPayload(payload, typeName)
+		if err != nil {
+			return false, err
+		}
+		for i := range parts {
+			left, err := simpleGeometryPartPoint(parts[i])
+			if err != nil {
+				return false, err
+			}
+			for j := i + 1; j < len(parts); j++ {
+				right, err := simpleGeometryPartPoint(parts[j])
+				if err != nil {
+					return false, err
+				}
+				if sameGeometryPoint(left, right) {
+					return false, nil
+				}
+			}
+		}
+		return true, nil
+	case "MULTILINESTRING":
+		parts, err := simpleGeometryPartsFromPayload(payload, typeName)
+		if err != nil {
+			return false, err
+		}
+		for _, part := range parts {
+			if simple, err := isSimpleFromPayload(part.payload); err != nil {
+				return false, err
+			} else if !simple {
+				return false, nil
+			}
+		}
+		for i := range parts {
+			for j := i + 1; j < len(parts); j++ {
+				intersects, err := simpleGeometryPartsIntersect(parts[i], parts[j])
+				if err != nil {
+					return false, err
+				}
+				if intersects {
+					touch, err := simplePartsTouchAtBothBoundaries(parts[i], parts[j])
+					if err != nil {
+						return false, err
+					}
+					if !touch {
+						return false, nil
+					}
+				}
+			}
+		}
+		return true, nil
+	case "MULTIPOLYGON":
+		parts, err := simpleGeometryPartsFromPayload(payload, typeName)
+		if err != nil {
+			return false, err
+		}
+		for _, part := range parts {
+			if simple, err := isSimpleFromPayload(part.payload); err != nil {
+				return false, err
+			} else if !simple {
+				return false, nil
+			}
+		}
+		for i := range parts {
+			for j := i + 1; j < len(parts); j++ {
+				intersects, err := simpleGeometryPartsIntersect(parts[i], parts[j])
+				if err != nil {
+					return false, err
+				}
+				if intersects {
+					touch, err := simplePartsTouchOnlyAtBoundary(parts[i], parts[j])
+					if err != nil {
+						return false, err
+					}
+					if !touch {
+						return false, nil
+					}
+				}
+			}
+		}
+		return true, nil
+	case "GEOMETRYCOLLECTION":
+		if empty, err := geometryIsExplicitlyEmpty(payload); err != nil {
+			return false, err
+		} else if empty {
+			return true, nil
+		}
+		items, err := geometryPayloadItems(payload, typeName)
+		if err != nil {
+			return false, err
+		}
+		members, err := simpleGeometryMembersFromPayload(payload, typeName)
+		if err != nil {
+			return false, err
+		}
+		for _, item := range items {
+			simple, err := isSimpleFromPayload(item)
+			if err != nil {
+				return false, err
+			}
+			if !simple {
+				return false, nil
+			}
+		}
+		for i := range members {
+			for j := i + 1; j < len(members); j++ {
+				intersects, err := simpleGeometryMembersInteriorIntersect(members[i], members[j])
+				if err != nil {
+					return false, err
+				}
+				if intersects {
+					return false, nil
+				}
+			}
+		}
+		return true, nil
 	default:
 		return false, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_IsSimple")
 	}
@@ -3445,6 +3716,779 @@ func lineStringIsSimpleFromPayload(payload []byte) (bool, error) {
 		return false, err
 	}
 	return lineStringPointsAreSimple(points), nil
+}
+
+type simpleGeometryPart struct {
+	typeName string
+	payload  []byte
+}
+
+type simpleGeometryMember struct {
+	typeName string
+	payload  []byte
+}
+
+// validateDerivedGeometry validates the structural contract needed by the
+// recursive derived-geometry kernels. The WKT/WKB readers deliberately accept
+// a few intermediate forms (for example a one-point LineString), while the
+// SQL property functions must continue to reject those as malformed input.
+func validateDerivedGeometry(g geo.Geometry) error {
+	finite := func(c geo.Coord) bool {
+		return !math.IsNaN(c.X) && !math.IsNaN(c.Y) && !math.IsInf(c.X, 0) && !math.IsInf(c.Y, 0)
+	}
+	var validate func(geo.Geometry) error
+	validate = func(value geo.Geometry) error {
+		switch v := value.(type) {
+		case geo.Point:
+			if v.IsEmpty {
+				return nil
+			}
+			if !finite(v.Coord()) {
+				return moerr.NewInvalidInputNoCtx("invalid point payload")
+			}
+		case geo.LineString:
+			if len(v.Points) == 0 {
+				return nil
+			}
+			if len(v.Points) < 2 {
+				return moerr.NewInvalidInputNoCtx("invalid linestring payload")
+			}
+			for _, c := range v.Points {
+				if !finite(c) {
+					return moerr.NewInvalidInputNoCtx("invalid linestring payload")
+				}
+			}
+		case geo.Polygon:
+			if len(v.Rings) == 0 {
+				return nil
+			}
+			for _, ring := range v.Rings {
+				ringPointCount := len(ring)
+				if len(ring) > 1 && sameGeometryPoint(
+					geometryPoint2D{x: ring[0].X, y: ring[0].Y},
+					geometryPoint2D{x: ring[len(ring)-1].X, y: ring[len(ring)-1].Y},
+				) {
+					ringPointCount--
+				}
+				if ringPointCount < 3 {
+					return moerr.NewInvalidInputNoCtx("invalid polygon payload")
+				}
+				for _, c := range ring {
+					if !finite(c) {
+						return moerr.NewInvalidInputNoCtx("invalid polygon payload")
+					}
+				}
+			}
+		case geo.MultiPoint:
+			for _, point := range v.Points {
+				if err := validate(point); err != nil {
+					return err
+				}
+			}
+		case geo.MultiLineString:
+			for _, line := range v.Lines {
+				if err := validate(line); err != nil {
+					return err
+				}
+			}
+		case geo.MultiPolygon:
+			for _, polygon := range v.Polygons {
+				if err := validate(polygon); err != nil {
+					return err
+				}
+			}
+		case geo.GeometryCollection:
+			for _, child := range v.Geometries {
+				if child == nil {
+					return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+				}
+				if err := validate(child); err != nil {
+					return err
+				}
+			}
+		default:
+			return moerr.NewInvalidInputNoCtx("invalid geometry payload")
+		}
+		return nil
+	}
+	return validate(g)
+}
+
+func hasDegeneratePolygon(g geo.Geometry) bool {
+	switch v := g.(type) {
+	case geo.Polygon:
+		return len(v.Rings) > 0 && geo.CartesianArea(v) == 0
+	case geo.MultiPolygon:
+		for _, polygon := range v.Polygons {
+			if hasDegeneratePolygon(polygon) {
+				return true
+			}
+		}
+	case geo.GeometryCollection:
+		for _, child := range v.Geometries {
+			if hasDegeneratePolygon(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func firstLineCoordinate(g geo.Geometry) (geo.Coord, bool) {
+	switch v := g.(type) {
+	case geo.LineString:
+		if len(v.Points) > 0 {
+			return v.Points[0], true
+		}
+	case geo.MultiLineString:
+		for _, line := range v.Lines {
+			if coord, ok := firstLineCoordinate(line); ok {
+				return coord, true
+			}
+		}
+	case geo.GeometryCollection:
+		for _, child := range v.Geometries {
+			if coord, ok := firstLineCoordinate(child); ok {
+				return coord, true
+			}
+		}
+	}
+	return geo.Coord{}, false
+}
+
+func polygonIsSimpleFromPayload(payload []byte) (bool, error) {
+	rings, _, _, err := polygonRingsFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	parsed := make([][]geometryPoint2D, 0, len(rings))
+	for _, ring := range rings {
+		points, err := parsePolygonRingPoints(ring[1 : len(ring)-1])
+		if err != nil {
+			return false, err
+		}
+		parsed = append(parsed, points)
+	}
+	return polygonRingsAreSimple(parsed), nil
+}
+
+func polygonRingsAreSimple(rings [][]geometryPoint2D) bool {
+	if len(rings) == 0 {
+		return false
+	}
+	for _, ring := range rings {
+		if !polygonRingIsValid(ring) {
+			return false
+		}
+	}
+	exterior := rings[0]
+	shell := geometryPolygon2D{outer: exterior}
+	for i, hole := range rings[1:] {
+		if !ringContainedByPolygonShell(hole, shell) {
+			return false
+		}
+		for _, otherHole := range rings[i+2:] {
+			if ringsHaveForbiddenInteriorIntersection(hole, otherHole) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func ringsHaveForbiddenInteriorIntersection(left, right []geometryPoint2D) bool {
+	leftPolygon := geometryPolygon2D{outer: left}
+	rightPolygon := geometryPolygon2D{outer: right}
+	leftPayload := encodeGeometryPayload("POLYGON("+polygonRingText(left)+")", 0, false)
+	rightPayload := encodeGeometryPayload("POLYGON("+polygonRingText(right)+")", 0, false)
+
+	if ringsHaveLinearOverlap(left, right) {
+		return true
+	}
+	if ringsIntersect(left, right) {
+		touches, err := polygonTouchesPolygonGeometry(leftPayload, rightPayload, leftPolygon, rightPolygon)
+		if err != nil || !touches {
+			return true
+		}
+	}
+
+	leftInterior, err := polygonInteriorPointFromRing(left)
+	if err != nil || pointInPolygon(right, leftInterior.x, leftInterior.y) {
+		return true
+	}
+	rightInterior, err := polygonInteriorPointFromRing(right)
+	if err != nil || pointInPolygon(left, rightInterior.x, rightInterior.y) {
+		return true
+	}
+	return false
+}
+
+func ringsHaveLinearOverlap(left, right []geometryPoint2D) bool {
+	for i := range left {
+		leftNext := (i + 1) % len(left)
+		for j := range right {
+			rightNext := (j + 1) % len(right)
+			if collinearSegmentsOverlapWithLength(left[i], left[leftNext], right[j], right[rightNext]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ringContainedByPolygonShell permits a hole to touch the shell at isolated
+// points. A shell/hole edge may not overlap or cross the shell, and every
+// open part of the edge must remain inside the shell. This is the polygon
+// boundary rule needed by ST_IsSimple; requiring a strictly interior first
+// vertex would incorrectly reject a legal tangential contact.
+func ringContainedByPolygonShell(ring []geometryPoint2D, shell geometryPolygon2D) bool {
+	for i := range ring {
+		next := (i + 1) % len(ring)
+		if sameGeometryPoint(ring[i], ring[next]) {
+			return false
+		}
+		inside, outside, _, boundaryOverlap := lineSegmentPolygonLocationFlagsGeometry(ring[i], ring[next], shell)
+		if outside || boundaryOverlap || (!inside && !pointOnPolygonBoundaryGeometry(shell, ring[i].x, ring[i].y)) {
+			return false
+		}
+	}
+	return true
+}
+
+// simpleGeometryPartsFromPayload flattens collection members to atomic
+// Point/LineString/Polygon parts. The caller still evaluates the collection's
+// own Multi*/GeometryCollection rules; flattening is only for cross-member
+// interior checks and intentionally skips empty members.
+func simpleGeometryPartsFromPayload(payload []byte, typeName string) ([]simpleGeometryPart, error) {
+	if empty, err := geometryIsExplicitlyEmpty(payload); err != nil {
+		return nil, err
+	} else if empty {
+		return nil, nil
+	}
+	if typeName == "POINT" || typeName == "LINESTRING" || typeName == "POLYGON" {
+		return []simpleGeometryPart{{typeName: typeName, payload: payload}}, nil
+	}
+	items, err := geometryPayloadItems(payload, typeName)
+	if err != nil {
+		return nil, err
+	}
+	parts := make([]simpleGeometryPart, 0, len(items))
+	for _, item := range items {
+		itemType, err := geometryTypeNameFromPayload(item)
+		if err != nil {
+			return nil, err
+		}
+		childParts, err := simpleGeometryPartsFromPayload(item, itemType)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, childParts...)
+	}
+	return parts, nil
+}
+
+// simpleGeometryMembersFromPayload preserves the boundary semantics of each
+// top-level GeometryCollection member. In particular, a MultiLineString's
+// boundary is computed with endpoint parity across all of its component lines;
+// flattening it before comparing a Point would incorrectly treat an even-degree
+// junction as a boundary point.
+func simpleGeometryMembersFromPayload(payload []byte, typeName string) ([]simpleGeometryMember, error) {
+	if empty, err := geometryIsEmpty(payload); err != nil {
+		return nil, err
+	} else if empty {
+		return nil, nil
+	}
+	if typeName != "GEOMETRYCOLLECTION" {
+		return []simpleGeometryMember{{typeName: typeName, payload: payload}}, nil
+	}
+
+	items, err := geometryPayloadItems(payload, typeName)
+	if err != nil {
+		return nil, err
+	}
+	members := make([]simpleGeometryMember, 0, len(items))
+	for _, item := range items {
+		itemType, err := geometryTypeNameFromPayload(item)
+		if err != nil {
+			return nil, err
+		}
+		if itemType == "GEOMETRYCOLLECTION" {
+			nested, err := simpleGeometryMembersFromPayload(item, itemType)
+			if err != nil {
+				return nil, err
+			}
+			members = append(members, nested...)
+			continue
+		}
+		members = append(members, simpleGeometryMember{typeName: itemType, payload: item})
+	}
+	return members, nil
+}
+
+func simpleGeometryMemberParts(member simpleGeometryMember) ([]simpleGeometryPart, error) {
+	return simpleGeometryPartsFromPayload(member.payload, member.typeName)
+}
+
+func simpleGeometryMemberPointLocation(member simpleGeometryMember, point geometryPoint2D) (geometryPointLocation, error) {
+	switch member.typeName {
+	case "POINT":
+		if empty, err := geometryIsEmpty(member.payload); err != nil {
+			return geometryPointExterior, err
+		} else if empty {
+			return geometryPointExterior, nil
+		}
+		x, y, err := parsePointXYFromPayload(member.payload)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		if sameGeometryPoint(point, geometryPoint2D{x: x, y: y}) {
+			return geometryPointInterior, nil
+		}
+		return geometryPointExterior, nil
+	case "MULTIPOINT":
+		items, err := geometryPayloadItems(member.payload, member.typeName)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		for _, item := range items {
+			if empty, err := geometryIsEmpty(item); err != nil {
+				return geometryPointExterior, err
+			} else if empty {
+				continue
+			}
+			x, y, err := parsePointXYFromPayload(item)
+			if err != nil {
+				return geometryPointExterior, err
+			}
+			if sameGeometryPoint(point, geometryPoint2D{x: x, y: y}) {
+				return geometryPointInterior, nil
+			}
+		}
+		return geometryPointExterior, nil
+	case "LINESTRING":
+		if empty, err := geometryIsEmpty(member.payload); err != nil {
+			return geometryPointExterior, err
+		} else if empty {
+			return geometryPointExterior, nil
+		}
+		line, err := lineStringGeometryPointsFromPayload(member.payload)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		if !pointIntersectsLineString(point, line) {
+			return geometryPointExterior, nil
+		}
+		if lineStringPointIsBoundary(line, point) {
+			return geometryPointBoundary, nil
+		}
+		return geometryPointInterior, nil
+	case "MULTILINESTRING":
+		items, err := geometryPayloadItems(member.payload, member.typeName)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		lines := make([][]geometryPoint2D, 0, len(items))
+		for _, item := range items {
+			if empty, err := geometryIsEmpty(item); err != nil {
+				return geometryPointExterior, err
+			} else if empty {
+				continue
+			}
+			line, err := lineStringGeometryPointsFromPayload(item)
+			if err != nil {
+				return geometryPointExterior, err
+			}
+			lines = append(lines, line)
+		}
+		return pointLocationInLineCollection(point, lines), nil
+	case "POLYGON":
+		if empty, err := geometryIsEmpty(member.payload); err != nil {
+			return geometryPointExterior, err
+		} else if empty {
+			return geometryPointExterior, nil
+		}
+		polygon, err := polygonGeometryFromPayload(member.payload)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		return pointLocationInPolygonGeometry(polygon, point.x, point.y), nil
+	case "MULTIPOLYGON":
+		items, err := geometryPayloadItems(member.payload, member.typeName)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		polygons := make([]polygonGeometryItem, 0, len(items))
+		for _, item := range items {
+			if empty, err := geometryIsEmpty(item); err != nil {
+				return geometryPointExterior, err
+			} else if empty {
+				continue
+			}
+			polygon, err := polygonGeometryFromPayload(item)
+			if err != nil {
+				return geometryPointExterior, err
+			}
+			polygons = append(polygons, polygonGeometryItem{payload: item, shape: polygon})
+		}
+		return pointLocationInPolygonCollection(point, polygons), nil
+	case "GEOMETRYCOLLECTION":
+		members, err := simpleGeometryMembersFromPayload(member.payload, member.typeName)
+		if err != nil {
+			return geometryPointExterior, err
+		}
+		hasBoundary := false
+		for _, child := range members {
+			location, err := simpleGeometryMemberPointLocation(child, point)
+			if err != nil {
+				return geometryPointExterior, err
+			}
+			switch location {
+			case geometryPointInterior:
+				return geometryPointInterior, nil
+			case geometryPointBoundary:
+				hasBoundary = true
+			}
+		}
+		if hasBoundary {
+			return geometryPointBoundary, nil
+		}
+		return geometryPointExterior, nil
+	default:
+		return geometryPointExterior, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+}
+
+func simpleGeometryMembersInteriorIntersect(left, right simpleGeometryMember) (bool, error) {
+	leftParts, err := simpleGeometryMemberParts(left)
+	if err != nil {
+		return false, err
+	}
+	rightParts, err := simpleGeometryMemberParts(right)
+	if err != nil {
+		return false, err
+	}
+	for _, leftPart := range leftParts {
+		for _, rightPart := range rightParts {
+			intersects, err := simpleGeometryPartsIntersect(leftPart, rightPart)
+			if err != nil {
+				return false, err
+			}
+			if !intersects {
+				continue
+			}
+			interior, err := simpleGeometryAtomicInteriorIntersect(left, right, leftPart, rightPart)
+			if err != nil {
+				return false, err
+			}
+			if interior {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func simpleGeometryAtomicInteriorIntersect(left, right simpleGeometryMember, leftPart, rightPart simpleGeometryPart) (bool, error) {
+	if leftPart.typeName == "POINT" {
+		point, err := simpleGeometryPartPoint(leftPart)
+		if err != nil {
+			return false, err
+		}
+		leftLocation, err := simpleGeometryMemberPointLocation(left, point)
+		if err != nil {
+			return false, err
+		}
+		rightLocation, err := simpleGeometryMemberPointLocation(right, point)
+		return leftLocation == geometryPointInterior && rightLocation == geometryPointInterior, err
+	}
+	if rightPart.typeName == "POINT" {
+		return simpleGeometryAtomicInteriorIntersect(right, left, rightPart, leftPart)
+	}
+
+	if leftPart.typeName == "LINESTRING" {
+		leftLine, err := lineStringGeometryPointsFromPayload(leftPart.payload)
+		if err != nil {
+			return false, err
+		}
+		switch rightPart.typeName {
+		case "LINESTRING":
+			rightLine, err := lineStringGeometryPointsFromPayload(rightPart.payload)
+			if err != nil {
+				return false, err
+			}
+			return simpleLinePartsInteriorIntersect(left, right, leftLine, rightLine)
+		case "POLYGON":
+			rightPolygon, err := polygonGeometryFromPayload(rightPart.payload)
+			if err != nil {
+				return false, err
+			}
+			return simpleLinePolygonPartsInteriorIntersect(left, right, leftLine, rightPolygon)
+		}
+	}
+	if rightPart.typeName == "LINESTRING" {
+		return simpleGeometryAtomicInteriorIntersect(right, left, rightPart, leftPart)
+	}
+	if leftPart.typeName == "POLYGON" && rightPart.typeName == "POLYGON" {
+		leftPolygon, err := polygonGeometryFromPayload(leftPart.payload)
+		if err != nil {
+			return false, err
+		}
+		rightPolygon, err := polygonGeometryFromPayload(rightPart.payload)
+		if err != nil {
+			return false, err
+		}
+		touch, err := polygonTouchesPolygonGeometry(leftPart.payload, rightPart.payload, leftPolygon, rightPolygon)
+		if err != nil {
+			return false, err
+		}
+		return !touch, nil
+	}
+	return false, nil
+}
+
+func simpleLinePartsInteriorIntersect(left, right simpleGeometryMember, leftLine, rightLine []geometryPoint2D) (bool, error) {
+	for i := 0; i < len(leftLine)-1; i++ {
+		for j := 0; j < len(rightLine)-1; j++ {
+			if !lineSegmentsIntersect(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1]) {
+				continue
+			}
+			if collinearSegmentsOverlapWithLength(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1]) {
+				return true, nil
+			}
+			points := segmentIntersectionPoints(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1])
+			if len(points) == 0 {
+				if point, ok := segmentIntersectionPoint(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1]); ok {
+					points = append(points, point)
+				}
+			}
+			for _, point := range points {
+				leftLocation, err := simpleGeometryMemberPointLocation(left, point)
+				if err != nil {
+					return false, err
+				}
+				rightLocation, err := simpleGeometryMemberPointLocation(right, point)
+				if err != nil {
+					return false, err
+				}
+				if leftLocation == geometryPointInterior && rightLocation == geometryPointInterior {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+func simpleLinePolygonPartsInteriorIntersect(lineMember, polygonMember simpleGeometryMember, line []geometryPoint2D, polygon geometryPolygon2D) (bool, error) {
+	for i := 0; i < len(line)-1; i++ {
+		start, end := line[i], line[i+1]
+		if sameGeometryPoint(start, end) {
+			continue
+		}
+		params := []float64{0, 1}
+		for _, ring := range polygonGeometryRings(polygon) {
+			for j := range ring {
+				next := (j + 1) % len(ring)
+				if !lineSegmentsIntersect(start, end, ring[j], ring[next]) {
+					continue
+				}
+				points := segmentIntersectionPoints(start, end, ring[j], ring[next])
+				if len(points) == 0 {
+					if point, ok := segmentIntersectionPoint(start, end, ring[j], ring[next]); ok {
+						points = append(points, point)
+					}
+				}
+				for _, point := range points {
+					params = append(params, segmentParameter(start, end, point))
+				}
+			}
+		}
+		sort.Float64s(params)
+		params = dedupeSegmentParameters(params)
+		for j := 0; j+1 < len(params); j++ {
+			if params[j+1]-params[j] <= 1e-9 {
+				continue
+			}
+			point := interpolateSegmentPoint(start, end, (params[j]+params[j+1])/2)
+			lineLocation, err := simpleGeometryMemberPointLocation(lineMember, point)
+			if err != nil {
+				return false, err
+			}
+			polygonLocation, err := simpleGeometryMemberPointLocation(polygonMember, point)
+			if err != nil {
+				return false, err
+			}
+			if lineLocation == geometryPointInterior && polygonLocation == geometryPointInterior {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+func simpleGeometryPartPoint(part simpleGeometryPart) (geometryPoint2D, error) {
+	x, y, err := parsePointXYFromPayload(part.payload)
+	if err != nil {
+		return geometryPoint2D{}, err
+	}
+	return geometryPoint2D{x: x, y: y}, nil
+}
+
+func simpleGeometryPartsIntersect(left, right simpleGeometryPart) (bool, error) {
+	if left.typeName == "POINT" {
+		point, err := simpleGeometryPartPoint(left)
+		if err != nil {
+			return false, err
+		}
+		switch right.typeName {
+		case "POINT":
+			other, err := simpleGeometryPartPoint(right)
+			if err != nil {
+				return false, err
+			}
+			return sameGeometryPoint(point, other), nil
+		case "LINESTRING":
+			line, err := lineStringGeometryPointsFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return pointIntersectsLineString(point, line), nil
+		case "POLYGON":
+			polygon, err := polygonGeometryFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return pointIntersectsPolygonGeometry(point, polygon), nil
+		}
+	}
+	if right.typeName == "POINT" {
+		return simpleGeometryPartsIntersect(right, left)
+	}
+	if left.typeName == "LINESTRING" {
+		line, err := lineStringGeometryPointsFromPayload(left.payload)
+		if err != nil {
+			return false, err
+		}
+		switch right.typeName {
+		case "LINESTRING":
+			other, err := lineStringGeometryPointsFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return lineStringIntersectsLineString(line, other), nil
+		case "POLYGON":
+			polygon, err := polygonGeometryFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return lineStringIntersectsPolygonGeometry(line, polygon), nil
+		}
+	}
+	if right.typeName == "LINESTRING" {
+		return simpleGeometryPartsIntersect(right, left)
+	}
+	leftPolygon, err := polygonGeometryFromPayload(left.payload)
+	if err != nil {
+		return false, err
+	}
+	rightPolygon, err := polygonGeometryFromPayload(right.payload)
+	if err != nil {
+		return false, err
+	}
+	return polygonIntersectsPolygonGeometry(leftPolygon, rightPolygon), nil
+}
+
+func simplePartsTouchOnlyAtBoundary(left, right simpleGeometryPart) (bool, error) {
+	if left.typeName == "POINT" {
+		point, err := simpleGeometryPartPoint(left)
+		if err != nil {
+			return false, err
+		}
+		switch right.typeName {
+		case "POINT":
+			return false, nil
+		case "LINESTRING":
+			line, err := lineStringGeometryPointsFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return pointTouchesLineString(point, line), nil
+		case "POLYGON":
+			polygon, err := polygonGeometryFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return pointOnPolygonBoundaryGeometry(polygon, point.x, point.y), nil
+		}
+	}
+	if right.typeName == "POINT" {
+		return simplePartsTouchOnlyAtBoundary(right, left)
+	}
+	if left.typeName == "LINESTRING" {
+		line, err := lineStringGeometryPointsFromPayload(left.payload)
+		if err != nil {
+			return false, err
+		}
+		switch right.typeName {
+		case "LINESTRING":
+			other, err := lineStringGeometryPointsFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return lineStringTouchesLineString(line, other), nil
+		case "POLYGON":
+			polygon, err := polygonGeometryFromPayload(right.payload)
+			if err != nil {
+				return false, err
+			}
+			return lineStringTouchesPolygonGeometry(line, polygon), nil
+		}
+	}
+	if right.typeName == "LINESTRING" {
+		return simplePartsTouchOnlyAtBoundary(right, left)
+	}
+	leftPolygon, err := polygonGeometryFromPayload(left.payload)
+	if err != nil {
+		return false, err
+	}
+	rightPolygon, err := polygonGeometryFromPayload(right.payload)
+	if err != nil {
+		return false, err
+	}
+	return polygonTouchesPolygonGeometry(left.payload, right.payload, leftPolygon, rightPolygon)
+}
+
+func simplePartsTouchAtBothBoundaries(left, right simpleGeometryPart) (bool, error) {
+	leftLine, err := lineStringGeometryPointsFromPayload(left.payload)
+	if err != nil {
+		return false, err
+	}
+	rightLine, err := lineStringGeometryPointsFromPayload(right.payload)
+	if err != nil {
+		return false, err
+	}
+	touched := false
+	for i := 0; i < len(leftLine)-1; i++ {
+		for j := 0; j < len(rightLine)-1; j++ {
+			if !lineSegmentsIntersect(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1]) {
+				continue
+			}
+			if collinearSegmentsOverlapWithLength(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1]) {
+				return false, nil
+			}
+			points := segmentIntersectionPoints(leftLine[i], leftLine[i+1], rightLine[j], rightLine[j+1])
+			if len(points) == 0 {
+				return false, nil
+			}
+			for _, point := range points {
+				if !lineStringPointIsBoundary(leftLine, point) || !lineStringPointIsBoundary(rightLine, point) {
+					return false, nil
+				}
+				touched = true
+			}
+		}
+	}
+	return touched, nil
 }
 
 func isRingFromPayload(payload []byte) (bool, error) {
@@ -3459,91 +4503,95 @@ func isRingFromPayload(payload []byte) (bool, error) {
 }
 
 func envelopeFromPayload(payload []byte) ([]byte, error) {
-	typeName, err := geometryTypeNameFromPayload(payload)
+	g, err := decodeGeoGeometry(payload)
 	if err != nil {
 		return nil, err
 	}
-
-	switch typeName {
-	case "POINT":
-		x, y, err := parsePointXYFromPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		_, srid, sridDefined, err := decodeGeometryPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		return envelopeGeometryFromBounds(x, x, y, y, srid, sridDefined), nil
-	case "LINESTRING":
-		pointTexts, srid, sridDefined, err := lineStringPointsFromPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		minX, maxX, minY, maxY, err := geometryBoundsFromCoordinateTexts(pointTexts, "invalid linestring payload")
-		if err != nil {
-			return nil, err
-		}
-		return envelopeGeometryFromBounds(minX, maxX, minY, maxY, srid, sridDefined), nil
-	case "POLYGON":
-		rings, srid, sridDefined, err := polygonRingsFromPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		minX, maxX, minY, maxY, err := polygonBoundsFromRings(rings)
-		if err != nil {
-			return nil, err
-		}
-		return envelopeGeometryFromBounds(minX, maxX, minY, maxY, srid, sridDefined), nil
-	default:
-		return nil, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_Envelope")
+	if err := validateDerivedGeometry(g); err != nil {
+		return nil, err
 	}
+	bb, ok := geo.Envelope(g)
+	if !ok {
+		return geo.WriteWKB(geo.GeometryCollection{}), nil
+	}
+	return envelopeGeometryFromBounds(bb.MinX, bb.MaxX, bb.MinY, bb.MaxY, 0, false), nil
 }
 
-func centroidFromPayload(payload []byte) ([]byte, error) {
-	typeName, err := geometryTypeNameFromPayload(payload)
+func centroidFromPayload(payload []byte) ([]byte, bool, error) {
+	g, err := decodeGeoGeometry(payload)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if err := validateDerivedGeometry(g); err != nil {
+		return nil, false, err
+	}
+	if hasDegeneratePolygon(g) {
+		return nil, false, moerr.NewInvalidInputNoCtx("invalid polygon payload")
+	}
+	dimension, hasDimension := derivedGeometryDimension(g)
+	if !hasDimension {
+		return nil, true, nil
 	}
 
-	switch typeName {
-	case "POINT":
-		x, y, err := parsePointXYFromPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		_, srid, sridDefined, err := decodeGeometryPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		return pointGeometryPayload(x, y, srid, sridDefined), nil
-	case "LINESTRING":
-		points, err := lineStringGeometryPointsFromPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		x, y, err := lineStringCentroid(points)
-		if err != nil {
-			return nil, err
-		}
-		_, srid, sridDefined, err := decodeGeometryPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		return pointGeometryPayload(x, y, srid, sridDefined), nil
-	case "POLYGON":
-		rings, srid, sridDefined, err := polygonRingsFromPayload(payload)
-		if err != nil {
-			return nil, err
-		}
-		x, y, err := polygonCentroid(rings)
-		if err != nil {
-			return nil, err
-		}
-		return pointGeometryPayload(x, y, srid, sridDefined), nil
-	default:
-		return nil, moerr.NewInvalidInputNoCtx("geometry type is not supported by ST_Centroid")
+	var coord geo.Coord
+	var ok bool
+	if dimension == 1 && geo.CartesianLength(g) == 0 {
+		// geo.Centroid intentionally falls through to points when every line
+		// segment has zero length. Once the highest dimension is known to be
+		// linear, the line's first coordinate is the required deterministic
+		// collapsed-line fallback instead of a lower-dimensional point.
+		coord, ok = firstLineCoordinate(g)
+	} else {
+		coord, ok = geo.Centroid(g)
 	}
+	if !ok {
+		return nil, false, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+	return geo.WriteWKB(geo.Point{X: coord.X, Y: coord.Y}), false, nil
+}
+
+// derivedGeometryDimension returns the highest non-empty topological
+// dimension represented by g. It is kept separate from geo.Centroid because a
+// zero-length LineString still has linear dimension even though its weighted
+// centroid has zero weight.
+func derivedGeometryDimension(g geo.Geometry) (int, bool) {
+	switch v := g.(type) {
+	case geo.Point:
+		return 0, !v.IsEmpty
+	case geo.LineString:
+		return 1, len(v.Points) != 0
+	case geo.Polygon:
+		return 2, len(v.Rings) != 0
+	case geo.MultiPoint:
+		for _, point := range v.Points {
+			if !point.IsEmpty {
+				return 0, true
+			}
+		}
+	case geo.MultiLineString:
+		for _, line := range v.Lines {
+			if len(line.Points) != 0 {
+				return 1, true
+			}
+		}
+	case geo.MultiPolygon:
+		for _, polygon := range v.Polygons {
+			if len(polygon.Rings) != 0 {
+				return 2, true
+			}
+		}
+	case geo.GeometryCollection:
+		best := -1
+		for _, child := range v.Geometries {
+			if childDimension, ok := derivedGeometryDimension(child); ok && childDimension > best {
+				best = childDimension
+			}
+		}
+		if best >= 0 {
+			return best, true
+		}
+	}
+	return 0, false
 }
 
 func boundaryFromPayload(payload []byte) ([]byte, error) {
@@ -4019,10 +5067,8 @@ func lineSegmentsIntersect(a, b, c, d geometryPoint2D) bool {
 }
 
 func geometryOrientation(a, b, c geometryPoint2D) int {
-	const epsilon = 1e-9
-
 	cross := (b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x)
-	if math.Abs(cross) <= epsilon {
+	if geometryCrossWithinDistance(cross, math.Hypot(b.x-a.x, b.y-a.y)) {
 		return 0
 	}
 	if cross > 0 {
@@ -4100,54 +5146,6 @@ func lineStringGeometryPointsFromPayload(payload []byte) ([]geometryPoint2D, err
 	return points, nil
 }
 
-func polygonBoundsFromRings(rings []string) (float64, float64, float64, float64, error) {
-	hasBounds := false
-	var minX, maxX, minY, maxY float64
-	for _, ring := range rings {
-		pointTexts := splitTopLevelGeometryItems(ring[1 : len(ring)-1])
-		ringMinX, ringMaxX, ringMinY, ringMaxY, err := geometryBoundsFromCoordinateTexts(pointTexts, "invalid polygon payload")
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-		if !hasBounds {
-			minX, maxX, minY, maxY = ringMinX, ringMaxX, ringMinY, ringMaxY
-			hasBounds = true
-			continue
-		}
-		minX = math.Min(minX, ringMinX)
-		maxX = math.Max(maxX, ringMaxX)
-		minY = math.Min(minY, ringMinY)
-		maxY = math.Max(maxY, ringMaxY)
-	}
-	if !hasBounds {
-		return 0, 0, 0, 0, moerr.NewInvalidInputNoCtx("invalid polygon payload")
-	}
-	return minX, maxX, minY, maxY, nil
-}
-
-func geometryBoundsFromCoordinateTexts(pointTexts []string, invalidMessage string) (float64, float64, float64, float64, error) {
-	if len(pointTexts) == 0 {
-		return 0, 0, 0, 0, moerr.NewInvalidInputNoCtx(invalidMessage)
-	}
-
-	firstX, firstY, err := parseCoordinatePairWithError(pointTexts[0], invalidMessage)
-	if err != nil {
-		return 0, 0, 0, 0, err
-	}
-	minX, maxX, minY, maxY := firstX, firstX, firstY, firstY
-	for _, pointText := range pointTexts[1:] {
-		x, y, err := parseCoordinatePairWithError(pointText, invalidMessage)
-		if err != nil {
-			return 0, 0, 0, 0, err
-		}
-		minX = math.Min(minX, x)
-		maxX = math.Max(maxX, x)
-		minY = math.Min(minY, y)
-		maxY = math.Max(maxY, y)
-	}
-	return minX, maxX, minY, maxY, nil
-}
-
 func pointGeometryPayload(x, y float64, srid uint32, sridDefined bool) []byte {
 	xText := strconv.FormatFloat(x, 'f', -1, 64)
 	yText := strconv.FormatFloat(y, 'f', -1, 64)
@@ -4161,11 +5159,11 @@ func envelopeGeometryFromBounds(minX, maxX, minY, maxY float64, srid uint32, sri
 	maxYText := strconv.FormatFloat(maxY, 'f', -1, 64)
 
 	switch {
-	case sameGeometryCoordinate(minX, maxX) && sameGeometryCoordinate(minY, maxY):
+	case minX == maxX && minY == maxY:
 		return pointGeometryPayload(minX, minY, srid, sridDefined)
-	case sameGeometryCoordinate(minX, maxX):
+	case minX == maxX:
 		return encodeGeometryPayload("LINESTRING("+minXText+" "+minYText+","+minXText+" "+maxYText+")", srid, sridDefined)
-	case sameGeometryCoordinate(minY, maxY):
+	case minY == maxY:
 		return encodeGeometryPayload("LINESTRING("+minXText+" "+minYText+","+maxXText+" "+minYText+")", srid, sridDefined)
 	default:
 		return encodeGeometryPayload(
@@ -4179,29 +5177,6 @@ func envelopeGeometryFromBounds(minX, maxX, minY, maxY float64, srid uint32, sri
 func sameGeometryCoordinate(a, b float64) bool {
 	const epsilon = 1e-9
 	return math.Abs(a-b) <= epsilon
-}
-
-func lineStringCentroid(points []geometryPoint2D) (float64, float64, error) {
-	totalLength := 0.0
-	sumX := 0.0
-	sumY := 0.0
-	for i := 0; i < len(points)-1; i++ {
-		dx := points[i+1].x - points[i].x
-		dy := points[i+1].y - points[i].y
-		segmentLength := math.Hypot(dx, dy)
-		if sameGeometryCoordinate(segmentLength, 0) {
-			continue
-		}
-		midX := (points[i].x + points[i+1].x) / 2
-		midY := (points[i].y + points[i+1].y) / 2
-		totalLength += segmentLength
-		sumX += midX * segmentLength
-		sumY += midY * segmentLength
-	}
-	if sameGeometryCoordinate(totalLength, 0) {
-		return points[0].x, points[0].y, nil
-	}
-	return sumX / totalLength, sumY / totalLength, nil
 }
 
 func polygonCentroid(rings []string) (float64, float64, error) {
@@ -6782,6 +7757,191 @@ func hexEncodeUint64(xs uint64) string {
 // Inet6Aton converts an IPv6 or IPv4 address string to a binary representation.
 // IPv4 addresses return 4 bytes, IPv6 addresses return 16 bytes.
 // Invalid addresses return NULL.
+func parseIPv4DottedQuad(s string, maxDigits int) ([4]byte, bool) {
+	var address [4]byte
+	if len(s) == 0 {
+		return address, false
+	}
+
+	octet := 0
+	value := 0
+	digits := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9':
+			digits++
+			if maxDigits > 0 && digits > maxDigits {
+				return [4]byte{}, false
+			}
+			digit := int(c - '0')
+			// Keep the maxDigits==0 policy safe for arbitrarily many leading
+			// zeroes; a non-zero value above 255 is rejected before the
+			// accumulator can overflow.
+			if value > (255-digit)/10 {
+				return [4]byte{}, false
+			}
+			value = value*10 + digit
+		case c == '.':
+			if digits == 0 || octet >= len(address)-1 {
+				return [4]byte{}, false
+			}
+			address[octet] = byte(value)
+			octet++
+			value = 0
+			digits = 0
+		default:
+			return [4]byte{}, false
+		}
+	}
+	if octet != len(address)-1 || digits == 0 {
+		return [4]byte{}, false
+	}
+	address[octet] = byte(value)
+	return address, true
+}
+
+// parseIPAddress accepts standard IPv4/IPv6 text and the decimal leading-zero
+// IPv4 spellings accepted by MySQL's strict IPv4 parser. For an embedded IPv4
+// tail, canonicalize only that tail before asking netip to parse the IPv6 form.
+func parseIPAddress(s string) (netip.Addr, bool) {
+	// An IPv6 string with a dotted IPv4 tail is at most 45 bytes when each
+	// IPv4 component uses the strict parser's maximum of three digits.
+	if len(s) > 45 {
+		return netip.Addr{}, false
+	}
+	if address, err := netip.ParseAddr(s); err == nil && address.Zone() == "" {
+		return address, true
+	}
+
+	if ipv4, ok := parseIPv4DottedQuad(s, 3); ok {
+		return netip.AddrFrom4(ipv4), true
+	}
+
+	colon := strings.LastIndexByte(s, ':')
+	if colon < 0 {
+		return netip.Addr{}, false
+	}
+	ipv4, ok := parseIPv4DottedQuad(s[colon+1:], 3)
+	if !ok {
+		return netip.Addr{}, false
+	}
+
+	var normalized [45]byte
+	n := copy(normalized[:], s[:colon+1])
+	for i, octet := range ipv4 {
+		if i > 0 {
+			normalized[n] = '.'
+			n++
+		}
+		if octet >= 100 {
+			normalized[n] = '0' + octet/100
+			n++
+			octet %= 100
+			normalized[n] = '0' + octet/10
+			n++
+			normalized[n] = '0' + octet%10
+			n++
+		} else if octet >= 10 {
+			normalized[n] = '0' + octet/10
+			n++
+			normalized[n] = '0' + octet%10
+			n++
+		} else {
+			normalized[n] = '0' + octet
+			n++
+		}
+	}
+	address, err := netip.ParseAddr(string(normalized[:n]))
+	if err != nil || address.Zone() != "" || !address.Is6() {
+		return netip.Addr{}, false
+	}
+	return address, true
+}
+
+func inet6AtonAddress(s string) ([16]byte, int, bool) {
+	var bytes [16]byte
+	address, ok := parseIPAddress(s)
+	if !ok {
+		return bytes, 0, false
+	}
+	if address.Is4() {
+		ipv4 := address.As4()
+		copy(bytes[:], ipv4[:])
+		return bytes, net.IPv4len, true
+	}
+	ipv6 := address.As16()
+	copy(bytes[:], ipv6[:])
+	return bytes, net.IPv6len, true
+}
+
+func inetAtonValue(s string) (uint64, bool) {
+	parts, count, ok := parseIPv4AtonParts(s)
+	if !ok {
+		return 0, false
+	}
+
+	// MySQL accepts one-, two-, three-, and four-part IPv4 spellings for
+	// INET_ATON. Each parsed part is a decimal byte. The one-part form maps to
+	// 0.0.0.a, the two-part form to a.0.0.b, and the three-part form to a.b.0.c.
+	switch count {
+	case 1:
+		return uint64(parts[0]), true
+	case 2:
+		return uint64(parts[0])<<24 | uint64(parts[1]), true
+	case 3:
+		return uint64(parts[0])<<24 | uint64(parts[1])<<16 | uint64(parts[2]), true
+	case 4:
+		return uint64(parts[0])<<24 | uint64(parts[1])<<16 | uint64(parts[2])<<8 | uint64(parts[3]), true
+	default:
+		return 0, false
+	}
+}
+
+// parseIPv4AtonParts parses the historical INET_ATON grammar. Unlike the
+// strict four-part consumers, INET_ATON accepts one to four decimal parts and
+// treats leading zeroes as decimal digits. MySQL rejects a part above 255 even
+// in a short form, so the parser keeps every part bounded to one byte.
+func parseIPv4AtonParts(s string) ([4]byte, int, bool) {
+	var parts [4]byte
+	if len(s) == 0 {
+		return parts, 0, false
+	}
+
+	part := 0
+	value := 0
+	digits := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9':
+			digits++
+			digit := int(c - '0')
+			// Permit arbitrarily many leading zeroes without allowing the
+			// accumulator itself to overflow before the range check.
+			if value > (255-digit)/10 {
+				return [4]byte{}, 0, false
+			}
+			value = value*10 + digit
+		case c == '.':
+			if digits == 0 || part >= len(parts)-1 {
+				return [4]byte{}, 0, false
+			}
+			parts[part] = byte(value)
+			part++
+			value = 0
+			digits = 0
+		default:
+			return [4]byte{}, 0, false
+		}
+	}
+	if digits == 0 {
+		return [4]byte{}, 0, false
+	}
+	parts[part] = byte(value)
+	return parts, part + 1, true
+}
+
 func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6813,22 +7973,14 @@ func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			rs.SetNullResult(uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
-			ip := net.ParseIP(ipStr)
-			if ip == nil {
+			resultBytes, resultLen, ok := inet6AtonAddress(ipStr)
+			if !ok {
 				// Invalid IP: return NULL for all rows
 				rs.SetNullResult(uint64(length))
 			} else {
-				var resultBytes []byte
-				if ip4 := ip.To4(); ip4 != nil {
-					// IPv4: return 4 bytes
-					resultBytes = ip4
-				} else {
-					// IPv6: return 16 bytes
-					resultBytes = ip
-				}
 				rowCount := uint64(length)
 				for i := uint64(0); i < rowCount; i++ {
-					if err := rs.AppendMustBytesValue(resultBytes); err != nil {
+					if err := rs.AppendMustBytesValue(resultBytes[:resultLen]); err != nil {
 						return err
 					}
 				}
@@ -6850,20 +8002,14 @@ func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			}
 			v1, _ := p1.GetStrValue(i)
 			ipStr := functionUtil.QuickBytesToStr(v1)
-			ip := net.ParseIP(ipStr)
-			if ip == nil {
+			resultBytes, resultLen, ok := inet6AtonAddress(ipStr)
+			if !ok {
 				// Invalid IP: return NULL
 				if err := rs.AppendMustNullForBytesResult(); err != nil {
 					return err
 				}
 			} else {
-				var resultBytes []byte
-				if ip4 := ip.To4(); ip4 != nil {
-					resultBytes = ip4
-				} else {
-					resultBytes = ip
-				}
-				if err := rs.AppendMustBytesValue(resultBytes); err != nil {
+				if err := rs.AppendMustBytesValue(resultBytes[:resultLen]); err != nil {
 					return err
 				}
 			}
@@ -6875,20 +8021,14 @@ func Inet6Aton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		ipStr := functionUtil.QuickBytesToStr(v1)
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
+		resultBytes, resultLen, ok := inet6AtonAddress(ipStr)
+		if !ok {
 			// Invalid IP: return NULL
 			if err := rs.AppendMustNullForBytesResult(); err != nil {
 				return err
 			}
 		} else {
-			var resultBytes []byte
-			if ip4 := ip.To4(); ip4 != nil {
-				resultBytes = ip4
-			} else {
-				resultBytes = ip
-			}
-			if err := rs.AppendMustBytesValue(resultBytes); err != nil {
+			if err := rs.AppendMustBytesValue(resultBytes[:resultLen]); err != nil {
 				return err
 			}
 		}
@@ -7002,7 +8142,7 @@ func inet6NtoaString(v []byte) (string, bool) {
 	case net.IPv6len:
 		ip := net.IP(v)
 		if ip4 := ip.To4(); ip4 != nil && isIPv4Mapped(ip) {
-			return ip4.String(), true
+			return "::ffff:" + ip4.String(), true
 		}
 		if isIPv4Compat(ip) && (v[12] != 0 || v[13] != 0) {
 			return "::" + net.IP(v[12:]).String(), true
@@ -7059,22 +8199,14 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
-			ip := net.ParseIP(ipStr)
-			if ip == nil {
+			resultVal, ok := inetAtonValue(ipStr)
+			if !ok {
 				// Invalid IP: return NULL for all rows
 				nulls.AddRange(rsNull, 0, uint64(length))
 			} else {
-				ip4 := ip.To4()
-				if ip4 == nil {
-					// Not IPv4: return NULL
-					nulls.AddRange(rsNull, 0, uint64(length))
-				} else {
-					// Convert to uint32: a.b.c.d = a*256^3 + b*256^2 + c*256 + d
-					resultVal := uint64(ip4[0])<<24 | uint64(ip4[1])<<16 | uint64(ip4[2])<<8 | uint64(ip4[3])
-					rowCount := uint64(length)
-					for i := uint64(0); i < rowCount; i++ {
-						rss[i] = resultVal
-					}
+				rowCount := uint64(length)
+				for i := uint64(0); i < rowCount; i++ {
+					rss[i] = resultVal
 				}
 			}
 		}
@@ -7091,19 +8223,12 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			}
 			v1, _ := p1.GetStrValue(i)
 			ipStr := functionUtil.QuickBytesToStr(v1)
-			ip := net.ParseIP(ipStr)
-			if ip == nil {
+			resultVal, ok := inetAtonValue(ipStr)
+			if !ok {
 				// Invalid IP: return NULL
 				rsNull.Add(i)
 			} else {
-				ip4 := ip.To4()
-				if ip4 == nil {
-					// Not IPv4: return NULL
-					rsNull.Add(i)
-				} else {
-					// Convert to uint32
-					rss[i] = uint64(ip4[0])<<24 | uint64(ip4[1])<<16 | uint64(ip4[2])<<8 | uint64(ip4[3])
-				}
+				rss[i] = resultVal
 			}
 		}
 		return nil
@@ -7113,88 +8238,121 @@ func InetAton(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		ipStr := functionUtil.QuickBytesToStr(v1)
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
+		resultVal, ok := inetAtonValue(ipStr)
+		if !ok {
 			// Invalid IP: return NULL
 			rsNull.Add(i)
 		} else {
-			ip4 := ip.To4()
-			if ip4 == nil {
-				// Not IPv4: return NULL
-				rsNull.Add(i)
-			} else {
-				// Convert to uint32
-				rss[i] = uint64(ip4[0])<<24 | uint64(ip4[1])<<16 | uint64(ip4[2])<<8 | uint64(ip4[3])
-			}
+			rss[i] = resultVal
 		}
 	}
 	return nil
 }
 
-// InetNtoa converts an unsigned integer to an IPv4 address string.
-// Returns NULL for invalid input.
-// Supports uint64, uint32, int64, int32 types.
+const maxInetNtoaValue = uint64(1<<32 - 1)
+
+var errInetNtoaOutOfRange = moerr.NewOutOfRangeNoCtx(
+	"INET_NTOA", "value is outside the IPv4 range",
+)
+
+func inetNtoaString(value uint32) string {
+	return net.IPv4(
+		byte(value>>24),
+		byte(value>>16),
+		byte(value>>8),
+		byte(value),
+	).String()
+}
+
+func inetNtoaUnsigned(value uint64) (string, error) {
+	if value > maxInetNtoaValue {
+		return "", errInetNtoaOutOfRange
+	}
+	return inetNtoaString(uint32(value)), nil
+}
+
+func inetNtoaSigned(value int64) (string, error) {
+	if value < 0 || uint64(value) > maxInetNtoaValue {
+		return "", errInetNtoaOutOfRange
+	}
+	return inetNtoaString(uint32(value)), nil
+}
+
+func inetNtoaReal(value float64) (string, error) {
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return "", errInetNtoaOutOfRange
+	}
+	rounded := math.RoundToEven(value)
+	if rounded < 0 || rounded > float64(maxInetNtoaValue) {
+		return "", errInetNtoaOutOfRange
+	}
+	return inetNtoaString(uint32(rounded)), nil
+}
+
+func inetNtoaDecimal64(value types.Decimal64, scale int32) (string, error) {
+	rounded, err := value.Scale(-scale)
+	if err != nil || rounded.Sign() || rounded > types.Decimal64(maxInetNtoaValue) {
+		return "", errInetNtoaOutOfRange
+	}
+	return inetNtoaString(uint32(rounded)), nil
+}
+
+func inetNtoaDecimal128(value types.Decimal128, scale int32) (string, error) {
+	rounded, err := value.Scale(-scale)
+	if err != nil || rounded.Sign() || rounded.Compare(types.Decimal128FromInt64(int64(maxInetNtoaValue))) > 0 {
+		return "", errInetNtoaOutOfRange
+	}
+	return inetNtoaString(uint32(rounded.B0_63)), nil
+}
+
+func inetNtoaDecimal256(value types.Decimal256, scale int32) (string, error) {
+	rounded, err := value.Scale(-scale)
+	if err != nil || rounded.Sign() || rounded.Compare(types.Decimal256FromInt64(int64(maxInetNtoaValue))) > 0 {
+		return "", errInetNtoaOutOfRange
+	}
+	return inetNtoaString(uint32(rounded.B0_63)), nil
+}
+
+// InetNtoa converts a numeric IPv4 address to text. Invalid, negative or
+// out-of-range values return NULL; fractional types follow their own MySQL
+// integer-conversion rounding contract.
 func InetNtoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	argType := ivecs[0].GetType()
 
 	switch argType.Oid {
 	case types.T_uint64:
-		return opUnaryFixedToStr[uint64](ivecs, result, proc, length, func(val uint64) string {
-			ipVal := uint32(val & 0xFFFFFFFF)
-			ip := net.IPv4(
-				byte(ipVal>>24),
-				byte(ipVal>>16&0xFF),
-				byte(ipVal>>8&0xFF),
-				byte(ipVal&0xFF),
-			)
-			return ip.String()
-		}, selectList)
+		return opUnaryFixedToStrWithNullOnError[uint64](ivecs, result, proc, length, inetNtoaUnsigned, selectList)
 	case types.T_uint32:
-		return opUnaryFixedToStr[uint32](ivecs, result, proc, length, func(val uint32) string {
-			ip := net.IPv4(
-				byte(val>>24),
-				byte(val>>16&0xFF),
-				byte(val>>8&0xFF),
-				byte(val&0xFF),
-			)
-			return ip.String()
-		}, selectList)
+		return opUnaryFixedToStr[uint32](ivecs, result, proc, length, inetNtoaString, selectList)
 	case types.T_int64:
-		return opUnaryFixedToStr[int64](ivecs, result, proc, length, func(val int64) string {
-			// Treat as unsigned
-			ipVal := uint32(uint64(val) & 0xFFFFFFFF)
-			ip := net.IPv4(
-				byte(ipVal>>24),
-				byte(ipVal>>16&0xFF),
-				byte(ipVal>>8&0xFF),
-				byte(ipVal&0xFF),
-			)
-			return ip.String()
-		}, selectList)
+		return opUnaryFixedToStrWithNullOnError[int64](ivecs, result, proc, length, inetNtoaSigned, selectList)
 	case types.T_int32:
-		return opUnaryFixedToStr[int32](ivecs, result, proc, length, func(val int32) string {
-			// Treat as unsigned
-			ipVal := uint32(val)
-			ip := net.IPv4(
-				byte(ipVal>>24),
-				byte(ipVal>>16&0xFF),
-				byte(ipVal>>8&0xFF),
-				byte(ipVal&0xFF),
-			)
-			return ip.String()
+		return opUnaryFixedToStrWithNullOnError[int32](ivecs, result, proc, length, func(value int32) (string, error) {
+			return inetNtoaSigned(int64(value))
+		}, selectList)
+	case types.T_float64:
+		return opUnaryFixedToStrWithNullOnError[float64](ivecs, result, proc, length, inetNtoaReal, selectList)
+	case types.T_float32:
+		return opUnaryFixedToStrWithNullOnError[float32](ivecs, result, proc, length, func(value float32) (string, error) {
+			return inetNtoaReal(float64(value))
+		}, selectList)
+	case types.T_decimal64:
+		scale := argType.Scale
+		return opUnaryFixedToStrWithNullOnError[types.Decimal64](ivecs, result, proc, length, func(value types.Decimal64) (string, error) {
+			return inetNtoaDecimal64(value, scale)
+		}, selectList)
+	case types.T_decimal128:
+		scale := argType.Scale
+		return opUnaryFixedToStrWithNullOnError[types.Decimal128](ivecs, result, proc, length, func(value types.Decimal128) (string, error) {
+			return inetNtoaDecimal128(value, scale)
+		}, selectList)
+	case types.T_decimal256:
+		scale := argType.Scale
+		return opUnaryFixedToStrWithNullOnError[types.Decimal256](ivecs, result, proc, length, func(value types.Decimal256) (string, error) {
+			return inetNtoaDecimal256(value, scale)
 		}, selectList)
 	default:
-		// Fallback to uint64
-		return opUnaryFixedToStr[uint64](ivecs, result, proc, length, func(val uint64) string {
-			ipVal := uint32(val & 0xFFFFFFFF)
-			ip := net.IPv4(
-				byte(ipVal>>24),
-				byte(ipVal>>16&0xFF),
-				byte(ipVal>>8&0xFF),
-				byte(ipVal&0xFF),
-			)
-			return ip.String()
-		}, selectList)
+		return moerr.NewInvalidInputNoCtxf("INET_NTOA does not support input type %s", argType.Oid.String())
 	}
 }
 
@@ -7232,9 +8390,8 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
-			ip := net.ParseIP(ipStr)
 			var resultVal int64
-			if ip != nil && ip.To4() != nil {
+			if _, ok := parseIPv4DottedQuad(ipStr, 3); ok {
 				// Valid IPv4 address
 				resultVal = 1
 			} else {
@@ -7259,8 +8416,7 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			}
 			v1, _ := p1.GetStrValue(i)
 			ipStr := functionUtil.QuickBytesToStr(v1)
-			ip := net.ParseIP(ipStr)
-			if ip != nil && ip.To4() != nil {
+			if _, ok := parseIPv4DottedQuad(ipStr, 3); ok {
 				rss[i] = 1
 			} else {
 				rss[i] = 0
@@ -7273,8 +8429,7 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		ipStr := functionUtil.QuickBytesToStr(v1)
-		ip := net.ParseIP(ipStr)
-		if ip != nil && ip.To4() != nil {
+		if _, ok := parseIPv4DottedQuad(ipStr, 3); ok {
 			rss[i] = 1
 		} else {
 			rss[i] = 0
@@ -7317,9 +8472,9 @@ func IsIPv6(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
-			ip := net.ParseIP(ipStr)
+			ip, ok := parseIPAddress(ipStr)
 			var resultVal int64
-			if ip != nil && ip.To4() == nil {
+			if ok && ip.Is6() {
 				// Valid IPv6 address (not IPv4)
 				resultVal = 1
 			} else {
@@ -7344,8 +8499,8 @@ func IsIPv6(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			}
 			v1, _ := p1.GetStrValue(i)
 			ipStr := functionUtil.QuickBytesToStr(v1)
-			ip := net.ParseIP(ipStr)
-			if ip != nil && ip.To4() == nil {
+			ip, ok := parseIPAddress(ipStr)
+			if ok && ip.Is6() {
 				rss[i] = 1
 			} else {
 				rss[i] = 0
@@ -7358,8 +8513,8 @@ func IsIPv6(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
 		ipStr := functionUtil.QuickBytesToStr(v1)
-		ip := net.ParseIP(ipStr)
-		if ip != nil && ip.To4() == nil {
+		ip, ok := parseIPAddress(ipStr)
+		if ok && ip.Is6() {
 			rss[i] = 1
 		} else {
 			rss[i] = 0
@@ -7368,18 +8523,18 @@ func IsIPv6(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	return nil
 }
 
-// isIPv4Compat checks if an IPv6 address is IPv4-compatible (::a.b.c.d)
-// IPv4-compatible addresses have the first 12 bytes as zeros
+// isIPv4Compat checks for the deprecated IPv4-compatible ::/96 range, excluding
+// the reserved :: and ::1 addresses.
 func isIPv4Compat(ip net.IP) bool {
 	if len(ip) != 16 {
 		return false
 	}
-	// Check for :: prefix (first 12 bytes are zeros)
+	// Check for the ::/96 prefix and require a payload greater than ::1.
 	return ip[0] == 0 && ip[1] == 0 && ip[2] == 0 && ip[3] == 0 &&
 		ip[4] == 0 && ip[5] == 0 && ip[6] == 0 && ip[7] == 0 &&
 		ip[8] == 0 && ip[9] == 0 && ip[10] == 0 && ip[11] == 0 &&
-		// Last 4 bytes should not be all zeros (0.0.0.0 is not considered IPv4-compatible)
-		!(ip[12] == 0 && ip[13] == 0 && ip[14] == 0 && ip[15] == 0)
+		// The reserved :: and ::1 addresses are not IPv4-compatible.
+		(ip[12] != 0 || ip[13] != 0 || ip[14] != 0 || ip[15] > 1)
 }
 
 // IsIPv4Compat returns 1 if the argument is a valid IPv4-compatible IPv6 address, 0 otherwise.

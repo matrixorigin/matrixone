@@ -1679,6 +1679,9 @@ func buildCTASDefaultFromOrigin(
 	if err = preservePersistedFormatCompatibility(ctx.GetContext(), defaultExpr); err != nil {
 		return nil, err
 	}
+	if err = RequirePersistedIPFunctionProtocol(ctx.GetContext(), ctx.GetProcess(), defaultExpr); err != nil {
+		return nil, err
+	}
 	if exprHasLocalColumnRef(defaultExpr) {
 		if err := requireExpressionDefaultProtocol(ctx.GetProcess()); err != nil {
 			return nil, err
@@ -4012,6 +4015,9 @@ func appendCheckDef(
 		return err
 	}
 	if err = preservePersistedFormatCompatibility(ctx.GetContext(), checkExpr); err != nil {
+		return err
+	}
+	if err = RequirePersistedIPFunctionProtocol(ctx.GetContext(), ctx.GetProcess(), checkExpr); err != nil {
 		return err
 	}
 	if err = validateCheckExpr(ctx.GetContext(), tableDef, checkExpr, columnPos); err != nil {
