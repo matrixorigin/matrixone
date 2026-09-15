@@ -152,6 +152,22 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			mustExec(t, ctx, conn, "delete from dst")
 		})
 
+		t.Run("decimal_division_sibling_does_not_inherit_integer_scale", func(t *testing.T) {
+			const coefficient = "123456789012345678901234567890123456789012345678901234567890"
+			mustExec(t, ctx, conn, "create table mixed_assignment_dst(i int, d decimal(65,0))")
+			mustExec(t, ctx, conn, "insert into mixed_assignment_dst select 1, cast('"+coefficient+
+				"' as decimal(65,0))/1 from src")
+			var got string
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select cast(d as char) from mixed_assignment_dst").Scan(&got))
+			require.Equal(t, coefficient, got)
+			mustExec(t, ctx, conn, "update mixed_assignment_dst set i=2,d=cast('"+coefficient+
+				"' as decimal(65,0))/1 where i=1")
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select cast(d as char) from mixed_assignment_dst where i=2").Scan(&got))
+			require.Equal(t, coefficient, got)
+		})
+
 		t.Run("prepared_strict_division_by_zero", func(t *testing.T) {
 			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'")
 			defer func() { _, _ = conn.ExecContext(ctx, "set sql_mode='STRICT_TRANS_TABLES'") }()
@@ -534,6 +550,13 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 		var value int64
 		require.NoError(t, conn.QueryRowContext(ctx, "select value from t_abs").Scan(&value))
 		require.Equal(t, int64(2), value)
+		require.NoError(t, conn.QueryRowContext(ctx, "select value from t_add").Scan(&value))
+		require.Equal(t, int64(-2), value)
+		mustExec(t, ctx, conn, "delete from t_add")
+		mustExec(t, ctx, conn, "prepare nested_add_sql from 'insert into t_add values (? + 0)'")
+		mustExec(t, ctx, conn, "set @nested_add_value=cast(-2.5 as double)")
+		mustExec(t, ctx, conn, "execute nested_add_sql using @nested_add_value")
+		mustExec(t, ctx, conn, "deallocate prepare nested_add_sql")
 		require.NoError(t, conn.QueryRowContext(ctx, "select value from t_add").Scan(&value))
 		require.Equal(t, int64(-2), value)
 

@@ -1708,6 +1708,16 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 // values travel in a text vector, but DECIMAL and FLOAT sources must retain
 // their different integer-rounding contracts. String-backed user variables
 // deliberately remain on the existing text-assignment path.
+func (rule *ResetParamRefRule) preparedPositionsHaveApproximateRuntime(positions map[int32]struct{}) bool {
+	for position := range positions {
+		typ, ok := rule.runtimeParamType(int(position))
+		if ok && typ.Oid.IsFloat() {
+			return true
+		}
+	}
+	return false
+}
+
 func (rule *ResetParamRefRule) rebindPreparedNumericIntegerAssignment(
 	expr *plan.Expr,
 ) (*plan.Expr, bool, error) {
@@ -1724,18 +1734,24 @@ func (rule *ResetParamRefRule) rebindPreparedNumericIntegerAssignment(
 	funcName := fn.Func.GetObjName()
 	switch funcName {
 	case "cast", "cast_assign", "cast_ignore", "cast_strict":
-	case "div":
+	default:
 		positions := preparedNumericValueParamPositions(expr)
-		if len(positions) == 0 {
+		if len(positions) == 0 ||
+			(funcName != "div" && !rule.preparedPositionsHaveApproximateRuntime(positions)) {
 			return expr, false, nil
 		}
 		rewritten, changed, err := rule.rebindPreparedNumericExpr(expr, positions)
-		if changed {
-			rule.specialized = true
+		if err != nil || !changed {
+			return rewritten, changed, err
 		}
-		return rewritten, changed, err
-	default:
-		return expr, false, nil
+		if !reflect.DeepEqual(rewritten.Typ, expr.Typ) {
+			rewritten, err = forceAssignmentCastExprWithName(rule.ctx, rewritten, expr.Typ, "cast_assign")
+			if err != nil {
+				return nil, true, err
+			}
+		}
+		rule.specialized = true
+		return rewritten, true, nil
 	}
 	if _, direct := preparedParamPosition(fn.Args[0]); !direct {
 		positions := preparedNumericValueParamPositions(fn.Args[0])

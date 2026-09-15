@@ -236,6 +236,15 @@ EXECUTE insert_unsigned USING @id, @unsigned_value;
 SELECT * FROM t_unsigned ORDER BY id;
 DEALLOCATE PREPARE insert_unsigned;
 
+CREATE TABLE mixed_assignment_dst(i INT, d DECIMAL(65,0));
+INSERT INTO mixed_assignment_dst
+SELECT 1, CAST('123456789012345678901234567890123456789012345678901234567890' AS DECIMAL(65,0))/1;
+UPDATE mixed_assignment_dst
+SET i=2,d=CAST('123456789012345678901234567890123456789012345678901234567890' AS DECIMAL(65,0))/1
+WHERE i=1;
+SELECT * FROM mixed_assignment_dst;
+DROP TABLE mixed_assignment_dst;
+
 SELECT 5/2 AS q;
 SELECT q FROM select_contract;
 EXECUTE ordinary_division USING @ordinary_value;

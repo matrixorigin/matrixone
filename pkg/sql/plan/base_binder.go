@@ -5085,7 +5085,7 @@ func bindFuncExprImplByPlanExpr(
 				// Keep enough fractional digits to distinguish half-integer
 				// boundaries for 64-bit integer operands. Do not scale the
 				// integer divisor too: decimal division rescales it internally.
-				if i == 0 && scale < 24 {
+				if i == 0 && types.T(arg.Typ.Id).IsInteger() && scale < 24 {
 					scale = 24
 				}
 				typ := types.New(types.T_decimal256, 65, scale)
