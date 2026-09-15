@@ -25,10 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -495,6 +499,69 @@ func TestExecCtxCloseClearsRootSQLOverride(t *testing.T) {
 	execCtx := &ExecCtx{rootSQLOverride: &rootSQL}
 	execCtx.Close()
 	require.Nil(t, execCtx.rootSQLOverride)
+}
+
+func TestRecoverTableDefForPlanMigratesLegacyHex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+
+	hexExpr := &pbplan.Expr{Typ: plan2.MakePlan2Type(&types.Type{Oid: types.T_varchar}), Expr: &pbplan.Expr_F{
+		F: &pbplan.Function{
+			Func: &pbplan.ObjectRef{Obj: function.EncodeOverloadID(function.HEX, 5), ObjName: "hex"},
+			Args: []*pbplan.Expr{plan2.MakePlan2Float64ConstExprWithType(14.5)},
+		},
+	}}
+	tableDef := &pbplan.TableDef{DbName: "db", Checks: []*pbplan.CheckDef{{Check: hexExpr}}}
+	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: context.Background(), proc: proc}}
+
+	require.NoError(t, tcc.recoverLegacyTinyText(context.Background(), "db", tableDef, nil, nil))
+	_, overloadID := function.DecodeOverloadID(tableDef.Checks[0].Check.GetF().GetFunc().GetObj())
+	require.Equal(t, int32(function.HexFloat64Overload), overloadID)
+}
+
+func TestResolveByIdPreservesUnassignableLegacyHexDefault(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+	t.Cleanup(func() {
+		if present {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+		}
+	})
+	typ := pbplan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 1}
+	catalogDef := &pbplan.TableDef{DbName: "db", Name: "t", Cols: []*pbplan.ColDef{{Name: "v", Typ: typ,
+		Default: &pbplan.Default{OriginString: "(hex(cast(15.5 as double)))", Expr: &pbplan.Expr{Typ: typ,
+			Expr: &pbplan.Expr_Lit{Lit: &pbplan.Literal{Value: &pbplan.Literal_Decimal64Val{
+				Decimal64Val: &pbplan.Decimal64{A: 100},
+			}}},
+		}},
+	}}}
+	wire, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	storage := mock_frontend.NewMockEngine(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("db", "t", relation, nil).Times(2)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef).Times(2)
+	ses, _ := newObservedProtocolSession()
+	ses.txnHandler = InitTxnHandler("", storage, proc.Ctx, txnOp)
+	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: proc.Ctx, ses: ses, proc: proc}}
+	for range 2 {
+		obj, resolved, err := tcc.ResolveById(42, nil)
+		require.NoError(t, err)
+		require.Equal(t, "t", obj.ObjName)
+		require.Equal(t, int64(100), resolved.Cols[0].Default.Expr.GetLit().GetDecimal64Val().A)
+		require.Same(t, catalogDef.Cols[0].Default, resolved.Cols[0].Default)
+	}
+	after, err := catalogDef.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, wire, after)
 }
 
 func TestDatabaseExistsSuppressesOnlyExpectedEOBLog(t *testing.T) {
