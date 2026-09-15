@@ -107,7 +107,8 @@ const (
 	MORPCVersion69     int64 = 69 // exact bounded per-partition RANK with boundary ties
 	MORPCVersion70     int64 = 70 // row-dependent and unsigned CONV bases
 	MORPCVersion71     int64 = 71 // checked integer arithmetic overloads
-	MORPCLatestVersion       = MORPCVersion71
+	MORPCVersion72     int64 = 72 // corrected IP function semantics and overload identities
+	MORPCLatestVersion       = MORPCVersion72
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
