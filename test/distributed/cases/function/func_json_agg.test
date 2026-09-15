@@ -291,4 +291,31 @@ SELECT
 FROM i18n_texts
 GROUP BY text_key;
 drop table i18n_texts;
+# JSON aggregate values preserve MySQL opaque subtype tags and raw bytes.
+DROP TABLE IF EXISTS t_json_opaque_agg;
+CREATE TABLE t_json_opaque_agg (
+    id INT,
+    bit_value BIT(8),
+    binary_value BINARY(3),
+    varbinary_value VARBINARY(3),
+    blob_value BLOB
+);
+INSERT INTO t_json_opaque_agg VALUES
+(1, b'10101010', X'00FF41', X'00FF41', X'00'),
+(2, NULL, NULL, UNHEX(''), NULL);
+SELECT id,
+       JSON_ARRAYAGG(bit_value) AS bit_array,
+       JSON_ARRAYAGG(binary_value) AS binary_array,
+       JSON_ARRAYAGG(varbinary_value) AS varbinary_array,
+       JSON_ARRAYAGG(blob_value) AS blob_array
+FROM t_json_opaque_agg GROUP BY id ORDER BY id;
+SELECT
+       JSON_OBJECTAGG(CAST(id AS CHAR), bit_value) AS bit_object,
+       JSON_OBJECTAGG(CAST(id AS CHAR), binary_value) AS binary_object,
+       JSON_OBJECTAGG(CAST(id AS CHAR), varbinary_value) AS varbinary_object,
+       JSON_OBJECTAGG(CAST(id AS CHAR), blob_value) AS blob_object
+FROM t_json_opaque_agg WHERE id = 1;
+SELECT JSON_ARRAYAGG(varbinary_value) AS empty_array
+FROM t_json_opaque_agg WHERE id = 99;
+DROP TABLE t_json_opaque_agg;
 drop database test_json;

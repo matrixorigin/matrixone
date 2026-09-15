@@ -114,6 +114,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.legacyDecimalSumState = useLegacyDecimalSumState(proc)
 	group.ctr.legacyDecimalSumResult = useLegacyDecimalSumResultForRemote(proc, group.NeedEval)
 	group.ctr.timeZone = proc.Base.SessionInfo.TimeZone
+	group.ctr.jsonAggOpaqueProtocolVersion = jsonAggregateOpaqueProtocolVersion(proc)
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()
@@ -281,6 +282,8 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 	}
 	for _, agg := range group.ctr.aggList {
 		aggexec.ConfigureGroupConcatTimeZone(agg, group.ctr.timeZone)
+		aggexec.ConfigureJSONAggregateOpaqueProtocol(
+			agg, group.ctr.jsonAggOpaqueProtocolVersion)
 	}
 	group.configureH0OrderedAggSpill(proc)
 

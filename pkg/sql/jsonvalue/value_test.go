@@ -153,6 +153,90 @@ func TestFromVectorMySQLConstructorTypes(t *testing.T) {
 	}
 }
 
+func TestOpaqueValueSizeAppendBuildConsistency(t *testing.T) {
+	mp := mpool.MustNewZero()
+	const protocolVersion = bytejson.MySQLOpaqueProtocolVersion
+
+	tests := []struct {
+		name      string
+		typ       types.Type
+		append    func(*vector.Vector) error
+		wantValue string
+	}{
+		{
+			name: "bit-width-seven", typ: types.New(types.T_bit, 7, 0),
+			append: func(v *vector.Vector) error {
+				return vector.AppendFixed(v, uint64(0xff), false, mp)
+			},
+			wantValue: `"base64:type16:fw=="`,
+		},
+		{
+			name: "binary", typ: types.T_binary.ToType(),
+			append: func(v *vector.Vector) error {
+				return vector.AppendBytes(v, []byte{0, 0xff, 'A'}, false, mp)
+			},
+			wantValue: `"base64:type254:AP9B"`,
+		},
+		{
+			name: "empty-varbinary", typ: types.T_varbinary.ToType(),
+			append: func(v *vector.Vector) error {
+				return vector.AppendBytes(v, nil, false, mp)
+			},
+			wantValue: `"base64:type15:"`,
+		},
+		{
+			name: "blob", typ: types.T_blob.ToType(),
+			append: func(v *vector.Vector) error {
+				return vector.AppendBytes(v, []byte{0}, false, mp)
+			},
+			wantValue: `"base64:type252:AA=="`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v := vector.NewVec(tc.typ)
+			defer v.Free(mp)
+			require.NoError(t, tc.append(v))
+
+			size, err := OpaqueValueSize(context.Background(), v, 0, protocolVersion)
+			require.NoError(t, err)
+			dst := []byte("prefix")
+			start := len(dst)
+			appended, err := AppendOpaqueValue(context.Background(), dst, v, 0, protocolVersion)
+			require.NoError(t, err)
+			require.Len(t, appended, start+size)
+			require.Equal(t, []byte("prefix"), appended[:start])
+
+			built, err := BuildOpaqueValue(context.Background(), v, 0, protocolVersion)
+			require.NoError(t, err)
+			require.Equal(t, append([]byte{byte(built.Type)}, built.Data...), appended[start:])
+			require.Equal(t, tc.wantValue, built.String())
+		})
+	}
+
+	nulls := vector.NewVec(types.T_binary.ToType())
+	defer nulls.Free(mp)
+	require.NoError(t, vector.AppendBytes(nulls, nil, true, mp))
+	size, err := OpaqueValueSize(context.Background(), nulls, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, 2, size)
+	encoded, err := AppendOpaqueValue(context.Background(), nil, nulls, 0, 0)
+	require.NoError(t, err)
+	require.Equal(t, []byte{byte(bytejson.TpCodeLiteral), bytejson.LiteralNull}, encoded)
+
+	unsupported := vector.NewVec(types.T_binary.ToType())
+	defer unsupported.Free(mp)
+	require.NoError(t, vector.AppendBytes(unsupported, []byte("x"), false, mp))
+	_, err = OpaqueValueSize(context.Background(), unsupported, 0, protocolVersion-1)
+	require.ErrorContains(t, err, "MORPC protocol version")
+	invalidBit := vector.NewVec(types.New(types.T_bit, 65, 0))
+	defer invalidBit.Free(mp)
+	require.NoError(t, vector.AppendFixed(invalidBit, uint64(1), false, mp))
+	_, err = OpaqueValueSize(context.Background(), invalidBit, 0, protocolVersion)
+	require.ErrorContains(t, err, "cannot cast BIT(65) to json")
+}
+
 func TestFromVectorGeometryAndNull(t *testing.T) {
 	mp := mpool.MustNewZero()
 	geometry := vector.NewVec(types.T_geometry.ToType())

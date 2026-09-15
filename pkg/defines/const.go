@@ -110,7 +110,8 @@ const (
 	MORPCVersion72     int64 = 72 // corrected IP function semantics and overload identities
 	MORPCVersion73     int64 = 73 // widened DECIMAL SUM partial state
 	MORPCVersion74     int64 = 74 // corrected numeric HEX overload identities
-	MORPCLatestVersion       = MORPCVersion74
+	MORPCVersion75     int64 = 75 // JSON aggregate opaque value execution
+	MORPCLatestVersion       = MORPCVersion75
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
