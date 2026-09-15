@@ -27,8 +27,8 @@ import (
 
 // RequirePersistedExpressionProtocol admits catalog-bound expressions only
 // after the deployment-managed common protocol reaches the required feature
-// version (v72 for ordinary IP, v78 for string numeric results, or v79 for
-// extended IP semantics). Unlike a remote
+// version (v72 for ordinary IP, v78 for string numeric results, v79 for
+// extended IP semantics, or v80 for spatial distance). Unlike a remote
 // pipeline, a catalog default/generated/check/on-update expression can be
 // evaluated locally by an older CN and therefore bypasses the per-send
 // capability check. Call this before folding a newly bound expression and at
@@ -59,6 +59,10 @@ func RequirePersistedExpressionProtocol(ctx context.Context, proc *process.Proce
 		requiredVersion = defines.MORPCVersion79
 		reason = "extended persisted IP function semantics"
 	}
+	if features.SpatialDistanceSemantics && requiredVersion < defines.MORPCVersion80 {
+		requiredVersion = defines.MORPCVersion80
+		reason = "geodetic spatial-distance semantics"
+	}
 	if requiredVersion == 0 {
 		return nil
 	}
@@ -80,9 +84,9 @@ func RequirePersistedExpressionProtocol(ctx context.Context, proc *process.Proce
 }
 
 // RequirePersistedIPFunctionProtocol is kept as a source-compatible wrapper
-// for existing catalog builders. New admission paths should use the shared
-// RequirePersistedExpressionProtocol so expression contracts take the maximum
-// required protocol instead of masking one another.
+// for callers outside the planner. New admission paths should use the shared
+// RequirePersistedExpressionProtocol so multiple versioned expression
+// contracts cannot drift apart.
 func RequirePersistedIPFunctionProtocol(ctx context.Context, proc *process.Process, owner any) error {
 	return RequirePersistedExpressionProtocol(ctx, proc, owner)
 }

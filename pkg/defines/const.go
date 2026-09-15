@@ -115,7 +115,8 @@ const (
 	MORPCVersion77     int64 = 77 // canonical opaque DISTINCT argument wire keys
 	MORPCVersion78     int64 = 78 // signed and widened string numeric result contracts
 	MORPCVersion79     int64 = 79 // extended IP coercions, bounded string domains, and INT32 IP predicates
-	MORPCLatestVersion       = MORPCVersion79
+	MORPCVersion80     int64 = 80 // geodetic distance semantics and length-unit overloads
+	MORPCLatestVersion       = MORPCVersion80
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

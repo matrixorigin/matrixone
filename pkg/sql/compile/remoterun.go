@@ -143,6 +143,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if features.SpatialDistanceSemantics {
+		if err = validateSpatialDistanceDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -2165,6 +2170,12 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion79) {
 		return moerr.NewNotSupportedNoCtx(
 			"extended IP function semantics require MORPC protocol version 79",
+		)
+	}
+	if features.SpatialDistanceSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {
+		return moerr.NewNotSupportedNoCtx(
+			"geodetic spatial-distance semantics require MORPC protocol version 80",
 		)
 	}
 	return nil

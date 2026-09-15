@@ -239,6 +239,9 @@ const (
 // StringNumericResultContracts requires MORPC v78 because the listed string
 // numeric functions keep overload IDs while changing their physical result
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
+// SpatialDistanceSemantics requires MORPC v80 because geodetic
+// ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
+// overloads and the distance family adds length-unit overloads.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                bool
 	JSONComparisonParam          bool
@@ -252,7 +255,8 @@ type RemoteExpressionFeatures struct {
 	IPFunctionSemantics          bool
 	// IPFunctionSemanticsV73 is the extended IP semantic category; its
 	// admission wire version is MORPC v79 after the v74-v78 contracts.
-	IPFunctionSemanticsV73 bool
+	IPFunctionSemanticsV73   bool
+	SpatialDistanceSemantics bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -266,7 +270,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.RowDependentConvBases ||
 		features.StringNumericResultContracts ||
 		features.IPFunctionSemantics ||
-		features.IPFunctionSemanticsV73
+		features.IPFunctionSemanticsV73 ||
+		features.SpatialDistanceSemantics
 }
 
 // These IDs are kept numeric deliberately: pkg/pb/plan cannot import the
@@ -276,16 +281,19 @@ func (features RemoteExpressionFeatures) Any() bool {
 // therefore based on function identity, not on the operand types selected by a
 // particular planner invocation.
 const (
-	remoteIPInet6AtonFunctionID    int32 = 392
-	remoteIPInet6NtoaFunctionID    int32 = 393
-	remoteIPInetAtonFunctionID     int32 = 394
-	remoteIPInetNtoaFunctionID     int32 = 395
-	remoteIPIsIPv4FunctionID       int32 = 396
-	remoteIPIsIPv6FunctionID       int32 = 397
-	remoteIPIsIPv4CompatFunctionID int32 = 398
-	remoteIPIsIPv4MappedFunctionID int32 = 399
-	remoteTOBase64FunctionID       int32 = 213
-	remoteCoalesceFunctionID       int32 = 74
+	remoteIPInet6AtonFunctionID       int32 = 392
+	remoteIPInet6NtoaFunctionID       int32 = 393
+	remoteIPInetAtonFunctionID        int32 = 394
+	remoteIPInetNtoaFunctionID        int32 = 395
+	remoteIPIsIPv4FunctionID          int32 = 396
+	remoteIPIsIPv6FunctionID          int32 = 397
+	remoteIPIsIPv4CompatFunctionID    int32 = 398
+	remoteIPIsIPv4MappedFunctionID    int32 = 399
+	remoteTOBase64FunctionID          int32 = 213
+	remoteCoalesceFunctionID          int32 = 74
+	remoteSpatialDistanceFunctionID   int32 = 421
+	remoteFrechetDistanceFunctionID   int32 = 506
+	remoteHausdorffDistanceFunctionID int32 = 507
 )
 
 func isRemoteIPFunction(functionID int32) bool {
@@ -394,6 +402,21 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			if !features.IPFunctionSemanticsV73 && isRemoteIPFunctionV73(current) {
 				features.IPFunctionSemanticsV73 = true
+			}
+			if !features.SpatialDistanceSemantics && fn != nil && fn.Func != nil {
+				functionID := int32(fn.Func.Obj >> 32)
+				overloadID := int32(fn.Func.Obj)
+				switch functionID {
+				case remoteFrechetDistanceFunctionID, remoteHausdorffDistanceFunctionID:
+					// The existing two-argument overloads now dispatch geodetic
+					// semantics for SRID 4326, so every overload is fenced.
+					features.SpatialDistanceSemantics = true
+				case remoteSpatialDistanceFunctionID:
+					// ST_DISTANCE overloads 4/5 are the new length-unit forms.
+					// Legacy two-argument and explicit-SRID forms retain their
+					// historical wire contract.
+					features.SpatialDistanceSemantics = overloadID == 4 || overloadID == 5
+				}
 			}
 			return nil
 		})
