@@ -6208,6 +6208,9 @@ func bindFuncExprImplByPlanExpr(
 	case "substring", "substr", "mid":
 		refineSubstringLiteralReturnType(args, &returnType)
 
+	case "left", "right":
+		refineLeftRightLiteralReturnType(args, &returnType)
+
 	case "lpad", "rpad":
 		refinePadLiteralReturnType(args, &returnType)
 
@@ -6501,12 +6504,23 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		return
 	}
 
-	// This refinement exists for byte-preserving binary expressions. Text
-	// SUBSTRING keeps its existing metadata contract; narrowing it here would
-	// change the overload's declared result width and make consumers that rely
-	// on the text semantic family reject an otherwise valid expression.
 	binary := types.StaticStringDomain(sourceType) == types.StringDomainBinary
 	if !binary {
+		// Character SUBSTRING's two-argument form has no fixed output length;
+		// the literal start may change the value, but keeping the source bound is
+		// the only sound metadata guarantee.  Only the explicit three-argument
+		// length can narrow a character result.
+		if len(args) != 3 {
+			return
+		}
+		length, known := binarySubstringLengthBound(args[2].GetLit())
+		if !known {
+			return
+		}
+		if sourceBound, sourceKnown := stringExprBound(args[0], false); sourceKnown && sourceBound < length {
+			length = sourceBound
+		}
+		refineKnownStringResultType(returnType, length, false)
 		return
 	}
 
@@ -6546,6 +6560,24 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	// one of the other inputs is dynamic or the source declaration is wider
 	// than the aggregate limit.
 	refineKnownStringResultType(returnType, bound, binary)
+}
+
+// refineLeftRightLiteralReturnType narrows the character and binary result of
+// LEFT/RIGHT when their length is a constant.  Unlike SUBSTRING's two-argument
+// form, the second argument is always the requested result length.
+func refineLeftRightLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 2 {
+		return
+	}
+	length, known := binarySubstringLengthBound(args[1].GetLit())
+	if !known {
+		return
+	}
+	binary := types.StaticStringDomain(makeTypeByPlan2Expr(args[0])) == types.StringDomainBinary
+	if source, sourceKnown := stringExprBound(args[0], binary); sourceKnown && source < length {
+		length = source
+	}
+	refineKnownStringResultType(returnType, length, binary)
 }
 
 func binarySubstringLengthBound(lit *plan.Literal) (uint64, bool) {
@@ -6962,6 +6994,8 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 		changed = adjustControlFlowBinaryMetadata(args, argTypes, valueIndexes, returnType)
 	case returnType.Oid.IsDecimal():
 		changed = adjustControlFlowDecimalLiteralMetadata(args, argTypes, valueIndexes, returnType)
+	case returnType.Oid == types.T_datetime || returnType.Oid == types.T_timestamp || returnType.Oid == types.T_time:
+		changed = adjustControlFlowTemporalMetadata(argTypes, valueIndexes, returnType)
 	}
 
 	if !changed || len(argsCastType) != len(args) {
@@ -6989,7 +7023,40 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 		for _, idx := range valueIndexes {
 			argsCastType[idx] = *returnType
 		}
+		return
 	}
+	if returnType.Oid == types.T_datetime || returnType.Oid == types.T_timestamp || returnType.Oid == types.T_time {
+		for _, idx := range valueIndexes {
+			argsCastType[idx] = *returnType
+		}
+	}
+}
+
+func adjustControlFlowTemporalMetadata(argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	maxScale := returnType.Scale
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) {
+			return false
+		}
+		typ := argTypes[idx]
+		switch typ.Oid {
+		case types.T_time, types.T_datetime, types.T_timestamp:
+			if typ.Scale > maxScale {
+				maxScale = typ.Scale
+			}
+		}
+	}
+	if maxScale <= returnType.Scale && (maxScale == 0 || returnType.Width == maxScale) {
+		return false
+	}
+	returnType.Scale = maxScale
+	if maxScale > 0 {
+		// Width is used by catalog/type rendering as the persisted FSP marker for
+		// temporal columns. Keep it synchronized with Scale so a widened value is
+		// not materialized as TIMESTAMP(0) despite retaining its precision.
+		returnType.Width = maxScale
+	}
+	return true
 }
 
 // adjustDateFormatMetadata starts with MySQL's format-dependent result length

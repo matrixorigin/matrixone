@@ -133,7 +133,7 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if features.IPFunctionSemantics {
+	if features.IPFunctionSemantics || features.IPFunctionSemanticsV73 {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
 			return nil, err
 		}
@@ -2159,6 +2159,12 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
 		return moerr.NewNotSupportedNoCtx(
 			"corrected IP function semantics require MORPC protocol version 72",
+		)
+	}
+	if features.IPFunctionSemanticsV73 &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion73) {
+		return moerr.NewNotSupportedNoCtx(
+			"extended IP function semantics require MORPC protocol version 73",
 		)
 	}
 	return nil

@@ -472,6 +472,35 @@ func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testin
 	}
 }
 
+func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing.T) {
+	ctx := plan2.NewMockCompilerContext(false)
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"select approx_percentile(0.5) within group (order by n_nationkey) from nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	var percentileFn *plan.Function
+	for _, node := range queryPlan.GetQuery().GetNodes() {
+		for _, aggregate := range node.GetAggList() {
+			if fn := aggregate.GetF(); fn != nil && fn.GetFunc().GetObjName() == plan2.NameApproxPercentile {
+				percentileFn = fn
+			}
+		}
+	}
+	require.NotNil(t, percentileFn)
+	require.Len(t, percentileFn.GetArgs(), 2)
+	require.NotNil(t, percentileFn.GetArgs()[1].GetF(), "raw planner output should retain the static cast")
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	args, config := constructAggregateConfig(percentileFn, proc)
+	require.Len(t, args, 1)
+	require.Equal(t, []byte("0.5"), config)
+}
+
 func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

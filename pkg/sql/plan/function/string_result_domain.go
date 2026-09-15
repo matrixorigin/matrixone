@@ -170,6 +170,32 @@ func fixedTextResultType(width uint64) types.Type {
 	return textStringResultType(stringResultBound{bytes: width}, types.CharsetUTF8)
 }
 
+// base64ResultBound is the encoded payload plus the line-feed inserted after
+// every complete 76-character output line.  The executor intentionally keeps
+// this MySQL-compatible wrapping behavior, so the metadata callback must use
+// the same bound rather than just the four-thirds expansion.
+func base64ResultBound(input stringResultBound) stringResultBound {
+	if input.unknown || input.bytes > math.MaxUint64-2 {
+		return unknownStringResultBound()
+	}
+	encoded := multiplyStringResultBound(
+		stringResultBound{bytes: (input.bytes + 2) / 3}, 4)
+	if encoded.unknown || encoded.bytes == 0 {
+		return encoded
+	}
+	return addStringResultBounds(encoded, stringResultBound{bytes: (encoded.bytes - 1) / 76})
+}
+
+func base64ReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_text.ToType()
+	}
+	// Base64 output is ASCII.  Both character and binary inputs are measured in
+	// their physical bytes; for CHAR/VARCHAR the declared character width is
+	// conservatively expanded by declaredStringByteBound.
+	return textStringResultType(base64ResultBound(declaredStringByteBound(parameters[0])), types.CharsetUTF8)
+}
+
 // compressResultBound mirrors zlib's compressBound contract, the five
 // bytes added by MySQL's COMPRESS framing (four-byte length plus the optional
 // trailing dot), and the two-byte final empty block emitted by Go's zlib

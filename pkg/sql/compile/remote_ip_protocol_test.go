@@ -35,9 +35,13 @@ import (
 )
 
 func remoteIPProtocolPipeline(functionID, overloadID int32) *pipeline.Pipeline {
+	return remoteIPProtocolPipelineWithType(functionID, overloadID, 10)
+}
+
+func remoteIPProtocolPipelineWithType(functionID, overloadID, resultType int32) *pipeline.Pipeline {
 	return &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 		ProjectList: []*planpb.Expr{{
-			Typ: planpb.Type{Id: 10},
+			Typ: planpb.Type{Id: resultType},
 			Expr: &planpb.Expr_F{F: &planpb.Function{
 				Func: &planpb.ObjectRef{
 					Obj:     function.EncodeOverloadID(functionID, overloadID),
@@ -58,7 +62,7 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
-			for _, value := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72} {
+			for _, value := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72, defines.MORPCVersion73} {
 				rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, value)
 			}
 		}
@@ -72,6 +76,7 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		function.IS_IPV4,
 		function.IS_IPV6,
 		function.IS_IPV4_COMPAT,
+		function.IS_IPV4_MAPPED,
 	} {
 		t.Run("function-"+strconv.Itoa(int(functionID)), func(t *testing.T) {
 			remotePipeline := remoteIPProtocolPipeline(functionID, 0)
@@ -102,6 +107,42 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 	t.Run("ordinary function is not fenced", func(t *testing.T) {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remoteIPProtocolPipeline(function.ABS, 0)))
+	})
+
+	t.Run("post-v72 overloads and result widths require v73", func(t *testing.T) {
+		cases := []struct {
+			name       string
+			functionID int32
+			overloadID int32
+			resultType int32
+		}{
+			{name: "to_base64 binary", functionID: function.TO_BASE64, overloadID: 3, resultType: 65},
+			{name: "coalesce binary", functionID: function.COALESCE, overloadID: 29, resultType: 65},
+			{name: "inet_ntoa dynamic", functionID: function.INET_NTOA, overloadID: 9, resultType: 65},
+			{name: "is_ipv4 mapped int", functionID: function.IS_IPV4_MAPPED, overloadID: 0, resultType: 22},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				p := remoteIPProtocolPipelineWithType(tc.functionID, tc.overloadID, tc.resultType)
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+				err := validateRemoteExpressionPipelineProtocol(proc, p)
+				require.ErrorContains(t, err, "protocol version 73")
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+				require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, p))
+			})
+		}
+	})
+
+	t.Run("actual destination is checked for v73", func(t *testing.T) {
+		p := remoteIPProtocolPipelineWithType(function.TO_BASE64, 3, 65)
+		p.Node = &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}
+		c, client := expressionProtocolTestCompile(t)
+		c.proc.Base.QueryClient = client
+		client.version = defines.MORPCVersion72
+		err := validateIPFunctionDestination(c.proc, p)
+		require.ErrorContains(t, err, "version 73")
+		client.version = defines.MORPCVersion73
+		require.NoError(t, validateIPFunctionDestination(c.proc, p))
 	})
 }
 

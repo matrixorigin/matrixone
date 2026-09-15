@@ -84,6 +84,8 @@ func TestBoundedBuiltinReturnTypes(t *testing.T) {
 	}
 
 	assertType(t, "inet_ntoa", []types.Type{types.T_uint64.ToType()}, types.T_varchar, 31, types.CharsetUTF8)
+	assertType(t, "to_base64", []types.Type{varbinary(128)}, types.T_varchar, 174, types.CharsetUTF8)
+	assertType(t, "to_base64", []types.Type{varchar(128)}, types.T_varchar, 692, types.CharsetUTF8)
 	assertType(t, "inet6_ntoa", []types.Type{varbinary(16)}, types.T_varchar, 39, types.CharsetUTF8)
 	assertType(t, "inet6_aton", []types.Type{varchar(39)}, types.T_varbinary, 16, types.CharsetBinary)
 
@@ -138,6 +140,24 @@ func TestBoundedBuiltinReturnTypes(t *testing.T) {
 
 	for _, fn := range []string{"uncompressed_length"} {
 		assertType(t, fn, []types.Type{types.T_blob.ToType()}, types.T_int64, 0, types.CharsetLegacy)
+	}
+}
+
+func TestBase64ResultBoundIncludesLineBreaks(t *testing.T) {
+	for _, test := range []struct {
+		input uint64
+		want  uint64
+	}{
+		{input: 1, want: 4},
+		{input: 57, want: 76},
+		{input: 58, want: 81},
+		{input: 128, want: 174},
+	} {
+		t.Run(strconv.FormatUint(test.input, 10), func(t *testing.T) {
+			got := base64ResultBound(stringResultBound{bytes: test.input})
+			require.False(t, got.unknown)
+			require.Equal(t, test.want, got.bytes)
+		})
 	}
 }
 

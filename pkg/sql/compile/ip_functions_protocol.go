@@ -25,17 +25,19 @@ import (
 )
 
 // constrainIPFunctionWorkers keeps changed IP expressions on one CN while a
-// rolling cluster still contains workers below MORPC v72. The capability probe
-// is performed once per compile and has no per-row execution cost.
+// rolling cluster still contains workers below the expression's admission
+// version. The capability probe is performed once per compile and has no
+// per-row execution cost.
 func (c *Compile) constrainIPFunctionWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
 	}
 	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || !features.IPFunctionSemantics {
+	if err != nil || (!features.IPFunctionSemantics && !features.IPFunctionSemanticsV73) {
 		return err
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion72)
+	required := requiredIPFunctionProtocolVersion(features)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, required)
 	if err != nil {
 		return err
 	}
@@ -49,22 +51,36 @@ func (c *Compile) constrainIPFunctionWorkers(qry *plan.Query) error {
 
 // validateIPFunctionDestination rechecks the actual serialized destination at
 // send time. A worker can be downgraded or replaced after compile-time
-// placement, so a coordinator-only version check is insufficient.
+// placement, so a coordinator-only version check is insufficient for any
+// expression capability carried by the v72/v73 IP admission fence.
 func validateIPFunctionDestination(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil || p.Node == nil {
 		return moerr.NewNotSupportedNoCtx(
-			"corrected IP function semantics require a versioned remote destination",
+			"versioned expression semantics require a remote destination",
 		)
 	}
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	if err != nil {
+		return err
+	}
+	required := requiredIPFunctionProtocolVersion(features)
 	supported, err := remoteWorkersSupportProtocol(proc,
-		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion72)
+		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, required)
 	if err != nil {
 		return err
 	}
 	if !supported {
-		return moerr.NewNotSupportedNoCtx(
-			"remote destination does not support corrected IP function semantics (MORPC version 72)",
+		return moerr.NewNotSupportedNoCtxf(
+			"remote destination does not support versioned expression semantics (MORPC version %d)",
+			required,
 		)
 	}
 	return nil
+}
+
+func requiredIPFunctionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.IPFunctionSemanticsV73 {
+		return defines.MORPCVersion73
+	}
+	return defines.MORPCVersion72
 }

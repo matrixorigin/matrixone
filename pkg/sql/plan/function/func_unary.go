@@ -54,6 +54,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -8356,14 +8357,208 @@ func InetNtoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 }
 
+// InetNtoaDynamic owns the source families whose numeric representation is
+// decided by the value domain rather than by a fixed numeric vector. Keeping
+// this dispatch at the batch boundary preserves the allocation-free native
+// overloads above while allowing MySQL-compatible conversion for strings,
+// BOOL, temporal values, JSON numbers, and prepared parameters.
+func InetNtoaDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(ivecs) != 1 {
+		return moerr.NewInvalidArg(proc.Ctx, "function inet_ntoa", fmt.Sprintf("expected 1 argument, got %d", len(ivecs)))
+	}
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	param := ivecs[0]
+	type valueGetter func(uint64) (string, bool, error)
+	var get valueGetter
+
+	appendSigned := func(value int64, null bool) (string, bool, error) {
+		if null {
+			return "", true, nil
+		}
+		text, err := inetNtoaSigned(value)
+		return text, err != nil, err
+	}
+	appendUnsigned := func(value uint64, null bool) (string, bool, error) {
+		if null {
+			return "", true, nil
+		}
+		text, err := inetNtoaUnsigned(value)
+		return text, err != nil, err
+	}
+
+	switch param.GetType().Oid {
+	case types.T_any:
+		// Prepared markers use a varlena transport vector until their execute-time
+		// domain is known.  Honor that per-row marker kind here; treating the
+		// vector as an untyped NULL would silently discard a valid bound value.
+		get = func(i uint64) (string, bool, error) {
+			if param.IsNull(i) {
+				return "", true, nil
+			}
+			value := param.GetBytesAt(int(i))
+			switch param.GetPrepareParamKindAt(int(i)) {
+			case vector.PrepareParamFloat:
+				floating, err := strconv.ParseFloat(string(value), 64)
+				if err != nil {
+					return "", true, err
+				}
+				text, err := inetNtoaReal(floating)
+				return text, err != nil, err
+			case vector.PrepareParamDecimal:
+				integer, err := roundPreparedDecimalIntegerString(string(value))
+				if err != nil {
+					return "", true, err
+				}
+				number, err := strconv.ParseInt(integer, 10, 64)
+				if err != nil {
+					return "", true, err
+				}
+				return appendSigned(number, false)
+			case vector.PrepareParamBoolean:
+				switch strings.ToLower(string(value)) {
+				case "true", "1":
+					return appendUnsigned(1, false)
+				case "false", "0":
+					return appendUnsigned(0, false)
+				default:
+					return appendUnsigned(0, false)
+				}
+			default:
+				return appendSigned(parseMySQLIntegerPrefix(value), false)
+			}
+		}
+	case types.T_bool:
+		p := vector.GenerateFunctionFixedTypeParameter[bool](param)
+		get = func(i uint64) (string, bool, error) {
+			v, null := p.GetValue(i)
+			if v {
+				return appendUnsigned(1, null)
+			}
+			return appendUnsigned(0, null)
+		}
+	case types.T_date:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Date](param)
+		get = func(i uint64) (string, bool, error) {
+			v, null := p.GetValue(i)
+			if null {
+				return "", true, nil
+			}
+			year, month, day, _ := v.Calendar(true)
+			value := int64(year)*10000 + int64(month)*100 + int64(day)
+			return appendSigned(value, false)
+		}
+	case types.T_datetime:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Datetime](param)
+		get = func(i uint64) (string, bool, error) {
+			v, null := p.GetValue(i)
+			if null {
+				return "", true, nil
+			}
+			year, month, day, _ := v.ToDate().Calendar(true)
+			hour, minute, second := v.Clock()
+			value := (((int64(year)*100+int64(month))*100+int64(day))*100+int64(hour))*10000 + int64(minute)*100 + int64(second)
+			return appendSigned(value, false)
+		}
+	case types.T_timestamp:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Timestamp](param)
+		zone := time.Local
+		if proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
+			zone = proc.GetSessionInfo().TimeZone
+		}
+		get = func(i uint64) (string, bool, error) {
+			v, null := p.GetValue(i)
+			if null {
+				return "", true, nil
+			}
+			dt := v.ToDatetime(zone)
+			year, month, day, _ := dt.ToDate().Calendar(true)
+			hour, minute, second := dt.Clock()
+			value := (((int64(year)*100+int64(month))*100+int64(day))*100+int64(hour))*10000 + int64(minute)*100 + int64(second)
+			return appendSigned(value, false)
+		}
+	case types.T_time:
+		p := vector.GenerateFunctionFixedTypeParameter[types.Time](param)
+		roundFraction := param.GetType().Scale > 0
+		get = func(i uint64) (string, bool, error) {
+			v, null := p.GetValue(i)
+			return appendSigned(mysqlTimeInt64(v, roundFraction), null)
+		}
+	case types.T_json:
+		get = func(i uint64) (string, bool, error) {
+			if param.IsNull(i) {
+				return "", true, nil
+			}
+			bj := types.DecodeJson(param.GetBytesAt(int(i)))
+			switch bj.Type {
+			case bytejson.TpCodeInt64:
+				return appendSigned(bj.GetInt64(), false)
+			case bytejson.TpCodeUint64:
+				return appendUnsigned(bj.GetUint64(), false)
+			case bytejson.TpCodeFloat64:
+				text, err := inetNtoaReal(bj.GetFloat64())
+				return text, err != nil, err
+			case bytejson.TpCodeDecimal:
+				integer, err := roundPreparedDecimalIntegerString(string(bj.GetString()))
+				if err != nil {
+					return "", true, err
+				}
+				number, err := strconv.ParseInt(integer, 10, 64)
+				if err != nil {
+					return "", true, err
+				}
+				return appendSigned(number, false)
+			default:
+				return "", true, nil
+			}
+		}
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+		p := vector.GenerateFunctionStrParameter(param)
+		get = func(i uint64) (string, bool, error) {
+			value, null := p.GetStrValue(i)
+			if null {
+				return "", true, nil
+			}
+			return appendSigned(parseMySQLIntegerPrefix(value), false)
+		}
+	case types.T_year:
+		p := vector.GenerateFunctionFixedTypeParameter[types.MoYear](param)
+		get = func(i uint64) (string, bool, error) {
+			v, null := p.GetValue(i)
+			return appendSigned(v.ToInt64(), null)
+		}
+	default:
+		return moerr.NewInvalidInputNoCtxf("INET_NTOA does not support input type %s", param.GetType().Oid.String())
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		text, null, err := get(i)
+		if null || err != nil {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := rs.AppendBytes([]byte(text), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // IsIPv4 returns 1 if the argument is a valid IPv4 address, 0 otherwise.
 // Returns NULL if the input is NULL.
 func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[int64](result)
+	rs := vector.MustFunctionResult[int32](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[int32](rsVec)
 	rsNull := rsVec.GetNulls()
 
 	c1 := ivecs[0].IsConst()
@@ -8390,7 +8585,7 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
-			var resultVal int64
+			var resultVal int32
 			if _, ok := parseIPv4DottedQuad(ipStr, 3); ok {
 				// Valid IPv4 address
 				resultVal = 1
@@ -8442,10 +8637,10 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 // Returns NULL if the input is NULL.
 func IsIPv6(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[int64](result)
+	rs := vector.MustFunctionResult[int32](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[int32](rsVec)
 	rsNull := rsVec.GetNulls()
 
 	c1 := ivecs[0].IsConst()
@@ -8473,7 +8668,7 @@ func IsIPv6(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 		} else {
 			ipStr := functionUtil.QuickBytesToStr(v1)
 			ip, ok := parseIPAddress(ipStr)
-			var resultVal int64
+			var resultVal int32
 			if ok && ip.Is6() {
 				// Valid IPv6 address (not IPv4)
 				resultVal = 1
@@ -8542,10 +8737,10 @@ func isIPv4Compat(ip net.IP) bool {
 // The input should be a binary representation from INET6_ATON (16 bytes for IPv6).
 func IsIPv4Compat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[int64](result)
+	rs := vector.MustFunctionResult[int32](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[int32](rsVec)
 	rsNull := rsVec.GetNulls()
 
 	c1 := ivecs[0].IsConst()
@@ -8571,7 +8766,7 @@ func IsIPv4Compat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			var resultVal int64
+			var resultVal int32
 			if len(v1) == 16 {
 				ip := net.IP(v1)
 				if isIPv4Compat(ip) {
@@ -8637,10 +8832,10 @@ func IsIPv4Compat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 // IPv4-mapped addresses have the format ::ffff:a.b.c.d
 func IsIPv4Mapped(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[int64](result)
+	rs := vector.MustFunctionResult[int32](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int64](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[int32](rsVec)
 	rsNull := rsVec.GetNulls()
 
 	c1 := ivecs[0].IsConst()
@@ -8666,7 +8861,7 @@ func IsIPv4Mapped(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			var resultVal int64
+			var resultVal int32
 			if len(v1) == 16 {
 				ip := net.IP(v1)
 				if isIPv4Mapped(ip) {

@@ -114,7 +114,8 @@ const (
 	MORPCVersion76     int64 = 76 // length-delimited variable-length GROUP hash keys
 	MORPCVersion77     int64 = 77 // canonical opaque DISTINCT argument wire keys
 	MORPCVersion78     int64 = 78 // signed and widened string numeric result contracts
-	MORPCLatestVersion       = MORPCVersion78
+	MORPCVersion79     int64 = 79 // extended IP coercions, bounded string domains, and INT32 IP predicates
+	MORPCLatestVersion       = MORPCVersion79
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -194,6 +194,14 @@ func RequiresMORPCVersion78StringNumericResultContracts(owner any) (bool, error)
 	return features.StringNumericResultContracts, err
 }
 
+// RequiresMORPCVersion79IPFunctionSemantics reports whether an owner contains
+// an expression whose overload identity or physical result contract was added
+// after the v72 IP-function fence.
+func RequiresMORPCVersion79IPFunctionSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.IPFunctionSemanticsV73, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -242,6 +250,9 @@ type RemoteExpressionFeatures struct {
 	ASCIIInt32Result             bool
 	StringNumericResultContracts bool
 	IPFunctionSemantics          bool
+	// IPFunctionSemanticsV73 is the extended IP semantic category; its
+	// admission wire version is MORPC v79 after the v74-v78 contracts.
+	IPFunctionSemanticsV73 bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -254,7 +265,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.IntegerArithmeticDomains ||
 		features.RowDependentConvBases ||
 		features.StringNumericResultContracts ||
-		features.IPFunctionSemantics
+		features.IPFunctionSemantics ||
+		features.IPFunctionSemanticsV73
 }
 
 // These IDs are kept numeric deliberately: pkg/pb/plan cannot import the
@@ -271,6 +283,9 @@ const (
 	remoteIPIsIPv4FunctionID       int32 = 396
 	remoteIPIsIPv6FunctionID       int32 = 397
 	remoteIPIsIPv4CompatFunctionID int32 = 398
+	remoteIPIsIPv4MappedFunctionID int32 = 399
+	remoteTOBase64FunctionID       int32 = 213
+	remoteCoalesceFunctionID       int32 = 74
 )
 
 func isRemoteIPFunction(functionID int32) bool {
@@ -281,8 +296,43 @@ func isRemoteIPFunction(functionID int32) bool {
 		remoteIPInetNtoaFunctionID,
 		remoteIPIsIPv4FunctionID,
 		remoteIPIsIPv6FunctionID,
-		remoteIPIsIPv4CompatFunctionID:
+		remoteIPIsIPv4CompatFunctionID,
+		remoteIPIsIPv4MappedFunctionID:
 		return true
+	default:
+		return false
+	}
+}
+
+// isRemoteIPFunctionV73 identifies only the overloads/result contracts added
+// after MORPC v72. Keeping this separate from isRemoteIPFunction lets a
+// rolling deployment continue to route already-serialized v72 IP plans while
+// fencing plans whose receiver needs the newer registry or physical width.
+func isRemoteIPFunctionV73(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	functionID := int32(fn.Func.Obj >> 32)
+	overloadID := int32(fn.Func.Obj)
+	switch functionID {
+	case remoteTOBase64FunctionID:
+		// The VARCHAR overload changed its result domain and the binary
+		// overloads are new identities. Both must stay on v73 workers.
+		return overloadID == 0 || overloadID >= 3
+	case remoteCoalesceFunctionID:
+		return overloadID == 29 || overloadID == 30
+	case remoteIPInetNtoaFunctionID:
+		return overloadID >= 9
+	case remoteIPIsIPv4FunctionID,
+		remoteIPIsIPv6FunctionID,
+		remoteIPIsIPv4CompatFunctionID,
+		remoteIPIsIPv4MappedFunctionID:
+		// v73 changed the physical result vector from BIGINT to INT.
+		return expr.Typ.Id == 22
 	default:
 		return false
 	}
@@ -341,6 +391,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			if !features.IPFunctionSemantics && fn != nil && fn.Func != nil {
 				features.IPFunctionSemantics = isRemoteIPFunction(int32(fn.Func.Obj >> 32))
+			}
+			if !features.IPFunctionSemanticsV73 && isRemoteIPFunctionV73(current) {
+				features.IPFunctionSemanticsV73 = true
 			}
 			return nil
 		})

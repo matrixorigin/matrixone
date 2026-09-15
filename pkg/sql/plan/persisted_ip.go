@@ -27,7 +27,8 @@ import (
 
 // RequirePersistedExpressionProtocol admits catalog-bound expressions only
 // after the deployment-managed common protocol reaches the required feature
-// version (v72 for IP or v78 for string numeric results). Unlike a remote
+// version (v72 for ordinary IP, v78 for string numeric results, or v79 for
+// extended IP semantics). Unlike a remote
 // pipeline, a catalog default/generated/check/on-update expression can be
 // evaluated locally by an older CN and therefore bypasses the per-send
 // capability check. Call this before folding a newly bound expression and at
@@ -53,6 +54,10 @@ func RequirePersistedExpressionProtocol(ctx context.Context, proc *process.Proce
 	if features.StringNumericResultContracts && requiredVersion < defines.MORPCVersion78 {
 		requiredVersion = defines.MORPCVersion78
 		reason = "corrected string numeric result contracts"
+	}
+	if features.IPFunctionSemanticsV73 && requiredVersion < defines.MORPCVersion79 {
+		requiredVersion = defines.MORPCVersion79
+		reason = "extended persisted IP function semantics"
 	}
 	if requiredVersion == 0 {
 		return nil

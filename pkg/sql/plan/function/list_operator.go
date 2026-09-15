@@ -2949,6 +2949,26 @@ var supportedOperators = []FuncNew{
 					return CoalesceStr
 				},
 			},
+			{
+				overloadId: 29,
+				args:       []types.T{types.T_binary},
+				retType: func(parameters []types.Type) types.Type {
+					return coalesceBinaryStringReturnType(types.T_binary, parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
+			{
+				overloadId: 30,
+				args:       []types.T{types.T_varbinary},
+				retType: func(parameters []types.Type) types.Type {
+					return coalesceBinaryStringReturnType(types.T_varbinary, parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return CoalesceStr
+				},
+			},
 		},
 	},
 

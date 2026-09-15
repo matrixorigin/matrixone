@@ -48,7 +48,13 @@ func TestPersistedIPFunctionProtocolAdmission(t *testing.T) {
 		"create table t(a bigint, b varchar(32) generated always as (inet_ntoa(a)) stored)",
 		"create table t(a bigint, check (inet_ntoa(a) <> ''))",
 	}
-	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72} {
+	for _, version := range []int64{
+		defines.MORPCVersion70,
+		defines.MORPCVersion71,
+		defines.MORPCVersion72,
+		defines.MORPCVersion78,
+		defines.MORPCVersion79,
+	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		for _, sql := range statements {
 			t.Run(fmt.Sprintf("%s/v%d", sql, version), func(t *testing.T) {
@@ -86,7 +92,7 @@ func TestPersistedIPFunctionProtocolAdmissionAcrossOwners(t *testing.T) {
 	expr, err := binder.BindExpr(ast, 0, false)
 	require.NoError(t, err)
 
-	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72} {
+	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72, defines.MORPCVersion73} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		if version < defines.MORPCVersion72 {
 			require.ErrorContains(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, expr), "protocol version 72")
@@ -132,7 +138,7 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 		"create table t(a bigint, b varchar(32) generated always as (inet_ntoa(a)) stored)", 1)
 	columns := []*ColDef{{Name: "a", Typ: planpb.Type{Id: int32(types.T_int64), Width: 64}}}
 
-	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72} {
+	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72, defines.MORPCVersion73} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 			_, err := buildDefaultExprWithColumns(defaultCol,
@@ -140,7 +146,7 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 			checkAdmissionResult(t, version, err)
 
 			_, err = buildOnUpdate(onUpdateCol, planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc)
-			checkAdmissionResult(t, version, err)
+			checkAdmissionResult(t, version, err, true)
 
 			_, err = buildGeneratedExpr(generatedCol,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, columns, proc)
@@ -149,7 +155,7 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 			_, err = buildCTASDefaultFromOrigin(ctx,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, true,
 				"inet_ntoa(1)", columns...)
-			checkAdmissionResult(t, version, err)
+			checkAdmissionResult(t, version, err, true)
 		})
 	}
 }
@@ -187,10 +193,14 @@ func TestPersistedStringNumericResultProtocolAdmission(t *testing.T) {
 		"legacy catalog-builder wrapper must use the shared maximum-version gate")
 }
 
-func checkAdmissionResult(t *testing.T, version int64, err error) {
+func checkAdmissionResult(t *testing.T, version int64, err error, requiresV79 ...bool) {
 	t.Helper()
-	if version < defines.MORPCVersion72 {
-		require.ErrorContains(t, err, "protocol version 72")
+	required := defines.MORPCVersion72
+	if len(requiresV79) > 0 && requiresV79[0] {
+		required = defines.MORPCVersion79
+	}
+	if version < required {
+		require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", required))
 	} else {
 		require.NoError(t, err)
 	}

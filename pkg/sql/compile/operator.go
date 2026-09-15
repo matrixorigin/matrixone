@@ -1957,6 +1957,7 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 			if err := validateApproxPercentileExpr(configExpr); err != nil {
 				panic(err)
 			}
+			configExpr = normalizeAggregateConfigExpr(proc, configExpr)
 			vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
 			if err != nil {
 				panic(err)
