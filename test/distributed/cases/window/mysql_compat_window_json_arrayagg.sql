@@ -61,4 +61,31 @@ insert into t_ident values (1, 2);
 select json_arrayagg, json_objectagg from t_ident;
 drop table t_ident;
 
+-- Opaque aggregate values retain their subtype tags through window frames.
+create table opaque_orders (
+  id int primary key,
+  customer_id int,
+  bit_value bit(8),
+  binary_value binary(3),
+  varbinary_value varbinary(3),
+  blob_value blob
+);
+insert into opaque_orders values
+(1,10,b'10101010',X'00FF41',X'00FF41',X'00'),
+(2,10,NULL,NULL,UNHEX(''),NULL),
+(3,10,b'00000111',X'000102',X'000102',X'80');
+select id,
+       json_arrayagg(bit_value) over (partition by customer_id order by id) bit_array,
+       json_arrayagg(binary_value) over (partition by customer_id order by id) binary_array,
+       json_arrayagg(varbinary_value) over (partition by customer_id order by id) varbinary_array,
+       json_arrayagg(blob_value) over (partition by customer_id order by id) blob_array
+from opaque_orders order by id;
+select id,
+       json_objectagg(id, bit_value) over (partition by customer_id order by id) bit_object,
+       json_objectagg(id, binary_value) over (partition by customer_id order by id) binary_object,
+       json_objectagg(id, varbinary_value) over (partition by customer_id order by id) varbinary_object,
+       json_objectagg(id, blob_value) over (partition by customer_id order by id) blob_object
+from opaque_orders order by id;
+drop table opaque_orders;
+
 drop database mysql_compat_window_json_arrayagg;

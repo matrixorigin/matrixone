@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -455,9 +456,20 @@ func runJSONArrayAggregate(
 	input *vector.Vector,
 	allocation *AllocationAccount,
 ) bytejson.ByteJson {
+	return runJSONArrayAggregateWithProtocol(t, mp, input, allocation, 0)
+}
+
+func runJSONArrayAggregateWithProtocol(
+	t *testing.T,
+	mp *mpool.MPool,
+	input *vector.Vector,
+	allocation *AllocationAccount,
+	protocolVersion int64,
+) bytejson.ByteJson {
 	t.Helper()
 	exec, err := MakeAgg(mp, AggIdOfJsonArrayAgg, false, *input.GetType())
 	require.NoError(t, err)
+	ConfigureJSONAggregateOpaqueProtocol(exec, protocolVersion)
 	var owner AllocationAccountOwner
 	if allocation != nil {
 		owner = exec.(AllocationAccountOwner)
@@ -483,6 +495,15 @@ func runJSONArrayAggregate(
 }
 
 func runJSONObjectAggregate(t *testing.T, mp *mpool.MPool, input *vector.Vector) bytejson.ByteJson {
+	return runJSONObjectAggregateWithProtocol(t, mp, input, 0)
+}
+
+func runJSONObjectAggregateWithProtocol(
+	t *testing.T,
+	mp *mpool.MPool,
+	input *vector.Vector,
+	protocolVersion int64,
+) bytejson.ByteJson {
 	t.Helper()
 	exec, err := MakeAgg(
 		mp,
@@ -492,6 +513,7 @@ func runJSONObjectAggregate(t *testing.T, mp *mpool.MPool, input *vector.Vector)
 		*input.GetType(),
 	)
 	require.NoError(t, err)
+	ConfigureJSONAggregateOpaqueProtocol(exec, protocolVersion)
 	require.NoError(t, exec.GroupGrow(1))
 	keys := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"v"})
 	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{keys, input}))
@@ -565,7 +587,7 @@ func fromValueListToVector(
 	return v
 }
 
-func TestJsonArrayAggBinaryUnsupported(t *testing.T) {
+func TestJsonArrayAggOpaqueRequiresProtocolAdmission(t *testing.T) {
 	mg := mpool.MustNewZero()
 	info := multiAggInfo{
 		aggID:     32,
@@ -580,10 +602,92 @@ func TestJsonArrayAggBinaryUnsupported(t *testing.T) {
 	vec := fromValueListToVector(mg, types.T_binary.ToType(), []string{"abc"}, nil)
 	err := exec.Fill(0, 0, []*vector.Vector{vec})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "binary data not supported")
+	require.Contains(t, err.Error(), "MORPC protocol version")
 
 	vec.Free(mg)
 	exec.Free()
+}
+
+func TestJSONAggregateOpaqueValueSurfaces(t *testing.T) {
+	const protocolVersion = bytejson.MySQLOpaqueProtocolVersion
+	mg := mpool.MustNewZero()
+
+	tests := []struct {
+		name      string
+		typ       types.Type
+		append    func(*vector.Vector) error
+		wantValue string
+		wantType  string
+	}{
+		{
+			name: "bit", typ: types.New(types.T_bit, 8, 0),
+			append: func(v *vector.Vector) error {
+				return vector.AppendFixed(v, uint64(0xaa), false, mg)
+			},
+			wantValue: "base64:type16:qg==", wantType: "BIT",
+		},
+		{
+			name: "binary", typ: types.T_binary.ToType(),
+			append: func(v *vector.Vector) error {
+				return vector.AppendBytes(v, []byte{0, 0xff, 'A'}, false, mg)
+			},
+			wantValue: "base64:type254:AP9B", wantType: "BLOB",
+		},
+		{
+			name: "varbinary", typ: types.T_varbinary.ToType(),
+			append: func(v *vector.Vector) error {
+				return vector.AppendBytes(v, []byte{}, false, mg)
+			},
+			wantValue: "base64:type15:", wantType: "BLOB",
+		},
+		{
+			name: "blob", typ: types.T_blob.ToType(),
+			append: func(v *vector.Vector) error {
+				return vector.AppendBytes(v, []byte{0}, false, mg)
+			},
+			wantValue: "base64:type252:AA==", wantType: "BLOB",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := vector.NewVec(tc.typ)
+			require.NoError(t, tc.append(input))
+			defer input.Free(mg)
+
+			size := func() int {
+				t.Helper()
+				valueSize, err := jsonArrayAggregateValueSizeWithProtocol(input, 0, protocolVersion)
+				require.NoError(t, err)
+				return valueSize
+			}()
+			appended, err := appendJSONArrayAggregateValueWithProtocol(
+				make([]byte, 0, size), input, 0, protocolVersion)
+			require.NoError(t, err)
+			require.Len(t, appended, size)
+
+			built, err := buildJSONArrayValueByteJsonWithProtocol(input, 0, protocolVersion)
+			require.NoError(t, err)
+			require.Equal(t, appended, append([]byte{byte(built.Type)}, built.Data...))
+			unquoted, err := built.Unquote()
+			require.NoError(t, err)
+			require.Equal(t, tc.wantValue, unquoted)
+			require.Equal(t, tc.wantType, built.TYPE())
+
+			regular := runJSONArrayAggregateWithProtocol(t, mg, input, nil, protocolVersion)
+			registry, account, allocation := newTestAggregateAllocation(t)
+			accounted := runJSONArrayAggregateWithProtocol(t, mg, input, allocation, protocolVersion)
+			finishTestAggregateAllocation(t, registry, account)
+			require.Equal(t, regular.Type, accounted.Type)
+			require.Equal(t, regular.Data, accounted.Data)
+			require.Equal(t, `[`+strconv.Quote(tc.wantValue)+`]`, regular.String())
+
+			object := runJSONObjectAggregateWithProtocol(t, mg, input, protocolVersion)
+			require.Equal(t, `{"v": `+strconv.Quote(tc.wantValue)+`}`, object.String())
+			require.Equal(t, tc.wantType, object.GetObjectVal(0).TYPE())
+		})
+	}
+	require.Zero(t, mg.CurrNB())
 }
 
 func TestJsonObjectAggKeyMustBeString(t *testing.T) {
@@ -711,7 +815,7 @@ func TestBuildValueByteJsonCoversTypes(t *testing.T) {
 			require.NoError(t, vector.AppendArrayList[uint8](v, [][]uint8{{0, 255}}, nil, mg))
 			return v
 		}(), 0, []any{float64(0), float64(255)}, ""},
-		{"binary-error", buildVarlenVec(t, mg, types.T_binary.ToType(), []string{"a"}), 0, "", "binary data not supported"},
+		{"binary-admission-error", buildVarlenVec(t, mg, types.T_binary.ToType(), []string{"a"}), 0, "", "MORPC protocol version"},
 		{"decimal256", buildFixedVec(t, mg, types.T_decimal256.ToType(), []types.Decimal256{{}}), 0, float64(0), ""},
 	}
 

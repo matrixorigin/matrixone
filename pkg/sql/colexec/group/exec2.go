@@ -123,6 +123,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	// distinct NaN payloads); local and v79+ execution uses canonical keys.
 	group.ctr.legacyDistinctFloatKeys = !canonicalDistinctKeyWireEnabled(proc)
 	group.ctr.timeZone = proc.Base.SessionInfo.TimeZone
+	group.ctr.jsonAggOpaqueProtocolVersion = jsonAggregateOpaqueProtocolVersion(proc)
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()
@@ -309,6 +310,8 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 	}
 	for _, agg := range group.ctr.aggList {
 		aggexec.ConfigureGroupConcatTimeZone(agg, group.ctr.timeZone)
+		aggexec.ConfigureJSONAggregateOpaqueProtocol(
+			agg, group.ctr.jsonAggOpaqueProtocolVersion)
 	}
 	group.configureH0OrderedAggSpill(proc)
 
