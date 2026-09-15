@@ -933,9 +933,10 @@ func binaryProtocolPrepareParamKind(
 }
 
 // binaryProtocolPrepareParamConcreteType retains the protocol's SQL domain
-// for direct JSON-comparison parameters. The text vector is only a transport
+// for direct JSON-comparison parameters and domains whose distinction must
+// survive the text transport. The text vector is only a transport
 // representation; using it as the semantic type would turn TINYINT 0/1 into
-// Boolean guesses and would erase JSON and temporal domains.
+// Boolean guesses and would erase JSON, temporal, or ENUM domains.
 func binaryProtocolPrepareParamConcreteType(
 	mysqlType defines.MysqlType,
 	isUnsigned bool,
@@ -987,6 +988,8 @@ func binaryProtocolPrepareParamConcreteType(
 		return types.T_enum, true
 	case defines.MYSQL_TYPE_GEOMETRY:
 		return types.T_geometry, true
+	case defines.MYSQL_TYPE_UUID:
+		return types.T_uuid, true
 	default:
 		return types.T_any, false
 	}
@@ -1280,6 +1283,11 @@ func binaryProtocolPrepareParamDomains(
 		// that only available domain distinction through specialization and the
 		// Process binary-string sidecar.
 		return types.T_blob.ToType(), types.Type{}, "", false, true
+	case defines.MYSQL_TYPE_ENUM:
+		// ENUM values are length-encoded strings on the wire, but ENUM is a
+		// distinct SQL domain. Preserve it so consumers that reject implicit
+		// stringification (for example JSON_STORAGE) can fail closed.
+		return types.T_enum.ToType(), types.Type{}, "", false, true
 	default:
 		return types.T_text.ToType(), types.Type{}, "", false, true
 	}
@@ -1643,6 +1651,19 @@ func initExecuteStmtParamWithResolverInSession(
 			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
 			kind := binaryProtocolPrepareParamKind(
 				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
+			// Several non-string protocol domains have PrepareParamKind=None
+			// because their wire payload is length-encoded text. Keep their
+			// concrete SQL domain in metadata even when the parameter is consumed
+			// by JSON_STORAGE, whose position is not a JSON-comparison adapter
+			// position. Numeric and Boolean domains continue to use their existing
+			// kind metadata and therefore do not need a second type section.
+			if kind == vector.PrepareParamNone {
+				concreteType, supported := binaryProtocolPrepareParamConcreteType(mysqlType, isUnsigned)
+				if supported && concreteType.Oid != types.T_any && !concreteType.Oid.IsMySQLString() {
+					prepareStmt.paramConcreteTypes[i] = concreteType
+					hasConcreteType = true
+				}
+			}
 			if _, relevant := slices.BinarySearch(
 				prepareStmt.jsonComparisonParamPositions, int32(i)); relevant {
 				_, memberOfParam := slices.BinarySearch(

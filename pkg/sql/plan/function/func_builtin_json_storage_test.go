@@ -300,7 +300,9 @@ func TestJsonStorageRejectsPreparedNonStringDomains(t *testing.T) {
 			{name: "float", typ: types.T_float64, kind: vector.PrepareParamFloat},
 			{name: "decimal", typ: types.T_decimal128, kind: vector.PrepareParamDecimal},
 			{name: "boolean", typ: types.T_bool, kind: vector.PrepareParamBoolean},
+			{name: "enum", typ: types.T_enum, kind: vector.PrepareParamNone},
 			{name: "date", typ: types.T_date, kind: vector.PrepareParamNone},
+			{name: "uuid", typ: types.T_uuid, kind: vector.PrepareParamNone},
 			{name: "geometry", typ: types.T_geometry, kind: vector.PrepareParamNone},
 		} {
 			t.Run(tc.name, func(t *testing.T) {

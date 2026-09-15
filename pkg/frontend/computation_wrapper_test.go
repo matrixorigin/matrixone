@@ -1844,6 +1844,7 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 		{name: "unsigned integer", mysqlType: defines.MYSQL_TYPE_LONGLONG, isUnsigned: true, want: types.T_uint64},
 		{name: "double", mysqlType: defines.MYSQL_TYPE_DOUBLE, want: types.T_float64},
 		{name: "string", mysqlType: defines.MYSQL_TYPE_VAR_STRING, want: types.T_text},
+		{name: "enum", mysqlType: defines.MYSQL_TYPE_ENUM, want: types.T_enum},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, ok := binaryProtocolPrepareParamType(test.mysqlType, test.isUnsigned, []byte("5"))
@@ -5321,6 +5322,7 @@ func TestBinaryProtocolPrepareParamConcreteType(t *testing.T) {
 		{name: "timestamp", mysqlType: defines.MYSQL_TYPE_TIMESTAMP, want: types.T_timestamp, supported: true},
 		{name: "enum", mysqlType: defines.MYSQL_TYPE_ENUM, want: types.T_enum, supported: true},
 		{name: "geometry", mysqlType: defines.MYSQL_TYPE_GEOMETRY, want: types.T_geometry, supported: true},
+		{name: "uuid", mysqlType: defines.MYSQL_TYPE_UUID, want: types.T_uuid, supported: true},
 		{name: "unknown", mysqlType: defines.MYSQL_TYPE_NULL, want: types.T_any},
 	} {
 		t.Run(test.name, func(t *testing.T) {
