@@ -16,6 +16,7 @@ package mergeorder
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -51,6 +52,78 @@ func TestSortBatchSpillsAndPreservesOrder(t *testing.T) {
 	require.Equal(t, []int8{1, 1, 3, 5, 7, 9}, vector.MustFixedColWithTypeCheck[int8](got.Vecs[0]))
 	require.Positive(t, analyzer.GetOpStats().SpillRows)
 	require.Positive(t, analyzer.GetOpStats().SpillSize)
+}
+
+func TestSortBatchEnforcesSpillResourceAdmission(t *testing.T) {
+	fs := []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8)}}
+	for _, tc := range []struct {
+		name      string
+		component process.ExecutionResourceComponent
+	}{
+		{name: "disk", component: process.ExecutionResourceComponentSpillDisk},
+		{name: "file descriptor", component: process.ExecutionResourceComponentSpillFD},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			t.Cleanup(func() {
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			generation, err := proc.GetExecutionResourceBudget()
+			require.NoError(t, err)
+
+			var releaseBlocker func()
+			switch tc.component {
+			case process.ExecutionResourceComponentSpillDisk:
+				reservation, reserveErr := generation.ReserveSpillDisk(generation.SpillDiskCap())
+				require.NoError(t, reserveErr)
+				releaseBlocker = func() {
+					if reservation != nil {
+						require.True(t, reservation.Release())
+					}
+				}
+			case process.ExecutionResourceComponentSpillFD:
+				reservation, reserveErr := generation.ReserveSpillFD(generation.SpillFDCap())
+				require.NoError(t, reserveErr)
+				releaseBlocker = func() {
+					if reservation != nil {
+						require.True(t, reservation.Release())
+					}
+				}
+			}
+			t.Cleanup(func() {
+				releaseBlocker()
+				require.Zero(t, generation.SpillDiskUsed())
+				require.Zero(t, generation.SpillFDUsed())
+			})
+
+			input := newValuesBatch(proc, []int8{3, 1, 2})
+			var sorted *batch.Batch
+			t.Cleanup(func() {
+				if sorted != nil {
+					sorted.Clean(proc.Mp())
+				}
+				input.Clean(proc.Mp())
+			})
+
+			before := generation.Snapshot()
+			sorted, err = SortBatch(
+				proc,
+				input,
+				fs,
+				1,
+				process.NewAnalyzer(0, false, false, "batch-sort-resource-admission"),
+			)
+			require.Nil(t, sorted)
+			var resourceErr *process.ExecutionResourceError
+			require.True(t, errors.As(err, &resourceErr))
+			require.Equal(t, tc.component, resourceErr.Component)
+			after := generation.Snapshot()
+			require.Equal(t, before.SpillDiskUsed, after.SpillDiskUsed)
+			require.Equal(t, before.SpillFDUsed, after.SpillFDUsed)
+			require.Equal(t, []int8{3, 1, 2}, vector.MustFixedColWithTypeCheck[int8](input.Vecs[0]))
+		})
+	}
 }
 
 func TestSortBatchFreesSingleBatchExpressionKey(t *testing.T) {

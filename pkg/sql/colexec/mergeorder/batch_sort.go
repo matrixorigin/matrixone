@@ -44,9 +44,14 @@ func SortBatch(
 		return input.Dup(proc.Mp())
 	}
 
+	budget, err := proc.GetExecutionResourceBudget()
+	if err != nil {
+		return nil, err
+	}
 	ctr := &container{
 		batchList: make([]*batch.Batch, 0, defaultCacheBatchSize),
 		orderCols: make([][]*vector.Vector, 0, defaultCacheBatchSize),
+		budget:    budget,
 	}
 	ctr.setSpillThreshold(threshold)
 	defer func() {
@@ -72,7 +77,6 @@ func SortBatch(
 		}
 	}()
 
-	var err error
 	ctr.executors = make([]colexec.ExpressionExecutor, len(fs))
 	for i := range fs {
 		ctr.executors[i], err = colexec.NewExpressionExecutor(proc, fs[i].Expr)

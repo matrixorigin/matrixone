@@ -15,6 +15,7 @@
 package window
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -65,6 +67,86 @@ func TestWindowOrderSpillsAndKeepsArgumentsAligned(t *testing.T) {
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowOrderSpillResourceAdmissionCleans(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		component process.ExecutionResourceComponent
+	}{
+		{name: "disk", component: process.ExecutionResourceComponentSpillDisk},
+		{name: "file descriptor", component: process.ExecutionResourceComponentSpillFD},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			t.Cleanup(func() {
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			generation, err := proc.GetExecutionResourceBudget()
+			require.NoError(t, err)
+
+			var releaseBlocker func()
+			switch tc.component {
+			case process.ExecutionResourceComponentSpillDisk:
+				reservation, reserveErr := generation.ReserveSpillDisk(generation.SpillDiskCap())
+				require.NoError(t, reserveErr)
+				releaseBlocker = func() {
+					if reservation != nil {
+						require.True(t, reservation.Release())
+					}
+				}
+			case process.ExecutionResourceComponentSpillFD:
+				reservation, reserveErr := generation.ReserveSpillFD(generation.SpillFDCap())
+				require.NoError(t, reserveErr)
+				releaseBlocker = func() {
+					if reservation != nil {
+						require.True(t, reservation.Release())
+					}
+				}
+			}
+			t.Cleanup(func() {
+				releaseBlocker()
+				require.Zero(t, generation.SpillDiskUsed())
+				require.Zero(t, generation.SpillFDUsed())
+			})
+
+			input := batch.NewWithSize(2)
+			input.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
+			input.Vecs[1] = testutil.MakeInt32Vector([]int32{3, 1, 2}, nil, proc.Mp())
+			input.SetRowCount(3)
+			arg := &Window{
+				WinSpecList: []*plan.Expr{{
+					Expr: &plan.Expr_W{W: &plan.WindowSpec{
+						Name:       "row_number",
+						WindowFunc: newFunExpr("row_number"),
+						OrderBy:    []*plan.OrderBySpec{{Expr: newColExprWithType(1, types.T_int32.ToType())}},
+					}},
+				}},
+				Aggs:           []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+				SpillThreshold: 1,
+			}
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+			arg.AppendChild(child)
+			t.Cleanup(func() {
+				child.Free(proc, true, err)
+				arg.Free(proc, true, err)
+			})
+			require.NoError(t, arg.Prepare(proc))
+
+			before := generation.Snapshot()
+			result, err := vm.Exec(arg, proc)
+			require.Nil(t, result.Batch)
+			var resourceErr *process.ExecutionResourceError
+			require.True(t, errors.As(err, &resourceErr))
+			require.Equal(t, tc.component, resourceErr.Component)
+			after := generation.Snapshot()
+			require.Equal(t, before.SpillDiskUsed, after.SpillDiskUsed)
+			require.Equal(t, before.SpillFDUsed, after.SpillFDUsed)
+			require.Equal(t, []int32{10, 20, 30}, vector.MustFixedColWithTypeCheck[int32](input.Vecs[0]))
+			require.Equal(t, []int32{3, 1, 2}, vector.MustFixedColWithTypeCheck[int32](input.Vecs[1]))
+		})
+	}
 }
 
 func TestWindowOrderSpillPreservesAggregateArguments(t *testing.T) {
