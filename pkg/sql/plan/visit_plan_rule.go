@@ -469,7 +469,12 @@ type ResetParamRefRule struct {
 	// sqlExecuteNumericParams carries the logical source value of SQL EXECUTE
 	// user variables. String-backed sources retain their separate MySQL numeric-
 	// prefix domain and must not own a result/common-value domain.
-	sqlExecuteNumericParams      []*plan.Expr
+	sqlExecuteNumericParams []*plan.Expr
+	// sqlExecuteStringMathParams carries the permissive MySQL numeric-prefix
+	// source for string arguments used by ABS/CEIL/FLOOR/MOD/ROUND/SIGN/
+	// TRUNCATE. It is kept separate so a marker reused in generic arithmetic
+	// still follows strict conversion in that occurrence.
+	sqlExecuteStringMathParams   []*plan.Expr
 	sqlExecuteStringBackedParams []bool
 	// numericPrefixDependent records rewritten expressions whose value domain
 	// was selected from an execute-time numeric-prefix parameter. The dependency
@@ -1053,7 +1058,8 @@ func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, erro
 	if !typOK {
 		return nil, false, nil
 	}
-	if kind != vector.PrepareParamFloat && typ.Oid != types.T_float64 && typ.Oid != types.T_float32 {
+	if kind != vector.PrepareParamFloat && typ.Oid != types.T_float64 && typ.Oid != types.T_float32 &&
+		!typ.Oid.IsMySQLString() {
 		return nil, false, nil
 	}
 	isBin := false
@@ -1156,6 +1162,14 @@ func collectFlattenedPreparedNumericSourcePositions(expr *plan.Expr, positions m
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil {
 		name := strings.ToLower(fn.Func.GetObjName())
+		if isPreparedStringMathFunction(name) {
+			for index, arg := range fn.Args {
+				if preparedStringMathFunctionValueArg(name, index, len(fn.Args)) {
+					collectFlattenedPreparedNumericSourcePositions(arg, positions)
+				}
+			}
+			return
+		}
 		if indexes, ok := numericFunctionResultArgs(name, len(fn.Args)); ok {
 			for _, index := range indexes {
 				if index >= 0 && index < len(fn.Args) {
@@ -1196,6 +1210,14 @@ func collectNumericValueParamPositions(expr *plan.Expr, positions map[int32]stru
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil {
 		name := strings.ToLower(fn.Func.GetObjName())
+		if isPreparedStringMathFunction(name) {
+			for index, arg := range fn.Args {
+				if preparedStringMathFunctionValueArg(name, index, len(fn.Args)) {
+					collectNumericValueParamPositions(arg, positions)
+				}
+			}
+			return
+		}
 		if indexes, ok := numericFunctionResultArgs(name, len(fn.Args)); ok {
 			for _, index := range indexes {
 				if index >= 0 && index < len(fn.Args) {
@@ -1248,12 +1270,37 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if _, ok := positions[param.Pos]; !ok {
 			return expr, false, nil
 		}
+		// A parameter nested below a string-math function has a dedicated
+		// permissive DOUBLE source prepared by replaceParamValsWithSelection.
+		// Prefer it over the generic runtime literal here; otherwise rebuilding
+		// an inner arithmetic node such as `? + 0` falls back to BIGINT and
+		// discards MySQL's numeric-prefix conversion.
+		if param.Pos >= 0 && int(param.Pos) < len(rule.sqlExecuteStringMathParams) {
+			if source := rule.sqlExecuteStringMathParams[param.Pos]; source != nil {
+				return DeepCopyExpr(source), true, nil
+			}
+		}
 		bound, ok, err := rule.typedRuntimeParamExpr(int(param.Pos))
-		return bound, ok, err
+		if err != nil || ok {
+			return bound, ok, err
+		}
+		// A runtime string that cannot establish a numeric source (for example
+		// ROUND's invalid precision marker) must retain the prepare-time cast,
+		// with its current literal materialized below the cast. Returning a nil
+		// expression here makes the enclosing function rebinder pass a nil
+		// argument to overload resolution and can panic; dropping the cast would
+		// also replace the original INT64 error contract with a string overload.
+		if materialized, changed := rule.materializePreparedParam(expr, int(param.Pos)); changed {
+			return materialized, true, nil
+		}
+		return expr, false, nil
 	}
 	if isImplicitPreparedParamCast(expr) {
 		if param, ok := implicitPreparedParam(expr); ok {
 			if _, selected := positions[param.Pos]; !selected {
+				if materialized, changed := rule.materializePreparedParam(expr, int(param.Pos)); changed {
+					return materialized, true, nil
+				}
 				return expr, false, nil
 			}
 			bound, changed, err := rule.rebindPreparedNumericExpr(expr.GetF().Args[0], positions)
@@ -1361,6 +1408,69 @@ func rebindExplicitPreparedCast(ctx context.Context, original *Expr, args []*Exp
 	bound := DeepCopyExpr(original)
 	bound.GetF().Args = args
 	return bound, nil
+}
+
+// materializePreparedParam replaces one marker below a prepared expression
+// while preserving every surrounding implicit/explicit cast and function
+// node. It is used by the numeric fallback rebinder for parameter roles that
+// deliberately do not own the execute-time numeric source (ROUND/TRUNCATE
+// precision is the important example).
+func (rule *ResetParamRefRule) materializePreparedParam(expr *plan.Expr, position int) (*Expr, bool) {
+	if expr == nil || position < 0 || position >= len(rule.params) || rule.params[position] == nil {
+		return expr, false
+	}
+	if param := expr.GetP(); param != nil {
+		if int(param.Pos) == position {
+			return DeepCopyExpr(rule.params[position]), true
+		}
+		return expr, false
+	}
+	if literal := expr.GetLit(); literal != nil && literal.Src != nil {
+		if source, changed := rule.materializePreparedParam(literal.Src, position); changed {
+			copy := DeepCopyExpr(expr)
+			copy.GetLit().Src = source
+			return copy, true
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		copy := DeepCopyExpr(expr)
+		changed := false
+		for index, arg := range fn.Args {
+			if !exprContainsPreparedPosition(arg, position) {
+				continue
+			}
+			materialized, itemChanged := rule.materializePreparedParam(arg, position)
+			copy.GetF().Args[index] = materialized
+			changed = changed || itemChanged
+		}
+		if changed {
+			return copy, true
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		copy := DeepCopyExpr(expr)
+		changed := false
+		for index, item := range list.List {
+			if !exprContainsPreparedPosition(item, position) {
+				continue
+			}
+			materialized, itemChanged := rule.materializePreparedParam(item, position)
+			copy.GetList().List[index] = materialized
+			changed = changed || itemChanged
+		}
+		if changed {
+			return copy, true
+		}
+	}
+	if sub := expr.GetSub(); sub != nil && sub.Child != nil &&
+		exprContainsPreparedPosition(sub.Child, position) {
+		if child, changed := rule.materializePreparedParam(sub.Child, position); changed {
+			copy := DeepCopyExpr(expr)
+			copy.GetSub().Child = child
+			return copy, true
+		}
+	}
+	return expr, false
 }
 
 func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
@@ -2029,14 +2139,35 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				paramPos < len(rule.sqlExecuteStringBackedParams) &&
 				rule.sqlExecuteStringBackedParams[paramPos] &&
 				paramPos < len(rule.params) && rule.params[paramPos] != nil
+			var sqlExecuteNumericSource *plan.Expr
+			if hasParamPos && paramPos < len(rule.sqlExecuteNumericParams) {
+				sqlExecuteNumericSource = rule.sqlExecuteNumericParams[paramPos]
+				if sqlExecuteNumericSource == nil &&
+					isPreparedStringMathFunction(functionName) &&
+					paramPos < len(rule.sqlExecuteStringMathParams) {
+					sqlExecuteNumericSource = rule.sqlExecuteStringMathParams[paramPos]
+				}
+			}
 			useSQLExecuteNumericSource := hasParamPos &&
 				preparedFunctionArgUsesSQLExecuteNumericSource(
 					e, functionName, i, len(exprImpl.F.Args)) &&
-				(hasPreparedBitwiseSource || hasPreparedCharSource || charStringSourceFallback || (paramPos >= 0 &&
-					paramPos < len(rule.sqlExecuteNumericParams) &&
-					rule.sqlExecuteNumericParams[paramPos] != nil)) &&
+				(hasPreparedBitwiseSource || hasPreparedCharSource || charStringSourceFallback ||
+					sqlExecuteNumericSource != nil) &&
 				preparedSQLExecuteNumericSourceOwnsResultDomain(
 					functionName, paramPos, rule.sqlExecuteStringBackedParams)
+			// ROUND/TRUNCATE precision is a control argument, not part of the
+			// value/result numeric domain.  It must retain the INT64 contract, but a
+			// native SQL EXECUTE source (BOOL/integer/DECIMAL/FLOAT) still needs to be
+			// materialized before the provisional text-to-INT64 cast is evaluated.
+			// String-backed sources deliberately stay on that cast so malformed
+			// suffixes keep the direct SQL error contract and never get the
+			// permissive numeric-prefix DOUBLE conversion used by the value operand.
+			useSQLExecuteControlSource := hasParamPos && implicitParamCast &&
+				isPreparedStringMathFunction(functionName) &&
+				!preparedStringMathFunctionValueArg(functionName, i, len(exprImpl.F.Args)) &&
+				sqlExecuteNumericSource != nil &&
+				(paramPos >= len(rule.sqlExecuteStringBackedParams) ||
+					!rule.sqlExecuteStringBackedParams[paramPos])
 			sharedControlParam := false
 			if paramPos >= 0 && preparedSQLExecuteNumericResultValueArg(functionName, i, len(exprImpl.F.Args)) {
 				for j, sibling := range originalArgs {
@@ -2094,6 +2225,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				if source == nil {
 					source = preparedCharSource
 				}
+				if source == nil {
+					source = sqlExecuteNumericSource
+				}
 				if source == nil && paramPos >= 0 && paramPos < len(rule.sqlExecuteNumericParams) {
 					source = rule.sqlExecuteNumericParams[paramPos]
 				}
@@ -2104,6 +2238,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					source = DeepCopyExpr(rule.params[paramPos])
 				}
 				rewrittenArg = DeepCopyExpr(source)
+			} else if useSQLExecuteControlSource {
+				// Materialize the native source while preserving the precision
+				// argument's prepare-time target type.  BOOL is represented by the
+				// source helper as CAST(BOOL AS INT64), which is exactly the shape
+				// needed by ROUND/TRUNCATE and avoids evaluating the cached
+				// TEXT-to-INT64 cast for TRUE/FALSE.
+				rewrittenArg = DeepCopyExpr(sqlExecuteNumericSource)
+				if !reflect.DeepEqual(rewrittenArg.Typ, arg.Typ) {
+					rewrittenArg, err = makePlan2CastExpr(rule.ctx, rewrittenArg, arg.Typ)
+					if err != nil {
+						return nil, err
+					}
+				}
 			} else {
 				var applyErr error
 				disablePrefix := sharedControlParam && paramPos >= 0 &&
@@ -2160,6 +2307,14 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// Do not also reinterpret the same argument through the text-prefix
 				// specialization selected for comparisons and common-value peers.
 				numericPrefixArgs[i] = false
+			} else if useSQLExecuteControlSource {
+				// The control source changes the installed literal but must not
+				// propagate a numeric result dependency to the enclosing function.
+				// Its overload/result type can remain unchanged, so mark the copy
+				// specialized explicitly at this shared rebinding boundary.
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
 			}
 			if preparedExprContainsNumericComparisonFallback(
 				rewrittenArg, rule.numericComparisonTextFallbackExprs,
@@ -3571,6 +3726,14 @@ func preparedFunctionArgUsesSQLExecuteNumericSource(
 	argIndex int,
 	argCount int,
 ) bool {
+	// String-math functions have argument roles that are narrower than their
+	// numeric result domain. In particular, ROUND/TRUNCATE precision must keep
+	// the INT64 prepare-time contract; only value operands opt into the
+	// permissive DOUBLE source. Use the same predicate as source discovery in
+	// utils.go so nested rebinding cannot reintroduce the broad position check.
+	if isPreparedStringMathFunction(name) {
+		return preparedStringMathFunctionValueArg(name, argIndex, argCount)
+	}
 	// A prepared TEXT marker can make result-selecting functions bind to a
 	// non-numeric envelope even though the execute-time SQL source is numeric.
 	// Decide from the argument's value role before consulting that provisional
@@ -3815,6 +3978,12 @@ func unwrapImplicitPreparedParamCast(ctx context.Context, rewritten *plan.Expr, 
 		bound, err := preparedRuntimeParamExpr(ctx, literal.GetSval(), literal.IsBin, typ)
 		if err != nil {
 			return nil, false
+		}
+		// Materializing the execute-time text again must not discard the marker
+		// provenance. The specialized plan may be cached and restored to a
+		// late-bound ParamRef for the next execution.
+		if literal.Src != nil {
+			attachPreparedRuntimeParamSource(bound, DeepCopyExpr(literal.Src))
 		}
 		arg = bound
 	}

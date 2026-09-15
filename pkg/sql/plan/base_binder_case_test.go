@@ -17,18 +17,22 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"unsafe"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -903,6 +907,30 @@ func TestPreparedNumericRuntimeLiteralRebindingHelpers(t *testing.T) {
 	require.Equal(t, types.T_bool, runtimeType.Oid)
 }
 
+func TestUnwrapImplicitPreparedParamCastRetainsParamSource(t *testing.T) {
+	ctx := context.Background()
+	source := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	literal := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_text)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Sval{Sval: "3.33"},
+			Src:   source,
+		}},
+	}
+	targetType := types.T_int64.ToType()
+	cast, err := makePlan2CastExpr(ctx, literal, makePlan2Type(&targetType))
+	require.NoError(t, err)
+
+	rewritten, ok := unwrapImplicitPreparedParamCast(ctx, cast, true)
+	require.True(t, ok)
+	position, found := preparedRuntimeSourceParamPosition(rewritten)
+	require.True(t, found)
+	require.Equal(t, 0, position)
+}
+
 func TestPreparedNumericRuntimeParamValueLiteralKinds(t *testing.T) {
 	params := []*planpb.Expr{
 		{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I8Val{I8Val: -8}}}},
@@ -1099,6 +1127,357 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.Equal(t, int32(types.T_int64), round.Typ.Id)
 	require.NotNil(t, round.GetF().Args[0].GetF())
 	require.Equal(t, int32(types.T_int64), round.GetF().Args[0].Typ.Id)
+}
+
+func TestPreparedMathStringParametersRebindToNumericOverloads(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name string
+		sql  string
+		fn   string
+		want types.T
+	}{
+		{name: "abs", sql: "prepare stmt_math_abs from 'select abs(?)'", fn: "abs", want: types.T_float64},
+		{name: "ceil", sql: "prepare stmt_math_ceil from 'select ceil(?)'", fn: "ceil", want: types.T_float64},
+		{name: "ceiling", sql: "prepare stmt_math_ceiling from 'select ceiling(?)'", fn: "ceiling", want: types.T_float64},
+		{name: "floor", sql: "prepare stmt_math_floor from 'select floor(?)'", fn: "floor", want: types.T_float64},
+		{name: "round", sql: "prepare stmt_math_round from 'select round(?)'", fn: "round", want: types.T_float64},
+		{name: "sign", sql: "prepare stmt_math_sign from 'select sign(?)'", fn: "sign", want: types.T_int64},
+		{name: "truncate", sql: "prepare stmt_math_truncate from 'select truncate(?)'", fn: "truncate", want: types.T_float64},
+		{name: "mod", sql: "prepare stmt_math_mod from 'select mod(?, 2)'", fn: "mod", want: types.T_float64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			preparedPlan := prepared.GetDcl().GetPrepare().Plan
+			require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(preparedPlan))
+
+			filled, err := FillValuesOfParamsInPlan(ctx, preparedPlan, []any{ParamValue{
+				Value:          "1.5tail",
+				RuntimeType:    types.T_varchar.ToType(),
+				HasRuntimeType: true,
+			}})
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(filled, test.fn)
+			require.NotNil(t, fn)
+			require.Equal(t, int32(test.want), fn.Typ.Id)
+			// Character parameters are explicitly cast to DOUBLE so execution
+			// reuses the stable numeric overload and its warning/binary semantics.
+			require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id)
+		})
+	}
+}
+
+func TestPreparedNestedMathStringParameterRebindsToNumericOverload(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name        string
+		sql         string
+		fn          string
+		value       any
+		runtimeType types.Type
+		want        types.T
+	}{
+		{name: "abs plus string", sql: "prepare stmt_nested_abs from 'select abs(? + 0)'", fn: "abs", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_float64},
+		{name: "ceil plus string", sql: "prepare stmt_nested_ceil from 'select ceil(? + 0)'", fn: "ceil", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_float64},
+		{name: "floor plus string", sql: "prepare stmt_nested_floor from 'select floor(? + 0)'", fn: "floor", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_float64},
+		{name: "round plus string", sql: "prepare stmt_nested_round from 'select round(? + 0)'", fn: "round", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_float64},
+		{name: "sign plus string", sql: "prepare stmt_nested_sign from 'select sign(? + 0)'", fn: "sign", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_int64},
+		{name: "truncate plus string", sql: "prepare stmt_nested_truncate from 'select truncate(? + 0, 1)'", fn: "truncate", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_float64},
+		{name: "mod plus string", sql: "prepare stmt_nested_mod from 'select mod(? + 0, 2)'", fn: "mod", value: "1.5tail", runtimeType: types.T_varchar.ToType(), want: types.T_float64},
+		{name: "abs plus integer", sql: "prepare stmt_nested_abs_int from 'select abs(? + 0)'", fn: "abs", value: int64(2), runtimeType: types.T_int64.ToType(), want: types.T_int64},
+		{name: "round plus integer", sql: "prepare stmt_nested_round_int from 'select round(? + 0)'", fn: "round", value: int64(2), runtimeType: types.T_int64.ToType(), want: types.T_int64},
+		{name: "mod plus integer", sql: "prepare stmt_nested_mod_int from 'select mod(? + 0, 2)'", fn: "mod", value: int64(2), runtimeType: types.T_int64.ToType(), want: types.T_int64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			preparedPlan := prepared.GetDcl().GetPrepare().Plan
+			filled, err := FillValuesOfParamsInPlan(ctx, preparedPlan, []any{ParamValue{
+				Value:          test.value,
+				RuntimeType:    test.runtimeType,
+				HasRuntimeType: true,
+			}})
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(filled, test.fn)
+			require.NotNil(t, fn)
+			require.Equal(t, int32(test.want), fn.Typ.Id)
+		})
+	}
+}
+
+func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
+	ctx := context.Background()
+	type evalResult struct {
+		typ    types.T
+		isNull bool
+		value  any
+	}
+	eval := func(t *testing.T, expr *planpb.Expr) (evalResult, error) {
+		t.Helper()
+		proc := testutil.NewProc(t)
+		executor, err := colexec.NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+		result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		if err != nil {
+			return evalResult{}, err
+		}
+		require.NotNil(t, result)
+		observed := evalResult{typ: result.GetType().Oid, isNull: result.IsNull(0)}
+		if observed.isNull {
+			return observed, nil
+		}
+		// Eval returns an executor-owned, reusable vector. Copy the scalar value
+		// before executor.Free; freeing result here would double-release it.
+		switch observed.typ {
+		case types.T_int8:
+			observed.value = vector.GetFixedAtWithTypeCheck[int8](result, 0)
+		case types.T_int16:
+			observed.value = vector.GetFixedAtWithTypeCheck[int16](result, 0)
+		case types.T_int32:
+			observed.value = vector.GetFixedAtWithTypeCheck[int32](result, 0)
+		case types.T_int64:
+			observed.value = vector.GetFixedAtWithTypeCheck[int64](result, 0)
+		case types.T_uint8:
+			observed.value = vector.GetFixedAtWithTypeCheck[uint8](result, 0)
+		case types.T_uint16:
+			observed.value = vector.GetFixedAtWithTypeCheck[uint16](result, 0)
+		case types.T_uint32:
+			observed.value = vector.GetFixedAtWithTypeCheck[uint32](result, 0)
+		case types.T_uint64:
+			observed.value = vector.GetFixedAtWithTypeCheck[uint64](result, 0)
+		case types.T_float32:
+			observed.value = vector.GetFixedAtWithTypeCheck[float32](result, 0)
+		case types.T_float64:
+			observed.value = vector.GetFixedAtWithTypeCheck[float64](result, 0)
+		case types.T_decimal64:
+			observed.value = vector.GetFixedAtWithTypeCheck[types.Decimal64](result, 0).Format(result.GetType().Scale)
+		case types.T_decimal128:
+			observed.value = vector.GetFixedAtWithTypeCheck[types.Decimal128](result, 0).Format(result.GetType().Scale)
+		case types.T_decimal256:
+			observed.value = vector.GetFixedAtWithTypeCheck[types.Decimal256](result, 0).Format(result.GetType().Scale)
+		case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+			observed.value = result.GetStringAt(0)
+		default:
+			t.Fatalf("unsupported evaluated type %v", observed.typ)
+		}
+		return observed, nil
+	}
+	stringParam := func(value string) ParamValue {
+		return ParamValue{Value: value, SourceType: types.T_varchar.ToType(), HasSourceType: true}
+	}
+
+	for _, name := range []string{"round", "truncate"} {
+		t.Run(name+" rejects non-integer precision without DOUBLE prefix", func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare stmt_math_precision from 'select "+name+"(?, ?)'")
+			require.NoError(t, err)
+			preparePlan := prepared.GetDcl().GetPrepare().Plan
+			for _, precision := range []string{"0.5tail", "1.5tail", "-0.5tail", "abc", ""} {
+				filled, specialized, fillErr := FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, []any{
+					stringParam("1.5tail"),
+					stringParam(precision),
+				})
+				require.NoError(t, fillErr, precision)
+				require.True(t, specialized, precision)
+				fn := findPlanFunctionExpr(filled, name)
+				require.NotNil(t, fn, precision)
+				require.Len(t, fn.GetF().Args, 2)
+				precisionCast := fn.GetF().Args[1]
+				require.Equal(t, int32(types.T_int64), precisionCast.Typ.Id, precisionCast.String())
+				require.Equal(t, int32(types.T_text), precisionCast.GetF().Args[0].Typ.Id,
+					"precision must retain the INT64 cast's text source, not a DOUBLE source")
+				require.Equal(t, precision, precisionCast.GetF().Args[0].GetLit().GetSval())
+				_, evalErr := eval(t, fn)
+				require.ErrorContains(t, evalErr, "invalid argument cast to int, bad value "+precision,
+					"precision=%q must keep direct/prepared INT64 error semantics", precision)
+			}
+		})
+
+		t.Run(name+" value marker still uses numeric-prefix source", func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare stmt_math_value from 'select "+name+"(?, 0)'")
+			require.NoError(t, err)
+			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx,
+				prepared.GetDcl().GetPrepare().Plan, []any{stringParam("1.5tail")})
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(filled, name)
+			require.NotNil(t, fn)
+			require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id, fn.String())
+			got, evalErr := eval(t, fn)
+			require.NoError(t, evalErr)
+			require.Equal(t, types.T_float64, got.typ)
+			require.False(t, got.isNull)
+			want := float64(2)
+			if name == "truncate" {
+				want = 1
+			}
+			require.Equal(t, want, got.value)
+		})
+
+		t.Run(name+" value runtime domains keep precision separate", func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare stmt_math_runtime_domains from 'select "+name+"(?, ?)'")
+			require.NoError(t, err)
+			preparePlan := prepared.GetDcl().GetPrepare().Plan
+			precision := ParamValue{Value: int64(0), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}
+			for _, test := range []struct {
+				name      string
+				value     ParamValue
+				wantType  types.T
+				wantValue any
+				wantNull  bool
+			}{
+				{name: "NULL", value: ParamValue{SourceType: types.T_varchar.ToType(), HasSourceType: true}, wantNull: true},
+				{name: "integer", value: ParamValue{Value: int64(15), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}, wantType: types.T_int64, wantValue: int64(15)},
+				{name: "DOUBLE", value: ParamValue{Value: float64(1.5), RuntimeType: types.T_float64.ToType(), HasRuntimeType: true}, wantType: types.T_float64, wantValue: float64(2)},
+				{name: "DECIMAL", value: ParamValue{Value: "1.5", PrepareParamKind: vector.PrepareParamDecimal}, wantType: types.T_decimal64, wantValue: "2.0"},
+				{name: "binary text", value: ParamValue{Value: "1", IsBin: true, IsBinaryProtocol: true,
+					RuntimeType: types.T_text.ToType(), HasRuntimeType: true}, wantType: types.T_float64, wantValue: float64(49)},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					filled, _, fillErr := FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan,
+						[]any{test.value, precision})
+					require.NoError(t, fillErr)
+					fn := findPlanFunctionExpr(filled, name)
+					require.NotNil(t, fn)
+					require.Equal(t, int32(types.T_int64), fn.GetF().Args[1].Typ.Id, fn.String())
+					got, evalErr := eval(t, fn)
+					require.NoError(t, evalErr)
+					require.Equal(t, test.wantNull, got.isNull)
+					if !test.wantNull {
+						if test.wantType != types.T_any {
+							require.Equal(t, test.wantType, got.typ)
+						}
+						wantValue := test.wantValue
+						if name == "truncate" {
+							switch test.name {
+							case "DOUBLE":
+								wantValue = float64(1)
+							case "DECIMAL":
+								wantValue = "1.0"
+							}
+						}
+						require.Equal(t, wantValue, got.value)
+					}
+				})
+			}
+		})
+	}
+
+	t.Run("nested ABS does not upgrade ROUND precision", func(t *testing.T) {
+		prepared, err := runOneStmt(NewMockOptimizer(false), t,
+			"prepare stmt_nested_precision from 'select abs(round(1, ?))'")
+		require.NoError(t, err)
+		filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx,
+			prepared.GetDcl().GetPrepare().Plan, []any{stringParam("1.5tail")})
+		require.NoError(t, err)
+		root := findPlanFunctionExpr(filled, "abs")
+		require.NotNil(t, root)
+		round := findPlanFunctionExpr(filled, "round")
+		require.NotNil(t, round)
+		require.Equal(t, int32(types.T_int64), round.GetF().Args[1].Typ.Id, round.String())
+		_, evalErr := eval(t, root)
+		require.ErrorContains(t, evalErr, "invalid argument cast to int, bad value 1.5tail")
+	})
+
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{name: "round precision inner abs", sql: "prepare stmt_inner_abs from 'select round(12.34, abs(?))'", want: "12.34"},
+		{name: "round precision inner arithmetic", sql: "prepare stmt_inner_arithmetic from 'select round(12.34, ? + 0)'", want: "12.34"},
+		{name: "round precision explicit signed", sql: "prepare stmt_explicit_signed from 'select round(12.34, cast(? as signed))'", want: "12.30"},
+		{name: "round precision explicit double", sql: "prepare stmt_explicit_double from 'select round(12.34, cast(? as double))'", want: "12.34"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			require.NoError(t, err)
+			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx,
+				prepared.GetDcl().GetPrepare().Plan, []any{stringParam("1.5tail")})
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(filled, "round")
+			require.NotNil(t, fn)
+			require.Len(t, fn.GetF().Args, 2)
+			precisionArg := fn.GetF().Args[1]
+			require.Equal(t, int32(types.T_int64), precisionArg.Typ.Id, fn.String())
+			precisionCast := precisionArg.GetF()
+			require.NotNil(t, precisionCast)
+			require.Equal(t, "cast", precisionCast.GetFunc().GetObjName())
+
+			switch tc.name {
+			case "round precision inner abs":
+				// The marker is a value of the nested ABS and therefore keeps
+				// the permissive DOUBLE source. The outer ROUND precision cast
+				// remains INT64 and is not rebound to the ABS source.
+				innerExpr := precisionCast.GetArgs()[0]
+				inner := innerExpr.GetF()
+				require.NotNil(t, inner)
+				require.Equal(t, "abs", inner.GetFunc().GetObjName())
+				require.Equal(t, int32(types.T_float64), innerExpr.Typ.Id)
+			case "round precision inner arithmetic":
+				// The arithmetic node owns the marker's numeric-prefix value
+				// semantics, while the enclosing precision cast stays INT64.
+				innerExpr := precisionCast.GetArgs()[0]
+				inner := innerExpr.GetF()
+				require.NotNil(t, inner)
+				require.Equal(t, "+", inner.GetFunc().GetObjName())
+				require.Len(t, inner.GetArgs(), 2)
+				require.Equal(t, int32(types.T_float64), innerExpr.Typ.Id)
+			case "round precision explicit signed":
+				// CAST(? AS SIGNED) is an explicit integer boundary. It uses
+				// the dedicated explicit CAST overload and must not be treated
+				// as a provisional prepared numeric source.
+				_, overload := function.DecodeOverloadID(precisionCast.GetFunc().GetObj())
+				require.Equal(t, int32(1), overload)
+				require.Equal(t, int32(types.T_text), precisionCast.GetArgs()[0].Typ.Id)
+			case "round precision explicit double":
+				// ROUND adds only its own implicit INT64 reconciliation cast;
+				// the user-written DOUBLE cast remains an explicit overload
+				// inside it and is not removed by role-aware fallback.
+				_, overload := function.DecodeOverloadID(precisionCast.GetFunc().GetObj())
+				require.Equal(t, int32(0), overload)
+				innerExpr := precisionCast.GetArgs()[0]
+				inner := innerExpr.GetF()
+				require.NotNil(t, inner)
+				_, overload = function.DecodeOverloadID(inner.GetFunc().GetObj())
+				require.Equal(t, int32(1), overload)
+				require.Equal(t, int32(types.T_float64), innerExpr.Typ.Id)
+			}
+			got, evalErr := eval(t, fn)
+			require.NoError(t, evalErr)
+			require.False(t, got.isNull)
+			require.Equal(t, types.T_decimal64, got.typ)
+			require.Equal(t, tc.want, got.value)
+		})
+	}
+
+	for _, sql := range []string{
+		"prepare stmt_mod_left from 'select mod(?, 2)'",
+		"prepare stmt_mod_right from 'select mod(2, ?)'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx,
+				prepared.GetDcl().GetPrepare().Plan, []any{stringParam("1.5tail")})
+			require.NoError(t, err)
+			fn := findPlanFunctionExpr(filled, "mod")
+			require.NotNil(t, fn)
+			require.Equal(t, int32(types.T_float64), fn.Typ.Id, fn.String())
+			got, evalErr := eval(t, fn)
+			require.NoError(t, evalErr)
+			require.Equal(t, types.T_float64, got.typ)
+			require.False(t, got.isNull)
+			want := float64(1.5)
+			if strings.Contains(sql, "mod(2,") {
+				want = 0.5
+			}
+			require.Equal(t, want, got.value)
+		})
+	}
 }
 
 func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {

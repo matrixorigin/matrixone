@@ -75,6 +75,100 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			require.Zero(t, result)
 		}
 
+		// ROUND/TRUNCATE keep the first argument's deferred numeric source, but
+		// their precision argument has a separate integer contract. Exercise the
+		// real COM_STMT_EXECUTE path with malformed string precision values and
+		// then change domains repeatedly on the same cached statement. A broad
+		// DOUBLE rebinding of the second marker either accepts these values or
+		// leaves the prior execution's type in the cache.
+		type preparedMathResult struct {
+			value        float64
+			valid        bool
+			databaseType string
+		}
+		queryPreparedMath := func(stmt *sql.Stmt, value, precision any) (preparedMathResult, error) {
+			rows, queryErr := stmt.QueryContext(ctx, value, precision)
+			if queryErr != nil {
+				return preparedMathResult{}, queryErr
+			}
+			defer rows.Close()
+			columnTypes, err := rows.ColumnTypes()
+			if err != nil {
+				return preparedMathResult{}, err
+			}
+			if len(columnTypes) != 1 {
+				return preparedMathResult{}, fmt.Errorf("expected one result column, got %d", len(columnTypes))
+			}
+			if !rows.Next() {
+				if err := rows.Err(); err != nil {
+					return preparedMathResult{}, err
+				}
+				return preparedMathResult{}, fmt.Errorf("prepared math query returned no rows")
+			}
+			var valueResult sql.NullFloat64
+			if err := rows.Scan(&valueResult); err != nil {
+				return preparedMathResult{}, err
+			}
+			if err := rows.Err(); err != nil {
+				return preparedMathResult{}, err
+			}
+			return preparedMathResult{
+				value: valueResult.Float64, valid: valueResult.Valid,
+				databaseType: strings.ToUpper(columnTypes[0].DatabaseTypeName()),
+			}, nil
+		}
+
+		for _, mathName := range []string{"round", "truncate"} {
+			mathStmt, err := db.PrepareContext(ctx, "select "+mathName+"(?, ?)")
+			require.NoError(t, err)
+			func() {
+				defer func() { require.NoError(t, mathStmt.Close()) }()
+				for _, precision := range []string{"0.5tail", "1.5tail", "-0.5tail", "abc", ""} {
+					_, queryErr := queryPreparedMath(mathStmt, "1.5", precision)
+					require.Error(t, queryErr, "%s precision=%q must retain integer-cast errors", mathName, precision)
+					require.Contains(t, queryErr.Error(), "bad value "+precision,
+						"%s precision=%q must report the original invalid marker", mathName, precision)
+				}
+
+				// A string value with an actual integer precision must succeed and
+				// expose the exact DECIMAL result domain selected for the numeric
+				// text value (rather than changing the precision marker to DOUBLE).
+				result, queryErr := queryPreparedMath(mathStmt, "1.5", int64(0))
+				require.NoError(t, queryErr)
+				require.True(t, result.valid)
+				require.Contains(t, result.databaseType, "DECIMAL")
+				want := float64(2)
+				if mathName == "truncate" {
+					want = 1
+				}
+				require.Equal(t, want, result.value)
+
+				// A native integer value must still select the integer overload
+				// after the string execution, proving the two markers are not
+				// coupled in the cached prepared plan.
+				result, queryErr = queryPreparedMath(mathStmt, int64(15), int64(0))
+				require.NoError(t, queryErr)
+				require.True(t, result.valid)
+				require.Contains(t, result.databaseType, "INT")
+				require.Equal(t, float64(15), result.value)
+
+				// Return to a malformed precision after a successful integer
+				// execution, then exercise NULL and a final string execution. This
+				// catches stale overload/type state across error and NULL paths.
+				_, queryErr = queryPreparedMath(mathStmt, "1.5", "1.5tail")
+				require.Error(t, queryErr)
+				require.Contains(t, queryErr.Error(), "bad value 1.5tail")
+				result, queryErr = queryPreparedMath(mathStmt, nil, int64(0))
+				require.NoError(t, queryErr)
+				require.False(t, result.valid)
+				result, queryErr = queryPreparedMath(mathStmt, "1.5", int64(1))
+				require.NoError(t, queryErr)
+				require.True(t, result.valid)
+				require.Contains(t, result.databaseType, "DECIMAL")
+				require.Equal(t, 1.5, result.value)
+			}()
+		}
+
 		abs, err := db.PrepareContext(ctx, "select abs(?)")
 		require.NoError(t, err)
 		defer abs.Close()

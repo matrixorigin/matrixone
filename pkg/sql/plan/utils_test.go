@@ -642,16 +642,23 @@ func TestPreparedParamValueNumericReprepareType(t *testing.T) {
 func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
 	ctx := context.Background()
 	for _, test := range []struct {
-		name       string
-		value      any
-		sourceType types.Type
-		wantType   types.T
-		wantNil    bool
+		name        string
+		value       any
+		sourceType  types.Type
+		allowPrefix bool
+		wantType    types.T
+		wantNil     bool
 	}{
-		{name: "string uses approximate numeric conversion", value: "2tail",
+		{name: "string uses approximate numeric conversion", value: "2tail", allowPrefix: true,
 			sourceType: types.New(types.T_varchar, 5, 0), wantType: types.T_float64},
-		{name: "string without numeric prefix keeps existing error path", value: "not-a-number",
+		{name: "string without numeric prefix converts to zero", value: "not-a-number", allowPrefix: true,
+			sourceType: types.New(types.T_varchar, 12, 0), wantType: types.T_float64},
+		{name: "empty string converts to zero", value: "", allowPrefix: true,
+			sourceType: types.New(types.T_varchar, 1, 0), wantType: types.T_float64},
+		{name: "strict arithmetic rejects wholly nonnumeric string", value: "not-a-number",
 			sourceType: types.New(types.T_varchar, 12, 0), wantNil: true},
+		{name: "strict arithmetic keeps numeric prefix", value: "2tail",
+			sourceType: types.New(types.T_varchar, 5, 0), wantType: types.T_float64},
 		{name: "boolean uses integer arithmetic", value: true,
 			sourceType: types.T_bool.ToType(), wantType: types.T_int64},
 		{name: "bit uses unsigned arithmetic", value: "5",
@@ -665,7 +672,7 @@ func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			expr, err := preparedSQLExecuteNumericParamExpr(
-				ctx, test.value, false, test.sourceType)
+				ctx, test.value, false, test.sourceType, test.allowPrefix)
 			require.NoError(t, err)
 			if test.wantNil {
 				require.Nil(t, expr)
