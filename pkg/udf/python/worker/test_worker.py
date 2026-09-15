@@ -3873,6 +3873,25 @@ except Exception:
         with self.assertRaisesRegex(ValueError, "duplicate control JSON field"):
             worker._decode_control(wire)
 
+    def test_control_rejects_excessive_json_nesting(self):
+        nested = "[" * worker.MAX_JSON_NESTING + "0" + "]" * worker.MAX_JSON_NESTING
+        value = {
+            "version": 1,
+            "kind": "OpenInvocation",
+            "tuple": {
+                "account_id": 1,
+                "statement_id": "statement",
+                "group_id": "group",
+                "group_epoch": 1,
+                "invocation_id": "invocation",
+                "lease_epoch": 1,
+            },
+            "payload": {"value": json.loads(nested)},
+        }
+        wire = json.dumps(value, separators=(",", ":")).encode()
+        with self.assertRaisesRegex(ValueError, "nesting exceeds"):
+            worker._decode_control(wire)
+
     def test_result_ack_rejects_zero_sequence(self):
         state = worker._InvocationState({}, 1)
         state.last_result = 1

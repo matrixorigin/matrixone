@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -68,6 +69,23 @@ func TestControlRejectsDuplicateJSONFields(t *testing.T) {
 	_, err := UnmarshalControl(wire)
 	require.ErrorIs(t, err, ErrProtocol)
 	require.ErrorContains(t, err, "duplicate control JSON field")
+}
+
+func TestControlRejectsExcessiveJSONNesting(t *testing.T) {
+	deepPayload := `{"value":` + strings.Repeat("[", MaxJSONNesting) + "0" + strings.Repeat("]", MaxJSONNesting) + "}"
+	wire, err := MarshalControl(Control{
+		Kind:    "OpenInvocation",
+		Tuple:   testTuple(),
+		Payload: json.RawMessage(deepPayload),
+	})
+	require.ErrorContains(t, err, "nesting exceeds")
+	require.Nil(t, wire)
+
+	// The same bound must protect an incoming frame even when it was produced
+	// by an older or non-Go peer that did not enforce the outbound check.
+	outer := `{"version":1,"kind":"OpenInvocation","tuple":{"account_id":1,"statement_id":"statement","group_id":"group","group_epoch":2,"invocation_id":"invocation","lease_epoch":3},"payload":` + deepPayload + `}`
+	_, err = UnmarshalControl([]byte(outer))
+	require.ErrorContains(t, err, "nesting exceeds")
 }
 
 func TestOpenInvocationPayloadMustBeObject(t *testing.T) {
