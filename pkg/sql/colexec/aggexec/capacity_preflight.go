@@ -95,6 +95,7 @@ type argumentChunkCapacity struct {
 	arenaConsumed uint64
 	arenaRequired uint64
 	scratch       int
+	legacyScratch int
 }
 
 func addArgumentChunkCapacity(
@@ -155,6 +156,24 @@ func addArgumentChunkCapacityWithValue(
 	return nil
 }
 
+func addLegacyScratchCapacity(
+	needs *[hashmap.UnitLimit]argumentChunkCapacity,
+	count int,
+	chunk int,
+	size int,
+) error {
+	if size < 0 || size > math.MaxUint32 {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	for i := 0; i < count; i++ {
+		if needs[i].chunk == chunk {
+			needs[i].legacyScratch = max(needs[i].legacyScratch, size)
+			return nil
+		}
+	}
+	return mpool.ErrAllocationAccountInvariant
+}
+
 func (ae *aggExec) applyArgumentChunkCapacity(
 	needs *[hashmap.UnitLimit]argumentChunkCapacity,
 	count int,
@@ -166,7 +185,7 @@ func (ae *aggExec) applyArgumentChunkCapacity(
 			return mpool.ErrAllocationAccountInvariant
 		}
 		if err := state.preflightArgumentCapacity(
-			ae.mp, need.arenaRequired, need.scratch); err != nil {
+			ae.mp, need.arenaRequired, need.scratch, need.legacyScratch); err != nil {
 			return err
 		}
 	}
@@ -177,12 +196,18 @@ func (ag *aggState) preflightArgumentCapacity(
 	mp *mpool.MPool,
 	additionalArenaRequired uint64,
 	scratch int,
+	legacyScratch int,
 ) error {
 	if ag == nil || ag.allocation == nil || ag.argSkl == nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	if scratch > 0 {
 		if _, err := ag.resizeArgScratch(mp, scratch); err != nil {
+			return err
+		}
+	}
+	if legacyScratch > 0 {
+		if _, err := ag.resizeLegacyValueScratch(mp, legacyScratch); err != nil {
 			return err
 		}
 	}
@@ -984,19 +1009,72 @@ func (ae *aggExec) addDistinctArgumentCapacity(
 	if state.argSkl.Contains(key) {
 		return nil
 	}
-	valueSize := 0
-	if len(vectors) == 1 && vectors[0].GetType().Oid == types.T_float32 &&
-		vectors[0].GetType().Scale > 0 {
+	valueSize, err := distinctLegacyRepresentativeSize(vectors, logicalRow, key)
+	if err != nil {
+		return err
+	}
+	if err := addArgumentChunkCapacityWithValue(
+		needs, needCount, x, key, valueSize); err != nil {
+		return err
+	}
+	if len(vectors) > 1 && valueSize > 0 {
+		return addLegacyScratchCapacity(needs, *needCount, x, valueSize)
+	}
+	return nil
+}
+
+func distinctLegacyRepresentativeSize(
+	vectors []*vector.Vector,
+	logicalRow int,
+	key []byte,
+) (int, error) {
+	if len(vectors) == 0 || len(key) < kAggArgPrefixSz {
+		return 0, mpool.ErrAllocationAccountInvariant
+	}
+	if len(vectors) == 1 {
 		row, err := preflightPhysicalRow(vectors[0], logicalRow)
 		if err != nil {
-			return err
+			return 0, err
 		}
-		if !bytes.Equal(key[kAggArgPrefixSz:], vectors[0].GetRawBytesAt(row)) {
-			valueSize = len(vectors[0].GetRawBytesAt(row))
+		raw := vectors[0].GetRawBytesAt(row)
+		if !bytes.Equal(key[kAggArgPrefixSz:], raw) {
+			return len(raw), nil
 		}
+		return 0, nil
 	}
-	return addArgumentChunkCapacityWithValue(
-		needs, needCount, x, key, valueSize)
+	off := kAggArgPrefixSz
+	rawSize := 0
+	needsRaw := false
+	for _, vec := range vectors {
+		row, err := preflightPhysicalRow(vec, logicalRow)
+		if err != nil {
+			return 0, err
+		}
+		if len(key)-off < 4 {
+			return 0, mpool.ErrAllocationAccountInvariant
+		}
+		canonicalSize := int(binary.BigEndian.Uint32(key[off:]))
+		off += 4
+		if canonicalSize > len(key)-off {
+			return 0, mpool.ErrAllocationAccountInvariant
+		}
+		raw := vec.GetRawBytesAt(row)
+		if len(raw) > math.MaxInt-rawSize-4 {
+			return 0, mpool.ErrAllocationAllocatorLimit
+		}
+		rawSize += 4 + len(raw)
+		if !bytes.Equal(key[off:off+canonicalSize], raw) {
+			needsRaw = true
+		}
+		off += canonicalSize
+	}
+	if off != len(key) {
+		return 0, mpool.ErrAllocationAccountInvariant
+	}
+	if needsRaw {
+		return rawSize, nil
+	}
+	return 0, nil
 }
 
 func (ae *aggExec) preflightDistinctBatchFillArgs(
@@ -1252,11 +1330,11 @@ func (ae *aggExec) preflightDistinctBatchFillArgsHashed(
 					payload = -1
 					break
 				}
-				raw := vec.GetRawBytesAt(row)
-				if len(raw) > math.MaxInt-payload-4 {
+				valueSize := canonicalDistinctArgumentKeySize(vec, row)
+				if valueSize > math.MaxInt-payload-4 {
 					return mpool.ErrAllocationAllocatorLimit
 				}
-				payload += 4 + len(raw)
+				payload += 4 + valueSize
 			}
 			if payload < 0 {
 				continue
@@ -1276,7 +1354,7 @@ func (ae *aggExec) preflightDistinctBatchFillArgsHashed(
 			continue
 		}
 		if len(vectors) == 1 {
-			payload = len(vectors[0].GetRawBytesAt(physicalRow))
+			payload = canonicalDistinctArgumentKeySize(vectors[0], physicalRow)
 		}
 		if payload > math.MaxInt-kAggArgPrefixSz {
 			return mpool.ErrAllocationAllocatorLimit

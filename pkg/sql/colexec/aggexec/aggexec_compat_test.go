@@ -150,6 +150,60 @@ func TestLegacyDistinctWireKeepsRawRepresentative(t *testing.T) {
 		right.Free(mp)
 		require.Zero(t, mp.CurrNB())
 	})
+
+	t.Run("spill-round-trip", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		json, err := types.ParseStringToByteJson("1")
+		require.NoError(t, err)
+		raw, err := types.EncodeJson(json)
+		require.NoError(t, err)
+		values := vector.NewVec(types.T_json.ToType())
+		require.NoError(t, vector.AppendBytes(values, raw, false, mp))
+
+		source := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+		).(*countColumnExec)
+		require.NoError(t, source.GroupGrow(1))
+		require.NoError(t, source.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+		SetCanonicalDistinctKeyWire(source, false)
+		var spill bytes.Buffer
+		require.NoError(t, source.SaveSpillIntermediateRows(0, []int32{0}, &spill))
+
+		restored := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+		).(*countColumnExec)
+		SetCanonicalDistinctKeyWire(restored, false)
+		require.NoError(t, restored.UnmarshalSpillFromReader(
+			bytes.NewReader(spill.Bytes()), mp))
+		var downgraded bytes.Buffer
+		require.NoError(t, restored.SaveIntermediateResultOfChunk(0, &downgraded))
+
+		legacy := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+		).(*countColumnExec)
+		require.NoError(t, legacy.GroupGrow(1))
+		SetCanonicalDistinctKeyWire(legacy, false)
+		encodeLegacyState(t, mp, legacy, raw)
+
+		target := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+		).(*countColumnExec)
+		SetCanonicalDistinctKeyWire(target, false)
+		require.NoError(t, target.UnmarshalFromReader(
+			bytes.NewReader(downgraded.Bytes()), mp))
+		require.NoError(t, target.BatchMerge(legacy, 0, []uint64{1}))
+		result, err := target.Flush()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+
+		result[0].Free(mp)
+		target.Free()
+		legacy.Free()
+		restored.Free()
+		source.Free()
+		values.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
 }
 
 func TestGroupConcatIntermediateRoundTrip(t *testing.T) {
