@@ -41,14 +41,12 @@ select id from docs where match(body) against('quantum') order by id;
 -- The UNRELATED COPY ALTER: adds a column the fulltext2 index does not cover.
 alter table docs add column extra int;
 
--- PREWARM the replacement index during its base-less initialization window: this MATCH runs
--- before the async REINDEX FORCE_SYNC builds the tag=0 base, so it loads a base-less +
--- cdc_tail-less generation into this CN's cache. The count(*)>=0 wrapper keeps the result
--- deterministic (always 1) whether or not the base has landed yet. Pre-fix a pinned empty
--- generation (a busy reader, another CN, or an absent later flush leaves RemoveIdle unable to
--- refresh it) made the post-base MATCH below return empty until the staleness sweep. The
--- not-cache-empty fix declines to RETAIN a base-less+tail-less generation, so the reload after
--- the base commits returns the correct rows.
+-- Best-effort PREWARM of the replacement index: if it runs before the async REINDEX FORCE_SYNC
+-- builds the tag=0 base, it loads a base-less generation into this CN's cache. This is a smoke
+-- probe only -- a BVT cannot hold the REINDEX, so the base may already be published and the
+-- count(*)>=0 wrapper (always 1) passes either way. The DETERMINISTIC proof that a base-less
+-- generation is served empty, NOT retained, and reloaded to the base without a CDC flush or
+-- housekeeping sweep is the unit test TestCacheNotCacheEmptyReloadsBase in pkg/vectorindex/cache.
 select count(*) >= 0 as prewarmed from docs where match(body) against('quantum');
 
 -- The ALTER cloned docs to a new table id, so the fulltext2 index has a NEW hidden table.
