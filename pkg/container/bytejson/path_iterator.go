@@ -57,6 +57,15 @@ const (
 	pathMatchArrayRange
 )
 
+func (it *PathIterator) popFrame() {
+	if len(it.stack) == 0 {
+		return
+	}
+	last := len(it.stack) - 1
+	it.stack[last] = pathMatchFrame{}
+	it.stack = it.stack[:last]
+}
+
 // NewPathIterator returns an iterator for matches in root. A nil path is an
 // invalid construction and is reported by the first call to Next; an empty
 // (but non-nil) Path is the valid root path.
@@ -145,7 +154,7 @@ func (it *PathIterator) NextContext(ctx context.Context) (value ByteJson, ok boo
 		top := &it.stack[len(it.stack)-1]
 		if top.path.empty() {
 			value = top.value
-			it.stack = it.stack[:len(it.stack)-1]
+			it.popFrame()
 			return value, true, nil
 		}
 
@@ -164,44 +173,46 @@ func (it *PathIterator) NextContext(ctx context.Context) (value ByteJson, ok boo
 				continue
 			case subPathKey:
 				if top.value.Type != TpCodeObject {
-					it.stack = it.stack[:len(it.stack)-1]
+					it.popFrame()
 					continue
 				}
 				child, exists := top.value.queryValByKeyExists([]byte(sub.key))
 				if !exists {
-					it.stack = it.stack[:len(it.stack)-1]
+					it.popFrame()
 					continue
 				}
-				it.stack = it.stack[:len(it.stack)-1]
+				it.popFrame()
 				it.stack = append(it.stack, pathMatchFrame{value: child, path: remaining})
 				continue
 			case subPathIdx:
 				if top.value.Type == TpCodeObject {
 					idx, _, _ := sub.idx.genIndex(1)
 					if idx != 0 {
-						it.stack = it.stack[:len(it.stack)-1]
+						it.popFrame()
 						continue
 					}
 					// JSON path [0] autowraps an object/scalar as the value
 					// itself, preserving the existing Query contract.
-					it.stack = it.stack[:len(it.stack)-1]
-					it.stack = append(it.stack, pathMatchFrame{value: top.value, path: remaining})
+					value := top.value
+					it.popFrame()
+					it.stack = append(it.stack, pathMatchFrame{value: value, path: remaining})
 					continue
 				}
 				if top.value.Type != TpCodeArray {
 					idx, _, _ := sub.idx.genIndex(1)
 					if idx != 0 {
-						it.stack = it.stack[:len(it.stack)-1]
+						it.popFrame()
 						continue
 					}
-					it.stack = it.stack[:len(it.stack)-1]
-					it.stack = append(it.stack, pathMatchFrame{value: top.value, path: remaining})
+					value := top.value
+					it.popFrame()
+					it.stack = append(it.stack, pathMatchFrame{value: value, path: remaining})
 					continue
 				}
 				count := top.value.GetElemCnt()
 				idx, _, last := sub.idx.genIndex(count)
 				if (last && idx < 0) || count <= idx {
-					it.stack = it.stack[:len(it.stack)-1]
+					it.popFrame()
 					continue
 				}
 				if idx == subPathIdxALL {
@@ -210,32 +221,35 @@ func (it *PathIterator) NextContext(ctx context.Context) (value ByteJson, ok boo
 					top.end = count
 					continue
 				}
-				it.stack = it.stack[:len(it.stack)-1]
-				it.stack = append(it.stack, pathMatchFrame{value: top.value.GetArrayElem(idx), path: remaining})
+				child := top.value.GetArrayElem(idx)
+				it.popFrame()
+				it.stack = append(it.stack, pathMatchFrame{value: child, path: remaining})
 				continue
 			case subPathRange:
 				if top.value.Type == TpCodeObject {
 					if !sub.iRange.matchesIndex(0, 1) {
-						it.stack = it.stack[:len(it.stack)-1]
+						it.popFrame()
 						continue
 					}
-					it.stack = it.stack[:len(it.stack)-1]
-					it.stack = append(it.stack, pathMatchFrame{value: top.value, path: remaining})
+					value := top.value
+					it.popFrame()
+					it.stack = append(it.stack, pathMatchFrame{value: value, path: remaining})
 					continue
 				}
 				if top.value.Type != TpCodeArray {
 					if !sub.iRange.matchesIndex(0, 1) {
-						it.stack = it.stack[:len(it.stack)-1]
+						it.popFrame()
 						continue
 					}
-					it.stack = it.stack[:len(it.stack)-1]
-					it.stack = append(it.stack, pathMatchFrame{value: top.value, path: remaining})
+					value := top.value
+					it.popFrame()
+					it.stack = append(it.stack, pathMatchFrame{value: value, path: remaining})
 					continue
 				}
 				rng := sub.iRange.genRange(top.value.GetElemCnt())
 				start, end := rng[0], rng[1]
 				if start < 0 || end < 0 {
-					it.stack = it.stack[:len(it.stack)-1]
+					it.popFrame()
 					continue
 				}
 				top.phase = pathMatchArrayRange
@@ -243,14 +257,14 @@ func (it *PathIterator) NextContext(ctx context.Context) (value ByteJson, ok boo
 				continue
 			case subPathKeyWildcard:
 				if top.value.Type != TpCodeObject {
-					it.stack = it.stack[:len(it.stack)-1]
+					it.popFrame()
 					continue
 				}
 				top.phase = pathMatchObjectWildcard
 				top.index, top.end = 0, top.value.GetElemCnt()
 				continue
 			default:
-				it.stack = it.stack[:len(it.stack)-1]
+				it.popFrame()
 				continue
 			}
 
@@ -258,13 +272,13 @@ func (it *PathIterator) NextContext(ctx context.Context) (value ByteJson, ok boo
 			// The suffix frame above is visited first. This frame then walks
 			// each child with the complete double-star path, one at a time.
 			if top.sub.tp != subPathDoubleStar {
-				it.stack = it.stack[:len(it.stack)-1]
+				it.popFrame()
 				continue
 			}
 			switch top.value.Type {
 			case TpCodeObject:
 				if top.index >= top.value.GetElemCnt() {
-					it.stack = it.stack[:len(it.stack)-1]
+					it.popFrame()
 					continue
 				}
 				child := top.value.GetObjectVal(top.index)
@@ -272,19 +286,19 @@ func (it *PathIterator) NextContext(ctx context.Context) (value ByteJson, ok boo
 				it.stack = append(it.stack, pathMatchFrame{value: child, path: top.path})
 			case TpCodeArray:
 				if top.index >= top.value.GetElemCnt() {
-					it.stack = it.stack[:len(it.stack)-1]
+					it.popFrame()
 					continue
 				}
 				child := top.value.GetArrayElem(top.index)
 				top.index++
 				it.stack = append(it.stack, pathMatchFrame{value: child, path: top.path})
 			default:
-				it.stack = it.stack[:len(it.stack)-1]
+				it.popFrame()
 			}
 
 		case pathMatchObjectWildcard:
 			if top.index >= top.end {
-				it.stack = it.stack[:len(it.stack)-1]
+				it.popFrame()
 				continue
 			}
 			child := top.value.GetObjectVal(top.index)
@@ -293,7 +307,7 @@ func (it *PathIterator) NextContext(ctx context.Context) (value ByteJson, ok boo
 
 		case pathMatchArrayWildcard:
 			if top.index >= top.end {
-				it.stack = it.stack[:len(it.stack)-1]
+				it.popFrame()
 				continue
 			}
 			child := top.value.GetArrayElem(top.index)
@@ -302,7 +316,7 @@ func (it *PathIterator) NextContext(ctx context.Context) (value ByteJson, ok boo
 
 		case pathMatchArrayRange:
 			if top.index >= top.end {
-				it.stack = it.stack[:len(it.stack)-1]
+				it.popFrame()
 				continue
 			}
 			child := top.value.GetArrayElem(top.index)

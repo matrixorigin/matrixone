@@ -16,7 +16,9 @@ package jsonvalue
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -169,11 +171,34 @@ func TestConvertScalarMalformedByteJsonFailsClosed(t *testing.T) {
 	result := ConvertScalar(malformed, types.T_int64.ToType())
 	require.Equal(t, StatusStatementError, result.Status)
 	require.Error(t, result.Err)
+	result = ConvertScalar(malformed, types.T_json.ToType())
+	require.Equal(t, StatusStatementError, result.Status)
+	require.Error(t, result.Err)
+
+	unknown := bytejson.ByteJson{Type: bytejson.TpCode(0xff), Data: []byte{1}}
+	result = ConvertScalar(unknown, types.T_json.ToType())
+	require.Equal(t, StatusStatementError, result.Status)
+	require.Error(t, result.Err)
 
 	malformedComposite := bytejson.ByteJson{Type: bytejson.TpCodeArray, Data: []byte{1}}
 	result = ConvertScalar(malformedComposite, types.T_json.ToType())
 	require.Equal(t, StatusStatementError, result.Status)
 	require.Error(t, result.Err)
+}
+
+func TestConvertPathMatchesMalformedRootJSONFailsClosed(t *testing.T) {
+	path, err := bytejson.ParseJsonPath(`$`)
+	require.NoError(t, err)
+	for _, value := range []bytejson.ByteJson{
+		{Type: bytejson.TpCodeInt64, Data: []byte{1}},
+		{Type: bytejson.TpCode(0xff), Data: []byte{1}},
+	} {
+		iterator := bytejson.NewPathIterator(value, &path)
+		result := ConvertPathMatches(iterator, types.T_json.ToType())
+		iterator.Close()
+		require.Equal(t, StatusStatementError, result.Status)
+		require.Error(t, result.Err)
+	}
 }
 
 func TestConvertPathMatchesDistinguishesMissingNullAndMultipleValues(t *testing.T) {
@@ -228,6 +253,87 @@ func TestConvertPathMatchesBuildsBoundedJSONCell(t *testing.T) {
 	result = ConvertPathMatchesContext(ctx, cancelled, types.T_json.ToType())
 	require.Equal(t, StatusStatementError, result.Status)
 	require.ErrorIs(t, result.Err, context.Canceled)
+}
+
+func TestConvertPathMatchesEnforcesJSONCellLimitForSingleMatch(t *testing.T) {
+	for _, document := range []string{
+		`"0123456789"`,
+		`[1,2,3]`,
+		`{"value":"0123456789"}`,
+	} {
+		t.Run(document, func(t *testing.T) {
+			value := parseConversionValue(t, document)
+			encoded, err := value.Marshal()
+			require.NoError(t, err)
+			require.Greater(t, len(encoded), 1)
+
+			exact := conversionIterator(t, document, `$`)
+			defer exact.Close()
+			result := ConvertPathMatchesWithLimit(exact, types.T_json.ToType(), len(encoded))
+			require.Equal(t, StatusSuccess, result.Status)
+			require.Equal(t, encoded, result.Value)
+
+			under := conversionIterator(t, document, `$`)
+			defer under.Close()
+			result = ConvertPathMatchesWithLimit(under, types.T_json.ToType(), len(encoded)-1)
+			require.Equal(t, StatusStatementError, result.Status)
+			require.ErrorIs(t, result.Err, bytejson.ErrJSONTableCellLimit)
+		})
+	}
+
+	null := conversionIterator(t, `null`, `$`)
+	defer null.Close()
+	result := ConvertPathMatchesWithLimit(null, types.T_json.ToType(), 1)
+	require.Equal(t, StatusJSONNull, result.Status)
+	require.NoError(t, result.Err)
+}
+
+func TestConvertPathMatchesEnforcesDefaultJSONCellLimitForSingleMatch(t *testing.T) {
+	payloadLength := types.MaxBlobLen
+	data := make([]byte, binary.MaxVarintLen64+payloadLength)
+	prefixLength := binary.PutUvarint(data, uint64(payloadLength))
+	data = data[:prefixLength+payloadLength]
+	value := bytejson.ByteJson{Type: bytejson.TpCodeBlob, Data: data}
+	require.Greater(t, len(data)+1, types.MaxBlobLen)
+
+	path, err := bytejson.ParseJsonPath(`$`)
+	require.NoError(t, err)
+	iterator := bytejson.NewPathIterator(value, &path)
+	result := ConvertPathMatches(iterator, types.T_json.ToType())
+	iterator.Close()
+	require.Equal(t, StatusStatementError, result.Status)
+	require.ErrorIs(t, result.Err, bytejson.ErrJSONTableCellLimit)
+}
+
+func TestConvertUint32AppendResultRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vectorValue := vector.NewVec(types.T_uint32.ToType())
+	defer vectorValue.Free(mp)
+
+	for _, test := range []struct {
+		document string
+		want     uint32
+	}{
+		{document: `0`, want: 0},
+		{document: `4294967295`, want: math.MaxUint32},
+	} {
+		result := ConvertScalar(parseConversionValue(t, test.document), types.T_uint32.ToType())
+		require.Equal(t, StatusSuccess, result.Status)
+		require.IsType(t, uint32(0), result.Value)
+		require.NoError(t, AppendResult(vectorValue, result, mp))
+		require.Equal(t, test.want, vector.GetFixedAtNoTypeCheck[uint32](vectorValue, vectorValue.Length()-1))
+	}
+
+	null := ConvertScalar(parseConversionValue(t, `null`), types.T_uint32.ToType())
+	require.Equal(t, StatusJSONNull, null.Status)
+	require.NoError(t, AppendResult(vectorValue, null, mp))
+	require.True(t, vectorValue.IsNull(uint64(vectorValue.Length()-1)))
+
+	over := ConvertScalar(parseConversionValue(t, `4294967296`), types.T_uint32.ToType())
+	require.Equal(t, StatusRangeError, over.Status)
+	require.Error(t, over.Err)
+	require.Error(t, AppendResult(vectorValue, over, mp))
+	require.Equal(t, 3, vectorValue.Length())
 }
 
 func TestAppendResultRejectsErrorsWithoutMutatingVector(t *testing.T) {

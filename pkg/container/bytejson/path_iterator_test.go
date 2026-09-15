@@ -305,6 +305,39 @@ func TestPathIteratorResetStartsFreshAndCloseReleasesCursor(t *testing.T) {
 	iterator.Close()
 }
 
+func TestPathIteratorClearsPoppedBorrowedFramesAcrossReset(t *testing.T) {
+	first, err := ParseFromString(`[[[1]]]`)
+	require.NoError(t, err)
+	deepPath, err := ParseJsonPath(`$[*][*][*]`)
+	require.NoError(t, err)
+	iterator := NewPathIterator(first, &deepPath)
+
+	value, matched, err := iterator.Next()
+	require.NoError(t, err)
+	require.True(t, matched)
+	require.Equal(t, "1", value.String())
+	_, matched, err = iterator.Next()
+	require.NoError(t, err)
+	require.False(t, matched)
+	require.Greater(t, cap(iterator.stack), 0)
+
+	retained := iterator.stack[:cap(iterator.stack)]
+	for i, frame := range retained {
+		require.Nil(t, frame.value.Data, "popped frame %d still retains source data", i)
+	}
+
+	second, err := ParseFromString(`2`)
+	require.NoError(t, err)
+	rootPath, err := ParseJsonPath(`$`)
+	require.NoError(t, err)
+	iterator.Reset(second, &rootPath)
+	require.Equal(t, second.Data, iterator.stack[0].value.Data)
+	for i, frame := range iterator.stack[1:cap(iterator.stack)] {
+		require.Nil(t, frame.value.Data, "reset frame %d still retains prior source data", i+1)
+	}
+	iterator.Close()
+}
+
 func collectRemainingMatches(t *testing.T, iterator *PathIterator) []string {
 	t.Helper()
 	var matches []string

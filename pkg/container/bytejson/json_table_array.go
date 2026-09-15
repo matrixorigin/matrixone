@@ -84,10 +84,17 @@ func (b *JSONTableArrayBuilder) AppendContext(ctx context.Context, value ByteJso
 	if b.count == math.MaxUint32 {
 		return fmt.Errorf("JSON_TABLE JSON array has too many elements")
 	}
+	stored, err := storageCompatibleJSONValue(value)
+	if err != nil {
+		return err
+	}
+	if stored.Type == TpCodeLiteral && len(stored.Data) != 1 {
+		return fmt.Errorf("invalid JSON literal payload length %d", len(stored.Data))
+	}
 
 	payloadLen := 0
-	if value.Type != TpCodeLiteral {
-		payloadLen = len(value.Data)
+	if stored.Type != TpCodeLiteral {
+		payloadLen = len(stored.Data)
 	}
 	const entrySize = valEntrySize
 	if payloadLen > math.MaxInt-(headerSize+len(b.entries)+entrySize+len(b.payload)) {
@@ -101,13 +108,13 @@ func (b *JSONTableArrayBuilder) AppendContext(ctx context.Context, value ByteJso
 
 	entryOffset := len(b.entries)
 	b.entries = append(b.entries, make([]byte, entrySize)...)
-	b.entries[entryOffset] = value.Type
-	if value.Type == TpCodeLiteral {
-		if value.Data[0] != LiteralNull && value.Data[0] != LiteralTrue && value.Data[0] != LiteralFalse {
+	b.entries[entryOffset] = stored.Type
+	if stored.Type == TpCodeLiteral {
+		if stored.Data[0] != LiteralNull && stored.Data[0] != LiteralTrue && stored.Data[0] != LiteralFalse {
 			b.entries = b.entries[:entryOffset]
-			return fmt.Errorf("invalid JSON literal type %d", value.Data[0])
+			return fmt.Errorf("invalid JSON literal type %d", stored.Data[0])
 		}
-		b.entries[entryOffset+valTypeSize] = value.Data[0]
+		b.entries[entryOffset+valTypeSize] = stored.Data[0]
 	} else {
 		if uint64(len(b.payload)) > math.MaxUint32 {
 			b.entries = b.entries[:entryOffset]
@@ -117,10 +124,20 @@ func (b *JSONTableArrayBuilder) AppendContext(ctx context.Context, value ByteJso
 			b.entries[entryOffset+valTypeSize:],
 			uint32(len(b.payload)),
 		)
-		b.payload = append(b.payload, value.Data...)
+		b.payload = append(b.payload, stored.Data...)
 	}
 	b.count++
 	return nil
+}
+
+func storageCompatibleJSONValue(value ByteJson) (stored ByteJson, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			stored = ByteJson{}
+			err = fmt.Errorf("invalid JSON value: %v", recovered)
+		}
+	}()
+	return value.StorageCompatible()
 }
 
 // Build finalizes and transfers ownership of the encoded array. A builder
@@ -135,7 +152,11 @@ func (b *JSONTableArrayBuilder) Build() (ByteJson, error) {
 	if b.count == 0 {
 		return ByteJson{}, errors.New("cannot build an empty JSON_TABLE array")
 	}
-	data := make([]byte, headerSize+len(b.entries)+len(b.payload))
+	dataLen := headerSize + len(b.entries) + len(b.payload)
+	if dataLen > math.MaxUint32 {
+		return ByteJson{}, errors.New("JSON_TABLE JSON cell exceeds uint32 storage size")
+	}
+	data := make([]byte, dataLen)
 	binary.LittleEndian.PutUint32(data[:4], b.count)
 	binary.LittleEndian.PutUint32(data[docSizeOff:headerSize], uint32(len(data)))
 	copy(data[headerSize:], b.entries)
