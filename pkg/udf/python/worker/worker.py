@@ -75,6 +75,8 @@ MAX_FENCE_COMPONENT_BYTES = 256
 # checking only for a non-negative Python int would admit values that no Go
 # caller can represent and would make quota/security identity non-canonical.
 MAX_SECURITY_PRINCIPAL_ID = (1 << 32) - 1
+MIN_INT64 = -(1 << 63)
+MAX_INT64 = (1 << 63) - 1
 # Admission bounds cover active fences and retained terminal tombstones.  The
 # names deliberately describe the whole ledger so a future cleanup change
 # cannot mistake active work for reclaimable terminal state.
@@ -545,7 +547,12 @@ def _typed_statement_context(raw: Any) -> Optional[Dict[str, Any]]:
     if raw.get("contract_version") != 1:
         raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported statement context contract")
     timestamp = raw.get("statement_timestamp_utc")
-    if isinstance(timestamp, bool) or not isinstance(timestamp, int):
+    if (
+        isinstance(timestamp, bool)
+        or not isinstance(timestamp, int)
+        or timestamp < MIN_INT64
+        or timestamp > MAX_INT64
+    ):
         raise ValueError("PROTOCOL: invalid typed statement timestamp")
     timezone_kind = raw.get("timezone_kind")
     if not isinstance(timezone_kind, str):
@@ -658,6 +665,8 @@ def _statement_context(raw: Any) -> Optional[StatementContext]:
     timestamp_text = _required_context_value(raw, "statement_timestamp_utc")
     try:
         timestamp_micros = int(timestamp_text, 10)
+        if timestamp_micros < MIN_INT64 or timestamp_micros > MAX_INT64:
+            raise ValueError("timestamp is outside int64 range")
         seconds, micros = divmod(timestamp_micros, 1_000_000)
         timestamp = _datetime.datetime(1970, 1, 1, tzinfo=_datetime.timezone.utc) + _datetime.timedelta(seconds=seconds, microseconds=micros)
     except (TypeError, ValueError, OverflowError) as exc:
