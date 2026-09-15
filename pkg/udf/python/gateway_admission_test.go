@@ -159,7 +159,7 @@ func TestGatewayAdmissionRetriesOwnerCleanupAfterGroupReleaseFailure(t *testing.
 
 	admission := &invocationAdmission{
 		gateway: gateway, group: group, credit: credit,
-		key: "release-retry-key", invocationID: "member", memberOpen: true,
+		key: "release-retry-key", groupKey: "release-retry", invocationID: "member", memberOpen: true,
 	}
 	require.ErrorContains(t, admission.finish(true, protocol.ReasonFailure), "injected group release failure")
 	require.Equal(t, protocol.GroupDraining, group.State())
@@ -194,7 +194,7 @@ func TestGatewayAdmissionReservesClosedGroupCapacityWhileActive(t *testing.T) {
 	gateway.admissionMu.Lock()
 	require.Empty(t, gateway.admittedGroups)
 	require.Zero(t, gateway.reservedGroupBytes)
-	require.Equal(t, uint64(1), gateway.closedGroups[first.Tuple.GroupID])
+	require.Equal(t, uint64(1), gateway.closedGroups[scopedGroupKey(first.Tuple.AccountID, first.Tuple.GroupID)])
 	gateway.admissionMu.Unlock()
 
 	// A new epoch of the same group reuses its already-reserved fence. A
@@ -210,4 +210,33 @@ func TestGatewayAdmissionReservesClosedGroupCapacityWhileActive(t *testing.T) {
 
 	_, err = gateway.admitInvocation(second)
 	require.ErrorIs(t, err, protocol.ErrLedgerFull)
+}
+
+func TestGatewayAdmissionScopesGroupByAccount(t *testing.T) {
+	gateway := newAdmissionTestGateway(t, 2)
+	first := validInvocation()
+	first.Tuple.GroupID = "same-name"
+	first.Tuple.InvocationID = "account-one"
+	second := validInvocation()
+	second.Tuple.AccountID = 2
+	second.Tuple.GroupID = first.Tuple.GroupID
+	second.Tuple.InvocationID = "account-two"
+
+	firstAdmission, err := gateway.admitInvocation(first)
+	require.NoError(t, err)
+	secondAdmission, err := gateway.admitInvocation(second)
+	require.NoError(t, err)
+	require.Len(t, gateway.active, 2)
+
+	require.NoError(t, firstAdmission.finish(true, protocol.ReasonInputEOF))
+	require.Len(t, gateway.active, 1)
+	gateway.admissionMu.Lock()
+	require.Equal(t, uint64(1), gateway.closedGroups[scopedGroupKey(1, "same-name")])
+	require.NotContains(t, gateway.closedGroups, scopedGroupKey(2, "same-name"))
+	gateway.admissionMu.Unlock()
+
+	require.NoError(t, secondAdmission.finish(true, protocol.ReasonInputEOF))
+	gateway.admissionMu.Lock()
+	require.Equal(t, uint64(1), gateway.closedGroups[scopedGroupKey(2, "same-name")])
+	gateway.admissionMu.Unlock()
 }
