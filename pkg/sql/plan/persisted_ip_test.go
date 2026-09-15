@@ -479,6 +479,61 @@ func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {
 		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 83")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion83)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
+
+}
+
+func TestPersistedExpressionProtocolAdmissionForSpatialDistance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		proc.Free()
+	})
+
+	spatialExpr := func(functionID, overloadID int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_float64)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{
+				Obj: int64(functionID)<<32 | int64(overloadID),
+			}}},
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		expr *planpb.Expr
+	}{
+		{name: "frechet legacy", expr: spatialExpr(506, 0)},
+		{name: "hausdorff legacy", expr: spatialExpr(507, 1)},
+		{name: "distance unit", expr: spatialExpr(421, 4)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, version := range []int64{defines.MORPCVersion79, defines.MORPCVersion80} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+				err := RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.expr)
+				if version < defines.MORPCVersion80 {
+					require.ErrorContains(t, err, "protocol version 80")
+				} else {
+					require.NoError(t, err)
+				}
+			}
+		})
+	}
+
+	// Mixed owners use the strongest admission requirement instead of allowing
+	// a v72 IP expression to mask a v80 spatial-distance expression.
+	mixed := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Default: &planpb.Default{Expr: spatialExpr(394, 0)}},
+		{Default: &planpb.Default{Expr: spatialExpr(421, 4)}},
+	}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion79)
+	require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, mixed), "protocol version 80")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
+	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, mixed))
 }
 
 func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {

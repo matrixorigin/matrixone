@@ -859,3 +859,51 @@ func TestRequiredRemoteExpressionFeaturesMetadataResultContractsSurviveWireRound
 	require.NoError(t, err)
 	require.True(t, features.ExpressionResultMetadataContracts)
 }
+
+func TestRequiredRemoteExpressionFeaturesSpatialDistance(t *testing.T) {
+	spatial := func(functionID, overloadID int32) *Expr {
+		return &Expr{
+			Typ: Type{Id: 30},
+			Expr: &Expr_F{F: &Function{Func: &ObjectRef{
+				Obj: int64(functionID)<<32 | int64(overloadID),
+			}}},
+		}
+	}
+	for _, tc := range []struct {
+		name     string
+		id       int32
+		overload int32
+		want     bool
+	}{
+		{name: "legacy frechet geometry", id: remoteFrechetDistanceFunctionID, overload: 0, want: true},
+		{name: "legacy frechet geometry32", id: remoteFrechetDistanceFunctionID, overload: 1, want: true},
+		{name: "unit frechet geometry", id: remoteFrechetDistanceFunctionID, overload: 2, want: true},
+		{name: "unit frechet geometry32", id: remoteFrechetDistanceFunctionID, overload: 3, want: true},
+		{name: "legacy hausdorff geometry", id: remoteHausdorffDistanceFunctionID, overload: 0, want: true},
+		{name: "legacy hausdorff geometry32", id: remoteHausdorffDistanceFunctionID, overload: 1, want: true},
+		{name: "unit hausdorff geometry", id: remoteHausdorffDistanceFunctionID, overload: 2, want: true},
+		{name: "unit hausdorff geometry32", id: remoteHausdorffDistanceFunctionID, overload: 3, want: true},
+		{name: "new distance geometry unit", id: remoteSpatialDistanceFunctionID, overload: 4, want: true},
+		{name: "new distance geometry32 unit", id: remoteSpatialDistanceFunctionID, overload: 5, want: true},
+		{name: "legacy distance", id: remoteSpatialDistanceFunctionID, overload: 0, want: false},
+		{name: "explicit SRID distance", id: remoteSpatialDistanceFunctionID, overload: 1, want: false},
+		{name: "geometry32 explicit SRID distance", id: remoteSpatialDistanceFunctionID, overload: 3, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(spatial(tc.id, tc.overload))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.SpatialDistanceSemantics)
+			require.Equal(t, tc.want, features.Any())
+		})
+	}
+
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expressions []*Expr }{
+		Expressions: []*Expr{
+			spatial(remoteSpatialDistanceFunctionID, 0),
+			spatial(remoteSpatialDistanceFunctionID, 4),
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, features.SpatialDistanceSemantics,
+		"a nested/new unit overload must fence the whole owner")
+}

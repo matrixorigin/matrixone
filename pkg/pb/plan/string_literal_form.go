@@ -285,6 +285,9 @@ const (
 // ExpressionResultMetadataContracts also requires MORPC v86 because bounded
 // character slicing and fractional temporal conditional results change the
 // serialized result metadata consumed by persisted views and remote workers.
+// SpatialDistanceSemantics requires MORPC v80 because geodetic
+// ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
+// overloads and the distance family adds length-unit overloads.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
@@ -302,6 +305,7 @@ type RemoteExpressionFeatures struct {
 	TOBase64ResultContracts           bool
 	IPFunctionResultContracts         bool
 	ExpressionResultMetadataContracts bool
+	SpatialDistanceSemantics bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -319,7 +323,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.IntegerParameterCoercion ||
 		features.TOBase64ResultContracts ||
 		features.IPFunctionResultContracts ||
-		features.ExpressionResultMetadataContracts
+		features.ExpressionResultMetadataContracts ||
+		features.SpatialDistanceSemantics
 }
 
 func isBoundedConditionalStringDomain(fn *Function) bool {
@@ -348,6 +353,9 @@ const (
 	remoteIPIsIPv4MappedFunctionID int32 = 399
 	remoteTOBase64FunctionID       int32 = 213
 	remoteINETNTOAFunctionID       int32 = 395
+	remoteSpatialDistanceFunctionID   int32 = 421
+	remoteFrechetDistanceFunctionID   int32 = 506
+	remoteHausdorffDistanceFunctionID int32 = 507
 )
 
 func isValidIntegerArgumentSource(id, source int32) bool {
@@ -780,6 +788,21 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			if !features.IPFunctionSemantics && fn != nil && fn.Func != nil {
 				features.IPFunctionSemantics = isRemoteIPFunction(int32(fn.Func.Obj >> 32))
+			}
+			if !features.SpatialDistanceSemantics && fn != nil && fn.Func != nil {
+				functionID := int32(fn.Func.Obj >> 32)
+				overloadID := int32(fn.Func.Obj)
+				switch functionID {
+				case remoteFrechetDistanceFunctionID, remoteHausdorffDistanceFunctionID:
+					// The existing two-argument overloads now dispatch geodetic
+					// semantics for SRID 4326, so every overload is fenced.
+					features.SpatialDistanceSemantics = true
+				case remoteSpatialDistanceFunctionID:
+					// ST_DISTANCE overloads 4/5 are the new length-unit forms.
+					// Legacy two-argument and explicit-SRID forms retain their
+					// historical wire contract.
+					features.SpatialDistanceSemantics = overloadID == 4 || overloadID == 5
+				}
 			}
 			return nil
 		})
