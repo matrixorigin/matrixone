@@ -835,6 +835,19 @@ class WorkerContractTest(unittest.TestCase):
         visible = valid.slice(1, 1)
         self.assertEqual(visible.to_pylist(), worker._output_array(visible, vector_descriptor, 1).to_pylist())
 
+    def test_descriptor_rejects_unused_domain_fields(self):
+        invalid = [
+            {"type_id": worker.DATE, "width": 1, "offset_width": 32, "temporal_encoding": "sql_zero_struct"},
+            {"type_id": worker.DATETIME, "width": 1, "offset_width": 32, "temporal_encoding": "sql_zero_struct"},
+            {"type_id": worker.TIME, "width": 1, "scale": 6, "offset_width": 32},
+            {"type_id": worker.VARCHAR, "width": 16, "scale": 1, "charset": 3, "offset_width": 32},
+            {"type_id": worker.VARBINARY, "width": 16, "scale": 1, "charset": 1, "offset_width": 32},
+        ]
+        for descriptor in invalid:
+            with self.subTest(descriptor=descriptor):
+                with self.assertRaises(ValueError):
+                    worker._field("value", descriptor)
+
     def test_scalar_vector_null_keeps_fixed_size_child_slots(self):
         descriptor = {"type_id": worker.VECF32, "width": 2, "offset_width": 0}
         array = worker._output_array(
