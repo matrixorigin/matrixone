@@ -384,6 +384,7 @@ func (s *service) registerExecutorsLocked() {
 	)
 	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc, cdcExecutor)
 	s.task.runner.RegisterExecutor(task.TaskCode_InitCdcStableEpoch, cdcExecutor)
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdcLosslessStart, cdcExecutor)
 
 	s.task.runner.RegisterExecutor(task.TaskCode_ISCPExecutor,
 		iscp.ISCPTaskExecutorFactory(

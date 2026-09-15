@@ -1266,6 +1266,82 @@ func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
 	}).BuildTaskMetadata()
 	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
+	lossless := (&CDCCreateTaskOptions{
+		TaskId: "no-full-hlc", NoFull: true,
+		ExtraOpts: fmt.Sprintf(`{"%s":"%s"}`, cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC),
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdcLosslessStart, lossless.Executor)
+}
+
+func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	snapshot := timestamp.Timestamp{PhysicalTime: time.Date(2026, 9, 9, 1, 2, 3, 456789000, time.UTC).UnixNano()}
+
+	opts := &CDCCreateTaskOptions{NoFull: true}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(snapshot)
+	opts.setNoFullStartTS(txnOp)
+	require.Equal(t, snapshot.DebugString(), opts.StartTs)
+
+	// An explicit StartTs remains the caller's activation boundary.
+	opts.StartTs = "2026-09-01T00:00:00Z"
+	opts.setNoFullStartTS(txnOp)
+	require.Equal(t, "2026-09-01T00:00:00Z", opts.StartTs)
+
+	noSnapshot := &CDCCreateTaskOptions{NoFull: true}
+	noSnapshot.setNoFullStartTS(nil)
+	require.Empty(t, noSnapshot.StartTs)
+
+	zeroTxnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	zeroTxnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{})
+	noSnapshot.setNoFullStartTS(zeroTxnOp)
+	require.Empty(t, noSnapshot.StartTs)
+}
+
+func TestCDCCreateTaskOptionsValidateAndFillNoFullSnapshot(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	snapshot := timestamp.Timestamp{PhysicalTime: 1710000000000000000, LogicalTime: 7}
+	txnOp.EXPECT().SnapshotTS().Return(snapshot)
+	txnOp.EXPECT().SetFootPrints(gomock.Any(), gomock.Any()).AnyTimes()
+	ses.txnHandler.txnOp = txnOp
+
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn,
+		func(context.Context, string, string, string, int, string) (*sql.DB, error) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			mock.ExpectClose()
+			return db, nil
+		})
+	defer stubOpenDbConn.Reset()
+	stubCheckPitr := gostub.Stub(&CDCCheckPitrGranularity,
+		func(context.Context, BackgroundExec, string, *cdc.PatternTuples, ...int64) error {
+			return nil
+		})
+	defer stubCheckPitr.Reset()
+
+	req := &CDCCreateTaskRequest{
+		TaskName:  "no-full-watermark",
+		SourceUri: "mysql://root:111@127.0.0.1:6001",
+		SinkType:  cdc.CDCSinkType_MySQL,
+		SinkUri:   "mysql://root:111@127.0.0.1:3306",
+		Tables:    "db1.t1",
+		Option: []string{
+			cdc.CDCRequestOptions_NoFull, "true",
+			cdc.CDCRequestOptions_Level, cdc.CDCPitrGranularity_Table,
+		},
+	}
+
+	var opts CDCCreateTaskOptions
+	require.NoError(t, opts.ValidateAndFill(context.Background(), ses, req))
+	require.Equal(t, snapshot.DebugString(), opts.StartTs)
+	require.Equal(t, task.TaskCode_InitCdcLosslessStart, opts.BuildTaskMetadata().Executor)
+	require.Contains(t, opts.ExtraOpts, cdc.CDCInitialSnapshotProtocolNoFullHLC)
 }
 
 func TestRegisterCdcExecutor(t *testing.T) {
@@ -5797,6 +5873,19 @@ func Test_parseTimestamp(t *testing.T) {
 
 	_, err = CDCStrToTime("2006-01-02T15:04:05-07:00", nil)
 	assert.NoError(t, err)
+}
+
+func TestCDCStrToTSRoundTripPreservesLogicalTime(t *testing.T) {
+	want := types.BuildTS(1710000000000000000, 3)
+	got, err := CDCStrToTS(want.ToString())
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+
+	// Existing wall-clock task rows and explicit user timestamps retain the
+	// historical logical-zero interpretation.
+	legacy, err := CDCStrToTS("2026-09-09T01:02:03.456789Z")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), int64(legacy.Logical()))
 }
 
 func TestCDCParseGranularityTuple(t *testing.T) {

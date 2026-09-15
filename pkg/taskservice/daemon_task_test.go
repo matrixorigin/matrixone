@@ -762,6 +762,38 @@ func TestStableCDCHeartbeatFailureRecoveryAndSupersession(t *testing.T) {
 	require.Same(t, replacement, published)
 }
 
+func TestLosslessCDCHeartbeatFailureCancelsSupersededGeneration(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_InitCdcLosslessStart
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = claim.LastRun
+	mustAddTestDaemonTask(t, store, 1, claim)
+
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	// A newer durable generation makes the old lossless-start heartbeat fail
+	// with ErrInvalidTask. The old generation must relinquish its local claim
+	// and cancel its CDC routine before the replacement can run.
+	superseding := claim
+	superseding.TaskRunner = "r2"
+	superseding.LastRun = nextDaemonClaimTime(claim.LastRun, time.Now())
+	superseding.LastHeartbeat = time.Now()
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
+	r.doSendHeartbeat(context.Background())
+
+	select {
+	case <-routine.cancelC:
+	case <-time.After(time.Second):
+		t.Fatal("superseded lossless CDC generation was not cancelled")
+	}
+	require.False(t, r.exists(claim.ID))
+}
+
 func TestStartDaemonTaskSerializesLocalAdmission(t *testing.T) {
 	r, store := newDaemonHandleTestRunner(t)
 	hook := &serviceWithDaemonHook{TaskService: r.service}

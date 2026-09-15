@@ -993,6 +993,21 @@ func TestTableChangeStream_StaleRead_NoRetryWithStartTs(t *testing.T) {
 	require.Equal(t, 0, h.Sinker().ResetCountSnapshot(), "sinker reset should not occur on fatal stale read")
 }
 
+func TestTableChangeStream_NoFullStaleReadDoesNotAdvanceDurableStart(t *testing.T) {
+	startTs := types.BuildTS(100, 5)
+	h := newTableStreamHarness(t, withHarnessNoFull(true), withHarnessStartTs(startTs))
+	defer h.Close()
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 10}
+	})
+
+	h.SetCollectError(moerr.NewErrStaleReadNoCtx("db1", "t1"))
+	err := h.RunStream(h.NewActiveRoutine())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot recover")
+	require.False(t, h.Stream().GetRetryable())
+}
+
 func TestTableChangeStream_StaleReadRetry_WatermarkUpdateFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeoutCause(context.Background(), 2*time.Second, moerr.CauseFinishTxnOp)
 	defer cancel()
@@ -2663,6 +2678,33 @@ func TestTableChangeStream_WaitsForStableEpochVisibility(t *testing.T) {
 	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
 	assert.Empty(t, h.CollectCallsSnapshot())
 	assert.Zero(t, updater.updateCalls.Load())
+}
+
+func TestTableChangeStreamPreservesLogicalStartBoundary(t *testing.T) {
+	start := types.BuildTS(100, 5)
+	updater := newWatermarkUpdaterStub()
+	h := newTableStreamHarness(t,
+		withHarnessNoFull(true),
+		withHarnessStartTs(start),
+		withHarnessWatermarkUpdater(updater, nil),
+	)
+	h.Stream().start.Done() // invoke processOneRound directly
+	require.NoError(t, updater.RemoveCachedWM(h.Context(), h.Stream().watermarkKey, WatermarkCleanupAll))
+	_, err := updater.GetOrAddCommitted(h.Context(), h.Stream().watermarkKey, &start)
+	require.NoError(t, err)
+	h.SetGetSnapshotTS(func(client.TxnOperator) timestamp.Timestamp {
+		return timestamp.Timestamp{PhysicalTime: 200, LogicalTime: 10}
+	})
+	h.SetCollectFactory(func(fromTs, toTs types.TS) (engine.ChangesHandle, error) {
+		require.Equal(t, start, fromTs)
+		require.Equal(t, types.BuildTS(200, 10), toTs)
+		return newImmediateChangesHandle(nil), nil
+	})
+
+	require.NoError(t, h.Stream().processOneRound(h.Context(), h.NewActiveRoutine()))
+	calls := h.CollectCallsSnapshot()
+	require.Len(t, calls, 1)
+	require.Equal(t, start, calls[0].from)
 }
 
 func TestTableChangeStream_StableSnapshotStaleReadFailsClosed(t *testing.T) {
