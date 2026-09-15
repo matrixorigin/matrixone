@@ -1253,10 +1253,6 @@ func buildValueByteJsonWithProtocol(
 	}
 }
 
-func buildJSONArrayValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, error) {
-	return buildJSONArrayValueByteJsonWithProtocol(vec, row, 0)
-}
-
 func buildJSONArrayValueByteJsonWithProtocol(
 	vec *vector.Vector,
 	row uint64,
