@@ -653,13 +653,25 @@ func hllAggregateBase(exec AggFuncExec) (*aggExec, hllStateFamily, bool) {
 }
 
 func makeHLLStateInfo(id int64, arg, ret types.Type) aggInfo {
+	return makeHLLStateInfoWithVersion(id, arg, ret, hllVersion)
+}
+
+func makeLegacyHLLStateInfo(id int64, arg, ret types.Type) aggInfo {
+	return makeHLLStateInfoWithVersion(id, arg, ret, hllLegacyVersion)
+}
+
+func makeHLLStateInfoWithVersion(id int64, arg, ret types.Type, version byte) aggInfo {
+	makeSketch := makeHllSketch
+	if version == hllLegacyVersion {
+		makeSketch = makeLegacyHllSketch
+	}
 	return aggInfo{
 		aggId:                    id,
 		argTypes:                 []types.Type{arg},
 		retType:                  ret,
-		makeMarshalerUnmarshaler: makeHllSketch,
+		makeMarshalerUnmarshaler: makeSketch,
 		boundedOpaqueState:       true,
-		stableEmptyOpaqueState:   stableEmptyHLLState(hllVersion),
+		stableEmptyOpaqueState:   stableEmptyHLLState(version),
 	}
 }
 
@@ -784,9 +796,11 @@ type hllAddExec struct {
 }
 
 func makeHllAdd(mp *mpool.MPool, id int64, arg types.Type) AggFuncExec {
-	return &hllAddExec{hllStateExec: hllStateExec{family: hllStateFamilyAdd, aggExec: aggExec{
+	// HLL_ADD_AGG output is persisted and consumed by HLL_MERGE_AGG. Keep its
+	// legacy wire/hash semantics so an upgrade can append to existing states.
+	return &hllAddExec{hllStateExec: hllStateExec{family: hllStateFamilyAdd, legacyWireState: true, aggExec: aggExec{
 		mp:      mp,
-		aggInfo: makeHLLStateInfo(id, arg, types.T_varbinary.ToType()),
+		aggInfo: makeLegacyHLLStateInfo(id, arg, types.T_varbinary.ToType()),
 	}}}
 }
 
@@ -842,9 +856,10 @@ type hllMergeExec struct {
 }
 
 func makeHllMerge(mp *mpool.MPool, id int64, arg types.Type) AggFuncExec {
-	return &hllMergeExec{hllStateExec: hllStateExec{family: hllStateFamilyMerge, aggExec: aggExec{
+	// HLL_MERGE_AGG must accept and emit the same v2 state as HLL_ADD_AGG.
+	return &hllMergeExec{hllStateExec: hllStateExec{family: hllStateFamilyMerge, legacyWireState: true, aggExec: aggExec{
 		mp:      mp,
-		aggInfo: makeHLLStateInfo(id, arg, types.T_varbinary.ToType()),
+		aggInfo: makeLegacyHLLStateInfo(id, arg, types.T_varbinary.ToType()),
 	}}}
 }
 
