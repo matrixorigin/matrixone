@@ -91,3 +91,67 @@ func (node CreateView) TypeName() string { return "tree.CreateView" }
 
 func (node *CreateView) GetStatementType() string { return "Create View" }
 func (node *CreateView) GetQueryType() string     { return QueryTypeDDL }
+
+// WithViewColumnNames returns a shallow AST copy whose output expressions
+// carry the explicit column names from CREATE/ALTER VIEW. The aliases are
+// applied only to the left-most output projection, which is the projection
+// that supplies the column headings for a UNION. Expressions and all clauses
+// remain shared and are never mutated.
+func WithViewColumnNames(stmt *Select, colNames IdentifierList) *Select {
+	if stmt == nil || len(colNames) == 0 {
+		return stmt
+	}
+	rewritten, ok := withViewColumnNames(stmt.Select, colNames)
+	if !ok {
+		return stmt
+	}
+	copyStmt := *stmt
+	copyStmt.Select = rewritten
+	return &copyStmt
+}
+
+func withViewColumnNames(stmt SelectStatement, colNames IdentifierList) (SelectStatement, bool) {
+	switch selectStmt := stmt.(type) {
+	case *SelectClause:
+		if len(selectStmt.Exprs) != len(colNames) {
+			return stmt, false
+		}
+		copyClause := *selectStmt
+		copyClause.Exprs = append(SelectExprs(nil), selectStmt.Exprs...)
+		for i := range colNames {
+			copyClause.Exprs[i].As = NewCStr(string(colNames[i]), 0)
+		}
+		return &copyClause, true
+	case *Select:
+		rewritten, ok := withViewColumnNames(selectStmt.Select, colNames)
+		if !ok {
+			return stmt, false
+		}
+		copyStmt := *selectStmt
+		copyStmt.Select = rewritten
+		return &copyStmt, true
+	case *ParenSelect:
+		if selectStmt.Select == nil {
+			return stmt, false
+		}
+		rewritten, ok := withViewColumnNames(selectStmt.Select, colNames)
+		if !ok {
+			return stmt, false
+		}
+		inner := *selectStmt.Select
+		inner.Select = rewritten
+		copyParen := *selectStmt
+		copyParen.Select = &inner
+		return &copyParen, true
+	case *UnionClause:
+		rewritten, ok := withViewColumnNames(selectStmt.Left, colNames)
+		if !ok {
+			return stmt, false
+		}
+		copyUnion := *selectStmt
+		copyUnion.Left = rewritten
+		return &copyUnion, true
+	default:
+		return stmt, false
+	}
+}

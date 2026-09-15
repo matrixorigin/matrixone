@@ -162,19 +162,23 @@ func viewMetadataFromPersistedData(ctx context.Context, persisted string) (persi
 	// Legacy ViewData.Stmt can be the entire COM_QUERY text. View binding uses
 	// its first parsed statement, so metadata must retain that compatibility.
 	var selectStmt *tree.Select
+	var columnNames tree.IdentifierList
 	checkOption := "NONE"
 	switch statement := statements[0].(type) {
 	case *tree.CreateView:
 		selectStmt = statement.AsSource
+		columnNames = statement.ColNames
 		checkOption = checkOptionOrNone(statement.CheckOption)
 	case *tree.AlterView:
 		selectStmt = statement.AsSource
+		columnNames = statement.ColNames
 	default:
 		return persistedViewMetadata{}, false
 	}
 	if selectStmt == nil {
 		return persistedViewMetadata{}, false
 	}
+	selectStmt = tree.WithViewColumnNames(selectStmt, columnNames)
 	return persistedViewMetadata{definition: tree.StringWithOpts(
 		selectStmt, dialect.MYSQL, tree.WithQuoteString(true),
 		tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()), checkOption: checkOption}, true
