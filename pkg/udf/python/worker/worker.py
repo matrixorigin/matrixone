@@ -1353,6 +1353,10 @@ def _validate_field(field: pa.Field, name: str, descriptor: Dict[str, Any]) -> N
         raise ValueError(f"TYPE_CONTRACT: Arrow field name {field.name!r} does not match {name!r}")
     if field.type != expected.type:
         raise ValueError(f"TYPE_CONTRACT: Arrow type {field.type} does not match {expected.type}")
+    if field.nullable != expected.nullable:
+        raise ValueError(
+            f"TYPE_CONTRACT: Arrow field nullable={field.nullable} does not match {expected.nullable}"
+        )
     if field.metadata != expected.metadata:
         raise ValueError("TYPE_CONTRACT: Arrow logical metadata does not match the frozen descriptor")
 
