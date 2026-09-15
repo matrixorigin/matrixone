@@ -176,6 +176,11 @@ func (d *countDistinctArgumentDrain) ForEach(
 		for row := 0; row < int(state.length); row++ {
 			group := chunk*AggBatchSize + row
 			if err := state.iter(uint16(row), func(key []byte) error {
+				// The bounded exact-count spill path hashes payloads again in
+				// Group.  It must receive the membership key, not a retained
+				// representative used by value-producing DISTINCT aggregates;
+				// otherwise canonical-equivalent values can be counted twice after
+				// crossing a spill boundary.
 				return fn(group, aggPayloadFromKey(&d.exec.aggInfo, key))
 			}); err != nil {
 				return err

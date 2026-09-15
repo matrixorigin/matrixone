@@ -1942,7 +1942,7 @@ func validateRemoteAggregateProtocol(
 			agg.GetAggID() == aggexec.AggIdOfHllMerge) &&
 			(proc == nil || !supportsRemoteHLL(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"HLL remote execution requires MORPC protocol version 73",
+				"HLL remote execution requires MORPC protocol version 74",
 			)
 		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
