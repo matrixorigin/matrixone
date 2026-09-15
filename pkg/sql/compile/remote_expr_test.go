@@ -579,11 +579,14 @@ func TestApproxPercentileRemoteProtocolValidation(t *testing.T) {
 	)}
 
 	require.ErrorContains(t, validateRemoteAggregateProtocol(nil, percentile),
-		"requires MORPC protocol version 73")
+		"requires MORPC protocol version 74")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
-		"requires MORPC protocol version 73")
+		"requires MORPC protocol version 74")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 74")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
 
 	// Rollback must reject both the new DESC config and ordinary ASC state: the
@@ -591,7 +594,7 @@ func TestApproxPercentileRemoteProtocolValidation(t *testing.T) {
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 	percentile[0].SetExtraConfig([]byte("0.5"))
 	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
-		"requires MORPC protocol version 73")
+		"requires MORPC protocol version 74")
 }
 
 func TestHLLRemoteProtocolValidation(t *testing.T) {
@@ -612,11 +615,14 @@ func TestHLLRemoteProtocolValidation(t *testing.T) {
 		)}
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
-			"HLL remote execution requires MORPC protocol version 74")
+			"HLL remote execution requires MORPC protocol version 75")
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
 		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
-			"HLL remote execution requires MORPC protocol version 74")
+			"HLL remote execution requires MORPC protocol version 75")
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 75")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
 		require.NoError(t, validateRemoteAggregateProtocol(proc, agg))
 	}
 }
