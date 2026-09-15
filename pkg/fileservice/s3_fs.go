@@ -993,9 +993,8 @@ read_s3:
 }
 
 func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) error {
-	// The full-object merge is still stalled after its bounded wait. Read exact
-	// entry ranges sequentially so this follower can progress without fetching
-	// the potentially much larger sparse envelope.
+	// Read exact entry ranges when a full-object cache fill cannot serve this
+	// request, without fetching the potentially much larger sparse envelope.
 	for i := range vector.Entries {
 		if vector.Entries[i].done {
 			continue
@@ -1110,6 +1109,15 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		if done {
 			return nil
 		}
+		// A skipped cache fill does not imply the cache file is readable: another
+		// writer may still own its asynchronous publication after releasing the
+		// I/O merge. Fetch only the missing ranges instead of reading the whole
+		// object again without a cache publication to amortize that read.
+		if _, _, expensive := vector.expensiveMinimalRangeRead(); expensive {
+			return s.readEntriesIndividually(ctx, vector)
+		}
+		min, max = vector.readMinimalRange()
+		readFullObject = false
 	}
 
 	// a function to get data lazily
@@ -1434,8 +1442,8 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		return true, err
 	}
 	if !stream.opened {
-		// The cache already has an index entry. Fall back to the regular read path,
-		// which can serve the request from cache without opening another S3 reader.
+		// SetFile may skip an existing file or a busy publication reservation.
+		// The caller must fall back without assuming a cache file is readable.
 		return false, nil
 	}
 	if stream.err != nil {
