@@ -16,6 +16,8 @@ package bytejson
 
 import (
 	"context"
+	"encoding/binary"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -163,6 +165,31 @@ func TestJSONTableArrayBuilderAccountsForStorageCompatibleExpansion(t *testing.T
 			require.Equal(t, test.wantBytes, len(encoded))
 			require.Greater(t, len(encoded), rawLimit)
 
+			exact, err := NewJSONTableArrayBuilder(test.wantBytes)
+			require.NoError(t, err)
+			for _, value := range test.values {
+				require.NoError(t, exact.Append(value))
+			}
+			exactArray, err := exact.Build()
+			require.NoError(t, err)
+			exactEncoded, err := exactArray.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, test.wantBytes, len(exactEncoded))
+
+			oneOver, err := NewJSONTableArrayBuilder(test.wantBytes - 1)
+			require.NoError(t, err)
+			for i, value := range test.values {
+				err = oneOver.Append(value)
+				if i == len(test.values)-1 {
+					require.ErrorIs(t, err, ErrJSONTableCellLimit)
+				} else {
+					require.NoError(t, err)
+				}
+			}
+			require.Less(t, oneOver.Count(), len(test.values))
+			exact.Close()
+			oneOver.Close()
+
 			bounded, err := NewJSONTableArrayBuilder(rawLimit)
 			require.NoError(t, err)
 			defer bounded.Close()
@@ -204,10 +231,101 @@ func TestJSONTableArrayBuilderAccountsForNestedStorageExpansion(t *testing.T) {
 	require.Equal(t, 87, len(encoded))
 	require.Greater(t, len(encoded), rawLimit)
 
+	exact, err := NewJSONTableArrayBuilder(len(encoded))
+	require.NoError(t, err)
+	for _, value := range values {
+		require.NoError(t, exact.Append(value))
+	}
+	exactArray, err := exact.Build()
+	require.NoError(t, err)
+	exactEncoded, err := exactArray.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, len(encoded), len(exactEncoded))
+
+	oneOver, err := NewJSONTableArrayBuilder(len(encoded) - 1)
+	require.NoError(t, err)
+	require.NoError(t, oneOver.Append(values[0]))
+	require.ErrorIs(t, oneOver.Append(values[1]), ErrJSONTableCellLimit)
+	require.Equal(t, 1, oneOver.Count())
+	exact.Close()
+	oneOver.Close()
+
 	bounded, err := NewJSONTableArrayBuilder(rawLimit)
 	require.NoError(t, err)
 	defer bounded.Close()
 	require.NoError(t, bounded.Append(values[0]))
 	require.ErrorIs(t, bounded.Append(values[1]), ErrJSONTableCellLimit)
 	require.Equal(t, 1, bounded.Count())
+}
+
+func TestJSONTableArrayBuilderRejectsLargeOpaqueBeforeEncoding(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		payloadLength int
+	}{
+		{name: "1MiB", payloadLength: 1 << 20},
+		{name: "8MiB", payloadLength: 8 << 20},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payloadLength := test.payloadLength
+			// Construct the input before measuring. The witness must charge the
+			// rejected storage conversion, rather than the caller's source buffer.
+			data := make([]byte, binary.MaxVarintLen64+payloadLength)
+			prefixLength := binary.PutUvarint(data, uint64(payloadLength))
+			data = data[:prefixLength+payloadLength]
+			value := ByteJson{Type: TpCodeOpaque, Data: data}
+
+			builder, err := NewJSONTableArrayBuilder(14)
+			require.NoError(t, err)
+			runtime.GC()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			err = builder.Append(value)
+			runtime.ReadMemStats(&after)
+
+			require.ErrorIs(t, err, ErrJSONTableCellLimit)
+			require.Zero(t, builder.Count())
+			require.Equal(t, 1+headerSize, builder.Bytes())
+			builder.Close()
+
+			// A rejected cell may allocate a small error or bookkeeping object,
+			// but it must not allocate an input-sized base64 representation.
+			require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(payloadLength/2))
+			heapDelta := uint64(0)
+			if after.HeapAlloc > before.HeapAlloc {
+				heapDelta = after.HeapAlloc - before.HeapAlloc
+			}
+			t.Logf("payload=%d total_alloc_delta=%d heap_alloc_delta=%d", payloadLength, after.TotalAlloc-before.TotalAlloc, heapDelta)
+			require.Less(t, heapDelta, uint64(payloadLength/2))
+		})
+	}
+}
+
+func TestJSONTableArrayBuilderNestedObjectStorageSize(t *testing.T) {
+	opaque := ByteJson{Type: TpCodeOpaque, Data: appendBinaryString(nil, "ab")}
+	nested, err := CreateByteJSON(map[string]any{"key": opaque})
+	require.NoError(t, err)
+
+	unbounded, err := NewJSONTableArrayBuilder(1024)
+	require.NoError(t, err)
+	require.NoError(t, unbounded.Append(nested))
+	array, err := unbounded.Build()
+	require.NoError(t, err)
+	encoded, err := array.Marshal()
+	require.NoError(t, err)
+	unbounded.Close()
+
+	for _, limit := range []int{len(encoded), len(encoded) - 1} {
+		bounded, err := NewJSONTableArrayBuilder(limit)
+		require.NoError(t, err)
+		err = bounded.Append(nested)
+		if limit == len(encoded) {
+			require.NoError(t, err)
+			require.Equal(t, 1, bounded.Count())
+		} else {
+			require.ErrorIs(t, err, ErrJSONTableCellLimit)
+			require.Zero(t, bounded.Count())
+		}
+		bounded.Close()
+	}
 }
