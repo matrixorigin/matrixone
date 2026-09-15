@@ -1784,13 +1784,28 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 }
 
 func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.GroupAggFuncExec, error) {
-	return ctr.makeAggListWithAllocation(aggExprs, ctr.aggregateAllocation)
+	return ctr.makeAggListForMode(aggExprs, ctr.aggregateAllocation, ctr.mtyp == H0)
 }
 
 func (ctr *container) makeSpillAggList(
 	aggExprs []aggexec.AggFuncExecExpression,
 ) ([]aggexec.GroupAggFuncExec, error) {
-	return ctr.makeAggListWithAllocation(aggExprs, ctr.spillAggregateAllocation)
+	return ctr.makeAggListForMode(aggExprs, ctr.spillAggregateAllocation, ctr.mtyp == H0)
+}
+
+func (ctr *container) makeSpillAggListForMode(
+	aggExprs []aggexec.AggFuncExecExpression,
+	singleGroup bool,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListForMode(aggExprs, ctr.spillAggregateAllocation, singleGroup)
+}
+
+func (ctr *container) makeAggListForMode(
+	aggExprs []aggexec.AggFuncExecExpression,
+	allocation *aggexec.AllocationAccount,
+	singleGroup bool,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListWithAllocation(aggExprs, allocation, singleGroup)
 }
 
 func (ctr *container) buildSpillReloadHashTable(
@@ -1820,6 +1835,7 @@ func (ctr *container) buildSpillReloadHashTable(
 func (ctr *container) makeAggListWithAllocation(
 	aggExprs []aggexec.AggFuncExecExpression,
 	allocation *aggexec.AllocationAccount,
+	singleGroup bool,
 ) ([]aggexec.GroupAggFuncExec, error) {
 	var err error
 	aggList := make([]aggexec.GroupAggFuncExec, len(aggExprs))
@@ -1830,7 +1846,6 @@ func (ctr *container) makeAggListWithAllocation(
 				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
 			)
 		}
-		singleGroup := ctr.mtyp == H0
 		if ctr.legacyTextMinMax || ctr.legacyVarianceState ||
 			ctr.legacyDecimalSumState || ctr.legacyDecimalSumResult {
 			if singleGroup {
@@ -1858,15 +1873,15 @@ func (ctr *container) makeAggListWithAllocation(
 			return nil, err
 		}
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
-		// mtyp is the logical Group mode and survives resident-spill resets.
-		// Preserve it in each rebuilt GROUP_CONCAT executor even when the
-		// current spill bucket contains only one group.
-		aggexec.SetGroupConcatMultiGroupContext(aggList[i], ctr.mtyp != H0)
+		// Preserve the mode used to construct this list. A merge partial's wire
+		// header may be the first authoritative mode before ctr.mtyp is published;
+		// deriving this from ctr.mtyp would configure a grouped median as H0.
+		aggexec.SetGroupConcatMultiGroupContext(aggList[i], !singleGroup)
 		aggexec.SetGroupConcatSourceRowsTrusted(
 			aggList[i], !ctr.groupConcatSourceRowsUntrusted)
 	}
 
-	if ctr.mtyp != H0 {
+	if !singleGroup {
 		aggexec.SyncAggregatorsToChunkSize(aggList, aggBatchSize)
 	} else {
 		aggexec.SyncAggregatorsToChunkSize(aggList, 1)

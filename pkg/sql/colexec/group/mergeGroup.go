@@ -444,118 +444,125 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 		return moerr.NewInvalidInputNoCtx("merge-group partial metadata is missing")
 	}
 	ctr.freeSpillAggList()
-	var err error
-	ctr.spillAggList, err = ctr.makeSpillAggList(mergeGroup.Aggs)
+	reader := bytes.NewReader(bat.ExtraBuf)
+	incomingType, err := types.ReadInt32(reader)
 	if err != nil {
 		return err
 	}
+	incomingNullable, err := types.ReadBool(reader)
+	if err != nil {
+		return err
+	}
+	if incomingType < H0 || incomingType > HStr {
+		return moerr.NewInvalidInputNoCtxf(
+			"invalid merge-group hash type %d", incomingType)
+	}
+	if incomingType == H0 && len(bat.Vecs) != 0 ||
+		incomingType != H0 && len(bat.Vecs) == 0 {
+		return moerr.NewInvalidInputNoCtx(
+			"merge-group hash type does not match group columns")
+	}
+	if incomingType == H0 && bat.RowCount() != 1 {
+		return moerr.NewInvalidInputNoCtx(
+			"merge-group H0 partial must contain exactly one row")
+	}
+	incomingHashVectors := ctr.hashKeyVectors(bat.Vecs)
+	incomingGroupingAware := incomingType == HStr &&
+		mergeGroupHashKeyHasGrouping(incomingHashVectors)
+	if ctr.mergePartialMetadataSet &&
+		(ctr.mtyp != incomingType || ctr.keyNullable != incomingNullable ||
+			(!ctr.groupingAware && incomingGroupingAware)) {
+		return moerr.NewInvalidInputNoCtx(
+			"inconsistent merge-group partial metadata")
+	}
+	if err := validateMergeGroupHashMetadata(
+		incomingType,
+		incomingNullable,
+		incomingHashVectors,
+	); err != nil {
+		return err
+	}
 
-	{
-		reader := bytes.NewReader(bat.ExtraBuf)
-		incomingType, err := types.ReadInt32(reader)
+	// The wire header is authoritative for the aggregate state grammar. Build
+	// the temporary list from that mode before publishing ctr.mtyp; a fresh
+	// MergeGroup starts at H0 even when its first partial is grouped (H8/HStr).
+	nAggs, err := types.ReadInt32(reader)
+	if err != nil {
+		return err
+	}
+	if nAggs < 0 {
+		return moerr.NewInvalidInputNoCtx("negative merge-group aggregate count")
+	}
+	ctr.spillAggList, err = ctr.makeSpillAggListForMode(
+		mergeGroup.Aggs, incomingType == H0)
+	if err != nil {
+		return err
+	}
+	if len(ctr.aggList) != len(mergeGroup.Aggs) {
+		ctr.aggList, err = ctr.makeAggListForMode(
+			mergeGroup.Aggs, ctr.aggregateAllocation, incomingType == H0)
 		if err != nil {
 			return err
 		}
-		incomingNullable, err := types.ReadBool(reader)
-		if err != nil {
+		ctr.configureOrderedAggSpill(proc, mergeGroup.OpAnalyzer, ctr.aggList)
+	}
+	if int(nAggs) != len(ctr.spillAggList) {
+		return moerr.NewInternalError(
+			proc.Ctx, "nAggs != len(mergeGroup.ctr.spillAggList)")
+	}
+	for i := int32(0); i < nAggs; i++ {
+		if err := ctr.spillAggList[i].UnmarshalFromReader(reader, ctr.mp); err != nil {
 			return err
 		}
-		if incomingType < H0 || incomingType > HStr {
-			return moerr.NewInvalidInputNoCtxf(
-				"invalid merge-group hash type %d", incomingType)
-		}
-		if incomingType == H0 && len(bat.Vecs) != 0 ||
-			incomingType != H0 && len(bat.Vecs) == 0 {
-			return moerr.NewInvalidInputNoCtx(
-				"merge-group hash type does not match group columns")
-		}
-		if incomingType == H0 && bat.RowCount() != 1 {
-			return moerr.NewInvalidInputNoCtx(
-				"merge-group H0 partial must contain exactly one row")
-		}
-		incomingHashVectors := ctr.hashKeyVectors(bat.Vecs)
-		incomingGroupingAware := incomingType == HStr &&
-			mergeGroupHashKeyHasGrouping(incomingHashVectors)
-		if ctr.mergePartialMetadataSet &&
-			(ctr.mtyp != incomingType || ctr.keyNullable != incomingNullable ||
-				(!ctr.groupingAware && incomingGroupingAware)) {
-			return moerr.NewInvalidInputNoCtx(
-				"inconsistent merge-group partial metadata")
-		}
-		if err := validateMergeGroupHashMetadata(
-			incomingType,
-			incomingNullable,
-			incomingHashVectors,
-		); err != nil {
-			return err
-		}
-		ctr.mtyp = incomingType
-		ctr.keyNullable = incomingNullable
-		// The plan-level declaration stays true even when this particular partial
-		// contains only the fully active grouping set and no sentinel bits. For
-		// compatibility with an undeclared single grouping partial, the first
-		// partial may still promote the hash grammar before the table is built.
-		ctr.groupingAware = ctr.groupingAware || incomingGroupingAware
-		ctr.mergePartialMetadataSet = true
-
-		if ctr.mtyp == H0 && len(ctr.groupByBatches) == 0 {
-			gb, err := ctr.createNewGroupByBatch(bat.Vecs, 1)
-			if err != nil {
-				return err
-			}
-			gb.SetRowCount(1)
-			ctr.groupByBatches = append(ctr.groupByBatches, gb)
-		}
-
-		nAggs, err := types.ReadInt32(reader)
-		if err != nil {
-			return err
-		}
-		if len(ctr.aggList) != len(mergeGroup.Aggs) {
-			ctr.aggList, err = ctr.makeAggList(mergeGroup.Aggs)
-			if err != nil {
-				return err
-			}
-			ctr.configureOrderedAggSpill(proc, mergeGroup.OpAnalyzer, ctr.aggList)
-		}
-		if int(nAggs) != len(ctr.spillAggList) {
-			return moerr.NewInternalError(
-				proc.Ctx, "nAggs != len(mergeGroup.ctr.spillAggList)")
-		}
-		for i := int32(0); i < nAggs; i++ {
-			if err := ctr.spillAggList[i].UnmarshalFromReader(reader, ctr.mp); err != nil {
-				return err
-			}
-			if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
-				vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
-				return moerr.NewInvalidStateNoCtx(
-					"aggregate binary-string metadata requires MORPCVersion18")
-			}
-			if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
-				vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
-				return moerr.NewInvalidStateNoCtx(
-					"aggregate explicit-text metadata requires MORPCVersion23")
-			}
-			if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
-				vec.HasStringSourceMetadata() && !stringSourceWireEnabled(proc) {
-				return moerr.NewInvalidStateNoCtx(
-					"aggregate string source metadata requires MORPCVersion37")
-			}
-			if err := validateDecodedAggregateGroupCount(
-				ctr.spillAggList[i], bat.RowCount()); err != nil {
-				return err
-			}
-		}
-		if !ctr.prepareParamKindWireV1 && reader.Len() > 0 {
+		if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
+			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
 			return moerr.NewInvalidStateNoCtx(
-				"prepared parameter aggregate trailer requires MORPCVersion12")
+				"aggregate binary-string metadata requires MORPCVersion18")
 		}
-		if ctr.prepareParamKindWireV1 && reader.Len() > 0 {
-			if err := mergeGroup.restorePartialPrepareParamKinds(
-				proc, reader, nAggs); err != nil {
-				return err
-			}
+		if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
+			vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
+			return moerr.NewInvalidStateNoCtx(
+				"aggregate explicit-text metadata requires MORPCVersion23")
 		}
+		if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
+			vec.HasStringSourceMetadata() && !stringSourceWireEnabled(proc) {
+			return moerr.NewInvalidStateNoCtx(
+				"aggregate string source metadata requires MORPCVersion37")
+		}
+		if err := validateDecodedAggregateGroupCount(
+			ctr.spillAggList[i], bat.RowCount()); err != nil {
+			return err
+		}
+	}
+	if !ctr.prepareParamKindWireV1 && reader.Len() > 0 {
+		return moerr.NewInvalidStateNoCtx(
+			"prepared parameter aggregate trailer requires MORPCVersion12")
+	}
+	if ctr.prepareParamKindWireV1 && reader.Len() > 0 {
+		if err := mergeGroup.restorePartialPrepareParamKinds(
+			proc, reader, nAggs); err != nil {
+			return err
+		}
+	}
+
+	// Publish the validated header only after its aggregate payload has been
+	// decoded. A rejected partial must not poison the mode used by a retry.
+	ctr.mtyp = incomingType
+	ctr.keyNullable = incomingNullable
+	// The plan-level declaration stays true even when this particular partial
+	// contains only the fully active grouping set and no sentinel bits. For
+	// compatibility with an undeclared single grouping partial, the first
+	// partial may still promote the hash grammar before the table is built.
+	ctr.groupingAware = ctr.groupingAware || incomingGroupingAware
+	ctr.mergePartialMetadataSet = true
+
+	if ctr.mtyp == H0 && len(ctr.groupByBatches) == 0 {
+		gb, err := ctr.createNewGroupByBatch(bat.Vecs, 1)
+		if err != nil {
+			return err
+		}
+		gb.SetRowCount(1)
+		ctr.groupByBatches = append(ctr.groupByBatches, gb)
 	}
 
 	if ctr.mtyp == H0 || len(bat.Vecs) == 0 {
