@@ -32,7 +32,7 @@ import (
 
 const informationSchemaViewsMaintenancePageSize = 32
 
-var errInformationSchemaViewsProtocolUnavailable = errors.New(
+var errInformationSchemaViewsProtocolUnavailable = moerr.NewNotSupportedNoCtx(
 	"information schema views maintenance protocol is unavailable")
 
 // informationSchemaViewsMaintenanceState is process-local progress. The
@@ -92,6 +92,14 @@ func (s *service) maintainInformationSchemaViews(ctx context.Context) error {
 			exists, viewDefinition, err := versions.CheckViewDefinition(
 				txn, uint32(accountID), sysview.InformationDBConst, "VIEWS")
 			if err != nil {
+				if informationSchemaViewsAccountGone(accountID, err) {
+					// DROP ACCOUNT removes the account-local mo_user and
+					// information_schema objects while the system-account page
+					// is being scanned. The account is no longer a valid repair
+					// target; keep the page transactional and let the next pass
+					// discover any surviving accounts.
+					continue
+				}
 				return err
 			}
 			if exists && viewDefinition == sysview.InformationSchemaViewsDDL {
@@ -108,6 +116,9 @@ func (s *service) maintainInformationSchemaViews(ctx context.Context) error {
 			}
 			if err := v4_0_7.UpgradeInformationSchemaViewsAfterProtocolCheck(
 				txn, uint32(accountID)); err != nil {
+				if informationSchemaViewsAccountGone(accountID, err) {
+					continue
+				}
 				return err
 			}
 		}
@@ -131,6 +142,12 @@ func (s *service) maintainInformationSchemaViews(ctx context.Context) error {
 	// unsupported capability the closure deliberately leaves next unchanged.
 	s.upgrade.informationSchemaViewsMaintenanceState = next
 	return nil
+}
+
+func informationSchemaViewsAccountGone(accountID int32, err error) bool {
+	return uint32(accountID) != catalog.System_Account &&
+		(moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) ||
+			moerr.IsMoErrCode(err, moerr.ErrBadDB))
 }
 
 func informationSchemaViewsProtocolReady(txn executor.TxnExecutor) (bool, error) {
