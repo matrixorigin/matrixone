@@ -102,6 +102,102 @@ func TestPersistedIPFunctionProtocolAdmissionAcrossOwners(t *testing.T) {
 	require.ErrorContains(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, table), "protocol version 72")
 }
 
+func TestPersistedProtocolVersionAdmissionRejectsFutureReader(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	require.NoError(t, RequirePersistedProtocolVersion(
+		proc.Ctx, proc, defines.MORPCLatestVersion))
+	require.ErrorContains(t, RequirePersistedProtocolVersion(
+		proc.Ctx, proc, defines.MORPCLatestVersion+1), "protocol version")
+
+	// A lower local runtime cannot bind an expression whose marker was already
+	// persisted by a newer writer, even when the marker is not IP-specific.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion71)
+	require.ErrorContains(t, RequirePersistedProtocolVersion(
+		proc.Ctx, proc, defines.MORPCVersion72), "protocol version 72")
+}
+
+func TestPersistedProtocolVersionAdmissionHonorsCommittedFloor(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldFloor)
+		} else {
+			if value, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+				rt.CompareAndDeleteGlobalVariables(
+					moruntime.PersistedExpressionProtocolFloor, value)
+			}
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(0))
+	require.ErrorContains(t, RequirePersistedProtocolVersion(
+		proc.Ctx, proc, defines.MORPCVersion72), "protocol version 72")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion72))
+	require.NoError(t, RequirePersistedProtocolVersion(
+		proc.Ctx, proc, defines.MORPCVersion72))
+}
+
+func TestPersistedProtocolVersionAdmissionSeparatesReadAndAuthoringFloors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldReadFloor, hadReadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadReadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	// Phase one has committed the durable read floor but has not completed the
+	// routing/catalog barrier. Existing marked views can be rebound; new
+	// protocol-bearing catalog metadata must still be rejected.
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion72))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(0))
+	require.NoError(t, RequirePersistedProtocolVersion(
+		proc.Ctx, proc, defines.MORPCVersion72))
+	require.ErrorContains(t, RequirePersistedProtocolVersionForAuthoring(
+		proc.Ctx, proc, defines.MORPCVersion72), "protocol version 72")
+
+	// After the enabled/admitted/catalog-fenced snapshot, the write gate opens.
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor,
+		int64(defines.MORPCVersion72))
+	require.NoError(t, RequirePersistedProtocolVersionForAuthoring(
+		proc.Ctx, proc, defines.MORPCVersion72))
+}
+
 func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	proc := ctx.GetProcess()
