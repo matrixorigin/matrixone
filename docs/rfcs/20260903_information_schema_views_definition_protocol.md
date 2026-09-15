@@ -59,19 +59,23 @@ encoding a pipeline containing either function ID; an unknown or unavailable
 destination capability fails closed. The v4.0.6 VIEWS upgrade waits for common
 v73. New tenant initialization installs the new VIEWS DDL only after the local
 coordinator and every CN in the current inventory have positively confirmed v73;
-a mixed, unknown, RPC-failing, or incomplete capability probe aborts the account
-transaction, so it cannot commit a final-version tenant with the predecessor
-metadata. A v72-or-earlier cluster preserves all existing metadata definitions,
+a mixed, unknown, RPC-failing, or incomplete capability probe records the
+predecessor VIEWS definition while still committing the final-version tenant
+row. A bounded post-upgrade reconciliation pass later rechecks common v73 and
+reuses the guarded transactional entry to replace only that predecessor
+definition. A v72-or-earlier cluster preserves all existing metadata definitions,
 including the v58 COLUMNS contract. Pipeline preparation, remote marshal, and
 remote unmarshal reject a
 pipeline containing either function ID below v73. The receiver check protects
 stale prepared work as well as normal sender dispatch. Before admitting any
-v72-or-earlier CN during rollback, operators must pause related metadata plans,
-restore `InformationSchemaViewsLegacyDDL`, wait for the catalog change and
-in-flight work to converge, and only then admit the older binary. Merely draining
-v72-dependent requests is not sufficient because the new persisted view text
-references the functions. The new JSON fields are additive and old binaries keep
-treating them as unknown.
+v72-or-earlier CN during rollback, operators must stop or pause every v73
+binary that can run the reconciliation owner, pause related metadata plans,
+restore `InformationSchemaViewsLegacyDDL` transactionally, wait for the catalog
+change and in-flight work to converge, and verify that no v73 maintenance
+worker can re-install it. Only then may the older binary be admitted. Merely
+draining v72-dependent requests is not sufficient because the new persisted view
+text references the functions. The new JSON fields are additive and old
+binaries keep treating them as unknown.
 
 ## Alternatives
 
@@ -102,10 +106,14 @@ Protocol tests cover the v72 predecessor
 rejection and v73 acceptance at prepare, sender, and receiver boundaries,
 including a mixed-version destination probe and the all-CN capability fence.
 System-view tests prove mixed, unknown, and RPC-failing CN capability probes
-abort before any tenant metadata is written, while an all-v73 inventory uses the
-parser-derived DDL. Tenant initialization tests also reject a predecessor or
-unknown local protocol before the final-version account row is inserted.
-Upgrade tests prove both the v4.0.7 handler and its VIEWS entry require v73. The
+fall back to the predecessor VIEWS DDL, while an all-v73 inventory uses the
+parser-derived DDL. Tenant initialization keeps the final account version but
+records the predecessor VIEWS definition when capability discovery is
+incomplete. The post-upgrade bounded reconciliation pass rediscovers that
+durable definition marker, retries only after a positive all-CN v73 check, and
+uses the same guarded transactional entry to publish the parser-derived
+definition once it is safe. Upgrade tests prove both the v4.0.7 handler and
+its VIEWS entry require v73. The
 predecessor-init test is also the rollback guard: it proves that the restoration
 target has no function reference before an older CN is admitted.
 
