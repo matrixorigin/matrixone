@@ -6989,8 +6989,6 @@ func (c *Compile) checkPitrGranularity(
 			if err != nil {
 				return err
 			}
-			type candidate struct{ dbName, tableName string }
-			candidates := make([]candidate, 0)
 			var validationErr error
 			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 				for i := 0; i < rows; i++ {
@@ -7014,7 +7012,6 @@ func (c *Compile) checkPitrGranularity(
 					if hasForeignKey {
 						continue
 					}
-					candidates = append(candidates, candidate{dbName: dbName, tableName: tableName})
 				}
 				return true
 			})
@@ -7022,24 +7019,9 @@ func (c *Compile) checkPitrGranularity(
 			if validationErr != nil {
 				return validationErr
 			}
-			for _, candidate := range candidates {
-				pkSQL := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = %d AND %s = %s AND %s = %s AND %s = 'p' AND %s <> %s LIMIT 1",
-					sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
-					sqlquote.Ident(catalog.SystemColAttr_AccID), accountId,
-					sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.String(candidate.dbName),
-					sqlquote.Ident(catalog.SystemColAttr_RelName), sqlquote.String(candidate.tableName),
-					sqlquote.Ident(catalog.SystemColAttr_ConstraintType),
-					sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.String(catalog.FakePrimaryKeyColName))
-				pkRes, queryErr := c.runSqlWithResultAndOptions(pkSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
-				if queryErr != nil {
-					return queryErr
-				}
-				valid := len(pkRes.Batches) > 0 && pkRes.Batches[0].RowCount() > 0
-				pkRes.Close()
-				if !valid {
-					return moerr.NewInternalErrorf(ctx, "CDC source scope %s contains a table without a primary key; CDC does not support tables without a user-visible primary key", pt.Source)
-				}
-			}
+			// The shared candidate query requires a user-visible primary key.
+			// The runtime scanner uses the same predicate, so future no-PK tables
+			// are never admitted and no per-table catalog queries are needed here.
 			continue
 		}
 		pkSQL := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = %d AND %s = %s AND %s = %s AND %s = 'p' AND %s <> %s LIMIT 1",
