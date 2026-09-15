@@ -3892,6 +3892,17 @@ except Exception:
         with self.assertRaisesRegex(ValueError, "nesting exceeds"):
             worker._decode_control(wire)
 
+    def test_action_decoders_reject_excessive_json_nesting(self):
+        nested = "[" * worker.MAX_JSON_NESTING + "0" + "]" * worker.MAX_JSON_NESTING
+        with self.assertRaisesRegex(ValueError, "nesting exceeds"):
+            worker._decode_capability_request(
+                ('{"protocol_version":1,"extra":' + nested + '}').encode()
+            )
+        with self.assertRaisesRegex(ValueError, "nesting exceeds"):
+            worker._decode_definition_validation(
+                ('{"extra":' + nested + '}').encode()
+            )
+
     def test_result_ack_rejects_zero_sequence(self):
         state = worker._InvocationState({}, 1)
         state.last_result = 1
