@@ -351,6 +351,49 @@ func TestPartitionedFulltextDMLShapesBuildRoutedMaintenance(t *testing.T) {
 	}
 }
 
+func TestPartitionedFulltextDeleteRoutesRegularHiddenIndexes(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	base := mock.ctxt.tables["docs_ft_dual"]
+	require.NotNil(t, base)
+	base.FeatureFlag |= features.Partitioned
+	base.Partition = &planpb.Partition{PartitionDefs: []*planpb.PartitionDef{
+		{Def: makePlan2BoolConstExprWithType(true)},
+		{Def: makePlan2BoolConstExprWithType(false)},
+	}}
+
+	logicPlan, err := runOneStmt(mock, t,
+		"delete from constraint_test.docs_ft_dual where id = 1")
+	require.NoError(t, err)
+
+	const uniqueIndexName = catalog.UniqueIndexTableNamePrefix + "docs-ft-dual-payload"
+	found := false
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node == nil {
+			continue
+		}
+		if node.NodeType == planpb.Node_DELETE && node.DeleteCtx != nil && node.DeleteCtx.TableDef != nil {
+			require.NotEqual(t, uniqueIndexName, node.DeleteCtx.TableDef.Name,
+				"partitioned regular index deletes must not target the logical hidden table")
+		}
+		if node.NodeType != planpb.Node_MULTI_UPDATE {
+			continue
+		}
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx == nil || updateCtx.TableDef == nil || updateCtx.TableDef.Name != uniqueIndexName {
+				continue
+			}
+			require.NotNil(t, updateCtx.PartitionIndexCtx)
+			require.True(t, updateCtx.IgnoreAffectedRows)
+			require.Len(t, updateCtx.DeleteCols, 2)
+			require.Equal(t, base.TblId, updateCtx.PartitionIndexCtx.ParentTable.TblId)
+			require.Equal(t, base.TblId, uint64(updateCtx.PartitionIndexCtx.ParentRef.Obj))
+			require.GreaterOrEqual(t, updateCtx.PartitionIndexCtx.PartitionCol.ColPos, int32(0))
+			found = true
+		}
+	}
+	require.True(t, found, "partitioned regular unique-index delete must use routed maintenance")
+}
+
 func nullSafeEqualityColumns(t *testing.T, marker *planpb.Expr) []string {
 	t.Helper()
 	require.NotNil(t, marker)
