@@ -26,7 +26,7 @@ import (
 
 // constrainStringNumericResultWorkers keeps corrected string numeric result
 // expressions on one CN while a rolling cluster still contains workers below
-// MORPC v73. The result wrapper and persisted numeric schema are part of the
+// MORPC v78. The result wrapper and persisted numeric schema are part of the
 // serialized expression contract, so every selected remote worker must agree.
 func (c *Compile) constrainStringNumericResultWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
@@ -36,7 +36,7 @@ func (c *Compile) constrainStringNumericResultWorkers(qry *plan.Query) error {
 	if err != nil || !features.StringNumericResultContracts {
 		return err
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion73)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion78)
 	if err != nil {
 		return err
 	}
@@ -60,14 +60,14 @@ func validateStringNumericResultDestination(proc *process.Process, p *pipeline.P
 	supported, err := remoteWorkersSupportProtocol(
 		proc,
 		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}},
-		defines.MORPCVersion73,
+		defines.MORPCVersion78,
 	)
 	if err != nil {
 		return err
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"remote destination does not support corrected string numeric result contracts (MORPC version 73)",
+			"remote destination does not support corrected string numeric result contracts (MORPC version 78)",
 		)
 	}
 	return nil

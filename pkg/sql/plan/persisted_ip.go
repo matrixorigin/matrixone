@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -24,8 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// RequirePersistedIPFunctionProtocol admits catalog-bound expressions only
-// after the deployment-managed common protocol reaches v72. Unlike a remote
+// RequirePersistedExpressionProtocol admits catalog-bound expressions only
+// after the deployment-managed common protocol reaches the required feature
+// version (v72 for IP or v78 for string numeric results). Unlike a remote
 // pipeline, a catalog default/generated/check/on-update expression can be
 // evaluated locally by an older CN and therefore bypasses the per-send
 // capability check. Call this before folding a newly bound expression and at
@@ -33,22 +35,33 @@ import (
 //
 // The owner may be an Expr or a TableDef (or another protobuf owner containing
 // expressions). RequiredRemoteExpressionFeatures walks only expression roots
-// and returns immediately for owners that do not use the changed IP functions.
+// and returns immediately for owners that do not use a protected expression
+// capability.
 // The protocol lookup is consequently on DDL/metadata paths, never on row
 // execution hot paths.
-func RequirePersistedIPFunctionProtocol(ctx context.Context, proc *process.Process, owner any) error {
+func RequirePersistedExpressionProtocol(ctx context.Context, proc *process.Process, owner any) error {
 	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
 	if err != nil {
 		return err
 	}
-	if !features.IPFunctionSemantics {
+	requiredVersion := int64(0)
+	reason := ""
+	if features.IPFunctionSemantics {
+		requiredVersion = defines.MORPCVersion72
+		reason = "corrected IP function semantics"
+	}
+	if features.StringNumericResultContracts && requiredVersion < defines.MORPCVersion78 {
+		requiredVersion = defines.MORPCVersion78
+		reason = "corrected string numeric result contracts"
+	}
+	if requiredVersion == 0 {
 		return nil
 	}
 	if proc != nil {
 		if rt := moruntime.ServiceRuntime(proc.GetService()); rt != nil {
 			value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 			version, valid := value.(int64)
-			if ok && valid && version >= defines.MORPCVersion72 {
+			if ok && valid && version >= requiredVersion {
 				return nil
 			}
 		}
@@ -56,8 +69,15 @@ func RequirePersistedIPFunctionProtocol(ctx context.Context, proc *process.Proce
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return moerr.NewNotSupported(
-		ctx,
-		"persisted IP function expressions require all CNs to support protocol version 72",
-	)
+	return moerr.NewNotSupported(ctx, fmt.Sprintf(
+		"persisted %s require all CNs to support protocol version %d",
+		reason, requiredVersion))
+}
+
+// RequirePersistedIPFunctionProtocol is kept as a source-compatible wrapper
+// for existing catalog builders. New admission paths should use the shared
+// RequirePersistedExpressionProtocol so expression contracts take the maximum
+// required protocol instead of masking one another.
+func RequirePersistedIPFunctionProtocol(ctx context.Context, proc *process.Process, owner any) error {
+	return RequirePersistedExpressionProtocol(ctx, proc, owner)
 }
