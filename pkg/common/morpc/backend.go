@@ -209,6 +209,8 @@ type remoteBackend struct {
 		goettyOptions         []goetty.Option
 		connectTimeout        time.Duration
 		connectAttemptTimeout time.Duration
+		connectNow            func() time.Time
+		connectWait           func(context.Context, time.Duration) error
 		bufferSize            int
 		busySize              int
 		batchSendSize         int
@@ -354,6 +356,12 @@ func (rb *remoteBackend) adjust() {
 	if rb.options.connectAttemptTimeout <= 0 ||
 		rb.options.connectAttemptTimeout > rb.options.connectTimeout {
 		rb.options.connectAttemptTimeout = rb.options.connectTimeout
+	}
+	if rb.options.connectNow == nil {
+		rb.options.connectNow = time.Now
+	}
+	if rb.options.connectWait == nil {
+		rb.options.connectWait = waitConnectRetry
 	}
 	if rb.options.streamBufferSize == 0 {
 		rb.options.streamBufferSize = 16
@@ -1198,10 +1206,11 @@ func (rb *remoteBackend) running() bool {
 }
 
 func (rb *remoteBackend) resetConn() error {
-	start := time.Now()
+	start := rb.options.connectNow()
 	deadline := start.Add(rb.options.connectTimeout)
 	defer func() {
-		rb.metrics.connectDurationHistogram.Observe(time.Since(start).Seconds())
+		rb.metrics.connectDurationHistogram.Observe(
+			rb.options.connectNow().Sub(start).Seconds())
 	}()
 
 	wait := time.Second
@@ -1215,7 +1224,7 @@ func (rb *remoteBackend) resetConn() error {
 			return backendClosed
 		default:
 		}
-		remaining := time.Until(deadline)
+		remaining := deadline.Sub(rb.options.connectNow())
 		if remaining <= 0 {
 			err := moerr.NewRPCTimeoutNoCtx()
 			rb.metrics.observeBackendError(rb.remote, "connect", err)
@@ -1258,7 +1267,7 @@ func (rb *remoteBackend) resetConn() error {
 		}
 		duration := time.Duration(0)
 		for {
-			remaining = time.Until(deadline)
+			remaining = deadline.Sub(rb.options.connectNow())
 			if remaining <= 0 {
 				err := moerr.NewRPCTimeoutNoCtx()
 				rb.metrics.observeBackendError(rb.remote, "connect", err)
@@ -1268,16 +1277,7 @@ func (rb *remoteBackend) resetConn() error {
 			if delay > remaining {
 				delay = remaining
 			}
-			timer := time.NewTimer(delay)
-			select {
-			case <-timer.C:
-			case <-rb.ctx.Done():
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
+			if err := rb.options.connectWait(rb.ctx, delay); err != nil {
 				return backendClosed
 			}
 			duration += delay
@@ -1290,6 +1290,17 @@ func (rb *remoteBackend) resetConn() error {
 		// reconnect failed, notify all future failed
 		backendErr := moerr.NewBackendCannotConnectNoCtx()
 		rb.notifyAllWaitWritesFailed(backendErr)
+	}
+}
+
+func waitConnectRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
