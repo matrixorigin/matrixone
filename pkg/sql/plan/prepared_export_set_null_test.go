@@ -48,6 +48,25 @@ func TestPreparedExportSetParamPositionOwnership(t *testing.T) {
 	}
 }
 
+func TestPreparedExportSetFoldedProducerIsNotBare(t *testing.T) {
+	for _, tc := range []struct {
+		sql      string
+		wantBare bool
+		wantType types.T
+	}{
+		{`select export_set(?,'Y','N','',4)`, true, types.T_int64},
+		{`select export_set((select ?),'Y','N','',4)`, true, types.T_text},
+		{`select export_set(x,'Y','N','',4) from (select ? as x) d`, false, types.T_text},
+	} {
+		prepared, err := runOneStmt(NewMockOptimizer(false), t, `prepare s from "`+tc.sql+`"`)
+		require.NoError(t, err)
+		positions, domains, bare := PreparedPlanExportSetParameters(prepared.GetDcl().GetPrepare().Plan)
+		require.Equal(t, []int32{0}, positions)
+		require.Equal(t, tc.wantBare, bare[0], tc.sql)
+		require.Equal(t, tc.wantType, domains[0].Oid, tc.sql)
+	}
+}
+
 func TestPreparedExportSetTypedNullDomain(t *testing.T) {
 	opt := NewMockOptimizer(false)
 	prepared, err := runOneStmt(opt, t, `prepare s from "select export_set(coalesce((select ?),2.5),'Y','N','',4)"`)

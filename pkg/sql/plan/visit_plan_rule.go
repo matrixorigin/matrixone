@@ -1939,7 +1939,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			functionName = exprImpl.F.Func.GetObjName()
 		}
 		if functionName == "cast" && !isExplicitPreparedLineageCast(e) {
-			if e.GetPreparedNumeric().GetProvisionalResultCast() && len(exprImpl.F.Args) > 0 {
+			foldedProducerEnvelope := len(exprImpl.F.Args) > 0 && !isBitwiseAggregatePrivateCast(e) &&
+				exprImpl.F.Args[0].GetPreparedNumeric().GetFallback()
+			if (e.GetPreparedNumeric().GetProvisionalResultCast() || foldedProducerEnvelope) && len(exprImpl.F.Args) > 0 {
 				for pos := range preparedNumericValueParamPositions(exprImpl.F.Args[0]) {
 					if rule.hasExportSetResolvedDomain(int(pos)) {
 						rule.specialized = true

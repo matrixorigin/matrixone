@@ -142,7 +142,7 @@ func TestPreparedExportSetNullDomainHistory(t *testing.T) {
 }
 
 func TestPreparedExportSetResolvedStringAndIntegerBindings(t *testing.T) {
-	for _, shape := range []string{"scalar", "direct", "subquery-arithmetic"} {
+	for _, shape := range []string{"scalar", "direct", "subquery-arithmetic", "derived-coalesce"} {
 		direct := shape == "direct"
 		sql := `select export_set(coalesce((select ?),2.5),'Y','N','',4)`
 		if shape == "subquery-arithmetic" {
@@ -150,6 +150,9 @@ func TestPreparedExportSetResolvedStringAndIntegerBindings(t *testing.T) {
 		}
 		if direct {
 			sql = `select export_set(coalesce(?,2.5),'Y','N','',4)`
+		}
+		if shape == "derived-coalesce" {
+			sql = `select export_set(coalesce(x,2.5),'Y','N','',4) from (select ? as x) d`
 		}
 		_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 393, sql)
 		func() {
@@ -190,7 +193,7 @@ func TestPreparedExportSetResolvedStringAndIntegerBindings(t *testing.T) {
 					if direct && i < 2 {
 						want = "YYNN"
 					}
-					require.Equal(t, want, result.GetStringAt(0), "step=%d direct=%t", i, direct)
+					require.Equal(t, want, result.GetStringAt(0), "step=%d shape=%s expr=%s", i, shape, expr.String())
 				}()
 				require.Equal(t, before, cached.String())
 			}
@@ -201,7 +204,8 @@ func TestPreparedExportSetResolvedStringAndIntegerBindings(t *testing.T) {
 func TestPreparedExportSetBareActualAndResolvedDomains(t *testing.T) {
 	for _, source := range []string{"?", "(select ?)"} {
 		for _, binary := range []bool{false, true} {
-			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 394, `select export_set(`+source+`,'Y','N','',4)`)
+			sql := `select export_set(` + source + `,'Y','N','',4)`
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 394, sql)
 			func() {
 				defer stmt.Close()
 				cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
@@ -241,13 +245,55 @@ func TestPreparedExportSetBareActualAndResolvedDomains(t *testing.T) {
 							if source != "?" && tc.typ.Oid.IsMySQLString() && want == "YYNN" {
 								want = "NYNN"
 							}
-							require.Equal(t, want, result.GetStringAt(0))
+							require.Equal(t, want, result.GetStringAt(0), "source=%s binary=%t type=%s expr=%s", source, binary, tc.typ, expr.String())
 						}
 					}()
 					require.Equal(t, before, cached.String())
 				}
 			}()
 		}
+	}
+}
+
+func TestPreparedExportSetFoldedDerivedSourceDomain(t *testing.T) {
+	_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 396,
+		`select export_set(x,'Y','N','',4) from (select ? as x) d`)
+	defer stmt.Close()
+	require.False(t, stmt.exportSetBareParams[0], "a folded derived projection is still a producer")
+	cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
+	before := cached.String()
+	text := types.T_text.ToType()
+	decimal := types.New(types.T_decimal64, 4, 1)
+	for step, tc := range []struct {
+		value any
+		typ   types.Type
+		want  string
+		null  bool
+	}{
+		{"2.5", text, "NYNN", false},
+		{"2.5", decimal, "YYNN", false},
+		{2.5, types.T_float64.ToType(), "NYNN", false},
+		{"2.5", decimal, "NYNN", false},
+		{"2.5", text, "NYNN", false},
+		{nil, text, "", true},
+	} {
+		values := []any{plan2.ParamValue{Value: tc.value, SourceType: tc.typ, HasSourceType: true, EnableNumericPrefix: true}}
+		stmt.applyExportSetNullRuntimeTypes(values)
+		filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, cached, values)
+		require.NoError(t, err)
+		q := filled.GetQuery()
+		expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+		result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+		require.NoError(t, err)
+		func() {
+			defer free()
+			if tc.null {
+				require.True(t, result.GetNulls().Contains(0), "step=%d", step)
+			} else {
+				require.Equal(t, tc.want, result.GetStringAt(0), "step=%d expr=%s", step, expr.String())
+			}
+		}()
+		require.Equal(t, before, cached.String())
 	}
 }
 

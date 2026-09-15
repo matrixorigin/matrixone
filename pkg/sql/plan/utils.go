@@ -3696,6 +3696,7 @@ func PreparedPlanExportSetParameters(preparePlan *Plan) ([]int32, map[int32]type
 		return nil, nil, nil
 	}
 	copy := DeepCopyPlan(preparePlan)
+	bare, foldedProducers := preparedExportSetFoldedSourceKinds(copy)
 	positions := markPreparedExportSetLineage(copy)
 	result := make([]int32, 0, len(positions))
 	for pos := range positions {
@@ -3706,26 +3707,54 @@ func PreparedPlanExportSetParameters(preparePlan *Plan) ([]int32, map[int32]type
 		return result, nil, nil
 	}
 	domains := preparedExportSetContextDomains(copy, positions)
+	for pos := range bare {
+		if foldedProducers[pos] {
+			domains[pos] = types.T_text.ToType()
+		} else {
+			domains[pos] = types.T_int64.ToType()
+		}
+	}
+	for pos := range foldedProducers {
+		if !bare[pos] {
+			domains[pos] = types.T_text.ToType()
+		}
+	}
+	return result, domains, bare
+}
+
+// preparedExportSetFoldedSourceKinds must run before the lineage scan mutates
+// its private plan copy. A folded derived-table projection and a direct marker
+// can both end as CAST(ParamRef AS BIGINT); the ParamRef's existing fallback
+// provenance is the remaining distinction.
+func preparedExportSetFoldedSourceKinds(p *Plan) (map[int32]bool, map[int32]bool) {
 	bare := make(map[int32]bool)
-	_ = plan.VisitExpressionsInOwner(copy, func(root *Expr) error {
+	producers := make(map[int32]bool)
+	_ = plan.VisitExpressionsInOwner(p, func(root *Expr) error {
 		return plan.VisitExprTree(root, func(expr *Expr) error {
 			fn := expr.GetF()
 			if fn == nil || fn.Func == nil || fn.Func.ObjName != "export_set" || len(fn.Args) == 0 {
 				return nil
 			}
-			if pos, ok := preparedResultParamPosition(fn.Args[0], "export_set"); ok && fn.Args[0].GetF().Args[0].GetP() != nil {
-				bare[int32(pos)] = true
-				domains[int32(pos)] = types.T_int64.ToType()
-				if fn.Args[0].GetPreparedNumeric().GetFallbackSource() {
-					// A flattened scalar marker still defaults to text, but no
-					// materializing producer owns its actual numeric value.
-					domains[int32(pos)] = types.T_text.ToType()
-				}
+			pos, ok := preparedResultParamPosition(fn.Args[0], "export_set")
+			if !ok {
+				return nil
+			}
+			source := fn.Args[0].GetF().Args[0]
+			if source.GetP() == nil {
+				return nil
+			}
+			position := int32(pos)
+			producer := source.GetPreparedNumeric().GetFallback()
+			if producer {
+				producers[position] = true
+			}
+			if !producer || fn.Args[0].GetPreparedNumeric().GetFallbackSource() {
+				bare[position] = true
 			}
 			return nil
 		})
 	})
-	return result, domains, bare
+	return bare, producers
 }
 
 func preparedExportSetContextDomains(p *Plan, positions map[int32]struct{}) map[int32]types.Type {

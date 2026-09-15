@@ -542,6 +542,32 @@ SET @export_set_bits = NULL;
 EXECUTE export_set_bare_domain USING @export_set_bits;
 DEALLOCATE PREPARE export_set_bare_domain;
 
+# 折叠后的派生投影仍是生产者，不能按最终 ParamRef 形状视作裸参数。
+PREPARE export_set_folded_derived FROM
+  "SELECT EXPORT_SET(x,'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = '2.5';
+EXECUTE export_set_folded_derived USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_folded_derived USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_folded_derived USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_folded_derived USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_folded_derived USING @export_set_bits;
+DEALLOCATE PREPARE export_set_folded_derived;
+
+# 派生 COALESCE 变为 DOUBLE 后必须清除外层遗留的隐式 INT64 转换。
+PREPARE export_set_folded_coalesce FROM
+  "SELECT EXPORT_SET(COALESCE(x,1.5),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_folded_coalesce USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DECIMAL(4,1));
+EXECUTE export_set_folded_coalesce USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_folded_coalesce USING @export_set_bits;
+DEALLOCATE PREPARE export_set_folded_coalesce;
+
 DROP TABLE export_set_scalar_input;
 
 DROP TABLE export_set_numeric_bits;
