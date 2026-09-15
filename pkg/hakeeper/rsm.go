@@ -885,7 +885,8 @@ func (s *stateMachine) hasPendingHAKeeperAdmission() bool {
 
 func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) bool {
 	if !s.state.CommandDeliveryPreparing && !s.state.CommandDeliveryEnabled &&
-		!s.state.ViewMetadataAdmissionPreparing && !s.state.ViewMetadataAdmissionEnabled {
+		!s.state.ViewMetadataAdmissionPreparing && !s.state.ViewMetadataAdmissionEnabled &&
+		s.state.PersistedExpressionRequiredProtocolVersion == 0 {
 		return true
 	}
 	uuid, admission := hakeeperAdmissionTarget(cmd)
@@ -1914,9 +1915,10 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 			Pending:                 s.state.ViewMetadataAdmissionPending,
 			HAKeeperAdmissionReady:  !s.hasPendingHAKeeperAdmission(),
 			RequiredProtocolVersion: s.state.PersistedExpressionRequiredProtocolVersion,
-			LogReady:                logReady,
-			CNReady:                 cnReady,
-			ProxyReady:              proxyReady,
+			PersistedExpressionProtocolActivationPending: s.state.PersistedExpressionProtocolActivationPending,
+			LogReady:   logReady,
+			CNReady:    cnReady,
+			ProxyReady: proxyReady,
 		}, nil
 	} else if q, ok := query.(*ClusterDetailsQuery); ok {
 		return s.handleClusterDetailsQuery(q.Cfg), nil

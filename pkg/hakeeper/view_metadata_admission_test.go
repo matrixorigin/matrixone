@@ -299,7 +299,7 @@ func TestViewMetadataAdmissionDeAdmitsLowerGenerationAfterFloor(t *testing.T) {
 		"a newer generation must not bypass the previous owner's drain target")
 }
 
-func TestViewMetadataAdmissionRaisesFloorOnlyAfterLiveCNUpgrade(t *testing.T) {
+func TestViewMetadataAdmissionRecordsFloorBeforeLiveCNUpgrade(t *testing.T) {
 	rsm := NewStateMachine(0, 1).(*stateMachine)
 	rsm.state.ViewMetadataAdmissionEnabled = true
 	rsm.state.ViewMetadataAdmissionEpoch = 2
@@ -325,7 +325,40 @@ func TestViewMetadataAdmissionRaisesFloorOnlyAfterLiveCNUpgrade(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Zero(t, result.Value)
-	require.Zero(t, rsm.state.PersistedExpressionRequiredProtocolVersion)
+	require.Equal(t, uint64(defines.MORPCLatestVersion),
+		rsm.state.PersistedExpressionRequiredProtocolVersion,
+		"the rejected tag is already in the log, so its decoder floor must be durable")
+	require.True(t, rsm.state.PersistedExpressionProtocolActivationPending)
+	require.False(t, rsm.state.CNState.Stores["cn-1"].ViewMetadataAdmissionReady,
+		"a lower-capability CN must be withdrawn as soon as the decoder floor is recorded")
+	joining := pb.ScheduleCommand{
+		UUID:        "joining-log",
+		ServiceType: pb.LogService,
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.AddReplica,
+			Replica: pb.Replica{
+				UUID:    "joining-log",
+				ShardID: DefaultHAKeeperShardID,
+			},
+		},
+	}
+	rsm.state.LogState.Stores["joining-log"] = pb.LogStoreInfo{
+		CommandDeliverySupported:                 true,
+		ViewMetadataAdmissionSupported:           true,
+		ViewMetadataAdmissionProtocolV3Supported: false,
+	}
+	require.False(t, rsm.logScheduleCommandDeliverable(joining),
+		"a lower-capability LogStore must be fenced even before admission enters preparing")
+
+	buf := bytes.NewBuffer(nil)
+	require.NoError(t, rsm.SaveSnapshot(buf, nil, nil))
+	recovered := NewStateMachine(0, 2).(*stateMachine)
+	require.NoError(t, recovered.RecoverFromSnapshot(bytes.NewReader(buf.Bytes()), nil, nil))
+	require.Equal(t, uint64(defines.MORPCLatestVersion),
+		recovered.state.PersistedExpressionRequiredProtocolVersion)
+	require.True(t, recovered.state.PersistedExpressionProtocolActivationPending)
+	require.False(t, recovered.logScheduleCommandDeliverable(joining),
+		"snapshot recovery must preserve the decoder admission fence")
 
 	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
 		UUID:                               "cn-1",
@@ -343,6 +376,7 @@ func TestViewMetadataAdmissionRaisesFloorOnlyAfterLiveCNUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, result.Value)
 	require.Equal(t, uint64(defines.MORPCLatestVersion), rsm.state.PersistedExpressionRequiredProtocolVersion)
+	require.False(t, rsm.state.PersistedExpressionProtocolActivationPending)
 	require.Equal(t, uint64(3), rsm.state.ViewMetadataAdmissionEpoch)
 	require.Zero(t, rsm.state.ViewMetadataCatalogFencedEpoch)
 	require.True(t, rsm.state.ViewMetadataRevalidationRequired,

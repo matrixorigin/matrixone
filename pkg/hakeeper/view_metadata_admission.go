@@ -36,9 +36,13 @@ type ViewMetadataAdmissionState struct {
 	// HAKeeper RSM. Callers use it to avoid proposing a lower compatibility
 	// target after a restart or leadership change.
 	RequiredProtocolVersion uint64
-	LogReady                map[string]bool
-	CNReady                 map[string]bool
-	ProxyReady              map[string]bool
+	// PersistedExpressionProtocolActivationPending distinguishes a durable
+	// decoder floor from a completed activation barrier. It remains true when
+	// the activation entry was applied but prerequisites rejected the attempt.
+	PersistedExpressionProtocolActivationPending bool
+	LogReady                                     map[string]bool
+	CNReady                                      map[string]bool
+	ProxyReady                                   map[string]bool
 }
 
 // GetEnableViewMetadataAdmissionCmd starts phase one. It must only be proposed
@@ -574,11 +578,13 @@ func (s *stateMachine) viewMetadataLogStoresProtocolReady() bool {
 }
 
 // handleActivatePersistedExpressionProtocol performs the protocol-floor
-// transition behind a new HAKeeper update tag.  The first entry commits the
-// floor and starts a fresh admission epoch; a later entry, after post-barrier
-// heartbeats and catalog fences, publishes the enabled state.  Splitting the
-// replicated state transition this way prevents a capability/fence observed
-// before the floor was raised from satisfying the new contract.
+// transition behind a new HAKeeper update tag. The first entry durably records
+// that the log now requires the target decoder, even when live CN readiness or
+// a pending admission prevents activation from completing. A later entry,
+// after post-barrier heartbeats and catalog fences, publishes the enabled
+// state. Splitting the replicated state transition this way prevents a
+// capability/fence observed before the floor was raised from satisfying the
+// new contract, while also fencing newly admitted old log stores immediately.
 func (s *stateMachine) handleActivatePersistedExpressionProtocol(
 	cmd []byte,
 ) sm.Result {
@@ -591,6 +597,24 @@ func (s *stateMachine) handleActivatePersistedExpressionProtocol(
 	if s.state.PersistedExpressionRequiredProtocolVersion > required {
 		return sm.Result{}
 	}
+	floorRaised := s.state.PersistedExpressionRequiredProtocolVersion < required
+	if floorRaised {
+		// This marker is a decoder-admission barrier, not proof that every live
+		// CN has completed the catalog handshake. The command itself is already
+		// present in the replicated log, so a later LogStore must understand the
+		// new tag even when this application attempt is rejected or deferred.
+		s.state.PersistedExpressionRequiredProtocolVersion = required
+		s.state.PersistedExpressionProtocolActivationPending = true
+		// Do not keep routing a CN that has not proved the new floor merely
+		// because the activation attempt was rejected before its epoch started.
+		for uuid, store := range s.state.CNState.Stores {
+			if store.PersistedExpressionProtocolVersion < required {
+				store.ViewMetadataAdmissionReady = false
+				s.state.CNState.Stores[uuid] = store
+				delete(s.state.ViewMetadataAdmissionCNReady, uuid)
+			}
+		}
+	}
 	if !s.viewMetadataLogStoresProtocolReady() ||
 		!s.persistedExpressionProtocolReady(required, targets.CNStoreTimeoutTicks) {
 		return sm.Result{}
@@ -602,10 +626,10 @@ func (s *stateMachine) handleActivatePersistedExpressionProtocol(
 		if s.hasPendingHAKeeperAdmission() {
 			return sm.Result{}
 		}
-		// Initial protocol activation is the phase-one barrier.  Commit the
-		// floor and the preparation epoch together so no CN can publish or
-		// consume persisted view metadata under a lower contract.
-		s.state.PersistedExpressionRequiredProtocolVersion = required
+		// Initial protocol activation is the phase-one barrier. The decoder
+		// marker was recorded above, so no CN can publish or consume persisted
+		// view metadata under a lower contract while this barrier is preparing.
+		s.state.PersistedExpressionProtocolActivationPending = false
 		s.state.ViewMetadataAdmissionPreparing = true
 		if s.state.ViewMetadataAdmissionEpoch == 0 {
 			s.state.ViewMetadataAdmissionEpoch = 1
@@ -622,11 +646,11 @@ func (s *stateMachine) handleActivatePersistedExpressionProtocol(
 		return sm.Result{}
 	}
 
-	// Commit the monotonic floor before any completion check.  Raising it also
-	// unconditionally starts a new epoch and clears all old acknowledgements,
+	// Once the prerequisites are satisfied, clear the pending marker and
+	// unconditionally start a new epoch. This also clears old acknowledgements,
 	// including a catalog fence produced by a lower-capability CN.
-	if s.state.PersistedExpressionRequiredProtocolVersion < required {
-		s.state.PersistedExpressionRequiredProtocolVersion = required
+	if floorRaised || s.state.PersistedExpressionProtocolActivationPending {
+		s.state.PersistedExpressionProtocolActivationPending = false
 		// The readiness bit is consumed directly by cluster-service routing. A
 		// store that was already stale or lower-capability must be withdrawn
 		// before the new epoch can capture any old-generation targets.
