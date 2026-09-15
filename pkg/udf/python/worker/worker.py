@@ -2881,10 +2881,13 @@ class RoutineFlightServer(_FlightServerBase):
         self._terminal: OrderedDict[tuple, _TerminalRecord] = OrderedDict()
         self._terminal_bytes = 0
         self._active_bytes = 0
-        self._active_groups: Dict[str, int] = {}
-        self._closed_groups: Dict[str, int] = {}
+        # A group id is scoped by the account in the fencing tuple. Keeping
+        # only the textual id here would let one tenant block or close a
+        # same-named group owned by another tenant.
+        self._active_groups: Dict[tuple, int] = {}
+        self._closed_groups: Dict[tuple, int] = {}
         self._closed_group_bytes = 0
-        self._reserved_groups = set()
+        self._reserved_groups: set[tuple] = set()
         self._reserved_group_bytes = 0
         self._clock = clock
         self._terminal_ttl_seconds = terminal_ttl_seconds
@@ -2912,12 +2915,24 @@ class RoutineFlightServer(_FlightServerBase):
         encoded = json.dumps(key, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
         return len(encoded) + 128
 
+    @staticmethod
+    def _group_key(key: tuple) -> tuple:
+        """Return the account-scoped identity of a group epoch."""
+        return key[0], key[2]
+
+    @staticmethod
+    def _group_fence_bytes(group_key: tuple) -> int:
+        # Account id is a fixed-width uint64 on the wire. Include it in the
+        # bounded fence estimate so the capacity accounting matches the
+        # account-scoped key rather than only charging the display id.
+        return len(group_key[1].encode("utf-8")) + 16
+
     def _purge_terminal_locked(self, now: float) -> None:
         expired = [
             key
             for key, record in self._terminal.items()
             if record.expires_at <= now
-            and self._closed_groups.get(key[2], 0) >= key[3]
+            and self._closed_groups.get(self._group_key(key), 0) >= key[3]
         ]
         for key in expired:
             record = self._terminal.pop(key)
@@ -2925,23 +2940,23 @@ class RoutineFlightServer(_FlightServerBase):
 
     def _admit(self, key: tuple) -> _InvocationState:
         size = self._entry_bytes(key)
-        group_id, group_epoch = key[2], key[3]
+        group_key, group_epoch = self._group_key(key), key[3]
         with self._lock:
-            if self._closed_groups.get(group_id, 0) >= group_epoch:
+            if self._closed_groups.get(group_key, 0) >= group_epoch:
                 raise ValueError("PROTOCOL: execution group epoch is already closed")
             self._purge_terminal_locked(self._clock())
             if key in self._active:
                 raise ValueError("PROTOCOL: invocation fence is active")
             if key in self._terminal:
                 raise ValueError("PROTOCOL: invocation fence is terminal")
-            if group_id in self._active_groups:
+            if group_key in self._active_groups:
                 raise ValueError("PROTOCOL: execution group epoch is already active")
             if len(self._active) + len(self._terminal) >= MAX_LEDGER_ENTRIES:
                 raise ValueError("RESOURCE_EXHAUSTED: terminal ledger entries are full")
             if self._active_bytes + self._terminal_bytes + size > MAX_LEDGER_BYTES:
                 raise ValueError("RESOURCE_EXHAUSTED: terminal ledger bytes are full")
-            if group_id not in self._closed_groups and group_id not in self._reserved_groups:
-                fence_bytes = len(group_id.encode("utf-8")) + 8
+            if group_key not in self._closed_groups and group_key not in self._reserved_groups:
+                fence_bytes = self._group_fence_bytes(group_key)
                 if (
                     len(self._closed_groups) + len(self._reserved_groups)
                     >= MAX_CLOSED_GROUP_ENTRIES
@@ -2952,12 +2967,12 @@ class RoutineFlightServer(_FlightServerBase):
                 # Reserve the future tombstone before creating the handler.
                 # Terminal cleanup converts this reservation into the
                 # closed-generation fence.
-                self._reserved_groups.add(group_id)
+                self._reserved_groups.add(group_key)
                 self._reserved_group_bytes += fence_bytes
             state = _InvocationState({}, size)
             self._active[key] = state
             self._active_bytes += size
-            self._active_groups[group_id] = group_epoch
+            self._active_groups[group_key] = group_epoch
             return state
 
     def _require_current_lease(self, key: tuple) -> None:
@@ -2976,14 +2991,14 @@ class RoutineFlightServer(_FlightServerBase):
         self._terminal_bytes += state.terminal_bytes
 
     def _close_group_epoch_locked(self, key: tuple) -> None:
-        group_id, group_epoch = key[2], key[3]
-        current = self._closed_groups.get(group_id, 0)
+        group_key, group_epoch = self._group_key(key), key[3]
+        current = self._closed_groups.get(group_key, 0)
         if group_epoch <= current:
             return
-        if group_id not in self._closed_groups:
-            fence_bytes = len(group_id.encode("utf-8")) + 8
-            if group_id in self._reserved_groups:
-                self._reserved_groups.remove(group_id)
+        if group_key not in self._closed_groups:
+            fence_bytes = self._group_fence_bytes(group_key)
+            if group_key in self._reserved_groups:
+                self._reserved_groups.remove(group_key)
                 self._reserved_group_bytes -= fence_bytes
             elif (
                 len(self._closed_groups) >= MAX_CLOSED_GROUP_ENTRIES
@@ -2994,7 +3009,7 @@ class RoutineFlightServer(_FlightServerBase):
                 # and refuse collection until the fence is reconstructed.
                 return
             self._closed_group_bytes += fence_bytes
-        self._closed_groups[group_id] = group_epoch
+        self._closed_groups[group_key] = group_epoch
 
     def _finish_invocation(self, key: tuple, state: Optional[_InvocationState]) -> None:
         # A rejected duplicate Open has no ownership of the existing state.
@@ -3008,9 +3023,9 @@ class RoutineFlightServer(_FlightServerBase):
                 return
             self._active.pop(key, None)
             self._active_bytes -= state.terminal_bytes
-            group_id, group_epoch = key[2], key[3]
-            if self._active_groups.get(group_id) == group_epoch:
-                self._active_groups.pop(group_id, None)
+            group_key, group_epoch = self._group_key(key), key[3]
+            if self._active_groups.get(group_key) == group_epoch:
+                self._active_groups.pop(group_key, None)
             # A started invocation is terminal even when the worker reports an
             # error.  Retaining the fence prevents a late retry from running
             # user code a second time.
