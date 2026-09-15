@@ -87,12 +87,12 @@ type TableConfig struct {
 	// snapshot). false = ordinary MATCH / a synchronous covered probe, which needs no tail.
 	ProbeTail bool `json:"probe_tail,omitempty"`
 	// ProbeTailWhere is the json predicate the operator pushes into BOTH its table_changes tail and its
-	// base-table fallback, rendered with the json_extract_*_internal twins
-	// (json_extract_string_internal(`col`, '$.path') <op> <lit>). The internal name is byte-identical
-	// in evaluation to the public json_extract but is NEVER matched by the mandatory-filter rewrite, so
-	// the fallback's base-table scan cannot re-trigger the probe and recurse (and the tail is future-
-	// proof against the rewrite ever touching table_changes columns). It filters both queries to
-	// matching rows -- no index. Empty ⇒ the planner declined the probe (never emitted with ProbeTail).
+	// base-table fallback, rendered with the public json_extract_string / json_extract_float64
+	// (json_extract_string(`col`, '$.path') <op> <lit>). The fallback/tail SQL runs with
+	// applyIndices=1 (set by the operator via StatementOption.WithOptimizerHints), so its base-table
+	// scan skips the mandatory-filter rewrite and cannot re-trigger the probe and recurse. It filters
+	// both queries to matching rows -- no index. Empty ⇒ the planner declined the probe (never emitted
+	// with ProbeTail).
 	ProbeTailWhere string `json:"probe_tail_where,omitempty"`
 	// ProbeTailBar / ProbeTailBarLogical are the max source commit as of the read (SourceCommitTS),
 	// carried as its physical and logical halves, computed once at plan time. The operator compares the

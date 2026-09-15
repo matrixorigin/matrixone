@@ -608,10 +608,10 @@ func TestRecordJSONProbeTail(t *testing.T) {
 	require.True(t, b.recordJSONProbeTail(scanNode, c, types.BuildTS(100, 0)))
 	info, ok := b.jsonProbeTail[7]
 	require.True(t, ok)
-	// The pushed predicate uses the json_extract_string_internal twin, so the fallback's base-table
-	// scan cannot re-trigger the probe rewrite and recurse. The operator uses it for both tail and
-	// fallback.
-	require.Equal(t, "json_extract_string_internal(`j`, '$.foo') = 'needle'", info.whereSQL)
+	// The pushed predicate uses the public json_extract_string; the fallback/tail SQL runs with
+	// applyIndices=1 so its base-table scan cannot re-trigger the probe rewrite and recurse. The
+	// operator uses it for both tail and fallback.
+	require.Equal(t, "json_extract_string(`j`, '$.foo') = 'needle'", info.whereSQL)
 	// The bar (max source commit as of the read) reaches the operator via the config.
 	require.Equal(t, int64(100), info.bar)
 	// The display SQL: table_changes over the gap, ALIASED (so change_type binds), filtered by the
@@ -622,11 +622,11 @@ func TestRecordJSONProbeTail(t *testing.T) {
 	require.Contains(t, info.displaySQL, "mo_tc.`id`")
 	require.Contains(t, info.displaySQL, "<searched generation>")
 	require.Contains(t, info.displaySQL, "mo_tc.change_type = 'insert'")
-	require.Contains(t, info.displaySQL, "AND (json_extract_string_internal(`j`, '$.foo') = 'needle')")
+	require.Contains(t, info.displaySQL, "AND (json_extract_string(`j`, '$.foo') = 'needle')")
 	// The display also spells out the other two runtime branches so EXPLAIN is honest: caught up runs
 	// no tail, and an incompatible generation runs the base-table fallback (shown in the comment).
 	require.Contains(t, info.displaySQL, "caught up => no tail")
-	require.Contains(t, info.displaySQL, "SELECT `id` FROM `db`.`docs` WHERE json_extract_string_internal(`j`, '$.foo') = 'needle'")
+	require.Contains(t, info.displaySQL, "SELECT `id` FROM `db`.`docs` WHERE json_extract_string(`j`, '$.foo') = 'needle'")
 }
 
 // recordJSONProbeTail must DECLINE (return false, record nothing) when the json predicate cannot be

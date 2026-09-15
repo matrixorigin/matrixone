@@ -5,11 +5,10 @@ ranges, probe dispatch, and the optimizer rule wired into `applyIndices`
 (`addJSONFulltextProbes`). Covered by BVT `fulltext2_json_probe.sql` and the
 rewritten json section of `fulltext2_parser.sql`. §7 lists what remains.
 
-Approved-by: cpegeric — the runtime redesign in this revision (self-completing
-json probe: probe dispatch, coverage/`build_ts` gating, and the `applyIndices`
-rewrite) is reviewed and approved for implementation. This approval covers the
-revised design as it stands here and supersedes any approval that predated the
-redesign.
+Revision (this PR): self-completing json probe — probe dispatch, coverage/`build_ts`
+gating, the `applyIndices` rewrite, and the rolling-upgrade runtime contract (§10.3).
+Design approval is the PR approval by its reviewers; no separate approval is recorded
+in this doc.
 
 ## 1. Where we are today
 
@@ -583,16 +582,26 @@ base table that projects only the *matching* pks. The query degrades to a full s
 reads the whole base once), but only matching pks flow into the mandatory join — so the join stays a
 cheap pk-lookup, never a `base(N) ⋈ all-pks(N)` self-join that would OOM on a large table.
 
-The pushed predicate uses the **`json_extract_*_internal` twins**, not the public `json_extract`, in
-**both** the tail and the fallback. The fallback scans the base table, which carries the json index, so
-the public name would re-trigger the mandatory-filter rewrite and recurse; the internal twins are
-byte-identical in evaluation but invisible to that rewrite (it matches by name). The tail could keep
-the public name — it runs over `table_changes`, a TVF the rewrite never touches today — but using the
-internal name there too makes the invariant absolute (**the pushed predicate is never the public name,
-on any scan**), removing any dependence on that TVF detail and keeping one predicate for both paths. If
-the predicate cannot be rendered to SQL, the planner declines the probe entirely (`recordJSONProbeTail`
+The pushed predicate uses the **public `json_extract_string` / `json_extract_float64`** in both the
+tail and the fallback. The fallback scans the base table, which carries the json index, so that
+predicate would normally re-trigger the mandatory-filter rewrite and recurse. It is prevented instead
+by running the fallback/tail SQL with **`applyIndices=1`**: the operator passes it per-statement via
+`StatementOption.WithOptimizerHints("applyIndices=1")` (the internal SQL executor bridges it onto the
+execution context; `parseOptimizeHints` applies it on top of the global variable), so `applyIndices`
+short-circuits and the internal plan skips index application entirely — no probe, no recursion. If the
+predicate cannot be rendered to SQL, the planner declines the probe entirely (`recordJSONProbeTail`
 returns false) and the query runs as a plain **Table Scan** — a real full scan, still cheaper than an
 all-pks self-join.
+
+**Rolling-upgrade invariant (runtime contract).** The recursion guard is a *coordinator-side plan
+decision*, not a new function symbol: `applyIndices=1` is applied only where the plan is built, and
+the resulting plan (with the rewrite skipped) is what ships to remote CNs, which execute it without
+re-planning. The pushed predicate is the **public** `json_extract_*`, present on every version. So a
+mixed-version cluster has **no** version-specific overload to resolve — no `function overload id not
+found`, and no path by which an older CN drops `probe_tail` or returns an incomplete mandatory-filter
+result. (An earlier revision used byte-identical `json_extract_*_internal` twins as new overloads;
+those were removed precisely because a new overload id is unresolvable on a CN that predates it,
+which is the rolling-upgrade hazard this invariant forbids.)
 
 `base rows ← fetch by pk ∈ AGG(bulk pks ∪ tail-or-fallback pks)`. The group-by dedup (`AGG`)
 is still required: bulk and tail overlap when a row is updated inside the gap (old value in

@@ -232,6 +232,20 @@ func (opts StatementOption) AllowMoColumnsUpdate() bool {
 	return opts.allowMoColumnsUpdate
 }
 
+// WithOptimizerHints sets a per-statement optimizer_hints string (same comma-separated
+// key=value format as the global optimizer_hints variable). The internal SQL executor
+// bridges it onto the execution context and the planner's parseOptimizeHints applies it
+// on top of the global, so a single internal statement can override optimizer behavior
+// (e.g. applyIndices=1) without touching the process-wide global.
+func (opts StatementOption) WithOptimizerHints(hints string) StatementOption {
+	opts.optimizerHints = hints
+	return opts
+}
+
+func (opts StatementOption) OptimizerHints() string {
+	return opts.optimizerHints
+}
+
 func (opts StatementOption) IgnoreForeignKey() bool {
 	return opts.ignoreForeignKey
 }

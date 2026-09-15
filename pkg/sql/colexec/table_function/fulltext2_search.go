@@ -44,8 +44,10 @@ import (
 )
 
 // ft2RunStreamingSql indirects the streaming SQL executor so the self-completing json-probe tail
-// (startProbeTail) can be driven by a unit test without a live cluster.
-var ft2RunStreamingSql = sqlexec.RunStreamingSql
+// (startProbeTail) can be driven by a unit test without a live cluster. It carries a per-statement
+// optimizer_hints string: the probe passes "applyIndices=1" so the fallback/tail SQL's base-table
+// scan skips the index rewrite and does not re-trigger the probe and recurse.
+var ft2RunStreamingSql = sqlexec.RunStreamingSqlWithOptimizerHints
 
 // ft2TailSpansSchema indirects the schema-version span check so a unit test can drive the behind
 // branch's tail-vs-fallback decision without a live engine.
@@ -480,7 +482,7 @@ func (u *fulltext2SearchState) startProbeStream(proc *process.Process, sql strin
 	ctx, cancel := context.WithCancel(proc.Ctx)
 	u.tailCancel = cancel
 	go func() {
-		_, e := ft2RunStreamingSql(ctx, u.tailSp, sql, u.tailStreamCh, u.tailErrCh)
+		_, e := ft2RunStreamingSql(ctx, u.tailSp, sql, "applyIndices=1", u.tailStreamCh, u.tailErrCh)
 		if e != nil {
 			u.tailErrCh <- e // buffered(2): send before close so emitProbeTail reads it after drain
 		}

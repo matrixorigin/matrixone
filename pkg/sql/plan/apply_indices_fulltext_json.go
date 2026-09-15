@@ -370,11 +370,12 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 
 // jsonProbeTailInfo is what a self-completing json probe carries to the operator and to EXPLAIN.
 type jsonProbeTailInfo struct {
-	// whereSQL is the json predicate rebuilt against the source columns with the json_extract_*_internal
-	// twins (json_extract_string_internal(`col`, '$.path') <op> <lit>). The operator pushes it into BOTH
-	// its table_changes tail and its base-table fallback: the internal name is byte-identical in
-	// evaluation to the public json_extract but is never matched by the mandatory-filter rewrite, so the
-	// fallback's base scan cannot re-trigger the probe and recurse. It filters both to matching rows.
+	// whereSQL is the json predicate rebuilt against the source columns with the public
+	// json_extract_string / json_extract_float64 (json_extract_string(`col`, '$.path') <op> <lit>).
+	// The operator pushes it into BOTH its table_changes tail and its base-table fallback, which run
+	// with applyIndices=1 (via StatementOption.WithOptimizerHints) so their base scan skips the
+	// mandatory-filter rewrite and cannot re-trigger the probe and recurse. It filters both to
+	// matching rows.
 	whereSQL string
 	// bar / barLogical are the max source commit as of the read (SourceCommitTS), physical and logical.
 	// The operator compares the generation it ACTUALLY searched against this FULL timestamp to choose
@@ -449,16 +450,15 @@ func jsonProbeColName(scanNode *plan.Node, col int32) string {
 // the base scan re-checks, so pushing it only shrinks the candidate set. Returns false when the
 // literal has no SQL rendering.
 //
-// It renders the json_extract_*_internal twins, NOT the public json_extract. The fallback scans the
-// BASE table, where the public name would re-trigger the mandatory-filter rewrite and recurse; the
-// internal twin is byte-identical in evaluation but invisible to that rewrite. The tail uses the same
-// internal name -- unnecessary today (it runs over table_changes, a TVF the rewrite never touches) but
-// it makes the invariant absolute (the pushed predicate is NEVER the public name, on any scan) and
-// keeps one predicate for both paths.
+// It renders the public json_extract_string / json_extract_float64. The fallback scans the BASE
+// table, where this predicate would normally re-trigger the mandatory-filter rewrite and recurse;
+// that is prevented instead by running the fallback/tail SQL with applyIndices=1 (the fulltext2
+// probe sets it via StatementOption.WithOptimizerHints), so its plan skips the index rewrite. No
+// byte-identical function twin is needed, so the plan stays free of a version-specific overload.
 func jsonComparisonSQL(c jsonComparison, colName string) (string, bool) {
-	fn := "json_extract_float64_internal"
+	fn := "json_extract_float64"
 	if c.isString {
-		fn = "json_extract_string_internal"
+		fn = "json_extract_string"
 	}
 	val, ok := jsonLiteralToSQL(c.lit)
 	if !ok {

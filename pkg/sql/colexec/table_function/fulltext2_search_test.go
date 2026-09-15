@@ -607,7 +607,7 @@ func probeTailState() *fulltext2SearchState {
 	st.pkVecIdx, st.scoreVecIdx = 0, 1
 	st.tblcfg = fulltext2.TableConfig{
 		DbName: "db", SrcTable: "t", PKey: "id",
-		ProbeTailWhere: "json_extract_string_internal(`j`, '$.foo') = 'needle'",
+		ProbeTailWhere: "json_extract_string(`j`, '$.foo') = 'needle'",
 		ProbeTailBar:   2000,
 	}
 	st.tailSearchedBuildTS = 100
@@ -633,7 +633,7 @@ func TestFulltext2SearchProbeTailStreams(t *testing.T) {
 	orig := ft2RunStreamingSql
 	defer func() { ft2RunStreamingSql = orig }()
 	var capturedSQL string
-	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, streamCh chan executor.Result, _ chan error) (executor.Result, error) {
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ string, streamCh chan executor.Result, _ chan error) (executor.Result, error) {
 		capturedSQL = sql
 		bat := batch.NewWithSize(1)
 		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
@@ -662,7 +662,7 @@ func TestFulltext2SearchProbeTailStreams(t *testing.T) {
 	require.Contains(t, capturedSQL, "'100-0'")
 	require.Contains(t, capturedSQL, "AS mo_tc")
 	require.Contains(t, capturedSQL, "mo_tc.change_type = 'insert'")
-	require.Contains(t, capturedSQL, "AND (json_extract_string_internal(`j`, '$.foo') = 'needle')")
+	require.Contains(t, capturedSQL, "AND (json_extract_string(`j`, '$.foo') = 'needle')")
 
 	st.batch.CleanOnlyData()
 	res, err = st.emitProbeTail(proc) // stream closed → end
@@ -681,7 +681,7 @@ func TestFulltext2SearchProbeTailCaughtUp(t *testing.T) {
 	orig := ft2RunStreamingSql
 	defer func() { ft2RunStreamingSql = orig }()
 	called := false
-	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, _ string, _ chan executor.Result, _ chan error) (executor.Result, error) {
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, _ string, _ string, _ chan executor.Result, _ chan error) (executor.Result, error) {
 		called = true
 		return executor.Result{}, nil
 	}
@@ -708,7 +708,7 @@ func TestFulltext2SearchProbeTailLogicalBoundary(t *testing.T) {
 	orig := ft2RunStreamingSql
 	defer func() { ft2RunStreamingSql = orig }()
 	var capturedSQL string
-	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ chan executor.Result, _ chan error) (executor.Result, error) {
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ string, _ chan executor.Result, _ chan error) (executor.Result, error) {
 		capturedSQL = sql
 		return executor.Result{}, nil
 	}
@@ -735,7 +735,7 @@ func TestFulltext2SearchProbeTailNewerFallback(t *testing.T) {
 	orig := ft2RunStreamingSql
 	defer func() { ft2RunStreamingSql = orig }()
 	var capturedSQL string
-	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, streamCh chan executor.Result, _ chan error) (executor.Result, error) {
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ string, streamCh chan executor.Result, _ chan error) (executor.Result, error) {
 		capturedSQL = sql
 		return executor.Result{}, nil
 	}
@@ -748,7 +748,7 @@ func TestFulltext2SearchProbeTailNewerFallback(t *testing.T) {
 	require.NoError(t, err)
 	// Selective full scan of the base table, filtered by the json_extract_*_internal predicate (so the
 	// base scan does not re-trigger the probe rewrite) -- NOT an all-pks scan, NOT a table_changes tail.
-	require.Equal(t, "SELECT `id` FROM `db`.`t` WHERE json_extract_string_internal(`j`, '$.foo') = 'needle'", capturedSQL)
+	require.Equal(t, "SELECT `id` FROM `db`.`t` WHERE json_extract_string(`j`, '$.foo') = 'needle'", capturedSQL)
 	require.NotContains(t, capturedSQL, "table_changes")
 }
 
@@ -767,7 +767,7 @@ func TestFulltext2SearchProbeTailPhysicalTieFallback(t *testing.T) {
 	orig := ft2RunStreamingSql
 	defer func() { ft2RunStreamingSql = orig }()
 	var capturedSQL string
-	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ chan executor.Result, _ chan error) (executor.Result, error) {
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ string, _ chan executor.Result, _ chan error) (executor.Result, error) {
 		capturedSQL = sql
 		return executor.Result{}, nil
 	}
@@ -779,7 +779,7 @@ func TestFulltext2SearchProbeTailPhysicalTieFallback(t *testing.T) {
 
 	_, err := st.emitProbeTail(proc)
 	require.NoError(t, err)
-	require.Equal(t, "SELECT `id` FROM `db`.`t` WHERE json_extract_string_internal(`j`, '$.foo') = 'needle'", capturedSQL)
+	require.Equal(t, "SELECT `id` FROM `db`.`t` WHERE json_extract_string(`j`, '$.foo') = 'needle'", capturedSQL)
 	require.NotContains(t, capturedSQL, "table_changes", "a physical-time tie must fall back, not tail")
 }
 
@@ -793,7 +793,7 @@ func TestFulltext2SearchProbeTailSchemaSpanFallback(t *testing.T) {
 	orig := ft2RunStreamingSql
 	defer func() { ft2RunStreamingSql = orig }()
 	var capturedSQL string
-	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, streamCh chan executor.Result, _ chan error) (executor.Result, error) {
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ string, streamCh chan executor.Result, _ chan error) (executor.Result, error) {
 		capturedSQL = sql
 		return executor.Result{}, nil
 	}
@@ -803,7 +803,7 @@ func TestFulltext2SearchProbeTailSchemaSpanFallback(t *testing.T) {
 
 	_, err := st.emitProbeTail(proc)
 	require.NoError(t, err)
-	require.Equal(t, "SELECT `id` FROM `db`.`t` WHERE json_extract_string_internal(`j`, '$.foo') = 'needle'", capturedSQL)
+	require.Equal(t, "SELECT `id` FROM `db`.`t` WHERE json_extract_string(`j`, '$.foo') = 'needle'", capturedSQL)
 	require.NotContains(t, capturedSQL, "table_changes")
 }
 
