@@ -13,6 +13,8 @@ explain format=json with c as (select id from t) select * from c;
 EXPLAIN
 explain format=json select id, row_number() over (order by id) as rn from t;
 EXPLAIN
+explain format=json select * from generate_series(1, 5) g;
+EXPLAIN
 explain (analyze false, format json) select * from t;
 EXPLAIN
 explain format=json update t set v = 99 where id = 1;

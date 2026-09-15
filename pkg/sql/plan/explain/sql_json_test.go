@@ -557,12 +557,50 @@ func TestBuildSQLJSONPlanCoversOperatorDetails(t *testing.T) {
 	require.Equal(t, "18", byID["7"].Limit)
 	require.Equal(t, []string{"28"}, byID["16"].Expressions)
 	require.Equal(t, []string{"29"}, byID["17"].Expressions)
+	require.Equal(t, "generate_series", byID["16"].TableName)
+	require.Equal(t, "generate_series", byID["17"].TableName)
 	require.Equal(t, "db.target", byID["20"].TableName)
 	require.Equal(t, "db.target", byID["21"].TableName)
 	require.Equal(t, []string{"30", "31"}, byID["22"].Expressions)
 	require.Len(t, byID["23"].Assignments, 2)
 	require.Equal(t, "db.target", byID["24"].TableName)
 	require.Equal(t, "db.target", decoded.QueryBlock.Table.TableName)
+}
+
+func TestBuildSQLJSONPlanPreservesVectorIndexPayload(t *testing.T) {
+	data, err := BuildSQLJSONPlan(context.Background(), &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:   0,
+			NodeType: plan.Node_VECTOR_INDEX_SCAN,
+			ObjRef:   &plan.ObjectRef{SchemaName: "db", ObjName: "items"},
+			TableDef: &plan.TableDef{Name: "items"},
+			VectorIndexScan: &plan.VectorIndexScan{
+				Index:            &plan.IndexDef{IndexName: "idx_embedding"},
+				DistanceFunction: "l2_distance",
+				QueryVector:      sqlJSONTestInt32(1),
+				CandidateLimit:   sqlJSONTestInt32(10),
+				PreFilters:       []*plan.Expr{sqlJSONTestInt32(2)},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	var decoded struct {
+		MatrixOne struct {
+			Nodes []sqlJSONNode `json:"nodes"`
+		} `json:"matrixone"`
+	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Len(t, decoded.MatrixOne.Nodes, 1)
+	require.Equal(t, "db.items", decoded.MatrixOne.Nodes[0].TableName)
+	require.Equal(t, []string{
+		"index=idx_embedding",
+		"metric=l2_distance",
+		"query_vector=1",
+		"candidate_limit=10",
+		"pre_filter[0]=2",
+	}, decoded.MatrixOne.Nodes[0].Expressions)
 }
 
 func TestSQLJSONHelpersRejectMalformedInputsAndPreserveStatistics(t *testing.T) {
