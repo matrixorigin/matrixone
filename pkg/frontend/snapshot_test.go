@@ -1086,9 +1086,8 @@ func TestMarkedAccountRestorePreflightsBeforeDestructiveWorkBelowCapability(t *t
 			showSQL:   fmt.Sprintf("show databases {MO_TS = %d}", ts),
 			createSQL: fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, dbName),
 			run: func(bh BackgroundExec) error {
-				return restoreToAccountWithPitr(
-					ctx, "", bh, pitrName, ts,
-					map[string]*tableInfo{}, map[string]*tableInfo{}, uint32(sysAccountID),
+				return preflightRestorePitrEntry(
+					ctx, "", bh, pitrName, ts, tree.RESTORELEVELACCOUNT, "", uint32(sysAccountID),
 				)
 			},
 		},
@@ -1163,6 +1162,54 @@ func TestClusterRestorePreflightsBeforeAccountSideEffects(t *testing.T) {
 		showDatabasesSQL,
 		createDatabaseSQL,
 	}, bh.executedSQLs)
+}
+
+func TestMarkedTableSnapshotRestorePreflightsBeforeFkSideEffects(t *testing.T) {
+	setProtocolVersionForTest(t, "", defines.MORPCVersion74)
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	const (
+		snapshotName = "issue26068_table_snapshot"
+		dbName       = "marked_branch"
+		tableName    = "child"
+		snapshotTS   = int64(100)
+	)
+
+	snapshotSQL := fmt.Sprintf("select * from mo_catalog.mo_snapshots where sname = '%s'", snapshotName)
+	createDatabaseSQL := fmt.Sprintf(
+		"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0",
+		snapshotTS, dbName,
+	)
+	fkSQL := "select db_name, table_name, refer_db_name, refer_table_name from " +
+		"mo_catalog.mo_foreign_keys where db_name = 'marked_branch' and table_name = 'child'"
+	bh.sql2result[snapshotSQL] = newMrsForSnapshotRecord(
+		"snapshot-id", snapshotName, snapshotTS, tree.SNAPSHOTLEVELTABLE.String(),
+		sysAccountName, dbName, tableName, 1,
+	)
+	bh.sql2result[createDatabaseSQL] = newMrsForRestoreStringRows(
+		[]string{"datname", "dat_createsql", "dat_type"},
+		[][]interface{}{{dbName, "create database " + dbName, catalog.SystemDBTypeDataBranch}},
+	)
+	bh.sql2result[fkSQL] = newMrsForRestoreStringRows(
+		[]string{"db_name", "table_name", "refer_db_name", "refer_table_name"},
+		[][]interface{}{{dbName, tableName, dbName, "parent"}},
+	)
+
+	_, err := doRestoreSnapshot(ctx, ses, &tree.RestoreSnapShot{
+		Level:        tree.RESTORELEVELTABLE,
+		SnapShotName: tree.Identifier(snapshotName),
+		DatabaseName: tree.Identifier(dbName),
+		TableName:    tree.Identifier(tableName),
+	})
+	require.ErrorContains(t, err, "requires MORPC protocol version 75")
+	require.Contains(t, bh.executedSQLs, createDatabaseSQL)
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
+	require.NotContains(t, bh.executedSQLs, fkSQL)
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, strings.ToLower(sql), "mo_foreign_keys")
+		require.NotContains(t, strings.ToLower(sql), "drop table")
+		require.NotContains(t, strings.ToLower(sql), "create database")
+	}
 }
 
 func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {

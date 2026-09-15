@@ -984,9 +984,9 @@ func preflightRestoreSnapshotEntry(
 	snapshot snapshotRecord,
 ) error {
 	switch stmt.Level {
-	case tree.RESTORELEVELCLUSTER, tree.RESTORELEVELTABLE:
+	case tree.RESTORELEVELCLUSTER:
 		// Cluster restore builds and validates its complete account plan before
-		// the first account mutation. Table restore does not recreate a database.
+		// the first account mutation.
 		return nil
 	case tree.RESTORELEVELACCOUNT:
 		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
@@ -1004,7 +1004,7 @@ func preflightRestoreSnapshotEntry(
 		return preflightLogicalRestoreAccountFromSnapshot(
 			ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts, uint32(snapshot.objId),
 		)
-	case tree.RESTORELEVELDATABASE:
+	case tree.RESTORELEVELDATABASE, tree.RESTORELEVELTABLE:
 		return preflightLogicalRestoreDatabases(
 			ctx,
 			[]string{string(stmt.DatabaseName)},

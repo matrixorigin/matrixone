@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3752,6 +3754,121 @@ func registerPitrRecordResultWithStatus(
 	}
 	mrs.AddRow(row)
 	bh.sql2result[sql] = mrs
+}
+
+func TestRestorePitrPreflightsBeforeAccountCreation(t *testing.T) {
+	setProtocolVersionForTest(t, "", defines.MORPCVersion74)
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	const (
+		pitrName  = "issue26068_account_pitr"
+		dbName    = "marked_branch"
+		account   = "tenant1"
+		accountID = uint64(1)
+	)
+	timeText := nanoTimeFormat(time.Now().Add(-2 * time.Hour).UnixNano())
+	ts, err := doResolveTimeStamp(timeText)
+	require.NoError(t, err)
+	bh.sql2result[catalog.FeatureRegistryCatalogGateSQL] = newMrsForSqlForShowDatabases(
+		[][]interface{}{{1}},
+	)
+
+	checkSQL, err := getSqlForCheckPitr(ctx, pitrName, sysAccountID)
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+	pitrSQL := fmt.Sprintf(
+		"%s where pitr_name = '%s' and create_account = %d",
+		getPitrFormat, pitrName, sysAccountID,
+	)
+	bh.sql2result[pitrSQL] = newMrsForPitrRecord([][]interface{}{{
+		"pitr-id", pitrName, uint64(sysAccountID),
+		time.Now().Add(-24 * time.Hour).UnixNano(), time.Now().Add(-24 * time.Hour).UnixNano(),
+		tree.PITRLEVELACCOUNT.String(), accountID, account, "", "", accountID, uint8(1), "d",
+	}})
+
+	accountSQL := fmt.Sprintf(
+		"select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } where account_name = '%s';",
+		ts, account,
+	)
+	showDatabasesSQL := fmt.Sprintf("show databases {MO_TS = %d}", ts)
+	createDatabaseSQL := fmt.Sprintf(
+		"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = %d",
+		ts, dbName, accountID,
+	)
+	bh.sql2result[accountSQL] = newMrsForRestoreStringRows(
+		[]string{"account_id", "account_name", "admin_name", "comments"},
+		[][]interface{}{{accountID, account, rootName, ""}},
+	)
+	bh.sql2result[showDatabasesSQL] = newMrsForSqlForShowDatabases([][]interface{}{{dbName}})
+	bh.sql2result[createDatabaseSQL] = newMrsForRestoreStringRows(
+		[]string{"datname", "dat_createsql", "dat_type"},
+		[][]interface{}{{dbName, "create database " + dbName, catalog.SystemDBTypeDataBranch}},
+	)
+
+	_, err = doRestorePitr(ctx, ses, &tree.RestorePitr{
+		Level:       tree.RESTORELEVELACCOUNT,
+		Name:        tree.Identifier(pitrName),
+		AccountName: tree.Identifier(account),
+		TimeStamp:   timeText,
+	})
+	require.ErrorContains(t, err, "requires MORPC protocol version 75", bh.executedSQLs)
+	require.Contains(t, bh.executedSQLs, createDatabaseSQL)
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, strings.ToLower(sql), "create account")
+		require.NotContains(t, strings.ToLower(sql), "drop table")
+		require.NotContains(t, strings.ToLower(sql), "drop database")
+	}
+}
+
+func TestRestorePitrPreflightsBeforeExistingAccountSideEffects(t *testing.T) {
+	setProtocolVersionForTest(t, "", defines.MORPCVersion74)
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	const (
+		pitrName = "issue26068_existing_account_pitr"
+		dbName   = "marked_branch"
+	)
+	timeText := nanoTimeFormat(time.Now().Add(-2 * time.Hour).UnixNano())
+	ts, err := doResolveTimeStamp(timeText)
+	require.NoError(t, err)
+	bh.sql2result[catalog.FeatureRegistryCatalogGateSQL] = newMrsForSqlForShowDatabases(
+		[][]interface{}{{1}},
+	)
+
+	checkSQL, err := getSqlForCheckPitr(ctx, pitrName, sysAccountID)
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+	registerPitrRecordResult(bh, pitrName, sysAccountID, 1, "d")
+	accountExistsSQL, err := getSqlForCheckAccountWithPitr(ctx, ts, sysAccountName)
+	require.NoError(t, err)
+	bh.sql2result[accountExistsSQL] = newMrsForPitrRecord([][]interface{}{{uint64(sysAccountID)}})
+	showDatabasesSQL := fmt.Sprintf("show databases {MO_TS = %d}", ts)
+	createDatabaseSQL := fmt.Sprintf(
+		"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0",
+		ts, dbName,
+	)
+	bh.sql2result[showDatabasesSQL] = newMrsForSqlForShowDatabases([][]interface{}{{dbName}})
+	bh.sql2result[createDatabaseSQL] = newMrsForRestoreStringRows(
+		[]string{"datname", "dat_createsql", "dat_type"},
+		[][]interface{}{{dbName, "create database " + dbName, catalog.SystemDBTypeDataBranch}},
+	)
+
+	_, err = doRestorePitr(ctx, ses, &tree.RestorePitr{
+		Level:     tree.RESTORELEVELACCOUNT,
+		Name:      tree.Identifier(pitrName),
+		TimeStamp: timeText,
+	})
+	require.ErrorContains(t, err, "requires MORPC protocol version 75", bh.executedSQLs)
+	require.Contains(t, bh.executedSQLs, createDatabaseSQL)
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
+	for _, sql := range bh.executedSQLs {
+		lowerSQL := strings.ToLower(sql)
+		require.NotContains(t, lowerSQL, "replace into mo_catalog.mo_view_refresh")
+		require.NotContains(t, lowerSQL, "mo_foreign_keys")
+		require.NotContains(t, lowerSQL, "drop table")
+		require.NotContains(t, lowerSQL, "drop database")
+	}
 }
 
 func TestDoDropPitrCompactsHistoricalAlterLineage(t *testing.T) {

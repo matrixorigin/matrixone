@@ -886,11 +886,19 @@ Implement these decisions in this change:
 ## 12. Database-level Branch Identity Amendment
 
 - Status: proposed and implemented; independent revision review pending
-- Independent decision: pending for exact revision r19
+- Independent decision: pending for exact revision r20
 - Tracking issue: [matrixorigin/matrixone#26068](https://github.com/matrixorigin/matrixone/issues/26068)
 - Implementation PR: [matrixorigin/matrixone#28272](https://github.com/matrixorigin/matrixone/pull/28272)
-- Design revision: `data-branch-database-identity-2026-09-16-r19`
+- Design revision: `data-branch-database-identity-2026-09-16-r20`
 - Required rollout capability: `MORPCVersion75`
+
+Revision r20 keeps the r19 v75 allocation and moves PITR account/database/table
+identity admission into `doRestorePitr`, before dropped-account creation,
+metadata invalidation, foreign-key cleanup, or database/table restore. Cluster
+PITR now enters the existing all-account preflight before generic FK cleanup.
+Table snapshot restore shares the database-level entry preflight, so an
+unsupported marked source is rejected before FK-linked target tables or index
+consumers can be affected.
 
 Revision r19 reserves v75 for this PR and requires the concurrently open JSON
 MIN/MAX capability PR #28950 to merge afterward as v76. Sharing v75 would let
@@ -1030,16 +1038,16 @@ restore transaction and does not publish a partially restored identity.
 
 Focused tests must cover both sides of the capability boundary:
 
-- v73 create rejects before any DDL; v75 create attaches the marker;
+- v74 create rejects before any DDL; v75 create attaches the marker;
 - old-created unmarked empty/all-dropped databases reject at both versions;
 - old-created unmarked table-backed databases with valid receipts delete at
   both versions;
-- new-created marked empty/all-dropped databases reject at v73 and delete at
+- new-created marked empty/all-dropped databases reject at v74 and delete at
   v75;
 - new-created marked table-backed databases retain legacy receipt validation at
-  v73 and require the same receipts at v75;
-- publication treats the marker as non-user at v73 and user at v75;
-- snapshot/PITR restore rejects marked input before destructive work at v73 and
+  v74 and require the same receipts at v75;
+- publication treats the marker as non-user at v74 and user at v75;
+- snapshot/PITR restore rejects marked input before destructive work at v74 and
   preserves the marker at v75;
 - missing/subscription/unknown identity and locally added ordinary tables remain
   negative controls;
