@@ -1814,7 +1814,9 @@ func Decimal128FromFloat64(x float64, width, scale int32) (y Decimal128, err err
 
 	y, err = ParseDecimal128(strconv.FormatFloat(x, 'g', -1, 64), width, scale)
 	if err != nil {
-		return y, err
+		// Keep the legacy Float64 conversion error contract instead of leaking
+		// the parser's implementation-specific overflow text.
+		return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
 	}
 	// ParseDecimal128 permits the signed minimum coefficient, while the legacy
 	// float conversion enforces a strict symmetric magnitude bound.

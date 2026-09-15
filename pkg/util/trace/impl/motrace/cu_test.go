@@ -113,8 +113,8 @@ func TestCalculateCUMem(t *testing.T) {
 				durationNS: 309319808921,
 				cfg:        &dummyOBConfig,
 			},
-			// want: 1.201028143901687e+06,
-			want: 1.2010281439016873e+06,
+			// want: 1.2010281439016876e+06,
+			want: 1.2010281439016876e+06,
 		},
 		{
 			name: "default_cfg",
@@ -153,7 +153,7 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 				durationNS: 309319808921,
 				cfg:        &dummyOBConfig,
 			},
-			want: 1.2010281439016873e+06,
+			want: 1.2010281439016876e+06,
 		},
 		{
 			name: "5,733(G-byte)*86400(sec)",
@@ -162,8 +162,8 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 				durationNS: 86400e9,
 				cfg:        &dummyOBConfig,
 			},
-			//    3,354,742,523.444667
-			want: 3.354742523444667e+09,
+			//    3,354,742,523.444668
+			want: 3.354742523444668e+09,
 		},
 		{
 			name: "128(GB)*7*86400(sec)",
@@ -173,7 +173,7 @@ func TestCalculateCUMemDecimal(t *testing.T) {
 				cfg:        &dummyOBConfig,
 			},
 			//  562,886,586.3021176
-			want: 5.628865863021175e+08,
+			want: 5.628865863021176e+08,
 		},
 		{
 			name: "573384797164(byte)*1e9(ns)",

@@ -568,6 +568,9 @@ func TestDecimal128FromFloat64KeepsDecimalRoundingAndRangeChecks(t *testing.T) {
 	require.Error(t, err)
 	_, err = Decimal128FromFloat64(-999.995, 5, 2)
 	require.Error(t, err)
+
+	_, err = Decimal128FromFloat64(1e20, 19, 6)
+	require.EqualError(t, err, "invalid input: Can't convert Float64 To Decimal128: 100000000000000000000.000000(19,6)")
 }
 
 func TestDecimal128FromFloat64RejectsSpecialValuesAndInvalidTypes(t *testing.T) {
