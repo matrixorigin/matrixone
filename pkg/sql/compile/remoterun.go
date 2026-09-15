@@ -147,6 +147,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateGroupConcatTimeZoneDestination(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateJSONMinMaxDestination(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -1952,6 +1955,12 @@ func validateRemoteAggregateProtocol(
 				"collation-aware text MIN/MAX remote execution requires MORPC protocol version 14",
 			)
 		}
+		if aggregateUsesJSONMinMax(agg) &&
+			(proc == nil || !supportsRemoteJSONMinMax(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"JSON MIN/MAX remote execution requires MORPC protocol version 75",
+			)
+		}
 	}
 	return nil
 }
@@ -2619,6 +2628,14 @@ func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bo
 	default:
 		return false
 	}
+}
+
+func aggregateUsesJSONMinMax(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfMin && agg.GetAggID() != aggexec.AggIdOfMax {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	return len(args) > 0 && args[0] != nil && types.T(args[0].Typ.Id) == types.T_json
 }
 
 // convert []aggexec.AggFuncExecExpression to []*pipeline.Aggregate
