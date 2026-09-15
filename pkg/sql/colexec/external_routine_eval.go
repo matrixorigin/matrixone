@@ -95,7 +95,7 @@ func validateRoutineCall(call *planpb.RoutineCall) error {
 	if call.ReturnType.Id == int32(types.T_any) {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: typed routine call has no return descriptor")
 	}
-	if call.ContractVersion != udf.PythonPlanContractVersion || !strings.EqualFold(call.Language, udf.LanguagePython) {
+	if call.ContractVersion != udf.PythonPlanContractVersion || call.Language != udf.LanguagePython {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported typed routine call contract")
 	}
 	if call.Volatility != "VOLATILE" {
