@@ -150,6 +150,22 @@ type UpgradeEntry struct {
 
 // Upgrade entity execution upgrade entrance
 func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error {
+	return u.upgrade(txn, accountId, true)
+}
+
+// UpgradeAfterProtocolCheck executes the same guarded entry after the caller
+// has checked RequiredProtocolVersion in the current transaction. This is
+// needed by retryable reconciliation callers that must distinguish a protocol
+// gate failure from an ErrNotSupported returned by the DDL itself.
+func (u *UpgradeEntry) UpgradeAfterProtocolCheck(txn executor.TxnExecutor, accountId uint32) error {
+	return u.upgrade(txn, accountId, false)
+}
+
+func (u *UpgradeEntry) upgrade(
+	txn executor.TxnExecutor,
+	accountId uint32,
+	checkProtocol bool,
+) error {
 	statementOption := UpgradeStatementOption(accountId)
 	if u.AllowMoColumnsUpdate {
 		statementOption = statementOption.WithMoColumnsUpdate()
@@ -164,7 +180,7 @@ func (u *UpgradeEntry) Upgrade(txn executor.TxnExecutor, accountId uint32) error
 	if exist {
 		return nil
 	}
-	if u.RequiredProtocolVersion > 0 {
+	if checkProtocol && u.RequiredProtocolVersion > 0 {
 		if txn == nil {
 			return moerr.NewNotSupportedNoCtxf(
 				"upgrade %s requires protocol version %d, transaction is unavailable",

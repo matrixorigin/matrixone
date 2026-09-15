@@ -31,6 +31,17 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 	upgradeInformationSchemaViews(),
 }
 
+// UpgradeInformationSchemaViewsAfterProtocolCheck reuses the guarded VIEWS
+// migration for post-upgrade reconciliation. The caller checks the protocol
+// immediately before calling this function so an ErrNotSupported from the
+// DDL cannot be mistaken for a retryable protocol gate.
+func UpgradeInformationSchemaViewsAfterProtocolCheck(
+	txn executor.TxnExecutor,
+	accountID uint32,
+) error {
+	return tenantUpgEntries[0].UpgradeAfterProtocolCheck(txn, accountID)
+}
+
 // upgradeInformationSchemaViews is deliberately scheduled in v4.0.7. The
 // v4.0.6 entry only reaches tenants that were still below v4.0.6; a tenant
 // already recorded at v4.0.6 must receive a new upgrade identity before the
