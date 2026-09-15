@@ -514,6 +514,12 @@ type DbTableInfo struct {
 	SourceTblId     uint64
 	SourceTblName   string
 	SourceCreateSql string
+	// PrimaryKeyChecked is true only for metadata returned by TableDetector.
+	// It preserves compatibility with manually constructed table descriptions
+	// while allowing a running wildcard task to fail closed if a user key is
+	// dropped after startup.
+	PrimaryKeyChecked bool
+	HasUserPrimaryKey bool
 
 	SinkDbName  string
 	SinkTblName string
@@ -547,14 +553,16 @@ func (info DbTableInfo) String() string {
 
 func (info DbTableInfo) Clone() *DbTableInfo {
 	return &DbTableInfo{
-		SourceDbId:      info.SourceDbId,
-		SourceDbName:    info.SourceDbName,
-		SourceTblId:     info.SourceTblId,
-		SourceTblName:   info.SourceTblName,
-		SourceCreateSql: info.SourceCreateSql,
-		SinkDbName:      info.SinkDbName,
-		SinkTblName:     info.SinkTblName,
-		IdChanged:       info.IdChanged,
+		SourceDbId:        info.SourceDbId,
+		SourceDbName:      info.SourceDbName,
+		SourceTblId:       info.SourceTblId,
+		SourceTblName:     info.SourceTblName,
+		SourceCreateSql:   info.SourceCreateSql,
+		PrimaryKeyChecked: info.PrimaryKeyChecked,
+		HasUserPrimaryKey: info.HasUserPrimaryKey,
+		SinkDbName:        info.SinkDbName,
+		SinkTblName:       info.SinkTblName,
+		IdChanged:         info.IdChanged,
 	}
 }
 

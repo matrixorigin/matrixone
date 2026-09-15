@@ -765,6 +765,14 @@ func (s *TableDetector) scanTable() error {
 			dbName := cols[3].GetStringAt(i)
 			createSql := cols[4].GetStringAt(i)
 			accountId := vector.MustFixedColWithTypeCheck[uint32](cols[5])[i]
+			// Older unit fixtures may not include the appended status column. The
+			// production query always does; retain the fixture compatibility while
+			// marking only authoritative scanner metadata as checked.
+			primaryKeyChecked := len(cols) > 7
+			hasUserPrimaryKey := true
+			if primaryKeyChecked {
+				hasUserPrimaryKey = vector.MustFixedColNoTypeCheck[bool](cols[7])[i]
+			}
 			hasForeignKey, decodeErr := TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
 			if decodeErr != nil {
 				scanErr = decodeErr
@@ -791,11 +799,13 @@ func (s *TableDetector) scanTable() error {
 
 			oldInfo, exists := s.Mp[accountId][key]
 			newInfo := &DbTableInfo{
-				SourceDbId:      dbId,
-				SourceDbName:    dbName,
-				SourceTblId:     tblId,
-				SourceTblName:   tblName,
-				SourceCreateSql: createSql,
+				SourceDbId:        dbId,
+				SourceDbName:      dbName,
+				SourceTblId:       tblId,
+				SourceTblName:     tblName,
+				SourceCreateSql:   createSql,
+				PrimaryKeyChecked: primaryKeyChecked,
+				HasUserPrimaryKey: hasUserPrimaryKey,
 			}
 			if !exists {
 				mp[accountId][key] = newInfo
@@ -807,6 +817,8 @@ func (s *TableDetector) scanTable() error {
 				updatedInfo.SourceTblId = tblId
 				updatedInfo.SourceTblName = tblName
 				updatedInfo.SourceCreateSql = createSql
+				updatedInfo.PrimaryKeyChecked = primaryKeyChecked
+				updatedInfo.HasUserPrimaryKey = hasUserPrimaryKey
 				updatedInfo.IdChanged = updatedInfo.IdChanged || idChanged
 				mp[accountId][key] = updatedInfo
 			}
