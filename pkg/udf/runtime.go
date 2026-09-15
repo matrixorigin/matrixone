@@ -27,6 +27,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -101,6 +102,9 @@ func (c StatementContext) Validate() error {
 	if c.TimezoneKind == "IANA" {
 		if c.TimezoneName == "" || c.TimezoneDatabaseVersion == "" || c.TimezoneOffsetMinutes != 0 {
 			return fmt.Errorf("python udf: IANA statement timezone is incomplete")
+		}
+		if _, err := time.LoadLocation(c.TimezoneName); err != nil {
+			return fmt.Errorf("python udf: IANA statement timezone is not present in the local tzdb: %w", err)
 		}
 	} else if c.TimezoneKind == "FIXED_OFFSET" {
 		if c.TimezoneName != "" || c.TimezoneDatabaseVersion != "" || c.TimezoneOffsetMinutes < -839 || c.TimezoneOffsetMinutes > 840 {

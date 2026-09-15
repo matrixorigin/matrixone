@@ -111,6 +111,34 @@ func TestStatementContextAcceptsUnixEpoch(t *testing.T) {
 	require.NoError(t, snapshot.Validate())
 }
 
+func TestStatementContextRejectsUnknownIANAZoneBeforeTransport(t *testing.T) {
+	snapshot := StatementContext{
+		ContractVersion:         StatementContextContractVersion,
+		StatementTimestampUTC:   0,
+		TimezoneKind:            "IANA",
+		TimezoneName:            "NoSuch/Zone",
+		TimezoneDatabaseVersion: "2026a",
+		CurrentUser:             "alice",
+		ConnectionCollation:     "utf8mb4_bin",
+	}
+	require.ErrorContains(t, snapshot.Validate(), "not present in the local tzdb")
+}
+
+func TestStatementContextAcceptsKnownIANAZone(t *testing.T) {
+	version, err := TimezoneDatabaseVersion()
+	require.NoError(t, err)
+	snapshot := StatementContext{
+		ContractVersion:         StatementContextContractVersion,
+		StatementTimestampUTC:   0,
+		TimezoneKind:            "IANA",
+		TimezoneName:            "UTC",
+		TimezoneDatabaseVersion: version,
+		CurrentUser:             "alice",
+		ConnectionCollation:     "utf8mb4_bin",
+	}
+	require.NoError(t, snapshot.Validate())
+}
+
 func TestStatementContextMatchesPythonDatetimeRange(t *testing.T) {
 	base := StatementContext{
 		ContractVersion:     StatementContextContractVersion,
