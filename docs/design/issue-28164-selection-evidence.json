@@ -5,22 +5,26 @@
     "malformed_generic_tuple": "FAIL: three missing terminators accepted",
     "MO_original_row_lookup": "NOT_RUN on transformed storage",
     "production_format_freeze": "NOT_APPROVED",
-    "production_integration": "NOT_EXPANDED"
+    "production_integration": "CANDIDATE_WIRED_BUT_DISABLED",
+    "native_0900_admission": "BLOCKED_UNTIL_DURABLE_CLUSTER_GATE",
+    "copy_dedup_and_hidden_pk_regressions": "PASS_FOCUSED",
+    "coercibility_regressions": "PASS_FOCUSED",
+    "live_sql_storage_migration_qa": "NOT_RUN"
   },
   "mysql": {
     "version": "8.0.45 aarch64",
     "image_digest": "sha256:4af1f8815716546f5b12410f7621f37f93db8dd11a184706ef59111930b8c2ff"
   },
   "vitess": {
-    "module": "vitess.io/vitess v0.22.1",
-    "commit": "aafd40357555438f9df7b7e28afe7e0828502896",
-    "toolchain": "go1.24.4 darwin/arm64",
-    "go1_26_4_import": "BUILD_FAILED: internal runtime Swiss map layout assertion"
+    "module": "vitess.io/vitess v0.24.0",
+    "commit": "e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0",
+    "toolchain": "go1.26.4 darwin/arm64",
+    "go1_26_4_import": "PASS in implementation worktree; full dependency closure review pending"
   },
   "mo_reference": {
     "base": "c54e2fc5e9057c3bfcc5a1ee1a2dfd75b3feb1d7",
-    "candidate_and_tuple_commit": "86c030d6b2",
-    "status": "experimental local commit, not production-activated"
+    "candidate_and_tuple_commit": "86c030d6b2 + working tree 2026-09-15",
+    "status": "candidate implementation, admission closed, not production-activated"
   },
   "corpus_count": 244,
   "comparison_modes": {

@@ -1,9 +1,9 @@
 # #28164: independent collation implementation and key selection
 
-Status: experimental selection, not a frozen production format. This supplements
-[the replacement design](issue-28164-collation-key-reuse.md) and supersedes any
-claim that the local `86c030d6b2` prototype froze production key bytes. No table
-has been enabled and no production integration was expanded in this selection.
+Status: experimental selection and implementation evidence, not a frozen
+production format. This supplements [the replacement design](issue-28164-collation-key-reuse.md)
+and records the current `28164-integration` fixes. Native 0900 admission is
+closed by a durable-cluster gate; no production table has been enabled.
 
 Machine-readable results, API option samples, sizes, benchmark records and raw
 artifact hashes are in [selection evidence](issue-28164-selection-evidence.json).
@@ -23,30 +23,30 @@ This is a scoped selection based on the results below, not a declaration that
 general-ci is the final backend for every collation. The native comparison also
 examined `utf8mb4_unicode_ci` (ID 224, legacy UCA 4.0/PAD SPACE),
 `utf8mb4_0900_ai_ci` (ID 255, UCA 9.0/NO PAD), and `utf8mb4_0900_bin`
-(ID 309, NO PAD). Vitess is a viable weight provider for those wider domains;
-the current general-ci table cannot implement them. Adding them to phase one
-would require distinct metadata identities and a wider SQL-consumer design.
+(ID 309, NO PAD). The implementation assigns independent MO identities to the
+two native 0900 variants and uses the fixed Vitess v0.24.0 backend; the SQL and
+storage consumers remain behind the durable admission gate.
 
 Current `build_util.go` compatibility spellings are a separate contract:
 
 - `utf8_bin`/`utf8mb3_bin` map to the text `_bin` class.
-- `utf8_general_ci`/`utf8mb3_general_ci`, `utf8mb4_0900_ai_ci`,
-  `latin1_swedish_ci`, and `ascii_general_ci` map to the general-ci class.
+- `utf8_general_ci`/`utf8mb3_general_ci`, `latin1_swedish_ci`, and
+  `ascii_general_ci` map to the legacy general-ci class. Explicit native 0900
+  names map only to the independent native identities.
 - MO stores UTF-8, so accepting a charset spelling does not establish MySQL's
   native utf8mb3/single-byte encoding and character-admission behavior.
 - Other Unicode/0900 collation names in the inspected baseline are rejected.
 
 Do not reinterpret persisted class 3 as native UCA 9.0 merely because a DDL dump
-used the `0900_ai_ci` alias. The recommended new-format admission policy is to
-require an explicit supported canonical semantic identity; misleading legacy
-aliases must be resolved to that identity before rebuild/creation, or rejected.
-Old tables retain their old format and metadata behavior. This admission policy
-is a design decision to implement/review, not behavior already shipped by this PR.
+used a historical alias. New native identities require explicit canonical
+semantics and the durable cluster gate. Old tables retain their old format and
+metadata behavior.
 
 ## 2. Candidates and reproducible environment
 
-- **Vitess:** Go module `vitess.io/vitess v0.22.1`, source commit
-  `aafd40357555438f9df7b7e28afe7e0828502896` (the previously researched release).
+- **Vitess:** Go module `vitess.io/vitess v0.24.0`, source commit
+  `e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0`, fixed for the native 0900
+  candidate backend.
   Its actual `Collate`, `WeightString`, `WeightStringLen` and `PadToMax` APIs were
   executed, not inferred from MO's comparator.
 - **MO/TiDB-derived candidate:** the existing mapping lineage at TiDB commit
@@ -56,13 +56,10 @@ is a design decision to implement/review, not behavior already shipped by this P
 - **Oracle:** actual MySQL 8.0.45 aarch64, official image digest
   `sha256:4af1f8815716546f5b12410f7621f37f93db8dd11a184706ef59111930b8c2ff`, in a
   task-owned network-isolated container. All SQL comparisons name the collation.
-- The pinned Vitess version failed to compile on MO's Go 1.26.4 because its
-  `go/hack` Swiss-map runtime-layout assertion does not match that toolchain.
-  The experiment used unmodified Vitess with Go 1.24.4. Both candidates in the
-  comparative microbenchmark used that same Go 1.24.4 executable/toolchain.
-  Directly adding this exact Vitess module to production is therefore not an
-  accepted integration plan; portable subset extraction or another validated
-  revision would need a separate dependency/toolchain assessment.
+- The selected module builds under MO's Go 1.26.4 in the implementation
+  worktree. Its dependency closure and a fresh complete MySQL 8.0.45 oracle
+  comparison remain separate acceptance items; this report does not freeze
+  production bytes by itself.
 
 A full libc `strxfrm` port is not the default. Its process/locale contract is not
 proof of the exact MySQL named semantics required here.
@@ -218,7 +215,9 @@ terminator sequences without error: `46 01`, `46 01 ff`, `46 01 00 ff`.
 require an actual terminator. The earlier C1-specific prototype decoder rejects
 such inputs, but that does not establish safety for all existing tuple consumers.
 This must be resolved in the later approved integration; it was not silently
-patched as part of this selection-only task.
+The implementation worktree now contains focused fixes for COPY dedup identity,
+hidden-PK format preservation, explicit-collation precedence and a fail-closed
+remote admission check. The public SQL/backfill terminal has not passed.
 
 A native MySQL UNIQUE-index reference query returned `id=7, name=Alpha` for
 `name='alpha '`, preserving original hex `416C706861`. MO's proposed transformed
@@ -257,9 +256,9 @@ The experiment followed `mo-dev`; the document/PR update follows
 
 Primary references:
 
-- [Pinned Vitess API and padding contract](https://github.com/vitessio/vitess/blob/aafd40357555438f9df7b7e28afe7e0828502896/go/mysql/collations/colldata/collation.go)
-- [Pinned Vitess scalar implementations](https://github.com/vitessio/vitess/blob/aafd40357555438f9df7b7e28afe7e0828502896/go/mysql/collations/colldata/unicode.go)
-- [Pinned Vitess UCA implementations](https://github.com/vitessio/vitess/blob/aafd40357555438f9df7b7e28afe7e0828502896/go/mysql/collations/colldata/uca.go)
+- [Pinned Vitess API and padding contract](https://github.com/vitessio/vitess/blob/e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0/go/mysql/collations/colldata/collation.go)
+- [Pinned Vitess scalar implementations](https://github.com/vitessio/vitess/blob/e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0/go/mysql/collations/colldata/unicode.go)
+- [Pinned Vitess UCA implementations](https://github.com/vitessio/vitess/blob/e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0/go/mysql/collations/colldata/uca.go)
 - [MySQL binary versus text _bin and padding](https://dev.mysql.com/doc/refman/8.0/en/charset-binary-collations.html)
 
 - [MySQL UCA version definitions](https://dev.mysql.com/doc/refman/8.0/en/charset-unicode-sets.html)

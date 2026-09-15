@@ -1,6 +1,9 @@
 # Collation-aware keys using existing indexes (#28164)
 
-Status: replacement design proposal with independent candidate-selection evidence; production format freeze, implementation acceptance and product acceptance pending.
+Status: Draft design and implementation review for #28164. The local
+integration branch contains candidate code and focused regression coverage;
+production format freeze, SQL/storage acceptance and QA remain pending. Native
+0900 admission is explicitly closed until the durable cluster gate is complete.
 
 See [the comparative selection report](issue-28164-collation-selection.md) and
 [its evidence](issue-28164-selection-evidence.json). These supersede earlier
@@ -22,8 +25,9 @@ selects the correct existing row; indexed and unindexed queries return identical
 original values. Physical lookup and filtering use the same transformed domain
 as physical storage. No independent sidecar or transaction state machine is added.
 
-This delivery changes documents only. Library integration, tuple changes, SQL
-semantics, migration, performance and distributed tests are implementation work.
+The implementation is maintained in the separate `codex/issue-28164-collation-integration`
+worktree. This PR records its design and evidence; it does not claim that live
+SQL, persisted-object pruning, migration recovery or distributed QA have passed.
 
 ## 2. Verified baseline (do not reuse the earlier checkout's assumptions)
 
@@ -32,7 +36,9 @@ path. The current baseline already has:
 
 - `proto/plan.proto`: `Type.charset` (field 8), `TableDef.default_charset` (39).
 - `pkg/container/types/types.go`: persisted semantic classes Legacy=0, Binary=1,
-  UTF8MB4Bin=2 (text PAD SPACE), UTF8=3 (general-ci).
+  UTF8MB4Bin=2 (text PAD SPACE), UTF8=3 (general-ci), and independent native
+  0900 identities AI=4 and BIN=5. Historical aliases are not reinterpreted as
+  native UCA 9.0.
 - `pkg/sql/plan/build_util.go`: column/table attribute resolution and explicit
   compatibility aliases. The spelling `utf8mb4_0900_ai_ci` currently maps to the
   general-ci class; it is NOT native MySQL UCA 9.0 NO PAD semantics.
@@ -79,8 +85,8 @@ Inspected candidates (pinned source, not moving branch names):
 | Candidate | Relevant API | Decision |
 | --- | --- | --- |
 | Existing MO TiDB-derived general-ci weights; TiDB v8.5.3 `dc2548aac79a712265e831cff2a3a896bc0a5a38` | `Collator.Compare`, `Key`, `KeyWithoutTrimRightSpace`, `CanUseRawMemAsKey` | Evaluated against Vitess and actual MySQL. Recommended for the narrowly scoped existing general-ci class after that comparison; not a universal Unicode backend. See the selection report for performance, API and remaining format gates. |
-| Vitess v22.0.1 `aafd40357555438f9df7b7e28afe7e0828502896` | `colldata.Collation.Collate`, `WeightString`, `WeightStringLen` | Executed against native MySQL in six named domains. Verified PAD-stream and NO-PAD adapters are described in the selection report; direct APIs are not universal SQL identity keys. The pinned module also needs a toolchain/dependency integration decision. |
-| `golang.org/x/text/collate` (MO already depends on x/text v0.35.0) | `Key`, `KeyFromString`, `Compare` | Useful Unicode API, but locale options do not establish MySQL named-collation compatibility. Not the production selection for this issue. |
+| Vitess v0.24.0 `e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0` | `colldata.Collation.Collate`, `WeightString`, `WeightStringLen` | Fixed candidate backend for native `utf8mb4_0900_ai_ci` and `utf8mb4_0900_bin`. The MO adapter validates UTF-8, uses unpadded weights for NO PAD, and keeps tuple framing outside the payload. Full dependency-closure and MySQL byte-freeze evidence remain pending. |
+| `golang.org/x/text/collate` (MO already depends on x/text v0.35.0) | `Key`, `KeyFromString`, `Compare` | Useful Unicode API, but locale options do not establish MySQL named-collation compatibility. Not the selected backend. |
 | MySQL `MY_COLLATION_HANDLER::strnxfrm` | charset-specific transformation | Semantics reference. A direct C integration/port needs dependency, license and deployment evaluation; it is not needed merely because the analogous C API exists. |
 
 The TiDB snapshot's unknown-collation fallback and malformed-input behavior must
@@ -100,7 +106,7 @@ Sources:
 - [TiDB interface](https://github.com/pingcap/tidb/blob/dc2548aac79a712265e831cff2a3a896bc0a5a38/pkg/util/collate/collate.go)
 - [TiDB general-ci](https://github.com/pingcap/tidb/blob/dc2548aac79a712265e831cff2a3a896bc0a5a38/pkg/util/collate/general_ci.go)
 - [TiDB binary/PAD variants](https://github.com/pingcap/tidb/blob/dc2548aac79a712265e831cff2a3a896bc0a5a38/pkg/util/collate/bin.go)
-- [Vitess weight-string contract](https://github.com/vitessio/vitess/blob/aafd40357555438f9df7b7e28afe7e0828502896/go/mysql/collations/colldata/collation.go)
+- [Vitess weight-string contract](https://github.com/vitessio/vitess/blob/e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0/go/mysql/collations/colldata/collation.go)
 - [Go collation API](https://pkg.go.dev/golang.org/x/text/collate)
 - [MySQL strnxfrm contract](https://dev.mysql.com/doc/dev/mysql-server/8.0.45/structMY__COLLATION__HANDLER.html)
 
