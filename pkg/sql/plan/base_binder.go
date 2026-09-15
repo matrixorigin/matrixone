@@ -5070,10 +5070,10 @@ func bindFuncExprImplByPlanExpr(
 	// predicates, groups or windows. Assignment-time producer mutation cannot
 	// update all of those consumers safely. This also canonicalizes operands
 	// after prepared rebinding removes provisional parameter casts.
-	if name == "/" && len(args) == 2 && inIntegerAssignmentDomain(ctx) {
+	if name == "/" && len(args) == 2 {
 		left, right := types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)
 		exact := (left.IsInteger() || left.IsDecimal()) && (right.IsInteger() || right.IsDecimal())
-		if exact && (left.IsInteger() || right.IsInteger()) {
+		if exact && inIntegerAssignmentDomain(ctx) && (left.IsInteger() || right.IsInteger()) {
 			args = append([]*Expr(nil), args...)
 			for i, arg := range args {
 				scale := arg.Typ.Scale
@@ -5112,8 +5112,10 @@ func bindFuncExprImplByPlanExpr(
 	if len(args) == 2 && inIntegerAssignmentDomain(ctx) &&
 		(name == "+" || name == "-" || name == "*" || name == "%" || name == "mod" || name == "div") {
 		left, right := types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)
-		if (left == types.T_decimal256 && (right.IsInteger() || right.IsDecimal())) ||
-			(right == types.T_decimal256 && (left.IsInteger() || left.IsDecimal())) {
+		preserveUnsignedIntegerDiv := name == "div" && left.IsUnsignedInt()
+		if !preserveUnsignedIntegerDiv &&
+			((left == types.T_decimal256 && (right.IsInteger() || right.IsDecimal())) ||
+				(right == types.T_decimal256 && (left.IsInteger() || left.IsDecimal()))) {
 			args = append([]*Expr(nil), args...)
 			for i, arg := range args {
 				if types.T(arg.Typ.Id) == types.T_decimal256 {

@@ -61,8 +61,26 @@ INSERT INTO dst SELECT 100, 1 + FLOOR(x/2) FROM src;
 INSERT INTO dst SELECT 101, FLOOR(x/2) + 1 FROM src;
 INSERT INTO dst SELECT 108, 10 DIV (x/2) FROM src;
 INSERT INTO dst SELECT 109, 10 DIV FLOOR(x/2) FROM src;
+-- @pattern
+INSERT INTO dst SELECT 113, CAST(10 AS UNSIGNED) DIV CAST(-2 AS DECIMAL(65,0)) FROM src;
+INSERT INTO dst SELECT 114, CAST(10 AS UNSIGNED) DIV CAST(2 AS DECIMAL(65,0)) FROM src;
 SELECT * FROM dst ORDER BY id;
 DELETE FROM dst;
+PREPARE div_root FROM 'INSERT INTO dst VALUES(110,10 DIV (?/2))';
+SET @div_x=5E0;
+EXECUTE div_root USING @div_x;
+SELECT * FROM dst;
+DELETE FROM dst;
+SET @div_x='5';
+EXECUTE div_root USING @div_x;
+SELECT * FROM dst;
+DELETE FROM dst;
+DEALLOCATE PREPARE div_root;
+PREPARE nested_div_root FROM 'INSERT INTO dst VALUES(112,ABS(10 DIV (?/2)))';
+EXECUTE nested_div_root USING @div_x;
+SELECT * FROM dst;
+DELETE FROM dst;
+DEALLOCATE PREPARE nested_div_root;
 
 -- Planner-owned exact casts must not hide a constant zero divisor from
 -- runtime strict-mode handling; the failed multi-row write is atomic.

@@ -136,6 +136,22 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			})
 		}
 
+		t.Run("integer_division_preserves_unsigned_domain", func(t *testing.T) {
+			mustExec(t, ctx, conn, "delete from dst")
+			_, err := conn.ExecContext(ctx,
+				"insert into dst select cast(10 as unsigned) div cast(-2 as decimal(65,0)) from src")
+			require.Error(t, err)
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from dst").Scan(&count))
+			require.Zero(t, count)
+			mustExec(t, ctx, conn,
+				"insert into dst select cast(10 as unsigned) div cast(2 as decimal(65,0)) from src")
+			var got int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
+			require.Equal(t, int64(5), got)
+			mustExec(t, ctx, conn, "delete from dst")
+		})
+
 		t.Run("prepared_strict_division_by_zero", func(t *testing.T) {
 			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'")
 			defer func() { _, _ = conn.ExecContext(ctx, "set sql_mode='STRICT_TRANS_TABLES'") }()
@@ -291,6 +307,43 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 				})
 			}
 		})
+		t.Run("prepared_integer_division_rebinds_complete_root", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table prepared_div_dst(v bigint)")
+			for _, wrapper := range []struct{ name, expression string }{
+				{"direct", "10 div (?/2)"}, {"abs", "abs(10 div (?/2))"},
+			} {
+				for _, protocol := range []string{"sql", "binary"} {
+					t.Run(wrapper.name+"/"+protocol, func(t *testing.T) {
+						query := "insert into prepared_div_dst values (" + wrapper.expression + ")"
+						if protocol == "binary" {
+							stmt, err := conn.PrepareContext(ctx, query)
+							require.NoError(t, err)
+							defer stmt.Close()
+							for _, value := range []any{float64(5), "5", float64(5)} {
+								mustExec(t, ctx, conn, "delete from prepared_div_dst")
+								_, err = stmt.ExecContext(ctx, value)
+								require.NoError(t, err)
+								var got int64
+								require.NoError(t, conn.QueryRowContext(ctx, "select v from prepared_div_dst").Scan(&got))
+								require.Equal(t, int64(4), got)
+							}
+						} else {
+							mustExec(t, ctx, conn, "prepare div_root_p from '"+query+"'")
+							defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare div_root_p") }()
+							for _, value := range []string{"5E0", "'5'", "5E0"} {
+								mustExec(t, ctx, conn, "delete from prepared_div_dst")
+								mustExec(t, ctx, conn, "set @div_root_value="+value)
+								mustExec(t, ctx, conn, "execute div_root_p using @div_root_value")
+								var got int64
+								require.NoError(t, conn.QueryRowContext(ctx, "select v from prepared_div_dst").Scan(&got))
+								require.Equal(t, int64(4), got)
+							}
+						}
+					})
+				}
+			}
+		})
+
 		t.Run("prepared_source_preserves_other_assignments", func(t *testing.T) {
 			rt := moruntime.ServiceRuntime(cn.GetServiceConfig().CN.UUID)
 			oldVersion, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)

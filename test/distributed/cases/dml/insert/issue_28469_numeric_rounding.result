@@ -70,13 +70,38 @@ INSERT INTO dst SELECT 100, 1 + FLOOR(x/2) FROM src;
 INSERT INTO dst SELECT 101, FLOOR(x/2) + 1 FROM src;
 INSERT INTO dst SELECT 108, 10 DIV (x/2) FROM src;
 INSERT INTO dst SELECT 109, 10 DIV FLOOR(x/2) FROM src;
+INSERT INTO dst SELECT 113, CAST(10 AS UNSIGNED) DIV CAST(-2 AS DECIMAL(65,0)) FROM src;
+Data truncation: data out of range: data type BIGINT,
+INSERT INTO dst SELECT 114, CAST(10 AS UNSIGNED) DIV CAST(2 AS DECIMAL(65,0)) FROM src;
 SELECT * FROM dst ORDER BY id;
 ➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
 100  ¦  3  𝄀
 101  ¦  3  𝄀
 108  ¦  4  𝄀
-109  ¦  5
+109  ¦  5  𝄀
+114  ¦  5
 DELETE FROM dst;
+PREPARE div_root FROM 'INSERT INTO dst VALUES(110,10 DIV (?/2))';
+SET @div_x=5E0;
+EXECUTE div_root USING @div_x;
+SELECT * FROM dst;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+110  ¦  4
+DELETE FROM dst;
+SET @div_x='5';
+EXECUTE div_root USING @div_x;
+SELECT * FROM dst;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+110  ¦  4
+DELETE FROM dst;
+DEALLOCATE PREPARE div_root;
+PREPARE nested_div_root FROM 'INSERT INTO dst VALUES(112,ABS(10 DIV (?/2)))';
+EXECUTE nested_div_root USING @div_x;
+SELECT * FROM dst;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+112  ¦  4
+DELETE FROM dst;
+DEALLOCATE PREPARE nested_div_root;
 SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
 PREPARE strict_zero FROM 'INSERT INTO dst VALUES (102,10/0), (103,5/2)';
 EXECUTE strict_zero;

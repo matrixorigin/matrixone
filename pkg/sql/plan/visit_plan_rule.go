@@ -1336,7 +1336,15 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 			return copy.GetF().Args[0], true, nil
 		}
 		restorePreparedIntegerArithmeticOperands(name, copy.GetF().Args)
-		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
+		bindCtx := rule.ctx
+		if name == "/" && len(copy.GetF().Args) == 2 {
+			left, right := types.T(copy.GetF().Args[0].Typ.Id), types.T(copy.GetF().Args[1].Typ.Id)
+			if (left == types.T_decimal256 && (right.IsInteger() || right.IsDecimal())) ||
+				(right == types.T_decimal256 && (left.IsInteger() || left.IsDecimal())) {
+				bindCtx = withIntegerAssignmentDomain(bindCtx)
+			}
+		}
+		bound, err := BindFuncExprImplByPlanExpr(bindCtx, name, copy.GetF().Args)
 		if err != nil {
 			return nil, false, err
 		}
@@ -1706,6 +1714,9 @@ func (rule *ResetParamRefRule) rebindPreparedNumericIntegerAssignment(
 	if expr == nil || !types.T(expr.Typ.Id).IsInteger() {
 		return expr, false, nil
 	}
+	previousCtx := rule.ctx
+	rule.ctx = withIntegerAssignmentDomain(previousCtx)
+	defer func() { rule.ctx = previousCtx }()
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
 		return expr, false, nil
@@ -1713,6 +1724,16 @@ func (rule *ResetParamRefRule) rebindPreparedNumericIntegerAssignment(
 	funcName := fn.Func.GetObjName()
 	switch funcName {
 	case "cast", "cast_assign", "cast_ignore", "cast_strict":
+	case "div":
+		positions := preparedNumericValueParamPositions(expr)
+		if len(positions) == 0 {
+			return expr, false, nil
+		}
+		rewritten, changed, err := rule.rebindPreparedNumericExpr(expr, positions)
+		if changed {
+			rule.specialized = true
+		}
+		return rewritten, changed, err
 	default:
 		return expr, false, nil
 	}
