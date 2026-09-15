@@ -2020,6 +2020,22 @@ class WorkerContractTest(unittest.TestCase):
         process.kill.assert_called_once_with()
         process.wait.assert_called_once_with(timeout=1.0)
 
+    @unittest.skipUnless(os.name == "posix", "process-group cleanup after leader exit")
+    def test_process_cleanup_kills_group_before_reaping_exited_leader(self):
+        process = mock.Mock(pid=1234)
+        process.poll.return_value = 7
+        process.wait.return_value = 7
+
+        with mock.patch.object(worker.os, "killpg", side_effect=[None, None]) as killpg:
+            worker._kill_execution_process(process)
+
+        self.assertEqual(
+            [mock.call(1234, 0), mock.call(1234, worker.signal.SIGKILL)],
+            killpg.call_args_list,
+        )
+        process.kill.assert_not_called()
+        process.wait.assert_called_once_with(timeout=1.0)
+
     def test_handler_close_retains_process_for_a_later_cleanup_retry(self):
         session = object.__new__(worker._HandlerProcessSession)
         session._slots = threading.BoundedSemaphore(1)
