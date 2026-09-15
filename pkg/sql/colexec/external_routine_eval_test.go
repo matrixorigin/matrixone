@@ -429,6 +429,12 @@ func TestExternalRoutineEvalRejectsSourceInExecutablePlan(t *testing.T) {
 	require.ErrorContains(t, validateRoutineCall(call), "plan contains source")
 }
 
+func TestExternalRoutineEvalRequiresCanonicalLanguage(t *testing.T) {
+	call := testExternalRoutineCall(t, python.ModeScalar, udf.NullCallHandler)
+	call.Language = "PYTHON"
+	require.ErrorContains(t, validateRoutineCall(call), "unsupported typed routine call contract")
+}
+
 func TestExternalRoutineEvalRejectsSuccessfulRuntimeWithoutResultRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
