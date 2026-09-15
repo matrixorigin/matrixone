@@ -2942,6 +2942,7 @@ func createPrepareStmtInSession(
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		prepareControl.Plan, len(prepareControl.ParamTypes))
+	prepareStmt.refreshGeometrySRIDParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositionsSet = true
 
