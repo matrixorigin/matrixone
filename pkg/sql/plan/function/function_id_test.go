@@ -762,7 +762,7 @@ var predefinedFunids = map[int]int{
 	INTERNAL_JSON_MEMBER_OF:        578,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 581,
+	FUNCTION_END_NUMBER: 579,
 }
 
 func Test_funids(t *testing.T) {
