@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"math"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -80,19 +82,43 @@ func TestAutoIDCachePointObservation(t *testing.T) {
 			require.NoError(t, executor.AppendFixedRows(result, 1, []uint64{2}))
 			return result.GetResult(), nil
 		})
+		observationCtx := t.Context()
 		for i := 1; i <= 4; i++ {
 			if i == 3 {
 				cache.commit()
+				observationCtx = WithAutoIDObservationScope(observationCtx)
 			}
-			value, err := cache.currentValue(t.Context(), 42, "i'd", store)
+			value, err := cache.currentValue(observationCtx, 42, "i'd", store)
 			require.NoError(t, err)
 			require.Equal(t, uint64(i*10+2), value, "每次观测必须看到最新allocator值，而不是缓存上次观测")
 			require.Zero(t, mp.CurrNB())
 		}
 		require.Equal(t, 4, calls)
-		require.Equal(t, 2, barrierCalls, "private transaction observations must not acquire an external fence")
+		require.Equal(t, 1, barrierCalls, "private observations use their transaction and one metadata expression shares one frontier")
 		require.Zero(t, allocator.asyncCalls.Load())
 	})
+}
+
+func TestAutoIDCacheObservationScopeConcurrent(t *testing.T) {
+	ctx := WithAutoIDObservationScope(t.Context())
+	frontier := timestamp.Timestamp{PhysicalTime: 99}
+	var calls atomic.Int64
+	acquire := func(context.Context) (timestamp.Timestamp, error) {
+		calls.Add(1)
+		return frontier, nil
+	}
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := acquireAutoIDObservationFrontier(ctx, acquire)
+			require.NoError(t, err)
+			require.Equal(t, frontier, got)
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, int64(1), calls.Load())
 }
 
 func TestAutoIDCachePointObservationWaitsForBarrierBeforeRead(t *testing.T) {
@@ -158,12 +184,27 @@ func TestAutoIDCachePointObservationBarrierErrors(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			exec := mock_executor.NewMockSQLExecutor(gomock.NewController(t))
-			_, _, err := (&sqlStore{exec: exec, acquireLogtailReadFence: tc.barrier}).GetColumnValue(t.Context(), 42, "id", nil)
-			require.Error(t, err)
-			if tc.name == "canceled" {
-				require.ErrorIs(t, err, tc.want)
-			} else {
-				require.ErrorContains(t, err, "logtail read barrier")
+			calls := 0
+			barrier := tc.barrier
+			if barrier != nil {
+				barrier = func(ctx context.Context) (timestamp.Timestamp, error) {
+					calls++
+					return tc.barrier(ctx)
+				}
+			}
+			store := &sqlStore{exec: exec, acquireLogtailReadFence: barrier}
+			ctx := WithAutoIDObservationScope(t.Context())
+			for range 2 {
+				_, _, err := store.GetColumnValue(ctx, 42, "id", nil)
+				require.Error(t, err)
+				if tc.name == "canceled" {
+					require.ErrorIs(t, err, tc.want)
+				} else {
+					require.ErrorContains(t, err, "logtail read barrier")
+				}
+			}
+			if barrier != nil {
+				require.Equal(t, 1, calls, "a shared barrier error must be stable for the metadata expression")
 			}
 		})
 	}

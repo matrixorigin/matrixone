@@ -17,6 +17,7 @@ package incrservice
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -51,6 +52,29 @@ func (c AutoColumn) getInsertSQL() string {
 }
 
 type logtailReadBarrier func(context.Context) (timestamp.Timestamp, error)
+
+type autoIDObservationScopeKey struct{}
+
+type autoIDObservationScope struct {
+	once     sync.Once
+	frontier timestamp.Timestamp
+	err      error
+}
+
+// WithAutoIDObservationScope lets one vectorized metadata expression share a
+// visibility frontier. Allocator values are never cached: each table still
+// performs its own point read at or after that frontier.
+func WithAutoIDObservationScope(ctx context.Context) context.Context {
+	return context.WithValue(ctx, autoIDObservationScopeKey{}, &autoIDObservationScope{})
+}
+
+func acquireAutoIDObservationFrontier(ctx context.Context, acquire logtailReadBarrier) (timestamp.Timestamp, error) {
+	if scope, ok := ctx.Value(autoIDObservationScopeKey{}).(*autoIDObservationScope); ok {
+		scope.once.Do(func() { scope.frontier, scope.err = acquire(ctx) })
+		return scope.frontier, scope.err
+	}
+	return acquire(ctx)
+}
 
 type sqlStore struct {
 	ls                      lockservice.LockService
@@ -591,7 +615,7 @@ func (s *sqlStore) GetColumnValue(ctx context.Context, tableID uint64, colName s
 		if s.acquireLogtailReadFence == nil {
 			return 0, 0, moerr.NewInternalErrorNoCtx("AUTO_INCREMENT observation requires a logtail read barrier")
 		}
-		frontier, err := s.acquireLogtailReadFence(ctx)
+		frontier, err := acquireAutoIDObservationFrontier(ctx, s.acquireLogtailReadFence)
 		if err != nil {
 			return 0, 0, err
 		}

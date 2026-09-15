@@ -254,6 +254,27 @@ func TestAutoIDCacheCurrentValueOverflow(t *testing.T) {
 	})
 }
 
+func TestAutoIDCacheResetPolicyRebinding(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		hintID     uint64
+	}{
+		{name: "old owner", hintID: 7, want: "replacement"},
+		{name: "replacement owner", hintID: 42, want: "replacement"},
+		{name: "unrelated owner", hintID: 9, want: "unrelated"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := rebindResetAutoIDCachePolicy(WithAutoIDCachePolicy(t.Context(), tc.hintID, 8), 7, 42)
+			known := ctx.Value(autoColumnKnownPolicyKey{}).(autoColumnKnownPolicy)
+			if tc.want == "replacement" {
+				require.Equal(t, autoColumnKnownPolicy{tableID: 42, size: 8}, known)
+			} else {
+				require.Equal(t, autoColumnKnownPolicy{tableID: 9, size: 8}, known)
+			}
+		})
+	}
+}
+
 func TestAutoIDCacheSQLMetadata(t *testing.T) {
 	for _, size := range []uint64{0, 1, 64, MaxAutoIDCache + 1} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
@@ -273,8 +294,8 @@ func TestAutoIDCacheSQLMetadata(t *testing.T) {
 			})
 			store := &sqlStore{exec: exec}
 			// Reset reads old allocator rows but the replacement's live metadata.
-			// A hint for the old physical table must not override replacement metadata.
-			ctx := context.WithValue(WithAutoIDCachePolicy(t.Context(), 7, MaxAutoIDCache+1), autoColumnPolicyTableKey{}, uint64(42))
+			// An unrelated hint must not override replacement metadata.
+			ctx := context.WithValue(WithAutoIDCachePolicy(t.Context(), 9, MaxAutoIDCache+1), autoColumnPolicyTableKey{}, uint64(42))
 			cols, err := store.GetColumns(ctx, 7, nil)
 			if size > MaxAutoIDCache {
 				require.ErrorContains(t, err, "AUTO_ID_CACHE")

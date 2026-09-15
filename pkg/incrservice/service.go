@@ -240,6 +240,10 @@ func (s *service) Reset(
 		zap.Uint64("new-table-id", newTableID),
 	)
 
+	// TRUNCATE preserves table policy while replacing the physical ID. Accept a
+	// policy owned by either side of that exact replacement, but never rebind an
+	// unrelated hint: it must continue through durable discovery.
+	ctx = rebindResetAutoIDCachePolicy(ctx, oldTableID, newTableID)
 	// The old catalog row may already be deleted by TRUNCATE. Read allocator
 	// state from the old ID but policy from its replacement in the same txn.
 	policyCtx := context.WithValue(ctx, autoColumnPolicyTableKey{}, newTableID)
@@ -279,6 +283,13 @@ func (s *service) Reset(
 		cols[idx].TableID = newTableID
 	}
 	return s.Create(ctx, newTableID, cols, txnOp)
+}
+
+func rebindResetAutoIDCachePolicy(ctx context.Context, oldTableID, newTableID uint64) context.Context {
+	if known, ok := ctx.Value(autoColumnKnownPolicyKey{}).(autoColumnKnownPolicy); ok && known.tableID == oldTableID {
+		return WithAutoIDCachePolicy(ctx, newTableID, known.size)
+	}
+	return ctx
 }
 
 func (s *service) Delete(

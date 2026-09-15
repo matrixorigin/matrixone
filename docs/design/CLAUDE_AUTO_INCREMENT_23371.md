@@ -89,9 +89,9 @@
 
 2026-09-11 review修复：使用同一真实embedded集群的SQL executor，对64/1024张默认策略空表，逐表调用GetColumns（绕过allocator缓存，三轮），对比无hint的原catalog子查询与已有typed policy的路径。1024表总读取中位数2.977s → 0.516s，约82.7%下降；64表36.675ms → 9.613ms。表创建/清理不计入计时；没有执行号段分配。该测量只证明cold policy读取路径的成本差异，不是端到端吞吐、严格复杂度或生产catalog容量承诺。未知tableID-only caller的fallback仍有目录读取成本。
 
-2026-09-14 review修复：扩展所有已拥有表定义的 Reset/SetOffset 生产调用点；空段 `CurrentValue` 改走 store 的 `GetColumnValue`，以 `(table_id, col_name)` 主键仅读 offset/step。私有 CREATE 继续使用 cache 持有的 txn；commit 后先通过 engine `LogtailReadBarrier` 获得并应用 TN 有序发布 frontier，再把该 frontier 作为内部 SQL 的最小提交时间，每次观测仍执行一次屏障和 SQL，避免跨 CN 过期高水位；不再取 policy、列名/索引或解码完整 AutoColumn 列表。缺失/重复 allocator 行、SQL失败、零step/溢出仍报错，不分配或缓存观测结果。
+2026-09-14 review修复：扩展所有已拥有表定义的 Reset/SetOffset 生产调用点；空段 `CurrentValue` 改走 store 的 `GetColumnValue`，以 `(table_id, col_name)` 主键仅读 offset/step。私有 CREATE 继续使用 cache 持有的 txn；commit 后先通过 engine `LogtailReadBarrier` 获得并应用 TN 有序发布 frontier，再把该 frontier 作为内部 SQL 的最小提交时间，一次 `internal_auto_increment` 向量执行共享一个屏障 frontier，各表仍执行一次 point SQL 并以该 frontier 为最小快照，避免跨 CN 过期高水位；不再取 policy、列名/索引或解码完整 AutoColumn 列表。缺失/重复 allocator 行、SQL失败、零step/溢出仍报错，不分配或缓存观测结果。
 
-在加入跨CN可见性屏障前，同一真实双CN环境对64/1024张 CACHE=1 空表逐表读取的三轮中位值分别为：fallback 21.904ms/951.706ms；typed policy 11.390ms/204.496ms；offset/step点查8.485ms/133.514ms。该数据只隔离证明收窄SQL形状的成本，不代表加入每次TN有序屏障后的当前端到端延迟，不能据此承诺SHOW/DDL吞吐。DDL/清理不计时且无号段分配；裸tableID且没有权威metadata的调用仍保留fallback。
+在加入跨CN可见性屏障前，同一真实双CN环境对64/1024张 CACHE=1 空表逐表读取的三轮中位值分别为：fallback 21.904ms/951.706ms；typed policy 11.390ms/204.496ms；offset/step点查8.485ms/133.514ms。该数据只隔离证明收窄SQL形状的成本，不代表加入每次TN有序屏障后的当前端到端延迟，不能据此承诺SHOW/DDL吞吐。DDL/清理不计时且无号段分配；Reset会把明确绑定旧物理ID的同表policy重绑定到replacement ID；已绑定replacement直接复用，无关ID不信任。裸tableID且没有权威metadata的调用仍保留fallback。
 
 空 demand-only cache 每次观察仍读持久offset：另一CN发号/显式值推进后，现有公开契约和跨CN回归要求下次观察推进。仅依据“曾分配过”或本地最后offset做缓存不能正确失效；本轮不新增跨CN失效协议，也不将过期数值当作当前值返回。优化目录策略读取与保留实时水位读取是两个独立决定。
 
