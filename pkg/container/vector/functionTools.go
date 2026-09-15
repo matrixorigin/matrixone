@@ -533,6 +533,11 @@ type FunctionResultWrapper interface {
 
 	SetResultVector(vec *Vector)
 	GetResultVector() *Vector
+	// ResultLength is the number of logical values produced through the
+	// FunctionResult append contract.  For fixed-width results the vector is
+	// pre-sized before execution, so Vector.Length alone describes capacity,
+	// not whether the producer actually populated every row.
+	ResultLength() int
 	Free()
 	PreExtendAndReset(size int) error
 }
@@ -792,6 +797,16 @@ func (fr *FunctionResult[T]) SetResultVector(v *Vector) {
 
 func (fr *FunctionResult[T]) GetResultVector() *Vector {
 	return fr.vec
+}
+
+func (fr *FunctionResult[T]) ResultLength() int {
+	if fr == nil || fr.vec == nil {
+		return 0
+	}
+	if fr.isVarlena {
+		return fr.vec.Length()
+	}
+	return int(fr.length)
 }
 
 func (fr *FunctionResult[T]) ConvertToStrParameter() FunctionParameterWrapper[types.Varlena] {
