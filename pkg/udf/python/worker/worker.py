@@ -1458,17 +1458,16 @@ def _canonical_json_text(value: str) -> str:
     def reject_nonstandard_number(_constant: str):
         raise ValueError("non-standard JSON number")
 
-    def reject_nonfinite_float(number: str):
-        parsed = float(number)
-        if not math.isfinite(parsed):
-            raise ValueError("non-finite JSON number")
-        return parsed
-
     try:
         json.loads(
             value,
             parse_constant=reject_nonstandard_number,
-            parse_float=reject_nonfinite_float,
+            # JSON values cross the ABI as compact text.  Parsing numbers as
+            # strings keeps validation independent of Python's binary-float
+            # range; Go's json.Compact accepts valid tokens such as 1e999 and
+            # the handler must observe that exact token unchanged.
+            parse_int=str,
+            parse_float=str,
         )
     except Exception as exc:
         raise ValueError("TYPE_CONTRACT: invalid JSON input") from exc
