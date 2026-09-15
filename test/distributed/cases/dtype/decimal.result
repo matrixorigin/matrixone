@@ -1291,8 +1291,11 @@ SELECT col1 / col2 FROM decimal19;
 -17600769189777557874.214320
 SELECT col1 * col2 FROM decimal19;
 Data truncation: data out of range: data type DECIMAL, invalid input: Decimal128 Mul overflow: 12345645678978945612312345678885229999*1235467899687894561
-SELECT col1 * 0.2871438217498217489217843728134214212143 FROM decimal19;
-Data truncation: data out of range: data type DECIMAL, invalid input: Decimal128 Mul overflow: 12345645678978945612312345678885229999*0.2871438217498217489217843728134214212
+-- Isolate the true Decimal256 overflow so the expected operand is independent
+-- of scan order; the fitting product is covered by decimal_256_literal.test.
+SELECT col1 * 0.2871438217498217489217843728134214212143 FROM decimal19
+WHERE col1 = 99999999999999999999999999999999999999;
+Data truncation: data out of range: data type DECIMAL, invalid input: Decimal256 Mul overflow: 99999999999999999999999999999999999999*0.2871438217498217489217843728134214212143
 SELECT col2 * -2733892455124775.7851878942123454 FROM decimal19;
 Data truncation: data out of range: data type DECIMAL, invalid input: Decimal128 Mul overflow: 1235467899687894561*-2733892455124775.7851878942123454
 SELECT col1 / 0;

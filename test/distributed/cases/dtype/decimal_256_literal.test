@@ -8,4 +8,19 @@ insert into decimal_256_unquoted_literal_t values
 select 12345678901234567890123456789012345.123456789012345678901234567890 as unquoted_decimal256;
 select id from decimal_256_unquoted_literal_t
 where d = 12345678901234567890123456789012345.123456789012345678901234567890;
+
+-- Plain decimal literals remain exact when the Decimal256 product fits. The
+-- explicit decimal comparison is an independent oracle for the full 40-digit
+-- fractional coefficient, rather than a rounded Decimal128 expectation.
+select count(*)
+from (
+    select cast('12345678901234567890' as decimal(65,0)) *
+        0.2871438217498217489217843728134214212143 as product
+) as exact_product
+where product = cast('3544985421796633986.5689846262348675848726349359393395888270' as decimal(65,40));
+
+-- A genuine signed-Decimal256 overflow remains an error on the negative path.
+select cast('-99999999999999999999999999999999999999' as decimal(65,0)) *
+    0.2871438217498217489217843728134214212143;
+
 drop table decimal_256_unquoted_literal_t;
