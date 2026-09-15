@@ -38,6 +38,37 @@ type publicationReadStorage struct {
 	beforeRead func(context.Context) error
 }
 
+type publicationVectorCache struct {
+	reads   atomic.Int64
+	updates atomic.Int64
+	last    *IOVector
+}
+
+var _ IOVectorCache = (*publicationVectorCache)(nil)
+
+func (c *publicationVectorCache) Read(context.Context, *IOVector) error {
+	c.reads.Add(1)
+	return nil
+}
+
+func (c *publicationVectorCache) Update(_ context.Context, vector *IOVector, _ bool) error {
+	c.updates.Add(1)
+	c.last = vector
+	return nil
+}
+
+func (c *publicationVectorCache) Flush(context.Context) {}
+
+func (c *publicationVectorCache) DeletePaths(context.Context, []string) error { return nil }
+
+func (c *publicationVectorCache) Evict(_ context.Context, done chan int64) {
+	if done != nil {
+		done <- 0
+	}
+}
+
+func (c *publicationVectorCache) Close(context.Context) {}
+
 func (s *publicationReadStorage) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
 	if s.beforeRead != nil {
 		if err := s.beforeRead(ctx); err != nil {
@@ -60,7 +91,7 @@ func (s *publicationReadStorage) Read(ctx context.Context, key string, min, max 
 }
 
 func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
-	for _, mode := range []string{"sparse", "dense", "partial-hit", "read-to-end", "cancel-between-entries", "error-between-entries", "publication-failure"} {
+	for _, mode := range []string{"sparse", "dense", "partial-hit", "read-to-end", "cancel-between-entries", "error-between-entries", "publication-failure", "custom-cache"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
 			defer cancel()
@@ -129,6 +160,11 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 			if mode == "read-to-end" {
 				follower.Entries = []IOEntry{{Offset: 9 << 20, Size: -1}}
 			}
+			var vectorCache *publicationVectorCache
+			if mode == "custom-cache" {
+				vectorCache = new(publicationVectorCache)
+				follower.Caches = []IOVectorCache{vectorCache}
+			}
 			defer follower.Release()
 			before := storage.bytes.Load()
 			opensBefore := storage.opens.Load()
@@ -193,6 +229,12 @@ func TestS3FSDefaultPolicyReadWhileFullObjectPublicationPending(t *testing.T) {
 				t.Logf("consumed_bytes=%d object_reads=%d", storage.bytes.Load()-before, storage.opens.Load()-opensBefore)
 				require.Equal(t, wantBytes, storage.bytes.Load()-before, "pending publication must not trigger another full-object read")
 				require.Equal(t, wantOpens, storage.opens.Load()-opensBefore)
+				if mode == "custom-cache" {
+					require.Equal(t, int64(1), vectorCache.reads.Load())
+					require.Equal(t, int64(1), vectorCache.updates.Load())
+					require.Same(t, follower, vectorCache.last)
+					require.Len(t, vectorCache.last.Entries, 2)
+				}
 			}
 			require.Equal(t, storage.opens.Load(), storage.closes.Load())
 			require.False(t, fs.ioMerger.IsMerging(fs.readMergeKey(follower)))
