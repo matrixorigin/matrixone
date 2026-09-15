@@ -2201,7 +2201,32 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			}
 		}
 
-		sorted, sortedOrderVecs, sortedAggVecs, err := mergeorder.SortBatchWithPrecomputedOrder(
+		inputConsumed := func() {
+			// The sorter has copied every row into sorter-owned resident or spill
+			// state. Release the materialized source and the carried expression
+			// vectors before final merge collection so the sorted partition does
+			// not overlap a second full copy of the same window payload.
+			if ctr.bat == bat {
+				bat.Clean(proc.Mp())
+				ctr.bat = nil
+			}
+			for _, ref := range orderRefs {
+				vec := ctr.orderVecs[ref[0]].Vec[ref[1]]
+				if vec != nil {
+					vec.Free(proc.Mp())
+					ctr.orderVecs[ref[0]].Vec[ref[1]] = nil
+				}
+			}
+			for _, ref := range extraRefs {
+				vec := ctr.aggVecs[ref[0]].Vec[ref[1]]
+				if vec != nil {
+					vec.Free(proc.Mp())
+					ctr.aggVecs[ref[0]].Vec[ref[1]] = nil
+				}
+			}
+		}
+
+		sorted, sortedOrderVecs, sortedAggVecs, err := mergeorder.SortBatchWithPrecomputedOrderAndRelease(
 			proc,
 			bat,
 			ap.Fs,
@@ -2209,6 +2234,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			ap.OpAnalyzer,
 			orderCols,
 			extraAggVecs,
+			inputConsumed,
 		)
 		if err != nil {
 			return false, err
@@ -2227,26 +2253,15 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			sorted.Clean(proc.Mp())
 			return false, moerr.NewInternalErrorNoCtx("window sorted vector count mismatch")
 		}
-		if ctr.bat == bat {
-			bat.Clean(proc.Mp())
-		}
 		ctr.bat = sorted
 		bat = sorted
 		// Keep the values evaluated before sorting. Re-evaluating either the order
 		// expressions or the window arguments would duplicate work and change the
 		// result of volatile expressions.
 		for k, ref := range orderRefs {
-			old := ctr.orderVecs[ref[0]].Vec[ref[1]]
-			if old != nil {
-				old.Free(proc.Mp())
-			}
 			ctr.orderVecs[ref[0]].Vec[ref[1]] = sortedOrderVecs[k]
 		}
 		for k, ref := range extraRefs {
-			old := ctr.aggVecs[ref[0]].Vec[ref[1]]
-			if old != nil {
-				old.Free(proc.Mp())
-			}
 			ctr.aggVecs[ref[0]].Vec[ref[1]] = sortedAggVecs[k]
 		}
 		externalSorted = true

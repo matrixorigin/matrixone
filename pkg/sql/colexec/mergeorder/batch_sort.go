@@ -37,11 +37,31 @@ func SortBatch(
 	threshold int64,
 	analyzer process.Analyzer,
 ) (*batch.Batch, error) {
+	return sortBatch(proc, input, fs, threshold, analyzer, nil)
+}
+
+// sortBatch sorts input and invokes inputConsumed after every input row has
+// been copied into sorter-owned resident batches or spill runs and before the
+// final result is collected. The callback transfers ownership of the source
+// input to the sorter; it is not invoked when validation, input copying, or
+// empty-input duplication fails.
+func sortBatch(
+	proc *process.Process,
+	input *batch.Batch,
+	fs []*plan.OrderBySpec,
+	threshold int64,
+	analyzer process.Analyzer,
+	inputConsumed func(),
+) (*batch.Batch, error) {
 	if proc == nil || input == nil || len(fs) == 0 {
 		return nil, moerr.NewInvalidInputNoCtx("invalid merge-order sort input")
 	}
 	if input.RowCount() == 0 {
-		return input.Dup(proc.Mp())
+		result, err := input.Dup(proc.Mp())
+		if err == nil && inputConsumed != nil {
+			inputConsumed()
+		}
+		return result, err
 	}
 
 	budget, err := proc.GetExecutionResourceBudget()
@@ -99,6 +119,9 @@ func SortBatch(
 		}
 	}
 
+	if inputConsumed != nil {
+		inputConsumed()
+	}
 	return ctr.collectSortedBatch(proc, fs, analyzer)
 }
 
@@ -116,7 +139,7 @@ func SortBatchWithExtraVectors(
 	extra []*vector.Vector,
 ) (*batch.Batch, []*vector.Vector, error) {
 	sorted, _, sortedExtra, err := sortBatchWithColumns(
-		proc, input, fs, threshold, analyzer, nil, extra)
+		proc, input, fs, threshold, analyzer, nil, extra, nil)
 	return sorted, sortedExtra, err
 }
 
@@ -133,6 +156,40 @@ func SortBatchWithPrecomputedOrder(
 	analyzer process.Analyzer,
 	orderCols []*vector.Vector,
 	extra []*vector.Vector,
+) (*batch.Batch, []*vector.Vector, []*vector.Vector, error) {
+	return sortBatchWithPrecomputedOrder(
+		proc, input, fs, threshold, analyzer, orderCols, extra, nil)
+}
+
+// SortBatchWithPrecomputedOrderAndRelease is the ownership-transfer variant
+// of SortBatchWithPrecomputedOrder. Once the callback runs, the sorter owns
+// independent copies of input, orderCols, and extra, and the callback must
+// release those caller-owned vectors. The callback runs exactly once before
+// final merge collection; if sorting fails before that point, the caller keeps
+// ownership and the callback is not called.
+func SortBatchWithPrecomputedOrderAndRelease(
+	proc *process.Process,
+	input *batch.Batch,
+	fs []*plan.OrderBySpec,
+	threshold int64,
+	analyzer process.Analyzer,
+	orderCols []*vector.Vector,
+	extra []*vector.Vector,
+	inputConsumed func(),
+) (*batch.Batch, []*vector.Vector, []*vector.Vector, error) {
+	return sortBatchWithPrecomputedOrder(
+		proc, input, fs, threshold, analyzer, orderCols, extra, inputConsumed)
+}
+
+func sortBatchWithPrecomputedOrder(
+	proc *process.Process,
+	input *batch.Batch,
+	fs []*plan.OrderBySpec,
+	threshold int64,
+	analyzer process.Analyzer,
+	orderCols []*vector.Vector,
+	extra []*vector.Vector,
+	inputConsumed func(),
 ) (*batch.Batch, []*vector.Vector, []*vector.Vector, error) {
 	if len(orderCols) != len(fs) {
 		return nil, nil, nil, moerr.NewInvalidInputNoCtx("merge-order key count mismatch")
@@ -158,7 +215,7 @@ func SortBatchWithPrecomputedOrder(
 		}
 	}
 	return sortBatchWithColumns(
-		proc, input, precomputed, threshold, analyzer, orderCols, extra)
+		proc, input, precomputed, threshold, analyzer, orderCols, extra, inputConsumed)
 }
 
 func sortBatchWithColumns(
@@ -169,6 +226,7 @@ func sortBatchWithColumns(
 	analyzer process.Analyzer,
 	orderCols []*vector.Vector,
 	extra []*vector.Vector,
+	inputConsumed func(),
 ) (*batch.Batch, []*vector.Vector, []*vector.Vector, error) {
 	if proc == nil || input == nil {
 		return nil, nil, nil, moerr.NewInvalidInputNoCtx("invalid merge-order sort input")
@@ -184,7 +242,7 @@ func sortBatchWithColumns(
 		}
 	}
 	if len(orderCols) == 0 && len(extra) == 0 {
-		sorted, err := SortBatch(proc, input, fs, threshold, analyzer)
+		sorted, err := sortBatch(proc, input, fs, threshold, analyzer, inputConsumed)
 		return sorted, nil, nil, err
 	}
 
@@ -199,12 +257,13 @@ func sortBatchWithColumns(
 	copy(combined.Attrs, input.Attrs)
 	combined.Recursive = input.Recursive
 	combined.SetRowCount(input.RowCount())
+	dataCols := len(input.Vecs)
+	inputAttrs := append([]string(nil), input.Attrs...)
 
-	sorted, err := SortBatch(proc, combined, fs, threshold, analyzer)
+	sorted, err := sortBatch(proc, combined, fs, threshold, analyzer, inputConsumed)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	dataCols := len(input.Vecs)
 	orderCount := len(orderCols)
 	if sorted == nil || len(sorted.Vecs) != dataCols+orderCount+len(extra) {
 		if sorted != nil {
@@ -216,7 +275,7 @@ func sortBatchWithColumns(
 	sortedOrder := append([]*vector.Vector(nil), sorted.Vecs[dataCols:dataCols+orderCount]...)
 	sortedExtra := append([]*vector.Vector(nil), sorted.Vecs[dataCols+orderCount:]...)
 	sorted.Vecs = sorted.Vecs[:dataCols]
-	sorted.Attrs = append([]string(nil), input.Attrs...)
+	sorted.Attrs = inputAttrs
 	return sorted, sortedOrder, sortedExtra, nil
 }
 

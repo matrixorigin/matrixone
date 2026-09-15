@@ -293,6 +293,186 @@ func TestSortBatchCarriesPrecomputedAndExtraVectors(t *testing.T) {
 	})
 }
 
+func TestSortBatchWithPrecomputedOrderAndReleaseTransfersSourceOwnership(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	var input = newPairBatch(proc, []int8{10, 20, 30}, []int64{1000, 2000, 3000})
+	key := testutil.NewVector(3, types.T_int8.ToType(), proc.Mp(), false, []int8{3, 1, 2})
+	extra := testutil.NewVector(3, types.T_int64.ToType(), proc.Mp(), false, []int64{100, 200, 300})
+	var sorted *batch.Batch
+	var sortedKeys, sortedExtra []*vector.Vector
+	t.Cleanup(func() {
+		if sorted != nil {
+			sorted.Clean(proc.Mp())
+		}
+		for _, vec := range sortedKeys {
+			if vec != nil {
+				vec.Free(proc.Mp())
+			}
+		}
+		for _, vec := range sortedExtra {
+			if vec != nil {
+				vec.Free(proc.Mp())
+			}
+		}
+		if input != nil {
+			input.Clean(proc.Mp())
+		}
+		if key != nil {
+			key.Free(proc.Mp())
+		}
+		if extra != nil {
+			extra.Free(proc.Mp())
+		}
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	var callbackCount int
+	release := func() {
+		callbackCount++
+		input.Clean(proc.Mp())
+		input = nil
+		key.Free(proc.Mp())
+		key = nil
+		extra.Free(proc.Mp())
+		extra = nil
+	}
+	var err error
+	sorted, sortedKeys, sortedExtra, err = SortBatchWithPrecomputedOrderAndRelease(
+		proc,
+		input,
+		[]*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8)}},
+		1,
+		process.NewAnalyzer(0, false, false, "batch-sort-source-release"),
+		[]*vector.Vector{key},
+		[]*vector.Vector{extra},
+		release,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, callbackCount)
+	require.Nil(t, input)
+	require.Nil(t, key)
+	require.Nil(t, extra)
+	require.Equal(t, []int8{20, 30, 10}, vector.MustFixedColWithTypeCheck[int8](sorted.Vecs[0]))
+	require.Equal(t, []int64{2000, 3000, 1000}, vector.MustFixedColWithTypeCheck[int64](sorted.Vecs[1]))
+	require.Equal(t, []int8{1, 2, 3}, vector.MustFixedColWithTypeCheck[int8](sortedKeys[0]))
+	require.Equal(t, []int64{200, 300, 100}, vector.MustFixedColWithTypeCheck[int64](sortedExtra[0]))
+}
+
+func TestSortBatchWithPrecomputedOrderAndReleaseBoundsWidePartitionPeak(t *testing.T) {
+	const (
+		rows     = 4096
+		dataCols = 32
+	)
+
+	run := func(releaseSource bool) (uint64, int64) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		epoch := proc.Mp().StartResourcePeakEpoch()
+		require.NotNil(t, epoch)
+		input := batch.NewOffHeapWithSize(dataCols)
+		makeInt64Vector := func(values []int64) *vector.Vector {
+			vec := vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixedList(vec, values, nil, proc.Mp()))
+			return vec
+		}
+		for col := range input.Vecs {
+			values := make([]int64, rows)
+			for i := range values {
+				values[i] = int64(i*dataCols + col)
+			}
+			input.Vecs[col] = makeInt64Vector(values)
+		}
+		input.SetRowCount(rows)
+		order := make([]int64, rows)
+		extraValues := make([]int64, rows)
+		for i := range order {
+			order[i] = int64(rows - i)
+			extraValues[i] = int64(i)
+		}
+		key := makeInt64Vector(order)
+		extra := makeInt64Vector(extraValues)
+		var sorted *batch.Batch
+		var sortedKeys, sortedExtra []*vector.Vector
+		var releaseBefore, releaseAfter int64
+		defer func() {
+			if sorted != nil {
+				sorted.Clean(proc.Mp())
+			}
+			for _, vec := range sortedKeys {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			for _, vec := range sortedExtra {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			if input != nil {
+				input.Clean(proc.Mp())
+			}
+			if key != nil {
+				key.Free(proc.Mp())
+			}
+			if extra != nil {
+				extra.Free(proc.Mp())
+			}
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		}()
+
+		analyzer := process.NewAnalyzer(0, false, false, "batch-sort-wide")
+		var err error
+		if releaseSource {
+			sorted, sortedKeys, sortedExtra, err = SortBatchWithPrecomputedOrderAndRelease(
+				proc,
+				input,
+				[]*plan.OrderBySpec{{Expr: newExpression(0, types.T_int64)}},
+				1,
+				analyzer,
+				[]*vector.Vector{key},
+				[]*vector.Vector{extra},
+				func() {
+					releaseBefore = proc.Mp().CurrNB()
+					input.Clean(proc.Mp())
+					input = nil
+					key.Free(proc.Mp())
+					key = nil
+					extra.Free(proc.Mp())
+					extra = nil
+					releaseAfter = proc.Mp().CurrNB()
+				},
+			)
+		} else {
+			sorted, sortedKeys, sortedExtra, err = SortBatchWithPrecomputedOrder(
+				proc,
+				input,
+				[]*plan.OrderBySpec{{Expr: newExpression(0, types.T_int64)}},
+				1,
+				analyzer,
+				[]*vector.Vector{key},
+				[]*vector.Vector{extra},
+			)
+		}
+		require.NoError(t, err)
+		peak, exact := proc.Mp().EndResourcePeakEpoch(epoch)
+		require.True(t, exact)
+		require.Equal(t, int64(1), vector.MustFixedColWithTypeCheck[int64](sortedKeys[0])[0])
+		require.Equal(t, int64(rows), vector.MustFixedColWithTypeCheck[int64](sortedKeys[0])[rows-1])
+		require.Equal(t, int64(rows-1), vector.MustFixedColWithTypeCheck[int64](sortedExtra[0])[0])
+		require.Positive(t, analyzer.GetOpStats().SpillRows)
+		if releaseSource {
+			require.Greater(t, releaseBefore, releaseAfter)
+		}
+		return peak, proc.Mp().CurrNB()
+	}
+
+	retainedPeak, retainedLive := run(false)
+	releasedPeak, releasedLive := run(true)
+	require.Less(t, releasedPeak, retainedPeak)
+	require.Less(t, releasedLive, retainedLive)
+}
+
 func TestSortBatchMergesResidentAndSpilledChunks(t *testing.T) {
 	fs := []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8)}}
 

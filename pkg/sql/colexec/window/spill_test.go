@@ -69,6 +69,56 @@ func TestWindowOrderSpillsAndKeepsArgumentsAligned(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestWindowOrderSpillReleasesConsumedMaterializedInput(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt32Vector([]int32{3, 1, 2}, nil, proc.Mp())
+	input.SetRowCount(3)
+
+	spec := &plan.Expr{
+		Expr: &plan.Expr_W{W: &plan.WindowSpec{
+			Name:       "row_number",
+			WindowFunc: newFunExpr("row_number"),
+			OrderBy:    []*plan.OrderBySpec{{Expr: newColExprWithType(1, types.T_int32.ToType())}},
+		}},
+	}
+	arg := &Window{
+		WinSpecList:    []*plan.Expr{spec},
+		Aggs:           []aggexec.AggFuncExecExpression{newRowNumberAggExpr(t)},
+		SpillThreshold: 1,
+	}
+
+	t.Cleanup(func() {
+		arg.Free(proc, true, nil)
+		input.Clean(proc.Mp())
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, arg.Prepare(proc))
+	arg.Fs = makeOrderBy(spec)
+	arg.ctr.orderVecs = make([]colexec.ExprEvalVector, len(arg.Fs))
+	for i := range arg.ctr.orderVecs {
+		var err error
+		arg.ctr.orderVecs[i], err = colexec.MakeEvalVector(proc, []*plan.Expr{arg.Fs[i].Expr})
+		require.NoError(t, err)
+	}
+	arg.ctr.bat = input
+	require.NoError(t, arg.ctr.evalAggVector(input, proc))
+
+	_, err := arg.ctr.processOrder(0, arg, input, proc)
+	require.NoError(t, err)
+	require.Empty(t, input.Vecs)
+	require.Zero(t, input.RowCount())
+	require.NotNil(t, arg.ctr.bat)
+	require.Equal(t, []int32{20, 30, 10}, vector.MustFixedColWithTypeCheck[int32](arg.ctr.bat.Vecs[0]))
+	require.Equal(t, []int32{1, 2, 3}, vector.MustFixedColWithTypeCheck[int32](arg.ctr.orderVecs[0].Vec[0]))
+
+	arg.Reset(proc, false, nil)
+	require.Zero(t, arg.ctr.bat.RowCount())
+}
+
 func TestWindowOrderSpillResourceAdmissionCleans(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
