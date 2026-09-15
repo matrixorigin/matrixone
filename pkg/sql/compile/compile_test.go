@@ -2239,9 +2239,9 @@ func TestMaterializedViewCapabilityAndReadValidationGuards(t *testing.T) {
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{}}}
 	require.NoError(t, c.validateMaterializedViewReads())
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion63)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
 	require.Error(t, requireMaterializedViewCapability(c))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion64)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
 	require.NoError(t, requireMaterializedViewCapability(c))
 }
 
