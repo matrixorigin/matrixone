@@ -344,6 +344,13 @@ func TestPythonRoutineCallRejectsNoncanonicalLanguage(t *testing.T) {
 	require.ErrorContains(t, err, `routine call has unsupported language "PYTHON"`)
 }
 
+func TestPythonContractPreflightRejectsNoncanonicalLanguage(t *testing.T) {
+	routine := &Udf{Language: "PYTHON"}
+	require.ErrorContains(t, routine.LoadPythonTypeContract(), "unsupported routine language")
+	require.ErrorContains(t, routine.ValidatePythonTypeContract(), "unsupported routine language")
+	require.ErrorContains(t, routine.ValidatePythonCatalogSignature(), "unsupported routine language")
+}
+
 func TestSQLRoutineFingerprintAndCallUseSharedRevisionContract(t *testing.T) {
 	fingerprint, err := SQLRoutineFingerprint("select value + 1", "[\"bigint\"]", "bigint")
 	require.NoError(t, err)

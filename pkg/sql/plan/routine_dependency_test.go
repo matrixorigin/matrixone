@@ -85,6 +85,14 @@ func TestAssignRoutineCallsiteIsPlanLocalAndIdempotent(t *testing.T) {
 	require.Equal(t, "python/2", second.CallsiteId)
 }
 
+func TestRoutineDependencyRejectsNoncanonicalLanguage(t *testing.T) {
+	builder := &QueryBuilder{qry: &planpb.Query{}}
+	call := testRoutineCallForDependency()
+	call.Language = "PYTHON"
+	require.ErrorContains(t, builder.assignRoutineCallsite(call), "language")
+	require.ErrorContains(t, builder.recordRoutinePlanDependency(call), "language")
+}
+
 func TestRecordRoutinePlanDependencyBoundsPlanClosure(t *testing.T) {
 	builder := &QueryBuilder{qry: &planpb.Query{
 		RoutineDependencies: make([]*planpb.RoutinePlanDependency, maxRoutinePlanDependencies),
