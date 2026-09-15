@@ -3333,6 +3333,7 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 	}
 
 	protocol, _ := exec.additionalConfig[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
-	exec.stableInitialSnapshot = protocol == cdc.CDCInitialSnapshotProtocolStableEpoch
+	exec.stableInitialSnapshot = protocol == cdc.CDCInitialSnapshotProtocolStableEpoch ||
+		protocol == cdc.CDCInitialSnapshotProtocolNoFullHLC
 	return nil
 }

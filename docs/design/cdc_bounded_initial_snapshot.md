@@ -2,8 +2,7 @@
 
 Status: approved for implementation in MatrixOne PR #27939 by XuPeng-SH in
 [review 5120209126](https://github.com/matrixorigin/matrixone/pull/27939#pullrequestreview-5120209126)
-after reviewing the exact protocol/code revision at `7fa37b9d61`. This
-status-only update records the R3 decision; it does not change the protocol.
+after reviewing the exact protocol/code revision at `7fa37b9d61`.
 The daemon-completion ownership defect demonstrated at
 `64a946ca54858db0d4d5c378f5e93450ded20e82` is corrected by the generation-owned
 completion implementation and regression tests described below.
@@ -23,6 +22,39 @@ It does not introduce a general target ownership service, cross-task target
 deduplication, external-target PITR coordination, or a hard upper bound on one
 engine batch. Those are separate product problems and are not needed to solve
 #27863 safely.
+
+## NoFull creation-watermark extension (#28268 / PR #28506)
+
+Design-gate decision for PR #28506: approved for implementation after the
+`gpt-5.6-luna` medium review recorded in the issue-to-pr task record, against
+exact head `1610fabcea6a9ed150885ca45bf90755f2efa600`. This section is the
+reviewed extension of the earlier bounded-snapshot design, not a claim that
+the earlier revision already covered the NoFull protocol.
+
+`CREATE CDC ... NoFull` persists its task before the asynchronous executor
+starts. Its activation boundary is therefore the HLC snapshot of the CREATE
+transaction, `S=(physical,logical)`, and every commit after `S` must remain
+eligible for incremental collection across delayed startup, retry, pause,
+resume, restart, and CN takeover.
+
+The producer persists `S` losslessly in the existing `StartTs` field using the
+internal `physical-logical` representation and marks the task with
+`no-full-hlc-v1`. The executor consumes that value before creating its initial
+watermark. Empty `StartTs` rows retain the legacy startup-snapshot fallback;
+explicit user `StartTs` values remain unchanged.
+
+This new persisted representation is gated by MORPC v73 and the distinct
+`TaskCode_InitCdcLosslessStart`. Frontend and compile creation paths use the
+same gate; old CNs cannot claim the new task code. A non-empty durable boundary
+fails closed on stale-read recovery instead of advancing to a later snapshot,
+which would silently lose the intervening interval.
+
+The protobuf source, generated enum maps, registered descriptor, daemon task
+classification, pause-finalization retry, and heartbeat claim-loss handling
+must all include the new task code. Acceptance requires focused HLC,
+legacy/user timestamp, protocol, descriptor, stale-read, and takeover
+cancellation tests, plus the public SQL CDC reproduction when a test-owned
+service is available.
 
 ## Problem
 

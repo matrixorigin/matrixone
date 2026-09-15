@@ -1370,7 +1370,8 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 			// tick. ErrInvalidTask is the explicit taskservice fence: the durable
 			// claim no longer matches this runner/generation and local target work
 			// must stop.
-			if claim.Metadata.Executor == task.TaskCode_InitCdcStableEpoch &&
+			if (claim.Metadata.Executor == task.TaskCode_InitCdcStableEpoch ||
+				claim.Metadata.Executor == task.TaskCode_InitCdcLosslessStart) &&
 				moerr.IsMoErrCode(err, moerr.ErrInvalidTask) &&
 				r.relinquishDaemonClaim(dt, claim) {
 				// Relinquish heartbeat ownership before cancellation. Pointer-aware
