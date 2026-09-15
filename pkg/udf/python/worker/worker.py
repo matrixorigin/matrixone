@@ -77,6 +77,8 @@ MAX_FENCE_COMPONENT_BYTES = 256
 MAX_SECURITY_PRINCIPAL_ID = (1 << 32) - 1
 MIN_INT64 = -(1 << 63)
 MAX_INT64 = (1 << 63) - 1
+MIN_INT32 = -(1 << 31)
+MAX_INT32 = (1 << 31) - 1
 # Admission bounds cover active fences and retained terminal tombstones.  The
 # names deliberately describe the whole ledger so a future cleanup change
 # cannot mistake active work for reclaimable terminal state.
@@ -1158,6 +1160,9 @@ def _canonical_descriptor(descriptor: Dict[str, Any]) -> bytes:
     for key in _DESCRIPTOR_INT_KEYS - {"type_id"}:
         if key in descriptor and type(descriptor[key]) is not int:
             raise ValueError(f"TYPE_CONTRACT: descriptor {key} must be an integer")
+    for key in _DESCRIPTOR_INT_KEYS:
+        if key in descriptor and not MIN_INT32 <= descriptor[key] <= MAX_INT32:
+            raise ValueError(f"TYPE_CONTRACT: descriptor {key} is outside int32 range")
     for key in _DESCRIPTOR_TEXT_KEYS:
         if key in descriptor and type(descriptor[key]) is not str:
             raise ValueError(f"TYPE_CONTRACT: descriptor {key} must be text")
