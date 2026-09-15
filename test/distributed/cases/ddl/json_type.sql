@@ -11,6 +11,7 @@ drop table if exists json_table_5a;
 drop table if exists json_view_1;
 drop table if exists json_table_6;
 drop table if exists json_minmax_issue28869;
+drop table if exists json_minmax_issue28869_ctas;
 drop view if exists json_minmax_issue28869_view;
 
 --Overwrite json string key value as character, number, Chinese, special character, '', constant, date format string, true/false

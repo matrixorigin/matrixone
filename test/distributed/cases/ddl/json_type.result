@@ -10,6 +10,7 @@ drop table if exists json_table_5a;
 drop table if exists json_view_1;
 drop table if exists json_table_6;
 drop table if exists json_minmax_issue28869;
+drop table if exists json_minmax_issue28869_ctas;
 drop view if exists json_minmax_issue28869_view;
 create table json_table_1(j1 json);
 insert into json_table_1 values('{"key10": "value1", "key2": "value2"}'),('{"key1": "@#$_%^&*()!@", "key123456": 223}'),('{"芝士面包": "12abc", "key_56": 78.90}'),('{"": "", "12_key": "中文mo"}'),('{"a 1": "b 1", "13key4": "中文mo"}'),('{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}'),('{"d1": [true,false]}'),('{}');
