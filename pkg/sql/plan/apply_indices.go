@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/geo"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -358,6 +359,16 @@ func findSpatialIndexFilter(idxDef *IndexDef, node *plan.Node) int32 {
 	if !ok {
 		return -1
 	}
+	// The current R-tree key is an axis-aligned Cartesian envelope. A WGS84
+	// geometry can cross the antimeridian, where its canonical envelope (for
+	// example [-179,179]) does not contain points that are geographically
+	// adjacent through +/-180. Using that envelope as an index candidate would
+	// be unsound because the covering spatial scan can omit a true match. Keep
+	// the exact SRID-aware predicate on the base table until the index key can
+	// represent circular longitude intervals.
+	if isGeodeticSpatialColumn(node.TableDef.Cols[targetColPos]) {
+		return -1
+	}
 	for i := range node.FilterList {
 		col := checkSpatialIndexFilter(node.FilterList[i])
 		if col != nil && col.ColPos == targetColPos {
@@ -365,6 +376,16 @@ func findSpatialIndexFilter(idxDef *IndexDef, node *plan.Node) int32 {
 		}
 	}
 	return -1
+}
+
+func isGeodeticSpatialColumn(col *plan.ColDef) bool {
+	if col == nil {
+		return false
+	}
+	if col.Typ.Id != int32(types.T_geometry) && col.Typ.Id != int32(types.T_geometry32) {
+		return false
+	}
+	return col.Typ.Width == int32(geo.SRIDWGS84+1)
 }
 
 func buildSpatialIndexColMap(idxDef *IndexDef, node *plan.Node, idxTag int32, idxTableDef *plan.TableDef) map[[2]int32]*plan.Expr {
