@@ -643,6 +643,99 @@ func TestMixedEmptyRangeEndpointsDoNotRetainLiveStateAfterUnlock(t *testing.T) {
 	)
 }
 
+func TestEmptyRangeEndpointLockCleanupOrdersDoNotRetainLiveState(t *testing.T) {
+	table := uint64(17)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			cases := []struct {
+				name      string
+				firstKey  []byte
+				secondKey []byte
+			}{
+				{
+					name:      "start-first",
+					firstKey:  []byte{7},
+					secondKey: []byte{5},
+				},
+				{
+					name:      "end-first",
+					firstKey:  []byte{5},
+					secondKey: []byte{7},
+				},
+			}
+
+			for i, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					caseTable := table + uint64(i)
+					ownerTxnID := newTestTxnID(byte(1 + i))
+					_, err := s.Lock(
+						ctx,
+						caseTable,
+						newTestRows(1, 10),
+						ownerTxnID,
+						newTestRangeExclusiveOptions(),
+					)
+					require.NoError(t, err)
+					v, err := s.getLockTable(context.Background(), 0, caseTable)
+					require.NoError(t, err)
+					lt := v.(*localLockTable)
+
+					orphanEndWaiters := &staleSnapshotReadTrapQueue{waiterQueue: newWaiterQueue()}
+					orphanEndWaiters.init(lt.logger)
+					orphanStartWaiters := &staleSnapshotReadTrapQueue{waiterQueue: newWaiterQueue()}
+					orphanStartWaiters.init(lt.logger)
+
+					lt.mu.Lock()
+					lt.mu.store.Add([]byte{5}, Lock{
+						value:   flagLockRangeEnd | flagLockExclusiveMode,
+						holders: newHolders(),
+						waiters: orphanEndWaiters,
+					})
+					lt.mu.store.Add([]byte{7}, Lock{
+						value:   flagLockRangeStart | flagLockExclusiveMode,
+						holders: newHolders(),
+						waiters: orphanStartWaiters,
+					})
+					lt.mu.Unlock()
+
+					cleanup := func(key []byte, txnNumber byte, state *staleSnapshotReadTrapQueue) {
+						options := newTestRowExclusiveOptions()
+						options.Policy = pb.WaitPolicy_FastFail
+						txnID := newTestTxnID(txnNumber)
+						_, err := s.Lock(ctx, caseTable, [][]byte{key}, txnID, options)
+						if err != nil {
+							require.ErrorIs(t, err, ErrLockConflict)
+						}
+						require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+						require.True(t, state.returned, "cleanup must return the orphan state")
+						lt.mu.RLock()
+						_, ok := lt.mu.store.Get(key)
+						lt.mu.RUnlock()
+						require.False(t, ok, "cleanup must remove the orphan endpoint")
+					}
+
+					firstState := orphanStartWaiters
+					secondState := orphanEndWaiters
+					if bytes.Equal(tc.firstKey, []byte{5}) {
+						firstState = orphanEndWaiters
+						secondState = orphanStartWaiters
+					}
+					cleanup(tc.firstKey, byte(10+i*2), firstState)
+					cleanup(tc.secondKey, byte(11+i*2), secondState)
+
+					require.NoError(t, s.Unlock(ctx, ownerTxnID, timestamp.Timestamp{}))
+					lt.mu.RLock()
+					remaining := lt.mu.store.Len()
+					lt.mu.RUnlock()
+					require.Zero(t, remaining, "owner unlock must not leave returned live state")
+				})
+			}
+		},
+	)
+}
+
 func TestMismatchedRangeEndpointRepairsLiveCounterpart(t *testing.T) {
 	table := uint64(10)
 	getRunner(false)(

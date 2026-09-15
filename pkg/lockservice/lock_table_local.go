@@ -1186,10 +1186,11 @@ func (l *localLockTable) findPairedRangeLock(key []byte, lock Lock) ([]byte, Loc
 }
 
 // findStructuralRangePair returns the first range endpoint in the direction
-// where this endpoint can be paired, without inspecting backing state. A
-// same-direction endpoint means the first opposite endpoint belongs to a
-// different range, so the pair is ambiguous and false is returned. Row locks
-// may be interleaved and are ignored.
+// where this endpoint can be paired, while using backing identity to reject
+// an endpoint already owned by another complete range. A same-direction
+// endpoint means the first opposite endpoint belongs to a different range, so
+// the pair is ambiguous and false is returned. Row locks may be interleaved
+// and are ignored.
 func (l *localLockTable) findStructuralRangePair(
 	key []byte,
 	lock Lock) ([]byte, Lock, bool) {
@@ -1214,8 +1215,9 @@ func (l *localLockTable) findStructuralRangePair(
 	}
 
 	// A range-start inside a complete range is an orphan, not the start of a
-	// pair with that range's end. Ignore interleaved rows and stop at the first
-	// range-end, which closes the nearest earlier range.
+	// pair with that range's end. Ignore interleaved rows and orphan range-ends;
+	// stop at an end only after its matching predecessor start proves that it
+	// closes a complete earlier range.
 	cur := key
 	for {
 		prevKey, prevLock, ok := l.mu.store.Prev(cur)
@@ -1226,7 +1228,14 @@ func (l *localLockTable) findStructuralRangePair(
 			return nil, Lock{}, false
 		}
 		if prevLock.isLockRangeEnd() {
-			break
+			// Skip an orphan range-end. A matching predecessor start means
+			// this is a complete earlier range and bounds the search; an
+			// unmatched end must not hide the start of an enclosing range.
+			if l.hasPrecedingRangePairLocked(prevKey, prevLock, nil) {
+				break
+			}
+			cur = prevKey
+			continue
 		}
 		cur = prevKey
 	}
@@ -1239,6 +1248,14 @@ func (l *localLockTable) findStructuralRangePair(
 		nil,
 		func(k []byte, v Lock) bool {
 			if v.isLockRangeEnd() {
+				// Do not use an enclosing range-end as this start's
+				// counterpart. The current start is allowed to be the
+				// candidate's own matching start; any earlier matching start
+				// proves that the candidate end already belongs to another
+				// range, possibly across orphan endpoints.
+				if l.hasPrecedingRangePairLocked(k, v, key) {
+					return false
+				}
 				pairedKey, pairedLock, found = k, v, true
 				return false
 			}
@@ -1249,6 +1266,33 @@ func (l *localLockTable) findStructuralRangePair(
 		},
 	)
 	return pairedKey, pairedLock, found
+}
+
+// hasPrecedingRangePairLocked reports whether an end already has a matching
+// range-start before endKey. excludeStartKey is the endpoint currently being
+// repaired; it may be the legitimate matching start for the candidate end.
+// Row locks and orphan endpoints are ignored while looking for a matching
+// backing state.
+func (l *localLockTable) hasPrecedingRangePairLocked(
+	endKey []byte,
+	end Lock,
+	excludeStartKey []byte,
+) bool {
+	paired := false
+	l.mu.store.Range(
+		nil,
+		endKey,
+		func(key []byte, lock Lock) bool {
+			if lock.isLockRangeStart() &&
+				!bytes.Equal(key, excludeStartKey) &&
+				sameRangeLockState(lock, end) {
+				paired = true
+				return false
+			}
+			return true
+		},
+	)
+	return paired
 }
 
 // hasFollowingRangePairLocked reports whether a predecessor range-start is
