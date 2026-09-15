@@ -872,6 +872,7 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 				"corrected string numeric result contracts require MORPC protocol version 73")
 
 			c, client := expressionProtocolTestCompile(t)
+			cRT := runtime.ServiceRuntime(c.proc.GetService())
 			op := projection.NewArgument()
 			defer op.Release()
 			op.ProjectList = p.InstructionList[0].ProjectList
@@ -881,21 +882,26 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 				NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
 				RootOp:   op,
 			}
+			client.version = defines.MORPCVersion72
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+			_, err := encodeRemoteScope(scope, c.proc)
+			require.ErrorContains(t, err,
+				"remote destination does not support corrected string numeric result contracts (MORPC version 73)")
+
 			client.version = defines.MORPCVersion73
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
 			data, err := encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
 
 			wire := new(pipeline.Pipeline)
 			require.NoError(t, wire.Unmarshal(data))
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
 			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire),
 				"corrected string numeric result contracts require MORPC protocol version 73")
 			_, err = decodeScope(data, c.proc, true, nil)
 			require.ErrorContains(t, err,
 				"corrected string numeric result contracts require MORPC protocol version 73")
 
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
 			_, err = decodeScope(data, c.proc, true, nil)
 			require.NoError(t, err)
 		})
