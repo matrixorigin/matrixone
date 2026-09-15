@@ -61,12 +61,60 @@ type recordingArtifactResolver struct {
 	digest  string
 }
 
+type blockingArtifactResolver struct{}
+
+func (blockingArtifactResolver) Resolve(ctx context.Context, _ uint64, _, _ string) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
 func (r *recordingArtifactResolver) Resolve(_ context.Context, accountID uint64, handler, digest string) (string, error) {
 	r.calls++
 	r.account = accountID
 	r.handler = handler
 	r.digest = digest
 	return r.source, nil
+}
+
+func TestValidateDefinitionBoundsArtifactResolution(t *testing.T) {
+	invocation := validInvocation()
+	gateway, err := NewGatewayWithArtifactStore(ClientConfig{
+		Enabled:         true,
+		AllowUnisolated: true,
+		ServerAddress:   "127.0.0.1:1",
+		RequestTimeout:  20 * time.Millisecond,
+	}, blockingArtifactResolver{})
+	require.NoError(t, err)
+	defer gateway.Close()
+
+	definition := &udf.RoutineDefinition{
+		Language:                udf.LanguagePython,
+		AccountID:               invocation.FunctionRef.AccountID,
+		Handler:                 invocation.Handler,
+		Args:                    append([]types.Type(nil), invocation.Args...),
+		ReturnType:              invocation.ReturnType,
+		Mode:                    invocation.Mode,
+		NullPolicy:              invocation.NullPolicy,
+		ABIContract:             invocation.ABIContract,
+		AdapterVersion:          invocation.AdapterVersion,
+		SDKVersion:              invocation.SDKVersion,
+		DefinitionSchemaVersion: invocation.DefinitionSchemaVersion,
+		ArtifactDigest:          invocation.ArtifactDigest,
+		EnvironmentDigest:       invocation.EnvironmentDigest,
+		DefinitionFingerprint:   invocation.DefinitionFingerprint,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- gateway.ValidateDefinition(ctx, definition) }()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(500 * time.Millisecond):
+		cancel()
+		require.FailNow(t, "artifact resolution was not bounded by the gateway request timeout")
+	}
 }
 
 func (c *finishAckFlightClient) DoAction(
