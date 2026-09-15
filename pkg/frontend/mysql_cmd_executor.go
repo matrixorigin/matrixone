@@ -2913,6 +2913,7 @@ func createPrepareStmtInSession(
 		NativeMode:             owner.sqlModeHasMatrixOneNative(),
 		OnlyFullGroupBy:        owner.sqlModeHasOnlyFullGroupBy(),
 		BoolSumAvg:             owner.sqlModeHasEnableBoolSumAvg(),
+		NoUnsignedSubtraction:  owner.sqlModeHasNoUnsignedSubtraction(),
 		sqlModeFlagsSet:        true,
 		remapDb:                maps.Clone(execCtx.remapDb),
 		defaultDatabase:        executionSes.GetTxnCompileCtx().GetDatabase(),
@@ -2941,6 +2942,7 @@ func createPrepareStmtInSession(
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		prepareControl.Plan, len(prepareControl.ParamTypes))
+	prepareStmt.refreshGeometrySRIDParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositionsSet = true
 

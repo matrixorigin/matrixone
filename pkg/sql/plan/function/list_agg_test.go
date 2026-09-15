@@ -47,6 +47,19 @@ func TestMySQLNumericAggTypeCheck(t *testing.T) {
 	}
 }
 
+func TestMySQLNumericAggSupportsDecimal256(t *testing.T) {
+	input := types.New(types.T_decimal256, 65, 30)
+	for _, name := range []string{"var_pop", "var_samp", "stddev_pop", "stddev_samp"} {
+		t.Run(name, func(t *testing.T) {
+			got, err := GetFunctionByName(context.Background(), name, []types.Type{input})
+			require.NoError(t, err)
+			require.Equal(t, types.T_float64.ToType(), got.GetReturnType())
+			_, shouldCast := got.ShouldDoImplicitTypeCast()
+			require.False(t, shouldCast)
+		})
+	}
+}
+
 func TestBitSumAvgUsesExistingUnsignedDomain(t *testing.T) {
 	for _, name := range []string{"sum", "avg"} {
 		for _, width := range []int32{1, 8, 64} {

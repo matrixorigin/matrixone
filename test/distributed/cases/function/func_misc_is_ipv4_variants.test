@@ -56,7 +56,8 @@ SELECT IS_IPV4_COMPAT(INET6_ATON('::10.0.5.9')) = 1 AS is_compat;
 SELECT IS_IPV4_COMPAT(INET6_ATON('::1')) = 0 AS is_not_compat;
 
 # Edge cases
-SELECT IS_IPV4_COMPAT(INET6_ATON('::0.0.0.1')) AS min_compat;
+SELECT IS_IPV4_COMPAT(INET6_ATON('::0.0.0.1')) AS reserved_loopback_compat;
+SELECT IS_IPV4_COMPAT(INET6_ATON('::0.0.0.2')) AS first_compat_payload;
 SELECT IS_IPV4_COMPAT(INET6_ATON('::255.255.255.255')) AS max_compat;
 SELECT IS_IPV4_COMPAT(INET6_ATON('::127.0.0.1')) AS loopback_compat;
 

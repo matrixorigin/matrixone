@@ -59,7 +59,73 @@ order by id;
 1  ¦  a  ¦  10  𝄀
 2  ¦  b  ¦  20  𝄀
 3  ¦  c  ¦  30
+create table t_unique(k int not null, payload varchar(20), amount int, unique key uk_k(k));
+insert into t_unique values (1, 'alpha', 10), (2, 'beta', 20);
+select k, payload, sum(amount) as total from t_unique group by k order by k;
+➤ k[4,32,0]  ¦  payload[12,20,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  alpha  ¦  10  𝄀
+2  ¦  beta  ¦  20
+select k, payload, sum(amount) as total from t_unique group by k, payload order by k;
+➤ k[4,32,0]  ¦  payload[12,20,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  alpha  ¦  10  𝄀
+2  ¦  beta  ¦  20
+select k, concat(payload, '!') as label, sum(amount) as total from t_unique group by k having payload <> '' order by payload;
+➤ k[4,32,0]  ¦  label[12,21,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  alpha!  ¦  10  𝄀
+2  ¦  beta!  ¦  20
+create table t_unique_composite(a int not null, b int not null, payload varchar(20), unique key uk_ab(a,b));
+insert into t_unique_composite values (1,1,'x'),(1,2,'y'),(2,1,'z');
+select a,b,payload,count(*) as n from t_unique_composite group by b,a order by a,b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  payload[12,20,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  1  ¦  x  ¦  1  𝄀
+1  ¦  2  ¦  y  ¦  1  𝄀
+2  ¦  1  ¦  z  ¦  1
+select a,payload,count(*) from t_unique_composite group by a;
+SQL syntax error: column "t_unique_composite.payload" must appear in the GROUP BY clause or be used in an aggregate function
+select payload,count(*) from t_unique_composite group by a+1,b;
+SQL syntax error: column "t_unique_composite.payload" must appear in the GROUP BY clause or be used in an aggregate function
+create table t_unique_fan(k int, v int);
+insert into t_unique_fan values (1,7),(1,8),(2,9);
+select u.k,u.payload,count(*) as n from t_unique u join t_unique_fan f on u.k=f.k group by u.k order by u.k;
+➤ k[4,32,0]  ¦  payload[12,20,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  alpha  ¦  2  𝄀
+2  ¦  beta  ¦  1
+select u.k,u.payload,count(*) as n from t_unique u join t_unique_fan f on u.k=f.k group by u.k,u.payload order by u.k;
+➤ k[4,32,0]  ¦  payload[12,20,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  alpha  ¦  2  𝄀
+2  ¦  beta  ¦  1
+select u.k,f.v,count(*) from t_unique u join t_unique_fan f on u.k=f.k group by u.k;
+SQL syntax error: column "f.v" must appear in the GROUP BY clause or be used in an aggregate function
+create table t_unique_nullable(k int, payload varchar(20), unique key uk_nullable(k));
+insert into t_unique_nullable values (null,'x'),(null,'y'),(1,'z');
+select k,payload,count(*) from t_unique_nullable group by k;
+SQL syntax error: column "t_unique_nullable.payload" must appear in the GROUP BY clause or be used in an aggregate function
+select k,payload,count(*) from t_unique_nullable where k is not null group by k;
+SQL syntax error: column "t_unique_nullable.payload" must appear in the GROUP BY clause or be used in an aggregate function
+select k,count(*) as n from t_unique_nullable group by k order by k is null,k;
+➤ k[4,32,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  1  𝄀
+null  ¦  2
+select k,payload,count(*) from t_unique group by k with rollup;
+SQL syntax error: column "t_unique.payload" must appear in the GROUP BY clause or be used in an aggregate function
+prepare unique_fd from 'select k,payload,sum(amount) as total from t_unique group by k order by k';
+execute unique_fd;
+➤ k[4,32,0]  ¦  payload[12,20,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  alpha  ¦  10  𝄀
+2  ¦  beta  ¦  20
+alter table t_unique drop index uk_k;
+insert into t_unique values (1,'different',30);
+execute unique_fd;
+SQL syntax error: column "t_unique.payload" must appear in the GROUP BY clause or be used in an aggregate function
+deallocate prepare unique_fd;
+select k,payload,sum(amount) as total from t_unique group by k,payload order by k,payload;
+➤ k[4,32,0]  ¦  payload[12,20,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  alpha  ¦  10  𝄀
+1  ¦  different  ¦  30  𝄀
+2  ¦  beta  ¦  20
 set session sql_mode = 'ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE';
+select a,b,payload,count(*) from t_unique_composite group by a,b;
+SQL syntax error: column "t_unique_composite.payload" must appear in the GROUP BY clause or be used in an aggregate function
 select region, product, sum(qty) as s_qty
 from t_sales
 where product = 'phone'

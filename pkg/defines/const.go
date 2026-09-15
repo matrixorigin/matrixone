@@ -102,7 +102,13 @@ const (
 	MORPCVersion64     int64 = 64 // typed BIN/CONV execution contracts
 	MORPCVersion65     int64 = 65 // signed INT result contract for ASCII
 	MORPCVersion66     int64 = 66 // GROUP_CONCAT source-row diagnostics in aggregate partial state
-	MORPCLatestVersion       = MORPCVersion66
+	MORPCVersion67     int64 = 67 // named process timezone identity
+	MORPCVersion68     int64 = 68 // complete GROUP_CONCAT cut reporting for strict writes
+	MORPCVersion69     int64 = 69 // exact bounded per-partition RANK with boundary ties
+	MORPCVersion70     int64 = 70 // row-dependent and unsigned CONV bases
+	MORPCVersion71     int64 = 71 // checked integer arithmetic overloads
+	MORPCVersion72     int64 = 72 // corrected IP function semantics and overload identities
+	MORPCLatestVersion       = MORPCVersion72
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
