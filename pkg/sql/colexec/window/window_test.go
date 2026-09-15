@@ -1575,10 +1575,10 @@ func TestWindowDecimalAggResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	resultValues := collectFixedWindowColumn[types.Decimal128](t, arg, proc, 1)
+	resultValues := collectFixedWindowColumn[types.Decimal256](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
-		require.Equal(t, values[idx], resultValues[idx], "row %d", idx)
+		require.Equal(t, types.Decimal256FromDecimal128(values[idx]), resultValues[idx], "row %d", idx)
 	}
 
 	arg.Free(proc, false, nil)
@@ -2218,13 +2218,13 @@ func TestBoundedSlidingSumSupportsDecimal64Arguments(t *testing.T) {
 
 	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
-	require.Equal(t, []types.Decimal128{
-		types.Decimal128FromInt64(100),
-		types.Decimal128FromInt64(100),
+	require.Equal(t, []types.Decimal256{
+		types.Decimal256FromInt64(100),
+		types.Decimal256FromInt64(100),
 		{},
-		types.Decimal128FromInt64(-300),
-		types.Decimal128FromInt64(100),
-	}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
+		types.Decimal256FromInt64(-300),
+		types.Decimal256FromInt64(100),
+	}, vector.MustFixedColWithTypeCheck[types.Decimal256](result))
 	require.False(t, result.IsNull(0))
 	require.False(t, result.IsNull(1))
 	require.True(t, result.IsNull(2))
