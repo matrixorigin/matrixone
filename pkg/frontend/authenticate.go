@@ -10582,16 +10582,6 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 			}
 			return rtnErr
 		} else {
-			// A newly created account is stamped with the current final version below.
-			// Resolve the VIEWS DDL capability before that stamp so an old or
-			// incompletely upgraded cluster cannot create a tenant that will never
-			// revisit the predecessor metadata definition.
-			protocolVersion, rtnErr = protocolVersionForTenantInitializationWithContext(
-				ctx,
-				ses.GetService(), ses.GetProc())
-			if rtnErr != nil {
-				return rtnErr
-			}
 			newTenant, newTenantCtx, rtnErr = createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 			if rtnErr != nil {
 				return rtnErr
@@ -10652,6 +10642,18 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 			return rtnErr
 		}
 		rtnErr = createTablesInSystemOfGeneralTenant(newTenantCtx, bh, newTenant)
+		if rtnErr != nil {
+			return rtnErr
+		}
+		// Resolve the VIEWS DDL capability as late as possible in the account
+		// creation transaction. Cluster service discovery may still be
+		// converging while the catalog, tenant tables, and system databases are
+		// being created. The check remains before the information_schema DDL is
+		// published, so a mixed or unknown cluster still receives the safe
+		// predecessor definition and can be repaired by maintenance later.
+		protocolVersion, rtnErr = protocolVersionForTenantInitializationWithContext(
+			ctx,
+			ses.GetService(), ses.GetProc())
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -11079,8 +11081,15 @@ func protocolVersionForTenantInitializationWithContext(
 		return legacyVersion, nil
 	}
 	version, ok := value.(int64)
-	if !ok || version < defines.MORPCVersion73 {
+	if !ok {
 		return legacyVersion, nil
+	}
+	if version < defines.MORPCVersion73 {
+		// Preserve every pre-existing protocol-specific information_schema
+		// contract. Only the new VIEWS function needs the v72 predecessor
+		// fallback; promoting an older known protocol would also install newer
+		// TABLES/COLUMNS and role-closure definitions.
+		return version, nil
 	}
 	supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion73)
 	if err != nil {

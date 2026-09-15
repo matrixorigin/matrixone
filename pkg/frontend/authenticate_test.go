@@ -579,7 +579,7 @@ type tenantInitializationProtocolCluster struct {
 	cns []metadata.CNService
 }
 
-func TestCreateTablesInformationSchemaWithoutProcessUsesLegacyForUnknownOrPredecessorProtocol(t *testing.T) {
+func TestCreateTablesInformationSchemaPreservesKnownProtocolFallback(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -590,20 +590,31 @@ func TestCreateTablesInformationSchemaWithoutProcessUsesLegacyForUnknownOrPredec
 		}
 	})
 	for _, test := range []struct {
-		name     string
-		protocol int64
+		name                   string
+		service                string
+		protocol               int64
+		wantTablesV41          bool
+		wantColumnsV41         bool
+		wantColumnsV46         bool
+		wantCurrentColumns     bool
+		wantCurrentRoles       bool
+		wantCompatibilityRoles bool
 	}{
-		{
-			name:     "predecessor local protocol",
-			protocol: defines.MORPCVersion72,
-		},
-		{
-			name:     "known local protocol without process",
-			protocol: defines.MORPCVersion73,
-		},
+		{name: "protocol 15", protocol: defines.MORPCVersion15, wantTablesV41: true, wantColumnsV41: true, wantCompatibilityRoles: true},
+		{name: "protocol 41", protocol: defines.MORPCVersion41, wantTablesV41: true, wantColumnsV41: true, wantCurrentRoles: true},
+		{name: "protocol 46", protocol: defines.MORPCVersion46, wantColumnsV46: true, wantCurrentRoles: true},
+		{name: "protocol 57", protocol: defines.MORPCVersion57, wantColumnsV46: true, wantCurrentRoles: true},
+		{name: "protocol 58", protocol: defines.MORPCVersion58, wantCurrentColumns: true, wantCurrentRoles: true},
+		{name: "protocol 72", protocol: defines.MORPCVersion72, wantCurrentColumns: true, wantCurrentRoles: true},
+		// Without a process there is no all-CN proof, so even a v73 local
+		// runtime must use the safe predecessor VIEWS definition.
+		{name: "protocol 73 without process", protocol: defines.MORPCVersion73, wantCurrentColumns: true, wantCurrentRoles: true},
+		{name: "unknown runtime", service: "missing-pr27716-runtime", protocol: defines.MORPCVersion72, wantCurrentColumns: true, wantCurrentRoles: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.protocol)
+			if test.service == "" {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.protocol)
+			}
 
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
@@ -617,10 +628,41 @@ func TestCreateTablesInformationSchemaWithoutProcessUsesLegacyForUnknownOrPredec
 				}).AnyTimes()
 
 			err := createTablesInInformationSchemaOfGeneralTenant(
-				context.Background(), bh, "", nil)
+				context.Background(), bh, test.service, nil)
 			require.NoError(t, err)
-			require.Contains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
-			require.NotContains(t, executed, sysview.InformationSchemaViewsDDL)
+			// Protocols below v73 also apply the historical role-visibility
+			// wrapper, so compare the VIEWS-specific contract rather than the
+			// whole SQL string.
+			require.True(t, containsSQLFragment(executed, "tbl.rel_createsql AS `VIEW_DEFINITION`"))
+			require.False(t, containsSQLFragment(executed, "mo_view_definition("))
+			tablesDDL := informationSchemaDDL(executed, "TABLES")
+			columnsDDL := informationSchemaDDL(executed, "COLUMNS")
+			require.NotEmpty(t, tablesDDL)
+			require.NotEmpty(t, columnsDDL)
+			if test.wantTablesV41 {
+				require.NotContains(t, tablesDDL, "UNION ALL")
+			} else {
+				require.Contains(t, tablesDDL, "UNION ALL")
+			}
+			if test.wantColumnsV41 {
+				require.NotContains(t, columnsDDL, "UNION ALL")
+			} else {
+				require.Contains(t, columnsDDL, "UNION ALL")
+			}
+			if test.wantColumnsV46 {
+				require.Contains(t, columnsDDL, "WHEN 3 then 'utf8' else NULL")
+				require.NotContains(t, columnsDDL, "WHEN 3 then 'utf8mb4' else NULL")
+			}
+			if test.wantCurrentColumns {
+				require.Contains(t, columnsDDL, "WHEN 3 then 'utf8mb4' else NULL")
+			}
+			if !test.wantColumnsV46 && !test.wantCurrentColumns {
+				require.Contains(t, columnsDDL, "WHEN 3 then 'utf8' else NULL")
+			}
+			require.Equal(t, test.wantCurrentRoles,
+				containsSQLFragment(executed, "mo_current_roles()"))
+			require.Equal(t, test.wantCompatibilityRoles,
+				containsSQLFragment(executed, "FROM mo_catalog.mo_role_grant rg"))
 		})
 	}
 }
@@ -643,6 +685,11 @@ func TestProtocolVersionForTenantInitializationUsesLegacyForUnknownRuntime(t *te
 	version, err = protocolVersionForTenantInitialization("", nil)
 	require.NoError(t, err)
 	require.Equal(t, defines.MORPCVersion72, version)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion41)
+	version, err = protocolVersionForTenantInitialization("", nil)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion41, version)
 }
 
 func (c *tenantInitializationProtocolCluster) GetCNServiceWithoutWorkingState(
@@ -775,6 +822,16 @@ func containsSQL(sqls []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+func informationSchemaDDL(sqls []string, view string) string {
+	prefix := "CREATE VIEW information_schema." + view + " AS"
+	for _, sql := range sqls {
+		if strings.HasPrefix(sql, prefix) {
+			return sql
+		}
+	}
+	return ""
 }
 
 func containsSQLFragment(sqls []string, fragment string) bool {

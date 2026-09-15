@@ -182,8 +182,8 @@ select count(*),schema_name from information_schema.schemata group by schema_nam
 select table_schema,table_name  from information_schema.tables where table_name='sys_t1';
 select table_schema,table_name from information_schema.tables where table_name='ac_t1';
 select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
-select * from information_schema.views where table_name='ac_v1';
-select * from information_schema.views where table_name='sys_v1';
+select table_catalog,table_schema,table_name,definer,security_type,character_set_client,collation_connection from information_schema.views where table_name='ac_v1';
+select table_catalog,table_schema,table_name,definer,security_type,character_set_client,collation_connection from information_schema.views where table_name='sys_v1';
 select count(*),table_name from information_schema.views group by table_name having count(*)>1;
 -- @bvt:issue#16438
 select count(*) from information_schema.partitions where table_schema='ac_db' and table_name='test02';
@@ -200,8 +200,8 @@ select count(*),schema_name from information_schema.schemata group by schema_nam
 select table_schema,table_name from information_schema.tables where table_name='sys_t1';
 select table_schema,table_name from information_schema.tables where table_name='ac_t1';
 select count(*),table_name from information_schema.tables group by table_name having count(*) >1;
-select * from information_schema.views where table_name='sys_v1';
-select * from information_schema.views where table_name='ac_v1';
+select table_catalog,table_schema,table_name,definer,security_type,character_set_client,collation_connection from information_schema.views where table_name='sys_v1';
+select table_catalog,table_schema,table_name,definer,security_type,character_set_client,collation_connection from information_schema.views where table_name='ac_v1';
 select count(*),table_name from information_schema.views group by table_name having count(*)>1;
 -- @bvt:issue#16438
 select count(*) from information_schema.partitions where table_schema='sys_db1' and table_name='test01';
