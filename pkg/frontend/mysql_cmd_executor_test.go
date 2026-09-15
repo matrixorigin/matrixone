@@ -513,6 +513,22 @@ func TestErrInfoMaxErrorCountLongWarningsUsesStatementBudget(t *testing.T) {
 	require.Zero(t, budget.Used(), "session reset must release the retained warning payload")
 }
 
+func TestErrInfoSealsByteBudgetAfterRejectedPrefixWarning(t *testing.T) {
+	budget := process.NewWarningDiagnosticBudget(
+		process.WarningDiagnosticRecordOverhead + uint64(len("later")))
+	info := &errInfo{maxCnt: 2, warningBudget: budget}
+
+	info.pushWithLevel(1000, "first diagnostic is too long", "Warning")
+	info.pushWithLevel(1001, "later", "Warning")
+
+	require.Equal(t, uint64(2), info.totalWarnings)
+	require.Empty(t, info.codes)
+	require.Empty(t, info.msgs)
+	require.Zero(t, budget.Used())
+
+	info.reset()
+}
+
 func TestSessionWarningBatchTransferDoesNotDoubleCharge(t *testing.T) {
 	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
 	info := &errInfo{maxCnt: int(^uint16(0)), warningBudget: budget}

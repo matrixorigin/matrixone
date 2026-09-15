@@ -1899,6 +1899,8 @@ func (ctr *container) makeAggListWithAllocation(
 				return nil, err
 			}
 		}
+		aggexec.ConfigureGroupConcatWarningBudget(
+			aggList[i], ctr.groupConcatWarnings.WarningBudget())
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
 		// Preserve the mode used to construct this list. A merge partial's wire
 		// header may be the first authoritative mode before ctr.mtyp is published;
