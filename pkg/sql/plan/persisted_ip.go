@@ -37,18 +37,33 @@ import (
 // The protocol lookup is consequently on DDL/metadata paths, never on row
 // execution hot paths.
 func RequirePersistedIPFunctionProtocol(ctx context.Context, proc *process.Process, owner any) error {
-	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	requiredVersion, err := RequiredPersistedIPFunctionProtocolVersion(owner)
 	if err != nil {
 		return err
 	}
-	if !features.IPFunctionSemantics {
+	if requiredVersion == 0 {
+		return nil
+	}
+	return RequirePersistedProtocolVersion(ctx, proc, requiredVersion)
+}
+
+// RequirePersistedProtocolVersion checks an explicit catalog-expression floor
+// against the local deployment protocol. It is used for persisted metadata
+// that was written before the version marker was introduced and must be
+// rejected before local binding can expose it to execution.
+func RequirePersistedProtocolVersion(
+	ctx context.Context,
+	proc *process.Process,
+	requiredVersion int64,
+) error {
+	if requiredVersion <= 0 {
 		return nil
 	}
 	if proc != nil {
 		if rt := moruntime.ServiceRuntime(proc.GetService()); rt != nil {
 			value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 			version, valid := value.(int64)
-			if ok && valid && version >= defines.MORPCVersion72 {
+			if ok && valid && version >= requiredVersion {
 				return nil
 			}
 		}
@@ -56,8 +71,53 @@ func RequirePersistedIPFunctionProtocol(ctx context.Context, proc *process.Proce
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return moerr.NewNotSupported(
+	return moerr.NewNotSupportedf(
 		ctx,
-		"persisted IP function expressions require all CNs to support protocol version 72",
-	)
+		"persisted expression semantics require all CNs to support protocol version %d",
+		requiredVersion)
+}
+
+// RequirePersistedProtocolVersionForService is the process-independent form
+// used by restore/background executors. Restore code has a service identity
+// but not a planner process; it must still reject a persisted marker before
+// executing its SQL on a downgraded CN.
+func RequirePersistedProtocolVersionForService(
+	ctx context.Context,
+	service string,
+	requiredVersion int64,
+) error {
+	if requiredVersion <= 0 {
+		return nil
+	}
+	if service != "" {
+		if rt := moruntime.ServiceRuntime(service); rt != nil {
+			value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			version, valid := value.(int64)
+			if ok && valid && version >= requiredVersion {
+				return nil
+			}
+		}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return moerr.NewNotSupportedf(
+		ctx,
+		"persisted expression semantics require all CNs to support protocol version %d",
+		requiredVersion)
+}
+
+// RequiredPersistedIPFunctionProtocolVersion reports the durable protocol
+// floor needed by a catalog-bound owner. It is intentionally separate from
+// the runtime check so view metadata can persist the requirement and readers
+// can reapply it without rescanning SQL text.
+func RequiredPersistedIPFunctionProtocolVersion(owner any) (int64, error) {
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	if err != nil {
+		return 0, err
+	}
+	if features.IPFunctionSemantics {
+		return defines.MORPCVersion72, nil
+	}
+	return 0, nil
 }

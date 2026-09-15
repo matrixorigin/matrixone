@@ -189,6 +189,7 @@ func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *t
 	ctx.tables["nation"].Cols[1].Typ.Width = 60
 	persisted := `{"Stmt":"create view v as select n_name from nation",` +
 		`"DefaultDatabase":"tpch","security_type":"DEFINER",` +
+		`"required_protocol_version":72,` +
 		`"future_field":{"keep":true}}`
 
 	regenerated, err := RegenerateViewDefinition(ctx, persisted)
@@ -201,6 +202,7 @@ func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *t
 	require.NoError(t, json.Unmarshal([]byte(regenerated.TableDef.ViewSql.View), &fields))
 	require.JSONEq(t, `{"keep":true}`, string(fields["future_field"]))
 	require.JSONEq(t, `"create view v as select n_name from nation"`, string(fields["Stmt"]))
+	require.JSONEq(t, `72`, string(fields["required_protocol_version"]))
 	require.Contains(t, fields, "dependencies")
 	require.Contains(t, fields, "lower_case_table_names")
 }

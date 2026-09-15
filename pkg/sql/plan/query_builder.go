@@ -11300,6 +11300,17 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return 0, err
 	}
+	if viewData.RequiredProtocolVersion != nil {
+		if *viewData.RequiredProtocolVersion < 0 {
+			return 0, moerr.NewInvalidInput(
+				builder.GetContext(), "invalid persisted view protocol version")
+		}
+		if err = RequirePersistedProtocolVersion(
+			builder.GetContext(), builder.compCtx.GetProcess(),
+			*viewData.RequiredProtocolVersion); err != nil {
+			return 0, err
+		}
+	}
 
 	parserSQLMode := legacyViewParserSQLMode
 	if viewData.SQLMode != nil {
@@ -11412,6 +11423,14 @@ func (builder *QueryBuilder) bindView(
 	}
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
+		return
+	}
+	// Views written before the protocol marker was introduced are still
+	// rebound from SQL. Recheck the finalized plan before exposing it to the
+	// outer query; the cluster admission floor protects older CN binaries, and
+	// this local check protects a capable reader with a stale catalog marker.
+	if err = RequirePersistedIPFunctionProtocol(
+		builder.GetContext(), builder.compCtx.GetProcess(), builder.qry); err != nil {
 		return
 	}
 	nodeID, err = builder.appendMySQLSpecialTypeBoundary(
@@ -12454,6 +12473,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	if slices.Contains(scanNodes, node.NodeType) {
 		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
+		}
+		if node.TableDef != nil {
+			// Defaults, generated columns, CHECK and ON UPDATE expressions are
+			// evaluated locally when a persisted TableDef is rebound. Keep this
+			// final read boundary in addition to the writer-side DDL checks.
+			if err := RequirePersistedIPFunctionProtocol(
+				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
+				return err
+			}
 		}
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))

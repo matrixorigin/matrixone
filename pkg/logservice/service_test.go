@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -711,12 +712,13 @@ func TestServiceViewMetadataAdmissionActivation(t *testing.T) {
 			return s.handleCNHeartbeat(ctx, pb.Request{
 				Method: pb.CN_HEARTBEAT,
 				CNHeartbeat: &pb.CNStoreHeartbeat{
-					UUID:                            "cn-admission",
-					ViewMetadataAdmissionSupported:  true,
-					ViewMetadataAdmissionGeneration: 10,
-					ViewMetadataObservedEpoch:       observed,
-					ViewMetadataCatalogFencedEpoch:  catalog,
-					CommandDeliveryAckSupported:     true,
+					UUID:                               "cn-admission",
+					ViewMetadataAdmissionSupported:     true,
+					PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
+					ViewMetadataAdmissionGeneration:    10,
+					ViewMetadataObservedEpoch:          observed,
+					ViewMetadataCatalogFencedEpoch:     catalog,
+					CommandDeliveryAckSupported:        true,
 				},
 			})
 		}

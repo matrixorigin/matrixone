@@ -23,6 +23,7 @@ import (
 	sm "github.com/lni/dragonboat/v4/statemachine"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -67,6 +68,26 @@ func updateViewMetadataLog(t *testing.T, rsm *stateMachine, uuid string) {
 	data, err := (&pb.LogStoreHeartbeat{
 		UUID:                           uuid,
 		ViewMetadataAdmissionSupported: true,
+	}).Marshal()
+	require.NoError(t, err)
+	_, err = rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetLogStoreHeartbeatCmd(data),
+	})
+	require.NoError(t, err)
+}
+
+func updateViewMetadataLogWithProtocol(
+	t *testing.T,
+	rsm *stateMachine,
+	uuid string,
+	protocolV2 bool,
+) {
+	t.Helper()
+	data, err := (&pb.LogStoreHeartbeat{
+		UUID:                                     uuid,
+		ViewMetadataAdmissionSupported:           true,
+		ViewMetadataAdmissionProtocolV2Supported: protocolV2,
 	}).Marshal()
 	require.NoError(t, err)
 	_, err = rsm.Update(sm.Entry{
@@ -144,6 +165,91 @@ func TestViewMetadataAdmissionActivationUsesPostBarrierAcks(t *testing.T) {
 	require.False(t, rsm.state.ViewMetadataAdmissionPreparing)
 	require.True(t, rsm.state.CNState.Stores["cn-1"].ViewMetadataAdmissionReady)
 	require.True(t, rsm.state.ProxyState.Stores["proxy-1"].ViewMetadataAdmissionReady)
+}
+
+func TestViewMetadataAdmissionFloorRejectsLegacyCNAndLogReplica(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.ViewMetadataAdmissionEnabled = true
+	rsm.state.ViewMetadataAdmissionEpoch = 4
+	rsm.state.ViewMetadataCatalogFencedEpoch = 4
+	rsm.state.PersistedExpressionRequiredProtocolVersion = uint64(defines.MORPCVersion72)
+	rsm.state.LogState.Shards[DefaultHAKeeperShardID] = pb.LogShardInfo{
+		Replicas: map[uint64]string{1: "log-1"},
+	}
+	updateViewMetadataLogWithProtocol(t, rsm, "log-1", true)
+
+	// An old CN can still send the lifecycle heartbeat, but its zero capability
+	// must not be admitted or marked ready after the durable floor is raised.
+	batch := updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                            "legacy-cn",
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 7,
+		ViewMetadataObservedEpoch:       4,
+		ViewMetadataCatalogFencedEpoch:  4,
+		ViewMetadataIngressReady:        true,
+	})
+	require.False(t, batch.ViewMetadataAdmission.Admitted)
+	require.False(t, batch.ViewMetadataAdmission.Ready)
+	require.False(t, rsm.state.CNState.Stores["legacy-cn"].ViewMetadataAdmissionReady)
+
+	// A late LogStore join must understand the v2 admission payload before its
+	// replica can be added to the HAKeeper RSM. The old admission bit alone is
+	// not enough once the floor is active.
+	command := pb.ScheduleCommand{
+		UUID:        "legacy-log",
+		ServiceType: pb.LogService,
+		ConfigChange: &pb.ConfigChange{
+			ChangeType: pb.AddReplica,
+			Replica:    pb.Replica{UUID: "legacy-log", ShardID: DefaultHAKeeperShardID},
+		},
+	}
+	require.False(t, rsm.logScheduleCommandDeliverable(command))
+	updateViewMetadataLogWithProtocol(t, rsm, "legacy-log", true)
+	require.True(t, rsm.logScheduleCommandDeliverable(command))
+}
+
+func TestViewMetadataAdmissionRaisesFloorOnlyAfterLiveCNUpgrade(t *testing.T) {
+	rsm := NewStateMachine(0, 1).(*stateMachine)
+	rsm.state.ViewMetadataAdmissionEnabled = true
+	rsm.state.ViewMetadataAdmissionEpoch = 2
+	rsm.state.ViewMetadataRevalidationRequired = true
+	rsm.state.ViewMetadataCatalogFencedEpoch = 2
+	rsm.state.CNState.Stores["cn-1"] = pb.CNStoreInfo{
+		Tick:                            10,
+		ViewMetadataAdmissionSupported:  true,
+		ViewMetadataAdmissionGeneration: 1,
+		ViewMetadataObservedEpoch:       2,
+		ViewMetadataCatalogFencedEpoch:  2,
+		ViewMetadataAdmissionReady:      true,
+		ViewMetadataIngressReady:        true,
+	}
+	cfg := Config{TickPerSecond: 1, CNStoreTimeout: 10 * time.Second, ProxyStoreTimeout: 10 * time.Second}
+	result, err := rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(cfg, uint64(defines.MORPCVersion72)),
+	})
+	require.NoError(t, err)
+	require.Zero(t, result.Value)
+	require.Zero(t, rsm.state.PersistedExpressionRequiredProtocolVersion)
+
+	updateViewMetadataCN(t, rsm, pb.CNStoreHeartbeat{
+		UUID:                               "cn-1",
+		ViewMetadataAdmissionSupported:     true,
+		ViewMetadataAdmissionGeneration:    1,
+		ViewMetadataObservedEpoch:          2,
+		ViewMetadataCatalogFencedEpoch:     2,
+		ViewMetadataIngressReady:           true,
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCVersion72),
+	})
+	result, err = rsm.Update(sm.Entry{
+		Index: rsm.state.Index + 1,
+		Cmd:   GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(cfg, uint64(defines.MORPCVersion72)),
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), result.Value)
+	require.Equal(t, uint64(defines.MORPCVersion72), rsm.state.PersistedExpressionRequiredProtocolVersion)
+	require.True(t, rsm.state.ViewMetadataRevalidationRequired,
+		"raising the floor must start a fresh admission epoch")
 }
 
 func TestViewMetadataAdmissionPreparingKeepsLegacyAndHidesPendingCN(t *testing.T) {
@@ -681,6 +787,7 @@ func TestViewMetadataAdmissionSnapshotRoundTripAndOldSnapshotFailClosed(t *testi
 	source.state.ViewMetadataRevalidationRequired = true
 	source.state.ViewMetadataCatalogFencedEpoch = 9
 	source.state.ViewMetadataAdmissionPending = true
+	source.state.PersistedExpressionRequiredProtocolVersion = 72
 	source.state.ViewMetadataAdmissionCNTargets = map[string]uint64{"cn-1": 7}
 	source.state.ViewMetadataAdmissionProxyTargets = map[string]uint64{"proxy-1": 8}
 	source.state.ViewMetadataAdmissionCNTargetTicks = map[string]uint64{"cn-1": 70}
@@ -694,6 +801,7 @@ func TestViewMetadataAdmissionSnapshotRoundTripAndOldSnapshotFailClosed(t *testi
 	require.Equal(t, uint64(9), recovered.state.ViewMetadataAdmissionEpoch)
 	require.True(t, recovered.state.ViewMetadataRevalidationRequired)
 	require.True(t, recovered.state.ViewMetadataAdmissionPending)
+	require.Equal(t, uint64(72), recovered.state.PersistedExpressionRequiredProtocolVersion)
 	require.Equal(t, map[string]uint64{"cn-1": 7},
 		recovered.state.ViewMetadataAdmissionCNTargets)
 	require.Equal(t, map[string]uint64{"proxy-1": 8},
@@ -713,6 +821,10 @@ func TestViewMetadataAdmissionSnapshotRoundTripAndOldSnapshotFailClosed(t *testi
 	require.False(t, recovered.state.ViewMetadataAdmissionEnabled)
 	require.Zero(t, recovered.state.ViewMetadataAdmissionEpoch)
 	require.False(t, recovered.state.ViewMetadataAdmissionPending)
+	// Recovering an older snapshot must not lower a floor that was already
+	// committed by this RSM. Otherwise a downgraded/restarted replica could
+	// re-enter the HAKeeper quorum without the persisted-expression fence.
+	require.Equal(t, uint64(72), recovered.state.PersistedExpressionRequiredProtocolVersion)
 }
 
 func TestViewMetadataAdmissionFencesLateHAKeeperMember(t *testing.T) {
