@@ -355,6 +355,23 @@ func TestInsertRowAliasNestedBareLocalColumnDoesNotCountAsCandidate(t *testing.T
 	require.NotNil(t, logicPlan)
 }
 
+func TestInsertRowAliasNestedBareTargetCorrelationIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.single_idx_t(id, val) values (1, 10) as n(k, v) "+
+			"on duplicate key update val = (select (select q.empno from constraint_test.emp as q) "+
+			"from constraint_test.emp as s where s.empno = id)")
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+}
+
+func TestInsertRowAliasNestedBareLocalColumnDoesNotCountAsTarget(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.single_idx_t(id, val) values (1, 10) as n(k, v) "+
+			"on duplicate key update val = (select (select q.empno from constraint_test.emp as q) "+
+			"from constraint_test.self_ref as s where s.parent_id = id)")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+}
+
 func TestOndupUpdateBinderIgnoresLocalAliasMatchingTarget(t *testing.T) {
 	stmt, err := parsers.ParseOne(
 		context.Background(), dialect.MYSQL,
