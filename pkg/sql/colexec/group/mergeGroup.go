@@ -478,7 +478,7 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 				"merge-group H0 partial must contain exactly one row")
 		}
 		incomingHashVectors := ctr.hashKeyVectors(bat.Vecs)
-		if incomingType == H8 && mergeGroupHashKeyNeedsV76(incomingHashVectors, incomingNullable) &&
+		if incomingType == H8 && mergeGroupHashKeyNeedsV77(incomingHashVectors, incomingNullable) &&
 			groupHashStringWireEnabled(proc) {
 			// Older producers could advertise H8 for a short CHAR/VARCHAR
 			// composite key. The old eight-byte concatenation is ambiguous, so
@@ -487,13 +487,13 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 			// compatible with already-produced partials.
 			incomingType = HStr
 		}
-		if incomingType == HStr && mergeGroupHashKeyNeedsV76(incomingHashVectors, incomingNullable) &&
+		if incomingType == HStr && mergeGroupHashKeyNeedsV77(incomingHashVectors, incomingNullable) &&
 			!groupHashStringWireEnabled(proc) {
 			return moerr.NewInvalidStateNoCtx(
-				"variable-length merge-group hash keys require MORPCVersion76")
+				"variable-length merge-group hash keys require MORPCVersion77")
 		}
 		ctr.legacyH8CharSemantics = incomingType == H8 &&
-			mergeGroupHashKeyNeedsV76(incomingHashVectors, incomingNullable) &&
+			mergeGroupHashKeyNeedsV77(incomingHashVectors, incomingNullable) &&
 			!groupHashStringWireEnabled(proc)
 		incomingGroupingAware := incomingType == HStr &&
 			mergeGroupHashKeyHasGrouping(incomingHashVectors)
@@ -660,7 +660,7 @@ func mergeGroupHashKeyHasVariableLength(vectors []*vector.Vector) bool {
 	return false
 }
 
-func mergeGroupHashKeyNeedsV76(vectors []*vector.Vector, nullable bool) bool {
+func mergeGroupHashKeyNeedsV77(vectors []*vector.Vector, nullable bool) bool {
 	if !mergeGroupHashKeyHasVariableLength(vectors) {
 		return false
 	}
