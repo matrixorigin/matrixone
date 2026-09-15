@@ -996,12 +996,18 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 	return nil
 }
 
-func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
+func builtInConcatCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 1 {
 		shouldCast := false
+		hasJSON := false
 
 		ret := make([]types.Type, len(inputs))
 		for i, source := range inputs {
+			if source.Oid == types.T_json {
+				hasJSON = true
+				ret[i] = source
+				continue
+			}
 			if !source.Oid.IsMySQLString() {
 				c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_varchar})
 				if c == matchFailed {
@@ -1014,6 +1020,16 @@ func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
 			} else {
 				ret[i] = source
 			}
+		}
+		if hasJSON {
+			idx := jsonStringConsumerOverloadIndex(overloads)
+			if idx < 0 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if shouldCast {
+				return newCheckResultWithCast(idx, ret)
+			}
+			return newCheckResultWithSuccess(idx)
 		}
 		if shouldCast {
 			return newCheckResultWithCast(0, ret)
@@ -1041,7 +1057,10 @@ func builtInConcat(parameters []*vector.Vector, result vector.FunctionResultWrap
 		apv := true
 
 		for _, p := range ps {
-			v, null := p.GetStrValue(i)
+			v, null, err := getJSONStringConsumerValue(p, i)
+			if err != nil {
+				return err
+			}
 			if null {
 				if err := rs.AppendBytes(nil, true); err != nil {
 					return err
