@@ -777,3 +777,26 @@ func (node *RestartCDC) StmtKind() StmtKind {
 func (node *SetLogserviceSettings) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
+
+// IsIgnoreStatement reports the DML error policy encoded by the statement.
+// LOAD DATA IGNORE LINES is a header count, not an IGNORE error policy.
+func IsIgnoreStatement(statement Statement) bool {
+	switch stmt := statement.(type) {
+	case *Insert:
+		return len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
+	case *Update:
+		return stmt.Ignore
+	case *Load:
+		return isLoadDataIgnore(stmt)
+	default:
+		return false
+	}
+}
+
+func isLoadDataIgnore(stmt *Load) bool {
+	if stmt == nil {
+		return false
+	}
+	_, ok := stmt.DuplicateHandling.(*DuplicateKeyIgnore)
+	return ok
+}
