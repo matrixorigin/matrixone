@@ -425,7 +425,7 @@ func (u *Udf) GetArgsPlanType() []*plan.Type {
 }
 func (u *Udf) GetRetPlanType() *plan.Type { return type2PlanType(u.GetRetType()) }
 func (u *Udf) GetArgsType() []types.Type {
-	if strings.EqualFold(u.Language, "python") {
+	if u.Language == udf.LanguagePython {
 		// Resolver-created routines always set PythonReturnType when the
 		// canonical descriptor has been loaded.  Keeping the fallback makes
 		// the generic Udf value usable by planner tests and by the SQL-side
@@ -443,7 +443,7 @@ func (u *Udf) GetArgsType() []types.Type {
 	return u.ArgsType
 }
 func (u *Udf) GetRetType() types.Type {
-	if strings.EqualFold(u.Language, "python") {
+	if u.Language == udf.LanguagePython {
 		if u.PythonReturnType == nil {
 			return types.Types[u.RetType].ToType()
 		}
@@ -457,8 +457,11 @@ func (u *Udf) GetRetType() types.Type {
 // rejected instead of being reinterpreted through the legacy logical-type
 // columns.
 func (u *Udf) LoadPythonTypeContract() error {
-	if !strings.EqualFold(u.Language, "python") {
+	if u == nil || u.Language == udf.LanguageSQL {
 		return nil
+	}
+	if u.Language != udf.LanguagePython {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported routine language %q", u.Language)
 	}
 	u.PythonArgTypes = nil
 	u.PythonReturnType = nil
@@ -477,8 +480,11 @@ func (u *Udf) LoadPythonTypeContract() error {
 // before that decode during lookup, so this second check closes the only point
 // where an argument list and its exact ABI could otherwise diverge.
 func (u *Udf) ValidatePythonTypeContract() error {
-	if !strings.EqualFold(u.Language, "python") {
+	if u == nil || u.Language == udf.LanguageSQL {
 		return nil
+	}
+	if u.Language != udf.LanguagePython {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported routine language %q", u.Language)
 	}
 	if u.PythonReturnType == nil {
 		return fmt.Errorf("python routine is missing return descriptor")
@@ -501,8 +507,11 @@ func (u *Udf) ValidatePythonTypeContract() error {
 // they still must agree on the logical OID or a damaged catalog row could be
 // selected by overload resolution and dispatched with a different ABI.
 func (u *Udf) ValidatePythonCatalogSignature() error {
-	if u == nil || !strings.EqualFold(u.Language, "python") {
+	if u == nil || u.Language == udf.LanguageSQL {
 		return nil
+	}
+	if u.Language != udf.LanguagePython {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported routine language %q", u.Language)
 	}
 	if len(u.Args) != len(u.PythonArgTypes) || u.PythonReturnType == nil {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python catalog signature is incomplete")

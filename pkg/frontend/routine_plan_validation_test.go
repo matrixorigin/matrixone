@@ -314,6 +314,12 @@ func TestRoutinePlanCatalogIdentityAcceptsAndRejectsSQLRevision(t *testing.T) {
 		"lua", body, fingerprint, 0, "", "", "", argTypes, retType,
 		udf.SQLDefinitionSchemaVersion, "", "", "", udf.NullCallHandler,
 	))
+	require.False(t, routinePlanCatalogIdentityValidForLanguage(
+		"PYTHON", body, fingerprint, udf.PythonSignatureKeySchemaVersion,
+		"", "", "", argTypes, retType, udf.PythonDefinitionSchemaVersion,
+		udf.PythonABIContract, udf.PythonAdapterVersion, udf.PythonSDKVersion,
+		udf.NullCallHandler,
+	))
 }
 
 func TestRoutinePlanDependenciesVisitsSharedQueriesOnce(t *testing.T) {
