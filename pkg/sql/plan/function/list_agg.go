@@ -130,7 +130,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return sumAvgTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -148,7 +148,7 @@ var supportedAggInNewFramework = []FuncNew{
 		class:      plan.Function_AGG,
 		layout:     STANDARD_FUNCTION,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+			return sumAvgTypeCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -274,10 +274,14 @@ var supportedAggInNewFramework = []FuncNew{
 			}
 			key := inputs[0]
 			val := inputs[1]
-			if key.Oid == types.T_any {
+			switch {
+			case key.Oid == types.T_any:
 				key = types.T_varchar.ToType()
-			}
-			if !key.Oid.IsMySQLString() {
+			case key.IsNumeric() && key.Oid != types.T_bit:
+				// BIT is included in IsNumeric, but remains outside the
+				// conventional numeric-key compatibility set.
+				key = types.T_varchar.ToType()
+			case !key.Oid.IsMySQLString():
 				return newCheckResultWithFailure(failedAggParametersWrong)
 			}
 			switch val.Oid {
@@ -756,6 +760,16 @@ func typeInList(typ types.T, supported []types.T) bool {
 // mysqlNumericAggTypeCheck implements MySQL's numeric coercion for variance
 // and standard-deviation aggregates. Unlike SUM, these aggregates accept
 // string and temporal expressions and evaluate their numeric representation.
+// BIT's storage domain is unsigned, but its legacy aggregate state is not
+// widened. Bind through the existing UINT64 aggregate instead of changing the
+// interpretation of old BIT partial states or treating BIT width as precision.
+func sumAvgTypeCheck(inputs []types.Type) checkResult {
+	if len(inputs) == 1 && inputs[0].Oid == types.T_bit {
+		return newCheckResultWithCast(0, []types.Type{types.T_uint64.ToType()})
+	}
+	return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
+}
+
 func mysqlNumericAggTypeCheck(inputs []types.Type) checkResult {
 	if len(inputs) != 1 {
 		return newCheckResultWithFailure(failedAggParametersWrong)

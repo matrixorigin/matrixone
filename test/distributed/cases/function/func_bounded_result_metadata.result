@@ -43,7 +43,7 @@ unhex_v  ¦  VARBINARY(4)  ¦  YES  𝄀
 md5_v  ¦  VARCHAR(32)  ¦  NO  𝄀
 sha1_v  ¦  VARCHAR(40)  ¦  NO  𝄀
 sha2_v  ¦  VARCHAR(128)  ¦  YES  𝄀
-uncompressed_v  ¦  INT(0)  ¦  YES
+uncompressed_v  ¦  INT  ¦  YES
 select bin_v, conv_v, hex_num, hex_text, hex(unhex_v), md5_v, sha1_v, sha2_v, uncompressed_v
 from bounded_string_ctas;
 ➤ bin_v[12,65,0]  ¦  conv_v[12,65,0]  ¦  hex_num[12,16,0]  ¦  hex_text[12,96,0]  ¦  hex(unhex_v)[12,8,0]  ¦  md5_v[12,32,0]  ¦  sha1_v[12,40,0]  ¦  sha2_v[12,128,0]  ¦  uncompressed_v[4,32,0]  𝄀

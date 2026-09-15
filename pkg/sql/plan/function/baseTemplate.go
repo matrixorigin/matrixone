@@ -3473,6 +3473,98 @@ func opUnaryBytesToBytesWithErrorCheck(
 	return nil
 }
 
+// opUnaryBytesToBytesWithResultNull evaluates a geometry-returning unary
+// function whose valid result can be SQL NULL independently of input NULL.
+// resultFn returns (value, true, nil) for that row-local NULL, and returns a
+// non-nil error only for malformed input or an otherwise fatal evaluation
+// failure. Keeping this separate from opUnaryBytesToBytesWithNullOnError is
+// important: the latter intentionally masks every error, while derived
+// geometry functions must still reject malformed payloads.
+func opUnaryBytesToBytesWithResultNull(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) ([]byte, bool, error), selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	rsNull := rsVec.GetNulls()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	appendResult := func(v []byte) error {
+		r, isNull, err := resultFn(v)
+		if err != nil {
+			return err
+		}
+		if isNull {
+			return rs.AppendMustNullForBytesResult()
+		}
+		return rs.AppendMustBytesValue(r)
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		r, isNull, err := resultFn(v1)
+		if err != nil {
+			return err
+		}
+		if isNull {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		return appendRepeatedBytesResult(rs, r, length)
+	}
+
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+		for i := uint64(0); i < uint64(length); i++ {
+			if rsNull.Contains(i) {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			if err := appendResult(v1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		if err := appendResult(v1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func opUnaryBytesToBytesWithNullOnError(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) ([]byte, error), selectList *FunctionSelectList) error {

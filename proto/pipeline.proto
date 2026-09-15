@@ -671,6 +671,9 @@ message Instruction {
   // MERGE_TOP only: consume one independently ordered stream from every
   // receiver. This is serialized for per-CN ordered gathers sent by RemoteRun.
   bool merge_top_ordered_streams = 63;
+  // PARTITION Top-N only: retain all peers of the Nth row. Planning is gated
+  // by MORPCVersion69 so an older receiver cannot silently drop RANK ties.
+  bool partition_top_n_with_ties = 64;
 }
 
 message AnalysisList {
@@ -781,6 +784,9 @@ message SessionInfo {
   // value of one on the receiving CN.
   uint64 auto_increment_increment = 15;
   uint64 auto_increment_offset = 16;
+  // IANA identity preserves historical and DST rules. Empty means the legacy
+  // time_zone bytes describe a fixed-offset location.
+  string time_zone_name = 17;
 }
 
 message SessionLoggerInfo {

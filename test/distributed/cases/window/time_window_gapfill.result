@@ -379,7 +379,7 @@ and column_name in ('ws', 'c')
 order by ordinal_position;
 ➤ column_name[12,192,0]  ¦  data_type[12,49151,0]  ¦  column_type[12,49151,0]  𝄀
 ws  ¦  datetime  ¦  DATETIME(0)  𝄀
-c  ¦  bigint  ¦  BIGINT(0)
+c  ¦  bigint  ¦  BIGINT
 select ws from boundary_type_rollup_dt;
 ➤ ws[93,64,0]  𝄀
 2026-01-01 00:00:00
@@ -410,7 +410,7 @@ order by ordinal_position;
 ➤ column_name[12,192,0]  ¦  data_type[12,49151,0]  ¦  column_type[12,49151,0]  𝄀
 ws  ¦  datetime  ¦  DATETIME(0)  𝄀
 we  ¦  datetime  ¦  DATETIME(0)  𝄀
-c  ¦  bigint  ¦  BIGINT(0)
+c  ¦  bigint  ¦  BIGINT
 select ws, we from boundary_type_rollup_date;
 ➤ ws[93,64,0]  ¦  we[93,64,0]  𝄀
 2026-01-01 00:00:00  ¦  2026-01-01 00:01:00
@@ -456,6 +456,6 @@ and column_name in ('ws', 'c')
 order by ordinal_position;
 ➤ column_name[12,192,0]  ¦  data_type[12,49151,0]  ¦  column_type[12,49151,0]  𝄀
 ws  ¦  timestamp  ¦  TIMESTAMP(0)  𝄀
-c  ¦  bigint  ¦  BIGINT(0)
+c  ¦  bigint  ¦  BIGINT
 set time_zone = '+00:00';
 drop database time_window_gapfill_bvt;

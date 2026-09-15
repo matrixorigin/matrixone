@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -159,6 +160,7 @@ func (proc *Process) BuildProcessInfo(
 			Database:               proc.Base.SessionInfo.GetDatabase(),
 			Version:                proc.Base.SessionInfo.GetVersion(),
 			TimeZone:               timeBytes,
+			TimeZoneName:           TimeZoneLocationName(loc),
 			QueryId:                proc.Base.SessionInfo.QueryId,
 			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
 			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
@@ -468,6 +470,17 @@ func ConvertToProcessSessionInfo(
 		SqlMode:                             sei.SqlMode,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
+	}
+	if sei.TimeZoneName != "" {
+		if sei.TimeZoneName == "Local" {
+			return sessionInfo, moerr.NewInvalidInputNoCtx("remote time zone must not refer to worker Local")
+		}
+		location, err := time.LoadLocation(sei.TimeZoneName)
+		if err != nil {
+			return sessionInfo, moerr.NewInvalidInputNoCtxf("cannot load remote time zone %q: %v", sei.TimeZoneName, err)
+		}
+		sessionInfo.TimeZone = location
+		return sessionInfo, nil
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
