@@ -1,7 +1,7 @@
 {
   "status": {
-    "semantic_comparison": "PASS within tested named domains and selected adapters",
-    "valid_tuple": "PASS",
+    "semantic_comparison": "PASS_HISTORICAL_V0221; V024_REVALIDATION_NOT_RUN",
+    "valid_tuple": "PASS_HISTORICAL_V0221; V024_TUPLE_REVALIDATION_NOT_RUN",
     "malformed_generic_tuple": "FAIL: three missing terminators accepted",
     "MO_original_row_lookup": "NOT_RUN on transformed storage",
     "production_format_freeze": "NOT_APPROVED",
@@ -15,16 +15,28 @@
     "version": "8.0.45 aarch64",
     "image_digest": "sha256:4af1f8815716546f5b12410f7621f37f93db8dd11a184706ef59111930b8c2ff"
   },
-  "vitess": {
-    "module": "vitess.io/vitess v0.24.0",
-    "commit": "e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0",
-    "toolchain": "go1.26.4 darwin/arm64",
-    "go1_26_4_import": "PASS in implementation worktree; full dependency closure review pending"
-  },
-  "mo_reference": {
-    "base": "c54e2fc5e9057c3bfcc5a1ee1a2dfd75b3feb1d7",
-    "candidate_and_tuple_commit": "72a659dff2",
-    "status": "candidate implementation, admission closed, not production-activated"
+  "evidence_provenance": {
+    "historical_experiment": {
+      "source_record": "f48db16a91",
+      "vitess": "v0.22.1",
+      "toolchain": "go1.24.4",
+      "mo_commit": "86c030d6b2",
+      "scope": "All comparison counts, tuple results, performance values and artifact hashes below",
+      "status": "PASS_HISTORICAL_RECORD; do not relabel as v0.24.0"
+    },
+    "v024_validation": {
+      "vitess": "v0.24.0",
+      "commit": "e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0",
+      "toolchain": "go1.26.4 darwin/arm64",
+      "mo_commit": "72a659dff2",
+      "import": "PASS in implementation worktree",
+      "dependency_closure": "NOT_RUN",
+      "full_mysql_oracle": "NOT_RUN",
+      "tuple_revalidation": "NOT_RUN",
+      "byte_format_freeze": "NOT_RUN",
+      "performance_revalidation": "NOT_RUN"
+    },
+    "candidate_status": "candidate implementation, admission closed, not production-activated"
   },
   "corpus_count": 244,
   "comparison_modes": {

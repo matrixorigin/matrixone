@@ -32,16 +32,22 @@ SQL, persisted-object pruning, migration recovery or distributed QA have passed.
 ## 2. Verified baseline (do not reuse the earlier checkout's assumptions)
 
 The earlier discussion inspected `816c913bf02c`, which lacked the newer metadata
-path. The current baseline already has:
+path. Keep these three states separate; a field or spelling observed on the
+integration branch is not evidence that it exists in the upstream baseline:
 
-- `proto/plan.proto`: `Type.charset` (field 8), `TableDef.default_charset` (39).
-- `pkg/container/types/types.go`: persisted semantic classes Legacy=0, Binary=1,
-  UTF8MB4Bin=2 (text PAD SPACE), UTF8=3 (general-ci), and independent native
-  0900 identities AI=4 and BIN=5. Historical aliases are not reinterpreted as
-  native UCA 9.0.
-- `pkg/sql/plan/build_util.go`: column/table attribute resolution and explicit
-  compatibility aliases. The spelling `utf8mb4_0900_ai_ci` currently maps to the
-  general-ci class; it is NOT native MySQL UCA 9.0 NO PAD semantics.
+- **Upstream baseline** `bb358ea76aeb44a6eed5079616e7e75ba35e75b9`: `Type.charset`
+  (field 8) and persisted classes Legacy=0, Binary=1, UTF8MB4Bin=2 and UTF8=3.
+  It does not contain native identities 4/5 or the candidate key-format gate.
+- **Candidate integration** `72a659dff2`: adds independent native identities
+  AI=4 and BIN=5, key-format metadata and the Vitess v0.24.0 adapter. These are
+  candidate semantics behind a default-closed admission fence, not baseline
+  data.
+- **Target design**: preserve the baseline meanings and introduce native 0900
+  only through explicit metadata, a frozen physical-format version and the
+  durable cluster gate. Historical aliases are never upgraded by reinterpretation.
+- In the baseline, `pkg/sql/plan/build_util.go` may accept the spelling
+  `utf8mb4_0900_ai_ci` as the legacy general-ci class. That spelling must not be
+  presented as native UCA 9.0; the candidate identity is a separate mapping.
 - `pkg/sql/colexec/aggexec/utf8mb4_general_ci.go`: a TiDB-derived weight table,
   original source commit `6cbbd222c786948379edc50ef8a8c37e485957c0`, with MO-specific
   malformed-byte handling. Existing MIN/MAX comparison is not by itself proof
@@ -53,6 +59,14 @@ path. The current baseline already has:
 
 Reuse this metadata and these structures. Do not allocate new protobuf numbers,
 copy a second weight table, or redefine zero-valued old metadata casually.
+
+Evidence labels are tied to the exact record that produced them. The historical
+comparison and tuple counts remain `PASS_HISTORICAL_V0221`; the v0.24.0 import and
+focused implementation tests are separate `PASS` evidence. A complete v0.24.0
+MySQL oracle, tuple byte freeze, live SQL/index behavior, persisted filtering,
+migration/recovery, and mixed-version rejection are `NOT_RUN` or blocked by the
+closed production admission gate. CI for this documentation PR cannot substitute
+for those implementation and cluster checks.
 
 ## 3. Representation and non-negotiable invariants
 

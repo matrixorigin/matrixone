@@ -7,6 +7,10 @@ closed by a durable-cluster gate; no production table has been enabled.
 
 Machine-readable results, API option samples, sizes, benchmark records and raw
 artifact hashes are in [selection evidence](issue-28164-selection-evidence.json).
+The detailed comparison rows and hashes are a historical experiment recorded
+under Vitess v0.22.1, Go 1.24.4 and MO `86c030d6b2`. The later v0.24.0 work
+only has an import/focused-weight check so far; its complete oracle, tuple,
+performance and byte-freeze revalidation are `NOT_RUN`.
 
 ## 1. Exact first-stage semantic scope
 
@@ -24,8 +28,10 @@ general-ci is the final backend for every collation. The native comparison also
 examined `utf8mb4_unicode_ci` (ID 224, legacy UCA 4.0/PAD SPACE),
 `utf8mb4_0900_ai_ci` (ID 255, UCA 9.0/NO PAD), and `utf8mb4_0900_bin`
 (ID 309, NO PAD). The implementation assigns independent MO identities to the
-two native 0900 variants and uses the fixed Vitess v0.24.0 backend; the SQL and
-storage consumers remain behind the durable admission gate.
+two native 0900 variants and pins the candidate backend to Vitess v0.24.0; the
+SQL and storage consumers remain behind the durable admission gate. The detailed
+measurements below are still the v0.22.1 historical record until a v0.24.0
+rerun is made.
 
 Current `build_util.go` compatibility spellings are a separate contract:
 
@@ -44,11 +50,14 @@ metadata behavior.
 
 ## 2. Candidates and reproducible environment
 
-- **Vitess:** Go module `vitess.io/vitess v0.24.0`, source commit
-  `e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0`, fixed for the native 0900
-  candidate backend.
-  Its actual `Collate`, `WeightString`, `WeightStringLen` and `PadToMax` APIs were
-  executed, not inferred from MO's comparator.
+- **Historical comparison:** the rows in section 3 were executed with
+  `vitess.io/vitess v0.22.1`, Go 1.24.4 and MO `86c030d6b2`; their counts and
+  hashes remain valid only for that environment.
+- **v0.24.0 candidate:** source commit
+  `e8d9fa81d351066497a8d99f92e9e9f2ecfd69d0`, imported under Go 1.26.4 in the
+  implementation worktree. Import and selected weight tests passed, while a
+  fresh full `Collate`, `WeightString`, `WeightStringLen`, `PadToMax` and MySQL
+  oracle comparison is `NOT_RUN`.
 - **MO/TiDB-derived candidate:** the existing mapping lineage at TiDB commit
   `6cbbd222c786948379edc50ef8a8c37e485957c0`, extracted in local prototype
   `86c030d6b2`; existing MO comparison and the new PAD adapter were measured
@@ -66,7 +75,7 @@ proof of the exact MySQL named semantics required here.
 
 ## 3. Native comparison results
 
-The corpus contains 244 strings: controls including embedded NUL, trailing and
+The historical corpus contains 244 strings: controls including embedded NUL, trailing and
 interior spaces, punctuation, case/accent pairs, composed/decomposed characters,
 ligatures and multi-character equivalents, supplementary-plane characters,
 long common prefixes and strings up to 1,000 characters. There are 59,536 ordered
@@ -158,7 +167,8 @@ Two experimental PAD encodings were compared:
   ignorables as well as general-ci/text `_bin`. It is not a generic promise for
   arbitrary multi-level collations or locale tailoring.
 
-T1 plus unchanged NO-PAD default weights passed all 357,216 native pair cases.
+In the historical v0.22.1 record, T1 plus unchanged NO-PAD default weights
+passed all 357,216 native pair cases. This is not a v0.24.0 rerun.
 C1 passed its supported scalar domains with either weight backend. First-stage
 recommendation: keep C1 as the compact candidate and reuse MO's existing mapped
 weights for general-ci, scalar weights for text `_bin`, and raw binary bytes.
