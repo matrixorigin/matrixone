@@ -151,7 +151,9 @@ func ConfigureGroupConcatWarningRetention(agg AggFuncExec, limit int) {
 		if limit == 0 {
 			exec.truncationRows = nil
 		} else if cap(exec.truncationRows) > limit*2 {
-			exec.truncationRows = append([]GroupConcatWarning(nil), exec.truncationRows...)
+			rows := make([]GroupConcatWarning, len(exec.truncationRows))
+			copy(rows, exec.truncationRows)
+			exec.truncationRows = rows
 		}
 	}
 }
@@ -252,7 +254,9 @@ func (a *GroupConcatWarningAccumulator) SetWarningRetentionLimit(limit int) {
 	if limit == 0 {
 		a.rows = nil
 	} else if cap(a.rows) > limit*2 {
-		a.rows = append([]GroupConcatWarning(nil), a.rows...)
+		rows := make([]GroupConcatWarning, len(a.rows))
+		copy(rows, a.rows)
+		a.rows = rows
 	}
 }
 
