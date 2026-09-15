@@ -203,21 +203,24 @@ func (d TypeDescriptor) Validate() error {
 			return fmt.Errorf("TYPE_CONTRACT: decimal descriptor carries a charset")
 		}
 	case types.T_date:
-		if d.Scale != 0 || d.Charset != types.CharsetLegacy {
-			return fmt.Errorf("TYPE_CONTRACT: DATE descriptor has invalid scale or charset")
+		if d.Width != 0 || d.Scale != 0 || d.Charset != types.CharsetLegacy {
+			return fmt.Errorf("TYPE_CONTRACT: DATE descriptor has unused or invalid fields")
 		}
 	case types.T_time, types.T_datetime, types.T_timestamp:
-		if d.Scale > 6 || d.Charset != types.CharsetLegacy {
+		if d.Width != 0 || d.Scale > 6 || d.Charset != types.CharsetLegacy {
 			return fmt.Errorf("TYPE_CONTRACT: temporal scale or charset is outside the supported range")
 		}
 	case types.T_char, types.T_varchar, types.T_text:
+		if d.Scale != 0 {
+			return fmt.Errorf("TYPE_CONTRACT: text descriptor carries an unused scale")
+		}
 		switch d.Charset {
 		case types.CharsetLegacy, types.CharsetUTF8MB4Bin, types.CharsetUTF8:
 		default:
 			return fmt.Errorf("TYPE_CONTRACT: unsupported text charset %d", d.Charset)
 		}
 	case types.T_binary, types.T_varbinary, types.T_blob:
-		if d.Charset != types.CharsetBinary {
+		if d.Scale != 0 || d.Charset != types.CharsetBinary {
 			return fmt.Errorf("TYPE_CONTRACT: binary descriptor must use the binary charset")
 		}
 	case types.T_uuid:

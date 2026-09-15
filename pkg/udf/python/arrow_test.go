@@ -656,6 +656,20 @@ func TestTypeDescriptorRejectsNonCanonicalDomain(t *testing.T) {
 	}
 }
 
+func TestTypeDescriptorRejectsUnusedDomainFields(t *testing.T) {
+	invalid := []TypeDescriptor{
+		{TypeID: int32(types.T_date), Width: 1, OffsetWidth: 32, TemporalEncoding: "sql_zero_struct"},
+		{TypeID: int32(types.T_datetime), Width: 1, OffsetWidth: 32, TemporalEncoding: "sql_zero_struct"},
+		{TypeID: int32(types.T_time), Width: 1, Scale: 6, OffsetWidth: 32},
+		{TypeID: int32(types.T_varchar), Width: 16, Scale: 1, Charset: types.CharsetUTF8, OffsetWidth: 32},
+		{TypeID: int32(types.T_varbinary), Width: 16, Scale: 1, Charset: types.CharsetBinary, OffsetWidth: 32},
+	}
+	for _, descriptor := range invalid {
+		_, err := descriptor.Field("value")
+		require.Error(t, err, "%+v", descriptor)
+	}
+}
+
 func TestFloatDescriptorsRoundTripThroughArrowFieldContract(t *testing.T) {
 	for _, typ := range []types.T{types.T_float32, types.T_float64} {
 		descriptor, err := NewTypeDescriptor(typ.ToType())
