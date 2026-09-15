@@ -624,15 +624,31 @@ func (dt Datetime) DatetimeMinusWithSecond(secondDt Datetime) int64 {
 }
 
 func (dt Datetime) ConvertToMonth(secondDt Datetime) int64 {
+	leftDate, rightDate := dt.ToDate(), secondDt.ToDate()
+	monthDiff := (int64(leftDate.Year())-int64(rightDate.Year()))*12 +
+		int64(leftDate.Month()) - int64(rightDate.Month())
+	if monthDiff == 0 {
+		return 0
+	}
 
-	dayDiff := int64(dt.ToDate().Day()) - int64(secondDt.ToDate().Day())
-	monthDiff := (int64(dt.ToDate().Year())-int64(secondDt.ToDate().Year()))*12 + int64(dt.ToDate().Month()) - int64(secondDt.ToDate().Month())
-
-	if dayDiff >= 0 {
-		return monthDiff
-	} else {
+	// TIMESTAMPDIFF counts complete calendar periods. Compare the entire
+	// month-day-time tuple so a same-day interval that is short by a
+	// microsecond does not look like a complete month. Truncate toward zero
+	// for negative intervals as well.
+	leftClock := int64(dt.Hour())*3600*MicroSecsPerSec +
+		int64(dt.Minute())*60*MicroSecsPerSec +
+		int64(dt.Sec())*MicroSecsPerSec + dt.MicroSec()
+	rightClock := int64(secondDt.Hour())*3600*MicroSecsPerSec +
+		int64(secondDt.Minute())*60*MicroSecsPerSec +
+		int64(secondDt.Sec())*MicroSecsPerSec + secondDt.MicroSec()
+	leftDay, rightDay := int(leftDate.Day()), int(rightDate.Day())
+	if monthDiff > 0 && (leftDay < rightDay || (leftDay == rightDay && leftClock < rightClock)) {
 		return monthDiff - 1
 	}
+	if monthDiff < 0 && (leftDay > rightDay || (leftDay == rightDay && leftClock > rightClock)) {
+		return monthDiff + 1
+	}
+	return monthDiff
 }
 
 func (dt Datetime) MicroSec() int64 {
