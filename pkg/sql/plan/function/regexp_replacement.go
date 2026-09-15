@@ -34,6 +34,14 @@ type regexpReplacementTemplate struct {
 	hasGroups bool
 }
 
+// regexpReplacementGroupInfo is implemented by both Go's RE2 matcher and the
+// ICU compatibility matcher. Keeping replacement parsing independent of the
+// engine preserves the same $0/$n/${name} rules on both paths.
+type regexpReplacementGroupInfo interface {
+	NumSubexp() int
+	SubexpIndex(name string) int
+}
+
 func regexpReplacementNeedsExpansion(replacement string) bool {
 	return strings.ContainsAny(replacement, "$\\")
 }
@@ -57,7 +65,7 @@ func regexpReplaceOutputUpperBound(sourceBytes, replacementBytes int) (uint64, b
 	return source + matchSlots*replacement, true
 }
 
-func parseRegexpReplacementTemplate(replacement string, reg *regexp.Regexp) (regexpReplacementTemplate, error) {
+func parseRegexpReplacementTemplate(replacement string, reg regexpReplacementGroupInfo) (regexpReplacementTemplate, error) {
 	template := regexpReplacementTemplate{
 		program: make([]byte, 0, min(len(replacement), 64<<10)),
 	}
@@ -144,7 +152,7 @@ func (t *regexpReplacementTemplate) visit(visit func(group int, literal []byte) 
 	return nil
 }
 
-func parseRegexpReplacementGroup(replacement string, start int, reg *regexp.Regexp) (group, next int, err error) {
+func parseRegexpReplacementGroup(replacement string, start int, reg regexpReplacementGroupInfo) (group, next int, err error) {
 	if start >= len(replacement) {
 		return 0, start, moerr.NewInvalidInputNoCtx("regexp_replace: invalid replacement template")
 	}

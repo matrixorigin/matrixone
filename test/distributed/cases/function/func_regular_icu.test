@@ -1,0 +1,33 @@
+# issue-28305: ICU-compatible pattern constructs through all REGEXP entry points
+SELECT REGEXP_LIKE('ab', 'a(?=b)') AS positive_lookahead,
+       REGEXP_LIKE('ab', 'a(?!c)') AS negative_lookahead,
+       REGEXP_LIKE('ab', '(?<=a)b') AS positive_lookbehind,
+       REGEXP_LIKE('ab', '(?<!c)b') AS negative_lookbehind;
+SELECT REGEXP_LIKE('ab', '(?>a)b') AS atomic_group,
+       REGEXP_LIKE('aaa', 'a++a') AS possessive_quantifier,
+       REGEXP_LIKE('😀', '\\X') AS grapheme;
+SELECT 'aa' REGEXP '(a)\\1' AS operator_backreference,
+       'ab' NOT REGEXP 'a(?!b)' AS operator_negative_lookahead;
+
+SELECT REGEXP_INSTR('ab', 'a(?=b)') AS instr_start,
+       REGEXP_INSTR('ab', '(?<=a)b', 1, 1, 1) AS instr_end,
+       REGEXP_SUBSTR('ab', 'a(?=b)') AS substr_lookahead,
+       REGEXP_SUBSTR('ab', '(?<=a)b') AS substr_lookbehind;
+SELECT REGEXP_REPLACE('abc', '(?<=a)b', 'X') AS replace_lookbehind,
+       REGEXP_REPLACE('aa', '(a)\\1', '<$0>') AS replace_backreference,
+       REGEXP_REPLACE('aba', '(?<left>a)(b)\\1', '<$1:$2:${left}>') AS replace_mixed_capture;
+
+SELECT REGEXP_INSTR('ab ab', 'a(?=b)', 1, 2, 1) AS second_end,
+       REGEXP_SUBSTR('ab ab', 'a(?=b)', 1, 2) AS second_substr,
+       REGEXP_REPLACE('ab ab', 'a(?=b)', 'X', 1, 2) AS second_replace;
+SELECT REGEXP_LIKE('AB', 'a(?=b)', 'i') AS match_type_case_fold,
+       REGEXP_LIKE('é', '^\\X$') AS combining_grapheme,
+       REGEXP_LIKE('👩‍💻', '^\\X$') AS zwj_grapheme;
+
+PREPARE regexp_icu_pattern_rebind FROM 'SELECT REGEXP_LIKE(?, ?) AS matched';
+SET @regexp_icu_subject = 'ab';
+SET @regexp_icu_pattern = 'a(?=b)';
+EXECUTE regexp_icu_pattern_rebind USING @regexp_icu_subject, @regexp_icu_pattern;
+SET @regexp_icu_pattern = 'a+';
+EXECUTE regexp_icu_pattern_rebind USING @regexp_icu_subject, @regexp_icu_pattern;
+DEALLOCATE PREPARE regexp_icu_pattern_rebind;
