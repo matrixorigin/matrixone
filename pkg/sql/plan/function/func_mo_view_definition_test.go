@@ -73,6 +73,24 @@ func TestViewDefinitionFromPersistedData(t *testing.T) {
 			ok:        true,
 		},
 		{
+			name:      "legacy dash line comment before as is structurally opaque",
+			persisted: `{"Stmt":"create view v -- migration comment\nas select 1"}`,
+			want:      "select 1",
+			ok:        true,
+		},
+		{
+			name:      "legacy hash line comment before as is structurally opaque",
+			persisted: `{"Stmt":"create view v # migration comment\nas select 1"}`,
+			want:      "select 1",
+			ok:        true,
+		},
+		{
+			name:      "legacy slash line comment before as is structurally opaque",
+			persisted: `{"Stmt":"create view v // migration comment\nas select 1"}`,
+			want:      "select 1",
+			ok:        true,
+		},
+		{
 			name:      "legacy executable wrapper preserves quoted terminator",
 			persisted: `{"Stmt":"/*!50001 CREATE VIEW v AS SELECT 'x*/y' AS s */;"}`,
 			want:      "x*/y",
