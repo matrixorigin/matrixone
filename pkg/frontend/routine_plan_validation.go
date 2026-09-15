@@ -313,10 +313,10 @@ func validateRoutinePlanDependencies(ctx context.Context, ses FeSession, p *plan
 			if !strings.EqualFold(revisionSecurityType, baseSecurityType) {
 				return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine %d has inconsistent revision and identity security contracts", id)
 			}
-			if strings.EqualFold(language, udf.LanguagePython) && !strings.EqualFold(revisionSecurityType, "INVOKER") {
+			if language == udf.LanguagePython && !strings.EqualFold(revisionSecurityType, "INVOKER") {
 				return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python routine catalog security type is not INVOKER")
 			}
-			if strings.EqualFold(language, udf.LanguageSQL) && !strings.EqualFold(revisionSecurityType, "DEFINER") {
+			if language == udf.LanguageSQL && !strings.EqualFold(revisionSecurityType, "DEFINER") {
 				return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: SQL routine catalog security type is not DEFINER")
 			}
 			identityValid := routinePlanCatalogIdentityValidForLanguage(
@@ -372,7 +372,7 @@ func routinePlanCatalogIdentityValidForLanguage(
 	definitionSchema int64,
 	revisionABI, revisionAdapter, revisionSDK, revisionNullPolicy string,
 ) bool {
-	if strings.EqualFold(language, udf.LanguageSQL) {
+	if language == udf.LanguageSQL {
 		expectedFingerprint, err := function.SQLRoutineFingerprint(rawBody, revisionArgTypes, revisionRetType)
 		return err == nil &&
 			fingerprint == expectedFingerprint &&
@@ -380,7 +380,7 @@ func routinePlanCatalogIdentityValidForLanguage(
 			revisionABI == "" && revisionAdapter == "" && revisionSDK == "" &&
 			revisionNullPolicy == udf.NullCallHandler
 	}
-	if !strings.EqualFold(language, udf.LanguagePython) {
+	if language != udf.LanguagePython {
 		return false
 	}
 	decoded, err := function.DecodePythonRoutineBody(rawBody)

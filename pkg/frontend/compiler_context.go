@@ -984,7 +984,7 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 			}
 			udf.SQLMode = &mode
 			udf.FunctionID = functionID
-			if strings.EqualFold(udf.Language, string(tree.PYTHON)) {
+			if udf.Language == string(tree.PYTHON) {
 				revision, revisionErr := readPythonRevision(queryCtx, bh, functionID, tcc.GetSnapshot())
 				if revisionErr != nil {
 					return nil, revisionErr
@@ -995,7 +995,7 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 				udf.RetType = revision.RetType
 				udf.Revision = revision.Revision
 				udf.NamespaceVersion = revision.NamespaceVersion
-			} else if strings.EqualFold(udf.Language, string(tree.SQL)) {
+			} else if udf.Language == string(tree.SQL) {
 				revision, found, revisionErr := readSQLRevision(queryCtx, bh, functionID, tcc.GetSnapshot())
 				if revisionErr != nil {
 					return nil, revisionErr
@@ -1035,7 +1035,7 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 
 			toList := make([]types.T, len(args))
 			pythonTargetTypes := make([]types.Type, 0)
-			if strings.EqualFold(udf.Language, string(tree.PYTHON)) {
+			if udf.Language == string(tree.PYTHON) {
 				pythonTargetTypes = udf.GetArgsType()
 			}
 			for j := range argList {
@@ -1336,7 +1336,7 @@ func readSQLRevision(
 		return sqlRevisionCatalogRow{}, false, err
 	}
 	if revisionValue <= 0 || uint64(revisionValue) != uint64(activeRevision) ||
-		!strings.EqualFold(language, string(tree.SQL)) ||
+		language != string(tree.SQL) ||
 		definitionSchema != udf.SQLDefinitionSchemaVersion ||
 		volatility != "VOLATILE" || nullPolicy != udf.NullCallHandler ||
 		!strings.EqualFold(securityType, "DEFINER") ||
@@ -1469,7 +1469,7 @@ func readPythonRevision(ctx context.Context, bh BackgroundExec, functionID int64
 	if err != nil {
 		return pythonRevisionCatalogRow{}, err
 	}
-	if !strings.EqualFold(language, string(tree.PYTHON)) || definitionSchema != udf.PythonDefinitionSchemaVersion || abi != udf.PythonABIContract || adapter != udf.PythonAdapterVersion || sdk != udf.PythonSDKVersion || volatility != "VOLATILE" || !strings.EqualFold(securityType, "INVOKER") || !strings.EqualFold(baseSecurityType, securityType) {
+	if language != string(tree.PYTHON) || definitionSchema != udf.PythonDefinitionSchemaVersion || abi != udf.PythonABIContract || adapter != udf.PythonAdapterVersion || sdk != udf.PythonSDKVersion || volatility != "VOLATILE" || !strings.EqualFold(securityType, "INVOKER") || !strings.EqualFold(baseSecurityType, securityType) {
 		return pythonRevisionCatalogRow{}, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision contract is not supported", functionID)
 	}
 	bodyDefinition, err := function.DecodePythonRoutineBody(body)
