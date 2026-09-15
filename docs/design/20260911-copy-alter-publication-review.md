@@ -3,7 +3,8 @@
 - Design: [COPY ALTER publication protocol](20260911-copy-alter-publication.md)
 - Issue: [#28319](https://github.com/matrixorigin/matrixone/issues/28319)
 - Implementation PR: [#28418](https://github.com/matrixorigin/matrixone/pull/28418)
-- Revision reviewed: 1 (2026-09-11)
+- Revision reviewed: 1 (2026-09-11; historical)
+- Current implementation/design revision: 2 (2026-09-15; pending review)
 - Review type: independent design handoff review
 
 ## Decision
@@ -17,6 +18,12 @@ summary.
 
 This is a separate design artifact and decision record. It is not a maintainer
 approval and does not waive the blocking design review requested on PR #28418.
+
+The implementation subsequently changed the ordinary publication wait
+contract in revision 2: SNAPSHOT and View contention now wait for every
+optimized entry point, while only the private coordination hook can request a
+bounded complete retry. This record has not been reissued as approval for that
+revision; the maintainer decision and workload/QA gates remain open.
 
 ## Review checklist
 

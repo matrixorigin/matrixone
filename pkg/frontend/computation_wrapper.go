@@ -282,18 +282,6 @@ func (cwft *TxnComputationWrapper) resetForTxnRetry(execCtx *ExecCtx, originalSQ
 	return nil
 }
 
-// setCopyAlterPublicationRetryOwner marks only binary prepared executions
-// whose frontend transaction is statement-owned and therefore safe to rebuild
-// after a publication conflict. Ordinary frontend statements keep the wait
-// policy so concurrent prepared relations can be reused without recopying.
-func (cwft *TxnComputationWrapper) setCopyAlterPublicationRetryOwner(execCtx *ExecCtx) {
-	comp, ok := cwft.compile.(*compile.Compile)
-	if !ok {
-		return
-	}
-	comp.SetCopyAlterPublicationRetryOwner(isCopyAlterPublicationRetryOwner(execCtx))
-}
-
 func isCopyAlterPublicationRetryOwner(execCtx *ExecCtx) bool {
 	return execCtx != nil && execCtx.input != nil &&
 		execCtx.input.isBinaryProtExecute &&
@@ -742,8 +730,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			return nil, err
 		}
 	}
-	cwft.setCopyAlterPublicationRetryOwner(execCtx)
-
 	return cwft.compile, err
 }
 
