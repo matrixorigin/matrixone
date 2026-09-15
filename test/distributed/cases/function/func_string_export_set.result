@@ -996,5 +996,31 @@ EXECUTE export_set_truncate_precision USING @export_set_bits;
 YYYY
 DEALLOCATE PREPARE export_set_round_precision;
 DEALLOCATE PREPARE export_set_truncate_precision;
+PREPARE export_set_round_precision FROM
+"SELECT EXPORT_SET(ROUND(15.5,x),'Y','N','',4) FROM (SELECT ? AS x) d";
+PREPARE export_set_truncate_precision FROM
+"SELECT EXPORT_SET(TRUNCATE(15.5,x),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = CAST(-0.5 AS DECIMAL(4,1));
+EXECUTE export_set_round_precision USING @export_set_bits;
+➤ EXPORT_SET(ROUND(15.5, x), Y, N, , 4)[12,64,0]  𝄀
+NNYN
+EXECUTE export_set_truncate_precision USING @export_set_bits;
+➤ EXPORT_SET(TRUNCATE(15.5, x), Y, N, , 4)[12,64,0]  𝄀
+NYNY
+DEALLOCATE PREPARE export_set_round_precision;
+DEALLOCATE PREPARE export_set_truncate_precision;
+PREPARE export_set_round_precision FROM
+"SELECT EXPORT_SET(ROUND(15.5,x),'Y','N','',4) FROM (SELECT ? AS x) d";
+PREPARE export_set_truncate_precision FROM
+"SELECT EXPORT_SET(TRUNCATE(15.5,x),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = CAST(-0.6 AS DOUBLE);
+EXECUTE export_set_round_precision USING @export_set_bits;
+➤ EXPORT_SET(ROUND(15.5, x), Y, N, , 4)[12,64,0]  𝄀
+NNYN
+EXECUTE export_set_truncate_precision USING @export_set_bits;
+➤ EXPORT_SET(TRUNCATE(15.5, x), Y, N, , 4)[12,64,0]  𝄀
+NYNY
+DEALLOCATE PREPARE export_set_round_precision;
+DEALLOCATE PREPARE export_set_truncate_precision;
 DROP TABLE export_set_scalar_input;
 DROP TABLE export_set_numeric_bits;

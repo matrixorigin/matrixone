@@ -2231,7 +2231,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					if rule.hasExportSetResolvedDomain(int(pos)) {
 						sourceType := types.T(rewrittenArg.Typ.Id)
 						if sourceType.IsDecimal() || sourceType == types.T_float32 || sourceType == types.T_float64 {
-							rewrittenArg, err = BindFuncExprImplByPlanExpr(rule.ctx, "truncate",
+							rewrittenArg, err = BindFuncExprImplByPlanExpr(rule.ctx, "round",
 								[]*Expr{rewrittenArg, makePlan2Int64ConstExprWithType(0)})
 							if err != nil {
 								return nil, err

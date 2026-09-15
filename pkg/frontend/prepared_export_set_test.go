@@ -384,6 +384,40 @@ func TestPreparedExportSetNestedPrecisionConsumerRole(t *testing.T) {
 	}
 }
 
+func TestPreparedExportSetIndependentNumericPrecisionDomains(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		consumer string
+		value    any
+		typ      types.Type
+		want     string
+	}{
+		{"round decimal half", "round(15.5,x)", "-0.5", types.New(types.T_decimal64, 4, 1), "NNYN"},
+		{"truncate decimal half", "truncate(15.5,x)", "-0.5", types.New(types.T_decimal64, 4, 1), "NYNY"},
+		{"round real fraction", "round(15.5,x)", -0.6, types.T_float64.ToType(), "NNYN"},
+		{"truncate real fraction", "truncate(15.5,x)", -0.6, types.T_float64.ToType(), "NYNY"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 399,
+				`select export_set(`+tc.consumer+`,'Y','N','',4) from (select ? as x) d`)
+			defer stmt.Close()
+			cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
+			values := []any{plan2.ParamValue{Value: tc.value, SourceType: tc.typ, HasSourceType: true,
+				EnableNumericPrefix: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, cached, values)
+			require.NoError(t, err)
+			q := filled.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr,
+				[]*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, tc.want, result.GetStringAt(0), "expr=%s", expr.String())
+		})
+	}
+}
+
 func TestPreparedExportSetMaterializedRealSaturation(t *testing.T) {
 	_, stmt, cw, _ := newPreparedExecuteEnvForSQLWithCompilerContext(t, 395,
 		`select export_set((select max(?) from tpch.nation),'Y','N','',4)`, plan2.NewMockCompilerContext(true))
