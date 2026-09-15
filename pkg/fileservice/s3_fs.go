@@ -303,6 +303,46 @@ func (s *S3FS) initCaches(ctx context.Context, config CacheConfig) error {
 			zap.Any("fs-name", s.name),
 		)
 	}
+	// memory cache
+	if config.MemoryCapacity != nil &&
+		*config.MemoryCapacity > DisableCacheCapacity {
+		s.memCache = NewMemCache(
+			fscache.ConstCapacity(int64(*config.MemoryCapacity)),
+			&config.CacheCallbacks,
+			s.perfCounterSets,
+			s.name,
+		)
+		logutil.Info("fileservice: memory cache initialized",
+			zap.Any("fs-name", s.name),
+			zap.Any("capacity", config.MemoryCapacity),
+		)
+	}
+
+	// disk cache
+	if config.DiskCapacity != nil &&
+		*config.DiskCapacity > DisableCacheCapacity &&
+		config.DiskPath != nil {
+		var err error
+		s.diskCache, err = NewDiskCache(
+			ctx,
+			*config.DiskPath,
+			fscache.ConstCapacity(int64(*config.DiskCapacity)),
+			s.perfCounterSets,
+			true,
+			nil,
+			s.name,
+		)
+		if err != nil {
+			return err
+		}
+		if s.memCache != nil {
+			s.diskCache.memoryCache = s.memCache.cache
+		}
+		logutil.Info("fileservice: disk cache initialized",
+			zap.Any("fs-name", s.name),
+			zap.Any("config", config),
+		)
+	}
 	if s.memCache != nil {
 		s.decodedReads = newDecodedReadRegistry(min(int64(*config.MemoryCapacity), s.memCache.cache.Capacity()))
 	}
@@ -594,11 +634,19 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	var finishDecode func()
 	var decodePrepared bool
+	var fillTicket *decodedFillTicket
+	var fillAttempted bool
+	finishFill := func() {
+		ticket := fillTicket
+		fillTicket = nil
+		ticket.finish()
+	}
 	defer func() {
 		if finishDecode != nil {
 			finishDecode()
 		}
 	}()
+	defer finishFill()
 	// A merge leader must not wake its waiters until caller-visible cache work
 	// has completed. Cache updates are deferred below, so register this defer
 	// first and let their later defers run before the merge is marked done.
@@ -692,9 +740,29 @@ read_memory_cache:
 read_disk_cache:
 	if !decodePrepared {
 		decodePrepared = true
-		finishDecode, err = s.prepareSharedDecode(vector)
+		finishDecode, fillTicket, fillAttempted, err = s.prepareSharedDecodeForRead(vector)
 		if err != nil {
 			return err
+		}
+		if fillAttempted {
+			if fillTicket != nil && !fillTicket.leader {
+				if err = fillTicket.wait(ctx, sharedDecodeFillWait); err != nil {
+					finishFill()
+					return err
+				}
+			}
+			if err = readCache(ctx, s.memCache, vector); err != nil {
+				finishFill()
+				return err
+			}
+			if vector.allDone() {
+				return nil
+			}
+			if fillTicket != nil && !fillTicket.leader {
+				// This request did not receive an admitted disk-cache fill. Do
+				// not carry its notification participation into remote or S3 IO.
+				finishFill()
+			}
 		}
 	}
 	if s.diskCache != nil {
@@ -710,6 +778,7 @@ read_disk_cache:
 		LogEvent(ctx, str_read_disk_cache_Caches_end)
 		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
+			finishFill()
 			return err
 		}
 		// Count bytes actually read from disk cache (entries that became done and from disk cache)
@@ -742,6 +811,7 @@ read_disk_cache:
 				metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
 			}()
 		}
+		finishFill()
 
 	}
 
