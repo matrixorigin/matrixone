@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -559,6 +560,16 @@ func TestDupOperatorMergeOrder(t *testing.T) {
 	if dupOp.SpillThreshold != op.SpillThreshold {
 		t.Errorf("SpillThreshold mismatch: got %d, want %d", dupOp.SpillThreshold, op.SpillThreshold)
 	}
+}
+
+func TestDupOperatorWindowPreservesSpillThreshold(t *testing.T) {
+	op := windowop.NewArgument()
+	defer op.Release()
+	op.SpillThreshold = 1234
+
+	duplicated := dupOperator(op, 0, 1).(*windowop.Window)
+	defer duplicated.Release()
+	require.Equal(t, op.SpillThreshold, duplicated.SpillThreshold)
 }
 
 func TestDupOperatorOrderPreservesSpecsAndAllocationContract(t *testing.T) {

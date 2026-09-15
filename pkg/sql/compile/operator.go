@@ -357,6 +357,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Fs = t.Fs
 		op.Aggs = t.Aggs
 		op.PartitionTopN = t.PartitionTopN
+		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
 		return op
 	case vm.MergeTop:
@@ -1866,6 +1867,7 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 	arg := window.NewArgument()
 	arg.Aggs = aggregationExpressions
 	arg.WinSpecList = node.WinSpecList
+	arg.SpillThreshold = node.SpillMem
 	return arg
 }
 
