@@ -221,6 +221,7 @@ text_vector,
 category,
 created_at
 from items;
+invalid input: expected vector dimension 5 != actual dimension 4.
 alter table items drop column image_vector;
 select * from items;
 id    name    description    text_vector    category    created_at
