@@ -65,6 +65,11 @@ else:
 
 PROTOCOL_VERSION = 1
 MAX_CONTROL_BYTES = 1 << 20
+# Keep control parsing shallow even when the total JSON envelope is below the
+# byte limit.  This is the Python counterpart of protocol.MaxJSONNesting; a
+# byte scanner makes the bound independent of the interpreter's recursion
+# limit and ignores bracket characters inside JSON strings.
+MAX_JSON_NESTING = 64
 # Keep the Python wire boundary identical to protocol.FencingTuple's
 # component limit.  The control frame limit alone is not sufficient: a
 # single oversized identity would otherwise consume most of every ledger
@@ -805,9 +810,35 @@ def _reject_nonstandard_json_constant(value):
     raise ValueError(f"PROTOCOL: invalid JSON constant {value}")
 
 
+def _validate_json_nesting(data: bytes) -> None:
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in data:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # backslash
+                escaped = True
+            elif byte == 0x22:  # double quote
+                in_string = False
+            continue
+        if byte == 0x22:
+            in_string = True
+        elif byte == 0x7B or byte == 0x5B:  # { or [
+            depth += 1
+            if depth > MAX_JSON_NESTING:
+                raise ValueError(
+                    f"PROTOCOL: control JSON nesting exceeds {MAX_JSON_NESTING} levels"
+                )
+        elif byte == 0x7D or byte == 0x5D:  # } or ]
+            depth -= 1
+
+
 def _decode_control(data: bytes) -> Dict[str, Any]:
     if not data or len(data) > MAX_CONTROL_BYTES:
         raise ValueError("PROTOCOL: invalid control size")
+    _validate_json_nesting(data)
     try:
         text = bytes(data).decode("utf-8")
     except UnicodeDecodeError as exc:
