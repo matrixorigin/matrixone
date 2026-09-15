@@ -226,7 +226,6 @@ func benchmarkStringMathCases() []struct {
 
 func BenchmarkPreparedStringMathEligibility(b *testing.B) {
 	for _, test := range benchmarkStringMathCases() {
-		test := test
 		b.Run(test.name, func(b *testing.B) {
 			query := benchmarkStringMathPlan(test.params, test.depth, test.noise, test.eligible, test.noMatch)
 			values := benchmarkStringMathValues(test.valueCount, test.numericPrefix)
@@ -247,7 +246,6 @@ func BenchmarkPreparedStringMathEligibility(b *testing.B) {
 
 func BenchmarkPreparedStringMathRoleDiscovery(b *testing.B) {
 	for _, test := range benchmarkStringMathRoleCases() {
-		test := test
 		b.Run(test.name, func(b *testing.B) {
 			for position, want := range test.want {
 				if got := preparedParamUsesStringMathFunction(test.plan, position); got != want {
@@ -270,7 +268,6 @@ func BenchmarkPreparedStringMathRoleDiscovery(b *testing.B) {
 func BenchmarkPreparedStringMathSpecialization(b *testing.B) {
 	ctx := context.Background()
 	for _, test := range benchmarkStringMathCases()[:10] {
-		test := test
 		b.Run(test.name, func(b *testing.B) {
 			query := benchmarkStringMathPlan(test.params, test.depth, test.noise, true, false)
 			values := benchmarkStringMathValues(test.valueCount, true)
