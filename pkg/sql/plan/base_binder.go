@@ -7884,6 +7884,9 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	// for float64, if the number is over 1<<53-1,it will lost, so if typ is float64,
 	// don't cast 0xXXXX as float64, use the uint64
 	returnDecimalExpr := func(val string) (*Expr, error) {
+		if canonical, _, _, ok := normalizePlainDecimalLiteral(val); ok {
+			val = canonical
+		}
 		if !typ.IsEmpty() {
 			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(val), typ)
 		}
@@ -7933,9 +7936,13 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		}
 		return makePlan2Uint64ConstExprWithType(val), nil
 	case tree.P_decimal:
+		literal := astExpr.String()
+		if canonical, _, _, ok := normalizePlainDecimalLiteral(literal); ok {
+			literal = canonical
+		}
 		if !typ.IsEmpty() {
 			if typ.Id == int32(types.T_decimal64) {
-				d64, err := types.ParseDecimal64(astExpr.String(), typ.Width, typ.Scale)
+				d64, err := types.ParseDecimal64(literal, typ.Width, typ.Scale)
 				if err != nil {
 					return nil, err
 				}
@@ -7952,7 +7959,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 				}, nil
 			}
 			if typ.Id == int32(types.T_decimal128) {
-				d128, err := types.ParseDecimal128(astExpr.String(), typ.Width, typ.Scale)
+				d128, err := types.ParseDecimal128(literal, typ.Width, typ.Scale)
 				if err != nil {
 					return nil, err
 				}
@@ -7970,17 +7977,17 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 					Typ: typ,
 				}, nil
 			}
-			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(astExpr.String()), typ)
+			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(literal), typ)
 		}
 		// Smart type selection for untyped decimal literals
 		// Choose decimal64 if value fits, otherwise decimal128
-		if isPlainDecimalLiteral(astExpr.String()) &&
-			decimalLiteralPrecision(astExpr.String()) > types.T_decimal128.ToType().Width {
-			return makePlan2DecimalExprWithType(b.GetContext(), astExpr.String())
+		if isPlainDecimalLiteral(literal) &&
+			decimalLiteralPrecision(literal) > types.T_decimal128.ToType().Width {
+			return makePlan2DecimalExprWithType(b.GetContext(), literal)
 		}
-		d128, scale, err := types.Parse128(astExpr.String())
+		d128, scale, err := types.Parse128(literal)
 		if err != nil {
-			return makePlan2DecimalExprWithType(b.GetContext(), astExpr.String())
+			return makePlan2DecimalExprWithType(b.GetContext(), literal)
 		}
 
 		// Check if value fits in decimal64 (18 digits precision)

@@ -964,6 +964,48 @@ func TestUnquotedDecimalLiteralRejectsBeyondDecimal256Precision(t *testing.T) {
 	}
 }
 
+func TestUnquotedDecimalLiteralNormalizesSpellingBeforeParsing(t *testing.T) {
+	ctx := context.Background()
+	leadingZeros := strings.Repeat("0", 100) + "1.25"
+	for _, test := range []struct {
+		name          string
+		value         string
+		wantCanonical string
+		wantWidth     int32
+		wantScale     int32
+	}{
+		{
+			name:          "integer leading zeros do not consume precision",
+			value:         leadingZeros,
+			wantCanonical: "1.25",
+			wantWidth:     3,
+			wantScale:     2,
+		},
+		{
+			name:          "display zero does not consume fractional precision",
+			value:         "0." + strings.Repeat("0", 75) + "1",
+			wantCanonical: "." + strings.Repeat("0", 75) + "1",
+			wantWidth:     76,
+			wantScale:     76,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := makePlan2DecimalExprWithType(ctx, test.value)
+			require.NoError(t, err)
+			require.Equal(t, test.wantWidth, expr.Typ.Width, expr.String())
+			require.Equal(t, test.wantScale, expr.Typ.Scale, expr.String())
+			require.Equal(t, test.wantCanonical, expr.GetF().Args[0].GetLit().GetSval())
+
+			stmt, err := runOneStmt(NewMockOptimizer(false), t, "select "+test.value)
+			require.NoError(t, err)
+			root := stmt.GetQuery().Nodes[stmt.GetQuery().Steps[len(stmt.GetQuery().Steps)-1]]
+			require.Len(t, root.ProjectList, 1)
+			require.NotNil(t, root.ProjectList[0].GetF(), root.ProjectList[0].String())
+			require.Equal(t, test.wantCanonical, root.ProjectList[0].GetF().Args[0].GetLit().GetSval())
+		})
+	}
+}
+
 func TestBuildIfNullMetadata(t *testing.T) {
 	for _, sql := range []string{
 		"select ifnull(null, 9.5)",
