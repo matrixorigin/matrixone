@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -716,6 +717,7 @@ type invocationAdmission struct {
 	group        *protocol.ExecutionGroup
 	credit       *protocol.LedgerCredit
 	key          string
+	groupKey     string
 	invocationID string
 
 	mu         sync.Mutex
@@ -738,6 +740,7 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 	if err != nil {
 		return nil, err
 	}
+	groupKey := scopedGroupKey(invocation.Tuple.AccountID, invocation.Tuple.GroupID)
 	// g.mu -> admissionMu is the lifecycle lock order. Close uses the same
 	// order so a concurrent shutdown cannot return while this invocation is
 	// still being admitted. Keep g.mu held until the complete claim is either
@@ -752,14 +755,14 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 	ledger := g.ledger
 	ttl := g.ledgerTTL
 	active := g.active
-	if err := g.claimGroupLocked(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch); err != nil {
+	if err := g.claimGroupLocked(groupKey, invocation.Tuple.GroupEpoch); err != nil {
 		g.admissionMu.Unlock()
 		g.mu.Unlock()
 		return nil, err
 	}
 	g.admissionMu.Unlock()
 	if ledger == nil || active == nil {
-		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)
 		g.mu.Unlock()
 		return nil, fmt.Errorf("python udf: admission state is not initialized")
 	}
@@ -770,15 +773,15 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 	// that permits an expired tombstone to release its reserved capacity.
 	ledger.Expire(time.Now(), g.epochClosed)
 	entryBytes := int64(len(key))
-	credit, err := ledger.Reserve(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch, 1, entryBytes)
+	credit, err := ledger.Reserve(groupKey, invocation.Tuple.GroupEpoch, 1, entryBytes)
 	if err != nil {
-		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)
 		g.mu.Unlock()
 		return nil, fmt.Errorf("RESOURCE_EXHAUSTED: Python UDF terminal ledger: %w", err)
 	}
 	if err := credit.Add(key, entryBytes, time.Now().Add(ttl)); err != nil {
 		credit.ReleaseUnused()
-		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)
 		g.mu.Unlock()
 		return nil, err
 	}
@@ -790,7 +793,7 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 	default:
 		_ = ledger.Abandon(key)
 		credit.ReleaseUnused()
-		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)
 		g.mu.Unlock()
 		return nil, fmt.Errorf("RESOURCE_EXHAUSTED: Python UDF active invocation slots are full")
 	}
@@ -808,7 +811,7 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 		<-active
 		_ = ledger.Abandon(key)
 		credit.ReleaseUnused()
-		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)
 		g.mu.Unlock()
 		return nil, err
 	}
@@ -816,14 +819,14 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 	if err != nil {
 		_ = group.Close(protocol.ReasonPartialOpenError)
 		_ = ledger.Abandon(key)
-		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)
 		g.mu.Unlock()
 		return nil, err
 	}
 	if err := token.Commit(); err != nil {
 		_ = group.Close(protocol.ReasonPartialOpenError)
 		_ = ledger.Abandon(key)
-		g.releaseGroupClaim(invocation.Tuple.GroupID, invocation.Tuple.GroupEpoch)
+		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)
 		g.mu.Unlock()
 		return nil, err
 	}
@@ -833,6 +836,7 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 		group:        group,
 		credit:       credit,
 		key:          key,
+		groupKey:     groupKey,
 		invocationID: invocation.Tuple.InvocationID,
 		memberOpen:   true,
 	}, nil
@@ -947,6 +951,13 @@ func (g *Gateway) epochClosed(groupID string, groupEpoch uint64) bool {
 	return ok && groupEpoch <= closedEpoch
 }
 
+// scopedGroupKey is an internal ownership key. The wire protocol keeps the
+// original group id, but group reservations and terminal fences are scoped by
+// account because the tuple identity is {account_id, group_id, group_epoch}.
+func scopedGroupKey(accountID uint64, groupID string) string {
+	return strconv.FormatUint(accountID, 10) + "\x00" + groupID
+}
+
 func invocationLedgerKey(tuple protocol.FencingTuple) (string, error) {
 	wire, err := json.Marshal(tuple)
 	if err != nil {
@@ -1005,7 +1016,13 @@ func (a *invocationAdmission) finish(attempted bool, reason protocol.CloseReason
 			errs = append(errs, err)
 		}
 		if a.group.State() == protocol.GroupReleased {
-			a.gateway.closeGroupEpoch(a.group.ID(), a.group.Epoch())
+			groupKey := a.groupKey
+			if groupKey == "" {
+				// Keep manually constructed admission records safe for protocol
+				// tests; all production admissions set the account-scoped key.
+				groupKey = a.group.ID()
+			}
+			a.gateway.closeGroupEpoch(groupKey, a.group.Epoch())
 		}
 		if err := errors.Join(errs...); err == nil {
 			a.finished = true
