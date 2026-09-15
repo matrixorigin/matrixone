@@ -3328,6 +3328,7 @@ class RoutineFlightServer(_FlightServerBase):
         return cleanup_error
 
     def do_action(self, context, action):
+        self._ensure_action_active(context)
         if action.type == "GetPythonCapabilities":
             request = _decode_capability_request(action.body)
             # pyarrow exposes Result as a one positional-buffer value across
@@ -3363,6 +3364,13 @@ class RoutineFlightServer(_FlightServerBase):
             self._purge_terminal_locked(self._clock())
             state = self._active.get(key)
             terminal = self._terminal.get(key)
+        # A cancelled action must not advance an active invocation.  This is
+        # checked again after decoding and ledger lookup because an action can
+        # be queued while its Flight context or the worker is being closed.
+        # If cancellation races this check, the state mutation is the action
+        # acceptance point; the caller may then safely retry the idempotent
+        # acknowledgement when its parent context is still alive.
+        self._ensure_action_active(context)
         if state is None:
             if terminal is None:
                 raise ValueError("PROTOCOL: unknown invocation")
@@ -3387,6 +3395,10 @@ class RoutineFlightServer(_FlightServerBase):
         elif action.type == "AcknowledgeFinish":
             state.ack_finish(_required_string(control, "finish_id"))
         yield _encode_control(self._ack_control(control))
+
+    def _ensure_action_active(self, context) -> None:
+        if self._shutdown_event.is_set() or _context_is_cancelled(context):
+            raise TimeoutError("DEADLINE_EXCEEDED: Flight action is cancelled")
 
     @staticmethod
     def _ack_control(control: Dict[str, Any]) -> Dict[str, Any]:
