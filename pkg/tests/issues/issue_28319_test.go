@@ -348,9 +348,6 @@ func TestIssue28319CopyAlterIndependentTables(t *testing.T) {
 			execSQLRequire(t, ctx, db, "insert into "+database+"."+table+" values(1,10),(2,20),(3,30)")
 		}
 		execSQLRequire(t, ctx, db, "create view "+database+".a_view as select id, v from "+database+".a")
-		const existingSnapshot = "issue_28319_shared_owner"
-		execSQLRequire(t, ctx, db, "create snapshot "+existingSnapshot+" for database "+database)
-		defer execSQLRequire(t, ctx, db, "drop snapshot "+existingSnapshot)
 
 		copied := make(chan struct{})
 		release := make(chan struct{})
@@ -387,8 +384,9 @@ func TestIssue28319CopyAlterIndependentTables(t *testing.T) {
 			t.Fatal("ALTER did not reach the copy boundary")
 		}
 		otherCtx, otherCancel := context.WithTimeout(ctx, 15*time.Second)
-		// Publish an owner while A is copying. A must read current ownership
-		// after its catalog refresh and retain the old generation.
+		// There is deliberately no pre-existing Snapshot/PITR owner. Publish the
+		// first owner while A is copying; A must read current ownership after its
+		// catalog refresh and retain the old generation.
 		const snapshot = "issue_28319_during_copy"
 		_, snapshotErr := peerDB.ExecContext(otherCtx, "create snapshot "+snapshot+" for table "+database+" a")
 		_, otherErr := peerDB.ExecContext(otherCtx, "alter table "+database+".b add primary key(id)")
@@ -674,10 +672,9 @@ func TestIssue28319PublicationGateWaitDoesNotRecopy(t *testing.T) {
 	})
 }
 
-// A SNAPSHOT owner is released after preparation. Caller-owned entry points
-// must wait for publication and reuse their prepared relation rather than
-// restart COPY. Binary prepared execution is covered by the dedicated retry
-// test below because it owns a replayable auto-commit transaction.
+// A SNAPSHOT owner is released after preparation. Every optimized entry point
+// must wait for publication and reuse its prepared relation, including binary
+// prepared execution which owns a replayable auto-commit transaction.
 func TestIssue28319CopyAlterPublicationWaitReusesPrepared(t *testing.T) {
 	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -696,7 +693,7 @@ func TestIssue28319CopyAlterPublicationWaitReusesPrepared(t *testing.T) {
 			execSQLRequire(t, cleanupCtx, db, "drop database "+database)
 		}()
 		execSQLRequire(t, ctx, db, "use "+database)
-		for _, mode := range []string{"query", "text", "executor"} {
+		for _, mode := range []string{"query", "binary", "text", "executor"} {
 			t.Run(mode, func(t *testing.T) {
 				execSQLRequire(t, ctx, db, "create table "+database+".t(id int not null, v int)")
 				execSQLRequire(t, ctx, db, "insert into "+database+".t values(1,10),(2,20)")
@@ -824,36 +821,9 @@ func TestIssue28319BinaryPreparedPublicationRetryRestoresDatabase(t *testing.T) 
 		require.NoError(t, paramStmt.QueryRowContext(ctx, 1).Scan(&parameterValue))
 		require.Equal(t, 10, parameterValue)
 
-		gateReady, releaseGate, gateDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-		var releaseOnce sync.Once
-		release := func() { releaseOnce.Do(func() { close(releaseGate) }) }
-		defer release()
-		go func() {
-			gateDone <- testutils.GetSQLExecutor(cn).ExecTxn(ctx, func(owner executor.TxnExecutor) error {
-				result, gateErr := owner.Exec(databranchutils.LineageOwnerLifecyclePessimisticLockSQL(), executor.StatementOption{})
-				result.Close()
-				if gateErr != nil {
-					return gateErr
-				}
-				close(gateReady)
-				select {
-				case <-releaseGate:
-					return nil
-				case <-ctx.Done():
-					return context.Cause(ctx)
-				}
-			}, executor.Options{}.WithAccountID(0))
-		}()
-		select {
-		case <-gateReady:
-		case gateErr := <-gateDone:
-			t.Fatalf("publication owner: %v", gateErr)
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
-		}
-
 		var copies atomic.Int32
-		var conflicts atomic.Int32
+		var publicationAttempts atomic.Int32
+		var injectedConflicts atomic.Int32
 		var txnMu sync.Mutex
 		var txnIDs [][]byte
 		restore := compile.SetAlterCopyPhaseHookForTest(func(callCtx context.Context, dbName, table, phase string, op client.TxnOperator) error {
@@ -866,9 +836,10 @@ func TestIssue28319BinaryPreparedPublicationRetryRestoresDatabase(t *testing.T) 
 				txnMu.Lock()
 				txnIDs = append(txnIDs, bytes.Clone(op.Txn().ID))
 				txnMu.Unlock()
-			case "publication-conflict":
-				if conflicts.Add(1) == 1 {
-					release()
+			case "publication-attempt":
+				publicationAttempts.Add(1)
+				if injectedConflicts.CompareAndSwap(0, 1) {
+					return moerr.NewTxnNeedRetryWithDefChanged(callCtx)
 				}
 			}
 			return nil
@@ -877,8 +848,8 @@ func TestIssue28319BinaryPreparedPublicationRetryRestoresDatabase(t *testing.T) 
 
 		_, err = stmt.ExecContext(ctx)
 		require.NoError(t, err)
-		require.NoError(t, <-gateDone)
-		require.Equal(t, int32(1), conflicts.Load(), "the first publication conflict is observed by the retry hook")
+		require.Equal(t, int32(1), injectedConflicts.Load(), "the first publication attempt is converted into a private retry")
+		require.Equal(t, int32(2), publicationAttempts.Load(), "the retry starts a fresh publication attempt")
 		require.Equal(t, int32(2), copies.Load(), "a full transaction retry must recopy from its new transaction")
 		txnMu.Lock()
 		require.Len(t, txnIDs, 2)

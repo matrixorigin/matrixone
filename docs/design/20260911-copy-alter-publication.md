@@ -2,8 +2,9 @@
 
 - Issue: [#28319](https://github.com/matrixorigin/matrixone/issues/28319)
 - Implementation PR: [#28418](https://github.com/matrixorigin/matrixone/pull/28418)
-- Revision: 1 (2026-09-11)
-- Status: proposed design for review; implementation is in the linked Draft PR.
+- Revision: 2 (2026-09-15)
+- Status: implementation revision for maintainer decision; the linked PR is
+  Ready for review, but this document is not itself an approval.
 - Target branch: `main`
 
 This document is the versioned design artifact for the COPY ALTER lock
@@ -51,12 +52,13 @@ the publication step succeeds.
 * Publication acquires lifecycle gates in the single order **SNAPSHOT then
   View**, matching the canonical order used by view-metadata recovery and
   other lifecycle owners. The SNAPSHOT row keeps the existing `FOR UPDATE`/
-  no-op UPDATE write barrier used by optimistic validation and GC. An entry
-  point that owns a complete replayable automatic-commit transaction (the
-  internal SQL executor or binary prepared frontend execution) uses FastFail
-  for this first gate; ordinary frontend statements and caller-owned
-  transactions wait so a prepared relation can be reused. The View row
-  retains its normal cancellation and wait boundary.
+  no-op UPDATE write barrier used by optimistic validation and GC. Every
+  optimized entry point uses the normal wait policy for ordinary publication
+  contention, so a prepared relation is reused regardless of whether the
+  request came from ordinary SQL, text/binary prepared execution or an
+  independent executor. The View row retains its normal cancellation and
+  wait boundary. A private coordination error owned by this helper remains
+  the only path that can request the bounded complete-transaction retry.
 * Publication rechecks source table ID, logical ID, branch/history owners,
   Snapshot/PITR coverage, View state, foreign-key/publication metadata and
   final task identities after the gates are held. A preparation-time “no
@@ -130,10 +132,10 @@ may publish a temporary task or View dependency after the phase transition.
 
 After preparation, the operation enters a short coordination section:
 
-1. acquire the SNAPSHOT lifecycle row with the existing `FOR UPDATE`; an
-   entry point that owns a complete replayable automatic-commit transaction
-   uses FastFail, while ordinary frontend and caller-owned transactions use
-   the normal wait policy so they can reuse the prepared relation;
+1. acquire the SNAPSHOT lifecycle row with the existing `FOR UPDATE` and the
+   normal wait policy. Ordinary contention is deliberately independent of
+   transaction ownership or executor type, so all optimized entry points can
+   reuse the prepared relation;
 2. acquire the View lifecycle row with the original cancellation and wait
    boundary;
 3. advance the workspace snapshot with `Workspace.AdvanceSnapshot` to a
@@ -256,3 +258,16 @@ not regress by more than 10%; concurrent throughput and P95 improve on the
 paired baseline; and no unexpected connection failure or timeout appears in
 three equivalent nightly runs. Missing remote or workload evidence remains a
 pending gate and cannot be replaced by a small local test.
+
+## Revision 2 change record
+
+Revision 2 makes the publication wait contract uniform across the optimized
+frontends. The previous implementation selected FastFail from executor or
+transaction ownership, which made ordinary prepared contention depend on the
+entry point and could turn a reusable prepared relation into an unnecessary
+whole-transaction retry. The implementation now waits for ordinary gate
+contention in every optimized entry point and reserves the complete retry for
+the private coordination hook; the regression suite has separate assertions
+for one-copy ordinary waits and a real two-transaction injected retry. The
+conditional handoff in the companion review remains historical evidence, so a
+maintainer decision on this revision is still required.

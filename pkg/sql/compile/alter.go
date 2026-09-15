@@ -349,13 +349,18 @@ func (c *Compile) alterCopyPublicationGatesReady() (bool, error) {
 // lockAlterCopyPublication acquires the global gates only after the copy and
 // synchronous index work are complete. The publication path uses the
 // canonical SNAPSHOT -> View order shared by the other lifecycle owners.
-// An entry point that owns a complete replayable automatic-commit transaction
-// uses FastFail for SNAPSHOT so a competing owner publication is handed to it
-// for a bounded full retry. Ordinary frontend statements and caller-owned
-// transactions wait at that gate so a prepared relation can be reused; View
-// retains its normal wait boundary.
+// Every optimized entry point waits for ordinary SNAPSHOT contention so it can
+// reuse its prepared relation; a private coordination error can still request
+// one bounded full retry through the marker below. View retains its normal wait
+// boundary.
 func (c *Compile) lockAlterCopyPublication(database, table string) error {
 	for attempt := 0; attempt < 2; attempt++ {
+		// The hook is deliberately before the gate reads so tests can inject the
+		// private coordination error without turning ordinary lock contention into
+		// a full COPY retry. Production callers never return an error here.
+		if hookErr := c.observeAlterCopyPhase(database, table, "publication-attempt"); hookErr != nil {
+			return c.markAlterCopyPublicationRetry(hookErr)
+		}
 		err := c.lockAlterCopyPublicationOnce()
 		if err == nil {
 			return nil
@@ -378,17 +383,11 @@ func (c *Compile) lockAlterCopyPublication(database, table string) error {
 	return c.markAlterCopyPublicationRetry(moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx))
 }
 
-func (c *Compile) alterCopyPublicationWaitPolicy() lock.WaitPolicy {
-	return copyAlterPublicationWaitPolicy(
-		c.copyAlterExecutorOwner,
-		c.copyAlterPublicationRetryOwner,
-	)
-}
-
-func copyAlterPublicationWaitPolicy(executorOwner, publicationRetryOwner bool) lock.WaitPolicy {
-	if executorOwner || publicationRetryOwner {
-		return lock.WaitPolicy_FastFail
-	}
+func copyAlterPublicationWaitPolicy() lock.WaitPolicy {
+	// Every optimized entry point waits on ordinary publication contention so
+	// its prepared relation can be reused. A private coordination error may
+	// still request the bounded full-transaction retry above; that decision is
+	// independent of the lock wait policy.
 	return lock.WaitPolicy_Wait
 }
 
@@ -398,11 +397,13 @@ func (c *Compile) lockAlterCopyPublicationOnce() error {
 	// in that window, so acquire both stable rows directly and verify that the
 	// catalog is ready. SNAPSHOT must be acquired first: recovery and other
 	// lifecycle owners use the canonical SNAPSHOT -> View order, and taking
-	// View first here would reintroduce a cross-path wait cycle.
+	// View first here would reintroduce a cross-path wait cycle. Ordinary
+	// contention waits for the owner to release the row; it is not converted
+	// into a retry merely because the caller can replay its transaction.
 	snapshotResult, err := c.runSqlWithResultAndOptions(
 		databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
 		int32(catalog.System_Account),
-		executor.StatementOption{}.WithWaitPolicy(c.alterCopyPublicationWaitPolicy()),
+		executor.StatementOption{}.WithWaitPolicy(copyAlterPublicationWaitPolicy()),
 	)
 	if err != nil {
 		snapshotResult.Close()

@@ -290,9 +290,6 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	proc.ResetQueryContext()
 	proc.ResetCloneTxnOperator()
 	c.proc = proc
-	// The publication retry owner belongs to one frontend execution. The
-	// wrapper re-applies it after Reset for the binary prepared path.
-	c.copyAlterPublicationRetryOwner = false
 	c.sequenceState = captureSequenceStatementState(proc)
 	c.proc.BeginFoundRowsStatement(statementHasSQLCalcFoundRows(c.stmt))
 	c.applyPlanSnapshot()
@@ -552,7 +549,6 @@ func (c *Compile) clear() {
 	c.copyAlterCreateScope = nil
 	c.copyAlterInternalExecutor = false
 	c.copyAlterExecutorOwner = false
-	c.copyAlterPublicationRetryOwner = false
 	c.copyAlterAdmissionSet = false
 	c.copyAlterAdmitted = false
 	c.copyAlterIndexBuild = false
@@ -877,12 +873,6 @@ func (c *Compile) IsSingleScope(ss []*Scope) bool {
 
 func (c *Compile) SetIsPrepare(isPrepare bool) {
 	c.isPrepare = isPrepare
-}
-
-// SetCopyAlterPublicationRetryOwner marks a frontend prepared execution as
-// the owner of a complete transaction retry after publication conflict.
-func (c *Compile) SetCopyAlterPublicationRetryOwner(owner bool) {
-	c.copyAlterPublicationRetryOwner = owner
 }
 
 func (c *Compile) FreeOperator() {

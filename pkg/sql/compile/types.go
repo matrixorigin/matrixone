@@ -434,13 +434,8 @@ type Compile struct {
 	copyAlterCreateScope      executor.CopyAlterPreparation
 	copyAlterInternalExecutor bool
 	copyAlterExecutorOwner    bool
-	// copyAlterPublicationRetryOwner marks a frontend prepared execution that
-	// owns a complete automatic-commit transaction and can rebuild it after a
-	// publication conflict. It is separate from copyAlterExecutorOwner because
-	// ordinary frontend statements must wait and reuse a prepared relation.
-	copyAlterPublicationRetryOwner bool
-	copyAlterAdmissionSet          bool
-	copyAlterAdmitted              bool
+	copyAlterAdmissionSet     bool
+	copyAlterAdmitted         bool
 	// copyAlterIndexBuild marks the explicit physical index-build call that
 	// follows the copied-row preparation. It is only meaningful together with
 	// copyAlterPrepare and is never propagated through user SQL.
