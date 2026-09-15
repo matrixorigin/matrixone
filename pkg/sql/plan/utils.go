@@ -1881,7 +1881,7 @@ func constantFoldWithPreparedExactSource(
 
 	// Skip constant folding for division/modulo by zero.
 	// This allows runtime to check sql_mode and statement type for proper error handling.
-	if rule.IsDivisionByZeroConstant(fn) {
+	if rule.ShouldDeferDivisionConstantFold(fn, bat, proc, varAndParamIsConst) {
 		return expr, nil
 	}
 

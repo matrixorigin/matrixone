@@ -240,7 +240,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 
 	// Skip constant folding for division/modulo by zero.
 	// This allows runtime to check sql_mode and statement type for proper error handling.
-	if IsDivisionByZeroConstant(fn) {
+	if ShouldDeferDivisionConstantFold(fn, r.bat, proc, false) {
 		return expr
 	}
 
@@ -985,6 +985,72 @@ func implicitCastLiteral(expr *plan.Expr) *plan.Literal {
 }
 
 // isZeroLiteral checks if a literal value is zero
+// ShouldDeferDivisionConstantFold extends the structural zero check to a
+// constant expression whose DECIMAL256 result cannot be represented by a plan
+// literal. Evaluation is read-only and used only to preserve the original
+// runtime expression; errors also stay runtime-owned rather than being hidden
+// by folding the enclosing division.
+func ShouldDeferDivisionConstantFold(
+	fn *plan.Function,
+	bat *batch.Batch,
+	proc *process.Process,
+	varAndParamIsConst bool,
+) bool {
+	if IsDivisionByZeroConstant(fn) {
+		return true
+	}
+	fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if (fid != function.DIV && fid != function.INTEGER_DIV && fid != function.MOD) || len(fn.Args) < 2 || proc == nil {
+		return false
+	}
+	divisor := fn.Args[1]
+	if !IsConstant(divisor, varAndParamIsConst) {
+		return false
+	}
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, divisor, []*batch.Batch{bat})
+	if err != nil {
+		return true
+	}
+	defer free()
+	if vec == nil || vec.Length() == 0 || vec.IsConstNull() || vec.GetNulls().Contains(0) {
+		return true
+	}
+	return numericVectorValueIsZero(vec)
+}
+
+func numericVectorValueIsZero(vec *vector.Vector) bool {
+	switch vec.GetType().Oid {
+	case types.T_int8:
+		return vector.GetFixedAtNoTypeCheck[int8](vec, 0) == 0
+	case types.T_int16:
+		return vector.GetFixedAtNoTypeCheck[int16](vec, 0) == 0
+	case types.T_int32:
+		return vector.GetFixedAtNoTypeCheck[int32](vec, 0) == 0
+	case types.T_int64:
+		return vector.GetFixedAtNoTypeCheck[int64](vec, 0) == 0
+	case types.T_uint8:
+		return vector.GetFixedAtNoTypeCheck[uint8](vec, 0) == 0
+	case types.T_uint16:
+		return vector.GetFixedAtNoTypeCheck[uint16](vec, 0) == 0
+	case types.T_uint32:
+		return vector.GetFixedAtNoTypeCheck[uint32](vec, 0) == 0
+	case types.T_uint64:
+		return vector.GetFixedAtNoTypeCheck[uint64](vec, 0) == 0
+	case types.T_float32:
+		return vector.GetFixedAtNoTypeCheck[float32](vec, 0) == 0
+	case types.T_float64:
+		return vector.GetFixedAtNoTypeCheck[float64](vec, 0) == 0
+	case types.T_decimal64:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0) == 0
+	case types.T_decimal128:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0) == (types.Decimal128{})
+	case types.T_decimal256:
+		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0) == (types.Decimal256{})
+	default:
+		return false
+	}
+}
+
 func isZeroLiteral(lit *plan.Literal) bool {
 	switch v := lit.Value.(type) {
 	case *plan.Literal_I8Val:

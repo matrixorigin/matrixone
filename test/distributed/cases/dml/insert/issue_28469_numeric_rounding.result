@@ -81,6 +81,20 @@ SELECT COUNT(*) FROM dst;
 ➤ COUNT(*)[-5,64,0]  𝄀
 0
 DEALLOCATE PREPARE strict_zero;
+PREPARE strict_nested_zero FROM 'INSERT INTO dst VALUES (104,10/(0/2)), (105,5/2)';
+EXECUTE strict_nested_zero;
+Data truncation: division by zero
+SELECT COUNT(*) FROM dst;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE strict_nested_zero;
+PREPARE strict_floor_zero FROM 'INSERT INTO dst VALUES (106,10/FLOOR(1/2)), (107,5/2)';
+EXECUTE strict_floor_zero;
+Data truncation: division by zero
+SELECT COUNT(*) FROM dst;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE strict_floor_zero;
 SET sql_mode = 'STRICT_TRANS_TABLES';
 INSERT INTO dst VALUES (1, 5 / 2);
 INSERT INTO dst SELECT 2, x / 2 FROM src;

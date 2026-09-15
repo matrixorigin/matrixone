@@ -31,16 +31,48 @@ import (
 
 func TestExactDivisionByZeroRemainsRuntimeChecked(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	division, err := BindFuncExprImplByPlanExpr(withIntegerAssignmentDomain(t.Context()), "/", []*planpb.Expr{
-		makePlan2Int64ConstExprWithType(10),
-		makePlan2Int64ConstExprWithType(0),
-	})
-	require.NoError(t, err)
-	require.True(t, rule.IsDivisionByZeroConstant(division.GetF()), "%s", division.String())
+	ctx := withIntegerAssignmentDomain(t.Context())
+	divide := func(left, right *planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, "/", []*planpb.Expr{left, right})
+		require.NoError(t, err)
+		return expr
+	}
+	floor := func(expr *planpb.Expr) *planpb.Expr {
+		bound, err := BindFuncExprImplByPlanExpr(ctx, "floor", []*planpb.Expr{expr})
+		require.NoError(t, err)
+		return bound
+	}
 
-	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, division, proc, true, true)
-	require.NoError(t, err)
-	require.NotNil(t, folded.GetF(), "strict DML must retain division for runtime sql_mode handling")
+	zeroDivisor := divide(makePlan2Int64ConstExprWithType(0), makePlan2Int64ConstExprWithType(2))
+	floorDivisor := floor(divide(makePlan2Int64ConstExprWithType(1), makePlan2Int64ConstExprWithType(2)))
+	for _, tc := range []struct {
+		name    string
+		divisor *planpb.Expr
+	}{
+		{"literal", makePlan2Int64ConstExprWithType(0)},
+		{"nested", zeroDivisor},
+		{"floor", floorDivisor},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			divisor := tc.divisor
+			division := divide(makePlan2Int64ConstExprWithType(10), DeepCopyExpr(divisor))
+			require.True(t, rule.ShouldDeferDivisionConstantFold(
+				division.GetF(), batch.EmptyForConstFoldBatch, proc, true))
+
+			folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(division), proc, true, true)
+			require.NoError(t, err)
+			require.NotNil(t, folded.GetF(), "strict DML must retain division for runtime sql_mode handling")
+
+			node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(division)}}
+			rule.NewConstantFold(true).Apply(node, nil, proc)
+			require.NotNil(t, node.ProjectList[0].GetF())
+		})
+	}
+
+	nonzero := divide(makePlan2Int64ConstExprWithType(2), makePlan2Int64ConstExprWithType(2))
+	division := divide(makePlan2Int64ConstExprWithType(10), nonzero)
+	require.False(t, rule.ShouldDeferDivisionConstantFold(
+		division.GetF(), batch.EmptyForConstFoldBatch, proc, true))
 }
 
 func TestExactNumericSourceSurvivesFoldCopyAndWire(t *testing.T) {

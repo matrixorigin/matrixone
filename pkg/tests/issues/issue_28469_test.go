@@ -135,16 +135,22 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 		}
 
 		t.Run("prepared_strict_division_by_zero", func(t *testing.T) {
-			mustExec(t, ctx, conn, "delete from dst")
 			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'")
-			mustExec(t, ctx, conn, "prepare strict_zero from 'insert into dst values (10/0), (5/2)'")
-			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare strict_zero") }()
-			_, err := conn.ExecContext(ctx, "execute strict_zero")
-			require.Error(t, err)
-			var count int
-			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from dst").Scan(&count))
-			require.Zero(t, count)
-			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES'")
+			defer func() { _, _ = conn.ExecContext(ctx, "set sql_mode='STRICT_TRANS_TABLES'") }()
+			for _, tc := range []struct{ name, divisor string }{
+				{"literal", "0"}, {"nested", "(0/2)"}, {"floor", "floor(1/2)"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					mustExec(t, ctx, conn, "delete from dst")
+					mustExec(t, ctx, conn, "prepare strict_zero from 'insert into dst values (10/"+tc.divisor+"), (5/2)'")
+					_, err := conn.ExecContext(ctx, "execute strict_zero")
+					require.Error(t, err)
+					mustExec(t, ctx, conn, "deallocate prepare strict_zero")
+					var count int
+					require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from dst").Scan(&count))
+					require.Zero(t, count)
+				})
+			}
 		})
 
 		for _, query := range []string{
