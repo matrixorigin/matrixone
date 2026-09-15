@@ -6627,22 +6627,23 @@ type CDCUserInfo struct {
 }
 
 type CDCCreateTaskOptions struct {
-	TaskName     string
-	TaskId       string
-	UserInfo     *CDCUserInfo
-	Exclude      string
-	StartTs      string
-	EndTs        string
-	MaxSqlLength int64
-	PitrTables   string // json encoded pitr tables: cdc2.PatternTuples
-	SrcUri       string // json encoded source uri: cdc2.UriInfo
-	SrcUriInfo   cdc.UriInfo
-	SinkUri      string // json encoded sink uri: cdc2.UriInfo
-	SinkUriInfo  cdc.UriInfo
-	ExtraOpts    string // json encoded extra opts: map[string]any
-	SinkType     string
-	NoFull       bool
-	ConfigFile   string
+	TaskName       string
+	TaskId         string
+	UserInfo       *CDCUserInfo
+	Exclude        string
+	ExcludePattern string
+	StartTs        string
+	EndTs          string
+	MaxSqlLength   int64
+	PitrTables     string // json encoded pitr tables: cdc2.PatternTuples
+	SrcUri         string // json encoded source uri: cdc2.UriInfo
+	SrcUriInfo     cdc.UriInfo
+	SinkUri        string // json encoded sink uri: cdc2.UriInfo
+	SinkUriInfo    cdc.UriInfo
+	ExtraOpts      string // json encoded extra opts: map[string]any
+	SinkType       string
+	NoFull         bool
+	ConfigFile     string
 
 	// control options
 	UseConsole bool
@@ -6667,6 +6668,12 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		key := planCDC.Option[i]
 		value := planCDC.Option[i+1]
 		tmpOpts[key] = value
+	}
+	// Make the raw exclude expression available to level validation, which runs
+	// before the option switch reaches the Exclude case.
+	if exclude := tmpOpts[cdc.CDCRequestOptions_Exclude]; exclude != "" {
+		opts.Exclude = exclude
+		opts.ExcludePattern = exclude
 	}
 
 	// extract source uri and check connection
@@ -6889,7 +6896,7 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 
 	// ensure PITR checks run with the target tenant account id
 	ctx = defines.AttachAccountId(ctx, opts.UserInfo.AccountId)
-	if err = c.checkPitrGranularity(ctx, patterTupples); err != nil {
+	if err = c.checkPitrGranularity(ctx, patterTupples, opts.ExcludePattern); err != nil {
 		return
 	}
 
@@ -6949,8 +6956,95 @@ func transformIntoHours(freq string) int64 {
 func (c *Compile) checkPitrGranularity(
 	ctx context.Context,
 	pts *cdc.PatternTuples,
+	exclude string,
 	minLength ...int64,
 ) error {
+	accountId, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	// Validate concrete CDC sources before persisting the task. The sink needs
+	// a user-visible primary key for UPDATE/DELETE identity; the engine-only
+	// fake key used by no-PK tables is deliberately not accepted.
+	for _, pt := range pts.Pts {
+		if pt == nil {
+			continue
+		}
+		if exclude != "" && pt.Source.Database != cdc.CDCPitrGranularity_All && pt.Source.Table != cdc.CDCPitrGranularity_All {
+			matched, err := regexp.MatchString(exclude, pt.Source.Database+"."+pt.Source.Table)
+			if err != nil {
+				return err
+			}
+			if matched {
+				continue
+			}
+		}
+		if pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
+			// Use the runtime scanner's catalog predicate, then apply Exclude and
+			// the foreign-key rule to real names. In particular, do not match a
+			// regexp against the synthetic "db.*" tuple.
+			res, err := c.runSqlWithResultAndOptions(
+				cdc.CollectCDCSourceCandidateSQL(accountId, pt.Source.Database, pt.Source.Table),
+				int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+			if err != nil {
+				return err
+			}
+			var validationErr error
+			res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+				for i := 0; i < rows; i++ {
+					dbName := cols[3].GetStringAt(i)
+					tableName := cols[1].GetStringAt(i)
+					if exclude != "" {
+						matched, matchErr := regexp.MatchString(exclude, dbName+"."+tableName)
+						if matchErr != nil {
+							validationErr = matchErr
+							return false
+						}
+						if matched {
+							continue
+						}
+					}
+					hasForeignKey, decodeErr := cdc.TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
+					if decodeErr != nil {
+						validationErr = decodeErr
+						return false
+					}
+					if hasForeignKey {
+						continue
+					}
+					if !vector.MustFixedColNoTypeCheck[bool](cols[7])[i] {
+						validationErr = moerr.NewInternalErrorf(ctx, "CDC source scope %s contains table %s.%s without a primary key", pt.Source, dbName, tableName)
+						return false
+					}
+				}
+				return true
+			})
+			res.Close()
+			if validationErr != nil {
+				return validationErr
+			}
+			// The shared candidate query retains every runtime table and returns its
+			// user-primary-key status. That avoids N+1 catalog queries while both
+			// admission and runtime can fail closed for a no-PK table.
+			continue
+		}
+		pkSQL := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = %d AND %s = %s AND %s = %s AND %s = 'p' AND %s <> %s LIMIT 1",
+			sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
+			sqlquote.Ident(catalog.SystemColAttr_AccID), accountId,
+			sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.String(pt.Source.Database),
+			sqlquote.Ident(catalog.SystemColAttr_RelName), sqlquote.String(pt.Source.Table),
+			sqlquote.Ident(catalog.SystemColAttr_ConstraintType),
+			sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.String(catalog.FakePrimaryKeyColName))
+		res, err := c.runSqlWithResultAndOptions(pkSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+		if err != nil {
+			return err
+		}
+		valid := len(res.Batches) > 0 && res.Batches[0].RowCount() > 0
+		res.Close()
+		if !valid {
+			return moerr.NewInternalErrorf(ctx, "source table %s has no primary key; CDC does not support tables without a user-visible primary key", pt.Source)
+		}
+	}
 	var minPitrLen int64 = 2
 	if len(minLength) > 1 {
 		return moerr.NewInternalErrorf(ctx, "only one length parameter allowed")
@@ -6958,11 +7052,6 @@ func (c *Compile) checkPitrGranularity(
 	if len(minLength) > 0 {
 		minPitrLen = max(minLength[0]+1, minPitrLen)
 	}
-	accountId, err := defines.GetAccountId(ctx)
-	if err != nil {
-		return err
-	}
-
 	sqlCluster := fmt.Sprintf(`SELECT pitr_length,pitr_unit FROM %s.%s WHERE level='cluster' AND account_id = %d`,
 		catalog.MO_CATALOG, catalog.MO_PITR, accountId)
 	if res, err := c.runSqlWithResultAndOptions(sqlCluster, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog()); err == nil {
@@ -7106,7 +7195,7 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 		return
 	}
 
-	if err = c.checkPitrGranularity(ctx, patterTupples, normalized); err != nil {
+	if err = c.checkPitrGranularity(ctx, patterTupples, opts.ExcludePattern, normalized); err != nil {
 		return err
 	}
 	return nil

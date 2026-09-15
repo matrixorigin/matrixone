@@ -17,12 +17,14 @@ package frontend
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"math"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -177,6 +179,38 @@ func (pc *PitrConfig) IsValid(minLength int64) bool {
 	return !(pc.Unit == "h" && pc.Length < minLength)
 }
 
+func checkCDCSourcePrimaryKey(ctx context.Context, bh BackgroundExec, dbName, tableName string) error {
+	// Read att_constraint_type directly; parsing SHOW CREATE text would
+	// incorrectly treat comments or identifiers containing "PRIMARY KEY" as an
+	// actual constraint. Keep hidden composite-PK markers; only the engine-only
+	// fake key denotes a table without a user primary key.
+	pkSQL := fmt.Sprintf("SELECT count(*) FROM %s.%s WHERE %s = %s AND %s = %s AND %s = 'p' AND %s <> %s",
+		quoteIdentifierForSQL(catalog.MO_CATALOG), quoteIdentifierForSQL(catalog.MO_COLUMNS),
+		quoteIdentifierForSQL(catalog.SystemColAttr_DBName), quoteSQLStringLiteral(dbName),
+		quoteIdentifierForSQL(catalog.SystemColAttr_RelName), quoteSQLStringLiteral(tableName),
+		quoteIdentifierForSQL(catalog.SystemColAttr_ConstraintType),
+		quoteIdentifierForSQL(catalog.SystemColAttr_Name), quoteSQLStringLiteral(catalog.FakePrimaryKeyColName))
+	if err := bh.Exec(ctx, pkSQL); err != nil {
+		return err
+	}
+	results, err := getResultSet(ctx, bh)
+	bh.ClearExecResultSet()
+	if err != nil {
+		return err
+	}
+	if len(results) == 0 || results[0].GetRowCount() == 0 {
+		return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
+	}
+	pkCount, err := results[0].GetUint64(ctx, 0, 0)
+	if err != nil {
+		return err
+	}
+	if pkCount == 0 {
+		return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
+	}
+	return nil
+}
+
 // CDCCheckPitrGranularity checks if the PITR (Point-in-Time Recovery) granularity settings
 // meet the minimum requirements for CDC tasks at different levels (cluster/account/db/table)
 // It verifies the PITR configuration in descending order of priority (cluster > account > database > table)
@@ -191,13 +225,103 @@ func (pc *PitrConfig) IsValid(minLength int64) bool {
 //
 // Returns:
 // - error: Returns an error if no PITR configuration meets the minimum requirement, otherwise nil.
-var CDCCheckPitrGranularity = func(
+var CDCCheckPitrGranularityWithExclude = func(
 	ctx context.Context,
 	bh BackgroundExec,
 	accName string,
 	pts *cdc.PatternTuples,
+	exclude string,
 	minLength ...int64,
 ) error {
+	// Validate concrete source tables before persisting the CDC task. A CDC
+	// stream needs a user-visible primary key to identify UPDATE/DELETE rows;
+	// MatrixOne's internal fake key is not a supported sink identity.
+	if bh != nil {
+		for _, pt := range pts.Pts {
+			if pt == nil {
+				continue
+			}
+			if pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
+				accountID, err := defines.GetAccountId(ctx)
+				if err != nil {
+					return err
+				}
+				candidateSQL := cdc.CollectCDCSourceCandidateSQL(accountID, pt.Source.Database, pt.Source.Table)
+				if err := bh.Exec(ctx, candidateSQL); err != nil {
+					return err
+				}
+				results, err := getResultSet(ctx, bh)
+				bh.ClearExecResultSet()
+				if err != nil {
+					return err
+				}
+				for _, result := range results {
+					for row := uint64(0); row < result.GetRowCount(); row++ {
+						dbName, err := result.GetString(ctx, row, 3)
+						if err != nil {
+							return err
+						}
+						tableName, err := result.GetString(ctx, row, 1)
+						if err != nil {
+							return err
+						}
+						if exclude != "" {
+							matched, err := regexp.MatchString(exclude, dbName+"."+tableName)
+							if err != nil {
+								return err
+							}
+							if matched {
+								continue
+							}
+						}
+						constraintIsNull, err := result.ColumnIsNull(ctx, row, 6)
+						if err != nil {
+							return err
+						}
+						var constraintBytes []byte
+						if !constraintIsNull {
+							// ExecResult intentionally exposes only typed getters. String
+							// conversion preserves the serialized constraint bytes and works
+							// for both the real result set and the test implementation.
+							constraint, err := result.GetString(ctx, row, 6)
+							if err != nil {
+								return err
+							}
+							constraintBytes = []byte(constraint)
+						}
+						hasForeignKey, err := cdc.TableHasForeignKeyConstraint(constraintBytes)
+						if err != nil {
+							return err
+						}
+						if hasForeignKey {
+							continue
+						}
+						hasUserPK, err := result.GetUint64(ctx, row, 7)
+						if err != nil {
+							return err
+						}
+						if hasUserPK == 0 {
+							return moerr.NewInternalErrorf(ctx, "CDC source scope %s contains table %s.%s without a primary key", pt.Source, dbName, tableName)
+						}
+
+					}
+				}
+				continue
+			}
+			if exclude != "" {
+				matched, err := regexp.MatchString(exclude, pt.Source.Database+"."+pt.Source.Table)
+				if err != nil {
+					return err
+				}
+				if matched {
+					continue
+				}
+			}
+			if err := checkCDCSourcePrimaryKey(ctx, bh, pt.Source.Database, pt.Source.Table); err != nil {
+				return err
+			}
+		}
+	}
 	var minPitrLen int64 = 2
 	if len(minLength) > 1 {
 		return moerr.NewInternalErrorf(ctx, "only one length parameter allowed")
@@ -269,6 +393,19 @@ var CDCCheckPitrGranularity = func(
 			pt.OriginString, minPitrLen)
 	}
 	return nil
+}
+
+// CDCCheckPitrGranularity is kept for callers that have no Exclude option.
+// CREATE CDC uses CDCCheckPitrGranularityWithExclude so admission sees the
+// same source set as the runtime scanner.
+var CDCCheckPitrGranularity = func(
+	ctx context.Context,
+	bh BackgroundExec,
+	accName string,
+	pts *cdc.PatternTuples,
+	minLength ...int64,
+) error {
+	return CDCCheckPitrGranularityWithExclude(ctx, bh, accName, pts, "", minLength...)
 }
 
 var (

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
@@ -42,22 +43,24 @@ type CDCUserInfo struct {
 }
 
 type CDCCreateTaskOptions struct {
-	TaskName     string
-	TaskId       string
-	UserInfo     *CDCUserInfo
-	Exclude      string
-	StartTs      string
-	EndTs        string
-	MaxSqlLength int64
-	PitrTables   string // json encoded pitr tables: cdc2.PatternTuples
-	SrcUri       string // json encoded source uri: cdc2.UriInfo
-	SrcUriInfo   cdc.UriInfo
-	SinkUri      string // json encoded sink uri: cdc2.UriInfo
-	SinkUriInfo  cdc.UriInfo
-	ExtraOpts    string // json encoded extra opts: map[string]any
-	SinkType     string
-	NoFull       bool
-	ConfigFile   string
+	TaskName string
+	TaskId   string
+	UserInfo *CDCUserInfo
+	Exclude  string
+	// ExcludePattern is the raw regexp. Exclude is escaped for persistence.
+	ExcludePattern string
+	StartTs        string
+	EndTs          string
+	MaxSqlLength   int64
+	PitrTables     string // json encoded pitr tables: cdc2.PatternTuples
+	SrcUri         string // json encoded source uri: cdc2.UriInfo
+	SrcUriInfo     cdc.UriInfo
+	SinkUri        string // json encoded sink uri: cdc2.UriInfo
+	SinkUriInfo    cdc.UriInfo
+	ExtraOpts      string // json encoded extra opts: map[string]any
+	SinkType       string
+	NoFull         bool
+	ConfigFile     string
 
 	// control options
 	UseConsole bool
@@ -65,6 +68,7 @@ type CDCCreateTaskOptions struct {
 
 func (opts *CDCCreateTaskOptions) Reset() {
 	opts.Exclude = ""
+	opts.ExcludePattern = ""
 	opts.StartTs = ""
 	opts.EndTs = ""
 	opts.MaxSqlLength = 0
@@ -101,6 +105,16 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		key := req.Option[i]
 		value := req.Option[i+1]
 		tmpOpts[key] = value
+	}
+	// Level is processed before Exclude in CDCRequestOptions. Preserve the raw
+	// regexp now so both initial and frequency validation select the same tables
+	// as the runtime scanner; the escaped form is only for persistence.
+	if exclude := tmpOpts[cdc.CDCRequestOptions_Exclude]; exclude != "" {
+		if _, err = regexp.Compile(exclude); err != nil {
+			return moerr.NewInternalErrorf(ctx, "invalid exclude: %s, err: %v", exclude, err)
+		}
+		opts.ExcludePattern = exclude
+		opts.Exclude = strings.ReplaceAll(exclude, "\\", "\\\\")
 	}
 
 	// extract source uri and check connection
@@ -177,11 +191,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 			}
 			level = value
 		case cdc.CDCRequestOptions_Exclude:
-			if _, err = regexp.Compile(value); err != nil {
-				err = moerr.NewInternalErrorf(ctx, "invalid exclude: %s, err: %v", value, err)
-				return
-			}
-			opts.Exclude = strings.ReplaceAll(value, "\\", "\\\\")
+			// Validated and prepared before Level above.
 		case cdc.CDCRequestOptions_StartTs:
 			if value != "" {
 				if startTs, err = CDCStrToTime(value, ses.timeZone); err != nil {
@@ -387,7 +397,11 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 		ctx,
 		ses,
 		func(ctx context.Context, ses *Session, bh BackgroundExec) error {
-			return CDCCheckPitrGranularity(ctx, bh, ses.GetTenantName(), patterTupples)
+			ctx = defines.AttachAccountId(ctx, ses.GetTenantInfo().GetTenantID())
+			if opts.ExcludePattern == "" {
+				return CDCCheckPitrGranularity(ctx, bh, ses.GetTenantName(), patterTupples)
+			}
+			return CDCCheckPitrGranularityWithExclude(ctx, bh, ses.GetTenantName(), patterTupples, opts.ExcludePattern)
 		},
 	); err != nil {
 		return
@@ -424,7 +438,11 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 		ctx,
 		ses,
 		func(ctx context.Context, ses *Session, bh BackgroundExec) error {
-			return CDCCheckPitrGranularity(ctx, bh, ses.GetTenantName(), patterTupples, normalized)
+			ctx = defines.AttachAccountId(ctx, ses.GetTenantInfo().GetTenantID())
+			if opts.ExcludePattern == "" {
+				return CDCCheckPitrGranularity(ctx, bh, ses.GetTenantName(), patterTupples, normalized)
+			}
+			return CDCCheckPitrGranularityWithExclude(ctx, bh, ses.GetTenantName(), patterTupples, opts.ExcludePattern, normalized)
 		},
 	); err != nil {
 		return

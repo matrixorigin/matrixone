@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -350,7 +351,16 @@ const (
 		" tbl.reldatabase, " +
 		" tbl.rel_createsql, " +
 		" tbl.account_id, " +
-		" tbl.`constraint` " +
+		" tbl.`constraint`, " +
+		// Keep unsupported tables visible to the scanner. The boolean lets both
+		// admission and an already-running task reject a missing user key instead
+		// of silently omitting the table from discovery.
+		" EXISTS (SELECT 1 FROM `mo_catalog`.`mo_columns` pk " +
+		"WHERE pk.account_id = tbl.account_id " +
+		"AND pk.db_name = tbl.reldatabase " +
+		"AND pk.relname = tbl.relname " +
+		"AND pk.constraint_type = 'p' " +
+		"AND pk.name <> '" + catalog.FakePrimaryKeyColName + "') AS has_user_pk " +
 		"FROM `mo_catalog`.`mo_tables` tbl " +
 		"WHERE " +
 		" tbl.account_id IN (%s) " +
@@ -1286,6 +1296,22 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 		catalog.SystemOrdinaryRel,
 		AddSingleQuotesJoin(catalog.SystemDatabases),
 	)
+}
+
+// CollectCDCSourceCandidateSQL returns the runtime scanner candidate set with
+// an explicit user-primary-key status. Do not filter no-PK tables here: CREATE
+// CDC must reject them and an active task must observe a later PK loss.
+func CollectCDCSourceCandidateSQL(accountID uint32, dbName, tableName string) string {
+	dbNames := "*"
+	if dbName != CDCPitrGranularity_All {
+		dbNames = AddSingleQuotesJoin([]string{dbName})
+	}
+	tableNames := "*"
+	if tableName != CDCPitrGranularity_All {
+		tableNames = AddSingleQuotesJoin([]string{tableName})
+	}
+	return CDCSQLBuilder.CollectTableInfoSQL(
+		strconv.FormatUint(uint64(accountID), 10), dbNames, tableNames)
 }
 
 func (b cdcSQLBuilder) GetTableIDSQL(

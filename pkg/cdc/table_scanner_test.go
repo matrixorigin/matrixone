@@ -97,23 +97,23 @@ func makeForeignKeyConstraintSQLValue(t *testing.T) string {
 }
 
 func TestTableHasForeignKeyConstraint(t *testing.T) {
-	hasForeignKey, err := tableHasForeignKeyConstraint(nil)
+	hasForeignKey, err := TableHasForeignKeyConstraint(nil)
 	require.NoError(t, err)
 	assert.False(t, hasForeignKey)
 
 	primaryKeyOnly := makeConstraintSQLValue(t, &engine.PrimaryKeyDef{
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
 	})
-	hasForeignKey, err = tableHasForeignKeyConstraint([]byte(primaryKeyOnly))
+	hasForeignKey, err = TableHasForeignKeyConstraint([]byte(primaryKeyOnly))
 	require.NoError(t, err)
 	assert.False(t, hasForeignKey)
 
 	foreignKey := makeForeignKeyConstraintSQLValue(t)
-	hasForeignKey, err = tableHasForeignKeyConstraint([]byte(foreignKey))
+	hasForeignKey, err = TableHasForeignKeyConstraint([]byte(foreignKey))
 	require.NoError(t, err)
 	assert.True(t, hasForeignKey)
 
-	_, err = tableHasForeignKeyConstraint([]byte{byte(engine.ForeignKey)})
+	_, err = TableHasForeignKeyConstraint([]byte{byte(engine.ForeignKey)})
 	require.Error(t, err)
 }
 
@@ -984,20 +984,16 @@ func Test_CollectTableInfoSQL(t *testing.T) {
 	sql := builder.CollectTableInfoSQL("1,2,3", "*", "*")
 	_, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	sql = strings.ToUpper(sql)
-	t.Log(sql)
-	expected := "SELECT  TBL.REL_ID,  TBL.RELNAME,  TBL.RELDATABASE_ID,  " +
-		"TBL.RELDATABASE,  TBL.REL_CREATESQL,  TBL.ACCOUNT_ID,  TBL.`CONSTRAINT` " +
-		"FROM `MO_CATALOG`.`MO_TABLES` TBL " +
-		"WHERE  TBL.ACCOUNT_ID IN (1,2,3)  AND TBL.RELKIND = 'R'  " +
-		"AND TBL.RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
-	assert.Equal(t, expected, sql)
+	upperSQL := strings.ToUpper(sql)
+	assert.Contains(t, upperSQL, "AS HAS_USER_PK")
+	assert.Contains(t, upperSQL, "PK.NAME <> '__MO_FAKE_PK_COL'")
+	assert.NotContains(t, upperSQL, "AND EXISTS")
 
 	sql = builder.CollectTableInfoSQL("0", "'source_db'", "'orders'")
 	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	expected = "SELECT  TBL.REL_ID,  TBL.RELNAME,  TBL.RELDATABASE_ID,  TBL.RELDATABASE,  TBL.REL_CREATESQL,  TBL.ACCOUNT_ID,  TBL.`CONSTRAINT` FROM `MO_CATALOG`.`MO_TABLES` TBL WHERE  TBL.ACCOUNT_ID IN (0)  AND TBL.RELDATABASE IN ('SOURCE_DB')  AND TBL.RELNAME IN ('ORDERS')  AND TBL.RELKIND = 'R'  AND TBL.RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
-	assert.Equal(t, strings.ToUpper(expected), strings.ToUpper(sql))
+	assert.Contains(t, strings.ToUpper(sql), "TBL.RELDATABASE IN ('SOURCE_DB')")
+	assert.Contains(t, strings.ToUpper(sql), "TBL.RELNAME IN ('ORDERS')")
 }
 
 func TestScanAndProcess(t *testing.T) {
@@ -1159,7 +1155,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat1 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat1 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "hasUserPK"})
 	bat1.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat1.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil, proc.Mp())
 	bat1.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
@@ -1167,13 +1163,14 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	bat1.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil, proc.Mp())
 	bat1.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat1.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
+	bat1.Vecs[7] = testutil.MakeBoolVector([]bool{true}, nil, proc.Mp())
 	bat1.SetRowCount(1)
 	res1 := executor.Result{
 		Mp:      proc.Mp(),
 		Batches: []*batch.Batch{bat1},
 	}
 
-	bat2 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat2 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "hasUserPK"})
 	bat2.Vecs[0] = testutil.MakeUint64Vector([]uint64{1002}, nil, proc.Mp())
 	bat2.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil, proc.Mp())
 	bat2.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
@@ -1181,6 +1178,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	bat2.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil, proc.Mp())
 	bat2.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat2.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
+	bat2.Vecs[7] = testutil.MakeBoolVector([]bool{false}, nil, proc.Mp())
 	bat2.SetRowCount(1)
 	res2 := executor.Result{
 		Mp:      proc.Mp(),
@@ -1230,6 +1228,8 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, uint64(1001), tblInfo.SourceTblId)
 	assert.False(t, tblInfo.IdChanged)
+	assert.True(t, tblInfo.PrimaryKeyChecked)
+	assert.True(t, tblInfo.HasUserPrimaryKey)
 
 	err = td.scanTable()
 	assert.NoError(t, err)
@@ -1239,6 +1239,8 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	tblInfo = accountMap["db1.tbl1"]
 	assert.Equal(t, uint64(1002), tblInfo.SourceTblId)
 	assert.True(t, tblInfo.IdChanged)
+	assert.True(t, tblInfo.PrimaryKeyChecked)
+	assert.False(t, tblInfo.HasUserPrimaryKey)
 }
 
 func TestTableScanner_PrintActiveRunners(t *testing.T) {

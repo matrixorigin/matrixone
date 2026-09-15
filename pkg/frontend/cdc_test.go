@@ -39,6 +39,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -59,6 +60,100 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
+	stub := gostub.Stub(&getPitrLengthAndUnit, func(context.Context, BackgroundExec, string, string, string, string) (int64, string, bool, error) {
+		return 24, "h", true, nil
+	})
+	defer stub.Reset()
+
+	query := func(db, table string) string {
+		return fmt.Sprintf("SELECT count(*) FROM %s.%s WHERE %s = %s AND %s = %s AND %s = 'p' AND %s <> %s",
+			quoteIdentifierForSQL(catalog.MO_CATALOG), quoteIdentifierForSQL(catalog.MO_COLUMNS),
+			quoteIdentifierForSQL(catalog.SystemColAttr_DBName), quoteSQLStringLiteral(db),
+			quoteIdentifierForSQL(catalog.SystemColAttr_RelName), quoteSQLStringLiteral(table),
+			quoteIdentifierForSQL(catalog.SystemColAttr_ConstraintType),
+			quoteIdentifierForSQL(catalog.SystemColAttr_Name), quoteSQLStringLiteral(catalog.FakePrimaryKeyColName))
+	}
+	for _, tc := range []struct {
+		name      string
+		db, table string
+		count     uint64
+		wantErr   bool
+	}{
+		{name: "single primary key", db: "db", table: "with_pk", count: 1},
+		{name: "composite primary key marker", db: "db", table: "composite", count: 1},
+		{name: "fake primary key rejected", db: "db", table: "without_pk", count: 0, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[query(tc.db, tc.table)] = &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{tc.count}}}
+			pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: tc.db, Table: tc.table}}}}
+			err := CDCCheckPitrGranularity(context.Background(), bh, "acc", pts)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+
+	t.Run("wildcard rejects discovered no primary key table", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{
+			{Source: cdc.PatternTable{Database: "db", Table: cdc.CDCPitrGranularity_All}},
+		}}
+		candidateSQL := cdc.CollectCDCSourceCandidateSQL(1, "db", cdc.CDCPitrGranularity_All)
+		bh.sql2result[candidateSQL] = &MysqlResultSet{Columns: make([]Column, 8), Data: [][]interface{}{{uint64(1), "without_pk", uint64(1), "db", "", uint32(1), []byte{}, false}}}
+		bh.sql2result[query("db", "without_pk")] = &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{uint64(0)}}}
+		ctx := defines.AttachAccountId(context.Background(), 1)
+		err := CDCCheckPitrGranularityWithExclude(ctx, bh, "acc", pts, "")
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "db.without_pk")
+		require.Len(t, bh.executedSQLs, 1)
+		require.Contains(t, bh.executedSQLs[0], "mo_columns")
+		require.NotContains(t, bh.executedSQLs[0], "count(*)")
+	})
+
+	t.Run("wildcard applies raw exclude to discovered table", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{
+			{Source: cdc.PatternTable{Database: "db", Table: cdc.CDCPitrGranularity_All}},
+		}}
+		candidateSQL := cdc.CollectCDCSourceCandidateSQL(1, "db", cdc.CDCPitrGranularity_All)
+		bh.sql2result[candidateSQL] = &MysqlResultSet{Columns: make([]Column, 8), Data: [][]interface{}{{uint64(1), "without_pk", uint64(1), "db", "", uint32(1), []byte{}, false}}}
+		ctx := defines.AttachAccountId(context.Background(), 1)
+		require.NoError(t, CDCCheckPitrGranularityWithExclude(ctx, bh, "acc", pts, `^db\.without_pk$`))
+		require.Len(t, bh.executedSQLs, 1)
+	})
+
+	t.Run("catalog query error is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		wantErr := errors.New("catalog unavailable")
+		bh.sql2err[query("db", "broken")] = wantErr
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "broken"}}}}
+		require.ErrorIs(t, CDCCheckPitrGranularity(context.Background(), bh, "acc", pts), wantErr)
+	})
+
+	t.Run("missing result is rejected", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "missing_result"}}}}
+		require.Error(t, CDCCheckPitrGranularity(context.Background(), bh, "acc", pts))
+	})
+
+	t.Run("malformed count is returned", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[query("db", "malformed")] = &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{"not-a-count"}}}
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "malformed"}}}}
+		require.Error(t, CDCCheckPitrGranularity(context.Background(), bh, "acc", pts))
+	})
+}
 
 // Global stub for GetTableDetector - initialized in init() to prevent panics across all tests
 var _globalTableDetectorStub *gostub.Stubs
@@ -460,6 +555,10 @@ func Test_handleCreateCdc(t *testing.T) {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
+	stubCheckPitrWithExclude := gostub.Stub(&CDCCheckPitrGranularityWithExclude, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, exclude string, minLength ...int64) error {
+		return nil
+	})
+	defer stubCheckPitrWithExclude.Reset()
 
 	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, user, password string, ip string, port int, timeout string) (*sql.DB, error) {
 		db, mock, dbErr := sqlmock.New()
@@ -509,6 +608,10 @@ func Test_doCreateCdc_invalidStartTs(t *testing.T) {
 		return nil
 	})
 	defer stubCheckPitr.Reset()
+	stubCheckPitrWithExclude := gostub.Stub(&CDCCheckPitrGranularityWithExclude, func(ctx context.Context, bh BackgroundExec, accName string, pts *cdc.PatternTuples, exclude string, minLength ...int64) error {
+		return nil
+	})
+	defer stubCheckPitrWithExclude.Reset()
 
 	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
 		db, mock, dbErr := sqlmock.New()
@@ -5162,6 +5265,57 @@ func TestCdcTask_handleNewTablesStopsReaderRemovedFromScan(t *testing.T) {
 	}, time.Second, time.Millisecond)
 	require.Equal(t, "live_sink_db", readerInfo.SinkDbName)
 	require.Equal(t, "live_sink_table", readerInfo.SinkTblName)
+}
+
+func TestCdcTask_handleNewTablesFailsWhenRunningTableLosesPrimaryKey(t *testing.T) {
+	stubGetTxnOp := gostub.Stub(&cdc.GetTxnOp, func(context.Context, engine.Engine, client.TxnClient, string) (client.TxnOperator, error) {
+		return nil, nil
+	})
+	defer stubGetTxnOp.Reset()
+	stubFinishTxnOp := gostub.Stub(&cdc.FinishTxnOp, func(context.Context, error, client.TxnOperator, engine.Engine) {})
+	defer stubFinishTxnOp.Reset()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	eng := mock_frontend.NewMockEngine(ctrl)
+	eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil)
+
+	closeCh := make(chan struct{})
+	reader := &mockChangeReader{
+		info:    &cdc.DbTableInfo{SourceDbName: "db1", SourceTblName: "orders", SourceTblId: 1001},
+		closeCh: closeCh,
+	}
+	executor := &captureCDCExecutor{}
+	cdcTask := &CDCTaskExecutor{
+		spec: &task.CreateCdcDetails{
+			TaskId: "task-pk-dropped", TaskName: "task-pk-dropped",
+			Accounts: []*task.Account{{Id: 0}},
+		},
+		tables: cdc.PatternTuples{Pts: []*cdc.PatternTuple{{
+			Source: cdc.PatternTable{Database: "db1", Table: cdc.CDCPitrGranularity_All},
+			Sink:   cdc.PatternTable{Database: cdc.CDCPitrGranularity_All, Table: cdc.CDCPitrGranularity_All},
+		}}},
+		cnEngine: eng, ie: executor, stateMachine: NewExecutorStateMachine(),
+		activeRoutine: cdc.NewCdcActiveRoutine(), holdCh: make(chan int, 1),
+		runningReaders: &sync.Map{},
+	}
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStart))
+	require.NoError(t, cdcTask.stateMachine.Transition(TransitionStartSuccess))
+	cdcTask.runningReaders.Store("db1.orders", reader)
+
+	err := cdcTask.handleNewTables(map[uint32]cdc.TblMap{0: {
+		"db1.orders": {
+			SourceDbName: "db1", SourceTblName: "orders", SourceTblId: 1001,
+			PrimaryKeyChecked: true, HasUserPrimaryKey: false,
+		},
+	}})
+	require.Error(t, err)
+	require.Equal(t, StateFailed, cdcTask.stateMachine.State())
+	select {
+	case <-closeCh:
+	case <-time.After(time.Second):
+		t.Fatal("expected reader to be closed after primary-key loss")
+	}
 }
 
 func TestCdcTask_handleNewTablesKeepsBlockedRemovedReaderOwnership(t *testing.T) {

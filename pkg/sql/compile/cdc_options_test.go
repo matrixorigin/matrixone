@@ -20,16 +20,132 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCheckPitrGranularityWildcardRejectsNoPrimaryKey(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		if strings.Contains(sql, catalog.MO_TABLES) {
+			result := executor.NewMemResult([]types.Type{
+				types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+				types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType(),
+			}, proc.Mp())
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1}))
+			require.NoError(t, executor.AppendStringRows(result, 1, []string{"without_pk"}))
+			require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{1}))
+			require.NoError(t, executor.AppendStringRows(result, 3, []string{"db"}))
+			require.NoError(t, executor.AppendStringRows(result, 4, []string{""}))
+			require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7}))
+			require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{{}}))
+			require.NoError(t, executor.AppendFixedRows(result, 7, []bool{false}))
+			return result.GetResult(), nil
+		}
+		result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []uint8{24}))
+		require.NoError(t, executor.AppendStringRows(result, 1, []string{"h"}))
+		return result.GetResult(), nil
+	}}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+		}
+	})
+
+	c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{
+		Database: "db", Table: cdc.CDCPitrGranularity_All,
+	}}}}
+	err := c.checkPitrGranularity(ctx, pts, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "db.without_pk")
+	require.Len(t, exec.sqls, 1)
+	require.Contains(t, exec.sqls[0], "mo_tables")
+	require.Contains(t, exec.sqls[0], "mo_columns")
+}
+
+func TestCheckPitrGranularityWildcardExcludeAndPrimaryKey(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	candidateResult := func(table string) executor.Result {
+		result := executor.NewMemResult([]types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType()}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1}))
+		require.NoError(t, executor.AppendStringRows(result, 1, []string{table}))
+		require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{1}))
+		require.NoError(t, executor.AppendStringRows(result, 3, []string{"db"}))
+		require.NoError(t, executor.AppendStringRows(result, 4, []string{""}))
+		require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7}))
+		require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{{}}))
+		require.NoError(t, executor.AppendFixedRows(result, 7, []bool{table == "with_pk"}))
+		return result.GetResult()
+	}
+	validPitrResult := func() executor.Result {
+		result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []uint8{24}))
+		require.NoError(t, executor.AppendStringRows(result, 1, []string{"h"}))
+		return result.GetResult()
+	}
+
+	for _, tc := range []struct{ name, table, exclude string }{
+		{name: "excluded no primary key", table: "without_pk", exclude: `^db\.without_pk$`},
+		{name: "visible primary key", table: "with_pk"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+				if strings.Contains(sql, catalog.MO_TABLES) {
+					return candidateResult(tc.table), nil
+				}
+				return validPitrResult(), nil
+			}}
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+			t.Cleanup(func() {
+				if hadPrevious {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+				}
+			})
+			c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+			defer c.Release()
+			pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: cdc.CDCPitrGranularity_All}}}}
+			require.NoError(t, c.checkPitrGranularity(ctx, pts, tc.exclude))
+			require.Len(t, exec.sqls, 2)
+			require.Contains(t, exec.sqls[0], "mo_columns")
+			require.NotContains(t, exec.sqls[1], "mo_columns")
+		})
+	}
+}
 
 type cdcRecordingSQLExecutor struct {
 	queries []string
