@@ -129,9 +129,7 @@ func (b *JSONTableArrayBuilder) AppendContext(ctx context.Context, value ByteJso
 	if stored.Type != TpCodeLiteral {
 		payloadLen = len(stored.Data)
 	}
-	if stored.Type == TpCodeLiteral {
-		storedDataLen = len(stored.Data)
-	} else if len(stored.Data) != storedDataLen {
+	if stored.Type != TpCodeLiteral && len(stored.Data) != storedDataLen {
 		return moerr.NewInternalErrorNoCtxf("JSON_TABLE storage size changed during admission: measured %d, encoded %d", storedDataLen, len(stored.Data))
 	}
 	const entrySize = valEntrySize
@@ -279,11 +277,6 @@ func jsonTableArrayPayloadBudget(maxBytes, entriesLen, payloadLen int) (int, err
 	return int(available), nil
 }
 
-func storageCompatibleDataSize(ctx context.Context, value ByteJson, limit, depth int) (size int, expands bool, err error) {
-	remaining := uint64(len(value.Data))
-	return storageCompatibleDataSizeWithBudget(ctx, value, limit, depth, &remaining)
-}
-
 func storageCompatibleDataSizeWithBudget(ctx context.Context, value ByteJson, limit, depth int, remaining *uint64) (size int, expands bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return 0, false, err
@@ -335,11 +328,6 @@ func storageCompatibleDataSizeWithBudget(ctx context.Context, value ByteJson, li
 	default:
 		return 0, false, moerr.NewInvalidInputNoCtxf("invalid JSON value type %#x", value.Type)
 	}
-}
-
-func storageCompatibleContainerDataSize(ctx context.Context, value ByteJson, limit, depth int) (int, bool, error) {
-	remaining := uint64(len(value.Data))
-	return storageCompatibleContainerDataSizeWithBudget(ctx, value, limit, depth, &remaining)
 }
 
 func storageCompatibleContainerDataSizeWithBudget(ctx context.Context, value ByteJson, limit, depth int, remaining *uint64) (int, bool, error) {
