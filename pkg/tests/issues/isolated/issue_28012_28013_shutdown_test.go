@@ -26,7 +26,6 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -35,25 +34,29 @@ import (
 
 // TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown keeps an
 // accepted transaction after WaitWalAndTail and before on1PCApply, then starts
-// TN shutdown inside a real embedded standalone cluster. TN shutdown must not
-// outrun the accepted commit; after the complete standalone shutdown and
-// restart, the multi-row statement is wholly visible or wholly absent, and the
-// restarted cluster accepts a new transaction.
+// a real embedded standalone shutdown. The shutdown must not outrun the
+// accepted commit; after restart the multi-row statement is wholly visible or
+// wholly absent, and the restarted cluster accepts a new transaction.
 func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) {
 	faultEnabledHere := fault.Enable()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	commitWaiters := "issue28012_28013_commit_waiters"
 	drainWaiters := "issue28012_28013_drain_waiters"
+	handlersDrainedWaiters := "issue28012_28013_handlers_drained_waiters"
 	commitRelease := "issue28012_28013_commit_release"
 	drainRelease := "issue28012_28013_drain_release"
+	handlersDrainedRelease := "issue28012_28013_handlers_drained_release"
 	faultPoints := []string{
 		objectio.FJ_CommitWait,
 		rpc.FJ_TxnServerDrainWithActiveHandler,
+		tnservice.FJ_TNStoreHandlersDrained,
 		objectio.FJ_CommitWaitTargetTenant,
 		commitWaiters,
 		drainWaiters,
+		handlersDrainedWaiters,
 		commitRelease,
 		drainRelease,
+		handlersDrainedRelease,
 	}
 	var (
 		cluster    embed.Cluster
@@ -87,7 +90,6 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	require.NoError(t, err)
 	sysDB := openIssue28012And28013DB(t, cluster, "dump:111")
 	dbs = append(dbs, sysDB)
-	tn := issue28012And28013TNService(t, cluster)
 	accountName := fmt.Sprintf("issue28012_%d", time.Now().UnixNano())
 	mustExecIssue28012And28013(t, ctx, sysDB, fmt.Sprintf(
 		"create account `%s` admin_name 'root' identified by '111'", accountName))
@@ -112,6 +114,9 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	require.NoError(t, fault.AddFaultPoint(ctx, rpc.FJ_TxnServerDrainWithActiveHandler, "1:1::", "WAIT", 0, "", false))
 	require.NoError(t, fault.AddFaultPoint(ctx, drainWaiters, ":::", "GETWAITERS", 0, rpc.FJ_TxnServerDrainWithActiveHandler, false))
 	require.NoError(t, fault.AddFaultPoint(ctx, drainRelease, ":::", "NOTIFYALL", 0, rpc.FJ_TxnServerDrainWithActiveHandler, false))
+	require.NoError(t, fault.AddFaultPoint(ctx, tnservice.FJ_TNStoreHandlersDrained, "1:1::", "WAIT", 0, "", false))
+	require.NoError(t, fault.AddFaultPoint(ctx, handlersDrainedWaiters, ":::", "GETWAITERS", 0, tnservice.FJ_TNStoreHandlersDrained, false))
+	require.NoError(t, fault.AddFaultPoint(ctx, handlersDrainedRelease, ":::", "NOTIFYALL", 0, tnservice.FJ_TNStoreHandlersDrained, false))
 
 	commitResult := make(chan error, 1)
 	goroutines.Add(1)
@@ -121,35 +126,54 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	}()
 	waitIssue28012And28013FaultWaiters(t, commitWaiters, 1, 30*time.Second)
 
-	tnShutdownResult := make(chan error, 1)
+	shutdownResult := make(chan error, 1)
 	goroutines.Add(1)
 	go func() {
 		defer goroutines.Done()
-		tnShutdownResult <- tn.Close()
+		shutdownResult <- cluster.Close()
 	}()
-	// This boundary is reached from the TN transaction server only after
-	// quiesce has started and while the accepted commit is still counted as an
-	// active handler. It deterministically proves the commit overlaps TN drain.
+	// This boundary is reached by the TN transaction server from the real
+	// cluster.Close path only after quiesce has started and while the accepted
+	// commit is still counted as an active handler.
 	waitIssue28012And28013FaultWaiters(t, drainWaiters, 1, 5*time.Second)
-
-	_, _, ok := fault.TriggerFault(commitRelease)
+	_, _, ok := fault.TriggerFault(drainRelease)
 	require.True(t, ok)
+
+	// Let Drain itself advance while the commit remains blocked. Neither the TN
+	// post-drain boundary nor the complete cluster shutdown may be observed yet.
+	var earlyShutdownErr error
+	require.Never(t, func() bool {
+		select {
+		case earlyShutdownErr = <-shutdownResult:
+			return true
+		default:
+		}
+		waiters, _, triggered := fault.TriggerFault(handlersDrainedWaiters)
+		return triggered && waiters > 0
+	}, 500*time.Millisecond, 10*time.Millisecond,
+		"standalone shutdown crossed TN drain while the accepted commit was blocked: %v", earlyShutdownErr)
+
+	_, _, ok = fault.TriggerFault(commitRelease)
+	require.True(t, ok)
+	// This is server-side completion evidence: drainHandlers returned only after
+	// the accepted handler left the transaction server's active set, while TN
+	// storage and WAL dependencies are still alive.
+	waitIssue28012And28013FaultWaiters(t, handlersDrainedWaiters, 1, 30*time.Second)
 	var commitErr error
 	select {
 	case commitErr = <-commitResult:
 	case <-time.After(30 * time.Second):
 		t.Fatal("accepted commit did not reach a terminal result after WAL barrier release")
 	}
-	_, _, ok = fault.TriggerFault(drainRelease)
+	_, _, ok = fault.TriggerFault(handlersDrainedRelease)
 	require.True(t, ok)
 	select {
-	case err := <-tnShutdownResult:
+	case err := <-shutdownResult:
 		require.NoError(t, err)
 	case <-time.After(30 * time.Second):
-		t.Fatal("TN shutdown did not finish after accepted commit completed")
+		t.Fatal("standalone shutdown did not finish after accepted commit completed")
 	}
 	require.NoError(t, db.Close())
-	require.NoError(t, cluster.Close())
 
 	for _, point := range faultPoints {
 		_, _ = fault.RemoveFaultPoint(context.Background(), point)
@@ -178,23 +202,6 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	var finalCount int
 	require.NoError(t, restartedDB.QueryRowContext(ctx, "select count(*) from "+dbName+".t").Scan(&finalCount))
 	require.Contains(t, []int{1, 4}, finalCount, "restarted standalone cluster must accept a new transaction")
-}
-
-func issue28012And28013TNService(t *testing.T, cluster embed.Cluster) tnservice.Service {
-	t.Helper()
-	var service tnservice.Service
-	cluster.ForeachServices(func(operator embed.ServiceOperator) bool {
-		if operator.ServiceType() != metadata.ServiceType_TN {
-			return true
-		}
-		raw := operator.RawService()
-		var ok bool
-		service, ok = raw.(tnservice.Service)
-		require.True(t, ok, "embedded TN operator returned %T", raw)
-		return false
-	})
-	require.NotNil(t, service, "embedded cluster has no TN service")
-	return service
 }
 
 func waitIssue28012And28013Goroutines(goroutines *sync.WaitGroup, timeout time.Duration) error {
