@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/udf"
 )
 
 // maxRoutinePlanDependencies bounds the amount of catalog state retained by
@@ -24,6 +25,9 @@ const maxRoutinePlanDependencies = 1024
 func (builder *QueryBuilder) assignRoutineCallsite(call *planpb.RoutineCall) error {
 	if builder == nil || call == nil {
 		return nil
+	}
+	if call.Language != udf.LanguageSQL && call.Language != udf.LanguagePython {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine call language %q is not canonical", call.Language)
 	}
 	if call.CallsiteId != "" {
 		if len(call.CallsiteId) > 256 || strings.ContainsAny(call.CallsiteId, "\r\n") {
@@ -43,6 +47,9 @@ func (builder *QueryBuilder) recordRoutinePlanDependency(call *planpb.RoutineCal
 	if builder == nil || builder.qry == nil || call == nil || call.FunctionRef == nil {
 		return nil
 	}
+	if call.Language != udf.LanguageSQL && call.Language != udf.LanguagePython {
+		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine call language %q is not canonical", call.Language)
+	}
 	ref := call.FunctionRef
 	dependency := &planpb.RoutinePlanDependency{
 		FunctionRef: &planpb.FunctionRef{
@@ -52,7 +59,7 @@ func (builder *QueryBuilder) recordRoutinePlanDependency(call *planpb.RoutineCal
 			AccountId:        ref.AccountId,
 			DatabaseId:       ref.DatabaseId,
 		},
-		Language:              strings.ToLower(call.Language),
+		Language:              call.Language,
 		ContractVersion:       call.ContractVersion,
 		DefinitionFingerprint: "",
 		Volatility:            call.Volatility,

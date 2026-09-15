@@ -207,13 +207,13 @@ func validateRestoredFunctionRevisionCatalog(
 		if err != nil {
 			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored function %d revision %d has an invalid definition schema", functionID, revision)
 		}
-		if strings.EqualFold(row[8], udf.LanguageSQL) {
+		if row[8] == udf.LanguageSQL {
 			if err := validateRestoredSQLFunctionRevision(functionID, revision, row, definitionSchema); err != nil {
 				return err
 			}
 			continue
 		}
-		if !strings.EqualFold(row[8], udf.LanguagePython) ||
+		if row[8] != udf.LanguagePython ||
 			definitionSchema != udf.PythonDefinitionSchemaVersion ||
 			row[10] != udf.PythonABIContract ||
 			row[11] != udf.PythonAdapterVersion ||
@@ -517,7 +517,7 @@ func publishRestoredPythonArtifacts(
 		if len(row) != 3 {
 			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored revision row %d has %d artifact columns", rowIndex, len(row))
 		}
-		if strings.EqualFold(row[0], udf.LanguagePython) {
+		if row[0] == udf.LanguagePython {
 			needStore = true
 			break
 		}
@@ -534,7 +534,7 @@ func publishRestoredPythonArtifacts(
 		return err
 	}
 	for rowIndex, row := range rows {
-		if !strings.EqualFold(row[0], udf.LanguagePython) {
+		if row[0] != udf.LanguagePython {
 			continue
 		}
 		body, decodeErr := function.DecodePythonRoutineBody(row[2])
