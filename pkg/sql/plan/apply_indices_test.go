@@ -9692,6 +9692,32 @@ func TestCheckSpatialIndexFilterPredicate(t *testing.T) {
 	require.Equal(t, int32(1), col.ColPos)
 }
 
+func TestFindSpatialIndexFilterSkipsGeodeticEnvelope(t *testing.T) {
+	idxDef := &planpb.IndexDef{
+		IndexName: "idx_g", IndexAlgo: catalog.MoIndexRTreeAlgo.ToString(),
+		Parts: []string{"g"},
+	}
+	filter := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{ObjName: "st_intersects"},
+		Args: []*planpb.Expr{makeSpatialColExpr(1), makeSpatialConstGeometryExpr()},
+	}}}
+
+	for _, oid := range []types.T{types.T_geometry, types.T_geometry32} {
+		t.Run(oid.String(), func(t *testing.T) {
+			tableDef := &planpb.TableDef{
+				Cols: []*planpb.ColDef{
+					{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}},
+					{Name: "g", Typ: planpb.Type{Id: int32(oid), Width: 4327}},
+				},
+				Name2ColIndex: map[string]int32{"id": 0, "g": 1},
+			}
+			node := &planpb.Node{TableDef: tableDef, FilterList: []*planpb.Expr{filter}}
+			require.Equal(t, int32(-1), findSpatialIndexFilter(idxDef, node),
+				"geodetic R-tree candidates are not sound across the antimeridian")
+		})
+	}
+}
+
 func TestSpatialIndexOnlyScanInheritsOrderHints(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
 	ctx := NewBindContext(builder, nil)

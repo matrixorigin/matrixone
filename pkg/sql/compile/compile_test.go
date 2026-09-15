@@ -2176,22 +2176,22 @@ func TestCompileShuffleGroupGatesWidenedDecimalSumByProtocolVersion(t *testing.T
 			}},
 		}}
 
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
 		require.True(t, hasWidenedDecimalSum(aggNode))
 		require.False(t, c.supportsRemoteWidenedDecimalSum())
 		require.False(t, c.canCompileShuffleGroup(aggNode),
 			"mixed-version clusters must finalize widened decimal SUM on the coordinator")
 
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
 		require.True(t, c.supportsRemoteWidenedDecimalSum())
 		require.True(t, c.canCompileShuffleGroup(aggNode))
 	}
 
 	// DECIMAL(16,2) SUM stays Decimal128 and therefore keeps the established
-	// final shuffle result type on both sides of a v69/v70 rolling upgrade.
+	// final shuffle result type on both sides of a v72/v73 rolling upgrade.
 	aggNode.AggList[0].GetF().Args[0].Typ.Width = 16
 	aggNode.AggList[0].GetF().Args[0].Typ.Id = int32(types.T_decimal64)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion69)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
 	require.False(t, hasWidenedDecimalSum(aggNode))
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
