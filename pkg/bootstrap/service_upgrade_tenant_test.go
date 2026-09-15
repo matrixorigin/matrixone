@@ -261,6 +261,8 @@ func TestShouldRunTenantUpgrade(t *testing.T) {
 	}{
 		{name: "older tenant on version transition", createVersion: "3.0.0", fromVersion: "3.0.0", toVersion: "3.0.1", want: true},
 		{name: "target tenant on version transition", createVersion: "3.0.1", fromVersion: "3.0.0", toVersion: "3.0.1"},
+		{name: "v4.0.6 tenant reaches new v4.0.7 repair identity", createVersion: "4.0.6", fromVersion: "4.0.6", toVersion: "4.0.7", want: true},
+		{name: "v4.0.7 tenant is not replayed by the repair identity", createVersion: "4.0.7", fromVersion: "4.0.6", toVersion: "4.0.7"},
 		{name: "target tenant on offset upgrade", createVersion: "4.0.6", fromVersion: "4.0.6", toVersion: "4.0.6", want: true},
 		{name: "newer tenant on offset upgrade", createVersion: "4.0.7", fromVersion: "4.0.6", toVersion: "4.0.6"},
 	} {

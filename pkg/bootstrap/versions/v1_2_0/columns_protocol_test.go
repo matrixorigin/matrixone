@@ -35,3 +35,18 @@ func TestHistoricalColumnsUpgradeProtocol(t *testing.T) {
 	}
 	require.Positive(t, count, "the historical COLUMNS entry must remain in the upgrade list")
 }
+
+func TestHistoricalViewsUpgradeUsesLegacyDefinition(t *testing.T) {
+	count := 0
+	for _, entry := range tenantUpgEntries {
+		if entry.Schema != sysview.InformationDBConst || entry.TableName != "VIEWS" {
+			continue
+		}
+		count++
+		require.Zero(t, entry.RequiredProtocolVersion)
+		require.Equal(t, sysview.InformationSchemaViewsLegacyDDL, entry.UpgSql)
+		require.NotContains(t, entry.UpgSql, "mo_view_definition(")
+		require.NotContains(t, entry.UpgSql, "mo_view_check_option(")
+	}
+	require.Positive(t, count, "the historical VIEWS entry must remain in the upgrade list")
+}
