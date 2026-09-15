@@ -189,3 +189,24 @@ func TestIPFunctionDestinationProtocolValidation(t *testing.T) {
 	require.NotEmpty(t, data)
 	require.Equal(t, client.calls, client.releases)
 }
+
+func TestV73ExpressionConstrainsPlacementUntilWorkerIsReady(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	wire := remoteIPProtocolPipelineWithType(function.TO_BASE64, 3, 65)
+	planExpr := wire.InstructionList[0].ProjectList[0]
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{planExpr}}}, Steps: []int32{0}}
+
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	client.version = defines.MORPCVersion72
+	require.NoError(t, c.constrainIPFunctionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType,
+		"a v73 expression must not be sent to a v72 worker")
+
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	client.version = defines.MORPCVersion73
+	require.NoError(t, c.constrainIPFunctionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType,
+		"all workers supporting v73 should retain distributed placement")
+}

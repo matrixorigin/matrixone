@@ -8395,7 +8395,7 @@ func InetNtoaDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			if param.IsNull(i) {
 				return "", true, nil
 			}
-			value := param.GetBytesAt(int(i))
+			value := param.GetBytesAtNoTypeCheck(int(i))
 			switch param.GetPrepareParamKindAt(int(i)) {
 			case vector.PrepareParamFloat:
 				floating, err := strconv.ParseFloat(string(value), 64)

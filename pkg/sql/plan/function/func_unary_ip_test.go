@@ -450,6 +450,46 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 			[]string{"255.255.255.255", "", "0.0.0.1", "0.0.0.0", ""},
 			[]bool{false, true, false, false, true})
 	})
+
+	t.Run("inet_ntoa prepared any domains", func(t *testing.T) {
+		input := vector.NewVec(types.T_text.ToType())
+		t.Cleanup(func() { input.Free(mp) })
+		values := []string{"1.5", "25.5", "true", "16909060", "2tail", "", "not-a-float"}
+		for row, value := range values {
+			require.NoError(t, vector.AppendBytes(input, []byte(value), row == 5, mp))
+		}
+		input.SetType(types.T_any.ToType())
+		input.SetPrepareParamKinds([]vector.PrepareParamKind{
+			vector.PrepareParamFloat,
+			vector.PrepareParamDecimal,
+			vector.PrepareParamBoolean,
+			vector.PrepareParamInteger,
+			vector.PrepareParamNone,
+			vector.PrepareParamNone,
+			vector.PrepareParamFloat,
+		})
+		resolved, err := GetFunctionByName(proc.Ctx, "inet_ntoa", []types.Type{types.T_any.ToType()})
+		require.NoError(t, err)
+		out, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), []*vector.Vector{input}, len(values))
+		require.NoError(t, err)
+		t.Cleanup(func() { out.Free(mp) })
+		assertStrings(t, out,
+			[]string{"0.0.0.2", "0.0.0.26", "0.0.0.1", "1.2.3.4", "0.0.0.2", "", ""},
+			[]bool{false, false, false, false, false, true, true})
+
+		masked := vector.NewVec(types.T_text.ToType())
+		t.Cleanup(func() { masked.Free(mp) })
+		require.NoError(t, vector.AppendBytes(masked, []byte("1.5"), false, mp))
+		require.NoError(t, vector.AppendBytes(masked, []byte("not-a-float"), false, mp))
+		masked.SetType(types.T_any.ToType())
+		masked.SetPrepareParamKinds([]vector.PrepareParamKind{vector.PrepareParamFloat, vector.PrepareParamFloat})
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), mp)
+		t.Cleanup(func() { result.Free() })
+		require.NoError(t, result.PreExtendAndReset(2))
+		require.NoError(t, InetNtoaDynamic([]*vector.Vector{masked}, result, proc, 2,
+			&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}))
+		assertStrings(t, result.GetResultVector(), []string{"0.0.0.2", ""}, []bool{false, true})
+	})
 }
 
 func TestIPFunctionsSelectionMasksInvalidRows(t *testing.T) {

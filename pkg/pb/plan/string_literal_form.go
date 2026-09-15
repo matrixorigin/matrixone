@@ -322,11 +322,11 @@ func isRemoteIPFunctionV73(expr *Expr) bool {
 	case remoteTOBase64FunctionID:
 		// The VARCHAR overload changed its result domain and the binary
 		// overloads are new identities. Both must stay on v73 workers.
-		return overloadID == 0 || overloadID >= 3
+		return overloadID == 0 || overloadID >= 3 && overloadID <= 5
 	case remoteCoalesceFunctionID:
 		return overloadID == 29 || overloadID == 30
 	case remoteIPInetNtoaFunctionID:
-		return overloadID >= 9
+		return overloadID >= 9 && overloadID <= 22
 	case remoteIPIsIPv4FunctionID,
 		remoteIPIsIPv6FunctionID,
 		remoteIPIsIPv4CompatFunctionID,
