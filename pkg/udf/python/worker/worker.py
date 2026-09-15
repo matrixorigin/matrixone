@@ -65,6 +65,11 @@ else:
 
 PROTOCOL_VERSION = 1
 MAX_CONTROL_BYTES = 1 << 20
+# Keep the Python wire boundary identical to protocol.FencingTuple's
+# component limit.  The control frame limit alone is not sufficient: a
+# single oversized identity would otherwise consume most of every ledger
+# entry and would be accepted by the worker after Go rejected it.
+MAX_FENCE_COMPONENT_BYTES = 256
 # Admission bounds cover active fences and retained terminal tombstones.  The
 # names deliberately describe the whole ledger so a future cleanup change
 # cannot mistake active work for reclaimable terminal state.
@@ -707,7 +712,9 @@ def _tuple_key(value: Dict[str, Any]) -> tuple:
         raise ValueError("PROTOCOL: incomplete fencing tuple")
     try:
         for key in string_fields:
-            value[key].encode("utf-8")
+            encoded = value[key].encode("utf-8")
+            if len(encoded) > MAX_FENCE_COMPONENT_BYTES:
+                raise ValueError("PROTOCOL: fencing tuple component is too large")
     except UnicodeEncodeError as exc:
         raise ValueError("PROTOCOL: fencing tuple contains invalid UTF-8") from exc
     account_id = value.get("account_id")
