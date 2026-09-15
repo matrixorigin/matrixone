@@ -51,6 +51,22 @@ func MockProcessInfoWithPro(
 func (proc *Process) BuildProcessInfo(
 	sql string,
 ) (pipeline.ProcessInfo, error) {
+	return proc.buildProcessInfo(sql, false)
+}
+
+// BuildProcessInfoWithStatementDigest captures max_digest_length only for a
+// remote scope that contains STATEMENT_DIGEST. Other remote scopes must not
+// fail because an unrelated resolver cannot provide this optional variable.
+func (proc *Process) BuildProcessInfoWithStatementDigest(
+	sql string,
+) (pipeline.ProcessInfo, error) {
+	return proc.buildProcessInfo(sql, true)
+}
+
+func (proc *Process) buildProcessInfo(
+	sql string,
+	captureStatementDigest bool,
+) (pipeline.ProcessInfo, error) {
 	procInfo := pipeline.ProcessInfo{}
 	{
 		procInfo.Id = proc.QueryId()
@@ -151,6 +167,19 @@ func (proc *Process) BuildProcessInfo(
 		if err != nil {
 			return procInfo, err
 		}
+		var sqlMode string
+		if captureStatementDigest {
+			// STATEMENT_DIGEST is placement-invariant: a coordinator resolver
+			// failure must not turn into a successful remote evaluation with a
+			// different SQL-mode snapshot. Ordinary remote scopes retain the
+			// historical best-effort fallback above.
+			sqlMode, err = ResolveSQLMode(proc)
+			if err != nil {
+				return procInfo, err
+			}
+		} else {
+			sqlMode = resolveSqlMode(proc)
+		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
 			User:                   proc.Base.SessionInfo.GetUser(),
@@ -165,13 +194,30 @@ func (proc *Process) BuildProcessInfo(
 			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
 			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
 			MatrixoneNativeMode:    proc.Base.SessionInfo.MatrixOneNativeMode,
-			SqlMode:                resolveSqlMode(proc),
+			SqlMode:                sqlMode,
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
 		}
-		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
+		maxDigestLength, maxDigestLengthSet, err := resolveMaxDigestLength(proc, captureStatementDigest)
 		if err != nil {
 			return procInfo, err
+		}
+		procInfo.SessionInfo.MaxDigestLength = maxDigestLength
+		procInfo.SessionInfo.MaxDigestLengthSet = maxDigestLengthSet
+		var nullifyZeroTemporal bool
+		if captureStatementDigest {
+			// The digest path already resolved (or restored) the SQL-mode
+			// snapshot above. Derive the temporal-cast flag from that same
+			// snapshot instead of consulting a receiving-CN resolver a second
+			// time. A false snapshot is meaningful too: it must not be
+			// replaced by the receiving CN's current mode.
+			nullifyZeroTemporal = proc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull ||
+				IsStrictNoZeroDateMode(sqlMode)
+		} else {
+			nullifyZeroTemporal, err = ResolveExplicitZeroTemporalCastReturnsNull(proc)
+			if err != nil {
+				return procInfo, err
+			}
 		}
 		procInfo.SessionInfo.ExplicitZeroTemporalCastReturnsNull = nullifyZeroTemporal
 	}
@@ -468,6 +514,8 @@ func ConvertToProcessSessionInfo(
 		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 		SqlMode:                             sei.SqlMode,
+		MaxDigestLength:                     sei.MaxDigestLength,
+		MaxDigestLengthSet:                  sei.MaxDigestLengthSet,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
 	}
@@ -485,45 +533,123 @@ func ConvertToProcessSessionInfo(
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
 	if err != nil {
-		return sessionInfo, nil
+		return sessionInfo, err
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
 }
 
-func resolveSqlMode(proc *Process) string {
-	if proc == nil {
-		return ""
+const (
+	defaultMaxDigestLength = int64(1024)
+	maxMaxDigestLength     = int64(1048576)
+)
+
+// ResolveMaxDigestLength applies the single validation contract used by both
+// the function evaluator and remote process encoding. An explicit snapshot is
+// authoritative whenever its presence bit is set, so a background resolver's
+// compiled default cannot overwrite it during a second CN forward (and an
+// invalid snapshot cannot be hidden by a valid resolver value). Resolver,
+// type, and range errors are returned instead of being converted to an unset
+// value.
+func ResolveMaxDigestLength(proc *Process) (int64, bool, error) {
+	return resolveMaxDigestLength(proc, true)
+}
+
+func resolveMaxDigestLength(proc *Process, resolve bool) (int64, bool, error) {
+	if proc == nil || proc.Base == nil {
+		return 0, false, nil
+	}
+	if proc.Base.SessionInfo.MaxDigestLengthSet {
+		return checkedMaxDigestLength(proc.Base.SessionInfo.MaxDigestLength)
+	}
+	if resolve {
+		if resolver := proc.GetResolveVariableFunc(); resolver != nil {
+			value, err := resolver("max_digest_length", true, true)
+			if err != nil {
+				return 0, false, err
+			}
+			if value == nil {
+				return 0, false, nil
+			}
+			resolved, err := normalizedMaxDigestLength(value)
+			if err != nil {
+				return 0, false, err
+			}
+			return resolved, true, nil
+		}
+	}
+	return 0, false, nil
+}
+
+func normalizedMaxDigestLength(value any) (int64, error) {
+	var resolved int64
+	switch typed := value.(type) {
+	case int64:
+		resolved = typed
+	case uint64:
+		if typed > uint64(maxMaxDigestLength) {
+			return 0, moerr.NewInternalErrorNoCtxf("max_digest_length is out of range: %d", typed)
+		}
+		resolved = int64(typed)
+	case int:
+		resolved = int64(typed)
+	default:
+		return 0, moerr.NewInternalErrorNoCtxf("unexpected max_digest_length type %T", value)
+	}
+	checked, _, err := checkedMaxDigestLength(resolved)
+	return checked, err
+}
+
+func checkedMaxDigestLength(value int64) (int64, bool, error) {
+	if value < 0 || value > maxMaxDigestLength {
+		return 0, false, moerr.NewInternalErrorNoCtxf("max_digest_length is out of range: %d", value)
+	}
+	return value, true, nil
+}
+
+// ResolveSQLMode returns the SQL-mode snapshot used by STATEMENT_DIGEST.
+// Resolver errors are returned so the digest-specific process codec can fail
+// before dispatch; callers that preserve the historical best-effort behavior
+// may use resolveSqlMode below.
+func ResolveSQLMode(proc *Process) (string, error) {
+	if proc == nil || proc.Base == nil {
+		return "", nil
+	}
+	// A remote/background process carries the coordinator's session snapshot.
+	// It must survive every encode/decode/forward hop unchanged; a resolver on
+	// the receiving CN describes that CN's defaults, not the remote statement.
+	if !proc.Base.IsFrontend && proc.Base.SessionInfo.SqlMode != "" {
+		return proc.Base.SessionInfo.SqlMode, nil
 	}
 	if f := proc.GetResolveVariableFunc(); f != nil {
-		if v, err := f("sql_mode", true, false); err == nil {
-			if s, ok := v.(string); ok {
-				if s == "" {
-					// Internal/background processes can retain a resolver from the
-					// executor that supplied the process. An empty value from that
-					// resolver is a compiled default, not an instruction to discard
-					// the session snapshot captured for remote execution. Keep an
-					// explicit empty sentinel as non-strict, but preserve any other
-					// snapshot so a second CN forward cannot silently lose strict
-					// assignment-cast behavior.
-					if proc.Base != nil && !proc.Base.IsFrontend {
-						if snapshot := proc.Base.SessionInfo.SqlMode; snapshot != "" {
-							return snapshot
-						}
-					}
-					return EmptySqlModeSentinel // explicitly non-strict
-				}
-				return s
+		v, err := f("sql_mode", true, false)
+		if err != nil {
+			return proc.Base.SessionInfo.SqlMode, err
+		}
+		if s, ok := v.(string); ok {
+			if s == "" {
+				return EmptySqlModeSentinel, nil // explicitly non-strict
 			}
+			return s, nil
+		}
+		if v != nil {
+			// A non-string resolver result is a malformed session variable,
+			// not an absent value.  Preserve the captured snapshot for callers
+			// that need the last known mode while making the strict digest path
+			// fail before it can be dispatched under a different mode.
+			return proc.Base.SessionInfo.SqlMode,
+				moerr.NewInternalErrorNoCtxf("unexpected sql_mode type %T", v)
 		}
 	}
 	// Resolver is nil on a remote CN (no session). Fall back to the sql_mode
 	// captured from the upstream CN so it survives a second forward
 	// (encode -> decode -> encode); otherwise the next hop defaults to strict.
-	if proc.Base == nil {
-		return ""
-	}
-	return proc.Base.SessionInfo.SqlMode
+	return proc.Base.SessionInfo.SqlMode, nil
+}
+
+func resolveSqlMode(proc *Process) string {
+	sqlMode, _ := ResolveSQLMode(proc)
+	return sqlMode
 }
 
 func resolveLockWaitTimeoutSeconds(proc *Process) int64 {
