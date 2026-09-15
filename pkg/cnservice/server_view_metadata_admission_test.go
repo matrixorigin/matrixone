@@ -380,6 +380,12 @@ func TestCNApplyViewMetadataAdmissionPublishesDurableFloorBeforeFence(t *testing
 	})
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, int64(0))
+	t.Cleanup(func() {
+		if value, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, value)
+		}
+	})
 	s := &service{
 		cfg:                             &Config{UUID: serviceID},
 		viewMetadataAdmissionGeneration: 9,
@@ -395,7 +401,70 @@ func TestCNApplyViewMetadataAdmissionPublishesDurableFloorBeforeFence(t *testing
 	floor, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolFloor)
 	require.True(t, ok)
 	require.Equal(t, int64(defines.MORPCVersion72), floor)
+	authoringFloor, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	require.True(t, ok)
+	require.Zero(t, authoringFloor,
+		"a preparing snapshot publishes the read floor but not the authoring floor")
 	require.Equal(t, uint64(2), s.viewMetadataEpochFence.Epoch())
+}
+
+func TestCNViewMetadataAdmissionSeparatesReadAndAuthoringFloors(t *testing.T) {
+	serviceID := "cn-admission-read-authoring-floor"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(serviceID, rt)
+	t.Cleanup(func() {
+		for _, name := range []string{
+			runtime.PersistedExpressionProtocolFloor,
+			runtime.PersistedExpressionProtocolAuthoringFloor,
+		} {
+			if value, ok := rt.GetGlobalVariables(name); ok {
+				rt.CompareAndDeleteGlobalVariables(name, value)
+			}
+		}
+	})
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, int64(0))
+	s := &service{
+		cfg:                             &Config{UUID: serviceID},
+		viewMetadataAdmissionGeneration: 9,
+		viewMetadataEpochFence:          compile.NewViewMetadataEpochFence(),
+		viewMetadataAdmissionUpdated:    make(chan struct{}, 1),
+	}
+
+	// Phase one installs the durable read/revalidation floor while the
+	// admission snapshot is still Preparing. Existing marked definitions can
+	// therefore be regenerated, but no new definition may be authored.
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+		Preparing:            true,
+		Epoch:                1,
+		Generation:           9,
+		RevalidationRequired: true,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion72),
+	}))
+	readFloor, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolFloor)
+	require.True(t, ok)
+	require.Equal(t, int64(defines.MORPCVersion72), readFloor)
+	authoringFloor, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	require.True(t, ok)
+	require.Zero(t, authoringFloor,
+		"a Preparing snapshot must not open the local authoring gate")
+
+	// Phase two is the first point at which this CN is enabled, admitted, and
+	// catalog-fenced. Only then may it author the new protocol's metadata.
+	require.NoError(t, s.applyViewMetadataAdmission(context.Background(), &logservicepb.ViewMetadataAdmission{
+		Enabled:              true,
+		Ready:                true,
+		Admitted:             true,
+		Epoch:                1,
+		Generation:           9,
+		RevalidationRequired: true,
+		CatalogFencedEpoch:   1,
+		PersistedExpressionRequiredProtocolVersion: uint64(defines.MORPCVersion72),
+	}))
+	authoringFloor, ok = rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	require.True(t, ok)
+	require.Equal(t, int64(defines.MORPCVersion72), authoringFloor)
 }
 
 func TestViewMetadataCatalogFenceRetryable(t *testing.T) {
