@@ -1501,15 +1501,16 @@ func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
 }
 
 type errInfo struct {
-	codes              []uint16
-	msgs               []string
-	levels             []string
-	maxCnt             int
-	totalWarnings      uint64
-	totalErrors        uint64
-	warningBytes       int
-	warningChargeBytes uint64
-	warningBudget      *process.WarningDiagnosticBudget
+	codes                  []uint16
+	msgs                   []string
+	levels                 []string
+	maxCnt                 int
+	totalWarnings          uint64
+	totalErrors            uint64
+	warningBytes           int
+	warningChargeBytes     uint64
+	warningBudget          *process.WarningDiagnosticBudget
+	warningRetentionSealed bool
 }
 
 func isRetainedWarningLevel(level string) bool {
@@ -1562,6 +1563,7 @@ func (e *errInfo) setWarningBudget(budget *process.WarningDiagnosticBudget) {
 	e.warningBudget = budget
 	e.warningBytes = 0
 	e.warningChargeBytes = 0
+	e.warningRetentionSealed = false
 	if len(e.codes) == 0 {
 		return
 	}
@@ -1579,8 +1581,12 @@ func (e *errInfo) setWarningBudget(budget *process.WarningDiagnosticBudget) {
 			message = oldMessages[i]
 		}
 		if isRetainedWarningLevel(level) {
+			if e.warningRetentionSealed {
+				continue
+			}
 			charge := process.WarningDiagnosticRecordBytes(message)
 			if !budget.Reserve(charge) {
+				e.warningRetentionSealed = true
 				continue
 			}
 			e.warningBytes += len(message)
@@ -1691,6 +1697,9 @@ func (e *errInfo) pushStored(code uint16, msg, level string) {
 		return
 	}
 	if !strings.EqualFold(level, "Error") {
+		if e.warningRetentionSealed {
+			return
+		}
 		budget := e.ensureWarningBudget()
 		candidateBytes := len(msg)
 		if candidateBytes > process.WarningDiagnosticMaxMessageBytes {
@@ -1698,11 +1707,13 @@ func (e *errInfo) pushStored(code uint16, msg, level string) {
 		}
 		available := budget.Limit() - budget.Used()
 		if uint64(candidateBytes)+process.WarningDiagnosticRecordOverhead > available {
+			e.warningRetentionSealed = true
 			return
 		}
 		msg = process.BoundWarningMessage(msg, process.WarningDiagnosticMaxMessageBytes)
 		charge := process.WarningDiagnosticRecordBytes(msg)
 		if !budget.Reserve(charge) {
+			e.warningRetentionSealed = true
 			return
 		}
 		e.warningChargeBytes += charge
@@ -1799,7 +1810,7 @@ func (e *errInfo) appendWarningBatchOwned(
 	}
 	for i := 0; i < len(msgs); i++ {
 		charge := process.WarningDiagnosticRecordBytes(msgs[i])
-		if i >= limit || e.maxCnt <= 0 || len(e.codes) >= e.maxCnt {
+		if i >= limit || e.maxCnt <= 0 || len(e.codes) >= e.maxCnt || e.warningRetentionSealed {
 			source.Release(charge)
 			continue
 		}
@@ -1831,6 +1842,7 @@ func (e *errInfo) reset() {
 	e.totalErrors = 0
 	e.warningBytes = 0
 	e.warningChargeBytes = 0
+	e.warningRetentionSealed = false
 }
 
 func (e *errInfo) snapshot() errInfo {

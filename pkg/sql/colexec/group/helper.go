@@ -1863,6 +1863,8 @@ func (ctr *container) makeAggListWithAllocation(
 			return nil, err
 		}
 		aggexec.ConfigureGroupConcatWarningRetention(aggList[i], limit)
+		aggexec.ConfigureGroupConcatWarningBudget(
+			aggList[i], ctr.groupConcatWarnings.WarningBudget())
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
 		// mtyp is the logical Group mode and survives resident-spill resets.
 		// Preserve it in each rebuilt GROUP_CONCAT executor even when the

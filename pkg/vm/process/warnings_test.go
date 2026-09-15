@@ -146,6 +146,28 @@ func TestWarningAccumulatorUsesConfiguredRetentionPrefix(t *testing.T) {
 	}
 }
 
+func TestWarningAccumulatorSealsByteBudgetAfterRejectedPrefixRecord(t *testing.T) {
+	budget := NewWarningDiagnosticBudget(
+		WarningDiagnosticRecordOverhead + uint64(len("later")))
+	var accumulator WarningAccumulator
+	accumulator.SetWarningRetentionLimit(2)
+	accumulator.SetWarningBudget(budget)
+
+	// The first diagnostic is too large for the remaining byte budget, while
+	// the later short message would fit. Detail retention must remain the
+	// production-order prefix rather than admitting the later record.
+	accumulator.Add(1000, "first diagnostic is too long")
+	accumulator.Add(1001, "later")
+
+	require.Equal(t, uint64(2), accumulator.Total)
+	require.Empty(t, accumulator.Codes)
+	require.Empty(t, accumulator.Messages)
+	require.False(t, accumulator.NeedsDiagnostic())
+	require.Zero(t, budget.Used())
+
+	accumulator.Reset()
+}
+
 func TestAppendWarningBatchUsesCurrentAttemptSink(t *testing.T) {
 	session := new(warningTestSession)
 	proc := &Process{Base: &BaseProcess{}, Session: session}

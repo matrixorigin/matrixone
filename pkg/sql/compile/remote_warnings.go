@@ -130,6 +130,7 @@ type remoteWarningCollector struct {
 	warningBytes                   int
 	warningChargeBytes             uint64
 	warningBudget                  *process.WarningDiagnosticBudget
+	warningRetentionSealed         bool
 	maxRetained                    int
 	maxRetainedSet                 bool
 	groupConcatCut                 bool
@@ -303,7 +304,7 @@ func (s *remoteWarningCollector) appendWarningBatchLocked(
 	sameBudget := source != nil && source == s.warningBudget
 	for i := 0; i < len(messages); i++ {
 		charge := process.WarningDiagnosticRecordBytes(messages[i])
-		if i >= batchLimit || len(s.warnings) >= limit {
+		if i >= batchLimit || len(s.warnings) >= limit || s.warningRetentionSealed {
 			if sameBudget {
 				source.Release(charge)
 			}
@@ -317,11 +318,13 @@ func (s *remoteWarningCollector) appendWarningBatchLocked(
 			}
 			available := s.warningBudget.Limit() - s.warningBudget.Used()
 			if uint64(candidateBytes)+process.WarningDiagnosticRecordOverhead > available {
+				s.warningRetentionSealed = true
 				continue
 			}
 			message = process.BoundWarningMessage(message, process.WarningDiagnosticMaxMessageBytes)
 			charge = process.WarningDiagnosticRecordBytes(message)
 			if !s.warningBudget.Reserve(charge) {
+				s.warningRetentionSealed = true
 				continue
 			}
 		}

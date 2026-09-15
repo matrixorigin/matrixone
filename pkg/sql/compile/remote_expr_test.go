@@ -197,6 +197,29 @@ func TestRemoteWarningCollectorConfiguredRetentionPrefixAndZero(t *testing.T) {
 	}
 }
 
+func TestRemoteWarningCollectorRespectsProcessNarrowedBudget(t *testing.T) {
+	proc := &process.Process{Base: &process.BaseProcess{
+		Lim: process.Limitation{Size: 1024},
+	}}
+	collector := &remoteWarningCollector{
+		maxRetained:    int(^uint16(0)),
+		maxRetainedSet: true,
+		warningBudget:  process.WarningDiagnosticBudgetForProcess(proc),
+	}
+	proc.Session = collector
+
+	longMessage := strings.Repeat("x", 2000)
+	collector.AppendWarningDiagnostic(1000, longMessage)
+	collector.AppendWarningDiagnostic(1001, "later")
+
+	require.Equal(t, uint64(1024), collector.warningBudget.Limit())
+	require.Equal(t, uint64(2), collector.warningCount)
+	require.Empty(t, collector.warnings)
+	require.LessOrEqual(t, collector.warningChargeBytes, uint64(1024))
+	collector.closeWarnings(false)
+	require.Zero(t, collector.warningBudget.Used())
+}
+
 func TestRemoteNumericCastWarningCountIsIndependentOfBatching(t *testing.T) {
 	buildCast := func(proc *process.Process) *plan.Expr {
 		proc.Session = &remoteWarningSession{}
