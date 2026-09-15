@@ -124,19 +124,39 @@ func TestMinMaxJSONMergeAndExtraAdmission(t *testing.T) {
 			leftInput.Free(mp)
 			rightInput.Free(mp)
 
-			extra := minMaxJSONBytes(t, int64(1))
-			extraExec := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
 			for _, invalid := range [][]byte{nil, {}, {0xff}, {byte(bytejson.TpCodeArray), 1}} {
+				extraExec := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
 				require.Error(t, extraExec.SetExtraInformation(invalid, 0))
+				extraExec.Free()
 			}
-			require.NoError(t, extraExec.SetExtraInformation(extra, 0))
-			extra[0] = byte(bytejson.TpCodeInt64)
-			require.NoError(t, extraExec.GroupGrow(1))
-			results, err := extraExec.Flush()
-			require.NoError(t, err)
-			require.Equal(t, minMaxJSONBytes(t, int64(1)), results[0].GetBytesAt(0))
-			results[0].Free(mp)
-			extraExec.Free()
+			for _, tc := range []struct {
+				name   string
+				mutate func([]byte)
+			}{
+				{name: "valid different payload", mutate: func(raw []byte) {
+					copy(raw, minMaxJSONBytes(t, int64(256)))
+				}},
+				{name: "invalid payload", mutate: func(raw []byte) {
+					raw[0] = 0xff
+				}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					extra := minMaxJSONBytes(t, int64(1))
+					before := bytes.Clone(extra)
+					extraExec := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
+					require.NoError(t, extraExec.SetExtraInformation(extra, 0))
+					tc.mutate(extra)
+					require.NotEqual(t, before, extra,
+						"the caller mutation must change the submitted payload")
+					require.NoError(t, extraExec.GroupGrow(1))
+					results, err := extraExec.Flush()
+					require.NoError(t, err)
+					require.Equal(t, minMaxJSONBytes(t, int64(1)), results[0].GetBytesAt(0),
+						"the executor must retain its own validated copy")
+					results[0].Free(mp)
+					extraExec.Free()
+				})
+			}
 			require.Zero(t, mp.CurrNB())
 		})
 	}
@@ -148,36 +168,50 @@ func TestMinMaxJSONStableAndSpillRoundTrip(t *testing.T) {
 			mp := mpool.MustNewZero()
 			typ := types.T_json.ToType()
 			input := vector.NewVec(typ)
-			values := []any{int64(256), int64(1), false, nil}
+			initial := map[bool]any{true: int64(256), false: int64(1)}[aggID == AggIdOfMin]
+			values := []any{initial, false, nil}
 			for _, value := range values {
 				require.NoError(t, vector.AppendBytes(input, minMaxJSONBytes(t, value), false, mp))
 			}
+			// Keep a JSON null and a SQL NULL in the restored state. The latter
+			// must remain absent from the typed JSON comparison.
+			require.NoError(t, vector.AppendBytes(input, nil, true, mp))
 			source := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
 			require.NoError(t, source.GroupGrow(2))
-			require.NoError(t, source.BatchFill(0, []uint64{1, 1, 2, 2}, []*vector.Vector{input}))
+			require.NoError(t, source.BatchFill(0, []uint64{1, 2, 2, 2}, []*vector.Vector{input}))
 
 			var stable bytes.Buffer
 			require.NoError(t, source.SaveIntermediateResult(2, [][]uint8{{1, 1}}, &stable))
 			restored := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
 			require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(stable.Bytes()), mp))
+			stableFollowup := vector.NewVec(typ)
+			followup := map[bool]any{true: int64(1), false: int64(256)}[aggID == AggIdOfMin]
+			require.NoError(t, vector.AppendBytes(stableFollowup, minMaxJSONBytes(t, followup), false, mp))
+			require.NoError(t, restored.BatchFill(0, []uint64{1}, []*vector.Vector{stableFollowup}))
 			stableResults, err := restored.Flush()
 			require.NoError(t, err)
 			require.Len(t, stableResults, 1)
-			require.Equal(t, minMaxJSONBytes(t, map[bool]any{true: int64(1), false: int64(256)}[aggID == AggIdOfMin]), stableResults[0].GetBytesAt(0))
+			require.Equal(t, minMaxJSONBytes(t, followup), stableResults[0].GetBytesAt(0))
 			require.Equal(t, minMaxJSONBytes(t, map[bool]any{true: nil, false: false}[aggID == AggIdOfMin]), stableResults[0].GetBytesAt(1))
 			stableResults[0].Free(mp)
 			restored.Free()
+			stableFollowup.Free(mp)
 
 			var spill bytes.Buffer
 			require.NoError(t, source.(SpillStateCodec).SaveSpillIntermediateRows(0, []int32{0, 1}, &spill))
 			spillTarget := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
 			require.NoError(t, spillTarget.(SpillStateCodec).UnmarshalSpillFromReader(bytes.NewReader(spill.Bytes()), mp))
+			spillFollowup := vector.NewVec(typ)
+			require.NoError(t, vector.AppendBytes(spillFollowup, minMaxJSONBytes(t, followup), false, mp))
+			require.NoError(t, spillTarget.BatchFill(0, []uint64{1}, []*vector.Vector{spillFollowup}))
 			spillResults, err := spillTarget.Flush()
 			require.NoError(t, err)
 			require.Len(t, spillResults, 1)
-			require.Equal(t, minMaxJSONBytes(t, map[bool]any{true: int64(1), false: int64(256)}[aggID == AggIdOfMin]), spillResults[0].GetBytesAt(0))
+			require.Equal(t, minMaxJSONBytes(t, followup), spillResults[0].GetBytesAt(0))
+			require.Equal(t, minMaxJSONBytes(t, map[bool]any{true: nil, false: false}[aggID == AggIdOfMin]), spillResults[0].GetBytesAt(1))
 			spillResults[0].Free(mp)
 			spillTarget.Free()
+			spillFollowup.Free(mp)
 
 			source.Free()
 			input.Free(mp)
@@ -197,6 +231,94 @@ func TestMinMaxJSONExtraUsesAllocationAccount(t *testing.T) {
 	require.NoError(t, exec.ClearAllocationAccount(allocation))
 	finishTestAggregateAllocation(t, registry, account)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestMinMaxJSONExtraFailureAtomicityAndGenerationCleanup(t *testing.T) {
+	newAllocation := func(t *testing.T, failAt int) (*mpool.AllocationAccountRegistry, *mpool.AllocationAccount, *AllocationAccount, *rejectNthAggregateAllocation) {
+		t.Helper()
+		registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+		require.NoError(t, err)
+		controller := &rejectNthAggregateAllocation{failAt: failAt}
+		account, err := registry.OpenWithController(1<<20, controller)
+		require.NoError(t, err)
+		allocation, err := NewAllocationAccount(account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3, VectorGrouping: 4,
+			ArgumentCount: 5, ArgumentArena: 6,
+		})
+		require.NoError(t, err)
+		return registry, account, allocation, controller
+	}
+
+	// Replacing an already accounted extra allocates the new payload first. A
+	// rejected replacement must leave the old payload and account usage intact.
+	{
+		mp := mpool.MustNewZero()
+		registry, account, allocation, controller := newAllocation(t, 2)
+		exec, err := MakeGroupAgg(mp, AggIdOfMin, false, nil, nil, types.T_json.ToType())
+		require.NoError(t, err)
+		owner := exec.(AllocationAccountOwner)
+		oldExtra := minMaxJSONBytes(t, int64(1))
+		require.NoError(t, exec.SetExtraInformation(oldExtra, 0))
+		require.NoError(t, owner.SetAllocationAccount(allocation))
+		usedBefore := account.Snapshot().Used
+		err = exec.SetExtraInformation(minMaxJSONBytes(t, int64(256)), 0)
+		require.Error(t, err)
+		require.True(t, mpool.IsRetryableAllocationCapacity(err))
+		require.Equal(t, usedBefore, account.Snapshot().Used)
+		require.Equal(t, oldExtra, exec.(*minMaxExecBytes).extra)
+		require.True(t, exec.(*minMaxExecBytes).extraAccounted)
+		require.True(t, controller.rejected)
+		require.NoError(t, exec.GroupGrow(1))
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Equal(t, oldExtra, results[0].GetBytesAt(0))
+		results[0].Free(mp)
+		exec.Free()
+		exec.Free()
+		require.NoError(t, owner.ClearAllocationAccount(allocation))
+		require.NoError(t, owner.ClearAllocationAccount(allocation))
+		require.Zero(t, account.Snapshot().Used)
+		finishTestAggregateAllocation(t, registry, account)
+		require.Zero(t, mp.CurrNB())
+	}
+
+	// A late attach can fail after the base owner pointer is installed. The
+	// failed attach rolls that pointer back so a different generation can retry.
+	{
+		mp := mpool.MustNewZero()
+		badRegistry, badAccount, badAllocation, badController := newAllocation(t, 1)
+		goodRegistry, goodAccount, goodAllocation := newTestAggregateAllocation(t)
+		otherRegistry, otherAccount, otherAllocation := newTestAggregateAllocation(t)
+		exec, err := MakeGroupAgg(mp, AggIdOfMin, false, nil, nil, types.T_json.ToType())
+		require.NoError(t, err)
+		owner := exec.(AllocationAccountOwner)
+		oldExtra := minMaxJSONBytes(t, int64(1))
+		require.NoError(t, exec.SetExtraInformation(oldExtra, 0))
+		err = owner.SetAllocationAccount(badAllocation)
+		require.Error(t, err)
+		require.True(t, mpool.IsRetryableAllocationCapacity(err))
+		require.True(t, badController.rejected)
+		require.Nil(t, exec.(*minMaxExecBytes).allocation)
+		require.False(t, exec.(*minMaxExecBytes).extraAccounted)
+		require.Zero(t, badAccount.Snapshot().Used)
+		require.NoError(t, owner.SetAllocationAccount(goodAllocation))
+		require.ErrorIs(t, owner.SetAllocationAccount(otherAllocation), mpool.ErrAllocationAccountMismatch)
+		require.ErrorIs(t, owner.ClearAllocationAccount(otherAllocation), mpool.ErrAllocationAccountMismatch)
+		require.NoError(t, exec.GroupGrow(1))
+		require.ErrorIs(t, owner.ClearAllocationAccount(goodAllocation), mpool.ErrAllocationAccountInvariant)
+		results, err := exec.Flush()
+		require.NoError(t, err)
+		require.Equal(t, oldExtra, results[0].GetBytesAt(0))
+		results[0].Free(mp)
+		exec.Free()
+		exec.Free()
+		require.NoError(t, owner.ClearAllocationAccount(goodAllocation))
+		require.NoError(t, owner.ClearAllocationAccount(goodAllocation))
+		finishTestAggregateAllocation(t, badRegistry, badAccount)
+		finishTestAggregateAllocation(t, goodRegistry, goodAccount)
+		finishTestAggregateAllocation(t, otherRegistry, otherAccount)
+		require.Zero(t, mp.CurrNB())
+	}
 }
 
 func TestMinMaxJSONFixtureOrder(t *testing.T) {

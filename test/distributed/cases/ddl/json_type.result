@@ -9,6 +9,8 @@ drop table if exists json_table_5;
 drop table if exists json_table_5a;
 drop table if exists json_view_1;
 drop table if exists json_table_6;
+drop table if exists json_minmax_issue28869;
+drop view if exists json_minmax_issue28869_view;
 create table json_table_1(j1 json);
 insert into json_table_1 values('{"key10": "value1", "key2": "value2"}'),('{"key1": "@#$_%^&*()!@", "key123456": 223}'),('{"芝士面包": "12abc", "key_56": 78.90}'),('{"": "", "12_key": "中文mo"}'),('{"a 1": "b 1", "13key4": "中文mo"}'),('{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}'),('{"d1": [true,false]}'),('{}');
 insert into json_table_1 values('{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee":"1234567890000000000000000000000000000000000000000000000","uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu":["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}');
@@ -138,6 +140,35 @@ max(j1)
 select min(j1) from json_table_1 ;
 min(j1)
 {}
+create table json_minmax_issue28869(id int, grp int, j json);
+insert into json_minmax_issue28869 values (1, 1, 'null'), (2, 1, 'false'), (3, 1, 'true'), (4, 1, '1'), (5, 1, '"a"'), (6, 1, null), (7, 2, '[1]'), (8, 2, '[1, 2]'), (9, 2, '{"a": 1}'), (10, 2, null), (11, 3, null);
+select json_type(min(j)) = 'NULL' as scalar_min_json_null, json_type(max(j)) = 'BOOLEAN' as scalar_max_boolean, min(j) = cast('null' as json) as scalar_min_value, max(j) = cast('true' as json) as scalar_max_value from json_minmax_issue28869 where grp = 1;
+scalar_min_json_null    scalar_max_boolean    scalar_min_value    scalar_max_value
+1    1    1    1
+select grp, json_type(min(j)) as group_min_type, json_type(max(j)) as group_max_type, min(j) = cast('{"a": 1}' as json) as group_min_value, max(j) = cast('[1, 2]' as json) as group_max_value from json_minmax_issue28869 where grp = 2 group by grp;
+grp    group_min_type    group_max_type    group_min_value    group_max_value
+2    OBJECT    ARRAY    1    1
+select min(j) is null as all_sql_null_min, max(j) is null as all_sql_null_max from json_minmax_issue28869 where grp = 3;
+all_sql_null_min    all_sql_null_max
+1    1
+select id, json_type(min(j) over (order by id rows unbounded preceding)) as window_min_type, json_type(max(j) over (order by id rows unbounded preceding)) as window_max_type, min(j) over (order by id rows unbounded preceding) = cast('null' as json) as window_min_json_null, max(j) over (order by id rows unbounded preceding) = cast('true' as json) as window_max_true from json_minmax_issue28869 where grp = 1 order by id;
+id    window_min_type    window_max_type    window_min_json_null    window_max_true
+1    NULL    NULL    1    0
+2    NULL    BOOLEAN    1    0
+3    NULL    BOOLEAN    1    1
+4    NULL    BOOLEAN    1    1
+5    NULL    BOOLEAN    1    1
+6    NULL    BOOLEAN    1    1
+create view json_minmax_issue28869_view as select grp, min(j) as mn, max(j) as mx from json_minmax_issue28869 group by grp;
+select grp, json_type(mn) as view_min_type, json_type(mx) as view_max_type, mn is null as view_min_sql_null, mx is null as view_max_sql_null from json_minmax_issue28869_view order by grp;
+grp    view_min_type    view_max_type    view_min_sql_null    view_max_sql_null
+1    NULL    BOOLEAN    0    0
+2    OBJECT    ARRAY    0    0
+3    null    null    1    1
+create table json_minmax_issue28869_ctas as select min(j) as mn, max(j) as mx from json_minmax_issue28869 where grp = 1;
+select json_type(mn) = 'NULL' as ctas_min_json_null, json_type(mx) = 'BOOLEAN' as ctas_max_boolean, mn = cast('null' as json) as ctas_min_value, mx = cast('true' as json) as ctas_max_value from json_minmax_issue28869_ctas;
+ctas_min_json_null    ctas_max_boolean    ctas_min_value    ctas_max_value
+1    1    1    1
 create table json_table_3b(d1 int,j1 json);
 insert into json_table_3b values(34,'{"key10": "value1", "key2": "value2"}'),(50,'{"key1": "@#$_%^&*()!@", "123456": "中文mo"}'),(1,'{"芝士面包": "12abc", "123456": "中文mo"}'),(45,'{"": "", "123456": "中文mo"}'),(22,'{"a 1": "b 1", "123456": "中文mo"}'),(88,'{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}'),(4,'{"key10": "value1", "key2": "value2"}'),(501,'{"key1": "@#$_%^&*()!@", "123456": "中文mo"}'),(1111,'{"芝士面包": "12abc", "123456": "中文mo"}'),(415,'{"": "", "123456": "中文mo"}');
 select max(d1),j1 from json_table_3b group by j1 order by j1;
