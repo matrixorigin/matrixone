@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -301,6 +302,24 @@ func litAsFloat(lit *plan.Literal) (float64, bool) {
 	return 0, false
 }
 
+// selfCompletingJSONProbeSupported reports whether the cluster is upgraded enough to run the
+// self-completing fulltext2 json index probe (see addJSONFulltextProbes for the mixed-version
+// hazard the gate closes). MOProtocolVersion is the service-local rollout gate, raised only once
+// every CN understands the probe_tail TableConfig contract and lowered before rollback.
+func (builder *QueryBuilder) selfCompletingJSONProbeSupported() bool {
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion73
+}
+
 // addJSONFulltextProbes appends an index-probe conjunct to scanNode's filter
 // list for every json_extract comparison a json fulltext2 index can serve.
 //
@@ -313,6 +332,17 @@ func litAsFloat(lit *plan.Literal) (float64, bool) {
 // Only TOP-LEVEL conjuncts are considered. A predicate under OR or NOT need not
 // hold for a returned row, so a probe derived from it would not be implied.
 func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
+	// Mixed-version fence. The json probe emits a fulltext2_search TVF whose TableConfig carries
+	// probe_tail/source/bar/predicate for self-completion. That TVF can be serialized into a remote
+	// scope (broadcast-join build side) and executed on any selected worker; a CN that predates this
+	// contract decodes the config into an older TableConfig, silently drops those fields, and runs
+	// only a stale bulk probe -- which then loses rows the tail would have supplied at the mandatory
+	// join. MOProtocolVersion is the service-local rollout gate (raised only once every CN
+	// understands the contract), so decline the probe until MORPCVersion73 and let the query run as
+	// a plain Table Scan on the retained json_extract predicate (correct, just unaccelerated).
+	if !builder.selfCompletingJSONProbeSupported() {
+		return
+	}
 	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
 		return
 	}

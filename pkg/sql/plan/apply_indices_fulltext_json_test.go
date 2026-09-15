@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -825,4 +826,27 @@ func TestDecideJSONProbeMatrix(t *testing.T) {
 	sync.IndexAlgo = "btree"
 	kind, _ = b.decideJSONProbe(scan, sync)
 	require.Equal(t, jsonProbeCovered, kind)
+}
+
+// The self-completing json probe emits a fulltext2_search TVF that can execute on a remote worker;
+// a CN predating the probe_tail contract mishandles it and loses rows. addJSONFulltextProbes must
+// decline the probe (plain Table Scan) until MOProtocolVersion reaches the gate (#28917 review).
+func TestSelfCompletingJSONProbeGate(t *testing.T) {
+	mockCtx := NewMockCompilerContext(false)
+	b := NewQueryBuilder(plan.Query_SELECT, mockCtx, false, true)
+	rt := moruntime.ServiceRuntime(b.compCtx.GetProcess().GetService())
+	require.NotNil(t, rt)
+
+	orig, had := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if had {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, orig)
+		}
+	})
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion72)
+	require.False(t, b.selfCompletingJSONProbeSupported(), "declined below the gate")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+	require.True(t, b.selfCompletingJSONProbeSupported(), "supported at the gate")
 }
