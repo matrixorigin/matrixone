@@ -365,8 +365,8 @@ func (exec *orderedPercentileExec[T, R]) flushAccounted() (
 				return nil, err
 			}
 			index := 0
-			err = state.iter(row, func(key []byte) error {
-				payload := aggPayloadFromKey(&exec.accounted.aggInfo, key)
+			err = state.iterWithValue(row, func(key, stored []byte) error {
+				payload := aggPayloadFromKeyValue(&exec.accounted.aggInfo, key, stored)
 				if len(payload) != exec.argType.TypeSize() || index >= len(values) {
 					return moerr.NewInternalErrorNoCtx(
 						"ordered percentile has invalid retained argument")

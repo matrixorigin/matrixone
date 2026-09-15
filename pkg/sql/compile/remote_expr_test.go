@@ -612,8 +612,11 @@ func TestHLLRemoteProtocolValidation(t *testing.T) {
 		)}
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
-			"HLL remote execution requires MORPC protocol version 73")
+			"HLL remote execution requires MORPC protocol version 74")
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 74")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
 		require.NoError(t, validateRemoteAggregateProtocol(proc, agg))
 	}
 }

@@ -176,6 +176,79 @@ func TestCountDistinctSignedZeroUsesOneValue(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestCountDistinctUsesCanonicalTypedKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		fill func(*testing.T, *vector.Vector, *mpool.MPool)
+		want int64
+	}{
+		{
+			name: "char-pad-space",
+			typ:  types.New(types.T_char, 4, 0),
+			fill: func(t *testing.T, vec *vector.Vector, mp *mpool.MPool) {
+				for _, value := range []string{"a", "a ", "a  ", "b"} {
+					require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+				}
+			},
+			want: 2,
+		},
+		{
+			name: "json-numeric-encoding",
+			typ:  types.T_json.ToType(),
+			fill: func(t *testing.T, vec *vector.Vector, mp *mpool.MPool) {
+				for _, value := range []string{"1", "1.0", "1e0", "2"} {
+					json, err := types.ParseStringToByteJson(value)
+					require.NoError(t, err)
+					encoded, err := types.EncodeJson(json)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendBytes(vec, encoded, false, mp))
+				}
+			},
+			want: 2,
+		},
+		{
+			name: "vector-signed-zero",
+			typ:  types.T_array_float32.ToType(),
+			fill: func(t *testing.T, vec *vector.Vector, mp *mpool.MPool) {
+				negativeZero := float32(math.Copysign(0, -1))
+				for _, value := range [][]float32{
+					{1, 0, 3}, {1, negativeZero, 3}, {1, 2, 3},
+				} {
+					require.NoError(t, vector.AppendBytes(
+						vec, types.ArrayToBytes(value), false, mp))
+				}
+			},
+			want: 2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			values := vector.NewVec(tc.typ)
+			tc.fill(t, values, mp)
+			exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{tc.typ})
+			require.NoError(t, exec.GroupGrow(1))
+			groups := make([]uint64, values.Length())
+			for i := range groups {
+				groups[i] = 1
+			}
+			require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(
+				0, groups, []*vector.Vector{values}))
+			require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{values}))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, tc.want,
+				vector.MustFixedColNoTypeCheck[int64](results[0])[0])
+			for _, result := range results {
+				result.Free(mp)
+			}
+			exec.Free()
+			values.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestCountDistinctFixedIndexPreservesFloatNaNIdentity(t *testing.T) {
 	mp := mpool.MustNewZero()
 	values := []float64{

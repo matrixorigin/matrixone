@@ -122,6 +122,33 @@ func TestAccountedHllPreflightBroadcastsScalarConstPastPhysicalRows(t *testing.T
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestAccountedHllCanonicalScratchIsReservedBeforeFill(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	exec := makeApproxCount(mp, AggIdOfApproxCount,
+		types.T_json.ToType()).(*approxCountExec)
+	owner := any(exec).(AllocationAccountOwner)
+	require.NoError(t, owner.SetAllocationAccount(allocation))
+	require.NoError(t, exec.GroupGrow(1))
+	baseline := account.Snapshot().Used
+
+	input := vector.NewVec(types.T_json.ToType())
+	require.NoError(t, vector.AppendBytes(
+		input, mustHLLJSON(t, "[1,{\"n\":2.0}]"), false, mp))
+	require.NoError(t, exec.PreflightBatchFill(
+		0, []uint64{1}, []*vector.Vector{input}))
+	require.NotNil(t, exec.state[0].argScratch)
+	require.Equal(t, baseline+uint64(hllRegisterCnt)+
+		uint64(cap(exec.state[0].argScratch)), account.Snapshot().Used)
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{input}))
+
+	input.Free(mp)
+	exec.Free()
+	require.NoError(t, owner.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestHllSketchMarshalAndUnmarshalFromReader(t *testing.T) {
 	mp := mpool.MustNewZero()
 	sketch, err := makeHllSketch(mp, nil)
@@ -344,6 +371,73 @@ func TestHllWireVersionValidation(t *testing.T) {
 	sketch := &hllSketch{regs: make([]byte, hllRegisterCnt), wireVersion: hllVersion}
 	require.Equal(t, hllVersion, sketch.effectiveWireVersion())
 	require.ErrorContains(t, sketch.useWireVersion(1), "invalid HLL hash version")
+}
+
+func TestHllV4UsesCanonicalTypedValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		typ   types.Type
+		left  []byte
+		right []byte
+	}{
+		{
+			name: "char-pad-space",
+			typ:  types.New(types.T_char, 4, 0),
+			left: []byte("a"), right: []byte("a "),
+		},
+		{
+			name:  "json-numeric-encoding",
+			typ:   types.T_json.ToType(),
+			left:  mustHLLJSON(t, "[1,{\"n\":2.0}]"),
+			right: mustHLLJSON(t, "[1.0,{\"n\":2}]"),
+		},
+		{
+			name:  "vector-signed-zero",
+			typ:   types.T_array_float32.ToType(),
+			left:  types.ArrayToBytes([]float32{1, 0, 3}),
+			right: types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			leftMU, err := makeHllSketch(mp, nil)
+			require.NoError(t, err)
+			rightMU, err := makeHllSketch(mp, nil)
+			require.NoError(t, err)
+			left := leftMU.(*hllSketch)
+			right := rightMU.(*hllSketch)
+			insertHLLValue(left, tc.typ, tc.left)
+			insertHLLValue(right, tc.typ, tc.right)
+			require.Equal(t, left.regs, right.regs)
+			left.Free()
+			right.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+
+	mp := mpool.MustNewZero()
+	v3MU, err := makeHllSketchWithVersion(mp, nil, hllFloatZeroVersion)
+	require.NoError(t, err)
+	v4MU, err := makeHllSketchWithVersion(mp, nil, hllVersion)
+	require.NoError(t, err)
+	v3 := v3MU.(*hllSketch)
+	v4 := v4MU.(*hllSketch)
+	v3.Insert([]byte("a"))
+	v4.Insert([]byte("a"))
+	require.ErrorContains(t, v4.Merge(v3), "incompatible HLL hash versions")
+	v3.Free()
+	v4.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func mustHLLJSON(t *testing.T, text string) []byte {
+	t.Helper()
+	value, err := types.ParseStringToByteJson(text)
+	require.NoError(t, err)
+	encoded, err := types.EncodeJson(value)
+	require.NoError(t, err)
+	return encoded
 }
 
 func TestHllLegacyWireStateCoversEmptyAndFloatingPointWidths(t *testing.T) {
