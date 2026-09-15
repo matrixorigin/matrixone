@@ -694,6 +694,9 @@ func buildDefaultExprWithColumns(
 	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
 		return nil, err
 	}
+	if err = RequirePersistedIPFunctionProtocol(proc.Ctx, proc, planExpr); err != nil {
+		return nil, err
+	}
 	if exprHasLocalColumnRef(planExpr) {
 		if err := requireExpressionDefaultProtocol(proc); err != nil {
 			return nil, err
@@ -773,6 +776,9 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 		return nil, err
 	}
 	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
+		return nil, err
+	}
+	if err = RequirePersistedIPFunctionProtocol(proc.Ctx, proc, planExpr); err != nil {
 		return nil, err
 	}
 
@@ -860,6 +866,9 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 		return nil, err
 	}
 	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
+		return nil, err
+	}
+	if err = RequirePersistedIPFunctionProtocol(proc.Ctx, proc, planExpr); err != nil {
 		return nil, err
 	}
 

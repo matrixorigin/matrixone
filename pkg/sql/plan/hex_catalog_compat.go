@@ -211,7 +211,7 @@ func supportsHexMySQLNumericProtocol(proc *process.Process) bool {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion70
+	return ok && valid && version >= defines.MORPCVersion73
 }
 
 func requireHexMySQLNumericProtocol(proc *process.Process, expr *plan.Expr) error {
@@ -220,7 +220,7 @@ func requireHexMySQLNumericProtocol(proc *process.Process, expr *plan.Expr) erro
 	}
 	return moerr.NewNotSupportedNoCtxf(
 		"MySQL numeric HEX semantics require all CNs to support MORPC protocol version %d",
-		defines.MORPCVersion70)
+		defines.MORPCVersion73)
 }
 
 func exprContainsNewHexOverload(expr *plan.Expr) bool {

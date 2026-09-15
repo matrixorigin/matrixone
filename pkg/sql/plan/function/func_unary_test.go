@@ -1353,6 +1353,131 @@ func TestStGeomFromTextWithSRID(t *testing.T) {
 	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 }
 
+func TestStGeomFromWKBWithSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	wkb := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	for _, inputType := range []types.T{types.T_varchar, types.T_blob, types.T_varbinary} {
+		t.Run(inputType.String(), func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(inputType.ToType(), []string{wkb, wkb, ""}, []bool{false, false, true}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 4326, 3857}, []bool{false, false, false}),
+			}
+			expect := NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{"POINT(1 2)", "POINT(1 2)", ""}, []bool{false, false, true})
+			tc := NewFunctionTestCase(proc, inputs, expect, StGeomFromWKBWithSRID)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestGeometrySRIDOverloadsResolve(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name      string
+		function  string
+		args      []types.Type
+		overload  int32
+		returnOID types.T
+	}{
+		{
+			name:      "wkb varchar with srid",
+			function:  "st_geomfromwkb",
+			args:      []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+			overload:  3,
+			returnOID: types.T_geometry,
+		},
+		{
+			name:      "wkb blob with srid",
+			function:  "st_geomfromwkb",
+			args:      []types.Type{types.T_blob.ToType(), types.T_int64.ToType()},
+			overload:  4,
+			returnOID: types.T_geometry,
+		},
+		{
+			name:      "wkb varbinary with srid",
+			function:  "st_geomfromwkb",
+			args:      []types.Type{types.T_varbinary.ToType(), types.T_int64.ToType()},
+			overload:  5,
+			returnOID: types.T_geometry,
+		},
+		{
+			name:      "geometry setter",
+			function:  "st_srid",
+			args:      []types.Type{types.T_geometry.ToType(), types.T_int64.ToType()},
+			overload:  2,
+			returnOID: types.T_geometry,
+		},
+		{
+			name:      "geometry32 setter",
+			function:  "st_srid",
+			args:      []types.Type{types.T_geometry32.ToType(), types.T_int64.ToType()},
+			overload:  3,
+			returnOID: types.T_geometry32,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, tc.function, tc.args)
+			require.NoError(t, err)
+			_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, tc.overload, overload)
+			require.Equal(t, tc.returnOID, resolved.GetReturnType().Oid)
+
+			registered, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
+			require.NoError(t, err)
+			execute, _, _, _ := registered.GetExecuteMethod()
+			require.NotNil(t, execute)
+		})
+	}
+}
+
+func TestStGeomFromWKBWithSRIDRejectsInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	validWKB := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	for _, tc := range []struct {
+		name string
+		wkb  string
+		srid int64
+	}{
+		{name: "negative srid", wkb: validWKB, srid: -1},
+		{name: "oversized srid", wkb: validWKB, srid: int64(geo.MaxSRID) + 1},
+		{name: "malformed wkb", wkb: "not-a-wkb", srid: 4326},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.wkb}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.srid}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil), StGeomFromWKBWithSRID)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	masked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-wkb", validWKB}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, 4326}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", "POINT(1 2)"}, []bool{true, false}),
+		StGeomFromWKBWithSRID).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	ok, info := masked.Run()
+	require.True(t, ok, info)
+
+	allMasked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-wkb", "not-a-wkb"}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -1}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", ""}, []bool{true, true}),
+		StGeomFromWKBWithSRID).WithSelectList(&FunctionSelectList{AllNull: true})
+	ok, info = allMasked.Run()
+	require.True(t, ok, info)
+}
+
 func TestStGeomFromTextWithSRIDRejectNonFiniteCoordinates(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
@@ -1487,6 +1612,95 @@ func TestStSRID(t *testing.T) {
 	fcTC2 := NewFunctionTestCase(proc, inputs2, expect2, StSRID)
 	s2, info2 := fcTC2.Run()
 	require.True(t, s2, fmt.Sprintf("err info is '%s'", info2))
+}
+
+func TestStSRIDWithSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geomType := types.T_geometry32.ToType()
+	geomType.Scale = 1
+	wkb, err := encodeGeometryPayloadFloat32("POINT(1 2)")
+	require.NoError(t, err)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{string(wkb), string(wkb), ""}, []bool{false, false, true}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, 0, 3857}, []bool{false, false, true}),
+	}
+	expect := NewFunctionTestResult(geomType, false,
+		[]string{"POINT(1 2)", "POINT(1 2)", ""}, []bool{false, false, true})
+	tc := NewFunctionTestCase(proc, inputs, expect, StSRIDWithSRID)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestStSRIDWithSRIDRejectsMalformedPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geomType := types.T_geometry.ToType()
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{"not-a-geometry"}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil)
+	tc := NewFunctionTestCase(proc, inputs, expect, StSRIDWithSRID)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestStSRIDWithSRIDRejectsWrongGeometry32Payload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geomType := types.T_geometry32.ToType()
+	wkb64 := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{wkb64}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry32.ToType(), true, nil, nil)
+	tc := NewFunctionTestCase(proc, inputs, expect, StSRIDWithSRID)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestStSRIDWithSRIDRejectsInvalidInputAndHonorsSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	validWKB := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	for _, tc := range []struct {
+		name string
+		wkb  string
+		srid int64
+	}{
+		{name: "negative srid", wkb: validWKB, srid: -1},
+		{name: "oversized srid", wkb: validWKB, srid: int64(geo.MaxSRID) + 1},
+		{name: "malformed geometry", wkb: "not-a-geometry", srid: 4326},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.wkb}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.srid}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil), StSRIDWithSRID)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	masked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"not-a-geometry", validWKB}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, 4326}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", "POINT(1 2)"}, []bool{true, false}),
+		StSRIDWithSRID).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	ok, info := masked.Run()
+	require.True(t, ok, info)
+
+	allMasked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"not-a-geometry", "not-a-geometry"}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -1}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", ""}, []bool{true, true}),
+		StSRIDWithSRID).WithSelectList(&FunctionSelectList{AllNull: true})
+	ok, info = allMasked.Run()
+	require.True(t, ok, info)
 }
 
 func initStGeometryTypeTestCase() []tcTemp {
@@ -6403,6 +6617,35 @@ func TestHexExplicitFloatTruncates(t *testing.T) {
 			require.True(t, ok, info)
 		})
 	}
+}
+
+func TestHexExplicitFloatRejectsSignedIntegerOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		evalFn fEvalFn
+	}{
+		{"float32_positive", NewFunctionTestInput(types.T_float32.ToType(), []float32{1e20}, nil), HexExplicitFloat32},
+		{"float32_negative", NewFunctionTestInput(types.T_float32.ToType(), []float32{-1e20}, nil), HexExplicitFloat32},
+		{"float64_positive", NewFunctionTestInput(types.T_float64.ToType(), []float64{1e20}, nil), HexExplicitFloat64},
+		{"float64_negative", NewFunctionTestInput(types.T_float64.ToType(), []float64{-1e20}, nil), HexExplicitFloat64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil), tc.evalFn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	// A masked overflow row must not fail short-circuit evaluation.
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(),
+		[]float64{1e20, 15.5}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{"", "F"}, []bool{true, false}), HexExplicitFloat64).
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	ok, info := fc.Run()
+	require.True(t, ok, info)
 }
 
 func TestHexDecimalRegistrationExecutesExactly(t *testing.T) {

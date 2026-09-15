@@ -505,7 +505,7 @@ func TestRecoverTableDefForPlanMigratesLegacyHex(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
 
 	hexExpr := &pbplan.Expr{Typ: plan2.MakePlan2Type(&types.Type{Oid: types.T_varchar}), Expr: &pbplan.Expr_F{
 		F: &pbplan.Function{
@@ -525,12 +525,12 @@ func TestResolveByIdPreservesUnassignableLegacyHexDefault(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	previous, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
 	t.Cleanup(func() {
 		if present {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
 		}
 	})
 	typ := pbplan.Type{Id: int32(types.T_decimal64), Width: 5, Scale: 1}
