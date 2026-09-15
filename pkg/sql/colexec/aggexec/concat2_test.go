@@ -65,6 +65,20 @@ func (c *cancelAfterGroupConcatWarningContext) Err() error {
 	return nil
 }
 
+type cancelAfterGroupConcatSortContext struct {
+	context.Context
+	calls    int
+	cancelAt int
+}
+
+func (c *cancelAfterGroupConcatSortContext) Err() error {
+	c.calls++
+	if c.calls >= c.cancelAt {
+		return context.Canceled
+	}
+	return nil
+}
+
 func (s *groupConcatWarningSink) AppendWarningDiagnostic(code uint16, msg string) {
 	s.AppendWarningBatch(1, []uint16{code}, []string{msg})
 }
@@ -258,6 +272,95 @@ func TestGroupConcatH0SpillBoundaries(t *testing.T) {
 	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
 	result[0].Free(mp)
 	count.Free()
+}
+
+func TestGroupConcatAccountedOrderedSpillErrors(t *testing.T) {
+	info := multiAggInfo{
+		aggID:     104,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	tests := []struct {
+		name string
+		fill func(*groupConcatExec, []*vector.Vector) error
+	}{
+		{
+			name: "bulk fill",
+			fill: func(exec *groupConcatExec, vectors []*vector.Vector) error {
+				return exec.BulkFill(0, vectors)
+			},
+		},
+		{
+			name: "batch fill",
+			fill: func(exec *groupConcatExec, vectors []*vector.Vector) error {
+				return exec.BatchFill(0, []uint64{1}, vectors)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, account, allocation := newTestAggregateAllocation(t)
+			exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+			require.NoError(t, exec.SetAllocationAccount(allocation))
+			require.NoError(t, exec.SetExtraInformation(
+				testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+				0,
+			))
+			require.NoError(t, exec.GroupGrow(1))
+
+			createErr := errors.New("create accounted spill run")
+			ConfigureGroupConcatH0Spill(
+				exec,
+				groupConcatMinRunSize,
+				context.Background(),
+				func() (*os.File, error) { return nil, createErr },
+				nil,
+			)
+			values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{
+				strings.Repeat("x", int(groupConcatMinRunSize)),
+			})
+			keys := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"k"})
+			err := tc.fill(exec, []*vector.Vector{values, keys})
+			require.ErrorIs(t, err, createErr)
+
+			values.Free(mp)
+			keys.Free(mp)
+			exec.Free()
+			require.NoError(t, exec.ClearAllocationAccount(allocation))
+			finishTestAggregateAllocation(t, registry, account)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestGroupConcatOrderedSortCancellationReleasesScratch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	exec := newGroupConcatExec(mp, multiAggInfo{
+		aggID:     105,
+		argTypes:  []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}, ",").(*groupConcatExec)
+	require.NoError(t, exec.SetExtraInformation(
+		testGroupConcatOrderConfig(1, []byte{groupConcatOrderAsc}, ","),
+		0,
+	))
+	entries := []groupConcatOrderedEntry{{
+		concatPayload: appendPayloadField(nil, []byte("value"), false),
+		orderPayload:  appendPayloadField(nil, []byte("key"), false),
+	}}
+	ctx := &cancelAfterGroupConcatSortContext{
+		Context:  context.Background(),
+		cancelAt: 3,
+	}
+	_, _, err := exec.sortOrderedEntries(ctx, entries)
+	require.ErrorIs(t, err, context.Canceled)
+
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestGroupConcatSpillWatermarkExcludesRunMetadata(t *testing.T) {
