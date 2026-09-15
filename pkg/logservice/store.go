@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
@@ -967,11 +968,19 @@ func (l *store) getViewMetadataAdmissionState(
 }
 
 func (l *store) viewMetadataAdmissionLogStoresReady(state *pb.CheckerState) bool {
+	return l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, false)
+}
+
+func (l *store) viewMetadataAdmissionLogStoresReadyWithProtocol(
+	state *pb.CheckerState,
+	requireProtocolV2 bool,
+) bool {
 	cfg := l.cfg.GetHAKeeperConfig()
 	cfg.Fill()
 	for _, info := range state.LogState.Stores {
 		if !cfg.LogStoreExpired(info.Tick, state.Tick) &&
-			!info.ViewMetadataAdmissionSupported {
+			(!info.ViewMetadataAdmissionSupported ||
+				(requireProtocolV2 && !info.ViewMetadataAdmissionProtocolV2Supported)) {
 			return false
 		}
 	}
@@ -985,6 +994,13 @@ func (l *store) tryEnableViewMetadataAdmission(
 	admission, err := l.getViewMetadataAdmissionState(ctx)
 	if err != nil {
 		return false, err
+	}
+	// A downgraded LogStore must not continue driving admission after the
+	// cluster has committed a floor it cannot understand. Treat the state as
+	// not ready and leave the durable barrier untouched until a compatible
+	// binary takes over.
+	if admission.RequiredProtocolVersion > uint64(defines.MORPCLatestVersion) {
+		return false, nil
 	}
 	if admission.Enabled && !admission.Pending {
 		return true, nil
@@ -1038,7 +1054,15 @@ func (l *store) tryEnableViewMetadataAdmission(
 	}
 	cmd := hakeeper.GetEnableViewMetadataAdmissionCmd()
 	if admission.Preparing || admission.Enabled {
-		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(l.cfg.GetHAKeeperConfig())
+		if !l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true) {
+			return false, nil
+		}
+		requiredProtocol := admission.RequiredProtocolVersion
+		if requiredProtocol < uint64(defines.MORPCVersion72) {
+			requiredProtocol = uint64(defines.MORPCVersion72)
+		}
+		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
+			l.cfg.GetHAKeeperConfig(), requiredProtocol)
 	}
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
@@ -1650,15 +1674,16 @@ func (l *store) hakeeperTick() {
 
 func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	m := pb.LogStoreHeartbeat{
-		UUID:                           l.id(),
-		RaftAddress:                    l.cfg.RaftServiceAddr(),
-		ServiceAddress:                 l.cfg.LogServiceServiceAddr(),
-		GossipAddress:                  l.cfg.GossipServiceAddr(),
-		StoreIncarnation:               l.getStoreIncarnation(),
-		Replicas:                       make([]pb.LogReplicaInfo, 0),
-		Locality:                       l.cfg.getLocality(),
-		CommandDeliverySupported:       true,
-		ViewMetadataAdmissionSupported: true,
+		UUID:                                     l.id(),
+		RaftAddress:                              l.cfg.RaftServiceAddr(),
+		ServiceAddress:                           l.cfg.LogServiceServiceAddr(),
+		GossipAddress:                            l.cfg.GossipServiceAddr(),
+		StoreIncarnation:                         l.getStoreIncarnation(),
+		Replicas:                                 make([]pb.LogReplicaInfo, 0),
+		Locality:                                 l.cfg.getLocality(),
+		CommandDeliverySupported:                 true,
+		ViewMetadataAdmissionSupported:           true,
+		ViewMetadataAdmissionProtocolV2Supported: true,
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,

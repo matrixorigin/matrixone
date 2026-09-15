@@ -898,6 +898,14 @@ func (s *stateMachine) logScheduleCommandDeliverable(cmd pb.ScheduleCommand) boo
 		!store.ViewMetadataAdmissionSupported {
 		return false
 	}
+	// Once the persisted-expression floor is being activated, a newly admitted
+	// HAKeeper replica must understand the floor as well. The original
+	// ViewMetadataAdmissionSupported bit predates that contract and is not
+	// sufficient to keep a downgraded LogStore out of the RSM membership.
+	if s.state.PersistedExpressionRequiredProtocolVersion > 0 &&
+		!store.ViewMetadataAdmissionProtocolV2Supported {
+		return false
+	}
 	return true
 }
 
@@ -1717,6 +1725,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 			Epoch:                s.state.ViewMetadataAdmissionEpoch,
 			RevalidationRequired: s.state.ViewMetadataRevalidationRequired,
 			CatalogFencedEpoch:   s.state.ViewMetadataCatalogFencedEpoch,
+			PersistedExpressionRequiredProtocolVersion: s.state.PersistedExpressionRequiredProtocolVersion,
 		}
 	}
 	for uuid, info := range s.state.CNState.Stores {
@@ -1892,13 +1901,14 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 			}
 		}
 		return ViewMetadataAdmissionState{
-			Preparing:              s.state.ViewMetadataAdmissionPreparing,
-			Enabled:                s.state.ViewMetadataAdmissionEnabled,
-			Pending:                s.state.ViewMetadataAdmissionPending,
-			HAKeeperAdmissionReady: !s.hasPendingHAKeeperAdmission(),
-			LogReady:               logReady,
-			CNReady:                cnReady,
-			ProxyReady:             proxyReady,
+			Preparing:               s.state.ViewMetadataAdmissionPreparing,
+			Enabled:                 s.state.ViewMetadataAdmissionEnabled,
+			Pending:                 s.state.ViewMetadataAdmissionPending,
+			HAKeeperAdmissionReady:  !s.hasPendingHAKeeperAdmission(),
+			RequiredProtocolVersion: s.state.PersistedExpressionRequiredProtocolVersion,
+			LogReady:                logReady,
+			CNReady:                 cnReady,
+			ProxyReady:              proxyReady,
 		}, nil
 	} else if q, ok := query.(*ClusterDetailsQuery); ok {
 		return s.handleClusterDetailsQuery(q.Cfg), nil
@@ -1950,5 +1960,8 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	s.state.ViewMetadataAdmissionCNTargetTicks = nil
 	s.state.ViewMetadataAdmissionProxyTargetTicks = nil
 	s.state.ViewMetadataAdmissionPending = false
+	// The persisted-expression floor is intentionally not reset here. An older
+	// snapshot has a zero value, while a newer snapshot must retain its
+	// monotonic safety boundary across recovery and rolling restarts.
 	return s.state.Unmarshal(data)
 }
