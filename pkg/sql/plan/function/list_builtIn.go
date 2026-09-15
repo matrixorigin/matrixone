@@ -2287,28 +2287,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: CONV,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
-			if len(inputs) != 3 {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			// First parameter can be any type (string or numeric)
-			// Second and third parameters must be int64, but NULL constants arrive as ANY
-			if (inputs[1].Oid != types.T_int64 && inputs[1].Oid != types.T_any) ||
-				(inputs[2].Oid != types.T_int64 && inputs[2].Oid != types.T_any) {
-				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			// Keep an untyped NULL or prepared marker dynamic. The executor
-			// must see the actual runtime vector instead of losing its domain
-			// through the VARCHAR overload.
-			if inputs[0].Oid == types.T_any {
-				for i, ov := range overloads {
-					if len(ov.args) == 3 && ov.args[0] == types.T_any {
-						return newCheckResultWithSuccess(i)
-					}
-				}
-			}
-			return newCheckResultWithSuccess(0)
-		},
+		checkFn:    convTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -5001,6 +4980,36 @@ var supportedStringBuiltIns = []FuncNew{
 					return StGeomFromWKB
 				},
 			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StGeomFromWKBWithSRID
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_blob, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StGeomFromWKBWithSRID
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_varbinary, types.T_int64},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_geometry.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StGeomFromWKBWithSRID
+				},
+			},
 		},
 	},
 
@@ -6112,6 +6121,22 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return StSRID
+				},
+			},
+			{
+				overloadId: 2,
+				args:       []types.T{types.T_geometry, types.T_int64},
+				retType:    geometrySetSRIDResultType,
+				newOp: func() executeLogicOfOverload {
+					return StSRIDWithSRID
+				},
+			},
+			{
+				overloadId: 3,
+				args:       []types.T{types.T_geometry32, types.T_int64},
+				retType:    geometrySetSRIDResultType,
+				newOp: func() executeLogicOfOverload {
+					return StSRIDWithSRID
 				},
 			},
 		},
@@ -13540,6 +13565,56 @@ var supportedOthersBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_int32},
+				retType: func(parameters []types.Type) types.Type {
+					return inetNtoaReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_float64},
+				retType: func(parameters []types.Type) types.Type {
+					return inetNtoaReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_float32},
+				retType: func(parameters []types.Type) types.Type {
+					return inetNtoaReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_decimal64},
+				retType: func(parameters []types.Type) types.Type {
+					return inetNtoaReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_decimal128},
+				retType: func(parameters []types.Type) types.Type {
+					return inetNtoaReturnType(parameters)
+				},
+				newOp: func() executeLogicOfOverload {
+					return InetNtoa
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_decimal256},
 				retType: func(parameters []types.Type) types.Type {
 					return inetNtoaReturnType(parameters)
 				},

@@ -104,8 +104,12 @@ const (
 	MORPCVersion66     int64 = 66 // GROUP_CONCAT source-row diagnostics in aggregate partial state
 	MORPCVersion67     int64 = 67 // named process timezone identity
 	MORPCVersion68     int64 = 68 // complete GROUP_CONCAT cut reporting for strict writes
-	MORPCVersion69     int64 = 69 // lossless physical/logical NoFull CDC start watermark
-	MORPCLatestVersion       = MORPCVersion69
+	MORPCVersion69     int64 = 69 // exact bounded per-partition RANK with boundary ties
+	MORPCVersion70     int64 = 70 // row-dependent and unsigned CONV bases
+	MORPCVersion71     int64 = 71 // checked integer arithmetic overloads
+	MORPCVersion72     int64 = 72 // corrected IP function semantics and overload identities
+	MORPCVersion73     int64 = 73 // lossless physical/logical NoFull CDC start watermark
+	MORPCLatestVersion       = MORPCVersion73
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
