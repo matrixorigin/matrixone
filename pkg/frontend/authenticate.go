@@ -72,6 +72,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TenantInfo struct {
@@ -10643,7 +10644,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, ses.GetService())
+		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, ses.GetService(), ses.GetProc())
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -10997,7 +10998,12 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, service string) error {
+func createTablesInInformationSchemaOfGeneralTenant(
+	ctx context.Context,
+	bh BackgroundExec,
+	service string,
+	proc *process.Process,
+) error {
 	start := time.Now()
 	defer func() {
 		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -11008,7 +11014,8 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	// TODO: when we have the auto_increment column, we need new strategy.
 
 	var err error
-	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersionForTenantInitialization(service))
+	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(
+		protocolVersionForTenantInitialization(service, proc))
 	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
 	sqls = append(sqls, "use information_schema;")
@@ -11026,7 +11033,7 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	return err
 }
 
-func protocolVersionForTenantInitialization(service string) int64 {
+func protocolVersionForTenantInitialization(service string, proc *process.Process) int64 {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
 		return defines.MORPCMinVersion
@@ -11038,6 +11045,14 @@ func protocolVersionForTenantInitialization(service string) int64 {
 	version, ok := value.(int64)
 	if !ok {
 		return defines.MORPCMinVersion
+	}
+	if version >= defines.MORPCVersion73 && proc != nil {
+		supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion73)
+		if err != nil || !supported {
+			// Publishing the v73 VIEWS DDL is unsafe until every CN can bind
+			// both new metadata functions. Unknown capability is legacy-safe.
+			return defines.MORPCVersion72
+		}
 	}
 	return version
 }

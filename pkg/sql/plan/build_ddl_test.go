@@ -1054,6 +1054,16 @@ func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testin
 			sql:      "CREATE VIEW v AS SELECT n_name FROM nation;",
 			contains: "select `nation`.`n_name` from `nation`",
 		},
+		{
+			name:     "explicit view columns are replayable as output aliases",
+			sql:      "CREATE VIEW v (view_name) AS SELECT n_name FROM nation;",
+			contains: "select `nation`.`n_name` as `view_name` from `nation`",
+		},
+		{
+			name:     "explicit view columns cover parenthesized union output",
+			sql:      "CREATE VIEW v (view_name) AS (SELECT n_name FROM nation UNION SELECT n_name FROM nation);",
+			contains: "as `view_name` from `nation` union",
+		},
 	}
 
 	for _, test := range tests {
