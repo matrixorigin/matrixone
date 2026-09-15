@@ -1782,65 +1782,46 @@ func Decimal64FromFloat64(x float64, width, scale int32) (y Decimal64, err error
 	return
 }
 
+func decimal128WidthLimit(width int32) Decimal128 {
+	if width <= 19 {
+		return Decimal128{Pow10[width], 0}
+	}
+	limit, _ := Decimal128{Pow10[19], 0}.Mul128(Decimal128{Pow10[width-19], 0})
+	return limit
+}
+
 func Decimal128FromFloat64(x float64, width, scale int32) (y Decimal128, err error) {
-	err = nil
 	if math.IsInf(x, 0) || math.IsNaN(x) {
-		err = moerr.NewInvalidInputNoCtx("Can't convert Float64 To Decimal128, Float64 is Inf or NaN")
-		return
+		return Decimal128{}, moerr.NewInvalidInputNoCtx("Can't convert Float64 To Decimal128, Float64 is Inf or NaN")
 	}
 	if width > 38 || width < 1 || scale > width || scale < 0 {
-		err = moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
-		return
+		return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
 	}
-	z := x
-	signx := false
-	n := scale
-	if x < 0 {
-		z = -z
-		signx = true
-	}
-	for n > 19 {
-		n -= 19
-		z *= float64(Pow10[19])
-	}
-	z *= float64(Pow10[n])
-	if z > FloatHigh {
-		n = 0
-		for z > FloatHigh {
-			z /= 10
-			n++
+	// Keep exact integral float64 values on the integer path. Do not scale x in
+	// float64: the scaled value may no longer retain integer precision.
+	if math.Trunc(x) == x && math.Abs(x) < FloatHigh {
+		negative := x < 0
+		magnitude := Decimal128{B0_63: uint64(math.Abs(x))}
+		magnitude, err = magnitude.Scale(scale)
+		if err != nil || magnitude.B64_127>>63 != 0 || !magnitude.Less(decimal128WidthLimit(width)) {
+			return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
 		}
-		if z < float64(Pow10[19]) {
-			if n > 19 || width-n < 19 {
-				err = moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
-				return
-			}
-		} else {
-			if n > 18 || width-n < 20 {
-				err = moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
-				return
-			}
+		if negative {
+			magnitude = magnitude.Minus()
 		}
-		y.B64_127 = 0
-		y.B0_63 = uint64(z)
-		y, _ = y.Scale(n)
-	} else {
-		if z*2 > FloatHigh || uint64(z*2)&1 == 0 {
-			y.B64_127 = 0
-			y.B0_63 = uint64(z)
-		} else {
-			y.B64_127 = 0
-			y.B0_63 = uint64(z) + 1
-		}
-		if width <= 19 && y.B0_63 >= Pow10[width] {
-			err = moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
-			return
-		}
+		return magnitude, nil
 	}
-	if signx {
-		y = y.Minus()
+
+	y, err = ParseDecimal128(strconv.FormatFloat(x, 'g', -1, 64), width, scale)
+	if err != nil {
+		return y, err
 	}
-	return
+	// ParseDecimal128 permits the signed minimum coefficient, while the legacy
+	// float conversion enforces a strict symmetric magnitude bound.
+	if y.Sign() && y == decimal128WidthLimit(width).Minus() {
+		return Decimal128{}, moerr.NewInvalidInputNoCtxf("Can't convert Float64 To Decimal128: %f(%d,%d)", x, width, scale)
+	}
+	return y, nil
 }
 
 func Decimal256FromFloat64(x float64, width, scale int32) (y Decimal256, err error) {

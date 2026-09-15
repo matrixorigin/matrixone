@@ -697,6 +697,51 @@ func TestExplicitCastFloatToDecimalPreservesInRangeValues(t *testing.T) {
 	}
 }
 
+func TestExplicitCastFloat64ToDecimal128PreservesScaledIntegerPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := types.New(types.T_decimal128, 38, 6)
+	base := types.Decimal128{B0_63: 1000000000001000000}
+	lower := types.Decimal128{B0_63: 1000000000000000000}
+	higher := types.Decimal128{B0_63: 1000000000002000000}
+	inputs := []float64{1000000000001, -1000000000001, 1000000000000, 1000000000002, 0}
+	expect := NewFunctionTestResult(
+		target,
+		false,
+		[]types.Decimal128{base, base.Minus(), lower, higher, {}},
+		[]bool{false, false, false, false, true},
+	)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), inputs, []bool{false, false, false, false, true}),
+			NewFunctionTestInput(target, []types.Decimal128{}, nil),
+		},
+		expect,
+		NewExplicitCast,
+	)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
+
+func TestExplicitCastFloat64ToDecimal128ClampsRoundedOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := types.New(types.T_decimal128, 5, 2)
+	max := types.Decimal128{B0_63: 99999}
+	inputs := []float64{999.995, -999.995}
+	expect := NewFunctionTestResult(target, false, []types.Decimal128{max, max.Minus()}, nil)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), inputs, nil),
+			NewFunctionTestInput(target, []types.Decimal128{}, nil),
+		},
+		expect,
+		NewExplicitCast,
+	)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
+
 func TestExplicitCastOverflowHelperBoundaries(t *testing.T) {
 	value64, err := decimalInt64Explicit("18446744073709551615")
 	require.NoError(t, err)
