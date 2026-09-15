@@ -100,7 +100,7 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 		})
 	}
 
-	t.Run("wildcard validates discovered no primary key table", func(t *testing.T) {
+	t.Run("wildcard omits discovered no primary key table", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{
@@ -110,7 +110,10 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 		bh.sql2result[candidateSQL] = &MysqlResultSet{Columns: make([]Column, 7), Data: [][]interface{}{{uint64(1), "without_pk", uint64(1), "db", "", uint32(1), []byte{}}}}
 		bh.sql2result[query("db", "without_pk")] = &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{uint64(0)}}}
 		ctx := defines.AttachAccountId(context.Background(), 1)
-		require.Error(t, CDCCheckPitrGranularityWithExclude(ctx, bh, "acc", pts, ""))
+		require.NoError(t, CDCCheckPitrGranularityWithExclude(ctx, bh, "acc", pts, ""))
+		require.Len(t, bh.executedSQLs, 1)
+		require.Contains(t, bh.executedSQLs[0], "mo_columns")
+		require.NotContains(t, bh.executedSQLs[0], "count(*)")
 	})
 
 	t.Run("wildcard applies raw exclude to discovered table", func(t *testing.T) {

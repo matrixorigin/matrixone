@@ -38,7 +38,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCheckPitrGranularityRejectsWildcardNoPrimaryKey(t *testing.T) {
+func TestCheckPitrGranularityWildcardFiltersNoPrimaryKey(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx := defines.AttachAccountId(context.Background(), 7)
 	proc.Ctx = ctx
@@ -60,8 +60,10 @@ func TestCheckPitrGranularityRejectsWildcardNoPrimaryKey(t *testing.T) {
 			require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{{}}))
 			return result.GetResult(), nil
 		}
-		result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
-		result.NewBatchWithRowCount(0)
+		result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []uint8{24}))
+		require.NoError(t, executor.AppendStringRows(result, 1, []string{"h"}))
 		return result.GetResult(), nil
 	}}
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -81,9 +83,11 @@ func TestCheckPitrGranularityRejectsWildcardNoPrimaryKey(t *testing.T) {
 		Database: "db", Table: cdc.CDCPitrGranularity_All,
 	}}}}
 	err := c.checkPitrGranularity(ctx, pts, "")
-	require.Error(t, err)
+	require.NoError(t, err)
 	require.Len(t, exec.sqls, 2)
 	require.Contains(t, exec.sqls[0], "mo_tables")
+	require.Contains(t, exec.sqls[0], "mo_columns")
+	require.NotContains(t, exec.sqls[1], "mo_columns")
 }
 
 func TestCheckPitrGranularityWildcardExcludeAndPrimaryKey(t *testing.T) {
@@ -121,12 +125,6 @@ func TestCheckPitrGranularityWildcardExcludeAndPrimaryKey(t *testing.T) {
 				if strings.Contains(sql, catalog.MO_TABLES) {
 					return candidateResult(tc.table), nil
 				}
-				if strings.Contains(sql, catalog.MO_COLUMNS) && tc.table == "with_pk" {
-					result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, proc.Mp())
-					result.NewBatchWithRowCount(1)
-					require.NoError(t, executor.AppendStringRows(result, 0, []string{"id"}))
-					return result.GetResult(), nil
-				}
 				return validPitrResult(), nil
 			}}
 			rt := moruntime.ServiceRuntime(proc.GetService())
@@ -143,6 +141,9 @@ func TestCheckPitrGranularityWildcardExcludeAndPrimaryKey(t *testing.T) {
 			defer c.Release()
 			pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: cdc.CDCPitrGranularity_All}}}}
 			require.NoError(t, c.checkPitrGranularity(ctx, pts, tc.exclude))
+			require.Len(t, exec.sqls, 2)
+			require.Contains(t, exec.sqls[0], "mo_columns")
+			require.NotContains(t, exec.sqls[1], "mo_columns")
 		})
 	}
 }

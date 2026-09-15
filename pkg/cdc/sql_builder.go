@@ -358,7 +358,13 @@ const (
 		"%s" +
 		"%s" +
 		" AND tbl.relkind = '%s' " +
-		" AND tbl.reldatabase NOT IN (%s)"
+		" AND tbl.reldatabase NOT IN (%s)" +
+		" AND EXISTS (SELECT 1 FROM `mo_catalog`.`mo_columns` pk " +
+		"WHERE pk.account_id = tbl.account_id " +
+		"AND pk.db_name = tbl.reldatabase " +
+		"AND pk.relname = tbl.relname " +
+		"AND pk.constraint_type = 'p' " +
+		"AND pk.name <> '__mo_fake_pk_col')"
 	CDCInsertMOISCPLogSqlTemplate = `REPLACE INTO mo_catalog.mo_iscp_log (` +
 		`account_id,` +
 		`table_id,` +

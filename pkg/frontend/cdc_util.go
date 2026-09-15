@@ -296,9 +296,7 @@ var CDCCheckPitrGranularityWithExclude = func(
 						if hasForeignKey {
 							continue
 						}
-						if err := checkCDCSourcePrimaryKey(ctx, bh, dbName, tableName); err != nil {
-							return err
-						}
+
 					}
 				}
 				continue
