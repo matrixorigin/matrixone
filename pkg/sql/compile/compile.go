@@ -3524,6 +3524,23 @@ func (c *Compile) compileIvfSearchParallel(node *plan.Node) ([]*Scope, error) {
 		ss = append(ss, ds)
 	}
 	c.anal.isFirst = false
+	if node.Limit != nil {
+		// Select the global IVF candidates before FUNCTION_SCAN applies its
+		// projection and limit. An unordered limit would let the first CN fill
+		// the entire candidate budget. ivf_search emits pk, score, then INCLUDE
+		// columns; use the raw score position before projection can change it.
+		candidateOrder := &plan.Node{OrderBy: []*plan.OrderBySpec{{
+			Expr: &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_float64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: 1,
+				}},
+			},
+			Flag: plan.OrderBySpec_ASC,
+		}}}
+		ss = c.compileTop(candidateOrder, node.Limit, ss)
+	}
 	return ss, nil
 }
 
