@@ -304,6 +304,7 @@ type PrepareStmt struct {
 	NativeMode             bool
 	OnlyFullGroupBy        bool
 	BoolSumAvg             bool
+	NoUnsignedSubtraction  bool
 	// sqlModeFlagsSet distinguishes captured disabled modes (OnlyFullGroupBy,
 	// BoolSumAvg) from legacy or minimal in-memory fixtures that predate these
 	// plan dependencies.
@@ -1835,6 +1836,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	oldOnlyFullGroupBy := false
 	oldBoolSumAvg := false
 	oldHighNotPrecedence := false
+	oldNoUnsignedSubtraction := false
 	oldParserFlags := mysql.SQLModeFlags(0)
 	oldIgnoreSpace := false
 	if name == "sql_mode" {
@@ -1842,6 +1844,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
 		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
 		oldHighNotPrecedence = ses.sqlModeHasHighNotPrecedence()
+		oldNoUnsignedSubtraction = ses.sqlModeHasNoUnsignedSubtraction()
 		oldParserFlags = ses.sqlModeParserFlags()
 		oldIgnoreSpace = ses.sqlModeHasIgnoreSpace()
 	}
@@ -1906,7 +1909,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldParserFlags, oldIgnoreSpace, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction, oldParserFlags, oldIgnoreSpace, val)
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
