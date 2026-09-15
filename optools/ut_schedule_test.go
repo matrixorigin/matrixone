@@ -403,6 +403,7 @@ exec 9<> "$CASE_DIR/timer-input"
 exec 6<> "$CASE_DIR/heartbeat-stop"
 timer_pid=""
 heartbeat_pid=""
+heartbeat_int_count=0
 cleanup() {
     if [[ -z "$timer_pid" && -f "$CASE_DIR/heartbeat-child.pid" ]]; then
         timer_pid=$(cat "$CASE_DIR/heartbeat-child.pid")
@@ -426,6 +427,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
+heartbeat_int_handler() {
+    heartbeat_int_count=$((heartbeat_int_count + 1))
+    stop_ut_heartbeat
+}
+
 # The long timer is deliberately TERM-ignoring and has no cleanup contract.
 # The production stop path must use exact-PID KILL and then reap it. The short
 # polling sleeps used by stop_ut_heartbeat remain the system sleep command.
@@ -441,7 +447,10 @@ sleep() {
 
 # scheduleHarnessWithMockTransform injects this function call between the
 # timer spawn and production PID registration. It publishes the child PID,
-# then waits for the parent to deliver TERM and release the launch window.
+# then waits for the parent to deliver the stop request and release the launch
+# window. Bash 3.2 ignores INT for asynchronous helpers, so the INT case below
+# delivers INT to this foreground caller and lets the real stop function send
+# TERM to the helper.
 ut_test_before_heartbeat_sleep_registration() {
     printf '%s\n' "$1" > "$CASE_DIR/heartbeat-child.pid"
     printf '%s\n' "$1" >&7
@@ -451,6 +460,7 @@ ut_test_before_heartbeat_sleep_registration() {
 }
 ut_test_heartbeat_stop_requested() {
     printf '%s\n' "$heartbeat_stop_requested" >&6
+    printf 'release\n' >&8
 }
 
 UT_HEARTBEAT_INTERVAL=60
@@ -458,24 +468,31 @@ start_ut_heartbeat
 heartbeat_pid="$UT_HEARTBEAT_PID"
 read -r -t 10 timer_pid <&7 || exit 90
 [[ "$timer_pid" =~ ^[0-9]+$ ]] || exit 91
-kill "-${HEARTBEAT_STOP_SIGNAL}" "$heartbeat_pid" || exit 92
+if [[ "$HEARTBEAT_STOP_SIGNAL" == INT ]]; then
+    trap heartbeat_int_handler INT
+    kill -INT "$$" || exit 92
+else
+    kill "-${HEARTBEAT_STOP_SIGNAL}" "$heartbeat_pid" || exit 92
+fi
 read -r -t 10 stop_state <&6 || exit 93
 [[ "$stop_state" == 1 ]] || exit 94
-printf 'release\n' >&8
+if [[ "$HEARTBEAT_STOP_SIGNAL" == INT && "$heartbeat_int_count" != 1 ]]; then
+    exit 95
+fi
 heartbeat_status=0
 wait "$heartbeat_pid" || heartbeat_status=$?
-[[ "$heartbeat_status" == 0 ]] || exit 95
+[[ "$heartbeat_status" == 0 ]] || exit 96
 if kill -0 "$heartbeat_pid" 2>/dev/null; then
-    exit 96
+    exit 97
 fi
 if kill -0 "$timer_pid" 2>/dev/null; then
-    exit 97
+    exit 98
 fi
 rm -f "$CASE_DIR/heartbeat-child.pid"
 timer_pid=""
 UT_HEARTBEAT_PID=""
 heartbeat_pid=""
-[[ -z "$UT_HEARTBEAT_PID" ]] || exit 98
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 99
 `
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
