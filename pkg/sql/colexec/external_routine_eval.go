@@ -651,6 +651,9 @@ func buildRoutineContext(proc *process.Process) (map[string]string, error) {
 	}
 	if zoneName == "FixedZone" {
 		_, offset := queryStart.In(location).Zone()
+		if offset%60 != 0 {
+			return nil, fmt.Errorf("python udf: fixed session timezone offset must be a whole number of minutes")
+		}
 		context["session_timezone_kind"] = "FIXED_OFFSET"
 		context["session_timezone_offset_minutes"] = formatTimezoneOffsetMinutes(offset / 60)
 		delete(context, "session_timezone_name")
