@@ -27,11 +27,12 @@ that references it.
 
 The CREATE/ALTER owner derives `ViewData.Definition` from the stabilized view
 AST, after wildcard expansion and separately persists `CheckOption`. Explicit
-view column names are applied as output aliases in that frozen SELECT,
-including the left-most projection of a UNION, so replay preserves the view's
-public column names. The same parser-tree helper is used when regenerating a
-legacy definition and when the metadata function parses a legacy `Stmt`. The
-catalog remains the single owner of that frozen metadata.
+view column names are exposed through a derived-table column list around that
+frozen SELECT, including UNION output, so replay preserves the view's public
+column names without renaming aliases referenced by the inner `ORDER BY` or
+`HAVING`. The same parser-tree helper is used when regenerating a legacy
+definition and when the metadata function parses a legacy `Stmt`. The catalog
+remains the single owner of that frozen metadata.
 `mo_view_definition(viewdef)` and `mo_view_check_option(viewdef)` return the
 stored fields without writes; for an older row that lacks them, they parse only
 the stored statement using its persisted SQL mode and identifier-case settings.
@@ -45,10 +46,13 @@ The capability is specific to these functions and the persisted VIEWS definition
 A sender probes the selected destination CN as well as its local runtime before
 encoding a pipeline containing either function ID; an unknown or unavailable
 destination capability fails closed. The v4.0.6 VIEWS upgrade waits for common
-v73. New tenant initialization at v72 or below preserves all existing metadata
-definitions, including the v58 COLUMNS
-contract, while installing the function-free predecessor VIEWS DDL; v73 installs
-the new DDL. Pipeline preparation, remote marshal, and remote unmarshal reject a
+v73. New tenant initialization installs the new VIEWS DDL only after the local
+coordinator and every CN in the current inventory have positively confirmed v73;
+a mixed, unknown, RPC-failing, or incomplete capability probe aborts the account
+transaction, so it cannot commit a final-version tenant with the predecessor
+metadata. A v72-or-earlier cluster preserves all existing metadata definitions,
+including the v58 COLUMNS contract. Pipeline preparation, remote marshal, and
+remote unmarshal reject a
 pipeline containing either function ID below v73. The receiver check protects
 stale prepared work as well as normal sender dispatch. Before admitting any
 v72-or-earlier CN during rollback, operators must pause related metadata plans,
@@ -80,15 +84,16 @@ NotSupported error rather than returning wrong metadata.
 ## Validation
 
 Focused parser/function tests cover current and legacy definitions, quoted and
-commented inputs, malformed rows, frozen wildcard expansion, explicit view
-column aliases, and CHECK OPTION. Protocol tests cover the v72 predecessor
+commented inputs, malformed rows, frozen wildcard expansion, explicit
+derived-table column lists with inner alias preservation, and CHECK OPTION.
+Protocol tests cover the v72 predecessor
 rejection and v73 acceptance at prepare, sender, and receiver boundaries,
 including a mixed-version destination probe and the all-CN capability fence.
-System-view tests prove v72 tenant initialization preserves the v58 COLUMNS
-contract and uses the predecessor VIEWS DDL, while v73 uses the parser-derived
-DDL; upgrade tests prove the VIEWS entry requires v73. The predecessor-init
-test is also the rollback guard: it proves that the restoration target has no
-function reference before an older CN is admitted.
+System-view tests prove mixed, unknown, and RPC-failing CN capability probes
+abort before any tenant metadata is written, while an all-v73 inventory uses the
+parser-derived DDL; upgrade tests prove the VIEWS entry requires v73. The
+predecessor-init test is also the rollback guard: it proves that the restoration
+target has no function reference before an older CN is admitted.
 
 ## Unresolved questions
 
