@@ -42,6 +42,10 @@ exit "$HEAVY_STATUS"
 }
 
 func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...string) ([]byte, error) {
+	return scheduleHarnessWithMockTransform(t, script, mock, nil, variables...)
+}
+
+func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transform func(string) string, variables ...string) ([]byte, error) {
 	t.Helper()
 	root := t.TempDir()
 	dir := filepath.Join(root, "optools")
@@ -59,7 +63,11 @@ func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...str
 			if index < 0 {
 				t.Fatal("missing runner dispatch")
 			}
-			data = []byte(text[:index])
+			text = text[:index]
+			if transform != nil {
+				text = transform(text)
+			}
+			data = []byte(text)
 		}
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0755); err != nil {
 			t.Fatal(err)
@@ -380,6 +388,91 @@ exit 0
 	out, err := scheduleHarnessWithMock(t, script, mock)
 	if err != nil {
 		t.Fatalf("heartbeat lifecycle: %v\n%s", err, out)
+	}
+}
+
+func TestUTHeartbeatStopDuringSleepRegistration(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkfifo "$CASE_DIR/heartbeat-child"
+mkfifo "$CASE_DIR/heartbeat-release"
+mkfifo "$CASE_DIR/timer-input"
+exec 7<> "$CASE_DIR/heartbeat-child"
+exec 8<> "$CASE_DIR/heartbeat-release"
+exec 9<> "$CASE_DIR/timer-input"
+timer_pid=""
+heartbeat_pid=""
+cleanup() {
+    if [[ -z "$timer_pid" && -f "$CASE_DIR/heartbeat-child.pid" ]]; then
+        timer_pid=$(cat "$CASE_DIR/heartbeat-child.pid")
+    fi
+    if [[ -n "$timer_pid" ]]; then
+        kill -KILL "$timer_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$heartbeat_pid" ]]; then
+        kill -KILL "$heartbeat_pid" 2>/dev/null || true
+    fi
+    exec 7>&-
+    exec 8>&-
+    exec 9>&-
+}
+trap cleanup EXIT
+
+# The long timer is deliberately TERM-ignoring and has no cleanup contract.
+# The production stop path must use exact-PID KILL and then reap it. The short
+# polling sleeps used by stop_ut_heartbeat remain the system sleep command.
+sleep() {
+    if [[ "${1:-}" == 60 ]]; then
+        trap '' TERM INT
+        while :; do
+            IFS= read -r _ <&9 || true
+        done
+    fi
+    command sleep "$@"
+}
+
+# scheduleHarnessWithMockTransform injects this function call between the
+# timer spawn and production PID registration. It publishes the child PID,
+# then waits for the parent to deliver TERM and release the launch window.
+ut_test_before_heartbeat_sleep_registration() {
+    printf '%s\n' "$1" > "$CASE_DIR/heartbeat-child.pid"
+    printf '%s\n' "$1" >&7
+    while ! read -r _ <&8; do
+        :
+    done
+}
+
+UT_HEARTBEAT_INTERVAL=60
+start_ut_heartbeat
+heartbeat_pid="$UT_HEARTBEAT_PID"
+read -r -t 10 timer_pid <&7 || exit 90
+[[ "$timer_pid" =~ ^[0-9]+$ ]] || exit 91
+kill "-${HEARTBEAT_STOP_SIGNAL}" "$heartbeat_pid" || exit 92
+printf 'release\n' >&8
+stop_ut_heartbeat
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 93
+! kill -0 "$heartbeat_pid" 2>/dev/null || exit 94
+! kill -0 "$timer_pid" 2>/dev/null || exit 95
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+	`
+	transform := func(text string) string {
+		const anchor = "            heartbeat_sleep_pid=$!\n"
+		if got := strings.Count(text, anchor); got != 1 {
+			t.Fatalf("heartbeat registration anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, anchor,
+			"            ut_test_before_heartbeat_sleep_registration \"$!\"\n"+anchor, 1)
+	}
+	for _, signal := range []string{"TERM", "INT"} {
+		t.Run(strings.ToLower(signal), func(t *testing.T) {
+			out, err := scheduleHarnessWithMockTransform(t, script, mock, transform,
+				"HEARTBEAT_STOP_SIGNAL="+signal)
+			if err != nil {
+				t.Fatalf("heartbeat registration lifecycle: %v\n%s", err, out)
+			}
+		})
 	}
 }
 

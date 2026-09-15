@@ -394,21 +394,53 @@ function start_ut_heartbeat(){
 
     (
         local heartbeat_sleep_pid=""
-        function stop_heartbeat_sleep(){
-            trap - TERM INT
+        local heartbeat_stop_requested=0
+        local heartbeat_sleep_status=0
+        function request_heartbeat_stop(){
+            # A signal may arrive after the timer is spawned but before its
+            # PID is published. Record the request and let the main loop
+            # consume it after publication; never exit while ownership is
+            # still being transferred.
+            heartbeat_stop_requested=1
             if [[ -n "${heartbeat_sleep_pid}" ]]; then
-                kill -TERM "${heartbeat_sleep_pid}" 2>/dev/null || true
+                # The timer has no state or graceful-cleanup contract. Kill
+                # the exact child so it cannot retain the runner's pipes.
+                kill -KILL "${heartbeat_sleep_pid}" 2>/dev/null || true
+            fi
+        }
+        function finish_heartbeat_stop(){
+            # Do not restore default handling: another TERM/INT must not
+            # interrupt the final wait and orphan the timer.
+            trap '' TERM INT
+            if [[ -n "${heartbeat_sleep_pid}" ]]; then
+                kill -KILL "${heartbeat_sleep_pid}" 2>/dev/null || true
                 wait "${heartbeat_sleep_pid}" 2>/dev/null || true
                 heartbeat_sleep_pid=""
             fi
             exit 0
         }
-        trap stop_heartbeat_sleep TERM INT
+        trap request_heartbeat_stop TERM INT
         while :; do
+            if (( heartbeat_stop_requested != 0 )); then
+                finish_heartbeat_stop
+            fi
             sleep "${interval}" &
             heartbeat_sleep_pid=$!
-            wait "${heartbeat_sleep_pid}" || exit 0
+            # Consume a stop received in the spawn-to-registration window.
+            if (( heartbeat_stop_requested != 0 )); then
+                finish_heartbeat_stop
+            fi
+            heartbeat_sleep_status=0
+            wait "${heartbeat_sleep_pid}" || heartbeat_sleep_status=$?
+            if (( heartbeat_stop_requested != 0 )); then
+                # A trapped signal can interrupt wait before Bash has reaped
+                # the child; the main loop remains the sole reaper.
+                finish_heartbeat_stop
+            fi
             heartbeat_sleep_pid=""
+            if (( heartbeat_sleep_status != 0 )); then
+                exit 0
+            fi
             [[ "${UT_TERMINATING}" == 0 ]] || exit 0
 
             local latest stage label active_cases active_detail active_records process_count memory report
