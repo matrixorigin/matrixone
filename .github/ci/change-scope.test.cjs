@@ -397,11 +397,8 @@ test('workflow provenance selects both helpers from the actual checkout config',
   }
 });
 
-test('entrypoint enables the complete race-UT shard contract', () => {
+test('entrypoint runs the complete race-UT suite on one runner', () => {
   const caller = entrypointJobs()['matrixone-ci'];
   assert.match(caller, /^    uses: matrixorigin\/CI\/\.github\/workflows\/ci\.yaml@main$/m);
-  assert.match(caller, /^    with:$/m);
-  assert.match(caller, /^      ut_parallel: 6$/m);
-  assert.match(caller, /^      ut_sharded: true$/m);
-  assert.doesNotMatch(caller, /^      ut_sharded: false$/m);
+  assert.match(caller, /^    with:\n      ut_parallel: 6\n      ut_sharded: false$/m);
 });
