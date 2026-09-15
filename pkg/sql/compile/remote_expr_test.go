@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -770,7 +771,7 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
 
 	affectedFunctionIDs := []int32{
-		function.ORD, function.LENGTH_UTF8, function.LEFT, function.RIGHT,
+		function.ORD, function.LEFT, function.RIGHT,
 		function.SUBSTRING, function.REVERSE, function.LOWER, function.UPPER,
 		function.LTRIM, function.RTRIM, function.TRIM, function.LOCATE,
 		function.POSITION, function.INSTR, function.INSERT, function.REPLACE,
@@ -779,10 +780,14 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 		function.CHARSET, function.COLLATION, function.INTERNAL_CHAR_SIZE,
 		function.INTERNAL_COLUMN_CHARACTER_SET,
 	}
-	semanticPipeline := func(functionID int32) *pipeline.Pipeline {
+	semanticPipeline := func(functionID int32, resultType ...types.T) *pipeline.Pipeline {
+		typ := types.T_int64
+		if len(resultType) > 0 {
+			typ = resultType[0]
+		}
 		return &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 			Op: int32(vm.Projection), ProjectList: []*plan.Expr{{
-				Typ: plan.Type{Id: int32(types.T_int64)},
+				Typ: plan.Type{Id: int32(typ)},
 				Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
 					Obj: function.EncodeOverloadID(functionID, 0),
 				}}},
@@ -820,6 +825,56 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 			decoded, err := decodeScope(data, proc, true, nil)
 			require.NoError(t, err)
 			require.NotNil(t, decoded)
+		})
+	}
+
+	// LENGTH_UTF8 keeps the historical UINT64 wrapper at MORPC v58. The
+	// corrected result wrappers are a separate v73 contract and must not be
+	// folded into the legacy binary-string semantic gate above.
+	for _, test := range []struct {
+		name string
+		id   int32
+		typ  types.T
+	}{
+		{name: "find_in_set", id: function.FINDINSET, typ: types.T_int32},
+		{name: "strcmp", id: function.STRCMP, typ: types.T_int32},
+		{name: "length_utf8", id: function.LENGTH_UTF8, typ: types.T_int64},
+		{name: "uncompressed_length", id: function.UNCOMPRESSED_LENGTH, typ: types.T_int64},
+		{name: "crc32", id: function.CRC32, typ: types.T_uint64},
+	} {
+		t.Run("corrected-"+test.name, func(t *testing.T) {
+			p := semanticPipeline(test.id, test.typ)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, p),
+				"corrected string numeric result contracts require MORPC protocol version 73")
+
+			c, client := expressionProtocolTestCompile(t)
+			op := projection.NewArgument()
+			defer op.Release()
+			op.ProjectList = p.InstructionList[0].ProjectList
+			scope := &Scope{
+				Magic:    Remote,
+				Proc:     c.proc,
+				NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
+				RootOp:   op,
+			}
+			client.version = defines.MORPCVersion73
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+			data, err := encodeRemoteScope(scope, c.proc)
+			require.NoError(t, err)
+
+			wire := new(pipeline.Pipeline)
+			require.NoError(t, wire.Unmarshal(data))
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire),
+				"corrected string numeric result contracts require MORPC protocol version 73")
+			_, err = decodeScope(data, c.proc, true, nil)
+			require.ErrorContains(t, err,
+				"corrected string numeric result contracts require MORPC protocol version 73")
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+			_, err = decodeScope(data, c.proc, true, nil)
+			require.NoError(t, err)
 		})
 	}
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion49)
