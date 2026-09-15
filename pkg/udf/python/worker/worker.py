@@ -1042,6 +1042,14 @@ def _validate_definition_syntax(value: Dict[str, Any]) -> None:
             if node.name == handler:
                 self._mark()
 
+        def visit_MatchMapping(self, node):
+            # ``rest`` is the capture name in a ``**name`` mapping pattern,
+            # represented as a plain string rather than an ast.Name.
+            if node.rest == handler:
+                self._mark()
+            self.visit_nodes(node.keys)
+            self.visit_nodes(node.patterns)
+
         def visit_nodes(self, nodes):
             for child in nodes:
                 self.visit(child)
