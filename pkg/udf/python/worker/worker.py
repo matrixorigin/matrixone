@@ -897,7 +897,11 @@ def _decode_definition_validation(data: bytes) -> Dict[str, Any]:
         raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported Python ABI contract")
     if sdk_version != SDK_VERSION:
         raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported Python SDK")
-    if value.get("definition_schema_version") != DEFINITION_SCHEMA_VERSION:
+    definition_schema_version = value.get("definition_schema_version")
+    if (
+        type(definition_schema_version) is not int
+        or definition_schema_version != DEFINITION_SCHEMA_VERSION
+    ):
         raise ValueError("UNSUPPORTED_ROUTINE_VERSION: unsupported Python definition schema")
     artifact_digest = _required_digest(value, "artifact_digest")
     environment_digest = _required_digest(value, "environment_digest")
