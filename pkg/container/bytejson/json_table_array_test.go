@@ -109,3 +109,105 @@ func TestJSONTableArrayBuilderRejectsInvalidInputs(t *testing.T) {
 	require.NoError(t, builder.Append(parseBuilderValue(t, `[]`)))
 	require.Equal(t, 1, builder.Count())
 }
+
+func TestJSONTableArrayBuilderAccountsForStorageCompatibleExpansion(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		values    []ByteJson
+		wantBytes int
+		firstFits bool
+	}{
+		{
+			name: "bit",
+			values: []ByteJson{
+				{Type: TpCodeBit, Data: appendBinaryString(nil, string([]byte{1, 1}))},
+				{Type: TpCodeBit, Data: appendBinaryString(nil, string([]byte{2, 2}))},
+			},
+			wantBytes: 61,
+			firstFits: false,
+		},
+		{
+			name: "opaque",
+			values: []ByteJson{
+				{Type: TpCodeOpaque, Data: appendBinaryString(nil, string([]byte{1, 1}))},
+				{Type: TpCodeOpaque, Data: appendBinaryString(nil, string([]byte{2, 2}))},
+			},
+			wantBytes: 29,
+			firstFits: true,
+		},
+		{
+			name: "bit and opaque",
+			values: []ByteJson{
+				{Type: TpCodeBit, Data: appendBinaryString(nil, string([]byte{1, 1}))},
+				{Type: TpCodeOpaque, Data: appendBinaryString(nil, string([]byte{2, 2}))},
+			},
+			wantBytes: 45,
+			firstFits: false,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rawLimit := 1 + headerSize + len(test.values)*valEntrySize
+			for _, value := range test.values {
+				rawLimit += len(value.Data)
+			}
+
+			unbounded, err := NewJSONTableArrayBuilder(1024)
+			require.NoError(t, err)
+			for _, value := range test.values {
+				require.NoError(t, unbounded.Append(value))
+			}
+			array, err := unbounded.Build()
+			require.NoError(t, err)
+			encoded, err := array.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, test.wantBytes, len(encoded))
+			require.Greater(t, len(encoded), rawLimit)
+
+			bounded, err := NewJSONTableArrayBuilder(rawLimit)
+			require.NoError(t, err)
+			defer bounded.Close()
+			err = bounded.Append(test.values[0])
+			if test.firstFits {
+				require.NoError(t, err)
+				require.Equal(t, 1, bounded.Count())
+				err = bounded.Append(test.values[1])
+				require.ErrorIs(t, err, ErrJSONTableCellLimit)
+				require.Equal(t, 1, bounded.Count())
+			} else {
+				require.ErrorIs(t, err, ErrJSONTableCellLimit)
+				require.Zero(t, bounded.Count())
+			}
+		})
+	}
+}
+
+func TestJSONTableArrayBuilderAccountsForNestedStorageExpansion(t *testing.T) {
+	bit := ByteJson{Type: TpCodeBit, Data: appendBinaryString(nil, string([]byte{1, 1}))}
+	nested, err := CreateByteJSON([]any{bit})
+	require.NoError(t, err)
+	values := []ByteJson{nested, nested}
+
+	rawLimit := 1 + headerSize + len(values)*valEntrySize
+	for _, value := range values {
+		rawLimit += len(value.Data)
+	}
+
+	unbounded, err := NewJSONTableArrayBuilder(1024)
+	require.NoError(t, err)
+	for _, value := range values {
+		require.NoError(t, unbounded.Append(value))
+	}
+	array, err := unbounded.Build()
+	require.NoError(t, err)
+	encoded, err := array.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, 87, len(encoded))
+	require.Greater(t, len(encoded), rawLimit)
+
+	bounded, err := NewJSONTableArrayBuilder(rawLimit)
+	require.NoError(t, err)
+	defer bounded.Close()
+	require.NoError(t, bounded.Append(values[0]))
+	require.ErrorIs(t, bounded.Append(values[1]), ErrJSONTableCellLimit)
+	require.Equal(t, 1, bounded.Count())
+}

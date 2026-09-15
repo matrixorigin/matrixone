@@ -16,6 +16,7 @@ package jsonvalue
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/internal/bytejsonvalidate"
 )
 
 // ConversionStatus describes the value classification at the JSON_TABLE
@@ -305,6 +307,9 @@ func ConvertPathMatchesWithLimitContext(
 		return Result{Status: StatusStatementError, Err: err}
 	}
 	if !ok {
+		if target.Oid == types.T_json {
+			return convertJSONValueWithLimit(ctx, first, maxBytes)
+		}
 		return ConvertScalarWithContext(ctx, first, target, ConversionOptions{})
 	}
 	if target.Oid != types.T_json {
@@ -342,8 +347,36 @@ func ConvertPathMatchesWithLimitContext(
 		return Result{Status: StatusStatementError, Err: err}
 	}
 	// ConvertScalar only serializes the already-built final cell here; it does
-	// not re-walk the matches or build a second slice.
-	return ConvertScalarWithContext(ctx, array, target, ConversionOptions{})
+	// not re-walk the matches or build a second slice. Keep the final check as
+	// the admission boundary in case the storage representation changes.
+	return convertJSONValueWithLimit(ctx, array, maxBytes)
+}
+
+func convertJSONValueWithLimit(ctx context.Context, value bytejson.ByteJson, maxBytes int) Result {
+	if maxBytes <= 0 {
+		return Result{
+			Status: StatusStatementError,
+			Err:    fmt.Errorf("invalid JSON_TABLE JSON cell limit %d", maxBytes),
+		}
+	}
+	result := ConvertScalarWithContext(ctx, value, types.T_json.ToType(), ConversionOptions{})
+	if result.Status != StatusSuccess {
+		return result
+	}
+	encoded, ok := result.Value.([]byte)
+	if !ok {
+		return Result{
+			Status: StatusStatementError,
+			Err:    errors.New("JSON_TABLE JSON conversion produced an incompatible value"),
+		}
+	}
+	if len(encoded) > maxBytes {
+		return Result{
+			Status: StatusStatementError,
+			Err:    fmt.Errorf("%w: %d bytes exceeds %d", bytejson.ErrJSONTableCellLimit, len(encoded), maxBytes),
+		}
+	}
+	return result
 }
 
 // AppendResult atomically appends a successful, null, or truncating result to
@@ -405,7 +438,53 @@ func safeMarshal(value bytejson.ByteJson) (data []byte, err error) {
 			data = nil
 		}
 	}()
+	if err := validateJSONValue(value); err != nil {
+		return nil, err
+	}
 	return value.Marshal()
+}
+
+func validateJSONValue(value bytejson.ByteJson) error {
+	if validJSONValue(value) {
+		return nil
+	}
+	return fmt.Errorf("invalid ByteJson value of type %#x", value.Type)
+}
+
+func validJSONValue(value bytejson.ByteJson) bool {
+	switch value.Type {
+	case bytejson.TpCodeLiteral:
+		if len(value.Data) != 1 {
+			return false
+		}
+		switch value.Data[0] {
+		case bytejson.LiteralNull, bytejson.LiteralTrue, bytejson.LiteralFalse:
+			return true
+		default:
+			return false
+		}
+	case bytejson.TpCodeInt64, bytejson.TpCodeUint64:
+		return len(value.Data) == 8
+	case bytejson.TpCodeFloat64:
+		if len(value.Data) != 8 {
+			return false
+		}
+		floating := math.Float64frombits(binary.LittleEndian.Uint64(value.Data))
+		return !math.IsNaN(floating) && !math.IsInf(floating, 0)
+	case bytejson.TpCodeString, bytejson.TpCodeDecimal,
+		bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime,
+		bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
+		_, ok := bytejsonvalidate.UvarintPayload(value.Data)
+		return ok
+	case bytejson.TpCodeArray, bytejson.TpCodeObject:
+		return bytejsonvalidate.Container(byte(value.Type), value.Data, validJSONScalar)
+	default:
+		return false
+	}
+}
+
+func validJSONScalar(tp byte, data []byte) bool {
+	return validJSONValue(bytejson.ByteJson{Type: bytejson.TpCode(tp), Data: data})
 }
 
 func safeScalarText(value bytejson.ByteJson) (text string, err error) {
@@ -472,7 +551,7 @@ func convertUnsignedInteger(value bytejson.ByteJson, text string, target types.T
 		if v > math.MaxUint32 {
 			return Result{Status: StatusRangeError, Err: conversionError(target, text)}
 		}
-		return Result{Value: v, Status: StatusSuccess}
+		return Result{Value: uint32(v), Status: StatusSuccess}
 	default:
 		return Result{Value: v, Status: StatusSuccess}
 	}
