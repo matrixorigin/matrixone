@@ -1,0 +1,47 @@
+set ft_relevancy_algorithm="TF-IDF";
+set experimental_fulltext_index = 1;
+drop database if exists ft_agg_match;
+create database ft_agg_match;
+use ft_agg_match;
+create table docs(id int primary key, body text);
+insert into docs values
+(1, 'hello world'),
+(2, 'foo bar'),
+(3, 'hello hello again'),
+(4, 'world only'),
+(5, 'hello matrix one'),
+(6, null);
+create fulltext index ft_body on docs(body);
+select max(match(body) against('hello')) as top from docs where match(body) against('hello');
+➤ top[7,23,31]  𝄀
+0.09843373
+select group_concat(match(body) against('hello') order by id separator '|') as scores from docs where match(body) against('hello');
+➤ scores[-1,16383,0]  𝄀
+0.049216866|0.09843373|0.049216866
+select group_concat(id order by match(body) against('hello') desc, id separator '|') as ids from docs where match(body) against('hello');
+➤ ids[-1,16383,0]  𝄀
+3|1|5
+with hits as (
+select id, match(body) against('hello') score from docs where match(body) against('hello')
+)
+select max(score) as top, group_concat(id order by score desc, id separator '|') as ids from hits;
+➤ top[7,23,31]  ¦  ids[-1,16383,0]  𝄀
+0.09843373  ¦  3|1|5
+select match(body) against('hello') as score, count(*) as c from docs where match(body) against('hello') group by match(body) against('hello') order by score;
+➤ score[7,23,31]  ¦  c[-5,64,0]  𝄀
+0.049216866  ¦  2  𝄀
+0.09843373  ¦  1
+explain select max(match(body) against('hello')) from docs where match(body) against('hello');
+-- @regex("fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Aggregate  𝄀
+        Aggregate Functions: max(mo_fulltext_alias_0.score)  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (docs.id = mo_fulltext_alias_0.doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on ft_agg_match.docs  𝄀
+                    Runtime Filter Probe: docs.id  𝄀
+              ->  Table Function on fulltext_index_scan
+drop database ft_agg_match;
