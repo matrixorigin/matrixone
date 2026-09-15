@@ -190,6 +190,8 @@ func BuildTableScanAccountFilter(
 		return BuildMoTablesFilter(uint64(accountID))
 	case databaseName == catalog.MO_CATALOG && tableName == catalog.MO_COLUMNS:
 		return BuildMoColumnsFilter(uint64(accountID))
+	case databaseName == catalog.MO_CATALOG && tableName == catalog.MO_VIEW_DEPENDENCIES:
+		return BuildViewMetadataDependenciesFilter(uint64(accountID))
 	case TableIsClusterTable(tableType):
 		return makeAccountIdEqualAst(uint64(accountID))
 	default:

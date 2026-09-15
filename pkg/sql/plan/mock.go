@@ -471,6 +471,21 @@ func NewMockCompilerContext(isDml bool) *MockCompilerContext {
 		},
 		pks: []int{0},
 	}
+	moSchema[catalog.MO_VIEW_REFRESH] = &Schema{
+		cols: []col{
+			{"account_id", types.T_uint32, false, 0, 0},
+			{"target_relation_id", types.T_uint64, false, 0, 0},
+			{"status", types.T_varchar, false, 32, 0},
+		},
+	}
+	moSchema[catalog.MO_VIEW_DEPENDENCIES] = &Schema{
+		cols: []col{
+			{"account_id", types.T_uint32, false, 0, 0},
+			{"target_relation_id", types.T_uint64, false, 0, 0},
+			{"dependency_ordinal", types.T_uint32, false, 0, 0},
+			{"source_relation_kind", types.T_varchar, false, 32, 0},
+		},
+	}
 	moSchema["mo_tables"] = &Schema{
 		cols: []col{
 			{"rel_id", types.T_uint64, false, 64, 0},

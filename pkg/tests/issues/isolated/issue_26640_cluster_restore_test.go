@@ -15,7 +15,6 @@
 package isolated
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -26,8 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/matrixorigin/matrixone/pkg/lockservice"
-	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -213,8 +210,6 @@ func runIssue28742CanceledRestoreWithMetadataProbe(
 	require.True(t, ok, "CN service does not expose the SQL executor")
 	probeExecutor := cn1Service.GetSQLExecutor()
 	require.NotNil(t, probeExecutor)
-	services := issue28742LockServices(cluster)
-	require.NotEmpty(t, services)
 
 	faultEnabledHere := fault.Enable()
 	if faultEnabledHere {
@@ -226,7 +221,7 @@ func runIssue28742CanceledRestoreWithMetadataProbe(
 		parent, restoreGateWaiters, ":::", "getwaiters", 0, restoreGate, false))
 
 	restoreCtx, cancelRestore := context.WithTimeout(parent, 90*time.Second)
-	probeCtx, cancelProbe := context.WithCancel(restoreCtx)
+	probeCtx, cancelProbe := context.WithTimeout(restoreCtx, 30*time.Second)
 	defer cancelProbe()
 	defer cancelRestore()
 	restoreDone := make(chan error, 1)
@@ -270,19 +265,14 @@ func runIssue28742CanceledRestoreWithMetadataProbe(
 		probeDone <- compile.RequireViewMetadataRevalidation(probeCtx, probeExecutor)
 	}()
 	probeStarted = true
-	require.Eventually(t, func() bool {
-		return issue28742HasFeatureRegistryMetadataWaiter(services)
-	}, 20*time.Second, 10*time.Millisecond,
-		"feature-registry metadata probe did not wait before cancellation")
-
-	cancelProbe()
 	select {
 	case err = <-probeDone:
 		probeStarted = false
-		require.Error(t, err)
+		require.ErrorContains(t, err, "lock options conflict")
 	case <-time.After(30 * time.Second):
-		require.FailNow(t, "canceled view-metadata fence did not return")
+		require.FailNow(t, "view-metadata fence did not fast-fail behind restore")
 	}
+	cancelProbe()
 
 	cancelRestore()
 	_, err = fault.RemoveFaultPoint(parent, restoreGate)
@@ -336,9 +326,6 @@ func runIssue28742RestoreWithMetadataProbe(
 	require.True(t, ok, "CN service does not expose the SQL executor")
 	probeExecutor := cn1Service.GetSQLExecutor()
 	require.NotNil(t, probeExecutor)
-
-	services := issue28742LockServices(cluster)
-	require.NotEmpty(t, services)
 
 	faultEnabledHere := fault.Enable()
 	if faultEnabledHere {
@@ -397,15 +384,17 @@ func runIssue28742RestoreWithMetadataProbe(
 	}()
 	probeStarted = true
 
-	// The fixed path owns the feature-registry identity exclusively before it
-	// pauses at restoreGate. The probe therefore queues on that same metadata
-	// key instead of holding a shared key while waiting on SNAPSHOT. On the old
-	// path this condition cannot become true until the restore is released,
-	// which makes the regression discriminate the original lock order.
-	require.Eventually(t, func() bool {
-		return issue28742HasFeatureRegistryMetadataWaiter(services)
-	}, 15*time.Second, 10*time.Millisecond,
-		"feature-registry metadata probe did not wait behind restore admission")
+	// Background recovery must never wait for SNAPSHOT while holding View.
+	// Since restore owns SNAPSHOT at this barrier, the probe must fast-fail and
+	// leave no reverse wait edge. A fresh probe is required to succeed after the
+	// restore publishes and releases both lifecycle gates.
+	select {
+	case err = <-probeDone:
+		probeConsumed = true
+		require.ErrorContains(t, err, "lock options conflict")
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "view-metadata fence did not fast-fail behind restore")
+	}
 
 	_, err = fault.RemoveFaultPoint(parent, restoreGate)
 	require.NoError(t, err)
@@ -417,13 +406,9 @@ func runIssue28742RestoreWithMetadataProbe(
 	case <-ctx.Done():
 		t.Fatalf("restore did not return: %v", ctx.Err())
 	}
-	select {
-	case err = <-probeDone:
-		probeConsumed = true
-		require.NoError(t, err)
-	case <-ctx.Done():
-		t.Fatalf("feature-registry metadata probe did not return: %v", ctx.Err())
-	}
+	freshProbeCtx, cancelFreshProbe := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelFreshProbe()
+	require.NoError(t, compile.RequireViewMetadataRevalidation(freshProbeCtx, probeExecutor))
 
 	var generation uint64
 	require.NoError(t, sysDB.QueryRowContext(parent,
@@ -431,44 +416,4 @@ func runIssue28742RestoreWithMetadataProbe(
 			"where account_id=0 and target_relation_id=0 and dependency_ordinal=0",
 	).Scan(&generation))
 	require.Greater(t, generation, uint64(0))
-}
-
-func issue28742LockServices(cluster embed.Cluster) []lockservice.LockService {
-	var services []lockservice.LockService
-	cluster.ForeachServices(func(service embed.ServiceOperator) bool {
-		if service.ServiceType() == metadata.ServiceType_CN {
-			services = append(services, lockservice.GetLockServiceByServiceID(service.ServiceID()))
-		}
-		return true
-	})
-	return services
-}
-
-func issue28742HasFeatureRegistryMetadataWaiter(services []lockservice.LockService) bool {
-	for _, service := range services {
-		found := false
-		service.IterLocks(func(tableID uint64, keys [][]byte, lock lockservice.Lock) bool {
-			if tableID != catalog.MO_TABLES_ID || !issue28742HasKey(keys, []byte("mo_feature_registry")) {
-				return true
-			}
-			lock.IterWaiters(func(pblock.WaitTxn) bool {
-				found = true
-				return false
-			})
-			return !found
-		})
-		if found {
-			return true
-		}
-	}
-	return false
-}
-
-func issue28742HasKey(keys [][]byte, needle []byte) bool {
-	for _, key := range keys {
-		if bytes.Contains(key, needle) {
-			return true
-		}
-	}
-	return false
 }

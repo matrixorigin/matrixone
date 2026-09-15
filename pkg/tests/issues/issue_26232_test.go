@@ -38,6 +38,7 @@ func TestIssue26232ViewDefaultAndCTASContracts(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		execSQLRequire(t, ctx, dbConn, "set role moadmin")
+		waitForViewMetadataActivation(t, ctx, cn.ServiceID())
 
 		const db = "issue_26232"
 		for _, stmt := range []string{

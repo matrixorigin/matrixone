@@ -24,6 +24,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -199,11 +200,11 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 			terminalPaths := []struct {
 				name      string
 				statement string
-				wantRows  int
+				commit    bool
 			}{
-				{name: "commit", statement: "commit", wantRows: 1},
-				{name: "replacement_begin", statement: "begin", wantRows: 1},
-				{name: "rollback", statement: "rollback", wantRows: 0},
+				{name: "commit", statement: "commit", commit: true},
+				{name: "replacement_begin", statement: "begin", commit: true},
+				{name: "rollback", statement: "rollback"},
 			}
 			services := issue27487LockServices(c)
 			require.NotEmpty(t, services)
@@ -218,10 +219,12 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 					require.NoError(t, execConn(conn1, "begin"))
 					require.NoError(t, execConn(conn1,
 						"data branch create table branch_quota_race."+tableName+" from branch_quota_race.src"))
-					// DDL now retains SNAPSHOT before View through the entire transaction.
-					// Observe a real waiter before ending the holder: elapsed time alone
-					// cannot distinguish serialization from a snapshot that never started.
+					// Explicit branch transactions defer their SNAPSHOT write barrier to
+					// COMMIT, but retain catalog/View locks. Snapshot creation can therefore
+					// wait on either lifecycle boundary. Observe both instead of requiring
+					// one implementation-specific lock.
 					beforeSnapshot, _ := issue28317Waiters(services, snapshotTableID)
+					beforeView, _ := issue28317Waiters(services, catalog.MO_TABLES_ID)
 					snapshotCtx, cancelSnapshot := context.WithCancel(execCtx)
 					snapshotDone := make(chan error, 1)
 					joined := false
@@ -247,13 +250,29 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 						snapshotDone <- snapshotErr
 					}()
 					require.Eventually(t, func() bool {
-						waiters, _ := issue28317Waiters(services, snapshotTableID)
-						return waiters > beforeSnapshot
-					}, 30*time.Second, 10*time.Millisecond, "snapshot did not reach the lifecycle gate")
+						snapshotWaiters, _ := issue28317Waiters(services, snapshotTableID)
+						viewWaiters, _ := issue28317Waiters(services, catalog.MO_TABLES_ID)
+						return snapshotWaiters > beforeSnapshot || viewWaiters > beforeView
+					}, 30*time.Second, 10*time.Millisecond, "snapshot did not reach a lifecycle gate")
 					terminalErr := execConn(conn1, terminalPath.statement)
-					require.NoError(t, terminalErr, terminalPath.name)
-					// A replacement BEGIN opened a new transaction; close it before
-					// checking committed state or performing cleanup DDL.
+					wantRows := 0
+					if terminalPath.commit && terminalErr == nil {
+						// The owner can win by already holding SNAPSHOT; otherwise
+						// commit validation rejects it after the competing snapshot
+						// acquires SNAPSHOT and waits for View. Both serial orders are
+						// valid, but partial publication is not.
+						wantRows = 1
+					} else if terminalPath.commit {
+						require.True(t,
+							strings.Contains(terminalErr.Error(), "txn need retry") ||
+								strings.Contains(terminalErr.Error(), "lock options conflict"),
+							"%s returned an unrelated error: %v", terminalPath.name, terminalErr)
+					} else {
+						require.NoError(t, terminalErr, terminalPath.name)
+					}
+					// A successful replacement BEGIN opens a new transaction; a failed
+					// commit/replacement is already aborted. ROLLBACK is harmless in both
+					// states and leaves a deterministic boundary for catalog assertions.
 					require.NoError(t, execConn(conn1, "rollback"))
 					select {
 					case snapshotErr := <-snapshotDone:
@@ -266,15 +285,15 @@ func TestIssue26087ConcurrentDataBranchQuota(t *testing.T) {
 					require.NoError(t, conn1.QueryRowContext(execCtx,
 						"select count(*) from mo_catalog.mo_tables where reldatabase = 'branch_quota_race' and relname = '"+tableName+"'",
 					).Scan(&explicitHolderCount))
-					require.Equal(t, terminalPath.wantRows, explicitHolderCount, terminalPath.name)
-					if terminalPath.wantRows != 0 {
+					require.Equal(t, wantRows, explicitHolderCount, terminalPath.name)
+					if wantRows != 0 {
 						var value int
 						require.NoError(t, conn1.QueryRowContext(execCtx,
 							"select a from branch_quota_race."+tableName).Scan(&value))
 						require.Equal(t, 1, value)
 					}
 					execSQLRequire(t, ctx, sysDB, "drop snapshot "+snapshotName)
-					if terminalPath.wantRows != 0 {
+					if wantRows != 0 {
 						require.NoError(t, execConn(conn1, "data branch delete table branch_quota_race."+tableName))
 					}
 				}()

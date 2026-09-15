@@ -26,36 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-var (
-	constTrue = &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Value: &plan.Literal_Bval{
-					Bval: true,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_bool),
-			NotNullable: true,
-		},
-	}
-
-	constFalse = &plan.Expr{
-		Expr: &plan.Expr_Lit{
-			Lit: &plan.Literal{
-				Value: &plan.Literal_Bval{
-					Bval: false,
-				},
-			},
-		},
-		Typ: plan.Type{
-			Id:          int32(types.T_bool),
-			NotNullable: true,
-		},
-	}
-)
-
 func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
 	return builder.flattenSubqueriesWithContext(nodeID, expr, ctx, false)
 }
@@ -403,10 +373,10 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			return nodeID, newProj, nil
 
 		case plan.SubqueryRef_EXISTS:
-			return nodeID, constTrue, nil
+			return nodeID, makePlan2BoolConstExprWithType(true), nil
 
 		case plan.SubqueryRef_NOT_EXISTS:
-			return nodeID, constFalse, nil
+			return nodeID, makePlan2BoolConstExprWithType(false), nil
 
 		case plan.SubqueryRef_IN:
 			newExpr, err := builder.generateRowComparison("=", subquery.Child, subCtx, true)
@@ -494,7 +464,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 
 		if scalarExistential {
 			if len(joinPreds) == 0 {
-				joinPreds = append(joinPreds, constTrue)
+				joinPreds = append(joinPreds, makePlan2BoolConstExprWithType(true))
 			}
 			var retExpr *plan.Expr
 			nodeID, retExpr, err = builder.insertMarkJoin(nodeID, subID, joinPreds, nil, false, ctx)
@@ -530,7 +500,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			}
 			joinType = plan.Node_LEFT
 			if len(joinPreds) == 0 {
-				joinPreds = append(joinPreds, constTrue)
+				joinPreds = append(joinPreds, makePlan2BoolConstExprWithType(true))
 			}
 		} else if subCtx.hasSingleRow {
 			joinType = plan.Node_LEFT
@@ -635,7 +605,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	case plan.SubqueryRef_EXISTS:
 		// Uncorrelated subquery
 		if len(joinPreds) == 0 {
-			joinPreds = append(joinPreds, constTrue)
+			joinPreds = append(joinPreds, makePlan2BoolConstExprWithType(true))
 		}
 
 		var markExpr *plan.Expr
@@ -649,7 +619,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	case plan.SubqueryRef_NOT_EXISTS:
 		// Uncorrelated subquery
 		if len(joinPreds) == 0 {
-			joinPreds = append(joinPreds, constTrue)
+			joinPreds = append(joinPreds, makePlan2BoolConstExprWithType(true))
 		}
 
 		var markExpr *plan.Expr
@@ -808,7 +778,7 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 				return unsafe()
 			}
 
-			marker := DeepCopyExpr(constTrue)
+			marker := makePlan2BoolConstExprWithType(true)
 			node.ProjectList[0] = marker
 			ctx.projects[0] = marker
 			match := GetColExpr(marker.Typ, ctx.projectTag, 0)
@@ -2275,7 +2245,7 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 		var newFilterList []*plan.Expr
 		for _, cond := range node.FilterList {
 			if hasCorrCol(cond) {
-				//cond, err = bindFuncExprImplByPlanExpr("is", []*plan.Expr{cond, DeepCopyExpr(constTrue)})
+				//cond, err = bindFuncExprImplByPlanExpr("is", []*plan.Expr{cond, makePlan2BoolConstExprWithType(true)})
 				if err != nil {
 					return 0, nil, err
 				}

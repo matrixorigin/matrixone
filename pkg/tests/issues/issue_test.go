@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -185,6 +186,17 @@ func execSQLRequire(t *testing.T, ctx context.Context, db *sql.DB, statement str
 func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement string) {
 	t.Helper()
 	_, _ = db.ExecContext(ctx, statement)
+}
+
+func waitForViewMetadataActivation(
+	t *testing.T,
+	ctx context.Context,
+	serviceID string,
+) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		return ctx.Err() == nil && compile.ViewMetadataRefreshEnabled(serviceID)
+	}, time.Minute, 100*time.Millisecond)
 }
 
 func TestWWConflict(t *testing.T) {

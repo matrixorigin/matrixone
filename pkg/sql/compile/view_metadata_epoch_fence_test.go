@@ -23,6 +23,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func BenchmarkViewMetadataRefreshLease(b *testing.B) {
+	fence := NewViewMetadataEpochFence()
+	require.NoError(b, fence.Advance(context.Background(), 1))
+	require.True(b, fence.MarkCatalogFenced(1))
+	require.True(b, fence.MarkRefreshReady(1))
+	require.True(b, fence.EnableRefresh(1))
+	fence.RenewAuthority(time.Now().Add(time.Hour))
+
+	b.Run("serial", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			lease, enabled, err := fence.AcquireRefresh(context.Background())
+			if err != nil || !enabled {
+				b.Fatalf("AcquireRefresh() = enabled %v, err %v", enabled, err)
+			}
+			lease.Release()
+		}
+	})
+	b.Run("parallel", func(b *testing.B) {
+		b.ReportAllocs()
+		b.RunParallel(func(pb *testing.PB) {
+			for pb.Next() {
+				lease, enabled, err := fence.AcquireRefresh(context.Background())
+				if err != nil || !enabled {
+					b.Fatalf("AcquireRefresh() = enabled %v, err %v", enabled, err)
+				}
+				lease.Release()
+			}
+		})
+	})
+}
+
 func waitViewMetadataFenceAdvancing(t *testing.T, fence *ViewMetadataEpochFence) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -90,6 +122,164 @@ func TestViewMetadataEpochFenceCancellationKeepsOldEpoch(t *testing.T) {
 	lease.Release()
 	require.NoError(t, fence.Advance(context.Background(), 2))
 	require.Equal(t, uint64(2), fence.Epoch())
+}
+
+func TestViewMetadataRefreshLeaseWaitsForCatalogFenceThenFailsClosed(t *testing.T) {
+	fence := NewViewMetadataEpochFence()
+	require.NoError(t, fence.Advance(context.Background(), 3))
+
+	type result struct {
+		lease    *ViewMetadataEpochLease
+		acquired bool
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		lease, acquired, err := fence.AcquireRefresh(context.Background())
+		done <- result{lease: lease, acquired: acquired, err: err}
+	}()
+	select {
+	case got := <-done:
+		t.Fatalf("refresh acquisition crossed the unfenced publication gap: %+v", got)
+	default:
+	}
+
+	require.True(t, fence.MarkCatalogFenced(3))
+	got := <-done
+	require.NoError(t, got.err)
+	require.False(t, got.acquired)
+	require.NotNil(t, got.lease)
+	require.Equal(t, uint64(3), got.lease.Epoch())
+	got.lease.Release()
+}
+
+func TestViewMetadataInitialRefreshLeaseBlocksFirstAdvance(t *testing.T) {
+	fence := NewViewMetadataEpochFence()
+	lease, enabled, err := fence.AcquireRefresh(context.Background())
+	require.NoError(t, err)
+	require.False(t, enabled)
+	require.NotNil(t, lease)
+	require.Zero(t, lease.Epoch())
+
+	done := make(chan error, 1)
+	go func() { done <- fence.Advance(context.Background(), 1) }()
+	waitViewMetadataFenceAdvancing(t, fence)
+	select {
+	case err := <-done:
+		t.Fatalf("first epoch advanced before initial refresh lease drained: %v", err)
+	default:
+	}
+	lease.Release()
+	require.NoError(t, <-done)
+	require.Equal(t, uint64(1), fence.Epoch())
+}
+
+func TestViewMetadataRefreshLeaseDrainsEnabledEpoch(t *testing.T) {
+	fence := NewViewMetadataEpochFence()
+	require.NoError(t, fence.Advance(context.Background(), 3))
+	require.True(t, fence.MarkCatalogFenced(3))
+	require.True(t, fence.MarkRefreshReady(3))
+	require.True(t, fence.EnableRefresh(3))
+	require.True(t, fence.RefreshEnabled())
+
+	lease, acquired, err := fence.AcquireRefresh(context.Background())
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.Equal(t, uint64(3), lease.Epoch())
+
+	done := make(chan error, 1)
+	go func() { done <- fence.Advance(context.Background(), 4) }()
+	waitViewMetadataFenceAdvancing(t, fence)
+	select {
+	case err := <-done:
+		t.Fatalf("epoch advanced before refresh lease drained: %v", err)
+	default:
+	}
+	lease.Release()
+	require.NoError(t, <-done)
+	require.False(t, fence.RefreshEnabled())
+	require.False(t, fence.EnableRefresh(3), "stale completion must not reopen a newer epoch")
+}
+
+func TestViewMetadataRefreshLeaseStaysSealedAfterCanceledAdvance(t *testing.T) {
+	fence := NewViewMetadataEpochFence()
+	require.NoError(t, fence.Advance(context.Background(), 1))
+	require.True(t, fence.MarkCatalogFenced(1))
+	require.True(t, fence.MarkRefreshReady(1))
+	require.True(t, fence.EnableRefresh(1))
+	blocker, err := fence.Acquire(context.Background())
+	require.NoError(t, err)
+
+	advanceCtx, cancelAdvance := context.WithCancel(context.Background())
+	advanceDone := make(chan error, 1)
+	go func() { advanceDone <- fence.Advance(advanceCtx, 2) }()
+	waitViewMetadataFenceAdvancing(t, fence)
+	cancelAdvance()
+	require.ErrorIs(t, <-advanceDone, context.Canceled)
+	require.False(t, fence.RefreshEnabled())
+
+	type acquireResult struct {
+		lease    *ViewMetadataEpochLease
+		acquired bool
+		err      error
+	}
+	leaseDone := make(chan acquireResult, 1)
+	go func() {
+		lease, acquired, acquireErr := fence.AcquireRefresh(context.Background())
+		leaseDone <- acquireResult{lease: lease, acquired: acquired, err: acquireErr}
+	}()
+	provisionalDone := make(chan acquireResult, 1)
+	go func() {
+		lease, acquireErr := fence.AcquireProvisional(context.Background())
+		provisionalDone <- acquireResult{lease: lease, err: acquireErr}
+	}()
+	select {
+	case result := <-leaseDone:
+		t.Fatalf("refresh reopened after canceled authoritative advance: %+v", result)
+	default:
+	}
+	select {
+	case result := <-provisionalDone:
+		t.Fatalf("provisional planning reopened old epoch after canceled advance: %+v", result)
+	default:
+	}
+
+	blocker.Release()
+	require.NoError(t, fence.Advance(context.Background(), 2))
+	require.True(t, fence.MarkCatalogFenced(2))
+	result := <-leaseDone
+	require.NoError(t, result.err)
+	require.False(t, result.acquired)
+	require.Equal(t, uint64(2), result.lease.Epoch())
+	result.lease.Release()
+	provisional := <-provisionalDone
+	require.NoError(t, provisional.err)
+	require.Equal(t, uint64(2), provisional.lease.Epoch())
+	provisional.lease.Release()
+}
+
+func TestViewMetadataAuthorityDeadlineFencesPausedProcessSynchronously(t *testing.T) {
+	fence := NewViewMetadataEpochFence()
+	now := time.Unix(100, 0)
+	fence.now = func() time.Time { return now }
+	require.NoError(t, fence.Advance(context.Background(), 1))
+	require.True(t, fence.MarkCatalogFenced(1))
+	require.True(t, fence.MarkRefreshReady(1))
+	require.True(t, fence.EnableRefresh(1))
+	fence.RenewAuthority(now.Add(time.Second))
+
+	lease, enabled, err := fence.AcquireRefresh(context.Background())
+	require.NoError(t, err)
+	require.True(t, enabled)
+	defer lease.Release()
+
+	// Model SIGSTOP/STW: wall time passes while the shutdown timer callback has
+	// not run. Both the old lease terminal and a new acquisition fail directly
+	// from the shared authority deadline.
+	now = now.Add(2 * time.Second)
+	require.ErrorIs(t, lease.ValidateAuthority(), context.Canceled)
+	_, _, err = fence.AcquireRefresh(context.Background())
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestViewMetadataEpochFenceCloseTerminatesWaiters(t *testing.T) {

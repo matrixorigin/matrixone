@@ -48,6 +48,7 @@ func TestBuildTableScanAccountFilter(t *testing.T) {
 		{name: "tenant mo_database", accountID: 7, databaseName: catalog.MO_CATALOG, tableName: catalog.MO_DATABASE, wantFilter: true, wantFragment: "account_id = 7"},
 		{name: "tenant mo_tables", accountID: 7, databaseName: catalog.MO_CATALOG, tableName: catalog.MO_TABLES, wantFilter: true, wantFragment: "account_id = 7"},
 		{name: "tenant mo_columns", accountID: 7, databaseName: catalog.MO_CATALOG, tableName: catalog.MO_COLUMNS, wantFilter: true, wantFragment: "account_id = 7"},
+		{name: "tenant mo_view_dependencies", accountID: 7, databaseName: catalog.MO_CATALOG, tableName: catalog.MO_VIEW_DEPENDENCIES, wantFilter: true, wantFragment: "account_id = 0"},
 		{name: "tenant metric", accountID: 7, databaseName: catalog.MO_SYSTEM_METRICS, tableName: catalog.MO_METRIC, wantFilter: true, wantFragment: "account_id = 7"},
 		{name: "tenant sql_statement_cu", accountID: 7, databaseName: catalog.MO_SYSTEM_METRICS, tableName: catalog.MO_SQL_STMT_CU, wantFilter: true, wantFragment: "account_id = 7"},
 		{name: "tenant statement_info", accountID: 7, databaseName: catalog.MO_SYSTEM, tableName: catalog.MO_STATEMENT, wantFilter: true, wantFragment: "account_id = 7"},

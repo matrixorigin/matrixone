@@ -29,6 +29,8 @@ const (
 )
 const maxExistentialArms = 8
 
+var constTrue = MakePlan2BoolConstExprWithType(true)
+
 type pendingExistential struct{ sub *plan.SubqueryRef }
 
 func (builder *QueryBuilder) existentialNYI() error {
