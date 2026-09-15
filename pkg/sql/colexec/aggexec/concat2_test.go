@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1725,6 +1726,45 @@ func TestGroupConcatExecRetainsProductionOrderPrefix(t *testing.T) {
 	total, warnings := ConsumeGroupConcatWarnings(exec)
 	require.Equal(t, uint64(2), total)
 	require.Equal(t, []GroupConcatWarning{{Row: 3}}, warnings)
+}
+
+func TestGroupConcatWarningBudgetSealsAfterRejectedPrefixRow(t *testing.T) {
+	budget := process.NewWarningDiagnosticBudget(
+		process.WarningDiagnosticRecordOverhead +
+			uint64(groupConcatWarningMessageLength(1)))
+	exec := &groupConcatExec{
+		warningRetentionLimit: 2,
+		warningBudget:         budget,
+	}
+
+	exec.recordTruncation(100000)
+	exec.recordTruncation(1)
+
+	total, warnings := ConsumeGroupConcatWarnings(exec)
+	require.Equal(t, uint64(2), total)
+	require.Empty(t, warnings)
+	require.Zero(t, budget.Used())
+}
+
+func TestGroupConcatWarningAccumulatorTransfersBudgetBeforeFormatting(t *testing.T) {
+	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	exec := &groupConcatExec{
+		warningRetentionLimit: 1,
+		warningBudget:         budget,
+	}
+	exec.recordTruncation(7)
+
+	var accumulator GroupConcatWarningAccumulator
+	accumulator.SetWarningRetentionLimit(1)
+	accumulator.SetWarningBudget(budget)
+	accumulator.Add(exec)
+	require.Positive(t, budget.Used())
+
+	sink := new(groupConcatWarningSink)
+	accumulator.Report(sink)
+	require.Equal(t, uint64(1), sink.total)
+	require.Equal(t, []string{"Row 7 was cut by GROUP_CONCAT()"}, sink.messages)
+	require.Zero(t, budget.Used())
 }
 
 func TestGroupConcatWarningAccumulatorRetainsFirstBatchPrefix(t *testing.T) {

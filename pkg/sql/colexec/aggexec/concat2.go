@@ -20,11 +20,11 @@ import (
 	"container/heap"
 	"context"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"math"
 	"os"
 	"slices"
+	"strconv"
 	"time"
 	"unicode/utf8"
 
@@ -40,30 +40,33 @@ import (
 // group_concat is a special string aggregation function.
 type groupConcatExec struct {
 	aggExec
-	distinct              bool
-	distinctHash          distinctHash
-	separator             []byte
-	concatArgCnt          int
-	orderArgCnt           int
-	orderArgIndexes       []uint32
-	orderDesc             []bool
-	orderNullsLast        []bool
-	orderedDistinct       []map[string][]byte
-	h0SpillLimit          int64
-	h0SpillContext        context.Context
-	h0SpillFile           func() (*os.File, error)
-	h0SpillReport         func(int64, int64, int64)
-	h0SpillData           *os.File
-	orderedSpillRuns      [][]groupConcatSpillRun
-	maxLen                uint64
-	truncationCount       uint64
-	truncationRows        []uint64
-	warningRowCount       uint64
-	warningRetentionLimit int
-	timeZone              *time.Location
-	inputRowCount         uint64
-	inputRowBase          uint64
-	inputRowBaseSet       bool
+	distinct               bool
+	distinctHash           distinctHash
+	separator              []byte
+	concatArgCnt           int
+	orderArgCnt            int
+	orderArgIndexes        []uint32
+	orderDesc              []bool
+	orderNullsLast         []bool
+	orderedDistinct        []map[string][]byte
+	h0SpillLimit           int64
+	h0SpillContext         context.Context
+	h0SpillFile            func() (*os.File, error)
+	h0SpillReport          func(int64, int64, int64)
+	h0SpillData            *os.File
+	orderedSpillRuns       [][]groupConcatSpillRun
+	maxLen                 uint64
+	truncationCount        uint64
+	truncationRows         []GroupConcatWarning
+	warningRowCount        uint64
+	warningRetentionLimit  int
+	warningBudget          *process.WarningDiagnosticBudget
+	warningChargeBytes     uint64
+	warningRetentionSealed bool
+	timeZone               *time.Location
+	inputRowCount          uint64
+	inputRowBase           uint64
+	inputRowBaseSet        bool
 	// multiGroupWarningContext is owned by the Group hash mode rather than by
 	// the current aggregate instance. It remains true while spill recovery
 	// rebuilds an executor for a bucket containing only one logical group.
@@ -77,10 +80,43 @@ type GroupConcatWarning struct {
 	Row uint64
 }
 
+func (exec *groupConcatExec) releaseWarningCharge(charge uint64) {
+	if exec == nil || exec.warningBudget == nil || charge == 0 {
+		return
+	}
+	exec.warningBudget.Release(charge)
+	if charge > exec.warningChargeBytes {
+		exec.warningChargeBytes = 0
+	} else {
+		exec.warningChargeBytes -= charge
+	}
+}
+
 // Direct aggregate callers retain the historical local fallback. Execution
 // operators bind the session snapshot explicitly through
 // ConfigureGroupConcatWarningRetention.
 const groupConcatWarningRetentionLimit = process.WarningDiagnosticLegacyRetentionLimit
+
+const (
+	groupConcatWarningPrefix = "Row "
+	groupConcatWarningSuffix = " was cut by GROUP_CONCAT()"
+)
+
+func groupConcatWarningMessageLength(row uint64) int {
+	digits := 1
+	for value := row; value >= 10; value /= 10 {
+		digits++
+	}
+	return len(groupConcatWarningPrefix) + digits + len(groupConcatWarningSuffix)
+}
+
+func groupConcatWarningRecordBytes(row uint64) uint64 {
+	return uint64(groupConcatWarningMessageLength(row)) + process.WarningDiagnosticRecordOverhead
+}
+
+func formatGroupConcatWarning(row uint64) string {
+	return groupConcatWarningPrefix + strconv.FormatUint(row, 10) + groupConcatWarningSuffix
+}
 
 type groupConcatWarningDiagnosticAppender interface {
 	AppendWarningDiagnostic(code uint16, msg string)
@@ -107,14 +143,49 @@ func ConfigureGroupConcatWarningRetention(agg AggFuncExec, limit int) {
 		}
 		exec.warningRetentionLimit = limit
 		if len(exec.truncationRows) > limit {
+			for _, warning := range exec.truncationRows[limit:] {
+				exec.releaseWarningCharge(groupConcatWarningRecordBytes(warning.Row))
+			}
 			exec.truncationRows = exec.truncationRows[:limit]
 		}
 		if limit == 0 {
 			exec.truncationRows = nil
 		} else if cap(exec.truncationRows) > limit*2 {
-			exec.truncationRows = append([]uint64(nil), exec.truncationRows...)
+			exec.truncationRows = append([]GroupConcatWarning(nil), exec.truncationRows...)
 		}
 	}
+}
+
+// ConfigureGroupConcatWarningBudget binds one aggregate executor to the
+// statement-wide diagnostic account. The aggregate charges only the bounded
+// representation that ReportGroupConcatWarnings will eventually format; it
+// never builds a diagnostic string before admission.
+func ConfigureGroupConcatWarningBudget(agg AggFuncExec, budget *process.WarningDiagnosticBudget) {
+	exec, ok := agg.(*groupConcatExec)
+	if !ok || exec == nil || exec.warningBudget == budget {
+		return
+	}
+	if exec.warningBudget != nil {
+		exec.warningBudget.Release(exec.warningChargeBytes)
+	}
+	if budget == nil {
+		budget = process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	}
+	exec.warningBudget = budget
+	exec.warningChargeBytes = 0
+	exec.warningRetentionSealed = false
+	keep := 0
+	for keep < len(exec.truncationRows) {
+		charge := groupConcatWarningRecordBytes(exec.truncationRows[keep].Row)
+		if !budget.Reserve(charge) {
+			exec.warningRetentionSealed = true
+			break
+		}
+		exec.warningChargeBytes += charge
+		keep++
+	}
+	clear(exec.truncationRows[keep:])
+	exec.truncationRows = exec.truncationRows[:keep]
 }
 
 // GroupConcatWarningRetentionLimit returns the configured retention capacity
@@ -139,10 +210,25 @@ func GroupConcatWarningRetentionLimit(agg AggFuncExec) int {
 // Keeping the accumulator here lets Group defer session publication until all
 // buckets have completed without exposing frontend/session types to aggexec.
 type GroupConcatWarningAccumulator struct {
-	total          uint64
-	rows           []GroupConcatWarning
-	retentionLimit int
-	retentionSet   bool
+	total                  uint64
+	rows                   []GroupConcatWarning
+	retentionLimit         int
+	retentionSet           bool
+	warningBudget          *process.WarningDiagnosticBudget
+	warningChargeBytes     uint64
+	warningRetentionSealed bool
+}
+
+func (a *GroupConcatWarningAccumulator) releaseWarningCharge(charge uint64) {
+	if a == nil || a.warningBudget == nil || charge == 0 {
+		return
+	}
+	a.warningBudget.Release(charge)
+	if charge > a.warningChargeBytes {
+		a.warningChargeBytes = 0
+	} else {
+		a.warningChargeBytes -= charge
+	}
 }
 
 func (a *GroupConcatWarningAccumulator) SetWarningRetentionLimit(limit int) {
@@ -158,6 +244,9 @@ func (a *GroupConcatWarningAccumulator) SetWarningRetentionLimit(limit int) {
 	a.retentionLimit = limit
 	a.retentionSet = true
 	if len(a.rows) > limit {
+		for _, warning := range a.rows[limit:] {
+			a.releaseWarningCharge(groupConcatWarningRecordBytes(warning.Row))
+		}
 		a.rows = a.rows[:limit]
 	}
 	if limit == 0 {
@@ -165,6 +254,40 @@ func (a *GroupConcatWarningAccumulator) SetWarningRetentionLimit(limit int) {
 	} else if cap(a.rows) > limit*2 {
 		a.rows = append([]GroupConcatWarning(nil), a.rows...)
 	}
+}
+
+func (a *GroupConcatWarningAccumulator) SetWarningBudget(budget *process.WarningDiagnosticBudget) {
+	if a == nil || a.warningBudget == budget {
+		return
+	}
+	if a.warningBudget != nil {
+		a.warningBudget.Release(a.warningChargeBytes)
+	}
+	if budget == nil {
+		budget = process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	}
+	a.warningBudget = budget
+	a.warningChargeBytes = 0
+	a.warningRetentionSealed = false
+	keep := 0
+	for keep < len(a.rows) {
+		charge := groupConcatWarningRecordBytes(a.rows[keep].Row)
+		if !budget.Reserve(charge) {
+			a.warningRetentionSealed = true
+			break
+		}
+		a.warningChargeBytes += charge
+		keep++
+	}
+	clear(a.rows[keep:])
+	a.rows = a.rows[:keep]
+}
+
+func (a *GroupConcatWarningAccumulator) WarningBudget() *process.WarningDiagnosticBudget {
+	if a == nil {
+		return nil
+	}
+	return a.warningBudget
 }
 
 func (a *GroupConcatWarningAccumulator) warningLimit() int {
@@ -181,13 +304,22 @@ func (a *GroupConcatWarningAccumulator) Add(agg AggFuncExec) {
 	if !a.retentionSet {
 		a.SetWarningRetentionLimit(GroupConcatWarningRetentionLimit(agg))
 	}
-	total, warnings := ConsumeGroupConcatWarnings(agg)
-	a.addBatch(total, warnings)
+	total, warnings, budget, charged := consumeGroupConcatWarningsOwned(agg)
+	a.addBatchOwned(total, warnings, budget, charged)
 }
 
 func (a *GroupConcatWarningAccumulator) addBatch(
 	total uint64,
 	warnings []GroupConcatWarning,
+) {
+	a.addBatchOwned(total, warnings, nil, 0)
+}
+
+func (a *GroupConcatWarningAccumulator) addBatchOwned(
+	total uint64,
+	warnings []GroupConcatWarning,
+	source *process.WarningDiagnosticBudget,
+	chargedBytes uint64,
 ) {
 	if a == nil {
 		return
@@ -199,24 +331,65 @@ func (a *GroupConcatWarningAccumulator) addBatch(
 	}
 	limit := a.warningLimit()
 	if limit == 0 {
+		if source != nil {
+			source.Release(chargedBytes)
+		}
 		return
 	}
-	remaining := limit - len(a.rows)
-	if remaining <= 0 {
-		return
+	if a.warningBudget == nil && source != nil {
+		a.warningBudget = source
 	}
-	if len(warnings) > remaining {
-		warnings = warnings[:remaining]
+	sameBudget := source != nil && source == a.warningBudget
+	accounted := uint64(0)
+	for _, warning := range warnings {
+		charge := groupConcatWarningRecordBytes(warning.Row)
+		accounted += charge
+		if len(a.rows) >= limit || a.warningRetentionSealed {
+			if sameBudget {
+				source.Release(charge)
+			}
+			continue
+		}
+		if source == nil && a.warningBudget != nil {
+			available := a.warningBudget.Limit() - a.warningBudget.Used()
+			if charge > available || !a.warningBudget.Reserve(charge) {
+				a.warningRetentionSealed = true
+				continue
+			}
+			a.warningChargeBytes += charge
+		} else if source != nil && !sameBudget {
+			if a.warningBudget == nil || !a.warningBudget.Reserve(charge) {
+				a.warningRetentionSealed = true
+				continue
+			}
+			a.warningChargeBytes += charge
+		} else if sameBudget {
+			a.warningChargeBytes += charge
+		}
+		a.rows = append(a.rows, warning)
 	}
-	a.rows = append(a.rows, warnings...)
+	if source != nil {
+		if sameBudget {
+			if chargedBytes > accounted {
+				source.Release(chargedBytes - accounted)
+			}
+		} else {
+			source.Release(chargedBytes)
+		}
+	}
 }
 
 func (a *GroupConcatWarningAccumulator) Reset() {
 	if a == nil {
 		return
 	}
+	if a.warningBudget != nil {
+		a.warningBudget.Release(a.warningChargeBytes)
+	}
 	a.total = 0
 	a.rows = a.rows[:0]
+	a.warningChargeBytes = 0
+	a.warningRetentionSealed = false
 }
 
 func hasGroupConcatWarningSink(session any) bool {
@@ -236,9 +409,6 @@ func (a *GroupConcatWarningAccumulator) Report(session any) {
 	if a == nil || a.total == 0 || !hasGroupConcatWarningSink(session) {
 		return
 	}
-	batch, hasBatchSink := session.(groupConcatWarningBatchAppender)
-	appender, hasDiagnosticSink := session.(groupConcatWarningDiagnosticAppender)
-	counter, hasCountSink := session.(groupConcatWarningCountAppender)
 	codes := make([]uint16, 0, len(a.rows))
 	messages := make([]string, 0, len(a.rows))
 	// The retained diagnostics are a production-order prefix. Preserve that
@@ -246,31 +416,12 @@ func (a *GroupConcatWarningAccumulator) Report(session any) {
 	for i := 0; i < len(a.rows); i++ {
 		warning := a.rows[i]
 		codes = append(codes, moerr.ER_CUT_VALUE_GROUP_CONCAT)
-		messages = append(messages, fmt.Sprintf(
-			"Row %d was cut by GROUP_CONCAT()", warning.Row))
+		messages = append(messages, formatGroupConcatWarning(warning.Row))
 	}
-	if hasBatchSink {
-		batch.AppendWarningBatch(a.total, codes, messages)
-		a.Reset()
-		return
-	}
-	if !hasDiagnosticSink {
-		if hasCountSink {
-			counter.AppendWarningCount(a.total)
-			a.Reset()
-		}
-		return
-	}
-	if uint64(len(codes)) > a.total {
-		codes = codes[:int(a.total)]
-		messages = messages[:int(a.total)]
-	}
-	if hasCountSink && a.total > uint64(len(codes)) {
-		counter.AppendWarningCount(a.total - uint64(len(codes)))
-	}
-	for i := range codes {
-		appender.AppendWarningDiagnostic(codes[i], messages[i])
-	}
+	charged := a.warningChargeBytes
+	process.AppendWarningBatchToSinkOwned(
+		session, a.total, codes, messages, a.warningBudget, charged)
+	a.warningChargeBytes = 0
 	a.Reset()
 }
 
@@ -279,22 +430,42 @@ func (a *GroupConcatWarningAccumulator) Report(session any) {
 // and prevents duplicate SHOW WARNINGS entries when a caller revisits a
 // materialized result.
 func ConsumeGroupConcatWarnings(agg AggFuncExec) (uint64, []GroupConcatWarning) {
-	exec, ok := agg.(*groupConcatExec)
-	if !ok || exec == nil || exec.truncationCount == 0 {
-		return 0, nil
+	total, rows, budget, charged := consumeGroupConcatWarningsOwned(agg)
+	if budget != nil {
+		budget.Release(charged)
 	}
-	total := exec.truncationCount
-	rows := make([]GroupConcatWarning, len(exec.truncationRows))
-	for i, row := range exec.truncationRows {
-		rows[i].Row = row
-	}
-	exec.clearTruncationWarnings()
 	return total, rows
 }
 
+func consumeGroupConcatWarningsOwned(agg AggFuncExec) (
+	uint64,
+	[]GroupConcatWarning,
+	*process.WarningDiagnosticBudget,
+	uint64,
+) {
+	exec, ok := agg.(*groupConcatExec)
+	if !ok || exec == nil || exec.truncationCount == 0 {
+		return 0, nil, nil, 0
+	}
+	total := exec.truncationCount
+	rows := exec.truncationRows
+	budget := exec.warningBudget
+	charged := exec.warningChargeBytes
+	exec.truncationCount = 0
+	exec.truncationRows = nil
+	exec.warningChargeBytes = 0
+	exec.warningRetentionSealed = false
+	return total, rows, budget, charged
+}
+
 func (exec *groupConcatExec) clearTruncationWarnings() {
+	if exec.warningBudget != nil {
+		exec.warningBudget.Release(exec.warningChargeBytes)
+	}
 	exec.truncationCount = 0
 	exec.truncationRows = exec.truncationRows[:0]
+	exec.warningChargeBytes = 0
+	exec.warningRetentionSealed = false
 }
 
 // ConfigureGroupConcatTimeZone installs the initiating session's location for
@@ -1214,13 +1385,23 @@ func (exec *groupConcatExec) recordTruncation(row uint64) {
 	}
 	exec.truncationCount++
 	limit := exec.warningRetentionLimit
-	if limit <= 0 {
+	if limit <= 0 || exec.warningRetentionSealed {
 		return
 	}
 	if len(exec.truncationRows) >= limit {
 		return
 	}
-	exec.truncationRows = append(exec.truncationRows, row)
+	if exec.warningBudget == nil {
+		exec.warningBudget = process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	}
+	charge := groupConcatWarningRecordBytes(row)
+	available := exec.warningBudget.Limit() - exec.warningBudget.Used()
+	if charge > available || !exec.warningBudget.Reserve(charge) {
+		exec.warningRetentionSealed = true
+		return
+	}
+	exec.truncationRows = append(exec.truncationRows, GroupConcatWarning{Row: row})
+	exec.warningChargeBytes += charge
 }
 
 func (exec *groupConcatExec) recordPayloadTruncation(
@@ -2737,8 +2918,12 @@ func (exec *groupConcatExec) Free() {
 	exec.h0SpillFile = nil
 	exec.h0SpillReport = nil
 	exec.orderedDistinct = nil
+	exec.clearTruncationWarnings()
 	exec.truncationRows = nil
 	exec.truncationCount = 0
+	exec.warningBudget = nil
+	exec.warningChargeBytes = 0
+	exec.warningRetentionSealed = false
 	exec.warningRowCount = 0
 	exec.warningRetentionLimit = groupConcatWarningRetentionLimit
 	exec.timeZone = nil

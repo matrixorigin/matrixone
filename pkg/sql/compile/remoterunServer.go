@@ -1002,9 +1002,11 @@ func (receiver *messageReceiverOnServer) newCompile() (*Compile, error) {
 	if proc.Base.SessionInfo.MaxErrorCountSet {
 		warningLimit = proc.Base.SessionInfo.MaxErrorCount
 	}
+	warningBudget := process.WarningDiagnosticBudgetForProcess(proc)
 	receiver.warningSession = &remoteWarningCollector{
 		maxRetained:    warningLimit,
 		maxRetainedSet: true,
+		warningBudget:  warningBudget,
 	}
 	// A remote CN owns an independent input stream. Its local source-row
 	// cursor therefore cannot be used as a statement-global GROUP_CONCAT

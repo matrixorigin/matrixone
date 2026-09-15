@@ -363,14 +363,15 @@ func AppendWarningBatchToSinkOwned(
 // operator/function invocation, so large INSERT IGNORE statements cannot grow
 // execution memory with the number of skipped rows.
 type WarningAccumulator struct {
-	Total             uint64
-	Codes             []uint16
-	Messages          []string
-	bytes             int
-	budgetBytes       uint64
-	budget            *WarningDiagnosticBudget
-	retentionLimit    int
-	retentionLimitSet bool
+	Total                  uint64
+	Codes                  []uint16
+	Messages               []string
+	bytes                  int
+	budgetBytes            uint64
+	budget                 *WarningDiagnosticBudget
+	retentionLimit         int
+	retentionLimitSet      bool
+	warningRetentionSealed bool
 }
 
 func (a *WarningAccumulator) ensureBudget() *WarningDiagnosticBudget {
@@ -398,11 +399,13 @@ func (a *WarningAccumulator) SetWarningBudget(budget *WarningDiagnosticBudget) {
 	}
 	a.budget = budget
 	a.budgetBytes = 0
+	a.warningRetentionSealed = false
 	keep := 0
 	a.bytes = 0
 	for keep < len(a.Messages) {
 		charge := WarningDiagnosticRecordBytes(a.Messages[keep])
 		if !budget.Reserve(charge) {
+			a.warningRetentionSealed = true
 			break
 		}
 		a.budgetBytes += charge
@@ -482,6 +485,9 @@ func (a *WarningAccumulator) Add(code uint16, message string) {
 	if len(a.Codes) >= a.warningRetentionLimit() {
 		return
 	}
+	if a.warningRetentionSealed {
+		return
+	}
 	if budget := a.ensureBudget(); budget != nil {
 		candidateBytes := len(message)
 		if candidateBytes > WarningDiagnosticMaxMessageBytes {
@@ -489,12 +495,14 @@ func (a *WarningAccumulator) Add(code uint16, message string) {
 		}
 		available := budget.Limit() - budget.Used()
 		if uint64(candidateBytes)+WarningDiagnosticRecordOverhead > available {
+			a.warningRetentionSealed = true
 			return
 		}
 	}
 	message = BoundWarningMessage(message, WarningDiagnosticMaxMessageBytes)
 	charge := WarningDiagnosticRecordBytes(message)
 	if !a.ensureBudget().Reserve(charge) {
+		a.warningRetentionSealed = true
 		return
 	}
 	a.Codes = append(a.Codes, code)
@@ -518,7 +526,7 @@ func (a *WarningAccumulator) AddCount() {
 // Callers can use it to avoid formatting large internal keys once the bounded
 // diagnostic buffer is full.
 func (a *WarningAccumulator) NeedsDiagnostic() bool {
-	if a == nil || len(a.Codes) >= a.warningRetentionLimit() {
+	if a == nil || len(a.Codes) >= a.warningRetentionLimit() || a.warningRetentionSealed {
 		return false
 	}
 	if a.budget == nil {
@@ -549,6 +557,7 @@ func (a *WarningAccumulator) Flush(proc *Process) {
 	a.Messages = a.Messages[:0]
 	a.bytes = 0
 	a.budgetBytes = 0
+	a.warningRetentionSealed = false
 }
 
 // Reset releases retained payload ownership without publishing it. It is the
@@ -567,4 +576,5 @@ func (a *WarningAccumulator) Reset() {
 	a.Messages = a.Messages[:0]
 	a.bytes = 0
 	a.budgetBytes = 0
+	a.warningRetentionSealed = false
 }
