@@ -296,6 +296,13 @@ var CDCCheckPitrGranularityWithExclude = func(
 						if hasForeignKey {
 							continue
 						}
+						hasUserPK, err := result.GetUint64(ctx, row, 7)
+						if err != nil {
+							return err
+						}
+						if hasUserPK == 0 {
+							return moerr.NewInternalErrorf(ctx, "CDC source scope %s contains table %s.%s without a primary key", pt.Source, dbName, tableName)
+						}
 
 					}
 				}

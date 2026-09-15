@@ -7012,6 +7012,10 @@ func (c *Compile) checkPitrGranularity(
 					if hasForeignKey {
 						continue
 					}
+					if !vector.MustFixedColNoTypeCheck[bool](cols[7])[i] {
+						validationErr = moerr.NewInternalErrorf(ctx, "CDC source scope %s contains table %s.%s without a primary key", pt.Source, dbName, tableName)
+						return false
+					}
 				}
 				return true
 			})
