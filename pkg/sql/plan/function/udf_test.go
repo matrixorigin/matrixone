@@ -338,6 +338,12 @@ func TestPythonRoutineCallCarriesExactCatalogContract(t *testing.T) {
 	require.NotEmpty(t, call.GetPython().DefinitionFingerprint)
 }
 
+func TestPythonRoutineCallRejectsNoncanonicalLanguage(t *testing.T) {
+	routine := &Udf{Language: "PYTHON"}
+	_, err := routine.GetRoutineCall()
+	require.ErrorContains(t, err, `routine call has unsupported language "PYTHON"`)
+}
+
 func TestSQLRoutineFingerprintAndCallUseSharedRevisionContract(t *testing.T) {
 	fingerprint, err := SQLRoutineFingerprint("select value + 1", "[\"bigint\"]", "bigint")
 	require.NoError(t, err)
