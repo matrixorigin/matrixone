@@ -38,7 +38,7 @@ func NumericFunctionResultArgs(name string, argCount int, includeAggregates bool
 	}
 
 	switch name {
-	case "+", "-", "*", "/", "%", "mod":
+	case "+", "-", "*", "/", "%", "mod", "div":
 		if argCount != 2 {
 			return nil, false
 		}

@@ -25,14 +25,14 @@ import (
 
 // Rebind every producer and consumer together, without changing the prepared
 // AST, logical plan or compile. No new runtime cache is published on this path.
-func rebindPreparedIntegerSource(execCtx *ExecCtx, ses FeSession, prepared *PrepareStmt, values []any) (*plan2.Plan, error) {
+func rebindPreparedIntegerSource(reqCtx context.Context, execCtx *ExecCtx, ses FeSession, prepared *PrepareStmt, values []any) (*plan2.Plan, error) {
 	compiler := ses.GetTxnCompileCtx()
 	previousDatabase := compiler.GetDatabase()
 	compiler.SetDatabase(prepared.defaultDatabase)
 	defer compiler.SetDatabase(previousDatabase)
 	var rebuilt *plan2.Plan
 	err := execCtx.withRootSQL(prepared.Sql, func() (err error) {
-		rebuilt, err = buildPreparedIntegerSource(execCtx.reqCtx, ses, compiler,
+		rebuilt, err = buildPreparedIntegerSource(reqCtx, ses, compiler,
 			prepared.Sql, prepared.schedulingSQLMode, values, prepared.integerSourceParamPositions)
 		return err
 	})

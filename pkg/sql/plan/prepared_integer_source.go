@@ -187,9 +187,9 @@ func WithPreparedIntegerBindings(requestCtx context.Context, c CompilerContext, 
 		}
 		bindings[int(pos)+1] = typ
 	}
-	ctx := c.GetContext()
+	ctx := requestCtx
 	if ctx == nil {
-		ctx = requestCtx
+		ctx = c.GetContext()
 	}
 	if ctx == nil {
 		ctx = context.Background()

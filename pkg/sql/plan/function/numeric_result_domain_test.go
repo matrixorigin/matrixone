@@ -29,6 +29,7 @@ func TestNumericFunctionResultArgs(t *testing.T) {
 		want  []int
 	}{
 		{name: "/", count: 2, want: []int{0, 1}},
+		{name: "div", count: 2, want: []int{0, 1}},
 		{name: "abs", count: 1, want: []int{0}},
 		{name: "round", count: 2, want: []int{0}},
 		{name: "truncate", count: 2, want: []int{0}},

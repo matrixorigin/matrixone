@@ -59,6 +59,8 @@ SELECT * FROM float_dst;
 CREATE TABLE dst (id INT PRIMARY KEY, v BIGINT);
 INSERT INTO dst SELECT 100, 1 + FLOOR(x/2) FROM src;
 INSERT INTO dst SELECT 101, FLOOR(x/2) + 1 FROM src;
+INSERT INTO dst SELECT 108, 10 DIV (x/2) FROM src;
+INSERT INTO dst SELECT 109, 10 DIV FLOOR(x/2) FROM src;
 SELECT * FROM dst ORDER BY id;
 DELETE FROM dst;
 
@@ -133,6 +135,15 @@ SET @division_value=7;
 EXECUTE exact_division USING @division_value;
 SELECT * FROM relational_dst ORDER BY v;
 DEALLOCATE PREPARE exact_division;
+DELETE FROM relational_dst;
+SET sql_mode = 'STRICT_TRANS_TABLES,NO_UNSIGNED_SUBTRACTION';
+PREPARE unsigned_subtraction FROM
+    'INSERT INTO relational_dst SELECT q FROM (SELECT ?/2 q) s WHERE ?-CAST(2 AS UNSIGNED)<0';
+SET @unsigned_x=5,@unsigned_y=1;
+EXECUTE unsigned_subtraction USING @unsigned_x,@unsigned_y;
+SELECT * FROM relational_dst;
+DEALLOCATE PREPARE unsigned_subtraction;
+SET sql_mode = 'STRICT_TRANS_TABLES';
 CREATE TABLE large_src (x BIGINT);
 INSERT INTO large_src VALUES (9007199254740993);
 INSERT INTO dst SELECT 20, x / 2 FROM large_src;

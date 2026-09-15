@@ -104,6 +104,8 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			{"addition_wrapper", "insert into dst select x / 2 + 0 from src", 3},
 			{"left_mixed_wrapper", "insert into dst select 1 + floor(x / 2) from src", 3},
 			{"right_mixed_wrapper", "insert into dst select floor(x / 2) + 1 from src", 3},
+			{"integer_division_wrapper", "insert into dst select 10 div (x / 2) from src", 4},
+			{"integer_division_floor_wrapper", "insert into dst select 10 div floor(x / 2) from src", 5},
 			{"update_wrapper", "update dst set v = abs(5 / 2)", 3},
 			{"approximate_control", "insert into dst select x / 2E0 from src", 2},
 			{"folded_approximate_control", "insert into dst values (abs(5E0 / 2) + 0)", 2},
@@ -259,6 +261,34 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 						}
 					})
 				}
+			}
+		})
+		t.Run("prepared_source_preserves_no_unsigned_subtraction", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table no_unsigned_dst(i bigint, f double)")
+			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES,NO_UNSIGNED_SUBTRACTION'")
+			defer func() { _, _ = conn.ExecContext(ctx, "set sql_mode='STRICT_TRANS_TABLES'") }()
+			query := "insert into no_unsigned_dst select q,q+0E0 from (select ?/2 q) s where ?-cast(2 as unsigned)<0"
+			for _, protocol := range []string{"sql", "binary"} {
+				t.Run(protocol, func(t *testing.T) {
+					mustExec(t, ctx, conn, "delete from no_unsigned_dst")
+					if protocol == "binary" {
+						stmt, err := conn.PrepareContext(ctx, query)
+						require.NoError(t, err)
+						defer stmt.Close()
+						_, err = stmt.ExecContext(ctx, int64(5), int64(1))
+						require.NoError(t, err)
+					} else {
+						mustExec(t, ctx, conn, "prepare unsigned_subtraction_p from '"+query+"'")
+						defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare unsigned_subtraction_p") }()
+						mustExec(t, ctx, conn, "set @unsigned_x=5,@unsigned_y=1")
+						mustExec(t, ctx, conn, "execute unsigned_subtraction_p using @unsigned_x,@unsigned_y")
+					}
+					var i int64
+					var f float64
+					require.NoError(t, conn.QueryRowContext(ctx, "select i,f from no_unsigned_dst").Scan(&i, &f))
+					require.Equal(t, int64(3), i)
+					require.Equal(t, 2.5, f)
+				})
 			}
 		})
 		t.Run("prepared_source_preserves_other_assignments", func(t *testing.T) {

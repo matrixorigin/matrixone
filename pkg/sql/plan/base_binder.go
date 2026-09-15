@@ -5110,7 +5110,7 @@ func bindFuncExprImplByPlanExpr(
 	// domain; promote the other exact operand symmetrically instead of depending
 	// on operand order. FLOAT remains authoritative and follows the branch above.
 	if len(args) == 2 && inIntegerAssignmentDomain(ctx) &&
-		(name == "+" || name == "-" || name == "*" || name == "%" || name == "mod") {
+		(name == "+" || name == "-" || name == "*" || name == "%" || name == "mod" || name == "div") {
 		left, right := types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)
 		if (left == types.T_decimal256 && (right.IsInteger() || right.IsDecimal())) ||
 			(right == types.T_decimal256 && (left.IsInteger() || left.IsDecimal())) {

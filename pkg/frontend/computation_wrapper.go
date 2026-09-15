@@ -1892,7 +1892,7 @@ func initExecuteStmtParamWithResolverInSession(
 			(runtimeCategoryCandidate && preparedRuntimeCacheSupports(cwft.paramVals)))
 	cacheableRuntimeQuery = cacheableRuntimeQuery && !rebindIntegerSource
 	if rebindIntegerSource {
-		runtimePlan, err = rebindPreparedIntegerSource(execCtx, executionSes, prepareStmt, cwft.paramVals)
+		runtimePlan, err = rebindPreparedIntegerSource(reqCtx, execCtx, executionSes, prepareStmt, cwft.paramVals)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
