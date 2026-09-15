@@ -2020,14 +2020,35 @@ def _read_exact(stream, size: int) -> bytearray:
     return result
 
 
+def _write_all(stream, data) -> None:
+    """Write one frame component completely to a byte stream.
+
+    The handler response channel is a pipe-backed ``FileIO`` object.  A
+    blocking write normally transfers all bytes, but the file API still
+    permits a short write (for example when a signal interrupts a large
+    transfer).  Treating that count as success would publish a truncated
+    length-prefixed frame and desynchronize every later response.
+    """
+    view = memoryview(data)
+    try:
+        offset = 0
+        while offset < len(view):
+            written = stream.write(view[offset:])
+            if not isinstance(written, int) or written <= 0 or written > len(view) - offset:
+                raise OSError("execution frame stream made no valid progress")
+            offset += written
+    finally:
+        view.release()
+
+
 def _write_execution_frame_parts(stream, parts: Iterable[bytes]) -> None:
     parts = tuple(parts)
     payload_size = sum(len(part) for part in parts)
     if payload_size > MAX_EXECUTION_FRAME_BYTES:
         raise ValueError("RESOURCE_EXHAUSTED: execution frame is too large")
-    stream.write(struct.pack(">Q", payload_size))
+    _write_all(stream, struct.pack(">Q", payload_size))
     for part in parts:
-        stream.write(part)
+        _write_all(stream, part)
     stream.flush()
 
 
