@@ -973,14 +973,14 @@ func (l *store) viewMetadataAdmissionLogStoresReady(state *pb.CheckerState) bool
 
 func (l *store) viewMetadataAdmissionLogStoresReadyWithProtocol(
 	state *pb.CheckerState,
-	requireProtocolV2 bool,
+	requireProtocolV3 bool,
 ) bool {
 	cfg := l.cfg.GetHAKeeperConfig()
 	cfg.Fill()
 	for _, info := range state.LogState.Stores {
 		if !cfg.LogStoreExpired(info.Tick, state.Tick) &&
 			(!info.ViewMetadataAdmissionSupported ||
-				(requireProtocolV2 && !info.ViewMetadataAdmissionProtocolV3Supported)) {
+				(requireProtocolV3 && !info.ViewMetadataAdmissionProtocolV3Supported)) {
 			return false
 		}
 	}
@@ -1704,7 +1704,6 @@ func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 		Locality:                                 l.cfg.getLocality(),
 		CommandDeliverySupported:                 true,
 		ViewMetadataAdmissionSupported:           true,
-		ViewMetadataAdmissionProtocolV2Supported: true,
 		ViewMetadataAdmissionProtocolV3Supported: true,
 	}
 	opts := dragonboat.NodeHostInfoOption{

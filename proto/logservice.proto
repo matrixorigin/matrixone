@@ -216,10 +216,7 @@ message LogStoreHeartbeat {
   // this Log store. It remains stable across process restarts and changes when
   // the store starts from a new data directory.
   string StoreIncarnation = 11;
-  // ViewMetadataAdmissionProtocolV2Supported proves that this HAKeeper RSM
-  // understands the persisted-expression admission payload. It predates the
-  // independent activation entry and is retained for compatibility checks.
-  bool ViewMetadataAdmissionProtocolV2Supported = 12;
+  reserved 12;
   // ViewMetadataAdmissionProtocolV3Supported proves that this HAKeeper RSM
   // understands the independent persisted-expression activation entry and
   // versioned snapshot envelope.
@@ -833,9 +830,7 @@ message LogStoreInfo {
   bool CommandDeliverySupported = 9;
   bool ViewMetadataAdmissionSupported = 10;
   string StoreIncarnation = 11;
-  // ViewMetadataAdmissionProtocolV2Supported proves that this HAKeeper RSM
-  // understands the persisted-expression admission payload.
-  bool ViewMetadataAdmissionProtocolV2Supported = 12;
+  reserved 12;
   bool ViewMetadataAdmissionProtocolV3Supported = 13;
 }
 
