@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -45,16 +46,16 @@ func TestExtractMinuteDatetimeVector(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	values := make([]types.Datetime, 62)
 	units := make([]string, len(values))
-	want := make([]string, len(values))
+	want := make([]int64, len(values))
 	for minute := 0; minute < 60; minute++ {
 		values[minute] = types.DatetimeFromClock(2026, 9, 12, 12, uint8(minute), 0, 0)
 		units[minute] = "minute"
-		want[minute] = fmt.Sprintf("%02d", minute)
+		want[minute] = int64(minute)
 	}
 	values[60] = types.ZeroDatetime
 	values[61] = types.Datetime(0)
 	units[60], units[61] = "minute", "minute"
-	want[60], want[61] = "00", "00"
+	want[60], want[61] = 0, 0
 
 	testCase := NewFunctionTestCase(
 		proc,
@@ -62,7 +63,7 @@ func TestExtractMinuteDatetimeVector(t *testing.T) {
 			NewFunctionTestConstInput(types.T_varchar.ToType(), units, nil),
 			NewFunctionTestInput(types.T_datetime.ToType(), values, nil),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, want, nil),
+		NewFunctionTestResult(types.T_int64.ToType(), false, want, nil),
 		ExtractFromDatetime,
 	)
 	succeed, info := testCase.Run()
@@ -83,9 +84,9 @@ func TestExtractMinuteDatetimeVectorFallbackAndNulls(t *testing.T) {
 		types.DatetimeFromClock(2026, 9, 12, 12, 0, 0, 0),
 	}
 	units := []string{"minute", "minute", "minute", "minute", "minute", "minute"}
-	want := make([]string, len(values))
+	want := make([]int64, len(values))
 	for i, value := range values {
-		want[i] = fmt.Sprintf("%02d", int(value.Minute()))
+		want[i] = int64(value.Minute())
 	}
 	unitNulls := []bool{false, false, false, false, false, false}
 	valueNulls := []bool{false, false, false, false, false, true}
@@ -97,7 +98,7 @@ func TestExtractMinuteDatetimeVectorFallbackAndNulls(t *testing.T) {
 			NewFunctionTestConstInput(types.T_varchar.ToType(), units, unitNulls),
 			NewFunctionTestInput(types.T_datetime.ToType(), values, valueNulls),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, want, resultNulls),
+		NewFunctionTestResult(types.T_int64.ToType(), false, want, resultNulls),
 		ExtractFromDatetime,
 	)
 	succeed, info := testCase.Run()
@@ -125,7 +126,7 @@ func TestExtractMinuteTimestampUsesSessionTimezone(t *testing.T) {
 			NewFunctionTestConstInput(types.T_varchar.ToType(), units, nil),
 			NewFunctionTestInput(types.T_timestamp.ToType(), values, []bool{false, false, true, false}),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"15", "00", "", "44"}, []bool{false, false, true, false}),
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{15, 0, 0, 44}, []bool{false, false, true, false}),
 		ExtractFromTimestamp,
 	)
 	succeed, info := testCase.Run()
@@ -139,7 +140,7 @@ func TestExtractMinuteTimestampUsesSessionTimezone(t *testing.T) {
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"minute", "minute", "minute"}, nil),
 			NewFunctionTestConstInput(types.T_timestamp.ToType(), []types.Timestamp{first, first, first}, nil),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"15", "15", "15"}, nil),
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{15, 15, 15}, nil),
 		ExtractFromTimestamp,
 	)
 	succeed, info = constantTimestamp.Run()
@@ -159,7 +160,7 @@ func TestExtractMinuteVectorConstantTemporalAndNullUnit(t *testing.T) {
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{unit, constantDatetime},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"07", "07", "07"}, nil),
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{7, 7, 7}, nil),
 		ExtractFromDatetime,
 	)
 	succeed, info := testCase.Run()
@@ -180,7 +181,7 @@ func TestExtractMinuteVectorConstantTemporalAndNullUnit(t *testing.T) {
 	nullUnitCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{unitWithNull, values},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "", ""}, []bool{true, true, true}),
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0, 0, 0}, []bool{true, true, true}),
 		ExtractFromDatetime,
 	)
 	succeed, info = nullUnitCase.Run()
@@ -194,7 +195,7 @@ func TestExtractMinuteVectorConstantTemporalAndNullUnit(t *testing.T) {
 			NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"minute"}, nil),
 			NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{}, nil),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{}, nil),
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{}, nil),
 		ExtractFromDatetime,
 	)
 	if err := emptyBatch.result.PreExtendAndReset(0); err != nil {
@@ -212,10 +213,10 @@ func TestExtractMinuteFastPathLeavesOtherUnitsUnchanged(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		unit string
-		want string
+		want int64
 	}{
-		{unit: "second", want: "06"},
-		{unit: "not-a-unit", want: ""},
+		{unit: "second", want: 6},
+		{unit: "not-a-unit", want: 0},
 	} {
 		t.Run(tc.unit, func(t *testing.T) {
 			testCase := NewFunctionTestCase(
@@ -228,7 +229,7 @@ func TestExtractMinuteFastPathLeavesOtherUnitsUnchanged(t *testing.T) {
 						nil,
 					),
 				},
-				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil),
+				NewFunctionTestResult(types.T_int64.ToType(), false, []int64{tc.want}, []bool{tc.unit == "not-a-unit"}),
 				ExtractFromDatetime,
 			)
 			succeed, info := testCase.Run()
@@ -282,7 +283,7 @@ func benchmarkExtractMinuteVector(
 			NewFunctionTestConstInput(types.T_varchar.ToType(), units, nil),
 			NewFunctionTestInput(inputType, values, nil),
 		},
-		NewFunctionTestResult(types.T_varchar.ToType(), false, nil, nil),
+		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
 		fn,
 	)
 	runBatch := func() {
@@ -295,8 +296,8 @@ func benchmarkExtractMinuteVector(
 		}
 	}
 	runBatch()
-	if got := fc.result.GetResultVector().GetStringAt(rows - 1); got != fmt.Sprintf("%02d", wantLastMinute) {
-		b.Fatalf("last result = %q, want %02d", got, wantLastMinute)
+	if got := vector.MustFixedColWithTypeCheck[int64](fc.result.GetResultVector())[rows-1]; got != int64(wantLastMinute) {
+		b.Fatalf("last result = %d, want %d", got, wantLastMinute)
 	}
 	b.ReportAllocs()
 	b.SetBytes(rows * 2)
@@ -305,7 +306,7 @@ func benchmarkExtractMinuteVector(
 		runBatch()
 	}
 	b.StopTimer()
-	if got := fc.result.GetResultVector().GetStringAt(rows - 1); got != fmt.Sprintf("%02d", wantLastMinute) {
-		b.Fatalf("last result = %q, want %02d", got, wantLastMinute)
+	if got := vector.MustFixedColWithTypeCheck[int64](fc.result.GetResultVector())[rows-1]; got != int64(wantLastMinute) {
+		b.Fatalf("last result = %d, want %d", got, wantLastMinute)
 	}
 }

@@ -1524,6 +1524,11 @@ type semanticDeclaration struct {
 var semanticDeclarations = []semanticDeclaration{
 	{semanticScalar, function.AND, "and", "and", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
 	{semanticScalar, function.OR, "or", "or", []types.Type{types.T_bool.ToType(), types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_datetime.ToType()}, "sirius-v1:extract"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_date.ToType()}, "sirius-v1:extract"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_time.ToType()}, "sirius-v1:extract"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_varchar.ToType()}, "sirius-v1:extract"},
+	{semanticScalar, function.EXTRACT, "extract", "extract", []types.Type{types.T_varchar.ToType(), types.T_timestamp.ToType()}, "sirius-v1:extract"},
 	{semanticScalar, function.NOT, "not", "not", []types.Type{types.T_bool.ToType()}, "sirius-v1:boolean-three-valued-logic"},
 	{semanticScalar, function.EQUAL, "=", "equal", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
 	{semanticScalar, function.NOT_EQUAL, "!=", "not_equal", []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, "sirius-v1:signed-i64-comparison"},
@@ -1679,7 +1684,7 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		case "singular_or_list":
 			declared = functionID == function.IN && len(args) >= 2 && (types.T(args[0].Typ.Id) == types.T_int32 || isTPCHStringType(types.T(args[0].Typ.Id)))
 		case "extract":
-			declared = functionID == function.EXTRACT && len(args) == 2 && types.T(args[0].Typ.Id) == types.T_varchar && types.T(args[1].Typ.Id) == types.T_date && types.T(out.Id) == types.T_uint32
+			declared = functionID == function.EXTRACT && len(args) == 2 && types.T(args[0].Typ.Id) == types.T_varchar && (types.T(args[1].Typ.Id) == types.T_date || types.T(args[1].Typ.Id) == types.T_datetime || types.T(args[1].Typ.Id) == types.T_time || types.T(args[1].Typ.Id) == types.T_varchar || types.T(args[1].Typ.Id) == types.T_timestamp) && types.T(out.Id) == types.T_int64
 		}
 	case semanticAggregate:
 		switch name {

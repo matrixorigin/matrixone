@@ -10466,16 +10466,82 @@ func DateStringToYear(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}, selectList)
 }
 
+// normalizeWeekMode applies the same modulo-eight normalization used by the
+// date implementation for both WEEK and YEARWEEK.  The SQL mode argument may
+// be a vector, so callers must invoke this per row rather than reading row 0.
+func normalizeWeekMode(mode int64) int {
+	mode %= 8
+	if mode < 0 {
+		mode += 8
+	}
+	return int(mode)
+}
+
+func weekModeAt(modes vector.FunctionParameterWrapper[int64], row uint64) (int, bool) {
+	if modes == nil {
+		return 0, false
+	}
+	// Preserve the historical behavior for a literal NULL mode: the old
+	// scalar path treated it as the omitted mode (mode 0).  Nulls in a
+	// row-dependent mode vector remain row-local NULLs below.
+	if modes.GetSourceVector().IsConstNull() {
+		return 0, false
+	}
+	mode, null := modes.GetValue(row)
+	if null {
+		return 0, true
+	}
+	return normalizeWeekMode(mode), false
+}
+
+// getDefaultWeekFormatMode reads the session default at execution time so a
+// prepared one-argument WEEK call observes a later SET default_week_format.
+func getDefaultWeekFormatMode(proc *process.Process) (int, error) {
+	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		return 0, nil
+	}
+	value, err := proc.GetResolveVariableFunc()("default_week_format", true, false)
+	if err != nil {
+		return 0, err
+	}
+	if value == nil {
+		return 0, nil
+	}
+	var mode int64
+	switch v := value.(type) {
+	case int64:
+		mode = v
+	case int32:
+		mode = int64(v)
+	case int:
+		mode = int64(v)
+	case uint64:
+		mode = int64(v)
+	case uint32:
+		mode = int64(v)
+	case uint:
+		mode = int64(v)
+	default:
+		return 0, moerr.NewInternalError(proc.Ctx,
+			fmt.Sprintf("session variable default_week_format has unexpected type %T", value))
+	}
+	return normalizeWeekMode(mode), nil
+}
+
 func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint8](result)
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	// MySQL uses mode % 8 for out-of-range values
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		mode = ((mode % 8) + 8) % 8
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	}
+	defaultMode := 0
+	if modes == nil {
+		var err error
+		defaultMode, err = getDefaultWeekFormatMode(proc)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -10486,8 +10552,12 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 			continue
 		}
 
+		mode, modeNull := weekModeAt(modes, i)
+		if modes == nil {
+			mode = defaultMode
+		}
 		date, null := dates.GetValue(i)
-		if null || date == types.ZeroDate {
+		if null || modeNull || date == types.ZeroDate {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -10505,13 +10575,17 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint8](result)
 	datetimes := vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0])
-
-	// Get mode (default 0 if not provided)
-	// MySQL uses mode % 8 for out-of-range values
-	mode := 0
-	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
-		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
-		mode = ((mode % 8) + 8) % 8
+	var modes vector.FunctionParameterWrapper[int64]
+	if len(ivecs) > 1 {
+		modes = vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
+	}
+	defaultMode := 0
+	if modes == nil {
+		var err error
+		defaultMode, err = getDefaultWeekFormatMode(proc)
+		if err != nil {
+			return err
+		}
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -10522,8 +10596,12 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 			continue
 		}
 
+		mode, modeNull := weekModeAt(modes, i)
+		if modes == nil {
+			mode = defaultMode
+		}
 		dt, null := datetimes.GetValue(i)
-		if null || dt == types.ZeroDatetime {
+		if null || modeNull || dt == types.ZeroDatetime {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
