@@ -1021,6 +1021,11 @@ func TestRegenerateLegacyViewDefinitionUsesParserDerivedMetadata(t *testing.T) {
 			contains:    "select 1",
 			checkOption: "CASCADED",
 		},
+		{
+			name:     "explicit view columns are retained by regeneration",
+			stmt:     "CREATE VIEW v (view_name) AS SELECT 1",
+			contains: "select 1 as `view_name`",
+		},
 	}
 
 	for _, test := range tests {

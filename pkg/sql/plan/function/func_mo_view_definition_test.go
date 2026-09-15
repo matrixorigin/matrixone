@@ -97,6 +97,12 @@ func TestViewDefinitionFromPersistedData(t *testing.T) {
 			ok:        true,
 		},
 		{
+			name:      "legacy explicit view columns are replayable as output aliases",
+			persisted: `{"Stmt":"CREATE VIEW v (view_name) AS SELECT 1"}`,
+			want:      "select 1 as `view_name`",
+			ok:        true,
+		},
+		{
 			name:      "legacy COM_QUERY uses the first statement",
 			persisted: `{"Stmt":"CREATE VIEW v AS SELECT 1; SELECT 2"}`,
 			want:      "select 1",

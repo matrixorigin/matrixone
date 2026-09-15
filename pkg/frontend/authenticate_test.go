@@ -503,7 +503,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		_, _, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, finalVersion, ca)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, "")
+		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, "", nil)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -585,7 +585,7 @@ func Test_createTablesInInformationSchemaOfGeneralTenant_UsesProtocolAwareViews(
 						return nil
 					}).AnyTimes()
 
-				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(context.Background(), bh, ""))
+				require.NoError(t, createTablesInInformationSchemaOfGeneralTenant(context.Background(), bh, "", nil))
 
 				require.Equal(t, test.wantCheckFunction, containsSQLFragment(executed, "mo_check_constraints()"))
 				require.Equal(t, test.wantCurrentRoles, containsSQLFragment(executed, "mo_current_roles()"))
