@@ -60,6 +60,8 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	// MergeGroup belongs to the upgraded coordinator and must publish the
 	// widened type selected by its plan, even when it consumes legacy state.
 	mergeGroup.ctr.legacyDecimalSumResult = false
+	mergeGroup.ctr.legacyApproxPercentileState = useLegacyApproxPercentileStateForRemote(proc)
+	mergeGroup.ctr.legacyHLLState = useLegacyHLLStateForRemote(proc)
 	mergeGroup.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false

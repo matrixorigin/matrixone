@@ -21,6 +21,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -4072,6 +4073,82 @@ func TestRemoteFinalDecimalSumPreservesOldCoordinatorResult(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRemoteApproxPercentileUsesLegacyStateBeforeProtocolV71(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
+	require.True(t, useLegacyApproxPercentileStateForRemote(proc))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+	require.False(t, useLegacyApproxPercentileStateForRemote(proc))
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
+	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)}}
+	ctr := &container{
+		mp:                          proc.Mp(),
+		mtyp:                        H0,
+		legacyApproxPercentileState: useLegacyApproxPercentileStateForRemote(proc),
+	}
+	aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfApproxPercentile, false, []*plan.Expr{arg}, []byte("0")),
+	})
+	require.NoError(t, err)
+	defer freeAggList(aggs)
+	values := vector.NewVec(types.T_float32.ToType())
+	defer values.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(values, float32(1), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(values, float32(math.NaN()), false, proc.Mp()))
+	require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
+	results, err := aggs[0].Flush()
+	require.NoError(t, err)
+	defer results[0].Free(proc.Mp())
+	require.True(t, math.IsNaN(vector.GetFixedAtNoTypeCheck[float64](results[0], 0)))
+}
+
+func TestRemoteHLLUsesLegacyStateBeforeProtocolV71(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
+
+	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)}}
+	ctr := &container{
+		mp:             proc.Mp(),
+		mtyp:           H0,
+		legacyHLLState: useLegacyHLLStateForRemote(proc),
+	}
+	require.True(t, ctr.legacyHLLState)
+	aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
+	})
+	require.NoError(t, err)
+	defer freeAggList(aggs)
+	values := vector.NewVec(types.T_float32.ToType())
+	defer values.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(values, float32(math.Copysign(0, -1)), false, proc.Mp()))
+	require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
+	results, err := aggs[0].Flush()
+	require.NoError(t, err)
+	defer results[0].Free(proc.Mp())
+	require.Equal(t, byte(2), results[0].GetBytesAt(0)[0],
+		"an old coordinator must receive a v2 HLL state")
+}
+
+func TestLegacyHLLStateRequiresRemoteProcess(t *testing.T) {
+	require.False(t, useLegacyHLLStateForRemote(nil))
+	require.False(t, useLegacyApproxPercentileStateForRemote(nil))
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	require.False(t, useLegacyHLLStateForRemote(proc))
 }
 
 func TestGroupConcatSourceRowProtocolGates(t *testing.T) {
