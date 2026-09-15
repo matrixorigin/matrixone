@@ -85,7 +85,7 @@ func (p jsonValueInputParameter) get(row uint64) ([]byte, bool) {
 }
 
 func decodeJSONValueStored(data []byte) (value bytejson.ByteJson, err error) {
-	value, err = decodeJSONValueStoredAdmitted(data)
+	value, err = decodeJSONValueStoredRaw(data)
 	if err != nil {
 		return bytejson.Null, err
 	}
@@ -95,10 +95,7 @@ func decodeJSONValueStored(data []byte) (value bytejson.ByteJson, err error) {
 	return value, nil
 }
 
-// decodeJSONValueStoredAdmitted decodes a T_json payload whose vector admission
-// has already run ValidateStoredJSONDocument. NewVecWithData has the same
-// trusted-input contract; callers must not use this helper for arbitrary bytes.
-func decodeJSONValueStoredAdmitted(data []byte) (value bytejson.ByteJson, err error) {
+func decodeJSONValueStoredRaw(data []byte) (value bytejson.ByteJson, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			value = bytejson.Null
@@ -110,6 +107,24 @@ func decodeJSONValueStoredAdmitted(data []byte) (value bytejson.ByteJson, err er
 	}
 	if err := value.Unmarshal(data); err != nil {
 		return bytejson.Null, err
+	}
+	return value, nil
+}
+
+// decodeJSONValueStoredAdmitted decodes a T_json payload whose vector admission
+// has already run ValidateStoredJSONDocument. NewVecWithData has the same
+// trusted-input contract; callers must not use this helper for arbitrary bytes.
+func decodeJSONValueStoredAdmitted(data []byte) (value bytejson.ByteJson, err error) {
+	value, err = decodeJSONValueStoredRaw(data)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	// Admission owns the complete stored-layout validation for immutable
+	// T_json vectors. Keep a lightweight shape check at this executor boundary
+	// as well: a remote or otherwise mutable vector must not turn a malformed
+	// descendant into an ordinary path miss and silently bypass ON ERROR.
+	if !bytejson.IsValidByteJson(value) {
+		return bytejson.Null, moerr.NewInvalidInputNoCtx("invalid binary JSON document")
 	}
 	return value, nil
 }
