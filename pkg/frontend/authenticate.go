@@ -10592,7 +10592,8 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 			// Resolve the VIEWS DDL capability before that stamp so an old or
 			// incompletely upgraded cluster cannot create a tenant that will never
 			// revisit the predecessor metadata definition.
-			protocolVersion, rtnErr = protocolVersionForTenantInitialization(
+			protocolVersion, rtnErr = protocolVersionForTenantInitializationWithContext(
+				ctx,
 				ses.GetService(), ses.GetProc())
 			if rtnErr != nil {
 				return rtnErr
@@ -11021,7 +11022,7 @@ func createTablesInInformationSchemaOfGeneralTenant(
 	service string,
 	proc *process.Process,
 ) error {
-	protocolVersion, err := protocolVersionForTenantInitialization(service, proc)
+	protocolVersion, err := protocolVersionForTenantInitializationWithContext(ctx, service, proc)
 	if err != nil {
 		return err
 	}
@@ -11062,36 +11063,44 @@ func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
 }
 
 func protocolVersionForTenantInitialization(service string, proc *process.Process) (int64, error) {
+	return protocolVersionForTenantInitializationWithContext(context.Background(), service, proc)
+}
+
+func protocolVersionForTenantInitializationWithContext(
+	ctx context.Context,
+	service string,
+	proc *process.Process,
+) (int64, error) {
+	// Account creation must remain available while the cluster is rolling out
+	// the parser-derived VIEWS functions. The predecessor definition is safe on
+	// every CN and the final-version account row is revisited by bootstrap
+	// maintenance once the capability becomes available.
+	legacyVersion := defines.MORPCVersion72
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
-		return 0, moerr.NewInvalidStateNoCtxf(
-			"cannot initialize tenant without a known MORPC protocol version")
+		return legacyVersion, nil
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {
-		return 0, moerr.NewInvalidStateNoCtxf(
-			"cannot initialize tenant without a known MORPC protocol version")
+		return legacyVersion, nil
 	}
 	version, ok := value.(int64)
 	if !ok || version < defines.MORPCVersion73 {
-		return 0, moerr.NewInvalidStateNoCtxf(
-			"cannot initialize tenant until the local CN supports MORPC v%d",
-			defines.MORPCVersion73)
+		return legacyVersion, nil
 	}
 	supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion73)
 	if err != nil {
-		return 0, moerr.NewInternalErrorNoCtxf(
-			"cannot verify MORPC v%d support for tenant initialization: %v",
-			defines.MORPCVersion73, err)
+		// Capability discovery is deliberately best-effort for account
+		// creation. Do not turn a temporary inventory/RPC failure into a
+		// failed CREATE ACCOUNT, but preserve cancellation of the owning
+		// process so shutdown and request cancellation still propagate.
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		return legacyVersion, nil
 	}
 	if !supported {
-		// Publishing the v73 VIEWS DDL is unsafe until every CN can bind
-		// both new metadata functions. Abort the account transaction so a
-		// transiently incomplete probe cannot commit a permanently stale
-		// tenant at the final version.
-		return 0, moerr.NewInvalidStateNoCtxf(
-			"cannot initialize tenant until every CN supports MORPC v%d",
-			defines.MORPCVersion73)
+		return legacyVersion, nil
 	}
 	return version, nil
 }

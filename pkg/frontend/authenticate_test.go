@@ -579,7 +579,7 @@ type tenantInitializationProtocolCluster struct {
 	cns []metadata.CNService
 }
 
-func TestCreateTablesInformationSchemaWithoutProcessRejectsUnknownOrPredecessorProtocol(t *testing.T) {
+func TestCreateTablesInformationSchemaWithoutProcessUsesLegacyForUnknownOrPredecessorProtocol(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -590,19 +590,16 @@ func TestCreateTablesInformationSchemaWithoutProcessRejectsUnknownOrPredecessorP
 		}
 	})
 	for _, test := range []struct {
-		name       string
-		protocol   int64
-		wantReason string
+		name     string
+		protocol int64
 	}{
 		{
-			name:       "predecessor local protocol",
-			protocol:   defines.MORPCVersion72,
-			wantReason: "local CN supports MORPC v73",
+			name:     "predecessor local protocol",
+			protocol: defines.MORPCVersion72,
 		},
 		{
-			name:       "known local protocol without process",
-			protocol:   defines.MORPCVersion73,
-			wantReason: "every CN supports MORPC v73",
+			name:     "known local protocol without process",
+			protocol: defines.MORPCVersion73,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -621,15 +618,17 @@ func TestCreateTablesInformationSchemaWithoutProcessRejectsUnknownOrPredecessorP
 
 			err := createTablesInInformationSchemaOfGeneralTenant(
 				context.Background(), bh, "", nil)
-			require.ErrorContains(t, err, test.wantReason)
-			require.Empty(t, executed)
+			require.NoError(t, err)
+			require.Contains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
+			require.NotContains(t, executed, sysview.InformationSchemaViewsDDL)
 		})
 	}
 }
 
-func TestProtocolVersionForTenantInitializationRejectsUnknownRuntime(t *testing.T) {
-	_, err := protocolVersionForTenantInitialization("missing-pr27716-runtime", nil)
-	require.ErrorContains(t, err, "known MORPC protocol version")
+func TestProtocolVersionForTenantInitializationUsesLegacyForUnknownRuntime(t *testing.T) {
+	version, err := protocolVersionForTenantInitialization("missing-pr27716-runtime", nil)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion72, version)
 
 	rt := moruntime.ServiceRuntime("")
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -641,8 +640,9 @@ func TestProtocolVersionForTenantInitializationRejectsUnknownRuntime(t *testing.
 		}
 	})
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, "invalid")
-	_, err = protocolVersionForTenantInitialization("", nil)
-	require.ErrorContains(t, err, "local CN supports MORPC v73")
+	version, err = protocolVersionForTenantInitialization("", nil)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion72, version)
 }
 
 func (c *tenantInitializationProtocolCluster) GetCNServiceWithoutWorkingState(
@@ -695,15 +695,15 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 		responses  map[string]int64
 		sendErrors map[string]error
 		wantLatest bool
-		wantError  bool
+		wantLegacy bool
 	}{
 		{
-			name: "mixed versions reject tenant initialization",
+			name: "mixed versions use legacy VIEWS",
 			responses: map[string]int64{
 				"cn-v73-query": defines.MORPCVersion73,
 				"cn-v72-query": defines.MORPCVersion72,
 			},
-			wantError: true,
+			wantLegacy: true,
 		},
 		{
 			name: "all CNs at v73 use current DDL",
@@ -714,21 +714,21 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 			wantLatest: true,
 		},
 		{
-			name: "unknown CN capability rejects tenant initialization",
+			name: "unknown CN capability uses legacy VIEWS",
 			responses: map[string]int64{
 				"cn-v73-query": defines.MORPCVersion73,
 			},
-			wantError: true,
+			wantLegacy: true,
 		},
 		{
-			name: "RPC failure rejects tenant initialization",
+			name: "RPC failure uses legacy VIEWS",
 			responses: map[string]int64{
 				"cn-v73-query": defines.MORPCVersion73,
 			},
 			sendErrors: map[string]error{
-				"cn-v72-query": errors.New("protocol probe failed"),
+				"cn-v72-query": context.Canceled,
 			},
-			wantError: true,
+			wantLegacy: true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -755,15 +755,14 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
 			err := createTablesInInformationSchemaOfGeneralTenant(
 				context.Background(), bh, service, proc)
-			if test.wantError {
-				require.Error(t, err)
-				require.Empty(t, executed)
-				return
-			}
 			require.NoError(t, err)
 			if test.wantLatest {
 				require.Contains(t, executed, sysview.InformationSchemaViewsDDL)
 				require.NotContains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
+			}
+			if test.wantLegacy {
+				require.Contains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
+				require.NotContains(t, executed, sysview.InformationSchemaViewsDDL)
 			}
 		})
 	}
