@@ -3,9 +3,10 @@
 --
 -- GPU REQUIRED. SHARDED variant of vector_ivfpq_delete: builds a 2-shard
 -- IVF-PQ index under the single-GPU simulation (gpu_multi_simulation=2 maps
--- both shards to physical device 0), deletes one row in EACH shard, and uses
--- one bounded combined readiness query to wait for both CDC deletes. The
--- original searches then confirm both are excluded. Lives under
+-- both shards to physical device 0), deletes one row in EACH shard, waits for
+-- the committed CDC tail, and uses one bounded combined readiness query to
+-- observe both CDC deletes. The original searches then confirm both are
+-- excluded. Lives under
 -- pessimistic_transaction/ because it depends on CDC catch-up.
 --
 -- This is the end-to-end check for the per-shard delete-bitset cache fix
@@ -174,11 +175,43 @@ select id from t order by l2_distance(v, '[128,128,128,128,128,128,128,128]') as
 
 -- Delete one row in EACH shard; CDC must propagate to both shards' deleted
 -- bitsets before search reflects it.
+-- Capture the committed tail generation before the delete. The first readiness
+-- gate below must observe a newer chunk before any vector probe can run.
+set @stbl = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'ix' and algo = 'ivfpq' and algo_table_type = 'ivfpq_index'
+      and table_id in (
+          select rel_id from mo_catalog.mo_tables
+          where reldatabase = database() and relname = 't'
+      )
+    limit 1
+);
+set @capture_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @tail_baseline from `',
+    database(), '`.`', @stbl,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_tail from @capture_tail_sql;
+execute capture_tail;
+deallocate prepare capture_tail;
+
 delete from t where id in (1, 128);
 
 select count(*) from t;
--- One readiness gate covers all CDC-dependent probes. It returns one row
--- only after every probe has its expected search result.
+-- First wait for the committed CDC tail. This storage-only poll keeps the
+-- exact vector probes from re-caching a pre-commit index snapshot.
+set @wait_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) > @tail_baseline as cdc_tail_ready from `',
+    database(), '`.`', @stbl,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_tail from @wait_tail_sql;
+-- @wait_expect(1, 60)
+execute wait_tail;
+deallocate prepare wait_tail;
+
+-- Then observe post-commit cache invalidation through exact vector probes.
+-- The gate returns one row only after every probe has its expected result.
 -- @wait_expect(1, 60)
 select 1 as ready
 from (

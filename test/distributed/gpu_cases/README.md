@@ -65,11 +65,12 @@ Cases that depend on **ISCP / async-index CDC** live under
 `cdc_tail` baseline and use one metadata-only `@wait_expect` gate for a
 committed cumulative `nrow` increase of at least 11, covering all nine DML
 statements including UPDATE tombstones. The load cases use the same gate shape
-to wait for committed storage-tail advancement. The four delete cases use
-bounded exact-match vector readiness probes: the gate waits for the deleted row
-to disappear and for survivor/untouched probes to return their expected ids,
-which also makes cache invalidation observable. Final vector queries remain
-single-shot. The multi-phase DDL cases retain their phase-specific
+to wait for committed storage-tail advancement. The four delete cases first
+wait on committed CDC-tail metadata, then use a bounded exact-match vector
+readiness gate: this ordering prevents a pre-commit index snapshot from being
+re-cached before the deleted row disappears and survivor/untouched probes
+return their expected ids. Final vector queries remain single-shot. The
+multi-phase DDL cases retain their phase-specific
 `SELECT SLEEP(...)` waits because each table rewrite must settle before the
 next DDL phase. The pure synchronous-build cases live in `gpu_cases/vector/`.
 
@@ -119,6 +120,6 @@ synthetic `vecf32(8)` data inline.
 
 The `.result` files are produced with mo-tester against a GPU-enabled MO. The
 async/load cases use a dynamic hidden-storage-table query with bounded
-`@wait_expect` after the post-CREATE mutation. The delete cases use bounded
-exact-match vector readiness after the delete; final vector searches stay
-single-shot.
+`@wait_expect` after the post-CREATE mutation. The delete cases first use a
+bounded storage-tail `@wait_expect`, then a bounded exact-match vector
+readiness gate after the delete; final vector searches stay single-shot.

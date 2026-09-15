@@ -132,11 +132,13 @@ GPU case 体系内执行，不迁移到外部回归，不删除业务 case，也
 ### GPU 向量等待
 
 异步和 load case 各使用一个 bounded、metadata-only readiness gate，等待已提交的 CDC
-或存储 tail 前进；就绪查询不执行向量检索。四个 delete case 使用 bounded exact-match
-vector readiness probes，只有在删除行被排除且 survivor/untouched probe 返回预期 id 后
-才继续，因此 readiness 也覆盖了 per-device/remote vector cache 的失效边界。原有最终
-向量查询和 `.result` oracle 全部保留，包含 async insert/delete/update、vecf16、10k load
-和 two-shard delete 场景。多阶段 DDL、snapshot 等依赖阶段顺序的等待保持独立。
+或存储 tail 前进；就绪查询不执行向量检索。四个 delete case 先使用 bounded、
+metadata-only gate 确认删除对应的 CDC tail 已提交，再使用 bounded exact-match vector
+readiness probes，确认删除行被排除且 survivor/untouched probe 返回预期 id；这样不会在
+提交前用向量探针重新缓存旧索引快照。原有最终向量查询和 `.result` oracle 全部保留，
+包含 async insert/delete/update、vecf16、10k load 和 two-shard delete 场景。多阶段 DDL、
+snapshot 等依赖阶段顺序的等待保持独立。跨 CN 的缓存最终一致性仍需在相同 CUDA 环境中
+单独验证，不由该 bounded gate 宣称为即时全局刷新。
 
 GPU 路径的执行及 before/after wall time、GPU 占用和失败率必须在相同 CUDA 环境上验证。
 

@@ -144,10 +144,37 @@ select id from t order by l2_distance(v, '[1,1,1,1,1,1,1,1]') asc limit 1;
 select id from t order by l2_distance(v, '[128,128,128,128,128,128,128,128]') asc limit 1;
 ➤ id[-5,64,0]  𝄀
 128
+set @stbl = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'ix' and algo = 'cagra' and algo_table_type = 'cagra_index'
+and table_id in (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 't'
+)
+limit 1
+);
+set @capture_tail_sql = concat(
+'select coalesce(max(chunk_id), -1) into @tail_baseline from `',
+database(), '`.`', @stbl,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_tail from @capture_tail_sql;
+execute capture_tail;
+deallocate prepare capture_tail;
 delete from t where id in (1, 128);
 select count(*) from t;
 ➤ count(*)[-5,64,0]  𝄀
 126
+set @wait_tail_sql = concat(
+'select coalesce(max(chunk_id), -1) > @tail_baseline as cdc_tail_ready from `',
+database(), '`.`', @stbl,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_tail from @wait_tail_sql;
+execute wait_tail;
+➤ cdc_tail_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_tail;
 select 1 as ready
 from (
 select 'delete-1' as probe_name, q.id as actual_id, 2 as expected_id
