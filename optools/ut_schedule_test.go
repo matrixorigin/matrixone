@@ -462,6 +462,7 @@ heartbeat_pid=""
 if kill -0 "$timer_pid" 2>/dev/null; then
     exit 95
 fi
+rm -f "$CASE_DIR/heartbeat-child.pid"
 timer_pid=""
 `
 	mock := `#!/bin/bash
@@ -556,10 +557,12 @@ start_ut_heartbeat
 if kill -0 "$helper_pid" 2>/dev/null; then
     exit 95
 fi
+rm -f "$CASE_DIR/heartbeat-helper.pid"
 helper_pid=""
 if kill -0 "$timer_pid" 2>/dev/null; then
     exit 96
 fi
+rm -f "$CASE_DIR/heartbeat-timer.pid"
 timer_pid=""
 [[ "$(trap -p TERM)" == *caller_term* ]] || exit 97
 
@@ -567,12 +570,23 @@ timer_pid=""
 start_ut_heartbeat
 restart_pid="$UT_HEARTBEAT_PID"
 [[ -n "$restart_pid" ]] || exit 98
+[[ "$helper_pid" == "$restart_pid" ]] || exit 99
+# Transfer the second-generation owner token to restart_pid before any
+# operation can fail, so EXIT cleanup never owns the same PID twice.
+rm -f "$CASE_DIR/heartbeat-helper.pid"
+helper_pid=""
 stop_ut_heartbeat
-[[ -z "$UT_HEARTBEAT_PID" ]] || exit 99
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 100
 if kill -0 "$restart_pid" 2>/dev/null; then
-    exit 100
+    exit 101
 fi
+rm -f "$CASE_DIR/heartbeat-helper.pid"
 restart_pid=""
+if kill -0 "$timer_pid" 2>/dev/null; then
+    exit 102
+fi
+rm -f "$CASE_DIR/heartbeat-timer.pid"
+timer_pid=""
 `
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
