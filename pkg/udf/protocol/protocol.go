@@ -44,6 +44,10 @@ const (
 	// but allowing an unbounded statement/group/invocation string would make
 	// every bounded entry claim an unbounded memory claim.
 	MaxFenceComponentBytes = 256
+	// Control JSON is intentionally shallow.  The byte bound alone is not a
+	// stack bound because duplicate-key validation walks nested arrays/objects
+	// before encoding/json can decode the envelope.
+	MaxJSONNesting = 64
 )
 
 var (
@@ -205,6 +209,9 @@ func validateControlFields(control Control, wire map[string]json.RawMessage) err
 			var payload map[string]json.RawMessage
 			if err := json.Unmarshal(control.Payload, &payload); err != nil || payload == nil {
 				return fmt.Errorf("%w: control kind %q payload must be a JSON object", ErrProtocol, control.Kind)
+			}
+			if err := rejectDuplicateJSONKeys(control.Payload); err != nil {
+				return fmt.Errorf("%w: invalid control payload: %v", ErrProtocol, err)
 			}
 		}
 	case "InputBatch", "ResultBatch":
@@ -368,6 +375,10 @@ func rejectDuplicateJSONKeys(data []byte) error {
 }
 
 func walkJSONValue(decoder *json.Decoder) error {
+	return walkJSONValueAtDepth(decoder, 0)
+}
+
+func walkJSONValueAtDepth(decoder *json.Decoder, depth int) error {
 	token, err := decoder.Token()
 	if err != nil {
 		return fmt.Errorf("decode control JSON: %v", err)
@@ -375,6 +386,9 @@ func walkJSONValue(decoder *json.Decoder) error {
 	delim, ok := token.(json.Delim)
 	if !ok {
 		return nil
+	}
+	if depth >= MaxJSONNesting {
+		return fmt.Errorf("control JSON nesting exceeds %d levels", MaxJSONNesting)
 	}
 	switch delim {
 	case '{':
@@ -392,7 +406,7 @@ func walkJSONValue(decoder *json.Decoder) error {
 				return fmt.Errorf("duplicate control JSON field %q", key)
 			}
 			seen[key] = struct{}{}
-			if err := walkJSONValue(decoder); err != nil {
+			if err := walkJSONValueAtDepth(decoder, depth+1); err != nil {
 				return err
 			}
 		}
@@ -400,7 +414,7 @@ func walkJSONValue(decoder *json.Decoder) error {
 		return err
 	case '[':
 		for decoder.More() {
-			if err := walkJSONValue(decoder); err != nil {
+			if err := walkJSONValueAtDepth(decoder, depth+1); err != nil {
 				return err
 			}
 		}
