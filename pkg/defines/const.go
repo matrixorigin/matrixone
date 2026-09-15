@@ -115,7 +115,8 @@ const (
 	MORPCVersion77     int64 = 77 // complete typed SQL equivalence keys in HLL states
 	MORPCVersion78     int64 = 78 // length-delimited variable-length GROUP hash keys
 	MORPCVersion79     int64 = 79 // canonical opaque DISTINCT argument wire keys
-	MORPCLatestVersion       = MORPCVersion79
+	MORPCVersion80     int64 = 80 // signed and widened string numeric result contracts
+	MORPCLatestVersion       = MORPCVersion80
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
