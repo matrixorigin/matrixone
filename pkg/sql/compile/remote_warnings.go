@@ -128,6 +128,8 @@ type remoteWarningCollector struct {
 	warningCount                   uint64
 	warnings                       []remoteWarningDiagnostic
 	warningBytes                   int
+	warningChargeBytes             uint64
+	warningBudget                  *process.WarningDiagnosticBudget
 	maxRetained                    int
 	maxRetainedSet                 bool
 	groupConcatCut                 bool
@@ -151,6 +153,18 @@ func (s *remoteWarningCollector) GetWarningRetentionLimit() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.warningRetentionLimitLocked()
+}
+
+func (s *remoteWarningCollector) GetWarningDiagnosticBudget() *process.WarningDiagnosticBudget {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.warningBudget == nil {
+		s.warningBudget = process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	}
+	return s.warningBudget
 }
 
 func (s *remoteWarningCollector) warningRetentionLimitLocked() int {
@@ -200,9 +214,63 @@ func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16
 		return
 	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appendWarningBatchLocked(total, codes, messages, nil, 0)
+}
+
+// AppendWarningBatchOwned accepts payload already charged to source. A local
+// same-budget transfer moves the retained string ownership without cloning;
+// a cross-CN/foreign-budget transfer falls back to the ordinary bounded copy.
+func (s *remoteWarningCollector) AppendWarningBatchOwned(
+	total uint64,
+	codes []uint16,
+	messages []string,
+	source *process.WarningDiagnosticBudget,
+	chargedBytes uint64,
+) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
-		s.mu.Unlock()
+		return false
+	}
+	if s.warningBudget == nil {
+		s.warningBudget = process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	}
+	sameBudget := source != nil && source == s.warningBudget
+	if sameBudget {
+		for _, message := range messages {
+			if len(message) > process.WarningDiagnosticMaxMessageBytes {
+				// The ownership contract covers already-bounded strings. A
+				// defensive fallback keeps malformed callers from retaining an
+				// unbounded payload or under-accounting the source charge.
+				sameBudget = false
+				break
+			}
+		}
+	}
+	appendSource := source
+	if !sameBudget && source == s.warningBudget {
+		appendSource = nil
+	}
+	s.appendWarningBatchLocked(total, codes, messages, appendSource, chargedBytes)
+	return sameBudget
+}
+
+func (s *remoteWarningCollector) appendWarningBatchLocked(
+	total uint64,
+	codes []uint16,
+	messages []string,
+	source *process.WarningDiagnosticBudget,
+	chargedBytes uint64,
+) {
+	if s.closed {
 		return
+	}
+	if s.warningBudget == nil {
+		s.warningBudget = process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
 	}
 	if ^uint64(0)-s.warningCount < total {
 		s.warningCount = ^uint64(0)
@@ -232,15 +300,50 @@ func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16
 	if uint64(batchLimit) > total {
 		batchLimit = int(total)
 	}
-	for i := 0; i < batchLimit && len(s.warnings) < limit; i++ {
-		message := process.BoundWarningMessage(messages[i], process.WarningDiagnosticMaxMessageBytes)
+	sameBudget := source != nil && source == s.warningBudget
+	for i := 0; i < len(messages); i++ {
+		charge := process.WarningDiagnosticRecordBytes(messages[i])
+		if i >= batchLimit || len(s.warnings) >= limit {
+			if sameBudget {
+				source.Release(charge)
+			}
+			continue
+		}
+		message := messages[i]
+		if !sameBudget {
+			candidateBytes := len(message)
+			if candidateBytes > process.WarningDiagnosticMaxMessageBytes {
+				candidateBytes = process.WarningDiagnosticMaxMessageBytes
+			}
+			available := s.warningBudget.Limit() - s.warningBudget.Used()
+			if uint64(candidateBytes)+process.WarningDiagnosticRecordOverhead > available {
+				continue
+			}
+			message = process.BoundWarningMessage(message, process.WarningDiagnosticMaxMessageBytes)
+			charge = process.WarningDiagnosticRecordBytes(message)
+			if !s.warningBudget.Reserve(charge) {
+				continue
+			}
+		}
 		s.warnings = append(s.warnings, remoteWarningDiagnostic{
 			Code:    codes[i],
 			Message: message,
 		})
 		s.warningBytes += len(message)
+		s.warningChargeBytes += charge
 	}
-	s.mu.Unlock()
+	if sameBudget {
+		// The source charge is a per-message sum. The loop above accounts for
+		// every source message; release any defensive remainder if a malformed
+		// caller supplied a larger aggregate.
+		accounted := uint64(0)
+		for _, message := range messages {
+			accounted += process.WarningDiagnosticRecordBytes(message)
+		}
+		if chargedBytes > accounted {
+			source.Release(chargedBytes - accounted)
+		}
+	}
 }
 
 func (s *remoteWarningCollector) markGroupConcatCut(message string) {
@@ -308,21 +411,31 @@ func (s *remoteWarningCollector) SnapshotWarnings() (uint64, []remoteWarningDiag
 // closeWarnings atomically seals an attempt against late local/RPC writers.
 // Failed attempts discard without copying; successful attempts transfer the
 // bounded records exactly once. A collector is never reopened for a retry.
-func (s *remoteWarningCollector) closeWarnings(success bool) (uint64, []remoteWarningDiagnostic, bool, string, bool) {
+func (s *remoteWarningCollector) closeWarnings(success bool) (
+	uint64,
+	[]remoteWarningDiagnostic,
+	bool,
+	string,
+	bool,
+	*process.WarningDiagnosticBudget,
+	uint64,
+) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return 0, nil, false, "", false
+		return 0, nil, false, "", false, nil, 0
 	}
 	s.closed = true
 	total, warnings := s.warningCount, s.warnings
 	cut, message := s.groupConcatCut, s.groupConcatCutMessage
 	incomplete := s.groupConcatReportingIncomplete
-	s.warningCount, s.warnings, s.warningBytes = 0, nil, 0
+	budget, charged := s.warningBudget, s.warningChargeBytes
+	s.warningCount, s.warnings, s.warningBytes, s.warningChargeBytes = 0, nil, 0, 0
 	s.groupConcatCut, s.groupConcatCutMessage = false, ""
 	s.groupConcatReportingIncomplete = false
 	if !success {
-		return 0, nil, false, "", false
+		budget.Release(charged)
+		return 0, nil, false, "", false, nil, 0
 	}
-	return total, warnings, cut, message, incomplete
+	return total, warnings, cut, message, incomplete, budget, charged
 }

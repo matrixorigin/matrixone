@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -271,6 +272,37 @@ func TestWarningAttemptCapturesStatementRetentionSnapshot(t *testing.T) {
 	require.Len(t, session.warnings, 2)
 	require.Equal(t, uint16(1), session.warnings[0].code)
 	require.Equal(t, uint16(2), session.warnings[1].code)
+}
+
+func TestWarningAttemptTransfersAndDiscardsStatementBudgetOwnership(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	session := &remoteWarningCollector{
+		maxRetained:    int(^uint16(0)),
+		maxRetainedSet: true,
+		warningBudget:  budget,
+	}
+	proc.Session = session
+	longMessage := strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes*2)
+
+	attempt := newWarningAttempt(proc, false)
+	attempt.collector.AppendWarningDiagnostic(1260, longMessage)
+	charged := budget.Used()
+	require.Positive(t, charged)
+	attempt.finish(true, session)
+	require.Equal(t, charged, budget.Used(), "same-budget transfer must not double-charge the retained string")
+	total, retained := session.SnapshotWarnings()
+	require.Equal(t, uint64(1), total)
+	require.Len(t, retained, 1)
+
+	failed := newWarningAttempt(proc, false)
+	failed.collector.AppendWarningDiagnostic(1260, "failed attempt")
+	require.Greater(t, budget.Used(), charged)
+	failed.finish(false, session)
+	require.Equal(t, charged, budget.Used(), "failed attempt must release its private charge")
+
+	session.closeWarnings(false)
+	require.Zero(t, budget.Used(), "reset/close must release the session-owned retained payload")
 }
 
 func TestPreparedGroupConcatFloorFreshAndRetryCompile(t *testing.T) {

@@ -491,6 +491,46 @@ func TestMaxErrorCountSessionCapacityAndZero(t *testing.T) {
 	require.Error(t, ses.SetSessionSysVar(ctx, "max_error_count", int64(65536)))
 }
 
+func TestErrInfoMaxErrorCountLongWarningsUsesStatementBudget(t *testing.T) {
+	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	info := &errInfo{
+		maxCnt:        int(^uint16(0)),
+		warningBudget: budget,
+	}
+	longMessage := strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes*2)
+	for i := 0; i < int(^uint16(0)); i++ {
+		info.pushWithLevel(1292, longMessage, "Warning")
+	}
+
+	require.Equal(t, uint64(^uint16(0)), info.totalWarnings)
+	require.NotEmpty(t, info.msgs)
+	require.Less(t, len(info.msgs), int(^uint16(0)))
+	require.LessOrEqual(t, info.warningBytes, process.WarningDiagnosticMaxBytes)
+	require.LessOrEqual(t, info.warningChargeBytes, uint64(process.WarningDiagnosticMaxBytes))
+	require.LessOrEqual(t, budget.Used(), uint64(process.WarningDiagnosticMaxBytes))
+
+	info.reset()
+	require.Zero(t, budget.Used(), "session reset must release the retained warning payload")
+}
+
+func TestSessionWarningBatchTransferDoesNotDoubleCharge(t *testing.T) {
+	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	info := &errInfo{maxCnt: int(^uint16(0)), warningBudget: budget}
+	ses := &Session{errInfo: info}
+	message := "retained warning"
+	charge := process.WarningDiagnosticRecordBytes(message)
+	require.True(t, budget.Reserve(charge))
+
+	require.True(t, ses.AppendWarningBatchOwned(
+		1, []uint16{1292}, []string{message}, budget, charge))
+	require.Equal(t, charge, budget.Used())
+	require.Equal(t, uint64(1), info.totalWarnings)
+	require.Equal(t, []string{message}, info.msgs)
+
+	ses.resetDiagnostics()
+	require.Zero(t, budget.Used())
+}
+
 func TestSetMaxErrorCountDefersActiveCapacityUntilStatementBoundary(t *testing.T) {
 	ctx := context.Background()
 	ses := &Session{

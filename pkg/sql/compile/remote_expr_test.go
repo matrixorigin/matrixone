@@ -477,6 +477,28 @@ func TestRemoteWarningCollectorBoundsMessageBytes(t *testing.T) {
 	require.Contains(t, retained[0].Message, "truncated")
 }
 
+func TestRemoteWarningCollectorMaxErrorCountUsesStatementBudget(t *testing.T) {
+	collector := &remoteWarningCollector{
+		maxRetained:    int(^uint16(0)),
+		maxRetainedSet: true,
+		warningBudget:  process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes),
+	}
+	longMessage := strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes*2)
+	for i := 0; i < int(^uint16(0)); i++ {
+		collector.AppendWarningDiagnostic(1292, longMessage)
+	}
+
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(^uint16(0)), total)
+	require.NotEmpty(t, retained)
+	require.Less(t, len(retained), int(^uint16(0)))
+	require.LessOrEqual(t, collector.warningBytes, process.WarningDiagnosticMaxBytes)
+	require.LessOrEqual(t, collector.warningChargeBytes, uint64(process.WarningDiagnosticMaxBytes))
+	require.LessOrEqual(t, collector.warningBudget.Used(), uint64(process.WarningDiagnosticMaxBytes))
+	collector.closeWarnings(false)
+	require.Zero(t, collector.warningBudget.Used())
+}
+
 func TestRemoteWarningCollectorDoesNotRetainMoreRecordsThanTotal(t *testing.T) {
 	collector := &remoteWarningCollector{}
 	collector.AppendWarningBatch(1, []uint16{1292, 1292}, []string{"first", "second"})

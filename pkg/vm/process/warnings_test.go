@@ -40,6 +40,42 @@ type countOnlyWarningSink struct {
 	total uint64
 }
 
+type ownedWarningSink struct {
+	budget   *WarningDiagnosticBudget
+	total    uint64
+	codes    []uint16
+	messages []string
+	charged  uint64
+}
+
+func (s *ownedWarningSink) GetWarningDiagnosticBudget() *WarningDiagnosticBudget {
+	return s.budget
+}
+
+func (s *ownedWarningSink) AppendWarningBatchOwned(
+	total uint64,
+	codes []uint16,
+	messages []string,
+	source *WarningDiagnosticBudget,
+	chargedBytes uint64,
+) bool {
+	if source != s.budget {
+		return false
+	}
+	s.total += total
+	s.codes = append(s.codes, codes...)
+	s.messages = append(s.messages, messages...)
+	s.charged += chargedBytes
+	return true
+}
+
+func (s *ownedWarningSink) reset() {
+	s.budget.Release(s.charged)
+	s.charged = 0
+	s.codes = nil
+	s.messages = nil
+}
+
 func (s *countOnlyWarningSink) AppendWarningCount(total uint64) {
 	if ^uint64(0)-s.total < total {
 		s.total = ^uint64(0)
@@ -223,9 +259,67 @@ func TestWarningAccumulatorBoundsRetainedMessageWithoutLosingCount(t *testing.T)
 		accumulator.Add(1062, strings.Repeat("x", WarningDiagnosticMaxMessageBytes*2))
 	}
 	require.Equal(t, uint64(warningDiagnosticRetentionLimit+10), accumulator.Total)
-	require.Len(t, accumulator.Codes, warningDiagnosticRetentionLimit)
-	require.Greater(t, accumulator.bytes, WarningDiagnosticMaxBytes)
+	require.Len(t, accumulator.Codes, int(WarningDiagnosticMaxBytes/(WarningDiagnosticMaxMessageBytes+WarningDiagnosticRecordOverhead)))
+	require.LessOrEqual(t, accumulator.bytes, WarningDiagnosticMaxBytes)
+	require.LessOrEqual(t, accumulator.budgetBytes, uint64(WarningDiagnosticMaxBytes))
+	require.Equal(t, accumulator.budget.Used(), accumulator.budgetBytes)
 	for _, message := range accumulator.Messages {
 		require.LessOrEqual(t, len(message), WarningDiagnosticMaxMessageBytes)
 	}
+	accumulator.Reset()
+	require.Zero(t, accumulator.budget.Used())
+}
+
+func TestWarningAccumulatorMaxErrorCountLongMessagesKeepsExactCountAndBudget(t *testing.T) {
+	var accumulator WarningAccumulator
+	accumulator.SetWarningRetentionLimit(int(^uint16(0)))
+	longMessage := strings.Repeat("x", WarningDiagnosticMaxMessageBytes*2)
+	for i := 0; i < int(^uint16(0)); i++ {
+		accumulator.Add(1062, longMessage)
+	}
+
+	require.Equal(t, uint64(^uint16(0)), accumulator.Total)
+	require.LessOrEqual(t, accumulator.budgetBytes, uint64(WarningDiagnosticMaxBytes))
+	require.LessOrEqual(t, accumulator.budget.Used(), uint64(WarningDiagnosticMaxBytes))
+	require.NotEmpty(t, accumulator.Messages)
+	require.Less(t, len(accumulator.Messages), int(^uint16(0)))
+	accumulator.Reset()
+	require.Zero(t, accumulator.budget.Used())
+}
+
+func TestWarningAccumulatorUsesSmallerStatementBudgetAndResets(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{Lim: Limitation{Size: 100}}}
+	var accumulator WarningAccumulator
+	accumulator.SetWarningRetentionForProcess(proc)
+	for i := 0; i < int(^uint16(0)); i++ {
+		accumulator.Add(1062, "x")
+	}
+
+	budget := WarningDiagnosticBudgetForProcess(proc)
+	require.Equal(t, uint64(100), budget.Limit())
+	require.Equal(t, uint64(^uint16(0)), accumulator.Total)
+	require.LessOrEqual(t, budget.Used(), budget.Limit())
+	require.LessOrEqual(t, accumulator.budgetBytes, budget.Limit())
+
+	accumulator.Reset()
+	require.Zero(t, budget.Used())
+}
+
+func TestWarningAccumulatorTransfersChargeWithoutDoubleAccounting(t *testing.T) {
+	budget := NewWarningDiagnosticBudget(WarningDiagnosticMaxBytes)
+	sink := &ownedWarningSink{budget: budget}
+	proc := &Process{Base: &BaseProcess{}, WarningSink: sink}
+	var accumulator WarningAccumulator
+	accumulator.SetWarningRetentionForProcess(proc)
+	accumulator.Add(1062, "duplicate")
+	charged := budget.Used()
+	accumulator.Flush(proc)
+
+	require.Positive(t, charged)
+	require.Equal(t, charged, budget.Used())
+	require.Equal(t, uint64(1), sink.total)
+	require.Len(t, sink.messages, 1)
+
+	sink.reset()
+	require.Zero(t, budget.Used())
 }
