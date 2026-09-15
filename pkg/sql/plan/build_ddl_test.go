@@ -1745,7 +1745,7 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 	}{
 		{name: "direct aggregate", query: "select service, count(*) requests, sum(bytes) bytes_sum from events group by service", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
 		{name: "where", query: "select service, count(*) requests, sum(bytes) bytes_sum from events where status = 500 group by service", outputs: []string{"service", "requests", "bytes_sum"}, eligible: true},
-		{name: "time bucket avg conditional", query: "select service, date_trunc('minute', event_ts) minute, count(*) requests, sum(case when status >= 500 then 1 else 0 end) errors, avg(duration) avg_duration from events where region = 'us' group by service, date_trunc('minute', event_ts)", outputs: []string{"service", "minute", "requests", "errors", "avg_duration"}, eligible: true},
+		{name: "time bucket avg conditional", query: "select service, date_trunc('minute', event_ts) minute, count(*) requests, sum(case when status >= 500 then 1 else 0 end) errors, avg(duration) avg_duration from events where region = 'us' group by service, date_trunc('minute', event_ts)", outputs: []string{"service", "minute", "requests", "errors", "avg_duration"}, eligible: false},
 		{name: "min max", query: "select service, min(duration) min_duration, max(duration) max_duration from events group by service", outputs: []string{"service", "min_duration", "max_duration"}, eligible: true},
 		{name: "count distinct", query: "select service, count(distinct trace_id) traces from events group by service", outputs: []string{"service", "traces"}, eligible: true},
 		{name: "sum distinct", query: "select service, sum(distinct bytes) bytes_sum from events group by service", outputs: []string{"service", "bytes_sum"}, eligible: true},
@@ -1936,7 +1936,7 @@ func TestMaterializedViewIncrementalExpressionAndAdmissionCoverage(t *testing.T)
 		{name: "cast", query: "select k from t where cast(a as signed) > 0", want: true},
 		{name: "case", query: "select k from t where case when a > 0 then b else c end > 1", want: true},
 		{name: "scalar functions", query: "select k from t where coalesce(a, b) > 0", want: true},
-		{name: "date trunc", query: "select k from t where date_trunc('minute', a) > 0", want: true},
+		{name: "date trunc", query: "select k from t where date_trunc('minute', a) > 0", want: false},
 		{name: "ifnull", query: "select k from t where ifnull(a, b) > 0", want: true},
 		{name: "abs", query: "select k from t where abs(a) > 0", want: true},
 		{name: "floor", query: "select k from t where floor(a) > 0", want: true},

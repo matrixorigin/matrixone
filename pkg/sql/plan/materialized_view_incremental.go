@@ -532,7 +532,12 @@ func materializedViewIncrementalScalarSupported(expr tree.Expr) bool {
 		return node.Else == nil || materializedViewIncrementalScalarSupported(node.Else)
 	case *tree.FuncExpr:
 		name := materializedViewIncrementalFunctionName(node)
-		if name != "date_trunc" && name != "coalesce" && name != "ifnull" && name != "abs" && name != "floor" && name != "ceil" {
+		// DATE_TRUNC on timestamp is session-time-zone dependent. Incremental
+		// refresh runs in a background context without the defining session.
+		if name == "date_trunc" {
+			return false
+		}
+		if name != "coalesce" && name != "ifnull" && name != "abs" && name != "floor" && name != "ceil" {
 			return false
 		}
 		if node.WindowSpec != nil || len(node.OrderBy) != 0 || node.Type == tree.FUNC_TYPE_DISTINCT {
