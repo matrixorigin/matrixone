@@ -307,6 +307,9 @@ func litAsFloat(lit *plan.Literal) (float64, bool) {
 // hazard the gate closes). MOProtocolVersion is the service-local rollout gate, raised only once
 // every CN understands the probe_tail TableConfig contract and lowered before rollback.
 func (builder *QueryBuilder) selfCompletingJSONProbeSupported() bool {
+	if builder == nil || builder.compCtx == nil {
+		return false
+	}
 	proc := builder.compCtx.GetProcess()
 	if proc == nil {
 		return false
@@ -332,17 +335,6 @@ func (builder *QueryBuilder) selfCompletingJSONProbeSupported() bool {
 // Only TOP-LEVEL conjuncts are considered. A predicate under OR or NOT need not
 // hold for a returned row, so a probe derived from it would not be implied.
 func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
-	// Mixed-version fence. The json probe emits a fulltext2_search TVF whose TableConfig carries
-	// probe_tail/source/bar/predicate for self-completion. That TVF can be serialized into a remote
-	// scope (broadcast-join build side) and executed on any selected worker; a CN that predates this
-	// contract decodes the config into an older TableConfig, silently drops those fields, and runs
-	// only a stale bulk probe -- which then loses rows the tail would have supplied at the mandatory
-	// join. MOProtocolVersion is the service-local rollout gate (raised only once every CN
-	// understands the contract), so decline the probe until MORPCVersion73 and let the query run as
-	// a plain Table Scan on the retained json_extract predicate (correct, just unaccelerated).
-	if !builder.selfCompletingJSONProbeSupported() {
-		return
-	}
 	if scanNode == nil || scanNode.TableDef == nil || len(scanNode.BindingTags) == 0 {
 		return
 	}
@@ -373,6 +365,17 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 		probe, ok := c.probe()
 		if !ok {
 			continue
+		}
+		// Mixed-version fence. The json probe emits a fulltext2_search TVF whose TableConfig carries
+		// probe_tail/source/bar/predicate for self-completion. That TVF can be serialized into a remote
+		// scope (broadcast-join build side) and executed on any selected worker; a CN that predates this
+		// contract decodes the config into an older TableConfig, silently drops those fields, and runs
+		// only a stale bulk probe -- which then loses rows the tail would have supplied at the mandatory
+		// join. MOProtocolVersion is the service-local rollout gate (raised only once every CN
+		// understands the contract), so decline the probe until MORPCVersion73 and let the query run as
+		// a plain Table Scan on the retained json_extract predicate (correct, just unaccelerated).
+		if !builder.selfCompletingJSONProbeSupported() {
+			return
 		}
 		match := builder.makeJSONProbeMatch(scanNode, c.col, probe)
 		if match == nil {
