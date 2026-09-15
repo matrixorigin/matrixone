@@ -1942,7 +1942,7 @@ func validateRemoteAggregateProtocol(
 		if agg.GetAggID() == aggexec.AggIdOfApproxPercentile &&
 			(proc == nil || !supportsRemoteApproxPercentile(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"approx_percentile remote execution requires MORPC protocol version 73",
+				"approx_percentile remote execution requires MORPC protocol version 74",
 			)
 		}
 		if (agg.GetAggID() == aggexec.AggIdOfApproxCount ||
@@ -1951,7 +1951,7 @@ func validateRemoteAggregateProtocol(
 			agg.GetAggID() == aggexec.AggIdOfHllMerge) &&
 			(proc == nil || !supportsRemoteHLL(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"HLL remote execution requires MORPC protocol version 74",
+				"HLL remote execution requires MORPC protocol version 75",
 			)
 		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {

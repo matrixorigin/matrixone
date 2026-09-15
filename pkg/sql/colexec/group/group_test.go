@@ -3393,7 +3393,7 @@ func TestGroupHashWidthUsesGlobalNullability(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
-func TestRemoteShortVarlenaGroupKeepsLegacyH8BeforeProtocolV75(t *testing.T) {
+func TestRemoteShortVarlenaGroupKeepsLegacyH8BeforeProtocolV76(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
@@ -3402,13 +3402,13 @@ func TestRemoteShortVarlenaGroupKeepsLegacyH8BeforeProtocolV75(t *testing.T) {
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
 	}}
 
-	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion74)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion75)
 	legacy := newGroupOp(proc, groupBy, nil)
 	require.NoError(t, legacy.Prepare(proc))
 	require.Equal(t, int32(H8), legacy.ctr.mtyp)
 	legacy.Free(proc, false, nil)
 
-	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion75)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion76)
 	current := newGroupOp(proc, groupBy, nil)
 	require.NoError(t, current.Prepare(proc))
 	require.Equal(t, int32(HStr), current.ctr.mtyp)
@@ -3419,7 +3419,7 @@ func TestRemoteShortCharH8PreservesLegacyPadding(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion74)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion75)
 
 	charType := types.New(types.T_char, 2, 0)
 	input := batch.NewWithSize(2)
@@ -3442,7 +3442,7 @@ func TestRemoteShortCharH8PreservesLegacyPadding(t *testing.T) {
 	outputs := collectBatches(t, g, proc)
 	require.Len(t, outputs, 1)
 	require.Equal(t, 2, outputs[0].RowCount(),
-		"pre-v75 H8 must retain raw CHAR padding when fields are concatenated")
+		"pre-v76 H8 must retain raw CHAR padding when fields are concatenated")
 	g.Free(proc, false, nil)
 	child.Free(proc, false, nil)
 }
@@ -3515,11 +3515,11 @@ func TestMergeGroupNormalizesLegacyH8VarlenaMetadata(t *testing.T) {
 	require.Equal(t, uint64(2), merge.ctr.hr.Hash.GroupCount())
 }
 
-func TestMergeGroupKeepsLegacyShortCharH8PaddingBeforeV75(t *testing.T) {
+func TestMergeGroupKeepsLegacyShortCharH8PaddingBeforeV76(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion74)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion75)
 
 	charType := types.New(types.T_char, 2, 0)
 	partial := batch.NewWithSize(2)
@@ -3552,11 +3552,11 @@ func TestMergeGroupKeepsLegacyShortCharH8PaddingBeforeV75(t *testing.T) {
 	require.Equal(t, uint64(2), merge.ctr.hr.Hash.GroupCount())
 }
 
-func TestMergeGroupKeepsLegacyLongHStrCompatibleBeforeV75(t *testing.T) {
+func TestMergeGroupKeepsLegacyLongHStrCompatibleBeforeV76(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
-	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion74)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion75)
 
 	longType := types.New(types.T_varchar, 64, 0)
 	partial := batch.NewWithSize(1)
@@ -4268,7 +4268,7 @@ func TestRemoteFinalDecimalSumPreservesOldCoordinatorResult(t *testing.T) {
 	}
 }
 
-func TestRemoteApproxPercentileUsesLegacyStateBeforeProtocolV71(t *testing.T) {
+func TestRemoteApproxPercentileUsesLegacyStateBeforeProtocolV74(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
@@ -4278,6 +4278,8 @@ func TestRemoteApproxPercentileUsesLegacyStateBeforeProtocolV71(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
 	require.True(t, useLegacyApproxPercentileStateForRemote(proc))
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+	require.True(t, useLegacyApproxPercentileStateForRemote(proc))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
 	require.False(t, useLegacyApproxPercentileStateForRemote(proc))
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
@@ -4340,14 +4342,20 @@ func TestRemoteHLLAddRetainsLegacyStateAcrossProtocolVersions(t *testing.T) {
 	require.True(t, useLegacyHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
 	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
-		"pre-v73 peers must receive the raw-value v2 HLL state")
+		"pre-v74 peers must receive the raw-value v2 HLL state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
 	require.True(t, useLegacyHLLStateForRemote(proc),
 		"v73 peers must receive a compatibility HLL state")
-	require.True(t, useFloatZeroHLLStateForRemote(proc))
+	require.False(t, useFloatZeroHLLStateForRemote(proc))
 	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
 		"v73 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+	require.True(t, useLegacyHLLStateForRemote(proc),
+		"v74 peers must receive a compatibility HLL state")
+	require.True(t, useFloatZeroHLLStateForRemote(proc))
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+		"v74 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
 	require.False(t, useLegacyHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
 	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
