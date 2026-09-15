@@ -3471,6 +3471,31 @@ except Exception:
                     }
                 )
 
+    def test_control_encoder_rejects_missing_required_fields(self):
+        tuple_value = {
+            "account_id": 1,
+            "statement_id": "statement",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "invocation",
+            "lease_epoch": 1,
+        }
+        cases = (
+            ("InputBatch", {}, "sequence"),
+            ("EndInput", {}, "last_sequence"),
+            (
+                "Finish",
+                {"last_result_sequence": 0, "finish_id": "finish", "status": "OK"},
+                "last_sequence",
+            ),
+            ("AcknowledgeFinish", {}, "finish_id"),
+        )
+        for kind, fields, field in cases:
+            with self.assertRaisesRegex(ValueError, f"missing.*{field}"):
+                worker._encode_control(
+                    {"kind": kind, "tuple": tuple_value, **fields}
+                )
+
     def test_control_rejects_unknown_fencing_tuple_fields(self):
         tuple_value = {
             "account_id": 0,
