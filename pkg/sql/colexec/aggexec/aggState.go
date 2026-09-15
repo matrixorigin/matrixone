@@ -1390,10 +1390,6 @@ func aggregateArgumentNodeSize(keySize, valueSize uint64) (uint64, error) {
 	return need, nil
 }
 
-func (ag *aggState) insertArg(mp *mpool.MPool, kbuf []byte) error {
-	return ag.insertArgValue(mp, kbuf, nil)
-}
-
 func (ag *aggState) insertArgValue(mp *mpool.MPool, kbuf, value []byte) error {
 	return ag.insertArgValueWithInserter(mp, kbuf, value, nil)
 }
