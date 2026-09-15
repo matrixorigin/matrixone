@@ -25,12 +25,16 @@ type Insert struct {
 	TargetDatabaseName Identifier
 	TargetTableName    Identifier
 
-	Accounts          IdentifierList
-	PartitionNames    IdentifierList
-	PartitionValues   PartitionValues
-	Columns           IdentifierList
-	ColumnNames       []*UnresolvedName
-	Rows              *Select
+	Accounts        IdentifierList
+	PartitionNames  IdentifierList
+	PartitionValues PartitionValues
+	Columns         IdentifierList
+	ColumnNames     []*UnresolvedName
+	Rows            *Select
+	// RowAlias is the optional MySQL INSERT VALUES/SET row alias. It is kept
+	// on INSERT rather than registering the alias as a catalog/table binding so
+	// the planner can install it only in the ON DUPLICATE KEY UPDATE scope.
+	RowAlias          *AliasClause
 	OnDuplicateUpdate UpdateExprs
 	Overwrite         bool
 	IsRestore         bool
@@ -82,6 +86,10 @@ func (node *Insert) Format(ctx *FmtCtx) {
 	if node.Rows != nil {
 		ctx.WriteByte(' ')
 		node.Rows.Format(ctx)
+	}
+	if node.RowAlias != nil {
+		ctx.WriteString(" as ")
+		node.RowAlias.Format(ctx)
 	}
 	if len(node.OnDuplicateUpdate) > 0 && !ignore {
 		ctx.WriteString(" on duplicate key update ")

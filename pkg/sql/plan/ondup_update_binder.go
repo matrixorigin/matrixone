@@ -16,11 +16,180 @@ package plan
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+// insertRowAliasBinding is the planner-local mapping from the names exposed by
+// INSERT ... VALUES/SET AS row_alias to target table column positions. It is
+// deliberately separate from catalog bindings so the alias cannot leak into
+// the INSERT input or another statement.
+type insertRowAliasBinding struct {
+	name string
+	cols map[string]insertRowAliasColumn
+}
+
+type insertRowAliasColumn struct {
+	targetIdx   int
+	incomingPos int
+}
+
+func lookupInsertTableColumn(tableDef *plan.TableDef, name string, lowerCaseTableNames int64) (int32, bool) {
+	if tableDef == nil {
+		return 0, false
+	}
+	// Column identifiers use the parser's column-name normalization regardless
+	// of lower_case_table_names. The latter controls table/row-alias matching;
+	// using it for columns makes an alias declared as `X` invisible to the
+	// parser's normalized lookup key `x` when the setting is 0.
+	key := normalizeInsertColumnName(name)
+	if tableDef.Name2ColIndex != nil {
+		if idx, ok := tableDef.Name2ColIndex[name]; ok {
+			if idx >= 0 && int(idx) < len(tableDef.Cols) && tableDef.Cols[idx] != nil {
+				return idx, true
+			}
+		}
+		for candidate, idx := range tableDef.Name2ColIndex {
+			if normalizeInsertColumnName(candidate) == key &&
+				idx >= 0 && int(idx) < len(tableDef.Cols) && tableDef.Cols[idx] != nil {
+				return idx, true
+			}
+		}
+	}
+	for i, col := range tableDef.Cols {
+		if col != nil && normalizeInsertColumnName(col.Name) == key {
+			return int32(i), true
+		}
+	}
+	return 0, false
+}
+
+func normalizeInsertColumnName(name string) string {
+	return tree.NewCStr(name, 1).Compare()
+}
+
+// validateInsertRowAlias checks the row alias after the target table and the
+// effective INSERT column order are known. The effective order is the explicit
+// INSERT list or SET list, or the visible implicit source sequence returned by
+// getInsertColsForRowAlias (which retains represented generated columns).
+func validateInsertRowAlias(
+	ctx context.Context,
+	rowAlias *tree.AliasClause,
+	insertColumns []string,
+	tableDef *plan.TableDef,
+	targetDBName, targetTableName string,
+	lowerCaseTableNames int64,
+) (*insertRowAliasBinding, error) {
+	if rowAlias == nil {
+		return nil, nil
+	}
+	aliasName := tree.NewCStr(string(rowAlias.Alias), lowerCaseTableNames).Compare()
+	if aliasName == "" {
+		return nil, moerr.NewInvalidInput(ctx, "INSERT row alias cannot be empty")
+	}
+	targetName := tree.NewCStr(targetTableName, lowerCaseTableNames).Compare()
+	if aliasName == targetName {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"row alias '%s' conflicts with target table '%s'", rowAlias.Alias, targetTableName)
+	}
+	if tableDef == nil {
+		return nil, moerr.NewInvalidInput(ctx, "INSERT row alias has no target table")
+	}
+	if len(rowAlias.Cols) > 0 && len(rowAlias.Cols) != len(insertColumns) {
+		return nil, moerr.NewInvalidInputf(ctx,
+			"INSERT row alias column list has %d entries, but the INSERT has %d columns",
+			len(rowAlias.Cols), len(insertColumns))
+	}
+
+	binding := &insertRowAliasBinding{
+		name: aliasName,
+		cols: make(map[string]insertRowAliasColumn, len(insertColumns)),
+	}
+	for i, targetColumn := range insertColumns {
+		if targetColumn == "" {
+			return nil, moerr.NewInvalidInput(ctx, "INSERT row alias contains an empty target column")
+		}
+		targetKey := normalizeInsertColumnName(targetColumn)
+		key := targetKey
+		if len(rowAlias.Cols) > 0 {
+			key = normalizeInsertColumnName(string(rowAlias.Cols[i]))
+		}
+		if key == "" {
+			return nil, moerr.NewInvalidInput(ctx, "INSERT row alias column cannot be empty")
+		}
+		if _, duplicate := binding.cols[key]; duplicate {
+			return nil, moerr.NewErrDupFieldName(ctx, key)
+		}
+		idx, ok := lookupInsertTableColumn(tableDef, targetColumn, lowerCaseTableNames)
+		if !ok {
+			return nil, moerr.NewBadFieldErrorf(ctx,
+				"invalid input: column '%s' does not exist", targetColumn)
+		}
+		binding.cols[key] = insertRowAliasColumn{
+			targetIdx:   int(idx),
+			incomingPos: int(idx),
+		}
+	}
+
+	// A row alias is never database-qualified. Database qualification is
+	// validated while each RHS reference is bound; keep this argument here so
+	// syntax validation has one shared call site for modern and fallback plans.
+	_ = targetDBName
+	return binding, nil
+}
+
+func validateOndupUpdateTargets(
+	ctx context.Context,
+	updates tree.UpdateExprs,
+	tableDef *plan.TableDef,
+	targetDBName, targetTableName string,
+	lowerCaseTableNames int64,
+) error {
+	if tableDef == nil {
+		return moerr.NewInvalidInput(ctx, "ON DUPLICATE KEY UPDATE has no target table")
+	}
+	for _, update := range updates {
+		if update == nil {
+			continue
+		}
+		if len(update.Names) == 0 || update.Names[0] == nil {
+			return moerr.NewInvalidInput(ctx, "ON DUPLICATE KEY UPDATE has no target column")
+		}
+		if err := validateInsertColumnQualifiers(
+			ctx, update.Names, targetDBName, targetTableName, lowerCaseTableNames,
+		); err != nil {
+			return err
+		}
+		if _, ok := lookupInsertTableColumn(tableDef, update.Names[0].ColName(), lowerCaseTableNames); !ok {
+			return moerr.NewBadFieldErrorf(ctx,
+				"invalid input: column '%s' does not exist", update.Names[0].ColNameOrigin())
+		}
+	}
+	return nil
+}
+
+func (binding *insertRowAliasBinding) remapIncomingPositions(ctx context.Context, tableDef *plan.TableDef, colName2Idx map[string]int32) error {
+	if binding == nil {
+		return nil
+	}
+	for name, column := range binding.cols {
+		if column.targetIdx < 0 || column.targetIdx >= len(tableDef.Cols) {
+			return moerr.NewInvalidInputf(ctx, "row alias column '%s' has no target position", name)
+		}
+		targetName := tableDef.Cols[column.targetIdx].Name
+		position, ok := colName2Idx[tableDef.Name+"."+targetName]
+		if !ok {
+			return moerr.NewBadFieldErrorf(ctx,
+				"invalid input: column '%s' does not exist", targetName)
+		}
+		column.incomingPos = int(position)
+		binding.cols[name] = column
+	}
+	return nil
+}
 
 // use for on duplicate key update clause:  eg: insert into t1 values(1,1),(2,2) on duplicate key update a = a + abs(b), b = values(b)-2
 func NewOndupUpdateBinder(
@@ -31,6 +200,7 @@ func NewOndupUpdateBinder(
 	tableDef *plan.TableDef,
 	targetDBName, targetTableName string,
 	lowerCaseTableNames int64,
+	rowAliases ...*insertRowAliasBinding,
 ) *OndupUpdateBinder {
 	b := &OndupUpdateBinder{
 		scanTag:             scanTag,
@@ -40,12 +210,19 @@ func NewOndupUpdateBinder(
 		targetTableName:     targetTableName,
 		lowerCaseTableNames: lowerCaseTableNames,
 	}
+	if len(rowAliases) > 0 {
+		b.rowAlias = rowAliases[0]
+	}
 	b.sysCtx = sysCtx
 	b.builder = builder
 	b.ctx = ctx
 	b.impl = b
 
 	return b
+}
+
+func (b *OndupUpdateBinder) SetTargetCorrelationTag(tag int32) {
+	b.targetCorrelationTag = tag
 }
 
 func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
@@ -71,7 +248,7 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 			}
 
 			colName := col.ColName()
-			idx, ok := b.tableDef.Name2ColIndex[colName]
+			idx, ok := lookupInsertTableColumn(b.tableDef, colName, b.lowerCaseTableNames)
 			if !ok {
 				return nil, moerr.NewBadFieldErrorf(b.GetContext(), "invalid input: column '%s' does not exist", col.ColNameOrigin())
 			}
@@ -120,21 +297,93 @@ func scalarSubqueryExpr(astExpr tree.Expr) (*tree.Subquery, bool) {
 
 func (b *OndupUpdateBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
 	colName := astExpr.ColName()
-	idx, ok := b.tableDef.Name2ColIndex[colName]
-	if !ok {
-		return nil, moerr.NewBadFieldErrorf(b.GetContext(), "invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
+	tableName := astExpr.TblName()
+	dbName := astExpr.DbName()
+	targetTableName := tree.NewCStr(b.targetTableName, b.lowerCaseTableNames).Compare()
+	targetDBName := tree.NewCStr(b.targetDBName, b.lowerCaseTableNames).Compare()
+	normalizedTableName := tree.NewCStr(tableName, b.lowerCaseTableNames).Compare()
+
+	if b.rowAlias != nil && normalizedTableName == b.rowAlias.name {
+		if dbName != "" {
+			return nil, moerr.NewInvalidInputf(b.GetContext(),
+				"row alias '%s' cannot be database-qualified", astExpr.TblNameOrigin())
+		}
+		column, ok := b.rowAlias.cols[normalizeInsertColumnName(colName)]
+		if !ok {
+			return nil, moerr.NewBadFieldErrorf(b.GetContext(),
+				"invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
+		}
+		return b.makeColRef(column.targetIdx, column.incomingPos, depth, colName, b.selectTag), nil
 	}
 
-	return &plan.Expr{
-		Typ: b.tableDef.Cols[idx].Typ,
-		Expr: &plan.Expr_Col{
-			Col: &plan.ColRef{
-				RelPos: b.scanTag,
-				ColPos: int32(idx),
-				Name:   colName,
-			},
-		},
-	}, nil
+	if tableName != "" {
+		if tableName != targetTableName || (dbName != "" && dbName != targetDBName) {
+			// At a correlated depth, let the ordinary parent chain resolve a
+			// local/outer subquery table before reporting this ODKU scope as
+			// missing. At depth zero no other table is legal in this scope.
+			if depth > 0 {
+				return b.baseBindColRef(astExpr, depth, isRoot)
+			}
+			return nil, moerr.NewInvalidInputf(b.GetContext(),
+				"missing FROM-clause entry for table '%s'", astExpr.TblNameOrigin())
+		}
+		idx, ok := lookupInsertTableColumn(b.tableDef, colName, b.lowerCaseTableNames)
+		if !ok {
+			return nil, moerr.NewBadFieldErrorf(b.GetContext(),
+				"invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
+		}
+		relPos := b.scanTag
+		if depth > 0 && b.targetCorrelationTag != 0 {
+			relPos = b.targetCorrelationTag
+		}
+		return b.makeColRef(int(idx), int(idx), depth, colName, relPos), nil
+	}
+
+	if b.rowAlias != nil {
+		aliasKey := normalizeInsertColumnName(colName)
+		_, incoming := b.rowAlias.cols[aliasKey]
+		_, target := lookupInsertTableColumn(b.tableDef, colName, b.lowerCaseTableNames)
+		if incoming && target {
+			return nil, moerr.NewInvalidInputf(b.GetContext(),
+				"ambiguous column reference '%s'", astExpr.ColNameOrigin())
+		}
+		if incoming {
+			column := b.rowAlias.cols[aliasKey]
+			return b.makeColRef(column.targetIdx, column.incomingPos, depth, colName, b.selectTag), nil
+		}
+	}
+
+	if idx, ok := lookupInsertTableColumn(b.tableDef, colName, b.lowerCaseTableNames); ok {
+		relPos := b.scanTag
+		if depth > 0 && b.targetCorrelationTag != 0 {
+			relPos = b.targetCorrelationTag
+		}
+		return b.makeColRef(int(idx), int(idx), depth, colName, relPos), nil
+	}
+	if depth > 0 {
+		return b.baseBindColRef(astExpr, depth, isRoot)
+	}
+
+	return nil, moerr.NewBadFieldErrorf(b.GetContext(),
+		"invalid input: column '%s' does not exist", astExpr.ColNameOrigin())
+}
+
+func (b *OndupUpdateBinder) makeColRef(targetIdx, colPos int, depth int32, name string, relPos int32) *plan.Expr {
+	expr := &plan.Expr{Typ: b.tableDef.Cols[targetIdx].Typ}
+	if depth == 0 {
+		expr.Expr = &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: relPos,
+			ColPos: int32(colPos),
+			Name:   name,
+		}}
+	} else {
+		expr.Expr = &plan.Expr_Corr{Corr: &plan.CorrColRef{
+			RelPos: relPos,
+			ColPos: int32(colPos),
+			Depth:  depth,
+		}}
+	}
+	return expr
 }
 
 func (b *OndupUpdateBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
@@ -146,7 +395,276 @@ func (b *OndupUpdateBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr,
 }
 
 func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return b.baseBindSubquery(astExpr, isRoot)
+	_, targetNested := b.astSubqueryTargetCorrelation(astExpr)
+	_, candidateNested := b.astSubqueryCandidateCorrelation(astExpr)
+	hasNestedAst := astSubqueryContainsNestedSubquery(astExpr)
+	if targetNested || candidateNested {
+		return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
+	}
+
+	// Bare ODKU columns cannot be classified reliably from the AST: an
+	// identically named column in a local FROM scope must shadow the outer target
+	// or row alias. Bind the subquery first, while its nested Expr_Sub nodes still
+	// retain their provenance, then reject a target or candidate correlation that
+	// occurs across a nested subquery boundary. Flattening happens later in the
+	// INSERT builder and would erase that distinction.
+	expr, err := b.baseBindSubquery(astExpr, isRoot)
+	if err != nil {
+		return nil, err
+	}
+	if b.builder != nil && b.selectTag != 0 {
+		hasTarget, hasCandidate, hasNested :=
+			b.builder.analyzeOdkuCorrelatedSubquery(expr, b.targetCorrelationTag, b.selectTag)
+		if (hasTarget || hasCandidate) && (hasNested || hasNestedAst) {
+			return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuTargetCorrelatedSubqueryCause)
+		}
+	}
+	return expr, nil
+}
+
+// astSubqueryContainsNestedSubquery preserves the nesting information that is
+// lost when bindSelect flattens a scalar subquery into its input plan. The
+// plan-level walk remains the authority for whether an identifier resolved to
+// an INSERT row alias; this helper only supplies the structural fact that a
+// child subquery existed.
+func astSubqueryContainsNestedSubquery(astExpr *tree.Subquery) bool {
+	if astExpr == nil {
+		return false
+	}
+
+	active := make(map[uintptr]struct{})
+	hasNested := false
+	var walk func(reflect.Value)
+	walk = func(value reflect.Value) {
+		if hasNested || !value.IsValid() {
+			return
+		}
+		if value.Kind() == reflect.Interface {
+			if value.IsNil() {
+				return
+			}
+			walk(value.Elem())
+			return
+		}
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				return
+			}
+			if value.CanInterface() {
+				if node, ok := value.Interface().(*tree.Subquery); ok {
+					if node != astExpr {
+						hasNested = true
+						return
+					}
+				}
+			}
+			pointer := value.Pointer()
+			if _, ok := active[pointer]; ok {
+				return
+			}
+			active[pointer] = struct{}{}
+			defer delete(active, pointer)
+			walk(value.Elem())
+			return
+		}
+
+		switch value.Kind() {
+		case reflect.Struct:
+			valueType := value.Type()
+			for i := 0; i < value.NumField(); i++ {
+				if valueType.Field(i).PkgPath == "" {
+					walk(value.Field(i))
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < value.Len(); i++ {
+				walk(value.Index(i))
+			}
+		}
+	}
+
+	walk(reflect.ValueOf(astExpr))
+	return hasNested
+}
+
+// astSubqueryTargetCorrelation checks the parser tree before the subquery is
+// bound and flattened. Once an inner scalar subquery is flattened into the
+// outer input plan, the plan-level walk cannot distinguish that unsafe shape
+// from an ordinary scalar expression. It deliberately ignores local aliases
+// that shadow the ODKU target table; ordinary local subquery tables and sibling
+// scalar subqueries remain valid.
+func (b *OndupUpdateBinder) astSubqueryTargetCorrelation(astExpr *tree.Subquery) (hasTarget, hasNested bool) {
+	if b == nil || astExpr == nil {
+		return false, false
+	}
+	targetTableName := tree.NewCStr(b.targetTableName, b.lowerCaseTableNames).Compare()
+	targetDBName := tree.NewCStr(b.targetDBName, b.lowerCaseTableNames).Compare()
+	return b.astSubqueryCorrelation(astExpr, func(node *tree.UnresolvedName, local bool) bool {
+		if local || node.TblName() == "" {
+			return false
+		}
+		qualifier := tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare()
+		return qualifier == targetTableName &&
+			(node.DbName() == "" ||
+				tree.NewCStr(node.DbName(), b.lowerCaseTableNames).Compare() == targetDBName)
+	})
+}
+
+// astSubqueryCandidateCorrelation performs the same pre-binding safety check
+// for INSERT row aliases. A nested candidate-correlated subquery has an input
+// plan that is materialized before duplicate-key arbitration, so the outer
+// target-match guard cannot make it safe. Local FROM aliases still shadow the
+// row alias and must not be classified as candidate references.
+func (b *OndupUpdateBinder) astSubqueryCandidateCorrelation(astExpr *tree.Subquery) (hasCandidate, hasNested bool) {
+	if b == nil || b.rowAlias == nil {
+		return false, false
+	}
+	candidateName := b.rowAlias.name
+	return b.astSubqueryCorrelation(astExpr, func(node *tree.UnresolvedName, local bool) bool {
+		return !local && node.DbName() == "" && node.TblName() != "" &&
+			tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare() == candidateName
+	})
+}
+
+func (b *OndupUpdateBinder) astSubqueryCorrelation(
+	astExpr *tree.Subquery,
+	match func(*tree.UnresolvedName, bool) bool,
+) (hasCorrelation, hasNested bool) {
+	if b == nil || astExpr == nil || match == nil {
+		return false, false
+	}
+
+	funcExprType := reflect.TypeOf(tree.FuncExpr{})
+	type subqueryFrame struct {
+		hasCorrelation bool
+		hasChild       bool
+	}
+
+	frames := make([]subqueryFrame, 0, 2)
+	localScopes := make([]map[string]struct{}, 0, 2)
+	isLocalQualifier := func(name string) bool {
+		for i := len(localScopes) - 1; i >= 0; i-- {
+			if _, ok := localScopes[i][name]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	active := make(map[uintptr]struct{})
+	var walk func(reflect.Value)
+	walk = func(value reflect.Value) {
+		if !value.IsValid() {
+			return
+		}
+		if value.Kind() == reflect.Interface {
+			if value.IsNil() {
+				return
+			}
+			walk(value.Elem())
+			return
+		}
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				return
+			}
+			pointer := value.Pointer()
+			if _, ok := active[pointer]; ok {
+				return
+			}
+			active[pointer] = struct{}{}
+			defer delete(active, pointer)
+
+			if value.CanInterface() {
+				switch node := value.Interface().(type) {
+				case *tree.Select:
+					localScopes = append(localScopes, b.astSelectLocalQualifiers(node.Select))
+					walk(value.Elem())
+					localScopes = localScopes[:len(localScopes)-1]
+					return
+				case *tree.SelectClause:
+					localScopes = append(localScopes, b.astSelectLocalQualifiers(node))
+					walk(value.Elem())
+					localScopes = localScopes[:len(localScopes)-1]
+					return
+				case *tree.UnresolvedName:
+					if len(frames) > 0 && node.TblName() != "" {
+						qualifier := tree.NewCStr(node.TblName(), b.lowerCaseTableNames).Compare()
+						local := node.DbName() == "" && isLocalQualifier(qualifier)
+						if match(node, local) {
+							frames[len(frames)-1].hasCorrelation = true
+							hasCorrelation = true
+						}
+					}
+					return
+				case *tree.Subquery:
+					if len(frames) > 0 {
+						frames[len(frames)-1].hasChild = true
+					}
+					frames = append(frames, subqueryFrame{})
+					walk(value.Elem())
+					frame := frames[len(frames)-1]
+					frames = frames[:len(frames)-1]
+					if frame.hasCorrelation && (frame.hasChild || len(frames) > 0) {
+						hasNested = true
+					}
+					return
+				}
+			}
+			walk(value.Elem())
+			return
+		}
+
+		switch value.Kind() {
+		case reflect.Struct:
+			valueType := value.Type()
+			for i := 0; i < value.NumField(); i++ {
+				if valueType == funcExprType && valueType.Field(i).Name == "Func" {
+					continue
+				}
+				if valueType.Field(i).PkgPath == "" {
+					walk(value.Field(i))
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			for i := 0; i < value.Len(); i++ {
+				walk(value.Index(i))
+			}
+		}
+	}
+
+	walk(reflect.ValueOf(astExpr))
+	return hasCorrelation, hasNested
+}
+
+func (b *OndupUpdateBinder) astSelectLocalQualifiers(stmt tree.SelectStatement) map[string]struct{} {
+	names := make(map[string]struct{})
+	if selectClause, ok := stmt.(*tree.SelectClause); ok && selectClause.From != nil {
+		for _, tableExpr := range selectClause.From.Tables {
+			b.collectAstTableQualifiers(tableExpr, names)
+		}
+	}
+	return names
+}
+
+func (b *OndupUpdateBinder) collectAstTableQualifiers(expr tree.TableExpr, names map[string]struct{}) {
+	switch tableExpr := expr.(type) {
+	case *tree.TableName:
+		names[tree.NewCStr(string(tableExpr.ObjectName), b.lowerCaseTableNames).Compare()] = struct{}{}
+	case *tree.AliasedTableExpr:
+		if tableExpr.As.Alias != "" {
+			names[tree.NewCStr(string(tableExpr.As.Alias), b.lowerCaseTableNames).Compare()] = struct{}{}
+			return
+		}
+		b.collectAstTableQualifiers(tableExpr.Expr, names)
+	case *tree.ParenTableExpr:
+		b.collectAstTableQualifiers(tableExpr.Expr, names)
+	case *tree.JoinTableExpr:
+		b.collectAstTableQualifiers(tableExpr.Left, names)
+		b.collectAstTableQualifiers(tableExpr.Right, names)
+	case *tree.ApplyTableExpr:
+		b.collectAstTableQualifiers(tableExpr.Left, names)
+		b.collectAstTableQualifiers(tableExpr.Right, names)
+	}
 }
 
 func (b *OndupUpdateBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
