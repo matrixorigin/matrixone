@@ -11014,8 +11014,11 @@ func createTablesInInformationSchemaOfGeneralTenant(
 	// TODO: when we have the auto_increment column, we need new strategy.
 
 	var err error
-	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(
-		protocolVersionForTenantInitialization(service, proc))
+	protocolVersion, err := protocolVersionForTenantInitialization(service, proc)
+	if err != nil {
+		return err
+	}
+	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersion)
 	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
 	sqls = append(sqls, "use information_schema;")
@@ -11033,28 +11036,37 @@ func createTablesInInformationSchemaOfGeneralTenant(
 	return err
 }
 
-func protocolVersionForTenantInitialization(service string, proc *process.Process) int64 {
+func protocolVersionForTenantInitialization(service string, proc *process.Process) (int64, error) {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
-		return defines.MORPCMinVersion
+		return defines.MORPCMinVersion, nil
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {
-		return defines.MORPCMinVersion
+		return defines.MORPCMinVersion, nil
 	}
 	version, ok := value.(int64)
 	if !ok {
-		return defines.MORPCMinVersion
+		return defines.MORPCMinVersion, nil
 	}
-	if version >= defines.MORPCVersion73 && proc != nil {
+	if version >= defines.MORPCVersion73 {
 		supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion73)
-		if err != nil || !supported {
+		if err != nil {
+			return 0, moerr.NewInternalErrorNoCtxf(
+				"cannot verify MORPC v%d support for tenant initialization: %v",
+				defines.MORPCVersion73, err)
+		}
+		if !supported {
 			// Publishing the v73 VIEWS DDL is unsafe until every CN can bind
-			// both new metadata functions. Unknown capability is legacy-safe.
-			return defines.MORPCVersion72
+			// both new metadata functions. Abort the account transaction so a
+			// transiently incomplete probe cannot commit a permanently stale
+			// tenant at the final version.
+			return 0, moerr.NewInvalidStateNoCtxf(
+				"cannot initialize tenant until every CN supports MORPC v%d",
+				defines.MORPCVersion73)
 		}
 	}
-	return version
+	return version, nil
 }
 
 // createSubscription insert records into mo_subs of To-All-Publications

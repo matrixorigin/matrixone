@@ -1022,6 +1022,8 @@ func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testin
 		sql         string
 		contains    string
 		checkOption string
+		replay      bool
+		replayCols  []string
 	}{
 		{
 			name:     "dollar quoted definer cannot supply structural view tokens",
@@ -1055,14 +1057,32 @@ func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testin
 			contains: "select `nation`.`n_name` from `nation`",
 		},
 		{
-			name:     "explicit view columns are replayable as output aliases",
-			sql:      "CREATE VIEW v (view_name) AS SELECT n_name FROM nation;",
-			contains: "select `nation`.`n_name` as `view_name` from `nation`",
+			name:       "explicit view columns preserve public names without changing inner aliases",
+			sql:        "CREATE VIEW v (view_name) AS SELECT n_name FROM nation;",
+			contains:   "as `__mo_view_definition`(`view_name`)",
+			replay:     true,
+			replayCols: []string{"view_name"},
 		},
 		{
-			name:     "explicit view columns cover parenthesized union output",
-			sql:      "CREATE VIEW v (view_name) AS (SELECT n_name FROM nation UNION SELECT n_name FROM nation);",
-			contains: "as `view_name` from `nation` union",
+			name:       "explicit view columns preserve aliases used by order by",
+			sql:        "CREATE VIEW v (view_name) AS SELECT 1 AS source_name ORDER BY source_name;",
+			contains:   "source_name",
+			replay:     true,
+			replayCols: []string{"view_name"},
+		},
+		{
+			name:       "explicit view columns preserve aliases used by having",
+			sql:        "CREATE VIEW v (view_name) AS SELECT 1 AS source_name HAVING source_name = 1;",
+			contains:   "having `source_name` = 1",
+			replay:     true,
+			replayCols: []string{"view_name"},
+		},
+		{
+			name:       "explicit view columns cover parenthesized union output",
+			sql:        "CREATE VIEW v (view_name, region_name) AS (SELECT n_name, n_regionkey FROM nation UNION SELECT n_name, n_regionkey FROM nation);",
+			contains:   "as `__mo_view_definition`(`view_name`, `region_name`)",
+			replay:     true,
+			replayCols: []string{"view_name", "region_name"},
 		},
 	}
 
@@ -1096,6 +1116,24 @@ func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testin
 			_, ok := definitions[0].(*tree.Select)
 			assert.True(t, ok)
 			definitions[0].Free()
+
+			if test.replay {
+				replaySQL := "CREATE VIEW replayed AS " + data.Definition
+				replayStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, replaySQL, 1)
+				require.NoError(t, err)
+				defer replayStmt.Free()
+				replayCtx := &rootSQLCompilerContext{
+					MockCompilerContext: NewMockCompilerContext(false),
+					rootSQL:             replaySQL,
+				}
+				replayed, err := BuildPlan(replayCtx, replayStmt, false)
+				require.NoError(t, err)
+				replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
+				require.Len(t, replayCols, len(test.replayCols))
+				for i, name := range test.replayCols {
+					require.Equal(t, name, replayCols[i].Name)
+				}
+			}
 		})
 	}
 }

@@ -218,6 +218,7 @@ func TestRegenerateLegacyViewDefinitionUsesParserDerivedMetadata(t *testing.T) {
 		stmt        string
 		contains    string
 		checkOption string
+		replay      bool
 	}{
 		{
 			name:     "dollar quoted definer cannot supply view boundary",
@@ -248,7 +249,14 @@ func TestRegenerateLegacyViewDefinitionUsesParserDerivedMetadata(t *testing.T) {
 		{
 			name:     "explicit view columns are retained by regeneration",
 			stmt:     "CREATE VIEW v (view_name) AS SELECT 1",
-			contains: "select 1 as `view_name`",
+			contains: "select `__mo_view_definition`.`view_name` as `view_name` from (select 1) as `__mo_view_definition`(`view_name`)",
+			replay:   true,
+		},
+		{
+			name:     "explicit view columns preserve an inner having alias",
+			stmt:     "CREATE VIEW v (view_name) AS SELECT 1 AS source_name HAVING source_name = 1",
+			contains: "having `source_name` = 1",
+			replay:   true,
 		},
 	}
 
@@ -277,6 +285,22 @@ func TestRegenerateLegacyViewDefinitionUsesParserDerivedMetadata(t *testing.T) {
 			_, ok := statements[0].(*tree.Select)
 			require.True(t, ok)
 			statements[0].Free()
+
+			if test.replay {
+				replaySQL := "CREATE VIEW replayed AS " + data.Definition
+				replayStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, replaySQL, 1)
+				require.NoError(t, err)
+				defer replayStmt.Free()
+				replayCtx := &rootSQLCompilerContext{
+					MockCompilerContext: NewMockCompilerContext(false),
+					rootSQL:             replaySQL,
+				}
+				replayed, err := BuildPlan(replayCtx, replayStmt, false)
+				require.NoError(t, err)
+				replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
+				require.Len(t, replayCols, 1)
+				require.Equal(t, "view_name", replayCols[0].Name)
+			}
 		})
 	}
 }
