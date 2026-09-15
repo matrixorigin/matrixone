@@ -367,22 +367,27 @@ func TestHllLegacyWireStateCoversEmptyAndFloatingPointWidths(t *testing.T) {
 
 			values := vector.NewVec(tc.typ)
 			if tc.typ.Oid == types.T_float32 {
-				require.NoError(t, vector.AppendFixed(values,
-					float32(math.Copysign(0, -1)), false, mp))
+				require.NoError(t, vector.AppendFixedList(values,
+					[]float32{0, float32(math.Copysign(0, -1))}, nil, mp))
 			} else {
-				require.NoError(t, vector.AppendFixed(values,
-					math.Copysign(0, -1), false, mp))
+				require.NoError(t, vector.AppendFixedList(values,
+					[]float64{0, math.Copysign(0, -1)}, nil, mp))
 			}
 			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
 			result, err := exec.Flush()
 			require.NoError(t, err)
 			require.Equal(t, hllLegacyVersion, result[0].GetBytesAt(0)[0])
 			expected := hll.NewNoSparse()
-			expected.Insert(values.GetRawBytesAt(0))
+			for row := 0; row < values.Length(); row++ {
+				expected.Insert(values.GetRawBytesAt(row))
+			}
 			expectedBytes, err := expected.MarshalBinary()
 			require.NoError(t, err)
 			require.Equal(t, expectedBytes[hllHeaderSize:],
 				result[0].GetBytesAt(0)[hllHeaderSize:])
+			legacyDecoder := hll.NewNoSparse()
+			require.NoError(t, legacyDecoder.UnmarshalBinary(result[0].GetBytesAt(0)))
+			require.Equal(t, uint64(2), legacyDecoder.Estimate())
 
 			values.Free(mp)
 			result[0].Free(mp)
@@ -775,8 +780,22 @@ func TestHllAddExecFillMergeFlush(t *testing.T) {
 	right.Free()
 }
 
-func TestHllAddPersistedStateSurvivesUpgradeAppendAndMerge(t *testing.T) {
+func TestHllAddPersistedLegacyStateSurvivesUpgradeAppendAndMerge(t *testing.T) {
 	mp := mpool.MustNewZero()
+
+	buildLegacyState := func(values ...int64) []byte {
+		// hll.NewNoSparse is the independent pre-upgrade producer. Keeping this
+		// state outside makeHllAdd prevents the regression from proving only that
+		// two current producers agree with each other.
+		legacy := hll.NewNoSparse()
+		for _, value := range values {
+			legacy.Insert(types.EncodeInt64(&value))
+		}
+		data, err := legacy.MarshalBinary()
+		require.NoError(t, err)
+		require.Equal(t, hllLegacyVersion, data[0])
+		return data
+	}
 
 	buildAddState := func(values ...int64) []byte {
 		exec := makeHllAdd(mp, 1, types.T_int64.ToType()).(*hllAddExec)
@@ -795,7 +814,7 @@ func TestHllAddPersistedStateSurvivesUpgradeAppendAndMerge(t *testing.T) {
 		return data
 	}
 
-	baseState := buildAddState(1, 2)
+	baseState := buildLegacyState(1, 2)
 	appendedState := buildAddState(3)
 
 	merge := makeHllMerge(mp, 1, types.T_varbinary.ToType()).(*hllMergeExec)
