@@ -562,6 +562,11 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 				execCtx.input != nil && execCtx.input.isBinaryProtExecute,
 				cwft.runtimeDirectResultSpecialization,
 			)
+			if preparedRetry != nil && cwft.preparedStmt != nil {
+				preparedRetry.integerSourcePositions = append([]int32(nil), cwft.preparedStmt.integerSourceParamPositions...)
+				preparedRetry.integerSourceSQL = cwft.preparedStmt.Sql
+				preparedRetry.integerSourceSQLMode = cwft.preparedStmt.schedulingSQLMode
+			}
 			var planSnapshotTS *timestamp.Timestamp
 			if cwft.preparedStmt != nil {
 				planSnapshotTS = &cwft.preparedStmt.Ts
@@ -1142,6 +1147,50 @@ func (prepareStmt *PrepareStmt) refreshFixedIntegerParamPositions(preparePlan *p
 		prepareStmt.hasLagLeadParams = preparedFixedIntegerParamPositions(preparePlan)
 }
 
+func preparedDMLIntegerAssignmentNeedsRuntimeSpecialization(
+	paramVals []any,
+	positions []int32,
+) bool {
+	for _, position := range positions {
+		if position < 0 || int(position) >= len(paramVals) {
+			continue
+		}
+		param, ok := paramVals[position].(plan2.ParamValue)
+		if !ok || param.Value == nil {
+			continue
+		}
+		var source types.Type
+		switch {
+		case param.HasSourceType:
+			source = param.SourceType
+		case param.IsBinaryProtocol && param.HasRuntimeType:
+			source = param.RuntimeType
+		}
+		if source.IsDecimal() || source.Oid.IsFloat() ||
+			param.PrepareParamKind == vector.PrepareParamDecimal ||
+			param.PrepareParamKind == vector.PrepareParamFloat {
+			return true
+		}
+	}
+	return false
+}
+
+func preparedDMLIntegerAssignmentRuntimeTypesNeedSpecialization(
+	runtimeTypes []types.Type,
+	positions []int32,
+) bool {
+	for _, position := range positions {
+		if position < 0 || int(position) >= len(runtimeTypes) {
+			continue
+		}
+		typ := runtimeTypes[position]
+		if typ.IsDecimal() || typ.Oid.IsFloat() {
+			return true
+		}
+	}
+	return false
+}
+
 func (prepareStmt *PrepareStmt) refreshGeometrySRIDParamPositions(preparePlan *plan2.Plan) {
 	if prepareStmt.geometrySRIDPositionsPlan == preparePlan {
 		return
@@ -1458,6 +1507,9 @@ func initExecuteStmtParamWithResolverInSession(
 			newPreparePlan.Plan)
 		prepareStmt.bitCountOverloadParamPositions = plan2.PreparedPlanBitCountFallbackParamPositions(
 			newPreparePlan.Plan)
+		prepareStmt.dmlIntegerAssignmentParamPositions =
+			plan2.PreparedDMLIntegerAssignmentParamPositions(newPreparePlan.Plan)
+		prepareStmt.integerSourceParamPositions = plan2.PreparedIntegerSourceParamPositions(newPreparePlan.Plan)
 		prepareStmt.conversionParamPositions = plan2.PreparedPlanConversionParamPositions(
 			newPreparePlan.Plan)
 		// Parameter type evolution belongs to one prepared-plan generation. The
@@ -1607,9 +1659,11 @@ func initExecuteStmtParamWithResolverInSession(
 		executionPlan.GetQuery() != nil
 	runtimeDirectResultCandidate := false
 	runtimeTextComparisonSpecialization := false
+	runtimeDMLIntegerAssignmentCandidate := false
 	directResultPositions := prepareStmt.directResultParamPositions
 	runtimeDirectResultPositions := make([]int32, 0, len(directResultPositions))
-	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
+	rebindIntegerSource := len(prepareStmt.integerSourceParamPositions) > 0
+	needsRuntimeParamVals := rebindIntegerSource || !binaryExecute || binaryLiteralPlan ||
 		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain ||
 		runtimeNumericOverloadCandidate || deferredBitCountOverloadCandidate
 	cwft.paramVals = nil
@@ -1707,6 +1761,9 @@ func initExecuteStmtParamWithResolverInSession(
 		if binaryStringMetadata != nil {
 			prepareStmt.paramBinaryStrings = binaryStringMetadata
 		}
+		runtimeDMLIntegerAssignmentCandidate =
+			preparedDMLIntegerAssignmentRuntimeTypesNeedSpecialization(
+				runtimeParamTypes, prepareStmt.dmlIntegerAssignmentParamPositions)
 		if hasConcreteType {
 			prepareStmt.paramMetadata = cwft.proc.SetPrepareParamsWithReusableTypedMeta(
 				prepareStmt.params, nil, prepareStmt.paramKinds,
@@ -1719,7 +1776,8 @@ func initExecuteStmtParamWithResolverInSession(
 			cwft.proc.SetPrepareParams(prepareStmt.params)
 		}
 		needsRuntimeParamVals = needsRuntimeParamVals || needsRuntimeSpecialization ||
-			runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate || runtimeDirectResultCandidate
+			runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate || runtimeDirectResultCandidate ||
+			runtimeDMLIntegerAssignmentCandidate
 		if needsRuntimeParamVals {
 			cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
 			if err != nil {
@@ -1779,6 +1837,9 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		cwft.paramVals = paramVals
 		applyPreparedConversionRuntimeTypes(cwft.paramVals, prepareStmt.conversionParamPositions)
+		runtimeDMLIntegerAssignmentCandidate =
+			preparedDMLIntegerAssignmentNeedsRuntimeSpecialization(
+				cwft.paramVals, prepareStmt.dmlIntegerAssignmentParamPositions)
 		bitCountNumericOverloadCandidate := prepareStmt.applyBitCountNumericRuntimeTypes(cwft.paramVals)
 		runtimeNumericOverloadCandidate = runtimeNumericOverloadCandidate ||
 			bitCountNumericOverloadCandidate
@@ -1787,6 +1848,7 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	needsRuntimeSpecialization = needsRuntimeSpecialization || runtimeDMLIntegerAssignmentCandidate
 	if !binaryExecute && executionPlan.GetQuery() != nil {
 		// SQL EXECUTE values are already decoded as ParamValue.  The prepared
 		// plan's cached prefix-consumer bit is sufficient to decide whether the
@@ -1816,7 +1878,8 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.runtimeSpecializationNeeded && !runtimeTextComparisonSpecialization &&
 		!prepareStmt.hasPaginationParams && !prepareStmt.hasLagLeadParams && !preparedExplain
 	if runtimeNumericOverloadCandidate || runtimeNumericPrefixCandidate || runtimeConversionCandidate ||
-		stableRuntimeSpecializationCandidate {
+		stableRuntimeSpecializationCandidate ||
+		(binaryExecute && runtimeDMLIntegerAssignmentCandidate) {
 		retainPreparedRuntimeParamRefs(cwft.paramVals)
 	}
 	if err := plan2.ValidatePreparedLagLeadParams(reqCtx, preparePlan.Plan, cwft.paramVals); err != nil {
@@ -1842,11 +1905,20 @@ func initExecuteStmtParamWithResolverInSession(
 	var cachedRuntimeCompile *compile.Compile
 	runtimeCacheKey := ""
 	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
-		runtimeConversionCandidate || stableRuntimeSpecializationCandidate
+		runtimeConversionCandidate || stableRuntimeSpecializationCandidate ||
+		(binaryExecute && runtimeDMLIntegerAssignmentCandidate)
 	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate
 	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
 		(runtimeDirectResultCandidate ||
 			(runtimeCategoryCandidate && preparedRuntimeCacheSupports(cwft.paramVals)))
+	cacheableRuntimeQuery = cacheableRuntimeQuery && !rebindIntegerSource
+	if rebindIntegerSource {
+		runtimePlan, err = rebindPreparedIntegerSource(reqCtx, execCtx, executionSes, prepareStmt, cwft.paramVals)
+		if err != nil {
+			return nil, nil, nil, originSQL, false, err
+		}
+		runtimeSpecialized, runtimePlanApplied = true, true
+	}
 	if cacheableRuntimeQuery {
 		if runtimeCategoryCandidate {
 			runtimeCacheKey = preparedRuntimeSemanticKey(cwft.paramVals)
@@ -2334,6 +2406,9 @@ func preparedRuntimeTextComparisonTypes(paramVals []any) []types.Type {
 // slice must not alias TxnComputationWrapper.paramVals because that field is
 // replaced on the next execution of the cached prepared statement.
 type preparedExecutionRetry struct {
+	integerSourcePositions     []int32
+	integerSourceSQL           string
+	integerSourceSQLMode       string
 	paramVals                  []any
 	binaryExecute              bool
 	directResultSpecialization bool
@@ -3251,6 +3326,13 @@ func buildPlanForCompileRetry(
 ) (*plan2.Plan, error) {
 	if ses != nil {
 		ctx = function.WithNoUnsignedSubtraction(ctx, mysql.HasSQLMode(sessionSQLMode(ses), "NO_UNSIGNED_SUBTRACTION"))
+	}
+	// A retry must retain the same source-domain binding as the first
+	// execution, and parse its own AST rather than mutate the cached one.
+	if preparedRetry != nil && len(preparedRetry.integerSourcePositions) > 0 {
+		return buildPreparedIntegerSource(ctx, ses, compilerContext,
+			preparedRetry.integerSourceSQL, preparedRetry.integerSourceSQLMode,
+			preparedRetry.paramVals, preparedRetry.integerSourcePositions)
 	}
 	// No permission verification is required when retry execute buildPlan.
 	retryPlan, err := buildPlanWithPrepareMode(

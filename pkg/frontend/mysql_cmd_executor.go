@@ -2914,10 +2914,13 @@ func createPrepareStmtInSession(
 		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
 			prepareControl.Plan),
 		fixedIntegerParamPositions: fixedIntegerParamPositions,
-		hasPaginationParams:        hasPaginationParams,
-		hasLagLeadParams:           hasLagLeadParams,
-		getFromSendLongData:        make(map[int]struct{}),
-		schedulingSQLMode:          schedulingSQLMode,
+		dmlIntegerAssignmentParamPositions: plan2.PreparedDMLIntegerAssignmentParamPositions(
+			prepareControl.Plan),
+		integerSourceParamPositions: plan2.PreparedIntegerSourceParamPositions(prepareControl.Plan),
+		hasPaginationParams:         hasPaginationParams,
+		hasLagLeadParams:            hasLagLeadParams,
+		getFromSendLongData:         make(map[int]struct{}),
+		schedulingSQLMode:           schedulingSQLMode,
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		prepareControl.Plan, len(prepareControl.ParamTypes))

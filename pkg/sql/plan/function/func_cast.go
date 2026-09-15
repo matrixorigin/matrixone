@@ -652,7 +652,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal256: {
-		types.T_bit,
+		types.T_bool, types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
@@ -1109,10 +1109,12 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = uint64ToOthers(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
 	case types.T_float32:
 		s := vector.GenerateFunctionFixedTypeParameter[float32](from)
-		err = float32ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = float32ToOthers(execProc, s, *toType, result, length, selectList, mode,
+			strictStringWidth, reportDataTooLong)
 	case types.T_float64:
 		s := vector.GenerateFunctionFixedTypeParameter[float64](from)
-		err = float64ToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = float64ToOthers(execProc, s, *toType, result, length, selectList, mode,
+			strictStringWidth, reportDataTooLong)
 	case types.T_decimal64:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from)
 		err = decimal64ToOthers(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
@@ -1977,7 +1979,8 @@ func uint64ToOthers(proc *process.Process,
 
 func float32ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[float32],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
@@ -1988,28 +1991,28 @@ func float32ToOthers(proc *process.Process,
 		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
@@ -2048,7 +2051,8 @@ func float32ToOthers(proc *process.Process,
 
 func float64ToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[float64],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
 	case types.T_bool:
@@ -2059,28 +2063,28 @@ func float64ToOthers(proc *process.Process,
 		return numericToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToIntegerForCast(ctx, source, rs, length, selectList, mode)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		if rs.GetType().Scale >= 0 && rs.GetType().Width > 0 {
@@ -2474,30 +2478,39 @@ func decimal256ToOthersWithContext(
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal256ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		for i := uint64(0); i < uint64(length); i++ {
+			value, null := source.GetValue(i)
+			if err := rs.Append(value != (types.Decimal256{}), null); err != nil {
+				return err
+			}
+		}
+		return nil
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return decimal256ToSigned(ctx, source, rs, 8, length, selectList)
+		return decimal256ToSigned(ctx, source, rs, 8, length, selectList, mode)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return decimal256ToSigned(ctx, source, rs, 16, length, selectList)
+		return decimal256ToSigned(ctx, source, rs, 16, length, selectList, mode)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return decimal256ToSigned(ctx, source, rs, 32, length, selectList)
+		return decimal256ToSigned(ctx, source, rs, 32, length, selectList, mode)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return decimal256ToSigned(ctx, source, rs, 64, length, selectList)
+		return decimal256ToSigned(ctx, source, rs, 64, length, selectList, mode)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return decimal256ToUnsigned(ctx, source, rs, 8, length, selectList)
+		return decimal256ToUnsigned(ctx, source, rs, 8, length, selectList, mode)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return decimal256ToUnsigned(ctx, source, rs, 16, length, selectList)
+		return decimal256ToUnsigned(ctx, source, rs, 16, length, selectList, mode)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return decimal256ToUnsigned(ctx, source, rs, 32, length, selectList)
+		return decimal256ToUnsigned(ctx, source, rs, 32, length, selectList, mode)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return decimal256ToUnsigned(ctx, source, rs, 64, length, selectList)
+		return decimal256ToUnsigned(ctx, source, rs, 64, length, selectList, mode)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return decimal256ToDecimal64(source, rs, length, selectList)
@@ -3463,6 +3476,66 @@ func floatExceedsBitRange(value float64, bitSize int) bool {
 	return value > float64(maxBitValue(bitSize))
 }
 
+func floatToIntegerForCast[T1 constraints.Float, T2 constraints.Integer](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[T1],
+	to *vector.FunctionResult[T2],
+	length int,
+	selectList *FunctionSelectList,
+	mode castMode,
+) error {
+	if !mode.isAssignment() {
+		return floatToInteger(ctx, from, to, length, selectList)
+	}
+
+	var zero T2
+	bitSize := int(unsafe.Sizeof(zero) * 8)
+	unsigned := ^zero > zero
+	lower := -math.Exp2(float64(bitSize - 1))
+	upper := math.Exp2(float64(bitSize - 1))
+	minValue := T2(uint64(1) << (bitSize - 1))
+	maxValue := minValue - 1
+	if unsigned {
+		lower = 0
+		upper = math.Exp2(float64(bitSize))
+		minValue = 0
+		maxValue = ^zero
+	}
+	adjustOutOfRange := mode == castModeAssignment || mode == castModeAssignmentIgnore
+	for i := uint64(0); i < uint64(length); i++ {
+		value, isNull := from.GetValue(i)
+		if isNull {
+			if err := to.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		floating := float64(value)
+		rounded := math.RoundToEven(floating)
+		if !math.IsNaN(rounded) && !math.IsInf(rounded, 0) && rounded >= lower && rounded < upper {
+			if err := to.Append(T2(rounded), false); err != nil {
+				return err
+			}
+			continue
+		}
+		if !adjustOutOfRange {
+			return moerr.NewOutOfRangef(ctx, to.GetType().Oid.String(), "value '%v'", value)
+		}
+		adjusted := zero
+		switch {
+		case math.IsNaN(rounded):
+		case rounded < lower || math.IsInf(rounded, -1):
+			adjusted = minValue
+		default:
+			adjusted = maxValue
+		}
+		if err := to.Append(adjusted, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // XXX do not use it to cast float to integer, please use floatToInteger
 func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 	ctx context.Context,
@@ -3471,6 +3544,14 @@ func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 	var i uint64
 	var dftValue T2
 	times := uint64(length)
+	if ^dftValue > dftValue {
+		for i = 0; i < times; i++ {
+			value, isNull := from.GetValue(i)
+			if !isNull && math.RoundToEven(float64(value)) < 0 {
+				return moerr.NewOutOfRangef(ctx, "float", "value '%v'", value)
+			}
+		}
+	}
 	if err := overflowForNumericToNumeric[T1, T2](ctx, from.UnSafeGetAllValue(), from.GetSourceVector().GetNulls()); err != nil {
 		return err
 	}
@@ -3481,7 +3562,7 @@ func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 				return err
 			}
 		} else {
-			if err := to.Append(T2(math.Round(float64(v))), false); err != nil {
+			if err := to.Append(T2(math.RoundToEven(float64(v))), false); err != nil {
 				return err
 			}
 		}
@@ -5503,7 +5584,7 @@ func decimal128ToUnsigned[T constraints.Unsigned](
 func decimal256ToSigned[T constraints.Signed](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal256],
-	to *vector.FunctionResult[T], bitSize int, length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[T], bitSize int, length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	l := uint64(length)
 	fromTyp := from.GetType()
@@ -5519,8 +5600,9 @@ func decimal256ToSigned[T constraints.Signed](
 				return err
 			}
 			xStr := x.Format(0)
+			// ParseInt returns the signed endpoint on range overflow.
 			result, err := strconv.ParseInt(xStr, 10, bitSize)
-			if err != nil {
+			if err != nil && mode != castModeAssignment && mode != castModeAssignmentIgnore {
 				return moerr.NewOutOfRangef(ctx,
 					fmt.Sprintf("int%d", bitSize),
 					"value '%v'", xStr)
@@ -5537,7 +5619,7 @@ func decimal256ToUnsigned[T constraints.Unsigned](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal256],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList) error {
+	length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	l := uint64(length)
 	fromType := from.GetType()
@@ -5550,8 +5632,10 @@ func decimal256ToUnsigned[T constraints.Unsigned](
 		} else {
 			xStr := v.Format(fromType.Scale)
 			xStr = strings.Split(xStr, ".")[0]
+			// ParseUint returns zero for negative input and the unsigned
+			// endpoint for positive overflow, matching assignment clamping.
 			result, err := strconv.ParseUint(xStr, 10, bitSize)
-			if err != nil {
+			if err != nil && mode != castModeAssignment && mode != castModeAssignmentIgnore {
 				return moerr.NewOutOfRangef(ctx,
 					fmt.Sprintf("uint%d", bitSize),
 					"value '%v'", xStr)

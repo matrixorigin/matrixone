@@ -722,6 +722,9 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		syntaxHasColumnNames = true
 	}
 
+	restoreDomain := builder.enterIntegerAssignmentDomain(hasIntegerInsertTarget(insertColumns, tableDef))
+	defer restoreDomain()
+
 	var astSlt *tree.Select
 	switch slt := stmt.Rows.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
@@ -1396,6 +1399,13 @@ func forceCastExpr2WithProcess(
 	if isTypedArrayPlanType(&targetType.Typ) {
 		return funcCastForTypedArrayType(ctx, expr, targetType.Typ)
 	}
+	// Target-aware parameter binding may already have inserted a generic cast.
+	// That provisional cast is not the DML assignment policy: unwrap it before
+	// the same-type fast path so IGNORE can own the conversion and range check.
+	if t2.Oid.IsInteger() && assignmentCastProtocolSupported(proc) &&
+		isImplicitPreparedParamCast(expr) {
+		expr = expr.GetF().Args[0]
+	}
 	t1 := makeTypeByPlan2Expr(expr)
 	if t1.Eq(t2) && !needsSameTypeAssignmentCast(targetType.Typ) {
 		return expr, nil
@@ -1406,6 +1416,17 @@ func forceCastExpr2WithProcess(
 	// cast. Other temporal assignments retain cast_strict behavior, while the
 	// remaining conversions continue to use the generic cast.
 	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
+	if funcName == "cast_assign" && integerLiteralFitsType(expr, t2) {
+		// This conversion cannot warn or clamp under any sql_mode. Keep the
+		// immutable cast foldable so literal propagation and generated-column
+		// planning are not blocked by an unnecessarily volatile assignment cast.
+		funcName = "cast"
+	}
+	expr, err = normalizeExactIntegerAssignment(ctx, expr, targetType.Typ)
+	if err != nil {
+		return nil, err
+	}
+	t1 = makeTypeByPlan2Expr(expr)
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
@@ -1445,7 +1466,131 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 	return forceAssignmentCastExprWithIgnore(ctx, expr, targetType, false)
 }
 
+func normalizeExactIntegerAssignment(ctx context.Context, expr *Expr, target Type) (*Expr, error) {
+	if expr != nil && types.T(target.Id).IsInteger() && types.T(expr.Typ.Id) == types.T_decimal256 {
+		return roundRebuiltExactNumericForInteger(ctx, expr)
+	}
+	if expr == nil || !types.T(target.Id).IsInteger() || !types.T(expr.Typ.Id).IsFloat() ||
+		!function.IsExactNumericExpression(expr, nil) {
+		return expr, nil
+	}
+	ctx = withIntegerAssignmentDomain(ctx)
+	rewritten, exact, err := rebuildExactNumericExpr(ctx, expr, nil)
+	if err != nil || !exact {
+		return expr, err
+	}
+	return roundRebuiltExactNumericForInteger(ctx, rewritten)
+}
+
+func roundRebuiltExactNumericForInteger(ctx context.Context, rewritten *Expr) (*Expr, error) {
+	if types.T(rewritten.Typ.Id).IsDecimal() && rewritten.Typ.Scale != 0 {
+		// The exact tree above retains all significant integer bits. ROUND on a
+		// DECIMAL implements SQL exact-numeric half-away rounding; a DECIMAL
+		// scale cast truncates and therefore cannot own this boundary.
+		rounded, err := BindFuncExprImplByPlanExpr(ctx, "round", []*Expr{
+			rewritten, makePlan2Int64ConstExprWithType(0),
+		})
+		if err != nil {
+			return nil, err
+		}
+		integerDomain := types.New(types.T_decimal256, 65, 0)
+		return makePlan2CastExpr(ctx, rounded, makePlan2Type(&integerDomain))
+	}
+	return rewritten, nil
+}
+
+func rebuildExactNumericExpr(
+	ctx context.Context,
+	expr *Expr,
+	resolve func(*Expr) (*Expr, bool, error),
+) (*Expr, bool, error) {
+	if expr == nil {
+		return expr, false, nil
+	}
+	if isNullLiteralExpr(expr) || types.T(expr.Typ.Id).IsInteger() || types.T(expr.Typ.Id).IsDecimal() {
+		return DeepCopyExpr(expr), true, nil
+	}
+	if expr.GetCol() != nil {
+		if resolve == nil {
+			return expr, false, nil
+		}
+		return resolve(expr)
+	}
+	if !types.T(expr.Typ.Id).IsFloat() {
+		return expr, false, nil
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Src != nil &&
+		function.IsExactNumericExpression(lit.Src, nil) {
+		return rebuildExactNumericExpr(ctx, lit.Src, resolve)
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr, false, nil
+	}
+	name := fn.Func.GetObjName()
+	if name == "cast" {
+		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 || fn.SyntaxExplicitCast || len(fn.Args) == 0 {
+			return expr, false, nil
+		}
+		// This implicit FLOAT cast is a physical coercion, not a
+		// user-selected approximate-domain boundary. Rebuild its source
+		// directly; explicit CAST remains authoritative above.
+		return rebuildExactNumericExpr(ctx, fn.Args[0], resolve)
+	}
+	indexes, ok := function.NumericFunctionResultArgs(name, len(fn.Args), false)
+	if !ok {
+		return expr, false, nil
+	}
+	args := make([]*Expr, len(fn.Args))
+	for i := range fn.Args {
+		args[i] = DeepCopyExpr(fn.Args[i])
+	}
+	for _, index := range indexes {
+		rewritten, exact, err := rebuildExactNumericExpr(ctx, fn.Args[index], resolve)
+		if err != nil || !exact {
+			return expr, false, err
+		}
+		args[index] = rewritten
+	}
+	if name == "/" {
+		// Integer `/` is physically FLOAT in the general expression engine.
+		// Scale only the dividend: scaling a full-width divisor too makes the
+		// decimal divider multiply MaxInt64 by that scale a second time. Twenty-
+		// four fractional digits distinguish either side of 0.5 for every pair
+		// of 64-bit integers (the minimum non-zero distance is > 1/(2*2^64)).
+		for resultPos, index := range indexes {
+			if types.T(args[index].Typ.Id).IsInteger() {
+				scale := int32(0)
+				if resultPos == 0 {
+					scale = 24
+				}
+				exactType := types.New(types.T_decimal256, 65, scale)
+				var err error
+				args[index], err = makePlan2CastExpr(ctx, args[index], makePlan2Type(&exactType))
+				if err != nil {
+					return nil, false, err
+				}
+			}
+		}
+	}
+	rewritten, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+	if err != nil {
+		return nil, false, err
+	}
+	return rewritten, true, nil
+}
+
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
+	if types.T(targetType.Id).IsInteger() {
+		if !assignmentCastProtocolSupported(proc) {
+			return "cast"
+		}
+		if isIgnore {
+			return "cast_ignore"
+		}
+		return "cast_assign"
+	}
 	if isIgnore && useIgnoreConversionAssignmentCast(targetType) && assignmentCastProtocolSupported(proc) {
 		return "cast_ignore"
 	}
@@ -1505,7 +1650,79 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	if err != nil || rewritten {
 		return expr, err
 	}
+	if !isIgnore && types.T(targetType.Id).IsInteger() && integerLiteralFitsType(sourceExpr, makeTypeByPlan2Type(targetType)) {
+		return forceAssignmentCastExprWithName(builder.GetContext(), expr, targetType, "cast")
+	}
 	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore)
+}
+
+func integerLiteralFitsType(expr *Expr, target types.Type) bool {
+	if expr == nil || !target.Oid.IsInteger() {
+		return false
+	}
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return false
+	}
+	var value int64
+	var unsigned uint64
+	var isUnsigned bool
+	switch literal := lit.Value.(type) {
+	case *plan.Literal_I8Val:
+		value = int64(literal.I8Val)
+	case *plan.Literal_I16Val:
+		value = int64(literal.I16Val)
+	case *plan.Literal_I32Val:
+		value = int64(literal.I32Val)
+	case *plan.Literal_I64Val:
+		value = literal.I64Val
+	case *plan.Literal_U8Val:
+		unsigned, isUnsigned = uint64(literal.U8Val), true
+	case *plan.Literal_U16Val:
+		unsigned, isUnsigned = uint64(literal.U16Val), true
+	case *plan.Literal_U32Val:
+		unsigned, isUnsigned = uint64(literal.U32Val), true
+	case *plan.Literal_U64Val:
+		unsigned, isUnsigned = literal.U64Val, true
+	default:
+		return false
+	}
+	if target.Oid.IsUnsignedInt() {
+		if !isUnsigned {
+			if value < 0 {
+				return false
+			}
+			unsigned = uint64(value)
+		}
+		switch target.Oid {
+		case types.T_uint8:
+			return unsigned <= uint64(^uint8(0))
+		case types.T_uint16:
+			return unsigned <= uint64(^uint16(0))
+		case types.T_uint32:
+			return unsigned <= uint64(^uint32(0))
+		case types.T_uint64:
+			return true
+		}
+	}
+	if isUnsigned {
+		if unsigned > uint64(^uint64(0)>>1) {
+			return false
+		}
+		value = int64(unsigned)
+	}
+	switch target.Oid {
+	case types.T_int8:
+		return value >= -1<<7 && value <= 1<<7-1
+	case types.T_int16:
+		return value >= -1<<15 && value <= 1<<15-1
+	case types.T_int32:
+		return value >= -1<<31 && value <= 1<<31-1
+	case types.T_int64:
+		return true
+	default:
+		return false
+	}
 }
 
 func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
@@ -1755,6 +1972,11 @@ func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, fun
 }
 
 func forceAssignmentCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
+	var err error
+	expr, err = normalizeExactIntegerAssignment(ctx, expr, targetType)
+	if err != nil {
+		return nil, err
+	}
 	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true)
 }
 
@@ -2053,7 +2275,11 @@ func buildValueScan(
 		} else {
 			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
 			binder.builder = builder
+			naturalBinder := NewDefaultBinder(builder.GetContext(), nil, nil, plan.Type{}, nil)
+			naturalBinder.builder = builder
 			for _, r := range slt.Rows {
+				preserveNumericSource := types.T(col.Typ.Id).IsInteger() &&
+					valuesExprIsFractionalNumericLiteral(r[i])
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {
@@ -2065,7 +2291,8 @@ func buildValueScan(
 						continue
 					}
 				}
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
+				if nv, ok := r[i].(*tree.NumVal); ok && !preserveNumericSource &&
+					!isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return nil, err
@@ -2085,7 +2312,11 @@ func buildValueScan(
 						return nil, err
 					}
 				} else {
-					defExpr, err = binder.BindExpr(r[i], 0, true)
+					valueBinder := binder
+					if preserveNumericSource {
+						valueBinder = naturalBinder
+					}
+					defExpr, err = valueBinder.BindExpr(r[i], 0, true)
 					if err != nil {
 						return nil, err
 					}

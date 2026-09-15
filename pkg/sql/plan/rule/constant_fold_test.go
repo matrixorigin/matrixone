@@ -28,6 +28,76 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
+func TestNumericVectorValueIsZero(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	constructors := []func() *vector.Vector{
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_int8.ToType(), int8(0), 1, proc.Mp())
+			return v
+		},
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_int16.ToType(), int16(0), 1, proc.Mp())
+			return v
+		},
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_int32.ToType(), int32(0), 1, proc.Mp())
+			return v
+		},
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_int64.ToType(), int64(0), 1, proc.Mp())
+			return v
+		},
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_uint8.ToType(), uint8(0), 1, proc.Mp())
+			return v
+		},
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_uint16.ToType(), uint16(0), 1, proc.Mp())
+			return v
+		},
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_uint32.ToType(), uint32(0), 1, proc.Mp())
+			return v
+		},
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_uint64.ToType(), uint64(0), 1, proc.Mp())
+			return v
+		},
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_float32.ToType(), float32(0), 1, proc.Mp())
+			return v
+		},
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_float64.ToType(), float64(0), 1, proc.Mp())
+			return v
+		},
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_decimal64.ToType(), types.Decimal64(0), 1, proc.Mp())
+			return v
+		},
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_decimal128.ToType(), types.Decimal128{}, 1, proc.Mp())
+			return v
+		},
+		func() *vector.Vector {
+			v, _ := vector.NewConstFixed(types.T_decimal256.ToType(), types.Decimal256{}, 1, proc.Mp())
+			return v
+		},
+	}
+	for _, construct := range constructors {
+		vec := construct()
+		require.True(t, numericVectorValueIsZero(vec), vec.GetType().String())
+		vec.Free(proc.Mp())
+	}
+	nonzero, err := vector.NewConstFixed(types.T_int64.ToType(), int64(1), 1, proc.Mp())
+	require.NoError(t, err)
+	defer nonzero.Free(proc.Mp())
+	require.False(t, numericVectorValueIsZero(nonzero))
+	unsupported := vector.NewVec(types.T_varchar.ToType())
+	defer unsupported.Free(proc.Mp())
+	require.False(t, numericVectorValueIsZero(unsupported))
+}
+
 func TestGetConstantValue2AppendsEnumLiteralWithEnumWidth(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	vec := vector.NewVec(types.T_enum.ToType())

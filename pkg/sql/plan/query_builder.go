@@ -13038,7 +13038,11 @@ func (builder *QueryBuilder) GetContext() context.Context {
 	if builder == nil {
 		return context.TODO()
 	}
-	return function.WithNoUnsignedSubtraction(builder.compCtx.GetContext(), builder.noUnsignedSubtraction)
+	ctx := function.WithNoUnsignedSubtraction(builder.compCtx.GetContext(), builder.noUnsignedSubtraction)
+	if builder.integerAssignmentDomain {
+		ctx = withIntegerAssignmentDomain(ctx)
+	}
+	return ctx
 }
 
 func (builder *QueryBuilder) checkPlanningCanceled() error {

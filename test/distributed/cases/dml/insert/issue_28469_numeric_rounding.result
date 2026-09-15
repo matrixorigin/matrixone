@@ -1,0 +1,344 @@
+DROP DATABASE IF EXISTS issue_28469;
+CREATE DATABASE issue_28469;
+USE issue_28469;
+SET sql_mode = 'STRICT_TRANS_TABLES';
+SELECT 5/2 AS q;
+➤ q[8,53,31]  𝄀
+2.5
+CREATE TABLE select_contract AS SELECT 5/2 AS q;
+SELECT q FROM select_contract;
+➤ q[8,53,31]  𝄀
+2.5
+PREPARE ordinary_division FROM 'SELECT ?/2 AS q';
+SET @ordinary_value=5;
+EXECUTE ordinary_division USING @ordinary_value;
+➤ q[8,53,31]  𝄀
+2.5
+CREATE TABLE t_rounding (
+id INT PRIMARY KEY,
+value_int INT,
+value_bigint BIGINT
+);
+INSERT INTO t_rounding VALUES
+(1, 2.5, 2.5),
+(2, -2.5, -2.5),
+(3, 3.5, 3.5),
+(4, -3.5, -3.5),
+(5, 2.5E0, 2.5E0),
+(6, -2.5E0, -2.5E0),
+(7, 3.5E0, 3.5E0),
+(8, -3.5E0, -3.5E0),
+(9, 2.49, 2.49),
+(10, -2.49, -2.49),
+(11, 2.51E0, 2.51E0),
+(12, -2.51E0, -2.51E0),
+(13, ((2.5)), ((9007199254740992.5000000000000001)));
+SELECT * FROM t_rounding ORDER BY id;
+➤ id[4,32,0]  ¦  value_int[4,32,0]  ¦  value_bigint[-5,64,0]  𝄀
+1  ¦  3  ¦  3  𝄀
+2  ¦  -3  ¦  -3  𝄀
+3  ¦  4  ¦  4  𝄀
+4  ¦  -4  ¦  -4  𝄀
+5  ¦  2  ¦  2  𝄀
+6  ¦  -2  ¦  -2  𝄀
+7  ¦  4  ¦  4  𝄀
+8  ¦  -4  ¦  -4  𝄀
+9  ¦  2  ¦  2  𝄀
+10  ¦  -2  ¦  -2  𝄀
+11  ¦  3  ¦  3  𝄀
+12  ¦  -3  ¦  -3  𝄀
+13  ¦  3  ¦  9007199254740993
+INSERT INTO t_rounding VALUES (14, '2.5', '-2.5');
+invalid argument cast to int, bad value 2.5
+SELECT COUNT(*) FROM t_rounding WHERE id = 14;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SET @exact_five = 5, @exact_two = 2;
+INSERT INTO t_rounding VALUES (15, @exact_five / @exact_two, -@exact_five / @exact_two);
+SELECT * FROM t_rounding WHERE id = 15;
+➤ id[4,32,0]  ¦  value_int[4,32,0]  ¦  value_bigint[-5,64,0]  𝄀
+15  ¦  3  ¦  -3
+CREATE TABLE src (x BIGINT);
+INSERT INTO src VALUES (5);
+CREATE TABLE float_dst (v DOUBLE);
+INSERT INTO float_dst SELECT x / 2 FROM src;
+SELECT * FROM float_dst;
+➤ v[8,53,31]  𝄀
+2.5
+CREATE TABLE dst (id INT PRIMARY KEY, v BIGINT);
+INSERT INTO dst SELECT 100, 1 + FLOOR(x/2) FROM src;
+INSERT INTO dst SELECT 101, FLOOR(x/2) + 1 FROM src;
+INSERT INTO dst SELECT 108, 10 DIV (x/2) FROM src;
+INSERT INTO dst SELECT 109, 10 DIV FLOOR(x/2) FROM src;
+INSERT INTO dst SELECT 114, CAST(10 AS UNSIGNED) DIV CAST(2 AS DECIMAL(65,0)) FROM src;
+SELECT * FROM dst ORDER BY id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+100  ¦  3  𝄀
+101  ¦  3  𝄀
+108  ¦  4  𝄀
+109  ¦  5  𝄀
+114  ¦  5
+DELETE FROM dst;
+PREPARE div_root FROM 'INSERT INTO dst VALUES(110,10 DIV (?/2))';
+SET @div_x=5E0;
+EXECUTE div_root USING @div_x;
+SELECT * FROM dst;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+110  ¦  4
+DELETE FROM dst;
+SET @div_x='5';
+EXECUTE div_root USING @div_x;
+SELECT * FROM dst;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+110  ¦  4
+DELETE FROM dst;
+DEALLOCATE PREPARE div_root;
+PREPARE nested_div_root FROM 'INSERT INTO dst VALUES(112,ABS(10 DIV (?/2)))';
+EXECUTE nested_div_root USING @div_x;
+SELECT * FROM dst;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+112  ¦  4
+DELETE FROM dst;
+DEALLOCATE PREPARE nested_div_root;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE strict_zero FROM 'INSERT INTO dst VALUES (102,10/0), (103,5/2)';
+EXECUTE strict_zero;
+Data truncation: division by zero
+SELECT COUNT(*) FROM dst;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE strict_zero;
+PREPARE strict_nested_zero FROM 'INSERT INTO dst VALUES (104,10/(0/2)), (105,5/2)';
+EXECUTE strict_nested_zero;
+Data truncation: division by zero
+SELECT COUNT(*) FROM dst;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE strict_nested_zero;
+PREPARE strict_floor_zero FROM 'INSERT INTO dst VALUES (106,10/FLOOR(1/2)), (107,5/2)';
+EXECUTE strict_floor_zero;
+Data truncation: division by zero
+SELECT COUNT(*) FROM dst;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE strict_floor_zero;
+SET sql_mode = 'STRICT_TRANS_TABLES';
+INSERT INTO dst VALUES (1, 5 / 2);
+INSERT INTO dst SELECT 2, x / 2 FROM src;
+INSERT INTO dst SELECT 3, ABS(x / 2) FROM src;
+INSERT INTO dst SELECT 4, -(x / 2) FROM src;
+INSERT INTO dst SELECT 5, x / 2 + 0 FROM src;
+INSERT INTO dst VALUES (6, 0);
+UPDATE dst SET v = ABS(5 / 2) WHERE id = 6;
+INSERT INTO dst SELECT 7, x / 2E0 FROM src;
+INSERT INTO dst VALUES (8, ABS(5E0 / 2) + 0);
+INSERT INTO dst SELECT 9, CAST(x / 2 AS DOUBLE) FROM src;
+INSERT INTO dst SELECT 10, ABS(q) FROM (SELECT x / 2 AS q FROM src) s;
+INSERT INTO dst SELECT 11, COALESCE(x / 2, 0) FROM src;
+INSERT INTO dst SELECT 12, IF(TRUE, x / 2, 0) FROM src;
+INSERT INTO dst SELECT 13, IFNULL(x / 2, 0) FROM src;
+INSERT INTO dst SELECT 14, NULLIF(x / 2, 0) FROM src;
+INSERT INTO dst SELECT 15, CASE WHEN TRUE THEN x / 2 ELSE 0 END FROM src;
+INSERT INTO dst SELECT 16, ROUND(x / 2, 1) FROM src;
+INSERT INTO dst SELECT 17, TRUNCATE(x / 2, 1) FROM src;
+INSERT INTO dst SELECT 18, GREATEST(x / 2, 0) FROM src;
+INSERT INTO dst SELECT 19, LEAST(x / 2, 3) FROM src;
+CREATE TABLE shared_dst (i BIGINT, f DOUBLE);
+INSERT INTO shared_dst SELECT q, q+0E0 FROM (SELECT x/2 AS q FROM src) s;
+SELECT * FROM shared_dst;
+➤ i[-5,64,0]  ¦  f[8,53,31]  𝄀
+3  ¦  2.5
+DELETE FROM shared_dst;
+PREPARE shared_division FROM 'INSERT INTO shared_dst SELECT q,q+0E0 FROM (SELECT SUM(?/2) OVER () AS q) s WHERE q>2.4';
+SET @shared_value=5;
+EXECUTE shared_division USING @shared_value;
+SET @shared_value=5E0;
+EXECUTE shared_division USING @shared_value;
+SET @shared_value=5;
+EXECUTE shared_division USING @shared_value;
+SELECT * FROM shared_dst ORDER BY i,f;
+➤ i[-5,64,0]  ¦  f[8,53,31]  𝄀
+2  ¦  2.5  𝄀
+3  ¦  2.5  𝄀
+3  ¦  2.5
+DEALLOCATE PREPARE shared_division;
+CREATE TABLE relational_dst (v BIGINT);
+INSERT INTO relational_dst SELECT q FROM (SELECT x/2 AS q FROM src) s WHERE q>2.6;
+SELECT COUNT(*) FROM relational_dst;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+INSERT INTO relational_dst SELECT SUM(x/2) FROM src;
+INSERT INTO relational_dst SELECT MIN(x/2) FROM src;
+INSERT INTO relational_dst SELECT MAX(x/2) FROM src;
+INSERT INTO relational_dst SELECT AVG(x/2) FROM src;
+INSERT INTO relational_dst SELECT SUM(x/2) OVER () FROM src;
+INSERT INTO relational_dst SELECT q FROM (SELECT x/2 AS q FROM src GROUP BY x/2) s;
+SELECT * FROM relational_dst ORDER BY v;
+➤ v[-5,64,0]  𝄀
+3  𝄀
+3  𝄀
+3  𝄀
+3  𝄀
+3  𝄀
+3
+DELETE FROM relational_dst;
+PREPARE exact_division FROM 'INSERT INTO relational_dst VALUES (?/2)';
+SET @division_value=5;
+EXECUTE exact_division USING @division_value;
+SET @division_value=CAST(5 AS DOUBLE);
+EXECUTE exact_division USING @division_value;
+SET @division_value=7;
+EXECUTE exact_division USING @division_value;
+SELECT * FROM relational_dst ORDER BY v;
+➤ v[-5,64,0]  𝄀
+2  𝄀
+3  𝄀
+4
+DEALLOCATE PREPARE exact_division;
+DELETE FROM relational_dst;
+SET sql_mode = 'STRICT_TRANS_TABLES,NO_UNSIGNED_SUBTRACTION';
+PREPARE unsigned_subtraction FROM
+'INSERT INTO relational_dst SELECT q FROM (SELECT ?/2 q) s WHERE ?-CAST(2 AS UNSIGNED)<0';
+SET @unsigned_x=5,@unsigned_y=1;
+EXECUTE unsigned_subtraction USING @unsigned_x,@unsigned_y;
+SELECT * FROM relational_dst;
+➤ v[-5,64,0]  𝄀
+3
+DEALLOCATE PREPARE unsigned_subtraction;
+SET sql_mode = 'STRICT_TRANS_TABLES';
+CREATE TABLE large_src (x BIGINT);
+INSERT INTO large_src VALUES (9007199254740993);
+INSERT INTO dst SELECT 20, x / 2 FROM large_src;
+DELETE FROM large_src;
+INSERT INTO large_src VALUES (9223372036854775807);
+INSERT INTO dst SELECT 21, COALESCE(x / 1, 0) FROM large_src;
+INSERT INTO dst VALUES (22, 9007199254740993 / 2);
+INSERT INTO dst VALUES (23, 9223372036854775807 / 1);
+INSERT INTO dst SELECT 24, x / CAST(1 AS DECIMAL(38,37)) FROM large_src;
+SELECT * FROM dst ORDER BY id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+1  ¦  3  𝄀
+2  ¦  3  𝄀
+3  ¦  3  𝄀
+4  ¦  -3  𝄀
+5  ¦  3  𝄀
+6  ¦  3  𝄀
+7  ¦  2  𝄀
+8  ¦  2  𝄀
+9  ¦  2  𝄀
+10  ¦  3  𝄀
+11  ¦  3  𝄀
+12  ¦  3  𝄀
+13  ¦  3  𝄀
+14  ¦  3  𝄀
+15  ¦  3  𝄀
+16  ¦  3  𝄀
+17  ¦  3  𝄀
+18  ¦  3  𝄀
+19  ¦  3  𝄀
+20  ¦  4503599627370497  𝄀
+21  ¦  9223372036854775807  𝄀
+22  ¦  4503599627370497  𝄀
+23  ¦  9223372036854775807  𝄀
+24  ¦  9223372036854775807
+CREATE TABLE quotient_source (result BIGINT);
+INSERT INTO quotient_source VALUES (150), (250);
+CREATE TABLE quotient_target (a BIGINT, b BIGINT, PRIMARY KEY(a,b));
+INSERT INTO quotient_target SELECT result/100, result%100 FROM quotient_source;
+SELECT * FROM quotient_target ORDER BY a,b;
+➤ a[-5,64,0]  ¦  b[-5,64,0]  𝄀
+2  ¦  50  𝄀
+3  ¦  50
+INSERT INTO t_rounding VALUES (20, 0, 0), (21, 0, 0);
+INSERT INTO t_rounding VALUES (20, 2.5, -2.5), (21, 2.5E0, -2.5E0)
+ON DUPLICATE KEY UPDATE value_int = VALUES(value_int), value_bigint = VALUES(value_bigint);
+SELECT * FROM t_rounding WHERE id IN (20, 21) ORDER BY id;
+➤ id[4,32,0]  ¦  value_int[4,32,0]  ¦  value_bigint[-5,64,0]  𝄀
+20  ¦  3  ¦  -3  𝄀
+21  ¦  2  ¦  -2
+PREPARE insert_rounding FROM 'INSERT INTO t_rounding VALUES (?, ?, ?)';
+SET @id = 30, @int_value = 2.5, @bigint_value = -2.5;
+EXECUTE insert_rounding USING @id, @int_value, @bigint_value;
+SET @id = 31, @int_value = CAST(2.5 AS DOUBLE), @bigint_value = CAST(-2.5 AS DOUBLE);
+EXECUTE insert_rounding USING @id, @int_value, @bigint_value;
+SET @id = 32, @int_value = CAST(3.5 AS DECIMAL(10, 1)), @bigint_value = CAST(-3.5 AS DECIMAL(10, 1));
+EXECUTE insert_rounding USING @id, @int_value, @bigint_value;
+SET @id = 33, @int_value = '2.5', @bigint_value = '-2.5';
+EXECUTE insert_rounding USING @id, @int_value, @bigint_value;
+invalid argument cast to int, bad value 2.5
+SELECT * FROM t_rounding WHERE id BETWEEN 30 AND 33 ORDER BY id;
+➤ id[4,32,0]  ¦  value_int[4,32,0]  ¦  value_bigint[-5,64,0]  𝄀
+30  ¦  3  ¦  -3  𝄀
+31  ¦  2  ¦  -2  𝄀
+32  ¦  4  ¦  -4
+DEALLOCATE PREPARE insert_rounding;
+CREATE TABLE t_nested_abs (value_bigint BIGINT);
+CREATE TABLE t_nested_add (value_bigint BIGINT);
+CREATE TABLE t_nested_explicit (id INT PRIMARY KEY, value_bigint BIGINT);
+PREPARE insert_nested_abs FROM 'INSERT INTO t_nested_abs VALUES (ABS(?))';
+PREPARE insert_nested_add FROM 'INSERT INTO t_nested_add VALUES (? + 0)';
+PREPARE insert_nested_explicit FROM
+'INSERT INTO t_nested_explicit VALUES (?, ABS(CAST(? AS DOUBLE)))';
+SET @nested_value = CAST(-2.5 AS DOUBLE);
+EXECUTE insert_nested_abs USING @nested_value;
+SET @nested_value = CAST(-2.5 AS DOUBLE);
+EXECUTE insert_nested_add USING @nested_value;
+SET @nested_id = 1, @nested_value = 2.5;
+EXECUTE insert_nested_explicit USING @nested_id, @nested_value;
+SELECT * FROM t_nested_abs;
+➤ value_bigint[-5,64,0]  𝄀
+2
+SELECT * FROM t_nested_add;
+➤ value_bigint[-5,64,0]  𝄀
+-2
+SELECT * FROM t_nested_explicit;
+➤ id[4,32,0]  ¦  value_bigint[-5,64,0]  𝄀
+1  ¦  2
+DEALLOCATE PREPARE insert_nested_abs;
+DEALLOCATE PREPARE insert_nested_add;
+DEALLOCATE PREPARE insert_nested_explicit;
+CREATE TABLE t_unsigned (id INT PRIMARY KEY, value_bigint BIGINT UNSIGNED);
+INSERT INTO t_unsigned VALUES (1, -1E0);
+Data truncation: data out of range: data type BIGINT UNSIGNED, value '-1'
+SELECT COUNT(*) FROM t_unsigned WHERE id = 1;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+PREPARE insert_unsigned FROM 'INSERT INTO t_unsigned VALUES (?, ?)';
+SET @id = 4, @unsigned_value = CAST(-1 AS DOUBLE);
+EXECUTE insert_unsigned USING @id, @unsigned_value;
+Data truncation: data out of range: data type BIGINT UNSIGNED, value '-1'
+SELECT COUNT(*) FROM t_unsigned WHERE id = 4;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+SET sql_mode = '';
+INSERT INTO t_unsigned VALUES (2, -1E0);
+INSERT INTO t_unsigned VALUES (6, -5/2);
+SET @id = 5, @unsigned_value = CAST(-1 AS DOUBLE);
+EXECUTE insert_unsigned USING @id, @unsigned_value;
+SELECT * FROM t_unsigned ORDER BY id;
+➤ id[4,32,0]  ¦  value_bigint[-5,64,0]  𝄀
+2  ¦  0  𝄀
+5  ¦  0  𝄀
+6  ¦  0
+DEALLOCATE PREPARE insert_unsigned;
+CREATE TABLE mixed_assignment_dst(i INT, d DECIMAL(65,0));
+INSERT INTO mixed_assignment_dst
+SELECT 1, CAST('123456789012345678901234567890123456789012345678901234567890' AS DECIMAL(65,0))/1;
+UPDATE mixed_assignment_dst
+SET i=2,d=CAST('123456789012345678901234567890123456789012345678901234567890' AS DECIMAL(65,0))/1
+WHERE i=1;
+SELECT * FROM mixed_assignment_dst;
+➤ i[4,32,0]  ¦  d[3,65,0]  𝄀
+2  ¦  123456789012345678901234567890123456789012345678901234567890
+DROP TABLE mixed_assignment_dst;
+SELECT 5/2 AS q;
+➤ q[8,53,31]  𝄀
+2.5
+SELECT q FROM select_contract;
+➤ q[8,53,31]  𝄀
+2.5
+EXECUTE ordinary_division USING @ordinary_value;
+➤ q[8,53,31]  𝄀
+2.5
+DEALLOCATE PREPARE ordinary_division;
+DROP DATABASE issue_28469;

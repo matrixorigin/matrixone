@@ -1064,7 +1064,17 @@ func d128DivOneToD256(x, y types.Decimal128, dst *types.Decimal256, scaleAdj int
 	x256 := types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
 	y256 := types.Decimal256{B0_63: y.B0_63, B64_127: y.B64_127}
 	if !d256MulPow10(&x256, scaleAdj) {
-		return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
+		// Restore the original signed inputs: a failed scale-up has already
+		// mutated x256. The generic owner handles a bounded wider numerator.
+		x256 = types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
+		d256Negate(&x256, signX)
+		d256Negate(&y256, signY)
+		result, _, err := x256.Div(y256, scale1, scale2)
+		if err != nil {
+			return err
+		}
+		*dst = result
+		return nil
 	}
 	result, err := x256.Div256(y256)
 	if err != nil {

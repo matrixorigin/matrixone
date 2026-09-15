@@ -1858,6 +1858,10 @@ func constantFoldWithPreparedExactSource(
 		// otherwise the later prepared-only fold cannot recover lost digits.
 		return expr, nil
 	}
+	var exactSource *plan.Expr
+	if types.T(expr.Typ.Id).IsFloat() && function.IsExactNumericExpression(expr, nil) {
+		exactSource = DeepCopyExpr(expr)
+	}
 	isVec := false
 	for i := range fn.Args {
 		foldExpr, errFold := constantFoldWithPreparedExactSource(
@@ -1877,7 +1881,7 @@ func constantFoldWithPreparedExactSource(
 
 	// Skip constant folding for division/modulo by zero.
 	// This allows runtime to check sql_mode and statement type for proper error handling.
-	if rule.IsDivisionByZeroConstant(fn) {
+	if rule.ShouldDeferDivisionConstantFold(fn, bat, proc, varAndParamIsConst) {
 		return expr, nil
 	}
 
@@ -1923,6 +1927,9 @@ func constantFoldWithPreparedExactSource(
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 	ec := &plan.Expr_Lit{
 		Lit: c,
+	}
+	if exactSource != nil {
+		c.Src = exactSource
 	}
 	expr.Expr = ec
 	return expr, nil
@@ -3782,6 +3789,41 @@ func isPreparedDMLStmt(stmtType plan.Query_StatementType) bool {
 	}
 }
 
+// PreparedDMLIntegerAssignmentParamPositions returns prepared markers beneath
+// DML write roots that assign into an integer target. The frontend caches this
+// bounded metadata per prepared-plan generation so ordinary prepared writes do
+// not need a plan walk on every execution.
+func PreparedDMLIntegerAssignmentParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil || preparePlan.GetQuery() == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	for expr := range preparedDMLWriteExpressions(preparePlan.GetQuery()) {
+		if expr == nil || !types.T(expr.Typ.Id).IsInteger() {
+			continue
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+			continue
+		}
+		switch fn.Func.GetObjName() {
+		case "cast", "cast_assign", "cast_ignore", "cast_strict":
+		default:
+			continue
+		}
+		collectNumericValueParamPositions(fn.Args[0], positions)
+	}
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
 func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 	writeExprs := make(map[*plan.Expr]struct{})
 	if query == nil || !isPreparedDMLStmt(query.StmtType) {
@@ -4626,6 +4668,18 @@ func FillValuesOfParamsInPlanWithSpecializationAtPositions(
 	paramVals []any,
 	positions []int32,
 ) (*Plan, bool, error) {
+	return fillValuesOfParamsAtPositions(ctx, preparePlan, paramVals, positions, false)
+}
+
+// FillPreparedDMLParamsAtPositions retains assignment policy while specializing
+// parameters outside an already rebound relational numeric source.
+func FillPreparedDMLParamsAtPositions(ctx context.Context, preparePlan *Plan,
+	paramVals []any, positions []int32) (*Plan, bool, error) {
+	return fillValuesOfParamsAtPositions(ctx, preparePlan, paramVals, positions, true)
+}
+
+func fillValuesOfParamsAtPositions(ctx context.Context, preparePlan *Plan,
+	paramVals []any, positions []int32, preserveDML bool) (*Plan, bool, error) {
 	selected := make([]bool, len(paramVals))
 	for _, position := range positions {
 		if position >= 0 && int(position) < len(selected) {
@@ -4633,7 +4687,7 @@ func FillValuesOfParamsInPlanWithSpecializationAtPositions(
 		}
 	}
 	return fillValuesOfParamsInPlanWithSpecializationSelected(
-		ctx, preparePlan, paramVals, false, selected)
+		ctx, preparePlan, paramVals, preserveDML, selected)
 }
 
 // FillValuesOfParamsInPlanWithPreparedNumericOverload is the execute-time

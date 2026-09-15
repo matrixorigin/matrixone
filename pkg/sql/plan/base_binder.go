@@ -371,6 +371,9 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 			},
 		},
 	}
+	if runtimeType, ok := preparedIntegerBinding(b.GetContext(), astExpr.Offset); ok {
+		return appendCastBeforeExpr(b.GetContext(), param, makePlan2Type(&runtimeType))
+	}
 	if b.numericParamType != nil {
 		return appendCastBeforeExpr(b.GetContext(), param, *b.numericParamType)
 	}
@@ -1279,6 +1282,11 @@ func (b *baseBinder) numericAstTypesInternalWithHint(
 ) (numericAstTypeScan, error) {
 	switch expr := astExpr.(type) {
 	case *tree.ParamExpr:
+		if typ, ok := preparedIntegerBinding(b.GetContext(), expr.Offset); ok {
+			scan := numericAstTypedOperand(makePlan2Type(&typ))
+			scan.hasParam, scan.hasParamRef = true, true
+			return scan, nil
+		}
 		return numericAstTypeScan{hasParam: true, hasParamRef: true}, nil
 	case *tree.VarExpr:
 		if expr.System {
@@ -2039,34 +2047,7 @@ func isNumericContextFunction(name string) bool {
 }
 
 func numericFunctionResultArgs(name string, argCount int) ([]int, bool) {
-	switch name {
-	case "mod":
-		if argCount != 2 {
-			return nil, false
-		}
-		return []int{0, 1}, true
-	case "if":
-		if argCount != 3 {
-			return nil, false
-		}
-		return []int{1, 2}, true
-	case "coalesce", "ifnull":
-		if argCount == 0 {
-			return nil, false
-		}
-		indexes := make([]int, argCount)
-		for i := range indexes {
-			indexes[i] = i
-		}
-		return indexes, true
-	case "nullif":
-		if argCount != 2 {
-			return nil, false
-		}
-		return []int{0}, true
-	default:
-		return nil, false
-	}
+	return function.NumericFunctionResultArgs(name, argCount, false)
 }
 
 func numericFunctionArgKeepsContext(name string, idx, argCount int) bool {
@@ -4074,6 +4055,14 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 	if len(args) != 2 {
 		return args, nil
 	}
+	if name == "/" && inIntegerAssignmentDomain(b.GetContext()) {
+		left, right := types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)
+		if (left.IsInteger() || left.IsDecimal()) && (right.IsInteger() || right.IsDecimal()) {
+			// Let the integer-write division binder establish its exact
+			// operands, rather than introducing a provisional FLOAT envelope.
+			return args, nil
+		}
+	}
 
 	left, right, _, ok := function.ResolveNumericBinaryTypes(
 		name,
@@ -5077,6 +5066,73 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	// Establish exact division before a result is published to projections,
+	// predicates, groups or windows. Assignment-time producer mutation cannot
+	// update all of those consumers safely. This also canonicalizes operands
+	// after prepared rebinding removes provisional parameter casts.
+	if name == "/" && len(args) == 2 {
+		left, right := types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)
+		exact := (left.IsInteger() || left.IsDecimal()) && (right.IsInteger() || right.IsDecimal())
+		if exact && inIntegerAssignmentDomain(ctx) && (left.IsInteger() || right.IsInteger()) {
+			args = append([]*Expr(nil), args...)
+			for i, arg := range args {
+				scale := arg.Typ.Scale
+				if types.T(arg.Typ.Id).IsInteger() {
+					// Integer metadata may use -1 for an unspecified scale;
+					// it never means a negative decimal scale during conversion.
+					scale = 0
+				}
+				// Keep enough fractional digits to distinguish half-integer
+				// boundaries for 64-bit integer operands. Do not scale the
+				// integer divisor too: decimal division rescales it internally.
+				if i == 0 && types.T(arg.Typ.Id).IsInteger() && scale < 24 {
+					scale = 24
+				}
+				typ := types.New(types.T_decimal256, 65, scale)
+				args[i], err = makePlan2CastExpr(ctx, arg, makePlan2Type(&typ))
+				if err != nil {
+					return nil, err
+				}
+			}
+		} else if (left.IsFloat() && right == types.T_decimal256) || (right.IsFloat() && left == types.T_decimal256) {
+			args = append([]*Expr(nil), args...)
+			for i, arg := range args {
+				typ := types.T_float64.ToType()
+				args[i], err = makePlan2CastExpr(ctx, arg, makePlan2Type(&typ))
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	// An exact division can flow through wrappers such as FLOOR before joining
+	// another arithmetic operand. DECIMAL256 overloads require a common physical
+	// domain; promote the other exact operand symmetrically instead of depending
+	// on operand order. FLOAT remains authoritative and follows the branch above.
+	if len(args) == 2 && inIntegerAssignmentDomain(ctx) &&
+		(name == "+" || name == "-" || name == "*" || name == "%" || name == "mod" || name == "div") {
+		left, right := types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)
+		preserveUnsignedIntegerDiv := name == "div" && left.IsUnsignedInt()
+		if !preserveUnsignedIntegerDiv &&
+			((left == types.T_decimal256 && (right.IsInteger() || right.IsDecimal())) ||
+				(right == types.T_decimal256 && (left.IsInteger() || left.IsDecimal()))) {
+			args = append([]*Expr(nil), args...)
+			for i, arg := range args {
+				if types.T(arg.Typ.Id) == types.T_decimal256 {
+					continue
+				}
+				scale := arg.Typ.Scale
+				if types.T(arg.Typ.Id).IsInteger() || scale < 0 {
+					scale = 0
+				}
+				typ := types.New(types.T_decimal256, 65, scale)
+				args[i], err = makePlan2CastExpr(ctx, arg, makePlan2Type(&typ))
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
 	if descendFunctions {
 		rejectIntervalArgs = rejectStandaloneIntervalFunctionArgs

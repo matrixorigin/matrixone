@@ -4630,6 +4630,9 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		}
 	}
 
+	restoreDomain := builder.enterIntegerAssignmentDomain(hasIntegerInsertTarget(insertColumns, tableDef))
+	defer restoreDomain()
+
 	var astSelect *tree.Select
 	switch selectImpl := rowsForInsert.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
@@ -5289,6 +5292,38 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 	}
 }
 
+// valuesExprIsFractionalNumericLiteral recognizes the transparent syntax that
+// must not lose a literal's natural exact/approximate domain at the integer
+// assignment boundary. The parser represents both ordinary decimals and
+// exponent literals as P_float64 when they fit in float64; the target-free
+// binder uses the original lexeme to distinguish DECIMAL from FLOAT.
+func valuesExprIsFractionalNumericLiteral(e tree.Expr) bool {
+	for {
+		switch value := e.(type) {
+		case *tree.ParenExpr:
+			e = value.Expr
+		case *tree.UnaryExpr:
+			if value.Op != tree.UNARY_MINUS && value.Op != tree.UNARY_PLUS {
+				return false
+			}
+			e = value.Expr
+		case *tree.NumVal:
+			switch value.ValType {
+			case tree.P_float64:
+				return true
+			case tree.P_decimal:
+				// P_decimal also represents integral literals above UINT64.
+				// Keep those on the existing eager integer-overflow path.
+				return strings.ContainsAny(value.String(), ".eE")
+			default:
+				return false
+			}
+		default:
+			return false
+		}
+	}
+}
+
 // A row containing a scalar subquery becomes an independently scheduled
 // relational branch. Keep that fan-out finite before binding creates any
 // subquery plan nodes; the branches feed a blocking ordinal sort and do not
@@ -5427,6 +5462,8 @@ func (builder *QueryBuilder) buildValueScan(
 				funcBinder = defaultFuncBinder
 			}
 			for _, r := range stmt.Rows {
+				preserveNumericSource := types.T(col.Typ.Id).IsInteger() &&
+					valuesExprIsFractionalNumericLiteral(r[i])
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {
 					expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(builder.GetContext(), nv, col.Typ)
 					if err != nil {
@@ -5437,7 +5474,8 @@ func (builder *QueryBuilder) buildValueScan(
 						continue
 					}
 				}
-				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
+				if nv, ok := r[i].(*tree.NumVal); ok && !preserveNumericSource &&
+					!isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
 					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
 					if err != nil {
 						return 0, nil, err
@@ -5498,7 +5536,8 @@ func (builder *QueryBuilder) buildValueScan(
 						}
 						// A function without dynamic parameters must retain its normal
 						// argument domain (for example LENGTH(100000.5)).
-						if !boundWithNumericContext && valuesExprIsFuncCall(r[i]) {
+						if !boundWithNumericContext &&
+							(preserveNumericSource || valuesExprIsFuncCall(r[i])) {
 							valueBinder = funcBinder
 						}
 					} else if valuesExprIsFuncCall(r[i]) {
