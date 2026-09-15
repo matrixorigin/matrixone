@@ -2426,14 +2426,16 @@ class _ExchangeInputReader:
                 "RESOURCE_EXHAUSTED: Flight input reader did not stop after cancellation"
             )
 def _kill_execution_process(process: subprocess.Popen) -> None:
-    # The leader can already have exited while one of its descendants keeps
-    # the execution alive.  The session closes the worker-owned liveness pipe
-    # before calling this helper, so the watchdog owns that leader-exited
-    # case.  Do not call killpg with a reaped PID: macOS may have already
-    # reused the process-group id and returns EPERM (or could address an
-    # unrelated group).  An un-reaped leader is still killed as a group.
+    # Check the process group before reaping the leader.  A handler can exit
+    # while a descendant keeps the group alive; polling first would reap the
+    # leader and skip killpg, leaving that descendant behind until the
+    # asynchronous watchdog happens to run.  Before process.poll() reaps the
+    # leader, its PID is still owned by this session and the group identity
+    # cannot have been reused.
     if os.name == "posix":
-        if process.poll() is None:
+        group_alive = _execution_group_alive(process)
+        leader_alive = process.poll() is None
+        if group_alive:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
@@ -2444,10 +2446,17 @@ def _kill_execution_process(process: subprocess.Popen) -> None:
                 # Kill the Popen child directly so the handler slot is not
                 # stranded; the parent-liveness watchdog remains responsible
                 # for descendants when the group cannot be addressed here.
-                try:
-                    process.kill()
-                except ProcessLookupError:
-                    pass
+                if leader_alive:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                else:
+                    raise
+        elif leader_alive:
+            # The group disappeared in the small race between the liveness
+            # probe and poll(); still make sure the owned leader is stopped.
+            process.kill()
     elif process.poll() is None:
         process.kill()
     try:
