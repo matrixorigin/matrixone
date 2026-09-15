@@ -245,7 +245,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// process view so statement-dependent cached decisions are recomputed.
 		proc.SetStmtProfile(&ses.stmtProfile)
 	}
-	ses.stmtProfile.SetStatementRuntimeProfile(stmtTyp, queryTyp, isIgnoreStatement(statement))
+	ses.stmtProfile.SetStatementRuntimeProfile(stmtTyp, queryTyp, tree.IsIgnoreStatement(statement))
 
 	//note: txn id here may be empty
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
@@ -389,27 +389,6 @@ func redactStatementErrorForLogging(err error, text string) error {
 	return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
 }
 
-func isIgnoreStatement(statement tree.Statement) bool {
-	switch stmt := statement.(type) {
-	case *tree.Insert:
-		return len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
-	case *tree.Update:
-		return stmt.Ignore
-	case *tree.Load:
-		return isLoadDataIgnore(stmt)
-	default:
-		return false
-	}
-}
-
-func isLoadDataIgnore(stmt *tree.Load) bool {
-	if stmt == nil {
-		return false
-	}
-	_, ok := stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore)
-	return ok
-}
-
 func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {
 	if proc == nil || statement == nil {
 		return
@@ -419,7 +398,7 @@ func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement t
 	stmtProfile.SetStatementRuntimeProfile(
 		getStatementType(statement).GetStatementType(),
 		getStatementType(statement).GetQueryType(),
-		isIgnoreStatement(statement),
+		tree.IsIgnoreStatement(statement),
 	)
 }
 
