@@ -17,6 +17,7 @@ package aggexec
 import (
 	"bytes"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1333,6 +1334,381 @@ func TestAvgDecimal256FinalizationPreservesInputCapacity(t *testing.T) {
 	}
 }
 
+func TestSumDecimal256EnforcesDeclaredPrecision(t *testing.T) {
+	const width int32 = 65
+	param := types.New(types.T_decimal256, width, 0)
+	maxText := strings.Repeat("9", int(width))
+	maxValue, err := types.ParseDecimal256(maxText, width, 0)
+	require.NoError(t, err)
+	negativeMaxValue, err := types.ParseDecimal256("-"+maxText, width, 0)
+	require.NoError(t, err)
+	one := types.Decimal256FromInt64(1)
+	negativeOne := one.Minus()
+
+	for _, tc := range []struct {
+		name     string
+		values   []types.Decimal256
+		distinct bool
+		bulk     bool
+		want     string
+		wantErr  string
+	}{
+		{name: "positive boundary", values: []types.Decimal256{maxValue}, bulk: true, want: maxText},
+		{name: "negative boundary", values: []types.Decimal256{negativeMaxValue}, want: "-" + maxText},
+		{name: "positive overflow", values: []types.Decimal256{maxValue, one}, wantErr: "beyond the range"},
+		{name: "negative overflow", values: []types.Decimal256{negativeMaxValue, negativeOne}, wantErr: "beyond the range"},
+		{name: "negative distinct overflow", values: []types.Decimal256{negativeMaxValue, negativeOne}, distinct: true, wantErr: "beyond the range"},
+		{name: "positive cancellation", values: []types.Decimal256{maxValue, one, negativeOne}, want: maxText},
+		{name: "negative cancellation", values: []types.Decimal256{negativeMaxValue, negativeOne, one}, want: "-" + maxText},
+		{name: "distinct duplicate remains in range", values: []types.Decimal256{maxValue, maxValue}, distinct: true, want: maxText},
+		{name: "distinct overflow", values: []types.Decimal256{maxValue, one}, distinct: true, wantErr: "beyond the range"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := buildDecimal256Vector(t, mp, param, nil, tc.values)
+			defer vec.Free(mp)
+
+			exec := makeSumAvgExec(mp, true, AggIdOfSum, tc.distinct, param)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			if tc.bulk {
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+			} else {
+				groups := make([]uint64, len(tc.values))
+				for i := range groups {
+					groups[i] = 1
+				}
+				require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{vec}))
+			}
+
+			results, err := exec.Flush()
+			defer func() {
+				for _, result := range results {
+					result.Free(mp)
+				}
+			}()
+			if tc.wantErr != "" {
+				require.Nil(t, results)
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			want, err := types.ParseDecimal256(tc.want, width, 0)
+			require.NoError(t, err)
+			require.Equal(t, types.New(types.T_decimal256, width, 0), *results[0].GetType())
+			require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Decimal256](results[0])[0])
+		})
+	}
+}
+
+func TestSumDecimal256PreservesNullAndEmptyGroups(t *testing.T) {
+	param := types.New(types.T_decimal256, 65, 0)
+	for _, tc := range []struct {
+		name     string
+		distinct bool
+		values   []types.Decimal256
+		nulls    []bool
+	}{
+		{name: "ordinary null", nulls: []bool{true}, values: []types.Decimal256{{}}},
+		{name: "ordinary empty"},
+		{name: "distinct null", distinct: true, nulls: []bool{true}, values: []types.Decimal256{{}}},
+		{name: "distinct empty", distinct: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := buildDecimal256Vector(t, mp, param, tc.nulls, tc.values)
+			defer vec.Free(mp)
+			exec := makeSumAvgExec(mp, true, AggIdOfSum, tc.distinct, param)
+			defer exec.Free()
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+
+			results, err := exec.Flush()
+			defer func() {
+				for _, result := range results {
+					result.Free(mp)
+				}
+			}()
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			require.True(t, results[0].IsNull(0))
+		})
+	}
+}
+
+func TestSumDecimal256PrecisionChecksAllGroups(t *testing.T) {
+	const width int32 = 65
+	param := types.New(types.T_decimal256, width, 0)
+	maxText := strings.Repeat("9", int(width))
+	maxValue, err := types.ParseDecimal256(maxText, width, 0)
+	require.NoError(t, err)
+	one := types.Decimal256FromInt64(1)
+
+	mp := mpool.MustNewZero()
+	vec := buildDecimal256Vector(t, mp, param, nil, []types.Decimal256{maxValue, maxValue, one})
+	defer vec.Free(mp)
+	exec := makeSumAvgExec(mp, true, AggIdOfSum, false, param)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(2))
+	require.NoError(t, exec.BatchFill(0, []uint64{1, 2, 2}, []*vector.Vector{vec}))
+
+	results, err := exec.Flush()
+	require.Nil(t, results)
+	require.ErrorContains(t, err, "beyond the range")
+}
+
+func TestSumDecimal256FlushErrorReleasesResultsAcrossChunks(t *testing.T) {
+	const width int32 = 65
+	param := types.New(types.T_decimal256, width, 0)
+	maxText := strings.Repeat("9", int(width))
+	maxValue, err := types.ParseDecimal256(maxText, width, 0)
+	require.NoError(t, err)
+	one := types.Decimal256FromInt64(1)
+
+	for _, distinct := range []bool{false, true} {
+		name := "ordinary"
+		if distinct {
+			name = "distinct"
+		}
+		t.Run(name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			baseline := mp.CurrNB()
+			defer func() {
+				require.Equal(t, baseline, mp.CurrNB())
+			}()
+
+			exec := makeSumAvgExec(mp, true, AggIdOfSum, distinct, param)
+			defer exec.Free()
+			exec.GetOptResult().modifyChunkSize(AggBatchSize)
+			require.NoError(t, exec.GroupGrow(AggBatchSize+1))
+
+			vec := buildDecimal256Vector(t, mp, param, nil, []types.Decimal256{
+				maxValue, maxValue, one,
+			})
+			defer vec.Free(mp)
+			require.NoError(t, exec.BatchFill(0, []uint64{
+				1, uint64(AggBatchSize + 1), uint64(AggBatchSize + 1),
+			}, []*vector.Vector{vec}))
+
+			results, err := exec.Flush()
+			defer func(results []*vector.Vector) {
+				for _, result := range results {
+					result.Free(mp)
+				}
+			}(results)
+			require.Nil(t, results)
+			require.ErrorContains(t, err, "beyond the range")
+		})
+	}
+}
+
+func TestSumDecimal256WideIntermediateRoundTrip(t *testing.T) {
+	const width int32 = 65
+	param := types.New(types.T_decimal256, width, 0)
+	maxText := strings.Repeat("9", int(width))
+	maxValue, err := types.ParseDecimal256(maxText, width, 0)
+	require.NoError(t, err)
+	one := types.Decimal256FromInt64(1)
+	negativeOne := one.Minus()
+
+	for _, tc := range []struct {
+		name     string
+		distinct bool
+		spill    bool
+	}{
+		{name: "ordinary intermediate", distinct: false, spill: false},
+		{name: "ordinary spill", distinct: false, spill: true},
+		{name: "distinct intermediate", distinct: true, spill: false},
+		{name: "distinct spill", distinct: true, spill: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			baseline := mp.CurrNB()
+			defer func() {
+				require.Equal(t, baseline, mp.CurrNB())
+			}()
+
+			var wire bytes.Buffer
+			func() {
+				source := makeSumAvgExec(mp, true, AggIdOfSum, tc.distinct, param)
+				defer source.Free()
+				source.GetOptResult().modifyChunkSize(1)
+				require.NoError(t, source.GroupGrow(1))
+				partial := buildDecimal256Vector(t, mp, param, nil, []types.Decimal256{maxValue, one})
+				defer partial.Free(mp)
+				require.NoError(t, source.BatchFill(0, []uint64{1, 1}, []*vector.Vector{partial}))
+
+				if tc.spill {
+					require.NoError(t, source.(SpillStateCodec).SaveSpillIntermediateRows(
+						0, []int32{0}, &wire))
+				} else {
+					require.NoError(t, source.SaveIntermediateResult(1, [][]uint8{{1}}, &wire))
+				}
+				require.NotEmpty(t, wire.Bytes())
+			}()
+
+			decode := func() (AggFuncExec, error) {
+				restored := makeSumAvgExec(mp, true, AggIdOfSum, tc.distinct, param)
+				owned := true
+				defer func() {
+					if owned {
+						restored.Free()
+					}
+				}()
+				restored.GetOptResult().modifyChunkSize(1)
+				var err error
+				if tc.spill {
+					err = restored.(SpillStateCodec).UnmarshalSpillFromReader(
+						bytes.NewReader(wire.Bytes()), mp)
+				} else {
+					err = restored.UnmarshalFromReader(
+						bytes.NewReader(wire.Bytes()), mp)
+				}
+				if err != nil {
+					// Both aggregate decoders free their receiver on error.
+					owned = false
+					return nil, err
+				}
+				owned = false
+				return restored, nil
+			}
+
+			for _, cancel := range []bool{false, true} {
+				func() {
+					restored, err := decode()
+					defer func(restored AggFuncExec) {
+						if restored != nil {
+							restored.Free()
+						}
+					}(restored)
+					require.NoError(t, err)
+
+					destination := makeSumAvgExec(mp, true, AggIdOfSum, tc.distinct, param)
+					defer destination.Free()
+					destination.GetOptResult().modifyChunkSize(1)
+					require.NoError(t, destination.GroupGrow(1))
+					require.NoError(t, destination.BatchMerge(restored, 0, []uint64{1}))
+
+					if cancel {
+						cancelExec := makeSumAvgExec(mp, true, AggIdOfSum, tc.distinct, param)
+						defer cancelExec.Free()
+						cancelExec.GetOptResult().modifyChunkSize(1)
+						require.NoError(t, cancelExec.GroupGrow(1))
+						cancelVec := buildDecimal256Vector(t, mp, param, nil, []types.Decimal256{negativeOne})
+						defer cancelVec.Free(mp)
+						require.NoError(t, cancelExec.BatchFill(0, []uint64{1}, []*vector.Vector{cancelVec}))
+						require.NoError(t, destination.BatchMerge(cancelExec, 0, []uint64{1}))
+					}
+
+					results, err := destination.Flush()
+					defer func(results []*vector.Vector) {
+						for _, result := range results {
+							result.Free(mp)
+						}
+					}(results)
+					if cancel {
+						require.NoError(t, err)
+						require.Len(t, results, 1)
+						require.Equal(t, maxValue, vector.MustFixedColNoTypeCheck[types.Decimal256](results[0])[0])
+					} else {
+						require.Nil(t, results)
+						require.ErrorContains(t, err, "beyond the range")
+					}
+				}()
+			}
+		})
+	}
+}
+
+func TestSumDecimal256EnforcesDeclaredPrecisionAtScale(t *testing.T) {
+	const (
+		width int32 = 65
+		scale int32 = 30
+	)
+	param := types.New(types.T_decimal256, width, scale)
+	maxText := strings.Repeat("9", int(width-scale)) + "." + strings.Repeat("9", int(scale))
+	maxValue, err := types.ParseDecimal256(maxText, width, scale)
+	require.NoError(t, err)
+	unitValue, err := types.ParseDecimal256("0."+strings.Repeat("0", int(scale)-1)+"1", width, scale)
+	require.NoError(t, err)
+
+	mp := mpool.MustNewZero()
+	vec := buildDecimal256Vector(t, mp, param, nil, []types.Decimal256{maxValue, unitValue})
+	defer vec.Free(mp)
+	exec := makeSumAvgExec(mp, true, AggIdOfSum, false, param)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.BatchFill(0, []uint64{1, 1}, []*vector.Vector{vec}))
+
+	results, err := exec.Flush()
+	require.Nil(t, results)
+	require.ErrorContains(t, err, "beyond the range")
+}
+
+func TestSumDecimal256PrecisionCheckedAfterMerge(t *testing.T) {
+	const width int32 = 65
+	param := types.New(types.T_decimal256, width, 0)
+	maxText := strings.Repeat("9", int(width))
+	maxValue, err := types.ParseDecimal256(maxText, width, 0)
+	require.NoError(t, err)
+	one := types.Decimal256FromInt64(1)
+	negativeOne := one.Minus()
+
+	for _, tc := range []struct {
+		name    string
+		cancel  bool
+		want    string
+		wantErr string
+	}{
+		{name: "overflow remains invalid", wantErr: "beyond the range"},
+		{name: "later cancellation remains valid", cancel: true, want: maxText},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			leftVec := buildDecimal256Vector(t, mp, param, nil, []types.Decimal256{maxValue})
+			rightVec := buildDecimal256Vector(t, mp, param, nil, []types.Decimal256{one})
+			defer leftVec.Free(mp)
+			defer rightVec.Free(mp)
+
+			left := makeSumAvgExec(mp, true, AggIdOfSum, false, param)
+			right := makeSumAvgExec(mp, true, AggIdOfSum, false, param)
+			defer left.Free()
+			defer right.Free()
+			require.NoError(t, left.GroupGrow(1))
+			require.NoError(t, right.GroupGrow(1))
+			require.NoError(t, left.BatchFill(0, []uint64{1}, []*vector.Vector{leftVec}))
+			require.NoError(t, right.BatchFill(0, []uint64{1}, []*vector.Vector{rightVec}))
+			require.NoError(t, left.BatchMerge(right, 0, []uint64{1}))
+
+			if tc.cancel {
+				cancelVec := buildDecimal256Vector(t, mp, param, nil, []types.Decimal256{negativeOne})
+				defer cancelVec.Free(mp)
+				require.NoError(t, left.BatchFill(0, []uint64{1}, []*vector.Vector{cancelVec}))
+			}
+
+			results, err := left.Flush()
+			defer func() {
+				for _, result := range results {
+					result.Free(mp)
+				}
+			}()
+			if tc.wantErr != "" {
+				require.Nil(t, results)
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			want, err := types.ParseDecimal256(tc.want, width, 0)
+			require.NoError(t, err)
+			require.Equal(t, want, vector.MustFixedColNoTypeCheck[types.Decimal256](results[0])[0])
+		})
+	}
+}
+
 func TestSumAvgDecimal256BulkFillPreservesBatchFillOverflowSemantics(t *testing.T) {
 	mp := mpool.MustNewZero()
 	typ := types.New(types.T_decimal256, 76, 0)
@@ -1358,7 +1734,7 @@ func TestSumAvgDecimal256BulkFillPreservesBatchFillOverflowSemantics(t *testing.
 		aggID      int64
 		flushError string
 	}{
-		{name: "sum", isSum: true, aggID: AggIdOfSum},
+		{name: "sum", isSum: true, aggID: AggIdOfSum, flushError: "beyond the range"},
 		{name: "avg", aggID: AggIdOfAvg, flushError: "Decimal256 Div overflow"},
 	}
 
