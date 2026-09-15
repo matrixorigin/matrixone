@@ -91,6 +91,10 @@ func TestStatementContextFromMapRejectsAmbiguousTimezoneAndMalformedMode(t *test
 	malformed["sql_mode"] = "[\"ANSI\",\"ANSI\"]"
 	_, err = StatementContextFromMap(malformed)
 	require.ErrorContains(t, err, "not canonical")
+
+	malformed["sql_mode"] = "null"
+	_, err = StatementContextFromMap(malformed)
+	require.ErrorContains(t, err, "expected a JSON array")
 }
 
 func TestStatementContextAcceptsUnixEpoch(t *testing.T) {
