@@ -3488,6 +3488,15 @@ func TestParquetRowModeLeafDefinitionLevelMatchesNullness(t *testing.T) {
 			require.Zero(t, vec.Length())
 		})
 	}
+
+	t.Run("missing nullable leaf appends null", func(t *testing.T) {
+		vec := vector.NewVec(types.T_int32.ToType())
+		t.Cleanup(func() { vec.Free(proc.Mp()) })
+		h := &ParquetHandler{}
+		require.NoError(t, h.processLeafValue(parquet.Row{}, col, vec, def, proc))
+		require.Equal(t, 1, vec.Length())
+		require.True(t, vec.GetNulls().Contains(0))
+	})
 }
 
 func TestParquetNestedNullUsesColumnDefinitionLevel(t *testing.T) {
