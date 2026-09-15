@@ -90,11 +90,38 @@ create table t1 (a json,b int);
 insert into t1 values ('{"t1":"a"}',1);
 insert into t1 values ('{"t1":"b"}',2);
 insert into t1 values ('{"t1":"c"}',3);
+insert into t1 values ('[1,true,"x"]',4);
+insert into t1 values ('1',5);
+insert into t1 values ('"x"',6);
+insert into t1 values ('true',7);
+insert into t1 values ('false',8);
+insert into t1 values ('null',9);
+insert into t1 values (NULL,10);
 select crc32(a),b from t1;
 crc32(a)    b
-3719146973    1
-1151663207    2
-866372849    3
+4012824821    1
+3983042220    2
+3970567323    3
+3071756745    4
+2212294583    5
+4128176518    6
+4261170317    7
+734881840    8
+634125391    9
+null    10
+drop table t1;
+
+drop table if exists crc32_binary;
+create table crc32_binary(id int, b varbinary(2));
+insert into crc32_binary values (1,X'00FF'),(2,X'00'),(3,X'FF'),(4,X''),(5,NULL);
+select id,crc32(b) from crc32_binary order by id;
+id    crc32(b)
+1    1826356594
+2    3523407757
+3    4278190080
+4    0
+5    null
+drop table crc32_binary;
 drop table if exists test_table;
 create table test_table (
 id int auto_increment primary key,
