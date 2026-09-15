@@ -3,7 +3,8 @@
 Status: Draft design and implementation review for #28164. The local
 integration branch contains candidate code and focused regression coverage;
 production format freeze, SQL/storage acceptance and QA remain pending. Native
-0900 admission is explicitly closed until the durable cluster gate is complete.
+0900 admission is explicitly closed by the temporary default-closed planner and
+remote fences; the durable cluster gate is not implemented.
 
 See [the comparative selection report](issue-28164-collation-selection.md) and
 [its evidence](issue-28164-selection-evidence.json). These supersede earlier
@@ -43,8 +44,10 @@ integration branch is not evidence that it exists in the upstream baseline:
   candidate semantics behind a default-closed admission fence, not baseline
   data.
 - **Target design**: preserve the baseline meanings and introduce native 0900
-  only through explicit metadata, a frozen physical-format version and the
-  durable cluster gate. Historical aliases are never upgraded by reinterpretation.
+  only through explicit metadata, a frozen physical-format version and a
+  completed durable cluster gate. The current implementation keeps the
+  temporary default-closed fence; historical aliases are never upgraded by
+  reinterpretation.
 - In the baseline, `pkg/sql/plan/build_util.go` may accept the spelling
   `utf8mb4_0900_ai_ci` as the legacy general-ci class. That spelling must not be
   presented as native UCA 9.0; the candidate identity is a separate mapping.
@@ -64,8 +67,9 @@ Evidence labels are tied to the exact record that produced them. The historical
 comparison and tuple counts remain `PASS_HISTORICAL_V0221`; the v0.24.0 import and
 focused implementation tests are separate `PASS` evidence. A complete v0.24.0
 MySQL oracle, tuple byte freeze, live SQL/index behavior, persisted filtering,
-migration/recovery, and mixed-version rejection are `NOT_RUN` or blocked by the
-closed production admission gate. CI for this documentation PR cannot substitute
+  migration/recovery, and mixed-version rejection are `NOT_RUN` or blocked by the
+  temporary default-closed production fence. The durable cluster gate is not
+  implemented; CI for this documentation PR cannot substitute
 for those implementation and cluster checks.
 
 ## 3. Representation and non-negotiable invariants

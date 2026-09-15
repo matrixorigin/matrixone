@@ -6,7 +6,7 @@
     "MO_original_row_lookup": "NOT_RUN on transformed storage",
     "production_format_freeze": "NOT_APPROVED",
     "production_integration": "CANDIDATE_WIRED_BUT_DISABLED",
-    "native_0900_admission": "BLOCKED_UNTIL_DURABLE_CLUSTER_GATE",
+    "native_0900_admission": "BLOCKED_BY_TEMPORARY_DEFAULT_CLOSED_GATE; DURABLE_CLUSTER_GATE_NOT_IMPLEMENTED",
     "copy_dedup_and_hidden_pk_regressions": "PASS_FOCUSED",
     "coercibility_regressions": "PASS_FOCUSED",
     "live_sql_storage_migration_qa": "NOT_RUN"

@@ -3,7 +3,8 @@
 Status: experimental selection and implementation evidence, not a frozen
 production format. This supplements [the replacement design](issue-28164-collation-key-reuse.md)
 and records the current `28164-integration` fixes. Native 0900 admission is
-closed by a durable-cluster gate; no production table has been enabled.
+closed by a temporary default-closed planner/remote fence; the complete durable
+cluster gate is not implemented, and no production table has been enabled.
 
 Machine-readable results, API option samples, sizes, benchmark records and raw
 artifact hashes are in [selection evidence](issue-28164-selection-evidence.json).
@@ -29,9 +30,9 @@ examined `utf8mb4_unicode_ci` (ID 224, legacy UCA 4.0/PAD SPACE),
 `utf8mb4_0900_ai_ci` (ID 255, UCA 9.0/NO PAD), and `utf8mb4_0900_bin`
 (ID 309, NO PAD). The implementation assigns independent MO identities to the
 two native 0900 variants and pins the candidate backend to Vitess v0.24.0; the
-SQL and storage consumers remain behind the durable admission gate. The detailed
-measurements below are still the v0.22.1 historical record until a v0.24.0
-rerun is made.
+SQL and storage consumers remain behind the temporary default-closed admission
+fence. The durable cluster gate is not implemented. The detailed measurements
+below are still the v0.22.1 historical record until a v0.24.0 rerun is made.
 
 Current `build_util.go` compatibility spellings are a separate contract:
 
@@ -45,8 +46,9 @@ Current `build_util.go` compatibility spellings are a separate contract:
 
 Do not reinterpret persisted class 3 as native UCA 9.0 merely because a DDL dump
 used a historical alias. New native identities require explicit canonical
-semantics and the durable cluster gate. Old tables retain their old format and
-metadata behavior.
+semantics and the current default-closed admission fence; the durable cluster
+gate remains unimplemented. Old tables retain their old format and metadata
+behavior.
 
 ## 2. Candidates and reproducible environment
 
