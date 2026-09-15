@@ -137,7 +137,7 @@ func TestBoundedBuiltinReturnTypes(t *testing.T) {
 	}
 
 	for _, fn := range []string{"uncompressed_length"} {
-		assertType(t, fn, []types.Type{types.T_blob.ToType()}, types.T_int32, 0, types.CharsetLegacy)
+		assertType(t, fn, []types.Type{types.T_blob.ToType()}, types.T_int64, 0, types.CharsetLegacy)
 	}
 }
 
@@ -208,7 +208,7 @@ func TestBoundedBuiltinRegistryCoversEveryChangedOverload(t *testing.T) {
 		})
 		t.Run("uncompressed_length/"+input.Oid.String(), func(t *testing.T) {
 			result := resolve(t, "uncompressed_length", []types.Type{input})
-			require.Equal(t, types.T_int32, result.Oid)
+			require.Equal(t, types.T_int64, result.Oid)
 		})
 	}
 
