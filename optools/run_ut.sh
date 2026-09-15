@@ -392,6 +392,13 @@ function start_ut_heartbeat(){
         return 0
     fi
 
+    local saved_term_trap
+    local heartbeat_term_pending=0
+    saved_term_trap=$(trap -p TERM)
+    # Publish the helper owner before replaying TERM. A signal received after
+    # the async spawn but before `$!` is assigned must not observe an empty
+    # heartbeat PID and strand the new helper.
+    trap 'heartbeat_term_pending=1' TERM
     (
         local heartbeat_sleep_pid=""
         local heartbeat_stop_requested=0
@@ -477,8 +484,19 @@ function start_ut_heartbeat(){
         done
     ) &
     UT_HEARTBEAT_PID=$!
+    restore_ut_term_trap "${saved_term_trap}"
     checkpoint_ut_event "heartbeat-start" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "" \
         "pid=${UT_HEARTBEAT_PID} interval=${interval}s"
+    if (( heartbeat_term_pending != 0 )); then
+        if [[ -z "${saved_term_trap}" ]]; then
+            # With Bash's default TERM disposition there is no caller cleanup
+            # handler to reap the newly published helper before re-signal.
+            stop_ut_heartbeat
+        fi
+        # Replay the original caller disposition after publication. The real
+        # runner's handler now observes UT_HEARTBEAT_PID and owns the cleanup.
+        kill -TERM "$$"
+    fi
 }
 
 function stop_ut_heartbeat(){

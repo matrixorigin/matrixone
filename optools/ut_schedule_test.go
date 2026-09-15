@@ -487,6 +487,117 @@ exit 0
 	}
 }
 
+func TestUTHeartbeatStopDuringHelperRegistration(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkfifo "$CASE_DIR/heartbeat-ready"
+exec 7<> "$CASE_DIR/heartbeat-ready"
+helper_pid=""
+timer_pid=""
+restart_pid=""
+caller_term_count=0
+caller_seen_pid=""
+publication_count=0
+cleanup() {
+    if [[ -z "$timer_pid" && -f "$CASE_DIR/heartbeat-timer.pid" ]]; then
+        timer_pid=$(cat "$CASE_DIR/heartbeat-timer.pid")
+    fi
+    if [[ -z "$helper_pid" && -f "$CASE_DIR/heartbeat-helper.pid" ]]; then
+        helper_pid=$(cat "$CASE_DIR/heartbeat-helper.pid")
+    fi
+    if [[ -n "$timer_pid" ]]; then
+        kill -KILL "$timer_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$helper_pid" ]]; then
+        kill -KILL "$helper_pid" 2>/dev/null || true
+        wait "$helper_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$restart_pid" ]]; then
+        kill -KILL "$restart_pid" 2>/dev/null || true
+        wait "$restart_pid" 2>/dev/null || true
+    fi
+    timer_pid=""
+    helper_pid=""
+    restart_pid=""
+    exec 7>&-
+}
+trap cleanup EXIT
+
+function logger() { :; }
+caller_term() {
+    caller_term_count=$((caller_term_count + 1))
+    caller_seen_pid="$UT_HEARTBEAT_PID"
+    stop_ut_heartbeat
+}
+trap caller_term TERM
+
+# The transformed helper reports its registered timer before the parent
+# launch hook sends TERM. This keeps the outer publication race deterministic
+# while also proving the published helper owns and reaps its timer.
+ut_test_heartbeat_ready() {
+    printf '%s\n' "$heartbeat_sleep_pid" > "$CASE_DIR/heartbeat-timer.pid"
+    printf '%s\n' "$heartbeat_sleep_pid" >&7
+}
+ut_test_before_heartbeat_registration() {
+    publication_count=$((publication_count + 1))
+    helper_pid="$1"
+    printf '%s\n' "$1" > "$CASE_DIR/heartbeat-helper.pid"
+    read -r -t 10 timer_pid <&7 || exit 90
+    [[ "$timer_pid" =~ ^[0-9]+$ ]] || exit 91
+    if [[ "$publication_count" == 1 ]]; then
+        kill -TERM "$$"
+    fi
+}
+
+UT_HEARTBEAT_INTERVAL=60
+start_ut_heartbeat
+[[ "$caller_term_count" == 1 ]] || exit 92
+[[ "$caller_seen_pid" == "$helper_pid" && -n "$caller_seen_pid" ]] || exit 93
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 94
+if kill -0 "$helper_pid" 2>/dev/null; then
+    exit 95
+fi
+helper_pid=""
+if kill -0 "$timer_pid" 2>/dev/null; then
+    exit 96
+fi
+timer_pid=""
+[[ "$(trap -p TERM)" == *caller_term* ]] || exit 97
+
+# The publication fence must not poison a later generation after cancellation.
+start_ut_heartbeat
+restart_pid="$UT_HEARTBEAT_PID"
+[[ -n "$restart_pid" ]] || exit 98
+stop_ut_heartbeat
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 99
+if kill -0 "$restart_pid" 2>/dev/null; then
+    exit 100
+fi
+restart_pid=""
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+	`
+	transform := func(text string) string {
+		const readyAnchor = "            heartbeat_sleep_pid=$!\n"
+		if got := strings.Count(text, readyAnchor); got != 1 {
+			t.Fatalf("heartbeat timer registration anchor count = %d, want 1", got)
+		}
+		text = strings.Replace(text, readyAnchor,
+			readyAnchor+"            ut_test_heartbeat_ready\n", 1)
+		const publicationAnchor = "    UT_HEARTBEAT_PID=$!\n"
+		if got := strings.Count(text, publicationAnchor); got != 1 {
+			t.Fatalf("heartbeat publication anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, publicationAnchor,
+			"    ut_test_before_heartbeat_registration \"$!\"\n"+publicationAnchor, 1)
+	}
+	out, err := scheduleHarnessWithMockTransform(t, script, mock, transform)
+	if err != nil {
+		t.Fatalf("heartbeat helper registration lifecycle: %v\n%s", err, out)
+	}
+}
+
 func TestLightIssuesOverlapPreservesReportsAndFailures(t *testing.T) {
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
