@@ -9260,9 +9260,19 @@ func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 			continue
 		}
 
-		// NOTE: During ARRAY --> ARRAY conversion, if you do width check
-		// `to.GetType().Width != from.GetType().Width`
-		// cases b/b and b+sqrt(b) fails.
+		// A DECLARED target dimension (to.Width) MUST match the value's ACTUAL element count.
+		// The same-OID branch below copies the payload verbatim and the cross-OID bridge preserves
+		// the element count, so without this a wrong-dimension value slips through under the target
+		// label -- e.g. a 3-d vector stored as VECF32(4) -- a mixed-dimension column that breaks
+		// distance queries and HNSW index construction (#28917). Validate the actual count, NOT the
+		// from-type width. An UNSIZED target (Width == MaxArrayDimension, the sentinel an arithmetic
+		// result such as b/b or b+sqrt(b) carries) declares no dimension, so skip it -- only a real
+		// declared dimension is enforced.
+		if w := int(to.GetType().Width); w > 0 && w != types.MaxArrayDimension {
+			if n := len(types.BytesToArray[I](v)); n != w {
+				return moerr.NewArrayDefMismatchNoCtx(w, n)
+			}
+		}
 
 		if from.GetType().Oid == to.GetType().Oid {
 			// Eg:- VECF32(3) --> VECF32(3): identical byte layout, copy as-is.
