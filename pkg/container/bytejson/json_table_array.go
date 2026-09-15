@@ -40,11 +40,21 @@ type JSONTableArrayBuilder struct {
 	done     bool
 }
 
+const (
+	// Container document sizes and value offsets are uint32. The complete
+	// ByteJson cell has one additional byte for its top-level type marker.
+	maxJSONTableArrayDataBytes = uint64(math.MaxUint32)
+	maxJSONTableArrayCellBytes = maxJSONTableArrayDataBytes + 1
+)
+
 // NewJSONTableArrayBuilder creates an empty bounded array builder. maxBytes is
 // the complete encoded cell size, including the top-level type byte.
 func NewJSONTableArrayBuilder(maxBytes int) (*JSONTableArrayBuilder, error) {
 	if maxBytes <= 0 {
 		return nil, fmt.Errorf("invalid JSON_TABLE JSON cell limit %d", maxBytes)
+	}
+	if uint64(maxBytes) > maxJSONTableArrayCellBytes {
+		return nil, fmt.Errorf("JSON_TABLE JSON cell limit %d exceeds uint32 storage size", maxBytes)
 	}
 	// The array header plus the top-level type byte must fit before any value is
 	// appended. Keeping this check here makes a limit smaller than the binary
@@ -89,9 +99,9 @@ func (b *JSONTableArrayBuilder) AppendContext(ctx context.Context, value ByteJso
 	// Opaque/Bit base64 payload or rebuild a nested container. Literal values
 	// stay inline in the value table, so their one-byte data is not part of the
 	// payload budget below.
-	availablePayload := b.maxBytes - 1 - headerSize - len(b.entries) - valEntrySize - len(b.payload)
-	if availablePayload < 0 {
-		return jsonTableCellLimitError()
+	availablePayload, err := jsonTableArrayPayloadBudget(b.maxBytes, len(b.entries), len(b.payload))
+	if err != nil {
+		return err
 	}
 	storageLimit := availablePayload
 	if value.Type == TpCodeLiteral {
@@ -184,7 +194,8 @@ func StorageCompatibleDataSizeWithLimit(ctx context.Context, value ByteJson, max
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	size, _, err := storageCompatibleDataSize(ctx, value, maxDataBytes, 1)
+	remaining := uint64(len(value.Data))
+	size, _, err := storageCompatibleDataSizeWithBudget(ctx, value, maxDataBytes, 1, &remaining)
 	return size, err
 }
 
@@ -227,7 +238,53 @@ func jsonTableCellLimitError() error {
 	return ErrJSONTableCellLimit
 }
 
+// jsonTableArrayPayloadBudget computes the payload admitted by both the
+// configured cell limit and the uint32 container format. It is intentionally
+// expressed in uint64 arithmetic so malformed builder state cannot wrap an
+// int before a value reaches StorageCompatible or a base64 encoder.
+func jsonTableArrayPayloadBudget(maxBytes, entriesLen, payloadLen int) (int, error) {
+	if maxBytes <= 0 {
+		return 0, fmt.Errorf("invalid JSON_TABLE JSON cell limit %d", maxBytes)
+	}
+	if uint64(maxBytes) > maxJSONTableArrayCellBytes {
+		return 0, fmt.Errorf("JSON_TABLE JSON cell limit %d exceeds uint32 storage size", maxBytes)
+	}
+	if entriesLen < 0 || payloadLen < 0 {
+		return 0, errors.New("invalid JSON_TABLE JSON array buffer length")
+	}
+
+	base := uint64(headerSize)
+	if uint64(entriesLen) > maxJSONTableArrayDataBytes-base {
+		return 0, errors.New("JSON_TABLE JSON cell exceeds uint32 storage size")
+	}
+	base += uint64(entriesLen)
+	if uint64(valEntrySize) > maxJSONTableArrayDataBytes-base {
+		return 0, errors.New("JSON_TABLE JSON cell exceeds uint32 storage size")
+	}
+	base += uint64(valEntrySize)
+	if uint64(payloadLen) > maxJSONTableArrayDataBytes-base {
+		return 0, errors.New("JSON_TABLE JSON cell exceeds uint32 storage size")
+	}
+	base += uint64(payloadLen)
+
+	cellDataLimit := uint64(maxBytes - 1)
+	if base > cellDataLimit {
+		return 0, jsonTableCellLimitError()
+	}
+	available := cellDataLimit - base
+	formatAvailable := maxJSONTableArrayDataBytes - base
+	if available > formatAvailable {
+		available = formatAvailable
+	}
+	return int(available), nil
+}
+
 func storageCompatibleDataSize(ctx context.Context, value ByteJson, limit, depth int) (size int, expands bool, err error) {
+	remaining := uint64(len(value.Data))
+	return storageCompatibleDataSizeWithBudget(ctx, value, limit, depth, &remaining)
+}
+
+func storageCompatibleDataSizeWithBudget(ctx context.Context, value ByteJson, limit, depth int, remaining *uint64) (size int, expands bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return 0, false, err
 	}
@@ -274,13 +331,18 @@ func storageCompatibleDataSize(ctx context.Context, value ByteJson, limit, depth
 		}
 		return storageSizeWithinLimit(prefixLen+encodedLen, limit, true)
 	case TpCodeArray, TpCodeObject:
-		return storageCompatibleContainerDataSize(ctx, value, limit, depth)
+		return storageCompatibleContainerDataSizeWithBudget(ctx, value, limit, depth, remaining)
 	default:
 		return 0, false, fmt.Errorf("invalid JSON value type %#x", value.Type)
 	}
 }
 
 func storageCompatibleContainerDataSize(ctx context.Context, value ByteJson, limit, depth int) (int, bool, error) {
+	remaining := uint64(len(value.Data))
+	return storageCompatibleContainerDataSizeWithBudget(ctx, value, limit, depth, &remaining)
+}
+
+func storageCompatibleContainerDataSizeWithBudget(ctx context.Context, value ByteJson, limit, depth int, remaining *uint64) (int, bool, error) {
 	if depth > JSONDocumentMaxNestingDepth {
 		return 0, false, fmt.Errorf("json document nesting depth exceeds %d", JSONDocumentMaxNestingDepth)
 	}
@@ -307,6 +369,9 @@ func storageCompatibleContainerDataSize(ctx context.Context, value ByteJson, lim
 		// budget cannot become admissible.
 		return 0, false, jsonTableCellLimitError()
 	}
+	if !consumeStoragePreflightWork(remaining, minimumSize) {
+		return 0, false, errors.New("invalid JSON container serialized work")
+	}
 	valueTableStart := int(uint64(headerSize) + keyTableSize)
 	payloadStart := int(minimumSize)
 	keyBytes := 0
@@ -323,6 +388,9 @@ func storageCompatibleContainerDataSize(ctx context.Context, value ByteJson, lim
 			}
 			if keyLength > uint64(math.MaxInt-keyBytes) {
 				return 0, false, errors.New("JSON_TABLE JSON cell size overflows int")
+			}
+			if !consumeStoragePreflightWork(remaining, keyLength) {
+				return 0, false, errors.New("invalid JSON container serialized work")
 			}
 			keyBytes += int(keyLength)
 		}
@@ -354,7 +422,10 @@ func storageCompatibleContainerDataSize(ctx context.Context, value ByteJson, lim
 		if !ok {
 			return 0, false, errors.New("invalid JSON container value")
 		}
-		childSize, childExpands, err := storageCompatibleDataSize(ctx, child, limit, depth+1)
+		if childType != TpCodeArray && childType != TpCodeObject && !consumeStoragePreflightWork(remaining, uint64(len(child.Data))) {
+			return 0, false, errors.New("invalid JSON container serialized work")
+		}
+		childSize, childExpands, err := storageCompatibleDataSizeWithBudget(ctx, child, limit, depth+1, remaining)
 		if err != nil {
 			return 0, false, err
 		}
@@ -376,6 +447,14 @@ func storageCompatibleContainerDataSize(ctx context.Context, value ByteJson, lim
 		return canonicalSize, true, nil
 	}
 	return len(data), false, nil
+}
+
+func consumeStoragePreflightWork(remaining *uint64, size uint64) bool {
+	if remaining == nil || size > *remaining {
+		return false
+	}
+	*remaining -= size
+	return true
 }
 
 func storageCompatibleChild(tp TpCode, data []byte) (ByteJson, bool) {
