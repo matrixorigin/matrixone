@@ -456,7 +456,7 @@ func validateRoutinePlanDependencyShape(dependency *planpb.RoutinePlanDependency
 	if dependency.Volatility == "" || dependency.NullPolicy == "" || !dependency.MayError || dependency.Leakproof {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency semantic contract is incomplete")
 	}
-	switch strings.ToLower(dependency.Language) {
+	switch dependency.Language {
 	case udf.LanguagePython:
 		if dependency.SecurityMode != "INVOKER" {
 			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python routine plan dependency must use INVOKER security")
@@ -506,7 +506,7 @@ func routinePlanDependenciesChanged(
 			(dependency.Language == udf.LanguagePython && expectedSecurityMode != "INVOKER") ||
 			(dependency.Language == udf.LanguageSQL && expectedSecurityMode == "") ||
 			dependency.MayError != true || dependency.Leakproof ||
-			!strings.EqualFold(state.language, dependency.Language) ||
+			state.language != dependency.Language ||
 			state.fingerprint != dependency.DefinitionFingerprint ||
 			state.artifactDigest != dependency.ArtifactDigest ||
 			state.environmentDigest != dependency.EnvironmentDigest {
