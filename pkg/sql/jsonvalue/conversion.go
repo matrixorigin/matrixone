@@ -254,7 +254,7 @@ func ConvertScalarWithContext(ctx context.Context, value bytejson.ByteJson, targ
 	default:
 		return Result{
 			Status: StatusConversionError,
-			Err:    moerr.NewNotSupportedf(nil, "JSON scalar conversion to %s", target),
+			Err:    moerr.NewNotSupportedf(ctx, "JSON scalar conversion to %s", target),
 		}
 	}
 }
