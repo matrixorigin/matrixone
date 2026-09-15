@@ -760,7 +760,8 @@ func typeInList(typ types.T, supported []types.T) bool {
 }
 
 // mysqlNumericAggTypeCheck implements MySQL's numeric coercion for variance
-// and standard-deviation aggregates. Unlike SUM, these aggregates accept
+// and standard-deviation aggregates. JSON operands use the existing
+// JSON-to-DOUBLE conversion path. Unlike SUM, these aggregates also accept
 // string and temporal expressions and evaluate their numeric representation.
 // BIT's storage domain is unsigned, but its legacy aggregate state is not
 // widened. Bind through the existing UINT64 aggregate instead of changing the
@@ -772,6 +773,9 @@ func sumAvgTypeCheck(inputs []types.Type) checkResult {
 	if len(inputs) == 1 && inputs[0].Oid == types.T_bit {
 		return newCheckResultWithCast(0, []types.Type{types.T_uint64.ToType()})
 	}
+	if len(inputs) == 1 && inputs[0].Oid == types.T_json {
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
+	}
 	return fixedUnaryAggTypeCheck(inputs, SumSupportedTypes)
 }
 
@@ -782,6 +786,8 @@ func mysqlNumericAggTypeCheck(inputs []types.Type) checkResult {
 
 	t := inputs[0]
 	switch {
+	case t.Oid == types.T_json:
+		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
 	case t.Oid == types.T_any:
 		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType()})
 	case typeInList(t.Oid, SumSupportedTypes):
