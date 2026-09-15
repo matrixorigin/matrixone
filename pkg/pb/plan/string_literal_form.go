@@ -187,9 +187,9 @@ func RequiresMORPCVersion72IPFunctionSemantics(owner any) (bool, error) {
 	return features.IPFunctionSemantics, err
 }
 
-// RequiresMORPCVersion73StringNumericResultContracts reports whether an owner
+// RequiresMORPCVersion78StringNumericResultContracts reports whether an owner
 // contains one of the corrected fixed-width string numeric result contracts.
-func RequiresMORPCVersion73StringNumericResultContracts(owner any) (bool, error) {
+func RequiresMORPCVersion78StringNumericResultContracts(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.StringNumericResultContracts, err
 }
@@ -228,7 +228,7 @@ const (
 // RowDependentConvBases requires MORPC v69 for nonconstant or unsigned bases.
 // IPFunctionSemantics requires MORPC v72 because the IP functions change
 // existing overload semantics and add numeric INET_NTOA overloads.
-// StringNumericResultContracts requires MORPC v73 because the listed string
+// StringNumericResultContracts requires MORPC v78 because the listed string
 // numeric functions keep overload IDs while changing their physical result
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 type RemoteExpressionFeatures struct {
