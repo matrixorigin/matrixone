@@ -1252,14 +1252,14 @@ func (l *localLockTable) findStructuralRangePair(
 }
 
 // hasFollowingRangePairLocked reports whether a predecessor range-start is
-// already paired with a later range-end. Row locks may be interleaved, but a
-// range-start before the empty endpoint must not adopt the endpoint when its
-// own complete range continues beyond it.
+// already paired with a later range-end. Row locks may be interleaved, and
+// empty orphan endpoints may be interleaved as well. Keep scanning past
+// mismatched ends, but stop at the next range-start: a matching end before
+// that boundary proves that the predecessor already has a complete pair.
 func (l *localLockTable) hasFollowingRangePairLocked(
 	key []byte,
 	start Lock) bool {
-	var pairedEnd Lock
-	var found bool
+	paired := false
 	l.mu.store.Range(
 		nextKey(key, nil),
 		nil,
@@ -1268,14 +1268,18 @@ func (l *localLockTable) hasFollowingRangePairLocked(
 				return false
 			}
 			if lock.isLockRangeEnd() {
-				pairedEnd = lock
-				found = true
-				return false
+				if sameRangeLockState(start, lock) {
+					paired = true
+					return false
+				}
+				// A mismatched end can be another orphan. It does not
+				// establish a pair, so continue looking for the predecessor's
+				// matching end before the next range-start boundary.
 			}
 			return true
 		},
 	)
-	return found && sameRangeLockState(start, pairedEnd)
+	return paired
 }
 
 func sameRangeLockState(left, right Lock) bool {
@@ -1320,6 +1324,7 @@ func (c *mergeContext) restart() {
 	for k := range c.mergedLocks {
 		delete(c.mergedLocks, k)
 	}
+	clear(c.mergedWaiters)
 	c.mergedWaiters = c.mergedWaiters[:0]
 	c.to.beginChange()
 }
@@ -1329,6 +1334,7 @@ func (c *mergeContext) close() {
 		delete(c.mergedLocks, k)
 	}
 	c.to = nil
+	clear(c.mergedWaiters)
 	c.mergedWaiters = c.mergedWaiters[:0]
 	mergePool.Put(c)
 }

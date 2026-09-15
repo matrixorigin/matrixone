@@ -533,6 +533,60 @@ func TestEmptyRangeEndDoesNotSpliceEnclosingLiveRange(t *testing.T) {
 	)
 }
 
+func TestMultipleEmptyRangeEndsDoNotRetainLiveStateAfterUnlock(t *testing.T) {
+	table := uint64(15)
+	getRunner(false)(
+		t,
+		table,
+		func(ctx context.Context, s *service, lt *localLockTable) {
+			txnID := newTestTxnID(1)
+			_, err := s.Lock(ctx, table, newTestRows(1, 10), txnID, newTestRangeExclusiveOptions())
+			require.NoError(t, err)
+
+			w := acquireWaiter(
+				pb.WaitTxn{TxnID: []byte("multiple-orphan-endpoints")},
+				"multiple orphan endpoint test",
+				lt.logger,
+			)
+			defer w.close("multiple orphan endpoint test", lt.logger)
+
+			orphanWaiters := make([]*staleSnapshotReadTrapQueue, 2)
+			for i := range orphanWaiters {
+				orphanWaiters[i] = &staleSnapshotReadTrapQueue{waiterQueue: newWaiterQueue()}
+				orphanWaiters[i].init(lt.logger)
+				orphanWaiters[i].put(w)
+			}
+
+			lt.mu.Lock()
+			for i, key := range [][]byte{{5}, {7}} {
+				lt.mu.store.Add(key, Lock{
+					value:   flagLockRangeEnd | flagLockExclusiveMode,
+					holders: newHolders(),
+					waiters: orphanWaiters[i],
+				})
+			}
+			// A missing last-wait key forces the batch cleanup path, which
+			// snapshots both orphan endpoints before deleting either one.
+			c := &lockContext{
+				txn:              &activeTxn{txnKey: "multiple-orphan-endpoints"},
+				rangeLastWaitKey: []byte{9},
+			}
+			lt.closeRangeWaiterLocked(c, w, false)
+			lt.mu.Unlock()
+
+			for _, waiters := range orphanWaiters {
+				require.True(t, waiters.returned, "orphan state should be returned when unreferenced")
+			}
+			require.NoError(t, s.Unlock(ctx, txnID, timestamp.Timestamp{}))
+
+			lt.mu.RLock()
+			remaining := lt.mu.store.Len()
+			lt.mu.RUnlock()
+			require.Zero(t, remaining, "unlock must not leave a key backed by returned live state")
+		},
+	)
+}
+
 func TestMismatchedRangeEndpointRepairsLiveCounterpart(t *testing.T) {
 	table := uint64(10)
 	getRunner(false)(
@@ -828,6 +882,28 @@ func TestMergeRangeRestartsAfterEmptyConflict(t *testing.T) {
 			require.NoError(t, s.Unlock(ctx, txn2, timestamp.Timestamp{}))
 		},
 	)
+}
+
+func TestMergeContextClearsMergedWaiterReferences(t *testing.T) {
+	to := newWaiterQueue()
+	to.init(getLogger(""))
+	c := newMergeContext(to)
+	q1 := newWaiterQueue()
+	q2 := newWaiterQueue()
+	c.mergedWaiters = append(c.mergedWaiters, q1, q2)
+
+	c.restart()
+	require.Empty(t, c.mergedWaiters)
+	for _, q := range c.mergedWaiters[:cap(c.mergedWaiters)] {
+		require.Nil(t, q, "restart must clear backing waiter-queue references")
+	}
+
+	c.mergedWaiters = append(c.mergedWaiters, q1, q2)
+	c.close()
+	for _, q := range c.mergedWaiters[:cap(c.mergedWaiters)] {
+		require.Nil(t, q, "close must clear backing waiter-queue references")
+	}
+	to.rollbackChange()
 }
 
 func TestMergeRangeWithNoConflict(t *testing.T) {
