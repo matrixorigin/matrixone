@@ -101,7 +101,8 @@ insert into t_unique_nullable values (null,'x'),(null,'y'),(1,'z');
 select k,payload,count(*) from t_unique_nullable group by k;
 SQL syntax error: column "t_unique_nullable.payload" must appear in the GROUP BY clause or be used in an aggregate function
 select k,payload,count(*) from t_unique_nullable where k is not null group by k;
-SQL syntax error: column "t_unique_nullable.payload" must appear in the GROUP BY clause or be used in an aggregate function
+➤ k[4,32,0]  ¦  payload[12,20,0]  ¦  count(*)[-5,64,0]  𝄀
+1  ¦  z  ¦  1
 select k,count(*) as n from t_unique_nullable group by k order by k is null,k;
 ➤ k[4,32,0]  ¦  n[-5,64,0]  𝄀
 1  ¦  1  𝄀
@@ -123,7 +124,112 @@ select k,payload,sum(amount) as total from t_unique group by k,payload order by 
 1  ¦  alpha  ¦  10  𝄀
 1  ¦  different  ¦  30  𝄀
 2  ¦  beta  ¦  20
+create table fd_parent(id int primary key, name varchar(20));
+create table fd_child(id int primary key, parent_id int, flag int, qty int);
+insert into fd_parent values (1,'one'),(2,'two');
+insert into fd_child values (10,1,1,5),(11,1,0,7),(12,2,1,11),(13,3,1,13),(14,null,1,17);
+select id,name,count(*) as n from (select id,name from fd_parent) d group by id order by id;
+➤ id[4,32,0]  ¦  name[12,20,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  one  ¦  1  𝄀
+2  ¦  two  ¦  1
+with d as (select id,name from fd_parent) select id,name,count(*) as n from d group by id order by id;
+➤ id[4,32,0]  ¦  name[12,20,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  one  ¦  1  𝄀
+2  ¦  two  ¦  1
+create view fd_view as select id,name from fd_parent;
+select id,name,count(*) as n from fd_view group by id order by id;
+➤ id[4,32,0]  ¦  name[12,20,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  one  ¦  1  𝄀
+2  ¦  two  ¦  1
+select c.parent_id,p.name,sum(c.qty) as total from fd_child c join fd_parent p on c.parent_id=p.id group by c.parent_id order by c.parent_id;
+➤ parent_id[4,32,0]  ¦  name[12,20,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  one  ¦  12  𝄀
+2  ¦  two  ¦  11
+select c.parent_id,p.name,sum(c.qty) as total from fd_child c,fd_parent p where c.parent_id=p.id group by c.parent_id order by c.parent_id;
+➤ parent_id[4,32,0]  ¦  name[12,20,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  one  ¦  12  𝄀
+2  ¦  two  ¦  11
+select parent_id,p.name,sum(c.qty) as total from fd_child c join (select id as parent_id,name from fd_parent) p using(parent_id) group by parent_id order by parent_id;
+➤ parent_id[4,32,0]  ¦  name[12,20,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  one  ¦  12  𝄀
+2  ¦  two  ¦  11
+select c.parent_id,concat(p.name,'!') as label,sum(c.qty) as total from fd_child c join fd_parent p on c.parent_id=p.id group by c.parent_id having p.name<>'two' order by p.name;
+➤ parent_id[4,32,0]  ¦  label[12,21,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  one!  ¦  12
+select c.parent_id,p.name,sum(c.qty) as total from fd_child c left join fd_parent p on c.parent_id=p.id group by c.parent_id order by c.parent_id is null,c.parent_id;
+➤ parent_id[4,32,0]  ¦  name[12,20,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  one  ¦  12  𝄀
+2  ¦  two  ¦  11  𝄀
+3  ¦  null  ¦  13  𝄀
+null  ¦  null  ¦  17
+select c.parent_id,p.name,sum(c.qty) as total from fd_child c left join fd_parent p on c.parent_id=p.id group by c.parent_id,p.name order by c.parent_id is null,c.parent_id;
+➤ parent_id[4,32,0]  ¦  name[12,20,0]  ¦  total[-5,64,0]  𝄀
+1  ¦  one  ¦  12  𝄀
+2  ¦  two  ¦  11  𝄀
+3  ¦  null  ¦  13  𝄀
+null  ¦  null  ¦  17
+select c.id,p.name,sum(c.qty) as total from fd_child c left join fd_parent p on c.parent_id=p.id and c.flag=1 group by c.id order by c.id;
+➤ id[4,32,0]  ¦  name[12,20,0]  ¦  total[-5,64,0]  𝄀
+10  ¦  one  ¦  5  𝄀
+11  ¦  null  ¦  7  𝄀
+12  ¦  two  ¦  11  𝄀
+13  ¦  null  ¦  13  𝄀
+14  ¦  null  ¦  17
+select c.id,p.name,sum(c.qty) as total from fd_parent p right join fd_child c on c.parent_id=p.id and c.flag=1 group by c.id order by c.id;
+➤ id[4,32,0]  ¦  name[12,20,0]  ¦  total[-5,64,0]  𝄀
+10  ¦  one  ¦  5  𝄀
+11  ¦  null  ¦  7  𝄀
+12  ¦  two  ¦  11  𝄀
+13  ¦  null  ¦  13  𝄀
+14  ¦  null  ¦  17
+select c.parent_id,p.name,sum(c.qty) from fd_child c left join fd_parent p on c.parent_id=p.id and c.flag=1 group by c.parent_id;
+SQL syntax error: column "p.name" must appear in the GROUP BY clause or be used in an aggregate function
+select p.id,c.id,count(*) from fd_child c left join fd_parent p on c.parent_id=p.id group by p.id;
+SQL syntax error: column "c.id" must appear in the GROUP BY clause or be used in an aggregate function
+select c.id,p2.name,count(*) as n from fd_child c left join fd_parent p on c.parent_id=p.id left join fd_parent p2 on p.id=p2.id group by c.id order by c.id;
+➤ id[4,32,0]  ¦  name[12,20,0]  ¦  n[-5,64,0]  𝄀
+10  ¦  one  ¦  1  𝄀
+11  ¦  one  ¦  1  𝄀
+12  ¦  two  ¦  1  𝄀
+13  ¦  null  ¦  1  𝄀
+14  ¦  null  ¦  1
+with d as (select id,name from fd_parent) select a.id,b.name,count(*) from d a cross join d b group by a.id;
+SQL syntax error: column "b.name" must appear in the GROUP BY clause or be used in an aggregate function
+with d as (select id,name from fd_parent) select a.id,b.name,count(*) as n from d a join d b on a.id=b.id group by a.id order by a.id;
+➤ id[4,32,0]  ¦  name[12,20,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  one  ¦  1  𝄀
+2  ¦  two  ¦  1
+create table fd_nullable(a int not null,b int,c int,payload varchar(20),unique key uk_abc(a,b,c));
+insert into fd_nullable values (1,null,1,'n1'),(1,null,1,'n2'),(1,1,null,'n3'),(1,1,null,'n4'),(1,1,1,'good'),(1,2,2,'other');
+select a,b,c,payload,count(*) from fd_nullable group by a,b,c;
+SQL syntax error: column "fd_nullable.payload" must appear in the GROUP BY clause or be used in an aggregate function
+select a,b,c,payload,count(*) from fd_nullable where b is not null group by a,b,c;
+SQL syntax error: column "fd_nullable.payload" must appear in the GROUP BY clause or be used in an aggregate function
+select a,b,c,payload,count(*) as n from fd_nullable where b is not null and c is not null group by a,b,c order by a,b,c;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  ¦  payload[12,20,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  good  ¦  1  𝄀
+1  ¦  2  ¦  2  ¦  other  ¦  1
+select a,b,c,payload,count(*) as n from fd_nullable where b is not null and c is not null group by a,b,c,payload order by a,b,c;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  c[4,32,0]  ¦  payload[12,20,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  good  ¦  1  𝄀
+1  ¦  2  ¦  2  ¦  other  ¦  1
+select k,payload,count(*) as n from (select k,payload from t_unique_nullable) d where k is not null group by k order by k;
+➤ k[4,32,0]  ¦  payload[12,20,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  z  ¦  1
+select a,b,c,payload,count(*) from fd_nullable where b is not null or a=1 group by a,b,c;
+SQL syntax error: column "fd_nullable.payload" must appear in the GROUP BY clause or be used in an aggregate function
+prepare fd_view_stmt from 'select id,name,count(*) as n from fd_view group by id order by id';
+execute fd_view_stmt;
+➤ id[4,32,0]  ¦  name[12,20,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  one  ¦  1  𝄀
+2  ¦  two  ¦  1
+create or replace view fd_view as select parent_id as id,cast(id as char) as name from fd_child;
+execute fd_view_stmt;
+SQL syntax error: column "fd_view.name" must appear in the GROUP BY clause or be used in an aggregate function
+deallocate prepare fd_view_stmt;
 set session sql_mode = 'ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE';
+select c.parent_id,p.name,sum(c.qty) from fd_child c join fd_parent p on c.parent_id=p.id group by c.parent_id;
+SQL syntax error: column "p.name" must appear in the GROUP BY clause or be used in an aggregate function
 select a,b,payload,count(*) from t_unique_composite group by a,b;
 SQL syntax error: column "t_unique_composite.payload" must appear in the GROUP BY clause or be used in an aggregate function
 select region, product, sum(qty) as s_qty
