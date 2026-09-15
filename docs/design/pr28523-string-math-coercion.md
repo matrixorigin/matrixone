@@ -4,9 +4,9 @@
 - Design revision: 4
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Implementation snapshot reviewed by this revision: `6d2078ab5` (rebased candidate; the
+- Implementation snapshot reviewed by this revision: `582a956c61` (rebased candidate; the
   revision-4 benchmark is test-only and does not change runtime semantics)
-- Rebased implementation base: `0c3a04f390adaf6281fd592a49778ea5b1155e67`
+- Rebased implementation base: `2ea4ec2e6ef4b20321a235ef416228506813e39b`
 - Independent design review: GPT-6 Astra, medium reasoning; revision 4 records the
   requested decisions and measurements, while exact maintainer approval remains pending
 - Review trigger: review `5199052257` identified a major-refactor/compatibility design gate
@@ -246,8 +246,8 @@ authorized maintainer decision.
 The pre-rebase head `85635cc` passed the required CI run
 `34813866468` (SCA, Ubuntu UT, coverage, build, Compose/Standalone BVT, and
  CI Required); that run is historical and is not evidence for the rebased head.
-After rebasing first to `7ffce04a`, then `a72a224c`, and finally current
-`0c3a04f3`, local CGo validation passed the full
+After rebasing first to `7ffce04a`, then `a72a224c`, `0c3a04f3`, and finally
+current `2ea4ec2e`, local CGo validation passed the full
 `pkg/sql/plan/function` and `pkg/sql/plan` packages, the prepared numeric
 `-race` focus, the string-math/overload focus, and the three issue regressions;
 remote post-rebase CI remains required.
@@ -262,8 +262,8 @@ outside this scope.
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
 Design revision: 4
-Implementation baseline: 6d2078ab5 (rebased candidate)
-Rebased base: 0c3a04f390adaf6281fd592a49778ea5b1155e67
+Implementation baseline: 582a956c61 (rebased candidate)
+Rebased base: 2ea4ec2e6ef4b20321a235ef416228506813e39b
 Scope/trigger: PR review 5199052257; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: GPT-6 Astra, medium reasoning, independent draft design review; final review pending after current-base rebase
 Review timestamp: 2026-09-15
