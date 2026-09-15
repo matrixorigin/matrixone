@@ -49,6 +49,7 @@ const (
 	aggGroupConcatSourceRowTrailerMagic   = uint64(0x4147474353523131)
 	aggGroupConcatSourceRowTrailerVersion = byte(1)
 	canonicalDistinctWireTag              = int32(-1)
+	spillDistinctWireTag                  = int32(-2)
 )
 
 var _ [0]struct{} = [AggBatchSize & aggBatchSizeMask]struct{}{}       // mask == size-1
@@ -200,6 +201,11 @@ type aggState struct {
 	// argScratch is reusable physical storage for key construction and spill
 	// decode. It avoids data-scaled Go byte slices on row-frequency paths.
 	argScratch []byte
+	// legacyValueScratch holds one temporary raw DISTINCT tuple while its
+	// canonical key is inserted into the skiplist. It is reused per work unit
+	// and is separately preflighted because the value must coexist with key
+	// scratch until insertion completes.
+	legacyValueScratch []byte
 	// boundedArgumentGrowth is enabled after exact DISTINCT ownership moves to
 	// Group's partition spool. Subsequent resident state is only a work set, so
 	// arena growth follows bounded 64 KiB steps instead of retaining speculative
@@ -336,6 +342,7 @@ func (ag *aggState) writeStateArg(
 	info *aggInfo,
 	includeGroupConcatSourceRow bool,
 	legacyDistinctKeyWire bool,
+	spillWire bool,
 ) error {
 	if err := types.WriteUint32(writer, ag.argCnt[i]); err != nil {
 		return err
@@ -413,6 +420,24 @@ func (ag *aggState) writeStateArg(
 						}
 					*/
 					payload := k[kAggArgPrefixSz:]
+					if spillWire && info.isDistinct &&
+						!info.preserveDistinctInputOrder {
+						canonical, err := groupConcatStateArgumentForWire(
+							info, payload, nil, includeGroupConcatSourceRow)
+						if err != nil {
+							return err
+						}
+						legacy := canonical
+						if len(stored) != 0 {
+							legacy = stored
+						}
+						if err := writeSpillDistinctWirePayload(
+							writer, canonical, legacy); err != nil {
+							return err
+						}
+						xcnt++
+						continue
+					}
 					// Before v76, an opaque DISTINCT argument was sent as the
 					// original length-delimited value. Canonical keys are only an
 					// in-memory equivalence representation; sending one here would
@@ -449,7 +474,13 @@ func (ag *aggState) writeStateArg(
 	return nil
 }
 
-func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *aggInfo) error {
+func (ag *aggState) readStateArg(
+	mp *mpool.MPool,
+	i int32,
+	r io.Reader,
+	info *aggInfo,
+	spillWire bool,
+) error {
 	var err error
 	wireCount, err := types.ReadUint32(r)
 	if err != nil {
@@ -510,18 +541,29 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 			if _, err = io.ReadFull(r, fixedKey[kAggArgPrefixSz:]); err != nil {
 				return err
 			}
-			if info.isDistinct && len(info.argTypes) == 1 &&
-				info.argTypes[0].Oid == types.T_float32 &&
-				info.argTypes[0].Scale > 0 {
-				var raw [4]byte
-				copy(raw[:], fixedKey[kAggArgPrefixSz:])
-				canonical := keycodec.NewFloat32Codec(info.argTypes[0].Scale).CanonicalBytes(
-					types.DecodeFixed[float32](raw[:]))
-				copy(fixedKey[kAggArgPrefixSz:], canonical[:])
-				if err := inserted(ag.insertArgValue(mp, fixedKey, raw[:])); err != nil {
-					return err
+			if info.isDistinct && len(info.argTypes) == 1 {
+				switch info.argTypes[0].Oid {
+				case types.T_float32:
+					var raw [4]byte
+					copy(raw[:], fixedKey[kAggArgPrefixSz:])
+					canonical := keycodec.NewFloat32Codec(info.argTypes[0].Scale).CanonicalBytes(
+						types.DecodeFixed[float32](raw[:]))
+					copy(fixedKey[kAggArgPrefixSz:], canonical[:])
+					if err := inserted(ag.insertArgValue(mp, fixedKey, raw[:])); err != nil {
+						return err
+					}
+					continue
+				case types.T_float64:
+					var raw [8]byte
+					copy(raw[:], fixedKey[kAggArgPrefixSz:])
+					canonical := keycodec.CanonicalFloat64Bytes(
+						types.DecodeFixed[float64](raw[:]))
+					copy(fixedKey[kAggArgPrefixSz:], canonical[:])
+					if err := inserted(ag.insertArgValue(mp, fixedKey, raw[:])); err != nil {
+						return err
+					}
+					continue
 				}
-				continue
 			}
 			if info.preserveDistinctInputOrder {
 				err = ag.insertArgValue(
@@ -536,6 +578,54 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 			wireSize, err := types.ReadInt32AsInt(r)
 			if err != nil {
 				return err
+			}
+			if spillWire && info.isDistinct &&
+				!info.preserveDistinctInputOrder &&
+				wireSize == int(spillDistinctWireTag) {
+				canonicalSize, err := types.ReadInt32AsInt(r)
+				if err != nil {
+					return err
+				}
+				if canonicalSize < 0 || canonicalSize > math.MaxInt-kAggArgPrefixSz {
+					return moerr.NewInvalidInputNoCtx(
+						"invalid spilled aggregate canonical argument size")
+				}
+				kbuf, err := ag.resizeArgScratch(
+					mp, kAggArgPrefixSz+canonicalSize)
+				if err != nil {
+					return err
+				}
+				binary.BigEndian.PutUint16(kbuf[:kAggArgPrefixSz], uint16(i))
+				if _, err = io.ReadFull(r, kbuf[kAggArgPrefixSz:]); err != nil {
+					return err
+				}
+				rawSize, err := types.ReadInt32AsInt(r)
+				if err != nil {
+					return err
+				}
+				if rawSize < 0 {
+					return moerr.NewInvalidInputNoCtx(
+						"invalid spilled aggregate legacy argument size")
+				}
+				var rawValue []byte
+				if rawSize > 0 {
+					rawValue, err = ag.allocation.allocArgumentArena(mp, rawSize)
+					if err != nil {
+						return err
+					}
+					if _, err = io.ReadFull(r, rawValue); err != nil {
+						mp.Free(rawValue)
+						return err
+					}
+				}
+				err = ag.insertArgValueWithInserter(mp, kbuf, rawValue, &inserter)
+				if rawValue != nil {
+					mp.Free(rawValue)
+				}
+				if err = inserted(err); err != nil {
+					return err
+				}
+				continue
 			}
 			canonicalWire := wireSize == int(canonicalDistinctWireTag)
 			if canonicalWire {
@@ -617,6 +707,40 @@ func writeCanonicalDistinctWirePayload(writer io.Writer, payload []byte) error {
 		return io.ErrShortWrite
 	}
 	return err
+}
+
+// writeSpillDistinctWirePayload is private to the spill codec. It always
+// carries the canonical membership key and one raw representative, independent
+// of the remote MORPC rollout flag, so a restored state can later be emitted
+// to either protocol generation.
+func writeSpillDistinctWirePayload(
+	writer io.Writer,
+	canonical []byte,
+	legacy []byte,
+) error {
+	if len(canonical) > math.MaxInt32 || len(legacy) > math.MaxInt32 {
+		return moerr.NewInvalidInputNoCtx("aggregate argument exceeds spill format")
+	}
+	if err := types.WriteInt32(writer, spillDistinctWireTag); err != nil {
+		return err
+	}
+	if err := types.WriteInt32(writer, int32(len(canonical))); err != nil {
+		return err
+	}
+	if n, err := writer.Write(canonical); err != nil {
+		return err
+	} else if n != len(canonical) {
+		return io.ErrShortWrite
+	}
+	if err := types.WriteInt32(writer, int32(len(legacy))); err != nil {
+		return err
+	}
+	if n, err := writer.Write(legacy); err != nil {
+		return err
+	} else if n != len(legacy) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func usesCanonicalDistinctWire(info *aggInfo) bool {
@@ -766,7 +890,7 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 		for i := range flags {
 			if flags[i] != 0 {
 				if err := ag.writeStateArg(
-					mp, int32(i), writer, info, info.groupConcatSourceRowWire, true); err != nil {
+					mp, int32(i), writer, info, info.groupConcatSourceRowWire, true, false); err != nil {
 					return err
 				}
 			}
@@ -830,7 +954,7 @@ func (ag *aggState) writeSpillStateRows(
 		return 0, moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 	}
 	for _, row := range rows {
-		if err := ag.writeStateArg(mp, row, writer, info, true, false); err != nil {
+		if err := ag.writeStateArg(mp, row, writer, info, true, false, true); err != nil {
 			return 0, err
 		}
 	}
@@ -906,7 +1030,7 @@ func (ag *aggState) readSpillState(
 		return cnt, nil
 	}
 	for row := range cnt {
-		if err := ag.readStateArg(mp, row, reader, info); err != nil {
+		if err := ag.readStateArg(mp, row, reader, info, true); err != nil {
 			return 0, err
 		}
 	}
@@ -967,7 +1091,7 @@ func (ag *aggState) writeAllStatesToBuf(
 		}
 		for i := range ag.length {
 			if err := ag.writeStateArg(
-				mp, int32(i), writer, info, info.groupConcatSourceRowWire, true); err != nil {
+				mp, int32(i), writer, info, info.groupConcatSourceRowWire, true, false); err != nil {
 				return err
 			}
 		}
@@ -1081,7 +1205,7 @@ func (ag *aggState) readStateWithAllocation(
 		}
 	} else {
 		for i := range cnt {
-			if err := ag.readStateArg(mp, int32(i), reader, info); err != nil {
+			if err := ag.readStateArg(mp, int32(i), reader, info, false); err != nil {
 				return 0, err
 			}
 		}
@@ -1191,6 +1315,31 @@ func (ag *aggState) resizeArgScratch(
 	return ag.argScratch, nil
 }
 
+func (ag *aggState) resizeLegacyValueScratch(
+	mp *mpool.MPool,
+	length int,
+) ([]byte, error) {
+	if ag == nil || mp == nil || length < 0 {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	if _, err := aggregateArgumentNodeSize(uint64(length), 0); err != nil {
+		return nil, err
+	}
+	if cap(ag.legacyValueScratch) >= length {
+		ag.legacyValueScratch = ag.legacyValueScratch[:length]
+		return ag.legacyValueScratch, nil
+	}
+	next, err := ag.allocation.allocArgumentArena(mp, length)
+	if err != nil {
+		return nil, err
+	}
+	if cap(ag.legacyValueScratch) > 0 {
+		mp.Free(ag.legacyValueScratch)
+	}
+	ag.legacyValueScratch = next
+	return ag.legacyValueScratch, nil
+}
+
 func aggregateArgumentNodeSize(keySize, valueSize uint64) (uint64, error) {
 	if keySize > math.MaxUint32 || valueSize > math.MaxUint32 {
 		return 0, mpool.ErrAllocationAllocatorLimit
@@ -1287,7 +1436,7 @@ func (ag *aggState) insertArgValueWithInserter(
 		// Relocate the offset-based nodes as one buffer under the state's selected
 		// growth policy. Ordinary recovery grows geometrically; bounded DISTINCT
 		// work sets retain their smaller increments without rebuilding every node.
-		if err := ag.preflightArgumentCapacity(mp, required, 0); err != nil {
+		if err := ag.preflightArgumentCapacity(mp, required, 0, 0); err != nil {
 			return err
 		}
 		if inserter != nil {
@@ -1709,6 +1858,10 @@ func (ag *aggState) free(mp *mpool.MPool) {
 		mp.Free(ag.argScratch)
 	}
 	ag.argScratch = nil
+	if cap(ag.legacyValueScratch) > 0 {
+		mp.Free(ag.legacyValueScratch)
+	}
+	ag.legacyValueScratch = nil
 	ag.boundedArgumentGrowth = false
 	for _, vec := range ag.vecs {
 		vec.Free(mp)
@@ -2955,7 +3108,7 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 		// A multi-column canonical key may not be sent to a pre-v76 peer.
 		// Retain one raw, length-delimited tuple only when it differs from the
 		// canonical key; insertPreparedArgWithValue copies it into the skiplist
-		// before the temporary accounted arena is released.
+		// while the reusable accounted scratch remains valid.
 		var legacyValue []byte
 		if distinct {
 			needsLegacyValue := false
@@ -2973,7 +3126,7 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 				off += valueSize
 			}
 			if needsLegacyValue {
-				legacyValue, err = state.allocation.allocArgumentArena(
+				legacyValue, err = state.resizeLegacyValueScratch(
 					ae.mp, rawTotalSize)
 				if err != nil {
 					return err
@@ -2982,7 +3135,6 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 				for _, vec := range vectors {
 					row, err := preflightPhysicalRow(vec, logicalRow)
 					if err != nil {
-						ae.mp.Free(legacyValue)
 						return err
 					}
 					raw := vec.GetRawBytesAt(row)
@@ -2995,9 +3147,6 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 		}
 		err = state.insertPreparedArgWithValue(
 			ae.mp, y, key, distinct, legacyValue)
-		if legacyValue != nil {
-			ae.mp.Free(legacyValue)
-		}
 		if err != nil {
 			return err
 		}
