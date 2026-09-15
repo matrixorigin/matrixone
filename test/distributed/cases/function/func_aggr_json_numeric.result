@@ -1,23 +1,7 @@
 DROP TABLE IF EXISTS json_numeric_agg;
 CREATE TABLE json_numeric_agg (id INT, grp INT, j JSON);
-INSERT INTO json_numeric_agg VALUES
-    (1, 1, '1'),
-    (2, 1, '2.5'),
-    (3, 1, '3'),
-    (4, 1, 'null'),
-    (5, 1, NULL),
-    (6, 2, '1'),
-    (7, 2, '1.0'),
-    (8, 2, '"1"'),
-    (9, 2, '4'),
-    (10, 2, 'null'),
-    (11, 2, NULL),
-    (12, 3, '"2.5"'),
-    (13, 4, '9007199254740992'),
-    (14, 4, '9007199254740993'),
-    (15, 4, '-9007199254740993');
-SELECT SUM(j), AVG(j), VAR_POP(j), VAR_SAMP(j), STDDEV_POP(j), STDDEV_SAMP(j)
-FROM json_numeric_agg WHERE grp = 1;
+INSERT INTO json_numeric_agg VALUES (1, 1, '1'), (2, 1, '2.5'), (3, 1, '3'), (4, 1, 'null'), (5, 1, NULL), (6, 2, '1'), (7, 2, '1.0'), (8, 2, '"1"'), (9, 2, '4'), (10, 2, 'null'), (11, 2, NULL), (12, 3, '"2.5"'), (13, 4, '9007199254740992'), (14, 4, '9007199254740993'), (15, 4, '-9007199254740993');
+SELECT SUM(j), AVG(j), VAR_POP(j), VAR_SAMP(j), STDDEV_POP(j), STDDEV_SAMP(j) FROM json_numeric_agg WHERE grp = 1;
 ➤ SUM(j)[8,54,0]  ¦  AVG(j)[8,54,0]  ¦  VAR_POP(j)[8,54,0]  ¦  VAR_SAMP(j)[8,54,0]  ¦  STDDEV_POP(j)[8,54,0]  ¦  STDDEV_SAMP(j)[8,54,0]  𝄀
 6.5  ¦  2.1666666666666665  ¦  0.7222222222222222  ¦  1.0833333333333333  ¦  0.8498365855987975  ¦  1.0408329997330663
 SELECT grp, SUM(j) FROM json_numeric_agg GROUP BY grp ORDER BY grp;
@@ -26,13 +10,10 @@ SELECT grp, SUM(j) FROM json_numeric_agg GROUP BY grp ORDER BY grp;
 2  ¦  7  𝄀
 3  ¦  2.5  𝄀
 4  ¦  9007199254740992
-SELECT SUM(DISTINCT j), AVG(DISTINCT j), VAR_POP(DISTINCT j), VAR_SAMP(DISTINCT j),
-       STDDEV_POP(DISTINCT j), STDDEV_SAMP(DISTINCT j)
-FROM json_numeric_agg WHERE grp = 2;
+SELECT SUM(DISTINCT j), AVG(DISTINCT j), VAR_POP(DISTINCT j), VAR_SAMP(DISTINCT j), STDDEV_POP(DISTINCT j), STDDEV_SAMP(DISTINCT j) FROM json_numeric_agg WHERE grp = 2;
 ➤ SUM(DISTINCT j)[8,54,0]  ¦  AVG(DISTINCT j)[8,54,0]  ¦  VAR_POP(DISTINCT j)[8,54,0]  ¦  VAR_SAMP(DISTINCT j)[8,54,0]  ¦  STDDEV_POP(DISTINCT j)[8,54,0]  ¦  STDDEV_SAMP(DISTINCT j)[8,54,0]  𝄀
 5  ¦  2.5  ¦  2.25  ¦  4.5  ¦  1.5  ¦  2.1213203435596424
-SELECT id, SUM(j) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
-FROM json_numeric_agg WHERE grp = 1 ORDER BY id;
+SELECT id, SUM(j) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM json_numeric_agg WHERE grp = 1 ORDER BY id;
 ➤ id[4,32,0]  ¦  SUM(j) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)[8,54,0]  𝄀
 1  ¦  1  𝄀
 2  ¦  3.5  𝄀
