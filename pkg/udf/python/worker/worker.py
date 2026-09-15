@@ -952,6 +952,92 @@ def _validate_definition_syntax(value: Dict[str, Any]) -> None:
         )
     tree = ast.parse(value["source"], filename="<matrixone-python-udf>", mode="exec")
     binding = None
+
+    class NestedModuleBindingVisitor(ast.NodeVisitor):
+        """Find handler bindings below a module statement.
+
+        A handler must be established by an unconditional module-level
+        function definition or lambda assignment.  Assignments in control
+        flow, imports, and pattern targets can otherwise leave CREATE looking
+        valid while the value exposed by exec() is absent or non-callable.
+        Function/class bodies and comprehension targets have their own scope
+        and are deliberately not treated as module rebinding.
+        """
+
+        def __init__(self):
+            self.found = False
+
+        def _mark(self):
+            self.found = True
+
+        def visit_Name(self, node):
+            if node.id == handler and isinstance(node.ctx, (ast.Store, ast.Del)):
+                self._mark()
+
+        def visit_FunctionDef(self, node):
+            if node.name == handler:
+                self._mark()
+
+        def visit_AsyncFunctionDef(self, node):
+            if node.name == handler:
+                self._mark()
+
+        def visit_ClassDef(self, node):
+            if node.name == handler:
+                self._mark()
+
+        def visit_Lambda(self, node):
+            return
+
+        def visit_ListComp(self, node):
+            self.visit(node.elt)
+            for generator in node.generators:
+                self.visit(generator.iter)
+                for condition in generator.ifs:
+                    self.visit(condition)
+
+        visit_SetComp = visit_ListComp
+        visit_GeneratorExp = visit_ListComp
+
+        def visit_DictComp(self, node):
+            self.visit(node.key)
+            self.visit(node.value)
+            for generator in node.generators:
+                self.visit(generator.iter)
+                for condition in generator.ifs:
+                    self.visit(condition)
+
+        def visit_Import(self, node):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".", 1)[0]
+                if bound == handler:
+                    self._mark()
+
+        def visit_ImportFrom(self, node):
+            for alias in node.names:
+                if alias.name == "*" or (alias.asname or alias.name) == handler:
+                    self._mark()
+
+        def visit_ExceptHandler(self, node):
+            if node.name == handler:
+                self._mark()
+            self.visit(node.type)
+            self.visit_nodes(node.body)
+
+        def visit_MatchAs(self, node):
+            if node.name == handler:
+                self._mark()
+            if node.pattern is not None:
+                self.visit(node.pattern)
+
+        def visit_MatchStar(self, node):
+            if node.name == handler:
+                self._mark()
+
+        def visit_nodes(self, nodes):
+            for child in nodes:
+                self.visit(child)
+
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == handler:
             # Continue scanning: a later module-level assignment can replace
@@ -973,6 +1059,10 @@ def _validate_definition_syntax(value: Dict[str, Any]) -> None:
             if any(isinstance(target, ast.Name) and target.id == handler for target in node.targets):
                 binding = "other"
                 continue
+        visitor = NestedModuleBindingVisitor()
+        visitor.visit(node)
+        if visitor.found:
+            binding = "other"
     if binding == "async":
         raise ValueError("USER_CODE: Python handler must be synchronous")
     if binding not in ("sync", "lambda"):
