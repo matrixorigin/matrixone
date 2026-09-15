@@ -3190,34 +3190,18 @@ func TimestampAddString(ivecs []*vector.Vector, result vector.FunctionResultWrap
 func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
-	// Get base parameters (must be constants)
-	if !ivecs[1].IsConst() || !ivecs[2].IsConst() {
-		return moerr.NewInvalidArg(proc.Ctx, "conv bases", "not constant")
-	}
-
-	fromBaseVec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[1])
-	toBaseVec := vector.GenerateFunctionFixedTypeParameter[int64](ivecs[2])
-
-	fromBase, null1 := fromBaseVec.GetValue(0)
-	toBase, null2 := toBaseVec.GetValue(0)
-
-	if null1 || null2 {
-		// If bases are NULL, return NULL for all rows
-		for i := uint64(0); i < uint64(length); i++ {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		}
+	if length == 0 {
 		return nil
 	}
-
-	absFromBase := absInt64(fromBase)
-	absToBase := absInt64(toBase)
-
-	// Invalid bases return NULL.
-	if absFromBase < 2 || absFromBase > 36 || absToBase < 2 || absToBase > 36 {
-		for i := uint64(0); i < uint64(length); i++ {
-			if err = rs.AppendBytes(nil, true); err != nil {
+	bases, err := newConvBases(ivecs[1], ivecs[2])
+	if err != nil {
+		return err
+	}
+	// Preserve the existing all-NULL fast path without inspecting N when a
+	// constant base is NULL or invalid.
+	if bases.constant && !bases.valid {
+		for i := 0; i < length; i++ {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		}
@@ -3235,7 +3219,7 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 	switch inputType.Oid {
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob:
-		return convString(ivecs[0], fromBase, toBase, rs, length, selectList)
+		return convString(ivecs[0], bases, rs, length, selectList)
 	case types.T_bool:
 		return convMappedInt64(
 			vector.GenerateFunctionFixedTypeParameter[bool](ivecs[0]),
@@ -3244,11 +3228,11 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 					return 1
 				}
 				return 0
-			}, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_bit:
 		return convUnsignedDirect(
 			vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0]),
-			toBase, rs, length, selectList)
+			bases, rs, length, selectList)
 	case types.T_any:
 		// T_any is only the function-local representation of an untyped NULL
 		// or a marker before execute-time specialization. It must propagate
@@ -3268,76 +3252,76 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 		case types.T_int8:
 			return convSignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[int8](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		case types.T_int16:
 			return convSignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[int16](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		case types.T_int32:
 			return convSignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[int32](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		default:
 			return convSignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[int64](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		}
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		switch inputType.Oid {
 		case types.T_uint8:
 			return convUnsignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[uint8](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		case types.T_uint16:
 			return convUnsignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[uint16](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		case types.T_uint32:
 			return convUnsignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		default:
 			return convUnsignedPrefix(
 				vector.GenerateFunctionFixedTypeParameter[uint64](ivecs[0]),
-				fromBase, toBase, rs, length, selectList)
+				bases, rs, length, selectList)
 		}
 	case types.T_float32, types.T_float64:
 		// Floating values use MySQL's string/prefix conversion semantics.
 		if inputType.Oid == types.T_float32 {
 			return convFloatPrefix(
 				vector.GenerateFunctionFixedTypeParameter[float32](ivecs[0]),
-				32, fromBase, toBase, rs, length, selectList)
+				32, bases, rs, length, selectList)
 		}
 		return convFloatPrefix(
 			vector.GenerateFunctionFixedTypeParameter[float64](ivecs[0]),
-			64, fromBase, toBase, rs, length, selectList)
+			64, bases, rs, length, selectList)
 	case types.T_decimal64:
 		return convDecimalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Decimal64](ivecs[0]),
 			func(v types.Decimal64) string { return v.Format(inputType.Scale) },
-			fromBase, toBase, rs, length, selectList)
+			bases, rs, length, selectList)
 	case types.T_decimal128:
 		return convDecimalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Decimal128](ivecs[0]),
 			func(v types.Decimal128) string { return v.Format(inputType.Scale) },
-			fromBase, toBase, rs, length, selectList)
+			bases, rs, length, selectList)
 	case types.T_decimal256:
 		return convDecimalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Decimal256](ivecs[0]),
 			func(v types.Decimal256) string { return v.Format(inputType.Scale) },
-			fromBase, toBase, rs, length, selectList)
+			bases, rs, length, selectList)
 	case types.T_date:
 		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0]),
 			func(dst []byte, v types.Date) []byte {
 				return strconv.AppendInt(dst, int64(v.Year()), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_datetime:
 		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Datetime](ivecs[0]),
 			func(dst []byte, v types.Datetime) []byte {
 				return strconv.AppendInt(dst, int64(v.Year()), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_timestamp:
 		zone := time.Local
 		if proc.GetSessionInfo() != nil && proc.GetSessionInfo().TimeZone != nil {
@@ -3347,19 +3331,19 @@ func Conv(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pro
 			vector.GenerateFunctionFixedTypeParameter[types.Timestamp](ivecs[0]),
 			func(dst []byte, v types.Timestamp) []byte {
 				return strconv.AppendInt(dst, int64(v.ToDatetime(zone).Year()), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_time:
 		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0]),
 			func(dst []byte, v types.Time) []byte {
 				return strconv.AppendInt(dst, v.Hour(), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	case types.T_year:
 		return convTemporalPrefix(
 			vector.GenerateFunctionFixedTypeParameter[types.MoYear](ivecs[0]),
 			func(dst []byte, v types.MoYear) []byte {
 				return strconv.AppendInt(dst, v.ToInt64(), 10)
-			}, fromBase, toBase, rs, length, selectList)
+			}, bases, rs, length, selectList)
 	default:
 		// Never pass a fixed-width vector to GenerateFunctionStrParameter:
 		// doing so is the panic reported by #28461. Unsupported input types
@@ -3383,11 +3367,19 @@ func formatUnsignedToBase(val uint64, toBase int64) string {
 	return strings.ToUpper(strconv.FormatUint(val, int(base)))
 }
 
-func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
+func convString(nVec *vector.Vector, bases convBases, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList) error {
 	nParam := vector.GenerateFunctionStrParameter(nVec)
 
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3420,10 +3412,18 @@ func convString(nVec *vector.Vector, fromBase, toBase int64, rs *vector.Function
 
 func convMappedInt64[T types.FixedSizeTExceptStrType](
 	nParam vector.FunctionParameterWrapper[T], mapValue func(T) int64,
-	toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+	bases convBases, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		_, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3464,11 +3464,19 @@ func appendConvPrefix(
 // formatting the remainder of every date/time value on the hot path.
 func convTemporalPrefix[T types.FixedSizeTExceptStrType](
 	nParam vector.FunctionParameterWrapper[T], appendPrefix func([]byte, T) []byte,
-	fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+	bases convBases, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	var prefix [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3495,10 +3503,18 @@ func convTemporalPrefix[T types.FixedSizeTExceptStrType](
 
 func convDecimalPrefix[T types.Decimal](
 	nParam vector.FunctionParameterWrapper[T], formatValue func(T) string,
-	fromBase, toBase int64, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
+	bases convBases, rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3524,11 +3540,19 @@ func convDecimalPrefix[T types.Decimal](
 }
 
 func convFloatPrefix[T types.Floats](
-	nParam vector.FunctionParameterWrapper[T], bitSize int, fromBase, toBase int64,
+	nParam vector.FunctionParameterWrapper[T], bitSize int, bases convBases,
 	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3912,12 +3936,20 @@ func isConvWhitespace(ch byte) bool {
 }
 
 func convSignedPrefix[T constraints.Signed](
-	nParam vector.FunctionParameterWrapper[T], fromBase, toBase int64,
+	nParam vector.FunctionParameterWrapper[T], bases convBases,
 	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	var text [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -3951,12 +3983,20 @@ func convSignedPrefix[T constraints.Signed](
 }
 
 func convUnsignedPrefix[T constraints.Unsigned](
-	nParam vector.FunctionParameterWrapper[T], fromBase, toBase int64,
+	nParam vector.FunctionParameterWrapper[T], bases convBases,
 	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	var text [32]byte
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		fromBase, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -4002,11 +4042,19 @@ func convUnsignedPrefix[T constraints.Unsigned](
 // bits must not be reparsed using from_base. The value is formatted as an
 // unsigned bit pattern, including the existing signed-to_base behavior.
 func convUnsignedDirect[T constraints.Unsigned](
-	nParam vector.FunctionParameterWrapper[T], toBase int64,
+	nParam vector.FunctionParameterWrapper[T], bases convBases,
 	rs *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
 ) error {
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+
+		_, toBase, valid := bases.at(i)
+		if !valid {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
@@ -7864,6 +7912,23 @@ func ExtractFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWra
 		return nil
 	}
 	unit := functionUtil.QuickBytesToStr(v1)
+	if unit == "minute" {
+		// The unit is constant for the vector. Keep this hot path out of the
+		// generic per-row unit lookup, switch, and integer formatter.
+		for i := uint64(0); i < uint64(length); i++ {
+			v2, null2 := p2.GetValue(i)
+			if null2 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(formatExtractMinute(int(v2.Minute()))), false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i := uint64(0); i < uint64(length); i++ {
 		v2, null2 := p2.GetValue(i)
 		if null2 {
@@ -8120,6 +8185,16 @@ func YearWeekString(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	return nil
 }
 
+const extractMinuteDigits = "000102030405060708091011121314151617181920212223242526272829303132333435363738394041424344454647484950515253545556575859"
+
+func formatExtractMinute(minute int) string {
+	if minute >= 0 && minute < 60 {
+		start := minute * 2
+		return extractMinuteDigits[start : start+2]
+	}
+	return fmt.Sprintf("%02d", minute)
+}
+
 func extractFromDatetime(unit string, d types.Datetime) (string, error) {
 	if _, ok := validDatetimeUnit[unit]; !ok {
 		return "", moerr.NewInternalErrorNoCtx("invalid unit")
@@ -8280,6 +8355,23 @@ func ExtractFromTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWr
 	}
 	unit := functionUtil.QuickBytesToStr(v1)
 	zone := proc.GetSessionInfo().TimeZone
+	if unit == "minute" {
+		// Preserve the per-row timezone conversion before extracting the minute.
+		for i := uint64(0); i < uint64(length); i++ {
+			v2, null2 := p2.GetValue(i)
+			if null2 {
+				if err = rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			dt := v2.ToDatetime(zone)
+			if err = rs.AppendBytes(functionUtil.QuickStrToBytes(formatExtractMinute(int(dt.Minute()))), false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i := uint64(0); i < uint64(length); i++ {
 		v2, null2 := p2.GetValue(i)
 		if null2 {
@@ -10642,12 +10734,15 @@ func L1DistanceArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.
 
 // StGeoHashFromPoint is ST_GeoHash(point, max_length): the geohash of a point.
 func StGeoHashFromPoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	return opBinaryStrFixedToStrWithErrorCheck[int64](ivecs, result, proc, length, func(v string, maxLen int64) (string, error) {
 		x, y, err := parsePointXYFromPayload(functionUtil.QuickStrToBytes(v))
 		if err != nil {
 			return "", err
 		}
-		return geo.EncodeGeoHash(x, y, int(maxLen)), nil
+		return geo.EncodeGeoHash(x, y, maxLen)
 	}, selectList)
 }
 
@@ -10674,7 +10769,11 @@ func StGeoHashFromLonLat(ivecs []*vector.Vector, result vector.FunctionResultWra
 			}
 			continue
 		}
-		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(geo.EncodeGeoHash(lon, lat, int(l))), false); err != nil {
+		hash, err := geo.EncodeGeoHash(lon, lat, l)
+		if err != nil {
+			return err
+		}
+		if err := rs.AppendBytes(functionUtil.QuickStrToBytes(hash), false); err != nil {
 			return err
 		}
 	}
@@ -10776,10 +10875,18 @@ func StBufferQS(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 // overlayBinary builds an eval function for a polygon Boolean operation.
-func overlayBinary(op geo.BoolOp) fEvalFn {
+func overlayBinary(functionName string, op geo.BoolOp) fEvalFn {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
+		if err != nil {
+			return err
+		}
+		if emptyBatch {
+			return nil
+		}
 		// float32 output only when both operands are GEOMETRY32.
 		f32 := geometryArgIsFloat32(ivecs, 0) && geometryArgIsFloat32(ivecs, 1)
+		srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 		return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
 			a, err := decodeGeoGeometry(v1)
 			if err != nil {
@@ -10789,9 +10896,27 @@ func overlayBinary(op geo.BoolOp) fEvalFn {
 			if err != nil {
 				return nil, err
 			}
-			g, oerr := geo.Overlay(a, b, op)
+			var projector geo.GeodeticProjector
+			if srid == geo.SRIDWGS84 {
+				projector, a, b, err = geo.ProjectGeodeticPair(a, b)
+				if err != nil {
+					return nil, err
+				}
+			}
+			var (
+				g    geo.Geometry
+				oerr error
+			)
+			if srid == geo.SRIDWGS84 {
+				g, oerr = projector.Overlay(a, b, op)
+			} else {
+				g, oerr = geo.Overlay(a, b, op)
+			}
 			if oerr != nil {
 				return nil, oerr
+			}
+			if srid == geo.SRIDWGS84 {
+				g = projector.Unproject(g)
 			}
 			return geoEncodeWKB(g, f32)
 		}, selectList)
@@ -10800,36 +10925,43 @@ func overlayBinary(op geo.BoolOp) fEvalFn {
 
 // StUnion returns the polygon union of two areal geometries.
 func StUnion(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return overlayBinary(geo.OpUnion)(ivecs, result, proc, length, selectList)
+	return overlayBinary("ST_UNION", geo.OpUnion)(ivecs, result, proc, length, selectList)
 }
 
 // StIntersection returns the polygon intersection of two areal geometries.
 func StIntersection(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return overlayBinary(geo.OpIntersection)(ivecs, result, proc, length, selectList)
+	return overlayBinary("ST_INTERSECTION", geo.OpIntersection)(ivecs, result, proc, length, selectList)
 }
 
 // StDifference returns the polygon difference (g1 minus g2).
 func StDifference(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return overlayBinary(geo.OpDifference)(ivecs, result, proc, length, selectList)
+	return overlayBinary("ST_DIFFERENCE", geo.OpDifference)(ivecs, result, proc, length, selectList)
 }
 
 // StSymDifference returns the polygon symmetric difference of two geometries.
 func StSymDifference(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return overlayBinary(geo.OpXOR)(ivecs, result, proc, length, selectList)
+	return overlayBinary("ST_SYMDIFFERENCE", geo.OpXOR)(ivecs, result, proc, length, selectList)
 }
 
 // StFrechetDistance returns the discrete Fréchet distance (planar) between two
 // geometries' vertex sequences.
 func StFrechetDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stFrechetDistance[float64](ivecs, result, proc, length, selectList)
+	return stFrechetDistance[float64]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
 }
 
 // StFrechetDistance32 is the GEOMETRY32 overload of ST_FrechetDistance.
 func StFrechetDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stFrechetDistance[float32](ivecs, result, proc, length, selectList)
+	return stFrechetDistance[float32]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
 }
 
-func stFrechetDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func stFrechetDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
+	if err != nil {
+		return err
+	}
+	if emptyBatch {
+		return nil
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
 		a, err := decodeGeoGeometry(v1)
 		if err != nil {
@@ -10847,18 +10979,25 @@ func stFrechetDistance[T float32 | float64](ivecs []*vector.Vector, result vecto
 	}, selectList)
 }
 
-// StHausdorffDistance returns the discrete Hausdorff distance (planar) between
-// two geometries' vertex sets.
+// StHausdorffDistance returns the discrete directed Hausdorff distance (planar)
+// from the first geometry's vertex set to the second geometry's vertex set.
 func StHausdorffDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stHausdorffDistance[float64](ivecs, result, proc, length, selectList)
+	return stHausdorffDistance[float64]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
 }
 
 // StHausdorffDistance32 is the GEOMETRY32 overload of ST_HausdorffDistance.
 func StHausdorffDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return stHausdorffDistance[float32](ivecs, result, proc, length, selectList)
+	return stHausdorffDistance[float32]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
 }
 
-func stHausdorffDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+func stHausdorffDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
+	if err != nil {
+		return err
+	}
+	if emptyBatch {
+		return nil
+	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
 		a, err := decodeGeoGeometry(v1)
 		if err != nil {
@@ -10868,7 +11007,7 @@ func stHausdorffDistance[T float32 | float64](ivecs []*vector.Vector, result vec
 		if err != nil {
 			return 0, err
 		}
-		d, ok := geo.HausdorffDistance(a, b)
+		d, ok := geo.DirectedHausdorffDistance(a, b)
 		if !ok {
 			return 0, moerr.NewInvalidInputNoCtx("ST_HausdorffDistance: empty geometry")
 		}
@@ -10957,6 +11096,13 @@ func StSimplify(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 // StCollect bundles two geometries into the most specific aggregate (multi or
 // collection).
 func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_COLLECT", ivecs, length, selectList)
+	if err != nil {
+		return err
+	}
+	if emptyBatch {
+		return nil
+	}
 	f32 := geometryArgIsFloat32(ivecs, 0) && geometryArgIsFloat32(ivecs, 1)
 	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
 		a, err := decodeGeoGeometry(v1)
@@ -10971,19 +11117,33 @@ func StCollect(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	}, selectList)
 }
 
+const maxGeoJSONDecimalDigits int64 = 1<<32 - 1
+
+func validateGeoJSONDecimalDigits(maxDec int64) error {
+	if maxDec < 0 || maxDec > maxGeoJSONDecimalDigits {
+		return moerr.NewInvalidInputNoCtxf(
+			"ST_AsGeoJSON maxdecimaldigits must be between 0 and %d",
+			maxGeoJSONDecimalDigits,
+		)
+	}
+	return nil
+}
+
 // StAsGeoJSONPrec renders a geometry as GeoJSON, rounding each coordinate to at
 // most maxdecimaldigits decimal places.
 func StAsGeoJSONPrec(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
 	return opBinaryStrFixedToStrWithErrorCheck[int64](ivecs, result, proc, length, func(v string, maxDec int64) (string, error) {
+		if err := validateGeoJSONDecimalDigits(maxDec); err != nil {
+			return "", err
+		}
 		g, err := decodeGeoGeometry(functionUtil.QuickStrToBytes(v))
 		if err != nil {
 			return "", err
 		}
-		md := int(maxDec)
-		if md < 0 {
-			md = -1
-		}
-		return geo.WriteGeoJSON(g, md), nil
+		return geo.WriteGeoJSONWithMaxDecimalDigits(g, maxDec), nil
 	}, selectList)
 }
 
@@ -11041,22 +11201,57 @@ func mbrPredicate(left, right []byte, pred func(a, b geo.BBox) bool) (bool, erro
 	return pred(a, b), nil
 }
 
-func bboxContains(a, b geo.BBox) bool {
+// bboxCovers reports whether the closed bounds of b are contained by a.
+func bboxCovers(a, b geo.BBox) bool {
 	return a.MinX <= b.MinX && a.MinY <= b.MinY && a.MaxX >= b.MaxX && a.MaxY >= b.MaxY
+}
+
+// intervalInteriorsIntersect reports whether the relative interiors of two
+// closed intervals intersect. A degenerate interval's interior is its point;
+// the interior of a non-degenerate interval is open.
+func intervalInteriorsIntersect(aMin, aMax, bMin, bMax float64) bool {
+	aPoint := aMin == aMax
+	bPoint := bMin == bMax
+	switch {
+	case aPoint && bPoint:
+		return aMin == bMin
+	case aPoint:
+		return bMin < aMin && aMin < bMax
+	case bPoint:
+		return aMin < bMin && bMin < aMax
+	default:
+		return aMin < bMax && bMin < aMax
+	}
+}
+
+// bboxInteriorsIntersect tests the relative interiors of two MBRs. Since each
+// MBR interior is the product of its x/y interval interiors, both axes must
+// intersect.
+func bboxInteriorsIntersect(a, b geo.BBox) bool {
+	return intervalInteriorsIntersect(a.MinX, a.MaxX, b.MinX, b.MaxX) &&
+		intervalInteriorsIntersect(a.MinY, a.MaxY, b.MinY, b.MaxY)
+}
+
+// bboxContains requires closed coverage and a non-empty interior intersection.
+func bboxContains(a, b geo.BBox) bool {
+	return bboxCovers(a, b) && bboxInteriorsIntersect(a, b)
+}
+
+func bboxWithin(a, b geo.BBox) bool {
+	return bboxContains(b, a)
 }
 
 func bboxDisjoint(a, b geo.BBox) bool {
 	return a.MaxX < b.MinX || a.MinX > b.MaxX || a.MaxY < b.MinY || a.MinY > b.MaxY
 }
 
+func bboxIntersects(a, b geo.BBox) bool {
+	return a.MinX <= b.MaxX && b.MinX <= a.MaxX &&
+		a.MinY <= b.MaxY && b.MinY <= a.MaxY
+}
+
 func bboxTouches(a, b geo.BBox) bool {
-	ix1, iy1 := math.Max(a.MinX, b.MinX), math.Max(a.MinY, b.MinY)
-	ix2, iy2 := math.Min(a.MaxX, b.MaxX), math.Min(a.MaxY, b.MaxY)
-	if ix1 > ix2 || iy1 > iy2 {
-		return false
-	}
-	// Intersect, but only along an edge or at a point (zero-area intersection).
-	return ix1 == ix2 || iy1 == iy2
+	return bboxIntersects(a, b) && !bboxInteriorsIntersect(a, b)
 }
 
 func bboxOverlaps(a, b geo.BBox) bool {
@@ -11065,11 +11260,18 @@ func bboxOverlaps(a, b geo.BBox) bool {
 	if ix1 >= ix2 || iy1 >= iy2 {
 		return false // disjoint or touching only
 	}
-	return !bboxContains(a, b) && !bboxContains(b, a)
+	return !bboxCovers(a, b) && !bboxCovers(b, a)
 }
 
 func mbrBinary(name string, pred func(a, b geo.BBox) bool) fEvalFn {
 	return func(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		emptyBatch, err := checkBinaryGeometryTypeSRID(name, ivecs, length, selectList)
+		if err != nil {
+			return err
+		}
+		if emptyBatch {
+			return nil
+		}
 		return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
 			return mbrPredicate(v1, v2, pred)
 		}, selectList)
@@ -11081,15 +11283,15 @@ func MBRContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pr
 }
 
 func MBRCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return mbrBinary("MBRCovers", bboxContains)(ivecs, result, proc, length, selectList)
+	return mbrBinary("MBRCovers", bboxCovers)(ivecs, result, proc, length, selectList)
 }
 
 func MBRWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return mbrBinary("MBRWithin", func(a, b geo.BBox) bool { return bboxContains(b, a) })(ivecs, result, proc, length, selectList)
+	return mbrBinary("MBRWithin", bboxWithin)(ivecs, result, proc, length, selectList)
 }
 
 func MBRCoveredBy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return mbrBinary("MBRCoveredBy", func(a, b geo.BBox) bool { return bboxContains(b, a) })(ivecs, result, proc, length, selectList)
+	return mbrBinary("MBRCoveredBy", func(a, b geo.BBox) bool { return bboxCovers(b, a) })(ivecs, result, proc, length, selectList)
 }
 
 func MBRDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -11115,6 +11317,13 @@ func MBRTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 // StMakeEnvelope builds the axis-aligned rectangle polygon spanning two corner
 // points (ST_MakeEnvelope).
 func StMakeEnvelope(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_MAKEENVELOPE", ivecs, length, selectList)
+	if err != nil {
+		return err
+	}
+	if emptyBatch {
+		return nil
+	}
 	return opBinaryBytesBytesToBytesWithErrorCheck(ivecs, result, proc, length, func(v1, v2 []byte) ([]byte, error) {
 		x1, y1, err := parsePointXYFromPayload(v1)
 		if err != nil {
@@ -11143,14 +11352,18 @@ func StDistanceSphere32(ivecs []*vector.Vector, result vector.FunctionResultWrap
 }
 
 func stDistanceSphere[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_DISTANCE_SPHERE", ivecs, length, selectList)
+	if err != nil {
+		return err
+	}
+	if emptyBatch {
+		return nil
+	}
 	// ST_Distance_Sphere has stricter constraints than ST_Distance: the two
 	// operands must share an SRID, must be POINT/MULTIPOINT, and their ordinates
 	// must be valid longitude/latitude (the sphere kernel interprets X/Y as
 	// degrees regardless of SRID). Mirror MySQL rather than silently feeding any
 	// geometry, mixed SRID, or out-of-range coordinate to the geodetic kernel.
-	if err := checkBinaryGeometryTypeSRID("ST_DISTANCE_SPHERE", ivecs); err != nil {
-		return err
-	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
 		lg, err := decodeGeoGeometry(v1)
 		if err != nil {
@@ -11231,14 +11444,63 @@ func StDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 }
 
 func stDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_DISTANCE", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_DISTANCE", ivecs, length, selectList)
+	if err != nil {
 		return err
 	}
+	if emptyBatch {
+		return nil
+	}
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
-	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
+	return stDistanceWithFixedSRID[T](ivecs, result, proc, length, selectList, srid)
+}
+
+func stDistanceWithFixedSRID[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList, srid uint32) error {
+	left := vector.GenerateFunctionStrParameter(ivecs[0])
+	right := vector.GenerateFunctionStrParameter(ivecs[1])
+	rs := vector.MustFunctionResult[T](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && (selectList.IgnoreAllRow() ||
+			(!selectList.ShouldEvalAllRow() && selectList.Contains(i))) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v1, n1 := left.GetStrValue(i)
+		v2, n2 := right.GetStrValue(i)
+		if n1 || n2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := validateComputationSRID(srid); err != nil {
+			return err
+		}
+		empty1, err := geometryDistancePayloadEmpty(v1)
+		if err != nil {
+			return err
+		}
+		empty2, err := geometryDistancePayloadEmpty(v2)
+		if err != nil {
+			return err
+		}
+		if empty1 || empty2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		d, err := geometryDistanceBySRID(v1, v2, srid)
-		return T(d), err
-	}, selectList)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(T(d), false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // StDistanceWithSRID is the ST_Distance(geom, geom, srid) overload: the explicit
@@ -11278,6 +11540,23 @@ func stDistanceWithSRID[T float32 | float64](ivecs []*vector.Vector, result vect
 		if err != nil {
 			return err
 		}
+		if err := validateComputationSRID(su); err != nil {
+			return err
+		}
+		empty1, err := geometryDistancePayloadEmpty(v1)
+		if err != nil {
+			return err
+		}
+		empty2, err := geometryDistancePayloadEmpty(v2)
+		if err != nil {
+			return err
+		}
+		if empty1 || empty2 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		d, err := geometryDistanceBySRID(v1, v2, su)
 		if err != nil {
 			return err
@@ -11301,7 +11580,7 @@ func geodeticDistance(left, right []byte) (float64, error) {
 		return 0, err
 	}
 	if !isDistanceSupportedGeometryType(leftType) || !isDistanceSupportedGeometryType(rightType) {
-		return 0, moerr.NewInvalidInputNoCtx("ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs")
+		return 0, moerr.NewInvalidInputNoCtx(stDistanceSupportedPairsError)
 	}
 	lg, err := decodeGeoGeometry(left)
 	if err != nil {
@@ -11311,6 +11590,12 @@ func geodeticDistance(left, right []byte) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := geo.ValidateGeodeticCoordinates(lg); err != nil {
+		return 0, err
+	}
+	if err := geo.ValidateGeodeticCoordinates(rg); err != nil {
+		return 0, err
+	}
 	d, ok := geo.DistanceMeters(lg, rg)
 	if !ok {
 		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
@@ -11318,93 +11603,184 @@ func geodeticDistance(left, right []byte) (float64, error) {
 	return d, nil
 }
 
+// geometryDistancePayloadEmpty reports whether a payload has no non-empty
+// component that can contribute to ST_DISTANCE. GeometryCollection members
+// may themselves be collections, and empty members are ignored when another
+// member is available. A top-level all-empty geometry is surfaced by the
+// evaluator as SQL NULL, matching the spatial distance contract.
+func geometryDistancePayloadEmpty(payload []byte) (bool, error) {
+	empty, err := geometryIsEmpty(payload)
+	if err != nil {
+		return false, err
+	}
+	if empty {
+		return true, nil
+	}
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	if typeName != "MULTIPOINT" && typeName != "MULTILINESTRING" &&
+		typeName != "MULTIPOLYGON" && typeName != "GEOMETRYCOLLECTION" {
+		return false, nil
+	}
+	count, err := geometryCountFromPayload(payload)
+	if err != nil {
+		return false, err
+	}
+	for i := int64(1); i <= count; i++ {
+		item, err := geometryNFromPayload(payload, i)
+		if err != nil {
+			return false, err
+		}
+		itemEmpty, err := geometryDistancePayloadEmpty([]byte(item))
+		if err != nil {
+			return false, err
+		}
+		if !itemEmpty {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func StContains(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_CONTAINS", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_CONTAINS", ivecs, length, selectList)
+	if err != nil {
 		return err
 	}
+	if emptyBatch {
+		return nil
+	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryContains(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryContains)
 	}, selectList)
 }
 
 func StWithin(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_WITHIN", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_WITHIN", ivecs, length, selectList)
+	if err != nil {
 		return err
 	}
+	if emptyBatch {
+		return nil
+	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryWithin(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryWithin)
 	}, selectList)
 }
 
 func StIntersects(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_INTERSECTS", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_INTERSECTS", ivecs, length, selectList)
+	if err != nil {
 		return err
 	}
+	if emptyBatch {
+		return nil
+	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryIntersects(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryIntersects)
 	}, selectList)
 }
 
 func StDisjoint(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_DISJOINT", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_DISJOINT", ivecs, length, selectList)
+	if err != nil {
 		return err
 	}
+	if emptyBatch {
+		return nil
+	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryDisjoint(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryDisjoint)
 	}, selectList)
 }
 
 func StTouches(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_TOUCHES", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_TOUCHES", ivecs, length, selectList)
+	if err != nil {
 		return err
 	}
+	if emptyBatch {
+		return nil
+	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryTouches(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryTouches)
 	}, selectList)
 }
 
 func StCrosses(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_CROSSES", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_CROSSES", ivecs, length, selectList)
+	if err != nil {
 		return err
 	}
+	if emptyBatch {
+		return nil
+	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryCrosses(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryCrosses)
 	}, selectList)
 }
 
 func StOverlaps(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_OVERLAPS", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_OVERLAPS", ivecs, length, selectList)
+	if err != nil {
 		return err
 	}
+	if emptyBatch {
+		return nil
+	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryOverlaps(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryOverlaps)
 	}, selectList)
 }
 
 func StEquals(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_EQUALS", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_EQUALS", ivecs, length, selectList)
+	if err != nil {
 		return err
 	}
+	if emptyBatch {
+		return nil
+	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryEquals(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryEquals)
 	}, selectList)
 }
 
 func StCovers(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_COVERS", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_COVERS", ivecs, length, selectList)
+	if err != nil {
 		return err
 	}
+	if emptyBatch {
+		return nil
+	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryCovers(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryCovers)
 	}, selectList)
 }
 
 func StCoveredBy(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	if err := checkBinaryGeometryTypeSRID("ST_COVEREDBY", ivecs); err != nil {
+	emptyBatch, err := checkBinaryGeometryTypeSRID("ST_COVEREDBY", ivecs, length, selectList)
+	if err != nil {
 		return err
 	}
+	if emptyBatch {
+		return nil
+	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](ivecs, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return geometryCoveredBy(v1, v2)
+		return geometryPredicateBySRID(srid, v1, v2, geometryCoveredBy)
 	}, selectList)
 }
 
@@ -11424,7 +11800,7 @@ type geometryParamInterval struct {
 }
 
 const (
-	stDistanceSupportedPairsError       = "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, or MULTIPOLYGON inputs"
+	stDistanceSupportedPairsError       = "ST_DISTANCE only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs"
 	stTouchesSupportedPairsError        = "ST_TOUCHES only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs"
 	stOverlapsSupportedPairsError       = "ST_OVERLAPS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs"
 	stEqualsSupportedPairsError         = "ST_EQUALS only supports POINT, LINESTRING, POLYGON, MULTIPOINT, MULTILINESTRING, MULTIPOLYGON, or GEOMETRYCOLLECTION inputs"
@@ -11446,7 +11822,7 @@ func isIntersectsSupportedGeometryType(typeName string) bool {
 }
 
 func isDistanceSupportedGeometryType(typeName string) bool {
-	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON"
+	return isSimpleGeometryType(typeName) || typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON" || typeName == "GEOMETRYCOLLECTION"
 }
 
 func geometrySRIDFromPayload(payload []byte) (uint32, error) {
@@ -11475,23 +11851,80 @@ func ensureMatchingGeometrySRID(functionName string, left, right []byte) error {
 	return nil
 }
 
-// checkBinaryGeometryTypeSRID rejects a binary spatial function whose two
-// operands carry different SRIDs. SRID lives in the column/expression type
-// (Width), not in the bare-WKB payload, so the two input vectors' types are
-// compared.
-func checkBinaryGeometryTypeSRID(functionName string, ivecs []*vector.Vector) error {
-	if len(ivecs) < 2 {
-		return nil
+// checkBinaryGeometryTypeSRID rejects an evaluated pair of non-NULL geometry
+// arguments whose effective SRIDs differ. The SRID is carried by the vector
+// type (Width), not by the bare-WKB payload. NULL and short-circuited rows keep
+// the strict-function NULL result; they have no geometry pair to compare. It
+// reports an empty batch separately so callers can avoid invoking a scalar
+// geometry kernel on constant operands when there are no output rows.
+func checkBinaryGeometryTypeSRID(functionName string, ivecs []*vector.Vector, length int, selectList *FunctionSelectList) (emptyBatch bool, err error) {
+	if length == 0 {
+		return true, nil
+	}
+	if len(ivecs) < 2 || (selectList != nil && selectList.IgnoreAllRow()) {
+		return false, nil
 	}
 	left := sridFromTypeWidth(ivecs[0].GetType().Width)
 	right := sridFromTypeWidth(ivecs[1].GetType().Width)
-	if left != right {
-		return moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, left, right)
+	if left == right {
+		return false, nil
 	}
-	return nil
+
+	masked := selectList != nil && !selectList.ShouldEvalAllRow()
+	for row := uint64(0); row < uint64(length); row++ {
+		if masked && selectList.Contains(row) {
+			continue
+		}
+		if ivecs[0].IsNull(row) || ivecs[1].IsNull(row) {
+			continue
+		}
+		return false, moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, left, right)
+	}
+	return false, nil
+}
+
+// geometryPredicateBySRID keeps the existing predicate matrix as the single
+// source of truth while adapting WGS84 inputs to one common local gnomonic
+// frame for its Cartesian segment kernel. The vector type carries the SRID;
+// bare WKB payloads intentionally do not, so this must happen at the evaluated
+// function boundary rather than inside geometryContains/geometryIntersects.
+func geometryPredicateBySRID(
+	srid uint32,
+	left, right []byte,
+	predicate func([]byte, []byte) (bool, error),
+) (bool, error) {
+	if srid != geo.SRIDWGS84 {
+		return predicate(left, right)
+	}
+
+	leftGeometry, err := decodeGeoGeometry(left)
+	if err != nil {
+		return false, err
+	}
+	rightGeometry, err := decodeGeoGeometry(right)
+	if err != nil {
+		return false, err
+	}
+	_, leftGeometry, rightGeometry, err = geo.ProjectGeodeticPair(leftGeometry, rightGeometry)
+	if err != nil {
+		return false, err
+	}
+	return predicate(geo.WriteWKB(leftGeometry), geo.WriteWKB(rightGeometry))
 }
 
 func geometryDistance(left, right []byte) (float64, error) {
+	leftEmpty, err := geometryDistancePayloadEmpty(left)
+	if err != nil {
+		return 0, err
+	}
+	rightEmpty, err := geometryDistancePayloadEmpty(right)
+	if err != nil {
+		return 0, err
+	}
+	if leftEmpty || rightEmpty {
+		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
+	}
+
 	leftType, err := geometryTypeNameFromPayload(left)
 	if err != nil {
 		return 0, err
@@ -11505,10 +11938,10 @@ func geometryDistance(left, right []byte) (float64, error) {
 			return 0, err
 		}
 	}
-	if leftType == "MULTIPOINT" || leftType == "MULTILINESTRING" || leftType == "MULTIPOLYGON" {
+	if isDistanceCollectionType(leftType) {
 		return multiGeometryDistance(left, right)
 	}
-	if rightType == "MULTIPOINT" || rightType == "MULTILINESTRING" || rightType == "MULTIPOLYGON" {
+	if isDistanceCollectionType(rightType) {
 		return multiGeometryDistance(right, left)
 	}
 
@@ -11606,6 +12039,10 @@ func geometryDistance(left, right []byte) (float64, error) {
 	default:
 		return 0, moerr.NewInvalidInputNoCtx(stDistanceSupportedPairsError)
 	}
+}
+
+func isDistanceCollectionType(typeName string) bool {
+	return typeName == "MULTIPOINT" || typeName == "MULTILINESTRING" || typeName == "MULTIPOLYGON" || typeName == "GEOMETRYCOLLECTION"
 }
 
 func pointDistanceToLineString(point geometryPoint2D, line []geometryPoint2D) (float64, error) {
@@ -11841,6 +12278,31 @@ func geometryContains(container, target []byte) (bool, error) {
 }
 
 func geometryContainsImpl(container, target []byte, containerType, targetType string) (bool, error) {
+	if targetType == "GEOMETRYCOLLECTION" && (isLinearGeometryType(containerType) || isPolygonGeometryType(containerType)) {
+		targetPoints, pointOnly, err := pointSetGeometryItems(target, targetType)
+		if err != nil {
+			return false, err
+		}
+		if pointOnly {
+			if len(targetPoints) == 0 {
+				return geometryCollectionContains(container, target, containerType, targetType)
+			}
+			switch {
+			case isLinearGeometryType(containerType):
+				containerLines, err := lineGeometryItems(container, containerType)
+				if err != nil {
+					return false, err
+				}
+				return pointCollectionContainedByLineCollection(targetPoints, containerLines), nil
+			case isPolygonGeometryType(containerType):
+				containerPolygons, err := polygonGeometryItems(container, containerType)
+				if err != nil {
+					return false, err
+				}
+				return pointCollectionContainedByPolygonCollection(targetPoints, containerPolygons), nil
+			}
+		}
+	}
 	if containerType == "GEOMETRYCOLLECTION" || targetType == "GEOMETRYCOLLECTION" {
 		return geometryCollectionContains(container, target, containerType, targetType)
 	}
@@ -12251,36 +12713,57 @@ func geometryCrosses(left, right []byte) (bool, error) {
 	if !isCrossesSupportedGeometryType(leftType) || !isCrossesSupportedGeometryType(rightType) {
 		return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
 	}
+	if leftType == "GEOMETRYCOLLECTION" && (isLinearGeometryType(rightType) || isPolygonGeometryType(rightType)) {
+		leftPoints, pointOnly, err := pointSetGeometryItems(left, leftType)
+		if err != nil {
+			return false, err
+		}
+		if pointOnly {
+			return pointCollectionCrossesGeometry(leftPoints, right, rightType)
+		}
+	}
+	if rightType == "GEOMETRYCOLLECTION" && (isLinearGeometryType(leftType) || isPolygonGeometryType(leftType)) {
+		rightPoints, pointOnly, err := pointSetGeometryItems(right, rightType)
+		if err != nil {
+			return false, err
+		}
+		if pointOnly {
+			return pointCollectionCrossesGeometry(rightPoints, left, leftType)
+		}
+	}
 	if leftType == "GEOMETRYCOLLECTION" || rightType == "GEOMETRYCOLLECTION" {
 		return geometryCollectionCrosses(left, right, leftType, rightType)
 	}
 
 	switch leftType {
 	case "POINT", "MULTIPOINT":
-		if isPolygonGeometryType(rightType) || isPointGeometryType(rightType) {
+		if isPointGeometryType(rightType) {
 			return false, nil
 		}
-		leftPoints, err := pointGeometryItems(left, leftType)
+		leftPoints, pointOnly, err := pointSetGeometryItems(left, leftType)
 		if err != nil {
 			return false, err
 		}
-		rightLines, err := lineGeometryItems(right, rightType)
-		if err != nil {
-			return false, err
+		if !pointOnly {
+			return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
 		}
-		return pointCollectionCrossesLineCollection(leftPoints, rightLines), nil
+		return pointCollectionCrossesGeometry(leftPoints, right, rightType)
 	case "LINESTRING", "MULTILINESTRING":
+		if isPointGeometryType(rightType) {
+			rightPoints, pointOnly, err := pointSetGeometryItems(right, rightType)
+			if err != nil {
+				return false, err
+			}
+			if !pointOnly {
+				return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
+			}
+			return pointCollectionCrossesGeometry(rightPoints, left, leftType)
+		}
 		leftLines, err := lineGeometryItems(left, leftType)
 		if err != nil {
 			return false, err
 		}
 		switch {
-		case isPointGeometryType(rightType):
-			rightPoints, err := pointGeometryItems(right, rightType)
-			if err != nil {
-				return false, err
-			}
-			return pointCollectionCrossesLineCollection(rightPoints, leftLines), nil
 		case isLinearGeometryType(rightType):
 			rightLines, err := lineGeometryItems(right, rightType)
 			if err != nil {
@@ -12297,8 +12780,18 @@ func geometryCrosses(left, right []byte) (bool, error) {
 			return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
 		}
 	case "POLYGON", "MULTIPOLYGON":
-		if isPointGeometryType(rightType) || isPolygonGeometryType(rightType) {
+		if isPolygonGeometryType(rightType) {
 			return false, nil
+		}
+		if isPointGeometryType(rightType) {
+			rightPoints, pointOnly, err := pointSetGeometryItems(right, rightType)
+			if err != nil {
+				return false, err
+			}
+			if !pointOnly {
+				return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
+			}
+			return pointCollectionCrossesGeometry(rightPoints, left, leftType)
 		}
 		leftPolygons, err := polygonGeometryItems(left, leftType)
 		if err != nil {
@@ -12695,13 +13188,6 @@ func lineStringTouchesLineString(left, right []geometryPoint2D) bool {
 		}
 	}
 	return touched
-}
-
-func pointCrossesLineString(point geometryPoint2D, line []geometryPoint2D) bool {
-	if !pointIntersectsLineString(point, line) {
-		return false
-	}
-	return !lineStringPointIsBoundary(line, point)
 }
 
 func lineStringCrossesLineString(left, right []geometryPoint2D) bool {
@@ -13623,6 +14109,135 @@ func pointGeometryItems(payload []byte, typeName string) ([]geometryPoint2D, err
 	return points, nil
 }
 
+type geometryCollectionFrame struct {
+	payload []byte
+	count   int64
+	next    int64
+}
+
+// pointSetGeometryItems recognizes a Point, MultiPoint, or a GeometryCollection
+// whose recursive leaves are exclusively Point/MultiPoint geometries. The
+// explicit frame stack bounds Go call-stack use for deeply nested collections.
+func pointSetGeometryItems(payload []byte, typeName string) ([]geometryPoint2D, bool, error) {
+	if isPointGeometryType(typeName) {
+		points, err := pointSetGeometryPayloadPoints(payload, typeName)
+		return points, true, err
+	}
+	if typeName != "GEOMETRYCOLLECTION" {
+		return nil, false, nil
+	}
+	count, err := geometryCountFromPayload(payload)
+	if err != nil {
+		empty, emptyErr := geometryIsExplicitlyEmpty(payload)
+		if emptyErr == nil && empty {
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+	frames := []geometryCollectionFrame{{payload: payload, count: count, next: 1}}
+	points := make([]geometryPoint2D, 0)
+	for len(frames) > 0 {
+		frameIndex := len(frames) - 1
+		frame := &frames[frameIndex]
+		if frame.next > frame.count {
+			frames = frames[:frameIndex]
+			continue
+		}
+
+		item, err := geometryNFromPayload(frame.payload, frame.next)
+		if err != nil {
+			return nil, false, err
+		}
+		frame.next++
+		itemPayload := []byte(item)
+		itemType, err := geometryTypeNameFromPayload(itemPayload)
+		if err != nil {
+			return nil, false, err
+		}
+		switch itemType {
+		case "POINT", "MULTIPOINT":
+			itemPoints, err := pointSetGeometryPayloadPoints(itemPayload, itemType)
+			if err != nil {
+				return nil, false, err
+			}
+			points = append(points, itemPoints...)
+		case "GEOMETRYCOLLECTION":
+			count, err := geometryCountFromPayload(itemPayload)
+			if err != nil {
+				empty, emptyErr := geometryIsExplicitlyEmpty(itemPayload)
+				if emptyErr == nil && empty {
+					continue
+				}
+				return nil, false, err
+			}
+			frames = append(frames, geometryCollectionFrame{payload: itemPayload, count: count, next: 1})
+		default:
+			return nil, false, nil
+		}
+	}
+	return points, true, nil
+}
+
+func pointSetGeometryPayloadPoints(payload []byte, typeName string) ([]geometryPoint2D, error) {
+	points, err := pointGeometryItems(payload, typeName)
+	if err == nil {
+		return points, nil
+	}
+	empty, emptyErr := geometryIsExplicitlyEmpty(payload)
+	if emptyErr == nil && empty {
+		return nil, nil
+	}
+	if typeName != "MULTIPOINT" {
+		return nil, err
+	}
+	items, itemsErr := geometryPayloadItems(payload, typeName)
+	if itemsErr != nil {
+		return nil, itemsErr
+	}
+	points = make([]geometryPoint2D, 0, len(items))
+	for _, item := range items {
+		x, y, pointErr := parsePointXYFromPayload(item)
+		if pointErr == nil {
+			points = append(points, geometryPoint2D{x: x, y: y})
+			continue
+		}
+		empty, emptyErr := geometryIsExplicitlyEmpty(item)
+		if emptyErr != nil {
+			return nil, emptyErr
+		}
+		if !empty {
+			return nil, pointErr
+		}
+	}
+	return points, nil
+}
+
+func pointCollectionCrossesGeometry(points []geometryPoint2D, other []byte, otherType string) (bool, error) {
+	empty, err := geometryIsExplicitlyEmpty(other)
+	if err != nil {
+		return false, err
+	}
+	if empty || len(points) == 0 {
+		return false, nil
+	}
+	switch {
+	case isLinearGeometryType(otherType):
+		lines, err := lineGeometryItems(other, otherType)
+		if err != nil {
+			return false, err
+		}
+		return pointCollectionCrossesLineCollection(points, lines), nil
+	case isPolygonGeometryType(otherType):
+		polygons, err := polygonGeometryItems(other, otherType)
+		if err != nil {
+			return false, err
+		}
+		return pointCollectionCrossesPolygonCollection(points, polygons), nil
+	default:
+		return false, moerr.NewInvalidInputNoCtx(stCrossesSupportedPairsError)
+	}
+}
+
 func pointCollectionCoveredByPointCollection(candidate, container []geometryPoint2D) bool {
 	for _, candidatePoint := range candidate {
 		covered := false
@@ -13670,18 +14285,66 @@ func pointCollectionCoveredByLineCollection(candidate []geometryPoint2D, contain
 	return true
 }
 
-func pointCollectionContainedByLineCollection(candidate []geometryPoint2D, container [][]geometryPoint2D) bool {
-	for _, candidatePoint := range candidate {
-		if !pointCrossesLineCollection(candidatePoint, container) {
-			return false
+type geometryPointLocation uint8
+
+const (
+	geometryPointExterior geometryPointLocation = iota
+	geometryPointBoundary
+	geometryPointInterior
+)
+
+func pointLocationInLineCollection(point geometryPoint2D, lines [][]geometryPoint2D) geometryPointLocation {
+	onLine := false
+	boundaryParity := false
+	for _, line := range lines {
+		if pointIntersectsLineString(point, line) {
+			onLine = true
+		}
+		if len(line) == 0 {
+			continue
+		}
+		if sameGeometryPoint(point, line[0]) {
+			boundaryParity = !boundaryParity
+		}
+		if sameGeometryPoint(point, line[len(line)-1]) {
+			boundaryParity = !boundaryParity
 		}
 	}
-	return true
+	if !onLine {
+		return geometryPointExterior
+	}
+	if boundaryParity {
+		return geometryPointBoundary
+	}
+	return geometryPointInterior
+}
+
+func pointCollectionContainedByLineCollection(candidate []geometryPoint2D, container [][]geometryPoint2D) bool {
+	if len(candidate) == 0 {
+		return true
+	}
+	hasInterior := false
+	for _, candidatePoint := range candidate {
+		switch pointLocationInLineCollection(candidatePoint, container) {
+		case geometryPointExterior:
+			return false
+		case geometryPointInterior:
+			hasInterior = true
+		}
+	}
+	return hasInterior
 }
 
 func pointCollectionCrossesLineCollection(points []geometryPoint2D, lines [][]geometryPoint2D) bool {
+	hasInterior, hasExterior := false, false
 	for _, point := range points {
-		if pointCrossesLineCollection(point, lines) {
+		switch pointLocationInLineCollection(point, lines) {
+		case geometryPointExterior:
+			hasExterior = true
+		case geometryPointInterior:
+			hasInterior = true
+		}
+		if hasInterior && hasExterior {
 			return true
 		}
 	}
@@ -13780,15 +14443,6 @@ func pointIntersectsLineCollection(point geometryPoint2D, lines [][]geometryPoin
 	return false
 }
 
-func pointCrossesLineCollection(point geometryPoint2D, lines [][]geometryPoint2D) bool {
-	for _, line := range lines {
-		if pointCrossesLineString(point, line) {
-			return true
-		}
-	}
-	return false
-}
-
 func lineSegmentCoveredByLineCollection(start, end geometryPoint2D, lines [][]geometryPoint2D) bool {
 	intervals := make([]geometryParamInterval, 0, len(lines))
 	for _, line := range lines {
@@ -13851,13 +14505,21 @@ func lineCollectionCrossesPolygonCollection(lines [][]geometryPoint2D, polygons 
 	return false
 }
 
-func pointInPolygonCollection(point geometryPoint2D, polygons []polygonGeometryItem) bool {
+func pointLocationInPolygonCollection(point geometryPoint2D, polygons []polygonGeometryItem) geometryPointLocation {
+	hasBoundary := false
 	for _, polygon := range polygons {
-		if pointInPolygonGeometry(polygon.shape, point.x, point.y) {
-			return true
+		location := pointLocationInPolygonGeometry(polygon.shape, point.x, point.y)
+		switch location {
+		case geometryPointInterior:
+			return geometryPointInterior
+		case geometryPointBoundary:
+			hasBoundary = true
 		}
 	}
-	return false
+	if hasBoundary {
+		return geometryPointBoundary
+	}
+	return geometryPointExterior
 }
 
 func pointCollectionCoveredByPolygonCollection(candidate []geometryPoint2D, container []polygonGeometryItem) bool {
@@ -13870,12 +14532,35 @@ func pointCollectionCoveredByPolygonCollection(candidate []geometryPoint2D, cont
 }
 
 func pointCollectionContainedByPolygonCollection(candidate []geometryPoint2D, container []polygonGeometryItem) bool {
+	if len(candidate) == 0 {
+		return true
+	}
+	hasInterior := false
 	for _, candidatePoint := range candidate {
-		if !pointInPolygonCollection(candidatePoint, container) {
+		switch pointLocationInPolygonCollection(candidatePoint, container) {
+		case geometryPointExterior:
 			return false
+		case geometryPointInterior:
+			hasInterior = true
 		}
 	}
-	return true
+	return hasInterior
+}
+
+func pointCollectionCrossesPolygonCollection(points []geometryPoint2D, container []polygonGeometryItem) bool {
+	hasInterior, hasExterior := false, false
+	for _, point := range points {
+		switch pointLocationInPolygonCollection(point, container) {
+		case geometryPointExterior:
+			hasExterior = true
+		case geometryPointInterior:
+			hasInterior = true
+		}
+		if hasInterior && hasExterior {
+			return true
+		}
+	}
+	return false
 }
 
 func lineCollectionCoveredByPolygonCollection(lines [][]geometryPoint2D, polygons []polygonGeometryItem) bool {
@@ -13999,16 +14684,28 @@ func multiGeometryDistance(collection, other []byte) (float64, error) {
 		return 0, err
 	}
 	minDistance := math.MaxFloat64
+	found := false
 	for i := int64(1); i <= count; i++ {
 		item, err := geometryNFromPayload(collection, i)
 		if err != nil {
 			return 0, err
 		}
+		empty, err := geometryDistancePayloadEmpty([]byte(item))
+		if err != nil {
+			return 0, err
+		}
+		if empty {
+			continue
+		}
 		distance, err := geometryDistance([]byte(item), other)
 		if err != nil {
 			return 0, err
 		}
+		found = true
 		minDistance = math.Min(minDistance, distance)
+	}
+	if !found {
+		return 0, moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
 	return minDistance, nil
 }
@@ -14041,7 +14738,12 @@ func pointInPolygon(points []geometryPoint2D, px, py float64) bool {
 	if pointOnPolygonBoundary(points, px, py) {
 		return false
 	}
+	return pointInPolygonRingInterior(points, px, py)
+}
 
+// pointInPolygonRingInterior is called only when the point has already been
+// checked against the ring boundary.
+func pointInPolygonRingInterior(points []geometryPoint2D, px, py float64) bool {
 	inside := false
 	j := len(points) - 1
 	for i := 0; i < len(points); i++ {
@@ -14056,6 +14758,21 @@ func pointInPolygon(points []geometryPoint2D, px, py float64) bool {
 		j = i
 	}
 	return inside
+}
+
+func pointLocationInPolygonGeometry(polygon geometryPolygon2D, px, py float64) geometryPointLocation {
+	if pointOnPolygonBoundaryGeometry(polygon, px, py) {
+		return geometryPointBoundary
+	}
+	if !pointInPolygonRingInterior(polygon.outer, px, py) {
+		return geometryPointExterior
+	}
+	for _, hole := range polygon.holes {
+		if pointInPolygonRingInterior(hole, px, py) {
+			return geometryPointExterior
+		}
+	}
+	return geometryPointInterior
 }
 
 func pointInPolygonGeometry(polygon geometryPolygon2D, px, py float64) bool {
@@ -14097,24 +14814,40 @@ func pointOnPolygonBoundaryGeometry(polygon geometryPolygon2D, px, py float64) b
 }
 
 func pointOnSegment(px, py float64, start, end geometryPoint2D) bool {
-	const epsilon = 1e-9
-
-	cross := (px-start.x)*(end.y-start.y) - (py-start.y)*(end.x-start.x)
-	if math.Abs(cross) > epsilon {
+	dx, dy := end.x-start.x, end.y-start.y
+	segmentLength := math.Hypot(dx, dy)
+	if segmentLength == 0 {
+		return math.Hypot(px-start.x, py-start.y) <= geometryPredicateDistanceTolerance
+	}
+	// The cross product has units of length squared. Compare it with the
+	// segment length times epsilon so epsilon remains a perpendicular-distance
+	// tolerance for both very short and very long segments. A fixed cross-product
+	// threshold otherwise makes short segments far too permissive and lets
+	// floating-point error on long segments reject points on the segment.
+	cross := (px-start.x)*dy - (py-start.y)*dx
+	if !geometryCrossWithinDistance(cross, segmentLength) {
 		return false
 	}
-	if px < math.Min(start.x, end.x)-epsilon || px > math.Max(start.x, end.x)+epsilon {
+	if px < math.Min(start.x, end.x)-geometryPredicateDistanceTolerance || px > math.Max(start.x, end.x)+geometryPredicateDistanceTolerance {
 		return false
 	}
-	if py < math.Min(start.y, end.y)-epsilon || py > math.Max(start.y, end.y)+epsilon {
+	if py < math.Min(start.y, end.y)-geometryPredicateDistanceTolerance || py > math.Max(start.y, end.y)+geometryPredicateDistanceTolerance {
 		return false
 	}
 	return true
 }
 
 func sameGeometryPoint(a, b geometryPoint2D) bool {
-	const epsilon = 1e-9
-	return math.Abs(a.x-b.x) <= epsilon && math.Abs(a.y-b.y) <= epsilon
+	return math.Abs(a.x-b.x) <= geometryPredicateDistanceTolerance && math.Abs(a.y-b.y) <= geometryPredicateDistanceTolerance
+}
+
+const geometryPredicateDistanceTolerance = 1e-9
+
+func geometryCrossWithinDistance(cross, segmentLength float64) bool {
+	// Cross products are area-like (length squared). Normalize their tolerance
+	// by the segment length so all orientation and point-on-segment decisions
+	// use the same perpendicular-distance contract.
+	return math.Abs(cross) <= geometryPredicateDistanceTolerance*segmentLength
 }
 
 func L2DistanceSqArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {

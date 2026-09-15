@@ -141,6 +141,36 @@ func TestBoundedBuiltinReturnTypes(t *testing.T) {
 	}
 }
 
+func TestSoundexReturnTypePreservesOutputCapacity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	for _, test := range []struct {
+		name      string
+		input     types.Type
+		wantOID   types.T
+		wantWidth int32
+	}{
+		{name: "short input retains four-character minimum", input: types.New(types.T_char, 1, 0), wantOID: types.T_varchar, wantWidth: 4},
+		{name: "varchar boundary", input: types.New(types.T_varchar, types.MaxVarcharLen, 0), wantOID: types.T_varchar, wantWidth: types.MaxVarcharLen},
+		{name: "text at varchar boundary", input: types.New(types.T_text, types.MaxVarcharLen, 0), wantOID: types.T_varchar, wantWidth: types.MaxVarcharLen},
+		{name: "text above varchar boundary", input: types.New(types.T_text, types.MaxVarcharLen+1, 0), wantOID: types.T_text, wantWidth: types.MaxMediumTextLen},
+		{name: "medium text", input: types.New(types.T_text, types.MaxMediumTextLen, 0), wantOID: types.T_text, wantWidth: types.MaxMediumTextLen},
+		{name: "long text", input: types.New(types.T_text, types.MaxLongTextLen, 0), wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
+		{name: "unbounded text", input: types.T_text.ToType(), wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
+		{name: "unknown varchar bound", input: types.New(types.T_varchar, 0, 0), wantOID: types.T_text, wantWidth: types.MaxLongTextLen},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "soundex", []types.Type{test.input})
+			require.NoError(t, err)
+			result := resolved.GetReturnType()
+			require.Equal(t, test.wantOID, result.Oid)
+			require.Equal(t, test.wantWidth, result.Width)
+			require.Equal(t, types.CharsetUTF8, result.Charset)
+		})
+	}
+}
+
 func TestBoundedBuiltinRegistryCoversEveryChangedOverload(t *testing.T) {
 	ctx := context.Background()
 	resolve := func(t *testing.T, name string, args []types.Type) types.Type {

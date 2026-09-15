@@ -1321,6 +1321,37 @@ func useSqlModeAssignmentCast(targetType Type) bool {
 		targetType.Id == int32(types.T_time)
 }
 
+// useIgnoreConversionAssignmentCast identifies conversions whose lexical
+// failure is adjusted by INSERT/UPDATE IGNORE. Keep this separate from
+// useSqlModeAssignmentCast: ordinary assignments to these types must retain
+// their existing cast/cast_strict selection, while the IGNORE runtime needs
+// the assignment-ignore mode to distinguish lexical failures from range and
+// execution errors.
+func useIgnoreConversionAssignmentCast(targetType Type) bool {
+	switch targetType.Id {
+	case int32(types.T_int8), int32(types.T_int16), int32(types.T_int32), int32(types.T_int64),
+		int32(types.T_uint8), int32(types.T_uint16), int32(types.T_uint32), int32(types.T_uint64),
+		int32(types.T_decimal64), int32(types.T_decimal128), int32(types.T_decimal256),
+		int32(types.T_date), int32(types.T_datetime), int32(types.T_timestamp):
+		return true
+	default:
+		return false
+	}
+}
+
+func assignmentCastProtocolSupported(proc *process.Process) bool {
+	if proc == nil {
+		return true
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	protocolVersion, valid := version.(int64)
+	return ok && valid && protocolVersion >= defines.MORPCVersion5
+}
+
 // needsSameTypeAssignmentCast reports whether values with the same planner
 // type still need to cross an assignment cast. Legacy TINYTEXT columns and
 // MatrixOne's extended internal TIME representation can both carry values that
@@ -1415,21 +1446,20 @@ func forceAssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (
 }
 
 func assignmentCastFunctionName(targetType Type, isIgnore bool, proc *process.Process) string {
+	if isIgnore && useIgnoreConversionAssignmentCast(targetType) && assignmentCastProtocolSupported(proc) {
+		return "cast_ignore"
+	}
 	if !useSqlModeAssignmentCast(targetType) {
 		if useAssignmentStrictCast(targetType) {
 			return "cast_strict"
 		}
 		return "cast"
 	}
-	if proc != nil {
-		version, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
-		protocolVersion, valid := version.(int64)
-		if !ok || !valid || protocolVersion < defines.MORPCVersion5 {
-			if isIgnore {
-				return "cast"
-			}
-			return "cast_strict"
+	if !assignmentCastProtocolSupported(proc) {
+		if isIgnore {
+			return "cast"
 		}
+		return "cast_strict"
 	}
 	if isIgnore {
 		return "cast_ignore"
@@ -1780,6 +1810,14 @@ func forceCastExprWithNameAndAssignment(
 func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (*plan.Expr, error) {
 	if numVal.ValType == tree.P_null || numVal.ValType == tree.P_nulltext {
 		return makePlan2NullConstExprWithType(), nil
+	}
+	// Do not parse IGNORE string assignments to numeric/temporal columns while
+	// building the plan. The runtime assignment cast owns the adjustment and
+	// warning so INSERT ... VALUES, INSERT ... SELECT, UPDATE, and prepared
+	// executions share one contract and diagnostics are emitted per logical row.
+	if isIgnore && numVal.ValType == tree.P_char && useIgnoreConversionAssignmentCast(makePlan2Type(colType)) {
+		expr := MakePlan2StringConstExprWithType(numVal.String())
+		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), true, proc)
 	}
 	switch colType.Oid {
 	case types.T_bool:

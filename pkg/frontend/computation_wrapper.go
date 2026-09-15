@@ -37,8 +37,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
@@ -370,12 +372,12 @@ func preparedGroupConcatMaxLenFloor(
 	if err != nil {
 		return 0, err
 	}
-	limit, ok := value.(int64)
-	if !ok || limit < 4 {
+	limit, ok := groupConcatMaxLenAsUint64(value)
+	if !ok || limit < groupConcatMaxLenMinimum {
 		return 0, moerr.NewInternalErrorf(ctx, "invalid group_concat_max_len: %v", value)
 	}
-	if current := uint64(limit); current > prepareStmt.groupConcatMaxLenFloor {
-		return current, nil
+	if limit > prepareStmt.groupConcatMaxLenFloor {
+		return limit, nil
 	}
 	return prepareStmt.groupConcatMaxLenFloor, nil
 }
@@ -419,7 +421,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 		if preparedExprRetry != nil {
 			runtimePlan, _, specializationErr := plan2.FillValuesOfParamsInPlanWithSpecialization(
-				execCtx.reqCtx, cwft.plan, preparedExprRetry.paramVals)
+				function.WithNoUnsignedSubtraction(execCtx.reqCtx, mysql.HasSQLMode(sessionSQLMode(cwft.ses), "NO_UNSIGNED_SUBTRACTION")), cwft.plan, preparedExprRetry.paramVals)
 			if specializationErr != nil {
 				return nil, specializationErr
 			}
@@ -1137,6 +1139,16 @@ func (prepareStmt *PrepareStmt) refreshFixedIntegerParamPositions(preparePlan *p
 		prepareStmt.hasLagLeadParams = preparedFixedIntegerParamPositions(preparePlan)
 }
 
+func (prepareStmt *PrepareStmt) refreshGeometrySRIDParamPositions(preparePlan *plan2.Plan) {
+	if prepareStmt.geometrySRIDPositionsPlan == preparePlan {
+		return
+	}
+	prepareStmt.geometrySRIDParamPositions,
+		prepareStmt.geometrySRIDSourceParamPositions =
+		plan2.PreparedPlanGeometrySRIDCacheParamPositions(preparePlan)
+	prepareStmt.geometrySRIDPositionsPlan = preparePlan
+}
+
 func preparedPositionHasStaticExactNumericPeer(preparePlan *plan2.Plan, position int) bool {
 	found := false
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
@@ -1322,6 +1334,8 @@ func initExecuteStmtParamWithResolverInSession(
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 	currentBoolSumAvg := owner.sqlModeHasEnableBoolSumAvg()
+	currentNoUnsignedSubtraction := owner.sqlModeHasNoUnsignedSubtraction()
+	reqCtx = function.WithNoUnsignedSubtraction(reqCtx, currentNoUnsignedSubtraction)
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	eng := cwft.proc.Base.SessionInfo.StorageEngine
@@ -1369,7 +1383,8 @@ func initExecuteStmtParamWithResolverInSession(
 	// subscription set. Rebuild both classes on every EXECUTE.
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
 		prepareStmt.sqlModeFlagsSet && (prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy ||
-			prepareStmt.BoolSumAvg != currentBoolSumAvg)
+			prepareStmt.BoolSumAvg != currentBoolSumAvg ||
+			prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction)
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
@@ -1454,6 +1469,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
 		prepareStmt.BoolSumAvg = currentBoolSumAvg
+		prepareStmt.NoUnsignedSubtraction = currentNoUnsignedSubtraction
 		prepareStmt.sqlModeFlagsSet = true
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
@@ -1464,6 +1480,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.protocolVersion = protocolVersion
 		prepareStmt.needsRebuild = false
 	}
+	prepareStmt.refreshGeometrySRIDParamPositions(executionPlan)
 	if !needRebuild && hasPreparedGroupConcat && groupConcatMaxLenFloor > previousGroupConcatMaxLenFloor {
 		// Keep the cached COM_STMT_PREPARE metadata in sync with the monotonic
 		// execution floor. The current execution gets the same bytes immediately;
@@ -1573,9 +1590,9 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeConversionCandidate := false
 	// The planner records deferred overloads explicitly on the prepared plan.
 	// Carry this bounded metadata into execution instead of walking every
-	// expression tree for each EXECUTE. ABS always rebinds; BIT_COUNT starts in
-	// the binary-string default and keeps the last canonical numeric parameter
-	// category it observes.
+	// expression tree for each EXECUTE. ABS and SIGN always rebind; BIT_COUNT
+	// starts in the binary-string default and keeps the last canonical numeric
+	// parameter category it observes.
 	deferredNumericOverloadCandidate := len(prepareStmt.numericOverloadParamPositions) > 0
 	deferredBitCountOverloadCandidate := len(prepareStmt.bitCountOverloadParamPositions) > 0
 	runtimeNumericOverloadCandidate := deferredNumericOverloadCandidate &&
@@ -1812,6 +1829,11 @@ func initExecuteStmtParamWithResolverInSession(
 	if cacheableRuntimeQuery {
 		if runtimeCategoryCandidate {
 			runtimeCacheKey = preparedRuntimeSemanticKey(cwft.paramVals)
+			if geometryKey := plan2.PreparedPlanGeometrySRIDSemanticKeyForPositions(
+				cwft.paramVals, prepareStmt.geometrySRIDParamPositions,
+				prepareStmt.geometrySRIDSourceParamPositions); geometryKey != "" {
+				runtimeCacheKey += geometryKey
+			}
 		} else {
 			runtimeCacheKey = preparedDirectResultSemanticKey(cwft.paramVals, runtimeDirectResultPositions)
 		}
@@ -3206,6 +3228,9 @@ func buildPlanForCompileRetry(
 	forcePrepare bool,
 	preparedRetry *preparedExecutionRetry,
 ) (*plan2.Plan, error) {
+	if ses != nil {
+		ctx = function.WithNoUnsignedSubtraction(ctx, mysql.HasSQLMode(sessionSQLMode(ses), "NO_UNSIGNED_SUBTRACTION"))
+	}
 	// No permission verification is required when retry execute buildPlan.
 	retryPlan, err := buildPlanWithPrepareMode(
 		ctx, ses, compilerContext, stmt, forcePrepare)

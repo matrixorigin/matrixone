@@ -1,0 +1,42 @@
+# ASCII returns a signed INT-compatible result domain.  Keep the value checks
+# and catalog checks together because the bug is metadata propagation, not
+# ASCII's first-byte calculation.
+DROP VIEW IF EXISTS ascii_view_28455;
+DROP TABLE IF EXISTS ascii_union_28455;
+DROP TABLE IF EXISTS ascii_dst_28455;
+DROP TABLE IF EXISTS ascii_src_28455;
+
+CREATE TABLE ascii_src_28455(id INT PRIMARY KEY, s VARCHAR(20));
+INSERT INTO ascii_src_28455 VALUES (1, 'A'), (2, '中'), (3, ''), (4, NULL);
+
+SELECT id, ASCII(s) AS ascii_value FROM ascii_src_28455 ORDER BY id;
+
+CREATE TABLE ascii_dst_28455 AS SELECT ASCII(s) AS a FROM ascii_src_28455;
+SELECT TABLE_NAME, DATA_TYPE, COLUMN_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'ascii_dst_28455'
+  AND COLUMN_NAME = 'a';
+
+CREATE VIEW ascii_view_28455 AS SELECT ASCII(s) AS a FROM ascii_src_28455;
+SELECT TABLE_NAME, DATA_TYPE, COLUMN_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'ascii_view_28455'
+  AND COLUMN_NAME = 'a';
+
+CREATE TABLE ascii_union_28455 AS
+SELECT ASCII(s) AS a FROM ascii_src_28455
+UNION ALL
+SELECT 300;
+SELECT TABLE_NAME, DATA_TYPE, COLUMN_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE()
+  AND TABLE_NAME = 'ascii_union_28455'
+  AND COLUMN_NAME = 'a';
+SELECT a FROM ascii_union_28455 ORDER BY a;
+
+DROP VIEW ascii_view_28455;
+DROP TABLE ascii_union_28455;
+DROP TABLE ascii_dst_28455;
+DROP TABLE ascii_src_28455;

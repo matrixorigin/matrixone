@@ -17,6 +17,7 @@ package plan
 import (
 	"github.com/gogo/protobuf/proto"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -176,6 +177,32 @@ func (builder *QueryBuilder) readSemiContainmentRelation(
 			relation.predicates = append(relation.predicates,
 				splitPlanConjunctions(node.FilterList)...)
 			return true
+		case planpb.Node_SINK_SCAN:
+			if len(node.Children) != 0 || len(node.BindingTags) != 1 ||
+				len(node.SourceStep) != 1 || len(node.FilterList) != 0 ||
+				len(node.ProjectList) == 0 || len(relation.scans) >= maxSemiContainmentScans {
+				return false
+			}
+			sourceStep := node.SourceStep[0]
+			if sourceStep < 0 || int(sourceStep) >= len(builder.qry.Steps) {
+				return false
+			}
+			sinkID := builder.qry.Steps[sourceStep]
+			if sinkID < 0 || int(sinkID) >= len(builder.qry.Nodes) {
+				return false
+			}
+			sink := builder.qry.Nodes[sinkID]
+			if sink == nil || sink.NodeType != planpb.Node_SINK ||
+				sink.ExtraOptions != materialized.CTESinkOption {
+				return false
+			}
+			tag := node.BindingTags[0]
+			if _, exists := relation.tagToScan[tag]; exists {
+				return false
+			}
+			relation.tagToScan[tag] = len(relation.scans)
+			relation.scans = append(relation.scans, node)
+			return true
 		default:
 			return false
 		}
@@ -187,8 +214,27 @@ func (builder *QueryBuilder) readSemiContainmentRelation(
 }
 
 func sameSemiContainmentScan(left, right *planpb.Node) bool {
-	return left != nil && right != nil && objectRefEqual(left.ObjRef, right.ObjRef) &&
-		proto.Equal(left.ScanSnapshot, right.ScanSnapshot)
+	if left == nil || right == nil || left.NodeType != right.NodeType {
+		return false
+	}
+	if left.NodeType == planpb.Node_TABLE_SCAN {
+		return objectRefEqual(left.ObjRef, right.ObjRef) &&
+			proto.Equal(left.ScanSnapshot, right.ScanSnapshot)
+	}
+	if left.NodeType != planpb.Node_SINK_SCAN || len(left.SourceStep) != 1 ||
+		len(right.SourceStep) != 1 || left.SourceStep[0] != right.SourceStep[0] ||
+		len(left.ProjectList) == 0 || len(left.ProjectList) != len(right.ProjectList) {
+		return false
+	}
+	for i := range left.ProjectList {
+		leftCol := left.ProjectList[i].GetCol()
+		rightCol := right.ProjectList[i].GetCol()
+		if leftCol == nil || rightCol == nil || leftCol.ColPos != rightCol.ColPos ||
+			!samePlanType(left.ProjectList[i].Typ, right.ProjectList[i].Typ) {
+			return false
+		}
+	}
+	return true
 }
 
 func readSemiContainmentKeys(
