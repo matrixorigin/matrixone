@@ -918,6 +918,13 @@ func calcWeekFromCalendar(ty, tm, td int, wb WeekBehaviour) (year int, week int)
 			week = 0
 			return
 		}
+		if !weekYear && year <= 1 {
+			// There is no representable preceding calendar year for the
+			// non-year-qualified week result. MySQL returns week zero at this
+			// lower boundary instead of allowing the arithmetic to underflow.
+			week = 0
+			return
+		}
 		weekYear = true
 		year--
 		days = calcDaysInYear(year)

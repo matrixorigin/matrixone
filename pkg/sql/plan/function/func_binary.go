@@ -1549,13 +1549,7 @@ func doTimeAdd(start types.Time, diff int64, iTyp types.IntervalType) (types.Tim
 	if success {
 		return t, nil
 	}
-	// TIME arithmetic is a duration operation. Once the internal duration
-	// leaves its representable calendar range, publish the signed MySQL
-	// endpoint and let the caller emit the truncation warning.
-	if diff < 0 {
-		return -types.MySQLTimeMaxForScale(6), nil
-	}
-	return types.MySQLTimeMaxForScale(6), nil
+	return 0, moerr.NewOutOfRangeNoCtx("time", "")
 }
 
 // datetimeOverflowMaxError is a special error to indicate maximum datetime overflow (should return NULL)
@@ -8712,41 +8706,6 @@ func ExtractFromVarchar(ivecs []*vector.Vector, result vector.FunctionResultWrap
 	}
 
 	return nil
-}
-
-func extractFromVarchar(unit string, t string, scale int32) (string, error) {
-	var result string
-	if len(t) == 0 {
-		result = t
-	} else if extractUnitPrefersTime(unit) {
-		if value, err := types.ParseTime(t, scale); err == nil {
-			result, err = extractFromTime(unit, value)
-			if err != nil {
-				return "", err
-			}
-		} else if value, err := parseDatetimeNoPanic(t, scale); err == nil {
-			result, err = extractFromDatetime(unit, value)
-			if err != nil {
-				return "", err
-			}
-		} else {
-			return "", moerr.NewInternalErrorNoCtx("invalid input")
-		}
-	} else if value, err := parseDatetimeNoPanic(t, scale); err == nil {
-		result, err = extractFromDatetime(unit, value)
-		if err != nil {
-			return "", err
-		}
-	} else if value, err := types.ParseTime(t, scale); err == nil {
-		result, err = extractFromTime(unit, value)
-		if err != nil {
-			return "", err
-		}
-	} else {
-		return "", moerr.NewInternalErrorNoCtx("invalid input")
-	}
-
-	return result, nil
 }
 
 func extractNumericFromVarchar(unit string, value string, scale int32) (int64, error) {
