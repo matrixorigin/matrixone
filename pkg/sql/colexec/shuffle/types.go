@@ -125,6 +125,8 @@ func (shuffle *Shuffle) GetShufflePool() *ShufflePool {
 }
 
 func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	// Publish the cause before releasing a holder in either execution mode.
+	// Late peers and active readers must observe the same terminal error.
 	if (pipelineFailed || err != nil) && shuffle.ctr.shufflePool != nil {
 		abortErr := err
 		if abortErr == nil {

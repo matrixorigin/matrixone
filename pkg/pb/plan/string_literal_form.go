@@ -192,6 +192,8 @@ const (
 	notEqualFunctionID               int32 = 1
 	nullSafeEqualFunctionID          int32 = 406
 	internalJSONComparisonFunctionID int32 = 577
+	statementDigestFunctionID        int32 = 579
+	statementDigestTextFunctionID    int32 = 580
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 	binFunctionID                    int32 = 270
@@ -204,10 +206,15 @@ const (
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
-// MORPC v59. TypedConversionFunctions requires MORPC v64 because BIN/CONV
+// MORPC v59. StatementDigest and StatementDigestText require MORPC v73 and
+// share one normalization/settings contract. TypedConversionFunctions
+// requires MORPC v64 because BIN/CONV
 // overload identities and their fixed-width execution contracts changed in
 // the same release. ASCIIInt32Result requires MORPC v65 because ASCII keeps
 // its overload IDs but changes its physical result vector from UINT8 to INT32.
+// The digest functions use one compatibility fence even though the function
+// IDs remain separate, so a remote plan cannot mix a new normalizer with an
+// older receiver.
 // A struct makes compatibility call sites name every capability instead of
 // relying on positional booleans.
 // RowDependentConvBases requires MORPC v69 for nonconstant or unsigned bases.
@@ -223,6 +230,8 @@ type RemoteExpressionFeatures struct {
 	RowDependentConvBases    bool
 	ASCIIInt32Result         bool
 	IPFunctionSemantics      bool
+	StatementDigestFunction  bool
+	StatementDigestText      bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -234,7 +243,9 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.ASCIIInt32Result ||
 		features.IntegerArithmeticDomains ||
 		features.RowDependentConvBases ||
-		features.IPFunctionSemantics
+		features.IPFunctionSemantics ||
+		features.StatementDigestFunction ||
+		features.StatementDigestText
 }
 
 // These IDs are kept numeric deliberately: pkg/pb/plan cannot import the
@@ -290,6 +301,14 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
 				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
 				features.JSONComparisonParam = true
+			}
+			if fn != nil && fn.Func != nil {
+				switch int32(fn.Func.Obj >> 32) {
+				case statementDigestFunctionID:
+					features.StatementDigestFunction = true
+				case statementDigestTextFunctionID:
+					features.StatementDigestText = true
+				}
 			}
 			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
 				features.MixedJSONBooleanEquality = true

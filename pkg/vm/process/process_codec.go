@@ -165,9 +165,11 @@ func (proc *Process) BuildProcessInfo(
 			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
 			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
 			MatrixoneNativeMode:    proc.Base.SessionInfo.MatrixOneNativeMode,
-			SqlMode:                resolveSqlMode(proc),
+			SqlMode:                ResolveSqlMode(proc),
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
+			MaxDigestLength:        int64(ResolveMaxDigestLength(proc)),
+			MaxDigestLengthSet:     true,
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
@@ -470,6 +472,8 @@ func ConvertToProcessSessionInfo(
 		SqlMode:                             sei.SqlMode,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
+		MaxDigestLength:                     sei.MaxDigestLength,
+		MaxDigestLengthSet:                  sei.MaxDigestLengthSet,
 	}
 	if sei.TimeZoneName != "" {
 		if sei.TimeZoneName == "Local" {
@@ -485,13 +489,19 @@ func ConvertToProcessSessionInfo(
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
 	if err != nil {
-		return sessionInfo, nil
+		// A missing or malformed legacy payload cannot safely reconstruct the
+		// session timezone. Propagate the decode error instead of silently using
+		// a worker-local default during remote execution.
+		return sessionInfo, err
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
 }
 
-func resolveSqlMode(proc *Process) string {
+// ResolveSqlMode returns the effective sql_mode for execution and forwarding.
+// A non-frontend process must retain its captured session snapshot when an
+// inherited resolver only exposes the compiled empty default.
+func ResolveSqlMode(proc *Process) string {
 	if proc == nil {
 		return ""
 	}

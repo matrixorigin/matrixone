@@ -85,8 +85,9 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 		}
 	}
 	if !shuffle.ctr.shufflePool.hold() {
-		// Preserve cancellation and the primary execution failure for the
-		// scope collector; a generic admission error would mask their cause.
+		// Preserve the original cancellation or execution failure when a peer
+		// terminates while this pipeline is preparing; a generic admission error
+		// would otherwise mask the cause.
 		if err := shuffle.ctr.shufflePool.terminalError(); err != nil {
 			return err
 		}

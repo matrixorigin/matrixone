@@ -787,6 +787,10 @@ message SessionInfo {
   // IANA identity preserves historical and DST rules. Empty means the legacy
   // time_zone bytes describe a fixed-offset location.
   string time_zone_name = 17;
+  // Statement digest length captured on the initiating CN. Field 18 follows
+  // the main-branch time_zone_name field; zero is meaningful when present.
+  int64 max_digest_length = 18;
+  bool max_digest_length_set = 19;
 }
 
 message SessionLoggerInfo {
