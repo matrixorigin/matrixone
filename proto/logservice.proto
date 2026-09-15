@@ -956,6 +956,11 @@ message HAKeeperRSMState {
   // across rolling restarts and snapshots and is never lowered by a downgrade
   // or by a stale heartbeat.
   uint64 PersistedExpressionRequiredProtocolVersion = 43;
+  // PersistedExpressionProtocolActivationPending records that an activation
+  // entry has made the decoder floor durable but its CN/admission prerequisites
+  // have not completed yet. It is cleared only when the activation barrier
+  // starts, so retries cannot mistake a rejected entry for a completed raise.
+  bool PersistedExpressionProtocolActivationPending = 44;
 }
 
 // ReplicaInfo contains details of a replica

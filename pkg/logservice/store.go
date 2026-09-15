@@ -1018,6 +1018,7 @@ func (l *store) tryEnableViewMetadataAdmission(
 		return false, nil
 	}
 	if admission.Enabled && !admission.Pending &&
+		!admission.PersistedExpressionProtocolActivationPending &&
 		admission.RequiredProtocolVersion >= uint64(defines.MORPCLatestVersion) {
 		return true, nil
 	}
@@ -1096,7 +1097,8 @@ func (l *store) tryEnableViewMetadataAdmission(
 			// durable pending bit is set.
 			cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
 				l.cfg.GetHAKeeperConfig())
-		} else if admission.RequiredProtocolVersion < uint64(defines.MORPCLatestVersion) {
+		} else if admission.PersistedExpressionProtocolActivationPending ||
+			admission.RequiredProtocolVersion < uint64(defines.MORPCLatestVersion) {
 			if !l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true) {
 				return false, nil
 			}
