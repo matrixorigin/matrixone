@@ -220,6 +220,24 @@ func TestValidateInvocationRequiresFrozenContract(t *testing.T) {
 	}
 }
 
+func TestValidateInvocationBoundsResolvedArtifact(t *testing.T) {
+	oversized := validInvocation()
+	oversized.Source = strings.Repeat("x", int(DefaultMaxArtifactBytes)+1)
+	require.ErrorContains(
+		t,
+		validateInvocation(oversized),
+		"Python artifact exceeds",
+	)
+
+	invalidUTF8 := validInvocation()
+	invalidUTF8.Source = string([]byte{0xff})
+	require.ErrorContains(
+		t,
+		validateInvocation(invalidUTF8),
+		"source is not valid UTF-8",
+	)
+}
+
 func TestGatewayValidatesIdentityBeforeResolvingArtifact(t *testing.T) {
 	resolver := &recordingArtifactResolver{source: validInvocation().Source}
 	gateway, err := NewGatewayWithArtifactStore(ClientConfig{
