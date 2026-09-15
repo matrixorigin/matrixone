@@ -1026,10 +1026,17 @@ func TestIssue28319CopyAlterRefreshTerminal(t *testing.T) {
 			defer cleanupCancel()
 			execSQLRequire(t, cleanupCtx, db, "drop database "+database)
 		}()
-		for _, rows := range []int{3, 16384} {
+		for _, writePath := range []struct {
+			name       string
+			forceFlush bool
+		}{
+			{"in-memory", false},
+			{"object-backed", true},
+		} {
+			const rows = 3
 			for _, failurePhase := range []string{"", "catalog-refreshed", "old-dropped", "renamed", "tasks-published", "renamed-cancel"} {
 				abort := failurePhase != ""
-				t.Run(fmt.Sprintf("rows=%d/failure=%s", rows, failurePhase), func(t *testing.T) {
+				t.Run(fmt.Sprintf("write-path=%s/failure=%s", writePath.name, failurePhase), func(t *testing.T) {
 					alterCtx, cancelAlter := context.WithCancel(ctx)
 					defer cancelAlter()
 					execSQLRequire(t, ctx, db, "create table "+database+".a(id int not null, v varchar(1024))")
@@ -1037,7 +1044,7 @@ func TestIssue28319CopyAlterRefreshTerminal(t *testing.T) {
 					execSQLRequire(t, ctx, db, fmt.Sprintf("insert into %s.a select result, repeat('x',1024) from generate_series(1,%d) g", database, rows))
 					originalID := currentRelationID(t, ctx, db, database, "a")
 					stopForceFlush := func() {}
-					if rows > 3 {
+					if writePath.forceFlush {
 						fault.Enable()
 						defer fault.Disable()
 						remove, injectErr := objectio.SimpleInject(objectio.FJ_CNWorkspaceForceFlush)
@@ -1133,7 +1140,7 @@ func TestIssue28319CopyAlterRefreshTerminal(t *testing.T) {
 					}
 					require.Equal(t, int32(1), copies.Load())
 					require.Equal(t, int32(1), refreshes.Load())
-					require.Equal(t, rows > 3, spilled.Load(), "exercise both in-memory and object-backed preparation writes")
+					require.Equal(t, writePath.forceFlush, spilled.Load(), "exercise both in-memory and object-backed preparation writes")
 					var actualRows, bytes, tables int
 					require.NoError(t, db.QueryRowContext(ctx, "select count(*),sum(length(v)) from "+database+".a").Scan(&actualRows, &bytes))
 					require.Equal(t, rows, actualRows)
