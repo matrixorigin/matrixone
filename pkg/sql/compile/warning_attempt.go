@@ -43,6 +43,7 @@ func newWarningAttempt(proc *process.Process, required bool) *warningAttempt {
 		collector: &remoteWarningCollector{
 			maxRetained:          process.WarningDiagnosticRetentionLimitForProcess(proc),
 			maxRetainedSet:       true,
+			warningBudget:        process.WarningDiagnosticBudgetForProcess(proc),
 			requiresCutReporting: required,
 		},
 		previous: make(map[*process.Process]any),
@@ -135,7 +136,7 @@ func (a *warningAttempt) finish(success bool, destination any) {
 	if a == nil {
 		return
 	}
-	total, warnings, cut, cutMessage, incomplete := a.collector.closeWarnings(success)
+	total, warnings, cut, cutMessage, incomplete, budget, charged := a.collector.closeWarnings(success)
 	a.restore()
 	if incomplete {
 		if marker, ok := destination.(groupConcatCutMarker); ok {
@@ -148,6 +149,7 @@ func (a *warningAttempt) finish(success bool, destination any) {
 		}
 	}
 	if total == 0 {
+		budget.Release(charged)
 		return
 	}
 	codes := make([]uint16, len(warnings))
@@ -155,7 +157,7 @@ func (a *warningAttempt) finish(success bool, destination any) {
 	for i, w := range warnings {
 		codes[i], messages[i] = w.Code, w.Message
 	}
-	appendWarningBatchToSink(destination, total, codes, messages)
+	process.AppendWarningBatchToSinkOwned(destination, total, codes, messages, budget, charged)
 }
 
 func (a *warningAttempt) discard() {

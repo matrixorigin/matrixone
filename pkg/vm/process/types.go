@@ -481,6 +481,8 @@ type BaseProcess struct {
 	messageBoard                        *message.MessageBoard
 	executionResourceBudgetMu           sync.Mutex
 	executionResourceBudget             *ExecutionResourceGeneration
+	warningDiagnosticBudgetMu           sync.Mutex
+	warningDiagnosticBudget             *WarningDiagnosticBudget
 	cteMemoryBudgetMu                   sync.Mutex
 	cteMemoryBudget                     *CTEMemoryBudget
 	logger                              *log.MOLogger
@@ -644,6 +646,9 @@ func (proc *Process) SetStmtProfile(sp *StmtProfile) {
 		proc.Base.executionResourceBudget = nil
 	}
 	proc.Base.executionResourceBudgetMu.Unlock()
+	proc.Base.warningDiagnosticBudgetMu.Lock()
+	proc.Base.warningDiagnosticBudget = nil
+	proc.Base.warningDiagnosticBudgetMu.Unlock()
 	proc.Base.cteMemoryBudgetMu.Lock()
 	if proc.Base.cteMemoryBudget != nil {
 		proc.Base.cteMemoryBudget.Close()
