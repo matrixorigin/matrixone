@@ -1861,7 +1861,7 @@ func (ctr *container) makeAggListWithAllocation(
 			aggexec.ConfigureApproxPercentileLegacyState(aggList[i])
 		}
 		if ctr.legacyHLLState {
-			if ctr.floatZeroHLLState {
+			if ctr.floatZeroHLLState && hllFloatZeroStateSupported(agExpr.GetAggID()) {
 				aggexec.ConfigureHLLFloatZeroState(aggList[i])
 			} else {
 				aggexec.ConfigureHLLLegacyState(aggList[i])
@@ -1888,6 +1888,15 @@ func (ctr *container) makeAggListWithAllocation(
 		}
 	}
 	return aggList, nil
+}
+
+// hllFloatZeroStateSupported is deliberately limited to APPROX_COUNT
+// families. Protocol v73 introduced signed-zero canonicalization for those
+// newly versioned states; persisted HLL_ADD_AGG/HLL_MERGE_AGG states retain
+// their v2 raw-value wire contract until a future explicit migration.
+func hllFloatZeroStateSupported(aggID int64) bool {
+	return aggID == aggexec.AggIdOfApproxCount ||
+		aggID == aggexec.AggIdOfApproxCountDistinct
 }
 
 func useLegacyTextMinMaxForRemote(proc *process.Process) bool {

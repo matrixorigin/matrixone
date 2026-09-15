@@ -7616,6 +7616,8 @@ func (c *Compile) compileGroupWithoutShuffle(
 	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) ||
 		(hasApproxPercentile(node) && !c.supportsRemoteApproxPercentile()) ||
 		(hasHLLAggregate(node) && !c.supportsRemoteHLL()) ||
+		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
+		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
 		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()) {
 		return c.compileOrderedAggregateSingleStage(node, ss, ns)
 	}
@@ -7832,6 +7834,74 @@ func hasHLLAggregate(node *plan.Node) bool {
 	return false
 }
 
+// hasVariableLengthGroupKey mirrors Group.prepareGroupAndAggArg's v75 fence
+// for a short variable-length physical key. Long variable-length keys already
+// used the historical HStr partial grammar, so they remain remotely usable
+// before v75.
+func hasVariableLengthGroupKey(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	positions := node.GroupByHashKey
+	if len(positions) == 0 {
+		positions = make([]int32, len(node.GroupBy))
+		for i := range node.GroupBy {
+			positions[i] = int32(i)
+		}
+	}
+
+	nullable := false
+	keyWidth := 0
+	variable := false
+	for _, pos := range positions {
+		if pos < 0 || int(pos) >= len(node.GroupBy) {
+			// Let the operator's existing plan validation report the malformed
+			// index; conservatively disable remote compilation here.
+			return true
+		}
+		expr := node.GroupBy[pos]
+		if expr == nil {
+			return true
+		}
+		nullable = nullable || !expr.Typ.NotNullable
+		variable = variable || types.T(expr.Typ.Id).FixedLength() < 0
+		keyWidth += group.GetKeyWidth(
+			types.T(expr.Typ.Id), expr.Typ.Width, nullable)
+		if variable && keyWidth > 8 {
+			return false
+		}
+	}
+	return variable && keyWidth <= 8
+}
+
+// hasCanonicalDistinctKeyWire is the plan-side counterpart of
+// aggexec.RequiresCanonicalDistinctKeyWire. Opaque DISTINCT state is used for
+// multi-argument aggregates and for single variable-length arguments. Keeping
+// that topology local during a pre-v76 rollout lets the receiver continue to
+// accept legacy raw payloads without asking an older peer to parse the marker
+// tagged grammar.
+func hasCanonicalDistinctKeyWire(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, expr := range node.AggList {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil ||
+			uint64(fn.Func.Obj)&function.Distinct == 0 {
+			continue
+		}
+		// GROUP_CONCAT has its own ordered/source-row wire contracts and does
+		// not use the canonical DISTINCT marker grammar.
+		if fn.Func.ObjName == plan2.NameGroupConcat {
+			continue
+		}
+		if len(fn.Args) != 1 || types.T(fn.Args[0].Typ.Id).FixedLength() < 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func hasVarianceAggregate(node *plan.Node) bool {
 	for _, agg := range node.AggList {
 		if fn := agg.GetF(); fn != nil {
@@ -7887,6 +7957,14 @@ func (c *Compile) supportsRemoteHLL() bool {
 	return supportsRemoteHLL(c.proc.GetService())
 }
 
+func (c *Compile) supportsRemoteGroupHashString() bool {
+	return supportsRemoteGroupHashString(c.proc.GetService())
+}
+
+func (c *Compile) supportsRemoteCanonicalDistinctKeyWire() bool {
+	return supportsRemoteCanonicalDistinctKeyWire(c.proc.GetService())
+}
+
 func supportsRemoteOrderedAggregates(service string) bool {
 	// MOProtocolVersion is the service-local deployment rollout gate.
 	// Deployment orchestration raises it after participating receivers
@@ -7928,6 +8006,26 @@ func supportsRemoteHLL(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion74
+}
+
+func supportsRemoteGroupHashString(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion75
+}
+
+func supportsRemoteCanonicalDistinctKeyWire(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion76
 }
 
 func (c *Compile) supportsRemoteVarianceAggregates() bool {
@@ -8226,6 +8324,8 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
 		(!hasApproxPercentile(node) || c.supportsRemoteApproxPercentile()) &&
 		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
+		(!hasVariableLengthGroupKey(node) || c.supportsRemoteGroupHashString()) &&
+		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
 		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
 }
