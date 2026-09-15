@@ -124,7 +124,10 @@ jobs:
     uses: matrixorigin/CI/.github/workflows/ci.yaml@main
     with:
       ut_parallel: 6
-      ut_sharded: false
+      # The reusable workflow's four shards are a complete, disjoint race-UT
+      # partition. Keep them on independent runners so one aggregate 70-minute
+      # deadline cannot cancel later stages before the required-check AND gate.
+      ut_sharded: true
     secrets: inherit
 
   matrixone-ut-coverage:
