@@ -84,6 +84,7 @@ func (s *Supervisor) Start() error {
 
 func (s *Supervisor) wait(cmd *exec.Cmd, done chan struct{}) {
 	err := cmd.Wait()
+	unplanned := false
 	s.mu.Lock()
 	if s.cmd == cmd {
 		// Keep the terminal state transition and Done close under the same lock.
@@ -93,10 +94,14 @@ func (s *Supervisor) wait(cmd *exec.Cmd, done chan struct{}) {
 		// worker.
 		s.cmd = nil
 		s.lastErr = err
+		// Close marks the supervisor as closing before killing the process
+		// group. Keep the exit error available through Err(), but do not report
+		// an intentional SIGKILL as an unexpected worker failure.
+		unplanned = !s.closing
 	}
 	close(done)
 	s.mu.Unlock()
-	if err != nil {
+	if err != nil && unplanned {
 		logutil.Errorf("Python UDF worker exited: %v", err)
 	}
 }
