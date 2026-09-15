@@ -250,6 +250,39 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 	}
 }
 
+func TestPersistedStringNumericResultProtocolAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL, "select strcmp('a', 'b')", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	binder := NewGeneratedColBinder(proc.Ctx, nil, nil)
+	expr, err := binder.BindExpr(ast, 0, false)
+	require.NoError(t, err)
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.True(t, features.StringNumericResultContracts)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion77)
+	require.ErrorContains(t,
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 78")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion78)
+	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
+	require.NoError(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, expr),
+		"legacy catalog-builder wrapper must use the shared maximum-version gate")
+}
+
 func checkAdmissionResult(t *testing.T, version int64, err error) {
 	t.Helper()
 	if version < defines.MORPCVersion72 {
