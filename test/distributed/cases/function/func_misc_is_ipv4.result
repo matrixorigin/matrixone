@@ -99,7 +99,21 @@ min_nonzero
 1
 SELECT IS_IPV4('192.168.01.1') AS leading_zero;  -- Should be valid (01 = 1)
 leading_zero
+1
+SELECT IS_IPV4('010.000.005.009') AS three_digit_leading_zeroes;
+three_digit_leading_zeroes
+1
+SELECT IS_IPV4('0001.2.3.4') AS four_digit_component;
+four_digit_component
 0
+DROP TABLE IF EXISTS ipv4_parser_policies;
+CREATE TABLE ipv4_parser_policies (id INT PRIMARY KEY, ip VARCHAR(50));
+INSERT INTO ipv4_parser_policies VALUES (1, '192.168.01.1'), (2, '0001.2.3.4');
+SELECT id, ip, IS_IPV4(ip) AS is_ipv4 FROM ipv4_parser_policies ORDER BY id;
+id    ip    is_ipv4
+1    192.168.01.1    1
+2    0001.2.3.4    0
+DROP TABLE ipv4_parser_policies;
 SELECT IS_IPV4('192.168.1') AS incomplete;
 incomplete
 0
