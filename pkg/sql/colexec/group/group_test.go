@@ -3415,6 +3415,38 @@ func TestRemoteShortVarlenaGroupKeepsLegacyH8BeforeProtocolV75(t *testing.T) {
 	current.Free(proc, false, nil)
 }
 
+func TestRemoteShortCharH8PreservesLegacyPadding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion74)
+
+	charType := types.New(types.T_char, 2, 0)
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(charType)
+	input.Vecs[1] = vector.NewVec(charType)
+	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("a "), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("ab"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("bc"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("c "), false, proc.Mp()))
+	input.SetRowCount(2)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	groupBy := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_char), Width: 2}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_char), Width: 2}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
+	}
+	g := newGroupOp(proc, groupBy, nil)
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+	require.Equal(t, int32(H8), g.ctr.mtyp)
+	outputs := collectBatches(t, g, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 2, outputs[0].RowCount(),
+		"pre-v75 H8 must retain raw CHAR padding when fields are concatenated")
+	g.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+}
+
 func TestGroupCompositeShortCharKeysPreserveFieldBoundaries(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -3480,6 +3512,43 @@ func TestMergeGroupNormalizesLegacyH8VarlenaMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, needSpill)
 	require.Equal(t, int32(HStr), merge.ctr.mtyp)
+	require.Equal(t, uint64(2), merge.ctr.hr.Hash.GroupCount())
+}
+
+func TestMergeGroupKeepsLegacyShortCharH8PaddingBeforeV75(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion74)
+
+	charType := types.New(types.T_char, 2, 0)
+	partial := batch.NewWithSize(2)
+	partial.Vecs[0] = vector.NewVec(charType)
+	partial.Vecs[1] = vector.NewVec(charType)
+	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("a "), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("ab"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("bc"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("c "), false, proc.Mp()))
+	partial.SetRowCount(2)
+	var extra bytes.Buffer
+	mtyp := int32(H8)
+	extra.Write(types.EncodeInt32(&mtyp))
+	nullable := false
+	extra.Write(types.EncodeBool(&nullable))
+	nAggs := int32(0)
+	extra.Write(types.EncodeInt32(&nAggs))
+	partial.ExtraBuf = extra.Bytes()
+
+	merge := newMergeGroupOp(nil)
+	t.Cleanup(func() {
+		merge.Free(proc, false, nil)
+		partial.Clean(proc.Mp())
+	})
+	require.NoError(t, merge.Prepare(proc))
+	needSpill, err := merge.buildOneBatch(proc, partial)
+	require.NoError(t, err)
+	require.False(t, needSpill)
+	require.Equal(t, int32(H8), merge.ctr.mtyp)
 	require.Equal(t, uint64(2), merge.ctr.hr.Hash.GroupCount())
 }
 

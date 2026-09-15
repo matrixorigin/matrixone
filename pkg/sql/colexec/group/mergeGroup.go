@@ -66,6 +66,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
+	mergeGroup.ctr.legacyH8CharSemantics = false
 	mergeGroup.ctr.groupingAware = mergeGroup.GroupingAware
 	mergeGroup.ctr.keyWidth = 0
 	mergeGroup.ctr.mtyp = 0
@@ -491,6 +492,9 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 			return moerr.NewInvalidStateNoCtx(
 				"variable-length merge-group hash keys require MORPCVersion75")
 		}
+		ctr.legacyH8CharSemantics = incomingType == H8 &&
+			mergeGroupHashKeyNeedsV75(incomingHashVectors, incomingNullable) &&
+			!groupHashStringWireEnabled(proc)
 		incomingGroupingAware := incomingType == HStr &&
 			mergeGroupHashKeyHasGrouping(incomingHashVectors)
 		if ctr.mergePartialMetadataSet &&
