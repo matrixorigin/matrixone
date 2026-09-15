@@ -4970,6 +4970,22 @@ func TestStrCmp(t *testing.T) {
 	}
 }
 
+func TestStrCmpInt32ResultWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "b", "a"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"a", "a", "b"}, nil),
+		},
+		NewFunctionTestResult(types.T_int32.ToType(), false,
+			[]int32{0, 1, -1}, []bool{false, false, false}),
+		StrCmp,
+	)
+	succeed, info := caseData.Run()
+	require.True(t, succeed, info)
+}
+
 func initSubStrTestCase() []tcTemp {
 	return []tcTemp{
 		{
@@ -5977,6 +5993,22 @@ func TestFindInSet(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestFindInSetInt32ResultWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"b", "x", "a"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b", "a,b", "a,b"}, nil),
+		},
+		NewFunctionTestResult(types.T_int32.ToType(), false,
+			[]int32{2, 0, 1}, []bool{false, false, false}),
+		FindInSet,
+	)
+	succeed, info := caseData.Run()
+	require.True(t, succeed, info)
 }
 
 func TestFindInSetSetDefinition(t *testing.T) {

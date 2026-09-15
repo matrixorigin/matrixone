@@ -43,10 +43,10 @@ unhex_v  ¦  VARBINARY(4)  ¦  YES  𝄀
 md5_v  ¦  VARCHAR(32)  ¦  NO  𝄀
 sha1_v  ¦  VARCHAR(40)  ¦  NO  𝄀
 sha2_v  ¦  VARCHAR(128)  ¦  YES  𝄀
-uncompressed_v  ¦  INT  ¦  YES
+uncompressed_v  ¦  BIGINT  ¦  YES
 select bin_v, conv_v, hex_num, hex_text, hex(unhex_v), md5_v, sha1_v, sha2_v, uncompressed_v
 from bounded_string_ctas;
-➤ bin_v[12,65,0]  ¦  conv_v[12,65,0]  ¦  hex_num[12,16,0]  ¦  hex_text[12,96,0]  ¦  hex(unhex_v)[12,8,0]  ¦  md5_v[12,32,0]  ¦  sha1_v[12,40,0]  ¦  sha2_v[12,128,0]  ¦  uncompressed_v[4,32,0]  𝄀
+➤ bin_v[12,65,0]  ¦  conv_v[12,65,0]  ¦  hex_num[12,16,0]  ¦  hex_text[12,96,0]  ¦  hex(unhex_v)[12,8,0]  ¦  md5_v[12,32,0]  ¦  sha1_v[12,40,0]  ¦  sha2_v[12,128,0]  ¦  uncompressed_v[-5,64,0]  𝄀
 1  ¦  1010  ¦  1  ¦  68656C6C6F  ¦  41  ¦  5d41402abc4b2a76b9719d911017c592  ¦  aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d  ¦  9b71d224bd62f3785d96d46ad3ea3d73319bfbc2890caadae2dff72519673ca72323c3d99ba5c11d7c7acc6e14b8c5da0c4663475c2e5c3adef46f73bcdec043  ¦  5
 create table bounded_binary_ctas as
 select compress(s) as compressed_v,
@@ -69,4 +69,21 @@ select length(compressed_v), length(compressed_binary_v), uncompressed_v,
 length(aes_v), length(aes_text_v) from bounded_binary_ctas;
 ➤ length(compressed_v)[-5,64,0]  ¦  length(compressed_binary_v)[-5,64,0]  ¦  uncompressed_v[-4,65535,0]  ¦  length(aes_v)[-5,64,0]  ¦  length(aes_text_v)[-5,64,0]  𝄀
 21  ¦  28  ¦  hello  ¦  16  ¦  16
+create view bounded_numeric_view as
+select find_in_set('b', 'a,b') as pos_v,
+strcmp('a', 'b') as cmp_v,
+char_length(s) as chars_v,
+crc32(s) as crc_v
+from source;
+create table bounded_numeric_ctas as select * from bounded_numeric_view;
+select count(*) as contract_columns
+from information_schema.columns
+where table_schema = 'bounded_result_metadata'
+and table_name in ('bounded_numeric_view', 'bounded_numeric_ctas')
+and ((column_name = 'pos_v' and column_type = 'INT')
+or (column_name = 'cmp_v' and column_type = 'INT')
+or (column_name = 'chars_v' and column_type = 'BIGINT')
+or (column_name = 'crc_v' and column_type = 'BIGINT UNSIGNED'));
+➤ contract_columns[-5,64,0]  𝄀
+8
 drop database bounded_result_metadata;

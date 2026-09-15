@@ -7621,6 +7621,16 @@ func TestLengthUTF8(t *testing.T) {
 	}
 }
 
+func TestLengthUTF8Int64ResultWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(types.T_varchar.ToType(), []string{"你好", "a"}, []bool{false, false})
+	result := NewFunctionTestResult(types.T_int64.ToType(), false,
+		[]int64{2, 1}, []bool{false, false})
+	caseData := NewFunctionTestCase(proc, []FunctionTestInput{input}, result, LengthUTF8)
+	succeed, info := caseData.Run()
+	require.True(t, succeed, info)
+}
+
 func TestLengthBinary(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, typ := range []types.Type{

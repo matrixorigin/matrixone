@@ -1311,8 +1311,10 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 				return expr, false, nil
 			}
 			boundChild := bound
-			if boundFn := bound.GetF(); boundFn != nil && len(boundFn.Args) > 0 {
-				boundChild = boundFn.Args[0]
+			if bound != nil {
+				if boundFn := bound.GetF(); boundFn != nil && len(boundFn.Args) > 0 {
+					boundChild = boundFn.Args[0]
+				}
 			}
 			return rule.rebindPreparedNumericExprWithBound(
 				expr.GetF().Args[0], boundChild, positions)
@@ -1320,8 +1322,10 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 	}
 	if sub := expr.GetSub(); sub != nil {
 		boundChild := sub.Child
-		if boundSub := bound.GetSub(); boundSub != nil {
-			boundChild = boundSub.Child
+		if bound != nil {
+			if boundSub := bound.GetSub(); boundSub != nil {
+				boundChild = boundSub.Child
+			}
 		}
 		child, changed, err := rule.rebindPreparedNumericExprWithBound(
 			sub.Child, boundChild, positions)
@@ -1344,8 +1348,10 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 		changed := false
 		for i, item := range list.List {
 			boundItem := item
-			if boundList := bound.GetList(); boundList != nil && i < len(boundList.List) {
-				boundItem = boundList.List[i]
+			if bound != nil {
+				if boundList := bound.GetList(); boundList != nil && i < len(boundList.List) {
+					boundItem = boundList.List[i]
+				}
 			}
 			itemBound, itemChanged, err := rule.rebindPreparedNumericExprWithBound(
 				item, boundItem, positions)
@@ -1374,8 +1380,10 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 		changed := false
 		for i, arg := range fn.Args {
 			boundArg := arg
-			if boundFn := bound.GetF(); boundFn != nil && i < len(boundFn.Args) {
-				boundArg = boundFn.Args[i]
+			if bound != nil {
+				if boundFn := bound.GetF(); boundFn != nil && i < len(boundFn.Args) {
+					boundArg = boundFn.Args[i]
+				}
 			}
 			argBound, argChanged, err := rule.rebindPreparedNumericExprWithBound(
 				arg, boundArg, positions)
