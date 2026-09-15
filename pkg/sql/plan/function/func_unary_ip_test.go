@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -539,4 +540,79 @@ func TestIPFunctionsSelectionMasksInvalidRows(t *testing.T) {
 			require.True(t, ok, info)
 		})
 	}
+}
+
+func TestIPPredicatesAcceptLegacyInt64Results(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	tests := []struct {
+		name   string
+		typ    types.Type
+		values []string
+		invoke func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error
+		want   []int64
+	}{
+		{
+			name:   "is_ipv4",
+			typ:    types.T_varchar.ToType(),
+			values: []string{"127.0.0.1", "not-an-ip", ""},
+			invoke: IsIPv4,
+			want:   []int64{1, 0, 0},
+		},
+		{
+			name:   "is_ipv6",
+			typ:    types.T_varchar.ToType(),
+			values: []string{"::1", "127.0.0.1", ""},
+			invoke: IsIPv6,
+			want:   []int64{1, 0, 0},
+		},
+		{
+			name:   "is_ipv4_compat",
+			typ:    types.T_varbinary.ToType(),
+			values: []string{string(append(make([]byte, 15), 2)), "short", ""},
+			invoke: IsIPv4Compat,
+			want:   []int64{1, 0, 0},
+		},
+		{
+			name: "is_ipv4_mapped",
+			typ:  types.T_varbinary.ToType(),
+			values: []string{
+				string([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 0, 2, 1}),
+				string(append(make([]byte, 15), 2)),
+				"",
+			},
+			invoke: IsIPv4Mapped,
+			want:   []int64{1, 0, 0},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			nsp := nulls.NewWithSize(len(tc.values))
+			nsp.Add(2)
+			input := newVectorByType(mp, tc.typ, tc.values, nsp)
+			t.Cleanup(func() { input.Free(mp) })
+
+			result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), mp)
+			t.Cleanup(func() { result.Free() })
+			require.NoError(t, result.PreExtendAndReset(len(tc.values)))
+			require.NoError(t, tc.invoke([]*vector.Vector{input}, result, proc, len(tc.values), nil))
+			require.Equal(t, tc.want, vector.MustFixedColNoTypeCheck[int64](result.GetResultVector()))
+			require.True(t, result.GetResultVector().IsNull(2))
+		})
+	}
+}
+
+func TestIPPredicatesRejectUnexpectedResultType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	input := newVectorByType(mp, types.T_varchar.ToType(), []string{"127.0.0.1"}, nil)
+	t.Cleanup(func() { input.Free(mp) })
+	result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), mp)
+	t.Cleanup(func() { result.Free() })
+	require.NoError(t, result.PreExtendAndReset(1))
+	err := IsIPv4([]*vector.Vector{input}, result, proc, 1, nil)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "expected INT32 or legacy INT64")
 }

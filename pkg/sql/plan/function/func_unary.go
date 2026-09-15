@@ -8551,14 +8551,25 @@ func InetNtoaDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-// IsIPv4 returns 1 if the argument is a valid IPv4 address, 0 otherwise.
-// Returns NULL if the input is NULL.
-func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+// ipPredicateResult contains the two result representations used by this
+// family of predicates. New plans use INT32, while serialized plans created
+// before the result-width correction can still arrive with INT64.
+type ipPredicateResult interface {
+	int32 | int64
+}
+
+func executeIPPredicate[T ipPredicateResult](
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	selectList *FunctionSelectList,
+	predicate func([]byte) bool,
+) error {
 	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[int32](result)
+	rs := vector.MustFunctionResult[T](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
 	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int32](rsVec)
+	rss := vector.MustFixedColNoTypeCheck[T](rsVec)
 	rsNull := rsVec.GetNulls()
 
 	c1 := ivecs[0].IsConst()
@@ -8584,14 +8595,9 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			ipStr := functionUtil.QuickBytesToStr(v1)
-			var resultVal int32
-			if _, ok := parseIPv4DottedQuad(ipStr, 3); ok {
-				// Valid IPv4 address
+			var resultVal T
+			if predicate(v1) {
 				resultVal = 1
-			} else {
-				// Not a valid IPv4 address
-				resultVal = 0
 			}
 			rowCount := uint64(length)
 			for i := uint64(0); i < rowCount; i++ {
@@ -8601,7 +8607,6 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 		return nil
 	}
 
-	// basic case
 	if p1.WithAnyNullValue() || rsAnyNull {
 		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
 		rowCount := uint64(length)
@@ -8610,8 +8615,7 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 				continue
 			}
 			v1, _ := p1.GetStrValue(i)
-			ipStr := functionUtil.QuickBytesToStr(v1)
-			if _, ok := parseIPv4DottedQuad(ipStr, 3); ok {
+			if predicate(v1) {
 				rss[i] = 1
 			} else {
 				rss[i] = 0
@@ -8623,8 +8627,7 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
-		ipStr := functionUtil.QuickBytesToStr(v1)
-		if _, ok := parseIPv4DottedQuad(ipStr, 3); ok {
+		if predicate(v1) {
 			rss[i] = 1
 		} else {
 			rss[i] = 0
@@ -8633,89 +8636,47 @@ func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *p
 	return nil
 }
 
+func executeIPPredicateResult(
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	length int,
+	selectList *FunctionSelectList,
+	name string,
+	predicate func([]byte) bool,
+) error {
+	resultVec := result.GetResultVector()
+	if resultVec == nil || resultVec.GetType() == nil {
+		return moerr.NewInvalidInputNoCtxf(
+			"%s result has no type; expected INT32 or legacy INT64", name)
+	}
+	switch resultVec.GetType().Oid {
+	case types.T_int32:
+		return executeIPPredicate[int32](ivecs, result, length, selectList, predicate)
+	case types.T_int64:
+		return executeIPPredicate[int64](ivecs, result, length, selectList, predicate)
+	default:
+		return moerr.NewInvalidInputNoCtxf(
+			"%s result type %s is unsupported; expected INT32 or legacy INT64",
+			name, resultVec.GetType().Oid.String())
+	}
+}
+
+// IsIPv4 returns 1 if the argument is a valid IPv4 address, 0 otherwise.
+// Returns NULL if the input is NULL.
+func IsIPv4(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return executeIPPredicateResult(ivecs, result, length, selectList, "is_ipv4", func(value []byte) bool {
+		_, ok := parseIPv4DottedQuad(functionUtil.QuickBytesToStr(value), 3)
+		return ok
+	})
+}
+
 // IsIPv6 returns 1 if the argument is a valid IPv6 address, 0 otherwise.
 // Returns NULL if the input is NULL.
 func IsIPv6(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[int32](result)
-	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int32](rsVec)
-	rsNull := rsVec.GetNulls()
-
-	c1 := ivecs[0].IsConst()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if c1 {
-		v1, null1 := p1.GetStrValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			ipStr := functionUtil.QuickBytesToStr(v1)
-			ip, ok := parseIPAddress(ipStr)
-			var resultVal int32
-			if ok && ip.Is6() {
-				// Valid IPv6 address (not IPv4)
-				resultVal = 1
-			} else {
-				// Not a valid IPv6 address (could be IPv4 or invalid)
-				resultVal = 0
-			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = resultVal
-			}
-		}
-		return nil
-	}
-
-	// basic case
-	if p1.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				continue
-			}
-			v1, _ := p1.GetStrValue(i)
-			ipStr := functionUtil.QuickBytesToStr(v1)
-			ip, ok := parseIPAddress(ipStr)
-			if ok && ip.Is6() {
-				rss[i] = 1
-			} else {
-				rss[i] = 0
-			}
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetStrValue(i)
-		ipStr := functionUtil.QuickBytesToStr(v1)
-		ip, ok := parseIPAddress(ipStr)
-		if ok && ip.Is6() {
-			rss[i] = 1
-		} else {
-			rss[i] = 0
-		}
-	}
-	return nil
+	return executeIPPredicateResult(ivecs, result, length, selectList, "is_ipv6", func(value []byte) bool {
+		ip, ok := parseIPAddress(functionUtil.QuickBytesToStr(value))
+		return ok && ip.Is6()
+	})
 }
 
 // isIPv4Compat checks for the deprecated IPv4-compatible ::/96 range, excluding
@@ -8736,94 +8697,9 @@ func isIPv4Compat(ip net.IP) bool {
 // Returns NULL if the input is NULL.
 // The input should be a binary representation from INET6_ATON (16 bytes for IPv6).
 func IsIPv4Compat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[int32](result)
-	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int32](rsVec)
-	rsNull := rsVec.GetNulls()
-
-	c1 := ivecs[0].IsConst()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if c1 {
-		v1, null1 := p1.GetStrValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			var resultVal int32
-			if len(v1) == 16 {
-				ip := net.IP(v1)
-				if isIPv4Compat(ip) {
-					resultVal = 1
-				} else {
-					resultVal = 0
-				}
-			} else {
-				// Invalid length: not a valid IPv6 binary representation
-				resultVal = 0
-			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = resultVal
-			}
-		}
-		return nil
-	}
-
-	// basic case
-	if p1.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				continue
-			}
-			v1, _ := p1.GetStrValue(i)
-			if len(v1) == 16 {
-				ip := net.IP(v1)
-				if isIPv4Compat(ip) {
-					rss[i] = 1
-				} else {
-					rss[i] = 0
-				}
-			} else {
-				rss[i] = 0
-			}
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetStrValue(i)
-		if len(v1) == 16 {
-			ip := net.IP(v1)
-			if isIPv4Compat(ip) {
-				rss[i] = 1
-			} else {
-				rss[i] = 0
-			}
-		} else {
-			rss[i] = 0
-		}
-	}
-	return nil
+	return executeIPPredicateResult(ivecs, result, length, selectList, "is_ipv4_compat", func(value []byte) bool {
+		return isIPv4Compat(net.IP(value))
+	})
 }
 
 // IsIPv4Mapped returns 1 if the argument is a valid IPv4-mapped IPv6 address, 0 otherwise.
@@ -8831,94 +8707,9 @@ func IsIPv4Compat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, p
 // The input should be a binary representation from INET6_ATON (16 bytes for IPv6).
 // IPv4-mapped addresses have the format ::ffff:a.b.c.d
 func IsIPv4Mapped(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	result.UseOptFunctionParamFrame(1)
-	rs := vector.MustFunctionResult[int32](result)
-	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
-	rsVec := rs.GetResultVector()
-	rss := vector.MustFixedColNoTypeCheck[int32](rsVec)
-	rsNull := rsVec.GetNulls()
-
-	c1 := ivecs[0].IsConst()
-	rsAnyNull := false
-
-	if selectList != nil {
-		if selectList.IgnoreAllRow() {
-			nulls.AddRange(rsNull, 0, uint64(length))
-			return nil
-		}
-		if !selectList.ShouldEvalAllRow() {
-			rsAnyNull = true
-			for i := range selectList.SelectList {
-				if selectList.Contains(uint64(i)) {
-					rsNull.Add(uint64(i))
-				}
-			}
-		}
-	}
-
-	if c1 {
-		v1, null1 := p1.GetStrValue(0)
-		if null1 {
-			nulls.AddRange(rsNull, 0, uint64(length))
-		} else {
-			var resultVal int32
-			if len(v1) == 16 {
-				ip := net.IP(v1)
-				if isIPv4Mapped(ip) {
-					resultVal = 1
-				} else {
-					resultVal = 0
-				}
-			} else {
-				// Invalid length: not a valid IPv6 binary representation
-				resultVal = 0
-			}
-			rowCount := uint64(length)
-			for i := uint64(0); i < rowCount; i++ {
-				rss[i] = resultVal
-			}
-		}
-		return nil
-	}
-
-	// basic case
-	if p1.WithAnyNullValue() || rsAnyNull {
-		nulls.Or(rsNull, ivecs[0].GetNulls(), rsNull)
-		rowCount := uint64(length)
-		for i := uint64(0); i < rowCount; i++ {
-			if rsNull.Contains(i) {
-				continue
-			}
-			v1, _ := p1.GetStrValue(i)
-			if len(v1) == 16 {
-				ip := net.IP(v1)
-				if isIPv4Mapped(ip) {
-					rss[i] = 1
-				} else {
-					rss[i] = 0
-				}
-			} else {
-				rss[i] = 0
-			}
-		}
-		return nil
-	}
-
-	rowCount := uint64(length)
-	for i := uint64(0); i < rowCount; i++ {
-		v1, _ := p1.GetStrValue(i)
-		if len(v1) == 16 {
-			ip := net.IP(v1)
-			if isIPv4Mapped(ip) {
-				rss[i] = 1
-			} else {
-				rss[i] = 0
-			}
-		} else {
-			rss[i] = 0
-		}
-	}
-	return nil
+	return executeIPPredicateResult(ivecs, result, length, selectList, "is_ipv4_mapped", func(value []byte) bool {
+		return isIPv4Mapped(net.IP(value))
+	})
 }
 
 // UnhexString returns a string representation of a hexadecimal value.
