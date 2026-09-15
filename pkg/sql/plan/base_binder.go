@@ -2949,7 +2949,8 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		}
 		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
 			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sign") ||
-				strings.EqualFold(funcName, "sleep") || strings.EqualFold(funcName, "char")) {
+				strings.EqualFold(funcName, "sleep") || strings.EqualFold(funcName, "char") ||
+				strings.EqualFold(funcName, "elt")) {
 			hasPreparedParam, err := b.hasPreparedNumericParamExprs(astExpr.Exprs, depth)
 			if err != nil {
 				return nil, err
@@ -3061,7 +3062,8 @@ func isPreparedNumericAggregate(name string, argCount int) bool {
 }
 
 func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
-	// ABS, SIGN, and SLEEP all have integer and floating-point overloads. A bare
+	// ABS, SIGN, SLEEP, and ELT's index all have integer and floating-point
+	// overloads. A bare
 	// prepared parameter has TEXT transport type at PREPARE time, so letting
 	// generic overload resolver choose an integer cast makes valid executions
 	// such as ABS(-1.5), SIGN(-0.1), and SLEEP(0.01) fail before the function
@@ -3071,6 +3073,11 @@ func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
 	// DOUBLE casts remain ordinary DOUBLE expressions.
 	if argCount == 1 && (strings.EqualFold(name, "abs") || strings.EqualFold(name, "sign") ||
 		strings.EqualFold(name, "sleep")) {
+		typ := types.T_float64.ToType()
+		target := makePlan2Type(&typ)
+		return &target, true
+	}
+	if argCount >= 2 && strings.EqualFold(name, "elt") {
 		typ := types.T_float64.ToType()
 		target := makePlan2Type(&typ)
 		return &target, true
@@ -3360,8 +3367,9 @@ func containsExplicitFloatCastInSelect(stmt tree.SelectStatement) bool {
 
 // bindPreparedNumericFuncExpr gives prepared numeric function arguments the
 // same static context as prepared arithmetic. SUM/AVG use the inferred numeric
-// domain, NTILE requires an integer domain, and CHAR uses an integer domain
-// only for arguments that contain a prepared marker. ParamRef remains TEXT for
+// domain, NTILE requires an integer domain, CHAR uses an integer domain only
+// for arguments that contain a prepared marker, and ELT uses a deferred
+// numeric domain only for its index argument. ParamRef remains TEXT for
 // transport and an explicit cast materializes the computation type.
 // Non-parameter expressions stay on their original binding path, so ordinary
 // string inputs continue to use their function-specific string semantics.
@@ -3373,6 +3381,48 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	target, ok := preparedNumericFunctionTarget(name, len(astArgs))
 	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
+	}
+	if strings.EqualFold(name, "elt") {
+		args := make([]*plan.Expr, len(astArgs))
+		deferredIndex := false
+		for i, astArg := range astArgs {
+			if i == 0 {
+				hasPreparedParam, err := b.hasPreparedNumericParamExprs([]tree.Expr{astArg}, depth)
+				if err != nil {
+					return nil, err
+				}
+				if hasPreparedParam {
+					args[i], err = b.bindNumericExprWithContext(astArg, depth, target)
+					if err != nil {
+						return nil, err
+					}
+					if !isDirectExplicitNumericCast(astArg) {
+						b.markPreparedNumericFallback(args[i])
+						deferredIndex = true
+					}
+					continue
+				}
+			}
+			var err error
+			args[i], err = b.impl.BindExpr(astArg, depth, false)
+			if err != nil {
+				return nil, err
+			}
+		}
+		bound, err := bindBoundFuncExprAndConstFold(
+			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if deferredIndex && bound != nil && bound.GetF() != nil && len(bound.GetF().Args) > 0 {
+			// ELT's numeric envelope can add a second implicit cast around the
+			// marker. Keep the deferred marker on the complete function argument,
+			// not only on the inner cast, so execute-time metadata discovery can
+			// select the full-arity ELT rebind path.
+			b.markPreparedNumericFallback(bound.GetF().Args[0])
+		}
+		return bound, nil
 	}
 	if strings.EqualFold(name, "char") {
 		args := make([]*plan.Expr, len(astArgs))
@@ -6158,6 +6208,9 @@ func bindFuncExprImplByPlanExpr(
 	case "substring", "substr", "mid":
 		refineSubstringLiteralReturnType(args, &returnType)
 
+	case "left", "right":
+		refineLeftRightLiteralReturnType(args, &returnType)
+
 	case "lpad", "rpad":
 		refinePadLiteralReturnType(args, &returnType)
 
@@ -6451,12 +6504,13 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		return
 	}
 
-	// This refinement exists for byte-preserving binary expressions. Text
-	// SUBSTRING keeps its existing metadata contract; narrowing it here would
-	// change the overload's declared result width and make consumers that rely
-	// on the text semantic family reject an otherwise valid expression.
 	binary := types.StaticStringDomain(sourceType) == types.StringDomainBinary
 	if !binary {
+		// Character SUBSTRING's two-argument form has no fixed output length;
+		// the literal start may change the value, but keeping the source bound is
+		// the only sound metadata guarantee.  Only the explicit three-argument
+		// length can narrow a character result.
+		function.RefineTextSubstringReturnType(args, returnType)
 		return
 	}
 
@@ -6496,6 +6550,27 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	// one of the other inputs is dynamic or the source declaration is wider
 	// than the aggregate limit.
 	refineKnownStringResultType(returnType, bound, binary)
+}
+
+// refineLeftRightLiteralReturnType narrows the character and binary result of
+// LEFT/RIGHT when their length is a constant.  Unlike SUBSTRING's two-argument
+// form, the second argument is always the requested result length.
+func refineLeftRightLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 2 {
+		return
+	}
+	if makeTypeByPlan2Expr(args[0]).Oid == types.T_blob {
+		return
+	}
+	length, known := binarySubstringLengthBound(args[1].GetLit())
+	if !known {
+		return
+	}
+	binary := types.StaticStringDomain(makeTypeByPlan2Expr(args[0])) == types.StringDomainBinary
+	if source, sourceKnown := stringExprBound(args[0], binary); sourceKnown && source < length {
+		length = source
+	}
+	refineKnownStringResultType(returnType, length, binary)
 }
 
 func binarySubstringLengthBound(lit *plan.Literal) (uint64, bool) {
@@ -6613,15 +6688,7 @@ func stringExprBound(expr *plan.Expr, binary bool) (uint64, bool) {
 	if binary {
 		return binaryExprByteBound(expr)
 	}
-	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
-		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
-			return uint64(utf8.RuneCountInString(value.Sval)), true
-		}
-	}
-	if expr.Typ.Width > 0 && types.T(expr.Typ.Id) != types.T_text {
-		return uint64(expr.Typ.Width), true
-	}
-	return 0, false
+	return function.TextSourceCharacterBound(expr)
 }
 
 func binaryExprByteBound(expr *plan.Expr) (uint64, bool) {
@@ -6912,6 +6979,8 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 		changed = adjustControlFlowBinaryMetadata(args, argTypes, valueIndexes, returnType)
 	case returnType.Oid.IsDecimal():
 		changed = adjustControlFlowDecimalLiteralMetadata(args, argTypes, valueIndexes, returnType)
+	case returnType.Oid == types.T_datetime || returnType.Oid == types.T_timestamp || returnType.Oid == types.T_time:
+		changed = adjustControlFlowTemporalMetadata(argTypes, valueIndexes, returnType)
 	}
 
 	if !changed || len(argsCastType) != len(args) {
@@ -6939,7 +7008,40 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 		for _, idx := range valueIndexes {
 			argsCastType[idx] = *returnType
 		}
+		return
 	}
+	if returnType.Oid == types.T_datetime || returnType.Oid == types.T_timestamp || returnType.Oid == types.T_time {
+		for _, idx := range valueIndexes {
+			argsCastType[idx] = *returnType
+		}
+	}
+}
+
+func adjustControlFlowTemporalMetadata(argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	maxScale := returnType.Scale
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) {
+			return false
+		}
+		typ := argTypes[idx]
+		switch typ.Oid {
+		case types.T_time, types.T_datetime, types.T_timestamp:
+			if typ.Scale > maxScale {
+				maxScale = typ.Scale
+			}
+		}
+	}
+	if maxScale <= returnType.Scale && (maxScale == 0 || returnType.Width == maxScale) {
+		return false
+	}
+	returnType.Scale = maxScale
+	if maxScale > 0 {
+		// Width is used by catalog/type rendering as the persisted FSP marker for
+		// temporal columns. Keep it synchronized with Scale so a widened value is
+		// not materialized as TIMESTAMP(0) despite retaining its precision.
+		returnType.Width = maxScale
+	}
+	return true
 }
 
 // adjustDateFormatMetadata starts with MySQL's format-dependent result length

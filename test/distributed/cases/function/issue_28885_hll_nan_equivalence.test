@@ -1,0 +1,34 @@
+-- #28885: SQL-equivalent floating-point values must share the
+-- APPROX_COUNT_DISTINCT key, while persisted HLL_ADD_AGG keeps its v2 raw
+-- value contract.
+drop table if exists issue_28885_hll_nan_equivalence;
+create table issue_28885_hll_nan_equivalence(v double);
+insert into issue_28885_hll_nan_equivalence values
+    (bit_cast(unhex('000000000000f87f') as double)),
+    (bit_cast(unhex('010000000000f87f') as double)),
+    (bit_cast(unhex('0000000000000080') as double)),
+    (0.0),
+    (1.0);
+
+select count(distinct v) as exact_count,
+       approx_count_distinct(v) as approx_count,
+       hll_cardinality(hll_add_agg(v)) as legacy_hll_count
+from issue_28885_hll_nan_equivalence;
+
+drop table issue_28885_hll_nan_equivalence;
+
+drop table if exists issue_28885_hll_nan_equivalence_float;
+create table issue_28885_hll_nan_equivalence_float(v float);
+insert into issue_28885_hll_nan_equivalence_float values
+    (bit_cast(unhex('0000c07f') as float)),
+    (bit_cast(unhex('0100c07f') as float)),
+    (bit_cast(unhex('00000080') as float)),
+    (0.0),
+    (1.0);
+
+select count(distinct v) as exact_count,
+       approx_count_distinct(v) as approx_count,
+       hll_cardinality(hll_add_agg(v)) as legacy_hll_count
+from issue_28885_hll_nan_equivalence_float;
+
+drop table issue_28885_hll_nan_equivalence_float;

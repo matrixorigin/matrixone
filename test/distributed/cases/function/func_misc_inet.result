@@ -233,6 +233,43 @@ EXECUTE inet_ntoa_double_rebind USING @inet_ntoa_value;
 ip
 null
 DEALLOCATE PREPARE inet_ntoa_double_rebind;
+PREPARE inet_ntoa_dynamic_reuse FROM 'SELECT INET_NTOA(?) AS ip';
+SET @inet_ntoa_dynamic = CAST(2.5 AS DOUBLE);
+EXECUTE inet_ntoa_dynamic_reuse USING @inet_ntoa_dynamic;
+ip
+0.0.0.2
+SET @inet_ntoa_dynamic = CAST(2.5 AS DECIMAL(18,1));
+EXECUTE inet_ntoa_dynamic_reuse USING @inet_ntoa_dynamic;
+ip
+0.0.0.3
+SET @inet_ntoa_dynamic = true;
+EXECUTE inet_ntoa_dynamic_reuse USING @inet_ntoa_dynamic;
+ip
+0.0.0.1
+SET @inet_ntoa_dynamic = 16909060;
+EXECUTE inet_ntoa_dynamic_reuse USING @inet_ntoa_dynamic;
+ip
+1.2.3.4
+SET @inet_ntoa_dynamic = '2tail';
+EXECUTE inet_ntoa_dynamic_reuse USING @inet_ntoa_dynamic;
+ip
+0.0.0.2
+SET @inet_ntoa_dynamic = NULL;
+EXECUTE inet_ntoa_dynamic_reuse USING @inet_ntoa_dynamic;
+ip
+null
+DEALLOCATE PREPARE inet_ntoa_dynamic_reuse;
+DROP TABLE IF EXISTS inet_ntoa_param_rows;
+CREATE TABLE inet_ntoa_param_rows (id INT);
+INSERT INTO inet_ntoa_param_rows VALUES (1), (2);
+PREPARE inet_ntoa_dynamic_batch FROM 'SELECT INET_NTOA(?) AS ip FROM inet_ntoa_param_rows';
+SET @inet_ntoa_dynamic = CAST(2.5 AS DOUBLE);
+EXECUTE inet_ntoa_dynamic_batch USING @inet_ntoa_dynamic;
+ip
+0.0.0.2
+0.0.0.2
+DEALLOCATE PREPARE inet_ntoa_dynamic_batch;
+DROP TABLE inet_ntoa_param_rows;
 SET @inet_ntoa_value = NULL;
 DROP TABLE IF EXISTS const_null_order_probe;
 CREATE TABLE const_null_order_probe(a INT);

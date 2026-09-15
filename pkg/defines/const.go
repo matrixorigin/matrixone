@@ -109,7 +109,13 @@ const (
 	MORPCVersion71     int64 = 71 // checked integer arithmetic overloads
 	MORPCVersion72     int64 = 72 // corrected IP function semantics and overload identities
 	MORPCVersion73     int64 = 73 // widened DECIMAL SUM partial state
-	MORPCLatestVersion       = MORPCVersion73
+	MORPCVersion74     int64 = 74 // NaN-ordered and direction-aware aggregate states
+	MORPCVersion75     int64 = 75 // complete typed SQL equivalence keys in HLL states
+	MORPCVersion76     int64 = 76 // length-delimited variable-length GROUP hash keys
+	MORPCVersion77     int64 = 77 // canonical opaque DISTINCT argument wire keys
+	MORPCVersion78     int64 = 78 // signed and widened string numeric result contracts
+	MORPCVersion79     int64 = 79 // extended IP coercions, bounded string domains, and INT32 IP predicates
+	MORPCLatestVersion       = MORPCVersion79
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

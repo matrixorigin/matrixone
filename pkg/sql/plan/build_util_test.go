@@ -952,10 +952,10 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 		{name: "inet_ntoa", expr: "inet_ntoa(ip_number)", baseColumn: "ip_number", baseSQLType: "bigint unsigned", baseType: plan.Type{Id: int32(types.T_uint64)}, generatedSQLType: "varchar(39)", generatedType: plan.Type{Id: int32(types.T_varchar), Width: 39}},
 		{name: "inet6_aton", expr: "inet6_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "varbinary(16)", generatedType: plan.Type{Id: int32(types.T_varbinary), Width: 16}},
 		{name: "inet6_ntoa", expr: "inet6_ntoa(ip_binary)", baseColumn: "ip_binary", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "varchar(39)", generatedType: plan.Type{Id: int32(types.T_varchar), Width: 39}},
-		{name: "is_ipv4", expr: "is_ipv4(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "bigint", generatedType: plan.Type{Id: int32(types.T_int64)}},
-		{name: "is_ipv6", expr: "is_ipv6(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "bigint", generatedType: plan.Type{Id: int32(types.T_int64)}},
-		{name: "is_ipv4_compat", expr: "is_ipv4_compat(ip_binary)", baseColumn: "ip_binary", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "bigint", generatedType: plan.Type{Id: int32(types.T_int64)}},
-		{name: "is_ipv4_mapped", expr: "is_ipv4_mapped(ip_binary)", baseColumn: "ip_binary", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "bigint", generatedType: plan.Type{Id: int32(types.T_int64)}},
+		{name: "is_ipv4", expr: "is_ipv4(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "int", generatedType: plan.Type{Id: int32(types.T_int32)}},
+		{name: "is_ipv6", expr: "is_ipv6(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "int", generatedType: plan.Type{Id: int32(types.T_int32)}},
+		{name: "is_ipv4_compat", expr: "is_ipv4_compat(ip_binary)", baseColumn: "ip_binary", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "int", generatedType: plan.Type{Id: int32(types.T_int32)}},
+		{name: "is_ipv4_mapped", expr: "is_ipv4_mapped(ip_binary)", baseColumn: "ip_binary", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "int", generatedType: plan.Type{Id: int32(types.T_int32)}},
 	}
 
 	for _, tc := range cases {

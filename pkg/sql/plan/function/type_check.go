@@ -187,6 +187,29 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return fixedTypeMatchExcept(overloads, inputs, -1)
 }
 
+// inetNtoaTypeMatch keeps native numeric overloads on their existing,
+// allocation-free executors while admitting value-domain conversions that
+// cannot be represented by a single static numeric cast. In particular, a
+// prepared marker must remain runtime-owned instead of being eagerly cast to
+// UINT64 at prepare time.
+func inetNtoaTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	prefer := inputs[0].Oid
+	switch prefer {
+	case types.T_any, types.T_bool, types.T_date, types.T_datetime, types.T_timestamp,
+		types.T_time, types.T_year, types.T_json, types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob:
+		for i, over := range overloads {
+			if len(over.args) == 1 && over.args[0] == prefer {
+				return newCheckResultWithSuccess(i)
+			}
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 // fixedTypeMatchExcept is the fixed matcher with one overload omitted. Keeping
 // the original overload slice avoids planner-time allocations for matchers
 // that need to reserve a dedicated string overload.

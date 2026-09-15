@@ -84,6 +84,8 @@ func TestBoundedBuiltinReturnTypes(t *testing.T) {
 	}
 
 	assertType(t, "inet_ntoa", []types.Type{types.T_uint64.ToType()}, types.T_varchar, 31, types.CharsetUTF8)
+	assertType(t, "to_base64", []types.Type{varbinary(128)}, types.T_varchar, 174, types.CharsetUTF8)
+	assertType(t, "to_base64", []types.Type{varchar(128)}, types.T_varchar, 692, types.CharsetUTF8)
 	assertType(t, "inet6_ntoa", []types.Type{varbinary(16)}, types.T_varchar, 39, types.CharsetUTF8)
 	assertType(t, "inet6_aton", []types.Type{varchar(39)}, types.T_varbinary, 16, types.CharsetBinary)
 
@@ -137,7 +139,52 @@ func TestBoundedBuiltinReturnTypes(t *testing.T) {
 	}
 
 	for _, fn := range []string{"uncompressed_length"} {
-		assertType(t, fn, []types.Type{types.T_blob.ToType()}, types.T_int32, 0, types.CharsetLegacy)
+		assertType(t, fn, []types.Type{types.T_blob.ToType()}, types.T_int64, 0, types.CharsetLegacy)
+	}
+}
+
+func TestToBase64ResolverKeepsWireOverloadIDs(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	tests := []struct {
+		name     string
+		input    types.Type
+		overload int32
+	}{
+		{name: "varchar", input: types.New(types.T_varchar, 8, 0), overload: 0},
+		{name: "array float32", input: types.T_array_float32.ToType(), overload: 1},
+		{name: "array float64", input: types.T_array_float64.ToType(), overload: 2},
+		{name: "binary", input: types.NewWithCharset(types.T_binary, 8, 0, types.CharsetBinary), overload: 3},
+		{name: "varbinary", input: types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), overload: 4},
+		{name: "blob", input: types.T_blob.ToType(), overload: 5},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "to_base64", []types.Type{test.input})
+			require.NoError(t, err)
+			functionID, overloadID := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, int32(TO_BASE64), functionID)
+			require.Equal(t, test.overload, overloadID)
+		})
+	}
+}
+
+func TestBase64ResultBoundIncludesLineBreaks(t *testing.T) {
+	for _, test := range []struct {
+		input uint64
+		want  uint64
+	}{
+		{input: 1, want: 4},
+		{input: 57, want: 76},
+		{input: 58, want: 81},
+		{input: 128, want: 174},
+	} {
+		t.Run(strconv.FormatUint(test.input, 10), func(t *testing.T) {
+			got := base64ResultBound(stringResultBound{bytes: test.input})
+			require.False(t, got.unknown)
+			require.Equal(t, test.want, got.bytes)
+		})
 	}
 }
 
@@ -208,7 +255,7 @@ func TestBoundedBuiltinRegistryCoversEveryChangedOverload(t *testing.T) {
 		})
 		t.Run("uncompressed_length/"+input.Oid.String(), func(t *testing.T) {
 			result := resolve(t, "uncompressed_length", []types.Type{input})
-			require.Equal(t, types.T_int32, result.Oid)
+			require.Equal(t, types.T_int64, result.Oid)
 		})
 	}
 

@@ -200,6 +200,69 @@ func TestRefineBinarySubstringReturnTypeConservativeCases(t *testing.T) {
 	require.Equal(t, int32(511), returnType.Width)
 }
 
+func TestRefineCharacterSubstringAndLeftRightReturnTypes(t *testing.T) {
+	textType := types.New(types.T_varchar, 512, 0)
+	source := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  makePlan2Type(&textType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+		}
+	}
+	returnType := func() types.Type { return types.New(types.T_varchar, 512, 0) }
+
+	textSubstring := returnType()
+	refineSubstringLiteralReturnType(
+		[]*planpb.Expr{source(), makePlan2Int64ConstExprWithType(2)},
+		&textSubstring,
+	)
+	require.Equal(t, int32(512), textSubstring.Width,
+		"two-argument character SUBSTRING has no fixed suffix length")
+
+	textSubstring = returnType()
+	refineSubstringLiteralReturnType(
+		[]*planpb.Expr{source(), makePlan2Int64ConstExprWithType(2), makePlan2Int64ConstExprWithType(7)},
+		&textSubstring,
+	)
+	require.Equal(t, int32(7), textSubstring.Width)
+
+	for _, name := range []string{"left", "right"} {
+		result := returnType()
+		refineLeftRightLiteralReturnType(
+			[]*planpb.Expr{source(), makePlan2Int64ConstExprWithType(7)}, &result)
+		require.Equal(t, int32(7), result.Width, "%s must honor its literal result length", name)
+	}
+}
+
+func TestRefineCharacterStringReturnTypesUseFormattedNumericBounds(t *testing.T) {
+	ctx := context.Background()
+	decimalType := types.New(types.T_decimal64, 5, 2)
+	source := &planpb.Expr{
+		Typ: makePlan2Type(&decimalType),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 0,
+			ColPos: 0,
+		}},
+	}
+
+	for _, name := range []string{"substring", "left", "right"} {
+		t.Run(name, func(t *testing.T) {
+			args := []*planpb.Expr{source, makePlan2Int64ConstExprWithType(1)}
+			if name == "substring" {
+				args = append(args, makePlan2Int64ConstExprWithType(20))
+			} else {
+				args[1] = makePlan2Int64ConstExprWithType(20)
+			}
+
+			bound, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), bound.Typ.Id)
+			// DECIMAL(5,2) can format -123.45 as seven characters. The
+			// refinement must use that cast bound, not precision five.
+			require.Equal(t, int32(7), bound.Typ.Width)
+		})
+	}
+}
+
 func TestBindBitwiseAggregateLeavesBlobSubstringInTextDomain(t *testing.T) {
 	ctx := context.Background()
 	sourceType := types.T_blob.ToType()
