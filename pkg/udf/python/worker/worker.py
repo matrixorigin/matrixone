@@ -559,7 +559,6 @@ def _typed_statement_context(raw: Any) -> Optional[Dict[str, Any]]:
     timezone_kind = raw.get("timezone_kind")
     if not isinstance(timezone_kind, str):
         raise ValueError("PROTOCOL: typed statement timezone is missing")
-    timezone_kind = timezone_kind.upper()
     timezone_name = raw.get("timezone_name", "")
     tzdb_version = raw.get("timezone_database_version", "")
     offset = raw.get("timezone_offset_minutes", 0)
@@ -678,7 +677,7 @@ def _statement_context(raw: Any) -> Optional[StatementContext]:
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("PROTOCOL: invalid statement_timestamp_utc") from exc
 
-    timezone_kind = _required_context_value(raw, "session_timezone_kind").upper()
+    timezone_kind = _required_context_value(raw, "session_timezone_kind")
     if timezone_kind == "IANA":
         timezone_name = _required_context_value(raw, "session_timezone_name")
         tzdb_version = _required_context_value(raw, "session_timezone_tzdb_version")
