@@ -334,6 +334,7 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 		hasPaginationParams: hasPaginationParams,
 		hasLagLeadParams:    hasLagLeadParams,
 	}
+	prepareStmt.refreshExportSetParamPositions(preparePlan.GetDcl().GetPrepare().Plan, len(preparePlan.GetDcl().GetPrepare().ParamTypes))
 	prepareStmt.refreshNumericPrefixConsumer(
 		preparePlan.GetDcl().GetPrepare().Plan,
 		len(preparePlan.GetDcl().GetPrepare().ParamTypes),

@@ -4236,7 +4236,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 					node := builder.qry.Nodes[tmpID]
 					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
-					} else if targetArgType.Oid == types.T_char {
+					} else if targetArgType.Oid == types.T_char || builder.isPrepareStatement {
+						// Retain the set-operation-owned boundary during PREPARE so
+						// runtime common-type selection can recover every SQL input.
 						node.ProjectList[columnIdx], err = appendSetOperationCastBeforeExpr(
 							builder.GetContext(), node.ProjectList[columnIdx], targetType,
 						)

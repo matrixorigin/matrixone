@@ -211,6 +211,14 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if f.IsRealTimeRelated() && r.isPrepared {
 		return expr
 	}
+	if r.isPrepared && fn.Func.GetObjName() == "cast" {
+		_, castOverload := function.DecodeOverloadID(overloadID)
+		if castOverload == 3 && !fn.GetSyntaxExplicitCast() {
+			// Keep the original branch domain under a provisional set-operation
+			// conversion; folding 2 to "2" would change runtime numeric sorting.
+			return expr
+		}
+	}
 	if r.isPrepared && IsImplicitFloatCastOfExplicitDecimalConstant(expr) {
 		// A parameterized parent can be rebound from FLOAT to DECIMAL at execute
 		// time. Keep the exact explicit DECIMAL source available underneath the

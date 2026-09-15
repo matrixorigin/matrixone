@@ -1464,6 +1464,7 @@ func initExecuteStmtParamWithResolverInSession(
 		// rebuilt plan has resolved against fresh metadata and must not inherit a
 		// numeric BIT_COUNT category selected by the preceding generation.
 		prepareStmt.bitCountNumericParamTypes = nil
+		prepareStmt.refreshExportSetParamPositions(newPreparePlan.Plan, len(newPreparePlan.ParamTypes))
 		prepareStmt.refreshFixedIntegerParamPositions(newPreparePlan.Plan)
 		if hasPreparedGroupConcat {
 			pendingGroupConcatColDefData = newColDefData
@@ -1787,6 +1788,7 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, moerr.NewInvalidInput(reqCtx, "Incorrect arguments to EXECUTE")
 		}
 	}
+	prepareStmt.applyExportSetNullRuntimeTypes(cwft.paramVals)
 	if !binaryExecute && executionPlan.GetQuery() != nil {
 		// SQL EXECUTE values are already decoded as ParamValue.  The prepared
 		// plan's cached prefix-consumer bit is sufficient to decide whether the
@@ -2129,12 +2131,13 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 			rawValue = param.MaterializedValue
 		}
 		runtimeType := param.RuntimeType
-		if !param.HasRuntimeType || runtimeType.Oid == types.T_text {
+		if !param.HasRuntimeType || (runtimeType.Oid == types.T_text && !param.ExportSetResolvedDomain) {
 			runtimeType = plan2.PreparedNumericPrefixTypeFromString(rawValue)
 		}
 		fmt.Fprintf(&key, "%d:%d:%d:%d:%d:%d;", i, param.PrepareParamKind,
 			runtimeType.Oid, runtimeType.Charset, runtimeType.Width, runtimeType.Scale)
 		fmt.Fprintf(&key, "binary:%t;domain:%d;", param.IsBinaryString, param.RuntimeStringDomain)
+		fmt.Fprintf(&key, "export-domain:%t;export-string:%t;", param.ExportSetResolvedDomain, param.ExportSetNumericString)
 		charSourceRelevant := param.IsBinaryProtocol || param.HasSourceType ||
 			(param.HasRuntimeType && types.T(param.RuntimeType.Oid).IsMySQLString())
 		if charSourceRelevant {

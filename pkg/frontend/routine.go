@@ -822,6 +822,12 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 		if st.hasPendingLongData() {
 			return moerr.GetOkExpectedNotSafeToStartTransfer()
 		}
+		// The migration payload cannot reconstruct numeric domains retained
+		// across NULL bindings. Keep the statement at its owner rather than
+		// silently changing COALESCE/EXPORT_SET results on the target CN.
+		if st.hasExportSetNumericHistory() {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
 	}
 	resp.PreparedStmtLongDataChecked = true
 	resp.FoundRows = ses.GetLastFoundRows()

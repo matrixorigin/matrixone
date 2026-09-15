@@ -2919,6 +2919,7 @@ func createPrepareStmtInSession(
 		getFromSendLongData:        make(map[int]struct{}),
 		schedulingSQLMode:          schedulingSQLMode,
 	}
+	prepareStmt.refreshExportSetParamPositions(prepareControl.Plan, len(prepareControl.ParamTypes))
 	prepareStmt.refreshNumericPrefixConsumer(
 		prepareControl.Plan, len(prepareControl.ParamTypes))
 	prepareStmt.refreshGeometrySRIDParamPositions(prepareControl.Plan)

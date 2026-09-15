@@ -4367,10 +4367,12 @@ func Test_doResetClearsPreparedBinaryState(t *testing.T) {
 
 	stmtName := "stmt1"
 	prepareStmt := &PrepareStmt{
-		Name:                stmtName,
-		proc:                proc,
-		params:              params,
-		getFromSendLongData: map[int]struct{}{0: {}},
+		Name:                    stmtName,
+		proc:                    proc,
+		params:                  params,
+		getFromSendLongData:     map[int]struct{}{0: {}},
+		exportSetParamPositions: []int32{0},
+		exportSetParamTypes:     []types.Type{types.T_float64.ToType()},
 	}
 	defer prepareStmt.Close()
 	ses.prepareStmts[stmtName] = prepareStmt
@@ -4378,6 +4380,8 @@ func Test_doResetClearsPreparedBinaryState(t *testing.T) {
 	require.NoError(t, doReset(ctx, ses, tree.NewReset(tree.Identifier(stmtName))))
 	require.False(t, prepareStmt.params.GetNulls().Any())
 	require.Empty(t, prepareStmt.getFromSendLongData)
+	require.Equal(t, []int32{0}, prepareStmt.exportSetParamPositions)
+	require.Equal(t, []types.Type{types.T_float64.ToType()}, prepareStmt.exportSetParamTypes)
 }
 
 func Test_ExecRequestPrepareCommandMissingStmt(t *testing.T) {

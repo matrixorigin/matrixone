@@ -119,45 +119,56 @@ func containsSequenceExpressions(exprs ...*planpb.Expr) bool {
 	return false
 }
 
-func containsSequenceOrderBy(specs []*planpb.OrderBySpec) bool {
-	for _, spec := range specs {
-		if spec != nil && ContainsSequenceFunction(spec.Expr) {
-			return true
-		}
-	}
-	return false
+func containsSequenceNodeExpressions(node *planpb.Node) bool {
+	return anyExecutableNodeExpr(node, ContainsSequenceFunction)
 }
 
-// containsSequenceNodeExpressions enumerates expression fields consumed by
+// anyExecutableNodeExpr enumerates expression fields consumed by
 // physical operators.  TableDef, InsertCtx.TableDef, UpdateCtx.TableDef,
 // DeleteCtx.TableDef, and vector-index hidden table definitions are schema
 // metadata; their defaults/generated expressions are not evaluated by a
 // scan. INSERT/UPDATE planners copy any evaluated default/generated expression
 // into ProjectList/OnUpdateExprs (or one of the explicit execution fields
 // below), so excluding metadata here does not hide a side effect.
-func containsSequenceNodeExpressions(node *planpb.Node) bool {
+func anyExecutableNodeExpr(node *planpb.Node, matches func(*planpb.Expr) bool) bool {
 	if node == nil {
 		return false
 	}
-	if containsSequenceExpressions(node.ProjectList...) ||
-		containsSequenceExpressions(node.OnList...) ||
-		containsSequenceExpressions(node.FilterList...) ||
-		containsSequenceExpressions(node.GroupBy...) ||
-		containsSequenceExpressions(node.AggList...) ||
-		containsSequenceExpressions(node.WinSpecList...) ||
-		containsSequenceExpressions(node.TblFuncExprList...) ||
-		containsSequenceExpressions(node.BlockFilterList...) ||
-		containsSequenceExpressions(node.FillVal...) ||
-		containsSequenceExpressions(node.OnUpdateExprs...) ||
-		containsSequenceExpressions(node.TimeWindowPartitionBy...) ||
-		containsSequenceExpressions(node.PhysicalEqualityKeyList...) {
+	containsExpressions := func(exprs ...*planpb.Expr) bool {
+		for _, expr := range exprs {
+			if matches(expr) {
+				return true
+			}
+		}
+		return false
+	}
+	containsOrderBy := func(specs []*planpb.OrderBySpec) bool {
+		for _, spec := range specs {
+			if spec != nil && matches(spec.Expr) {
+				return true
+			}
+		}
+		return false
+	}
+	if containsExpressions(node.ProjectList...) ||
+		containsExpressions(node.OnList...) ||
+		containsExpressions(node.FilterList...) ||
+		containsExpressions(node.GroupBy...) ||
+		containsExpressions(node.AggList...) ||
+		containsExpressions(node.WinSpecList...) ||
+		containsExpressions(node.TblFuncExprList...) ||
+		containsExpressions(node.BlockFilterList...) ||
+		containsExpressions(node.FillVal...) ||
+		containsExpressions(node.OnUpdateExprs...) ||
+		containsExpressions(node.TimeWindowPartitionBy...) ||
+		containsExpressions(node.PhysicalEqualityKeyList...) {
 		return true
 	}
-	if containsSequenceExpressions(node.Limit, node.Offset, node.Interval, node.Sliding,
+	if containsExpressions(node.Limit, node.Offset, node.Interval, node.Sliding,
 		node.Timestamp, node.WEnd, node.GapFillStart, node.GapFillEnd) {
 		return true
 	}
-	if containsSequenceOrderBy(node.OrderBy) {
+	if containsOrderBy(node.OrderBy) {
 		return true
 	}
 	if rowset := node.RowsetData; rowset != nil {
@@ -166,51 +177,51 @@ func containsSequenceNodeExpressions(node *planpb.Node) bool {
 				continue
 			}
 			for _, value := range col.Data {
-				if value != nil && ContainsSequenceFunction(value.Expr) {
+				if value != nil && matches(value.Expr) {
 					return true
 				}
 			}
 		}
 	}
 	if reader := node.IndexReaderParam; reader != nil {
-		if ContainsSequenceFunction(reader.Limit) || containsSequenceOrderBy(reader.OrderBy) {
+		if matches(reader.Limit) || containsOrderBy(reader.OrderBy) {
 			return true
 		}
 		if dist := reader.DistRange; dist != nil &&
-			(ContainsSequenceFunction(dist.LowerBound) || ContainsSequenceFunction(dist.UpperBound)) {
+			(matches(dist.LowerBound) || matches(dist.UpperBound)) {
 			return true
 		}
 	}
 	for _, target := range node.LockTargets {
-		if target != nil && ContainsSequenceFunction(target.LockRows) {
+		if target != nil && matches(target.LockRows) {
 			return true
 		}
 	}
 	for _, spec := range node.RuntimeFilterProbeList {
-		if spec != nil && (ContainsSequenceFunction(spec.Expr) || ContainsSequenceFunction(spec.BuildExpr)) {
+		if spec != nil && (matches(spec.Expr) || matches(spec.BuildExpr)) {
 			return true
 		}
 	}
 	for _, spec := range node.RuntimeFilterBuildList {
-		if spec != nil && (ContainsSequenceFunction(spec.Expr) || ContainsSequenceFunction(spec.BuildExpr)) {
+		if spec != nil && (matches(spec.Expr) || matches(spec.BuildExpr)) {
 			return true
 		}
 	}
-	if dedup := node.DedupJoinCtx; dedup != nil && containsSequenceExpressions(dedup.UpdateColExprList...) {
+	if dedup := node.DedupJoinCtx; dedup != nil && containsExpressions(dedup.UpdateColExprList...) {
 		return true
 	}
 	if pre := node.PreInsertCtx; pre != nil &&
-		containsSequenceExpressions(pre.CompPkeyExpr, pre.ClusterByExpr) {
+		containsExpressions(pre.CompPkeyExpr, pre.ClusterByExpr) {
 		return true
 	}
 	if scan := node.VectorIndexScan; scan != nil {
-		if ContainsSequenceFunction(scan.QueryVector) ||
-			ContainsSequenceFunction(scan.CandidateLimit) ||
-			containsSequenceExpressions(scan.PreFilters...) || ContainsSequenceFunction(scan.FirstRoundLimit) {
+		if matches(scan.QueryVector) ||
+			matches(scan.CandidateLimit) ||
+			containsExpressions(scan.PreFilters...) || matches(scan.FirstRoundLimit) {
 			return true
 		}
 		if dist := scan.DistanceRange; dist != nil &&
-			(ContainsSequenceFunction(dist.LowerBound) || ContainsSequenceFunction(dist.UpperBound)) {
+			(matches(dist.LowerBound) || matches(dist.UpperBound)) {
 			return true
 		}
 	}
