@@ -1685,7 +1685,7 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		case "singular_or_list":
 			declared = functionID == function.IN && len(args) >= 2 && (types.T(args[0].Typ.Id) == types.T_int32 || isTPCHStringType(types.T(args[0].Typ.Id)))
 		case "extract":
-			declared = functionID == function.EXTRACT && len(args) == 2 && types.T(args[0].Typ.Id) == types.T_varchar && types.T(args[1].Typ.Id) == types.T_date && types.T(out.Id) == types.T_uint32
+			declared = functionID == function.EXTRACT && len(args) == 2 && types.T(args[0].Typ.Id) == types.T_varchar && (types.T(args[1].Typ.Id) == types.T_date || types.T(args[1].Typ.Id) == types.T_datetime || types.T(args[1].Typ.Id) == types.T_time || types.T(args[1].Typ.Id) == types.T_varchar || types.T(args[1].Typ.Id) == types.T_timestamp) && types.T(out.Id) == types.T_int64
 		}
 	case semanticAggregate:
 		switch name {
