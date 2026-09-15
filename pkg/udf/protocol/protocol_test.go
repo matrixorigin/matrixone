@@ -70,6 +70,19 @@ func TestControlRejectsDuplicateJSONFields(t *testing.T) {
 	require.ErrorContains(t, err, "duplicate control JSON field")
 }
 
+func TestOpenInvocationPayloadMustBeObject(t *testing.T) {
+	for _, payload := range []string{"null", "[]", `"text"`} {
+		wire := []byte(`{"version":1,"kind":"OpenInvocation","tuple":{"account_id":1,"statement_id":"statement","group_id":"group","group_epoch":2,"invocation_id":"invocation","lease_epoch":3},"payload":` + payload + `}`)
+		_, err := UnmarshalControl(wire)
+		require.ErrorIs(t, err, ErrProtocol)
+		require.ErrorContains(t, err, "payload must be a JSON object")
+
+		_, err = MarshalControl(Control{Kind: "OpenInvocation", Tuple: testTuple(), Payload: json.RawMessage(payload)})
+		require.ErrorIs(t, err, ErrProtocol)
+		require.ErrorContains(t, err, "payload must be a JSON object")
+	}
+}
+
 func TestControlFieldsBelongToTheirKind(t *testing.T) {
 	wire, err := MarshalControl(Control{Kind: "InputBatch", Tuple: testTuple(), Sequence: 1})
 	require.NoError(t, err)
