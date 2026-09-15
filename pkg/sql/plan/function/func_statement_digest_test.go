@@ -199,6 +199,38 @@ func TestStatementDigestSQLModeSnapshotWinsOnRemoteProcess(t *testing.T) {
 	require.Zero(t, digestMode)
 }
 
+func TestStatementDigestRejectsInvalidSQLModeResolverType(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.IsFrontend = true
+	proc.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES"
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+		require.True(t, system)
+		switch name {
+		case "sql_mode":
+			require.False(t, global)
+			return int64(123), nil
+		case "max_digest_length":
+			require.True(t, global)
+			return int64(defaultMaxDigestLength), nil
+		default:
+			t.Fatalf("unexpected variable %q", name)
+			return nil, nil
+		}
+	})
+
+	_, _, err := statementDigestSQLMode(proc)
+	require.EqualError(t, err, "internal error: unexpected sql_mode type int64")
+
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"SELECT 1"}, nil)},
+		NewFunctionTestResult(statementDigestResultType(), true, []string{""}, nil),
+		StatementDigest,
+	)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
+
 func TestStatementDigestRejectsInvalidSQL(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	invalidInputs := []string{

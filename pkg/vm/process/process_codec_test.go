@@ -336,6 +336,87 @@ func TestProcessCodecHelpers(t *testing.T) {
 	})
 }
 
+func TestResolveSQLModeResolverValueTypes(t *testing.T) {
+	var typedNilString *string
+	var typedNilBytes []byte
+
+	cases := []struct {
+		name     string
+		value    any
+		wantMode string
+		wantErr  bool
+	}{
+		{name: "valid string", value: "STRICT_ALL_TABLES", wantMode: "STRICT_ALL_TABLES"},
+		{name: "explicit empty string", value: "", wantMode: EmptySqlModeSentinel},
+		{name: "plain nil", value: nil, wantMode: "STRICT_TRANS_TABLES"},
+		{name: "integer", value: int64(123), wantMode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "boolean", value: true, wantMode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "typed nil string", value: typedNilString, wantMode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "typed nil bytes", value: typedNilBytes, wantMode: "STRICT_TRANS_TABLES", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := &Process{Base: &BaseProcess{
+				IsFrontend:  true,
+				SessionInfo: SessionInfo{SqlMode: "STRICT_TRANS_TABLES"},
+			}}
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+				require.Equal(t, "sql_mode", name)
+				return tc.value, nil
+			})
+
+			mode, err := ResolveSQLMode(proc)
+			require.Equal(t, tc.wantMode, mode)
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err,
+				fmt.Sprintf("internal error: unexpected sql_mode type %T", tc.value))
+		})
+	}
+}
+
+func TestBuildProcessInfoStatementDigestRejectsInvalidSQLModeType(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.IsFrontend = true
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+		if name == "sql_mode" {
+			return int64(123), nil
+		}
+		return nil, nil
+	})
+
+	// Non-digest remote scopes retain the historical best-effort behavior.
+	_, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+
+	// A digest-bearing scope must reject the malformed variable before it can
+	// be serialized and evaluated under a different SQL mode remotely.
+	_, err = proc.BuildProcessInfoWithStatementDigest("select 1")
+	require.EqualError(t, err, "internal error: unexpected sql_mode type int64")
+
+	// A failed resolution must not poison the process; a later retry resolves a
+	// fresh valid snapshot and succeeds.
+	calls := 0
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+		if name != "sql_mode" {
+			return nil, nil
+		}
+		calls++
+		if calls == 1 {
+			return int64(123), nil
+		}
+		return "STRICT_ALL_TABLES", nil
+	})
+	_, err = proc.BuildProcessInfoWithStatementDigest("select 1")
+	require.EqualError(t, err, "internal error: unexpected sql_mode type int64")
+	info, err := proc.BuildProcessInfoWithStatementDigest("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_ALL_TABLES", info.SessionInfo.SqlMode)
+	require.Equal(t, 2, calls)
+}
+
 func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	proc.Base.IsFrontend = false
@@ -480,8 +561,11 @@ func TestBuildProcessInfoStatementDigestPropagatesMaxLengthErrors(t *testing.T) 
 	proc.Base.IsFrontend = true
 	proc.Base.SessionInfo.MaxDigestLength = -1
 	proc.Base.SessionInfo.MaxDigestLengthSet = true
-	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
-		return int64(1024), nil
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "max_digest_length" {
+			return int64(1024), nil
+		}
+		return "", nil
 	})
 	_, err = proc.BuildProcessInfoWithStatementDigest("select 1")
 	require.EqualError(t, err, "internal error: max_digest_length is out of range: -1")

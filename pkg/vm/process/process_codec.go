@@ -632,6 +632,14 @@ func ResolveSQLMode(proc *Process) (string, error) {
 			}
 			return s, nil
 		}
+		if v != nil {
+			// A non-string resolver result is a malformed session variable,
+			// not an absent value.  Preserve the captured snapshot for callers
+			// that need the last known mode while making the strict digest path
+			// fail before it can be dispatched under a different mode.
+			return proc.Base.SessionInfo.SqlMode,
+				moerr.NewInternalErrorNoCtxf("unexpected sql_mode type %T", v)
+		}
 	}
 	// Resolver is nil on a remote CN (no session). Fall back to the sql_mode
 	// captured from the upstream CN so it survives a second forward
