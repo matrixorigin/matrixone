@@ -335,6 +335,7 @@ func (ag *aggState) writeStateArg(
 	writer io.Writer,
 	info *aggInfo,
 	includeGroupConcatSourceRow bool,
+	legacyDistinctKeyWire bool,
 ) error {
 	if err := types.WriteUint32(writer, ag.argCnt[i]); err != nil {
 		return err
@@ -404,15 +405,27 @@ func (ag *aggState) writeStateArg(
 					xcnt++
 				}
 			} else {
-				for ok, k, _ := it.SeekGE(lk); ok; ok, k, _ = it.Next() {
+				for ok, k, stored := it.SeekGE(lk); ok; ok, k, stored = it.Next() {
 					/*
 						checkI := binary.BigEndian.Uint16(k[:kAggArgPrefixSz])
 						if checkI != uint16(i) {
 							panic(moerr.NewInternalErrorNoCtxf("writeStateArg: mismatch i: %d != %d", checkI, i))
 						}
 					*/
+					payload := k[kAggArgPrefixSz:]
+					// Before v76, an opaque DISTINCT argument was sent as the
+					// original length-delimited value. Canonical keys are only an
+					// in-memory equivalence representation; sending one here would
+					// make an old peer see a second value when it merges the same
+					// argument from a legacy producer. Keep the first raw
+					// representative alongside every canonicalized DISTINCT key.
+					if info.isDistinct && legacyDistinctKeyWire &&
+						info.legacyCanonicalDistinctKeyWire &&
+						len(stored) != 0 {
+						payload = stored
+					}
 					payload, err := groupConcatStateArgumentForWire(
-						info, k[kAggArgPrefixSz:], nil, includeGroupConcatSourceRow)
+						info, payload, nil, includeGroupConcatSourceRow)
 					if err != nil {
 						return err
 					}
@@ -543,8 +556,13 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 				return err
 			}
 			var ownedCanonical []byte
+			var legacyValue []byte
 			if usesCanonicalDistinctWire(info) && !canonicalWire {
 				payload := kbuf[kAggArgPrefixSz:]
+				// Retain the legacy representative as the skiplist value. A
+				// current receiver may later have to re-export this state to a
+				// pre-v76 peer, which cannot consume the canonical key bytes.
+				legacyValue = payload
 				canonical, owned, canonicalErr := canonicalizeLegacyDistinctPayload(
 					ag, mp, info, kbuf[:kAggArgPrefixSz], payload)
 				if canonicalErr != nil {
@@ -570,7 +588,7 @@ func (ag *aggState) readStateArg(mp *mpool.MPool, i int32, r io.Reader, info *ag
 				err = ag.insertArgValue(
 					mp, kbuf, makeDistinctInputOrderValue(ui, sourceRow))
 			} else {
-				err = ag.insertArgValueWithInserter(mp, kbuf, nil, &inserter)
+				err = ag.insertArgValueWithInserter(mp, kbuf, legacyValue, &inserter)
 			}
 			if ownedCanonical != nil {
 				mp.Free(ownedCanonical)
@@ -748,7 +766,7 @@ func (ag *aggState) writeStateToBuf(mp *mpool.MPool, info *aggInfo, flags []uint
 		for i := range flags {
 			if flags[i] != 0 {
 				if err := ag.writeStateArg(
-					mp, int32(i), writer, info, info.groupConcatSourceRowWire); err != nil {
+					mp, int32(i), writer, info, info.groupConcatSourceRowWire, true); err != nil {
 					return err
 				}
 			}
@@ -812,7 +830,7 @@ func (ag *aggState) writeSpillStateRows(
 		return 0, moerr.NewInternalErrorNoCtx("argSkl is not initialized")
 	}
 	for _, row := range rows {
-		if err := ag.writeStateArg(mp, row, writer, info, true); err != nil {
+		if err := ag.writeStateArg(mp, row, writer, info, true, false); err != nil {
 			return 0, err
 		}
 	}
@@ -949,7 +967,7 @@ func (ag *aggState) writeAllStatesToBuf(
 		}
 		for i := range ag.length {
 			if err := ag.writeStateArg(
-				mp, int32(i), writer, info, info.groupConcatSourceRowWire); err != nil {
+				mp, int32(i), writer, info, info.groupConcatSourceRowWire, true); err != nil {
 				return err
 			}
 		}
@@ -2614,8 +2632,7 @@ func (ag *aggState) fillDistinctVectorArg(
 	}
 	var value []byte
 	raw := vec.GetRawBytesAt(row)
-	if vec.GetType().Oid == types.T_float32 && vec.GetType().Scale > 0 &&
-		!bytes.Equal(k[kAggArgPrefixSz:], raw) {
+	if !bytes.Equal(k[kAggArgPrefixSz:], raw) {
 		value = raw
 	}
 	return ag.insertPreparedArgWithValue(mp, y, k, true, value)
@@ -2868,15 +2885,21 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			continue
 		}
 
-		// Calculate total encoded size without retaining a row-frequency Go
-		// slice of column payloads.
+		// Calculate both the canonical key size and the legacy raw tuple size
+		// without retaining a row-frequency Go slice of column payloads.
 		totalSize := 0
+		rawTotalSize := 0
 		for _, vec := range vectors {
 			row, err := preflightPhysicalRow(vec, logicalRow)
 			if err != nil {
 				return err
 			}
 			raw := vec.GetRawBytesAt(row)
+			if uint64(len(raw)) > math.MaxUint32 ||
+				len(raw) > math.MaxInt-rawTotalSize-4 {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			rawTotalSize += 4 + len(raw)
 			valueSize := len(raw)
 			if distinct {
 				valueSize = canonicalDistinctArgumentKeySize(vec, row)
@@ -2928,7 +2951,54 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 			}
 			off += valueSize
 		}
-		if err := state.insertPreparedArg(ae.mp, y, key, distinct); err != nil {
+
+		// A multi-column canonical key may not be sent to a pre-v76 peer.
+		// Retain one raw, length-delimited tuple only when it differs from the
+		// canonical key; insertPreparedArgWithValue copies it into the skiplist
+		// before the temporary accounted arena is released.
+		var legacyValue []byte
+		if distinct {
+			needsLegacyValue := false
+			off = header
+			for _, vec := range vectors {
+				row, err := preflightPhysicalRow(vec, logicalRow)
+				if err != nil {
+					return err
+				}
+				valueSize := canonicalDistinctArgumentKeySize(vec, row)
+				off += 4
+				if !bytes.Equal(key[off:off+valueSize], vec.GetRawBytesAt(row)) {
+					needsLegacyValue = true
+				}
+				off += valueSize
+			}
+			if needsLegacyValue {
+				legacyValue, err = state.allocation.allocArgumentArena(
+					ae.mp, rawTotalSize)
+				if err != nil {
+					return err
+				}
+				off = 0
+				for _, vec := range vectors {
+					row, err := preflightPhysicalRow(vec, logicalRow)
+					if err != nil {
+						ae.mp.Free(legacyValue)
+						return err
+					}
+					raw := vec.GetRawBytesAt(row)
+					binary.BigEndian.PutUint32(legacyValue[off:], uint32(len(raw)))
+					off += 4
+					copy(legacyValue[off:], raw)
+					off += len(raw)
+				}
+			}
+		}
+		err = state.insertPreparedArgWithValue(
+			ae.mp, y, key, distinct, legacyValue)
+		if legacyValue != nil {
+			ae.mp.Free(legacyValue)
+		}
+		if err != nil {
 			return err
 		}
 	}
