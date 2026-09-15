@@ -94,11 +94,10 @@ insert into decimal_256_t values
 (4, cast('7.500000000000000000000000000000' as decimal(65,30)));
 select d from decimal_256_t force index (decimal_256_idx) order by d;
 ➤ d[3,65,30]  𝄀
--1E-30
-7.500000000000000000000000000000
-42.000000000000000000000000000000
+-1E-30  𝄀
+7.500000000000000000000000000000  𝄀
+42.000000000000000000000000000000  𝄀
 12345678901234567890123456789012345.123456789012345678901234567890
-
 drop table decimal_256_t;
 
 drop table if exists decimal_256_unique_t;
@@ -117,10 +116,8 @@ force index (decimal_256_unique_idx)
 where d = cast('8.500000000000000000000000000000' as decimal(65,30)) and k = 8;
 ➤ id[4,32,0]  𝄀
 2
-
 select id, d, k from decimal_256_unique_t order by id;
 ➤ id[4,32,0]  ¦  d[3,65,30]  ¦  k[4,32,0]  𝄀
 1  ¦  7.500000000000000000000000000000  ¦  7  𝄀
 2  ¦  8.500000000000000000000000000000  ¦  8
-
 drop table decimal_256_unique_t;
