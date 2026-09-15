@@ -3657,6 +3657,27 @@ except Exception:
                 ).encode()
             )
 
+    def test_open_invocation_payload_must_be_object(self):
+        tuple_value = {
+            "account_id": 1,
+            "statement_id": "statement",
+            "group_id": "group",
+            "group_epoch": 1,
+            "invocation_id": "invocation",
+            "lease_epoch": 1,
+        }
+        for payload in (None, [], "text"):
+            value = {
+                "version": worker.PROTOCOL_VERSION,
+                "kind": "OpenInvocation",
+                "tuple": tuple_value,
+                "payload": payload,
+            }
+            with self.assertRaisesRegex(ValueError, "payload must be an object"):
+                worker._decode_control(json.dumps(value).encode())
+            with self.assertRaisesRegex(ValueError, "payload must be an object"):
+                worker._encode_control(value)
+
     def test_control_encoder_rejects_nonstandard_json_numbers(self):
         tuple_value = {
             "account_id": 1,
