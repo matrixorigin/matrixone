@@ -656,7 +656,7 @@ func (ag *aggState) readStateArg(
 			}
 			var ownedCanonical []byte
 			var legacyValue []byte
-			if usesCanonicalDistinctWire(info) && !canonicalWire {
+			if canonicalDistinctMembershipEnabled(info) && !canonicalWire {
 				payload := kbuf[kAggArgPrefixSz:]
 				// Retain the legacy representative as the skiplist value. A
 				// current receiver may later have to re-export this state to a
@@ -753,9 +753,17 @@ func writeSpillDistinctWirePayload(
 }
 
 func usesCanonicalDistinctWire(info *aggInfo) bool {
-	return info != nil && info.isDistinct && info.saveArg &&
-		info.usesOpaqueArgEncoding() && !info.preserveDistinctInputOrder &&
+	return canonicalDistinctMembershipEnabled(info) &&
 		!info.legacyCanonicalDistinctKeyWire
+}
+
+// canonicalDistinctMembershipEnabled controls the in-memory equivalence key,
+// independently of whether the peer can read the v76 marker-bearing wire
+// format. A current receiver must normalize legacy raw payloads before they
+// can be appended to or merged with current canonical keys.
+func canonicalDistinctMembershipEnabled(info *aggInfo) bool {
+	return info != nil && info.isDistinct && info.saveArg &&
+		info.usesOpaqueArgEncoding() && !info.preserveDistinctInputOrder
 }
 
 func fixedDistinctRepresentativeIsNegativeZero(
