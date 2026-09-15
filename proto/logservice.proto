@@ -217,10 +217,13 @@ message LogStoreHeartbeat {
   // the store starts from a new data directory.
   string StoreIncarnation = 11;
   // ViewMetadataAdmissionProtocolV2Supported proves that this HAKeeper RSM
-  // understands the persisted-expression protocol floor carried by admission
-  // commands and snapshots. It is a separate capability because the original
-  // admission bit predates expression compatibility checks.
+  // understands the persisted-expression admission payload. It predates the
+  // independent activation entry and is retained for compatibility checks.
   bool ViewMetadataAdmissionProtocolV2Supported = 12;
+  // ViewMetadataAdmissionProtocolV3Supported proves that this HAKeeper RSM
+  // understands the independent persisted-expression activation entry and
+  // versioned snapshot envelope.
+  bool ViewMetadataAdmissionProtocolV3Supported = 13;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -456,6 +459,11 @@ enum HAKeeperUpdateType {
   CompleteLogServiceRecoveryUpdate = 19;
   EnableCommandDeliveryUpdate = 20;
   EnableViewMetadataAdmissionUpdate = 21;
+  // ActivatePersistedExpressionProtocolUpdate is deliberately separate from
+  // the legacy admission update.  An older HAKeeper RSM must reject this
+  // entry instead of replaying it while ignoring the persisted-expression
+  // protocol floor.
+  ActivatePersistedExpressionProtocolUpdate = 22;
 }
 
 // HAKeeperState state transition diagram
@@ -826,9 +834,9 @@ message LogStoreInfo {
   bool ViewMetadataAdmissionSupported = 10;
   string StoreIncarnation = 11;
   // ViewMetadataAdmissionProtocolV2Supported proves that this HAKeeper RSM
-  // understands the persisted-expression protocol floor carried by admission
-  // commands and snapshots.
+  // understands the persisted-expression admission payload.
   bool ViewMetadataAdmissionProtocolV2Supported = 12;
+  bool ViewMetadataAdmissionProtocolV3Supported = 13;
 }
 
 message LogState {

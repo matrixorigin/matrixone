@@ -127,6 +127,35 @@ func TestPersistedProtocolVersionAdmissionRejectsFutureReader(t *testing.T) {
 		proc.Ctx, proc, defines.MORPCVersion72), "protocol version 72")
 }
 
+func TestPersistedProtocolVersionAdmissionHonorsCommittedFloor(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldFloor)
+		} else {
+			if value, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+				rt.CompareAndDeleteGlobalVariables(
+					moruntime.PersistedExpressionProtocolFloor, value)
+			}
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(0))
+	require.ErrorContains(t, RequirePersistedProtocolVersion(
+		proc.Ctx, proc, defines.MORPCVersion72), "protocol version 72")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion72))
+	require.NoError(t, RequirePersistedProtocolVersion(
+		proc.Ctx, proc, defines.MORPCVersion72))
+}
+
 func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	proc := ctx.GetProcess()

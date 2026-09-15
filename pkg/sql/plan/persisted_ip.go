@@ -61,9 +61,7 @@ func RequirePersistedProtocolVersion(
 	}
 	if proc != nil {
 		if rt := moruntime.ServiceRuntime(proc.GetService()); rt != nil {
-			value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-			version, valid := value.(int64)
-			if ok && valid && version >= requiredVersion {
+			if persistedProtocolRuntimeAllows(rt, requiredVersion) {
 				return nil
 			}
 		}
@@ -91,9 +89,7 @@ func RequirePersistedProtocolVersionForService(
 	}
 	if service != "" {
 		if rt := moruntime.ServiceRuntime(service); rt != nil {
-			value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-			version, valid := value.(int64)
-			if ok && valid && version >= requiredVersion {
+			if persistedProtocolRuntimeAllows(rt, requiredVersion) {
 				return nil
 			}
 		}
@@ -105,6 +101,29 @@ func RequirePersistedProtocolVersionForService(
 		ctx,
 		"persisted expression semantics require all CNs to support protocol version %d",
 		requiredVersion)
+}
+
+// persistedProtocolRuntimeAllows keeps the fast DDL/metadata admission check
+// independent from row execution.  The deployment protocol must be new
+// enough, and when a CN has installed the durable HAKeeper-floor key that
+// floor must have reached the requested version too.  A missing floor key is
+// retained as a compatibility fallback for standalone/unit-test runtimes.
+func persistedProtocolRuntimeAllows(
+	rt moruntime.Runtime,
+	requiredVersion int64,
+) bool {
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < requiredVersion {
+		return false
+	}
+	floorValue, floorPresent := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolFloor)
+	if !floorPresent {
+		return true
+	}
+	floor, valid := floorValue.(int64)
+	return valid && floor >= requiredVersion
 }
 
 // RequiredPersistedIPFunctionProtocolVersion reports the durable protocol

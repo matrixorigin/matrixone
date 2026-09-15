@@ -376,6 +376,12 @@ func TestRegenerateViewDefinitionRejectsInvalidPersistedDefinitions(t *testing.T
 	require.Error(t, err)
 	_, err = RegenerateViewDefinition(ctx, `{"Stmt":"select 1"}`)
 	require.Error(t, err)
+	_, err = RegenerateViewDefinition(ctx,
+		`{"Stmt":"select (","required_protocol_version":73}`)
+	require.ErrorContains(t, err, "protocol version 73")
+	_, err = RegenerateViewDefinition(ctx,
+		`{"Stmt":"select (","required_protocol_version":-1}`)
+	require.ErrorContains(t, err, "must not be negative")
 
 	for _, regenerated := range []*RegeneratedViewDefinition{
 		nil,
