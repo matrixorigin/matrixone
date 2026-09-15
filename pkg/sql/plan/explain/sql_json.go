@@ -554,7 +554,7 @@ func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.VectorIndexSc
 	if spec == nil || spec.Index == nil {
 		return nil, moerr.NewInvalidInput(ctx, "vector index scan metadata is missing")
 	}
-	values := make([]string, 0, 4+len(spec.PreFilters))
+	values := make([]string, 0, 8+len(spec.PreFilters))
 	values = append(values, "index="+spec.Index.IndexName)
 	if spec.DistanceFunction != "" {
 		values = append(values, "metric="+spec.DistanceFunction)
@@ -565,6 +565,7 @@ func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.VectorIndexSc
 	}{
 		{name: "query_vector", expr: spec.QueryVector},
 		{name: "candidate_limit", expr: spec.CandidateLimit},
+		{name: "first_round_limit", expr: spec.FirstRoundLimit},
 	} {
 		value, err := sqlJSONExpr(ctx, field.expr, options)
 		if err != nil {
@@ -572,6 +573,35 @@ func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.VectorIndexSc
 		}
 		if value != "" {
 			values = append(values, field.name+"="+value)
+		}
+	}
+	if spec.DistanceRange != nil {
+		for _, bound := range []struct {
+			name      string
+			boundType plan.BoundType
+			expr      *plan.Expr
+		}{
+			{name: "distance_lower_bound", boundType: spec.DistanceRange.LowerBoundType, expr: spec.DistanceRange.LowerBound},
+			{name: "distance_upper_bound", boundType: spec.DistanceRange.UpperBoundType, expr: spec.DistanceRange.UpperBound},
+		} {
+			if bound.expr == nil && bound.boundType == plan.BoundType_UNBOUNDED {
+				continue
+			}
+			if bound.expr == nil {
+				return nil, moerr.NewInvalidInputf(ctx, "vector index scan %s expression is missing", bound.name)
+			}
+			boundType := bound.boundType.String()
+			if boundType == "" {
+				return nil, moerr.NewInvalidInputf(ctx, "vector index scan %s has unknown bound type %d", bound.name, bound.boundType)
+			}
+			value, err := sqlJSONExpr(ctx, bound.expr, options)
+			if err != nil {
+				return nil, err
+			}
+			if value == "" {
+				return nil, moerr.NewInvalidInputf(ctx, "vector index scan %s expression is empty", bound.name)
+			}
+			values = append(values, bound.name+"_type="+boundType, bound.name+"="+value)
 		}
 	}
 	for i, expr := range spec.PreFilters {
