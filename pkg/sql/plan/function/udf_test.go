@@ -104,6 +104,12 @@ func TestPythonUdfArgTypeCastKeepsDeclaredDescriptorForSameOID(t *testing.T) {
 	require.Nil(t, PythonUdfArgTypeCast([]types.Type{source}, nil))
 }
 
+func TestPythonCatalogTypeNamePreservesLogicalDecimalAlias(t *testing.T) {
+	require.Equal(t, "decimal", PythonCatalogTypeName(types.New(types.T_decimal64, 18, 2)))
+	require.Equal(t, "decimal", PythonCatalogTypeName(types.New(types.T_decimal128, 38, 10)))
+	require.Equal(t, "bigint", PythonCatalogTypeName(types.T_int64.ToType()))
+}
+
 func TestPythonCatalogSignatureRejectsLogicalDescriptorDrift(t *testing.T) {
 	argument, err := NewPythonTypeDescriptor(types.T_int64.ToType())
 	require.NoError(t, err)
