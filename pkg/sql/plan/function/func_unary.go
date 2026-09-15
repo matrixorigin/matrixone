@@ -8952,9 +8952,17 @@ func builtInCrc32Result[Tr types.FixedSizeTExceptStrType](
 	selectList *FunctionSelectList,
 	toResult func(uint32) Tr,
 ) error {
+	isJSON := parameters[0].GetType().Oid == types.T_json
 	return opUnaryBytesToFixedWithErrorCheck[Tr](
 		parameters,
 		result, proc, length, func(v []byte) (Tr, error) {
+			if isJSON {
+				var err error
+				v, err = types.DecodeJson(v).MarshalJSON()
+				if err != nil {
+					return toResult(0), err
+				}
+			}
 			content.hah.Reset()
 			_, err := content.hah.Write(v)
 			if err != nil {

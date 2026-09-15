@@ -57,7 +57,21 @@ create table t1 (a json,b int);
 insert into t1 values ('{"t1":"a"}',1);
 insert into t1 values ('{"t1":"b"}',2);
 insert into t1 values ('{"t1":"c"}',3);
+insert into t1 values ('[1,true,"x"]',4);
+insert into t1 values ('1',5);
+insert into t1 values ('"x"',6);
+insert into t1 values ('true',7);
+insert into t1 values ('false',8);
+insert into t1 values ('null',9);
+insert into t1 values (NULL,10);
 select crc32(a),b from t1;
+drop table t1;
+
+drop table if exists crc32_binary;
+create table crc32_binary(id int, b varbinary(2));
+insert into crc32_binary values (1,X'00FF'),(2,X'00'),(3,X'FF'),(4,X''),(5,NULL);
+select id,crc32(b) from crc32_binary order by id;
+drop table crc32_binary;
 
 
 drop table if exists test_table;
