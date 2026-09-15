@@ -3771,7 +3771,7 @@ func initFormatTestCase() []tcTemp {
 	r2 := "Dec December 12 12 21st 21 21 356 23 11 12 PM 11:12:34 PM 23:12:34 34 123456 51 51 51 51 Fri Friday 5 2012 2012 2012 12 %"
 
 	d3, _ := types.ParseDatetime("0001-01-01 00:00:00.123456", 6)
-	r3 := `Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 00 01 53 01 Mon Monday 1 0000 0001 0001 01 %`
+	r3 := `Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123456 00 00 53 01 Mon Monday 1 0000 0001 0001 01 %`
 
 	d4, _ := types.ParseDatetime("2016-09-3 00:59:59.123456", 6)
 	r4 := `Sep September 09 9 3rd 03 3 247 0 12 59 AM 12:59:59 AM 00:59:59 59 123456 35 35 35 35 Sat Saturday 6 2016 2016 2016 16 %`
