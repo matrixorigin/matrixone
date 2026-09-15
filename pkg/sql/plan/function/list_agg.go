@@ -817,6 +817,7 @@ var MinMaxSupportedTypes = []types.T{
 	types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_datalink,
 	types.T_uuid,
 	types.T_binary, types.T_varbinary,
+	types.T_json,
 }
 
 var AnyValueSupportedTypes = []types.T{

@@ -20,10 +20,215 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+func minMaxJSONBytes(t *testing.T, value any) []byte {
+	t.Helper()
+	bj, err := bytejson.CreateByteJSONWithCheck(value)
+	require.NoError(t, err)
+	encoded, err := bj.Marshal()
+	require.NoError(t, err)
+	return encoded
+}
+
+func TestMinMaxJSONUsesTypedComparisonAcrossBatchesAndNulls(t *testing.T) {
+	tests := []struct {
+		name   string
+		values []any
+		min    any
+		max    any
+	}{
+		{name: "numeric little endian", values: []any{int64(256), int64(1)}, min: int64(1), max: int64(256)},
+		{name: "numeric encodings", values: []any{float64(1), int64(256)}, min: float64(1), max: int64(256)},
+		{name: "zero before boolean", values: []any{false, int64(0)}, min: int64(0), max: false},
+		{name: "array element then length", values: []any{[]any{int64(0), int64(0)}, []any{int64(0)}}, min: []any{int64(0)}, max: []any{int64(0), int64(0)}},
+		{name: "json null before number", values: []any{int64(0), nil}, min: nil, max: int64(0)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, aggID := range []int64{AggIdOfMin, AggIdOfMax} {
+				mp := mpool.MustNewZero()
+				input := vector.NewVec(types.T_json.ToType())
+				first := minMaxJSONBytes(t, tc.values[0])
+				second := minMaxJSONBytes(t, tc.values[1])
+				require.NoError(t, vector.AppendBytes(input, first, false, mp))
+				// A SQL NULL is not a JSON value and must not participate in the
+				// comparison. It is deliberately placed between two batches.
+				require.NoError(t, vector.AppendBytes(input, nil, true, mp))
+				agg := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, types.T_json.ToType())
+				require.NoError(t, agg.GroupGrow(1))
+				require.NoError(t, agg.BatchFill(0, []uint64{1, 1}, []*vector.Vector{input}))
+
+				secondInput := vector.NewVec(types.T_json.ToType())
+				require.NoError(t, vector.AppendBytes(secondInput, second, false, mp))
+				require.NoError(t, vector.AppendBytes(secondInput, minMaxJSONBytes(t, tc.values[0]), false, mp))
+				require.NoError(t, agg.BatchFill(0, []uint64{1, GroupNotMatched}, []*vector.Vector{secondInput}))
+
+				results, err := agg.Flush()
+				require.NoError(t, err)
+				require.Len(t, results, 1)
+				wantValue := tc.min
+				if aggID == AggIdOfMax {
+					wantValue = tc.max
+				}
+				want := minMaxJSONBytes(t, wantValue)
+				require.Equal(t, want, results[0].GetBytesAt(0))
+				results[0].Free(mp)
+				agg.Free()
+				input.Free(mp)
+				secondInput.Free(mp)
+				require.Zero(t, mp.CurrNB())
+			}
+		})
+	}
+}
+
+func TestMinMaxJSONMergeAndExtraAdmission(t *testing.T) {
+	for _, aggID := range []int64{AggIdOfMin, AggIdOfMax} {
+		t.Run(fmt.Sprint(aggID), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			typ := types.T_json.ToType()
+			leftInput := vector.NewVec(typ)
+			rightInput := vector.NewVec(typ)
+			require.NoError(t, vector.AppendBytes(leftInput, minMaxJSONBytes(t, int64(256)), false, mp))
+			require.NoError(t, vector.AppendBytes(rightInput, minMaxJSONBytes(t, int64(1)), false, mp))
+			left := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
+			right := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
+			require.NoError(t, left.GroupGrow(1))
+			require.NoError(t, right.GroupGrow(1))
+			require.NoError(t, left.BulkFill(0, []*vector.Vector{leftInput}))
+			require.NoError(t, right.BulkFill(0, []*vector.Vector{rightInput}))
+			require.NoError(t, left.Merge(right, 0, 0))
+
+			leftResults, err := left.Flush()
+			require.NoError(t, err)
+			rightResults, err := right.Flush()
+			require.NoError(t, err)
+			wantLeft := minMaxJSONBytes(t, int64(1))
+			wantRight := minMaxJSONBytes(t, int64(1))
+			if aggID == AggIdOfMax {
+				wantLeft = minMaxJSONBytes(t, int64(256))
+				wantRight = minMaxJSONBytes(t, int64(1))
+			}
+			require.Equal(t, wantLeft, leftResults[0].GetBytesAt(0))
+			require.Equal(t, wantRight, rightResults[0].GetBytesAt(0))
+			leftResults[0].Free(mp)
+			rightResults[0].Free(mp)
+			left.Free()
+			right.Free()
+			leftInput.Free(mp)
+			rightInput.Free(mp)
+
+			extra := minMaxJSONBytes(t, int64(1))
+			extraExec := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
+			for _, invalid := range [][]byte{nil, {}, {0xff}, {byte(bytejson.TpCodeArray), 1}} {
+				require.Error(t, extraExec.SetExtraInformation(invalid, 0))
+			}
+			require.NoError(t, extraExec.SetExtraInformation(extra, 0))
+			extra[0] = byte(bytejson.TpCodeInt64)
+			require.NoError(t, extraExec.GroupGrow(1))
+			results, err := extraExec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, minMaxJSONBytes(t, int64(1)), results[0].GetBytesAt(0))
+			results[0].Free(mp)
+			extraExec.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestMinMaxJSONStableAndSpillRoundTrip(t *testing.T) {
+	for _, aggID := range []int64{AggIdOfMin, AggIdOfMax} {
+		t.Run(fmt.Sprint(aggID), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			typ := types.T_json.ToType()
+			input := vector.NewVec(typ)
+			values := []any{int64(256), int64(1), false, nil}
+			for _, value := range values {
+				require.NoError(t, vector.AppendBytes(input, minMaxJSONBytes(t, value), false, mp))
+			}
+			source := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
+			require.NoError(t, source.GroupGrow(2))
+			require.NoError(t, source.BatchFill(0, []uint64{1, 1, 2, 2}, []*vector.Vector{input}))
+
+			var stable bytes.Buffer
+			require.NoError(t, source.SaveIntermediateResult(2, [][]uint8{{1, 1}}, &stable))
+			restored := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
+			require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(stable.Bytes()), mp))
+			stableResults, err := restored.Flush()
+			require.NoError(t, err)
+			require.Len(t, stableResults, 1)
+			require.Equal(t, minMaxJSONBytes(t, map[bool]any{true: int64(1), false: int64(256)}[aggID == AggIdOfMin]), stableResults[0].GetBytesAt(0))
+			require.Equal(t, minMaxJSONBytes(t, map[bool]any{true: nil, false: false}[aggID == AggIdOfMin]), stableResults[0].GetBytesAt(1))
+			stableResults[0].Free(mp)
+			restored.Free()
+
+			var spill bytes.Buffer
+			require.NoError(t, source.(SpillStateCodec).SaveSpillIntermediateRows(0, []int32{0, 1}, &spill))
+			spillTarget := makeMinMaxExec(mp, aggID, aggID == AggIdOfMin, typ)
+			require.NoError(t, spillTarget.(SpillStateCodec).UnmarshalSpillFromReader(bytes.NewReader(spill.Bytes()), mp))
+			spillResults, err := spillTarget.Flush()
+			require.NoError(t, err)
+			require.Len(t, spillResults, 1)
+			require.Equal(t, minMaxJSONBytes(t, map[bool]any{true: int64(1), false: int64(256)}[aggID == AggIdOfMin]), spillResults[0].GetBytesAt(0))
+			spillResults[0].Free(mp)
+			spillTarget.Free()
+
+			source.Free()
+			input.Free(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestMinMaxJSONExtraUsesAllocationAccount(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	extra := minMaxJSONBytes(t, int64(1))
+	exec, err := MakeGroupAgg(mp, AggIdOfMin, false, allocation, extra, types.T_json.ToType())
+	require.NoError(t, err)
+	require.Positive(t, account.Snapshot().Used)
+	exec.Free()
+	require.NoError(t, exec.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestMinMaxJSONFixtureOrder(t *testing.T) {
+	inputs := []string{
+		`{"key10":"value1","key2":"value2"}`,
+		`{"key1":"@#$_%^&*()!@","key123456":223}`,
+		`{"芝士面包":"12abc","key_56":78.90}`,
+		`{"":"","12_key":"中文mo"}`,
+		`{"a 1":"b 1","13key4":"中文mo"}`,
+		`{"d1":"2020-10-09","d2":"2019-08-20 12:30:00"}`,
+		`{"d1":[true,false]}`,
+		`{}`,
+		`{"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee":"1234567890000000000000000000000000000000000000000000000","uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu":["aaaaaaaaaaaaaaaaaaaaaaa11111111111111111111111111111111111111"]}`,
+	}
+	var min, max bytejson.ByteJson
+	for i, text := range inputs {
+		value, err := bytejson.ParseFromString(text)
+		require.NoError(t, err)
+		if i == 0 || bytejson.CompareByteJson(value, min) < 0 {
+			min = value
+		}
+		if i == 0 || bytejson.CompareByteJson(value, max) > 0 {
+			max = value
+		}
+	}
+	minText, err := min.MarshalJSON()
+	require.NoError(t, err)
+	maxText, err := max.MarshalJSON()
+	require.NoError(t, err)
+	require.JSONEq(t, `{}`, string(minText))
+	require.JSONEq(t, `{"key_56":78.9,"芝士面包":"12abc"}`, string(maxText))
+}
 
 func TestFixedMinMaxPreservesAndMergesStringSources(t *testing.T) {
 	for _, valueType := range []struct {

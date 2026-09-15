@@ -113,6 +113,7 @@ delete from json_table_61;
 select * from json_table_61;
 
 -- agg function
+-- MIN/MAX JSON uses SQL typed JSON ordering, including containers and JSON null.
 select count(j1) from json_table_1 ;
 select max(j1) from json_table_1 ;
 select min(j1) from json_table_1 ;

@@ -133,9 +133,11 @@ select count(j1) from json_table_1 ;
 count(j1)
 9
 select max(j1) from json_table_1 ;
-invalid argument aggregate function max, bad value [JSON]
+max(j1)
+{"key_56": 78.9, "芝士面包": "12abc"}
 select min(j1) from json_table_1 ;
-invalid argument aggregate function min, bad value [JSON]
+min(j1)
+{}
 create table json_table_3b(d1 int,j1 json);
 insert into json_table_3b values(34,'{"key10": "value1", "key2": "value2"}'),(50,'{"key1": "@#$_%^&*()!@", "123456": "中文mo"}'),(1,'{"芝士面包": "12abc", "123456": "中文mo"}'),(45,'{"": "", "123456": "中文mo"}'),(22,'{"a 1": "b 1", "123456": "中文mo"}'),(88,'{"d1": "2020-10-09", "d2": "2019-08-20 12:30:00"}'),(4,'{"key10": "value1", "key2": "value2"}'),(501,'{"key1": "@#$_%^&*()!@", "123456": "中文mo"}'),(1111,'{"芝士面包": "12abc", "123456": "中文mo"}'),(415,'{"": "", "123456": "中文mo"}');
 select max(d1),j1 from json_table_3b group by j1 order by j1;
