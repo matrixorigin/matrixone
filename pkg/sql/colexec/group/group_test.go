@@ -3822,10 +3822,9 @@ func TestMergeGroupH0SkipsGenericSpillAndReuses(t *testing.T) {
 
 func TestMergeGroupUsesIncomingGroupedModeForMedian(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	defer func() {
+	t.Cleanup(func() {
 		proc.Free()
-		require.Zero(t, proc.Mp().CurrNB())
-	}()
+	})
 
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
@@ -3858,6 +3857,23 @@ func TestMergeGroupUsesIncomingGroupedModeForMedian(t *testing.T) {
 		nil,
 	)})
 	merge.AppendChild(mergeChild)
+	allocation := installGroupTestAllocation(t, merge, proc, 64<<20)
+	mergeFreed := false
+	mergeChildFreed := false
+	allocationFinalized := false
+	t.Cleanup(func() {
+		if !mergeFreed {
+			merge.Free(proc, false, nil)
+		}
+		if !mergeChildFreed {
+			mergeChild.Free(proc, false, nil)
+		}
+		if !allocationFinalized {
+			require.Zero(t, allocation.account.Snapshot().Used)
+			finalizeGroupTestAllocation(t, merge, allocation)
+		}
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	require.NoError(t, merge.Prepare(proc))
 	outputs := collectBatches(t, merge, proc)
 	require.Len(t, outputs, 1)
@@ -3867,7 +3883,12 @@ func TestMergeGroupUsesIncomingGroupedModeForMedian(t *testing.T) {
 	require.Equal(t, []float64{10, 20}, vector.MustFixedColNoTypeCheck[float64](outputs[0].Vecs[1]))
 	require.Equal(t, int32(H8), merge.ctr.mtyp)
 	merge.Free(proc, false, nil)
+	mergeFreed = true
 	mergeChild.Free(proc, false, nil)
+	mergeChildFreed = true
+	require.Zero(t, allocation.account.Snapshot().Used)
+	finalizeGroupTestAllocation(t, merge, allocation)
+	allocationFinalized = true
 }
 
 func TestMergeGroupHonorsCancellationAfterInput(t *testing.T) {
