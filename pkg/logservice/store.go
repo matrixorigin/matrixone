@@ -971,12 +971,31 @@ func (l *store) viewMetadataAdmissionLogStoresReadyWithProtocol(
 	state *pb.CheckerState,
 	requireProtocolV3 bool,
 ) bool {
-	cfg := l.cfg.GetHAKeeperConfig()
-	cfg.Fill()
-	for _, info := range state.LogState.Stores {
-		if !cfg.LogStoreExpired(info.Tick, state.Tick) &&
-			(!info.ViewMetadataAdmissionSupported ||
-				(requireProtocolV3 && !info.ViewMetadataAdmissionProtocolV3Supported)) {
+	if state == nil {
+		return false
+	}
+	shard, ok := state.LogState.Shards[hakeeper.DefaultHAKeeperShardID]
+	if !ok || len(shard.Replicas) == 0 {
+		return false
+	}
+	check := func(uuid string) bool {
+		info, ok := state.LogState.Stores[uuid]
+		if !ok || !info.ViewMetadataAdmissionSupported {
+			return false
+		}
+		return !requireProtocolV3 || info.ViewMetadataAdmissionProtocolV3Supported
+	}
+	// A Store record can outlive membership, but every current voting and
+	// non-voting HAKeeper member is still a Raft recipient. Heartbeat expiry is
+	// therefore not a capability exemption: an old member must advertise V3
+	// before a protocol-bearing entry can be proposed.
+	for _, uuid := range shard.Replicas {
+		if !check(uuid) {
+			return false
+		}
+	}
+	for _, uuid := range shard.NonVotingReplicas {
+		if !check(uuid) {
 			return false
 		}
 	}
@@ -1070,7 +1089,14 @@ func (l *store) tryEnableViewMetadataAdmission(
 		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
 			l.cfg.GetHAKeeperConfig())
 	} else if admission.Enabled {
-		if admission.RequiredProtocolVersion < uint64(defines.MORPCLatestVersion) {
+		if admission.Pending {
+			// A pending generation drain can only make progress through the
+			// legacy reconciliation entry, which expires abandoned targets. The
+			// protocol-bearing entry deliberately remains fail-closed while the
+			// durable pending bit is set.
+			cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
+				l.cfg.GetHAKeeperConfig())
+		} else if admission.RequiredProtocolVersion < uint64(defines.MORPCLatestVersion) {
 			if !l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true) {
 				return false, nil
 			}
