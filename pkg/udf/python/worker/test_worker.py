@@ -237,6 +237,35 @@ class WorkerContractTest(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_definition_validation_rejects_handler_rebound_in_module_control_flow(self):
+        sources = (
+            "def f(ctx, value): return value\n"
+            "if True:\n"
+            "    f = 1\n",
+            "def f(ctx, value): return value\n"
+            "for f in (1,):\n"
+            "    pass\n",
+            "def f(ctx, value): return value\n"
+            "from math import pi as f\n",
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                with self.assertRaisesRegex(ValueError, "not a module-level function"):
+                    worker._validate_definition_syntax(
+                        complete_definition_validation_payload(source)
+                    )
+
+        # A same-named local in a nested function does not rebind the module
+        # handler and must remain valid.
+        worker._validate_definition_syntax(
+            complete_definition_validation_payload(
+                "def f(ctx, value):\n"
+                "    def inner():\n"
+                "        f = 1\n"
+                "    return value\n"
+            )
+        )
+
     def test_capability_advertises_worker_instance_lease(self):
         encoded = worker._encode_capabilities(
             {"protocol_version": worker.PROTOCOL_VERSION}, lease_epoch=17
