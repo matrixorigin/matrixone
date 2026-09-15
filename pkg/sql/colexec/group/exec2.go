@@ -193,22 +193,20 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			group.ctr.keyWidth += int32(width)
 		}
 
+		legacyShortVariableKey := variableLengthKey && group.ctr.keyWidth <= 8 &&
+			!groupHashStringWireEnabled(proc)
 		if group.ctr.keyWidth == 0 {
 			group.ctr.mtyp = H0
-		} else if compactHashKey && group.ctr.keyWidth <= 8 {
+		} else if (compactHashKey || legacyShortVariableKey) && group.ctr.keyWidth <= 8 {
 			group.ctr.mtyp = H8
 		} else {
 			group.ctr.mtyp = HStr
 		}
-		// HStr is a new partial-wire grammar. There is no safe representation
-		// for a short variable-length key on a pre-v75 receiver: H8 loses field
-		// boundaries, while HStr is not understood by the old receiver. Fail
-		// before emitting a partial rather than risk a silent grouping error.
-		if variableLengthKey && group.ctr.keyWidth <= 8 &&
-			!groupHashStringWireEnabled(proc) {
-			return moerr.NewInvalidStateNoCtx(
-				"variable-length GROUP keys require MORPCVersion75")
-		}
+		// HStr is the v75 length-delimited partial grammar. During a rolling
+		// upgrade, an old coordinator can still send this new worker a plan that
+		// expects the historical H8 producer behavior. Keep that legacy wire until
+		// the shared rollout gate reaches v75; the planner prevents new plans from
+		// creating a new short-varlen remote boundary before then.
 
 		group.ctr.groupingAware = false
 		if group.DynamicGrouping {
@@ -1320,6 +1318,8 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 		aggexec.SetGroupConcatSourceRowWire(ag, groupConcatSourceRowWireEnabled(proc))
 		aggexec.SetGroupConcatSourceRowProvenanceWire(
 			ag, groupConcatSourceRowProvenanceWireEnabled(proc))
+		aggexec.SetCanonicalDistinctKeyWire(
+			ag, canonicalDistinctKeyWireEnabled(proc))
 		if aggexec.RequiresCanonicalDistinctKeyWire(ag) &&
 			!canonicalDistinctKeyWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(

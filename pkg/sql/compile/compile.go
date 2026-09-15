@@ -1953,7 +1953,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 	case plan.Node_AGG:
 		childNodeID := node.Children[0]
 		childNode := nodes[childNodeID]
-		if isLocalPreAggregationGroup(node, childNode) {
+		if isLocalPreAggregationGroup(node, childNode) &&
+			!c.hasUnsupportedRemoteGroupWire(node) {
 			ss, err = c.compileLocalPreAggregationScope(step, childNodeID, nodes)
 		} else {
 			ss, err = c.compilePlanScope(step, childNodeID, nodes)
@@ -7614,11 +7615,7 @@ func (c *Compile) compileGroupWithoutShuffle(
 	distinctRequiresSingleStage bool,
 ) []*Scope {
 	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) ||
-		(hasApproxPercentile(node) && !c.supportsRemoteApproxPercentile()) ||
-		(hasHLLAggregate(node) && !c.supportsRemoteHLL()) ||
-		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
-		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
-		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()) {
+		c.hasUnsupportedRemoteGroupWire(node) {
 		return c.compileOrderedAggregateSingleStage(node, ss, ns)
 	}
 	if c.IsSingleScope(ss) {
@@ -7626,6 +7623,14 @@ func (c *Compile) compileGroupWithoutShuffle(
 	}
 	return c.compileMergeGroup(
 		node, ss, ns, distinctRequiresSingleStage)
+}
+
+func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
+	return (hasApproxPercentile(node) && !c.supportsRemoteApproxPercentile()) ||
+		(hasHLLAggregate(node) && !c.supportsRemoteHLL()) ||
+		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
+		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
+		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates())
 }
 
 func isLocalPreAggregationGroup(parent, child *plan.Node) bool {
