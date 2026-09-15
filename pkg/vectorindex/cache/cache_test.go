@@ -248,6 +248,52 @@ func TestCacheRemovePrefix(t *testing.T) {
 	Cache.Destroy()
 }
 
+// emptyGenSearch is a MockSearch that reports EmptyGeneration, exercising the cache's
+// not-cache-empty path (fulltext2's base-less + cdc_tail-less generation).
+type emptyGenSearch struct {
+	MockSearch
+	empty bool
+}
+
+func (m *emptyGenSearch) EmptyGeneration() bool { return m.empty }
+
+// TestCacheNotCacheEmpty: a loaded generation reporting EmptyGeneration (no tag=0 base, no
+// tag=1 cdc_tail) is served but NOT retained, so the next query reloads and picks up the base
+// once it appears -- the deterministic guard for the copy-alter base-less window regression. A
+// data-bearing generation is cached as usual. Covers both the Search and SearchInto paths.
+func TestCacheNotCacheEmpty(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+
+	Cache = NewVectorIndexCache()
+	// Empty generation via Search: served, then evicted (not retained).
+	empty := &emptyGenSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: true}
+	_, _, err := Cache.Search(sqlproc, "empty_idx", empty, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.Nil(t, err)
+	_, ok := Cache.IndexMap.Load("empty_idx")
+	require.False(t, ok, "a base-less + cdc_tail-less generation must not be retained")
+
+	// Non-empty generation via Search: cached as usual.
+	full := &emptyGenSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: false}
+	_, _, err = Cache.Search(sqlproc, "full_idx", full, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.Nil(t, err)
+	_, ok = Cache.IndexMap.Load("full_idx")
+	require.True(t, ok, "a data-bearing generation must be cached")
+
+	// SearchInto path: same not-cache-empty contract.
+	var out vectorindex.SearchOutput
+	empty2 := &emptyGenSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: true}
+	require.Nil(t, Cache.SearchInto(sqlproc, "empty_idx2", empty2, fp32a, vectorindex.RuntimeConfig{Limit: 4}, &out))
+	_, ok = Cache.IndexMap.Load("empty_idx2")
+	require.False(t, ok, "SearchInto must not retain a base-less + cdc_tail-less generation")
+
+	Cache.Destroy()
+}
+
 func TestCacheAny(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)

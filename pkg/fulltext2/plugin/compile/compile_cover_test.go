@@ -131,7 +131,13 @@ func TestAlterCopyInitSQL(t *testing.T) {
 
 	startFromNow, initSQL, err := (Hooks{}).AlterCopyInitSQL(ctx, indexDefs(""))
 	require.NoError(t, err)
-	require.True(t, startFromNow)
+	// startFromNow MUST be true. With a non-empty InitSQL the REINDEX FORCE_SYNC rebuilds the
+	// tag=0 base from source and the tail arms from the post-copy registration watermark, so the
+	// first normal CDC iteration does NOT re-collect the copied rows. Returning false here would
+	// make registerJob persist an empty startTs (watermark_updater.go), so the first iteration
+	// would CollectChanges from ts=0 and replay every copied row into cdc_tail on top of the
+	// complete base -- a full-table tail replay that duplicates postings/cache/storage (#28837).
+	require.True(t, startFromNow, "false would arm the tail from ts=0 -> full-table replay of copied rows")
 	require.Equal(t, "ALTER TABLE `db`.`src` ALTER REINDEX `idx` FULLTEXT2 FORCE_SYNC", initSQL)
 
 	// Contrast: RestoreInitSQL is the clone-optimized no-op (the base is cloned there).

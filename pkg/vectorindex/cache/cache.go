@@ -788,6 +788,15 @@ func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch
 	}
 }
 
+// algoEmptyGeneration reports a freshly loaded generation the cache should NOT retain: one
+// with no tag=0 base AND no tag=1 cdc_tail (the transient copy-alter init window before the
+// REINDEX builds the base, or an empty table). Only fulltext2 implements the optional
+// interface; every other algorithm is cached as before.
+func algoEmptyGeneration(algo *VectorIndexSearch) bool {
+	e, ok := algo.Algo.(interface{ EmptyGeneration() bool })
+	return ok && e.EmptyGeneration()
+}
+
 // house keeping to check expired keys and delete from cache
 func (c *VectorIndexCache) HouseKeeping() {
 
@@ -1015,6 +1024,15 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			return nil, nil, err
 		}
 
+		// Do not retain a base-less + cdc_tail-less generation (the transient copy-alter init
+		// window or an empty table): serve its empty result, but evict so the next query reloads
+		// and picks up the base once REINDEX builds it. Only the loader evicts (a concurrent
+		// reader already completed on the same generation); the CDC-flush RemoveIdle still
+		// refreshes a NON-empty stale generation. The evicted result is empty, so its keys alias
+		// no index memory the teardown frees.
+		if !loaded && algoEmptyGeneration(algo) {
+			c.evictEntry(key, algo, "fulltext2-empty-generation")
+		}
 		return keys, distances, nil
 	}
 }
@@ -1112,6 +1130,11 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 				continue
 			}
 			return err
+		}
+		// Do not retain a base-less + cdc_tail-less generation; see Search. out already holds
+		// the (empty) result and is caller-owned, so the teardown frees nothing it references.
+		if !loaded && algoEmptyGeneration(algo) {
+			c.evictEntry(key, algo, "fulltext2-empty-generation")
 		}
 		return nil
 	}

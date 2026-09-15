@@ -41,6 +41,16 @@ select id from docs where match(body) against('quantum') order by id;
 -- The UNRELATED COPY ALTER: adds a column the fulltext2 index does not cover.
 alter table docs add column extra int;
 
+-- PREWARM the replacement index during its base-less initialization window: this MATCH runs
+-- before the async REINDEX FORCE_SYNC builds the tag=0 base, so it loads a base-less +
+-- cdc_tail-less generation into this CN's cache. The count(*)>=0 wrapper keeps the result
+-- deterministic (always 1) whether or not the base has landed yet. Pre-fix a pinned empty
+-- generation (a busy reader, another CN, or an absent later flush leaves RemoveIdle unable to
+-- refresh it) made the post-base MATCH below return empty until the staleness sweep. The
+-- not-cache-empty fix declines to RETAIN a base-less+tail-less generation, so the reload after
+-- the base commits returns the correct rows.
+select count(*) >= 0 as prewarmed from docs where match(body) against('quantum');
+
 -- The ALTER cloned docs to a new table id, so the fulltext2 index has a NEW hidden table.
 -- Re-resolve it and wait on ITS tag=0 base. Pre-fix the CDC consumer writes only tag=1, so
 -- this base never appears and the wait times out (reproducing #28837); post-fix REINDEX
@@ -66,5 +76,23 @@ select id from docs where match(body) against('quantum') order by id;
 -- The unrelated column is present and MATCH composes with a predicate on it.
 show create table docs;
 select id, extra from docs where match(body) against('quantum') order by id;
+
+-- After the REINDEX rebuilt the tag=0 base, ordinary CDC must keep flowing: a fresh INSERT
+-- (a term absent from the base) must arrive in the tag=1 cdc_tail and become searchable. The
+-- copy-alter registered the CDC with startFromNow=true, so the first normal iteration does NOT
+-- replay the copied rows (that would need an empty ts=0 watermark) -- it carries only the new
+-- rows. MATCH then composes the base (copied rows) with the tail (new rows). Wait on the
+-- durable tag=1 tail, never MATCH (which can pin a stale per-CN cache).
+insert into docs(id, body, extra) values (100,'neutrino oscillation study',1),(101,'neutrino detector array',1);
+set @wait_tail_sql = concat(
+    'select count(*) > 0 as ready from `', database(), '`.`', @ft2_index2, '` where tag = 1');
+prepare wait_tail from @wait_tail_sql;
+-- @wait_expect(1, 120)
+execute wait_tail;
+deallocate prepare wait_tail;
+
+-- New rows arrived via the CDC tail; the base still serves the copied rows.
+select id from docs where match(body) against('neutrino') order by id;
+select id from docs where match(body) against('quantum') order by id;
 
 drop database ft2_copy_alter_case;
