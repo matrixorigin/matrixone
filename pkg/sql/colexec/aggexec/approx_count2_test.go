@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+	"slices"
 	"testing"
 
 	hll "github.com/axiomhq/hyperloglog"
@@ -593,22 +594,9 @@ func TestHllFloatSignedZeroUsesOneSQLValue(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), vector.GetFixedAtNoTypeCheck[uint64](approxResult[0], 0))
 
-	hllAdd := makeHllAdd(mp, 1, types.T_float64.ToType()).(*hllAddExec)
-	require.NoError(t, hllAdd.GroupGrow(1))
-	require.NoError(t, hllAdd.BatchFill(0, []uint64{1, 1}, []*vector.Vector{values}))
-	hllResult, err := hllAdd.Flush()
-	require.NoError(t, err)
-	restored, err := makeHllSketch(mp, nil)
-	require.NoError(t, err)
-	require.NoError(t, restored.(*hllSketch).UnmarshalBinary(hllResult[0].GetBytesAt(0)))
-	require.Equal(t, uint64(1), restored.(*hllSketch).Estimate())
-
 	values.Free(mp)
 	approxResult[0].Free(mp)
-	hllResult[0].Free(mp)
-	restored.(*hllSketch).Free()
 	approx.Free()
-	hllAdd.Free()
 
 	float32Values := vector.NewVec(types.T_float32.ToType())
 	require.NoError(t, vector.AppendFixedList(float32Values,
@@ -763,6 +751,8 @@ func TestHllAddExecFillMergeFlush(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, vecs[0].IsNull(0))
 	require.False(t, vecs[0].IsNull(1))
+	require.Equal(t, hllLegacyVersion, vecs[0].GetBytesAt(0)[0])
+	require.Equal(t, hllLegacyVersion, vecs[0].GetBytesAt(1)[0])
 
 	group1MU, err := makeHllSketch(mp, nil)
 	require.NoError(t, err)
@@ -783,6 +773,52 @@ func TestHllAddExecFillMergeFlush(t *testing.T) {
 	vecs[0].Free(mp)
 	left.Free()
 	right.Free()
+}
+
+func TestHllAddPersistedStateSurvivesUpgradeAppendAndMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	buildAddState := func(values ...int64) []byte {
+		exec := makeHllAdd(mp, 1, types.T_int64.ToType()).(*hllAddExec)
+		require.NoError(t, exec.GroupGrow(1))
+		input := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixedList(input, values, nil, mp))
+		groups := slices.Repeat([]uint64{1}, len(values))
+		require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{input}))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		data := bytes.Clone(result[0].GetBytesAt(0))
+		require.Equal(t, hllLegacyVersion, data[0])
+		result[0].Free(mp)
+		input.Free(mp)
+		exec.Free()
+		return data
+	}
+
+	baseState := buildAddState(1, 2)
+	appendedState := buildAddState(3)
+
+	merge := makeHllMerge(mp, 1, types.T_varbinary.ToType()).(*hllMergeExec)
+	require.NoError(t, merge.GroupGrow(1))
+	states := vector.NewVec(types.T_varbinary.ToType())
+	require.NoError(t, vector.AppendBytes(states, baseState, false, mp))
+	require.NoError(t, vector.AppendBytes(states, appendedState, false, mp))
+	require.NoError(t, merge.BatchFill(0, []uint64{1, 1}, []*vector.Vector{states}))
+	result, err := merge.Flush()
+	require.NoError(t, err)
+	require.Equal(t, hllLegacyVersion, result[0].GetBytesAt(0)[0])
+
+	restoredMU, err := makeHllSketch(mp, nil)
+	require.NoError(t, err)
+	restored := restoredMU.(*hllSketch)
+	require.NoError(t, restored.UnmarshalBinary(result[0].GetBytesAt(0)))
+	require.Equal(t, uint64(3), restored.Estimate())
+
+	result[0].Free(mp)
+	states.Free(mp)
+	restored.Free()
+	merge.Free()
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestHllMergeExecFillMergeFlush(t *testing.T) {
