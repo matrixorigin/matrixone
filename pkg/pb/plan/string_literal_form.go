@@ -180,6 +180,13 @@ func RequiresMORPCVersion59NumericFormatArguments(owner any) (bool, error) {
 	return features.FormatNumericArguments, err
 }
 
+// RequiresMORPCVersion72IPFunctionSemantics reports whether an owner contains
+// an IP function whose serialized execution contract changed in MORPC v72.
+func RequiresMORPCVersion72IPFunctionSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.IPFunctionSemantics, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -204,14 +211,18 @@ const (
 // A struct makes compatibility call sites name every capability instead of
 // relying on positional booleans.
 // RowDependentConvBases requires MORPC v69 for nonconstant or unsigned bases.
+// IPFunctionSemantics requires MORPC v72 because the IP functions change
+// existing overload semantics and add numeric INET_NTOA overloads.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool
 	MixedJSONBooleanEquality bool
 	FormatNumericArguments   bool
 	TypedConversionFunctions bool
+	IntegerArithmeticDomains bool
 	RowDependentConvBases    bool
 	ASCIIInt32Result         bool
+	IPFunctionSemantics      bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -221,7 +232,40 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.FormatNumericArguments ||
 		features.TypedConversionFunctions ||
 		features.ASCIIInt32Result ||
-		features.RowDependentConvBases
+		features.IntegerArithmeticDomains ||
+		features.RowDependentConvBases ||
+		features.IPFunctionSemantics
+}
+
+// These IDs are kept numeric deliberately: pkg/pb/plan cannot import the
+// planner's function package without creating an import cycle. Every listed
+// function either changed the interpretation of an existing overload or
+// gained overloads in the IP-function compatibility fix. The remote fence is
+// therefore based on function identity, not on the operand types selected by a
+// particular planner invocation.
+const (
+	remoteIPInet6AtonFunctionID    int32 = 392
+	remoteIPInet6NtoaFunctionID    int32 = 393
+	remoteIPInetAtonFunctionID     int32 = 394
+	remoteIPInetNtoaFunctionID     int32 = 395
+	remoteIPIsIPv4FunctionID       int32 = 396
+	remoteIPIsIPv6FunctionID       int32 = 397
+	remoteIPIsIPv4CompatFunctionID int32 = 398
+)
+
+func isRemoteIPFunction(functionID int32) bool {
+	switch functionID {
+	case remoteIPInet6AtonFunctionID,
+		remoteIPInet6NtoaFunctionID,
+		remoteIPInetAtonFunctionID,
+		remoteIPInetNtoaFunctionID,
+		remoteIPIsIPv4FunctionID,
+		remoteIPIsIPv6FunctionID,
+		remoteIPIsIPv4CompatFunctionID:
+		return true
+	default:
+		return false
+	}
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -232,6 +276,13 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			fn := current.GetF()
+			if fn != nil && fn.Func != nil {
+				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				// PLUS/MINUS/MULTI are stable function IDs 10/11/12.
+				if (id >= 10 && id <= 12 && overload == 2) || (id == 11 && overload == 3) {
+					features.IntegerArithmeticDomains = true
+				}
+			}
 			if !features.NumericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
 				strings.EqualFold(fn.Func.GetObjName(), "cast") {
 				features.NumericPrefix = true
@@ -264,6 +315,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			if !features.ASCIIInt32Result && isASCIIInt32Result(current) {
 				features.ASCIIInt32Result = true
+			}
+			if !features.IPFunctionSemantics && fn != nil && fn.Func != nil {
+				features.IPFunctionSemantics = isRemoteIPFunction(int32(fn.Func.Obj >> 32))
 			}
 			return nil
 		})

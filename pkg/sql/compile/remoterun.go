@@ -123,8 +123,18 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if features.IntegerArithmeticDomains {
+		if err = validateIntegerDomainDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if features.RowDependentConvBases {
 		if err = validateConvBasesDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.IPFunctionSemantics {
+		if err = validateIPFunctionDestination(proc, p); err != nil {
 			return nil, err
 		}
 	}
@@ -2107,6 +2117,9 @@ func validateRemoteExpressionPipelineProtocol(
 			"typed BIN/CONV execution requires MORPC protocol version 64",
 		)
 	}
+	if features.IntegerArithmeticDomains && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion71) {
+		return moerr.NewNotSupportedNoCtx("checked integer arithmetic requires MORPC protocol version 71")
+	}
 	if features.RowDependentConvBases && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion70) {
 		return moerr.NewNotSupportedNoCtx("row-dependent CONV bases require MORPC protocol version 70")
 	}
@@ -2114,6 +2127,12 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion65) {
 		return moerr.NewNotSupportedNoCtx(
 			"signed INT ASCII results require MORPC protocol version 65",
+		)
+	}
+	if features.IPFunctionSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
+		return moerr.NewNotSupportedNoCtx(
+			"corrected IP function semantics require MORPC protocol version 72",
 		)
 	}
 	return nil
