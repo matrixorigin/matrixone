@@ -3028,15 +3028,15 @@ func requireJSONValueContractProtocol(ctx context.Context, proc *process.Process
 	if rt == nil {
 		return moerr.NewNotSupported(
 			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 58",
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 73",
 		)
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion58 {
+	if !ok || !valid || version < defines.MORPCVersion73 {
 		return moerr.NewNotSupported(
 			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 58",
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 73",
 		)
 	}
 	return nil
@@ -3232,7 +3232,7 @@ func validateJSONValueDefaultLiteral(ctx context.Context, expr tree.Expr, target
 		}
 		floatText := jsonValueDefaultNumericText(value)
 		parsed, parseErr := strconv.ParseFloat(strings.TrimSpace(floatText), bits)
-		if parseErr != nil || math.IsInf(parsed, 0) {
+		if parseErr != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
 			return moerr.NewInvalidInputf(ctx, "invalid JSON_VALUE default %q", value)
 		}
 	case types.T_decimal64:
@@ -3257,16 +3257,33 @@ func validateJSONValueDefaultLiteral(ctx context.Context, expr tree.Expr, target
 			return err
 		}
 	case types.T_date:
-		if _, err = types.ParseDateCast(value); err != nil {
+		var parsed types.Date
+		if parsed, err = types.ParseDateCast(value); err != nil {
 			return err
 		}
+		if parsed == types.ZeroDate {
+			return moerr.NewInvalidInputf(ctx, "invalid JSON_VALUE default %q", value)
+		}
 	case types.T_time:
+		if !jsonValueDefaultFractionalPrecisionExact(value, target.Scale) {
+			return moerr.NewDataTruncatedf(ctx, "JSON_VALUE", "default time loses fractional precision")
+		}
+		if err = rejectJSONValueDefaultZeroDatetime(ctx, value); err != nil {
+			return err
+		}
 		if _, err = types.ParseTime(value, target.Scale); err != nil {
 			return err
 		}
 	case types.T_datetime:
-		if _, err = types.ParseDatetime(value, target.Scale); err != nil {
+		if !jsonValueDefaultFractionalPrecisionExact(value, target.Scale) {
+			return moerr.NewDataTruncatedf(ctx, "JSON_VALUE", "default datetime loses fractional precision")
+		}
+		var parsed types.Datetime
+		if parsed, err = types.ParseDatetime(value, target.Scale); err != nil {
 			return err
+		}
+		if parsed == types.ZeroDatetime {
+			return moerr.NewInvalidInputf(ctx, "invalid JSON_VALUE default %q", value)
 		}
 	case types.T_year:
 		if _, parseErr := types.ParseMoYear(value); parseErr != nil {
@@ -3314,6 +3331,30 @@ func jsonValueDefaultNumericExactAtScale(value string, scale int32) bool {
 	factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
 	rational.Mul(rational, new(big.Rat).SetInt(factor))
 	return rational.Denom().Cmp(big.NewInt(1)) == 0
+}
+
+func jsonValueDefaultFractionalPrecisionExact(value string, scale int32) bool {
+	if scale < 0 {
+		return false
+	}
+	value = strings.TrimSpace(value)
+	dot := strings.IndexByte(value, '.')
+	if dot < 0 {
+		return true
+	}
+	return int32(len(value[dot+1:])) <= scale
+}
+
+func rejectJSONValueDefaultZeroDatetime(ctx context.Context, value string) error {
+	value = strings.TrimSpace(value)
+	if !strings.ContainsAny(value, "-/") {
+		return nil
+	}
+	parsed, err := types.ParseDatetime(value, 6)
+	if err == nil && parsed == types.ZeroDatetime {
+		return moerr.NewInvalidInputf(ctx, "invalid JSON_VALUE default %q", value)
+	}
+	return nil
 }
 
 func jsonValueDefaultLiteralText(expr tree.Expr) (string, error) {

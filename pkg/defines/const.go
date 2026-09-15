@@ -93,7 +93,7 @@ const (
 	MORPCVersion55     int64 = 55 // session-owned temporary DDL with transactional data
 	MORPCVersion56     int64 = 56 // session-scoped AUTO_INCREMENT increment/offset and provenance
 	MORPCVersion57     int64 = 57 // Arrow LOAD external-scan pipeline payload
-	MORPCVersion58     int64 = 58 // binary-string semantics, runtime domains, and seven-argument JSON_VALUE plan contract
+	MORPCVersion58     int64 = 58 // binary-string semantics and runtime domains
 	MORPCVersion59     int64 = 59 // typed numeric FORMAT arguments in remote expressions
 	MORPCVersion60     int64 = 60 // row-dependent expression defaults
 	MORPCVersion61     int64 = 61 // index metadata provenance columns (nrow, build_ts)
@@ -120,7 +120,8 @@ const (
 	MORPCVersion82     int64 = 82 // self-completing fulltext2 json index probe (probe_tail contract)
 	MORPCVersion83     int64 = 83 // bounded COALESCE character and binary result domains
 	MORPCVersion84     int64 = 84 // extended discrete percentile input types
-	MORPCLatestVersion       = MORPCVersion84
+	MORPCVersion85     int64 = 85 // seven-argument JSON_VALUE plan contract
+	MORPCLatestVersion       = MORPCVersion85
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

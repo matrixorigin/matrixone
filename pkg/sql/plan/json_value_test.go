@@ -108,10 +108,10 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, legacy.GetF().Args, 2)
 
-	_, err = bind(defines.MORPCVersion57, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 58")
+	_, err = bind(defines.MORPCVersion72, `select json_value('1', '$' returning unsigned)`)
+	require.ErrorContains(t, err, "MORPC protocol version 73")
 
-	contract, err := bind(defines.MORPCVersion58, `select json_value('1', '$' returning unsigned)`)
+	contract, err := bind(defines.MORPCVersion73, `select json_value('1', '$' returning unsigned)`)
 	require.NoError(t, err)
 	require.Len(t, contract.GetF().Args, 7)
 }
@@ -299,6 +299,7 @@ func TestJSONValueDefaultValidationMatrix(t *testing.T) {
 	require.NoError(t, validateJSONValueDefaultLiteral(ctx, boolLiteral(true), types.New(types.T_float32, 0, 0)))
 	require.NoError(t, validateJSONValueDefaultLiteral(ctx, boolLiteral(false), types.New(types.T_float64, 0, 0)))
 	require.Error(t, validateJSONValueDefaultLiteral(ctx, literal("1e1000"), types.New(types.T_float64, 0, 0)))
+	require.Error(t, validateJSONValueDefaultLiteral(ctx, literal("NaN"), types.New(types.T_float64, 0, 0)))
 
 	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
 		typ := types.New(oid, 6, 2)
@@ -328,8 +329,13 @@ func TestJSONValueDefaultValidationMatrix(t *testing.T) {
 		typ   types.Type
 	}{
 		{"date invalid", "not-a-date", types.New(types.T_date, 0, 0)},
+		{"date zero", "0000-00-00", types.New(types.T_date, 0, 0)},
 		{"time invalid", "not-a-time", types.New(types.T_time, 0, 3)},
+		{"time excess fractional precision", "12:34:56.1234", types.New(types.T_time, 0, 3)},
+		{"time zero datetime", "0000-00-00 00:00:00", types.New(types.T_time, 0, 3)},
 		{"datetime invalid", "not-a-datetime", types.New(types.T_datetime, 0, 3)},
+		{"datetime excess fractional precision", "2024-01-02 12:34:56.1234", types.New(types.T_datetime, 0, 3)},
+		{"datetime zero", "0000-00-00 00:00:00", types.New(types.T_datetime, 0, 3)},
 		{"year invalid", "2156", types.New(types.T_year, 0, 0)},
 		{"json invalid", "not-json", types.New(types.T_json, 0, 0)},
 	} {

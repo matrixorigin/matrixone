@@ -14497,6 +14497,7 @@ name_confict:
 |   DAY
 |   DEDUP
 |   EMPTY_SYM
+|   ERROR_SYM
 |   HOUR
 |   IF
 |   FORMAT
