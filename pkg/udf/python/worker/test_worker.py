@@ -280,6 +280,31 @@ class WorkerContractTest(unittest.TestCase):
             statement.statement_timestamp_utc,
         )
 
+    def test_statement_timezone_kind_requires_canonical_spelling(self):
+        typed = {
+            "contract_version": 1,
+            "statement_timestamp_utc": 0,
+            "timezone_kind": "fixed_offset",
+            "timezone_offset_minutes": 0,
+            "sql_mode": [],
+            "current_user": "alice",
+            "connection_collation": "utf8mb4_bin",
+        }
+        with self.assertRaisesRegex(ValueError, "unsupported typed statement timezone"):
+            worker._typed_statement_context(typed)
+
+        with self.assertRaisesRegex(ValueError, "unsupported timezone kind"):
+            worker._statement_context(
+                {
+                    "statement_timestamp_utc": "0",
+                    "session_timezone_kind": "fixed_offset",
+                    "session_timezone_offset_minutes": "0",
+                    "sql_mode": "[]",
+                    "current_user": "alice",
+                    "connection_collation": "utf8mb4_bin",
+                }
+            )
+
     def test_typed_statement_context_rejects_timestamp_outside_int64(self):
         typed = {
             "contract_version": 1,
