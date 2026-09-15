@@ -1767,6 +1767,36 @@ func TestGroupConcatWarningAccumulatorTransfersBudgetBeforeFormatting(t *testing
 	require.Zero(t, budget.Used())
 }
 
+func TestGroupConcatWarningAdmissionBoundsLargeRetentionBeforeFormatting(t *testing.T) {
+	const maxErrorCount = int(^uint16(0))
+	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	exec := &groupConcatExec{
+		warningRetentionLimit: maxErrorCount,
+		warningBudget:         budget,
+	}
+	for row := uint64(1); row <= uint64(maxErrorCount); row++ {
+		exec.recordTruncation(row)
+	}
+
+	require.Equal(t, uint64(maxErrorCount), exec.truncationCount)
+	require.NotEmpty(t, exec.truncationRows)
+	require.Less(t, len(exec.truncationRows), maxErrorCount)
+	require.LessOrEqual(t, exec.warningChargeBytes, uint64(process.WarningDiagnosticMaxBytes))
+	require.Equal(t, exec.warningChargeBytes, budget.Used())
+	retained := len(exec.truncationRows)
+
+	var accumulator GroupConcatWarningAccumulator
+	accumulator.SetWarningRetentionLimit(maxErrorCount)
+	accumulator.SetWarningBudget(budget)
+	accumulator.Add(exec)
+	sink := new(groupConcatWarningSink)
+	accumulator.Report(sink)
+	require.Equal(t, uint64(maxErrorCount), sink.total)
+	require.Len(t, sink.messages, retained)
+	require.Equal(t, "Row 1 was cut by GROUP_CONCAT()", sink.messages[0])
+	require.Zero(t, budget.Used())
+}
+
 func TestGroupConcatWarningAccumulatorRetainsFirstBatchPrefix(t *testing.T) {
 	var accumulator GroupConcatWarningAccumulator
 	accumulator.SetWarningRetentionLimit(1)

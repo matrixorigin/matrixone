@@ -146,6 +146,13 @@ func warningDiagnosticBudgetLimit(proc *Process) uint64 {
 	return limit
 }
 
+// WarningDiagnosticBudgetLimitForProcess exposes the process-narrowed payload
+// limit to sinks which must initialize their own provider before becoming the
+// process's current warning destination.
+func WarningDiagnosticBudgetLimitForProcess(proc *Process) uint64 {
+	return warningDiagnosticBudgetLimit(proc)
+}
+
 // WarningDiagnosticBudgetForProcess resolves the account captured by the
 // current sink first, then falls back to the process generation. A process
 // limitation smaller than the compatibility budget narrows the fallback.
