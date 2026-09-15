@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -463,6 +464,10 @@ func TestMySQLUncompressWarningClassification(t *testing.T) {
 func TestUncompressBoundsWarningsForRepeatedConstantRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	// Exercise the explicit max_error_count bound instead of relying on the
+	// larger process default.
+	proc.Base.SessionInfo.MaxErrorCount = process.WarningDiagnosticLegacyRetentionLimit
+	proc.Base.SessionInfo.MaxErrorCountSet = true
 	warnings := &uncompressWarningSink{}
 	proc.WarningSink = warnings
 

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1598,6 +1599,46 @@ func TestGroupConcatMaxLenReportsWarningsOnce(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestGroupConcatWarningRetentionLimitControlsPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit int
+		want  int
+	}{
+		{name: "zero", limit: 0, want: 0},
+		{name: "one", limit: 1, want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			info := multiAggInfo{
+				aggID:     97,
+				argTypes:  []types.Type{types.T_varchar.ToType()},
+				retType:   GroupConcatReturnType([]types.Type{types.T_varchar.ToType()}),
+				emptyNull: true,
+			}
+			exec := newGroupConcatExec(mp, info, "").(*groupConcatExec)
+			ConfigureGroupConcatWarningRetention(exec, tc.limit)
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.SetExtraInformation(EncodeGroupConcatConfig("", 2), 0))
+			values := buildVarlenVec(t, mp, types.T_varchar.ToType(), []string{"a", "b", "c", "d"})
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+			results, err := exec.Flush()
+			require.NoError(t, err)
+			sink := new(groupConcatWarningSink)
+			ReportGroupConcatWarnings(exec, sink)
+			require.Equal(t, uint64(1), sink.total)
+			require.Len(t, sink.messages, tc.want)
+			if tc.want > 0 {
+				require.Equal(t, "Row 3 was cut by GROUP_CONCAT()", sink.messages[0])
+			}
+			results[0].Free(mp)
+			values.Free(mp)
+			exec.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func TestGroupConcatWarningsCountOnlySinkReceivesAllRows(t *testing.T) {
 	mp := mpool.MustNewZero()
 	info := multiAggInfo{
@@ -1624,7 +1665,7 @@ func TestGroupConcatWarningsCountOnlySinkReceivesAllRows(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestGroupConcatWarningAccumulatorRetainsGlobalSmallestRows(t *testing.T) {
+func TestGroupConcatWarningAccumulatorRetainsProductionOrderPrefix(t *testing.T) {
 	mp := mpool.MustNewZero()
 	makeExec := func(base uint64) (*groupConcatExec, *vector.Vector, *vector.Vector) {
 		info := multiAggInfo{
@@ -1665,8 +1706,8 @@ func TestGroupConcatWarningAccumulatorRetainsGlobalSmallestRows(t *testing.T) {
 	require.Equal(t, uint64(80), sink.total)
 	require.Len(t, sink.codes, groupConcatWarningRetentionLimit)
 	require.Len(t, sink.messages, groupConcatWarningRetentionLimit)
-	require.Equal(t, "Row 148 was cut by GROUP_CONCAT()", sink.messages[0])
-	require.Equal(t, "Row 2 was cut by GROUP_CONCAT()",
+	require.Equal(t, "Row 2 was cut by GROUP_CONCAT()", sink.messages[0])
+	require.Equal(t, "Row 148 was cut by GROUP_CONCAT()",
 		sink.messages[len(sink.messages)-1])
 	firstResult.Free(mp)
 	firstValues.Free(mp)
@@ -1675,6 +1716,210 @@ func TestGroupConcatWarningAccumulatorRetainsGlobalSmallestRows(t *testing.T) {
 	secondValues.Free(mp)
 	second.Free()
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupConcatExecRetainsProductionOrderPrefix(t *testing.T) {
+	exec := &groupConcatExec{warningRetentionLimit: 1}
+	exec.recordTruncation(3)
+	exec.recordTruncation(2)
+
+	total, warnings := ConsumeGroupConcatWarnings(exec)
+	require.Equal(t, uint64(2), total)
+	require.Equal(t, []GroupConcatWarning{{Row: 3}}, warnings)
+}
+
+func TestGroupConcatWarningBudgetSealsAfterRejectedPrefixRow(t *testing.T) {
+	budget := process.NewWarningDiagnosticBudget(
+		process.WarningDiagnosticRecordOverhead +
+			uint64(groupConcatWarningMessageLength(1)))
+	exec := &groupConcatExec{
+		warningRetentionLimit: 2,
+		warningBudget:         budget,
+	}
+
+	exec.recordTruncation(100000)
+	exec.recordTruncation(1)
+
+	total, warnings := ConsumeGroupConcatWarnings(exec)
+	require.Equal(t, uint64(2), total)
+	require.Empty(t, warnings)
+	require.Zero(t, budget.Used())
+}
+
+func TestGroupConcatWarningAccumulatorTransfersBudgetBeforeFormatting(t *testing.T) {
+	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	exec := &groupConcatExec{
+		warningRetentionLimit: 1,
+		warningBudget:         budget,
+	}
+	exec.recordTruncation(7)
+
+	var accumulator GroupConcatWarningAccumulator
+	accumulator.SetWarningRetentionLimit(1)
+	accumulator.SetWarningBudget(budget)
+	accumulator.Add(exec)
+	require.Positive(t, budget.Used())
+
+	sink := new(groupConcatWarningSink)
+	accumulator.Report(sink)
+	require.Equal(t, uint64(1), sink.total)
+	require.Equal(t, []string{"Row 7 was cut by GROUP_CONCAT()"}, sink.messages)
+	require.Zero(t, budget.Used())
+}
+
+func TestGroupConcatWarningAdmissionBoundsLargeRetentionBeforeFormatting(t *testing.T) {
+	const maxErrorCount = int(^uint16(0))
+	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	exec := &groupConcatExec{
+		warningRetentionLimit: maxErrorCount,
+		warningBudget:         budget,
+	}
+	for row := uint64(1); row <= uint64(maxErrorCount); row++ {
+		exec.recordTruncation(row)
+	}
+
+	require.Equal(t, uint64(maxErrorCount), exec.truncationCount)
+	require.NotEmpty(t, exec.truncationRows)
+	require.Less(t, len(exec.truncationRows), maxErrorCount)
+	require.LessOrEqual(t, exec.warningChargeBytes, uint64(process.WarningDiagnosticMaxBytes))
+	require.Equal(t, exec.warningChargeBytes, budget.Used())
+	retained := len(exec.truncationRows)
+
+	var accumulator GroupConcatWarningAccumulator
+	accumulator.SetWarningRetentionLimit(maxErrorCount)
+	accumulator.SetWarningBudget(budget)
+	accumulator.Add(exec)
+	sink := new(groupConcatWarningSink)
+	accumulator.Report(sink)
+	require.Equal(t, uint64(maxErrorCount), sink.total)
+	require.Len(t, sink.messages, retained)
+	require.Equal(t, "Row 1 was cut by GROUP_CONCAT()", sink.messages[0])
+	require.Zero(t, budget.Used())
+}
+
+func TestGroupConcatWarningAccumulatorRetainsFirstBatchPrefix(t *testing.T) {
+	var accumulator GroupConcatWarningAccumulator
+	accumulator.SetWarningRetentionLimit(1)
+	accumulator.addBatch(2, []GroupConcatWarning{{Row: 3}, {Row: 2}})
+
+	sink := new(groupConcatWarningSink)
+	accumulator.Report(sink)
+	require.Equal(t, uint64(2), sink.total)
+	require.Equal(t, []string{"Row 3 was cut by GROUP_CONCAT()"}, sink.messages)
+}
+
+func TestGroupConcatWarningConfigurationRebindsBudgetAndCapacity(t *testing.T) {
+	rowOneCharge := groupConcatWarningRecordBytes(1)
+	rowTwoCharge := groupConcatWarningRecordBytes(2)
+
+	budget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	exec := &groupConcatExec{
+		warningRetentionLimit: 4,
+		truncationRows:        make([]GroupConcatWarning, 2, 8),
+	}
+	exec.truncationRows[0] = GroupConcatWarning{Row: 1}
+	exec.truncationRows[1] = GroupConcatWarning{Row: 2}
+	ConfigureGroupConcatWarningBudget(exec, budget)
+	require.Equal(t, rowOneCharge+rowTwoCharge, budget.Used())
+
+	ConfigureGroupConcatWarningRetention(exec, 1)
+	require.Len(t, exec.truncationRows, 1)
+	require.LessOrEqual(t, cap(exec.truncationRows), 2)
+	require.Equal(t, rowOneCharge, budget.Used())
+	ConfigureGroupConcatWarningRetention(exec, int(^uint16(0))+1)
+	require.Equal(t, int(^uint16(0)), exec.warningRetentionLimit)
+	ConfigureGroupConcatWarningRetention(exec, -1)
+	require.Zero(t, exec.warningRetentionLimit)
+	require.Empty(t, exec.truncationRows)
+	require.Zero(t, budget.Used())
+
+	rebind := &groupConcatExec{
+		warningRetentionLimit: 2,
+		truncationRows: []GroupConcatWarning{
+			{Row: 1},
+			{Row: 2},
+		},
+	}
+	oldBudget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	ConfigureGroupConcatWarningBudget(rebind, oldBudget)
+	smallBudget := process.NewWarningDiagnosticBudget(rowOneCharge)
+	ConfigureGroupConcatWarningBudget(rebind, smallBudget)
+	require.Zero(t, oldBudget.Used())
+	require.Len(t, rebind.truncationRows, 1)
+	require.True(t, rebind.warningRetentionSealed)
+	require.Equal(t, rowOneCharge, smallBudget.Used())
+	ConfigureGroupConcatWarningBudget(rebind, smallBudget)
+	ConfigureGroupConcatWarningBudget(rebind, nil)
+	require.NotSame(t, smallBudget, rebind.warningBudget)
+	require.False(t, rebind.warningRetentionSealed)
+	require.Equal(t, rowOneCharge, rebind.warningBudget.Used())
+	rebind.clearTruncationWarnings()
+	require.Zero(t, rebind.warningBudget.Used())
+
+	ConfigureGroupConcatWarningRetention(nil, 1)
+	ConfigureGroupConcatWarningBudget(nil, nil)
+	require.Equal(t, groupConcatWarningRetentionLimit, GroupConcatWarningRetentionLimit(nil))
+	invalid := &groupConcatExec{warningRetentionLimit: -1}
+	require.Zero(t, GroupConcatWarningRetentionLimit(invalid))
+	invalid.warningRetentionLimit = int(^uint16(0)) + 1
+	require.Equal(t, int(^uint16(0)), GroupConcatWarningRetentionLimit(invalid))
+}
+
+func TestGroupConcatWarningAccumulatorBudgetOwnershipBoundaries(t *testing.T) {
+	rows := []GroupConcatWarning{{Row: 1}, {Row: 2}}
+	firstCharge := groupConcatWarningRecordBytes(rows[0].Row)
+	secondCharge := groupConcatWarningRecordBytes(rows[1].Row)
+
+	var nilAccumulator *GroupConcatWarningAccumulator
+	nilAccumulator.SetWarningRetentionLimit(1)
+	nilAccumulator.SetWarningBudget(nil)
+	nilAccumulator.Add(nil)
+	nilAccumulator.Reset()
+
+	sameBudget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	require.True(t, sameBudget.Reserve(firstCharge+secondCharge))
+	same := &GroupConcatWarningAccumulator{}
+	same.SetWarningRetentionLimit(1)
+	same.addBatchOwned(2, rows, sameBudget, firstCharge+secondCharge)
+	require.Equal(t, uint64(2), same.total)
+	require.Equal(t, rows[:1], same.rows)
+	require.Equal(t, firstCharge, sameBudget.Used())
+	same.Reset()
+	require.Zero(t, sameBudget.Used())
+
+	destinationBudget := process.NewWarningDiagnosticBudget(firstCharge)
+	sourceBudget := process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	require.True(t, sourceBudget.Reserve(firstCharge+secondCharge))
+	different := &GroupConcatWarningAccumulator{}
+	different.SetWarningRetentionLimit(2)
+	different.SetWarningBudget(destinationBudget)
+	different.addBatchOwned(2, rows, sourceBudget, firstCharge+secondCharge)
+	require.Equal(t, rows[:1], different.rows)
+	require.True(t, different.warningRetentionSealed)
+	require.Zero(t, sourceBudget.Used())
+	require.Equal(t, firstCharge, destinationBudget.Used())
+	different.Reset()
+	require.Zero(t, destinationBudget.Used())
+
+	budgeted := &GroupConcatWarningAccumulator{}
+	budgeted.SetWarningRetentionLimit(1)
+	budget := process.NewWarningDiagnosticBudget(firstCharge)
+	budgeted.SetWarningBudget(budget)
+	budgeted.addBatch(1, rows[:1])
+	require.Equal(t, firstCharge, budget.Used())
+	budgeted.Reset()
+	require.Zero(t, budget.Used())
+
+	zero := &GroupConcatWarningAccumulator{}
+	zero.SetWarningRetentionLimit(0)
+	zeroSource := process.NewWarningDiagnosticBudget(firstCharge)
+	require.True(t, zeroSource.Reserve(firstCharge))
+	zero.addBatchOwned(1, rows[:1], zeroSource, firstCharge)
+	require.Zero(t, zeroSource.Used())
+
+	saturated := &GroupConcatWarningAccumulator{total: ^uint64(0)}
+	saturated.addBatchOwned(1, nil, nil, 0)
+	require.Equal(t, ^uint64(0), saturated.total)
 }
 
 func TestGroupConcatWarningsAreDiscardedAfterFailedFinalization(t *testing.T) {
