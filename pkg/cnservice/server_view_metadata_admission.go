@@ -60,6 +60,10 @@ func (s *service) initViewMetadataAdmission(ctx context.Context) error {
 	if _, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolFloor); !ok {
 		rt.SetGlobalVariables(runtime.PersistedExpressionProtocolFloor, int64(0))
 	}
+	// The write gate is local to this CN incarnation. Never inherit it across
+	// a restart: the new process must first consume an enabled/admitted,
+	// catalog-fenced snapshot again.
+	rt.SetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, int64(0))
 	rt.SetGlobalVariables(
 		compile.ViewMetadataEpochFenceRuntimeKey,
 		s.viewMetadataEpochFence,
@@ -144,6 +148,7 @@ func (s *service) applyViewMetadataAdmission(
 		copy.Enabled = false
 		copy.Ready = false
 		copy.Admitted = false
+		s.clearPersistedExpressionAuthoringFloor()
 		s.lockViewMetadataAdmission()
 		s.viewMetadataAdmission.Store(&copy)
 		s.notifyViewMetadataAdmissionUpdated()
@@ -152,6 +157,9 @@ func (s *service) applyViewMetadataAdmission(
 	}
 	if s.viewMetadataEpochFence == nil {
 		return moerr.NewInternalErrorNoCtx("view metadata epoch fence is not initialized")
+	}
+	if !s.persistedExpressionAuthoringSnapshotReady(snapshot) {
+		s.clearPersistedExpressionAuthoringFloor()
 	}
 	if snapshot.PersistedExpressionRequiredProtocolVersion > 0 {
 		if rt := runtime.ServiceRuntime(s.cfg.UUID); rt != nil {
@@ -182,7 +190,52 @@ func (s *service) applyViewMetadataAdmission(
 		!viewMetadataCatalogFenceRetryable(err, false) {
 		return err
 	}
+	s.publishPersistedExpressionAuthoringFloor(&copy)
 	return nil
+}
+
+// publishPersistedExpressionAuthoringFloor advances the local write gate only
+// after HAKeeper has completed phase two for this CN and the local catalog
+// fence is known. The durable read floor is intentionally published earlier,
+// while the snapshot is still Preparing, so existing marked metadata can be
+// safely read/revalidated without allowing new metadata to be authored during
+// the routing handoff.
+func (s *service) publishPersistedExpressionAuthoringFloor(
+	snapshot *logservicepb.ViewMetadataAdmission,
+) {
+	if !s.persistedExpressionAuthoringSnapshotReady(snapshot) {
+		return
+	}
+	rt := runtime.ServiceRuntime(s.cfg.UUID)
+	if rt == nil {
+		return
+	}
+	required := int64(snapshot.PersistedExpressionRequiredProtocolVersion)
+	value, ok := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor)
+	current, valid := value.(int64)
+	if !ok || !valid || current < required {
+		rt.SetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, required)
+	}
+}
+
+func (s *service) persistedExpressionAuthoringSnapshotReady(
+	snapshot *logservicepb.ViewMetadataAdmission,
+) bool {
+	if snapshot == nil || snapshot.PersistedExpressionRequiredProtocolVersion == 0 ||
+		!snapshot.Enabled || !snapshot.Ready || !snapshot.Admitted {
+		return false
+	}
+	if !snapshot.RevalidationRequired {
+		return true
+	}
+	return snapshot.Epoch > 0 && snapshot.CatalogFencedEpoch >= snapshot.Epoch &&
+		s.viewMetadataCatalogFencedEpoch.Load() >= snapshot.Epoch
+}
+
+func (s *service) clearPersistedExpressionAuthoringFloor() {
+	if rt := runtime.ServiceRuntime(s.cfg.UUID); rt != nil {
+		rt.SetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor, int64(0))
+	}
 }
 
 // revokeViewMetadataGeneration fences a process that no longer owns its UUID.
@@ -434,6 +487,7 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool) error
 				return upgradeErr
 			}
 			if accepted {
+				s.publishPersistedExpressionAuthoringFloor(snapshot)
 				return nil
 			}
 			continue
@@ -524,6 +578,7 @@ func (s *service) waitForViewMetadataAdmissionHandoff(publishIngress bool) error
 				return upgradeErr
 			}
 			if accepted {
+				s.publishPersistedExpressionAuthoringFloor(snapshot)
 				return nil
 			}
 		}

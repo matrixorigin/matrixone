@@ -694,7 +694,7 @@ func buildDefaultExprWithColumns(
 	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocol(proc.Ctx, proc, planExpr); err != nil {
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, planExpr); err != nil {
 		return nil, err
 	}
 	if exprHasLocalColumnRef(planExpr) {
@@ -778,7 +778,7 @@ func buildOnUpdate(col *tree.ColumnTableDef, typ plan.Type, proc *process.Proces
 	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocol(proc.Ctx, proc, planExpr); err != nil {
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, planExpr); err != nil {
 		return nil, err
 	}
 
@@ -868,7 +868,7 @@ func buildGeneratedExpr(col *tree.ColumnTableDef, typ plan.Type, existingCols []
 	if err = preservePersistedFormatCompatibility(proc.Ctx, planExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocol(proc.Ctx, proc, planExpr); err != nil {
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, planExpr); err != nil {
 		return nil, err
 	}
 

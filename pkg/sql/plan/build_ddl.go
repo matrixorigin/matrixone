@@ -228,6 +228,7 @@ func genViewTableDef(
 	colNames tree.IdentifierList,
 	viewDatabase string,
 	viewName string,
+	forAuthoring bool,
 ) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
@@ -294,8 +295,14 @@ func genViewTableDef(
 		return nil, err
 	}
 	if viewRequiredProtocol > 0 {
-		if err = RequirePersistedProtocolVersion(
-			ctx.GetContext(), ctx.GetProcess(), viewRequiredProtocol); err != nil {
+		if forAuthoring {
+			err = RequirePersistedProtocolVersionForAuthoring(
+				ctx.GetContext(), ctx.GetProcess(), viewRequiredProtocol)
+		} else {
+			err = RequirePersistedProtocolVersion(
+				ctx.GetContext(), ctx.GetProcess(), viewRequiredProtocol)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -1683,7 +1690,7 @@ func buildCTASDefaultFromOrigin(
 	if err = preservePersistedFormatCompatibility(ctx.GetContext(), defaultExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocol(ctx.GetContext(), ctx.GetProcess(), defaultExpr); err != nil {
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), defaultExpr); err != nil {
 		return nil, err
 	}
 	if exprHasLocalColumnRef(defaultExpr) {
@@ -1812,7 +1819,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}
 
 	tableDef, err := genViewTableDef(
-		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName))
+		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), true)
 	if err != nil {
 		return nil, err
 	}
@@ -4021,7 +4028,7 @@ func appendCheckDef(
 	if err = preservePersistedFormatCompatibility(ctx.GetContext(), checkExpr); err != nil {
 		return err
 	}
-	if err = RequirePersistedIPFunctionProtocol(ctx.GetContext(), ctx.GetProcess(), checkExpr); err != nil {
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), checkExpr); err != nil {
 		return err
 	}
 	if err = validateCheckExpr(ctx.GetContext(), tableDef, checkExpr, columnPos); err != nil {
@@ -5929,7 +5936,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	defer func() {
 		ctx.SetBuildingAlterView(false, "", "")
 	}()
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName, true)
 	if err != nil {
 		return nil, err
 	}

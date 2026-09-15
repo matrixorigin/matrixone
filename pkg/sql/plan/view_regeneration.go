@@ -164,7 +164,7 @@ func RegenerateViewDefinition(
 		lowerCaseTableNames: lowerCaseTableNames,
 	}
 	tableDef, err := genViewTableDef(
-		regenerationCtx, selectStmt, columnNames, viewDatabase, viewName)
+		regenerationCtx, selectStmt, columnNames, viewDatabase, viewName, false)
 	if err != nil {
 		return nil, err
 	}
