@@ -183,3 +183,63 @@ func TestDecimal256MultiplyHonorsPublishedPrecision(t *testing.T) {
 		})
 	}
 }
+
+func TestDecimal256MultiplyPreservesWideSignedOperand(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	leftType := types.New(types.T_decimal256, 19, 0)
+	rightType := types.New(types.T_decimal256, 32, 16)
+	resultType := types.New(types.T_decimal256, 51, 16)
+	left, err := types.ParseDecimal256("1235467899687894561", leftType.Width, leftType.Scale)
+	require.NoError(t, err)
+	for _, test := range []struct {
+		name     string
+		right    string
+		expected string
+	}{
+		{
+			name:     "positive",
+			right:    "2733892455124775.7851878942123454",
+			expected: "3377636369505588272411432821735887.9920303797133694",
+		},
+		{
+			name:     "negative",
+			right:    "-2733892455124775.7851878942123454",
+			expected: "-3377636369505588272411432821735887.9920303797133694",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			right, parseErr := types.ParseDecimal256(test.right, rightType.Width, rightType.Scale)
+			require.NoError(t, parseErr)
+			expected, parseErr := types.ParseDecimal256(test.expected, resultType.Width, resultType.Scale)
+			require.NoError(t, parseErr)
+			require.False(t, d256AllFitInt64([]types.Decimal256{right}, 1))
+			require.False(t, d256AllFitInt32([]types.Decimal256{right}, 1))
+
+			for _, input := range []struct {
+				name  string
+				right FunctionTestInput
+			}{
+				{
+					name:  "literal scalar",
+					right: NewFunctionTestConstInput(rightType, []types.Decimal256{right}, nil),
+				},
+				{
+					name:  "typed column",
+					right: NewFunctionTestInput(rightType, []types.Decimal256{right, right}, nil),
+				},
+			} {
+				t.Run(input.name, func(t *testing.T) {
+					testCase := NewFunctionTestCase(proc,
+						[]FunctionTestInput{
+							NewFunctionTestInput(leftType, []types.Decimal256{left, left}, nil),
+							input.right,
+						},
+						NewFunctionTestResult(resultType, false, []types.Decimal256{expected, expected}, nil),
+						multiFn)
+					succeeded, info := testCase.Run()
+					require.True(t, succeeded, info)
+				})
+			}
+		})
+	}
+}

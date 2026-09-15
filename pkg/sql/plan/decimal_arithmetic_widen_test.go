@@ -18,8 +18,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -152,4 +156,46 @@ func TestCTASPublishesDecimal256ProductBoundary(t *testing.T) {
 	require.Equal(t, int32(types.T_decimal256), columns[0].Typ.Id)
 	require.Equal(t, int32(65), columns[0].Typ.Width)
 	require.Equal(t, int32(0), columns[0].Typ.Scale)
+}
+
+func TestWideFractionalLiteralMultiplicationPreservesHighBits(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		literal  string
+		expected string
+	}{
+		{
+			name:     "positive literal",
+			literal:  "2733892455124775.7851878942123454",
+			expected: "3377636369505588272411432821735887.9920303797133694",
+		},
+		{
+			name:     "negative literal",
+			literal:  "-2733892455124775.7851878942123454",
+			expected: "-3377636369505588272411432821735887.9920303797133694",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := runOneExprStmt(NewMockOptimizer(false), t,
+				"select cast(1235467899687894561 as decimal(19,0)) * "+test.literal)
+			require.NoError(t, err)
+			expr := stmt.GetQuery().Nodes[1].ProjectList[0]
+			require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
+			require.Equal(t, int32(51), expr.Typ.Width)
+			require.Equal(t, int32(16), expr.Typ.Scale)
+
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.False(t, result.IsNull(0))
+			actual := vector.GetFixedAtWithTypeCheck[types.Decimal256](result, 0)
+			expected, err := types.ParseDecimal256(test.expected, 51, 16)
+			require.NoError(t, err)
+			require.Equal(t, expected, actual)
+		})
+	}
 }
