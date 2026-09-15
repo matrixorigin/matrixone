@@ -1441,6 +1441,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainGroupConcatTimeZoneWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.constrainJSONMinMaxWorkers(qry); err != nil {
+		return nil, err
+	}
 
 	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
@@ -8174,7 +8177,8 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
 		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
-		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
+		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum()) &&
+		(!hasJSONMinMaxAggregate(node) || c.supportsRemoteJSONMinMax())
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
