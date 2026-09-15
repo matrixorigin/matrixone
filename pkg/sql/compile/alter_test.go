@@ -79,6 +79,42 @@ func TestShouldUseFixedAlterCopySnapshot(t *testing.T) {
 	require.False(t, shouldUseFixedAlterCopySnapshot(false, true))
 }
 
+func TestAlterCopyPublicationRetryMarker(t *testing.T) {
+	txnID := []byte("first transaction")
+	cause := moerr.NewTxnNeedRetryWithDefChanged(context.Background())
+	ordinary := errors.New("ordinary error")
+	require.Nil(t, markAlterCopyPublicationRetry(nil, txnID))
+	require.False(t, isAlterCopyPublicationRetry(nil, txnID))
+	require.Same(t, ordinary, markAlterCopyPublicationRetry(ordinary, txnID),
+		"ordinary errors must not be wrapped")
+	marked := markAlterCopyPublicationRetry(cause, txnID)
+	require.Same(t, marked, markAlterCopyPublicationRetry(marked, txnID),
+		"a marker must not be nested")
+	require.True(t, isAlterCopyPublicationRetry(marked, txnID))
+	require.False(t, isAlterCopyPublicationRetry(marked, []byte("next transaction")))
+	require.False(t, isAlterCopyPublicationRetry(marked, nil))
+	require.ErrorIs(t, marked, cause)
+	require.Same(t, cause, UnwrapAlterCopyPublicationRetry(marked))
+	require.Same(t, cause, UnwrapAlterCopyPublicationRetry(fmt.Errorf("wrapped: %w", marked)))
+	cleanupFailure := errors.Join(marked, errors.New("cleanup failed"))
+	require.Same(t, cleanupFailure, UnwrapAlterCopyPublicationRetry(cleanupFailure))
+	require.False(t, isAlterCopyPublicationRetry(errors.Join(marked, errors.New("cleanup failed")), txnID))
+	require.False(t, isAlterCopyPublicationRetry(fmt.Errorf("wrapped: %w", errors.Join(marked, errors.New("cleanup failed"))), txnID))
+	require.Equal(t, cause, markAlterCopyPublicationRetry(cause, txnID).(*alterCopyPublicationRetryError).Unwrap())
+}
+
+func TestAlterCopyCreateScopeOwnership(t *testing.T) {
+	scope := &alterCopyCreateScope{txnID: []byte("owner"), database: "db", table: "copy"}
+	require.False(t, scope.AllowsCopyAlterCreate([]byte("owner"), "db", "copy"))
+	scope.active.Store(true)
+	require.True(t, scope.AllowsCopyAlterCreate([]byte("owner"), "db", "copy"))
+	require.False(t, scope.AllowsCopyAlterCreate([]byte("other"), "db", "copy"))
+	require.False(t, scope.AllowsCopyAlterCreate([]byte("owner"), "db", "user_table"))
+	require.False(t, scope.AllowsCopyAlterCreate([]byte("owner"), "other_db", "copy"))
+	scope.active.Store(false)
+	require.False(t, scope.AllowsCopyAlterCreate([]byte("owner"), "db", "copy"))
+}
+
 func TestAlterCopySQLAtLineageSnapshot(t *testing.T) {
 	const sql = "insert into copy select * from source"
 	require.Equal(t, sql, alterCopySQLAtLineageSnapshot(sql, alterDataBranchLineagePlan{}))
@@ -493,6 +529,12 @@ func TestIsAlterAffectedPluginIndexMatchesIndexNamePartsAndIncludedColumns(t *te
 	require.False(t, isAlterAffectedPluginIndex(indexDef, []string{"other"}))
 	require.False(t, isAlterAffectedPluginIndex(indexDef, nil))
 	require.False(t, isAlterAffectedPluginIndex(nil, []string{"idx_vec"}))
+}
+
+func TestCollectAlterCopyAffectedPluginIndexesNilDefinition(t *testing.T) {
+	got := collectAlterCopyAffectedPluginIndexes(nil, []string{"embedding"})
+	require.NotNil(t, got)
+	require.Empty(t, got)
 }
 
 func TestReplaceRefChildTableID(t *testing.T) {
@@ -1165,6 +1207,7 @@ type alterCopyInsertSpyExecutor struct {
 	resultSequences map[string][]executor.Result
 	errs            map[string]error
 	executedSQLs    []string
+	statementOpts   []executor.StatementOption
 }
 
 type alterCopyAutoIncrEpochWorkspace struct {
@@ -1821,6 +1864,7 @@ func (e *alterCopyInsertSpyExecutor) Exec(
 	opts executor.Options,
 ) (executor.Result, error) {
 	e.executedSQLs = append(e.executedSQLs, sql)
+	e.statementOpts = append(e.statementOpts, opts.StatementOption())
 	if sql == e.insertSQL {
 		e.insertCtx = ctx
 		e.insertOption = opts.StatementOption()
@@ -2407,6 +2451,42 @@ func newAlterCopyPrecheckCompile(
 		},
 	}
 	return c
+}
+
+func TestLockAlterCopyPublicationUsesCanonicalLifecycleGateOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+	}{
+		{name: "caller-owned waits"},
+		{name: "executor-owned waits"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			spyExec := &alterCopyInsertSpyExecutor{}
+			c := newAlterCopyPrecheckCompile(t, ctrl, spyExec)
+			mp := c.proc.Mp()
+			spyExec.results = map[string]executor.Result{
+				databranchutils.LineageOwnerLifecyclePessimisticLockSQL(): newAlterCopyFixedResult(
+					t, mp, types.T_uint64.ToType(), []uint64{1},
+				),
+				catalog.ViewMetadataLifecycleGateSQL: newAlterCopyFixedResult(
+					t, mp, types.T_uint64.ToType(), []uint64{1},
+				),
+			}
+
+			require.NoError(t, c.lockAlterCopyPublicationOnce())
+			require.Equal(t, []string{
+				databranchutils.LineageOwnerLifecyclePessimisticLockSQL(),
+				catalog.ViewMetadataLifecycleGateSQL,
+			}, spyExec.executedSQLs)
+			require.Equal(t, lock.WaitPolicy_Wait, spyExec.statementOpts[0].WaitPolicy())
+			require.Equal(t, lock.WaitPolicy_Wait, spyExec.statementOpts[1].WaitPolicy())
+		})
+	}
+}
+
+func TestCopyAlterPublicationWaitPolicy(t *testing.T) {
+	require.Equal(t, lock.WaitPolicy_Wait, copyAlterPublicationWaitPolicy())
 }
 
 func newAlterCopyConstNullResult(mp *mpool.MPool, typ types.Type) executor.Result {

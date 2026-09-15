@@ -159,6 +159,58 @@ func TestMaxExecutionTimeAppliesToTextPreparedSelect(t *testing.T) {
 	require.False(t, applies)
 }
 
+func TestCopyAlterPublicationRetryOwner(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  *UserInput
+		txnOpt FeTxnOption
+		want   bool
+	}{
+		{
+			name:  "binary automatic commit",
+			input: &UserInput{isBinaryProtExecute: true},
+			txnOpt: FeTxnOption{
+				autoCommit:            true,
+				activeTxnAtStartKnown: true,
+			},
+			want: true,
+		},
+		{
+			name:  "text automatic commit waits",
+			input: &UserInput{},
+			txnOpt: FeTxnOption{
+				autoCommit:            true,
+				activeTxnAtStartKnown: true,
+			},
+		},
+		{
+			name:  "binary explicit transaction waits",
+			input: &UserInput{isBinaryProtExecute: true},
+			txnOpt: FeTxnOption{
+				autoCommit:            true,
+				byBegin:               true,
+				activeTxnAtStartKnown: true,
+			},
+		},
+		{
+			name:  "binary existing transaction waits",
+			input: &UserInput{isBinaryProtExecute: true},
+			txnOpt: FeTxnOption{
+				autoCommit:            true,
+				activeTxnAtStartKnown: true,
+				activeTxnAtStart:      true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			execCtx := &ExecCtx{input: tt.input, txnOpt: tt.txnOpt}
+			require.Equal(t, tt.want, isCopyAlterPublicationRetryOwner(execCtx))
+		})
+	}
+}
+
 func maxExecutionTimeTestSession(milliseconds int64) *Session {
 	return &Session{feSessionImpl: feSessionImpl{
 		sesSysVars: &SystemVariables{mp: map[string]interface{}{

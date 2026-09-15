@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -32,6 +33,12 @@ type stubCompileContext struct {
 	qryDatabase      string
 	vars             map[string]any
 	isFrontend       bool
+	indexInfo        *plan.CreateTable
+	runSQLs          []string
+	runErr           error
+	buildErr         error
+	dropErr          error
+	createErr        error
 
 	// lastCdcTask records the args of the most recent
 	// CreateIndexCdcTask call. Used by HandleCreateIndex_Async{True,
@@ -58,15 +65,18 @@ type stubCompileContext struct {
 	}
 }
 
-func (s *stubCompileContext) Ctx() compileplugin.Context             { return nil }
-func (s *stubCompileContext) Database() engine.Database              { return nil }
-func (s *stubCompileContext) QryDatabase() string                    { return s.qryDatabase }
-func (s *stubCompileContext) OriginalTableDef() *plan.TableDef       { return s.originalTableDef }
-func (s *stubCompileContext) IndexInfo() *plan.CreateTable           { return nil }
-func (s *stubCompileContext) MainTableID() uint64                    { return 0 }
-func (s *stubCompileContext) MainExtra() *api.SchemaExtra            { return nil }
-func (s *stubCompileContext) RunSql(_ string) error                  { return nil }
-func (s *stubCompileContext) BuildIndexTable(_ *plan.TableDef) error { return nil }
+func (s *stubCompileContext) Ctx() compileplugin.Context       { return nil }
+func (s *stubCompileContext) Database() engine.Database        { return nil }
+func (s *stubCompileContext) QryDatabase() string              { return s.qryDatabase }
+func (s *stubCompileContext) OriginalTableDef() *plan.TableDef { return s.originalTableDef }
+func (s *stubCompileContext) IndexInfo() *plan.CreateTable     { return s.indexInfo }
+func (s *stubCompileContext) MainTableID() uint64              { return 0 }
+func (s *stubCompileContext) MainExtra() *api.SchemaExtra      { return nil }
+func (s *stubCompileContext) RunSql(sql string) error {
+	s.runSQLs = append(s.runSQLs, sql)
+	return s.runErr
+}
+func (s *stubCompileContext) BuildIndexTable(_ *plan.TableDef) error { return s.buildErr }
 func (s *stubCompileContext) ResolveVariable(name string, _, _ bool) (any, error) {
 	if v, ok := s.vars[name]; ok {
 		return v, nil
@@ -83,10 +93,10 @@ func (s *stubCompileContext) CreateIndexCdcTask(_, _ string, _ uint64, _ string,
 	s.lastCdcTask.called = true
 	s.lastCdcTask.startFromNow = startFromNow
 	s.lastCdcTask.sql = sql
-	return nil
+	return s.createErr
 }
 func (s *stubCompileContext) DropIndexCdcTask(_ *plan.TableDef, _, _, _ string) error {
-	return nil
+	return s.dropErr
 }
 func (s *stubCompileContext) RunSqlWithResult(_ string) (executor.Result, error) {
 	return executor.Result{}, nil
@@ -101,6 +111,17 @@ func (s *stubCompileContext) RegisterIdxcronUpdate(tableID uint64, dbName, table
 	s.lastIdxcronUpdate.metadataLen = len(metadata)
 	return nil
 }
+
+type alterCopyPhaseContext struct {
+	*stubCompileContext
+	prepare bool
+	build   bool
+	publish bool
+}
+
+func (s *alterCopyPhaseContext) IsAlterCopyPrepare() bool     { return s.prepare }
+func (s *alterCopyPhaseContext) IsAlterCopyIndexBuild() bool  { return s.build }
+func (s *alterCopyPhaseContext) IsAlterCopyPublication() bool { return s.publish }
 
 func cagraIndexDefs() map[string]*plan.IndexDef {
 	return map[string]*plan.IndexDef{
@@ -381,12 +402,90 @@ func TestCagraHandleCreateIndex_BackgroundReentry(t *testing.T) {
 	require.False(t, ctx.stubCompileContext.lastIdxcronUpdate.called, "background re-entry must NOT rewrite mo_index_update")
 }
 
+func TestCagraAlterCopyPublicationDoesNotBuildInGate(t *testing.T) {
+	base := newHandleCtx(true).stubCompileContext
+	ctx := &alterCopyPhaseContext{stubCompileContext: base, publish: true}
+	defs := cagraIndexDefs()
+	defs[catalog.Cagra_TblType_Metadata].IndexAlgoParams = `{"async":"true"}`
+	err := Hooks{}.HandleCreateIndex(ctx, defs)
+	require.NoError(t, err)
+	require.Empty(t, ctx.runSQLs, "publication must only register deferred initialization")
+	require.True(t, ctx.lastCdcTask.called)
+	require.False(t, ctx.lastCdcTask.startFromNow, "preserve asynchronous initialization watermark")
+	require.NotEmpty(t, ctx.lastCdcTask.sql)
+}
+
+func TestCagraAlterCopyPublicationSkipsSecondBuildAfterPreparation(t *testing.T) {
+	base := newHandleCtx(true).stubCompileContext
+	ctx := &alterCopyPhaseContext{stubCompileContext: base, publish: true}
+	err := Hooks{}.HandleCreateIndex(ctx, cagraIndexDefs())
+	require.NoError(t, err)
+	require.True(t, ctx.lastCdcTask.called)
+	require.True(t, ctx.lastCdcTask.startFromNow)
+	require.Empty(t, ctx.lastCdcTask.sql, "a synchronously prepared index only needs forward CDC maintenance")
+}
+
+func TestCagraAlterCopyChildCreateSkipsPhysicalWork(t *testing.T) {
+	base := newHandleCtx(true).stubCompileContext
+	ctx := &alterCopyPhaseContext{stubCompileContext: base, prepare: true}
+	err := Hooks{}.HandleCreateIndex(ctx, cagraIndexDefs())
+	require.NoError(t, err)
+	require.Empty(t, ctx.runSQLs)
+	require.False(t, ctx.lastCdcTask.called)
+}
+
+func TestCagraAlterCopyPreparationBuildsExplicitSyncIndex(t *testing.T) {
+	base := newHandleCtx(true).stubCompileContext
+	ctx := &alterCopyPhaseContext{stubCompileContext: base, prepare: true, build: true}
+	err := Hooks{}.HandleCreateIndex(ctx, cagraIndexDefs())
+	require.NoError(t, err)
+	require.NotEmpty(t, ctx.runSQLs)
+	require.False(t, ctx.lastCdcTask.called)
+}
+
 func TestCagraHandleReindex_DelegatesToCreate(t *testing.T) {
 	// HandleReindex is a thin pass-through to handleCreate; honors
 	// the forceSync arg directly (unlike HandleCreateIndex, which
 	// now reads catalog.IndexParamAsync).
 	err := Hooks{}.HandleReindex(newHandleCtx(true), cagraIndexDefs(), false, false)
 	require.NoError(t, err)
+}
+
+func TestCagraAlterCopyPhaseAndErrorPaths(t *testing.T) {
+	ctx := newHandleCtx(true)
+	ctx.stubCompileContext.indexInfo = &plan.CreateTable{IndexTables: []*plan.TableDef{{Name: "__mo_cagra"}}}
+	ctx2 := &alterCopyPhaseContext{stubCompileContext: ctx.stubCompileContext, prepare: true}
+	require.NoError(t, Hooks{}.HandleCreateIndex(ctx2, cagraIndexDefs()))
+
+	ctx = newHandleCtx(true)
+	ctx.stubCompileContext.indexInfo = &plan.CreateTable{IndexTables: []*plan.TableDef{{Name: "__mo_cagra"}}}
+	ctx.stubCompileContext.buildErr = errors.New("hidden table build failed")
+	ctx2 = &alterCopyPhaseContext{stubCompileContext: ctx.stubCompileContext, prepare: true}
+	require.ErrorIs(t, Hooks{}.HandleCreateIndex(ctx2, cagraIndexDefs()), ctx.stubCompileContext.buildErr)
+
+	asyncDefs := cagraIndexDefs()
+	asyncDefs[catalog.Cagra_TblType_Metadata].IndexAlgoParams = `{"async":"true"}`
+	ctx2 = &alterCopyPhaseContext{stubCompileContext: newHandleCtx(true).stubCompileContext, prepare: true, build: true}
+	require.NoError(t, Hooks{}.HandleCreateIndex(ctx2, asyncDefs))
+
+	ctx = newHandleCtx(true)
+	ctx.stubCompileContext.dropErr = errors.New("drop task failed")
+	ctx2 = &alterCopyPhaseContext{stubCompileContext: ctx.stubCompileContext, publish: true}
+	require.ErrorIs(t, Hooks{}.HandleCreateIndex(ctx2, cagraIndexDefs()), ctx.stubCompileContext.dropErr)
+
+	ctx = newHandleCtx(true)
+	ctx.stubCompileContext.createErr = errors.New("create task failed")
+	ctx2 = &alterCopyPhaseContext{stubCompileContext: ctx.stubCompileContext, publish: true}
+	require.ErrorIs(t, Hooks{}.HandleCreateIndex(ctx2, cagraIndexDefs()), ctx.stubCompileContext.createErr)
+
+	ctx = newHandleCtx(true)
+	ctx.stubCompileContext.runErr = errors.New("delete old index failed")
+	require.ErrorIs(t, Hooks{}.HandleCreateIndex(ctx, cagraIndexDefs()), ctx.stubCompileContext.runErr)
+
+	ctx = newHandleCtx(true)
+	ctx.stubCompileContext.runErr = errors.New("build index failed")
+	ctx2 = &alterCopyPhaseContext{stubCompileContext: ctx.stubCompileContext, prepare: true, build: true}
+	require.ErrorIs(t, Hooks{}.HandleCreateIndex(ctx2, cagraIndexDefs()), ctx.stubCompileContext.runErr)
 }
 
 // TestCagraValidateReindexParams_RejectsLists: CAGRA has no `lists` param,
