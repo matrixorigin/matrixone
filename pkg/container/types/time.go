@@ -366,6 +366,28 @@ func (t Time) TruncateToScale(scale int32) Time {
 	return result
 }
 
+// TruncateToScaleWithoutRounding discards fractional digits toward zero. It
+// is selected by TIME_TRUNCATE_FRACTIONAL for conversions to a lower FSP.
+func (t Time) TruncateToScaleWithoutRounding(scale int32) Time {
+	if scale >= 6 {
+		return t
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	isNeg := t < 0
+	absTime := t
+	if isNeg {
+		absTime = -t
+	}
+	divisor := int64(scaleVal[scale])
+	result := (int64(absTime) / divisor) * divisor
+	if isNeg {
+		return -Time(result)
+	}
+	return Time(result)
+}
+
 func (t Time) ToDecimal64(ctx context.Context, width, scale int32) (Decimal64, error) {
 	tToStr := t.NumericString(scale)
 	ret, err := ParseDecimal64(tToStr, width, scale)

@@ -630,6 +630,59 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	return buildDefaultExprWithColumns(col, typ, proc, nil)
 }
 
+func legacyImplicitTimestampDefaults(proc *process.Process) bool {
+	if proc == nil || proc.GetResolveVariableFunc() == nil {
+		return false
+	}
+	value, err := proc.GetResolveVariableFunc()("explicit_defaults_for_timestamp", true, false)
+	if err != nil {
+		return false
+	}
+	switch value := value.(type) {
+	case int64:
+		return value == 0
+	case uint64:
+		return value == 0
+	case bool:
+		return !value
+	default:
+		return false
+	}
+}
+
+func hasExplicitNullableAttribute(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is {
+			return true
+		}
+	}
+	return false
+}
+
+func currentTimestampAST() tree.Expr {
+	return &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName("current_timestamp")),
+	}
+}
+
+func buildImplicitCurrentTimestampExpr(typ plan.Type, proc *process.Process) (*plan.Expr, error) {
+	ast := currentTimestampAST()
+	binder := NewDefaultBinder(proc.Ctx, nil, nil, typ, nil)
+	bound, err := binder.BindExpr(ast, 0, false)
+	if err != nil {
+		return nil, err
+	}
+	return makePlan2AssignmentCastExpr(proc.Ctx, bound, typ)
+}
+
+func buildImplicitCurrentTimestampDefault(typ plan.Type, proc *process.Process) (*plan.Default, error) {
+	expr, err := buildImplicitCurrentTimestampExpr(typ, proc)
+	if err != nil {
+		return nil, err
+	}
+	return &plan.Default{NullAbility: false, Expr: expr, OriginString: "CURRENT_TIMESTAMP()"}, nil
+}
+
 // buildDefaultExprWithColumns is the scoped form of buildDefaultExpr.  The
 // unscoped form remains for call sites that bind an expression which is not a
 // table-row default (for example internal compatibility expressions).

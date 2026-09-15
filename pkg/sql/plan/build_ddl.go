@@ -1403,6 +1403,17 @@ func genAsSelectCols(
 				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
+		// Temporal expression types use Scale for their SQL FSP, while older
+		// planner paths may leave Width at zero. Materialized CTAS metadata and
+		// SHOW CREATE render the suffix from Width, so keep both fields aligned.
+		if typ.Scale > 0 {
+			switch types.T(typ.Id) {
+			case types.T_time, types.T_datetime, types.T_timestamp:
+				if typ.Width < typ.Scale {
+					typ.Width = typ.Scale
+				}
+			}
+		}
 		// CTAS creates a new table from the query result.  A source column's
 		// AUTO_INCREMENT attribute is not part of that result schema and must
 		// not be copied to the new table.
@@ -3137,6 +3148,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	}
 
 	genColIdx := 0 // tracks the current column's position in allColDefs
+	legacyTimestampDefaultApplied := false
 	for _, item := range stmt.Defs {
 		switch def := item.(type) {
 		case *tree.ColumnTableDef:
@@ -3275,13 +3287,33 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				if err != nil {
 					return err
 				}
+				// With explicit_defaults_for_timestamp=OFF, MySQL gives the
+				// first unconstrained TIMESTAMP column an implicit current-time
+				// default and ON UPDATE expression. Keep explicit NULL columns
+				// out of this legacy rule.
+				if !legacyTimestampDefaultApplied && types.T(colType.Id) == types.T_timestamp &&
+					!hasExplicitNullableAttribute(def) && legacyImplicitTimestampDefaults(ctx.GetProcess()) {
+					defaultValue, err = buildImplicitCurrentTimestampDefault(colType, ctx.GetProcess())
+					if err != nil {
+						return err
+					}
+					implicitExpr, implicitErr := buildImplicitCurrentTimestampExpr(colType, ctx.GetProcess())
+					if implicitErr != nil {
+						return implicitErr
+					}
+					onUpdateExpr = &plan.OnUpdate{Expr: implicitExpr, OriginString: "CURRENT_TIMESTAMP()"}
+					legacyTimestampDefaultApplied = true
+				}
 				if auto_incr && defaultValue.Expr != nil {
 					return moerr.NewInvalidInputf(ctx.GetContext(), "invalid default value for '%s'", colNameOrigin)
 				}
 
-				onUpdateExpr, err = buildOnUpdate(def, colType, ctx.GetProcess())
-				if err != nil {
-					return err
+				explicitOnUpdate, updateErr := buildOnUpdate(def, colType, ctx.GetProcess())
+				if updateErr != nil {
+					return updateErr
+				}
+				if explicitOnUpdate != nil {
+					onUpdateExpr = explicitOnUpdate
 				}
 			}
 

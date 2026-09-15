@@ -10500,7 +10500,7 @@ func DateToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapper, 
 		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return v.DayOfWeek().String(), nil
+		return localizedWeekday(proc, int(v.DayOfWeek())), nil
 	}, selectList)
 }
 
@@ -10512,7 +10512,7 @@ func DatetimeToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		}
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return v.DayOfWeek().String(), nil
+		return localizedWeekday(proc, int(v.DayOfWeek())), nil
 	}, selectList)
 }
 
@@ -10529,7 +10529,7 @@ func TimestampToDayName(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		dt := v.ToDatetime(loc)
 		// DayOfWeek() returns 0=Sunday, 1=Monday, ..., 6=Saturday
 		// Use String() method to get the weekday name
-		return dt.DayOfWeek().String(), nil
+		return localizedWeekday(proc, int(dt.DayOfWeek())), nil
 	}, selectList)
 }
 
@@ -10541,7 +10541,7 @@ func DateStringToDayName(ivecs []*vector.Vector, result vector.FunctionResultWra
 		if parts.year == 0 {
 			return types.DayOfWeekFromCalendar(parts.year, parts.month, parts.day).String(), true
 		}
-		return parts.date.DayOfWeek().String(), true
+		return localizedWeekday(proc, int(parts.date.DayOfWeek())), true
 	})
 }
 
@@ -10554,7 +10554,7 @@ func DateToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		// Month() returns 1-12
 		month := v.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1], nil
+			return localizedMonth(proc, int(month)), nil
 		}
 		return "", nil
 	}, selectList)
@@ -10569,7 +10569,7 @@ func DatetimeToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWra
 		// Month() returns 1-12
 		month := v.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1], nil
+			return localizedMonth(proc, int(month)), nil
 		}
 		return "", nil
 	}, selectList)
@@ -10589,7 +10589,7 @@ func TimestampToMonthName(ivecs []*vector.Vector, result vector.FunctionResultWr
 		// Month() returns 1-12
 		month := dt.Month()
 		if month >= 1 && month <= 12 {
-			return MonthNames[month-1], nil
+			return localizedMonth(proc, int(month)), nil
 		}
 		return "", nil
 	}, selectList)
@@ -10601,7 +10601,7 @@ func DateStringToMonthName(ivecs []*vector.Vector, result vector.FunctionResultW
 		if month < 1 || month > 12 {
 			return "", false
 		}
-		return MonthNames[month-1], true
+		return localizedMonth(proc, int(month)), true
 	})
 }
 

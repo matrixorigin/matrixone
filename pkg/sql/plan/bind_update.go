@@ -105,6 +105,20 @@ func (builder *QueryBuilder) makeUpdateChangedRowsExpr(
 	if proc == nil || !proc.Base.SessionInfo.CountUpdateChangedRows {
 		return nil, nil
 	}
+	return builder.makeUpdateChangedRowsPredicate(alias, selectNode, selectNodeTag, oldColName2Idx, newColName2Idx)
+}
+
+// makeUpdateChangedRowsPredicate is also used to guard automatic ON UPDATE
+// expressions. The changed-row marker is optional protocol metadata, but the
+// predicate itself is required for MySQL's rule that a no-op UPDATE must not
+// refresh CURRENT_TIMESTAMP columns.
+func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
+	alias string,
+	selectNode *plan.Node,
+	selectNodeTag int32,
+	oldColName2Idx map[string]int32,
+	newColName2Idx map[string]int32,
+) (*plan.Expr, error) {
 
 	updatedCols := make([]string, 0)
 	prefix := alias + "."
@@ -122,14 +136,29 @@ func (builder *QueryBuilder) makeUpdateChangedRowsExpr(
 			continue
 		}
 		newPos := newColName2Idx[qualifiedName]
+		if newPos < 0 || int(newPos) >= len(selectNode.ProjectList) {
+			continue
+		}
+		oldTyp := selectNode.ProjectList[newPos].Typ
 		oldExpr := &plan.Expr{
-			Typ:  selectNode.ProjectList[oldPos].Typ,
+			Typ:  oldTyp,
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: oldPos}},
 		}
-		newExpr := &plan.Expr{
-			Typ:  selectNode.ProjectList[newPos].Typ,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: newPos}},
+		// UPDATE projection trimming can remove the appended OLD-value copy,
+		// leaving oldPos outside ProjectList. Prefer the underlying scan column
+		// whenever it is available so the predicate remains valid after that
+		// trimming pass.
+		columnName := qualifiedName[strings.LastIndexByte(qualifiedName, '.')+1:]
+		if sourceRef := findSourceColumnRef(selectNode.ProjectList[newPos], selectNodeTag, newPos, columnName); sourceRef != nil {
+			oldExpr.Expr = &plan.Expr_Col{Col: sourceRef}
+		} else if oldPos < 0 || int(oldPos) >= len(selectNode.ProjectList) {
+			continue
 		}
+		// Inline the computed assignment instead of referring to the mutable
+		// projection slot. Optimizer projection trimming may remove that slot,
+		// while the assignment's underlying scan references remain available.
+		newExpr := DeepCopyExpr(selectNode.ProjectList[newPos])
+		newExpr.Typ = oldTyp
 		var err error
 		if oldExpr.Typ.Id == int32(types.T_char) {
 			oldExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "rtrim", []*plan.Expr{oldExpr})
@@ -158,6 +187,46 @@ func (builder *QueryBuilder) makeUpdateChangedRowsExpr(
 		return nil, nil
 	}
 	return BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allEqual})
+}
+
+// findSourceColumnRef returns a scan-level reference embedded in an updated
+// assignment expression. Keeping the reference on the source relation avoids
+// depending on an optimizer-preserved OLD-value projection slot.
+func findSourceColumnRef(expr *plan.Expr, projectionTag, columnPos int32, columnName string) *plan.ColRef {
+	var fallback *plan.ColRef
+	var visit func(*plan.Expr)
+	visit = func(current *plan.Expr) {
+		if current == nil {
+			return
+		}
+		if col := current.GetCol(); col != nil {
+			if col.RelPos == projectionTag {
+				return
+			}
+			if col.ColPos == columnPos && (columnName == "" || col.Name == "" || col.Name == columnName) {
+				copy := *col
+				fallback = &copy
+				return
+			}
+			if fallback == nil {
+				copy := *col
+				fallback = &copy
+			}
+			return
+		}
+		if fn := current.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				visit(arg)
+			}
+		}
+		if list := current.GetList(); list != nil {
+			for _, item := range list.List {
+				visit(item)
+			}
+		}
+	}
+	visit(expr)
+	return fallback
 }
 
 // appendSequentialSingleTableUpdateAssignments materializes the current row in
@@ -627,6 +696,22 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 	hasReadOnlyUpdateSource := dmlCtx.hasReadOnlySource || len(dmlCtx.aliases) > updatedTargetCount
 	guardTargetAssignmentEvaluation := isMultiTargetUpdate || hasReadOnlyUpdateSource
+	// Keep the explicit-assignment positions stable while automatic
+	// ON UPDATE columns are appended below. The latter add OLD-value copies to
+	// the projection and mutate the working maps; predicates built from those
+	// transient positions can otherwise reference columns that are no longer
+	// present after projection trimming.
+	changedRowsOldColName2Idx := maps.Clone(oldColName2Idx)
+	changedRowsNewColName2Idx := maps.Clone(newColName2Idx)
+	changedPredicates := make(map[string]*plan.Expr)
+	for _, alias := range dmlCtx.aliases {
+		if predicate, predicateErr := builder.makeUpdateChangedRowsPredicate(
+			alias, selectNode, selectNodeTag, changedRowsOldColName2Idx, changedRowsNewColName2Idx); predicateErr != nil {
+			return 0, predicateErr
+		} else if predicate != nil {
+			changedPredicates[alias] = predicate
+		}
+	}
 
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
@@ -716,6 +801,22 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					}
 
 					oldPos := oldColName2Idx[alias+"."+col.Name]
+					if changed := changedPredicates[alias]; changed != nil {
+						oldRef := &plan.ColRef{RelPos: selectNodeTag, ColPos: oldPos}
+						if sourceRef := findSourceColumnRef(selectNode.ProjectList[oldPos], selectNodeTag, oldPos, col.Name); sourceRef != nil {
+							oldRef = sourceRef
+						}
+						oldValue := &plan.Expr{
+							Typ:  selectNode.ProjectList[oldPos].Typ,
+							Expr: &plan.Expr_Col{Col: oldRef},
+						}
+						newDefExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{
+							DeepCopyExpr(changed), newDefExpr, oldValue,
+						})
+						if err != nil {
+							return 0, err
+						}
+					}
 					newColName2Idx[alias+"."+col.Name] = oldPos
 					oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
 					selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
@@ -2050,7 +2151,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 		}
 		changedRowsExpr, err := builder.makeUpdateChangedRowsExpr(
-			alias, selectNode, selectNodeTag, oldColName2Idx, newColName2Idx)
+			alias, selectNode, selectNodeTag, changedRowsOldColName2Idx, changedRowsNewColName2Idx)
 		if err != nil {
 			return 0, err
 		}
