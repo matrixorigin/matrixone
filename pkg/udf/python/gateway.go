@@ -200,6 +200,12 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	requestCtx := ctx
+	var cancel context.CancelFunc
+	if g.cfg.RequestTimeout > 0 {
+		requestCtx, cancel = context.WithTimeout(ctx, g.cfg.RequestTimeout)
+		defer cancel()
+	}
 	if definition == nil {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: nil Python routine definition")
 	}
@@ -262,7 +268,7 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 	source := definition.Source
 	if g.artifactResolver != nil {
 		resolved, resolveErr := g.artifactResolver.Resolve(
-			ctx, definition.AccountID, definition.Handler, definition.ArtifactDigest,
+			requestCtx, definition.AccountID, definition.Handler, definition.ArtifactDigest,
 		)
 		if resolveErr != nil {
 			return resolveErr
@@ -292,7 +298,7 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 	// lease in its request. It must perform its own worker-instance handshake;
 	// relying on a cached readiness result could validate against a replacement
 	// worker with a different contract.
-	if err := g.ensureCapabilities(ctx, client, true); err != nil {
+	if err := g.ensureCapabilities(requestCtx, client, true); err != nil {
 		return err
 	}
 	payload, err := json.Marshal(definitionValidationPayload{
@@ -314,8 +320,12 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 	if err != nil {
 		return fmt.Errorf("python udf: encode definition validation: %w", err)
 	}
-	actionCtx, cancel := context.WithTimeout(ctx, g.cfg.RequestTimeout)
-	defer cancel()
+	actionCtx := requestCtx
+	var actionCancel context.CancelFunc
+	if g.cfg.RequestTimeout > 0 {
+		actionCtx, actionCancel = context.WithTimeout(requestCtx, g.cfg.RequestTimeout)
+		defer actionCancel()
+	}
 	stream, err := client.DoAction(actionCtx, &flight.Action{Type: "ValidatePythonDefinition", Body: payload})
 	if err != nil {
 		g.invalidateCapabilities()
