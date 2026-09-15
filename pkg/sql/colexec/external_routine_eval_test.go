@@ -50,6 +50,14 @@ type externalRoutineCaptureRuntime struct {
 	invocations []udf.Invocation
 }
 
+type externalRoutineEmptySuccessRuntime struct{}
+
+func (r *externalRoutineEmptySuccessRuntime) Language() string { return udf.LanguagePython }
+
+func (r *externalRoutineEmptySuccessRuntime) Execute(_ context.Context, _ *udf.Invocation, _ vector.FunctionResultWrapper, _ *mpool.MPool) error {
+	return nil
+}
+
 func (r *externalRoutineCaptureRuntime) Language() string { return udf.LanguagePython }
 
 func (r *externalRoutineCaptureRuntime) Execute(_ context.Context, invocation *udf.Invocation, result vector.FunctionResultWrapper, mp *mpool.MPool) error {
@@ -419,6 +427,34 @@ func TestExternalRoutineEvalRejectsSourceInExecutablePlan(t *testing.T) {
 	call := testExternalRoutineCall(t, python.ModeScalar, udf.NullCallHandler)
 	call.GetPython().Source = "def add(ctx, value): return value + 1"
 	require.ErrorContains(t, validateRoutineCall(call), "plan contains source")
+}
+
+func TestExternalRoutineEvalRejectsSuccessfulRuntimeWithoutResultRows(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.SetQueryId("missing-result-query")
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.GetSessionInfo().User = "root"
+	proc.Base.StmtProfile = &process.StmtProfile{}
+	proc.GetStmtProfile().SetQueryStart(time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC))
+
+	input := vector.NewVec(types.T_int64.ToType())
+	defer input.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(input, int64(10), false, proc.Mp()))
+	bat := batch.NewWithSize(0)
+	bat.SetRowCount(1)
+	proc.Base.UdfService = &externalRoutineEmptySuccessRuntime{}
+	evaluator, err := newExternalRoutineEval(
+		proc,
+		testExternalRoutineCall(t, python.ModeScalar, udf.NullCallHandler),
+		[]ExpressionExecutor{&externalRoutineTestExecutor{vector: input}},
+		nil,
+	)
+	require.NoError(t, err)
+	defer evaluator.Free()
+
+	_, err = evaluator.Eval(proc, []*batch.Batch{bat}, []bool{true})
+	require.ErrorContains(t, err, "runtime produced 0 result rows, expected 1")
 }
 
 func TestExternalRoutineTransfersResultOwnership(t *testing.T) {
