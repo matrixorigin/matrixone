@@ -5105,6 +5105,32 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	}
+	// An exact division can flow through wrappers such as FLOOR before joining
+	// another arithmetic operand. DECIMAL256 overloads require a common physical
+	// domain; promote the other exact operand symmetrically instead of depending
+	// on operand order. FLOAT remains authoritative and follows the branch above.
+	if len(args) == 2 && inIntegerAssignmentDomain(ctx) &&
+		(name == "+" || name == "-" || name == "*" || name == "%" || name == "mod") {
+		left, right := types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)
+		if (left == types.T_decimal256 && (right.IsInteger() || right.IsDecimal())) ||
+			(right == types.T_decimal256 && (left.IsInteger() || left.IsDecimal())) {
+			args = append([]*Expr(nil), args...)
+			for i, arg := range args {
+				if types.T(arg.Typ.Id) == types.T_decimal256 {
+					continue
+				}
+				scale := arg.Typ.Scale
+				if types.T(arg.Typ.Id).IsInteger() || scale < 0 {
+					scale = 0
+				}
+				typ := types.New(types.T_decimal256, 65, scale)
+				args[i], err = makePlan2CastExpr(ctx, arg, makePlan2Type(&typ))
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
 	if descendFunctions {
 		rejectIntervalArgs = rejectStandaloneIntervalFunctionArgs

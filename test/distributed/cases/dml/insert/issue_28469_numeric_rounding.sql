@@ -57,6 +57,19 @@ CREATE TABLE float_dst (v DOUBLE);
 INSERT INTO float_dst SELECT x / 2 FROM src;
 SELECT * FROM float_dst;
 CREATE TABLE dst (id INT PRIMARY KEY, v BIGINT);
+INSERT INTO dst SELECT 100, 1 + FLOOR(x/2) FROM src;
+INSERT INTO dst SELECT 101, FLOOR(x/2) + 1 FROM src;
+SELECT * FROM dst ORDER BY id;
+DELETE FROM dst;
+
+-- Planner-owned exact casts must not hide a constant zero divisor from
+-- runtime strict-mode handling; the failed multi-row write is atomic.
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE strict_zero FROM 'INSERT INTO dst VALUES (102,10/0), (103,5/2)';
+EXECUTE strict_zero;
+SELECT COUNT(*) FROM dst;
+DEALLOCATE PREPARE strict_zero;
+SET sql_mode = 'STRICT_TRANS_TABLES';
 INSERT INTO dst VALUES (1, 5 / 2);
 INSERT INTO dst SELECT 2, x / 2 FROM src;
 INSERT INTO dst SELECT 3, ABS(x / 2) FROM src;

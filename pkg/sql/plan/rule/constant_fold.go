@@ -949,20 +949,39 @@ func IsDivisionByZeroConstant(fn *plan.Function) bool {
 		return false
 	}
 
-	// Check if either operand is NULL
+	// Check if either operand is NULL. Exact integer-assignment binding may
+	// insert an implicit DECIMAL256 cast before folding, so follow only those
+	// planner-owned casts; an explicit user CAST remains its own SQL boundary.
 	for _, arg := range fn.Args {
-		lit := arg.GetLit()
-		if lit != nil && lit.GetIsnull() {
+		if lit := implicitCastLiteral(arg); lit != nil && lit.GetIsnull() {
 			return true
 		}
 	}
 
-	divisor := fn.Args[1]
-	lit := divisor.GetLit()
-	if lit == nil {
-		return false
+	lit := implicitCastLiteral(fn.Args[1])
+	return lit != nil && isZeroLiteral(lit)
+}
+
+func implicitCastLiteral(expr *plan.Expr) *plan.Literal {
+	for expr != nil {
+		if lit := expr.GetLit(); lit != nil {
+			if lit.Src != nil {
+				expr = lit.Src
+				continue
+			}
+			return lit
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || fn.GetSyntaxExplicitCast() || len(fn.Args) == 0 {
+			return nil
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 && overload != 4 {
+			return nil
+		}
+		expr = fn.Args[0]
 	}
-	return isZeroLiteral(lit)
+	return nil
 }
 
 // isZeroLiteral checks if a literal value is zero

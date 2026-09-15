@@ -102,6 +102,8 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			{"abs_wrapper", "insert into dst select abs(x / 2) from src", 3},
 			{"negation_wrapper", "insert into dst select -(x / 2) from src", -3},
 			{"addition_wrapper", "insert into dst select x / 2 + 0 from src", 3},
+			{"left_mixed_wrapper", "insert into dst select 1 + floor(x / 2) from src", 3},
+			{"right_mixed_wrapper", "insert into dst select floor(x / 2) + 1 from src", 3},
 			{"update_wrapper", "update dst set v = abs(5 / 2)", 3},
 			{"approximate_control", "insert into dst select x / 2E0 from src", 2},
 			{"folded_approximate_control", "insert into dst values (abs(5E0 / 2) + 0)", 2},
@@ -131,6 +133,19 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 				require.Equal(t, tc.want, got)
 			})
 		}
+
+		t.Run("prepared_strict_division_by_zero", func(t *testing.T) {
+			mustExec(t, ctx, conn, "delete from dst")
+			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'")
+			mustExec(t, ctx, conn, "prepare strict_zero from 'insert into dst values (10/0), (5/2)'")
+			defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare strict_zero") }()
+			_, err := conn.ExecContext(ctx, "execute strict_zero")
+			require.Error(t, err)
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from dst").Scan(&count))
+			require.Zero(t, count)
+			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES'")
+		})
 
 		for _, query := range []string{
 			"select sum(x/2) from src",

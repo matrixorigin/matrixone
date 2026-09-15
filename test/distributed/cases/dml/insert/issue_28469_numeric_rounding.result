@@ -66,6 +66,22 @@ SELECT * FROM float_dst;
 ➤ v[8,53,31]  𝄀
 2.5
 CREATE TABLE dst (id INT PRIMARY KEY, v BIGINT);
+INSERT INTO dst SELECT 100, 1 + FLOOR(x/2) FROM src;
+INSERT INTO dst SELECT 101, FLOOR(x/2) + 1 FROM src;
+SELECT * FROM dst ORDER BY id;
+➤ id[4,32,0]  ¦  v[-5,64,0]  𝄀
+100  ¦  3  𝄀
+101  ¦  3
+DELETE FROM dst;
+SET sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO';
+PREPARE strict_zero FROM 'INSERT INTO dst VALUES (102,10/0), (103,5/2)';
+EXECUTE strict_zero;
+Data truncation: division by zero
+SELECT COUNT(*) FROM dst;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE strict_zero;
+SET sql_mode = 'STRICT_TRANS_TABLES';
 INSERT INTO dst VALUES (1, 5 / 2);
 INSERT INTO dst SELECT 2, x / 2 FROM src;
 INSERT INTO dst SELECT 3, ABS(x / 2) FROM src;

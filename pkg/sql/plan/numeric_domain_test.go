@@ -29,6 +29,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestExactDivisionByZeroRemainsRuntimeChecked(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	division, err := BindFuncExprImplByPlanExpr(withIntegerAssignmentDomain(t.Context()), "/", []*planpb.Expr{
+		makePlan2Int64ConstExprWithType(10),
+		makePlan2Int64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	require.True(t, rule.IsDivisionByZeroConstant(division.GetF()), "%s", division.String())
+
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, division, proc, true, true)
+	require.NoError(t, err)
+	require.NotNil(t, folded.GetF(), "strict DML must retain division for runtime sql_mode handling")
+}
+
 func TestExactNumericSourceSurvivesFoldCopyAndWire(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, optimizerFold := range []bool{false, true} {

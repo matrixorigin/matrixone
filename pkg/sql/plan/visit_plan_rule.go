@@ -1640,10 +1640,15 @@ func (rule *ResetParamRefRule) rebindPreparedNumericIntegerAssignment(
 		return expr, false, nil
 	}
 	param, isParamValue := rule.paramValues[paramPos].(ParamValue)
-	numericKind := isParamValue &&
+	// Numeric-prefix classification is a SQL text-transport fallback, not the
+	// source type of a COM_STMT string packet. Keep binary strings intact until
+	// cast_assign/cast_ignore applies the target's conversion policy.
+	binaryString := isParamValue && param.IsBinaryProtocol && param.HasRuntimeType &&
+		param.RuntimeType.Oid.IsMySQLString()
+	numericKind := isParamValue && !binaryString &&
 		(param.PrepareParamKind == vector.PrepareParamDecimal ||
 			param.PrepareParamKind == vector.PrepareParamFloat)
-	if rule.sqlExecuteStringBackedParams[paramPos] && !numericKind {
+	if binaryString || (rule.sqlExecuteStringBackedParams[paramPos] && !numericKind) {
 		return expr, false, nil
 	}
 	source := rule.sqlExecuteNumericParams[paramPos]
