@@ -581,6 +581,7 @@ func TestBuildSQLJSONPlanPreservesVectorIndexPayload(t *testing.T) {
 				DistanceFunction: "l2_distance",
 				QueryVector:      sqlJSONTestInt32(1),
 				CandidateLimit:   sqlJSONTestInt32(10),
+				FirstRoundLimit:  sqlJSONTestInt32(4),
 				PreFilters:       []*plan.Expr{sqlJSONTestInt32(2)},
 			},
 		}},
@@ -599,8 +600,52 @@ func TestBuildSQLJSONPlanPreservesVectorIndexPayload(t *testing.T) {
 		"metric=l2_distance",
 		"query_vector=1",
 		"candidate_limit=10",
+		"first_round_limit=4",
 		"pre_filter[0]=2",
 	}, decoded.MatrixOne.Nodes[0].Expressions)
+}
+
+func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {
+	buildExpressions := func(upper int32) []string {
+		data, err := BuildSQLJSONPlan(context.Background(), &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{0},
+			Nodes: []*plan.Node{{
+				NodeId:   0,
+				NodeType: plan.Node_VECTOR_INDEX_SCAN,
+				VectorIndexScan: &plan.VectorIndexScan{
+					Index: &plan.IndexDef{IndexName: "idx_embedding"},
+					DistanceRange: &plan.DistRange{
+						UpperBoundType: plan.BoundType_INCLUSIVE,
+						UpperBound:     sqlJSONTestInt32(upper),
+					},
+				},
+			}},
+		})
+		require.NoError(t, err)
+		var decoded struct {
+			MatrixOne struct {
+				Nodes []sqlJSONNode `json:"nodes"`
+			} `json:"matrixone"`
+		}
+		require.NoError(t, json.Unmarshal(data, &decoded))
+		require.Len(t, decoded.MatrixOne.Nodes, 1)
+		return decoded.MatrixOne.Nodes[0].Expressions
+	}
+
+	lower := buildExpressions(5)
+	upper := buildExpressions(50)
+	require.NotEqual(t, lower, upper)
+	require.Equal(t, []string{
+		"index=idx_embedding",
+		"distance_upper_bound_type=INCLUSIVE",
+		"distance_upper_bound=5",
+	}, lower)
+	require.Equal(t, []string{
+		"index=idx_embedding",
+		"distance_upper_bound_type=INCLUSIVE",
+		"distance_upper_bound=50",
+	}, upper)
 }
 
 func TestSQLJSONHelpersRejectMalformedInputsAndPreserveStatistics(t *testing.T) {
