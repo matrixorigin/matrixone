@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"runtime"
 	"testing"
 	"time"
 
@@ -303,6 +304,70 @@ func TestConvertPathMatchesEnforcesDefaultJSONCellLimitForSingleMatch(t *testing
 	iterator.Close()
 	require.Equal(t, StatusStatementError, result.Status)
 	require.ErrorIs(t, result.Err, bytejson.ErrJSONTableCellLimit)
+}
+
+func TestConvertPathMatchesRejectsLargeOpaqueBeforeEncoding(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		payloadLength int
+	}{
+		{name: "1MiB", payloadLength: 1 << 20},
+		{name: "8MiB", payloadLength: 8 << 20},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// Build the source before measuring conversion. This isolates the
+			// rejected storage encoding from the caller-owned input allocation.
+			data := make([]byte, binary.MaxVarintLen64+test.payloadLength)
+			prefixLength := binary.PutUvarint(data, uint64(test.payloadLength))
+			data = data[:prefixLength+test.payloadLength]
+			value := bytejson.ByteJson{Type: bytejson.TpCodeOpaque, Data: data}
+			path, err := bytejson.ParseJsonPath(`$`)
+			require.NoError(t, err)
+			iterator := bytejson.NewPathIterator(value, &path)
+
+			runtime.GC()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			result := ConvertPathMatchesWithLimit(iterator, types.T_json.ToType(), 14)
+			runtime.ReadMemStats(&after)
+			iterator.Close()
+
+			require.Equal(t, StatusStatementError, result.Status)
+			require.ErrorIs(t, result.Err, bytejson.ErrJSONTableCellLimit)
+			require.Less(t, after.TotalAlloc-before.TotalAlloc, uint64(test.payloadLength/2))
+			heapDelta := uint64(0)
+			if after.HeapAlloc > before.HeapAlloc {
+				heapDelta = after.HeapAlloc - before.HeapAlloc
+			}
+			t.Logf("payload=%d total_alloc_delta=%d heap_alloc_delta=%d", test.payloadLength, after.TotalAlloc-before.TotalAlloc, heapDelta)
+			require.Less(t, heapDelta, uint64(test.payloadLength/2))
+		})
+	}
+}
+
+func TestConvertPathMatchesUsesSharedOpaqueAdmissionForSingleAndMulti(t *testing.T) {
+	data := make([]byte, binary.MaxVarintLen64+1<<20)
+	prefixLength := binary.PutUvarint(data, uint64(1<<20))
+	data = data[:prefixLength+1<<20]
+	opaque := bytejson.ByteJson{Type: bytejson.TpCodeOpaque, Data: data}
+
+	singlePath, err := bytejson.ParseJsonPath(`$`)
+	require.NoError(t, err)
+	single := bytejson.NewPathIterator(opaque, &singlePath)
+	singleResult := ConvertPathMatchesWithLimit(single, types.T_json.ToType(), 14)
+	single.Close()
+	require.Equal(t, StatusStatementError, singleResult.Status)
+	require.ErrorIs(t, singleResult.Err, bytejson.ErrJSONTableCellLimit)
+
+	array, err := bytejson.CreateByteJSON([]any{opaque})
+	require.NoError(t, err)
+	multiPath, err := bytejson.ParseJsonPath(`$[*]`)
+	require.NoError(t, err)
+	multi := bytejson.NewPathIterator(array, &multiPath)
+	multiResult := ConvertPathMatchesWithLimit(multi, types.T_json.ToType(), 14)
+	multi.Close()
+	require.Equal(t, StatusStatementError, multiResult.Status)
+	require.ErrorIs(t, multiResult.Err, bytejson.ErrJSONTableCellLimit)
 }
 
 func TestConvertUint32AppendResultRoundTrip(t *testing.T) {

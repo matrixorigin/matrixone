@@ -359,24 +359,17 @@ func convertJSONValueWithLimit(ctx context.Context, value bytejson.ByteJson, max
 			Err:    fmt.Errorf("invalid JSON_TABLE JSON cell limit %d", maxBytes),
 		}
 	}
-	result := ConvertScalarWithContext(ctx, value, types.T_json.ToType(), ConversionOptions{})
-	if result.Status != StatusSuccess {
-		return result
+	if isJSONNull(value) {
+		return Result{Status: StatusJSONNull}
 	}
-	encoded, ok := result.Value.([]byte)
-	if !ok {
+	encoded, err := bytejson.MarshalStorageCompatibleWithLimit(ctx, value, maxBytes)
+	if err != nil {
 		return Result{
 			Status: StatusStatementError,
-			Err:    errors.New("JSON_TABLE JSON conversion produced an incompatible value"),
+			Err:    err,
 		}
 	}
-	if len(encoded) > maxBytes {
-		return Result{
-			Status: StatusStatementError,
-			Err:    fmt.Errorf("%w: %d bytes exceeds %d", bytejson.ErrJSONTableCellLimit, len(encoded), maxBytes),
-		}
-	}
-	return result
+	return Result{Value: encoded, Status: StatusSuccess}
 }
 
 // AppendResult atomically appends a successful, null, or truncating result to
