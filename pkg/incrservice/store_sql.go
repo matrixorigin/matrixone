@@ -50,18 +50,26 @@ func (c AutoColumn) getInsertSQL() string {
 		c.Step)
 }
 
+type logtailReadBarrier func(context.Context) (timestamp.Timestamp, error)
+
 type sqlStore struct {
-	ls   lockservice.LockService
-	exec executor.SQLExecutor
+	ls                      lockservice.LockService
+	exec                    executor.SQLExecutor
+	acquireLogtailReadFence logtailReadBarrier
 }
 
 func NewSQLStore(
 	exec executor.SQLExecutor,
 	ls lockservice.LockService,
+	acquireLogtailReadFence func(context.Context) (timestamp.Timestamp, error),
 ) (IncrValueStore, error) {
+	if acquireLogtailReadFence == nil {
+		return nil, moerr.NewInternalErrorNoCtx("AUTO_INCREMENT store requires a logtail read barrier")
+	}
 	return &sqlStore{
-		exec: exec,
-		ls:   ls,
+		exec:                    exec,
+		ls:                      ls,
+		acquireLogtailReadFence: acquireLogtailReadFence,
 	}, nil
 }
 
@@ -578,7 +586,18 @@ func autoColumnReadOptions(txnOp client.TxnOperator) executor.Options {
 func (s *sqlStore) GetColumnValue(ctx context.Context, tableID uint64, colName string, txnOp client.TxnOperator) (uint64, uint64, error) {
 	query := fmt.Sprintf("select offset, step from %s where table_id = %d and col_name = '%s'",
 		incrTableName, tableID, sqlquote.EscapeString(colName))
-	res, err := s.exec.Exec(ctx, query, autoColumnReadOptions(txnOp))
+	opts := autoColumnReadOptions(txnOp)
+	if txnOp == nil {
+		if s.acquireLogtailReadFence == nil {
+			return 0, 0, moerr.NewInternalErrorNoCtx("AUTO_INCREMENT observation requires a logtail read barrier")
+		}
+		frontier, err := s.acquireLogtailReadFence(ctx)
+		if err != nil {
+			return 0, 0, err
+		}
+		opts = opts.WithMinCommittedTS(frontier)
+	}
+	res, err := s.exec.Exec(ctx, query, opts)
 	if err != nil {
 		return 0, 0, err
 	}
