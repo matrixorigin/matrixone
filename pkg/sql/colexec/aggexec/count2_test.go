@@ -176,6 +176,47 @@ func TestCountDistinctSignedZeroUsesOneValue(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestCountDistinctFloat64SignedZeroSurvivesIntermediateMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	makePartial := func(value float64) []byte {
+		exec := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()},
+		).(*countColumnExec)
+		require.NoError(t, exec.GroupGrow(1))
+		vec := testutil.NewFloat64Vector(
+			1, types.T_float64.ToType(), mp, false, nil, []float64{value})
+		require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}))
+		SetCanonicalDistinctKeyWire(exec, false)
+		var encoded bytes.Buffer
+		require.NoError(t, exec.SaveIntermediateResultOfChunk(0, &encoded))
+		vec.Free(mp)
+		exec.Free()
+		return bytes.Clone(encoded.Bytes())
+	}
+
+	minusZero := makePartial(math.Copysign(0, -1))
+	plusZero := makePartial(0)
+	target := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()},
+	).(*countColumnExec)
+	other := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_float64.ToType()},
+	).(*countColumnExec)
+	SetCanonicalDistinctKeyWire(target, false)
+	SetCanonicalDistinctKeyWire(other, false)
+	require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(minusZero), mp))
+	require.NoError(t, other.UnmarshalFromReader(bytes.NewReader(plusZero), mp))
+	require.NoError(t, target.BatchMerge(other, 0, []uint64{1}))
+	result, err := target.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+
+	result[0].Free(mp)
+	target.Free()
+	other.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestCountDistinctUsesCanonicalTypedKeys(t *testing.T) {
 	for _, tc := range []struct {
 		name string
