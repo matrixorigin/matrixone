@@ -1858,6 +1858,8 @@ func (ctr *container) makeAggListWithAllocation(
 			return nil, err
 		}
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
+		aggexec.ConfigureJSONAggregateOpaqueProtocol(
+			aggList[i], ctr.jsonAggOpaqueProtocolVersion)
 		// mtyp is the logical Group mode and survives resident-spill resets.
 		// Preserve it in each rebuilt GROUP_CONCAT executor even when the
 		// current spill bucket contains only one group.
@@ -1878,6 +1880,25 @@ func (ctr *container) makeAggListWithAllocation(
 		}
 	}
 	return aggList, nil
+}
+
+func jsonAggregateOpaqueProtocolVersion(proc *process.Process) int64 {
+	if proc == nil {
+		return 0
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return 0
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return 0
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return 0
+	}
+	return version
 }
 
 func useLegacyTextMinMaxForRemote(proc *process.Process) bool {

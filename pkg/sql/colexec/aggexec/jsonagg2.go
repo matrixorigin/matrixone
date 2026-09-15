@@ -31,8 +31,22 @@ import (
 
 type jsonArrayAggExec struct {
 	aggExec
-	distinct     bool
-	distinctHash distinctHash
+	distinct              bool
+	distinctHash          distinctHash
+	opaqueProtocolVersion int64
+}
+
+// ConfigureJSONAggregateOpaqueProtocol supplies the execution-local protocol
+// admission to the two JSON aggregate executors. An unset value is treated as
+// unknown by the canonical opaque encoder and therefore rejects non-NULL
+// opaque values.
+func ConfigureJSONAggregateOpaqueProtocol(agg AggFuncExec, protocolVersion int64) {
+	switch exec := agg.(type) {
+	case *jsonArrayAggExec:
+		exec.opaqueProtocolVersion = protocolVersion
+	case *jsonObjectAggExec:
+		exec.opaqueProtocolVersion = protocolVersion
+	}
 }
 
 func (exec *jsonArrayAggExec) SetAllocationAccount(
@@ -126,7 +140,8 @@ func (exec *jsonArrayAggExec) BatchFill(offset int, groups []uint64, vectors []*
 					continue
 				}
 			}
-			val, err = buildJSONArrayValueByteJson(vectors[0], uint64(row))
+			val, err = buildJSONArrayValueByteJsonWithProtocol(
+				vectors[0], uint64(row), exec.opaqueProtocolVersion)
 			if err != nil {
 				return err
 			}
@@ -232,8 +247,9 @@ func (exec *jsonArrayAggExec) Free() {
 
 type jsonObjectAggExec struct {
 	aggExec
-	distinct     bool
-	distinctHash distinctHash
+	distinct              bool
+	distinctHash          distinctHash
+	opaqueProtocolVersion int64
 }
 
 func (exec *jsonObjectAggExec) SetAllocationAccount(
@@ -334,7 +350,8 @@ func (exec *jsonObjectAggExec) BatchFill(offset int, groups []uint64, vectors []
 		}
 		val := bytejson.Null
 		if !vectors[1].IsNull(uint64(valRow)) {
-			val, err = buildValueByteJson(vectors[1], uint64(valRow))
+			val, err = buildValueByteJsonWithProtocol(
+				vectors[1], uint64(valRow), exec.opaqueProtocolVersion)
 			if err != nil {
 				return err
 			}
@@ -459,6 +476,14 @@ func appendJSONPayloadField(dst []byte, data []byte) []byte {
 }
 
 func jsonAggregateValueSize(vec *vector.Vector, row uint64) (int, error) {
+	return jsonAggregateValueSizeWithProtocol(vec, row, 0)
+}
+
+func jsonAggregateValueSizeWithProtocol(
+	vec *vector.Vector,
+	row uint64,
+	protocolVersion int64,
+) (int, error) {
 	if vec.IsNull(row) || vec.GetType().Oid == types.T_any || vec.GetType().Oid == types.T_bool {
 		return 2, nil
 	}
@@ -492,9 +517,9 @@ func jsonAggregateValueSize(vec *vector.Vector, row uint64) (int, error) {
 	case types.T_char, types.T_varchar, types.T_text:
 		length := len(vec.GetBytesAt(int(row)))
 		return 1 + jsonUvarintSize(uint64(length)) + length, nil
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		return 0, moerr.NewInvalidInputNoCtxf(
-			"binary data not supported json aggregate: %v", typ.String())
+	case types.T_bit, types.T_binary, types.T_varbinary, types.T_blob:
+		return jsonvalue.OpaqueValueSize(
+			context.Background(), vec, int(row), protocolVersion)
 	case types.T_uuid:
 		return 1 + jsonUvarintSize(36) + 36, nil
 	case types.T_json:
@@ -526,10 +551,18 @@ func jsonAggregateDecimalSize(value string) int {
 }
 
 func jsonArrayAggregateValueSize(vec *vector.Vector, row uint64) (int, error) {
+	return jsonArrayAggregateValueSizeWithProtocol(vec, row, 0)
+}
+
+func jsonArrayAggregateValueSizeWithProtocol(
+	vec *vector.Vector,
+	row uint64,
+	protocolVersion int64,
+) (int, error) {
 	if !isSharedJSONArrayValueType(vec.GetType().Oid) {
-		return jsonAggregateValueSize(vec, row)
+		return jsonAggregateValueSizeWithProtocol(vec, row, protocolVersion)
 	}
-	value, err := buildJSONArrayValueByteJson(vec, row)
+	value, err := buildJSONArrayValueByteJsonWithProtocol(vec, row, protocolVersion)
 	if err != nil {
 		return 0, err
 	}
@@ -586,6 +619,15 @@ func appendJSONAggregateValue(
 	dst []byte,
 	vec *vector.Vector,
 	row uint64,
+) ([]byte, error) {
+	return appendJSONAggregateValueWithProtocol(dst, vec, row, 0)
+}
+
+func appendJSONAggregateValueWithProtocol(
+	dst []byte,
+	vec *vector.Vector,
+	row uint64,
+	protocolVersion int64,
 ) ([]byte, error) {
 	if vec.IsNull(row) {
 		return append(dst, bytejson.TpCodeLiteral, bytejson.LiteralNull), nil
@@ -658,9 +700,9 @@ func appendJSONAggregateValue(
 	case types.T_char, types.T_varchar, types.T_text:
 		dst = append(dst, bytejson.TpCodeString)
 		return appendJSONBinaryString(dst, vec.GetBytesAt(int(row))), nil
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		return nil, moerr.NewInvalidInputNoCtxf(
-			"binary data not supported json aggregate: %v", typ.String())
+	case types.T_bit, types.T_binary, types.T_varbinary, types.T_blob:
+		return jsonvalue.AppendOpaqueValue(
+			context.Background(), dst, vec, int(row), protocolVersion)
 	case types.T_uuid:
 		value := vector.MustFixedColNoTypeCheck[types.Uuid](vec)[row].String()
 		dst = append(dst, bytejson.TpCodeString)
@@ -690,10 +732,19 @@ func appendJSONAggregateValue(
 }
 
 func appendJSONArrayAggregateValue(dst []byte, vec *vector.Vector, row uint64) ([]byte, error) {
+	return appendJSONArrayAggregateValueWithProtocol(dst, vec, row, 0)
+}
+
+func appendJSONArrayAggregateValueWithProtocol(
+	dst []byte,
+	vec *vector.Vector,
+	row uint64,
+	protocolVersion int64,
+) ([]byte, error) {
 	if !isSharedJSONArrayValueType(vec.GetType().Oid) {
-		return appendJSONAggregateValue(dst, vec, row)
+		return appendJSONAggregateValueWithProtocol(dst, vec, row, protocolVersion)
 	}
-	value, err := buildJSONArrayValueByteJson(vec, row)
+	value, err := buildJSONArrayValueByteJsonWithProtocol(vec, row, protocolVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -749,7 +800,8 @@ func (exec *jsonArrayAggExec) batchFillAccounted(
 		if vectors[0].IsConst() {
 			row = 0
 		}
-		valueSize, err := jsonArrayAggregateValueSize(vectors[0], uint64(row))
+		valueSize, err := jsonArrayAggregateValueSizeWithProtocol(
+			vectors[0], uint64(row), exec.opaqueProtocolVersion)
 		if err != nil {
 			return err
 		}
@@ -765,7 +817,8 @@ func (exec *jsonArrayAggExec) batchFillAccounted(
 		payload := key[header : header+5]
 		payload[0] = 1
 		binary.NativeEndian.PutUint32(payload[1:], uint32(valueSize))
-		payload, err = appendJSONArrayAggregateValue(payload, vectors[0], uint64(row))
+		payload, err = appendJSONArrayAggregateValueWithProtocol(
+			payload, vectors[0], uint64(row), exec.opaqueProtocolVersion)
 		if err != nil {
 			return err
 		}
@@ -803,7 +856,8 @@ func (exec *jsonObjectAggExec) batchFillAccounted(
 		if err != nil {
 			return err
 		}
-		valueSize, err := jsonAggregateValueSize(vectors[1], uint64(valueRow))
+		valueSize, err := jsonAggregateValueSizeWithProtocol(
+			vectors[1], uint64(valueRow), exec.opaqueProtocolVersion)
 		if err != nil {
 			return err
 		}
@@ -822,7 +876,8 @@ func (exec *jsonObjectAggExec) batchFillAccounted(
 		payload = payload[:valueHeader+5]
 		payload[valueHeader] = 1
 		binary.NativeEndian.PutUint32(payload[valueHeader+1:], uint32(valueSize))
-		payload, err = appendJSONAggregateValue(payload, vectors[1], uint64(valueRow))
+		payload, err = appendJSONAggregateValueWithProtocol(
+			payload, vectors[1], uint64(valueRow), exec.opaqueProtocolVersion)
 		if err != nil {
 			return err
 		}
@@ -1066,6 +1121,14 @@ func (exec *jsonObjectAggExec) flushAccounted() (_ []*vector.Vector, retErr erro
 }
 
 func buildValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, error) {
+	return buildValueByteJsonWithProtocol(vec, row, 0)
+}
+
+func buildValueByteJsonWithProtocol(
+	vec *vector.Vector,
+	row uint64,
+	protocolVersion int64,
+) (bytejson.ByteJson, error) {
 	typ := vec.GetType()
 	switch typ.Oid {
 	case types.T_any:
@@ -1118,8 +1181,9 @@ func buildValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, erro
 		val := vector.GenerateFunctionStrParameter(vec)
 		data, _ := val.GetStrValue(row)
 		return bytejson.CreateByteJSONWithCheck(string(data))
-	case types.T_binary, types.T_varbinary, types.T_blob:
-		return bytejson.ByteJson{}, moerr.NewInvalidInputNoCtxf("binary data not supported json aggregate: %v", typ.String())
+	case types.T_bit, types.T_binary, types.T_varbinary, types.T_blob:
+		return jsonvalue.BuildOpaqueValue(
+			context.Background(), vec, int(row), protocolVersion)
 	case types.T_array_float32:
 		val := vector.GenerateFunctionStrParameter(vec)
 		data, _ := val.GetStrValue(row)
@@ -1190,8 +1254,16 @@ func buildValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, erro
 }
 
 func buildJSONArrayValueByteJson(vec *vector.Vector, row uint64) (bytejson.ByteJson, error) {
+	return buildJSONArrayValueByteJsonWithProtocol(vec, row, 0)
+}
+
+func buildJSONArrayValueByteJsonWithProtocol(
+	vec *vector.Vector,
+	row uint64,
+	protocolVersion int64,
+) (bytejson.ByteJson, error) {
 	if !isSharedJSONArrayValueType(vec.GetType().Oid) {
-		return buildValueByteJson(vec, row)
+		return buildValueByteJsonWithProtocol(vec, row, protocolVersion)
 	}
 	// Only TIME, DATETIME and YEAR enter this path. None needs opaque JSON
 	// admission; use the fail-closed protocol value if that set is expanded.

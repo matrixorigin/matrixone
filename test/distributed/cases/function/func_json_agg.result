@@ -355,4 +355,37 @@ GROUP BY text_key;
 welcome_message  ¦  {"en": "Welcome to our application", "es": "Bienvenido a nuestra aplicación", "zh": "欢迎使用我们的应用"}  𝄀
 login_button  ¦  {"en": "Login", "es": "Iniciar sesión", "zh": "登录"}
 drop table i18n_texts;
+DROP TABLE IF EXISTS t_json_opaque_agg;
+CREATE TABLE t_json_opaque_agg (
+id INT,
+bit_value BIT(8),
+binary_value BINARY(3),
+varbinary_value VARBINARY(3),
+blob_value BLOB
+);
+INSERT INTO t_json_opaque_agg VALUES
+(1, b'10101010', X'00FF41', X'00FF41', X'00'),
+(2, NULL, NULL, UNHEX(''), NULL);
+SELECT id,
+JSON_ARRAYAGG(bit_value) AS bit_array,
+JSON_ARRAYAGG(binary_value) AS binary_array,
+JSON_ARRAYAGG(varbinary_value) AS varbinary_array,
+JSON_ARRAYAGG(blob_value) AS blob_array
+FROM t_json_opaque_agg GROUP BY id ORDER BY id;
+➤ id[4,32,0]  ¦  bit_array[-1,2147483647,0]  ¦  binary_array[-1,2147483647,0]  ¦  varbinary_array[-1,2147483647,0]  ¦  blob_array[-1,2147483647,0]  𝄀
+1  ¦  ["base64:type16:qg=="]  ¦  ["base64:type254:AP9B"]  ¦  ["base64:type15:AP9B"]  ¦  ["base64:type252:AA=="]  𝄀
+2  ¦  [null]  ¦  [null]  ¦  ["base64:type15:"]  ¦  [null]  𝄀
+SELECT
+JSON_OBJECTAGG(CAST(id AS CHAR), bit_value) AS bit_object,
+JSON_OBJECTAGG(CAST(id AS CHAR), binary_value) AS binary_object,
+JSON_OBJECTAGG(CAST(id AS CHAR), varbinary_value) AS varbinary_object,
+JSON_OBJECTAGG(CAST(id AS CHAR), blob_value) AS blob_object
+FROM t_json_opaque_agg WHERE id = 1;
+➤ bit_object[-1,2147483647,0]  ¦  binary_object[-1,2147483647,0]  ¦  varbinary_object[-1,2147483647,0]  ¦  blob_object[-1,2147483647,0]  𝄀
+{"1": "base64:type16:qg=="}  ¦  {"1": "base64:type254:AP9B"}  ¦  {"1": "base64:type15:AP9B"}  ¦  {"1": "base64:type252:AA=="}
+SELECT JSON_ARRAYAGG(varbinary_value) AS empty_array
+FROM t_json_opaque_agg WHERE id = 99;
+➤ empty_array[-1,2147483647,0]  𝄀
+NULL
+DROP TABLE t_json_opaque_agg;
 drop database test_json;
