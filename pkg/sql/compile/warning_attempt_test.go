@@ -305,6 +305,26 @@ func TestWarningAttemptTransfersAndDiscardsStatementBudgetOwnership(t *testing.T
 	require.Zero(t, budget.Used(), "reset/close must release the session-owned retained payload")
 }
 
+func TestWarningAttemptNarrowsRemoteCollectorBudgetToProcessLimit(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.Lim.Size = 1024
+	session := &remoteWarningCollector{}
+	proc.Session = session
+
+	attempt := newWarningAttempt(proc, false)
+	require.NotNil(t, attempt)
+	require.Equal(t, uint64(1024), session.GetWarningDiagnosticBudget().Limit())
+	require.Same(t, session.warningBudget, attempt.collector.warningBudget)
+
+	attempt.collector.AppendWarningDiagnostic(1260, strings.Repeat("x", 2000))
+	attempt.collector.AppendWarningDiagnostic(1261, "later short warning")
+	_, retained := attempt.collector.SnapshotWarnings()
+	require.Empty(t, retained, "a rejected remote prefix must seal later short diagnostics")
+
+	attempt.finish(false, session)
+	require.Zero(t, session.warningBudget.Used())
+}
+
 func TestPreparedGroupConcatFloorFreshAndRetryCompile(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	proc := testutil.NewProcess(t)
