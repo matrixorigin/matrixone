@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"math"
 	"testing"
@@ -88,6 +89,143 @@ func TestCountDistinctArgumentDrainCommitAndRestore(t *testing.T) {
 	result[0].Free(mp)
 	restored.Free()
 	require.Equal(t, baseline, mp.CurrNB())
+}
+
+func TestCountDistinctArgumentDrainUsesCanonicalMembershipKey(t *testing.T) {
+	mp := mpool.MustNewZero()
+	input := testutil.NewFloat32Vector(
+		2,
+		types.New(types.T_float32, 10, 2),
+		mp,
+		false,
+		nil,
+		[]float32{1.2300001, 1.23},
+	)
+	defer input.Free(mp)
+
+	exec := newCountColumnExec(
+		mp,
+		AggIdOfCountColumn,
+		true,
+		[]types.Type{types.New(types.T_float32, 10, 2)},
+	)
+	spill := exec.(ExactCountDistinctSpillState)
+	require.NoError(t, spill.GroupGrow(1))
+	require.NoError(t, spill.BatchFill(
+		0, []uint64{1, 1}, []*vector.Vector{input}))
+
+	drain, err := spill.BeginArgumentDrain(nil)
+	require.NoError(t, err)
+	var payloads [][]byte
+	require.NoError(t, drain.ForEach(func(_ int, payload []byte) error {
+		payloads = append(payloads, bytes.Clone(payload))
+		return nil
+	}))
+	require.Len(t, payloads, 1)
+	require.NoError(t, drain.Commit())
+	for _, payload := range payloads {
+		require.NoError(t, spill.InsertDistinctArgument(0, payload))
+	}
+	result, err := spill.Flush()
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, vector.MustFixedColNoTypeCheck[int64](result[0]))
+	result[0].Free(mp)
+	exec.Free()
+}
+
+func TestCountDistinctStateRestoresLegacyRawOpaqueKeys(t *testing.T) {
+	mp := mpool.MustNewZero()
+	exec := newCountColumnExec(
+		mp,
+		AggIdOfCountColumn,
+		true,
+		[]types.Type{types.New(types.T_char, 2, 0)},
+	).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(1))
+
+	// This is the pre-canonical opaque DISTINCT state: the two raw CHAR
+	// spellings compare equal after PAD SPACE normalization.
+	var wire bytes.Buffer
+	require.NoError(t, types.WriteInt32(&wire, 1))
+	require.NoError(t, types.WriteUint32(&wire, 2))
+	first := []byte("a ")
+	second := []byte("a")
+	require.NoError(t, types.WriteInt32(&wire, int32(len(first))))
+	_, err := wire.Write(first)
+	require.NoError(t, err)
+	require.NoError(t, types.WriteInt32(&wire, int32(len(second))))
+	_, err = wire.Write(second)
+	require.NoError(t, err)
+
+	_, err = exec.state[0].readState(mp, &wire, &exec.aggInfo)
+	require.NoError(t, err)
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, vector.MustFixedColNoTypeCheck[int64](result[0]))
+	result[0].Free(mp)
+	exec.Free()
+}
+
+func TestCountDistinctStateRestoresLegacyRawTupleKeys(t *testing.T) {
+	mp := mpool.MustNewZero()
+	tupleTypes := []types.Type{
+		types.New(types.T_char, 2, 0),
+		types.New(types.T_char, 2, 0),
+	}
+	exec := newCountColumnExec(mp, AggIdOfCountColumn, true, tupleTypes).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(1))
+	encodeTuple := func(left, right string) []byte {
+		payload := make([]byte, 8+len(left)+len(right))
+		binary.BigEndian.PutUint32(payload, uint32(len(left)))
+		copy(payload[4:], left)
+		offset := 4 + len(left)
+		binary.BigEndian.PutUint32(payload[offset:], uint32(len(right)))
+		copy(payload[offset+4:], right)
+		return payload
+	}
+	var wire bytes.Buffer
+	require.NoError(t, types.WriteInt32(&wire, 1))
+	require.NoError(t, types.WriteUint32(&wire, 2))
+	for _, payload := range [][]byte{
+		encodeTuple("a ", "b"),
+		encodeTuple("a", "b"),
+	} {
+		require.NoError(t, types.WriteInt32(&wire, int32(len(payload))))
+		_, err := wire.Write(payload)
+		require.NoError(t, err)
+	}
+
+	_, err := exec.state[0].readState(mp, &wire, &exec.aggInfo)
+	require.NoError(t, err)
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, vector.MustFixedColNoTypeCheck[int64](result[0]))
+	result[0].Free(mp)
+	exec.Free()
+}
+
+func TestCountDistinctLegacyPayloadCannotMimicCanonicalWireFrame(t *testing.T) {
+	mp := mpool.MustNewZero()
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true,
+		[]types.Type{types.New(types.T_varchar, 16, 0)},
+	).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(1))
+	var wire bytes.Buffer
+	require.NoError(t, types.WriteInt32(&wire, 1))
+	require.NoError(t, types.WriteUint32(&wire, 2))
+	for _, value := range [][]byte{[]byte("MOCDK1a"), []byte("a")} {
+		require.NoError(t, types.WriteInt32(&wire, int32(len(value))))
+		_, err := wire.Write(value)
+		require.NoError(t, err)
+	}
+	_, err := exec.state[0].readState(mp, &wire, &exec.aggInfo)
+	require.NoError(t, err)
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, []int64{2}, vector.MustFixedColNoTypeCheck[int64](result[0]))
+	result[0].Free(mp)
+	exec.Free()
 }
 
 func TestCountDistinctArgumentDrainAbortKeepsResidentOwner(t *testing.T) {

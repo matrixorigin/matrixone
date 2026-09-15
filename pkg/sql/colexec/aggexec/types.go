@@ -265,6 +265,18 @@ type GroupAggFuncExec interface {
 	SetPrepareParamKind(vector.PrepareParamKind)
 }
 
+// RequiresCanonicalDistinctKeyWire reports whether an aggregate's saved
+// DISTINCT argument state uses the canonical opaque-key wire grammar. Group
+// uses this to keep the marker-bearing format away from pre-compatible peers.
+func RequiresCanonicalDistinctKeyWire(agg AggFuncExec) bool {
+	if configurable, ok := agg.(interface {
+		requiresCanonicalDistinctKeyWire() bool
+	}); ok {
+		return configurable.requiresCanonicalDistinctKeyWire()
+	}
+	return false
+}
+
 // AllocationAccountOwner is implemented by aggregate executors whose complete
 // retained state can participate in an operator's physical allocation
 // account.  It is deliberately separate from AggFuncExec: callers that do not

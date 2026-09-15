@@ -3393,6 +3393,104 @@ func TestGroupHashWidthUsesGlobalNullability(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestGroupCompositeShortCharKeysPreserveFieldBoundaries(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	charType := types.New(types.T_char, 2, 0)
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(charType)
+	input.Vecs[1] = vector.NewVec(charType)
+	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("a "), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("ab"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("bc"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("c "), false, proc.Mp()))
+	input.SetRowCount(2)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	groupBy := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_char), Width: 2}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_char), Width: 2}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
+	}
+	g := newGroupOp(proc, groupBy, nil)
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+	require.Equal(t, int32(HStr), g.ctr.mtyp)
+	outputs := collectBatches(t, g, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 2, outputs[0].RowCount(),
+		"CHAR canonicalization must not merge distinct composite fields")
+	g.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+}
+
+func TestMergeGroupNormalizesLegacyH8VarlenaMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	charType := types.New(types.T_char, 2, 0)
+	partial := batch.NewWithSize(2)
+	partial.Vecs[0] = vector.NewVec(charType)
+	partial.Vecs[1] = vector.NewVec(charType)
+	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("a "), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(partial.Vecs[0], []byte("ab"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("bc"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(partial.Vecs[1], []byte("c "), false, proc.Mp()))
+	partial.SetRowCount(2)
+	var extra bytes.Buffer
+	mtyp := int32(H8)
+	extra.Write(types.EncodeInt32(&mtyp))
+	nullable := false
+	extra.Write(types.EncodeBool(&nullable))
+	nAggs := int32(0)
+	extra.Write(types.EncodeInt32(&nAggs))
+	partial.ExtraBuf = extra.Bytes()
+
+	merge := newMergeGroupOp(nil)
+	t.Cleanup(func() {
+		merge.Free(proc, false, nil)
+		partial.Clean(proc.Mp())
+	})
+	require.NoError(t, merge.Prepare(proc))
+	needSpill, err := merge.buildOneBatch(proc, partial)
+	require.NoError(t, err)
+	require.False(t, needSpill)
+	require.Equal(t, int32(HStr), merge.ctr.mtyp)
+	require.Equal(t, uint64(2), merge.ctr.hr.Hash.GroupCount())
+}
+
+func TestMergeGroupKeepsLegacyLongHStrCompatibleBeforeV75(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	setPrepareParamKindProtocolVersion(t, proc, defines.MORPCVersion74)
+
+	longType := types.New(types.T_varchar, 64, 0)
+	partial := batch.NewWithSize(1)
+	partial.Vecs[0] = vector.NewVec(longType)
+	require.NoError(t, vector.AppendBytes(
+		partial.Vecs[0], []byte("already-compatible-long-key"), false, proc.Mp()))
+	partial.SetRowCount(1)
+	var extra bytes.Buffer
+	mtyp := int32(HStr)
+	extra.Write(types.EncodeInt32(&mtyp))
+	nullable := false
+	extra.Write(types.EncodeBool(&nullable))
+	nAggs := int32(0)
+	extra.Write(types.EncodeInt32(&nAggs))
+	partial.ExtraBuf = extra.Bytes()
+
+	merge := newMergeGroupOp(nil)
+	t.Cleanup(func() {
+		merge.Free(proc, false, nil)
+		partial.Clean(proc.Mp())
+	})
+	require.NoError(t, merge.Prepare(proc))
+	needSpill, err := merge.buildOneBatch(proc, partial)
+	require.NoError(t, err)
+	require.False(t, needSpill)
+	require.Equal(t, int32(HStr), merge.ctr.mtyp)
+	require.Equal(t, uint64(1), merge.ctr.hr.Hash.GroupCount())
+}
+
 func TestGroupDuplicateInputDoesNotOverallocateAggregateState(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	makeInput := func(rows int) *batch.Batch {
@@ -4111,36 +4209,52 @@ func TestRemoteApproxPercentileUsesLegacyStateBeforeProtocolV71(t *testing.T) {
 	require.True(t, math.IsNaN(vector.GetFixedAtNoTypeCheck[float64](results[0], 0)))
 }
 
-func TestRemoteHLLUsesLegacyStateBeforeProtocolV71(t *testing.T) {
+func TestRemoteHLLUsesLegacyStateBeforeProtocolV74(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
-
 	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)}}
-	ctr := &container{
-		mp:             proc.Mp(),
-		mtyp:           H0,
-		legacyHLLState: useLegacyHLLStateForRemote(proc),
+	makeVersion := func() byte {
+		ctr := &container{
+			mp:                proc.Mp(),
+			mtyp:              H0,
+			legacyHLLState:    useLegacyHLLStateForRemote(proc),
+			floatZeroHLLState: useFloatZeroHLLStateForRemote(proc),
+		}
+		aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
+			aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
+		})
+		require.NoError(t, err)
+		values := vector.NewVec(types.T_float32.ToType())
+		require.NoError(t, vector.AppendFixed(
+			values, float32(math.Copysign(0, -1)), false, proc.Mp()))
+		require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
+		results, err := aggs[0].Flush()
+		require.NoError(t, err)
+		version := results[0].GetBytesAt(0)[0]
+		results[0].Free(proc.Mp())
+		values.Free(proc.Mp())
+		freeAggList(aggs)
+		return version
 	}
-	require.True(t, ctr.legacyHLLState)
-	aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
-		aggexec.MakeAggFunctionExpression(
-			aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
-	})
-	require.NoError(t, err)
-	defer freeAggList(aggs)
-	values := vector.NewVec(types.T_float32.ToType())
-	defer values.Free(proc.Mp())
-	require.NoError(t, vector.AppendFixed(values, float32(math.Copysign(0, -1)), false, proc.Mp()))
-	require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
-	results, err := aggs[0].Flush()
-	require.NoError(t, err)
-	defer results[0].Free(proc.Mp())
-	require.Equal(t, byte(2), results[0].GetBytesAt(0)[0],
-		"an old coordinator must receive a v2 HLL state")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
+	require.True(t, useLegacyHLLStateForRemote(proc))
+	require.False(t, useFloatZeroHLLStateForRemote(proc))
+	require.Equal(t, byte(2), makeVersion(),
+		"pre-v73 peers must receive the raw-value v2 HLL state")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+	require.True(t, useLegacyHLLStateForRemote(proc),
+		"v73 peers must receive a compatibility HLL state")
+	require.True(t, useFloatZeroHLLStateForRemote(proc))
+	require.Equal(t, byte(3), makeVersion(),
+		"v73 peers must receive the signed-zero-compatible v3 HLL state")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+	require.False(t, useLegacyHLLStateForRemote(proc))
+	require.False(t, useFloatZeroHLLStateForRemote(proc))
 }
 
 func TestLegacyHLLStateRequiresRemoteProcess(t *testing.T) {

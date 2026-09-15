@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -115,6 +116,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.legacyDecimalSumResult = useLegacyDecimalSumResultForRemote(proc, group.NeedEval)
 	group.ctr.legacyApproxPercentileState = useLegacyApproxPercentileStateForRemote(proc)
 	group.ctr.legacyHLLState = useLegacyHLLStateForRemote(proc)
+	group.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
 	group.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 
 	// debug,
@@ -160,6 +162,8 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 		if len(group.GroupByHashKey) > 0 {
 			hashKeyCount = len(group.GroupByHashKey)
 		}
+		compactHashKey := true
+		variableLengthKey := false
 		for i := 0; i < hashKeyCount; i++ {
 			exprIdx := i
 			if len(group.GroupByHashKey) > 0 {
@@ -177,16 +181,33 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			if expr.Typ.Id == int32(types.T_tuple) {
 				return moerr.NewInternalErrorNoCtx("tuple is not supported as group by column")
 			}
+			if types.T(expr.Typ.Id).FixedLength() < 0 {
+				// IntHashMap has one eight-byte slot per key and cannot encode
+				// field boundaries for variable-length composite keys. Keep all
+				// variable-length keys on the length-delimited HStr codec, even
+				// when their declared width happens to fit in eight bytes.
+				compactHashKey = false
+				variableLengthKey = true
+			}
 			width := GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, group.ctr.keyNullable)
 			group.ctr.keyWidth += int32(width)
 		}
 
 		if group.ctr.keyWidth == 0 {
 			group.ctr.mtyp = H0
-		} else if group.ctr.keyWidth <= 8 {
+		} else if compactHashKey && group.ctr.keyWidth <= 8 {
 			group.ctr.mtyp = H8
 		} else {
 			group.ctr.mtyp = HStr
+		}
+		// HStr is a new partial-wire grammar. There is no safe representation
+		// for a short variable-length key on a pre-v75 receiver: H8 loses field
+		// boundaries, while HStr is not understood by the old receiver. Fail
+		// before emitting a partial rather than risk a silent grouping error.
+		if variableLengthKey && group.ctr.keyWidth <= 8 &&
+			!groupHashStringWireEnabled(proc) {
+			return moerr.NewInvalidStateNoCtx(
+				"variable-length GROUP keys require MORPCVersion75")
 		}
 
 		group.ctr.groupingAware = false
@@ -287,6 +308,19 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 	group.configureH0OrderedAggSpill(proc)
 
 	return nil
+}
+
+// HasVariableLengthKey reports whether a hash key contains a type whose
+// physical representation is not fixed-width. Such keys require HStr's
+// length-delimited encoding when more than one column participates in the
+// key; an eight-byte IntHashMap slot cannot preserve their boundaries.
+func HasVariableLengthKey(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if expr != nil && types.T(expr.Typ.Id).FixedLength() < 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func GetKeyWidth(id types.T, width0 int32, nullable bool) (width int) {
@@ -1286,6 +1320,11 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 		aggexec.SetGroupConcatSourceRowWire(ag, groupConcatSourceRowWireEnabled(proc))
 		aggexec.SetGroupConcatSourceRowProvenanceWire(
 			ag, groupConcatSourceRowProvenanceWireEnabled(proc))
+		if aggexec.RequiresCanonicalDistinctKeyWire(ag) &&
+			!canonicalDistinctKeyWireEnabled(proc) {
+			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
+				"canonical DISTINCT argument keys require MORPCVersion76")
+		}
 		if vec := ag.PrepareParamKindVectorForChunk(curr); vec != nil &&
 			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(

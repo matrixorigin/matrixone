@@ -7927,7 +7927,7 @@ func supportsRemoteHLL(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion73
+	return ok && protocolVersion >= defines.MORPCVersion74
 }
 
 func (c *Compile) supportsRemoteVarianceAggregates() bool {

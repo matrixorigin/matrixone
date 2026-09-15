@@ -1861,7 +1861,11 @@ func (ctr *container) makeAggListWithAllocation(
 			aggexec.ConfigureApproxPercentileLegacyState(aggList[i])
 		}
 		if ctr.legacyHLLState {
-			aggexec.ConfigureHLLLegacyState(aggList[i])
+			if ctr.floatZeroHLLState {
+				aggexec.ConfigureHLLFloatZeroState(aggList[i])
+			} else {
+				aggexec.ConfigureHLLLegacyState(aggList[i])
+			}
 		}
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
 		// mtyp is the logical Group mode and survives resident-spill resets.
@@ -1969,7 +1973,49 @@ func useLegacyHLLStateForRemote(proc *process.Process) bool {
 	value, ok := moruntime.ServiceRuntime(proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return !ok || !valid || version < defines.MORPCVersion73
+	return !ok || !valid || version < defines.MORPCVersion74
+}
+
+func useFloatZeroHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version == defines.MORPCVersion73
+}
+
+func groupHashStringWireEnabled(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return true
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion75
+}
+
+func canonicalDistinctKeyWireEnabled(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return true
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion76
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

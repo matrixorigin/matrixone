@@ -23,6 +23,7 @@ import (
 
 	metro "github.com/dgryski/go-metro"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap/keycodec"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,12 +31,13 @@ import (
 )
 
 const (
-	hllPrecision     = uint8(14)
-	hllRegisterCnt   = 1 << hllPrecision
-	hllHeaderSize    = 8
-	hllEncodedSize   = hllHeaderSize + hllRegisterCnt
-	hllLegacyVersion = byte(2)
-	hllVersion       = byte(3)
+	hllPrecision        = uint8(14)
+	hllRegisterCnt      = 1 << hllPrecision
+	hllHeaderSize       = 8
+	hllEncodedSize      = hllHeaderSize + hllRegisterCnt
+	hllLegacyVersion    = byte(2)
+	hllFloatZeroVersion = byte(3)
+	hllVersion          = byte(4)
 )
 
 var canonicalEmptyHLL = func() [hllEncodedSize]byte {
@@ -49,9 +51,10 @@ var canonicalEmptyHLL = func() [hllEncodedSize]byte {
 // hllSketch is the dense p=14 representation historically produced by
 // hyperloglog.NewNoSparse. Keeping the register array in MPool makes the
 // fixed 16 KiB per-group allocation physically accountable. Version 2 keeps
-// the legacy raw-value hash semantics, while version 3 canonicalizes SQL
-// floating-point signed zero; sketches with different hash versions cannot
-// be merged losslessly.
+// the legacy raw-value hash semantics, version 3 canonicalizes only scalar
+// floating-point signed zero, and version 4 uses the complete typed SQL
+// equivalence key. Sketches with different hash versions cannot be merged
+// losslessly.
 type hllSketch struct {
 	mp          *mpool.MPool
 	regs        []byte
@@ -88,6 +91,13 @@ func makeLegacyHllSketch(
 	return makeHllSketchWithVersion(mp, allocation, hllLegacyVersion)
 }
 
+func makeFloatZeroHllSketch(
+	mp *mpool.MPool,
+	allocation *AllocationAccount,
+) (MarshalerUnmarshaler, error) {
+	return makeHllSketchWithVersion(mp, allocation, hllFloatZeroVersion)
+}
+
 func (s *hllSketch) effectiveWireVersion() byte {
 	if s.wireVersion == 0 {
 		return hllVersion
@@ -118,7 +128,8 @@ func hasHLLRegisters(regs []byte) bool {
 }
 
 func (s *hllSketch) useWireVersion(version byte) error {
-	if version != hllLegacyVersion && version != hllVersion {
+	if version != hllLegacyVersion && version != hllFloatZeroVersion &&
+		version != hllVersion {
 		return moerr.NewInvalidInputNoCtx("invalid HLL hash version")
 	}
 	current := s.effectiveWireVersion()
@@ -153,27 +164,74 @@ func (s *hllSketch) Insert(value []byte) {
 }
 
 func insertHLLValue(sketch *hllSketch, typ types.Type, value []byte) {
-	if sketch.effectiveWireVersion() == hllLegacyVersion {
+	insertHLLValueWithScratch(sketch, typ, value, nil)
+}
+
+func insertHLLValueWithScratch(
+	sketch *hllSketch,
+	typ types.Type,
+	value []byte,
+	scratch []byte,
+) []byte {
+	switch sketch.effectiveWireVersion() {
+	case hllLegacyVersion:
 		sketch.Insert(value)
-		return
-	}
-	switch typ.Oid {
-	case types.T_float32:
-		decoded := types.DecodeFixed[float32](value)
-		if decoded == 0 {
-			var zero float32
-			sketch.Insert(types.EncodeFixed(zero))
-			return
+		return scratch
+	case hllFloatZeroVersion:
+		switch typ.Oid {
+		case types.T_float32:
+			if len(value) == types.T_float32.TypeLen() &&
+				types.DecodeFixed[float32](value) == 0 {
+				var zero float32
+				sketch.Insert(types.EncodeFixed(zero))
+				return scratch
+			}
+		case types.T_float64:
+			if len(value) == types.T_float64.TypeLen() &&
+				types.DecodeFixed[float64](value) == 0 {
+				var zero float64
+				sketch.Insert(types.EncodeFixed(zero))
+				return scratch
+			}
 		}
-	case types.T_float64:
-		decoded := types.DecodeFixed[float64](value)
-		if decoded == 0 {
-			var zero float64
-			sketch.Insert(types.EncodeFixed(zero))
-			return
+		sketch.Insert(value)
+		return scratch
+	case hllVersion:
+		switch typ.Oid {
+		case types.T_char:
+			sketch.Insert(keycodec.CanonicalCharValue(value))
+			return scratch
+		case types.T_float32:
+			if len(value) == types.T_float32.TypeLen() {
+				encoded := keycodec.NewFloat32Codec(typ.Scale).CanonicalBytes(
+					types.DecodeFixed[float32](value))
+				sketch.Insert(encoded[:])
+				return scratch
+			}
+		case types.T_float64:
+			if len(value) == types.T_float64.TypeLen() {
+				encoded := keycodec.CanonicalFloat64Bytes(
+					types.DecodeFixed[float64](value))
+				sketch.Insert(encoded[:])
+				return scratch
+			}
 		}
+		// These types already have the exact bytes used by the v4 equality
+		// domain. Passing nil scratch to AppendCanonicalValue would allocate a
+		// fresh copy for every row outside the aggregate allocation account.
+		if !canonicalValueNeedsScratch(typ) {
+			sketch.Insert(value)
+			return scratch
+		}
+		scratch = keycodec.AppendCanonicalValue(scratch[:0], typ, value)
+		sketch.Insert(scratch)
+		return scratch
+	default:
+		// The sketch constructors and wire validators reject unknown versions;
+		// retain a defensive raw fallback for an in-memory malformed object.
+		sketch.Insert(value)
+		return scratch
 	}
-	sketch.Insert(value)
 }
 
 func (s *hllSketch) Merge(other *hllSketch) error {
@@ -293,7 +351,8 @@ func (s *hllSketch) UnmarshalFromReader(reader io.Reader) error {
 
 func validateDenseHLLHeader(header []byte) error {
 	if len(header) != hllHeaderSize ||
-		(header[0] != hllLegacyVersion && header[0] != hllVersion) ||
+		(header[0] != hllLegacyVersion && header[0] != hllFloatZeroVersion &&
+			header[0] != hllVersion) ||
 		header[1] != hllPrecision || header[2] != 0 || header[3] != 0 ||
 		binary.BigEndian.Uint32(header[4:]) != hllRegisterCnt {
 		return moerr.NewInvalidInputNoCtx("invalid dense HLL sketch")
@@ -322,7 +381,8 @@ func (s *hllSketch) mergeBytes(data []byte) error {
 	if len(data) < hllHeaderSize {
 		return moerr.NewInvalidInputNoCtx("invalid HLL sketch size")
 	}
-	if (data[0] != hllLegacyVersion && data[0] != hllVersion) ||
+	if (data[0] != hllLegacyVersion && data[0] != hllFloatZeroVersion &&
+		data[0] != hllVersion) ||
 		data[1] != hllPrecision || data[2] != 0 {
 		return moerr.NewInvalidInputNoCtx("invalid HLL sketch header")
 	}
@@ -500,8 +560,9 @@ func (s *hllSketch) Free() {
 
 type hllStateExec struct {
 	aggExec
-	family          hllStateFamily
-	legacyWireState bool
+	family             hllStateFamily
+	legacyWireState    bool
+	floatZeroWireState bool
 }
 
 type hllStateFamily uint8
@@ -528,6 +589,7 @@ func (exec *hllStateExec) PreflightBatchFill(
 		return mpool.ErrAllocationAccountInvalid
 	}
 	var active [hashmap.UnitLimit]bool
+	var scratchSizes [hashmap.UnitLimit]int
 	for i, group := range groups {
 		if group == GroupNotMatched {
 			continue
@@ -537,8 +599,12 @@ func (exec *hllStateExec) PreflightBatchFill(
 			row = 0
 		}
 		active[i] = !vectors[0].IsNull(uint64(row))
+		if active[i] {
+			scratchSizes[i] = exec.canonicalScratchSize(
+				vectors[0], row)
+		}
 	}
-	return exec.preallocateMappedGroups(groups, &active)
+	return exec.preallocateMappedGroups(groups, &active, &scratchSizes)
 }
 
 func (exec *hllStateExec) PreflightBatchMerge(
@@ -567,12 +633,13 @@ func (exec *hllStateExec) PreflightBatchMerge(
 		}
 		active[i] = other.state[sx].mobs[sy] != nil
 	}
-	return exec.preallocateMappedGroups(groups, &active)
+	return exec.preallocateMappedGroups(groups, &active, nil)
 }
 
 func (exec *hllStateExec) preallocateMappedGroups(
 	groups []uint64,
 	active *[hashmap.UnitLimit]bool,
+	scratchSizes *[hashmap.UnitLimit]int,
 ) error {
 	type allocatedSketch struct {
 		state *aggState
@@ -600,6 +667,12 @@ func (exec *hllStateExec) preallocateMappedGroups(
 		_, y, state, err := exec.validatePreflightTarget(group)
 		if err != nil || state == nil || int(y) >= len(state.mobs) {
 			return mpool.ErrAllocationAccountInvariant
+		}
+		if scratchSizes != nil && scratchSizes[index] > 0 {
+			if _, err := state.resizeArgScratch(
+				exec.mp, scratchSizes[index]); err != nil {
+				return err
+			}
 		}
 		if state.mobs[y] != nil {
 			continue
@@ -691,11 +764,21 @@ func stableEmptyHLLState(version byte) func(io.Writer) error {
 }
 
 // ConfigureHLLLegacyState makes a newly constructed remote executor emit the
-// version-2 hash semantics understood by pre-v71 peers. It is applied before
+// version-2 hash semantics understood by pre-v73 peers. It is applied before
 // GroupGrow so lazy and preflight allocations use the same version.
 func ConfigureHLLLegacyState(aggregate AggFuncExec) {
 	if configurable, ok := aggregate.(interface{ setLegacyHLLState() }); ok {
 		configurable.setLegacyHLLState()
+	}
+}
+
+// ConfigureHLLFloatZeroState makes a newly constructed remote executor emit
+// the version-3 hash semantics used by protocol v73: only scalar floating
+// point signed zero is canonicalized. Protocol v74 introduces the complete
+// typed SQL-equivalence key and must not be sent this compatibility state.
+func ConfigureHLLFloatZeroState(aggregate AggFuncExec) {
+	if configurable, ok := aggregate.(interface{ setFloatZeroHLLState() }); ok {
+		configurable.setFloatZeroHLLState()
 	}
 }
 
@@ -705,8 +788,16 @@ type approxCountExec struct {
 
 func (exec *hllStateExec) setLegacyHLLState() {
 	exec.legacyWireState = true
+	exec.floatZeroWireState = false
 	exec.aggInfo.makeMarshalerUnmarshaler = makeLegacyHllSketch
 	exec.aggInfo.stableEmptyOpaqueState = stableEmptyHLLState(hllLegacyVersion)
+}
+
+func (exec *hllStateExec) setFloatZeroHLLState() {
+	exec.legacyWireState = true
+	exec.floatZeroWireState = true
+	exec.aggInfo.makeMarshalerUnmarshaler = makeFloatZeroHllSketch
+	exec.aggInfo.stableEmptyOpaqueState = stableEmptyHLLState(hllFloatZeroVersion)
 }
 
 func (exec *hllStateExec) makeHLLSketch(
@@ -714,9 +805,48 @@ func (exec *hllStateExec) makeHLLSketch(
 	allocation *AllocationAccount,
 ) (MarshalerUnmarshaler, error) {
 	if exec.legacyWireState {
+		if exec.floatZeroWireState {
+			return makeFloatZeroHllSketch(mp, allocation)
+		}
 		return makeLegacyHllSketch(mp, allocation)
 	}
 	return makeHllSketch(mp, allocation)
+}
+
+func canonicalValueNeedsScratch(typ types.Type) bool {
+	switch typ.Oid {
+	case types.T_json, types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16:
+		return true
+	default:
+		return false
+	}
+}
+
+func (exec *hllStateExec) canonicalScratchSize(
+	vec *vector.Vector,
+	row int,
+) int {
+	if exec == nil || exec.legacyWireState || len(exec.argTypes) == 0 ||
+		vec == nil || !canonicalValueNeedsScratch(exec.argTypes[0]) {
+		return 0
+	}
+	return keycodec.CanonicalValueSize(exec.argTypes[0], vec.GetRawBytesAt(row))
+}
+
+func (exec *hllStateExec) prepareCanonicalScratch(
+	x int,
+	value []byte,
+) ([]byte, error) {
+	if exec == nil || exec.legacyWireState || len(exec.argTypes) == 0 ||
+		!canonicalValueNeedsScratch(exec.argTypes[0]) {
+		return nil, nil
+	}
+	if x < 0 || x >= len(exec.state) {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
+	size := keycodec.CanonicalValueSize(exec.argTypes[0], value)
+	return exec.state[x].resizeArgScratch(exec.mp, size)
 }
 
 func makeApproxCount(mp *mpool.MPool, id int64, arg types.Type) AggFuncExec {
@@ -751,7 +881,13 @@ func (exec *approxCountExec) BatchFill(offset int, groups []uint64, vectors []*v
 		if err != nil {
 			return err
 		}
-		insertHLLValue(sketch, exec.argTypes[0], vectors[0].GetRawBytesAt(row))
+		scratch, err := exec.prepareCanonicalScratch(
+			x, vectors[0].GetRawBytesAt(row))
+		if err != nil {
+			return err
+		}
+		insertHLLValueWithScratch(
+			sketch, exec.argTypes[0], vectors[0].GetRawBytesAt(row), scratch)
 	}
 	return nil
 }
@@ -829,7 +965,13 @@ func (exec *hllAddExec) BatchFill(offset int, groups []uint64, vectors []*vector
 		if err != nil {
 			return err
 		}
-		insertHLLValue(sketch, exec.argTypes[0], vectors[0].GetRawBytesAt(row))
+		scratch, err := exec.prepareCanonicalScratch(
+			x, vectors[0].GetRawBytesAt(row))
+		if err != nil {
+			return err
+		}
+		insertHLLValueWithScratch(
+			sketch, exec.argTypes[0], vectors[0].GetRawBytesAt(row), scratch)
 	}
 	return nil
 }
@@ -957,6 +1099,9 @@ func flushHLLSketches(exec *hllStateExec) (_ []*vector.Vector, retErr error) {
 		empty := canonicalEmptyHLL
 		if exec.legacyWireState {
 			empty[0] = hllLegacyVersion
+			if exec.floatZeroWireState {
+				empty[0] = hllFloatZeroVersion
+			}
 		}
 		for row := range int(state.length) {
 			if retErr = vector.AppendBytes(vecs[chunk], empty[:], false, exec.mp); retErr != nil {
@@ -982,6 +1127,7 @@ func hllStateSize(states []aggState) int64 {
 				size += hllRegisterCnt
 			}
 		}
+		size += int64(cap(state.argScratch))
 	}
 	return size
 }
