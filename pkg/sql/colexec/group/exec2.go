@@ -113,6 +113,8 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.legacyVarianceState = useLegacyVarianceStateForRemote(proc)
 	group.ctr.legacyDecimalSumState = useLegacyDecimalSumState(proc)
 	group.ctr.legacyDecimalSumResult = useLegacyDecimalSumResultForRemote(proc, group.NeedEval)
+	group.ctr.legacyApproxPercentileState = useLegacyApproxPercentileStateForRemote(proc)
+	group.ctr.legacyHLLState = useLegacyHLLStateForRemote(proc)
 	group.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 
 	// debug,

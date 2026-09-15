@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RoaringBitmap/roaring/v2"
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -13089,6 +13090,38 @@ func TestHllCardinality(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, HllCardinality)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestBitmapCount(t *testing.T) {
+	bmp := roaring.New()
+	bmp.Add(7)
+	data, err := bmp.MarshalBinary()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		input string
+		err   bool
+		value []uint64
+		nulls []bool
+	}{
+		{name: "valid bitmap", input: string(data), value: []uint64{1}, nulls: []bool{false}},
+		{name: "malformed bitmap", input: "not-a-bitmap", err: true, value: []uint64{0}, nulls: []bool{false}},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varbinary.ToType(), []string{test.input}, nil),
+				},
+				NewFunctionTestResult(types.T_uint64.ToType(), test.err, test.value, test.nulls),
+				BitmapCount)
+			s, info := fcTC.Run()
+			require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", test.name, info))
+		})
 	}
 }
 
