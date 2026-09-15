@@ -201,6 +201,18 @@ class WorkerContractTest(unittest.TestCase):
         finally:
             server.shutdown()
 
+    def test_definition_validation_rejects_boolean_schema_version(self):
+        payload = complete_definition_validation_payload()
+        payload["definition_schema_version"] = True
+        # A malformed sender could otherwise recompute its own malformed
+        # fingerprint and pass the later integrity check. The version domain
+        # must be rejected before that comparison.
+        payload["definition_fingerprint"] = worker._definition_fingerprint(payload)
+        with self.assertRaisesRegex(ValueError, "unsupported Python definition schema"):
+            worker._decode_definition_validation(
+                json.dumps(payload, separators=(",", ":")).encode()
+            )
+
     def test_definition_validation_rejects_handler_rebound_after_definition(self):
         payload = complete_definition_validation_payload(
             "def f(ctx, value): return value\n"
