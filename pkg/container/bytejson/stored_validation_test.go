@@ -102,6 +102,22 @@ func TestValidateStoredJSONDocumentRejectsMalformedRanges(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("out-of-order value ranges", func(t *testing.T) {
+		data := make([]byte, headerSize+2*valEntrySize+2*numberSize)
+		endian.PutUint32(data, 2)
+		endian.PutUint32(data[docSizeOff:], uint32(len(data)))
+		payloadOffset := headerSize + 2*valEntrySize
+		for i := 0; i < 2; i++ {
+			entry := headerSize + i*valEntrySize
+			data[entry] = TpCodeInt64
+		}
+		endian.PutUint32(data[headerSize+valTypeSize:], uint32(payloadOffset+numberSize))
+		endian.PutUint32(data[headerSize+valEntrySize+valTypeSize:], uint32(payloadOffset))
+
+		err := ValidateStoredJSONDocument(ByteJson{Type: TpCodeArray, Data: data})
+		require.Error(t, err)
+	})
+
 	t.Run("non-finite float", func(t *testing.T) {
 		data := make([]byte, numberSize)
 		endian.PutUint64(data, math.Float64bits(math.NaN()))
@@ -119,6 +135,28 @@ func TestValidateStoredJSONDocumentRejectsMalformedRanges(t *testing.T) {
 		endian.PutUint16(data[headerSize+keyOriginOff:], 4)
 		data[headerSize+keyEntrySize] = TpCodeInt64
 		endian.PutUint32(data[headerSize+keyEntrySize+valTypeSize:], uint32(keyOffset+2))
+
+		err := ValidateStoredJSONDocument(ByteJson{Type: TpCodeObject, Data: data})
+		require.Error(t, err)
+	})
+
+	t.Run("object keys must be sorted", func(t *testing.T) {
+		data := make([]byte, headerSize+2*keyEntrySize+2*valEntrySize+2+2*numberSize)
+		endian.PutUint32(data, 2)
+		endian.PutUint32(data[docSizeOff:], uint32(len(data)))
+		keyOffset := headerSize + 2*keyEntrySize + 2*valEntrySize
+		for i, key := range [][]byte{[]byte("z"), []byte("a")} {
+			entry := headerSize + i*keyEntrySize
+			endian.PutUint32(data[entry:], uint32(keyOffset+i))
+			endian.PutUint16(data[entry+keyOriginOff:], 1)
+			data[keyOffset+i] = key[0]
+		}
+		valueTable := headerSize + 2*keyEntrySize
+		for i := 0; i < 2; i++ {
+			entry := valueTable + i*valEntrySize
+			data[entry] = TpCodeInt64
+			endian.PutUint32(data[entry+valTypeSize:], uint32(keyOffset+2+i*numberSize))
+		}
 
 		err := ValidateStoredJSONDocument(ByteJson{Type: TpCodeObject, Data: data})
 		require.Error(t, err)

@@ -3466,7 +3466,7 @@ func jsonValueLegacy(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 		if isStr {
 			bj, err = types.ParseSliceToByteJson(jsonBytes)
 		} else {
-			bj, err = decodeJSONValueStored(jsonBytes)
+			bj, err = decodeJSONValueStoredAdmitted(jsonBytes)
 		}
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_value", "invalid JSON document")

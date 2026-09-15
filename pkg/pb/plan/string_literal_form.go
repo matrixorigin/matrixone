@@ -187,13 +187,12 @@ func RequiresMORPCVersion72IPFunctionSemantics(owner any) (bool, error) {
 	return features.IPFunctionSemantics, err
 }
 
-// RequiresMORPCVersion58JSONValueContract reports whether an owner contains
+// RequiresMORPCVersion73JSONValueContract reports whether an owner contains
 // the planner-only seven-argument JSON_VALUE overload. The overload carries
 // target and response semantics that older receivers cannot dispatch.
-func RequiresMORPCVersion58JSONValueContract(owner any) (bool, error) {
+func RequiresMORPCVersion73JSONValueContract(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONValueContract, err
-}
 }
 
 const (
@@ -224,7 +223,7 @@ const (
 // RowDependentConvBases requires MORPC v69 for nonconstant or unsigned bases.
 // IPFunctionSemantics requires MORPC v72 because the IP functions change
 // existing overload semantics and add numeric INET_NTOA overloads.
-// JSONValueContract requires MORPC v58.
+// JSONValueContract requires MORPC v73.
 type RemoteExpressionFeatures struct {
 	NumericPrefix            bool
 	JSONComparisonParam      bool

@@ -70,6 +70,7 @@ select json_value('{"a": 1}', '$.missing');
 
 -- null input
 select json_value(null, '$.a');
+select json_value(null, '$[');
 select json_value('{"a": 1}', null);
 
 -- from json column

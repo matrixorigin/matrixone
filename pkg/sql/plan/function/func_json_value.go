@@ -85,6 +85,20 @@ func (p jsonValueInputParameter) get(row uint64) ([]byte, bool) {
 }
 
 func decodeJSONValueStored(data []byte) (value bytejson.ByteJson, err error) {
+	value, err = decodeJSONValueStoredAdmitted(data)
+	if err != nil {
+		return bytejson.Null, err
+	}
+	if err := bytejson.ValidateStoredJSONDocument(value); err != nil {
+		return bytejson.Null, err
+	}
+	return value, nil
+}
+
+// decodeJSONValueStoredAdmitted decodes a T_json payload whose vector admission
+// has already run ValidateStoredJSONDocument. NewVecWithData has the same
+// trusted-input contract; callers must not use this helper for arbitrary bytes.
+func decodeJSONValueStoredAdmitted(data []byte) (value bytejson.ByteJson, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			value = bytejson.Null
@@ -95,9 +109,6 @@ func decodeJSONValueStored(data []byte) (value bytejson.ByteJson, err error) {
 		return bytejson.Null, moerr.NewInvalidInputNoCtx("invalid binary JSON document")
 	}
 	if err := value.Unmarshal(data); err != nil {
-		return bytejson.Null, err
-	}
-	if err := bytejson.ValidateStoredJSONDocument(value); err != nil {
 		return bytejson.Null, err
 	}
 	return value, nil
@@ -196,9 +207,31 @@ func jsonValueContext(proc *process.Process) context.Context {
 	return proc.Ctx
 }
 
+func validateJSONValuePath(pathBytes []byte) error {
+	if _, err := types.ParseStringToPath(string(pathBytes)); err != nil {
+		return moerr.NewInvalidArgNoCtx("json_value", "invalid path expression")
+	}
+	return nil
+}
+
 func jsonValueExtract(
 	doc, pathBytes []byte,
 	docType types.T,
+) jsonValueExtracted {
+	return jsonValueExtractWithStoredValidation(doc, pathBytes, docType, true)
+}
+
+func jsonValueExtractAdmitted(
+	doc, pathBytes []byte,
+	docType types.T,
+) jsonValueExtracted {
+	return jsonValueExtractWithStoredValidation(doc, pathBytes, docType, false)
+}
+
+func jsonValueExtractWithStoredValidation(
+	doc, pathBytes []byte,
+	docType types.T,
+	validateStored bool,
 ) jsonValueExtracted {
 	pathString := string(pathBytes)
 	path, err := types.ParseStringToPath(pathString)
@@ -218,7 +251,11 @@ func jsonValueExtract(
 		// expression can still provide an empty/malformed binary payload (for
 		// example through a test vector or a remote plan).
 		var decodeErr error
-		value, decodeErr = decodeJSONValueStored(doc)
+		if validateStored {
+			value, decodeErr = decodeJSONValueStored(doc)
+		} else {
+			value, decodeErr = decodeJSONValueStoredAdmitted(doc)
+		}
 		if decodeErr != nil {
 			state := jsonValueSourceParseError
 			if bytejson.IsJSONDocumentDepthError(decodeErr) {
@@ -301,20 +338,23 @@ func jsonValueExecuteCore(
 		}
 		doc, docNull := docParam.get(row)
 		path, pathNull := pathParam.get(row)
-		if docNull {
-			if err := appendNull(); err != nil {
-				return err
-			}
-			continue
-		}
 		if pathNull {
 			if err := appendNull(); err != nil {
 				return err
 			}
 			continue
 		}
+		if err := validateJSONValuePath(path); err != nil {
+			return err
+		}
+		if docNull {
+			if err := appendNull(); err != nil {
+				return err
+			}
+			continue
+		}
 
-		extracted := jsonValueExtract(doc, path, docType)
+		extracted := jsonValueExtractAdmitted(doc, path, docType)
 		switch extracted.state {
 		case jsonValueSQLNull, jsonValuePathNull:
 			if err := appendNull(); err != nil {
@@ -608,7 +648,7 @@ func parseJSONValueInt64(e jsonValueExtracted, _ types.Type) (int64, error) {
 			return value, nil
 		}
 	case bytejson.TpCodeString:
-		if value, ok := bytejson.NumericTextToInt64(string(e.value.GetString())); ok {
+		if value, ok := bytejson.NumericTextToInt64(numericText); ok {
 			return value, nil
 		}
 	case bytejson.TpCodeLiteral:
@@ -675,7 +715,7 @@ func parseJSONValueUint64(e jsonValueExtracted, _ types.Type) (uint64, error) {
 			return value, nil
 		}
 	case bytejson.TpCodeString:
-		if value, ok := bytejson.NumericTextToUint64(string(e.value.GetString())); ok {
+		if value, ok := bytejson.NumericTextToUint64(numericText); ok {
 			return value, nil
 		}
 	case bytejson.TpCodeLiteral:
@@ -763,12 +803,49 @@ func parseJSONValueDate(e jsonValueExtracted, _ types.Type) (types.Date, error) 
 	if err != nil {
 		return 0, err
 	}
-	return types.ParseDateCast(s)
+	value, err := types.ParseDateCast(s)
+	if err != nil {
+		return 0, err
+	}
+	if value == types.ZeroDate {
+		return 0, moerr.NewInvalidInputNoCtxf("invalid DATE value %s", s)
+	}
+	return value, nil
+}
+
+func jsonValueFractionalPrecisionExact(text string, scale int32) bool {
+	if scale < 0 {
+		return false
+	}
+	dot := strings.IndexByte(strings.TrimSpace(text), '.')
+	if dot < 0 {
+		return true
+	}
+	fraction := strings.TrimSpace(text)[dot+1:]
+	return int32(len(fraction)) <= scale
+}
+
+func rejectJSONValueZeroDatetime(text string) error {
+	text = strings.TrimSpace(text)
+	if !strings.ContainsAny(text, "-/") {
+		return nil
+	}
+	value, err := types.ParseDatetime(text, 6)
+	if err == nil && value == types.ZeroDatetime {
+		return moerr.NewInvalidInputNoCtxf("invalid DATETIME value %s", text)
+	}
+	return nil
 }
 
 func parseJSONValueTime(e jsonValueExtracted, target types.Type) (types.Time, error) {
 	s, err := jsonValueScalarText(e)
 	if err != nil {
+		return 0, err
+	}
+	if !jsonValueFractionalPrecisionExact(s, target.Scale) {
+		return 0, moerr.NewDataTruncatedNoCtxf("TIME", "value %q loses fractional precision at scale %d", s, target.Scale)
+	}
+	if err := rejectJSONValueZeroDatetime(s); err != nil {
 		return 0, err
 	}
 	return types.ParseTime(s, target.Scale)
@@ -779,7 +856,17 @@ func parseJSONValueDatetime(e jsonValueExtracted, target types.Type) (types.Date
 	if err != nil {
 		return 0, err
 	}
-	return types.ParseDatetime(s, target.Scale)
+	if !jsonValueFractionalPrecisionExact(s, target.Scale) {
+		return 0, moerr.NewDataTruncatedNoCtxf("DATETIME", "value %q loses fractional precision at scale %d", s, target.Scale)
+	}
+	value, err := types.ParseDatetime(s, target.Scale)
+	if err != nil {
+		return 0, err
+	}
+	if value == types.ZeroDatetime {
+		return 0, moerr.NewInvalidInputNoCtxf("invalid DATETIME value %s", s)
+	}
+	return value, nil
 }
 
 func parseJSONValueYear(e jsonValueExtracted, _ types.Type) (types.MoYear, error) {

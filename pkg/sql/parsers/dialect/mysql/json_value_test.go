@@ -80,6 +80,7 @@ func TestJSONValueKeywordsPreserveExistingEmptyCalls(t *testing.T) {
 	for _, sql := range []string{
 		"select empty(''), empty('text')",
 		"select empty(instr('a', 'b'))",
+		"select error('x')",
 		"create table output as select empty(col) from input",
 		"select empty(json_value(doc, '$' default '' on empty error on error)) from input",
 		"select empty, error from empty as error",

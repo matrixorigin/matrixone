@@ -122,7 +122,7 @@ func TestJSONValueNumericConvertersCoverSourceDomains(t *testing.T) {
 		{"unsigned", jsonValueTestExtracted(t, "12"), 12},
 		{"float", jsonValueTestExtracted(t, "12.0"), 12},
 		{"decimal", jsonValueExtracted{state: jsonValueOneValue, value: newTypedByteJson(bytejson.TpCodeDecimal, "12"), text: "12"}, 12},
-		{"string", jsonValueTestExtracted(t, `"12"`), 12},
+		{"string", jsonValueTestExtracted(t, `" 12 "`), 12},
 		{"true", jsonValueTestExtracted(t, "true"), 1},
 		{"false", jsonValueTestExtracted(t, "false"), 0},
 	}
@@ -145,6 +145,29 @@ func TestJSONValueNumericConvertersCoverSourceDomains(t *testing.T) {
 	require.Error(t, err)
 	_, err = parseJSONValueInt64(jsonValueTestExtracted(t, "1.5"), types.T_int64.ToType())
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDataTruncated))
+}
+
+func TestJSONValueTemporalConversionBoundaries(t *testing.T) {
+	_, err := parseJSONValueDate(jsonValueTestExtracted(t, `"0000-00-00"`), types.T_date.ToType())
+	require.Error(t, err)
+
+	_, err = parseJSONValueTime(
+		jsonValueTestExtracted(t, `"12:34:56.1234"`),
+		types.New(types.T_time, 0, 3),
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDataTruncated))
+
+	_, err = parseJSONValueDatetime(
+		jsonValueTestExtracted(t, `"2024-01-02 12:34:56.1234"`),
+		types.New(types.T_datetime, 0, 3),
+	)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDataTruncated))
+
+	_, err = parseJSONValueDatetime(
+		jsonValueTestExtracted(t, `"0000-00-00 00:00:00"`),
+		types.New(types.T_datetime, 0, 3),
+	)
+	require.Error(t, err)
 }
 
 func TestJSONValueTextAndScalarBoundaries(t *testing.T) {

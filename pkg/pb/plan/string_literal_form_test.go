@@ -535,7 +535,7 @@ func TestRequiredRemoteExpressionFeaturesASCIIResultContract(t *testing.T) {
 
 }
 
-func TestRequiresMORPCVersion58JSONValueContract(t *testing.T) {
+func TestRequiresMORPCVersion73JSONValueContract(t *testing.T) {
 	jsonValueContract := &Expr{Expr: &Expr_F{F: &Function{
 		Func: &ObjectRef{Obj: int64(462)<<32 | 2, ObjName: "json_value"},
 		Args: make([]*Expr, 7),
@@ -545,11 +545,11 @@ func TestRequiresMORPCVersion58JSONValueContract(t *testing.T) {
 		Args: make([]*Expr, 2),
 	}}}
 
-	required, err := RequiresMORPCVersion58JSONValueContract(jsonValueContract)
+	required, err := RequiresMORPCVersion73JSONValueContract(jsonValueContract)
 	require.NoError(t, err)
 	require.True(t, required)
 
-	required, err = RequiresMORPCVersion58JSONValueContract(legacy)
+	required, err = RequiresMORPCVersion73JSONValueContract(legacy)
 	require.NoError(t, err)
 	require.False(t, required)
 }
