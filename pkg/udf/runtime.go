@@ -160,6 +160,14 @@ func StatementContextFromMap(values map[string]string) (*StatementContext, error
 		if err := json.Unmarshal([]byte(raw), &mode); err != nil {
 			return nil, fmt.Errorf("python udf: invalid statement sql_mode: %w", err)
 		}
+		// The wire contract is a JSON array, including when it is empty.  A
+		// JSON null decodes successfully into a nil Go slice, but would be
+		// serialized back as null and rejected by the Python context decoder.
+		// Reject it at the trusted CN adapter instead of carrying a malformed
+		// snapshot into the Flight request.
+		if mode == nil {
+			return nil, fmt.Errorf("python udf: invalid statement sql_mode: expected a JSON array")
+		}
 	}
 	context := &StatementContext{
 		ContractVersion:         StatementContextContractVersion,
