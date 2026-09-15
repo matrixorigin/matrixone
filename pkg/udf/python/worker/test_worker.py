@@ -371,6 +371,34 @@ class WorkerContractTest(unittest.TestCase):
                 }
             )
 
+    def test_statement_context_matches_python_datetime_range(self):
+        for timestamp in (
+            worker.MIN_STATEMENT_TIMESTAMP_UTC - 1,
+            worker.MAX_STATEMENT_TIMESTAMP_UTC + 1,
+        ):
+            typed = {
+                "contract_version": 1,
+                "statement_timestamp_utc": timestamp,
+                "timezone_kind": "FIXED_OFFSET",
+                "timezone_offset_minutes": 0,
+                "sql_mode": [],
+                "current_user": "alice",
+                "connection_collation": "utf8mb4_bin",
+            }
+            with self.assertRaisesRegex(ValueError, "invalid typed statement timestamp"):
+                worker._typed_statement_context(typed)
+            with self.assertRaisesRegex(ValueError, "invalid statement_timestamp_utc"):
+                worker._statement_context(
+                    {
+                        "statement_timestamp_utc": str(timestamp),
+                        "session_timezone_kind": "FIXED_OFFSET",
+                        "session_timezone_offset_minutes": "0",
+                        "sql_mode": "[]",
+                        "current_user": "alice",
+                        "connection_collation": "utf8mb4_bin",
+                    }
+                )
+
     def test_typed_contract_versions_require_integer_wire_values(self):
         typed_context = {
             "contract_version": True,

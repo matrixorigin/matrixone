@@ -77,6 +77,11 @@ MAX_FENCE_COMPONENT_BYTES = 256
 MAX_SECURITY_PRINCIPAL_ID = (1 << 32) - 1
 MIN_INT64 = -(1 << 63)
 MAX_INT64 = (1 << 63) - 1
+# StatementContext is materialized as datetime.datetime. This is narrower
+# than the wire int64 domain and must match the Go context validator before an
+# invocation reaches user code.
+MIN_STATEMENT_TIMESTAMP_UTC = -62135596800000000
+MAX_STATEMENT_TIMESTAMP_UTC = 253402300799999999
 MIN_INT32 = -(1 << 31)
 MAX_INT32 = (1 << 31) - 1
 # Admission bounds cover active fences and retained terminal tombstones.  The
@@ -552,8 +557,8 @@ def _typed_statement_context(raw: Any) -> Optional[Dict[str, Any]]:
     if (
         isinstance(timestamp, bool)
         or not isinstance(timestamp, int)
-        or timestamp < MIN_INT64
-        or timestamp > MAX_INT64
+        or timestamp < MIN_STATEMENT_TIMESTAMP_UTC
+        or timestamp > MAX_STATEMENT_TIMESTAMP_UTC
     ):
         raise ValueError("PROTOCOL: invalid typed statement timestamp")
     timezone_kind = raw.get("timezone_kind")
@@ -670,8 +675,8 @@ def _statement_context(raw: Any) -> Optional[StatementContext]:
     timestamp_text = _required_context_value(raw, "statement_timestamp_utc")
     try:
         timestamp_micros = int(timestamp_text, 10)
-        if timestamp_micros < MIN_INT64 or timestamp_micros > MAX_INT64:
-            raise ValueError("timestamp is outside int64 range")
+        if timestamp_micros < MIN_STATEMENT_TIMESTAMP_UTC or timestamp_micros > MAX_STATEMENT_TIMESTAMP_UTC:
+            raise ValueError("timestamp is outside the Python datetime range")
         seconds, micros = divmod(timestamp_micros, 1_000_000)
         timestamp = _datetime.datetime(1970, 1, 1, tzinfo=_datetime.timezone.utc) + _datetime.timedelta(seconds=seconds, microseconds=micros)
     except (TypeError, ValueError, OverflowError) as exc:
