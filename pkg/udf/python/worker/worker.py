@@ -1535,6 +1535,11 @@ def _load_handler(source: str, handler: str):
         raise ValueError(
             "UNSUPPORTED_ROUTINE_VERSION: Python external handler import requires an immutable artifact catalog"
         )
+    # CREATE validates the source without executing it, but execution may be
+    # reached through a direct Flight request or a stale/malformed caller.
+    # Reapply the static binding contract before exec so invalid module-level
+    # rebinding cannot run top-level user code before being rejected.
+    _validate_definition_syntax({"source": source, "handler": handler})
     namespace: Dict[str, Any] = {"__name__": "__matrixone_routine__"}
     exec(compile(source, "<routine>", "exec"), namespace, namespace)
     function = namespace.get(handler)
