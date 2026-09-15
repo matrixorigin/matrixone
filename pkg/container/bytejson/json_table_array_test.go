@@ -17,6 +17,7 @@ package bytejson
 import (
 	"context"
 	"encoding/binary"
+	"math"
 	"runtime"
 	"testing"
 
@@ -28,6 +29,74 @@ func parseBuilderValue(t *testing.T, text string) ByteJson {
 	value, err := ParseFromString(text)
 	require.NoError(t, err)
 	return value
+}
+
+func aliasedInt64ArrayForStoragePreflight() ByteJson {
+	data := make([]byte, headerSize+2*valEntrySize+numberSize)
+	binary.LittleEndian.PutUint32(data[:4], 2)
+	binary.LittleEndian.PutUint32(data[docSizeOff:], uint32(len(data)))
+	for i := 0; i < 2; i++ {
+		entryOffset := headerSize + i*valEntrySize
+		data[entryOffset] = byte(TpCodeInt64)
+		binary.LittleEndian.PutUint32(data[entryOffset+valTypeSize:], uint32(headerSize+2*valEntrySize))
+	}
+	binary.LittleEndian.PutUint64(data[headerSize+2*valEntrySize:], 1)
+	return ByteJson{Type: TpCodeArray, Data: data}
+}
+
+func aliasedNestedArrayForStoragePreflight(depth int) ByteJson {
+	value := aliasedInt64ArrayForStoragePreflight()
+	for i := 1; i < depth; i++ {
+		data := make([]byte, headerSize+2*valEntrySize+len(value.Data))
+		binary.LittleEndian.PutUint32(data[:4], 2)
+		binary.LittleEndian.PutUint32(data[docSizeOff:], uint32(len(data)))
+		for entry := 0; entry < 2; entry++ {
+			entryOffset := headerSize + entry*valEntrySize
+			data[entryOffset] = byte(TpCodeArray)
+			binary.LittleEndian.PutUint32(data[entryOffset+valTypeSize:], uint32(headerSize+2*valEntrySize))
+		}
+		copy(data[headerSize+2*valEntrySize:], value.Data)
+		value = ByteJson{Type: TpCodeArray, Data: data}
+	}
+	return value
+}
+
+func TestStoragePreflightRejectsAliasedSerializedWork(t *testing.T) {
+	value := aliasedInt64ArrayForStoragePreflight()
+	_, err := StorageCompatibleDataSizeWithLimit(context.Background(), value, math.MaxInt)
+	require.Error(t, err)
+}
+
+func TestStoragePreflightBoundsAliasedNestedWork(t *testing.T) {
+	value := aliasedNestedArrayForStoragePreflight(16)
+	require.Equal(t, 296, len(value.Data))
+	_, err := StorageCompatibleDataSizeWithLimit(context.Background(), value, math.MaxInt)
+	require.Error(t, err)
+}
+
+func TestJSONTableArrayBuilderRejectsLimitBeyondUint32Format(t *testing.T) {
+	if uint64(^uint(0)>>1) < uint64(math.MaxUint32)+1 {
+		t.Skip("host int cannot represent the uint32 format boundary")
+	}
+
+	limitAtFormatMax := int(uint64(math.MaxUint32) + 1)
+	builder, err := NewJSONTableArrayBuilder(limitAtFormatMax)
+	require.NoError(t, err)
+	builder.Close()
+
+	_, err = NewJSONTableArrayBuilder(limitAtFormatMax + 1)
+	require.Error(t, err)
+
+	exactEntries := int(uint64(math.MaxUint32) - uint64(headerSize) - uint64(valEntrySize))
+	available, err := jsonTableArrayPayloadBudget(limitAtFormatMax, exactEntries, 0)
+	require.NoError(t, err)
+	require.Zero(t, available)
+	_, err = jsonTableArrayPayloadBudget(limitAtFormatMax, exactEntries+1, 0)
+	require.Error(t, err)
+	_, err = jsonTableArrayPayloadBudget(limitAtFormatMax, math.MaxUint32, 0)
+	require.Error(t, err)
+	_, err = jsonTableArrayPayloadBudget(limitAtFormatMax, 0, math.MaxUint32)
+	require.Error(t, err)
 }
 
 func TestJSONTableArrayBuilderPreservesEveryCopiedValue(t *testing.T) {

@@ -202,6 +202,55 @@ func TestConvertPathMatchesMalformedRootJSONFailsClosed(t *testing.T) {
 	}
 }
 
+func aliasedInt64ArrayForConversion() bytejson.ByteJson {
+	const headerSize = 8
+	const valueEntrySize = 5
+	const numberSize = 8
+	data := make([]byte, headerSize+2*valueEntrySize+numberSize)
+	binary.LittleEndian.PutUint32(data[:4], 2)
+	binary.LittleEndian.PutUint32(data[4:], uint32(len(data)))
+	for i := 0; i < 2; i++ {
+		entryOffset := headerSize + i*valueEntrySize
+		data[entryOffset] = byte(bytejson.TpCodeInt64)
+		binary.LittleEndian.PutUint32(data[entryOffset+1:], uint32(headerSize+2*valueEntrySize))
+	}
+	binary.LittleEndian.PutUint64(data[headerSize+2*valueEntrySize:], 1)
+	return bytejson.ByteJson{Type: bytejson.TpCodeArray, Data: data}
+}
+
+func TestConvertPathMatchesRejectsAliasedSerializedWorkSingleAndMulti(t *testing.T) {
+	aliased := aliasedInt64ArrayForConversion()
+	scalar := ConvertScalar(aliased, types.T_json.ToType())
+	require.Equal(t, StatusStatementError, scalar.Status)
+	require.Error(t, scalar.Err)
+
+	singlePath, err := bytejson.ParseJsonPath(`$`)
+	require.NoError(t, err)
+	single := bytejson.NewPathIterator(aliased, &singlePath)
+	singleResult := ConvertPathMatchesWithLimit(single, types.T_json.ToType(), 1024)
+	single.Close()
+	require.Equal(t, StatusStatementError, singleResult.Status)
+	require.Error(t, singleResult.Err)
+
+	outer, err := bytejson.CreateByteJSON([]any{aliased, aliased})
+	require.NoError(t, err)
+	multiPath, err := bytejson.ParseJsonPath(`$[*]`)
+	require.NoError(t, err)
+	multi := bytejson.NewPathIterator(outer, &multiPath)
+	multiResult := ConvertPathMatchesWithLimit(multi, types.T_json.ToType(), 1024)
+	multi.Close()
+	require.Equal(t, StatusStatementError, multiResult.Status)
+	require.Error(t, multiResult.Err)
+
+	nested := conversionIterator(t, `{"nested":[1,2]}`, `$`)
+	defer nested.Close()
+	nestedResult := ConvertPathMatchesWithLimit(nested, types.T_json.ToType(), 1024)
+	require.Equal(t, StatusSuccess, nestedResult.Status)
+	encoded, ok := nestedResult.Value.([]byte)
+	require.True(t, ok)
+	require.Equal(t, `{"nested": [1, 2]}`, types.DecodeJson(encoded).String())
+}
+
 func TestConvertPathMatchesDistinguishesMissingNullAndMultipleValues(t *testing.T) {
 	missing := conversionIterator(t, `{"present":null}`, `$.missing`)
 	defer missing.Close()
