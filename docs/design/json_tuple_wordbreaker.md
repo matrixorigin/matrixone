@@ -17,9 +17,9 @@ as described in this document:
   by that generation's `build_ts` coverage of the read snapshot (§10, §10.1–§10.2);
 - self-completion fallback — the partial `table_changes` tail over `(searched, snapshot]`,
   with a base-table fallback when the tail cannot serve a schema-version span (§5.1, §10.3);
-- mixed-version protocol fencing — decline the probe at plan time below `MORPCVersion73`,
-  and re-check the destination's current version at the remote sender boundary
-  (`encodeRemoteScope`) before serialization (§10.3).
+- mixed-version protocol fencing — decline the probe at plan time on a cluster below the
+  probe_tail protocol version, and re-check the destination's current version at the remote
+  sender boundary (`encodeRemoteScope`) before serialization (§10.3).
 
 It does not authorize operational rollout or waive release validation.
 

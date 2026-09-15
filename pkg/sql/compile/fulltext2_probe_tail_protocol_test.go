@@ -54,13 +54,13 @@ func TestFulltext2ProbeTailRejectsOnRollback(t *testing.T) {
 	defer scope.RootOp.Release()
 
 	// Built at the latest level; the fleet then rolls back below the gate before the send.
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
 	_, err := encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "MORPC version 73")
+	require.ErrorContains(t, err, "newer MORPC protocol version")
 
 	// At the gate it serializes.
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
-	client.version = defines.MORPCVersion73
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+	client.version = defines.MORPCVersion74
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
