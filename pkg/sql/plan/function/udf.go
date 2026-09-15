@@ -533,10 +533,7 @@ func (u *Udf) ValidatePythonCatalogSignature() error {
 
 func pythonCatalogTypeNameMatches(name string, oid types.T) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "decimal" {
-		return oid == types.T_decimal64 || oid == types.T_decimal128
-	}
-	return name == strings.ToLower(oid.String())
+	return name == PythonCatalogTypeName(types.Type{Oid: oid})
 }
 
 // PythonCatalogTypeName returns the logical type name stored in the shared
