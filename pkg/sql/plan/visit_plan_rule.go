@@ -2230,7 +2230,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				for pos := range preparedNumericValueParamPositions(originalArgs[i]) {
 					if rule.hasExportSetResolvedDomain(int(pos)) {
 						sourceType := types.T(rewrittenArg.Typ.Id)
-						if sourceType.IsDecimal() || sourceType == types.T_float32 || sourceType == types.T_float64 {
+						numericSource := sourceType.IsDecimal() || sourceType == types.T_float32 || sourceType == types.T_float64
+						if numericSource {
 							rewrittenArg, err = BindFuncExprImplByPlanExpr(rule.ctx, "round",
 								[]*Expr{rewrittenArg, makePlan2Int64ConstExprWithType(0)})
 							if err != nil {
@@ -2238,7 +2239,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 							}
 						}
 						target := makePlan2Type(&types.Type{Oid: types.T_int64})
-						rewrittenArg, err = appendCastBeforeExprWithOverload(rule.ctx, rewrittenArg, target, 4)
+						if numericSource {
+							rewrittenArg, err = makePlan2CastExpr(rule.ctx, rewrittenArg, target)
+						} else {
+							rewrittenArg, err = appendCastBeforeExprWithOverload(rule.ctx, rewrittenArg, target, 4)
+						}
 						if err != nil {
 							return nil, err
 						}

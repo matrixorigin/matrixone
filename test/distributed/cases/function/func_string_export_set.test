@@ -631,6 +631,13 @@ EXECUTE export_set_truncate_precision USING @export_set_bits;
 DEALLOCATE PREPARE export_set_round_precision;
 DEALLOCATE PREPARE export_set_truncate_precision;
 
+# 嵌套精度表达式溢出必须保留 checked cast 错误，不能由 CAST4 饱和。
+PREPARE export_set_precision_overflow FROM
+  "SELECT EXPORT_SET(ROUND(15.5,ABS(x)),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = '1e100';
+EXECUTE export_set_precision_overflow USING @export_set_bits;
+DEALLOCATE PREPARE export_set_precision_overflow;
+
 DROP TABLE export_set_scalar_input;
 
 DROP TABLE export_set_numeric_bits;

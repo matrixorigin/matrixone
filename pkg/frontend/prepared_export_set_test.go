@@ -418,6 +418,29 @@ func TestPreparedExportSetIndependentNumericPrecisionDomains(t *testing.T) {
 	}
 }
 
+func TestPreparedExportSetPrecisionExpressionOverflow(t *testing.T) {
+	_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 400,
+		`select export_set(round(15.5,abs(x)),'Y','N','',4) from (select ? as x) d`)
+	defer stmt.Close()
+	cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
+	values := []any{plan2.ParamValue{Value: "1e100", SourceType: types.T_text.ToType(), HasSourceType: true,
+		EnableNumericPrefix: true}}
+	stmt.applyExportSetNullRuntimeTypes(values)
+	filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, cached, values)
+	if err != nil {
+		require.Error(t, err)
+		return
+	}
+	q := filled.GetQuery()
+	expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+	_, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr,
+		[]*batch.Batch{batch.EmptyForConstFoldBatch})
+	if free != nil {
+		defer free()
+	}
+	require.Error(t, err)
+}
+
 func TestPreparedExportSetMaterializedRealSaturation(t *testing.T) {
 	_, stmt, cw, _ := newPreparedExecuteEnvForSQLWithCompilerContext(t, 395,
 		`select export_set((select max(?) from tpch.nation),'Y','N','',4)`, plan2.NewMockCompilerContext(true))
