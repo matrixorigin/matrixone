@@ -288,7 +288,7 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 
 	eqmap := make(map[int32]int32)
 
-	idxID, _, _, _, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
+	idxID, _, _, served, err := builder.applyJoinFullTextIndices(nodeID, projNode, scanNode,
 		scanNode.Limit, scanNode.Offset, filterids, filterIndexDefs, projids, projIndexDefs,
 		wrappedExprs, wrappedIndexDefs, eqmap, colRefCnt, idxColMap)
 	if err != nil {
@@ -301,6 +301,22 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	scanNode.Offset = nil
 
 	aggNode.Children[0] = idxID
+
+	// A MATCH that appears INSIDE the aggregate node -- max(match(...)), group_concat(... order by
+	// match(...)) in AggList, or GROUP BY match(...) in GroupBy -- is served by the index scan just
+	// built, but reparenting the child alone leaves the raw fulltext_match in those expressions, which
+	// throws 20105 at execution (#28681). Rewrite it to the score column the join now produces, exactly
+	// as the projection path does for ProjectList (replaceScoreFnInExprBy recurses through the
+	// aggregate's args, incl. group_concat's order-by, so every served MATCH is replaced).
+	if len(served) > 0 {
+		rewriter := builder.fullTextScoreRewriter(served)
+		for i := range aggNode.AggList {
+			aggNode.AggList[i] = replaceScoreFnInExprBy(aggNode.AggList[i], rewriter)
+		}
+		for i := range aggNode.GroupBy {
+			aggNode.GroupBy[i] = replaceScoreFnInExprBy(aggNode.GroupBy[i], rewriter)
+		}
+	}
 
 	return nodeID, nil
 }
