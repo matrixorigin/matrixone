@@ -241,6 +241,7 @@ var _ SystemVariableType = SystemVariableDoubleType{}
 var _ SystemVariableType = SystemVariableEnumType{}
 var _ SystemVariableType = SystemVariableSetType{}
 var _ SystemVariableType = SystemVariableStringType{}
+var _ SystemVariableType = SystemVariableLocaleType{}
 var _ SystemVariableType = SystemVariableNullType{}
 
 type SystemVariableNullType struct {
@@ -977,6 +978,43 @@ func InitSystemVariableSetType(name string, values ...string) SystemVariableSetT
 
 type SystemVariableStringType struct {
 	name string
+}
+
+// SystemVariableLocaleType validates lc_time_names at SET time. Keep the
+// canonical spelling returned by MySQL while accepting case-insensitive input.
+type SystemVariableLocaleType struct{}
+
+func (SystemVariableLocaleType) String() string { return "STRING" }
+
+func (SystemVariableLocaleType) Convert(value interface{}) (interface{}, error) {
+	if value == nil {
+		return "en_US", nil
+	}
+	s, ok := value.(string)
+	if !ok {
+		return nil, errorConvertToStringFailed
+	}
+	return normalizeTimeLocale(s)
+}
+
+func (SystemVariableLocaleType) Type() types.T { return types.T_varchar }
+
+func (SystemVariableLocaleType) MysqlType() defines.MysqlType { return defines.MYSQL_TYPE_VARCHAR }
+
+func (SystemVariableLocaleType) Zero() interface{} { return "en_US" }
+
+func (SystemVariableLocaleType) ConvertFromString(value string) (interface{}, error) {
+	return normalizeTimeLocale(value)
+}
+
+func normalizeTimeLocale(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	for _, locale := range []string{"en_US", "fr_FR", "de_DE", "ja_JP"} {
+		if strings.EqualFold(value, locale) {
+			return locale, nil
+		}
+	}
+	return "", moerr.NewInvalidInputf(context.Background(), "Unknown locale: '%s'", value)
 }
 
 func InitSystemVariableStringType(name string) SystemVariableStringType {
@@ -2090,6 +2128,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("explicit_defaults_for_timestamp"),
 		Default:           int64(1),
 	},
+	"timestamp": {
+		Name:              "timestamp",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableDoubleType("timestamp", 0, float64(math.MaxInt64)/1e9),
+		Default:           float64(0),
+	},
 	"external_user": {
 		Name:              "external_user",
 		Scope:             ScopeSession,
@@ -2367,8 +2413,8 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("lc_time_names"),
-		Default:           "",
+		Type:              SystemVariableLocaleType{},
+		Default:           "en_US",
 	},
 	"local_infile": {
 		Name:              "local_infile",

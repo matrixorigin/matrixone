@@ -677,3 +677,16 @@ func TestAddIntervalMicrosecond(t *testing.T) {
 		})
 	}
 }
+
+func TestDatetimeDSTGapUsesFirstRepresentableWallTime(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	dt, err := ParseDatetime("2024-03-10 02:30:00.123456", 6)
+	require.NoError(t, err)
+	require.True(t, dt.IsNonexistentLocalTime(loc))
+
+	normalized := dt.ConvertToGoTime(loc)
+	require.Equal(t, "2024-03-10 03:00:00.123456", normalized.Format("2006-01-02 15:04:05.000000"))
+	want := time.Date(2024, 3, 10, 3, 0, 0, 123456000, loc).UnixMicro() + unixEpochMicroSecs
+	require.Equal(t, Timestamp(want), dt.ToTimestamp(loc))
+}

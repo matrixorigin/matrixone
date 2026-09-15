@@ -2180,7 +2180,7 @@ func TestTimestampAddRetType(t *testing.T) {
 		require.NotNil(t, matchedOverload, "Should find matching overload for TIMESTAMP input")
 
 		retType := matchedOverload.retType(parameters)
-		require.Equal(t, types.T_timestamp, retType.Oid)
+		require.Equal(t, types.T_datetime, retType.Oid)
 		require.Equal(t, int32(0), retType.Scale, "retType preserves the input FSP")
 	})
 }

@@ -323,6 +323,18 @@ func (ts Timestamp) TruncateToScale(scale int32) Timestamp {
 	return Timestamp(base * divisor)
 }
 
+// TruncateToScaleWithoutRounding discards fractional digits toward zero.
+func (ts Timestamp) TruncateToScaleWithoutRounding(scale int32) Timestamp {
+	if ts == ZeroTimestamp || scale >= 6 {
+		return ts
+	}
+	if scale < 0 {
+		scale = 0
+	}
+	divisor := int64(scaleTable[scale])
+	return Timestamp(int64(ts) / divisor * divisor)
+}
+
 // FromClockUTC gets the utc time value in Timestamp
 func FromClockUTC(year int32, month, day, hour, minute, sec uint8, msec uint32) Timestamp {
 	days := DateFromCalendar(year, month, day)
