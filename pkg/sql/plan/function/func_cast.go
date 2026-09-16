@@ -4700,8 +4700,12 @@ func timeToTime(
 
 func mysqlTimeForCast(ctx context.Context, proc *process.Process, value types.Time, mode castMode, scale int32, row uint64) (types.Time, error) {
 	maxValue := types.MySQLTimeMaxForScale(scale)
-	if !mode.isAssignment() || (value >= -maxValue && value <= maxValue) {
+	if value >= -maxValue && value <= maxValue {
 		return value, nil
+	}
+	if !mode.isAssignment() {
+		appendTimeRangeWarning(proc, value, scale)
+		return types.ClampMySQLTimeForScale(value, scale), nil
 	}
 	return mysqlTimeOutOfRangeForCast(ctx, proc, mode, value.String2(scale), value < 0, row)
 }

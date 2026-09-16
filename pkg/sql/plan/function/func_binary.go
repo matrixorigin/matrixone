@@ -4268,6 +4268,12 @@ func addTimeToDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 
 		// Add time2 to datetime (both are in microseconds)
 		resultDt := types.Datetime(int64(dt) + int64(time2))
+		if !validDatetimeResult(resultDt) {
+			if err := rs.Append(types.Datetime(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 
 		if err := rs.Append(resultDt, false); err != nil {
 			return err
@@ -4319,6 +4325,12 @@ func addTimeToTimestamp(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		// Convert timestamp to datetime, add time, convert back
 		dt := ts.ToDatetime(loc)
 		resultDt := types.Datetime(int64(dt) + int64(time2))
+		if !validDatetimeResult(resultDt) {
+			if err := rs.Append(types.Timestamp(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 		resultTs := resultDt.ToTimestamp(loc)
 
 		if err := rs.Append(resultTs, false); err != nil {
@@ -4387,6 +4399,10 @@ func appendTimeRangeWarning(proc *process.Process, value types.Time, scale int32
 		appender.AppendWarningDiagnostic(moerr.ER_TRUNCATED_WRONG_VALUE,
 			fmt.Sprintf("Truncated incorrect time value: '%s'", value.String2(scale)))
 	}
+}
+
+func validDatetimeResult(value types.Datetime) bool {
+	return value >= types.DatetimeEpoch && value <= types.DatetimeFromClock(types.MaxDatetimeYear, 12, 31, 23, 59, 59, 999999)
 }
 
 func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -5506,6 +5522,9 @@ func doDateStringSub(startStr string, diff int64, iTyp types.IntervalType) (type
 			// Maximum overflow: return special error to indicate NULL should be returned
 			return 0, datetimeOverflowMaxError
 		} else {
+			if iTyp == types.MicroSecond {
+				return 0, datetimeOverflowMaxError
+			}
 			// Check if year is out of valid range for negative intervals
 			var resultYear int64
 			startYear := int64(start.Year())

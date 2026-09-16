@@ -596,16 +596,11 @@ func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 	})
 
-	t.Run("ordinary expression cast preserves MatrixOne extended time", func(t *testing.T) {
+	t.Run("ordinary expression cast clamps to MySQL TIME range", func(t *testing.T) {
 		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewCast)
 		require.NoError(t, err)
 		values := vector.MustFixedColWithTypeCheck[types.Time](result)
-		require.Equal(t, []types.Time{
-			types.TimeFromClock(false, 838, 59, 59, 1),
-			types.TimeFromClock(false, 839, 0, 0, 0),
-			types.TimeFromClock(true, 838, 59, 59, 1),
-			types.TimeFromClock(true, 839, 0, 0, 0),
-		}, values)
+		require.Equal(t, []types.Time{max, max, -max, -max}, values)
 	})
 
 	t.Run("scale zero rejects values that round over the endpoint", func(t *testing.T) {
