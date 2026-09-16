@@ -60,6 +60,14 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestAlterDatabaseCharsetCollationCompatibilityNoOp(t *testing.T) {
+	stmt, err := ParseOne(context.Background(),
+		"ALTER DATABASE `gitea_mo` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin", 1)
+	require.NoError(t, err)
+	require.IsType(t, &tree.EmptyStmt{}, stmt)
+	require.Empty(t, tree.String(stmt, dialect.MYSQL))
+}
+
 func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
 	tests := []struct {
 		name      string
