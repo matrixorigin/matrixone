@@ -117,6 +117,29 @@ func (c *SharedTestCluster) Run(
 	fn(c.cluster)
 }
 
+// active reports whether this fixture currently owns a successfully started
+// cluster. It is used by the single-CN wrapper to coexist with packages that
+// already initialized the canonical two-CN fixture.
+func (c *SharedTestCluster) active() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cluster != nil && c.err == nil && !c.closed
+}
+
+// RunActive invokes fn while holding this fixture's lifecycle lock. Callers
+// must use active first and only use this method for a fixture that has
+// already been initialized successfully.
+func (c *SharedTestCluster) RunActive(t testReporter, fn func(Cluster)) {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.cluster == nil || c.err != nil {
+		t.Fatalf("shared cluster is not active")
+		return
+	}
+	fn(c.cluster)
+}
+
 // Close releases the shared cluster or retries cleanup retained from a failed
 // initialization. Ownership is cleared only after the underlying Close has
 // completed successfully.
@@ -370,6 +393,16 @@ func RunSingleCNBaseClusterTests(
 	fn func(Cluster),
 ) {
 	t.Helper()
+	// A package may contain both canonical multi-CN tests and the specialized
+	// one-CN refresh matrix. Reuse CN 0 when the canonical fixture is already
+	// active; starting a second complete cluster would violate process-wide
+	// admission and is unnecessary for a test that only uses CN 0. When the
+	// matrix is selected on its own, the one-CN fixture still keeps startup
+	// below the per-test race budget.
+	if basicClusterState.active() {
+		basicClusterState.RunActive(t, fn)
+		return
+	}
 	singleCNClusterState.Run(t, func() (Cluster, error) {
 		return startBasicCluster(1, basicClusterSetupTracer(t, 1))
 	}, func(c Cluster) {
