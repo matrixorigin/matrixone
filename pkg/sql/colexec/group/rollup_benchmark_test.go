@@ -45,12 +45,13 @@ import (
 // operator so the measured path includes source-to-aggregate data movement.
 func BenchmarkRollupAlgorithms(b *testing.B) {
 	cases := []struct {
-		name      string
-		rows      int
-		ndv       int
-		keyCount  int
-		ordered   bool
-		aggregate string
+		name         string
+		rows         int
+		ndv          int
+		keyCount     int
+		ordered      bool
+		derivedOrder bool
+		aggregate    string
 	}{
 		// These are the shapes in which one scan plus one ordered aggregate can
 		// amortize the fixed cost of the legacy grouping-set branches.
@@ -78,13 +79,20 @@ func BenchmarkRollupAlgorithms(b *testing.B) {
 		{name: "large_ordered_very_many_levels", rows: 100000, ndv: 2, keyCount: 20, ordered: true},
 		{name: "large_ordered_extreme_levels", rows: 100000, ndv: 2, keyCount: 32, ordered: true},
 		{name: "million_ordered_low_ndv", rows: 1000000, ndv: 4, keyCount: 3, ordered: true},
+		// This models:
+		//   SELECT ... FROM (SELECT ... ORDER BY k1, k2, k3) d
+		//   GROUP BY k1, k2, k3 WITH ROLLUP
+		// The sort path pays for the derived ORDER BY once. The hash path sorts
+		// every grouping-set branch, matching the current expanded plan shape.
+		{name: "million_derived_order_low_ndv", rows: 1000000, ndv: 4, keyCount: 3, derivedOrder: true},
 	}
 
 	for _, tc := range cases {
 		for _, algorithm := range []string{"sort", "hash-serial", "hash-parallel"} {
 			name := fmt.Sprintf("%s/%s", tc.name, algorithm)
 			b.Run(name, func(b *testing.B) {
-				runner, err := newRollupBenchmarkRunner(b, tc.rows, tc.ndv, tc.keyCount, tc.ordered, tc.aggregate)
+				runner, err := newRollupBenchmarkRunner(b, tc.rows, tc.ndv, tc.keyCount,
+					tc.ordered, tc.derivedOrder, tc.aggregate)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -118,11 +126,12 @@ func BenchmarkRollupAlgorithms(b *testing.B) {
 }
 
 type rollupBenchmarkRunner struct {
-	inputs  []*rollupBenchmarkInput
-	groupBy [][]*plan.Expr
-	specs   []*plan.OrderBySpec
-	ordered bool
-	aggs    []aggexec.AggFuncExecExpression
+	inputs       []*rollupBenchmarkInput
+	groupBy      [][]*plan.Expr
+	specs        []*plan.OrderBySpec
+	ordered      bool
+	derivedOrder bool
+	aggs         []aggexec.AggFuncExecExpression
 }
 
 type rollupBenchmarkInput struct {
@@ -132,17 +141,18 @@ type rollupBenchmarkInput struct {
 
 func newRollupBenchmarkRunner(
 	t testing.TB,
-	rows, ndv, keyCount int, ordered bool, aggregate string,
+	rows, ndv, keyCount int, ordered, derivedOrder bool, aggregate string,
 ) (*rollupBenchmarkRunner, error) {
 	if rows <= 0 || ndv <= 0 || keyCount <= 0 {
 		return nil, fmt.Errorf("invalid rollup benchmark shape: rows=%d ndv=%d keys=%d", rows, ndv, keyCount)
 	}
 
 	runner := &rollupBenchmarkRunner{
-		inputs:  make([]*rollupBenchmarkInput, 0, keyCount+1),
-		groupBy: make([][]*plan.Expr, keyCount+1),
-		specs:   make([]*plan.OrderBySpec, keyCount),
-		ordered: ordered,
+		inputs:       make([]*rollupBenchmarkInput, 0, keyCount+1),
+		groupBy:      make([][]*plan.Expr, keyCount+1),
+		specs:        make([]*plan.OrderBySpec, keyCount),
+		ordered:      ordered,
+		derivedOrder: derivedOrder,
 	}
 	switch aggregate {
 	case "", "count":
@@ -369,18 +379,39 @@ func (runner *rollupBenchmarkRunner) runHashBranch(prefix int) (int64, error) {
 		return 0, err
 	}
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	inputOp := vm.Operator(child)
+	var order *orderop.Order
+	if runner.derivedOrder {
+		order = orderop.NewArgument()
+		order.OrderBySpec = runner.specs
+		order.AppendChild(child)
+		inputOp = order
+	}
 	group := newGroupOp(input.proc, runner.groupBy[prefix],
 		runner.aggs)
 	group.SpillMem = 1 << 30
-	group.AppendChild(child)
+	group.AppendChild(inputOp)
+	if order != nil {
+		if err = order.Prepare(input.proc); err != nil {
+			order.Free(input.proc, true, err)
+			child.Free(input.proc, true, err)
+			return 0, err
+		}
+	}
 	if err = group.Prepare(input.proc); err != nil {
 		group.Free(input.proc, true, err)
+		if order != nil {
+			order.Free(input.proc, true, err)
+		}
 		child.Free(input.proc, true, err)
 		return 0, err
 	}
 	peak, _, err := drainRollupBenchmarkOp(
 		group, input.proc, input.proc.Mp().CurrNB(), group.ctr.mp)
 	group.Free(input.proc, err != nil, err)
+	if order != nil {
+		order.Free(input.proc, err != nil, err)
+	}
 	child.Free(input.proc, err != nil, err)
 	return peak, err
 }
