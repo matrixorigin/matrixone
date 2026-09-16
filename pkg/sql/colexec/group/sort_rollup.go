@@ -52,8 +52,9 @@ type sortRollupState struct {
 	// Input batches are retained only while an output batch became full in the
 	// middle of processing them. The child owns the batch; the state only holds
 	// the pointer until the next call.
-	input    *batch.Batch
-	inputRow int
+	input                     *batch.Batch
+	inputRow                  int
+	inputStartBoundaryHandled bool
 
 	// pendingClose drains prefixes in descending order. A separate boolean is
 	// needed because prefix zero is a valid pending value.
@@ -63,6 +64,12 @@ type sortRollupState struct {
 
 	output     *batch.Batch
 	outputRows int
+	// lastOutput is the ownership bridge between Call and its consumer. A
+	// returned batch is borrowed by the caller until the next Call, after which
+	// the streaming operator can reclaim it. Keeping only this one reference
+	// preserves the bounded-memory contract without asking every parent
+	// operator to know about sort-rollup internals.
+	lastOutput *batch.Batch
 
 	finalizing bool
 	finalized  bool
@@ -190,6 +197,10 @@ func (s *sortRollupState) free(mp *mpool.MPool) {
 		s.output.Clean(mp)
 		s.output = nil
 	}
+	if s.lastOutput != nil {
+		s.lastOutput.Clean(mp)
+		s.lastOutput = nil
+	}
 	s.lastExprKeys = nil
 	s.rollupSources = nil
 	s.levelAggs = nil
@@ -199,6 +210,7 @@ func (s *sortRollupState) free(mp *mpool.MPool) {
 	s.equalers = nil
 	s.input = nil
 	s.inputRow = 0
+	s.inputStartBoundaryHandled = false
 	s.pendingClose = false
 	s.outputRows = 0
 	s.finalizing = false
@@ -660,7 +672,11 @@ func (group *Group) processSortRollupInput(proc *process.Process) error {
 		}
 
 		start := s.inputRow
-		if start == 0 && s.haveLast {
+		if start == 0 && s.haveLast && !s.inputStartBoundaryHandled {
+			// Mark the boundary before draining it. Draining may yield because
+			// the output batch became full; on resume the same input row must not
+			// close the already-reset prefix a second time.
+			s.inputStartBoundaryHandled = true
 			common := s.commonPrefixFromLast(keyVecs, start)
 			if common < logicalCount {
 				s.startClose(common)
@@ -705,6 +721,7 @@ func (group *Group) processSortRollupInput(proc *process.Process) error {
 
 	s.input = nil
 	s.inputRow = 0
+	s.inputStartBoundaryHandled = false
 	group.OpAnalyzer.SetMemUsed(group.sortRollupMemoryUsed())
 	return group.checkSortRollupCapacity(proc)
 }
@@ -760,9 +777,19 @@ func (group *Group) prepareSortRollup(proc *process.Process) error {
 func (group *Group) takeSortRollupOutput() vm.CallResult {
 	res := vm.NewCallResult()
 	res.Batch = group.ctr.sortRollup.output
+	group.ctr.sortRollup.lastOutput = res.Batch
 	group.ctr.sortRollup.output = nil
 	group.ctr.sortRollup.outputRows = 0
 	return res
+}
+
+func (group *Group) releaseSortRollupOutput() {
+	if group == nil || group.ctr.sortRollup == nil ||
+		group.ctr.sortRollup.lastOutput == nil {
+		return
+	}
+	group.ctr.sortRollup.lastOutput.Clean(group.ctr.mp)
+	group.ctr.sortRollup.lastOutput = nil
 }
 
 func (group *Group) callSortRollup(proc *process.Process) (vm.CallResult, error) {
@@ -773,6 +800,11 @@ func (group *Group) callSortRollup(proc *process.Process) (vm.CallResult, error)
 	if s == nil {
 		return vm.CancelResult, moerr.NewInternalErrorNoCtx("sort rollup state is not initialized")
 	}
+	// The previous result has been synchronously consumed by the caller before
+	// it asks this operator for another batch. Reclaim it before allocating or
+	// admitting the next output batch. The terminal call also releases the last
+	// partial result; Free remains a safety net for abandoned pipelines.
+	group.releaseSortRollupOutput()
 
 	if group.ctr.state == vm.End {
 		return vm.CancelResult, nil
@@ -863,5 +895,6 @@ func (group *Group) callSortRollup(proc *process.Process) (vm.CallResult, error)
 		}
 		s.input = result.Batch
 		s.inputRow = 0
+		s.inputStartBoundaryHandled = false
 	}
 }

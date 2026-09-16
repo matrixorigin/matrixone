@@ -178,7 +178,7 @@ func (builder *QueryBuilder) probeSortRollupInput(
 		ReCalcNodeStats(probeNodeID, probeBuilder, false, true, true)
 	}
 	probeCtx.binder = NewWhereBinder(probeBuilder, probeCtx)
-	groupBinder := NewGroupBinder(probeBuilder, probeCtx, nil)
+	groupBinder := NewGroupBinder(probeBuilder, probeCtx, nil, false)
 	boundExprs := make([]*Expr, 0, len(exprs))
 	for _, expr := range exprs {
 		// qualifyColumnNames adds the source table to an unresolved name in

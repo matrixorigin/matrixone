@@ -23,6 +23,7 @@ import (
 	containertypes "github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -129,6 +130,7 @@ type sortRollupCostEstimate struct {
 	HashMemory          float64
 	SortMemory          float64
 	SortAggMemory       float64
+	SortOutputMemory    float64
 	SortGroupUpperBound float64
 	SortFeasible        bool
 	BranchCount         int
@@ -265,7 +267,10 @@ func estimateSortRollupCost(
 	// unit and is not charged to the group mpool, so include this fixed heap
 	// allocation explicitly in the admission estimate.
 	scratchBytes := float64(hashmap.UnitLimit * bytesPerRollupGroupID)
-	sortAggMemory := math.Max(1, float64(branches)*hashStateBytes+scratchBytes)
+	sortOutputMemory, sortOutputBounded := sortRollupOutputBatchMemory(
+		probe, selectExprs, extraAggregateExprs...)
+	sortAggMemory := math.Max(1,
+		float64(branches)*hashStateBytes+scratchBytes+sortOutputMemory)
 	if probe.orderedInput {
 		// Streaming ROLLUP reuses an existing global order. Its resident
 		// working set is the active prefix states and a bounded output batch,
@@ -310,7 +315,7 @@ func estimateSortRollupCost(
 			rowsForCPU*rollupSortAggCost*aggregateCost*float64(branches)
 	}
 	sortCost := sortWork
-	sortFeasible := aggregateStateBounded
+	sortFeasible := aggregateStateBounded && sortOutputBounded
 	if aggSpillMem > 0 {
 		// Both paths use the same streaming aggregate. The unordered path
 		// additionally accounts for its independent sort workspace below.
@@ -345,6 +350,7 @@ func estimateSortRollupCost(
 		HashMemory:          hashMemory,
 		SortMemory:          sortMemory,
 		SortAggMemory:       sortAggMemory,
+		SortOutputMemory:    sortOutputMemory,
 		SortGroupUpperBound: sortGroupUpperBound,
 		SortFeasible:        sortFeasible,
 		BranchCount:         branches,
@@ -356,6 +362,133 @@ func estimateSortRollupCost(
 		OrderedInput:        probe.orderedInput,
 	}
 	return estimate, true
+}
+
+const (
+	rollupOutputVectorOverhead = 64
+	rollupOutputAggregateWidth = 32
+	// hll_add_agg and its merge variants materialize a dense p=14 HLL state
+	// when the aggregate result is flushed. Keep the encoded header in the
+	// estimate as well as the 16 KiB register array. Underestimating this
+	// vector could let COST select sort for a result batch that exceeds the
+	// aggregate memory limit by more than 100 MiB.
+	rollupHLLAggregateWidth = 8 + (1 << 14)
+)
+
+// sortRollupOutputBatchMemory accounts for the batch that the executor
+// retains while its consumer processes a result. createNewGroupByBatch
+// pre-extends every grouping vector to AggBatchSize, and aggregate result
+// vectors grow to the same logical batch size as rows are appended. The
+// previous model admitted only the active prefix state and scratch group IDs,
+// so a small memory limit could select a plan that failed as soon as it
+// materialized its first full result batch.
+//
+// The estimate is deliberately conservative. Fixed-width aggregate results
+// use 32 bytes even when their concrete result is narrower, and both null and
+// grouping bitmaps are charged for every grouping column. An unbounded key or
+// aggregate returns a finite upper placeholder but marks the estimate
+// infeasible; automatic selection remains fail-closed.
+func sortRollupOutputBatchMemory(
+	probe *sortRollupProbe,
+	selectExprs tree.SelectExprs,
+	extraAggregateExprs ...tree.Expr,
+) (float64, bool) {
+	if probe == nil {
+		return math.Max(1, float64(aggexec.AggBatchSize)*rollupMaxRowWidth), false
+	}
+
+	rows := float64(aggexec.AggBatchSize)
+	bitmapBytes := float64((aggexec.AggBatchSize + 7) / 8)
+	bytes := 0.0
+	bounded := true
+	addVector := func(width float64, grouping bool) {
+		if width <= 0 || math.IsNaN(width) || math.IsInf(width, 0) {
+			width = rollupMaxRowWidth
+			bounded = false
+		}
+		if width > rollupMaxRowWidth {
+			width = rollupMaxRowWidth
+			bounded = false
+		}
+		bytes += rows*width + bitmapBytes + rollupOutputVectorOverhead
+		if grouping {
+			bytes += bitmapBytes
+		}
+	}
+
+	for _, expr := range probe.groupExprs {
+		carrier := getRowCarrierCost(expr, false)
+		if carrier.varlen {
+			bounded = false
+		}
+		addVector(float64(carrier.width), true)
+	}
+
+	for _, selectExpr := range selectExprs {
+		width, count, ok := sortRollupAggregateOutputProfile(selectExpr.Expr)
+		if !ok {
+			bounded = false
+		}
+		for range count {
+			addVector(width, false)
+		}
+	}
+	// HAVING and ORDER BY aggregates are also registered in ctx.aggregates and
+	// therefore occupy result vectors even when they are not projected by the
+	// SELECT list. Charge their AST expressions here so the admission check
+	// covers the same hidden aggregate state as the executor.
+	for _, expr := range extraAggregateExprs {
+		width, count, ok := sortRollupAggregateOutputProfile(expr)
+		if !ok {
+			bounded = false
+		}
+		for range count {
+			addVector(width, false)
+		}
+	}
+
+	if bytes <= 0 || math.IsNaN(bytes) || math.IsInf(bytes, 0) {
+		return math.Max(1, rows*rollupMaxRowWidth), false
+	}
+	// Vector growth and allocator rounding can exceed the logical fixed-width
+	// payload. Keep admission comfortably above the exact payload estimate.
+	bytes *= 1.25
+	return bytes, bounded && finiteRollupCost(bytes)
+}
+
+func sortRollupAggregateOutputProfile(expr tree.Expr) (float64, int, bool) {
+	width := 0.0
+	count := 0
+	bounded := true
+	walkGroupingSetOrderByExpr(expr, func(candidate tree.Expr) bool {
+		fn, ok := candidate.(*tree.FuncExpr)
+		if !ok || fn.WindowSpec != nil {
+			return true
+		}
+		name := strings.ToLower(sortRollupASTFunctionName(fn))
+		if !function.GetFunctionIsAggregateByName(name) {
+			return true
+		}
+		count++
+		switch name {
+		case "count", "count_if", "starcount", "avg", "sum", "bit_and", "bit_or",
+			"bit_xor", "bitagg_and", "bitagg_or", "boolagg_and", "boolagg_or", "min",
+			"max", "any_value", "std", "stddev", "stddev_pop", "stddev_samp", "var_pop",
+			"var_samp", "variance", "corr", "covar_pop", "covar_sample", "approx_count",
+			"approx_count_distinct":
+			width += rollupOutputAggregateWidth
+		case "hll_add_agg", "hll_add", "hll_merge":
+			width += rollupHLLAggregateWidth
+		default:
+			bounded = false
+			width += rollupMaxRowWidth
+		}
+		return true
+	})
+	if count == 0 {
+		return 0, 0, bounded
+	}
+	return width / float64(count), count, bounded && finiteRollupCost(width)
 }
 
 func finiteRollupStat(value float64) bool {
