@@ -1211,6 +1211,18 @@ func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
+// EmptyGeneration reports a loaded generation with no real centroids: the centroids table for
+// this version holds only the single NULL-vector placeholder row (a freshly created index, or the
+// transient async-build window before the real centroids are committed). LoadCentroids skips the
+// NULL row and leaves Index.Centroids nil, so findCentroids routes every query to bucket 1. The
+// cache declines to retain such a generation, so the next query reloads and picks up the real
+// centroids once the build writes them under the same version -- instead of pinning a
+// bucket-1-only routing model until the housekeeping sweep. A generation with real centroids is
+// cached normally.
+func (s *IvfflatSearch[T]) EmptyGeneration() bool {
+	return s.Index != nil && s.Index.Centroids == nil
+}
+
 // GetIndexSize reports the centroids, the only part of an IVFFLAT index the cache holds
 // resident: the entries stay in the index table and are read per query. Centroids is itself a
 // VectorIndexSearchIf (a brute-force index over the centroid vectors), so both arenas come

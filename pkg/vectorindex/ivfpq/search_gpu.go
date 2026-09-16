@@ -336,6 +336,16 @@ func (s *IvfpqSearch[B, Q]) IsStale() (bool, error) {
 	return ts != s.loadedTs || tail != s.loadedTail, nil
 }
 
+// EmptyGeneration reports a loaded generation with no vectors: no main index (MultiIndex nil,
+// every sub-index empty) AND no CDC overflow rows -- a freshly created index, or the async-build
+// window before the first vectors are committed. Search returns empty on that state. The cache
+// declines to retain it, so the next query reloads and picks up the vectors once the build writes
+// them under the same generation -- instead of pinning an empty generation until the IsStale sweep
+// evicts it. A generation with a main index or overflow rows is cached normally.
+func (s *IvfpqSearch[B, Q]) EmptyGeneration() bool {
+	return s.MultiIndex == nil && s.Overflow == nil
+}
+
 // loadCdcTail mirrors cagra.CagraSearch.loadCdcTail — see that for the
 // architectural commentary. Differs only in the IndexConfig type slot and
 // the GpuIvfPq element type.

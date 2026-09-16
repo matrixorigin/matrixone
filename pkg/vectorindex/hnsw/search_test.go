@@ -564,3 +564,36 @@ func TestGetIndexSizeUnknownNrowStillChargesTheMapping(t *testing.T) {
 	require.EqualValues(t, file, host,
 		"an unknown row count drops only the allocation term, never the mapping")
 }
+
+// TestHnswEmptyGeneration: a loaded generation with no models, or only empty (0-vector) models
+// (a freshly created index, or the async-build window before the first model is written), reports
+// EmptyGeneration -> true, so the cache does not retain a vector-less generation. A generation
+// with any populated model reports false.
+func TestHnswEmptyGeneration(t *testing.T) {
+	newModel := func(withVec bool) *HnswModel[float32] {
+		idxcfg := usearch.DefaultConfig(3)
+		idxcfg.Metric = usearch.L2sq
+		uidx, err := usearch.NewIndex(idxcfg)
+		require.NoError(t, err)
+		if withVec {
+			require.NoError(t, uidx.Reserve(1))
+			require.NoError(t, uidx.Add(usearch.Key(0), []float32{1, 2, 3}))
+		}
+		return &HnswModel[float32]{Index: uidx}
+	}
+
+	// No models loaded -> empty generation.
+	require.True(t, (&HnswSearch[float32]{}).EmptyGeneration())
+
+	// All loaded models empty (usearch Len 0) -> empty generation.
+	e1 := newModel(false)
+	defer func() { require.NoError(t, e1.Index.Destroy()) }()
+	require.True(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e1}}).EmptyGeneration())
+
+	// At least one populated model -> not empty.
+	e2 := newModel(false)
+	defer func() { require.NoError(t, e2.Index.Destroy()) }()
+	full := newModel(true)
+	defer func() { require.NoError(t, full.Index.Destroy()) }()
+	require.False(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e2, full}}).EmptyGeneration())
+}

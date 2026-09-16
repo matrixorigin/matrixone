@@ -357,6 +357,16 @@ func (s *CagraSearch[B, Q]) IsStale() (bool, error) {
 	return ts != s.loadedTs || tail != s.loadedTail, nil
 }
 
+// EmptyGeneration reports a loaded generation with no vectors: no main index (MultiIndex nil,
+// every sub-index empty) AND no CDC overflow rows -- a freshly created index, or the async-build
+// window before the first vectors are committed. Search returns empty on that state. The cache
+// declines to retain it, so the next query reloads and picks up the vectors once the build writes
+// them under the same generation -- instead of pinning an empty generation until the IsStale sweep
+// evicts it. A generation with a main index or overflow rows is cached normally.
+func (s *CagraSearch[B, Q]) EmptyGeneration() bool {
+	return s.MultiIndex == nil && s.Overflow == nil
+}
+
 // loadCdcTail loads the tag=1 event-log rows persisted by CDC under the
 // fixed vectorindex.CdcTailId sentinel, replays them to derive the
 // (deleted, overflow) state, applies the deletes to every loaded sub-index
