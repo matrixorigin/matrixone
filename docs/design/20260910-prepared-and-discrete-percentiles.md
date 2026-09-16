@@ -21,11 +21,12 @@ implementation is accepted. Any later implementation change that alters the
 public type set, rank relation, cache transition, retained payload, or protocol
 gate requires design re-review.
 
-The extended discrete-percentile admission boundary is MORPC v81. Main owns
-v76-v80 for NaN-ordered percentiles, HLL/DISTINCT/group-key state, and string
-numeric result contracts; those gates remain unchanged. Prepared approximate
-percentiles retain main's v76 explicit direction configuration, including its
-SQL NaN ordering, rather than translating a descending percentile to `1-p`.
+The extended discrete-percentile admission boundary is MORPC v82. Main owns
+v76-v81 for NaN-ordered percentiles, HLL/DISTINCT/group-key state, string
+numeric result contracts, and table-owned auto-ID cache; those gates remain
+unchanged. Prepared approximate percentiles retain main's v76 explicit
+direction configuration, including its SQL NaN ordering, rather than
+translating a descending percentile to `1-p`.
 
 ## Problem and goals
 

@@ -579,9 +579,9 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 	require.ErrorContains(
 		t,
 		validateRemoteAggregateProtocol(proc, extended),
-		"extended discrete percentile input types require MORPC protocol version 81",
+		"extended discrete percentile input types require MORPC protocol version 82",
 	)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion82)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, extended))
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion80)
 	require.Error(t, validateRemoteAggregateProtocol(proc, extended),

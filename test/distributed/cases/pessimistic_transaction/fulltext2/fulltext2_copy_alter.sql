@@ -1,3 +1,9 @@
+-- @skip:issue#28985
+-- Skipped: flaky in multi-CN CI. The final section asserts that a warm per-CN fulltext2 cache
+-- reflects a subsequent CDC tail flush, but cross-CN cache refresh is EVENTUAL by design (the
+-- ~10m IsStale pull sweep; RemoveIdle evicts only the consumer CN -- see the won't-fix note in
+-- pkg/vectorindex/cache/cache.go), so a MATCH routed to a non-consumer CN drops the new rows.
+-- Tracked in #28985; unskip once the case is made multi-CN-deterministic (or scoped single-CN).
 -- Regression for #28837 (fulltext2): an UNRELATED COPY ALTER (ADD COLUMN, which does not
 -- touch the indexed column) must not leave the FULLTEXT2 index empty. cloneUnaffectedIndexes
 -- marks fulltext2 SkipWholeIndex, so the ALTER clones the table to a NEW id with an empty

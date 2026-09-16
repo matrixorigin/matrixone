@@ -8006,7 +8006,7 @@ func supportsRemoteOrderedSetExtendedTypes(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion81
+	return ok && protocolVersion >= defines.MORPCVersion82
 }
 
 func supportsRemoteApproxPercentile(service string) bool {
