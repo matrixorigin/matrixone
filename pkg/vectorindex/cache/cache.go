@@ -950,6 +950,11 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 	var emptyGen bool
 	rt.EmptyGeneration = &emptyGen
 	for {
+		// Per ITERATION, not per call: the flag describes the generation THIS attempt searched,
+		// and a retry searches a different one. VectorIndexSearch.Search writes it only after
+		// the algo ran, so an attempt that returns before that (a torn-down entry, a failed
+		// load) must not be judged on the previous attempt's generation.
+		emptyGen = false
 		s := newVectorIndexSearch(newalgo)
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
@@ -1077,6 +1082,11 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 	var emptyGen bool
 	rt.EmptyGeneration = &emptyGen
 	for {
+		// Per ITERATION, not per call: the flag describes the generation THIS attempt searched,
+		// and a retry searches a different one. VectorIndexSearch.Search writes it only after
+		// the algo ran, so an attempt that returns before that (a torn-down entry, a failed
+		// load) must not be judged on the previous attempt's generation.
+		emptyGen = false
 		s := newVectorIndexSearch(newalgo)
 		value, loaded := c.IndexMap.LoadOrStore(key, s)
 		algo := value.(*VectorIndexSearch)
