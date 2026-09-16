@@ -3801,7 +3801,7 @@ func rewritePreparedPrecisionBitwiseOperandsInPlace(expr *Expr, resolvedDomain t
 			continue
 		}
 		sourceType := makeTypeByPlan2Expr(cast.Args[0])
-		if !sourceType.IsNumeric() && preparedPrecisionHasFallbackSource(cast.Args[0]) && resolvedDomain.IsNumeric() {
+		if !sourceType.IsNumeric() && preparedPrecisionBitwiseUsesResolvedDomain(cast.Args[0]) && resolvedDomain.IsNumeric() {
 			sourceType = resolvedDomain
 		}
 		if sourceType.Oid.IsFloat() {
@@ -3814,6 +3814,30 @@ func rewritePreparedPrecisionBitwiseOperandsInPlace(expr *Expr, resolvedDomain t
 			setPreparedCastOverload(arg, 5)
 		}
 	}
+}
+
+func preparedPrecisionBitwiseUsesResolvedDomain(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && types.T(expr.Typ.Id).IsMySQLString() {
+		name := ""
+		if fn.Func != nil {
+			name = fn.Func.GetObjName()
+		}
+		if name == "cast" && len(fn.Args) > 0 && !fn.GetSyntaxExplicitCast() {
+			return preparedPrecisionBitwiseUsesResolvedDomain(fn.Args[0])
+		}
+		if name != "ifnull" && name != "coalesce" && name != "case" {
+			return false
+		}
+		for _, arg := range fn.Args {
+			if types.T(arg.Typ.Id).IsMySQLString() && !preparedPrecisionBitwiseUsesResolvedDomain(arg) {
+				return false
+			}
+		}
+	}
+	return preparedPrecisionProducerUsesResolvedDomain(expr)
 }
 
 func preparedPrecisionBitwiseFunction(name string) bool {

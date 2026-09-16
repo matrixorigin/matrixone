@@ -532,6 +532,48 @@ func TestPreparedExportSetPrecisionDecimalBitwiseSaturation(t *testing.T) {
 	}
 }
 
+func TestPreparedExportSetPrecisionTextBitwiseProducer(t *testing.T) {
+	_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 404,
+		`select export_set(truncate(15.5,ifnull(concat(x,''),'0') & 1),'Y','N','',4) from (select ? as x) d`)
+	defer stmt.Close()
+	values := []any{plan2.ParamValue{Value: "0.5", SourceType: types.New(types.T_decimal64, 2, 1),
+		HasSourceType: true, EnableNumericPrefix: true}}
+	stmt.applyExportSetNullRuntimeTypes(values)
+	filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx,
+		stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+	require.NoError(t, err)
+	q := filled.GetQuery()
+	expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	defer input.Clean(cw.proc.Mp())
+	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("0.5"), false, cw.proc.Mp()))
+	input.SetRowCount(1)
+	result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{input})
+	require.NoError(t, err)
+	defer free()
+	require.Equal(t, "YYYY", result.GetStringAt(0), "expr=%s", expr.String())
+}
+
+func TestPreparedExportSetSiblingAbsKeepsDecimalDomain(t *testing.T) {
+	_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 405,
+		`select export_set(x,'Y','N','',4),abs(x) from (select ? as x) d`)
+	defer stmt.Close()
+	values := []any{plan2.ParamValue{Value: "2.5", SourceType: types.New(types.T_decimal64, 2, 1),
+		HasSourceType: true, EnableNumericPrefix: true}}
+	stmt.applyExportSetNullRuntimeTypes(values)
+	filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx,
+		stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+	require.NoError(t, err)
+	q := filled.GetQuery()
+	root := q.Nodes[q.Steps[len(q.Steps)-1]]
+	require.Len(t, root.ProjectList, 2)
+	abs := root.ProjectList[1]
+	require.Equal(t, int32(types.T_decimal64), abs.Typ.Id, "expr=%s", abs.String())
+	require.Equal(t, int32(types.T_decimal64), abs.GetF().Args[0].Typ.Id)
+	require.Nil(t, abs.GetF().Args[0].GetF(), "ABS must consume the refreshed producer directly")
+}
+
 func TestPreparedExportSetPrecisionExpressionOverflow(t *testing.T) {
 	_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 400,
 		`select export_set(round(15.5,abs(x)),'Y','N','',4) from (select ? as x) d`)

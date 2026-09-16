@@ -7446,6 +7446,18 @@ func refreshPreparedPlanProjectionExprType(
 				changed = true
 			}
 		}
+		if functionName == "abs" {
+			for i, arg := range exprImpl.F.Args {
+				if cast := arg.GetF(); cast != nil && cast.Func != nil && cast.Func.GetObjName() == "cast" &&
+					len(cast.Args) > 0 && !cast.GetSyntaxExplicitCast() && makeTypeByPlan2Expr(cast.Args[0]).IsNumeric() {
+					// A sibling EXPORT_SET may have provisionally forced the shared
+					// producer through INT64. ABS owns no integer conversion: rebind
+					// it from the refreshed producer domain instead.
+					exprImpl.F.Args[i] = DeepCopyExpr(cast.Args[0])
+					changed = true
+				}
+			}
+		}
 		argsChanged := false
 		for i, arg := range exprImpl.F.Args {
 			if arg != nil && !reflect.DeepEqual(arg.Typ, originalArgTypes[i]) {

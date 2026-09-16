@@ -1089,6 +1089,20 @@ EXECUTE export_set_precision_greatest_text USING @export_set_bits;
 ➤ EXPORT_SET(TRUNCATE(15.5, GREATEST(COALESCE(x, 0), 0)), Y, N, , 4)[12,64,0]  𝄀
 YYYY
 DEALLOCATE PREPARE export_set_precision_greatest_text;
+PREPARE export_set_precision_text_bitwise FROM
+"SELECT EXPORT_SET(TRUNCATE(15.5,IFNULL(CONCAT(x,''),'0') & 1),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = CAST(0.5 AS DECIMAL(2,1));
+EXECUTE export_set_precision_text_bitwise USING @export_set_bits;
+➤ EXPORT_SET(TRUNCATE(15.5, IFNULL(CONCAT(x, ), 0) & 1), Y, N, , 4)[12,64,0]  𝄀
+YYYY
+DEALLOCATE PREPARE export_set_precision_text_bitwise;
+PREPARE export_set_sibling_abs FROM
+"SELECT EXPORT_SET(x,'Y','N','',4),ABS(x) FROM (SELECT ? AS x) d";
+SET @export_set_bits = CAST(2.5 AS DECIMAL(2,1));
+EXECUTE export_set_sibling_abs USING @export_set_bits;
+➤ EXPORT_SET(x, Y, N, , 4)[12,64,0]  ¦  ABS(x)[3,2,1]  𝄀
+YYNN  ¦  2.5
+DEALLOCATE PREPARE export_set_sibling_abs;
 PREPARE export_set_precision_decimal_history FROM
 "SELECT EXPORT_SET(ROUND(15.5,x),'Y','N','',4) FROM (SELECT ? AS x) d";
 SET @export_set_bits = CAST(-0.5 AS DECIMAL(2,1));

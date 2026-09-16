@@ -146,6 +146,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if features.ExportSetNumericContracts {
+		if err = validateExportSetNumericDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -2162,6 +2167,12 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {
 		return moerr.NewNotSupportedNoCtx(
 			"corrected string numeric result contracts require MORPC protocol version 80",
+		)
+	}
+	if features.ExportSetNumericContracts &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion81) {
+		return moerr.NewNotSupportedNoCtx(
+			"prepared EXPORT_SET numeric contracts require MORPC protocol version 81",
 		)
 	}
 	if features.IPFunctionSemantics &&

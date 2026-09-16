@@ -231,6 +231,8 @@ const (
 // StringNumericResultContracts requires MORPC v80 because the listed string
 // numeric functions keep overload IDs while changing their physical result
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
+// ExportSetNumericContracts requires MORPC v81 because EXPORT_SET float
+// semantics changed and private CAST overload 5 does not exist on old workers.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                bool
 	JSONComparisonParam          bool
@@ -241,6 +243,7 @@ type RemoteExpressionFeatures struct {
 	RowDependentConvBases        bool
 	ASCIIInt32Result             bool
 	StringNumericResultContracts bool
+	ExportSetNumericContracts    bool
 	IPFunctionSemantics          bool
 }
 
@@ -254,6 +257,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.IntegerArithmeticDomains ||
 		features.RowDependentConvBases ||
 		features.StringNumericResultContracts ||
+		features.ExportSetNumericContracts ||
 		features.IPFunctionSemantics
 }
 
@@ -339,6 +343,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.StringNumericResultContracts && isStringNumericResultContract(current) {
 				features.StringNumericResultContracts = true
 			}
+			if !features.ExportSetNumericContracts && isExportSetNumericContract(current) {
+				features.ExportSetNumericContracts = true
+			}
 			if !features.IPFunctionSemantics && fn != nil && fn.Func != nil {
 				features.IPFunctionSemantics = isRemoteIPFunction(int32(fn.Func.Obj >> 32))
 			}
@@ -346,6 +353,24 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 		})
 	})
 	return
+}
+
+func isExportSetNumericContract(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	functionID, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+	if functionID == 21 && (overload == 4 || overload == 5) {
+		return true
+	}
+	if functionID != 385 && !strings.EqualFold(fn.Func.GetObjName(), "export_set") {
+		return false
+	}
+	return len(fn.Args) > 0 && (fn.Args[0].Typ.Id == 30 || fn.Args[0].Typ.Id == 31)
 }
 
 // isASCIIInt32Result identifies the new physical result contract of ASCII.
