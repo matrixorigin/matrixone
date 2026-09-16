@@ -165,6 +165,9 @@ func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
 		{`select substring_index(?,".",?)`, []int32{1}},
 		{`select substring_index("a.b.c",".",cast(? as double))`, []int32{0}},
 		{`select substring_index("a.b.c",".",if(?,?,?))`, []int32{1, 2}},
+		{`select substring_index("a.b.c",".",coalesce(?,0e0))`, []int32{0}},
+		{`select substring_index("a.b.c",".",ifnull(?,0e0))`, []int32{0}},
+		{`select substring_index("a.b.c",".",(select ? where true))`, []int32{0}},
 		{`select substring_index(?,".",2)`, nil},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
@@ -247,6 +250,21 @@ func TestIntegerArgumentPreparedSelectors(t *testing.T) {
 			},
 			"a.b",
 		},
+		{
+			`select substring_index("a.b.c.d",".",coalesce(?,0e0))`,
+			[]any{ParamValue{Value: float64(1.5), IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_float64.ToType()}},
+			"a.b",
+		},
+		{
+			`select substring_index("a.b.c.d",".",ifnull(?,0e0))`,
+			[]any{ParamValue{Value: float64(1.5), IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_float64.ToType()}},
+			"a.b",
+		},
+		{
+			`select substring_index("a.b.c.d",".",coalesce(?,"0"))`,
+			[]any{ParamValue{Value: float64(1.5), IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_float64.ToType()}},
+			"a",
+		},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare integer_selector from '"+tc.query+"'")
@@ -262,6 +280,49 @@ func TestIntegerArgumentPreparedSelectors(t *testing.T) {
 			require.Equal(t, tc.want, result.GetStringAt(0))
 		})
 	}
+}
+
+func TestIntegerArgumentPreparedScalarSubquery(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare integer_scalar from 'select substring_index("a.b.c.d",".",(select ? where true))'`)
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().Plan
+	require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(original))
+
+	bound, changed, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(proc.Ctx, original, []any{
+		ParamValue{Value: float64(1.5), IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_float64.ToType()},
+	})
+	require.NoError(t, err)
+	require.True(t, changed)
+	query := bound.GetQuery()
+	root := query.Nodes[query.Steps[0]]
+	privateCast := root.ProjectList[0].GetF().Args[2]
+	require.True(t, isIntegerArgumentCast(privateCast))
+	require.Equal(t, int32(types.T_float64), privateCast.GetF().Args[0].Typ.Id)
+
+	var scalarProjection *Expr
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != planpb.Node_PROJECT || len(node.ProjectList) != 1 {
+			continue
+		}
+		if literal := node.ProjectList[0].GetLit(); literal != nil && literal.GetDval() == 1.5 {
+			scalarProjection = node.ProjectList[0]
+			break
+		}
+	}
+	require.NotNil(t, scalarProjection)
+	inner, freeInner, err := colexec.GetReadonlyResultFromExpression(
+		proc, scalarProjection, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, err)
+	defer freeInner()
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = inner
+	input.SetRowCount(1)
+	result, freeResult, err := colexec.GetReadonlyResultFromExpression(proc, root.ProjectList[0], []*batch.Batch{input})
+	require.NoError(t, err)
+	defer freeResult()
+	require.Equal(t, "a.b", result.GetStringAt(0))
 }
 
 func TestIntegerArgumentPreparedSourceEvaluation(t *testing.T) {

@@ -1071,28 +1071,34 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 		return nil
 	}
 	positions := make(map[int32]struct{})
-	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
-		fn := expr.GetF()
-		_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
-			if isIntegerArgumentCast(nested) {
-				for pos := range preparedNumericValueParamPositions(nested.GetF().Args[0]) {
-					positions[pos] = struct{}{}
+	query := preparePlan.GetQuery()
+	for nodeID, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		_ = plan.VisitExpressionsInOwner(node, func(expr *plan.Expr) error {
+			fn := expr.GetF()
+			_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+				if isIntegerArgumentCast(nested) {
+					collectPreparedIntegerArgumentParamPositions(
+						query, int32(nodeID), nested.GetF().Args[0], positions,
+						make(map[[2]int32]struct{}))
 				}
+				return nil
+			})
+			if fn == nil || fn.Func == nil {
+				return nil
+			}
+			arg, ok := preparedNumericFallbackFunctionArg(fn)
+			if !ok {
+				return nil
+			}
+			for pos := range preparedNumericValueParamPositions(arg) {
+				positions[pos] = struct{}{}
 			}
 			return nil
 		})
-		if fn == nil || fn.Func == nil {
-			return nil
-		}
-		arg, ok := preparedNumericFallbackFunctionArg(fn)
-		if !ok {
-			return nil
-		}
-		for pos := range preparedNumericValueParamPositions(arg) {
-			positions[pos] = struct{}{}
-		}
-		return nil
-	})
+	}
 	if len(positions) == 0 {
 		return nil
 	}
@@ -1102,6 +1108,54 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
+}
+
+// collectPreparedIntegerArgumentParamPositions follows only projected ColRef
+// lineage from the private CAST's owning node. After scalar-subquery
+// flattening, the outer CAST sees a ColRef while the contributing ParamRef
+// remains in an inner PROJECT expression. Predicate-only markers stay outside
+// this projection walk and cannot become value candidates.
+func collectPreparedIntegerArgumentParamPositions(
+	query *plan.Query,
+	nodeID int32,
+	expr *plan.Expr,
+	positions map[int32]struct{},
+	visited map[[2]int32]struct{},
+) {
+	if query == nil || expr == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return
+	}
+	for pos := range preparedNumericValueParamPositions(expr) {
+		positions[pos] = struct{}{}
+	}
+	_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+		col := nested.GetCol()
+		if col == nil || col.ColPos < 0 {
+			return nil
+		}
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return nil
+		}
+		childID := int32(-1)
+		if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+			childID = node.Children[col.RelPos]
+		} else if len(node.Children) == 1 {
+			childID = node.Children[0]
+		}
+		key := [2]int32{childID, col.ColPos}
+		if _, ok := visited[key]; ok || childID < 0 || int(childID) >= len(query.Nodes) {
+			return nil
+		}
+		child := query.Nodes[childID]
+		if child == nil || int(col.ColPos) >= len(child.ProjectList) || child.ProjectList[col.ColPos] == nil {
+			return nil
+		}
+		visited[key] = struct{}{}
+		collectPreparedIntegerArgumentParamPositions(
+			query, childID, child.ProjectList[col.ColPos], positions, visited)
+		return nil
+	})
 }
 
 // PreparedPlanBitCountFallbackParamPositions returns unresolved BIT_COUNT

@@ -95,6 +95,24 @@ func (b *baseBinder) bindIntegerSourceAst(ast tree.Expr, depth int32, target typ
 			}
 			return bindIntegerSelector(b.GetContext(), []*Expr{predicate, yes, no}, function.IntegerArgumentUsesBitSources(name, position))
 		}
+		if callee == "coalesce" || callee == "ifnull" {
+			// These are value-producing boundaries rather than transparent
+			// selectors, but their prepared markers still need the numeric domain
+			// proven by sibling values. Otherwise PREPARE reconciles a marker and
+			// 0e0 as TEXT, and EXECUTE cannot recover DOUBLE semantics from the
+			// already-converted literal.
+			physical := target.ToType()
+			planTarget := makePlan2Type(&physical)
+			source, err := b.bindNumericExprWithContext(value, depth, &planTarget)
+			if err != nil {
+				return nil, err
+			}
+			source, err = b.integerArgumentStorageSource(source)
+			if err != nil {
+				return nil, err
+			}
+			return appendIntegerArgument(b.GetContext(), source, target, false)
+		}
 	}
 	source, err := b.impl.BindExpr(ast, depth, false)
 	if err != nil {
