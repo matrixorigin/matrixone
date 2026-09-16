@@ -47,7 +47,7 @@ Invalid data type for JSON data in argument 1 to function json_depth; a JSON str
 SELECT JSON_DEPTH(CAST('1' AS BINARY)) AS result;
 Invalid data type for JSON data in argument 1 to function json_depth; a JSON string or JSON type is required.
 SELECT JSON_DEPTH(CONCAT(REPEAT('{"a":', 100), '1', REPEAT('}', 100))) AS result;
-➤ JSON_DEPTH(concat(repeat({"a":, 100), 1, repeat(}, 100)))[-5,64,0]  𝄀
+➤ result[-5,64,0]  𝄀
 101
 SELECT JSON_DEPTH(CONCAT(REPEAT('{"a":', 101), '1', REPEAT('}', 101))) AS result;
 invalid input: json document nesting depth exceeds 100

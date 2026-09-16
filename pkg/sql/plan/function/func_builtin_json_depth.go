@@ -143,6 +143,9 @@ func JsonDepth(
 			err      error
 		)
 		if ivecs[0].GetType().Oid == types.T_json {
+			if len(value) == 0 {
+				return 0, jsonStorageInvalidArg(proc, "json_depth")
+			}
 			document = types.DecodeJson(value)
 			if !bytejson.IsValidByteJson(document) {
 				return 0, jsonStorageInvalidArg(proc, "json_depth")
