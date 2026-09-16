@@ -226,8 +226,6 @@ func (task *mergeObjectsTask) GetMPool() *mpool.MPool {
 	return task.rt.VectorPool.Transient.GetMPool()
 }
 
-func (task *mergeObjectsTask) HostHintName() string { return "TN" }
-
 func (task *mergeObjectsTask) LoadNextBatch(
 	ctx context.Context, objIdx uint32, reuseBatch *batch.Batch,
 ) (*batch.Batch, *nulls.Nulls, func(), error) {

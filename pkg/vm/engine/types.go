@@ -1174,8 +1174,6 @@ type Relation interface {
 	PrimaryKeysMayBeUpserted(ctx context.Context, from types.TS, to types.TS, batch *batch.Batch, pkIndex int32) (bool, error)
 
 	ApproxObjectsNum(ctx context.Context) int
-	MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error)
-	GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error)
 
 	// GetFlushTS returns the flush timestamp of the relation.
 	GetFlushTS(ctx context.Context) (types.TS, error)
