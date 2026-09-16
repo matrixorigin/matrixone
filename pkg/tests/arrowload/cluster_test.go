@@ -113,6 +113,43 @@ func startArrowLoadClusterWithForceModes(t testing.TB) embed.Cluster {
 	return c
 }
 
+// startArrowLoadClusterWithGateModes provisions the two static gate policies
+// in one test-owned cluster. The tests use different CNs, so each policy keeps
+// its own frontend configuration while sharing the expensive cluster lifecycle.
+func startArrowLoadClusterWithGateModes(t testing.TB) embed.Cluster {
+	t.Helper()
+	nextCN := 0
+	c, err := embed.StartTestCluster(
+		embed.WithCNCount(2),
+		embed.WithPreStart(func(svc embed.ServiceOperator) {
+			if svc.ServiceType() != metadata.ServiceType_CN {
+				return
+			}
+			cnIndex := nextCN
+			nextCN++
+			svc.Adjust(func(cfg *embed.ServiceConfig) {
+				cfg.CN.Frontend.ArrowLoad.Enabled = cnIndex != 0
+				cfg.CN.Frontend.ArrowLoad.S3Enabled = true
+				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = cnIndex == 0
+			})
+		}))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
+	require.NoError(t, err)
+	return c
+}
+
+func requireArrowLoadPolicy(t testing.TB, c embed.Cluster, cnIndex int, enabled, s3Enabled, distributedEnabled bool) {
+	t.Helper()
+	cn, err := c.GetCNService(cnIndex)
+	require.NoError(t, err)
+	arrowLoad := cn.GetServiceConfig().CN.Frontend.ArrowLoad
+	require.Equal(t, enabled, arrowLoad.Enabled, "CN%d Arrow LOAD enabled policy", cnIndex)
+	require.Equal(t, s3Enabled, arrowLoad.S3Enabled, "CN%d Arrow LOAD S3 policy", cnIndex)
+	require.Equal(t, distributedEnabled, arrowLoad.DistributedEnabled, "CN%d Arrow LOAD distributed policy", cnIndex)
+}
+
 // adjustArrowLoadCluster changes only the next CN generation's rollout
 // settings. Callers close the current generation before adjustment and restart
 // afterward, so an admitted statement always keeps the policy snapshot carried

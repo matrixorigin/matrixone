@@ -248,6 +248,105 @@ func TestCacheRemovePrefix(t *testing.T) {
 	Cache.Destroy()
 }
 
+// emptyGenSearch is a MockSearch that reports EmptyGeneration, exercising the cache's
+// not-cache-empty path (fulltext2's base-less + cdc_tail-less generation).
+type emptyGenSearch struct {
+	MockSearch
+	empty bool
+}
+
+func (m *emptyGenSearch) EmptyGeneration() bool { return m.empty }
+
+// TestCacheNotCacheEmpty: a loaded generation reporting EmptyGeneration (no tag=0 base, no
+// tag=1 cdc_tail) is served but NOT retained, so the next query reloads and picks up the base
+// once it appears -- the deterministic guard for the copy-alter base-less window regression. A
+// data-bearing generation is cached as usual. Covers both the Search and SearchInto paths.
+func TestCacheNotCacheEmpty(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+
+	Cache = NewVectorIndexCache()
+	// Empty generation via Search: served, then evicted (not retained).
+	empty := &emptyGenSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: true}
+	_, _, err := Cache.Search(sqlproc, "empty_idx", empty, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.Nil(t, err)
+	_, ok := Cache.IndexMap.Load("empty_idx")
+	require.False(t, ok, "a base-less + cdc_tail-less generation must not be retained")
+
+	// Non-empty generation via Search: cached as usual.
+	full := &emptyGenSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: false}
+	_, _, err = Cache.Search(sqlproc, "full_idx", full, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.Nil(t, err)
+	_, ok = Cache.IndexMap.Load("full_idx")
+	require.True(t, ok, "a data-bearing generation must be cached")
+
+	// SearchInto path: same not-cache-empty contract.
+	var out vectorindex.SearchOutput
+	empty2 := &emptyGenSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: true}
+	require.Nil(t, Cache.SearchInto(sqlproc, "empty_idx2", empty2, fp32a, vectorindex.RuntimeConfig{Limit: 4}, &out))
+	_, ok = Cache.IndexMap.Load("empty_idx2")
+	require.False(t, ok, "SearchInto must not retain a base-less + cdc_tail-less generation")
+
+	Cache.Destroy()
+}
+
+// baseAwareSearch reports EmptyGeneration and returns a configurable result, so a reload can
+// observe a different (populated) generation than the evicted base-less one.
+type baseAwareSearch struct {
+	MockSearch
+	empty bool
+	keys  []int64
+}
+
+func (m *baseAwareSearch) EmptyGeneration() bool { return m.empty }
+
+func (m *baseAwareSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (any, []float64, error) {
+	return m.keys, make([]float64, len(m.keys)), nil
+}
+
+// TestCacheNotCacheEmptyReloadsBase is the deterministic #28837 closure a SQL BVT cannot prove:
+// the copy-alter prewarm cannot be held before the async REINDEX publishes the base, so its
+// count(*)>=0 passes whether or not the base-less generation was retained. Here the two loads
+// are ordered by hand. A base-less generation (REINDEX not yet done) is served empty and, by
+// the not-cache-empty fix, is NOT retained. When the base is published, the SAME cache and key
+// reload a populated generation and return its rows -- with NO RemoveIdle (CDC flush) and NO
+// HouseKeeping (staleness sweep) in between. Were the base-less generation retained, the second
+// Search would LoadOrStore-hit it and return empty (the bug), so the []int64{42} assertion has
+// teeth.
+func TestCacheNotCacheEmptyReloadsBase(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+
+	Cache = NewVectorIndexCache()
+	t.Cleanup(func() { Cache.Destroy() })
+	key := "reload_idx"
+
+	// Base-less initialization window: served empty, and not retained.
+	empty := &baseAwareSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: true, keys: []int64{}}
+	k1, _, err := Cache.Search(sqlproc, key, empty, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.Nil(t, err)
+	require.Empty(t, k1.([]int64))
+	_, ok := Cache.IndexMap.Load(key)
+	require.False(t, ok, "a base-less + cdc_tail-less generation must not be retained")
+
+	// Base published. No RemoveIdle, no HouseKeeping -- the reload happens purely because the
+	// empty generation was evicted, so the same key LoadOrStore-misses and loads the base.
+	base := &baseAwareSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: false, keys: []int64{42}}
+	k2, _, err := Cache.Search(sqlproc, key, base, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.Nil(t, err)
+	require.Equal(t, []int64{42}, k2.([]int64), "the same CN must reload and pick up the published base")
+	_, ok = Cache.IndexMap.Load(key)
+	require.True(t, ok, "a data-bearing generation must be retained")
+}
+
 func TestCacheAny(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
