@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -252,67 +253,59 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
 			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("use `%s`", dbName))
 
-			t.Run("single_pk_with_base", func(t *testing.T) {
-				runSinglePKWithBase(t, ctx, sqlDB, dbName)
-			})
-			t.Run("composite_pk_with_base", func(t *testing.T) {
-				runMultiPKWithBase(t, ctx, sqlDB, dbName)
-			})
-			t.Run("single_pk_without_base", func(t *testing.T) {
-				runSinglePKNoBase(t, ctx, sqlDB, dbName)
-			})
-			t.Run("composite_pk_without_base", func(t *testing.T) {
-				runMultiPKNoBase(t, ctx, sqlDB, dbName)
-			})
-			t.Run("composite_multi_column_mutations", func(t *testing.T) {
-				runCompositeDiffMultiColumn(t, ctx, sqlDB, dbName)
-			})
-			t.Run("single_pk_update_split", func(t *testing.T) {
-				runUpdateSplitDiffAsFile(t, ctx, sqlDB, dbName)
-			})
-			t.Run("composite_pk_update_split", func(t *testing.T) {
-				runCompositeUpdateSplitDiffAsFile(t, ctx, sqlDB, dbName)
-			})
-			t.Run("no_pk_duplicates_and_null_delete", func(t *testing.T) {
-				runNoPKDuplicateDiffAsFile(t, ctx, sqlDB, dbName)
-			})
-			t.Run("complex_types_and_string_edges", func(t *testing.T) {
-				runComplexTypeDiffAsFile(t, ctx, sqlDB, dbName)
-			})
-			t.Run("sql_null_values", func(t *testing.T) {
-				runSQLDiffHandlesNulls(t, ctx, sqlDB, dbName)
-			})
-			t.Run("database_branch_metadata", func(t *testing.T) {
-				runBranchDatabaseMetadata(t, ctx, sqlDB, dbName+"_metadata")
-				execSQLDB(t, ctx, sqlDB, fmt.Sprintf("use `%s`", dbName))
-			})
-			t.Run("csv_multi_block_round_trip", func(t *testing.T) {
-				runCSVLoadSimple(t, ctx, sqlDB, dbName)
-			})
-			t.Run("csv_rich_types_round_trip", func(t *testing.T) {
-				runCSVLoadRichTypes(t, ctx, sqlDB, dbName)
-			})
-			t.Run("csv_user_diff_prefix_identifier", func(t *testing.T) {
-				runCSVUserDiffPrefixIdentifier(t, ctx, sqlDB, dbName)
-			})
-			t.Run("output_limit_subset", func(t *testing.T) {
-				runDiffOutputLimitSubset(t, ctx, sqlDB, dbName)
-			})
-			t.Run("output_limit_without_base", func(t *testing.T) {
-				runDiffOutputLimitNoBase(t, ctx, sqlDB, dbName)
-			})
-			t.Run("output_limit_multi_block", func(t *testing.T) {
-				runDiffOutputLimitMultiBlockBase(t, ctx, sqlDB, dbName)
-			})
-			t.Run("output_summary", func(t *testing.T) {
-				runDiffOutputSummaryComplex(t, ctx, sqlDB, dbName)
-			})
-			t.Run("stage_round_trip", func(t *testing.T) {
-				runDiffOutputToStage(t, ctx, sqlDB, dbName)
-			})
-			t.Run("update_apply_special_columns", func(t *testing.T) {
-				runDataBranchUpdateApplySpecialColumns(t, ctx, sqlDB)
-			})
+			cases := []struct {
+				name string
+				run  func(*testing.T, context.Context, *sql.DB, string)
+			}{
+				{name: "single_pk_with_base", run: runSinglePKWithBase},
+				{name: "composite_pk_with_base", run: runMultiPKWithBase},
+				{name: "single_pk_without_base", run: runSinglePKNoBase},
+				{name: "composite_pk_without_base", run: runMultiPKNoBase},
+				{name: "composite_multi_column_mutations", run: runCompositeDiffMultiColumn},
+				{name: "single_pk_update_split", run: runUpdateSplitDiffAsFile},
+				{name: "composite_pk_update_split", run: runCompositeUpdateSplitDiffAsFile},
+				{name: "no_pk_duplicates_and_null_delete", run: runNoPKDuplicateDiffAsFile},
+				{name: "complex_types_and_string_edges", run: runComplexTypeDiffAsFile},
+				{name: "sql_null_values", run: runSQLDiffHandlesNulls},
+				{name: "database_branch_metadata", run: func(t *testing.T, ctx context.Context, db *sql.DB, dbName string) {
+					runBranchDatabaseMetadata(t, ctx, db, dbName+"_metadata")
+					execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+				}},
+				{name: "csv_multi_block_round_trip", run: runCSVLoadSimple},
+				{name: "csv_rich_types_round_trip", run: runCSVLoadRichTypes},
+				{name: "csv_user_diff_prefix_identifier", run: runCSVUserDiffPrefixIdentifier},
+				{name: "output_limit_subset", run: runDiffOutputLimitSubset},
+				{name: "output_limit_without_base", run: runDiffOutputLimitNoBase},
+				{name: "output_limit_multi_block", run: runDiffOutputLimitMultiBlockBase},
+				{name: "output_summary", run: runDiffOutputSummaryComplex},
+				{name: "stage_round_trip", run: runDiffOutputToStage},
+				{name: "update_apply_special_columns", run: func(t *testing.T, ctx context.Context, db *sql.DB, _ string) {
+					runDataBranchUpdateApplySpecialColumns(t, ctx, db)
+				}},
+			}
+
+			sem := make(chan struct{}, 2)
+			var wg sync.WaitGroup
+			for _, tc := range cases {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					sem <- struct{}{}
+					defer func() { <-sem }()
+
+					t.Run(tc.name, func(t *testing.T) {
+						subDB, openErr := sql.Open("mysql", dsn)
+						require.NoError(t, openErr)
+						defer subDB.Close()
+						subDB.SetMaxOpenConns(1)
+						subCtx, subCancel := context.WithTimeout(ctx, time.Second*240)
+						defer subCancel()
+						execSQLDB(t, subCtx, subDB, fmt.Sprintf("use `%s`", dbName))
+						tc.run(t, subCtx, subDB, dbName)
+					})
+				}()
+			}
+			wg.Wait()
 		})
 }
 
