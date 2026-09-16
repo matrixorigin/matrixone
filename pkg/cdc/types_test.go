@@ -652,6 +652,31 @@ func TestPatternTuples_Append(t *testing.T) {
 	}
 }
 
+func TestNormalizeCDCSourcePatternCase(t *testing.T) {
+	pts := &PatternTuples{Pts: []*PatternTuple{
+		{
+			Source: PatternTable{Database: "SourceDB", Table: "SourceTable"},
+			Sink:   PatternTable{Database: "SinkDB", Table: "SinkTable"},
+		},
+		{
+			Source: PatternTable{Database: CDCPitrGranularity_All, Table: CDCPitrGranularity_All},
+			Sink:   PatternTable{Database: CDCPitrGranularity_All, Table: CDCPitrGranularity_All},
+		},
+	}}
+
+	NormalizeCDCSourcePatternCase(pts, 0)
+	assert.Equal(t, "SourceDB", pts.Pts[0].Source.Database)
+	assert.Equal(t, "SourceTable", pts.Pts[0].Source.Table)
+
+	NormalizeCDCSourcePatternCase(pts, 1)
+	assert.Equal(t, "sourcedb", pts.Pts[0].Source.Database)
+	assert.Equal(t, "sourcetable", pts.Pts[0].Source.Table)
+	assert.Equal(t, "SinkDB", pts.Pts[0].Sink.Database)
+	assert.Equal(t, "SinkTable", pts.Pts[0].Sink.Table)
+	assert.Equal(t, CDCPitrGranularity_All, pts.Pts[1].Source.Database)
+	assert.Equal(t, CDCPitrGranularity_All, pts.Pts[1].Source.Table)
+}
+
 func TestPatternTuples_String(t *testing.T) {
 	type fields struct {
 		Pts      []*PatternTuple

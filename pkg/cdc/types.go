@@ -826,6 +826,27 @@ func (pts *PatternTuples) Append(pt *PatternTuple) {
 	pts.Pts = append(pts.Pts, pt)
 }
 
+// NormalizeCDCSourcePatternCase applies MatrixOne's source-side identifier
+// policy before a CDC task persists or validates its source patterns. Sink
+// identifiers intentionally retain the user's spelling because their server
+// can use a different case policy.
+func NormalizeCDCSourcePatternCase(pts *PatternTuples, lowerCaseTableNames int64) {
+	if lowerCaseTableNames == 0 || pts == nil {
+		return
+	}
+	for _, pt := range pts.Pts {
+		if pt == nil {
+			continue
+		}
+		if pt.Source.Database != CDCPitrGranularity_All {
+			pt.Source.Database = strings.ToLower(pt.Source.Database)
+		}
+		if pt.Source.Table != CDCPitrGranularity_All {
+			pt.Source.Table = strings.ToLower(pt.Source.Table)
+		}
+	}
+}
+
 func (pts *PatternTuples) String() string {
 	if pts.Pts == nil {
 		return ""

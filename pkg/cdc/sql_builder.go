@@ -17,7 +17,6 @@ package cdc
 import (
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -1308,14 +1307,11 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 func CollectCDCSourceCandidateSQL(accountID uint32, dbName, tableName string) string {
 	dbNames := "*"
 	if dbName != CDCPitrGranularity_All {
-		// Catalog relation names are normalized to lower case. CREATE CDC keeps
-		// the spelling supplied by the user, so normalize concrete names here to
-		// make admission select the same source relation as runtime discovery.
-		dbNames = AddSingleQuotesJoin([]string{strings.ToLower(dbName)})
+		dbNames = AddSingleQuotesJoin([]string{dbName})
 	}
 	tableNames := "*"
 	if tableName != CDCPitrGranularity_All {
-		tableNames = AddSingleQuotesJoin([]string{strings.ToLower(tableName)})
+		tableNames = AddSingleQuotesJoin([]string{tableName})
 	}
 	return CDCSQLBuilder.CollectTableInfoSQL(
 		strconv.FormatUint(uint64(accountID), 10), dbNames, tableNames)
