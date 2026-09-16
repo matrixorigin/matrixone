@@ -797,10 +797,13 @@ func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch
 }
 
 // algoEmptyGeneration reports a freshly loaded generation the cache should NOT retain: one
-// with no tag=0 base AND no tag=1 cdc_tail (the transient copy-alter init window before the
-// REINDEX builds the base, or an empty table). Only fulltext2 implements the optional
-// interface; every other algorithm is cached as before. Callers must hold the entry's
-// read lock: it reads algo.Algo state that DestroyWithReason mutates under the write lock.
+// that holds no searchable vectors. Each algorithm defines that for its own layout --
+// fulltext2: no tag=0 base and no tag=1 cdc_tail (the transient copy-alter init window before
+// the REINDEX builds the base, or an empty table); ivfflat: the NULL-vector centroid
+// placeholder only; hnsw: no populated model; ivfpq/cagra: no sub-index and no CDC overflow.
+// An algorithm that does not implement the optional interface is cached as before. Callers
+// must hold the entry's read lock: it reads algo.Algo state that DestroyWithReason mutates
+// under the write lock.
 func algoEmptyGeneration(algo *VectorIndexSearch) bool {
 	e, ok := algo.Algo.(interface{ EmptyGeneration() bool })
 	return ok && e.EmptyGeneration()
@@ -1035,14 +1038,15 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			return nil, nil, err
 		}
 
-		// Do not retain a base-less + cdc_tail-less generation (the transient copy-alter init
-		// window or an empty table): serve its empty result, but evict so the next query reloads
-		// and picks up the base once REINDEX builds it. Only the loader evicts (a concurrent
-		// reader already completed on the same generation); the CDC-flush RemoveIdle still
-		// refreshes a NON-empty stale generation. The evicted result is empty, so its keys alias
-		// no index memory the teardown frees.
+		// Do not retain a generation with no searchable vectors (the transient copy-alter init
+		// window, the ASYNC-build window before the first vectors are committed, or an empty
+		// table): serve its empty result, but evict so the next query reloads and picks up the
+		// vectors once the build writes them under the same generation. Only the loader evicts
+		// (a concurrent reader already completed on the same generation); the CDC-flush
+		// RemoveIdle still refreshes a NON-empty stale generation. The evicted result is empty,
+		// so its keys alias no index memory the teardown frees.
 		if !loaded && emptyGen {
-			c.evictEntry(key, algo, "fulltext2-empty-generation")
+			c.evictEntry(key, algo, "empty-generation")
 		}
 		return keys, distances, nil
 	}
@@ -1144,10 +1148,10 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 			}
 			return err
 		}
-		// Do not retain a base-less + cdc_tail-less generation; see Search. out already holds
-		// the (empty) result and is caller-owned, so the teardown frees nothing it references.
+		// Do not retain a vector-less generation; see Search. out already holds the (empty)
+		// result and is caller-owned, so the teardown frees nothing it references.
 		if !loaded && emptyGen {
-			c.evictEntry(key, algo, "fulltext2-empty-generation")
+			c.evictEntry(key, algo, "empty-generation")
 		}
 		return nil
 	}
