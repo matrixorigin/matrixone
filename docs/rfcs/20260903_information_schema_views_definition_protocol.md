@@ -11,7 +11,7 @@
 `information_schema.VIEWS.VIEW_DEFINITION` must expose the defining SELECT,
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through parser-aware metadata functions. The functions
-are new distributed plan functions (IDs 578 and 581), so the catalog contract is fenced by MORPC
+are new distributed plan functions (IDs 581 and 582), so the catalog contract is fenced by MORPC
 v73.
 
 ## Problem and invariant
@@ -52,7 +52,7 @@ migration and is outside this PR.
 
 MORPC v73 is allocated as `MORPCLatestVersion + 1` from official main v72,
 which already owns v70 through v72. The two function IDs are the next available
-IDs after main's exclusive function bound 579, and the bound advances to 581.
+IDs after main's exclusive function bound 581, and the bound advances to 583.
 The capability is specific to these functions and the persisted VIEWS definition.
 A sender probes the selected destination CN as well as its local runtime before
 encoding a pipeline containing either function ID; an unknown or unavailable
