@@ -3020,16 +3020,29 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	// step 1. init watermarkUpdater
 	// get watermark from db
 	watermark := exec.startTs
-	// New NoFull tasks persist the CREATE CDC snapshot in startTs. Keep the
-	// fallback for legacy task rows that have no durable start watermark.
-	if exec.noFull && watermark.IsEmpty() {
-		watermark = types.TimestampToTS(txnOp.SnapshotTS())
-	}
 	watermarkKey := cdc.WatermarkKey{
 		AccountId: uint64(exec.spec.Accounts[0].GetId()),
 		TaskId:    exec.spec.TaskId,
 		DBName:    info.SourceDbName,
 		TableName: info.SourceTblName,
+	}
+	legacyNoFull := exec.noFull && exec.startTs.IsEmpty() && !exec.stableInitialSnapshot
+	if legacyNoFull {
+		// A legacy NoFull task is safe to resume only when it already has a
+		// durable progress point. Never invent a new snapshot here: that would
+		// silently skip commits between CREATE CDC and executor admission.
+		var found bool
+		watermark, _, found, err = exec.watermarkUpdater.GetWatermarkProgressIfExists(ctx, &watermarkKey)
+		if err != nil {
+			return err
+		}
+		if !found || watermark.IsEmpty() {
+			return moerr.NewNotSupportedf(ctx, "legacy NoFull CDC task has no durable creation start; recreate after all CNs support protocol version %d", defines.MORPCVersion76)
+		}
+	} else if exec.noFull && watermark.IsEmpty() {
+		// New NoFull tasks persist the CREATE CDC snapshot in startTs. Keep the
+		// fallback for legacy task rows that have no durable start watermark.
+		watermark = types.TimestampToTS(txnOp.SnapshotTS())
 	}
 	var initialSnapshotEpoch types.TS
 	var initialSnapshotPending bool
@@ -3346,12 +3359,5 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 	// generation's durable progress after claim loss.
 	exec.stableInitialSnapshot = protocol == cdc.CDCInitialSnapshotProtocolStableEpoch ||
 		protocol == cdc.CDCInitialSnapshotProtocolNoFullHLC
-	if exec.noFull && exec.startTs.IsEmpty() && protocol == "" {
-		// A pre-capability frontend could persist NoFull with an empty start_ts.
-		// Starting from a fresh snapshot would silently skip the interval between
-		// CREATE CDC and executor admission, so fail closed during mixed-version
-		// operation instead of inventing a later boundary.
-		return moerr.NewNotSupportedf(ctx, "legacy NoFull CDC task has no durable creation start; recreate after all CNs support protocol version %d", defines.MORPCVersion76)
-	}
 	return nil
 }

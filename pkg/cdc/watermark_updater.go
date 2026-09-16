@@ -1476,6 +1476,32 @@ func (u *CDCWatermarkUpdater) GetWatermarkProgress(
 	ctx context.Context,
 	key *WatermarkKey,
 ) (types.TS, uint64, error) {
+	watermark, generation, found, err := u.getWatermarkProgress(ctx, key)
+	if err != nil {
+		return types.TS{}, 0, err
+	}
+	if !found {
+		return types.TS{}, 0, &RetryableSnapshotEpochError{err: moerr.NewInternalErrorf(
+			ctx, "CDC watermark generation is missing for %s", key.String())}
+	}
+	return watermark, generation, nil
+}
+
+// GetWatermarkProgressIfExists loads a durable watermark without creating one.
+// It is used when deciding whether a legacy task can safely resume: an
+// existing non-empty watermark is a durable activation boundary, while a
+// missing row must not be replaced with the executor's current snapshot.
+func (u *CDCWatermarkUpdater) GetWatermarkProgressIfExists(
+	ctx context.Context,
+	key *WatermarkKey,
+) (types.TS, uint64, bool, error) {
+	return u.getWatermarkProgress(ctx, key)
+}
+
+func (u *CDCWatermarkUpdater) getWatermarkProgress(
+	ctx context.Context,
+	key *WatermarkKey,
+) (types.TS, uint64, bool, error) {
 	readCtx, cancel := context.WithTimeoutCause(
 		ctx, snapshotEpochPersistenceTimeout, moerr.CauseWatermarkRead)
 	defer cancel()
@@ -1486,30 +1512,33 @@ func (u *CDCWatermarkUpdater) GetWatermarkProgress(
 		ie.SessionOverrideOptions{},
 	)
 	if err := res.Error(); err != nil {
-		return types.TS{}, 0, classifySnapshotEpochBackendError(err)
+		return types.TS{}, 0, false, classifySnapshotEpochBackendError(err)
+	}
+	if res.RowCount() == 0 {
+		return types.TS{}, 0, false, nil
 	}
 	if res.RowCount() != 1 {
-		return types.TS{}, 0, &RetryableSnapshotEpochError{err: moerr.NewInternalErrorf(
-			ctx, "CDC watermark generation is missing for %s", key.String())}
+		return types.TS{}, 0, false, &RetryableSnapshotEpochError{err: moerr.NewInternalErrorf(
+			ctx, "CDC watermark generation has multiple rows for %s", key.String())}
 	}
 	watermarkString, err := res.GetString(readCtx, 0, 0)
 	if err != nil {
-		return types.TS{}, 0, err
+		return types.TS{}, 0, false, err
 	}
 	watermark, err := parseWatermarkTS(watermarkString)
 	if err != nil {
-		return types.TS{}, 0, moerr.NewInternalErrorf(
+		return types.TS{}, 0, false, moerr.NewInternalErrorf(
 			ctx, "invalid CDC watermark %q for %s: %v", watermarkString, key.String(), err)
 	}
 	generation, err := res.GetUint64(readCtx, 0, 1)
 	if err != nil {
-		return types.TS{}, 0, err
+		return types.TS{}, 0, false, err
 	}
 	u.Lock()
 	u.cacheCommitted[*key] = watermark
 	u.cacheCommittedGeneration[*key] = generation
 	u.Unlock()
-	return watermark, generation, nil
+	return watermark, generation, true, nil
 }
 
 // ClaimWatermarkOwner durably publishes the daemon generation that is allowed
