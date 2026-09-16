@@ -61,3 +61,13 @@ func TestCRC32AcceptsScalarArgumentsWithoutChangingStringDomains(t *testing.T) {
 		})
 	}
 }
+
+func TestCRC32Uint64ResultWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(types.T_varchar.ToType(), []string{"hello", ""}, []bool{false, false})
+	result := NewFunctionTestResult(types.T_uint64.ToType(), false,
+		[]uint64{907060870, 0}, []bool{false, false})
+	caseData := NewFunctionTestCase(proc, []FunctionTestInput{input}, result, newCrc32ExecContext().builtInCrc32)
+	succeed, info := caseData.Run()
+	require.True(t, succeed, info)
+}
