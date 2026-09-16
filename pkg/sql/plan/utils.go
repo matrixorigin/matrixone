@@ -1051,7 +1051,7 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 }
 
 // PreparedPlanHasDeferredNumericFunction reports whether a prepared plan has
-// an ABS or SIGN argument whose overload was deferred until execution. This is
+// a deferred numeric function argument whose overload was deferred until execution. This is
 // kept as a plan-introspection helper for tests and diagnostics; execute-time
 // eligibility is cached on PrepareStmt and must not call this walker for every
 // execution.
@@ -1060,7 +1060,7 @@ func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
 }
 
 // PreparedPlanNumericFallbackParamPositions returns the parameter positions
-// whose value supplies a deferred numeric ABS or SIGN argument. The result is
+// whose value supplies a deferred numeric function argument. The result is
 // plan metadata, not an execute-time decision: callers can compute it once when a
 // prepared plan is built and use it to decide whether runtime values must be
 // decoded. In particular, this avoids scanning/deep-copying the entire plan
@@ -1072,13 +1072,14 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	positions := make(map[int32]struct{})
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil || !isPreparedNumericFallbackFunction(fn.Func.GetObjName()) || len(fn.Args) != 1 {
+		if fn == nil || fn.Func == nil {
 			return nil
 		}
-		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
+		arg, ok := preparedNumericFallbackFunctionArg(fn)
+		if !ok {
 			return nil
 		}
-		for pos := range preparedNumericValueParamPositions(fn.Args[0]) {
+		for pos := range preparedNumericValueParamPositions(arg) {
 			positions[pos] = struct{}{}
 		}
 		return nil
@@ -1169,11 +1170,37 @@ func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName 
 
 func isPreparedNumericFallbackFunction(name string) bool {
 	switch strings.ToLower(name) {
-	case "abs", "sign":
+	case "abs", "sign", "elt":
 		return true
 	default:
 		return false
 	}
+}
+
+func isPreparedNumericFallbackFunctionCall(name string, argCount int) bool {
+	if !isPreparedNumericFallbackFunction(name) {
+		return false
+	}
+	switch strings.ToLower(name) {
+	case "elt":
+		return argCount >= 2
+	case "abs", "sign":
+		return argCount == 1
+	default:
+		return false
+	}
+}
+
+func preparedNumericFallbackFunctionArg(fn *plan.Function) (*plan.Expr, bool) {
+	if fn == nil || fn.Func == nil ||
+		!isPreparedNumericFallbackFunctionCall(fn.Func.GetObjName(), len(fn.Args)) {
+		return nil, false
+	}
+	arg := fn.Args[0]
+	if !isPreparedNumericFallbackExpr(arg) {
+		return nil, false
+	}
+	return arg, true
 }
 
 func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
@@ -3179,23 +3206,54 @@ func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
 		return nil
 	}
+	query := preparePlan.GetQuery()
 	rule := &decrementParamOrdinalRule{
 		seen:         make(map[*plan.ParamRef]struct{}),
 		seenFallback: make(map[*plan.Expr]struct{}),
 	}
-	visit := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
+	subqueryRoots := newSubqueryRootRule()
+	rules := []VisitPlanRule{rule, subqueryRoots}
+	visit := NewVisitPlan(preparePlan, rules)
 	if err := visit.Visit(ctx); err != nil {
 		return err
 	}
-	for i := range preparePlan.GetQuery().Params {
+	for i := range query.Params {
 		var err error
-		preparePlan.GetQuery().Params[i], err = rule.ApplyExpr(preparePlan.GetQuery().Params[i])
+		query.Params[i], err = subqueryRoots.ApplyExpr(query.Params[i])
+		if err != nil {
+			return err
+		}
+		query.Params[i], err = rule.ApplyExpr(query.Params[i])
 		if err != nil {
 			return err
 		}
 	}
-	return visitMissingNodeExprs(
-		preparePlan.GetQuery(), preparePlan.GetQuery().Steps, []VisitPlanRule{rule})
+	if err := visitMissingNodeExprs(query, query.Steps, rules); err != nil {
+		return err
+	}
+
+	visitedRoots := make(map[int32]struct{})
+	for len(subqueryRoots.pending) > 0 {
+		root := subqueryRoots.pending[0]
+		subqueryRoots.pending = subqueryRoots.pending[1:]
+		if _, ok := visitedRoots[root]; ok {
+			continue
+		}
+		if root < 0 || int(root) >= len(query.Nodes) {
+			return moerr.NewInternalErrorf(ctx, "missing query root %d for prepared subquery", root)
+		}
+		visitedRoots[root] = struct{}{}
+		queryCopy := *query
+		queryCopy.Steps = []int32{root}
+		queryPlan := &Plan{Plan: &plan.Plan_Query{Query: &queryCopy}}
+		if err := NewVisitPlan(queryPlan, rules).Visit(ctx); err != nil {
+			return err
+		}
+		if err := visitMissingNodeExprs(&queryCopy, queryCopy.Steps, rules); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func resetPreparePlan(
@@ -3224,14 +3282,46 @@ func resetPreparePlan(
 	resetQuery := func(query *Query) ([]*plan.ObjectRef, []int32, error) {
 		queryPlan := &Plan{Plan: &plan.Plan_Query{Query: query}}
 		getParamRule := NewGetParamRule()
-		visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule})
+		subqueryRoots := newSubqueryRootRule()
+		visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule, subqueryRoots})
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 			return nil, nil, err
 		}
 		for i := range query.Params {
 			var err error
+			query.Params[i], err = subqueryRoots.ApplyExpr(query.Params[i])
+			if err != nil {
+				return nil, nil, err
+			}
 			query.Params[i], err = getParamRule.ApplyExpr(query.Params[i])
 			if err != nil {
+				return nil, nil, err
+			}
+		}
+
+		// Scalar subquery plans are referenced by Expr_Sub.NodeId rather than
+		// linked through the writer's Children list. Visit each referenced root
+		// so parameters in its projection/filter remain part of the prepared
+		// statement, including nested subqueries in a discarded ODKU RHS.
+		visitedRoots := make(map[int32]struct{})
+		rootOrder := make([]int32, 0)
+		for len(subqueryRoots.pending) > 0 {
+			root := subqueryRoots.pending[0]
+			subqueryRoots.pending = subqueryRoots.pending[1:]
+			if _, ok := visitedRoots[root]; ok {
+				continue
+			}
+			if root < 0 || int(root) >= len(query.Nodes) {
+				return nil, nil, moerr.NewInternalErrorf(
+					ctx.GetContext(), "missing query root %d for prepared subquery", root)
+			}
+			visitedRoots[root] = struct{}{}
+			rootOrder = append(rootOrder, root)
+			queryCopy := *query
+			queryCopy.Steps = []int32{root}
+			queryPlan = &Plan{Plan: &plan.Plan_Query{Query: &queryCopy}}
+			visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule, subqueryRoots})
+			if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -3245,9 +3335,19 @@ func resetPreparePlan(
 		querySchemas = appendPrepareSchemas(querySchemas, query.GetCatalogDependencies()...)
 
 		resetParamRule := NewResetParamOrderRule(args)
+		queryPlan = &Plan{Plan: &plan.Plan_Query{Query: query}}
 		visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 			return nil, nil, err
+		}
+		for _, root := range rootOrder {
+			queryCopy := *query
+			queryCopy.Steps = []int32{root}
+			queryPlan = &Plan{Plan: &plan.Plan_Query{Query: &queryCopy}}
+			visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
+			if err := visitQuery.Visit(ctx.GetContext()); err != nil {
+				return nil, nil, err
+			}
 		}
 		for i := range query.Params {
 			var err error

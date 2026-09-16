@@ -54,6 +54,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -2153,6 +2154,48 @@ func TestCompileShuffleGroupGatesVarianceByProtocolVersion(t *testing.T) {
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
 
+func TestCompileShuffleGroupGatesWidenedDecimalSumByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for _, input := range []types.Type{
+		types.New(types.T_decimal64, 18, 2),
+		types.New(types.T_decimal128, 38, 2),
+		types.New(types.T_decimal256, 65, 2),
+	} {
+		aggNode.AggList = []*plan.Expr{{
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: aggexec.AggIdOfSum},
+				Args: []*plan.Expr{{Typ: plan.Type{
+					Id:    int32(input.Oid),
+					Width: input.Width,
+					Scale: input.Scale,
+				}}},
+			}},
+		}}
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+		require.True(t, hasWidenedDecimalSum(aggNode))
+		require.False(t, c.supportsRemoteWidenedDecimalSum())
+		require.False(t, c.canCompileShuffleGroup(aggNode),
+			"mixed-version clusters must finalize widened decimal SUM on the coordinator")
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+		require.True(t, c.supportsRemoteWidenedDecimalSum())
+		require.True(t, c.canCompileShuffleGroup(aggNode))
+	}
+
+	// DECIMAL(16,2) SUM stays Decimal128 and therefore keeps the established
+	// final shuffle result type on both sides of a v72/v73 rolling upgrade.
+	aggNode.AggList[0].GetF().Args[0].Typ.Width = 16
+	aggNode.AggList[0].GetF().Args[0].Typ.Id = int32(types.T_decimal64)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+	require.False(t, hasWidenedDecimalSum(aggNode))
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
 func TestCompileShuffleGroupGatesOrderedSetPercentileByProtocolVersion(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, _ := newShuffleGroupTestNodes(16)
@@ -2178,6 +2221,147 @@ func TestCompileShuffleGroupGatesOrderedSetPercentileByProtocolVersion(t *testin
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
 	require.True(t, c.supportsRemoteOrderedSetAggregates())
 	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
+func TestCompileShuffleGroupGatesApproxPercentileByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: plan2.NameApproxPercentile},
+			Args: []*plan.Expr{
+				aggNode.GroupBy[0],
+				plan2.MakePlan2Float64ConstExprWithType(0.5),
+			},
+		}},
+	}}
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+	require.True(t, hasApproxPercentile(aggNode))
+	require.False(t, c.supportsRemoteApproxPercentile())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"mixed-version clusters must keep changed approx_percentile state local")
+	local := c.compileGroupWithoutShuffle(
+		aggNode,
+		[]*Scope{newShuffleGroupInputScope(t, 1)},
+		nodes,
+		false,
+	)
+	require.Len(t, local, 1)
+	require.True(t, local[0].RootOp.(*group.Group).NeedEval,
+		"unsupported remote state must use one local aggregate owner")
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+	require.False(t, c.supportsRemoteApproxPercentile())
+	require.False(t, c.canCompileShuffleGroup(aggNode))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+	require.False(t, c.supportsRemoteApproxPercentile(),
+		"v74 is reserved for HEX and must keep the legacy approx_percentile state")
+	require.False(t, c.canCompileShuffleGroup(aggNode))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
+	require.False(t, c.supportsRemoteApproxPercentile())
+	require.False(t, c.canCompileShuffleGroup(aggNode))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
+	require.True(t, c.supportsRemoteApproxPercentile())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"rollback must disable the v76 approx_percentile state before exchange")
+}
+
+func TestCompileShuffleGroupGatesHLLByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	aggNode.AggList = []*plan.Expr{{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "approx_count"},
+			Args: []*plan.Expr{aggNode.GroupBy[0]},
+		}},
+	}}
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+	require.True(t, hasHLLAggregate(aggNode))
+	require.False(t, c.supportsRemoteHLL())
+	require.False(t, c.canCompileShuffleGroup(aggNode))
+	local := c.compileGroupWithoutShuffle(
+		aggNode,
+		[]*Scope{newShuffleGroupInputScope(t, 1)},
+		nodes,
+		false,
+	)
+	require.Len(t, local, 1)
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+	require.False(t, c.supportsRemoteHLL(),
+		"v73 peers must not receive the v4 typed-key HLL state")
+	require.False(t, c.canCompileShuffleGroup(aggNode))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+	require.False(t, c.supportsRemoteHLL(),
+		"v74 peers must not receive the v4 typed-key HLL state")
+	require.False(t, c.canCompileShuffleGroup(aggNode))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
+	require.False(t, c.supportsRemoteHLL(),
+		"v75 peers must not receive the v4 typed-key HLL state")
+	require.False(t, c.canCompileShuffleGroup(aggNode))
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
+	require.False(t, c.supportsRemoteHLL())
+	require.False(t, c.canCompileShuffleGroup(aggNode))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
+	require.True(t, c.supportsRemoteHLL())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
+func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	aggNode.GroupBy[0].Typ = plan.Type{
+		Id:    int32(types.T_varchar),
+		Width: 2,
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
+	require.True(t, hasVariableLengthGroupKey(aggNode))
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"short variable-length group keys must stay local before MORPC v78")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion78)
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+
+	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 2}}
+	aggNode.AggList = []*plan.Expr{{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				Obj:     int64(uint64(function.EncodeOverloadID(function.COUNT, 0)) | uint64(function.Distinct)),
+				ObjName: "count",
+			},
+			Args: []*plan.Expr{arg},
+		}},
+	}}
+	require.True(t, hasCanonicalDistinctKeyWire(aggNode))
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"canonical opaque DISTINCT keys must stay local before MORPC v79")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
+func TestRemoteApproxPercentileAndHLLCapabilitiesDefaultClosed(t *testing.T) {
+	service := "missing-protocol-" + t.Name()
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, service, nil)
+	runtime.SetupServiceBasedRuntime(service, rt)
+	require.True(t, rt.CompareAndDeleteGlobalVariables(
+		runtime.MOProtocolVersion, defines.MORPCLatestVersion))
+	require.False(t, supportsRemoteApproxPercentile(service))
+	require.False(t, supportsRemoteHLL(service))
 }
 
 func TestCompilePartitionTopNGatedByProtocolVersion(t *testing.T) {

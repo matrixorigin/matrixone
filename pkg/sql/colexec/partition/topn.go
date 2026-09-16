@@ -151,7 +151,7 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 	for _, expr := range partitionExprs {
 		keyWidth += int32(group.GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, ctr.keyNullable))
 	}
-	ctr.isStrHash = keyWidth > 8
+	ctr.isStrHash = keyWidth > 8 || group.HasVariableLengthKey(partitionExprs)
 	if err = ctr.hash.BuildHashTable(
 		proc.Ctx, proc.Mp(), false, ctr.isStrHash, ctr.keyNullable,
 		false, 1024, nil, nil,
