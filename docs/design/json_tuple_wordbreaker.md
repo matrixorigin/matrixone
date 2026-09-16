@@ -606,15 +606,31 @@ predicate cannot be rendered to SQL, the planner declines the probe entirely (`r
 returns false) and the query runs as a plain **Table Scan** — a real full scan, still cheaper than an
 all-pks self-join.
 
-**Rolling-upgrade invariant (runtime contract).** The recursion guard is a *coordinator-side plan
-decision*, not a new function symbol: `applyIndices=1` is applied only where the plan is built, and
-the resulting plan (with the rewrite skipped) is what ships to remote CNs, which execute it without
-re-planning. The pushed predicate is the **public** `json_extract_*`, present on every version. So a
-mixed-version cluster has **no** version-specific overload to resolve — no `function overload id not
-found`, and no path by which an older CN drops `probe_tail` or returns an incomplete mandatory-filter
-result. (An earlier revision used byte-identical `json_extract_*_internal` twins as new overloads;
-those were removed precisely because a new overload id is unresolvable on a CN that predates it,
-which is the rolling-upgrade hazard this invariant forbids.)
+**Rolling-upgrade invariant (runtime contract).** Two distinct mixed-version hazards, kept separate.
+
+*Overload resolution.* The pushed predicate is the **public** `json_extract_*`, present on every
+version, so a mixed-version cluster has no version-specific overload to resolve — no `function
+overload id not found` on an older CN. (An earlier revision used byte-identical
+`json_extract_*_internal` twins as new overloads; they were removed precisely because a new overload
+id is unresolvable on a CN that predates it.) The recursion guard is likewise a *coordinator-side
+plan decision*, not a new symbol: `applyIndices=1` is applied only where the plan is built, and the
+resulting plan (rewrite skipped) ships to remote CNs, which execute it without re-planning.
+
+*Config compatibility — the real fence.* The public function names do **not** make the probe wire-
+compatible. The self-completing probe is carried in the `fulltext2_search` TVF config as `probe_tail*`
+fields; an older CN that receives this TVF **silently drops those unknown JSON fields** (its decode
+ignores fields it does not know) and runs **only the stale bulk generation**, returning an incomplete
+mandatory-filter result that omits any source row committed in `(searched, snapshot]`. Correctness
+therefore rests on two **normative** fences, both required — removing or bypassing either recreates
+that silent incomplete result:
+
+1. **Plan-time gate.** The coordinator injects the probe only when the cluster's negotiated protocol
+   version is at least the one that introduced the probe_tail contract; below it, the query runs as a
+   plain Table Scan on the retained predicate.
+2. **Sender-boundary recheck.** The negotiated version can drop between plan build and serialization,
+   so the point that serializes a fragment to another node re-checks the destination's *current*
+   version and **fails closed** (rejects the query) when it predates the contract — it never ships a
+   probe_tail config an older CN would mishandle.
 
 `base rows ← fetch by pk ∈ AGG(bulk pks ∪ tail-or-fallback pks)`. The group-by dedup (`AGG`)
 is still required: bulk and tail overlap when a row is updated inside the gap (old value in
