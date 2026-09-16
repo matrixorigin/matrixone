@@ -32,12 +32,12 @@ execute s2;
 ➤ has_base[-7,1,0]  𝄀
 1
 deallocate prepare s2;
-select id from t order by l2_distance(v, '[7,7,7,7,7,7,7,7]') limit 1;
-➤ id[-5,64,0]  𝄀
-7
-select id from t order by l2_distance(v, '[123,123,123,123,123,123,123,123]') limit 1;
-➤ id[-5,64,0]  𝄀
-122
+select abs(id - 7) <= 5 as near from t order by l2_distance(v, '[7,7,7,7,7,7,7,7]') limit 1;
+➤ near[-7,1,0]  𝄀
+1
+select abs(id - 123) <= 5 as near from t order by l2_distance(v, '[123,123,123,123,123,123,123,123]') limit 1;
+➤ near[-7,1,0]  𝄀
+1
 select count(*) from t;
 ➤ count(*)[-5,64,0]  𝄀
 200

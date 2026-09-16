@@ -382,9 +382,11 @@ func (s *CagraSearch[B, Q]) EmptyGeneration() bool {
 //
 // includeBytesPerRow comes from the first sub-index that successfully
 // loaded; cdc_tail's INSERT records share the col-meta layout with the main
-// index by construction (CDC writer side is fed the same colMetaJSON). If
-// no sub-index loaded (empty index — never built, or built and dropped),
-// we have no col-meta and skip; cdc_tail data is moot without a main index.
+// index by construction (CDC writer side is fed the same colMetaJSON). With
+// no sub-index loaded (never built, small-data-only, or a copy-alter
+// replacement) the layout is recovered from the first tag=1 chunk's frame
+// header instead, and the tail IS loaded: those rows become the brute-force
+// overflow, which is the whole index in that state.
 func (s *CagraSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	var (
 		includeBytesPerRow int

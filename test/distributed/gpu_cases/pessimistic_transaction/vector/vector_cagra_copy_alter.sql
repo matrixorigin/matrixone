@@ -59,7 +59,9 @@ prepare s2 from @q2;
 execute s2;
 deallocate prepare s2;
 
--- The rebuilt index answers: exact match on a stored vector is its own row.
+-- The rebuilt index answers: exact match on a stored vector is its own row. CAGRA stores the
+-- full f32 vectors, so a distance-0 hit is stable and the id can be pinned (the IVF-PQ twin
+-- asserts a neighbourhood instead, because its 8-bit codebook answer is seed-dependent).
 select id from t order by l2_distance(v, '[7,7,7,7,7,7,7,7]') limit 1;
 select id from t order by l2_distance(v, '[123,123,123,123,123,123,123,123]') limit 1;
 

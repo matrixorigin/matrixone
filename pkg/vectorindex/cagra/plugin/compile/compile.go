@@ -93,8 +93,9 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 	if !ok {
 		return false, "", moerr.NewInternalErrorNoCtx("cagra_meta index definition not found")
 	}
-	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` cagra FORCE_SYNC",
-		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s cagra FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(metaDef.IndexName)), nil
 }
 
 // AlterCopyInitSQL — a COPY ALTER's cloneUnaffectedIndexes SKIPS this (SkipWholeIndex) async

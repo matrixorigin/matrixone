@@ -41,10 +41,12 @@ func TestAlterCopyInitSQL(t *testing.T) {
 	require.True(t, startFromNow, "false would arm the tail from ts=0 -> full-table replay on top of the base")
 	require.Equal(t, "ALTER TABLE `db1`.`t` ALTER REINDEX `ix` cagra FORCE_SYNC", initSQL)
 
-	// Contrast: RestoreInitSQL rebuilds too, but from the block-cloned rows.
+	// Contrast: RestoreInitSQL rebuilds too, but from the block-cloned rows. It builds the
+	// same statement and must escape identifiers the same way -- a restore whose InitSQL is
+	// malformed can never execute, so the restored index stays base-less forever.
 	_, restoreSQL, err := (Hooks{}).RestoreInitSQL(ctx, cagraIndexDefs())
 	require.NoError(t, err)
-	require.NotEmpty(t, restoreSQL)
+	require.Equal(t, "ALTER TABLE `db1`.`t` ALTER REINDEX `ix` cagra FORCE_SYNC", restoreSQL)
 
 	// Embedded backticks in db/table/index names are escaped (doubled) via the shared identifier
 	// helper, so the post-commit REINDEX is valid SQL rather than malformed.
@@ -58,6 +60,10 @@ func TestAlterCopyInitSQL(t *testing.T) {
 	_, btSQL, err := (Hooks{}).AlterCopyInitSQL(btctx, btdefs)
 	require.NoError(t, err)
 	require.Equal(t, "ALTER TABLE `d``b`.`s``rc` ALTER REINDEX `id``x` cagra FORCE_SYNC", btSQL)
+
+	_, btRestoreSQL, err := (Hooks{}).RestoreInitSQL(btctx, btdefs)
+	require.NoError(t, err)
+	require.Equal(t, "ALTER TABLE `d``b`.`s``rc` ALTER REINDEX `id``x` cagra FORCE_SYNC", btRestoreSQL)
 
 	// Fail closed when the metadata def is absent: a silent (false, "") would leave the
 	// replacement index base-less with no way to notice.
