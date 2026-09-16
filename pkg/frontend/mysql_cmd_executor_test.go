@@ -884,6 +884,32 @@ func TestErrInfoWarningBatchOwnershipBounds(t *testing.T) {
 	require.False(t, nilInfo.appendWarningBatchOwned(1, []uint16{1}, []string{"x"}, nil, 0))
 }
 
+func TestErrInfoWarningBatchOwnershipRejectsUnderchargedSource(t *testing.T) {
+	messages := []string{"first warning", "later warning"}
+	firstCharge := process.WarningDiagnosticRecordBytes(messages[0])
+	accounted := firstCharge + process.WarningDiagnosticRecordBytes(messages[1])
+	sourceCharge := accounted - 1
+	otherCharge := uint64(7)
+	budget := process.NewWarningDiagnosticBudget(otherCharge + sourceCharge)
+	require.True(t, budget.Reserve(otherCharge))
+	require.True(t, budget.Reserve(sourceCharge))
+
+	destination := &Session{errInfo: &errInfo{
+		maxCnt:        1,
+		warningBudget: budget,
+	}}
+	require.True(t, process.AppendWarningBatchToSinkOwned(
+		destination, 2, []uint16{1292, 1292}, messages, budget, sourceCharge))
+	require.Equal(t, messages[:1], destination.errInfo.msgs)
+	require.Equal(t, uint64(2), destination.errInfo.totalWarnings)
+	require.Equal(t, otherCharge+firstCharge, budget.Used())
+
+	destination.resetDiagnostics()
+	require.Equal(t, otherCharge, budget.Used())
+	budget.Release(otherCharge)
+	require.Zero(t, budget.Used())
+}
+
 func TestBeginWarningDiagnosticsNarrowsProcessBudget(t *testing.T) {
 	ses := &Session{
 		feSessionImpl: feSessionImpl{

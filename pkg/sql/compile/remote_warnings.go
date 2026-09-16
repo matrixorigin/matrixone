@@ -230,7 +230,7 @@ func (s *remoteWarningCollector) AppendWarningBatch(total uint64, codes []uint16
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.appendWarningBatchLocked(total, codes, messages, nil, 0)
+	s.appendWarningBatchLocked(total, codes, messages, nil, 0, nil)
 }
 
 // AppendWarningBatchOwned accepts payload already charged to source. A local
@@ -249,13 +249,19 @@ func (s *remoteWarningCollector) AppendWarningBatchOwned(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		if source != nil && source == s.warningBudget {
+			_, consumed := source.Reconcile(chargedBytes, 0)
+			return consumed
+		}
 		return false
 	}
 	if s.warningBudget == nil {
 		s.warningBudget = process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
 	}
 	sameBudget := source != nil && source == s.warningBudget
+	undercharged := false
 	if sameBudget {
+		accounted := uint64(0)
 		for _, message := range messages {
 			if len(message) > process.WarningDiagnosticMaxMessageBytes {
 				// The ownership contract covers already-bounded strings. A
@@ -264,13 +270,32 @@ func (s *remoteWarningCollector) AppendWarningBatchOwned(
 				sameBudget = false
 				break
 			}
+			accounted += process.WarningDiagnosticRecordBytes(message)
 		}
+		if sameBudget && chargedBytes < accounted {
+			// Reconcile the source charge atomically with the first retained
+			// payload. Releasing it in a separate step would let another
+			// producer consume the capacity before the replacement reserve.
+			undercharged = true
+			sameBudget = false
+		}
+	}
+	if undercharged {
+		replacement := chargedBytes
+		s.appendWarningBatchLocked(total, codes, messages, nil, 0, &replacement)
+		if replacement != 0 {
+			_, consumed := s.warningBudget.Reconcile(replacement, 0)
+			if consumed {
+				replacement = 0
+			}
+		}
+		return replacement == 0
 	}
 	appendSource := source
 	if !sameBudget && source == s.warningBudget {
 		appendSource = nil
 	}
-	s.appendWarningBatchLocked(total, codes, messages, appendSource, chargedBytes)
+	s.appendWarningBatchLocked(total, codes, messages, appendSource, chargedBytes, nil)
 	return sameBudget
 }
 
@@ -280,6 +305,7 @@ func (s *remoteWarningCollector) appendWarningBatchLocked(
 	messages []string,
 	source *process.WarningDiagnosticBudget,
 	chargedBytes uint64,
+	replacement *uint64,
 ) {
 	if s.closed {
 		return
@@ -337,7 +363,17 @@ func (s *remoteWarningCollector) appendWarningBatchLocked(
 			}
 			message = process.BoundWarningMessage(message, process.WarningDiagnosticMaxMessageBytes)
 			charge = process.WarningDiagnosticRecordBytes(message)
-			if !s.warningBudget.Reserve(charge) {
+			reserved := false
+			if replacement != nil && *replacement != 0 {
+				var consumed bool
+				reserved, consumed = s.warningBudget.Reconcile(*replacement, charge)
+				if consumed {
+					*replacement = 0
+				}
+			} else {
+				reserved = s.warningBudget.Reserve(charge)
+			}
+			if !reserved {
 				s.warningRetentionSealed = true
 				continue
 			}
@@ -348,6 +384,12 @@ func (s *remoteWarningCollector) appendWarningBatchLocked(
 		})
 		s.warningBytes += len(message)
 		s.warningChargeBytes += charge
+	}
+	if replacement != nil && *replacement != 0 {
+		_, consumed := s.warningBudget.Reconcile(*replacement, 0)
+		if consumed {
+			*replacement = 0
+		}
 	}
 	if sameBudget {
 		// The source charge is a per-message sum. The loop above accounts for

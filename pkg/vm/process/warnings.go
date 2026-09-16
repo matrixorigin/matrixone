@@ -92,11 +92,38 @@ func (b *WarningDiagnosticBudget) Reserve(size uint64) bool {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if size > b.limit-b.used {
+	// A corrupted or mismatched accounting state must fail closed. Without
+	// this guard, used > limit would wrap the subtraction and admit an
+	// unbounded retained payload.
+	if b.used > b.limit || size > b.limit-b.used {
 		return false
 	}
 	b.used += size
 	return true
+}
+
+// Reconcile atomically replaces releaseBytes with reserveBytes. The first
+// result reports whether reserveBytes was admitted; the second reports
+// whether the caller's release ownership was consumed. A failed replacement
+// can still consume the old charge, which lets callers finish ownership
+// transfer without a release-then-reserve capacity race. If the old charge is
+// already absent, it is discarded fail-closed and callers must not release it
+// again.
+func (b *WarningDiagnosticBudget) Reconcile(releaseBytes, reserveBytes uint64) (bool, bool) {
+	if b == nil {
+		return reserveBytes == 0, releaseBytes == 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if releaseBytes > b.used {
+		return false, true
+	}
+	b.used -= releaseBytes
+	if b.used > b.limit || reserveBytes > b.limit-b.used {
+		return false, true
+	}
+	b.used += reserveBytes
+	return true, true
 }
 
 func (b *WarningDiagnosticBudget) Release(size uint64) {

@@ -336,7 +336,7 @@ func (a *GroupConcatWarningAccumulator) addBatchOwned(
 	limit := a.warningLimit()
 	if limit == 0 {
 		if source != nil {
-			source.Release(chargedBytes)
+			source.Reconcile(chargedBytes, 0)
 		}
 		return
 	}
@@ -346,8 +346,20 @@ func (a *GroupConcatWarningAccumulator) addBatchOwned(
 	sameBudget := source != nil && source == a.warningBudget
 	accounted := uint64(0)
 	for _, warning := range warnings {
+		accounted += groupConcatWarningRecordBytes(warning.Row)
+	}
+	undercharged := sameBudget && chargedBytes < accounted
+	if undercharged {
+		// Reconcile the source charge atomically with the first retained
+		// row so another producer cannot consume the freed capacity.
+		sameBudget = false
+	}
+	replacement := uint64(0)
+	if undercharged {
+		replacement = chargedBytes
+	}
+	for _, warning := range warnings {
 		charge := groupConcatWarningRecordBytes(warning.Row)
-		accounted += charge
 		if len(a.rows) >= limit || a.warningRetentionSealed {
 			if sameBudget {
 				source.Release(charge)
@@ -362,7 +374,17 @@ func (a *GroupConcatWarningAccumulator) addBatchOwned(
 			}
 			a.warningChargeBytes += charge
 		} else if source != nil && !sameBudget {
-			if a.warningBudget == nil || !a.warningBudget.Reserve(charge) {
+			reserved := false
+			if a.warningBudget != nil && replacement != 0 {
+				var consumed bool
+				reserved, consumed = a.warningBudget.Reconcile(replacement, charge)
+				if consumed {
+					replacement = 0
+				}
+			} else if a.warningBudget != nil {
+				reserved = a.warningBudget.Reserve(charge)
+			}
+			if !reserved {
 				a.warningRetentionSealed = true
 				continue
 			}
@@ -373,7 +395,14 @@ func (a *GroupConcatWarningAccumulator) addBatchOwned(
 		a.rows = append(a.rows, warning)
 	}
 	if source != nil {
-		if sameBudget {
+		if undercharged {
+			if replacement != 0 {
+				_, consumed := a.warningBudget.Reconcile(replacement, 0)
+				if consumed {
+					replacement = 0
+				}
+			}
+		} else if sameBudget {
 			if chargedBytes > accounted {
 				source.Release(chargedBytes - accounted)
 			}

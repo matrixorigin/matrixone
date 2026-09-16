@@ -168,6 +168,41 @@ func TestWarningAccumulatorSealsByteBudgetAfterRejectedPrefixRecord(t *testing.T
 	accumulator.Reset()
 }
 
+func TestWarningDiagnosticBudgetRejectsOvercommittedState(t *testing.T) {
+	budget := &WarningDiagnosticBudget{limit: 1, used: 2}
+
+	require.False(t, budget.Reserve(1))
+	require.Equal(t, uint64(2), budget.Used())
+}
+
+func TestWarningDiagnosticBudgetReconcileOwnershipBoundaries(t *testing.T) {
+	const otherCharge = uint64(7)
+	const sourceCharge = uint64(5)
+	const replacementCharge = uint64(8)
+
+	budget := NewWarningDiagnosticBudget(otherCharge + replacementCharge)
+	require.True(t, budget.Reserve(otherCharge))
+	require.True(t, budget.Reserve(sourceCharge))
+
+	reserved, consumed := budget.Reconcile(sourceCharge, replacementCharge)
+	require.True(t, reserved)
+	require.True(t, consumed)
+	require.Equal(t, otherCharge+replacementCharge, budget.Used())
+
+	reserved, consumed = budget.Reconcile(replacementCharge, replacementCharge+1)
+	require.False(t, reserved)
+	require.True(t, consumed)
+	require.Equal(t, otherCharge, budget.Used())
+
+	reserved, consumed = budget.Reconcile(replacementCharge, 1)
+	require.False(t, reserved)
+	require.True(t, consumed)
+	require.Equal(t, otherCharge, budget.Used())
+
+	budget.Release(otherCharge)
+	require.Zero(t, budget.Used())
+}
+
 func TestAppendWarningBatchUsesCurrentAttemptSink(t *testing.T) {
 	session := new(warningTestSession)
 	proc := &Process{Base: &BaseProcess{}, Session: session}
