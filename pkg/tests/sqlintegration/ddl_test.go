@@ -230,9 +230,11 @@ func TestCDCCases(t *testing.T) {
 			db := testutils.GetDatabaseName(t)
 			defer cleanupSQLIntegration(t, cn1, "drop database if exists "+db)
 			table := "table01"
+			noPKTable := "table_no_pk"
 			cdcTaskDB := "cdc_task_db"
 			cdcTaskTbl := "cdc_task_tbl"
 			cdcTaskAcc := "cdc_task_acc"
+			cdcTaskNoPK := "cdc_task_no_pk"
 			port := fmt.Sprintf("%d", c.ID()+199)
 
 			conn := "mysql://dump:#admin:111@127.0.0.1:" + port
@@ -252,7 +254,7 @@ func TestCDCCases(t *testing.T) {
 
 			// setup schema
 			mustExec("", "create database "+db)
-			mustExec(db, "create table "+table+" (col1 int)")
+			mustExec(db, "create table "+table+" (col1 int primary key)")
 
 			// ensure PITR for CDC precondition
 			mustExec(db, "create pitr if not exists pitr_db for database "+db+" range 3 'h' internal")
@@ -399,6 +401,13 @@ func TestCDCCases(t *testing.T) {
 			// Case 5: duplicate create should error
 			_, err = exec.Exec(ctx, "create cdc "+cdcTaskDB+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal", executor.Options{}.WithDatabase(db))
 			require.Error(t, err)
+
+			// A source without a user-visible primary key is not supported: reject
+			// it on the normal frontend SQL path before a CDC task is persisted.
+			mustExec(db, "create table "+noPKTable+" (col1 int)")
+			_, err = exec.Exec(ctx, "create cdc "+cdcTaskNoPK+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+noPKTable+"' {'Level'='table'}", executor.Options{}.WithDatabase(db))
+			require.Error(t, err)
+			verifyTaskPresent(cdcTaskNoPK, false)
 
 			// Validation selects for presence
 			require.Greater(t, rows("", "select * from mo_catalog.mo_cdc_task"), 0)

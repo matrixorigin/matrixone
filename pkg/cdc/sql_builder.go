@@ -17,6 +17,7 @@ package cdc
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -357,8 +358,11 @@ const (
 		// of silently omitting the table from discovery.
 		" EXISTS (SELECT 1 FROM `mo_catalog`.`mo_columns` pk " +
 		"WHERE pk." + catalog.SystemColAttr_AccID + " = tbl." + catalog.SystemRelAttr_AccID + " " +
-		"AND pk." + catalog.SystemColAttr_DBName + " = tbl." + catalog.SystemRelAttr_DBName + " " +
-		"AND pk." + catalog.SystemColAttr_RelName + " = tbl." + catalog.SystemRelAttr_Name + " " +
+		// Use catalog IDs rather than display names. DDL can preserve identifier
+		// case while catalog lookup is keyed by IDs; matching names made a real
+		// PRIMARY KEY source look keyless on the CREATE CDC path.
+		"AND pk." + catalog.SystemColAttr_DBID + " = tbl." + catalog.SystemRelAttr_DBID + " " +
+		"AND pk." + catalog.SystemColAttr_RelID + " = tbl." + catalog.SystemRelAttr_ID + " " +
 		"AND pk." + catalog.SystemColAttr_ConstraintType + " = 'p' " +
 		"AND pk." + catalog.SystemColAttr_Name + " <> '" + catalog.FakePrimaryKeyColName + "') AS has_user_pk " +
 		"FROM `mo_catalog`.`mo_tables` tbl " +
@@ -1304,11 +1308,14 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 func CollectCDCSourceCandidateSQL(accountID uint32, dbName, tableName string) string {
 	dbNames := "*"
 	if dbName != CDCPitrGranularity_All {
-		dbNames = AddSingleQuotesJoin([]string{dbName})
+		// Catalog relation names are normalized to lower case. CREATE CDC keeps
+		// the spelling supplied by the user, so normalize concrete names here to
+		// make admission select the same source relation as runtime discovery.
+		dbNames = AddSingleQuotesJoin([]string{strings.ToLower(dbName)})
 	}
 	tableNames := "*"
 	if tableName != CDCPitrGranularity_All {
-		tableNames = AddSingleQuotesJoin([]string{tableName})
+		tableNames = AddSingleQuotesJoin([]string{strings.ToLower(tableName)})
 	}
 	return CDCSQLBuilder.CollectTableInfoSQL(
 		strconv.FormatUint(uint64(accountID), 10), dbNames, tableNames)
