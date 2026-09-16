@@ -1749,6 +1749,11 @@ def _temporal_array(values: list, descriptor: Dict[str, Any]) -> pa.Array:
 
 
 def _output_array(values: Any, descriptor: Dict[str, Any], rows: int) -> pa.Array:
+    # Keep this helper safe when called directly by a runtime adapter or a
+    # conformance harness. The normal exchange path validates the Open payload
+    # first, but _arrow_type alone can construct a physical type for an
+    # invalid semantic descriptor (for example DECIMAL64 precision 19).
+    _canonical_descriptor(descriptor)
     if isinstance(values, pa.ChunkedArray):
         values = values.combine_chunks()
     if isinstance(values, pa.Array):
