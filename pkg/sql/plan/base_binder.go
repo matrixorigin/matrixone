@@ -3079,17 +3079,6 @@ func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
 		target := makePlan2Type(&typ)
 		return &target, true
 	}
-	// CHAR has integer and string overload behavior rather than a single
-	// ordinary numeric overload. A prepared marker has no value domain at
-	// PREPARE time, so bind marker-bearing arguments in an integer context and
-	// let execution-time specialization restore the SQL value's actual numeric
-	// source (DECIMAL, approximate string-prefix, BOOL, or an integer). Direct
-	// string arguments do not enter this path and retain CHAR's prefix parsing.
-	if argCount > 0 && strings.EqualFold(name, "char") {
-		typ := types.T_int64.ToType()
-		target := makePlan2Type(&typ)
-		return &target, true
-	}
 	if isPreparedNumericAggregate(name, argCount) {
 		return nil, true
 	}
@@ -3364,8 +3353,7 @@ func containsExplicitFloatCastInSelect(stmt tree.SelectStatement) bool {
 
 // bindPreparedNumericFuncExpr gives prepared numeric function arguments the
 // same static context as prepared arithmetic. SUM/AVG use the inferred numeric
-// domain, NTILE requires an integer domain, and CHAR uses an integer domain
-// only for arguments that contain a prepared marker. ParamRef remains TEXT for
+// domain and NTILE requires an integer domain. ParamRef remains TEXT for
 // transport and an explicit cast materializes the computation type.
 // Non-parameter expressions stay on their original binding path, so ordinary
 // string inputs continue to use their function-specific string semantics.
@@ -3377,26 +3365,6 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	target, ok := preparedNumericFunctionTarget(name, len(astArgs))
 	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
-	}
-	if strings.EqualFold(name, "char") {
-		args := make([]*plan.Expr, len(astArgs))
-		for i, astArg := range astArgs {
-			hasPreparedParam, err := b.hasPreparedNumericParamExprs([]tree.Expr{astArg}, depth)
-			if err != nil {
-				return nil, err
-			}
-			if hasPreparedParam {
-				args[i], err = b.bindNumericExprWithContext(astArg, depth, target)
-			} else {
-				args[i], err = b.impl.BindExpr(astArg, depth, false)
-			}
-			if err != nil {
-				return nil, err
-			}
-		}
-		return bindBoundFuncExprAndConstFold(
-			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
-		)
 	}
 
 	// Binding can normalize the parsed CAST node in place. Snapshot the user's
@@ -3651,7 +3619,19 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 			}
-			expr, err := b.impl.BindExpr(arg, depth, false)
+			var expr *Expr
+			var err error
+			if function.IntegerArgumentSourceDependent(name, idx) {
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+				expr, err = b.bindIntegerDomainArgumentAst(name, idx, arg, depth)
+			} else if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext {
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+				expr, err = b.bindIntegerArgumentAst(arg, depth, target)
+			} else {
+				expr, err = b.impl.BindExpr(arg, depth, false)
+			}
 			b.numericParamType = paramType
 			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {
@@ -5053,28 +5033,6 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, nil, false)
 }
 
-func hexExplicitRealCastOverload(name string, args []*Expr) (int32, bool) {
-	if name != "hex" || len(args) != 1 || args[0] == nil {
-		return 0, false
-	}
-	cast := args[0].GetF()
-	if cast == nil || cast.GetFunc().GetObjName() != "cast" {
-		return 0, false
-	}
-	_, castOverload := function.DecodeOverloadID(cast.GetFunc().GetObj())
-	if castOverload == 0 && !cast.GetSyntaxExplicitCast() {
-		return 0, false
-	}
-	switch types.T(args[0].Typ.Id) {
-	case types.T_float32:
-		return function.HexExplicitFloat32Overload, true
-	case types.T_float64:
-		return function.HexExplicitFloat64Overload, true
-	default:
-		return 0, false
-	}
-}
-
 func bindPreparedFuncExprImplByPlanExpr(
 	ctx context.Context,
 	originalBoundExpr *Expr,
@@ -5103,6 +5061,10 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	args, err = bindIntegerFunctionArguments(ctx, name, args)
+	if err != nil {
+		return nil, err
+	}
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
 	if descendFunctions {
 		rejectIntervalArgs = rejectStandaloneIntervalFunctionArgs
@@ -5818,12 +5780,6 @@ func bindFuncExprImplByPlanExpr(
 		return nil, err
 	}
 
-	if overloadID, ok := hexExplicitRealCastOverload(name, args); ok {
-		fGet, err = function.GetFunctionByNameWithOverload(ctx, name, argsType, overloadID)
-		if err != nil {
-			return nil, err
-		}
-	}
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
@@ -6243,15 +6199,6 @@ func bindFuncExprImplByPlanExpr(
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
-				} else if name == "char" &&
-					(argsType[idx].Oid == types.T_float32 || argsType[idx].Oid == types.T_float64) &&
-					castType.Oid == types.T_int64 {
-					// MySQL's CHAR(float) uses the DOUBLE round-to-even contract.
-					// The ordinary implicit float-to-integer cast is intentionally
-					// round-half-away-from-zero for other SQL expressions, so keep this
-					// correction local to CHAR instead of changing global arithmetic or
-					// cast semantics.
-					args[idx], err = appendExplicitCastBeforeExpr(ctx, args[idx], typ)
 				} else if mysqlNumericPrefixBitwiseArg(name, idx, len(args), argsType[idx], castType) ||
 					mysqlNumericPrefixFunctionArg(name, idx, len(args), argsType[idx], castType) {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
@@ -9262,6 +9209,9 @@ func isDecimalLiteralCast(arg *plan.Expr) bool {
 // DefaultBinder or ReplaceValueBinder. For other binder implementations it
 // returns an empty Type so literal binding falls back to the generic path.
 func (b *baseBinder) defaultValueBindType() plan.Type {
+	if b.integerArgumentSourceContext {
+		return plan.Type{}
+	}
 	if d, ok := b.impl.(*DefaultBinder); ok {
 		return d.typ
 	}

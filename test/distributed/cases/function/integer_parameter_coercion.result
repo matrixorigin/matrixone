@@ -1,0 +1,364 @@
+drop database if exists integer_parameter_coercion;
+create database integer_parameter_coercion;
+use integer_parameter_coercion;
+create table sources(id int, d decimal(38,18), v double, s varchar(32), bits bit(8));
+insert into sources values (1,2.5,2.5,'1.9tail',b'10'),(2,1.5,1.5,'-1.9tail',b'1'),(3,null,null,null,null);
+select id,substring_index('a.b.c.d','.',d),substring_index('a.b.c.d','.',v),substring_index('a.b.c.d','.',cast(v as double)),substring_index('a.b.c.d','.',s),substring_index('a.b.c.d','.',bits) from sources order by id;
+➤ id[4,32,0]  ¦  substring_index(a.b.c.d, ., d)[12,7,0]  ¦  substring_index(a.b.c.d, ., v)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(v as double))[12,7,0]  ¦  substring_index(a.b.c.d, ., s)[12,7,0]  ¦  substring_index(a.b.c.d, ., bits)[12,7,0]  𝄀
+1  ¦  a.b.c  ¦  a.b  ¦  a.b  ¦  a  ¦  a.b  𝄀
+2  ¦  a.b  ¦  a.b  ¦  a  ¦  d  ¦  a  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select substring_index('a.b.c.d','.',2.5),substring_index('a.b.c.d','.',2.5e0),substring_index('a.b.c.d','.',cast(1.5 as double));
+➤ substring_index(a.b.c.d, ., 2.5)[12,7,0]  ¦  substring_index(a.b.c.d, ., 2.5e0)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(1.5 as double))[12,7,0]  𝄀
+a.b.c  ¦  a.b  ¦  a
+select id,substring_index('a.b.c.d','.',if(id=1,d,v)),substring_index('a.b.c.d','.',case when id=1 then d else v end),substring_index('a.b.c.d','.',if(id=2,cast(v as double),v)) from sources order by id;
+➤ id[4,32,0]  ¦  substring_index(a.b.c.d, ., if(id = 1, d, v))[12,7,0]  ¦  substring_index(a.b.c.d, ., case when id = 1 then d else v end)[12,7,0]  ¦  substring_index(a.b.c.d, ., if(id = 2, cast(v as double), v))[12,7,0]  𝄀
+1  ¦  a.b.c  ¦  a.b.c  ¦  a.b  𝄀
+2  ¦  a.b  ¦  a.b  ¦  a  𝄀
+3  ¦  null  ¦  null  ¦  null
+select id,substring_index('a.b.c.d','.',cast(v as double)+0e0),substring_index('a.b.c.d','.',abs(cast(v as double))),substring_index('a.b.c.d','.',coalesce(cast(v as double),0e0)),substring_index('a.b.c.d','.',ifnull(cast(v as double),0e0)),substring_index('a.b.c.d','.',nullif(cast(v as double),-1e0)) from sources order by id;
+➤ id[4,32,0]  ¦  substring_index(a.b.c.d, ., cast(v as double) + 0e0)[12,7,0]  ¦  substring_index(a.b.c.d, ., abs(cast(v as double)))[12,7,0]  ¦  substring_index(a.b.c.d, ., coalesce(cast(v as double), 0e0))[12,7,0]  ¦  substring_index(a.b.c.d, ., ifnull(cast(v as double), 0e0))[12,7,0]  ¦  substring_index(a.b.c.d, ., nullif(cast(v as double), -1e0))[12,7,0]  𝄀
+1  ¦  a.b  ¦  a.b  ¦  a.b  ¦  a.b  ¦  a.b  𝄀
+2  ¦  a.b  ¦  a.b  ¦  a.b  ¦  a.b  ¦  a  𝄀
+3  ¦  null  ¦  null  ¦    ¦    ¦  null
+select substring_index('a.b.c','.',if(true,1,cast('9223372036854775808' as decimal(20,0))));
+➤ substring_index(a.b.c, ., if(true, 1, cast(9223372036854775808 as decimal(20))))[12,5,0]  𝄀
+a
+select substring_index('a.b.c','.',case when false then cast('9223372036854775808' as decimal(20,0)) else 1 end);
+➤ substring_index(a.b.c, ., case when false then cast(9223372036854775808 as decimal(20)) else 1 end)[12,5,0]  𝄀
+a
+select left('abcd',2.5),right('abcd',2.5),substring('abcd',2.5),substr('abcd',1,2.5),mid('abcd',1,2.5);
+➤ left(abcd, 2.5)[12,4,0]  ¦  right(abcd, 2.5)[12,4,0]  ¦  substring(abcd, 2.5)[12,4,0]  ¦  substr(abcd, 1, 2.5)[12,4,0]  ¦  mid(abcd, 1, 2.5)[12,4,0]  𝄀
+abc  ¦  bcd  ¦  cd  ¦  abc  ¦  abc
+select lpad('x',2.5,'0'),rpad('x',2.5,'0'),insert('abcd',2.5,1.5,'X'),locate('b','abcabc',2.5);
+➤ lpad(x, 2.5, 0)[-1,16383,0]  ¦  rpad(x, 2.5, 0)[-1,16383,0]  ¦  insert(abcd, 2.5, 1.5, X)[12,5,0]  ¦  locate(b, abcabc, 2.5)[-5,64,0]  𝄀
+00x  ¦  x00  ¦  abX  ¦  5
+select repeat('x',2.5),length(space(2.5)),elt(2.5,'a','b','c'),period_add(202401,2.5),period_diff(202403.5,202401.5);
+➤ repeat(x, 2.5)[-1,16383,0]  ¦  length(space(2.5))[-5,64,0]  ¦  elt(2.5, a, b, c)[12,1,0]  ¦  period_add(202401, 2.5)[-5,64,0]  ¦  period_diff(202403.5, 202401.5)[-5,64,0]  𝄀
+xxx  ¦  3  ¦  c  ¦  202404  ¦  2
+select left('abcd',2.5e0),right('abcd',2.5e0),substring('abcd',2.5e0),lpad('x',2.5e0,'0'),repeat('x',2.5e0),elt(2.5e0,'a','b','c');
+➤ left(abcd, 2.5e0)[12,4,0]  ¦  right(abcd, 2.5e0)[12,4,0]  ¦  substring(abcd, 2.5e0)[12,4,0]  ¦  lpad(x, 2.5e0, 0)[-1,16383,0]  ¦  repeat(x, 2.5e0)[-1,16383,0]  ¦  elt(2.5e0, a, b, c)[12,1,0]  𝄀
+ab  ¦  cd  ¦  bcd  ¦  0x  ¦  xx  ¦  b
+select substring_index('a.b.c','.',true),substring_index('a.b.c','.',false),substring_index('a.b.c','.', '  +2tail'),substring_index('a.b.c','.', '1e2'),substring_index('a.b.c','.', 'bad');
+➤ substring_index(a.b.c, ., true)[12,5,0]  ¦  substring_index(a.b.c, ., false)[12,5,0]  ¦  substring_index(a.b.c, .,   +2tail)[12,5,0]  ¦  substring_index(a.b.c, ., 1e2)[12,5,0]  ¦  substring_index(a.b.c, ., bad)[12,5,0]  𝄀
+a  ¦    ¦  a.b  ¦  a  ¦  
+select substring_index('a.b.c','.',cast('9007199254740993.5' as decimal(38,1)));
+➤ substring_index(a.b.c, ., cast(9007199254740993.5 as decimal(38, 1)))[12,5,0]  𝄀
+a.b.c
+select substring_index('a.b.c','.',cast('9223372036854775807.4' as decimal(38,1)));
+➤ substring_index(a.b.c, ., cast(9223372036854775807.4 as decimal(38, 1)))[12,5,0]  𝄀
+a.b.c
+select substring_index('a.b.c','.',cast('9223372036854775807.5' as decimal(38,1)));
+Data truncation: data out of range: data type int64, integer argument
+select substring_index('a.b.c','.',18446744073709551615);
+Data truncation: data out of range: data type int64, integer argument
+select substring_index('a.b.c','.', '-9223372036854775809');
+Data truncation: data out of range: data type int64, integer argument
+select substring_index('a.b.c','.',null);
+➤ substring_index(a.b.c, ., null)[12,5,0]  𝄀
+null
+create table defaults_t(a varchar(32) default (substring_index('a.b.c.d','.',2.5)),b varchar(32) default (substring_index('a.b.c.d','.',cast(1.5 as double))));
+insert into defaults_t values (default,default);
+select * from defaults_t;
+➤ a[12,32,0]  ¦  b[12,32,0]  𝄀
+a.b.c  ¦  a
+create table generated_t(v double,g varchar(32) generated always as (substring_index('a.b.c.d','.',v)) stored,h varchar(32) generated always as (substring_index('a.b.c.d','.',cast(v as double))) stored,check(length(substring_index('a.b.c.d','.',v))>=0));
+insert into generated_t(v) values (1.5),(2.5),(null);
+select * from generated_t order by v;
+➤ v[8,53,31]  ¦  g[12,32,0]  ¦  h[12,32,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1.5  ¦  a.b  ¦  a  𝄀
+2.5  ¦  a.b  ¦  a.b
+update generated_t set v=3.5 where v=1.5;
+select * from generated_t order by v;
+➤ v[8,53,31]  ¦  g[12,32,0]  ¦  h[12,32,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+2.5  ¦  a.b  ¦  a.b  𝄀
+3.5  ¦  a.b.c.d  ¦  a.b.c
+prepare integer_source from 'select substring_index("a.b.c.d",".",?),substring_index("a.b.c.d",".",cast(? as double)),period_add(202401,?),left("abcd",?)';
+set @v=1.5e0;
+execute integer_source using @v,@v,@v,@v;
+➤ substring_index(a.b.c.d, ., ?)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(? as double))[12,7,0]  ¦  period_add(202401, ?)[-5,64,0]  ¦  left(abcd, ?)[12,4,0]  𝄀
+a.b  ¦  a  ¦  202403  ¦  ab
+set @v=2.5;
+execute integer_source using @v,@v,@v,@v;
+➤ substring_index(a.b.c.d, ., ?)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(? as double))[12,7,0]  ¦  period_add(202401, ?)[-5,64,0]  ¦  left(abcd, ?)[12,4,0]  𝄀
+a.b.c  ¦  a.b  ¦  202404  ¦  abc
+set @v='1.9tail';
+execute integer_source using @v,@v,@v,@v;
+➤ substring_index(a.b.c.d, ., ?)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(? as double))[12,7,0]  ¦  period_add(202401, ?)[-5,64,0]  ¦  left(abcd, ?)[12,4,0]  𝄀
+a  ¦  a  ¦  202402  ¦  a
+set @v=null;
+execute integer_source using @v,@v,@v,@v;
+➤ substring_index(a.b.c.d, ., ?)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(? as double))[12,7,0]  ¦  period_add(202401, ?)[-5,64,0]  ¦  left(abcd, ?)[12,4,0]  𝄀
+null  ¦  null  ¦  null  ¦  null
+set @v='9223372036854775808';
+execute integer_source using @v,@v,@v,@v;
+Data truncation: data out of range: data type int64, integer argument
+set @v=1.5e0;
+execute integer_source using @v,@v,@v,@v;
+➤ substring_index(a.b.c.d, ., ?)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(? as double))[12,7,0]  ¦  period_add(202401, ?)[-5,64,0]  ¦  left(abcd, ?)[12,4,0]  𝄀
+a.b  ¦  a  ¦  202403  ¦  ab
+deallocate prepare integer_source;
+select round(1234,-1.5e0),round(1234,cast(-1.5 as double)),round(1234,-2.5);
+➤ round(1234, -1.5e0)[-5,64,0]  ¦  round(1234, cast(-1.5 as double))[-5,64,0]  ¦  round(1234, -2.5)[-5,64,0]  𝄀
+1200  ¦  1230  ¦  1000
+select round(1.2345e0,1.5e0),round(1.2345e0,cast(1.5 as double)),truncate(1.2399e0,2.5);
+➤ round(1.2345e0, 1.5e0)[8,53,31]  ¦  round(1.2345e0, cast(1.5 as double))[8,53,31]  ¦  truncate(1.2399e0, 2.5)[8,53,31]  𝄀
+1.23  ¦  1.2  ¦  1.239
+select ceil(12345,-1.5e0),ceiling(12345,cast(-1.5 as double)),floor(12345,-1.5e0),floor(12345,cast(-1.5 as double));
+➤ ceil(12345, -1.5e0)[-5,64,0]  ¦  ceiling(12345, cast(-1.5 as double))[-5,64,0]  ¦  floor(12345, -1.5e0)[-5,64,0]  ¦  floor(12345, cast(-1.5 as double))[-5,64,0]  𝄀
+12400  ¦  12350  ¦  12300  ¦  12340
+select case when true then ceiling(12345,cast(-1.5 as double)) else round(1,1e40) end;
+➤ case when true then ceiling(12345, cast(-1.5 as double)) else round(1, 1e40) end[-5,64,0]  𝄀
+12350
+select case when false then ceiling(12345,cast(-1.5 as double)) else round(1,1e40) end;
+Data truncation: data out of range: data type int64, integer argument
+create table more_sources(id int,n double,d decimal(5,1));
+insert into more_sources values (1,1.5,1.5),(2,2.5,2.5),(3,null,null);
+select id,round(1.2345e0,n),round(1.2345e0,d),truncate(1.2345e0,n),truncate(1.2345e0,d) from more_sources order by id;
+➤ id[4,32,0]  ¦  round(1.2345e0, n)[8,53,31]  ¦  round(1.2345e0, d)[8,53,31]  ¦  truncate(1.2345e0, n)[8,53,31]  ¦  truncate(1.2345e0, d)[8,53,31]  𝄀
+1  ¦  1.23  ¦  1.23  ¦  1.23  ¦  1.23  𝄀
+2  ¦  1.23  ¦  1.234  ¦  1.23  ¦  1.234  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null
+select ceil(12345,n) from more_sources;
+invalid argument the second argument of the ceil, bad value not const
+select floor(12345,n) from more_sources;
+invalid argument the second argument of the floor, bad value not const
+select id,regexp_instr('a.b.c','[.]',1,n),regexp_substr('a1b2c3','[0-9]',1,n),regexp_substr('a1b2c3','[0-9]',1,d),regexp_replace('a.b.c','[.]','X',1,n) from more_sources order by id;
+➤ id[4,32,0]  ¦  regexp_instr(a.b.c, [.], 1, n)[-5,64,0]  ¦  regexp_substr(a1b2c3, [0-9], 1, n)[12,6,0]  ¦  regexp_substr(a1b2c3, [0-9], 1, d)[12,6,0]  ¦  regexp_replace(a.b.c, [.], X, 1, n)[12,11,0]  𝄀
+1  ¦  4  ¦  2  ¦  2  ¦  a.bXc  𝄀
+2  ¦  4  ¦  2  ¦  3  ¦  a.bXc  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null
+select regexp_instr('a.b.c','[.]',1,1,0.5e0),regexp_instr('a.b.c','[.]',1,1,0.5);
+➤ regexp_instr(a.b.c, [.], 1, 1, 0.5e0)[-5,64,0]  ¦  regexp_instr(a.b.c, [.], 1, 1, 0.5)[-5,64,0]  𝄀
+2  ¦  3
+select regexp_instr('a.b.c','[.]',1,1,127.5e0);
+Data truncation: data out of range: data type int8, value '128'
+select from_days(738886.5),from_days(738886.5e0),from_days(null);
+➤ from_days(738886.5)[91,10,0]  ¦  from_days(738886.5e0)[91,10,0]  ¦  from_days(null)[91,10,0]  𝄀
+2023-01-02  ¦  2023-01-01  ¦  null
+select week('2021-01-03',2.5),week('2021-01-03',2.5e0),yearweek('2021-01-03',2.5),yearweek('2021-01-03',2.5e0);
+➤ week(2021-01-03, 2.5)[-6,8,0]  ¦  week(2021-01-03, 2.5e0)[-6,8,0]  ¦  yearweek(2021-01-03, 2.5)[-5,64,0]  ¦  yearweek(2021-01-03, 2.5e0)[-5,64,0]  𝄀
+53  ¦  1  ¦  202053  ¦  202101
+select length(random_bytes(1.5e0)),length(random_bytes(cast(1.5 as double))),length(random_bytes(null));
+➤ length(random_bytes(1.5e0))[-5,64,0]  ¦  length(random_bytes(cast(1.5 as double)))[-5,64,0]  ¦  length(random_bytes(null))[-5,64,0]  𝄀
+2  ¦  1  ¦  null
+select length(random_bytes(0));
+Data truncation: length value is out of range in 'random_bytes'
+select length(random_bytes(1025));
+Data truncation: length value is out of range in 'random_bytes'
+select length(sha2('abc','256tail')),length(sha2('abc',255.5e0)),length(sha2('abc',cast(255.5 as double))),sha2('abc',null);
+➤ length(sha2(abc, 256tail))[-5,64,0]  ¦  length(sha2(abc, 255.5e0))[-5,64,0]  ¦  length(sha2(abc, cast(255.5 as double)))[-5,64,0]  ¦  sha2(abc, null)[12,128,0]  𝄀
+64  ¦  64  ¦  null  ¦  null
+select sha2('abc','9223372036854775808');
+Data truncation: data out of range: data type int64, integer argument
+select l1_norm(subvector(cast('[1,2,3,4]' as vecf32),2.5,1.5e0));
+➤ l1_norm(subvector(cast([1,2,3,4] as vecf32), 2.5, 1.5e0))[8,53,31]  𝄀
+7.0
+create table year_source(y year);
+insert into year_source values (0),(2024),(null);
+select cast(y as unsigned),substring_index('a.b.c','.',y) from year_source order by y;
+➤ cast(y as unsigned)[-5,64,0]  ¦  substring_index(a.b.c, ., y)[12,5,0]  𝄀
+null  ¦  null  𝄀
+0  ¦    𝄀
+2024  ¦  a.b.c
+select length(random_bytes(y)) from year_source where y=2024;
+Data truncation: length value is out of range in 'random_bytes'
+prepare additional_integer_source from 'select round(1.2345e0,?),regexp_instr("a.b.c","[.]",1,?),length(random_bytes(?)),week("2021-01-03",?)';
+set @v=1.5e0;
+execute additional_integer_source using @v,@v,@v,@v;
+➤ round(1.2345e0, ?)[8,53,31]  ¦  regexp_instr(a.b.c, [.], 1, ?)[-5,64,0]  ¦  length(random_bytes(?))[-5,64,0]  ¦  week(2021-01-03, ?)[-6,8,0]  𝄀
+1.23  ¦  4  ¦  2  ¦  1
+set @v='1.9tail';
+execute additional_integer_source using @v,@v,@v,@v;
+➤ round(1.2345e0, ?)[8,53,31]  ¦  regexp_instr(a.b.c, [.], 1, ?)[-5,64,0]  ¦  length(random_bytes(?))[-5,64,0]  ¦  week(2021-01-03, ?)[-6,8,0]  𝄀
+1.2  ¦  2  ¦  1  ¦  0
+set @v=null;
+execute additional_integer_source using @v,@v,@v,@v;
+➤ round(1.2345e0, ?)[8,53,31]  ¦  regexp_instr(a.b.c, [.], 1, ?)[-5,64,0]  ¦  length(random_bytes(?))[-5,64,0]  ¦  week(2021-01-03, ?)[-6,8,0]  𝄀
+null  ¦  null  ¦  null  ¦  1
+set @v=1.5e0;
+execute additional_integer_source using @v,@v,@v,@v;
+➤ round(1.2345e0, ?)[8,53,31]  ¦  regexp_instr(a.b.c, [.], 1, ?)[-5,64,0]  ¦  length(random_bytes(?))[-5,64,0]  ¦  week(2021-01-03, ?)[-6,8,0]  𝄀
+1.23  ¦  4  ¦  2  ¦  1
+deallocate prepare additional_integer_source;
+create table bit_sources(id int,s varchar(32),n double,u bigint unsigned,i bigint);
+insert into bit_sources values (1,'65.5',65.5,18446744073709551615,-2),(2,'18446744073709551615',66.5,9223372036854775808,-1),(3,'-1',null,0,-2),(4,null,null,null,null);
+select id,hex(char(s)),hex(char(n)),hex(char(cast(n as double))),hex(char(if(id=1,u,i))) from bit_sources order by id;
+➤ id[4,32,0]  ¦  hex(char(s))[12,8,0]  ¦  hex(char(n))[12,8,0]  ¦  hex(char(cast(n as double)))[12,8,0]  ¦  hex(char(if(id = 1, u, i)))[12,8,0]  𝄀
+1  ¦  41  ¦  42  ¦  41  ¦  FFFFFFFF  𝄀
+2  ¦  FFFFFFFF  ¦  42  ¦  42  ¦  FFFFFFFF  𝄀
+3  ¦  FFFFFFFF  ¦    ¦    ¦  FFFFFFFE  𝄀
+4  ¦    ¦    ¦    ¦  
+select id,make_set(s,'a','b'),export_set(s,'Y','N',',',2),hex(s),hex(n) from bit_sources order by id;
+➤ id[4,32,0]  ¦  make_set(s, a, b)[12,3,0]  ¦  export_set(s, Y, N, ,, 2)[12,127,0]  ¦  hex(s)[12,256,0]  ¦  hex(n)[12,16,0]  𝄀
+1  ¦  a  ¦  Y,N  ¦  36352E35  ¦  42  𝄀
+2  ¦  a,b  ¦  Y,Y  ¦  3138343436373434303733373039353531363135  ¦  42  𝄀
+3  ¦  a,b  ¦  Y,Y  ¦  2D31  ¦  null  𝄀
+4  ¦  null  ¦  null  ¦  null  ¦  null
+select hex(char('9223372036854775808')),hex(char(-1,18446744073709551615)),hex(0x0001);
+➤ hex(char(9223372036854775808))[12,8,0]  ¦  hex(char(-1, 18446744073709551615))[12,16,0]  ¦  hex(0x0001)[12,16,0]  𝄀
+00  ¦  FFFFFFFFFFFFFFFF  ¦  0001
+select hex(char(if(false,cast('9223372036854775808' as decimal(20,0)),18446744073709551615)));
+➤ hex(char(if(false, cast(9223372036854775808 as decimal(20)), 18446744073709551615)))[12,8,0]  𝄀
+FFFFFFFF
+select char(if(true,cast('9223372036854775808' as decimal(20,0)),18446744073709551615));
+Data truncation: data out of range: data type int64, integer argument
+select char('18446744073709551616');
+Data truncation: data out of range: data type uint64, integer argument
+select char('-9223372036854775809');
+Data truncation: data out of range: data type int64, integer argument
+select substring_index('a.b','.', '18446744073709551615');
+Data truncation: data out of range: data type int64, integer argument
+select conv('10',2.5,10),conv('10',2.5e0,10),conv(1.5,10,8);
+➤ conv(10, 2.5, 10)[12,65,0]  ¦  conv(10, 2.5e0, 10)[12,65,0]  ¦  conv(1.5, 10, 8)[12,65,0]  𝄀
+3  ¦  2  ¦  1
+select split_part('a.b.c','.',1.5e0),split_part('a.b.c','.',cast(1.5 as double));
+➤ split_part(a.b.c, ., 1.5e0)[12,5,0]  ¦  split_part(a.b.c, ., cast(1.5 as double))[12,5,0]  𝄀
+b  ¦  a
+select split_part('a.b.c','.',4294967296);
+Data truncation: data out of range: data type uint32, value '4294967296'
+prepare bit_integer_source from 'select hex(char(?)),make_set(?,"a","b"),export_set(?,"Y","N",",",2)';
+set @v=65.5e0;
+execute bit_integer_source using @v,@v,@v;
+➤ hex(char(?))[12,8,0]  ¦  make_set(?, a, b)[12,3,0]  ¦  export_set(?, Y, N, ,, 2)[12,127,0]  𝄀
+42  ¦  b  ¦  N,Y
+set @v='65.5';
+execute bit_integer_source using @v,@v,@v;
+➤ hex(char(?))[12,8,0]  ¦  make_set(?, a, b)[12,3,0]  ¦  export_set(?, Y, N, ,, 2)[12,127,0]  𝄀
+41  ¦  a  ¦  Y,N
+set @v='18446744073709551615';
+execute bit_integer_source using @v,@v,@v;
+➤ hex(char(?))[12,8,0]  ¦  make_set(?, a, b)[12,3,0]  ¦  export_set(?, Y, N, ,, 2)[12,127,0]  𝄀
+FFFFFFFF  ¦  a,b  ¦  Y,Y
+set @v=-1;
+execute bit_integer_source using @v,@v,@v;
+➤ hex(char(?))[12,8,0]  ¦  make_set(?, a, b)[12,3,0]  ¦  export_set(?, Y, N, ,, 2)[12,127,0]  𝄀
+FFFFFFFF  ¦  a,b  ¦  Y,Y
+set @v=null;
+execute bit_integer_source using @v,@v,@v;
+➤ hex(char(?))[12,8,0]  ¦  make_set(?, a, b)[12,3,0]  ¦  export_set(?, Y, N, ,, 2)[12,127,0]  𝄀
+  ¦  null  ¦  null
+deallocate prepare bit_integer_source;
+select timestampadd(day,2.5,'2024-01-01'),timestampadd(day,2.5e0,'2024-01-01'),timestampadd(day,cast(1.5 as double),'2024-01-01');
+➤ timestampadd(day, 2.5, 2024-01-01)[12,65535,0]  ¦  timestampadd(day, 2.5e0, 2024-01-01)[12,65535,0]  ¦  timestampadd(day, cast(1.5 as double), 2024-01-01)[12,65535,0]  𝄀
+2024-01-04  ¦  2024-01-03  ¦  2024-01-02
+select id,timestampadd(day,n,'2024-01-01'),timestampadd(day,d,'2024-01-01'),timestampadd(day,cast(n as double),'2024-01-01') from more_sources order by id;
+➤ id[4,32,0]  ¦  timestampadd(day, n, 2024-01-01)[12,65535,0]  ¦  timestampadd(day, d, 2024-01-01)[12,65535,0]  ¦  timestampadd(day, cast(n as double), 2024-01-01)[12,65535,0]  𝄀
+1  ¦  2024-01-03  ¦  2024-01-03  ¦  2024-01-02  𝄀
+2  ¦  2024-01-03  ¦  2024-01-04  ¦  2024-01-03  𝄀
+3  ¦  null  ¦  null  ¦  null
+select timestampadd(day,1,cast('2024-01-01' as date)),timestampadd(day,1.5e0,cast('2024-01-01' as date)),timestampadd(microsecond,1.5e0,'2024-01-01');
+➤ timestampadd(day, 1, cast(2024-01-01 as date))[91,10,0]  ¦  timestampadd(day, 1.5e0, cast(2024-01-01 as date))[91,10,0]  ¦  timestampadd(microsecond, 1.5e0, 2024-01-01)[12,65535,0]  𝄀
+2024-01-02  ¦  2024-01-03  ¦  2024-01-01 00:00:00.000002
+select timestampadd(day,if(true,1,1e40),'2024-01-01');
+➤ timestampadd(day, if(true, 1, 1e40), 2024-01-01)[12,65535,0]  𝄀
+2024-01-02
+select timestampadd(day,18446744073709551615,'2024-01-01');
+Data truncation: data out of range: data type int64, integer argument
+select timestampadd(day,'9223372036854775808','2024-01-01');
+Data truncation: data out of range: data type int64, integer argument
+create table enum_sources (v enum('20.5','10.5'));
+insert into enum_sources values ('20.5'),('10.5');
+select cast(v as unsigned),left('abcd',v),hex(char(v)),substring_index('a.b.c','.',v) from enum_sources order by v;
+➤ cast(v as unsigned)[-5,64,0]  ¦  left(abcd, v)[12,4,0]  ¦  hex(char(v))[12,8,0]  ¦  substring_index(a.b.c, ., v)[12,5,0]  𝄀
+1  ¦  a  ¦  01  ¦  a  𝄀
+2  ¦  ab  ¦  02  ¦  a.b
+select octet_length(random_bytes(v)),conv('10',v,10) from enum_sources order by v;
+➤ octet_length(random_bytes(v))[-5,64,0]  ¦  conv(10, v, 10)[12,65,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  2
+select left('abcd',v),left('abcd',ifnull(v,'')) from (select v from enum_sources) derived order by v;
+➤ left(abcd, v)[12,4,0]  ¦  left(abcd, ifnull(v, ))[12,4,0]  𝄀
+a  ¦  abcd  𝄀
+ab  ¦  abcd
+create table temporal_sources(t time(6),d datetime(6),day_value date,ts timestamp(6));
+insert into temporal_sources values ('00:02:55.5','2023-12-31 23:59:59.5','2024-01-01','2024-01-01 00:00:00.5');
+select sha2('abc',t),sha2('abc',d),sha2('abc',day_value),sha2('abc',ts) from temporal_sources;
+➤ sha2(abc, t)[12,128,0]  ¦  sha2(abc, d)[12,128,0]  ¦  sha2(abc, day_value)[12,128,0]  ¦  sha2(abc, ts)[12,128,0]  𝄀
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  ¦  null  ¦  null  ¦  null
+select sha2('abc',cast('838:59:59.999999' as time(6))),sha2('abc',cast('9999-12-31 23:59:59.999999' as datetime(6)));
+➤ sha2(abc, cast(838:59:59.999999 as time(6)))[12,128,0]  ¦  sha2(abc, cast(9999-12-31 23:59:59.999999 as datetime(6)))[12,128,0]  𝄀
+null  ¦  null
+select sha2('abc',if(true,cast('00:02:55.5' as time(6)),1e40));
+➤ sha2(abc, if(true, cast(00:02:55.5 as time(6)), 1e40))[12,128,0]  𝄀
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+select sha2('abc',cast('00000256-0000-0000-0000-000000000000' as uuid));
+➤ sha2(abc, cast(00000256-0000-0000-0000-000000000000 as uuid))[12,128,0]  𝄀
+ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+select left('abc',cast('00:00:01.5' as time(6)));
+invalid input: invalid integer argument cast signature [TIME BIGINT]
+select maketime(12.5,58.5,30.5),maketime(12.5e0,58.5e0,30.5e0),maketime(cast(12.5 as double),cast(58.5 as double),cast(30.5 as double)),maketime('12.9tail','58.9tail','30.5tail');
+➤ maketime(12.5, 58.5, 30.5)[92,12,0]  ¦  maketime(12.5e0, 58.5e0, 30.5e0)[92,17,0]  ¦  maketime(cast(12.5 as double), cast(58.5 as double), cast(30.5 as double))[92,17,0]  ¦  maketime(12.9tail, 58.9tail, 30.5tail)[92,17,0]  𝄀
+13:59:30.500000000  ¦  12:58:30.500000000  ¦  12:58:30.500000000  ¦  12:58:30.500000000
+select id,maketime(n,d,30.5),maketime(d,n,30.5e0),maketime(cast(n as double),cast(d as double),30.5) from more_sources order by id;
+➤ id[4,32,0]  ¦  maketime(n, d, 30.5)[92,12,0]  ¦  maketime(d, n, 30.5e0)[92,17,0]  ¦  maketime(cast(n as double), cast(d as double), 30.5)[92,12,0]  𝄀
+1  ¦  02:02:30.500000000  ¦  02:02:30.500000000  ¦  01:01:30.500000000  𝄀
+2  ¦  02:03:30.500000000  ¦  03:02:30.500000000  ¦  02:02:30.500000000  𝄀
+3  ¦  null  ¦  null  ¦  null
+select maketime(cast('00:00:12.5' as time(6)),1,2),maketime(if(true,12.5,12.5e0),if(false,58.5,58.5e0),30.5),maketime(coalesce(cast(12.5 as double),0e0),1,2);
+➤ maketime(cast(00:00:12.5 as time(6)), 1, 2)[92,10,0]  ¦  maketime(if(true, 12.5, 12.5e0), if(false, 58.5, 58.5e0), 30.5)[92,12,0]  ¦  maketime(coalesce(cast(12.5 as double), 0e0), 1, 2)[92,10,0]  𝄀
+13:01:02  ¦  13:58:30.500000000  ¦  12:01:02
+select maketime(v,1,2) from enum_sources order by v;
+➤ maketime(v, 1, 2)[92,10,0]  𝄀
+01:01:02  𝄀
+02:01:02
+select maketime(NULL,1,2),maketime(12,NULL,2),maketime(12,1,NULL),maketime(cast('00000012-0000-0000-0000-000000000000' as uuid),1,2);
+➤ maketime(null, 1, 2)[92,10,0]  ¦  maketime(12, null, 2)[92,10,0]  ¦  maketime(12, 1, null)[92,17,0]  ¦  maketime(cast(00000012-0000-0000-0000-000000000000 as uuid), 1, 2)[92,10,0]  𝄀
+null  ¦  null  ¦  null  ¦  12:01:02
+select maketime(cast('9223372036854775808' as decimal(20,0)),0,0);
+Data truncation: data out of range: data type int64, integer argument
+select maketime('9223372036854775808',0,0);
+Data truncation: data out of range: data type int64, integer argument
+select format(1234.5,1.5),format(1234.5,1.5e0),format(1234.5,cast(1.5 as double)),format(1234.5,'1.9tail');
+➤ format(1234.5, 1.5)[12,65535,0]  ¦  format(1234.5, 1.5e0)[12,65535,0]  ¦  format(1234.5, cast(1.5 as double))[12,65535,0]  ¦  format(1234.5, 1.9tail)[12,65535,0]  𝄀
+1,234.50  ¦  1,234.50  ¦  1,234.5  ¦  1,234.5
+select format(2.5,0),format(2.5e0,0),format('2.5',0),format(cast(2.5 as double),0);
+➤ format(2.5, 0)[12,65535,0]  ¦  format(2.5e0, 0)[12,65535,0]  ¦  format(2.5, 0)[12,65535,0]  ¦  format(cast(2.5 as double), 0)[12,65535,0]  𝄀
+3  ¦  2  ¦  2  ¦  2
+select id,format(n,d),format(d,n),format(cast(n as double),n) from more_sources order by id;
+➤ id[4,32,0]  ¦  format(n, d)[12,65535,0]  ¦  format(d, n)[12,65535,0]  ¦  format(cast(n as double), n)[12,65535,0]  𝄀
+1  ¦  1.50  ¦  1.50  ¦  1.50  𝄀
+2  ¦  2.500  ¦  2.50  ¦  2.50  𝄀
+3  ¦  null  ¦  null  ¦  null
+select format(1234.5,cast('00:00:01.5' as time(6))),format(1234.5,if(true,2.5,2.5e0)),format(1234.5,coalesce(cast(1.5 as double),0e0));
+➤ format(1234.5, cast(00:00:01.5 as time(6)))[12,65535,0]  ¦  format(1234.5, if(true, 2.5, 2.5e0))[12,65535,0]  ¦  format(1234.5, coalesce(cast(1.5 as double), 0e0))[12,65535,0]  𝄀
+1,234.50  ¦  1,234.500  ¦  1,234.50
+select format(1234.5,v) from enum_sources order by v;
+➤ format(1234.5, v)[12,65535,0]  𝄀
+1,234.5  𝄀
+1,234.50
+select format(1234.5,NULL),format(1234.5,1,'de_DE'),format(1234.5,cast('00000002-0000-0000-0000-000000000000' as uuid));
+➤ format(1234.5, null)[12,65535,0]  ¦  format(1234.5, 1, de_DE)[12,65535,0]  ¦  format(1234.5, cast(00000002-0000-0000-0000-000000000000 as uuid))[12,65535,0]  𝄀
+null  ¦  1.234,5  ¦  1,234.50
+select format(1,cast('9223372036854775808' as decimal(20,0)));
+Data truncation: data out of range: data type int64, integer argument
+select format(1,'9223372036854775808');
+Data truncation: data out of range: data type int64, integer argument
+select makedate(2024.5,2.5),makedate(2024.5e0,2.5e0),makedate(2024,cast(1.5 as double)),makedate('2024tail','2.9tail');
+➤ makedate(2024.5, 2.5)[12,65535,0]  ¦  makedate(2024.5e0, 2.5e0)[12,65535,0]  ¦  makedate(2024, cast(1.5 as double))[12,65535,0]  ¦  makedate(2024tail, 2.9tail)[12,65535,0]  𝄀
+2025-01-03  ¦  2024-01-02  ¦  2024-01-01  ¦  2024-01-02
+select id,makedate(2024,n),makedate(2024,d),makedate(2024,cast(n as double)) from more_sources order by id;
+➤ id[4,32,0]  ¦  makedate(2024, n)[12,65535,0]  ¦  makedate(2024, d)[12,65535,0]  ¦  makedate(2024, cast(n as double))[12,65535,0]  𝄀
+1  ¦  2024-01-02  ¦  2024-01-02  ¦  2024-01-01  𝄀
+2  ¦  2024-01-02  ¦  2024-01-03  ¦  2024-01-02  𝄀
+3  ¦  null  ¦  null  ¦  null
+select makedate(0,1),makedate(69,1),makedate(70,1),makedate(9999,365),makedate(9999,366),makedate(2024,4294967297),makedate(2024,9223372036854775807);
+➤ makedate(0, 1)[12,65535,0]  ¦  makedate(69, 1)[12,65535,0]  ¦  makedate(70, 1)[12,65535,0]  ¦  makedate(9999, 365)[12,65535,0]  ¦  makedate(9999, 366)[12,65535,0]  ¦  makedate(2024, 4294967297)[12,65535,0]  ¦  makedate(2024, 9223372036854775807)[12,65535,0]  𝄀
+2000-01-01  ¦  2069-01-01  ¦  1970-01-01  ¦  9999-12-31  ¦  null  ¦  null  ¦  null
+select makedate(2024,cast('00:00:01.5' as time(6))),makedate(2024,if(true,2.5,2.5e0)),makedate(2024,coalesce(cast(1.5 as double),0e0));
+➤ makedate(2024, cast(00:00:01.5 as time(6)))[12,65535,0]  ¦  makedate(2024, if(true, 2.5, 2.5e0))[12,65535,0]  ¦  makedate(2024, coalesce(cast(1.5 as double), 0e0))[12,65535,0]  𝄀
+2024-01-02  ¦  2024-01-03  ¦  2024-01-02
+select makedate(2024,v) from enum_sources order by v;
+➤ makedate(2024, v)[12,65535,0]  𝄀
+2024-01-01  𝄀
+2024-01-02
+select makedate(NULL,1),makedate(2024,NULL),makedate(cast('00002024-0000-0000-0000-000000000000' as uuid),1);
+➤ makedate(null, 1)[12,65535,0]  ¦  makedate(2024, null)[12,65535,0]  ¦  makedate(cast(00002024-0000-0000-0000-000000000000 as uuid), 1)[12,65535,0]  𝄀
+null  ¦  null  ¦  2024-01-01
+select makedate(2024,cast('9223372036854775808' as decimal(20,0)));
+Data truncation: data out of range: data type int64, integer argument
+select makedate(2024,'9223372036854775808');
+Data truncation: data out of range: data type int64, integer argument
+drop database integer_parameter_coercion;

@@ -47,8 +47,15 @@ func TestRandomBytesTypeCheckAcceptsMysqlCoercibleArguments(t *testing.T) {
 	} {
 		resolved, err := GetFunctionByName(ctx, "random_bytes", []types.Type{tc.typ})
 		require.NoError(t, err, tc.typ)
-		require.Equal(t, tc.overload, resolved.overloadId, tc.typ)
-		require.False(t, resolved.needCast, tc.typ)
+		require.Equal(t, int32(0), resolved.overloadId, tc.typ)
+		require.Equal(t, tc.typ.Oid != types.T_int64, resolved.needCast, tc.typ)
+		if resolved.needCast {
+			targets, _ := resolved.ShouldDoImplicitTypeCast()
+			require.Equal(t, types.T_int64, targets[0].Oid)
+		}
+		// The source-specific legacy identity still decodes for old plans.
+		_, err = GetFunctionById(ctx, encodeOverloadID(RANDOM_BYTES, tc.overload))
+		require.NoError(t, err)
 		require.Equal(t, types.T_blob, resolved.retType.Oid, tc.typ)
 	}
 

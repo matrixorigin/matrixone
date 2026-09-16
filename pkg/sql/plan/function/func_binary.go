@@ -6768,12 +6768,9 @@ func formatCheck(overloads []overload, inputs []types.Type) checkResult {
 		}
 		targets := append([]types.Type(nil), inputs...)
 		needsCast := false
-		for i := 1; i < len(targets); i++ {
-			if targets[i].Oid.IsMySQLString() {
-				continue
-			}
-			targets[i] = formattedScalarStringType(targets[i])
-			SetTargetScaleFromSource(&inputs[i], &targets[i])
+		if len(targets) == 3 && !targets[2].Oid.IsMySQLString() {
+			targets[2] = formattedScalarStringType(targets[2])
+			SetTargetScaleFromSource(&inputs[2], &targets[2])
 			needsCast = true
 		}
 		if needsCast {
@@ -6786,7 +6783,26 @@ func formatCheck(overloads []overload, inputs []types.Type) checkResult {
 	if inputs[0].Oid.IsDateRelate() {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	return fixedTypeMatch(overloads, inputs)
+	overloadID := len(inputs) - 2
+	if overloadID < 0 || overloadID >= len(overloads) {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	targets := append([]types.Type(nil), inputs...)
+	needsCast := false
+	if !targets[0].Oid.IsMySQLString() {
+		targets[0] = formattedScalarStringType(inputs[0])
+		SetTargetScaleFromSource(&inputs[0], &targets[0])
+		needsCast = true
+	}
+	if len(targets) == 3 && !targets[2].Oid.IsMySQLString() {
+		targets[2] = formattedScalarStringType(inputs[2])
+		SetTargetScaleFromSource(&inputs[2], &targets[2])
+		needsCast = true
+	}
+	if needsCast {
+		return newCheckResultWithCast(overloadID, targets)
+	}
+	return newCheckResultWithSuccess(overloadID)
 }
 
 func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {

@@ -35,14 +35,34 @@ func preservePersistedFormatCompatibility(ctx context.Context, expr *planpb.Expr
 			return nil
 		}
 		id, _ := function.DecodeOverloadID(fn.Func.Obj)
-		if id != function.FORMAT || !makeTypeByPlan2Expr(fn.Args[0]).IsNumeric() {
+		if id != function.FORMAT {
 			return nil
 		}
-		arg, err := appendCastBeforeExpr(ctx, fn.Args[0], planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen})
-		if err != nil {
-			return err
+		stringType := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+		if makeTypeByPlan2Expr(fn.Args[0]).IsNumeric() {
+			arg, err := appendCastBeforeExpr(ctx, fn.Args[0], stringType)
+			if err != nil {
+				return err
+			}
+			fn.Args[0] = arg
 		}
-		fn.Args[0] = arg
+		precision := fn.Args[1]
+		if cast := precision.GetF(); cast != nil && cast.Func != nil && len(cast.Args) > 0 {
+			id, overload := function.DecodeOverloadID(cast.Func.Obj)
+			if id == function.CAST && function.IsIntegerArgumentCastOverload(overload) {
+				precision = cast.Args[0]
+			}
+		}
+		if types.T(precision.Typ.Id) != types.T_varchar {
+			arg, err := appendCastBeforeExpr(ctx, precision, stringType)
+			if err != nil {
+				return err
+			}
+			fn.Args[1] = arg
+		} else {
+			fn.Args[1] = precision
+		}
+		fn.Func.Obj = function.EncodeOverloadID(function.FORMAT, int32(len(fn.Args)-2))
 		return nil
 	})
 }

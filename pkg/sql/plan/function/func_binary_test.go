@@ -4472,7 +4472,7 @@ func TestFormatNumericDomainsKeepTheirRoundingContracts(t *testing.T) {
 	}
 }
 
-func TestFormatCheckSelectsSourceDomainWithoutExtraOverloads(t *testing.T) {
+func TestFormatCheckSelectsSourceDomainWithIntegerPrecision(t *testing.T) {
 	fn := allSupportedFunctions[FORMAT]
 	require.NotNil(t, fn.checkFn)
 
@@ -4487,10 +4487,8 @@ func TestFormatCheckSelectsSourceDomainWithoutExtraOverloads(t *testing.T) {
 		types.T_decimal64.ToType(),
 		types.T_int64.ToType(),
 	})
-	require.Equal(t, succeedWithCast, result.status)
+	require.Equal(t, succeedMatched, result.status)
 	require.Equal(t, 0, result.idx)
-	require.Equal(t, types.T_decimal64, result.finalType[0].Oid)
-	require.Equal(t, types.T_varchar, result.finalType[1].Oid)
 
 	result = fn.checkFn(fn.Overloads, []types.Type{
 		types.T_float64.ToType(),
@@ -4508,12 +4506,12 @@ func TestFormatCheckSelectsSourceDomainWithoutExtraOverloads(t *testing.T) {
 	require.Equal(t, succeedWithCast, result.status)
 	require.Equal(t, 1, result.idx)
 	require.Len(t, result.finalType, 3)
-	require.Equal(t, types.T_varchar, result.finalType[1].Oid)
+	require.Equal(t, types.T_int64, result.finalType[1].Oid)
 	require.Equal(t, types.T_varchar, result.finalType[2].Oid)
 
 	result = fn.checkFn(fn.Overloads, []types.Type{
 		types.T_varchar.ToType(),
-		types.T_varchar.ToType(),
+		types.T_int64.ToType(),
 	})
 	require.Equal(t, succeedMatched, result.status)
 	require.Equal(t, 0, result.idx)
@@ -4523,14 +4521,14 @@ func TestFormatCheckSelectsSourceDomainWithoutExtraOverloads(t *testing.T) {
 		types.T_varchar.ToType(),
 	})
 	require.True(t, ok)
-	require.Equal(t, int32(0), resolved.overloadId)
+	require.Equal(t, int32(IntegerFormat2Overload), resolved.overloadId)
 	resolved, ok = GetFunctionByNameWithoutError("format", []types.Type{
 		types.T_float64.ToType(),
 		types.T_varchar.ToType(),
 		types.T_varchar.ToType(),
 	})
 	require.True(t, ok)
-	require.Equal(t, int32(1), resolved.overloadId)
+	require.Equal(t, int32(IntegerFormat3Overload), resolved.overloadId)
 
 	for _, inputs := range [][]types.Type{
 		{types.T_date.ToType(), types.T_varchar.ToType()},

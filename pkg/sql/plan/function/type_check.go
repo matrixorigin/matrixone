@@ -400,20 +400,6 @@ func stringDomainFixedTypeMatch(overloads []overload, inputs []types.Type) check
 // hexTypeMatch keeps HEX's byte-preserving string domains while treating BOOL
 // as the numeric value 0/1. BOOL must not be added to the global implicit-cast
 // lattice because unrelated string/binary functions intentionally stringify it.
-func hexTypeMatch(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) == 1 {
-		switch inputs[0].Oid {
-		case types.T_bool:
-			return fixedTypeMatchWithBoolNumericCast(overloads, inputs)
-		case types.T_float32:
-			return newCheckResultWithSuccess(HexFloat32Overload)
-		case types.T_float64:
-			return newCheckResultWithSuccess(HexFloat64Overload)
-		}
-	}
-	return stringDomainFixedTypeMatch(overloads, inputs)
-}
-
 // sha2TypeMatch defers an unknown hash-length operand to SHA2's string
 // overload. A parameter marker is represented as T_any during prepare, but a
 // later execution may bind a character value such as "256tail". Resolving it

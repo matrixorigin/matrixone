@@ -77,6 +77,9 @@ func TestPersistedFormatCatalogCompatibility(t *testing.T) {
 					needsV59, err := planpb.RequiresMORPCVersion59NumericFormatArguments(&loaded)
 					require.NoError(t, err)
 					require.False(t, needsV59)
+					features, err := planpb.RequiredRemoteExpressionFeatures(&loaded)
+					require.NoError(t, err)
+					require.False(t, features.IntegerParameterCoercion)
 				})
 			}
 		}

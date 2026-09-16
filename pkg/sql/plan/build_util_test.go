@@ -711,11 +711,11 @@ func TestBuildPlanFencesHexDefaultBeforeConstantFold(t *testing.T) {
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	const ddl = "create table t(v varchar(16) default (hex(cast(15.5 as double))))"
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
 	_, err := buildSingleStmt(mock, t, ddl)
-	require.ErrorContains(t, err, "protocol version 74")
+	require.ErrorContains(t, err, "protocol version 76")
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
 	built, err := buildSingleStmt(mock, t, ddl)
 	require.NoError(t, err)
 	def := built.GetDdl().GetCreateTable().GetTableDef().GetCols()[0].GetDefault()
@@ -727,7 +727,7 @@ func TestMigrateLegacyHexDoesNotReparseFoldedDefault(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
 
 	stmt, err := mysql.ParseOneWithSQLMode(t.Context(),
 		"create table t(v varchar(16) default (hex(cast(16777215.9 as real))))", 1, "REAL_AS_FLOAT")
@@ -796,6 +796,9 @@ func TestMigrateLegacyHexFoldedDefaultWhitelist(t *testing.T) {
 			for range 2 {
 				require.NoError(t, MigrateLegacyHexTableDef(proc, execution))
 				require.Equal(t, tc.want, execution.Cols[0].Default.Expr.GetLit().GetSval())
+				features, err := plan.RequiredRemoteExpressionFeatures(execution)
+				require.NoError(t, err)
+				require.False(t, features.IntegerParameterCoercion, "v74 migration must not introduce v76 identities")
 			}
 			after, err := loaded.Marshal()
 			require.NoError(t, err)

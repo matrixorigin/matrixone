@@ -5224,8 +5224,10 @@ func TestSpaceDecimalUsesMySQLRounding(t *testing.T) {
 	resolved, err := GetFunctionByName(context.Background(), "space", []types.Type{decimalType})
 	require.NoError(t, err)
 	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
-	require.False(t, shouldCast)
-	require.Empty(t, targets)
+	require.True(t, shouldCast)
+	require.Equal(t, []types.Type{types.T_int64.ToType()}, targets)
+	_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+	require.Equal(t, int32(1), overload)
 }
 
 func initToTimeCase() []tcTemp {
@@ -6515,11 +6517,11 @@ func TestHexNumericTypeResolution(t *testing.T) {
 		castType   types.T
 	}{
 		{name: "bool", typ: types.T_bool.ToType(), overloadID: 2, cast: true, castType: types.T_int64},
-		{name: "decimal64", typ: types.New(types.T_decimal64, 18, 1), overloadID: 8},
-		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 0), overloadID: 9},
-		{name: "decimal256", typ: types.New(types.T_decimal256, 65, 0), overloadID: 10},
-		{name: "float32", typ: types.T_float32.ToType(), overloadID: HexFloat32Overload},
-		{name: "float64", typ: types.T_float64.ToType(), overloadID: HexFloat64Overload},
+		{name: "decimal64", typ: types.New(types.T_decimal64, 18, 1), overloadID: 2, cast: true, castType: types.T_int64},
+		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 0), overloadID: 2, cast: true, castType: types.T_int64},
+		{name: "decimal256", typ: types.New(types.T_decimal256, 65, 0), overloadID: 2, cast: true, castType: types.T_int64},
+		{name: "float32", typ: types.T_float32.ToType(), overloadID: 2, cast: true, castType: types.T_int64},
+		{name: "float64", typ: types.T_float64.ToType(), overloadID: 2, cast: true, castType: types.T_int64},
 		{name: "varchar", typ: types.T_varchar.ToType(), overloadID: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -6658,7 +6660,7 @@ func TestHexExplicitFloatRejectsSignedIntegerOverflow(t *testing.T) {
 	require.True(t, ok, info)
 }
 
-func TestHexDecimalRegistrationExecutesExactly(t *testing.T) {
+func TestHexLegacyDecimalRegistrationExecutesExactly(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	decimal64Strings := []string{"15.5", "-15.5", "14.5", "-14.5", "0.0"}
@@ -6711,13 +6713,15 @@ func TestHexDecimalRegistrationExecutesExactly(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			resolved, err := GetFunctionByName(proc.Ctx, "hex", []types.Type{tc.typ})
+			// Execute the exact v74 wire identity, not the v76 binder's
+			// checked-integer selection. Legacy saturation remains unchanged.
+			encoded := EncodeOverloadID(HEX, tc.overloadID)
+			_, err := GetFunctionById(proc.Ctx, encoded)
 			require.NoError(t, err)
-			require.Equal(t, tc.overloadID, resolved.overloadId)
 			input := newVectorByType(proc.Mp(), tc.typ, tc.values, nil)
 			defer input.Free(proc.Mp())
 			input.GetNulls().Add(uint64(len(tc.want) - 1))
-			out, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), []*vector.Vector{input}, len(tc.want))
+			out, err := RunFunctionDirectly(proc, encoded, []*vector.Vector{input}, len(tc.want))
 			require.NoError(t, err)
 			defer out.Free(proc.Mp())
 			for i, want := range tc.want {

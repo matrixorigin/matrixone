@@ -18,9 +18,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,12 +39,12 @@ func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
 	charExpr := findPlanFunctionExpr(prepared.GetDcl().GetPrepare().Plan, "char")
 	require.NotNil(t, charExpr)
 	require.Len(t, charExpr.GetF().Args, 1)
-	require.True(t, PreparedPlanNeedsRuntimeSpecialization(prepared.GetDcl().GetPrepare().Plan))
+	require.Equal(t, []int32{0}, PreparedPlanNumericFallbackParamPositions(prepared.GetDcl().GetPrepare().Plan))
 	for _, tc := range []struct {
-		name             string
-		param            ParamValue
-		wantChild        types.T
-		wantStringSource bool
+		name      string
+		param     ParamValue
+		wantChild types.T
+		wantValue string
 	}{
 		{
 			name: "decimal source",
@@ -49,21 +52,23 @@ func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
 				Value: "65.5", SourceType: types.New(types.T_decimal64, 3, 1), HasSourceType: true,
 			},
 			wantChild: types.T_decimal64,
+			wantValue: "B",
 		},
 		{
 			name: "string numeric source",
 			param: ParamValue{
 				Value: "65.5", SourceType: types.T_varchar.ToType(), HasSourceType: true,
 			},
-			wantChild: types.T_decimal64,
+			wantChild: types.T_varchar,
+			wantValue: "A",
 		},
 		{
 			name: "string suffix source",
 			param: ParamValue{
 				Value: "65.5xyz", SourceType: types.T_varchar.ToType(), HasSourceType: true,
 			},
-			wantChild:        types.T_varchar,
-			wantStringSource: true,
+			wantChild: types.T_varchar,
+			wantValue: "A",
 		},
 		{
 			name: "boolean source",
@@ -71,6 +76,7 @@ func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
 				Value: "1", SourceType: types.T_bool.ToType(), HasSourceType: true,
 			},
 			wantChild: types.T_bool,
+			wantValue: "\u0001",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -80,32 +86,7 @@ func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
 			filledChar := findPlanFunctionExpr(filled, "char")
 			require.NotNil(t, filledChar)
 			require.True(t, specialized, "CHAR must be rebound for source domain %v", tc.param.SourceType)
-			if tc.wantStringSource {
-				stringArg := filledChar.GetF().Args[0]
-				require.Equal(t, tc.wantChild, types.T(stringArg.Typ.Id))
-				stringLiteral := stringArg.GetLit()
-				if stringLiteral == nil && stringArg.GetF() != nil && len(stringArg.GetF().Args) > 0 {
-					stringLiteral = stringArg.GetF().Args[0].GetLit()
-				}
-				require.NotNil(t, stringLiteral, filledChar.String())
-				require.Equal(t, "65.5xyz", stringLiteral.GetSval(), filledChar.String())
-				return
-			}
-			require.Equal(t, types.T_int64, types.T(filledChar.GetF().Args[0].Typ.Id))
-			cast := filledChar.GetF().Args[0].GetF()
-			require.NotNil(t, cast)
-			require.Equal(t, "cast", cast.GetFunc().GetObjName())
-			require.Len(t, cast.Args, 2)
-			child := cast.Args[0]
-			if tc.wantChild == types.T_varchar {
-				// SQL string variables use the approximate numeric-prefix source
-				// before CHAR's numeric rounding cast.
-				require.NotNil(t, child.GetF())
-				require.Equal(t, "cast", child.GetF().GetFunc().GetObjName())
-				require.Equal(t, types.T_float64, types.T(child.Typ.Id))
-				child = child.GetF().Args[0]
-			}
-			require.Equal(t, tc.wantChild, types.T(child.Typ.Id), filledChar.String())
+			assertPreparedCharIntegerSource(t, filledChar, tc.wantChild, tc.wantValue)
 		})
 	}
 
@@ -120,14 +101,7 @@ func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
 	require.True(t, specialized)
 	filledChar := findPlanFunctionExpr(filled, "char")
 	require.NotNil(t, filledChar)
-	stringArg := filledChar.GetF().Args[0]
-	require.Equal(t, types.T_varchar, types.T(stringArg.Typ.Id))
-	stringLiteral := stringArg.GetLit()
-	if stringLiteral == nil && stringArg.GetF() != nil && len(stringArg.GetF().Args) > 0 {
-		stringLiteral = stringArg.GetF().Args[0].GetLit()
-	}
-	require.NotNil(t, stringLiteral)
-	require.Equal(t, "abc", stringLiteral.GetSval())
+	assertPreparedCharIntegerSource(t, filledChar, types.T_varchar, "\x00")
 
 	for _, input := range []types.Type{
 		types.T_varchar.ToType(), types.T_int64.ToType(), types.T_bool.ToType(),
@@ -148,16 +122,17 @@ func TestIssue28454CharPreparedCOMStmtTextKeepsStringSemantics(t *testing.T) {
 	preparePlan := prepared.GetDcl().GetPrepare().Plan
 
 	for _, tc := range []struct {
-		name             string
-		value            string
-		hasRuntimeType   bool
-		wantStringSource bool
+		name           string
+		value          string
+		hasRuntimeType bool
+		wantValue      string
 	}{
-		{name: "no numeric prefix", value: "abc", wantStringSource: true},
-		{name: "numeric suffix", value: "65.5xyz", wantStringSource: true},
-		{name: "complete decimal", value: "65.5"},
-		{name: "complete exponent", value: "64.5e0"},
-		{name: "complete decimal with text metadata", value: "65.5", hasRuntimeType: true},
+		{name: "no numeric prefix", value: "abc", wantValue: "\x00"},
+		{name: "numeric suffix", value: "65.5xyz", wantValue: "A"},
+		{name: "complete decimal", value: "65.5", wantValue: "A"},
+		{name: "complete exponent", value: "64.5e0", wantValue: "@"},
+		{name: "complete decimal with text metadata", value: "65.5", hasRuntimeType: true, wantValue: "A"},
+		{name: "unsigned text", value: "18446744073709551615", wantValue: "\xff\xff\xff\xff"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			param := ParamValue{
@@ -173,24 +148,26 @@ func TestIssue28454CharPreparedCOMStmtTextKeepsStringSemantics(t *testing.T) {
 			require.True(t, specialized)
 			charExpr := findPlanFunctionExpr(filled, "char")
 			require.NotNil(t, charExpr)
-			arg := charExpr.GetF().Args[0]
-			if tc.wantStringSource {
-				require.Equal(t, types.T_varchar, types.T(arg.Typ.Id), charExpr.String())
-				literal := arg.GetLit()
-				if literal == nil && arg.GetF() != nil && len(arg.GetF().Args) > 0 {
-					literal = arg.GetF().Args[0].GetLit()
-				}
-				require.NotNil(t, literal, charExpr.String())
-				require.Equal(t, tc.value, literal.GetSval())
-				return
-			}
-			require.Equal(t, types.T_int64, types.T(arg.Typ.Id), charExpr.String())
-			cast := arg.GetF()
-			require.NotNil(t, cast, charExpr.String())
-			require.Len(t, cast.Args, 2, charExpr.String())
-			require.True(t, types.T(cast.Args[0].Typ.Id).IsDecimal(), charExpr.String())
+			assertPreparedCharIntegerSource(t, charExpr, types.T_text, tc.wantValue)
 		})
 	}
+}
+
+func assertPreparedCharIntegerSource(t *testing.T, expr *Expr, source types.T, want string) {
+	t.Helper()
+	logical := expr.GetF().Args[0]
+	canonical := types.T_int64
+	if source.IsUnsignedInt() || source == types.T_bit || source.IsMySQLString() {
+		canonical = types.T_uint64
+	}
+	require.Equal(t, canonical, types.T(logical.Typ.Id), "numeric source domains must not collapse into a unified bit domain")
+	require.True(t, isIntegerArgumentCast(logical))
+	require.Equal(t, source, types.T(logical.GetF().Args[0].Typ.Id))
+	proc := testutil.NewProcess(t)
+	result, free, err := colexec.GetReadonlyResultFromExpression(proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, err)
+	defer free()
+	require.Equal(t, want, result.GetStringAt(0))
 }
 
 func TestIssue28454CharPreparedNumericSourceRetainsRuntimeProvenance(t *testing.T) {

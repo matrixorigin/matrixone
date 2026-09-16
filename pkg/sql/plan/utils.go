@@ -1060,7 +1060,8 @@ func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
 }
 
 // PreparedPlanNumericFallbackParamPositions returns the parameter positions
-// whose value supplies a deferred numeric ABS or SIGN argument. The result is
+// whose value supplies a deferred numeric ABS/SIGN argument or a private
+// integer-argument conversion. The result is
 // plan metadata, not an execute-time decision: callers can compute it once when a
 // prepared plan is built and use it to decide whether runtime values must be
 // decoded. In particular, this avoids scanning/deep-copying the entire plan
@@ -1072,6 +1073,23 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	positions := make(map[int32]struct{})
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
 		fn := expr.GetF()
+		_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+			if call := nested.GetF(); call != nil && call.Func != nil {
+				for i, arg := range call.Args {
+					if function.IntegerArgumentSourceDependent(call.Func.ObjName, i) {
+						for pos := range preparedNumericValueParamPositions(arg) {
+							positions[pos] = struct{}{}
+						}
+					}
+				}
+			}
+			if isIntegerArgumentCast(nested) {
+				for pos := range preparedNumericValueParamPositions(nested.GetF().Args[0]) {
+					positions[pos] = struct{}{}
+				}
+			}
+			return nil
+		})
 		if fn == nil || fn.Func == nil || !isPreparedNumericFallbackFunction(fn.Func.GetObjName()) || len(fn.Args) != 1 {
 			return nil
 		}
@@ -1839,6 +1857,10 @@ func constantFoldWithPreparedExactSource(
 	}
 
 	overloadID := fn.Func.GetObj()
+	functionID, _ := function.DecodeOverloadID(overloadID)
+	if preservePreparedExactSource && rule.IsNullIntegerArgumentCast(expr) {
+		return expr, nil
+	}
 	f, err := function.GetFunctionById(proc.Ctx, overloadID)
 	if err != nil {
 		return nil, err
@@ -1863,6 +1885,12 @@ func constantFoldWithPreparedExactSource(
 		foldExpr, errFold := constantFoldWithPreparedExactSource(
 			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource)
 		if errFold != nil {
+			if functionID == function.CASE {
+				// Selection owns branch errors. Retain the failing subtree for
+				// runtime masking, but still fold safe constants in other branches
+				// so const-only consumers do not lose their input contract.
+				continue
+			}
 			return nil, errFold
 		}
 		fn.Args[i] = foldExpr

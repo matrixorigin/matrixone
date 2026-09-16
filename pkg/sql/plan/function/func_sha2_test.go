@@ -102,19 +102,19 @@ func TestSHA2StillFormatsScalarInput(t *testing.T) {
 	require.Equal(t, types.T_int64, targets[1].Oid)
 }
 
-func TestSHA2DefersUnknownHashLengthToStringOverload(t *testing.T) {
+func TestSHA2BindsUnknownHashLengthToIntegerContext(t *testing.T) {
 	resolved, err := GetFunctionByName(context.Background(), "sha2", []types.Type{
 		types.T_varchar.ToType(),
 		types.T_any.ToType(),
 	})
 	require.NoError(t, err)
 	_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
-	require.Equal(t, int32(1), overload)
+	require.Equal(t, int32(0), overload)
 	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
 	require.True(t, shouldCast)
 	require.Len(t, targets, 2)
 	require.Equal(t, types.T_varchar, targets[0].Oid)
-	require.Equal(t, types.T_varchar, targets[1].Oid)
+	require.Equal(t, types.T_int64, targets[1].Oid)
 }
 
 func TestSHA2PreservesEveryMySQLStringDomain(t *testing.T) {
@@ -176,10 +176,12 @@ func TestSHA2StringLengthPreservesBinaryOperands(t *testing.T) {
 	})
 	require.NoError(t, err)
 	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
-	require.False(t, shouldCast)
-	require.Empty(t, targets)
+	require.True(t, shouldCast)
+	require.Equal(t, binaryType, targets[0])
+	require.Equal(t, types.T_int64, targets[1].Oid)
 	_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
-	require.Equal(t, int32(1), overload)
+	require.Equal(t, int32(0), overload)
+	// Keep exercising the legacy string kernel below for persisted plans.
 
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
@@ -215,10 +217,11 @@ func TestSHA2StringLengthAcceptsEveryMySQLStringDomain(t *testing.T) {
 			})
 			require.NoError(t, err)
 			targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
-			require.False(t, shouldCast)
-			require.Empty(t, targets)
+			require.True(t, shouldCast)
+			require.Equal(t, types.T_varchar, targets[0].Oid)
+			require.Equal(t, types.T_int64, targets[1].Oid)
 			_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
-			require.Equal(t, int32(1), overload)
+			require.Equal(t, int32(0), overload)
 		})
 	}
 }

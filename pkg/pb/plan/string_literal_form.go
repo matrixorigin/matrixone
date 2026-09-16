@@ -223,6 +223,9 @@ type RemoteExpressionFeatures struct {
 	RowDependentConvBases    bool
 	ASCIIInt32Result         bool
 	IPFunctionSemantics      bool
+	// IntegerParameterCoercion requires v76 for private CAST 5..8 and
+	// integer-only consumer identities (MAKEDATE 1, FORMAT 2..3, MAKETIME 36..38).
+	IntegerParameterCoercion bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -234,7 +237,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.ASCIIInt32Result ||
 		features.IntegerArithmeticDomains ||
 		features.RowDependentConvBases ||
-		features.IPFunctionSemantics
+		features.IPFunctionSemantics ||
+		features.IntegerParameterCoercion
 }
 
 // These IDs are kept numeric deliberately: pkg/pb/plan cannot import the
@@ -278,6 +282,12 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				// CAST is stable function ID 21. Match execution identity, not
+				// names or source types; legacy CAST 0..4 remains executable.
+				if (id == 21 && overload >= 5 && overload <= 8) || (id == 202 && overload == 1) || (id == 262 && overload >= 2 && overload <= 3) ||
+					(id == 373 && overload >= 36 && overload <= 38) {
+					features.IntegerParameterCoercion = true
+				}
 				// PLUS/MINUS/MULTI are stable function IDs 10/11/12.
 				if (id >= 10 && id <= 12 && overload == 2) || (id == 11 && overload == 3) {
 					features.IntegerArithmeticDomains = true

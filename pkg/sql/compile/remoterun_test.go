@@ -1558,7 +1558,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
-	t.Run("typed FORMAT sender and receiver boundary", func(t *testing.T) {
+	t.Run("integer precision FORMAT sender and receiver boundary", func(t *testing.T) {
 		for _, test := range []struct {
 			name       string
 			firstType  types.Type
@@ -1576,28 +1576,28 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 				}
 				scope := makeScope(expr)
 
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
 				err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
 				require.ErrorContains(t, err,
-					"typed numeric FORMAT arguments require MORPC protocol version 59")
+					"integer parameter coercion requires MORPC protocol version 76")
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 				_, _, _, _, err = prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
 				require.ErrorContains(t, err,
-					"typed numeric FORMAT arguments require MORPC protocol version 59")
+					"integer parameter coercion requires MORPC protocol version 76")
 
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion59)
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
 				require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 
-				encoded, _, _, _, err := prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+				encoded, err := remotePipeline.Marshal()
 				require.NoError(t, err)
 				decoded, err := decodeScope(encoded, proc, true, nil)
 				require.NoError(t, err)
 				decoded.release()
 
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion58)
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
 				_, err = decodeScope(encoded, proc, true, nil)
 				require.ErrorContains(t, err,
-					"typed numeric FORMAT arguments require MORPC protocol version 59")
+					"integer parameter coercion requires MORPC protocol version 76")
 			})
 		}
 	})

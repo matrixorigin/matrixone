@@ -2669,6 +2669,37 @@ func TestBinaryDecimalIntegerConsumerSpecializesAndReusesSemanticCategory(t *tes
 	require.Same(t, textParams, cw.proc.GetPrepareParams())
 }
 
+func TestPreparedCalendarIntegerSourceSemantics(t *testing.T) {
+	ses, stmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 239, "select timestampadd(day,?,'2024-01-01'),timestampadd(day,cast(? as double),'2024-01-01'),makedate(2024,?),makedate(2024,cast(? as double)),format(1234.5,?),format(1234.5,cast(? as double)),maketime(?,1,2),maketime(cast(? as double),1,2)")
+	defer func() { cw.proc.SetPrepareParams(nil); stmt.Close() }()
+	stmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(stmt.PreparePlan.GetDcl().GetPrepare().Plan)
+	require.Equal(t, []int32{0, 1, 2, 3, 4, 5, 6, 7}, stmt.numericOverloadParamPositions)
+	stmt.params = vector.NewVec(types.T_text.ToType())
+	for i := 0; i < 8; i++ {
+		require.NoError(t, vector.AppendBytes(stmt.params, []byte("1.5"), false, cw.proc.Mp()))
+	}
+	stmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_DOUBLE), 0, byte(defines.MYSQL_TYPE_DOUBLE), 0, byte(defines.MYSQL_TYPE_DOUBLE), 0, byte(defines.MYSQL_TYPE_DOUBLE), 0, byte(defines.MYSQL_TYPE_DOUBLE), 0, byte(defines.MYSQL_TYPE_DOUBLE), 0, byte(defines.MYSQL_TYPE_DOUBLE), 0, byte(defines.MYSQL_TYPE_DOUBLE), 0}
+	_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, stmt.Name)
+	require.NoError(t, err)
+	if owned && executionStmt != nil {
+		defer executionStmt.Free()
+	}
+	q := runtimePlan.GetQuery()
+	root := q.Nodes[q.Steps[len(q.Steps)-1]]
+	for i, want := range []string{"2024-01-03", "2024-01-02", "2024-01-02", "2024-01-01", "1,234.50", "1,234.5", "02:01:02", "01:01:02"} {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			value, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, root.ProjectList[i], []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			if value.GetType().Oid == types.T_time {
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Time](value, 0).String2(value.GetType().Scale))
+			} else {
+				require.Equal(t, want, value.GetStringAt(0))
+			}
+		})
+	}
+}
+
 func TestPreparedNumericOverloadSpecializationReusesRuntimeCategory(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 209, "select abs(?)")
 	defer func() {
@@ -3390,6 +3421,10 @@ func TestCOMStmtCharRuntimeCacheSeparatesEffectiveIntegerDomains(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 				t, uint32(230+i), "select char(?)")
+			// Match the production PREPARE metadata for the migrated integer role
+			// without changing unrelated fixtures' specialization configuration.
+			prepareStmt.numericOverloadParamPositions = plan2.PreparedPlanNumericFallbackParamPositions(
+				prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
 			defer func() {
 				cw.proc.SetPrepareParams(nil)
 				prepareStmt.Close()

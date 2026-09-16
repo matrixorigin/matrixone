@@ -479,14 +479,14 @@ func Test_GetFunctionByName(t *testing.T) {
 			name: "elt", args: []types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			shouldErr:  false,
 			requireFid: ELT, requireOid: 0,
-			shouldCast: false,
+			shouldCast: true, requireTyp: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			requireRet: types.T_varchar.ToType(),
 		},
 		{
 			name: "elt", args: []types.Type{types.T_bit.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			shouldErr:  false,
 			requireFid: ELT, requireOid: 0,
-			shouldCast: false,
+			shouldCast: true, requireTyp: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			requireRet: types.T_varchar.ToType(),
 		},
 		{
@@ -660,7 +660,17 @@ func TestUnixTimestampTemporalReturnScale(t *testing.T) {
 	require.Equal(t, types.New(types.T_decimal128, 38, 6), fractionalDatetimeResult.retType)
 }
 
-func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
+func makeTimeExpectedSecondTarget(input types.Type) types.T {
+	if input.Oid.IsInteger() {
+		return types.T_int64
+	}
+	if isMakeTimeTextType(input.Oid) || input.Oid.IsDecimal() {
+		return types.T_varchar
+	}
+	return types.T_float64
+}
+
+func TestMakeTimeDecimalHourMinuteUseIntegerParameters(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decimalType := types.New(types.T_decimal128, 30, 20)
 	decimal256Type := types.New(types.T_decimal256, 65, 30)
@@ -692,11 +702,11 @@ func TestMakeTimeDecimalHourMinuteUseExactOverloads(t *testing.T) {
 		require.True(t, result.needCast)
 		selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
 		require.NoError(t, err)
-		require.Equal(t, test.args, selected.args)
+		require.Equal(t, []types.T{types.T_int64, types.T_int64, makeTimeExpectedSecondTarget(test.inputs[2])}, selected.args)
 	}
 }
 
-func TestMakeTimeDecimal256OverloadMatrix(t *testing.T) {
+func TestMakeTimeDecimal256UsesIntegerParameters(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	decimal128Type := types.New(types.T_decimal128, 30, 20)
 	decimal256Type := types.New(types.T_decimal256, 65, 30)
@@ -725,7 +735,7 @@ func TestMakeTimeDecimal256OverloadMatrix(t *testing.T) {
 				require.NoError(t, err)
 				selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
 				require.NoError(t, err)
-				require.Equal(t, []types.T{hour.target, minute.target, second.target}, selected.args)
+				require.Equal(t, []types.T{types.T_int64, types.T_int64, makeTimeExpectedSecondTarget(second.input)}, selected.args)
 			}
 		}
 	}
@@ -741,9 +751,8 @@ func TestMakeTimeStringSecondUsesExactOverload(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, result.needCast)
-	require.Len(t, result.targetTypes, 3)
-	require.Equal(t, types.T_float64, result.targetTypes[0].Oid)
-	require.Equal(t, types.T_float64, result.targetTypes[1].Oid)
+	require.Equal(t, types.T_int64, result.targetTypes[0].Oid)
+	require.Equal(t, types.T_int64, result.targetTypes[1].Oid)
 	require.Equal(t, types.T_varchar, result.targetTypes[2].Oid)
 	require.Equal(t, int32(-1), result.targetTypes[2].Scale)
 	require.Equal(t, types.T_time.ToTypeWithScale(6), result.retType)
@@ -1132,13 +1141,14 @@ func TestMakeTimeStringArgumentTargets(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			result, err := GetFunctionByName(proc.Ctx, "maketime", test.inputs)
 			require.NoError(t, err)
-			require.Equal(t, test.needCast, result.needCast)
-			require.Equal(t, test.targets, result.targetTypes)
+			require.True(t, result.needCast)
+			require.Equal(t, types.T_int64, result.targetTypes[0].Oid)
+			require.Equal(t, types.T_int64, result.targetTypes[1].Oid)
 			require.Equal(t, test.returnType, result.retType)
 
 			selected, err := GetFunctionById(proc.Ctx, result.GetEncodedOverloadID())
 			require.NoError(t, err)
-			require.Equal(t, test.overloadArgs, selected.args)
+			require.Equal(t, []types.T{types.T_int64, types.T_int64, makeTimeExpectedSecondTarget(test.inputs[2])}, selected.args)
 		})
 	}
 }
@@ -1159,7 +1169,11 @@ func TestMakeTimeBinaryArgumentsUseNumericOverloads(t *testing.T) {
 			result, err := GetFunctionByName(proc.Ctx, "maketime", inputs)
 			require.NoError(t, err)
 			require.True(t, result.needCast)
-			require.Equal(t, types.T_int64, result.targetTypes[position].Oid)
+			if position < 2 {
+				require.Equal(t, types.T_int64, result.targetTypes[position].Oid)
+			} else {
+				require.Equal(t, types.T_float64, result.targetTypes[position].Oid)
+			}
 		}
 	}
 }

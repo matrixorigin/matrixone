@@ -93,7 +93,14 @@ func TestHexExplicitRealCastUsesTruncatingOverload(t *testing.T) {
 			hexExpr, err := BindFuncExprImplByPlanExpr(ctx, "hex", []*Expr{explicit})
 			require.NoError(t, err)
 			_, overloadID := function.DecodeOverloadID(hexExpr.GetF().GetFunc().GetObj())
-			require.Equal(t, tc.overloadID, overloadID)
+			require.Equal(t, int32(2), overloadID)
+			cast := hexExpr.GetF().GetArgs()[0].GetF()
+			require.NotNil(t, cast)
+			castID, castOverload := function.DecodeOverloadID(cast.GetFunc().GetObj())
+			require.Equal(t, int32(function.CAST), castID)
+			require.Equal(t, function.TruncatedIntegerArgumentCastOverload, castOverload)
+			_, err = function.GetFunctionById(ctx, function.EncodeOverloadID(function.HEX, tc.overloadID))
+			require.NoError(t, err, "the v74 explicit REAL identity remains executable")
 		})
 	}
 
@@ -101,7 +108,9 @@ func TestHexExplicitRealCastUsesTruncatingOverload(t *testing.T) {
 		ctx, "hex", []*Expr{MakePlan2Float64ConstExprWithType(15.5)})
 	require.NoError(t, err)
 	_, overloadID := function.DecodeOverloadID(ordinary.GetF().GetFunc().GetObj())
-	require.Equal(t, int32(function.HexFloat64Overload), overloadID)
+	require.Equal(t, int32(2), overloadID)
+	_, castOverload := function.DecodeOverloadID(ordinary.GetF().GetArgs()[0].GetF().GetFunc().GetObj())
+	require.Equal(t, function.IntegerArgumentCastOverload, castOverload)
 }
 
 func TestCharComparisonUsesDedicatedCastOverload(t *testing.T) {

@@ -1552,7 +1552,9 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 	var rewritten *plan.Expr
 	var err error
-	if _, preserve := rule.preserveRoots[e]; preserve {
+	if isIntegerArgumentCast(e) {
+		rewritten, err = rule.rebindIntegerArgumentCast(e)
+	} else if _, preserve := rule.preserveRoots[e]; preserve {
 		rewritten, err = rule.applyExprPreservingRoot(e)
 	} else {
 		rewritten, err = rule.applyExpr(e)
@@ -1984,6 +1986,16 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		numericPrefixListKinds := make([][]types.StringConversionKind, len(exprImpl.F.Args))
 		var sharedControlReturnType *plan.Type
 		for i, arg := range exprImpl.F.Args {
+			if planfunction.IntegerArgumentSourceDependent(functionName, i) {
+				boundArgs[i], err = rule.rebindIntegerDomainArgument(functionName, i, arg)
+				if err != nil {
+					return nil, err
+				}
+				rule.specialized = true
+				needResetFunction = true
+				compareArgTypes = true
+				continue
+			}
 			originalArgTyp := plan.Type{}
 			originalArgFuncObj := int64(0)
 			if arg != nil {
@@ -2000,7 +2012,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if hasParamPos && isPreparedBitwiseAggregate(functionName) && i == 0 &&
 				isBitwiseAggregatePrivateCast(arg) {
 				preparedBitwiseSource, hasPreparedBitwiseSource, err =
-					rule.preparedBitwiseAggregateSource(paramPos)
+					rule.preparedRuntimeSourceExpr(paramPos, false)
 				if err != nil {
 					return nil, err
 				}
@@ -3491,11 +3503,10 @@ func (rule *ResetParamRefRule) preparedCharSourceExpr(pos int) (*plan.Expr, bool
 	return nil, false, nil
 }
 
-// preparedBitwiseAggregateSource reconstructs the execute-time operand using
-// its protocol type or SQL user-variable source type. Keeping the original
-// source domain lets the aggregate binder choose the integer or byte-string
-// path again instead of inheriting the provisional CAST4(INT64) from PREPARE.
-func (rule *ResetParamRefRule) preparedBitwiseAggregateSource(pos int) (*plan.Expr, bool, error) {
+// preparedRuntimeSourceExpr reconstructs an execute-time operand using its
+// protocol type or SQL user-variable source type, including text and typed
+// NULL. Consumers must not infer a numeric type from a textual value here.
+func (rule *ResetParamRefRule) preparedRuntimeSourceExpr(pos int, preserveProtocolText bool) (*plan.Expr, bool, error) {
 	if pos < 0 || pos >= len(rule.paramValues) || pos >= len(rule.params) {
 		return nil, false, nil
 	}
@@ -3508,6 +3519,10 @@ func (rule *ResetParamRefRule) preparedBitwiseAggregateSource(pos int) (*plan.Ex
 	switch {
 	case param.IsBinaryProtocol && param.HasRuntimeType:
 		sourceType = param.RuntimeType
+	case param.IsBinaryProtocol && preserveProtocolText:
+		// An absent concrete protocol domain denotes text, not an invitation
+		// to infer DECIMAL from its spelling in an integer context.
+		sourceType = types.T_text.ToType()
 	case param.HasSourceType:
 		sourceType = param.SourceType
 	case param.HasRuntimeType:

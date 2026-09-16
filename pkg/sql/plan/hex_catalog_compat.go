@@ -133,6 +133,12 @@ func migrateFoldedHexDefault(proc *process.Process, col *plan.ColDef) error {
 	if err != nil {
 		return nil
 	}
+	// This migration has a v74 contract even when the current binder emits
+	// v76 integer coercion. Recover the whitelisted numeric source and use
+	// its retained v74 identity; do not leak private CASTs into old plans.
+	if !restoreFoldedHexVersion74(bound) {
+		return nil
+	}
 	legacy := DeepCopyExpr(bound)
 	fn := legacy.GetF()
 	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
@@ -199,6 +205,50 @@ func migrateFoldedHexDefault(proc *process.Process, col *plan.ColDef) error {
 	col.Default = &plan.Default{Expr: newValue, OriginString: col.Default.OriginString,
 		NullAbility: col.Default.NullAbility}
 	return nil
+}
+
+func restoreFoldedHexVersion74(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id != function.HEX {
+		return false
+	}
+	arg := fn.Args[0]
+	cast := arg.GetF()
+	if cast == nil || cast.Func == nil || len(cast.Args) < 1 {
+		return true
+	}
+	id, overload := function.DecodeOverloadID(cast.Func.Obj)
+	if id != function.CAST || !function.IsIntegerArgumentCastOverload(overload) {
+		return true
+	}
+	source := cast.Args[0]
+	var hexOverload int32
+	switch types.T(source.Typ.Id) {
+	case types.T_bool:
+		// Reuse public CAST 0; BOOL-to-integer predates v74.
+		cast.Func.Obj = function.EncodeOverloadID(function.CAST, 0)
+		return true
+	case types.T_decimal64:
+		hexOverload = function.HexMySQLNumericOverloadStart
+	case types.T_decimal128:
+		hexOverload = function.HexMySQLNumericOverloadStart + 1
+	case types.T_decimal256:
+		hexOverload = function.HexMySQLNumericOverloadStart + 2
+	case types.T_float64:
+		if overload != function.TruncatedIntegerArgumentCastOverload {
+			return false
+		}
+		hexOverload = function.HexExplicitFloat64Overload
+	default:
+		return false
+	}
+	fn.Args[0] = source
+	fn.Func.Obj = function.EncodeOverloadID(function.HEX, hexOverload)
+	return true
 }
 
 func supportsHexMySQLNumericProtocol(proc *process.Process) bool {

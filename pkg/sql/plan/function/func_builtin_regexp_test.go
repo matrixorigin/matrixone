@@ -1181,8 +1181,15 @@ func TestRegexpFunctionsPreserveBinaryOverloadDomain(t *testing.T) {
 		} {
 			resolved, err := GetFunctionByName(context.Background(), tc.name, tc.args)
 			require.NoError(t, err)
-			_, needsCast := resolved.ShouldDoImplicitTypeCast()
-			require.False(t, needsCast, "%s(%s)", tc.name, oid)
+			targets, needsCast := resolved.ShouldDoImplicitTypeCast()
+			if tc.name == "regexp_instr" && len(tc.args) >= 5 {
+				// Logical integer evaluation retains the old INT8 execution
+				// adapter; it must not change any string operand's domain.
+				require.True(t, needsCast)
+				require.Equal(t, tc.args, targets)
+			} else {
+				require.False(t, needsCast, "%s(%s)", tc.name, oid)
+			}
 			if tc.name == "regexp_substr" || tc.name == "regexp_replace" {
 				require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(resolved.GetReturnType()))
 			}

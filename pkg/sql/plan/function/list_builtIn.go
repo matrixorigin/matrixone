@@ -799,9 +799,10 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `char`
 	{
-		functionId: CHAR,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    builtInCharCheck,
+		functionId:        CHAR,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64, mode: integerBitPatternParameter, variadic: true}},
+		layout:            STANDARD_FUNCTION,
+		checkFn:           builtInCharCheck,
 
 		Overloads: []overload{
 			{
@@ -961,10 +962,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `elt`
 	{
-		functionId: ELT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    eltCheck,
+		functionId:        ELT,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           eltCheck,
 
 		Overloads: []overload{
 			{
@@ -981,10 +983,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `make_set`
 	{
-		functionId: MAKE_SET,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    makeSetCheck,
+		functionId:        MAKE_SET,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64, mode: integerBitPatternParameter}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           makeSetCheck,
 
 		Overloads: []overload{
 			{
@@ -1001,10 +1004,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `export_set`
 	{
-		functionId: EXPORT_SET,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    exportSetCheck,
+		functionId:        EXPORT_SET,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64, mode: integerBitPatternParameter}, {position: 4, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           exportSetCheck,
 
 		Overloads: []overload{
 			{
@@ -1207,10 +1211,12 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `format`
 	{
-		functionId: FORMAT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    formatCheck,
+		functionId:        FORMAT,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64, temporal: true, uuid: true}},
+		bindingOverloads:  []int{IntegerFormat2Overload, IntegerFormat3Overload},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           formatCheck,
 
 		Overloads: []overload{
 			{
@@ -1232,6 +1238,18 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return FormatWith3Args
 				},
+			},
+			{
+				overloadId: IntegerFormat2Overload,
+				args:       []types.T{types.T_varchar, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return FormatWith2IntegerScale },
+			},
+			{
+				overloadId: IntegerFormat3Overload,
+				args:       []types.T{types.T_varchar, types.T_int64, types.T_varchar},
+				retType:    func(parameters []types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return FormatWith3IntegerScale },
 			},
 		},
 	},
@@ -2346,10 +2364,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `conv`
 	{
-		functionId: CONV,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    convTypeCheck,
+		functionId:        CONV,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}, {position: 2, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           convTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -2911,10 +2930,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `left`
 	{
-		functionId: LEFT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        LEFT,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2942,10 +2962,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `right`
 	{
-		functionId: RIGHT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        RIGHT,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3095,10 +3116,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `lpad`
 	{
-		functionId: LPAD,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        LPAD,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3210,10 +3232,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `insert`
 	{
-		functionId: INSERT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        INSERT,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}, {position: 2, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3264,6 +3287,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `regexp_instr`
 	{
 		functionId:          REGEXP_INSTR,
+		integerParameters:   []integerParameter{{position: 2, target: types.T_int64}, {position: 3, target: types.T_int64}, {position: 4, target: types.T_int64}},
 		class:               plan.Function_STRICT,
 		layout:              STANDARD_FUNCTION,
 		checkFn:             regexpStringDomainFixedTypeMatch,
@@ -3358,6 +3382,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `regexp_replace`
 	{
 		functionId:          REGEXP_REPLACE,
+		integerParameters:   []integerParameter{{position: 3, target: types.T_int64}, {position: 4, target: types.T_int64}},
 		class:               plan.Function_STRICT,
 		layout:              STANDARD_FUNCTION,
 		checkFn:             regexpReplaceStringDomainFixedTypeMatch,
@@ -3410,6 +3435,7 @@ var supportedStringBuiltIns = []FuncNew{
 	// function `regexp_substr`
 	{
 		functionId:          REGEXP_SUBSTR,
+		integerParameters:   []integerParameter{{position: 2, target: types.T_int64}, {position: 3, target: types.T_int64}},
 		class:               plan.Function_STRICT,
 		layout:              STANDARD_FUNCTION,
 		checkFn:             regexpStringDomainFixedTypeMatch,
@@ -3463,10 +3489,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `repeat`
 	{
-		functionId: REPEAT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        REPEAT,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3525,10 +3552,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `rpad`
 	{
-		functionId: RPAD,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        RPAD,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3672,10 +3700,12 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `space`
 	{
-		functionId: SPACE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        SPACE,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}},
+		bindingOverloads:  []int{1},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3733,10 +3763,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `split_part`
 	{
-		functionId: SPLIT_PART,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        SPLIT_PART,
+		integerParameters: []integerParameter{{position: 2, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4268,10 +4299,12 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// random_bytes
 	{
-		functionId: RANDOM_BYTES,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    randomBytesCheck,
+		functionId:        RANDOM_BYTES,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}},
+		bindingOverloads:  []int{0},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           randomBytesCheck,
 
 		Overloads: []overload{
 			{
@@ -4371,10 +4404,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `substring`, `substr`, `mid`
 	{
-		functionId: SUBSTRING,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        SUBSTRING,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}, {position: 2, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4492,10 +4526,12 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `substring_index`
 	{
-		functionId: SUBSTRING_INDEX,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        SUBSTRING_INDEX,
+		integerParameters: []integerParameter{{position: 2, target: types.T_int64}},
+		bindingOverloads:  []int{2},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4820,10 +4856,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `locate`
 	{
-		functionId: LOCATE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        LOCATE,
+		integerParameters: []integerParameter{{position: 2, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -7086,10 +7123,12 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `sha2`
 	{
-		functionId: SHA2,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    sha2TypeMatch,
+		functionId:        SHA2,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64, temporal: true, uuid: true}},
+		bindingOverloads:  []int{0},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           sha2TypeMatch,
 
 		Overloads: []overload{
 			{
@@ -7720,10 +7759,11 @@ var supportedArrayOperations = []FuncNew{
 	},
 	// function `subvector`
 	{
-		functionId: SUB_VECTOR,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        SUB_VECTOR,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}, {position: 2, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -8422,10 +8462,11 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `ceil`, `ceiling`
 	{
-		functionId: CEIL,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        CEIL,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -8649,10 +8690,11 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `floor`
 	{
-		functionId: FLOOR,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        FLOOR,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -8790,10 +8832,14 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `hex`
 	{
-		functionId: HEX,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    hexTypeMatch,
+		functionId:        HEX,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64, mode: numericOnlyIntegerParameter}},
+		// Numeric sources are normalized before selection. Preserve every
+		// pre-v76 identity below for stored and in-flight expressions.
+		bindingOverloads: []int{0, 1, 2, 3, 6, 7},
+		class:            plan.Function_STRICT,
+		layout:           STANDARD_FUNCTION,
+		checkFn:          stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9395,10 +9441,11 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `round`
 	{
-		functionId: ROUND,
-		class:      plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		functionId:        ROUND,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT | plan.Function_ZONEMAPPABLE,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -9526,10 +9573,11 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `truncate`
 	{
-		functionId: TRUNCATE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatchWithBoolNumericCast,
+		functionId:        TRUNCATE,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatchWithBoolNumericCast,
 
 		Overloads: []overload{
 			{
@@ -10192,10 +10240,11 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 	// function `timestampadd`
 	{
-		functionId: TIMESTAMPADD,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        TIMESTAMPADD,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -11778,10 +11827,11 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 	// function `from_days`
 	{
-		functionId: FROM_DAYS,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        FROM_DAYS,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -11969,10 +12019,11 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 	// function `week`
 	{
-		functionId: WEEK,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        WEEK,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12143,10 +12194,11 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 	// function `yearweek`
 	{
-		functionId: YEARWEEK,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        YEARWEEK,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12357,7 +12409,12 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 func makeTimeReturnType(parameters []types.Type) types.Type {
 	scale := parameters[2].Scale
-	if scale < 0 {
+	if parameters[2].Charset == types.CharsetBinary || parameters[2].Oid.IsInteger() || parameters[2].Oid == types.T_bit || parameters[2].Oid == types.T_year ||
+		parameters[2].Oid == types.T_binary || parameters[2].Oid == types.T_varbinary || parameters[2].Oid == types.T_blob {
+		scale = 0
+	} else if (parameters[2].Oid == types.T_float32 || parameters[2].Oid == types.T_float64) && scale <= 0 {
+		scale = 6
+	} else if scale < 0 {
 		scale = 6
 	} else if scale > 6 {
 		scale = 6
@@ -12377,58 +12434,29 @@ func isMakeTimeTextType(oid types.T) bool {
 }
 
 func makeTimeCheck(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) != 3 {
+	if len(inputs) != 3 || inputs[0].Oid != types.T_int64 || inputs[1].Oid != types.T_int64 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
+	target := types.T_float64
 	exactSecond := isMakeTimeTextType(inputs[2].Oid) || inputs[2].Oid.IsDecimal()
-	exactHour := inputs[0].Oid.IsDecimal()
-	exactMinute := inputs[1].Oid.IsDecimal()
-	if !isMakeTimeTextType(inputs[0].Oid) && !isMakeTimeTextType(inputs[1].Oid) && !exactHour && !exactMinute && !exactSecond {
-		return fixedTypeMatch(overloads, inputs)
+	if inputs[2].Oid.IsInteger() {
+		target = types.T_int64
+	} else if exactSecond {
+		target = types.T_varchar
 	}
-
-	targetOids := []types.T{types.T_float64, types.T_float64, types.T_float64}
-	if isMakeTimeTextType(inputs[0].Oid) {
-		targetOids[0] = types.T_varchar
-	} else if exactHour {
-		if inputs[0].Oid == types.T_decimal256 {
-			targetOids[0] = types.T_decimal256
-		} else {
-			targetOids[0] = types.T_decimal128
-		}
-	}
-	if isMakeTimeTextType(inputs[1].Oid) {
-		targetOids[1] = types.T_varchar
-	} else if exactMinute {
-		if inputs[1].Oid == types.T_decimal256 {
-			targetOids[1] = types.T_decimal256
-		} else {
-			targetOids[1] = types.T_decimal128
-		}
-	}
-	if exactSecond {
-		targetOids[2] = types.T_varchar
-	}
-	status, _ := tryToMatch(inputs, targetOids)
-	if status == matchFailed {
-		return fixedTypeMatch(overloads, inputs)
-	}
-
 	for i, ov := range overloads {
-		if len(ov.args) != len(targetOids) || ov.args[0] != targetOids[0] || ov.args[1] != targetOids[1] || ov.args[2] != targetOids[2] {
+		if len(ov.args) != 3 || ov.args[0] != types.T_int64 || ov.args[1] != types.T_int64 || ov.args[2] != target {
 			continue
 		}
-		if status == matchDirectly && !exactSecond {
+		if inputs[2].Oid == target && !exactSecond {
 			return newCheckResultWithSuccess(i)
 		}
-		targets := make([]types.Type, len(inputs))
-		for j := range targets {
-			if inputs[j].Oid == targetOids[j] {
-				targets[j] = inputs[j]
-			} else {
-				targets[j] = targetOids[j].ToType()
-				SetTargetScaleFromSource(&inputs[j], &targets[j])
-			}
+		targets := append([]types.Type(nil), inputs...)
+		targets[2] = target.ToType()
+		SetTargetScaleFromSource(&inputs[2], &targets[2])
+		if inputs[2].Charset == types.CharsetBinary || inputs[2].Oid == types.T_binary || inputs[2].Oid == types.T_varbinary || inputs[2].Oid == types.T_blob {
+			targets[2].Scale = 0
+			targets[2].Charset = types.CharsetBinary
 		}
 		if exactSecond {
 			if inputs[2].Oid.IsDecimal() {
@@ -12968,9 +12996,14 @@ var supportedControlBuiltIns = []FuncNew{
 	// function `MAKEDATE`
 	{
 		functionId: MAKEDATE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		integerParameters: []integerParameter{
+			{position: 0, target: types.T_int64, temporal: true, uuid: true},
+			{position: 1, target: types.T_int64, temporal: true, uuid: true},
+		},
+		bindingOverloads: []int{IntegerMakeDateOverload},
+		class:            plan.Function_STRICT,
+		layout:           STANDARD_FUNCTION,
+		checkFn:          fixedTypeMatch,
 		Overloads: []overload{
 			{
 				overloadId: 0,
@@ -12982,15 +13015,26 @@ var supportedControlBuiltIns = []FuncNew{
 					return MakeDateString
 				},
 			},
+			{
+				overloadId: IntegerMakeDateOverload,
+				args:       []types.T{types.T_int64, types.T_int64},
+				retType:    func(parameters []types.Type) types.Type { return types.T_varchar.ToType() },
+				newOp:      func() executeLogicOfOverload { return MakeDateInteger },
+			},
 		},
 	},
 
 	// function `MAKETIME`
 	{
 		functionId: MAKETIME,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    makeTimeCheck,
+		integerParameters: []integerParameter{
+			{position: 0, target: types.T_int64, temporal: true, uuid: true},
+			{position: 1, target: types.T_int64, temporal: true, uuid: true},
+		},
+		bindingOverloads: []int{36, 37, 38},
+		class:            plan.Function_STRICT,
+		layout:           STANDARD_FUNCTION,
+		checkFn:          makeTimeCheck,
 		Overloads: []overload{
 			{
 				overloadId: 0,
@@ -13232,15 +13276,35 @@ var supportedControlBuiltIns = []FuncNew{
 				retType:    makeTimeReturnType,
 				newOp:      func() executeLogicOfOverload { return MakeTime },
 			},
+			{
+				overloadId: 36,
+				args:       []types.T{types.T_int64, types.T_int64, types.T_int64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 37,
+				args:       []types.T{types.T_int64, types.T_int64, types.T_float64},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
+			{
+				overloadId: 38,
+				args:       []types.T{types.T_int64, types.T_int64, types.T_varchar},
+				retType:    makeTimeReturnType,
+				newOp:      func() executeLogicOfOverload { return MakeTime },
+			},
 		},
 	},
 
 	// function `period_add`
 	{
-		functionId: PERIOD_ADD,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        PERIOD_ADD,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}, {position: 1, target: types.T_int64}},
+		bindingOverloads:  []int{0},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
 		Overloads: []overload{
 			{
 				overloadId: 0,
@@ -13317,10 +13381,12 @@ var supportedControlBuiltIns = []FuncNew{
 
 	// function `period_diff`
 	{
-		functionId: PERIOD_DIFF,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        PERIOD_DIFF,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}, {position: 1, target: types.T_int64}},
+		bindingOverloads:  []int{0},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
 		Overloads: []overload{
 			{
 				overloadId: 0,
@@ -14525,10 +14591,11 @@ var supportedOthersBuiltIns = []FuncNew{
 
 	// function `last_query_id`, `last_uuid`
 	{
-		functionId: LAST_QUERY_ID,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        LAST_QUERY_ID,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
