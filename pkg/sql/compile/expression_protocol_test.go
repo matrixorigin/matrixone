@@ -112,20 +112,20 @@ func TestExpressionProtocolResolvesLegacyAddressOnlyScopes(t *testing.T) {
 func TestAllCNsSupportProtocolProbesEveryCN(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	client.version = defines.MORPCVersion75
+	client.version = defines.MORPCVersion76
 
-	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion75)
+	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion76)
 	require.NoError(t, err)
 	require.True(t, supported)
 	require.Equal(t, 1, client.calls)
 
-	client.version = defines.MORPCVersion74
-	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion75)
+	client.version = defines.MORPCVersion75
+	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion76)
 	require.NoError(t, err)
 	require.False(t, supported)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
-	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion75)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
+	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion76)
 	require.NoError(t, err)
 	require.False(t, supported)
 }
