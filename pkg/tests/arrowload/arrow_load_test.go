@@ -128,22 +128,33 @@ func testArrowCommitPhaseFailureRollback(t *testing.T, db *sql.DB) {
 	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from commit_failure_rollback"))
 }
 
-// TestArrowLoadGateDisabled proves the explicit rollback switch fails closed:
-// with `cn.frontend.arrow-load.enabled=false`, any Arrow LOAD must be rejected
-// before touching the file at all. This checks the client-visible opt-out
-// contract, but it does not replace a true mixed-binary-version rehearsal.
-func TestArrowLoadGateDisabled(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, false, true, true)
-	db := openArrowLoadDB(t, c, 0)
-	mustExec(t, db, "create database if not exists arrow_gate_off")
-	mustExec(t, db, "use arrow_gate_off")
-	mustExec(t, db, "create table t(id bigint not null, amount decimal(18,2), score double, flag bool)")
-	path := filepath.Join(t.TempDir(), "missing-before-gate.arrow")
+// TestArrowLoadGateModes keeps the two static rollback-policy checks in one
+// two-CN fixture. Each subtest uses the CN whose complete Arrow policy matches
+// the scenario, preserving the explicit gate matrix without paying for two
+// independent cluster admissions.
+func TestArrowLoadGateModes(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing-before-gate.arrow")
+	distributedPath := prepareArrowLoadDistributedDisabledSoftFallback(t)
+	c := startArrowLoadClusterWithGateModes(t)
+	requireArrowLoadPolicy(t, c, 0, false, true, true)
+	requireArrowLoadPolicy(t, c, 1, true, true, false)
 
-	_, err := db.Exec(fmt.Sprintf("load data infile {'filepath'='%s','format'='arrow'} into table t", path))
-	require.Error(t, err)
-	require.Contains(t, strings.ToLower(err.Error()), "disabled by configuration")
-	require.Equal(t, int64(0), queryCount(t, db, "select count(*) from t"))
+	t.Run("GateDisabled", func(t *testing.T) {
+		db := openArrowLoadDB(t, c, 0)
+		mustExec(t, db, "create database if not exists arrow_gate_off")
+		mustExec(t, db, "use arrow_gate_off")
+		mustExec(t, db, "create table t(id bigint not null, amount decimal(18,2), score double, flag bool)")
+
+		_, err := db.Exec(fmt.Sprintf("load data infile {'filepath'='%s','format'='arrow'} into table t", missingPath))
+		require.Error(t, err)
+		require.Contains(t, strings.ToLower(err.Error()), "disabled by configuration")
+		require.Equal(t, int64(0), queryCount(t, db, "select count(*) from t"))
+	})
+
+	t.Run("DistributedDisabledSoftFallback", func(t *testing.T) {
+		db := openArrowLoadDB(t, c, 1)
+		testArrowLoadDistributedDisabledSoftFallback(t, db, distributedPath)
+	})
 }
 
 // testArrowLoadGateS3Disabled proves the explicit S3 kill switch fails closed
@@ -167,19 +178,12 @@ func testArrowLoadGateS3Disabled(t *testing.T, c embed.Cluster) {
 	require.Equal(t, int64(0), queryCount(t, db, "select count(*) from t"))
 }
 
-// TestArrowLoadDistributedDisabledSoftFallback proves the explicit distributed
-// rollback switch is a soft fallback (silently serialize), not a hard rejection.
-func TestArrowLoadDistributedDisabledSoftFallback(t *testing.T) {
-	c := startArrowLoadCluster(t, 1, true, true, false)
-	db := openArrowLoadDB(t, c, 0)
-	testArrowLoadDistributedDisabledSoftFallback(t, db)
-}
-
 // testArrowLoadDistributedDisabledSoftFallback proves DistributedEnabled=false
 // is a soft fallback (silently serialize), not a hard rejection. Its caller
-// provisions a dedicated cluster with the distributed kill switch disabled, so
-// the scenario does not mutate any shared cluster configuration.
-func testArrowLoadDistributedDisabledSoftFallback(t *testing.T, db *sql.DB) {
+// provisions a dedicated CN with the distributed kill switch disabled, so the
+// scenario does not mutate any shared cluster configuration.
+func testArrowLoadDistributedDisabledSoftFallback(t *testing.T, db *sql.DB, pathPattern string) {
+	t.Helper()
 	const databaseName = "arrow_distributed_off"
 	const tableName = "`arrow_distributed_off`.`t`"
 	mustExec(t, db, "create database if not exists "+databaseName)
@@ -188,14 +192,18 @@ func testArrowLoadDistributedDisabledSoftFallback(t *testing.T, db *sql.DB) {
 	})
 	mustExec(t, db, "create table "+tableName+"(id bigint not null, name varchar(50))")
 
+	mustExec(t, db, fmt.Sprintf(
+		"load data infile {'filepath'='%s','format'='arrow'} into table %s parallel 'true'",
+		pathPattern, tableName))
+	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from "+tableName))
+}
+
+func prepareArrowLoadDistributedDisabledSoftFallback(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	fixtureIDName(t, dir, "part1.arrow", containerFile, [][]idNameRow{{{id: 1, name: "a"}}})
 	fixtureIDName(t, dir, "part2.arrow", containerFile, [][]idNameRow{{{id: 2, name: "b"}}})
-
-	mustExec(t, db, fmt.Sprintf(
-		"load data infile {'filepath'='%s','format'='arrow'} into table %s parallel 'true'",
-		filepath.Join(dir, "part*.arrow"), tableName))
-	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from "+tableName))
+	return filepath.Join(dir, "part*.arrow")
 }
 
 func testArrowTypeMatrixNumeric(t *testing.T, db *sql.DB) {
