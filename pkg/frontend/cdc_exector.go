@@ -3195,7 +3195,8 @@ func (exec *CDCTaskExecutor) matchesSourceName(name, pattern string) bool {
 		return true
 	}
 	if exec.tables.SourceCaseMode == 2 {
-		return strings.EqualFold(name, pattern)
+		return cdc.CDCSourceIdentifierKey(name, exec.tables.SourceCaseMode) ==
+			cdc.CDCSourceIdentifierKey(pattern, exec.tables.SourceCaseMode)
 	}
 	return name == pattern
 }

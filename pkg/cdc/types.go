@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/tidwall/btree"
@@ -844,18 +845,18 @@ func NormalizeCDCSourcePatternCase(pts *PatternTuples, lowerCaseTableNames int64
 			continue
 		}
 		if lowerCaseTableNames == 1 && pt.Source.Database != CDCPitrGranularity_All {
-			pt.Source.Database = strings.ToLower(pt.Source.Database)
+			pt.Source.Database = CDCSourceIdentifierKey(pt.Source.Database, lowerCaseTableNames)
 		}
 		if lowerCaseTableNames == 1 && pt.Source.Table != CDCPitrGranularity_All {
-			pt.Source.Table = strings.ToLower(pt.Source.Table)
+			pt.Source.Table = CDCSourceIdentifierKey(pt.Source.Table, lowerCaseTableNames)
 		}
 		keyDB, keyTable := pt.Source.Database, pt.Source.Table
 		if lowerCaseTableNames != 0 {
 			if keyDB != CDCPitrGranularity_All {
-				keyDB = strings.ToLower(keyDB)
+				keyDB = CDCSourceIdentifierKey(keyDB, lowerCaseTableNames)
 			}
 			if keyTable != CDCPitrGranularity_All {
-				keyTable = strings.ToLower(keyTable)
+				keyTable = CDCSourceIdentifierKey(keyTable, lowerCaseTableNames)
 			}
 		}
 		key := GenDbTblKey(keyDB, keyTable)
@@ -865,6 +866,14 @@ func NormalizeCDCSourcePatternCase(pts *PatternTuples, lowerCaseTableNames int64
 		seen[key] = struct{}{}
 	}
 	return nil
+}
+
+// CDCSourceIdentifierKey returns the source-server identifier key used by
+// parser/catalog mode 1 and mode 2. Keep CDC source matching on this helper:
+// strings.EqualFold has a wider Unicode equivalence relation than MatrixOne's
+// identifier policy (for example, Greek sigma forms).
+func CDCSourceIdentifierKey(name string, lowerCaseTableNames int64) string {
+	return tree.NewCStr(name, lowerCaseTableNames).Compare()
 }
 
 func (pts *PatternTuples) String() string {
