@@ -76,7 +76,7 @@ func pipelineHasFulltext2ProbeTail(p *pipeline.Pipeline) bool {
 
 // validateFulltext2ProbeTailDestination fails closed when a scope carrying a self-completing
 // fulltext2 json probe is about to be serialized to a CN that does not understand the probe_tail
-// TableConfig contract (MORPCVersion74).
+// TableConfig contract (MORPCVersion81).
 //
 // addJSONFulltextProbes declines the probe at plan time on a mixed-version fleet, but that sample
 // is taken while planning. MOProtocolVersion is explicitly lowered before a rollback, so it can drop
@@ -91,7 +91,7 @@ func validateFulltext2ProbeTailDestination(proc *process.Process, p *pipeline.Pi
 		return nil
 	}
 	if p != nil && p.Node != nil {
-		supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion74)
+		supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion81)
 		if err != nil {
 			return err
 		}

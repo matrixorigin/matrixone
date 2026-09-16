@@ -59,8 +59,8 @@ func TestFulltext2ProbeTailRejectsOnRollback(t *testing.T) {
 	require.ErrorContains(t, err, "newer MORPC protocol version")
 
 	// At the gate it serializes.
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
-	client.version = defines.MORPCVersion74
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
+	client.version = defines.MORPCVersion81
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
