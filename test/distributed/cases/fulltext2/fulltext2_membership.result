@@ -140,22 +140,22 @@ set fulltext_bloom_filter_pushdown = 0;
 select id, category from ft_uuid where match(body) against('learning') and category in ('tech', 'food') order by id;
 ➤ id[12,-1,0]  ¦  category[12,50,0]  𝄀
 00000000-0000-0000-0000-000000000001  ¦  tech  𝄀
-00000000-0000-0000-0000-000000000002  ¦  tech
+00000000-0000-0000-0000-000000000002  ¦  tech  𝄀
 00000000-0000-0000-0000-000000000003  ¦  food
 select id, category from ft_uuid where match(body) against('learning') and category = 'tech' order by id limit 1;
 ➤ id[12,-1,0]  ¦  category[12,50,0]  𝄀
-00000000-0000-0000-0000-000000000001  ¦  tech  𝄀
+00000000-0000-0000-0000-000000000001  ¦  tech
 select id, category from ft_uuid where match(body) against('learning') and category = 'nope' order by id;
 ➤ id[12,-1,0]  ¦  category[12,50,0]  𝄀
 set fulltext_bloom_filter_pushdown = 1;
 select id, category from ft_uuid where match(body) against('learning') and category in ('tech', 'food') order by id;
 ➤ id[12,-1,0]  ¦  category[12,50,0]  𝄀
 00000000-0000-0000-0000-000000000001  ¦  tech  𝄀
-00000000-0000-0000-0000-000000000002  ¦  tech
+00000000-0000-0000-0000-000000000002  ¦  tech  𝄀
 00000000-0000-0000-0000-000000000003  ¦  food
 select id, category from ft_uuid where match(body) against('learning') and category = 'tech' order by id limit 1;
 ➤ id[12,-1,0]  ¦  category[12,50,0]  𝄀
-00000000-0000-0000-0000-000000000001  ¦  tech  𝄀
+00000000-0000-0000-0000-000000000001  ¦  tech
 select id, category from ft_uuid where match(body) against('learning') and category = 'nope' order by id;
 ➤ id[12,-1,0]  ¦  category[12,50,0]  𝄀
 set fulltext_bloom_filter_pushdown = 0;

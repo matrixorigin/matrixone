@@ -14,15 +14,22 @@
 
 package fulltext2
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
+)
 
 var benchmarkUUIDMembershipSink uint64
 
-// BenchmarkLoadedUUIDMembership measures the warmed loaded UUID wrapper with a
-// deterministic exact filter. The serial hit/miss/mixed cells isolate ParseBytes
-// and the query-owned scratch from the real C/Bloom filter's own allocation and
-// variability; run this benchmark with GOMAXPROCS=1 and 10 for the two requested
-// scheduler settings.
+// BenchmarkLoadedUUIDMembership compares the production pointer-backed probe
+// with an otherwise identical inline [16]byte copy. The pointer-backed form
+// pays one per-owner allocation and then reuses a pointer-free backing object;
+// the inline form gives the compiler a fresh 16-byte array at every probe.
+// Both forms share the loaded pkContent and UUID ParseBytes work, so the
+// comparison isolates the ownership choice. Run with GOMAXPROCS=1 and 10 for
+// the two requested scheduler settings.
 func BenchmarkLoadedUUIDMembership(b *testing.B) {
 	u0 := mustTestUUID(b, "00000000-0000-0000-0000-000000000001")
 	u1 := mustTestUUID(b, "00000000-0000-0000-0000-000000000002")
@@ -45,19 +52,49 @@ func BenchmarkLoadedUUIDMembership(b *testing.B) {
 		}},
 	}
 	for _, tc := range cases {
-		b.Run(tc.name, func(b *testing.B) {
+		b.Run(tc.name+"/pointer-backed", func(b *testing.B) {
 			membership := &docFilterMembership{seg: loaded, f: tc.filter}
-			membership.Contains(tc.ord(0)) // warm the loaded path before timing
-			b.ReportAllocs()
-			b.SetBytes(16)
-			b.ResetTimer()
-			var last bool
-			for i := 0; i < b.N; i++ {
-				last = membership.Contains(tc.ord(i))
-			}
-			benchmarkUUIDMembershipSink = uint64(boolToInt(last))
+			benchmarkUUIDMembershipProbe(b, membership.Contains, tc.ord)
+		})
+		b.Run(tc.name+"/inline-copy", func(b *testing.B) {
+			membership := &inlineUUIDMembership{seg: loaded, f: tc.filter}
+			benchmarkUUIDMembershipProbe(b, membership.Contains, tc.ord)
 		})
 	}
+}
+
+type inlineUUIDMembership struct {
+	seg *Segment
+	f   docfilter.MembershipFilter
+}
+
+func (m *inlineUUIDMembership) Contains(ord int64) bool {
+	if ord < 0 || ord >= int64(m.seg.numDocs()) {
+		return false
+	}
+	raw, err := m.seg.pkContent(ord)
+	if err != nil {
+		return false
+	}
+	u, err := uuid.ParseBytes(raw)
+	if err != nil {
+		return false
+	}
+	var probe [16]byte
+	probe = [16]byte(u)
+	return m.f.Test(probe[:])
+}
+
+func benchmarkUUIDMembershipProbe(b *testing.B, contains func(int64) bool, ord func(int) int64) {
+	contains(ord(0)) // warm the pointer-backed allocation before timing
+	b.ReportAllocs()
+	b.SetBytes(16)
+	b.ResetTimer()
+	var last bool
+	for i := 0; i < b.N; i++ {
+		last = contains(ord(i))
+	}
+	benchmarkUUIDMembershipSink = uint64(boolToInt(last))
 }
 
 func boolToInt(value bool) int {
