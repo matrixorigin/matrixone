@@ -451,7 +451,7 @@ var (
 		"datname AS SCHEMA_NAME," +
 		"'utf8mb4' AS DEFAULT_CHARACTER_SET_NAME," +
 		"'" + DefaultCollationForCharset("utf8mb4") + "' AS DEFAULT_COLLATION_NAME," +
-		"if(true, NULL, '') AS SQL_PATH," +
+		"cast(NULL as char(0)) AS SQL_PATH," +
 		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 		"FROM __mo_visible_databases"
 
