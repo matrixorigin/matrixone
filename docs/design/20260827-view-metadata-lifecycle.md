@@ -4,7 +4,7 @@
 - **历史获批语义 checkpoint**：PR #27734 commit `351397e59a286ff13cef6113904f24313310a03c`，包含 cursor per-FETCH epoch fencing、E0 presence、disabled same-epoch semantics、metadata-only authority containment、独立 sealed provisional epoch gate，以及 multi-CN/frontend admission/hot-path evidence
 - **历史审批记录**：reviewer `fengttt` 于 `2026-09-06T17:41:15Z` 对 exact head `bb1e8259c3f8f30f20a8617925c4c81f3243094b` 提交 GitHub `APPROVED` review（[review 5126100008](https://github.com/matrixorigin/matrixone/pull/27734#pullrequestreview-5126100008)），覆盖 executable checkpoint `8c2332ecbbfc6e6c2196e734d345875b2edac134` 及其语义修订。
 - **锁协议审批记录**：reviewer `fengttt` 于 `2026-09-16T02:55:41Z` 对 exact head `cec64fc8abfe9b069987c1ead07b681f4d9a883a` 提交 GitHub `APPROVED` review（[review 5218046900](https://github.com/matrixorigin/matrixone/pull/27734#pullrequestreview-5218046900)）；该 head 包含后台锁协调语义 checkpoint `a97f8074d7514428d042de482650c7b4f3f855e1`。
-- **获批语义 checkpoint**：`a97f8074d7514428d042de482650c7b4f3f855e1`；当前 conformance head 为 `1d6c836077ec14aa3aacbb8054b505ad9a55f459`。审批 head 之后仅合并 main、调整测试 fixture 以符合已获批 FastFail 协议并更新 conformance 文档，未改变锁协议语义。
+- **获批语义 checkpoint**：`a97f8074d7514428d042de482650c7b4f3f855e1`；当前 conformance head 为 `a7e85733cbcca99ccb18c4cacc3a0f2996176f78`。审批 head 之后仅合并 main、调整测试 fixture，并修复 owned DATA BRANCH DELETE 在目标锁返回 RC retry 时未重启完整 admission/lock/validation transaction 的实现偏差；这些变更恢复已记录的 post-lock atomic validation contract，未改变获批锁协议语义。
 - **稳定版本**：PR 正文必须链接获批 checkpoint、审批记录与当前 conformance head；后续任何 semantic change 都重新进入 Pending re-approval
 - **Owning issue**：#26227
 - **实现系列**：#27267、#27370、#27430、#27734
@@ -248,7 +248,7 @@ CI 中硬编码 `if: false` 的 Upgrade jobs 只能记录为 SKIPPED，不能替
 6. **接受** rollback 后 fail closed + 再 revalidate；不承诺旧 binary 可独立开放新 lifecycle。
 7. **实现偏差**：原 prototype 使用 SQL 文本识别 `information_schema.columns`，review 发现可绕过；本版本将 section 6.3 固化为 AST contract。
 
-历史设计门禁由 `fengttt` 的 review `5126100008` 关闭；后台锁协调语义 checkpoint `a97f8074d7514428d042de482650c7b4f3f855e1`（其 base 为 `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）由同一 reviewer 的 review `5218046900` 在 exact head `cec64fc8abfe9b069987c1ead07b681f4d9a883a` 上重新审批。当前 conformance head 为 `1d6c836077ec14aa3aacbb8054b505ad9a55f459`（merge base `091825aac2`）；审批后的变更仅合并 main、对齐测试 fixture 与更新文档，未改变锁协议语义。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
+历史设计门禁由 `fengttt` 的 review `5126100008` 关闭；后台锁协调语义 checkpoint `a97f8074d7514428d042de482650c7b4f3f855e1`（其 base 为 `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）由同一 reviewer 的 review `5218046900` 在 exact head `cec64fc8abfe9b069987c1ead07b681f4d9a883a` 上重新审批。当前 conformance head 为 `a7e85733cbcca99ccb18c4cacc3a0f2996176f78`（merge base `091825aac2`）；审批后的变更仅合并 main、对齐测试 fixture、更新文档，并使 owned DATA BRANCH DELETE 在目标锁返回 RC retry 时重启完整 admission/lock/validation transaction，恢复既有 post-lock atomic validation contract，未改变锁协议语义。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
 
 ### 12.1 后台恢复与显式 owner 事务的锁协调修复
 
@@ -281,3 +281,5 @@ CI run `34680338003` 暴露 cluster restore probe 仍按旧协议要求后台 re
 合并 main `2ea4ec2e6e` 时，prepared statement 构造冲突按字段并集解决：同时保留 View lease dependency 与 upstream `NoUnsignedSubtraction` SQL mode snapshot。两项 focused 测试各五次、完整 compile 通过；完整 frontend 唯一失败为 upstream `TestConnMeasuresOnlyPhysicalOutputWrite` 的瞬时计量断言，单独二十次复跑通过。
 
 合并 main `091825aac2` 时，isolated cluster restore fixture 冲突保留 upstream 对 loaded race runner 的 transaction-timeout retry helper，同时移除已被后台 FastFail 协议淘汰的锁 waiter introspection；lock conflict 仍直接返回，不被 helper 重试。restore race 三次、prepared View/SQL-mode focused 测试三次及完整 compile 通过。
+
+Review `5218599374` 暴露 owned DATA BRANCH DELETE 在等待目标 database lock 后收到 `ErrTxnNeedRetry` 时，会在 post-lock validation 前把 retry 泄漏给客户端。`a7e85733cb` 对 owned background transaction 只允许一次完整重启：rollback/begin 后重新取得 lineage lifecycle admission，再重复 target lock 与 validation；shared/explicit transaction 和非 retry 错误不进入该路径。issue26068 race 十次、包含其前序 shared-cluster tests 的 race 五次、frontend coverage 三次、restart helper focused 十次及完整 frontend 通过。
