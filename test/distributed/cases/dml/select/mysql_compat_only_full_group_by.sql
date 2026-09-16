@@ -97,8 +97,50 @@ execute unique_fd;
 deallocate prepare unique_fd;
 select k,payload,sum(amount) as total from t_unique group by k,payload order by k,payload;
 
+-- Remaining functional-dependency cases: projection lineage and equality joins.
+create table fd_parent(id int primary key, name varchar(20));
+create table fd_child(id int primary key, parent_id int, flag int, qty int);
+insert into fd_parent values (1,'one'),(2,'two');
+insert into fd_child values (10,1,1,5),(11,1,0,7),(12,2,1,11),(13,3,1,13),(14,null,1,17);
+select id,name,count(*) as n from (select id,name from fd_parent) d group by id order by id;
+with d as (select id,name from fd_parent) select id,name,count(*) as n from d group by id order by id;
+create view fd_view as select id,name from fd_parent;
+select id,name,count(*) as n from fd_view group by id order by id;
+select c.parent_id,p.name,sum(c.qty) as total from fd_child c join fd_parent p on c.parent_id=p.id group by c.parent_id order by c.parent_id;
+select c.parent_id,p.name,sum(c.qty) as total from fd_child c,fd_parent p where c.parent_id=p.id group by c.parent_id order by c.parent_id;
+select parent_id,p.name,sum(c.qty) as total from fd_child c join (select id as parent_id,name from fd_parent) p using(parent_id) group by parent_id order by parent_id;
+select c.parent_id,concat(p.name,'!') as label,sum(c.qty) as total from fd_child c join fd_parent p on c.parent_id=p.id group by c.parent_id having p.name<>'two' order by p.name;
+
+-- The inferred result must equal an explicitly grouped reference, with unmatched rows retained.
+select c.parent_id,p.name,sum(c.qty) as total from fd_child c left join fd_parent p on c.parent_id=p.id group by c.parent_id order by c.parent_id is null,c.parent_id;
+select c.parent_id,p.name,sum(c.qty) as total from fd_child c left join fd_parent p on c.parent_id=p.id group by c.parent_id,p.name order by c.parent_id is null,c.parent_id;
+select c.id,p.name,sum(c.qty) as total from fd_child c left join fd_parent p on c.parent_id=p.id and c.flag=1 group by c.id order by c.id;
+select c.id,p.name,sum(c.qty) as total from fd_parent p right join fd_child c on c.parent_id=p.id and c.flag=1 group by c.id order by c.id;
+select c.parent_id,p.name,sum(c.qty) from fd_child c left join fd_parent p on c.parent_id=p.id and c.flag=1 group by c.parent_id;
+select p.id,c.id,count(*) from fd_child c left join fd_parent p on c.parent_id=p.id group by p.id;
+select c.id,p2.name,count(*) as n from fd_child c left join fd_parent p on c.parent_id=p.id left join fd_parent p2 on p.id=p2.id group by c.id order by c.id;
+with d as (select id,name from fd_parent) select a.id,b.name,count(*) from d a cross join d b group by a.id;
+with d as (select id,name from fd_parent) select a.id,b.name,count(*) as n from d a join d b on a.id=b.id group by a.id order by a.id;
+
+create table fd_nullable(a int not null,b int,c int,payload varchar(20),unique key uk_abc(a,b,c));
+insert into fd_nullable values (1,null,1,'n1'),(1,null,1,'n2'),(1,1,null,'n3'),(1,1,null,'n4'),(1,1,1,'good'),(1,2,2,'other');
+select a,b,c,payload,count(*) from fd_nullable group by a,b,c;
+select a,b,c,payload,count(*) from fd_nullable where b is not null group by a,b,c;
+select a,b,c,payload,count(*) as n from fd_nullable where b is not null and c is not null group by a,b,c order by a,b,c;
+select a,b,c,payload,count(*) as n from fd_nullable where b is not null and c is not null group by a,b,c,payload order by a,b,c;
+select k,payload,count(*) as n from (select k,payload from t_unique_nullable) d where k is not null group by k order by k;
+select a,b,c,payload,count(*) from fd_nullable where b is not null or a=1 group by a,b,c;
+
+-- Prepared view lineage must be revalidated after replacement changes row identity.
+prepare fd_view_stmt from 'select id,name,count(*) as n from fd_view group by id order by id';
+execute fd_view_stmt;
+create or replace view fd_view as select parent_id as id,cast(id as char) as name from fd_child;
+execute fd_view_stmt;
+deallocate prepare fd_view_stmt;
+
 -- MATRIXONE_NATIVE keeps MatrixOne's strict ONLY_FULL_GROUP_BY behavior.
 set session sql_mode = 'ONLY_FULL_GROUP_BY,MATRIXONE_NATIVE';
+select c.parent_id,p.name,sum(c.qty) from fd_child c join fd_parent p on c.parent_id=p.id group by c.parent_id;
 select a,b,payload,count(*) from t_unique_composite group by a,b;
 select region, product, sum(qty) as s_qty
 from t_sales
