@@ -52,7 +52,8 @@ func ReplaceRegeneratedViewDependencies(
 		lowerCaseTableNames = *data.LowerCaseTableNames
 	}
 	updated, err := patchPersistedViewMetadata(
-		regenerated.TableDef.ViewSql.View, nil, dependencies, lowerCaseTableNames)
+		regenerated.TableDef.ViewSql.View, nil, dependencies,
+		lowerCaseTableNames, data.RequiredProtocolVersion)
 	if err != nil {
 		return err
 	}
@@ -105,6 +106,18 @@ func RegenerateViewDefinition(
 	if err := json.Unmarshal([]byte(persistedViewData), &viewData); err != nil {
 		return nil, err
 	}
+	if viewData.RequiredProtocolVersion != nil {
+		if *viewData.RequiredProtocolVersion < 0 {
+			return nil, moerr.NewInvalidInputf(
+				ctx.GetContext(),
+				"persisted view protocol version must not be negative: %d",
+				*viewData.RequiredProtocolVersion)
+		}
+		if err := RequirePersistedProtocolVersion(
+			ctx.GetContext(), ctx.GetProcess(), *viewData.RequiredProtocolVersion); err != nil {
+			return nil, err
+		}
+	}
 	parserSQLMode := legacyViewParserSQLMode
 	if viewData.SQLMode != nil {
 		parserSQLMode = *viewData.SQLMode
@@ -151,7 +164,7 @@ func RegenerateViewDefinition(
 		lowerCaseTableNames: lowerCaseTableNames,
 	}
 	tableDef, err := genViewTableDef(
-		regenerationCtx, selectStmt, columnNames, viewDatabase, viewName)
+		regenerationCtx, selectStmt, columnNames, viewDatabase, viewName, false)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +174,9 @@ func RegenerateViewDefinition(
 	}
 
 	updatedViewData, err := patchPersistedViewMetadata(
-		persistedViewData, &generatedData.Stmt, generatedData.Dependencies, lowerCaseTableNames)
+		persistedViewData, &generatedData.Stmt, generatedData.Dependencies,
+		lowerCaseTableNames, maxPersistedProtocolVersion(
+			viewData.RequiredProtocolVersion, generatedData.RequiredProtocolVersion))
 	if err != nil {
 		return nil, err
 	}
@@ -177,6 +192,7 @@ func patchPersistedViewMetadata(
 	stableStatement *string,
 	dependencies []ViewDependency,
 	lowerCaseTableNames int64,
+	requiredProtocolVersion *int64,
 ) (string, error) {
 	fields := make(map[string]json.RawMessage)
 	if err := json.Unmarshal([]byte(persistedViewData), &fields); err != nil {
@@ -194,6 +210,13 @@ func patchPersistedViewMetadata(
 		fields["Stmt"] = encodedStatement
 	}
 	fields["dependencies"] = encodedDependencies
+	if requiredProtocolVersion != nil {
+		encodedRequiredProtocolVersion, marshalErr := json.Marshal(*requiredProtocolVersion)
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		fields["required_protocol_version"] = encodedRequiredProtocolVersion
+	}
 	if _, ok := fields["lower_case_table_names"]; !ok {
 		encodedLowerCaseTableNames, marshalErr := json.Marshal(lowerCaseTableNames)
 		if marshalErr != nil {
@@ -203,4 +226,22 @@ func patchPersistedViewMetadata(
 	}
 	updated, err := json.Marshal(fields)
 	return string(updated), err
+}
+
+func maxPersistedProtocolVersion(values ...*int64) *int64 {
+	var max int64
+	seen := false
+	for _, value := range values {
+		if value == nil || *value < 0 {
+			continue
+		}
+		if !seen || *value > max {
+			max = *value
+			seen = true
+		}
+	}
+	if !seen {
+		return nil
+	}
+	return &max
 }

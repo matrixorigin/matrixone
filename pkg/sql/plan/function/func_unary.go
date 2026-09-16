@@ -8933,15 +8933,34 @@ func newCrc32ExecContext() *crc32ExecContext {
 }
 
 func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[uint32](
+	if _, legacy := result.(*vector.FunctionResult[uint32]); legacy {
+		return builtInCrc32Result[uint32](content, parameters, result, proc, length, selectList, func(value uint32) uint32 {
+			return value
+		})
+	}
+	return builtInCrc32Result[uint64](content, parameters, result, proc, length, selectList, func(value uint32) uint64 {
+		return uint64(value)
+	})
+}
+
+func builtInCrc32Result[Tr types.FixedSizeTExceptStrType](
+	content *crc32ExecContext,
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	toResult func(uint32) Tr,
+) error {
+	return opUnaryBytesToFixedWithErrorCheck[Tr](
 		parameters,
-		result, proc, length, func(v []byte) (uint32, error) {
+		result, proc, length, func(v []byte) (Tr, error) {
 			content.hah.Reset()
 			_, err := content.hah.Write(v)
 			if err != nil {
-				return 0, err
+				return toResult(0), err
 			}
-			return content.hah.Sum32(), nil
+			return toResult(content.hah.Sum32()), nil
 		}, selectList)
 }
 
@@ -9378,12 +9397,20 @@ func strLength(xs string) int64 {
 }
 
 func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedByStringDomain[uint64](
-		ivecs, result, proc, length, strLengthUTF8, strLengthBinary, selectList)
+	if _, legacy := result.(*vector.FunctionResult[uint64]); legacy {
+		return opUnaryBytesToFixedByStringDomain[uint64](
+			ivecs, result, proc, length, strLengthUTF8, strLengthBinary, selectList)
+	}
+	return opUnaryBytesToFixedByStringDomain[int64](
+		ivecs, result, proc, length, strLengthUTF8Int64, strLengthBinaryInt64, selectList)
 }
 
 func strLengthUTF8(xs []byte) uint64 {
 	return lengthutf8.CountUTF8CodePoints(xs)
+}
+
+func strLengthUTF8Int64(xs []byte) int64 {
+	return int64(strLengthUTF8(xs))
 }
 
 func LengthBinary(
@@ -9393,12 +9420,20 @@ func LengthBinary(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
-	return opUnaryBytesToFixedByStringDomain[uint64](
-		ivecs, result, proc, length, strLengthUTF8, strLengthBinary, selectList)
+	if _, legacy := result.(*vector.FunctionResult[uint64]); legacy {
+		return opUnaryBytesToFixedByStringDomain[uint64](
+			ivecs, result, proc, length, strLengthUTF8, strLengthBinary, selectList)
+	}
+	return opUnaryBytesToFixedByStringDomain[int64](
+		ivecs, result, proc, length, strLengthUTF8Int64, strLengthBinaryInt64, selectList)
 }
 
 func strLengthBinary(xs []byte) uint64 {
 	return uint64(len(xs))
+}
+
+func strLengthBinaryInt64(xs []byte) int64 {
+	return int64(len(xs))
 }
 
 func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -9700,13 +9735,24 @@ func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 // UncompressedLength: UNCOMPRESSED_LENGTH(compressed_string) - Returns the length that the compressed string had before being compressed
 // Reads the first 4 bytes (little-endian) from the compressed string
 func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if _, legacy := result.(*vector.FunctionResult[int32]); legacy {
+		return uncompressedLengthResult[int32](parameters, result, proc, length, selectList, func(value uint32) int32 {
+			return int32(value)
+		})
+	}
+	return uncompressedLengthResult[int64](parameters, result, proc, length, selectList, func(value uint32) int64 {
+		return int64(value)
+	})
+}
+
+func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, toResult func(uint32) Tr) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
-	rs := vector.MustFunctionResult[int32](result)
+	rs := vector.MustFunctionResult[Tr](result)
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		if selectList != nil && selectList.Contains(i) {
-			if err := rs.Append(0, true); err != nil {
+			if err := rs.Append(toResult(0), true); err != nil {
 				return err
 			}
 			continue
@@ -9714,21 +9760,21 @@ func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResul
 
 		data, null := source.GetStrValue(i)
 		if null {
-			if err := rs.Append(0, true); err != nil {
+			if err := rs.Append(toResult(0), true); err != nil {
 				return err
 			}
 			continue
 		}
 
 		if len(data) <= 4 {
-			if err := rs.Append(0, false); err != nil {
+			if err := rs.Append(toResult(0), false); err != nil {
 				return err
 			}
 			continue
 		}
 
 		originalLen := binary.LittleEndian.Uint32(data[0:4]) & mysqlCompressedLengthMask
-		if err := rs.Append(int32(originalLen), false); err != nil {
+		if err := rs.Append(toResult(originalLen), false); err != nil {
 			return err
 		}
 	}
@@ -13481,12 +13527,12 @@ func BitmapBucketNumber(parameters []*vector.Vector, result vector.FunctionResul
 }
 
 func BitmapCount(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixed[uint64](parameters, result, proc, length, func(v []byte) (cnt uint64) {
+	return opUnaryBytesToFixedWithErrorCheck[uint64](parameters, result, proc, length, func(v []byte) (uint64, error) {
 		bmp := roaring.New()
 		if err := bmp.UnmarshalBinary(v); err != nil {
-			return 0
+			return 0, moerr.NewInvalidInputf(proc.Ctx, "invalid bitmap: %v", err)
 		}
-		return bmp.GetCardinality()
+		return bmp.GetCardinality(), nil
 	}, selectList)
 }
 

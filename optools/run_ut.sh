@@ -57,8 +57,12 @@ UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
 UT_HELPER_TERM_GRACE_TICKS=${UT_HELPER_TERM_GRACE_TICKS:-"60"}
 HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
 PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
-# Two shards cut the measured engine/test race runtime roughly in half while
-# keeping the default heavy-stage memory/process budget bounded.
+# Keep plan race processes bounded because each shard owns a race-instrumented
+# test process and its package resources. The default stays serial on the
+# constrained CI runner; stronger runners can opt into two independent shards.
+PLAN_RACE_PARALLEL=${PLAN_RACE_PARALLEL:-"1"}
+# Two engine shards cut the measured engine/test race runtime roughly in half
+# while keeping the default heavy-stage memory/process budget bounded.
 ENGINE_RACE_SHARDS=2
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
@@ -905,7 +909,7 @@ function consume_plan_race_report(){
         fi
         return "${append_status}"
     fi
-    rm -f "${PLAN_RACE_REPORT}"
+    rm -f "${PLAN_RACE_REPORT}" "${PLAN_RACE_REPORT}".*
     PLAN_RACE_REPORT=""
     restore_ut_term_trap "${saved_term_trap}"
     if (( term_pending != 0 && UT_TERMINATING == 0 )); then
@@ -1205,12 +1209,25 @@ function run_plan_race_shards(){
     local test_count=0
     local plan_child_pid=""
     local previous_term_trap=""
+    local report_staging=""
+    local active_count=0
+    local next_shard=0
+    local pid=""
+    local scheduler_progress=0
+    local plan_term_grace_ticks=20
     local -a shard_patterns
     local -a shard_counts
+    local -a shard_pids=()
+    local -a shard_reports=()
 
     if ! [[ "${PLAN_RACE_SHARDS}" =~ ^[1-9][0-9]*$ ]] ||
         (( PLAN_RACE_SHARDS > 64 )); then
         logger "ERR" "PLAN_RACE_SHARDS must be an integer from 1 through 64, got '${PLAN_RACE_SHARDS}'"
+        return 2
+    fi
+    if ! [[ "${PLAN_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+        (( PLAN_RACE_PARALLEL > 2 )); then
+        logger "ERR" "PLAN_RACE_PARALLEL must be 1 or 2, got '${PLAN_RACE_PARALLEL}'"
         return 2
     fi
 
@@ -1218,11 +1235,14 @@ function run_plan_race_shards(){
     # process-group cleanup local to this helper so a cancelled parent cannot
     # strand the test binary after the helper's shell exits.
     previous_term_trap=$(trap -p TERM)
-    trap 'if [[ -n "${plan_child_pid}" ]]; then terminate_ut_process_groups 20 "${plan_child_pid}"; fi; wait 2>/dev/null || true; rm -f "${plan_test_binary}"; exit 143' TERM
+    # A TERM can arrive while the helper is transitioning from one child
+    # group to the next. Bound each cleanup pass so two independent groups
+    # finish before the parent helper's 15-second cancellation window.
+    trap 'if [[ -n "${plan_child_pid:-}" ]]; then terminate_ut_process_groups "${plan_term_grace_ticks:-20}" "${plan_child_pid}"; fi; if [[ -n "${shard_pids+x}" ]] && (( ${#shard_pids[@]} > 0 )); then terminate_ut_process_groups "${plan_term_grace_ticks:-20}" "${shard_pids[@]}"; fi; if [[ -n "${shard_pids+x}" ]]; then for pid in "${shard_pids[@]}"; do [[ -n "${pid}" ]] && wait "${pid}" 2>/dev/null || true; done; fi; wait 2>/dev/null || true; if [[ -n "${plan_test_binary:-}" ]]; then rm -f "${plan_test_binary}"; fi; exit 143' TERM
     if [[ -z "${PLAN_RACE_REPORT}" ]]; then
         PLAN_RACE_REPORT="${G_WKSP}/${G_TS}-plan-race-report.out"
     fi
-    : > "${PLAN_RACE_REPORT}"
+    rm -f "${PLAN_RACE_REPORT}" "${PLAN_RACE_REPORT}".*
     checkpoint_ut_event "start" "plan" "${plan_package}" "" "shards=${PLAN_RACE_SHARDS}"
     # Resolve both metadata fields through one cancellable child. Keeping the
     # PID in plan_child_pid makes TERM ownership identical to build and shard
@@ -1326,37 +1346,122 @@ function run_plan_race_shards(){
         return 2
     fi
 
-    logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes"
+    logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes with parallelism ${PLAN_RACE_PARALLEL}"
     for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
         if (( shard_counts[shard] == 0 )); then
             continue
         fi
         shard_patterns[shard]+=')$'
-        logger "INF" "Run ${plan_package} race shard $(( shard + 1 ))/${PLAN_RACE_SHARDS} (${shard_counts[shard]} tests)"
-        mark_ut_stage "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" start "" "tests=${shard_counts[shard]}"
-        set -m
-        (
-            cd "${plan_package_dir}" || exit 2
-            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
-                go tool test2json -t -p "${plan_package_import}" \
-                "${plan_test_binary}" -test.short=true -test.v=test2json \
-                -test.paniconexit0=true -test.count=1 \
-                -test.timeout="${UT_TIMEOUT}m" \
-                -test.run="${shard_patterns[shard]}"
-        ) >> "${PLAN_RACE_REPORT}" 2>> "${UT_STDERR}" &
-        plan_child_pid=$!
-        CURRENT_UT_PID=${plan_child_pid}
-        checkpoint_ut_event "pid-start" "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" "" "child_pid=${plan_child_pid} tests=${shard_counts[shard]}"
-        wait "${plan_child_pid}"
-        shard_exit_status=$?
-        plan_child_pid=""
-        CURRENT_UT_PID=""
-        set +m
-        mark_ut_stage "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" finish "${shard_exit_status}"
-        if (( shard_exit_status != 0 )); then
-            shard_status=1
+        # append_ut_report recovers unmarked shard files through a lexical
+        # glob. Keep the suffix fixed-width so shard 10 follows shard 09.
+        shard_reports[shard]="${PLAN_RACE_REPORT}.$(printf '%02d' "${shard}")"
+        : > "${shard_reports[shard]}"
+    done
+
+    # Run fresh test-binary processes with a hard two-process ceiling. Each
+    # process writes an independent report, so a failed shard cannot leave a
+    # partially interleaved JSON stream or hide another shard's status.
+    set -m
+    while (( next_shard < PLAN_RACE_SHARDS || active_count > 0 )); do
+        while (( next_shard < PLAN_RACE_SHARDS && active_count < PLAN_RACE_PARALLEL )); do
+            shard=${next_shard}
+            next_shard=$(( next_shard + 1 ))
+            if (( shard_counts[shard] == 0 )); then
+                continue
+            fi
+            logger "INF" "Run ${plan_package} race shard $(( shard + 1 ))/${PLAN_RACE_SHARDS} (${shard_counts[shard]} tests)"
+            mark_ut_stage "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" start "" "tests=${shard_counts[shard]}"
+            (
+                cd "${plan_package_dir}" || exit 2
+                LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+                    go tool test2json -t -p "${plan_package_import}" \
+                    "${plan_test_binary}" -test.short=true -test.v=test2json \
+                    -test.paniconexit0=true -test.count=1 \
+                    -test.timeout="${UT_TIMEOUT}m" \
+                    -test.run="${shard_patterns[shard]}"
+            ) > "${shard_reports[shard]}" 2>> "${UT_STDERR}" &
+            shard_pids[shard]=$!
+            active_count=$(( active_count + 1 ))
+            checkpoint_ut_event "pid-start" "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" "" "child_pid=${shard_pids[shard]} tests=${shard_counts[shard]}"
+        done
+
+        if (( active_count == 0 )); then
+            continue
+        fi
+
+        # Bash 3.2 does not provide wait -n. Poll the owned children instead of
+        # waiting for the first active index, so a later fast shard releases a
+        # bounded slot without being held behind an earlier slow shard.
+        scheduler_progress=0
+        for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
+            if [[ -z "${shard_pids[shard]:-}" ]]; then
+                continue
+            fi
+            pid=${shard_pids[shard]}
+            if kill -0 "${pid}" 2>/dev/null; then
+                continue
+            fi
+            wait "${pid}"
+            shard_exit_status=$?
+            shard_pids[shard]=""
+            active_count=$(( active_count - 1 ))
+            scheduler_progress=1
+            mark_ut_stage "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" finish "${shard_exit_status}"
+            if (( shard_exit_status != 0 )); then
+                logger "ERR" "${plan_package} race shard $(( shard + 1 )) failed with status ${shard_exit_status}"
+                shard_status=1
+            fi
+        done
+        if (( scheduler_progress == 0 )); then
+            sleep 0.05
         fi
     done
+    set +m
+
+    # Publish the complete ordered report only after every shard has been
+    # reaped. The ready marker makes the base report authoritative to
+    # append_ut_report; cancellation before the marker leaves shard reports
+    # available for diagnostics and safe recovery.
+    report_staging="${PLAN_RACE_REPORT}.tmp.$$"
+    rm -f "${report_staging}"
+    if ! : > "${report_staging}"; then
+        logger "ERR" "failed to create plan race report staging file"
+        rm -f "${plan_test_binary}"
+        PLAN_RACE_TEST_BINARY=""
+        restore_ut_term_trap "${previous_term_trap}"
+        return 1
+    fi
+    for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
+        if (( shard_counts[shard] == 0 )); then
+            continue
+        fi
+        if ! cat "${shard_reports[shard]}" >> "${report_staging}"; then
+            logger "ERR" "failed to assemble plan race shard ${shard} report"
+            rm -f "${report_staging}"
+            rm -f "${plan_test_binary}"
+            PLAN_RACE_TEST_BINARY=""
+            restore_ut_term_trap "${previous_term_trap}"
+            return 1
+        fi
+    done
+    if ! mv -f "${report_staging}" "${PLAN_RACE_REPORT}"; then
+        logger "ERR" "failed to publish plan race report"
+        rm -f "${report_staging}"
+        rm -f "${plan_test_binary}"
+        PLAN_RACE_TEST_BINARY=""
+        restore_ut_term_trap "${previous_term_trap}"
+        return 1
+    fi
+    if ! : > "${PLAN_RACE_REPORT}.ready"; then
+        logger "ERR" "failed to publish plan race report readiness marker"
+        # Keep the complete base report and shard reports for append_ut_report
+        # to recover if marker publication is interrupted.
+        rm -f "${plan_test_binary}"
+        PLAN_RACE_TEST_BINARY=""
+        restore_ut_term_trap "${previous_term_trap}"
+        return 1
+    fi
+    rm -f "${PLAN_RACE_REPORT}".[0-9]*
 
     rm -f "${plan_test_binary}"
     PLAN_RACE_TEST_BINARY=""
