@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -281,6 +282,43 @@ func TestPersistedStringNumericResultProtocolAdmission(t *testing.T) {
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 	require.NoError(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, expr),
 		"legacy catalog-builder wrapper must use the shared maximum-version gate")
+}
+
+func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	binaryType := types.New(types.T_binary, 4, 0)
+	varbinaryType := types.New(types.T_varbinary, 12, 0)
+	expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, "coalesce", []*planpb.Expr{
+		{Typ: makePlan2Type(&binaryType), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		{Typ: makePlan2Type(&varbinaryType), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+	})
+	require.NoError(t, err)
+	functionID, overloadID := function.DecodeOverloadID(expr.GetF().Func.Obj)
+	require.Equal(t, int32(function.COALESCE), functionID)
+	require.Equal(t, int32(31), overloadID)
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.True(t, features.BoundedConditionalStringDomains)
+
+	required, err := RequiredPersistedExpressionProtocolVersion(expr)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion82), required)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
+	require.ErrorContains(t,
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 82")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 }
 
 func checkAdmissionResult(t *testing.T, version int64, err error) {

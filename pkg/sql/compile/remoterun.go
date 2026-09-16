@@ -146,6 +146,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if features.BoundedConditionalStringDomains {
+		if err = validateBoundedConditionalStringDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -2180,6 +2185,12 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {
 		return moerr.NewNotSupportedNoCtx(
 			"corrected string numeric result contracts require MORPC protocol version 80",
+		)
+	}
+	if features.BoundedConditionalStringDomains &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion82) {
+		return moerr.NewNotSupportedNoCtx(
+			"bounded conditional string domains require MORPC protocol version 82",
 		)
 	}
 	if features.IPFunctionSemantics &&
