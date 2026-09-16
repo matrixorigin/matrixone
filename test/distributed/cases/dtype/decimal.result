@@ -515,7 +515,7 @@ select * from t1;
 insert into t1 values(0.999995);
 invalid input: 0.999995 beyond the range, can't be converted to Decimal64(5,5).
 insert into t1 values(-0.999995);
-invalid input: 0.999995 beyond the range, can't be converted to Decimal64(5,5).
+invalid input: .999995 beyond the range, can't be converted to Decimal64(5,5).
 drop table t1;
 create table t1(a decimal(17,17));
 insert into t1 values(0), (0.99999999999999999), (0.999999999999999994), (-0.99999999999999999), (-0.999999999999999994);
@@ -529,7 +529,7 @@ select * from t1;
 insert into t1 values(0.999999999999999995);
 invalid input: 0.999999999999999995 beyond the range, can't be converted to Decimal128(17,17).
 insert into t1 values(-0.999999999999999995);
-invalid input: 0.999999999999999995 beyond the range, can't be converted to Decimal128(17,17).
+invalid input: .999999999999999995 beyond the range, can't be converted to Decimal128(17,17).
 drop table if exists t1;
 create table t1 (a decimal(12,2), b decimal(12, 2));
 insert into t1 values (301934.27, 301934.27);
