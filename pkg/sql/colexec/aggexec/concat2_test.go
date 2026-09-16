@@ -565,6 +565,75 @@ func TestGroupConcatDistinctAndHelpers(t *testing.T) {
 	exec.Free()
 }
 
+func TestGroupConcatDistinctNative0900UsesComparisonIdentity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	native := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB40900AI)
+	info := multiAggInfo{
+		aggID:    89,
+		distinct: true,
+		argTypes: []types.Type{native},
+		retType: func() types.Type {
+			typ := types.T_text.ToType()
+			typ.Charset = types.CharsetUTF8MB40900AI
+			return typ
+		}(),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, exec.GroupGrow(1))
+	values := buildVarlenVec(t, mp, native, []string{"Alpha", "alpha"})
+	require.NoError(t, exec.BatchFill(0, []uint64{1, 1}, []*vector.Vector{values}))
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "Alpha", string(result[0].GetBytesAt(0)))
+	result[0].Free(mp)
+	values.Free(mp)
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestGroupConcatAccountedDistinctNative0900UsesComparisonIdentity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	native := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB40900AI)
+	info := multiAggInfo{
+		aggID:     90,
+		distinct:  true,
+		argTypes:  []types.Type{native},
+		retType:   types.T_text.ToType(),
+		emptyNull: true,
+	}
+	exec := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	registry, account, allocation := newTestAggregateAllocation(t)
+	require.NoError(t, exec.SetAllocationAccount(allocation))
+	require.NoError(t, exec.GroupGrow(1))
+	values := buildVarlenVec(t, mp, native, []string{"Alpha", "alpha"})
+	groups := []uint64{1, 1}
+	require.NoError(t, exec.PreflightBatchFill(0, groups, []*vector.Vector{values}))
+	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{values}))
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "Alpha", string(result[0].GetBytesAt(0)))
+	result[0].Free(mp)
+
+	var encoded bytes.Buffer
+	require.NoError(t, exec.SaveIntermediateResult(1, [][]uint8{{1}}, &encoded))
+	restored := newGroupConcatExec(mp, info, ",").(*groupConcatExec)
+	require.NoError(t, restored.SetAllocationAccount(allocation))
+	require.NoError(t, restored.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+	restoredResult, err := restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, "Alpha", string(restoredResult[0].GetBytesAt(0)))
+	restoredResult[0].Free(mp)
+	restored.Free()
+	require.NoError(t, restored.ClearAllocationAccount(allocation))
+	values.Free(mp)
+	exec.Free()
+	require.NoError(t, exec.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestGroupConcatGeometryUsesBinaryResult(t *testing.T) {
 	geometryType := types.T_geometry.ToType()
 	geometry32Type := types.T_geometry32.ToType()

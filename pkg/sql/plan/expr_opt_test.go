@@ -58,6 +58,99 @@ func TestDoMergeFiltersOnCompositeKeyMergesSortKeyRanges(t *testing.T) {
 	requireFuncNames(t, ret, "in_range")
 }
 
+func TestDoMergeFiltersOnNativeSinglePrimaryUsesOpaquePhysicalKey(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	nativeType := planpb.Type{
+		Id:      int32(types.T_varchar),
+		Width:   types.MaxVarcharLen,
+		Charset: uint32(types.CharsetUTF8MB40900AI),
+	}
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: "name", Typ: nativeType},
+			{Name: "__mo_cpkey", Typ: planpb.Type{Id: int32(types.T_varbinary), Width: types.MaxVarBinaryLen}},
+		},
+		Name2ColIndex: map[string]int32{"name": 0, "__mo_cpkey": 1},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "__mo_cpkey",
+			Names:       []string{"name"},
+			CompPkeyCol: &planpb.ColDef{Name: "__mo_cpkey", Typ: planpb.Type{Id: int32(types.T_varbinary)}, Hidden: true},
+		},
+	}
+	column := &planpb.Expr{
+		Typ: nativeType,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: tag, ColPos: 0, Name: "name",
+		}},
+	}
+	constant := MakePlan2StringConstExprWithType("Alpha")
+	constant.Typ = nativeType
+	filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), ">", []*planpb.Expr{column, constant})
+	require.NoError(t, err)
+
+	ret := builder.doMergeFiltersOnCompositeKey(tableDef, tag, filter)
+	require.Len(t, ret, 1)
+	fn := ret[0].GetF()
+	require.NotNil(t, fn)
+	require.Equal(t, ">", fn.Func.ObjName)
+	require.Equal(t, int32(1), nativeComparisonColumn(fn.Args[0]).ColPos)
+	serial := fn.Args[1].GetF()
+	require.NotNil(t, serial)
+	require.Equal(t, "serial", serial.Func.ObjName)
+	key := serial.Args[0].GetF()
+	require.NotNil(t, key)
+	require.Equal(t, "internal_collation_key", key.Func.ObjName)
+}
+
+func TestDoMergeFiltersOnNativeSinglePrimaryKeepsExplicitBinaryResidual(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	nativeType := planpb.Type{
+		Id:      int32(types.T_varchar),
+		Width:   types.MaxVarcharLen,
+		Charset: uint32(types.CharsetUTF8MB40900AI),
+	}
+	binType := nativeType
+	binType.Charset = uint32(types.CharsetUTF8MB4Bin)
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: "name", Typ: nativeType},
+			{Name: "__mo_cpkey", Typ: planpb.Type{Id: int32(types.T_varbinary), Width: types.MaxVarBinaryLen}},
+		},
+		Name2ColIndex: map[string]int32{"name": 0, "__mo_cpkey": 1},
+		Pkey: &planpb.PrimaryKeyDef{
+			PkeyColName: "__mo_cpkey",
+			Names:       []string{"name"},
+			CompPkeyCol: &planpb.ColDef{Name: "__mo_cpkey", Typ: planpb.Type{Id: int32(types.T_varbinary)}, Hidden: true},
+		},
+	}
+	column := &planpb.Expr{
+		Typ:  nativeType,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: tag, ColPos: 0, Name: "name"}},
+	}
+	explicitBinary := &planpb.Expr{
+		Typ: binType,
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func:              &planpb.ObjectRef{ObjName: "cast"},
+			ExplicitCollation: true,
+			Args:              []*planpb.Expr{column},
+		}},
+	}
+	right := makePlan2StringConstExprWithType("alpha")
+	right.Typ = binType
+	filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{explicitBinary, right})
+	require.NoError(t, err)
+
+	ret := builder.doMergeFiltersOnCompositeKey(tableDef, tag, filter)
+	require.Len(t, ret, 1)
+	require.Equal(t, "=", ret[0].GetF().Func.ObjName)
+	require.True(t, ret[0].GetF().Args[0].GetF().ExplicitCollation)
+	require.Equal(t, int32(0), ret[0].GetF().Args[0].GetF().Args[0].GetCol().ColPos)
+}
+
 func TestDoMergeFiltersOnCompositeKeySupportsFoldedInVector(t *testing.T) {
 	testCases := []struct {
 		name            string

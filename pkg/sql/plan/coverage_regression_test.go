@@ -857,6 +857,18 @@ func TestSkipUniqueIdxDedupMatchesSameUniqueDefinition(t *testing.T) {
 	newTable.Cols[0] = DeepCopyColDef(oldTable.Cols[0])
 	newTable.Cols[0].GeneratedCol = &planpb.GeneratedCol{IsStored: true}
 	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable, identitySources))
+
+	// A collation change preserves the visible column name and type family but
+	// changes the unique identity. The COPY path must re-check duplicates.
+	newTable.Cols[0] = DeepCopyColDef(oldTable.Cols[0])
+	newTable.Cols[0].Typ.Charset = uint32(types.CharsetUTF8MB40900AI)
+	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable, identitySources))
+
+	// Reusing an index definition with a new physical key format is likewise
+	// unsafe even when the visible value is byte-for-byte unchanged.
+	newTable.Cols[0] = DeepCopyColDef(oldTable.Cols[0])
+	newTable.Indexes[0].KeyFormat = uint32(types.PADSpaceKeyV1)
+	require.Empty(t, skipUniqueIdxDedup(oldTable, newTable, identitySources))
 }
 
 func TestSkipPkDedupRequiresValuePreservingKeyColumns(t *testing.T) {
@@ -878,6 +890,13 @@ func TestSkipPkDedupRequiresValuePreservingKeyColumns(t *testing.T) {
 
 	newTable = DeepCopyTableDef(oldTable, true)
 	newTable.Cols[0].GeneratedCol = &planpb.GeneratedCol{IsStored: true}
+	require.False(t, skipPkDedup(oldTable, newTable, identitySources))
+
+	newTable = DeepCopyTableDef(oldTable, true)
+	newTable.Cols[0].Typ.Charset = uint32(types.CharsetUTF8MB40900AI)
+	require.False(t, skipPkDedup(oldTable, newTable, identitySources))
+	newTable = DeepCopyTableDef(oldTable, true)
+	newTable.KeyFormat = uint32(types.PADSpaceKeyV1)
 	require.False(t, skipPkDedup(oldTable, newTable, identitySources))
 }
 

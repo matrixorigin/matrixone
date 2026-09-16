@@ -358,12 +358,23 @@ func (exec *groupConcatExec) SetAllocationAccount(
 	// Group mode. It replaces the auxiliary Go hash and uses the same bounded
 	// spill representation as ordinary saved arguments.
 	preserveDistinctInputOrder := exec.distinct && exec.orderArgCnt == 0
+	distinctIdentityPrefix := preserveDistinctInputOrder
+	if distinctIdentityPrefix {
+		distinctIdentityPrefix = false
+		for _, typ := range exec.argTypes {
+			if types.NeedsCollationKey(typ, types.PADSpaceKeyV1) {
+				distinctIdentityPrefix = true
+				break
+			}
+		}
+	}
 	if err := exec.aggExec.SetAllocationAccount(allocation); err != nil {
 		return err
 	}
 	exec.aggInfo.isDistinct = preserveDistinctInputOrder
 	exec.aggInfo.preserveDistinctInputOrder = preserveDistinctInputOrder
 	exec.aggInfo.distinctInputOrderSourceRow = preserveDistinctInputOrder
+	exec.aggInfo.distinctIdentityPrefix = distinctIdentityPrefix
 	exec.distinctHash.free()
 	return nil
 }
@@ -377,6 +388,7 @@ func (exec *groupConcatExec) ClearAllocationAccount(
 	exec.aggInfo.isDistinct = false
 	exec.aggInfo.preserveDistinctInputOrder = false
 	exec.aggInfo.distinctInputOrderSourceRow = false
+	exec.aggInfo.distinctIdentityPrefix = false
 	return nil
 }
 
@@ -656,22 +668,44 @@ func (exec *groupConcatExec) fillInputOrderRowAccounted(
 	row int,
 	sourceRow uint64,
 ) error {
-	concatPayloadSize := 0
-	for i, vec := range vectors[:exec.concatArgCnt] {
-		physicalRow := row
-		if vec.IsConst() {
-			physicalRow = 0
+	var concatPayload []byte
+	var distinctIdentity []byte
+	if exec.aggInfo.distinctIdentityPrefix {
+		var err error
+		concatPayload, err = encodeGroupConcatPayload(
+			vectors[:exec.concatArgCnt], row, exec.concatTypes())
+		if err != nil {
+			return err
 		}
-		if vec.IsNull(uint64(physicalRow)) {
+		if concatPayload == nil {
 			return nil
 		}
-		fieldSize := len(groupConcatFieldBytes(
-			vec, physicalRow, exec.argTypes[i]))
-		if uint64(fieldSize) > math.MaxUint32 ||
-			fieldSize > math.MaxInt-concatPayloadSize-5 {
-			return mpool.ErrAllocationAllocatorLimit
+		distinctIdentity, err = groupConcatDistinctIdentityFromPayload(
+			concatPayload, exec.concatTypes())
+		if err != nil {
+			return err
 		}
-		concatPayloadSize += 5 + fieldSize
+	}
+	concatPayloadSize := 0
+	if exec.aggInfo.distinctIdentityPrefix {
+		concatPayloadSize = len(concatPayload)
+	} else {
+		for i, vec := range vectors[:exec.concatArgCnt] {
+			physicalRow := row
+			if vec.IsConst() {
+				physicalRow = 0
+			}
+			if vec.IsNull(uint64(physicalRow)) {
+				return nil
+			}
+			fieldSize := len(groupConcatFieldBytes(
+				vec, physicalRow, exec.argTypes[i]))
+			if uint64(fieldSize) > math.MaxUint32 ||
+				fieldSize > math.MaxInt-concatPayloadSize-5 {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			concatPayloadSize += 5 + fieldSize
+		}
 	}
 	payloadSize := concatPayloadSize
 	if exec.orderArgCnt != 0 {
@@ -717,10 +751,17 @@ func (exec *groupConcatExec) fillInputOrderRowAccounted(
 	if !exec.aggInfo.isDistinct {
 		headerSize += kAggArgOrdinalSz
 	}
-	if payloadSize > math.MaxInt-headerSize {
+	keyPayloadSize := payloadSize
+	if exec.aggInfo.distinctIdentityPrefix {
+		if len(distinctIdentity) > math.MaxInt-4 {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		keyPayloadSize = 4 + len(distinctIdentity)
+	}
+	if keyPayloadSize > math.MaxInt-headerSize {
 		return mpool.ErrAllocationAllocatorLimit
 	}
-	key, err := state.resizeArgScratch(exec.mp, headerSize+payloadSize)
+	key, err := state.resizeArgScratch(exec.mp, headerSize+keyPayloadSize)
 	if err != nil {
 		return err
 	}
@@ -730,45 +771,30 @@ func (exec *groupConcatExec) fillInputOrderRowAccounted(
 			key[kAggArgPrefixSz:headerSize], state.argCnt[y])
 	}
 	offset := headerSize
-	if withSourceRow {
-		copy(key[offset:], groupConcatSourcePayloadMagic)
-		offset += len(groupConcatSourcePayloadMagic)
-		key[offset] = groupConcatSourcePayloadVersion
-		offset++
-		binary.BigEndian.PutUint64(key[offset:], sourceRow)
-		offset += 8
-	}
-	if exec.orderArgCnt != 0 {
-		binary.BigEndian.PutUint32(key[offset:], uint32(concatPayloadSize))
+	if exec.aggInfo.distinctIdentityPrefix {
+		binary.BigEndian.PutUint32(key[offset:], uint32(len(distinctIdentity)))
 		offset += 4
-	}
-	for i, vec := range vectors[:exec.concatArgCnt] {
-		physicalRow := row
-		if vec.IsConst() {
-			physicalRow = 0
+		copy(key[offset:], distinctIdentity)
+		offset += len(distinctIdentity)
+	} else {
+		if withSourceRow {
+			copy(key[offset:], groupConcatSourcePayloadMagic)
+			offset += len(groupConcatSourcePayloadMagic)
+			key[offset] = groupConcatSourcePayloadVersion
+			offset++
+			binary.BigEndian.PutUint64(key[offset:], sourceRow)
+			offset += 8
 		}
-		field := groupConcatFieldBytes(vec, physicalRow, exec.argTypes[i])
-		key[offset] = 1
-		offset++
-		binary.NativeEndian.PutUint32(key[offset:], uint32(len(field)))
-		offset += 4
-		copy(key[offset:], field)
-		offset += len(field)
-	}
-	if exec.orderArgCnt != 0 {
-		for _, index := range exec.orderArgIndexes {
-			vec := vectors[index]
+		if exec.orderArgCnt != 0 {
+			binary.BigEndian.PutUint32(key[offset:], uint32(concatPayloadSize))
+			offset += 4
+		}
+		for i, vec := range vectors[:exec.concatArgCnt] {
 			physicalRow := row
 			if vec.IsConst() {
 				physicalRow = 0
 			}
-			if vec.IsNull(uint64(physicalRow)) {
-				key[offset] = 0
-				offset++
-				continue
-			}
-			field := groupConcatFieldBytes(
-				vec, physicalRow, exec.argTypes[index])
+			field := groupConcatFieldBytes(vec, physicalRow, exec.argTypes[i])
 			key[offset] = 1
 			offset++
 			binary.NativeEndian.PutUint32(key[offset:], uint32(len(field)))
@@ -776,8 +802,36 @@ func (exec *groupConcatExec) fillInputOrderRowAccounted(
 			copy(key[offset:], field)
 			offset += len(field)
 		}
+		if exec.orderArgCnt != 0 {
+			for _, index := range exec.orderArgIndexes {
+				vec := vectors[index]
+				physicalRow := row
+				if vec.IsConst() {
+					physicalRow = 0
+				}
+				if vec.IsNull(uint64(physicalRow)) {
+					key[offset] = 0
+					offset++
+					continue
+				}
+				field := groupConcatFieldBytes(
+					vec, physicalRow, exec.argTypes[index])
+				key[offset] = 1
+				offset++
+				binary.NativeEndian.PutUint32(key[offset:], uint32(len(field)))
+				offset += 4
+				copy(key[offset:], field)
+				offset += len(field)
+			}
+		}
 	}
 	if exec.aggInfo.preserveDistinctInputOrder {
+		if exec.aggInfo.distinctIdentityPrefix {
+			value := makeDistinctInputOrderValueWithPayload(
+				state.argCnt[y], sourceRow, concatPayload)
+			return state.fillDistinctArgInInputOrderWithValue(
+				exec.mp, y, key, value)
+		}
 		return state.fillDistinctArgInInputOrder(exec.mp, y, key, sourceRow)
 	}
 	return state.insertPreparedArg(exec.mp, y, key, exec.aggInfo.isDistinct)
@@ -837,7 +891,12 @@ func (exec *groupConcatExec) fillOrderedDistinct(
 			return err
 		}
 		group := int(grp - 1)
-		key := string(concatPayload)
+		identity, err := groupConcatDistinctIdentityFromPayload(
+			concatPayload, exec.concatTypes())
+		if err != nil {
+			return err
+		}
+		key := string(identity)
 		touchKey := string(binary.BigEndian.AppendUint64(nil, uint64(group))) + key
 		if _, ok := touched[touchKey]; !ok {
 			touched[touchKey] = struct{}{}
@@ -1675,6 +1734,40 @@ func (exec *groupConcatExec) encodePayload(
 		encodeGroupConcatOrderedPayload(concatPayload, orderPayload), sourceRow), nil
 }
 
+// groupConcatDistinctIdentityFromPayload keeps GROUP_CONCAT's original
+// payload available for output while deriving a separate comparison identity
+// for native 0900 string arguments. The payload framing is reused so multiple
+// arguments cannot collide through concatenation alone.
+func groupConcatDistinctIdentityFromPayload(
+	payload []byte,
+	argTypes []types.Type,
+) ([]byte, error) {
+	identity := make([]byte, 0, len(payload))
+	err := payloadFieldIterator(payload, len(argTypes), func(i int, isNull bool, data []byte) error {
+		if isNull {
+			identity = append(identity, 0)
+			return nil
+		}
+		value := data
+		if types.NeedsCollationKey(argTypes[i], types.PADSpaceKeyV1) {
+			part, err := types.ResolveStringKeyPart(argTypes[i], types.PADSpaceKeyV1)
+			if err != nil {
+				return err
+			}
+			value, err = part.Key(nil, data)
+			if err != nil {
+				return err
+			}
+		}
+		identity = appendPayloadField(identity, value, false)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return identity, nil
+}
+
 func encodeGroupConcatSourcePayload(payload []byte, sourceRow uint64) []byte {
 	encoded := make([]byte, groupConcatSourcePayloadHeaderSize+len(payload))
 	copy(encoded, groupConcatSourcePayloadMagic)
@@ -1711,7 +1804,21 @@ func groupConcatStatePayloadForWire(
 	includeSourceRow bool,
 ) ([]byte, error) {
 	if info == nil || !info.groupConcatSourceRowState {
+		if info != nil && info.distinctIdentityPrefix {
+			storedPayload, ok := distinctInputOrderPayload(info, value)
+			if !ok {
+				return nil, mpool.ErrAllocationAccountInvariant
+			}
+			return storedPayload, nil
+		}
 		return payload, nil
+	}
+	if info.distinctIdentityPrefix {
+		storedPayload, ok := distinctInputOrderPayload(info, value)
+		if !ok {
+			return nil, mpool.ErrAllocationAccountInvariant
+		}
+		payload = storedPayload
 	}
 	decoded, sourceRow, err := decodeGroupConcatSourcePayload(payload)
 	if err != nil {
@@ -1788,8 +1895,9 @@ type groupConcatOrderedEntry struct {
 }
 
 type groupConcatDistinctOrder struct {
-	entry int64
-	rank  int64
+	entry    int64
+	rank     int64
+	identity []byte
 }
 
 type groupConcatSpillRun struct {
@@ -2257,6 +2365,13 @@ func (exec *groupConcatExec) flushGroupInInputOrderAccounted(
 			return nil
 		}
 		payload := aggPayloadFromKey(&exec.aggInfo, key)
+		if exec.aggInfo.distinctIdentityPrefix {
+			storedPayload, ok := distinctInputOrderPayload(&exec.aggInfo, value)
+			if !ok {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			payload = storedPayload
+		}
 		encodedPayload, sourceRow, err := decodeGroupConcatSourcePayload(payload)
 		if err != nil {
 			return err
@@ -2377,15 +2492,20 @@ func (exec *groupConcatExec) flushOrderedGroupAccounted(
 		}
 		defer mpool.FreeSlice(exec.mp, dedup)
 		for rank, entry := range selectors {
+			identity, err := groupConcatDistinctIdentityFromPayload(
+				entries[entry].concatPayload, exec.concatTypes())
+			if err != nil {
+				return err
+			}
 			dedup[rank] = groupConcatDistinctOrder{
-				entry: entry,
-				rank:  int64(rank),
+				entry:    entry,
+				rank:     int64(rank),
+				identity: identity,
 			}
 		}
 		slices.SortFunc(dedup, func(left, right groupConcatDistinctOrder) int {
 			if cmp := bytes.Compare(
-				entries[left.entry].concatPayload,
-				entries[right.entry].concatPayload); cmp != 0 {
+				left.identity, right.identity); cmp != 0 {
 				return cmp
 			}
 			return int(left.rank - right.rank)
@@ -2393,8 +2513,7 @@ func (exec *groupConcatExec) flushOrderedGroupAccounted(
 		kept := 0
 		for _, candidate := range dedup {
 			if kept > 0 && bytes.Equal(
-				entries[dedup[kept-1].entry].concatPayload,
-				entries[candidate.entry].concatPayload) {
+				dedup[kept-1].identity, candidate.identity) {
 				continue
 			}
 			dedup[kept] = candidate
@@ -2770,9 +2889,14 @@ func (exec *groupConcatExec) UnmarshalFromReader(reader io.Reader, mp *mpool.MPo
 				if err != nil {
 					return err
 				}
+				identity, err := groupConcatDistinctIdentityFromPayload(
+					concatPayload, exec.concatTypes())
+				if err != nil {
+					return err
+				}
 				candidates = append(candidates, groupConcatDistinctCandidate{
 					group:   globalGroup,
-					key:     string(concatPayload),
+					key:     string(identity),
 					payload: payload,
 				})
 				return nil

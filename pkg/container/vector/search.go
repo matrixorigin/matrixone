@@ -121,9 +121,9 @@ func VarlenSearchOffsetByLess(ub []byte, closed bool, quick bool) func(*Vector) 
 		}
 
 		for x := 0; x < vecLen; x++ {
-			if closed && bytes.Compare(vector.GetBytesAt(x), ub) <= 0 {
+			if closed && compareStringRows(vector.typ, vector.GetBytesAt(x), ub) <= 0 {
 				sels = append(sels, int64(x))
-			} else if !closed && bytes.Compare(vector.GetBytesAt(x), ub) < 0 {
+			} else if !closed && compareStringRows(vector.typ, vector.GetBytesAt(x), ub) < 0 {
 				sels = append(sels, int64(x))
 			} else if quick {
 				break
@@ -143,9 +143,9 @@ func VarlenSearchOffsetByGreat(lb []byte, closed bool, quick bool) func(*Vector)
 		}
 
 		for x := vecLen - 1; x >= 0; x-- {
-			if closed && bytes.Compare(vector.GetBytesAt(x), lb) >= 0 {
+			if closed && compareStringRows(vector.typ, vector.GetBytesAt(x), lb) >= 0 {
 				sels = append(sels, int64(x))
-			} else if !closed && bytes.Compare(vector.GetBytesAt(x), lb) > 0 {
+			} else if !closed && compareStringRows(vector.typ, vector.GetBytesAt(x), lb) > 0 {
 				sels = append(sels, int64(x))
 			} else if quick {
 				break
@@ -191,7 +191,7 @@ func VarlenLinearSearchOffsetByValFactory(vals [][]byte) func(*Vector) []int64 {
 		}
 		for x := 0; x < vecLen; x++ {
 			for y := range vals {
-				if bytes.Equal(vals[y], vector.GetBytesAt(x)) {
+				if compareStringRows(vector.typ, vals[y], vector.GetBytesAt(x)) == 0 {
 					sels = append(sels, int64(x))
 					break
 				}
@@ -443,10 +443,10 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int64 {
 		subVals := vals
 		if len(vals) >= kMinLenForSubVector {
 			lowerBound := sort.Search(len(vals), func(i int) bool {
-				return bytes.Compare(varlenas[0].GetByteSlice(area), vals[i]) <= 0
+				return compareStringRows(vec.typ, varlenas[0].GetByteSlice(area), vals[i]) <= 0
 			})
 			upperBound := sort.Search(len(vals), func(i int) bool {
-				return bytes.Compare(varlenas[n1-1].GetByteSlice(area), vals[i]) < 0
+				return compareStringRows(vec.typ, varlenas[n1-1].GetByteSlice(area), vals[i]) < 0
 			})
 			subVals = vals[lowerBound:upperBound]
 			if len(subVals) == 0 {
@@ -457,19 +457,19 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int64 {
 		if len(subVals) <= kMaxLenForBinarySearch {
 			start := 0
 			for i := 0; i < len(subVals); i++ {
-				if i > 0 && bytes.Equal(subVals[i], subVals[i-1]) {
+				if i > 0 && compareStringRows(vec.typ, subVals[i], subVals[i-1]) == 0 {
 					continue
 				}
 				idx := sort.Search(n1-start, func(idx int) bool {
-					return bytes.Compare(varlenas[start+idx].GetByteSlice(area), subVals[i]) >= 0
+					return compareStringRows(vec.typ, varlenas[start+idx].GetByteSlice(area), subVals[i]) >= 0
 				})
 				pos := start + idx
 				if pos >= n1 {
 					break
 				}
-				if bytes.Equal(varlenas[pos].GetByteSlice(area), subVals[i]) {
+				if compareStringRows(vec.typ, varlenas[pos].GetByteSlice(area), subVals[i]) == 0 {
 					runEnd := pos + 1
-					for runEnd < n1 && bytes.Equal(varlenas[runEnd].GetByteSlice(area), subVals[i]) {
+					for runEnd < n1 && compareStringRows(vec.typ, varlenas[runEnd].GetByteSlice(area), subVals[i]) == 0 {
 						runEnd++
 					}
 					for j := pos; j < runEnd; j++ {
@@ -484,17 +484,17 @@ func VarlenBinarySearchOffsetByValFactory(vals [][]byte) func(*Vector) []int64 {
 			n2 := len(subVals)
 			i1, i2 := 0, 0
 			for i1 < n1 && i2 < n2 {
-				ord := bytes.Compare(varlenas[i1].GetByteSlice(area), subVals[i2])
+				ord := compareStringRows(vec.typ, varlenas[i1].GetByteSlice(area), subVals[i2])
 				if ord == 0 {
 					val := subVals[i2]
 					runStart := i1
-					for i1 < n1 && bytes.Equal(varlenas[i1].GetByteSlice(area), val) {
+					for i1 < n1 && compareStringRows(vec.typ, varlenas[i1].GetByteSlice(area), val) == 0 {
 						i1++
 					}
 					for j := runStart; j < i1; j++ {
 						sels = append(sels, int64(j))
 					}
-					for i2 < n2 && bytes.Equal(subVals[i2], val) {
+					for i2 < n2 && compareStringRows(vec.typ, subVals[i2], val) == 0 {
 						i2++
 					}
 				} else if ord < 0 {

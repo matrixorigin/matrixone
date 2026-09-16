@@ -1925,10 +1925,11 @@ func constantFoldWithPreparedExactSource(
 
 		return &plan.Expr{
 			Typ: plan.Type{
-				Id:      int32(vec.GetType().Oid),
-				Scale:   vec.GetType().Scale,
-				Width:   vec.GetType().Width,
-				Charset: uint32(vec.GetType().Charset),
+				Id:               int32(vec.GetType().Oid),
+				Scale:            vec.GetType().Scale,
+				Width:            vec.GetType().Width,
+				Charset:          uint32(vec.GetType().Charset),
+				CollationVersion: uint32(vec.GetType().CollationVersion),
 			},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
@@ -3033,7 +3034,7 @@ func ResetAuxIdForExpr(expr *plan.Expr) {
 // }
 
 func ExprType2Type(typ *plan.Type) types.Type {
-	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	return types.NewWithCharsetVersion(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset), uint8(typ.CollationVersion))
 }
 
 func PkColByTableDef(tblDef *plan.TableDef) *plan.ColDef {

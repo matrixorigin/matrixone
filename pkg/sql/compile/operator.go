@@ -1790,8 +1790,9 @@ func constructTimeWindow(_ context.Context, node *plan.Node, proc *process.Proce
 		aggregationExpressions = append(
 			aggregationExpressions,
 			aggexec.MakeAggFunctionExpression(functionID, isDistinct, args, cfg))
-		typs = append(typs, types.NewWithCharset(
-			types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale, uint8(e.Typ.Charset),
+		typs = append(typs, types.NewWithCharsetVersion(
+			types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale,
+			uint8(e.Typ.Charset), uint8(e.Typ.CollationVersion),
 		))
 	}
 	wStart := layout.WStartSlot != plan2.TimeWindowSlotNone
@@ -1909,8 +1910,9 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 
 	typs := make([]types.Type, len(childNode.ProjectList))
 	for i, e := range childNode.ProjectList {
-		typs[i] = types.NewWithCharset(
-			types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale, uint8(e.Typ.Charset),
+		typs[i] = types.NewWithCharsetVersion(
+			types.T(e.Typ.Id), e.Typ.Width, e.Typ.Scale,
+			uint8(e.Typ.Charset), uint8(e.Typ.CollationVersion),
 		)
 	}
 
@@ -2273,8 +2275,9 @@ func constructMergeGroup(
 	if arg.EmptyGroupingSet || len(arg.EmptyGroupingSetIDs) > 0 {
 		arg.GroupByTypes = make([]types.Type, len(node.GroupBy))
 		for i, expr := range node.GroupBy {
-			arg.GroupByTypes[i] = types.NewWithCharset(
-				types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
+			arg.GroupByTypes[i] = types.NewWithCharsetVersion(
+				types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale,
+				uint8(expr.Typ.Charset), uint8(expr.Typ.CollationVersion))
 		}
 	}
 	return arg

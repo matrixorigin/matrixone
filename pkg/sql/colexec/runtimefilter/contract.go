@@ -184,16 +184,16 @@ func ExactKeyEncodingWithComponents(
 		return keycodec.ExactRuntimeFilterUnsupported
 	}
 
-	probeType := types.New(
-		types.T(spec.ProbeType.Id),
-		spec.ProbeType.Width,
-		spec.ProbeType.Scale,
-	)
-	declaredBuildType := types.New(
-		types.T(buildExpr.Typ.Id),
-		buildExpr.Typ.Width,
-		buildExpr.Typ.Scale,
-	)
+	// Preserve charset identity through validation. Dropping it here would
+	// accidentally admit a raw runtime filter for visible native 0900 text,
+	// whose bytes are not the SQL equality identity.
+	probeType := planType(*spec.ProbeType)
+	declaredBuildType := planType(buildExpr.Typ)
+	if types.NeedsCollationKey(probeType, types.PADSpaceKeyV1) ||
+		types.NeedsCollationKey(declaredBuildType, types.PADSpaceKeyV1) ||
+		types.NeedsCollationKey(payloadType, types.PADSpaceKeyV1) {
+		return keycodec.ExactRuntimeFilterUnsupported
+	}
 
 	// The probe/build edge is the SQL equality contract. The two payload edges
 	// defend stale plans and materialization drift. All three must advertise
@@ -329,6 +329,11 @@ func validateTupleEncodingComponents(
 		probeType := planType(spec.KeyComponentProbeTypes[i])
 		declaredBuildType := planType(arg.Typ)
 		actualBuildType := componentPayloadTypes[i]
+		if types.NeedsCollationKey(probeType, types.PADSpaceKeyV1) ||
+			types.NeedsCollationKey(declaredBuildType, types.PADSpaceKeyV1) ||
+			types.NeedsCollationKey(actualBuildType, types.PADSpaceKeyV1) {
+			return false
+		}
 		if keycodec.ExactRuntimeFilterEncodingForPair(
 			probeType, declaredBuildType,
 		) != keycodec.ExactRuntimeFilterRaw ||
@@ -345,7 +350,7 @@ func validateTupleEncodingComponents(
 }
 
 func planType(typ plan.Type) types.Type {
-	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	return types.NewWithCharsetVersion(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset), uint8(typ.CollationVersion))
 }
 
 // CloseFloatSignedZero appends the complementary representation when an exact

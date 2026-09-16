@@ -191,6 +191,15 @@ func (builder *QueryBuilder) exactRuntimeFilterPlanEncoding(
 	probeType, buildType types.Type,
 	matchPrefix bool,
 ) (keycodec.ExactRuntimeFilterEncoding, bool) {
+	// A raw runtime-filter payload has no collation metadata. Versioned text
+	// therefore cannot use the legacy raw contract: bytewise Bloom/IN probes
+	// would disagree with the schema-resolved equality identity.
+	// Physical opaque keys (varbinary/binary metadata) remain eligible because
+	// their producer already materialized the schema-resolved key.
+	if types.NeedsCollationKey(probeType, types.PADSpaceKeyV1) ||
+		types.NeedsCollationKey(buildType, types.PADSpaceKeyV1) {
+		return keycodec.ExactRuntimeFilterUnsupported, false
+	}
 	encoding := keycodec.ExactRuntimeFilterEncodingForPair(probeType, buildType)
 	if encoding == keycodec.ExactRuntimeFilterUnsupported {
 		return encoding, false

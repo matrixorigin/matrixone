@@ -177,6 +177,26 @@ func TestCountDistinctSignedZeroUsesOneValue(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestCountDistinctNative0900UsesComparisonIdentity(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB40900AI)
+	values := testutil.NewStringVector(2, typ, mp, false, nil, []string{"Alpha", "alpha"})
+	defer values.Free(mp)
+	exec := newCountColumnExec(mp, AggIdOfCountColumn, true, []types.Type{typ})
+	require.NoError(t, exec.GroupGrow(1))
+	groups := []uint64{1, 1}
+	require.NoError(t, exec.(BatchCapacityPreflight).PreflightBatchFill(0, groups, []*vector.Vector{values}))
+	require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{values}))
+	results, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vector.MustFixedColNoTypeCheck[int64](results[0])[0])
+	for _, result := range results {
+		result.Free(mp)
+	}
+	exec.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestCountDistinctFloat64SignedZeroSurvivesIntermediateMerge(t *testing.T) {
 	mp := mpool.MustNewZero()
 	makePartial := func(value float64) []byte {

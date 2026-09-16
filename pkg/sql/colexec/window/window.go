@@ -475,8 +475,9 @@ func (ctr *container) newAggregateExecutor(
 	argExprs := ag.GetArgExpressions()
 	argTypes := make([]types.Type, len(argExprs))
 	for j, arg := range argExprs {
-		argTypes[j] = types.NewWithCharset(
-			types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
+		argTypes[j] = types.NewWithCharsetVersion(
+			types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale,
+			uint8(arg.Typ.Charset), uint8(arg.Typ.CollationVersion),
 		)
 	}
 
@@ -1151,9 +1152,9 @@ func (ctr *container) processValueFuncRange(
 
 	// aggVecs already evaluated by caller (eval case in Call)
 	srcVec := ctr.aggVecs[idx].Vec[0] // the expression column
-	retType := types.NewWithCharset(
+	retType := types.NewWithCharsetVersion(
 		types.T(w.WindowFunc.Typ.Id), w.WindowFunc.Typ.Width, w.WindowFunc.Typ.Scale,
-		uint8(w.WindowFunc.Typ.Charset),
+		uint8(w.WindowFunc.Typ.Charset), uint8(w.WindowFunc.Typ.CollationVersion),
 	)
 	localResult := vector.NewVec(retType)
 	defer func() {

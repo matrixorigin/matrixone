@@ -219,6 +219,11 @@ func compareNullableRaw(a *vector.Vector, ai int, b *vector.Vector, bi int) int 
 
 func compareVectorValue(a *vector.Vector, ai int, b *vector.Vector, bi int, typ types.Type) int {
 	x, y := a.GetRawBytesAt(ai), b.GetRawBytesAt(bi)
+	if typ.Oid.IsMySQLString() {
+		if types.NeedsCollationKey(typ, types.PADSpaceKeyV1) {
+			return types.CompareStringValues(typ, a.GetBytesAt(ai), b.GetBytesAt(bi))
+		}
+	}
 	switch typ.Oid {
 	case types.T_bool:
 		return types.BoolAscCompare(types.DecodeBool(x), types.DecodeBool(y))

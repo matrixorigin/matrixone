@@ -11153,6 +11153,10 @@ func compareOrderedRows[T cmp.Ordered](v *Vector, left, right int) int {
 	return cmp.Compare(GetFixedAtNoTypeCheck[T](v, left), GetFixedAtNoTypeCheck[T](v, right))
 }
 
+func compareStringRows(typ types.Type, left, right []byte) int {
+	return types.CompareStringValues(typ, left, right)
+}
+
 func supportsInplaceSort(oid types.T) bool {
 	switch oid {
 	case types.T_bool, types.T_bit,
@@ -11266,7 +11270,7 @@ func compareVectorRows(v *Vector, left, right int) int {
 		return types.ArrayElementCompare[uint8](
 			types.BytesToArray[uint8](v.GetBytesAt(left)), types.BytesToArray[uint8](v.GetBytesAt(right)))
 	default:
-		return bytes.Compare(v.GetBytesAt(left), v.GetBytesAt(right))
+		return compareStringRows(v.typ, v.GetBytesAt(left), v.GetBytesAt(right))
 	}
 }
 
@@ -11773,10 +11777,10 @@ func (v *Vector) InplaceSortAndCompact() {
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
 		slices.SortFunc(col, func(a, b types.Varlena) int {
-			return bytes.Compare(a.GetByteSlice(area), b.GetByteSlice(area))
+			return compareStringRows(v.typ, a.GetByteSlice(area), b.GetByteSlice(area))
 		})
 		newCol := slices.CompactFunc(col, func(a, b types.Varlena) bool {
-			return bytes.Equal(a.GetByteSlice(area), b.GetByteSlice(area))
+			return compareStringRows(v.typ, a.GetByteSlice(area), b.GetByteSlice(area)) == 0
 		})
 
 		if len(newCol) != len(col) {
@@ -12016,7 +12020,7 @@ func (v *Vector) InplaceSort() {
 	case types.T_char, types.T_varchar, types.T_json, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink, types.T_geometry, types.T_geometry32:
 		col, area := MustVarlenaRawData(v)
 		slices.SortFunc(col, func(a, b types.Varlena) int {
-			return bytes.Compare(a.GetByteSlice(area), b.GetByteSlice(area))
+			return compareStringRows(v.typ, a.GetByteSlice(area), b.GetByteSlice(area))
 		})
 
 	case types.T_array_float32:
@@ -12422,8 +12426,8 @@ func Intersection2VectorVarlen(
 		bytesA := cola[idxA].GetByteSlice(areaa)
 		bytesB := colb[idxB].GetByteSlice(areab)
 
-		if cmpRet = bytes.Compare(bytesA, bytesB); cmpRet == 0 {
-			if ret.Length() == 0 || !bytes.Equal(preVal, bytesA) {
+		if cmpRet = compareStringRows(va.typ, bytesA, bytesB); cmpRet == 0 {
+			if ret.Length() == 0 || compareStringRows(va.typ, preVal, bytesA) != 0 {
 				if err = AppendBytes(ret, bytesA, false, mp); err != nil {
 					return err
 				}
@@ -12468,8 +12472,8 @@ func Union2VectorValen(
 		ba := cola[i].GetByteSlice(areaa)
 		bb := colb[j].GetByteSlice(areab)
 
-		if bytes.Compare(ba, bb) <= 0 {
-			if (i == 0 && j == 0) || !bytes.Equal(prevVal, ba) {
+		if compareStringRows(va.typ, ba, bb) <= 0 {
+			if (i == 0 && j == 0) || compareStringRows(va.typ, prevVal, ba) != 0 {
 				prevVal = ba
 				if err = AppendBytes(ret, ba, false, mp); err != nil {
 					return err
@@ -12477,7 +12481,7 @@ func Union2VectorValen(
 			}
 			i++
 		} else {
-			if (i == 0 && j == 0) || !bytes.Equal(prevVal, bb) {
+			if (i == 0 && j == 0) || compareStringRows(va.typ, prevVal, bb) != 0 {
 				prevVal = bb
 				if err = AppendBytes(ret, bb, false, mp); err != nil {
 					return err
@@ -12489,7 +12493,7 @@ func Union2VectorValen(
 
 	for ; i < lenA; i++ {
 		ba := cola[i].GetByteSlice(areaa)
-		if (i == 0 && j == 0) || !bytes.Equal(prevVal, ba) {
+		if (i == 0 && j == 0) || compareStringRows(va.typ, prevVal, ba) != 0 {
 			prevVal = ba
 			if err = AppendBytes(ret, ba, false, mp); err != nil {
 				return err
@@ -12499,7 +12503,7 @@ func Union2VectorValen(
 
 	for ; j < lenB; j++ {
 		bb := colb[j].GetByteSlice(areab)
-		if (i == 0 && j == 0) || !bytes.Equal(prevVal, bb) {
+		if (i == 0 && j == 0) || compareStringRows(va.typ, prevVal, bb) != 0 {
 			prevVal = bb
 			if err = AppendBytes(ret, bb, false, mp); err != nil {
 				return err

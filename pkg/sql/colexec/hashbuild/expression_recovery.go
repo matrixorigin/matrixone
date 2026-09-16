@@ -224,8 +224,9 @@ func serialExpressionPackerBounds(fn *plan.Function) (
 		if arg == nil {
 			return 0, 0, false, process.ErrExecutionResourceInvalid
 		}
-		component, ok := function.SerialEncodedTypeSizeBound(types.New(
+		component, ok := function.SerialEncodedTypeSizeBound(types.NewWithCharsetVersion(
 			types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale,
+			uint8(arg.Typ.Charset), uint8(arg.Typ.CollationVersion),
 		))
 		if !ok {
 			return 0, 0, false, nil

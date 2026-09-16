@@ -37,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	vitesscollations "vitess.io/vitess/go/mysql/collations"
+	vitesscolldata "vitess.io/vitess/go/mysql/collations/colldata"
 )
 
 var kAlwaysFalseExpr = &plan.Expr{
@@ -2910,6 +2912,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	if strings.EqualFold(funcName, "collate") {
+		return b.bindExplicitCollationExpr(astExpr, depth)
+	}
 	if strings.EqualFold(funcName, "grouping") {
 		return b.bindGroupingFuncExpr(astExpr)
 	}
@@ -3008,6 +3013,58 @@ func (b *baseBinder) bindGenericFunctionExpr(name string, astArgs []tree.Expr, d
 		return nil, err
 	}
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
+}
+
+// bindExplicitCollationExpr preserves the explicit COLLATE coercibility rule
+// at the planner boundary. The parser represents `expr COLLATE name` as a
+// private two-argument function node; no runtime function is emitted because
+// the selected identity is carried by the expression type and consumed by the
+// comparison-key normalizer below.
+func (b *baseBinder) bindExplicitCollationExpr(astExpr *tree.FuncExpr, depth int32) (*Expr, error) {
+	if len(astExpr.Exprs) != 2 {
+		return nil, moerr.NewInvalidArg(b.GetContext(), "COLLATE", len(astExpr.Exprs))
+	}
+	collationName, ok := astExpr.Exprs[1].(*tree.NumVal)
+	if !ok || collationName.ValType != tree.P_char {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "COLLATE requires a collation name")
+	}
+	charset, ok := collationForName(collationName.String())
+	if !ok {
+		return nil, unsupportedCollationError(b.GetContext(), collationName.String())
+	}
+	expr, err := b.impl.BindExpr(astExpr.Exprs[0], depth, false)
+	if err != nil {
+		return nil, err
+	}
+	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+		return nil, moerr.NewInvalidInput(b.GetContext(), "COLLATE is only valid for string expressions")
+	}
+	target := expr.Typ
+	if charset == uint32(types.CharsetBinary) {
+		applyCharsetToPlanType(&target, charset)
+	} else {
+		target.Charset = charset
+	}
+	target.CollationCoercibility = 0
+	target.CollationCoercibilitySet = true
+	target.CollationMergeConflict = false
+	target.CollationVersion = collationSemanticVersion(charset)
+	// Keep COLLATE as an executable identity cast rather than changing the
+	// child in place. The wrapper carries explicit-coercibility provenance
+	// through plan copies/RPC while the ordinary cast overload preserves the
+	// original value for projections and index residuals.
+	bound, err := appendCastBeforeExpr(b.GetContext(), expr, target)
+	if err != nil {
+		return nil, err
+	}
+	if fn := bound.GetF(); fn != nil && fn.Func != nil {
+		fn.ExplicitCollation = true
+	}
+	bound.Typ.CollationCoercibility = 0
+	bound.Typ.CollationCoercibilitySet = true
+	bound.Typ.CollationMergeConflict = false
+	bound.Typ.CollationVersion = collationSemanticVersion(charset)
+	return bound, nil
 }
 
 // bindGroupingFuncExpr binds GROUPING arguments directly to their registered
@@ -4778,6 +4835,28 @@ func bindSerialFuncOverExprList(ctx context.Context, name string, args []*Expr) 
 	return args[0], true, nil
 }
 
+// normalizeSerialCollationArgs makes tuple producers use the same comparison
+// identity as tuple probes. Native 0900 keys are deliberately introduced only
+// for the explicit native domains; legacy table plans continue to serialize
+// their string values byte-for-byte.
+func normalizeSerialCollationArgs(ctx context.Context, name string, args []*Expr) error {
+	if name != function.SerialFunctionName && name != function.SerialFullFunctionName {
+		return nil
+	}
+	for i, arg := range args {
+		if arg == nil || !types.T(arg.Typ.Id).IsMySQLString() ||
+			!types.NeedsCollationKey(makeTypeByPlan2Expr(arg), types.PADSpaceKeyV1) {
+			continue
+		}
+		key, err := MakeCollationKeyExpr(ctx, arg, arg.Typ, types.PADSpaceKeyV1)
+		if err != nil {
+			return err
+		}
+		args[i] = key
+	}
+	return nil
+}
+
 func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 	if len(args) != 2 {
 		return nil
@@ -5177,6 +5256,9 @@ func bindFuncExprImplByPlanExpr(
 	// deal with some special function
 	if listExpr, ok, err := bindSerialFuncOverExprList(ctx, name, args); ok || err != nil {
 		return listExpr, err
+	}
+	if err := normalizeSerialCollationArgs(ctx, name, args); err != nil {
+		return nil, err
 	}
 	if err := normalizeDecimalStringLiteralComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
@@ -5648,9 +5730,20 @@ func bindFuncExprImplByPlanExpr(
 		// When the leftside is also tuple.  e.g. where (a, b) in ((1, 2), (3, 4), ...)
 		if leftList, ok := args[0].Expr.(*plan.Expr_List); ok {
 			if rightList := args[1].GetList(); rightList != nil {
+				// A row-value IN is a product of independent comparison
+				// domains.  Do not flatten all fields into one coercibility
+				// merge: (ai_ci, bin) is valid when each corresponding field
+				// has a matching identity.
 				return handleTupleIn(ctx, name, leftList, rightList)
 			}
 			return nil, moerr.NewInternalError(ctx, "The right side of IN must be a list")
+		}
+		// IN has a dedicated vectorization path below and returns before the
+		// ordinary function binder reaches the coercibility pass. Resolve the
+		// effective identity first so explicit COLLATE, column, derived, and
+		// literal operands use the same precedence as scalar comparisons.
+		if err := normalizeCollationCoercibilityArgs(ctx, name, args); err != nil {
+			return nil, err
 		}
 
 		//if all the expr in the in list can safely cast to left type, we call it safe
@@ -5697,6 +5790,19 @@ func bindFuncExprImplByPlanExpr(
 
 			if len(inExprList) > 1 || partitionIn {
 				leftType := makeTypeByPlan2Expr(args[0])
+				if types.NeedsCollationKey(leftType, types.PADSpaceKeyV1) {
+					sourceType := args[0].Typ
+					args[0], err = makeNativeCollationKeyExpr(ctx, args[0], sourceType)
+					if err != nil {
+						return nil, err
+					}
+					for i := range inExprList {
+						inExprList[i], err = makeNativeCollationKeyExpr(ctx, inExprList[i], sourceType)
+						if err != nil {
+							return nil, err
+						}
+					}
+				}
 				argsType := []types.Type{leftType, leftType}
 				fGet, err := function.GetFunctionByName(ctx, name, argsType)
 				if err != nil {
@@ -5786,6 +5892,9 @@ func bindFuncExprImplByPlanExpr(
 		return nil, err
 	}
 	if err := validateLagLeadOffsetLiteral(ctx, name, args); err != nil {
+		return nil, err
+	}
+	if err := normalizeCollationCoercibilityArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
 
@@ -6340,6 +6449,9 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	}
+	if err := normalizeNativeComparisonKeyArgs(ctx, name, args); err != nil {
+		return nil, err
+	}
 
 	// Temporal precision is also the display width stored in derived schemas.
 	// Keep the two metadata fields aligned after unit-dependent refinement.
@@ -6361,6 +6473,9 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 	}
+	if err := setCollationMetadataForFunction(name, args, &Typ); err != nil {
+		return nil, err
+	}
 	return &Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
@@ -6372,16 +6487,455 @@ func bindFuncExprImplByPlanExpr(
 	}, nil
 }
 
-func sameFunctionArgumentTypes(left, right []types.Type) bool {
-	if len(left) != len(right) {
-		return false
+func normalizeNativeComparisonKeyArgs(ctx context.Context, name string, args []*plan.Expr) error {
+	switch name {
+	case "=", "<=>", "<", "<=", ">", ">=", "<>", "between":
+	default:
+		return nil
 	}
-	for i := range left {
-		if !left[i].Eq(right[i]) {
-			return false
+	for i, arg := range args {
+		if arg == nil || !types.T(arg.Typ.Id).IsMySQLString() ||
+			!types.NeedsCollationKey(makeTypeByPlan2Expr(arg), types.PADSpaceKeyV1) {
+			continue
+		}
+		rewritten, err := MakeCollationKeyExpr(ctx, arg, arg.Typ, types.PADSpaceKeyV1)
+		if err != nil {
+			return err
+		}
+		args[i] = rewritten
+	}
+	return nil
+}
+
+type collationCandidate struct {
+	charset  uint8
+	version  uint8
+	rank     uint8
+	conflict bool
+}
+
+// normalizeCollationCoercibilityArgs applies the part of MySQL's collation
+// coercibility lattice that is observable by the supported string identities:
+// explicit COLLATE (0), derived string expressions (1), columns (2), and
+// literals/parameters (4). The old type-only merge remains the compatibility
+// fallback for expressions with no native or explicit identity. Keeping this
+// pass at the planner boundary makes JOIN, comparison, LIKE, and IN choose the
+// same effective identity before overload resolution and key wrapping.
+func normalizeCollationCoercibilityArgs(ctx context.Context, name string, args []*plan.Expr) error {
+	if !collationSensitiveFunction(name) {
+		return nil
+	}
+	var candidates []collationCandidate
+	var collect func(*plan.Expr) error
+	collect = func(expr *plan.Expr) error {
+		if expr == nil {
+			return nil
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if err := collect(item); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		candidate, ok, err := collationCandidateForExpr(expr)
+		if err != nil {
+			return err
+		}
+		if ok {
+			candidates = append(candidates, candidate)
+		}
+		return nil
+	}
+	for _, arg := range args {
+		if err := collect(arg); err != nil {
+			return moerr.NewInvalidInputf(ctx, "%s for operation '%s'", err.Error(), name)
 		}
 	}
-	return true
+	if len(candidates) == 0 {
+		return nil
+	}
+	hasNativeOrExplicit := false
+	for _, candidate := range candidates {
+		if candidate.rank == 0 || candidate.version != types.CollationVersionLegacy ||
+			types.IsNative0900Collation(candidate.charset) {
+			hasNativeOrExplicit = true
+			break
+		}
+	}
+	if !hasNativeOrExplicit {
+		return nil
+	}
+	// Determine the winning coercibility before looking for conflicts.  The old
+	// left-to-right loop rejected a weak literal before seeing a stronger
+	// explicit COLLATE later in the argument list.
+	winningRank := candidates[0].rank
+	for _, candidate := range candidates[1:] {
+		if candidate.rank < winningRank {
+			winningRank = candidate.rank
+		}
+	}
+	chosen := candidates[0]
+	chosenSet := false
+	for _, candidate := range candidates {
+		if candidate.rank != winningRank {
+			continue
+		}
+		if !chosenSet {
+			chosen = candidate
+			chosenSet = true
+			continue
+		}
+		var err error
+		chosen, err = mergeCollationCandidates(name, chosen, candidate)
+		if err != nil {
+			return moerr.NewInvalidInputf(ctx, "%s for operation '%s'", err.Error(), name)
+		}
+	}
+	if chosen.conflict && isCollationComparisonFunction(name) {
+		return moerr.NewInvalidInputf(ctx,
+			"illegal mix of collations: derived collations require an operation-specific result for '%s'", name)
+	}
+	// Expression nodes can be shared by projections, filters and join keys.
+	// Apply the derived identity to private copies so choosing a comparison
+	// collation cannot mutate another consumer's type metadata.
+	for i, arg := range args {
+		args[i] = DeepCopyExpr(arg)
+	}
+	var apply func(*plan.Expr)
+	apply = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		if f := expr.GetF(); f != nil && f.ExplicitCollation {
+			return
+		}
+		if types.T(expr.Typ.Id).IsMySQLString() {
+			expr.Typ.Charset = uint32(chosen.charset)
+			expr.Typ.CollationVersion = uint32(chosen.version)
+			expr.Typ.CollationCoercibility = uint32(chosen.rank)
+			expr.Typ.CollationCoercibilitySet = true
+			expr.Typ.CollationMergeConflict = chosen.conflict
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				apply(item)
+			}
+		}
+	}
+	for _, arg := range args {
+		apply(arg)
+	}
+	return nil
+}
+
+func collationCoercibilityRank(expr *plan.Expr) uint8 {
+	candidate, ok, _ := collationCandidateForExpr(expr)
+	if !ok {
+		return 6
+	}
+	return candidate.rank
+}
+
+func collationCandidateForExpr(expr *plan.Expr) (collationCandidate, bool, error) {
+	if expr == nil || !types.T(expr.Typ.Id).IsMySQLString() {
+		return collationCandidate{}, false, nil
+	}
+	if expr.Typ.CollationCoercibilitySet {
+		return collationCandidate{
+			charset:  uint8(expr.Typ.Charset),
+			version:  uint8(expr.Typ.CollationVersion),
+			rank:     uint8(expr.Typ.CollationCoercibility),
+			conflict: expr.Typ.CollationMergeConflict,
+		}, true, nil
+	}
+	if f := expr.GetF(); f != nil && f.ExplicitCollation {
+		return collationCandidate{charset: uint8(expr.Typ.Charset), version: uint8(expr.Typ.CollationVersion), rank: 0}, true, nil
+	}
+	if lit := expr.GetLit(); lit != nil {
+		if lit.GetIsnull() {
+			return collationCandidate{charset: uint8(expr.Typ.Charset), version: uint8(expr.Typ.CollationVersion), rank: 6}, true, nil
+		}
+		return collationCandidate{charset: uint8(expr.Typ.Charset), version: uint8(expr.Typ.CollationVersion), rank: 4}, true, nil
+	}
+	if _, ok := expr.Expr.(*plan.Expr_Col); ok {
+		return collationCandidate{charset: uint8(expr.Typ.Charset), version: uint8(expr.Typ.CollationVersion), rank: 2}, true, nil
+	}
+	if _, ok := expr.Expr.(*plan.Expr_P); ok {
+		return collationCandidate{charset: uint8(expr.Typ.Charset), version: uint8(expr.Typ.CollationVersion), rank: 4}, true, nil
+	}
+	if f := expr.GetF(); f != nil && f.Func != nil {
+		name := strings.ToLower(f.Func.ObjName)
+		if name == "internal_collation_key" {
+			return collationCandidate{charset: types.CharsetBinary, version: types.CollationVersionLegacy, rank: 2}, true, nil
+		}
+		if isCollationSystemConstant(name) {
+			return collationCandidate{charset: uint8(expr.Typ.Charset), version: uint8(expr.Typ.CollationVersion), rank: 3}, true, nil
+		}
+		return collationCandidateForFunction(name, f.Args, uint8(expr.Typ.Charset), uint8(expr.Typ.CollationVersion))
+	}
+	return collationCandidate{charset: uint8(expr.Typ.Charset), version: uint8(expr.Typ.CollationVersion), rank: 5}, true, nil
+}
+
+func isCollationSystemConstant(name string) bool {
+	switch name {
+	case "user", "current_user", "version", "database", "schema", "connection_id":
+		return true
+	default:
+		return false
+	}
+}
+
+// collationCandidateForFunction computes the provenance of a string function
+// result. Concatenation is a derived value (rank 1) and must merge all string
+// inputs. Other string functions preserve the identity of their first string
+// input; treating every VARCHAR-returning function as CONCAT was the source of
+// the old rank-1 bug.
+func collationCandidateForFunction(name string, args []*plan.Expr, fallback, fallbackVersion uint8) (collationCandidate, bool, error) {
+	type indexedCandidate struct {
+		index int
+		value collationCandidate
+	}
+	children := make([]indexedCandidate, 0, len(args))
+	for i, arg := range args {
+		candidate, ok, err := collationCandidateForExpr(arg)
+		if err != nil {
+			return collationCandidate{}, false, err
+		}
+		if ok {
+			children = append(children, indexedCandidate{index: i, value: candidate})
+		}
+	}
+	if len(children) == 0 {
+		return collationCandidate{charset: fallback, version: fallbackVersion, rank: 5}, true, nil
+	}
+	if name == "cast" || name == "convert" {
+		// An explicit target charset is the identity of CAST/CONVERT's
+		// string result.  Keep the historical derived rank, but do not
+		// mistake the source column's charset for the target.
+		return collationCandidate{charset: fallback, version: fallbackVersion, rank: 1}, true, nil
+	}
+
+	// Most string functions preserve the identity of one source argument, but
+	// a few have a different source position or derive a common result from
+	// several branches. Keep these rules beside the function provenance logic
+	// instead of treating every VARCHAR-returning function as CONCAT.
+	if name == "trim" {
+		for _, child := range children {
+			if child.index == 2 {
+				return child.value, true, nil
+			}
+		}
+	}
+	mergeAll := name == "concat" || name == "concat_ws" || name == "elt" ||
+		name == "make_set" || name == "export_set" || name == "case" ||
+		name == "if" || name == "coalesce" || name == "ifnull" || name == "nullif"
+	if mergeAll {
+		start := 0
+		if name == "make_set" || name == "export_set" {
+			start = 1
+		}
+		chosenSet := false
+		var chosen collationCandidate
+		for _, child := range children {
+			if child.index < start {
+				continue
+			}
+			if !chosenSet {
+				chosen = child.value
+				chosenSet = true
+				continue
+			}
+			var err error
+			chosen, err = mergeCollationCandidates(name, chosen, child.value)
+			if err != nil {
+				return collationCandidate{}, false, err
+			}
+		}
+		if !chosenSet {
+			return collationCandidate{charset: fallback, version: fallbackVersion, rank: 5}, true, nil
+		}
+		// Vitess/MySQL assigns coercibility NONE (1) only when a derived result
+		// actually combines different collations. Preserve an explicit or
+		// otherwise stronger source when all inputs resolve to one identity;
+		// otherwise a single explicit COLLATE would be weakened and could lose
+		// an equal-rank conflict against the other side of a comparison.
+		return chosen, true, nil
+	}
+	return children[0].value, true, nil
+}
+
+// setCollationMetadataForFunction persists the effective identity on a result
+// type so cloning, folding, and plan serialization do not have to rediscover
+// it from a function name. The presence bit is necessary because explicit
+// COLLATE is coercibility zero.
+func setCollationMetadataForFunction(name string, args []*plan.Expr, typ *plan.Type) error {
+	if typ == nil || !types.T(typ.Id).IsMySQLString() ||
+		strings.EqualFold(name, "internal_collation_key") || !collationSensitiveFunction(name) {
+		return nil
+	}
+	candidate, ok, err := collationCandidateForFunction(strings.ToLower(name), args, uint8(typ.Charset), uint8(typ.CollationVersion))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	// Legacy functions already have a stable return charset from overload
+	// resolution.  Only native/explicit identities need the new persisted
+	// provenance; leaving legacy results untouched preserves their existing
+	// binary/general-ci behavior and wire shape.
+	if candidate.rank != 0 && candidate.version == types.CollationVersionLegacy &&
+		!types.IsNative0900Collation(candidate.charset) &&
+		!types.IsNative0900Collation(uint8(typ.Charset)) {
+		return nil
+	}
+	typ.Charset = uint32(candidate.charset)
+	typ.CollationVersion = uint32(candidate.version)
+	typ.CollationCoercibility = uint32(candidate.rank)
+	typ.CollationCoercibilitySet = true
+	typ.CollationMergeConflict = candidate.conflict
+	return nil
+}
+
+func mergeCollationCandidates(operation string, left, right collationCandidate) (collationCandidate, error) {
+	if left.charset == right.charset {
+		if left.version != right.version {
+			if left.rank < right.rank {
+				return left, nil
+			}
+			if right.rank < left.rank {
+				return right, nil
+			}
+			return collationCandidate{}, fmt.Errorf("illegal mix of collation semantic versions %d and %d", left.version, right.version)
+		}
+		if right.conflict {
+			left.conflict = true
+		}
+		return left, nil
+	}
+	leftID, leftOK := vitessCollationID(left.charset)
+	rightID, rightOK := vitessCollationID(right.charset)
+	if !leftOK || !rightOK {
+		return collationCandidate{}, fmt.Errorf("unsupported collation identities %d and %d", left.charset, right.charset)
+	}
+	if left.version != right.version {
+		if left.rank < right.rank {
+			return left, nil
+		}
+		if right.rank < left.rank {
+			return right, nil
+		}
+		return collationCandidate{}, fmt.Errorf("illegal mix of collation semantic versions %d and %d", left.version, right.version)
+	}
+	result, _, _, err := vitesscolldata.Merge(vitesscollations.MySQL8(),
+		vitesscollations.TypedCollation{
+			Collation:    leftID,
+			Coercibility: vitesscollations.Coercibility(left.rank),
+			Repertoire:   vitesscollations.RepertoireUnicode,
+		},
+		vitesscollations.TypedCollation{
+			Collation:    rightID,
+			Coercibility: vitesscollations.Coercibility(right.rank),
+			Repertoire:   vitesscollations.RepertoireUnicode,
+		},
+		vitesscolldata.CoercionOptions{},
+	)
+	if err != nil {
+		return collationCandidate{}, fmt.Errorf("illegal mix of collations: %w", err)
+	}
+	charset, ok := matrixOneCharset(result.Collation)
+	if !ok {
+		return collationCandidate{}, fmt.Errorf("unsupported merged collation %d", result.Collation)
+	}
+	conflict := left.conflict || right.conflict
+	if left.charset != right.charset &&
+		!vitessCollationIsBinary(leftID) && !vitessCollationIsBinary(rightID) &&
+		result.Coercibility == vitesscollations.CoerceNone {
+		conflict = true
+	}
+	if conflict && isCollationComparisonFunction(operation) {
+		return collationCandidate{}, fmt.Errorf("illegal mix of collations: equal-rank non-binary collations cannot be compared")
+	}
+	return collationCandidate{
+		charset:  charset,
+		version:  maxCollationVersion(left.version, right.version),
+		rank:     uint8(result.Coercibility),
+		conflict: conflict,
+	}, nil
+}
+
+func maxCollationVersion(left, right uint8) uint8 {
+	if left > right {
+		return left
+	}
+	return right
+}
+
+func vitessCollationID(charset uint8) (vitesscollations.ID, bool) {
+	switch charset {
+	case types.CharsetLegacy, types.CharsetBinary:
+		return vitesscollations.CollationBinaryID, true
+	case types.CharsetUTF8MB4Bin:
+		return vitesscollations.CollationUtf8mb4BinID, true
+	case types.CharsetUTF8:
+		return vitesscollations.ID(45), true
+	case types.CharsetUTF8MB40900AI:
+		return vitesscollations.ID(255), true
+	case types.CharsetUTF8MB40900Bin:
+		return vitesscollations.ID(309), true
+	default:
+		return vitesscollations.Unknown, false
+	}
+}
+
+func matrixOneCharset(collation vitesscollations.ID) (uint8, bool) {
+	switch collation {
+	case vitesscollations.CollationBinaryID:
+		return types.CharsetBinary, true
+	case vitesscollations.CollationUtf8mb4BinID:
+		return types.CharsetUTF8MB4Bin, true
+	case 45:
+		return types.CharsetUTF8, true
+	case 255:
+		return types.CharsetUTF8MB40900AI, true
+	case 309:
+		return types.CharsetUTF8MB40900Bin, true
+	default:
+		return 0, false
+	}
+}
+
+func vitessCollationIsBinary(collation vitesscollations.ID) bool {
+	definition := vitesscolldata.Lookup(collation)
+	return definition != nil && definition.IsBinary()
+}
+
+func isCollationComparisonFunction(name string) bool {
+	switch name {
+	case "=", "<=>", "<", "<=", ">", ">=", "<>", "!=", "between",
+		"in", "not_in", "partition_in", "like", "ilike", "strcmp", "field",
+		"locate", "instr", "find_in_set":
+		return true
+	default:
+		return false
+	}
+}
+
+func collationSensitiveFunction(name string) bool {
+	switch name {
+	case "=", "<=>", "<", "<=", ">", ">=", "<>", "!=", "between",
+		"in", "not_in", "partition_in", "like", "ilike", "strcmp", "field",
+		"locate", "instr", "find_in_set", "replace", "concat", "concat_ws",
+		"lower", "lcase", "upper", "ucase", "trim", "ltrim", "rtrim",
+		"substr", "substring", "left", "right", "insert", "repeat", "quote",
+		"elt", "make_set", "export_set", "case", "if", "coalesce", "ifnull",
+		"nullif", "regexp_substr", "regexp_replace", "reverse":
+		return true
+	default:
+		return false
+	}
 }
 
 // refineDecimalRoundingReturnType applies the exact-numeric metadata rules
@@ -7295,7 +7849,8 @@ func controlFlowMaxBytesPerCharacter(charset uint8) int32 {
 		// is utf8mb4, so use its four-byte bound instead of treating this
 		// historical marker as an explicit utf8mb3 setting.
 		return int32(utf8.UTFMax)
-	case types.CharsetUTF8, types.CharsetUTF8MB4Bin:
+	case types.CharsetUTF8, types.CharsetUTF8MB4Bin,
+		types.CharsetUTF8MB40900AI, types.CharsetUTF8MB40900Bin:
 		// Both explicit text identities are utf8mb4 in MatrixOne. This is the
 		// effective charset of newly bound literals and view expressions, so a
 		// two-character literal has an eight-byte VARBINARY capacity.

@@ -144,7 +144,7 @@ func (mergeTop *MergeTop) prepareStream(proc *process.Process) (err error) {
 			nullsLast = true
 		}
 		t := spec.Expr.Typ
-		typ := types.NewWithCharset(types.T(t.Id), t.Width, t.Scale, uint8(t.Charset))
+		typ := types.NewWithCharsetVersion(types.T(t.Id), t.Width, t.Scale, uint8(t.Charset), uint8(t.CollationVersion))
 		ctr.compares[i] = compare.NewOrder(typ, desc, nullsLast)
 	}
 

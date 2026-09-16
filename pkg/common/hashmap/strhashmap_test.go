@@ -371,6 +371,131 @@ func TestStrHashMapCharKeysUsePadSpaceSemantics(t *testing.T) {
 	}
 }
 
+func TestStrHashMapNative0900CollationKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		oid        types.T
+		charset    uint8
+		values     []string
+		wantValues []uint64
+		wantProbe  string
+		wantGroup  uint64
+	}{
+		{
+			name:       "ai_ci",
+			oid:        types.T_varchar,
+			charset:    types.CharsetUTF8MB40900AI,
+			values:     []string{"Alpha", "alpha", "alpha ", "Beta"},
+			wantValues: []uint64{1, 1, 2, 3},
+			wantProbe:  "ALPHA",
+			wantGroup:  3,
+		},
+		{
+			name:       "ai_ci_char_no_pad",
+			oid:        types.T_char,
+			charset:    types.CharsetUTF8MB40900AI,
+			values:     []string{"Alpha", "alpha", "alpha ", "Beta"},
+			wantValues: []uint64{1, 1, 2, 3},
+			wantProbe:  "ALPHA",
+			wantGroup:  3,
+		},
+		{
+			name:       "bin_no_pad",
+			oid:        types.T_varchar,
+			charset:    types.CharsetUTF8MB40900Bin,
+			values:     []string{"Alpha", "alpha", "Alpha "},
+			wantValues: []uint64{1, 2, 3},
+			wantProbe:  "Alpha",
+			wantGroup:  3,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			typ := types.NewWithCharset(tc.oid, 32, 0, tc.charset)
+			build := vector.NewVec(typ)
+			defer build.Free(mp)
+			for _, value := range tc.values {
+				require.NoError(t, vector.AppendBytes(build, []byte(value), false, mp))
+			}
+			probe, err := vector.NewConstBytes(typ, []byte(tc.wantProbe), 1, mp)
+			require.NoError(t, err)
+			defer probe.Free(mp)
+			hashMap, err := NewStrHashMap(false, mp)
+			require.NoError(t, err)
+			defer hashMap.Free()
+			values, zValues, err := hashMap.NewIterator().Insert(0, build.Length(), []*vector.Vector{build})
+			require.NoError(t, err)
+			require.Equal(t, tc.wantValues, values)
+			require.Equal(t, tc.wantGroup, hashMap.GroupCount())
+			require.Equal(t, []int64{1, 1, 1, 1}[:len(tc.values)], zValues)
+			values, zValues, err = hashMap.NewIterator().Find(0, 1, []*vector.Vector{probe})
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), values[0])
+			require.Equal(t, int64(1), zValues[0])
+		})
+	}
+}
+
+func TestStrHashMapLegacyCollationKeysRemainBytewise(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8MB4Bin, types.CharsetUTF8} {
+		t.Run(fmt.Sprintf("charset-%d", charset), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			typ := types.NewWithCharset(types.T_varchar, 32, 0, charset)
+			build := vector.NewVec(typ)
+			defer build.Free(mp)
+			for _, value := range []string{"a", "a "} {
+				require.NoError(t, vector.AppendBytes(build, []byte(value), false, mp))
+			}
+			hashMap, err := NewStrHashMap(false, mp)
+			require.NoError(t, err)
+			defer hashMap.Free()
+			values, _, err := hashMap.NewIterator().Insert(0, build.Length(), []*vector.Vector{build})
+			require.NoError(t, err)
+			require.Equal(t, []uint64{1, 2}, values)
+			require.Equal(t, uint64(2), hashMap.GroupCount())
+		})
+	}
+}
+
+func TestStrHashMapLegacyCollationAcceptsRawBytes(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8MB4Bin, types.CharsetUTF8} {
+		t.Run(fmt.Sprintf("charset-%d", charset), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			typ := types.NewWithCharset(types.T_varchar, 32, 0, charset)
+			build := vector.NewVec(typ)
+			defer build.Free(mp)
+			require.NoError(t, vector.AppendBytes(build, []byte{0xff}, false, mp))
+			hashMap, err := NewStrHashMap(false, mp)
+			require.NoError(t, err)
+			defer hashMap.Free()
+			values, _, err := hashMap.NewIterator().Insert(0, 1, []*vector.Vector{build})
+			require.NoError(t, err)
+			require.Equal(t, []uint64{1}, values)
+		})
+	}
+}
+
+func TestStrHashMapNativeCollationRejectsInvalidUTF8(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8MB40900AI, types.CharsetUTF8MB40900Bin} {
+		t.Run(fmt.Sprintf("charset-%d", charset), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+			typ := types.NewWithCharset(types.T_varchar, 32, 0, charset)
+			build := vector.NewVec(typ)
+			defer build.Free(mp)
+			require.NoError(t, vector.AppendBytes(build, []byte{0xff}, false, mp))
+			hashMap, err := NewStrHashMap(false, mp)
+			require.NoError(t, err)
+			defer hashMap.Free()
+			_, _, err = hashMap.NewIterator().Insert(0, 1, []*vector.Vector{build})
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestStrHashMapCanonicalVarlenaVectorShapes(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
 	negativeZero64 := math.Copysign(0, -1)

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -158,6 +159,30 @@ func TestTextMinMaxGeneralCIWeights(t *testing.T) {
 	require.Positive(t, exec.comp([]byte{0xff}, []byte{0xfe}))
 }
 
+func TestVersionedTextMinMaxUsesTupleIdentity(t *testing.T) {
+	// The frozen C1 key places an embedded NUL before the empty key. The old
+	// general-ci comparator trims/pads values and selects the opposite winner;
+	// this regression proves MIN/MAX consumes the schema-aware identity.
+	mp := mpool.MustNewZero()
+	typ := types.NewWithCharsetVersion(
+		types.T_varchar, 16, 0, types.CharsetUTF8, types.CollationVersionV1,
+	)
+	vec := vector.NewVec(typ)
+	require.NoError(t, vector.AppendBytes(vec, []byte(""), false, mp))
+	require.NoError(t, vector.AppendBytes(vec, []byte{0}, false, mp))
+
+	min := makeMinMaxExec(mp, AggIdOfMin, true, typ)
+	require.NoError(t, min.GroupGrow(1))
+	require.NoError(t, min.BulkFill(0, []*vector.Vector{vec}))
+	results, err := min.Flush()
+	require.NoError(t, err)
+	require.Equal(t, []byte{0}, results[0].GetBytesAt(0))
+	results[0].Free(mp)
+	min.Free()
+	vec.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestTextMinMaxUTF8mb4BinUsesPadSpace(t *testing.T) {
 	space := []byte("a ")
 	nul := []byte{'a', 0}
@@ -200,6 +225,43 @@ func TestTextMinMaxUTF8mb4BinUsesPadSpace(t *testing.T) {
 			require.Len(t, results, 1)
 			defer results[0].Free(mp)
 			require.Equal(t, tc.expect, results[0].GetBytesAt(0))
+		})
+	}
+}
+
+func TestTextMinMaxNative0900UsesNativeRelations(t *testing.T) {
+	values := [][]byte{[]byte("z"), []byte("Å"), []byte("a"), []byte("😀")}
+	for _, tc := range []struct {
+		name    string
+		charset uint8
+		compare func([]byte, []byte) int
+	}{
+		{name: "ai", charset: types.CharsetUTF8MB40900AI, compare: collation.UCA0900AICollate},
+		{name: "bin", charset: types.CharsetUTF8MB40900Bin, compare: collation.UCA0900BinCollate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			typ := types.NewWithCharset(types.T_varchar, 32, 0, tc.charset)
+			vec := vector.NewVec(typ)
+			for _, value := range values {
+				require.NoError(t, vector.AppendBytes(vec, value, false, mp))
+			}
+			agg := makeMinMaxExec(mp, AggIdOfMin, true, typ)
+			require.NoError(t, agg.GroupGrow(1))
+			require.NoError(t, agg.BulkFill(0, []*vector.Vector{vec}))
+			result, err := agg.Flush()
+			require.NoError(t, err)
+			want := values[0]
+			for _, value := range values[1:] {
+				if tc.compare(value, want) < 0 {
+					want = value
+				}
+			}
+			require.Equal(t, want, result[0].GetBytesAt(0))
+			result[0].Free(mp)
+			agg.Free()
+			vec.Free(mp)
+			require.Zero(t, mp.CurrNB())
 		})
 	}
 }

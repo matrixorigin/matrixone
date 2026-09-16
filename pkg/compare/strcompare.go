@@ -17,9 +17,19 @@ package compare
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func stringComparator(typ types.Type) func([]byte, []byte) int {
+	if types.NeedsCollationKey(typ, types.PADSpaceKeyV1) {
+		return func(left, right []byte) int {
+			return types.CompareStringValues(typ, left, right)
+		}
+	}
+	return bytes.Compare
+}
 
 func (c *strCompare) Vector() *vector.Vector {
 	return c.vs[0]
@@ -45,8 +55,11 @@ func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
 	}
 	x := c.vs[veci].GetBytesAt(int(vi))
 	y := c.vs[vecj].GetBytesAt(int(vj))
-	if c.desc {
-		return bytes.Compare(y, x)
+	if c.cmp == nil {
+		c.cmp = bytes.Compare
 	}
-	return bytes.Compare(x, y)
+	if c.desc {
+		return c.cmp(y, x)
+	}
+	return c.cmp(x, y)
 }

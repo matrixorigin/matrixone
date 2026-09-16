@@ -1115,9 +1115,79 @@ func float32ComparisonNormalizers(leftScale, rightScale int32) (
 	return left, right, leftScale > 0 || rightScale > 0
 }
 
+// native0900Comparison is the executor safety net for callers that construct
+// a comparison function directly instead of going through the planner's
+// internal_collation_key wrapper. Normal SQL plans still take the wrapper
+// path; this keeps direct vector execution and restored plans on the same
+// identity contract and rejects malformed UTF-8 instead of silently falling
+// back to byte comparison.
+func native0900Comparison(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	cmp func(int) bool,
+	nullSafe bool,
+) (bool, error) {
+	if len(parameters) != 2 || parameters[0] == nil || parameters[1] == nil {
+		return false, nil
+	}
+	leftType, rightType := parameters[0].GetType(), parameters[1].GetType()
+	if leftType == nil || rightType == nil || !leftType.Oid.IsMySQLString() ||
+		!types.NeedsCollationKey(*leftType, types.PADSpaceKeyV1) ||
+		rightType.Charset != leftType.Charset || rightType.CollationVersion != leftType.CollationVersion ||
+		!rightType.Oid.IsMySQLString() {
+		return false, nil
+	}
+	part, err := types.ResolveStringKeyPart(*leftType, types.PADSpaceKeyV1)
+	if err != nil {
+		return true, err
+	}
+	leftValues := vector.GenerateFunctionStrParameter(parameters[0])
+	rightValues := vector.GenerateFunctionStrParameter(parameters[1])
+	for row := 0; row < length; row++ {
+		left, leftNull := leftValues.GetStrValue(uint64(row))
+		if !leftNull {
+			if _, err := part.Key(nil, left); err != nil {
+				return true, moerr.NewInvalidInputf(proc.Ctx, "collation comparison: %v", err)
+			}
+		}
+		right, rightNull := rightValues.GetStrValue(uint64(row))
+		if !rightNull {
+			if _, err := part.Key(nil, right); err != nil {
+				return true, moerr.NewInvalidInputf(proc.Ctx, "collation comparison: %v", err)
+			}
+		}
+	}
+	compare := func(left, right []byte) bool {
+		leftKey, _ := part.Key(nil, left)
+		rightKey, _ := part.Key(nil, right)
+		return cmp(bytes.Compare(leftKey, rightKey))
+	}
+	if nullSafe {
+		return true, opBinaryBytesBytesToFixedNullSafe(parameters, result, proc, length, compare, selectList)
+	}
+	return true, opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length,
+		func(left, right []byte) (bool, error) {
+			leftKey, err := part.Key(nil, left)
+			if err != nil {
+				return false, err
+			}
+			rightKey, err := part.Key(nil, right)
+			if err != nil {
+				return false, err
+			}
+			return cmp(bytes.Compare(leftKey, rightKey)), nil
+		}, selectList)
+}
+
 func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if handled, err := native0900Comparison(parameters, result, proc, length, selectList, func(c int) bool { return c == 0 }, true); handled {
+		return err
+	}
 	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
 		return compareJSONBoolean(parameters, rs, proc, length, true, func(c int) bool { return c == 0 }, selectList)
 	}
@@ -1286,6 +1356,9 @@ func nullSafeEqualFn(parameters []*vector.Vector, result vector.FunctionResultWr
 func equalFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if handled, err := native0900Comparison(parameters, result, proc, length, selectList, func(c int) bool { return c == 0 }, false); handled {
+		return err
+	}
 	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
 		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c == 0 }, selectList)
 	}
@@ -1710,6 +1783,9 @@ func valueDec256Compare(
 func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if handled, err := native0900Comparison(parameters, result, proc, length, selectList, func(c int) bool { return c > 0 }, false); handled {
+		return err
+	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left > right
@@ -1876,6 +1952,9 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if handled, err := native0900Comparison(parameters, result, proc, length, selectList, func(c int) bool { return c >= 0 }, false); handled {
+		return err
+	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left >= right
@@ -2042,6 +2121,9 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if handled, err := native0900Comparison(parameters, result, proc, length, selectList, func(c int) bool { return c != 0 }, false); handled {
+		return err
+	}
 	if isJSONBooleanComparison(*paramType, *parameters[1].GetType()) {
 		return compareJSONBoolean(parameters, rs, proc, length, false, func(c int) bool { return c != 0 }, selectList)
 	}
@@ -2214,6 +2296,9 @@ func notEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if handled, err := native0900Comparison(parameters, result, proc, length, selectList, func(c int) bool { return c < 0 }, false); handled {
+		return err
+	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left < right
@@ -2380,6 +2465,9 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	paramType := parameters[0].GetType()
 	rs := vector.MustFunctionResult[bool](result)
+	if handled, err := native0900Comparison(parameters, result, proc, length, selectList, func(c int) bool { return c <= 0 }, false); handled {
+		return err
+	}
 	if isDatetimeTimestampComparison(*paramType, *parameters[1].GetType()) {
 		return compareDatetimeAndTimestamp(parameters, rs, proc, length, func(left, right types.Timestamp) bool {
 			return left <= right

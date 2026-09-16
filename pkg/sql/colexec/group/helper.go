@@ -1842,8 +1842,9 @@ func (ctr *container) makeAggListWithAllocation(
 	for i, agExpr := range aggExprs {
 		typs := make([]types.Type, len(agExpr.GetArgExpressions()))
 		for j, arg := range agExpr.GetArgExpressions() {
-			typs[j] = types.NewWithCharset(
-				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
+			typs[j] = types.NewWithCharsetVersion(
+				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale,
+				uint8(arg.Typ.Charset), uint8(arg.Typ.CollationVersion),
 			)
 		}
 		if ctr.legacyTextMinMax || ctr.legacyVarianceState ||

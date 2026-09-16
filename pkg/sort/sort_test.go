@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -169,6 +170,36 @@ func TestSortByVectors(t *testing.T) {
 		[]bool{true, false},
 	)
 	require.Equal(t, []int64{2, 0, 1, 3, 4, 5}, selectors)
+}
+
+func TestSortForSQLOrderNative0900UsesCollation(t *testing.T) {
+	values := [][]byte{[]byte("z"), []byte("Å"), []byte("a"), []byte("😀")}
+	for _, tc := range []struct {
+		name    string
+		charset uint8
+		compare func([]byte, []byte) int
+	}{
+		{name: "ai", charset: types.CharsetUTF8MB40900AI, compare: collation.UCA0900AICollate},
+		{name: "bin", charset: types.CharsetUTF8MB40900Bin, compare: collation.UCA0900BinCollate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			typ := types.NewWithCharset(types.T_varchar, 32, 0, tc.charset)
+			vec := vector.NewVec(typ)
+			defer vec.Free(mp)
+			for _, value := range values {
+				require.NoError(t, vector.AppendBytes(vec, value, false, mp))
+			}
+			selectors := []int64{0, 1, 2, 3}
+			SortForSQLOrder(false, false, false, selectors, vec)
+			for i := 1; i < len(selectors); i++ {
+				left := vec.GetBytesAt(int(selectors[i-1]))
+				right := vec.GetBytesAt(int(selectors[i]))
+				require.LessOrEqual(t, tc.compare(left, right), 0)
+			}
+			require.NotEqual(t, []int64{0, 1, 2, 3}, selectors)
+		})
+	}
 }
 
 func TestSortByVectorsSortsNonNullPartitionWhenVectorHasNullElsewhere(t *testing.T) {

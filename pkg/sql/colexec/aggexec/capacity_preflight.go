@@ -413,7 +413,11 @@ func preflightArgumentRowsEqual(
 		if leftNull || rightNull {
 			return leftNull && rightNull, nil
 		}
-		if !distinctArgumentRowsEqual(vec, leftRow, rightRow) {
+		equal, err := distinctArgumentRowsEqual(vec, leftRow, rightRow)
+		if err != nil {
+			return false, err
+		}
+		if !equal {
 			return false, nil
 		}
 	}
@@ -641,25 +645,36 @@ func distinctArgumentRowHash(
 			return 0, err
 		}
 		typ := *vec.GetType()
+		raw := vec.GetRawBytesAt(row)
 		var value []byte
 		switch typ.Oid {
 		case types.T_float32:
-			values := vector.MustFixedColNoTypeCheck[float32](vec)
-			encoded := keycodec.NewFloat32Codec(typ.Scale).CanonicalBytes(values[row])
+			encoded := keycodec.NewFloat32Codec(typ.Scale).CanonicalBytes(
+				vector.MustFixedColNoTypeCheck[float32](vec)[row])
 			value = encoded[:]
 		case types.T_float64:
-			values := vector.MustFixedColNoTypeCheck[float64](vec)
-			encoded := keycodec.CanonicalFloat64Bytes(values[row])
+			encoded := keycodec.CanonicalFloat64Bytes(
+				vector.MustFixedColNoTypeCheck[float64](vec)[row])
 			value = encoded[:]
 		case types.T_char:
-			value = keycodec.CanonicalCharValue(vec.GetRawBytesAt(row))
+			value = keycodec.CanonicalCharValue(raw)
 		case types.T_json, types.T_array_float32, types.T_array_float64,
 			types.T_array_bf16, types.T_array_float16:
-			scratch = keycodec.AppendCanonicalValue(
-				scratch[:0], typ, vec.GetRawBytesAt(row))
+			scratch = keycodec.AppendCanonicalValue(scratch[:0], typ, raw)
 			value = scratch
 		default:
-			value = vec.GetRawBytesAt(row)
+			if types.NeedsCollationKey(typ, types.PADSpaceKeyV1) {
+				part, partErr := types.ResolveStringKeyPart(typ, types.PADSpaceKeyV1)
+				if partErr != nil {
+					return 0, partErr
+				}
+				value, err = part.Key(scratch[:0], raw)
+				if err != nil {
+					return 0, err
+				}
+			} else {
+				value = raw
+			}
 		}
 		hash = keycodec.HashCombine(hash, xxhash.Sum64(value))
 	}
@@ -774,8 +789,8 @@ func (ag *aggState) preparePreflightArgumentKey(
 		}
 		raw := vectors[0].GetRawBytesAt(row)
 		if distinct {
-			if copied := copyCanonicalDistinctArgument(key[off:], vectors[0], row); copied != payload {
-				return nil, mpool.ErrAllocationAccountInvariant
+			if _, err := copyCanonicalDistinctArgument(key[off:], vectors[0], row); err != nil {
+				return nil, err
 			}
 		} else {
 			copy(key[off:], raw)
@@ -786,21 +801,28 @@ func (ag *aggState) preparePreflightArgumentKey(
 			if err != nil {
 				return nil, err
 			}
-			raw := vec.GetRawBytesAt(row)
-			valueSize := len(raw)
 			if distinct {
-				valueSize = canonicalDistinctArgumentKeySize(vec, row)
-			}
-			binary.BigEndian.PutUint32(key[off:], uint32(valueSize))
-			off += 4
-			if distinct {
-				if copied := copyCanonicalDistinctArgument(key[off:], vec, row); copied != valueSize {
-					return nil, mpool.ErrAllocationAccountInvariant
+				value, err := canonicalDistinctArgumentBytes(vec, row, key[off+4:])
+				if err != nil {
+					return nil, err
 				}
+				if uint64(len(value)) > math.MaxUint32 {
+					return nil, mpool.ErrAllocationAllocatorLimit
+				}
+				binary.BigEndian.PutUint32(key[off:], uint32(len(value)))
+				off += 4
+				copy(key[off:], value)
+				off += len(value)
 			} else {
+				raw := vec.GetRawBytesAt(row)
+				if uint64(len(raw)) > math.MaxUint32 {
+					return nil, mpool.ErrAllocationAllocatorLimit
+				}
+				binary.BigEndian.PutUint32(key[off:], uint32(len(raw)))
+				off += 4
 				copy(key[off:], raw)
+				off += len(raw)
 			}
-			off += valueSize
 		}
 	}
 	return key, nil
@@ -1135,10 +1157,9 @@ func (ae *aggExec) preflightDistinctBatchFillArgsOnce(
 					payload = -1
 					break
 				}
-				raw := vec.GetRawBytesAt(row)
-				valueSize := len(raw)
-				if len(vectors) > 1 {
-					valueSize = canonicalDistinctArgumentKeySize(vec, row)
+				valueSize, err := canonicalDistinctArgumentPayloadSize(vec, row)
+				if err != nil {
+					return err
 				}
 				if valueSize > math.MaxInt-payload-4 {
 					return mpool.ErrAllocationAllocatorLimit
@@ -1164,7 +1185,10 @@ func (ae *aggExec) preflightDistinctBatchFillArgsOnce(
 		if len(vectors) == 1 {
 			// Duplicate rows need neither a retained key nor its payload size.
 			// Delay the raw-value access until exact admission accepts this row.
-			payload = canonicalDistinctArgumentKeySize(vectors[0], physicalRow)
+			payload, err = canonicalDistinctArgumentPayloadSize(vectors[0], physicalRow)
+			if err != nil {
+				return err
+			}
 		}
 		if payload > math.MaxInt-kAggArgPrefixSz {
 			return mpool.ErrAllocationAllocatorLimit
@@ -1330,7 +1354,10 @@ func (ae *aggExec) preflightDistinctBatchFillArgsHashed(
 					payload = -1
 					break
 				}
-				valueSize := canonicalDistinctArgumentKeySize(vec, row)
+				valueSize, err := canonicalDistinctArgumentPayloadSize(vec, row)
+				if err != nil {
+					return err
+				}
 				if valueSize > math.MaxInt-payload-4 {
 					return mpool.ErrAllocationAllocatorLimit
 				}
@@ -1354,7 +1381,10 @@ func (ae *aggExec) preflightDistinctBatchFillArgsHashed(
 			continue
 		}
 		if len(vectors) == 1 {
-			payload = canonicalDistinctArgumentKeySize(vectors[0], physicalRow)
+			payload, err = canonicalDistinctArgumentPayloadSize(vectors[0], physicalRow)
+			if err != nil {
+				return err
+			}
 		}
 		if payload > math.MaxInt-kAggArgPrefixSz {
 			return mpool.ErrAllocationAllocatorLimit
@@ -2849,11 +2879,41 @@ func (exec *groupConcatExec) PreflightBatchFill(
 			}
 			payload += groupConcatSourcePayloadHeaderSize
 		}
+		var distinctIdentity []byte
+		var distinctPayload []byte
+		if exec.aggInfo.distinctIdentityPrefix {
+			if exec.orderArgCnt != 0 || withSourceRow {
+				return mpool.ErrAllocationAccountInvariant
+			}
+			distinctPayload, err = encodeGroupConcatPayload(
+				vectors[:exec.concatArgCnt], logicalRow, exec.concatTypes())
+			if err != nil {
+				return err
+			}
+			if distinctPayload == nil {
+				continue
+			}
+			distinctIdentity, err = groupConcatDistinctIdentityFromPayload(
+				distinctPayload, exec.concatTypes())
+			if err != nil {
+				return err
+			}
+		}
 		headerSize := kAggArgPrefixSz
 		if !exec.aggInfo.isDistinct {
 			headerSize += kAggArgOrdinalSz
 		}
-		keySize := headerSize + payload
+		keyPayloadSize := payload
+		if exec.aggInfo.distinctIdentityPrefix {
+			if len(distinctIdentity) > math.MaxInt-4 {
+				return mpool.ErrAllocationAllocatorLimit
+			}
+			keyPayloadSize = 4 + len(distinctIdentity)
+		}
+		if keyPayloadSize > math.MaxInt-headerSize {
+			return mpool.ErrAllocationAllocatorLimit
+		}
+		keySize := headerSize + keyPayloadSize
 		key, err := state.resizeArgScratch(exec.mp, keySize)
 		if err != nil {
 			return err
@@ -2869,7 +2929,12 @@ func (exec *groupConcatExec) PreflightBatchFill(
 				key[kAggArgPrefixSz:headerSize], ordinal)
 		}
 		keyOffset := headerSize
-		if withSourceRow {
+		if exec.aggInfo.distinctIdentityPrefix {
+			binary.BigEndian.PutUint32(key[keyOffset:], uint32(len(distinctIdentity)))
+			keyOffset += 4
+			copy(key[keyOffset:], distinctIdentity)
+			keyOffset += len(distinctIdentity)
+		} else if withSourceRow {
 			copy(key[keyOffset:], groupConcatSourcePayloadMagic)
 			keyOffset += len(groupConcatSourcePayloadMagic)
 			key[keyOffset] = groupConcatSourcePayloadVersion
@@ -2877,44 +2942,46 @@ func (exec *groupConcatExec) PreflightBatchFill(
 			binary.BigEndian.PutUint64(key[keyOffset:], 0)
 			keyOffset += 8
 		}
-		if exec.orderArgCnt != 0 {
+		if !exec.aggInfo.distinctIdentityPrefix && exec.orderArgCnt != 0 {
 			binary.BigEndian.PutUint32(key[keyOffset:], uint32(concatPayloadSize))
 			keyOffset += 4
 		}
-		for column, vec := range vectors[:exec.concatArgCnt] {
-			physicalRow, err := preflightPhysicalRow(vec, logicalRow)
-			if err != nil {
-				return err
-			}
-			field := groupConcatFieldBytes(
-				vec, physicalRow, exec.argTypes[column])
-			key[keyOffset] = 1
-			keyOffset++
-			binary.NativeEndian.PutUint32(key[keyOffset:], uint32(len(field)))
-			keyOffset += 4
-			copy(key[keyOffset:], field)
-			keyOffset += len(field)
-		}
-		if exec.orderArgCnt != 0 {
-			for _, index := range exec.orderArgIndexes {
-				vec := vectors[index]
+		if !exec.aggInfo.distinctIdentityPrefix {
+			for column, vec := range vectors[:exec.concatArgCnt] {
 				physicalRow, err := preflightPhysicalRow(vec, logicalRow)
 				if err != nil {
 					return err
 				}
-				if vec.IsNull(uint64(physicalRow)) {
-					key[keyOffset] = 0
-					keyOffset++
-					continue
-				}
 				field := groupConcatFieldBytes(
-					vec, physicalRow, exec.argTypes[index])
+					vec, physicalRow, exec.argTypes[column])
 				key[keyOffset] = 1
 				keyOffset++
 				binary.NativeEndian.PutUint32(key[keyOffset:], uint32(len(field)))
 				keyOffset += 4
 				copy(key[keyOffset:], field)
 				keyOffset += len(field)
+			}
+			if exec.orderArgCnt != 0 {
+				for _, index := range exec.orderArgIndexes {
+					vec := vectors[index]
+					physicalRow, err := preflightPhysicalRow(vec, logicalRow)
+					if err != nil {
+						return err
+					}
+					if vec.IsNull(uint64(physicalRow)) {
+						key[keyOffset] = 0
+						keyOffset++
+						continue
+					}
+					field := groupConcatFieldBytes(
+						vec, physicalRow, exec.argTypes[index])
+					key[keyOffset] = 1
+					keyOffset++
+					binary.NativeEndian.PutUint32(key[keyOffset:], uint32(len(field)))
+					keyOffset += 4
+					copy(key[keyOffset:], field)
+					keyOffset += len(field)
+				}
 			}
 		}
 		if exec.aggInfo.isDistinct {
@@ -2928,21 +2995,39 @@ func (exec *groupConcatExec) PreflightBatchFill(
 				}
 				candidateRow := offset + earlier
 				equal := true
-				for column, vec := range vectors[:exec.concatArgCnt] {
-					left, err := preflightPhysicalRow(vec, candidateRow)
-					if err != nil {
-						return err
+				if exec.aggInfo.distinctIdentityPrefix {
+					candidatePayload, candidateErr := encodeGroupConcatPayload(
+						vectors[:exec.concatArgCnt], candidateRow, exec.concatTypes())
+					if candidateErr != nil {
+						return candidateErr
 					}
-					right, err := preflightPhysicalRow(vec, logicalRow)
-					if err != nil {
-						return err
-					}
-					if vec.IsNull(uint64(left)) ||
-						!bytes.Equal(groupConcatFieldBytes(
-							vec, left, exec.argTypes[column]),
-							groupConcatFieldBytes(vec, right, exec.argTypes[column])) {
+					if candidatePayload == nil {
 						equal = false
-						break
+					} else {
+						candidateIdentity, candidateErr := groupConcatDistinctIdentityFromPayload(
+							candidatePayload, exec.concatTypes())
+						if candidateErr != nil {
+							return candidateErr
+						}
+						equal = bytes.Equal(distinctIdentity, candidateIdentity)
+					}
+				} else {
+					for column, vec := range vectors[:exec.concatArgCnt] {
+						left, err := preflightPhysicalRow(vec, candidateRow)
+						if err != nil {
+							return err
+						}
+						right, err := preflightPhysicalRow(vec, logicalRow)
+						if err != nil {
+							return err
+						}
+						if vec.IsNull(uint64(left)) ||
+							!bytes.Equal(groupConcatFieldBytes(
+								vec, left, exec.argTypes[column]),
+								groupConcatFieldBytes(vec, right, exec.argTypes[column])) {
+							equal = false
+							break
+						}
 					}
 				}
 				if equal {
@@ -2957,6 +3042,12 @@ func (exec *groupConcatExec) PreflightBatchFill(
 		valueSize := 0
 		if exec.aggInfo.preserveDistinctInputOrder {
 			valueSize = exec.aggInfo.distinctInputOrderValueSize()
+			if exec.aggInfo.distinctIdentityPrefix {
+				if len(distinctPayload) > math.MaxInt-valueSize {
+					return mpool.ErrAllocationAllocatorLimit
+				}
+				valueSize += len(distinctPayload)
+			}
 		}
 		if err := addArgumentChunkCapacityWithValue(
 			&needs, &needCount, x, key, valueSize); err != nil {

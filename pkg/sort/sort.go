@@ -373,6 +373,30 @@ func sortByVector(
 			data []types.Varlena
 			area []byte
 		}{data: data, area: area}
+		if sqlOrder && types.NeedsCollationKey(*vec.GetType(), types.PADSpaceKeyV1) {
+			less := func(v struct {
+				data []types.Varlena
+				area []byte
+			}, i, j int64) bool {
+				left := v.data[i].GetByteSlice(v.area)
+				right := v.data[j].GetByteSlice(v.area)
+				return types.CompareStringValues(*vec.GetType(), left, right) < 0
+			}
+			greater := func(v struct {
+				data []types.Varlena
+				area []byte
+			}, i, j int64) bool {
+				left := v.data[i].GetByteSlice(v.area)
+				right := v.data[j].GetByteSlice(v.area)
+				return types.CompareStringValues(*vec.GetType(), left, right) > 0
+			}
+			if !desc {
+				genericSort(col, os, less)
+			} else {
+				genericSort(col, os, greater)
+			}
+			break
+		}
 		if !desc {
 			genericSort(col, os, varlenaLess)
 		} else {

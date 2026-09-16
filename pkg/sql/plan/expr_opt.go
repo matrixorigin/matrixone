@@ -430,10 +430,11 @@ func blockFilterConstantVectorSet(literalVec *plan.LiteralVec) (ret map[string]s
 		return nil, false
 	}
 	typ := plan.Type{
-		Id:      int32(vec.GetType().Oid),
-		Scale:   vec.GetType().Scale,
-		Width:   vec.GetType().Width,
-		Charset: uint32(vec.GetType().Charset),
+		Id:               int32(vec.GetType().Oid),
+		Scale:            vec.GetType().Scale,
+		Width:            vec.GetType().Width,
+		Charset:          uint32(vec.GetType().Charset),
+		CollationVersion: uint32(vec.GetType().CollationVersion),
 	}
 	if physicalLength == 0 {
 		return make(map[string]struct{}), true
@@ -1973,6 +1974,13 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 		Parts = util.SplitCompositeClusterByColumnName(tableDef.ClusterBy.Name)
 		numParts = len(Parts)
 	}
+	if numParts == 1 && tableDef.Pkey.CompPkeyCol != nil && tableDef.Pkey.CompPkeyCol.Hidden {
+		if partPos, ok := tableDef.Name2ColIndex[Parts[0]]; ok &&
+			isNative0900Type(tableDef.Cols[partPos].Typ) {
+			return builder.rewriteNativeSinglePrimaryKeyFilters(
+				tableDef, tableTag, sortkeyIdx, filters...)
+		}
+	}
 
 	for i, expr := range filters {
 		if expr == nil {
@@ -2569,6 +2577,231 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	}
 
 	return newFilterList
+}
+
+func nativeComparisonColumn(expr *plan.Expr) *plan.ColRef {
+	if expr == nil {
+		return nil
+	}
+	if col := expr.GetCol(); col != nil {
+		return col
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
+		return nil
+	}
+	if fn.Func.ObjName == "internal_collation_key" ||
+		(fn.Func.ObjName == "cast" && fn.ExplicitCollation) {
+		return nativeComparisonColumn(fn.Args[0])
+	}
+	// Physical native-collation keys are stored as opaque VARBINARY values.
+	// The comparison binder may insert a VARCHAR cast when it selects the
+	// generic string comparison overload.  That cast does not change which
+	// table column is indexed; unwrap it only for an explicitly binary column
+	// so arbitrary user CAST expressions cannot be mistaken for indexable
+	// source columns.
+	if fn.Func.ObjName == "cast" {
+		if inner := fn.Args[0]; inner != nil {
+			if col := inner.GetCol(); col != nil &&
+				(types.T(inner.Typ.Id) == types.T_binary ||
+					types.T(inner.Typ.Id) == types.T_varbinary ||
+					types.T(inner.Typ.Id) == types.T_blob ||
+					inner.Typ.Charset == uint32(types.CharsetBinary)) {
+				return col
+			}
+		}
+	}
+	return nil
+}
+
+// nativeComparisonIdentity returns the versioned text identity already present
+// on one comparison operand. A physical-key rewrite is valid only when every
+// operand uses the same identity as the hidden primary key; otherwise replacing
+// the original predicate would erase a residual semantic filter.
+type nativeCollationIdentity struct {
+	charset uint8
+	version uint8
+}
+
+func nativeComparisonIdentity(expr *plan.Expr) (nativeCollationIdentity, bool) {
+	if expr == nil || expr.Typ.Charset > 255 {
+		return nativeCollationIdentity{}, false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		switch fn.Func.ObjName {
+		case "internal_collation_key":
+			if len(fn.Args) == 2 && fn.Args[1] != nil && fn.Args[1].GetLit() != nil {
+				charset := fn.Args[1].GetLit().GetU64Val()
+				if charset <= 255 {
+					identity := nativeCollationIdentity{charset: uint8(charset), version: uint8(expr.Typ.CollationVersion)}
+					sourceType := expr.Typ
+					if fn.Args[0] != nil {
+						identity.version = uint8(fn.Args[0].Typ.CollationVersion)
+						sourceType = fn.Args[0].Typ
+					}
+					runtimeType := types.NewWithCharsetVersion(
+						types.T(sourceType.Id), sourceType.Width, sourceType.Scale,
+						identity.charset, identity.version,
+					)
+					if types.NeedsCollationKey(runtimeType, types.PADSpaceKeyV1) {
+						return identity, true
+					}
+				}
+			}
+			return nativeCollationIdentity{}, false
+		default:
+			if fn.ExplicitCollation {
+				identity := nativeCollationIdentity{charset: uint8(expr.Typ.Charset), version: uint8(expr.Typ.CollationVersion)}
+				runtimeType := types.NewWithCharsetVersion(
+					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale,
+					identity.charset, identity.version,
+				)
+				if types.NeedsCollationKey(runtimeType, types.PADSpaceKeyV1) {
+					return identity, true
+				}
+				return nativeCollationIdentity{}, false
+			}
+		}
+	}
+	identity := nativeCollationIdentity{charset: uint8(expr.Typ.Charset), version: uint8(expr.Typ.CollationVersion)}
+	runtimeType := types.NewWithCharsetVersion(
+		types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale,
+		identity.charset, identity.version,
+	)
+	return identity, types.NeedsCollationKey(runtimeType, types.PADSpaceKeyV1)
+}
+
+func nativeFilterUsesPhysicalIdentity(filter *plan.Expr, expected nativeCollationIdentity) bool {
+	if filter == nil {
+		return false
+	}
+	fn := filter.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) < 2 {
+		return false
+	}
+	left, ok := nativeComparisonIdentity(fn.Args[0])
+	if !ok || left != expected {
+		return false
+	}
+	check := func(expr *plan.Expr) bool {
+		identity, ok := nativeComparisonIdentity(expr)
+		return ok && identity == expected
+	}
+	switch fn.Func.ObjName {
+	case "in":
+		list := fn.Args[1].GetList()
+		if list == nil {
+			return false
+		}
+		for _, item := range list.List {
+			if !check(item) {
+				return false
+			}
+		}
+		return true
+	case "between":
+		return len(fn.Args) == 3 && check(fn.Args[1]) && check(fn.Args[2])
+	default:
+		return check(fn.Args[1])
+	}
+}
+
+func (builder *QueryBuilder) rewriteNativeSinglePrimaryKeyFilters(
+	tableDef *plan.TableDef,
+	tableTag, physicalPos int32,
+	filters ...*plan.Expr,
+) []*plan.Expr {
+	physical := GetColExpr(tableDef.Cols[physicalPos].Typ, tableTag, physicalPos)
+	partPos := tableDef.Name2ColIndex[tableDef.Pkey.Names[0]]
+	partType := tableDef.Cols[partPos].Typ
+	wrap := func(value *plan.Expr) (*plan.Expr, error) {
+		if value == nil {
+			return nil, nil
+		}
+		key, err := makeNativeCollationKeyExpr(builder.GetContext(), value, partType)
+		if err != nil {
+			return nil, err
+		}
+		return BindFuncExprImplByPlanExpr(builder.GetContext(), function.SerialFunctionName, []*plan.Expr{key})
+	}
+	for i, filter := range filters {
+		fn := filter.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) < 2 {
+			continue
+		}
+		expectedType := types.NewWithCharsetVersion(
+			types.T(partType.Id), partType.Width, partType.Scale,
+			uint8(partType.Charset), uint8(partType.CollationVersion),
+		)
+		expectedIdentity := nativeCollationIdentity{
+			charset: expectedType.Charset,
+			version: expectedType.CollationVersion,
+		}
+		if !nativeFilterUsesPhysicalIdentity(filter, expectedIdentity) {
+			continue
+		}
+		column := nativeComparisonColumn(fn.Args[0])
+		if column == nil || column.RelPos != tableTag || column.ColPos != partPos {
+			continue
+		}
+		name := fn.Func.ObjName
+		var rewritten *plan.Expr
+		var err error
+		physicalArg := DeepCopyExpr(physical)
+		switch name {
+		case "=":
+			key, keyErr := wrap(fn.Args[1])
+			if keyErr != nil {
+				continue
+			}
+			rewritten, err = BindFuncExprImplByPlanExpr(builder.GetContext(), name, []*plan.Expr{physicalArg, key})
+		case "<", "<=", ">", ">=", "<>":
+			key, keyErr := wrap(fn.Args[1])
+			if keyErr != nil {
+				continue
+			}
+			rewritten, err = BindFuncExprImplByPlanExpr(builder.GetContext(), name, []*plan.Expr{physicalArg, key})
+		case "in":
+			list := fn.Args[1].GetList()
+			if list == nil {
+				continue
+			}
+			items := make([]*plan.Expr, len(list.List))
+			valid := true
+			for j, item := range list.List {
+				items[j], err = wrap(item)
+				if err != nil {
+					valid = false
+					break
+				}
+			}
+			if !valid {
+				continue
+			}
+			rewritten, err = BindFuncExprImplByPlanExpr(builder.GetContext(), name, []*plan.Expr{
+				physicalArg,
+				{Typ: physical.Typ, Expr: &plan.Expr_List{List: &plan.ExprList{List: items}}},
+			})
+		case "between":
+			if len(fn.Args) != 3 {
+				continue
+			}
+			lower, lowerErr := wrap(fn.Args[1])
+			upper, upperErr := wrap(fn.Args[2])
+			if lowerErr != nil || upperErr != nil {
+				continue
+			}
+			rewritten, err = BindFuncExprImplByPlanExpr(builder.GetContext(), name, []*plan.Expr{physicalArg, lower, upper})
+		default:
+			continue
+		}
+		if err != nil || rewritten == nil {
+			continue
+		}
+		rewritten.Selectivity = filter.Selectivity
+		filters[i] = rewritten
+	}
+	return filters
 }
 
 func flattenLogicalExpressions(expr *plan.Expr, opName string, args *[]*plan.Expr) {

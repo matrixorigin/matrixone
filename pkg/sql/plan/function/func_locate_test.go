@@ -243,3 +243,23 @@ func TestLocate(t *testing.T) {
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
 }
+
+func TestLocateNative0900AIUsesUCAComparison(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		needle   string
+		haystack string
+		position int64
+		want     int64
+	}{
+		{name: "case and accent", needle: "e\u0301", haystack: "xxÉyy", position: 1, want: 3},
+		{name: "expansion", needle: "ss", haystack: "aßb", position: 1, want: 2},
+		{name: "position", needle: "ALPHA", haystack: "zero alpha", position: 2, want: 6},
+		{name: "empty", needle: "", haystack: "abc", position: 2, want: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := locateNative0900AI([]byte(tc.needle), []byte(tc.haystack), tc.position)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}

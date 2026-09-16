@@ -168,7 +168,7 @@ func (partition *Partition) prepareTopN(proc *process.Process) (err error) {
 		} else if spec.Flag&plan.OrderBySpec_NULLS_LAST != 0 {
 			nullsLast = true
 		}
-		typ := types.NewWithCharset(types.T(spec.Expr.Typ.Id), spec.Expr.Typ.Width, spec.Expr.Typ.Scale, uint8(spec.Expr.Typ.Charset))
+		typ := types.NewWithCharsetVersion(types.T(spec.Expr.Typ.Id), spec.Expr.Typ.Width, spec.Expr.Typ.Scale, uint8(spec.Expr.Typ.Charset), uint8(spec.Expr.Typ.CollationVersion))
 		// Top-N order keys must use the same total order as the window sorter.
 		// In particular, native float comparison is not a strict weak order for
 		// NaNs and can make the heap discard rows from the SQL-order prefix.

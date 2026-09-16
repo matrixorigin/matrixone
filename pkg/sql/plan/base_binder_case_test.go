@@ -470,9 +470,10 @@ func TestPreparedRegexpScalarSubqueryPropagatesDerivedColumnRuntimeDomain(t *tes
 
 func TestPreparedNumericMetadataIsSparse(t *testing.T) {
 	require.Nil(t, (&planpb.Expr{}).GetPreparedNumeric())
-	// Five resident scalar fields made Expr 184 bytes. One optional pointer
-	// keeps ordinary expressions at a bounded 168 bytes on 64-bit targets.
-	require.Equal(t, uintptr(168), unsafe.Sizeof(planpb.Expr{}))
+	// Collation provenance is carried in the embedded Type. The versioned
+	// identity adds one aligned word to ordinary expressions; the prepared
+	// number metadata remains an optional pointer.
+	require.Equal(t, uintptr(184), unsafe.Sizeof(planpb.Expr{}))
 }
 
 var benchmarkPreparedNumericDeepCopySink *planpb.Expr

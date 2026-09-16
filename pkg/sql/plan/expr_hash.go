@@ -177,8 +177,9 @@ func literalForExecutableIdentity(typ plan.Type, lit *plan.Literal) *plan.Litera
 }
 
 func executableLiteralForm(typ plan.Type, form plan.StringLiteralForm) plan.StringLiteralForm {
-	staticDomain := types.StaticStringDomain(types.NewWithCharset(
-		types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset)))
+	staticDomain := types.StaticStringDomain(types.NewWithCharsetVersion(
+		types.T(typ.Id), typ.Width, typ.Scale,
+		uint8(typ.Charset), uint8(typ.CollationVersion)))
 	if form == plan.StringLiteralForm_STRING_LITERAL_TEXT &&
 		staticDomain == types.StringDomainText {
 		return plan.StringLiteralForm_STRING_LITERAL_NONE

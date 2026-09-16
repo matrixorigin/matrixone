@@ -144,6 +144,51 @@ func TestJsonComparisonParamPreservesPreparedScalarType(t *testing.T) {
 	})
 }
 
+func TestNative0900DirectComparisonsUseCollationIdentity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name  string
+		typ   types.Type
+		left  []string
+		right []string
+		eq    []bool
+		lt    []bool
+	}{
+		{
+			name:  "ai",
+			typ:   types.NewWithCharset(types.T_varchar, types.MaxVarcharLen, 0, types.CharsetUTF8MB40900AI),
+			left:  []string{"Alpha", "e\u0301", "a"},
+			right: []string{"alpha", "É", "b"},
+			eq:    []bool{true, true, false},
+			lt:    []bool{false, false, true},
+		},
+		{
+			name:  "bin-no-pad",
+			typ:   types.NewWithCharset(types.T_varchar, types.MaxVarcharLen, 0, types.CharsetUTF8MB40900Bin),
+			left:  []string{"Alpha", "a ", "a"},
+			right: []string{"alpha", "a", "a "},
+			eq:    []bool{false, false, false},
+			lt:    []bool{true, false, true},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			equalCase := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(tc.typ, tc.left, nil),
+				NewFunctionTestInput(tc.typ, tc.right, nil),
+			}, NewFunctionTestResult(types.T_bool.ToType(), false, tc.eq, nil), equalFn)
+			succeed, errInfo := equalCase.Run()
+			require.True(t, succeed, errInfo)
+
+			lessCase := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(tc.typ, tc.left, nil),
+				NewFunctionTestInput(tc.typ, tc.right, nil),
+			}, NewFunctionTestResult(types.T_bool.ToType(), false, tc.lt, nil), lessThanFn)
+			succeed, errInfo = lessCase.Run()
+			require.True(t, succeed, errInfo)
+		})
+	}
+}
+
 func TestPreparedJSONComparisonCoercion(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

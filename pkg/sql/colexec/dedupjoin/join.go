@@ -1361,6 +1361,10 @@ func odkuValuesEqual(left, right *vector.Vector) bool {
 	if left.GetType().Oid != right.GetType().Oid {
 		return false
 	}
+	if left.GetType().Oid.IsMySQLString() &&
+		types.NeedsCollationKey(*left.GetType(), types.PADSpaceKeyV1) {
+		return types.CompareStringValues(*left.GetType(), left.GetBytesAt(0), right.GetBytesAt(0)) == 0
+	}
 
 	switch left.GetType().Oid {
 	case types.T_char:

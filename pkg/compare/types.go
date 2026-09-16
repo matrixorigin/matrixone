@@ -43,6 +43,7 @@ type strCompare struct {
 	nullsLast   bool
 	vs          []*vector.Vector
 	isConstNull []bool
+	cmp         func([]byte, []byte) int
 }
 
 type arrayCompare struct {

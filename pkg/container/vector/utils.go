@@ -15,7 +15,6 @@
 package vector
 
 import (
-	"bytes"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -90,7 +89,7 @@ func FindFirstIndexInSortedVarlenVector(vec *Vector, v []byte) int {
 	if length == 0 {
 		return -1
 	}
-	if bytes.Equal(vec.GetBytesAt(0), v) {
+	if compareStringRows(vec.typ, vec.GetBytesAt(0), v) == 0 {
 		return 0
 	}
 	if length == 1 {
@@ -99,13 +98,13 @@ func FindFirstIndexInSortedVarlenVector(vec *Vector, v []byte) int {
 	l, r := 0, length-1
 	for l < r {
 		mid := (l + r) / 2
-		if bytes.Compare(vec.GetBytesAt(mid), v) >= 0 {
+		if compareStringRows(vec.typ, vec.GetBytesAt(mid), v) >= 0 {
 			r = mid
 		} else {
 			l = mid + 1
 		}
 	}
-	if bytes.Equal(vec.GetBytesAt(l), v) {
+	if compareStringRows(vec.typ, vec.GetBytesAt(l), v) == 0 {
 		return l
 	}
 	return -1
@@ -299,10 +298,10 @@ func VarlenGetMinMax(vec *Vector) (minv, maxv []byte) {
 				minv, maxv = val, val
 				first = false
 			} else {
-				if bytes.Compare(minv, val) > 0 {
+				if compareStringRows(vec.typ, minv, val) > 0 {
 					minv = val
 				}
-				if bytes.Compare(maxv, val) < 0 {
+				if compareStringRows(vec.typ, maxv, val) < 0 {
 					maxv = val
 				}
 			}
@@ -312,10 +311,10 @@ func VarlenGetMinMax(vec *Vector) (minv, maxv []byte) {
 		minv, maxv = val, val
 		for i, j := 1, vec.Length(); i < j; i++ {
 			val := col[i].GetByteSlice(area)
-			if bytes.Compare(minv, val) > 0 {
+			if compareStringRows(vec.typ, minv, val) > 0 {
 				minv = val
 			}
-			if bytes.Compare(maxv, val) < 0 {
+			if compareStringRows(vec.typ, maxv, val) < 0 {
 				maxv = val
 			}
 		}

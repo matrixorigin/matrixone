@@ -8567,7 +8567,8 @@ func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 	needles := vector.GenerateFunctionStrParameter(ivecs[1])
 	rs := vector.MustFunctionResult[int64](result)
 	uniformBinary, perRow := stringDomainMode(ivecs[0])
-	caseInsensitive := ivecs[0].GetType().Charset == types.CharsetUTF8
+	caseInsensitive := types.IsCaseInsensitiveCollation(ivecs[0].GetType().Charset)
+	native0900AI := ivecs[0].GetType().Charset == types.CharsetUTF8MB40900AI
 	for row := uint64(0); row < uint64(length); row++ {
 		if functionRowSkipped(selectList, row) {
 			if err = rs.Append(0, true); err != nil {
@@ -8584,7 +8585,11 @@ func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 			continue
 		}
 		binary := binaryStringAt(ivecs[0], int(row), uniformBinary, perRow)
-		rs.AppendMustValue(locateString(needle, haystack, 1, binary, caseInsensitive))
+		if native0900AI && !binary {
+			rs.AppendMustValue(locateNative0900AI(needle, haystack, 1))
+		} else {
+			rs.AppendMustValue(locateString(needle, haystack, 1, binary, caseInsensitive))
+		}
 	}
 	return nil
 }

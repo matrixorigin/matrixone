@@ -2193,6 +2193,22 @@ func Test_BuiltIn_RegularMatchForLikeOp(t *testing.T) {
 	}
 }
 
+func TestNative0900AILikeUsesCollationAwareWildcard(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	native := types.NewWithCharset(types.T_varchar, types.MaxVarcharLen, 0, types.CharsetUTF8MB40900AI)
+	tcc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(native, []string{"xxÉyy", "aßb", "plain"}, nil),
+			NewFunctionTestInput(native, []string{"%e%yy", "a%b", "P%"}, nil),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true}, nil),
+		newOpBuiltInRegexp().likeFn,
+	)
+	succeed, errInfo := tcc.Run()
+	require.True(t, succeed, errInfo)
+}
+
 func Test_BuiltIn_RegularMatchForLikeOpWithEscape(t *testing.T) {
 	op := newOpBuiltInRegexp()
 

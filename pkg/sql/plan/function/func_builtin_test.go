@@ -1633,6 +1633,56 @@ func TestSerialAndSerialFullEncodeNonNullRowsIdentically(t *testing.T) {
 	}
 }
 
+func TestNative0900SerialUsesOpaqueWeightKey(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB40900AI)
+	input := newVectorByType(proc.Mp(), typ, []string{"Alpha", "alpha", "Alpha "}, nil)
+	defer input.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(3))
+	op := newOpSerial()
+	defer op.Close()
+	require.NoError(t, op.BuiltInSerial([]*vector.Vector{input}, result, proc, 3, nil))
+	require.Equal(t, result.GetResultVector().GetBytesAt(0), result.GetResultVector().GetBytesAt(1))
+	require.NotEqual(t, result.GetResultVector().GetBytesAt(0), result.GetResultVector().GetBytesAt(2))
+
+	part, err := types.ResolveStringKeyPart(typ, types.PADSpaceKeyV1)
+	require.NoError(t, err)
+	p := types.NewPacker()
+	defer p.Close()
+	_, err = part.Encode(p, nil, []byte("Alpha"))
+	require.NoError(t, err)
+	require.Equal(t, p.GetBuf(), result.GetResultVector().GetBytesAt(0))
+
+	invalid := newVectorByType(proc.Mp(), typ, []string{"\xff"}, nil)
+	defer invalid.Free(proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.Error(t, op.BuiltInSerial([]*vector.Vector{invalid}, result, proc, 1, nil))
+}
+
+func TestNative0900HashAndPartitionUseTheSameIdentity(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB40900AI)
+	input := newVectorByType(proc.Mp(), typ, []string{"Alpha", "alpha"}, nil)
+	defer input.Free(proc.Mp())
+
+	hashResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer hashResult.Free()
+	partitionResult := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), proc.Mp())
+	defer partitionResult.Free()
+	require.NoError(t, hashResult.PreExtendAndReset(2))
+	require.NoError(t, partitionResult.PreExtendAndReset(2))
+	require.NoError(t, builtInHash([]*vector.Vector{input}, hashResult, proc, 2, nil))
+	require.NoError(t, builtInHashPartition([]*vector.Vector{input}, partitionResult, proc, 2, nil))
+
+	hashes := vector.MustFixedColNoTypeCheck[int64](hashResult.GetResultVector())
+	partitions := vector.MustFixedColNoTypeCheck[uint64](partitionResult.GetResultVector())
+	require.Equal(t, hashes[0], hashes[1])
+	require.Equal(t, uint64(hashes[0]), partitions[0])
+	require.Equal(t, partitions[0], partitions[1])
+}
+
 func Test_BuiltIn_SerialFull(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

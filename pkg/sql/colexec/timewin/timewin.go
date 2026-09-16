@@ -82,8 +82,9 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 				return err
 			}
 			ctr.partSet[i] = getPartitionSetFunction(
-				types.NewWithCharset(
-					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+				types.NewWithCharsetVersion(
+					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale,
+					uint8(expr.Typ.Charset), uint8(expr.Typ.CollationVersion),
 				), proc.Mp())
 		}
 	}
@@ -550,8 +551,9 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 	for i, expression := range timeWin.Aggs {
 		params := make([]types.Type, len(expression.GetArgExpressions()))
 		for j, argument := range expression.GetArgExpressions() {
-			params[j] = types.NewWithCharset(
-				types.T(argument.Typ.Id), argument.Typ.Width, argument.Typ.Scale, uint8(argument.Typ.Charset),
+			params[j] = types.NewWithCharsetVersion(
+				types.T(argument.Typ.Id), argument.Typ.Width, argument.Typ.Scale,
+				uint8(argument.Typ.Charset), uint8(argument.Typ.CollationVersion),
 			)
 			if j == 0 && params[j].Oid == types.T_any && i < len(timeWin.Types) {
 				// Older manually-constructed plans/tests keep the physical first
@@ -591,8 +593,8 @@ func newTsExpr(typ plan.Type, ctx context.Context) (*plan.Expr, error) {
 
 	typ.NotNullable = col.Typ.NotNullable
 	argsType := []types.Type{
-		types.NewWithCharset(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset)),
-		types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset)),
+		types.NewWithCharsetVersion(types.T(col.Typ.Id), col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset), uint8(col.Typ.CollationVersion)),
+		types.NewWithCharsetVersion(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset), uint8(typ.CollationVersion)),
 	}
 	fGet, err := function.GetFunctionByName(ctx, "cast", argsType)
 	if err != nil {
@@ -1172,7 +1174,7 @@ func appendTimestampBoundaryVector(
 	typ plan.Type,
 	proc *process.Process,
 ) (vec *vector.Vector, err error) {
-	tsType := types.NewWithCharset(types.T_timestamp, typ.Width, typ.Scale, uint8(typ.Charset))
+	tsType := types.NewWithCharsetVersion(types.T_timestamp, typ.Width, typ.Scale, uint8(typ.Charset), uint8(typ.CollationVersion))
 	vec = vector.NewOffHeapVecWithType(tsType)
 	defer func() {
 		if err != nil {
@@ -1201,7 +1203,7 @@ func appendTimestampIntervalBoundaryVector(
 	typ plan.Type,
 	proc *process.Process,
 ) (vec *vector.Vector, err error) {
-	tsType := types.NewWithCharset(types.T_timestamp, typ.Width, typ.Scale, uint8(typ.Charset))
+	tsType := types.NewWithCharsetVersion(types.T_timestamp, typ.Width, typ.Scale, uint8(typ.Charset), uint8(typ.CollationVersion))
 	vec = vector.NewOffHeapVecWithType(tsType)
 	defer func() {
 		if err != nil {
