@@ -246,6 +246,16 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			var got int
 			require.NoError(t, conn.QueryRowContext(ctx, "select i from ondup_control_dst where id=1").Scan(&got))
 			require.Equal(t, 1, got)
+
+			mustExec(t, ctx, conn, "create table ondup_float_dst(id int primary key, x bigint, i bigint)")
+			mustExec(t, ctx, conn, "insert into ondup_float_dst values (1,1000000000000000000,0),(2,1000000000000000000,0)")
+			const floatAssignment = "((x/1)*x*x+0E0)/1E54"
+			mustExec(t, ctx, conn, "update ondup_float_dst set i="+floatAssignment+" where id=1")
+			mustExec(t, ctx, conn, "insert into ondup_float_dst values (2,0,0) on duplicate key update i="+floatAssignment)
+			var count, sum int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*),sum(i) from ondup_float_dst").Scan(&count, &sum))
+			require.Equal(t, int64(2), count)
+			require.Equal(t, int64(2), sum)
 		})
 
 		t.Run("group_ordinals_aliases_and_float_boundaries", func(t *testing.T) {
