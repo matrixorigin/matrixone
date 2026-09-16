@@ -53,7 +53,7 @@ var (
 	issue28319PerfOutput  = flag.String("issue28319-output", "", "directory for JSONL, CSV and manifest artifacts")
 )
 
-const issue28319PerfToolVersion = "issue28319-perf-driver-v1"
+const issue28319PerfToolVersion = "issue28319-perf-driver-v2"
 
 type issue28319PerfRecord struct {
 	RunID         string `json:"run_id"`
@@ -65,8 +65,8 @@ type issue28319PerfRecord struct {
 	Result        string `json:"result"`
 	Error         string `json:"error,omitempty"`
 	TxnAttempts   string `json:"txn_attempts"`
-	CopyStarted   int    `json:"copy_started"`
-	CopyCompleted int    `json:"copy_completed"`
+	CopyStarted   string `json:"copy_started"`
+	CopyCompleted string `json:"copy_completed"`
 	CopyRows      string `json:"copy_rows"`
 	CopyBytes     string `json:"copy_bytes"`
 }
@@ -121,8 +121,8 @@ func (w *issue28319PerfWriters) write(record issue28319PerfRecord) error {
 		record.Result,
 		record.Error,
 		record.TxnAttempts,
-		strconv.Itoa(record.CopyStarted),
-		strconv.Itoa(record.CopyCompleted),
+		record.CopyStarted,
+		record.CopyCompleted,
 		record.CopyRows,
 		record.CopyBytes,
 	}); err != nil {
@@ -151,13 +151,20 @@ func (w *issue28319PerfWriters) close() error {
 	}
 	durations := make([]int64, 0, len(w.records))
 	errorsCount, copyStarted, copyCompleted := 0, 0, 0
+	copyCountersUnavailable := false
 	for _, record := range w.records {
 		durations = append(durations, record.DurationNanos)
 		if record.Result != "OK" {
 			errorsCount++
 		}
-		copyStarted += record.CopyStarted
-		copyCompleted += record.CopyCompleted
+		started, startedErr := strconv.Atoi(record.CopyStarted)
+		completed, completedErr := strconv.Atoi(record.CopyCompleted)
+		if startedErr != nil || completedErr != nil {
+			copyCountersUnavailable = true
+			continue
+		}
+		copyStarted += started
+		copyCompleted += completed
 	}
 	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
 	percentile := func(fraction float64) int64 {
@@ -167,11 +174,15 @@ func (w *issue28319PerfWriters) close() error {
 		index := int(float64(len(durations)-1) * fraction)
 		return durations[index]
 	}
+	copyStartedValue, copyCompletedValue := strconv.Itoa(copyStarted), strconv.Itoa(copyCompleted)
+	if copyCountersUnavailable {
+		copyStartedValue, copyCompletedValue = "UNAVAILABLE", "UNAVAILABLE"
+	}
 	for _, metric := range [][2]string{
 		{"records", strconv.Itoa(len(w.records))},
 		{"errors", strconv.Itoa(errorsCount)},
-		{"copy_started", strconv.Itoa(copyStarted)},
-		{"copy_completed", strconv.Itoa(copyCompleted)},
+		{"copy_started", copyStartedValue},
+		{"copy_completed", copyCompletedValue},
 		{"p50_duration_nanos", strconv.FormatInt(percentile(0.50), 10)},
 		{"p95_duration_nanos", strconv.FormatInt(percentile(0.95), 10)},
 		{"max_duration_nanos", strconv.FormatInt(percentile(1.00), 10)},
@@ -519,6 +530,8 @@ func issue28319PerfRun(t *testing.T, db *sql.DB, cn embed.ServiceOperator, write
 						DurationNanos: time.Since(requestStarted).Nanoseconds(),
 						Result:        "OK",
 						TxnAttempts:   txnAttempts,
+						CopyStarted:   "UNAVAILABLE",
+						CopyCompleted: "UNAVAILABLE",
 						CopyRows:      "UNAVAILABLE",
 						CopyBytes:     "UNAVAILABLE",
 					}
@@ -527,8 +540,8 @@ func issue28319PerfRun(t *testing.T, db *sql.DB, cn embed.ServiceOperator, write
 						record.Error = err.Error()
 					}
 					if observer != nil {
-						record.CopyStarted = after.starts - before.starts
-						record.CopyCompleted = after.completed - before.completed
+						record.CopyStarted = strconv.Itoa(after.starts - before.starts)
+						record.CopyCompleted = strconv.Itoa(after.completed - before.completed)
 					}
 					if writeErr := writers.write(record); writeErr != nil {
 						results <- writeErr
