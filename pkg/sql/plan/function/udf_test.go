@@ -95,6 +95,24 @@ func TestPythonUdfArgTypeMatchPrefersExactDescriptor(t *testing.T) {
 	require.Less(t, exactCost, coerceCost)
 }
 
+func TestPythonUdfArgTypeMatchRejectsVectorDimensionChange(t *testing.T) {
+	source := types.New(types.T_array_float32, 4, 0)
+	target := types.New(types.T_array_float32, 3, 0)
+	canMatch, cost := PythonUdfArgTypeMatch([]types.Type{source}, []types.Type{target})
+	require.False(t, canMatch)
+	require.Equal(t, -1, cost)
+
+	inputs := []types.Type{
+		types.T_text.ToType(),
+		source,
+		target,
+		types.T_int64.ToType(),
+	}
+	result := checkPythonUdf(nil, inputs)
+	require.Equal(t, failedFunctionParametersWrong, result.status)
+	require.Nil(t, PythonUdfArgTypeCast([]types.Type{source}, []types.Type{target}))
+}
+
 func TestPythonUdfArgTypeCastKeepsDeclaredDescriptorForSameOID(t *testing.T) {
 	source := types.New(types.T_decimal64, 18, 2)
 	target := types.New(types.T_decimal64, 18, 6)
