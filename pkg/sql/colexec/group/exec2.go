@@ -204,10 +204,10 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 		} else {
 			group.ctr.mtyp = HStr
 		}
-		// HStr is the v77 length-delimited partial grammar. During a rolling
+		// HStr is the v78 length-delimited partial grammar. During a rolling
 		// upgrade, an old coordinator can still send this new worker a plan that
 		// expects the historical H8 producer behavior. Keep that legacy wire until
-		// the shared rollout gate reaches v77; the planner prevents new plans from
+		// the shared rollout gate reaches v78; the planner prevents new plans from
 		// creating a new short-varlen remote boundary before then.
 
 		group.ctr.groupingAware = false
@@ -1335,7 +1335,7 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 		if aggexec.RequiresCanonicalDistinctKeyWire(ag) &&
 			!canonicalDistinctKeyWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
-				"canonical DISTINCT argument keys require MORPCVersion78")
+				"canonical DISTINCT argument keys require MORPCVersion79")
 		}
 		if vec := ag.PrepareParamKindVectorForChunk(curr); vec != nil &&
 			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {

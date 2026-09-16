@@ -2261,12 +2261,15 @@ func TestCompileShuffleGroupGatesApproxPercentileByProtocolVersion(t *testing.T)
 		"v74 is reserved for HEX and must keep the legacy approx_percentile state")
 	require.False(t, c.canCompileShuffleGroup(aggNode))
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
+	require.False(t, c.supportsRemoteApproxPercentile())
+	require.False(t, c.canCompileShuffleGroup(aggNode))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
 	require.True(t, c.supportsRemoteApproxPercentile())
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"rollback must disable the v75 approx_percentile state before exchange")
+		"rollback must disable the v76 approx_percentile state before exchange")
 }
 
 func TestCompileShuffleGroupGatesHLLByProtocolVersion(t *testing.T) {
@@ -2309,6 +2312,9 @@ func TestCompileShuffleGroupGatesHLLByProtocolVersion(t *testing.T) {
 	require.False(t, c.canCompileShuffleGroup(aggNode))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
+	require.False(t, c.supportsRemoteHLL())
+	require.False(t, c.canCompileShuffleGroup(aggNode))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
 	require.True(t, c.supportsRemoteHLL())
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
@@ -2323,11 +2329,11 @@ func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {
 		Id:    int32(types.T_varchar),
 		Width: 2,
 	}
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
 	require.True(t, hasVariableLengthGroupKey(aggNode))
 	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"short variable-length group keys must stay local before MORPC v77")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
+		"short variable-length group keys must stay local before MORPC v78")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion78)
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 
 	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 2}}
@@ -2343,8 +2349,8 @@ func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {
 	}}
 	require.True(t, hasCanonicalDistinctKeyWire(aggNode))
 	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"canonical opaque DISTINCT keys must stay local before MORPC v78")
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion78)
+		"canonical opaque DISTINCT keys must stay local before MORPC v79")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
 

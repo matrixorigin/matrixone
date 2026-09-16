@@ -7842,10 +7842,10 @@ func hasHLLAggregate(node *plan.Node) bool {
 	return false
 }
 
-// hasVariableLengthGroupKey mirrors Group.prepareGroupAndAggArg's v77 fence
+// hasVariableLengthGroupKey mirrors Group.prepareGroupAndAggArg's v78 fence
 // for a short variable-length physical key. Long variable-length keys already
 // used the historical HStr partial grammar, so they remain remotely usable
-// before v77.
+// before v78.
 func hasVariableLengthGroupKey(node *plan.Node) bool {
 	if node == nil {
 		return false
@@ -7885,7 +7885,7 @@ func hasVariableLengthGroupKey(node *plan.Node) bool {
 // hasCanonicalDistinctKeyWire is the plan-side counterpart of
 // aggexec.RequiresCanonicalDistinctKeyWire. Opaque DISTINCT state is used for
 // multi-argument aggregates and for single variable-length arguments. Keeping
-// that topology local during a pre-v78 rollout lets the receiver continue to
+// that topology local during a pre-v79 rollout lets the receiver continue to
 // accept legacy raw payloads without asking an older peer to parse the marker
 // tagged grammar.
 func hasCanonicalDistinctKeyWire(node *plan.Node) bool {
@@ -8003,7 +8003,7 @@ func supportsRemoteApproxPercentile(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion75
+	return ok && protocolVersion >= defines.MORPCVersion76
 }
 
 func supportsRemoteHLL(service string) bool {
@@ -8013,7 +8013,7 @@ func supportsRemoteHLL(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion76
+	return ok && protocolVersion >= defines.MORPCVersion77
 }
 
 func supportsRemoteGroupHashString(service string) bool {
@@ -8023,7 +8023,7 @@ func supportsRemoteGroupHashString(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion77
+	return ok && protocolVersion >= defines.MORPCVersion78
 }
 
 func supportsRemoteCanonicalDistinctKeyWire(service string) bool {
@@ -8033,7 +8033,7 @@ func supportsRemoteCanonicalDistinctKeyWire(service string) bool {
 		return false
 	}
 	protocolVersion, ok := version.(int64)
-	return ok && protocolVersion >= defines.MORPCVersion78
+	return ok && protocolVersion >= defines.MORPCVersion79
 }
 
 func (c *Compile) supportsRemoteVarianceAggregates() bool {

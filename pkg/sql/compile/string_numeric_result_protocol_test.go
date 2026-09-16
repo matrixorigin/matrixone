@@ -57,7 +57,7 @@ func TestStringNumericResultPlacementAndDestinationProtocol(t *testing.T) {
 
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	client.version = defines.MORPCVersion78
+	client.version = defines.MORPCVersion79
 	require.NoError(t, c.constrainStringNumericResultWorkers(qry))
 	require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
 		"a worker below the result-contract version must not receive a multi-CN plan")
@@ -67,15 +67,15 @@ func TestStringNumericResultPlacementAndDestinationProtocol(t *testing.T) {
 
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	client.version = defines.MORPCVersion79
+	client.version = defines.MORPCVersion80
 	require.NoError(t, c.constrainStringNumericResultWorkers(qry))
 	require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType,
-		"a v79 worker keeps the multi-CN placement")
+		"a v80 worker keeps the multi-CN placement")
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 
-	client.version = defines.MORPCVersion78
+	client.version = defines.MORPCVersion79
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination",
 		"a destination downgrade after placement must still be rejected")
@@ -84,15 +84,15 @@ func TestStringNumericResultPlacementAndDestinationProtocol(t *testing.T) {
 	// one-CN placement rather than assuming the current protocol is sufficient.
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Mcpu: 4}}
-	client.version = defines.MORPCVersion79
+	client.version = defines.MORPCVersion80
 	require.NoError(t, c.constrainStringNumericResultWorkers(qry))
 	require.Equal(t, plan.ExecTypeAP_ONECN, c.execType)
 	require.Equal(t, c.addr, c.cnList[0].Addr)
 
 	rt := runtime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion78)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
 	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc,
 		&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 			ProjectList: []*planpb.Expr{qry.Nodes[0].ProjectList[0]},
-		}}}), "version 79")
+		}}}), "version 80")
 }

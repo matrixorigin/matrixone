@@ -1947,7 +1947,7 @@ func validateRemoteAggregateProtocol(
 		if agg.GetAggID() == aggexec.AggIdOfApproxPercentile &&
 			(proc == nil || !supportsRemoteApproxPercentile(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"approx_percentile remote execution requires MORPC protocol version 75",
+				"approx_percentile remote execution requires MORPC protocol version 76",
 			)
 		}
 		if (agg.GetAggID() == aggexec.AggIdOfApproxCount ||
@@ -1956,7 +1956,7 @@ func validateRemoteAggregateProtocol(
 			agg.GetAggID() == aggexec.AggIdOfHllMerge) &&
 			(proc == nil || !supportsRemoteHLL(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"HLL remote execution requires MORPC protocol version 76",
+				"HLL remote execution requires MORPC protocol version 77",
 			)
 		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
@@ -2159,9 +2159,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.StringNumericResultContracts &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion79) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {
 		return moerr.NewNotSupportedNoCtx(
-			"corrected string numeric result contracts require MORPC protocol version 79",
+			"corrected string numeric result contracts require MORPC protocol version 80",
 		)
 	}
 	if features.IPFunctionSemantics &&

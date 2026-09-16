@@ -276,8 +276,8 @@ func TestPersistedStringNumericResultProtocolAdmission(t *testing.T) {
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 79")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion79)
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 80")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 	require.NoError(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, expr),
 		"legacy catalog-builder wrapper must use the shared maximum-version gate")

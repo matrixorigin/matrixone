@@ -302,16 +302,16 @@ func TestPersistedStringNumericViewProtocolLifecycle(t *testing.T) {
 	}
 
 	// CREATE and ALTER both pass through the authoring gate. A CN that has
-	// only admitted the previous v78 contract must not publish v79 metadata.
-	_, err := build(createSQL, defines.MORPCVersion78)
-	require.ErrorContains(t, err, "protocol version 79")
-	created, err := build(createSQL, defines.MORPCVersion79)
+	// only admitted the previous v79 contract must not publish v80 metadata.
+	_, err := build(createSQL, defines.MORPCVersion79)
+	require.ErrorContains(t, err, "protocol version 80")
+	created, err := build(createSQL, defines.MORPCVersion80)
 	require.NoError(t, err)
 	createdView := created.GetDdl().GetCreateView().GetTableDef()
 	var createdData ViewData
 	require.NoError(t, json.Unmarshal([]byte(createdView.GetViewSql().GetView()), &createdData))
 	require.NotNil(t, createdData.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion79), *createdData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion80), *createdData.RequiredProtocolVersion)
 
 	// Make the successfully authored definition visible to ALTER VIEW through
 	// the mock catalog, then exercise the same write-side fence on replacement.
@@ -319,38 +319,38 @@ func TestPersistedStringNumericViewProtocolLifecycle(t *testing.T) {
 	ctx.objects["v_string_numeric"] = &planpb.ObjectRef{
 		SchemaName: "tpch", ObjName: "v_string_numeric",
 	}
-	_, err = build(alterSQL, defines.MORPCVersion78)
-	require.ErrorContains(t, err, "protocol version 79")
-	altered, err := build(alterSQL, defines.MORPCVersion79)
+	_, err = build(alterSQL, defines.MORPCVersion79)
+	require.ErrorContains(t, err, "protocol version 80")
+	altered, err := build(alterSQL, defines.MORPCVersion80)
 	require.NoError(t, err)
 	var alteredData ViewData
 	require.NoError(t, json.Unmarshal(
 		[]byte(altered.GetDdl().GetAlterView().GetTableDef().GetViewSql().GetView()), &alteredData))
 	require.NotNil(t, alteredData.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion79), *alteredData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion80), *alteredData.RequiredProtocolVersion)
 
 	// Regeneration is the read-side boundary. Start with a lower historical
 	// marker and an unknown field: generation must raise the marker to the
-	// newly required v79 floor while preserving unrelated JSON metadata.
+	// newly required v80 floor while preserving unrelated JSON metadata.
 	var persistedFields map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(createdView.GetViewSql().GetView()), &persistedFields))
-	persistedFields["required_protocol_version"] = json.RawMessage("78")
+	persistedFields["required_protocol_version"] = json.RawMessage("79")
 	persistedFields["future_field"] = json.RawMessage(`{"keep":true}`)
 	persistedBytes, err := json.Marshal(persistedFields)
 	require.NoError(t, err)
 	persisted := string(persistedBytes)
 
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion78)
-	_, err = RegenerateViewDefinition(ctx, persisted)
-	require.ErrorContains(t, err, "protocol version 79")
-
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion79)
+	_, err = RegenerateViewDefinition(ctx, persisted)
+	require.ErrorContains(t, err, "protocol version 80")
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion80)
 	regenerated, err := RegenerateViewDefinition(ctx, persisted)
 	require.NoError(t, err)
 	var regeneratedFields map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(
 		[]byte(regenerated.TableDef.GetViewSql().GetView()), &regeneratedFields))
-	require.JSONEq(t, `79`, string(regeneratedFields["required_protocol_version"]))
+	require.JSONEq(t, `80`, string(regeneratedFields["required_protocol_version"]))
 	require.JSONEq(t, `{"keep":true}`, string(regeneratedFields["future_field"]))
 }
 

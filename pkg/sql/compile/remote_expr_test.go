@@ -580,17 +580,20 @@ func TestApproxPercentileRemoteProtocolValidation(t *testing.T) {
 	)}
 
 	require.ErrorContains(t, validateRemoteAggregateProtocol(nil, percentile),
-		"requires MORPC protocol version 75")
+		"requires MORPC protocol version 76")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
-		"requires MORPC protocol version 75")
+		"requires MORPC protocol version 76")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
 	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
-		"requires MORPC protocol version 75")
+		"requires MORPC protocol version 76")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
 	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
-		"requires MORPC protocol version 75")
+		"requires MORPC protocol version 76")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 76")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
 
 	// Rollback must reject both the new DESC config and ordinary ASC state: the
@@ -598,7 +601,7 @@ func TestApproxPercentileRemoteProtocolValidation(t *testing.T) {
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 	percentile[0].SetExtraConfig([]byte("0.5"))
 	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
-		"requires MORPC protocol version 75")
+		"requires MORPC protocol version 76")
 }
 
 func TestHLLRemoteProtocolValidation(t *testing.T) {
@@ -619,17 +622,20 @@ func TestHLLRemoteProtocolValidation(t *testing.T) {
 		)}
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
 		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
-			"HLL remote execution requires MORPC protocol version 76")
+			"HLL remote execution requires MORPC protocol version 77")
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
 		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
-			"HLL remote execution requires MORPC protocol version 76")
+			"HLL remote execution requires MORPC protocol version 77")
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
 		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
-			"HLL remote execution requires MORPC protocol version 76")
+			"HLL remote execution requires MORPC protocol version 77")
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
 		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
-			"HLL remote execution requires MORPC protocol version 76")
+			"HLL remote execution requires MORPC protocol version 77")
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 77")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
 		require.NoError(t, validateRemoteAggregateProtocol(proc, agg))
 	}
 }
@@ -829,9 +835,9 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 	}
 
 	t.Run("legacy-length-utf8-uint64-v58", func(t *testing.T) {
-		// A pre-v79 serialized LENGTH_UTF8 result is UINT64.  It keeps the
+		// A pre-v80 serialized LENGTH_UTF8 result is UINT64.  It keeps the
 		// v58 binary-string fence, but must not be mistaken for the corrected
-		// INT64 result contract introduced at v79.
+		// INT64 result contract introduced at v80.
 		p := semanticPipeline(function.LENGTH_UTF8, types.T_uint64)
 		project := projection.NewArgument()
 		defer project.Release()
@@ -858,7 +864,7 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 	})
 
 	// LENGTH_UTF8 keeps the historical UINT64 wrapper at MORPC v58. The
-	// corrected result wrappers are a separate v79 contract and must not be
+	// corrected result wrappers are a separate v80 contract and must not be
 	// folded into the legacy binary-string semantic gate above.
 	for _, test := range []struct {
 		name string
@@ -875,7 +881,7 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 			p := semanticPipeline(test.id, test.typ)
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
 			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, p),
-				"corrected string numeric result contracts require MORPC protocol version 79")
+				"corrected string numeric result contracts require MORPC protocol version 80")
 
 			c, client := expressionProtocolTestCompile(t)
 			cRT := runtime.ServiceRuntime(c.proc.GetService())
@@ -889,12 +895,12 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 				RootOp:   op,
 			}
 			client.version = defines.MORPCVersion72
-			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion80)
 			_, err := encodeRemoteScope(scope, c.proc)
 			require.ErrorContains(t, err,
-				"remote destination does not support corrected string numeric result contracts (MORPC version 79)")
+				"remote destination does not support corrected string numeric result contracts (MORPC version 80)")
 
-			client.version = defines.MORPCVersion79
+			client.version = defines.MORPCVersion80
 			data, err := encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
 
@@ -902,12 +908,12 @@ func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
 			require.NoError(t, wire.Unmarshal(data))
 			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
 			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire),
-				"corrected string numeric result contracts require MORPC protocol version 79")
+				"corrected string numeric result contracts require MORPC protocol version 80")
 			_, err = decodeScope(data, c.proc, true, nil)
 			require.ErrorContains(t, err,
-				"corrected string numeric result contracts require MORPC protocol version 79")
+				"corrected string numeric result contracts require MORPC protocol version 80")
 
-			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion80)
 			_, err = decodeScope(data, c.proc, true, nil)
 			require.NoError(t, err)
 		})

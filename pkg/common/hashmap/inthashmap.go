@@ -75,7 +75,7 @@ func (m *IntHashMap) SetRejectNaN() error {
 
 // SetLegacyCharPadding keeps CHAR bytes unchanged in the historical H8
 // concatenation grammar. It is used only while a remote merge boundary still
-// accepts pre-v77 partials; the current H8 path uses SQL PAD SPACE keys.
+// accepts pre-v78 partials; the current H8 path uses SQL PAD SPACE keys.
 // It must be selected before inserting the first row.
 func (m *IntHashMap) SetLegacyCharPadding(enabled bool) error {
 	if m == nil || m.rows != 0 {

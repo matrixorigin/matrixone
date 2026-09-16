@@ -1466,8 +1466,8 @@ func (exec *approxPercentileExecBase[T]) SetExtraInformation(partialResult any, 
 }
 
 // ConfigureApproxPercentileLegacyState makes a newly constructed remote
-// executor emit the version-1 float ordering understood by pre-v75 peers.
-// The caller applies this only while the deployment protocol is below v75.
+// executor emit the version-1 float ordering understood by pre-v76 peers.
+// The caller applies this only while the deployment protocol is below v76.
 func ConfigureApproxPercentileLegacyState(aggregate AggFuncExec) {
 	if configurable, ok := aggregate.(interface{ setLegacyApproxPercentileState() }); ok {
 		configurable.setLegacyApproxPercentileState()
