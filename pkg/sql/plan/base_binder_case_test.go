@@ -1168,6 +1168,62 @@ func TestPreparedMathStringParametersRebindToNumericOverloads(t *testing.T) {
 	}
 }
 
+func TestMathStringPlannerBindsLiteralsAndVarcharColumnsToDouble(t *testing.T) {
+	ctx := context.Background()
+	queries := []struct {
+		name      string
+		sql       string
+		functions []string
+	}{
+		{
+			name:      "literal",
+			sql:       "select abs('1.5tail'), ceil('1.5tail'), floor('1.5tail'), round('1.5tail'), sign('1.5tail'), truncate('1.5tail', 1)",
+			functions: []string{"abs", "ceil", "floor", "round", "sign", "truncate"},
+		},
+		{
+			name:      "varchar column",
+			sql:       "select abs(n_name), ceil(n_name), floor(n_name), mod(n_name, 2), round(n_name, 1), sign(n_name), truncate(n_name, 1) from nation",
+			functions: []string{"abs", "ceil", "floor", "mod", "round", "sign", "truncate"},
+		},
+	}
+
+	for _, query := range queries {
+		t.Run(query.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, query.sql, 1)
+			require.NoError(t, err)
+			built, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+			require.NoError(t, err)
+			optimized, err := NewBaseOptimizer(NewMockCompilerContext(false)).Optimize(stmt, false)
+			require.NoError(t, err)
+			optimizedPlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: optimized}}
+
+			for _, name := range query.functions {
+				fn := findPlanFunctionExpr(built, name)
+				require.NotNil(t, fn, name)
+				_, castOverload := function.DecodeOverloadID(fn.GetF().Args[0].GetF().GetFunc().GetObj())
+				require.Equal(t, int32(2), castOverload, fn.String())
+				require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id, fn.String())
+				if name == "mod" {
+					require.Equal(t, int32(types.T_float64), fn.GetF().Args[1].Typ.Id, fn.String())
+				}
+				if name == "truncate" {
+					require.Len(t, fn.GetF().Args, 2)
+					require.Equal(t, int32(types.T_int64), fn.GetF().Args[1].Typ.Id, fn.String())
+				}
+				optFn := findPlanFunctionExpr(optimizedPlan, name)
+				if optFn != nil {
+					_, optCastOverload := function.DecodeOverloadID(optFn.GetF().Args[0].GetF().GetFunc().GetObj())
+					require.Equal(t, int32(2), optCastOverload, optFn.String())
+					require.Equal(t, int32(types.T_float64), optFn.GetF().Args[0].Typ.Id, optFn.String())
+					if name == "mod" {
+						require.Equal(t, int32(types.T_float64), optFn.GetF().Args[1].Typ.Id, optFn.String())
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestPreparedNestedMathStringParameterRebindsToNumericOverload(t *testing.T) {
 	ctx := context.Background()
 	for _, test := range []struct {

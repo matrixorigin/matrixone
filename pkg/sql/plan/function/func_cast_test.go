@@ -69,7 +69,7 @@ func TestStringToFloatMatrixOneNativeRejectsIncompleteTokens(t *testing.T) {
 	proc.GetSessionInfo().MatrixOneNativeMode = true
 
 	for _, input := range []string{
-		"1abc", "abc", "", "   ", "  -2.5foo", ".5xyz", "1e2foo", "1eabc", "-0suffix", "1e10000",
+		"1abc", "1.5tail", "abc", "", "   ", "  -2.5foo", ".5xyz", "1e2foo", "1eabc", "-0suffix", "1e10000",
 	} {
 		t.Run(input, func(t *testing.T) {
 			tc := NewFunctionTestCase(proc,

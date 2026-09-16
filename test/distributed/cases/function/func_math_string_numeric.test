@@ -1,6 +1,8 @@
 DROP DATABASE IF EXISTS issue28487_math_string;
 CREATE DATABASE issue28487_math_string;
 USE issue28487_math_string;
+SET @old_math_string_numeric_sql_mode_28487 = @@session.sql_mode;
+SET SESSION sql_mode = '';
 
 -- Character literals consume the MySQL numeric prefix for every affected function.
 SELECT
@@ -57,6 +59,73 @@ SET @math_string_numeric_v_28487 = NULL;
 EXECUTE math_string_numeric_null_stmt_28487 USING @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487, @math_string_numeric_v_28487;
 DEALLOCATE PREPARE math_string_numeric_null_stmt_28487;
 
+-- MySQL mode keeps the numeric prefix and reports a warning for discarded
+-- non-numeric text; an empty string remains zero without a warning.
+SELECT ABS('1.5tail') AS abs_prefix_warning;
+SHOW WARNINGS;
+SELECT ABS('abc') AS abs_invalid_warning;
+SHOW WARNINGS;
+SELECT ABS('') AS abs_empty_no_warning;
+SHOW WARNINGS;
+
+-- Native mode requires a complete numeric token for both direct and prepared
+-- string-math values. These are intentionally separate statements so each
+-- counterexample is observed rather than masked by the first failing row.
+SET SESSION sql_mode = 'MATRIXONE_NATIVE';
+SELECT ABS('1.5tail') AS abs_native_prefix_error;
+SELECT ABS('abc') AS abs_native_invalid_error;
+SELECT ABS('') AS abs_native_empty_error;
+SELECT CEIL('1.5tail') AS ceil_native_prefix_error;
+SELECT FLOOR('1.5tail') AS floor_native_prefix_error;
+SELECT SIGN('1.5tail') AS sign_native_prefix_error;
+SELECT ROUND('1.5tail') AS round_native_prefix_error;
+SELECT TRUNCATE('1.5tail', 0) AS truncate_native_prefix_error;
+SELECT MOD('1.5tail', 2) AS mod_native_prefix_error;
+
+-- The same native-mode contract must hold for VARCHAR columns; do not let a
+-- literal-only constant-folding path hide a column execution mismatch.
+SELECT id, ABS(s) AS abs_native_column_error FROM src WHERE id = 5;
+SELECT id, CEIL(s) AS ceil_native_column_error FROM src WHERE id = 5;
+SELECT id, FLOOR(s) AS floor_native_column_error FROM src WHERE id = 5;
+SELECT id, MOD(s, 2) AS mod_native_column_error FROM src WHERE id = 5;
+SELECT id, ROUND(s) AS round_native_column_error FROM src WHERE id = 5;
+SELECT id, SIGN(s) AS sign_native_column_error FROM src WHERE id = 5;
+SELECT id, TRUNCATE(s, 0) AS truncate_native_column_error FROM src WHERE id = 5;
+
+SET @math_string_native_v_28487 = '1.5tail';
+PREPARE math_string_native_abs_stmt_28487 FROM 'SELECT ABS(?) AS abs_native_prepare';
+EXECUTE math_string_native_abs_stmt_28487 USING @math_string_native_v_28487;
+DEALLOCATE PREPARE math_string_native_abs_stmt_28487;
+PREPARE math_string_native_ceil_stmt_28487 FROM 'SELECT CEIL(?) AS ceil_native_prepare';
+EXECUTE math_string_native_ceil_stmt_28487 USING @math_string_native_v_28487;
+DEALLOCATE PREPARE math_string_native_ceil_stmt_28487;
+PREPARE math_string_native_floor_stmt_28487 FROM 'SELECT FLOOR(?) AS floor_native_prepare';
+EXECUTE math_string_native_floor_stmt_28487 USING @math_string_native_v_28487;
+DEALLOCATE PREPARE math_string_native_floor_stmt_28487;
+PREPARE math_string_native_round_stmt_28487 FROM 'SELECT ROUND(?) AS round_native_prepare';
+EXECUTE math_string_native_round_stmt_28487 USING @math_string_native_v_28487;
+DEALLOCATE PREPARE math_string_native_round_stmt_28487;
+PREPARE math_string_native_sign_stmt_28487 FROM 'SELECT SIGN(?) AS sign_native_prepare';
+EXECUTE math_string_native_sign_stmt_28487 USING @math_string_native_v_28487;
+DEALLOCATE PREPARE math_string_native_sign_stmt_28487;
+PREPARE math_string_native_truncate_stmt_28487 FROM 'SELECT TRUNCATE(?, 0) AS truncate_native_prepare';
+EXECUTE math_string_native_truncate_stmt_28487 USING @math_string_native_v_28487;
+DEALLOCATE PREPARE math_string_native_truncate_stmt_28487;
+PREPARE math_string_native_mod_stmt_28487 FROM 'SELECT MOD(?, 2) AS mod_native_prepare';
+EXECUTE math_string_native_mod_stmt_28487 USING @math_string_native_v_28487;
+DEALLOCATE PREPARE math_string_native_mod_stmt_28487;
+
+-- Changing the mode between executions must not reuse a permissively folded
+-- value. The cached statement is exercised MySQL -> native -> MySQL.
+SET SESSION sql_mode = '';
+PREPARE math_string_mode_flip_stmt_28487 FROM 'SELECT ABS(?) AS abs_mode_flip';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_native_v_28487;
+SET SESSION sql_mode = 'MATRIXONE_NATIVE';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_native_v_28487;
+SET SESSION sql_mode = '';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_native_v_28487;
+DEALLOCATE PREPARE math_string_mode_flip_stmt_28487;
+
 -- Native numeric paths retain their existing result domains.
 SELECT
     ABS(-2) AS abs_int,
@@ -67,4 +136,5 @@ SELECT
     SIGN(CAST(-1.5 AS DECIMAL(5, 1))) AS sign_decimal,
     TRUNCATE(CAST(1.5 AS DECIMAL(5, 1)), 0) AS truncate_decimal;
 
+SET SESSION sql_mode = @old_math_string_numeric_sql_mode_28487;
 DROP DATABASE issue28487_math_string;

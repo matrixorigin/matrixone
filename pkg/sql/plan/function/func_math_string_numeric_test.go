@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -110,6 +111,72 @@ func TestMathStringExecutorsEmitNumericCoercionWarnings(t *testing.T) {
 	for _, warning := range session.warnings {
 		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
 		require.Contains(t, warning.msg, "DOUBLE")
+	}
+}
+
+func TestDirectMathStringExecutorsHonorNativeMode(t *testing.T) {
+	values := []string{"1.5tail", "abc", ""}
+	for _, tc := range []struct {
+		name       string
+		fn         fEvalFn
+		resultType types.Type
+		want       any
+		digits     bool
+	}{
+		{name: "abs", fn: AbsStr, resultType: types.T_float64.ToType(), want: []float64{1.5, 0, 0}},
+		{name: "sign", fn: SignStr, resultType: types.T_int64.ToType(), want: []int64{1, 0, 0}},
+		{name: "ceil", fn: CeilStr, resultType: types.T_float64.ToType(), want: []float64{2, 0, 0}},
+		{name: "floor", fn: FloorStr, resultType: types.T_float64.ToType(), want: []float64{1, 0, 0}},
+		{name: "round", fn: RoundStr, resultType: types.T_float64.ToType(), want: []float64{2, 0, 0}},
+		{name: "truncate", fn: TruncateStr, resultType: types.T_float64.ToType(), want: []float64{1, 0, 0}, digits: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mysqlSession := &numericWarningSession{}
+			mysqlProc := testutil.NewProcess(t)
+			defer mysqlProc.Free()
+			mysqlProc.Session = mysqlSession
+			mysqlProc.GetSessionInfo().MatrixOneNativeMode = false
+
+			makeInputs := func(input []string) []FunctionTestInput {
+				inputs := []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), input, nil),
+				}
+				if tc.digits {
+					inputs = append(inputs, NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil))
+				}
+				return inputs
+			}
+			run := func(proc *process.Process, input []string, wantErr bool) (bool, string) {
+				caseTest := NewFunctionTestCase(proc, makeInputs(input),
+					NewFunctionTestResult(tc.resultType, wantErr, tc.want, nil), tc.fn)
+				defer func() {
+					for _, parameter := range caseTest.parameters {
+						parameter.Free(proc.Mp())
+					}
+					caseTest.result.Free()
+				}()
+				return caseTest.Run()
+			}
+
+			ok, info := run(mysqlProc, values, false)
+			require.True(t, ok, info)
+			require.Len(t, mysqlSession.warnings, 2)
+			for _, warning := range mysqlSession.warnings {
+				require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+				require.Contains(t, warning.msg, "DOUBLE")
+			}
+
+			nativeProc := testutil.NewProcess(t)
+			defer nativeProc.Free()
+			nativeSession := &numericWarningSession{}
+			nativeProc.Session = nativeSession
+			nativeProc.GetSessionInfo().MatrixOneNativeMode = true
+			for _, input := range values {
+				ok, info = run(nativeProc, []string{input}, true)
+				require.True(t, ok, "%s: %s", input, info)
+			}
+			require.Empty(t, nativeSession.warnings)
+		})
 	}
 }
 

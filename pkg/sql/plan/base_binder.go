@@ -396,9 +396,9 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 	}
 	if !astExpr.System && b.numericParamType != nil {
 		// User variables are text-backed when their assignment came from a
-		// string.  Numeric expressions use MySQL's prefix conversion for such
-		// values (for example, '12abc' -> 12), rather than the strict implicit
-		// cast which rejects the trailing text.
+		// string. The explicit FLOAT64 cast keeps the execution-time
+		// compatibility decision: MySQL mode consumes a prefix (for example,
+		// '12abc' -> 12), while MATRIXONE_NATIVE rejects the trailing text.
 		if isStringBackedType(typ) {
 			return appendExplicitCastBeforeExpr(b.GetContext(), variable, *b.numericParamType)
 		}
@@ -438,7 +438,8 @@ func (b *baseBinder) resolveUserVariableType(expr *tree.VarExpr) (Type, bool) {
 // evaluated through one value-independent floating-point target: their
 // contents can change after PREPARE, so selecting BIGINT/DECIMAL from the
 // value observed during binding would freeze the wrong cast in the prepared
-// plan. The explicit cast overload consumes MySQL's numeric prefix at runtime.
+// plan. The explicit cast overload applies the effective MySQL/native
+// compatibility mode at runtime.
 func (b *baseBinder) resolveUserVariableNumericType(expr *tree.VarExpr) (Type, bool) {
 	if typ, ok := b.resolveUserVariableType(expr); ok {
 		resolved := makeTypeByPlan2Type(typ)
@@ -2040,7 +2041,8 @@ func preparedStringMathFunctionValueArg(name string, argIndex, argCount int) boo
 	if argIndex < 0 || argIndex >= argCount {
 		return false
 	}
-	switch strings.ToLower(name) {
+	lowerName := strings.ToLower(name)
+	switch lowerName {
 	case "abs", "ceil", "ceiling", "floor", "sign":
 		return argIndex == 0
 	case "mod":
@@ -2154,7 +2156,16 @@ func mysqlNumericPrefixFunctionArg(name string, idx, argCount int, source, targe
 		return false
 	}
 
-	switch strings.ToLower(name) {
+	lowerName := strings.ToLower(name)
+	switch lowerName {
+	case "abs", "ceil", "ceiling", "floor", "mod", "round", "sign", "truncate":
+		// String-valued operands of these numeric functions are deliberately
+		// bound through the comparison cast.  NewCast is intentionally strict
+		// for ordinary implicit reconciliation, whereas NewComparisonCast is
+		// the execution path that carries MySQL's numeric-prefix behavior and
+		// consults MATRIXONE_NATIVE at runtime.  Only value operands are
+		// eligible; ROUND/TRUNCATE precision remains an integer control input.
+		return (lowerName == "mod" && argCount == 2) || idx == 0
 	case "left", "right", "lpad", "rpad", "repeat":
 		return idx == 1 && argCount >= 2
 	case "space":

@@ -4274,8 +4274,9 @@ func (rule *preparedRuntimeTextComparisonScanRule) exprHasNumericDomain(expr *pl
 	if expr.GetCol() != nil {
 		// A numeric column is a numeric comparison domain too. Keep the column
 		// expression itself unchanged; the text marker is rebound to the
-		// engine's DOUBLE conversion so numeric-prefix and warning semantics are
-		// preserved without relying on the stale prepare-time integer cast.
+		// engine's mode-aware DOUBLE conversion so numeric-prefix and warning
+		// semantics are preserved without relying on the stale prepare-time
+		// integer cast.
 		return preparedComparisonTypeIsNumeric(types.T(expr.Typ.Id))
 	}
 	if preparedComparisonTypeIsNumeric(types.T(expr.Typ.Id)) {
@@ -5557,9 +5558,10 @@ type ParamValue struct {
 	// parameter itself is unrelated to numeric-prefix specialization.
 	RetainParamRef bool
 	// EnableNumericPrefix records that the deployment-wide protocol version can
-	// execute planner-injected MySQL numeric-prefix casts.  Keep the negotiated
-	// capability on each value so execute-time plan specialization does not need
-	// to guess a service identity from context.Context.
+	// execute planner-injected mode-aware string-to-DOUBLE casts. Keep the
+	// negotiated capability on each value so execute-time plan specialization
+	// does not need to guess a service identity from context.Context; the
+	// process SQL mode still decides whether a prefix is accepted or rejected.
 	EnableNumericPrefix bool
 }
 
@@ -6479,11 +6481,13 @@ func preparedSQLExecuteNumericParamExpr(
 				return nil, nil
 			}
 		}
-		// A SQL string user variable enters arithmetic through MySQL's
-		// approximate numeric-prefix domain. This includes an empty or wholly
-		// non-numeric string, whose prefix conversion is zero with a warning.
-		// Keep that distinct from a DECIMAL user variable, even though both
-		// arrive in the frontend's text vector.
+		// A SQL string user variable enters arithmetic through a FLOAT64 source;
+		// the execution-time cast applies the effective compatibility mode. In
+		// MySQL mode a decimal prefix is consumed (a wholly non-numeric value is
+		// zero with a warning and an empty value remains zero without one); in
+		// MATRIXONE_NATIVE an incomplete token is rejected. Keep that distinct
+		// from a DECIMAL user variable, even though both arrive in the frontend's
+		// text vector.
 		return appendExplicitCastBeforeExpr(ctx, source, makeSimplePlan2Type(types.T_float64))
 	}
 	if sourceType.Oid == types.T_bool {
@@ -6962,6 +6966,18 @@ func replaceParamValsWithSelection(
 			hasExecuteSourceType := param.HasSourceType
 			if !hasExecuteSourceType && hasRuntimeType && isStringBackedType(runtimeType) {
 				executeSourceType = runtimeType
+				hasExecuteSourceType = true
+			}
+			// COM_STMT text parameters may have no decoded RuntimeType metadata.
+			// A marker used by a string-math value still needs an explicit TEXT
+			// source so the execution-time DOUBLE cast is installed; otherwise the
+			// provisional comparison cast remains in place and a value such as
+			// `1.5tail` is never given the function's numeric-prefix semantics.
+			if !hasExecuteSourceType && allowNonnumericStringPrefix[i] && param.IsBinaryProtocol &&
+				param.PrepareParamKind == vector.PrepareParamNone && param.Value != nil &&
+				!param.IsBin && !param.IsBinaryString &&
+				!PreparedNumericStringIsComplete(preparedParamValueText(param)) {
+				executeSourceType = types.T_text.ToType()
 				hasExecuteSourceType = true
 			}
 			if hasExecuteSourceType && param.Value != nil {

@@ -2325,9 +2325,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				originalArgFuncObj = preparedExprFunctionObj(arg)
 			}
 			implicitParamCast := isImplicitPreparedParamCast(arg)
+			// A direct plan-only binder can use the comparison-cast overload for a
+			// provisional string-math argument even though no comparison owns the
+			// expression.  It is still a removable prepare-time envelope here; an
+			// explicit CAST remains excluded by the syntax bit and by the helper.
+			if !implicitParamCast && isPreparedStringMathFunction(functionName) {
+				implicitParamCast = isPreparedStringMathParamCast(arg)
+			}
 			bitwiseParamCast := isPreparedBitwiseOperator(functionName) &&
 				isPreparedBitwiseParamCast(arg)
 			paramPos, hasParamPos := preparedParamPosition(arg)
+			if !hasParamPos && implicitParamCast && isPreparedStringMathFunction(functionName) {
+				paramPos, hasParamPos = preparedStringMathParamPosition(arg)
+			}
 			var preparedBitwiseSource *plan.Expr
 			var hasPreparedBitwiseSource bool
 			var nestedPreparedBitwiseSource *plan.Expr
@@ -4117,6 +4127,34 @@ func preparedResultParamPosition(expr *plan.Expr, name string) (int, bool) {
 func isImplicitPreparedParamCast(expr *plan.Expr) bool {
 	_, ok := implicitPreparedParam(expr)
 	return ok
+}
+
+// isPreparedStringMathParamCast recognizes the comparison-cast envelope that
+// the plan-only binder may place around a marker before a string-math function
+// is rebound.  CAST2 is provisional in this context; explicit SQL CASTs carry
+// SyntaxExplicitCast and remain authoritative.
+func isPreparedStringMathParamCast(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" ||
+		len(fn.Args) == 0 || fn.GetSyntaxExplicitCast() {
+		return false
+	}
+	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	if overload != 2 {
+		return false
+	}
+	param := fn.Args[0].GetP()
+	return param != nil && param.Pos >= 0
+}
+
+func preparedStringMathParamPosition(expr *plan.Expr) (int, bool) {
+	if !isPreparedStringMathParamCast(expr) {
+		return 0, false
+	}
+	return int(expr.GetF().Args[0].GetP().Pos), true
 }
 
 func implicitPreparedParamPosition(expr *plan.Expr) (int, bool) {

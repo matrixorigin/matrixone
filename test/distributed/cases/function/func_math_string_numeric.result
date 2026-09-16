@@ -1,6 +1,8 @@
 DROP DATABASE IF EXISTS issue28487_math_string;
 CREATE DATABASE issue28487_math_string;
 USE issue28487_math_string;
+SET @old_math_string_numeric_sql_mode_28487 = @@session.sql_mode;
+SET SESSION sql_mode = '';
 SELECT
 ABS('1.5') AS abs_literal,
 CEIL(' 1.5') AS ceil_literal,
@@ -66,6 +68,98 @@ EXECUTE math_string_numeric_null_stmt_28487 USING @math_string_numeric_v_28487, 
 ➤ abs_prepare[8,53,31]  ¦  ceil_prepare[8,53,31]  ¦  ceiling_prepare[8,53,31]  ¦  mod_prepare[-5,64,0]  ¦  round_prepare[8,53,31]  ¦  sign_prepare[-5,64,0]  ¦  truncate_prepare[8,53,31]  𝄀
 null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
 DEALLOCATE PREPARE math_string_numeric_null_stmt_28487;
+SELECT ABS('1.5tail') AS abs_prefix_warning;
+➤ abs_prefix_warning[8,53,31]  𝄀
+1.5
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: '1.5tail'
+SELECT ABS('abc') AS abs_invalid_warning;
+➤ abs_invalid_warning[8,53,31]  𝄀
+0.0
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect DOUBLE value: 'abc'
+SELECT ABS('') AS abs_empty_no_warning;
+➤ abs_empty_no_warning[8,53,31]  𝄀
+0.0
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+SET SESSION sql_mode = 'MATRIXONE_NATIVE';
+SELECT ABS('1.5tail') AS abs_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT ABS('abc') AS abs_native_invalid_error;
+invalid input: "abc" is invalid numeric string
+SELECT ABS('') AS abs_native_empty_error;
+invalid input: "" is invalid numeric string
+SELECT CEIL('1.5tail') AS ceil_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT FLOOR('1.5tail') AS floor_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT SIGN('1.5tail') AS sign_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT ROUND('1.5tail') AS round_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT TRUNCATE('1.5tail', 0) AS truncate_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT MOD('1.5tail', 2) AS mod_native_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
+SELECT id, ABS(s) AS abs_native_column_error FROM src WHERE id = 5;
+invalid input: "1.5tail" is invalid numeric string
+SELECT id, CEIL(s) AS ceil_native_column_error FROM src WHERE id = 5;
+invalid input: "1.5tail" is invalid numeric string
+SELECT id, FLOOR(s) AS floor_native_column_error FROM src WHERE id = 5;
+invalid input: "1.5tail" is invalid numeric string
+SELECT id, MOD(s, 2) AS mod_native_column_error FROM src WHERE id = 5;
+invalid input: "1.5tail" is invalid numeric string
+SELECT id, ROUND(s) AS round_native_column_error FROM src WHERE id = 5;
+invalid input: "1.5tail" is invalid numeric string
+SELECT id, SIGN(s) AS sign_native_column_error FROM src WHERE id = 5;
+invalid input: "1.5tail" is invalid numeric string
+SELECT id, TRUNCATE(s, 0) AS truncate_native_column_error FROM src WHERE id = 5;
+invalid input: "1.5tail" is invalid numeric string
+SET @math_string_native_v_28487 = '1.5tail';
+PREPARE math_string_native_abs_stmt_28487 FROM 'SELECT ABS(?) AS abs_native_prepare';
+EXECUTE math_string_native_abs_stmt_28487 USING @math_string_native_v_28487;
+invalid input: "1.5tail" is invalid numeric string
+DEALLOCATE PREPARE math_string_native_abs_stmt_28487;
+PREPARE math_string_native_ceil_stmt_28487 FROM 'SELECT CEIL(?) AS ceil_native_prepare';
+EXECUTE math_string_native_ceil_stmt_28487 USING @math_string_native_v_28487;
+invalid input: "1.5tail" is invalid numeric string
+DEALLOCATE PREPARE math_string_native_ceil_stmt_28487;
+PREPARE math_string_native_floor_stmt_28487 FROM 'SELECT FLOOR(?) AS floor_native_prepare';
+EXECUTE math_string_native_floor_stmt_28487 USING @math_string_native_v_28487;
+invalid input: "1.5tail" is invalid numeric string
+DEALLOCATE PREPARE math_string_native_floor_stmt_28487;
+PREPARE math_string_native_round_stmt_28487 FROM 'SELECT ROUND(?) AS round_native_prepare';
+EXECUTE math_string_native_round_stmt_28487 USING @math_string_native_v_28487;
+invalid input: "1.5tail" is invalid numeric string
+DEALLOCATE PREPARE math_string_native_round_stmt_28487;
+PREPARE math_string_native_sign_stmt_28487 FROM 'SELECT SIGN(?) AS sign_native_prepare';
+EXECUTE math_string_native_sign_stmt_28487 USING @math_string_native_v_28487;
+invalid input: "1.5tail" is invalid numeric string
+DEALLOCATE PREPARE math_string_native_sign_stmt_28487;
+PREPARE math_string_native_truncate_stmt_28487 FROM 'SELECT TRUNCATE(?, 0) AS truncate_native_prepare';
+EXECUTE math_string_native_truncate_stmt_28487 USING @math_string_native_v_28487;
+invalid input: "1.5tail" is invalid numeric string
+DEALLOCATE PREPARE math_string_native_truncate_stmt_28487;
+PREPARE math_string_native_mod_stmt_28487 FROM 'SELECT MOD(?, 2) AS mod_native_prepare';
+EXECUTE math_string_native_mod_stmt_28487 USING @math_string_native_v_28487;
+invalid input: "1.5tail" is invalid numeric string
+DEALLOCATE PREPARE math_string_native_mod_stmt_28487;
+SET SESSION sql_mode = '';
+PREPARE math_string_mode_flip_stmt_28487 FROM 'SELECT ABS(?) AS abs_mode_flip';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_native_v_28487;
+➤ abs_mode_flip[8,53,31]  𝄀
+1.5
+SET SESSION sql_mode = 'MATRIXONE_NATIVE';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_native_v_28487;
+invalid input: "1.5tail" is invalid numeric string
+SET SESSION sql_mode = '';
+EXECUTE math_string_mode_flip_stmt_28487 USING @math_string_native_v_28487;
+➤ abs_mode_flip[8,53,31]  𝄀
+1.5
+DEALLOCATE PREPARE math_string_mode_flip_stmt_28487;
 SELECT
 ABS(-2) AS abs_int,
 CEIL(1.5) AS ceil_float,
@@ -76,4 +170,5 @@ SIGN(CAST(-1.5 AS DECIMAL(5, 1))) AS sign_decimal,
 TRUNCATE(CAST(1.5 AS DECIMAL(5, 1)), 0) AS truncate_decimal;
 ➤ abs_int[-5,64,0]  ¦  ceil_float[3,2,0]  ¦  floor_decimal[3,5,0]  ¦  mod_int[-5,64,0]  ¦  round_float[3,2,0]  ¦  sign_decimal[-5,64,0]  ¦  truncate_decimal[3,5,1]  𝄀
 2  ¦  2  ¦  -2  ¦  1  ¦  2  ¦  -1  ¦  1.0
+SET SESSION sql_mode = @old_math_string_numeric_sql_mode_28487;
 DROP DATABASE issue28487_math_string;
