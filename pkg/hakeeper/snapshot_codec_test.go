@@ -260,8 +260,6 @@ func TestHAKeeperSnapshotRejectsInvalidInputAtomically(t *testing.T) {
 		{name: "missing-required", fn: func(s *pb.CatalogMetadataBarrierState) { s.RequiredGeneration = 0 }},
 		{name: "missing-view-protocol", fn: func(s *pb.CatalogMetadataBarrierState) { s.RequiredViewDependencyProtocol = 0 }},
 		{name: "missing-recovery-protocol", fn: func(s *pb.CatalogMetadataBarrierState) { s.RequiredRecoveryProtocol = 0 }},
-		{name: "completed-ahead", fn: func(s *pb.CatalogMetadataBarrierState) { s.CompletedGeneration = s.RequiredGeneration + 1 }},
-		{name: "nonterminal-complete", fn: func(s *pb.CatalogMetadataBarrierState) { s.CompletedGeneration = s.RequiredGeneration }},
 	} {
 		state := valid
 		state.CatalogMetadataBarrier = validCatalogBarrier(pb.CATALOG_METADATA_BARRIER_RECOVERING)
@@ -270,13 +268,43 @@ func TestHAKeeperSnapshotRejectsInvalidInputAtomically(t *testing.T) {
 		require.NoError(t, marshalErr)
 		fixtures[test.name] = marshalSnapshotEnvelopeFixture(t, 1, snapshotRequiredFeatures(&state), payload)
 	}
-	activated := valid
-	activated.CatalogMetadataBarrier = validCatalogBarrier(pb.CATALOG_METADATA_BARRIER_ACTIVATED)
-	activated.CatalogMetadataBarrier.CompletedGeneration--
-	activatedPayload, err := activated.Marshal()
-	require.NoError(t, err)
-	fixtures["activated-incomplete"] = marshalSnapshotEnvelopeFixture(
-		t, 1, snapshotRequiredFeatures(&activated), activatedPayload)
+	for _, phase := range []pb.CatalogMetadataBarrierPhase{
+		pb.CATALOG_METADATA_BARRIER_PREPARING,
+		pb.CATALOG_METADATA_BARRIER_SEALED,
+		pb.CATALOG_METADATA_BARRIER_CATALOG_REQUIRED,
+		pb.CATALOG_METADATA_BARRIER_RECOVERING,
+	} {
+		for _, completed := range []struct {
+			name  string
+			value uint64
+		}{
+			{name: "equal", value: 11},
+			{name: "ahead", value: 12},
+		} {
+			state := valid
+			state.CatalogMetadataBarrier = validCatalogBarrier(phase)
+			state.CatalogMetadataBarrier.CompletedGeneration = completed.value
+			payload, marshalErr := state.Marshal()
+			require.NoError(t, marshalErr)
+			name := fmt.Sprintf("phase-%s-completed-%s", phase, completed.name)
+			fixtures[name] = marshalSnapshotEnvelopeFixture(t, 1, snapshotRequiredFeatures(&state), payload)
+		}
+	}
+	for _, completed := range []struct {
+		name  string
+		value uint64
+	}{
+		{name: "behind", value: 10},
+		{name: "ahead", value: 12},
+	} {
+		state := valid
+		state.CatalogMetadataBarrier = validCatalogBarrier(pb.CATALOG_METADATA_BARRIER_ACTIVATED)
+		state.CatalogMetadataBarrier.CompletedGeneration = completed.value
+		payload, marshalErr := state.Marshal()
+		require.NoError(t, marshalErr)
+		fixtures["phase-activated-completed-"+completed.name] =
+			marshalSnapshotEnvelopeFixture(t, 1, snapshotRequiredFeatures(&state), payload)
+	}
 
 	featureStates := []pb.HAKeeperRSMState{valid, func() pb.HAKeeperRSMState {
 		state := valid
@@ -375,5 +403,26 @@ func BenchmarkHAKeeperSnapshotRecovery(b *testing.B) {
 				benchmarkSnapshotRecovery(b, format, reused)
 			})
 		}
+	}
+}
+
+func BenchmarkHAKeeperSnapshotTruncatedRecovery(b *testing.B) {
+	fixtures := map[string][]byte{
+		"raw":  {0x0a, 0x7f},
+		"moh2": append(append([]byte{}, hakeeperSnapshotMagicV2...), 0x0a, 0x7f),
+		"moh3": append(append([]byte{}, hakeeperSnapshotMagicV3...), 0x12, 0x7f),
+	}
+	for name, fixture := range fixtures {
+		b.Run(name, func(b *testing.B) {
+			rsm := NewStateMachine(0, 1).(*stateMachine)
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.ReportMetric(float64(len(fixture)), "snapshot-bytes")
+			for range b.N {
+				if err := rsm.RecoverFromSnapshot(bytes.NewReader(fixture), nil, nil); err == nil {
+					b.Fatal("truncated snapshot unexpectedly recovered")
+				}
+			}
+		})
 	}
 }
