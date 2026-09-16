@@ -64,6 +64,8 @@ type Gateway struct {
 	conn              *grpc.ClientConn
 	flight            flight.FlightServiceClient
 	mu                sync.Mutex
+	lifecycleCtx      context.Context
+	lifecycleCancel   context.CancelFunc
 	capabilityMu      sync.Mutex
 	admissionMu       sync.Mutex
 	capabilityReady   bool
@@ -139,10 +141,13 @@ func newGateway(cfg ClientConfig, resolver ArtifactResolver, allowInlineSource b
 	if err != nil {
 		return nil, err
 	}
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	return &Gateway{
 		cfg:                  cfg,
 		artifactResolver:     resolver,
 		allowInlineSource:    allowInlineSource,
+		lifecycleCtx:         lifecycleCtx,
+		lifecycleCancel:      lifecycleCancel,
 		active:               make(chan struct{}, cfg.MaxActiveInvocations),
 		ledger:               ledger,
 		ledgerTTL:            cfg.TerminalRecordTTL,
@@ -168,6 +173,8 @@ func (g *Gateway) CheckLanguageReady(ctx context.Context, language string) error
 	if !g.cfg.AllowUnisolated {
 		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python UDF runtime requires explicit unisolated opt-in")
 	}
+	requestCtx, release := g.withLifecycleContext(ctx)
+	defer release()
 	client, err := g.flightClient()
 	if err != nil {
 		return err
@@ -175,7 +182,7 @@ func (g *Gateway) CheckLanguageReady(ctx context.Context, language string) error
 	// Readiness is an external admission decision. Refresh the worker
 	// capability record so a worker replacement at the same endpoint cannot
 	// inherit a stale success from the previous process.
-	return g.ensureCapabilities(ctx, client, true)
+	return g.ensureCapabilities(requestCtx, client, true)
 }
 
 // ValidateDefinition asks the current worker to compile the exact artifact
@@ -197,13 +204,11 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 	if !g.cfg.AllowUnisolated {
 		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python UDF runtime requires explicit unisolated opt-in")
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	requestCtx := ctx
+	requestCtx, release := g.withLifecycleContext(ctx)
+	defer release()
 	var cancel context.CancelFunc
 	if g.cfg.RequestTimeout > 0 {
-		requestCtx, cancel = context.WithTimeout(ctx, g.cfg.RequestTimeout)
+		requestCtx, cancel = context.WithTimeout(requestCtx, g.cfg.RequestTimeout)
 		defer cancel()
 	}
 	if definition == nil {
@@ -415,6 +420,9 @@ func (g *Gateway) Close() error {
 		g.mu.Unlock()
 		return nil
 	}
+	if g.lifecycleCancel != nil {
+		g.lifecycleCancel()
+	}
 	// Serialize the close barrier with group admission.  Once this lock is
 	// released, no caller can pass the admission check after Close returns.
 	g.admissionMu.Lock()
@@ -431,6 +439,29 @@ func (g *Gateway) Close() error {
 	// read lock until Execute returns would make shutdown wait for the very RPC
 	// it needs to cancel.
 	return conn.Close()
+}
+
+// withLifecycleContext combines a caller's cancellation with the Gateway
+// lifetime.  A resolver or a readiness action can run before a Flight stream
+// exists, so closing the gRPC connection alone cannot interrupt it.  The
+// returned release function removes the AfterFunc callback and cancels the
+// derived context when the operation completes.
+func (g *Gateway) withLifecycleContext(parent context.Context) (context.Context, func()) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	combined, cancel := context.WithCancel(parent)
+	g.mu.Lock()
+	lifecycle := g.lifecycleCtx
+	g.mu.Unlock()
+	if lifecycle == nil {
+		return combined, cancel
+	}
+	stop := context.AfterFunc(lifecycle, cancel)
+	return combined, func() {
+		stop()
+		cancel()
+	}
 }
 
 type openPayload struct {
@@ -475,10 +506,9 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if !g.cfg.AllowUnisolated {
 		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python UDF runtime requires explicit unisolated opt-in")
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	streamCtx, cancel := context.WithTimeout(ctx, g.cfg.RequestTimeout)
+	requestCtx, release := g.withLifecycleContext(ctx)
+	defer release()
+	streamCtx, cancel := context.WithTimeout(requestCtx, g.cfg.RequestTimeout)
 	defer cancel()
 	if invocation == nil || result == nil || mp == nil {
 		return fmt.Errorf("python udf: nil invocation, result, or memory pool")
