@@ -43,6 +43,112 @@ type physicalOwnerViewContext struct {
 	accountID uint32
 }
 
+func TestPersistedDecimalLiteralViewProtocolLifecycle(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldReadFloor, hadReadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadReadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	const createSQL = "create view v_decimal_literal as select 12345678901234567890123456789012345678.1 as n"
+	parseAndBuild := func(sql string) (*Plan, error) {
+		root := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		return BuildPlan(root, stmt, false)
+	}
+
+	// A CN that can execute v81 but has not passed the v82 authoring barrier
+	// must not publish a view whose literal would be rebound differently by an
+	// older planner.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion81))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion81))
+	_, err := parseAndBuild(createSQL)
+	require.ErrorContains(t, err, "protocol version 82")
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion82))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion82))
+	created, err := parseAndBuild(createSQL)
+	require.NoError(t, err)
+	createdView := created.GetDdl().GetCreateView().GetTableDef()
+	var createdData ViewData
+	require.NoError(t, json.Unmarshal([]byte(createdView.GetViewSql().GetView()), &createdData))
+	require.NotNil(t, createdData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion82), *createdData.RequiredProtocolVersion)
+
+	// The compact IN-vector path carries the same aggregate marker. Keep this
+	// as a planner-level check so the compatibility fence does not regress into
+	// a slow structured-list fallback for ordinary decimal predicates.
+	const createInSQL = "create view v_decimal_in as select n_name from nation where n_regionkey in (0.1, 0.2)"
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion81))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion81))
+	_, err = parseAndBuild(createInSQL)
+	require.ErrorContains(t, err, "protocol version 82")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion82))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion82))
+	createdIn, err := parseAndBuild(createInSQL)
+	require.NoError(t, err)
+	var createdInData ViewData
+	require.NoError(t, json.Unmarshal([]byte(createdIn.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &createdInData))
+	require.NotNil(t, createdInData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion82), *createdInData.RequiredProtocolVersion)
+
+	// The same SQL without a historical marker is a legacy view. Regeneration
+	// and direct expansion both rebind it first, then discover and fence v82.
+	var markerlessFields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(createdView.GetViewSql().GetView()), &markerlessFields))
+	delete(markerlessFields, "required_protocol_version")
+	markerlessBytes, err := json.Marshal(markerlessFields)
+	require.NoError(t, err)
+	markerless := string(markerlessBytes)
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion81))
+	_, err = RegenerateViewDefinition(ctx, markerless)
+	require.ErrorContains(t, err, "protocol version 82")
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion82))
+	regenerated, err := RegenerateViewDefinition(ctx, markerless)
+	require.NoError(t, err)
+	var regeneratedData ViewData
+	require.NoError(t, json.Unmarshal([]byte(regenerated.TableDef.GetViewSql().GetView()), &regeneratedData))
+	require.NotNil(t, regeneratedData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion82), *regeneratedData.RequiredProtocolVersion)
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion81))
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
+	bindCtx := NewBindContext(builder, nil)
+	viewDef := &TableDef{ViewSql: &planpb.ViewDef{View: markerless}}
+	_, err = builder.bindView(bindCtx, viewDef, nil, &ObjectRef{}, "tpch", "v_decimal_literal", nil)
+	require.ErrorContains(t, err, "protocol version 82")
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion82))
+	builder = NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
+	bindCtx = NewBindContext(builder, nil)
+	_, err = builder.bindView(bindCtx, viewDef, nil, &ObjectRef{}, "tpch", "v_decimal_literal", nil)
+	require.NoError(t, err)
+}
+
 func (c *physicalOwnerViewContext) ResolveViewDependencyAccount(
 	*ObjectRef, *TableDef, *Snapshot,
 ) (uint32, error) {
