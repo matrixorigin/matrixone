@@ -406,6 +406,20 @@ func freeSortRollupVectors(vecs []*vector.Vector, mp *mpool.MPool) {
 	}
 }
 
+func freeSortRollupArgWindows(
+	windows [][]*vector.Vector,
+	owned [][]bool,
+	mp *mpool.MPool,
+) {
+	for i := range windows {
+		for j, vec := range windows[i] {
+			if vec != nil && i < len(owned) && j < len(owned[i]) && owned[i][j] {
+				vec.Free(mp)
+			}
+		}
+	}
+}
+
 // appendOutputRow materializes exactly one finished ROLLUP row. Aggregate
 // Flush transfers ownership of the result vector, so the first row can attach
 // those vectors directly and later rows append into them with UnionOne.
@@ -555,7 +569,14 @@ func (group *Group) fillSortRollupLevels(
 			s.groupIDs[i] = 1
 		}
 	}
-	for start, end := offset, offset+rows; start < end; {
+	end := offset + rows
+	// Every live streaming prefix owns exactly one aggregate group. The
+	// general BatchFill path still has to dispatch every row through its group
+	// id hash table, even though all ids are 1. Preflight the same chunks for
+	// allocation-account correctness, then use the aggregate's single-group
+	// BulkFill once for the complete run. Windows are borrowed views, so the
+	// input is not copied when a run starts after a previous key boundary.
+	for start := offset; start < end; {
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return err
 		}
@@ -571,18 +592,45 @@ func (group *Group) fillSortRollupLevels(
 					return err
 				}
 			}
-			for i, agg := range s.levelAggs[prefix] {
-				if err := agg.BatchFill(
-					start,
-					groups,
-					group.ctr.aggArgEvaluate[i].Vec,
-				); err != nil {
-					return err
-				}
-			}
 		}
 		start += n
 	}
+
+	argWindows := make([][]*vector.Vector, len(group.ctr.aggArgEvaluate))
+	argWindowOwned := make([][]bool, len(group.ctr.aggArgEvaluate))
+	for i, evaluated := range group.ctr.aggArgEvaluate {
+		argWindows[i] = make([]*vector.Vector, len(evaluated.Vec))
+		argWindowOwned[i] = make([]bool, len(evaluated.Vec))
+		for j, vec := range evaluated.Vec {
+			if offset == 0 && vec.Length() == rows {
+				argWindows[i][j] = vec
+				continue
+			}
+			var window *vector.Vector
+			var err error
+			if group.ctr.expressionAllocation != nil {
+				window, err = vec.WindowByLogicalRowsWithAllocation(
+					offset, end, group.ctr.mp, group.ctr.expressionAllocation)
+			} else {
+				window, err = vec.WindowByLogicalRows(offset, end)
+			}
+			if err != nil {
+				freeSortRollupArgWindows(argWindows, argWindowOwned, group.ctr.mp)
+				return err
+			}
+			argWindows[i][j] = window
+			argWindowOwned[i][j] = true
+		}
+	}
+	for prefix := range s.levelAggs {
+		for i, agg := range s.levelAggs[prefix] {
+			if err := agg.BulkFill(0, argWindows[i]); err != nil {
+				freeSortRollupArgWindows(argWindows, argWindowOwned, group.ctr.mp)
+				return err
+			}
+		}
+	}
+	freeSortRollupArgWindows(argWindows, argWindowOwned, group.ctr.mp)
 	return nil
 }
 
