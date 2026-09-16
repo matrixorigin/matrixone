@@ -67,6 +67,7 @@ insert into json_null_cdc values
  (2,NULL,'{"k":"onlyrighttoken"}'),
  (3,'{"k":"onlylefttoken"}',NULL),
  (4,NULL,NULL),
+ (5,'null','{"k":"literalcontrol"}'),
  (6,'"null"',NULL);
 set @wait_json_sql = concat(
     'select coalesce(max(chunk_id), -1) >= 0 as json_ready from `', database(), '`.`', @json_ft2_index,
@@ -82,6 +83,7 @@ deallocate prepare wait_json;
 select id from json_null_cdc where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
 select id from json_null_cdc where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
 select id from json_null_cdc where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
 select id from json_null_cdc where match(left_doc, right_doc) against('null' in boolean mode) order by id;
 
 -- UPDATE partial-NULL transitions. Each wait observes a new durable tail chunk;
