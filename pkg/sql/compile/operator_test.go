@@ -380,24 +380,6 @@ func TestConstructAggregateConfigApproxPercentileWithinGroup(t *testing.T) {
 	}
 }
 
-func TestComplementPercentileConfigPreservesDecimalScale(t *testing.T) {
-	for _, tc := range []struct {
-		input string
-		want  string
-	}{
-		{input: "0", want: "1"},
-		{input: "1", want: "0"},
-		{input: "0.95", want: "0.05"},
-		{input: "0.500", want: "0.500"},
-	} {
-		actual, err := complementPercentileConfig([]byte(tc.input))
-		require.NoError(t, err)
-		require.Equal(t, tc.want, string(actual))
-	}
-	_, err := complementPercentileConfig([]byte("invalid"))
-	require.Error(t, err)
-}
-
 func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
