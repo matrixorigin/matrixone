@@ -356,11 +356,11 @@ const (
 		// admission and an already-running task reject a missing user key instead
 		// of silently omitting the table from discovery.
 		" EXISTS (SELECT 1 FROM `mo_catalog`.`mo_columns` pk " +
-		"WHERE pk.account_id = tbl.account_id " +
-		"AND pk.db_name = tbl.reldatabase " +
-		"AND pk.relname = tbl.relname " +
-		"AND pk.constraint_type = 'p' " +
-		"AND pk.name <> '" + catalog.FakePrimaryKeyColName + "') AS has_user_pk " +
+		"WHERE pk." + catalog.SystemColAttr_AccID + " = tbl." + catalog.SystemRelAttr_AccID + " " +
+		"AND pk." + catalog.SystemColAttr_DBName + " = tbl." + catalog.SystemRelAttr_DBName + " " +
+		"AND pk." + catalog.SystemColAttr_RelName + " = tbl." + catalog.SystemRelAttr_Name + " " +
+		"AND pk." + catalog.SystemColAttr_ConstraintType + " = 'p' " +
+		"AND pk." + catalog.SystemColAttr_Name + " <> '" + catalog.FakePrimaryKeyColName + "') AS has_user_pk " +
 		"FROM `mo_catalog`.`mo_tables` tbl " +
 		"WHERE " +
 		" tbl.account_id IN (%s) " +
