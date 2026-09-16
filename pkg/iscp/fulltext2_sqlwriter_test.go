@@ -311,9 +311,9 @@ func TestFulltext2WriterJSONFlatNullColumnMatrix(t *testing.T) {
 	}
 	bj, err := bytejson.ParseFromString(`{"k":"binary"}`)
 	require.NoError(t, err)
-	got, err := w.rowText(context.Background(), []any{int64(1), nil, bj, nil})
+	binaryText, err := w.rowText(context.Background(), []any{int64(1), nil, bj, nil})
 	require.NoError(t, err)
-	require.Equal(t, "binary", got, "T_json ByteJson follows the same NULL sibling rule")
+	require.Equal(t, "binary", binaryText, "T_json ByteJson follows the same NULL sibling rule")
 	txt, err := w.rowText(context.Background(), []any{int64(1), []byte(`{"k":"left"}`), nil, []byte(`{"k":"right"}`)})
 	require.NoError(t, err)
 	tok, err := fulltext2.CdcTokenizerWithJSONOptions(fulltext2.ParserJSON, fulltext2.JSONTermOptions{})
