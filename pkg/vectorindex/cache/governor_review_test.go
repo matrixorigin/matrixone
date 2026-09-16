@@ -776,6 +776,41 @@ func TestRemoveKeepsSnapshotGenerationsAndDDLClearsThem(t *testing.T) {
 	require.False(t, isResident(c, snapB))
 }
 
+// RemoveIdle refreshes an idle entry after a CDC append but never yanks the cache
+// out from under a concurrent reader: a busy entry stays warm and RemoveIdle
+// reports it did not evict, deferring the refresh to a later idle moment. It
+// touches the live generation only, like Remove.
+func TestRemoveIdleEvictsIdleButKeepsBusyAndSnapshots(t *testing.T) {
+	c := newBoundCache(t)
+	sp := govProc(t, c, 1, caps{}, caps{})
+
+	table := "__mo_index_secondary_idle"
+
+	// A missing key has nothing to evict.
+	require.False(t, c.RemoveIdle(table, "cdc"))
+
+	// A search in flight (holds the entry's lock) cannot be claimed: left warm.
+	loadInto(t, c, sp, table, 100, 0)
+	held := entryOf(t, c, table)
+	held.Mutex.RLock()
+	require.False(t, c.RemoveIdle(table, "cdc"), "a busy entry is left warm")
+	require.True(t, isResident(c, table), "the concurrent reader keeps its cache")
+	held.Mutex.RUnlock()
+
+	// Now idle: RemoveIdle claims and destroys it so the next Search reloads.
+	require.True(t, c.RemoveIdle(table, "cdc"), "an idle entry is evicted")
+	require.False(t, isResident(c, table), "the next Search reloads the appended tail")
+
+	// An append refreshes only the live generation; a snapshot it cannot have
+	// changed is left resident (current entry only, like Remove).
+	loadInto(t, c, sp, table, 100, 0)
+	snap := SnapshotKey(table, snapshotTS(100))
+	loadInto(t, c, sp, snap, 100, 0)
+	require.True(t, c.RemoveIdle(table, "cdc"))
+	require.False(t, isResident(c, table))
+	require.True(t, isResident(c, snap), "a snapshot the append cannot have changed stays")
+}
+
 // A binding cap evicts on every miss, so an INFO line per pass is a log storm. INFO is
 // rate-limited per arena; the counters stay exact.
 func TestGovernorEvictionLoggingIsRateLimited(t *testing.T) {
