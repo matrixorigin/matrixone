@@ -127,6 +127,106 @@ func TestCastTemporalNumericUsesMysqlPackedValue(t *testing.T) {
 	}
 }
 
+func TestTimeNumericArithmeticPreservesFractionAndMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	timeType := types.T_time.ToTypeWithScale(3)
+	decimal64Type := types.New(types.T_decimal64, 18, 3)
+	decimal128Scale3Type := types.New(types.T_decimal128, 38, 3)
+	decimal128Scale9Type := types.New(types.T_decimal128, 38, 9)
+
+	timeSmall, err := types.ParseTime("00:00:00.001", 3)
+	require.NoError(t, err)
+	timeLarge, err := types.ParseTime("00:00:34.500", 3)
+	require.NoError(t, err)
+	wantSmall, err := types.ParseDecimal64("0.001", 18, 3)
+	require.NoError(t, err)
+	wantLarge, err := types.ParseDecimal64("34.500", 18, 3)
+	require.NoError(t, err)
+
+	castCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(timeType, []types.Time{timeSmall, timeLarge}, nil),
+			NewFunctionTestInput(decimal64Type, []types.Decimal64{}, nil),
+		},
+		NewFunctionTestResult(decimal64Type, false, []types.Decimal64{wantSmall, wantLarge}, nil),
+		NewCast,
+	)
+	succeed, info := castCase.Run()
+	require.True(t, succeed, info)
+
+	for _, tc := range []struct {
+		name       string
+		operator   string
+		wantReturn types.Type
+	}{
+		{name: "multiply", operator: "*", wantReturn: decimal128Scale3Type},
+		{name: "divide", operator: "/", wantReturn: decimal128Scale9Type},
+		{name: "modulo", operator: "%", wantReturn: decimal64Type},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, tc.operator,
+				[]types.Type{timeType, types.T_int64.ToType()})
+			require.NoError(t, err)
+			targets, needsCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, needsCast)
+			require.Equal(t, []types.Type{decimal64Type, types.T_decimal64.ToType()}, targets)
+			require.Equal(t, tc.wantReturn, resolved.GetReturnType())
+		})
+	}
+
+	wantMultiplySmall, err := types.ParseDecimal128("0.010", 38, 3)
+	require.NoError(t, err)
+	wantMultiplyLarge, err := types.ParseDecimal128("345.000", 38, 3)
+	require.NoError(t, err)
+	decimalTen, err := types.ParseDecimal64("10", 18, 0)
+	require.NoError(t, err)
+	decimalFive, err := types.ParseDecimal64("5", 18, 0)
+	require.NoError(t, err)
+	multiplyCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(decimal64Type, []types.Decimal64{wantSmall, wantLarge}, nil),
+			NewFunctionTestInput(types.T_decimal64.ToType(), []types.Decimal64{decimalTen, decimalTen}, nil),
+		},
+		NewFunctionTestResult(decimal128Scale3Type, false,
+			[]types.Decimal128{wantMultiplySmall, wantMultiplyLarge}, nil),
+		multiFn,
+	)
+	succeed, info = multiplyCase.Run()
+	require.True(t, succeed, info)
+
+	wantDivideSmall, err := types.ParseDecimal128("0.000100000", 38, 9)
+	require.NoError(t, err)
+	wantDivideLarge, err := types.ParseDecimal128("3.450000000", 38, 9)
+	require.NoError(t, err)
+	divideCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(decimal64Type, []types.Decimal64{wantSmall, wantLarge}, nil),
+			NewFunctionTestInput(types.T_decimal64.ToType(), []types.Decimal64{decimalTen, decimalTen}, nil),
+		},
+		NewFunctionTestResult(decimal128Scale9Type, false,
+			[]types.Decimal128{wantDivideSmall, wantDivideLarge}, nil),
+		divFn,
+	)
+	succeed, info = divideCase.Run()
+	require.True(t, succeed, info)
+
+	wantModuloSmall, err := types.ParseDecimal64("0.001", 18, 3)
+	require.NoError(t, err)
+	wantModuloLarge, err := types.ParseDecimal64("4.500", 18, 3)
+	require.NoError(t, err)
+	moduloCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(decimal64Type, []types.Decimal64{wantSmall, wantLarge}, nil),
+			NewFunctionTestInput(types.T_decimal64.ToType(), []types.Decimal64{decimalFive, decimalFive}, nil),
+		},
+		NewFunctionTestResult(decimal64Type, false,
+			[]types.Decimal64{wantModuloSmall, wantModuloLarge}, nil),
+		modFn,
+	)
+	succeed, info = moduloCase.Run()
+	require.True(t, succeed, info)
+}
+
 func TestTemporalNumericTypeCheckUsesDecimal128ForDateTimeAndTimestamp(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

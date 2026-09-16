@@ -107,7 +107,7 @@ func TestPersistedIPFunctionAlterTargetAdmission(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.version)
 			qry := &plan2.AlterTable{TableDef: source, CopyTableDef: tc.copyDef}
 			target := persistedIPFunctionAlterTarget(qry)
-			err := plan.RequirePersistedIPFunctionProtocol(proc.Ctx, proc, target)
+			err := plan.RequirePersistedIPFunctionProtocolForAuthoring(proc.Ctx, proc, target)
 			if tc.wantErr {
 				require.ErrorContains(t, err, "protocol version 72")
 			} else {
@@ -516,6 +516,7 @@ func TestCreateDatabaseChecksExistingBeforeSerializingAbsence(t *testing.T) {
 		ifNotExists  bool
 		lookups      []lookupResult
 		lockErr      error
+		databaseType string
 		createErr    error
 		wantCreate   bool
 		wantErr      error
@@ -525,6 +526,17 @@ func TestCreateDatabaseChecksExistingBeforeSerializingAbsence(t *testing.T) {
 	}{
 		{
 			name: "physical creation",
+			lookups: []lookupResult{
+				{err: moerr.GetOkExpectedEOB()},
+				{err: moerr.GetOkExpectedEOB()},
+			},
+			wantCreate:   true,
+			wantAffected: 1,
+			wantEvents:   []string{"lookup", "lock", "lookup", "create"},
+		},
+		{
+			name:         "internal database type",
+			databaseType: catalog.SystemDBTypeDataBranch,
 			lookups: []lookupResult{
 				{err: moerr.GetOkExpectedEOB()},
 				{err: moerr.GetOkExpectedEOB()},
@@ -626,8 +638,9 @@ func TestCreateDatabaseChecksExistingBeforeSerializingAbsence(t *testing.T) {
 			}
 			if tc.wantCreate {
 				eng.EXPECT().Create(gomock.Any(), "db1", gomock.Any()).DoAndReturn(
-					func(context.Context, string, client.TxnOperator) error {
+					func(ctx context.Context, _ string, _ client.TxnOperator) error {
 						events = append(events, "create")
+						require.Equal(t, tc.databaseType, ctx.Value(defines.DatTypKey{}))
 						return tc.createErr
 					},
 				)
@@ -635,6 +648,9 @@ func TestCreateDatabaseChecksExistingBeforeSerializingAbsence(t *testing.T) {
 
 			proc := testutil.NewProcess(t)
 			ctx := defines.AttachAccountId(context.Background(), sysAccountId)
+			if tc.databaseType != "" {
+				ctx = context.WithValue(ctx, defines.DatTypKey{}, tc.databaseType)
+			}
 			proc.Ctx = ctx
 			proc.ReplaceTopCtx(ctx)
 			c := &Compile{e: eng, proc: proc, affectRows: new(atomic.Uint64)}

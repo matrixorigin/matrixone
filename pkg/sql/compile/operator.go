@@ -856,6 +856,9 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 
 func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
 	preCtx := node.PreInsertCtx
+	if err := incrservice.CheckAutoIDCache(proc.Ctx, proc.GetService(), preCtx.TableDef.GetAutoIdCache()); err != nil {
+		return nil, err
+	}
 	schemaName := preCtx.Ref.SchemaName
 	var err error
 
@@ -1966,17 +1969,8 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 			if err != nil {
 				panic(err)
 			}
-			// The existing approximate-percentile executor always ranks values in
-			// ascending order. An ordered-set DESC call has the same result as the
-			// ascending complementary percentile, so preserve the executor and its
-			// wire-compatible text configuration by translating p to 1-p here.
-			if len(f.AggConfig) > 0 && f.AggConfig[0] != 0 {
-				config, err = complementPercentileConfig(config)
-				if err != nil {
-					panic(err)
-				}
-			}
-			return args[:len(args)-1], config
+			descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
+			return args[:len(args)-1], aggexec.EncodeApproxPercentileConfig(config, descending)
 		}
 
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:

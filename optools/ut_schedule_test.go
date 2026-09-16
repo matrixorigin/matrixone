@@ -42,6 +42,10 @@ exit "$HEAVY_STATUS"
 }
 
 func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...string) ([]byte, error) {
+	return scheduleHarnessWithMockTransform(t, script, mock, nil, variables...)
+}
+
+func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transform func(string) string, variables ...string) ([]byte, error) {
 	t.Helper()
 	root := t.TempDir()
 	dir := filepath.Join(root, "optools")
@@ -59,7 +63,11 @@ func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...str
 			if index < 0 {
 				t.Fatal("missing runner dispatch")
 			}
-			data = []byte(text[:index])
+			text = text[:index]
+			if transform != nil {
+				text = transform(text)
+			}
+			data = []byte(text)
 		}
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0755); err != nil {
 			t.Fatal(err)
@@ -380,6 +388,262 @@ exit 0
 	out, err := scheduleHarnessWithMock(t, script, mock)
 	if err != nil {
 		t.Fatalf("heartbeat lifecycle: %v\n%s", err, out)
+	}
+}
+
+func TestUTHeartbeatStopDuringSleepRegistration(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkfifo "$CASE_DIR/heartbeat-child"
+mkfifo "$CASE_DIR/heartbeat-release"
+mkfifo "$CASE_DIR/timer-input"
+mkfifo "$CASE_DIR/heartbeat-stop"
+exec 7<> "$CASE_DIR/heartbeat-child"
+exec 8<> "$CASE_DIR/heartbeat-release"
+exec 9<> "$CASE_DIR/timer-input"
+exec 6<> "$CASE_DIR/heartbeat-stop"
+timer_pid=""
+heartbeat_pid=""
+heartbeat_int_count=0
+cleanup() {
+    if [[ -z "$timer_pid" && -f "$CASE_DIR/heartbeat-child.pid" ]]; then
+        timer_pid=$(cat "$CASE_DIR/heartbeat-child.pid")
+    fi
+    # Unblock the injected launch-window hook before terminating its owner.
+    printf 'cleanup\n' >&8 2>/dev/null || true
+    if [[ -n "$timer_pid" ]]; then
+        kill -KILL "$timer_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$heartbeat_pid" ]]; then
+        kill -KILL "$heartbeat_pid" 2>/dev/null || true
+        wait "$heartbeat_pid" 2>/dev/null || true
+    fi
+    rm -f "$CASE_DIR/heartbeat-child.pid"
+    timer_pid=""
+    heartbeat_pid=""
+    exec 6>&-
+    exec 7>&-
+    exec 8>&-
+    exec 9>&-
+}
+trap cleanup EXIT
+
+heartbeat_int_handler() {
+    heartbeat_int_count=$((heartbeat_int_count + 1))
+    stop_ut_heartbeat
+}
+
+# The long timer is deliberately TERM-ignoring and has no cleanup contract.
+# The production stop path must use exact-PID KILL and then reap it. The short
+# polling sleeps used by stop_ut_heartbeat remain the system sleep command.
+sleep() {
+    if [[ "${1:-}" == 60 ]]; then
+        trap '' TERM INT
+        while :; do
+            IFS= read -r _ <&9 || true
+        done
+    fi
+    command sleep "$@"
+}
+
+# scheduleHarnessWithMockTransform injects this function call between the
+# timer spawn and production PID registration. It publishes the child PID,
+# then waits for the parent to deliver the stop request and release the launch
+# window. Bash 3.2 ignores INT for asynchronous helpers, so the INT case below
+# delivers INT to this foreground caller and lets the real stop function send
+# TERM to the helper.
+ut_test_before_heartbeat_sleep_registration() {
+    printf '%s\n' "$1" > "$CASE_DIR/heartbeat-child.pid"
+    printf '%s\n' "$1" >&7
+    while ! read -r _ <&8; do
+        :
+    done
+}
+ut_test_heartbeat_stop_requested() {
+    printf '%s\n' "$heartbeat_stop_requested" >&6
+    printf 'release\n' >&8
+}
+
+UT_HEARTBEAT_INTERVAL=60
+start_ut_heartbeat
+heartbeat_pid="$UT_HEARTBEAT_PID"
+read -r -t 10 timer_pid <&7 || exit 90
+[[ "$timer_pid" =~ ^[0-9]+$ ]] || exit 91
+if [[ "$HEARTBEAT_STOP_SIGNAL" == INT ]]; then
+    trap heartbeat_int_handler INT
+    kill -INT "$$" || exit 92
+else
+    kill "-${HEARTBEAT_STOP_SIGNAL}" "$heartbeat_pid" || exit 92
+fi
+read -r -t 10 stop_state <&6 || exit 93
+[[ "$stop_state" == 1 ]] || exit 94
+if [[ "$HEARTBEAT_STOP_SIGNAL" == INT && "$heartbeat_int_count" != 1 ]]; then
+    exit 95
+fi
+heartbeat_status=0
+wait "$heartbeat_pid" || heartbeat_status=$?
+[[ "$heartbeat_status" == 0 ]] || exit 96
+if kill -0 "$heartbeat_pid" 2>/dev/null; then
+    exit 97
+fi
+if kill -0 "$timer_pid" 2>/dev/null; then
+    exit 98
+fi
+rm -f "$CASE_DIR/heartbeat-child.pid"
+timer_pid=""
+UT_HEARTBEAT_PID=""
+heartbeat_pid=""
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 99
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+	`
+	transform := func(text string) string {
+		const anchor = "            heartbeat_sleep_pid=$!\n"
+		if got := strings.Count(text, anchor); got != 1 {
+			t.Fatalf("heartbeat registration anchor count = %d, want 1", got)
+		}
+		text = strings.Replace(text, anchor,
+			"            ut_test_before_heartbeat_sleep_registration \"$!\"\n"+anchor, 1)
+		const stopAnchor = "            heartbeat_stop_requested=1\n"
+		if got := strings.Count(text, stopAnchor); got != 1 {
+			t.Fatalf("heartbeat stop anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, stopAnchor,
+			stopAnchor+"            ut_test_heartbeat_stop_requested\n", 1)
+	}
+	for _, signal := range []string{"TERM", "INT"} {
+		t.Run(strings.ToLower(signal), func(t *testing.T) {
+			out, err := scheduleHarnessWithMockTransform(t, script, mock, transform,
+				"HEARTBEAT_STOP_SIGNAL="+signal)
+			if err != nil {
+				t.Fatalf("heartbeat registration lifecycle: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestUTHeartbeatStopDuringHelperRegistration(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkfifo "$CASE_DIR/heartbeat-ready"
+exec 7<> "$CASE_DIR/heartbeat-ready"
+helper_pid=""
+timer_pid=""
+restart_pid=""
+caller_term_count=0
+caller_seen_pid=""
+publication_count=0
+cleanup() {
+    if [[ -z "$timer_pid" && -f "$CASE_DIR/heartbeat-timer.pid" ]]; then
+        timer_pid=$(cat "$CASE_DIR/heartbeat-timer.pid")
+    fi
+    if [[ -z "$helper_pid" && -f "$CASE_DIR/heartbeat-helper.pid" ]]; then
+        helper_pid=$(cat "$CASE_DIR/heartbeat-helper.pid")
+    fi
+    if [[ -n "$timer_pid" ]]; then
+        kill -KILL "$timer_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$helper_pid" ]]; then
+        kill -KILL "$helper_pid" 2>/dev/null || true
+        wait "$helper_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$restart_pid" ]]; then
+        kill -KILL "$restart_pid" 2>/dev/null || true
+        wait "$restart_pid" 2>/dev/null || true
+    fi
+    timer_pid=""
+    helper_pid=""
+    restart_pid=""
+    exec 7>&-
+}
+trap cleanup EXIT
+
+function logger() { :; }
+caller_term() {
+    caller_term_count=$((caller_term_count + 1))
+    caller_seen_pid="$UT_HEARTBEAT_PID"
+    stop_ut_heartbeat
+}
+trap caller_term TERM
+
+# The transformed helper reports its registered timer before the parent
+# launch hook sends TERM. This keeps the outer publication race deterministic
+# while also proving the published helper owns and reaps its timer.
+ut_test_heartbeat_ready() {
+    printf '%s\n' "$heartbeat_sleep_pid" > "$CASE_DIR/heartbeat-timer.pid"
+    printf '%s\n' "$heartbeat_sleep_pid" >&7
+}
+ut_test_before_heartbeat_registration() {
+    publication_count=$((publication_count + 1))
+    helper_pid="$1"
+    printf '%s\n' "$1" > "$CASE_DIR/heartbeat-helper.pid"
+    read -r -t 10 timer_pid <&7 || exit 90
+    [[ "$timer_pid" =~ ^[0-9]+$ ]] || exit 91
+    if [[ "$publication_count" == 1 ]]; then
+        kill -TERM "$$"
+    fi
+}
+
+UT_HEARTBEAT_INTERVAL=60
+start_ut_heartbeat
+[[ "$caller_term_count" == 1 ]] || exit 92
+[[ "$caller_seen_pid" == "$helper_pid" && -n "$caller_seen_pid" ]] || exit 93
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 94
+if kill -0 "$helper_pid" 2>/dev/null; then
+    exit 95
+fi
+rm -f "$CASE_DIR/heartbeat-helper.pid"
+helper_pid=""
+if kill -0 "$timer_pid" 2>/dev/null; then
+    exit 96
+fi
+rm -f "$CASE_DIR/heartbeat-timer.pid"
+timer_pid=""
+[[ "$(trap -p TERM)" == *caller_term* ]] || exit 97
+
+# The publication fence must not poison a later generation after cancellation.
+start_ut_heartbeat
+restart_pid="$UT_HEARTBEAT_PID"
+[[ -n "$restart_pid" ]] || exit 98
+[[ "$helper_pid" == "$restart_pid" ]] || exit 99
+# Transfer the second-generation owner token to restart_pid before any
+# operation can fail, so EXIT cleanup never owns the same PID twice.
+rm -f "$CASE_DIR/heartbeat-helper.pid"
+helper_pid=""
+stop_ut_heartbeat
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 100
+if kill -0 "$restart_pid" 2>/dev/null; then
+    exit 101
+fi
+rm -f "$CASE_DIR/heartbeat-helper.pid"
+restart_pid=""
+if kill -0 "$timer_pid" 2>/dev/null; then
+    exit 102
+fi
+rm -f "$CASE_DIR/heartbeat-timer.pid"
+timer_pid=""
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+	`
+	transform := func(text string) string {
+		const readyAnchor = "            heartbeat_sleep_pid=$!\n"
+		if got := strings.Count(text, readyAnchor); got != 1 {
+			t.Fatalf("heartbeat timer registration anchor count = %d, want 1", got)
+		}
+		text = strings.Replace(text, readyAnchor,
+			readyAnchor+"            ut_test_heartbeat_ready\n", 1)
+		const publicationAnchor = "    UT_HEARTBEAT_PID=$!\n"
+		if got := strings.Count(text, publicationAnchor); got != 1 {
+			t.Fatalf("heartbeat publication anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, publicationAnchor,
+			"    ut_test_before_heartbeat_registration \"$!\"\n"+publicationAnchor, 1)
+	}
+	out, err := scheduleHarnessWithMockTransform(t, script, mock, transform)
+	if err != nil {
+		t.Fatalf("heartbeat helper registration lifecycle: %v\n%s", err, out)
 	}
 }
 

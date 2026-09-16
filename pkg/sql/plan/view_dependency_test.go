@@ -18,14 +18,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -189,6 +193,7 @@ func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *t
 	ctx.tables["nation"].Cols[1].Typ.Width = 60
 	persisted := `{"Stmt":"create view v as select n_name from nation",` +
 		`"DefaultDatabase":"tpch","security_type":"DEFINER",` +
+		`"required_protocol_version":72,` +
 		`"future_field":{"keep":true}}`
 
 	regenerated, err := RegenerateViewDefinition(ctx, persisted)
@@ -201,8 +206,152 @@ func TestRegenerateViewDefinitionUsesAuthoritativeGeneratorAndPreservesJSON(t *t
 	require.NoError(t, json.Unmarshal([]byte(regenerated.TableDef.ViewSql.View), &fields))
 	require.JSONEq(t, `{"keep":true}`, string(fields["future_field"]))
 	require.JSONEq(t, `"create view v as select n_name from nation"`, string(fields["Stmt"]))
+	require.JSONEq(t, `72`, string(fields["required_protocol_version"]))
 	require.Contains(t, fields, "dependencies")
 	require.Contains(t, fields, "lower_case_table_names")
+}
+
+func TestRegenerateViewDefinitionUsesReadFloorDuringAuthoringBarrier(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldReadFloor, hadReadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadReadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	// During phase one, existing persisted definitions must be readable while
+	// new protocol-bearing definitions remain blocked until catalog fencing.
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion72))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(0))
+	persisted := `{"Stmt":"create view v as select inet_ntoa(1)",` +
+		`"DefaultDatabase":"tpch","required_protocol_version":72}`
+
+	regenerated, err := RegenerateViewDefinition(ctx, persisted)
+	require.NoError(t, err)
+	require.NotNil(t, regenerated)
+	require.NotNil(t, regenerated.TableDef)
+	require.NotNil(t, regenerated.TableDef.ViewSql)
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"create view v as select inet_ntoa(1)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	_, err = BuildPlan(ctx, stmt, false)
+	require.ErrorContains(t, err, "protocol version 72")
+}
+
+func TestPersistedStringNumericViewProtocolLifecycle(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldReadFloor, hadReadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadReadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	const createSQL = "create view v_string_numeric as select char_length(n_name) as n from nation"
+	const alterSQL = "alter view v_string_numeric as select char_length(n_name) as n from nation"
+	parse := func(sql string) tree.Statement {
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+		require.NoError(t, err)
+		return stmt
+	}
+	build := func(sql string, authoringFloor int64) (*Plan, error) {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
+		root := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}
+		stmt := parse(sql)
+		defer stmt.Free()
+		return BuildPlan(root, stmt, false)
+	}
+
+	// CREATE and ALTER both pass through the authoring gate. A CN that has
+	// only admitted the previous v79 contract must not publish v80 metadata.
+	_, err := build(createSQL, defines.MORPCVersion79)
+	require.ErrorContains(t, err, "protocol version 80")
+	created, err := build(createSQL, defines.MORPCVersion80)
+	require.NoError(t, err)
+	createdView := created.GetDdl().GetCreateView().GetTableDef()
+	var createdData ViewData
+	require.NoError(t, json.Unmarshal([]byte(createdView.GetViewSql().GetView()), &createdData))
+	require.NotNil(t, createdData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion80), *createdData.RequiredProtocolVersion)
+
+	// Make the successfully authored definition visible to ALTER VIEW through
+	// the mock catalog, then exercise the same write-side fence on replacement.
+	ctx.tables["v_string_numeric"] = DeepCopyTableDef(createdView, true)
+	ctx.objects["v_string_numeric"] = &planpb.ObjectRef{
+		SchemaName: "tpch", ObjName: "v_string_numeric",
+	}
+	_, err = build(alterSQL, defines.MORPCVersion79)
+	require.ErrorContains(t, err, "protocol version 80")
+	altered, err := build(alterSQL, defines.MORPCVersion80)
+	require.NoError(t, err)
+	var alteredData ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(altered.GetDdl().GetAlterView().GetTableDef().GetViewSql().GetView()), &alteredData))
+	require.NotNil(t, alteredData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion80), *alteredData.RequiredProtocolVersion)
+
+	// Regeneration is the read-side boundary. Start with a lower historical
+	// marker and an unknown field: generation must raise the marker to the
+	// newly required v80 floor while preserving unrelated JSON metadata.
+	var persistedFields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(createdView.GetViewSql().GetView()), &persistedFields))
+	persistedFields["required_protocol_version"] = json.RawMessage("79")
+	persistedFields["future_field"] = json.RawMessage(`{"keep":true}`)
+	persistedBytes, err := json.Marshal(persistedFields)
+	require.NoError(t, err)
+	persisted := string(persistedBytes)
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion79)
+	_, err = RegenerateViewDefinition(ctx, persisted)
+	require.ErrorContains(t, err, "protocol version 80")
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion80)
+	regenerated, err := RegenerateViewDefinition(ctx, persisted)
+	require.NoError(t, err)
+	var regeneratedFields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(
+		[]byte(regenerated.TableDef.GetViewSql().GetView()), &regeneratedFields))
+	require.JSONEq(t, `80`, string(regeneratedFields["required_protocol_version"]))
+	require.JSONEq(t, `{"keep":true}`, string(regeneratedFields["future_field"]))
 }
 
 func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
@@ -374,6 +523,13 @@ func TestRegenerateViewDefinitionRejectsInvalidPersistedDefinitions(t *testing.T
 	require.Error(t, err)
 	_, err = RegenerateViewDefinition(ctx, `{"Stmt":"select 1"}`)
 	require.Error(t, err)
+	futureVersion := defines.MORPCLatestVersion + 1
+	_, err = RegenerateViewDefinition(ctx,
+		fmt.Sprintf(`{"Stmt":"select (","required_protocol_version":%d}`, futureVersion))
+	require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", futureVersion))
+	_, err = RegenerateViewDefinition(ctx,
+		`{"Stmt":"select (","required_protocol_version":-1}`)
+	require.ErrorContains(t, err, "must not be negative")
 
 	for _, regenerated := range []*RegeneratedViewDefinition{
 		nil,

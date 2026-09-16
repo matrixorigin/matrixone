@@ -84,6 +84,13 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 		sqlquote.Ident(metaDef.IndexName)), nil
 }
 
+// AlterCopyInitSQL — ivf-flat clones metadata+centroids and rebuilds entries from the
+// CDC ts=0 replay (its per-hidden-table clone policy), so the COPY ALTER unaffected path
+// needs no InitSQL: (false, "") keeps the current behavior (#28837).
+func (Hooks) AlterCopyInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) (bool, string, error) {
+	return false, "", nil
+}
+
 // ValidateReindexParams handles the IVF-FLAT `lists` update at ALTER
 // REINDEX time. The legacy switch at ddl.go:928 wrote new lists into
 // the AlgoParams map and persisted it via UPDATE mo_catalog.mo_indexes
