@@ -6283,7 +6283,11 @@ func DateStringToTime(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		if e != nil {
 			return 0, moerr.NewOutOfRangeNoCtxf("time", "'%s'", string(v))
 		}
-		return t, nil
+		clamped := types.ClampMySQLTimeForScale(t, 6)
+		if clamped != t {
+			appendTimeRangeWarning(proc, t, 6)
+		}
+		return clamped, nil
 	}, selectList)
 }
 

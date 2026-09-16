@@ -151,7 +151,17 @@ func newTimestampPairTimeReader(vec *vector.Vector, proc *process.Process) (time
 	switch vec.GetType().Oid {
 	case types.T_time:
 		parameter := vector.GenerateFunctionFixedTypeParameter[types.Time](vec)
-		return parameter.GetValue, nil
+		return func(row uint64) (types.Time, bool) {
+			value, isNull := parameter.GetValue(row)
+			if isNull {
+				return 0, true
+			}
+			clamped := types.ClampMySQLTimeForScale(value, 6)
+			if clamped != value {
+				appendTimeRangeWarning(proc, value, 6)
+			}
+			return clamped, false
+		}, nil
 	case types.T_date:
 		parameter := vector.GenerateFunctionFixedTypeParameter[types.Date](vec)
 		return func(row uint64) (types.Time, bool) {
@@ -217,7 +227,14 @@ func newTimestampPairTimeReader(vec *vector.Vector, proc *process.Process) (time
 			if negativeDay {
 				timeValue = -timeValue
 			}
-			return timeValue, err != nil
+			if err != nil {
+				return 0, true
+			}
+			clamped := types.ClampMySQLTimeForScale(timeValue, 6)
+			if clamped != timeValue {
+				appendTimeRangeWarning(proc, timeValue, 6)
+			}
+			return clamped, false
 		}, nil
 	default:
 		return nil, moerr.NewInternalErrorNoCtxf("unexpected TIMESTAMP second argument type %s", vec.GetType().Oid)

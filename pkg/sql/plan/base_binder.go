@@ -6320,7 +6320,7 @@ func bindFuncExprImplByPlanExpr(
 		} else {
 			// Lower dynamic formats to the legacy three-argument overload. This
 			// keeps serialized plans executable by older CNs during rolling upgrades.
-			args = append(args, makePlan2DateConstNullExprWithScale(types.T_datetime, 6))
+			args = append(args, makePlan2DateConstNullExprWithScale(types.T_varchar, 6))
 		}
 	case "unix_timestamp":
 		if len(args) == 1 {
