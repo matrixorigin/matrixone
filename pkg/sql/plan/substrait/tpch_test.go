@@ -31,12 +31,15 @@ import (
 
 func TestExportCanonicalTPCHPlans(t *testing.T) {
 	mock := planbuilder.NewMockOptimizer(false)
-	// Exact DECIMAL widening makes these plans contain Decimal256 expressions.
-	// Substrait decimal is capped at precision 38, so declining Sirius offload is
-	// required to preserve MatrixOne's wider arithmetic semantics.
-	decimal256Plans := map[int]struct{}{
-		1: {}, 3: {}, 5: {}, 7: {}, 8: {}, 9: {}, 10: {},
-		11: {}, 14: {}, 15: {}, 17: {}, 19: {}, 20: {},
+	// Exact DECIMAL arithmetic and SUM widening make these plans contain
+	// Decimal256 expressions. Substrait decimal is capped at precision 38, so
+	// declining Sirius offload preserves MatrixOne's wider arithmetic semantics.
+	decimal256Plans := map[int]EligibilityReason{
+		1: EligibilityExpression, 3: EligibilityExpression, 5: EligibilityExpression,
+		6: EligibilityType, 7: EligibilityExpression, 8: EligibilityExpression,
+		9: EligibilityExpression, 10: EligibilityExpression, 11: EligibilityType,
+		14: EligibilityExpression, 15: EligibilityExpression, 17: EligibilityExpression,
+		19: EligibilityExpression, 20: EligibilityExpression,
 	}
 	for queryNumber := 1; queryNumber <= 22; queryNumber++ {
 		t.Run(fmt.Sprintf("q%d", queryNumber), func(t *testing.T) {
@@ -61,9 +64,15 @@ func TestExportCanonicalTPCHPlans(t *testing.T) {
 			}
 
 			candidate, err := Export(query)
-			if _, expectedIneligible := decimal256Plans[queryNumber]; expectedIneligible {
+			if expectedReason, expectedIneligible := decimal256Plans[queryNumber]; expectedIneligible {
 				require.Error(t, err)
-				require.True(t, IsNotEligible(err), err)
+				require.True(t, IsNotEligible(err))
+				reason, ok := NotEligibleReason(err)
+				require.True(t, ok)
+				require.Equal(t, expectedReason, reason)
+				if expectedReason == EligibilityType {
+					require.ErrorContains(t, err, "unsupported type DECIMAL256")
+				}
 				return
 			}
 			require.NoError(t, err)

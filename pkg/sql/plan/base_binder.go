@@ -2975,7 +2975,11 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return b.impl.BindWinFunc(funcName, astExpr, depth, isRoot)
 	}
 
-	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	if err == nil && strings.EqualFold(funcName, "json_merge") {
+		appendJSONMergeWarning(b.GetContext(), astExpr)
+	}
+	return expr, err
 }
 
 // bindGenericFunctionExpr keeps a whitespace-separated sensitive function
@@ -5049,6 +5053,28 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, nil, false)
 }
 
+func hexExplicitRealCastOverload(name string, args []*Expr) (int32, bool) {
+	if name != "hex" || len(args) != 1 || args[0] == nil {
+		return 0, false
+	}
+	cast := args[0].GetF()
+	if cast == nil || cast.GetFunc().GetObjName() != "cast" {
+		return 0, false
+	}
+	_, castOverload := function.DecodeOverloadID(cast.GetFunc().GetObj())
+	if castOverload == 0 && !cast.GetSyntaxExplicitCast() {
+		return 0, false
+	}
+	switch types.T(args[0].Typ.Id) {
+	case types.T_float32:
+		return function.HexExplicitFloat32Overload, true
+	case types.T_float64:
+		return function.HexExplicitFloat64Overload, true
+	default:
+		return 0, false
+	}
+}
+
 func bindPreparedFuncExprImplByPlanExpr(
 	ctx context.Context,
 	originalBoundExpr *Expr,
@@ -5793,6 +5819,12 @@ func bindFuncExprImplByPlanExpr(
 		return nil, err
 	}
 
+	if overloadID, ok := hexExplicitRealCastOverload(name, args); ok {
+		fGet, err = function.GetFunctionByNameWithOverload(ctx, name, argsType, overloadID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
