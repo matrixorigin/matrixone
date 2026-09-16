@@ -1250,6 +1250,11 @@ func applyTransparentStringSource(
 	if result == nil || source == nil || rows <= 0 {
 		return nil
 	}
+	// An implicit cast changes the physical result type but does not change
+	// the source SQL domain. Preserve that domain alongside StringSource so
+	// consumers such as JSON_STORAGE can reject an ENUM value that travelled
+	// through the text transport instead of accepting it as VARCHAR.
+	result.SetPrepareParamType(source.GetPrepareParamType())
 	if source.GetStringSources() == nil {
 		return result.SetStringSource(source.GetStringSource())
 	}
