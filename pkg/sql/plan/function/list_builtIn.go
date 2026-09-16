@@ -961,10 +961,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `elt`
 	{
-		functionId: ELT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    eltCheck,
+		functionId:        ELT,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           eltCheck,
 
 		Overloads: []overload{
 			{
@@ -2911,10 +2912,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `left`
 	{
-		functionId: LEFT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        LEFT,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -2942,10 +2944,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `right`
 	{
-		functionId: RIGHT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        RIGHT,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3095,10 +3098,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `lpad`
 	{
-		functionId: LPAD,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        LPAD,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3210,10 +3214,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `insert`
 	{
-		functionId: INSERT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        INSERT,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}, {position: 2, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3463,10 +3468,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `repeat`
 	{
-		functionId: REPEAT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        REPEAT,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3525,10 +3531,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `rpad`
 	{
-		functionId: RPAD,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        RPAD,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3672,10 +3679,12 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `space`
 	{
-		functionId: SPACE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		functionId:        SPACE,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64}},
+		bindingOverloads:  []int{1},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           fixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4371,10 +4380,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `substring`, `substr`, `mid`
 	{
-		functionId: SUBSTRING,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        SUBSTRING,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}, {position: 2, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -4822,10 +4832,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `locate`
 	{
-		functionId: LOCATE,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		functionId:        LOCATE,
+		integerParameters: []integerParameter{{position: 2, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{

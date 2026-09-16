@@ -324,3 +324,45 @@ func TestIntegerArgumentText(t *testing.T) {
 	require.Zero(t, value.magnitude)
 	require.True(t, textIntegerArgument(append([]byte{1}, make([]byte, 8)...), true).overflow)
 }
+
+func TestStringIntegerArgumentConsumers(t *testing.T) {
+	for _, name := range []string{"left", "right", "substring", "substr", "mid", "lpad", "rpad", "insert", "locate", "repeat", "space", "elt"} {
+		t.Run(name, func(t *testing.T) {
+			id, ok := getFunctionIdByNameWithoutErr(name)
+			require.True(t, ok)
+			f := allSupportedFunctions[id]
+			index := 0
+			if len(f.bindingOverloads) > 0 {
+				index = f.bindingOverloads[0]
+			}
+			inputs := make([]types.Type, len(f.Overloads[index].args))
+			for i, arg := range f.Overloads[index].args {
+				inputs[i] = arg.ToType()
+			}
+			if name == "elt" {
+				inputs = []types.Type{types.T_int64.ToType(), types.T_varchar.ToType()}
+			}
+			if name == "locate" {
+				inputs = append(inputs, types.T_int64.ToType())
+			}
+			for _, parameter := range f.integerParameters {
+				if parameter.position < len(inputs) {
+					inputs[parameter.position] = types.New(types.T_decimal128, 20, 1)
+				}
+			}
+			original := append([]types.Type(nil), inputs...)
+			result, err := GetFunctionByName(context.Background(), name, inputs)
+			require.NoError(t, err)
+			_, executionID := DecodeOverloadID(result.GetEncodedOverloadID())
+			require.True(t, f.bindsOverload(int(executionID)))
+			casts, needed := result.ShouldDoImplicitTypeCast()
+			require.True(t, needed)
+			for _, parameter := range f.integerParameters {
+				if parameter.position < len(inputs) {
+					require.Equal(t, parameter.target, casts[parameter.position].Oid)
+				}
+			}
+			require.Equal(t, original, inputs)
+		})
+	}
+}
