@@ -810,24 +810,42 @@ func (pts *PatternTuples) Append(pt *PatternTuple) {
 }
 
 // NormalizeCDCSourcePatternCase applies MatrixOne's source-side identifier
-// policy before a CDC task persists or validates its source patterns. Sink
-// identifiers intentionally retain the user's spelling because their server
-// can use a different case policy.
-func NormalizeCDCSourcePatternCase(pts *PatternTuples, lowerCaseTableNames int64) {
-	if lowerCaseTableNames == 0 || pts == nil {
-		return
+// policy before a CDC task persists or validates its source patterns. Mode 1
+// stores source identifiers in lowercase; mode 2 retains execution spelling
+// while still treating source identities case-insensitively for duplicate
+// detection. Sink identifiers intentionally retain the user's spelling because
+// their server can use a different case policy.
+func NormalizeCDCSourcePatternCase(pts *PatternTuples, lowerCaseTableNames int64) error {
+	if pts == nil {
+		return nil
 	}
+	seen := make(map[string]struct{}, len(pts.Pts))
 	for _, pt := range pts.Pts {
 		if pt == nil {
 			continue
 		}
-		if pt.Source.Database != CDCPitrGranularity_All {
+		if lowerCaseTableNames == 1 && pt.Source.Database != CDCPitrGranularity_All {
 			pt.Source.Database = strings.ToLower(pt.Source.Database)
 		}
-		if pt.Source.Table != CDCPitrGranularity_All {
+		if lowerCaseTableNames == 1 && pt.Source.Table != CDCPitrGranularity_All {
 			pt.Source.Table = strings.ToLower(pt.Source.Table)
 		}
+		keyDB, keyTable := pt.Source.Database, pt.Source.Table
+		if lowerCaseTableNames != 0 {
+			if keyDB != CDCPitrGranularity_All {
+				keyDB = strings.ToLower(keyDB)
+			}
+			if keyTable != CDCPitrGranularity_All {
+				keyTable = strings.ToLower(keyTable)
+			}
+		}
+		key := GenDbTblKey(keyDB, keyTable)
+		if _, ok := seen[key]; ok {
+			return moerr.NewInternalErrorNoCtxf("one db/table: %s can't be used as multi sources in a cdc task", key)
+		}
+		seen[key] = struct{}{}
 	}
+	return nil
 }
 
 func (pts *PatternTuples) String() string {
