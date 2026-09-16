@@ -3565,17 +3565,22 @@ func preparedPrecisionHasFallbackSource(expr *Expr) bool {
 }
 
 func preparedPrecisionProducerUsesResolvedDomain(expr *Expr) bool {
-	fn := expr.GetF()
-	return fn == nil || fn.Func == nil || fn.Func.GetObjName() != "coalesce"
+	return expr != nil && expr.GetPreparedNumeric().GetFallbackSource()
 }
 
 func rewritePreparedPrecisionBitwiseOperands(expr *Expr) *Expr {
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || !preparedPrecisionBitwiseFunction(fn.Func.GetObjName()) {
+	if expr == nil || expr.GetF() == nil {
 		return expr
 	}
 	copy := DeepCopyExpr(expr)
-	for _, arg := range copy.GetF().Args {
+	fn := copy.GetF()
+	for i, arg := range fn.Args {
+		fn.Args[i] = rewritePreparedPrecisionBitwiseOperands(arg)
+	}
+	if fn.Func == nil || !preparedPrecisionBitwiseFunction(fn.Func.GetObjName()) {
+		return copy
+	}
+	for _, arg := range fn.Args {
 		cast := arg.GetF()
 		if cast == nil || cast.Func == nil || cast.Func.GetObjName() != "cast" || len(cast.Args) == 0 ||
 			cast.GetSyntaxExplicitCast() || !types.T(arg.Typ.Id).IsInteger() {
@@ -3583,7 +3588,7 @@ func rewritePreparedPrecisionBitwiseOperands(expr *Expr) *Expr {
 		}
 		source := types.T(cast.Args[0].Typ.Id)
 		if source.IsFloat() || source.IsDecimal() {
-			setPreparedCastOverload(arg, 1)
+			setPreparedCastOverload(arg, 4)
 		}
 	}
 	return copy

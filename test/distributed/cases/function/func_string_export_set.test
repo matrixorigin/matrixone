@@ -667,6 +667,21 @@ PREPARE export_set_precision_coalesce_text FROM
 SET @export_set_bits = CAST(0.5 AS DECIMAL(2,1));
 EXECUTE export_set_precision_coalesce_text USING @export_set_bits;
 DEALLOCATE PREPARE export_set_precision_coalesce_text;
+PREPARE export_set_precision_nested_bitwise FROM
+  "SELECT EXPORT_SET(TRUNCATE(15.5,ABS(x & 1)),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = CAST(0.5 AS DOUBLE);
+EXECUTE export_set_precision_nested_bitwise USING @export_set_bits;
+DEALLOCATE PREPARE export_set_precision_nested_bitwise;
+PREPARE export_set_precision_bitwise_saturation FROM
+  "SELECT EXPORT_SET(TRUNCATE(15.5,x & 1),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = CAST(1e100 AS DOUBLE);
+EXECUTE export_set_precision_bitwise_saturation USING @export_set_bits;
+DEALLOCATE PREPARE export_set_precision_bitwise_saturation;
+PREPARE export_set_precision_greatest_text FROM
+  "SELECT EXPORT_SET(TRUNCATE(15.5,GREATEST(COALESCE(x,'0'),'0')),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = CAST(0.5 AS DECIMAL(2,1));
+EXECUTE export_set_precision_greatest_text USING @export_set_bits;
+DEALLOCATE PREPARE export_set_precision_greatest_text;
 
 DROP TABLE export_set_scalar_input;
 

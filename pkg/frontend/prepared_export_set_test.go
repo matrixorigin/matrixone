@@ -432,7 +432,10 @@ func TestPreparedExportSetPrecisionExpressionRoles(t *testing.T) {
 		{"sign integer", "sign(x)", int64(1), types.T_int64.ToType(), "NNNN", false},
 		{"ifnull real", "ifnull(x,0)", 0.5, types.T_float64.ToType(), "YYYY", true},
 		{"bitwise real", "x & 1", 0.5, types.T_float64.ToType(), "YYYY", true},
+		{"nested bitwise real", "abs(x & 1)", 0.5, types.T_float64.ToType(), "YYYY", true},
+		{"bitwise real saturation", "x & 1", 1e100, types.T_float64.ToType(), "NNNN", true},
 		{"coalesce text", "coalesce(x,'0')", "0.5", types.New(types.T_decimal64, 2, 1), "YYYY", true},
+		{"greatest coalesce text", "greatest(coalesce(x,'0'),'0')", "0.5", types.New(types.T_decimal64, 2, 1), "YYYY", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 401,
