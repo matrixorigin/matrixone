@@ -1787,6 +1787,18 @@ func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]a
 	return ctr.makeAggListForMode(aggExprs, ctr.aggregateAllocation, ctr.mtyp == H0)
 }
 
+// makeSingleGroupAggList constructs the bounded aggregate state used by an
+// ordered ROLLUP prefix.  The ordinary GROUP BY path chooses the aggregate
+// representation from ctr.mtyp; that representation is intentionally not
+// reused here because every live ROLLUP prefix owns exactly one group even
+// when the input relation has an unbounded number of groups.
+func (ctr *container) makeSingleGroupAggList(
+	aggExprs []aggexec.AggFuncExecExpression,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListWithAllocationMode(
+		aggExprs, ctr.aggregateAllocation, true)
+}
+
 func (ctr *container) makeSpillAggList(
 	aggExprs []aggexec.AggFuncExecExpression,
 ) ([]aggexec.GroupAggFuncExec, error) {
@@ -1833,6 +1845,15 @@ func (ctr *container) buildSpillReloadHashTable(
 }
 
 func (ctr *container) makeAggListWithAllocation(
+	aggExprs []aggexec.AggFuncExecExpression,
+	allocation *aggexec.AllocationAccount,
+	singleGroup bool,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListWithAllocationMode(
+		aggExprs, allocation, ctr.mtyp == H0)
+}
+
+func (ctr *container) makeAggListWithAllocationMode(
 	aggExprs []aggexec.AggFuncExecExpression,
 	allocation *aggexec.AllocationAccount,
 	singleGroup bool,

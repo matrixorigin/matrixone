@@ -3748,6 +3748,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableStringType("version_compile_zlib"),
 		Default:           "",
 	},
+	"rollup_algorithm": {
+		Name:              "rollup_algorithm",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemSystemEnumType("rollup_algorithm", "COST", "SORT", "HASH"),
+		Default:           "COST",
+	},
 	"windowing_use_high_precision": {
 		Name:              "windowing_use_high_precision",
 		Scope:             ScopeBoth,
