@@ -534,7 +534,7 @@ func (hb *HashmapBuilder) buildHashmap(
 		}
 		duplicateWarnings.Add(
 			moerr.ER_DUP_ENTRY,
-			moerr.NewDuplicateEntry(proc.Ctx, rowStr, hb.DedupColName).Error(),
+			moerr.FormatDuplicateEntry(rowStr, hb.DedupColName),
 		)
 	}
 	if err := checkHashBuildCanceled(proc); err != nil {
