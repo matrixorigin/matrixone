@@ -65,7 +65,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
 	// MergeGroup is a receiver. It canonicalizes legacy producer payloads into
 	// the current in-memory DISTINCT domain, so its destination uses the modern
-	// key policy even when the incoming peer is below v78.
+	// key policy even when the incoming peer is below v79.
 	mergeGroup.ctr.legacyDistinctFloatKeys = false
 	mergeGroup.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 	mergeGroup.ctr.groupByTypes = nil

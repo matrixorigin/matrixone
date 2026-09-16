@@ -274,7 +274,7 @@ type container struct {
 	legacyHLLState              bool
 	floatZeroHLLState           bool
 	// legacyDistinctFloatKeys is frozen before aggregate groups are admitted.
-	// Pre-v78 remote producers keep the compatibility FLOAT key policy, which
+	// Pre-v79 remote producers keep the compatibility FLOAT key policy, which
 	// preserves every non-zero bit pattern in the fixed index and wire output.
 	legacyDistinctFloatKeys bool
 	timeZone                *time.Location

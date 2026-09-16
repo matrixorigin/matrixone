@@ -7924,7 +7924,7 @@ func hasCanonicalDistinctKeyWire(node *plan.Node) bool {
 }
 
 // hasLegacyFloatDistinctKeyWire identifies the fixed-width FLOAT DISTINCT
-// contract that changed with the canonical key fast path. Before MORPC v78 a
+// contract that changed with the canonical key fast path. Before MORPC v79 a
 // remote producer must keep every non-zero float bit pattern as a separate
 // key, so a new coordinator keeps this aggregation local until all remote
 // peers understand the modern contract. GROUP_CONCAT has an independent

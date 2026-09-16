@@ -279,7 +279,7 @@ func RequiresCanonicalDistinctKeyWire(agg AggFuncExec) bool {
 
 // RequiresModernDistinctFloatKeyWire reports whether an aggregate was built
 // with the modern FLOAT DISTINCT membership policy. A producer must not send
-// that state to a pre-v78 peer after a capability downgrade: the legacy peer
+// that state to a pre-v79 peer after a capability downgrade: the legacy peer
 // compares fixed-width float bytes and the modern state may already have
 // collapsed distinct NaN payloads.
 func RequiresModernDistinctFloatKeyWire(agg AggFuncExec) bool {
