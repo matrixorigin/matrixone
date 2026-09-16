@@ -769,7 +769,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					}
 					newColName2Idx[alias+"."+col.Name] = oldPos
 					oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
-					selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
+					selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
 					selectNode.ProjectList[oldPos] = newDefExpr
 				}
 
@@ -1029,7 +1029,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 			assignedColsByTarget[i][col.Name] = struct{}{}
 			oldColName2Idx[alias+"."+col.Name] = int32(len(selectNode.ProjectList))
-			selectNode.ProjectList = append(selectNode.ProjectList, selectNode.ProjectList[oldPos])
+			selectNode.ProjectList = append(selectNode.ProjectList, DeepCopyExpr(selectNode.ProjectList[oldPos]))
 			selectNode.ProjectList[oldPos] = genExpr
 			if isMultiTargetUpdate {
 				targetSelected, buildErr := builder.buildTargetSelectedBelowAssignmentProject(
