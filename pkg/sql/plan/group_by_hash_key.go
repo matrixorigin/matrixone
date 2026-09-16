@@ -31,6 +31,15 @@ func (builder *QueryBuilder) determineGroupByHashKeys(nodeID int32) {
 // Keep this separate from the tree walk because optimizer rewrites can create a
 // new aggregate after the initial annotation pass.
 func (builder *QueryBuilder) determineGroupByHashKey(node *pbplan.Node) {
+	// Sort rollup uses the visible grouping-list prefix as its aggregation
+	// hierarchy. A uniqueness-derived subset key is valid for hash equality,
+	// but it cannot replace a visible rollup level (the omitted value must still
+	// be emitted on the detail row). Keep the sort path fail-closed; the
+	// appendAggNode pad-space key, when present, is an explicit equality key and
+	// is preserved by the early return below.
+	if IsSortRollupOption(node.ExtraOptions) {
+		return
+	}
 	// Some semantic rewrites provide an explicit physical key that differs from
 	// the user-visible grouping value. Preserve that stronger proof.
 	if len(node.GroupByHashKey) > 0 {

@@ -1875,6 +1875,12 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	if name == "div_precision_increment" {
 		oldDivPrecisionIncrement = ses.currentDivPrecisionIncrement()
 	}
+	oldRollupAlgorithm := ""
+	if name == "rollup_algorithm" {
+		if old, getErr := ses.GetSessionSysVar(name); getErr == nil {
+			oldRollupAlgorithm, _ = old.(string)
+		}
+	}
 
 	def, ok := gSysVarsDefs[name]
 	if !ok {
@@ -1988,6 +1994,12 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 	if err == nil && name == "div_precision_increment" {
 		if increment, ok := val.(int64); ok && increment != oldDivPrecisionIncrement {
 			ses.cleanCache()
+		}
+	}
+	if err == nil && name == "rollup_algorithm" {
+		if newValue, ok := val.(string); ok && oldRollupAlgorithm != newValue {
+			ses.cleanCache()
+			ses.markPreparedPlansForRollupAlgorithmChange()
 		}
 	}
 	if err == nil && vectorModeVariable {

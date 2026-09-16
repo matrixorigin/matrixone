@@ -1,0 +1,44 @@
+drop database if exists rollup_sort_bvt;
+create database rollup_sort_bvt;
+use rollup_sort_bvt;
+create table t_rollup_sort (
+a int,
+b int,
+amount int
+);
+insert into t_rollup_sort values
+(null, 1, 10),
+(null, 1, 20),
+(1, 1, 30),
+(1, 2, 40),
+(2, 1, 50);
+set session rollup_algorithm = 'SORT';
+select a, b, cnt, total, grouping_a, grouping_b
+from (
+select a, b,
+count(*) as cnt,
+sum(amount) as total,
+grouping(a) as grouping_a,
+grouping(b) as grouping_b
+from t_rollup_sort
+group by a, b with rollup
+) q
+order by grouping_a, grouping_b, a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]  𝄀
+null  ¦  1  ¦  2  ¦  30  ¦  0  ¦  0 𝄀
+1  ¦  1  ¦  1  ¦  30  ¦  0  ¦  0 𝄀
+1  ¦  2  ¦  1  ¦  40  ¦  0  ¦  0 𝄀
+2  ¦  1  ¦  1  ¦  50  ¦  0  ¦  0 𝄀
+null  ¦  null  ¦  2  ¦  30  ¦  0  ¦  1 𝄀
+1  ¦  null  ¦  2  ¦  70  ¦  0  ¦  1 𝄀
+2  ¦  null  ¦  1  ¦  50  ¦  0  ¦  1 𝄀
+null  ¦  null  ¦  5  ¦  150  ¦  1  ¦  1
+truncate table t_rollup_sort;
+select a, b, count(*) as cnt, sum(amount) as total,
+grouping(a) as grouping_a, grouping(b) as grouping_b
+from t_rollup_sort
+group by a, b with rollup;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]  𝄀
+null  ¦  null  ¦  0  ¦  null  ¦  1  ¦  1
+set session rollup_algorithm = default;
+drop database rollup_sort_bvt;

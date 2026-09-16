@@ -2356,6 +2356,8 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 		builder.optimizerHints.skipDedup = value
 	case "outerAntiPlanning":
 		builder.optimizerHints.outerAntiPlanning = value
+	case "rollupSort":
+		builder.optimizerHints.rollupSort = value
 	}
 }
 
@@ -2390,6 +2392,20 @@ func (builder *QueryBuilder) parseOptimizeHints() {
 		if str, ok := v.(string); ok {
 			applyHints(str)
 		}
+	}
+}
+
+// sortRollupMode is retained as an internal compatibility adapter. New code
+// should use rollup_algorithm through rollupAlgorithmMode, which mirrors the
+// COST/SORT/HASH session variable used by the window partition implementation.
+func (builder *QueryBuilder) sortRollupMode() int {
+	switch builder.rollupAlgorithmMode() {
+	case rollupAlgorithmSort:
+		return 1
+	case rollupAlgorithmHash:
+		return 2
+	default:
+		return 0
 	}
 }
 

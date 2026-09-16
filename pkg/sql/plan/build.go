@@ -77,6 +77,9 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	if IsSnapshotValid(ctx.GetSnapshot()) {
 		bindCtx.snapshot = ctx.GetSnapshot()
 	}
+	// The physical ROLLUP selector is needed while binding the query block.
+	// createQuery parses the same setting again for the optimizer passes.
+	builder.parseOptimizeHints()
 
 	rootId, err := builder.bindSelect(stmt, bindCtx, true)
 	if err != nil {
