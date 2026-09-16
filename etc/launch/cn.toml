@@ -17,6 +17,10 @@ data-dir = "./mo-data/shared2"
 [log]
 level = "info"
 
+# Fresh local/BVT cluster opt-in. Never enable during a mixed-version upgrade.
+[cn.auto-increment]
+enable-auto-id-cache = true
+
 [cn]
 uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
 port-base = 18000
