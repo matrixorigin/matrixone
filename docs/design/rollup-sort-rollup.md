@@ -90,9 +90,15 @@ extension; today they use the legacy path.
 
 ## Eligibility and planner contract
 
-The planner considers the sort path only for one non-empty ROLLUP list over a
-single base-table source, or over a conservative derived table whose explicit
-`ORDER BY` already establishes the complete grouping-key prefix. Grouping terms
+The planner considers the sort path only for the root query block, and only for
+one non-empty ROLLUP list over a single base-table source, or over a
+conservative derived table whose explicit `ORDER BY` already establishes the
+complete grouping-key prefix. A ROLLUP in a nested query block—including a
+derived table, view, CTE body or reference, or scalar subquery—always uses the
+existing grouping-set rewrite. This boundary is intentional: grouping metadata
+from a nested block feeds the outer materialization and fan-out logic, so the
+internal sort-rollup marker must not cross that boundary. A root ROLLUP may
+still consume the order of an eligible non-grouped derived input. Grouping terms
 must be distinct direct column references, their bound types must pass the same
 conservative order/equality whitelist as the executor, and the query block must
 have no named or inline window expression. Joins, ordinary derived tables,
@@ -317,8 +323,9 @@ contracts. Operator memory is reported through the existing group analyzer.
 - executor tests cover two input batches, empty input, source NULL versus
   rollup NULL, grouping bitmap, aggregate values, and cleanup;
 - planner tests prove repeated/direct-ineligible and inline-window forms do not
-  take the sort path, derived/CTE sources fall back, and outer filters stay
-  above the aggregate;
+  take the sort path, nested query-block ROLLUP stays on the legacy path,
+  eligible ordered derived input remains reusable, and outer filters stay above
+  the aggregate;
 - executor tests cover count-based and byte-based capacity limits, automatic
   capacity, initialization failure followed by `Reset -> Prepare`, and
   cleanup;
