@@ -245,19 +245,14 @@ func (u *fulltext2CreateState) rowInclude(tf *TableFunction, nthRow int) []any {
 
 // rowTerms tokenizes source row nthRow (columns argVecs[2..]) into ordered terms,
 // applying the index's parser. datalink columns are resolved to plain text and
-// json columns to their flattened values; a NULL column yields no tokens (matches
-// the classic tokenizer's per-row NULL handling).
+// json columns to their flattened values; a SQL NULL column yields no tokens
+// while other columns in the row continue to contribute terms.
 func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process, nthRow int) ([]fulltext2.WordPos, error) {
 	argVecs := tf.ctr.argVecs
 	// Text columns are argVecs[2 : textEnd); the trailing len(IncludeTypes) args are INCLUDE
-	// columns (their values are stored verbatim, NOT tokenized). A NULL in any TEXT column
-	// yields no tokens (empty doc); a NULL INCLUDE column is fine (stored as NULL).
+	// columns (their values are stored verbatim, NOT tokenized). A SQL NULL text column
+	// contributes no terms; the other indexed columns in the same row remain searchable.
 	textEnd := len(argVecs) - len(u.tblcfg.IncludeTypes)
-	for i := 2; i < textEnd; i++ {
-		if argVecs[i].IsNull(uint64(nthRow)) {
-			return nil, nil
-		}
-	}
 
 	// The tuple json breaker must run BEFORE any flatten: flattening joins the
 	// leaf values and throws the keys away, and the keys are the whole point.
@@ -267,6 +262,9 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 		opt := u.tblcfg.JSONTermOptions()
 		var terms []fulltext2.WordPos
 		for i := 2; i < textEnd; i++ {
+			if argVecs[i].IsNull(uint64(nthRow)) {
+				continue
+			}
 			binary := argVecs[i].GetType().Oid == types.T_json
 			var raw []byte
 			if binary {
@@ -291,6 +289,9 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 	var content bytes.Buffer
 	if fulltext2.IsJSONParser(u.tblcfg.Parser) {
 		for i := 2; i < textEnd; i++ {
+			if argVecs[i].IsNull(uint64(nthRow)) {
+				continue
+			}
 			binary := argVecs[i].GetType().Oid == types.T_json
 			var raw []byte
 			if binary {
@@ -317,6 +318,9 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 		}
 	} else {
 		for i := 2; i < textEnd; i++ {
+			if argVecs[i].IsNull(uint64(nthRow)) {
+				continue
+			}
 			if content.Len() > 0 {
 				content.WriteByte('\n')
 			}

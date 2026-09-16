@@ -56,4 +56,32 @@ select id from jt where match(doc) against('red..blue--brown@@yellow::orange' in
 select id from jt where match(doc) against('兒童中文' in boolean mode) order by id;
 select id from jt where match(doc) against('red' in boolean mode) order by id;
 
+-- ============ multi-column SQL NULL boundary ==========
+-- SQL NULL contributes no terms; a non-NULL sibling remains searchable. JSON
+-- literal null is also distinct from SQL NULL: it contributes no value term,
+-- while the JSON string "null" is indexed as a whole value.
+drop table if exists js_null;
+create table js_null(id bigint primary key, left_doc json, right_doc json);
+insert into js_null values
+ (1,'{"k":"leftboth"}','{"k":"rightboth"}'),
+ (2,NULL,'{"k":"onlyrighttoken"}'),
+ (3,'{"k":"onlylefttoken"}',NULL),
+ (4,NULL,NULL),
+ (5,'null','{"k":"literalcontrol"}'),
+ (6,'"null"',NULL);
+create fulltext2 index ft_null on js_null(left_doc, right_doc) with parser json_value;
+select id from js_null where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+select id from js_null where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+select id from js_null where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+select id from js_null where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+select id from js_null where match(left_doc, right_doc) against('null' in boolean mode) order by id;
+
+-- FORCE_SYNC MERGE and REBUILD must preserve the same complete PK sets.
+alter table js_null alter reindex ft_null fulltext2 merge force_sync;
+select id from js_null where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+select id from js_null where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+alter table js_null alter reindex ft_null fulltext2 force_sync;
+select id from js_null where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+select id from js_null where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+
 drop database fulltext2_jsonvalue;

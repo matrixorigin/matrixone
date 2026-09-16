@@ -62,10 +62,25 @@ func TestFulltext2WriterRowText(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "hello\nworld", txt)
 
-	// any NULL indexed column → whole doc yields no tokens.
+	// A SQL NULL indexed column contributes no text; the other column remains.
 	txt, err = w.rowText(context.Background(), []any{int64(1), nil, "world"})
 	require.NoError(t, err)
-	require.Equal(t, "", txt)
+	require.Equal(t, "world", txt)
+
+	// NULL columns do not create separators. The delimiter follows the same
+	// buffer-based rule as fulltext2_create, including an explicitly empty value.
+	txt, err = w.rowText(context.Background(), []any{int64(1), "alpha", nil, "beta"})
+	require.NoError(t, err)
+	require.Equal(t, "alpha\nbeta", txt)
+	txt, err = w.rowText(context.Background(), []any{int64(1), "alpha", "", "beta"})
+	require.NoError(t, err)
+	require.Equal(t, "alpha\n\nbeta", txt)
+	tok, err := fulltext2.CdcTokenizer(fulltext2.ParserNgram)
+	require.NoError(t, err)
+	require.Equal(t, []fulltext2.WordPos{{Word: "alpha", Pos: 0}, {Word: "beta", Pos: 7}}, tok(txt))
+	txt, err = w.rowText(context.Background(), []any{int64(1), nil, "alpha"})
+	require.NoError(t, err)
+	require.Equal(t, "alpha", txt)
 
 	// json parser flattens each column's values.
 	wj := newFT2Writer(fulltext2.ParserJSON)
@@ -78,6 +93,109 @@ func TestFulltext2WriterRowText(t *testing.T) {
 	txt, err = wjv.rowText(context.Background(), []any{int64(1), []byte(`{"a":"origin"}`)})
 	require.NoError(t, err)
 	require.Contains(t, txt, "origin")
+}
+
+func TestFulltext2WriterJSONValueSkipsNullColumn(t *testing.T) {
+	w := newFT2Writer(fulltext2.ParserJSONValue)
+	w.textPos = []int32{1, 2}
+	w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
+
+	txt, err := w.rowText(context.Background(), []any{int64(1), nil, []byte(`{"k":"right"}`)})
+	require.NoError(t, err)
+	require.Equal(t, "right", txt)
+
+	txt, err = w.rowText(context.Background(), []any{int64(1), []byte(`{"k":"left"}`), nil})
+	require.NoError(t, err)
+	require.Equal(t, "left", txt)
+
+	txt, err = w.rowText(context.Background(), []any{int64(1), []byte(`{"k":"left"}`), []byte(`{"k":"right"}`)})
+	require.NoError(t, err)
+	require.Equal(t, "left\nright", txt)
+	tok, err := fulltext2.CdcTokenizer(fulltext2.ParserJSONValue)
+	require.NoError(t, err)
+	require.Equal(t, []fulltext2.WordPos{{Word: "left", Pos: 0}, {Word: "right", Pos: 5}}, tok(txt))
+
+	// JSON literal null has no value term, while the JSON string "null" is a
+	// searchable whole value. A SQL NULL sibling must not change either result.
+	txt, err = w.rowText(context.Background(), []any{int64(1), nil, []byte("null")})
+	require.NoError(t, err)
+	require.Empty(t, txt)
+	txt, err = w.rowText(context.Background(), []any{int64(1), []byte(`"null"`), nil})
+	require.NoError(t, err)
+	require.Equal(t, "null", txt)
+}
+
+func TestFulltext2WriterJSONTupleSkipsNullColumn(t *testing.T) {
+	w := newFT2Writer(fulltext2.ParserJSON)
+	w.textPos = []int32{1, 2}
+	w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
+
+	txt, err := w.rowText(context.Background(), []any{int64(1), nil, []byte(`{"b":"right"}`)})
+	require.NoError(t, err)
+	got := fulltext2.DecodeJSONTermCarrier(txt)
+	require.Len(t, got, 1)
+	want, err := fulltext2.JSONTupleColumn([]byte(`{"b":"right"}`), fulltext2.DefaultJSONTermOptions())
+	require.NoError(t, err)
+	require.Equal(t, want[0], got[0].Word)
+	require.Equal(t, int32(0), got[0].Pos)
+}
+
+func TestFulltext2WriterJSONFlatSkipsNullColumn(t *testing.T) {
+	w := newFT2Writer(fulltext2.ParserJSON)
+	w.cfg.JSONNoKeys = true
+	w.textPos = []int32{1, 2}
+	w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
+	txt, err := w.rowText(context.Background(), []any{int64(1), nil, []byte(`{"k":"right"}`)})
+	require.NoError(t, err)
+	require.Equal(t, "right", txt)
+}
+
+func TestFulltext2WriterPartialNullRoundTrip(t *testing.T) {
+	w := newFT2Writer(fulltext2.ParserNgram)
+	w.textPos = []int32{1, 2}
+	w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
+
+	require.NoError(t, w.Insert(context.Background(), []any{int64(1), nil, "right"}))
+	blob, err := w.ToSql()
+	require.NoError(t, err)
+	cdc, err := fulltext2.DecodeCdc(blob)
+	require.NoError(t, err)
+	require.Len(t, cdc.Events, 1)
+	require.Equal(t, "right", cdc.Events[0].Text)
+	words, err := fulltext2.CdcTokenizer(fulltext2.ParserNgram)
+	require.NoError(t, err)
+	require.Equal(t, []fulltext2.WordPos{{Word: "right", Pos: 0}}, words(cdc.Events[0].Text))
+
+	w.Reset()
+	require.NoError(t, w.Upsert(context.Background(), []any{int64(1), nil, nil}))
+	blob, err = w.ToSql()
+	require.NoError(t, err)
+	cdc, err = fulltext2.DecodeCdc(blob)
+	require.NoError(t, err)
+	require.Len(t, cdc.Events, 1)
+	require.Empty(t, cdc.Events[0].Text)
+}
+
+func TestFulltext2WriterMalformedJSONWithNullSibling(t *testing.T) {
+	for _, row := range [][]any{
+		{int64(1), nil, []byte("{bad")},
+		{int64(1), []byte("{bad"), nil},
+	} {
+		w := newFT2Writer(fulltext2.ParserJSONValue)
+		w.textPos = []int32{1, 2}
+		w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
+		_, err := w.rowText(context.Background(), row)
+		require.Error(t, err)
+	}
+}
+
+func TestFulltext2WriterNullDatalinkSiblingIsSkipped(t *testing.T) {
+	w := newFT2Writer(fulltext2.ParserNgram)
+	w.textPos = []int32{1, 2}
+	w.textTypes = []int32{int32(types.T_datalink), int32(types.T_varchar)}
+	txt, err := w.rowText(context.Background(), []any{int64(1), nil, "right"})
+	require.NoError(t, err)
+	require.Equal(t, "right", txt)
 }
 
 // TestFulltext2WriterDatalinkFallback: with no resolver context (cnEngine==nil, e.g. unit tests) a datalink column falls back to indexing the URL

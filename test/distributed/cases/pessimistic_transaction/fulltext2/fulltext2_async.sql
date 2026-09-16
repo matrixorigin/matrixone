@@ -51,6 +51,138 @@ prepare wait_initial_ft2 from @wait_initial_ft2_sql;
 execute wait_initial_ft2;
 deallocate prepare wait_initial_ft2;
 
+-- Independent CDC boundary: create an empty JSON_VALUE index first so this
+-- lifecycle is not masked by an initial CREATE mismatch.
+drop table if exists json_null_cdc;
+create table json_null_cdc(id bigint primary key, left_doc json, right_doc json);
+create fulltext2 index ftv on json_null_cdc(left_doc, right_doc) with parser json_value;
+set @json_ft2_index = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'ftv' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'json_null_cdc')
+    limit 1
+);
+insert into json_null_cdc values
+ (1,'{"k":"leftboth"}','{"k":"rightboth"}'),
+ (2,NULL,'{"k":"onlyrighttoken"}'),
+ (3,'{"k":"onlylefttoken"}',NULL),
+ (4,NULL,NULL),
+ (6,'"null"',NULL);
+set @wait_json_sql = concat(
+    'select coalesce(max(chunk_id), -1) >= 0 as json_ready from `', database(), '`.`', @json_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_json from @wait_json_sql;
+-- @wait_expect(2, 120)
+execute wait_json;
+deallocate prepare wait_json;
+
+-- Initial CDC INSERT: partial NULL rows retain the non-NULL sibling; all-NULL
+-- has no searchable terms and the JSON string "null" remains searchable.
+select id from json_null_cdc where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('null' in boolean mode) order by id;
+
+-- UPDATE partial-NULL transitions. Each wait observes a new durable tail chunk;
+-- the following MATCH is the correctness oracle.
+set @capture_json_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @json_tail_before from `', database(), '`.`', @json_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_json_tail from @capture_json_tail_sql;
+execute capture_json_tail;
+deallocate prepare capture_json_tail;
+update json_null_cdc set left_doc = NULL where id = 1;
+set @wait_json_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @json_tail_before,
+    ' as json_update_ready from `', database(), '`.`', @json_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_json from @wait_json_sql;
+-- @wait_expect(2, 120)
+execute wait_json;
+deallocate prepare wait_json;
+select id from json_null_cdc where match(left_doc, right_doc) against('leftboth' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('rightboth' in boolean mode) order by id;
+
+prepare capture_json_tail from @capture_json_tail_sql;
+execute capture_json_tail;
+deallocate prepare capture_json_tail;
+update json_null_cdc set right_doc = NULL, left_doc = '{"k":"newleft"}' where id = 1;
+set @wait_json_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @json_tail_before,
+    ' as json_update_ready from `', database(), '`.`', @json_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_json from @wait_json_sql;
+-- @wait_expect(2, 120)
+execute wait_json;
+deallocate prepare wait_json;
+select id from json_null_cdc where match(left_doc, right_doc) against('rightboth' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('newleft' in boolean mode) order by id;
+
+-- An all-NULL UPSERT shadows the old terms while retaining the source PK.
+prepare capture_json_tail from @capture_json_tail_sql;
+execute capture_json_tail;
+deallocate prepare capture_json_tail;
+update json_null_cdc set left_doc = NULL where id = 1;
+set @wait_json_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @json_tail_before,
+    ' as json_update_ready from `', database(), '`.`', @json_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_json from @wait_json_sql;
+-- @wait_expect(2, 120)
+execute wait_json;
+deallocate prepare wait_json;
+select id from json_null_cdc where id = 1;
+select id from json_null_cdc where match(left_doc, right_doc) against('newleft' in boolean mode) order by id;
+
+prepare capture_json_tail from @capture_json_tail_sql;
+execute capture_json_tail;
+deallocate prepare capture_json_tail;
+update json_null_cdc set right_doc = '{"k":"revived"}' where id = 1;
+set @wait_json_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @json_tail_before,
+    ' as json_update_ready from `', database(), '`.`', @json_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_json from @wait_json_sql;
+-- @wait_expect(2, 120)
+execute wait_json;
+deallocate prepare wait_json;
+select id from json_null_cdc where match(left_doc, right_doc) against('revived' in boolean mode) order by id;
+
+prepare capture_json_tail from @capture_json_tail_sql;
+execute capture_json_tail;
+deallocate prepare capture_json_tail;
+delete from json_null_cdc where id = 1;
+set @wait_json_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @json_tail_before,
+    ' as json_delete_ready from `', database(), '`.`', @json_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_json from @wait_json_sql;
+-- @wait_expect(2, 120)
+execute wait_json;
+deallocate prepare wait_json;
+select id from json_null_cdc where match(left_doc, right_doc) against('revived' in boolean mode) order by id;
+prepare capture_json_tail from @capture_json_tail_sql;
+execute capture_json_tail;
+deallocate prepare capture_json_tail;
+insert into json_null_cdc values (1,NULL,'{"k":"reinserted"}');
+set @wait_json_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @json_tail_before,
+    ' as json_reinsert_ready from `', database(), '`.`', @json_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_json from @wait_json_sql;
+-- @wait_expect(2, 120)
+execute wait_json;
+deallocate prepare wait_json;
+select id from json_null_cdc where match(left_doc, right_doc) against('reinserted' in boolean mode) order by id;
+
 -- src's initial-sync state is verified via src2 below (a never-re-mutated table).
 -- src itself is deliberately NOT searched here: fulltext2's per-CN index cache is
 -- not cross-invalidated by the CDC consumer (which evicts only its own CN), so a
@@ -59,7 +191,7 @@ deallocate prepare wait_initial_ft2;
 -- searched only after its final mutation has settled, so its cache loads fresh.
 show create table src;
 
--- select src2 (composite pk): id0 (red), id3 (blue red)
+-- select src2 (composite pk): id0 (red), id3 (blue red), id4 (body with NULL title)
 select id1, id2 from src2 where match(body, title) against('red') order by id1;
 show create table src2;
 
@@ -111,3 +243,4 @@ select id from src1 where match(body, title) against('green') order by id;
 
 drop table src1;
 drop table src2;
+drop table json_null_cdc;
