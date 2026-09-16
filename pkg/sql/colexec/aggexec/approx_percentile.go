@@ -21,6 +21,7 @@ import (
 	"math/big"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -34,6 +35,7 @@ const (
 	approxPercentileMaxLevels      = 64
 	approxPercentileSketchVersion  = byte(1)
 	approxPercentileDecimalWidth   = int32(38)
+	approxPercentileDescPrefix     = "DESC:"
 )
 
 func ApproxPercentileReturnType(args []types.Type) types.Type {
@@ -662,12 +664,69 @@ func (s *quantileSketch[T]) decode(reader io.Reader) (_ *quantileSketch[T], retE
 		}
 		represented += uint64(length) * weight
 	}
+	if quantileStateHasNaN(restored) {
+		// Version 1 sketches written before SQL float ordering was introduced
+		// may have NaN at the old comparator's minimum. Re-establish the current
+		// ordering before validating extrema and allowing a future merge.
+		normalizeDecodedQuantileState(restored)
+	}
 	if represented != count || restored.hasValue != (count > 0) ||
 		restored.hasValue && restored.compare(restored.min, restored.max) > 0 {
 		return nil, moerr.NewInvalidInputNoCtx("approx_percentile: inconsistent sketch state")
 	}
 	restored.count = count
 	return restored, nil
+}
+
+func quantileValueIsNaN[T quantileValue](value T) bool {
+	switch value := any(value).(type) {
+	case float32:
+		return math.IsNaN(float64(value))
+	case float64:
+		return math.IsNaN(value)
+	default:
+		return false
+	}
+}
+
+func quantileStateHasNaN[T quantileValue](sketch *quantileSketch[T]) bool {
+	if sketch.hasValue &&
+		(quantileValueIsNaN(sketch.min) || quantileValueIsNaN(sketch.max)) {
+		return true
+	}
+	for level := 0; level < int(sketch.levelCnt); level++ {
+		for _, value := range sketch.levels[level] {
+			if quantileValueIsNaN(value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func normalizeDecodedQuantileState[T quantileValue](sketch *quantileSketch[T]) {
+	for level := 0; level < int(sketch.levelCnt); level++ {
+		slices.SortFunc(sketch.levels[level], sketch.compare)
+	}
+	if !sketch.hasValue {
+		return
+	}
+	minValue, maxValue := sketch.min, sketch.min
+	consider := func(value T) {
+		if sketch.compare(value, minValue) < 0 {
+			minValue = value
+		}
+		if sketch.compare(value, maxValue) > 0 {
+			maxValue = value
+		}
+	}
+	consider(sketch.max)
+	for level := 0; level < int(sketch.levelCnt); level++ {
+		for _, value := range sketch.levels[level] {
+			consider(value)
+		}
+	}
+	sketch.min, sketch.max = minValue, maxValue
 }
 
 func (s *quantileSketch[T]) UnmarshalFromReader(reader io.Reader) error {
@@ -970,52 +1029,118 @@ func percentileRanks(count uint64, p *big.Rat) (lo, hi uint64, frac *big.Rat) {
 		new(big.Int).Set(fraction.denominator))
 }
 
-func parsePercentileConfig(partialResult any) (*big.Rat, float64, error) {
+// EncodeApproxPercentileConfig preserves the legacy plain-text configuration
+// for ascending aggregates and carries the ordered-set direction only when it
+// is needed. This keeps ordinary approx_percentile state/config compatible.
+func EncodeApproxPercentileConfig(config []byte, descending bool) []byte {
+	if !descending {
+		return config
+	}
+	encoded := make([]byte, len(approxPercentileDescPrefix)+len(config))
+	copy(encoded, approxPercentileDescPrefix)
+	copy(encoded[len(approxPercentileDescPrefix):], config)
+	return encoded
+}
+
+func parsePercentileConfig(partialResult any) (*big.Rat, float64, bool, error) {
 	b, ok := partialResult.([]byte)
 	if !ok {
-		return nil, 0, moerr.NewInternalErrorNoCtx("approx_percentile: expected []byte config")
+		return nil, 0, false, moerr.NewInternalErrorNoCtx("approx_percentile: expected []byte config")
 	}
 	text := string(b)
+	descending := strings.HasPrefix(text, approxPercentileDescPrefix)
+	if descending {
+		text = strings.TrimPrefix(text, approxPercentileDescPrefix)
+	}
 	p, err := strconv.ParseFloat(text, 64)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	if math.IsNaN(p) || math.IsInf(p, 0) || p < 0 || p > 1 {
-		return nil, 0, moerr.NewInvalidInputNoCtxf(
+		return nil, 0, false, moerr.NewInvalidInputNoCtxf(
 			"approx_percentile: percentile must be in [0,1] and finite, got %v", p)
 	}
 	rat, ok := new(big.Rat).SetString(text)
 	if !ok || rat.Sign() < 0 || rat.Cmp(big.NewRat(1, 1)) > 0 {
-		return nil, 0, moerr.NewInvalidInputNoCtxf("approx_percentile: invalid percentile %q", text)
+		return nil, 0, false, moerr.NewInvalidInputNoCtxf("approx_percentile: invalid percentile %q", text)
 	}
-	return rat, p, nil
+	return rat, p, descending, nil
 }
 
 func orderedCompare[T numeric](a, b T) int {
-	af, bf := float64(a), float64(b)
-	if math.IsNaN(af) {
-		if math.IsNaN(bf) {
-			return 0
+	switch left := any(a).(type) {
+	case float32:
+		return types.Float32OrderAscCompare(left, any(b).(float32))
+	case float64:
+		return types.Float64OrderAscCompare(left, any(b).(float64))
+	default:
+		if a < b {
+			return -1
 		}
-		return -1
+		if a > b {
+			return 1
+		}
+		return 0
 	}
-	if math.IsNaN(bf) {
-		return 1
+}
+
+func approxPercentileCompare[T quantileValue](compare func(T, T) int, descending bool) func(T, T) int {
+	if !descending {
+		return compare
 	}
-	if a < b {
-		return -1
+	return func(a, b T) int {
+		switch left := any(a).(type) {
+		case float32:
+			return types.Float32OrderDescCompare(left, any(b).(float32))
+		case float64:
+			return types.Float64OrderDescCompare(left, any(b).(float64))
+		default:
+			return -compare(a, b)
+		}
 	}
-	if a > b {
-		return 1
+}
+
+func legacyApproxPercentileCompare[T quantileValue](compare func(T, T) int) func(T, T) int {
+	return func(a, b T) int {
+		switch left := any(a).(type) {
+		case float32:
+			right := any(b).(float32)
+			leftNaN, rightNaN := math.IsNaN(float64(left)), math.IsNaN(float64(right))
+			if leftNaN || rightNaN {
+				switch {
+				case leftNaN && rightNaN:
+					return 0
+				case leftNaN:
+					return -1
+				default:
+					return 1
+				}
+			}
+		case float64:
+			right := any(b).(float64)
+			leftNaN, rightNaN := math.IsNaN(left), math.IsNaN(right)
+			if leftNaN || rightNaN {
+				switch {
+				case leftNaN && rightNaN:
+					return 0
+				case leftNaN:
+					return -1
+				default:
+					return 1
+				}
+			}
+		}
+		return compare(a, b)
 	}
-	return 0
 }
 
 type approxPercentileExecBase[T quantileValue] struct {
 	aggExec
 	percentile      *big.Rat
 	percentileFloat float64
+	ascCompare      func(T, T) int
 	compare         func(T, T) int
+	descending      bool
 	arithmetic      percentileArithmeticScratch
 }
 
@@ -1146,7 +1271,7 @@ func (exec *approxPercentileExecBase[T]) preflightBatchMerge(
 }
 
 func newApproxPercentileExecBase[T quantileValue](mp *mpool.MPool, info singleAggInfo, compare func(T, T) int) approxPercentileExecBase[T] {
-	exec := approxPercentileExecBase[T]{compare: compare}
+	exec := approxPercentileExecBase[T]{ascCompare: compare, compare: compare}
 	exec.mp = mp
 	exec.aggInfo = aggInfo{
 		aggId:      info.aggID,
@@ -1297,6 +1422,7 @@ func (exec *approxPercentileExecBase[T]) mergeCompatible(
 	return exec != nil && other != nil &&
 		exec.aggId == other.aggId &&
 		exec.isDistinct == other.isDistinct &&
+		exec.descending == other.descending &&
 		len(exec.argTypes) == 1 && len(other.argTypes) == 1 &&
 		exec.argTypes[0].Eq(other.argTypes[0]) &&
 		exec.retType.Eq(other.retType)
@@ -1318,13 +1444,55 @@ func (exec *approxPercentileExecBase[T]) batchMerge(other *approxPercentileExecB
 }
 
 func (exec *approxPercentileExecBase[T]) SetExtraInformation(partialResult any, groupIndex int) error {
-	percentile, percentileFloat, err := parsePercentileConfig(partialResult)
+	percentile, percentileFloat, descending, err := parsePercentileConfig(partialResult)
 	if err != nil {
 		return err
+	}
+	if exec.descending != descending && exec.hasSketchState() {
+		return moerr.NewInvalidInputNoCtx(
+			"approx_percentile: order direction cannot change after sketch state is initialized")
+	}
+	if exec.descending != descending {
+		exec.descending = descending
+		exec.compare = approxPercentileCompare(exec.ascCompare, descending)
+		compare := exec.compare
+		exec.aggInfo.makeMarshalerUnmarshaler = func(mp *mpool.MPool, allocation *AllocationAccount) (MarshalerUnmarshaler, error) {
+			return newQuantileSketch(mp, compare, allocation), nil
+		}
 	}
 	exec.percentile = percentile
 	exec.percentileFloat = percentileFloat
 	return nil
+}
+
+// ConfigureApproxPercentileLegacyState makes a newly constructed remote
+// executor emit the version-1 float ordering understood by pre-v75 peers.
+// The caller applies this only while the deployment protocol is below v75.
+func ConfigureApproxPercentileLegacyState(aggregate AggFuncExec) {
+	if configurable, ok := aggregate.(interface{ setLegacyApproxPercentileState() }); ok {
+		configurable.setLegacyApproxPercentileState()
+	}
+}
+
+func (exec *approxPercentileExecBase[T]) setLegacyApproxPercentileState() {
+	exec.ascCompare = legacyApproxPercentileCompare(exec.ascCompare)
+	exec.compare = exec.ascCompare
+	exec.descending = false
+	compare := exec.compare
+	exec.aggInfo.makeMarshalerUnmarshaler = func(mp *mpool.MPool, allocation *AllocationAccount) (MarshalerUnmarshaler, error) {
+		return newQuantileSketch(mp, compare, allocation), nil
+	}
+}
+
+func (exec *approxPercentileExecBase[T]) hasSketchState() bool {
+	for _, state := range exec.state {
+		for _, mob := range state.mobs {
+			if mob != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (exec *approxPercentileExecBase[T]) Size() int64 {
@@ -1589,7 +1757,7 @@ func percentileNumericVals[T numeric](values []T, p float64) float64 {
 	if len(values) == 0 || p < 0 || p > 1 {
 		return math.NaN()
 	}
-	rat, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
+	rat, _, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
 	if err != nil {
 		return math.NaN()
 	}
@@ -1607,7 +1775,7 @@ func percentileDecimal64Vals(values []types.Decimal64, p float64, argScale int32
 	if len(values) == 0 || p < 0 || p > 1 {
 		return types.Decimal128{}, nil
 	}
-	rat, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
+	rat, _, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
 	if err != nil {
 		return types.Decimal128{}, err
 	}
@@ -1630,7 +1798,7 @@ func percentileDecimal128Vals(values []types.Decimal128, p float64, argWidth, ar
 	if len(values) == 0 || p < 0 || p > 1 {
 		return types.Decimal128{}, nil
 	}
-	rat, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
+	rat, _, _, err := parsePercentileConfig([]byte(strconv.FormatFloat(p, 'g', -1, 64)))
 	if err != nil {
 		return types.Decimal128{}, err
 	}

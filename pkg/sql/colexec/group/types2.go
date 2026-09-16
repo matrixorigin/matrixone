@@ -229,6 +229,9 @@ type container struct {
 	mtyp        int32
 	keyWidth    int32
 	keyNullable bool
+	// legacyH8CharSemantics keeps pre-v77 CHAR bytes intact when this
+	// container must merge a short variable-length H8 partial.
+	legacyH8CharSemantics bool
 	// groupingAware selects the collision-free HStr key grammar whenever a
 	// grouping-set rollup sentinel can appear, including NOT NULL input keys.
 	groupingAware bool
@@ -258,16 +261,19 @@ type container struct {
 	groupConcatSourceRowsUntrusted bool
 
 	// aggs, which holds the intermediate state of agg functions.
-	aggList                []aggexec.GroupAggFuncExec
-	aggExprs               []aggexec.AggFuncExecExpression
-	groupConcatWarnings    aggexec.GroupConcatWarningAccumulator
-	prepareParamKind       aggexec.PrepareParamKindStates
-	prepareParamKindWireV1 bool
-	legacyTextMinMax       bool
-	legacyVarianceState    bool
-	legacyDecimalSumState  bool
-	legacyDecimalSumResult bool
-	timeZone               *time.Location
+	aggList                     []aggexec.GroupAggFuncExec
+	aggExprs                    []aggexec.AggFuncExecExpression
+	groupConcatWarnings         aggexec.GroupConcatWarningAccumulator
+	prepareParamKind            aggexec.PrepareParamKindStates
+	prepareParamKindWireV1      bool
+	legacyTextMinMax            bool
+	legacyVarianceState         bool
+	legacyDecimalSumState       bool
+	legacyDecimalSumResult      bool
+	legacyApproxPercentileState bool
+	legacyHLLState              bool
+	floatZeroHLLState           bool
+	timeZone                    *time.Location
 
 	// spill, agglist to load spilled data.
 	spillMem        int64

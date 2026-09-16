@@ -187,6 +187,13 @@ func RequiresMORPCVersion72IPFunctionSemantics(owner any) (bool, error) {
 	return features.IPFunctionSemantics, err
 }
 
+// RequiresMORPCVersion79StringNumericResultContracts reports whether an owner
+// contains one of the corrected fixed-width string numeric result contracts.
+func RequiresMORPCVersion79StringNumericResultContracts(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.StringNumericResultContracts, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -198,6 +205,14 @@ const (
 	convFunctionID                   int32 = 367
 	asciiFunctionID                  int32 = 52
 	asciiInt32ResultTypeID           int32 = 22
+	findInSetFunctionID              int32 = 101
+	lengthUTF8FunctionID             int32 = 125
+	strCmpFunctionID                 int32 = 344
+	uncompressedLengthFunctionID     int32 = 389
+	crc32FunctionID                  int32 = 81
+	stringNumericInt32ResultTypeID   int32 = 22
+	stringNumericInt64ResultTypeID   int32 = 23
+	stringNumericUint64ResultTypeID  int32 = 28
 )
 
 // RemoteExpressionFeatures is the complete set of versioned expression
@@ -213,16 +228,20 @@ const (
 // RowDependentConvBases requires MORPC v69 for nonconstant or unsigned bases.
 // IPFunctionSemantics requires MORPC v72 because the IP functions change
 // existing overload semantics and add numeric INET_NTOA overloads.
+// StringNumericResultContracts requires MORPC v79 because the listed string
+// numeric functions keep overload IDs while changing their physical result
+// vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 type RemoteExpressionFeatures struct {
-	NumericPrefix            bool
-	JSONComparisonParam      bool
-	MixedJSONBooleanEquality bool
-	FormatNumericArguments   bool
-	TypedConversionFunctions bool
-	IntegerArithmeticDomains bool
-	RowDependentConvBases    bool
-	ASCIIInt32Result         bool
-	IPFunctionSemantics      bool
+	NumericPrefix                bool
+	JSONComparisonParam          bool
+	MixedJSONBooleanEquality     bool
+	FormatNumericArguments       bool
+	TypedConversionFunctions     bool
+	IntegerArithmeticDomains     bool
+	RowDependentConvBases        bool
+	ASCIIInt32Result             bool
+	StringNumericResultContracts bool
+	IPFunctionSemantics          bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -234,6 +253,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.ASCIIInt32Result ||
 		features.IntegerArithmeticDomains ||
 		features.RowDependentConvBases ||
+		features.StringNumericResultContracts ||
 		features.IPFunctionSemantics
 }
 
@@ -316,6 +336,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.ASCIIInt32Result && isASCIIInt32Result(current) {
 				features.ASCIIInt32Result = true
 			}
+			if !features.StringNumericResultContracts && isStringNumericResultContract(current) {
+				features.StringNumericResultContracts = true
+			}
 			if !features.IPFunctionSemantics && fn != nil && fn.Func != nil {
 				features.IPFunctionSemantics = isRemoteIPFunction(int32(fn.Func.Obj >> 32))
 			}
@@ -339,6 +362,41 @@ func isASCIIInt32Result(expr *Expr) bool {
 	}
 	return int32(fn.Func.Obj>>32) == asciiFunctionID ||
 		strings.EqualFold(fn.Func.GetObjName(), "ascii")
+}
+
+// isStringNumericResultContract identifies the new physical result contracts
+// of the affected string numeric functions. Legacy serialized plans use the
+// same overload IDs with their historical result wrappers, so the result type
+// participates in the feature check just as it does for ASCII.
+func isStringNumericResultContract(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	functionID := int32(fn.Func.Obj >> 32)
+	name := strings.ToLower(fn.Func.GetObjName())
+	switch functionID {
+	case findInSetFunctionID, strCmpFunctionID:
+		return expr.Typ.Id == stringNumericInt32ResultTypeID
+	case lengthUTF8FunctionID, uncompressedLengthFunctionID:
+		return expr.Typ.Id == stringNumericInt64ResultTypeID
+	case crc32FunctionID:
+		return expr.Typ.Id == stringNumericUint64ResultTypeID
+	default:
+		switch name {
+		case "find_in_set", "findinset", "strcmp":
+			return expr.Typ.Id == stringNumericInt32ResultTypeID
+		case "char_length", "character_length", "length_utf8", "uncompressed_length":
+			return expr.Typ.Id == stringNumericInt64ResultTypeID
+		case "crc32":
+			return expr.Typ.Id == stringNumericUint64ResultTypeID
+		default:
+			return false
+		}
+	}
 }
 
 // RequiresMORPCVersion64TypedConversion reports whether an owner contains a

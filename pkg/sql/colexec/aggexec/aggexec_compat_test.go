@@ -16,6 +16,8 @@ package aggexec
 
 import (
 	"bytes"
+	"encoding/binary"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -23,6 +25,317 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCanonicalDistinctKeyWireCanUseLegacyPeerFormat(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	agg, err := MakeAgg(mp, AggIdOfCountColumn, true, types.T_varchar.ToType())
+	require.NoError(t, err)
+	defer agg.Free()
+	require.True(t, RequiresCanonicalDistinctKeyWire(agg))
+
+	SetCanonicalDistinctKeyWire(agg, false)
+	require.False(t, RequiresCanonicalDistinctKeyWire(agg))
+	SetCanonicalDistinctKeyWire(agg, true)
+	require.True(t, RequiresCanonicalDistinctKeyWire(agg))
+}
+
+func TestLegacyDistinctWireKeepsRawRepresentative(t *testing.T) {
+	encodeLegacyState := func(t *testing.T, mp *mpool.MPool, exec *countColumnExec, payload []byte) {
+		t.Helper()
+		var state bytes.Buffer
+		require.NoError(t, types.WriteInt32(&state, 1))
+		require.NoError(t, types.WriteUint32(&state, 1))
+		require.NoError(t, types.WriteInt32(&state, int32(len(payload))))
+		_, err := state.Write(payload)
+		require.NoError(t, err)
+		_, err = exec.state[0].readState(mp, &state, &exec.aggInfo)
+		require.NoError(t, err)
+	}
+
+	encodeTuple := func(left, right []byte) []byte {
+		payload := make([]byte, 8+len(left)+len(right))
+		binary.BigEndian.PutUint32(payload, uint32(len(left)))
+		copy(payload[4:], left)
+		offset := 4 + len(left)
+		binary.BigEndian.PutUint32(payload[offset:], uint32(len(right)))
+		copy(payload[offset+4:], right)
+		return payload
+	}
+
+	t.Run("json", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		json, err := types.ParseStringToByteJson("1")
+		require.NoError(t, err)
+		raw, err := types.EncodeJson(json)
+		require.NoError(t, err)
+		values := vector.NewVec(types.T_json.ToType())
+		require.NoError(t, vector.AppendBytes(values, raw, false, mp))
+
+		source := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+		).(*countColumnExec)
+		require.NoError(t, source.GroupGrow(1))
+		require.NoError(t, source.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+		SetCanonicalDistinctKeyWire(source, false)
+		var encoded bytes.Buffer
+		require.NoError(t, source.SaveIntermediateResultOfChunk(0, &encoded))
+
+		legacy := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+		).(*countColumnExec)
+		require.NoError(t, legacy.GroupGrow(1))
+		SetCanonicalDistinctKeyWire(legacy, false)
+		encodeLegacyState(t, mp, legacy, raw)
+
+		target := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+		).(*countColumnExec)
+		SetCanonicalDistinctKeyWire(target, false)
+		require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(encoded.Bytes()), mp))
+		require.NoError(t, target.BatchMerge(legacy, 0, []uint64{1}))
+		result, err := target.Flush()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+
+		result[0].Free(mp)
+		target.Free()
+		legacy.Free()
+		source.Free()
+		values.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+
+	t.Run("multi-column", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		leftType := types.New(types.T_char, 2, 0)
+		rightType := types.New(types.T_char, 2, 0)
+		left := vector.NewVec(leftType)
+		right := vector.NewVec(rightType)
+		require.NoError(t, vector.AppendBytes(left, []byte("a "), false, mp))
+		require.NoError(t, vector.AppendBytes(right, []byte("b"), false, mp))
+		raw := encodeTuple([]byte("a "), []byte("b"))
+
+		source := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{leftType, rightType},
+		).(*countColumnExec)
+		require.NoError(t, source.GroupGrow(1))
+		require.NoError(t, source.BatchFill(0, []uint64{1}, []*vector.Vector{left, right}))
+		SetCanonicalDistinctKeyWire(source, false)
+		var encoded bytes.Buffer
+		require.NoError(t, source.SaveIntermediateResultOfChunk(0, &encoded))
+
+		legacy := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{leftType, rightType},
+		).(*countColumnExec)
+		require.NoError(t, legacy.GroupGrow(1))
+		SetCanonicalDistinctKeyWire(legacy, false)
+		encodeLegacyState(t, mp, legacy, raw)
+
+		target := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{leftType, rightType},
+		).(*countColumnExec)
+		SetCanonicalDistinctKeyWire(target, false)
+		require.NoError(t, target.UnmarshalFromReader(bytes.NewReader(encoded.Bytes()), mp))
+		require.NoError(t, target.BatchMerge(legacy, 0, []uint64{1}))
+		result, err := target.Flush()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+
+		result[0].Free(mp)
+		target.Free()
+		legacy.Free()
+		source.Free()
+		left.Free(mp)
+		right.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+
+	t.Run("spill-round-trip", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		json, err := types.ParseStringToByteJson("1")
+		require.NoError(t, err)
+		raw, err := types.EncodeJson(json)
+		require.NoError(t, err)
+		values := vector.NewVec(types.T_json.ToType())
+		require.NoError(t, vector.AppendBytes(values, raw, false, mp))
+
+		source := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+		).(*countColumnExec)
+		require.NoError(t, source.GroupGrow(1))
+		require.NoError(t, source.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+		SetCanonicalDistinctKeyWire(source, false)
+		var spill bytes.Buffer
+		require.NoError(t, source.SaveSpillIntermediateRows(0, []int32{0}, &spill))
+
+		restored := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+		).(*countColumnExec)
+		SetCanonicalDistinctKeyWire(restored, false)
+		require.NoError(t, restored.UnmarshalSpillFromReader(
+			bytes.NewReader(spill.Bytes()), mp))
+		var downgraded bytes.Buffer
+		require.NoError(t, restored.SaveIntermediateResultOfChunk(0, &downgraded))
+
+		legacy := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+		).(*countColumnExec)
+		require.NoError(t, legacy.GroupGrow(1))
+		SetCanonicalDistinctKeyWire(legacy, false)
+		encodeLegacyState(t, mp, legacy, raw)
+
+		target := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+		).(*countColumnExec)
+		SetCanonicalDistinctKeyWire(target, false)
+		require.NoError(t, target.UnmarshalFromReader(
+			bytes.NewReader(downgraded.Bytes()), mp))
+		require.NoError(t, target.BatchMerge(legacy, 0, []uint64{1}))
+		result, err := target.Flush()
+		require.NoError(t, err)
+		require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+
+		result[0].Free(mp)
+		target.Free()
+		legacy.Free()
+		restored.Free()
+		source.Free()
+		values.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+}
+
+func TestLegacyDistinctRestoreCanonicalizesBeforeAppendAndMerge(t *testing.T) {
+	mustJSON := func(text string) []byte {
+		value, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err)
+		raw, err := types.EncodeJson(value)
+		require.NoError(t, err)
+		return raw
+	}
+	encodeTuple := func(values ...[]byte) []byte {
+		size := 4 * len(values)
+		for _, value := range values {
+			size += len(value)
+		}
+		payload := make([]byte, size)
+		offset := 0
+		for _, value := range values {
+			binary.BigEndian.PutUint32(payload[offset:], uint32(len(value)))
+			offset += 4
+			copy(payload[offset:], value)
+			offset += len(value)
+		}
+		return payload
+	}
+	encodeLegacyState := func(t *testing.T, exec *countColumnExec, payload []byte) {
+		t.Helper()
+		var state bytes.Buffer
+		require.NoError(t, types.WriteInt32(&state, 1))
+		require.NoError(t, types.WriteUint32(&state, 1))
+		require.NoError(t, types.WriteInt32(&state, int32(len(payload))))
+		_, err := state.Write(payload)
+		require.NoError(t, err)
+		_, err = exec.state[0].readState(exec.mp, &state, &exec.aggInfo)
+		require.NoError(t, err)
+	}
+
+	tests := []struct {
+		name       string
+		argTypes   []types.Type
+		legacy     []byte
+		newVectors func(*testing.T, *mpool.MPool) []*vector.Vector
+	}{
+		{
+			name:     "char-pad-space",
+			argTypes: []types.Type{types.New(types.T_char, 2, 0)},
+			legacy:   []byte("a "),
+			newVectors: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
+				vec := vector.NewVec(types.New(types.T_char, 2, 0))
+				require.NoError(t, vector.AppendBytes(vec, []byte("a"), false, mp))
+				return []*vector.Vector{vec}
+			},
+		},
+		{
+			name:     "json-numeric-encoding",
+			argTypes: []types.Type{types.T_json.ToType()},
+			legacy:   mustJSON("1"),
+			newVectors: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
+				value, err := types.ParseStringToByteJson("1.0")
+				require.NoError(t, err)
+				raw, err := types.EncodeJson(value)
+				require.NoError(t, err)
+				vec := vector.NewVec(types.T_json.ToType())
+				require.NoError(t, vector.AppendBytes(vec, raw, false, mp))
+				return []*vector.Vector{vec}
+			},
+		},
+		{
+			name: "tuple-float64-nan",
+			argTypes: []types.Type{
+				types.T_float64.ToType(),
+				types.New(types.T_char, 2, 0),
+			},
+			legacy: encodeTuple(
+				types.EncodeFixed(math.Float64frombits(0x7ff8000000000001)),
+				[]byte("a"),
+			),
+			newVectors: func(t *testing.T, mp *mpool.MPool) []*vector.Vector {
+				floatVec := vector.NewVec(types.T_float64.ToType())
+				require.NoError(t, vector.AppendFixed(
+					floatVec,
+					math.Float64frombits(0xfff8000000000001),
+					false,
+					mp,
+				))
+				charVec := vector.NewVec(types.New(types.T_char, 2, 0))
+				require.NoError(t, vector.AppendBytes(charVec, []byte("a"), false, mp))
+				return []*vector.Vector{floatVec, charVec}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		for _, action := range []string{"append", "merge"} {
+			t.Run(tc.name+"/"+action, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				target := newCountColumnExec(
+					mp, AggIdOfCountColumn, true, tc.argTypes,
+				).(*countColumnExec)
+				require.NoError(t, target.GroupGrow(1))
+				SetCanonicalDistinctKeyWire(target, false)
+				encodeLegacyState(t, target, tc.legacy)
+
+				values := tc.newVectors(t, mp)
+				groups := []uint64{1}
+				if action == "append" {
+					require.NoError(t, target.BatchFill(0, groups, values))
+				} else {
+					source := newCountColumnExec(
+						mp, AggIdOfCountColumn, true, tc.argTypes,
+					).(*countColumnExec)
+					require.NoError(t, source.GroupGrow(1))
+					require.NoError(t, source.BatchFill(0, groups, values))
+					require.NoError(t, target.BatchMerge(source, 0, groups))
+					source.Free()
+				}
+				for _, value := range values {
+					value.Free(mp)
+				}
+
+				result, err := target.Flush()
+				require.NoError(t, err)
+				require.Equal(t, int64(1),
+					vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+				result[0].Free(mp)
+				target.Free()
+				require.Zero(t, mp.CurrNB())
+			})
+		}
+	}
+}
 
 func TestGroupConcatIntermediateRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
