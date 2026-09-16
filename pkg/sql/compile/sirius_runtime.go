@@ -23,7 +23,6 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile/sidecarflight"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
 )
@@ -60,7 +59,7 @@ func siriusPlanEligible(queryPlan *planpb.Plan) bool {
 // exception is the explicit local-CN benchmark mode, where TN GC is disabled,
 // and each CN owns one process-local manager and one sidecar pairing.
 type SiriusRuntime struct {
-	Flight                   *sidecarflight.Runtime
+	Backend                  SiriusBackend
 	Leases                   *substrait.LeaseManager
 	Resolver                 *substrait.ResolverServer
 	AuthorizedClientSPKIHash []byte
@@ -74,7 +73,7 @@ type SiriusRuntime struct {
 }
 
 func (r *SiriusRuntime) Validate() error {
-	if r == nil || r.Flight == nil || r.Leases == nil ||
+	if r == nil || r.Backend == nil || r.Leases == nil ||
 		r.Resolver == nil || len(r.AuthorizedClientSPKIHash) != 32 || r.DataDir == "" ||
 		r.LeaseTTL <= 0 || r.LeaseTTL > substrait.MaxLeaseTTL || r.CleanupTimeout <= 0 {
 		return moerr.NewInternalErrorNoCtx("substrait: incomplete CN Sirius runtime")
@@ -89,15 +88,15 @@ func (r *SiriusRuntime) Validate() error {
 	return nil
 }
 
-// Close obeys the ownership order: stop/cancel Flight work first, then close
+// Close obeys the ownership order: stop/cancel backend work first, then close
 // the resolver that serves the leases retained by that work.
 func (r *SiriusRuntime) Close(ctx context.Context) error {
 	if r == nil {
 		return nil
 	}
 	var result error
-	if r.Flight != nil {
-		result = errors.Join(result, r.Flight.Close(ctx))
+	if r.Backend != nil {
+		result = errors.Join(result, r.Backend.Close(ctx))
 	}
 	if r.Resolver != nil {
 		result = errors.Join(result, r.Resolver.Close(ctx))
@@ -106,7 +105,7 @@ func (r *SiriusRuntime) Close(ctx context.Context) error {
 }
 
 // ReconcileReplay transfers durable leases left by a prior CN generation to
-// Flight's retry owner. Cancellation by statement identity is idempotent, and
+// the backend's retry owner. Cancellation by statement identity is idempotent, and
 // lease release starts only after the sidecar acknowledges quiescence.
 func (r *SiriusRuntime) ReconcileReplay() error {
 	if err := r.Validate(); err != nil {
@@ -115,7 +114,7 @@ func (r *SiriusRuntime) ReconcileReplay() error {
 	var result error
 	for _, pending := range r.Leases.PendingExecutions() {
 		readRefs := cloneReadRefs(pending.ReadRefs)
-		err := r.Flight.Reconcile(pending.AccountID, pending.QueryID, func(ctx context.Context) error {
+		err := r.Backend.Reconcile(pending.AccountID, pending.QueryID, func(ctx context.Context) error {
 			return releaseReadRefs(ctx, r.Leases, readRefs)
 		})
 		result = errors.Join(result, err)
@@ -137,11 +136,11 @@ func lookupSiriusRuntime(service string) (*SiriusRuntime, bool) {
 }
 
 type siriusReadOwner struct {
-	execution *sidecarflight.Execution
+	execution SiriusExecution
 	runtime   *SiriusRuntime
 }
 
-func newSiriusReadOwner(execution *sidecarflight.Execution, runtime *SiriusRuntime) *siriusReadOwner {
+func newSiriusReadOwner(execution SiriusExecution, runtime *SiriusRuntime) *siriusReadOwner {
 	return &siriusReadOwner{execution: execution, runtime: runtime}
 }
 
@@ -149,7 +148,8 @@ func (o *siriusReadOwner) finish(ctx context.Context, succeeded bool) error {
 	if o == nil {
 		return nil
 	}
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), o.runtime.CleanupTimeout)
+	cleanupCtx, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), o.runtime.CleanupTimeout,
+		moerr.NewInternalErrorNoCtx("substrait: timed out cleaning up Sirius execution"))
 	defer cancel()
 	if succeeded {
 		return o.execution.CleanupAfterRun(cleanupCtx, nil)
@@ -189,15 +189,16 @@ func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Pl
 		}
 		return false, err
 	}
-	execution, prepareErr := runtime.Flight.Prepare(
-		ctx, uint64(accountID), queryID, readPlan.Plan, readPlan.OutputTypes, readPlan.Headings,
-		readPlan.LeaseExpiresAt.Add(-runtime.CleanupTimeout),
-		func(releaseCtx context.Context) error {
+	execution, prepareErr := runtime.Backend.Prepare(ctx, SiriusPrepareRequest{
+		AccountID: uint64(accountID), QueryID: queryID, Plan: readPlan.Plan,
+		OutputTypes: readPlan.OutputTypes, Headings: readPlan.Headings,
+		Deadline: readPlan.LeaseExpiresAt.Add(-runtime.CleanupTimeout),
+		Release: func(releaseCtx context.Context) error {
 			return readPlan.Release(releaseCtx, runtime.Leases)
 		},
-	)
+	})
 	if prepareErr != nil {
-		if sidecarflight.IsPreVisibilityFallback(prepareErr) {
+		if runtime.Backend.CanFallbackBeforeVisibility(prepareErr) {
 			return false, nil
 		}
 		return false, prepareErr
@@ -207,24 +208,25 @@ func (c *Compile) tryCompileSiriusRead(ctx context.Context, queryPlan *planpb.Pl
 }
 
 // recoverAdmittedRead handles an operational failure after admission but
-// before any Flight request exists. It first attempts bounded synchronous
-// release. If any release fails, durable ownership transfers to Flight's
+// before any backend request exists. It first attempts bounded synchronous
+// release. If any release fails, durable ownership transfers to the backend's
 // identity-based reconciliation worker, which retries idempotent release.
 func (r *SiriusRuntime) recoverAdmittedRead(ctx context.Context, accountID uint64, queryID []byte, plan *SiriusReadPlan) error {
-	if r == nil || r.Flight == nil || plan == nil {
+	if r == nil || r.Backend == nil || plan == nil {
 		return moerr.NewInternalErrorNoCtx("substrait: cannot recover admitted read without a runtime owner")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.CleanupTimeout)
+	cleanupCtx, cancel := context.WithTimeoutCause(context.WithoutCancel(ctx), r.CleanupTimeout,
+		moerr.NewInternalErrorNoCtx("substrait: timed out releasing admitted Sirius reads"))
 	releaseErr := plan.Release(cleanupCtx, r.Leases)
 	cancel()
 	if releaseErr == nil {
 		return nil
 	}
 	readRefs := cloneReadRefs(plan.ReadRefs)
-	reconcileErr := r.Flight.Reconcile(accountID, append([]byte(nil), queryID...), func(releaseCtx context.Context) error {
+	reconcileErr := r.Backend.Reconcile(accountID, append([]byte(nil), queryID...), func(releaseCtx context.Context) error {
 		return releaseReadRefs(releaseCtx, r.Leases, readRefs)
 	})
 	return errors.Join(releaseErr, reconcileErr)
