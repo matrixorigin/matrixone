@@ -158,8 +158,9 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		}
 	}
 	// Attach this row's INCLUDE column values (actual values → segment docmap for
-	// prefilter + coverage). Only for docs the Add loop created, i.e. non-empty text
-	// (a NULL/empty-text row is skipped above), consistent with the CDC/build empty-doc skip.
+	// prefilter + coverage). Only for docs the Add loop created, i.e. rows with
+	// searchable content (a no-searchable-content row is skipped above), consistent
+	// with the CDC/build empty-doc skip.
 	if len(u.tblcfg.IncludeTypes) > 0 {
 		u.cur.SetInclude(pk, u.rowInclude(tf, nthRow))
 	}

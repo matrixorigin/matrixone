@@ -80,8 +80,14 @@ select id from js_null where match(left_doc, right_doc) against('null' in boolea
 alter table js_null alter reindex ft_null fulltext2 merge force_sync;
 select id from js_null where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
 select id from js_null where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+select id from js_null where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+select id from js_null where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+select id from js_null where match(left_doc, right_doc) against('null' in boolean mode) order by id;
 alter table js_null alter reindex ft_null fulltext2 force_sync;
 select id from js_null where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
 select id from js_null where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+select id from js_null where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+select id from js_null where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+select id from js_null where match(left_doc, right_doc) against('null' in boolean mode) order by id;
 
 drop database fulltext2_jsonvalue;

@@ -16,9 +16,11 @@ package iscp
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -67,12 +69,15 @@ func TestFulltext2WriterRowText(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "world", txt)
 
-	// NULL columns do not create separators. The delimiter follows the same
-	// buffer-based rule as fulltext2_create, including an explicitly empty value.
-	txt, err = w.rowText(context.Background(), []any{int64(1), "alpha", nil, "beta"})
+	// NULL columns do not create separators. Use a three-column writer for this
+	// matrix so textPos/textTypes remain aligned with the row shape.
+	w3 := newFT2Writer(fulltext2.ParserNgram)
+	w3.textPos = []int32{1, 2, 3}
+	w3.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar), int32(types.T_varchar)}
+	txt, err = w3.rowText(context.Background(), []any{int64(1), "alpha", nil, "beta"})
 	require.NoError(t, err)
 	require.Equal(t, "alpha\nbeta", txt)
-	txt, err = w.rowText(context.Background(), []any{int64(1), "alpha", "", "beta"})
+	txt, err = w3.rowText(context.Background(), []any{int64(1), "alpha", "", "beta"})
 	require.NoError(t, err)
 	require.Equal(t, "alpha\n\nbeta", txt)
 	tok, err := fulltext2.CdcTokenizer(fulltext2.ParserNgram)
@@ -93,6 +98,125 @@ func TestFulltext2WriterRowText(t *testing.T) {
 	txt, err = wjv.rowText(context.Background(), []any{int64(1), []byte(`{"a":"origin"}`)})
 	require.NoError(t, err)
 	require.Contains(t, txt, "origin")
+}
+
+// writerTailSegments materializes the exact writer output through the production
+// CDC codec and TailBuilder. This keeps the integration assertion independent
+// from hand-built Cdc events used by the lower-level LWW tests.
+func writerTailSegments(t *testing.T, parser string, cdcs ...*fulltext2.Cdc) []*fulltext2.Segment {
+	t.Helper()
+	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(parser, fulltext2.JSONTermOptions{})
+	require.NoError(t, err)
+	tb, err := fulltext2.NewTailBuilder(int32(types.T_int64), 1, 0, "", tokenize)
+	require.NoError(t, err)
+	defer tb.Cleanup()
+	for _, cdc := range cdcs {
+		require.NoError(t, tb.AddBatch(cdc))
+	}
+	frames, err := tb.Finish()
+	require.NoError(t, err)
+	segments := make([]*fulltext2.Segment, 0, len(frames))
+	for i, frame := range frames {
+		data, err := os.ReadFile(frame.Path)
+		require.NoError(t, err)
+		start := frame.Offset
+		end := start + int64(frame.FrameLen)
+		require.GreaterOrEqual(t, start, int64(0))
+		require.LessOrEqual(t, end, int64(len(data)))
+		seg, deletes, err := fulltext2.UnframeTail("writer-tail", data[start:end])
+		require.NoError(t, err)
+		require.Empty(t, deletes)
+		if seg != nil {
+			seg.Recency = int64(i + 1)
+			segments = append(segments, seg)
+		}
+	}
+	return segments
+}
+
+func writerCdc(t *testing.T, w *Fulltext2SqlWriter) *fulltext2.Cdc {
+	t.Helper()
+	blob, err := w.ToSql()
+	require.NoError(t, err)
+	cdc, err := fulltext2.DecodeCdc(blob)
+	require.NoError(t, err)
+	return cdc
+}
+
+func TestFulltext2WriterOutputReachesTailBuilder(t *testing.T) {
+	ctx := context.Background()
+	w := newFT2Writer(fulltext2.ParserNgram)
+	w.textPos = []int32{1, 2}
+	w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
+
+	// Build a base version, then drive each replacement from the real writer.
+	baseBuilder := fulltext2.NewBuilder("writer-base", int32(types.T_int64))
+	require.NoError(t, baseBuilder.Add("right", 0, int64(1)))
+	base, err := baseBuilder.Finish()
+	require.NoError(t, err)
+	base.Recency = 0
+
+	require.NoError(t, w.Upsert(ctx, []any{int64(1), nil, "right"}))
+	partial := writerCdc(t, w)
+	require.Len(t, partial.Events, 1)
+	require.Equal(t, "right", partial.Events[0].Text)
+
+	w.Reset()
+	require.NoError(t, w.Upsert(ctx, []any{int64(1), nil, nil}))
+	empty := writerCdc(t, w)
+	require.Len(t, empty.Events, 1)
+	require.Empty(t, empty.Events[0].Text)
+	// Stop before recovery so the zero-word writer event is the newest copy and
+	// must shadow the base term on its own.
+	tails := writerTailSegments(t, fulltext2.ParserNgram, partial, empty)
+	idx := fulltext2.NewIndex(append([]*fulltext2.Segment{base}, tails...), nil)
+	got, err := idx.SearchQuery([]byte("right"), false, fulltext2.ParserNgram, fulltext2.BM25, 100, nil)
+	require.NoError(t, err)
+	require.Empty(t, got)
+
+	w.Reset()
+	require.NoError(t, w.Upsert(ctx, []any{int64(1), nil, "revived"}))
+	revived := writerCdc(t, w)
+	tails = writerTailSegments(t, fulltext2.ParserNgram, partial, empty, revived)
+	// Include the base copy so the zero-word writer event must actually shadow it.
+	idx = fulltext2.NewIndex(append([]*fulltext2.Segment{base}, tails...), nil)
+	got, err = idx.SearchQuery([]byte("revived"), false, fulltext2.ParserNgram, fulltext2.BM25, 100, nil)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, int64(1), got[0].Pk)
+}
+
+func TestFulltext2WriterOutputCarriesIncludeThroughTail(t *testing.T) {
+	w := newFT2Writer(fulltext2.ParserNgram)
+	w.textPos = []int32{1, 2}
+	w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
+	w.includePos = []int32{3}
+	w.includeTypes = []int32{int32(types.T_varchar)}
+	w.cdc.IncludeTypes = w.includeTypes
+
+	require.NoError(t, w.Upsert(context.Background(), []any{int64(1), nil, "right", "active"}))
+	partial := writerCdc(t, w)
+	require.Equal(t, []int32{int32(types.T_varchar)}, partial.IncludeTypes)
+	// Varlena INCLUDE values decode through the shared pk codec as []byte.
+	require.Equal(t, []any{[]byte("active")}, partial.Events[0].Include)
+	partialTail := writerTailSegments(t, fulltext2.ParserNgram, partial)
+	idx := fulltext2.NewIndex(partialTail, nil)
+	got, err := idx.SearchQuery([]byte("right"), false, fulltext2.ParserNgram, fulltext2.BM25, 100, nil)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, []any{[]byte("active")}, got[0].Include)
+
+	// A later all-NULL content upsert still carries its NULL INCLUDE value and
+	// shadows the prior searchable version.
+	w.Reset()
+	require.NoError(t, w.Upsert(context.Background(), []any{int64(1), nil, nil, nil}))
+	empty := writerCdc(t, w)
+	require.Equal(t, []any{nil}, empty.Events[0].Include)
+	tails := writerTailSegments(t, fulltext2.ParserNgram, partial, empty)
+	idx = fulltext2.NewIndex(tails, nil)
+	got, err = idx.SearchQuery([]byte("right"), false, fulltext2.ParserNgram, fulltext2.BM25, 100, nil)
+	require.NoError(t, err)
+	require.Empty(t, got)
 }
 
 func TestFulltext2WriterJSONValueSkipsNullColumn(t *testing.T) {
@@ -134,10 +258,17 @@ func TestFulltext2WriterJSONTupleSkipsNullColumn(t *testing.T) {
 	require.NoError(t, err)
 	got := fulltext2.DecodeJSONTermCarrier(txt)
 	require.Len(t, got, 1)
-	want, err := fulltext2.JSONTupleColumn([]byte(`{"b":"right"}`), fulltext2.DefaultJSONTermOptions())
-	require.NoError(t, err)
-	require.Equal(t, want[0], got[0].Word)
+	require.Equal(t, fulltext2.JSONStringTerm("b", "right"), got[0].Word)
 	require.Equal(t, int32(0), got[0].Pos)
+
+	// A native T_json value arrives at the writer as ByteJson. Keep the sibling
+	// SQL NULL in the same row to exercise the representation boundary directly.
+	bj, err := bytejson.ParseFromString(`{"b":"binary"}`)
+	require.NoError(t, err)
+	txt, err = w.rowText(context.Background(), []any{int64(1), nil, bj})
+	require.NoError(t, err)
+	got = fulltext2.DecodeJSONTermCarrier(txt)
+	require.Equal(t, []fulltext2.WordPos{{Word: fulltext2.JSONStringTerm("b", "binary"), Pos: 0}}, got)
 }
 
 func TestFulltext2WriterJSONFlatSkipsNullColumn(t *testing.T) {
@@ -196,6 +327,19 @@ func TestFulltext2WriterNullDatalinkSiblingIsSkipped(t *testing.T) {
 	txt, err := w.rowText(context.Background(), []any{int64(1), nil, "right"})
 	require.NoError(t, err)
 	require.Equal(t, "right", txt)
+}
+
+func TestFulltext2WriterNullSiblingAcrossTextParsers(t *testing.T) {
+	for _, parser := range []string{fulltext2.ParserDefault, fulltext2.ParserNgram, fulltext2.ParserGojieba} {
+		t.Run(parser, func(t *testing.T) {
+			w := newFT2Writer(parser)
+			w.textPos = []int32{1, 2}
+			w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
+			got, err := w.rowText(context.Background(), []any{int64(1), nil, "sibling"})
+			require.NoError(t, err)
+			require.Equal(t, "sibling", got)
+		})
+	}
 }
 
 // TestFulltext2WriterDatalinkFallback: with no resolver context (cnEngine==nil, e.g. unit tests) a datalink column falls back to indexing the URL

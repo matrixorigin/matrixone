@@ -19,6 +19,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
@@ -312,12 +313,34 @@ func TestFulltext2CreateRowTermsJSONTupleSkipsNull(t *testing.T) {
 	got, err := st.rowTerms(tf, proc, 0)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
-	left, err := fulltext2.JSONTupleColumnTerms([]byte(`{"a":"left"}`), false, fulltext2.DefaultJSONTermOptions())
-	require.NoError(t, err)
-	right, err := fulltext2.JSONTupleColumnTerms([]byte(`{"b":"right"}`), false, fulltext2.DefaultJSONTermOptions())
-	require.NoError(t, err)
-	require.Equal(t, []string{left[0], right[0]}, []string{got[0].Word, got[1].Word})
+	// Keep the expected carrier terms independent of the adapter under test.
+	require.Equal(t, []string{
+		fulltext2.JSONStringTerm("a", "left"),
+		fulltext2.JSONStringTerm("b", "right"),
+	}, []string{got[0].Word, got[1].Word})
 	require.Equal(t, []int32{0, 1}, []int32{got[0].Pos, got[1].Pos})
+}
+
+func TestFulltext2CreateRowTermsBinaryJSONNullSibling(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSON}}
+
+	pk := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed[int64](pk, 1, false, mp))
+	left := vector.NewVec(types.T_json.ToType())
+	bj, err := bytejson.ParseFromString(`{"k":"binary"}`)
+	require.NoError(t, err)
+	require.NoError(t, vector.AppendByteJson(left, bj, false, mp))
+	right := vector.NewVec(types.T_json.ToType())
+	require.NoError(t, vector.AppendByteJson(right, bytejson.ByteJson{}, true, mp))
+
+	tf := newFT2TF([]string{"status"}, ft2StatusRets())
+	tf.Args = []*plan.Expr{makeStrConstExpr("{}"), makeStrConstExpr("pk"), makeStrConstExpr("left"), makeStrConstExpr("right")}
+	tf.ctr.argVecs = []*vector.Vector{ft2ConstStr(t, mp, "{}"), pk, left, right}
+	got, err := st.rowTerms(tf, proc, 0)
+	require.NoError(t, err)
+	require.Equal(t, []fulltext2.WordPos{{Word: fulltext2.JSONStringTerm("k", "binary"), Pos: 0}}, got)
 }
 
 func TestFulltext2CreateRowTermsNullBitmapAndConstNull(t *testing.T) {

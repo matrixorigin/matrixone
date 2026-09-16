@@ -140,13 +140,28 @@ execute wait_json;
 deallocate prepare wait_json;
 select id from json_null_cdc where id = 1;
 select id from json_null_cdc where match(left_doc, right_doc) against('newleft' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('null' in boolean mode) order by id;
 
 -- MERGE and REBUILD must preserve the zero-word shadow and must not resurrect
 -- the terms that were removed by the all-NULL update.
 alter table json_null_cdc alter reindex ftv fulltext2 merge force_sync;
 select id from json_null_cdc where match(left_doc, right_doc) against('newleft' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('null' in boolean mode) order by id;
 alter table json_null_cdc alter reindex ftv fulltext2 force_sync;
 select id from json_null_cdc where match(left_doc, right_doc) against('newleft' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('null' in boolean mode) order by id;
 
 prepare capture_json_tail from @capture_json_tail_sql;
 execute capture_json_tail;

@@ -91,6 +91,15 @@ id
 select id from js_null where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
 id
 3
+select id from js_null where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+id
+1
+select id from js_null where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+id
+5
+select id from js_null where match(left_doc, right_doc) against('null' in boolean mode) order by id;
+id
+6
 alter table js_null alter reindex ft_null fulltext2 force_sync;
 select id from js_null where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
 id
@@ -98,4 +107,13 @@ id
 select id from js_null where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
 id
 3
+select id from js_null where match(left_doc, right_doc) against('+leftboth +rightboth' in boolean mode) order by id;
+id
+1
+select id from js_null where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+id
+5
+select id from js_null where match(left_doc, right_doc) against('null' in boolean mode) order by id;
+id
+6
 drop database fulltext2_jsonvalue;
