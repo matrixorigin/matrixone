@@ -4,10 +4,10 @@
 - Design revision: 5
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Implementation snapshot reviewed by this revision: `5b9766413c` (post-rebase
+- Implementation snapshot reviewed by this revision: `92f60f9e2a` (post-rebase
   code/tests baseline; the revision-4 benchmark is test-only and does not
   change runtime semantics)
-- Rebased implementation base: `01d60e1c4ded1b0f3fc1a4ecd75ce54e95e23b90`
+- Rebased implementation base: `4f0039db16d4b997be6a55b032a0a76f7ec64b57`
 - Independent design review: GPT-6 Astra, medium reasoning; revision 5 records the
   requested mode-boundary decision and validation additions, while exact maintainer
   approval remains pending
@@ -259,7 +259,7 @@ authorized maintainer decision.
 The pre-rebase head `85635cc` passed the required CI run
 `34813866468` (SCA, Ubuntu UT, coverage, build, Compose/Standalone BVT, and
 CI Required); that run is historical and is not evidence for the current head.
-After rebasing onto current `main` `01d60e1c4d`, local validation passed the
+After rebasing onto current `main` `4f0039db16`, local validation passed the
 full `pkg/sql/plan/function`, `pkg/sql/plan`, and `pkg/frontend` packages, the
 prepared numeric `-race` focus, the string-math/overload focus, the SQL-mode
 setter regression, `go vet` with repository CGo headers, `make build`, and
@@ -279,8 +279,8 @@ outside this scope.
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
 Design revision: 5
-Implementation baseline: 5b9766413c (post-rebase code/tests baseline)
-Rebased base: 01d60e1c4ded1b0f3fc1a4ecd75ce54e95e23b90
+Implementation baseline: 92f60f9e2a (post-rebase code/tests baseline)
+Rebased base: 4f0039db16d4b997be6a55b032a0a76f7ec64b57
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: GPT-6 Astra, medium reasoning, independent draft design review; final review pending after current-base rebase
 Review timestamp: 2026-09-15
