@@ -312,12 +312,12 @@ func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {
 
 	required, err := RequiredPersistedExpressionProtocolVersion(expr)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion82), required)
+	require.Equal(t, int64(defines.MORPCVersion83), required)
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 82")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 83")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion83)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 }
 

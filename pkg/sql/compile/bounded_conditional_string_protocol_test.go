@@ -73,7 +73,7 @@ func TestBoundedConditionalStringPlacementAndDestinationProtocol(t *testing.T) {
 
 	c.execType = plan.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	client.version = defines.MORPCVersion82
+	client.version = defines.MORPCVersion83
 	require.NoError(t, c.constrainBoundedConditionalStringWorkers(qry))
 	require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType)
 	data, err := encodeRemoteScope(scope, c.proc)
@@ -89,5 +89,5 @@ func TestBoundedConditionalStringPlacementAndDestinationProtocol(t *testing.T) {
 	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc,
 		&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
 			ProjectList: []*planpb.Expr{qry.Nodes[0].ProjectList[0]},
-		}}}), "version 81")
+		}}}), "version 83")
 }

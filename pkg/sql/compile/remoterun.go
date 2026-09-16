@@ -2188,9 +2188,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.BoundedConditionalStringDomains &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion82) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion83) {
 		return moerr.NewNotSupportedNoCtx(
-			"bounded conditional string domains require MORPC protocol version 82",
+			"bounded conditional string domains require MORPC protocol version 83",
 		)
 	}
 	if features.IPFunctionSemantics &&

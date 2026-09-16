@@ -25,7 +25,7 @@ import (
 )
 
 // constrainBoundedConditionalStringWorkers keeps the new bounded binary
-// COALESCE overloads on one CN while a rolling cluster contains pre-v82
+// COALESCE overloads on one CN while a rolling cluster contains pre-v83
 // workers. Those workers do not have overload identities 30 and 31.
 func (c *Compile) constrainBoundedConditionalStringWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
@@ -35,7 +35,7 @@ func (c *Compile) constrainBoundedConditionalStringWorkers(qry *plan.Query) erro
 	if err != nil || !features.BoundedConditionalStringDomains {
 		return err
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion82)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion83)
 	if err != nil {
 		return err
 	}
@@ -58,14 +58,14 @@ func validateBoundedConditionalStringDestination(proc *process.Process, p *pipel
 	supported, err := remoteWorkersSupportProtocol(
 		proc,
 		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}},
-		defines.MORPCVersion82,
+		defines.MORPCVersion83,
 	)
 	if err != nil {
 		return err
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"remote destination does not support bounded conditional string domains (MORPC version 82)",
+			"remote destination does not support bounded conditional string domains (MORPC version 83)",
 		)
 	}
 	return nil

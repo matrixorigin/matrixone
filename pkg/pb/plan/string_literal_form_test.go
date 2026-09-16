@@ -554,7 +554,7 @@ func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *test
 		require.True(t, features.BoundedConditionalStringDomains)
 		require.True(t, features.Any())
 
-		required, err := RequiresMORPCVersion82BoundedConditionalStringDomains(coalesce(overload))
+		required, err := RequiresMORPCVersion83BoundedConditionalStringDomains(coalesce(overload))
 		require.NoError(t, err)
 		require.True(t, required)
 	}

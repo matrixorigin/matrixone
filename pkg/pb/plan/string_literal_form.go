@@ -194,10 +194,10 @@ func RequiresMORPCVersion80StringNumericResultContracts(owner any) (bool, error)
 	return features.StringNumericResultContracts, err
 }
 
-// RequiresMORPCVersion82BoundedConditionalStringDomains reports whether an
+// RequiresMORPCVersion83BoundedConditionalStringDomains reports whether an
 // owner contains a conditional string overload introduced with the bounded
 // CHAR/VARCHAR and BINARY/VARBINARY result-domain contract.
-func RequiresMORPCVersion82BoundedConditionalStringDomains(owner any) (bool, error) {
+func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.BoundedConditionalStringDomains, err
 }
@@ -240,7 +240,7 @@ const (
 // StringNumericResultContracts requires MORPC v80 because the listed string
 // numeric functions keep overload IDs while changing their physical result
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
-// BoundedConditionalStringDomains requires MORPC v81 because the bounded
+// BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                   bool
