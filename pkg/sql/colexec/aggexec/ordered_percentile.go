@@ -654,8 +654,8 @@ func (exec *orderedPercentileExec[T, R]) flushAccounted() (
 				return nil, err
 			}
 			index := 0
-			err = state.iter(row, func(key []byte) error {
-				payload := aggPayloadFromKey(&exec.accounted.aggInfo, key)
+			err = state.iterWithValue(row, func(key, stored []byte) error {
+				payload := aggPayloadFromKeyValue(&exec.accounted.aggInfo, key, stored)
 				if len(payload) != exec.argType.TypeSize() || index >= len(values) {
 					return moerr.NewInternalErrorNoCtx(
 						"ordered percentile has invalid retained argument")
@@ -684,11 +684,7 @@ func (exec *orderedPercentileExec[T, R]) setAccountedResult(
 	values []T, result *vector.Vector, row int,
 ) error {
 	slices.SortFunc(values, func(left, right T) int {
-		comparison := compareOrderedPercentileValue(left, right)
-		if exec.descending {
-			comparison = -comparison
-		}
-		return comparison
+		return compareOrderedPercentileValueWithDirection(left, right, exec.descending)
 	})
 	lo, hi, fraction := orderedPercentileRanksWithScratch(
 		&exec.arithmetic, uint64(len(values)), exec.percentile, exec.mode)
@@ -795,10 +791,7 @@ func sortOrderedPercentileValues[T numeric | types.Decimal64 | types.Decimal128]
 
 	sort.Slice(selectors, func(i, j int) bool {
 		left, right := selectors[i], selectors[j]
-		cmp := compareOrderedPercentileValue(values[int(left)], values[int(right)])
-		if descending {
-			cmp = -cmp
-		}
+		cmp := compareOrderedPercentileValueWithDirection(values[int(left)], values[int(right)], descending)
 		if cmp == 0 {
 			return left < right
 		}
@@ -1271,10 +1264,7 @@ type orderedPercentileRunHeap[T numeric | types.Decimal64 | types.Decimal128] st
 func (h orderedPercentileRunHeap[T]) Len() int { return len(h.runs) }
 func (h orderedPercentileRunHeap[T]) Less(i, j int) bool {
 	left, right := h.runs[i], h.runs[j]
-	cmp := compareOrderedPercentileValue(h.values[left], h.values[right])
-	if h.descending {
-		cmp = -cmp
-	}
+	cmp := compareOrderedPercentileValueWithDirection(h.values[left], h.values[right], h.descending)
 	if cmp == 0 {
 		return left < right
 	}
@@ -1310,15 +1300,31 @@ func compareOrderedPercentileValue[T numeric | types.Decimal64 | types.Decimal12
 	case uint64:
 		return cmp.Compare(l, any(right).(uint64))
 	case float32:
-		return cmp.Compare(l, any(right).(float32))
+		return types.Float32OrderAscCompare(l, any(right).(float32))
 	case float64:
-		return cmp.Compare(l, any(right).(float64))
+		return types.Float64OrderAscCompare(l, any(right).(float64))
 	case types.Decimal64:
 		return l.Compare(any(right).(types.Decimal64))
 	case types.Decimal128:
 		return l.Compare(any(right).(types.Decimal128))
 	default:
 		panic("unsupported ordered percentile type")
+	}
+}
+
+func compareOrderedPercentileValueWithDirection[T numeric | types.Decimal64 | types.Decimal128](
+	left, right T, descending bool,
+) int {
+	if !descending {
+		return compareOrderedPercentileValue(left, right)
+	}
+	switch l := any(left).(type) {
+	case float32:
+		return types.Float32OrderDescCompare(l, any(right).(float32))
+	case float64:
+		return types.Float64OrderDescCompare(l, any(right).(float64))
+	default:
+		return -compareOrderedPercentileValue(left, right)
 	}
 }
 

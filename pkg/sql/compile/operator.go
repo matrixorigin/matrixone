@@ -2037,17 +2037,10 @@ func constructApproxPercentileConfig(
 	if err != nil {
 		return nil, nil, err
 	}
-	// The existing approximate-percentile executor always ranks values in
-	// ascending order. An ordered-set DESC call has the same result as the
-	// ascending complementary percentile, so preserve the executor and its
-	// wire-compatible text configuration by translating p to 1-p here.
-	if len(f.AggConfig) > 0 && f.AggConfig[0] != 0 {
-		config, err = complementPercentileConfig(config)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	return args[:1], config, nil
+	// Preserve the v76 executor's explicit direction, including SQL NaN ordering,
+	// while evaluating a prepared percentile exactly once for this execution.
+	descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
+	return args[:1], aggexec.EncodeApproxPercentileConfig(config, descending), nil
 }
 
 func constructOrderedPercentileConfig(

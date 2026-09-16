@@ -365,7 +365,7 @@ func TestConstructAggregateConfigApproxPercentileWithinGroup(t *testing.T) {
 	}{
 		{name: "ordinary form", want: "0.25"},
 		{name: "ordered ascending", planConfig: []byte{0}, want: "0.25"},
-		{name: "ordered descending", planConfig: []byte{1}, want: "0.75"},
+		{name: "ordered descending", planConfig: []byte{1}, want: "DESC:0.25"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args, config := constructAggregateConfig(&plan.Function{
@@ -464,7 +464,7 @@ func TestPreflightPercentileConfigsReturnsPreparedValueError(t *testing.T) {
 		wantConfig []byte
 	}{
 		{name: "ordinary approx", function: plan2.NameApproxPercentile, wantConfig: []byte("0.25")},
-		{name: "ordered approx descending", function: plan2.NameApproxPercentile, descending: true, wantConfig: []byte("0.75")},
+		{name: "ordered approx descending", function: plan2.NameApproxPercentile, descending: true, wantConfig: aggexec.EncodeApproxPercentileConfig([]byte("0.25"), true)},
 		{name: "continuous", function: plan2.NamePercentileCont},
 		{name: "discrete", function: plan2.NamePercentileDisc},
 	} {
