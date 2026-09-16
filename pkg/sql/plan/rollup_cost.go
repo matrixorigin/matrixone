@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	containertypes "github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -193,13 +194,25 @@ func estimateSortRollupCost(
 		!finiteRollupStat(stats.Outcnt) || !finiteRollupStat(stats.Cost) {
 		return estimate, false
 	}
-	if stats.TableCnt > 0 && stats.Outcnt > stats.TableCnt {
-		// A filtered scan cannot produce more rows than its table-wide input.
-		// Inconsistent statistics are not a reason to risk changing the plan.
-		return estimate, false
-	}
-	if stats.TableCnt == 0 && stats.Outcnt > 0 {
-		return estimate, false
+	// A derived-table/project node may retain the planner's generic table-count
+	// default while carrying the real child output count. Its output is the
+	// input to this ROLLUP, so do not reject that wrapper merely because
+	// Outcnt > TableCnt. Keep the consistency check strict for leaf scans, where
+	// TableCnt is a table cardinality invariant rather than a wrapper artifact.
+	tableRows := stats.TableCnt
+	leafScan := probe.source.NodeType == plan.Node_TABLE_SCAN ||
+		probe.source.NodeType == plan.Node_EXTERNAL_SCAN
+	if leafScan {
+		if tableRows > 0 && stats.Outcnt > tableRows {
+			// A filtered scan cannot produce more rows than its table-wide input.
+			// Inconsistent statistics are not a reason to risk changing the plan.
+			return estimate, false
+		}
+		if tableRows == 0 && stats.Outcnt > 0 {
+			return estimate, false
+		}
+	} else if stats.Outcnt > tableRows {
+		tableRows = stats.Outcnt
 	}
 
 	rows := math.Max(0, stats.Outcnt)
@@ -245,7 +258,7 @@ func estimateSortRollupCost(
 	// Keep the theoretical output-group bound for diagnostics and overflow
 	// detection. It is not the resident aggregate-state bound: the executor is
 	// streaming even when it must insert an internal SORT before this node.
-	capacityRows := math.Max(rows, stats.TableCnt)
+	capacityRows := math.Max(rows, tableRows)
 	sortGroupUpperBound := capacityRows*float64(levels) + 1
 	// groupIDs is one reusable UnitLimit-sized slice shared by all active
 	// prefixes. The aggregate preflight scratch is stack-bounded by the same

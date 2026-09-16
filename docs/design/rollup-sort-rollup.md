@@ -165,6 +165,10 @@ there; it does not materialize one aggregate state per emitted group. `N_cap`,
 retained below as a diagnostic output-group upper bound, is the larger of the
 filtered input estimate and the table-row estimate so stale or optimistic
 filtered `Outcnt` cannot make diagnostics look artificially small.
+For the eligible direct derived-table shape, wrapper `TableCnt` is not treated
+as a leaf-table invariant: when it is stale or generic, the derived output
+`Outcnt` is used as the ROLLUP input cardinality. Leaf scan statistics retain
+the strict `Outcnt <= TableCnt` consistency check.
 
 The state estimate is admitted automatically only for aggregates with a fixed
 state contract whose arguments can be proven fixed-width by the isolated
@@ -187,6 +191,14 @@ go test -mod=mod ./pkg/sql/colexec/group -run '^$' \
   -benchtime=5x -count=3
 ```
 
+The derived-order shape can be run separately with:
+
+```text
+go test -mod=mod ./pkg/sql/colexec/group -run '^$' \
+  -bench 'BenchmarkRollupAlgorithms/million_(ordered_low_ndv|derived_order_low_ndv)/(sort|hash-serial|hash-parallel)$' \
+  -benchtime=5x -count=3
+```
+
 It runs on the same materialized `int32` input, includes the sort operator for
 unordered cases, skips it for the paired ordered cases, and executes all
 legacy grouping-set branches in the hash case. Every large case has at least
@@ -206,6 +218,7 @@ shape                              sort          hash-serial       hash-parallel
 100000 rows, 20 keys, NDV=2        6.63–6.86 ms   87.39–91.03 ms     22.72–24.37 ms
 100000 rows, 32 keys, NDV=2       10.19–10.60 ms  202.27–205.88 ms     46.93–53.68 ms
 1000000 rows, 3 keys, NDV=4       10.47–10.93 ms   43.58–43.67 ms     22.27–22.69 ms
+1000000 rows, child ORDER BY      24.49–24.64 ms   96.75–99.30 ms     40.65–41.55 ms
 ```
 
 The 100000-row cases show the actual advantage of the new combination:
@@ -222,6 +235,21 @@ than parallel hash. These measurements are calibration evidence, not
 machine-independent elapsed-time constants; the planner keeps a cost margin
 and falls back to hash when statistics or order proof is uncertain.
 Known empty-table statistics remain valid and estimate one grand-total group.
+
+The last row models the concrete derived-table query shape:
+
+```sql
+SELECT d.a, d.b, d.c, count(*)
+FROM (SELECT a, b, c FROM t ORDER BY a, b, c) AS d
+GROUP BY d.a, d.b, d.c WITH ROLLUP;
+```
+
+For this shape, the forced SORT plan contains one table scan, one sort, and one
+streaming aggregate. The forced HASH plan expands to four table scans, four
+sorts, five aggregates, and three `UNION ALL` nodes. The derived-order benchmark
+therefore charges the child `ORDER BY` once for SORT and once per grouping-set
+branch for HASH; it is a comparison of the current physical plan shapes, not a
+claim that an arbitrary unordered ROLLUP should always sort.
 
 The aggregate marker is carried in `ExtraOptions`, which is already part of
 the plan representation. The final group is compiled only after the global

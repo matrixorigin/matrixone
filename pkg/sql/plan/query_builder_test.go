@@ -1462,6 +1462,54 @@ func TestQueryBuilderSortRollupReusesOrderedDerivedSource(t *testing.T) {
 	require.Equal(t, 1, sortCount)
 }
 
+func TestQueryBuilderOrderedDerivedRollupPlanModes(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+
+	sql := `select d.a, d.b, d.c, count(*) from
+		(select a, b, c from select_test.bind_select order by a, b, c) d
+		group by d.a, d.b, d.c with rollup`
+	for _, tc := range []struct {
+		name string
+		hint string
+	}{
+		{name: "sort", hint: "rollupSort=1"},
+		{name: "hash", hint: "rollupSort=2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt.SetGlobalVariables("optimizer_hints", tc.hint)
+			stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+			require.NoError(t, err)
+
+			counts := make(map[plan.Node_NodeType]int)
+			for _, node := range queryPlan.GetQuery().Nodes {
+				counts[node.NodeType]++
+			}
+			if tc.name == "sort" {
+				require.Equal(t, 1, counts[plan.Node_TABLE_SCAN])
+				require.Equal(t, 1, counts[plan.Node_SORT])
+				require.Equal(t, 1, counts[plan.Node_AGG])
+				require.True(t, planHasSortRollup(queryPlan.GetQuery()))
+			} else {
+				require.Equal(t, 4, counts[plan.Node_TABLE_SCAN])
+				require.Equal(t, 4, counts[plan.Node_SORT])
+				require.Equal(t, 5, counts[plan.Node_AGG])
+				require.Equal(t, 3, counts[plan.Node_UNION_ALL])
+				require.False(t, planHasSortRollup(queryPlan.GetQuery()))
+			}
+		})
+	}
+}
+
 func TestSortRollupTypeProbeDoesNotMutateAST(t *testing.T) {
 	stmt, err := parsers.Parse(context.TODO(), dialect.MYSQL,
 		`select a, b, count(*) from select_test.bind_select

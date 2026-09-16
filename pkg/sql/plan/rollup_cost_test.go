@@ -82,6 +82,26 @@ func TestSortRollupCostModelUsesFilterCardinality(t *testing.T) {
 		"a selective WHERE should make the one-pass path cheaper")
 }
 
+func TestSortRollupCostModelUsesOrderedDerivedSource(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+	rt.SetGlobalVariables("optimizer_hints", "determineShuffle=2")
+
+	queryPlan := buildAutoRollupPlanSQLWithStats(t, 1_000_000,
+		`select d.a, d.b, d.c, count(*) from
+			(select a, b, c from select_test.bind_select order by a, b, c) d
+			group by d.a, d.b, d.c with rollup`)
+	require.True(t, planHasSortRollup(queryPlan.GetQuery()),
+		"known ordered input should make streaming rollup cheaper at 1M rows")
+}
+
 func TestSortRollupCostModelHonorsHashOverride(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
@@ -347,6 +367,24 @@ func TestSortRollupCostModelRejectsUnknownNDV(t *testing.T) {
 
 	_, ok := estimateSortRollupCost(probe, nil)
 	require.False(t, ok, "unknown NDV must not let sort win by heuristic")
+}
+
+func TestSortRollupCostModelRejectsInconsistentLeafStats(t *testing.T) {
+	probe := &sortRollupProbe{
+		builder: NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false),
+		source: &Node{
+			NodeType: plan.Node_TABLE_SCAN,
+			Stats:    &Stats{TableCnt: 100, Outcnt: 101, Cost: 100, Rowsize: 64},
+		},
+		groupExprs: []*Expr{{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Ndv:  10,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}},
+	}
+
+	_, ok := estimateSortRollupCost(probe, nil)
+	require.False(t, ok, "a leaf scan with Outcnt > TableCnt must remain fail-closed")
 }
 
 func TestSortRollupCostModelRejectsUnboundedAggregateState(t *testing.T) {
