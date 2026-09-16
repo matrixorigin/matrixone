@@ -117,7 +117,8 @@ const (
 	MORPCVersion79     int64 = 79 // canonical opaque DISTINCT argument wire keys
 	MORPCVersion80     int64 = 80 // signed and widened string numeric result contracts
 	MORPCVersion81     int64 = 81 // opt-in table-owned AUTO_ID_CACHE and its PRE_INSERT wire marker
-	MORPCLatestVersion       = MORPCVersion81
+	MORPCVersion82     int64 = 82 // sys-admin vector-index cache freshness-interval, cache-info, and evict ctl
+	MORPCLatestVersion       = MORPCVersion82
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

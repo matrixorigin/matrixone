@@ -43,10 +43,11 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_GetPipelineInfo:       defines.MORPCVersion1,
 	pb.CmdMethod_GetProtocolVersion:    defines.MORPCMinVersion, // To make sure these methods are compatible with all versions.
 	pb.CmdMethod_SetProtocolVersion:    defines.MORPCMinVersion,
-	// A sys-admin/test knob; keep it reachable on any version (a CN without the handler simply errors).
-	pb.CmdMethod_SetVectorIndexFreshnessInterval: defines.MORPCMinVersion,
-	pb.CmdMethod_GetVectorIndexCacheInfo:         defines.MORPCMinVersion,
-	pb.CmdMethod_EvictVectorIndexCache:           defines.MORPCMinVersion,
+	// Sys-admin vector-index cache knobs: gated so a mixed-version cluster rejects the call
+	// cluster-wide until every CN is upgraded, instead of dispatching to a CN with no handler.
+	pb.CmdMethod_SetVectorIndexFreshnessInterval: defines.MORPCVersion82,
+	pb.CmdMethod_GetVectorIndexCacheInfo:         defines.MORPCVersion82,
+	pb.CmdMethod_EvictVectorIndexCache:           defines.MORPCVersion82,
 	pb.CmdMethod_CoreDumpConfig:                  defines.MORPCMinVersion,
 	pb.CmdMethod_MigrateConnFrom:                 defines.MORPCVersion1,
 	pb.CmdMethod_MigrateConnTo:                   defines.MORPCVersion1,
