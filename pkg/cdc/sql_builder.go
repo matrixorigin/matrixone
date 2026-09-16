@@ -17,7 +17,6 @@ package cdc
 import (
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
