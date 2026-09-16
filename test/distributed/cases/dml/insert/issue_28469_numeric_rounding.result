@@ -341,6 +341,15 @@ SELECT * FROM mixed_float_dst;
 ➤ i[4,32,0]  ¦  d[8,53,31]  𝄀
 2  ¦  1.0E54
 DROP TABLE mixed_float_dst;
+CREATE TABLE predicate_domain_dst(i INT);
+INSERT INTO predicate_domain_dst SELECT 1
+WHERE (1000000000000000000/1)*1000000000000000000*1000000000000000000>0;
+UPDATE predicate_domain_dst SET i=2
+WHERE (1000000000000000000/1)*1000000000000000000*1000000000000000000>0;
+SELECT * FROM predicate_domain_dst;
+➤ i[4,32,0]  𝄀
+2
+DROP TABLE predicate_domain_dst;
 SELECT 5/2 AS q;
 ➤ q[8,53,31]  𝄀
 2.5

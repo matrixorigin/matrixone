@@ -178,6 +178,16 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			require.Equal(t, 1e54, approximate)
 		})
 
+		t.Run("integer_target_does_not_change_predicate_domain", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table predicate_domain_dst(i int)")
+			const predicate = "(1000000000000000000/1)*1000000000000000000*1000000000000000000>0"
+			mustExec(t, ctx, conn, "insert into predicate_domain_dst select 1 where "+predicate)
+			mustExec(t, ctx, conn, "update predicate_domain_dst set i=2 where "+predicate)
+			var got int
+			require.NoError(t, conn.QueryRowContext(ctx, "select i from predicate_domain_dst").Scan(&got))
+			require.Equal(t, 2, got)
+		})
+
 		t.Run("prepared_strict_division_by_zero", func(t *testing.T) {
 			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'")
 			defer func() { _, _ = conn.ExecContext(ctx, "set sql_mode='STRICT_TRANS_TABLES'") }()

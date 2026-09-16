@@ -5330,16 +5330,6 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	seedPreparedNumericAggregateTableProjectionTypes(builder, stmt, ctx)
 	seedNumericTableProjectionTypes(builder, stmt, ctx)
 	seedNumericCteProjectionTypes(builder, ctx)
-	// numericProjectionTypes describes this query block's consumers after target
-	// propagation. Enter exact execution only when every output of this block is
-	// integer-bound; mixed top-level DML projections keep unrelated expressions
-	// in their ordinary domains, while a shared producer seeded as integer stays
-	// exact for all of its consumers.
-	restoreIntegerDomain := builder.enterIntegerAssignmentDomain(
-		allNumericProjectionTargetsInteger(ctx.numericProjectionTypes),
-	)
-	defer restoreIntegerDomain()
-
 	// preprocess CTEs
 	if err = builder.preprocessCte(stmt, ctx); err != nil {
 		return
@@ -8216,6 +8206,14 @@ func (builder *QueryBuilder) bindSelectClause(
 	if selectList, err = appendSelectList(builder, ctx, selectList, clause.Exprs...); err != nil {
 		return
 	}
+	// WHERE and lock predicates above retain ordinary SELECT semantics. Enter
+	// the exact domain only for alias, aggregate, window, and grouping producer
+	// discovery needed by integer-bound outputs.
+	restoreResultDomain := builder.enterIntegerAssignmentDomain(
+		allNumericProjectionTargetsInteger(ctx.numericProjectionTypes),
+	)
+	defer restoreResultDomain()
+
 	if len(selectList) == 0 {
 		err = moerr.NewParseError(builder.GetContext(), "No tables used")
 		return
