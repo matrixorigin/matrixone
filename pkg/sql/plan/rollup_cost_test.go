@@ -192,6 +192,7 @@ func TestSortRollupCostModelMatchesMeasuredShapeBoundary(t *testing.T) {
 		{name: "small", rows: 100, levels: 3, ndv: 8, wantSort: true},
 		{name: "medium", rows: 4096, levels: 3, ndv: 8, wantSort: false},
 		{name: "tiny-many-levels", rows: 256, levels: 12, ndv: 4, wantSort: true},
+		{name: "large-one-key", rows: 100000, levels: 1, ndv: 8, wantSort: false},
 	} {
 		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
 		groupExprs := make([]*Expr, tc.levels)

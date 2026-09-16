@@ -45,11 +45,12 @@ import (
 // operator so the measured path includes source-to-aggregate data movement.
 func BenchmarkRollupAlgorithms(b *testing.B) {
 	cases := []struct {
-		name     string
-		rows     int
-		ndv      int
-		keyCount int
-		ordered  bool
+		name      string
+		rows      int
+		ndv       int
+		keyCount  int
+		ordered   bool
+		aggregate string
 	}{
 		// These are the shapes in which one scan plus one ordered aggregate can
 		// amortize the fixed cost of the legacy grouping-set branches.
@@ -71,14 +72,19 @@ func BenchmarkRollupAlgorithms(b *testing.B) {
 		{name: "large_ordered_one_key", rows: 100000, ndv: 8, keyCount: 1, ordered: true},
 		{name: "large_ordered_single_group", rows: 100000, ndv: 1, keyCount: 12, ordered: true},
 		{name: "large_ordered_many_levels", rows: 100000, ndv: 2, keyCount: 12, ordered: true},
+		{name: "large_ordered_wider_ndv", rows: 100000, ndv: 4, keyCount: 12, ordered: true},
+		{name: "large_ordered_high_ndv", rows: 100000, ndv: 64, keyCount: 12, ordered: true},
+		{name: "large_ordered_avg_many_levels", rows: 100000, ndv: 2, keyCount: 12, ordered: true, aggregate: "avg"},
 		{name: "large_ordered_very_many_levels", rows: 100000, ndv: 2, keyCount: 20, ordered: true},
+		{name: "large_ordered_extreme_levels", rows: 100000, ndv: 2, keyCount: 32, ordered: true},
+		{name: "million_ordered_low_ndv", rows: 1000000, ndv: 4, keyCount: 3, ordered: true},
 	}
 
 	for _, tc := range cases {
 		for _, algorithm := range []string{"sort", "hash-serial", "hash-parallel"} {
 			name := fmt.Sprintf("%s/%s", tc.name, algorithm)
 			b.Run(name, func(b *testing.B) {
-				runner, err := newRollupBenchmarkRunner(b, tc.rows, tc.ndv, tc.keyCount, tc.ordered)
+				runner, err := newRollupBenchmarkRunner(b, tc.rows, tc.ndv, tc.keyCount, tc.ordered, tc.aggregate)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -116,6 +122,7 @@ type rollupBenchmarkRunner struct {
 	groupBy [][]*plan.Expr
 	specs   []*plan.OrderBySpec
 	ordered bool
+	aggs    []aggexec.AggFuncExecExpression
 }
 
 type rollupBenchmarkInput struct {
@@ -125,7 +132,7 @@ type rollupBenchmarkInput struct {
 
 func newRollupBenchmarkRunner(
 	t testing.TB,
-	rows, ndv, keyCount int, ordered bool,
+	rows, ndv, keyCount int, ordered bool, aggregate string,
 ) (*rollupBenchmarkRunner, error) {
 	if rows <= 0 || ndv <= 0 || keyCount <= 0 {
 		return nil, fmt.Errorf("invalid rollup benchmark shape: rows=%d ndv=%d keys=%d", rows, ndv, keyCount)
@@ -136,6 +143,14 @@ func newRollupBenchmarkRunner(
 		groupBy: make([][]*plan.Expr, keyCount+1),
 		specs:   make([]*plan.OrderBySpec, keyCount),
 		ordered: ordered,
+	}
+	switch aggregate {
+	case "", "count":
+		runner.aggs = []aggexec.AggFuncExecExpression{countStarAgg()}
+	case "avg":
+		runner.aggs = []aggexec.AggFuncExecExpression{avgAgg(int32(keyCount))}
+	default:
+		return nil, fmt.Errorf("invalid rollup benchmark aggregate: %s", aggregate)
 	}
 	for prefix := 0; prefix <= keyCount; prefix++ {
 		runner.groupBy[prefix] = makeRollupBenchmarkGroupBy(prefix)
@@ -153,7 +168,7 @@ func newRollupBenchmarkRunner(
 	for i := 0; i <= keyCount; i++ {
 		mp := mpool.MustNewZero()
 		proc := testutil.NewProcessWithMPool(t, "", mp)
-		base, err := makeRollupBenchmarkBatch(proc, rows, ndv, keyCount, ordered)
+		base, err := makeRollupBenchmarkBatch(proc, rows, ndv, keyCount, ordered, aggregate == "avg")
 		if err != nil {
 			proc.Free()
 			return nil, err
@@ -193,9 +208,13 @@ func makeRollupBenchmarkGroupBy(prefix int) []*plan.Expr {
 
 func makeRollupBenchmarkBatch(
 	proc *process.Process,
-	rows, ndv, keyCount int, ordered bool,
+	rows, ndv, keyCount int, ordered bool, withMeasure bool,
 ) (*batch.Batch, error) {
-	bat := batch.NewWithSize(keyCount)
+	columnCount := keyCount
+	if withMeasure {
+		columnCount++
+	}
+	bat := batch.NewWithSize(columnCount)
 	allValues := make([][]int32, keyCount)
 	for key := 0; key < keyCount; key++ {
 		values := make([]int32, rows)
@@ -207,6 +226,13 @@ func makeRollupBenchmarkBatch(
 			values[row] = int32((row*7919 + key*104729) % ndv)
 		}
 		allValues[key] = values
+	}
+	if withMeasure {
+		values := make([]int32, rows)
+		for row := range values {
+			values[row] = int32((row*31 + 7) % 1000003)
+		}
+		allValues = append(allValues, values)
 	}
 	if ordered {
 		order := make([]int, rows)
@@ -230,7 +256,7 @@ func makeRollupBenchmarkBatch(
 			allValues[key] = sortedValues
 		}
 	}
-	for key := 0; key < keyCount; key++ {
+	for key := 0; key < len(allValues); key++ {
 		vec := vector.NewVec(types.T_int32.ToType())
 		if err := vector.AppendFixedList(vec, allValues[key], nil, proc.Mp()); err != nil {
 			bat.Clean(proc.Mp())
@@ -258,7 +284,7 @@ func (runner *rollupBenchmarkRunner) runSort() (int64, error) {
 		inputOp = order
 	}
 	group := newGroupOp(source.proc, runner.groupBy[len(runner.groupBy)-1],
-		[]aggexec.AggFuncExecExpression{countStarAgg()})
+		runner.aggs)
 	group.SortRollup = true
 	group.SpillMem = 1 << 30
 	group.AppendChild(inputOp)
@@ -344,7 +370,7 @@ func (runner *rollupBenchmarkRunner) runHashBranch(prefix int) (int64, error) {
 	}
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	group := newGroupOp(input.proc, runner.groupBy[prefix],
-		[]aggexec.AggFuncExecExpression{countStarAgg()})
+		runner.aggs)
 	group.SpillMem = 1 << 30
 	group.AppendChild(child)
 	if err = group.Prepare(input.proc); err != nil {
