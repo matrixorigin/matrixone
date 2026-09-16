@@ -4082,7 +4082,9 @@ func markPreparedResultCastsProvisional(
 	for i, arg := range args {
 		if i < len(peerSources) && peerSources[i] != nil {
 			attachPreparedRuntimeParamSource(arg, DeepCopyExpr(peerSources[i]))
-			ensurePreparedNumericMetadata(arg).ProvisionalResultPeer = true
+			metadata := ensurePreparedNumericMetadata(arg)
+			metadata.ProvisionalResultPeer = true
+			metadata.StringDomainSource = DeepCopyExpr(peerSources[i])
 		}
 		if i < len(astArgs) {
 			if explicitCast, ok := astArgs[i].(*tree.CastExpr); ok {

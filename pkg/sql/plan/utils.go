@@ -1082,7 +1082,7 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 				if isIntegerArgumentCast(nested) {
 					collectPreparedIntegerArgumentParamPositions(
 						query, int32(nodeID), nested.GetF().Args[0], positions,
-						make(map[[2]int32]struct{}))
+						make(map[[2]int32]struct{}), nil)
 				}
 				return nil
 			})
@@ -1121,6 +1121,7 @@ func collectPreparedIntegerArgumentParamPositions(
 	expr *plan.Expr,
 	positions map[int32]struct{},
 	visited map[[2]int32]struct{},
+	sources map[*plan.Expr]struct{},
 ) {
 	if query == nil || expr == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
 		return
@@ -1129,6 +1130,12 @@ func collectPreparedIntegerArgumentParamPositions(
 		positions[pos] = struct{}{}
 	}
 	_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+		if sources != nil && preparedExprContainsParam(nested) {
+			if fn := nested.GetF(); fn != nil && fn.Func != nil &&
+				(fn.Func.ObjName == "coalesce" || fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff") {
+				sources[nested] = struct{}{}
+			}
+		}
 		col := nested.GetCol()
 		if col == nil || col.ColPos < 0 {
 			return nil
@@ -1140,7 +1147,7 @@ func collectPreparedIntegerArgumentParamPositions(
 		// AGG emits grouping columns as negative-relation ColRefs. Their value
 		// lineage is the corresponding GROUP BY expression on this node, not a
 		// child projection with the same column ordinal.
-		if col.RelPos < 0 && node.NodeType == plan.Node_AGG &&
+		if col.RelPos == -1 && node.NodeType == plan.Node_AGG &&
 			int(col.ColPos) < len(node.GroupBy) && node.GroupBy[col.ColPos] != nil {
 			// Use a distinct key namespace from child projections: the same
 			// (node, column) pair was consumed to arrive at this AGG output.
@@ -1148,27 +1155,33 @@ func collectPreparedIntegerArgumentParamPositions(
 			if _, ok := visited[key]; !ok {
 				visited[key] = struct{}{}
 				collectPreparedIntegerArgumentParamPositions(
-					query, nodeID, node.GroupBy[col.ColPos], positions, visited)
+					query, nodeID, node.GroupBy[col.ColPos], positions, visited, sources)
 			}
 			return nil
 		}
-		childID := int32(-1)
-		if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
-			childID = node.Children[col.RelPos]
+		// A set output represents the same ordinal in every branch. RelPos=0
+		// is an output encoding, not proof that only the left input contributes.
+		var children []int32
+		if isPreparedSetOperationNode(node.NodeType) {
+			children = node.Children
+		} else if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+			children = node.Children[col.RelPos : col.RelPos+1]
 		} else if len(node.Children) == 1 {
-			childID = node.Children[0]
+			children = node.Children
 		}
-		key := [2]int32{childID, col.ColPos}
-		if _, ok := visited[key]; ok || childID < 0 || int(childID) >= len(query.Nodes) {
-			return nil
+		for _, childID := range children {
+			key := [2]int32{childID, col.ColPos}
+			if _, ok := visited[key]; ok || childID < 0 || int(childID) >= len(query.Nodes) {
+				continue
+			}
+			child := query.Nodes[childID]
+			if child == nil || int(col.ColPos) >= len(child.ProjectList) || child.ProjectList[col.ColPos] == nil {
+				continue
+			}
+			visited[key] = struct{}{}
+			collectPreparedIntegerArgumentParamPositions(
+				query, childID, child.ProjectList[col.ColPos], positions, visited, sources)
 		}
-		child := query.Nodes[childID]
-		if child == nil || int(col.ColPos) >= len(child.ProjectList) || child.ProjectList[col.ColPos] == nil {
-			return nil
-		}
-		visited[key] = struct{}{}
-		collectPreparedIntegerArgumentParamPositions(
-			query, childID, child.ProjectList[col.ColPos], positions, visited)
 		return nil
 	})
 }

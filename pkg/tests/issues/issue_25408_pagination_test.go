@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -121,6 +122,106 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create database "+dbName)
 		execSQLRequire(t, ctx, db, "create table "+dbName+".page(id int)")
 		execSQLRequire(t, ctx, db, "insert into "+dbName+".page values (1),(2),(3)")
+
+		t.Run("integer source domains across protocols and writes", func(t *testing.T) {
+			conn, connErr := db.Conn(ctx)
+			require.NoError(t, connErr)
+			defer conn.Close()
+			_, connErr = conn.ExecContext(ctx, "create table "+dbName+".integer_sources(v varchar(20))")
+			require.NoError(t, connErr)
+			_, connErr = conn.ExecContext(ctx, "create table "+dbName+".integer_peer(v double)")
+			require.NoError(t, connErr)
+			_, connErr = conn.ExecContext(ctx, "insert into "+dbName+".integer_peer values (0)")
+			require.NoError(t, connErr)
+			t.Run("binary cached source domain transitions", func(t *testing.T) {
+				stmt, err := conn.PrepareContext(ctx, `select substring_index("a.b.c.d",".",coalesce(?,0e0))`)
+				require.NoError(t, err)
+				defer stmt.Close()
+				for _, value := range []struct {
+					input any
+					want  string
+				}{
+					{nil, ""}, {float64(1.5), "a.b"}, {"1.5", "a"},
+					{nil, ""}, {float64(1.5), "a.b"}, {"1.5", "a"},
+				} {
+					var got string
+					require.NoError(t, stmt.QueryRowContext(ctx, value.input).Scan(&got))
+					require.Equal(t, value.want, got)
+				}
+			})
+			for _, tc := range []struct {
+				name, source, assignment, want string
+				args                           []any
+			}{
+				{"text", "coalesce(?,0e0)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"text ifnull", "ifnull(?,0e0)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"double", "coalesce(?,0e0)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"explicit float peer", "coalesce(?,cast(0 as double))", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"mixed", "coalesce(?,?)", `set @integer_a="1.5", @integer_b=1.5e0`, "a", []any{"1.5", float64(1.5)}},
+				{"null", "coalesce(?,?)", "set @integer_a=NULL, @integer_b=1.5e0", "a.b", []any{nil, float64(1.5)}},
+				{"project", "(select coalesce(?,0e0) where true)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"project text", "(select coalesce(?,0e0) where true)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"project null", "(select coalesce(?,?) where true)", "set @integer_a=NULL, @integer_b=1.5e0", "a.b", []any{nil, float64(1.5)}},
+				{"union distinct right", "(select 0e0 where false union select ?)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"column peer", "(select coalesce(?,x) from (select 0e0 as x) d)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"scan column peer", "(select coalesce(?,v) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"unfolded cast peer", "(select coalesce(?,cast(v as double)) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"union right", "(select 0e0 where false union all select ?)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					expr := `substring_index("a.b.c.d",".",` + tc.source + `)`
+					for _, binary := range []bool{false, true} {
+						for _, write := range []bool{false, true} {
+							t.Run(fmt.Sprintf("binary=%v/write=%v", binary, write), func(t *testing.T) {
+								query := "select " + expr
+								if write {
+									_, err := conn.ExecContext(ctx, "delete from "+dbName+".integer_sources")
+									require.NoError(t, err)
+									query = "insert into " + dbName + ".integer_sources values (" + expr + ")"
+									if strings.HasPrefix(tc.source, "(select") {
+										// Scalar subqueries use INSERT SELECT; the VALUES
+										// planner does not support this subquery shape.
+										query = "insert into " + dbName + ".integer_sources select " + expr
+									}
+								}
+								var got string
+								if binary {
+									stmt, err := conn.PrepareContext(ctx, query)
+									require.NoError(t, err)
+									defer stmt.Close()
+									if write {
+										_, err = stmt.ExecContext(ctx, tc.args...)
+									} else {
+										err = stmt.QueryRowContext(ctx, tc.args...).Scan(&got)
+									}
+									require.NoError(t, err)
+								} else {
+									_, err := conn.ExecContext(ctx, tc.assignment)
+									require.NoError(t, err)
+									_, err = conn.ExecContext(ctx, "prepare integer_domain from '"+query+"'")
+									require.NoError(t, err)
+									defer func() { _, err := conn.ExecContext(ctx, "deallocate prepare integer_domain"); require.NoError(t, err) }()
+									execute := "execute integer_domain using @integer_a"
+									if len(tc.args) == 2 {
+										execute += ",@integer_b"
+									}
+									if write {
+										_, err = conn.ExecContext(ctx, execute)
+									} else {
+										err = conn.QueryRowContext(ctx, execute).Scan(&got)
+									}
+									require.NoError(t, err)
+								}
+								if write {
+									require.NoError(t, conn.QueryRowContext(ctx, "select v from "+dbName+".integer_sources").Scan(&got))
+								}
+								require.Equal(t, tc.want, got)
+							})
+						}
+					}
+				})
+			}
+		})
 
 		type scalarObservation struct {
 			value        string

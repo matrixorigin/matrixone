@@ -209,6 +209,11 @@ func (rule *ResetParamRefRule) integerArgumentRuntimeSource(source *Expr) (*Expr
 	}
 	if marker := source.GetP(); marker != nil {
 		if value, ok, err := rule.preparedRuntimeSourceExpr(int(marker.Pos), true); err != nil || ok {
+			if value != nil && value.GetLit().GetIsnull() {
+				// The transport's placeholder type is not a SQL value domain.
+				typ := types.T_any.ToType()
+				value.Typ = makePlan2Type(&typ)
+			}
 			return value, err
 		}
 		if value, ok, err := rule.typedRuntimeParamExpr(int(marker.Pos)); err != nil || ok {
@@ -222,30 +227,32 @@ func (rule *ResetParamRefRule) integerArgumentRuntimeSource(source *Expr) (*Expr
 		}
 		return rebindExplicitPreparedCast(rule.ctx, source, []*Expr{value, fn.Args[1]})
 	}
-	// A value-producing source such as COALESCE owns its runtime common
-	// domain. Rebind the complete source before ordinary recursive replacement
-	// so a numeric runtime marker can restore provisional numeric peers, while
-	// a real string marker keeps the prepare-time string contract.
-	positions := preparedNumericValueParamPositions(source)
-	if len(positions) > 0 {
-		allRuntimeSourcesAreText := true
-		for position := range positions {
-			typ, ok := rule.runtimeParamType(int(position))
-			if !ok || !typ.Oid.IsMySQLString() {
-				allRuntimeSourcesAreText = false
-				break
+	// Reconstruct common-type producers from each actual source, not numeric
+	// spelling inference or an all-parameters-are-text shortcut. In particular,
+	// one numeric marker cannot turn its TEXT sibling into a numeric value.
+	if fn := source.GetF(); fn != nil && fn.Func != nil &&
+		(fn.Func.ObjName == "coalesce" || fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff") {
+		args := make([]*Expr, len(fn.Args))
+		for i, arg := range fn.Args {
+			metadata := arg.GetPreparedNumeric()
+			if metadata.GetProvisionalResultPeer() && metadata.GetStringDomainSource() != nil {
+				arg = DeepCopyExpr(metadata.GetStringDomainSource())
+			} else if metadata.GetProvisionalResultCast() && !isExplicitPreparedCast(arg) {
+				if cast := arg.GetF(); cast != nil && len(cast.Args) == 2 {
+					arg = cast.Args[0]
+				}
+			}
+			var err error
+			args[i], err = rule.integerArgumentRuntimeSource(arg)
+			if err != nil {
+				return nil, err
 			}
 		}
-		if allRuntimeSourcesAreText {
-			return rule.ApplyExpr(source)
+		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.ObjName, args)
+		if err == nil {
+			preserveReboundFunctionMetadata(fn, bound.GetF())
 		}
-		bound, changed, err := rule.rebindPreparedNumericExprWithBound(source, source, positions)
-		if err != nil {
-			return nil, err
-		}
-		if changed {
-			return bound, nil
-		}
+		return bound, err
 	}
 	return rule.ApplyExpr(source)
 }

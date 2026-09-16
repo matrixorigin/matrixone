@@ -437,6 +437,9 @@ type ResetParamRefRule struct {
 	ctx      context.Context
 	params   []*Expr
 	exprMemo map[*plan.Expr]*plan.Expr
+	// Common-type producers reached through integer-consumer value lineage,
+	// including producers separated from that consumer by PROJECT nodes.
+	integerSourceRoots map[*plan.Expr]struct{}
 	// preserveRoots contains DML write expressions whose outer shape must
 	// remain stable while nested parameters are rebound.  The write operator
 	// consumes these expressions positionally; rebuilding the outer function
@@ -810,6 +813,26 @@ func NewResetParamRefRule(ctx context.Context, params []*Expr) *ResetParamRefRul
 
 func (rule *ResetParamRefRule) setPreparedPlan(preparePlan *Plan) {
 	rule.preparedPlan = preparePlan
+	rule.integerSourceRoots = make(map[*plan.Expr]struct{})
+	query := preparePlan.GetQuery()
+	if query == nil {
+		return
+	}
+	positions := make(map[int32]struct{})
+	for nodeID, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		_ = plan.VisitExpressionsInOwner(node, func(root *plan.Expr) error {
+			return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+				if isIntegerArgumentCast(expr) {
+					collectPreparedIntegerArgumentParamPositions(query, int32(nodeID), expr.GetF().Args[0],
+						positions, make(map[[2]int32]struct{}), rule.integerSourceRoots)
+				}
+				return nil
+			})
+		})
+	}
 }
 
 // SetParamKinds is used by the plan-level replacement tests and by callers
@@ -1503,8 +1526,11 @@ func provisionalNumericPeerSource(expr *plan.Expr) (*Expr, bool) {
 	}
 	source := literal.Src
 	if fn := source.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" &&
-		!fn.GetSyntaxExplicitCast() && len(fn.Args) > 0 {
-		source = fn.Args[0]
+		!fn.GetSyntaxExplicitCast() && len(fn.Args) > 0 && types.T(source.Typ.Id).IsMySQLString() {
+		_, overload := planfunction.DecodeOverloadID(fn.Func.Obj)
+		if overload == 0 {
+			source = fn.Args[0]
+		}
 	}
 	if source != nil && preparedNumericCommonOperandType(makeTypeByPlan2Expr(source).Oid) {
 		return DeepCopyExpr(source), true
@@ -1693,7 +1719,10 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 	var rewritten *plan.Expr
 	var err error
-	if isIntegerArgumentCast(e) {
+	if _, source := rule.integerSourceRoots[e]; source {
+		rewritten, err = rule.integerArgumentRuntimeSource(e)
+		rule.specialized = true
+	} else if isIntegerArgumentCast(e) {
 		rewritten, err = rule.rebindIntegerArgumentCast(e)
 	} else if _, preserve := rule.preserveRoots[e]; preserve {
 		rewritten, err = rule.applyExprPreservingRoot(e)
