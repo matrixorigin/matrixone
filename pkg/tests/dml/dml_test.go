@@ -284,7 +284,12 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 				}},
 			}
 
-			sem := make(chan struct{}, 2)
+			// These cases share one database and create/drop persistent staging tables.
+			// Running unrelated cases concurrently can make one case's staging DDL
+			// deadlock with another case's lineage lifecycle transaction. Concurrency
+			// is not part of this diff/apply contract, so keep the shared fixture
+			// deterministic instead of adding retries that can hide real failures.
+			sem := make(chan struct{}, 1)
 			var wg sync.WaitGroup
 			for _, tc := range cases {
 				wg.Add(1)
