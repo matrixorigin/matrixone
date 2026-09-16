@@ -2949,7 +2949,8 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		}
 		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
 			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sign") ||
-				strings.EqualFold(funcName, "sleep") || strings.EqualFold(funcName, "char")) {
+				strings.EqualFold(funcName, "sleep") || strings.EqualFold(funcName, "char") ||
+				strings.EqualFold(funcName, "elt")) {
 			hasPreparedParam, err := b.hasPreparedNumericParamExprs(astExpr.Exprs, depth)
 			if err != nil {
 				return nil, err
@@ -3065,7 +3066,8 @@ func isPreparedNumericAggregate(name string, argCount int) bool {
 }
 
 func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
-	// ABS, SIGN, and SLEEP all have integer and floating-point overloads. A bare
+	// ABS, SIGN, SLEEP, and ELT's index all have integer and floating-point
+	// overloads. A bare
 	// prepared parameter has TEXT transport type at PREPARE time, so letting
 	// generic overload resolver choose an integer cast makes valid executions
 	// such as ABS(-1.5), SIGN(-0.1), and SLEEP(0.01) fail before the function
@@ -3075,6 +3077,11 @@ func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
 	// DOUBLE casts remain ordinary DOUBLE expressions.
 	if argCount == 1 && (strings.EqualFold(name, "abs") || strings.EqualFold(name, "sign") ||
 		strings.EqualFold(name, "sleep")) {
+		typ := types.T_float64.ToType()
+		target := makePlan2Type(&typ)
+		return &target, true
+	}
+	if argCount >= 2 && strings.EqualFold(name, "elt") {
 		typ := types.T_float64.ToType()
 		target := makePlan2Type(&typ)
 		return &target, true
@@ -3491,8 +3498,9 @@ func containsExplicitFloatCastInSelect(stmt tree.SelectStatement) bool {
 
 // bindPreparedNumericFuncExpr gives prepared numeric function arguments the
 // same static context as prepared arithmetic. SUM/AVG use the inferred numeric
-// domain, NTILE requires an integer domain, and CHAR uses an integer domain
-// only for arguments that contain a prepared marker. ParamRef remains TEXT for
+// domain, NTILE requires an integer domain, CHAR uses an integer domain only
+// for arguments that contain a prepared marker, and ELT uses a deferred
+// numeric domain only for its index argument. ParamRef remains TEXT for
 // transport and an explicit cast materializes the computation type.
 // Non-parameter expressions stay on their original binding path, so ordinary
 // string inputs continue to use their function-specific string semantics.
@@ -3504,6 +3512,48 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	target, ok := preparedNumericFunctionTarget(name, len(astArgs))
 	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
+	}
+	if strings.EqualFold(name, "elt") {
+		args := make([]*plan.Expr, len(astArgs))
+		deferredIndex := false
+		for i, astArg := range astArgs {
+			if i == 0 {
+				hasPreparedParam, err := b.hasPreparedNumericParamExprs([]tree.Expr{astArg}, depth)
+				if err != nil {
+					return nil, err
+				}
+				if hasPreparedParam {
+					args[i], err = b.bindNumericExprWithContext(astArg, depth, target)
+					if err != nil {
+						return nil, err
+					}
+					if !isDirectExplicitNumericCast(astArg) {
+						b.markPreparedNumericFallback(args[i])
+						deferredIndex = true
+					}
+					continue
+				}
+			}
+			var err error
+			args[i], err = b.impl.BindExpr(astArg, depth, false)
+			if err != nil {
+				return nil, err
+			}
+		}
+		bound, err := bindBoundFuncExprAndConstFold(
+			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if deferredIndex && bound != nil && bound.GetF() != nil && len(bound.GetF().Args) > 0 {
+			// ELT's numeric envelope can add a second implicit cast around the
+			// marker. Keep the deferred marker on the complete function argument,
+			// not only on the inner cast, so execute-time metadata discovery can
+			// select the full-arity ELT rebind path.
+			b.markPreparedNumericFallback(bound.GetF().Args[0])
+		}
+		return bound, nil
 	}
 	if strings.EqualFold(name, "char") {
 		args := make([]*plan.Expr, len(astArgs))

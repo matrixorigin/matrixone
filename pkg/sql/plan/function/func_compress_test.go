@@ -330,6 +330,16 @@ func TestCompressFunctionsNullsSelectListAndLengthMask(t *testing.T) {
 	require.False(t, lengthVector.IsNull(1))
 	require.True(t, lengthVector.IsNull(4))
 
+	wideLengthResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	require.NoError(t, wideLengthResult.PreExtendAndReset(5))
+	require.NoError(t, UncompressedLength([]*vector.Vector{lengthInput}, wideLengthResult, proc, 5, nil))
+	wideLengthVector := wideLengthResult.GetResultVector()
+	require.Equal(t, []int64{0, 0, int64(mysqlCompressedLengthMask), 561409641, 0}, vector.MustFixedColNoTypeCheck[int64](wideLengthVector))
+	require.False(t, wideLengthVector.IsNull(0))
+	require.False(t, wideLengthVector.IsNull(1))
+	require.True(t, wideLengthVector.IsNull(4))
+
+	wideLengthResult.Free()
 	lengthResult.Free()
 	invalidResult.Free()
 	uncompressedResult.Free()

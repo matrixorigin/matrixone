@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newTestFS() fileservice.FileService {
@@ -679,12 +680,11 @@ func TestCleanState(t *testing.T) {
 			assert.Equal(t, uint64(i)+1, lsn)
 		}
 		lc := c.logClient.(*mockLogClient)
-		lc.fakeError("getLatestLsn")
-		go func() {
-			time.Sleep(time.Second)
-			lc.clearFakeError("getLatestLsn")
-		}()
-		c.cleanState(ctx, time.Millisecond*200)
+		lc.failNext("getLatestLsn", 5)
+		c.cleanState(ctx, time.Millisecond)
+		calls, failures := lc.callStats("getLatestLsn")
+		assert.Equal(t, 6, calls)
+		assert.Equal(t, 5, failures)
 		assert.Equal(t, uint64(count), c.syncedLsn.Load())
 		requiredLsn, err := c.upstreamLogClient.getRequiredLsnWithRetry(ctx)
 		assert.NoError(t, err)
@@ -703,12 +703,11 @@ func TestCleanState(t *testing.T) {
 			assert.Equal(t, uint64(i)+1, lsn)
 		}
 		lc := c.logClient.(*mockLogClient)
-		lc.fakeError("setRequiredLsn")
-		go func() {
-			time.Sleep(time.Second)
-			lc.clearFakeError("setRequiredLsn")
-		}()
-		c.cleanState(ctx, time.Millisecond*200)
+		lc.failNext("setRequiredLsn", 5)
+		c.cleanState(ctx, time.Millisecond)
+		calls, failures := lc.callStats("setRequiredLsn")
+		assert.Equal(t, 6, calls)
+		assert.Equal(t, 5, failures)
 		assert.Equal(t, uint64(count), c.syncedLsn.Load())
 		requiredLsn, err := c.logClient.getRequiredLsnWithRetry(ctx)
 		assert.NoError(t, err)
@@ -925,13 +924,28 @@ func TestLoopWork(t *testing.T) {
 		}
 
 		c.syncedLsn.Store(10)
+		c.writeLsn.Store(30)
+		loopDone := make(chan error, 1)
 		go func() {
-			time.Sleep(time.Millisecond * 200)
-			c.writeLsn.Store(20)
-			time.Sleep(time.Millisecond * 200)
-			cancel()
+			loopDone <- c.loop(ctx, time.Millisecond)
 		}()
-		assert.Equal(t, context.Canceled, c.loop(ctx, time.Millisecond*10))
+		joined := false
+		defer func() {
+			if !joined {
+				cancel()
+				<-loopDone
+			}
+		}()
+		// The required-LSN update is the completion event for the batch. Waiting
+		// on it keeps this test independent of scheduler throughput and still
+		// verifies the consumer's externally visible protection state.
+		require.Eventually(t, func() bool {
+			requiredLsn, err := c.logClient.getRequiredLsn(ctx)
+			return err == nil && requiredLsn == 31
+		}, 5*time.Second, time.Millisecond)
+		cancel()
+		assert.Equal(t, context.Canceled, <-loopDone)
+		joined = true
 		assert.Equal(t, uint64(30), c.syncedLsn.Load())
 		requiredLsn, err := c.logClient.getRequiredLsn(ctx)
 		assert.NoError(t, err)

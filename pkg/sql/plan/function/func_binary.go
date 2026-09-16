@@ -7476,7 +7476,10 @@ func FromUnixTimeDecimal256Format(ivecs []*vector.Vector, result vector.Function
 }
 
 func StrCmp(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
-	return opBinaryStrStrToFixedWithErrorCheck[int8](ivecs, result, proc, length, strcmp, nil)
+	if _, legacy := result.(*vector.FunctionResult[int8]); legacy {
+		return opBinaryStrStrToFixedWithErrorCheck[int8](ivecs, result, proc, length, strcmp, nil)
+	}
+	return opBinaryStrStrToFixedWithErrorCheck[int32](ivecs, result, proc, length, strcmpInt32, nil)
 }
 
 func strcmp(s1, s2 string) (int8, error) {
@@ -7487,6 +7490,11 @@ func strcmp(s1, s2 string) (int8, error) {
 		return -1, nil
 	}
 	return 1, nil
+}
+
+func strcmpInt32(s1, s2 string) (int32, error) {
+	value, err := strcmp(s1, s2)
+	return int32(value), err
 }
 
 func SubStringWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
@@ -8532,12 +8540,30 @@ func extractUnitPrefersTime(unit string) bool {
 }
 
 func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if _, legacy := result.(*vector.FunctionResult[uint64]); legacy {
+		return findInSetResult[uint64](ivecs, result, proc, length, selectList, func(value uint64) uint64 {
+			return value
+		})
+	}
+	return findInSetResult[int32](ivecs, result, proc, length, selectList, func(value uint64) int32 {
+		return int32(value)
+	})
+}
+
+func findInSetResult[Tr types.FixedSizeTExceptStrType](
+	ivecs []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	toResult func(uint64) Tr,
+) (err error) {
 	if len(ivecs) == 3 {
 		var (
 			cachedDefinition string
 			memberPositions  map[string]uint64
 		)
-		findSetMember := func(target string, bitmap uint64, definition string) uint64 {
+		findSetMember := func(target string, bitmap uint64, definition string) Tr {
 			// The definition is a hidden constant for planner-generated SET
 			// calls. Keep the fallback for direct executor tests and defensive
 			// callers that provide a row-wise metadata vector.
@@ -8560,26 +8586,26 @@ func FindInSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				position, ok = memberPositions[strings.ToLower(targetKey)]
 			}
 			if !ok || position == 0 || position > types.MaxSetMembers {
-				return 0
+				return toResult(0)
 			}
 			if bitmap&(uint64(1)<<uint(position-1)) == 0 {
-				return 0
+				return toResult(0)
 			}
-			return position
+			return toResult(position)
 		}
-		return opTernaryStrFixedStrToFixed[uint64, uint64](ivecs, result, proc, length, findSetMember, selectList)
+		return opTernaryStrFixedStrToFixed[uint64, Tr](ivecs, result, proc, length, findSetMember, selectList)
 	}
 
-	findInStrList := func(str, strlist string) uint64 {
+	findInStrList := func(str, strlist string) Tr {
 		for j, s := range strings.Split(strlist, ",") {
 			if s == str {
-				return uint64(j + 1)
+				return toResult(uint64(j + 1))
 			}
 		}
-		return 0
+		return toResult(0)
 	}
 
-	return opBinaryStrStrToFixed[uint64](ivecs, result, proc, length, findInStrList, nil)
+	return opBinaryStrStrToFixed[Tr](ivecs, result, proc, length, findInStrList, nil)
 }
 
 func Instr(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {

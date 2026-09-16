@@ -2471,8 +2471,6 @@ func Test_ConnectionCount(t *testing.T) {
 	waitForClientCount(2)
 	waitForGauge(2)
 
-	time.Sleep(time.Millisecond * 10)
-
 	//close the connection
 	closeDbConn(t, conn1)
 	closeDbConn(t, conn2)
