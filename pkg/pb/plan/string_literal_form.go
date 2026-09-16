@@ -242,7 +242,7 @@ type RemoteExpressionFeatures struct {
 	ASCIIInt32Result             bool
 	StringNumericResultContracts bool
 	IPFunctionSemantics          bool
-	// IntegerParameterCoercion requires v81 for private CAST 5..8.
+	// IntegerParameterCoercion requires v82 for private CAST 5..8.
 	IntegerParameterCoercion bool
 }
 
