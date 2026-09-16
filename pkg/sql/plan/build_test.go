@@ -203,6 +203,18 @@ func TestPrepareDataBranchUsesFrontendExecutionPlan(t *testing.T) {
 	}
 }
 
+func TestPrepareCompatibilityNoOpUsesFrontendExecutionPlan(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt from 'alter database d character set utf8mb4 collate utf8mb4_bin'")
+	require.NoError(t, err)
+	prepare := p.GetDcl().GetPrepare()
+	require.NotNil(t, prepare)
+	require.NotNil(t, prepare.GetPlan())
+	require.Nil(t, prepare.GetPlan().GetQuery())
+	require.Nil(t, prepare.GetPlan().GetDdl())
+	require.Empty(t, prepare.GetParamTypes())
+}
+
 func TestPrepareDataBranchRejectsSubqueryParameters(t *testing.T) {
 	_, err := runOneStmt(NewMockOptimizer(false), t,
 		"prepare stmt from 'data branch pick branch into base keys(select id from branch where id = ?) when conflict accept'")

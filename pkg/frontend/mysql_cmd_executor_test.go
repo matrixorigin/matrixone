@@ -5091,6 +5091,8 @@ func Test_statement_type(t *testing.T) {
 			{&tree.AnalyzeStmt{}},
 			{&tree.CheckTableStmt{}},
 			{&tree.ShowProfileStmt{}},
+			{&tree.EmptyStmt{}},
+			{tree.NewPrepareStmt("compat_noop", &tree.EmptyStmt{})},
 		}
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -8690,6 +8692,18 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	require.NoError(t, err)
 	require.IsType(t, &tree.SetVar{}, prepared.PrepareStmt)
 	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 1)
+
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("alter database d character set utf8mb4 collate utf8mb4_bin"),
+	})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.IsType(t, &tree.EmptyStmt{}, prepared.PrepareStmt)
+	require.NotNil(t, prepared.PreparePlan.GetDcl().GetPrepare().GetPlan())
 
 	resp, err = ExecRequest(ses, execCtx, &Request{
 		cmd:  COM_STMT_PREPARE,

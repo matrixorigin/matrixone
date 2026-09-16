@@ -56,7 +56,7 @@ func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, er
 		}, nil, nil
 	case *tree.SetVar:
 		return buildSetVariablesWithQuery(stmt, ctx, true)
-	case *tree.AnalyzeStmt,
+	case *tree.AnalyzeStmt, *tree.EmptyStmt,
 		*tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
 		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
 		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
