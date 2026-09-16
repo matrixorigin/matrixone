@@ -175,6 +175,28 @@ func TestValidateDataBranchCreateTxn(t *testing.T) {
 		"CREATE DATA BRANCH is not supported with optimistic transactions")
 }
 
+func TestInstallDataBranchCloneContextRestoresRequestContext(t *testing.T) {
+	type requestKey struct{}
+	baseCtx := context.WithValue(context.Background(), requestKey{}, "request")
+	execCtx := &ExecCtx{reqCtx: baseCtx}
+
+	restore := installDataBranchCloneContext(
+		execCtx, tree.NormalCloneLevelDatabase, catalog.SystemDBTypeDataBranch,
+	)
+	require.Equal(t, tree.NormalCloneLevelDatabase,
+		execCtx.reqCtx.Value(tree.CloneLevelCtxKey{}))
+	require.Equal(t, true, execCtx.reqCtx.Value(dataBranchCloneLockCtxKey{}))
+	require.Equal(t, catalog.SystemDBTypeDataBranch,
+		execCtx.reqCtx.Value(defines.DatTypKey{}))
+	require.Equal(t, "request", execCtx.reqCtx.Value(requestKey{}))
+
+	restore()
+	require.Equal(t, baseCtx, execCtx.reqCtx)
+	require.Nil(t, execCtx.reqCtx.Value(tree.CloneLevelCtxKey{}))
+	require.Nil(t, execCtx.reqCtx.Value(dataBranchCloneLockCtxKey{}))
+	require.Nil(t, execCtx.reqCtx.Value(defines.DatTypKey{}))
+}
+
 func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootAlterLineage(t *testing.T) {
 	require.Equal(t,
 		"select count(*) from mo_catalog.mo_branch_metadata b join mo_catalog.mo_tables t on b.table_id = t.rel_id where t.account_id = 7 and b.table_deleted = false and b.level != 'alter' for update",
