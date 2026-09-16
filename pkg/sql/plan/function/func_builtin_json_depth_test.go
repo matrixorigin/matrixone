@@ -138,6 +138,27 @@ func TestJsonDepthRejectsMalformedTypeAndBinaryDomain(t *testing.T) {
 	require.Error(t, JsonDepth([]*vector.Vector{input}, result, proc, 1, nil))
 }
 
+func TestJsonDepthRejectsEmptyTypedPayloadWithoutPanic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	// Public T_json append paths reject malformed payloads. Build the
+	// representation as text, then change only the test vector metadata so the
+	// executor's fail-closed boundary is exercised directly.
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer input.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(input, []byte{}, false, proc.Mp()))
+	input.SetType(types.T_json.ToType())
+
+	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	var got error
+	require.NotPanics(t, func() {
+		got = JsonDepth([]*vector.Vector{input}, result, proc, 1, nil)
+	})
+	require.ErrorContains(t, got, "invalid argument json_depth, bad value invalid JSON document")
+}
+
 func TestJsonDepthPreparedProvenanceAndSelectList(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
