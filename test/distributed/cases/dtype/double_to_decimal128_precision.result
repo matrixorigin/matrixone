@@ -1,0 +1,44 @@
+drop database if exists double_decimal128_precision;
+create database double_decimal128_precision;
+use double_decimal128_precision;
+select cast(cast(1000000000001 as double) as decimal(38,0)) as scale_zero,
+cast(cast(1000000000001 as double) as decimal(38,5)) as scale_five,
+cast(cast(1000000000001 as double) as decimal(38,6)) as scale_six,
+cast(cast(-1000000000001 as double) as decimal(38,6)) as negative_scale_six;
+➤ scale_zero[3,38,0]  ¦  scale_five[3,38,5]  ¦  scale_six[3,38,6]  ¦  negative_scale_six[3,38,6]  𝄀
+1000000000001  ¦  1000000000001.00000  ¦  1000000000001.000000  ¦  -1000000000001.000000
+select cast(1000000000001 as decimal(38,6)) as integer_direct,
+cast('1000000000001' as decimal(38,6)) as string_direct,
+cast(cast(1000000000001 as double) as decimal(65,6)) as decimal256_control;
+➤ integer_direct[3,38,6]  ¦  string_direct[3,38,6]  ¦  decimal256_control[3,65,6]  𝄀
+1000000000001.000000  ¦  1000000000001.000000  ¦  1000000000001.000000
+create table decimal_values (
+id int primary key,
+source_double double,
+stored_decimal decimal(38,6)
+);
+insert into decimal_values values
+(1, cast(1000000000001 as double), cast(1000000000001 as double)),
+(2, cast(-1000000000001 as double), cast(-1000000000001 as double));
+select id,
+cast(source_double as decimal(38,6)) as casted,
+stored_decimal
+from decimal_values
+order by id;
+➤ id[4,32,0]  ¦  casted[3,38,6]  ¦  stored_decimal[3,38,6]  𝄀
+1  ¦  1000000000001.000000  ¦  1000000000001.000000  𝄀
+2  ¦  -1000000000001.000000  ¦  -1000000000001.000000
+create table decimal_assignments (
+id int primary key,
+source_double double,
+assigned_decimal decimal(38,6)
+);
+insert into decimal_assignments values
+(1, cast(1000000000001 as double), 0),
+(2, cast(-1000000000001 as double), 0);
+update decimal_assignments set assigned_decimal = source_double;
+select id, assigned_decimal from decimal_assignments order by id;
+➤ id[4,32,0]  ¦  assigned_decimal[3,38,6]  𝄀
+1  ¦  1000000000001.000000  𝄀
+2  ¦  -1000000000001.000000
+drop database double_decimal128_precision;
