@@ -86,6 +86,34 @@ select id from json_null_cdc where match(left_doc, right_doc) against('+leftboth
 select id from json_null_cdc where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
 select id from json_null_cdc where match(left_doc, right_doc) against('null' in boolean mode) order by id;
 
+-- The initial MATCHes above deliberately preheat the query cache. Recreate the
+-- lifecycle table before UPDATE coverage so no later assertion depends on a
+-- stale per-CN snapshot from those initial probes.
+drop table json_null_cdc;
+create table json_null_cdc(id bigint primary key, left_doc json, right_doc json);
+create fulltext2 index ftv on json_null_cdc(left_doc, right_doc) with parser json_value;
+set @json_ft2_index = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'ftv' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'json_null_cdc')
+    limit 1
+);
+insert into json_null_cdc values
+ (1,'{"k":"leftboth"}','{"k":"rightboth"}'),
+ (2,NULL,'{"k":"onlyrighttoken"}'),
+ (3,'{"k":"onlylefttoken"}',NULL),
+ (4,NULL,NULL),
+ (5,'null','{"k":"literalcontrol"}'),
+ (6,'"null"',NULL);
+set @wait_json_sql = concat(
+    'select coalesce(max(chunk_id), -1) >= 0 as json_ready from `', database(), '`.`', @json_ft2_index,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_json from @wait_json_sql;
+-- @wait_expect(2, 120)
+execute wait_json;
+deallocate prepare wait_json;
+
 -- UPDATE partial-NULL transitions. Each wait observes a new durable tail chunk;
 -- the following MATCH is the correctness oracle.
 set @capture_json_tail_sql = concat(
