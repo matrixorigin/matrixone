@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -37,18 +38,30 @@ import (
 // The protocol lookup is consequently on DDL/metadata paths, never on row
 // execution hot paths.
 func RequirePersistedIPFunctionProtocol(ctx context.Context, proc *process.Process, owner any) error {
+	// Retain the existing publication hooks while sharing one feature walk.
+	return RequirePersistedExpressionProtocol(ctx, proc, owner)
+}
+
+// RequirePersistedExpressionProtocol gates IP semantics and private integer
+// coercion before folding and catalog publication. Remote placement alone
+// cannot protect catalog expressions evaluated locally by an older CN.
+func RequirePersistedExpressionProtocol(ctx context.Context, proc *process.Process, owner any) error {
 	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
 	if err != nil {
 		return err
 	}
-	if !features.IPFunctionSemantics {
+	if !features.IPFunctionSemantics && !features.IntegerParameterCoercion {
 		return nil
+	}
+	required, description := defines.MORPCVersion72, "IP function"
+	if features.IntegerParameterCoercion {
+		required, description = defines.MORPCVersion76, "integer argument"
 	}
 	if proc != nil {
 		if rt := moruntime.ServiceRuntime(proc.GetService()); rt != nil {
 			value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 			version, valid := value.(int64)
-			if ok && valid && version >= defines.MORPCVersion72 {
+			if ok && valid && version >= required {
 				return nil
 			}
 		}
@@ -58,6 +71,6 @@ func RequirePersistedIPFunctionProtocol(ctx context.Context, proc *process.Proce
 	}
 	return moerr.NewNotSupported(
 		ctx,
-		"persisted IP function expressions require all CNs to support protocol version 72",
+		fmt.Sprintf("persisted %s expressions require all CNs to support protocol version %d", description, required),
 	)
 }

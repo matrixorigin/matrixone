@@ -3364,8 +3364,7 @@ func containsExplicitFloatCastInSelect(stmt tree.SelectStatement) bool {
 
 // bindPreparedNumericFuncExpr gives prepared numeric function arguments the
 // same static context as prepared arithmetic. SUM/AVG use the inferred numeric
-// domain, NTILE requires an integer domain, and CHAR uses an integer domain
-// only for arguments that contain a prepared marker. ParamRef remains TEXT for
+// domain and NTILE requires an integer domain. ParamRef remains TEXT for
 // transport and an explicit cast materializes the computation type.
 // Non-parameter expressions stay on their original binding path, so ordinary
 // string inputs continue to use their function-specific string semantics.
@@ -3378,6 +3377,7 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
 	}
+
 	if strings.EqualFold(name, "char") {
 		args := make([]*plan.Expr, len(astArgs))
 		for i, astArg := range astArgs {
@@ -3651,7 +3651,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 			}
-			expr, err := b.impl.BindExpr(arg, depth, false)
+			var expr *Expr
+			var err error
+			if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext {
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+				expr, err = b.bindIntegerArgumentAst(arg, depth, target)
+			} else {
+				expr, err = b.impl.BindExpr(arg, depth, false)
+			}
 			b.numericParamType = paramType
 			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {
@@ -5103,6 +5111,10 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	args, err = bindIntegerFunctionArguments(ctx, name, args)
+	if err != nil {
+		return nil, err
+	}
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
 	if descendFunctions {
 		rejectIntervalArgs = rejectStandaloneIntervalFunctionArgs
@@ -9262,6 +9274,9 @@ func isDecimalLiteralCast(arg *plan.Expr) bool {
 // DefaultBinder or ReplaceValueBinder. For other binder implementations it
 // returns an empty Type so literal binding falls back to the generic path.
 func (b *baseBinder) defaultValueBindType() plan.Type {
+	if b.integerArgumentSourceContext {
+		return plan.Type{}
+	}
 	if d, ok := b.impl.(*DefaultBinder); ok {
 		return d.typ
 	}
