@@ -19,6 +19,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -379,24 +380,6 @@ func TestConstructAggregateConfigApproxPercentileWithinGroup(t *testing.T) {
 	}
 }
 
-func TestComplementPercentileConfigPreservesDecimalScale(t *testing.T) {
-	for _, tc := range []struct {
-		input string
-		want  string
-	}{
-		{input: "0", want: "1"},
-		{input: "1", want: "0"},
-		{input: "0.95", want: "0.05"},
-		{input: "0.500", want: "0.500"},
-	} {
-		actual, err := complementPercentileConfig([]byte(tc.input))
-		require.NoError(t, err)
-		require.Equal(t, tc.want, string(actual))
-	}
-	_, err := complementPercentileConfig([]byte("invalid"))
-	require.Error(t, err)
-}
-
 func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -485,20 +468,18 @@ func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing
 
 	for _, fn := range []string{plan2.NamePercentileCont, plan2.NamePercentileDisc} {
 		t.Run(fn+" wrong argument count", func(t *testing.T) {
-			require.Panics(t, func() {
-				constructAggregateConfig(&plan.Function{
-					Func: &plan.ObjectRef{ObjName: fn},
-					Args: []*plan.Expr{value},
-				}, proc)
-			})
+			_, _, err := constructAggregateConfigWithError(&plan.Function{
+				Func: &plan.ObjectRef{ObjName: fn},
+				Args: []*plan.Expr{value},
+			}, proc)
+			require.ErrorContains(t, err, "requires a value and percentile argument")
 		})
 		t.Run(fn+" nonconstant percentile", func(t *testing.T) {
-			require.Panics(t, func() {
-				constructAggregateConfig(&plan.Function{
-					Func: &plan.ObjectRef{ObjName: fn},
-					Args: []*plan.Expr{value, percentileColumn},
-				}, proc)
-			})
+			_, _, err := constructAggregateConfigWithError(&plan.Function{
+				Func: &plan.ObjectRef{ObjName: fn},
+				Args: []*plan.Expr{value, percentileColumn},
+			}, proc)
+			require.ErrorContains(t, err, "must be a constant")
 		})
 	}
 
@@ -830,11 +811,219 @@ func TestConstructTimeWindowApproxPercentileRejectsInvalidConfig(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			node := makeTimeWindowAggNode(fn.GetEncodedOverloadID(), plan2.NameApproxPercentile, tc.percentile)
-			require.PanicsWithError(t, tc.want, func() {
-				constructTimeWindow(context.Background(), node, proc)
+			require.NotPanics(t, func() {
+				err = validateAggregateConfigs(node, proc)
 			})
+			require.ErrorContains(t, err, tc.want)
+			require.NotContains(t, err.Error(), "operator.go")
 		})
 	}
+}
+
+func TestCompileRejectsInvalidAggregateConfigWithoutPanicFrames(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
+		types.T_int32.ToType(), types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+	node := makeTimeWindowAggNode(
+		fn.GetEncodedOverloadID(),
+		plan2.NameApproxPercentile,
+		plan2.MakePlan2Float64ConstExprWithType(-0.01),
+	)
+	node.NodeType = plan.Node_TIME_WINDOW
+
+	c := &Compile{proc: proc}
+	_, err = c.compilePlanScopeWithUnionAllDemand(
+		0, 0, []*plan.Node{node}, false)
+	require.ErrorContains(t, err,
+		"invalid input: percentile argument of approx_percentile")
+	require.NotContains(t, err.Error(), "operator.go")
+	require.NotContains(t, err.Error(), "compile.go")
+}
+
+func TestCompileValidatesAggregateConfigsBeforeBuildingEachOperator(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
+		types.T_int32.ToType(), types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+
+	newInvalidAggregate := func() *plan.Expr {
+		return makeTimeWindowAggNode(
+			fn.GetEncodedOverloadID(),
+			plan2.NameApproxPercentile,
+			plan2.MakePlan2Float64ConstExprWithType(-0.01),
+		).AggList[0]
+	}
+	tests := []struct {
+		name string
+		node func() *plan.Node
+	}{
+		{
+			name: "aggregate",
+			node: func() *plan.Node {
+				return &plan.Node{
+					NodeType: plan.Node_AGG,
+					AggList:  []*plan.Expr{newInvalidAggregate()},
+				}
+			},
+		},
+		{
+			name: "window",
+			node: func() *plan.Node {
+				return &plan.Node{
+					NodeType: plan.Node_WINDOW,
+					WinSpecList: []*plan.Expr{{
+						Expr: &plan.Expr_W{W: &plan.WindowSpec{
+							WindowFunc: newInvalidAggregate(),
+						}},
+					}},
+				}
+			},
+		},
+		{
+			name: "time window",
+			node: func() *plan.Node {
+				node := makeTimeWindowAggNode(
+					fn.GetEncodedOverloadID(),
+					plan2.NameApproxPercentile,
+					plan2.MakePlan2Float64ConstExprWithType(-0.01),
+				)
+				node.NodeType = plan.Node_TIME_WINDOW
+				return node
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Compile{proc: proc}
+			var err error
+			require.NotPanics(t, func() {
+				_, err = c.compilePlanScopeWithUnionAllDemand(
+					0, 0, []*plan.Node{tc.node()}, false)
+			})
+			require.ErrorContains(t, err,
+				"invalid input: percentile argument of approx_percentile")
+			require.NotContains(t, err.Error(), "operator.go")
+			require.NotContains(t, err.Error(), "compile.go")
+		})
+	}
+}
+
+func TestConstructAggregateConfigRejectsOrderedPercentileErrors(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	value := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	nonConstant := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}},
+	}
+	for _, name := range []string{plan2.NamePercentileCont, plan2.NamePercentileDisc} {
+		for _, tc := range []struct {
+			name   string
+			config *plan.Expr
+			want   string
+		}{
+			{
+				name:   "below range",
+				config: plan2.MakePlan2Float64ConstExprWithType(-0.01),
+				want:   "must be finite and in [0,1], got -0.01",
+			},
+			{
+				name:   "above range",
+				config: plan2.MakePlan2Float64ConstExprWithType(1.01),
+				want:   "must be finite and in [0,1], got 1.01",
+			},
+			{
+				name:   "non constant",
+				config: nonConstant,
+				want:   "must be a constant",
+			},
+			{
+				name:   "unsupported type",
+				config: plan2.MakePlan2StringConstExprWithType("0.5"),
+				want:   "unsupported percentile type",
+			},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				f := &plan.Function{
+					Func: &plan.ObjectRef{ObjName: name},
+					Args: []*plan.Expr{value, tc.config},
+				}
+				_, _, err := constructAggregateConfigWithError(f, proc)
+				require.ErrorContains(t, err, tc.want)
+			})
+		}
+	}
+}
+
+func TestConstructAggregateConfigPropagatesConfigExpressionErrors(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	value := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	invalidConfig := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}}
+	for _, name := range []string{plan2.NamePercentileCont, plan2.NamePercentileDisc} {
+		f := &plan.Function{
+			Func: &plan.ObjectRef{ObjName: name},
+			Args: []*plan.Expr{value, invalidConfig},
+		}
+		_, _, err := constructAggregateConfigWithError(f, proc)
+		require.Error(t, err, name)
+	}
+}
+
+func TestConstructAggregateConfigCoversLegacyConfigurationFailures(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	badString := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+
+	_, _, err := constructAggregateConfigWithError(nil, proc)
+	require.ErrorContains(t, err, "configuration is nil")
+	require.Panics(t, func() { constructAggregateConfig(nil, proc) })
+
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInvalidInputNoCtx("cannot resolve group_concat_max_len")
+	})
+	_, _, err = constructAggregateConfigWithError(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameGroupConcat},
+		Args: []*plan.Expr{value},
+	}, proc)
+	require.ErrorContains(t, err, "cannot resolve group_concat_max_len")
+
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "invalid", nil
+	})
+	_, _, err = constructAggregateConfigWithError(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameGroupConcat},
+		Args: []*plan.Expr{value},
+	}, proc)
+	require.ErrorContains(t, err, "group_concat_max_len has invalid value")
+
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(1024), nil
+	})
+	for _, name := range []string{plan2.NameGroupConcat, plan2.NameClusterCenters} {
+		_, _, err = constructAggregateConfigWithError(&plan.Function{
+			Func: &plan.ObjectRef{ObjName: name},
+			Args: []*plan.Expr{value, badString},
+		}, proc)
+		require.Error(t, err, name)
+	}
+
 }
 
 func TestConstructAggregateConfigPreservesOtherSpecialConfigs(t *testing.T) {
