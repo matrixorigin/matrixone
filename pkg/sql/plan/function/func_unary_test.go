@@ -31,6 +31,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RoaringBitmap/roaring/v2"
 	hll "github.com/axiomhq/hyperloglog"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -1353,6 +1354,131 @@ func TestStGeomFromTextWithSRID(t *testing.T) {
 	require.True(t, s, fmt.Sprintf("err info is '%s'", info))
 }
 
+func TestStGeomFromWKBWithSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	wkb := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	for _, inputType := range []types.T{types.T_varchar, types.T_blob, types.T_varbinary} {
+		t.Run(inputType.String(), func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(inputType.ToType(), []string{wkb, wkb, ""}, []bool{false, false, true}),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 4326, 3857}, []bool{false, false, false}),
+			}
+			expect := NewFunctionTestResult(types.T_geometry.ToType(), false,
+				[]string{"POINT(1 2)", "POINT(1 2)", ""}, []bool{false, false, true})
+			tc := NewFunctionTestCase(proc, inputs, expect, StGeomFromWKBWithSRID)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestGeometrySRIDOverloadsResolve(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name      string
+		function  string
+		args      []types.Type
+		overload  int32
+		returnOID types.T
+	}{
+		{
+			name:      "wkb varchar with srid",
+			function:  "st_geomfromwkb",
+			args:      []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()},
+			overload:  3,
+			returnOID: types.T_geometry,
+		},
+		{
+			name:      "wkb blob with srid",
+			function:  "st_geomfromwkb",
+			args:      []types.Type{types.T_blob.ToType(), types.T_int64.ToType()},
+			overload:  4,
+			returnOID: types.T_geometry,
+		},
+		{
+			name:      "wkb varbinary with srid",
+			function:  "st_geomfromwkb",
+			args:      []types.Type{types.T_varbinary.ToType(), types.T_int64.ToType()},
+			overload:  5,
+			returnOID: types.T_geometry,
+		},
+		{
+			name:      "geometry setter",
+			function:  "st_srid",
+			args:      []types.Type{types.T_geometry.ToType(), types.T_int64.ToType()},
+			overload:  2,
+			returnOID: types.T_geometry,
+		},
+		{
+			name:      "geometry32 setter",
+			function:  "st_srid",
+			args:      []types.Type{types.T_geometry32.ToType(), types.T_int64.ToType()},
+			overload:  3,
+			returnOID: types.T_geometry32,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, tc.function, tc.args)
+			require.NoError(t, err)
+			_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, tc.overload, overload)
+			require.Equal(t, tc.returnOID, resolved.GetReturnType().Oid)
+
+			registered, err := GetFunctionById(proc.Ctx, resolved.GetEncodedOverloadID())
+			require.NoError(t, err)
+			execute, _, _, _ := registered.GetExecuteMethod()
+			require.NotNil(t, execute)
+		})
+	}
+}
+
+func TestStGeomFromWKBWithSRIDRejectsInvalidInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	validWKB := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	for _, tc := range []struct {
+		name string
+		wkb  string
+		srid int64
+	}{
+		{name: "negative srid", wkb: validWKB, srid: -1},
+		{name: "oversized srid", wkb: validWKB, srid: int64(geo.MaxSRID) + 1},
+		{name: "malformed wkb", wkb: "not-a-wkb", srid: 4326},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.wkb}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.srid}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil), StGeomFromWKBWithSRID)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	masked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-wkb", validWKB}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, 4326}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", "POINT(1 2)"}, []bool{true, false}),
+		StGeomFromWKBWithSRID).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	ok, info := masked.Run()
+	require.True(t, ok, info)
+
+	allMasked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"not-a-wkb", "not-a-wkb"}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -1}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", ""}, []bool{true, true}),
+		StGeomFromWKBWithSRID).WithSelectList(&FunctionSelectList{AllNull: true})
+	ok, info = allMasked.Run()
+	require.True(t, ok, info)
+}
+
 func TestStGeomFromTextWithSRIDRejectNonFiniteCoordinates(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
@@ -1487,6 +1613,95 @@ func TestStSRID(t *testing.T) {
 	fcTC2 := NewFunctionTestCase(proc, inputs2, expect2, StSRID)
 	s2, info2 := fcTC2.Run()
 	require.True(t, s2, fmt.Sprintf("err info is '%s'", info2))
+}
+
+func TestStSRIDWithSRID(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geomType := types.T_geometry32.ToType()
+	geomType.Scale = 1
+	wkb, err := encodeGeometryPayloadFloat32("POINT(1 2)")
+	require.NoError(t, err)
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{string(wkb), string(wkb), ""}, []bool{false, false, true}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326, 0, 3857}, []bool{false, false, true}),
+	}
+	expect := NewFunctionTestResult(geomType, false,
+		[]string{"POINT(1 2)", "POINT(1 2)", ""}, []bool{false, false, true})
+	tc := NewFunctionTestCase(proc, inputs, expect, StSRIDWithSRID)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestStSRIDWithSRIDRejectsMalformedPayload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geomType := types.T_geometry.ToType()
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{"not-a-geometry"}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil)
+	tc := NewFunctionTestCase(proc, inputs, expect, StSRIDWithSRID)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestStSRIDWithSRIDRejectsWrongGeometry32Payload(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geomType := types.T_geometry32.ToType()
+	wkb64 := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(geomType, []string{wkb64}, []bool{false}),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{4326}, []bool{false}),
+	}
+	expect := NewFunctionTestResult(types.T_geometry32.ToType(), true, nil, nil)
+	tc := NewFunctionTestCase(proc, inputs, expect, StSRIDWithSRID)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
+func TestStSRIDWithSRIDRejectsInvalidInputAndHonorsSelection(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	validWKB := string(encodeGeometryPayload("POINT(1 2)", 0, false))
+	for _, tc := range []struct {
+		name string
+		wkb  string
+		srid int64
+	}{
+		{name: "negative srid", wkb: validWKB, srid: -1},
+		{name: "oversized srid", wkb: validWKB, srid: int64(geo.MaxSRID) + 1},
+		{name: "malformed geometry", wkb: "not-a-geometry", srid: 4326},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_geometry.ToType(), []string{tc.wkb}, []bool{false}),
+					NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.srid}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_geometry.ToType(), true, nil, nil), StSRIDWithSRID)
+			ok, info := tc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	masked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"not-a-geometry", validWKB}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, 4326}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", "POINT(1 2)"}, []bool{true, false}),
+		StSRIDWithSRID).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	ok, info := masked.Run()
+	require.True(t, ok, info)
+
+	allMasked := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_geometry.ToType(), []string{"not-a-geometry", "not-a-geometry"}, []bool{false, false}),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{-1, -1}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_geometry.ToType(), false, []string{"", ""}, []bool{true, true}),
+		StSRIDWithSRID).WithSelectList(&FunctionSelectList{AllNull: true})
+	ok, info = allMasked.Run()
+	require.True(t, ok, info)
 }
 
 func initStGeometryTypeTestCase() []tcTemp {
@@ -6292,6 +6507,292 @@ func TestHexInt64(t *testing.T) {
 	}
 }
 
+func TestHexNumericTypeResolution(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		typ        types.Type
+		overloadID int32
+		cast       bool
+		castType   types.T
+	}{
+		{name: "bool", typ: types.T_bool.ToType(), overloadID: 2, cast: true, castType: types.T_int64},
+		{name: "decimal64", typ: types.New(types.T_decimal64, 18, 1), overloadID: 8},
+		{name: "decimal128", typ: types.New(types.T_decimal128, 38, 0), overloadID: 9},
+		{name: "decimal256", typ: types.New(types.T_decimal256, 65, 0), overloadID: 10},
+		{name: "float32", typ: types.T_float32.ToType(), overloadID: HexFloat32Overload},
+		{name: "float64", typ: types.T_float64.ToType(), overloadID: HexFloat64Overload},
+		{name: "varchar", typ: types.T_varchar.ToType(), overloadID: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), "hex", []types.Type{tc.typ})
+			require.NoError(t, err)
+			require.Equal(t, tc.overloadID, resolved.overloadId)
+			castTypes, cast := resolved.ShouldDoImplicitTypeCast()
+			require.Equal(t, tc.cast, cast)
+			if tc.cast {
+				require.Equal(t, tc.castType, castTypes[0].Oid)
+			}
+		})
+	}
+}
+
+func TestHexLegacyFloatOverloadsKeepOldSemantics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name       string
+		typ        types.Type
+		value      any
+		overloadID int32
+	}{
+		{name: "float32", typ: types.T_float32.ToType(), value: []float32{14.5}, overloadID: 4},
+		{name: "float64", typ: types.T_float64.ToType(), value: []float64{14.5}, overloadID: 5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := newVectorByType(proc.Mp(), tc.typ, tc.value, nil)
+			defer input.Free(proc.Mp())
+			out, err := RunFunctionDirectly(proc, EncodeOverloadID(HEX, tc.overloadID), []*vector.Vector{input}, 1)
+			require.NoError(t, err)
+			defer out.Free(proc.Mp())
+			require.Equal(t, "F", string(out.GetBytesAt(0)))
+		})
+	}
+}
+
+func TestHexFloatUsesSignedRoundToEven(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	want := []string{"E", "10", "FFFFFFFFFFFFFFF2", "FFFFFFFFFFFFFFF0", "1C9", ""}
+	nulls := []bool{false, false, false, false, false, true}
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		evalFn fEvalFn
+	}{
+		{
+			name: "float32",
+			input: NewFunctionTestInput(types.T_float32.ToType(),
+				[]float32{14.5, 15.5, -14.5, -15.5, 456.789, 0}, nulls),
+			evalFn: HexFloat32,
+		},
+		{
+			name: "float64",
+			input: NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{14.5, 15.5, -14.5, -15.5, 456.789, 0}, nulls),
+			evalFn: HexFloat64,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, want, nulls), tc.evalFn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestHexExplicitFloatTruncates(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	want := []string{"E", "F", "FFFFFFFFFFFFFFF2", "FFFFFFFFFFFFFFF1", "1C8", ""}
+	nulls := []bool{false, false, false, false, false, true}
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		evalFn fEvalFn
+	}{
+		{
+			name: "float32",
+			input: NewFunctionTestInput(types.T_float32.ToType(),
+				[]float32{14.5, 15.5, -14.5, -15.5, 456.789, 0}, nulls),
+			evalFn: HexExplicitFloat32,
+		},
+		{
+			name: "float64",
+			input: NewFunctionTestInput(types.T_float64.ToType(),
+				[]float64{14.5, 15.5, -14.5, -15.5, 456.789, 0}, nulls),
+			evalFn: HexExplicitFloat64,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, want, nulls), tc.evalFn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestHexExplicitFloatRejectsSignedIntegerOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		evalFn fEvalFn
+	}{
+		{"float32_positive", NewFunctionTestInput(types.T_float32.ToType(), []float32{1e20}, nil), HexExplicitFloat32},
+		{"float32_negative", NewFunctionTestInput(types.T_float32.ToType(), []float32{-1e20}, nil), HexExplicitFloat32},
+		{"float32_exact_min", NewFunctionTestInput(types.T_float32.ToType(), []float32{float32(math.MinInt64)}, nil), HexExplicitFloat32},
+		{"float64_positive", NewFunctionTestInput(types.T_float64.ToType(), []float64{1e20}, nil), HexExplicitFloat64},
+		{"float64_negative", NewFunctionTestInput(types.T_float64.ToType(), []float64{-1e20}, nil), HexExplicitFloat64},
+		{"float64_exact_min", NewFunctionTestInput(types.T_float64.ToType(), []float64{float64(math.MinInt64)}, nil), HexExplicitFloat64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input},
+				NewFunctionTestResult(types.T_varchar.ToType(), true, nil, nil), tc.evalFn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	// The next representable float64 toward zero remains inside the accepted domain.
+	insideMin := math.Nextafter(float64(math.MinInt64), 0)
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(),
+		[]float64{insideMin}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{fmt.Sprintf("%X", uint64(int64(insideMin)))}, nil), HexExplicitFloat64)
+	ok, info := fc.Run()
+	require.True(t, ok, info)
+
+	// A masked overflow row must not fail short-circuit evaluation.
+	fc = NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_float64.ToType(),
+		[]float64{1e20, 15.5}, nil)}, NewFunctionTestResult(types.T_varchar.ToType(), false,
+		[]string{"", "F"}, []bool{true, false}), HexExplicitFloat64).
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	ok, info = fc.Run()
+	require.True(t, ok, info)
+}
+
+func TestHexDecimalRegistrationExecutesExactly(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	decimal64Strings := []string{"15.5", "-15.5", "14.5", "-14.5", "0.0"}
+	decimal64Values := make([]types.Decimal64, len(decimal64Strings))
+	for i, value := range decimal64Strings {
+		parsed, scale, err := types.Parse64(value)
+		require.NoError(t, err)
+		require.Equal(t, int32(1), scale)
+		decimal64Values[i] = parsed
+	}
+	decimal128Strings := []string{"9007199254740993", "9223372036854775808", "-9223372036854775809", "0"}
+	decimal128Values := make([]types.Decimal128, len(decimal128Strings))
+	for i, value := range decimal128Strings {
+		parsed, scale, err := types.Parse128(value)
+		require.NoError(t, err)
+		require.Zero(t, scale)
+		decimal128Values[i] = parsed
+	}
+	decimal256Strings := []string{
+		"99999999999999999999999999999999999999999999999999999999999999999",
+		"-9999999999999999999999999999999999999999999999999999999999999999",
+		"0",
+	}
+	decimal256Values := make([]types.Decimal256, len(decimal256Strings))
+	for i, value := range decimal256Strings {
+		parsed, scale, err := types.Parse256(value)
+		require.NoError(t, err)
+		require.Zero(t, scale)
+		decimal256Values[i] = parsed
+	}
+
+	for _, tc := range []struct {
+		name       string
+		typ        types.Type
+		values     any
+		overloadID int32
+		want       []string
+	}{
+		{
+			name: "decimal64", typ: types.New(types.T_decimal64, 18, 1), values: decimal64Values, overloadID: 8,
+			want: []string{"10", "FFFFFFFFFFFFFFF0", "F", "FFFFFFFFFFFFFFF1", ""},
+		},
+		{
+			name: "decimal128", typ: types.New(types.T_decimal128, 38, 0), values: decimal128Values, overloadID: 9,
+			want: []string{"20000000000001", "7FFFFFFFFFFFFFFF", "8000000000000000", ""},
+		},
+		{
+			name: "decimal256", typ: types.New(types.T_decimal256, 65, 0), values: decimal256Values, overloadID: 10,
+			want: []string{"7FFFFFFFFFFFFFFF", "8000000000000000", ""},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "hex", []types.Type{tc.typ})
+			require.NoError(t, err)
+			require.Equal(t, tc.overloadID, resolved.overloadId)
+			input := newVectorByType(proc.Mp(), tc.typ, tc.values, nil)
+			defer input.Free(proc.Mp())
+			input.GetNulls().Add(uint64(len(tc.want) - 1))
+			out, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), []*vector.Vector{input}, len(tc.want))
+			require.NoError(t, err)
+			defer out.Free(proc.Mp())
+			for i, want := range tc.want {
+				if i == len(tc.want)-1 {
+					require.True(t, out.IsNull(uint64(i)))
+					continue
+				}
+				require.Equal(t, want, string(out.GetBytesAt(i)))
+			}
+		})
+	}
+}
+
+func TestHexDecimalHighScaleRoundsOnce(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name string
+		oid  types.T
+		text string
+		want string
+	}{
+		{name: "decimal128_below_half", oid: types.T_decimal128, text: "0.45000000000000000005", want: "0"},
+		{name: "decimal128_negative_below_half", oid: types.T_decimal128, text: "-0.45000000000000000005", want: "0"},
+		{name: "decimal128_half", oid: types.T_decimal128, text: "0.50000000000000000000", want: "1"},
+		{name: "decimal128_negative_half", oid: types.T_decimal128, text: "-0.50000000000000000000", want: "FFFFFFFFFFFFFFFF"},
+		{name: "decimal128_upper_boundary", oid: types.T_decimal128,
+			text: "9223372036854775806.5" + strings.Repeat("0", 18), want: "7FFFFFFFFFFFFFFF"},
+		{name: "decimal128_lower_boundary", oid: types.T_decimal128,
+			text: "-9223372036854775807.5" + strings.Repeat("0", 18), want: "8000000000000000"},
+		{name: "decimal256_below_half", oid: types.T_decimal256,
+			text: "0.45" + strings.Repeat("0", 37) + "5", want: "0"},
+		{name: "decimal256_negative_below_half", oid: types.T_decimal256,
+			text: "-0.45" + strings.Repeat("0", 37) + "5", want: "0"},
+		{name: "decimal256_half", oid: types.T_decimal256,
+			text: "0.5" + strings.Repeat("0", 39), want: "1"},
+		{name: "decimal256_negative_half", oid: types.T_decimal256,
+			text: "-0.5" + strings.Repeat("0", 39), want: "FFFFFFFFFFFFFFFF"},
+		{name: "decimal256_upper_boundary", oid: types.T_decimal256,
+			text: "9223372036854775806.5" + strings.Repeat("0", 39), want: "7FFFFFFFFFFFFFFF"},
+		{name: "decimal256_lower_boundary", oid: types.T_decimal256,
+			text: "-9223372036854775807.5" + strings.Repeat("0", 39), want: "8000000000000000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var value any
+			switch tc.oid {
+			case types.T_decimal128:
+				parsed, scale, err := types.Parse128(tc.text)
+				require.NoError(t, err)
+				value = []types.Decimal128{parsed}
+				typ := types.New(tc.oid, 38, scale)
+				input := newVectorByType(proc.Mp(), typ, value, nil)
+				defer input.Free(proc.Mp())
+				out, err := RunFunctionDirectly(proc, EncodeOverloadID(HEX, 9), []*vector.Vector{input}, 1)
+				require.NoError(t, err)
+				defer out.Free(proc.Mp())
+				require.Equal(t, tc.want, string(out.GetBytesAt(0)))
+			case types.T_decimal256:
+				parsed, scale, err := types.Parse256(tc.text)
+				require.NoError(t, err)
+				value = []types.Decimal256{parsed}
+				typ := types.New(tc.oid, 65, scale)
+				input := newVectorByType(proc.Mp(), typ, value, nil)
+				defer input.Free(proc.Mp())
+				out, err := RunFunctionDirectly(proc, EncodeOverloadID(HEX, 10), []*vector.Vector{input}, 1)
+				require.NoError(t, err)
+				defer out.Free(proc.Mp())
+				require.Equal(t, tc.want, string(out.GetBytesAt(0)))
+			default:
+				t.Fatalf("unexpected decimal type %s", tc.oid)
+			}
+		})
+	}
+}
+
 // HexArray
 func initHexArrayTestCase() []tcTemp {
 
@@ -7118,6 +7619,16 @@ func TestLengthUTF8(t *testing.T) {
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+func TestLengthUTF8Int64ResultWrapper(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := NewFunctionTestInput(types.T_varchar.ToType(), []string{"你好", "a"}, []bool{false, false})
+	result := NewFunctionTestResult(types.T_int64.ToType(), false,
+		[]int64{2, 1}, []bool{false, false})
+	caseData := NewFunctionTestCase(proc, []FunctionTestInput{input}, result, LengthUTF8)
+	succeed, info := caseData.Run()
+	require.True(t, succeed, info)
 }
 
 func TestLengthBinary(t *testing.T) {
@@ -12589,6 +13100,38 @@ func TestHllCardinality(t *testing.T) {
 		fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, HllCardinality)
 		s, info := fcTC.Run()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+	}
+}
+
+func TestBitmapCount(t *testing.T) {
+	bmp := roaring.New()
+	bmp.Add(7)
+	data, err := bmp.MarshalBinary()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		input string
+		err   bool
+		value []uint64
+		nulls []bool
+	}{
+		{name: "valid bitmap", input: string(data), value: []uint64{1}, nulls: []bool{false}},
+		{name: "malformed bitmap", input: "not-a-bitmap", err: true, value: []uint64{0}, nulls: []bool{false}},
+	}
+
+	proc := testutil.NewProcess(t)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varbinary.ToType(), []string{test.input}, nil),
+				},
+				NewFunctionTestResult(types.T_uint64.ToType(), test.err, test.value, test.nulls),
+				BitmapCount)
+			s, info := fcTC.Run()
+			require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", test.name, info))
+		})
 	}
 }
 

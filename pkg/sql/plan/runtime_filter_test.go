@@ -419,19 +419,22 @@ func TestCorrelatedScalarPredicateDoesNotCreateRuntimeFilter(t *testing.T) {
 func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 	typ := planpb.Type{Id: int32(types.T_int64)}
 	tests := []struct {
-		name       string
-		nodeType   planpb.Node_NodeType
-		joinType   planpb.Node_JoinType
-		childPos   int32
-		rightJoin  bool
-		shuffle    bool
-		unsafeOn   bool
-		unsafeScan bool
-		wantProbe  bool
+		name        string
+		nodeType    planpb.Node_NodeType
+		joinType    planpb.Node_JoinType
+		childPos    int32
+		rightJoin   bool
+		shuffle     bool
+		unsafeOn    bool
+		unsafeScan  bool
+		unsafePeer  bool
+		unboundPeer bool
+		wantProbe   bool
 	}{
 		{name: "inner left", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, wantProbe: true},
-		{name: "shuffled inner lineage", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, shuffle: true},
-		{name: "inner build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1},
+		{name: "shuffled inner lineage", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, shuffle: true, wantProbe: true},
+		{name: "inner build side with safe unbound scan peer", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1, unboundPeer: true, wantProbe: true},
+		{name: "inner build side with fallible peer", nodeType: planpb.Node_JOIN, joinType: planpb.Node_INNER, childPos: 1, unsafePeer: true},
 		{name: "semi preserved side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, wantProbe: true},
 		{name: "semi build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, childPos: 1},
 		{name: "right semi physical build side", nodeType: planpb.Node_JOIN, joinType: planpb.Node_SEMI, rightJoin: true},
@@ -452,8 +455,18 @@ func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 				children = []int32{0, 1}
 			}
 			builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{
-				{NodeType: planpb.Node_TABLE_SCAN, ProjectList: []*planpb.Expr{GetColExpr(typ, 10, 0)}},
-				{NodeType: planpb.Node_TABLE_SCAN, ProjectList: []*planpb.Expr{GetColExpr(typ, 11, 0)}},
+				{
+					NodeType:    planpb.Node_TABLE_SCAN,
+					ProjectList: []*planpb.Expr{GetColExpr(typ, 10, 0)},
+					BindingTags: []int32{10},
+					TableDef:    &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: typ}}},
+				},
+				{
+					NodeType:    planpb.Node_TABLE_SCAN,
+					ProjectList: []*planpb.Expr{GetColExpr(typ, 11, 0)},
+					BindingTags: []int32{11},
+					TableDef:    &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: typ}}},
+				},
 				{
 					NodeType:    tc.nodeType,
 					JoinType:    tc.joinType,
@@ -471,6 +484,12 @@ func TestScalarRuntimeFilterScanColumnStopsAtSemanticBarriers(t *testing.T) {
 			}
 			if tc.unsafeScan {
 				builder.qry.Nodes[0].FilterList = []*planpb.Expr{unsafePredicate}
+			}
+			if tc.unsafePeer {
+				builder.qry.Nodes[0].ProjectList = []*planpb.Expr{unsafePredicate}
+			}
+			if tc.unboundPeer {
+				builder.qry.Nodes[0].BindingTags = nil
 			}
 
 			_, _, ok := builder.scalarRuntimeFilterScanColumn(

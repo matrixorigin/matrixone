@@ -25,12 +25,16 @@ type Insert struct {
 	TargetDatabaseName Identifier
 	TargetTableName    Identifier
 
-	Accounts          IdentifierList
-	PartitionNames    IdentifierList
-	PartitionValues   PartitionValues
-	Columns           IdentifierList
-	ColumnNames       []*UnresolvedName
-	Rows              *Select
+	Accounts        IdentifierList
+	PartitionNames  IdentifierList
+	PartitionValues PartitionValues
+	Columns         IdentifierList
+	ColumnNames     []*UnresolvedName
+	Rows            *Select
+	// Ignore keeps INSERT's error-conversion policy independent from the
+	// duplicate-key action.  In particular, INSERT IGNORE ... ON DUPLICATE KEY
+	// UPDATE must still carry the ordered UPDATE expressions.
+	Ignore            bool
 	OnDuplicateUpdate UpdateExprs
 	Overwrite         bool
 	IsRestore         bool
@@ -45,7 +49,7 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		node.With.Format(ctx)
 		ctx.WriteByte(' ')
 	}
-	ignore := len(node.OnDuplicateUpdate) == 1 && node.OnDuplicateUpdate[0] == nil
+	ignore := node.IsIgnore()
 	if node.Overwrite {
 		ctx.WriteString("insert overwrite ")
 	} else if ignore {
@@ -83,9 +87,10 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		node.Rows.Format(ctx)
 	}
-	if len(node.OnDuplicateUpdate) > 0 && !ignore {
+	updates := node.GetOnDuplicateUpdate()
+	if len(updates) > 0 {
 		ctx.WriteString(" on duplicate key update ")
-		node.OnDuplicateUpdate.Format(ctx)
+		updates.Format(ctx)
 	}
 	if node.HasReturning() {
 		ctx.WriteString(" returning ")
@@ -94,6 +99,24 @@ func (node *Insert) Format(ctx *FmtCtx) {
 }
 
 func (node *Insert) HasReturning() bool { return len(node.Returning) > 0 }
+
+// IsIgnore reports the statement-level INSERT IGNORE policy.  The nil update
+// sentinel is retained as a read-only compatibility fallback for callers that
+// construct pre-28159 ASTs directly; the parser no longer emits it.
+func (node *Insert) IsIgnore() bool {
+	return node != nil && (node.Ignore ||
+		(len(node.OnDuplicateUpdate) == 1 && node.OnDuplicateUpdate[0] == nil))
+}
+
+// GetOnDuplicateUpdate returns only executable ODKU assignments.  The former
+// [nil] sentinel represented INSERT IGNORE/ON DUPLICATE KEY IGNORE and must not
+// be interpreted as an UPDATE list by planners or prepared-statement binders.
+func (node *Insert) GetOnDuplicateUpdate() UpdateExprs {
+	if node == nil || (len(node.OnDuplicateUpdate) == 1 && node.OnDuplicateUpdate[0] == nil) {
+		return nil
+	}
+	return node.OnDuplicateUpdate
+}
 
 func (node *Insert) GetStatementType() string { return "Insert" }
 func (node *Insert) GetQueryType() string     { return QueryTypeDML }

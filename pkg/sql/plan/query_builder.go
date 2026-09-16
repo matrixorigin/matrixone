@@ -97,6 +97,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 	var mysqlCompatible bool
 	var mysqlFullGroupByCompat bool
 	var boolSumAvgCompat bool
+	var noUnsignedSubtraction bool
 
 	mode, err := ctx.ResolveVariable("sql_mode", true, false)
 	if err == nil {
@@ -105,6 +106,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			mysqlCompatible = !onlyFullGroupBy
 			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
 			boolSumAvgCompat = mysql.HasEnableBoolSumAvgSQLMode(modeStr)
+			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, "NO_UNSIGNED_SUBTRACTION")
 		}
 	}
 
@@ -159,6 +161,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 		mysqlCompatible:          mysqlCompatible,
 		mysqlFullGroupByCompat:   mysqlFullGroupByCompat,
 		boolSumAvgCompat:         boolSumAvgCompat,
+		noUnsignedSubtraction:    noUnsignedSubtraction,
 		aggSpillMem:              aggSpillMem,
 		joinSpillMem:             joinSpillMem,
 		sortSpillMem:             sortSpillMem,
@@ -8134,6 +8137,8 @@ func (builder *QueryBuilder) bindSelectClause(
 	}
 
 	// build FROM clause
+	ctx.fullGroupByInputReady = false
+	ctx.fullGroupByProof = nil
 	if nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot); err != nil {
 		return
 	}
@@ -8253,6 +8258,8 @@ func (builder *QueryBuilder) bindSelectClause(
 		queryBlockHasPendingAggregate(selectList, clause.Having, astOrderBy)
 
 	// bind HAVING clause
+	ctx.fullGroupByInputNode = nodeID
+	ctx.fullGroupByInputReady = true
 	havingBinder = NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
 		boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder)
@@ -11293,6 +11300,17 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return 0, err
 	}
+	if viewData.RequiredProtocolVersion != nil {
+		if *viewData.RequiredProtocolVersion < 0 {
+			return 0, moerr.NewInvalidInput(
+				builder.GetContext(), "invalid persisted view protocol version")
+		}
+		if err = RequirePersistedProtocolVersion(
+			builder.GetContext(), builder.compCtx.GetProcess(),
+			*viewData.RequiredProtocolVersion); err != nil {
+			return 0, err
+		}
+	}
 
 	parserSQLMode := legacyViewParserSQLMode
 	if viewData.SQLMode != nil {
@@ -11393,6 +11411,10 @@ func (builder *QueryBuilder) bindView(
 	defer func() {
 		builder.isForUpdate = savedIsForUpdate
 	}()
+	previousWarningContext := builder.compCtx.GetContext()
+	builder.compCtx.SetContext(WithJSONMergeWarningOrigin(
+		previousWarningContext, JSONMergeWarningStoredView))
+	defer builder.compCtx.SetContext(previousWarningContext)
 
 	if capture, ok := builder.compCtx.(viewDependencyScope); ok {
 		capture.enterNestedView()
@@ -11403,8 +11425,18 @@ func (builder *QueryBuilder) bindView(
 		builder.compCtx.SetQueryingSubscription(metadataSubscription.Meta)
 		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
+	viewNodeStart := len(builder.qry.Nodes)
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
+		return
+	}
+	// Views written before the protocol marker was introduced are still
+	// rebound from SQL. Recheck the finalized plan before exposing it to the
+	// outer query; the cluster admission floor protects older CN binaries, and
+	// this local check protects a capable reader with a stale catalog marker.
+	if err = RequirePersistedIPFunctionProtocol(
+		builder.GetContext(), builder.compCtx.GetProcess(),
+		builder.qry.Nodes[viewNodeStart:]); err != nil {
 		return
 	}
 	nodeID, err = builder.appendMySQLSpecialTypeBoundary(
@@ -12448,6 +12480,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
 		}
+		if node.TableDef != nil {
+			// Defaults, generated columns, CHECK and ON UPDATE expressions are
+			// evaluated locally when a persisted TableDef is rebound. Keep this
+			// final read boundary in addition to the writer-side DDL checks.
+			if err := RequirePersistedIPFunctionProtocol(
+				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
+				return err
+			}
+		}
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
 		}
@@ -13031,7 +13072,7 @@ func (builder *QueryBuilder) GetContext() context.Context {
 	if builder == nil {
 		return context.TODO()
 	}
-	return builder.compCtx.GetContext()
+	return function.WithNoUnsignedSubtraction(builder.compCtx.GetContext(), builder.noUnsignedSubtraction)
 }
 
 func (builder *QueryBuilder) checkPlanningCanceled() error {

@@ -47,10 +47,8 @@ UT_PARALLEL=${UT_PARALLEL:-"1"}
 UT_SHARD=${UT_SHARD:-"all"}
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"0"}
 UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"1"}
-# The light package wave does not own embedded-cluster fixtures.  On CI's
-# single runner it can therefore overlap the exclusive issues package when
-# enabled, but it uses its own conservative package budget so the two waves do
-# not recreate the six-way race-test pressure that this scheduler removed.
+# Light/issues overlap is opt-in: the measured treatment regressed wall time
+# and did not meet the runner's memory-headroom gate.
 UT_OVERLAP_LIGHT=${UT_OVERLAP_LIGHT:-"0"}
 UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
 # A helper may own two independent child process groups. Its trap gives each
@@ -59,8 +57,12 @@ UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
 UT_HELPER_TERM_GRACE_TICKS=${UT_HELPER_TERM_GRACE_TICKS:-"60"}
 HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
 PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
-# Two shards cut the measured engine/test race runtime roughly in half while
-# keeping the default heavy-stage memory/process budget bounded.
+# Keep plan race processes bounded because each shard owns a race-instrumented
+# test process and its package resources. The default stays serial on the
+# constrained CI runner; stronger runners can opt into two independent shards.
+PLAN_RACE_PARALLEL=${PLAN_RACE_PARALLEL:-"1"}
+# Two engine shards cut the measured engine/test race runtime roughly in half
+# while keeping the default heavy-stage memory/process budget bounded.
 ENGINE_RACE_SHARDS=2
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
@@ -394,21 +396,62 @@ function start_ut_heartbeat(){
         return 0
     fi
 
+    local saved_term_trap
+    local heartbeat_term_pending=0
+    saved_term_trap=$(trap -p TERM)
+    # Publish the helper owner before replaying TERM. A signal received after
+    # the async spawn but before `$!` is assigned must not observe an empty
+    # heartbeat PID and strand the new helper.
+    trap 'heartbeat_term_pending=1' TERM
     (
         local heartbeat_sleep_pid=""
-        function stop_heartbeat_sleep(){
-            trap - TERM INT
+        local heartbeat_stop_requested=0
+        local heartbeat_sleep_status=0
+        function request_heartbeat_stop(){
+            # A signal may arrive after the timer is spawned but before its
+            # PID is published. Record the request and let the main loop
+            # consume it after publication; never exit while ownership is
+            # still being transferred.
+            heartbeat_stop_requested=1
             if [[ -n "${heartbeat_sleep_pid}" ]]; then
-                kill -TERM "${heartbeat_sleep_pid}" 2>/dev/null || true
+                # The timer has no state or graceful-cleanup contract. Kill
+                # the exact child so it cannot retain the runner's pipes.
+                kill -KILL "${heartbeat_sleep_pid}" 2>/dev/null || true
+            fi
+        }
+        function finish_heartbeat_stop(){
+            # Do not restore default handling: another TERM/INT must not
+            # interrupt the final wait and orphan the timer.
+            trap '' TERM INT
+            if [[ -n "${heartbeat_sleep_pid}" ]]; then
+                kill -KILL "${heartbeat_sleep_pid}" 2>/dev/null || true
+                wait "${heartbeat_sleep_pid}" 2>/dev/null || true
+                heartbeat_sleep_pid=""
             fi
             exit 0
         }
-        trap stop_heartbeat_sleep TERM INT
+        trap request_heartbeat_stop TERM INT
         while :; do
+            if (( heartbeat_stop_requested != 0 )); then
+                finish_heartbeat_stop
+            fi
             sleep "${interval}" &
             heartbeat_sleep_pid=$!
-            wait "${heartbeat_sleep_pid}" || exit 0
+            # Consume a stop received in the spawn-to-registration window.
+            if (( heartbeat_stop_requested != 0 )); then
+                finish_heartbeat_stop
+            fi
+            heartbeat_sleep_status=0
+            wait "${heartbeat_sleep_pid}" || heartbeat_sleep_status=$?
+            if (( heartbeat_stop_requested != 0 )); then
+                # A trapped signal can interrupt wait before Bash has reaped
+                # the child; the main loop remains the sole reaper.
+                finish_heartbeat_stop
+            fi
             heartbeat_sleep_pid=""
+            if (( heartbeat_sleep_status != 0 )); then
+                exit 0
+            fi
             [[ "${UT_TERMINATING}" == 0 ]] || exit 0
 
             local latest stage label active_cases active_detail active_records process_count memory report
@@ -445,8 +488,19 @@ function start_ut_heartbeat(){
         done
     ) &
     UT_HEARTBEAT_PID=$!
+    restore_ut_term_trap "${saved_term_trap}"
     checkpoint_ut_event "heartbeat-start" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "" \
         "pid=${UT_HEARTBEAT_PID} interval=${interval}s"
+    if (( heartbeat_term_pending != 0 )); then
+        if [[ -z "${saved_term_trap}" ]]; then
+            # With Bash's default TERM disposition there is no caller cleanup
+            # handler to reap the newly published helper before re-signal.
+            stop_ut_heartbeat
+        fi
+        # Replay the original caller disposition after publication. The real
+        # runner's handler now observes UT_HEARTBEAT_PID and owns the cleanup.
+        kill -TERM "$$"
+    fi
 }
 
 function stop_ut_heartbeat(){
@@ -466,38 +520,281 @@ function stop_ut_heartbeat(){
     UT_HEARTBEAT_PID=""
 }
 
+CGROUP_MEMORY_PATH=""
+CGROUP_MEMORY_LIMIT="unknown"
+CGROUP_MEMORY_HIERARCHY="unknown"
+CGROUP_MEMORY_HIERARCHY_COMPLETE=0
+CGROUP_MEMORY_EVENTS_HIERARCHICAL="unknown"
+
+function cgroup_memory_log_escape(){
+    local value=$1
+    value=${value//%/%25}
+    value=${value//|/%7C}
+    value=${value//;/%3B}
+    value=${value// /%20}
+    value=${value//$'\t'/%09}
+    value=${value//$'\n'/%0A}
+    printf '%s' "${value}"
+}
+
+function cgroup_v2_memory_events_hierarchical(){
+    local mountinfo_path=$1
+    local cgroup_mount=$2
+    if [[ ! -r "${mountinfo_path}" ]]; then
+        return 1
+    fi
+    awk -v mount="${cgroup_mount}" '
+        BEGIN {
+            hierarchical = 1
+        }
+        $5 == mount {
+            for (i = 1; i <= NF - 2; i++) {
+                if ($i == "-" && $(i + 1) == "cgroup2") {
+                    found = 1
+                    if ($0 ~ /(^|[ ,])memory_localevents([, ]|$)/) {
+                        hierarchical = 0
+                    }
+                }
+            }
+        }
+        END {
+            if (found && hierarchical != 0) {
+                exit 0
+            }
+            exit 1
+        }
+    ' "${mountinfo_path}"
+}
+
+function resolve_cgroup_memory_boundary(){
+    local leaf_path=$1
+    local cgroup_root=$2
+    local limit_file=$3
+    local mountinfo_path=${4:-"/proc/self/mountinfo"}
+    local current_path=${leaf_path}
+    local best_path=${leaf_path}
+    local best_limit=""
+    local best_value=0
+    local candidate_limit=""
+    local candidate_value=0
+    local hierarchy_complete=1
+    local hierarchy_metrics=""
+    local usage_file=""
+    local peak_file=""
+    local events_file=""
+    local current_value="unknown"
+    local peak_value="unknown"
+    local event_value="unknown"
+    local oom="unknown"
+    local oom_kill="unknown"
+    local failcnt="unknown"
+    local event_name=""
+    local event_count=""
+    local escaped_path=""
+    local boundary=""
+
+    CGROUP_MEMORY_PATH=${leaf_path}
+    CGROUP_MEMORY_LIMIT="unknown"
+    CGROUP_MEMORY_HIERARCHY="none"
+    CGROUP_MEMORY_HIERARCHY_COMPLETE=0
+    CGROUP_MEMORY_EVENTS_HIERARCHICAL="not_applicable"
+    if [[ "${leaf_path}" != "${cgroup_root}" && "${leaf_path}" != "${cgroup_root}/"* ]]; then
+        return 0
+    fi
+
+    if [[ "${limit_file}" == "memory.max" ]]; then
+        CGROUP_MEMORY_EVENTS_HIERARCHICAL=0
+        if cgroup_v2_memory_events_hierarchical "${mountinfo_path}" "${cgroup_root}"; then
+            CGROUP_MEMORY_EVENTS_HIERARCHICAL=1
+        else
+            hierarchy_complete=0
+        fi
+    fi
+
+    # A child can inherit a hard limit from any visible ancestor, and a parent
+    # can be under more pressure than its child because of sibling usage. Keep
+    # every finite boundary's metrics for the A/B safety check; the tightest
+    # limit is only a concise summary. On ties prefer the ancestor.
+    while [[ "${current_path}" == "${cgroup_root}" || "${current_path}" == "${cgroup_root}/"* ]]; do
+        if [[ -r "${current_path}/${limit_file}" ]]; then
+            candidate_limit=$(< "${current_path}/${limit_file}")
+            if [[ "${candidate_limit}" =~ ^[0-9]+$ ]]; then
+                candidate_value=$((10#${candidate_limit}))
+                # The v1 controller represents an unlimited limit as a very
+                # large page-aligned integer rather than the literal "max".
+                if [[ "${limit_file}" == "memory.limit_in_bytes" ]] &&
+                    (( candidate_value >= 1152921504606846976 )); then
+                    candidate_limit=""
+                fi
+                if [[ -n "${candidate_limit}" ]]; then
+                    if [[ "${limit_file}" == "memory.max" ]]; then
+                        usage_file="memory.current"
+                        peak_file="memory.peak"
+                        events_file="memory.events"
+                    else
+                        usage_file="memory.usage_in_bytes"
+                        peak_file="memory.max_usage_in_bytes"
+                        events_file="memory.failcnt"
+                    fi
+
+                    current_value="unknown"
+                    peak_value="unknown"
+                    event_value="unknown"
+                    if [[ -r "${current_path}/${usage_file}" ]]; then
+                        current_value=$(< "${current_path}/${usage_file}")
+                        if ! [[ "${current_value}" =~ ^[0-9]+$ ]]; then
+                            current_value="unknown"
+                            hierarchy_complete=0
+                        fi
+                    else
+                        hierarchy_complete=0
+                    fi
+                    if [[ -r "${current_path}/${peak_file}" ]]; then
+                        peak_value=$(< "${current_path}/${peak_file}")
+                        if ! [[ "${peak_value}" =~ ^[0-9]+$ ]]; then
+                            peak_value="unknown"
+                            hierarchy_complete=0
+                        fi
+                    else
+                        hierarchy_complete=0
+                    fi
+
+                    if [[ "${limit_file}" == "memory.max" ]]; then
+                        oom="unknown"
+                        oom_kill="unknown"
+                        if [[ -r "${current_path}/${events_file}" ]]; then
+                            while read -r event_name event_count; do
+                                case "${event_name}" in
+                                    oom) oom=${event_count} ;;
+                                    oom_kill) oom_kill=${event_count} ;;
+                                esac
+                            done < "${current_path}/${events_file}"
+                        fi
+                        if [[ "${oom}" =~ ^[0-9]+$ && "${oom_kill}" =~ ^[0-9]+$ ]]; then
+                            event_value="oom=${oom},oom_kill=${oom_kill}"
+                        else
+                            hierarchy_complete=0
+                        fi
+                    else
+                        failcnt="unknown"
+                        if [[ -r "${current_path}/${events_file}" ]]; then
+                            failcnt=$(< "${current_path}/${events_file}")
+                        fi
+                        if [[ "${failcnt}" =~ ^[0-9]+$ ]]; then
+                            event_value="failcnt=${failcnt}"
+                        else
+                            hierarchy_complete=0
+                        fi
+                    fi
+
+                    escaped_path=$(cgroup_memory_log_escape "${current_path}")
+                    boundary="${escaped_path}|${candidate_limit}|${current_value}|${peak_value}|${event_value}"
+                    if [[ -n "${hierarchy_metrics}" ]]; then
+                        hierarchy_metrics="${hierarchy_metrics};${boundary}"
+                    else
+                        hierarchy_metrics=${boundary}
+                    fi
+
+                    if [[ -z "${best_limit}" ]] || (( candidate_value <= best_value )); then
+                        best_path=${current_path}
+                        best_limit=${candidate_limit}
+                        best_value=${candidate_value}
+                    fi
+                fi
+            elif [[ "${limit_file}" == "memory.max" && "${candidate_limit}" == "max" ]] ||
+                [[ "${limit_file}" == "memory.limit_in_bytes" && "${candidate_limit}" == "-1" ]]; then
+                :
+            else
+                hierarchy_complete=0
+            fi
+        elif [[ "${current_path}" != "${cgroup_root}" || -e "${current_path}/${limit_file}" ]]; then
+            hierarchy_complete=0
+        fi
+
+        if [[ "${current_path}" == "${cgroup_root}" ]]; then
+            break
+        fi
+        current_path=${current_path%/*}
+        if [[ -z "${current_path}" ]]; then
+            break
+        fi
+    done
+
+    if [[ -n "${hierarchy_metrics}" ]]; then
+        CGROUP_MEMORY_HIERARCHY=${hierarchy_metrics}
+    fi
+    CGROUP_MEMORY_HIERARCHY_COMPLETE=${hierarchy_complete}
+    if [[ "${hierarchy_complete}" == "1" && -n "${best_limit}" ]]; then
+        CGROUP_MEMORY_PATH=${best_path}
+        CGROUP_MEMORY_LIMIT=${best_limit}
+    fi
+}
+
 function cgroup_memory_metrics(){
     local relative_path=""
+    local cgroup_root="/sys/fs/cgroup"
     local cgroup_path=""
+    local memory_current="unknown"
+    local memory_peak="unknown"
     if [[ ! -r /proc/self/cgroup ]]; then
         return 0
     fi
 
     relative_path=$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)
     if [[ -n "${relative_path}" ]]; then
-        cgroup_path="/sys/fs/cgroup${relative_path}"
+        if [[ "${relative_path}" == "/" ]]; then
+            cgroup_path=${cgroup_root}
+        else
+            cgroup_path="${cgroup_root}${relative_path}"
+        fi
         if [[ -r "${cgroup_path}/memory.current" ]]; then
-            printf 'current=%s peak=%s' \
-                "$(< "${cgroup_path}/memory.current")" \
-                "$(< "${cgroup_path}/memory.peak")"
+            resolve_cgroup_memory_boundary "${cgroup_path}" "${cgroup_root}" "memory.max"
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.current" ]]; then
+                memory_current=$(< "${CGROUP_MEMORY_PATH}/memory.current")
+            fi
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.peak" ]]; then
+                memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.peak")
+            fi
+            printf 'current=%s peak=%s memory.max=%s memory.leaf=%s memory.scope=%s memory.hierarchy_complete=%s memory.events_hierarchical=%s memory.boundaries=%s' \
+                "${memory_current}" "${memory_peak}" \
+                "${CGROUP_MEMORY_LIMIT}" "${cgroup_path}" "${CGROUP_MEMORY_PATH}" \
+                "${CGROUP_MEMORY_HIERARCHY_COMPLETE}" "${CGROUP_MEMORY_EVENTS_HIERARCHICAL}" \
+                "${CGROUP_MEMORY_HIERARCHY}"
             return 0
         fi
     fi
 
     relative_path=$(awk -F: '$2 ~ /(^|,)memory(,|$)/ { print $3; exit }' /proc/self/cgroup)
-    cgroup_path="/sys/fs/cgroup/memory${relative_path}"
+    cgroup_root="/sys/fs/cgroup/memory"
+    if [[ "${relative_path}" == "/" ]]; then
+        cgroup_path=${cgroup_root}
+    else
+        cgroup_path="${cgroup_root}${relative_path}"
+    fi
     if [[ -r "${cgroup_path}/memory.usage_in_bytes" ]]; then
-        printf 'current=%s peak=%s' \
-            "$(< "${cgroup_path}/memory.usage_in_bytes")" \
-            "$(< "${cgroup_path}/memory.max_usage_in_bytes")"
+        resolve_cgroup_memory_boundary "${cgroup_path}" "${cgroup_root}" "memory.limit_in_bytes"
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.usage_in_bytes" ]]; then
+            memory_current=$(< "${CGROUP_MEMORY_PATH}/memory.usage_in_bytes")
+        fi
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes" ]]; then
+            memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes")
+        fi
+        printf 'current=%s peak=%s memory.limit_in_bytes=%s memory.leaf=%s memory.scope=%s memory.hierarchy_complete=%s memory.events_hierarchical=%s memory.boundaries=%s' \
+            "${memory_current}" "${memory_peak}" \
+            "${CGROUP_MEMORY_LIMIT}" "${cgroup_path}" "${CGROUP_MEMORY_PATH}" \
+            "${CGROUP_MEMORY_HIERARCHY_COMPLETE}" "${CGROUP_MEMORY_EVENTS_HIERARCHICAL}" \
+            "${CGROUP_MEMORY_HIERARCHY}"
     fi
 }
 
 function report_cgroup_memory_usage(){
     local label=$1
     local relative_path=""
+    local cgroup_root="/sys/fs/cgroup"
     local cgroup_path=""
     local events=""
+    local memory_current="unknown"
+    local memory_peak="unknown"
 
     if [[ ! -r /proc/self/cgroup ]]; then
         return 0
@@ -505,18 +802,49 @@ function report_cgroup_memory_usage(){
 
     relative_path=$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup)
     if [[ -n "${relative_path}" ]]; then
-        cgroup_path="/sys/fs/cgroup${relative_path}"
-        if [[ -r "${cgroup_path}/memory.peak" ]]; then
-            events=$(tr '\n' ' ' < "${cgroup_path}/memory.events")
-            logger "INF" "${label} cgroup memory: current=$(< "${cgroup_path}/memory.current") peak=$(< "${cgroup_path}/memory.peak") events=${events}"
+        if [[ "${relative_path}" == "/" ]]; then
+            cgroup_path=${cgroup_root}
+        else
+            cgroup_path="${cgroup_root}${relative_path}"
+        fi
+        if [[ -r "${cgroup_path}/memory.current" ]]; then
+            resolve_cgroup_memory_boundary "${cgroup_path}" "${cgroup_root}" "memory.max"
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.current" ]]; then
+                memory_current=$(< "${CGROUP_MEMORY_PATH}/memory.current")
+            fi
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.peak" ]]; then
+                memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.peak")
+            fi
+            if [[ -r "${CGROUP_MEMORY_PATH}/memory.events" ]]; then
+                events=$(tr '\n' ' ' < "${CGROUP_MEMORY_PATH}/memory.events")
+            else
+                events="unknown"
+            fi
+            logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.max=${CGROUP_MEMORY_LIMIT} memory.leaf=${cgroup_path} memory.scope=${CGROUP_MEMORY_PATH} memory.hierarchy_complete=${CGROUP_MEMORY_HIERARCHY_COMPLETE} memory.events_hierarchical=${CGROUP_MEMORY_EVENTS_HIERARCHICAL} memory.boundaries=${CGROUP_MEMORY_HIERARCHY} events=${events}"
             return 0
         fi
     fi
 
     relative_path=$(awk -F: '$2 ~ /(^|,)memory(,|$)/ { print $3; exit }' /proc/self/cgroup)
-    cgroup_path="/sys/fs/cgroup/memory${relative_path}"
-    if [[ -r "${cgroup_path}/memory.max_usage_in_bytes" ]]; then
-        logger "INF" "${label} cgroup memory: current=$(< "${cgroup_path}/memory.usage_in_bytes") peak=$(< "${cgroup_path}/memory.max_usage_in_bytes") failcnt=$(< "${cgroup_path}/memory.failcnt")"
+    cgroup_root="/sys/fs/cgroup/memory"
+    if [[ "${relative_path}" == "/" ]]; then
+        cgroup_path=${cgroup_root}
+    else
+        cgroup_path="${cgroup_root}${relative_path}"
+    fi
+    if [[ -r "${cgroup_path}/memory.usage_in_bytes" ]]; then
+        resolve_cgroup_memory_boundary "${cgroup_path}" "${cgroup_root}" "memory.limit_in_bytes"
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.usage_in_bytes" ]]; then
+            memory_current=$(< "${CGROUP_MEMORY_PATH}/memory.usage_in_bytes")
+        fi
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes" ]]; then
+            memory_peak=$(< "${CGROUP_MEMORY_PATH}/memory.max_usage_in_bytes")
+        fi
+        local failcnt="unknown"
+        if [[ -r "${CGROUP_MEMORY_PATH}/memory.failcnt" ]]; then
+            failcnt=$(< "${CGROUP_MEMORY_PATH}/memory.failcnt")
+        fi
+        logger "INF" "${label} cgroup memory: current=${memory_current} peak=${memory_peak} memory.limit_in_bytes=${CGROUP_MEMORY_LIMIT} memory.leaf=${cgroup_path} memory.scope=${CGROUP_MEMORY_PATH} memory.hierarchy_complete=${CGROUP_MEMORY_HIERARCHY_COMPLETE} memory.events_hierarchical=${CGROUP_MEMORY_EVENTS_HIERARCHICAL} memory.boundaries=${CGROUP_MEMORY_HIERARCHY} failcnt=${failcnt}"
     fi
 }
 
@@ -581,7 +909,7 @@ function consume_plan_race_report(){
         fi
         return "${append_status}"
     fi
-    rm -f "${PLAN_RACE_REPORT}"
+    rm -f "${PLAN_RACE_REPORT}" "${PLAN_RACE_REPORT}".*
     PLAN_RACE_REPORT=""
     restore_ut_term_trap "${saved_term_trap}"
     if (( term_pending != 0 && UT_TERMINATING == 0 )); then
@@ -881,12 +1209,25 @@ function run_plan_race_shards(){
     local test_count=0
     local plan_child_pid=""
     local previous_term_trap=""
+    local report_staging=""
+    local active_count=0
+    local next_shard=0
+    local pid=""
+    local scheduler_progress=0
+    local plan_term_grace_ticks=20
     local -a shard_patterns
     local -a shard_counts
+    local -a shard_pids=()
+    local -a shard_reports=()
 
     if ! [[ "${PLAN_RACE_SHARDS}" =~ ^[1-9][0-9]*$ ]] ||
         (( PLAN_RACE_SHARDS > 64 )); then
         logger "ERR" "PLAN_RACE_SHARDS must be an integer from 1 through 64, got '${PLAN_RACE_SHARDS}'"
+        return 2
+    fi
+    if ! [[ "${PLAN_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+        (( PLAN_RACE_PARALLEL > 2 )); then
+        logger "ERR" "PLAN_RACE_PARALLEL must be 1 or 2, got '${PLAN_RACE_PARALLEL}'"
         return 2
     fi
 
@@ -894,11 +1235,14 @@ function run_plan_race_shards(){
     # process-group cleanup local to this helper so a cancelled parent cannot
     # strand the test binary after the helper's shell exits.
     previous_term_trap=$(trap -p TERM)
-    trap 'if [[ -n "${plan_child_pid}" ]]; then terminate_ut_process_groups 20 "${plan_child_pid}"; fi; wait 2>/dev/null || true; rm -f "${plan_test_binary}"; exit 143' TERM
+    # A TERM can arrive while the helper is transitioning from one child
+    # group to the next. Bound each cleanup pass so two independent groups
+    # finish before the parent helper's 15-second cancellation window.
+    trap 'if [[ -n "${plan_child_pid:-}" ]]; then terminate_ut_process_groups "${plan_term_grace_ticks:-20}" "${plan_child_pid}"; fi; if [[ -n "${shard_pids+x}" ]] && (( ${#shard_pids[@]} > 0 )); then terminate_ut_process_groups "${plan_term_grace_ticks:-20}" "${shard_pids[@]}"; fi; if [[ -n "${shard_pids+x}" ]]; then for pid in "${shard_pids[@]}"; do [[ -n "${pid}" ]] && wait "${pid}" 2>/dev/null || true; done; fi; wait 2>/dev/null || true; if [[ -n "${plan_test_binary:-}" ]]; then rm -f "${plan_test_binary}"; fi; exit 143' TERM
     if [[ -z "${PLAN_RACE_REPORT}" ]]; then
         PLAN_RACE_REPORT="${G_WKSP}/${G_TS}-plan-race-report.out"
     fi
-    : > "${PLAN_RACE_REPORT}"
+    rm -f "${PLAN_RACE_REPORT}" "${PLAN_RACE_REPORT}".*
     checkpoint_ut_event "start" "plan" "${plan_package}" "" "shards=${PLAN_RACE_SHARDS}"
     # Resolve both metadata fields through one cancellable child. Keeping the
     # PID in plan_child_pid makes TERM ownership identical to build and shard
@@ -1002,37 +1346,122 @@ function run_plan_race_shards(){
         return 2
     fi
 
-    logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes"
+    logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes with parallelism ${PLAN_RACE_PARALLEL}"
     for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
         if (( shard_counts[shard] == 0 )); then
             continue
         fi
         shard_patterns[shard]+=')$'
-        logger "INF" "Run ${plan_package} race shard $(( shard + 1 ))/${PLAN_RACE_SHARDS} (${shard_counts[shard]} tests)"
-        mark_ut_stage "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" start "" "tests=${shard_counts[shard]}"
-        set -m
-        (
-            cd "${plan_package_dir}" || exit 2
-            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
-                go tool test2json -t -p "${plan_package_import}" \
-                "${plan_test_binary}" -test.short=true -test.v=test2json \
-                -test.paniconexit0=true -test.count=1 \
-                -test.timeout="${UT_TIMEOUT}m" \
-                -test.run="${shard_patterns[shard]}"
-        ) >> "${PLAN_RACE_REPORT}" 2>> "${UT_STDERR}" &
-        plan_child_pid=$!
-        CURRENT_UT_PID=${plan_child_pid}
-        checkpoint_ut_event "pid-start" "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" "" "child_pid=${plan_child_pid} tests=${shard_counts[shard]}"
-        wait "${plan_child_pid}"
-        shard_exit_status=$?
-        plan_child_pid=""
-        CURRENT_UT_PID=""
-        set +m
-        mark_ut_stage "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" finish "${shard_exit_status}"
-        if (( shard_exit_status != 0 )); then
-            shard_status=1
+        # append_ut_report recovers unmarked shard files through a lexical
+        # glob. Keep the suffix fixed-width so shard 10 follows shard 09.
+        shard_reports[shard]="${PLAN_RACE_REPORT}.$(printf '%02d' "${shard}")"
+        : > "${shard_reports[shard]}"
+    done
+
+    # Run fresh test-binary processes with a hard two-process ceiling. Each
+    # process writes an independent report, so a failed shard cannot leave a
+    # partially interleaved JSON stream or hide another shard's status.
+    set -m
+    while (( next_shard < PLAN_RACE_SHARDS || active_count > 0 )); do
+        while (( next_shard < PLAN_RACE_SHARDS && active_count < PLAN_RACE_PARALLEL )); do
+            shard=${next_shard}
+            next_shard=$(( next_shard + 1 ))
+            if (( shard_counts[shard] == 0 )); then
+                continue
+            fi
+            logger "INF" "Run ${plan_package} race shard $(( shard + 1 ))/${PLAN_RACE_SHARDS} (${shard_counts[shard]} tests)"
+            mark_ut_stage "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" start "" "tests=${shard_counts[shard]}"
+            (
+                cd "${plan_package_dir}" || exit 2
+                LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+                    go tool test2json -t -p "${plan_package_import}" \
+                    "${plan_test_binary}" -test.short=true -test.v=test2json \
+                    -test.paniconexit0=true -test.count=1 \
+                    -test.timeout="${UT_TIMEOUT}m" \
+                    -test.run="${shard_patterns[shard]}"
+            ) > "${shard_reports[shard]}" 2>> "${UT_STDERR}" &
+            shard_pids[shard]=$!
+            active_count=$(( active_count + 1 ))
+            checkpoint_ut_event "pid-start" "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" "" "child_pid=${shard_pids[shard]} tests=${shard_counts[shard]}"
+        done
+
+        if (( active_count == 0 )); then
+            continue
+        fi
+
+        # Bash 3.2 does not provide wait -n. Poll the owned children instead of
+        # waiting for the first active index, so a later fast shard releases a
+        # bounded slot without being held behind an earlier slow shard.
+        scheduler_progress=0
+        for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
+            if [[ -z "${shard_pids[shard]:-}" ]]; then
+                continue
+            fi
+            pid=${shard_pids[shard]}
+            if kill -0 "${pid}" 2>/dev/null; then
+                continue
+            fi
+            wait "${pid}"
+            shard_exit_status=$?
+            shard_pids[shard]=""
+            active_count=$(( active_count - 1 ))
+            scheduler_progress=1
+            mark_ut_stage "plan" "${plan_package} shard $(( shard + 1 ))/${PLAN_RACE_SHARDS}" finish "${shard_exit_status}"
+            if (( shard_exit_status != 0 )); then
+                logger "ERR" "${plan_package} race shard $(( shard + 1 )) failed with status ${shard_exit_status}"
+                shard_status=1
+            fi
+        done
+        if (( scheduler_progress == 0 )); then
+            sleep 0.05
         fi
     done
+    set +m
+
+    # Publish the complete ordered report only after every shard has been
+    # reaped. The ready marker makes the base report authoritative to
+    # append_ut_report; cancellation before the marker leaves shard reports
+    # available for diagnostics and safe recovery.
+    report_staging="${PLAN_RACE_REPORT}.tmp.$$"
+    rm -f "${report_staging}"
+    if ! : > "${report_staging}"; then
+        logger "ERR" "failed to create plan race report staging file"
+        rm -f "${plan_test_binary}"
+        PLAN_RACE_TEST_BINARY=""
+        restore_ut_term_trap "${previous_term_trap}"
+        return 1
+    fi
+    for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
+        if (( shard_counts[shard] == 0 )); then
+            continue
+        fi
+        if ! cat "${shard_reports[shard]}" >> "${report_staging}"; then
+            logger "ERR" "failed to assemble plan race shard ${shard} report"
+            rm -f "${report_staging}"
+            rm -f "${plan_test_binary}"
+            PLAN_RACE_TEST_BINARY=""
+            restore_ut_term_trap "${previous_term_trap}"
+            return 1
+        fi
+    done
+    if ! mv -f "${report_staging}" "${PLAN_RACE_REPORT}"; then
+        logger "ERR" "failed to publish plan race report"
+        rm -f "${report_staging}"
+        rm -f "${plan_test_binary}"
+        PLAN_RACE_TEST_BINARY=""
+        restore_ut_term_trap "${previous_term_trap}"
+        return 1
+    fi
+    if ! : > "${PLAN_RACE_REPORT}.ready"; then
+        logger "ERR" "failed to publish plan race report readiness marker"
+        # Keep the complete base report and shard reports for append_ut_report
+        # to recover if marker publication is interrupted.
+        rm -f "${plan_test_binary}"
+        PLAN_RACE_TEST_BINARY=""
+        restore_ut_term_trap "${previous_term_trap}"
+        return 1
+    fi
+    rm -f "${PLAN_RACE_REPORT}".[0-9]*
 
     rm -f "${plan_test_binary}"
     PLAN_RACE_TEST_BINARY=""
@@ -1657,6 +2086,10 @@ function run_tests(){
         report_slow_ut_cases
         report_active_ut_cases
     fi
+
+    # Take the acceptance snapshot only after plan/engine/heavy helpers and all
+    # report writers have been joined. The caller stops the heartbeat next.
+    report_cgroup_memory_usage "Final race UT"
 
     # The caller must continue into ut_summary even when go test failed.
     return 0

@@ -2949,7 +2949,8 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		}
 		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
 			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sign") ||
-				strings.EqualFold(funcName, "sleep") || strings.EqualFold(funcName, "char")) {
+				strings.EqualFold(funcName, "sleep") || strings.EqualFold(funcName, "char") ||
+				strings.EqualFold(funcName, "elt")) {
 			hasPreparedParam, err := b.hasPreparedNumericParamExprs(astExpr.Exprs, depth)
 			if err != nil {
 				return nil, err
@@ -2975,7 +2976,11 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return b.impl.BindWinFunc(funcName, astExpr, depth, isRoot)
 	}
 
-	return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
+	if err == nil && strings.EqualFold(funcName, "json_merge") {
+		appendJSONMergeWarning(b.GetContext(), astExpr)
+	}
+	return expr, err
 }
 
 // bindGenericFunctionExpr keeps a whitespace-separated sensitive function
@@ -3061,7 +3066,8 @@ func isPreparedNumericAggregate(name string, argCount int) bool {
 }
 
 func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
-	// ABS, SIGN, and SLEEP all have integer and floating-point overloads. A bare
+	// ABS, SIGN, SLEEP, and ELT's index all have integer and floating-point
+	// overloads. A bare
 	// prepared parameter has TEXT transport type at PREPARE time, so letting
 	// generic overload resolver choose an integer cast makes valid executions
 	// such as ABS(-1.5), SIGN(-0.1), and SLEEP(0.01) fail before the function
@@ -3071,6 +3077,11 @@ func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
 	// DOUBLE casts remain ordinary DOUBLE expressions.
 	if argCount == 1 && (strings.EqualFold(name, "abs") || strings.EqualFold(name, "sign") ||
 		strings.EqualFold(name, "sleep")) {
+		typ := types.T_float64.ToType()
+		target := makePlan2Type(&typ)
+		return &target, true
+	}
+	if argCount >= 2 && strings.EqualFold(name, "elt") {
 		typ := types.T_float64.ToType()
 		target := makePlan2Type(&typ)
 		return &target, true
@@ -3360,8 +3371,9 @@ func containsExplicitFloatCastInSelect(stmt tree.SelectStatement) bool {
 
 // bindPreparedNumericFuncExpr gives prepared numeric function arguments the
 // same static context as prepared arithmetic. SUM/AVG use the inferred numeric
-// domain, NTILE requires an integer domain, and CHAR uses an integer domain
-// only for arguments that contain a prepared marker. ParamRef remains TEXT for
+// domain, NTILE requires an integer domain, CHAR uses an integer domain only
+// for arguments that contain a prepared marker, and ELT uses a deferred
+// numeric domain only for its index argument. ParamRef remains TEXT for
 // transport and an explicit cast materializes the computation type.
 // Non-parameter expressions stay on their original binding path, so ordinary
 // string inputs continue to use their function-specific string semantics.
@@ -3373,6 +3385,48 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	target, ok := preparedNumericFunctionTarget(name, len(astArgs))
 	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
+	}
+	if strings.EqualFold(name, "elt") {
+		args := make([]*plan.Expr, len(astArgs))
+		deferredIndex := false
+		for i, astArg := range astArgs {
+			if i == 0 {
+				hasPreparedParam, err := b.hasPreparedNumericParamExprs([]tree.Expr{astArg}, depth)
+				if err != nil {
+					return nil, err
+				}
+				if hasPreparedParam {
+					args[i], err = b.bindNumericExprWithContext(astArg, depth, target)
+					if err != nil {
+						return nil, err
+					}
+					if !isDirectExplicitNumericCast(astArg) {
+						b.markPreparedNumericFallback(args[i])
+						deferredIndex = true
+					}
+					continue
+				}
+			}
+			var err error
+			args[i], err = b.impl.BindExpr(astArg, depth, false)
+			if err != nil {
+				return nil, err
+			}
+		}
+		bound, err := bindBoundFuncExprAndConstFold(
+			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if deferredIndex && bound != nil && bound.GetF() != nil && len(bound.GetF().Args) > 0 {
+			// ELT's numeric envelope can add a second implicit cast around the
+			// marker. Keep the deferred marker on the complete function argument,
+			// not only on the inner cast, so execute-time metadata discovery can
+			// select the full-arity ELT rebind path.
+			b.markPreparedNumericFallback(bound.GetF().Args[0])
+		}
+		return bound, nil
 	}
 	if strings.EqualFold(name, "char") {
 		args := make([]*plan.Expr, len(astArgs))
@@ -5049,6 +5103,28 @@ func BindFuncExprImplByPlanExpr(ctx context.Context, name string, args []*Expr) 
 	return bindFuncExprImplByPlanExpr(ctx, name, args, true, nil, nil, false)
 }
 
+func hexExplicitRealCastOverload(name string, args []*Expr) (int32, bool) {
+	if name != "hex" || len(args) != 1 || args[0] == nil {
+		return 0, false
+	}
+	cast := args[0].GetF()
+	if cast == nil || cast.GetFunc().GetObjName() != "cast" {
+		return 0, false
+	}
+	_, castOverload := function.DecodeOverloadID(cast.GetFunc().GetObj())
+	if castOverload == 0 && !cast.GetSyntaxExplicitCast() {
+		return 0, false
+	}
+	switch types.T(args[0].Typ.Id) {
+	case types.T_float32:
+		return function.HexExplicitFloat32Overload, true
+	case types.T_float64:
+		return function.HexExplicitFloat64Overload, true
+	default:
+		return 0, false
+	}
+}
+
 func bindPreparedFuncExprImplByPlanExpr(
 	ctx context.Context,
 	originalBoundExpr *Expr,
@@ -5792,6 +5868,12 @@ func bindFuncExprImplByPlanExpr(
 		return nil, err
 	}
 
+	if overloadID, ok := hexExplicitRealCastOverload(name, args); ok {
+		fGet, err = function.GetFunctionByNameWithOverload(ctx, name, argsType, overloadID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	funcID = fGet.GetEncodedOverloadID()
 	returnType = fGet.GetReturnType()
 	argsCastType, _ = fGet.ShouldDoImplicitTypeCast()
@@ -5877,35 +5959,75 @@ func bindFuncExprImplByPlanExpr(
 
 	refineDecimalRoundingReturnType(name, args, argsType, &returnType)
 
-	// Geometry constructors with an explicit constant SRID argument record the
-	// SRID in the result type's Width (geometry cells store bare WKB, so SRID
-	// lives in the type). A non-constant SRID cannot be represented this way.
+	// Geometry constructors with an explicit SRID argument record the SRID in
+	// the result type's Width (geometry cells store bare WKB, so SRID lives in
+	// the type). A direct prepared marker is admitted for the WKB constructor
+	// and ST_SRID setter; ResetParamRefRule binds and validates its value at
+	// execute time, while row-varying expressions remain unsupported.
 	if returnType.Oid == types.T_geometry || returnType.Oid == types.T_geometry32 {
 		switch name {
-		case "st_geomfromtext", "st_geomfromwkb", "st_geometryfromtext", "st_pointfromtext",
+		case "st_geomfromtext", "st_geomfromwkb", "st_geomfrombinary", "st_geometryfromtext", "st_geometryfromwkb", "st_pointfromtext",
 			"st_linefromtext", "st_polygonfromtext", "st_mpointfromtext", "st_mlinefromtext",
 			"st_mpolyfromtext", "st_geomcollfromtext", "st_pointfromgeohash",
 			"st_geomfromgeojson":
 			if len(args) >= 2 {
-				// The SRID is carried in the result type's Width, so it must be
-				// a constant known at bind time. A non-constant SRID (column,
-				// parameter, or CAST/arithmetic expression) cannot be
-				// represented this way and is rejected rather than being
-				// silently dropped.
+				sourceIsNull := len(args) > 0 && geometrySRIDSourceIsStaticNull(args[0])
 				lit, ok := args[len(args)-1].Expr.(*plan.Expr_Lit)
 				if !ok || lit.Lit == nil {
+					if (name == "st_geomfromwkb" || name == "st_geomfrombinary" || name == "st_geometryfromwkb") &&
+						isDirectPreparedGeometrySRIDArg(args[len(args)-1]) {
+						returnType.Width = 0
+						break
+					}
 					return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
 				}
-				if !lit.Lit.Isnull {
-					iv, ok := lit.Lit.GetValue().(*plan.Literal_I64Val)
-					if !ok {
-						return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
-					}
-					if err := validateGeometrySRID(iv.I64Val); err != nil {
-						return nil, err
-					}
-					returnType.Width = encodeGeometrySRIDWidth(uint32(iv.I64Val), true)
+				iv, isNull, ok := geometrySRIDLiteralValue(lit.Lit)
+				if !ok {
+					return nil, moerr.NewInvalidInput(ctx, "the SRID argument of a geometry constructor must be a constant integer")
 				}
+				if isNull {
+					returnType.Width = 0
+					break
+				}
+				if sourceIsNull {
+					// The SQL NULL geometry is the result regardless of the SRID
+					// value. Do not report an SRID range error before NULL
+					// propagation has a chance to take effect.
+					returnType.Width = 0
+					break
+				}
+				if err := validateGeometrySRID(iv); err != nil {
+					return nil, err
+				}
+				returnType.Width = encodeGeometrySRIDWidth(uint32(iv), true)
+			}
+		case "st_srid":
+			if len(args) == 2 {
+				sourceIsNull := geometrySRIDSourceIsStaticNull(args[0])
+				lit, ok := args[1].Expr.(*plan.Expr_Lit)
+				if !ok || lit.Lit == nil {
+					if isDirectPreparedGeometrySRIDArg(args[1]) {
+						returnType.Width = 0
+						break
+					}
+					return nil, moerr.NewInvalidInput(ctx, "the SRID argument of ST_SRID must be a constant integer")
+				}
+				iv, isNull, ok := geometrySRIDLiteralValue(lit.Lit)
+				if !ok {
+					return nil, moerr.NewInvalidInput(ctx, "the SRID argument of ST_SRID must be a constant integer")
+				}
+				if isNull {
+					returnType.Width = 0
+					break
+				}
+				if sourceIsNull {
+					returnType.Width = 0
+					break
+				}
+				if err := validateGeometrySRID(iv); err != nil {
+					return nil, err
+				}
+				returnType.Width = encodeGeometrySRIDWidth(uint32(iv), true)
 			}
 		}
 	}

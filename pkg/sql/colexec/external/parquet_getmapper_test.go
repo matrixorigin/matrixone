@@ -53,6 +53,11 @@ func TestGetMapper_OptionalToNotNullable(t *testing.T) {
 	require.NotNil(t, mp, "optional column should map to notNullable type (runtime NULL check)")
 }
 
+func TestGetMapper_NilColumn(t *testing.T) {
+	var h ParquetHandler
+	require.Nil(t, h.getMapper(nil, plan.Type{Id: int32(types.T_int32)}))
+}
+
 // Test type mismatch cases that return nil mapper
 func TestGetMapper_TypeMismatch(t *testing.T) {
 	tests := []struct {

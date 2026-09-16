@@ -1575,10 +1575,10 @@ func TestWindowDecimalAggResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	resultValues := collectFixedWindowColumn[types.Decimal128](t, arg, proc, 1)
+	resultValues := collectFixedWindowColumn[types.Decimal256](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
-		require.Equal(t, values[idx], resultValues[idx], "row %d", idx)
+		require.Equal(t, types.Decimal256FromDecimal128(values[idx]), resultValues[idx], "row %d", idx)
 	}
 
 	arg.Free(proc, false, nil)
@@ -2218,13 +2218,13 @@ func TestBoundedSlidingSumSupportsDecimal64Arguments(t *testing.T) {
 
 	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
-	require.Equal(t, []types.Decimal128{
-		types.Decimal128FromInt64(100),
-		types.Decimal128FromInt64(100),
+	require.Equal(t, []types.Decimal256{
+		types.Decimal256FromInt64(100),
+		types.Decimal256FromInt64(100),
 		{},
-		types.Decimal128FromInt64(-300),
-		types.Decimal128FromInt64(100),
-	}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
+		types.Decimal256FromInt64(-300),
+		types.Decimal256FromInt64(100),
+	}, vector.MustFixedColWithTypeCheck[types.Decimal256](result))
 	require.False(t, result.IsNull(0))
 	require.False(t, result.IsNull(1))
 	require.True(t, result.IsNull(2))
@@ -2525,6 +2525,45 @@ func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 	require.Equal(t, []int64{0, 2}, arg.ctr.ps)
 	require.Equal(t, []int32{1, 1, 2, 2}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
 	require.Equal(t, []uint64{1, 2, 1, 2}, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[2]))
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionTopNSeparatesGroupingNullFromEmptyString(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"", "", ""}, nil, proc.Mp()))
+	input.Vecs[0].GetGrouping().Add(0)
+	input.Vecs[1] = testutil.MakeInt32Vector([]int32{100, 30, 20}, nil, proc.Mp())
+	input.SetRowCount(3)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "rank",
+				WindowFunc:  newFunExpr("rank"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_varchar.ToType())},
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newColExprWithType(1, types.T_int32.ToType()),
+					Flag: plan.OrderBySpec_DESC,
+				}},
+			}},
+		}},
+		Aggs:          []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		PartitionTopN: true,
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{0, 1}, arg.ctr.ps)
+	require.Equal(t, []uint64{1, 1, 2}, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[2]))
 
 	arg.Free(proc, false, nil)
 	child.Free(proc, false, nil)

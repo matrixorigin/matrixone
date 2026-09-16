@@ -180,6 +180,20 @@ func RequiresMORPCVersion59NumericFormatArguments(owner any) (bool, error) {
 	return features.FormatNumericArguments, err
 }
 
+// RequiresMORPCVersion72IPFunctionSemantics reports whether an owner contains
+// an IP function whose serialized execution contract changed in MORPC v72.
+func RequiresMORPCVersion72IPFunctionSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.IPFunctionSemantics, err
+}
+
+// RequiresMORPCVersion80StringNumericResultContracts reports whether an owner
+// contains one of the corrected fixed-width string numeric result contracts.
+func RequiresMORPCVersion80StringNumericResultContracts(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.StringNumericResultContracts, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -191,6 +205,14 @@ const (
 	convFunctionID                   int32 = 367
 	asciiFunctionID                  int32 = 52
 	asciiInt32ResultTypeID           int32 = 22
+	findInSetFunctionID              int32 = 101
+	lengthUTF8FunctionID             int32 = 125
+	strCmpFunctionID                 int32 = 344
+	uncompressedLengthFunctionID     int32 = 389
+	crc32FunctionID                  int32 = 81
+	stringNumericInt32ResultTypeID   int32 = 22
+	stringNumericInt64ResultTypeID   int32 = 23
+	stringNumericUint64ResultTypeID  int32 = 28
 )
 
 // RemoteExpressionFeatures is the complete set of versioned expression
@@ -203,13 +225,23 @@ const (
 // its overload IDs but changes its physical result vector from UINT8 to INT32.
 // A struct makes compatibility call sites name every capability instead of
 // relying on positional booleans.
+// RowDependentConvBases requires MORPC v69 for nonconstant or unsigned bases.
+// IPFunctionSemantics requires MORPC v72 because the IP functions change
+// existing overload semantics and add numeric INET_NTOA overloads.
+// StringNumericResultContracts requires MORPC v80 because the listed string
+// numeric functions keep overload IDs while changing their physical result
+// vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 type RemoteExpressionFeatures struct {
-	NumericPrefix            bool
-	JSONComparisonParam      bool
-	MixedJSONBooleanEquality bool
-	FormatNumericArguments   bool
-	TypedConversionFunctions bool
-	ASCIIInt32Result         bool
+	NumericPrefix                bool
+	JSONComparisonParam          bool
+	MixedJSONBooleanEquality     bool
+	FormatNumericArguments       bool
+	TypedConversionFunctions     bool
+	IntegerArithmeticDomains     bool
+	RowDependentConvBases        bool
+	ASCIIInt32Result             bool
+	StringNumericResultContracts bool
+	IPFunctionSemantics          bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -218,7 +250,42 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
 		features.TypedConversionFunctions ||
-		features.ASCIIInt32Result
+		features.ASCIIInt32Result ||
+		features.IntegerArithmeticDomains ||
+		features.RowDependentConvBases ||
+		features.StringNumericResultContracts ||
+		features.IPFunctionSemantics
+}
+
+// These IDs are kept numeric deliberately: pkg/pb/plan cannot import the
+// planner's function package without creating an import cycle. Every listed
+// function either changed the interpretation of an existing overload or
+// gained overloads in the IP-function compatibility fix. The remote fence is
+// therefore based on function identity, not on the operand types selected by a
+// particular planner invocation.
+const (
+	remoteIPInet6AtonFunctionID    int32 = 392
+	remoteIPInet6NtoaFunctionID    int32 = 393
+	remoteIPInetAtonFunctionID     int32 = 394
+	remoteIPInetNtoaFunctionID     int32 = 395
+	remoteIPIsIPv4FunctionID       int32 = 396
+	remoteIPIsIPv6FunctionID       int32 = 397
+	remoteIPIsIPv4CompatFunctionID int32 = 398
+)
+
+func isRemoteIPFunction(functionID int32) bool {
+	switch functionID {
+	case remoteIPInet6AtonFunctionID,
+		remoteIPInet6NtoaFunctionID,
+		remoteIPInetAtonFunctionID,
+		remoteIPInetNtoaFunctionID,
+		remoteIPIsIPv4FunctionID,
+		remoteIPIsIPv6FunctionID,
+		remoteIPIsIPv4CompatFunctionID:
+		return true
+	default:
+		return false
+	}
 }
 
 // RequiredRemoteExpressionFeatures reports the independent versioned
@@ -229,6 +296,13 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			fn := current.GetF()
+			if fn != nil && fn.Func != nil {
+				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				// PLUS/MINUS/MULTI are stable function IDs 10/11/12.
+				if (id >= 10 && id <= 12 && overload == 2) || (id == 11 && overload == 3) {
+					features.IntegerArithmeticDomains = true
+				}
+			}
 			if !features.NumericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
 				strings.EqualFold(fn.Func.GetObjName(), "cast") {
 				features.NumericPrefix = true
@@ -250,8 +324,23 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.TypedConversionFunctions && isTypedConversionFunction(fn) {
 				features.TypedConversionFunctions = true
 			}
+			if fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == convFunctionID && len(fn.Args) == 3 {
+				for _, base := range fn.Args[1:] {
+					// Only literal INT64 bases prove the pre-v65 constant-vector
+					// contract. Unknown or not-yet-folded expressions fail closed.
+					if base == nil || base.Typ.Id != 23 || base.GetLit() == nil {
+						features.RowDependentConvBases = true
+					}
+				}
+			}
 			if !features.ASCIIInt32Result && isASCIIInt32Result(current) {
 				features.ASCIIInt32Result = true
+			}
+			if !features.StringNumericResultContracts && isStringNumericResultContract(current) {
+				features.StringNumericResultContracts = true
+			}
+			if !features.IPFunctionSemantics && fn != nil && fn.Func != nil {
+				features.IPFunctionSemantics = isRemoteIPFunction(int32(fn.Func.Obj >> 32))
 			}
 			return nil
 		})
@@ -273,6 +362,41 @@ func isASCIIInt32Result(expr *Expr) bool {
 	}
 	return int32(fn.Func.Obj>>32) == asciiFunctionID ||
 		strings.EqualFold(fn.Func.GetObjName(), "ascii")
+}
+
+// isStringNumericResultContract identifies the new physical result contracts
+// of the affected string numeric functions. Legacy serialized plans use the
+// same overload IDs with their historical result wrappers, so the result type
+// participates in the feature check just as it does for ASCII.
+func isStringNumericResultContract(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	functionID := int32(fn.Func.Obj >> 32)
+	name := strings.ToLower(fn.Func.GetObjName())
+	switch functionID {
+	case findInSetFunctionID, strCmpFunctionID:
+		return expr.Typ.Id == stringNumericInt32ResultTypeID
+	case lengthUTF8FunctionID, uncompressedLengthFunctionID:
+		return expr.Typ.Id == stringNumericInt64ResultTypeID
+	case crc32FunctionID:
+		return expr.Typ.Id == stringNumericUint64ResultTypeID
+	default:
+		switch name {
+		case "find_in_set", "findinset", "strcmp":
+			return expr.Typ.Id == stringNumericInt32ResultTypeID
+		case "char_length", "character_length", "length_utf8", "uncompressed_length":
+			return expr.Typ.Id == stringNumericInt64ResultTypeID
+		case "crc32":
+			return expr.Typ.Id == stringNumericUint64ResultTypeID
+		default:
+			return false
+		}
+	}
 }
 
 // RequiresMORPCVersion64TypedConversion reports whether an owner contains a

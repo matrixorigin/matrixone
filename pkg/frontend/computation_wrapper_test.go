@@ -1844,6 +1844,7 @@ func TestBinaryProtocolPrepareParamType(t *testing.T) {
 		{name: "unsigned integer", mysqlType: defines.MYSQL_TYPE_LONGLONG, isUnsigned: true, want: types.T_uint64},
 		{name: "double", mysqlType: defines.MYSQL_TYPE_DOUBLE, want: types.T_float64},
 		{name: "string", mysqlType: defines.MYSQL_TYPE_VAR_STRING, want: types.T_text},
+		{name: "enum", mysqlType: defines.MYSQL_TYPE_ENUM, want: types.T_enum},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got, ok := binaryProtocolPrepareParamType(test.mysqlType, test.isUnsigned, []byte("5"))
@@ -4752,6 +4753,36 @@ func TestInitExecuteStmtParamRebuildsPreparedPlanWhenBoolSumAvgChanges(t *testin
 	require.NotSame(t, rebuiltPlan, prepareStmt.PreparePlan)
 }
 
+func TestInitExecuteStmtParamRebuildsPreparedPlanWhenNoUnsignedSubtractionChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 112)
+	defer prepareStmt.Close()
+
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+	prepareStmt.OnlyFullGroupBy = true
+	prepareStmt.NoUnsignedSubtraction = false
+	prepareStmt.sqlModeFlagsSet = true
+	originalPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY,NO_UNSIGNED_SUBTRACTION"))
+
+	retComp, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.Nil(t, retComp)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.True(t, prepareStmt.NoUnsignedSubtraction)
+	require.True(t, prepareStmt.OnlyFullGroupBy)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+
+	// Dropping the token rebuilds again; an unchanged mode reuses the plan.
+	rebuiltPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.False(t, prepareStmt.NoUnsignedSubtraction)
+	require.NotSame(t, rebuiltPlan, prepareStmt.PreparePlan)
+}
+
 func TestInitExecuteStmtParamRebuildsPlanInvalidatedDuringRun(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 110)
 	defer prepareStmt.Close()
@@ -5291,6 +5322,7 @@ func TestBinaryProtocolPrepareParamConcreteType(t *testing.T) {
 		{name: "timestamp", mysqlType: defines.MYSQL_TYPE_TIMESTAMP, want: types.T_timestamp, supported: true},
 		{name: "enum", mysqlType: defines.MYSQL_TYPE_ENUM, want: types.T_enum, supported: true},
 		{name: "geometry", mysqlType: defines.MYSQL_TYPE_GEOMETRY, want: types.T_geometry, supported: true},
+		{name: "uuid", mysqlType: defines.MYSQL_TYPE_UUID, want: types.T_uuid, supported: true},
 		{name: "unknown", mysqlType: defines.MYSQL_TYPE_NULL, want: types.T_any},
 	} {
 		t.Run(test.name, func(t *testing.T) {

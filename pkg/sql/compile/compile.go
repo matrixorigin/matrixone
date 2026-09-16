@@ -1426,6 +1426,18 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = c.constrainIntegerDomainWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainConvBasesWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainIPFunctionWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainStringNumericResultWorkers(qry); err != nil {
+		return nil, err
+	}
 	if err = c.constrainStrictWriteWorkers(); err != nil {
 		return nil, err
 	}
@@ -1944,7 +1956,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 	case plan.Node_AGG:
 		childNodeID := node.Children[0]
 		childNode := nodes[childNodeID]
-		if isLocalPreAggregationGroup(node, childNode) {
+		if isLocalPreAggregationGroup(node, childNode) &&
+			!c.hasUnsupportedRemoteGroupWire(node) {
 			ss, err = c.compileLocalPreAggregationScope(step, childNodeID, nodes)
 		} else {
 			ss, err = c.compilePlanScope(step, childNodeID, nodes)
@@ -7000,7 +7013,11 @@ func (c *Compile) compilePostDml(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
-	if node.Limit != nil && c.supportsRemotePartitionTopN() {
+	partitionTopNSupported := c.supportsRemotePartitionTopN()
+	if node.PartitionTopNWithTies {
+		partitionTopNSupported = c.supportsRemotePartitionTopNWithTies()
+	}
+	if node.Limit != nil && partitionTopNSupported {
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			op := constructPartition(node)
@@ -7053,6 +7070,7 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 		arg.OrderBySpecs = node.OrderBy[:node.PartitionByCount]
 		arg.Limit = nil
 		arg.PartitionByCount = 0
+		arg.WithTies = false
 	}
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
@@ -7600,7 +7618,7 @@ func (c *Compile) compileGroupWithoutShuffle(
 	distinctRequiresSingleStage bool,
 ) []*Scope {
 	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) ||
-		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()) {
+		c.hasUnsupportedRemoteGroupWire(node) {
 		return c.compileOrderedAggregateSingleStage(node, ss, ns)
 	}
 	if c.IsSingleScope(ss) {
@@ -7608,6 +7626,14 @@ func (c *Compile) compileGroupWithoutShuffle(
 	}
 	return c.compileMergeGroup(
 		node, ss, ns, distinctRequiresSingleStage)
+}
+
+func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
+	return (hasApproxPercentile(node) && !c.supportsRemoteApproxPercentile()) ||
+		(hasHLLAggregate(node) && !c.supportsRemoteHLL()) ||
+		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
+		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
+		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates())
 }
 
 func isLocalPreAggregationGroup(parent, child *plan.Node) bool {
@@ -7795,6 +7821,95 @@ func hasOrderedSetPercentile(node *plan.Node) bool {
 	return false
 }
 
+func hasApproxPercentile(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil && fn.Func.ObjName == plan2.NameApproxPercentile {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHLLAggregate(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil {
+			switch fn.Func.ObjName {
+			case "approx_count", "approx_count_distinct", "hll_add_agg", "hll_merge_agg":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasVariableLengthGroupKey mirrors Group.prepareGroupAndAggArg's v78 fence
+// for a short variable-length physical key. Long variable-length keys already
+// used the historical HStr partial grammar, so they remain remotely usable
+// before v78.
+func hasVariableLengthGroupKey(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	positions := node.GroupByHashKey
+	if len(positions) == 0 {
+		positions = make([]int32, len(node.GroupBy))
+		for i := range node.GroupBy {
+			positions[i] = int32(i)
+		}
+	}
+
+	nullable := false
+	keyWidth := 0
+	variable := false
+	for _, pos := range positions {
+		if pos < 0 || int(pos) >= len(node.GroupBy) {
+			// Let the operator's existing plan validation report the malformed
+			// index; conservatively disable remote compilation here.
+			return true
+		}
+		expr := node.GroupBy[pos]
+		if expr == nil {
+			return true
+		}
+		nullable = nullable || !expr.Typ.NotNullable
+		variable = variable || types.T(expr.Typ.Id).FixedLength() < 0
+		keyWidth += group.GetKeyWidth(
+			types.T(expr.Typ.Id), expr.Typ.Width, nullable)
+		if variable && keyWidth > 8 {
+			return false
+		}
+	}
+	return variable && keyWidth <= 8
+}
+
+// hasCanonicalDistinctKeyWire is the plan-side counterpart of
+// aggexec.RequiresCanonicalDistinctKeyWire. Opaque DISTINCT state is used for
+// multi-argument aggregates and for single variable-length arguments. Keeping
+// that topology local during a pre-v79 rollout lets the receiver continue to
+// accept legacy raw payloads without asking an older peer to parse the marker
+// tagged grammar.
+func hasCanonicalDistinctKeyWire(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, expr := range node.AggList {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil ||
+			uint64(fn.Func.Obj)&function.Distinct == 0 {
+			continue
+		}
+		// GROUP_CONCAT has its own ordered/source-row wire contracts and does
+		// not use the canonical DISTINCT marker grammar.
+		if fn.Func.ObjName == plan2.NameGroupConcat {
+			continue
+		}
+		if len(fn.Args) != 1 || types.T(fn.Args[0].Typ.Id).FixedLength() < 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func hasVarianceAggregate(node *plan.Node) bool {
 	for _, agg := range node.AggList {
 		if fn := agg.GetF(); fn != nil {
@@ -7808,12 +7923,54 @@ func hasVarianceAggregate(node *plan.Node) bool {
 	return false
 }
 
+// hasWidenedDecimalSum reports SUM expressions whose public result is
+// Decimal256. Before MORPC v73, a new CN can still exchange the legacy
+// Decimal128 partial state with an old CN, but a final shuffle Group evaluates
+// the state on its remote owner and sends the public result directly. That
+// final batch would be Decimal256 on the new binary and Decimal128 on the old
+// binary, so mixed-version clusters must use Group + coordinator MergeGroup.
+func hasWidenedDecimalSum(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		fn := agg.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 ||
+			int64(uint64(fn.Func.Obj)&function.DistinctMask) != aggexec.AggIdOfSum {
+			continue
+		}
+
+		input := fn.Args[0].Typ
+		oid := types.T(input.Id)
+		if oid != types.T_decimal64 && oid != types.T_decimal128 && oid != types.T_decimal256 {
+			continue
+		}
+		if aggexec.SumReturnType([]types.Type{types.New(oid, input.Width, input.Scale)}).Oid == types.T_decimal256 {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Compile) supportsRemoteOrderedAggregates() bool {
 	return supportsRemoteOrderedAggregates(c.proc.GetService())
 }
 
 func (c *Compile) supportsRemoteOrderedSetAggregates() bool {
 	return supportsRemoteOrderedSetAggregates(c.proc.GetService())
+}
+
+func (c *Compile) supportsRemoteApproxPercentile() bool {
+	return supportsRemoteApproxPercentile(c.proc.GetService())
+}
+
+func (c *Compile) supportsRemoteHLL() bool {
+	return supportsRemoteHLL(c.proc.GetService())
+}
+
+func (c *Compile) supportsRemoteGroupHashString() bool {
+	return supportsRemoteGroupHashString(c.proc.GetService())
+}
+
+func (c *Compile) supportsRemoteCanonicalDistinctKeyWire() bool {
+	return supportsRemoteCanonicalDistinctKeyWire(c.proc.GetService())
 }
 
 func supportsRemoteOrderedAggregates(service string) bool {
@@ -7839,6 +7996,46 @@ func supportsRemoteOrderedSetAggregates(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion17
 }
 
+func supportsRemoteApproxPercentile(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion76
+}
+
+func supportsRemoteHLL(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion77
+}
+
+func supportsRemoteGroupHashString(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion78
+}
+
+func supportsRemoteCanonicalDistinctKeyWire(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion79
+}
+
 func (c *Compile) supportsRemoteVarianceAggregates() bool {
 	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -7849,6 +8046,16 @@ func (c *Compile) supportsRemoteVarianceAggregates() bool {
 	return ok && protocolVersion >= defines.MORPCVersion35
 }
 
+func (c *Compile) supportsRemoteWidenedDecimalSum() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion73
+}
+
 func (c *Compile) supportsRemotePartitionTopN() bool {
 	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -7857,6 +8064,16 @@ func (c *Compile) supportsRemotePartitionTopN() bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion19
+}
+
+func (c *Compile) supportsRemotePartitionTopNWithTies() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion69
 }
 
 func (c *Compile) supportsRemoteHashPartition() bool {
@@ -8113,7 +8330,12 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
-		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates())
+		(!hasApproxPercentile(node) || c.supportsRemoteApproxPercentile()) &&
+		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
+		(!hasVariableLengthGroupKey(node) || c.supportsRemoteGroupHashString()) &&
+		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
+		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
+		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
