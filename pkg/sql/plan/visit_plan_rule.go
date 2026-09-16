@@ -2030,6 +2030,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		sqlExecuteNumericNestedDependent := false
 		numericComparisonFallback := false
 		boundArgs := make([]*plan.Expr, len(exprImpl.F.Args))
+		precisionArgs := make(map[int]*plan.Expr)
 		// An implicit cast around a COM_STMT text marker is provisional.  For a
 		// numeric comparison, however, the column/literal side owns the
 		// comparison domain and must remain indexable.  Replace the provisional
@@ -2226,30 +2227,30 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					return nil, err
 				}
 			}
-			if len(rule.exportSetParamPositions) > 0 && preparedExportSetIntegerPrecisionArg(functionName, i) {
-				for pos := range preparedNumericValueParamPositions(originalArgs[i]) {
-					if rule.hasExportSetResolvedDomain(int(pos)) {
-						sourceType := types.T(rewrittenArg.Typ.Id)
-						numericSource := sourceType.IsDecimal() || sourceType == types.T_float32 || sourceType == types.T_float64
-						if numericSource {
-							rewrittenArg, err = BindFuncExprImplByPlanExpr(rule.ctx, "round",
-								[]*Expr{rewrittenArg, makePlan2Int64ConstExprWithType(0)})
-							if err != nil {
-								return nil, err
-							}
-						}
-						target := makePlan2Type(&types.Type{Oid: types.T_int64})
-						if numericSource {
-							rewrittenArg, err = makePlan2CastExpr(rule.ctx, rewrittenArg, target)
-						} else {
-							rewrittenArg, err = appendCastBeforeExprWithOverload(rule.ctx, rewrittenArg, target, 4)
-						}
-						if err != nil {
-							return nil, err
-						}
-						break
+			precisionPos, precisionOwned := rule.preparedExportSetPrecisionPosition(originalArgs[i], rewrittenArg)
+			if len(rule.exportSetParamPositions) > 0 && preparedExportSetIntegerPrecisionArg(functionName, i) && precisionOwned {
+				rewrittenArg = unwrapPreparedPrecisionEnvelope(rewrittenArg)
+				sourceType := types.T(rewrittenArg.Typ.Id)
+				overload := int32(1)
+				if sourceType.IsMySQLString() && precisionPos >= 0 && precisionPos < len(rule.params) &&
+					rule.params[precisionPos] != nil && makeTypeByPlan2Expr(rule.params[precisionPos]).IsNumeric() {
+					rewrittenArg, err = makePlan2CastExpr(rule.ctx, rewrittenArg, rule.params[precisionPos].Typ)
+					if err != nil {
+						return nil, err
 					}
+					sourceType = types.T(rewrittenArg.Typ.Id)
 				}
+				target := makePlan2Type(&types.Type{Oid: types.T_int64})
+				if sourceType.IsMySQLString() {
+					overload = 4
+				}
+				rewrittenArg, err = appendCastBeforeExprWithOverload(rule.ctx, rewrittenArg, target, overload)
+				if err != nil {
+					return nil, err
+				}
+				setPreparedCastOverload(rewrittenArg, overload)
+				precisionArgs[i] = rewrittenArg
+				needResetFunction, compareArgTypes, rule.specialized = true, true, true
 			}
 			if len(rule.exportSetParamPositions) > 0 && preparedExportSetNumericStringAsReal(functionName, i) &&
 				!preparedNumericResultPolymorphicFunction(functionName) && types.T(rewrittenArg.Typ.Id).IsMySQLString() {
@@ -2605,6 +2606,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			if err != nil {
 				return nil, err
+			}
+			for index, precisionArg := range precisionArgs {
+				rewritten.GetF().Args[index] = precisionArg
 			}
 			preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 			if functionBindingChanged(originalTyp, originalFuncObj, originalArgTypes, rewritten, compareArgTypes) {
@@ -3510,6 +3514,65 @@ func windowHasNumericPrefixDependency(
 		}
 	}
 	return false
+}
+
+func (rule *ResetParamRefRule) preparedExportSetPrecisionPosition(original, rewritten *Expr) (int, bool) {
+	for pos := range preparedNumericValueParamPositions(original) {
+		if rule.hasExportSetResolvedDomain(int(pos)) {
+			return int(pos), true
+		}
+	}
+	if len(rule.exportSetParamPositions) == 1 && preparedPrecisionHasFallbackSource(rewritten) {
+		for pos := range rule.exportSetParamPositions {
+			return int(pos), true
+		}
+	}
+	return -1, false
+}
+
+func preparedPrecisionHasFallbackSource(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetPreparedNumeric().GetFallbackSource() {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if preparedPrecisionHasFallbackSource(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func setPreparedCastOverload(expr *Expr, overload int32) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" {
+		return
+	}
+	functionID, _ := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	fn.Func.Obj = int64(functionID)<<32 | int64(overload)
+	if overload == 1 {
+		fn.SyntaxExplicitCast = true
+	}
+}
+
+func unwrapPreparedPrecisionEnvelope(expr *Expr) *Expr {
+	for expr != nil {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 ||
+			fn.GetSyntaxExplicitCast() {
+			return expr
+		}
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 {
+			return expr
+		}
+		expr = fn.Args[0]
+	}
+	return nil
 }
 
 func preparedExportSetIntegerPrecisionArg(functionName string, argIndex int) bool {

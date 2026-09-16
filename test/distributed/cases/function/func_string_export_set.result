@@ -1028,5 +1028,31 @@ SET @export_set_bits = '1e100';
 EXECUTE export_set_precision_overflow USING @export_set_bits;
 Data truncation: data out of range: data type int64, value '1e+100'
 DEALLOCATE PREPARE export_set_precision_overflow;
+PREPARE export_set_precision_abs FROM
+"SELECT EXPORT_SET(TRUNCATE(15.5,ABS(x)),'Y','N','',4) FROM (SELECT ? AS x) d";
+PREPARE export_set_precision_round FROM
+"SELECT EXPORT_SET(TRUNCATE(15.5,ROUND(x,0)),'Y','N','',4) FROM (SELECT ? AS x) d";
+PREPARE export_set_precision_sign FROM
+"SELECT EXPORT_SET(TRUNCATE(15.5,SIGN(x)),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = 1;
+EXECUTE export_set_precision_abs USING @export_set_bits;
+➤ EXPORT_SET(TRUNCATE(15.5, ABS(x)), Y, N, , 4)[12,64,0]  𝄀
+NNNN
+EXECUTE export_set_precision_round USING @export_set_bits;
+➤ EXPORT_SET(TRUNCATE(15.5, ROUND(x, 0)), Y, N, , 4)[12,64,0]  𝄀
+NNNN
+EXECUTE export_set_precision_sign USING @export_set_bits;
+➤ EXPORT_SET(TRUNCATE(15.5, SIGN(x)), Y, N, , 4)[12,64,0]  𝄀
+NNNN
+DEALLOCATE PREPARE export_set_precision_abs;
+DEALLOCATE PREPARE export_set_precision_round;
+DEALLOCATE PREPARE export_set_precision_sign;
+PREPARE export_set_precision_ifnull FROM
+"SELECT EXPORT_SET(TRUNCATE(15.5,IFNULL(x,0)),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = CAST(0.5 AS DOUBLE);
+EXECUTE export_set_precision_ifnull USING @export_set_bits;
+➤ EXPORT_SET(TRUNCATE(15.5, IFNULL(x, 0)), Y, N, , 4)[12,64,0]  𝄀
+YYYY
+DEALLOCATE PREPARE export_set_precision_ifnull;
 DROP TABLE export_set_scalar_input;
 DROP TABLE export_set_numeric_bits;

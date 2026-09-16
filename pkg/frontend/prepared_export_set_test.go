@@ -418,6 +418,49 @@ func TestPreparedExportSetIndependentNumericPrecisionDomains(t *testing.T) {
 	}
 }
 
+func TestPreparedExportSetPrecisionExpressionRoles(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		precision   string
+		value       any
+		typ         types.Type
+		want        string
+		materialize bool
+	}{
+		{"abs integer", "abs(x)", int64(1), types.T_int64.ToType(), "NNNN", false},
+		{"round integer", "round(x,0)", int64(1), types.T_int64.ToType(), "NNNN", false},
+		{"sign integer", "sign(x)", int64(1), types.T_int64.ToType(), "NNNN", false},
+		{"ifnull real", "ifnull(x,0)", 0.5, types.T_float64.ToType(), "YYYY", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 401,
+				`select export_set(truncate(15.5,`+tc.precision+`),'Y','N','',4) from (select ? as x) d`)
+			defer stmt.Close()
+			cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
+			values := []any{plan2.ParamValue{Value: tc.value, SourceType: tc.typ, HasSourceType: true,
+				EnableNumericPrefix: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, cached, values)
+			require.NoError(t, err)
+			q := filled.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+			inputs := []*batch.Batch{batch.EmptyForConstFoldBatch}
+			if tc.materialize {
+				input := batch.NewWithSize(1)
+				input.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], tc.value.(float64), false, cw.proc.Mp()))
+				input.SetRowCount(1)
+				defer input.Clean(cw.proc.Mp())
+				inputs = []*batch.Batch{input}
+			}
+			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, inputs)
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, tc.want, result.GetStringAt(0), "expr=%s", expr.String())
+		})
+	}
+}
+
 func TestPreparedExportSetPrecisionExpressionOverflow(t *testing.T) {
 	_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 400,
 		`select export_set(round(15.5,abs(x)),'Y','N','',4) from (select ? as x) d`)
