@@ -1379,13 +1379,14 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		pwd,
 		tables,
 		filters,
-		"",
+		"2026-09-16 00:00:00",
 		"",
 		true,
-		fmt.Sprintf("{\"%s\":%v,\"%s\":\"%s\",\"%s\":%v}",
+		fmt.Sprintf("{\"%s\":%v,\"%s\":\"%s\",\"%s\":%v,\"%s\":\"%s\"}",
 			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn, cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
 			cdc.CDCTaskExtraOptions_SendSqlTimeout, cdc.CDCDefaultSendSqlTimeout,
 			cdc.CDCTaskExtraOptions_MaxSqlLength, cdc.CDCDefaultTaskExtra_MaxSQLLen,
+			cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC,
 		),
 	))
 
