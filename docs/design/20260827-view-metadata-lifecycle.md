@@ -1,10 +1,10 @@
 # View 元数据生命周期与分布式激活设计
 
-- **状态**：Pending re-approval（2026-09-09 后台锁协调修复；历史审批仍有效于其原 checkpoint）
+- **状态**：Approved
 - **历史获批语义 checkpoint**：PR #27734 commit `351397e59a286ff13cef6113904f24313310a03c`，包含 cursor per-FETCH epoch fencing、E0 presence、disabled same-epoch semantics、metadata-only authority containment、独立 sealed provisional epoch gate，以及 multi-CN/frontend admission/hot-path evidence
-- **审批记录**：reviewer `fengttt` 于 `2026-09-06T17:41:15Z` 对 exact head `bb1e8259c3f8f30f20a8617925c4c81f3243094b` 提交 GitHub `APPROVED` review（[review 5126100008](https://github.com/matrixorigin/matrixone/pull/27734#pullrequestreview-5126100008)），覆盖最终 executable checkpoint `8c2332ecbbfc6e6c2196e734d345875b2edac134` 及其语义修订。
-- **重新审批原因**：`bc6f03e17e` 将 catalog capability 与 admission lease 解耦，使 catalog 已就绪但 admission-disabled 的 capable CN 仍维护当前 DDL metadata；后续 restore 修复改变 table/database restore 的 invalidation 与 rolling-upgrade catalog-readiness fallback。最终协议不使用 whole-account reset：relation-removal 在 restore 事务内将受影响 reverse closure 推进到非 `CURRENT` generation；disabled 但 catalog-ready 的 capable CN 同样发布 durable marker 与 affected-closure generation。事务末 reconciliation 按 restore scope 限定：table restore 只扫描目标 table identity/name，database restore 只扫描目标 database，只有 account restore 才扫描 account；各 scope 只删除 orphan targets/dependencies 并 seed missing restored Views。
-- **获批语义 checkpoint**：`8c2332ecbbfc6e6c2196e734d345875b2edac134`；审批覆盖 exact head `bb1e8259c3f8f30f20a8617925c4c81f3243094b`。
+- **历史审批记录**：reviewer `fengttt` 于 `2026-09-06T17:41:15Z` 对 exact head `bb1e8259c3f8f30f20a8617925c4c81f3243094b` 提交 GitHub `APPROVED` review（[review 5126100008](https://github.com/matrixorigin/matrixone/pull/27734#pullrequestreview-5126100008)），覆盖 executable checkpoint `8c2332ecbbfc6e6c2196e734d345875b2edac134` 及其语义修订。
+- **锁协议审批记录**：reviewer `fengttt` 于 `2026-09-16T02:55:41Z` 对 exact head `cec64fc8abfe9b069987c1ead07b681f4d9a883a` 提交 GitHub `APPROVED` review（[review 5218046900](https://github.com/matrixorigin/matrixone/pull/27734#pullrequestreview-5218046900)）；该 head 包含后台锁协调语义 checkpoint `a97f8074d7514428d042de482650c7b4f3f855e1`。
+- **获批语义 checkpoint**：`a97f8074d7514428d042de482650c7b4f3f855e1`；当前 conformance head 为 `1d6c836077ec14aa3aacbb8054b505ad9a55f459`。审批 head 之后仅合并 main、调整测试 fixture 以符合已获批 FastFail 协议并更新 conformance 文档，未改变锁协议语义。
 - **稳定版本**：PR 正文必须链接获批 checkpoint、审批记录与当前 conformance head；后续任何 semantic change 都重新进入 Pending re-approval
 - **Owning issue**：#26227
 - **实现系列**：#27267、#27370、#27430、#27734
@@ -248,7 +248,7 @@ CI 中硬编码 `if: false` 的 Upgrade jobs 只能记录为 SKIPPED，不能替
 6. **接受** rollback 后 fail closed + 再 revalidate；不承诺旧 binary 可独立开放新 lifecycle。
 7. **实现偏差**：原 prototype 使用 SQL 文本识别 `information_schema.columns`，review 发现可绕过；本版本将 section 6.3 固化为 AST contract。
 
-历史设计门禁由 `fengttt` 的 review `5126100008` 关闭，审批只覆盖上述获批 checkpoint。待审锁协议语义 checkpoint 为 `a97f8074d7514428d042de482650c7b4f3f855e1`（其 base 为 `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）；当前 conformance head 为 `4b07308cc9931dc8c81c09c9b701a75c19a2b6ba`（merge base `091825aac2`，后续仅调整 lifecycle/upgrade/生成结果 fixture 与合并冲突，不改变待审锁协议）；本次后台锁协调改变不能自动继承历史审批。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
+历史设计门禁由 `fengttt` 的 review `5126100008` 关闭；后台锁协调语义 checkpoint `a97f8074d7514428d042de482650c7b4f3f855e1`（其 base 为 `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）由同一 reviewer 的 review `5218046900` 在 exact head `cec64fc8abfe9b069987c1ead07b681f4d9a883a` 上重新审批。当前 conformance head 为 `1d6c836077ec14aa3aacbb8054b505ad9a55f459`（merge base `091825aac2`）；审批后的变更仅合并 main、对齐测试 fixture 与更新文档，未改变锁协议语义。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
 
 ### 12.1 后台恢复与显式 owner 事务的锁协调修复
 
