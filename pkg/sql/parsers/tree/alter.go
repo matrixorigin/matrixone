@@ -724,6 +724,8 @@ func (node *AlterTable) reset() {
 				opt.Free()
 			case *TableOptionAUTOEXTEND_SIZE:
 				opt.Free()
+			case *TableOptionAutoIDCache:
+				opt.Free()
 			case *TableOptionAutoIncrement:
 				opt.Free()
 			case *TableOptionComment:
