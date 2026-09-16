@@ -217,7 +217,7 @@ shape                              sort          hash-serial       hash-parallel
 100000 rows, 12 keys, AVG          6.37–6.52 ms   39.51–39.67 ms     11.26–12.25 ms
 100000 rows, 20 keys, NDV=2        6.63–6.86 ms   87.39–91.03 ms     22.72–24.37 ms
 100000 rows, 32 keys, NDV=2       10.19–10.60 ms  202.27–205.88 ms     46.93–53.68 ms
-1000000 rows, 3 keys, NDV=4       10.47–10.93 ms   43.58–43.67 ms     22.27–22.69 ms
+1000000 rows, 3 keys, NDV=4       10.61–11.17 ms   43.81–46.05 ms     22.48–22.72 ms
 1000000 rows, child ORDER BY      24.49–24.64 ms   96.75–99.30 ms     40.65–41.55 ms
 ```
 
