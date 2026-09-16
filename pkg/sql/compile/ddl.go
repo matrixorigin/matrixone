@@ -115,7 +115,9 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	}
 
 	ctx = context.WithValue(ctx, defines.SqlKey{}, createDatabase.GetSql())
-	datType := ""
+	// Internal database creators can attach a categorical type to the CREATE
+	// itself so the catalog row is atomic with the database definition.
+	datType, _ := ctx.Value(defines.DatTypKey{}).(string)
 	// handle sub
 	if subOption := createDatabase.SubscriptionOption; subOption != nil {
 		datType = catalog.SystemDBTypeSubscription
@@ -696,7 +698,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		}
 	}
 	targetTableDef := persistedIPFunctionAlterTarget(qry)
-	if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, targetTableDef); err != nil {
+	if err := plan2.RequirePersistedIPFunctionProtocolForAuthoring(c.proc.Ctx, c.proc, targetTableDef); err != nil {
 		return err
 	}
 
@@ -1518,11 +1520,14 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateTable()
-	if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+	if err := incrservice.CheckAutoIDCache(c.proc.Ctx, c.proc.GetService(), qry.GetTableDef().GetAutoIdCache()); err != nil {
+		return err
+	}
+	if err := plan2.RequirePersistedIPFunctionProtocolForAuthoring(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
 		return err
 	}
 	for _, indexTableDef := range qry.GetIndexTables() {
-		if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, indexTableDef); err != nil {
+		if err := plan2.RequirePersistedIPFunctionProtocolForAuthoring(c.proc.Ctx, c.proc, indexTableDef); err != nil {
 			return err
 		}
 	}
@@ -5479,7 +5484,7 @@ func maybeResetAutoIncrement(
 	}
 	if containAuto {
 		err = incrservice.GetAutoIncrementService(sid).Reset(
-			ctx,
+			incrservice.WithAutoIDCachePolicy(ctx, tblDef.TblId, tblDef.AutoIdCache),
 			oldId,
 			newId,
 			keepAutoIncrement,
@@ -5597,7 +5602,7 @@ func (c *Compile) appendAlterAutoIncrementReqs(
 			return err
 		}
 		if err = svc.SetOffset(
-			c.proc.Ctx,
+			incrservice.WithAutoIDCachePolicy(c.proc.Ctx, tableDef.TblId, tableDef.AutoIdCache),
 			tid,
 			col.ColIndex,
 			targetCol.Name,

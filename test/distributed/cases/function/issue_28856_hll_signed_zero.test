@@ -1,0 +1,13 @@
+-- #28856: APPROX_COUNT_DISTINCT canonicalizes FLOAT signed zero to one SQL
+-- value. HLL_ADD_AGG remains on its persisted v2 raw-value wire semantics so
+-- existing HLL_ADD_AGG/HLL_MERGE_AGG states remain mergeable across upgrade.
+drop table if exists issue_28856_hll_signed_zero;
+create table issue_28856_hll_signed_zero(v double);
+insert into issue_28856_hll_signed_zero values
+    (cast('0.0' as double)), (cast('-0.0' as double));
+
+select approx_count_distinct(v) as approx_count,
+       hll_cardinality(hll_add_agg(v)) as hll_count
+from issue_28856_hll_signed_zero;
+
+drop table issue_28856_hll_signed_zero;

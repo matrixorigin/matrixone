@@ -190,6 +190,16 @@ func TestRestoreInitSQL(t *testing.T) {
 	require.Error(t, err)
 }
 
+// AlterCopyInitSQL is (false, "") for hnsw: RunHnsw rebuilds the graph from the CDC ts=0 replay,
+// so the copy-alter replacement index converges without an explicit rebuild InitSQL. (Contrast
+// fulltext2, whose consumer writes only a cdc_tail with no base and therefore must REINDEX.) #28837
+func TestAlterCopyInitSQL(t *testing.T) {
+	ok, sql, err := Hooks{}.AlterCopyInitSQL(newRecordingCtx(), hnswDefs(""))
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Empty(t, sql)
+}
+
 // --- SQL generators --------------------------------------------------------
 
 func TestGenDeleteSQL(t *testing.T) {
