@@ -70,6 +70,31 @@ func TestShufflePreparePreservesEarlierAbortCause(t *testing.T) {
 	}
 }
 
+func TestShuffleResetDoesNotStopUnheldDrainAllWriter(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	pool := NewShufflePool(2, 2, true)
+	prepared, unprepared := NewArgument(), NewArgument()
+	defer prepared.Release()
+	defer unprepared.Release()
+	for _, arg := range []*Shuffle{prepared, unprepared} {
+		arg.DrainAllBuckets = true
+		arg.BucketNum = 2
+		arg.SetShufflePool(pool)
+	}
+
+	require.NoError(t, prepared.Prepare(proc))
+	require.True(t, prepared.ctr.held)
+	require.False(t, unprepared.ctr.held)
+	unprepared.Reset(proc, false, nil)
+	prepared.Reset(proc, false, nil)
+
+	pool.holderLock.Lock()
+	defer pool.holderLock.Unlock()
+	require.Equal(t, int32(1), pool.holders)
+	require.Equal(t, int32(1), pool.stoppers, "only the operator that acquired a holder may stop writing")
+}
+
 // add unit tests for cases
 type shuffleTestCase struct {
 	arg   *Shuffle
