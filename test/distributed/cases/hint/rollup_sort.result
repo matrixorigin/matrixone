@@ -25,13 +25,13 @@ group by a, b with rollup
 ) q
 order by grouping_a, grouping_b, a, b;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]  𝄀
-null  ¦  1  ¦  2  ¦  30  ¦  0  ¦  0 𝄀
-1  ¦  1  ¦  1  ¦  30  ¦  0  ¦  0 𝄀
-1  ¦  2  ¦  1  ¦  40  ¦  0  ¦  0 𝄀
-2  ¦  1  ¦  1  ¦  50  ¦  0  ¦  0 𝄀
-null  ¦  null  ¦  2  ¦  30  ¦  0  ¦  1 𝄀
-1  ¦  null  ¦  2  ¦  70  ¦  0  ¦  1 𝄀
-2  ¦  null  ¦  1  ¦  50  ¦  0  ¦  1 𝄀
+null  ¦  1  ¦  2  ¦  30  ¦  0  ¦  0  𝄀
+1  ¦  1  ¦  1  ¦  30  ¦  0  ¦  0  𝄀
+1  ¦  2  ¦  1  ¦  40  ¦  0  ¦  0  𝄀
+2  ¦  1  ¦  1  ¦  50  ¦  0  ¦  0  𝄀
+null  ¦  null  ¦  2  ¦  30  ¦  0  ¦  1  𝄀
+1  ¦  null  ¦  2  ¦  70  ¦  0  ¦  1  𝄀
+2  ¦  null  ¦  1  ¦  50  ¦  0  ¦  1  𝄀
 null  ¦  null  ¦  5  ¦  150  ¦  1  ¦  1
 truncate table t_rollup_sort;
 select a, b, count(*) as cnt, sum(amount) as total,
