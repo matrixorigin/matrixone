@@ -299,6 +299,22 @@ func TestAppendArrowResultValidatesEmptyArrayType(t *testing.T) {
 	require.ErrorContains(t, AppendArrowResult(descriptor, values, result, mp), "Arrow type")
 }
 
+func TestAppendArrowResultRejectsInvalidSemanticDescriptor(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	result := vector.NewFunctionResultWrapper(types.T_decimal64.ToType(), mp)
+	defer result.Free()
+
+	decimalType := &arrow.Decimal128Type{Precision: 19, Scale: 0}
+	builder := array.NewDecimal128Builder(memory.NewGoAllocator(), decimalType)
+	builder.Append(decimal128.FromI64(1))
+	values := builder.NewDecimal128Array()
+	defer values.Release()
+
+	descriptor := TypeDescriptor{TypeID: int32(types.T_decimal64), Width: 19, OffsetWidth: 32}
+	require.ErrorContains(t, AppendArrowResult(descriptor, values, result, mp), "decimal precision")
+}
+
 func TestZeroArgumentRecordPreservesRows(t *testing.T) {
 	record := array.NewRecordBatch(arrow.NewSchema(nil, nil), nil, 3)
 	defer record.Release()
