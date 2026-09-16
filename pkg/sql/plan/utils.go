@@ -2041,6 +2041,10 @@ func constantFoldWithPreparedExactSource(
 			// and visible to the remote protocol capability analysis.
 			return expr, nil
 		}
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion82DecimalLiteralSemantics(exprList)
+		if err != nil {
+			return nil, err
+		}
 		isSerialized := rule.ContainsSerializedLiteral(exprList)
 
 		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -2065,10 +2069,11 @@ func constantFoldWithPreparedExactSource(
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:          int32(vec.Length()),
-					Data:         data,
-					IsSerialized: isSerialized,
-					StringSource: uint32(vec.GetStringSource()),
+					Len:                       int32(vec.Length()),
+					Data:                      data,
+					IsSerialized:              isSerialized,
+					StringSource:              uint32(vec.GetStringSource()),
+					DecimalLiteralRequiresV82: requiresDecimalProvenance,
 				},
 			},
 		}, nil
@@ -2139,6 +2144,10 @@ func constantFoldWithPreparedExactSource(
 	defer free()
 
 	if isVec {
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion82DecimalLiteralSemantics(fn.Args)
+		if err != nil {
+			return nil, err
+		}
 		if vec.GetStringSources() != nil {
 			return expr, nil
 		}
@@ -2156,9 +2165,10 @@ func constantFoldWithPreparedExactSource(
 			},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:          int32(vec.Length()),
-					Data:         data,
-					StringSource: uint32(vec.GetStringSource()),
+					Len:                       int32(vec.Length()),
+					Data:                      data,
+					StringSource:              uint32(vec.GetStringSource()),
+					DecimalLiteralRequiresV82: requiresDecimalProvenance,
 				},
 			},
 		}, nil
@@ -2168,6 +2178,7 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 	rule.PreserveFoldedLiteralStringDomain(expr, c)
+	rule.PreserveFoldedDecimalLiteralSemantics(expr, c)
 	if source := vec.GetStringSource(); source != types.StringSourceLiteral {
 		c.StringSource = uint32(source) + 1
 	}
