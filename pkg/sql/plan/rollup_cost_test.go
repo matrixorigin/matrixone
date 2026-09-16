@@ -244,7 +244,9 @@ func TestSortRollupCostModelMatchesMeasuredShapeBoundary(t *testing.T) {
 func TestSortRollupCostModelAccountsForOrderedInputReuse(t *testing.T) {
 	makeProbe := func(ordered bool) *sortRollupProbe {
 		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
-		builder.aggSpillMem = 10_000
+		// The runtime pre-extends one output batch. Leave enough room for that
+		// batch so this test isolates the effect of reusing input order.
+		builder.aggSpillMem = 4 << 20
 		return &sortRollupProbe{
 			builder: builder,
 			source: &Node{Stats: &Stats{
@@ -301,6 +303,105 @@ func TestSortRollupCostModelRejectsAggregateCapacityOverflow(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, estimate.SortFeasible,
 		"active streaming rollup state must be capacity-feasible before sort can be selected")
+}
+
+func TestSortRollupCostModelChargesOutputBatchCapacity(t *testing.T) {
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
+		`select a, b, count(*) from select_test.bind_select group by a, b with rollup`, 1)
+	require.NoError(t, err)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder.aggSpillMem = 10_000
+	probe := &sortRollupProbe{
+		builder: builder,
+		source: &Node{Stats: &Stats{
+			TableCnt: 100_000,
+			Outcnt:   100_000,
+			Cost:     100_000,
+			Rowsize:  64,
+		}},
+		groupExprs: []*Expr{
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Ndv: 10,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Ndv: 10,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
+		},
+	}
+
+	estimate, ok := estimateSortRollupCost(probe, selectClause.Exprs)
+	require.True(t, ok)
+	require.Greater(t, estimate.SortOutputMemory, float64(10_000),
+		"the admission estimate must include the pre-extended output vectors")
+	require.False(t, estimate.SortFeasible,
+		"COST must reject a sort plan whose first output batch exceeds the limit")
+}
+
+func TestSortRollupCostModelChargesHiddenAggregateOutput(t *testing.T) {
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
+		`select a, b from select_test.bind_select
+			group by a, b with rollup having sum(c) > 0 order by sum(c)`, 1)
+	require.NoError(t, err)
+	stmt := stmts[0].(*tree.Select)
+	selectClause := stmt.Select.(*tree.SelectClause)
+	extra := sortRollupAdditionalExprs(selectClause.Having, stmt.OrderBy)
+	require.Len(t, extra, 2, "the test query must contain HAVING and ORDER BY aggregate expressions")
+
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder.aggSpillMem = 700_000
+	probe := &sortRollupProbe{
+		builder: builder,
+		source: &Node{Stats: &Stats{
+			TableCnt: 100_000,
+			Outcnt:   100_000,
+			Cost:     100_000,
+			Rowsize:  64,
+		}},
+		groupExprs: []*Expr{
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Ndv: 10,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Ndv: 10,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
+		},
+	}
+
+	withoutHidden, ok := estimateSortRollupCost(probe, selectClause.Exprs)
+	require.True(t, ok)
+	withHidden, ok := estimateSortRollupCost(probe, selectClause.Exprs, extra...)
+	require.True(t, ok)
+	require.Greater(t, withHidden.SortOutputMemory, withoutHidden.SortOutputMemory,
+		"HAVING/ORDER BY aggregates must be charged as hidden output vectors")
+	require.False(t, withHidden.SortFeasible,
+		"the memory budget must account for hidden aggregate output")
+}
+
+func TestSortRollupCostModelChargesHLLOutputCapacity(t *testing.T) {
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
+		`select a, hll_add_agg(b) from select_test.bind_select group by a with rollup`, 1)
+	require.NoError(t, err)
+	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, false)
+	builder.aggSpillMem = 128 << 20
+	probe := &sortRollupProbe{
+		builder: builder,
+		source: &Node{Stats: &Stats{
+			TableCnt: 100_000,
+			Outcnt:   100_000,
+			Cost:     100_000,
+			Rowsize:  64,
+		}},
+		groupExprs: []*Expr{{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Ndv:  100_000,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}},
+	}
+
+	estimate, ok := estimateSortRollupCost(probe, selectClause.Exprs)
+	require.True(t, ok)
+	require.Greater(t, estimate.SortOutputMemory, float64(128<<20),
+		"a full HLL result batch must include its dense serialized state")
+	require.False(t, estimate.SortFeasible,
+		"COST must not select sort when an HLL result batch exceeds the limit")
 }
 
 func TestSortRollupCostModelAcceptsKnownEmptyStats(t *testing.T) {
