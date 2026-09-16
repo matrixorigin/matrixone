@@ -45,12 +45,27 @@ func TestRegexpCacheGet(t *testing.T) {
 }
 
 func TestRegexpCacheGC(t *testing.T) {
-	cache := newRegexCache(time.Millisecond * 100)
+	ttl := time.Millisecond * 100
+	cache := newRegexCache(ttl)
+	beforeGet := time.Now()
 	r, err := cache.get(".*")
+	afterGet := time.Now()
 	assert.Equal(t, 1, cache.count())
 	assert.NoError(t, err)
 	assert.NotNil(t, r)
-	time.Sleep(time.Millisecond * 200)
+	item, ok := cache.cache.Load(".*")
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	ci, ok := item.(cacheItem)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	assert.False(t, ci.expireAt.Before(beforeGet.Add(ttl)), "cache entry should receive its configured TTL")
+	assert.False(t, ci.expireAt.After(afterGet.Add(ttl)), "cache entry should receive its configured TTL")
+	cache.cache.Store(".*", cacheItem{regexp: r, expireAt: time.Now().Add(-time.Nanosecond)})
 	cache.gc()
 	assert.Equal(t, 0, cache.count())
 }
